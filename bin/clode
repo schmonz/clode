@@ -1,0 +1,173 @@
+#!/bin/sh
+# clode — run the latest Claude Code under host Node, no Bun runtime.
+#
+# Locates an upstream `claude` binary (from a provider package or the user's
+# install), extracts its JS bundle once (cached per binary under the user's
+# cache dir), and runs it under Node. A changed `claude` binary re-extracts on
+# next launch, so provider updates are transparent.
+set -e
+
+# --- packaging substitution (rewritten by `make install`; placeholders left intact in
+#     the source tree fall back to dev defaults) -----------------------------
+CLODE_SELF_VERSION="@VERSION@";  case "$CLODE_SELF_VERSION" in @*) CLODE_SELF_VERSION="dev";; esac
+LIBEXEC_BAKED="@LIBEXEC@";       case "$LIBEXEC_BAKED"      in @*) LIBEXEC_BAKED="";; esac
+NODE_BAKED="@NODE@";             case "$NODE_BAKED"         in @*) NODE_BAKED="/opt/pkg/bin/node";; esac
+PYTHON_BAKED="@PYTHON@";         case "$PYTHON_BAKED"       in @*) PYTHON_BAKED="/opt/pkg/bin/python3";; esac
+CLAUDE_BIN_BAKED="@CLAUDE_BIN@"; case "$CLAUDE_BIN_BAKED"   in @*) CLAUDE_BIN_BAKED="";; esac
+# --------------------------------------------------------------------------
+
+# Resolve the upstream claude binary to extract from. Precedence:
+#   CLODE_CLAUDE_BIN > CLODE_VERSION_DIR > baked provider path >
+#   ~/.local/bin/claude (symlink-resolved) > `claude` on PATH.
+resolve_claude_bin() {
+  if [ -n "$CLODE_CLAUDE_BIN" ];  then printf '%s\n' "$CLODE_CLAUDE_BIN";  return 0; fi
+  if [ -n "$CLODE_VERSION_DIR" ]; then printf '%s\n' "$CLODE_VERSION_DIR"; return 0; fi
+  if [ -n "$CLAUDE_BIN_BAKED" ] && [ -e "$CLAUDE_BIN_BAKED" ]; then
+    printf '%s\n' "$CLAUDE_BIN_BAKED"; return 0
+  fi
+  link="$HOME/.local/bin/claude"
+  if [ -e "$link" ]; then
+    real=$(readlink "$link" 2>/dev/null || printf '%s' "$link")
+    case "$real" in /*) ;; *) real="$(dirname "$link")/$real" ;; esac
+    printf '%s\n' "$real"; return 0
+  fi
+  if p=$(command -v claude 2>/dev/null); then printf '%s\n' "$p"; return 0; fi
+  return 1
+}
+
+# Fast size+mtime signature: GNU stat, then BSD stat, then a python fallback.
+sig_of() {
+  stat -c '%s-%Y' "$1" 2>/dev/null && return 0
+  stat -f '%z-%m' "$1" 2>/dev/null && return 0
+  "$PYTHON" -c 'import os,sys;s=os.stat(sys.argv[1]);print("%d-%d"%(s.st_size,int(s.st_mtime)))' "$1"
+}
+
+# Cache key: reads $BIN, sets $KEY.
+# The version is used when the path encodes one (.../versions/<ver>[/...]),
+# else <basename>-<size+mtime> so a changed provider binary re-extracts.
+cache_key() {
+  case "$BIN" in
+    */versions/*) KEY=${BIN#*/versions/}; KEY=${KEY%%/*} ;;
+    *)            KEY="$(basename "$BIN")-$(sig_of "$BIN")" ;;
+  esac
+}
+
+# Check that Node is present and meets the minimum version requirement.
+require_node() {
+  # Minimum Node major. The extracted bundle adopts newer JS over time (today
+  # TC39 `using`, needs Node >= 24); this creeps upward. Clear error, not a
+  # leaked V8 SyntaxError.
+  MIN_NODE_MAJOR=24
+  if [ ! -x "$NODE" ]; then
+    echo "clode: no usable node at '$NODE' (set CLODE_NODE)" >&2
+    exit 1
+  fi
+  NODE_MAJOR=$("$NODE" -e 'process.stdout.write(process.versions.node.split(".")[0])' 2>/dev/null || echo 0)
+  if [ "${NODE_MAJOR:-0}" -lt "$MIN_NODE_MAJOR" ]; then
+    echo "clode: node $("$NODE" --version 2>/dev/null) is too old; need >= v$MIN_NODE_MAJOR" >&2
+    echo "clode: (the extracted bundle uses newer JS, e.g. 'using' declarations)" >&2
+    exit 1
+  fi
+}
+
+# Extract-on-first-use, cached per key. Runs node --check on the output;
+# refuses to cache on any failure.
+extract_if_needed() {
+  [ -f "$CACHE/cli.cjs" ] && [ -f "$CACHE/bun-shim.cjs" ] && return 0
+  echo "clode: extracting JS for $KEY..." >&2
+  mkdir -p "$CACHE"
+  if ! "$PYTHON" "$LIBEXEC/extract-claude-js" "$BIN" "$CACHE/cli.cjs"; then
+    rm -f "$CACHE/cli.cjs"
+    echo "clode: extraction failed (see error above); not caching." >&2
+    exit 1
+  fi
+  if ! "$NODE" --check "$CACHE/cli.cjs"; then
+    rm -f "$CACHE/cli.cjs"
+    echo "clode: extracted JS failed 'node --check'; not caching." >&2
+    exit 1
+  fi
+  cp "$LIBEXEC/bun-shim.cjs" "$CACHE/bun-shim.cjs"
+}
+
+# On legacy macOS (no trustd; the old ocspd/CSSM trust stack), evaluating the
+# system certificate store does blocking per-cert OCSP fetches — tens of seconds,
+# enough to stall the TUI. There, default Claude Code's CA source to the bundled
+# Mozilla roots (fast, and sufficient for api.anthropic.com). Overridable; gated to
+# macOS so Linux/NetBSD are untouched. Add a private/corporate root via
+# NODE_EXTRA_CA_CERTS to keep the bundled (fast) path. CLODE_TRUSTD overrides the
+# probe path (for tests).
+maybe_default_cert_store() {
+  [ "$(uname -s)" = Darwin ] || return 0
+  [ -e "${CLODE_TRUSTD:-/usr/libexec/trustd}" ] && return 0   # modern trust stack: leave app default
+  : "${CLAUDE_CODE_CERT_STORE:=bundled}"; export CLAUDE_CODE_CERT_STORE
+}
+
+# Launch the cached bundle under the inherited environment.
+# DISABLE_INSTALLATION_CHECKS silences the npm-deprecation nudge (false
+# positive for our non-native install).
+exec_bundle() {
+  : "${DISABLE_INSTALLATION_CHECKS:=1}"; export DISABLE_INSTALLATION_CHECKS
+  : "${NODE_USE_ENV_PROXY:=1}"; export NODE_USE_ENV_PROXY
+  maybe_default_cert_store
+  exec "$NODE" "$CACHE/cli.cjs" "$@"
+}
+
+main() {
+  # `clode --clode-version` reports our own version without launching the bundle.
+  # (`clode --version` still passes through to Claude Code.)
+  if [ "$1" = "--clode-version" ]; then
+    echo "clode $CLODE_SELF_VERSION"
+    exit 0
+  fi
+
+  # Resolve this script's real location, following symlinks (so an installed
+  # ~/.local/bin/clode symlink works, and the source tree runs in place).
+  SELF="$0"
+  while [ -h "$SELF" ]; do
+    link=$(readlink "$SELF")
+    case "$link" in /*) SELF="$link" ;; *) SELF="$(dirname "$SELF")/$link" ;; esac
+  done
+  HERE=$(cd "$(dirname "$SELF")" && pwd)
+
+  # Helper files (extractor, shim). Installed: a libexec dir baked by `make
+  # install`. Source tree: ../libexec relative to bin/. Override: CLODE_LIBEXEC.
+  LIBEXEC="${CLODE_LIBEXEC:-$LIBEXEC_BAKED}"
+  if [ -z "$LIBEXEC" ]; then
+    if [ -f "$HERE/bun-shim.cjs" ]; then
+      LIBEXEC="$HERE"                 # flat layout (e.g. a packaged libexec dir)
+    elif [ -f "$HERE/../libexec/bun-shim.cjs" ]; then
+      LIBEXEC="$(cd "$HERE/../libexec" && pwd)"   # source tree: bin/ + libexec/
+    else
+      LIBEXEC="$HERE"
+    fi
+  fi
+
+  # Host tools. Override per box.
+  NODE="${CLODE_NODE:-$NODE_BAKED}"
+  PYTHON="${CLODE_PYTHON:-$PYTHON_BAKED}"
+
+  require_node
+
+  BIN=$(resolve_claude_bin) || {
+    echo "clode: no Claude Code binary found." >&2
+    echo "clode: install the provider package (e.g. claude-code), or set" >&2
+    echo "clode: CLODE_CLAUDE_BIN=/path/to/claude" >&2
+    exit 1
+  }
+  if [ ! -e "$BIN" ]; then
+    echo "clode: claude binary not found at '$BIN'" >&2
+    exit 1
+  fi
+
+  cache_key
+
+  CACHE_ROOT="${CLODE_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/clode}"
+  CACHE="$CACHE_ROOT/$KEY"
+
+  extract_if_needed
+
+  exec_bundle "$@"
+}
+
+# Allow BATS/tests to source this file and call functions without launching.
+[ -n "${CLODE_SOURCED:-}" ] || main "$@"
