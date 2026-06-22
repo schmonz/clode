@@ -137,17 +137,33 @@ tool locations).
 
 ## Tests
 
-    make test                  # full suite (some tests need a logged-in ~/.claude + network)
-    CLODE_OFFLINE=1 make test  # skip the network/model tests
+    make test          # offline suite (default; no network or login needed)
+    make test-online   # also run the network/model tests (needs a logged-in ~/.claude)
 
 `make test` runs the pytest, node:test, and bats suites via `test/run-all.sh`
-(its single underlying runner). If your Node isn't found, set `CLODE_NODE` to it.
-For environments without `make`: `sh test/run-all.sh [--offline]`.
+(its single underlying runner), **offline by default**. The online tests (live
+model round-trips, a logged-in `~/.claude`) are opt-in. The runner sets the
+offline gate itself from the flag — you never export an env var. If your Node
+isn't found, set `CLODE_NODE`. For environments without `make`:
+`sh test/run-all.sh [--online]`.
 
 ## Developing
 
-The tests need `bats` (shell), `pytest` (Python), and a host Node (`node:test`).
-Running `clode` itself needs none of those — only a recent Node and Python 3.
+Test dependencies:
+
+- **`bats`** — runs the shell suite (launcher, install, resolution, caching).
+- **`pytest`** (Python) — runs the extractor and inspector suites.
+- **a host Node** — runs the `node:test` suites (shim behavior, text formatting).
+- **`pyte`** (Python) — a terminal emulator used by the pty/TUI screen tests
+  (`pip install pyte`, or your platform's package). The TUI tests **skip cleanly**
+  where `pyte` isn't installed rather than failing.
+
+The suite is POSIX-portable: it relies on no GNU-only tools — not `mktemp -d`
+(bare), `env -u`, or `timeout` — so it runs on \*BSD, macOS, and pkgsrc as well as
+Linux. If your Node or Python isn't on the default path, set `CLODE_NODE` /
+`CLODE_PYTHON`.
+
+Running `clode` itself needs none of these — only a recent Node and Python 3.
 
 ## Uninstall
 

@@ -1,11 +1,13 @@
 """pytest unit + e2e tests for libexec/inspect-claude-bundle."""
-import importlib.util, importlib.machinery, os, subprocess, sys
+import importlib.util, importlib.machinery, os, subprocess, sys, shutil
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 SCRIPT = os.path.join(ROOT, "libexec", "inspect-claude-bundle")
 SHIM = os.path.join(ROOT, "libexec", "bun-shim.cjs")
 BIN = os.path.expanduser("~/.local/share/claude/versions/2.1.183")
+# Discover node on PATH (CLODE_NODE overrides); no hardcoded prefix.
+NODE = os.environ.get("CLODE_NODE") or shutil.which("node") or "node"
 
 
 def load(name, path):
@@ -46,7 +48,7 @@ import pytest
                     reason="no claude binary / shim")
 def test_coverage_report_runs_and_is_machine_readable():
     r = subprocess.run([sys.executable, SCRIPT, BIN, "--shim", SHIM,
-                        "--node", os.environ.get("CLODE_NODE", "/opt/pkg/bin/node"),
+                        "--node", NODE,
                         "--json"], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     import json
@@ -96,7 +98,7 @@ def test_strict_gate_clean_on_known_good_bundle():
     # --json run to verify undici classification
     r_json = subprocess.run(
         [sys.executable, SCRIPT, _STRICT_BIN, "--shim", SHIM,
-         "--node", os.environ.get("CLODE_NODE", "/opt/pkg/bin/node"), "--json"],
+         "--node", NODE, "--json"],
         capture_output=True, text=True)
     assert r_json.returncode == 0, r_json.stderr
     doc = _json.loads(r_json.stdout)
@@ -109,7 +111,7 @@ def test_strict_gate_clean_on_known_good_bundle():
     # --strict run: must exit 0 (clean gate on the known-good bundle)
     r_strict = subprocess.run(
         [sys.executable, SCRIPT, _STRICT_BIN, "--shim", SHIM,
-         "--node", os.environ.get("CLODE_NODE", "/opt/pkg/bin/node"), "--strict"],
+         "--node", NODE, "--strict"],
         capture_output=True, text=True)
     assert r_strict.returncode == 0, \
         "--strict exited %d; unreviewed items:\n%s" % (r_strict.returncode, r_strict.stderr)

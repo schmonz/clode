@@ -7,7 +7,7 @@ Dependency-free. Rerun on each `claude update` to track surface drift.
 
 Options:
   --shim PATH    bun-shim.cjs to compare against (enables the coverage report)
-  --node PATH    node to load the shim with (default /opt/pkg/bin/node)
+  --node PATH    node to load the shim with (default: CLODE_NODE, else first on PATH)
   --coverage     print ONLY the coverage / unaccounted-features report
   --json         machine-readable output
   --strict       exit non-zero if any upstream feature is unaccounted for
@@ -22,7 +22,7 @@ Reports:
                          (provided but throws) / missing / disabled-native, and
                          lists everything UNACCOUNTED FOR.
 """
-import re, sys, os, json
+import re, sys, os, json, shutil
 
 MARKER = re.compile(rb'// @bun\b[^\n]*@bun-cjs\n\(function\(exports, require, module, __filename, __dirname\) \{')
 BUN_API = re.compile(rb'\bBun\.([A-Za-z_$][A-Za-z0-9_$]*)')
@@ -357,7 +357,8 @@ def main():
     strict = '--strict' in sys.argv[1:]
 
     r = inspect(args[0])
-    shim = probe_shim(opt('--shim'), opt('--node', '/opt/pkg/bin/node'),
+    node = opt('--node') or os.environ.get('CLODE_NODE') or shutil.which('node') or 'node'
+    shim = probe_shim(opt('--shim'), node,
                       list(r['external_modules'].keys()))
     cov = coverage(r, shim) if shim is not None else None
 

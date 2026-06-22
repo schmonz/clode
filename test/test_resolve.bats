@@ -5,17 +5,17 @@ load test_helper
 setup() {
   cd "$BATS_TEST_DIRNAME/.."
   ROOT=$(pwd)
-  TMP=$(mktemp -d)
+  TMP=$(mktempd)
   export HOME="$TMP/home"; mkdir -p "$HOME/.local/bin"
   export CLODE_CACHE="$TMP/cache"
   export CLODE_LIBEXEC="$ROOT/libexec"
 
   mkdir -p "$TMP/share/versions" "$TMP/pathdir"
-  /opt/pkg/bin/python3 test/mkfixture.py "$TMP/explicit" L-explicit
-  /opt/pkg/bin/python3 test/mkfixture.py "$TMP/share/versions/9.9.9" L-versiondir
-  /opt/pkg/bin/python3 test/mkfixture.py "$TMP/local-target" L-local
+  "$CLODE_PYTHON" test/mkfixture.py "$TMP/explicit" L-explicit
+  "$CLODE_PYTHON" test/mkfixture.py "$TMP/share/versions/9.9.9" L-versiondir
+  "$CLODE_PYTHON" test/mkfixture.py "$TMP/local-target" L-local
   ln -sf "$TMP/local-target" "$HOME/.local/bin/claude"
-  /opt/pkg/bin/python3 test/mkfixture.py "$TMP/pathdir/claude" L-path
+  "$CLODE_PYTHON" test/mkfixture.py "$TMP/pathdir/claude" L-path
   chmod +x "$TMP/pathdir/claude"
 }
 

@@ -11,8 +11,11 @@ set -e
 #     the source tree fall back to dev defaults) -----------------------------
 CLODE_SELF_VERSION="@VERSION@";  case "$CLODE_SELF_VERSION" in @*) CLODE_SELF_VERSION="dev";; esac
 LIBEXEC_BAKED="@LIBEXEC@";       case "$LIBEXEC_BAKED"      in @*) LIBEXEC_BAKED="";; esac
-NODE_BAKED="@NODE@";             case "$NODE_BAKED"         in @*) NODE_BAKED="/opt/pkg/bin/node";; esac
-PYTHON_BAKED="@PYTHON@";         case "$PYTHON_BAKED"       in @*) PYTHON_BAKED="/opt/pkg/bin/python3";; esac
+# Dev fallback when the placeholder isn't substituted: discover on PATH. `|| :`
+# keeps a not-found result from tripping `set -e` (empty is fine — CLODE_NODE /
+# CLODE_PYTHON override, and require_node gives a clean error if truly absent).
+NODE_BAKED="@NODE@";             case "$NODE_BAKED"         in @*) NODE_BAKED="$(command -v node 2>/dev/null || :)";; esac
+PYTHON_BAKED="@PYTHON@";         case "$PYTHON_BAKED"       in @*) PYTHON_BAKED="$(command -v python3 2>/dev/null || :)";; esac
 CLAUDE_BIN_BAKED="@CLAUDE_BIN@"; case "$CLAUDE_BIN_BAKED"   in @*) CLAUDE_BIN_BAKED="";; esac
 # --------------------------------------------------------------------------
 
@@ -73,7 +76,17 @@ require_node() {
 # Extract-on-first-use, cached per key. Runs node --check on the output;
 # refuses to cache on any failure.
 extract_if_needed() {
-  [ -f "$CACHE/cli.cjs" ] && [ -f "$CACHE/bun-shim.cjs" ] && return 0
+  if [ -f "$CACHE/cli.cjs" ] && [ -f "$CACHE/bun-shim.cjs" ]; then
+    # Cache hit on the bundle. Still refresh the cached shim if the installed
+    # source differs, so a shim fix reaches existing per-version caches without
+    # waiting for a provider update to trigger a re-extract. (The cli.cjs prelude
+    # require()s bun-shim.cjs from this same dir at every launch.)
+    if ! cmp -s "$LIBEXEC/bun-shim.cjs" "$CACHE/bun-shim.cjs"; then
+      cp "$LIBEXEC/bun-shim.cjs" "$CACHE/bun-shim.cjs"
+      echo "clode: refreshed cached bun-shim for $KEY" >&2
+    fi
+    return 0
+  fi
   echo "clode: extracting JS for $KEY..." >&2
   mkdir -p "$CACHE"
   if ! "$PYTHON" "$LIBEXEC/extract-claude-js" "$BIN" "$CACHE/cli.cjs"; then

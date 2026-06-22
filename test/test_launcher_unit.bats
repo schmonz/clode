@@ -1,6 +1,8 @@
 #!/usr/bin/env bats
 # Unit tests: source bin/clode with the main guard suppressed, test functions.
 
+load test_helper
+
 setup() {
   ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   export CLODE_SOURCED=1
@@ -15,7 +17,7 @@ setup() {
 }
 
 @test "cache_key falls back to basename+signature for unversioned paths" {
-  tmp="$(mktemp)"; BIN="$tmp"
+  tmp="$(mktempf)"; BIN="$tmp"
   cache_key
   case "$KEY" in "$(basename "$tmp")"-*) ok=1 ;; *) ok=0 ;; esac
   rm -f "$tmp"

@@ -4,7 +4,7 @@ load test_helper
 
 setup() {
   cd "$BATS_TEST_DIRNAME/.."
-  TMP=$(mktemp -d)
+  TMP=$(mktempd)
   DEST="$TMP/dest"
   make install DESTDIR="$DEST" PREFIX=/usr \
     NODE="$(command -v node)" PYTHON="$(command -v python3)" CLAUDE_BIN=/opt/fake/claude

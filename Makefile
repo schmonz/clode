@@ -56,4 +56,7 @@ clean:
 test check:
 	sh test/run-all.sh
 
-.PHONY: all install uninstall dist clean test check
+test-online:
+	sh test/run-all.sh --online
+
+.PHONY: all install uninstall dist clean test check test-online
