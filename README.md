@@ -1,0 +1,160 @@
+# clode — run the latest Claude Code under Node
+
+Run the latest Claude Code on any platform where Node runs.
+
+## Use it
+
+Install `clode` (see [Install](#install) below), then run it the same way you
+would run `claude`:
+
+```sh
+clode                       # interactive TUI
+clode -p 'hello'            # non-interactive
+clode --version
+```
+
+All args pass straight through (`--settings`, `--mcp-config`, etc.).
+
+To update Claude Code, run `claude update` inside the TUI (or from `claude`
+directly) as you normally would. clode picks up the new version automatically
+on next launch — no extra steps needed.
+
+Our command is always **`clode`**. We never install, name, or replace anything
+called `claude`.
+
+## Why
+
+Claude Code used to run anywhere Node runs. It now ships as a
+[Bun](https://bun.sh) `--compile` standalone binary that targets only a few
+popular modern platforms: the Bun runtime requires AVX2 on x86 and is not
+available for non-x86 architectures or for systems such as NetBSD/pkgsrc.
+
+clode carves the plain-text JS application bundle out of that binary and runs
+it under the host's Node, with a small `Bun` global shim. Because the extracted
+bundle is architecture- and OS-independent JS, the same approach works on
+no-AVX2 x86, non-x86 arches, and non-macOS platforms.
+
+> On a box where the **native** binary runs fine (modern arm64/x86 macOS or
+> Linux), keep using `claude` — native is faster and full-featured. clode is for
+> the machines where native can't run.
+
+## Install
+
+### From a package
+
+clode is packaged for system package managers (AUR, Debian, pkgsrc). The
+package installs the clode toolset and depends on a provider package that
+supplies the upstream `claude` binary. clode extracts the bundle on first run,
+caches it under `~/.cache/clode`, and re-extracts automatically when the
+provider updates the binary.
+
+### From source
+
+```sh
+make install PREFIX=/usr/local              # honors DESTDIR, BINDIR, LIBEXECDIR, MANDIR
+make install PREFIX=/usr CLAUDE_BIN=/usr/bin/claude   # bake a provider path
+make dist                                   # clode-<version>.tar.gz (source only)
+```
+
+The launcher finds its helper files under `LIBEXECDIR/clode` and the upstream
+binary by precedence (`CLODE_CLAUDE_BIN`, a baked provider path,
+`~/.local/bin/claude`, `claude` on `PATH`).
+
+## How it works
+
+**Extractor (`libexec/extract-claude-js`)** — finds the `@bun-cjs` entry module
+inside the binary's `__BUN` segment by module name, strips Bun's CJS wrapper,
+rewrites `import.meta`, and prepends a prelude that installs the `Bun` global
+shim. Output is plain CommonJS.
+
+**Shim (`libexec/bun-shim.cjs`)** — a `Bun` global for Node: text/hash/spawn/which/semver
+and friends, a `Module._load` hook resolving `bun:ffi` and external npm modules
+the bundle `require()`s (e.g. `ws`), and a `node:fs` `readSync({length})` compat
+shim. Because the extracted bundle is plain JS, Node is the host today — and
+other modern JS runtimes are a possible future host.
+
+**Launcher (`bin/clode`)** — resolves the version the updater linked at
+`~/.local/bin/claude`, extracts and caches `<version>/cli.cjs` on first use,
+then runs it under Node in a clean environment. A new provider version
+auto-extracts on next launch. It also sets `DISABLE_INSTALLATION_CHECKS=1`
+(override to `0` to re-enable) to suppress false-positive "installed via npm"
+notices that don't apply to a non-native install.
+
+## Keeping up with updates
+
+Updates are transparent (extract-on-first-use, cached per version). But each
+new version may use more of the Bun API. After an update, check for surface
+drift with the inspector:
+
+```sh
+libexec/inspect-claude-bundle ~/.local/share/claude/versions/<ver> \
+        --shim libexec/bun-shim.cjs --coverage
+```
+
+This reports every `Bun.*` member, `bun:` module, and external `require()` the
+bundle uses, classified **implemented / stubbed / missing**, and flags anything
+**UNACCOUNTED FOR** — including *MISSING external modules*, the class most likely
+to **silently hang the interactive TUI** (a missing `require()` rejects in a
+render-gating promise). Use `--strict` to exit nonzero on anything unaccounted
+for.
+
+The launcher's own version check (not a hardcoded number here) is the
+authoritative guard for Node compatibility.
+
+## Limitations
+
+- **Disabled native features** — image/sharp, audio capture, computer-use,
+  SQLite-backed bits, MSAL: these are Bun-ABI native `.node` addons embedded in
+  the binary and can't load under Node. They degrade gracefully.
+- **`ws` is stubbed** — WebSocket client features (voice speech-to-text, realtime
+  client) don't connect; they no longer hang startup.
+- **Runtime TypeScript** — `Bun.Transpiler`/`esbuild` are not provided, so
+  TS-authored hooks/MCP/plugins won't transpile. JS ones work.
+- Various rarely-used `Bun.*` members are stubbed or missing (see the coverage
+  report).
+
+### Old macOS: slow TLS startup
+
+Claude Code trusts the macOS **system** certificate store by default. On legacy
+macOS (the pre-`trustd` `ocspd`/CSSM trust stack) evaluating that store does
+blocking per-certificate OCSP fetches and can stall startup for tens of seconds.
+clode detects that stack (no `/usr/libexec/trustd`) and defaults
+`CLAUDE_CODE_CERT_STORE=bundled` there, using Node's bundled Mozilla roots — fast,
+and enough for `api.anthropic.com`. Override with `CLAUDE_CODE_CERT_STORE=system`
+to force the system store, or add a private/corporate root with
+`NODE_EXTRA_CA_CERTS=/path/to/root.pem` to keep the fast bundled path.
+
+## Requirements
+
+- **A recent Node** — the launcher checks the version and gives a clear error if
+  it is too old. Node's minimum rises over time as Claude Code adopts newer JS;
+  the launcher is always the authoritative source.
+- **Python 3** — used for extraction only.
+
+Override the host tools per machine: `CLODE_NODE`, `CLODE_PYTHON`, and
+`CLODE_PATH` (the clean-env PATH; defaults to the node + python dirs plus common
+tool locations).
+
+## Tests
+
+    make test                  # full suite (some tests need a logged-in ~/.claude + network)
+    CLODE_OFFLINE=1 make test  # skip the network/model tests
+
+`make test` runs the pytest, node:test, and bats suites via `test/run-all.sh`
+(its single underlying runner). If your Node isn't found, set `CLODE_NODE` to it.
+For environments without `make`: `sh test/run-all.sh [--offline]`.
+
+## Developing
+
+The tests need `bats` (shell), `pytest` (Python), and a host Node (`node:test`).
+Running `clode` itself needs none of those — only a recent Node and Python 3.
+
+## Uninstall
+
+```sh
+make uninstall PREFIX=/usr/local            # remove installed files
+rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/clode"   # drop the extraction cache
+```
+
+The upstream native binary and its `~/.local/bin/claude` pointer are never
+modified by this project.

@@ -1,0 +1,11 @@
+build/
+*.cjs.cache
+__pycache__/
+*.pyc
+
+# Superpowers working docs (plans, approaches, skill scratch) — not part of the project
+docs/
+
+# macOS cruft
+.DS_Store
+._*
