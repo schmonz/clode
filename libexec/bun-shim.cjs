@@ -85,97 +85,161 @@ function isWide(c){
     (c>=0xF900&&c<=0xFAFF)||(c>=0xFE30&&c<=0xFE4F)||(c>=0xFF00&&c<=0xFF60)||
     (c>=0xFFE0&&c<=0xFFE6)||(c>=0x1F300&&c<=0x1FAFF)||(c>=0x20000&&c<=0x3FFFD);
 }
-function charWidth(c){
+// Code points that are emoji-presentation by Unicode default. NOTE: conservative
+// terminals (old iTerm2, *BSD consoles — clode's targets) still render a lone one
+// at width 1 and only widen it with an explicit VS16. So this set does NOT force
+// width 2 on its own; it only seeds isEmojiBase() as VS16-promotable. (A "modern"
+// Unicode-9-width terminal would want these at 2 — that's the terminal's call.)
+function isEmojiPresentation(c){
+  return (c>=0x231A&&c<=0x231B)||(c>=0x23E9&&c<=0x23EC)||c===0x23F0||c===0x23F3||
+    (c>=0x25FD&&c<=0x25FE)||(c>=0x2614&&c<=0x2615)||(c>=0x2648&&c<=0x2653)||
+    c===0x267F||c===0x2693||c===0x26A1||(c>=0x26AA&&c<=0x26AB)||
+    (c>=0x26BD&&c<=0x26BE)||(c>=0x26C4&&c<=0x26C5)||c===0x26CE||c===0x26D4||
+    c===0x26EA||(c>=0x26F2&&c<=0x26F3)||c===0x26F5||c===0x26FA||c===0x26FD||
+    c===0x2705||(c>=0x270A&&c<=0x270B)||c===0x2728||c===0x274C||c===0x274E||
+    (c>=0x2753&&c<=0x2755)||c===0x2757||(c>=0x2795&&c<=0x2797)||c===0x27B0||
+    c===0x27BF||(c>=0x2B1B&&c<=0x2B1C)||c===0x2B50||c===0x2B55||
+    c===0x1F004||c===0x1F0CF||c===0x1F18E||(c>=0x1F191&&c<=0x1F19A)||
+    (c>=0x1F1E6&&c<=0x1F1FF)||c===0x1F201||c===0x1F21A||c===0x1F22F||
+    (c>=0x1F232&&c<=0x1F236)||(c>=0x1F238&&c<=0x1F23A)||(c>=0x1F250&&c<=0x1F251);
+}
+// Emoji that DEFAULT to text presentation (one column) but switch to emoji
+// presentation — two columns — when followed by VS16 (U+FE0F): ⚠️ ☀️ ▶️.
+// Gated to the symbol blocks so a stray VS16 after ordinary text (a️) is ignored.
+function isEmojiBase(c){
+  return c===0x00A9||c===0x00AE||c===0x203C||c===0x2049||c===0x2122||c===0x2139||
+    (c>=0x2190&&c<=0x21FF)||(c>=0x2300&&c<=0x23FF)||(c>=0x2460&&c<=0x24FF)||
+    (c>=0x25A0&&c<=0x27BF)||c===0x2934||c===0x2935||(c>=0x2B00&&c<=0x2BFF)||
+    c===0x3030||c===0x303D||c===0x3297||c===0x3299||isEmojiPresentation(c);
+}
+// `next` is the following code point (for VS16 lookahead); 0/undefined at end.
+function charWidth(c, next){
   if (c === 0 || isZeroWidth(c)) return 0;
-  return isWide(c) ? 2 : 1;
+  if (next === 0xFE0F && isEmojiBase(c)) return 2;   // VS16 forces emoji width 2
+  return isWide(c) ? 2 : 1;                           // lone BMP symbols stay width 1
 }
 function stringWidth(s){
   s = stripANSI(String(s));
+  const cps = [];
+  for (const ch of s) cps.push(ch.codePointAt(0));
   let w = 0;
-  for (const ch of s) w += charWidth(ch.codePointAt(0));
+  for (let i = 0; i < cps.length; i++) w += charWidth(cps[i], cps[i + 1]);
   return w;
 }
 
-// --- wrapAnsi: ANSI-aware word wrap to `columns`. Wraps at spaces, hard-breaks
-// words longer than the width, preserves explicit newlines, and re-opens the
-// active SGR style at the start of each wrapped line (closing it at the end) so
-// color never bleeds across — or gets dropped at — a break. (s)=>s never wrapped.
-// Whitespace is preserved verbatim (leading, trailing, runs) EXCEPT the single
-// separator consumed at a forced wrap; text that fits returns byte-for-byte
-// unchanged. Losing whitespace here desynced the input editor's cursor math from
-// what it rendered, which crashed the TUI on indented / multi-space input. ---
-const SGR_ONLY = /^\x1b\[[0-9;]*m$/;
-const ESC_AT = /^(?:\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-9;?]*[ -\/]*[@-~])/;
-function nextActive(active, esc){
-  if (!SGR_ONLY.test(esc)) return active;     // only SGR styles carry across lines
-  const params = esc.slice(2, -1);            // between ESC[ and m
-  return (params === '' || params === '0') ? '' : active + esc;  // reset clears
-}
-function wrapLine(line, columns){
-  // Tokenize into alternating word / whitespace runs; escapes attach to the
-  // current token. Spaces become their own tokens so they survive intact unless
-  // dropped as the separator at a wrap point.
-  const tokens = [];
-  let tok = null;
-  for (let i = 0; i < line.length;){
-    if (line[i] === '\x1b'){
-      const m = ESC_AT.exec(line.slice(i));
-      // Escapes bind to a WORD token, never to a whitespace run: a span that
-      // opens just after a space (`...word ESC[7mword`) must travel with the
-      // upcoming word. Otherwise the separator space carries the style, and
-      // dropping that space at a wrap leaks the next span's color (and a stray
-      // reset) onto the END of the previous line — misplaced TUI highlighting.
-      if (m){
-        if (!tok || tok.space){ if (tok) tokens.push(tok); tok = { str: '', w: 0, escs: [], space: false }; }
-        tok.str += m[0]; tok.escs.push(m[0]); i += m[0].length; continue;
-      }
-    }
-    const cp = line.codePointAt(i), ch = String.fromCodePoint(cp), isSp = ch === ' ';
-    if (!tok || tok.space !== isSp){ if (tok) tokens.push(tok); tok = { str: '', w: 0, escs: [], space: isSp }; }
-    tok.str += ch; tok.w += charWidth(cp);
-    i += ch.length;
-  }
-  if (tok) tokens.push(tok);
+// --- wrapAnsi: faithful port of the `wrap-ansi` algorithm (which Bun.wrapAnsi
+// mirrors), wired to OUR stringWidth/stripANSI so wrapping and width-measuring
+// share ONE width function — the property that makes native's wraps and the
+// renderer's inline-code highlight positions line up. Honors the {trim, hard,
+// wordWrap} options the renderer and editor pass; the previous hand-rolled version
+// ignored the options and dropped wrap-boundary whitespace, which drifted TUI
+// highlights. SGR/OSC is closed before each inserted newline and reopened after,
+// via the ansi-styles open->close map (single active code, exactly like wrap-ansi).
+// (We don't .normalize() the input the way wrap-ansi does, to keep the input
+// editor's byte-for-byte cursor math intact; the renderer feeds NFC text already.)
+const ESCAPES = new Set(['', '']);
+const A_BELL = '', A_LINK = ']8;;', FG_RESET = 39;
+const sgrCode = (code) => `[${code}m`;
+const sgrLink = (url) => `${A_LINK}${url}${A_BELL}`;
+// open SGR code -> its reset code (the slice of ansi-styles `.codes` we need)
+const SGR_RESET = new Map([[1, 22], [2, 22], [3, 23], [4, 24], [7, 27], [8, 28], [9, 29], [53, 55]]);
+for (let c = 30; c <= 37; c++) SGR_RESET.set(c, 39);
+for (let c = 90; c <= 97; c++) SGR_RESET.set(c, 39);
+for (let c = 40; c <= 47; c++) SGR_RESET.set(c, 49);
+for (let c = 100; c <= 107; c++) SGR_RESET.set(c, 49);
 
-  const result = [];
-  let cur = '', curW = 0, active = '', content = false, pending = null;  // pending = deferred space run
-  const flush = () => { result.push(cur + (active ? '\x1b[0m' : '')); cur = ''; curW = 0; content = false; };
-  const applyEscs = (t) => { for (const e of t.escs) active = nextActive(active, e); };
-  for (const t of tokens){
-    if (t.space){ pending = t; continue; }               // hold separators until we know the next word fits
-    const sepW = pending ? pending.w : 0;
-    if (t.w <= columns){
-      if (content && curW + sepW + t.w > columns){        // word won't fit: wrap, dropping the separator
-        if (pending){ applyEscs(pending); pending = null; }
-        flush(); cur = active;
-      } else if (pending){                                // separator (or leading space) kept
-        cur += pending.str; curW += pending.w; applyEscs(pending); pending = null;
-      }
-      cur += t.str; curW += t.w; content = true; applyEscs(t);
-    } else {                                              // overlong word: keep separator if it fits, then hard-break
-      if (pending){
-        if (curW + pending.w <= columns){ cur += pending.str; curW += pending.w; content = true; }
-        applyEscs(pending); pending = null;
-      }
-      for (let i = 0; i < t.str.length;){
-        if (t.str[i] === '\x1b'){
-          const m = ESC_AT.exec(t.str.slice(i));
-          if (m){ cur += m[0]; active = nextActive(active, m[0]); i += m[0].length; continue; }
-        }
-        const cp = t.str.codePointAt(i), ch = String.fromCodePoint(cp), cw = charWidth(cp);
-        if (content && curW + cw > columns){ flush(); cur = active; }
-        cur += ch; curW += cw; if (cw > 0) content = true;
-        i += ch.length;
+// Break a single word too long for `columns`, ANSI-aware (escapes count zero).
+function wrapWord(rows, word, columns){
+  const chars = [...word];
+  let inEscape = false, inLink = false;
+  let visible = stringWidth(stripANSI(rows[rows.length - 1]));
+  for (let i = 0; i < chars.length; i++){
+    const ch = chars[i], w = stringWidth(ch);
+    if (visible + w <= columns) rows[rows.length - 1] += ch;
+    else { rows.push(ch); visible = 0; }
+    if (ESCAPES.has(ch)){ inEscape = true; inLink = chars.slice(i + 1).join('').startsWith(A_LINK); }
+    if (inEscape){
+      if (inLink){ if (ch === A_BELL){ inEscape = false; inLink = false; } }
+      else if (ch === 'm'){ inEscape = false; }
+      continue;
+    }
+    visible += w;
+    if (visible === columns && i < chars.length - 1){ rows.push(''); visible = 0; }
+  }
+  if (!visible && rows[rows.length - 1].length > 0 && rows.length > 1) rows[rows.length - 2] += rows.pop();
+}
+
+// Trim trailing spaces from a row without disturbing ANSI escapes.
+function trimRowRight(s){
+  const words = s.split(' ');
+  let last = words.length;
+  while (last > 0 && stringWidth(words[last - 1]) === 0) last--;
+  return last === words.length ? s : words.slice(0, last).join(' ') + words.slice(last).join('');
+}
+
+function wrapAnsiLine(string, columns, options){
+  if (options.trim !== false && string.trim() === '') return '';
+  const words = string.split(' ');
+  const lengths = words.map((w) => stringWidth(w));
+  let rows = [''];
+  for (let index = 0; index < words.length; index++){
+    const word = words[index];
+    if (options.trim !== false) rows[rows.length - 1] = rows[rows.length - 1].trimStart();
+    let rowLength = stringWidth(rows[rows.length - 1]);
+    if (index !== 0){
+      if (rowLength >= columns && (options.wordWrap === false || options.trim === false)){ rows.push(''); rowLength = 0; }
+      if (rowLength > 0 || options.trim === false){ rows[rows.length - 1] += ' '; rowLength++; }
+    }
+    if (options.hard && lengths[index] > columns){
+      const remaining = columns - rowLength;
+      const breaksThis = 1 + Math.floor((lengths[index] - remaining - 1) / columns);
+      const breaksNext = Math.floor((lengths[index] - 1) / columns);
+      if (breaksNext < breaksThis) rows.push('');
+      wrapWord(rows, word, columns);
+      continue;
+    }
+    if (rowLength + lengths[index] > columns && rowLength > 0 && lengths[index] > 0){
+      if (options.wordWrap === false && rowLength < columns){ wrapWord(rows, word, columns); continue; }
+      rows.push('');
+    }
+    if (rowLength + lengths[index] > columns && options.wordWrap === false && !options.hard){ wrapWord(rows, word, columns); continue; }
+    rows[rows.length - 1] += word;
+  }
+  if (options.trim !== false) rows = rows.map(trimRowRight);
+
+  // Reconstruct style across the inserted newlines: close the active SGR/OSC before
+  // each '\n' and reopen it after. Single active code, exactly like wrap-ansi.
+  const pre = rows.join('\n');
+  const cps = [...pre];
+  let out = '', active, activeUrl, idx = 0;
+  for (let i = 0; i < cps.length; i++){
+    const ch = cps[i];
+    out += ch;
+    if (ESCAPES.has(ch)){
+      const m = /(?:\[(\d+)m|\]8;;(.*?))/.exec(pre.slice(idx));
+      if (m){
+        if (m[1] !== undefined){ const c = Number(m[1]); active = c === FG_RESET ? undefined : c; }
+        else if (m[2] !== undefined){ activeUrl = m[2].length === 0 ? undefined : m[2]; }
       }
     }
+    const reset = SGR_RESET.get(Number(active));
+    if (cps[i + 1] === '\n'){
+      if (activeUrl) out += sgrLink('');
+      if (active && reset) out += sgrCode(reset);
+    } else if (ch === '\n'){
+      if (active && reset) out += sgrCode(active);
+      if (activeUrl) out += sgrLink(activeUrl);
+    }
+    idx += ch.length;
   }
-  if (pending){ cur += pending.str; applyEscs(pending); }  // trailing whitespace stays on the last line
-  flush();
-  return result.join('\n');
+  return out;
 }
-function wrapAnsi(str, columns){
+
+function wrapAnsi(string, columns, options){
   columns = columns > 0 ? columns : 80;
-  return String(str).split('\n').map((l) => wrapLine(l, columns)).join('\n');
+  options = options || {};
+  return String(string).replace(/\r\n/g, '\n').split('\n')
+    .map((line) => wrapAnsiLine(line, columns, options)).join('\n');
 }
 
 // --- hashing: Bun.hash default = Wyhash64 (returns BigInt). TODO: exact wyhash if values
