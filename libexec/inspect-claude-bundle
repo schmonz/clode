@@ -1,0 +1,391 @@
+#!/usr/bin/env python3
+"""inspect-claude-bundle  <claude-native-binary | extracted-cli.cjs>  [options]
+
+Report what a Claude Code bundle needs from the Node host, and (with --shim)
+exactly which of those needs our extracted JS version does NOT yet account for.
+Dependency-free. Rerun on each `claude update` to track surface drift.
+
+Options:
+  --shim PATH    bun-shim.cjs to compare against (enables the coverage report)
+  --node PATH    node to load the shim with (default /opt/pkg/bin/node)
+  --coverage     print ONLY the coverage / unaccounted-features report
+  --json         machine-readable output
+  --strict       exit non-zero if any upstream feature is unaccounted for
+
+Reports:
+  * Bun.* API surface  — every real `Bun.<member>` referenced, with counts.
+  * bun: modules       — every require/import("bun:..."); flags unhandled ones.
+  * embedded assets    — native .node/.wasm blobs = optional features that are
+                         disabled under the loose-JS host.
+  * @bun-cjs blocks    — module name + size of each carved block (entry first).
+  * COVERAGE (--shim)  — classifies each upstream need as implemented / stubbed
+                         (provided but throws) / missing / disabled-native, and
+                         lists everything UNACCOUNTED FOR.
+"""
+import re, sys, os, json
+
+MARKER = re.compile(rb'// @bun\b[^\n]*@bun-cjs\n\(function\(exports, require, module, __filename, __dirname\) \{')
+BUN_API = re.compile(rb'\bBun\.([A-Za-z_$][A-Za-z0-9_$]*)')
+BUN_MOD = re.compile(rb'''(?:require|import)\(\s*["'](bun:[\w./-]+)["']''')
+# Any require()/import() string specifier. In a Bun --compile bundle, inlined deps
+# use internal ids, so a STRING specifier here is an *external* module the host
+# must resolve at runtime — the class that hung the TUI (require("ws")).
+REQ_ANY = re.compile(rb'''(?:require|import)\(\s*["']([^"']+)["']''')
+ASSET = re.compile(rb'[\w./$-]{3,90}\.(?:node|wasm)\x00')
+JSON_TXT = re.compile(rb'[\w./$-]{3,90}\.(?:json|txt)\x00')
+
+# Curated set of real Bun global-namespace members (Bun 1.x). Used to separate
+# genuine API references from minifier-concatenation noise like `Bun.stderrBun`
+# (= `Bun.stderr` jammed against `Bun` in a string). A bundle member NOT in this
+# set is reported as "unrecognized" for triage (could be a brand-new Bun API or
+# noise) rather than silently treated as a real gap. Extend as Bun grows.
+KNOWN_BUN = {
+    'serve', 'fetch', 'file', 'write', 'spawn', 'spawnSync', 'which', 'env',
+    'version', 'revision', 'main', 'argv', 'stdin', 'stdout', 'stderr',
+    'Glob', 'build', 'Transpiler', 'FileSystemRouter', 'Terminal',
+    'ArrayBufferSink', 'deepEquals', 'deepMatch', 'escapeHTML', 'stringWidth',
+    'stripANSI', 'wrapAnsi', 'nanoseconds', 'sleep', 'sleepSync', 'peek',
+    'inspect', 'gc', 'generateHeapSnapshot', 'allocUnsafe', 'concatArrayBuffers',
+    'readableStreamToArray', 'readableStreamToArrayBuffer', 'readableStreamToBytes',
+    'readableStreamToBlob', 'readableStreamToJSON', 'readableStreamToText',
+    'readableStreamToFormData', 'resolve', 'resolveSync', 'fileURLToPath',
+    'pathToFileURL', 'listen', 'connect', 'udpSocket', 'dns', 'semver', 'hash',
+    'CryptoHasher', 'password', 'gzipSync', 'gunzipSync', 'deflateSync',
+    'inflateSync', 'color', 'randomUUIDv7', 'indexOfLine', 'mmap', 'openInEditor',
+    'enableANSIColors', 'isMainThread', 'plugin', 'registerMacro', 'Cookie',
+    'CookieMap', 'S3Client', 'redis', 'sql', 'SQL', 's3', 'YAML', 'JSONL',
+    'jest', 'cron', 'Security', 'Database', 'FFI', 'embeddedFiles', '$',
+}
+
+# Map embedded native-addon basenames to the upstream feature they back and
+# whether the loose-JS host can ever use them. (Bun-ABI, platform-specific .node
+# addons can't load under Node, so these features are intentionally disabled.)
+NATIVE_FEATURES = {
+    'better_sqlite3': 'SQLite storage (bun:sqlite / history, todos)',
+    'sharp': 'image processing / resizing (sharp)',
+    'image-processor': 'image paste / processing',
+    'audio-capture': 'audio capture (voice input)',
+    'computer-use-swift': 'computer-use (screen control, macOS Swift)',
+    'computer-use-input': 'computer-use (input injection)',
+    'url-handler': 'macOS URL-scheme handler',
+    'modifiers': 'keyboard modifier capture',
+    'msal.js': 'Microsoft auth (MSAL) native bits',
+}
+
+
+def nearest_name(data, start):
+    lo = max(0, start - 4096)
+    seg = data[lo:start]
+    j = seg.rfind(b'.js\x00')
+    if j == -1:
+        return None
+    k = seg.rfind(b'\x00', 0, j)
+    return seg[k + 1:j + 3].decode('latin-1', 'replace')
+
+
+def count(pat, data, group=1):
+    out = {}
+    for m in pat.finditer(data):
+        key = m.group(group).decode('latin-1')
+        out[key] = out.get(key, 0) + 1
+    return out
+
+
+def feature_for_asset(asset):
+    base = os.path.basename(asset)
+    for stem, desc in NATIVE_FEATURES.items():
+        if base.startswith(stem):
+            return desc
+    return None
+
+
+def inspect(path):
+    data = open(path, 'rb').read()
+
+    bun_api = count(BUN_API, data)
+    bun_mods = count(BUN_MOD, data)
+
+    assets = sorted({m.group().rstrip(b'\x00').decode('latin-1') for m in ASSET.finditer(data)})
+    json_txt = sorted({m.group().rstrip(b'\x00').decode('latin-1') for m in JSON_TXT.finditer(data)})
+
+    blocks = []
+    for m in MARKER.finditer(data):
+        body_start = m.end()
+        nul = data.find(b'\x00', body_start)
+        end = nul if nul != -1 else len(data)
+        size = len(data[body_start:end])
+        blocks.append({'name': nearest_name(data, m.start()), 'size': size})
+    blocks.sort(key=lambda b: -b['size'])
+
+    # External module specifiers: bare (non-relative, non-bun:) require/import.
+    # node:-prefixed are explicitly builtin; bare ones (fs, ws, ...) get classified
+    # by the node probe (builtin vs installed vs host-stub vs MISSING).
+    ext = {}
+    valid_spec = re.compile(r'^(?:@[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$')  # npm-ish, ASCII
+    for m in REQ_ANY.finditer(data):
+        spec = m.group(1).decode('latin-1')
+        if spec.startswith(('.', '/', 'bun:', 'node:')):
+            continue
+        if not valid_spec.match(spec):       # drop binary noise from native-binary scans
+            continue
+        ext[spec] = ext.get(spec, 0) + 1
+
+    real = {k: v for k, v in bun_api.items() if k in KNOWN_BUN}
+    unrecognized = {k: v for k, v in bun_api.items() if k not in KNOWN_BUN}
+
+    # distinct features backed by embedded native addons (dedup by description)
+    disabled = sorted({feature_for_asset(a) for a in assets if feature_for_asset(a)})
+
+    return {
+        'file': path,
+        'bytes': len(data),
+        'embeddedFiles_consumed': 'embeddedFiles' in bun_api,
+        'bun_api_real': dict(sorted(real.items(), key=lambda kv: (-kv[1], kv[0]))),
+        'bun_api_unrecognized': dict(sorted(unrecognized.items(), key=lambda kv: (-kv[1], kv[0]))),
+        'bun_modules': dict(sorted(bun_mods.items())),
+        'external_modules': dict(sorted(ext.items(), key=lambda kv: (-kv[1], kv[0]))),
+        'embedded_assets': assets,
+        'disabled_native_features': disabled,
+        'json_txt_names': json_txt,
+        'bun_cjs_blocks': blocks,
+    }
+
+
+def probe_shim(shim_path, node, specifiers):
+    """Load the shim in node and report: the Bun.* members it provides, which are
+    throwing stubs, and — for each external module specifier — whether the host
+    can resolve it (builtin / installed / host-stub / MISSING). Returns a dict or
+    None if node/shim unavailable. The MISSING list is the startup-hazard class."""
+    import subprocess
+    if not (shim_path and os.path.exists(shim_path)):
+        return None
+    code = """
+const shim = require(process.argv[1]);
+const specs = JSON.parse(process.argv[2]);
+const Module = require('module');
+const B = globalThis.Bun || {};
+const keys = Object.keys(B);
+const stubs = keys.filter(k => typeof B[k] === 'function' && B[k].__bunShimStub);
+const hostModules = new Set(shim.__hostModules || []);
+const bunBuiltins = new Set(shim.__bunBuiltins || []);
+const isBuiltin = Module.isBuiltin || ((n) => require('module').builtinModules.includes(n.replace(/^node:/, '')));
+const modules = {};
+for (const s of specs) {
+  if (bunBuiltins.has(s)) { modules[s] = 'bun-builtin'; continue; }
+  if (isBuiltin(s)) { modules[s] = 'builtin'; continue; }
+  let resolved = false;
+  try { require.resolve(s); resolved = true; } catch (_) {}
+  if (resolved) modules[s] = 'installed';
+  else if (hostModules.has(s)) modules[s] = 'host-stub';
+  else modules[s] = 'MISSING';
+}
+process.stdout.write(JSON.stringify({ keys, stubs, modules }));
+"""
+    try:
+        out = subprocess.run([node, '-e', code, os.path.abspath(shim_path), json.dumps(specifiers)],
+                             capture_output=True, text=True, timeout=30)
+        if out.returncode != 0:
+            return None
+        return json.loads(out.stdout)
+    except Exception:
+        return None
+
+
+# bun: modules the shim's Module._load hook handles (keep in sync with bun-shim).
+HANDLED_BUN_MODULES = {'bun:ffi'}
+
+# External require()s we have reviewed and accept as MISSING: each is lazily
+# loaded behind try/catch for a feature the Node host intentionally doesn't
+# support, so it degrades that feature rather than crashing startup. A NEW
+# external require not in this set (and not stubbed by bun-shim) is the class
+# that hard-fails at a user's runtime (see undici/proxy) — --strict fails on it
+# so we catch it at update time, not in the field.
+ACCEPTED_MISSING_EXTERNALS = {
+    'esbuild', 'typescript',
+    'playwright', 'playwright-core',
+    'react', 'react-dom', 'react-dom/client',
+    'node-fetch',
+    'ajv-formats/dist/formats',
+    'ajv/dist/runtime/equal', 'ajv/dist/runtime/ucs2length',
+    'ajv/dist/runtime/uri', 'ajv/dist/runtime/validation_error',
+}
+
+def unreviewed_externals(modules_missing):
+    """Missing external requires that are neither stubbed nor on the accepted list."""
+    return sorted(m for m in modules_missing if m not in ACCEPTED_MISSING_EXTERNALS)
+
+
+# Bun.* members the shim deliberately provides as throwing stubs (features the
+# Node host can't support; they degrade rather than crash — see docs/BACKLOG.md).
+ACCEPTED_STUBBED_BUN = {'serve', 'listen', 'file', 'write', 'Terminal', 'Transpiler'}
+# Missing Bun.* members are NOT pre-accepted: a newly-used Bun API we don't provide
+# should be reviewed. (Empty set => any 'missing' Bun.* fails the gate.)
+ACCEPTED_MISSING_BUN = set()
+# bun: modules the shim resolves to a generic shim object rather than a real impl.
+# Only bun:ffi is specifically handled; bun:jsc is unused at runtime (BACKLOG).
+ACCEPTED_BUN_MODULES = {'bun:jsc'}
+
+def gate_problems(cov):
+    """Everything --strict should fail on: unaccounted items NOT on a reviewed
+    allowlist, across Bun.* stubs/missing, bun: modules, and external requires."""
+    p = []
+    p += ['Bun.%s (stubbed)' % k for k in cov['stubbed'] if k not in ACCEPTED_STUBBED_BUN]
+    p += ['Bun.%s (missing)' % k for k in cov['missing'] if k not in ACCEPTED_MISSING_BUN]
+    p += ['%s (bun: module unhandled)' % m for m in cov['bun_modules_unhandled'] if m not in ACCEPTED_BUN_MODULES]
+    p += ['%s (external require MISSING)' % m for m in cov['modules_missing'] if m not in ACCEPTED_MISSING_EXTERNALS]
+    return sorted(p)
+
+
+def coverage(r, shim):
+    """Classify every upstream need vs what the shim provides."""
+    provided, stubs = set(shim['keys']), set(shim['stubs'])
+    implemented, stubbed, missing = [], [], []
+    for k in r['bun_api_real']:
+        if k in stubs:
+            stubbed.append(k)
+        elif k in provided:
+            implemented.append(k)
+        else:
+            missing.append(k)
+    bun_mod_unhandled = sorted(m for m in r['bun_modules'] if m not in HANDLED_BUN_MODULES)
+    mods = shim.get('modules', {})
+    modules_missing = sorted(m for m, st in mods.items() if st == 'MISSING')
+    modules_host_stub = sorted(m for m, st in mods.items() if st == 'host-stub')
+    return {
+        'implemented': sorted(implemented),
+        'stubbed': sorted(stubbed),
+        'missing': sorted(missing),
+        'unrecognized': sorted(r['bun_api_unrecognized']),
+        'bun_modules_unhandled': bun_mod_unhandled,
+        'modules_missing': modules_missing,
+        'modules_host_stub': modules_host_stub,
+        'disabled_native_features': r['disabled_native_features'],
+    }
+
+
+def human_surface(r):
+    L = []
+    L.append("file: %s (%d bytes)" % (r['file'], r['bytes']))
+    L.append("")
+    L.append("@bun-cjs blocks (%d):" % len(r['bun_cjs_blocks']))
+    for b in r['bun_cjs_blocks']:
+        L.append("  %10d  %s" % (b['size'], b['name'] or '<unnamed>'))
+    L.append("")
+    L.append("Bun.* API surface (%d real):" % len(r['bun_api_real']))
+    for k, v in r['bun_api_real'].items():
+        L.append("  %4dx  Bun.%s" % (v, k))
+    if r['bun_api_unrecognized']:
+        L.append("")
+        L.append("  (%d unrecognized — new API or minifier noise, triage:)" % len(r['bun_api_unrecognized']))
+        for k, v in r['bun_api_unrecognized'].items():
+            L.append("    %4dx  Bun.%s" % (v, k))
+    L.append("")
+    L.append("bun: modules:")
+    for k, v in r['bun_modules'].items():
+        L.append("  %4dx  %s%s" % (v, k, '' if k in HANDLED_BUN_MODULES else '   <-- UNHANDLED'))
+    if not r['bun_modules']:
+        L.append("  (none)")
+    L.append("")
+    L.append("embedded .node/.wasm assets (%d) -> disabled features under loose JS:" % len(r['embedded_assets']))
+    for f in r['disabled_native_features']:
+        L.append("  - %s" % f)
+    L.append("")
+    L.append("external module require()s (%d) — non-builtin specifiers:" % len(r['external_modules']))
+    for k, v in r['external_modules'].items():
+        L.append("  %4dx  %s" % (v, k))
+    return "\n".join(L)
+
+
+def human_coverage(r, cov):
+    L = []
+    real = len(r['bun_api_real'])
+    L.append("=== COVERAGE: upstream needs vs extracted-JS host ===")
+    L.append("Bun.* real members used by bundle: %d" % real)
+    L.append("  implemented : %d" % len(cov['implemented']))
+    L.append("  stubbed     : %d  (provided but throw if exercised)" % len(cov['stubbed']))
+    L.append("  missing     : %d  (not provided at all)" % len(cov['missing']))
+    L.append("")
+    unaccounted = (len(cov['stubbed']) + len(cov['missing']) + len(cov['bun_modules_unhandled'])
+                   + len(cov['modules_missing']))
+    L.append("--- UNACCOUNTED FOR (%d Bun.* + %d bun: modules + %d ext modules + %d native features) ---"
+             % (len(cov['stubbed']) + len(cov['missing']), len(cov['bun_modules_unhandled']),
+                len(cov['modules_missing']), len(cov['disabled_native_features'])))
+    if cov['modules_missing']:
+        L.append("MISSING external modules (require() will reject -> SILENT TUI HANG risk):")
+        for m in cov['modules_missing']:
+            L.append("  %s" % m)
+    if cov['modules_host_stub']:
+        L.append("HOST-STUBBED modules (resolve to a shim; feature degraded):")
+        for m in cov['modules_host_stub']:
+            L.append("  %s" % m)
+    if cov['stubbed']:
+        L.append("STUBBED (throw when used):")
+        for k in cov['stubbed']:
+            L.append("  Bun.%s" % k)
+    if cov['missing']:
+        L.append("MISSING (not on the shim):")
+        for k in cov['missing']:
+            L.append("  Bun.%s" % k)
+    if cov['bun_modules_unhandled']:
+        L.append("UNHANDLED bun: modules:")
+        for m in cov['bun_modules_unhandled']:
+            L.append("  %s" % m)
+    if cov['disabled_native_features']:
+        L.append("DISABLED native-addon features (cannot run under loose JS):")
+        for f in cov['disabled_native_features']:
+            L.append("  - %s" % f)
+    if cov['unrecognized']:
+        L.append("UNRECOGNIZED Bun.* (triage — new API or noise):")
+        for k in cov['unrecognized']:
+            L.append("  Bun.%s" % k)
+    return "\n".join(L), unaccounted
+
+
+def opt(flag, default=None):
+    a = sys.argv[1:]
+    return a[a.index(flag) + 1] if flag in a and a.index(flag) + 1 < len(a) else default
+
+
+def main():
+    consumed_vals = {opt('--shim'), opt('--node')}
+    args = [a for a in sys.argv[1:]
+            if not a.startswith('-') and a not in consumed_vals]
+    if len(args) != 1:
+        sys.exit(__doc__)
+    only_cov = '--coverage' in sys.argv[1:]
+    as_json = '--json' in sys.argv[1:]
+    strict = '--strict' in sys.argv[1:]
+
+    r = inspect(args[0])
+    shim = probe_shim(opt('--shim'), opt('--node', '/opt/pkg/bin/node'),
+                      list(r['external_modules'].keys()))
+    cov = coverage(r, shim) if shim is not None else None
+
+    if as_json:
+        out = dict(r)
+        if cov is not None:
+            out['coverage'] = cov
+        print(json.dumps(out, indent=2))
+    else:
+        if not only_cov:
+            print(human_surface(r))
+        if cov is not None:
+            text, _ = human_coverage(r, cov)
+            if not only_cov:
+                print("")
+            print(text)
+        elif only_cov:
+            print("(no --shim given; coverage unavailable)")
+
+    if strict and cov is not None:
+        problems = gate_problems(cov)
+        if problems:
+            sys.stderr.write("UNREVIEWED upstream needs (stub/implement in bun-shim, or add to "
+                             "the ACCEPTED_* lists after review):\n")
+            for x in problems:
+                sys.stderr.write("  %s\n" % x)
+        sys.exit(1 if problems else 0)
+
+
+if __name__ == '__main__':
+    main()
