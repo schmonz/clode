@@ -1,0 +1,59 @@
+.Dd June 20, 2026
+.Dt CLODE 1
+.Os
+.Sh NAME
+.Nm clode
+.Nd run the latest Claude Code under host Node, no Bun runtime
+.Sh SYNOPSIS
+.Nm
+.Op Ar claude-args ...
+.Nm
+.Fl -clode-version
+.Sh DESCRIPTION
+.Nm
+locates an upstream
+.Xr claude 1
+binary (from a provider package or your own install), extracts its JavaScript
+bundle once, caches it per binary under your cache directory, and runs it under
+the system Node.
+A changed provider binary re-extracts on next launch, so updates are
+transparent.
+.Nm
+never installs, names, or replaces anything called
+.Ar claude ;
+it reads the upstream binary only as the source of the bundle and never
+redistributes it.
+.Pp
+.Fl -clode-version
+prints clode's own version and exits.
+All other arguments pass through to Claude Code.
+.Sh ENVIRONMENT
+.Bl -tag -width CLODE_VERSION_DIR
+.It Ev CLODE_CLAUDE_BIN
+Absolute path to the upstream claude binary (highest precedence).
+.It Ev CLODE_VERSION_DIR
+A specific on-disk version path to run.
+.It Ev CLODE_CACHE
+Cache root (default
+.Pa ${XDG_CACHE_HOME:-$HOME/.cache}/clode ) .
+.It Ev CLODE_LIBEXEC
+Directory holding the extractor and Bun shim.
+.It Ev CLODE_NODE , Ev CLODE_PYTHON
+Host node and python3 (absolute paths).
+.It Ev CLODE_PATH
+Clean-env PATH for the launched process.
+.It Ev DISABLE_INSTALLATION_CHECKS
+Set to 0 to re-enable the upstream npm-deprecation notices (default 1).
+.El
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa LIBEXEC/extract-claude-js , Pa LIBEXEC/bun-shim.cjs
+Extractor and Bun-global shim.
+.It Pa ${XDG_CACHE_HOME:-$HOME/.cache}/clode/<key>/cli.cjs
+Per-binary extracted bundle cache.
+.El
+.Sh SEE ALSO
+.Xr claude 1 ,
+.Xr node 1
+.Sh AUTHORS
+.An Amitai Schleier
