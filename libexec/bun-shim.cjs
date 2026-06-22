@@ -53,22 +53,129 @@ fs.readSync = function (fd, bufferOrOpts, ...rest) {
 // --coverage) can tell "provided but unimplemented" from a real implementation.
 const TODO = (name) => { const f = () => { throw new Error(`Bun.${name} not yet implemented in the Node host shim`); }; f.__bunShimStub = true; return f; };
 
-// --- text utils (minimal; replace with npm string-width/strip-ansi if exact widths matter) ---
-const ANSI = /\x1b\[[0-9;]*[A-Za-z]/g;
+// --- text utils (first-party, no deps; correctness pinned by test/text-format.test.cjs) ---
+// stripANSI removes both CSI (ESC [ ... letter) and OSC (ESC ] ... BEL|ST) sequences;
+// an OSC leak (hyperlinks, window titles) would otherwise show as raw text in the TUI.
+const ANSI = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-9;?]*[ -\/]*[@-~]/g;
 function stripANSI(s){ return String(s).replace(ANSI, ''); }
+
+// Display width of a single code point. Zero-width (combining marks, joiners,
+// bidi/format controls, variation selectors) -> 0; wide CJK/emoji -> 2; else 1.
+// Over-counting zero-width chars used to drift boxes/columns to the right.
+function isZeroWidth(c){
+  return c === 0x00AD ||                     // soft hyphen
+    (c >= 0x0300 && c <= 0x036F) ||          // combining diacritical marks
+    (c >= 0x0483 && c <= 0x0489) ||          // combining (Cyrillic)
+    (c >= 0x0591 && c <= 0x05BD) ||          // Hebrew points
+    (c >= 0x0610 && c <= 0x061A) ||          // Arabic marks
+    (c >= 0x064B && c <= 0x065F) || c === 0x0670 ||
+    (c >= 0x06D6 && c <= 0x06DC) ||
+    (c >= 0x1AB0 && c <= 0x1AFF) ||          // combining diacritical marks extended
+    (c >= 0x1DC0 && c <= 0x1DFF) ||          // combining diacritical marks supplement
+    (c >= 0x200B && c <= 0x200F) ||          // ZWSP, ZWNJ, ZWJ, LRM, RLM
+    (c >= 0x202A && c <= 0x202E) ||          // bidi embeddings/overrides
+    (c >= 0x2060 && c <= 0x2064) ||          // word joiner & invisible operators
+    (c >= 0x20D0 && c <= 0x20FF) ||          // combining marks for symbols
+    (c >= 0xFE00 && c <= 0xFE0F) ||          // variation selectors
+    (c >= 0xFE20 && c <= 0xFE2F) ||          // combining half marks
+    c === 0xFEFF;                            // ZWNBSP / BOM
+}
+function isWide(c){
+  return (c>=0x1100&&c<=0x115F)||(c>=0x2E80&&c<=0xA4CF)||(c>=0xAC00&&c<=0xD7A3)||
+    (c>=0xF900&&c<=0xFAFF)||(c>=0xFE30&&c<=0xFE4F)||(c>=0xFF00&&c<=0xFF60)||
+    (c>=0xFFE0&&c<=0xFFE6)||(c>=0x1F300&&c<=0x1FAFF)||(c>=0x20000&&c<=0x3FFFD);
+}
+function charWidth(c){
+  if (c === 0 || isZeroWidth(c)) return 0;
+  return isWide(c) ? 2 : 1;
+}
 function stringWidth(s){
   s = stripANSI(String(s));
   let w = 0;
-  for (const ch of s){
-    const c = ch.codePointAt(0);
-    if (c === 0) continue;
-    // wide CJK / emoji ranges -> width 2 (approximation)
-    if ((c>=0x1100&&c<=0x115F)||(c>=0x2E80&&c<=0xA4CF)||(c>=0xAC00&&c<=0xD7A3)||
-        (c>=0xF900&&c<=0xFAFF)||(c>=0xFE30&&c<=0xFE4F)||(c>=0xFF00&&c<=0xFF60)||
-        (c>=0xFFE0&&c<=0xFFE6)||(c>=0x1F300&&c<=0x1FAFF)||(c>=0x20000&&c<=0x3FFFD)) w+=2;
-    else w+=1;
-  }
+  for (const ch of s) w += charWidth(ch.codePointAt(0));
   return w;
+}
+
+// --- wrapAnsi: ANSI-aware word wrap to `columns`. Wraps at spaces, hard-breaks
+// words longer than the width, preserves explicit newlines, and re-opens the
+// active SGR style at the start of each wrapped line (closing it at the end) so
+// color never bleeds across — or gets dropped at — a break. (s)=>s never wrapped.
+// Whitespace is preserved verbatim (leading, trailing, runs) EXCEPT the single
+// separator consumed at a forced wrap; text that fits returns byte-for-byte
+// unchanged. Losing whitespace here desynced the input editor's cursor math from
+// what it rendered, which crashed the TUI on indented / multi-space input. ---
+const SGR_ONLY = /^\x1b\[[0-9;]*m$/;
+const ESC_AT = /^(?:\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-9;?]*[ -\/]*[@-~])/;
+function nextActive(active, esc){
+  if (!SGR_ONLY.test(esc)) return active;     // only SGR styles carry across lines
+  const params = esc.slice(2, -1);            // between ESC[ and m
+  return (params === '' || params === '0') ? '' : active + esc;  // reset clears
+}
+function wrapLine(line, columns){
+  // Tokenize into alternating word / whitespace runs; escapes attach to the
+  // current token. Spaces become their own tokens so they survive intact unless
+  // dropped as the separator at a wrap point.
+  const tokens = [];
+  let tok = null;
+  for (let i = 0; i < line.length;){
+    if (line[i] === '\x1b'){
+      const m = ESC_AT.exec(line.slice(i));
+      // Escapes bind to a WORD token, never to a whitespace run: a span that
+      // opens just after a space (`...word ESC[7mword`) must travel with the
+      // upcoming word. Otherwise the separator space carries the style, and
+      // dropping that space at a wrap leaks the next span's color (and a stray
+      // reset) onto the END of the previous line — misplaced TUI highlighting.
+      if (m){
+        if (!tok || tok.space){ if (tok) tokens.push(tok); tok = { str: '', w: 0, escs: [], space: false }; }
+        tok.str += m[0]; tok.escs.push(m[0]); i += m[0].length; continue;
+      }
+    }
+    const cp = line.codePointAt(i), ch = String.fromCodePoint(cp), isSp = ch === ' ';
+    if (!tok || tok.space !== isSp){ if (tok) tokens.push(tok); tok = { str: '', w: 0, escs: [], space: isSp }; }
+    tok.str += ch; tok.w += charWidth(cp);
+    i += ch.length;
+  }
+  if (tok) tokens.push(tok);
+
+  const result = [];
+  let cur = '', curW = 0, active = '', content = false, pending = null;  // pending = deferred space run
+  const flush = () => { result.push(cur + (active ? '\x1b[0m' : '')); cur = ''; curW = 0; content = false; };
+  const applyEscs = (t) => { for (const e of t.escs) active = nextActive(active, e); };
+  for (const t of tokens){
+    if (t.space){ pending = t; continue; }               // hold separators until we know the next word fits
+    const sepW = pending ? pending.w : 0;
+    if (t.w <= columns){
+      if (content && curW + sepW + t.w > columns){        // word won't fit: wrap, dropping the separator
+        if (pending){ applyEscs(pending); pending = null; }
+        flush(); cur = active;
+      } else if (pending){                                // separator (or leading space) kept
+        cur += pending.str; curW += pending.w; applyEscs(pending); pending = null;
+      }
+      cur += t.str; curW += t.w; content = true; applyEscs(t);
+    } else {                                              // overlong word: keep separator if it fits, then hard-break
+      if (pending){
+        if (curW + pending.w <= columns){ cur += pending.str; curW += pending.w; content = true; }
+        applyEscs(pending); pending = null;
+      }
+      for (let i = 0; i < t.str.length;){
+        if (t.str[i] === '\x1b'){
+          const m = ESC_AT.exec(t.str.slice(i));
+          if (m){ cur += m[0]; active = nextActive(active, m[0]); i += m[0].length; continue; }
+        }
+        const cp = t.str.codePointAt(i), ch = String.fromCodePoint(cp), cw = charWidth(cp);
+        if (content && curW + cw > columns){ flush(); cur = active; }
+        cur += ch; curW += cw; if (cw > 0) content = true;
+        i += ch.length;
+      }
+    }
+  }
+  if (pending){ cur += pending.str; applyEscs(pending); }  // trailing whitespace stays on the last line
+  flush();
+  return result.join('\n');
+}
+function wrapAnsi(str, columns){
+  columns = columns > 0 ? columns : 80;
+  return String(str).split('\n').map((l) => wrapLine(l, columns)).join('\n');
 }
 
 // --- hashing: Bun.hash default = Wyhash64 (returns BigInt). TODO: exact wyhash if values
@@ -158,8 +265,7 @@ const Bun = {
   argv: process.argv,
   stdin: process.stdin, stdout: process.stdout, stderr: process.stderr,
 
-  stripANSI, stringWidth,
-  wrapAnsi: (s)=> String(s),                 // TODO: real wrap-ansi
+  stripANSI, stringWidth, wrapAnsi,
   hash, which, spawn, semver, JSONL, YAML,
   deepEquals: (a,b)=> require('util').isDeepStrictEqual(a,b),
   gc: ()=> { if (global.gc) global.gc(); },
