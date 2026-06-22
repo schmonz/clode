@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+"""
+extract-claude-js  <claude-native-binary>  <out-cli.cjs>
+
+Pull the Claude Code JS bundle out of a Bun `--compile` standalone binary so it
+can run under plain Node. Version-independent: it does NOT depend on hardcoded
+offsets or the (private) Bun version — it searches for the Bun CJS entry marker
+and carves the bundle up to the next NUL.
+
+What it does:
+  1. Find every Bun CJS module block:  `// @bun ... @bun-cjs\n(function(exports,
+     require, module, __filename, __dirname) {  ...body...  })`  terminated by a
+     NUL byte (minified JS has no raw NULs).
+  2. Pick the block named entrypoints/cli.js — refuses to guess if not found.
+  3. Strip the marker + CJS wrapper, leaving the bare module body.
+  4. Rewrite `import.meta` (illegal in Node CJS) to a CJS-safe shim object.
+  5. Prepend a prelude that installs the Bun-global shim and __import_meta.
+  6. Verify the output before writing (rejects bad carves, removes partial output).
+
+The result is `require()`-able / runnable by Node >=18.
+"""
+import re, sys, os
+
+MARKER = re.compile(rb'// @bun\b[^\n]*@bun-cjs\n\(function\(exports, require, module, __filename, __dirname\) \{')
+
+# Tokens that must appear in any legitimate Claude Code CLI bundle.
+# Used by main() to catch wrong-block carves before caching.
+SENTINELS = (b"commander", b"@anthropic-ai/claude-code")
+
+# The CLI entrypoint is ~17 MB; anything smaller is a bad carve.
+# Only enforced by main() — not by verify() so unit tests on synthetic data work.
+MIN_OUTPUT_BYTES = 1_000_000
+
+
+def nearest_name(data, start):
+    """The Bun module path (e.g. /$bunfs/root/src/entrypoints/cli.js) is a
+    NUL-terminated string just before its @bun-cjs block. Scan back up to 4KB
+    for the last `...something.js\\0` ending before `start`."""
+    lo = max(0, start - 4096)
+    seg = data[lo:start]
+    j = seg.rfind(b'.js\x00')
+    if j == -1:
+        return None
+    k = seg.rfind(b'\x00', 0, j)
+    return seg[k + 1:j + 3].decode('latin-1', 'replace')
+
+
+def carve_blocks(data):
+    """Find all Bun @bun-cjs module blocks in *data*.
+
+    Returns a list of (offset, size, body, name) tuples where:
+      offset  — byte offset of the marker in *data*
+      size    — length of the carved body in bytes
+      body    — the bare module body (marker + wrapper stripped)
+      name    — module path from the preceding NUL-terminated string, or None
+    """
+    blocks = []
+    for m in MARKER.finditer(data):
+        body_start = m.end()                     # just past the `{`
+        nul = data.find(b'\x00', body_start)
+        end = nul if nul != -1 else len(data)
+        # body is everything up to the trailing `})` before the NUL
+        block = data[body_start:end]
+        # trim trailing whitespace then the closing `})`
+        block = block.rstrip()
+        if block.endswith(b'})'):
+            block = block[:-2]
+        name = nearest_name(data, m.start())
+        blocks.append((m.start(), len(block), block, name))
+    return blocks
+
+
+def pick_entry(blocks):
+    """Select the cli.js entry block by name. A bundle with no entrypoints/cli.js
+    block means the format changed — refuse to guess, so a bad carve never ships."""
+    if not blocks:
+        sys.exit("error: no Bun @bun-cjs entry marker found — format may have changed")
+    named = next((b for b in blocks if (b[3] or '').endswith('entrypoints/cli.js')), None)
+    if named is None:
+        by_size = max(blocks, key=lambda b: b[1])
+        sys.exit("error: no block named entrypoints/cli.js; bundle format may have changed "
+                 "(largest candidate was %d bytes). Refusing to guess." % by_size[1])
+    return named
+
+
+PRELUDE = b"""// ---- mavericks node-host prelude (auto-generated) ----
+globalThis.Bun = globalThis.Bun || require(__dirname + '/bun-shim.cjs');
+const __import_meta = {
+  url: require('url').pathToFileURL(__filename).href,
+  dirname: __dirname,
+  filename: __filename,
+  env: process.env,
+  main: require.main === module,
+  resolve: (s) => require('url').pathToFileURL(require.resolve(s)).href,
+};
+// ------------------------------------------------------
+"""
+
+
+def transform(body):
+    """Rewrite *body* to be Node CJS-compatible and prepend the prelude.
+
+    Replaces all `import.meta` references with `__import_meta` (which is
+    defined by the prelude).  Replacing inside strings is harmless.
+    """
+    body = re.sub(rb'\bimport\.meta\b', b'__import_meta', body)
+    return PRELUDE + body + b'\n'
+
+
+def verify(out_text):
+    """Check *out_text* for structural problems (ALWAYS run).
+
+    Returns a list of human-readable problem strings; an empty list means OK.
+
+    Checks performed (structural only):
+      - no residual NUL bytes (would indicate a bad carve boundary)
+      - no residual `import.meta` tokens (would indicate a missed rewrite)
+    """
+    problems = []
+    if b"\x00" in out_text:
+        problems.append("output contains NUL bytes (bad carve boundary)")
+    if b"import.meta" in out_text:
+        problems.append("output still contains import.meta (rewrite missed a form)")
+    return problems
+
+
+def content_checks(out_text):
+    """Size-floor and sentinel-token checks: a real cli bundle is ~17MB and contains
+    known tokens; a tiny or wrong carve fails these.
+
+    Returns a list of human-readable problem strings; an empty list means OK.
+
+    Checks performed:
+      - output is at least MIN_OUTPUT_BYTES bytes
+      - at least one sentinel token from SENTINELS is present
+    """
+    problems = []
+    if len(out_text) < MIN_OUTPUT_BYTES:
+        problems.append("output too small: %d bytes (< %d size floor)"
+                        % (len(out_text), MIN_OUTPUT_BYTES))
+    if not any(s in out_text for s in SENTINELS):
+        problems.append("no expected sentinel token found (not the cli bundle?)")
+    return problems
+
+
+def main(argv):
+    pos = [a for a in argv if not a.startswith('-')]
+    if len(pos) != 2:
+        sys.exit(__doc__)
+    binpath, out = pos
+    data = open(binpath, 'rb').read()
+    off, size, body, name = pick_entry(carve_blocks(data))
+    text = transform(body)
+    open(out, 'wb').write(text)
+    problems = verify(text) + content_checks(text)
+    if problems:
+        try: os.remove(out)
+        except OSError: pass
+        sys.exit("error: extraction failed verification:\n  - " + "\n  - ".join(problems))
+    sys.stderr.write("entry=%s\nwrote %s (%d bytes)\n" % (name or '<unknown>', out, len(text)))
+
+
+if __name__ == '__main__':
+    main(sys.argv[1:])
