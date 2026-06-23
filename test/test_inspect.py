@@ -56,6 +56,51 @@ def test_coverage_report_runs_and_is_machine_readable():
     assert "coverage" in doc and "missing" in doc["coverage"]
 
 
+def test_detects_known_search_applets():
+    blob = (b'OYr("find","bfs",["-S","dfs","-regextype","findutils-default"]),'
+            b'OYr("grep","ugrep",["-G","--ignore-files"])')
+    assert ins.search_applets(blob) == {"bfs", "ugrep"}
+
+def test_flags_an_unknown_applet():
+    blob = b'OYr("grep","ugrep",["-G"]),OYr("sk","skim",["--tac"])'
+    assert ins.unknown_search_applets(ins.search_applets(blob)) == ["skim"]
+
+def test_no_unknown_applets_for_the_known_set():
+    blob = b'OYr("find","bfs",["-S"]),OYr("grep","ugrep",["-G"])'
+    assert ins.unknown_search_applets(ins.search_applets(blob)) == []
+
+def test_ignores_non_shadow_calls():
+    # self-exec re-tags via argv0 (e.g. seccomp) and two-string calls whose args
+    # array does NOT start with a flag must NOT be detected as applets.
+    blob = b'argv0:"apply-seccomp";Qyd("apply-seccomp");Zz("arch","apply-seccomp",["amd64"])'
+    assert ins.search_applets(blob) == set()
+
+def test_ripgrep_lever_tracked():
+    assert ins.ripgrep_lever_present(b'x USE_BUILTIN_RIPGREP y') is True
+    assert ins.ripgrep_lever_present(b'no lever here') is False
+
+
+def test_gate_problems_includes_unknown_applet():
+    cov = {'stubbed': [], 'missing': [], 'bun_modules_unhandled': [],
+           'modules_missing': [], 'search_applets_unknown': ['skim'],
+           'ripgrep_lever_present': True}
+    problems = ins.gate_problems(cov)
+    assert 'skim (search applet unhandled)' in problems
+
+def test_gate_problems_flags_missing_ripgrep_lever():
+    cov = {'stubbed': [], 'missing': [], 'bun_modules_unhandled': [],
+           'modules_missing': [], 'search_applets_unknown': [],
+           'ripgrep_lever_present': False}
+    problems = ins.gate_problems(cov)
+    assert any('ripgrep' in p.lower() for p in problems)
+
+def test_gate_problems_clean_for_known_applets_and_present_lever():
+    cov = {'stubbed': [], 'missing': [], 'bun_modules_unhandled': [],
+           'modules_missing': [], 'search_applets_unknown': [],
+           'ripgrep_lever_present': True}
+    assert ins.gate_problems(cov) == []
+
+
 def test_unreviewed_externals_filters_accepted():
     assert ins.unreviewed_externals(['undici', 'esbuild']) == ['undici']
     assert ins.unreviewed_externals(['esbuild', 'react', 'typescript']) == []
@@ -115,3 +160,13 @@ def test_strict_gate_clean_on_known_good_bundle():
         capture_output=True, text=True)
     assert r_strict.returncode == 0, \
         "--strict exited %d; unreviewed items:\n%s" % (r_strict.returncode, r_strict.stderr)
+
+
+@pytest.mark.skipif(not os.path.exists(_STRICT_BIN),
+                    reason="no bundle for strict test")
+def test_strict_without_shim_is_an_error_not_a_silent_pass():
+    r = subprocess.run(
+        [sys.executable, SCRIPT, _STRICT_BIN, "--node", NODE, "--strict"],
+        capture_output=True, text=True)
+    assert r.returncode != 0, "--strict without --shim must not exit 0 (it would bypass the gate)"
+    assert "shim" in (r.stderr + r.stdout).lower()

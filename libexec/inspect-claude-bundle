@@ -57,6 +57,35 @@ KNOWN_BUN = {
     'jest', 'cron', 'Security', 'Database', 'FFI', 'embeddedFiles', '$',
 }
 
+# Snapshot-shadow applets the upstream native binary multiplexes on argv0 and
+# shadows into the shell snapshot via a generator call of the shape
+#   OYr("<shadowed-cmd>","<applet>",["-<flag>", ...])
+# (e.g. OYr("find","bfs",["-S",...]), OYr("grep","ugrep",["-G",...])). clode's
+# bun-shim rewrites those shadows to real host tools, so a NEW or RENAMED applet
+# upstream must fail --strict instead of silently mis-routing under clode.
+KNOWN_SEARCH_APPLETS = {'ugrep', 'bfs'}
+# The leading flag in the args array ("-...) is what distinguishes a real shadow
+# generator call from unrelated two-string calls (e.g. self-exec re-tags like
+# argv0:"apply-seccomp"). Verified to yield exactly {bfs, ugrep} on real bundles.
+SEARCH_APPLET = re.compile(
+    rb'[A-Za-z_$][\w$]*\("[a-z][a-z0-9_+-]{0,15}","([a-z][a-z0-9_+-]{1,15})",\["-')
+
+def search_applets(data):
+    return {m.group(1).decode('latin-1') for m in SEARCH_APPLET.finditer(data)}
+
+def unknown_search_applets(applets):
+    return sorted(a for a in applets if a not in KNOWN_SEARCH_APPLETS)
+
+# clode also points the internal Grep tool at a system ripgrep (bin/clode
+# set_ripgrep_env) by setting USE_BUILTIN_RIPGREP and letting the bundle resolve
+# `rg` on PATH. If upstream renames/removes that lever, our integration silently
+# no-ops — so track its presence and fail --strict when the signal disappears.
+RIPGREP_LEVER = b'USE_BUILTIN_RIPGREP'
+
+def ripgrep_lever_present(data):
+    return RIPGREP_LEVER in data
+
+
 # Map embedded native-addon basenames to the upstream feature they back and
 # whether the loose-JS host can ever use them. (Bun-ABI, platform-specific .node
 # addons can't load under Node, so these features are intentionally disabled.)
@@ -148,6 +177,8 @@ def inspect(path):
         'disabled_native_features': disabled,
         'json_txt_names': json_txt,
         'bun_cjs_blocks': blocks,
+        'search_applets': sorted(search_applets(data)),
+        'ripgrep_lever_present': ripgrep_lever_present(data),
     }
 
 
@@ -233,6 +264,9 @@ def gate_problems(cov):
     p += ['Bun.%s (missing)' % k for k in cov['missing'] if k not in ACCEPTED_MISSING_BUN]
     p += ['%s (bun: module unhandled)' % m for m in cov['bun_modules_unhandled'] if m not in ACCEPTED_BUN_MODULES]
     p += ['%s (external require MISSING)' % m for m in cov['modules_missing'] if m not in ACCEPTED_MISSING_EXTERNALS]
+    p += ['%s (search applet unhandled)' % a for a in cov.get('search_applets_unknown', [])]
+    if not cov.get('ripgrep_lever_present', True):
+        p += ['USE_BUILTIN_RIPGREP lever missing (bin/clode set_ripgrep_env would no-op)']
     return sorted(p)
 
 
@@ -260,6 +294,8 @@ def coverage(r, shim):
         'modules_missing': modules_missing,
         'modules_host_stub': modules_host_stub,
         'disabled_native_features': r['disabled_native_features'],
+        'search_applets_unknown': unknown_search_applets(set(r.get('search_applets', []))),
+        'ripgrep_lever_present': r.get('ripgrep_lever_present', True),
     }
 
 
@@ -338,6 +374,12 @@ def human_coverage(r, cov):
         L.append("UNRECOGNIZED Bun.* (triage — new API or noise):")
         for k in cov['unrecognized']:
             L.append("  Bun.%s" % k)
+    if cov.get('search_applets_unknown'):
+        L.append("UNHANDLED argv0 search applets (bun-shim won't rewrite these shadows):")
+        for a in cov['search_applets_unknown']:
+            L.append("  %s" % a)
+    if not cov.get('ripgrep_lever_present', True):
+        L.append("MISSING ripgrep lever USE_BUILTIN_RIPGREP (bin/clode set_ripgrep_env would no-op)")
     return "\n".join(L), unaccounted
 
 
@@ -377,6 +419,11 @@ def main():
             print(text)
         elif only_cov:
             print("(no --shim given; coverage unavailable)")
+
+    if strict and cov is None:
+        sys.stderr.write("inspect-claude-bundle: --strict requires --shim "
+                         "(the applet/ripgrep gate needs shim coverage)\n")
+        sys.exit(2)
 
     if strict and cov is not None:
         problems = gate_problems(cov)
