@@ -115,6 +115,24 @@ maybe_default_cert_store() {
   : "${CLAUDE_CODE_CERT_STORE:=bundled}"; export CLAUDE_CODE_CERT_STORE
 }
 
+# Point Claude Code's internal Grep tool at a real ripgrep when one exists, so it
+# uses system rg instead of its embedded copy. The bundle enables system mode when
+# USE_BUILTIN_RIPGREP is 0/false/no/off AND it can resolve `rg` on PATH (it does a
+# plain PATH lookup — there is no path env var). rg stays OPTIONAL: if none is found
+# we leave the config alone and let Claude Code fall back to its embedded search.
+# Override the discovered rg with CLODE_RG.
+set_ripgrep_env() {
+  _rg="${CLODE_RG:-$(command -v rg 2>/dev/null || :)}"
+  [ -n "$_rg" ] || return 0
+  : "${USE_BUILTIN_RIPGREP:=0}"; export USE_BUILTIN_RIPGREP
+  # Ensure the chosen rg is discoverable on PATH (the bundle finds it by name).
+  _rgdir=$(dirname "$_rg")
+  case ":$PATH:" in
+    *":$_rgdir:"*) : ;;
+    *) PATH="$_rgdir:$PATH"; export PATH ;;
+  esac
+}
+
 # Launch the cached bundle under the inherited environment.
 # DISABLE_INSTALLATION_CHECKS silences the npm-deprecation nudge (false
 # positive for our non-native install).
@@ -122,6 +140,7 @@ exec_bundle() {
   : "${DISABLE_INSTALLATION_CHECKS:=1}"; export DISABLE_INSTALLATION_CHECKS
   : "${NODE_USE_ENV_PROXY:=1}"; export NODE_USE_ENV_PROXY
   maybe_default_cert_store
+  set_ripgrep_env
   exec "$NODE" "$CACHE/cli.cjs" "$@"
 }
 
