@@ -97,13 +97,77 @@ const __import_meta = {
 """
 
 
+# Inject a clode "search-applet version skew" section into Claude's /doctor screen,
+# rendered as a sibling just before the doctor footer. The createElement alias and
+# the Box/Text component identifiers are CAPTURED from the footer fragment itself
+# (group refs), so the patch self-adapts to minifier identifier churn across Claude
+# versions — we hardcode only the stable user-facing footer string. The section
+# renders only when clode recorded a skew finding (globalThis.__clodeDoctor.appletSkew,
+# set by bun-shim's warnAppletSkew) and renders null otherwise, so a skew-free
+# /doctor is behaviorally unchanged.
+#
+# Fail-loud contract: the anchor must match EXACTLY once. If it doesn't, we do NOT
+# patch (clode must never brick /doctor) and warn loudly — the skew is still
+# reported on stderr at startup regardless, and inspect-claude-bundle --strict
+# tracks this same anchor so a Claude update that moves it trips CI first.
+# NOTE: the identifier runs are LENGTH-BOUNDED ({1,40}), not open `+`. Minified
+# identifiers are short; an unbounded `[A-Za-z0-9_$]+` before the required
+# `.default.createElement` literal backtracks O(n^2) over a long run of identifier
+# chars with no match — which the ~1MB synthetic test fixture (and, more slowly,
+# the real bundle) is, hanging extraction. Bounding keeps the scan linear.
+DOCTOR_FOOTER = re.compile(
+    rb'(?P<ce>[A-Za-z0-9_$]{1,40}\.default\.createElement)\('
+    rb'(?P<box>[A-Za-z0-9_$]{1,40}),\{marginTop:1\},'
+    rb'(?P=ce)\((?P<text>[A-Za-z0-9_$]{1,40}),\{dimColor:!0\},'
+    rb'"Still having issues\? Run /feedback to report details\."'
+)
+
+
+def _doctor_section(ce, box, text):
+    """The injected element, built from identifiers captured at the anchor so it
+    uses the surrounding code's exact React/ink aliases. Defensive by construction:
+    pure property reads over a clode-owned array, cannot throw during render, and
+    collapses to null when there is no skew."""
+    return (
+        b'(globalThis.__clodeDoctor&&globalThis.__clodeDoctor.appletSkew&&'
+        b'globalThis.__clodeDoctor.appletSkew.length?'
+        + ce + b'(' + box + b',{flexDirection:"column",marginTop:1},'
+        + ce + b'(' + text + b',{color:"yellow"},'
+        b'"clode: search-applet version skew \\u2014 these commands will fail until you upgrade the host tool:"),'
+        + ce + b'(' + text + b',{dimColor:!0},'
+        b'globalThis.__clodeDoctor.appletSkew.map(function(s){'
+        b'return "  /"+s.name+": host "+s.applet+" rejects flags Claude\\u2019s bundled "+s.applet+" uses \\u2014 "+s.why}'
+        b').join("\\n"))'
+        b'):null),'
+    )
+
+
+def patch_doctor(body):
+    """Inject the applet-skew section before the doctor footer. Returns
+    (new_body, applied:bool); applied is False (body unchanged) when the anchor
+    does not match exactly once — see DOCTOR_FOOTER for the fail-loud contract."""
+    matches = list(DOCTOR_FOOTER.finditer(body))
+    if len(matches) != 1:
+        return body, False
+    m = matches[0]
+    inject = _doctor_section(m.group('ce'), m.group('box'), m.group('text'))
+    return body[:m.start()] + inject + body[m.start():], True
+
+
 def transform(body):
     """Rewrite *body* to be Node CJS-compatible and prepend the prelude.
 
     Replaces all `import.meta` references with `__import_meta` (which is
-    defined by the prelude).  Replacing inside strings is harmless.
+    defined by the prelude), then injects the clode /doctor applet-skew section.
+    Replacing inside strings is harmless.
     """
     body = re.sub(rb'\bimport\.meta\b', b'__import_meta', body)
+    body, applied = patch_doctor(body)
+    if not applied:
+        sys.stderr.write(
+            "clode: /doctor applet-skew hook NOT applied — doctor footer anchor not found "
+            "exactly once (Claude version drift?). Skew still warns on stderr at startup; "
+            "run inspect-claude-bundle --strict to confirm the surface.\n")
     return PRELUDE + body + b'\n'
 
 

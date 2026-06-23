@@ -80,6 +80,53 @@ def test_ripgrep_lever_tracked():
     assert ins.ripgrep_lever_present(b'no lever here') is False
 
 
+def test_embedded_applet_versions_extracts_ugrep_and_misses_unstamped():
+    blob = b'...ugrep 7.5.0 built with...'   # bfs/rg carry no version string in the bundle
+    vers = ins.embedded_applet_versions(blob)
+    assert vers == {'ugrep': '7.5.0', 'bfs': None, 'rg': None}
+
+
+def test_embedded_applet_versions_picks_up_bfs_and_rg_if_stamped():
+    blob = b'bfs 4.0.6 / ripgrep 14.1.0 / ugrep 7.5.0'
+    assert ins.embedded_applet_versions(blob) == {
+        'ugrep': '7.5.0', 'bfs': '4.0.6', 'rg': '14.1.0'}
+
+
+def test_host_applet_version_parses_from_a_stub_via_env_override(tmp_path):
+    stub = tmp_path / "bfs"
+    stub.write_text("#!/bin/sh\necho 'bfs 1.5.1'\n")
+    stub.chmod(0o755)
+    assert ins.host_applet_version('bfs', env={'CLODE_BFS': str(stub)}) == '1.5.1'
+
+
+def test_host_applet_version_none_when_absent():
+    assert ins.host_applet_version('definitely-not-an-applet', env={}) is None
+
+
+def test_human_applets_flags_host_skew(monkeypatch):
+    monkeypatch.setattr(ins, 'host_applet_version', lambda a, env=None: '1.5.1')
+    r = {'search_applets': ['bfs'], 'embedded_applet_versions': {'bfs': '4.0.6'}}
+    out = ins.human_applets(r)
+    assert 'embedded 4.0.6' in out and 'host 1.5.1' in out
+    assert 'skew possible' in out
+
+
+def test_doctor_hook_anchor_present():
+    anchor = b'Still having issues? Run /feedback to report details.'
+    assert ins.doctor_hook_anchor_present(b'x ' + anchor + b' y') is True
+    assert ins.doctor_hook_anchor_present(b'nope') is False
+    # ambiguous (>1) is NOT a safe single anchor — must be exactly one
+    assert ins.doctor_hook_anchor_present(anchor + anchor) is False
+
+
+def test_gate_problems_flags_missing_doctor_anchor():
+    cov = {'stubbed': [], 'missing': [], 'bun_modules_unhandled': [],
+           'modules_missing': [], 'search_applets_unknown': [],
+           'ripgrep_lever_present': True, 'doctor_hook_anchor_present': False}
+    problems = ins.gate_problems(cov)
+    assert any('/doctor' in p for p in problems)
+
+
 def test_gate_problems_includes_unknown_applet():
     cov = {'stubbed': [], 'missing': [], 'bun_modules_unhandled': [],
            'modules_missing': [], 'search_applets_unknown': ['skim'],

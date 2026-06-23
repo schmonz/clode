@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { rewriteSnapshot } = require('../libexec/bun-shim.cjs');
+const { rewriteSnapshot, collectShadows, warnAppletSkew, CLODE_SHADOWS } = require('../libexec/bun-shim.cjs');
 
 const fx = (name) => fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8');
 
@@ -97,6 +97,101 @@ test('rewriteSnapshot: handles a { inside a quoted string in the shadow body', (
   assert.doesNotMatch(out, /ARGV0=bfs/);
   // the following unrelated function must remain intact (proves matchBrace found the right end)
   assert.match(out, /function after \{ echo untouched; \}/);
+});
+
+// --- applet skew probe (collectShadows / warnAppletSkew) ---
+
+const skewSnap = [
+  'function grep {',
+  '  local _cc_bin="${CLAUDE_CODE_EXECPATH:-}"',
+  '  ARGV0=ugrep "$_cc_bin" -G --ignore-files "$@"',
+  '}',
+  'function find {',
+  '  local _cc_bin="${CLAUDE_CODE_EXECPATH:-}"',
+  '  ARGV0=bfs "$_cc_bin" -S dfs -regextype findutils-default "$@"',
+  '}',
+].join('\n');
+
+test('collectShadows: returns known shadows with applet/env/flags, skips unknown', () => {
+  const shadows = collectShadows(skewSnap);
+  assert.deepStrictEqual(shadows, [
+    { name: 'grep', applet: 'ugrep', env: 'CLODE_UGREP', flags: '-G --ignore-files' },
+    { name: 'find', applet: 'bfs', env: 'CLODE_BFS', flags: '-S dfs -regextype findutils-default' },
+  ]);
+});
+
+test('CLODE_SHADOWS probe specs: build a no-op invocation + skew predicate', () => {
+  const find = CLODE_SHADOWS.find.probe(['-S', 'dfs', '-regextype', 'findutils-default']);
+  assert.deepStrictEqual(find.args, ['-S', 'dfs', '-regextype', 'findutils-default', '-quit', '.']);
+  assert.strictEqual(find.skew(0), false);   // accepted
+  assert.strictEqual(find.skew(1), true);    // bfs errors with exit 1
+  const grep = CLODE_SHADOWS.grep.probe(['-G']);
+  assert.deepStrictEqual(grep.args, ['-G', '-e', 'x', '/dev/null']);
+  assert.strictEqual(grep.skew(1), false);   // 1 == "no match", not skew
+  assert.strictEqual(grep.skew(2), true);    // 2 == usage error
+});
+
+// A tiny executable applet stub that prints to stderr and exits with a chosen code.
+function stubApplet(code, stderr) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-stub-'));
+  const p = path.join(dir, 'applet');
+  fs.writeFileSync(p, `#!/bin/sh\necho "${stderr}" >&2\nexit ${code}\n`);
+  fs.chmodSync(p, 0o755);
+  return p;
+}
+
+function captureStderr(fn) {
+  const orig = process.stderr.write;
+  let buf = '';
+  process.stderr.write = (s) => { buf += s; return true; };
+  try { fn(); } finally { process.stderr.write = orig; }
+  return buf;
+}
+
+test('warnAppletSkew: warns, naming the rejected flag, when the host applet errors on the flags', () => {
+  const prev = process.env.CLODE_BFS;
+  process.env.CLODE_BFS = stubApplet(1, "bfs: error: Unsupported -regextype 'findutils-default'.");
+  try {
+    const out = captureStderr(() => warnAppletSkew(collectShadows(skewSnap)));
+    assert.match(out, /host bfs rejects the flags/);
+    assert.match(out, /Unsupported -regextype 'findutils-default'/);
+    assert.match(out, /set CLODE_BFS to a compatible bfs/);
+  } finally {
+    if (prev === undefined) delete process.env.CLODE_BFS; else process.env.CLODE_BFS = prev;
+  }
+});
+
+test('warnAppletSkew: silent when the host applet accepts the flags', () => {
+  const prev = process.env.CLODE_BFS;
+  process.env.CLODE_BFS = stubApplet(0, '');
+  try {
+    const out = captureStderr(() => warnAppletSkew([
+      { name: 'find', applet: 'bfs', env: 'CLODE_BFS', flags: '-S dfs' },
+    ]));
+    assert.strictEqual(out, '');
+  } finally {
+    if (prev === undefined) delete process.env.CLODE_BFS; else process.env.CLODE_BFS = prev;
+  }
+});
+
+test('warnAppletSkew: records findings on globalThis.__clodeDoctor for the /doctor hook', () => {
+  const prev = process.env.CLODE_BFS;
+  process.env.CLODE_BFS = stubApplet(1, "bfs: error: Unsupported -regextype 'findutils-default'.");
+  try {
+    // unique flags => fresh dedupe key, independent of other tests in this file
+    captureStderr(() => warnAppletSkew([
+      { name: 'find', applet: 'bfs', env: 'CLODE_BFS', flags: '-regextype doctor-hook-unique' },
+    ]));
+    assert.ok(globalThis.__clodeDoctor && Array.isArray(globalThis.__clodeDoctor.appletSkew),
+      'expected globalThis.__clodeDoctor.appletSkew array');
+    const f = globalThis.__clodeDoctor.appletSkew.find((x) => x.why.includes('doctor-hook') || x.why.includes('Unsupported'));
+    assert.ok(f, 'expected the recorded bfs skew finding');
+    assert.strictEqual(f.name, 'find');
+    assert.strictEqual(f.applet, 'bfs');
+    assert.match(f.why, /Unsupported -regextype/);
+  } finally {
+    if (prev === undefined) delete process.env.CLODE_BFS; else process.env.CLODE_BFS = prev;
+  }
 });
 
 const cp = require('node:child_process');

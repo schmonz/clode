@@ -64,8 +64,9 @@ binary by precedence (`CLODE_CLAUDE_BIN`, a baked provider path,
 
 **Extractor (`libexec/extract-claude-js`)** — finds the `@bun-cjs` entry module
 inside the binary's `__BUN` segment by module name, strips Bun's CJS wrapper,
-rewrites `import.meta`, and prepends a prelude that installs the `Bun` global
-shim. Output is plain CommonJS.
+rewrites `import.meta`, injects a clode *search-applet version skew* section into
+the `/doctor` screen (anchored on a stable string, fail-loud if it drifts), and
+prepends a prelude that installs the `Bun` global shim. Output is plain CommonJS.
 
 **Shim (`libexec/bun-shim.cjs`)** — a `Bun` global for Node: text/hash/spawn/which/semver
 and friends, a `Module._load` hook resolving `bun:ffi` and external npm modules
@@ -97,6 +98,12 @@ bundle uses, classified **implemented / stubbed / missing**, and flags anything
 to **silently hang the interactive TUI** (a missing `require()` rejects in a
 render-gating promise). Use `--strict` to exit nonzero on anything unaccounted
 for.
+
+`--strict` also tracks two integration anchors a Claude update could move: the
+`USE_BUILTIN_RIPGREP` lever, and the `/doctor` footer string that `extract-claude-js`
+patches its *search-applet version skew* section onto. If either drifts, extraction
+warns loudly and skips that hook rather than failing silently — the skew check still
+warns on stderr regardless — and `--strict` trips so CI catches it on the next update.
 
 The launcher's own version check (not a hardcoded number here) is the
 authoritative guard for Node compatibility.
@@ -130,6 +137,24 @@ to force the system store, or add a private/corporate root with
   it is too old. Node's minimum rises over time as Claude Code adopts newer JS;
   the launcher is always the authoritative source.
 - **Python 3** — used for extraction only.
+- **Search applets — `ugrep`, `bfs`, optionally `rg`** (only for Claude Code's
+  Bash `grep`/`find`/`rg` commands). Upstream ships its own builds of these and
+  invokes them through a multiplexer; clode reroutes that to the host applets of
+  the same name (see *How it works*). They must be **recent enough to accept the
+  flags Claude's bundled build uses** — an older host applet can reject a flag and
+  make `grep`/`find` fail. Known floors:
+    - **ugrep ≥ 7.5.0** — the bundled version; newer is fine.
+    - **bfs 3.x** — needs the `findutils-default` regextype Claude's `find` shadow
+      passes; bfs 1.5.x rejects it.
+    - **rg** — any reasonably recent ripgrep (also used by the internal Grep tool
+      via `USE_BUILTIN_RIPGREP=0`).
+
+  These floors are guidance, **not the source of truth**: clode capability-probes
+  each host applet at snapshot-refresh and warns loudly on stderr — and in Claude
+  Code's `/doctor` screen, under *"search-applet version skew"* — if yours rejects
+  the bundled flags. Override the resolved binary with `CLODE_UGREP`, `CLODE_BFS`,
+  `CLODE_RG`. Compare host vs. embedded versions any time with
+  `libexec/inspect-claude-bundle ~/.local/share/claude/versions/<ver>`.
 
 Override the host tools per machine: `CLODE_NODE`, `CLODE_PYTHON`, and
 `CLODE_PATH` (the clean-env PATH; defaults to the node + python dirs plus common

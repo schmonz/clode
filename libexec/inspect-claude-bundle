@@ -22,7 +22,7 @@ Reports:
                          (provided but throws) / missing / disabled-native, and
                          lists everything UNACCOUNTED FOR.
 """
-import re, sys, os, json, shutil
+import re, sys, os, json, shutil, subprocess
 
 MARKER = re.compile(rb'// @bun\b[^\n]*@bun-cjs\n\(function\(exports, require, module, __filename, __dirname\) \{')
 BUN_API = re.compile(rb'\bBun\.([A-Za-z_$][A-Za-z0-9_$]*)')
@@ -84,6 +84,56 @@ RIPGREP_LEVER = b'USE_BUILTIN_RIPGREP'
 
 def ripgrep_lever_present(data):
     return RIPGREP_LEVER in data
+
+
+# clode patches Claude's /doctor screen (in extract-claude-js) to surface a
+# search-applet version-skew section, anchored on the doctor footer's stable
+# user-facing string. The patch self-adapts to minifier identifier churn but
+# CANNOT survive this anchor moving/renaming — so track its presence (and
+# uniqueness) and fail --strict if it drifts, the same way the ripgrep lever is
+# tracked. Drift trips here on `claude update` before any user hits a silent miss.
+DOCTOR_HOOK_ANCHOR = b'Still having issues? Run /feedback to report details.'
+
+def doctor_hook_anchor_present(data):
+    return data.count(DOCTOR_HOOK_ANCHOR) == 1
+
+
+# Versions of the applets the native binary bundles. clode's rewritten grep/find/rg
+# shadows exec the HOST applet but pass the flags upstream invokes ITS embedded build
+# with — so a host applet that skews older can reject a flag the embedded one accepts
+# (pkgsrc bfs 1.5.1 vs the bundle's bfs rejecting -regextype findutils-default). The
+# bundle only stamps a "<name> X.Y.Z" string for ugrep today; bfs/rg carry none, so
+# they report None (the pattern still picks them up should a future build add one).
+# This is why we capability-PROBE at snapshot-refresh rather than compare versions:
+# the one applet that actually skewed (bfs) is the one with no extractable version.
+APPLET_VERSION = {
+    'ugrep': re.compile(rb'\bugrep (\d+\.\d+\.\d+)'),
+    'bfs':   re.compile(rb'\bbfs (\d+\.\d+(?:\.\d+)?)'),
+    'rg':    re.compile(rb'\bripgrep (\d+\.\d+\.\d+)'),
+}
+# host PATH lookup honors the same CLODE_<APPLET> overrides bun-shim resolves with.
+APPLET_ENV = {'ugrep': 'CLODE_UGREP', 'bfs': 'CLODE_BFS', 'rg': 'CLODE_RG'}
+
+def embedded_applet_versions(data):
+    out = {}
+    for applet, pat in APPLET_VERSION.items():
+        m = pat.search(data)
+        out[applet] = m.group(1).decode('latin-1') if m else None
+    return out
+
+def host_applet_version(applet, env=None):
+    """Best-effort host `<applet> --version`, returning the first version-looking
+    token (or None if the applet isn't installed / can't be probed)."""
+    e = env if env is not None else os.environ
+    exe = e.get(APPLET_ENV.get(applet, '')) or shutil.which(applet)
+    if not exe:
+        return None
+    try:
+        p = subprocess.run([exe, '--version'], capture_output=True, text=True, timeout=5)
+    except Exception:
+        return None
+    m = re.search(r'\d+\.\d+(?:\.\d+)?', (p.stdout or '') + '\n' + (p.stderr or ''))
+    return m.group(0) if m else None
 
 
 # Map embedded native-addon basenames to the upstream feature they back and
@@ -178,6 +228,8 @@ def inspect(path):
         'json_txt_names': json_txt,
         'bun_cjs_blocks': blocks,
         'search_applets': sorted(search_applets(data)),
+        'embedded_applet_versions': embedded_applet_versions(data),
+        'doctor_hook_anchor_present': doctor_hook_anchor_present(data),
         'ripgrep_lever_present': ripgrep_lever_present(data),
     }
 
@@ -267,6 +319,8 @@ def gate_problems(cov):
     p += ['%s (search applet unhandled)' % a for a in cov.get('search_applets_unknown', [])]
     if not cov.get('ripgrep_lever_present', True):
         p += ['USE_BUILTIN_RIPGREP lever missing (bin/clode set_ripgrep_env would no-op)']
+    if not cov.get('doctor_hook_anchor_present', True):
+        p += ['/doctor footer anchor missing/ambiguous (applet-skew hook would not apply)']
     return sorted(p)
 
 
@@ -296,6 +350,7 @@ def coverage(r, shim):
         'disabled_native_features': r['disabled_native_features'],
         'search_applets_unknown': unknown_search_applets(set(r.get('search_applets', []))),
         'ripgrep_lever_present': r.get('ripgrep_lever_present', True),
+        'doctor_hook_anchor_present': r.get('doctor_hook_anchor_present', True),
     }
 
 
@@ -329,6 +384,28 @@ def human_surface(r):
     L.append("external module require()s (%d) — non-builtin specifiers:" % len(r['external_modules']))
     for k, v in r['external_modules'].items():
         L.append("  %4dx  %s" % (v, k))
+    return "\n".join(L)
+
+
+def human_applets(r, env=None):
+    """Embedded vs host search-applet versions with a skew hint. The authoritative
+    flag-compat check is bun-shim's runtime probe (warnAppletSkew); this just
+    surfaces the versions so a runtime skew warning is explainable at a glance."""
+    emb = r.get('embedded_applet_versions', {})
+    applets = sorted(set(r.get('search_applets', [])) | {a for a, v in emb.items() if v})
+    if not applets:
+        return ""
+    L = ["search applets (embedded in bundle vs host):"]
+    for a in applets:
+        e = emb.get(a)
+        h = host_applet_version(a, env)
+        if h is None:
+            note = '(not installed on host)'
+        elif e and h != e:
+            note = '<-- host differs; flag skew possible (bun-shim probes at refresh)'
+        else:
+            note = ''
+        L.append("  %-6s embedded %-8s host %-10s %s" % (a, e or '?', h or '-', note))
     return "\n".join(L)
 
 
@@ -380,6 +457,8 @@ def human_coverage(r, cov):
             L.append("  %s" % a)
     if not cov.get('ripgrep_lever_present', True):
         L.append("MISSING ripgrep lever USE_BUILTIN_RIPGREP (bin/clode set_ripgrep_env would no-op)")
+    if not cov.get('doctor_hook_anchor_present', True):
+        L.append("MISSING/AMBIGUOUS /doctor footer anchor (extract-claude-js applet-skew hook would not apply)")
     return "\n".join(L), unaccounted
 
 
@@ -412,6 +491,10 @@ def main():
     else:
         if not only_cov:
             print(human_surface(r))
+            applets = human_applets(r)
+            if applets:
+                print("")
+                print(applets)
         if cov is not None:
             text, _ = human_coverage(r, cov)
             if not only_cov:

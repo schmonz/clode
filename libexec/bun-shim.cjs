@@ -67,17 +67,25 @@ const _looksLikeSnapshotCmd = (s) =>
   typeof s === 'string' && s.indexOf('SNAPSHOT_FILE=') !== -1 && /(ARGV0=|exec -a )/.test(s);
 const _rewriteSnapshotArg = (s) => {
   if (!_looksLikeSnapshotCmd(s)) return s;
+  let rewritten;
   try {
-    return rewriteSnapshot(s);
+    rewritten = rewriteSnapshot(s);
   } catch (e) {
     process.stderr.write(`clode: snapshot shadow rewrite skipped: ${e && e.message}\n`);
     return s;
   }
+  // Rewrite succeeded: probe the host applets for flag skew (best-effort, never fatal).
+  try { warnAppletSkew(collectShadows(s)); } catch (_) {}
+  return rewritten;
 };
 // Rewrite any snapshot-generator command found in a child_process invocation.
 // execFile/spawn family: the command string is an element of the args ARRAY (2nd arg).
 // exec/execSync family: the command is the FIRST string arg.
 const _rewriteArgsArray = (a) => Array.isArray(a) ? a.map(_rewriteSnapshotArg) : a;
+
+// Unpatched spawnSync for warnAppletSkew's own applet probes, so they never
+// recurse back through the snapshot-rewrite wrapper installed just below.
+const _rawSpawnSync = cp.spawnSync;
 
 for (const m of ['execFile', 'execFileSync', 'spawn', 'spawnSync']) {
   const orig = cp[m];
@@ -292,10 +300,20 @@ function wrapAnsi(string, columns, options){
 // under clode resolves to node / a non-dispatching binary). Same-tool routing,
 // fail-loud if the applet is absent. A shadow whose applet we don't know throws
 // (auto-tracking: a new upstream applet must be handled deliberately). ---
+// probe(flags) -> { args, skew } describes a NO-OP invocation of the host applet
+// that still PARSES the same flag list the rewritten shadow will pass it, plus a
+// skew(exitCode) predicate that is true when the applet rejected those flags.
+// grep-family tools exit >=2 on a usage error (1 just means "no match", not skew);
+// bfs exits non-zero on any error and 0 once it hits -quit. Used by warnAppletSkew
+// at snapshot-refresh to catch a host applet that's too old for the embedded one's
+// flags (e.g. pkgsrc bfs 1.5.1 rejecting -regextype findutils-default).
 const CLODE_SHADOWS = {
-  grep: { applet: 'ugrep', env: 'CLODE_UGREP' },
-  find: { applet: 'bfs',   env: 'CLODE_BFS'   },
-  rg:   { applet: 'rg',    env: 'CLODE_RG'    },
+  grep: { applet: 'ugrep', env: 'CLODE_UGREP',
+          probe: (f) => ({ args: [...f, '-e', 'x', '/dev/null'], skew: (c) => c >= 2 }) },
+  find: { applet: 'bfs',   env: 'CLODE_BFS',
+          probe: (f) => ({ args: [...f, '-quit', '.'],           skew: (c) => c !== 0 }) },
+  rg:   { applet: 'rg',    env: 'CLODE_RG',
+          probe: (f) => ({ args: [...f, '--version'],            skew: (c) => c >= 2 }) },
 };
 // A shadow body is the upstream multiplexer if it invokes an applet via argv0
 // against the provider binary. We detect the applet from ARGV0=/exec -a.
@@ -353,9 +371,11 @@ function buildShadow(name, known, parsed){
     `}`;
 }
 
-function rewriteSnapshot(text){
-  text = String(text);
-  let out = '', i = 0;
+// Walk every `function NAME { ... }` whose body is an upstream multiplexer shadow,
+// invoking cb with the parse + span. Shared by rewriteSnapshot (which rewrites the
+// span) and collectShadows (which only reads it) so the two can never disagree
+// about what counts as a shadow.
+function _eachShadow(text, cb){
   const fnRe = /\bfunction ([A-Za-z_][A-Za-z0-9_]*) \{/g;
   let m;
   while ((m = fnRe.exec(text)) !== null){
@@ -363,23 +383,88 @@ function rewriteSnapshot(text){
     const openIdx = m.index + m[0].length - 1;          // the '{'
     const endIdx = matchBrace(text, openIdx);
     if (endIdx === -1) break;
-    const body = text.slice(openIdx + 1, endIdx - 1);
-    const parsed = parseShadow(body);
+    const parsed = parseShadow(text.slice(openIdx + 1, endIdx - 1));
     if (parsed){
-      // Body looks like an upstream multiplexer shadow.
-      const known = CLODE_SHADOWS[name];
-      if (!known || known.applet !== parsed.applet){
-        throw new Error(`clode: unrecognized search shadow function ${name} -> ${parsed.applet}; ` +
-          `update CLODE_SHADOWS in bun-shim.cjs`);
-      }
-      out += text.slice(i, m.index) + buildShadow(name, known, parsed);
-      i = endIdx;
+      cb({ name, parsed, mIndex: m.index, endIdx });
       fnRe.lastIndex = endIdx;
     }
     // non-shadow functions: leave untouched (the slice is emitted later)
   }
+}
+
+function rewriteSnapshot(text){
+  text = String(text);
+  let out = '', i = 0;
+  _eachShadow(text, ({ name, parsed, mIndex, endIdx }) => {
+    // Body looks like an upstream multiplexer shadow.
+    const known = CLODE_SHADOWS[name];
+    if (!known || known.applet !== parsed.applet){
+      throw new Error(`clode: unrecognized search shadow function ${name} -> ${parsed.applet}; ` +
+        `update CLODE_SHADOWS in bun-shim.cjs`);
+    }
+    out += text.slice(i, mIndex) + buildShadow(name, known, parsed);
+    i = endIdx;
+  });
   out += text.slice(i);
   return out;
+}
+
+// Parse (without rewriting) the known search shadows present in a snapshot, for
+// the skew probe. Unknown applets are skipped here — rewriteSnapshot already
+// throws on them before we ever probe.
+function collectShadows(text){
+  const out = [];
+  _eachShadow(String(text), ({ name, parsed }) => {
+    const known = CLODE_SHADOWS[name];
+    if (known && known.applet === parsed.applet)
+      out.push({ name, applet: known.applet, env: known.env, flags: parsed.flags });
+  });
+  return out;
+}
+
+// After rewriting a shadow to exec the host applet, confirm that applet actually
+// ACCEPTS the flags Claude's embedded applet is invoked with. A host applet that
+// skews older can reject a flag the bundle's build supports, so `find`/`grep`
+// would fail at use-time with a cryptic error far from here. Probe once per
+// (applet, flags) per process and warn loudly, naming the rejected flag. Absence
+// of the applet is NOT skew — the rewritten shadow's own guard fails loud on that.
+const _warnedSkew = new Set();
+const _skewFindings = [];
+// Record a skew finding for BOTH surfaces: the loud stderr line (here, the source
+// of truth — independent of any bundle patching) and globalThis.__clodeDoctor,
+// which the /doctor screen (patched in by extract-claude-js) renders. The /doctor
+// section is best-effort; stderr always fires, so a skew is never silently dropped.
+function _recordSkew(f){
+  _skewFindings.push(f);
+  const g = (typeof globalThis !== 'undefined') ? globalThis : global;
+  g.__clodeDoctor = g.__clodeDoctor || {};
+  g.__clodeDoctor.appletSkew = _skewFindings;
+}
+function warnAppletSkew(shadows){
+  for (const sh of shadows){
+    const known = CLODE_SHADOWS[sh.name];
+    if (!known || !known.probe) continue;
+    const bin = process.env[known.env] || which(known.applet);
+    if (!bin) continue;
+    const flags = sh.flags ? sh.flags.split(/\s+/).filter(Boolean) : [];
+    const key = sh.applet + '\0' + flags.join(' ');
+    if (_warnedSkew.has(key)) continue;
+    const { args, skew } = known.probe(flags);
+    let r;
+    try { r = _rawSpawnSync(bin, args, { encoding: 'utf8', timeout: 5000 }); }
+    catch (_) { continue; }
+    if (r.error || skew(r.status)){
+      _warnedSkew.add(key);
+      const why = String(r.stderr || '').trim().split('\n')[0]
+        || (r.error && r.error.message) || `exit ${r.status}`;
+      _recordSkew({ name: sh.name, applet: sh.applet, why });
+      process.stderr.write(
+        `clode: host ${sh.applet} rejects the flags Claude's embedded ${sh.applet} uses — ` +
+        `\`${sh.name}\` will fail:\n` +
+        `       ${why}\n` +
+        `       set ${known.env} to a compatible ${sh.applet}, or upgrade it.\n`);
+    }
+  }
 }
 
 // --- hashing: Bun.hash default = Wyhash64 (returns BigInt). TODO: exact wyhash if values
@@ -564,4 +649,7 @@ module.exports.__bunFFI = BUN_BUILTINS['bun:ffi'];
 module.exports.__hostModules = Object.keys(HOST_MODULES);   // external npm modules we stub
 module.exports.__bunBuiltins = Object.keys(BUN_BUILTINS);   // bun: modules we resolve
 module.exports.rewriteSnapshot = rewriteSnapshot;
+module.exports.collectShadows = collectShadows;
+module.exports.warnAppletSkew = warnAppletSkew;
+module.exports.CLODE_SHADOWS = CLODE_SHADOWS;
 globalThis.Bun = globalThis.Bun || module.exports;   // ensure global even if required directly

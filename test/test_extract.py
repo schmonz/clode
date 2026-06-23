@@ -38,6 +38,56 @@ def test_transform_rewrites_import_meta_and_prepends_prelude():
     assert out.startswith(b"//")  # prelude comment
 
 
+# A realistic minified doctor footer fragment (createElement alias uA.default,
+# Box=U, Text=h) — the shape patch_doctor anchors on.
+SYN_DOCTOR = (
+    b'uA.default.createElement(Bf,null,'
+    b'uA.default.createElement(U,{flexDirection:"column"},I),'
+    b'uA.default.createElement(U,{marginTop:1},'
+    b'uA.default.createElement(h,{dimColor:!0},"Still having issues? Run /feedback to report details.")))'
+)
+
+
+def test_patch_doctor_injects_skew_section_with_captured_identifiers():
+    out, applied = ex.patch_doctor(SYN_DOCTOR)
+    assert applied is True
+    # guard + clode-owned data path present
+    assert b"globalThis.__clodeDoctor.appletSkew" in out
+    # built from the CAPTURED aliases (uA.default.createElement / U / h), not hardcoded
+    assert b'uA.default.createElement(U,{flexDirection:"column",marginTop:1}' in out
+    assert b'uA.default.createElement(h,{color:"yellow"}' in out
+    # inserted BEFORE the footer; footer string still present exactly once and intact
+    assert out.count(b"Still having issues?") == 1
+    assert b'{marginTop:1},uA.default.createElement(h,{dimColor:!0},"Still having issues?' in out
+
+
+def test_patch_doctor_is_linear_on_pathological_padding():
+    # A long run of identifier chars with no match must NOT backtrack O(n^2).
+    # (The ~1MB synthetic fixture is exactly this; an unbounded `+` hung extraction.)
+    import time
+    body = b"x" * 2_000_000
+    t = time.time()
+    out, applied = ex.patch_doctor(body)
+    assert applied is False and out == body
+    assert time.time() - t < 2.0, "patch_doctor regex is super-linear on identifier-run padding"
+
+
+def test_patch_doctor_noop_when_anchor_absent():
+    out, applied = ex.patch_doctor(b"no doctor screen here")
+    assert applied is False and out == b"no doctor screen here"
+
+
+def test_patch_doctor_noop_when_anchor_ambiguous():
+    # exactly-once or we don't touch it (fail-loud contract)
+    out, applied = ex.patch_doctor(SYN_DOCTOR + SYN_DOCTOR)
+    assert applied is False
+
+
+def test_transform_applies_doctor_patch_on_realistic_body():
+    out = ex.transform(SYN_DOCTOR)
+    assert b"globalThis.__clodeDoctor.appletSkew" in out
+
+
 def test_verify_flags_residual_nul_and_import_meta():
     assert ex.verify(b"ok\n") == []
     assert any("NUL" in p for p in ex.verify(b"bad\x00"))
