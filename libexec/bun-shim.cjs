@@ -49,6 +49,51 @@ fs.readSync = function (fd, bufferOrOpts, ...rest) {
   return _readSync.call(this, fd, bufferOrOpts, ...rest);
 };
 
+// --- snapshot rewrite hook (child_process layer) ---------------------------
+// Claude Code generates its zsh shell snapshot by building a shell SCRIPT string
+// (which embeds the grep/find/rg shadow functions in heredocs) and running it via
+// child_process.execFile(shell, ["-c","-l", script]). The spawned SHELL writes the
+// snapshot file via redirection — node never touches it with fs.writeFile. So we
+// intercept the child_process call and rewrite the embedded shadows in the command
+// string before the shell runs it. Detection is gated on the snapshot signature
+// (a SNAPSHOT_FILE= assignment plus an ARGV0=/exec -a shadow), so every other spawn
+// passes through untouched. rewriteSnapshot throws on an unknown applet; at runtime
+// we DON'T brick snapshot generation — we warn loudly and pass the original through
+// (the inspect --strict gate is the build-time tripwire for new applets).
+// We patch the SAME child_process object the bundle uses: `cp` above is
+// require('child_process'), which Node caches, so require('node:child_process')
+// and require('child_process') in the bundle resolve to this very object.
+const _looksLikeSnapshotCmd = (s) =>
+  typeof s === 'string' && s.indexOf('SNAPSHOT_FILE=') !== -1 && /(ARGV0=|exec -a )/.test(s);
+const _rewriteSnapshotArg = (s) => {
+  if (!_looksLikeSnapshotCmd(s)) return s;
+  try {
+    return rewriteSnapshot(s);
+  } catch (e) {
+    process.stderr.write(`clode: snapshot shadow rewrite skipped: ${e && e.message}\n`);
+    return s;
+  }
+};
+// Rewrite any snapshot-generator command found in a child_process invocation.
+// execFile/spawn family: the command string is an element of the args ARRAY (2nd arg).
+// exec/execSync family: the command is the FIRST string arg.
+const _rewriteArgsArray = (a) => Array.isArray(a) ? a.map(_rewriteSnapshotArg) : a;
+
+for (const m of ['execFile', 'execFileSync', 'spawn', 'spawnSync']) {
+  const orig = cp[m];
+  if (typeof orig !== 'function') continue;
+  cp[m] = function (file, args, ...rest) {
+    return orig.call(this, file, _rewriteArgsArray(args), ...rest);
+  };
+}
+for (const m of ['exec', 'execSync']) {
+  const orig = cp[m];
+  if (typeof orig !== 'function') continue;
+  cp[m] = function (command, ...rest) {
+    return orig.call(this, _rewriteSnapshotArg(command), ...rest);
+  };
+}
+
 // Throwing stub, tagged so the coverage report (inspect-claude-bundle
 // --coverage) can tell "provided but unimplemented" from a real implementation.
 const TODO = (name) => { const f = () => { throw new Error(`Bun.${name} not yet implemented in the Node host shim`); }; f.__bunShimStub = true; return f; };
@@ -242,6 +287,101 @@ function wrapAnsi(string, columns, options){
     .map((line) => wrapAnsiLine(line, columns, options)).join('\n');
 }
 
+// --- rewriteSnapshot: rewrite Claude Code's grep/find/rg shell-snapshot shadows
+// to exec the REAL host applet instead of the upstream native multiplexer (which
+// under clode resolves to node / a non-dispatching binary). Same-tool routing,
+// fail-loud if the applet is absent. A shadow whose applet we don't know throws
+// (auto-tracking: a new upstream applet must be handled deliberately). ---
+const CLODE_SHADOWS = {
+  grep: { applet: 'ugrep', env: 'CLODE_UGREP' },
+  find: { applet: 'bfs',   env: 'CLODE_BFS'   },
+  rg:   { applet: 'rg',    env: 'CLODE_RG'    },
+};
+// A shadow body is the upstream multiplexer if it invokes an applet via argv0
+// against the provider binary. We detect the applet from ARGV0=/exec -a.
+const SHADOW_APPLET = /(?:ARGV0=|exec -a )([A-Za-z0-9_+-]+)\b/;
+
+// Find the end index (exclusive) of a brace-balanced block that starts at the
+// '{' at openIdx. Quote/escape aware: braces inside shell single- or
+// double-quoted spans (and a backslash-escaped brace) do NOT count, so a stray
+// '}' in a quoted string can't desync the match. Single quotes are fully literal
+// (no escapes); double quotes honor backslash escapes; outside quotes a
+// backslash escapes the next char.
+function matchBrace(text, openIdx){
+  let depth = 0, quote = null;  // quote: null | "'" | '"'
+  for (let i = openIdx; i < text.length; i++){
+    const ch = text[i];
+    if (quote === "'"){
+      if (ch === "'") quote = null;          // single quotes: literal, no escapes
+      continue;
+    }
+    if (quote === '"'){
+      if (ch === '\\'){ i++; continue; }     // escape next char inside double quotes
+      if (ch === '"') quote = null;
+      continue;
+    }
+    if (ch === '\\'){ i++; continue; }       // outside quotes: escape next char
+    if (ch === "'" || ch === '"'){ quote = ch; continue; }
+    if (ch === '{') depth++;
+    else if (ch === '}'){ depth--; if (depth === 0) return i + 1; }
+  }
+  return -1;
+}
+
+// Pull the applet + the flag string (between "$_cc_bin" and "$@") out of a shadow
+// body, plus the optional passthrough `for _cc_a ... done` guard. Returns null if
+// the body is not an upstream multiplexer shadow.
+function parseShadow(body){
+  const am = SHADOW_APPLET.exec(body);
+  if (!am || !/_cc_bin|CLAUDE_CODE_EXECPATH|\/claude\b/.test(body)) return null;
+  const applet = am[1];
+  const fm = /"\$_cc_bin"\s+([\s\S]*?)\s+"\$@"/.exec(body);
+  const flags = fm ? fm[1].trim() : '';
+  const gm = /(\s*local _cc_a[\s\S]*?\n\s*done\n)/.exec(body);
+  const guard = gm ? gm[1] : '';
+  return { applet, flags, guard };
+}
+
+function buildShadow(name, known, parsed){
+  const { applet, env } = known;
+  const flags = parsed.flags ? ' ' + parsed.flags : '';
+  return `function ${name} {\n` +
+    parsed.guard +
+    `  local _bin="\${${env}:-$(command -v ${applet} 2>/dev/null)}"\n` +
+    `  [ -n "$_bin" ] || { echo "clode: ${name} needs '${applet}' (set ${env} or install it)" >&2; return 127; }\n` +
+    `  exec "$_bin"${flags} "$@"\n` +
+    `}`;
+}
+
+function rewriteSnapshot(text){
+  text = String(text);
+  let out = '', i = 0;
+  const fnRe = /\bfunction ([A-Za-z_][A-Za-z0-9_]*) \{/g;
+  let m;
+  while ((m = fnRe.exec(text)) !== null){
+    const name = m[1];
+    const openIdx = m.index + m[0].length - 1;          // the '{'
+    const endIdx = matchBrace(text, openIdx);
+    if (endIdx === -1) break;
+    const body = text.slice(openIdx + 1, endIdx - 1);
+    const parsed = parseShadow(body);
+    if (parsed){
+      // Body looks like an upstream multiplexer shadow.
+      const known = CLODE_SHADOWS[name];
+      if (!known || known.applet !== parsed.applet){
+        throw new Error(`clode: unrecognized search shadow function ${name} -> ${parsed.applet}; ` +
+          `update CLODE_SHADOWS in bun-shim.cjs`);
+      }
+      out += text.slice(i, m.index) + buildShadow(name, known, parsed);
+      i = endIdx;
+      fnRe.lastIndex = endIdx;
+    }
+    // non-shadow functions: leave untouched (the slice is emitted later)
+  }
+  out += text.slice(i);
+  return out;
+}
+
 // --- hashing: Bun.hash default = Wyhash64 (returns BigInt). TODO: exact wyhash if values
 //     must match data produced elsewhere; FNV-1a is a stable stand-in for in-process keys. ---
 function hash(input, seed){
@@ -423,4 +563,5 @@ module.exports = Bun;
 module.exports.__bunFFI = BUN_BUILTINS['bun:ffi'];
 module.exports.__hostModules = Object.keys(HOST_MODULES);   // external npm modules we stub
 module.exports.__bunBuiltins = Object.keys(BUN_BUILTINS);   // bun: modules we resolve
+module.exports.rewriteSnapshot = rewriteSnapshot;
 globalThis.Bun = globalThis.Bun || module.exports;   // ensure global even if required directly
