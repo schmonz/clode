@@ -531,11 +531,86 @@ function which(bin, opts){
   return null;
 }
 
-// --- semver: lean on npm `semver` if resolvable, else a small comparator ---
+// --- semver: lean on npm `semver` if resolvable, else a REAL numeric comparator.
+// The old string fallback (a<b?-1:a>b?1:0) mis-ordered multi-digit components:
+// "2.1.179" < "2.1.70" lexicographically (because '1' < '7' at the patch digit),
+// so the bundle's version gates built on Bun.semver.order tripped — e.g. Remote
+// Control declaring a NEWER build "too old" (2.1.179 vs the 2.1.70 minimum). And
+// satisfies returned `false` outright, silently failing any range check. Now we
+// parse and compare numerically (Bun.semver.order -> -1/0/1) and implement the
+// common range forms (||, AND, ^ ~ >= <= > < =, x-ranges, hyphen). ---
 let _semver; try { _semver = require('semver'); } catch(_){}
+
+function _svParse(v){
+  const s = String(v).trim().replace(/^[v=\s]+/, '');
+  const core = s.split('+')[0];                 // drop build metadata
+  const dash = core.indexOf('-');
+  const main = (dash === -1 ? core : core.slice(0, dash)).split('.');
+  const pre = dash === -1 ? [] : core.slice(dash + 1).split('.');
+  const nums = [0, 1, 2].map(i => parseInt(main[i], 10) || 0);
+  return { main: nums, pre };
+}
+function _svCmpPre(a, b){                        // SemVer §11 prerelease precedence
+  if (!a.length && !b.length) return 0;
+  if (!a.length) return 1;                       // no prerelease outranks a prerelease
+  if (!b.length) return -1;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++){
+    if (a[i] === b[i]) continue;
+    const an = /^\d+$/.test(a[i]), bn = /^\d+$/.test(b[i]);
+    if (an && bn) return Number(a[i]) < Number(b[i]) ? -1 : 1;
+    if (an) return -1;                           // numeric identifiers < alphanumeric
+    if (bn) return 1;
+    return a[i] < b[i] ? -1 : 1;
+  }
+  return a.length < b.length ? -1 : a.length > b.length ? 1 : 0;
+}
+function _svOrder(a, b){
+  const A = _svParse(a), B = _svParse(b);
+  for (let i = 0; i < 3; i++) if (A.main[i] !== B.main[i]) return A.main[i] < B.main[i] ? -1 : 1;
+  return _svCmpPre(A.pre, B.pre);
+}
+function _svPad(v){ return _svParse(v).main.join('.'); }   // partial -> x.y.z (missing = 0)
+// One comparator against version v: ">=1.2.0", "^1.2", "~1.2.3", "1.x", "2", "*".
+function _svSatisfiesOne(v, c){
+  c = c.trim();
+  if (!c || c === '*' || c === 'x' || c === 'X' || c === 'latest') return true;
+  const m = /^(>=|<=|>|<|=|\^|~)?\s*(.*)$/.exec(c);
+  const op = m[1] || '=', rest = m[2].trim();
+  if (op === '>' || op === '>=' || op === '<' || op === '<='){
+    const cmp = _svOrder(v, _svPad(rest));
+    return op === '>' ? cmp > 0 : op === '>=' ? cmp >= 0 : op === '<' ? cmp < 0 : cmp <= 0;
+  }
+  const parts = rest.replace(/^[v=]+/, '').split('+')[0].split('-')[0].split('.');
+  const num = parts.map(p => (p === '' || p === 'x' || p === 'X' || p === '*') ? null : (parseInt(p, 10) || 0));
+  const lo = [num[0] || 0, num[1] || 0, num[2] || 0];
+  let hi = null;                                 // exclusive upper bound, or null = exact
+  if (op === '^'){
+    if (lo[0] > 0) hi = [lo[0] + 1, 0, 0];
+    else if (lo[1] > 0) hi = [0, lo[1] + 1, 0];
+    else hi = [0, 0, lo[2] + 1];
+  } else if (op === '~'){
+    hi = num[1] == null ? [lo[0] + 1, 0, 0] : [lo[0], lo[1] + 1, 0];
+  } else {                                       // '=' / bare: exact unless x-range/partial
+    if (num[0] == null) return true;             // "*"/"x"
+    if (num[1] == null) hi = [lo[0] + 1, 0, 0];
+    else if (num[2] == null) hi = [lo[0], lo[1] + 1, 0];
+  }
+  if (hi == null) return _svOrder(v, lo.join('.')) === 0;
+  return _svOrder(v, lo.join('.')) >= 0 && _svOrder(v, hi.join('.')) < 0;
+}
+function _svSatisfies(v, range){
+  return String(range).split('||').some(part => {
+    const comps = part.trim().split(/\s+/).filter(Boolean);
+    if (!comps.length) return true;
+    const h = comps.indexOf('-');                // hyphen range "a - b"
+    if (h > 0 && comps[h + 1]) return _svOrder(v, comps[h - 1]) >= 0 && _svOrder(v, comps[h + 1]) <= 0;
+    return comps.every(c => _svSatisfiesOne(v, c));
+  });
+}
 const semver = {
-  satisfies: (v,r)=> _semver ? _semver.satisfies(v,r) : false,
-  order: (a,b)=> _semver ? _semver.compare(a,b) : (a<b?-1:a>b?1:0),
+  satisfies: (v,r)=> _semver ? _semver.satisfies(v,r) : _svSatisfies(v,r),
+  order: (a,b)=> _semver ? _semver.compare(a,b) : _svOrder(a,b),
 };
 
 function JSONL(text){ return String(text).split('\n').filter(Boolean).map(l=>JSON.parse(l)); }
