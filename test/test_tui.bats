@@ -15,17 +15,44 @@ load test_helper
 #   withws/ — a fake `ws` on the resolution path -> the TUI must render
 #   nows/   — nothing on the resolution path     -> clode must fail LOUD, not hang
 
-_tui_make_world() {  # $1 = root; builds withws/ (fake ws) and nows/ (empty) prefixes
+_tui_mod() {  # $1 = node_modules dir, $2 = package name; index.js body on stdin
+  mkdir -p "$1/$2"
+  printf '{"name":"%s","version":"0.0.0-clode-test","main":"index.js"}\n' "$2" > "$1/$2/package.json"
+  cat > "$1/$2/index.js"
+}
+
+# The render ext-deps (string-width/strip-ansi/wrap-ansi/semver) are now REQUIRED for
+# clode to render at all, so both worlds get functional-enough fakes — `ws` is the
+# only difference between them. The fakes only need to be good enough that the welcome
+# box renders (ASCII width, basic ANSI strip, identity wrap, numeric version compare).
+_tui_render_deps() {  # $1 = node_modules dir
+  _tui_mod "$1" string-width <<'JS'
+module.exports = (s) => [...String(s).replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, '')].length;
+JS
+  _tui_mod "$1" strip-ansi <<'JS'
+module.exports = (s) => String(s).replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-9;?]*[ -\/]*[@-~]/g, '');
+JS
+  _tui_mod "$1" wrap-ansi <<'JS'
+module.exports = (s) => String(s);
+JS
+  _tui_mod "$1" semver <<'JS'
+const P = (v) => String(v).replace(/^[v=]+/, '').split('.').map((n) => parseInt(n, 10) || 0);
+exports.compare = (a, b) => { const x = P(a), y = P(b); for (let i = 0; i < 3; i++) if ((x[i]||0) !== (y[i]||0)) return (x[i]||0) < (y[i]||0) ? -1 : 1; return 0; };
+exports.satisfies = () => true;
+JS
+}
+
+_tui_make_world() {  # $1 = root; builds withws/ (all deps) and nows/ (no ws) prefixes
   local r=$1 realnode; realnode="${CLODE_NODE:-$(command -v node)}"
-  mkdir -p "$r/withws/bin" "$r/withws/lib/node_modules/ws" "$r/nows/bin" "$r/nows/lib/node_modules"
+  mkdir -p "$r/withws/bin" "$r/withws/lib/node_modules" "$r/nows/bin" "$r/nows/lib/node_modules"
   ln -s "$realnode" "$r/withws/bin/node"
   ln -s "$realnode" "$r/nows/bin/node"
-  printf '{"name":"ws","version":"0.0.0-clode-test","main":"index.js"}\n' \
-    > "$r/withws/lib/node_modules/ws/package.json"
-  cat > "$r/withws/lib/node_modules/ws/index.js" <<'JS'
+  _tui_render_deps "$r/withws/lib/node_modules"
+  _tui_render_deps "$r/nows/lib/node_modules"
+  # ws: present only in withws, so nows exercises the ws fail-loud path specifically.
+  _tui_mod "$r/withws/lib/node_modules" ws <<'JS'
 // Fake no-connect ws: enough for the bundle's startup require() to succeed and the
-// TUI to render. Never connects (Remote Control isn't exercised here). Mirrors the
-// shape clode shipped before the real adapter.
+// TUI to render. Never connects (Remote Control isn't exercised here).
 const { EventEmitter } = require('events');
 class WebSocket extends EventEmitter {
   constructor(u){ super(); this.url = u; this.readyState = 0; }

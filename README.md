@@ -187,6 +187,15 @@ to force the system store, or add a private/corporate root with
   `yaml`, the first YAML operation prints a clear "install `yaml`" message and the
   affected feature degrades (that skill/command is skipped) instead of failing
   silently. Everything else works without it.
+- **`string-width`, `strip-ansi`, `wrap-ansi`, `semver` (npm) — required to render.**
+  These back Bun's `stringWidth`/`stripANSI`/`wrapAnsi`/`semver`, run on every frame
+  (and gate versions), and so are mandatory: clode resolves the real packages and
+  fails loud with a clear "install X" message + clean exit if one is missing (no
+  in-house clones anymore). Install everything clode needs in one go:
+
+  ```sh
+  npm install -g ws yaml string-width strip-ansi wrap-ansi semver
+  ```
 
 Override the host tools per machine: `CLODE_NODE`, `CLODE_PYTHON`, and
 `CLODE_PATH` (the clean-env PATH; defaults to the node + python dirs plus common

@@ -327,7 +327,9 @@ def unreviewed_externals(modules_missing):
 # Bun.* members the shim deliberately provides as throwing stubs (features the
 # Node host can't support; they degrade rather than crash — see docs/BACKLOG.md).
 ACCEPTED_STUBBED_BUN = {'serve', 'listen', 'file', 'write', 'Terminal', 'Transpiler',
-                        'YAML'}  # fail-loud ext-dep: real when `yaml` installed, stub (loud) when not
+                        # fail-loud ext-deps: real when the npm package is installed,
+                        # a (loud) stub when not (YAML/yaml; the render utils + semver).
+                        'YAML', 'stringWidth', 'stripANSI', 'wrapAnsi', 'semver'}
 # Missing Bun.* members are NOT pre-accepted: a newly-used Bun API we don't provide
 # should be reviewed. (Empty set => any 'missing' Bun.* fails the gate.)
 ACCEPTED_MISSING_BUN = set()

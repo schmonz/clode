@@ -106,194 +106,35 @@ for (const m of ['exec', 'execSync']) {
 // --coverage) can tell "provided but unimplemented" from a real implementation.
 const TODO = (name) => { const f = () => { throw new Error(`Bun.${name} not yet implemented in the Node host shim`); }; f.__bunShimStub = true; return f; };
 
-// --- text utils (first-party, no deps; correctness pinned by test/text-format.test.cjs) ---
-// stripANSI removes both CSI (ESC [ ... letter) and OSC (ESC ] ... BEL|ST) sequences;
-// an OSC leak (hyperlinks, window titles) would otherwise show as raw text in the TUI.
-const ANSI = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-9;?]*[ -\/]*[@-~]/g;
-function stripANSI(s){ return String(s).replace(ANSI, ''); }
+// --- external deps backed by real npm packages -----------------------------
+// stripANSI / stringWidth / wrapAnsi (and semver, below) are backed by the npm
+// strip-ansi / string-width / wrap-ansi / semver packages -- no in-house clones.
+// They render every frame / gate versions, so a missing one is FATAL: write the
+// install hint and exit (nothing to recover, unlike the optional ws/yaml features).
+// require() resolves these even though string-width/strip-ansi/wrap-ansi are ESM-
+// only: Node (clode floors at 24) supports require() of ESM with no top-level await
+// and returns a namespace whose `.default` is the function -- hence `.default || m`.
+// (A future top-level-await release would make require() throw ERR_REQUIRE_ASYNC_
+// MODULE; pin a sync version then.)
+function _extMissing(pkg, feature){
+  return "clode: " + feature + " needs the npm '" + pkg + "' package, which isn't installed.\n" +
+    "       Install it with the same Node as clode:  npm install -g " + pkg + "\n" +
+    "       (or point NODE_PATH at a node_modules dir that has it).";
+}
+function _extFatal(msg){ try { fs.writeSync(2, '\n' + msg + '\n'); } catch (_) {} process.exit(1); }
+function _extResolve(pkg){ try { const m = require(pkg); return (m && m.default) || m; } catch (_) { return undefined; } }
 
-// Display width of a single code point. Zero-width (combining marks, joiners,
-// bidi/format controls, variation selectors) -> 0; wide CJK/emoji -> 2; else 1.
-// Over-counting zero-width chars used to drift boxes/columns to the right.
-function isZeroWidth(c){
-  return c === 0x00AD ||                     // soft hyphen
-    (c >= 0x0300 && c <= 0x036F) ||          // combining diacritical marks
-    (c >= 0x0483 && c <= 0x0489) ||          // combining (Cyrillic)
-    (c >= 0x0591 && c <= 0x05BD) ||          // Hebrew points
-    (c >= 0x0610 && c <= 0x061A) ||          // Arabic marks
-    (c >= 0x064B && c <= 0x065F) || c === 0x0670 ||
-    (c >= 0x06D6 && c <= 0x06DC) ||
-    (c >= 0x1AB0 && c <= 0x1AFF) ||          // combining diacritical marks extended
-    (c >= 0x1DC0 && c <= 0x1DFF) ||          // combining diacritical marks supplement
-    (c >= 0x200B && c <= 0x200F) ||          // ZWSP, ZWNJ, ZWJ, LRM, RLM
-    (c >= 0x202A && c <= 0x202E) ||          // bidi embeddings/overrides
-    (c >= 0x2060 && c <= 0x2064) ||          // word joiner & invisible operators
-    (c >= 0x20D0 && c <= 0x20FF) ||          // combining marks for symbols
-    (c >= 0xFE00 && c <= 0xFE0F) ||          // variation selectors
-    (c >= 0xFE20 && c <= 0xFE2F) ||          // combining half marks
-    c === 0xFEFF;                            // ZWNBSP / BOM
-}
-function isWide(c){
-  return (c>=0x1100&&c<=0x115F)||(c>=0x2E80&&c<=0xA4CF)||(c>=0xAC00&&c<=0xD7A3)||
-    (c>=0xF900&&c<=0xFAFF)||(c>=0xFE30&&c<=0xFE4F)||(c>=0xFF00&&c<=0xFF60)||
-    (c>=0xFFE0&&c<=0xFFE6)||(c>=0x1F300&&c<=0x1FAFF)||(c>=0x20000&&c<=0x3FFFD);
-}
-// Code points that are emoji-presentation by Unicode default. NOTE: conservative
-// terminals (old iTerm2, *BSD consoles — clode's targets) still render a lone one
-// at width 1 and only widen it with an explicit VS16. So this set does NOT force
-// width 2 on its own; it only seeds isEmojiBase() as VS16-promotable. (A "modern"
-// Unicode-9-width terminal would want these at 2 — that's the terminal's call.)
-function isEmojiPresentation(c){
-  return (c>=0x231A&&c<=0x231B)||(c>=0x23E9&&c<=0x23EC)||c===0x23F0||c===0x23F3||
-    (c>=0x25FD&&c<=0x25FE)||(c>=0x2614&&c<=0x2615)||(c>=0x2648&&c<=0x2653)||
-    c===0x267F||c===0x2693||c===0x26A1||(c>=0x26AA&&c<=0x26AB)||
-    (c>=0x26BD&&c<=0x26BE)||(c>=0x26C4&&c<=0x26C5)||c===0x26CE||c===0x26D4||
-    c===0x26EA||(c>=0x26F2&&c<=0x26F3)||c===0x26F5||c===0x26FA||c===0x26FD||
-    c===0x2705||(c>=0x270A&&c<=0x270B)||c===0x2728||c===0x274C||c===0x274E||
-    (c>=0x2753&&c<=0x2755)||c===0x2757||(c>=0x2795&&c<=0x2797)||c===0x27B0||
-    c===0x27BF||(c>=0x2B1B&&c<=0x2B1C)||c===0x2B50||c===0x2B55||
-    c===0x1F004||c===0x1F0CF||c===0x1F18E||(c>=0x1F191&&c<=0x1F19A)||
-    (c>=0x1F1E6&&c<=0x1F1FF)||c===0x1F201||c===0x1F21A||c===0x1F22F||
-    (c>=0x1F232&&c<=0x1F236)||(c>=0x1F238&&c<=0x1F23A)||(c>=0x1F250&&c<=0x1F251);
-}
-// Emoji that DEFAULT to text presentation (one column) but switch to emoji
-// presentation — two columns — when followed by VS16 (U+FE0F): ⚠️ ☀️ ▶️.
-// Gated to the symbol blocks so a stray VS16 after ordinary text (a️) is ignored.
-function isEmojiBase(c){
-  return c===0x00A9||c===0x00AE||c===0x203C||c===0x2049||c===0x2122||c===0x2139||
-    (c>=0x2190&&c<=0x21FF)||(c>=0x2300&&c<=0x23FF)||(c>=0x2460&&c<=0x24FF)||
-    (c>=0x25A0&&c<=0x27BF)||c===0x2934||c===0x2935||(c>=0x2B00&&c<=0x2BFF)||
-    c===0x3030||c===0x303D||c===0x3297||c===0x3299||isEmojiPresentation(c);
-}
-// `next` is the following code point (for VS16 lookahead); 0/undefined at end.
-function charWidth(c, next){
-  if (c === 0 || isZeroWidth(c)) return 0;
-  if (next === 0xFE0F && isEmojiBase(c)) return 2;   // VS16 forces emoji width 2
-  return isWide(c) ? 2 : 1;                           // lone BMP symbols stay width 1
-}
-function stringWidth(s){
-  s = stripANSI(String(s));
-  const cps = [];
-  for (const ch of s) cps.push(ch.codePointAt(0));
-  let w = 0;
-  for (let i = 0; i < cps.length; i++) w += charWidth(cps[i], cps[i + 1]);
-  return w;
-}
-
-// --- wrapAnsi: faithful port of the `wrap-ansi` algorithm (which Bun.wrapAnsi
-// mirrors), wired to OUR stringWidth/stripANSI so wrapping and width-measuring
-// share ONE width function — the property that makes native's wraps and the
-// renderer's inline-code highlight positions line up. Honors the {trim, hard,
-// wordWrap} options the renderer and editor pass; the previous hand-rolled version
-// ignored the options and dropped wrap-boundary whitespace, which drifted TUI
-// highlights. SGR/OSC is closed before each inserted newline and reopened after,
-// via the ansi-styles open->close map (single active code, exactly like wrap-ansi).
-// (We don't .normalize() the input the way wrap-ansi does, to keep the input
-// editor's byte-for-byte cursor math intact; the renderer feeds NFC text already.)
-const ESCAPES = new Set(['', '']);
-const A_BELL = '', A_LINK = ']8;;', FG_RESET = 39;
-const sgrCode = (code) => `[${code}m`;
-const sgrLink = (url) => `${A_LINK}${url}${A_BELL}`;
-// open SGR code -> its reset code (the slice of ansi-styles `.codes` we need)
-const SGR_RESET = new Map([[1, 22], [2, 22], [3, 23], [4, 24], [7, 27], [8, 28], [9, 29], [53, 55]]);
-for (let c = 30; c <= 37; c++) SGR_RESET.set(c, 39);
-for (let c = 90; c <= 97; c++) SGR_RESET.set(c, 39);
-for (let c = 40; c <= 47; c++) SGR_RESET.set(c, 49);
-for (let c = 100; c <= 107; c++) SGR_RESET.set(c, 49);
-
-// Break a single word too long for `columns`, ANSI-aware (escapes count zero).
-function wrapWord(rows, word, columns){
-  const chars = [...word];
-  let inEscape = false, inLink = false;
-  let visible = stringWidth(stripANSI(rows[rows.length - 1]));
-  for (let i = 0; i < chars.length; i++){
-    const ch = chars[i], w = stringWidth(ch);
-    if (visible + w <= columns) rows[rows.length - 1] += ch;
-    else { rows.push(ch); visible = 0; }
-    if (ESCAPES.has(ch)){ inEscape = true; inLink = chars.slice(i + 1).join('').startsWith(A_LINK); }
-    if (inEscape){
-      if (inLink){ if (ch === A_BELL){ inEscape = false; inLink = false; } }
-      else if (ch === 'm'){ inEscape = false; }
-      continue;
-    }
-    visible += w;
-    if (visible === columns && i < chars.length - 1){ rows.push(''); visible = 0; }
-  }
-  if (!visible && rows[rows.length - 1].length > 0 && rows.length > 1) rows[rows.length - 2] += rows.pop();
-}
-
-// Trim trailing spaces from a row without disturbing ANSI escapes.
-function trimRowRight(s){
-  const words = s.split(' ');
-  let last = words.length;
-  while (last > 0 && stringWidth(words[last - 1]) === 0) last--;
-  return last === words.length ? s : words.slice(0, last).join(' ') + words.slice(last).join('');
-}
-
-function wrapAnsiLine(string, columns, options){
-  if (options.trim !== false && string.trim() === '') return '';
-  const words = string.split(' ');
-  const lengths = words.map((w) => stringWidth(w));
-  let rows = [''];
-  for (let index = 0; index < words.length; index++){
-    const word = words[index];
-    if (options.trim !== false) rows[rows.length - 1] = rows[rows.length - 1].trimStart();
-    let rowLength = stringWidth(rows[rows.length - 1]);
-    if (index !== 0){
-      if (rowLength >= columns && (options.wordWrap === false || options.trim === false)){ rows.push(''); rowLength = 0; }
-      if (rowLength > 0 || options.trim === false){ rows[rows.length - 1] += ' '; rowLength++; }
-    }
-    if (options.hard && lengths[index] > columns){
-      const remaining = columns - rowLength;
-      const breaksThis = 1 + Math.floor((lengths[index] - remaining - 1) / columns);
-      const breaksNext = Math.floor((lengths[index] - 1) / columns);
-      if (breaksNext < breaksThis) rows.push('');
-      wrapWord(rows, word, columns);
-      continue;
-    }
-    if (rowLength + lengths[index] > columns && rowLength > 0 && lengths[index] > 0){
-      if (options.wordWrap === false && rowLength < columns){ wrapWord(rows, word, columns); continue; }
-      rows.push('');
-    }
-    if (rowLength + lengths[index] > columns && options.wordWrap === false && !options.hard){ wrapWord(rows, word, columns); continue; }
-    rows[rows.length - 1] += word;
-  }
-  if (options.trim !== false) rows = rows.map(trimRowRight);
-
-  // Reconstruct style across the inserted newlines: close the active SGR/OSC before
-  // each '\n' and reopen it after. Single active code, exactly like wrap-ansi.
-  const pre = rows.join('\n');
-  const cps = [...pre];
-  let out = '', active, activeUrl, idx = 0;
-  for (let i = 0; i < cps.length; i++){
-    const ch = cps[i];
-    out += ch;
-    if (ESCAPES.has(ch)){
-      const m = /(?:\[(\d+)m|\]8;;(.*?))/.exec(pre.slice(idx));
-      if (m){
-        if (m[1] !== undefined){ const c = Number(m[1]); active = c === FG_RESET ? undefined : c; }
-        else if (m[2] !== undefined){ activeUrl = m[2].length === 0 ? undefined : m[2]; }
-      }
-    }
-    const reset = SGR_RESET.get(Number(active));
-    if (cps[i + 1] === '\n'){
-      if (activeUrl) out += sgrLink('');
-      if (active && reset) out += sgrCode(reset);
-    } else if (ch === '\n'){
-      if (active && reset) out += sgrCode(active);
-      if (activeUrl) out += sgrLink(activeUrl);
-    }
-    idx += ch.length;
-  }
-  return out;
-}
-
-function wrapAnsi(string, columns, options){
-  columns = columns > 0 ? columns : 80;
-  options = options || {};
-  return String(string).replace(/\r\n/g, '\n').split('\n')
-    .map((line) => wrapAnsiLine(line, columns, options)).join('\n');
-}
+const _stringWidthFn = _extResolve('string-width');
+const _stripAnsiFn   = _extResolve('strip-ansi');
+const _wrapAnsiFn    = _extResolve('wrap-ansi');
+function stringWidth(...a){ return _stringWidthFn ? _stringWidthFn(...a) : _extFatal(_extMissing('string-width', 'text rendering (display width)')); }
+function stripANSI(...a){ return _stripAnsiFn ? _stripAnsiFn(...a) : _extFatal(_extMissing('strip-ansi', 'text rendering (ANSI stripping)')); }
+function wrapAnsi(...a){ return _wrapAnsiFn ? _wrapAnsiFn(...a) : _extFatal(_extMissing('wrap-ansi', 'text rendering (line wrapping)')); }
+// Without the real module these are fail-loud stubs, not implementations -- tag so
+// inspect-claude-bundle coverage reports them honestly (see Bun.YAML).
+if (!_stringWidthFn) stringWidth.__bunShimStub = true;
+if (!_stripAnsiFn) stripANSI.__bunShimStub = true;
+if (!_wrapAnsiFn) wrapAnsi.__bunShimStub = true;
 
 // --- rewriteSnapshot: rewrite Claude Code's grep/find/rg shell-snapshot shadows
 // to exec the REAL host applet instead of the upstream native multiplexer (which
@@ -531,87 +372,15 @@ function which(bin, opts){
   return null;
 }
 
-// --- semver: lean on npm `semver` if resolvable, else a REAL numeric comparator.
-// The old string fallback (a<b?-1:a>b?1:0) mis-ordered multi-digit components:
-// "2.1.179" < "2.1.70" lexicographically (because '1' < '7' at the patch digit),
-// so the bundle's version gates built on Bun.semver.order tripped — e.g. Remote
-// Control declaring a NEWER build "too old" (2.1.179 vs the 2.1.70 minimum). And
-// satisfies returned `false` outright, silently failing any range check. Now we
-// parse and compare numerically (Bun.semver.order -> -1/0/1) and implement the
-// common range forms (||, AND, ^ ~ >= <= > < =, x-ranges, hyphen). ---
+// --- semver: backed by the npm `semver` package; fail loud if absent. (The old
+// in-house numeric comparator is gone -- npm semver owns correctness, including the
+// "2.1.179 > 2.1.70" Remote Control gate the original string fallback broke.) ---
 let _semver; try { _semver = require('semver'); } catch(_){}
-
-function _svParse(v){
-  const s = String(v).trim().replace(/^[v=\s]+/, '');
-  const core = s.split('+')[0];                 // drop build metadata
-  const dash = core.indexOf('-');
-  const main = (dash === -1 ? core : core.slice(0, dash)).split('.');
-  const pre = dash === -1 ? [] : core.slice(dash + 1).split('.');
-  const nums = [0, 1, 2].map(i => parseInt(main[i], 10) || 0);
-  return { main: nums, pre };
-}
-function _svCmpPre(a, b){                        // SemVer §11 prerelease precedence
-  if (!a.length && !b.length) return 0;
-  if (!a.length) return 1;                       // no prerelease outranks a prerelease
-  if (!b.length) return -1;
-  const n = Math.min(a.length, b.length);
-  for (let i = 0; i < n; i++){
-    if (a[i] === b[i]) continue;
-    const an = /^\d+$/.test(a[i]), bn = /^\d+$/.test(b[i]);
-    if (an && bn) return Number(a[i]) < Number(b[i]) ? -1 : 1;
-    if (an) return -1;                           // numeric identifiers < alphanumeric
-    if (bn) return 1;
-    return a[i] < b[i] ? -1 : 1;
-  }
-  return a.length < b.length ? -1 : a.length > b.length ? 1 : 0;
-}
-function _svOrder(a, b){
-  const A = _svParse(a), B = _svParse(b);
-  for (let i = 0; i < 3; i++) if (A.main[i] !== B.main[i]) return A.main[i] < B.main[i] ? -1 : 1;
-  return _svCmpPre(A.pre, B.pre);
-}
-function _svPad(v){ return _svParse(v).main.join('.'); }   // partial -> x.y.z (missing = 0)
-// One comparator against version v: ">=1.2.0", "^1.2", "~1.2.3", "1.x", "2", "*".
-function _svSatisfiesOne(v, c){
-  c = c.trim();
-  if (!c || c === '*' || c === 'x' || c === 'X' || c === 'latest') return true;
-  const m = /^(>=|<=|>|<|=|\^|~)?\s*(.*)$/.exec(c);
-  const op = m[1] || '=', rest = m[2].trim();
-  if (op === '>' || op === '>=' || op === '<' || op === '<='){
-    const cmp = _svOrder(v, _svPad(rest));
-    return op === '>' ? cmp > 0 : op === '>=' ? cmp >= 0 : op === '<' ? cmp < 0 : cmp <= 0;
-  }
-  const parts = rest.replace(/^[v=]+/, '').split('+')[0].split('-')[0].split('.');
-  const num = parts.map(p => (p === '' || p === 'x' || p === 'X' || p === '*') ? null : (parseInt(p, 10) || 0));
-  const lo = [num[0] || 0, num[1] || 0, num[2] || 0];
-  let hi = null;                                 // exclusive upper bound, or null = exact
-  if (op === '^'){
-    if (lo[0] > 0) hi = [lo[0] + 1, 0, 0];
-    else if (lo[1] > 0) hi = [0, lo[1] + 1, 0];
-    else hi = [0, 0, lo[2] + 1];
-  } else if (op === '~'){
-    hi = num[1] == null ? [lo[0] + 1, 0, 0] : [lo[0], lo[1] + 1, 0];
-  } else {                                       // '=' / bare: exact unless x-range/partial
-    if (num[0] == null) return true;             // "*"/"x"
-    if (num[1] == null) hi = [lo[0] + 1, 0, 0];
-    else if (num[2] == null) hi = [lo[0], lo[1] + 1, 0];
-  }
-  if (hi == null) return _svOrder(v, lo.join('.')) === 0;
-  return _svOrder(v, lo.join('.')) >= 0 && _svOrder(v, hi.join('.')) < 0;
-}
-function _svSatisfies(v, range){
-  return String(range).split('||').some(part => {
-    const comps = part.trim().split(/\s+/).filter(Boolean);
-    if (!comps.length) return true;
-    const h = comps.indexOf('-');                // hyphen range "a - b"
-    if (h > 0 && comps[h + 1]) return _svOrder(v, comps[h - 1]) >= 0 && _svOrder(v, comps[h + 1]) <= 0;
-    return comps.every(c => _svSatisfiesOne(v, c));
-  });
-}
 const semver = {
-  satisfies: (v,r)=> _semver ? _semver.satisfies(v,r) : _svSatisfies(v,r),
-  order: (a,b)=> _semver ? _semver.compare(a,b) : _svOrder(a,b),
+  satisfies: (v,r)=> _semver ? _semver.satisfies(v,r) : _extFatal(_extMissing('semver', 'version checks')),
+  order: (a,b)=> _semver ? _semver.compare(a,b) : _extFatal(_extMissing('semver', 'version checks')),
 };
+if (!_semver) semver.__bunShimStub = true;
 
 function JSONL(text){ return String(text).split('\n').filter(Boolean).map(l=>JSON.parse(l)); }
 
@@ -714,10 +483,7 @@ const WS_MISSING =
 // sees nothing). Write straight to fd 2 (unbuffered, survives the exit) and stop
 // the process at the first point ws is needed. This is the shape we want for
 // host-provided deps generally: install it, or get a clear message and a clean exit.
-function _wsFatal(){
-  try { fs.writeSync(2, '\n' + WS_MISSING + '\n'); } catch (_) {}
-  process.exit(1);
-}
+function _wsFatal(){ _extFatal(WS_MISSING); }
 // Translate a Bun-style WebSocket constructor call into ws's (url, protocols, options).
 function _wsArgs(url, opts){
   if (opts && typeof opts === 'object' && !Array.isArray(opts)){
