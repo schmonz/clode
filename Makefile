@@ -30,7 +30,7 @@ install:
 	    -e "s|@CLAUDE_BIN@|$(CLAUDE_BIN)|g" \
 	    bin/clode > "$(DESTDIR)$(BINDIR)/clode"; \
 	chmod 0755 "$(DESTDIR)$(BINDIR)/clode"; \
-	cp libexec/extract-claude-js libexec/inspect-claude-bundle libexec/bun-shim.cjs "$(DESTDIR)$(pkglibexec)/"; \
+	cp libexec/extract-claude-js libexec/inspect-claude-bundle libexec/bun-shim.cjs package.json "$(DESTDIR)$(pkglibexec)/"; \
 	cp man/clode.1 "$(DESTDIR)$(MANDIR)/man1/clode.1"; \
 	cp README.md LICENSE "$(DESTDIR)$(DOCDIR)/clode/"; \
 	echo "installed clode $$v to $(DESTDIR)$(BINDIR)/clode"
@@ -40,6 +40,7 @@ uninstall:
 	      "$(DESTDIR)$(pkglibexec)/extract-claude-js" \
 	      "$(DESTDIR)$(pkglibexec)/inspect-claude-bundle" \
 	      "$(DESTDIR)$(pkglibexec)/bun-shim.cjs" \
+	      "$(DESTDIR)$(pkglibexec)/package.json" \
 	      "$(DESTDIR)$(MANDIR)/man1/clode.1" \
 	      "$(DESTDIR)$(DOCDIR)/clode/README.md" \
 	      "$(DESTDIR)$(DOCDIR)/clode/LICENSE"

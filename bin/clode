@@ -163,12 +163,54 @@ exec_bundle() {
 # npm puts globals under <node-prefix>/lib/node_modules; add that to NODE_PATH,
 # preserving any the user set. No-op if the dir doesn't exist.
 set_node_path() {
-  _gmods=$(cd "$(dirname "$NODE")/../lib/node_modules" 2>/dev/null && pwd || :)
-  [ -n "$_gmods" ] || return 0
-  case ":${NODE_PATH:-}:" in
-    *":$_gmods:"*) : ;;
-    *) NODE_PATH="${NODE_PATH:+$NODE_PATH:}$_gmods"; export NODE_PATH ;;
-  esac
+  # clode's own managed deps (ensure_deps) FIRST, so a fresh managed copy wins over a
+  # stale global one; then the node prefix's global node_modules. Any NODE_PATH the
+  # user already set stays ahead of both (their override wins). No-op on absent dirs.
+  for _d in "${DEPS_ROOT:-}/node_modules" \
+            "$(cd "$(dirname "$NODE")/../lib/node_modules" 2>/dev/null && pwd || :)"; do
+    [ -d "$_d" ] || continue
+    case ":${NODE_PATH:-}:" in
+      *":$_d:"*) : ;;
+      *) NODE_PATH="${NODE_PATH:+$NODE_PATH:}$_d"; export NODE_PATH ;;
+    esac
+  done
+}
+
+# Resolve clode's runtime npm deps (the package.json manifest) into a user-owned dir,
+# installing on first run and re-installing when the manifest changes (sig-gated, like
+# extract_if_needed). These back the bundle's ext-deps (ws, yaml, string-width, ...).
+# User-owned => no sudo; CLODE_DEPS overrides the dir AND, if already populated, opts
+# out of auto-install (you manage it). CLODE_NPM overrides the npm binary.
+ensure_deps() {
+  DEPS_ROOT="${CLODE_DEPS:-${XDG_DATA_HOME:-$HOME/.local/share}/clode}"
+  _manifest=""
+  for _c in "$LIBEXEC/package.json" "$HERE/../package.json"; do
+    [ -f "$_c" ] && { _manifest="$_c"; break; }
+  done
+  [ -n "$_manifest" ] || return 0            # no manifest shipped -> nothing to ensure
+  # A CLODE_DEPS dir with node_modules but no clode-written .deps-sig is user-managed:
+  # trust it, never auto-install. (Our own managed dir HAS a .deps-sig, so it still
+  # falls through to the sig-gate below and re-installs when the manifest changes.)
+  [ -n "${CLODE_DEPS:-}" ] && [ -d "$CLODE_DEPS/node_modules" ] && [ ! -f "$CLODE_DEPS/.deps-sig" ] && return 0
+  _sig=$(sig_of "$_manifest")
+  if [ -d "$DEPS_ROOT/node_modules" ] && \
+     [ "$(cat "$DEPS_ROOT/.deps-sig" 2>/dev/null)" = "$_sig" ]; then
+    return 0                                 # already fresh for this manifest
+  fi
+  echo "clode: installing dependencies..." >&2
+  _npm="${CLODE_NPM:-$(command -v npm 2>/dev/null || :)}"
+  if [ -z "$_npm" ]; then
+    echo "clode: need npm to install runtime dependencies (ws, yaml, string-width, ...);" >&2
+    echo "       install npm, or set CLODE_DEPS to a node_modules you populate yourself." >&2
+    exit 1
+  fi
+  mkdir -p "$DEPS_ROOT"
+  cp "$_manifest" "$DEPS_ROOT/package.json"
+  if ! "$_npm" install --prefix "$DEPS_ROOT" --no-audit --no-fund --omit=dev >&2; then
+    echo "clode: dependency install failed (see npm output above)." >&2
+    exit 1
+  fi
+  printf '%s\n' "$_sig" > "$DEPS_ROOT/.deps-sig"
 }
 
 main() {
@@ -224,6 +266,8 @@ main() {
   CACHE="$CACHE_ROOT/$KEY"
 
   extract_if_needed
+
+  ensure_deps
 
   exec_bundle "$@"
 }

@@ -1,4 +1,6 @@
 build/
+node_modules/
+package-lock.json
 *.cjs.cache
 __pycache__/
 *.pyc

@@ -157,45 +157,22 @@ to force the system store, or add a private/corporate root with
   the bundled flags. Override the resolved binary with `CLODE_UGREP`, `CLODE_BFS`,
   `CLODE_RG`. Compare host vs. embedded versions any time with
   `libexec/inspect-claude-bundle ~/.local/share/claude/versions/<ver>`.
-- **`ws` (npm) — for WebSocket features only** (Remote Control / `/remote`,
-  MCP-over-WebSocket). Claude Code is built for Bun's header-bearing WebSocket;
-  Node's global one silently drops the auth header, so clode backs WebSockets with
-  the npm [`ws`](https://www.npmjs.com/package/ws) package via a thin adapter.
-  Install it with the **same Node as clode**:
+- **npm runtime dependencies — auto-installed on first run.** The extracted bundle
+  needs a few npm packages that Bun would otherwise provide built-in: `ws`
+  (header-bearing WebSocket — Remote Control / MCP-over-WebSocket; Node's global one
+  drops the auth header), `yaml` (skill/command/memory frontmatter), and
+  `string-width` / `strip-ansi` / `wrap-ansi` / `semver` (TUI rendering + version
+  gates). They're declared in `package.json`, and **clode installs them on first
+  run** — into a user-owned dir (`${XDG_DATA_HOME:-~/.local/share}/clode`, no sudo),
+  re-installing only when the manifest changes, the same self-managing way it
+  extracts the bundle. Normally you do nothing.
 
-  ```sh
-  npm install -g ws
-  ```
-
-  clode adds the node prefix's global `node_modules` to `NODE_PATH` so a global
-  install is found (or set `NODE_PATH` to any `node_modules` that has `ws`). It is
-  an explicit, **fail-loud** dependency: if a WebSocket feature is used without
-  `ws` installed, clode raises a clear "install `ws`" error rather than silently
-  failing to connect. Everything else works without it.
-- **`yaml` (npm) — for YAML frontmatter only** (skills, slash commands, agents,
-  and memory files carry YAML frontmatter). Claude Code uses Bun's built-in
-  `Bun.YAML`; clode backs it with the npm
-  [`yaml`](https://www.npmjs.com/package/yaml) package. Install it with the **same
-  Node as clode**:
-
-  ```sh
-  npm install -g yaml
-  ```
-
-  Resolved the same way as `ws` (global `node_modules` on `NODE_PATH`), and also an
-  explicit, **fail-loud** dependency — but at point of use, not startup: without
-  `yaml`, the first YAML operation prints a clear "install `yaml`" message and the
-  affected feature degrades (that skill/command is skipped) instead of failing
-  silently. Everything else works without it.
-- **`string-width`, `strip-ansi`, `wrap-ansi`, `semver` (npm) — required to render.**
-  These back Bun's `stringWidth`/`stripANSI`/`wrapAnsi`/`semver`, run on every frame
-  (and gate versions), and so are mandatory: clode resolves the real packages and
-  fails loud with a clear "install X" message + clean exit if one is missing (no
-  in-house clones anymore). Install everything clode needs in one go:
-
-  ```sh
-  npm install -g ws yaml string-width strip-ansi wrap-ansi semver
-  ```
+  - First run needs `npm` + network; if either is unavailable clode exits with a
+    clear message rather than launching half-provisioned.
+  - `CLODE_DEPS` points clode at a deps dir you manage yourself (pre-populate its
+    `node_modules` and clode leaves it alone); `CLODE_NPM` overrides the npm binary.
+  - Defense in depth: if a package is somehow missing at use, clode still fails loud
+    with an "install" hint instead of failing silently.
 
 Override the host tools per machine: `CLODE_NODE`, `CLODE_PYTHON`, and
 `CLODE_PATH` (the clean-env PATH; defaults to the node + python dirs plus common

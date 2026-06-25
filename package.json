@@ -1,0 +1,17 @@
+{
+  "name": "clode-runtime-deps",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Runtime npm dependencies clode resolves for the extracted Claude Code bundle. clode installs these automatically on first run into a user-owned dir (override with CLODE_DEPS); see README. Ranges are caret-on-current-major — tighten a minimum here when we learn of one.",
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "semver": "^7",
+    "string-width": "^7",
+    "strip-ansi": "^7",
+    "wrap-ansi": "^9",
+    "ws": "^8",
+    "yaml": "^2"
+  }
+}
