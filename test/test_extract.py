@@ -88,6 +88,52 @@ def test_transform_applies_doctor_patch_on_realistic_body():
     assert b"globalThis.__clodeDoctor.appletSkew" in out
 
 
+# Realistic minified shapes patch_doctor_eager anchors on: the no-arg snapshot
+# generator and the /doctor local-jsx command's `load`.
+SYN_GEN = b'async function Tp7(){let H=await Gp7();return{provider:await I_q(H)}}'
+SYN_DOC_CMD = (
+    b'qlL={name:"doctor",description:"Diagnose",isEnabled:()=>!cH.X,'
+    b'type:"local-jsx",immediate:!0,requires:{ink:!0},'
+    b'load:()=>Promise.resolve().then(() => (L4K(),f4K))}')
+SYN_EAGER = SYN_GEN + b';var rwA;var M4K=E(()=>{' + SYN_DOC_CMD + b'});'
+
+
+def test_patch_doctor_eager_wires_both_anchors():
+    out, applied = ex.patch_doctor_eager(SYN_EAGER)
+    assert applied is True
+    # bridge exposed right after the generator definition
+    assert b'}globalThis.__clodeEnsureSnapshot=Tp7;' in out
+    # load now ensures the snapshot before yielding the screen, and stays BALANCED
+    assert (b'load:()=>Promise.resolve().then(()=>{var g=globalThis.__clodeEnsureSnapshot;'
+            b'return g?Promise.resolve().then(g).catch(function(){}):void 0})'
+            b'.then(() => (L4K(),f4K))}') in out
+    # the original callback's parens are not doubled (the earlier f4K))) bug)
+    assert b'f4K)))' not in out
+
+
+def test_patch_doctor_eager_noop_when_generator_absent():
+    body = b'var x;var M4K=E(()=>{' + SYN_DOC_CMD + b'});'
+    out, applied = ex.patch_doctor_eager(body)
+    assert applied is False and out == body
+
+
+def test_patch_doctor_eager_noop_when_doctor_load_absent():
+    body = SYN_GEN + b';var y=1;'
+    out, applied = ex.patch_doctor_eager(body)
+    assert applied is False and out == body
+
+
+def test_patch_doctor_eager_noop_when_ambiguous():
+    out, applied = ex.patch_doctor_eager(SYN_EAGER + SYN_EAGER)
+    assert applied is False
+
+
+def test_transform_applies_eager_patch_on_realistic_body():
+    out = ex.transform(SYN_DOCTOR + b';' + SYN_EAGER)
+    assert b"globalThis.__clodeEnsureSnapshot=Tp7;" in out
+    assert b"globalThis.__clodeDoctor.appletSkew" in out  # the render section too
+
+
 def test_verify_flags_residual_nul_and_import_meta():
     assert ex.verify(b"ok\n") == []
     assert any("NUL" in p for p in ex.verify(b"bad\x00"))

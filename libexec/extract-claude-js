@@ -154,11 +154,71 @@ def patch_doctor(body):
     return body[:m.start()] + inject + body[m.start():], True
 
 
+# Make /doctor show the applet-skew on the FIRST open, not only after a shell
+# command. The skew probe (bun-shim's warnAppletSkew) runs when Claude generates
+# its shell snapshot, which Claude does lazily on first Bash use — so a fresh
+# /doctor is empty. We can't probe eagerly without the snapshot: the embedded flags
+# are built dynamically (ARGV0=${...} "$_cc_bin" -S dfs ...), so they only exist once
+# the snapshot script is generated. The fix: have /doctor trigger snapshot generation
+# (which fires our probe) and await it before rendering.
+#
+# Two anchors, both best-effort + fail-loud (never brick /doctor):
+#   1. SNAPSHOT_GEN — the no-arg generator `async function G(){let h=await S();
+#      return{provider:await I(h)}}`. Expose it as globalThis.__clodeEnsureSnapshot,
+#      set when its (eagerly-initialized) module body runs.
+#   2. DOCTOR_LOAD — the /doctor command's `load:()=>Promise.resolve().then(...)`.
+#      Chain an ensure-step before the original so generation completes (and the
+#      probe populates __clodeDoctor) before the screen renders.
+# If the bridge is unset when /doctor opens (generator module not yet initialized),
+# the ensure-step is a no-op and /doctor falls back to today's lazy behavior — no
+# regression. We apply BOTH or NEITHER (a half-wired patch is pointless).
+SNAPSHOT_GEN = re.compile(
+    rb'async function (?P<gen>[A-Za-z0-9_$]{1,6})\(\)\{'
+    rb'let (?P<h>[A-Za-z0-9_$]{1,6})=await [A-Za-z0-9_$]{1,6}\(\);'
+    rb'return\{provider:await [A-Za-z0-9_$]{1,6}\((?P=h)\)\}\}'
+)
+DOCTOR_LOAD = re.compile(
+    rb'(?P<prefix>name:"doctor".{0,240}?)'
+    rb'load:\(\)=>Promise\.resolve\(\)\.then\('
+    rb'(?P<cb>\(\) => \([A-Za-z0-9_$]{1,8}\(\),[A-Za-z0-9_$]{1,8}\))'
+    rb'\)',
+    re.DOTALL,
+)
+# Defensive ensure-step: never throws (sync throw -> rejection), swallows errors so a
+# snapshot failure can never brick /doctor; no-op when the bridge isn't set yet.
+_DOCTOR_ENSURE = (
+    b'()=>{var g=globalThis.__clodeEnsureSnapshot;'
+    b'return g?Promise.resolve().then(g).catch(function(){}):void 0}')
+
+
+def patch_doctor_eager(body):
+    """Wire /doctor to generate the shell snapshot (firing the skew probe) before it
+    renders, so the applet-skew section shows on first open. Returns (body, applied);
+    applied is False (body unchanged) unless BOTH anchors match exactly once."""
+    gens = list(SNAPSHOT_GEN.finditer(body))
+    loads = list(DOCTOR_LOAD.finditer(body))
+    if len(gens) != 1 or len(loads) != 1:
+        return body, False
+    g, L = gens[0], loads[0]
+    new_load = (b'load:()=>Promise.resolve().then(' + _DOCTOR_ENSURE
+                + b').then(' + L.group('cb') + b')')
+    # Splice the later offset first so the earlier splice's offsets stay valid.
+    expose = b'globalThis.__clodeEnsureSnapshot=' + g.group('gen') + b';'
+    edits = sorted([
+        (g.end(), g.end(), expose),
+        (L.start(), L.end(), L.group('prefix') + new_load),
+    ], key=lambda e: e[0], reverse=True)
+    for start, end, repl in edits:
+        body = body[:start] + repl + body[end:]
+    return body, True
+
+
 def transform(body):
     """Rewrite *body* to be Node CJS-compatible and prepend the prelude.
 
     Replaces all `import.meta` references with `__import_meta` (which is
-    defined by the prelude), then injects the clode /doctor applet-skew section.
+    defined by the prelude), then injects the clode /doctor applet-skew section and
+    wires /doctor to refresh the skew probe before rendering.
     Replacing inside strings is harmless.
     """
     body = re.sub(rb'\bimport\.meta\b', b'__import_meta', body)
@@ -168,6 +228,12 @@ def transform(body):
             "clode: /doctor applet-skew hook NOT applied — doctor footer anchor not found "
             "exactly once (Claude version drift?). Skew still warns on stderr at startup; "
             "run inspect-claude-bundle --strict to confirm the surface.\n")
+    body, eager = patch_doctor_eager(body)
+    if not eager:
+        sys.stderr.write(
+            "clode: /doctor eager-snapshot hook NOT applied — generator or doctor-load "
+            "anchor not found exactly once (Claude version drift?). The applet-skew section "
+            "still appears after the first shell command; run inspect-claude-bundle --strict.\n")
     return PRELUDE + body + b'\n'
 
 
