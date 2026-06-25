@@ -92,10 +92,20 @@ def ripgrep_lever_present(data):
 # CANNOT survive this anchor moving/renaming — so track its presence (and
 # uniqueness) and fail --strict if it drifts, the same way the ripgrep lever is
 # tracked. Drift trips here on `claude update` before any user hits a silent miss.
-DOCTOR_HOOK_ANCHOR = b'Still having issues? Run /feedback to report details.'
+_DOCTOR_FOOTER_CLASSIC = re.compile(
+    rb'[A-Za-z0-9_$]{1,40}\.default\.createElement\([A-Za-z0-9_$]{1,40},\{marginTop:1\},'
+    rb'[A-Za-z0-9_$]{1,40}\.default\.createElement\([A-Za-z0-9_$]{1,40},\{dimColor:!0\},'
+    rb'"Still having issues\? Run /feedback to report details\."')
+_DOCTOR_FOOTER_JSX = re.compile(
+    rb'[A-Za-z0-9_$]{1,40}\.jsx\([A-Za-z0-9_$]{1,40},\{marginTop:1,children:'
+    rb'[A-Za-z0-9_$]{1,40}\.jsx\([A-Za-z0-9_$]{1,40},\{dimColor:!0,children:'
+    rb'"Still having issues\? Run /feedback to report details\."\}\)\}\)')
 
 def doctor_hook_anchor_present(data):
-    return data.count(DOCTOR_HOOK_ANCHOR) == 1
+    # exactly one usable footer anchor in either element form (the extractor injects
+    # before it). A bare string with no element wrapper is structural drift -> False.
+    return (len(_DOCTOR_FOOTER_CLASSIC.findall(data)) +
+            len(_DOCTOR_FOOTER_JSX.findall(data))) == 1
 
 
 # clode also patches /doctor (in extract-claude-js) to GENERATE the shell snapshot
