@@ -1,10 +1,23 @@
 {
-  "name": "clode-runtime-deps",
+  "name": "clode",
   "version": "0.1.0",
   "private": true,
-  "description": "Runtime npm dependencies clode resolves for the extracted Claude Code bundle. clode installs these automatically on first run into a user-owned dir (override with CLODE_DEPS); see README. Ranges are caret-on-current-major — tighten a minimum here when we learn of one.",
+  "description": "Run the latest Claude Code under Node on any machine: clode extracts the upstream bundle and runs it under a host Node via a small Bun shim. Install with `npm install -g .`; the runtime deps below are installed automatically on first run for non-npm installs.",
+  "bin": {
+    "clode": "bin/clode"
+  },
+  "files": [
+    "bin/",
+    "libexec/",
+    "man/",
+    "VERSION"
+  ],
   "engines": {
     "node": ">=24"
+  },
+  "scripts": {
+    "test": "sh test/run-all.sh",
+    "test:online": "sh test/run-all.sh --online"
   },
   "dependencies": {
     "semver": "^7",

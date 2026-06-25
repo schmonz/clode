@@ -1,59 +1,45 @@
 #!/usr/bin/env bats
+# clode is distributed/installed as an npm package (`npm install -g .`). `npm pack`
+# produces the installable tarball; verify it ships exactly what a runnable clode
+# needs and nothing else, and that the packed launcher works.
 
 load test_helper
 
 setup() {
   cd "$BATS_TEST_DIRNAME/.."
+  NPM="${CLODE_NPM:-npm}"
+  command -v "$NPM" >/dev/null 2>&1 || { NPM_SKIP="npm not installed"; return; }
   v=$(cat VERSION)
-  make dist >/dev/null
-  TAR="clode-$v.tar.gz"
-  LIST=$(tar tzf "$TAR")
+  PACKDIR=$(mktempd)
+  "$NPM" pack --pack-destination "$PACKDIR" >/dev/null 2>&1
+  TGZ="$PACKDIR/clode-$v.tgz"
+  LIST=$(tar tzf "$TGZ" 2>/dev/null)
 }
 
-teardown() {
-  cd "$BATS_TEST_DIRNAME/.."
-  v=$(cat VERSION)
-  rm -f "clode-$v.tar.gz"
+teardown() { [ -n "${PACKDIR:-}" ] && rm -rf "$PACKDIR"; }
+
+@test "npm pack produces the package tarball" {
+  [ -n "${NPM_SKIP:-}" ] && skip "$NPM_SKIP"
+  test -f "$TGZ"
 }
 
-@test "dist tarball exists" {
-  v=$(cat VERSION)
-  test -f "clode-$v.tar.gz"
+@test "package ships the launcher, libexec helpers, manifest, version, man, license" {
+  [ -n "${NPM_SKIP:-}" ] && skip "$NPM_SKIP"
+  for f in bin/clode libexec/bun-shim.cjs libexec/extract-claude-js \
+           libexec/inspect-claude-bundle package.json VERSION man/clode.1 LICENSE; do
+    echo "$LIST" | grep -q "^package/$f\$" || { echo "missing: $f"; false; }
+  done
 }
 
-@test "dist contains bin/clode" {
-  v=$(cat VERSION)
-  echo "$LIST" | grep -q "clode-$v/bin/clode"
+@test "package excludes tests, build artifacts, and node_modules" {
+  [ -n "${NPM_SKIP:-}" ] && skip "$NPM_SKIP"
+  ! echo "$LIST" | grep -qE 'package/(test/|Makefile|node_modules/)|cli\.cjs|/build/'
 }
 
-@test "dist contains Makefile" {
-  v=$(cat VERSION)
-  echo "$LIST" | grep -q "clode-$v/Makefile"
-}
-
-@test "dist contains LICENSE" {
-  v=$(cat VERSION)
-  echo "$LIST" | grep -q "clode-$v/LICENSE"
-}
-
-@test "dist contains libexec/bun-shim.cjs" {
-  v=$(cat VERSION)
-  echo "$LIST" | grep -q "clode-$v/libexec/bun-shim.cjs"
-}
-
-@test "dist contains libexec/extract-claude-js" {
-  v=$(cat VERSION)
-  echo "$LIST" | grep -q "clode-$v/libexec/extract-claude-js"
-}
-
-@test "dist contains man/clode.1" {
-  v=$(cat VERSION)
-  echo "$LIST" | grep -q "clode-$v/man/clode.1"
-}
-
-@test "dist contains no forbidden build artifacts" {
-  if echo "$LIST" | grep -qE 'cli\.cjs|/build/|^build/'; then
-    echo "$LIST" | grep -E 'cli\.cjs|build/'
-    false
-  fi
+@test "the packed launcher runs and reports its version" {
+  [ -n "${NPM_SKIP:-}" ] && skip "$NPM_SKIP"
+  tar xzf "$TGZ" -C "$PACKDIR"
+  run "$PACKDIR/package/bin/clode" --clode-version
+  [ "$status" -eq 0 ]
+  [ "$output" = "clode $v" ]
 }

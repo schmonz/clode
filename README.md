@@ -50,15 +50,22 @@ provider updates the binary.
 
 ### From source
 
+clode installs as an npm package. For a self-contained install — copies the
+launcher and installs its runtime deps:
+
 ```sh
-make install PREFIX=/usr/local              # honors DESTDIR, BINDIR, LIBEXECDIR, MANDIR
-make install PREFIX=/usr CLAUDE_BIN=/usr/bin/claude   # bake a provider path
-make dist                                   # clode-<version>.tar.gz (source only)
+npm pack                                   # build clode-<version>.tgz
+npm install -g ./clode-<version>.tgz       # install the launcher + its deps
+npm uninstall -g clode                     # remove it
 ```
 
-The launcher finds its helper files under `LIBEXECDIR/clode` and the upstream
-binary by precedence (`CLODE_CLAUDE_BIN`, a baked provider path,
-`~/.local/bin/claude`, `claude` on `PATH`).
+`npm install -g .` from a checkout instead *symlinks* the checkout (like `npm
+link`) and doesn't pull the deps — clode's first-run auto-install provides them.
+That's handy while developing clode; the tarball install is the self-contained one.
+
+There's no install-time configuration: the launcher finds its helper files next to
+itself (`<prefix>/lib/node_modules/clode/libexec`) and the upstream binary by
+precedence (`CLODE_CLAUDE_BIN`, `~/.local/bin/claude`, `claude` on `PATH`).
 
 ## How it works
 
@@ -180,14 +187,14 @@ tool locations).
 
 ## Tests
 
-    make test          # offline suite (default; no network or login needed)
-    make test-online   # also run the network/model tests (needs a logged-in ~/.claude)
+    npm test               # offline suite (default; no network or login needed)
+    npm run test:online    # also run the network/model tests (needs a logged-in ~/.claude)
 
-`make test` runs the pytest, node:test, and bats suites via `test/run-all.sh`
+`npm test` runs the pytest, node:test, and bats suites via `test/run-all.sh`
 (its single underlying runner), **offline by default**. The online tests (live
 model round-trips, a logged-in `~/.claude`) are opt-in. The runner sets the
 offline gate itself from the flag — you never export an env var. If your Node
-isn't found, set `CLODE_NODE`. For environments without `make`:
+isn't found, set `CLODE_NODE`. Without npm you can call the runner directly:
 `sh test/run-all.sh [--online]`.
 
 ## Developing
@@ -211,8 +218,9 @@ Running `clode` itself needs none of these — only a recent Node and Python 3.
 ## Uninstall
 
 ```sh
-make uninstall PREFIX=/usr/local            # remove installed files
-rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/clode"   # drop the extraction cache
+npm uninstall -g clode                                   # remove the launcher + its deps
+rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/clode"           # drop the extraction cache
+rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/clode"      # drop auto-installed deps (non-npm installs)
 ```
 
 The upstream native binary and its `~/.local/bin/claude` pointer are never

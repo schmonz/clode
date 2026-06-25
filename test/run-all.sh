@@ -2,7 +2,7 @@
 # run-all.sh — run the test suite, report pass/fail, exit nonzero on any fail.
 # OFFLINE BY DEFAULT: no network or login required. The online tests (live model
 # round-trips and a logged-in ~/.claude — print/assets/tools) are opt-in.
-# Normal entry point: `make test` (offline) / `make test-online` (adds online).
+# Normal entry point: `npm test` (offline) / `npm run test:online` (adds online).
 # Direct usage: sh test/run-all.sh            (offline, the default)
 #               sh test/run-all.sh --online   (also run the network/model tests)
 cd "$(dirname "$0")/.."

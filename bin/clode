@@ -7,16 +7,17 @@
 # next launch, so provider updates are transparent.
 set -e
 
-# --- packaging substitution (rewritten by `make install`; placeholders left intact in
-#     the source tree fall back to dev defaults) -----------------------------
-CLODE_SELF_VERSION="@VERSION@";  case "$CLODE_SELF_VERSION" in @*) CLODE_SELF_VERSION="dev";; esac
-LIBEXEC_BAKED="@LIBEXEC@";       case "$LIBEXEC_BAKED"      in @*) LIBEXEC_BAKED="";; esac
-# Dev fallback when the placeholder isn't substituted: discover on PATH. `|| :`
-# keeps a not-found result from tripping `set -e` (empty is fine — CLODE_NODE /
-# CLODE_PYTHON override, and require_node gives a clean error if truly absent).
-NODE_BAKED="@NODE@";             case "$NODE_BAKED"         in @*) NODE_BAKED="$(command -v node 2>/dev/null || :)";; esac
-PYTHON_BAKED="@PYTHON@";         case "$PYTHON_BAKED"       in @*) PYTHON_BAKED="$(command -v python3 2>/dev/null || :)";; esac
-CLAUDE_BIN_BAKED="@CLAUDE_BIN@"; case "$CLAUDE_BIN_BAKED"   in @*) CLAUDE_BIN_BAKED="";; esac
+# --- host tool + path defaults -------------------------------------------------
+# clode ships as a plain script (npm package or source tree) with no install-time
+# path baking: discover tools at runtime, resolve helpers relative to this script,
+# read our version from the shipped VERSION file. Each is overridable via CLODE_*.
+# `|| :` keeps a not-found result from tripping `set -e` (require_node gives a clean
+# error if node is truly absent; CLODE_NODE/CLODE_PYTHON override).
+LIBEXEC_BAKED=""                                          # -> $HERE/../libexec
+NODE_BAKED="$(command -v node 2>/dev/null || :)"
+PYTHON_BAKED="$(command -v python3 2>/dev/null || :)"
+CLAUDE_BIN_BAKED=""                                       # -> resolve_claude_bin
+CLODE_SELF_VERSION=""                                     # -> read from VERSION below
 # --------------------------------------------------------------------------
 
 # Resolve the upstream claude binary to extract from. Precedence:
@@ -163,10 +164,12 @@ exec_bundle() {
 # npm puts globals under <node-prefix>/lib/node_modules; add that to NODE_PATH,
 # preserving any the user set. No-op if the dir doesn't exist.
 set_node_path() {
-  # clode's own managed deps (ensure_deps) FIRST, so a fresh managed copy wins over a
-  # stale global one; then the node prefix's global node_modules. Any NODE_PATH the
-  # user already set stays ahead of both (their override wins). No-op on absent dirs.
-  for _d in "${DEPS_ROOT:-}/node_modules" \
+  # Where clode's runtime deps live, most-authoritative first: an npm install ships
+  # them in clode's own node_modules ($HERE/../node_modules); else ensure_deps put
+  # them in DEPS_ROOT; finally the node prefix's global node_modules. Any NODE_PATH
+  # the user set stays ahead of all (their override wins). No-op on absent dirs.
+  for _d in "$(cd "$HERE/.." 2>/dev/null && pwd || :)/node_modules" \
+            "${DEPS_ROOT:-}/node_modules" \
             "$(cd "$(dirname "$NODE")/../lib/node_modules" 2>/dev/null && pwd || :)"; do
     [ -d "$_d" ] || continue
     case ":${NODE_PATH:-}:" in
@@ -188,6 +191,8 @@ ensure_deps() {
     [ -f "$_c" ] && { _manifest="$_c"; break; }
   done
   [ -n "$_manifest" ] || return 0            # no manifest shipped -> nothing to ensure
+  # An npm install ships clode's deps in its own node_modules -> nothing to install.
+  [ -d "$HERE/../node_modules" ] && return 0
   # A CLODE_DEPS dir with node_modules but no clode-written .deps-sig is user-managed:
   # trust it, never auto-install. (Our own managed dir HAS a .deps-sig, so it still
   # falls through to the sig-gate below and re-installs when the manifest changes.)
@@ -214,15 +219,8 @@ ensure_deps() {
 }
 
 main() {
-  # `clode --clode-version` reports our own version without launching the bundle.
-  # (`clode --version` still passes through to Claude Code.)
-  if [ "$1" = "--clode-version" ]; then
-    echo "clode $CLODE_SELF_VERSION"
-    exit 0
-  fi
-
-  # Resolve this script's real location, following symlinks (so an installed
-  # ~/.local/bin/clode symlink works, and the source tree runs in place).
+  # Resolve this script's real location, following symlinks (so an npm-installed
+  # bin symlink works, and the source tree runs in place).
   SELF="$0"
   while [ -h "$SELF" ]; do
     link=$(readlink "$SELF")
@@ -230,8 +228,18 @@ main() {
   done
   HERE=$(cd "$(dirname "$SELF")" && pwd)
 
-  # Helper files (extractor, shim). Installed: a libexec dir baked by `make
-  # install`. Source tree: ../libexec relative to bin/. Override: CLODE_LIBEXEC.
+  # Our version comes from the shipped VERSION file (next to bin/, both in the source
+  # tree and an npm install). `clode --clode-version` reports it without launching the
+  # bundle. (`clode --version` still passes through to Claude Code.)
+  CLODE_SELF_VERSION=$(cat "$HERE/../VERSION" 2>/dev/null || echo dev)
+  if [ "$1" = "--clode-version" ]; then
+    echo "clode $CLODE_SELF_VERSION"
+    exit 0
+  fi
+
+  # Helper files (extractor, shim): `$HERE/../libexec` for the source tree and an npm
+  # install alike; a flat layout (bin and helpers in one dir) also works. CLODE_LIBEXEC
+  # overrides.
   LIBEXEC="${CLODE_LIBEXEC:-$LIBEXEC_BAKED}"
   if [ -z "$LIBEXEC" ]; then
     if [ -f "$HERE/bun-shim.cjs" ]; then

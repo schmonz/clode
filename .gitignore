@@ -1,6 +1,7 @@
 build/
 node_modules/
 package-lock.json
+*.tgz
 *.cjs.cache
 __pycache__/
 *.pyc
