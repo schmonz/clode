@@ -148,6 +148,13 @@ def test_doctor_anchor_absent_when_only_the_bare_string_remains():
     assert ins.doctor_hook_anchor_present(body) is False
 
 
+def test_autoupdater_anchor_present_and_absent():
+    present = (b'd("tengu_pkg_manager_auto_updater_start",e);'
+               b'let[_H,...AH]=a,qH=await o_(_H,AH,{cwd:x});')
+    assert ins.autoupdater_hook_anchor_present(present) is True
+    assert ins.autoupdater_hook_anchor_present(b"no autoupdater") is False
+
+
 def test_gate_problems_flags_missing_doctor_anchor():
     cov = {'stubbed': [], 'missing': [], 'bun_modules_unhandled': [],
            'modules_missing': [], 'search_applets_unknown': [],

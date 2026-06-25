@@ -121,6 +121,21 @@ DOCTOR_LOAD_ANCHOR = re.compile(
 def snapshot_generator_present(data):
     return data.count(SNAPSHOT_GEN_ANCHOR) == 1
 
+
+# clode redirects the in-TUI pkg-manager autoupdater's spawn argv to
+# `clode --internal-update` (in extract-claude-js), anchored on the
+# auto_updater_start telemetry call immediately followed by the `let[..]=cmd`
+# destructure that feeds the spawn. The redirect self-adapts to identifier churn
+# but CANNOT survive this anchor moving/renaming — so track it (uniqueness too)
+# and fail --strict if it drifts, before a user's in-TUI update silently no-ops.
+_AUTOUPDATER_ANCHOR = re.compile(
+    rb'tengu_pkg_manager_auto_updater_start",[A-Za-z0-9_$]{1,6}\);'
+    rb'let\[[A-Za-z0-9_$]{1,6},\.\.\.[A-Za-z0-9_$]{1,6}\]=[A-Za-z0-9_$]{1,6},'
+    rb'[A-Za-z0-9_$]{1,6}=await [A-Za-z0-9_$]{1,6}\(')
+
+def autoupdater_hook_anchor_present(data):
+    return len(_AUTOUPDATER_ANCHOR.findall(data)) == 1
+
 def doctor_load_anchor_present(data):
     return len(DOCTOR_LOAD_ANCHOR.findall(data)) == 1
 
@@ -257,6 +272,7 @@ def inspect(path):
         'search_applets': sorted(search_applets(data)),
         'embedded_applet_versions': embedded_applet_versions(data),
         'doctor_hook_anchor_present': doctor_hook_anchor_present(data),
+        'autoupdater_hook_anchor_present': autoupdater_hook_anchor_present(data),
         'snapshot_generator_present': snapshot_generator_present(data),
         'doctor_load_anchor_present': doctor_load_anchor_present(data),
         'ripgrep_lever_present': ripgrep_lever_present(data),
@@ -360,6 +376,8 @@ def gate_problems(cov):
         p += ['USE_BUILTIN_RIPGREP lever missing (bin/clode set_ripgrep_env would no-op)']
     if not cov.get('doctor_hook_anchor_present', True):
         p += ['/doctor footer anchor missing/ambiguous (applet-skew hook would not apply)']
+    if not cov.get('autoupdater_hook_anchor_present', True):
+        p += ['in-TUI autoupdater anchor missing/ambiguous (clode --internal-update redirect would not apply)']
     if not cov.get('snapshot_generator_present', True):
         p += ['snapshot-generator anchor missing/ambiguous (/doctor eager-snapshot hook would not apply)']
     if not cov.get('doctor_load_anchor_present', True):
@@ -394,6 +412,7 @@ def coverage(r, shim):
         'search_applets_unknown': unknown_search_applets(set(r.get('search_applets', []))),
         'ripgrep_lever_present': r.get('ripgrep_lever_present', True),
         'doctor_hook_anchor_present': r.get('doctor_hook_anchor_present', True),
+        'autoupdater_hook_anchor_present': r.get('autoupdater_hook_anchor_present', True),
     }
 
 
@@ -502,6 +521,8 @@ def human_coverage(r, cov):
         L.append("MISSING ripgrep lever USE_BUILTIN_RIPGREP (bin/clode set_ripgrep_env would no-op)")
     if not cov.get('doctor_hook_anchor_present', True):
         L.append("MISSING/AMBIGUOUS /doctor footer anchor (extract-claude-js applet-skew hook would not apply)")
+    if not cov.get('autoupdater_hook_anchor_present', True):
+        L.append("MISSING/AMBIGUOUS in-TUI autoupdater anchor (extract-claude-js autoupdater redirect would not apply)")
     if not cov.get('snapshot_generator_present', True):
         L.append("MISSING/AMBIGUOUS snapshot-generator anchor (/doctor eager-snapshot hook would not apply)")
     if not cov.get('doctor_load_anchor_present', True):
