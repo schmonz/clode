@@ -1,0 +1,24 @@
+  Multiple installations found ⚠
+  ├ npm-global at /usr/local/bin/claude
+  └ native at ~/.local/bin/claude
+
+  Installation warnings ⚠
+  ├ macOS Keychain is not writable (add-generic-password failed).
+  └ Run: security unlock-keychain ~/Library/Keychains/login.keychain-db
+
+  Updates ⚠
+  ├ Auto-updates: disabled (set by env: DISABLE_AUTOUPDATER)
+  └ Stable version: 2.1.179
+
+  Remote Control ✔
+  └ Control this session from claude.ai/code or the Claude mobile app
+
+  Version locks ✔
+  └ 2.1.179: PID 67890 (running)
+
+  clode: search-applet version skew — these commands will fail until you upgrade the host tool:
+    /find: host bfs rejects flags Claude's bundled bfs uses — bfs: error.
+
+  Still having issues? Run /feedback to report details.
+
+  Enter to close · f to fix with Claude

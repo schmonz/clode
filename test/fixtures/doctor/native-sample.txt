@@ -1,0 +1,26 @@
+  Multiple installations found ⚠
+  ├ npm-global at /usr/local/bin/claude
+  └ native at ~/.local/bin/claude
+
+  Installation warnings ⚠
+  ├ Native installation exists but ~/.local/bin is not in your PATH
+  ├ Run: echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc then run:
+    source ~/.zshrc
+  ├ macOS Keychain is not writable (add-generic-password failed).
+  ├ Run: security unlock-keychain ~/Library/Keychains/login.keychain-db
+  ├ Leftover npm global installation at /usr/local/bin/claude
+  └ Run: npm -g uninstall @anthropic-ai/claude-code
+
+  Updates ⚠
+  ├ Auto-updates: disabled (set by env: DISABLE_AUTOUPDATER)
+  └ Stable version: 2.1.179
+
+  Remote Control ✔
+  └ Control this session from claude.ai/code or the Claude mobile app
+
+  Version locks ✔
+  └ 2.1.179: PID 12345 (running)
+
+  Still having issues? Run /feedback to report details.
+
+  Enter to close · f to fix with Claude
