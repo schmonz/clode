@@ -27,12 +27,35 @@ redistributes it.
 .Fl -clode-version
 prints clode's own version and exits.
 All other arguments pass through to Claude Code.
+.Pp
+.Nm update
+.Op Cm stable | latest | Ar version
+fetches the latest upstream Claude Code host-agnostically (a fixed
+.Cm linux-x64
+build \(em the embedded JavaScript is the same on every platform) into clode's
+provider store and verifies its checksum; the next launch extracts and runs it.
+The default channel is
+.Cm stable .
 .Sh ENVIRONMENT
 .Bl -tag -width CLODE_VERSION_DIR
 .It Ev CLODE_CLAUDE_BIN
 Absolute path to the upstream claude binary (highest precedence).
 .It Ev CLODE_VERSION_DIR
 A specific on-disk version path to run.
+.It Ev CLODE_PROVIDERS
+Store for binaries fetched by
+.Nm update
+(default
+.Pa ${XDG_DATA_HOME:-$HOME/.local/share}/clode/providers ) .
+.It Ev CLODE_RELEASES_URL
+Base URL for
+.Nm update
+downloads.
+.It Ev CLODE_FETCH_PLATFORM
+Which platform's build
+.Nm update
+fetches (default
+.Cm linux-x64 ) .
 .It Ev CLODE_CACHE
 Cache root (default
 .Pa ${XDG_CACHE_HOME:-$HOME/.cache}/clode ) .

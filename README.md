@@ -1,4 +1,4 @@
-# clode — run the latest Claude Code under Node
+# clode — Claude Code, under Node
 
 Run the latest Claude Code on any platform where Node runs.
 
@@ -90,9 +90,21 @@ notices that don't apply to a non-native install.
 
 ## Keeping up with updates
 
-Updates are transparent (extract-on-first-use, cached per version). But each
-new version may use more of the Bun API. After an update, check for surface
-drift with the inspector:
+Run `clode update` to fetch the latest upstream Claude Code and use it on next
+launch. It downloads **host-agnostically** — a fixed `linux-x64` build, since the
+embedded JS is the same program on every platform and clode runs it under Node —
+verifies the checksum, and stores it under `$XDG_DATA_HOME/clode/providers/`. Choose
+a channel or version: `clode update [stable|latest|<version>]` (default `stable`).
+Overrides: `CLODE_RELEASES_URL` (source), `CLODE_FETCH_PLATFORM` (which platform's
+build), `CLODE_PROVIDERS` (store).
+
+(In-TUI `claude update` still fails under clode for now — making that affordance do
+the right thing is a later phase; use `clode update`.)
+
+Updates are otherwise transparent too: point clode at any updated provider binary
+(your package manager, the Claude installer) and it re-extracts on next launch. Each
+new version may use more of the Bun API, so after an update check for surface drift
+with the inspector:
 
 ```sh
 libexec/inspect-claude-bundle ~/.local/share/claude/versions/<ver> \
