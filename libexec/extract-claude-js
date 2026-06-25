@@ -122,8 +122,17 @@ DOCTOR_FOOTER = re.compile(
     rb'"Still having issues\? Run /feedback to report details\."'
 )
 
+# 2.1.191 switched the footer to the automatic JSX runtime (`X.jsx(Box,{...props,
+# children:...})` instead of `X.createElement(Box,props,...)`). Same identifier
+# bounding rationale as DOCTOR_FOOTER.
+DOCTOR_FOOTER_JSX = re.compile(
+    rb'(?P<jf>[A-Za-z0-9_$]{1,40}\.jsx)\((?P<jbox>[A-Za-z0-9_$]{1,40}),\{marginTop:1,children:'
+    rb'(?P=jf)\((?P<jtext>[A-Za-z0-9_$]{1,40}),\{dimColor:!0,children:'
+    rb'"Still having issues\? Run /feedback to report details\."\}\)\}\)'
+)
 
-def _doctor_section(ce, box, text):
+
+def _doctor_section_classic(ce, box, text):
     """The injected element, built from identifiers captured at the anchor so it
     uses the surrounding code's exact React/ink aliases. Defensive by construction:
     pure property reads over a clode-owned array, cannot throw during render, and
@@ -142,16 +151,36 @@ def _doctor_section(ce, box, text):
     )
 
 
+def _doctor_section_jsx(jf, box, text):
+    """Injected element in automatic-JSX-runtime form. `jf` is e.g. b'ls.jsx';
+    static-array children use its jsxs sibling (jf + b's')."""
+    jfs = jf + b's'
+    return (
+        b'(globalThis.__clodeDoctor&&globalThis.__clodeDoctor.appletSkew&&'
+        b'globalThis.__clodeDoctor.appletSkew.length?'
+        + jfs + b'(' + box + b',{flexDirection:"column",marginTop:1,children:['
+        + jf + b'(' + text + b',{color:"yellow",children:'
+        b'"clode: search-applet version skew \\u2014 these commands will fail until you upgrade the host tool:"}),'
+        + jf + b'(' + text + b',{dimColor:!0,children:'
+        b'globalThis.__clodeDoctor.appletSkew.map(function(s){'
+        b'return "  /"+s.name+": host "+s.applet+" rejects flags Claude\\u2019s bundled "+s.applet+" uses \\u2014 "+s.why}'
+        b').join("\\n")})]}):null),'
+    )
+
+
 def patch_doctor(body):
-    """Inject the applet-skew section before the doctor footer. Returns
-    (new_body, applied:bool); applied is False (body unchanged) when the anchor
-    does not match exactly once — see DOCTOR_FOOTER for the fail-loud contract."""
-    matches = list(DOCTOR_FOOTER.finditer(body))
-    if len(matches) != 1:
-        return body, False
-    m = matches[0]
-    inject = _doctor_section(m.group('ce'), m.group('box'), m.group('text'))
-    return body[:m.start()] + inject + body[m.start():], True
+    """Inject the applet-skew section before the doctor footer, in whichever element
+    form the bundle uses. Returns (new_body, applied); applied is False (unchanged)
+    unless exactly one footer (classic OR jsx) matches."""
+    m = list(DOCTOR_FOOTER.finditer(body))
+    if len(m) == 1:
+        inject = _doctor_section_classic(m[0].group('ce'), m[0].group('box'), m[0].group('text'))
+        return body[:m[0].start()] + inject + body[m[0].start():], True
+    j = list(DOCTOR_FOOTER_JSX.finditer(body))
+    if len(j) == 1:
+        inject = _doctor_section_jsx(j[0].group('jf'), j[0].group('jbox'), j[0].group('jtext'))
+        return body[:j[0].start()] + inject + body[j[0].start():], True
+    return body, False
 
 
 # Make /doctor show the applet-skew on the FIRST open, not only after a shell

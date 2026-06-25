@@ -61,6 +61,31 @@ def test_patch_doctor_injects_skew_section_with_captured_identifiers():
     assert b'{marginTop:1},uA.default.createElement(h,{dimColor:!0},"Still having issues?' in out
 
 
+SYN_DOCTOR_JSX = (
+    b'ls.jsxs(Nu,{children:['
+    b'ls.jsx(U,{flexDirection:"column",children:x}),'
+    b'ls.jsx(U,{marginTop:1,children:ls.jsx(w,{dimColor:!0,children:"Still having issues? Run /feedback to report details."})}),'
+    b'ls.jsx(U,{marginTop:1,children:ls.jsx(w,{dimColor:!0,italic:!0,children:"x"})})'
+    b']})')
+
+
+def test_patch_doctor_injects_jsx_form_when_footer_uses_automatic_runtime():
+    out, applied = ex.patch_doctor(SYN_DOCTOR_JSX)
+    assert applied is True
+    assert b"globalThis.__clodeDoctor.appletSkew" in out
+    assert b'ls.jsxs(U,{flexDirection:"column",marginTop:1,children:[ls.jsx(w,{color:"yellow",children:' in out
+    assert b'ls.jsx(w,{dimColor:!0,children:globalThis.__clodeDoctor.appletSkew.map(' in out
+    assert b'):null),ls.jsx(U,{marginTop:1,children:ls.jsx(w,{dimColor:!0,children:"Still having issues?' in out
+
+
+def test_patch_doctor_matches_the_real_2_1_191_fixture():
+    import os
+    body = open(os.path.join(ROOT, "test", "fixtures", "doctor", "footer-2.1.191.js"), "rb").read()
+    out, applied = ex.patch_doctor(body)
+    assert applied is True
+    assert b"search-applet version skew" in out
+
+
 def test_patch_doctor_is_linear_on_pathological_padding():
     # A long run of identifier chars with no match must NOT backtrack O(n^2).
     # (The ~1MB synthetic fixture is exactly this; an unbounded `+` hung extraction.)
