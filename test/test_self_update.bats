@@ -59,6 +59,12 @@ teardown() { rm -rf "$TMP"; }
   test -f "$XDG_DATA_HOME/clode/providers/9.9.9/claude"
 }
 
+@test "clode --internal-update <channel> fetches like update (non-interactive)" {
+  run env CLODE_CLAUDE_BIN=/nonexistent ./bin/clode --internal-update stable
+  [ "$status" -eq 0 ]
+  test -f "$XDG_DATA_HOME/clode/providers/9.9.9/claude"
+}
+
 @test "after clode update, launching clode extracts the fetched provider" {
   export CLODE_CACHE="$TMP/cache"
   env CLODE_CLAUDE_BIN=/nonexistent ./bin/clode update stable >/dev/null 2>&1
