@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tui_screen.py SECONDS [--send-hex HEX] [--rows R --cols C] -- cmd [args...]
+"""tui_screen.py SECONDS [--send-hex HEX] [--then-hex HEX@DELAY] [--rows R --cols C] -- cmd [args...]
 
 Run a TUI command under a pseudo-terminal with a REAL terminal emulator (pyte)
 on the other end, so capability-query-gated apps (Claude Code's Ink TUI probes
@@ -40,19 +40,28 @@ EXTRA_PROBES = [
 
 def main():
     argv = sys.argv[1:]
-    to_send = b''
+    # Each send is (delay_seconds, bytes). --send-hex keeps its historical 1.5s
+    # default; --then-hex HEX@DELAY adds further timed sends. Sending the submit
+    # Enter as a SEPARATE later keystroke is what lets a slash command actually
+    # submit: a batched "/doctor\r" is swallowed as a bracketed paste.
+    sends = []
     rows, cols = 40, 100
     # parse leading options
-    while len(argv) >= 2 and argv[1] in ('--send-hex', '--rows', '--cols'):
+    while len(argv) >= 2 and argv[1] in ('--send-hex', '--then-hex', '--rows', '--cols'):
         if argv[1] == '--send-hex':
-            to_send = bytes.fromhex(argv[2])
+            sends.append((1.5, bytes.fromhex(argv[2])))
+        elif argv[1] == '--then-hex':
+            spec = argv[2]
+            hexpart, _, delaypart = spec.partition('@')
+            sends.append((float(delaypart), bytes.fromhex(hexpart)))
         elif argv[1] == '--rows':
             rows = int(argv[2])
         elif argv[1] == '--cols':
             cols = int(argv[2])
         argv = [argv[0]] + argv[3:]
+    sends.sort(key=lambda s: s[0])
     if len(argv) < 3 or argv[1] != '--':
-        sys.exit("usage: tui_screen.py SECONDS [--send-hex HEX] [--rows R --cols C] -- cmd ...")
+        sys.exit("usage: tui_screen.py SECONDS [--send-hex HEX] [--then-hex HEX@DELAY] [--rows R --cols C] -- cmd ...")
     secs = float(argv[0])
     cmd = argv[2:]
 
@@ -73,7 +82,7 @@ def main():
         pass
 
     start = time.time()
-    sent = False
+    next_send = 0
     answered = set()
     seen = b''
     while True:
@@ -102,12 +111,12 @@ def main():
                     os.write(fd, reply)
                 except OSError:
                     pass
-        if not sent and to_send and time.time() - start > 1.5:
+        while next_send < len(sends) and time.time() - start > sends[next_send][0]:
             try:
-                os.write(fd, to_send)
+                os.write(fd, sends[next_send][1])
             except OSError:
                 pass
-            sent = True
+            next_send += 1
         try:
             if os.waitpid(pid, os.WNOHANG)[0] == pid:
                 break
