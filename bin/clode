@@ -178,7 +178,7 @@ exec_bundle() {
   set_ripgrep_env
   set_node_path
   # Hand the bundle's in-TUI autoupdater a way back to this launcher: it spawns
-  # "$CLODE_SELF --internal-update" instead of the npm path that fails under clode.
+  # "$CLODE_SELF --clode-internal-update" instead of the npm path that fails under clode.
   CLODE_SELF="$SELF"; export CLODE_SELF
   exec "$NODE" "$CACHE/cli.cjs" "$@"
 }
@@ -334,9 +334,9 @@ main() {
     clode_update "${2:-stable}"; exit $?
   fi
 
-  # `clode --internal-update [channel]` is the non-interactive entry the in-TUI
+  # `clode --clode-internal-update [channel]` is the non-interactive entry the in-TUI
   # autoupdater spawns (via CLODE_SELF); same fetch as `update`, then exit.
-  if [ "$1" = "--internal-update" ]; then
+  if [ "$1" = "--clode-internal-update" ]; then
     clode_update "${2:-stable}"; exit $?
   fi
 

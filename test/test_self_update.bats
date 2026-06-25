@@ -59,8 +59,8 @@ teardown() { rm -rf "$TMP"; }
   test -f "$XDG_DATA_HOME/clode/providers/9.9.9/claude"
 }
 
-@test "clode --internal-update <channel> fetches like update (non-interactive)" {
-  run env CLODE_CLAUDE_BIN=/nonexistent ./bin/clode --internal-update stable
+@test "clode --clode-internal-update <channel> fetches like update (non-interactive)" {
+  run env CLODE_CLAUDE_BIN=/nonexistent ./bin/clode --clode-internal-update stable
   [ "$status" -eq 0 ]
   test -f "$XDG_DATA_HOME/clode/providers/9.9.9/claude"
 }

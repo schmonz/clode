@@ -150,7 +150,7 @@ SYN_AUTOUPDATER = (
 def test_patch_autoupdater_redirects_spawn_to_clode():
     out, applied = ex.patch_autoupdater(SYN_AUTOUPDATER)
     assert applied is True
-    assert b'a=process.env.CLODE_SELF?[process.env.CLODE_SELF,"--internal-update"]:a;' in out
+    assert b'a=process.env.CLODE_SELF?[process.env.CLODE_SELF,"--clode-internal-update"]:a;' in out
     assert b'_auto_updater_start",e);a=process.env.CLODE_SELF?' in out
     assert b':a;let[_H,...AH]=a,' in out
 

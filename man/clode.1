@@ -8,7 +8,13 @@
 .Nm
 .Op Ar claude-args ...
 .Nm
+.Cm update
+.Op Cm stable | latest | Ar version
+.Nm
 .Fl -clode-version
+.Nm
+.Fl -clode-internal-update
+.Op Ar channel
 .Sh DESCRIPTION
 .Nm
 locates an upstream
@@ -36,6 +42,23 @@ build \(em the embedded JavaScript is the same on every platform) into clode's
 provider store and verifies its checksum; the next launch extracts and runs it.
 The default channel is
 .Cm stable .
+.Pp
+.Nm
+patches Claude Code's in-app auto-updater to run
+.Nm Fl -clode-internal-update
+.Op Ar channel ,
+a non-interactive form of
+.Nm update ,
+so the in-TUI
+.Ic claude update
+affordance (and the automatic updater) fetch via clode rather than the npm path
+that cannot apply under clode; the bundle's
+.Dq Update installed \(em Restart to apply
+message then means relaunch to run the freshly fetched version.
+You normally invoke
+.Nm update
+directly rather than
+.Fl -clode-internal-update .
 .Sh ENVIRONMENT
 .Bl -tag -width CLODE_VERSION_DIR
 .It Ev CLODE_CLAUDE_BIN

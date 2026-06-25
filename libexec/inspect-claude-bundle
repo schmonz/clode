@@ -119,7 +119,7 @@ def snapshot_generator_present(data):
 
 
 # clode redirects the in-TUI pkg-manager autoupdater's spawn argv to
-# `clode --internal-update` (in extract-claude-js), anchored on the
+# `clode --clode-internal-update` (in extract-claude-js), anchored on the
 # auto_updater_start telemetry call immediately followed by the `let[..]=cmd`
 # destructure that feeds the spawn. The redirect self-adapts to identifier churn
 # but CANNOT survive this anchor moving/renaming — so track it (uniqueness too)
@@ -134,7 +134,7 @@ _AUTOUPDATER_ANCHOR = re.compile(
 # survive patching. Count it present if the pristine anchor matches once (a native
 # binary: the patch will apply) OR the override is already spliced in (a patched
 # extract: the patch did apply). Only genuine drift (neither) trips --strict.
-_AUTOUPDATER_PATCHED = b'process.env.CLODE_SELF?[process.env.CLODE_SELF,"--internal-update"]'
+_AUTOUPDATER_PATCHED = b'process.env.CLODE_SELF?[process.env.CLODE_SELF,"--clode-internal-update"]'
 
 def autoupdater_hook_anchor_present(data):
     return len(_AUTOUPDATER_ANCHOR.findall(data)) == 1 or _AUTOUPDATER_PATCHED in data
@@ -380,7 +380,7 @@ def gate_problems(cov):
     if not cov.get('doctor_hook_anchor_present', True):
         p += ['/doctor installation-warnings anchor missing/ambiguous (applet-skew hook would not apply)']
     if not cov.get('autoupdater_hook_anchor_present', True):
-        p += ['in-TUI autoupdater anchor missing/ambiguous (clode --internal-update redirect would not apply)']
+        p += ['in-TUI autoupdater anchor missing/ambiguous (clode --clode-internal-update redirect would not apply)']
     if not cov.get('snapshot_generator_present', True):
         p += ['snapshot-generator anchor missing/ambiguous (/doctor eager-snapshot hook would not apply)']
     if not cov.get('doctor_load_anchor_present', True):

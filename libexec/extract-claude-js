@@ -210,7 +210,7 @@ def patch_doctor_eager(body):
 # Claude Code's in-TUI autoupdater (the pkg-manager path) spawns an npm/install
 # command to fetch a new version, then shows "Update installed · Restart to apply".
 # Under clode there is no npm-managed install to update, so that spawn fails. We
-# redirect the spawn's argv to `"$CLODE_SELF" --internal-update` (clode's own
+# redirect the spawn's argv to `"$CLODE_SELF" --clode-internal-update` (clode's own
 # host-agnostic fetch into the provider store) when CLODE_SELF is set, leaving the
 # argv untouched otherwise. The override is spliced right after the
 # auto_updater_start telemetry call, before the `let[..]=cmd` destructure that
@@ -225,7 +225,7 @@ AUTOUPDATER_SPAWN = re.compile(
 )
 
 def patch_autoupdater(body):
-    """Override the pkg-manager autoupdater's spawn argv to call `clode --internal-update`
+    """Override the pkg-manager autoupdater's spawn argv to call `clode --clode-internal-update`
     (when CLODE_SELF is set). exit 0 -> the bundle's existing success path shows
     "Update installed · Restart to apply"; next launch re-extracts. Returns
     (new_body, applied); applied False unless exactly one match (fail-loud)."""
@@ -233,7 +233,7 @@ def patch_autoupdater(body):
     if len(m) != 1:
         return body, False
     cmd = m[0].group('cmd'); pre = m[0].group('pre')
-    override = cmd + b'=process.env.CLODE_SELF?[process.env.CLODE_SELF,"--internal-update"]:' + cmd + b';'
+    override = cmd + b'=process.env.CLODE_SELF?[process.env.CLODE_SELF,"--clode-internal-update"]:' + cmd + b';'
     cut = m[0].start() + len(pre)
     return body[:cut] + override + body[cut:], True
 

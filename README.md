@@ -98,8 +98,13 @@ a channel or version: `clode update [stable|latest|<version>]` (default `stable`
 Overrides: `CLODE_RELEASES_URL` (source), `CLODE_FETCH_PLATFORM` (which platform's
 build), `CLODE_PROVIDERS` (store).
 
-(In-TUI `claude update` still fails under clode for now — making that affordance do
-the right thing is a later phase; use `clode update`.)
+The in-app updater works too: clode patches the bundle's auto-updater so it runs
+`clode --clode-internal-update` — the same host-agnostic fetch as `clode update` —
+instead of the npm path that can't apply under clode. So the in-TUI `claude update`
+(and the automatic updater) drive clode's fetch, and the bundle's existing "Update
+installed · Restart to apply" means just that: relaunch to run the new version.
+`--clode-internal-update` is the non-interactive entry point the bundle invokes; you
+normally just run `clode update` directly.
 
 Updates are otherwise transparent too: point clode at any updated provider binary
 (your package manager, the Claude installer) and it re-extracts on next launch. Each
