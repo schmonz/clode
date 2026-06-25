@@ -33,3 +33,11 @@ teardown() { rm -rf "$TMP"; }
   [ "$(readlink "$XDG_DATA_HOME/clode/providers/current")" = "9.9.9" ]
   echo "$output" | grep -q "updated to 9.9.9"
 }
+
+@test "a bad checksum aborts the update without moving 'current'" {
+  printf '{"platforms":{"linux-x64":{"checksum":"%064d"}}}\n' 0 > "$REPO/9.9.9/manifest.json"
+  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; PYTHON="$CLODE_PYTHON" clode_update stable'
+  [ "$status" -ne 0 ]
+  echo "$output" | grep -qi "checksum mismatch"
+  [ ! -e "$XDG_DATA_HOME/clode/providers/current" ]
+}
