@@ -97,90 +97,54 @@ const __import_meta = {
 """
 
 
-# Inject a clode "search-applet version skew" section into Claude's /doctor screen,
-# rendered as a sibling just before the doctor footer. The createElement alias and
-# the Box/Text component identifiers are CAPTURED from the footer fragment itself
-# (group refs), so the patch self-adapts to minifier identifier churn across Claude
-# versions — we hardcode only the stable user-facing footer string. The section
-# renders only when clode recorded a skew finding (globalThis.__clodeDoctor.appletSkew,
-# set by bun-shim's warnAppletSkew) and renders null otherwise, so a skew-free
-# /doctor is behaviorally unchanged.
+# Contribute clode's applet-skew findings as NATIVE Claude "Installation warnings"
+# data, rather than grafting our own /doctor section. The doctor diagnostics
+# builder returns an object `{installationType:…,warnings:L,packageManager:…,…}`
+# where `L` is the warnings array the "Installation warnings" section renders (each
+# {issue,fix} -> an `issue` line + a `Run: fix` line). We splice a contribution that
+# pushes one {issue,fix} per skew finding onto L, just before that return.
 #
-# Fail-loud contract: the anchor must match EXACTLY once. If it doesn't, we do NOT
-# patch (clode must never brick /doctor) and warn loudly — the skew is still
-# reported on stderr at startup regardless, and inspect-claude-bundle --strict
-# tracks this same anchor so a Claude update that moves it trips CI first.
-# NOTE: the identifier runs are LENGTH-BOUNDED ({1,40}), not open `+`. Minified
-# identifiers are short; an unbounded `[A-Za-z0-9_$]+` before the required
-# `.default.createElement` literal backtracks O(n^2) over a long run of identifier
-# chars with no match — which the ~1MB synthetic test fixture (and, more slowly,
-# the real bundle) is, hanging extraction. Bounding keeps the scan linear.
-DOCTOR_FOOTER = re.compile(
-    rb'(?P<ce>[A-Za-z0-9_$]{1,40}\.default\.createElement)\('
-    rb'(?P<box>[A-Za-z0-9_$]{1,40}),\{marginTop:1\},'
-    rb'(?P=ce)\((?P<text>[A-Za-z0-9_$]{1,40}),\{dimColor:!0\},'
-    rb'"Still having issues\? Run /feedback to report details\."'
-)
-
-# 2.1.191 switched the footer to the automatic JSX runtime (`X.jsx(Box,{...props,
-# children:...})` instead of `X.createElement(Box,props,...)`). Same identifier
-# bounding rationale as DOCTOR_FOOTER.
-DOCTOR_FOOTER_JSX = re.compile(
-    rb'(?P<jf>[A-Za-z0-9_$]{1,40}\.jsx)\((?P<jbox>[A-Za-z0-9_$]{1,40}),\{marginTop:1,children:'
-    rb'(?P=jf)\((?P<jtext>[A-Za-z0-9_$]{1,40}),\{dimColor:!0,children:'
-    rb'"Still having issues\? Run /feedback to report details\."\}\)\}\)'
+# Anchor: `return{installationType:` is a UNIQUE, unminified marker (object keys are
+# not minified); the bounded `.{0,400}?` skips the intervening fields (incl. the
+# autoUpdates arrow's own `return`) to capture the warnings var from `,warnings:<id>,
+# packageManager:`. Same fail-loud contract as the other doctor patches: inject only
+# on an exactly-once match; never brick /doctor (skew still warns on stderr).
+#
+# `fix` carries a literal "Run: " to match the surrounding warnings' convention. The
+# override env var is derived in-JS as CLODE_<APPLET> (matches bun-shim's CLODE_BFS/
+# CLODE_UGREP/CLODE_RG), so no new field on the finding is needed.
+# The 400 cap is ~2x the real-bundle gap (~210 chars between installationType: and ,warnings:); a future Claude that grows past it fails the exactly-once match (caught by inspect-claude-bundle --strict), never silently mis-injects.
+INSTALL_WARNINGS = re.compile(
+    rb'return\{installationType:.{0,400}?,warnings:(?P<arr>[A-Za-z0-9_$]{1,6}),packageManager:',
+    re.DOTALL,
 )
 
 
-def _doctor_section_classic(ce, box, text):
-    """The injected element, built from identifiers captured at the anchor so it
-    uses the surrounding code's exact React/ink aliases. Defensive by construction:
-    pure property reads over a clode-owned array, cannot throw during render, and
-    collapses to null when there is no skew."""
+def _skew_contribution(arr):
+    """JS spliced before the diagnostics return: defensively push each clode skew
+    finding onto the warnings array `arr`. Safe by construction: cannot throw on
+    well-formed findings — bun-shim always records `name`, `applet`, and `why` as
+    strings (CLODE_SHADOWS), so the string operations below are always valid. A
+    no-op when there is no skew."""
     return (
-        b'(globalThis.__clodeDoctor&&globalThis.__clodeDoctor.appletSkew&&'
-        b'globalThis.__clodeDoctor.appletSkew.length?'
-        + ce + b'(' + box + b',{flexDirection:"column",marginTop:1},'
-        + ce + b'(' + text + b',{color:"yellow"},'
-        b'"clode: search-applet version skew \\u2014 these commands will fail until you upgrade the host tool:"),'
-        + ce + b'(' + text + b',{dimColor:!0},'
-        b'globalThis.__clodeDoctor.appletSkew.map(function(s){'
-        b'return "  /"+s.name+": host "+s.applet+" rejects flags Claude\\u2019s bundled "+s.applet+" uses \\u2014 "+s.why}'
-        b').join("\\n"))'
-        b'):null),'
+        b'globalThis.__clodeDoctor&&globalThis.__clodeDoctor.appletSkew&&'
+        b'globalThis.__clodeDoctor.appletSkew.forEach(function(s){' + arr + b'.push({'
+        b'issue:"host "+s.applet+" rejects flags clode\\u2019s bundled /"+s.name+" uses \\u2014 "+s.why,'
+        b'fix:"Run: set CLODE_"+s.applet.toUpperCase()+" to a compatible "+s.applet+", or upgrade it"'
+        b'})});'
     )
 
 
-def _doctor_section_jsx(jf, box, text):
-    """Injected element in automatic-JSX-runtime form. `jf` is e.g. b'ls.jsx';
-    static-array children use its jsxs sibling (jf + b's')."""
-    jfs = jf + b's'
-    return (
-        b'(globalThis.__clodeDoctor&&globalThis.__clodeDoctor.appletSkew&&'
-        b'globalThis.__clodeDoctor.appletSkew.length?'
-        + jfs + b'(' + box + b',{flexDirection:"column",marginTop:1,children:['
-        + jf + b'(' + text + b',{color:"yellow",children:'
-        b'"clode: search-applet version skew \\u2014 these commands will fail until you upgrade the host tool:"}),'
-        + jf + b'(' + text + b',{dimColor:!0,children:'
-        b'globalThis.__clodeDoctor.appletSkew.map(function(s){'
-        b'return "  /"+s.name+": host "+s.applet+" rejects flags Claude\\u2019s bundled "+s.applet+" uses \\u2014 "+s.why}'
-        b').join("\\n")})]}):null),'
-    )
-
-
-def patch_doctor(body):
-    """Inject the applet-skew section before the doctor footer, in whichever element
-    form the bundle uses. Returns (new_body, applied); applied is False (unchanged)
-    unless exactly one footer (classic OR jsx) matches."""
-    m = list(DOCTOR_FOOTER.finditer(body))
-    if len(m) == 1:
-        inject = _doctor_section_classic(m[0].group('ce'), m[0].group('box'), m[0].group('text'))
-        return body[:m[0].start()] + inject + body[m[0].start():], True
-    j = list(DOCTOR_FOOTER_JSX.finditer(body))
-    if len(j) == 1:
-        inject = _doctor_section_jsx(j[0].group('jf'), j[0].group('jbox'), j[0].group('jtext'))
-        return body[:j[0].start()] + inject + body[j[0].start():], True
-    return body, False
+def patch_doctor_warnings(body):
+    """Splice the skew contribution before the doctor diagnostics return. Returns
+    (new_body, applied); applied is False (unchanged) unless the anchor matches
+    exactly once."""
+    m = list(INSTALL_WARNINGS.finditer(body))
+    if len(m) != 1:
+        return body, False
+    inject = _skew_contribution(m[0].group('arr'))
+    cut = m[0].start()
+    return body[:cut] + inject + body[cut:], True
 
 
 # Make /doctor show the applet-skew on the FIRST open, not only after a shell
@@ -277,17 +241,19 @@ def transform(body):
     """Rewrite *body* to be Node CJS-compatible and prepend the prelude.
 
     Replaces all `import.meta` references with `__import_meta` (which is
-    defined by the prelude), then injects the clode /doctor applet-skew section and
-    wires /doctor to refresh the skew probe before rendering.
+    defined by the prelude), then contributes the clode applet-skew finding to
+    /doctor's installation warnings and wires /doctor to refresh the skew probe
+    before rendering.
     Replacing inside strings is harmless.
     """
     body = re.sub(rb'\bimport\.meta\b', b'__import_meta', body)
-    body, applied = patch_doctor(body)
+    body, applied = patch_doctor_warnings(body)
     if not applied:
         sys.stderr.write(
-            "clode: /doctor applet-skew hook NOT applied — doctor footer anchor not found "
-            "exactly once (Claude version drift?). Skew still warns on stderr at startup; "
-            "run inspect-claude-bundle --strict to confirm the surface.\n")
+            "clode: /doctor applet-skew hook NOT applied — installation-warnings anchor "
+            "(return{installationType:...,warnings:...}) not found exactly once (Claude "
+            "version drift?). Skew still warns on stderr at startup; run "
+            "inspect-claude-bundle --strict to confirm the surface.\n")
     body, eager = patch_doctor_eager(body)
     if not eager:
         sys.stderr.write(

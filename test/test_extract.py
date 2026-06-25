@@ -38,79 +38,58 @@ def test_transform_rewrites_import_meta_and_prepends_prelude():
     assert out.startswith(b"//")  # prelude comment
 
 
-# A realistic minified doctor footer fragment (createElement alias uA.default,
-# Box=U, Text=h) — the shape patch_doctor anchors on.
-SYN_DOCTOR = (
-    b'uA.default.createElement(Bf,null,'
-    b'uA.default.createElement(U,{flexDirection:"column"},I),'
-    b'uA.default.createElement(U,{marginTop:1},'
-    b'uA.default.createElement(h,{dimColor:!0},"Still having issues? Run /feedback to report details.")))'
+# A realistic minified diagnostics return-object — the shape patch_doctor_warnings
+# anchors on. `warnings:L` is the array the "Installation warnings" section renders.
+# The autoUpdates arrow holds a nested `return`, which the bounded `.{0,400}?` gap
+# must skip to reach `,warnings:`.
+SYN_WARNINGS = (
+    b'let D=await Oy8();'
+    b'return{installationType:_,version:A,configInstallMethod:$,'
+    b'autoUpdates:(()=>{let J=RSH();return J?"disabled":"enabled"})(),'
+    b'multipleInstallations:f,warnings:L,packageManager:Y,ripgrepStatus:w}'
 )
 
 
-def test_patch_doctor_injects_skew_section_with_captured_identifiers():
-    out, applied = ex.patch_doctor(SYN_DOCTOR)
+def test_patch_doctor_warnings_contributes_skew_before_the_return():
+    out, applied = ex.patch_doctor_warnings(SYN_WARNINGS)
     assert applied is True
-    # guard + clode-owned data path present
-    assert b"globalThis.__clodeDoctor.appletSkew" in out
-    # built from the CAPTURED aliases (uA.default.createElement / U / h), not hardcoded
-    assert b'uA.default.createElement(U,{flexDirection:"column",marginTop:1}' in out
-    assert b'uA.default.createElement(h,{color:"yellow"}' in out
-    # inserted BEFORE the footer; footer string still present exactly once and intact
-    assert out.count(b"Still having issues?") == 1
-    assert b'{marginTop:1},uA.default.createElement(h,{dimColor:!0},"Still having issues?' in out
+    assert b'L.push({issue:' in out
+    assert b'globalThis.__clodeDoctor.appletSkew.forEach(' in out
+    assert b'})});return{installationType:' in out
+    assert out.count(b'return{installationType:') == 1
+    assert b'"Run: set CLODE_"+s.applet.toUpperCase()+' in out
 
 
-SYN_DOCTOR_JSX = (
-    b'ls.jsxs(Nu,{children:['
-    b'ls.jsx(U,{flexDirection:"column",children:x}),'
-    b'ls.jsx(U,{marginTop:1,children:ls.jsx(w,{dimColor:!0,children:"Still having issues? Run /feedback to report details."})}),'
-    b'ls.jsx(U,{marginTop:1,children:ls.jsx(w,{dimColor:!0,italic:!0,children:"x"})})'
-    b']})')
-
-
-def test_patch_doctor_injects_jsx_form_when_footer_uses_automatic_runtime():
-    out, applied = ex.patch_doctor(SYN_DOCTOR_JSX)
+def test_patch_doctor_warnings_matches_the_real_2_1_179_fixture():
+    body = open(os.path.join(ROOT, "test", "fixtures", "doctor", "warnings-2.1.179.js"), "rb").read()
+    out, applied = ex.patch_doctor_warnings(body)
     assert applied is True
-    assert b"globalThis.__clodeDoctor.appletSkew" in out
-    assert b'ls.jsxs(U,{flexDirection:"column",marginTop:1,children:[ls.jsx(w,{color:"yellow",children:' in out
-    assert b'ls.jsx(w,{dimColor:!0,children:globalThis.__clodeDoctor.appletSkew.map(' in out
-    assert b'):null),ls.jsx(U,{marginTop:1,children:ls.jsx(w,{dimColor:!0,children:"Still having issues?' in out
+    assert b'.push({issue:' in out
 
 
-def test_patch_doctor_matches_the_real_2_1_191_fixture():
-    import os
-    body = open(os.path.join(ROOT, "test", "fixtures", "doctor", "footer-2.1.191.js"), "rb").read()
-    out, applied = ex.patch_doctor(body)
-    assert applied is True
-    assert b"search-applet version skew" in out
+def test_patch_doctor_warnings_noop_when_anchor_absent():
+    out, applied = ex.patch_doctor_warnings(b"no diagnostics object here")
+    assert applied is False and out == b"no diagnostics object here"
 
 
-def test_patch_doctor_is_linear_on_pathological_padding():
-    # A long run of identifier chars with no match must NOT backtrack O(n^2).
-    # (The ~1MB synthetic fixture is exactly this; an unbounded `+` hung extraction.)
+def test_patch_doctor_warnings_noop_when_anchor_ambiguous():
+    out, applied = ex.patch_doctor_warnings(SYN_WARNINGS + SYN_WARNINGS)
+    assert applied is False and out == SYN_WARNINGS + SYN_WARNINGS
+
+
+def test_patch_doctor_warnings_is_linear_on_pathological_padding():
     import time
-    body = b"x" * 2_000_000
+    body = b'return{installationType:' + b'x' * 2000000
     t = time.time()
-    out, applied = ex.patch_doctor(body)
-    assert applied is False and out == body
-    assert time.time() - t < 2.0, "patch_doctor regex is super-linear on identifier-run padding"
-
-
-def test_patch_doctor_noop_when_anchor_absent():
-    out, applied = ex.patch_doctor(b"no doctor screen here")
-    assert applied is False and out == b"no doctor screen here"
-
-
-def test_patch_doctor_noop_when_anchor_ambiguous():
-    # exactly-once or we don't touch it (fail-loud contract)
-    out, applied = ex.patch_doctor(SYN_DOCTOR + SYN_DOCTOR)
+    out, applied = ex.patch_doctor_warnings(body)
     assert applied is False
+    assert time.time() - t < 2.0, "patch_doctor_warnings regex is super-linear on padding"
 
 
-def test_transform_applies_doctor_patch_on_realistic_body():
-    out = ex.transform(SYN_DOCTOR)
-    assert b"globalThis.__clodeDoctor.appletSkew" in out
+def test_transform_contributes_skew_to_warnings_on_realistic_body():
+    out = ex.transform(SYN_WARNINGS)
+    assert b'L.push({issue:' in out
+    assert b'})});return{installationType:' in out
 
 
 # Realistic minified shapes patch_doctor_eager anchors on: the no-arg snapshot
@@ -154,9 +133,9 @@ def test_patch_doctor_eager_noop_when_ambiguous():
 
 
 def test_transform_applies_eager_patch_on_realistic_body():
-    out = ex.transform(SYN_DOCTOR + b';' + SYN_EAGER)
+    out = ex.transform(SYN_WARNINGS + b';' + SYN_EAGER)
     assert b"globalThis.__clodeEnsureSnapshot=Tp7;" in out
-    assert b"globalThis.__clodeDoctor.appletSkew" in out  # the render section too
+    assert b"globalThis.__clodeDoctor.appletSkew" in out  # the contribution too
 
 
 SYN_AUTOUPDATER = (
