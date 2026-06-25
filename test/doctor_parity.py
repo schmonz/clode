@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Parse Claude Code's /doctor screen into blank-separated blocks, and compare a
 native render against a clode render, allowing ONLY clode's intended deviations:
-it may add the applet-skew block, and it may drop two install-identity-gated
-warnings (clode runs from its cache dir, so it is neither the npm-global nor the
-native install). Any other added/dropped block or item is reported.
+it may add the applet-skew items to the Installation warnings block, and it may
+drop two install-identity-gated warnings (clode runs from its cache dir, so it
+is neither the npm-global nor the native install). Any other added/dropped block
+or item is reported.
 
 CLI: doctor_parity.py NATIVE_SCREEN CLODE_SCREEN
      prints unlisted deviations (if any) and exits 1; exits 0 on parity.
@@ -12,7 +13,13 @@ import re
 import sys
 
 TREE_LEADS = ("├", "└", "│")
-SKEW_MARKER = "clode: search-applet version skew"
+
+# Items clode may ADD to a shared block — the applet-skew finding now renders as
+# native "Installation warnings" data: an `issue` line + its `Run: fix` line.
+ALLOWED_ADDED_ITEM_SUBSTRINGS = (
+    "rejects flags clode",   # the skew issue line
+    "set CLODE_",            # the skew fix line ("Run: set CLODE_<APPLET> …")
+)
 
 # Items clode may omit from "Installation warnings", matched as substrings on the
 # glyph-stripped item text. Each nag is about cleaning up the install you launched
@@ -84,9 +91,9 @@ def compare(native, clode):
     native_titles = [b.title for b in native]
     clode_titles = [b.title for b in clode]
 
-    # Added blocks: only the skew block is allowed.
+    # Added blocks: none allowed (skew is now a native warnings item, not a block).
     for b in clode:
-        if b.title not in native_titles and SKEW_MARKER not in b.title:
+        if b.title not in native_titles:
             deviations.append("unexpected ADDED block: %r" % b.title)
     # Dropped blocks: none allowed.
     for b in native:
@@ -108,7 +115,7 @@ def compare(native, clode):
             if item not in cb.items and not any(s in item for s in ALLOWED_OMISSION_SUBSTRINGS):
                 deviations.append("unexpected DROPPED item in %r: %r" % (nb.title, item))
         for item in cb.items:
-            if item not in nb.items:
+            if item not in nb.items and not any(s in item for s in ALLOWED_ADDED_ITEM_SUBSTRINGS):
                 deviations.append("unexpected ADDED item in %r: %r" % (nb.title, item))
     return deviations
 

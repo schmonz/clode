@@ -84,3 +84,21 @@ def test_compare_pid_volatility_does_not_trip():
     vn = next(b for b in native if b.title == "Version locks ✔")
     vc = next(b for b in clode if b.title == "Version locks ✔")
     assert vn.items == vc.items  # PIDs differ in the fixtures but normalize equal
+
+
+def test_compare_allows_skew_items_under_installation_warnings():
+    native = dp.parse_screen(_read("native-sample.txt"))
+    clode = dp.parse_screen(_read("clode-sample.txt"))
+    iw = next(b for b in clode if b.title == "Installation warnings ⚠")
+    assert any("rejects flags clode" in it for it in iw.items)   # skew issue present
+    assert any("set CLODE_" in it for it in iw.items)            # skew fix present
+    assert dp.compare(native, clode) == []                       # ...and allowlisted
+
+
+def test_compare_flags_a_non_skew_added_item():
+    native = dp.parse_screen(_read("native-sample.txt"))
+    clode = dp.parse_screen(_read("clode-sample.txt"))
+    iw = next(b for b in clode if b.title == "Installation warnings ⚠")
+    iw.items.append("clode phoned home to evil.example.com")     # not allowlisted
+    devs = dp.compare(native, clode)
+    assert any("ADDED item" in d and "evil.example.com" in d for d in devs)

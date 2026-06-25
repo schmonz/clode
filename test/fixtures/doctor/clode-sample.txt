@@ -4,7 +4,9 @@
 
   Installation warnings ⚠
   ├ macOS Keychain is not writable (add-generic-password failed).
-  └ Run: security unlock-keychain ~/Library/Keychains/login.keychain-db
+  ├ Run: security unlock-keychain ~/Library/Keychains/login.keychain-db
+  ├ host bfs rejects flags clode's bundled /find uses — bfs: error: Unsupported -regextype 'findutils-default'.
+  └ Run: set CLODE_BFS to a compatible bfs, or upgrade it
 
   Updates ⚠
   ├ Auto-updates: disabled (set by env: DISABLE_AUTOUPDATER)
@@ -15,9 +17,6 @@
 
   Version locks ✔
   └ 2.1.179: PID 67890 (running)
-
-  clode: search-applet version skew — these commands will fail until you upgrade the host tool:
-    /find: host bfs rejects flags Claude's bundled bfs uses — bfs: error.
 
   Still having issues? Run /feedback to report details.
 
