@@ -159,6 +159,25 @@ def test_transform_applies_eager_patch_on_realistic_body():
     assert b"globalThis.__clodeDoctor.appletSkew" in out  # the render section too
 
 
+SYN_AUTOUPDATER = (
+    b'd("tengu_pkg_manager_auto_updater_start",e);'
+    b'let[_H,...AH]=a,qH=await o_(_H,AH,{cwd:GxK.homedir(),timeout:300000});'
+    b'if(qH.code===0)d("tengu_pkg_manager_auto_updater_success",e)')
+
+
+def test_patch_autoupdater_redirects_spawn_to_clode():
+    out, applied = ex.patch_autoupdater(SYN_AUTOUPDATER)
+    assert applied is True
+    assert b'a=process.env.CLODE_SELF?[process.env.CLODE_SELF,"--internal-update"]:a;' in out
+    assert b'_auto_updater_start",e);a=process.env.CLODE_SELF?' in out
+    assert b':a;let[_H,...AH]=a,' in out
+
+
+def test_patch_autoupdater_noop_when_absent():
+    out, applied = ex.patch_autoupdater(b"no autoupdater here")
+    assert applied is False and out == b"no autoupdater here"
+
+
 def test_verify_flags_residual_nul_and_import_meta():
     assert ex.verify(b"ok\n") == []
     assert any("NUL" in p for p in ex.verify(b"bad\x00"))

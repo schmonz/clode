@@ -242,6 +242,37 @@ def patch_doctor_eager(body):
     return body, True
 
 
+# Claude Code's in-TUI autoupdater (the pkg-manager path) spawns an npm/install
+# command to fetch a new version, then shows "Update installed · Restart to apply".
+# Under clode there is no npm-managed install to update, so that spawn fails. We
+# redirect the spawn's argv to `"$CLODE_SELF" --internal-update` (clode's own
+# host-agnostic fetch into the provider store) when CLODE_SELF is set, leaving the
+# argv untouched otherwise. The override is spliced right after the
+# auto_updater_start telemetry call, before the `let[..]=cmd` destructure that
+# feeds the spawn — so the spawn sees clode's argv. exit 0 -> the bundle's existing
+# success path renders "Restart to apply"; the next clode launch re-extracts the
+# freshly-fetched provider. Anchor PROVEN against real 2.1.179; same identifier
+# bounding rationale as the doctor anchors (short minified ids, linear scan).
+AUTOUPDATER_SPAWN = re.compile(
+    rb'(?P<pre>tengu_pkg_manager_auto_updater_start",[A-Za-z0-9_$]{1,6}\);)'
+    rb'let\[[A-Za-z0-9_$]{1,6},\.\.\.[A-Za-z0-9_$]{1,6}\]=(?P<cmd>[A-Za-z0-9_$]{1,6}),'
+    rb'[A-Za-z0-9_$]{1,6}=await [A-Za-z0-9_$]{1,6}\('
+)
+
+def patch_autoupdater(body):
+    """Override the pkg-manager autoupdater's spawn argv to call `clode --internal-update`
+    (when CLODE_SELF is set). exit 0 -> the bundle's existing success path shows
+    "Update installed · Restart to apply"; next launch re-extracts. Returns
+    (new_body, applied); applied False unless exactly one match (fail-loud)."""
+    m = list(AUTOUPDATER_SPAWN.finditer(body))
+    if len(m) != 1:
+        return body, False
+    cmd = m[0].group('cmd'); pre = m[0].group('pre')
+    override = cmd + b'=process.env.CLODE_SELF?[process.env.CLODE_SELF,"--internal-update"]:' + cmd + b';'
+    cut = m[0].start() + len(pre)
+    return body[:cut] + override + body[cut:], True
+
+
 def transform(body):
     """Rewrite *body* to be Node CJS-compatible and prepend the prelude.
 
@@ -263,6 +294,12 @@ def transform(body):
             "clode: /doctor eager-snapshot hook NOT applied — generator or doctor-load "
             "anchor not found exactly once (Claude version drift?). The applet-skew section "
             "still appears after the first shell command; run inspect-claude-bundle --strict.\n")
+    body, au = patch_autoupdater(body)
+    if not au:
+        sys.stderr.write(
+            "clode: in-TUI autoupdater hook NOT applied — pkg-manager apply anchor not found "
+            "exactly once (Claude version drift?). `clode update` still works; "
+            "run inspect-claude-bundle --strict.\n")
     return PRELUDE + body + b'\n'
 
 
