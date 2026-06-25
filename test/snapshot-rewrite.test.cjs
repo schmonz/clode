@@ -155,7 +155,9 @@ test('warnAppletSkew: warns, naming the rejected flag, when the host applet erro
     const out = captureStderr(() => warnAppletSkew(collectShadows(skewSnap)));
     assert.match(out, /host bfs rejects the flags/);
     assert.match(out, /Unsupported -regextype 'findutils-default'/);
-    assert.match(out, /set CLODE_BFS to a compatible bfs/);
+    // applet-specific remedy: bfs needs an Oniguruma-enabled build, not just an "upgrade"
+    assert.match(out, /install bfs ≥ 3\.3 built with Oniguruma, or set CLODE_BFS to such a build/);
+    assert.doesNotMatch(out, /upgrade it/);
   } finally {
     if (prev === undefined) delete process.env.CLODE_BFS; else process.env.CLODE_BFS = prev;
   }
@@ -189,6 +191,8 @@ test('warnAppletSkew: records findings on globalThis.__clodeDoctor for the /doct
     assert.strictEqual(f.name, 'find');
     assert.strictEqual(f.applet, 'bfs');
     assert.match(f.why, /Unsupported -regextype/);
+    // the finding carries the applet-specific remedy so the /doctor hook renders it too
+    assert.match(f.fix, /Oniguruma/);
   } finally {
     if (prev === undefined) delete process.env.CLODE_BFS; else process.env.CLODE_BFS = prev;
   }

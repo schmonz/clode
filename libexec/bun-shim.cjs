@@ -148,12 +148,22 @@ if (!_wrapAnsiFn) wrapAnsi.__bunShimStub = true;
 // bfs exits non-zero on any error and 0 once it hits -quit. Used by warnAppletSkew
 // at snapshot-refresh to catch a host applet that's too old for the embedded one's
 // flags (e.g. pkgsrc bfs 1.5.1 rejecting -regextype findutils-default).
+// `fix` is the applet-specific remedy surfaced on BOTH skew surfaces (stderr and the
+// /doctor Installation-warnings item). bfs is specific: Claude's `find` alias passes
+// `-regextype findutils-default`, a GNU-findutils regex type bfs only provides when
+// built with Oniguruma (bfs gates the GNU types behind `#if BFS_WITH_ONIGURUMA`), and
+// that support landed in bfs 3.3 ("all regex types from GNU find"). A POSIX-only build
+// — any version — rejects the flag, so "upgrade it" is wrong advice. ugrep/rg keep a
+// generic remedy until we learn their concrete requirements.
 const CLODE_SHADOWS = {
   grep: { applet: 'ugrep', env: 'CLODE_UGREP',
+          fix: 'set CLODE_UGREP to a compatible ugrep, or upgrade it',
           probe: (f) => ({ args: [...f, '-e', 'x', '/dev/null'], skew: (c) => c >= 2 }) },
   find: { applet: 'bfs',   env: 'CLODE_BFS',
+          fix: 'install bfs ≥ 3.3 built with Oniguruma, or set CLODE_BFS to such a build',
           probe: (f) => ({ args: [...f, '-quit', '.'],           skew: (c) => c !== 0 }) },
   rg:   { applet: 'rg',    env: 'CLODE_RG',
+          fix: 'set CLODE_RG to a compatible rg, or upgrade it',
           probe: (f) => ({ args: [...f, '--version'],            skew: (c) => c >= 2 }) },
 };
 // A shadow body is the upstream multiplexer if it invokes an applet via argv0
@@ -298,12 +308,13 @@ function warnAppletSkew(shadows){
       _warnedSkew.add(key);
       const why = String(r.stderr || '').trim().split('\n')[0]
         || (r.error && r.error.message) || `exit ${r.status}`;
-      _recordSkew({ name: sh.name, applet: sh.applet, why });
+      const fix = known.fix || `set ${known.env} to a compatible ${sh.applet}, or upgrade it`;
+      _recordSkew({ name: sh.name, applet: sh.applet, why, fix });
       process.stderr.write(
         `clode: host ${sh.applet} rejects the flags Claude's embedded ${sh.applet} uses — ` +
         `\`${sh.name}\` will fail:\n` +
         `       ${why}\n` +
-        `       set ${known.env} to a compatible ${sh.applet}, or upgrade it.\n`);
+        `       ${fix}.\n`);
     }
   }
 }

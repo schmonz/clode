@@ -23,7 +23,7 @@
   ├ macOS Keychain is not writable (add-generic-password failed).
   ├ Run: security unlock-keychain ~/Library/Keychains/login.keychain-db
   ├ host bfs rejects flags clode's bundled /find uses — bfs: error: Unsupported -regextype 'findutils-default'.
-  └ Run: set CLODE_BFS to a compatible bfs, or upgrade it
+  └ install bfs ≥ 3.3 built with Oniguruma, or set CLODE_BFS to such a build
 
   Updates ⚠
   ├ Auto-updates: disabled (set by env: DISABLE_AUTOUPDATER)

@@ -101,7 +101,7 @@ const __import_meta = {
 # data, rather than grafting our own /doctor section. The doctor diagnostics
 # builder returns an object `{installationType:…,warnings:L,packageManager:…,…}`
 # where `L` is the warnings array the "Installation warnings" section renders (each
-# {issue,fix} -> an `issue` line + a `Run: fix` line). We splice a contribution that
+# {issue,fix} -> an `issue` line + a `fix` line). We splice a contribution that
 # pushes one {issue,fix} per skew finding onto L, just before that return.
 #
 # Anchor: `return{installationType:` is a UNIQUE, unminified marker (object keys are
@@ -110,9 +110,10 @@ const __import_meta = {
 # packageManager:`. Same fail-loud contract as the other doctor patches: inject only
 # on an exactly-once match; never brick /doctor (skew still warns on stderr).
 #
-# `fix` carries a literal "Run: " to match the surrounding warnings' convention. The
-# override env var is derived in-JS as CLODE_<APPLET> (matches bun-shim's CLODE_BFS/
-# CLODE_UGREP/CLODE_RG), so no new field on the finding is needed.
+# The remedy (`fix`) is the applet-specific one bun-shim records on each finding
+# (`s.fix`), so the /doctor advice matches the stderr advice exactly (e.g. bfs's
+# "install bfs >= 3.3 built with Oniguruma ..."). A generic CLODE_<APPLET> hint is the
+# fallback if an older shim recorded a finding without `s.fix`.
 # The 400 cap is ~2x the real-bundle gap (~210 chars between installationType: and ,warnings:); a future Claude that grows past it fails the exactly-once match (caught by inspect-claude-bundle --strict), never silently mis-injects.
 INSTALL_WARNINGS = re.compile(
     rb'return\{installationType:.{0,400}?,warnings:(?P<arr>[A-Za-z0-9_$]{1,6}),packageManager:',
@@ -130,7 +131,7 @@ def _skew_contribution(arr):
         b'globalThis.__clodeDoctor&&globalThis.__clodeDoctor.appletSkew&&'
         b'globalThis.__clodeDoctor.appletSkew.forEach(function(s){' + arr + b'.push({'
         b'issue:"host "+s.applet+" rejects flags clode\\u2019s bundled /"+s.name+" uses \\u2014 "+s.why,'
-        b'fix:"Run: set CLODE_"+s.applet.toUpperCase()+" to a compatible "+s.applet+", or upgrade it"'
+        b'fix:s.fix||("set CLODE_"+s.applet.toUpperCase()+" to a compatible "+s.applet)'
         b'})});'
     )
 

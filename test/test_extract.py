@@ -57,7 +57,10 @@ def test_patch_doctor_warnings_contributes_skew_before_the_return():
     assert b'globalThis.__clodeDoctor.appletSkew.forEach(' in out
     assert b'})});return{installationType:' in out
     assert out.count(b'return{installationType:') == 1
-    assert b'"Run: set CLODE_"+s.applet.toUpperCase()+' in out
+    # the remedy is the applet-specific one bun-shim records (s.fix), with a generic
+    # CLODE_<APPLET> fallback for older shims
+    assert b'fix:s.fix||(' in out
+    assert b'"set CLODE_"+s.applet.toUpperCase()+' in out
 
 
 def test_patch_doctor_warnings_matches_the_real_2_1_179_fixture():
