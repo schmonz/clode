@@ -133,8 +133,15 @@ _AUTOUPDATER_ANCHOR = re.compile(
     rb'let\[[A-Za-z0-9_$]{1,6},\.\.\.[A-Za-z0-9_$]{1,6}\]=[A-Za-z0-9_$]{1,6},'
     rb'[A-Za-z0-9_$]{1,6}=await [A-Za-z0-9_$]{1,6}\(')
 
+# clode's autoupdater redirect splices its override INTO the anchored sequence (between
+# the start-telemetry and the destructure), so unlike the /doctor anchor it does not
+# survive patching. Count it present if the pristine anchor matches once (a native
+# binary: the patch will apply) OR the override is already spliced in (a patched
+# extract: the patch did apply). Only genuine drift (neither) trips --strict.
+_AUTOUPDATER_PATCHED = b'process.env.CLODE_SELF?[process.env.CLODE_SELF,"--internal-update"]'
+
 def autoupdater_hook_anchor_present(data):
-    return len(_AUTOUPDATER_ANCHOR.findall(data)) == 1
+    return len(_AUTOUPDATER_ANCHOR.findall(data)) == 1 or _AUTOUPDATER_PATCHED in data
 
 def doctor_load_anchor_present(data):
     return len(DOCTOR_LOAD_ANCHOR.findall(data)) == 1
