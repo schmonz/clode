@@ -25,3 +25,11 @@ teardown() { rm -rf "$TMP"; }
   [ "$status" -eq 0 ]
   [ "$output" = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" ]
 }
+
+@test "clode_update fetches the fixed platform into the provider store + current pointer" {
+  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; PYTHON="$CLODE_PYTHON" clode_update stable'
+  [ "$status" -eq 0 ]
+  test -f "$XDG_DATA_HOME/clode/providers/9.9.9/claude"
+  [ "$(readlink "$XDG_DATA_HOME/clode/providers/current")" = "9.9.9" ]
+  echo "$output" | grep -q "updated to 9.9.9"
+}

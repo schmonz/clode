@@ -235,6 +235,55 @@ ensure_deps() {
   printf '%s\n' "$_sig" > "$DEPS_ROOT/.deps-sig"
 }
 
+# Fetch the latest upstream Claude Code JS host-agnostically into clode's provider
+# store, then leave it for extract-on-change to pick up. We request a FIXED platform
+# (linux-x64): the embedded JS is the same program on every platform (it branches on
+# process.platform at runtime), so clode runs it under Node on any host -- including
+# ones Anthropic ships no binary for. We NEVER run the downloaded binary.
+CLODE_RELEASES_URL="${CLODE_RELEASES_URL:-https://downloads.claude.ai/claude-code-releases}"
+CLODE_FETCH_PLATFORM="${CLODE_FETCH_PLATFORM:-linux-x64}"
+
+clode_update() {
+  _channel="${1:-stable}"
+  if command -v curl >/dev/null 2>&1; then CLODE_DOWNLOADER=curl
+  elif command -v wget >/dev/null 2>&1; then CLODE_DOWNLOADER=wget
+  else echo "clode: need curl or wget to update" >&2; return 1; fi
+  _base="$CLODE_RELEASES_URL"
+  case "$_channel" in
+    [0-9]*) _ver="$_channel" ;;
+    *)      _ver=$(download_file "$_base/$_channel" | tr -d '\r\n') ;;
+  esac
+  case "$_ver" in
+    [0-9]*.[0-9]*.[0-9]*) : ;;
+    *) echo "clode: couldn't resolve a version for '$_channel' from $_base" >&2; return 1 ;;
+  esac
+  _plat="$CLODE_FETCH_PLATFORM"
+  _manifest=$(download_file "$_base/$_ver/manifest.json") || { echo "clode: failed to fetch manifest for $_ver" >&2; return 1; }
+  _sum=$(printf '%s' "$_manifest" | "$PYTHON" -c \
+    "import json,sys;d=json.load(sys.stdin);p=d.get('platforms',d);print(p.get('$_plat',{}).get('checksum',''))" 2>/dev/null)
+  case "$_sum" in
+    [0-9a-f]*) : ;;
+    *) echo "clode: platform $_plat not in manifest for $_ver" >&2; return 1 ;;
+  esac
+  _providers="${CLODE_PROVIDERS:-${XDG_DATA_HOME:-$HOME/.local/share}/clode/providers}"
+  _dest="$_providers/$_ver"; _bin="$_dest/claude"
+  if [ -f "$_bin" ] && [ "$(sha256_of "$_bin")" = "$_sum" ]; then
+    echo "clode: already have $_ver" >&2
+  else
+    echo "clode: fetching Claude Code $_ver ($_plat)..." >&2
+    mkdir -p "$_dest"; _tmp="$_dest/.claude.partial"
+    if ! download_file "$_base/$_ver/$_plat/claude" "$_tmp"; then
+      rm -f "$_tmp"; echo "clode: download failed" >&2; return 1
+    fi
+    if [ "$(sha256_of "$_tmp")" != "$_sum" ]; then
+      rm -f "$_tmp"; echo "clode: checksum mismatch for $_ver (corrupt or tampered download)" >&2; return 1
+    fi
+    mv "$_tmp" "$_bin"; chmod +x "$_bin"
+  fi
+  ln -sfn "$_ver" "$_providers/current"
+  echo "clode: updated to $_ver. Relaunch clode to use it." >&2
+}
+
 main() {
   # Resolve this script's real location, following symlinks (so an npm-installed
   # bin symlink works, and the source tree runs in place).
