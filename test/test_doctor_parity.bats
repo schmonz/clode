@@ -24,7 +24,7 @@ _doctor_capture() {  # $1 = out file; rest = command (+args) to run
     "$CLODE_PYTHON" test/tui_screen.py 16 \
       --then-hex 2f646f63746f72@4 \
       --then-hex 0d@6 \
-      --rows 50 --cols 100 \
+      --rows 120 --cols 100 \
       -- "$@"
   ) > "$out" 2>/dev/null || true
 }

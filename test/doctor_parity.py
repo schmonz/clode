@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
-"""Parse Claude Code's /doctor screen into blank-separated blocks, and compare a
-native render against a clode render, allowing ONLY clode's intended deviations:
-it may add the applet-skew items to the Installation warnings block, and it may
-drop two install-identity-gated warnings (clode runs from its cache dir, so it
-is neither the npm-global nor the native install). Any other added/dropped block
-or item is reported.
+"""Slice a captured /doctor SCREEN to its report, parse it into blank-separated
+blocks, and compare a native render against a clode render, allowing ONLY clode's
+intended deviations:
+  - it may add the applet-skew items to the Installation warnings block;
+  - it may drop two install-identity-gated warnings (clode runs from its cache
+    dir, so it is neither the npm-global nor the native install);
+  - its Diagnostics section may diverge on the labels in DIAGNOSTICS_DIVERGENT_LABELS
+    (clode runs node + extracted JS, so "Currently running"/"Path"/"Invoked" differ).
+Any other added/dropped block or item is reported.
+
+The /doctor report is taller than a typical terminal and does NOT scroll, so the
+capture must be tall enough to contain the whole thing. slice_to_report() extracts
+the report (from its leading full-width rule to the 'Enter to close' footer) and
+flags an INCOMPLETE capture when that boundary is missing — i.e. the terminal was
+too short and the top scrolled off. A truncated capture is never silently compared.
 
 CLI: doctor_parity.py NATIVE_SCREEN CLODE_SCREEN
-     prints unlisted deviations (if any) and exits 1; exits 0 on parity.
+     exits 0 on parity, 1 on unlisted deviations, 2 on an incomplete capture.
 """
 import re
 import sys
@@ -30,6 +39,45 @@ ALLOWED_OMISSION_SUBSTRINGS = (
     "Leftover npm global installation",
     "npm -g uninstall",         # that nag's "Run:" follow-up
 )
+
+# In the Diagnostics section, clode legitimately diverges from native: it runs the
+# extracted JS under host node, so it reports installType "unknown", a host node
+# Path, and an extra "Invoked" (the cache cli.cjs). These item LABELS may differ in
+# value OR presence (either direction) ONLY within the Diagnostics block.
+DIAGNOSTICS_DIVERGENT_LABELS = ("Currently running:", "Path:", "Invoked:")
+
+# The /doctor report's top boundary: a full-width horizontal rule (pure dashes, no
+# box corners) that sits just above the first section. The session welcome box uses
+# corner glyphs (╰…╯), so it does not match. Unique per report -> also our
+# completeness signal.
+_REPORT_RULE = re.compile(r"^\s*─{40,}\s*$")
+_REPORT_FOOTER = "Enter to close"
+
+
+def slice_to_report(text):
+    """Return (report_text, complete). The report runs from the line AFTER the
+    leading full-width rule through the 'Enter to close' footer. complete is False
+    when the rule isn't present exactly once or the footer is missing (terminal too
+    short -> the top of the report scrolled off); callers must treat an incomplete
+    capture as a hard error, never compare it."""
+    lines = text.split("\n")
+    rules = [i for i, l in enumerate(lines) if _REPORT_RULE.match(l)]
+    feet = [i for i, l in enumerate(lines) if _REPORT_FOOTER in l]
+    if len(rules) != 1 or not feet:
+        return text, False
+    return "\n".join(lines[rules[0] + 1:feet[-1] + 1]), True
+
+
+def _allowed_dropped(block_title, item):
+    if any(s in item for s in ALLOWED_OMISSION_SUBSTRINGS):
+        return True
+    return "Diagnostics" in block_title and any(item.startswith(l) for l in DIAGNOSTICS_DIVERGENT_LABELS)
+
+
+def _allowed_added(block_title, item):
+    if any(s in item for s in ALLOWED_ADDED_ITEM_SUBSTRINGS):
+        return True
+    return "Diagnostics" in block_title and any(item.startswith(l) for l in DIAGNOSTICS_DIVERGENT_LABELS)
 
 
 def _normalize(s):
@@ -112,10 +160,10 @@ def compare(native, clode):
         if cb is None:
             continue
         for item in nb.items:
-            if item not in cb.items and not any(s in item for s in ALLOWED_OMISSION_SUBSTRINGS):
+            if item not in cb.items and not _allowed_dropped(nb.title, item):
                 deviations.append("unexpected DROPPED item in %r: %r" % (nb.title, item))
         for item in cb.items:
-            if item not in nb.items and not any(s in item for s in ALLOWED_ADDED_ITEM_SUBSTRINGS):
+            if item not in nb.items and not _allowed_added(nb.title, item):
                 deviations.append("unexpected ADDED item in %r: %r" % (nb.title, item))
     return deviations
 
@@ -124,10 +172,14 @@ def main():
     if len(sys.argv) != 3:
         sys.exit("usage: doctor_parity.py NATIVE_SCREEN CLODE_SCREEN")
     with open(sys.argv[1]) as f:
-        native = parse_screen(f.read())
+        nat_report, nat_ok = slice_to_report(f.read())
     with open(sys.argv[2]) as f:
-        clode = parse_screen(f.read())
-    devs = compare(native, clode)
+        clo_report, clo_ok = slice_to_report(f.read())
+    if not nat_ok or not clo_ok:
+        print("INCOMPLETE CAPTURE: /doctor report boundary (rule/footer) not found — "
+              "increase capture --rows (native_complete=%s clode_complete=%s)" % (nat_ok, clo_ok))
+        sys.exit(2)
+    devs = compare(parse_screen(nat_report), parse_screen(clo_report))
     for d in devs:
         print(d)
     sys.exit(1 if devs else 0)

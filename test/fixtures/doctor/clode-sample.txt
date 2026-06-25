@@ -1,3 +1,20 @@
+│  ▐▛███▜▌   Claude Code   │ What's new                                  │
+│  ▝▜█████▛▘ Opus 4.8       │ Some changelog line that varies run to run… │
+╰──────────────────────────────────────────────────────────────────────╯
+
+
+❯ /doctor
+
+────────────────────────────────────────────────────────────
+  Diagnostics ✔
+  ├ Currently running: unknown (2.1.179)
+  ├ Commit: 8c865e06ae13
+  ├ Platform: darwin-x64
+  ├ Path: /usr/local/bin/node
+  ├ Invoked: /Users/schmonz/.cache/clode/2.1.179/cli.cjs
+  ├ Config install method: native
+  └ Search: OK (/usr/local/bin/rg)
+
   Multiple installations found ⚠
   ├ npm-global at /usr/local/bin/claude
   └ native at ~/.local/bin/claude
@@ -11,6 +28,10 @@
   Updates ⚠
   ├ Auto-updates: disabled (set by env: DISABLE_AUTOUPDATER)
   └ Stable version: 2.1.179
+
+  Background server ◯
+  ├ Mode: ephemeral
+  └ See claude daemon status for details
 
   Remote Control ✔
   └ Control this session from claude.ai/code or the Claude mobile app
