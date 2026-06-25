@@ -326,6 +326,11 @@ main() {
   NODE="${CLODE_NODE:-$NODE_BAKED}"
   PYTHON="${CLODE_PYTHON:-$PYTHON_BAKED}"
 
+  # `clode update [channel]` fetches a fresh provider, then exits — no Node needed.
+  if [ "$1" = "update" ]; then
+    clode_update "${2:-stable}"; exit $?
+  fi
+
   require_node
 
   BIN=$(resolve_claude_bin) || {

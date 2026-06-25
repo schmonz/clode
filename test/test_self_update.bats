@@ -51,3 +51,10 @@ teardown() { rm -rf "$TMP"; }
   echo "$output" | grep -q "providers/9.9.9/claude"
   echo "$output" | grep -qx "9.9.9"
 }
+
+@test "clode update <channel> fetches and reports, then exits" {
+  run env CLODE_CLAUDE_BIN=/nonexistent ./bin/clode update stable
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "updated to 9.9.9"
+  test -f "$XDG_DATA_HOME/clode/providers/9.9.9/claude"
+}
