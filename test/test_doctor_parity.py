@@ -42,3 +42,45 @@ def test_parse_strips_tree_glyphs_from_items():
     blocks = {b.title: b for b in dp.parse_screen(_read("native-sample.txt"))}
     for it in blocks["Multiple installations found ⚠"].items:
         assert not it.startswith("├") and not it.startswith("└")
+
+
+def test_compare_clean_pair_is_parity():
+    native = dp.parse_screen(_read("native-sample.txt"))
+    clode = dp.parse_screen(_read("clode-sample.txt"))
+    # Skew added + two install nags dropped + PID differs → all allowlisted/normalized.
+    assert dp.compare(native, clode) == []
+
+
+def test_compare_flags_a_dropped_section():
+    native = dp.parse_screen(_read("native-sample.txt"))
+    clode = [b for b in dp.parse_screen(_read("clode-sample.txt"))
+             if b.title != "Remote Control ✔"]
+    devs = dp.compare(native, clode)
+    assert any("DROPPED block" in d and "Remote Control" in d for d in devs)
+
+
+def test_compare_flags_an_unexpected_added_section():
+    native = dp.parse_screen(_read("native-sample.txt"))
+    clode = dp.parse_screen(_read("clode-sample.txt"))
+    bogus = dp.Block("Surprise telemetry ✔")
+    clode.append(bogus)
+    devs = dp.compare(native, clode)
+    assert any("ADDED block" in d and "Surprise telemetry" in d for d in devs)
+
+
+def test_compare_flags_a_dropped_non_allowlisted_item():
+    native = dp.parse_screen(_read("native-sample.txt"))
+    clode = dp.parse_screen(_read("clode-sample.txt"))
+    # Remove the keychain warning (NOT on the allowlist) from clode's render.
+    iw = next(b for b in clode if b.title == "Installation warnings ⚠")
+    iw.items = [it for it in iw.items if "Keychain is not writable" not in it]
+    devs = dp.compare(native, clode)
+    assert any("DROPPED item" in d and "Keychain is not writable" in d for d in devs)
+
+
+def test_compare_pid_volatility_does_not_trip():
+    native = dp.parse_screen(_read("native-sample.txt"))
+    clode = dp.parse_screen(_read("clode-sample.txt"))
+    vn = next(b for b in native if b.title == "Version locks ✔")
+    vc = next(b for b in clode if b.title == "Version locks ✔")
+    assert vn.items == vc.items  # PIDs differ in the fixtures but normalize equal
