@@ -58,3 +58,12 @@ teardown() { rm -rf "$TMP"; }
   echo "$output" | grep -q "updated to 9.9.9"
   test -f "$XDG_DATA_HOME/clode/providers/9.9.9/claude"
 }
+
+@test "after clode update, launching clode extracts the fetched provider" {
+  export CLODE_CACHE="$TMP/cache"
+  env CLODE_CLAUDE_BIN=/nonexistent ./bin/clode update stable >/dev/null 2>&1
+  # CLODE_CLAUDE_BIN was only set inline for the update above (never exported), so a
+  # plain launch resolves the fetched provider. (Avoid `env -u`: BSD env lacks it.)
+  ./bin/clode >/dev/null 2>&1 || true
+  test -f "$TMP/cache/9.9.9/cli.cjs"
+}
