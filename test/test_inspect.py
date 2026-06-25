@@ -127,24 +127,16 @@ def test_ws_is_accepted_external_not_a_coverage_gap():
 
 
 def test_doctor_hook_anchor_present():
-    footer = (b'uA.default.createElement(U,{marginTop:1},uA.default.createElement('
-              b'h,{dimColor:!0},"Still having issues? Run /feedback to report details."))')
-    assert ins.doctor_hook_anchor_present(b'x ' + footer + b' y') is True
+    warn = (b'return{installationType:_,version:A,multipleInstallations:f,'
+            b'warnings:L,packageManager:Y,ripgrepStatus:w}')
+    assert ins.doctor_hook_anchor_present(b'x ' + warn + b' y') is True
     assert ins.doctor_hook_anchor_present(b'nope') is False
-    # ambiguous (>1) is NOT a safe single anchor — must be exactly one
-    assert ins.doctor_hook_anchor_present(footer + footer) is False
+    # ambiguous: two diagnostics returns -> not a usable single anchor
+    assert ins.doctor_hook_anchor_present(warn + warn) is False
 
 
-def test_doctor_anchor_present_for_both_classic_and_jsx_footers():
-    classic = (b'uA.default.createElement(U,{marginTop:1},uA.default.createElement('
-               b'h,{dimColor:!0},"Still having issues? Run /feedback to report details."))')
-    jsx = (b'ls.jsx(U,{marginTop:1,children:ls.jsx(w,{dimColor:!0,children:'
-           b'"Still having issues? Run /feedback to report details."})})')
-    assert ins.doctor_hook_anchor_present(classic) is True
-    assert ins.doctor_hook_anchor_present(jsx) is True
-
-def test_doctor_anchor_absent_when_only_the_bare_string_remains():
-    body = b'children:"Still having issues? Run /feedback to report details." somewhere else'
+def test_doctor_anchor_absent_when_only_a_bare_warnings_key_remains():
+    body = b'something with warnings: in prose but no installationType return'
     assert ins.doctor_hook_anchor_present(body) is False
 
 

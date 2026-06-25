@@ -86,26 +86,22 @@ def ripgrep_lever_present(data):
     return RIPGREP_LEVER in data
 
 
-# clode patches Claude's /doctor screen (in extract-claude-js) to surface a
-# search-applet version-skew section, anchored on the doctor footer's stable
-# user-facing string. The patch self-adapts to minifier identifier churn but
+# clode patches Claude's /doctor screen (in extract-claude-js) to surface applet
+# version-skew. It now contributes the finding as NATIVE "Installation warnings"
+# data, spliced before the diagnostics object's `return{installationType:...,
+# warnings:L,packageManager:...}`. clode's patch is idempotent/self-adapting but
 # CANNOT survive this anchor moving/renaming — so track its presence (and
-# uniqueness) and fail --strict if it drifts, the same way the ripgrep lever is
-# tracked. Drift trips here on `claude update` before any user hits a silent miss.
-_DOCTOR_FOOTER_CLASSIC = re.compile(
-    rb'[A-Za-z0-9_$]{1,40}\.default\.createElement\([A-Za-z0-9_$]{1,40},\{marginTop:1\},'
-    rb'[A-Za-z0-9_$]{1,40}\.default\.createElement\([A-Za-z0-9_$]{1,40},\{dimColor:!0\},'
-    rb'"Still having issues\? Run /feedback to report details\."')
-_DOCTOR_FOOTER_JSX = re.compile(
-    rb'[A-Za-z0-9_$]{1,40}\.jsx\([A-Za-z0-9_$]{1,40},\{marginTop:1,children:'
-    rb'[A-Za-z0-9_$]{1,40}\.jsx\([A-Za-z0-9_$]{1,40},\{dimColor:!0,children:'
-    rb'"Still having issues\? Run /feedback to report details\."\}\)\}\)')
+# uniqueness) here, identical to how the patch gates itself.
+_DOCTOR_WARNINGS_ANCHOR = re.compile(
+    rb'return\{installationType:.{0,400}?,warnings:[A-Za-z0-9_$]{1,6},packageManager:',
+    re.DOTALL,
+)
+
 
 def doctor_hook_anchor_present(data):
-    # exactly one usable footer anchor in either element form (the extractor injects
-    # before it). A bare string with no element wrapper is structural drift -> False.
-    return (len(_DOCTOR_FOOTER_CLASSIC.findall(data)) +
-            len(_DOCTOR_FOOTER_JSX.findall(data))) == 1
+    # exactly one usable diagnostics-return anchor (the extractor splices the
+    # skew contribution before it).
+    return len(_DOCTOR_WARNINGS_ANCHOR.findall(data)) == 1
 
 
 # clode also patches /doctor (in extract-claude-js) to GENERATE the shell snapshot
@@ -382,7 +378,7 @@ def gate_problems(cov):
     if not cov.get('ripgrep_lever_present', True):
         p += ['USE_BUILTIN_RIPGREP lever missing (bin/clode set_ripgrep_env would no-op)']
     if not cov.get('doctor_hook_anchor_present', True):
-        p += ['/doctor footer anchor missing/ambiguous (applet-skew hook would not apply)']
+        p += ['/doctor installation-warnings anchor missing/ambiguous (applet-skew hook would not apply)']
     if not cov.get('autoupdater_hook_anchor_present', True):
         p += ['in-TUI autoupdater anchor missing/ambiguous (clode --internal-update redirect would not apply)']
     if not cov.get('snapshot_generator_present', True):
