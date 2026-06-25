@@ -46,6 +46,23 @@ sig_of() {
   "$PYTHON" -c 'import os,sys;s=os.stat(sys.argv[1]);print("%d-%d"%(s.st_size,int(s.st_mtime)))' "$1"
 }
 
+# Pick an available SHA-256 tool (linux: sha256sum, macOS/BSD: shasum). Echoes hex digest.
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d' ' -f1
+  else echo "clode: need sha256sum or shasum to verify downloads" >&2; return 1; fi
+}
+
+# GET a URL (curl or wget). $1=url, $2=output file (optional; stdout if omitted).
+# $CLODE_DOWNLOADER is set by clode_update; URLs may be https:// or file://.
+download_file() {
+  if [ "${CLODE_DOWNLOADER:-curl}" = curl ]; then
+    if [ -n "${2:-}" ]; then curl -fsSL -o "$2" "$1"; else curl -fsSL "$1"; fi
+  else
+    if [ -n "${2:-}" ]; then wget -qO "$2" "$1"; else wget -qO - "$1"; fi
+  fi
+}
+
 # Cache key: reads $BIN, sets $KEY.
 # The version is used when the path encodes one (.../versions/<ver>[/...]),
 # else <basename>-<size+mtime> so a changed provider binary re-extracts.
@@ -280,5 +297,5 @@ main() {
   exec_bundle "$@"
 }
 
-# Allow BATS/tests to source this file and call functions without launching.
-[ -n "${CLODE_SOURCED:-}" ] || main "$@"
+# Allow sourcing (tests) without launching: CLODE_SOURCED suppresses the launch.
+case "${CLODE_SOURCED:-}" in "") main "$@" ;; *) : ;; esac

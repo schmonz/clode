@@ -1,0 +1,27 @@
+#!/usr/bin/env bats
+# clode update: host-agnostic fetch of the upstream JS into a clode-owned provider store.
+load test_helper
+
+setup() {
+  cd "$BATS_TEST_DIRNAME/.."
+  TMP=$(mktempd)
+  export HOME="$TMP/home"; mkdir -p "$HOME"
+  export XDG_DATA_HOME="$TMP/data"
+  REPO="$TMP/repo"; V=9.9.9; PLAT=linux-x64
+  mkdir -p "$REPO/$V/$PLAT"
+  "$CLODE_PYTHON" test/mkfixture.py "$REPO/$V/$PLAT/claude" v
+  if command -v sha256sum >/dev/null 2>&1; then SUM=$(sha256sum "$REPO/$V/$PLAT/claude" | cut -d' ' -f1)
+  else SUM=$(shasum -a 256 "$REPO/$V/$PLAT/claude" | cut -d' ' -f1); fi
+  printf '%s\n' "$V" > "$REPO/stable"
+  printf '%s\n' "$V" > "$REPO/latest"
+  printf '{"platforms":{"%s":{"checksum":"%s"}}}\n' "$PLAT" "$SUM" > "$REPO/$V/manifest.json"
+  export CLODE_RELEASES_URL="file://$REPO"
+}
+teardown() { rm -rf "$TMP"; }
+
+@test "sha256_of computes the file digest" {
+  echo -n "hello" > "$TMP/h"
+  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; sha256_of "'"$TMP"'/h"'
+  [ "$status" -eq 0 ]
+  [ "$output" = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" ]
+}
