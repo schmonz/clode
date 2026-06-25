@@ -141,7 +141,22 @@ exec_bundle() {
   : "${NODE_USE_ENV_PROXY:=1}"; export NODE_USE_ENV_PROXY
   maybe_default_cert_store
   set_ripgrep_env
+  set_node_path
   exec "$NODE" "$CACHE/cli.cjs" "$@"
+}
+
+# Make host-installed npm packages (notably `ws`, the WebSocket dependency the
+# shim requires for Remote Control / MCP-over-WebSocket) resolvable by the shim,
+# which runs from the cache dir and so wouldn't otherwise find a global install.
+# npm puts globals under <node-prefix>/lib/node_modules; add that to NODE_PATH,
+# preserving any the user set. No-op if the dir doesn't exist.
+set_node_path() {
+  _gmods=$(cd "$(dirname "$NODE")/../lib/node_modules" 2>/dev/null && pwd || :)
+  [ -n "$_gmods" ] || return 0
+  case ":${NODE_PATH:-}:" in
+    *":$_gmods:"*) : ;;
+    *) NODE_PATH="${NODE_PATH:+$NODE_PATH:}$_gmods"; export NODE_PATH ;;
+  esac
 }
 
 main() {

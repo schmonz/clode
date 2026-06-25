@@ -155,6 +155,21 @@ to force the system store, or add a private/corporate root with
   the bundled flags. Override the resolved binary with `CLODE_UGREP`, `CLODE_BFS`,
   `CLODE_RG`. Compare host vs. embedded versions any time with
   `libexec/inspect-claude-bundle ~/.local/share/claude/versions/<ver>`.
+- **`ws` (npm) — for WebSocket features only** (Remote Control / `/remote`,
+  MCP-over-WebSocket). Claude Code is built for Bun's header-bearing WebSocket;
+  Node's global one silently drops the auth header, so clode backs WebSockets with
+  the npm [`ws`](https://www.npmjs.com/package/ws) package via a thin adapter.
+  Install it with the **same Node as clode**:
+
+  ```sh
+  npm install -g ws
+  ```
+
+  clode adds the node prefix's global `node_modules` to `NODE_PATH` so a global
+  install is found (or set `NODE_PATH` to any `node_modules` that has `ws`). It is
+  an explicit, **fail-loud** dependency: if a WebSocket feature is used without
+  `ws` installed, clode raises a clear "install `ws`" error rather than silently
+  failing to connect. Everything else works without it.
 
 Override the host tools per machine: `CLODE_NODE`, `CLODE_PYTHON`, and
 `CLODE_PATH` (the clean-env PATH; defaults to the node + python dirs plus common

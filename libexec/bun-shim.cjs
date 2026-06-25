@@ -668,27 +668,56 @@ const BUN_BUILTINS = {
     suffix: process.platform === 'darwin' ? 'dylib' : 'so',
   },
 };
-// External npm modules the bundle require()s at runtime that Bun resolves but
-// the Node host may not have. A missing one is SILENT and fatal: it rejects in a
-// render-gating promise and the interactive TUI hangs with a blank screen
-// (this happened with `ws`). Provide host stubs so startup can never hang on a
-// missing module. We prefer the REAL module if it's installed; the stub is only
-// a fallback. Stubs are tagged __hostStub so the coverage report can flag them.
-const { EventEmitter } = require('events');
-class HostWebSocket extends EventEmitter {
-  // client stub: constructs but never connects; both ws (.on) and DOM
-  // (.addEventListener/.onopen) shapes are no-ops so callers don't throw.
-  constructor(url) { super(); this.url = url; this.readyState = 0; }
-  send() {} close() {} ping() {} pong() {} terminate() {}
-  addEventListener() {} removeEventListener() {}
+// --- WebSocket / `ws`: the bundle is written for BUN's WebSocket, which takes a
+// SINGLE options object — new WebSocket(url, {protocols, headers, tls, proxy}).
+// Node's global WebSocket (undici/WHATWG) ignores `headers`, so the Bearer auth
+// header never goes out and Remote Control / MCP-over-WebSocket get rejected. We
+// back it with the npm `ws` package (translating Bun's options to ws's
+// (url, protocols, {headers,...}) form) and install it as globalThis.WebSocket.
+//
+// `ws` is an EXPLICIT npm dependency, not something we vendor or stub: when it
+// isn't installed we FAIL LOUD at the first WebSocket use (mirroring the
+// search-applet guards) rather than silently never-connecting. The seam — resolve
+// the real module, else a clear "install it" error — is the shape we want for
+// host-provided deps generally. ---
+let _ws; try { _ws = require('ws'); } catch (_) {}
+const _realWS = () => _ws && (_ws.WebSocket || _ws.default || _ws);
+const WS_MISSING =
+  "clode: WebSocket features (Remote Control, MCP-over-WebSocket) need the npm 'ws' " +
+  "package, which isn't installed.\n" +
+  "       Install it with the same Node as clode:  npm install -g ws\n" +
+  "       (or point NODE_PATH at a node_modules dir that has it).";
+// A missing required ext-dep must fail LOUD and FATAL, not throw. The bundle
+// require()s `ws` inside a render-gating startup promise that SWALLOWS exceptions,
+// so a plain throw just hangs the interactive TUI with a blank screen (the user
+// sees nothing). Write straight to fd 2 (unbuffered, survives the exit) and stop
+// the process at the first point ws is needed. This is the shape we want for
+// host-provided deps generally: install it, or get a clear message and a clean exit.
+function _wsFatal(){
+  try { fs.writeSync(2, '\n' + WS_MISSING + '\n'); } catch (_) {}
+  process.exit(1);
 }
-HostWebSocket.CONNECTING = 0; HostWebSocket.OPEN = 1; HostWebSocket.CLOSING = 2; HostWebSocket.CLOSED = 3;
-const wsStub = HostWebSocket;
-wsStub.WebSocket = HostWebSocket;
-wsStub.default = HostWebSocket;
-wsStub.WebSocketServer = class WebSocketServer extends EventEmitter {};
-wsStub.Server = wsStub.WebSocketServer;
-wsStub.__hostStub = true;
+// Translate a Bun-style WebSocket constructor call into ws's (url, protocols, options).
+function _wsArgs(url, opts){
+  if (opts && typeof opts === 'object' && !Array.isArray(opts)){
+    const options = {};
+    if (opts.headers) options.headers = opts.headers;
+    if (opts.tls && typeof opts.tls === 'object') Object.assign(options, opts.tls);  // ca/cert/key/rejectUnauthorized
+    return [url, opts.protocols, options];
+  }
+  return [url, opts, undefined];                 // WHATWG form: 2nd arg is protocols
+}
+function BunWebSocket(url, opts){
+  const WS = _realWS();
+  if (!WS) _wsFatal();
+  const [u, p, o] = _wsArgs(url, opts);
+  return new WS(u, p, o);                         // ws instance: addEventListener/send/close/binaryType
+}
+BunWebSocket.CONNECTING = 0; BunWebSocket.OPEN = 1; BunWebSocket.CLOSING = 2; BunWebSocket.CLOSED = 3;
+// Override the global so the bundle's `new globalThis.WebSocket(url,{headers})`
+// sites get header support; Node's native one would silently drop the auth header.
+globalThis.WebSocket = BunWebSocket;
+
 // undici: Node bundles undici internally but doesn't expose the bare module, and
 // the bundle's proxy path does require("undici").setGlobalDispatcher(new
 // EnvHttpProxyAgent(...)). We don't reimplement undici — real proxying is delegated
@@ -707,11 +736,14 @@ const undiciStub = new Proxy({ __hostStub: true }, {
     return _undiciNoop;
   },
 });
-const HOST_MODULES = { ws: wsStub, undici: undiciStub };
+const HOST_MODULES = { undici: undiciStub };
 
 const _load = Module._load;
 Module._load = function (request, parent, isMain) {
   if (Object.prototype.hasOwnProperty.call(BUN_BUILTINS, request)) return BUN_BUILTINS[request];
+  // `ws` is a required host dependency: real module if installed, else fail loud
+  // (no silent no-connect stub — see the WebSocket adapter above).
+  if (request === 'ws') { if (_ws) return _ws; _wsFatal(); }
   if (Object.prototype.hasOwnProperty.call(HOST_MODULES, request)) {
     try { return _load.call(this, request, parent, isMain); }   // prefer a real install
     catch (_) { return HOST_MODULES[request]; }                 // else the host stub
@@ -725,6 +757,7 @@ module.exports.__hostModules = Object.keys(HOST_MODULES);   // external npm modu
 module.exports.__bunBuiltins = Object.keys(BUN_BUILTINS);   // bun: modules we resolve
 module.exports.rewriteSnapshot = rewriteSnapshot;
 module.exports.collectShadows = collectShadows;
+module.exports._wsArgs = _wsArgs;
 module.exports.warnAppletSkew = warnAppletSkew;
 module.exports.CLODE_SHADOWS = CLODE_SHADOWS;
 globalThis.Bun = globalThis.Bun || module.exports;   // ensure global even if required directly

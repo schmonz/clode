@@ -18,19 +18,38 @@ setup() {
     export TERM=xterm-256color
     "$PYTHON" test/tui_screen.py 11 -- ./bin/clode
   ) > "$OUT" 2>/dev/null || true
+  # `ws` is a required ext-dep: the bundle require()s it at startup, so interactive
+  # clode now FAILS LOUD (prints this install hint and exits) instead of rendering
+  # when ws is missing. Detect which world we're in so the render tests and the
+  # fail-loud test each run only where they're meaningful (no network in the
+  # offline suite, so we can't just install ws).
+  WS_ABSENT=""
+  grep -aq 'npm install -g ws' "$OUT" && WS_ABSENT=1
 }
 
 @test "TUI renders the welcome box (Claude Code)" {
   [ -n "${TUI_SKIP:-}" ] && skip "$TUI_SKIP"
+  [ -n "${WS_ABSENT:-}" ] && skip "ws not installed; interactive clode fails loud instead of rendering"
   grep -aq 'Claude Code' "$OUT"
 }
 
 @test "TUI reaches an interactive prompt" {
   [ -n "${TUI_SKIP:-}" ] && skip "$TUI_SKIP"
+  [ -n "${WS_ABSENT:-}" ] && skip "ws not installed; interactive clode fails loud instead of rendering"
   grep -aqE 'shortcuts|for agents|/effort|trust this folder|Accessing workspace' "$OUT"
 }
 
 @test "TUI has no npm-deprecation banner" {
   [ -n "${TUI_SKIP:-}" ] && skip "$TUI_SKIP"
+  [ -n "${WS_ABSENT:-}" ] && skip "ws not installed; interactive clode fails loud instead of rendering"
   ! grep -aqi 'deprecated' "$OUT"
+}
+
+@test "TUI fails LOUD (not a blank hang) when the ws ext-dep is missing" {
+  [ -n "${TUI_SKIP:-}" ] && skip "$TUI_SKIP"
+  [ -z "${WS_ABSENT:-}" ] && skip "ws is installed; the fail-loud path is not exercised"
+  # Regression guard: missing ws used to be swallowed by a render-gating promise,
+  # leaving a blank screen. It must surface a clear, actionable message instead.
+  grep -aq "WebSocket features" "$OUT"
+  grep -aq 'npm install -g ws' "$OUT"
 }

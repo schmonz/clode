@@ -284,6 +284,11 @@ HANDLED_BUN_MODULES = {'bun:ffi'}
 # that hard-fails at a user's runtime (see undici/proxy) — --strict fails on it
 # so we catch it at update time, not in the field.
 ACCEPTED_MISSING_EXTERNALS = {
+    # ws: an EXPLICIT host npm dependency for WebSocket features (Remote Control,
+    # MCP-over-WS). bun-shim resolves the real module and fails loud at first use
+    # when absent (it is no longer host-stubbed), so "MISSING" here is the user's
+    # install responsibility, not a coverage gap.
+    'ws',
     'esbuild', 'typescript',
     'playwright', 'playwright-core',
     'react', 'react-dom', 'react-dom/client',

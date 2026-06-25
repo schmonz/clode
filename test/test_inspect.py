@@ -111,6 +111,13 @@ def test_human_applets_flags_host_skew(monkeypatch):
     assert 'skew possible' in out
 
 
+def test_ws_is_accepted_external_not_a_coverage_gap():
+    # ws is an explicit host npm dependency (fail-loud in the shim), so its absence
+    # must NOT trip --strict as an unreviewed MISSING external.
+    assert 'ws' in ins.ACCEPTED_MISSING_EXTERNALS
+    assert ins.unreviewed_externals(['ws']) == []
+
+
 def test_doctor_hook_anchor_present():
     anchor = b'Still having issues? Run /feedback to report details.'
     assert ins.doctor_hook_anchor_present(b'x ' + anchor + b' y') is True
