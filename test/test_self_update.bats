@@ -41,3 +41,13 @@ teardown() { rm -rf "$TMP"; }
   echo "$output" | grep -qi "checksum mismatch"
   [ ! -e "$XDG_DATA_HOME/clode/providers/current" ]
 }
+
+@test "resolve_claude_bin prefers the fetched provider; cache_key uses its version" {
+  mkdir -p "$XDG_DATA_HOME/clode/providers/9.9.9"
+  : > "$XDG_DATA_HOME/clode/providers/9.9.9/claude"
+  ln -sfn 9.9.9 "$XDG_DATA_HOME/clode/providers/current"
+  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; BIN=$(resolve_claude_bin); echo "$BIN"; cache_key; echo "$KEY"'
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "providers/9.9.9/claude"
+  echo "$output" | grep -qx "9.9.9"
+}

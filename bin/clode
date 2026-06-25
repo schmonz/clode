@@ -26,6 +26,10 @@ CLODE_SELF_VERSION=""                                     # -> read from VERSION
 resolve_claude_bin() {
   if [ -n "$CLODE_CLAUDE_BIN" ];  then printf '%s\n' "$CLODE_CLAUDE_BIN";  return 0; fi
   if [ -n "$CLODE_VERSION_DIR" ]; then printf '%s\n' "$CLODE_VERSION_DIR"; return 0; fi
+  _prov="${CLODE_PROVIDERS:-${XDG_DATA_HOME:-$HOME/.local/share}/clode/providers}/current"
+  if [ -e "$_prov/claude" ]; then
+    printf '%s\n' "$(cd "$_prov" 2>/dev/null && pwd -P)/claude"; return 0
+  fi
   if [ -n "$CLAUDE_BIN_BAKED" ] && [ -e "$CLAUDE_BIN_BAKED" ]; then
     printf '%s\n' "$CLAUDE_BIN_BAKED"; return 0
   fi
@@ -68,8 +72,9 @@ download_file() {
 # else <basename>-<size+mtime> so a changed provider binary re-extracts.
 cache_key() {
   case "$BIN" in
-    */versions/*) KEY=${BIN#*/versions/}; KEY=${KEY%%/*} ;;
-    *)            KEY="$(basename "$BIN")-$(sig_of "$BIN")" ;;
+    */versions/*)  KEY=${BIN#*/versions/}; KEY=${KEY%%/*} ;;
+    */providers/*) KEY=${BIN#*/providers/}; KEY=${KEY%%/*} ;;
+    *)             KEY="$(basename "$BIN")-$(sig_of "$BIN")" ;;
   esac
 }
 
