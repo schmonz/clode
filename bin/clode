@@ -76,7 +76,14 @@ require_node() {
 # Extract-on-first-use, cached per key. Runs node --check on the output;
 # refuses to cache on any failure.
 extract_if_needed() {
-  if [ -f "$CACHE/cli.cjs" ] && [ -f "$CACHE/bun-shim.cjs" ]; then
+  # cli.cjs is a function of BOTH the provider binary (the cache KEY) AND the
+  # extractor logic that patches it (the /doctor inject, future patches). The KEY
+  # only captures the binary, so fingerprint the extractor too and re-extract when
+  # it changes — otherwise an extract-claude-js edit never reaches existing caches
+  # until the binary moves. (The shim is handled separately, by cmp below.)
+  _extractor_sig=$(sig_of "$LIBEXEC/extract-claude-js")
+  if [ -f "$CACHE/cli.cjs" ] && [ -f "$CACHE/bun-shim.cjs" ] \
+     && [ "$(cat "$CACHE/.extractor-sig" 2>/dev/null)" = "$_extractor_sig" ]; then
     # Cache hit on the bundle. Still refresh the cached shim if the installed
     # source differs, so a shim fix reaches existing per-version caches without
     # waiting for a provider update to trigger a re-extract. (The cli.cjs prelude
@@ -87,7 +94,11 @@ extract_if_needed() {
     fi
     return 0
   fi
-  echo "clode: extracting JS for $KEY..." >&2
+  if [ -f "$CACHE/cli.cjs" ]; then
+    echo "clode: extractor changed; re-extracting JS for $KEY..." >&2
+  else
+    echo "clode: extracting JS for $KEY..." >&2
+  fi
   mkdir -p "$CACHE"
   if ! "$PYTHON" "$LIBEXEC/extract-claude-js" "$BIN" "$CACHE/cli.cjs"; then
     rm -f "$CACHE/cli.cjs"
@@ -100,6 +111,7 @@ extract_if_needed() {
     exit 1
   fi
   cp "$LIBEXEC/bun-shim.cjs" "$CACHE/bun-shim.cjs"
+  printf '%s\n' "$_extractor_sig" > "$CACHE/.extractor-sig"
 }
 
 # On legacy macOS (no trustd; the old ocspd/CSSM trust stack), evaluating the

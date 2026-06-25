@@ -39,3 +39,22 @@ teardown() {
   n=$(ls "$TMP/c2" | wc -l | tr -d ' ')
   [ "$n" = "1" ]
 }
+
+@test "extractor change re-extracts the cached bundle (binary unchanged)" {
+  # The bundle (cli.cjs) is a function of (binary, extractor logic), but the cache
+  # key only captures the binary. Without this, an edit to extract-claude-js never
+  # reaches existing caches until the provider binary moves (the /doctor patch bug).
+  export CLODE_CACHE="$TMP/c3"
+  LX="$TMP/libexec"; cp -R "$ROOT/libexec" "$LX"; export CLODE_LIBEXEC="$LX"
+  mkdir -p "$TMP/bin"
+  "$CLODE_PYTHON" test/mkfixture.py "$TMP/bin/claude" v
+  # first run extracts
+  CLODE_CLAUDE_BIN="$TMP/bin/claude" ./bin/clode >/dev/null 2>&1
+  # second run, extractor UNCHANGED: cache hit, no re-extract
+  run env CLODE_CLAUDE_BIN="$TMP/bin/claude" ./bin/clode
+  ! echo "$output" | grep -q 'extracting JS'
+  # change the extractor (new size+mtime) -> must re-extract even though BIN is identical
+  printf '\n# clode-test touch\n' >> "$LX/extract-claude-js"
+  run env CLODE_CLAUDE_BIN="$TMP/bin/claude" ./bin/clode
+  echo "$output" | grep -q 'extracting JS'
+}
