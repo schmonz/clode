@@ -34,6 +34,7 @@ run() { # name, command...
 
 run "pytest extract"  "$PYTHON" -m pytest -q test/test_extract.py
 run "pytest inspect"  "$PYTHON" -m pytest -q test/test_inspect.py
+run "pytest doctor"   "$PYTHON" -m pytest -q test/test_doctor_parity.py
 run "node tests"      "$NODE" --test test/*.test.cjs
 run "bats suite"      "$BATS" test/
 
