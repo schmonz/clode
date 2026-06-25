@@ -113,8 +113,10 @@ authoritative guard for Node compatibility.
 - **Disabled native features** — image/sharp, audio capture, computer-use,
   SQLite-backed bits, MSAL: these are Bun-ABI native `.node` addons embedded in
   the binary and can't load under Node. They degrade gracefully.
-- **`ws` is stubbed** — WebSocket client features (voice speech-to-text, realtime
-  client) don't connect; they no longer hang startup.
+- **WebSocket / YAML need an npm dep** — WebSocket features (Remote Control,
+  MCP-over-WebSocket) and YAML frontmatter work once `ws` / `yaml` are installed;
+  without them clode fails loud with an install hint rather than silently. See
+  Requirements.
 - **Runtime TypeScript** — `Bun.Transpiler`/`esbuild` are not provided, so
   TS-authored hooks/MCP/plugins won't transpile. JS ones work.
 - Various rarely-used `Bun.*` members are stubbed or missing (see the coverage
@@ -170,6 +172,21 @@ to force the system store, or add a private/corporate root with
   an explicit, **fail-loud** dependency: if a WebSocket feature is used without
   `ws` installed, clode raises a clear "install `ws`" error rather than silently
   failing to connect. Everything else works without it.
+- **`yaml` (npm) — for YAML frontmatter only** (skills, slash commands, agents,
+  and memory files carry YAML frontmatter). Claude Code uses Bun's built-in
+  `Bun.YAML`; clode backs it with the npm
+  [`yaml`](https://www.npmjs.com/package/yaml) package. Install it with the **same
+  Node as clode**:
+
+  ```sh
+  npm install -g yaml
+  ```
+
+  Resolved the same way as `ws` (global `node_modules` on `NODE_PATH`), and also an
+  explicit, **fail-loud** dependency — but at point of use, not startup: without
+  `yaml`, the first YAML operation prints a clear "install `yaml`" message and the
+  affected feature degrades (that skill/command is skipped) instead of failing
+  silently. Everything else works without it.
 
 Override the host tools per machine: `CLODE_NODE`, `CLODE_PYTHON`, and
 `CLODE_PATH` (the clean-env PATH; defaults to the node + python dirs plus common

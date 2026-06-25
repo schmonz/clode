@@ -267,7 +267,9 @@ const specs = JSON.parse(process.argv[2]);
 const Module = require('module');
 const B = globalThis.Bun || {};
 const keys = Object.keys(B);
-const stubs = keys.filter(k => typeof B[k] === 'function' && B[k].__bunShimStub);
+// __bunShimStub tags throwing function stubs AND object-valued stubs (e.g. Bun.YAML
+// when the `yaml` dep is absent), so match any tagged value, not just functions.
+const stubs = keys.filter(k => B[k] != null && B[k].__bunShimStub === true);
 const hostModules = new Set(shim.__hostModules || []);
 const bunBuiltins = new Set(shim.__bunBuiltins || []);
 const isBuiltin = Module.isBuiltin || ((n) => require('module').builtinModules.includes(n.replace(/^node:/, '')));
@@ -324,7 +326,8 @@ def unreviewed_externals(modules_missing):
 
 # Bun.* members the shim deliberately provides as throwing stubs (features the
 # Node host can't support; they degrade rather than crash — see docs/BACKLOG.md).
-ACCEPTED_STUBBED_BUN = {'serve', 'listen', 'file', 'write', 'Terminal', 'Transpiler'}
+ACCEPTED_STUBBED_BUN = {'serve', 'listen', 'file', 'write', 'Terminal', 'Transpiler',
+                        'YAML'}  # fail-loud ext-dep: real when `yaml` installed, stub (loud) when not
 # Missing Bun.* members are NOT pre-accepted: a newly-used Bun API we don't provide
 # should be reviewed. (Empty set => any 'missing' Bun.* fails the gate.)
 ACCEPTED_MISSING_BUN = set()

@@ -615,11 +615,32 @@ const semver = {
 
 function JSONL(text){ return String(text).split('\n').filter(Boolean).map(l=>JSON.parse(l)); }
 
+// Bun.YAML is backed by the npm `yaml` dep (the same ext-dep seam as `ws`). The
+// bundle uses it only at feature time (skill/command/memory frontmatter) and wraps
+// many parse() calls in try/catch — so a plain throw is SWALLOWED and the user never
+// learns why frontmatter broke. Fail loud at point-of-use: write the actionable
+// message to fd 2 ONCE (survives the caller's catch), then throw CLODE_YAML_MISSING
+// so each item can still degrade per-feature. Not exit (unlike ws) — yaml is
+// point-of-use, not startup-critical. Args are forwarded verbatim so Bun's
+// `YAML.stringify(value, replacer, space)` reaches the real module intact.
 let _yaml; try { _yaml = require('yaml'); } catch(_){}
+const YAML_MISSING =
+  "clode: YAML features (skill/command/memory frontmatter) need the npm 'yaml' " +
+  "package, which isn't installed.\n" +
+  "       Install it with the same Node as clode:  npm install -g yaml\n" +
+  "       (or point NODE_PATH at a node_modules dir that has it).";
+let _yamlWarned = false;
+function _yamlFatal(){
+  if (!_yamlWarned) { _yamlWarned = true; try { fs.writeSync(2, '\n' + YAML_MISSING + '\n'); } catch(_){} }
+  const e = new Error(YAML_MISSING); e.code = 'CLODE_YAML_MISSING'; throw e;
+}
 const YAML = {
-  parse: (s)=> _yaml ? _yaml.parse(s) : (()=>{throw new Error('Bun.YAML needs the `yaml` package');})(),
-  stringify: (o)=> _yaml ? _yaml.stringify(o) : (()=>{throw new Error('Bun.YAML needs the `yaml` package');})(),
+  parse: (...a)=> _yaml ? _yaml.parse(...a) : _yamlFatal(),
+  stringify: (...a)=> _yaml ? _yaml.stringify(...a) : _yamlFatal(),
 };
+// Without `yaml`, Bun.YAML is a fail-loud stub, not a real implementation — tag it
+// so inspect-claude-bundle's coverage reports it honestly (stubbed, not implemented).
+if (!_yaml) YAML.__bunShimStub = true;
 
 const Bun = {
   version: process.versions.bun || '1.4.0',

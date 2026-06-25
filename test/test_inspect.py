@@ -42,6 +42,14 @@ def test_coverage_classifies_implemented_stubbed_missing():
     assert cov["missing"] == ["Glob"]
 
 
+def test_yaml_stub_is_accepted_by_strict_gate():
+    # Bun.YAML is a fail-loud ext-dep: real when `yaml` is installed, a (loud) stub
+    # when not. Coverage must be able to report it stubbed without --strict failing.
+    cov = {"stubbed": ["YAML"], "missing": [], "bun_modules_unhandled": [],
+           "modules_missing": []}
+    assert "Bun.YAML (stubbed)" not in ins.gate_problems(cov)
+
+
 import pytest
 
 @pytest.mark.skipif(not (os.path.exists(BIN) and os.path.exists(SHIM)),
