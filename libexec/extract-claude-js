@@ -93,6 +93,22 @@ const __import_meta = {
   main: require.main === module,
   resolve: (s) => require('url').pathToFileURL(require.resolve(s)).href,
 };
+// clode's native-autoupdater redirect calls this (when CLODE_SELF is set): spawn
+// clode's own host-agnostic fetch instead of upstream's in-process native install,
+// then resolve a success-shaped result so the bundle renders "Restart to apply".
+globalThis.__clodeNativeUpdate = function () {
+  return new Promise(function (resolve) {
+    var child = require('child_process').spawn(
+      process.env.CLODE_SELF, ['--clode-internal-update'], { stdio: 'inherit' });
+    // Report success only when clode's update actually succeeded (exit 0), so a
+    // failed fetch doesn't drive the bundle's "Restart to apply" path onto an
+    // unchanged version. `--clode-internal-update` propagates clode_update's status.
+    child.on('exit', function (code) {
+      resolve({ wasUpdated: code === 0, latestVersion: null, lockFailed: false }); });
+    child.on('error', function () {
+      resolve({ wasUpdated: false, latestVersion: null, lockFailed: false }); });
+  });
+};
 // ------------------------------------------------------
 """
 
@@ -238,6 +254,34 @@ def patch_autoupdater(body):
     return body[:cut] + override + body[cut:], True
 
 
+# Claude Code's in-TUI NATIVE autoupdater installs in-process: after the
+# `tengu_native_auto_updater_start` telemetry it does `try{let T=await <fn>(<arg>),…`
+# where <fn> returns {wasUpdated,latestVersion,lockFailed}. Under clode that native
+# install is wrong (clode runs extracted JS, not a native install). We replace the
+# call with a CLODE_SELF-guarded clode spawn that resolves a success-shaped result,
+# so the bundle's existing "Restart to apply" path runs and the next launch
+# re-extracts. The `,` after the call bounds <arg>. Same fail-loud contract as the
+# pkg-manager redirect. Anchor PROVEN against real 2.1.179.
+NATIVE_AUTOUPDATER = re.compile(
+    rb'(?P<pre>tengu_native_auto_updater_start",(?:\{\}|[A-Za-z0-9_$]{1,6})\);'
+    rb'try\{let [A-Za-z0-9_$]{1,6}=await )'
+    rb'(?P<call>[A-Za-z0-9_$]{1,6}\([A-Za-z0-9_$]{1,6}\)),'
+)
+
+def patch_native_autoupdater(body):
+    """Redirect the in-TUI NATIVE autoupdater to clode's internal fetch (when
+    CLODE_SELF is set). Replaces `await <fn>(<arg>)` with
+    `await (process.env.CLODE_SELF?globalThis.__clodeNativeUpdate():<fn>(<arg>))`.
+    Returns (new_body, applied); applied False unless exactly one match (fail-loud)."""
+    m = list(NATIVE_AUTOUPDATER.finditer(body))
+    if len(m) != 1:
+        return body, False
+    pre = m[0].group('pre'); call = m[0].group('call')
+    override = (pre + b'(process.env.CLODE_SELF?globalThis.__clodeNativeUpdate():'
+                + call + b'),')
+    return body[:m[0].start()] + override + body[m[0].end():], True
+
+
 def transform(body):
     """Rewrite *body* to be Node CJS-compatible and prepend the prelude.
 
@@ -267,6 +311,12 @@ def transform(body):
             "clode: in-TUI autoupdater hook NOT applied — pkg-manager apply anchor not found "
             "exactly once (Claude version drift?). `clode update` still works; "
             "run inspect-claude-bundle --strict.\n")
+    body, nau = patch_native_autoupdater(body)
+    if not nau:
+        sys.stderr.write(
+            "clode: in-TUI NATIVE autoupdater hook NOT applied — native apply anchor "
+            "not found exactly once (Claude version drift?). `clode update` still "
+            "works; run inspect-claude-bundle --strict.\n")
     return PRELUDE + body + b'\n'
 
 

@@ -160,6 +160,30 @@ def test_patch_autoupdater_noop_when_absent():
     assert applied is False and out == b"no autoupdater here"
 
 
+SYN_NATIVE_AUTOUPDATER = (
+    b'Z9.now();d("tengu_native_auto_updater_start",{});'
+    b'try{let T=await _mH(w),Z={ISSUES_EXPLAINER:"x"};'
+    b'if(T.lockFailed){}')
+
+
+def test_patch_native_autoupdater_redirects_to_clode():
+    out, applied = ex.patch_native_autoupdater(SYN_NATIVE_AUTOUPDATER)
+    assert applied is True
+    assert (b'let T=await (process.env.CLODE_SELF?'
+            b'globalThis.__clodeNativeUpdate():_mH(w)),') in out
+
+
+def test_patch_native_autoupdater_noop_when_absent():
+    out, applied = ex.patch_native_autoupdater(b"no native autoupdater here")
+    assert applied is False and out == b"no native autoupdater here"
+
+
+def test_patch_native_autoupdater_noop_when_ambiguous():
+    doubled = SYN_NATIVE_AUTOUPDATER + SYN_NATIVE_AUTOUPDATER
+    out, applied = ex.patch_native_autoupdater(doubled)
+    assert applied is False and out == doubled
+
+
 def test_verify_flags_residual_nul_and_import_meta():
     assert ex.verify(b"ok\n") == []
     assert any("NUL" in p for p in ex.verify(b"bad\x00"))
