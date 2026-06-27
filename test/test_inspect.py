@@ -147,6 +147,22 @@ def test_autoupdater_anchor_present_and_absent():
     assert ins.autoupdater_hook_anchor_present(b"no autoupdater") is False
 
 
+def test_native_autoupdater_anchor_present_and_absent():
+    present = (b'd("tengu_native_auto_updater_start",{});'
+               b'try{let T=await _mH(w),Z={};')
+    assert ins.native_autoupdater_hook_anchor_present(present) is True
+    assert ins.native_autoupdater_hook_anchor_present(b"no native autoupdater") is False
+
+
+def test_gate_problems_flags_missing_native_autoupdater_anchor():
+    cov = {'stubbed': [], 'missing': [], 'bun_modules_unhandled': [],
+           'modules_missing': [], 'search_applets_unknown': [],
+           'ripgrep_lever_present': True,
+           'native_autoupdater_hook_anchor_present': False}
+    problems = ins.gate_problems(cov)
+    assert any('native autoupdater' in p for p in problems)
+
+
 def test_gate_problems_flags_missing_doctor_anchor():
     cov = {'stubbed': [], 'missing': [], 'bun_modules_unhandled': [],
            'modules_missing': [], 'search_applets_unknown': [],

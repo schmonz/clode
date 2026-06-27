@@ -139,6 +139,18 @@ _AUTOUPDATER_PATCHED = b'process.env.CLODE_SELF?[process.env.CLODE_SELF,"--clode
 def autoupdater_hook_anchor_present(data):
     return len(_AUTOUPDATER_ANCHOR.findall(data)) == 1 or _AUTOUPDATER_PATCHED in data
 
+# clode also redirects the NATIVE in-TUI autoupdater (extract-claude-js
+# patch_native_autoupdater). Track its anchor and the patched marker so --strict
+# catches drift before a user's unattended native update silently mis-applies.
+_NATIVE_AUTOUPDATER_ANCHOR = re.compile(
+    rb'tengu_native_auto_updater_start",(?:\{\}|[A-Za-z0-9_$]{1,6})\);'
+    rb'try\{let [A-Za-z0-9_$]{1,6}=await [A-Za-z0-9_$]{1,6}\([A-Za-z0-9_$]{1,6}\),')
+_NATIVE_AUTOUPDATER_PATCHED = b'process.env.CLODE_SELF?globalThis.__clodeNativeUpdate()'
+
+def native_autoupdater_hook_anchor_present(data):
+    return (len(_NATIVE_AUTOUPDATER_ANCHOR.findall(data)) == 1
+            or _NATIVE_AUTOUPDATER_PATCHED in data)
+
 def doctor_load_anchor_present(data):
     return len(DOCTOR_LOAD_ANCHOR.findall(data)) == 1
 
@@ -276,6 +288,7 @@ def inspect(path):
         'embedded_applet_versions': embedded_applet_versions(data),
         'doctor_hook_anchor_present': doctor_hook_anchor_present(data),
         'autoupdater_hook_anchor_present': autoupdater_hook_anchor_present(data),
+        'native_autoupdater_hook_anchor_present': native_autoupdater_hook_anchor_present(data),
         'snapshot_generator_present': snapshot_generator_present(data),
         'doctor_load_anchor_present': doctor_load_anchor_present(data),
         'ripgrep_lever_present': ripgrep_lever_present(data),
@@ -381,6 +394,8 @@ def gate_problems(cov):
         p += ['/doctor installation-warnings anchor missing/ambiguous (applet-skew hook would not apply)']
     if not cov.get('autoupdater_hook_anchor_present', True):
         p += ['in-TUI autoupdater anchor missing/ambiguous (clode --clode-internal-update redirect would not apply)']
+    if not cov.get('native_autoupdater_hook_anchor_present', True):
+        p += ['in-TUI native autoupdater anchor missing/ambiguous (clode --clode-internal-update redirect would not apply)']
     if not cov.get('snapshot_generator_present', True):
         p += ['snapshot-generator anchor missing/ambiguous (/doctor eager-snapshot hook would not apply)']
     if not cov.get('doctor_load_anchor_present', True):
@@ -416,6 +431,7 @@ def coverage(r, shim):
         'ripgrep_lever_present': r.get('ripgrep_lever_present', True),
         'doctor_hook_anchor_present': r.get('doctor_hook_anchor_present', True),
         'autoupdater_hook_anchor_present': r.get('autoupdater_hook_anchor_present', True),
+        'native_autoupdater_hook_anchor_present': r.get('native_autoupdater_hook_anchor_present', True),
     }
 
 
@@ -526,6 +542,8 @@ def human_coverage(r, cov):
         L.append("MISSING/AMBIGUOUS /doctor footer anchor (extract-claude-js applet-skew hook would not apply)")
     if not cov.get('autoupdater_hook_anchor_present', True):
         L.append("MISSING/AMBIGUOUS in-TUI autoupdater anchor (extract-claude-js autoupdater redirect would not apply)")
+    if not cov.get('native_autoupdater_hook_anchor_present', True):
+        L.append("MISSING/AMBIGUOUS in-TUI native autoupdater anchor (extract-claude-js native autoupdater redirect would not apply)")
     if not cov.get('snapshot_generator_present', True):
         L.append("MISSING/AMBIGUOUS snapshot-generator anchor (/doctor eager-snapshot hook would not apply)")
     if not cov.get('doctor_load_anchor_present', True):
