@@ -171,6 +171,39 @@ set_ripgrep_env() {
 # Launch the cached bundle under the inherited environment.
 # DISABLE_INSTALLATION_CHECKS silences the npm-deprecation nudge (false
 # positive for our non-native install).
+# Write a clode-ONLY settings file wiring the PreToolUse update-guard hook, and echo
+# its path. Passed via --settings so it MERGES with (never overwrites) the user's
+# settings and exists only for clode-launched sessions — upstream claude never sees
+# it. MUST NOT be written into any shared settings file (~/.claude/settings.json,
+# project .claude/settings.json, .claude/settings.local.json). Absolute node + script
+# paths so the hook runs regardless of the session's PATH. No-op (echo nothing) if the
+# guard script is missing.
+write_update_guard_settings() {
+  _guard_script="$LIBEXEC/clode-update-guard.cjs"
+  [ -f "$_guard_script" ] || return 0
+  _dir="${XDG_CACHE_HOME:-$HOME/.cache}/clode"
+  _out="$_dir/update-guard-settings.json"
+  mkdir -p "$_dir" || return 0
+  printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"%s %s"}]}]}}\n' \
+    "$NODE" "$_guard_script" > "$_out" || return 0
+  printf '%s\n' "$_out"
+}
+
+# Decide whether THIS invocation gets the update-guard hook, and echo the settings
+# path if so (else nothing). Print-and-exit invocations (`clode --version`/`--help`)
+# run no model, so the PreToolUse(Bash) guard can never fire on them — and passing
+# --settings there would make the bundle take the settings/render path, needlessly
+# requiring the render ext-deps for a bare `clode --version`. Skip those; every real
+# session (interactive, -p) gets the guard. Match the FIRST arg exactly so a prompt
+# that merely contains the text "--version" (e.g. `-p "explain --version"`) is not
+# mistaken for the flag; the canonical `clode --version`/`--help` lead with it.
+guard_settings_for_args() {
+  case "$1" in
+    --version|-v|--help|-h) return 0 ;;
+  esac
+  write_update_guard_settings
+}
+
 exec_bundle() {
   : "${DISABLE_INSTALLATION_CHECKS:=1}"; export DISABLE_INSTALLATION_CHECKS
   : "${NODE_USE_ENV_PROXY:=1}"; export NODE_USE_ENV_PROXY
@@ -180,7 +213,8 @@ exec_bundle() {
   # Hand the bundle's in-TUI autoupdater a way back to this launcher: it spawns
   # "$CLODE_SELF --clode-internal-update" instead of the npm path that fails under clode.
   CLODE_SELF="$SELF"; export CLODE_SELF
-  exec "$NODE" "$CACHE/cli.cjs" "$@"
+  _guard_settings=$(guard_settings_for_args "$@")
+  exec "$NODE" "$CACHE/cli.cjs" ${_guard_settings:+--settings "$_guard_settings"} "$@"
 }
 
 # Make host-installed npm packages (notably `ws`, the WebSocket dependency the
