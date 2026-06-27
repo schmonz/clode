@@ -184,6 +184,14 @@ def test_patch_native_autoupdater_noop_when_ambiguous():
     assert applied is False and out == doubled
 
 
+def test_patch_native_autoupdater_matches_the_real_2_1_179_fixture():
+    body = open(os.path.join(ROOT, "test", "fixtures", "autoupdater",
+                             "native-2.1.179.js"), "rb").read()
+    out, applied = ex.patch_native_autoupdater(body)
+    assert applied is True
+    assert b'process.env.CLODE_SELF?globalThis.__clodeNativeUpdate():' in out
+
+
 def test_verify_flags_residual_nul_and_import_meta():
     assert ex.verify(b"ok\n") == []
     assert any("NUL" in p for p in ex.verify(b"bad\x00"))
