@@ -43,6 +43,26 @@ resolve_claude_bin() {
   return 1
 }
 
+# Some installs ship `claude` as a tiny shell wrapper that just `exec`s the real
+# single-file binary (e.g. Linux distro packaging where /usr/bin/claude is
+# `exec /opt/claude-code/bin/claude "$@"`). Extracting JS from the wrapper fails
+# with "no @bun-cjs entry marker found" (see GitHub issue #1); follow its exec
+# target to the real bundle. Real bundles are >100MB (and test fixtures ~1MB), so
+# only files small enough to BE a wrapper are inspected — we never sed the bundle.
+# Bounded against exec cycles; only absolute exec targets are followed, so a
+# `exec "$@"`/`exec env ...`/relative line leaves the path unchanged.
+follow_wrapper() {
+  _w="$1"; _n=0
+  while [ "$_n" -lt 10 ] && [ -f "$_w" ] && \
+        [ "$(wc -c < "$_w" 2>/dev/null || echo 999999)" -lt 65536 ]; do
+    _t=$(sed -n 's/^[[:space:]]*exec[[:space:]]\{1,\}\([^[:space:]]\{1,\}\).*/\1/p' "$_w" 2>/dev/null | tail -1)
+    case "$_t" in /*) ;; *) break ;; esac        # only follow an absolute target
+    [ -e "$_t" ] && [ "$_t" != "$_w" ] || break
+    _w="$_t"; _n=$((_n + 1))
+  done
+  printf '%s\n' "$_w"
+}
+
 # Fast size+mtime signature: GNU stat, then BSD stat, then a python fallback.
 sig_of() {
   stat -c '%s-%Y' "$1" 2>/dev/null && return 0
@@ -386,6 +406,9 @@ main() {
     echo "clode: claude binary not found at '$BIN'" >&2
     exit 1
   fi
+  # Resolve through a tiny exec-wrapper to the real single-file bundle, so we
+  # extract (and cache_key off) the binary that actually carries the JS.
+  BIN=$(follow_wrapper "$BIN")
 
   cache_key
 

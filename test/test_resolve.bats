@@ -49,3 +49,18 @@ teardown() {
   [ "${rc:-0}" -eq 1 ]
   [[ "$err" == *"CLODE_CLAUDE_BIN"* ]]
 }
+
+@test "6. a tiny exec-wrapper is followed to the real bundle (issue #1)" {
+  # /usr/bin/claude is sometimes `exec /opt/.../claude "$@"`; extracting the
+  # 110-byte wrapper used to fail with "no @bun-cjs entry marker". Follow it.
+  printf '#!/bin/sh\nexec %s "$@"\n' "$TMP/explicit" > "$TMP/wrapper"
+  chmod +x "$TMP/wrapper"
+  out=$(CLODE_CLAUDE_BIN="$TMP/wrapper" ./bin/clode 2>/dev/null)
+  [[ "$out" == *"L-explicit"* ]]
+}
+
+@test "7. a real (non-wrapper) bundle is left untouched" {
+  # The big bundle must pass straight through follow_wrapper, not be scanned.
+  out=$(CLODE_CLAUDE_BIN="$TMP/explicit" ./bin/clode 2>/dev/null)
+  [[ "$out" == *"L-explicit"* ]]
+}
