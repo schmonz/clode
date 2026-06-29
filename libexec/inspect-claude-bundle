@@ -374,7 +374,11 @@ ACCEPTED_STUBBED_BUN = {'serve', 'listen', 'file', 'write', 'Terminal', 'Transpi
                         'YAML', 'stringWidth', 'stripANSI', 'wrapAnsi', 'semver'}
 # Missing Bun.* members are NOT pre-accepted: a newly-used Bun API we don't provide
 # should be reviewed. (Empty set => any 'missing' Bun.* fails the gate.)
-ACCEPTED_MISSING_BUN = set()
+#   SQL: new in 2.1.195. The sole reference is `new Bun.SQL(...)` inside
+#   startGateway(), which is dynamically imported ONLY by the opt-in `claude
+#   gateway` subcommand (a self-hosted proxy server) — never loaded on the
+#   interactive/-p agent path, so unreachable in normal clode use.
+ACCEPTED_MISSING_BUN = {'SQL'}
 # bun: modules the shim resolves to a generic shim object rather than a real impl.
 # Only bun:ffi is specifically handled; bun:jsc is unused at runtime (BACKLOG).
 ACCEPTED_BUN_MODULES = {'bun:jsc'}

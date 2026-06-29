@@ -220,9 +220,24 @@ def test_gate_problems_returns_unreviewed_items():
     assert ins.gate_problems(cov_clean) == []
 
 
-# Prefer build/2.1.185 if it exists, else fall back to the versioned user install.
-_BUNDLE_185 = os.path.join(ROOT, 'build', '2.1.185', 'cli.cjs')
-_STRICT_BIN = _BUNDLE_185 if os.path.exists(_BUNDLE_185) else BIN
+# Run the strict gate against the NEWEST locally-extracted bundle so a freshly
+# `clode update`d version's surface drift (e.g. 2.1.195's Bun.SQL) is caught here
+# automatically, with no test edit. Pick the highest pure-semver build/<ver>/cli.cjs
+# (skipping non-semver dirs like "2.1.183-test"); fall back to the versioned install.
+def _newest_build_bundle():
+    import glob, re
+    best, best_key = None, ()
+    for p in glob.glob(os.path.join(ROOT, 'build', '*', 'cli.cjs')):
+        ver = os.path.basename(os.path.dirname(p))
+        m = re.fullmatch(r'(\d+)\.(\d+)\.(\d+)', ver)
+        if not m:
+            continue
+        key = tuple(int(x) for x in m.groups())
+        if key > best_key:
+            best, best_key = p, key
+    return best
+
+_STRICT_BIN = _newest_build_bundle() or BIN
 
 @pytest.mark.skipif(not (os.path.exists(_STRICT_BIN) and os.path.exists(SHIM)),
                     reason="no bundle / shim for strict test")
