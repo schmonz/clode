@@ -363,8 +363,8 @@ clode_update() {
   esac
   _plat="$CLODE_FETCH_PLATFORM"
   _manifest=$(download_file "$_base/$_ver/manifest.json") || { echo "clode: failed to fetch manifest for $_ver" >&2; return 1; }
-  _sum=$(printf '%s' "$_manifest" | "$PYTHON" -c \
-    "import json,sys;d=json.load(sys.stdin);p=d.get('platforms',d);print(p.get('$_plat',{}).get('checksum',''))" 2>/dev/null)
+  _sum=$(printf '%s' "$_manifest" | "$NODE" -e \
+    'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const m=JSON.parse(d);const p=m.platforms||m;process.stdout.write((p["'"$_plat"'"]||{}).checksum||"")}catch(e){}})')
   case "$_sum" in
     [0-9a-f]*) : ;;
     *) echo "clode: platform $_plat not in manifest for $_ver" >&2; return 1 ;;
