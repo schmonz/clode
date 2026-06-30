@@ -335,13 +335,13 @@ CLODE_CHANGELOG_URL="${CLODE_CHANGELOG_URL:-https://raw.githubusercontent.com/an
 # exit status (warn-only by design). No-op when sourced without main() (no LIBEXEC).
 clode_signals_report() {
   _ver="$1"; _prev="$2"; _bin="$3"
-  _tool="$LIBEXEC/clode-signals"
+  _tool="$LIBEXEC/clode-signals.cjs"
   [ -n "$LIBEXEC" ] && [ -f "$_tool" ] || return 0
   _cltmp="${TMPDIR:-/tmp}/clode-changelog.$$"; _cl=""
   download_file "$CLODE_CHANGELOG_URL" "$_cltmp" 2>/dev/null && _cl="$_cltmp"
   _sigdir="${CLODE_SIGNALS_DIR:-}"
   if [ -z "$_sigdir" ] && [ -d "$HERE/../.git" ]; then _sigdir="$HERE/../signals"; fi
-  "$PYTHON" "$_tool" --version "$_ver" \
+  "$NODE" "$_tool" --version "$_ver" \
     ${_prev:+--prev "$_prev"} ${_bin:+--bundle "$_bin"} \
     ${_cl:+--changelog-file "$_cl"} ${_sigdir:+--snapshot-dir "$_sigdir"} 2>/dev/null || :
   rm -f "$_cltmp" 2>/dev/null || :
