@@ -135,3 +135,19 @@ _watch_fixture() {
   [ -z "$stderr" ]
   rm -rf "$TMP"
 }
+
+@test "clode --clode-watch runs a cycle, writes a notice, prints a summary, exits 0" {
+  _watch_fixture 2.0.0 1.0.0 high
+  run ./bin/clode --clode-watch
+  [ "$status" -eq 0 ]
+  grep -qx 'high=1' "$CLODE_WATCH_DIR/watch-notice"
+  echo "$output" | grep -qi "running under Node"
+  rm -rf "$TMP"
+}
+
+@test "clode --clode-watch does not reach the bundle (no node/provider needed)" {
+  _watch_fixture 2.0.0 1.0.0 low
+  run env CLODE_CLAUDE_BIN=/nonexistent ./bin/clode --clode-watch
+  [ "$status" -eq 0 ]
+  rm -rf "$TMP"
+}

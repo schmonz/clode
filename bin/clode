@@ -562,6 +562,13 @@ main() {
     clode_update "${2:-stable}"; exit $?
   fi
 
+  # `clode --clode-watch` runs one stateless update-signal cycle, then exits.
+  # Namespaced flag (not a bare `watch` verb) so it can never collide with a
+  # future upstream `claude watch`. Manual mode: prints a summary to stderr.
+  if [ "$1" = "--clode-watch" ]; then
+    clode_watch manual; exit 0
+  fi
+
   require_node
 
   BIN=$(resolve_claude_bin) || {
