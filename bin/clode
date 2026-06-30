@@ -511,10 +511,11 @@ clode_watch_banner() {
   done < "$_notice"
   [ "$_nh" = 1 ] && [ -n "$_nl" ] || return 0
   _providers="${CLODE_PROVIDERS:-${XDG_DATA_HOME:-$HOME/.local/share}/clode/providers}"
-  _cur=""; [ -L "$_providers/current" ] && _cur=$(readlink "$_providers/current" 2>/dev/null)
+  _cur=""; [ -L "$_providers/current" ] && _cur=$(readlink "$_providers/current" 2>/dev/null) || :
   [ -n "$_cur" ] || _cur="$_nc"
   version_gt "$_nl" "$_cur" || return 0
   echo "clode: Claude Code $_nl is available and may affect running under Node (run 'clode --clode-watch' for details, 'clode update' to take it)." >&2
+  return 0
 }
 
 main() {
