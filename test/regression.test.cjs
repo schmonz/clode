@@ -7,29 +7,14 @@
 // then inspect-claude-bundle.cjs <cli.cjs> --json -> sha256(stdout) == inspect_json_sha256.
 // Versions whose provider binary is absent are SKIPPED (logged, not silently dropped);
 // at least one version must run.
+//
+// To re-bless after an INTENTIONAL change to the JS extractor/inspector output:
+// node test/update-golden-shas.cjs (then review the git diff of test/golden-shas.json).
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { spawnSync } = require('node:child_process');
-const crypto = require('node:crypto');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
-
-const NODE = process.env.CLODE_NODE || process.execPath;
-const REPO = path.resolve(__dirname, '..');
-const EXTRACT = path.join(REPO, 'libexec', 'extract-claude-js.cjs');
-const INSPECT = path.join(REPO, 'libexec', 'inspect-claude-bundle.cjs');
+const { VERSIONS, providerBin, shasForBinary } = require('./golden-shas-lib.cjs');
 const MANIFEST = require('./golden-shas.json');
-const PROVIDERS = process.env.CLODE_PROVIDERS ||
-  path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local/share'), 'clode/providers');
 
-function providerBin(v) {
-  const p = path.join(PROVIDERS, v, 'claude');
-  return fs.existsSync(p) ? p : null;
-}
-function sha256(buf) { return crypto.createHash('sha256').update(buf).digest('hex'); }
-
-const VERSIONS = Object.keys(MANIFEST);
 const present = VERSIONS.filter(providerBin);
 const absent = VERSIONS.filter((v) => !providerBin(v));
 if (absent.length) console.error(`[regression] SKIP (no provider binary): ${absent.join(', ')}`);
@@ -43,23 +28,8 @@ for (const v of VERSIONS) {
   test(`extract+inspect sha parity for ${v}`, (t) => {
     const bin = providerBin(v);
     if (!bin) { t.skip(`no provider binary for ${v} (fetch with: clode update ${v})`); return; }
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'reg-'));
-    try {
-      const cli = path.join(tmp, 'cli.cjs');
-      const ex = spawnSync(NODE, [EXTRACT, bin, cli], { encoding: 'utf8' });
-      assert.strictEqual(ex.status, 0, `extract ${v}: ${ex.stderr}`);
-      const cliSha = sha256(fs.readFileSync(cli));
-      assert.strictEqual(cliSha, MANIFEST[v].cli_sha256, `cli_sha256 ${v}`);
-
-      const ins = spawnSync(NODE, [INSPECT, cli, '--json'],
-        { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-      assert.strictEqual(ins.status, 0, `inspect ${v}: ${ins.stderr}`);
-      // Normalize the only path-dependent field (input path) before hashing.
-      const doc = JSON.parse(ins.stdout); doc.file = 'cli.cjs';
-      const insSha = sha256(JSON.stringify(doc, null, 2));
-      assert.strictEqual(insSha, MANIFEST[v].inspect_json_sha256, `inspect_json_sha256 ${v}`);
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+    const { cli_sha256, inspect_json_sha256 } = shasForBinary(bin);
+    assert.strictEqual(cli_sha256, MANIFEST[v].cli_sha256, `cli_sha256 ${v}`);
+    assert.strictEqual(inspect_json_sha256, MANIFEST[v].inspect_json_sha256, `inspect_json_sha256 ${v}`);
   });
 }

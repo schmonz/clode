@@ -17,6 +17,7 @@ const CHANGELOG = [
   '## 2.1.200', '',
   '- Upgraded the bundled Bun runtime to 1.3',
   '- requires the native binary for gateway',
+  // NEGATIVE case: a non-HIGH, non-ASCII line that must NOT appear in the digest.
   '- A normal feature with an apostrophe ’ here', '',
   '## 2.1.195', '', '- old note', '',
 ].join('\n');
