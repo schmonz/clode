@@ -232,3 +232,17 @@ _watch_fixture() {
   [ "$status" -eq 0 ]
   echo "$output" | grep -q -- '--clode-watch'
 }
+
+@test "version_gt resolves semver via clode's own node_modules (npm-global layout)" {
+  TMP=$(mktempd)
+  mkdir -p "$TMP/app/bin" "$TMP/app/node_modules" "$TMP/empty"
+  # Symlink the real semver into a fake clode-own node_modules.
+  ln -s "$CLODE_DEPS/node_modules/semver" "$TMP/app/node_modules/semver"
+  run sh -c 'CLODE_SOURCED=1 . ./bin/clode
+    HERE="'"$TMP"'/app/bin"
+    CLODE_DEPS="'"$TMP"'/empty"; XDG_DATA_HOME="'"$TMP"'/empty"; NODE_PATH=""
+    version_gt 2.0.0 1.0.0 && echo OK'
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qx OK
+  rm -rf "$TMP"
+}

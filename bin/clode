@@ -476,8 +476,12 @@ EOF
 version_gt() {
   _vg_node="${NODE:-${CLODE_NODE:-$NODE_BAKED}}"
   [ -n "$_vg_node" ] || return 1
+  # Resolve semver from clode's dep store (CLODE_DEPS/XDG) AND clode's own
+  # node_modules ($HERE/../node_modules, the `npm install -g` layout) -- the
+  # watcher runs before set_node_path populates NODE_PATH, so resolve both here.
   _vg_np="${CLODE_DEPS:-${XDG_DATA_HOME:-$HOME/.local/share}/clode}/node_modules"
-  NODE_PATH="${NODE_PATH:+$NODE_PATH:}$_vg_np" "$_vg_node" -e \
+  _vg_own=""; [ -n "${HERE:-}" ] && _vg_own="$HERE/../node_modules"
+  NODE_PATH="${NODE_PATH:+$NODE_PATH:}$_vg_np${_vg_own:+:$_vg_own}" "$_vg_node" -e \
 'try{process.exit(require("semver").gt(process.argv[1],process.argv[2])?0:1)}catch(e){process.exit(2)}' \
     "$1" "$2" 2>/dev/null
 }
