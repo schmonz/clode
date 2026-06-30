@@ -17,9 +17,16 @@ test('carves one block, strips wrapper, finds the name', () => {
   assert.strictEqual(blocks[0].name, '/x/src/entrypoints/cli.js');
 });
 
-test('ASCII-only rstrip: a trailing 0xA0 byte is preserved (not stripped)', () => {
-  // Body ends with byte 0xA0 then the wrapper close. Python bytes.rstrip keeps 0xA0.
-  const data = buildBlock('/a/cli.js', 'B ');
+test('ASCII-only rstrip preserves a trailing 0xA0 byte (would die under \\s)', () => {
+  // The carved region ends in byte 0xA0 (explicit \xa0 escape so no editor can
+  // normalize it to a space). Python bytes.rstrip() leaves 0xA0 — so the region
+  // does NOT end in "})" and the wrapper is NOT trimmed. Under JS \s, 0xA0 would
+  // be stripped, then "})" trimmed -> "BODY"; this asserts the ASCII-only result.
+  const NBSP = '\xa0'; // charCode 0xA0 == latin1 byte 0xA0
+  const data = '/a/cli.js\x00' +
+    '// @bun @bun-cjs\n(function(exports, require, module, __filename, __dirname) {' +
+    'BODY})' + NBSP + '\x00';
   const blocks = carveBlocks(data);
-  assert.strictEqual(blocks[0].body, 'B ');
+  assert.strictEqual(blocks.length, 1);
+  assert.strictEqual(blocks[0].body, 'BODY})' + NBSP);
 });
