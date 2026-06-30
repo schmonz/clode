@@ -182,3 +182,47 @@ _watch_fixture() {
   [ -z "$output" ]
   rm -rf "$TMP"
 }
+
+@test "clode_watch_maybe fires (and stamps throttle) when none exists" {
+  _watch_fixture 2.0.0 1.0.0 high
+  run sh -c 'CLODE_SOURCED=1 . ./bin/clode
+    clode_watch_fire() { echo fired > "'"$TMP"'/marker"; }
+    clode_watch_maybe
+    test -f "'"$TMP"'/marker" && echo MARK
+    test -f "'"$CLODE_WATCH_DIR"'/last-watch" && echo STAMP'
+  echo "$output" | grep -qx MARK
+  echo "$output" | grep -qx STAMP
+  rm -rf "$TMP"
+}
+
+@test "clode_watch_maybe is a no-op under CLODE_NO_WATCH=1" {
+  _watch_fixture 2.0.0 1.0.0 high
+  run sh -c 'CLODE_NO_WATCH=1 CLODE_SOURCED=1 . ./bin/clode
+    clode_watch_fire() { echo fired > "'"$TMP"'/marker"; }
+    clode_watch_maybe
+    test -f "'"$TMP"'/marker" || echo NOMARK'
+  echo "$output" | grep -qx NOMARK
+  rm -rf "$TMP"
+}
+
+@test "clode_watch_maybe respects a fresh throttle (no re-fire)" {
+  _watch_fixture 2.0.0 1.0.0 high
+  mkdir -p "$CLODE_WATCH_DIR"; : > "$CLODE_WATCH_DIR/last-watch"
+  run sh -c 'CLODE_SOURCED=1 . ./bin/clode
+    clode_watch_fire() { echo fired > "'"$TMP"'/marker"; }
+    clode_watch_maybe
+    test -f "'"$TMP"'/marker" || echo NOMARK'
+  echo "$output" | grep -qx NOMARK
+  rm -rf "$TMP"
+}
+
+@test "clode_watch_maybe fires when the throttle is stale (interval 0)" {
+  _watch_fixture 2.0.0 1.0.0 high
+  mkdir -p "$CLODE_WATCH_DIR"; : > "$CLODE_WATCH_DIR/last-watch"
+  run sh -c 'CLODE_WATCH_INTERVAL=0 CLODE_SOURCED=1 . ./bin/clode
+    clode_watch_fire() { echo fired > "'"$TMP"'/marker"; }
+    clode_watch_maybe
+    test -f "'"$TMP"'/marker" && echo MARK'
+  echo "$output" | grep -qx MARK
+  rm -rf "$TMP"
+}

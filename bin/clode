@@ -518,6 +518,28 @@ clode_watch_banner() {
   return 0
 }
 
+# Spawn one watch cycle fully detached so it never adds startup latency or output.
+clode_watch_fire() {
+  ( "$SELF" --clode-watch >/dev/null 2>&1 & ) </dev/null >/dev/null 2>&1 || :
+}
+
+# Fire a watch cycle at most once per CLODE_WATCH_INTERVAL (default 1 day). Stamps
+# the throttle BEFORE firing so a failing cycle can't cause a re-fire storm.
+# Disabled by CLODE_NO_WATCH. Never blocks; always returns 0.
+clode_watch_maybe() {
+  [ -z "${CLODE_NO_WATCH:-}" ] || return 0
+  _wd=$(watch_dir); _throttle="$_wd/last-watch"
+  if [ -f "$_throttle" ]; then
+    _now=$(date +%s 2>/dev/null || echo 0)
+    _age=$(( _now - $(file_mtime "$_throttle") ))
+    [ "$_age" -ge "${CLODE_WATCH_INTERVAL:-86400}" ] || return 0
+  fi
+  mkdir -p "$_wd" 2>/dev/null || return 0
+  : > "$_throttle" 2>/dev/null || return 0
+  clode_watch_fire
+  return 0
+}
+
 main() {
   # Pull clode's own flags out of the args FIRST (in any position) so the bundle
   # never sees them. --clode-verbose un-silences clode's progress chatter; rotate
@@ -614,6 +636,13 @@ main() {
   extract_if_needed
 
   ensure_deps
+
+  # Watcher: on real sessions only (never on print-and-exit, which run no model),
+  # surface any prior HIGH notice, then maybe fire a fresh detached cycle.
+  case "$1" in
+    --version|-v|--help|-h) : ;;
+    *) clode_watch_banner; clode_watch_maybe ;;
+  esac
 
   exec_bundle "$@"
 }
