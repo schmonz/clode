@@ -12,7 +12,7 @@ teardown() {
 }
 
 @test "extractor carves fixture and Node boots it to the label" {
-  "$CLODE_PYTHON" test/mkfixture.py "$TMP/claude" hello
+  "$CLODE_NODE" test/mkfixture.cjs "$TMP/claude" hello
   "$CLODE_NODE" libexec/extract-claude-js.cjs "$TMP/claude" "$TMP/cli.cjs" 2>/dev/null
   cp libexec/bun-shim.cjs "$TMP/bun-shim.cjs"
   run "$CLODE_NODE" "$TMP/cli.cjs"

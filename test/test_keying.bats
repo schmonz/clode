@@ -19,7 +19,7 @@ teardown() {
 @test "version-encoded path uses version as cache key" {
   export CLODE_CACHE="$TMP/c1"
   mkdir -p "$TMP/share/versions"
-  "$CLODE_PYTHON" test/mkfixture.py "$TMP/share/versions/9.9.9" v
+  "$CLODE_NODE" test/mkfixture.cjs "$TMP/share/versions/9.9.9" v
   CLODE_CLAUDE_BIN="$TMP/share/versions/9.9.9" ./bin/clode >/dev/null 2>&1
   test -d "$TMP/c1/9.9.9"
 }
@@ -27,7 +27,7 @@ teardown() {
 @test "non-encoded path uses basename-sig as cache key" {
   export CLODE_CACHE="$TMP/c2"
   mkdir -p "$TMP/bin"
-  "$CLODE_PYTHON" test/mkfixture.py "$TMP/bin/claude" v
+  "$CLODE_NODE" test/mkfixture.cjs "$TMP/bin/claude" v
   CLODE_CLAUDE_BIN="$TMP/bin/claude" ./bin/clode >/dev/null 2>&1
   ls "$TMP/c2" | grep -q '^claude-'
 }
@@ -35,7 +35,7 @@ teardown() {
 @test "stable key: identical binary re-run yields exactly one cache entry" {
   export CLODE_CACHE="$TMP/c2"
   mkdir -p "$TMP/bin"
-  "$CLODE_PYTHON" test/mkfixture.py "$TMP/bin/claude" v
+  "$CLODE_NODE" test/mkfixture.cjs "$TMP/bin/claude" v
   CLODE_CLAUDE_BIN="$TMP/bin/claude" ./bin/clode >/dev/null 2>&1
   CLODE_CLAUDE_BIN="$TMP/bin/claude" ./bin/clode >/dev/null 2>&1
   n=$(ls "$TMP/c2" | wc -l | tr -d ' ')
@@ -49,7 +49,7 @@ teardown() {
   export CLODE_CACHE="$TMP/c3"
   LX="$TMP/libexec"; cp -R "$ROOT/libexec" "$LX"; export CLODE_LIBEXEC="$LX"
   mkdir -p "$TMP/bin"
-  "$CLODE_PYTHON" test/mkfixture.py "$TMP/bin/claude" v
+  "$CLODE_NODE" test/mkfixture.cjs "$TMP/bin/claude" v
   # first run extracts
   CLODE_CLAUDE_BIN="$TMP/bin/claude" ./bin/clode >/dev/null 2>&1
   # second run, extractor UNCHANGED: cache hit, no re-extract

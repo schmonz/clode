@@ -12,7 +12,7 @@ setup() {
   export CLODE_LIBEXEC="$ROOT/libexec"
   export CLODE_CACHE="$TMP/cache"
   BIN="$TMP/claude"
-  "$CLODE_PYTHON" test/mkfixture.py "$BIN" tok
+  "$CLODE_NODE" test/mkfixture.cjs "$BIN" tok
   export CLODE_CLAUDE_BIN="$BIN"
 }
 teardown() { rm -rf "$TMP"; }

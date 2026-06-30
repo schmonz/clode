@@ -22,7 +22,7 @@ setup() {
   export CLODE_CACHE="$TMP/cache"
   export CLODE_DEPS="$TMP/deps"        # overrides test_helper's sentinel
   mkdir -p "$TMP/bin"
-  "$CLODE_PYTHON" test/mkfixture.py "$TMP/bin/claude" v
+  "$CLODE_NODE" test/mkfixture.cjs "$TMP/bin/claude" v
   export CLODE_CLAUDE_BIN="$TMP/bin/claude"
   # Fake npm: log the call and create node_modules under --prefix (a "successful" install).
   export NPMLOG="$TMP/npmlog"

@@ -9,7 +9,7 @@ setup() {
   export XDG_DATA_HOME="$TMP/data"
   REPO="$TMP/repo"; V=9.9.9; PLAT=linux-x64
   mkdir -p "$REPO/$V/$PLAT"
-  "$CLODE_PYTHON" test/mkfixture.py "$REPO/$V/$PLAT/claude" v
+  "$CLODE_NODE" test/mkfixture.cjs "$REPO/$V/$PLAT/claude" v
   if command -v sha256sum >/dev/null 2>&1; then SUM=$(sha256sum "$REPO/$V/$PLAT/claude" | cut -d' ' -f1)
   else SUM=$(shasum -a 256 "$REPO/$V/$PLAT/claude" | cut -d' ' -f1); fi
   printf '%s\n' "$V" > "$REPO/stable"

@@ -11,11 +11,11 @@ setup() {
   export CLODE_LIBEXEC="$ROOT/libexec"
 
   mkdir -p "$TMP/share/versions" "$TMP/pathdir"
-  "$CLODE_PYTHON" test/mkfixture.py "$TMP/explicit" L-explicit
-  "$CLODE_PYTHON" test/mkfixture.py "$TMP/share/versions/9.9.9" L-versiondir
-  "$CLODE_PYTHON" test/mkfixture.py "$TMP/local-target" L-local
+  "$CLODE_NODE" test/mkfixture.cjs "$TMP/explicit" L-explicit
+  "$CLODE_NODE" test/mkfixture.cjs "$TMP/share/versions/9.9.9" L-versiondir
+  "$CLODE_NODE" test/mkfixture.cjs "$TMP/local-target" L-local
   ln -sf "$TMP/local-target" "$HOME/.local/bin/claude"
-  "$CLODE_PYTHON" test/mkfixture.py "$TMP/pathdir/claude" L-path
+  "$CLODE_NODE" test/mkfixture.cjs "$TMP/pathdir/claude" L-path
   chmod +x "$TMP/pathdir/claude"
 }
 

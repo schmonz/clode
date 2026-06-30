@@ -12,7 +12,7 @@ setup() {
   export CLODE_VERBOSE=1   # these tests assert on clode's 'extracting JS' /
                            # 'refreshed cached bun-shim' chatter, gated on verbose
   BIN="$TMP/usr/bin/claude"; mkdir -p "$(dirname "$BIN")"
-  "$CLODE_PYTHON" test/mkfixture.py "$BIN" v1
+  "$CLODE_NODE" test/mkfixture.cjs "$BIN" v1
   export CLODE_CLAUDE_BIN="$BIN"
 }
 
@@ -35,7 +35,7 @@ teardown() {
 
 @test "provider upgrade auto-invalidates cache and re-extracts v2" {
   ./bin/clode >/dev/null 2>/dev/null  # warm cache for v1
-  "$CLODE_PYTHON" test/mkfixture.py "$BIN" v2-updated
+  "$CLODE_NODE" test/mkfixture.cjs "$BIN" v2-updated
   run ./bin/clode
   grep -q 'extracting JS' <<<"$output"
   [[ "$output" == *"CLODE-FIXTURE v2-updated"* ]]
