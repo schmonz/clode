@@ -418,6 +418,20 @@ Run 'clode --help' for Claude Code's own help.
 EOF
 }
 
+# version_gt A B -> success (0) iff version A is strictly greater than B, using the
+# real `semver` ext-dep (the SAME module the bundle uses) -- never a hand-rolled
+# shell compare. semver is resolved from clode's dep store; node from the usual
+# precedence. Returns non-zero if node/semver is unavailable, so callers stay
+# conservative (the watcher then under-alarms rather than false-alarms).
+version_gt() {
+  _vg_node="${NODE:-${CLODE_NODE:-$NODE_BAKED}}"
+  [ -n "$_vg_node" ] || return 1
+  _vg_np="${CLODE_DEPS:-${XDG_DATA_HOME:-$HOME/.local/share}/clode}/node_modules"
+  NODE_PATH="${NODE_PATH:+$NODE_PATH:}$_vg_np" "$_vg_node" -e \
+'try{process.exit(require("semver").gt(process.argv[1],process.argv[2])?0:1)}catch(e){process.exit(2)}' \
+    "$1" "$2" 2>/dev/null
+}
+
 main() {
   # Pull clode's own flags out of the args FIRST (in any position) so the bundle
   # never sees them. --clode-verbose un-silences clode's progress chatter; rotate
