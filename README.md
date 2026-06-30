@@ -52,7 +52,8 @@ You'll have to live without:
 
 - `node` >= 24 and `npm`
 - `ugrep` >= 7.5.0, `bfs` >= 3.x (built with Oniguruma), and `rg` for fast searches
-- `python` >= 3 for the extractor (hey, maybe we should do that in JavaScript!)
+
+The runtime itself needs only `node` and a POSIX `sh`.
 
 Once you have those:
 

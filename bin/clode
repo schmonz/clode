@@ -12,10 +12,9 @@ set -e
 # path baking: discover tools at runtime, resolve helpers relative to this script,
 # read our version from the shipped VERSION file. Each is overridable via CLODE_*.
 # `|| :` keeps a not-found result from tripping `set -e` (require_node gives a clean
-# error if node is truly absent; CLODE_NODE/CLODE_PYTHON override).
+# error if node is truly absent; CLODE_NODE overrides).
 LIBEXEC_BAKED=""                                          # -> $HERE/../libexec
 NODE_BAKED="$(command -v node 2>/dev/null || :)"
-PYTHON_BAKED="$(command -v python3 2>/dev/null || :)"
 CLAUDE_BIN_BAKED=""                                       # -> resolve_claude_bin
 CLODE_SELF_VERSION=""                                     # -> read from VERSION below
 # --------------------------------------------------------------------------
@@ -416,16 +415,16 @@ clode_watch() {
   # Newer: scan ONLY the changelog for HIGH signals (no --bundle).
   _high=0; _cltmp="${TMPDIR:-/tmp}/clode-watch-cl.$$"
   if download_file "$CLODE_CHANGELOG_URL" "$_cltmp" 2>/dev/null \
-     && [ -n "$LIBEXEC" ] && [ -f "$LIBEXEC/clode-signals" ]; then
-    _json=$("$PYTHON" "$LIBEXEC/clode-signals" --version "$_latest" --prev "$_current" \
+     && [ -n "$LIBEXEC" ] && [ -f "$LIBEXEC/clode-signals.cjs" ]; then
+    _json=$("$NODE" "$LIBEXEC/clode-signals.cjs" --version "$_latest" --prev "$_current" \
               --changelog-file "$_cltmp" --json 2>/dev/null || :)
     # Matches clode-signals' json.dumps(indent=2) output (the '": "' separator).
     case "$_json" in *'"tier": "high"'*) _high=1 ;; esac
   fi
   write_watch_notice "$_notice" "$_latest" "$_current" "$_high" "$_now"
   if [ -n "$_manual" ]; then
-    if [ -f "$_cltmp" ] && [ -n "$LIBEXEC" ] && [ -f "$LIBEXEC/clode-signals" ]; then
-      "$PYTHON" "$LIBEXEC/clode-signals" --version "$_latest" --prev "$_current" \
+    if [ -f "$_cltmp" ] && [ -n "$LIBEXEC" ] && [ -f "$LIBEXEC/clode-signals.cjs" ]; then
+      "$NODE" "$LIBEXEC/clode-signals.cjs" --version "$_latest" --prev "$_current" \
         --changelog-file "$_cltmp" >&2 2>/dev/null || :
     fi
     if [ "$_high" = 1 ]; then
@@ -460,7 +459,7 @@ Key environment overrides:
   CLODE_VERBOSE=1     same as --clode-verbose
   CLODE_NO_WATCH=1    disable the opportunistic on-launch update-signal check
   CLODE_CLAUDE_BIN    upstream claude binary to extract from
-  CLODE_NODE          host node            CLODE_PYTHON   host python3
+  CLODE_NODE          host node
   CLODE_CACHE         extracted-bundle cache dir
   CLODE_CHANGELOG_URL release-notes source for the post-update signals digest
 
@@ -599,7 +598,6 @@ main() {
 
   # Host tools. Override per box.
   NODE="${CLODE_NODE:-$NODE_BAKED}"
-  PYTHON="${CLODE_PYTHON:-$PYTHON_BAKED}"
 
   # `clode update [channel]` fetches a fresh provider, then exits — no Node needed.
   if [ "$1" = "update" ]; then

@@ -88,7 +88,7 @@ _watch_fixture() {
 
 @test "clode_watch: newer version with HIGH signal writes high=1 notice" {
   _watch_fixture 2.0.0 1.0.0 high
-  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; PYTHON="$CLODE_PYTHON" LIBEXEC="$PWD/libexec" clode_watch'
+  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; NODE="$CLODE_NODE" LIBEXEC="$PWD/libexec" clode_watch'
   [ "$status" -eq 0 ]
   grep -qx 'latest=2.0.0'  "$CLODE_WATCH_DIR/watch-notice"
   grep -qx 'current=1.0.0' "$CLODE_WATCH_DIR/watch-notice"
@@ -98,7 +98,7 @@ _watch_fixture() {
 
 @test "clode_watch: newer version without HIGH signal writes high=0" {
   _watch_fixture 2.0.0 1.0.0 low
-  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; PYTHON="$CLODE_PYTHON" LIBEXEC="$PWD/libexec" clode_watch'
+  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; NODE="$CLODE_NODE" LIBEXEC="$PWD/libexec" clode_watch'
   [ "$status" -eq 0 ]
   grep -qx 'high=0' "$CLODE_WATCH_DIR/watch-notice"
   rm -rf "$TMP"
@@ -106,7 +106,7 @@ _watch_fixture() {
 
 @test "clode_watch: not newer writes high=0, never banners" {
   _watch_fixture 1.0.0 1.0.0 high
-  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; PYTHON="$CLODE_PYTHON" LIBEXEC="$PWD/libexec" clode_watch'
+  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; NODE="$CLODE_NODE" LIBEXEC="$PWD/libexec" clode_watch'
   [ "$status" -eq 0 ]
   grep -qx 'high=0' "$CLODE_WATCH_DIR/watch-notice"
   rm -rf "$TMP"
@@ -114,7 +114,7 @@ _watch_fixture() {
 
 @test "clode_watch: no provider store is a silent no-op (no notice written)" {
   _watch_fixture 2.0.0 "" high
-  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; PYTHON="$CLODE_PYTHON" LIBEXEC="$PWD/libexec" clode_watch'
+  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; NODE="$CLODE_NODE" LIBEXEC="$PWD/libexec" clode_watch'
   [ "$status" -eq 0 ]
   [ ! -f "$CLODE_WATCH_DIR/watch-notice" ]
   rm -rf "$TMP"
@@ -122,7 +122,7 @@ _watch_fixture() {
 
 @test "clode_watch manual mode: HIGH prints a Node-impact summary to stderr" {
   _watch_fixture 2.0.0 1.0.0 high
-  run --separate-stderr sh -c 'CLODE_SOURCED=1 . ./bin/clode; PYTHON="$CLODE_PYTHON" LIBEXEC="$PWD/libexec" clode_watch manual'
+  run --separate-stderr sh -c 'CLODE_SOURCED=1 . ./bin/clode; NODE="$CLODE_NODE" LIBEXEC="$PWD/libexec" clode_watch manual'
   [ "$status" -eq 0 ]
   echo "$stderr" | grep -q "may affect running under Node"
   rm -rf "$TMP"
@@ -130,7 +130,7 @@ _watch_fixture() {
 
 @test "clode_watch non-manual mode is silent (no stderr)" {
   _watch_fixture 2.0.0 1.0.0 high
-  run --separate-stderr sh -c 'CLODE_SOURCED=1 . ./bin/clode; PYTHON="$CLODE_PYTHON" LIBEXEC="$PWD/libexec" clode_watch'
+  run --separate-stderr sh -c 'CLODE_SOURCED=1 . ./bin/clode; NODE="$CLODE_NODE" LIBEXEC="$PWD/libexec" clode_watch'
   [ "$status" -eq 0 ]
   [ -z "$stderr" ]
   rm -rf "$TMP"
