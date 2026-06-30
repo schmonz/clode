@@ -29,3 +29,23 @@ setup() {
   echo "$output" | grep -qx not-lt
   echo "$output" | grep -qx gt-prerelease
 }
+
+@test "watch_dir honors CLODE_WATCH_DIR then XDG_CACHE_HOME then HOME" {
+  run sh -c 'CLODE_WATCH_DIR=/x/y CLODE_SOURCED=1 . ./bin/clode; watch_dir'
+  [ "$output" = "/x/y" ]
+  run sh -c 'unset CLODE_WATCH_DIR; XDG_CACHE_HOME=/c HOME=/h CLODE_SOURCED=1 . ./bin/clode; watch_dir'
+  [ "$output" = "/c/clode" ]
+  run sh -c 'unset CLODE_WATCH_DIR XDG_CACHE_HOME; HOME=/h CLODE_SOURCED=1 . ./bin/clode; watch_dir'
+  [ "$output" = "/h/.cache/clode" ]
+}
+
+@test "write_watch_notice emits parseable key=value lines" {
+  TMP=$(mktempd)
+  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; write_watch_notice "'"$TMP"'/n" 2.0.0 1.0.0 1 1700000000'
+  [ "$status" -eq 0 ]
+  grep -qx 'latest=2.0.0'      "$TMP/n"
+  grep -qx 'current=1.0.0'     "$TMP/n"
+  grep -qx 'high=1'            "$TMP/n"
+  grep -qx 'checked_at=1700000000' "$TMP/n"
+  rm -rf "$TMP"
+}

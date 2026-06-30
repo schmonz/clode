@@ -432,6 +432,24 @@ version_gt() {
     "$1" "$2" 2>/dev/null
 }
 
+# Where watcher state lives (throttle + notice). Independent of the bundle cache
+# (CLODE_CACHE) so it's stable across versions. CLODE_WATCH_DIR overrides.
+watch_dir() {
+  printf '%s\n' "${CLODE_WATCH_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/clode}"
+}
+
+# Epoch mtime of a file, portably (BSD stat -f, GNU stat -c). 0 if unknown.
+file_mtime() {
+  stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0
+}
+
+# Write the watch notice. $1 path  $2 latest  $3 current  $4 high(0/1)  $5 epoch.
+# key=value lines so the next-launch banner reads it without a JSON parser.
+write_watch_notice() {
+  printf 'latest=%s\ncurrent=%s\nhigh=%s\nchecked_at=%s\n' \
+    "$2" "$3" "$4" "$5" > "$1" 2>/dev/null || :
+}
+
 main() {
   # Pull clode's own flags out of the args FIRST (in any position) so the bundle
   # never sees them. --clode-verbose un-silences clode's progress chatter; rotate
