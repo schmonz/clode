@@ -25,10 +25,14 @@ teardown() { [ -n "${PACKDIR:-}" ] && rm -rf "$PACKDIR"; }
 
 @test "package ships the launcher, libexec helpers, manifest, version, man, license" {
   [ -n "${NPM_SKIP:-}" ] && skip "$NPM_SKIP"
-  for f in bin/clode libexec/bun-shim.cjs libexec/extract-claude-js \
-           libexec/inspect-claude-bundle package.json VERSION man/clode.1 LICENSE; do
+  for f in bin/clode libexec/bun-shim.cjs libexec/extract-claude-js.cjs \
+           libexec/inspect-claude-bundle.cjs package.json VERSION man/clode.1 LICENSE; do
     echo "$LIST" | grep -q "^package/$f\$" || { echo "missing: $f"; false; }
   done
+}
+
+@test "the shipped runtime (bin + libexec) has no python" {
+  ! grep -rIlE 'python3?|CLODE_PYTHON' "$BATS_TEST_DIRNAME/../bin" "$BATS_TEST_DIRNAME/../libexec"
 }
 
 @test "package excludes tests, build artifacts, and node_modules" {

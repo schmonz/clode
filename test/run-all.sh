@@ -8,6 +8,9 @@
 cd "$(dirname "$0")/.."
 # Discover host tools on PATH; CLODE_* override per machine. No hardcoded prefixes
 # (the Python/Node helpers also resolve via their `#!/usr/bin/env` shebangs).
+# Python is now a TEST-only dependency (the doctor-parity pytest + the bats that
+# drive mkfixture.py/pty_run.py/tui_screen.py). The shipped runtime (bin/ +
+# libexec/) is Python-free — node + sh only.
 : "${CLODE_NODE:=$(command -v node)}"
 : "${CLODE_PYTHON:=$(command -v python3)}"
 : "${CLODE_BATS:=$(command -v bats)}"
@@ -32,10 +35,7 @@ run() { # name, command...
   if out=$("$@" 2>&1); then echo "OK"; else echo "FAIL"; echo "$out" | sed 's/^/    /'; fails=$((fails+1)); fi
 }
 
-run "pytest extract"  "$PYTHON" -m pytest -q test/test_extract.py
-run "pytest inspect"  "$PYTHON" -m pytest -q test/test_inspect.py
 run "pytest doctor"   "$PYTHON" -m pytest -q test/test_doctor_parity.py
-run "pytest signals"  "$PYTHON" -m pytest -q test/test_signals.py
 run "node tests"      "$NODE" --test test/*.test.cjs
 run "bats suite"      "$BATS" test/
 
