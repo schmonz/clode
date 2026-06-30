@@ -56,7 +56,7 @@ teardown() {
   run env CLODE_CLAUDE_BIN="$TMP/bin/claude" ./bin/clode
   ! echo "$output" | grep -q 'extracting JS'
   # change the extractor (new size+mtime) -> must re-extract even though BIN is identical
-  printf '\n# clode-test touch\n' >> "$LX/extract-claude-js"
+  printf '\n# clode-test touch\n' >> "$LX/extract-claude-js.cjs"
   run env CLODE_CLAUDE_BIN="$TMP/bin/claude" ./bin/clode
   echo "$output" | grep -q 'extracting JS'
 }

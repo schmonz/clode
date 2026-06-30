@@ -143,7 +143,7 @@ extract_if_needed() {
   # only captures the binary, so fingerprint the extractor too and re-extract when
   # it changes — otherwise an extract-claude-js edit never reaches existing caches
   # until the binary moves. (The shim is handled separately, by cmp below.)
-  _extractor_sig=$(sig_of "$LIBEXEC/extract-claude-js")
+  _extractor_sig=$(sig_of "$LIBEXEC/extract-claude-js.cjs")
   if [ -f "$CACHE/cli.cjs" ] && [ -f "$CACHE/bun-shim.cjs" ] \
      && [ "$(cat "$CACHE/.extractor-sig" 2>/dev/null)" = "$_extractor_sig" ]; then
     # Cache hit on the bundle. Still refresh the cached shim if the installed
@@ -162,7 +162,7 @@ extract_if_needed() {
     clode_log "clode: extracting JS for $KEY..."
   fi
   mkdir -p "$CACHE"
-  if ! run_quiet "$PYTHON" "$LIBEXEC/extract-claude-js" "$BIN" "$CACHE/cli.cjs"; then
+  if ! run_quiet "$NODE" "$LIBEXEC/extract-claude-js.cjs" "$BIN" "$CACHE/cli.cjs"; then
     rm -f "$CACHE/cli.cjs"
     echo "clode: extraction failed (see error above); not caching." >&2
     exit 1
