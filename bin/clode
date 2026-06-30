@@ -497,6 +497,26 @@ write_watch_notice() {
     "$2" "$3" "$4" "$5" > "$1" 2>/dev/null || :
 }
 
+# Print ONE stderr line iff the last watch found a newer HIGH-signal version that
+# still applies (installed provider still older than it). The deliberate exception
+# to silent-by-default. Cheap: plain `read` loop, no JSON parser. Always returns 0.
+clode_watch_banner() {
+  _notice="$(watch_dir)/watch-notice"
+  [ -f "$_notice" ] || return 0
+  _nl=""; _nc=""; _nh=""
+  while IFS='=' read -r _k _v; do
+    case "$_k" in
+      latest) _nl="$_v" ;; current) _nc="$_v" ;; high) _nh="$_v" ;;
+    esac
+  done < "$_notice"
+  [ "$_nh" = 1 ] && [ -n "$_nl" ] || return 0
+  _providers="${CLODE_PROVIDERS:-${XDG_DATA_HOME:-$HOME/.local/share}/clode/providers}"
+  _cur=""; [ -L "$_providers/current" ] && _cur=$(readlink "$_providers/current" 2>/dev/null)
+  [ -n "$_cur" ] || _cur="$_nc"
+  version_gt "$_nl" "$_cur" || return 0
+  echo "clode: Claude Code $_nl is available and may affect running under Node (run 'clode --clode-watch' for details, 'clode update' to take it)." >&2
+}
+
 main() {
   # Pull clode's own flags out of the args FIRST (in any position) so the bundle
   # never sees them. --clode-verbose un-silences clode's progress chatter; rotate

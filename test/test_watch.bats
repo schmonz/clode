@@ -151,3 +151,34 @@ _watch_fixture() {
   [ "$status" -eq 0 ]
   rm -rf "$TMP"
 }
+
+@test "clode_watch_banner prints once for a HIGH notice that still applies" {
+  _watch_fixture 2.0.0 1.0.0 high
+  mkdir -p "$CLODE_WATCH_DIR"
+  printf 'latest=2.0.0\ncurrent=1.0.0\nhigh=1\nchecked_at=1\n' > "$CLODE_WATCH_DIR/watch-notice"
+  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; clode_watch_banner'
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qi "2.0.0"
+  echo "$output" | grep -qi "running under Node"
+  rm -rf "$TMP"
+}
+
+@test "clode_watch_banner is silent for a high=0 notice" {
+  _watch_fixture 2.0.0 1.0.0 low
+  mkdir -p "$CLODE_WATCH_DIR"
+  printf 'latest=2.0.0\ncurrent=1.0.0\nhigh=0\nchecked_at=1\n' > "$CLODE_WATCH_DIR/watch-notice"
+  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; clode_watch_banner'
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  rm -rf "$TMP"
+}
+
+@test "clode_watch_banner self-clears once the provider has caught up" {
+  _watch_fixture 2.0.0 2.0.0 high   # provider current advanced to 2.0.0
+  mkdir -p "$CLODE_WATCH_DIR"
+  printf 'latest=2.0.0\ncurrent=1.0.0\nhigh=1\nchecked_at=1\n' > "$CLODE_WATCH_DIR/watch-notice"
+  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; clode_watch_banner'
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  rm -rf "$TMP"
+}
