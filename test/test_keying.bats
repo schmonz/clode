@@ -8,6 +8,8 @@ setup() {
   TMP=$(mktempd)
   export HOME="$TMP/home"; mkdir -p "$HOME"
   export CLODE_LIBEXEC="$ROOT/libexec"
+  export CLODE_VERBOSE=1   # these tests use clode's 'extracting JS' chatter as the
+                           # cache-miss/hit signal, which is silent unless verbose
 }
 
 teardown() {

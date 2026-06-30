@@ -6,10 +6,13 @@
 .Nd run the latest Claude Code under host Node, no Bun runtime
 .Sh SYNOPSIS
 .Nm
+.Op Fl -clode-verbose
 .Op Ar claude-args ...
 .Nm
 .Cm update
 .Op Cm stable | latest | Ar version
+.Nm
+.Fl -clode-help
 .Nm
 .Fl -clode-version
 .Nm
@@ -31,8 +34,24 @@ it reads the upstream binary only as the source of the bundle and never
 redistributes it.
 .Pp
 .Fl -clode-version
-prints clode's own version and exits.
+prints clode's own version and exits, and
+.Fl -clode-help
+prints clode's own options and exits.
 All other arguments pass through to Claude Code.
+.Pp
+By default
+.Nm
+emits nothing of its own \(em only Claude Code's output \(em so it is a
+transparent stand-in.
+.Fl -clode-verbose
+(or
+.Ev CLODE_VERBOSE Ns = Ns Cm 1 )
+un-mutes clode's own progress, such as bundle extraction and dependency
+installation.
+The flag may appear in any position and is consumed by
+.Nm ;
+it is never passed through to Claude Code.
+Errors are always shown regardless.
 .Pp
 .Nm update
 .Op Cm stable | latest | Ar version
@@ -61,6 +80,9 @@ directly rather than
 .Fl -clode-internal-update .
 .Sh ENVIRONMENT
 .Bl -tag -width CLODE_VERSION_DIR
+.It Ev CLODE_VERBOSE
+When non-empty, un-mutes clode's own progress output (same as
+.Fl -clode-verbose ) .
 .It Ev CLODE_CLAUDE_BIN
 Absolute path to the upstream claude binary (highest precedence).
 .It Ev CLODE_VERSION_DIR

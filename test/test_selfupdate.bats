@@ -9,6 +9,8 @@ setup() {
   export HOME="$TMP/home"; mkdir -p "$HOME"
   export CLODE_CACHE="$TMP/cache"
   export CLODE_LIBEXEC="$ROOT/libexec"
+  export CLODE_VERBOSE=1   # these tests assert on clode's 'extracting JS' /
+                           # 'refreshed cached bun-shim' chatter, gated on verbose
   BIN="$TMP/usr/bin/claude"; mkdir -p "$(dirname "$BIN")"
   "$CLODE_PYTHON" test/mkfixture.py "$BIN" v1
   export CLODE_CLAUDE_BIN="$BIN"
