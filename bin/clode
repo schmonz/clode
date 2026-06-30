@@ -438,9 +438,9 @@ watch_dir() {
   printf '%s\n' "${CLODE_WATCH_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/clode}"
 }
 
-# Epoch mtime of a file, portably (BSD stat -f, GNU stat -c). 0 if unknown.
+# Epoch mtime of a file, portably (GNU stat -c, then BSD stat -f). 0 if unknown.
 file_mtime() {
-  stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0
+  stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0
 }
 
 # Write the watch notice. $1 path  $2 latest  $3 current  $4 high(0/1)  $5 epoch.

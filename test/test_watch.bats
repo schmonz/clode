@@ -49,3 +49,15 @@ setup() {
   grep -qx 'checked_at=1700000000' "$TMP/n"
   rm -rf "$TMP"
 }
+
+@test "file_mtime returns a single numeric epoch; 0 for missing" {
+  TMP=$(mktempd)
+  : > "$TMP/f"
+  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; file_mtime "'"$TMP"'/f"'
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | wc -l | tr -d " ")" -eq 0 ]   # one line, no trailing
+  case "$output" in *[!0-9]*) false ;; esac                  # digits only
+  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; file_mtime "'"$TMP"'/nope"'
+  [ "$output" = 0 ]
+  rm -rf "$TMP"
+}
