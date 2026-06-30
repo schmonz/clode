@@ -264,6 +264,10 @@ function inspect(p) {
   // distinct features backed by embedded native addons (dedup by description)
   const disabled = [...new Set(assets.map(featureForAsset).filter((f) => f))].sort();
 
+  // KEY ORDER IS A --json BYTE CONTRACT: pyJson() serializes with sortKeys:false,
+  // so the insertion order below is the on-disk order. Keep field order in sync;
+  // do NOT alphabetize. (inspect-diff.test.cjs catches a reorder while the Python
+  // oracle exists; after it's deleted this comment is the only guard.)
   return {
     file: p,
     bytes: data.length,
@@ -394,6 +398,11 @@ function coverage(r, shim) {
   const mods = shim.modules || {};
   const modulesMissing = Object.keys(mods).filter((m) => mods[m] === 'MISSING').sort();
   const modulesHostStub = Object.keys(mods).filter((m) => mods[m] === 'host-stub').sort();
+  // KEY ORDER IS A --json BYTE CONTRACT (pyJson sortKeys:false) — keep in sync.
+  // NOTE: this object intentionally OMITS snapshot_generator_present and
+  // doctor_load_anchor_present (matches the oracle). gateProblems()/humanCoverage()
+  // read those via getDefault(cov, ..., true), so their branches are always-true /
+  // dead by design. Do NOT "fix" by adding them here — it changes --json + --strict.
   return {
     implemented: implemented.slice().sort(),
     stubbed: stubbed.slice().sort(),
@@ -543,6 +552,8 @@ function opt(flag, def = null) {
 }
 
 function main() {
+  // pyJson required lazily here (not at top) so requiring this module for its
+  // exports (e.g. the unit tests) doesn't pull in clode-jsutil.
   const { pyJson } = require('./clode-jsutil.cjs');
   const argv = process.argv.slice(2);
   const consumed = new Set([opt('--shim'), opt('--node')]);
