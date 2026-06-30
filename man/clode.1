@@ -117,7 +117,7 @@ If set, disable the opportunistic on-launch update-signal check.
 Seconds between opportunistic checks (default 86400).
 .It Ev CLODE_WATCH_DIR
 Directory for watcher state (throttle + notice); default
-.Pa $XDG_CACHE_HOME/clode .
+.Pa ${XDG_CACHE_HOME:-$HOME/.cache}/clode .
 .It Ev CLODE_CACHE
 Cache root (default
 .Pa ${XDG_CACHE_HOME:-$HOME/.cache}/clode ) .
