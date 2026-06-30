@@ -30,6 +30,12 @@ under Node — e.g. a bundled-Bun-runtime bump, a raised Node floor, or new
 checkout it also writes a reviewable `signals/<ver>.json` snapshot. Override the
 notes source with `CLODE_CHANGELOG_URL` (air-gapped/testing).
 
+clode also watches for *concerning* upgrades on its own: about once a day a launch
+fires a background, changelog-only check, and if a newer Claude Code carries
+signals that bear on running under Node it prints a one-line notice next time you
+start. Run `clode --clode-watch` to check on demand, or set `CLODE_NO_WATCH=1` to
+turn the automatic check off.
+
 You'll have to live without:
 
 - image/sharp

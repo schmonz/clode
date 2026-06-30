@@ -44,6 +44,14 @@ setup() { cd "$BATS_TEST_DIRNAME/.." ; }
   grep -q 'CLODE_NODE' man/clode.1
 }
 
+@test "man page documents --clode-watch" {
+  grep -q 'clode-watch' man/clode.1
+}
+
+@test "man page documents CLODE_NO_WATCH" {
+  grep -q 'CLODE_NO_WATCH' man/clode.1
+}
+
 @test "mandoc lint runs without error (if mandoc available)" {
   command -v mandoc >/dev/null 2>&1 || skip "mandoc not available"
   mandoc -Tlint man/clode.1 || true

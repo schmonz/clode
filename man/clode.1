@@ -16,6 +16,8 @@
 .Nm
 .Fl -clode-version
 .Nm
+.Fl -clode-watch
+.Nm
 .Fl -clode-internal-update
 .Op Ar channel
 .Sh DESCRIPTION
@@ -78,6 +80,14 @@ You normally invoke
 .Nm update
 directly rather than
 .Fl -clode-internal-update .
+.Pp
+.Fl -clode-watch
+runs one update-signal check (is a newer Claude Code available, and does its
+changelog carry signals that bear on running under Node?), prints a summary, and
+exits.
+A normal launch also performs this check opportunistically, at most once per day,
+fully in the background, and prints a one-line notice on the next launch only when
+a newer version carries such signals.
 .Sh ENVIRONMENT
 .Bl -tag -width CLODE_VERSION_DIR
 .It Ev CLODE_VERBOSE
@@ -101,6 +111,13 @@ Which platform's build
 .Nm update
 fetches (default
 .Cm linux-x64 ) .
+.It Ev CLODE_NO_WATCH
+If set, disable the opportunistic on-launch update-signal check.
+.It Ev CLODE_WATCH_INTERVAL
+Seconds between opportunistic checks (default 86400).
+.It Ev CLODE_WATCH_DIR
+Directory for watcher state (throttle + notice); default
+.Pa $XDG_CACHE_HOME/clode .
 .It Ev CLODE_CACHE
 Cache root (default
 .Pa ${XDG_CACHE_HOME:-$HOME/.cache}/clode ) .

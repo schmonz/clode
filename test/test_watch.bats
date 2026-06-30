@@ -226,3 +226,9 @@ _watch_fixture() {
   echo "$output" | grep -qx MARK
   rm -rf "$TMP"
 }
+
+@test "clode --clode-help mentions --clode-watch" {
+  run ./bin/clode --clode-help
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q -- '--clode-watch'
+}

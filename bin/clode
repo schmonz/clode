@@ -453,9 +453,12 @@ clode-specific options (consumed by clode; everything else goes to Claude Code):
   --clode-version     print clode's own version and exit
   --clode-verbose     show clode's progress (extract/deps/etc.); silent by default,
                       so a normal launch emits only Claude Code's own output
+  --clode-watch       run one update-signal check now (newer version + signals
+                      that bear on running under Node), print a summary, and exit
 
 Key environment overrides:
   CLODE_VERBOSE=1     same as --clode-verbose
+  CLODE_NO_WATCH=1    disable the opportunistic on-launch update-signal check
   CLODE_CLAUDE_BIN    upstream claude binary to extract from
   CLODE_NODE          host node            CLODE_PYTHON   host python3
   CLODE_CACHE         extracted-bundle cache dir
