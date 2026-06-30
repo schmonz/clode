@@ -82,11 +82,11 @@ follow_wrapper() {
   printf '%s\n' "$_w"
 }
 
-# Fast size+mtime signature: GNU stat, then BSD stat, then a python fallback.
+# Fast size+mtime signature: GNU stat, then BSD stat, then a node fallback.
 sig_of() {
   stat -c '%s-%Y' "$1" 2>/dev/null && return 0
   stat -f '%z-%m' "$1" 2>/dev/null && return 0
-  "$PYTHON" -c 'import os,sys;s=os.stat(sys.argv[1]);print("%d-%d"%(s.st_size,int(s.st_mtime)))' "$1"
+  "$NODE" -e 'const s=require("fs").statSync(process.argv[1]);console.log(s.size+"-"+Math.trunc(s.mtimeMs/1000))' "$1"
 }
 
 # Pick an available SHA-256 tool (linux: sha256sum, macOS/BSD: shasum). Echoes hex digest.
