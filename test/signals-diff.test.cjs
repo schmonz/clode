@@ -69,6 +69,32 @@ test('JS clode-signals matches Python: --version only (no prev, no changelog)', 
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
+test('JS clode-signals matches Python: prev-snapshot delta path (⚠ markers changed)', () => {
+  // Exercises loadPrevSnapshot + phraseDeltas + render's "bundle markers changed"
+  // block (the ONLY place ⚠ markers + → are emitted) — untested by the cases above.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sigdiff-'));
+  const cl = path.join(tmp, 'CHANGELOG.md');
+  fs.writeFileSync(cl, CHANGELOG);
+  const D = path.join(tmp, 'snap');
+  const oneP = path.join(tmp, 'b1.bin');
+  const twoP = path.join(tmp, 'b2.bin');
+  fs.writeFileSync(oneP, 'x requires the native binary x');
+  fs.writeFileSync(twoP, 'requires the native binary ... requires the native binary');
+  // Seed the prev (2.1.195) snapshot with bundle count 1 (py==js bytes, so seed once).
+  run(PY_TOOL, ['--version', '2.1.195', '--bundle', oneP, '--snapshot-dir', D], false);
+  // Delta run: count 1 -> 2 triggers the markers-changed render block.
+  const args = ['--version', '2.1.200', '--prev', '2.1.195',
+    '--changelog-file', cl, '--bundle', twoP, '--snapshot-dir', D];
+  const py = run(PY_TOOL, args, false);
+  const js = run(JS_TOOL, args, true);
+  assert.strictEqual(js.status, py.status, 'exit code');
+  assert.strictEqual(js.stdout, py.stdout, 'delta-path stdout');
+  // Guard against a vacuous test: confirm the delta block actually rendered.
+  assert.ok(py.stdout.includes('→') && py.stdout.includes('bundle markers changed'),
+    'delta block present in output');
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
 test('JS clode-signals matches Python: --bundle phrase counts', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sigdiff-'));
   const cl = path.join(tmp, 'CHANGELOG.md');

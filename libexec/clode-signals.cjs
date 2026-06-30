@@ -203,4 +203,8 @@ function main(argv) {
   return 0; // always: warn-only, never block an update
 }
 
-process.exit(main(process.argv.slice(2)));
+// Mirror Python's `if __name__ == "__main__"`: only run as a CLI entry, so a
+// future require() of this module can't terminate the host process.
+if (require.main === module) process.exit(main(process.argv.slice(2)));
+
+module.exports = { main };
