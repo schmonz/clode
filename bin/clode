@@ -418,7 +418,7 @@ clode_watch() {
      && [ -n "$LIBEXEC" ] && [ -f "$LIBEXEC/clode-signals.cjs" ]; then
     _json=$("$NODE" "$LIBEXEC/clode-signals.cjs" --version "$_latest" --prev "$_current" \
               --changelog-file "$_cltmp" --json 2>/dev/null || :)
-    # Matches clode-signals' json.dumps(indent=2) output (the '": "' separator).
+    # Matches clode-signals.cjs' pyJson (json.dumps-identical) output (the '": "' separator).
     case "$_json" in *'"tier": "high"'*) _high=1 ;; esac
   fi
   write_watch_notice "$_notice" "$_latest" "$_current" "$_high" "$_now"

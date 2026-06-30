@@ -44,7 +44,7 @@ teardown() {
 
 @test "extractor change re-extracts the cached bundle (binary unchanged)" {
   # The bundle (cli.cjs) is a function of (binary, extractor logic), but the cache
-  # key only captures the binary. Without this, an edit to extract-claude-js never
+  # key only captures the binary. Without this, an edit to extract-claude-js.cjs never
   # reaches existing caches until the provider binary moves (the /doctor patch bug).
   export CLODE_CACHE="$TMP/c3"
   LX="$TMP/libexec"; cp -R "$ROOT/libexec" "$LX"; export CLODE_LIBEXEC="$LX"
