@@ -30,3 +30,30 @@ test('ASCII-only rstrip preserves a trailing 0xA0 byte (would die under \\s)', (
   assert.strictEqual(blocks.length, 1);
   assert.strictEqual(blocks[0].body, 'BODY})' + NBSP);
 });
+
+test('no markers -> empty list', () => {
+  assert.deepStrictEqual(carveBlocks('nothing to see here\x00plain text'), []);
+});
+
+test('block with no preceding .js name -> name is null', () => {
+  const data = 'no-name-here\x00' +
+    '// @bun @bun-cjs\n(function(exports, require, module, __filename, __dirname) {' +
+    'X})\x00';
+  const blocks = carveBlocks(data);
+  assert.strictEqual(blocks.length, 1);
+  assert.strictEqual(blocks[0].name, null);
+  assert.strictEqual(blocks[0].body, 'X');
+});
+
+test('multiple blocks carved in order with their names', () => {
+  const data =
+    '/a/first.js\x00' +
+    '// @bun @bun-cjs\n(function(exports, require, module, __filename, __dirname) {ONE})\x00' +
+    '/b/second.js\x00' +
+    '// @bun @bun-cjs\n(function(exports, require, module, __filename, __dirname) {TWO})\x00';
+  const blocks = carveBlocks(data);
+  assert.strictEqual(blocks.length, 2);
+  assert.deepStrictEqual([blocks[0].name, blocks[0].body], ['/a/first.js', 'ONE']);
+  assert.deepStrictEqual([blocks[1].name, blocks[1].body], ['/b/second.js', 'TWO']);
+  assert.ok(blocks[1].offset > blocks[0].offset);
+});

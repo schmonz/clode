@@ -32,4 +32,7 @@ function carveBlocks(data) {
   return blocks;
 }
 
-module.exports = { MARKER, carveBlocks, nearestName };
+// MARKER is intentionally NOT exported: it's a `g`-flagged (stateful `lastIndex`)
+// regex, so direct `.exec()`/`.test()` by a consumer would give cursor-dependent
+// results. carveBlocks owns it via matchAll (which clones it, so it stays reentrant).
+module.exports = { carveBlocks, nearestName };
