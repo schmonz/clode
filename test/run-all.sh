@@ -19,6 +19,17 @@ NODE="$CLODE_NODE"; PYTHON="$CLODE_PYTHON"; BATS="$CLODE_BATS"
 [ -n "$NODE" ]   || { echo "run-all: node not found on PATH (set CLODE_NODE)" >&2; exit 2; }
 [ -n "$PYTHON" ] || { echo "run-all: python3 not found on PATH (set CLODE_PYTHON)" >&2; exit 2; }
 [ -n "$BATS" ]   || { echo "run-all: bats not found on PATH (set CLODE_BATS)" >&2; exit 2; }
+# Test harness deps (node-pty, @xterm/headless) live in a SEPARATE manifest
+# (test/package.json -> test/node_modules), deliberately NOT in the root
+# package.json: a root `npm install` would also pull the shipped runtime deps into
+# the root node_modules, where the shim's ext-dep resolver would find them and
+# defeat the fail-loud tests (which require those deps to be ABSENT). The PTY tests
+# are NOT optional, so install the harness here and fail loudly rather than skip.
+if ! "$NODE" test/harness-preflight.cjs 2>/dev/null; then
+  echo "run-all: installing test harness deps (test/node_modules)..." >&2
+  npm install --prefix test >/dev/null 2>&1 || true
+fi
+"$NODE" test/harness-preflight.cjs || { echo "run-all: PTY test harness unavailable (see above)" >&2; exit 2; }
 # The runner is the single source of truth for the CLODE_OFFLINE gate the bats
 # tests read: callers pass a flag, not an env var, and an ambient CLODE_OFFLINE
 # never leaks in. Offline is the default; --online opts in.

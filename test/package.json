@@ -1,0 +1,10 @@
+{
+  "name": "clode-test-harness",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Test-only harness dependencies for clode's PTY/TUI tests. Kept OUT of the root package.json on purpose: the root node_modules must stay free of the shipped runtime deps (semver/ws/yaml/string-width/strip-ansi/wrap-ansi) or the fail-loud ext-dep tests would resolve them and stop failing. Installed into test/node_modules via `npm install --prefix test`; never shipped (the npm files allowlist excludes test/).",
+  "dependencies": {
+    "node-pty": "^1.0.0",
+    "@xterm/headless": "^5.5.0"
+  }
+}
