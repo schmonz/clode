@@ -37,6 +37,8 @@ The result is \`require()\`-able / runnable by Node >=18.
 const SENTINELS = ['commander', '@anthropic-ai/claude-code'];
 
 // The CLI entrypoint is ~17 MB; anything smaller is a bad carve.
+// Only enforced by contentChecks()/main() — not by verify() — so unit tests on
+// synthetic data still work.
 const MIN_OUTPUT_BYTES = 1000000;
 
 // sys.exit(str) equivalent: write the message + newline to stderr, exit 1.
@@ -45,6 +47,8 @@ function die(msg) {
   process.exit(1);
 }
 
+// Select the cli.js entry block by name. A bundle with no entrypoints/cli.js
+// block means the format changed — refuse to guess, so a bad carve never ships.
 function pickEntry(blocks) {
   if (!blocks.length) {
     die('error: no Bun @bun-cjs entry marker found — format may have changed');
@@ -89,9 +93,35 @@ globalThis.__clodeNativeUpdate = function () {
 `;
 
 // --- doctor installation-warnings contribution -------------------------------
+// Contribute clode's applet-skew findings as NATIVE Claude "Installation warnings"
+// data, rather than grafting our own /doctor section. The doctor diagnostics
+// builder returns an object `{installationType:…,warnings:L,packageManager:…,…}`
+// where `L` is the warnings array the "Installation warnings" section renders (each
+// {issue,fix} -> an `issue` line + a `fix` line). We splice a contribution that
+// pushes one {issue,fix} per skew finding onto L, just before that return.
+//
+// Anchor: `return{installationType:` is a UNIQUE, unminified marker (object keys are
+// not minified); the bounded `.{0,400}?` skips the intervening fields (incl. the
+// autoUpdates arrow's own `return`) to capture the warnings var from `,warnings:<id>,
+// packageManager:`. Same fail-loud contract as the other doctor patches: inject only
+// on an exactly-once match; never brick /doctor (skew still warns on stderr).
+//
+// The remedy (`fix`) is the applet-specific one bun-shim records on each finding
+// (`s.fix`), so the /doctor advice matches the stderr advice exactly (e.g. bfs's
+// "install bfs >= 3.3 built with Oniguruma ..."). A generic CLODE_<APPLET> hint is
+// the fallback if an older shim recorded a finding without `s.fix`.
+//
+// The 400 cap is ~2x the real-bundle gap (~210 chars between installationType: and
+// ,warnings:); a future Claude that grows past it fails the exactly-once match
+// (caught by inspect-claude-bundle --strict), never silently mis-injects.
 const INSTALL_WARNINGS =
   /return\{installationType:.{0,400}?,warnings:(?<arr>[A-Za-z0-9_$]{1,6}),packageManager:/gs;
 
+// JS spliced before the diagnostics return: defensively push each clode skew
+// finding onto the warnings array `arr`. Safe by construction: cannot throw on
+// well-formed findings — bun-shim always records `name`, `applet`, and `why` as
+// strings (CLODE_SHADOWS), so the string operations below are always valid. A
+// no-op when there is no skew.
 function _skewContribution(arr) {
   return (
     'globalThis.__clodeDoctor&&globalThis.__clodeDoctor.appletSkew&&'
@@ -102,6 +132,9 @@ function _skewContribution(arr) {
   );
 }
 
+// Splice the skew contribution before the doctor diagnostics return. Returns
+// [newBody, applied]; applied is false (body unchanged) unless the anchor matches
+// exactly once.
 function patchDoctorWarnings(body) {
   const m = [...body.matchAll(INSTALL_WARNINGS)];
   if (m.length !== 1) return [body, false];
@@ -111,14 +144,41 @@ function patchDoctorWarnings(body) {
 }
 
 // --- doctor eager-snapshot wiring --------------------------------------------
+// Make /doctor show the applet-skew on the FIRST open, not only after a shell
+// command. The skew probe (bun-shim's warnAppletSkew) runs when Claude generates
+// its shell snapshot, which Claude does lazily on first Bash use — so a fresh
+// /doctor is empty. We can't probe eagerly without the snapshot: the embedded flags
+// are built dynamically (ARGV0=${...} "$_cc_bin" -S dfs ...), so they only exist
+// once the snapshot script is generated. The fix: have /doctor trigger snapshot
+// generation (which fires our probe) and await it before rendering.
+//
+// Two anchors, both best-effort + fail-loud (never brick /doctor):
+//   1. SNAPSHOT_GEN — the no-arg generator `async function G(){let h=await S();
+//      return{provider:await I(h)}}`. Expose it as globalThis.__clodeEnsureSnapshot,
+//      set when its (eagerly-initialized) module body runs.
+//   2. DOCTOR_LOAD — the /doctor command's `load:()=>Promise.resolve().then(...)`.
+//      Chain an ensure-step before the original so generation completes (and the
+//      probe populates __clodeDoctor) before the screen renders.
+// If the bridge is unset when /doctor opens (generator module not yet initialized),
+// the ensure-step is a no-op and /doctor falls back to today's lazy behavior — no
+// regression. We apply BOTH or NEITHER (a half-wired patch is pointless).
+//
+// Short minified-id bounds ({1,6}/{1,8}) keep each anchor a tight linear scan over
+// minified names without matching across unrelated code.
 const SNAPSHOT_GEN =
   /async function (?<gen>[A-Za-z0-9_$]{1,6})\(\)\{let (?<h>[A-Za-z0-9_$]{1,6})=await [A-Za-z0-9_$]{1,6}\(\);return\{provider:await [A-Za-z0-9_$]{1,6}\(\k<h>\)\}\}/g;
 const DOCTOR_LOAD =
   /(?<prefix>name:"doctor".{0,240}?)load:\(\)=>Promise\.resolve\(\)\.then\((?<cb>\(\) => \([A-Za-z0-9_$]{1,8}\(\),[A-Za-z0-9_$]{1,8}\))\)/gs;
+// Defensive ensure-step: never throws (a sync throw becomes a rejection),
+// swallows errors so a snapshot failure can never brick /doctor; no-op when the
+// bridge isn't set yet.
 const _DOCTOR_ENSURE =
   '()=>{var g=globalThis.__clodeEnsureSnapshot;'
   + 'return g?Promise.resolve().then(g).catch(function(){}):void 0}';
 
+// Wire /doctor to generate the shell snapshot (firing the skew probe) before it
+// renders, so the applet-skew section shows on first open. Returns [body, applied];
+// applied is false (body unchanged) unless BOTH anchors match exactly once.
 function patchDoctorEager(body) {
   const gens = [...body.matchAll(SNAPSHOT_GEN)];
   const loads = [...body.matchAll(DOCTOR_LOAD)];
@@ -141,9 +201,25 @@ function patchDoctorEager(body) {
 }
 
 // --- pkg-manager autoupdater redirect ----------------------------------------
+// Claude Code's in-TUI autoupdater (the pkg-manager path) spawns an npm/install
+// command to fetch a new version, then shows "Update installed · Restart to apply".
+// Under clode there is no npm-managed install to update, so that spawn fails. We
+// redirect the spawn's argv to `"$CLODE_SELF" --clode-internal-update` (clode's own
+// host-agnostic fetch into the provider store) when CLODE_SELF is set, leaving the
+// argv untouched otherwise. The override is spliced right after the
+// auto_updater_start telemetry call, before the `let[..]=cmd` destructure that
+// feeds the spawn — so the spawn sees clode's argv. exit 0 -> the bundle's existing
+// success path renders "Restart to apply"; the next clode launch re-extracts the
+// freshly-fetched provider. Anchor PROVEN against real 2.1.179; same identifier
+// bounding rationale as the doctor anchors (short minified ids, linear scan).
 const AUTOUPDATER_SPAWN =
   /(?<pre>tengu_pkg_manager_auto_updater_start",[A-Za-z0-9_$]{1,6}\);)let\[[A-Za-z0-9_$]{1,6},\.\.\.[A-Za-z0-9_$]{1,6}\]=(?<cmd>[A-Za-z0-9_$]{1,6}),[A-Za-z0-9_$]{1,6}=await [A-Za-z0-9_$]{1,6}\(/g;
 
+// Override the pkg-manager autoupdater's spawn argv to call
+// `clode --clode-internal-update` (when CLODE_SELF is set). exit 0 -> the bundle's
+// existing success path shows "Update installed · Restart to apply"; next launch
+// re-extracts. Returns [newBody, applied]; applied false unless exactly one match
+// (fail-loud).
 function patchAutoupdater(body) {
   const m = [...body.matchAll(AUTOUPDATER_SPAWN)];
   if (m.length !== 1) return [body, false];
@@ -155,9 +231,22 @@ function patchAutoupdater(body) {
 }
 
 // --- native autoupdater redirect ---------------------------------------------
+// Claude Code's in-TUI NATIVE autoupdater installs in-process: after the
+// `tengu_native_auto_updater_start` telemetry it does `try{let T=await <fn>(<arg>),…`
+// where <fn> returns {wasUpdated,latestVersion,lockFailed}. Under clode that native
+// install is wrong (clode runs extracted JS, not a native install). We replace the
+// call with a CLODE_SELF-guarded clode spawn (globalThis.__clodeNativeUpdate, set
+// in the prelude) that resolves a success-shaped result, so the bundle's existing
+// "Restart to apply" path runs and the next launch re-extracts. The `,` after the
+// call bounds <arg>. Same fail-loud contract as the pkg-manager redirect. Anchor
+// PROVEN against real 2.1.179.
 const NATIVE_AUTOUPDATER =
   /(?<pre>tengu_native_auto_updater_start",(?:\{\}|[A-Za-z0-9_$]{1,6})\);try\{let [A-Za-z0-9_$]{1,6}=await )(?<call>[A-Za-z0-9_$]{1,6}\([A-Za-z0-9_$]{1,6}\)),/g;
 
+// Redirect the in-TUI NATIVE autoupdater to clode's internal fetch (when
+// CLODE_SELF is set). Replaces `await <fn>(<arg>)` with
+// `await (process.env.CLODE_SELF?globalThis.__clodeNativeUpdate():<fn>(<arg>))`.
+// Returns [newBody, applied]; applied false unless exactly one match (fail-loud).
 function patchNativeAutoupdater(body) {
   const m = [...body.matchAll(NATIVE_AUTOUPDATER)];
   if (m.length !== 1) return [body, false];
@@ -168,6 +257,11 @@ function patchNativeAutoupdater(body) {
   return [body.slice(0, m[0].index) + override + body.slice(m[0].index + m[0][0].length), true];
 }
 
+// Rewrite *body* to be Node CJS-compatible and prepend the prelude. Replaces all
+// `import.meta` references with `__import_meta` (defined by the prelude), then
+// contributes the clode applet-skew finding to /doctor's installation warnings,
+// wires /doctor to refresh the skew probe before rendering, and redirects both
+// autoupdaters. Replacing inside strings is harmless.
 function transform(body) {
   body = body.replace(/\bimport\.meta\b/g, '__import_meta');
   let applied;
