@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+"""clode-signals — surface Anthropic's direction-of-travel signals on update.
+
+clode runs Claude Code's JS under a Node host + Bun shim. Two kinds of upstream
+change can erode that: runtime-surface drift (new Bun.* / native deps — covered
+by inspect-claude-bundle) and *intent* signals that the surface scan can't see:
+prose in the release notes ("upgraded the bundled Bun runtime", "requires the
+native binary") and inert-but-revealing strings in the bundle ("install.sh
+instead of npm"). This tool scans both and writes a per-version snapshot so the
+delta is reviewable in git, not just printed once.
+
+Dependency-free and OFFLINE: the caller fetches text (the shell `clode_update`
+already downloads), this only reads files. WARN-ONLY: always exits 0; it never
+blocks an update. The committed snapshot (signals/<ver>.json) is the review gate.
+
+Usage:
+  clode-signals --version VER [--prev PREVVER]
+                [--bundle PATH]          raw provider binary or cli.cjs to scan
+                [--changelog-file PATH]  full CHANGELOG.md text (caller-fetched)
+                [--snapshot-dir DIR]     read prev snapshot here, write <VER>.json
+                [--json]
+"""
+import argparse, json, os, re, sys
+
+# --- bundle phrase scan -------------------------------------------------------
+# Plaintext markers (present in the raw bun binary too, so no extraction needed)
+# that reveal a hard dependency on the native runtime / a push off npm. tier
+# "high" => printed with a warning marker; "info" => tracked for its count delta.
+BUNDLE_PHRASES = [
+    ("requires the native binary", "high"),
+    ("install.sh instead of npm",  "high"),
+    ("not supported under npm",     "high"),
+    ("typeof Bun",                  "info"),   # native-runtime guards; watch the count
+]
+
+# --- changelog keyword scan ---------------------------------------------------
+# HIGH = directly bears on whether clode can keep running the JS under Node.
+# MED  = adjacent runtime/packaging churn worth a glance. Everything else is
+# ignored — bare "removed"/"no longer" is almost always a feature note, not a
+# clode signal, so we DON'T match it alone (that was the false-positive firehose).
+CHANGELOG_HIGH = [
+    r"\bbun\b.{0,30}\b(runtime|version|upgrade|requir)",
+    r"\b(requir|need)\w*\b.{0,30}\bnative\b",
+    r"\b(requir|need)\w*\b.{0,30}\bnode\b",   # host-Node floor: clode's MIN_NODE_MAJOR must track it
+    r"\bnative binary\b",
+    r"install\.sh",
+    r"\bno longer\b.{0,30}\b(npm|node|support)",
+    r"\bdrop\w*\b.{0,20}\bnpm\b",
+    r"\bdeprecat\w*\b.{0,40}\b(npm|node|install|runtime)\b",
+]
+CHANGELOG_MED = [
+    r"\bbun\b",
+    r"\bnode(\.js)?\b.{0,30}\b(version|requir|minimum|>=|v?\d)",
+    r"\bruntime\b",
+]
+
+_VER_RE = re.compile(r"^##\s+(\d+\.\d+\.\d+)\s*$")
+
+
+def ver_key(v):
+    return tuple(int(x) for x in v.split("."))
+
+
+def parse_changelog(text):
+    """Return [(version, [lines])] in file order (newest first, as published)."""
+    sections, cur, buf = [], None, []
+    for line in text.splitlines():
+        m = _VER_RE.match(line.strip())
+        if m:
+            if cur is not None:
+                sections.append((cur, buf))
+            cur, buf = m.group(1), []
+        elif cur is not None:
+            buf.append(line)
+    if cur is not None:
+        sections.append((cur, buf))
+    return sections
+
+
+def scan_changelog(text, version, prev=None):
+    """Flag lines in the (prev, version] release-note range. If prev is None or
+    not found, scan only `version`'s own section."""
+    want_hi = [re.compile(p, re.I) for p in CHANGELOG_HIGH]
+    want_md = [re.compile(p, re.I) for p in CHANGELOG_MED]
+    vk = ver_key(version)
+    pk = ver_key(prev) if prev else None
+    flags = []
+    for ver, lines in parse_changelog(text):
+        try:
+            k = ver_key(ver)
+        except ValueError:
+            continue
+        in_range = (k == vk) if pk is None else (pk < k <= vk)
+        if not in_range:
+            continue
+        for ln in lines:
+            s = ln.strip()
+            if not s or s == "-":
+                continue
+            tier = "high" if any(r.search(s) for r in want_hi) else (
+                "med" if any(r.search(s) for r in want_md) else None)
+            if tier:
+                flags.append({"version": ver, "tier": tier, "line": s.lstrip("- ").strip()})
+    return flags
+
+
+def scan_bundle(path):
+    """Count concern phrases in the bundle/binary bytes."""
+    counts = {}
+    if not path or not os.path.exists(path):
+        return counts
+    with open(path, "rb") as f:
+        data = f.read()
+    for phrase, _tier in BUNDLE_PHRASES:
+        counts[phrase] = data.count(phrase.encode())
+    return counts
+
+
+def load_prev_snapshot(snapshot_dir, prev):
+    if not (snapshot_dir and prev):
+        return None
+    p = os.path.join(snapshot_dir, prev + ".json")
+    if not os.path.exists(p):
+        return None
+    try:
+        with open(p) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def build_snapshot(version, bundle_counts, changelog_flags):
+    return {
+        "version": version,
+        "bundle_phrases": bundle_counts,
+        "changelog_flags": changelog_flags,
+    }
+
+
+def phrase_deltas(cur, prev_snap):
+    """New phrases or changed counts vs the previous snapshot."""
+    prev = (prev_snap or {}).get("bundle_phrases", {})
+    out = []
+    for phrase, n in cur.items():
+        was = prev.get(phrase)
+        if was is None and n:
+            out.append((phrase, None, n))
+        elif was is not None and n != was:
+            out.append((phrase, was, n))
+    return out
+
+
+def render(snapshot, prev_snap, prev_ver, range_flags):
+    L = []
+    ver = snapshot["version"]
+    hi = [f for f in range_flags if f["tier"] == "high"]
+    md = [f for f in range_flags if f["tier"] == "med"]
+    deltas = phrase_deltas(snapshot["bundle_phrases"], prev_snap)
+    range_desc = ver if not prev_ver else "%s..%s" % (prev_ver, ver)
+
+    L.append("clode signals for %s%s:" % (
+        ver, "" if not prev_ver else "  (release notes %s)" % range_desc))
+
+    if hi:
+        L.append("  release notes (HIGH — bears on running under Node):")
+        for f in hi:
+            L.append("    ⚠ %s: %s" % (f["version"], f["line"]))
+    if deltas:
+        L.append("  bundle markers changed vs %s:" % (prev_ver or "—"))
+        for phrase, was, now in deltas:
+            chg = "new, x%d" % now if was is None else "x%d → x%d" % (was, now)
+            mark = " ⚠" if phrase in (p for p, t in BUNDLE_PHRASES if t == "high") else ""
+            L.append("    %s (%s)%s" % (phrase, chg, mark))
+    if md and (hi or deltas or prev_snap is None):
+        L.append("  release notes (runtime/packaging churn, fyi):")
+        for f in md[:8]:
+            L.append("    · %s: %s" % (f["version"], f["line"]))
+
+    if not hi and not deltas and not md:
+        L.append("  no new native-binary / runtime / npm signals.")
+    return "\n".join(L)
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument("--version", required=True)
+    ap.add_argument("--prev")
+    ap.add_argument("--bundle")
+    ap.add_argument("--changelog-file")
+    ap.add_argument("--snapshot-dir")
+    ap.add_argument("--json", action="store_true")
+    a = ap.parse_args(argv)
+
+    bundle_counts = scan_bundle(a.bundle)
+    # Snapshot stores THIS version's own notes (reproducible regardless of which
+    # prev you updated from — so signals/<ver>.json is stable across machines).
+    # The printed digest scans the (prev, version] range for what's new to YOU.
+    own_flags, range_flags = [], []
+    if a.changelog_file and os.path.exists(a.changelog_file):
+        with open(a.changelog_file, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+        own_flags = scan_changelog(text, a.version)
+        range_flags = scan_changelog(text, a.version, a.prev) if a.prev else own_flags
+
+    snapshot = build_snapshot(a.version, bundle_counts, own_flags)
+    prev_snap = load_prev_snapshot(a.snapshot_dir, a.prev)
+
+    if a.snapshot_dir:
+        try:
+            os.makedirs(a.snapshot_dir, exist_ok=True)
+            with open(os.path.join(a.snapshot_dir, a.version + ".json"), "w") as f:
+                json.dump(snapshot, f, indent=2, sort_keys=True)
+                f.write("\n")
+        except OSError:
+            pass  # warn-only: a read-only install (npm) just gets the printed digest
+
+    if a.json:
+        print(json.dumps(snapshot, indent=2, sort_keys=True))
+    else:
+        print(render(snapshot, prev_snap, a.prev, range_flags))
+    return 0  # always: warn-only, never block an update
+
+
+if __name__ == "__main__":
+    sys.exit(main())

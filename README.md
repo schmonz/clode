@@ -22,7 +22,13 @@ Run `clode` anywhere you'd run `claude`.
 
 On first run, it'll install its `npm` dependencies into a user-owned dir, fetch and postprocess the latest upstream, then launch it.
 
-Updating is much the same as you're used to, modulo the postprocessing.
+Updating is much the same as you're used to, modulo the postprocessing. After
+each `clode update`, a warn-only *signals* digest flags anything in the new
+release's notes or bundle that bears on clode's ability to keep running the JS
+under Node — e.g. a bundled-Bun-runtime bump, a raised Node floor, or new
+"requires the native binary" gating. It never blocks the update; in a source
+checkout it also writes a reviewable `signals/<ver>.json` snapshot. Override the
+notes source with `CLODE_CHANGELOG_URL` (air-gapped/testing).
 
 You'll have to live without:
 

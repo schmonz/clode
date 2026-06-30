@@ -304,6 +304,29 @@ ensure_deps() {
 # ones Anthropic ships no binary for. We NEVER run the downloaded binary.
 CLODE_RELEASES_URL="${CLODE_RELEASES_URL:-https://downloads.claude.ai/claude-code-releases}"
 CLODE_FETCH_PLATFORM="${CLODE_FETCH_PLATFORM:-linux-x64}"
+# Release notes live on GitHub (not the downloads server). Used only by the
+# warn-only post-update signals digest; override for tests/air-gapped boxes.
+CLODE_CHANGELOG_URL="${CLODE_CHANGELOG_URL:-https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md}"
+
+# After an update, surface Anthropic's direction-of-travel signals: release-note
+# lines and bundle markers that bear on clode's ability to keep running the JS
+# under Node (e.g. "upgraded the bundled Bun runtime", "requires the native
+# binary"). Prints a digest; in a source checkout also writes a reviewable
+# signals/<ver>.json snapshot. STRICTLY best-effort — never affects the update's
+# exit status (warn-only by design). No-op when sourced without main() (no LIBEXEC).
+clode_signals_report() {
+  _ver="$1"; _prev="$2"; _bin="$3"
+  _tool="$LIBEXEC/clode-signals"
+  [ -n "$LIBEXEC" ] && [ -f "$_tool" ] || return 0
+  _cltmp="${TMPDIR:-/tmp}/clode-changelog.$$"; _cl=""
+  download_file "$CLODE_CHANGELOG_URL" "$_cltmp" 2>/dev/null && _cl="$_cltmp"
+  _sigdir="${CLODE_SIGNALS_DIR:-}"
+  if [ -z "$_sigdir" ] && [ -d "$HERE/../.git" ]; then _sigdir="$HERE/../signals"; fi
+  "$PYTHON" "$_tool" --version "$_ver" \
+    ${_prev:+--prev "$_prev"} ${_bin:+--bundle "$_bin"} \
+    ${_cl:+--changelog-file "$_cl"} ${_sigdir:+--snapshot-dir "$_sigdir"} 2>/dev/null || :
+  rm -f "$_cltmp" 2>/dev/null || :
+}
 
 clode_update() {
   _channel="${1:-stable}"
@@ -342,8 +365,11 @@ clode_update() {
     fi
     mv "$_tmp" "$_bin"; chmod +x "$_bin"
   fi
+  _prev_ver=""
+  [ -L "$_providers/current" ] && _prev_ver=$(readlink "$_providers/current" 2>/dev/null)
   ln -sfn "$_ver" "$_providers/current"
   echo "clode: updated to $_ver. Relaunch clode to use it." >&2
+  clode_signals_report "$_ver" "$_prev_ver" "$_bin" >&2 || :
 }
 
 main() {

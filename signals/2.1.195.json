@@ -1,0 +1,10 @@
+{
+  "bundle_phrases": {
+    "install.sh instead of npm": 2,
+    "not supported under npm": 0,
+    "requires the native binary": 4,
+    "typeof Bun": 6
+  },
+  "changelog_flags": [],
+  "version": "2.1.195"
+}

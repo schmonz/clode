@@ -16,6 +16,12 @@ setup() {
   printf '%s\n' "$V" > "$REPO/latest"
   printf '{"platforms":{"%s":{"checksum":"%s"}}}\n' "$PLAT" "$SUM" > "$REPO/$V/manifest.json"
   export CLODE_RELEASES_URL="file://$REPO"
+  # Keep the post-update signals digest offline and out of the real repo: a
+  # local changelog fixture + a temp snapshot dir (else it would fetch GitHub
+  # and write into this checkout's signals/ via the $HERE/../.git fallback).
+  printf '# Changelog\n\n## %s\n\n- Upgraded the bundled Bun runtime to 9.9\n- Fixed a thing\n' "$V" > "$REPO/CHANGELOG.md"
+  export CLODE_CHANGELOG_URL="file://$REPO/CHANGELOG.md"
+  export CLODE_SIGNALS_DIR="$TMP/signals"
 }
 teardown() { rm -rf "$TMP"; }
 
@@ -63,6 +69,15 @@ teardown() { rm -rf "$TMP"; }
   run env CLODE_CLAUDE_BIN=/nonexistent ./bin/clode --clode-internal-update stable
   [ "$status" -eq 0 ]
   test -f "$XDG_DATA_HOME/clode/providers/9.9.9/claude"
+}
+
+@test "clode update prints a warn-only signals digest and writes a snapshot" {
+  run env CLODE_CLAUDE_BIN=/nonexistent ./bin/clode update stable
+  [ "$status" -eq 0 ]                                   # warn-only: never blocks
+  echo "$output" | grep -q "clode signals for 9.9.9"
+  echo "$output" | grep -q "Upgraded the bundled Bun runtime"   # HIGH release-note signal
+  test -f "$TMP/signals/9.9.9.json"
+  grep -q '"version": "9.9.9"' "$TMP/signals/9.9.9.json"
 }
 
 @test "after clode update, launching clode extracts the fetched provider" {
