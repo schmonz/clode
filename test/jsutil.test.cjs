@@ -24,3 +24,17 @@ test('empty containers and nesting like python', () => {
   const got = pyJson({ x: {}, y: [], z: [{ k: 'é' }] }, { sortKeys: true });
   assert.strictEqual(got, '{\n  "x": {},\n  "y": [],\n  "z": [\n    {\n      "k": "\\u00e9"\n    }\n  ]\n}');
 });
+
+test('null values serialize like python (and an own __proto__ key survives)', () => {
+  assert.strictEqual(pyJson({ a: null }, { sortKeys: true }), '{\n  "a": null\n}');
+  // Python: json.dumps({"__proto__":1}, indent=2, sort_keys=True) -> keeps the key.
+  const obj = JSON.parse('{"__proto__":1,"a":2}'); // own enumerable __proto__
+  assert.strictEqual(pyJson(obj, { sortKeys: true }), '{\n  "__proto__": 1,\n  "a": 2\n}');
+});
+
+test('sortKeys does not mutate the input', () => {
+  const input = { b: 1, a: { d: 4, c: 3 } };
+  pyJson(input, { sortKeys: true });
+  assert.deepStrictEqual(Object.keys(input), ['b', 'a']);
+  assert.deepStrictEqual(Object.keys(input.a), ['d', 'c']);
+});

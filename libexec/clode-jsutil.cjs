@@ -13,10 +13,13 @@ function escapeNonAscii(s) {
 }
 
 // Deep-clone with object keys sorted (Python sort_keys=True). Arrays keep order.
+// Object.create(null) so an own "__proto__" key becomes an ordinary data property
+// (a plain `{}` would invoke the prototype setter, silently dropping it and
+// breaking byte-parity); JSON.stringify serializes null-proto objects normally.
 function sortDeep(v) {
   if (Array.isArray(v)) return v.map(sortDeep);
   if (v && typeof v === 'object') {
-    const o = {};
+    const o = Object.create(null);
     for (const k of Object.keys(v).sort()) o[k] = sortDeep(v[k]);
     return o;
   }
@@ -26,6 +29,9 @@ function sortDeep(v) {
 // Reproduce Python json.dumps(obj, indent=2[, sort_keys]). JSON.stringify with
 // indent=2 already uses ',\n' + ': ' separators and '{}'/'[]' for empties, which
 // match Python's indented form; only ensure_ascii and key sorting differ.
+// Parity holds for str/int/bool/null/array/object; floats (Python 1.0 vs JS 1)
+// and NaN/Infinity (Python keeps them, JSON.stringify emits null) are NOT
+// Python-identical — clode's callers emit none of those.
 function pyJson(obj, { sortKeys = false } = {}) {
   const v = sortKeys ? sortDeep(obj) : obj;
   return escapeNonAscii(JSON.stringify(v, null, 2));
