@@ -391,6 +391,52 @@ clode_update() {
   clode_signals_report "$_ver" "$_prev_ver" "$_bin" >&2 || :
 }
 
+# One stateless poll->detect->notify cycle for concerning upstream releases.
+# WARN-ONLY: always returns 0. Changelog-only (never downloads the ~240MB binary).
+# $1 nonempty => manual invocation: also print a human summary to stderr.
+clode_watch() {
+  _manual="${1:-}"
+  if command -v curl >/dev/null 2>&1; then CLODE_DOWNLOADER=curl
+  elif command -v wget >/dev/null 2>&1; then CLODE_DOWNLOADER=wget
+  else return 0; fi
+  _wd=$(watch_dir); mkdir -p "$_wd" 2>/dev/null || return 0
+  _notice="$_wd/watch-notice"
+  _latest=$(download_file "$CLODE_RELEASES_URL/stable" 2>/dev/null | tr -d '\r\n') || return 0
+  case "$_latest" in [0-9]*.[0-9]*.[0-9]*) : ;; *) return 0 ;; esac
+  _providers="${CLODE_PROVIDERS:-${XDG_DATA_HOME:-$HOME/.local/share}/clode/providers}"
+  _current=""
+  [ -L "$_providers/current" ] && _current=$(readlink "$_providers/current" 2>/dev/null)
+  [ -n "$_current" ] || return 0           # no clode-managed provider -> no-op
+  _now=$(date +%s 2>/dev/null || echo 0)
+  if ! version_gt "$_latest" "$_current"; then
+    write_watch_notice "$_notice" "$_latest" "$_current" 0 "$_now"
+    [ -n "$_manual" ] && echo "clode: up to date ($_current; latest stable $_latest)." >&2
+    return 0
+  fi
+  # Newer: scan ONLY the changelog for HIGH signals (no --bundle).
+  _high=0; _cltmp="${TMPDIR:-/tmp}/clode-watch-cl.$$"
+  if download_file "$CLODE_CHANGELOG_URL" "$_cltmp" 2>/dev/null \
+     && [ -n "$LIBEXEC" ] && [ -f "$LIBEXEC/clode-signals" ]; then
+    _json=$("$PYTHON" "$LIBEXEC/clode-signals" --version "$_latest" --prev "$_current" \
+              --changelog-file "$_cltmp" --json 2>/dev/null || :)
+    case "$_json" in *'"tier": "high"'*) _high=1 ;; esac
+  fi
+  write_watch_notice "$_notice" "$_latest" "$_current" "$_high" "$_now"
+  if [ -n "$_manual" ]; then
+    if [ -f "$_cltmp" ] && [ -n "$LIBEXEC" ] && [ -f "$LIBEXEC/clode-signals" ]; then
+      "$PYTHON" "$LIBEXEC/clode-signals" --version "$_latest" --prev "$_current" \
+        --changelog-file "$_cltmp" >&2 2>/dev/null || :
+    fi
+    if [ "$_high" = 1 ]; then
+      echo "clode: $_latest may affect running under Node (run 'clode update' to take it)." >&2
+    else
+      echo "clode: $_latest is available (no Node-impacting signals)." >&2
+    fi
+  fi
+  rm -f "$_cltmp" 2>/dev/null || :
+  return 0
+}
+
 # clode's own help (clode-specific flags only — `clode --help` still passes
 # through to Claude Code). Printed to stdout; exits 0.
 clode_help() {

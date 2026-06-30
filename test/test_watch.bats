@@ -61,3 +61,61 @@ setup() {
   [ "$output" = 0 ]
   rm -rf "$TMP"
 }
+
+# Build a fake releases repo + provider store. $1 = stable version, $2 = provider
+# current version (empty for none), $3 = "high"|"low" changelog content.
+_watch_fixture() {
+  TMP=$(mktempd)
+  export HOME="$TMP/home"; mkdir -p "$HOME"
+  export XDG_DATA_HOME="$TMP/data"
+  export XDG_CACHE_HOME="$TMP/cache"
+  export CLODE_WATCH_DIR="$TMP/cache/clode"
+  REPO="$TMP/repo"; mkdir -p "$REPO"
+  printf '%s\n' "$1" > "$REPO/stable"
+  if [ "$3" = high ]; then
+    printf '# Changelog\n\n## %s\n\n- requires the native binary now\n## %s\n\n- old\n' "$1" "${2:-0.0.0}" > "$REPO/CHANGELOG.md"
+  else
+    printf '# Changelog\n\n## %s\n\n- minor fix\n## %s\n\n- old\n' "$1" "${2:-0.0.0}" > "$REPO/CHANGELOG.md"
+  fi
+  export CLODE_RELEASES_URL="file://$REPO"
+  export CLODE_CHANGELOG_URL="file://$REPO/CHANGELOG.md"
+  export CLODE_PROVIDERS="$XDG_DATA_HOME/clode/providers"
+  if [ -n "$2" ]; then
+    mkdir -p "$CLODE_PROVIDERS/$2"; : > "$CLODE_PROVIDERS/$2/claude"
+    ln -sfn "$2" "$CLODE_PROVIDERS/current"
+  fi
+}
+
+@test "clode_watch: newer version with HIGH signal writes high=1 notice" {
+  _watch_fixture 2.0.0 1.0.0 high
+  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; PYTHON="$CLODE_PYTHON" LIBEXEC="$PWD/libexec" clode_watch'
+  [ "$status" -eq 0 ]
+  grep -qx 'latest=2.0.0'  "$CLODE_WATCH_DIR/watch-notice"
+  grep -qx 'current=1.0.0' "$CLODE_WATCH_DIR/watch-notice"
+  grep -qx 'high=1'        "$CLODE_WATCH_DIR/watch-notice"
+  rm -rf "$TMP"
+}
+
+@test "clode_watch: newer version without HIGH signal writes high=0" {
+  _watch_fixture 2.0.0 1.0.0 low
+  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; PYTHON="$CLODE_PYTHON" LIBEXEC="$PWD/libexec" clode_watch'
+  [ "$status" -eq 0 ]
+  grep -qx 'high=0' "$CLODE_WATCH_DIR/watch-notice"
+  rm -rf "$TMP"
+}
+
+@test "clode_watch: not newer writes high=0, never banners" {
+  _watch_fixture 1.0.0 1.0.0 high
+  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; PYTHON="$CLODE_PYTHON" LIBEXEC="$PWD/libexec" clode_watch'
+  [ "$status" -eq 0 ]
+  grep -qx 'high=0' "$CLODE_WATCH_DIR/watch-notice"
+  rm -rf "$TMP"
+}
+
+@test "clode_watch: no provider store is a silent no-op (no notice written)" {
+  _watch_fixture 2.0.0 "" high
+  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; PYTHON="$CLODE_PYTHON" LIBEXEC="$PWD/libexec" clode_watch'
+  [ "$status" -eq 0 ]
+  [ ! -f "$CLODE_WATCH_DIR/watch-notice" ]
+  rm -rf "$TMP"
+}
