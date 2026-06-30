@@ -401,7 +401,7 @@ clode_watch() {
   else return 0; fi
   _wd=$(watch_dir); mkdir -p "$_wd" 2>/dev/null || return 0
   _notice="$_wd/watch-notice"
-  _latest=$(download_file "$CLODE_RELEASES_URL/stable" 2>/dev/null | tr -d '\r\n') || return 0
+  _latest=$(download_file "$CLODE_RELEASES_URL/stable" 2>/dev/null | tr -d '\r\n')
   case "$_latest" in [0-9]*.[0-9]*.[0-9]*) : ;; *) return 0 ;; esac
   _providers="${CLODE_PROVIDERS:-${XDG_DATA_HOME:-$HOME/.local/share}/clode/providers}"
   _current=""
@@ -419,6 +419,7 @@ clode_watch() {
      && [ -n "$LIBEXEC" ] && [ -f "$LIBEXEC/clode-signals" ]; then
     _json=$("$PYTHON" "$LIBEXEC/clode-signals" --version "$_latest" --prev "$_current" \
               --changelog-file "$_cltmp" --json 2>/dev/null || :)
+    # Matches clode-signals' json.dumps(indent=2) output (the '": "' separator).
     case "$_json" in *'"tier": "high"'*) _high=1 ;; esac
   fi
   write_watch_notice "$_notice" "$_latest" "$_current" "$_high" "$_now"

@@ -119,3 +119,19 @@ _watch_fixture() {
   [ ! -f "$CLODE_WATCH_DIR/watch-notice" ]
   rm -rf "$TMP"
 }
+
+@test "clode_watch manual mode: HIGH prints a Node-impact summary to stderr" {
+  _watch_fixture 2.0.0 1.0.0 high
+  run --separate-stderr sh -c 'CLODE_SOURCED=1 . ./bin/clode; PYTHON="$CLODE_PYTHON" LIBEXEC="$PWD/libexec" clode_watch manual'
+  [ "$status" -eq 0 ]
+  echo "$stderr" | grep -q "may affect running under Node"
+  rm -rf "$TMP"
+}
+
+@test "clode_watch non-manual mode is silent (no stderr)" {
+  _watch_fixture 2.0.0 1.0.0 high
+  run --separate-stderr sh -c 'CLODE_SOURCED=1 . ./bin/clode; PYTHON="$CLODE_PYTHON" LIBEXEC="$PWD/libexec" clode_watch'
+  [ "$status" -eq 0 ]
+  [ -z "$stderr" ]
+  rm -rf "$TMP"
+}
