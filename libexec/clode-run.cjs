@@ -3,11 +3,13 @@
 // clode-run — JS port of bin/clode's bundle-launch path (write_update_guard_settings,
 // guard_settings_for_args, exec_bundle). Sets up the host environment and launches the
 // extracted cli.cjs under host node. Because a JS launcher cannot `exec` (replace its
-// own image) the way the sh launcher does, it spawns the bundle as a child with
-// stdio inherited and forwards the terminating signals — a faithful stand-in for
-// `exec`, including re-raising a killing signal so the parent's exit status reflects
-// it. Pure Node stdlib + a require of clode-hosttools (the host-env helpers).
+// own image) the way the sh launcher did, it spawns the bundle as a child with stdio
+// inherited — a two-process stand-in for `exec`. The child stays in the launcher's
+// foreground process group, so tty signals reach it directly; the parent ignores those
+// (SIGINT/SIGQUIT), forwards only directed signals (SIGTERM/SIGHUP), and mirrors the
+// child's exit status. Pure Node stdlib + a require of clode-hosttools (host-env helpers).
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const hosttools = require('./clode-hosttools.cjs');
@@ -96,10 +98,25 @@ function applyBundleEnv(opts = {}) {
 
 // Port of exec_bundle's launch. Sets up the env (applyBundleEnv), then spawns
 //   node cli.cjs [--settings <settingsPath>] <args...>
-// with stdio inherited, forwarding INT/TERM/HUP/QUIT to the child and re-raising a
-// killing signal so this process's exit status mirrors the child's — the faithful
-// stand-in for the sh `exec`. spawn/procOn/exit/killParent/stderr are injectable for
-// testing without terminating the test process.
+// with stdio inherited — a two-process stand-in for the sh `exec`.
+//
+// Signal model (matching exec's single-process observable behavior across two
+// processes): the child stays in the launcher's foreground process group, so the
+// KERNEL delivers tty-generated signals (Ctrl-C=SIGINT, Ctrl-\=SIGQUIT) to the child
+// directly, and its own handlers (the Ink TUI's "press Ctrl-C twice to exit"
+// interception) must apply, exactly as under exec. Therefore:
+//   - The parent IGNORES tty signals (SIGINT/SIGQUIT) via no-op handlers. This keeps
+//     the launcher from dying on Ctrl-C (which would kill it out from under the TUI)
+//     AND avoids re-forwarding them to the child (the kernel already delivered them —
+//     forwarding would DOUBLE-deliver and break the twice-to-exit UX).
+//   - The parent FORWARDS directed signals (SIGTERM/SIGHUP) to the child, since those
+//     are sent to the launcher pid only (e.g. `kill <clode-pid>`) and never reach the
+//     child on their own.
+// On child exit we tear the handlers down and mirror the child's status: a signal
+// death becomes 128 + signum (shell $? convention, e.g. 130 for SIGINT) so callers
+// see the right exit status; otherwise the child's own exit code.
+// spawn/procOn/procOff/exit/stderr are injectable for testing without terminating
+// the test process.
 function runBundle(opts = {}) {
   const {
     node,
@@ -112,8 +129,8 @@ function runBundle(opts = {}) {
     env = process.env,
     spawn: spawnFn = spawn,
     procOn = (s, cb) => process.on(s, cb),
+    procOff = (s, cb) => process.removeListener(s, cb),
     exit = (c) => process.exit(c),
-    killParent = (sig) => process.kill(process.pid, sig),
     stderr = process.stderr,
   } = opts;
 
@@ -122,14 +139,27 @@ function runBundle(opts = {}) {
   const argv = settingsPath ? ['--settings', settingsPath, ...args] : [...args];
   const child = spawnFn(node, [cliPath, ...argv], { stdio: 'inherit', env });
 
-  const fwd = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT'];
-  for (const s of fwd) procOn(s, () => { try { child.kill(s); } catch {} });
+  // Ignore tty signals (child gets them from the shared group); forward directed ones.
+  const handlers = {};
+  for (const s of ['SIGINT', 'SIGQUIT']) {
+    handlers[s] = () => {};
+    procOn(s, handlers[s]);
+  }
+  for (const s of ['SIGTERM', 'SIGHUP']) {
+    handlers[s] = () => { try { child.kill(s); } catch {} };
+    procOn(s, handlers[s]);
+  }
+  const cleanup = () => {
+    for (const s of Object.keys(handlers)) procOff(s, handlers[s]);
+  };
 
   child.on('exit', (code, signal) => {
-    if (signal) { killParent(signal); return; } // re-raise so exit status reflects the signal
+    cleanup();
+    if (signal) { exit(128 + os.constants.signals[signal]); return; }
     exit(code == null ? 1 : code);
   });
   child.on('error', (e) => {
+    cleanup();
     stderr.write('clode: failed to launch node: ' + e.message + '\n');
     exit(1);
   });

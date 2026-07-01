@@ -2,7 +2,8 @@
 // Unit tests for libexec/clode-run.cjs — the JS port of bin/clode's bundle-launch
 // path. Mirrors the sh-side coverage in test/test_update_guard_wiring.bats for the
 // guard-settings wiring, and adds coverage for the exec_bundle env setup + the
-// spawn-child-with-signal-forwarding stand-in for `exec`.
+// spawn-child (two-process) stand-in for `exec`: ignore tty signals, forward directed
+// signals, mirror the child's exit status.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -123,7 +124,7 @@ test('runBundle spawns node with cli.cjs + --settings + args, stdio inherit, mut
     node: NODE, cliPath: '/cache/cli.cjs', args: ['-p', 'hi'],
     settingsPath: '/cache/clode/guard.json', self: '/self/clode', libexec: REAL_LIBEXEC, env,
     spawn: (cmd, a, o) => { call = { cmd, a, o }; return child; },
-    procOn: () => {}, exit: () => {}, killParent: () => {},
+    procOn: () => {}, procOff: () => {}, exit: () => {},
   });
   assert.strictEqual(call.cmd, NODE);
   assert.deepStrictEqual(call.a, ['/cache/cli.cjs', '--settings', '/cache/clode/guard.json', '-p', 'hi']);
@@ -140,7 +141,7 @@ test('runBundle omits --settings when settingsPath is null', () => {
     node: NODE, cliPath: '/cache/cli.cjs', args: ['--version'], settingsPath: null,
     self: 'x', libexec: REAL_LIBEXEC, env: {},
     spawn: (cmd, a) => { call = { cmd, a }; return child; },
-    procOn: () => {}, exit: () => {}, killParent: () => {},
+    procOn: () => {}, procOff: () => {}, exit: () => {},
   });
   assert.deepStrictEqual(call.a, ['/cache/cli.cjs', '--version']);
 });
@@ -151,7 +152,7 @@ test('runBundle passes through the child exit code', () => {
   let exited = null;
   runBundle({
     node: NODE, cliPath: '/cli.cjs', args: [], settingsPath: null, self: 'x', libexec: REAL_LIBEXEC, env: {},
-    spawn: () => child, procOn: () => {}, exit: (c) => { exited = c; }, killParent: () => {},
+    spawn: () => child, procOn: () => {}, exit: (c) => { exited = c; }, procOff: () => {},
   });
   child.emit('exit', 3, null);
   assert.strictEqual(exited, 3);
@@ -162,37 +163,60 @@ test('runBundle maps a null exit code to 1', () => {
   let exited = null;
   runBundle({
     node: NODE, cliPath: '/cli.cjs', args: [], settingsPath: null, self: 'x', libexec: REAL_LIBEXEC, env: {},
-    spawn: () => child, procOn: () => {}, exit: (c) => { exited = c; }, killParent: () => {},
+    spawn: () => child, procOn: () => {}, exit: (c) => { exited = c; }, procOff: () => {},
   });
   child.emit('exit', null, null);
   assert.strictEqual(exited, 1);
 });
 
-test('runBundle re-raises a killing signal instead of exiting', () => {
+test('runBundle exits 128+signum when the child is killed by a signal', () => {
   const child = fakeChild();
   let exited = 'unset';
-  let raised = null;
   runBundle({
     node: NODE, cliPath: '/cli.cjs', args: [], settingsPath: null, self: 'x', libexec: REAL_LIBEXEC, env: {},
-    spawn: () => child, procOn: () => {}, exit: (c) => { exited = c; }, killParent: (s) => { raised = s; },
+    spawn: () => child, procOn: () => {}, procOff: () => {}, exit: (c) => { exited = c; },
   });
   child.emit('exit', null, 'SIGINT');
-  assert.strictEqual(raised, 'SIGINT');
-  assert.strictEqual(exited, 'unset', 'exit() must not be called when the child was signalled');
+  // shell $? convention: 128 + signal number (130 for SIGINT)
+  assert.strictEqual(exited, 128 + os.constants.signals.SIGINT);
 });
 
-test('runBundle forwards terminating signals to the child', () => {
+test('runBundle ignores tty signals (SIGINT/SIGQUIT) and forwards directed signals (SIGTERM/SIGHUP)', () => {
   const child = fakeChild();
   const handlers = {};
   runBundle({
     node: NODE, cliPath: '/cli.cjs', args: [], settingsPath: null, self: 'x', libexec: REAL_LIBEXEC, env: {},
-    spawn: () => child, procOn: (s, cb) => { handlers[s] = cb; }, exit: () => {}, killParent: () => {},
+    spawn: () => child, procOn: (s, cb) => { handlers[s] = cb; }, procOff: () => {}, exit: () => {},
   });
-  for (const s of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT']) {
+  // all four are registered on the parent...
+  for (const s of ['SIGINT', 'SIGQUIT', 'SIGTERM', 'SIGHUP']) {
     assert.strictEqual(typeof handlers[s], 'function', `handler registered for ${s}`);
-    handlers[s]();
   }
-  assert.deepStrictEqual(child.killed, ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT']);
+  // ...but tty signals (delivered to the child by the shared group) are NO-OPs:
+  // forwarding them would double-deliver and break the TUI's twice-to-exit UX.
+  handlers.SIGINT();
+  handlers.SIGQUIT();
+  assert.deepStrictEqual(child.killed, [], 'tty signals must not be forwarded');
+  // directed signals reach only the launcher pid, so they ARE forwarded to the child.
+  handlers.SIGTERM();
+  handlers.SIGHUP();
+  assert.deepStrictEqual(child.killed, ['SIGTERM', 'SIGHUP']);
+});
+
+test('runBundle removes its signal handlers when the child exits', () => {
+  const child = fakeChild();
+  const registered = new Set();
+  const removed = new Set();
+  runBundle({
+    node: NODE, cliPath: '/cli.cjs', args: [], settingsPath: null, self: 'x', libexec: REAL_LIBEXEC, env: {},
+    spawn: () => child,
+    procOn: (s) => { registered.add(s); },
+    procOff: (s) => { removed.add(s); },
+    exit: () => {},
+  });
+  child.emit('exit', 0, null);
+  assert.deepStrictEqual([...removed].sort(), [...registered].sort(),
+    'every registered signal handler is torn down on exit');
 });
 
 test('runBundle reports a launch error and exits 1', () => {
@@ -201,7 +225,7 @@ test('runBundle reports a launch error and exits 1', () => {
   let msg = '';
   runBundle({
     node: NODE, cliPath: '/cli.cjs', args: [], settingsPath: null, self: 'x', libexec: REAL_LIBEXEC, env: {},
-    spawn: () => child, procOn: () => {}, exit: (c) => { exited = c; }, killParent: () => {},
+    spawn: () => child, procOn: () => {}, exit: (c) => { exited = c; }, procOff: () => {},
     stderr: { write: (s) => { msg += s; } },
   });
   child.emit('error', new Error('boom'));
@@ -218,10 +242,61 @@ test('runBundle really spawns node and passes through its exit code', () => {
     runBundle({
       node: NODE, cliPath: cli, args: [], settingsPath: null, self: 'x',
       libexec: REAL_LIBEXEC, env: { ...process.env },
-      procOn: () => {}, killParent: () => {},
+      procOn: () => {}, procOff: () => {},
       exit: (c) => {
         try { assert.strictEqual(c, 7); resolve(); } catch (e) { reject(e); }
       },
     });
   });
+});
+
+// --- runBundle: end-to-end exit-status mapping, SAFELY isolated ----------------
+// This exercises the REAL child.on('exit') path (code AND signal) without the test
+// process ever ORIGINATING a signal. We spawn a helper that calls runBundle with a
+// fake bundle; when the signal case is under test the fake bundle KILLS ITSELF
+// (process.kill(process.pid, ...)). The helper is spawned {detached:true} so it is a
+// new session/process-group leader — fully isolated from this test's group — and the
+// only signal in play is the grandchild signalling its own pid. Nothing here can
+// reach the test runner's process group.
+const { spawn: realSpawn } = require('node:child_process');
+
+function runHelper(cliBody) {
+  return new Promise((resolve, reject) => {
+    const dir = tmpdir();
+    const cli = path.join(dir, 'fake-cli.cjs');
+    fs.writeFileSync(cli, cliBody);
+    const helper = path.join(dir, 'helper.cjs');
+    const runPath = path.resolve(REAL_LIBEXEC, 'clode-run.cjs');
+    fs.writeFileSync(helper,
+      `const { runBundle } = require(${JSON.stringify(runPath)});\n` +
+      `runBundle({\n` +
+      `  node: process.execPath,\n` +
+      `  cliPath: ${JSON.stringify(cli)},\n` +
+      `  args: [], settingsPath: null, self: 'x',\n` +
+      `  libexec: ${JSON.stringify(REAL_LIBEXEC)},\n` +
+      `  env: { ...process.env },\n` +
+      `});\n`);
+    // detached:true => new session + process group; the helper (and its grandchild)
+    // are isolated from the test runner's group. stdio ignored to keep output clean.
+    const proc = realSpawn(process.execPath, [helper], { detached: true, stdio: 'ignore' });
+    proc.on('error', reject);
+    proc.on('exit', (code, signal) => resolve({ code, signal }));
+  });
+}
+
+test('runBundle (real, isolated): a self-signalled child maps to 128+signum', async () => {
+  // The fake bundle kills ITSELF with SIGTERM; runBundle must exit 128+15 = 143.
+  const { code, signal } = await runHelper("process.kill(process.pid, 'SIGTERM');\n");
+  assert.strictEqual(signal, null, 'the launcher itself exits normally, not by signal');
+  assert.strictEqual(code, 128 + os.constants.signals.SIGTERM);
+});
+
+test('runBundle (real, isolated): a child that exits 7 maps to 7', async () => {
+  const { code } = await runHelper('process.exit(7);\n');
+  assert.strictEqual(code, 7);
+});
+
+test('runBundle (real, isolated): a child that exits 0 maps to 0', async () => {
+  const { code } = await runHelper('process.exit(0);\n');
+  assert.strictEqual(code, 0);
 });
