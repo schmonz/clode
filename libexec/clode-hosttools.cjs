@@ -145,6 +145,9 @@ function applyNodePath(opts = {}) {
   let dirs = opts.dirs;
   if (!dirs) {
     dirs = [];
+    // Under a SEA the ext-deps come from a materialized node_modules (a full path,
+    // not a depsRoot); it's the most authoritative, so it leads the clode-derived set.
+    if (opts.extraDir) dirs.push(opts.extraDir);
     if (here) dirs.push(path.join(path.resolve(here, '..'), 'node_modules'));
     if (depsRoot) dirs.push(path.join(depsRoot, 'node_modules'));
     if (node) dirs.push(path.join(path.dirname(node), '..', 'lib', 'node_modules'));

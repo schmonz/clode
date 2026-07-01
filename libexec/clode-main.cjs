@@ -88,6 +88,26 @@ function requireNode(node, opts = {}) {
   return hosttools.requireNodeVersionOrExit({ versionString: ver, stderr, exit });
 }
 
+// Resolve where the bundle's runtime ext-deps (ws, yaml, string-width, ...) and the
+// bun-shim come from, branching on SEA:
+//   - SEA: materialize both from embedded assets (no npm). Returns the materialized
+//     node_modules (seaDepsNM, for NODE_PATH) and the materialized bun-shim path
+//     (bunShimSrc, for the extractor).
+//   - npm/source: ensureDeps installs the ext-deps; the bun-shim comes from libexec
+//     (bunShimSrc undefined -> extractIfNeeded's default). seaDepsNM is null.
+// sea/deps are injected (default to the real modules) so the branch is unit-testable
+// without a real SEA.
+function prepareRuntimeDeps(opts) {
+  const { sea, deps, cacheRoot, libexec, here, verbose, env } = opts;
+  if (sea.isSea()) {
+    const seaDepsNM = sea.materializeDeps({ cacheDir: cacheRoot });
+    const bunShimSrc = sea.materializeBunShim({ destDir: path.join(cacheRoot, 'sea-deps') });
+    return { seaDepsNM, bunShimSrc };
+  }
+  deps.ensureDeps({ libexec, here, verbose, env });
+  return { seaDepsNM: null, bunShimSrc: undefined };
+}
+
 // main(argv, {self}) — async because it awaits clodeUpdate/clodeWatch.
 async function main(argv, opts = {}) {
   const env = process.env;
@@ -182,8 +202,15 @@ async function main(argv, opts = {}) {
     || path.join(env.XDG_CACHE_HOME || path.join(env.HOME || '', '.cache'), 'clode');
   const cache = path.join(cacheRoot, key);
 
-  extract.extractIfNeeded({ bin, cacheDir: cache, libexec: LIBEXEC, verbose, node, key });
-  deps.ensureDeps({ libexec: LIBEXEC, here: HERE, verbose, env });
+  // Under a SEA, the ext-deps + bun-shim are materialized from embedded assets (no
+  // npm/libexec); otherwise ensureDeps installs the deps and the shim comes from
+  // libexec. Both feed the extractor (bunShimSrc) and the launch (seaDepsNM).
+  const sea = require('./clode-sea.cjs');
+  const { seaDepsNM, bunShimSrc } = prepareRuntimeDeps({
+    sea, deps, cacheRoot, libexec: LIBEXEC, here: HERE, verbose, env,
+  });
+
+  extract.extractIfNeeded({ bin, cacheDir: cache, libexec: LIBEXEC, verbose, node, key, bunShimSrc });
 
   // Where ensure_deps put the runtime ext-deps (ws, yaml, string-width, ...): the
   // sh keeps DEPS_ROOT as a shell var visible to set_node_path; here we recompute it
@@ -208,6 +235,7 @@ async function main(argv, opts = {}) {
     self,
     libexec: LIBEXEC,
     depsRoot,
+    seaDepsNM,
     env,
   });
 }
@@ -239,4 +267,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { main, clodeHelp, requireNode, runAsNodeIfRequested };
+module.exports = { main, clodeHelp, requireNode, runAsNodeIfRequested, prepareRuntimeDeps };

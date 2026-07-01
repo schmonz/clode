@@ -80,7 +80,7 @@ function guardSettingsForArgs(args = [], opts = {}) {
 //   maybe_default_cert_store, set_ripgrep_env, set_node_path, CLODE_SELF=self.
 // Mutates and returns env.
 function applyBundleEnv(opts = {}) {
-  const { node, self, libexec, env = process.env } = opts;
+  const { node, self, libexec, seaDepsNM, env = process.env } = opts;
   const depsRoot = 'depsRoot' in opts ? opts.depsRoot : env.DEPS_ROOT;
   setIfUnset(env, 'DISABLE_INSTALLATION_CHECKS', '1');
   setIfUnset(env, 'NODE_USE_ENV_PROXY', '1');
@@ -91,7 +91,7 @@ function applyBundleEnv(opts = {}) {
   // yields the same package root as path.resolve(HERE,'..'). depsRoot (ensure_deps's
   // DEPS_ROOT, threaded from the launcher) + the node prefix's global node_modules
   // come from the caller/node exactly as in sh's set_node_path.
-  hosttools.applyNodePath({ env, here: libexec, depsRoot, node });
+  hosttools.applyNodePath({ env, here: libexec, depsRoot, node, extraDir: seaDepsNM });
   // Hand the bundle's in-TUI autoupdater a way back to this launcher.
   if (self != null) env.CLODE_SELF = self;
   return env;
@@ -127,6 +127,7 @@ function runBundle(opts = {}) {
     self,
     libexec,
     depsRoot,
+    seaDepsNM,
     env = process.env,
     spawn: spawnFn = spawn,
     procOn = (s, cb) => process.on(s, cb),
@@ -145,7 +146,7 @@ function runBundle(opts = {}) {
     env.CLODE_SEA_RUN_AS_NODE = '1';
   }
 
-  applyBundleEnv({ node, self, libexec, depsRoot, env });
+  applyBundleEnv({ node, self, libexec, depsRoot, seaDepsNM, env });
 
   const argv = settingsPath ? ['--settings', settingsPath, ...args] : [...args];
   const child = spawnFn(node, [cliPath, ...argv], { stdio: 'inherit', env });

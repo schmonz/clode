@@ -97,7 +97,9 @@ function extractIfNeeded(opts) {
   const extractorSig = sigOf(path.join(libexec, 'extract-claude-js.cjs'));
   const cliPath = path.join(cacheDir, 'cli.cjs');
   const cacheShim = path.join(cacheDir, 'bun-shim.cjs');
-  const srcShim = path.join(libexec, 'bun-shim.cjs');
+  // The bun-shim source is libexec/bun-shim.cjs in the npm/source layout; under a
+  // SEA the caller passes the materialized (embedded-asset) shim instead.
+  const srcShim = opts.bunShimSrc || path.join(libexec, 'bun-shim.cjs');
   const sigPath = path.join(cacheDir, '.extractor-sig');
 
   if (isFile(cliPath) && isFile(cacheShim) && readSig(sigPath) === extractorSig) {
