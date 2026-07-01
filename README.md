@@ -78,14 +78,29 @@ rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/clode"
 
 - `node` >= 24 and `npm` (same as running clode)
 - `bats`
+- on Linux (and anywhere `node-pty` has no prebuilt binary): a C/C++ toolchain
+  to compile it — `python3`, `make`, and a C++ compiler (`g++`/`clang++`). These
+  are the standard `node-gyp` build deps.
 
 The PTY/TUI tests drive clode under a pseudo-terminal via `node-pty` +
 `@xterm/headless`. Those are declared in a separate `test/package.json` and
 install into `test/node_modules`; `npm test` installs them automatically on first
-run (or run `npm install --prefix test` yourself). `node-pty` needs a prebuilt
-binary for your platform, or a C/C++ toolchain to compile one. These tests are
-**not optional** — the suite fails loudly rather than skipping if the harness
-can't load.
+run (or run `npm install --prefix test` yourself). These tests are **not
+optional** — the suite fails loudly rather than skipping if the harness can't
+load.
+
+> **First install compiles `node-pty` and can take a few minutes.** `node-pty`
+> ships prebuilt binaries only for macOS and Windows; on **Linux** there is no
+> prebuild, so `npm install` compiles it from source with `node-gyp` (hence the
+> toolchain above). The very first build also downloads the Node C++ headers for
+> your Node version, so it may sit "quiet" for a while — it is not hung. Later
+> installs reuse the cached headers and finish in seconds.
+>
+> If you install with a package manager that blocks dependency build scripts by
+> default (e.g. **pnpm** or **bun**), the compile is skipped and `node-pty` loads
+> with "no prebuilt binary"; approve its build script first (pnpm:
+> `pnpm approve-builds`, or add it to `onlyBuiltDependencies`; bun:
+> `trustedDependencies`). Plain `npm` runs the build script without prompting.
 
 > **A bare `npm install` at the repo root is tolerated, but unnecessary.** The
 > "fail-loud" tests (which assert clode dies with a clear message when a runtime dep

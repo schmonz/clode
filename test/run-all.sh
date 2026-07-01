@@ -25,8 +25,17 @@ NODE="$CLODE_NODE"; BATS="$CLODE_BATS"
 # the "dep is ABSENT" assertions. The PTY tests are NOT optional, so install the
 # harness here and fail loudly rather than skip.
 if ! "$NODE" test/harness-preflight.cjs 2>/dev/null; then
-  echo "run-all: installing test harness deps (test/node_modules)..." >&2
-  npm install --prefix test >/dev/null 2>&1 || true
+  echo "run-all: installing PTY test harness deps into test/node_modules..." >&2
+  echo "run-all: node-pty has no Linux prebuilt binary, so it compiles from source" >&2
+  echo "run-all: (needs python3 + a C/C++ toolchain; the first build also downloads" >&2
+  echo "run-all:  Node headers, so it can take a few minutes — output is shown below)" >&2
+  # Do NOT swallow npm's output or its exit status: a slow source build must be
+  # visible (else it looks like a hang), and a failed one must fail loud with the
+  # real node-gyp error rather than surfacing later as an opaque "harness missing".
+  if ! npm install --prefix test; then
+    echo "run-all: harness dep install failed (see npm output above)" >&2
+    exit 2
+  fi
 fi
 "$NODE" test/harness-preflight.cjs || { echo "run-all: PTY test harness unavailable (see above)" >&2; exit 2; }
 # The runner is the single source of truth for the CLODE_OFFLINE gate the bats
