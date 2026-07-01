@@ -117,8 +117,11 @@ async function main(argv, opts = {}) {
   const HERE = path.join(ROOT, 'bin');
 
   // Version from the shipped VERSION file (command-sub strips trailing newlines).
-  let version = 'dev';
-  try { version = fs.readFileSync(path.join(ROOT, 'VERSION'), 'utf8').replace(/\n+$/, '') || 'dev'; } catch { /* dev */ }
+  // The file wins in the npm/source layout; the esbuilt bundle/SEA can't find it
+  // (__dirname is build/sea, not the package root), so it falls back to the version
+  // esbuild injects via --define (undefined outside a bundle -> the typeof guard).
+  let version = (typeof __CLODE_BUNDLE_VERSION__ !== 'undefined' && __CLODE_BUNDLE_VERSION__) || 'dev';
+  try { version = fs.readFileSync(path.join(ROOT, 'VERSION'), 'utf8').replace(/\n+$/, '') || version; } catch { /* keep injected/dev */ }
 
   const first = args[0];
 
@@ -206,6 +209,16 @@ async function main(argv, opts = {}) {
     libexec: LIBEXEC,
     depsRoot,
     env,
+  });
+}
+
+// Self-run entry: when this module is the process's main module (the esbuilt SEA
+// bundle, or `node libexec/clode-main.cjs`), behave like bin/clode's prologue caller.
+// Guarded so it does NOT run when bin/clode require()s us and calls main() itself.
+if (require.main === module) {
+  main(process.argv.slice(2), { self: process.execPath }).catch((e) => {
+    process.stderr.write('clode: ' + ((e && e.stack) || e) + '\n');
+    process.exit(1);
   });
 }
 
