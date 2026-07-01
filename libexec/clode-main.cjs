@@ -88,24 +88,25 @@ function requireNode(node, opts = {}) {
   return hosttools.requireNodeVersionOrExit({ versionString: ver, stderr, exit });
 }
 
-// Resolve where the bundle's runtime ext-deps (ws, yaml, string-width, ...) and the
-// bun-shim come from, branching on SEA:
-//   - SEA: materialize both from embedded assets (no npm). Returns the materialized
-//     node_modules (seaDepsNM, for NODE_PATH) and the materialized bun-shim path
-//     (bunShimSrc, for the extractor).
-//   - npm/source: ensureDeps installs the ext-deps; the bun-shim comes from libexec
-//     (bunShimSrc undefined -> extractIfNeeded's default). seaDepsNM is null.
+// Resolve where the bundle's runtime deps and support files come from, branching on
+// SEA — but only to produce ON-DISK dirs that mirror the npm/source layout, so the
+// rest of the launcher runs unchanged against them:
+//   - SEA: materialize the ext-deps into a depsRoot-shaped dir (seaDepsRoot) and the
+//     bun-shim + extractor into a libexec-shaped dir (seaLibexec), from embedded
+//     assets (no npm).
+//   - npm/source: ensureDeps installs the ext-deps; both dirs stay undefined so the
+//     caller uses the real LIBEXEC and the default DEPS_ROOT.
 // sea/deps are injected (default to the real modules) so the branch is unit-testable
 // without a real SEA.
 function prepareRuntimeDeps(opts) {
   const { sea, deps, cacheRoot, libexec, here, verbose, env } = opts;
   if (sea.isSea()) {
-    const seaDepsNM = sea.materializeDeps({ cacheDir: cacheRoot });
-    const bunShimSrc = sea.materializeBunShim({ destDir: path.join(cacheRoot, 'sea-deps') });
-    return { seaDepsNM, bunShimSrc };
+    const seaDepsRoot = sea.materializeDeps({ cacheDir: cacheRoot });   // holds node_modules/
+    const seaLibexec = sea.materializeLibexec({ destDir: path.join(cacheRoot, 'sea-deps', 'libexec') });
+    return { seaDepsRoot, seaLibexec };
   }
   deps.ensureDeps({ libexec, here, verbose, env });
-  return { seaDepsNM: null, bunShimSrc: undefined };
+  return { seaDepsRoot: undefined, seaLibexec: undefined };
 }
 
 // main(argv, {self}) — async because it awaits clodeUpdate/clodeWatch.
@@ -202,22 +203,24 @@ async function main(argv, opts = {}) {
     || path.join(env.XDG_CACHE_HOME || path.join(env.HOME || '', '.cache'), 'clode');
   const cache = path.join(cacheRoot, key);
 
-  // Under a SEA, the ext-deps + bun-shim are materialized from embedded assets (no
-  // npm/libexec); otherwise ensureDeps installs the deps and the shim comes from
-  // libexec. Both feed the extractor (bunShimSrc) and the launch (seaDepsNM).
+  // Under a SEA the ext-deps + support files are materialized from embedded assets
+  // into dirs shaped like the npm/source layout (a depsRoot and a libexec); otherwise
+  // ensureDeps installs and the real LIBEXEC/DEPS_ROOT apply. Everything downstream
+  // then runs UNCHANGED against LAUNCH_LIBEXEC / depsRoot — no SEA-specific branches.
   const sea = require('./clode-sea.cjs');
-  const { seaDepsNM, bunShimSrc } = prepareRuntimeDeps({
+  const { seaDepsRoot, seaLibexec } = prepareRuntimeDeps({
     sea, deps, cacheRoot, libexec: LIBEXEC, here: HERE, verbose, env,
   });
+  const LAUNCH_LIBEXEC = seaLibexec || LIBEXEC;
 
-  extract.extractIfNeeded({ bin, cacheDir: cache, libexec: LIBEXEC, verbose, node, key, bunShimSrc });
+  extract.extractIfNeeded({ bin, cacheDir: cache, libexec: LAUNCH_LIBEXEC, verbose, node, key });
 
-  // Where ensure_deps put the runtime ext-deps (ws, yaml, string-width, ...): the
-  // sh keeps DEPS_ROOT as a shell var visible to set_node_path; here we recompute it
-  // identically and hand it to runBundle so its node_modules joins NODE_PATH.
+  // Where the runtime ext-deps (ws, yaml, string-width, ...) live: ensure_deps's
+  // DEPS_ROOT in the npm/source path, or the materialized sea-deps dir under SEA. Its
+  // node_modules joins NODE_PATH via runBundle -> applyNodePath, unchanged either way.
   const home = env.HOME || '';
   const xdgData = env.XDG_DATA_HOME || `${home}/.local/share`;
-  const depsRoot = env.CLODE_DEPS || `${xdgData}/clode`;
+  const depsRoot = seaDepsRoot || env.CLODE_DEPS || `${xdgData}/clode`;
 
   // Watcher: on real sessions only (never on print-and-exit, which run no model),
   // surface any prior HIGH notice, then maybe fire a fresh detached cycle.
@@ -226,16 +229,15 @@ async function main(argv, opts = {}) {
     watch.clodeWatchMaybe({ env, self });
   }
 
-  const settingsPath = run.guardSettingsForArgs(args, { node, libexec: LIBEXEC, env });
+  const settingsPath = run.guardSettingsForArgs(args, { node, libexec: LAUNCH_LIBEXEC, env });
   run.runBundle({
     node,
     cliPath: path.join(cache, 'cli.cjs'),
     args,
     settingsPath,
     self,
-    libexec: LIBEXEC,
+    libexec: LAUNCH_LIBEXEC,
     depsRoot,
-    seaDepsNM,
     env,
   });
 }
@@ -250,7 +252,10 @@ function runAsNodeIfRequested() {
   const rest = process.argv.slice(2);                    // [script, ...args]
   const script = require('node:path').resolve(rest[0]);
   process.argv = [process.execPath, script, ...rest.slice(1)];
-  require(script);                                        // runs as the main module
+  // In a SEA the global `require` (embedderRequire) resolves ONLY built-in modules;
+  // createRequire yields a filesystem-capable require for the extracted cli.cjs (and
+  // it behaves identically outside a SEA, so this one path serves both).
+  require('node:module').createRequire(script)(script);
   return true;
 }
 

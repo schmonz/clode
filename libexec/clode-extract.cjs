@@ -15,7 +15,8 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const vm = require('node:vm');
+const Module = require('node:module');
 const { sigOf } = require('./clode-resolve.cjs');
 const { extractToFile } = require('./extract-claude-js.cjs');
 
@@ -88,7 +89,6 @@ function extractIfNeeded(opts) {
   const {
     bin, cacheDir, libexec,
     verbose = false,
-    node = process.execPath,
   } = opts;
   const key = opts.key !== undefined ? opts.key : path.basename(cacheDir);
   const emit = opts.log || ((m) => process.stderr.write(m + '\n'));
@@ -97,9 +97,7 @@ function extractIfNeeded(opts) {
   const extractorSig = sigOf(path.join(libexec, 'extract-claude-js.cjs'));
   const cliPath = path.join(cacheDir, 'cli.cjs');
   const cacheShim = path.join(cacheDir, 'bun-shim.cjs');
-  // The bun-shim source is libexec/bun-shim.cjs in the npm/source layout; under a
-  // SEA the caller passes the materialized (embedded-asset) shim instead.
-  const srcShim = opts.bunShimSrc || path.join(libexec, 'bun-shim.cjs');
+  const srcShim = path.join(libexec, 'bun-shim.cjs');
   const sigPath = path.join(cacheDir, '.extractor-sig');
 
   if (isFile(cliPath) && isFile(cacheShim) && readSig(sigPath) === extractorSig) {
@@ -129,12 +127,18 @@ function extractIfNeeded(opts) {
     throw e;
   }
 
-  const chk = spawnSync(node, ['--check', cliPath], { encoding: 'utf8' });
-  if (chk.status !== 0) {
+  // Syntax-check the extracted JS IN-PROCESS: compile it as a CommonJS module (wrapped,
+  // so top-level return/require/module are legal) WITHOUT running it — the equivalent of
+  // `node --check`. Done in-process so it works whether the launcher is a plain node or
+  // a SEA binary (which has no `--check` mode) and needs no external node at all.
+  try {
+    const src = fs.readFileSync(cliPath, 'utf8');
+    new vm.Script(Module.wrap(src), { filename: cliPath });
+  } catch (e) {
     try { fs.rmSync(cliPath); } catch { /* ignore */ }
-    if (chk.stderr) process.stderr.write(chk.stderr);
-    process.stderr.write("clode: extracted JS failed 'node --check'; not caching.\n");
-    throw new Error("extracted JS failed 'node --check'");
+    if (e && e.stack) process.stderr.write(e.stack + '\n');
+    process.stderr.write('clode: extracted JS failed the syntax check; not caching.\n');
+    throw new Error('extracted JS failed the syntax check');
   }
 
   fs.copyFileSync(srcShim, cacheShim);

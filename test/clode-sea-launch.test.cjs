@@ -1,7 +1,8 @@
 'use strict';
-// Task 4: under a SEA the bundle's ext-deps + bun-shim come from embedded assets, not
-// npm/libexec. These tests exercise the real seams (prepareRuntimeDeps, applyNodePath,
-// extractIfNeeded) with injected fakes — no real SEA, no network.
+// Task 4: under a SEA the bundle's ext-deps + support files are materialized from
+// embedded assets into dirs shaped like the npm/source tree, then the UNCHANGED
+// launcher runs against them. These tests exercise the real seams (prepareRuntimeDeps
+// + the unchanged extractIfNeeded/applyNodePath) with injected fakes — no real SEA.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -12,86 +13,85 @@ const { prepareRuntimeDeps } = require('../libexec/clode-main.cjs');
 const hosttools = require('../libexec/clode-hosttools.cjs');
 const { extractIfNeeded } = require('../libexec/clode-extract.cjs');
 
-test('prepareRuntimeDeps under SEA: materializes assets, does NOT call ensureDeps', () => {
+test('prepareRuntimeDeps under SEA: materializes deps+libexec dirs, no ensureDeps', () => {
   const calls = [];
   const fakeSea = {
     isSea: () => true,
-    materializeDeps: (o) => { calls.push(['materializeDeps', o.cacheDir]); return '/cache/sea-deps/SIG/node_modules'; },
-    materializeBunShim: (o) => { calls.push(['materializeBunShim', o.destDir]); return '/cache/sea-deps/bun-shim.cjs'; },
+    materializeDeps: (o) => { calls.push(['materializeDeps', o.cacheDir]); return '/cache/sea-deps/SIG'; },
+    materializeLibexec: (o) => { calls.push(['materializeLibexec', o.destDir]); return '/cache/sea-deps/libexec'; },
   };
   const fakeDeps = { ensureDeps: () => { calls.push(['ensureDeps']); } };
   const out = prepareRuntimeDeps({
     sea: fakeSea, deps: fakeDeps, cacheRoot: '/cache', libexec: '/lib', here: '/bin', verbose: false, env: {},
   });
-  assert.strictEqual(out.seaDepsNM, '/cache/sea-deps/SIG/node_modules');
-  assert.strictEqual(out.bunShimSrc, '/cache/sea-deps/bun-shim.cjs');
+  assert.strictEqual(out.seaDepsRoot, '/cache/sea-deps/SIG');
+  assert.strictEqual(out.seaLibexec, '/cache/sea-deps/libexec');
   assert.deepStrictEqual(calls, [
     ['materializeDeps', '/cache'],
-    ['materializeBunShim', path.join('/cache', 'sea-deps')],
+    ['materializeLibexec', path.join('/cache', 'sea-deps', 'libexec')],
   ]);
   assert.ok(!calls.some((c) => c[0] === 'ensureDeps'), 'ensureDeps must not run under SEA');
 });
 
-test('prepareRuntimeDeps under non-SEA: calls ensureDeps, no materialization', () => {
+test('prepareRuntimeDeps under non-SEA: calls ensureDeps, dirs undefined', () => {
   const calls = [];
   const fakeSea = {
     isSea: () => false,
     materializeDeps: () => { calls.push(['materializeDeps']); return 'X'; },
-    materializeBunShim: () => { calls.push(['materializeBunShim']); return 'Y'; },
+    materializeLibexec: () => { calls.push(['materializeLibexec']); return 'Y'; },
   };
   const fakeDeps = { ensureDeps: (o) => { calls.push(['ensureDeps', o.libexec, o.here]); } };
   const out = prepareRuntimeDeps({
     sea: fakeSea, deps: fakeDeps, cacheRoot: '/cache', libexec: '/lib', here: '/bin', verbose: true, env: { X: 1 },
   });
-  assert.strictEqual(out.seaDepsNM, null);
-  assert.strictEqual(out.bunShimSrc, undefined);
+  assert.strictEqual(out.seaDepsRoot, undefined);
+  assert.strictEqual(out.seaLibexec, undefined);
   assert.deepStrictEqual(calls, [['ensureDeps', '/lib', '/bin']]);
 });
 
-test('applyNodePath includes the sea-deps node_modules (extraDir), most-authoritative', () => {
+test('the materialized depsRoot flows through applyNodePath unchanged', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'seanp-'));
   try {
-    const seaNM = path.join(tmp, 'sea-deps', 'SIG', 'node_modules');
-    fs.mkdirSync(seaNM, { recursive: true });
+    // Shape a materialized depsRoot: <depsRoot>/node_modules exists.
+    const depsRoot = path.join(tmp, 'sea-deps', 'SIG');
+    fs.mkdirSync(path.join(depsRoot, 'node_modules'), { recursive: true });
     const env = { NODE_PATH: '/user/mods' };
-    hosttools.applyNodePath({ env, here: path.join(tmp, 'libexec'), node: process.execPath, extraDir: seaNM });
+    // Exactly how runBundle calls it — no SEA-specific arg, just depsRoot.
+    hosttools.applyNodePath({ env, here: path.join(tmp, 'libexec'), depsRoot, node: process.execPath });
     const parts = env.NODE_PATH.split(path.delimiter);
     assert.strictEqual(parts[0], '/user/mods', 'user NODE_PATH stays ahead');
-    assert.ok(parts.includes(seaNM), 'sea-deps node_modules must be on NODE_PATH');
+    assert.ok(parts.includes(path.join(depsRoot, 'node_modules')), 'materialized node_modules must be on NODE_PATH');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
 
-test('extractIfNeeded sources the bun-shim from the injected bunShimSrc (SEA), not libexec', () => {
+test('extractIfNeeded (unchanged) uses the materialized libexec for shim + extractor sig', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'seaext-'));
   try {
-    // A libexec with its OWN bun-shim + a fake extractor sig target. We drive a cache
-    // HIT (cli.cjs + shim present, sig matches) so no real extraction runs; the shim
-    // refresh then proves which source wins.
-    const libexec = path.join(tmp, 'libexec');
-    fs.mkdirSync(libexec, { recursive: true });
-    fs.writeFileSync(path.join(libexec, 'bun-shim.cjs'), '// LIBEXEC shim\n');
-    // The materialized (SEA) shim, elsewhere.
-    const seaShim = path.join(tmp, 'materialized', 'bun-shim.cjs');
-    fs.mkdirSync(path.dirname(seaShim), { recursive: true });
-    fs.writeFileSync(seaShim, '// SEA shim\n');
+    // A materialized libexec dir: bun-shim.cjs + a stand-in extract-claude-js.cjs.
+    // (Content of the extractor file is irrelevant here — only its sigOf is read for
+    // the cache-hit check; the real extraction is not triggered on a hit.)
+    const seaLibexec = path.join(tmp, 'sea-deps', 'libexec');
+    fs.mkdirSync(seaLibexec, { recursive: true });
+    fs.writeFileSync(path.join(seaLibexec, 'bun-shim.cjs'), '// SEA shim\n');
+    fs.writeFileSync(path.join(seaLibexec, 'extract-claude-js.cjs'), '// SEA extractor\n');
 
     const { sigOf } = require('../libexec/clode-resolve.cjs');
     const cacheDir = path.join(tmp, 'cache');
     fs.mkdirSync(cacheDir, { recursive: true });
     fs.writeFileSync(path.join(cacheDir, 'cli.cjs'), '// cached cli\n');
     fs.writeFileSync(path.join(cacheDir, 'bun-shim.cjs'), '// stale shim\n');
-    const extractorSig = sigOf(path.join(__dirname, '..', 'libexec', 'extract-claude-js.cjs'));
-    fs.writeFileSync(path.join(cacheDir, '.extractor-sig'), extractorSig + '\n');
+    // Prime the cache sig to match the materialized extractor's sigOf -> a hit.
+    fs.writeFileSync(path.join(cacheDir, '.extractor-sig'),
+      sigOf(path.join(seaLibexec, 'extract-claude-js.cjs')) + '\n');
 
-    // libexec here points at the REAL libexec so the extractor-sig matches; the shim
-    // source is overridden via bunShimSrc.
-    extractIfNeeded({
-      bin: '/unused', cacheDir, libexec: path.join(__dirname, '..', 'libexec'),
-      bunShimSrc: seaShim, key: 'test',
-    });
+    // Called EXACTLY as the non-SEA path calls it — libexec is just the materialized dir.
+    extractIfNeeded({ bin: '/unused', cacheDir, libexec: seaLibexec, key: 'sea' });
+
+    // Cache hit refreshed the shim from the materialized libexec (not the stale one).
     assert.strictEqual(fs.readFileSync(path.join(cacheDir, 'bun-shim.cjs'), 'utf8'), '// SEA shim\n');
+    assert.ok(fs.existsSync(path.join(cacheDir, 'cli.cjs')), 'cache hit should be preserved');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
