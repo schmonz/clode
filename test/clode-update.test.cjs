@@ -1,0 +1,173 @@
+'use strict';
+// Unit tests for libexec/clode-update.cjs — the JS port of bin/clode's
+// clode_update (bin/clode:349) + clode_signals_report (bin/clode:335). Mirrors
+// the semantics of test/test_self_update.bats using file:// fixtures (a fake
+// releases repo) so no network is touched:
+//   REPO/stable            -> "9.9.9\n"     (channel -> version resolution)
+//   REPO/9.9.9/manifest.json                (platform checksum)
+//   REPO/9.9.9/linux-x64/claude             (a fake provider binary via mkfixture)
+//   REPO/CHANGELOG.md                       (post-update signals digest input)
+// with CLODE_RELEASES_URL=file://REPO, CLODE_PROVIDERS=<tmp>, CLODE_CHANGELOG_URL,
+// CLODE_SIGNALS_DIR=<tmp> (keeps signals offline + out of this checkout's signals/).
+const { test } = require('node:test');
+const assert = require('node:assert');
+const { spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const REPO_ROOT = path.resolve(__dirname, '..');
+const LIBEXEC = path.join(REPO_ROOT, 'libexec');
+const HERE = path.join(REPO_ROOT, 'bin');
+const NODE = process.env.CLODE_NODE || process.execPath;
+
+const { clodeUpdate } = require('../libexec/clode-update.cjs');
+const { sha256Of } = require('../libexec/clode-net.cjs');
+
+const V = '9.9.9';
+const PLAT = 'linux-x64';
+
+// A stderr sink so we can assert on the (stderr-bound) messages + signals digest.
+function sink() {
+  const buf = [];
+  return { write(x) { buf.push(x); return true; }, text() { return buf.join(''); } };
+}
+
+// Build the whole fixture repo + a tmp provider/signals area; return the env
+// object + paths. Uses mkfixture.cjs for a carve-able fake provider binary and
+// clode-net's sha256Of for the manifest checksum (matches the update's verify).
+function fixture() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-upd-'));
+  const repo = path.join(tmp, 'repo');
+  const providers = path.join(tmp, 'providers');
+  const signals = path.join(tmp, 'signals');
+  const home = path.join(tmp, 'home');
+  fs.mkdirSync(path.join(repo, V, PLAT), { recursive: true });
+  fs.mkdirSync(home, { recursive: true });
+
+  const claudeSrc = path.join(repo, V, PLAT, 'claude');
+  const mk = spawnSync(NODE, [path.join(REPO_ROOT, 'test', 'mkfixture.cjs'), claudeSrc, 'v'],
+    { encoding: 'utf8' });
+  assert.strictEqual(mk.status, 0, 'mkfixture built the fake provider binary');
+  const sum = sha256Of(claudeSrc);
+
+  fs.writeFileSync(path.join(repo, 'stable'), V + '\n');
+  fs.writeFileSync(path.join(repo, 'latest'), V + '\n');
+  fs.writeFileSync(path.join(repo, V, 'manifest.json'),
+    JSON.stringify({ platforms: { [PLAT]: { checksum: sum } } }) + '\n');
+  fs.writeFileSync(path.join(repo, 'CHANGELOG.md'),
+    `# Changelog\n\n## ${V}\n\n- Upgraded the bundled Bun runtime to 9.9\n- Fixed a thing\n`);
+
+  const env = {
+    ...process.env,
+    HOME: home,
+    XDG_DATA_HOME: path.join(tmp, 'data'),
+    CLODE_RELEASES_URL: 'file://' + repo,
+    CLODE_FETCH_PLATFORM: PLAT,
+    CLODE_PROVIDERS: providers,
+    CLODE_CHANGELOG_URL: 'file://' + path.join(repo, 'CHANGELOG.md'),
+    CLODE_SIGNALS_DIR: signals,
+  };
+  return { tmp, repo, providers, signals, sum, env };
+}
+
+function opts(env, stderr) {
+  return { env, libexec: LIBEXEC, here: HERE, node: NODE, stderr };
+}
+
+function cleanup(fx) { fs.rmSync(fx.tmp, { recursive: true, force: true }); }
+
+test('clode_update fetches the fixed platform into the provider store + current pointer', async () => {
+  const fx = fixture();
+  const err = sink();
+  try {
+    const status = await clodeUpdate('stable', opts(fx.env, err));
+    assert.strictEqual(status, 0, 'update succeeded');
+    assert.ok(fs.existsSync(path.join(fx.providers, V, 'claude')), 'provider binary landed');
+    assert.strictEqual(fs.readlinkSync(path.join(fx.providers, 'current')), V, 'current -> 9.9.9');
+    assert.match(err.text(), /updated to 9\.9\.9/, 'updated message');
+    // The fetched binary must byte-match the fixture (atomic temp->rename intact).
+    assert.strictEqual(sha256Of(path.join(fx.providers, V, 'claude')), fx.sum);
+    // chmod +x: the mode carries the execute bit.
+    assert.ok(fs.statSync(path.join(fx.providers, V, 'claude')).mode & 0o111, 'executable');
+  } finally { cleanup(fx); }
+});
+
+test('a bad checksum aborts the update without moving "current"', async () => {
+  const fx = fixture();
+  fs.writeFileSync(path.join(fx.repo, V, 'manifest.json'),
+    JSON.stringify({ platforms: { [PLAT]: { checksum: '0'.repeat(64) } } }) + '\n');
+  const err = sink();
+  try {
+    const status = await clodeUpdate('stable', opts(fx.env, err));
+    assert.notStrictEqual(status, 0, 'update aborted (nonzero)');
+    assert.match(err.text(), /checksum mismatch/i, 'checksum mismatch message');
+    assert.ok(!fs.existsSync(path.join(fx.providers, 'current')), 'current not created');
+    // The partial download is cleaned up (no .claude.partial left behind).
+    assert.ok(!fs.existsSync(path.join(fx.providers, V, '.claude.partial')), 'partial removed');
+  } finally { cleanup(fx); }
+});
+
+test('clode_update accepts a numeric version channel (uses it as-is)', async () => {
+  const fx = fixture();
+  const err = sink();
+  try {
+    const status = await clodeUpdate(V, opts(fx.env, err));
+    assert.strictEqual(status, 0, 'numeric channel update succeeded');
+    assert.ok(fs.existsSync(path.join(fx.providers, V, 'claude')), 'provider binary landed');
+    assert.strictEqual(fs.readlinkSync(path.join(fx.providers, 'current')), V);
+  } finally { cleanup(fx); }
+});
+
+test('unresolvable channel yields the exact "couldn\'t resolve" error, return 1', async () => {
+  const fx = fixture();
+  const err = sink();
+  try {
+    const status = await clodeUpdate('nope', opts(fx.env, err));
+    assert.strictEqual(status, 1, 'nonzero on unresolved version');
+    assert.match(err.text(),
+      new RegExp(`clode: couldn't resolve a version for 'nope' from file://${fx.repo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+      'exact resolve-failure message');
+  } finally { cleanup(fx); }
+});
+
+test('platform not in manifest yields the exact error, return 1', async () => {
+  const fx = fixture();
+  fs.writeFileSync(path.join(fx.repo, V, 'manifest.json'),
+    JSON.stringify({ platforms: {} }) + '\n');
+  const err = sink();
+  try {
+    const status = await clodeUpdate('stable', opts(fx.env, err));
+    assert.strictEqual(status, 1);
+    assert.match(err.text(), new RegExp(`clode: platform ${PLAT} not in manifest for ${V}`));
+  } finally { cleanup(fx); }
+});
+
+test('clode update prints a warn-only signals digest and writes a snapshot', async () => {
+  const fx = fixture();
+  const err = sink();
+  try {
+    const status = await clodeUpdate('stable', opts(fx.env, err));
+    assert.strictEqual(status, 0, 'warn-only: signals never block the update');
+    const out = err.text();
+    assert.match(out, /clode signals for 9\.9\.9/, 'signals digest header');
+    assert.match(out, /Upgraded the bundled Bun runtime/, 'HIGH release-note signal surfaced');
+    const snap = path.join(fx.signals, V + '.json');
+    assert.ok(fs.existsSync(snap), 'snapshot written');
+    assert.match(fs.readFileSync(snap, 'utf8'), /"version": "9\.9\.9"/, 'snapshot has version');
+  } finally { cleanup(fx); }
+});
+
+test('already-have short-circuit re-uses the provider without re-download', async () => {
+  const fx = fixture();
+  try {
+    const first = await clodeUpdate('stable', opts(fx.env, sink()));
+    assert.strictEqual(first, 0, 'first update ok');
+    const err = sink();
+    const second = await clodeUpdate('stable', opts(fx.env, err));
+    assert.strictEqual(second, 0, 'second update ok');
+    assert.match(err.text(), /already have 9\.9\.9/, 'already-have message');
+    assert.match(err.text(), /updated to 9\.9\.9/, 'still re-points + reports');
+    assert.strictEqual(fs.readlinkSync(path.join(fx.providers, 'current')), V);
+  } finally { cleanup(fx); }
+});
