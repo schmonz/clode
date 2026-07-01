@@ -25,38 +25,13 @@ setup() {
 }
 teardown() { rm -rf "$TMP"; }
 
-@test "sha256_of computes the file digest" {
-  echo -n "hello" > "$TMP/h"
-  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; sha256_of "'"$TMP"'/h"'
-  [ "$status" -eq 0 ]
-  [ "$output" = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" ]
-}
-
-@test "clode_update fetches the fixed platform into the provider store + current pointer" {
-  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; NODE="$CLODE_NODE" clode_update stable'
-  [ "$status" -eq 0 ]
-  test -f "$XDG_DATA_HOME/clode/providers/9.9.9/claude"
-  [ "$(readlink "$XDG_DATA_HOME/clode/providers/current")" = "9.9.9" ]
-  echo "$output" | grep -q "updated to 9.9.9"
-}
-
-@test "a bad checksum aborts the update without moving 'current'" {
-  printf '{"platforms":{"linux-x64":{"checksum":"%064d"}}}\n' 0 > "$REPO/9.9.9/manifest.json"
-  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; NODE="$CLODE_NODE" clode_update stable'
-  [ "$status" -ne 0 ]
-  echo "$output" | grep -qi "checksum mismatch"
-  [ ! -e "$XDG_DATA_HOME/clode/providers/current" ]
-}
-
-@test "resolve_claude_bin prefers the fetched provider; cache_key uses its version" {
-  mkdir -p "$XDG_DATA_HOME/clode/providers/9.9.9"
-  : > "$XDG_DATA_HOME/clode/providers/9.9.9/claude"
-  ln -sfn 9.9.9 "$XDG_DATA_HOME/clode/providers/current"
-  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; BIN=$(resolve_claude_bin); echo "$BIN"; cache_key; echo "$KEY"'
-  [ "$status" -eq 0 ]
-  echo "$output" | grep -q "providers/9.9.9/claude"
-  echo "$output" | grep -qx "9.9.9"
-}
+# NB: the sourcing @tests that called sh-internal helpers directly
+# (sha256_of, clode_update, resolve_claude_bin, cache_key) were removed when
+# bin/clode became a Node program. Their behavior is covered by the module
+# node --test units: sha256_of -> sha256Of (test/clode-net.test.cjs),
+# clode_update + checksum-abort -> test/clode-update.test.cjs, resolve_claude_bin
+# + cache_key -> test/clode-resolve.test.cjs. The subprocess @tests below still
+# exercise the JS launcher end-to-end.
 
 @test "clode update <channel> fetches and reports, then exits" {
   run env CLODE_CLAUDE_BIN=/nonexistent "$CLODE_BIN" update stable

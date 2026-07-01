@@ -88,6 +88,19 @@ exits.
 A normal launch also performs this check opportunistically, at most once per day,
 fully in the background, and prints a one-line notice on the next launch only when
 a newer version carries such signals.
+.Pp
+.Nm
+itself is a Node program
+.Pq Li #!/usr/bin/env node ,
+so it needs
+.Xr node 1
+on
+.Ev PATH
+to start.
+An ES5-safe prologue prints a friendly
+.Dq node too old
+message on an outdated node; a truly missing node yields
+.Li "env: node: not found" .
 .Sh ENVIRONMENT
 .Bl -tag -width CLODE_VERSION_DIR
 .It Ev CLODE_VERBOSE

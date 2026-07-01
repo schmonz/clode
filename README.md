@@ -53,7 +53,9 @@ You'll have to live without:
 - `node` >= 24 and `npm`
 - `ugrep` >= 7.5.0, `bfs` >= 3.x (built with Oniguruma), and `rg` for fast searches
 
-The runtime itself needs only `node` and a POSIX `sh`.
+The launcher itself is a Node program (`#!/usr/bin/env node`), so it needs `node`
+on `PATH` to start. An ES5-safe prologue prints a friendly "node too old" message
+on an outdated node; a truly missing node yields `env: node: not found`.
 
 Once you have those:
 

@@ -1,9 +1,9 @@
 'use strict';
-// Unit tests for the JS launcher entry: bin/clode.cjs (ES5-safe prologue) +
+// Unit tests for the JS launcher entry: bin/clode (ES5-safe prologue) +
 // libexec/clode-main.cjs (the dispatch spine). Covers the print-and-exit paths
 // (--clode-version, --clode-help) and the prologue's old-node floor guard. The
 // full DEFAULT-launch wiring is smoke-tested separately (see the task's fixture
-// smoke); the FULL bats parity gate is the next task.
+// smoke); the FULL bats parity gate runs against this same entry.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -11,7 +11,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const ROOT = path.resolve(__dirname, '..');
-const ENTRY = path.join(ROOT, 'bin', 'clode.cjs');
+const ENTRY = path.join(ROOT, 'bin', 'clode');
 const NODE = process.execPath;
 const VERSION = fs.readFileSync(path.join(ROOT, 'VERSION'), 'utf8').replace(/\n+$/, '');
 

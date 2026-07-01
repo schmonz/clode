@@ -1,7 +1,7 @@
 'use strict';
 // clode-main — the JS launcher spine. Ports bin/clode's main() control flow
 // (bin/clode:549) faithfully, wiring the already-built sub-modules into a complete
-// launcher. Entry is bin/clode.cjs (an ES5-safe prologue that require()s this and
+// launcher. Entry is bin/clode (an ES5-safe prologue that require()s this and
 // calls main()). This module runs on modern Node (>= MIN_NODE_MAJOR); the prologue
 // guarantees that before it loads us.
 //
