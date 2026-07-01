@@ -47,7 +47,8 @@ try {
   spawnSmoke();
 } catch (e) {
   if (process.platform !== 'win32' && /posix_spawn|spawn-helper|EACCES|ENOENT/i.test(String(e && e.message))) {
-    chmodSpawnHelpers();
+    const n = chmodSpawnHelpers();
+    if (n) process.stderr.write('preflight: restored +x on ' + n + ' node-pty spawn-helper(s)\n');
     try {
       spawnSmoke();
     } catch (e2) {

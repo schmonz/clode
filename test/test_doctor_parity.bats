@@ -7,8 +7,9 @@ load test_helper
 # docs/superpowers/specs/2026-06-25-doctor-parity-test-design.md). The two live
 # renders are compared against EACH OTHER, so host-specific content cancels out.
 #
-# Skips cleanly (not fails) when:
-#   - pyte (real terminal emulator, test-only dep) is missing
+# The PTY/TUI harness (node-pty + @xterm/headless) is non-optional (run-all's
+# preflight guarantees it). This test still skips cleanly (not fails) for genuine
+# ENVIRONMENTAL reasons — never for a missing harness:
 #   - native `claude` is missing or won't run here (clode's whole reason to exist)
 #   - native and clode resolve to different versions (would pollute the comparison)
 #

@@ -20,6 +20,9 @@ const EXTRA_PROBES = [
   ['\x1b[>0c',  'da2',   '\x1b[>0;10;1c'],
 ];
 
+// Note: --send-hex/--then-hex decode hex to a latin1 string then child.write()s
+// it (re-encoded UTF-8). All current fixtures are ASCII (/doctor, CR), so this is
+// exact; a byte >= 0x80 would need a Buffer write to stay faithful to the bytes.
 function parseArgs(argv) {
   const sends = []; let rows = 40, cols = 100;
   while (argv.length >= 2 && ['--send-hex', '--then-hex', '--rows', '--cols'].includes(argv[1])) {
@@ -78,4 +81,9 @@ async function main() {
   process.stdout.write(out.join('\n') + '\n');
   process.exit(0);
 }
-main();
+// Honor the "Exit 0 always" contract even if pty.spawn/setup throws: fail loud
+// with a nonzero exit rather than crashing on an unhandled rejection.
+main().catch((e) => {
+  process.stderr.write('tui-screen: ' + ((e && e.stack) || e) + '\n');
+  process.exit(2);
+});
