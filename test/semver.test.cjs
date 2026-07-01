@@ -5,17 +5,10 @@
 // is fatal (exit), like the render utils.
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
-
-const SHIM = path.resolve(__dirname, '../libexec/bun-shim.cjs');
-function runChild(body, env) {
-  return spawnSync(process.execPath,
-    ['-e', `const Bun=require(${JSON.stringify(SHIM)});\n${body}`],
-    { encoding: 'utf8', env: { ...process.env, NODE_PATH: '', ...env } });
-}
+const { runShimChild } = require('./isolated-shim.cjs');
 
 // Fake `semver` (CJS named exports, like the real one): echo args so we can prove
 // order->compare and satisfies->satisfies forward through.
@@ -32,7 +25,7 @@ function withFakeSemver() {
 for (const [name, call] of [['order', "Bun.semver.order('1.0.0','2.0.0')"],
                             ['satisfies', "Bun.semver.satisfies('1.0.0','>=1.0.0')"]]) {
   test(`fail-loud: Bun.semver.${name} exits with an install hint when semver is absent`, () => {
-    const r = runChild(`${call}; console.log('CONTINUED');`);
+    const r = runShimChild(`${call}; console.log('CONTINUED');`);
     assert.notStrictEqual(r.status, 0);
     assert.doesNotMatch(r.stdout, /CONTINUED/);
     assert.match(r.stderr, /semver/);
@@ -41,7 +34,7 @@ for (const [name, call] of [['order', "Bun.semver.order('1.0.0','2.0.0')"],
 }
 
 test('forwards to the real semver: order -> compare, satisfies -> satisfies', () => {
-  const r = runChild(
+  const r = runShimChild(
     `console.log(Bun.semver.order('1.0.0','2.0.0'));
      console.log(Bun.semver.satisfies('1.0.0','>=1.0.0'));`,
     { NODE_PATH: withFakeSemver() });

@@ -87,13 +87,13 @@ binary for your platform, or a C/C++ toolchain to compile one. These tests are
 **not optional** — the suite fails loudly rather than skipping if the harness
 can't load.
 
-> **Don't run a bare `npm install` at the repo root.** clode's runtime deps
-> (`ws`, `yaml`, `string-width`, `strip-ansi`, `wrap-ansi`, `semver`) must stay
-> *out* of the root `node_modules`: the "fail-loud" tests assert clode dies with a
-> clear message when those deps are absent, so a populated root `node_modules`
-> would make them pass vacuously. Runtime deps install into a user-owned dir at
-> runtime; test-harness deps live under `test/`. Keep the root `node_modules`
-> empty.
+> **A bare `npm install` at the repo root is tolerated, but unnecessary.** The
+> "fail-loud" tests (which assert clode dies with a clear message when a runtime dep
+> like `ws`/`yaml`/`semver` is absent) are now isolated from the repo's own
+> `node_modules` — they run their shim children from a temp copy outside the repo
+> tree — so a populated root `node_modules` no longer makes them pass vacuously. You
+> still don't need one: runtime deps install into a user-owned dir at runtime, and
+> test-harness deps live under `test/`.
 
 Run the whole suite:
 

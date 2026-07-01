@@ -17,11 +17,13 @@ NODE="$CLODE_NODE"; BATS="$CLODE_BATS"
 [ -n "$NODE" ]   || { echo "run-all: node not found on PATH (set CLODE_NODE)" >&2; exit 2; }
 [ -n "$BATS" ]   || { echo "run-all: bats not found on PATH (set CLODE_BATS)" >&2; exit 2; }
 # Test harness deps (node-pty, @xterm/headless) live in a SEPARATE manifest
-# (test/package.json -> test/node_modules), deliberately NOT in the root
-# package.json: a root `npm install` would also pull the shipped runtime deps into
-# the root node_modules, where the shim's ext-dep resolver would find them and
-# defeat the fail-loud tests (which require those deps to be ABSENT). The PTY tests
-# are NOT optional, so install the harness here and fail loudly rather than skip.
+# (test/package.json -> test/node_modules), by convention — NOT in the root
+# package.json. The fail-loud ext-dep tests (semver/websocket/yaml/text-utils) are
+# now ISOLATED from the repo's own node_modules: they run their shim children from a
+# temp copy of bun-shim.cjs OUTSIDE the repo tree (test/isolated-shim.cjs), so a
+# stray root `npm install` can no longer make the runtime deps resolvable and defeat
+# the "dep is ABSENT" assertions. The PTY tests are NOT optional, so install the
+# harness here and fail loudly rather than skip.
 if ! "$NODE" test/harness-preflight.cjs 2>/dev/null; then
   echo "run-all: installing test harness deps (test/node_modules)..." >&2
   npm install --prefix test >/dev/null 2>&1 || true

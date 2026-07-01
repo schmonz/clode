@@ -4,17 +4,10 @@
 // like ws — clode can't render without them, so there's nothing to recover.
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
-
-const SHIM = path.resolve(__dirname, '../libexec/bun-shim.cjs');
-function runChild(body, env) {
-  return spawnSync(process.execPath,
-    ['-e', `const Bun=require(${JSON.stringify(SHIM)});\n${body}`],
-    { encoding: 'utf8', env: { ...process.env, NODE_PATH: '', ...env } });
-}
+const { runShimChild } = require('./isolated-shim.cjs');
 
 // Fake string-width/strip-ansi/wrap-ansi on a NODE_PATH dir. string-width and
 // strip-ansi are ESM-only upstream (default export), so model that shape — a
@@ -40,7 +33,7 @@ for (const [api, call] of [['stringWidth', "Bun.stringWidth('x')"],
                            ['stripANSI', "Bun.stripANSI('x')"],
                            ['wrapAnsi', "Bun.wrapAnsi('x', 10)"]]) {
   test(`fail-loud: Bun.${api} exits with an install hint when its module is absent`, () => {
-    const r = runChild(`${call}; console.log('CONTINUED');`);
+    const r = runShimChild(`${call}; console.log('CONTINUED');`);
     assert.notStrictEqual(r.status, 0, 'must exit non-zero when the dep is missing');
     assert.doesNotMatch(r.stdout, /CONTINUED/, 'must exit, not continue (every render needs it)');
     assert.match(r.stderr, /npm install/);
@@ -48,7 +41,7 @@ for (const [api, call] of [['stringWidth', "Bun.stringWidth('x')"],
 }
 
 test('forwards all args to the real modules and unwraps ESM .default', () => {
-  const r = runChild(
+  const r = runShimChild(
     `console.log(Bun.stringWidth('hi', {countAnsiEscapeCodes:true}));
      console.log(Bun.stripANSI('\\u001b[31mhi\\u001b[0m'));
      console.log(Bun.wrapAnsi('hi there', 4, {hard:true}));`,

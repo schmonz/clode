@@ -9,20 +9,13 @@
 // eaten by the bundle's promise and the user sees nothing.)
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { spawnSync } = require('node:child_process');
-const path = require('node:path');
 const shim = require('../libexec/bun-shim.cjs');
 const { _wsArgs } = shim;
-
-const SHIM = path.resolve(__dirname, '../libexec/bun-shim.cjs');
-// Run a child node that loads the shim, then runs `body`. NODE_PATH is cleared so
-// the child can never resolve a globally-installed `ws` — these tests assert the
-// ws-ABSENT behavior deterministically on any machine.
-function runChild(body) {
-  return spawnSync(process.execPath,
-    ['-e', `require(${JSON.stringify(SHIM)});\n${body}`],
-    { encoding: 'utf8', env: { ...process.env, NODE_PATH: '' } });
-}
+// runShimChild loads the shim from a temp copy OUTSIDE the repo with cwd there, so
+// the child can never resolve a globally- OR repo-installed `ws` (even the child's
+// own require('ws') walks a clean chain) — these tests assert the ws-ABSENT
+// behavior deterministically regardless of the repo's node_modules.
+const { runShimChild } = require('./isolated-shim.cjs');
 
 test('_wsArgs: Bun single-options object -> ws (url, protocols, {headers})', () => {
   assert.deepStrictEqual(
@@ -50,7 +43,7 @@ test('globalThis.WebSocket is the adapter and exposes the ready-state constants'
 test('fail-loud: missing ws cannot be swallowed — require("ws") prints to stderr and exits', () => {
   // Mimics the bundle's render-gating require: the caller swallows the failure.
   // It must STILL surface (stderr) and STILL stop the process (no CONTINUED).
-  const r = runChild(`try { require('ws'); } catch (_) {} console.log('CONTINUED');`);
+  const r = runShimChild(`try { require('ws'); } catch (_) {} console.log('CONTINUED');`);
   assert.notStrictEqual(r.status, 0, 'must exit non-zero when ws is missing');
   assert.doesNotMatch(r.stdout, /CONTINUED/, 'must not continue past a swallowed failure');
   assert.match(r.stderr, /ws/);
@@ -58,7 +51,7 @@ test('fail-loud: missing ws cannot be swallowed — require("ws") prints to stde
 });
 
 test('fail-loud: missing ws cannot be swallowed — new WebSocket prints to stderr and exits', () => {
-  const r = runChild(
+  const r = runShimChild(
     `try { new globalThis.WebSocket('wss://x', { headers: { a: '1' } }); } catch (_) {} console.log('CONTINUED');`);
   assert.notStrictEqual(r.status, 0, 'must exit non-zero when ws is missing');
   assert.doesNotMatch(r.stdout, /CONTINUED/, 'must not continue past a swallowed failure');

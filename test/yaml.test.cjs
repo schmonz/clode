@@ -9,26 +9,19 @@
 // throw (CLODE_YAML_MISSING) so each feature can still degrade per-item.
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
-
-const SHIM = path.resolve(__dirname, '../libexec/bun-shim.cjs');
-// Run a child node that loads the shim, then runs `body`. NODE_PATH is cleared so the
-// child can never resolve a host-installed `yaml` — these assert the yaml-ABSENT
-// behavior deterministically on any machine.
-function runChild(body, env) {
-  return spawnSync(process.execPath,
-    ['-e', `const Bun=require(${JSON.stringify(SHIM)});\n${body}`],
-    { encoding: 'utf8', env: { ...process.env, NODE_PATH: '', ...env } });
-}
+// runShimChild loads the shim from a temp copy OUTSIDE the repo with cwd there, so
+// the child can never resolve a host- OR repo-installed `yaml` — these assert the
+// yaml-ABSENT behavior deterministically regardless of the repo's node_modules.
+const { runShimChild } = require('./isolated-shim.cjs');
 
 test('fail-loud: missing yaml cannot be swallowed — parse prints the hint, throws a coded error', () => {
   // Mimics the bundle: the caller swallows the throw. The message must STILL surface
   // (stderr), the error must carry CLODE_YAML_MISSING, and the process keeps running
   // (throw, not exit — yaml is point-of-use, not startup-critical).
-  const r = runChild(
+  const r = runShimChild(
     `var e; try { Bun.YAML.parse('a: 1'); } catch (x) { e = x; }
      console.log('CODE=' + (e && e.code));
      console.log('CONTINUED');`);
@@ -39,7 +32,7 @@ test('fail-loud: missing yaml cannot be swallowed — parse prints the hint, thr
 });
 
 test('fail-loud: missing yaml — stringify is loud and coded too', () => {
-  const r = runChild(
+  const r = runShimChild(
     `var e; try { Bun.YAML.stringify({a:1}); } catch (x) { e = x; }
      console.log('CODE=' + (e && e.code));`);
   assert.match(r.stderr, /yaml/);
@@ -47,7 +40,7 @@ test('fail-loud: missing yaml — stringify is loud and coded too', () => {
 });
 
 test('fail-loud: the install hint is printed at most once across many parses', () => {
-  const r = runChild(
+  const r = runShimChild(
     `for (var i = 0; i < 3; i++) { try { Bun.YAML.parse('a: 1'); } catch (x) {} }`);
   const n = (r.stderr.match(/npm install/g) || []).length;
   assert.strictEqual(n, 1, 'message must not spam every frontmatter parse');
@@ -67,7 +60,7 @@ function withFakeYaml() {
 }
 
 test('forwards all args to the real yaml (Bun signature value,replacer,space)', () => {
-  const r = runChild(
+  const r = runShimChild(
     `console.log(Bun.YAML.stringify({a:1}, null, 2));
      console.log(JSON.stringify(Bun.YAML.parse('a: 1')));`,
     { NODE_PATH: withFakeYaml() });
@@ -78,12 +71,12 @@ test('forwards all args to the real yaml (Bun signature value,replacer,space)', 
 
 test('inspect honesty: Bun.YAML is tagged a stub when yaml is absent', () => {
   // inspect-claude-bundle counts a tagged Bun member as "stubbed", not implemented.
-  const r = runChild(`console.log('STUB=' + (Bun.YAML.__bunShimStub === true));`);
+  const r = runShimChild(`console.log('STUB=' + (Bun.YAML.__bunShimStub === true));`);
   assert.match(r.stdout, /STUB=true/);
 });
 
 test('inspect honesty: Bun.YAML is not a stub when yaml is present', () => {
-  const r = runChild(`console.log('STUB=' + (Bun.YAML.__bunShimStub === true));`,
+  const r = runShimChild(`console.log('STUB=' + (Bun.YAML.__bunShimStub === true));`,
     { NODE_PATH: withFakeYaml() });
   assert.match(r.stdout, /STUB=false/);
 });
