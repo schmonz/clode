@@ -5,7 +5,7 @@ load test_helper
 setup() { cd "$BATS_TEST_DIRNAME/.." ; }
 
 @test "clode --clode-version reports the shipped VERSION" {
-  run ./bin/clode --clode-version
+  run "$CLODE_BIN" --clode-version
   [ "$status" -eq 0 ]
   [ "$output" = "clode $(cat VERSION)" ]
 }

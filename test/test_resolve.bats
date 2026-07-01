@@ -24,28 +24,28 @@ teardown() {
 }
 
 @test "1. CLODE_CLAUDE_BIN wins over all" {
-  out=$(CLODE_CLAUDE_BIN="$TMP/explicit" CLODE_VERSION_DIR="$TMP/share/versions/9.9.9" ./bin/clode 2>/dev/null)
+  out=$(CLODE_CLAUDE_BIN="$TMP/explicit" CLODE_VERSION_DIR="$TMP/share/versions/9.9.9" "$CLODE_BIN" 2>/dev/null)
   [[ "$out" == *"L-explicit"* ]]
 }
 
 @test "2. CLODE_VERSION_DIR next" {
-  out=$(CLODE_VERSION_DIR="$TMP/share/versions/9.9.9" ./bin/clode 2>/dev/null)
+  out=$(CLODE_VERSION_DIR="$TMP/share/versions/9.9.9" "$CLODE_BIN" 2>/dev/null)
   [[ "$out" == *"L-versiondir"* ]]
 }
 
 @test "3. ~/.local/bin/claude symlink next" {
-  out=$(PATH="$TMP/pathdir:$PATH" ./bin/clode 2>/dev/null)
+  out=$(PATH="$TMP/pathdir:$PATH" "$CLODE_BIN" 2>/dev/null)
   [[ "$out" == *"L-local"* ]]
 }
 
 @test "4. claude on PATH last" {
   rm -f "$HOME/.local/bin/claude"
-  out=$(PATH="$TMP/pathdir:$PATH" ./bin/clode 2>/dev/null)
+  out=$(PATH="$TMP/pathdir:$PATH" "$CLODE_BIN" 2>/dev/null)
   [[ "$out" == *"L-path"* ]]
 }
 
 @test "5. no provider yields exit 1 and guidance" {
-  err=$(PATH="/usr/bin:/bin" HOME="$TMP/empty" ./bin/clode 2>&1 >/dev/null) || rc=$?
+  err=$(PATH="/usr/bin:/bin" HOME="$TMP/empty" "$CLODE_BIN" 2>&1 >/dev/null) || rc=$?
   [ "${rc:-0}" -eq 1 ]
   [[ "$err" == *"CLODE_CLAUDE_BIN"* ]]
 }
@@ -55,12 +55,12 @@ teardown() {
   # 110-byte wrapper used to fail with "no @bun-cjs entry marker". Follow it.
   printf '#!/bin/sh\nexec %s "$@"\n' "$TMP/explicit" > "$TMP/wrapper"
   chmod +x "$TMP/wrapper"
-  out=$(CLODE_CLAUDE_BIN="$TMP/wrapper" ./bin/clode 2>/dev/null)
+  out=$(CLODE_CLAUDE_BIN="$TMP/wrapper" "$CLODE_BIN" 2>/dev/null)
   [[ "$out" == *"L-explicit"* ]]
 }
 
 @test "7. a real (non-wrapper) bundle is left untouched" {
   # The big bundle must pass straight through follow_wrapper, not be scanned.
-  out=$(CLODE_CLAUDE_BIN="$TMP/explicit" ./bin/clode 2>/dev/null)
+  out=$(CLODE_CLAUDE_BIN="$TMP/explicit" "$CLODE_BIN" 2>/dev/null)
   [[ "$out" == *"L-explicit"* ]]
 }

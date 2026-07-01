@@ -10,7 +10,7 @@ setup() {
 @test "cache populated for current version" {
   [ -e "$HOME/.local/bin/claude" ] || skip "no provider binary installed"
   cur=$(basename "$(readlink "$HOME/.local/bin/claude")")
-  run ./bin/clode --version
+  run "$CLODE_BIN" --version
   test -f "build/$cur/cli.cjs"
 }
 
@@ -22,7 +22,7 @@ setup() {
     skip "only one version on disk"
   fi
   rm -rf "build/$alt"
-  run env CLODE_VERSION_DIR="$HOME/.local/share/claude/versions/$alt" ./bin/clode --version
+  run env CLODE_VERSION_DIR="$HOME/.local/share/claude/versions/$alt" "$CLODE_BIN" --version
   [ "$status" -eq 0 ]
   [[ "$output" == *"$alt"* ]]
   test -f "build/$alt/cli.cjs"

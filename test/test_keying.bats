@@ -20,7 +20,7 @@ teardown() {
   export CLODE_CACHE="$TMP/c1"
   mkdir -p "$TMP/share/versions"
   "$CLODE_NODE" test/mkfixture.cjs "$TMP/share/versions/9.9.9" v
-  CLODE_CLAUDE_BIN="$TMP/share/versions/9.9.9" ./bin/clode >/dev/null 2>&1
+  CLODE_CLAUDE_BIN="$TMP/share/versions/9.9.9" "$CLODE_BIN" >/dev/null 2>&1
   test -d "$TMP/c1/9.9.9"
 }
 
@@ -28,7 +28,7 @@ teardown() {
   export CLODE_CACHE="$TMP/c2"
   mkdir -p "$TMP/bin"
   "$CLODE_NODE" test/mkfixture.cjs "$TMP/bin/claude" v
-  CLODE_CLAUDE_BIN="$TMP/bin/claude" ./bin/clode >/dev/null 2>&1
+  CLODE_CLAUDE_BIN="$TMP/bin/claude" "$CLODE_BIN" >/dev/null 2>&1
   ls "$TMP/c2" | grep -q '^claude-'
 }
 
@@ -36,8 +36,8 @@ teardown() {
   export CLODE_CACHE="$TMP/c2"
   mkdir -p "$TMP/bin"
   "$CLODE_NODE" test/mkfixture.cjs "$TMP/bin/claude" v
-  CLODE_CLAUDE_BIN="$TMP/bin/claude" ./bin/clode >/dev/null 2>&1
-  CLODE_CLAUDE_BIN="$TMP/bin/claude" ./bin/clode >/dev/null 2>&1
+  CLODE_CLAUDE_BIN="$TMP/bin/claude" "$CLODE_BIN" >/dev/null 2>&1
+  CLODE_CLAUDE_BIN="$TMP/bin/claude" "$CLODE_BIN" >/dev/null 2>&1
   n=$(ls "$TMP/c2" | wc -l | tr -d ' ')
   [ "$n" = "1" ]
 }
@@ -51,12 +51,12 @@ teardown() {
   mkdir -p "$TMP/bin"
   "$CLODE_NODE" test/mkfixture.cjs "$TMP/bin/claude" v
   # first run extracts
-  CLODE_CLAUDE_BIN="$TMP/bin/claude" ./bin/clode >/dev/null 2>&1
+  CLODE_CLAUDE_BIN="$TMP/bin/claude" "$CLODE_BIN" >/dev/null 2>&1
   # second run, extractor UNCHANGED: cache hit, no re-extract
-  run env CLODE_CLAUDE_BIN="$TMP/bin/claude" ./bin/clode
+  run env CLODE_CLAUDE_BIN="$TMP/bin/claude" "$CLODE_BIN"
   ! echo "$output" | grep -q 'extracting JS'
   # change the extractor (new size+mtime) -> must re-extract even though BIN is identical
   printf '\n# clode-test touch\n' >> "$LX/extract-claude-js.cjs"
-  run env CLODE_CLAUDE_BIN="$TMP/bin/claude" ./bin/clode
+  run env CLODE_CLAUDE_BIN="$TMP/bin/claude" "$CLODE_BIN"
   echo "$output" | grep -q 'extracting JS'
 }

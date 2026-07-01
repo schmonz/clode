@@ -42,7 +42,7 @@ setup_file() {
   if [ -z "$nver" ]; then
     echo "native claude did not run here" > "$skipfile"; return
   fi
-  cver="$(./bin/clode --version 2>/dev/null | head -1)"
+  cver="$("$CLODE_BIN" --version 2>/dev/null | head -1)"
   if [ "$nver" != "$cver" ]; then
     echo "version mismatch: native='$nver' clode='$cver'" > "$skipfile"; return
   fi
@@ -59,9 +59,9 @@ setup_file() {
   ln -sf "$real_nm" "$deps_dir/node_modules"
   export CLODE_DEPS="$deps_dir"
   # Warm clode's per-binary cache so a (re)extract never eats the timed capture.
-  ./bin/clode --version >/dev/null 2>&1 || true
+  "$CLODE_BIN" --version >/dev/null 2>&1 || true
   _doctor_capture "$BATS_FILE_TMPDIR/native.txt" "$native"
-  _doctor_capture "$BATS_FILE_TMPDIR/clode.txt"  ./bin/clode
+  _doctor_capture "$BATS_FILE_TMPDIR/clode.txt"  "$CLODE_BIN"
 }
 
 setup() {

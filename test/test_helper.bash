@@ -4,6 +4,10 @@
 # run-all.sh — still finds node without a hardcoded prefix.
 export CLODE_NODE="${CLODE_NODE:-$(command -v node)}"
 
+# The launcher under test. Defaults to the shipped bin/clode; the launcher→JS
+# parity gate runs the whole suite against the JS entry via CLODE_BIN.
+export CLODE_BIN="${CLODE_BIN:-./bin/clode}"
+
 # Point clode's runtime-dep install at a "user-managed" sentinel — a node_modules with
 # no clode .deps-sig, which ensure_deps treats as user-managed and never touches — so
 # the suite NEVER runs a real `npm install` (offline, deterministic). Created here (and

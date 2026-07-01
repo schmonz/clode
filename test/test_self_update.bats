@@ -59,20 +59,20 @@ teardown() { rm -rf "$TMP"; }
 }
 
 @test "clode update <channel> fetches and reports, then exits" {
-  run env CLODE_CLAUDE_BIN=/nonexistent ./bin/clode update stable
+  run env CLODE_CLAUDE_BIN=/nonexistent "$CLODE_BIN" update stable
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "updated to 9.9.9"
   test -f "$XDG_DATA_HOME/clode/providers/9.9.9/claude"
 }
 
 @test "clode --clode-internal-update <channel> fetches like update (non-interactive)" {
-  run env CLODE_CLAUDE_BIN=/nonexistent ./bin/clode --clode-internal-update stable
+  run env CLODE_CLAUDE_BIN=/nonexistent "$CLODE_BIN" --clode-internal-update stable
   [ "$status" -eq 0 ]
   test -f "$XDG_DATA_HOME/clode/providers/9.9.9/claude"
 }
 
 @test "clode update prints a warn-only signals digest and writes a snapshot" {
-  run env CLODE_CLAUDE_BIN=/nonexistent ./bin/clode update stable
+  run env CLODE_CLAUDE_BIN=/nonexistent "$CLODE_BIN" update stable
   [ "$status" -eq 0 ]                                   # warn-only: never blocks
   echo "$output" | grep -q "clode signals for 9.9.9"
   echo "$output" | grep -q "Upgraded the bundled Bun runtime"   # HIGH release-note signal
@@ -82,9 +82,9 @@ teardown() { rm -rf "$TMP"; }
 
 @test "after clode update, launching clode extracts the fetched provider" {
   export CLODE_CACHE="$TMP/cache"
-  env CLODE_CLAUDE_BIN=/nonexistent ./bin/clode update stable >/dev/null 2>&1
+  env CLODE_CLAUDE_BIN=/nonexistent "$CLODE_BIN" update stable >/dev/null 2>&1
   # CLODE_CLAUDE_BIN was only set inline for the update above (never exported), so a
   # plain launch resolves the fetched provider. (Avoid `env -u`: BSD env lacks it.)
-  ./bin/clode >/dev/null 2>&1 || true
+  "$CLODE_BIN" >/dev/null 2>&1 || true
   test -f "$TMP/cache/9.9.9/cli.cjs"
 }

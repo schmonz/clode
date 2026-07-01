@@ -76,7 +76,7 @@ _tui_capture() {  # $1 = withws|nows, $2 = world root, $3 = out file
   ( unset TMUX TMUX_PANE TERM_PROGRAM NODE_PATH
     export TERM=xterm-256color
     export CLODE_NODE="$2/$1/bin/node"
-    "$CLODE_NODE" test/tui-screen.cjs 11 -- ./bin/clode
+    "$CLODE_NODE" test/tui-screen.cjs 11 -- "$CLODE_BIN"
   ) > "$3" 2>/dev/null || true
 }
 
@@ -86,7 +86,7 @@ setup_file() {
   _tui_make_world "$world"
   # Warm the per-binary cache first so a (re)extract never eats into the timed pty
   # captures below.
-  ( export CLODE_NODE="$world/withws/bin/node"; ./bin/clode --version >/dev/null 2>&1 ) || true
+  ( export CLODE_NODE="$world/withws/bin/node"; "$CLODE_BIN" --version >/dev/null 2>&1 ) || true
   _tui_capture withws "$world" "$BATS_FILE_TMPDIR/withws.txt"
   _tui_capture nows   "$world" "$BATS_FILE_TMPDIR/nows.txt"
 }

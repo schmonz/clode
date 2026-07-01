@@ -9,7 +9,7 @@ setup() {
 
 @test "clode --version reports Claude Code" {
   [ -e "$HOME/.local/bin/claude" ] || skip "no provider binary installed"
-  run ./bin/clode --version
+  run "$CLODE_BIN" --version
   [ "$status" -eq 0 ]
   [[ "$output" == *"Claude Code"* ]]
 }

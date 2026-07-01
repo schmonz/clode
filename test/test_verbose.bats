@@ -18,7 +18,7 @@ setup() {
 teardown() { rm -rf "$TMP"; }
 
 @test "--clode-help prints clode-specific options and exits 0" {
-  run ./bin/clode --clode-help
+  run "$CLODE_BIN" --clode-help
   [ "$status" -eq 0 ]
   echo "$output" | grep -q -- '--clode-verbose'
   echo "$output" | grep -q -- '--clode-version'
@@ -26,13 +26,13 @@ teardown() { rm -rf "$TMP"; }
 }
 
 @test "--clode-verbose is stripped before clode-flag dispatch (works in any position)" {
-  run ./bin/clode --clode-verbose --clode-help
+  run "$CLODE_BIN" --clode-verbose --clode-help
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'run the latest Claude Code'
 }
 
 @test "default launch emits NO clode chatter (only the bundle's output)" {
-  run ./bin/clode
+  run "$CLODE_BIN"
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'CLODE-FIXTURE tok'      # the bundle did run
   ! echo "$output" | grep -q 'extracting JS'        # ...but clode stayed quiet
@@ -40,14 +40,14 @@ teardown() { rm -rf "$TMP"; }
 }
 
 @test "--clode-verbose un-mutes clode's progress, and is consumed (bundle still boots)" {
-  run ./bin/clode --clode-verbose
+  run "$CLODE_BIN" --clode-verbose
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'extracting JS'
   echo "$output" | grep -q 'CLODE-FIXTURE tok'      # flag consumed, not passed on
 }
 
 @test "CLODE_VERBOSE=1 env is equivalent to the flag" {
-  run env CLODE_VERBOSE=1 ./bin/clode
+  run env CLODE_VERBOSE=1 "$CLODE_BIN"
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'extracting JS'
 }

@@ -6,7 +6,7 @@ setup() { cd "$BATS_TEST_DIRNAME/.." ; }
 
 @test "clode -p reaches the model" {
   [ -z "${CLODE_OFFLINE:-}" ] || skip "offline"
-  run ./bin/clode -p 'reply with exactly: PONG'
+  run "$CLODE_BIN" -p 'reply with exactly: PONG'
   [ "$status" -eq 0 ]
   ! grep -qiE 'not yet implemented|Cannot find module|is not a function' <<<"$output"
   [[ "$output" == *PONG* ]]
