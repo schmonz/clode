@@ -212,14 +212,31 @@ async function main(argv, opts = {}) {
   });
 }
 
+// SEA "run as node" mode: when clode-run spawns the SEA binary to execute the
+// extracted cli.cjs, it sets CLODE_SEA_RUN_AS_NODE. In that mode, behave like plain
+// `node <script> [args]`: strip the sentinel (the bundle must never see it), reshape
+// argv, and run the script as the main module. Returns true when it handled the run.
+function runAsNodeIfRequested() {
+  if (process.env.CLODE_SEA_RUN_AS_NODE !== '1') return false;
+  delete process.env.CLODE_SEA_RUN_AS_NODE;             // never leaks to the bundle
+  const rest = process.argv.slice(2);                    // [script, ...args]
+  const script = require('node:path').resolve(rest[0]);
+  process.argv = [process.execPath, script, ...rest.slice(1)];
+  require(script);                                        // runs as the main module
+  return true;
+}
+
 // Self-run entry: when this module is the process's main module (the esbuilt SEA
 // bundle, or `node libexec/clode-main.cjs`), behave like bin/clode's prologue caller.
 // Guarded so it does NOT run when bin/clode require()s us and calls main() itself.
+// runAsNodeIfRequested runs FIRST: under SEA re-invocation it takes over the process.
 if (require.main === module) {
-  main(process.argv.slice(2), { self: process.execPath }).catch((e) => {
-    process.stderr.write('clode: ' + ((e && e.stack) || e) + '\n');
-    process.exit(1);
-  });
+  if (!runAsNodeIfRequested()) {
+    main(process.argv.slice(2), { self: process.execPath }).catch((e) => {
+      process.stderr.write('clode: ' + ((e && e.stack) || e) + '\n');
+      process.exit(1);
+    });
+  }
 }
 
-module.exports = { main, clodeHelp, requireNode };
+module.exports = { main, clodeHelp, requireNode, runAsNodeIfRequested };
