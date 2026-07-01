@@ -76,7 +76,7 @@ setup() {
 }
 
 @test "clode /doctor matches native except for allowlisted deviations" {
-  run "$CLODE_PYTHON" test/doctor_parity.py "$NATIVE" "$CLODE"
+  run "$CLODE_NODE" test/doctor-parity.cjs "$NATIVE" "$CLODE"
   echo "$output"
   [ "$status" -eq 0 ]
 }
