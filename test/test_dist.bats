@@ -35,6 +35,11 @@ teardown() { [ -n "${PACKDIR:-}" ] && rm -rf "$PACKDIR"; }
   ! grep -rIlE 'python3?|CLODE_PYTHON' "$BATS_TEST_DIRNAME/../bin" "$BATS_TEST_DIRNAME/../libexec"
 }
 
+@test "the repo tracks no python files" {
+  cd "$BATS_TEST_DIRNAME/.."
+  ! git ls-files '*.py' | grep -q .
+}
+
 @test "package excludes tests, build artifacts, and node_modules" {
   [ -n "${NPM_SKIP:-}" ] && skip "$NPM_SKIP"
   ! echo "$LIST" | grep -qE 'package/(test/|Makefile|node_modules/)|cli\.cjs|/build/'

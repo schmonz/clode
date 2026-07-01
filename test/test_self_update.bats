@@ -33,7 +33,7 @@ teardown() { rm -rf "$TMP"; }
 }
 
 @test "clode_update fetches the fixed platform into the provider store + current pointer" {
-  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; NODE="$CLODE_NODE" PYTHON="$CLODE_PYTHON" clode_update stable'
+  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; NODE="$CLODE_NODE" clode_update stable'
   [ "$status" -eq 0 ]
   test -f "$XDG_DATA_HOME/clode/providers/9.9.9/claude"
   [ "$(readlink "$XDG_DATA_HOME/clode/providers/current")" = "9.9.9" ]
@@ -42,7 +42,7 @@ teardown() { rm -rf "$TMP"; }
 
 @test "a bad checksum aborts the update without moving 'current'" {
   printf '{"platforms":{"linux-x64":{"checksum":"%064d"}}}\n' 0 > "$REPO/9.9.9/manifest.json"
-  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; NODE="$CLODE_NODE" PYTHON="$CLODE_PYTHON" clode_update stable'
+  run sh -c 'CLODE_SOURCED=1 . ./bin/clode; NODE="$CLODE_NODE" clode_update stable'
   [ "$status" -ne 0 ]
   echo "$output" | grep -qi "checksum mismatch"
   [ ! -e "$XDG_DATA_HOME/clode/providers/current" ]

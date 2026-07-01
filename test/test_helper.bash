@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Shared setup for clode BATS tests. Discover host tools on PATH (CLODE_* override
 # per machine); set here too so a file run directly under `bats` — not via
-# run-all.sh — still finds node/python without a hardcoded prefix.
+# run-all.sh — still finds node without a hardcoded prefix.
 export CLODE_NODE="${CLODE_NODE:-$(command -v node)}"
 
 # Point clode's runtime-dep install at a "user-managed" sentinel — a node_modules with

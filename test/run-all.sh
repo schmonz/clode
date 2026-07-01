@@ -7,17 +7,14 @@
 #               sh test/run-all.sh --online   (also run the network/model tests)
 cd "$(dirname "$0")/.."
 # Discover host tools on PATH; CLODE_* override per machine. No hardcoded prefixes
-# (the Python/Node helpers also resolve via their `#!/usr/bin/env` shebangs).
-# Python is now a TEST-only dependency (the doctor-parity pytest + the bats that
-# drive mkfixture.py/pty_run.py/tui_screen.py). The shipped runtime (bin/ +
-# libexec/) is Python-free — node + sh only.
+# (the Node helpers also resolve via their `#!/usr/bin/env` shebangs).
+# Both the shipped runtime (bin/ + libexec/) AND the test suite are now
+# Python-free: node + sh + bats only (plus npm for the node-pty devDep install).
 : "${CLODE_NODE:=$(command -v node)}"
-: "${CLODE_PYTHON:=$(command -v python3)}"
 : "${CLODE_BATS:=$(command -v bats)}"
-export CLODE_NODE CLODE_PYTHON
-NODE="$CLODE_NODE"; PYTHON="$CLODE_PYTHON"; BATS="$CLODE_BATS"
+export CLODE_NODE
+NODE="$CLODE_NODE"; BATS="$CLODE_BATS"
 [ -n "$NODE" ]   || { echo "run-all: node not found on PATH (set CLODE_NODE)" >&2; exit 2; }
-[ -n "$PYTHON" ] || { echo "run-all: python3 not found on PATH (set CLODE_PYTHON)" >&2; exit 2; }
 [ -n "$BATS" ]   || { echo "run-all: bats not found on PATH (set CLODE_BATS)" >&2; exit 2; }
 # Test harness deps (node-pty, @xterm/headless) live in a SEPARATE manifest
 # (test/package.json -> test/node_modules), deliberately NOT in the root
@@ -46,7 +43,6 @@ run() { # name, command...
   if out=$("$@" 2>&1); then echo "OK"; else echo "FAIL"; echo "$out" | sed 's/^/    /'; fails=$((fails+1)); fi
 }
 
-run "pytest doctor"   "$PYTHON" -m pytest -q test/test_doctor_parity.py
 run "node tests"      "$NODE" --test test/*.test.cjs
 run "bats suite"      "$BATS" test/
 
