@@ -67,23 +67,21 @@ JS
 }
 
 _tui_capture() {  # $1 = withws|nows, $2 = world root, $3 = out file
-  # Drive clode under a pty (tui_screen.py self-terminates after its SECONDS arg, so
-  # no GNU `timeout` needed). Clear tmux hints so Ink doesn't emit passthrough pyte
-  # can't decode. NODE_PATH cleared so ONLY the chosen prefix decides ws visibility.
+  # Drive clode under a pty (tui-screen.cjs self-terminates after its SECONDS arg, so
+  # no GNU `timeout` needed). Clear tmux hints so Ink doesn't emit passthrough the
+  # emulator can't decode. NODE_PATH cleared so ONLY the chosen prefix decides ws
+  # visibility. The harness loads node-pty's prebuilt addon, so it must run under a
+  # node-pty-capable node — the world node is a symlink to the box's real node, so it
+  # qualifies; the spawned ./bin/clode child still resolves its deps via CLODE_NODE.
   ( unset TMUX TMUX_PANE TERM_PROGRAM NODE_PATH
     export TERM=xterm-256color
     export CLODE_NODE="$2/$1/bin/node"
-    "$CLODE_PYTHON" test/tui_screen.py 11 -- ./bin/clode
+    "$CLODE_NODE" test/tui-screen.cjs 11 -- ./bin/clode
   ) > "$3" 2>/dev/null || true
 }
 
 setup_file() {
   cd "$BATS_TEST_DIRNAME/.."
-  # pyte (a real terminal emulator) is a test-only dependency; skip cleanly where
-  # it isn't installed (cf. the mandoc/offline skips).
-  if ! "$CLODE_PYTHON" -c 'import pyte' 2>/dev/null; then
-    touch "$BATS_FILE_TMPDIR/skip"; return
-  fi
   local world="$BATS_FILE_TMPDIR/world"
   _tui_make_world "$world"
   # Warm the per-binary cache first so a (re)extract never eats into the timed pty
@@ -94,7 +92,6 @@ setup_file() {
 }
 
 setup() {
-  [ -f "$BATS_FILE_TMPDIR/skip" ] && skip "pyte not installed"
   WS="$BATS_FILE_TMPDIR/withws.txt"
   NOWS="$BATS_FILE_TMPDIR/nows.txt"
 }

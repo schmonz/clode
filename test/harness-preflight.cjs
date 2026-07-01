@@ -19,4 +19,44 @@ if (missing.length) {
     'These are test-only deps (test/package.json) — they are NOT part of the shipped package.\n');
   process.exit(1);
 }
+
+// Resolving node-pty is NOT enough: it spawns through a prebuilt `spawn-helper`
+// binary that must be EXECUTABLE. An extraction/copy that drops the +x bit leaves
+// resolve() green but every pty.spawn() failing with "posix_spawnp failed" at test
+// time. So do a real spawn smoke; if it trips, restore the +x bit on any bundled
+// spawn-helper and retry once before failing loud.
+const fs = require('node:fs');
+function chmodSpawnHelpers() {
+  let fixed = 0;
+  const base = path.dirname(req.resolve('node-pty'));            // .../node-pty/lib
+  const prebuilds = path.join(base, '..', 'prebuilds');
+  let dirs = [];
+  try { dirs = fs.readdirSync(prebuilds); } catch { /* none */ }
+  for (const d of dirs) {
+    const h = path.join(prebuilds, d, 'spawn-helper');
+    try { fs.chmodSync(h, 0o755); fixed++; } catch { /* not this platform */ }
+  }
+  return fixed;
+}
+function spawnSmoke() {
+  const pty = req('node-pty');
+  const child = pty.spawn('/bin/sh', ['-c', 'exit 0'], { name: 'xterm-256color', cols: 20, rows: 5 });
+  try { child.kill(); } catch { /* already gone */ }
+}
+try {
+  spawnSmoke();
+} catch (e) {
+  if (process.platform !== 'win32' && /posix_spawn|spawn-helper|EACCES|ENOENT/i.test(String(e && e.message))) {
+    chmodSpawnHelpers();
+    try {
+      spawnSmoke();
+    } catch (e2) {
+      process.stderr.write('node-pty cannot spawn a pty even after fixing spawn-helper perms: ' + (e2 && e2.message) + '\n');
+      process.exit(1);
+    }
+  } else {
+    process.stderr.write('node-pty cannot spawn a pty: ' + (e && e.message) + '\n');
+    process.exit(1);
+  }
+}
 process.exit(0);

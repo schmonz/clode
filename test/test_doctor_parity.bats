@@ -21,7 +21,7 @@ _doctor_capture() {  # $1 = out file; rest = command (+args) to run
   local out=$1; shift
   ( unset TMUX TMUX_PANE TERM_PROGRAM NODE_PATH
     export TERM=xterm-256color DISABLE_AUTOUPDATER=1
-    "$CLODE_PYTHON" test/tui_screen.py 16 \
+    "$CLODE_NODE" test/tui-screen.cjs 16 \
       --then-hex 2f646f63746f72@4 \
       --then-hex 0d@6 \
       --rows 120 --cols 100 \
@@ -32,9 +32,6 @@ _doctor_capture() {  # $1 = out file; rest = command (+args) to run
 setup_file() {
   cd "$BATS_TEST_DIRNAME/.."
   local skipfile="$BATS_FILE_TMPDIR/skip"
-  if ! "$CLODE_PYTHON" -c 'import pyte' 2>/dev/null; then
-    echo "pyte not installed" > "$skipfile"; return
-  fi
   local native; native="$(command -v claude || true)"
   if [ -z "$native" ]; then
     echo "native claude not on PATH" > "$skipfile"; return
