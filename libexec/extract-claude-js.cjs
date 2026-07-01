@@ -50,13 +50,16 @@ function die(msg) {
 // Select the cli.js entry block by name. A bundle with no entrypoints/cli.js
 // block means the format changed — refuse to guess, so a bad carve never ships.
 function pickEntry(blocks) {
+  // Throws (rather than process.exit) so an in-process caller (clode-extract) can
+  // catch a format change and fail loudly WITHOUT tearing down the launcher. main()
+  // re-adds the 'error: ' prefix via die(), so the CLI's stderr + exit-1 is unchanged.
   if (!blocks.length) {
-    die('error: no Bun @bun-cjs entry marker found — format may have changed');
+    throw new Error('no Bun @bun-cjs entry marker found — format may have changed');
   }
   const named = blocks.find((b) => (b.name || '').endsWith('entrypoints/cli.js'));
   if (named === undefined) {
     const bySize = blocks.reduce((a, b) => (b.size > a.size ? b : a));
-    die('error: no block named entrypoints/cli.js; bundle format may have changed '
+    throw new Error('no block named entrypoints/cli.js; bundle format may have changed '
       + `(largest candidate was ${bySize.size} bytes). Refusing to guess.`);
   }
   return named;
@@ -322,12 +325,14 @@ function contentChecks(outText) {
   return problems;
 }
 
-function main(argv) {
-  const pos = argv.filter((a) => !a.startsWith('-'));
-  if (pos.length !== 2) {
-    die(DOC);
-  }
-  const [binpath, out] = pos;
+// Extract the CLI bundle from *binpath* and write the Node-CJS-runnable cli.cjs to
+// *out*. The reusable core of main(): read latin1 -> carve -> pickEntry -> transform
+// -> write Buffer(latin1) -> verify + contentChecks. Removes a bad partial output and
+// THROWS on any verification/content problem (loud failure the in-process caller can
+// catch), rather than calling process.exit — so it is safe to require() and call from
+// clode-extract without tearing the whole launcher down. Returns { name, bytes } for
+// the caller's progress line. Byte-for-byte identical to what the CLI wrote before.
+function extractToFile(binpath, out) {
   const data = fs.readFileSync(binpath, 'latin1');
   const entry = pickEntry(carveBlocks(data));
   const text = transform(entry.body);
@@ -335,9 +340,26 @@ function main(argv) {
   const problems = verify(text).concat(contentChecks(text));
   if (problems.length) {
     try { fs.rmSync(out); } catch (e) { /* ignore */ }
-    die('error: extraction failed verification:\n  - ' + problems.join('\n  - '));
+    throw new Error('extraction failed verification:\n  - ' + problems.join('\n  - '));
   }
-  process.stderr.write(`entry=${entry.name || '<unknown>'}\nwrote ${out} (${text.length} bytes)\n`);
+  return { name: entry.name, bytes: text.length };
+}
+
+function main(argv) {
+  const pos = argv.filter((a) => !a.startsWith('-'));
+  if (pos.length !== 2) {
+    die(DOC);
+  }
+  const [binpath, out] = pos;
+  let res;
+  try {
+    res = extractToFile(binpath, out);
+  } catch (e) {
+    // Preserve the CLI's exact stderr + exit-1 contract (die's 'error: ' prefix +
+    // the verification detail extractToFile carries in its message).
+    die('error: ' + e.message);
+  }
+  process.stderr.write(`entry=${res.name || '<unknown>'}\nwrote ${out} (${res.bytes} bytes)\n`);
 }
 
 if (require.main === module) {
@@ -353,6 +375,7 @@ module.exports = {
   transform,
   verify,
   contentChecks,
+  extractToFile,
   main,
   PRELUDE,
 };
