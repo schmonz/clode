@@ -182,6 +182,13 @@ async function main(argv, opts = {}) {
   extract.extractIfNeeded({ bin, cacheDir: cache, libexec: LIBEXEC, verbose, node, key });
   deps.ensureDeps({ libexec: LIBEXEC, here: HERE, verbose, env });
 
+  // Where ensure_deps put the runtime ext-deps (ws, yaml, string-width, ...): the
+  // sh keeps DEPS_ROOT as a shell var visible to set_node_path; here we recompute it
+  // identically and hand it to runBundle so its node_modules joins NODE_PATH.
+  const home = env.HOME || '';
+  const xdgData = env.XDG_DATA_HOME || `${home}/.local/share`;
+  const depsRoot = env.CLODE_DEPS || `${xdgData}/clode`;
+
   // Watcher: on real sessions only (never on print-and-exit, which run no model),
   // surface any prior HIGH notice, then maybe fire a fresh detached cycle.
   if (first !== '--version' && first !== '-v' && first !== '--help' && first !== '-h') {
@@ -197,6 +204,7 @@ async function main(argv, opts = {}) {
     settingsPath,
     self,
     libexec: LIBEXEC,
+    depsRoot,
     env,
   });
 }

@@ -45,7 +45,12 @@ teardown() {
 }
 
 @test "5. no provider yields exit 1 and guidance" {
-  err=$(PATH="/usr/bin:/bin" HOME="$TMP/empty" "$CLODE_BIN" 2>&1 >/dev/null) || rc=$?
+  # node must be on PATH so the #!/usr/bin/env node JS launcher can start at all (the
+  # sh launcher ignores it). We expose ONLY node via a lone symlink dir — not node's
+  # real bin dir, which may also hold a `claude` and would defeat the isolation — so
+  # empty HOME + this minimal PATH keep every provider absent for BOTH launchers.
+  mkdir -p "$TMP/nodebin"; ln -sf "$CLODE_NODE" "$TMP/nodebin/node"
+  err=$(PATH="$TMP/nodebin:/usr/bin:/bin" HOME="$TMP/empty" "$CLODE_BIN" 2>&1 >/dev/null) || rc=$?
   [ "${rc:-0}" -eq 1 ]
   [[ "$err" == *"CLODE_CLAUDE_BIN"* ]]
 }

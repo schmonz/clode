@@ -78,15 +78,17 @@ function guardSettingsForArgs(args = [], opts = {}) {
 // Mutates and returns env.
 function applyBundleEnv(opts = {}) {
   const { node, self, libexec, env = process.env } = opts;
+  const depsRoot = 'depsRoot' in opts ? opts.depsRoot : env.DEPS_ROOT;
   setIfUnset(env, 'DISABLE_INSTALLATION_CHECKS', '1');
   setIfUnset(env, 'NODE_USE_ENV_PROXY', '1');
   hosttools.certStoreDefault({ env });
   hosttools.applyRipgrepEnv({ env });
   // sh set_node_path derives $HERE/../node_modules; libexec is a sibling of that
   // node_modules (both directly under the package root), so path.resolve(libexec,'..')
-  // yields the same package root as path.resolve(HERE,'..'). $DEPS_ROOT + the node
-  // prefix's global node_modules come from env/node exactly as in sh.
-  hosttools.applyNodePath({ env, here: libexec, depsRoot: env.DEPS_ROOT, node });
+  // yields the same package root as path.resolve(HERE,'..'). depsRoot (ensure_deps's
+  // DEPS_ROOT, threaded from the launcher) + the node prefix's global node_modules
+  // come from the caller/node exactly as in sh's set_node_path.
+  hosttools.applyNodePath({ env, here: libexec, depsRoot, node });
   // Hand the bundle's in-TUI autoupdater a way back to this launcher.
   if (self != null) env.CLODE_SELF = self;
   return env;
@@ -106,6 +108,7 @@ function runBundle(opts = {}) {
     settingsPath = null,
     self,
     libexec,
+    depsRoot,
     env = process.env,
     spawn: spawnFn = spawn,
     procOn = (s, cb) => process.on(s, cb),
@@ -114,7 +117,7 @@ function runBundle(opts = {}) {
     stderr = process.stderr,
   } = opts;
 
-  applyBundleEnv({ node, self, libexec, env });
+  applyBundleEnv({ node, self, libexec, depsRoot, env });
 
   const argv = settingsPath ? ['--settings', settingsPath, ...args] : [...args];
   const child = spawnFn(node, [cliPath, ...argv], { stdio: 'inherit', env });
