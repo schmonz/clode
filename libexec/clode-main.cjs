@@ -181,7 +181,12 @@ async function main(argv, opts = {}) {
   }
 
   // 8. DEFAULT LAUNCH.
-  requireNode(node);
+  // Under a SEA the binary is its own node, so an external CLODE_NODE is irrelevant and
+  // must not gate the launch (runBundle also forces node=self under SEA); otherwise the
+  // resolved `node` applies.
+  const sea = require('./clode-sea.cjs');
+  const launchNode = sea.isSea() ? process.execPath : node;
+  requireNode(launchNode);
 
   let bin = resolve.resolveClaudeBin({ env });
   if (bin == null) {
@@ -207,13 +212,12 @@ async function main(argv, opts = {}) {
   // into dirs shaped like the npm/source layout (a depsRoot and a libexec); otherwise
   // ensureDeps installs and the real LIBEXEC/DEPS_ROOT apply. Everything downstream
   // then runs UNCHANGED against LAUNCH_LIBEXEC / depsRoot — no SEA-specific branches.
-  const sea = require('./clode-sea.cjs');
   const { seaDepsRoot, seaLibexec } = prepareRuntimeDeps({
     sea, deps, cacheRoot, libexec: LIBEXEC, here: HERE, verbose, env,
   });
   const LAUNCH_LIBEXEC = seaLibexec || LIBEXEC;
 
-  extract.extractIfNeeded({ bin, cacheDir: cache, libexec: LAUNCH_LIBEXEC, verbose, node, key });
+  extract.extractIfNeeded({ bin, cacheDir: cache, libexec: LAUNCH_LIBEXEC, verbose, key });
 
   // Where the runtime ext-deps (ws, yaml, string-width, ...) live: ensure_deps's
   // DEPS_ROOT in the npm/source path, or the materialized sea-deps dir under SEA. Its
@@ -229,9 +233,9 @@ async function main(argv, opts = {}) {
     watch.clodeWatchMaybe({ env, self });
   }
 
-  const settingsPath = run.guardSettingsForArgs(args, { node, libexec: LAUNCH_LIBEXEC, env });
+  const settingsPath = run.guardSettingsForArgs(args, { node: launchNode, libexec: LAUNCH_LIBEXEC, env });
   run.runBundle({
-    node,
+    node: launchNode,
     cliPath: path.join(cache, 'cli.cjs'),
     args,
     settingsPath,

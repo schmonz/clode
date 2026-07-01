@@ -34,7 +34,14 @@ function materializeDeps({ sea = seaMod(), cacheDir }) {
   execFileSync('tar', ['-xf', tarPath, '-C', tmp]);  // extracts a node_modules/ dir
   fs.rmSync(tarPath);
   fs.mkdirSync(path.dirname(dir), { recursive: true });
-  fs.renameSync(tmp, dir);                            // atomic publish
+  try {
+    fs.renameSync(tmp, dir);                          // atomic publish
+  } catch (e) {
+    // Lost a cold-start race: another clode published this sig first. Its dir is
+    // authoritative (rename onto a non-empty dir fails ENOTEMPTY/EEXIST) — drop ours.
+    if (fs.existsSync(path.join(dir, 'node_modules'))) fs.rmSync(tmp, { recursive: true, force: true });
+    else throw e;
+  }
   return dir;
 }
 

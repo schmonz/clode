@@ -6,6 +6,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import url from 'node:url';
 
@@ -43,7 +44,13 @@ function stageDeps() {
   fs.rmSync(staging, { recursive: true, force: true });
   fs.mkdirSync(staging, { recursive: true });
   fs.copyFileSync(path.join(REPO, 'package.json'), path.join(staging, 'package.json'));
-  execFileSync('npm', ['install', '--prefix', staging, '--no-audit', '--no-fund', '--omit=dev'], { stdio: 'inherit' });
+  // Prefer a reproducible install: copy the committed lockfile and `npm ci` (exact,
+  // locked versions). Fall back to `npm install` only if no lockfile is present.
+  const lock = path.join(REPO, 'package-lock.json');
+  const cmd = fs.existsSync(lock)
+    ? (fs.copyFileSync(lock, path.join(staging, 'package-lock.json')), ['ci', '--omit=dev'])
+    : ['install', '--omit=dev'];
+  execFileSync('npm', [cmd[0], '--prefix', staging, '--no-audit', '--no-fund', ...cmd.slice(1)], { stdio: 'inherit' });
   const tar = path.join(OUT, 'deps.tar');
   execFileSync('tar', ['-cf', tar, '-C', staging, 'node_modules']);
   const sig = crypto.createHash('sha256').update(fs.readFileSync(tar)).digest('hex');
@@ -56,6 +63,7 @@ function writeSeaConfig(bundle, tar, sigFile) {
   const cfg = {
     main: bundle,
     output: path.join(OUT, 'sea-prep.blob'),
+    disableExperimentalSEAWarning: true,   // don't print node's SEA warning on every run
     // The libexec-shaped support files clode-sea materializes to disk at runtime, so
     // extractIfNeeded finds them (shim + extractor) exactly as in the npm/source tree.
     assets: {
@@ -94,18 +102,47 @@ function buildBinary(blob) {
 // without corrupting the ELF, and the dynamic loader then segfaults at startup — a
 // runtime-only symptom we catch here at build time.
 function smokeCheck(bin) {
+  // 1. It runs at all. The classic failure is a STRIPPED embedded node: postject can't
+  //    inject into it without corrupting the ELF, and the loader segfaults at startup.
   const r = spawnSync(bin, ['--clode-version'], { encoding: 'utf8' });
-  if (r.status === 0 && /^clode \d+\.\d+\.\d+/.test(r.stdout || '')) return;
-  console.error(`SEA self-check FAILED${r.signal ? ` (crashed with ${r.signal})` : ''}: ` +
-    `'${bin} --clode-version' did not print the version.`);
-  if (r.signal === 'SIGSEGV') {
-    console.error('A SIGSEGV at startup almost always means the embedded node was a STRIPPED');
-    console.error('binary — postject corrupts stripped nodes and the loader crashes. Build with');
-    console.error('an official, non-stripped Node (an asdf/nvm nodejs.org build), not a distro-');
-    console.error('stripped /usr/bin/node.');
+  if (!(r.status === 0 && /^clode \d+\.\d+\.\d+/.test(r.stdout || ''))) {
+    console.error(`SEA self-check FAILED${r.signal ? ` (crashed with ${r.signal})` : ''}: ` +
+      `'${bin} --clode-version' did not print the version.`);
+    if (r.signal === 'SIGSEGV') {
+      console.error('A SIGSEGV at startup almost always means the embedded node was a STRIPPED');
+      console.error('binary — postject corrupts stripped nodes and the loader crashes. Build with');
+      console.error('an official, non-stripped Node (an asdf/nvm nodejs.org build), not a distro-');
+      console.error('stripped /usr/bin/node.');
+    }
+    if (r.stderr) console.error(r.stderr);
+    process.exit(1);
   }
-  if (r.stderr) console.error(r.stderr);
-  process.exit(1);
+  // 2. Best-effort DEEP check: if a provider is resolvable, boot the REAL bundle once
+  //    (offline `--version`) — this exercises deps/extractor materialization + run-as-
+  //    node, catching a corrupt deps.tar or stale embedded extractor that step 1 can't.
+  //    Skipped (with a note) when no provider is available at build time.
+  const provider = process.env.CLODE_CLAUDE_BIN
+    || ['/usr/bin/claude', '/usr/local/bin/claude'].find((p) => fs.existsSync(p));
+  if (!provider) {
+    console.error('SEA self-check: skipped deep boot (no provider; set CLODE_CLAUDE_BIN to enable)');
+    return;
+  }
+  const cache = fs.mkdtempSync(path.join(os.tmpdir(), 'sea-selfcheck-'));
+  try {
+    const boot = spawnSync(bin, ['--version'], {
+      encoding: 'utf8', timeout: 120000,
+      env: { ...process.env, CLODE_CACHE: cache, CLODE_CLAUDE_BIN: provider },
+    });
+    if (boot.status !== 0 || /Cannot find module|MODULE_NOT_FOUND/.test(boot.stderr || '')) {
+      console.error('SEA self-check FAILED: the binary could not boot the real bundle ' +
+        '(corrupt deps asset or stale embedded extractor?).');
+      if (boot.stderr) console.error(boot.stderr);
+      process.exit(1);
+    }
+    console.error('SEA self-check: booted the real bundle OK');
+  } finally {
+    fs.rmSync(cache, { recursive: true, force: true });
+  }
 }
 
 const bundle = esbuildBundle();
