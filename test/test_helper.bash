@@ -3,7 +3,6 @@
 # per machine); set here too so a file run directly under `bats` — not via
 # run-all.sh — still finds node/python without a hardcoded prefix.
 export CLODE_NODE="${CLODE_NODE:-$(command -v node)}"
-export CLODE_PYTHON="${CLODE_PYTHON:-$(command -v python3)}"
 
 # Point clode's runtime-dep install at a "user-managed" sentinel — a node_modules with
 # no clode .deps-sig, which ensure_deps treats as user-managed and never touches — so
@@ -52,18 +51,20 @@ mktempf() { mktemp    "${TMPDIR:-/tmp}/clode.XXXXXX"; }
 # Portable wall-clock timeout. clode runs where GNU coreutils' `timeout` is absent
 # (NetBSD/pkgsrc, older macOS — macOS ships it only as `gtimeout`), so a test must
 # not hard-depend on it. Prefer a real timeout/gtimeout; otherwise fall back to
-# python3, which clode already requires (so this is exactly as portable as clode).
+# node, which clode already requires (so this is exactly as portable as clode).
 # Args: SECONDS CMD...; output/stdin pass through; exits 124 on timeout (as GNU does).
 clode_timeout() {
   _to=$1; shift
   if command -v timeout >/dev/null 2>&1; then timeout "$_to" "$@"
   elif command -v gtimeout >/dev/null 2>&1; then gtimeout "$_to" "$@"
-  else "$CLODE_PYTHON" - "$_to" "$@" <<'PY'
-import subprocess, sys
-try:
-    sys.exit(subprocess.run(sys.argv[2:], timeout=float(sys.argv[1])).returncode)
-except subprocess.TimeoutExpired:
-    sys.exit(124)
-PY
+  else "$CLODE_NODE" -e '
+const { spawn } = require("child_process");
+const to = parseFloat(process.argv[1]);
+const p = spawn(process.argv[2], process.argv.slice(3), { stdio: "inherit" });
+let timedOut = false;
+const t = setTimeout(() => { timedOut = true; p.kill("SIGKILL"); }, to * 1000);
+p.on("error", () => process.exit(127));
+p.on("exit", (code) => { clearTimeout(t); process.exit(timedOut ? 124 : (code == null ? 1 : code)); });
+' "$_to" "$@"
   fi
 }
