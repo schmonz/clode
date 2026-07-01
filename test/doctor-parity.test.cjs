@@ -29,6 +29,31 @@ test('sliceToReport flags incomplete capture (no rule)', () => {
   assert.strictEqual(ok, false);
 });
 
+test('CLI exit codes: 0 parity, 1 deviation, 2 incomplete', () => {
+  // The live native-vs-clode bats path skips on version mismatch, so cover the
+  // CLI exit-code contract (0/1/2) directly against synthetic captures.
+  const { spawnSync } = require('node:child_process');
+  const os = require('node:os');
+  const NODE = process.env.CLODE_NODE || process.execPath;
+  const TOOL = path.join(__dirname, 'doctor-parity.cjs');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dpcli-'));
+  const w = (name, content) => { const p = path.join(tmp, name); fs.writeFileSync(p, content); return p; };
+  const run = (n, c) => spawnSync(NODE, [TOOL, n, c], { encoding: 'utf8' });
+  const A = 'Section A\n├ item one\n└ item two';
+  const B = 'Section B\n└ only here';
+
+  // parity: identical complete captures -> 0
+  assert.strictEqual(run(w('n0', synth(A)), w('c0', synth(A))).status, 0, 'parity -> 0');
+  // deviation: clode drops a whole block -> 1, with a DROPPED block message
+  const r1 = run(w('n1', synth(A, B)), w('c1', synth(A)));
+  assert.strictEqual(r1.status, 1, 'deviation -> 1');
+  assert.match(r1.stdout, /DROPPED block/);
+  // incomplete capture (no leading rule) -> 2
+  assert.strictEqual(run(w('inc', 'no rule\nEnter to close'), w('ok', synth(A))).status, 2, 'incomplete -> 2');
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
 test('parity holds with allowed skew add + allowed omission', () => {
   const native = synth('Installation warnings\n├ foo is not in your PATH\n└ ok item');
   const clode = synth('Installation warnings\n├ host bfs rejects flags clode uses — why\n└ ok item');
