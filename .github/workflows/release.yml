@@ -1,0 +1,77 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']                      # real trigger (kept on main)
+    branches: ['ci/github-releases']  # TEST-ONLY — delete before merging to main
+  workflow_dispatch: {}               # manual button (kept on main)
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest   # linux-x64
+          - os: macos-14        # darwin arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .tool-versions
+      - name: Assert Node matches the .tool-versions pin
+        run: |
+          set -euo pipefail
+          want=$(sed -n 's/^nodejs //p' .tool-versions)
+          have=$(node -v); have=${have#v}
+          [ "$have" = "$want" ] || { echo "node skew: .tool-versions=$want but runtime=$have" >&2; exit 1; }
+          echo "node $have matches .tool-versions pin"
+      - name: Build the SEA binary
+        run: node scripts/build-sea.mjs
+      - name: Name the binary
+        id: name
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF_TYPE" = tag ]; then V="${GITHUB_REF_NAME#v}"; else V="$(cat VERSION)"; fi
+          BASE=$(node -e "console.log(require('./scripts/platform-tag.cjs').platformTag())")
+          BASE=${BASE%-node*}
+          DIR=$(node -e "console.log(require('./scripts/platform-tag.cjs').seaOut('.'))")
+          ASSET="clode-$V-$BASE"
+          cp "$DIR/clode" "$ASSET"
+          echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.name.outputs.asset }}
+          path: ${{ steps.name.outputs.asset }}
+          if-no-files-found: error
+
+  release:
+    needs: build          # publishes ONLY if every build job succeeded
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            TAG="$GITHUB_REF_NAME"; DRAFT=""
+          else
+            V="$(cat VERSION)"; TAG="v$V-test.$GITHUB_RUN_NUMBER"; DRAFT="--draft"
+          fi
+          echo "Publishing $TAG (draft=${DRAFT:-no}) with: $(ls dist)"
+          gh release create "$TAG" $DRAFT \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --notes "Automated release. Assets: $(ls dist | tr '\n' ' ')" \
+            dist/*
