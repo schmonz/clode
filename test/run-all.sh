@@ -13,6 +13,13 @@ cd "$(dirname "$0")/.."
 : "${CLODE_NODE:=$(command -v node)}"
 : "${CLODE_BATS:=$(command -v bats)}"
 export CLODE_NODE
+# Canonicalize CLODE_NODE to the REAL interpreter binary. A version-manager SHIM
+# (asdf/nvm) re-derives PATH internally when exec'd, which defeats a test's minimal
+# PATH and can leak a real `claude` back in (see test_resolve #5). process.execPath
+# is the concrete binary the shim ultimately runs, so resolving through it once
+# yields a stable, shim-free node — and removes the need to hand-set CLODE_NODE.
+if _real=$("$CLODE_NODE" -e 'process.stdout.write(process.execPath)' 2>/dev/null) \
+   && [ -n "$_real" ]; then CLODE_NODE="$_real"; export CLODE_NODE; fi
 NODE="$CLODE_NODE"; BATS="$CLODE_BATS"
 [ -n "$NODE" ]   || { echo "run-all: node not found on PATH (set CLODE_NODE)" >&2; exit 2; }
 [ -n "$BATS" ]   || { echo "run-all: bats not found on PATH (set CLODE_BATS)" >&2; exit 2; }
