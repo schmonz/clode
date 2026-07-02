@@ -162,14 +162,14 @@ async function main(argv, opts = {}) {
 
   // 5. `clode update [channel]`: fetch a fresh provider, then exit — no Node floor.
   if (first === 'update') {
-    const status = await update.clodeUpdate(args[1] || 'stable', { env, libexec: LIBEXEC, here: HERE, node });
+    const status = await update.clodeUpdate(args[1], { env, libexec: LIBEXEC, here: HERE, node });
     return process.exit(status);
   }
 
   // 6. `clode --clode-internal-update [channel]`: the non-interactive entry the
   //    in-TUI autoupdater spawns (via CLODE_SELF); same fetch as `update`, then exit.
   if (first === '--clode-internal-update') {
-    const status = await update.clodeUpdate(args[1] || 'stable', { env, libexec: LIBEXEC, here: HERE, node });
+    const status = await update.clodeUpdate(args[1], { env, libexec: LIBEXEC, here: HERE, node });
     return process.exit(status);
   }
 

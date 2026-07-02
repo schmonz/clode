@@ -28,6 +28,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { downloadFile } = require('./clode-net.cjs');
+const { resolveChannel, releasesUrl } = require('./clode-update.cjs');
 
 const HERE_DEFAULT = __dirname; // libexec/; bin/ is a sibling
 const LIBEXEC_DEFAULT = __dirname;
@@ -145,9 +146,13 @@ async function clodeWatch(manual, opts) {
   try { fs.mkdirSync(wd, { recursive: true }); } catch { return 0; }
   const notice = path.join(wd, 'watch-notice');
 
+  // Poll the SAME channel `clode update` would fetch: autoUpdatesChannel, else
+  // 'latest' (matching claude), against the resolved releases base (default URL
+  // when CLODE_RELEASES_URL is unset). Keeps the nudge and the updater in step.
+  const chan = resolveChannel(undefined, env);
   let latest;
   try {
-    latest = String(await downloadFile(env.CLODE_RELEASES_URL + '/stable'))
+    latest = String(await downloadFile(`${releasesUrl(env)}/${chan}`))
       .replace(/[\r\n]/g, '');
   } catch { return 0; }
   if (!/^[0-9].*\.[0-9].*\.[0-9]/.test(latest)) return 0;
@@ -159,7 +164,7 @@ async function clodeWatch(manual, opts) {
 
   if (!versionGt(latest, current, { env, here })) {
     writeWatchNotice(notice, latest, current, 0, now);
-    if (manual) stderr.write(`clode: up to date (${current}; latest stable ${latest}).\n`);
+    if (manual) stderr.write(`clode: up to date (${current}; ${chan} ${latest}).\n`);
     return 0;
   }
 

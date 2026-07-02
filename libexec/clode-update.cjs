@@ -51,6 +51,43 @@ function providersDir(env) {
   return `${xdgData}/clode/providers`;
 }
 
+// Settings files claude reads the auto-update channel from, HIGHEST precedence
+// first: enterprise-managed policy (platform-fixed path), then user settings
+// (CLODE honors CLAUDE_CONFIG_DIR like claude, defaulting to ~/.claude). We scope
+// to the machine/user-global tiers where `autoUpdatesChannel` actually lives, not
+// per-directory project settings (a global provider fetch has no project cwd).
+function settingsFiles(env) {
+  const managed = process.platform === 'darwin'
+    ? '/Library/Application Support/ClaudeCode/managed-settings.json'
+    : process.platform === 'win32'
+      ? 'C:\\ProgramData\\ClaudeCode\\managed-settings.json'
+      : '/etc/claude-code/managed-settings.json';
+  const cfgDir = env.CLAUDE_CONFIG_DIR && env.CLAUDE_CONFIG_DIR !== ''
+    ? env.CLAUDE_CONFIG_DIR
+    : path.join(env.HOME || '', '.claude');
+  return [managed, path.join(cfgDir, 'settings.json')];
+}
+
+// The `autoUpdatesChannel` value from the first settings file that defines it as
+// a non-empty string, or '' if none do. Best-effort: an absent/unreadable/invalid
+// file is skipped, never thrown (a broken settings.json must not break `update`).
+function readAutoUpdatesChannel(env) {
+  for (const f of settingsFiles(env)) {
+    let obj;
+    try { obj = JSON.parse(fs.readFileSync(f, 'utf8')); } catch { continue; }
+    const v = obj && obj.autoUpdatesChannel;
+    if (typeof v === 'string' && v !== '') return v;
+  }
+  return '';
+}
+
+// Resolve the effective channel, matching claude's precedence: an explicit CLI
+// arg wins; else the autoUpdatesChannel setting; else 'latest' (claude's default).
+function resolveChannel(explicit, env) {
+  if (typeof explicit === 'string' && explicit !== '') return explicit;
+  return readAutoUpdatesChannel(env) || 'latest';
+}
+
 // Extract the platform's checksum from a manifest body. Mirrors the inline node
 // in bin/clode:365-366: `const p = m.platforms || m; (p[plat]||{}).checksum||""`,
 // tolerant of a flat (no top-level "platforms") shape. Any parse error -> "".
@@ -141,7 +178,7 @@ async function clodeUpdate(channel, opts = {}) {
   } = opts;
   const err = (m) => stderr.write(m + '\n');
 
-  const chan = channel || 'stable';
+  const chan = resolveChannel(channel, env);
   const base = releasesUrl(env);
 
   // Resolve version: a numeric channel is used as-is; otherwise fetch the channel
@@ -225,4 +262,4 @@ async function clodeUpdate(channel, opts = {}) {
   return 0;
 }
 
-module.exports = { clodeUpdate, clodeSignalsReport };
+module.exports = { clodeUpdate, clodeSignalsReport, resolveChannel, releasesUrl };

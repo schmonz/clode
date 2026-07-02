@@ -61,8 +61,17 @@ fetches the latest upstream Claude Code host-agnostically (a fixed
 .Cm linux-x64
 build \(em the embedded JavaScript is the same on every platform) into clode's
 provider store and verifies its checksum; the next launch extracts and runs it.
-The default channel is
-.Cm stable .
+With no argument the channel is taken from the
+.Cm autoUpdatesChannel
+setting in
+.Pa managed-settings.json
+or
+.Pa $CLAUDE_CONFIG_DIR/settings.json
+(default
+.Pa ~/.claude/settings.json ) ,
+falling back to
+.Cm latest
+\(em matching Claude Code's own default.
 .Pp
 .Nm
 patches Claude Code's in-app auto-updater to run

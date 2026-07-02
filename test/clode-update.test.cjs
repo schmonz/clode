@@ -158,6 +158,76 @@ test('clode update prints a warn-only signals digest and writes a snapshot', asy
   } finally { cleanup(fx); }
 });
 
+// Add a second, self-consistent version to an existing fixture repo (its own
+// binary + manifest) so channel-resolution tests can prove WHICH channel/version
+// was fetched by which version dir + `current` points to.
+function addVersion(fx, ver) {
+  const dir = path.join(fx.repo, ver, PLAT);
+  fs.mkdirSync(dir, { recursive: true });
+  const src = path.join(dir, 'claude');
+  const mk = spawnSync(NODE, [path.join(REPO_ROOT, 'test', 'mkfixture.cjs'), src, 'v'],
+    { encoding: 'utf8' });
+  assert.strictEqual(mk.status, 0, 'mkfixture built the extra provider binary');
+  const sum = sha256Of(src);
+  fs.writeFileSync(path.join(fx.repo, ver, 'manifest.json'),
+    JSON.stringify({ platforms: { [PLAT]: { checksum: sum } } }) + '\n');
+  return sum;
+}
+
+// Point stable -> 8.8.8 and latest -> 9.9.9 so the two channels resolve to
+// DIFFERENT versions; returns the "other" version added for stable.
+function twoChannelRepo(fx) {
+  const STABLE_V = '8.8.8';
+  addVersion(fx, STABLE_V);
+  fs.writeFileSync(path.join(fx.repo, 'stable'), STABLE_V + '\n');
+  fs.writeFileSync(path.join(fx.repo, 'latest'), V + '\n'); // V = 9.9.9
+  return STABLE_V;
+}
+
+function writeUserSettings(fx, obj) {
+  const dir = path.join(fx.env.HOME, '.claude');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify(obj) + '\n');
+}
+
+test('no channel arg defaults to latest (matching claude)', async () => {
+  const fx = fixture();
+  twoChannelRepo(fx);
+  const err = sink();
+  try {
+    const status = await clodeUpdate(undefined, opts(fx.env, err));
+    assert.strictEqual(status, 0, 'default-channel update succeeded');
+    assert.strictEqual(fs.readlinkSync(path.join(fx.providers, 'current')), V,
+      'defaulted to latest -> 9.9.9');
+  } finally { cleanup(fx); }
+});
+
+test('no channel arg honors autoUpdatesChannel:stable from user settings', async () => {
+  const fx = fixture();
+  const STABLE_V = twoChannelRepo(fx);
+  writeUserSettings(fx, { autoUpdatesChannel: 'stable' });
+  const err = sink();
+  try {
+    const status = await clodeUpdate(undefined, opts(fx.env, err));
+    assert.strictEqual(status, 0, 'settings-driven update succeeded');
+    assert.strictEqual(fs.readlinkSync(path.join(fx.providers, 'current')), STABLE_V,
+      'followed autoUpdatesChannel=stable -> 8.8.8');
+  } finally { cleanup(fx); }
+});
+
+test('an explicit channel arg overrides the autoUpdatesChannel setting', async () => {
+  const fx = fixture();
+  twoChannelRepo(fx);
+  writeUserSettings(fx, { autoUpdatesChannel: 'stable' });
+  const err = sink();
+  try {
+    const status = await clodeUpdate('latest', opts(fx.env, err));
+    assert.strictEqual(status, 0, 'explicit-channel update succeeded');
+    assert.strictEqual(fs.readlinkSync(path.join(fx.providers, 'current')), V,
+      'explicit latest beat the stable setting -> 9.9.9');
+  } finally { cleanup(fx); }
+});
+
 test('already-have short-circuit re-uses the provider without re-download', async () => {
   const fx = fixture();
   try {

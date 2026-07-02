@@ -33,6 +33,7 @@ _watch_fixture() {
   export CLODE_WATCH_DIR="$TMP/cache/clode"
   REPO="$TMP/repo"; mkdir -p "$REPO"
   printf '%s\n' "$1" > "$REPO/stable"
+  printf '%s\n' "$1" > "$REPO/latest"
   if [ "$3" = high ]; then
     printf '# Changelog\n\n## %s\n\n- requires the native binary now\n## %s\n\n- old\n' "$1" "${2:-0.0.0}" > "$REPO/CHANGELOG.md"
   else

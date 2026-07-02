@@ -55,6 +55,7 @@ function watchFixture(latest, current, tier) {
   fs.mkdirSync(home, { recursive: true });
   fs.mkdirSync(repo, { recursive: true });
   fs.writeFileSync(path.join(repo, 'stable'), latest + '\n');
+  fs.writeFileSync(path.join(repo, 'latest'), latest + '\n');
   const prev = current || '0.0.0';
   const body = tier === 'high'
     ? `# Changelog\n\n## ${latest}\n\n- requires the native binary now\n## ${prev}\n\n- old\n`
@@ -208,7 +209,26 @@ test('clodeWatch manual mode: up-to-date prints an up-to-date summary', semverOp
   const err = sink();
   const rc = await clodeWatch('manual', { env: fx.env, libexec: LIBEXEC, here: HERE, node: NODE, stderr: err });
   assert.strictEqual(rc, 0);
-  assert.match(err.text(), /up to date \(1\.0\.0; latest stable 1\.0\.0\)/);
+  assert.match(err.text(), /up to date \(1\.0\.0; latest 1\.0\.0\)/);
+});
+
+test('clodeWatch follows autoUpdatesChannel when picking the upstream pointer', semverOpts, async () => {
+  // stable -> 1.0.0 (== current), latest -> 2.0.0. Default (no setting) follows
+  // latest, so 2.0.0 is seen as newer; autoUpdatesChannel=stable sees up-to-date.
+  const fx = watchFixture('2.0.0', '1.0.0', 'low');
+  fs.writeFileSync(path.join(fx.tmp, 'repo', 'stable'), '1.0.0\n');
+
+  const def = await clodeWatch('', { env: fx.env, libexec: LIBEXEC, here: HERE, node: NODE, stderr: sink() });
+  assert.strictEqual(def, 0);
+  assert.strictEqual(readNotice(fx.notice).latest, '2.0.0', 'default follows latest pointer');
+
+  const cfg = path.join(fx.env.HOME, '.claude');
+  fs.mkdirSync(cfg, { recursive: true });
+  fs.writeFileSync(path.join(cfg, 'settings.json'), JSON.stringify({ autoUpdatesChannel: 'stable' }) + '\n');
+  const err = sink();
+  const rc = await clodeWatch('manual', { env: fx.env, libexec: LIBEXEC, here: HERE, node: NODE, stderr: err });
+  assert.strictEqual(rc, 0);
+  assert.match(err.text(), /up to date \(1\.0\.0; stable 1\.0\.0\)/, 'stable setting follows stable pointer');
 });
 
 test('clodeWatch non-manual mode is silent (no stderr)', semverOpts, async () => {
