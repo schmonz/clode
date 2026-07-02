@@ -28,6 +28,7 @@ const deps = require('./clode-deps.cjs');
 const update = require('./clode-update.cjs');
 const watch = require('./clode-watch.cjs');
 const run = require('./clode-run.cjs');
+const { clodeCacheDir, depsStore } = require('./clode-paths.cjs');
 
 // clode's own help (clode-specific flags only — `clode --help` still passes
 // through to Claude Code). Byte-for-byte the sh clode_help heredoc, version
@@ -204,8 +205,7 @@ async function main(argv, opts = {}) {
   bin = resolve.followWrapper(bin);
 
   const key = resolve.cacheKey(bin);
-  const cacheRoot = env.CLODE_CACHE
-    || path.join(env.XDG_CACHE_HOME || path.join(env.HOME || '', '.cache'), 'clode');
+  const cacheRoot = clodeCacheDir(env);
   const cache = path.join(cacheRoot, key);
 
   // Under a SEA the ext-deps + support files are materialized from embedded assets
@@ -222,9 +222,7 @@ async function main(argv, opts = {}) {
   // Where the runtime ext-deps (ws, yaml, string-width, ...) live: ensure_deps's
   // DEPS_ROOT in the npm/source path, or the materialized sea-deps dir under SEA. Its
   // node_modules joins NODE_PATH via runBundle -> applyNodePath, unchanged either way.
-  const home = env.HOME || '';
-  const xdgData = env.XDG_DATA_HOME || `${home}/.local/share`;
-  const depsRoot = seaDepsRoot || env.CLODE_DEPS || `${xdgData}/clode`;
+  const depsRoot = seaDepsRoot || depsStore(env);
 
   // Watcher: on real sessions only (never on print-and-exit, which run no model),
   // surface any prior HIGH notice, then maybe fire a fresh detached cycle.

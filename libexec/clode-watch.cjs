@@ -24,11 +24,11 @@
 // high=1 iff the JSON contains `"tier": "high"`.
 
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { downloadFile } = require('./clode-net.cjs');
 const { resolveChannel, releasesUrl } = require('./clode-update.cjs');
+const cpaths = require('./clode-paths.cjs');
 
 const HERE_DEFAULT = __dirname; // libexec/; bin/ is a sibling
 const LIBEXEC_DEFAULT = __dirname;
@@ -47,8 +47,7 @@ function envOf(opts) {
 // than false-alarms.
 function loadSemver(opts) {
   const env = envOf(opts);
-  const store = env.CLODE_DEPS
-    || path.join(env.XDG_DATA_HOME || path.join(env.HOME || os.homedir(), '.local', 'share'), 'clode');
+  const store = cpaths.depsStore(env);
   const cands = [path.join(store, 'node_modules')];
   const here = (opts && opts.here) || null;
   if (here) cands.push(path.join(here, '..', 'node_modules'));
@@ -73,10 +72,7 @@ function versionGt(a, b, opts) {
 // Where watcher state lives (throttle + notice). Independent of the bundle
 // cache so it's stable across versions. CLODE_WATCH_DIR overrides.
 function watchDir(env) {
-  env = env || process.env;
-  if (env.CLODE_WATCH_DIR) return env.CLODE_WATCH_DIR;
-  const cache = env.XDG_CACHE_HOME || path.join(env.HOME || os.homedir(), '.cache');
-  return path.join(cache, 'clode');
+  return cpaths.watchDir(env || process.env);
 }
 
 // Epoch mtime (truncated seconds) of a file; 0 if unknown.
@@ -106,9 +102,7 @@ function readNoticeFile(p) {
 }
 
 function providersDir(env) {
-  return env.CLODE_PROVIDERS
-    || path.join(env.XDG_DATA_HOME || path.join(env.HOME || os.homedir(), '.local', 'share'),
-      'clode', 'providers');
+  return cpaths.providersDir(env || process.env);
 }
 
 // readlink of <providers>/current iff it's a symlink; '' otherwise.

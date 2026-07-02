@@ -14,6 +14,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { sigOf } = require('./clode-resolve.cjs');
 const { findTool } = require('./clode-hosttools.cjs');
+const { depsStore } = require('./clode-paths.cjs');
 
 // `[ -f "$p" ]`: exists AND is a regular file (any stat error -> false).
 function isFile(p) {
@@ -86,9 +87,7 @@ function ensureDeps(opts = {}) {
   const clodeLog = (m) => { if (verbose) emit(m); };
 
   // DEPS_ROOT="${CLODE_DEPS:-${XDG_DATA_HOME:-$HOME/.local/share}/clode}"
-  const home = env.HOME || '';
-  const xdgData = env.XDG_DATA_HOME || `${home}/.local/share`;
-  const depsRoot = env.CLODE_DEPS || `${xdgData}/clode`;
+  const depsRoot = depsStore(env);
 
   // manifest: first of LIBEXEC/package.json, HERE/../package.json that is a file.
   let manifest = '';

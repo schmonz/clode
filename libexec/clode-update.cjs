@@ -22,6 +22,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { downloadFile, sha256Of } = require('./clode-net.cjs');
+const cpaths = require('./clode-paths.cjs');
 
 // `[ -f "$p" ]`: exists AND is a regular file.
 function isFile(p) {
@@ -45,10 +46,7 @@ function changelogUrl(env) {
     'https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md';
 }
 function providersDir(env) {
-  if (env.CLODE_PROVIDERS) return env.CLODE_PROVIDERS;
-  const home = env.HOME || '';
-  const xdgData = env.XDG_DATA_HOME || `${home}/.local/share`;
-  return `${xdgData}/clode/providers`;
+  return cpaths.providersDir(env);
 }
 
 // Settings files claude reads the auto-update channel from, HIGHEST precedence

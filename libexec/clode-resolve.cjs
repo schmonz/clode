@@ -7,6 +7,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { providersDir } = require('./clode-paths.cjs');
 
 // Does `p` exist? Mirrors sh `[ -e "$p" ]` — existence, following symlinks (any
 // stat error, incl. a dangling link, is "no"). statSync (not lstat) so a symlink
@@ -105,8 +106,7 @@ function resolveClaudeBin(opts = {}) {
   // and, if <current>/claude exists, returns "$(cd <current> && pwd -P)/claude"
   // — the symlink-resolved (physical) provider dir + /claude.
   const home = env.HOME || '';
-  const xdgData = env.XDG_DATA_HOME || `${home}/.local/share`;
-  const providers = env.CLODE_PROVIDERS || `${xdgData}/clode/providers`;
+  const providers = providersDir(env);
   const current = `${providers}/current`;
   if (pathExists(`${current}/claude`, fsm)) {
     let physDir;

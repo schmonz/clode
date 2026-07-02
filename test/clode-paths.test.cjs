@@ -42,3 +42,16 @@ test('CLODE_STATE_ROOT contains BOTH data and cache (npm + SEA seal)', () => {
 test('falls back to os.homedir() when HOME unset', () => {
   assert.strictEqual(P.clodeDataDir({}), path.join(os.homedir(), '.local', 'share', 'clode'));
 });
+
+test('watchDir ignores CLODE_CACHE (uses cache base) while clodeCacheDir honors it', () => {
+  const env = { HOME, CLODE_CACHE: '/bundlecache' };
+  assert.strictEqual(P.clodeCacheDir(env), '/bundlecache');
+  assert.strictEqual(P.watchDir(env), cache);           // HOME-based, NOT /bundlecache
+  assert.strictEqual(P.watchDir({ CLODE_STATE_ROOT: '/s' }), require('path').join('/s', 'cache', 'clode'));
+});
+
+test('a caller (clode-watch.watchDir) honors CLODE_STATE_ROOT via clode-paths', () => {
+  const watch = require('../libexec/clode-watch.cjs');
+  const got = watch.watchDir({ CLODE_STATE_ROOT: '/sandbox' });
+  assert.strictEqual(got, require('path').join('/sandbox', 'cache', 'clode'));
+});

@@ -23,12 +23,20 @@ function clodeDataDir(env = process.env) {
   return path.join(xdg, 'clode');
 }
 
-// The cache dir (~/.cache/clode equiv). CLODE_CACHE IS today's cache override.
-function clodeCacheDir(env = process.env) {
-  if (env.CLODE_CACHE) return env.CLODE_CACHE;
+// The cache LOCATION, independent of the CLODE_CACHE override. Both the extracted-
+// bundle cache and the watch dir share this base; each layers its OWN override on top
+// (CLODE_CACHE / CLODE_WATCH_DIR). Kept separate so the watch dir does NOT move when
+// only CLODE_CACHE is set — preserving clode-watch's prior behavior (its watchDir
+// never consulted CLODE_CACHE).
+function cacheBase(env) {
   if (env.CLODE_STATE_ROOT) return path.join(env.CLODE_STATE_ROOT, 'cache', 'clode');
   const xdg = env.XDG_CACHE_HOME || path.join(homeDir(env), '.cache');
   return path.join(xdg, 'clode');
+}
+
+// The extracted-bundle cache dir. CLODE_CACHE IS today's override.
+function clodeCacheDir(env = process.env) {
+  return env.CLODE_CACHE || cacheBase(env);
 }
 
 function depsStore(env = process.env) {
@@ -37,8 +45,11 @@ function depsStore(env = process.env) {
 function providersDir(env = process.env) {
   return env.CLODE_PROVIDERS || path.join(clodeDataDir(env), 'providers');
 }
+// watchDir builds on cacheBase, NOT clodeCacheDir — it must ignore CLODE_CACHE (the
+// pre-refactor clode-watch.watchDir did), else the watcher writes into the version-
+// keyed bundle cache and collides (test_keying/test_selfupdate).
 function watchDir(env = process.env) {
-  return env.CLODE_WATCH_DIR || clodeCacheDir(env);
+  return env.CLODE_WATCH_DIR || cacheBase(env);
 }
 
 module.exports = { clodeDataDir, clodeCacheDir, depsStore, providersDir, watchDir };
