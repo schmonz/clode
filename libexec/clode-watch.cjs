@@ -64,7 +64,9 @@ function loadSemver(opts) {
 function versionGt(a, b, opts) {
   const semver = loadSemver(opts || {});
   if (!semver) return false;
-  try { return semver.gt(a, b) === true; } catch { return false; }
+  // Use compare() (the fundamental primitive every semver-compatible module
+  // provides, incl. the render fakes) rather than gt(); a > b iff compare > 0.
+  try { return semver.compare(a, b) > 0; } catch { return false; }
 }
 
 // ---------------------------------------------------------------------------

@@ -109,6 +109,25 @@ test('versionGt is conservative (false) on garbage / no semver', () => {
   assert.strictEqual(versionGt('2.0.0', '1.0.0', { env }), false);
 });
 
+test('versionGt works with a semver exposing only compare() (no gt)', () => {
+  // The sanctioned fake semver (test_helper.bash seed + managed-deps fixture)
+  // exports compare/satisfies only. versionGt must not depend on gt().
+  const tmp = tmpdir();
+  const nm = path.join(tmp, 'clode', 'node_modules', 'semver');
+  fs.mkdirSync(nm, { recursive: true });
+  fs.writeFileSync(path.join(nm, 'package.json'),
+    '{"name":"semver","version":"0.0.0-test","main":"index.js"}');
+  fs.writeFileSync(path.join(nm, 'index.js'),
+    'const P=v=>String(v).replace(/^[v=]+/,"").split(".").map(n=>parseInt(n,10)||0);' +
+    'exports.compare=(a,b)=>{const x=P(a),y=P(b);for(let i=0;i<3;i++)' +
+    'if((x[i]||0)!==(y[i]||0))return (x[i]||0)<(y[i]||0)?-1:1;return 0;};' +
+    'exports.satisfies=()=>true;');
+  const env = { CLODE_DEPS: path.join(tmp, 'clode') };
+  assert.strictEqual(versionGt('2.0.0', '1.0.0', { env }), true, 'greater');
+  assert.strictEqual(versionGt('1.0.0', '2.0.0', { env }), false, 'lesser');
+  assert.strictEqual(versionGt('1.0.0', '1.0.0', { env }), false, 'equal');
+});
+
 test('versionGt resolves semver via clode\'s own node_modules (npm-global layout)', semverOpts, () => {
   const tmp = tmpdir();
   const appBin = path.join(tmp, 'app', 'bin');
