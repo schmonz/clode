@@ -4,15 +4,37 @@
 // `--bundle-only` stops after esbuild (Task 1); the full pipeline (deps asset,
 // sea-config, blob, postject, and macOS re-sign) is appended in Task 5.
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import url from 'node:url';
 
+const require = createRequire(import.meta.url);
+const { platformTag } = require('./platform-tag.cjs');
+
 const REPO = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '..');
-const OUT = path.join(REPO, 'build', 'sea');
+// All build artifacts (toolchain node_modules, bundle, deps.tar, blob, and the final
+// binary) live under a per-platform tag dir so a shared/NFS `build/` tree can host
+// mutually-incompatible builds (different OS/OS-version/arch/node) without collision.
+const TOOLCHAIN = path.join(REPO, 'build', platformTag());
+const OUT = TOOLCHAIN;
 fs.mkdirSync(OUT, { recursive: true });
+
+// Provision the build-only toolchain (esbuild, postject) INTO the per-tag dir, so each
+// host installs its own native binaries side by side instead of overwriting a shared
+// build/node_modules. Idempotent: skips the install once the .bin shims are present.
+function ensureToolchain() {
+  const bin = (name) => path.join(TOOLCHAIN, 'node_modules', '.bin', name);
+  if (fs.existsSync(bin('esbuild')) && fs.existsSync(bin('postject'))) return;
+  // npm --prefix needs the manifest in the prefix dir; the committed source of truth
+  // is build/package.json (build-only devDeps, kept out of the repo-root node_modules).
+  fs.copyFileSync(path.join(REPO, 'build', 'package.json'), path.join(TOOLCHAIN, 'package.json'));
+  console.error(`toolchain: installing esbuild+postject into ${path.relative(REPO, TOOLCHAIN)}`);
+  // cwd: TOOLCHAIN (not --prefix) so npm reads this manifest as the root — see stageDeps.
+  execFileSync('npm', ['install', '--no-audit', '--no-fund'], { stdio: 'inherit', cwd: TOOLCHAIN });
+}
 
 // clode's version lives in the VERSION file at the repo root. The esbuilt bundle's
 // __dirname is build/sea (not the package root), so the runtime file-read in
@@ -25,7 +47,7 @@ function repoVersion() {
 }
 
 function esbuildBundle() {
-  const esbuild = path.join(REPO, 'build', 'node_modules', '.bin', 'esbuild');
+  const esbuild = path.join(TOOLCHAIN, 'node_modules', '.bin', 'esbuild');
   const bundle = path.join(OUT, 'clode-main.bundle.cjs');
   execFileSync(esbuild, [
     path.join(REPO, 'libexec', 'clode-main.cjs'),
@@ -36,26 +58,48 @@ function esbuildBundle() {
   return bundle;
 }
 
-// Stage the shipped runtime deps (root package.json) into a SEPARATE prefix — never
-// the repo root — and tar the resulting node_modules as the embedded deps asset. A
-// sha256 of the tar is the sig materializeDeps keys the extraction cache on.
+// Stage the shipped runtime deps (root package.json) and tar the resulting node_modules
+// as the embedded deps asset. A sha256 of the tar is the sig materializeDeps keys the
+// extraction cache on.
+//
+// Two things keep this fast and NFS-friendly:
+//   1. Stage on LOCAL disk (os.tmpdir), never the (possibly NFS) build dir. npm writing
+//      ~350 tiny node_modules files onto an NFS mount took ~5 min here; on local disk
+//      it's sub-second. Only the single resulting tar is written back to the tag dir.
+//   2. Cache on the lockfile hash: skip npm+tar entirely when the lockfile is unchanged.
+//      This also keeps deps.sig STABLE across rebuilds (a fresh tar's mtimes would churn
+//      the sig and needlessly bust every client's runtime extraction cache).
 function stageDeps() {
-  const staging = path.join(OUT, 'deps-staging');
-  fs.rmSync(staging, { recursive: true, force: true });
-  fs.mkdirSync(staging, { recursive: true });
-  fs.copyFileSync(path.join(REPO, 'package.json'), path.join(staging, 'package.json'));
-  // Prefer a reproducible install: copy the committed lockfile and `npm ci` (exact,
-  // locked versions). Fall back to `npm install` only if no lockfile is present.
-  const lock = path.join(REPO, 'package-lock.json');
-  const cmd = fs.existsSync(lock)
-    ? (fs.copyFileSync(lock, path.join(staging, 'package-lock.json')), ['ci', '--omit=dev'])
-    : ['install', '--omit=dev'];
-  execFileSync('npm', [cmd[0], '--prefix', staging, '--no-audit', '--no-fund', ...cmd.slice(1)], { stdio: 'inherit' });
   const tar = path.join(OUT, 'deps.tar');
-  execFileSync('tar', ['-cf', tar, '-C', staging, 'node_modules']);
-  const sig = crypto.createHash('sha256').update(fs.readFileSync(tar)).digest('hex');
   const sigFile = path.join(OUT, 'deps.sig');
+  const lockHashFile = path.join(OUT, 'deps.lockhash');
+  const lock = path.join(REPO, 'package-lock.json');
+  const manifest = fs.existsSync(lock) ? lock : path.join(REPO, 'package.json');
+  const lockHash = crypto.createHash('sha256').update(fs.readFileSync(manifest)).digest('hex');
+  if (fs.existsSync(tar) && fs.existsSync(sigFile) && fs.existsSync(lockHashFile)
+      && fs.readFileSync(lockHashFile, 'utf8') === lockHash) {
+    console.error('deps: reusing cached deps.tar (lockfile unchanged)');
+    return { tar, sigFile };
+  }
+  const staging = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-deps-'));
+  try {
+    fs.copyFileSync(path.join(REPO, 'package.json'), path.join(staging, 'package.json'));
+    // Prefer a reproducible install: copy the committed lockfile and `npm ci` (exact,
+    // locked versions). Fall back to `npm install` only if no lockfile is present.
+    const cmd = fs.existsSync(lock)
+      ? (fs.copyFileSync(lock, path.join(staging, 'package-lock.json')), ['ci', '--omit=dev'])
+      : ['install', '--omit=dev'];
+    // Run npm IN the staging dir (cwd), not via --prefix: with --prefix, npm mis-derives
+    // the root package name from the prefix's basename when cwd is a different package
+    // (the repo root, also named "clode"), and `npm ci` then fails the lockfile sync check.
+    execFileSync('npm', [cmd[0], '--no-audit', '--no-fund', ...cmd.slice(1)], { stdio: 'inherit', cwd: staging });
+    execFileSync('tar', ['-cf', tar, '-C', staging, 'node_modules']);
+  } finally {
+    fs.rmSync(staging, { recursive: true, force: true });
+  }
+  const sig = crypto.createHash('sha256').update(fs.readFileSync(tar)).digest('hex');
   fs.writeFileSync(sigFile, sig);
+  fs.writeFileSync(lockHashFile, lockHash);
   return { tar, sigFile };
 }
 
@@ -88,7 +132,7 @@ function buildBinary(blob) {
   fs.writeFileSync(bin, fs.readFileSync(process.execPath)); // embed THIS node
   fs.chmodSync(bin, 0o755);
   if (process.platform === 'darwin') execFileSync('codesign', ['--remove-signature', bin]);
-  const postject = path.join(REPO, 'build', 'node_modules', '.bin', 'postject');
+  const postject = path.join(TOOLCHAIN, 'node_modules', '.bin', 'postject');
   const args = [bin, 'NODE_SEA_BLOB', blob,
     '--sentinel-fuse', 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2'];
   if (process.platform === 'darwin') args.push('--macho-segment-name', 'NODE_SEA');
@@ -145,6 +189,7 @@ function smokeCheck(bin) {
   }
 }
 
+ensureToolchain();
 const bundle = esbuildBundle();
 console.error(`esbuild → ${bundle}`);
 if (process.argv.includes('--bundle-only')) process.exit(0);

@@ -9,19 +9,23 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const REPO = path.resolve(__dirname, '..');
-const BIN = path.join(REPO, 'build', 'sea', 'clode');
-const ESBUILD = path.join(REPO, 'build', 'node_modules', '.bin', 'esbuild');
+// Build artifacts live under a per-platform tag dir (build/<os>-<osver>-<arch>-node<major>);
+// the tag is computed from the node running the build, which defaults to this runner.
+const { seaOut } = require('../scripts/platform-tag.cjs');
+const OUT = seaOut(REPO);
+const BIN = path.join(OUT, 'clode');
 
 // Building a SEA is expensive AND embeds the building node — which must be an official
 // (non-stripped) Node, or postject corrupts it. So this is opt-in (CLODE_SEA=1) and
-// builds with CLODE_SEA_NODE (an official node, e.g. an asdf install) when given.
+// builds with CLODE_SEA_NODE (an official node, e.g. an asdf install) when given. Any
+// OS/arch qualifies (the tag isolates hosts); the build self-provisions its toolchain.
 const BUILD_NODE = process.env.CLODE_SEA_NODE || process.execPath;
-const canBuild =
-  process.env.CLODE_SEA === '1' && process.platform === 'linux' && process.arch === 'x64' && fs.existsSync(ESBUILD);
+const nodeMajor = parseInt(process.versions.node.split('.')[0], 10);
+const canBuild = process.env.CLODE_SEA === '1' && nodeMajor >= 24;
 
 test('build-sea.mjs produces a runnable SEA binary that reports the version', { timeout: 300000 }, (t) => {
   if (!canBuild) {
-    t.skip('SEA build opt-in (set CLODE_SEA=1, linux-x64, `npm install --prefix build`, official CLODE_SEA_NODE)');
+    t.skip('SEA build opt-in (set CLODE_SEA=1 with an official node >= 24 as CLODE_SEA_NODE)');
     return;
   }
   const b = spawnSync(BUILD_NODE, [path.join(REPO, 'scripts', 'build-sea.mjs')], { encoding: 'utf8', cwd: REPO });

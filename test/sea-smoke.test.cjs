@@ -11,14 +11,19 @@ const os = require('node:os');
 const path = require('node:path');
 
 const REPO = path.resolve(__dirname, '..');
-const BIN = path.join(REPO, 'build', 'sea', 'clode');
-const ESBUILD = path.join(REPO, 'build', 'node_modules', '.bin', 'esbuild');
+// Build artifacts live under a per-platform tag dir (build/<os>-<osver>-<arch>-node<major>);
+// the tag is computed from the node running the build, which defaults to this runner.
+const { seaOut } = require('../scripts/platform-tag.cjs');
+const OUT = seaOut(REPO);
+const BIN = path.join(OUT, 'clode');
+const ESBUILD = path.join(OUT, 'node_modules', '.bin', 'esbuild');
 
 // Opt-in (CLODE_SEA=1); builds on demand with CLODE_SEA_NODE (an official, non-stripped
-// node — a distro-stripped node segfaults once postject injects the blob).
+// node — a distro-stripped node segfaults once postject injects the blob). Any OS/arch
+// qualifies (the tag keeps hosts from colliding); the build self-provisions its toolchain.
 const BUILD_NODE = process.env.CLODE_SEA_NODE || process.execPath;
-const canBuild =
-  process.env.CLODE_SEA === '1' && process.platform === 'linux' && process.arch === 'x64' && fs.existsSync(ESBUILD);
+const nodeMajor = parseInt(process.versions.node.split('.')[0], 10);
+const canBuild = process.env.CLODE_SEA === '1' && nodeMajor >= 24;
 
 // A provider the built binary can extract/run (offline). Prefer an explicit override,
 // else the host's claude wrapper. null -> the bundle-boot tests skip.

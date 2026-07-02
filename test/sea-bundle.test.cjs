@@ -6,12 +6,16 @@ const path = require('node:path');
 
 const REPO = path.resolve(__dirname, '..');
 const NODE = process.env.CLODE_NODE || process.execPath;
-const BUNDLE = path.join(REPO, 'build', 'sea', 'clode-main.bundle.cjs');
+// Build artifacts live under a per-platform tag dir (build/<os>-<osver>-<arch>-node<major>)
+// so a shared build/ tree can host mutually-incompatible builds without collision.
+const { seaOut } = require('../scripts/platform-tag.cjs');
+const OUT = seaOut(REPO);
+const BUNDLE = path.join(OUT, 'clode-main.bundle.cjs');
 
-// The SEA build toolchain (esbuild) lives in build/node_modules (build/package.json),
-// installed with `npm install --prefix build` — NOT the repo root. Skip cleanly when
-// it isn't installed so the normal suite is never forced to build a SEA bundle.
-const ESBUILD = path.join(REPO, 'build', 'node_modules', '.bin', 'esbuild');
+// The SEA build toolchain (esbuild) is installed INTO the per-tag dir on demand by
+// build-sea.mjs (from build/package.json) — NOT the repo root. Skip cleanly when it
+// isn't installed yet so the normal suite is never forced to build a SEA bundle.
+const ESBUILD = path.join(OUT, 'node_modules', '.bin', 'esbuild');
 const haveBuildDeps = fs.existsSync(ESBUILD);
 
 test('esbuild produces a self-contained clode-main bundle that runs as node', (t) => {

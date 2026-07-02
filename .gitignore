@@ -1,6 +1,7 @@
 build/*
 !build/package.json
 node_modules/
+test/.harness/
 package-lock.json
 *.tgz
 *.cjs.cache

@@ -83,10 +83,13 @@ rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/clode"
   are the standard `node-gyp` build deps.
 
 The PTY/TUI tests drive clode under a pseudo-terminal via `node-pty` +
-`@xterm/headless`. Those are declared in a separate `test/package.json` and
-install into `test/node_modules`; `npm test` installs them automatically on first
-run (or run `npm install --prefix test` yourself). These tests are **not
-optional** — the suite fails loudly rather than skipping if the harness can't
+`@xterm/headless`. Those are declared in a separate `test/package.json`, and
+`npm test` installs them automatically on first run. Because `node-pty` carries a
+**native** binary, the harness installs into a per-platform directory
+(`test/.harness/<os>-<osver>-<arch>-node<major>/`) rather than a shared
+`test/node_modules`, so one machine's compiled binary can't clobber another's on a
+shared/NFS workdir — `NODE_PATH` points the tests at the right one. These tests are
+**not optional** — the suite fails loudly rather than skipping if the harness can't
 load.
 
 > **First install compiles `node-pty` and can take a few minutes.** `node-pty`
@@ -117,10 +120,43 @@ npm test               # offline suite (default; no network or login needed)
 npm run test:online    # also run the network/model tests (needs a logged-in ~/.claude)
 ```
 
-Run a subset directly (install the harness first — only `npm test` auto-installs it):
+Run a subset directly (run `npm test` once first — it installs the PTY/TUI harness
+into `test/.harness/<tag>/` and the rest resolve it via `NODE_PATH`):
 
 ```sh
-npm install --prefix test     # once, for the PTY/TUI tests
 node --test test/*.test.cjs   # JS unit, module, and differential tests
 bats test/                    # launcher + integration tests
 ```
+
+### Building a single-file binary (SEA)
+
+clode can be packaged as a stand-alone [Node SEA](https://nodejs.org/api/single-executable-applications.html) —
+one executable that embeds Node, the esbuilt launcher, and the runtime deps, so a
+target machine needs neither `node` nor `npm`:
+
+```sh
+node scripts/build-sea.mjs
+```
+
+The output is `build/<os>-<osver>-<arch>-node<major>/clode` (e.g.
+`build/darwin-25-arm64-node24/clode`). The build is self-provisioning: it installs
+its own build tools (`esbuild`, `postject`) and stages the runtime deps on first run,
+then caches them. On macOS it ad-hoc-signs the binary (required, or it won't launch).
+
+**Use an official, non-stripped Node** ≥ 24 as the build node — a nodejs.org build,
+or one from `asdf`/`nvm`. The SEA embeds *whichever `node` runs the script*, so:
+
+- A **stripped** node (some distro `/usr/bin/node`) corrupts under `postject` and the
+  result segfaults at startup. The build's self-check catches this and explains it.
+- A node that links **non-system libraries** (e.g. a pkgsrc/Homebrew node pulling in
+  `/opt/pkg/lib` or `/opt/homebrew` dylibs) produces a binary that only runs where
+  those libraries exist. An official build links only the OS's own libraries, so the
+  binary is portable across machines of the same OS/arch.
+
+To embed a specific Node, run the script *with* that Node
+(`~/.asdf/installs/nodejs/24.18.0/bin/node scripts/build-sea.mjs`).
+
+Everything lands under a per-platform tag dir (the same tuple the test harness uses),
+so builds for different OS/arch/Node coexist on a shared/NFS `build/` tree without
+colliding. Set `CLODE_CLAUDE_BIN=/path/to/claude` to have the build additionally boot
+the real bundle once as a deep self-check.

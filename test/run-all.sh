@@ -24,15 +24,30 @@ NODE="$CLODE_NODE"; BATS="$CLODE_BATS"
 # stray root `npm install` can no longer make the runtime deps resolvable and defeat
 # the "dep is ABSENT" assertions. The PTY tests are NOT optional, so install the
 # harness here and fail loudly rather than skip.
+# node-pty carries a NATIVE binary, so the harness is per-platform: scope it under a
+# tag dir (test/.harness/<os>-<osver>-<arch>-node<major>) so a shared/NFS test/ tree can
+# host harnesses for different OS/arch/node without one host's compiled binary clobbering
+# another's. NODE_PATH points node's module resolution at the tagged dir (there is no
+# stray test/node_modules to shadow it). The tag is computed by the same helper the SEA
+# build uses, from THIS node — so the harness ABI always matches the node running tests.
+TAG=$("$NODE" -e 'process.stdout.write(require("./scripts/platform-tag.cjs").platformTag())') \
+  || { echo "run-all: could not compute platform tag" >&2; exit 2; }
+HARNESS="$PWD/test/.harness/$TAG"
+export NODE_PATH="$HARNESS/node_modules${NODE_PATH:+:$NODE_PATH}"
 if ! "$NODE" test/harness-preflight.cjs 2>/dev/null; then
-  echo "run-all: installing PTY test harness deps into test/node_modules..." >&2
+  echo "run-all: installing PTY test harness deps into test/.harness/$TAG ..." >&2
   echo "run-all: node-pty has no Linux prebuilt binary, so it compiles from source" >&2
   echo "run-all: (needs python3 + a C/C++ toolchain; the first build also downloads" >&2
   echo "run-all:  Node headers, so it can take a few minutes — output is shown below)" >&2
   # Do NOT swallow npm's output or its exit status: a slow source build must be
   # visible (else it looks like a hang), and a failed one must fail loud with the
   # real node-gyp error rather than surfacing later as an opaque "harness missing".
-  if ! npm install --prefix test; then
+  # Run npm IN the harness dir (cwd), not --prefix: --prefix mis-derives the root
+  # package name from the dir basename when cwd is a different package (the repo root).
+  mkdir -p "$HARNESS"
+  cp test/package.json "$HARNESS/package.json"
+  [ -f test/package-lock.json ] && cp test/package-lock.json "$HARNESS/package-lock.json"
+  if ! ( cd "$HARNESS" && npm install ); then
     echo "run-all: harness dep install failed (see npm output above)" >&2
     exit 2
   fi
