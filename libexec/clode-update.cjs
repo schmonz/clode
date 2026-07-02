@@ -221,10 +221,28 @@ async function clodeUpdate(channel, opts = {}) {
   const providers = providersDir(env);
   const dest = path.join(providers, ver);
   const bin = path.join(dest, 'claude');
+  const current = path.join(providers, 'current');
 
-  // Already have a byte-verified copy? Short-circuit the download but still
-  // re-point `current` + report signals below (bin/clode:373-385).
-  if (isFile(bin) && sha256Of(bin) === sum) {
+  // The version `current` points at now — for no-op detection and the signals
+  // diff's baseline (bin/clode:373-385).
+  let prevVer = '';
+  try {
+    if (fs.lstatSync(current).isSymbolicLink()) prevVer = fs.readlinkSync(current);
+  } catch { /* no current yet */ }
+
+  const haveIt = isFile(bin) && sha256Of(bin) === sum;
+
+  // Nothing to do: we already have this exact build AND `current` already points
+  // at it. Report it cleanly and stop — no false "updated to", and no signals
+  // digest diffing the version against itself.
+  if (haveIt && prevVer === ver) {
+    err(`clode: already up to date (${ver}).`);
+    return 0;
+  }
+
+  if (haveIt) {
+    // Byte-verified copy on disk (a re-point to an already-fetched version):
+    // short-circuit the download (bin/clode:373-385).
     err(`clode: already have ${ver}`);
   } else {
     err(`clode: fetching Claude Code ${ver} (${plat})...`);
@@ -246,18 +264,16 @@ async function clodeUpdate(channel, opts = {}) {
     fs.chmodSync(bin, fs.statSync(bin).mode | 0o111);          // chmod +x
   }
 
-  // Record the previous target, then atomically re-point current -> ver.
-  let prevVer = '';
-  const current = path.join(providers, 'current');
-  try {
-    if (fs.lstatSync(current).isSymbolicLink()) prevVer = fs.readlinkSync(current);
-  } catch { /* no current yet */ }
+  // Atomically re-point current -> ver.
   relinkCurrent(current, ver);
 
   err(`clode: updated to ${ver}. Relaunch clode to use it.`);
 
-  // Warn-only post-update signals digest (never affects the exit status).
-  await clodeSignalsReport(ver, prevVer, bin, { env, libexec, here, node, stderr });
+  // Warn-only post-update signals digest (never affects the exit status). Only
+  // when the effective version actually changed — a same-version diff is noise.
+  if (prevVer !== ver) {
+    await clodeSignalsReport(ver, prevVer, bin, { env, libexec, here, node, stderr });
+  }
 
   return 0;
 }

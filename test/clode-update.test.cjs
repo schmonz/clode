@@ -228,7 +228,7 @@ test('an explicit channel arg overrides the autoUpdatesChannel setting', async (
   } finally { cleanup(fx); }
 });
 
-test('already-have short-circuit re-uses the provider without re-download', async () => {
+test('re-running update on the current version is a clean no-op', async () => {
   const fx = fixture();
   try {
     const first = await clodeUpdate('stable', opts(fx.env, sink()));
@@ -236,8 +236,29 @@ test('already-have short-circuit re-uses the provider without re-download', asyn
     const err = sink();
     const second = await clodeUpdate('stable', opts(fx.env, err));
     assert.strictEqual(second, 0, 'second update ok');
-    assert.match(err.text(), /already have 9\.9\.9/, 'already-have message');
-    assert.match(err.text(), /updated to 9\.9\.9/, 'still re-points + reports');
+    const out = err.text();
+    // Nothing changed: one clear line, no bogus "updated to" claim, and NO
+    // signals digest diffing the version against itself.
+    assert.match(out, /already up to date \(9\.9\.9\)/, 'clean up-to-date message');
+    assert.doesNotMatch(out, /updated to/, 'does not claim an update happened');
+    assert.doesNotMatch(out, /clode signals for/, 'no self-comparing digest');
+    assert.strictEqual(fs.readlinkSync(path.join(fx.providers, 'current')), V);
+  } finally { cleanup(fx); }
+});
+
+test('switching back to an already-downloaded version still re-points + reports', async () => {
+  const fx = fixture();
+  const OTHER = '8.8.8';
+  addVersion(fx, OTHER);
+  try {
+    await clodeUpdate(V, opts(fx.env, sink()));      // current -> 9.9.9
+    await clodeUpdate(OTHER, opts(fx.env, sink()));  // current -> 8.8.8
+    const err = sink();
+    const rc = await clodeUpdate(V, opts(fx.env, err)); // back to the cached 9.9.9
+    assert.strictEqual(rc, 0);
+    const out = err.text();
+    assert.match(out, /already have 9\.9\.9/, 'reused the cached binary (no re-download)');
+    assert.match(out, /updated to 9\.9\.9/, 'a real re-point IS reported');
     assert.strictEqual(fs.readlinkSync(path.join(fx.providers, 'current')), V);
   } finally { cleanup(fx); }
 });
