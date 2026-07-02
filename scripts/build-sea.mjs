@@ -31,9 +31,15 @@ function ensureToolchain() {
   // npm --prefix needs the manifest in the prefix dir; the committed source of truth
   // is build/package.json (build-only devDeps, kept out of the repo-root node_modules).
   fs.copyFileSync(path.join(REPO, 'build', 'package.json'), path.join(TOOLCHAIN, 'package.json'));
+  // Prefer a reproducible, pinned install: copy the committed lockfile and `npm ci`.
+  // Fall back to `npm install` only when no lockfile is present.
+  const lock = path.join(REPO, 'build', 'package-lock.json');
+  const cmd = fs.existsSync(lock)
+    ? (fs.copyFileSync(lock, path.join(TOOLCHAIN, 'package-lock.json')), ['ci'])
+    : ['install'];
   console.error(`toolchain: installing esbuild+postject into ${path.relative(REPO, TOOLCHAIN)}`);
   // cwd: TOOLCHAIN (not --prefix) so npm reads this manifest as the root — see stageDeps.
-  execFileSync('npm', ['install', '--no-audit', '--no-fund'], { stdio: 'inherit', cwd: TOOLCHAIN });
+  execFileSync('npm', [cmd[0], '--no-audit', '--no-fund', ...cmd.slice(1)], { stdio: 'inherit', cwd: TOOLCHAIN });
 }
 
 // clode's version lives in the VERSION file at the repo root. The esbuilt bundle's

@@ -1,5 +1,6 @@
 build/*
 !build/package.json
+!build/package-lock.json
 node_modules/
 test/.harness/
 *.tgz
