@@ -12,9 +12,16 @@ export CLODE_BIN="${CLODE_BIN:-./bin/clode}"
 # no clode .deps-sig, which ensure_deps treats as user-managed and never touches — so
 # the suite NEVER runs a real `npm install` (offline, deterministic). Created here (and
 # gitignored) rather than committed, since `node_modules/` is ignored. test_deps.bats
-# overrides CLODE_DEPS to exercise the auto-install itself.
-export CLODE_DEPS="${CLODE_DEPS:-$BATS_TEST_DIRNAME/fixtures/managed-deps}"
-mkdir -p "$CLODE_DEPS/node_modules"
+# and other files override CLODE_DEPS in their own setup() (after this load).
+#
+# The fixture path is FIXED, not "${CLODE_DEPS:-...}": seed_render_deps below writes
+# into it, and inheriting an exported CLODE_DEPS here once let that seed clobber the
+# user's REAL store (e.g. ~/.local/share/clode) with a compare-only mock semver,
+# breaking the live install's version_gt. Seeding must only ever touch this
+# disposable, gitignored fixtures dir.
+CLODE_FIXTURE_DEPS="$BATS_TEST_DIRNAME/fixtures/managed-deps"
+export CLODE_DEPS="$CLODE_FIXTURE_DEPS"
+mkdir -p "$CLODE_FIXTURE_DEPS/node_modules"
 
 # Seed functional fakes for the bundle's render ext-deps into a node_modules dir.
 # The renderer REQUIRES string-width/strip-ansi/wrap-ansi (and semver) to draw at all,
@@ -44,7 +51,7 @@ exports.compare = (a, b) => { const x = P(a), y = P(b); for (let i = 0; i < 3; i
 exports.satisfies = () => true;
 JS
 }
-seed_render_deps "$CLODE_DEPS/node_modules"
+seed_render_deps "$CLODE_FIXTURE_DEPS/node_modules"
 
 # Portable temp creation. NetBSD/BSD/macOS mktemp REQUIRE an explicit template;
 # only GNU mktemp accepts a bare `mktemp -d`. Always pass a template so the tests
