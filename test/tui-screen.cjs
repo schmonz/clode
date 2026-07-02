@@ -7,8 +7,23 @@
 // capability-query-gated apps (Claude Code's Ink TUI probes DA/DSR/OSC/XTVERSION
 // at startup and waits for answers) actually render. Prints the final rendered
 // screen to stdout for the test to assert on. Exit 0 always.
-const pty = require('node-pty');
-const { Terminal } = require('@xterm/headless');
+// Load the PTY harness (node-pty + @xterm/headless) from the per-platform tag dir
+// EXPLICITLY, not via NODE_PATH. Callers like test_tui.bats' _tui_capture scrub
+// NODE_PATH so the world prefix alone decides the child's `ws` visibility; that must
+// not also starve this driver of its harness. Fall back to bare require (normal
+// resolution / an explicit NODE_PATH) when the tag dir isn't present.
+const path = require('node:path');
+function loadHarness() {
+  try {
+    const REPO = path.resolve(__dirname, '..');
+    const { harnessDir } = require(path.join(REPO, 'scripts', 'platform-tag.cjs'));
+    const nm = path.join(harnessDir(REPO), 'node_modules');
+    return { pty: require(path.join(nm, 'node-pty')), Terminal: require(path.join(nm, '@xterm/headless')).Terminal };
+  } catch {
+    return { pty: require('node-pty'), Terminal: require('@xterm/headless').Terminal };
+  }
+}
+const { pty, Terminal } = loadHarness();
 
 // Probes xterm doesn't answer (xterm extensions / OSC colors): supply plausible
 // replies so the TUI's startup negotiation completes. Ported from tui_screen.py.
