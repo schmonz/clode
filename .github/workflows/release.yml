@@ -2,9 +2,8 @@ name: release
 
 on:
   push:
-    tags: ['v*']                      # real trigger (kept on main)
-    branches: ['ci/github-releases']  # TEST-ONLY — delete before merging to main
-  workflow_dispatch: {}               # manual button (kept on main)
+    tags: ['v*']                      # real trigger: a pushed version tag cuts a release
+  workflow_dispatch: {}               # manual button
 
 jobs:
   build:
