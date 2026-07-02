@@ -5,6 +5,10 @@ on:
     tags: ['v*']                      # real trigger: a pushed version tag cuts a release
   workflow_dispatch: {}               # manual button
 
+# Default-deny: the build job needs no write. The release job elevates below.
+permissions:
+  contents: read
+
 jobs:
   build:
     strategy:
