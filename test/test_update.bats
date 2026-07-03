@@ -4,10 +4,10 @@ load test_helper
 
 setup() {
   cd "$BATS_TEST_DIRNAME/.."
-  export CLODE_CACHE="$(pwd)/build"
 }
 
 @test "cache populated for current version" {
+  clode_quarantine
   [ -e "$HOME/.local/bin/claude" ] || skip "no provider binary installed"
   cur=$(basename "$(readlink "$HOME/.local/bin/claude")")
   run "$CLODE_BIN" --version
@@ -15,6 +15,7 @@ setup() {
 }
 
 @test "alternate version auto-extracts and boots transparently" {
+  clode_quarantine
   [ -e "$HOME/.local/bin/claude" ] || skip "no provider binary installed"
   cur=$(basename "$(readlink "$HOME/.local/bin/claude")")
   alt=$(ls "$HOME/.local/share/claude/versions" | grep -E '^[0-9]' | grep -v "^${cur}$" | head -1)

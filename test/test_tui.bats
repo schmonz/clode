@@ -116,7 +116,7 @@ setup() {
 }
 
 @test "TUI fails LOUD (not a blank hang) when the ws ext-dep is missing" {
-  skip "pending hermetic node conversion — needs a trust-state fixture (BACKLOG hermetic-testing)"
+  clode_quarantine "pending hermetic node conversion — needs a trust-state fixture (BACKLOG hermetic-testing)"
   # Regression guard: missing ws used to be swallowed by a render-gating promise,
   # leaving a blank screen. It must surface a clear, actionable message instead.
   grep -aq 'WebSocket features' "$NOWS"

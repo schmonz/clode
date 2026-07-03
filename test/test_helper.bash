@@ -84,3 +84,11 @@ p.on("exit", (code) => { clearTimeout(t); process.exit(timedOut ? 124 : (code ==
 ' "$_to" "$@"
   fi
 }
+
+# Cases that still require a real provider/store or write the repo tree are quarantined
+# until the bats->node conversion restores them in hermetic form. Call at the top of
+# such a test's body. Accepts an optional specific reason; defaults to the generic one.
+# See BACKLOG "Hermetic test execution" thread.
+clode_quarantine() {
+  skip "${1:-pending hermetic node conversion (BACKLOG hermetic-testing)}"
+}

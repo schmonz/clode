@@ -46,18 +46,13 @@ setup_file() {
   if [ "$nver" != "$cver" ]; then
     echo "version mismatch: native='$nver' clode='$cver'" > "$skipfile"; return
   fi
-  # Parity needs clode's REAL render deps — fake string-width/wrap-ansi would change
-  # text wrapping and forge spurious deviations. Expose the deps a normal clode install
-  # resolves, but stay offline: a user-managed CLODE_DEPS (node_modules symlink, no
-  # .deps-sig) makes ensure_deps trust them and never npm-install. Skip if absent.
-  local real_nm="${XDG_DATA_HOME:-$HOME/.local/share}/clode/node_modules"
-  if [ ! -d "$real_nm/string-width" ] || [ ! -d "$real_nm/wrap-ansi" ]; then
-    echo "clode render deps not installed at $real_nm (run clode once online first)" > "$skipfile"; return
-  fi
-  local deps_dir="$BATS_FILE_TMPDIR/deps"
-  mkdir -p "$deps_dir"
-  ln -sf "$real_nm" "$deps_dir/node_modules"
-  export CLODE_DEPS="$deps_dir"
+  # NOTE: this test is explicitly quarantined (see the @tests below) pending the
+  # bats->node conversion, which will restore parity coverage against a hermetic
+  # golden fixture instead of clode's REAL render deps. Formerly this block exposed
+  # the deps a normal clode install resolves (a user-managed CLODE_DEPS symlink to
+  # the real ~/.local/share/clode/node_modules) so fake string-width/wrap-ansi
+  # wouldn't forge spurious wrapping deviations; that real-store read is removed —
+  # captures below now resolve via the sandbox's seeded fakes instead.
   # Warm clode's per-binary cache so a (re)extract never eats the timed capture.
   "$CLODE_BIN" --version >/dev/null 2>&1 || true
   _doctor_capture "$BATS_FILE_TMPDIR/native.txt" "$native"
@@ -71,11 +66,13 @@ setup() {
 }
 
 @test "both /doctor renders were captured" {
+  clode_quarantine
   grep -aq 'Enter to close' "$NATIVE"
   grep -aq 'Enter to close' "$CLODE"
 }
 
 @test "clode /doctor matches native except for allowlisted deviations" {
+  clode_quarantine
   run "$CLODE_NODE" test/doctor-parity.cjs "$NATIVE" "$CLODE"
   echo "$output"
   [ "$status" -eq 0 ]
