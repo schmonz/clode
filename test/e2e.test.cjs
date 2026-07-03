@@ -12,6 +12,8 @@ test('sandbox builds a constructed-clean env with no ambient leak', (t) => {
   assert.strictEqual(sbx.env.HOME, sbx.home);
   assert.strictEqual(sbx.env.CLODE_NO_WATCH, '1');
   assert.strictEqual(sbx.env.CLODE_OFFLINE, '1');
+  // CLODE_DEPS points at the seeded store so ensureDeps takes its npm-free opt-out.
+  assert.strictEqual(sbx.env.CLODE_DEPS, path.join(sbx.stateRoot, 'share', 'clode'));
   assert.ok(sbx.env.CLODE_NODE && path.isAbsolute(sbx.env.CLODE_NODE));
   // render fakes seeded under the sandbox data store
   const semver = path.join(sbx.stateRoot, 'share', 'clode', 'node_modules', 'semver', 'package.json');

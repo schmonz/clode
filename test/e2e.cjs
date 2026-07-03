@@ -43,12 +43,22 @@ function sandbox(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-e2e-'));
   const home = path.join(dir, 'home');
   const stateRoot = dir;
+  const depsDir = path.join(stateRoot, 'share', 'clode');   // == depsStore(CLODE_STATE_ROOT)
   fs.mkdirSync(home, { recursive: true });
-  seedRenderDeps(path.join(stateRoot, 'share', 'clode', 'node_modules'));
+  seedRenderDeps(path.join(depsDir, 'node_modules'));
   const env = {
     PATH: '/usr/bin:/bin',
     HOME: home,
     CLODE_STATE_ROOT: stateRoot,
+    // Point CLODE_DEPS at the seeded (no .deps-sig) store so ensureDeps takes its
+    // user-managed opt-out (clode-deps.cjs) and NEVER shells out to npm — the bundle
+    // boots offline against the fakes. Without this the launcher would try to
+    // `npm install` the real ext-deps (the bash harness relied on npm being on PATH +
+    // an npm cache to do that install into its throwaway sandbox; the constructed-clean
+    // PATH here has no npm, so we take the npm-free path instead — strictly more
+    // hermetic). Tests exercising ensureDeps itself (test_deps) override CLODE_DEPS to
+    // an empty dir so the opt-out does not fire.
+    CLODE_DEPS: depsDir,
     CLODE_NODE: NODE,
     CLODE_NO_WATCH: '1',
     CLODE_OFFLINE: '1',
