@@ -13,9 +13,9 @@ const path = require('node:path');
 const REPO = path.resolve(__dirname, '..');
 // Build artifacts live under a per-platform tag dir (build/<os>-<osver>-<arch>-node<major>);
 // the tag is computed from the node running the build, which defaults to this runner.
-const { seaOut } = require('../scripts/platform-tag.cjs');
+const { seaOut, seaBin } = require('../scripts/platform-tag.cjs');
 const OUT = seaOut(REPO);
-const BIN = path.join(OUT, 'clode');
+const BIN = seaBin(REPO);
 const ESBUILD = path.join(OUT, 'node_modules', '.bin', 'esbuild');
 
 // Opt-in (CLODE_SEA=1); builds on demand with CLODE_SEA_NODE (an official, non-stripped

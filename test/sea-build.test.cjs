@@ -11,9 +11,8 @@ const path = require('node:path');
 const REPO = path.resolve(__dirname, '..');
 // Build artifacts live under a per-platform tag dir (build/<os>-<osver>-<arch>-node<major>);
 // the tag is computed from the node running the build, which defaults to this runner.
-const { seaOut } = require('../scripts/platform-tag.cjs');
-const OUT = seaOut(REPO);
-const BIN = path.join(OUT, 'clode');
+const { seaBin } = require('../scripts/platform-tag.cjs');
+const BIN = seaBin(REPO);
 
 // Building a SEA is expensive AND embeds the building node — which must be an official
 // (non-stripped) Node, or postject corrupts it. So this is opt-in (CLODE_SEA=1) and
