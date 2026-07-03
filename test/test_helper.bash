@@ -22,6 +22,17 @@ mkdir -p "$HOME"
 unset CLODE_DEPS CLODE_CACHE CLODE_PROVIDERS CLODE_WATCH_DIR CLODE_VERSION_DIR \
       CLODE_CLAUDE_BIN XDG_DATA_HOME XDG_CACHE_HOME
 
+# Suppress the on-launch watcher auto-fire (clodeWatchMaybe, libexec/clode-watch.cjs)
+# suite-wide. A plain launch spawns clode-watch --clode-watch DETACHED and unref'd
+# (clodeWatchFire); it keeps writing into its watch dir under this sandbox after the
+# bats test that launched it returns, racing that test's own teardown's `rm -rf`
+# (observed: test_self_update.bats "after clode update, launching clode extracts the
+# fetched provider" -> `rm: .../clode.XXXXXX: Directory not empty`, intermittent under
+# full-suite timing). Nothing exercises the auto-fire itself: the watcher's behavior is
+# covered by --clode-watch (test_watch.bats, calls clodeWatch directly, not gated by
+# this var) and by the node --test units in clode-watch.test.cjs (inject their own env).
+export CLODE_NO_WATCH=1
+
 # Seed functional fakes for the bundle's render ext-deps into a node_modules dir.
 # The renderer REQUIRES string-width/strip-ansi/wrap-ansi (and semver) to draw at all,
 # so any test that runs a real session (e.g. `-p` end-to-end) needs them resolvable.
