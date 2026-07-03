@@ -9,9 +9,9 @@ cd "$(dirname "$0")/.."
 # Discover host tools on PATH; CLODE_* override per machine. No hardcoded prefixes
 # (the Node helpers also resolve via their `#!/usr/bin/env` shebangs).
 # Both the shipped runtime (bin/ + libexec/) AND the test suite are now
-# Python-free: node + sh + bats only (plus npm for the node-pty devDep install).
+# Python-free AND bats-free: pure node:test, driven by sh (this runner only), plus
+# npm for the node-pty devDep install. Windows-portable (no bash test framework).
 : "${CLODE_NODE:=$(command -v node)}"
-: "${CLODE_BATS:=$(command -v bats)}"
 export CLODE_NODE
 # Canonicalize CLODE_NODE to the REAL interpreter binary. A version-manager SHIM
 # (asdf/nvm) re-derives PATH internally when exec'd, which defeats a test's minimal
@@ -20,9 +20,8 @@ export CLODE_NODE
 # yields a stable, shim-free node — and removes the need to hand-set CLODE_NODE.
 if _real=$("$CLODE_NODE" -e 'process.stdout.write(process.execPath)' 2>/dev/null) \
    && [ -n "$_real" ]; then CLODE_NODE="$_real"; export CLODE_NODE; fi
-NODE="$CLODE_NODE"; BATS="$CLODE_BATS"
+NODE="$CLODE_NODE"
 [ -n "$NODE" ]   || { echo "run-all: node not found on PATH (set CLODE_NODE)" >&2; exit 2; }
-[ -n "$BATS" ]   || { echo "run-all: bats not found on PATH (set CLODE_BATS)" >&2; exit 2; }
 # Test harness deps (node-pty, @xterm/headless) live in a SEPARATE manifest
 # (test/package.json -> test/node_modules), by convention — NOT in the root
 # package.json. The fail-loud ext-dep tests (semver/websocket/yaml/text-utils) are
@@ -60,7 +59,7 @@ if ! "$NODE" test/harness-preflight.cjs 2>/dev/null; then
   fi
 fi
 "$NODE" test/harness-preflight.cjs || { echo "run-all: PTY test harness unavailable (see above)" >&2; exit 2; }
-# The runner is the single source of truth for the CLODE_OFFLINE gate the bats
+# The runner is the single source of truth for the CLODE_OFFLINE gate the node
 # tests read: callers pass a flag, not an env var, and an ambient CLODE_OFFLINE
 # never leaks in. Offline is the default; --online opts in.
 case "${1:-}" in
@@ -84,7 +83,6 @@ run() { # name, command...
 }
 
 run "node tests"      "$NODE" --test test/*.test.cjs
-run "bats suite"      "$BATS" test/
 
 GUARD_AFTER=$("$CLODE_NODE" test/hermetic-guard.cjs snapshot $GUARD_WATCH)
 if [ "$GUARD_BEFORE" != "$GUARD_AFTER" ]; then
