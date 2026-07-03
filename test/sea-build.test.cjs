@@ -30,7 +30,8 @@ test('build-sea.mjs produces a runnable SEA binary that reports the version', { 
   const b = spawnSync(BUILD_NODE, [path.join(REPO, 'scripts', 'build-sea.mjs')], { encoding: 'utf8', cwd: REPO });
   assert.strictEqual(b.status, 0, b.stderr);
   assert.ok(fs.existsSync(BIN), 'SEA binary not produced');
-  assert.ok(fs.statSync(BIN).mode & 0o111, 'SEA binary not executable');
+  // "Executable" is proven uniformly by actually running it below — the POSIX exec-mode bit
+  // (mode & 0o111) is meaningless on Windows, where runnability comes from the .exe suffix.
   // The binary runs (postject worked): --clode-version exits 0 and prints the version.
   const r = spawnSync(BIN, ['--clode-version'], { encoding: 'utf8' });
   assert.strictEqual(r.status, 0, r.stderr);
