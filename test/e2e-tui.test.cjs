@@ -27,6 +27,13 @@ let NOWS = '';     // rendered screen with ws missing
 let SBX = null;
 
 before(async () => {
+  // OPT-IN ONLY. This spawns the REAL Claude Code bundle to render the Ink TUI, which
+  // probes the macOS login Keychain (auth status) and pops system dialogs, and may touch
+  // the network. Keep it OUT of the default offline `npm test`; a dev opts in explicitly.
+  if (process.env.CLODE_LIVE_RENDER !== '1') {
+    SKIP = 'live-render opt-in only (set CLODE_LIVE_RENDER=1; spawns the real bundle, touches Keychain)';
+    return;
+  }
   const provider = realProvider();
   if (!provider) { SKIP = 'no resolvable Claude Code provider (environmental)'; return; }
   SBX = sandbox();                                  // no per-test t; cleaned up in after()
