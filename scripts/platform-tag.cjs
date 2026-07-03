@@ -13,6 +13,8 @@
 //   * linux  -> `linux-glibc<ver>` using the glibc the running Node was COMPILED against
 //     (`process.report...glibcVersionCompiler`) — the true minimum to RUN the binary.
 //     musl / field absent -> `linux-musl`.
+//   * win32  -> `windows` (no OS-version token: Windows is ABI-stable across releases,
+//     and the embedded node<major> already pins the real compat floor).
 //   * anything else -> the raw kernel/OS major (never mis-maps; only ever over-splits,
 //     the safe direction to err).
 const os = require('os');
@@ -39,6 +41,7 @@ function linuxGlibc(report = process.report && process.report.getReport()) {
 function osToken(platform = process.platform) {
   if (platform === 'darwin') return `macos-${macosVersion()}`;
   if (platform === 'linux') return `linux-${linuxGlibc()}`;
+  if (platform === 'win32') return 'windows';   // ABI-stable; node<major> pins compat
   return `${platform}-${String(os.release()).split('.')[0]}`;
 }
 
@@ -57,9 +60,14 @@ function seaOut(repo) {
   return path.join(repo, 'build', platformTag());
 }
 
+// The per-tag SEA output BINARY (sibling of seaOut's dir). .exe on Windows.
+function seaBin(repo, platform = process.platform) {
+  return path.join(seaOut(repo), platform === 'win32' ? 'clode.exe' : 'clode');
+}
+
 // The per-tag PTY/TUI test-harness dir (node_modules with node-pty's native binary).
 function harnessDir(repo) {
   return path.join(repo, 'test', '.harness', platformTag());
 }
 
-module.exports = { macosVersion, linuxGlibc, osToken, platformTag, seaOut, harnessDir };
+module.exports = { macosVersion, linuxGlibc, osToken, platformTag, seaOut, seaBin, harnessDir };

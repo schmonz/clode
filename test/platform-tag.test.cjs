@@ -39,3 +39,15 @@ test('platformTag is a pure formatter over an injected token', () => {
 test('platformTag() with no args produces the host tuple', () => {
   assert.match(platformTag(), /^(macos-(10\.\d+|\d+)|linux-(glibc\d+\.\d+|musl)|\w+-\d+)-\S+-node\d+$/);
 });
+
+test('osToken maps win32 to the stable "windows" token (no OS-version split)', () => {
+  assert.strictEqual(osToken('win32'), 'windows');
+});
+
+test('seaBin names the SEA output binary — .exe only on win32', () => {
+  const path = require('node:path');
+  const { seaBin } = require('../scripts/platform-tag.cjs');
+  assert.strictEqual(path.basename(seaBin('/repo', 'win32')), 'clode.exe');
+  assert.strictEqual(path.basename(seaBin('/repo', 'linux')), 'clode');
+  assert.strictEqual(path.basename(seaBin('/repo', 'darwin')), 'clode');
+});
