@@ -14,6 +14,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const hosttools = require('./clode-hosttools.cjs');
 const sea = require('./clode-sea.cjs');
+const { cacheBase } = require('./clode-paths.cjs');
 
 // sh `: "${VAR:=value}"` — assign when unset OR empty. Mutates env.
 function setIfUnset(env, name, value) {
@@ -35,11 +36,7 @@ function writeUpdateGuardSettings(opts = {}) {
   } catch {
     return null;
   }
-  // sh `${XDG_CACHE_HOME:-$HOME/.cache}/clode` — :- is unset-or-empty.
-  const cacheBase = env.XDG_CACHE_HOME && env.XDG_CACHE_HOME !== ''
-    ? env.XDG_CACHE_HOME
-    : path.join(env.HOME || '', '.cache');
-  const dir = path.join(cacheBase, 'clode');
+  const dir = cacheBase(env);
   const out = path.join(dir, 'update-guard-settings.json');
   try {
     fs.mkdirSync(dir, { recursive: true });

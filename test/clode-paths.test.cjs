@@ -22,6 +22,13 @@ test('clodeCacheDir: CLODE_CACHE > CLODE_STATE_ROOT > XDG_CACHE_HOME > HOME', ()
   assert.strictEqual(P.clodeCacheDir({ HOME, CLODE_STATE_ROOT: '/s', CLODE_CACHE: '/c' }), '/c');
 });
 
+test('cacheBase (public): CLODE_STATE_ROOT > XDG_CACHE_HOME > HOME, ignores CLODE_CACHE', () => {
+  assert.strictEqual(P.cacheBase({ HOME }), cache);
+  assert.strictEqual(P.cacheBase({ HOME, XDG_CACHE_HOME: '/xc' }), require('path').join('/xc', 'clode'));
+  assert.strictEqual(P.cacheBase({ HOME, CLODE_STATE_ROOT: '/s' }), require('path').join('/s', 'cache', 'clode'));
+  assert.strictEqual(P.cacheBase({ HOME, CLODE_CACHE: '/c' }), cache); // ignores CLODE_CACHE
+});
+
 test('derived dirs layer their specific override on the base', () => {
   assert.strictEqual(P.depsStore({ HOME }), share);
   assert.strictEqual(P.depsStore({ HOME, CLODE_DEPS: '/d' }), '/d');

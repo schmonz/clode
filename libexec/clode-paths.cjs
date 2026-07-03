@@ -8,8 +8,8 @@
 //
 // Precedence (high→low): specific override (CLODE_DEPS/CLODE_CACHE/CLODE_PROVIDERS/
 // CLODE_WATCH_DIR) > CLODE_STATE_ROOT > XDG_* > HOME.
-const os = require('os');
-const path = require('path');
+const os = require('node:os');
+const path = require('node:path');
 
 function homeDir(env) {
   return env.HOME || os.homedir();
@@ -52,4 +52,4 @@ function watchDir(env = process.env) {
   return env.CLODE_WATCH_DIR || cacheBase(env);
 }
 
-module.exports = { clodeDataDir, clodeCacheDir, depsStore, providersDir, watchDir };
+module.exports = { clodeDataDir, clodeCacheDir, depsStore, providersDir, watchDir, cacheBase };
