@@ -73,7 +73,7 @@ function sandbox(t) {
 // stdin. Returns status/signal/stdout/stderr plus `output` = stdout+stderr (matching
 // bats `run`'s merged $output).
 function runClode(sbx, args = [], opts = {}) {
-  const r = spawnSync(NODE, [BIN, ...args], {
+  const r = spawnSync(NODE, [opts.bin || BIN, ...args], {
     encoding: 'utf8',
     env: { ...sbx.env, ...(opts.env || {}) },
     input: opts.input,
@@ -92,4 +92,28 @@ function mkProvider(dest, label) {
   return dest;
 }
 
-module.exports = { sandbox, runClode, mkProvider, seedRenderDeps, REPO, BIN, NODE };
+// Write a fake npm (a POSIX-sh shim) at `dest`, used via CLODE_NPM to exercise
+// ensureDeps without a real npm. `ok:true` (default) logs the invocation to
+// `opts.log` (if given) and simulates a successful install by mkdir'ing
+// node_modules/.installed under the `--prefix` dir; `ok:false` fails loud (exit 1).
+// The log path is baked into the script (absolute), so no env plumbing is needed.
+// NOTE: a `.sh` shim is Linux/macOS only (Spec 2a); a node-based shim is the
+// Windows-portable follow-up (Spec 2b).
+function fakeNpm(dest, opts = {}) {
+  const ok = opts.ok !== false;
+  let body;
+  if (ok) {
+    body = '#!/bin/sh\n'
+      + (opts.log ? `echo "npm $*" >> "${opts.log}"\n` : '')
+      + 'p=""; while [ $# -gt 0 ]; do [ "$1" = "--prefix" ] && p="$2"; shift; done\n'
+      + '[ -n "$p" ] && mkdir -p "$p/node_modules/.installed"\n'
+      + 'exit 0\n';
+  } else {
+    body = '#!/bin/sh\necho "boom" >&2\nexit 1\n';
+  }
+  fs.writeFileSync(dest, body);
+  fs.chmodSync(dest, 0o755);
+  return dest;
+}
+
+module.exports = { sandbox, runClode, mkProvider, fakeNpm, seedRenderDeps, REPO, BIN, NODE };
