@@ -68,6 +68,13 @@ case "${1:-}" in
   ''|--offline) export CLODE_OFFLINE=1 ;;
   *) echo "usage: $0 [--online|--offline]" >&2; exit 2 ;;
 esac
+# Hermeticity guard. run-all itself runs with the REAL HOME; only the clode
+# subprocesses under test get the sandbox. Watch the dirs a test must never touch.
+REAL_STORE="${XDG_DATA_HOME:-$HOME/.local/share}/clode"
+GUARD_WATCH="$REAL_STORE ${XDG_CACHE_HOME:-$HOME/.cache}/clode $HOME/.local/bin $PWD/build"
+"$CLODE_NODE" test/hermetic-guard.cjs preflight "$REAL_STORE" || exit 2
+GUARD_BEFORE=$("$CLODE_NODE" test/hermetic-guard.cjs snapshot $GUARD_WATCH)
+
 fails=0
 
 run() { # name, command...
@@ -78,6 +85,15 @@ run() { # name, command...
 
 run "node tests"      "$NODE" --test test/*.test.cjs
 run "bats suite"      "$BATS" test/
+
+GUARD_AFTER=$("$CLODE_NODE" test/hermetic-guard.cjs snapshot $GUARD_WATCH)
+if [ "$GUARD_BEFORE" != "$GUARD_AFTER" ]; then
+  echo "HERMETICITY VIOLATION — a test created/modified a real dir:"
+  printf '%s\n' "$GUARD_AFTER" | while IFS= read -r line; do
+    case "$GUARD_BEFORE" in *"$line"*) : ;; *) echo "    changed: $line" ;; esac
+  done
+  fails=$((fails+1))
+fi
 
 echo
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; else echo "$fails FAILED"; exit 1; fi
