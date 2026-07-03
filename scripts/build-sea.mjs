@@ -12,7 +12,7 @@ import path from 'node:path';
 import url from 'node:url';
 
 const require = createRequire(import.meta.url);
-const { platformTag } = require('./platform-tag.cjs');
+const { platformTag, seaBin } = require('./platform-tag.cjs');
 
 const REPO = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '..');
 // All build artifacts (toolchain node_modules, bundle, deps.tar, blob, and the final
@@ -21,6 +21,27 @@ const REPO = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '..'
 const TOOLCHAIN = path.join(REPO, 'build', platformTag());
 const OUT = TOOLCHAIN;
 fs.mkdirSync(OUT, { recursive: true });
+
+// npm is a .cmd on Windows; execFileSync needs a shell for it. (The npm args below are
+// all static flags — no user-controlled paths as args — so shell:true is injection-safe;
+// cwd is passed as an option, not an arg.)
+const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const NPM_OPTS = process.platform === 'win32' ? { shell: true } : {};
+
+// Run a toolchain CLI (esbuild/postject) via its node_modules/.bin shim. On POSIX the
+// shim is directly executable — esbuild's is the native binary (post-install), postject's
+// is a #!node script — so execFileSync runs it as-is. On Windows the runnable shim is a
+// .cmd, which execFileSync can only launch through a shell. (Build paths live under
+// build/<tag> and have no spaces in practice; if a repo path with spaces bites on Windows,
+// quote the args here.)
+function runBin(name, args, opts = {}) {
+  const shim = path.join(TOOLCHAIN, 'node_modules', '.bin', name);
+  if (process.platform === 'win32') {
+    execFileSync(`${shim}.cmd`, args, { ...opts, shell: true });
+  } else {
+    execFileSync(shim, args, opts);
+  }
+}
 
 // Provision the build-only toolchain (esbuild, postject) INTO the per-tag dir, so each
 // host installs its own native binaries side by side instead of overwriting a shared
@@ -39,7 +60,7 @@ function ensureToolchain() {
     : ['install'];
   console.error(`toolchain: installing esbuild+postject into ${path.relative(REPO, TOOLCHAIN)}`);
   // cwd: TOOLCHAIN (not --prefix) so npm reads this manifest as the root — see stageDeps.
-  execFileSync('npm', [cmd[0], '--no-audit', '--no-fund', ...cmd.slice(1)], { stdio: 'inherit', cwd: TOOLCHAIN });
+  execFileSync(NPM, [cmd[0], '--no-audit', '--no-fund', ...cmd.slice(1)], { stdio: 'inherit', cwd: TOOLCHAIN, ...NPM_OPTS });
 }
 
 // clode's version lives in the VERSION file at the repo root. The esbuilt bundle's
@@ -53,9 +74,8 @@ function repoVersion() {
 }
 
 function esbuildBundle() {
-  const esbuild = path.join(TOOLCHAIN, 'node_modules', '.bin', 'esbuild');
   const bundle = path.join(OUT, 'clode-main.bundle.cjs');
-  execFileSync(esbuild, [
+  runBin('esbuild', [
     path.join(REPO, 'libexec', 'clode-main.cjs'),
     '--bundle', '--platform=node', '--format=cjs', '--target=node24',
     `--define:__CLODE_BUNDLE_VERSION__=${JSON.stringify(repoVersion())}`,
@@ -98,7 +118,7 @@ function stageDeps() {
     // Run npm IN the staging dir (cwd), not via --prefix: with --prefix, npm mis-derives
     // the root package name from the prefix's basename when cwd is a different package
     // (the repo root, also named "clode"), and `npm ci` then fails the lockfile sync check.
-    execFileSync('npm', [cmd[0], '--no-audit', '--no-fund', ...cmd.slice(1)], { stdio: 'inherit', cwd: staging });
+    execFileSync(NPM, [cmd[0], '--no-audit', '--no-fund', ...cmd.slice(1)], { stdio: 'inherit', cwd: staging, ...NPM_OPTS });
     execFileSync('tar', ['-cf', tar, '-C', staging, 'node_modules']);
   } finally {
     fs.rmSync(staging, { recursive: true, force: true });
@@ -132,17 +152,23 @@ function writeSeaConfig(bundle, tar, sigFile) {
 // macOS needs an unsign/re-sign dance and a Mach-O segment name; Linux (and other
 // ELF hosts) just postject the blob into a note section — no signing.
 function buildBinary(blob) {
-  const bin = path.join(OUT, 'clode');
+  const bin = seaBin(REPO);                          // clode.exe on win32, clode elsewhere
   // Robust copy: fs.copyFileSync uses copy_file_range on Linux, which returns EIO on
   // some filesystems (autofs / network mounts). A plain read+write avoids it.
   fs.writeFileSync(bin, fs.readFileSync(process.execPath)); // embed THIS node
-  fs.chmodSync(bin, 0o755);
+  fs.chmodSync(bin, 0o755);                          // no-op on Windows, harmless
   if (process.platform === 'darwin') execFileSync('codesign', ['--remove-signature', bin]);
-  const postject = path.join(TOOLCHAIN, 'node_modules', '.bin', 'postject');
+  if (process.platform === 'win32') {
+    // The official node.exe is Authenticode-signed; postject rewrites the PE and
+    // invalidates it. Remove it first when signtool is available; tolerate its absence
+    // (we ship unsigned regardless — the stale signature is cosmetic for an unsigned dist).
+    try { execFileSync('signtool', ['remove', '/s', bin], { stdio: 'inherit' }); }
+    catch { console.error('build-sea: signtool unavailable — shipping unsigned'); }
+  }
   const args = [bin, 'NODE_SEA_BLOB', blob,
     '--sentinel-fuse', 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2'];
   if (process.platform === 'darwin') args.push('--macho-segment-name', 'NODE_SEA');
-  execFileSync(postject, args, { stdio: 'inherit' });
+  runBin('postject', args, { stdio: 'inherit' });
   if (process.platform === 'darwin') execFileSync('codesign', ['--sign', '-', bin]); // ad-hoc; required or it won't run
   return bin;
 }
