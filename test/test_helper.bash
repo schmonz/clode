@@ -8,20 +8,19 @@ export CLODE_NODE="${CLODE_NODE:-$(command -v node)}"
 # parity gate runs the whole suite against the JS entry via CLODE_BIN.
 export CLODE_BIN="${CLODE_BIN:-./bin/clode}"
 
-# Point clode's runtime-dep install at a "user-managed" sentinel — a node_modules with
-# no clode .deps-sig, which ensure_deps treats as user-managed and never touches — so
-# the suite NEVER runs a real `npm install` (offline, deterministic). Created here (and
-# gitignored) rather than committed, since `node_modules/` is ignored. test_deps.bats
-# and other files override CLODE_DEPS in their own setup() (after this load).
-#
-# The fixture path is FIXED, not "${CLODE_DEPS:-...}": seed_render_deps below writes
-# into it, and inheriting an exported CLODE_DEPS here once let that seed clobber the
-# user's REAL store (e.g. ~/.local/share/clode) with a compare-only mock semver,
-# breaking the live install's version_gt. Seeding must only ever touch this
-# disposable, gitignored fixtures dir.
-CLODE_FIXTURE_DEPS="$BATS_TEST_DIRNAME/fixtures/managed-deps"
-export CLODE_DEPS="$CLODE_FIXTURE_DEPS"
-mkdir -p "$CLODE_FIXTURE_DEPS/node_modules"
+# HERMETIC SANDBOX. Put ALL of clode's on-disk state under one private, disposable
+# root so no test can read or write the real ~/.local/share/clode, ~/.cache/clode,
+# or ~/.local/bin. Setting CLODE_STATE_ROOT redirects the npm dep store AND the SEA
+# materialized-deps cache AND providers/watch (see libexec/clode-paths.cjs); setting
+# HOME seals the ~/.local/bin/claude fallback and any os.homedir() read. Every other
+# steering var is unset so nothing ambient leaks in. Per bats FILE (BATS_FILE_TMPDIR
+# is auto-removed); files needing finer isolation re-scope in their own setup().
+CLODE_SANDBOX="${BATS_FILE_TMPDIR:-$(mktemp -d "${TMPDIR:-/tmp}/clode-sbx.XXXXXX")}/sandbox"
+export CLODE_STATE_ROOT="$CLODE_SANDBOX"
+export HOME="$CLODE_SANDBOX/home"
+mkdir -p "$HOME"
+unset CLODE_DEPS CLODE_CACHE CLODE_PROVIDERS CLODE_WATCH_DIR CLODE_VERSION_DIR \
+      CLODE_CLAUDE_BIN XDG_DATA_HOME XDG_CACHE_HOME
 
 # Seed functional fakes for the bundle's render ext-deps into a node_modules dir.
 # The renderer REQUIRES string-width/strip-ansi/wrap-ansi (and semver) to draw at all,
@@ -51,7 +50,13 @@ exports.compare = (a, b) => { const x = P(a), y = P(b); for (let i = 0; i < 3; i
 exports.satisfies = () => true;
 JS
 }
-seed_render_deps "$CLODE_FIXTURE_DEPS/node_modules"
+
+# Seed the render ext-deps (string-width/strip-ansi/wrap-ansi/semver) into the
+# sandbox's data store so offline render paths resolve them WITHOUT a real npm
+# install. No .deps-sig => ensure_deps treats it as user-managed and never installs.
+CLODE_SANDBOX_DEPS="$CLODE_SANDBOX/share/clode/node_modules"
+mkdir -p "$CLODE_SANDBOX_DEPS"
+seed_render_deps "$CLODE_SANDBOX_DEPS"
 
 # Portable temp creation. NetBSD/BSD/macOS mktemp REQUIRE an explicit template;
 # only GNU mktemp accepts a bare `mktemp -d`. Always pass a template so the tests

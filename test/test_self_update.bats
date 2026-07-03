@@ -6,6 +6,11 @@ setup() {
   cd "$BATS_TEST_DIRNAME/.."
   TMP=$(mktempd)
   export HOME="$TMP/home"; mkdir -p "$HOME"
+  # CLODE_STATE_ROOT (set by test_helper's sandbox) outranks XDG_DATA_HOME in
+  # clode-paths' precedence, so it would silently swallow this file's own
+  # per-test isolation below. Unset it so XDG_DATA_HOME governs, as this file
+  # (and its assertions against $XDG_DATA_HOME/clode/...) expects.
+  unset CLODE_STATE_ROOT
   export XDG_DATA_HOME="$TMP/data"
   REPO="$TMP/repo"; V=9.9.9; PLAT=linux-x64
   mkdir -p "$REPO/$V/$PLAT"

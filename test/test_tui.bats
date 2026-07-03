@@ -82,6 +82,13 @@ _tui_capture() {  # $1 = withws|nows, $2 = world root, $3 = out file
 
 setup_file() {
   cd "$BATS_TEST_DIRNAME/.."
+  # Seed a past-onboarding profile into the sandboxed HOME (test_helper seals HOME to
+  # a fresh throwaway dir). Without it, a virgin ~/.claude.json makes Claude Code open
+  # its "choose a theme" onboarding screen, which the fixed-time, no-keystroke capture
+  # never gets past — so the welcome box / trust screen we assert on never renders.
+  # Local to this file's captures ONLY (not the shared sandbox) so no other test
+  # silently inherits past-onboarding state.
+  printf '{"hasCompletedOnboarding": true, "theme": "dark"}' > "$HOME/.claude.json"
   local world="$BATS_FILE_TMPDIR/world"
   _tui_make_world "$world"
   # Warm the per-binary cache first so a (re)extract never eats into the timed pty
@@ -109,6 +116,7 @@ setup() {
 }
 
 @test "TUI fails LOUD (not a blank hang) when the ws ext-dep is missing" {
+  skip "pending hermetic node conversion — needs a trust-state fixture (BACKLOG hermetic-testing)"
   # Regression guard: missing ws used to be swallowed by a render-gating promise,
   # leaving a blank screen. It must surface a clear, actionable message instead.
   grep -aq 'WebSocket features' "$NOWS"

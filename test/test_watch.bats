@@ -4,15 +4,11 @@ load test_helper
 
 setup() {
   cd "$BATS_TEST_DIRNAME/.."
-  # version_gt resolves `semver` from clode's dep store; pin it to the REAL store
-  # so per-test HOME/XDG overrides don't hide it. (semver is a declared ext-dep.)
-  # NB: test_helper (loaded above) points CLODE_DEPS at a fixture whose fake
-  # `semver` has no `.gt`, so resolve the real store directly from the real HOME
-  # (before any per-test override) rather than inheriting that fixture value.
-  export CLODE_DEPS="${XDG_DATA_HOME:-$HOME/.local/share}/clode"
-  if [ ! -d "$CLODE_DEPS/node_modules/semver" ]; then
-    skip "semver ext-dep not installed (run: npm install --prefix \"$CLODE_DEPS\")"
-  fi
+  # version_gt resolves `semver` via clode-paths' depsStore(), which (with no
+  # CLODE_DEPS override) falls through to CLODE_STATE_ROOT — the sandbox
+  # test_helper seeded with a compare()-capable fake semver. versionGt uses
+  # compare(), not gt() (see a86faa4), so that fake is sufficient here; no
+  # per-test override or real-store lookup is needed.
 }
 
 # NB: the sourcing @tests that called sh-internal helpers directly (version_gt,
