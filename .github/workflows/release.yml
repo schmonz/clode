@@ -15,9 +15,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest   # linux-x64
-          - os: macos-14        # darwin arm64
+          - os: ubuntu-latest    # linux-x64
+          - os: macos-14         # darwin arm64
+          - os: windows-latest   # windows-x64
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash              # windows-latest defaults to pwsh; force Git Bash so the
+                                 # existing set -euo pipefail / sed / cp steps run unchanged
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -32,6 +37,8 @@ jobs:
           echo "node $have matches .tool-versions pin"
       - name: Build the SEA binary
         run: node scripts/build-sea.mjs
+      - name: Offline SEA smoke (build + --clode-version/--clode-help)
+        run: CLODE_SEA=1 node --test --test-concurrency=1 test/sea-build.test.cjs test/sea-smoke.test.cjs
       - name: Name the binary
         id: name
         run: |
