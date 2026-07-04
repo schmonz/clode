@@ -39,9 +39,12 @@ jobs:
           if [ "$GITHUB_REF_TYPE" = tag ]; then V="${GITHUB_REF_NAME#v}"; else V="$(cat VERSION)"; fi
           BASE=$(node -e "console.log(require('./scripts/platform-tag.cjs').platformTag())")
           BASE=${BASE%-node*}
-          DIR=$(node -e "console.log(require('./scripts/platform-tag.cjs').seaOut('.'))")
-          ASSET="clode-$V-$BASE"
-          cp "$DIR/clode" "$ASSET"
+          # seaBin returns an OS-NATIVE path (backslashes on Windows); normalize to forward
+          # slashes so bash `cp` accepts it on the Git Bash runner.
+          BIN=$(node -e "const p=require('path');console.log(require('./scripts/platform-tag.cjs').seaBin('.').split(p.sep).join('/'))")
+          EXT=""; case "$BIN" in *.exe) EXT=".exe" ;; esac
+          ASSET="clode-$V-$BASE$EXT"
+          cp "$BIN" "$ASSET"
           echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
