@@ -128,7 +128,9 @@ function stageDeps() {
     // which reads an archive path like `D:\…\deps.tar` as a remote `host:path` (the drive-letter
     // colon) and dies "Cannot connect to D: resolve failed". With no colon-bearing path args —
     // `-f -` for stdout and cwd set by the OS, not parsed by tar — this is uniform on GNU tar
-    // (Windows/Linux) and bsdtar (macOS), and the byte stream is an identical standard tar.
+    // (Windows/Linux) and bsdtar (macOS). The result is an identically-STRUCTURED standard tar
+    // (same member layout as the old `-cf <file> -C staging`); tar output isn't bit-reproducible
+    // in general, but the deps.sig sha256 is recomputed from whatever archive we produce.
     const archive = execFileSync('tar', ['-cf', '-', 'node_modules'], { cwd: staging, maxBuffer: 1 << 30 });
     fs.writeFileSync(tar, archive);
   } finally {
