@@ -25,7 +25,7 @@ jobs:
                                  # existing set -euo pipefail / sed / cp steps run unchanged
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version-file: .tool-versions
       - name: Assert Node matches the .tool-versions pin
