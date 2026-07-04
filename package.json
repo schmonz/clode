@@ -23,7 +23,7 @@
     "semver": "^7",
     "string-width": "^8.0.0",
     "strip-ansi": "^7",
-    "wrap-ansi": "^9",
+    "wrap-ansi": "^10.0.0",
     "ws": "^8",
     "yaml": "^2"
   }
