@@ -29,10 +29,12 @@ function materializeDeps({ sea = seaMod(), cacheDir }) {
   const tmp = dir + '.partial-' + process.pid;
   fs.rmSync(tmp, { recursive: true, force: true }); // clear a stale partial from a crashed run
   fs.mkdirSync(tmp, { recursive: true });
-  const tarPath = path.join(tmp, 'deps.tar');
-  fs.writeFileSync(tarPath, assetBuffer(sea, 'deps.tar'));
-  execFileSync('tar', ['-xf', tarPath, '-C', tmp]);  // extracts a node_modules/ dir
-  fs.rmSync(tarPath);
+  // Extract via STDIN (`-xf -`) with tmp as the process cwd, instead of passing OS-native paths
+  // as tar args. On Windows under a bash PATH, `tar` is Git Bash's GNU tar, which reads an archive
+  // path like `C:\…\deps.tar` as a remote `host:path` (the drive-letter colon) and dies "Cannot
+  // connect". Streaming the buffer to stdin with no colon-bearing path args is uniform on GNU tar
+  // (Windows/Linux) and bsdtar (macOS) — the runtime mirror of the build-side archive step.
+  execFileSync('tar', ['-xf', '-'], { cwd: tmp, input: assetBuffer(sea, 'deps.tar'), maxBuffer: 1 << 30 });
   fs.mkdirSync(path.dirname(dir), { recursive: true });
   try {
     fs.renameSync(tmp, dir);                          // atomic publish
