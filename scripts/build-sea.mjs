@@ -123,7 +123,14 @@ function stageDeps() {
     // the root package name from the prefix's basename when cwd is a different package
     // (the repo root, also named "clode"), and `npm ci` then fails the lockfile sync check.
     runNpm([cmd[0], '--no-audit', '--no-fund', ...cmd.slice(1)], { stdio: 'inherit', cwd: staging });
-    execFileSync('tar', ['-cf', tar, '-C', staging, 'node_modules']);
+    // Archive to STDOUT (`-f -`) with the staging dir as the process cwd, instead of passing
+    // OS-native paths as tar arguments. On Windows under a bash PATH `tar` resolves to GNU tar,
+    // which reads an archive path like `D:\…\deps.tar` as a remote `host:path` (the drive-letter
+    // colon) and dies "Cannot connect to D: resolve failed". With no colon-bearing path args —
+    // `-f -` for stdout and cwd set by the OS, not parsed by tar — this is uniform on GNU tar
+    // (Windows/Linux) and bsdtar (macOS), and the byte stream is an identical standard tar.
+    const archive = execFileSync('tar', ['-cf', '-', 'node_modules'], { cwd: staging, maxBuffer: 1 << 30 });
+    fs.writeFileSync(tar, archive);
   } finally {
     fs.rmSync(staging, { recursive: true, force: true });
   }
