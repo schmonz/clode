@@ -24,7 +24,7 @@ jobs:
         shell: bash              # windows-latest defaults to pwsh; force Git Bash so the
                                  # existing set -euo pipefail / sed / cp steps run unchanged
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version-file: .tool-versions
@@ -65,7 +65,7 @@ jobs:
     permissions:
       contents: write     # only this job writes the release; build stays read-only
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           path: dist
