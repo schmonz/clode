@@ -3,7 +3,7 @@
   "private": true,
   "description": "Build-time-only deps (esbuild, postject) for the Node SEA. NOT shipped; kept out of the repo-root node_modules so the fail-loud ext-dep tests keep an empty root node_modules.",
   "devDependencies": {
-    "esbuild": "^0.24.0",
+    "esbuild": "^0.28.0",
     "postject": "^1.0.0-alpha.6"
   }
 }
