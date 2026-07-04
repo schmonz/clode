@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "semver": "^7",
-    "string-width": "^7",
+    "string-width": "^8.0.0",
     "strip-ansi": "^7",
     "wrap-ansi": "^9",
     "ws": "^8",
