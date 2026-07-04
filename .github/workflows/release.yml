@@ -53,7 +53,7 @@ jobs:
           ASSET="clode-$V-$BASE$EXT"
           cp "$BIN" "$ASSET"
           echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.name.outputs.asset }}
           path: ${{ steps.name.outputs.asset }}
@@ -66,7 +66,7 @@ jobs:
       contents: write     # only this job writes the release; build stays read-only
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
