@@ -38,6 +38,19 @@ function writeExec(p, body) {
   return p;
 }
 
+// A minimal fs mock that simulates a symlink at `link` pointing to `target`, for the
+// resolver's injectable fsm — no real OS symlink (privilege-free, uniform on every OS).
+// statSync succeeds only for the link (pathExists), readlinkSync returns the target,
+// readFileSync throws (so step-3's providers/current probe finds no clode-managed provider).
+function mockSymlink(link, target) {
+  const enoent = () => { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; };
+  return {
+    statSync: (p) => (p === link ? { isFile: () => true } : enoent()),
+    readlinkSync: (p) => (p === link ? target : enoent()),
+    readFileSync: () => enoent(),
+  };
+}
+
 // =========================================================================
 // resolveClaudeBin — precedence (mirrors test_resolve.bats 1-5, + provider)
 // =========================================================================
@@ -99,25 +112,20 @@ test('4b. a baked path that does not exist is skipped', () => {
 });
 
 test('5. ~/.local/bin/claude symlink next (absolute target, one hop)', () => {
-  const dir = tmpdir();
-  const target = mkBundle(path.join(dir, 'local-target'), 'L-local');
-  const home = path.join(dir, 'home');
-  fs.mkdirSync(path.join(home, '.local', 'bin'), { recursive: true });
-  fs.symlinkSync(target, path.join(home, '.local', 'bin', 'claude'));
+  const home = '/home/u';
+  const link = path.join(home, '.local', 'bin', 'claude');
+  const target = path.join(home, 'versions', '2.1.0', 'claude'); // absolute -> returned verbatim
   const env = { HOME: home, PATH: '' };
-  assert.strictEqual(resolveClaudeBin({ env }), target);
+  assert.strictEqual(resolveClaudeBin({ env, fsm: mockSymlink(link, target) }), target);
 });
 
 test('5b. ~/.local/bin/claude relative symlink is anchored at the link dir', () => {
-  const dir = tmpdir();
-  const home = path.join(dir, 'home');
+  const home = '/home/u';
   const bindir = path.join(home, '.local', 'bin');
-  fs.mkdirSync(bindir, { recursive: true });
-  mkBundle(path.join(bindir, 'real-claude'), 'rel');
-  fs.symlinkSync('real-claude', path.join(bindir, 'claude')); // relative target
+  const link = path.join(bindir, 'claude');
   const env = { HOME: home, PATH: '' };
   assert.strictEqual(
-    resolveClaudeBin({ env }),
+    resolveClaudeBin({ env, fsm: mockSymlink(link, 'real-claude') }),
     path.join(bindir, 'real-claude'),
   );
 });
