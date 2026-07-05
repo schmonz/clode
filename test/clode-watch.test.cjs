@@ -134,8 +134,8 @@ test('versionGt resolves semver via clode\'s own node_modules (npm-global layout
   const appNm = path.join(tmp, 'app', 'node_modules');
   fs.mkdirSync(appBin, { recursive: true });
   fs.mkdirSync(appNm, { recursive: true });
-  fs.symlinkSync(path.join(REAL_STORE, 'node_modules', 'semver'),
-    path.join(appNm, 'semver'));
+  fs.cpSync(path.join(REAL_STORE, 'node_modules', 'semver'),
+    path.join(appNm, 'semver'), { recursive: true });
   const env = { CLODE_DEPS: path.join(tmp, 'empty'), XDG_DATA_HOME: path.join(tmp, 'empty') };
   assert.strictEqual(versionGt('2.0.0', '1.0.0', { env, here: appBin }), true);
 });

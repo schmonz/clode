@@ -29,7 +29,7 @@ function buildFixtures(sbx) {
   const localBin = path.join(sbx.home, '.local', 'bin');
   fs.mkdirSync(localBin, { recursive: true });
   const localLink = path.join(localBin, 'claude');
-  fs.symlinkSync(localTarget, localLink);
+  fs.cpSync(localTarget, localLink, { recursive: true });
 
   const pathDir = path.join(sbx.dir, 'pathdir');
   fs.mkdirSync(pathDir, { recursive: true });
