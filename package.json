@@ -16,8 +16,8 @@
     "node": ">=24"
   },
   "scripts": {
-    "test": "sh test/run-all.sh",
-    "test:online": "sh test/run-all.sh --online"
+    "test": "node test/run.mjs",
+    "test:online": "node test/run.mjs --online"
   },
   "dependencies": {
     "semver": "^7",
