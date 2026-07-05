@@ -258,6 +258,19 @@ test('a nonexistent start path is returned unchanged', () => {
   assert.strictEqual(followWrapper('/no/such/file'), '/no/such/file');
 });
 
+test('followWrapper follows an absolute Windows-style exec target', () => {
+  const wrapper = 'C:\\tools\\claude';
+  const target = 'C:\\providers\\2.1.0\\claude';
+  const body = `#!/bin/sh\nexec ${target} "$@"\n`;
+  const fsm = {
+    statSync: (p) => (p === wrapper ? { isFile: () => true, size: body.length }
+              : p === target ? { isFile: () => true, size: 70000 } // >=65536 -> stop at target
+              : (() => { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; })()),
+    readFileSync: (p) => (p === wrapper ? body : ''),
+  };
+  assert.strictEqual(followWrapper(wrapper, fsm), target);
+});
+
 // =========================================================================
 // sigOf — stability (mirrors test_keying.bats semantics)
 // =========================================================================

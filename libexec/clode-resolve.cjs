@@ -80,7 +80,7 @@ function followWrapper(startPath, fsm = fs) {
       if (m) target = m[1];
     }
     if (target === null) break;
-    if (target[0] !== '/') break; // case "$_t" in /*) ;; *) break — absolute only
+    if (!path.win32.isAbsolute(target)) break; // absolute only (win32.isAbsolute: also /x, uniformly on every host)
     if (!pathExists(target, fsm) || target === w) break; // -e "$_t" && "$_t" != "$_w"
     w = target;
     n += 1;
