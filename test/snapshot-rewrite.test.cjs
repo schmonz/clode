@@ -15,7 +15,14 @@ const HAS_SH = (() => {
   try { return require('node:child_process').spawnSync('sh', ['-c', 'exit 0']).status === 0; }
   catch { return false; }
 })();
-const SH_SKIP = HAS_SH ? false : 'needs a POSIX shell (sh) to generate + verify a snapshot file; rewrite logic covered by the rewriteSnapshot string tests';
+// Also skip on Windows: even with Git Bash `sh` on PATH (as under CI's `shell: bash`), a
+// Windows `C:\…` snapshot path embedded in the POSIX shell script gets backslash-mangled,
+// so the generator never writes the file (ENOENT) — POSIX-shell snapshot GENERATION has no
+// Windows analog. The rewrite LOGIC is covered cross-platform by the pure-string
+// rewriteSnapshot(...) tests above.
+const SH_SKIP = (process.platform === 'win32')
+  ? 'POSIX-shell snapshot generation has no Windows analog (rewrite logic covered by the rewriteSnapshot string tests)'
+  : (HAS_SH ? false : 'needs a POSIX shell (sh) to generate + verify a snapshot file; rewrite logic covered by the rewriteSnapshot string tests');
 
 test('rewriteSnapshot: leaves text with no shadows unchanged', () => {
   const plain = 'export PATH=/usr/bin\nfunction hello { echo hi; }\n';

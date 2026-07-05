@@ -13,9 +13,12 @@ function makeDepsTar(tmp) {
   const stage = path.join(tmp, 'stage');
   fs.mkdirSync(path.join(stage, 'node_modules', 'fake'), { recursive: true });
   fs.writeFileSync(path.join(stage, 'node_modules', 'fake', 'index.js'), 'module.exports = 42;\n');
-  const tar = path.join(tmp, 'deps.tar');
-  execFileSync('tar', ['-cf', tar, '-C', stage, 'node_modules']);
-  return fs.readFileSync(tar);
+  // Archive to stdout with the staging dir as cwd — NO colon-bearing path args, so Git
+  // Bash's GNU tar (what `npm test` under `shell: bash` resolves on Windows CI) can't
+  // misread a `C:`/`D:` drive letter as a remote `host:path` (mirrors the build-side
+  // stageDeps fix, commit 28be5c0). A colon-bearing `-f C:\…\deps.tar` fails there with
+  // "tar: Cannot connect to C: resolve failed".
+  return execFileSync('tar', ['-cf', '-', 'node_modules'], { cwd: stage, maxBuffer: 64 * 1024 * 1024 });
 }
 
 // A fake SEA whose getRawAsset serves an in-memory asset map (Buffers/ArrayBuffers).

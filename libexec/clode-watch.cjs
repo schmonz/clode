@@ -159,7 +159,12 @@ async function clodeWatch(manual, opts) {
 
   // Newer: scan ONLY the changelog for HIGH signals (no --bundle).
   let high = 0;
-  const cltmp = path.join(env.TMPDIR || '/tmp', `clode-watch-cl.${process.pid}`);
+  // Stage the fetched changelog inside the clode-owned watch dir (`wd`, already created
+  // above) — NOT a hardcoded `/tmp`, which on Windows resolves to `<cwd-drive>:\tmp` and
+  // is absent when clode runs off a non-C: drive (e.g. CI's `D:\a\...`), silently failing
+  // the changelog fetch so HIGH signals were never detected. `wd` is valid on every
+  // platform and hermetic. Cleaned up at the end of this branch.
+  const cltmp = path.join(wd, `clode-watch-cl.${process.pid}`);
   let haveChangelog = false;
   try {
     await downloadFile(env.CLODE_CHANGELOG_URL, cltmp);
