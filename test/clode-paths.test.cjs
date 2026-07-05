@@ -62,3 +62,11 @@ test('a caller (clode-watch.watchDir) honors CLODE_STATE_ROOT via clode-paths', 
   const got = watch.watchDir({ CLODE_STATE_ROOT: '/sandbox' });
   assert.strictEqual(got, require('path').join('/sandbox', 'cache', 'clode'));
 });
+
+test('homeDir: prefers env.HOME when set', () => {
+  assert.strictEqual(P.homeDir({ HOME }), HOME);
+});
+
+test('homeDir: falls back to os.homedir() when HOME is unset', () => {
+  assert.strictEqual(P.homeDir({}), os.homedir());
+});

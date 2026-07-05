@@ -52,4 +52,4 @@ function watchDir(env = process.env) {
   return env.CLODE_WATCH_DIR || cacheBase(env);
 }
 
-module.exports = { clodeDataDir, clodeCacheDir, depsStore, providersDir, watchDir, cacheBase };
+module.exports = { homeDir, clodeDataDir, clodeCacheDir, depsStore, providersDir, watchDir, cacheBase };
