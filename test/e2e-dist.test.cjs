@@ -58,12 +58,18 @@ test('package ships the launcher, libexec helpers, manifest, version, man, licen
 
 // @test "the shipped runtime (bin + libexec) has no python"
 test('the shipped runtime (bin + libexec) has no python', () => {
-  const r = spawnSync('grep', [
-    '-rIlE', 'python3?|CLODE_PYTHON', path.join(REPO, 'bin'), path.join(REPO, 'libexec'),
-  ], { encoding: 'utf8' });
-  // ! grep -rIlE ...  → grep must find nothing (non-zero exit, no matches)
-  assert.notStrictEqual(r.status, 0);
-  assert.strictEqual(r.stdout, '');
+  const re = /python3?|CLODE_PYTHON/;
+  const hits = [];
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) { walk(p); continue; }
+      try { if (re.test(fs.readFileSync(p, 'utf8'))) hits.push(p); } catch { /* binary/unreadable: skip */ }
+    }
+  };
+  walk(path.join(REPO, 'bin'));
+  walk(path.join(REPO, 'libexec'));
+  assert.deepStrictEqual(hits, [], `python reference(s) in shipped runtime: ${hits.join(', ')}`);
 });
 
 // @test "the repo tracks no python files"
