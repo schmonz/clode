@@ -8,6 +8,15 @@ const { rewriteSnapshot, collectShadows, warnAppletSkew, CLODE_SHADOWS } = requi
 
 const fx = (name) => fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8');
 
+// Real-POSIX-shell integration: these tests spawn `sh` to generate a snapshot file. Gate them on a
+// working sh (WSL/Linux/macOS; Windows only if Git Bash sh is on PATH). The rewrite LOGIC is covered
+// by the pure-string rewriteSnapshot(...) tests above, so gating loses no coverage.
+const HAS_SH = (() => {
+  try { return require('node:child_process').spawnSync('sh', ['-c', 'exit 0']).status === 0; }
+  catch { return false; }
+})();
+const SH_SKIP = HAS_SH ? false : 'needs a POSIX shell (sh) to generate + verify a snapshot file; rewrite logic covered by the rewriteSnapshot string tests';
+
 test('rewriteSnapshot: leaves text with no shadows unchanged', () => {
   const plain = 'export PATH=/usr/bin\nfunction hello { echo hi; }\n';
   assert.strictEqual(rewriteSnapshot(plain), plain);
@@ -219,7 +228,7 @@ function snapshotCmd(snapPath){
   ].join('\n');
 }
 
-test('child_process.execFileSync rewrites the snapshot-generator command (shell writes real-applet shadows)', () => {
+test('child_process.execFileSync rewrites the snapshot-generator command (shell writes real-applet shadows)', { skip: SH_SKIP }, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-cp-'));
   fs.mkdirSync(path.join(dir, 'shell-snapshots'));
   const snap = path.join(dir, 'shell-snapshots', 'snapshot-zsh-1.sh');
@@ -230,7 +239,7 @@ test('child_process.execFileSync rewrites the snapshot-generator command (shell 
   assert.match(got, /exec "\$_bin" -S dfs -regextype findutils-default/);
 });
 
-test('child_process.execFile (async) rewrites the snapshot-generator command', (t, done) => {
+test('child_process.execFile (async) rewrites the snapshot-generator command', { skip: SH_SKIP }, (t, done) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-cp-'));
   fs.mkdirSync(path.join(dir, 'shell-snapshots'));
   const snap = path.join(dir, 'shell-snapshots', 'snapshot-zsh-2.sh');
@@ -245,12 +254,12 @@ test('child_process.execFile (async) rewrites the snapshot-generator command', (
   });
 });
 
-test('child_process passes through non-snapshot commands unchanged', () => {
+test('child_process passes through non-snapshot commands unchanged', { skip: SH_SKIP }, () => {
   const out = cp.execFileSync('sh', ['-c', 'echo hello-world']).toString();
   assert.match(out, /hello-world/);
 });
 
-test('child_process.spawnSync rewrites the snapshot-generator command', () => {
+test('child_process.spawnSync rewrites the snapshot-generator command', { skip: SH_SKIP }, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-cp-'));
   fs.mkdirSync(path.join(dir, 'shell-snapshots'));
   const snap = path.join(dir, 'shell-snapshots', 'snapshot-zsh-3.sh');
