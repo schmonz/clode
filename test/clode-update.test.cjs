@@ -96,7 +96,9 @@ test('clode_update fetches the fixed platform into the provider store + current 
     // The fetched binary must byte-match the fixture (atomic temp->rename intact).
     assert.strictEqual(sha256Of(path.join(fx.providers, V, 'claude')), fx.sum);
     // chmod +x: the mode carries the execute bit.
-    assert.ok(fs.statSync(path.join(fx.providers, V, 'claude')).mode & 0o111, 'executable');
+    if (process.platform !== 'win32') {
+      assert.ok(fs.statSync(path.join(fx.providers, V, 'claude')).mode & 0o111, 'executable');
+    }
   } finally { cleanup(fx); }
 });
 

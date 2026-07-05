@@ -45,7 +45,7 @@ function writeUpdateGuardSettings(opts = {}) {
   }
   // Byte-for-byte the sh printf shape (raw, matching the launcher's printf; trailing \n).
   const cmd = `${node} ${guardScript}`;
-  const json = `{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"${cmd}"}]}]}}\n`;
+  const json = `{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":${JSON.stringify(cmd)}}]}]}}\n`;
   try {
     fs.writeFileSync(out, json);
   } catch {
