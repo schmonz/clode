@@ -32,7 +32,7 @@ function writeMod(nmDir, name, body) {
   fs.writeFileSync(path.join(d, 'index.js'), body);
 }
 
-const worldNode = (prefix) => path.join(prefix, 'bin', 'node');
+const worldNode = (prefix) => path.join(prefix, 'bin', 'node' + path.extname(NODE));
 
 // Build the withws/ and nows/ node prefixes the TUI tests need under sbx.dir/world.
 // Each has bin/node -> real NODE and lib/node_modules with functional-fake render deps;
@@ -46,7 +46,7 @@ function makeWsWorlds(sbx) {
     fs.mkdirSync(path.join(prefix, 'bin'), { recursive: true });
     const nm = path.join(prefix, 'lib', 'node_modules');
     fs.mkdirSync(nm, { recursive: true });
-    fs.symlinkSync(NODE, worldNode(prefix));
+    fs.cpSync(NODE, worldNode(prefix)); // copy (not symlink): symlinks need privilege on Windows
     seedRenderDeps(nm);
     if (which === 'withws') writeMod(nm, 'ws', FAKE_WS);
     out[which] = prefix;
