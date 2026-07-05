@@ -26,7 +26,13 @@ const BASH = (() => {
   const r = require('node:child_process').spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' });
   return r.status === 0 ? r.stdout.trim() : '';
 })();
-const BASH_SKIP = BASH ? false : 'needs bash to source the function-keyword snapshot (rewrite logic is covered by the rewriteSnapshot string tests)';
+// Also skip on Windows: even Git-Bash can't source a `C:\…` snapshot path with the
+// POSIX stub applets / POSIX PATH this test builds, and POSIX-shell-under-bash has no
+// native Windows analog. The rewrite logic is covered cross-platform by the pure-string
+// rewriteSnapshot(...) tests in snapshot-rewrite.test.cjs.
+const BASH_SKIP = process.platform === 'win32'
+  ? 'POSIX-shell snapshot sourcing has no Windows analog (rewrite logic covered by the rewriteSnapshot string tests)'
+  : (BASH ? false : 'needs bash to source the function-keyword snapshot (rewrite logic is covered by the rewriteSnapshot string tests)');
 
 // The bats rewrote the fixture in a SEPARATE node subprocess (so bun-shim.cjs's
 // require-time side effects — Module._load / child_process patching, globalThis

@@ -140,13 +140,11 @@ test('CLODE_SHADOWS probe specs: build a no-op invocation + skew predicate', () 
   assert.strictEqual(grep.skew(2), true);    // 2 == usage error
 });
 
-// A tiny executable applet stub that prints to stderr and exits with a chosen code.
-function stubApplet(code, stderr) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-stub-'));
-  const p = path.join(dir, 'applet');
-  fs.writeFileSync(p, `#!/bin/sh\necho "${stderr}" >&2\nexit ${code}\n`);
-  fs.chmodSync(p, 0o755);
-  return p;
+// A mock spawn that reports a chosen exit code + stderr, injected into warnAppletSkew.
+// This exercises the skew-probe LOGIC without a real executable stub, so it runs on
+// every platform (a `#!/bin/sh` stub isn't runnable on Windows).
+function mockSpawn(code, stderr) {
+  return () => ({ status: code, stdout: '', stderr });
 }
 
 function captureStderr(fn) {
@@ -159,9 +157,10 @@ function captureStderr(fn) {
 
 test('warnAppletSkew: warns, naming the rejected flag, when the host applet errors on the flags', () => {
   const prev = process.env.CLODE_BFS;
-  process.env.CLODE_BFS = stubApplet(1, "bfs: error: Unsupported -regextype 'findutils-default'.");
+  process.env.CLODE_BFS = '/fake/bfs';
+  const spawn = mockSpawn(1, "bfs: error: Unsupported -regextype 'findutils-default'.");
   try {
-    const out = captureStderr(() => warnAppletSkew(collectShadows(skewSnap)));
+    const out = captureStderr(() => warnAppletSkew(collectShadows(skewSnap), spawn));
     assert.match(out, /host bfs rejects the flags/);
     assert.match(out, /Unsupported -regextype 'findutils-default'/);
     // applet-specific remedy: bfs needs an Oniguruma-enabled build, not just an "upgrade"
@@ -174,11 +173,12 @@ test('warnAppletSkew: warns, naming the rejected flag, when the host applet erro
 
 test('warnAppletSkew: silent when the host applet accepts the flags', () => {
   const prev = process.env.CLODE_BFS;
-  process.env.CLODE_BFS = stubApplet(0, '');
+  process.env.CLODE_BFS = '/fake/bfs';
+  const spawn = mockSpawn(0, '');
   try {
     const out = captureStderr(() => warnAppletSkew([
       { name: 'find', applet: 'bfs', env: 'CLODE_BFS', flags: '-S dfs' },
-    ]));
+    ], spawn));
     assert.strictEqual(out, '');
   } finally {
     if (prev === undefined) delete process.env.CLODE_BFS; else process.env.CLODE_BFS = prev;
@@ -187,12 +187,13 @@ test('warnAppletSkew: silent when the host applet accepts the flags', () => {
 
 test('warnAppletSkew: records findings on globalThis.__clodeDoctor for the /doctor hook', () => {
   const prev = process.env.CLODE_BFS;
-  process.env.CLODE_BFS = stubApplet(1, "bfs: error: Unsupported -regextype 'findutils-default'.");
+  process.env.CLODE_BFS = '/fake/bfs';
+  const spawn = mockSpawn(1, "bfs: error: Unsupported -regextype 'findutils-default'.");
   try {
     // unique flags => fresh dedupe key, independent of other tests in this file
     captureStderr(() => warnAppletSkew([
       { name: 'find', applet: 'bfs', env: 'CLODE_BFS', flags: '-regextype doctor-hook-unique' },
-    ]));
+    ], spawn));
     assert.ok(globalThis.__clodeDoctor && Array.isArray(globalThis.__clodeDoctor.appletSkew),
       'expected globalThis.__clodeDoctor.appletSkew array');
     const f = globalThis.__clodeDoctor.appletSkew.find((x) => x.why.includes('doctor-hook') || x.why.includes('Unsupported'));

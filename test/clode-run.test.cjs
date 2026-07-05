@@ -36,11 +36,10 @@ test('writeUpdateGuardSettings emits a clode-only PreToolUse hook settings file'
   assert.match(body, /"PreToolUse"/);
   assert.match(body, /"matcher":"Bash"/);
   assert.match(body, /clode-update-guard\.cjs/);
-  // exact JSON shape (byte-for-byte with sh printf) + node + guard-script command
+  // exact JSON shape + node + guard-script command. The command is JSON.stringify'd by
+  // the runtime, so on Windows its backslashes are escaped — assert via JSON.parse (below)
+  // rather than byte-for-byte against an un-escaped template (which only matches on POSIX).
   const guard = path.join(REAL_LIBEXEC, 'clode-update-guard.cjs');
-  assert.strictEqual(
-    body,
-    `{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"${NODE} ${guard}"}]}]}}\n`);
   // written under $XDG_CACHE_HOME/clode
   assert.strictEqual(out, path.join(home, 'cache', 'clode', 'update-guard-settings.json'));
   // valid JSON with the expected structure

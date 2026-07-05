@@ -44,15 +44,28 @@ function readSig(p) {
   }
 }
 
+// How to spawn npm. On Windows npm IS a batch shim (npm.cmd), and Node can't spawn a
+// .cmd/.bat directly (spawnSync -> EINVAL since the CVE-2024-27980 hardening), so route
+// it through the command interpreter (cmd.exe /d /s /c). POSIX — or a bare .exe — spawns
+// verbatim. This is the Windows parallel of the sh launcher invoking npm on PATH.
+function npmInvocation(npm, args, env) {
+  if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(npm)) {
+    const comspec = (env && env.ComSpec) || process.env.ComSpec || 'cmd.exe';
+    return [comspec, ['/d', '/s', '/c', npm, ...args]];
+  }
+  return [npm, args];
+}
+
 // Port of run_quiet around the npm subprocess: when verbose, stream its output live;
 // otherwise buffer stdout+stderr and swallow on success, resurfacing it on failure
 // (keeping the "see npm output above" diagnostic honest). Returns true on success.
-function runNpmQuiet(verbose, npm, args, spawn, stderr) {
+function runNpmQuiet(verbose, npm, args, spawn, stderr, env) {
+  const [cmd, cmdArgs] = npmInvocation(npm, args, env);
   if (verbose) {
-    const r = spawn(npm, args, { stdio: 'inherit' });
+    const r = spawn(cmd, cmdArgs, { stdio: 'inherit' });
     return r.status === 0;
   }
-  const r = spawn(npm, args, { encoding: 'utf8' });
+  const r = spawn(cmd, cmdArgs, { encoding: 'utf8' });
   if (r.status === 0) return true;
   // sh: `>"$_ql" 2>&1` then `cat "$_ql" >&2` — stdout then stderr, both to stderr.
   if (r.stdout) stderr.write(r.stdout);
@@ -133,7 +146,7 @@ function ensureDeps(opts = {}) {
   fs.copyFileSync(manifest, path.join(depsRoot, 'package.json'));
 
   const args = ['install', '--prefix', depsRoot, '--no-audit', '--no-fund', '--omit=dev'];
-  if (!runNpmQuiet(verbose, npm, args, spawn, stderr)) {
+  if (!runNpmQuiet(verbose, npm, args, spawn, stderr, env)) {
     stderr.write('clode: dependency install failed (see npm output above).\n');
     return exit(1);
   }

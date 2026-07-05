@@ -62,7 +62,7 @@ test('CLODE_VERSION_DIR next', (t) => {
 test('~/.local/bin/claude symlink next', (t) => {
   const sbx = sandbox(t);
   const fx = buildFixtures(sbx);
-  const r = runClode(sbx, [], { env: { PATH: `${fx.pathDir}:${sbx.env.PATH}` } });
+  const r = runClode(sbx, [], { env: { PATH: [fx.pathDir, sbx.env.PATH].join(path.delimiter) } });
   assert.match(r.output, /L-local/);
 });
 
@@ -71,7 +71,7 @@ test('claude on PATH last', (t) => {
   const sbx = sandbox(t);
   const fx = buildFixtures(sbx);
   fs.rmSync(fx.localLink, { force: true });
-  const r = runClode(sbx, [], { env: { PATH: `${fx.pathDir}:${sbx.env.PATH}` } });
+  const r = runClode(sbx, [], { env: { PATH: [fx.pathDir, sbx.env.PATH].join(path.delimiter) } });
   assert.match(r.output, /L-path/);
 });
 

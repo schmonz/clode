@@ -63,6 +63,13 @@ function sandbox(t) {
     CLODE_NO_WATCH: '1',
     CLODE_OFFLINE: '1',
   };
+  // On Windows, clode must reach the command interpreter to run a .cmd (e.g. npm.cmd) —
+  // the parallel of /bin/sh being reachable via the POSIX sandbox PATH above. ComSpec is
+  // an OS constant (path to cmd.exe), not real user/app state, so surfacing it keeps the
+  // sandbox hermetic while letting the Windows .cmd-spawn paths work.
+  if (process.platform === 'win32') {
+    env.ComSpec = process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe';
+  }
   if (t && typeof t.after === 'function') {
     t.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } });
   }
@@ -92,15 +99,35 @@ function mkProvider(dest, label) {
   return dest;
 }
 
-// Write a fake npm (a POSIX-sh shim) at `dest`, used via CLODE_NPM to exercise
-// ensureDeps without a real npm. `ok:true` (default) logs the invocation to
-// `opts.log` (if given) and simulates a successful install by mkdir'ing
-// node_modules/.installed under the `--prefix` dir; `ok:false` fails loud (exit 1).
-// The log path is baked into the script (absolute), so no env plumbing is needed.
-// NOTE: a `.sh` shim is Linux/macOS only (Spec 2a); a node-based shim is the
-// Windows-portable follow-up (Spec 2b).
+// Write a fake npm at `dest`, used via CLODE_NPM to exercise ensureDeps without a real
+// npm. `ok:true` (default) logs the invocation to `opts.log` (if given) and simulates a
+// successful install by mkdir'ing node_modules/.installed under the `--prefix` dir;
+// `ok:false` fails loud (exit 1). The log path is baked into the script (absolute), so
+// no env plumbing is needed. Returns the path CLODE_NPM should point at.
+//
+// Cross-platform: on POSIX a `#!/bin/sh` shim; on Windows a `.cmd` shim (npm on Windows
+// IS npm.cmd, and clode routes .cmd through cmd.exe) delegating to a paired `.cjs` run
+// by NODE. spawnSync can't exec a `#!/bin/sh` on Windows. NODE is embedded absolute
+// because the hermetic sandbox PATH (/usr/bin:/bin) carries no node.
 function fakeNpm(dest, opts = {}) {
   const ok = opts.ok !== false;
+  if (process.platform === 'win32') {
+    const cjs = dest + '.cjs';
+    let body;
+    if (ok) {
+      body = 'const fs=require("fs"),path=require("path");const a=process.argv.slice(2);\n'
+        + (opts.log ? `fs.appendFileSync(${JSON.stringify(opts.log)},"npm "+a.join(" ")+"\\n");\n` : '')
+        + 'let p="";for(let i=0;i<a.length-1;i++)if(a[i]==="--prefix")p=a[i+1];\n'
+        + 'if(p)fs.mkdirSync(path.join(p,"node_modules",".installed"),{recursive:true});\n'
+        + 'process.exit(0);\n';
+    } else {
+      body = 'process.stderr.write("boom\\n");process.exit(1);\n';
+    }
+    fs.writeFileSync(cjs, body);
+    const cmd = dest + '.cmd';
+    fs.writeFileSync(cmd, `@echo off\r\n"${NODE}" "${cjs}" %*\r\n`);
+    return cmd;
+  }
   let body;
   if (ok) {
     body = '#!/bin/sh\n'

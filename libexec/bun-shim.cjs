@@ -291,7 +291,7 @@ function _recordSkew(f){
   g.__clodeDoctor = g.__clodeDoctor || {};
   g.__clodeDoctor.appletSkew = _skewFindings;
 }
-function warnAppletSkew(shadows){
+function warnAppletSkew(shadows, spawn = _rawSpawnSync){
   for (const sh of shadows){
     const known = CLODE_SHADOWS[sh.name];
     if (!known || !known.probe) continue;
@@ -302,7 +302,7 @@ function warnAppletSkew(shadows){
     if (_warnedSkew.has(key)) continue;
     const { args, skew } = known.probe(flags);
     let r;
-    try { r = _rawSpawnSync(bin, args, { encoding: 'utf8', timeout: 5000 }); }
+    try { r = spawn(bin, args, { encoding: 'utf8', timeout: 5000 }); }
     catch (_) { continue; }
     if (r.error || skew(r.status)){
       _warnedSkew.add(key);
