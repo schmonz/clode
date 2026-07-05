@@ -284,7 +284,11 @@ function runHelper(cliBody) {
   });
 }
 
-test('runBundle (real, isolated): a self-signalled child maps to 128+signum', async () => {
+test('runBundle (real, isolated): a self-signalled child maps to 128+signum', {
+  skip: process.platform === 'win32'
+    ? 'real POSIX signal self-delivery has no Windows analog; the 128+signum mapping logic is covered by the fakeChild unit test above'
+    : false,
+}, async () => {
   // The fake bundle kills ITSELF with SIGTERM; runBundle must exit 128+15 = 143.
   const { code, signal } = await runHelper("process.kill(process.pid, 'SIGTERM');\n");
   assert.strictEqual(signal, null, 'the launcher itself exits normally, not by signal');
