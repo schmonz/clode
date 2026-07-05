@@ -37,7 +37,7 @@ test('platformTag is a pure formatter over an injected token', () => {
 });
 
 test('platformTag() with no args produces the host tuple', () => {
-  assert.match(platformTag(), /^(macos-(10\.\d+|\d+)|linux-(glibc\d+\.\d+|musl)|\w+-\d+)-\S+-node\d+$/);
+  assert.match(platformTag(), /^(macos-(10\.\d+|\d+)|linux-(glibc\d+\.\d+|musl)|windows|\w+-\d+)-\S+-node\d+$/);
 });
 
 test('osToken maps win32 to the stable "windows" token (no OS-version split)', () => {

@@ -40,10 +40,11 @@ test('derived dirs layer their specific override on the base', () => {
 
 test('CLODE_STATE_ROOT contains BOTH data and cache (npm + SEA seal)', () => {
   const env = { CLODE_STATE_ROOT: '/sandbox' };
-  assert.ok(P.depsStore(env).startsWith('/sandbox/'));
-  assert.ok(P.clodeCacheDir(env).startsWith('/sandbox/'));
-  assert.ok(P.providersDir(env).startsWith('/sandbox/'));
-  assert.ok(P.watchDir(env).startsWith('/sandbox/'));
+  const u = (p) => p.replace(/\\/g, '/');
+  assert.ok(u(P.depsStore(env)).startsWith('/sandbox/'));
+  assert.ok(u(P.clodeCacheDir(env)).startsWith('/sandbox/'));
+  assert.ok(u(P.providersDir(env)).startsWith('/sandbox/'));
+  assert.ok(u(P.watchDir(env)).startsWith('/sandbox/'));
 });
 
 test('falls back to os.homedir() when HOME unset', () => {
