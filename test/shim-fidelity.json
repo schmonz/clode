@@ -1,0 +1,274 @@
+{
+  "stringWidth": [
+    {
+      "in": "",
+      "out": 0
+    },
+    {
+      "in": "hello",
+      "out": 5
+    },
+    {
+      "in": "日本語",
+      "out": 6
+    },
+    {
+      "in": "Ａ",
+      "out": 2
+    },
+    {
+      "in": "👍",
+      "out": 2
+    },
+    {
+      "in": "👨‍👩‍👧‍👦",
+      "out": 2
+    },
+    {
+      "in": "👋🏽",
+      "out": 2
+    },
+    {
+      "in": "à",
+      "out": 1
+    },
+    {
+      "in": "​hi",
+      "out": 2
+    },
+    {
+      "in": "\u001b[31mred\u001b[0m",
+      "out": 3
+    },
+    {
+      "in": "a\tb",
+      "out": 2
+    }
+  ],
+  "stripAnsi": [
+    {
+      "in": "plain",
+      "out": "plain"
+    },
+    {
+      "in": "\u001b[31mred\u001b[0m",
+      "out": "red"
+    },
+    {
+      "in": "\u001b[1;32mbold green\u001b[0m",
+      "out": "bold green"
+    },
+    {
+      "in": "\u001b]8;;https://example.com\u001b\\link\u001b]8;;\u001b\\",
+      "out": "link"
+    },
+    {
+      "in": "\u001b[2J\u001b[Hcleared",
+      "out": "cleared"
+    },
+    {
+      "in": "nested \u001b[31m\u001b[1mx\u001b[0m",
+      "out": "nested x"
+    }
+  ],
+  "wrapAnsi": [
+    {
+      "in": "the quick brown fox jumps",
+      "cols": 10,
+      "opts": null,
+      "out": "the quick\nbrown fox\njumps"
+    },
+    {
+      "in": "the quick brown fox jumps",
+      "cols": 10,
+      "opts": {
+        "hard": true
+      },
+      "out": "the quick\nbrown fox\njumps"
+    },
+    {
+      "in": "  leading and trailing  ",
+      "cols": 10,
+      "opts": {
+        "trim": false
+      },
+      "out": "  leading \nand \ntrailing  "
+    },
+    {
+      "in": "longwordwithoutbreaks",
+      "cols": 8,
+      "opts": {
+        "hard": true
+      },
+      "out": "longword\nwithoutb\nreaks"
+    },
+    {
+      "in": "longwordwithoutbreaks",
+      "cols": 8,
+      "opts": {
+        "wordWrap": false
+      },
+      "out": "longword\nwithoutb\nreaks"
+    },
+    {
+      "in": "日本語 の テキスト",
+      "cols": 6,
+      "opts": {
+        "hard": true
+      },
+      "out": "日本語\nの テ\nキスト"
+    },
+    {
+      "in": "\u001b[31mred text that wraps\u001b[0m",
+      "cols": 8,
+      "opts": {
+        "hard": true
+      },
+      "out": "\u001b[31mred text\u001b[39m\n\u001b[31mthat\u001b[39m\n\u001b[31mwraps\u001b[0m"
+    }
+  ],
+  "yamlParse": [
+    {
+      "in": "a: 1\nb: two\n",
+      "out": {
+        "a": 1,
+        "b": "two"
+      }
+    },
+    {
+      "in": "list:\n  - x\n  - y\n",
+      "out": {
+        "list": [
+          "x",
+          "y"
+        ]
+      }
+    },
+    {
+      "in": "anchored: &a hi\nref: *a\n",
+      "out": {
+        "anchored": "hi",
+        "ref": "hi"
+      }
+    },
+    {
+      "in": "multi: |\n  line1\n  line2\n",
+      "out": {
+        "multi": "line1\nline2\n"
+      }
+    },
+    {
+      "in": "flow: {x: 1, y: [2, 3]}\n",
+      "out": {
+        "flow": {
+          "x": 1,
+          "y": [
+            2,
+            3
+          ]
+        }
+      }
+    },
+    {
+      "in": "nullish: ~\nbool: yes\nstr: \"yes\"\nnum: 007\n",
+      "out": {
+        "nullish": null,
+        "bool": "yes",
+        "str": "yes",
+        "num": 7
+      }
+    }
+  ],
+  "yamlStringify": [
+    {
+      "in": {
+        "a": 1,
+        "b": "two",
+        "c": [
+          1,
+          2,
+          3
+        ]
+      },
+      "out": "a: 1\nb: two\nc:\n  - 1\n  - 2\n  - 3\n"
+    },
+    {
+      "in": {
+        "nested": {
+          "x": true,
+          "y": null
+        }
+      },
+      "out": "nested:\n  x: true\n  y: null\n"
+    },
+    {
+      "in": [
+        "a",
+        "b",
+        {
+          "c": 3
+        }
+      ],
+      "out": "- a\n- b\n- c: 3\n"
+    }
+  ],
+  "semverSort": [
+    {
+      "in": [
+        "1.0.0",
+        "1.0.0-alpha",
+        "1.0.0-beta",
+        "1.0.0-alpha.1",
+        "2.1.70",
+        "2.1.179",
+        "1.2.3"
+      ],
+      "out": [
+        "1.0.0-alpha",
+        "1.0.0-alpha.1",
+        "1.0.0-beta",
+        "1.0.0",
+        "1.2.3",
+        "2.1.70",
+        "2.1.179"
+      ]
+    }
+  ],
+  "semverSatisfies": [
+    {
+      "in": [
+        "1.2.3",
+        "^1.0.0"
+      ],
+      "out": true
+    },
+    {
+      "in": [
+        "2.0.0",
+        "^1.0.0"
+      ],
+      "out": false
+    },
+    {
+      "in": [
+        "1.0.0-alpha",
+        ">=1.0.0"
+      ],
+      "out": false
+    },
+    {
+      "in": [
+        "8.0.1",
+        "^8"
+      ],
+      "out": true
+    },
+    {
+      "in": [
+        "2.1.179",
+        ">2.1.70"
+      ],
+      "out": true
+    }
+  ]
+}
