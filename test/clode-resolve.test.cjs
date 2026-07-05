@@ -316,6 +316,11 @@ test('cacheKey falls back to basename+signature for unversioned paths', () => {
   assert.strictEqual(key, `claude-${sigOf(bin)}`);
 });
 
+test('cacheKey reads the version from a Windows-separator versioned path', () => {
+  assert.strictEqual(cacheKey('C:\\Users\\x\\.local\\share\\clode\\providers\\2.1.201\\claude'), '2.1.201');
+  assert.strictEqual(cacheKey('C:\\a\\versions\\9.9.9\\claude.exe'), '9.9.9');
+});
+
 test('cacheKey is stable: same binary -> same key', () => {
   const dir = tmpdir();
   const bin = path.join(dir, 'claude');

@@ -37,11 +37,11 @@ function sigOf(p, fsm = fs) {
 // a changed provider binary re-extracts.
 //   sh: KEY=${BIN#*/versions/}; KEY=${KEY%%/*}   (segment after the FIRST match)
 function cacheKey(bin, fsm = fs) {
+  const norm = bin.replace(/\\/g, '/'); // Windows paths use '\'; match markers on either separator
   for (const marker of ['/versions/', '/providers/']) {
-    const i = bin.indexOf(marker); // #*/versions/ removes up to the FIRST occurrence
+    const i = norm.indexOf(marker); // #*/versions/ removes up to the FIRST occurrence
     if (i !== -1) {
-      const rest = bin.slice(i + marker.length);
-      return rest.split('/')[0]; // %%/* -> up to the first slash
+      return norm.slice(i + marker.length).split('/')[0]; // %%/* -> up to the first slash
     }
   }
   return `${path.basename(bin)}-${sigOf(bin, fsm)}`;
@@ -119,7 +119,7 @@ function resolveClaudeBin(opts = {}) {
   //    POSIX, so the list is a no-op there (no platform branch). `claude` is tried
   //    first so a POSIX install's version-keyed symlink is preferred if both exist.
   for (const leaf of ['claude', 'claude.exe']) {
-    const link = `${home}/.local/bin/${leaf}`;
+    const link = path.join(home, '.local', 'bin', leaf); // native separators (Windows: backslashes)
     if (!pathExists(link, fsm)) continue;
     let real;
     try {
@@ -130,7 +130,7 @@ function resolveClaudeBin(opts = {}) {
     // Anchor a RELATIVE readlink target at the link dir; use an absolute one as-is.
     // path.isAbsolute (not a leading-'/' test) so a Windows drive path (C:\...) from
     // the plain-copy case is returned unmangled.
-    if (!path.isAbsolute(real)) real = `${path.dirname(link)}/${real}`;
+    if (!path.isAbsolute(real)) real = path.join(path.dirname(link), real);
     return real;
   }
 
