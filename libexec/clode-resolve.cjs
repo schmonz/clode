@@ -102,11 +102,8 @@ function resolveClaudeBin(opts = {}) {
   // 2. explicit version dir — likewise verbatim.
   if (env.CLODE_VERSION_DIR) return env.CLODE_VERSION_DIR;
 
-  // 3. provider `current`. sh builds:
-  //   ${CLODE_PROVIDERS:-${XDG_DATA_HOME:-$HOME/.local/share}/clode/providers}/current
-  // and, if <current>/claude exists, returns "$(cd <current> && pwd -P)/claude"
-  // — the symlink-resolved (physical) provider dir + /claude.
-  // 3. clode-managed provider `current` — the active version's claude, if any.
+  // 3. clode-managed provider `current` — the active version's claude, if any
+  //    (resolved through the clode-current seam: a pointer file -> providers/<ver>/claude).
   const cbin = currentBin(env, fsm);
   if (cbin) return cbin;
 

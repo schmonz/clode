@@ -102,10 +102,6 @@ function readNoticeFile(p) {
   return out;
 }
 
-function providersDir(env) {
-  return cpaths.providersDir(env || process.env);
-}
-
 // The version <providers>/current points at, via the clode-current seam ('' if none).
 function currentProvider(env) {
   return currentVersion(env);
