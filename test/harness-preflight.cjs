@@ -40,7 +40,9 @@ function chmodSpawnHelpers() {
 }
 function spawnSmoke() {
   const pty = req('node-pty');
-  const child = pty.spawn('/bin/sh', ['-c', 'exit 0'], { name: 'xterm-256color', cols: 20, rows: 5 });
+  // Spawn THIS node under the pty (no shell dependency): exercises the pty backend
+  // — openpty on POSIX, ConPTY on Windows — uniformly. /bin/sh does not exist on Windows.
+  const child = pty.spawn(process.execPath, ['-e', 'process.exit(0)'], { name: 'xterm-256color', cols: 20, rows: 5 });
   try { child.kill(); } catch { /* already gone */ }
 }
 try {
