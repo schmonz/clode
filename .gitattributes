@@ -1,0 +1,7 @@
+# clode is POSIX-oriented (shell-snapshot fixtures, the launcher, .cjs/.sh helpers) and
+# must check out with LF on every platform. Without this, Windows checkouts with
+# core.autocrlf=true (e.g. GitHub's windows-latest runner) convert text files to CRLF,
+# which breaks line-sensitive tests — notably the shell-snapshot rewrite, whose passthrough
+# guard silently drops under CRLF. Force LF for all text; git still auto-detects binaries
+# (.tgz, images, the SEA artifact) and leaves them untouched.
+* text=auto eol=lf
