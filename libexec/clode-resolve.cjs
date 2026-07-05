@@ -128,8 +128,8 @@ function resolveClaudeBin(opts = {}) {
       real = link; // not a symlink (e.g. the Windows copy) -> the path itself
     }
     // Anchor a RELATIVE readlink target at the link dir; use an absolute one as-is.
-    // path.isAbsolute (not a leading-'/' test) so a Windows drive path (C:\...) from
-    // the plain-copy case is returned unmangled.
+    // path.win32.isAbsolute (not a leading-'/' test) so a Windows drive path (C:\...)
+    // from the plain-copy case is returned unmangled.
     if (!path.win32.isAbsolute(real)) real = path.join(path.dirname(link), real);
     return real;
   }

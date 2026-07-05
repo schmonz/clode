@@ -8,9 +8,9 @@ const { makeWsWorlds, seedClaudeProfile, worldNode } = require('./e2e-pty.cjs');
 test('makeWsWorlds builds withws (with ws) and nows (without ws)', (t) => {
   const sbx = sandbox(t);
   const { withws, nows } = makeWsWorlds(sbx);
-  // both worlds have a node symlink + fake render deps
+  // both worlds have a node copy + fake render deps
   for (const p of [withws, nows]) {
-    assert.ok(fs.existsSync(worldNode(p)), 'world node symlink exists');
+    assert.ok(fs.existsSync(worldNode(p)), 'world node copy exists');
     assert.ok(fs.existsSync(path.join(p, 'lib', 'node_modules', 'string-width', 'package.json')));
   }
   // ws present ONLY in withws
