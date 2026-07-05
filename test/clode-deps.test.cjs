@@ -5,8 +5,10 @@
 // skip; changed-manifest reinstall; missing/failing npm exits loud; a user-managed
 // CLODE_DEPS is left alone; deps shipped in clode's own node_modules => no install.
 //
-// A FAKE npm (a tiny sh stub written to disk, passed as npmPath) stands in for the
-// real one so tests never hit the network — mirroring the CLODE_NPM fake in the bats.
+// A MOCK spawn (injected via ensureDeps' `spawn` option) stands in for the real
+// npm subprocess so tests never hit the network or shell out to a real npm —
+// cross-platform, no `#!/bin/sh` fake required (mirrors the CLODE_NPM fake in the
+// bats, and the applet-spawn mock pattern from commit bfc6b97).
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -30,32 +32,27 @@ function makePkg() {
   fs.mkdirSync(libexec, { recursive: true });
   fs.writeFileSync(path.join(root, 'package.json'), '{"name":"clode","dependencies":{}}\n');
   const deps = path.join(root, 'deps');
-  const npmlog = path.join(root, 'npmlog');
-  return { root, here, libexec, deps, npmlog };
+  return { root, here, libexec, deps };
 }
 
-// Fake npm: append the invocation to a log, and (a "successful" install) create
-// node_modules under --prefix. Mirrors test_deps.bats's npm-ok.
-function fakeNpmOk(dir, npmlog) {
-  const p = path.join(dir, 'npm-ok');
-  fs.writeFileSync(
-    p,
-    '#!/bin/sh\n' +
-      `echo "npm $*" >> "${npmlog}"\n` +
-      'p=""; while [ $# -gt 0 ]; do [ "$1" = "--prefix" ] && p="$2"; shift; done\n' +
-      '[ -n "$p" ] && mkdir -p "$p/node_modules/.installed"\n' +
-      'exit 0\n',
-  );
-  fs.chmodSync(p, 0o755);
-  return p;
+// A mock npm `spawn` (replaces the #!/bin/sh fake — cross-platform, no real process).
+// Records each invocation to `log.calls`, and on `--prefix` creates
+// <prefix>/node_modules/.installed (the fake "successful install" side effect the
+// tests check). Return shape matches spawnSync (r.status), same field runNpmQuiet
+// reads in libexec/clode-deps.cjs.
+function fakeNpmOk(log) {
+  return (npm, args) => {
+    log.calls.push('npm ' + args.join(' '));
+    let prefix = '';
+    for (let i = 0; i < args.length - 1; i++) if (args[i] === '--prefix') prefix = args[i + 1];
+    if (prefix) fs.mkdirSync(path.join(prefix, 'node_modules', '.installed'), { recursive: true });
+    return { status: 0, stdout: '', stderr: '' };
+  };
 }
 
-// Fake npm that fails, like test_deps.bats's npm-fail.
-function fakeNpmFail(dir) {
-  const p = path.join(dir, 'npm-fail');
-  fs.writeFileSync(p, '#!/bin/sh\necho "boom" >&2\nexit 1\n');
-  fs.chmodSync(p, 0o755);
-  return p;
+// A mock npm `spawn` that fails, like test_deps.bats's npm-fail.
+function fakeNpmFail() {
+  return (npm, args) => ({ status: 1, stdout: '', stderr: 'boom\n' });
 }
 
 // Run ensureDeps with captured stderr + an exit stub that unwinds (like sh `exit`).
@@ -72,56 +69,53 @@ function run(opts) {
   return { exitCode, err };
 }
 
-function readLog(p) {
-  try { return fs.readFileSync(p, 'utf8'); } catch { return ''; }
-}
-
 // --- auto-install ----------------------------------------------------------
 test('auto-install runs when the deps dir is empty, and records a sig', () => {
-  const { root, here, libexec, deps, npmlog } = makePkg();
-  const npm = fakeNpmOk(root, npmlog);
-  const { exitCode } = run({ here, libexec, npmPath: npm, env: { CLODE_DEPS: deps } });
+  const { here, libexec, deps } = makePkg();
+  const log = { calls: [] };
+  const { exitCode } = run({ here, libexec, npmPath: 'npm', spawn: fakeNpmOk(log), env: { CLODE_DEPS: deps } });
   assert.strictEqual(exitCode, null);
-  const log = readLog(npmlog);
-  assert.match(log, /install/);
+  const calls = log.calls.join('\n');
+  assert.match(calls, /install/);
   // npm flags carried through, in the sh order.
-  assert.match(log, /--no-audit --no-fund --omit=dev/);
+  assert.match(calls, /--no-audit --no-fund --omit=dev/);
   assert.ok(fs.existsSync(path.join(deps, 'node_modules', '.installed')));
   assert.ok(fs.existsSync(path.join(deps, '.deps-sig')));
 });
 
 test('the copied manifest lands at DEPS_ROOT/package.json', () => {
-  const { root, here, libexec, deps, npmlog } = makePkg();
-  const npm = fakeNpmOk(root, npmlog);
-  run({ here, libexec, npmPath: npm, env: { CLODE_DEPS: deps } });
+  const { here, libexec, deps } = makePkg();
+  const log = { calls: [] };
+  run({ here, libexec, npmPath: 'npm', spawn: fakeNpmOk(log), env: { CLODE_DEPS: deps } });
   assert.ok(fs.existsSync(path.join(deps, 'package.json')));
 });
 
 test('auto-install is skipped when the manifest sig already matches', () => {
-  const { root, here, libexec, deps, npmlog } = makePkg();
-  const npm = fakeNpmOk(root, npmlog);
-  run({ here, libexec, npmPath: npm, env: { CLODE_DEPS: deps } });
-  fs.writeFileSync(npmlog, ''); // clear
-  run({ here, libexec, npmPath: npm, env: { CLODE_DEPS: deps } });
-  assert.doesNotMatch(readLog(npmlog), /install/);
+  const { here, libexec, deps } = makePkg();
+  const log = { calls: [] };
+  const spawn = fakeNpmOk(log);
+  run({ here, libexec, npmPath: 'npm', spawn, env: { CLODE_DEPS: deps } });
+  log.calls.length = 0; // clear
+  run({ here, libexec, npmPath: 'npm', spawn, env: { CLODE_DEPS: deps } });
+  assert.doesNotMatch(log.calls.join('\n'), /install/);
 });
 
 test('a changed manifest triggers a reinstall', () => {
-  const { root, here, libexec, deps, npmlog } = makePkg();
-  const npm = fakeNpmOk(root, npmlog);
-  run({ here, libexec, npmPath: npm, env: { CLODE_DEPS: deps } });
-  fs.writeFileSync(npmlog, '');
+  const { root, here, libexec, deps } = makePkg();
+  const log = { calls: [] };
+  const spawn = fakeNpmOk(log);
+  run({ here, libexec, npmPath: 'npm', spawn, env: { CLODE_DEPS: deps } });
+  log.calls.length = 0;
   // mutate the manifest -> size (and mtime) change -> sig changes
   fs.appendFileSync(path.join(root, 'package.json'), '\n');
-  run({ here, libexec, npmPath: npm, env: { CLODE_DEPS: deps } });
-  assert.match(readLog(npmlog), /install/);
+  run({ here, libexec, npmPath: 'npm', spawn, env: { CLODE_DEPS: deps } });
+  assert.match(log.calls.join('\n'), /install/);
 });
 
 // --- fail-loud -------------------------------------------------------------
 test('a failing npm exits loud (exit 1) with the dependency-install error', () => {
-  const { root, here, libexec, deps } = makePkg();
-  const npm = fakeNpmFail(root);
-  const { exitCode, err } = run({ here, libexec, npmPath: npm, env: { CLODE_DEPS: deps } });
+  const { here, libexec, deps } = makePkg();
+  const { exitCode, err } = run({ here, libexec, npmPath: 'npm', spawn: fakeNpmFail(), env: { CLODE_DEPS: deps } });
   assert.strictEqual(exitCode, 1);
   assert.match(err, /dependency install failed/i);
 });
@@ -137,20 +131,20 @@ test('missing npm exits loud (exit 1) with the need-npm error', () => {
 
 // --- early returns ---------------------------------------------------------
 test('a user-managed CLODE_DEPS (node_modules, no .deps-sig) is left alone', () => {
-  const { root, here, libexec, deps, npmlog } = makePkg();
-  const npm = fakeNpmOk(root, npmlog);
+  const { here, libexec, deps } = makePkg();
+  const log = { calls: [] };
   fs.mkdirSync(path.join(deps, 'node_modules', '.user'), { recursive: true });
-  run({ here, libexec, npmPath: npm, env: { CLODE_DEPS: deps } });
-  assert.doesNotMatch(readLog(npmlog), /install/);
+  run({ here, libexec, npmPath: 'npm', spawn: fakeNpmOk(log), env: { CLODE_DEPS: deps } });
+  assert.doesNotMatch(log.calls.join('\n'), /install/);
 });
 
 test("deps shipped in clode's own node_modules (npm install -g .) -> no auto-install", () => {
-  const { root, here, libexec, deps, npmlog } = makePkg();
-  const npm = fakeNpmOk(root, npmlog);
+  const { root, here, libexec, deps } = makePkg();
+  const log = { calls: [] };
   // what `npm install -g .` leaves next to bin/ ($HERE/../node_modules)
   fs.mkdirSync(path.join(root, 'node_modules', '.shipped'), { recursive: true });
-  run({ here, libexec, npmPath: npm, env: { CLODE_DEPS: deps } });
-  assert.doesNotMatch(readLog(npmlog), /install/);
+  run({ here, libexec, npmPath: 'npm', spawn: fakeNpmOk(log), env: { CLODE_DEPS: deps } });
+  assert.doesNotMatch(log.calls.join('\n'), /install/);
 });
 
 test('no manifest anywhere -> nothing to ensure (no install, no exit)', () => {
@@ -159,38 +153,37 @@ test('no manifest anywhere -> nothing to ensure (no install, no exit)', () => {
   const libexec = path.join(root, 'libexec');
   fs.mkdirSync(here, { recursive: true });
   fs.mkdirSync(libexec, { recursive: true });
-  const npmlog = path.join(root, 'npmlog');
-  const npm = fakeNpmOk(root, npmlog);
-  const { exitCode } = run({ here, libexec, npmPath: npm, env: { CLODE_DEPS: path.join(root, 'deps') } });
+  const log = { calls: [] };
+  const { exitCode } = run({ here, libexec, npmPath: 'npm', spawn: fakeNpmOk(log), env: { CLODE_DEPS: path.join(root, 'deps') } });
   assert.strictEqual(exitCode, null);
-  assert.doesNotMatch(readLog(npmlog), /install/);
+  assert.doesNotMatch(log.calls.join('\n'), /install/);
 });
 
 // --- manifest search order -------------------------------------------------
 test('the manifest in libexec/package.json wins over here/../package.json', () => {
-  const { root, here, libexec, deps, npmlog } = makePkg();
-  const npm = fakeNpmOk(root, npmlog);
+  const { here, libexec, deps } = makePkg();
+  const log = { calls: [] };
   // put a manifest in libexec too; ensure_deps prefers it (first in search order)
   fs.writeFileSync(path.join(libexec, 'package.json'), '{"name":"clode-libexec"}\n');
-  run({ here, libexec, npmPath: npm, env: { CLODE_DEPS: deps } });
+  run({ here, libexec, npmPath: 'npm', spawn: fakeNpmOk(log), env: { CLODE_DEPS: deps } });
   const copied = fs.readFileSync(path.join(deps, 'package.json'), 'utf8');
   assert.match(copied, /clode-libexec/);
 });
 
 // --- DEPS_ROOT resolution --------------------------------------------------
 test('DEPS_ROOT defaults to XDG_DATA_HOME/clode when CLODE_DEPS is unset', () => {
-  const { root, here, libexec, npmlog } = makePkg();
-  const npm = fakeNpmOk(root, npmlog);
+  const { root, here, libexec } = makePkg();
+  const log = { calls: [] };
   const xdg = path.join(root, 'xdg');
-  run({ here, libexec, npmPath: npm, env: { XDG_DATA_HOME: xdg } });
+  run({ here, libexec, npmPath: 'npm', spawn: fakeNpmOk(log), env: { XDG_DATA_HOME: xdg } });
   assert.ok(fs.existsSync(path.join(xdg, 'clode', 'node_modules', '.installed')));
   assert.ok(fs.existsSync(path.join(xdg, 'clode', '.deps-sig')));
 });
 
 test('DEPS_ROOT defaults to HOME/.local/share/clode when neither is set', () => {
-  const { root, here, libexec, npmlog } = makePkg();
-  const npm = fakeNpmOk(root, npmlog);
+  const { root, here, libexec } = makePkg();
+  const log = { calls: [] };
   const home = path.join(root, 'home');
-  run({ here, libexec, npmPath: npm, env: { HOME: home } });
+  run({ here, libexec, npmPath: 'npm', spawn: fakeNpmOk(log), env: { HOME: home } });
   assert.ok(fs.existsSync(path.join(home, '.local', 'share', 'clode', 'node_modules', '.installed')));
 });
