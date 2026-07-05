@@ -131,6 +131,25 @@ test('5c. ~/.local/bin/claude regular file (not a symlink) returns the path itse
   assert.strictEqual(resolveClaudeBin({ env }), claude);
 });
 
+test('5d. ~/.local/bin/claude.exe (Windows plain copy) resolves to the .exe', () => {
+  const dir = tmpdir();
+  const home = path.join(dir, 'home');
+  const bindir = path.join(home, '.local', 'bin');
+  const claudeExe = mkBundle(path.join(bindir, 'claude.exe'), 'winexe');
+  const env = { HOME: home, PATH: '' };
+  assert.strictEqual(resolveClaudeBin({ env }), claudeExe);
+});
+
+test('5e. when both claude and claude.exe exist, claude wins', () => {
+  const dir = tmpdir();
+  const home = path.join(dir, 'home');
+  const bindir = path.join(home, '.local', 'bin');
+  const claude = mkBundle(path.join(bindir, 'claude'), 'plain');
+  mkBundle(path.join(bindir, 'claude.exe'), 'winexe');
+  const env = { HOME: home, PATH: '' };
+  assert.strictEqual(resolveClaudeBin({ env }), claude);
+});
+
 test('6. claude on PATH last', () => {
   const dir = tmpdir();
   const pathdir = path.join(dir, 'pathdir');

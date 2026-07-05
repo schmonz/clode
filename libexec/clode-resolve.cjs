@@ -7,7 +7,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { providersDir } = require('./clode-paths.cjs');
+const { providersDir, homeDir } = require('./clode-paths.cjs');
 
 // Does `p` exist? Mirrors sh `[ -e "$p" ]` — existence, following symlinks (any
 // stat error, incl. a dangling link, is "no"). statSync (not lstat) so a symlink
@@ -105,7 +105,7 @@ function resolveClaudeBin(opts = {}) {
   //   ${CLODE_PROVIDERS:-${XDG_DATA_HOME:-$HOME/.local/share}/clode/providers}/current
   // and, if <current>/claude exists, returns "$(cd <current> && pwd -P)/claude"
   // — the symlink-resolved (physical) provider dir + /claude.
-  const home = env.HOME || '';
+  const home = homeDir(env);
   const providers = providersDir(env);
   const current = `${providers}/current`;
   if (pathExists(`${current}/claude`, fsm)) {
@@ -121,17 +121,25 @@ function resolveClaudeBin(opts = {}) {
   // 4. baked provider path (empty in the JS default; kept for parity).
   if (baked && pathExists(baked, fsm)) return baked;
 
-  // 5. ~/.local/bin/claude, single-hop readlink-resolved (relative -> anchored at
-  //    the link's dir). Not a symlink / readlink fails -> the link path itself.
-  const link = `${home}/.local/bin/claude`;
-  if (pathExists(link, fsm)) {
+  // 5. ~/.local/bin/claude[.exe], single-hop readlink-resolved (relative -> anchored
+  //    at the link's dir). The native installer writes `claude` on POSIX (a symlink
+  //    into versions/<ver>) and `claude.exe` on Windows (a plain copy — symlinks need
+  //    privilege there). Try both leaf names uniformly; `claude.exe` never exists on
+  //    POSIX, so the list is a no-op there (no platform branch). `claude` is tried
+  //    first so a POSIX install's version-keyed symlink is preferred if both exist.
+  for (const leaf of ['claude', 'claude.exe']) {
+    const link = `${home}/.local/bin/${leaf}`;
+    if (!pathExists(link, fsm)) continue;
     let real;
     try {
       real = fsm.readlinkSync(link);
     } catch {
-      real = link;
+      real = link; // not a symlink (e.g. the Windows copy) -> the path itself
     }
-    if (real[0] !== '/') real = `${path.dirname(link)}/${real}`;
+    // Anchor a RELATIVE readlink target at the link dir; use an absolute one as-is.
+    // path.isAbsolute (not a leading-'/' test) so a Windows drive path (C:\...) from
+    // the plain-copy case is returned unmangled.
+    if (!path.isAbsolute(real)) real = `${path.dirname(link)}/${real}`;
     return real;
   }
 
