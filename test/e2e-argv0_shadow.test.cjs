@@ -19,6 +19,15 @@ const { sandbox, REPO, NODE } = require('./e2e.cjs');
 const BUN_SHIM = path.join(REPO, 'libexec', 'bun-shim.cjs');
 const FIXTURE = path.join(REPO, 'test', 'fixtures', 'snapshot-execpath.sh');
 
+// The rewritten snapshot uses `function name { … }` (bash/zsh); dash (/bin/sh on Ubuntu) can't parse
+// it. Source under bash. Resolve bash's ABSOLUTE path once so a test's restricted env.PATH can't hide
+// it; gate on bash being present (skip-with-reason where it isn't — e.g. Windows without Git Bash).
+const BASH = (() => {
+  const r = require('node:child_process').spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' });
+  return r.status === 0 ? r.stdout.trim() : '';
+})();
+const BASH_SKIP = BASH ? false : 'needs bash to source the function-keyword snapshot (rewrite logic is covered by the rewriteSnapshot string tests)';
+
 // The bats rewrote the fixture in a SEPARATE node subprocess (so bun-shim.cjs's
 // require-time side effects — Module._load / child_process patching, globalThis
 // mutation — never touch the test runner). Replicate that isolation verbatim: same
@@ -39,7 +48,7 @@ function rewriteSnap(sbx) {
 
 // Render a rewritten snapshot, then source it with a stub `ugrep` on PATH and
 // confirm `grep` (the shadow) execs the stub with the upstream flags.
-test('rewritten grep shadow execs the real ugrep with upstream flags', (t) => {
+test('rewritten grep shadow execs the real ugrep with upstream flags', { skip: BASH_SKIP }, (t) => {
   const sbx = sandbox(t);
   const snap = rewriteSnap(sbx);
 
@@ -50,7 +59,7 @@ test('rewritten grep shadow execs the real ugrep with upstream flags', (t) => {
   fs.writeFileSync(ugrep, '#!/bin/sh\necho "ugrep-called: $*"\n');
   fs.chmodSync(ugrep, 0o755);
 
-  const r = spawnSync('/bin/sh', ['-c', `. '${snap}'; grep needle`], {
+  const r = spawnSync(BASH, ['-c', `. '${snap}'; grep needle`], {
     encoding: 'utf8',
     env: { ...sbx.env, PATH: `${binDir}:${sbx.env.PATH}` },
     cwd: REPO,
@@ -62,14 +71,14 @@ test('rewritten grep shadow execs the real ugrep with upstream flags', (t) => {
   assert.match(output, /needle/);
 });
 
-test('rewritten grep shadow fails loud when ugrep is absent', (t) => {
+test('rewritten grep shadow fails loud when ugrep is absent', { skip: BASH_SKIP }, (t) => {
   const sbx = sandbox(t);
   const snap = rewriteSnap(sbx);
 
   // Use a minimal PATH that has sh (/bin/sh) but no ugrep, and clear CLODE_UGREP.
   // The intended exit is 127 (the fail-loud path) — bats declared it via `run -127`.
   const binDir = path.join(sbx.dir, 'bin');   // never created — matches the bats
-  const r = spawnSync('/bin/sh', ['-c', `. '${snap}'; grep needle`], {
+  const r = spawnSync(BASH, ['-c', `. '${snap}'; grep needle`], {
     encoding: 'utf8',
     env: { ...sbx.env, PATH: `${binDir}:/bin:/usr/bin`, CLODE_UGREP: '' },
     cwd: REPO,
