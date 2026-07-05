@@ -15,7 +15,6 @@ jobs:
           - os: ubuntu-latest      # linux-x64
           - os: ubuntu-24.04-arm   # linux-arm64
           - os: macos-14           # darwin-arm64
-          - os: macos-13           # darwin-x64 (Intel)
           - os: windows-latest     # windows-x64
           - os: windows-11-arm     # windows-arm64
     runs-on: ${{ matrix.os }}
