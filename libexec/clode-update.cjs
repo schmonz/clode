@@ -23,6 +23,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { downloadFile, sha256Of } = require('./clode-net.cjs');
 const cpaths = require('./clode-paths.cjs');
+const { currentVersion, setCurrent } = require('./clode-current.cjs');
 
 // `[ -f "$p" ]`: exists AND is a regular file.
 function isFile(p) {
@@ -97,15 +98,6 @@ function checksumFor(manifestText, plat) {
   } catch {
     return '';
   }
-}
-
-// Force-(re)create `current` as a relative symlink to `ver`. Mirrors
-// `ln -sfn "$ver" "$current"`: replace any existing entry (file/dir/symlink)
-// without dereferencing, then link to the RELATIVE target so the store is
-// relocatable.
-function relinkCurrent(current, ver) {
-  try { fs.lstatSync(current); fs.rmSync(current, { recursive: true, force: true }); } catch { /* absent */ }
-  fs.symlinkSync(ver, current);
 }
 
 // After an update, surface Anthropic's direction-of-travel signals (release-note
@@ -219,14 +211,10 @@ async function clodeUpdate(channel, opts = {}) {
   const providers = providersDir(env);
   const dest = path.join(providers, ver);
   const bin = path.join(dest, 'claude');
-  const current = path.join(providers, 'current');
 
   // The version `current` points at now — for no-op detection and the signals
-  // diff's baseline (bin/clode:373-385).
-  let prevVer = '';
-  try {
-    if (fs.lstatSync(current).isSymbolicLink()) prevVer = fs.readlinkSync(current);
-  } catch { /* no current yet */ }
+  // diff's baseline.
+  const prevVer = currentVersion(env);
 
   const haveIt = isFile(bin) && sha256Of(bin) === sum;
 
@@ -263,7 +251,7 @@ async function clodeUpdate(channel, opts = {}) {
   }
 
   // Atomically re-point current -> ver.
-  relinkCurrent(current, ver);
+  setCurrent(env, ver);
 
   err(`clode: updated to ${ver}. Relaunch clode to use it.`);
 

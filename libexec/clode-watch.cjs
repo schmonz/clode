@@ -29,6 +29,7 @@ const { execFileSync } = require('node:child_process');
 const { downloadFile } = require('./clode-net.cjs');
 const { resolveChannel, releasesUrl } = require('./clode-update.cjs');
 const cpaths = require('./clode-paths.cjs');
+const { currentVersion } = require('./clode-current.cjs');
 
 const HERE_DEFAULT = __dirname; // libexec/; bin/ is a sibling
 const LIBEXEC_DEFAULT = __dirname;
@@ -105,13 +106,9 @@ function providersDir(env) {
   return cpaths.providersDir(env || process.env);
 }
 
-// readlink of <providers>/current iff it's a symlink; '' otherwise.
+// The version <providers>/current points at, via the clode-current seam ('' if none).
 function currentProvider(env) {
-  const link = path.join(providersDir(env), 'current');
-  try {
-    if (fs.lstatSync(link).isSymbolicLink()) return fs.readlinkSync(link);
-  } catch { /* none */ }
-  return '';
+  return currentVersion(env);
 }
 
 // Spawn clode-signals.cjs exactly as the sh does. Returns stdout (utf8), or ''

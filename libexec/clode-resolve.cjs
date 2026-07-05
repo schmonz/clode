@@ -7,7 +7,8 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { providersDir, homeDir } = require('./clode-paths.cjs');
+const { homeDir } = require('./clode-paths.cjs');
+const { currentBin } = require('./clode-current.cjs');
 
 // Does `p` exist? Mirrors sh `[ -e "$p" ]` — existence, following symlinks (any
 // stat error, incl. a dangling link, is "no"). statSync (not lstat) so a symlink
@@ -105,21 +106,14 @@ function resolveClaudeBin(opts = {}) {
   //   ${CLODE_PROVIDERS:-${XDG_DATA_HOME:-$HOME/.local/share}/clode/providers}/current
   // and, if <current>/claude exists, returns "$(cd <current> && pwd -P)/claude"
   // — the symlink-resolved (physical) provider dir + /claude.
-  const home = homeDir(env);
-  const providers = providersDir(env);
-  const current = `${providers}/current`;
-  if (pathExists(`${current}/claude`, fsm)) {
-    let physDir;
-    try {
-      physDir = fsm.realpathSync(current); // cd + pwd -P: resolve the whole path
-    } catch {
-      physDir = ''; // cd failed -> $(...) empty -> sh yields "/claude"
-    }
-    return `${physDir}/claude`;
-  }
+  // 3. clode-managed provider `current` — the active version's claude, if any.
+  const cbin = currentBin(env, fsm);
+  if (cbin) return cbin;
 
   // 4. baked provider path (empty in the JS default; kept for parity).
   if (baked && pathExists(baked, fsm)) return baked;
+
+  const home = homeDir(env);
 
   // 5. ~/.local/bin/claude[.exe], single-hop readlink-resolved (relative -> anchored
   //    at the link's dir). The native installer writes `claude` on POSIX (a symlink
