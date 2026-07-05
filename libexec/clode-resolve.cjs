@@ -130,7 +130,7 @@ function resolveClaudeBin(opts = {}) {
     // Anchor a RELATIVE readlink target at the link dir; use an absolute one as-is.
     // path.isAbsolute (not a leading-'/' test) so a Windows drive path (C:\...) from
     // the plain-copy case is returned unmangled.
-    if (!path.isAbsolute(real)) real = path.join(path.dirname(link), real);
+    if (!path.win32.isAbsolute(real)) real = path.join(path.dirname(link), real);
     return real;
   }
 
@@ -145,15 +145,22 @@ function resolveClaudeBin(opts = {}) {
 // command -v claude: first executable regular file named `claude` on PATH.
 function whichClaude(env, fsm = fs) {
   const PATH = env.PATH || '';
+  // Candidate leaf names: `claude` plus the Windows executable extensions from PATHEXT (data, not a
+  // platform branch — on POSIX PATHEXT is unset so the default list's `.exe`/`.cmd`/… simply never
+  // exist; on Windows a PATH provider is claude.exe/claude.cmd).
+  const exts = (env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').map((e) => e.trim().toLowerCase()).filter(Boolean);
+  const leaves = ['claude', ...exts.map((e) => 'claude' + e)];
   for (const dir of PATH.split(path.delimiter)) {
     if (!dir) continue; // an empty PATH element means CWD in sh; clode never relies on it
-    const cand = path.join(dir, 'claude');
-    try {
-      if (!fsm.statSync(cand).isFile()) continue;
-      fsm.accessSync(cand, fs.constants.X_OK);
-      return cand;
-    } catch {
-      // not there / not executable -> keep walking
+    for (const leaf of leaves) {
+      const cand = path.join(dir, leaf);
+      try {
+        if (!fsm.statSync(cand).isFile()) continue;
+        fsm.accessSync(cand, fs.constants.X_OK);
+        return cand;
+      } catch {
+        // not there / not executable -> keep walking
+      }
     }
   }
   return null;

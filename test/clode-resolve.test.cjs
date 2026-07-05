@@ -167,13 +167,19 @@ test('6. claude on PATH last', () => {
 });
 
 test('6b. a non-executable claude on PATH is skipped', () => {
-  const dir = tmpdir();
-  const pathdir = path.join(dir, 'pathdir');
-  fs.mkdirSync(pathdir, { recursive: true });
-  fs.writeFileSync(path.join(pathdir, 'claude'), 'not exec');
-  fs.chmodSync(path.join(pathdir, 'claude'), 0o644);
-  const env = { HOME: path.join(dir, 'nohome'), PATH: pathdir };
-  assert.strictEqual(resolveClaudeBin({ env }), null);
+  // Mock a claude on PATH whose accessSync(X_OK) fails (non-executable). Tests whichClaude's
+  // skip-on-inaccessible logic uniformly — Windows has no exec bit, so a real chmod wouldn't apply.
+  const pathdir = path.join(path.sep === '\\' ? 'C:\\pd' : '/pd');
+  const cand = path.join(pathdir, 'claude');
+  const enoent = () => { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; };
+  const fsm = {
+    statSync: (p) => (p === cand ? { isFile: () => true } : enoent()),
+    accessSync: () => { const e = new Error('EACCES'); e.code = 'EACCES'; throw e; }, // not executable
+    readlinkSync: () => { const e = new Error('EINVAL'); e.code = 'EINVAL'; throw e; },
+    readFileSync: () => enoent(),
+  };
+  const env = { HOME: '/nohome', PATH: pathdir };
+  assert.strictEqual(resolveClaudeBin({ env, fsm }), null);
 });
 
 test('7. no provider yields the not-found signal (null)', () => {
