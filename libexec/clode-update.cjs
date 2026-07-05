@@ -41,11 +41,16 @@ function releasesUrl(env) {
 }
 // The platform whose binary we download. ARBITRARY BY DESIGN: clode never runs this
 // binary — it byte-scans it for the @bun-cjs blocks and carves the JS out to run under
-// host Node. Claude Code ships one JS bundle per version (it branches on
-// process.platform at runtime), so every platform's binary yields the SAME extracted
-// JS. We fix it to linux-x64 (always present) so all hosts share one per-version cache
-// entry; host-derived selection would fragment that cache for no benefit. Overridable
-// via CLODE_FETCH_PLATFORM.
+// host Node. Claude Code ships the SAME PROGRAM on every platform (it branches on
+// process.platform at RUNTIME), so any platform's binary carves to a behaviorally
+// identical bundle. The carve is NOT byte-identical across platforms — separate
+// per-platform Bun builds assign different minifier identifier names, embed bundled
+// text assets with the build OS's line endings (CRLF on win32, LF on linux/macOS), and
+// bake in Bun's VFS path prefix (/$bunfs vs B:/~BUN) — but none of that is behavioral
+// (verified: win32 vs linux carves differ only in those cosmetics; linux == macOS
+// byte-for-byte). We fix it to linux-x64: always present, canonical LF, and one shared
+// per-version cache entry for all hosts (host-derived selection would fragment that
+// cache for no benefit). Overridable via CLODE_FETCH_PLATFORM.
 function fetchPlatform(env) {
   return env.CLODE_FETCH_PLATFORM || 'linux-x64';
 }
