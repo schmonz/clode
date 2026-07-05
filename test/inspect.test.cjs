@@ -79,11 +79,12 @@ test('embedded_applet_versions picks up bfs and rg if stamped', () => {
 });
 
 test('host_applet_version parses from a stub via env override', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-inspect-'));
-  const stub = path.join(dir, 'bfs');
-  fs.writeFileSync(stub, "#!/bin/sh\necho 'bfs 1.5.1'\n");
-  fs.chmodSync(stub, 0o755);
-  assert.strictEqual(ins.hostAppletVersion('bfs', { CLODE_BFS: stub }), '1.5.1');
+  // Mock the applet's `--version` output instead of spawning a real stub (cross-platform).
+  const spawn = (exe, args) => {
+    assert.deepStrictEqual(args, ['--version']);
+    return { status: 0, stdout: 'bfs 1.5.1\n', stderr: '' };
+  };
+  assert.strictEqual(ins.hostAppletVersion('bfs', { CLODE_BFS: '/fake/bfs' }, spawn), '1.5.1');
 });
 
 test('host_applet_version none when absent', () => {
@@ -91,14 +92,10 @@ test('host_applet_version none when absent', () => {
 });
 
 test('human_applets flags host skew', () => {
-  // Behavioral equivalent of the Python monkeypatch: a stub bfs reporting 1.5.1
-  // via the CLODE_BFS host override, against an embedded 4.0.6.
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-inspect-'));
-  const stub = path.join(dir, 'bfs');
-  fs.writeFileSync(stub, "#!/bin/sh\necho 'bfs 1.5.1'\n");
-  fs.chmodSync(stub, 0o755);
+  // Stub bfs reports 1.5.1 via a mock spawn, against an embedded 4.0.6.
+  const spawn = () => ({ status: 0, stdout: 'bfs 1.5.1\n', stderr: '' });
   const r = { search_applets: ['bfs'], embedded_applet_versions: { bfs: '4.0.6' } };
-  const out = ins.humanApplets(r, { CLODE_BFS: stub });
+  const out = ins.humanApplets(r, { CLODE_BFS: '/fake/bfs' }, spawn);
   assert.ok(out.includes('embedded 4.0.6') && out.includes('host 1.5.1'));
   assert.ok(out.includes('skew possible'));
 });

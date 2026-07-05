@@ -147,13 +147,13 @@ function which(name) {
   return null;
 }
 
-function hostAppletVersion(applet, env) {
+function hostAppletVersion(applet, env, spawn = spawnSync) {
   const e = env != null ? env : process.env;
   const exe = e[APPLET_ENV[applet] || ''] || which(applet);
   if (!exe) return null;
   let p;
   try {
-    p = spawnSync(exe, ['--version'], { encoding: 'utf8', timeout: 5000 });
+    p = spawn(exe, ['--version'], { encoding: 'utf8', timeout: 5000 });
   } catch (_) {
     return null;
   }
@@ -461,7 +461,7 @@ function humanSurface(r) {
   return L.join('\n');
 }
 
-function humanApplets(r, env) {
+function humanApplets(r, env, spawn = spawnSync) {
   const emb = getDefault(r, 'embedded_applet_versions', {});
   const set = new Set(getDefault(r, 'search_applets', []));
   for (const a of Object.keys(emb)) if (emb[a]) set.add(a);
@@ -470,7 +470,7 @@ function humanApplets(r, env) {
   const L = ['search applets (embedded in bundle vs host):'];
   for (const a of applets) {
     const e = emb[a];
-    const h = hostAppletVersion(a, env);
+    const h = hostAppletVersion(a, env, spawn);
     let note;
     if (h === null) note = '(not installed on host)';
     else if (e && h !== e) note = '<-- host differs; flag skew possible (bun-shim probes at refresh)';
