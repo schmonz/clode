@@ -47,3 +47,29 @@ jobs:
           # reuse (sea-smoke, with CLODE_CLAUDE_BIN set so they RUN). CLODE_OFFLINE skips online -p.
           CLODE_SEA=1 CLODE_OFFLINE=1 CLODE_CLAUDE_BIN="$PROV" \
             node --test --test-concurrency=1 test/sea-build.test.cjs test/sea-smoke.test.cjs
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest    # linux-x64
+          - os: windows-latest   # windows-x64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .tool-versions
+      - name: Assert Node matches the .tool-versions pin
+        run: |
+          set -euo pipefail
+          want=$(sed -n 's/^nodejs //p' .tool-versions)
+          have=$(node -v); have=${have#v}
+          [ "$have" = "$want" ] || { echo "node skew: .tool-versions=$want but runtime=$have" >&2; exit 1; }
+      - name: Install runtime deps (the six Bun-backing packages, locked) for the fidelity gate
+        run: npm ci
+      - name: Full node:test suite (includes the shim-fidelity gate)
+        run: npm test
