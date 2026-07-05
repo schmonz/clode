@@ -10,6 +10,17 @@
 // .default is the function (Node >=24, no top-level await) — hence `.default || m`.
 // The deps MUST be installed (npm ci); the gate is meaningless against absent deps, so
 // we throw loudly rather than skip.
+//
+// NOTE: this lib resolves the RAW npm packages directly (NOT libexec/bun-shim.cjs).
+// Deliberate: importing bun-shim.cjs has heavy global side effects unwanted in a unit
+// test (it patches fs / child_process, installs globalThis.WebSocket, hooks Module._load).
+// Today the shim's wrappers for these five are pure pass-throughs
+// (stringWidth(...a){return _stringWidthFn(...a)}, YAML.parse:(...a)=>_yaml.parse(...a),
+// semver.order/satisfies -> the package's compare/satisfies), so the raw package measures
+// exactly what clode ships. CAVEAT: if a shim wrapper ever gains real logic — e.g. passing
+// options to wrap-ansi to close the Bun {trim,hard,wordWrap} divergence — update THIS lib
+// to measure the shim's wrapped behavior, or the guard will silently keep measuring the
+// raw package and miss both the fix and any regression of it.
 
 function req(pkg) {
   let m;
@@ -36,8 +47,8 @@ const WIDTH_INPUTS = [
   '👍',                     // emoji presentation
   '👨‍👩‍👧‍👦',              // ZWJ family sequence
   '👋🏽',                    // skin-tone modifier
-  'à',                // 'a' + combining grave
-  '​hi',               // zero-width space + text
+  'a\u0300',                // 'a' + combining grave
+  '\u200bhi',               // zero-width space + text
   '\x1b[31mred\x1b[0m',     // ANSI-wrapped
   'a\tb',                   // tab
 ];
@@ -92,6 +103,9 @@ const SEMVER_SATISFIES_INPUTS = [
 
 // Runs the corpus. Any input that throws propagates (a thrown corpus case IS a behavior
 // change worth failing on). Result is deterministic and JSON-serializable.
+// Corpus outputs must be JSON-round-trippable: a case returning `undefined` would be
+// dropped by JSON.stringify on BOTH sides of the compare and produce no signal — keep
+// corpus cases to defined values (a throwing case is fine; it fails loudly).
 function compute() {
   return {
     stringWidth: WIDTH_INPUTS.map((s) => ({ in: s, out: stringWidth(s) })),
