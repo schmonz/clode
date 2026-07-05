@@ -6,8 +6,9 @@
 // (prev-version + re-point), and clode-watch (current version). Must NOT require
 // clode-resolve (resolve requires this — that would cycle).
 //
-// Phase A: `current` is a relative SYMLINK to <ver> (today's behavior). A later task
-// flips these three functions to a pointer FILE without touching any caller.
+// `current` is a pointer FILE containing the version string (trimmed). Uniform on
+// every platform; no privilege needed on Windows. A legacy symlink-to-dir self-heals:
+// currentVersion sees EISDIR and returns '', and the next setCurrent removes it.
 const fs = require('node:fs');
 const path = require('node:path');
 const { providersDir } = require('./clode-paths.cjs');
@@ -17,31 +18,32 @@ function currentPath(env) {
 }
 
 // The version string <providers>/current points at, or '' if there is none.
+// Pointer file: the file's trimmed contents. A legacy symlink-to-dir reads as EISDIR
+// -> '' (ignored; the next setCurrent rewrites it as a file).
 function currentVersion(env, fsm = fs) {
-  const cur = currentPath(env);
-  try {
-    if (fsm.lstatSync(cur).isSymbolicLink()) return fsm.readlinkSync(cur);
-  } catch { /* none */ }
-  return '';
+  try { return fsm.readFileSync(currentPath(env), 'utf8').trim(); } catch { return ''; }
 }
 
-// Absolute path to the current provider's `claude` binary, or null. Mirrors the old
-// resolve step 3: realpath-resolve the `current` symlink dir + '/claude', iff that
-// file exists.
+// Absolute path to the current provider's `claude` binary, or null. Reads the pointer
+// version, then <providers>/<ver>/claude iff it exists. The path still contains
+// /providers/<ver>/, so cacheKey keys off <ver> (shared-per-version cache preserved).
 function currentBin(env, fsm = fs) {
-  const cur = currentPath(env);
-  try { fsm.statSync(`${cur}/claude`); } catch { return null; }
-  let physDir;
-  try { physDir = fsm.realpathSync(cur); } catch { physDir = ''; }
-  return `${physDir}/claude`;
+  const ver = currentVersion(env, fsm);
+  if (!ver) return null;
+  const bin = path.join(providersDir(env), ver, 'claude');
+  try { fsm.statSync(bin); } catch { return null; }
+  return bin;
 }
 
-// Point <providers>/current at `ver`, replacing any prior entry (ln -sfn semantics):
-// remove any existing file/dir/symlink, then create a RELATIVE symlink to `ver`.
+// Point <providers>/current at `ver`: write a pointer FILE atomically (temp + rename),
+// removing any prior entry first (incl. a legacy symlink/dir). No symlink -> no
+// privilege needed on Windows.
 function setCurrent(env, ver, fsm = fs) {
   const cur = currentPath(env);
-  try { fsm.lstatSync(cur); fsm.rmSync(cur, { recursive: true, force: true }); } catch { /* absent */ }
-  fsm.symlinkSync(ver, cur);
+  const tmp = `${cur}.${process.pid}.tmp`;
+  fsm.writeFileSync(tmp, `${ver}\n`);
+  try { fsm.rmSync(cur, { recursive: true, force: true }); } catch { /* absent */ }
+  fsm.renameSync(tmp, cur);
 }
 
 module.exports = { currentVersion, currentBin, setCurrent, currentPath };

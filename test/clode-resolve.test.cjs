@@ -62,12 +62,12 @@ test('3. provider current (symlink-resolved abs) beats baked/local/PATH', () => 
   const verdir = path.join(providers, '2.1.183');
   fs.mkdirSync(verdir, { recursive: true });
   mkBundle(path.join(verdir, 'claude'), 'prov');
-  fs.symlinkSync('2.1.183', path.join(providers, 'current'));
+  fs.writeFileSync(path.join(providers, 'current'), '2.1.183\n');
   const env = { CLODE_PROVIDERS: providers, HOME: dir, PATH: '' };
   // Resolves through `current` to the physical version dir.
   assert.strictEqual(
     resolveClaudeBin({ env, baked: mkBundle(path.join(dir, 'baked'), 'b') }),
-    path.join(fs.realpathSync(verdir), 'claude'),
+    path.join(verdir, 'claude'),
   );
 });
 
@@ -77,11 +77,11 @@ test('3b. provider default location XDG_DATA_HOME/clode/providers', () => {
   const verdir = path.join(providers, '9.9.9');
   fs.mkdirSync(verdir, { recursive: true });
   mkBundle(path.join(verdir, 'claude'), 'prov');
-  fs.symlinkSync('9.9.9', path.join(providers, 'current'));
+  fs.writeFileSync(path.join(providers, 'current'), '9.9.9\n');
   const env = { XDG_DATA_HOME: dir, HOME: dir, PATH: '' };
   assert.strictEqual(
     resolveClaudeBin({ env }),
-    path.join(fs.realpathSync(verdir), 'claude'),
+    path.join(verdir, 'claude'),
   );
 });
 

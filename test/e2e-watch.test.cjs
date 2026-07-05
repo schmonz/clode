@@ -32,7 +32,7 @@ function watchFixture(sbx, stable, current, sig) {
   if (current) {
     fs.mkdirSync(path.join(providers, current), { recursive: true });
     fs.writeFileSync(path.join(providers, current, 'claude'), '');
-    fs.symlinkSync(current, path.join(providers, 'current'));
+    fs.writeFileSync(path.join(providers, 'current'), current + '\n');
   }
   return env;
 }

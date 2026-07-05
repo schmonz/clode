@@ -1,7 +1,7 @@
 'use strict';
 // Unit tests for libexec/clode-current.cjs — the single seam for clode's
-// active-provider pointer (<providers>/current). Phase A asserts the SYMLINK
-// representation; Phase B (later task) re-points these at a pointer file.
+// active-provider pointer (<providers>/current). Asserts the pointer-file
+// representation.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -21,6 +21,9 @@ test('setCurrent + currentVersion round-trip', () => {
   fs.mkdirSync(path.join(s.providers, '9.9.9'), { recursive: true });
   setCurrent(s.env, '9.9.9');
   assert.strictEqual(currentVersion(s.env), '9.9.9');
+  const raw = fs.readFileSync(path.join(s.providers, 'current'), 'utf8');
+  assert.strictEqual(raw.trim(), '9.9.9', 'current is a pointer FILE containing the version');
+  assert.ok(fs.statSync(path.join(s.providers, 'current')).isFile(), 'current is a regular file, not a symlink');
 });
 
 test('currentVersion is empty when no current exists', () => {
@@ -34,7 +37,7 @@ test('currentBin returns the resolved provider claude path', () => {
   fs.mkdirSync(verdir, { recursive: true });
   fs.writeFileSync(path.join(verdir, 'claude'), 'x');
   setCurrent(s.env, '9.9.9');
-  assert.strictEqual(currentBin(s.env), path.join(fs.realpathSync(verdir), 'claude'));
+  assert.strictEqual(currentBin(s.env), path.join(verdir, 'claude'));
 });
 
 test('currentBin is null when the provider binary is absent', () => {

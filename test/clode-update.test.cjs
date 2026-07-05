@@ -84,7 +84,7 @@ test('clode_update fetches the fixed platform into the provider store + current 
     const status = await clodeUpdate('stable', opts(fx.env, err));
     assert.strictEqual(status, 0, 'update succeeded');
     assert.ok(fs.existsSync(path.join(fx.providers, V, 'claude')), 'provider binary landed');
-    assert.strictEqual(fs.readlinkSync(path.join(fx.providers, 'current')), V, 'current -> 9.9.9');
+    assert.strictEqual(fs.readFileSync(path.join(fx.providers, 'current'), 'utf8').trim(), V, 'current -> 9.9.9');
     assert.match(err.text(), /updated to 9\.9\.9/, 'updated message');
     // The fetched binary must byte-match the fixture (atomic temp->rename intact).
     assert.strictEqual(sha256Of(path.join(fx.providers, V, 'claude')), fx.sum);
@@ -115,7 +115,7 @@ test('clode_update accepts a numeric version channel (uses it as-is)', async () 
     const status = await clodeUpdate(V, opts(fx.env, err));
     assert.strictEqual(status, 0, 'numeric channel update succeeded');
     assert.ok(fs.existsSync(path.join(fx.providers, V, 'claude')), 'provider binary landed');
-    assert.strictEqual(fs.readlinkSync(path.join(fx.providers, 'current')), V);
+    assert.strictEqual(fs.readFileSync(path.join(fx.providers, 'current'), 'utf8').trim(), V);
   } finally { cleanup(fx); }
 });
 
@@ -197,7 +197,7 @@ test('no channel arg defaults to latest (matching claude)', async () => {
   try {
     const status = await clodeUpdate(undefined, opts(fx.env, err));
     assert.strictEqual(status, 0, 'default-channel update succeeded');
-    assert.strictEqual(fs.readlinkSync(path.join(fx.providers, 'current')), V,
+    assert.strictEqual(fs.readFileSync(path.join(fx.providers, 'current'), 'utf8').trim(), V,
       'defaulted to latest -> 9.9.9');
   } finally { cleanup(fx); }
 });
@@ -210,7 +210,7 @@ test('no channel arg honors autoUpdatesChannel:stable from user settings', async
   try {
     const status = await clodeUpdate(undefined, opts(fx.env, err));
     assert.strictEqual(status, 0, 'settings-driven update succeeded');
-    assert.strictEqual(fs.readlinkSync(path.join(fx.providers, 'current')), STABLE_V,
+    assert.strictEqual(fs.readFileSync(path.join(fx.providers, 'current'), 'utf8').trim(), STABLE_V,
       'followed autoUpdatesChannel=stable -> 8.8.8');
   } finally { cleanup(fx); }
 });
@@ -223,7 +223,7 @@ test('an explicit channel arg overrides the autoUpdatesChannel setting', async (
   try {
     const status = await clodeUpdate('latest', opts(fx.env, err));
     assert.strictEqual(status, 0, 'explicit-channel update succeeded');
-    assert.strictEqual(fs.readlinkSync(path.join(fx.providers, 'current')), V,
+    assert.strictEqual(fs.readFileSync(path.join(fx.providers, 'current'), 'utf8').trim(), V,
       'explicit latest beat the stable setting -> 9.9.9');
   } finally { cleanup(fx); }
 });
@@ -242,7 +242,7 @@ test('re-running update on the current version is a clean no-op', async () => {
     assert.match(out, /already up to date \(9\.9\.9\)/, 'clean up-to-date message');
     assert.doesNotMatch(out, /updated to/, 'does not claim an update happened');
     assert.doesNotMatch(out, /clode signals for/, 'no self-comparing digest');
-    assert.strictEqual(fs.readlinkSync(path.join(fx.providers, 'current')), V);
+    assert.strictEqual(fs.readFileSync(path.join(fx.providers, 'current'), 'utf8').trim(), V);
   } finally { cleanup(fx); }
 });
 
@@ -259,6 +259,6 @@ test('switching back to an already-downloaded version still re-points + reports'
     const out = err.text();
     assert.match(out, /already have 9\.9\.9/, 'reused the cached binary (no re-download)');
     assert.match(out, /updated to 9\.9\.9/, 'a real re-point IS reported');
-    assert.strictEqual(fs.readlinkSync(path.join(fx.providers, 'current')), V);
+    assert.strictEqual(fs.readFileSync(path.join(fx.providers, 'current'), 'utf8').trim(), V);
   } finally { cleanup(fx); }
 });
