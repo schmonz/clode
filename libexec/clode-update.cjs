@@ -39,6 +39,13 @@ function isDir(p) {
 function releasesUrl(env) {
   return env.CLODE_RELEASES_URL || 'https://downloads.claude.ai/claude-code-releases';
 }
+// The platform whose binary we download. ARBITRARY BY DESIGN: clode never runs this
+// binary — it byte-scans it for the @bun-cjs blocks and carves the JS out to run under
+// host Node. Claude Code ships one JS bundle per version (it branches on
+// process.platform at runtime), so every platform's binary yields the SAME extracted
+// JS. We fix it to linux-x64 (always present) so all hosts share one per-version cache
+// entry; host-derived selection would fragment that cache for no benefit. Overridable
+// via CLODE_FETCH_PLATFORM.
 function fetchPlatform(env) {
   return env.CLODE_FETCH_PLATFORM || 'linux-x64';
 }
@@ -97,6 +104,21 @@ function checksumFor(manifestText, plat) {
     return (p[plat] || {}).checksum || '';
   } catch {
     return '';
+  }
+}
+
+// The container filename for a platform, from the manifest's platforms.<plat>.binary
+// (self-describing: "claude" for linux-x64, "claude.exe" for win32-x64). Defaults to
+// "claude". This is only the name of the file we DOWNLOAD — we carve the JS out of it
+// and store it under clode's canonical `claude` name; we never run it, so which
+// platform's container we fetch is arbitrary (the JS is identical per version).
+function binaryFor(manifestText, plat) {
+  try {
+    const m = JSON.parse(manifestText);
+    const p = m.platforms || m;
+    return (p[plat] || {}).binary || 'claude';
+  } catch {
+    return 'claude';
   }
 }
 
@@ -235,7 +257,7 @@ async function clodeUpdate(channel, opts = {}) {
     fs.mkdirSync(dest, { recursive: true });
     const tmp = path.join(dest, '.claude.partial');
     try {
-      await downloadFile(`${base}/${ver}/${plat}/claude`, tmp);
+      await downloadFile(`${base}/${ver}/${plat}/${binaryFor(manifestText, plat)}`, tmp);
     } catch {
       try { fs.unlinkSync(tmp); } catch { /* absent */ }
       err('clode: download failed');
@@ -264,4 +286,4 @@ async function clodeUpdate(channel, opts = {}) {
   return 0;
 }
 
-module.exports = { clodeUpdate, clodeSignalsReport, resolveChannel, releasesUrl };
+module.exports = { clodeUpdate, clodeSignalsReport, resolveChannel, releasesUrl, binaryFor };

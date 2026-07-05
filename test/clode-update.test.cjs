@@ -21,7 +21,7 @@ const LIBEXEC = path.join(REPO_ROOT, 'libexec');
 const HERE = path.join(REPO_ROOT, 'bin');
 const NODE = process.env.CLODE_NODE || process.execPath;
 
-const { clodeUpdate } = require('../libexec/clode-update.cjs');
+const { clodeUpdate, binaryFor } = require('../libexec/clode-update.cjs');
 const { sha256Of } = require('../libexec/clode-net.cjs');
 
 const V = '9.9.9';
@@ -76,6 +76,13 @@ function opts(env, stderr) {
 }
 
 function cleanup(fx) { fs.rmSync(fx.tmp, { recursive: true, force: true }); }
+
+test('binaryFor reads the manifest platform binary name, defaults to claude', () => {
+  const m = JSON.stringify({ platforms: { 'win32-x64': { binary: 'claude.exe' }, 'linux-x64': {} } });
+  assert.strictEqual(binaryFor(m, 'win32-x64'), 'claude.exe');
+  assert.strictEqual(binaryFor(m, 'linux-x64'), 'claude'); // no binary field -> default
+  assert.strictEqual(binaryFor('not json', 'linux-x64'), 'claude'); // parse error -> default
+});
 
 test('clode_update fetches the fixed platform into the provider store + current pointer', async () => {
   const fx = fixture();
