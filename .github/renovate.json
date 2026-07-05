@@ -4,5 +4,18 @@
     "config:recommended"
   ],
   "automerge": true,
-  "ignoreTests": true
+  "ignoreTests": true,
+  "packageRules": [
+    {
+      "matchPackageNames": [
+        "string-width",
+        "strip-ansi",
+        "wrap-ansi",
+        "semver",
+        "yaml",
+        "ws"
+      ],
+      "ignoreTests": false
+    }
+  ]
 }
