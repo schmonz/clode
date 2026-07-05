@@ -143,9 +143,10 @@ test('versionGt resolves semver via clode\'s own node_modules (npm-global layout
 // --- watchDir ---------------------------------------------------------------
 
 test('watchDir honors CLODE_WATCH_DIR then XDG_CACHE_HOME then HOME', () => {
+  const u = (p) => p.replace(/\\/g, '/'); // normalize Windows separators from path.join
   assert.strictEqual(watchDir({ CLODE_WATCH_DIR: '/x/y' }), '/x/y');
-  assert.strictEqual(watchDir({ XDG_CACHE_HOME: '/c', HOME: '/h' }), '/c/clode');
-  assert.strictEqual(watchDir({ HOME: '/h' }), '/h/.cache/clode');
+  assert.strictEqual(u(watchDir({ XDG_CACHE_HOME: '/c', HOME: '/h' })), '/c/clode');
+  assert.strictEqual(u(watchDir({ HOME: '/h' })), '/h/.cache/clode');
 });
 
 // --- writeWatchNotice -------------------------------------------------------
