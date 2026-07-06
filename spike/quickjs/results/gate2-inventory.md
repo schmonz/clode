@@ -39,23 +39,23 @@ Bundle: /Users/schmonz/.cache/clode/2.1.198/cli.cjs
 
 | module | refs |
 |---|---|
-| path | 502 |
-| fs | 442 |
-| crypto | 189 |
+| path | 508 |
+| fs | 452 |
+| crypto | 191 |
 | os | 120 |
 | util | 63 |
-| child_process | 60 |
+| child_process | 61 |
 | stream | 54 |
 | url | 52 |
 | net | 39 |
 | process | 30 |
-| buffer | 28 |
-| http | 25 |
+| buffer | 29 |
+| http | 27 |
+| https | 18 |
 | events | 17 |
-| https | 16 |
+| readline | 15 |
 | assert | 13 |
-| readline | 13 |
-| async_hooks | 11 |
+| async_hooks | 12 |
 | tls | 11 |
 | zlib | 11 |
 | tty | 8 |
@@ -77,7 +77,7 @@ Bundle: /Users/schmonz/.cache/clode/2.1.198/cli.cjs
 
 | global | refs |
 |---|---|
-| process | 3166 |
+| process | 3170 |
 | Buffer | 548 |
 | performance | 321 |
 | URL | 316 |
@@ -90,7 +90,7 @@ Bundle: /Users/schmonz/.cache/clode/2.1.198/cli.cjs
 | URLSearchParams | 26 |
 | TextEncoder | 21 |
 | WebSocket | 19 |
-| navigator | 18 |
+| navigator | 19 |
 | queueMicrotask | 17 |
 | TextDecoder | 16 |
 | AbortController | 14 |

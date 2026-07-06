@@ -11,12 +11,12 @@ const GLOBALS = ['fetch','Buffer','process','WebSocket','AbortController','Abort
 function scan(text) {
   const modules = {}, globals = {};
   for (const b of BUILTINS) {
-    const re = new RegExp(String.raw`(?:require\(|from\s*)\s*["'](?:node:)?(?:${b})(?:/[a-z]+)?["']`, 'g');
+    const re = new RegExp(String.raw`(?:require\(|import\(|from\s*)\s*["'](?:node:)?(?:${b})(?:/[a-z]+)?["']`, 'g');
     const n = (text.match(re) || []).length;
     if (n) modules[b] = n;
   }
   for (const g of GLOBALS) {
-    const re = new RegExp(String.raw`(?<![.\w$])${g}\s*[.(]`, 'g');
+    const re = new RegExp(String.raw`(?<![.\w$])${g}\s*(?:\?\.|[.(])`, 'g');
     const n = (text.match(re) || []).length;
     if (n) globals[g] = n;
   }
