@@ -64,6 +64,7 @@ need re-running). Ref counts below should be read as a lower bound.
 | process | module | — | 30 | See the `process` global row — same underlying object, `require('node:process')` is just a re-export of the global in Node too. | (see global row) | Combined ref total across `process` module+global: toolchain 177, bundle 3200. |
 | querystring | module | — | 3 | No dedicated module, but the native `URLSearchParams` (with `Symbol.iterator` added) covers standard query-string parse/stringify. | shimmable-JS | `src/js/polyfills/url.js:6` (`const NativeURLSearchParams = core.URLSearchParams`), `:40` (`globalThis.URLSearchParams = NativeURLSearchParams`). Node's `querystring` module has some non-standard quirks (array/dup-key handling, custom escape) needing a thin JS layer atop `URLSearchParams`, not new native code. |
 | readline | module | — | 15 | `tjs:readline` provides interactive line-editing/ANSI color primitives via `createInterface`, but with a different (non-EventEmitter-`line`-event) shape than Node's `readline`. | shimmable-JS | `src/js/stdlib/readline/readline.js:1319-1323` (`function createInterface(options) { … } export { createInterface, ReadlineInterface };`). Listed in `website/docs/features/standard-library.md` (`tjs:readline` — "Interactive line editing and ANSI colors"). A Node-shaped wrapper over this (or a from-scratch implementation directly on the stdin `ReadableStream`, already provided per the tty scrutiny row) is pure JS. |
+| sea | module | 1 | — | No `node:sea` module, but the same *capabilities* exist natively: txiki standalone binaries are self-detecting (the runtime reads its own executable's trailing magic at boot to decide whether it is a bundled binary — the moral equivalent of `sea.isSea()`), and embedded payloads are readable from JS by reading `tjs.exePath` (the experimental TPK app-package format additionally auto-extracts bundled assets to a cache dir on first run). | shimmable-JS | Clode's toolchain uses exactly two `node:sea` functions — `isSea()` and `getRawAsset(name)` (clode `libexec/clode-sea.cjs:14-19`). `isSea` analog: `src/js/run-main/index.js:39-52` defines the 12-byte `tx1k1.js` trailer ("Trailer for standalone binaries") and `:158-185` self-detects by opening `tjs.exePath` and checking the trailing magic — an app-level shim can perform the identical check in pure JS via `tjs.open`/`tjs.exePath`. `getRawAsset` analog: txiki's own build tooling already reads the running executable from JS (`src/js/run-main/tpk.js:261`, `const exe = await tjs.readFile(tjs.exePath)`), so a shim can append clode's assets behind an extra trailer and slice them back out the same way; alternatively the TPK format (`website/docs/guides/app-packages.md` — "ZIP archive appended to the runtime binary… extracted to a temporary directory on first run and cached") packages arbitrary multi-file assets into the binary and materializes them on disk at launch, which is precisely what clode's `materializeDeps`/`materializeLibexec` do with the bytes `getRawAsset` returns. Both routes are pure JS over already-native primitives; the trailer *layout* differs from Node SEA's blob format, so clode's build scripts would change, but no new C surface is needed. |
 | stream | module | — | 54 | No Node `Readable`/`Writable`/`Transform`/`Duplex`; WHATWG `ReadableStream`/`WritableStream`/`TransformStream` (Streams API) are native. | shimmable-JS | `website/docs/features/web-platform-apis.md` lists "Streams API" as supported; used throughout `src/js/core/fs.js`, `stdio.js`, `process.js` (`ProcessReadableStream extends ReadableStream`). Node's own ecosystem answer to "Node streams on WHATWG streams" is the pure-JS `readable-stream` npm package — same technique applies here, no native gap, though backpressure/`objectMode` semantics are real engineering work (not just a name-swap). |
 | string_decoder | module | — | 7 | No dedicated module, but `TextDecoder` (native, supports `{ stream: true }` for multi-byte boundary carry-over) covers the core use case. | shimmable-JS | `web-platform-apis.md` lists the "Encoding API" (`TextEncoder`/`TextDecoder`) as supported; probe confirms `global.TextDecoder OK` under tjs. Node's `string_decoder` module solves exactly the incremental-multi-byte problem `TextDecoder({ stream: true })` already solves — a thin wrapper, not new logic. |
 | timers | module | — | 5 | `setTimeout`/`setInterval`/`clearTimeout`/`clearInterval` are native globals; `setImmediate`/`clearImmediate` are absent. | shimmable-JS | Probe: `global.setTimeout OK` under tjs. No `setImmediate` hits in `src/js/`. `setImmediate` is commonly shimmed as `setTimeout(fn, 0)` (with the well-known ordering caveat versus real macrotask-queue semantics) — pure JS, no native gap. |
@@ -151,10 +152,10 @@ that, per this gate, txiki.js already made for us.
 
 - Every module and global key present in `gate2-inventory.json`
   (toolchain ∪ bundle) has exactly one row above; no `…` cells remain.
-  Tally: 33 module rows (`fs`, `child_process`, `assert`, `async_hooks`,
+  Tally: 34 module rows (`fs`, `child_process`, `assert`, `async_hooks`,
   `buffer`, `console`, `constants`, `crypto`, `dns`, `events`, `http`,
   `http2`, `https`, `inspector`, `module`, `net`, `os`, `path`,
-  `perf_hooks`, `process`, `querystring`, `readline`, `stream`,
+  `perf_hooks`, `process`, `querystring`, `readline`, `sea`, `stream`,
   `string_decoder`, `timers`, `tls`, `tty`, `url`, `util`, `v8`, `vm`,
   `worker_threads`, `zlib`) + 28 global rows (`fetch`, `Buffer`,
   `process`, `WebSocket`, `URL`, `crypto`, `AbortController`,
@@ -162,12 +163,12 @@ that, per this gate, txiki.js already made for us.
   `queueMicrotask`, `structuredClone`, `setImmediate`, `performance`,
   `navigator`, `ReadableStream`, `TransformStream`, `Blob`, `FormData`,
   `Headers`, `Request`, `Response`, `Worker`, `SharedArrayBuffer`,
-  `Atomics`, `FinalizationRegistry`, `WeakRef`) = 61 distinct rows,
+  `Atomics`, `FinalizationRegistry`, `WeakRef`) = 62 distinct rows,
   plus 3 explicit composite scrutiny rows called out separately per the
   brief's template (their ref counts are cross-referenced into the
   underlying module rows rather than double-counted in the tally
   below).
-- Classification tally (61 module/global rows; the `process` module
+- Classification tally (62 module/global rows; the `process` module
   row is counted with its global row's `shimmable-JS` verdict since
   they're the same underlying object; `zlib`'s composite verdict is
   counted under `needs-C` since the brotli half is the real gap):
@@ -177,15 +178,15 @@ that, per this gate, txiki.js already made for us.
   `queueMicrotask`, `structuredClone`, `performance`, `ReadableStream`,
   `TransformStream`, `Blob`, `FormData`, `Headers`, `Request`,
   `Response`, `Worker`, `SharedArrayBuffer`, `Atomics`,
-  `FinalizationRegistry`, `WeakRef`) · **shimmable-JS 29** (modules:
+  `FinalizationRegistry`, `WeakRef`) · **shimmable-JS 30** (modules:
   `assert`, `async_hooks`, `buffer`, `constants`, `crypto`, `dns`,
   `events`, `http`, `https`, `module`, `net`, `os`, `perf_hooks`,
-  `process`, `querystring`, `readline`, `stream`, `string_decoder`,
-  `timers`, `tls`, `tty`, `url`, `util`, `v8`, `worker_threads`;
-  globals: `Buffer`, `process`, `setImmediate`, `navigator`)
-  · **needs-C 4** (`fs` sync, `http2`, `vm`, `zlib`/brotli half)
-  · **hard 1** (`inspector`, explicitly flagged non-blocking).
-  27 + 29 + 4 + 1 = 61.
+  `process`, `querystring`, `readline`, `sea`, `stream`,
+  `string_decoder`, `timers`, `tls`, `tty`, `url`, `util`, `v8`,
+  `worker_threads`; globals: `Buffer`, `process`, `setImmediate`,
+  `navigator`) · **needs-C 4** (`fs` sync, `http2`, `vm`, `zlib`/brotli
+  half) · **hard 1** (`inspector`, explicitly flagged non-blocking).
+  27 + 30 + 4 + 1 = 62.
 - Ref counts were copied verbatim from `gate2-inventory.json`;
   spot-checked `fs` (toolchain 15 / bundle 452), `crypto` (toolchain 1 /
   bundle 191), and `process` — toolchain has *no* `process` module ref
