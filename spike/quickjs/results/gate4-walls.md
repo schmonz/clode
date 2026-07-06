@@ -60,6 +60,7 @@ BOOT-OK /Users/schmonz/Documents/shared-trees/clode/libexec/extract-claude-js.cj
 ## rung: /Users/schmonz/.cache/clode/2.1.198/cli.cjs
 ```
 BOOT-OK /Users/schmonz/.cache/clode/2.1.198/cli.cjs
+> NOTE: BOOT-OK here means only that the synchronous top-level returned. Failures in async continuations, timers, and unhandled rejections after that point are NOT captured by this determination — this same run then dies on the uncaught fs/promises rejection shown below (i.e., an effective boot stop for the async phase).
 --- WALL LOG (first-touch order) ---
 WALL 1: require(string-width)
 WALL 2: require(strip-ansi)
@@ -139,7 +140,9 @@ re-run past them; the rest are where each rung's exploration actually stopped.
 - **WALL 2: `node:fs.readSync` / `node:fs.realpathSync`** — `libexec/bun-shim.cjs`
   (and, as `realpathSync`, somewhere inside the 18MB `cli.cjs` bundle itself)
   — assessment: **hard**. tjs has *zero* synchronous filesystem primitives
-  (`tjs.readFile`/`stat`/`realPath`/etc. are all `libuv`-async-only, per
+  (the C core has internal statSync/mkdirSync used only by its bootstrap, not
+  exported to the tjs global, and not the walled operations — readSync/readFileSync/realpathSync
+  exist nowhere) (`tjs.readFile`/`stat`/`realPath`/etc. are all `libuv`-async-only, per
   `src/js/core/index.js`); CJS `require()` semantics assume synchronous fs.
   A real fix needs a blocking bridge (tjs does expose `Worker` +
   `SharedArrayBuffer` + `Atomics`, so `Atomics.wait`-on-a-worker is possible
@@ -179,8 +182,8 @@ re-run past them; the rest are where each rung's exploration actually stopped.
   a one-line alias).
 - **WALL 11: `require(fs/promises)`** — inside `cli.cjs` (deep, minified,
   reached from an unguarded async continuation — this is an *uncaught*
-  wall, unlike most of bun-shim.cjs's try/caught ones, so it's a real
-  `BOOT-STOP` for the bundle rung) — assessment: shimmable-JS. Unlike the
+  wall, unlike most of bun-shim.cjs's try/caught ones, so it's an effective
+  boot stop (async-phase) for the bundle rung) — assessment: shimmable-JS. Unlike the
   sync-fs family, `fs/promises` maps cleanly onto tjs's native async I/O
   (`tjs.readFile`/`writeFile`/`stat`/`readDir`/`makeDir`/… are already
   promise-based) — this is a genuinely *good* sign for the node-shim's
@@ -196,3 +199,5 @@ expensive path via `Worker` + `Atomics.wait`, since tjs exposes both).
 Everything found is **hard** (sync fs) or **shimmable-JS** (everything
 else) — real, sizeable work for a phase-2 node-shim, but not a re-plan
 trigger.
+
+**Tally:** 10 shimmable-JS / 0 needs-C / 1 hard / 0 architectural = 11 entries
