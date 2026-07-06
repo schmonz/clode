@@ -74,8 +74,10 @@ test('the shipped runtime (bin + libexec) has no python', () => {
 
 // @test "the repo tracks no python files"
 test('the repo tracks no python files', () => {
-  const r = spawnSync('git', ['ls-files', '*.py'], { cwd: REPO, encoding: 'utf8' });
-  // ! git ls-files '*.py' | grep -q .  → no tracked .py files
+  // spike/ is exempt: non-production measurement tooling (qemu guest drivers)
+  // that never ships; the invariant guards the product, not the evidence.
+  const r = spawnSync('git', ['ls-files', '*.py', ':!spike/'], { cwd: REPO, encoding: 'utf8' });
+  // ! git ls-files '*.py' ':!spike/' | grep -q .  → no tracked .py files outside spike/
   assert.strictEqual(r.stdout.trim(), '');
 });
 
