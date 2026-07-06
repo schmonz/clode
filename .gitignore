@@ -14,3 +14,6 @@ docs/
 # macOS cruft
 .DS_Store
 ._*
+
+# QuickJS-phase-1 vendor checkouts/builds/tarballs (artifacts; PINS.md records versions)
+spike/quickjs/vendor/
