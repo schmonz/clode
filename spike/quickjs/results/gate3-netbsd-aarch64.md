@@ -35,8 +35,11 @@ cmake version 4.2.3
      — worked around with `-DBUILD_WITH_WASM=OFF`.
   3. (compile, final run) `deps/ada` requires C++20 constexpr
      `std::string`, beyond NetBSD 10.1's base g++ 10.5:
-     `ada.h:7043:10: error: call to non-'constexpr' function
-     'std::__cxx11::basic_string<...>::operator __sv_type() const'`
+     ```
+     /root/qjswork/txiki.js/deps/ada/ada.h: In member function 'constexpr std::string_view ada::url::get_pathname() const':
+     /root/qjswork/txiki.js/deps/ada/ada.h:7043:10: error: call to non-'constexpr' function 'std::__cxx11::basic_string<_CharT, _Traits, _Alloc>::operator std::__cxx11::basic_string<_CharT, _Traits, _Alloc>::__sv_type() const [with _CharT = char; _Traits = std::char_traits<char>; _Alloc = std::allocator<char>; std::__cxx11::basic_string<_CharT, _Traits, _Alloc>::__sv_type = std::basic_string_view<char>]' [line truncated]
+     - 7043 |   return path;
+     ```
      — not worked around (would need a pkgsrc gcc 12+ toolchain; out of
      scope for this gate, and itself the finding: txiki's toolchain floor
      is above the NetBSD 10.1 base system).
@@ -155,5 +158,5 @@ through pkg_add.
   KB vs bytes): qjsc compile 248420 KB (~243 MB) vs ~268 MB darwin;
   run-from-source 178676 KB (~174 MB) vs ~208 MB darwin; empty control
   ~2.5 MB both. Same order of magnitude — memory behavior ports.
-  Standalone run-from-bytecode: measurable on darwin (~2.4 MB at crash),
-  **broken on NetBSD (spins, see above)**.
+  Standalone run-from-bytecode: darwin measured at ~80.4 MB (84,344,832 B),
+  spins at ~2.7 MB RSS on NetBSD (not a comparable bytecode-memory figure; see above).
