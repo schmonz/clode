@@ -160,3 +160,105 @@ through pkg_add.
   ~2.5 MB both. Same order of magnitude — memory behavior ports.
   Standalone run-from-bytecode: darwin measured at ~80.4 MB (84,344,832 B),
   spins at ~2.7 MB RSS on NetBSD (not a comparable bytecode-memory figure; see above).
+
+## qjs -c standalone spin — root cause (ktrace)
+
+Follow-up run 2026-07-06 (`qemu/run-repro.py` + `qemu/repro-ktrace.sh`,
+console log `vendor/repro-console.log`): fresh guest, qjs-ng v0.15.1
+rebuilt from the pinned tarball, then two bounded (`ulimit -t 8`) ktraced
+runs with stdin at `</dev/null`.
+
+**Minimal repro: YES.** A standalone compiled from `console.log(1);`
+(`qjs -c tiny.js -o tiny-exe`, 1,205,026 bytes) spins identically to the
+18MB bundle-exe. The bug is in quickjs-ng's standalone bootstrap on
+NetBSD, not anything in our bundle.
+
+**Smoking gun — it isn't running the standalone at all.** Both tiny-exe
+and bundle-exe printed, before spinning:
+
+```
+QuickJS-ng - Type ".help" for help
+qjs >
+```
+
+That is the interactive REPL banner. The "standalone" fell back to plain
+`qjs` argv handling, got no arguments, and entered interactive mode with
+stdin already at EOF.
+
+Syscall histogram from the 8-CPU-second tiny-exe trace (verbatim; kdump
+record-type field — 41,233,553 kdump lines total):
+
+```
+13744575 RET
+13744575 CALL
+6872195 GIO
+6872194
+  10 NAMI
+   2 EMUL
+   1 \".help\"
+   1 PSIG
+```
+
+13.74M syscalls in 8 CPU seconds, exactly 2 CALLs per GIO — a two-syscall
+loop (event-loop poll + `read`) where every `read` on the EOF'd stdin
+returns 0 and the REPL's read handler is re-armed forever. The bundle-exe
+trace is the same shape (11.97M CALL/RET, 5.99M GIO). Only 10 NAMI
+records — all ld.elf_so library opens; the binary never re-opens its own
+image to check for the bytecode trailer.
+
+First 20 kdump lines of the tiny-exe trace (verbatim):
+
+```
+  2642   2642 ktrace   EMUL  "netbsd"
+  2642   2642 ktrace   CALL  execve(0xffffffef9536,0xffffffef8fb0,0xffffffef8fc0)
+  2642   2642 ktrace   NAMI  "/root/qjswork/./tiny-exe"
+  2642   2642 ktrace   NAMI  "/usr/libexec/ld.elf_so"
+  2642   2642 tiny-exe EMUL  "netbsd"
+  2642   2642 tiny-exe RET   execve JUSTRETURN
+  2642   2642 tiny-exe CALL  mmap(0,0x8000,PROT_READ|PROT_WRITE,0x1002<PRIVATE,ANONYMOUS,ALIGN=NONE>,0xffffffff,0,0)
+  2642   2642 tiny-exe RET   mmap 278507956072448/0xfd4d2fc9f000
+  2642   2642 tiny-exe CALL  open(0xfffff326c738,0,0xfffff3281590)
+  2642   2642 tiny-exe NAMI  "/etc/ld.so.conf"
+  2642   2642 tiny-exe RET   open -1 errno 2 No such file or directory
+  2642   2642 tiny-exe CALL  open(0xfffffff05cb8,0,0xf)
+  2642   2642 tiny-exe NAMI  "/usr/lib/libpthread.so.1"
+  2642   2642 tiny-exe RET   open 3
+  2642   2642 tiny-exe CALL  __fstat50(3,0xfffffff05ba8)
+  2642   2642 tiny-exe RET   __fstat50 0
+  2642   2642 tiny-exe CALL  mmap(0,0x1000,PROT_READ,0x1<SHARED,FILE,ALIGN=NONE>,3,0,0)
+  2642   2642 tiny-exe RET   mmap 278507956068352/0xfd4d2fc9e000
+  2642   2642 tiny-exe CALL  munmap(0xfd4d2fc9e000,0x1000)
+  2642   2642 tiny-exe RET   munmap 0
+```
+
+### Diagnosis (two stacked upstream bugs)
+
+1. **`js_exepath()` has no NetBSD implementation.** In v0.15.1's
+   `cutils.h` the function is implemented for `_WIN32`, `__APPLE__`, and
+   `__linux__ || __GNU__`; the trailing `#else` branch is
+   `return -1;` — NetBSD (and every other BSD) lands there. `qjs.c`'s
+   startup does `if (!js_exepath(...) && is_standalone(...)) standalone = 1;`
+   so on NetBSD the trailer check is never reached (consistent with zero
+   self-open NAMI records) and the binary behaves as a vanilla `qjs`:
+   no argv → interactive REPL. The standalone mechanism silently degrades
+   to a REPL on any platform without a `js_exepath` port.
+2. **The REPL busy-spins when stdin is at EOF.** `repl.js` registers
+   `os.setReadHandler(term_fd, term_read_handler)`; on an EOF'd fd the
+   event loop's poll reports readable immediately, `os.read` returns 0,
+   and the handler never detects EOF/unregisters — a 100% CPU
+   poll+read(→0) loop, ~860K iterations per CPU-second. This is what the
+   Gate-3 memory phase measured for 300 CPU seconds (62% sys time,
+   ~2.7MB RSS: REPL-sized, bytecode heap never loaded).
+
+The earlier hypothesis (self-read/seek loop in the appended-bytecode
+loader) is refuted: the loader never runs.
+
+**Upstream-reportable: YES, both.** (1) is a straightforward portability
+gap — NetBSD/FreeBSD/OpenBSD can implement it via
+`sysctl(KERN_PROC_PATHNAME)` / `/proc/curproc/exe`, and failing that the
+standalone check should probably fall back to `argv[0]` resolution rather
+than silently becoming a REPL. (2) is a quality-of-implementation bug
+reproducible on any platform with `qjs </dev/null`. For Gate 3 the
+practical consequence stands: the `qjs -c` ship mechanism does not work
+on NetBSD 10.1 as shipped in v0.15.1, but the fix is small and mechanical
+rather than architectural.

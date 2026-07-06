@@ -239,6 +239,11 @@ where the same case exits in ~0.4s on darwin — SIGXCPU kills just that
 child and `/usr/bin/time -l` still reports its rusage, turning the row
 into valid "peak RSS while spinning" ceiling evidence instead of a lost
 run.
+**RESOLVED (ktrace follow-up, `run-repro.py`/`repro-ktrace.sh`):** the
+standalone never runs its payload on NetBSD — `js_exepath()` has no NetBSD
+port (returns -1), the trailer check is skipped, and the binary falls back
+to an interactive REPL that busy-spins poll+read(→0) on EOF'd stdin; see
+`results/gate3-netbsd-aarch64.md` § "qjs -c standalone spin — root cause".
 
 ## 5. Distill results
 
