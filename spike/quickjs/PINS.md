@@ -15,3 +15,15 @@ netbsd-evbarm-aarch64 10.1 cdn 2026-07-06
 simde v0.8.2 wamr-fetchcontent 2026-07-06
 # simde: header-only, wamr simde.cmake FetchContent git-clones it at configure time;
 #   guests get it pre-seeded via vendor/dist/simde-v0.8.2.tar.gz + FETCHCONTENT_SOURCE_DIR_SIMDE
+netbsd-mac68k 10.1 cdn 2026-07-06
+# mac68k: North-Star BE32 rung; anita has ZERO mac68k support -> manual qemu-system-m68k
+#   -M q800 (max RAM 1024 MiB) bring-up. Install kernel netbsd-INSTALL.gz (embedded sysinst
+#   ramdisk) at installation/instkernel/; work kernel netbsd-GENERIC.gz at binary/kernel/;
+#   sets base+comp+etc+text at binary/sets/. sysinst driven over serial by qemu/run-mac68k.py.
+#   No m68k pkgsrc binary packages assumed; build with base comp.tgz gcc + quickjs-ng cmake.
+quickjs-ng-js_exepath-netbsd patch 2026-07-06
+# patch: patches/quickjs-ng-js_exepath-netbsd.patch adds a NetBSD js_exepath() (sysctl
+#   KERN_PROC_PATHNAME) to cutils.h. Without it a `qjs -c` standalone silently falls back to
+#   the REPL on any BSD and busy-spins on EOF stdin (root cause: results/gate3-netbsd-aarch64.md).
+#   Applied to the guest's extracted quickjs-ng source (patch -p1) before cmake; upstream fix
+#   candidate. Enables the run-from-bytecode memory measurement the North Star turns on.

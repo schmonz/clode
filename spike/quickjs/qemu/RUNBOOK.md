@@ -262,3 +262,92 @@ either hand-driven `qemu-system-m68k` (machine `q800`) + sysinst expect
 scripting, or checking whether a newer anita grew support. The driver keeps
 its `ARCHES` table arch-parameterized, but the mac68k row is aspirational
 until that's resolved.
+
+## mac68k (Task 9) — BLOCKED at boot: qemu q800 `-kernel` cannot boot NetBSD
+
+**Bottom line:** you cannot boot a NetBSD/mac68k kernel with
+`qemu-system-m68k -M q800 -kernel ...`. qemu's q800 `-kernel` loader
+implements **only the Linux/m68k boot protocol**; NetBSD/mac68k requires the
+MacBSD **Booter** (which itself requires a proprietary Quadra 800 ROM +
+a MacOS system). There is no serial-automatable, ROM-free path. This is a
+hard wall reached *before* sysinst, so the sysinst-driver / build / probe /
+memory work of Task 9 was never reachable.
+
+### What was set up (all working, all on LOCAL disk `/private/tmp/qemu-mac68k`)
+
+```sh
+WORK=/private/tmp/qemu-mac68k; mkdir -p "$WORK/sets"
+BASE=https://cdn.netbsd.org/pub/NetBSD/NetBSD-10.1/mac68k
+# install + work kernels (m68k big-endian ELF, confirmed with file(1))
+curl -fsSL -o "$WORK/netbsd-INSTALL.gz" "$BASE/installation/instkernel/netbsd-INSTALL.gz"
+curl -fsSL -o "$WORK/netbsd-GENERIC.gz" "$BASE/binary/kernel/netbsd-GENERIC.gz"
+gunzip -kf "$WORK"/netbsd-INSTALL.gz "$WORK"/netbsd-GENERIC.gz   # qemu loads the ELF
+# raw SCSI disk on local disk (NFS byte-range-lock lesson)
+/opt/pkg/bin/qemu-img create -f raw "$WORK/wd0.img" 4G
+# install sets staged for a host file server (served at 10.0.2.2:8080 during a
+# hypothetical sysinst HTTP install): base+etc+comp+text+kern-GENERIC, sidecars
+# stripped, mirrored under the served tree in CDN layout:
+#   vendor/dist/m68k-cdn/pub/NetBSD/NetBSD-10.1/mac68k/binary/sets/*.tgz
+```
+
+q800 RAM ceiling (recorded, per the memory-reality task item): **1024 MiB
+max** — `qemu-system-m68k -M q800 -m 2G` errors
+`Too much memory for this machine: 2048 MiB, maximum 1024 MiB`. Use `-m 1000M`.
+
+### The wall (three independent confirmations)
+
+Boot attempt (representative; several `-serial`/`-append` variants tried):
+
+```sh
+/opt/pkg/bin/qemu-system-m68k -M q800 -m 1000M \
+  -drive file=$WORK/wd0.img,format=raw,if=scsi,bus=0,unit=0 \
+  -kernel $WORK/netbsd-INSTALL -append "SERIALCONSOLE" \
+  -serial mon:stdio -display none
+```
+
+**Every variant produced ZERO kernel output** — nothing on the serial port,
+and a monitor `screendump` of the macfb framebuffer showed a **solid white
+(uninitialised) screen** (`vendor/…` scratch: `fb1.ppm`/`fb2.ppm`), i.e. the
+kernel never reached console init. qemu printed no load error, so the ELF
+loaded and PC was set to the entry point — the kernel simply hangs in early
+boot. Variants tried: `-serial stdio` (chA only); `-serial mon:stdio`;
+`-serial none -serial mon:stdio` (console on chB); `-append "SERIALCONSOLE"`,
+`-append "SERIALCONSOLE=1"`, `-append "console=ttyS0 vga=off"`, empty
+`-append`. None output anything.
+
+Root cause, confirmed from source:
+
+1. **NetBSD/mac68k reads its boot environment from the MacBSD Booter**, not
+   from a Linux bootinfo. `sys/arch/mac68k/mac68k/machdep.c: getenvvars(u_long
+   flag, char *buf)` expects `flag & 0x80000000` set and `buf` pointing at a
+   `"var=val\0var=val\0…\0\0"` environment; `consinit()` then does
+   `serial_console = getenv("SERIALCONSOLE")` and reads `VIDEO_ADDR`,
+   `DIMENSIONS`, etc. from that same env. With no env buffer, all `getenv()`s
+   return 0 → bogus video params → dead console (the white screen).
+2. **qemu 11's `hw/m68k/q800.c` `-kernel` path writes only the Linux/m68k
+   `BI_*` bootinfo array** (`BI_MACHTYPE, BI_MAC_VADDR, BI_MAC_SCCBASE,
+   BI_COMMAND_LINE, BI_RAMDISK, …`). It never builds the NetBSD `var=val\0`
+   env and never sets the `0x80000000` flag. `-append` becomes
+   `BI_COMMAND_LINE` only — NetBSD's `getenvvars()` never sees it. The two
+   NetBSD-specific bits in qemu (`via1_adb_netbsd_enum_hack`, the
+   `"Create alias for NetBSD"` ESCC alias) are for NetBSD running *via the
+   Booter on a real ROM*, not for `-kernel`.
+3. **Every community recipe confirms the ROM+Booter requirement**: the qemu
+   wiki / E-Maculation / Wikistix / port-mac68k list all install NetBSD/mac68k
+   by booting MacOS from a `Quadra800.rom`, running the Booter app, and
+   ticking its "serial console" box — the checkbox that sets `SERIALCONSOLE`
+   in the Booter env. qemu's *own* functional test (`tests/functional/
+   test_m68k_q800.py`) boots a **Debian/Linux** m68k kernel with
+   `console=ttyS0 vga=off`, never NetBSD.
+
+The Quadra 800 ROM is copyrighted Apple firmware (not redistributable, not
+present here), and driving the MacOS-hosted Booter GUI to install NetBSD is
+inherently a graphical, non-serial, non-scriptable process. So the North-Star
+mac68k rung is **unreachable under qemu without a proprietary ROM** — a
+re-plan trigger to be resolved with the user (see
+`results/gate3-netbsd-mac68k.md`). The `js_exepath` NetBSD patch
+(`patches/quickjs-ng-js_exepath-netbsd.patch`) and the memory-ceiling analysis
+are the salvageable, still-useful deliverables; a big-endian rung, if wanted,
+should retarget to a qemu machine with an open firmware — **NetBSD/sparc**
+(sun4m, 32-bit BE, OpenBIOS, anita-supported) or **NetBSD/macppc** (32-bit BE,
+OpenBIOS) — both boot ROM-free and install over serial.

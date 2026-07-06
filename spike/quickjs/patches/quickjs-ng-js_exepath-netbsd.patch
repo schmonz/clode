@@ -1,0 +1,81 @@
+# quickjs-ng js_exepath() NetBSD port
+#
+# Adds a NetBSD implementation of js_exepath() to cutils.h. In quickjs-ng
+# v0.15.1 the function is implemented only for _WIN32, __APPLE__, and
+# __linux__/__GNU__; every BSD lands in the trailing `#else` that returns -1.
+#
+# Consequence (root-caused in results/gate3-netbsd-aarch64.md, section
+# "qjs -c standalone spin — root cause"): qjs.c does
+#     if (!js_exepath(...) && is_standalone(...)) standalone = 1;
+# so on NetBSD the trailer check is never reached, a `qjs -c`-built standalone
+# silently degrades to the interactive REPL, and (bug 2) the REPL busy-spins
+# poll+read(->0) on EOF'd stdin — which is exactly why the aarch64 rung could
+# not measure the run-from-bytecode memory number and had to bound it with
+# `ulimit -t`. This patch makes the standalone actually run its embedded
+# bytecode, so the mac68k rung can measure the load-bearing run-from-bytecode
+# path (the only path that fits the North-Star memory ceiling).
+#
+# Implementation: KERN_PROC_ARGS/KERN_PROC_PATHNAME sysctl for the current
+# process (pid -1), mirroring libuv's uv_exepath() for NetBSD, with a
+# /proc/curproc/exe fallback. This is the upstream fix candidate — a
+# straightforward portability addition, not a local hack.
+#
+# Pinned in PINS.md. Apply inside the extracted quickjs-ng source with:
+#     patch -p1 < quickjs-ng-js_exepath-netbsd.patch
+#
+--- a/cutils.h
++++ b/cutils.h
+@@ -35,6 +35,10 @@
+ #if defined(__APPLE__)
+ #include <mach-o/dyld.h>
+ #endif
++#if defined(__NetBSD__)
++#include <sys/param.h>
++#include <sys/sysctl.h>
++#endif
+ #include <stdbool.h>
+ #include <stdlib.h>
+ #include <string.h>
+@@ -1705,6 +1709,42 @@
+     *size = n;
+ 
+     return 0;
++}
++#elif defined(__NetBSD__)
++static inline int js_exepath(char *buffer, size_t *size) {
++    /* NetBSD has no /proc by default; the executable path of the current
++       process is exposed via the KERN_PROC_ARGS/KERN_PROC_PATHNAME sysctl
++       (pid -1 == self). Mirrors libuv's uv_exepath() for NetBSD, and is the
++       upstream fix candidate for the portability gap this patch closes. */
++    int mib[4];
++    size_t n;
++
++    if (buffer == NULL || size == NULL || *size == 0)
++        return -1;
++
++    mib[0] = CTL_KERN;
++    mib[1] = KERN_PROC_ARGS;
++    mib[2] = -1;
++    mib[3] = KERN_PROC_PATHNAME;
++
++    n = *size;
++    if (sysctl(mib, 4, buffer, &n, NULL, 0) == 0 && n > 0) {
++        if (n >= *size)
++            n = *size - 1;
++        buffer[n] = '\0';
++        *size = strlen(buffer);
++        return 0;
++    }
++
++    /* fallback: procfs symlink, present only if /proc is mounted */
++    {
++        ssize_t r = readlink("/proc/curproc/exe", buffer, *size - 1);
++        if (r == -1)
++            return -1;
++        buffer[r] = '\0';
++        *size = (size_t)r;
++        return 0;
++    }
+ }
+ #else
+ static inline int js_exepath(char* buffer, size_t* size_ptr) {
