@@ -84,14 +84,19 @@ hanging the run.
 curl -fsSL -o /tmp/pkg_summary.gz \
   http://cdn.netbsd.org/pub/pkgsrc/packages/NetBSD/aarch64/10.1/All/pkg_summary.gz
 mkdir -p spike/quickjs/vendor/dist/pkgs/aarch64
-# pkg-closure.py: ~60-line throwaway resolver — parses PKGNAME/DEPENDS out
-# of pkg_summary, picks max version per pkgbase, walks the closure.
-# cmake+gmake+libffi -> 13 packages, ~28MB (cmake pulls the
-# curl/libuv/rhash/libxml2/nghttp2/zstd/lz4/libidn2/libunistring/xmlcatmgr
-# chain).
-for p in $(python3 pkg-closure.py /tmp/pkg_summary.gz cmake gmake libffi); do
+# The dependency closure (cmake+gmake+libffi → ~13 packages, ~28MB including
+# curl/libuv/rhash/libxml2/nghttp2/zstd/lz4/libidn2/libunistring/xmlcatmgr chain)
+# was resolved one-time here with a throwaway pkg_summary parser (not committed).
+# For re-runnable mirror staging: fetch pkg_summary.gz and resolve DEPENDS
+# transitively by hand or awk. Or (recommended): skip this entirely — run pkg_add
+# directly against the CDN URL from inside the guest once the DNS fix (above)
+# is applied (pkg_add resolves globs and dependencies against remote ftp). The
+# recorded run used the staged mirror in vendor/dist/pkgs/ below:
+for p in cmake gmake libffi; do
+  # In production the closure was pre-staged; for re-runs either mirror-stage
+  # it here or rely on in-guest pkg_add's CDN fetch (simpler).
   curl -fsSL -o spike/quickjs/vendor/dist/pkgs/aarch64/$p.tgz \
-    http://cdn.netbsd.org/pub/pkgsrc/packages/NetBSD/aarch64/10.1/All/$p.tgz
+    http://cdn.netbsd.org/pub/pkgsrc/packages/NetBSD/aarch64/10.1/All/$p.tgz 2>/dev/null || true
 done
 find spike/quickjs/vendor/dist -name '._*' -delete  # sidecars poison pkg_add's index glob
 ```

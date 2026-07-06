@@ -19,7 +19,7 @@ netbsd-mac68k 10.1 cdn 2026-07-06
 # mac68k: North-Star BE32 rung; anita has ZERO mac68k support -> manual qemu-system-m68k
 #   -M q800 (max RAM 1024 MiB) bring-up. Install kernel netbsd-INSTALL.gz (embedded sysinst
 #   ramdisk) at installation/instkernel/; work kernel netbsd-GENERIC.gz at binary/kernel/;
-#   sets base+comp+etc+text at binary/sets/. sysinst driven over serial by qemu/run-mac68k.py.
+#   sets base+comp+etc+text at binary/sets/. sysinst driver never written — rung blocked at qemu boot (no NetBSD-capable q800 -kernel path); see results/gate3-netbsd-mac68k.md
 #   No m68k pkgsrc binary packages assumed; build with base comp.tgz gcc + quickjs-ng cmake.
 quickjs-ng-js_exepath-netbsd patch 2026-07-06
 # patch: patches/quickjs-ng-js_exepath-netbsd.patch adds a NetBSD js_exepath() (sysctl
