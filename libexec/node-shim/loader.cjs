@@ -316,14 +316,56 @@ Object.defineProperty(globalThis, 'Buffer', {
   configurable: true,
   get() { return loadBuiltin('buffer').Buffer; },
 });
-globalThis.setImmediate ??= (fn, ...a) => setTimeout(fn, 0, ...a);
-globalThis.clearImmediate ??= clearTimeout;
-if (globalThis.process?.env?.CLODE_SHIM_TRACE) {
-  const _st = globalThis.setTimeout, _si = globalThis.setInterval;
+// Node's timer functions return a Timeout/Immediate OBJECT (ref/unref/hasRef/
+// refresh + Symbol.toPrimitive→id); txiki's return a bare NUMBER. The extracted
+// bundle pervasively uses the Node idiom `setTimeout(...).unref()` (e.g. its
+// DataDog telemetry-flush timer, `w1m`) — which throws `TypeError: not a
+// function` on a number and silently bails the -p action before the Messages
+// round-trip. Wrap the globals so the handle is Node-shaped, while clearTimeout/
+// clearInterval still accept either the handle or a raw number (txiki's clear*
+// wants the number). Characterized by test/node-shim-timers-handle.test.cjs.
+// DIVERGENCE: ref()/unref() do NOT change event-loop liveness (txiki exposes no
+// per-timer ref control to JS) — they are no-ops returning the handle so the
+// chained idiom works; hasRef() reflects the last ref/unref call. refresh()
+// re-arms by clearing the old timer and re-scheduling the same fn+delay,
+// returning the same handle (identity preserved), matching Node's observable
+// contract for the round-trip's usage.
+{
+  const _st = globalThis.setTimeout, _ct = globalThis.clearTimeout;
+  const _si = globalThis.setInterval, _ci = globalThis.clearInterval;
+  const TRACE = !!globalThis.process?.env?.CLODE_SHIM_TRACE;
   let n = 0;
-  globalThis.setTimeout = function (fn, d, ...a) { const id = ++n; console.error('[timer] setTimeout#' + id + ' delay=' + d); return _st.call(this, function () { console.error('[timer] fire setTimeout#' + id); return fn.apply(this, arguments); }, d, ...a); };
-  globalThis.setInterval = function (fn, d, ...a) { const id = ++n; console.error('[timer] setInterval#' + id + ' delay=' + d); return _si.call(this, fn, d, ...a); };
+  function makeHandle(rawId, kind, rearm) {
+    let refed = true;
+    return {
+      _id: rawId, _kind: kind,
+      ref() { refed = true; return this; },
+      unref() { refed = false; return this; },
+      hasRef() { return refed; },
+      refresh() { if (rearm) { _ct.call(globalThis, this._id); this._id = rearm(); } return this; },
+      [Symbol.toPrimitive]() { return this._id; },
+    };
+  }
+  globalThis.setTimeout = function (fn, d, ...a) {
+    let cb = fn;
+    if (TRACE) { const id = ++n; console.error('[timer] setTimeout#' + id + ' delay=' + d); cb = function () { console.error('[timer] fire setTimeout#' + id); return fn.apply(this, arguments); }; }
+    const self = this;
+    const rearm = () => _st.call(self, cb, d, ...a);
+    return makeHandle(_st.call(self, cb, d, ...a), 'timeout', rearm);
+  };
+  globalThis.setInterval = function (fn, d, ...a) {
+    let cb = fn;
+    if (TRACE) { const id = ++n; console.error('[timer] setInterval#' + id + ' delay=' + d); }
+    return makeHandle(_si.call(this, cb, d, ...a), 'interval', null);
+  };
+  globalThis.clearTimeout = function (h) { return _ct.call(this, h && typeof h === 'object' ? h._id : h); };
+  globalThis.clearInterval = function (h) { return _ci.call(this, h && typeof h === 'object' ? h._id : h); };
 }
+// setImmediate/clearImmediate AFTER the overrides so they route through the
+// handle-wrapped setTimeout/clearTimeout (Node's setImmediate also returns an
+// unref-able handle).
+globalThis.setImmediate ??= (fn, ...a) => setTimeout(fn, 0, ...a);
+globalThis.clearImmediate ??= (h) => clearTimeout(h);
 // Node's `global` === globalThis; the bundle references the bare `global`
 // identifier (e.g. `global.TEST...`). tjs exposes only globalThis, so alias it.
 globalThis.global ??= globalThis;
