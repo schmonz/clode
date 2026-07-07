@@ -162,7 +162,7 @@ function evalModule(file) {
 globalThis.process = loadBuiltin('process');
 Object.defineProperty(globalThis, 'Buffer', {
   configurable: true,
-  get() { return makeRequire(SHIM_DIR)('./internal/buffer-lite.cjs').Buffer; },
+  get() { return makeRequire(SHIM_DIR)('./../internal/buffer-lite.cjs').Buffer; },
 });
 globalThis.setImmediate ??= (fn, ...a) => setTimeout(fn, 0, ...a);
 globalThis.clearImmediate ??= clearTimeout;
