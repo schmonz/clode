@@ -102,7 +102,7 @@ function sealSurface(ns, exportsVal) {
 /* ---- builtin registry (lazy) */
 const SHIM_DIR = P.join(P.dirname(P.resolve(tjs.args[2] ?? '')), 'modules'); // loader.cjs lives beside modules/
 const builtinCache = new Map();
-const KNOWN = ['assert','buffer','child_process','crypto','events','fs','fs/promises','module','net','os','path','process','stream','string_decoder','tls','tty','url','util','vm','zlib','sea','readline','http','https','dgram','worker_threads','async_hooks','inspector','constants','querystring','timers','dns','http2','perf_hooks','diagnostics_channel'];
+const KNOWN = ['assert','buffer','child_process','crypto','events','fs','fs/promises','module','net','os','path','process','stream','string_decoder','tls','tty','url','util','v8','vm','zlib','sea','readline','http','https','dgram','worker_threads','async_hooks','inspector','constants','querystring','timers','dns','http2','perf_hooks','diagnostics_channel'];
 function loadBuiltin(name) {
   if (builtinCache.has(name)) return builtinCache.get(name);
   const base = name === 'fs/promises' ? 'fs' : name;

@@ -23,4 +23,13 @@ function inherits(ctor, superCtor) {
   Object.setPrototypeOf(ctor.prototype, superCtor.prototype);
   ctor.super_ = superCtor;
 }
-module.exports = { format, promisify, inherits, inspect: inspect1, types: { isDate: (v) => v instanceof Date } };
+function isDeepStrictEqual(a, b) {
+  if (a === b) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return Object.is(a, b);
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  const ka = Reflect.ownKeys(a), kb = Reflect.ownKeys(b);
+  if (ka.length !== kb.length) return false;
+  for (const k of ka) { if (!Object.prototype.hasOwnProperty.call(b, k)) return false; if (!isDeepStrictEqual(a[k], b[k])) return false; }
+  return true;
+}
+module.exports = { format, promisify, inherits, inspect: inspect1, isDeepStrictEqual, types: { isDate: (v) => v instanceof Date } };
