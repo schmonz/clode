@@ -37,24 +37,23 @@
 //   node's full launch-failure contract — emitting 'error' alone would silently
 //   hang a caller using the (more common) 'close'-listener lifecycle idiom.
 //
-//   DIVERGENCE B (no synchronous event-loop pump exists in this tjs build):
-//   there is no `tjs.runLoopOnce`/`tjs.engine.run`-style primitive reachable
-//   from JS (`Object.keys(tjs)` and `Object.keys(tjs.engine)` were probed —
-//   neither exists), so spawnSync CANNOT genuinely block-until-complete the
-//   way node's does. tjs *does* expose Worker + SharedArrayBuffer + Atomics
-//   (probed: all present), so a true synchronous spawn IS buildable by
-//   running the real spawn in a Worker and Atomics.wait()-ing on the main
-//   thread — but that is real new surface (message-size limits, transfer
-//   semantics, worker lifecycle) explicitly deferred by the brief to a later
-//   task ("that becomes a real wall to solve there") rather than grown here.
-//   spawnSync therefore throws the loud, IMMEDIATE (non-hanging) branded wall
-//   below instead of silently deadlocking or faking synchronicity — this
-//   satisfies "must not deadlock" by construction (it never enters a wait).
-//   execFileSync/execSync are built on spawnSync and inherit the same wall.
-//   The bundle's `-p` path is expected to be async-throughout (spawn/execFile,
-//   both real here); if a later task's wall-walk finds `-p` genuinely needs a
-//   working spawnSync, the Worker+Atomics route above is the documented next
-//   step, not a redesign of this file's async half.
+//   DIVERGENCE B (no synchronous event-loop pump exists in this tjs build) —
+//   RESOLVED on darwin/linux by a C primitive, `__tjs_spawn_sync` (the
+//   `txiki-sync-spawn.patch`, mirroring the sync-fs patch's shape): a
+//   posix_spawn + poll()-drain that blocks the calling (main) thread until
+//   the child exits or a timeout/maxBuffer cap fires, then returns
+//   `{pid,status,signal,stdout,stderr,timedOut}` synchronously. spawnSync
+//   below calls it directly; no event-loop pump was needed after all. Before
+//   landing on the C route, a Worker+Atomics spike (spawn the child inside a
+//   Worker, Atomics.wait() on the main thread for a SharedArrayBuffer flag)
+//   was tried and REJECTED: Atomics.wait() throws "cannot block in this
+//   thread" when called from the tjs main thread (only worker threads may
+//   block on it), so that approach could not actually synchronize without
+//   itself becoming new unproven surface. The C primitive avoids that
+//   entirely — it blocks in C, not JS — which is why it was chosen instead.
+//   execFileSync/execSync are built on spawnSync and inherit the real
+//   behavior for free; bun-shim's `spawn.sync` (which calls `cp.spawnSync`)
+//   lights up unchanged.
 //
 //   DIVERGENCE C (writing to a piped child's stdin did not complete in probe):
 //   `tjs.spawn(["/bin/cat"], {stdin:'pipe', stdout:'pipe'})` then
@@ -107,6 +106,25 @@ function launchError(err, syscall, file, args) {
   e.path = file;
   e.spawnargs = args;
   return e;
+}
+
+// Node reports a child's terminating signal as its STRING name ("SIGKILL",
+// "SIGTERM"), not the raw OS number. The C primitive __tjs_spawn_sync returns
+// the low-level number (it's the syscall layer); translate here. Built lazily
+// (first-wins on any number collision, e.g. SIGABRT/SIGIOT) off the same
+// os.constants.signals table node uses, so the mapping tracks the platform.
+let _signalNames;
+function signalName(n) {
+  if (n == null || n === 0) return null;
+  if (!_signalNames) {
+    _signalNames = {};
+    const sig = (require('node:os').constants && require('node:os').constants.signals) || {};
+    for (const name of Object.keys(sig)) {
+      const num = sig[name];
+      if (!(num in _signalNames)) _signalNames[num] = name;
+    }
+  }
+  return _signalNames[n] || null;
 }
 
 // Node's `shell` option: when truthy, the command is run through a shell rather
@@ -206,22 +224,71 @@ function spawn(file, args = [], opts = {}) {
   return child;
 }
 
-// spawnSync: DIVERGENCE B — tjs has no synchronous event-loop pump reachable
-// from JS in this build, so a genuine blocking wait is not implementable
-// without growing new Worker+Atomics surface (deferred, see header). Rather
-// than hang forever spinning a loop that never advances, wall LOUDLY and
-// immediately: this throws in microseconds, never deadlocks. The
-// `typeof tjs.runLoopOnce` gate is kept (rather than an unconditional throw)
-// so a future tjs build that adds the primitive fails this exact assertion
-// first, as a prompt to implement the real body, instead of silently staying
-// walled forever.
+// spawnSync: real synchronous spawn over the C primitive __tjs_spawn_sync
+// (posix_spawn + poll drain; DIVERGENCE B resolved on darwin — see header).
+// Node result shape; encoding/toString + PATH resolution + shell done here.
 function spawnSync(file, args = [], opts = {}) {
   if (!Array.isArray(args)) { opts = args || {}; args = []; }
+  ({ file, args } = applyShell(file, args, opts));
   trace('spawnSync', file, JSON.stringify(args));
-  if (typeof tjs.runLoopOnce !== 'function') {
-    throw new Error('node-shim: child_process.spawnSync needs a synchronous loop pump (tjs.runLoopOnce) — not available in this tjs build; use spawn()/execFile() (async) instead, or add the primitive (see child_process.cjs header, DIVERGENCE B)');
+  if (typeof globalThis.__tjs_spawn_sync !== 'function') {
+    throw new Error('node-shim: child_process.spawnSync needs __tjs_spawn_sync (rebuild tjs with txiki-sync-spawn.patch — see child_process.cjs header)');
   }
-  throw new Error('node-shim: child_process.spawnSync — tjs.runLoopOnce appeared but the sync body was never implemented; implement it here, test-first');
+  const env = opts.env ? Object.entries(opts.env).map(([k, v]) => `${k}=${v}`) : undefined;
+  let input;
+  if (opts.input != null) {
+    const b = Buffer.isBuffer(opts.input) ? opts.input : Buffer.from(String(opts.input));
+    // pass a real ArrayBuffer slice (the C side reads an ArrayBuffer)
+    input = b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
+  }
+  const exe = resolveExe(file, (opts.env && opts.env.PATH) ? opts.env : process.env);
+  let r;
+  try {
+    r = globalThis.__tjs_spawn_sync(exe, args, {
+      cwd: opts.cwd, env, input,
+      timeoutMs: typeof opts.timeout === 'number' ? opts.timeout : 0,
+      // Match node's real spawnSync default (1 MiB) exactly — no divergence.
+      maxBuffer: typeof opts.maxBuffer === 'number' ? opts.maxBuffer : (1024 * 1024),
+    });
+  } catch (err) {
+    // DIVERGENCE: launch failure — the C op THROWS a coded Error; node's
+    // spawnSync instead RETURNS an object with .error set and status null.
+    // Reshape to node's EXACT launch-failure contract (verified against host
+    // node v26 for a bad path): pid 0, status/signal null, stdout/stderr
+    // undefined (the keys exist but are unset — NOT empty buffers/strings),
+    // output null, error set. Callers that read r.error/r.status work.
+    const e = launchError(err, 'spawnSync', exe, args);
+    return { pid: 0, status: null, signal: null, error: e,
+             stdout: undefined, stderr: undefined, output: null };
+  }
+  const enc = opts.encoding;
+  const conv = (ab) => {
+    const buf = Buffer.from(ab);
+    return (enc && enc !== 'buffer') ? buf.toString(enc) : buf;
+  };
+  const out = conv(r.stdout), err = conv(r.stderr);
+  const result = {
+    pid: r.pid,
+    status: r.status,
+    // Node exposes the terminating signal by NAME, not the raw OS number.
+    signal: signalName(r.signal),
+    stdout: out, stderr: err, output: [null, out, err],
+  };
+  // DIVERGENCE: node sets result.error on timeout/maxBuffer; mirror the timeout
+  // case. The C primitive conflates a maxBuffer overrun with a real timeout —
+  // BOTH are reported via the same `timedOut:true` flag (both SIGKILL the
+  // child; see mod_spawn_sync.c's DIVERGENCE comment). This shim therefore
+  // CANNOT distinguish "output exceeded maxBuffer" from "ran too long"; both
+  // surface as this single ETIMEDOUT-shaped error rather than node's
+  // maxBuffer-specific RangeError (ERR_CHILD_PROCESS_STDIO_MAXBUFFER).
+  // Additionally, on timeout the C always kills with SIGKILL, so result.signal
+  // reads "SIGKILL" where node's timeout default is "SIGTERM" (documented in
+  // mod_spawn_sync.c). Not fabricating a separate maxBuffer path is intentional
+  // (YAGNI): the bundle's sync callers pass maxBuffer:1e6 for a keychain read
+  // and won't exceed it. Both divergences are characterized (tjs-only rows) in
+  // test/node-shim-child-process.test.cjs.
+  if (r.timedOut) result.error = Object.assign(new Error(`spawnSync ${exe} ETIMEDOUT`), { code: 'ETIMEDOUT', errno: 'ETIMEDOUT' });
+  return result;
 }
 
 function execFile(file, args, opts, cb) {
@@ -244,6 +311,7 @@ function execFile(file, args, opts, cb) {
 function execFileSync(file, args, opts) {
   if (!Array.isArray(args)) { opts = args; args = []; }
   const r = spawnSync(file, args || [], opts || {});
+  if (r.error) throw r.error;
   if (r.status !== 0) throw Object.assign(new Error(`Command failed: ${file}`), { status: r.status, stderr: r.stderr });
   return r.stdout;
 }

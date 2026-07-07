@@ -3,12 +3,10 @@
 // must match host node's observable results for the same fixtures. Locks the
 // surface bun-shim patches and the bundle's -p path may call. SKIPs without tjs.
 //
-// spawnSync/execFileSync: tjs has no synchronous event-loop pump reachable
-// from JS (probed empirically — see child_process.cjs header, DIVERGENCE B),
-// so the shim WALLS loudly and IMMEDIATELY instead of deadlocking. Those two
-// rows assert the wall fires fast (proving no hang) rather than diffing
-// against host node's real output. spawn/execFile (async, callback/event
-// based) are real and are characterized directly against host node.
+// spawnSync/execFileSync: real, over the C primitive __tjs_spawn_sync
+// (DIVERGENCE B in child_process.cjs's header is now RESOLVED on
+// darwin/linux). The sync rows below run each fixture under BOTH host node
+// and tjs and diff the observable result, same as the async rows.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -23,47 +21,169 @@ function prog(body) {
   return f;
 }
 
-test('spawnSync: walls loud and fast instead of deadlocking (no tjs sync loop pump)', (t) => {
+test('spawnSync: status + stdout + stderr match node', (t) => {
   if (skipUnlessTjs(t)) return;
   const body = `
     const cp = require('node:child_process');
-    try {
-      cp.spawnSync('/bin/echo', ['hello']);
-      console.log(JSON.stringify({ threw: false }));
-    } catch (e) {
-      console.log(JSON.stringify({ threw: true, message: e.message }));
-    }`;
+    const r = cp.spawnSync('/bin/sh', ['-c', 'echo out; echo err 1>&2; exit 7'], { encoding: 'utf8' });
+    console.log(JSON.stringify({ status: r.status, out: r.stdout, err: r.stderr }));`;
   const f = prog(body);
-  const start = Date.now();
+  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
   const r = runLoader(f);
-  const elapsedMs = Date.now() - start;
   assert.strictEqual(r.status, 0, r.stderr);
-  const out = JSON.parse(r.stdout.trim());
-  assert.strictEqual(out.threw, true);
-  assert.match(out.message, /synchronous loop pump/);
-  // Must wall fast, not ride the loader's 30s timeout — proves no deadlock.
-  assert.ok(elapsedMs < 10000, `spawnSync wall took ${elapsedMs}ms — looks like a hang, not a fast throw`);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
 });
 
-test('execFileSync: inherits the spawnSync wall (also fast, not a hang)', (t) => {
+test('spawnSync: stdin input echoes like node (cat)', (t) => {
   if (skipUnlessTjs(t)) return;
   const body = `
     const cp = require('node:child_process');
-    try {
-      cp.execFileSync('/bin/echo', ['xyz']);
-      console.log(JSON.stringify({ threw: false }));
-    } catch (e) {
-      console.log(JSON.stringify({ threw: true, message: e.message }));
-    }`;
+    const r = cp.spawnSync('/bin/cat', [], { input: 'PING123', encoding: 'utf8' });
+    console.log(JSON.stringify({ status: r.status, out: r.stdout }));`;
   const f = prog(body);
-  const start = Date.now();
+  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
   const r = runLoader(f);
-  const elapsedMs = Date.now() - start;
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
+});
+
+test('spawnSync: env passthrough matches node (printenv)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const cp = require('node:child_process');
+    const r = cp.spawnSync('/usr/bin/printenv', ['CLODE_X'], { env: { CLODE_X: 'yes' }, encoding: 'utf8' });
+    console.log(JSON.stringify({ status: r.status, out: (r.stdout||'').trim() }));`;
+  const f = prog(body);
+  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
+});
+
+test('spawnSync: cwd matches node (pwd)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const cp = require('node:child_process');
+    const os = require('node:os');
+    const r = cp.spawnSync('/bin/pwd', [], { cwd: os.tmpdir(), encoding: 'utf8' });
+    // normalize the macOS /private symlink both sides for a stable compare
+    console.log(JSON.stringify({ status: r.status, endsWithTmp: /tmp\\/?$/.test((r.stdout||'').trim()) }));`;
+  const f = prog(body);
+  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
+});
+
+test('execFileSync: returns stdout string like node', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const cp = require('node:child_process');
+    console.log(cp.execFileSync('/bin/echo', ['xyz'], { encoding: 'utf8' }).trim());`;
+  const f = prog(body);
+  // Diff against the host-node oracle like the sibling rows, not a hardcoded literal.
+  const node = require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim();
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.stdout.trim(), node);
+});
+
+test('execFileSync: nonzero exit throws with status like node', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const cp = require('node:child_process');
+    try { cp.execFileSync('/bin/sh', ['-c', 'exit 5']); console.log('NO_THROW'); }
+    catch (e) { console.log(JSON.stringify({ status: e.status })); }`;
+  const f = prog(body);
+  const node = require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim();
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.stdout.trim(), node);
+});
+
+test('spawnSync: ENOENT result shape matches node (full object, not just status)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  // Node returns the launch failure as a RESULT (never throws): pid 0,
+  // status/signal null, stdout/stderr undefined (dropped by JSON), output null,
+  // error.code ENOENT. Diff the whole node-visible shape against the oracle.
+  const body = `
+    const cp = require('node:child_process');
+    const r = cp.spawnSync('/no/such/binary_xyz', [], {});
+    console.log(JSON.stringify({
+      pid: r.pid, status: r.status, signal: r.signal,
+      stdout: r.stdout, stderr: r.stderr, output: r.output,
+      code: r.error && r.error.code,
+    }));`;
+  const f = prog(body);
+  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  // Anchor the oracle so a node behavior change is loud, not silently absorbed.
+  assert.deepStrictEqual(node, { pid: 0, status: null, signal: null, output: null, code: 'ENOENT' });
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
+});
+
+test('spawnSync: timeout kills and reports like node (signal is a NAME, not a number)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const cp = require('node:child_process');
+    const r = cp.spawnSync('/bin/sleep', ['5'], { timeout: 300 });
+    console.log(JSON.stringify({
+      statusNull: r.status === null,
+      signal: r.signal,                 // must be a STRING name, never a raw int
+      signalType: typeof r.signal,
+      code: r.error && r.error.code,
+    }));`;
+  const f = prog(body);
+  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  // Oracle anchor: node reports status null, signal STRING "SIGTERM", ETIMEDOUT.
+  assert.strictEqual(node.statusNull, true);
+  assert.strictEqual(node.signalType, 'string');
+  assert.strictEqual(node.signal, 'SIGTERM');
+  assert.strictEqual(node.code, 'ETIMEDOUT');
+  const r = runLoader(f);
   assert.strictEqual(r.status, 0, r.stderr);
   const out = JSON.parse(r.stdout.trim());
-  assert.strictEqual(out.threw, true);
-  assert.match(out.message, /synchronous loop pump/);
-  assert.ok(elapsedMs < 10000, `execFileSync wall took ${elapsedMs}ms — looks like a hang, not a fast throw`);
+  // Shape that MUST match node: status null on timeout, error code ETIMEDOUT,
+  // and — the CRITICAL fix — signal reported as a STRING NAME, not the OS int.
+  assert.strictEqual(out.statusNull, node.statusNull);
+  assert.strictEqual(out.signalType, 'string', `signal must be a name string, got ${JSON.stringify(out.signal)} (${out.signalType})`);
+  assert.strictEqual(out.code, node.code);
+  // DIVERGENCE (characterized, not diffed): the C primitive always SIGKILLs on
+  // timeout, so the shim reports "SIGKILL" where node's timeout default is
+  // "SIGTERM" (see mod_spawn_sync.c / child_process.cjs spawnSync comment). We
+  // assert the shim's actual value so the divergence is pinned, and confirm it
+  // genuinely differs from node's here.
+  assert.strictEqual(out.signal, 'SIGKILL');
+  assert.notStrictEqual(out.signal, node.signal);
+});
+
+// DIVERGENCE characterization (tjs-only — deliberately NOT diffed against node,
+// the two differ BY DESIGN). The C primitive conflates a maxBuffer overrun with
+// a timeout: both trip the same `timedOut` flag and SIGKILL the child. So the
+// shim surfaces an over-maxBuffer child via the SAME ETIMEDOUT-shaped error it
+// uses for a real timeout — NOT node's RangeError ERR_CHILD_PROCESS_STDIO_MAXBUFFER.
+// This row pins that documented behavior so a future change to the conflation is loud.
+test('spawnSync: maxBuffer overrun surfaces as the timeout error (tjs DIVERGENCE, not node RangeError)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const cp = require('node:child_process');
+    // Emit 10 bytes with a 4-byte cap -> overrun. In node this would be a
+    // RangeError (ERR_CHILD_PROCESS_STDIO_MAXBUFFER); under the shim it comes
+    // back as the conflated timeout error with code ETIMEDOUT.
+    const r = cp.spawnSync('/bin/sh', ['-c', 'printf HELLOWORLD'], { maxBuffer: 4 });
+    console.log(JSON.stringify({
+      hasError: !!r.error,
+      code: r.error && r.error.code,
+      statusNull: r.status === null,
+    }));`;
+  const f = prog(body);
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout.trim());
+  assert.strictEqual(out.hasError, true, 'overrun must set r.error under the shim');
+  assert.strictEqual(out.code, 'ETIMEDOUT', 'overrun is surfaced via the conflated timeout error');
+  assert.strictEqual(out.statusNull, true, 'a killed (overrun) child reports status null');
 });
 
 test('spawn: exit event + piped stdout resolve like node', (t) => {
