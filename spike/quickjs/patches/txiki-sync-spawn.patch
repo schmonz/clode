@@ -33,9 +33,10 @@ diff --git a/src/vm.c b/src/vm.c
      tjs__mod_process_init(ctx, ns);
 diff --git a/src/mod_spawn_sync.c b/src/mod_spawn_sync.c
 new file mode 100644
+index 0000000000000000000000000000000000000000..5613b9c5cd89ccb9a28f4da733d553ec618103b0
 --- /dev/null
 +++ b/src/mod_spawn_sync.c
-@@ -0,0 +1,269 @@
+@@ -0,0 +1,293 @@
 +/* Synchronous spawn primitive for CommonJS interop (node-shim).
 + * posix_spawn + poll()-drain, main-thread blocking by design. Exposed as
 + * the global `__tjs_spawn_sync`. Mirrors mod_fs_sync.c; upstream candidate. */
@@ -132,6 +133,7 @@ new file mode 100644
 +    JSValue opts = argv[2];
 +
 +    char **cargv = js_string_array(ctx, argv[1], 1, file);
++    if (!cargv) { JS_FreeCString(ctx, file); return JS_ThrowOutOfMemory(ctx); }
 +    JSValue envv = JS_GetPropertyStr(ctx, opts, "env");
 +    char **cenv = JS_IsArray(envv) ? js_string_array(ctx, envv, 0, NULL) : NULL;
 +    JS_FreeValue(ctx, envv);
@@ -150,22 +152,35 @@ new file mode 100644
 +    JSValue mv = JS_GetPropertyStr(ctx, opts, "maxBuffer");
 +    if (JS_IsNumber(mv)) JS_ToInt64(ctx, &max_buffer, mv);
 +    JS_FreeValue(ctx, mv);
++    if (timeout_ms < 0) timeout_ms = 0;          /* negative timeout => no timeout */
++    if (max_buffer <= 0) max_buffer = 1 << 24;   /* nonpositive cap => default 16MB */
 +
 +#if !defined(__APPLE__) && !defined(__GLIBC__)
 +    if (cwd) {
++        /* build the error before freeing file (throw_errno copies the message) */
 +        JSValue e = throw_errno(ctx, EINVAL, "spawn_sync_cwd_unsupported", file);
-+        goto fail_early_ret; /* handled below */
-+    fail_early_ret:
 +        free_string_array(cargv); free_string_array(cenv);
-+        if (cwd) JS_FreeCString(ctx, cwd); JS_FreeValue(ctx, cwdv); JS_FreeValue(ctx, inv); JS_FreeCString(ctx, file);
++        JS_FreeCString(ctx, cwd); JS_FreeValue(ctx, cwdv); JS_FreeValue(ctx, inv); JS_FreeCString(ctx, file);
 +        return e;
 +    }
 +#endif
 +
-+    int outp[2], errp[2], inp[2] = {-1, -1}, devnull = -1;
-+    pipe(outp); pipe(errp);
++    int outp[2] = {-1, -1}, errp[2] = {-1, -1}, inp[2] = {-1, -1}, devnull = -1;
 +    int use_stdin = (input != NULL);
-+    if (use_stdin) pipe(inp); else devnull = open("/dev/null", O_RDONLY);
++    if (pipe(outp) < 0 || pipe(errp) < 0 ||
++        (use_stdin ? (pipe(inp) < 0) : ((devnull = open("/dev/null", O_RDONLY)) < 0))) {
++        JSValue e = throw_errno(ctx, errno, "pipe", file);
++        for (int i = 0; i < 2; i++) {
++            if (outp[i] >= 0) close(outp[i]);
++            if (errp[i] >= 0) close(errp[i]);
++            if (inp[i] >= 0) close(inp[i]);
++        }
++        if (devnull >= 0) close(devnull);
++        free_string_array(cargv); free_string_array(cenv);
++        if (cwd) JS_FreeCString(ctx, cwd);
++        JS_FreeValue(ctx, cwdv); JS_FreeValue(ctx, inv); JS_FreeCString(ctx, file);
++        return e;
++    }
 +
 +    posix_spawn_file_actions_t fa;
 +    posix_spawn_file_actions_init(&fa);
@@ -252,7 +267,15 @@ new file mode 100644
 +                ssize_t n = read(pfds[k].fd, rbuf, sizeof(rbuf));
 +                if (n > 0) {
 +                    buf_append(k == 0 ? &ob : &eb, rbuf, (size_t)n, (size_t)max_buffer);
++                    /* DIVERGENCE: a maxBuffer overrun is reported via the SAME
++                     * `timedOut` flag as a real timeout (both kill with SIGKILL).
++                     * Node distinguishes them (a RangeError
++                     * ERR_CHILD_PROCESS_STDIO_MAXBUFFER vs signal=killSignal). The
++                     * shim (Task 2) surfaces the conflated case as an error;
++                     * characterized in test/node-shim-child-process.test.cjs. */
 +                    if ((int64_t)(ob.len + eb.len) >= max_buffer) { timed_out = 1; break; }
++                } else if (n < 0 && errno == EINTR) {
++                    continue;  /* interrupted read — retry via the next poll, not EOF */
 +                } else {
 +                    close(pfds[k].fd); pfds[k].fd = -1; open_count--;
 +                }
@@ -272,6 +295,8 @@ new file mode 100644
 +    JS_DefinePropertyValueStr(ctx, result, "pid", JS_NewInt32(ctx, pid), JS_PROP_C_W_E);
 +    JS_DefinePropertyValueStr(ctx, result, "status",
 +        (has_status && !timed_out) ? JS_NewInt32(ctx, WEXITSTATUS(wstatus)) : JS_NULL, JS_PROP_C_W_E);
++    /* DIVERGENCE: on timeout/maxBuffer the child is always killed with SIGKILL
++     * (reported here as the signal); Node defaults to SIGTERM then escalates. */
 +    JS_DefinePropertyValueStr(ctx, result, "signal",
 +        has_sig ? JS_NewInt32(ctx, WTERMSIG(wstatus)) : (timed_out ? JS_NewInt32(ctx, SIGKILL) : JS_NULL), JS_PROP_C_W_E);
 +    JS_DefinePropertyValueStr(ctx, result, "stdout",
