@@ -1,4 +1,7 @@
 'use strict';
+// Characterization: node:crypto + the shim's ACTIVE Buffer (feross/buffer when
+// npm-installed deps are present; the deps-free buffer-lite fallback otherwise)
+// must match host node's answers.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -30,7 +33,7 @@ out.push(Buffer.from('ab').equals(Buffer.from('ac')));
 console.log(JSON.stringify(out));
 `;
 
-test('crypto + buffer-lite characterization vs host node', (t) => {
+test('crypto + active Buffer (feross when present) characterization vs host node', (t) => {
   if (skipUnlessTjs(t)) return;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-crypto-'));
   const f = path.join(dir, 'prog.cjs');

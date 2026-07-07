@@ -178,7 +178,7 @@ function runBundle(opts = {}) {
   });
   child.on('error', (e) => {
     cleanup();
-    stderr.write('clode: failed to launch node: ' + e.message + '\n');
+    stderr.write('clode: failed to launch ' + (env.CLODE_ENGINE === 'tjs' ? 'tjs' : 'node') + ': ' + e.message + '\n');
     exit(1);
   });
   return child;

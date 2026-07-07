@@ -8,7 +8,7 @@ const NS = globalThis.__nodeShim;
 
 function parentDir(parent) {
   const f = parent && parent.filename;
-  return f ? path.dirname(f) : NS.readTextSync ? process.cwd() : process.cwd();
+  return f ? path.dirname(f) : process.cwd();
 }
 
 // Node's Module.wrap: the exact CJS wrapper string. Kept byte-faithful so a
