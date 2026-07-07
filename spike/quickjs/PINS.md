@@ -34,5 +34,11 @@ quickjs-ng-js_exepath-netbsd patch 2026-07-06
 #   CJS entry finishes evaluating — the SOLE wall on the M2 `--version` boot. 4MB clears
 #   it with headroom (measured recursion depth 1034 -> 4155) and stays well under the 8MB
 #   main-thread C stack on macOS/Linux. Characterized by test/node-shim-stack.test.cjs.
+#   CAVEAT (worker threads): this 4MB JS stack ceiling applies to whichever thread runs
+#   the engine, but libuv worker threads default to only a ~512KB C stack on macOS — a
+#   4MB JS limit there could SEGFAULT (native stack overrun) rather than throw a catchable
+#   RangeError like the main thread does. Safe today because --version is main-thread-only
+#   (8MB C stack) and worker_threads is not shimmed. Whoever bumps this stack size again
+#   (or adds worker_threads support) in M3+ MUST re-check the worker C-stack size first.
 # upstream: js_exepath + repl-eof-spin (quickjs-ng), sync-fs (txiki) — prepared 2026-07-07, awaiting user go-ahead to post
 # before-posting: DONE 2026-07-07 — txiki-sync-fs.patch is submission-ready (header de-jargoned; C hardened: read errno-capture around js_free, write resolves pos before JS_GetArrayBuffer to avoid detach-dangling)
