@@ -17,3 +17,6 @@ docs/
 
 # QuickJS-phase-1 vendor checkouts/builds/tarballs (artifacts; PINS.md records versions)
 spike/quickjs/vendor/
+
+# patched-tjs build output (scripts/build-tjs.mjs)
+build/tjs/
