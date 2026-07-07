@@ -1,10 +1,15 @@
 'use strict';
 // node:stream — the minimal Readable/Writable/PassThrough the SDK's SSE reader
 // and the bundle touch, over node:events. Locked by test/node-shim-stream.test.cjs.
-// DIVERGENCE: this is a behavioral subset (flowing-mode data/end/finish, async
-// iteration, pipe/pipeline) — NOT node's full backpressure/highWaterMark state
-// machine. Every implemented behavior is characterized against host node; extend
-// test-first (Task 4) if the response reader needs more.
+// This is a behavioral SUBSET (flowing-mode 'data'/'end'/'finish', the
+// end-callback contract, async iteration, pipe/pipeline). PassThrough emits
+// both 'finish' (writable side) and 'end' (readable side), matching host node's
+// observable order for a consumed stream ('end' before 'finish'). It is NOT
+// node's full backpressure/highWaterMark state machine, and does not model
+// paused-mode .read() polling, .destroy()/'close', or web-stream interop.
+// Every implemented behavior is characterized against host node
+// (test/node-shim-stream.test.cjs); extend test-first (Task 4) if the response
+// reader needs more.
 const { EventEmitter } = require('node:events');
 
 class Readable extends EventEmitter {
@@ -12,7 +17,6 @@ class Readable extends EventEmitter {
     super();
     this._reading = false;
     this._ended = false;
-    this._buf = [];
     if (typeof opts.read === 'function') this._read = opts.read;
   }
   _read() {}
@@ -61,18 +65,37 @@ class Writable extends EventEmitter {
     return true;
   }
   end(chunk, enc, cb) {
+    // Normalize function-first: .end(cb) / .end(chunk, cb) / .end(chunk, enc, cb).
+    // Must test for a callback BEFORE the chunk!=null write, else .end(cb)
+    // coerces the callback to a string and writes it as data (host node: no write).
+    if (typeof chunk === 'function') { cb = chunk; chunk = enc = undefined; }
+    else if (typeof enc === 'function') { cb = enc; enc = undefined; }
     if (chunk != null) this.write(chunk, enc);
-    if (typeof chunk === 'function') cb = chunk;
     this._ended = true;
-    queueMicrotask(() => { this.emit('finish'); if (cb) cb(); });
+    // Host node order: the end-callback runs BEFORE the 'finish' event.
+    queueMicrotask(() => { if (cb) cb(); this.emit('finish'); });
     return this;
   }
 }
 
 class PassThrough extends Readable {
-  constructor(opts = {}) { super(opts); }
+  constructor(opts = {}) { super(opts); this._ended = false; }
   write(chunk) { this.push(chunk); return true; }
-  end(chunk) { if (chunk != null) this.push(chunk); this.push(null); return this; }
+  end(chunk, enc, cb) {
+    // Same function-first normalization as Writable.end — .end(cb) must NOT
+    // write the callback as data, and the callback MUST be invoked.
+    if (typeof chunk === 'function') { cb = chunk; chunk = enc = undefined; }
+    else if (typeof enc === 'function') { cb = enc; enc = undefined; }
+    if (chunk != null) this.push(chunk);
+    this.push(null); // schedules 'end' (readable side)
+    this._ended = true;
+    // Host-node observable order for a consumed PassThrough is 'end', then the
+    // end-callback, then 'finish' (writable side). queueMicrotask is FIFO, so
+    // enqueue in that order AFTER push(null)'s 'end' task.
+    if (cb) queueMicrotask(cb);
+    queueMicrotask(() => this.emit('finish'));
+    return this;
+  }
 }
 
 function pipeline(...args) {
