@@ -1,15 +1,22 @@
 'use strict';
-// node:vm — M1 surface: syntax-check only (the extractor compiles module
-// sources to validate them). DIVERGENCE (documented): new Function parses
-// in sloppy/function context, not Script context; adequate for the
-// extractor's syntax gate, wrong for actual sandboxing. Fail loud on run.
+// node:vm — SEALED (loader). Script keeps the M1 syntax-gate semantics.
+// runInThisContext / compileFunction are real (indirect eval / new Function).
+// DIVERGENCE (documented + tested): both evaluate in the GLOBAL context, not a
+// sandboxed one — quickjs-ng has no context-isolation primitive we expose here.
+// Adequate for the bundle's non-sandboxed self-eval; a true sandbox is a wall.
+const indirectEval = eval; // indirect eval => global scope, not the caller's
 class Script {
   constructor(code) {
+    this.__code = code;
     try { new Function(code); } catch (e) {
       if (e instanceof SyntaxError) throw e;
-      throw new SyntaxError(String(e?.message ?? e));
+      throw new SyntaxError(String(e && e.message ? e.message : e));
     }
   }
-  runInThisContext() { throw new Error('node-shim: vm.Script.runInThisContext not implemented'); }
+  runInThisContext() { return indirectEval(this.__code); }
 }
-module.exports = { Script };
+function runInThisContext(code) { return indirectEval(String(code)); }
+function compileFunction(code, params) {
+  return new Function(...(Array.isArray(params) ? params : []), String(code));
+}
+module.exports = { Script, runInThisContext, compileFunction };

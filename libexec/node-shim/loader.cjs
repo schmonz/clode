@@ -79,6 +79,26 @@ function wallProxy(ns) {
   });
 }
 
+/* ---- property-granular wall for SEALED builtins ------------------------------
+ * A sealed builtin has a small, fully-enumerated surface: a GET of an
+ * unimplemented string key throws the branded wall instead of returning
+ * undefined (M2 entry gate #1). Introspection/interop keys are allowlisted so
+ * Promise-unwrapping, ESM interop, and console.log don't trip the wall. Only
+ * curated tiny shims opt in (SEALED) — broad modules keep Node's missing-prop
+ * = undefined idiom, which the bundle's feature-detection depends on. */
+const SEALED = new Set(['module', 'vm']);
+const SEAL_ALLOW = new Set(['then', 'default', '__esModule', 'constructor', 'prototype',
+  'toJSON', 'toString', 'valueOf', 'inspect', Symbol.toPrimitive, Symbol.iterator,
+  Symbol.toStringTag, Symbol.for('nodejs.util.inspect.custom')]);
+function sealSurface(ns, exportsVal) {
+  return new Proxy(exportsVal, {
+    get(target, prop) {
+      if (prop in target || SEAL_ALLOW.has(prop) || typeof prop === 'symbol') return target[prop];
+      throw new Error(`node-shim: ${ns}.${String(prop)} not implemented`);
+    },
+  });
+}
+
 /* ---- builtin registry (lazy) */
 const SHIM_DIR = P.join(P.dirname(P.resolve(tjs.args[2] ?? '')), 'modules'); // loader.cjs lives beside modules/
 const builtinCache = new Map();
@@ -93,6 +113,9 @@ function loadBuiltin(name) {
     exportsVal = name === 'fs/promises' ? mod.promises : mod;
   } else {
     exportsVal = wallProxy(name);
+  }
+  if (SEALED.has(name) && exportsVal && typeof exportsVal === 'object') {
+    exportsVal = sealSurface(name, exportsVal);
   }
   builtinCache.set(name, exportsVal);
   return exportsVal;
@@ -135,12 +158,27 @@ function resolveRequest(request, fromDir) {
   }
 }
 
+// The canonical resolver: builtin | json | evaluated CJS. Exposed so
+// modules/module.cjs can implement Module._load over it, and so require()
+// routes through the CURRENT Module._load (a monkeypatch therefore intercepts).
+function moduleLoad(request, fromDir) {
+  const r = resolveRequest(request, fromDir);
+  if (r.builtin) return loadBuiltin(r.builtin);
+  if (r.file.endsWith('.json')) return JSON.parse(readTextSync(r.file));
+  return evalModule(r.file);
+}
+
 function makeRequire(fromDir) {
   const req = (request) => {
-    const r = resolveRequest(request, fromDir);
-    if (r.builtin) return loadBuiltin(r.builtin);
-    if (r.file.endsWith('.json')) return JSON.parse(readTextSync(r.file));
-    return evalModule(r.file);
+    // Route through Module._load so a monkeypatch (bun-shim's bun:ffi/ws/undici
+    // hook) intercepts. module.cjs's _load calls back into moduleLoad for the
+    // real resolution; before module.cjs loads, __nodeShim.moduleLoad is the
+    // resolver directly (bootstrap: require('module') itself must not recurse).
+    const M = builtinCache.get('module');
+    if (M && typeof M._load === 'function' && request !== 'module' && request !== 'node:module') {
+      return M._load(request, { filename: P.join(fromDir, '<require>') }, false);
+    }
+    return moduleLoad(request, fromDir);
   };
   req.resolve = (request) => {
     const r = resolveRequest(request, fromDir);
@@ -174,7 +212,10 @@ Object.defineProperty(globalThis, 'Buffer', {
 });
 globalThis.setImmediate ??= (fn, ...a) => setTimeout(fn, 0, ...a);
 globalThis.clearImmediate ??= clearTimeout;
-globalThis.__nodeShim = { loadBuiltin, makeRequire, wallProxy, readTextSync, version: 'm1' };
+globalThis.__nodeShim = {
+  loadBuiltin, makeRequire, wallProxy, readTextSync, moduleLoad, resolveRequest, KNOWN,
+  version: 'm2',
+};
 
 const entry = tjs.args[3];
 if (!entry) { console.error('usage: tjs run loader.cjs <entry.cjs> [args...]'); tjs.exit(64); }
