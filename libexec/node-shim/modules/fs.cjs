@@ -57,6 +57,21 @@ class Stats {
   isSymbolicLink() { return this.#kind === 'symlink'; }
 }
 
+// fs.Dirent — the shape readdir(withFileTypes) yields. FSS.readdir returns NAMES
+// only (probed), so the entry kind comes from an lstat (no symlink follow, like
+// node's d_type). `parentPath` is node's field (`path` is the deprecated alias).
+class Dirent {
+  #kind;
+  constructor(name, kind, parentPath) { this.name = name; this.parentPath = parentPath; this.path = parentPath; this.#kind = kind; }
+  isFile() { return this.#kind === 'file'; }
+  isDirectory() { return this.#kind === 'dir'; }
+  isSymbolicLink() { return this.#kind === 'symlink'; }
+  isBlockDevice() { return false; }
+  isCharacterDevice() { return false; }
+  isFIFO() { return false; }
+  isSocket() { return false; }
+}
+
 function readAll(fd) {
   const size = FSS.fstat(fd).size;
   const out = new Uint8Array(size);
@@ -123,6 +138,35 @@ function readSync(fd, buf, offset, length, position) {
 const statSync = (p) => new Stats(FSS.stat(p));
 const lstatSync = (p) => new Stats(FSS.lstat(p));
 
+function direntFor(parentPath, name) {
+  let kind = 'file';
+  try { kind = FSS.lstat(path.join(parentPath, name)).kind; } catch { /* broken link etc → treat as file */ }
+  return new Dirent(name, kind, parentPath);
+}
+
+// Shared readdir core: honours { withFileTypes, recursive } like host node.
+// recursive descends real directories only (lstat kind, no symlink follow);
+// without withFileTypes it yields path strings relative to `p` (node's shape).
+function readdirCore(p, opts) {
+  const wft = !!(opts && opts.withFileTypes);
+  const recursive = !!(opts && opts.recursive);
+  if (!recursive) {
+    const names = FSS.readdir(p);
+    return wft ? names.map((n) => direntFor(p, n)) : names;
+  }
+  const out = [];
+  const walk = (dir, relBase) => {
+    for (const n of FSS.readdir(dir)) {
+      const rel = relBase ? path.join(relBase, n) : n;
+      const d = direntFor(dir, n);
+      out.push(wft ? d : rel);
+      if (d.isDirectory()) walk(path.join(dir, n), rel);
+    }
+  };
+  walk(p, '');
+  return out;
+}
+
 const fsMod = {
   constants,
   readFileSync, writeFileSync, mkdirSync, readSync,
@@ -131,9 +175,19 @@ const fsMod = {
   existsSync: (p) => { try { FSS.stat(p); return true; } catch { return false; } },
   realpathSync: (p) => FSS.realpath(p),
   readlinkSync: (p) => FSS.readlink(p),
-  readdirSync: (p, opts) => {
-    if (opts?.withFileTypes) throw new Error('node-shim: fs.readdirSync withFileTypes not implemented');
-    return FSS.readdir(p);
+  readdirSync: (p, opts) => readdirCore(p, opts),
+  opendirSync: (p) => {
+    // Minimal Dir: an async-iterable + read()/close() over an eager Dirent list,
+    // enough for a `for await (const d of await opendir(p))` walker.
+    const ents = readdirCore(p, { withFileTypes: true });
+    let i = 0;
+    return {
+      path: p,
+      read: async () => (i < ents.length ? ents[i++] : null),
+      close: async () => {},
+      closeSync: () => {},
+      [Symbol.asyncIterator]() { return { next: async () => (i < ents.length ? { value: ents[i++], done: false } : { value: undefined, done: true }) }; },
+    };
   },
   rmdirSync: (p) => FSS.rmdir(p),
   unlinkSync: (p) => FSS.unlink(p),
@@ -156,10 +210,17 @@ const promises = {
   },
   writeFile: async (p, data) => { writeFileSync(p, data); },
   stat: async (p) => statSync(p),
+  lstat: async (p) => lstatSync(p),
   mkdir: async (p, opts) => mkdirSync(p, opts),
-  readdir: async (p) => FSS.readdir(p),
+  readdir: async (p, opts) => readdirCore(p, opts),
+  opendir: async (p) => fsMod.opendirSync(p),
   access: async (p, m) => FSS.access(p, m ?? constants.F_OK),
   realpath: async (p) => FSS.realpath(p),
+  readlink: async (p) => FSS.readlink(p),
+  unlink: async (p) => FSS.unlink(p),
+  rename: async (a, b) => FSS.rename(a, b),
+  rmdir: async (p) => FSS.rmdir(p),
+  copyFile: async (a, b) => { writeFileSync(b, readFileSync(a)); },
   rm: async (p, opts) => {
     const l = (() => { try { return lstatSync(p); } catch (e) { if (opts?.force && e.code === 'ENOENT') return null; throw e; } })();
     if (!l) return;
@@ -173,12 +234,20 @@ const promises = {
 };
 fsMod.promises = promises;
 
+// Node's callback fs APIs take an optional options arg before the callback; the
+// cb is always last. Route each through its promises twin so behavior matches.
 const cbWrap = (pfn) => (...args) => {
   const cb = args.pop();
+  if (typeof cb !== 'function') throw new TypeError('callback must be a function');
   pfn(...args).then((v) => cb(null, v), (e) => cb(e));
 };
-fsMod.readFile = cbWrap(promises.readFile);
-fsMod.stat = cbWrap(promises.stat);
-fsMod.access = cbWrap(promises.access);
+for (const name of ['readFile', 'writeFile', 'stat', 'lstat', 'access', 'readdir',
+  'realpath', 'readlink', 'mkdir', 'unlink', 'rename', 'rmdir', 'copyFile', 'rm', 'opendir']) {
+  fsMod[name] = cbWrap(promises[name]);
+}
+fsMod.open = (p, flags, mode, cb) => { const c = typeof cb === 'function' ? cb : (typeof mode === 'function' ? mode : flags); try { c(null, fsMod.openSync(p, typeof flags === 'string' || typeof flags === 'number' ? flags : 'r')); } catch (e) { c(e); } };
+fsMod.close = (fd, cb) => { try { FSS.close(fd); if (cb) cb(null); } catch (e) { if (cb) cb(e); } };
+fsMod.Stats = Stats;
+fsMod.Dirent = Dirent;
 
 module.exports = fsMod;
