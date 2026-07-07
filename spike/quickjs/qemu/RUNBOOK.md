@@ -249,6 +249,11 @@ standalone never runs its payload on NetBSD — `js_exepath()` has no NetBSD
 port (returns -1), the trailer check is skipped, and the binary falls back
 to an interactive REPL that busy-spins poll+read(→0) on EOF'd stdin; see
 `results/gate3-netbsd-aarch64.md` § "qjs -c standalone spin — root cause".
+**PATCH VALIDATED (2026-07-06):** `patches/quickjs-ng-js_exepath-netbsd.patch`
+applied + rebuilt on a fresh evbarm-aarch64 boot fixes it — hello-exe prints
+correctly and the real bundle standalone runs its bytecode and fails fast at
+`require` (peak RSS 81,296 KB), matching darwin instead of spinning; see
+`results/gate3-netbsd-aarch64.md` § "Patch validation (2026-07-06)".
 
 ## 5. Distill results
 

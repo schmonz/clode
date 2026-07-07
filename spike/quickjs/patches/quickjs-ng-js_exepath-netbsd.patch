@@ -20,6 +20,15 @@
 # /proc/curproc/exe fallback. This is the upstream fix candidate — a
 # straightforward portability addition, not a local hack.
 #
+# RUNTIME-VALIDATED on NetBSD/evbarm-aarch64 10.1 (2026-07-06): applied
+# clean (patch -p1, both hunks), qjs rebuilt, `qjs -c hello.js -o
+# hello-exe` now prints "standalone-ok 42" and exits 0 (no REPL banner,
+# no spin), and the real bundle standalone now runs its embedded
+# bytecode and fails fast at the first missing Node API (`require`),
+# peak RSS 81,296 KB — matching darwin's failure mode instead of
+# spinning. See results/gate3-netbsd-aarch64.md § "Patch validation
+# (2026-07-06)".
+#
 # Pinned in PINS.md. Apply inside the extracted quickjs-ng source with:
 #     patch -p1 < quickjs-ng-js_exepath-netbsd.patch
 #

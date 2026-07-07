@@ -262,3 +262,56 @@ reproducible on any platform with `qjs </dev/null`. For Gate 3 the
 practical consequence stands: the `qjs -c` ship mechanism does not work
 on NetBSD 10.1 as shipped in v0.15.1, but the fix is small and mechanical
 rather than architectural.
+
+## Patch validation (2026-07-06)
+
+Confirms `patches/quickjs-ng-js_exepath-netbsd.patch` fixes the spin
+diagnosed above. Fresh evbarm-aarch64 boot (guest disk boots
+`snapshot=on`, so the earlier repro run's `/root/qjswork` did not
+persist — the driver rebuilt from the pinned tarball fresh), patch
+applied with `patch -p1` (both hunks succeeded, exit 0), `cmake --build
+build --target qjs -j2` rebuilt cleanly (exit 0). Driver: adapted copy
+of `qemu/run-repro.py`, guest script `vendor/validate-patch.sh`
+(uncommitted scratch), console log `vendor/validate-console.log`.
+
+**hello-exe** (`console.log("standalone-ok " + 6*7);` compiled via
+`qjs -c hello.js -o hello-exe`, then `./hello-exe </dev/null`) —
+verbatim:
+
+```
+standalone-ok 42
+```
+Exit 0, no REPL banner, no spin — this previously printed the
+`QuickJS-ng - Type ".help" for help` banner and spun at 100% CPU.
+
+**bundle-exe** (the real `cli.cjs`, 18,441,695 bytes, compiled via
+`qjs -c cli.cjs -o bundle-exe`, then `/usr/bin/time -l ./bundle-exe
+</dev/null`) — verbatim:
+
+```
+Possibly unhandled promise rejection: ReferenceError: require is not defined
+    at <anonymous> (<evalScript>:2:1)
+    at evalScript (native)
+    at runStandalone (<null>:0:1)
+
+Possibly unhandled promise rejection: ReferenceError: require is not defined
+    at <anonymous> (<evalScript>:2:1)
+    at evalScript (native)
+    at runStandalone (<null>:0:1)
+
+        0.10 real         0.09 user         0.01 sys
+     81296  maximum resident set size
+```
+
+Exit 1. This is the North-Star run-from-bytecode measurement Gate 3
+couldn't get: the standalone now actually executes its embedded
+bytecode (`runStandalone` in the stack trace — proof the trailer path
+ran, not the REPL) and fails fast at the first missing Node API
+(`require`), matching the darwin/arm64 control's failure mode
+(`results/gate2-probe-darwin-arm64.md`) instead of spinning. Peak RSS:
+**81,296 KB**, in 0.10s real — a real number, not a spin ceiling.
+
+**Verdict: yes.** The patch converts the spin into correct standalone
+execution — `qjs -c` standalones now run their embedded bytecode on
+NetBSD/evbarm-aarch64 instead of silently degrading to a busy-spinning
+REPL.
