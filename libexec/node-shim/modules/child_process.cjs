@@ -68,6 +68,11 @@ const { EventEmitter } = require('node:events');
 const path = require('node:path');
 const FSS = globalThis.__tjs_fs_sync;
 
+// Opt-in spawn tracing (CLODE_SHIM_TRACE=1) — diagnostic for the -p wall-walk;
+// silent unless enabled. Writes to stderr so it never pollutes the -p stdout.
+const TRACE = !!(globalThis.process && globalThis.process.env && globalThis.process.env.CLODE_SHIM_TRACE);
+function trace() { if (TRACE) { try { console.error('[cp]', ...arguments); } catch { /* best effort */ } } }
+
 function resolveExe(file, env) {
   // Node resolves a bare command via PATH for spawn; a path with a slash is used
   // as-is. Mirror that so a bundle spawn of a bare tool behaves like node.
@@ -108,6 +113,7 @@ function spawn(file, args = [], opts = {}) {
   if (!Array.isArray(args)) { opts = args || {}; args = []; }
   const env = opts.env || undefined;
   const stdio = normStdio(opts);
+  trace('spawn', file, JSON.stringify(args), 'stdio=', JSON.stringify(stdio));
   const child = new EventEmitter();
   let proc;
   try {
@@ -135,7 +141,7 @@ function spawn(file, args = [], opts = {}) {
   }
   child.pid = proc.pid;
   // Wrap tjs WHATWG streams as node-ish EventEmitters emitting 'data'/'end'.
-  const wrapReadable = (s) => {
+  const wrapReadable = (s, which) => {
     if (!s) return null;
     const em = new EventEmitter();
     (async () => {
@@ -146,19 +152,20 @@ function spawn(file, args = [], opts = {}) {
           if (done) break;
           if (value) em.emit('data', Buffer.from(value));
         }
+        trace('stream end', file, which);
         em.emit('end');
-      } catch (e) { em.emit('error', e); }
+      } catch (e) { trace('stream error', file, which, String(e)); em.emit('error', e); }
     })();
     return em;
   };
-  child.stdout = wrapReadable(proc.stdout);
-  child.stderr = wrapReadable(proc.stderr);
+  child.stdout = wrapReadable(proc.stdout, 'stdout');
+  child.stderr = wrapReadable(proc.stderr, 'stderr');
   child.stdin = proc.stdin || null; // DIVERGENCE C: best-effort passthrough only
   child.kill = (sig) => { try { proc.kill(sig); return true; } catch { return false; } };
   child.ref = () => {}; child.unref = () => {};
   proc.wait().then(
-    (st) => { child.exitCode = st.exit_status; child.emit('exit', st.exit_status, st.term_signal || null); child.emit('close', st.exit_status, st.term_signal || null); },
-    (e) => { child.emit('error', e); },
+    (st) => { trace('wait resolved', file, 'exit=', st.exit_status); child.exitCode = st.exit_status; child.emit('exit', st.exit_status, st.term_signal || null); child.emit('close', st.exit_status, st.term_signal || null); },
+    (e) => { trace('wait rejected', file, String(e)); child.emit('error', e); },
   );
   return child;
 }
@@ -174,6 +181,7 @@ function spawn(file, args = [], opts = {}) {
 // walled forever.
 function spawnSync(file, args = [], opts = {}) {
   if (!Array.isArray(args)) { opts = args || {}; args = []; }
+  trace('spawnSync', file, JSON.stringify(args));
   if (typeof tjs.runLoopOnce !== 'function') {
     throw new Error('node-shim: child_process.spawnSync needs a synchronous loop pump (tjs.runLoopOnce) — not available in this tjs build; use spawn()/execFile() (async) instead, or add the primitive (see child_process.cjs header, DIVERGENCE B)');
   }

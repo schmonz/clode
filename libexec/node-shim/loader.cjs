@@ -80,6 +80,7 @@ function wallProxy(ns) {
       // API access still walls loudly.
       if (prop === Symbol.toPrimitive || prop === 'then' || prop === Symbol.iterator
           || prop === 'default' || prop === '__esModule' || prop === Symbol.toStringTag) return undefined;
+      if (globalThis.process?.env?.CLODE_SHIM_TRACE) { try { console.error('[wall]', ns + '.' + String(prop)); } catch { /* best effort */ } }
       throw new Error(`node-shim: ${ns}.${String(prop)} not implemented`);
     },
   });
@@ -100,6 +101,7 @@ function sealSurface(ns, exportsVal) {
   return new Proxy(exportsVal, {
     get(target, prop) {
       if (prop in target || SEAL_ALLOW.has(prop) || typeof prop === 'symbol') return target[prop];
+      if (globalThis.process?.env?.CLODE_SHIM_TRACE) { try { console.error('[wall]', ns + '.' + String(prop)); } catch { /* best effort */ } }
       throw new Error(`node-shim: ${ns}.${String(prop)} not implemented`);
     },
   });
@@ -316,6 +318,12 @@ Object.defineProperty(globalThis, 'Buffer', {
 });
 globalThis.setImmediate ??= (fn, ...a) => setTimeout(fn, 0, ...a);
 globalThis.clearImmediate ??= clearTimeout;
+if (globalThis.process?.env?.CLODE_SHIM_TRACE) {
+  const _st = globalThis.setTimeout, _si = globalThis.setInterval;
+  let n = 0;
+  globalThis.setTimeout = function (fn, d, ...a) { const id = ++n; console.error('[timer] setTimeout#' + id + ' delay=' + d); return _st.call(this, function () { console.error('[timer] fire setTimeout#' + id); return fn.apply(this, arguments); }, d, ...a); };
+  globalThis.setInterval = function (fn, d, ...a) { const id = ++n; console.error('[timer] setInterval#' + id + ' delay=' + d); return _si.call(this, fn, d, ...a); };
+}
 // Node's `global` === globalThis; the bundle references the bare `global`
 // identifier (e.g. `global.TEST...`). tjs exposes only globalThis, so alias it.
 globalThis.global ??= globalThis;
@@ -365,6 +373,30 @@ globalThis.__nodeShim = {
   loadBuiltin, makeRequire, wallProxy, readTextSync, moduleLoad, resolveRequest, requireExt, KNOWN,
   version: 'm2',
 };
+
+// Opt-in fetch tracing (CLODE_SHIM_TRACE=1) for the -p wall-walk: log each
+// request start and response arrival so a hang in the API round-trip is
+// localized. Silent unless enabled.
+if (globalThis.process && globalThis.process.env && globalThis.process.env.CLODE_SHIM_TRACE && typeof globalThis.fetch === 'function') {
+  const _fetch = globalThis.fetch;
+  globalThis.fetch = function (input, init) {
+    const method = (init && init.method) || (input && input.method) || 'GET';
+    const url = typeof input === 'string' ? input : (input && input.url) || String(input);
+    console.error('[fetch] ->', method, url);
+    const p = _fetch.call(this, input, init);
+    return p.then(
+      (res) => {
+        console.error('[fetch] <-', method, url, 'status=', res.status, 'ce=', res.headers.get('content-encoding'), 'te=', res.headers.get('transfer-encoding'), 'cl=', res.headers.get('content-length'));
+        for (const m of ['text', 'json', 'arrayBuffer']) {
+          const orig = res[m];
+          if (typeof orig === 'function') res[m] = function (...a) { console.error('[fetch] body.' + m + ' start', url); return orig.apply(this, a).then((v) => { console.error('[fetch] body.' + m + ' done', url); return v; }, (e) => { console.error('[fetch] body.' + m + ' err', url, String(e)); throw e; }); };
+        }
+        return res;
+      },
+      (e) => { console.error('[fetch] xx', method, url, String(e)); throw e; },
+    );
+  };
+}
 
 // Async failures on the -p path settle in promise continuations the synchronous
 // try/catch below cannot see. tjs surfaces them via the WHATWG
