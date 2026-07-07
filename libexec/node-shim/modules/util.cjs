@@ -24,7 +24,7 @@ function inherits(ctor, superCtor) {
   ctor.super_ = superCtor;
 }
 function isDeepStrictEqual(a, b) {
-  if (a === b) return true;
+  if (a === b) return a !== 0 || 1 / a === 1 / b;
   if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return Object.is(a, b);
   if (Array.isArray(a) !== Array.isArray(b)) return false;
   const ka = Reflect.ownKeys(a), kb = Reflect.ownKeys(b);
