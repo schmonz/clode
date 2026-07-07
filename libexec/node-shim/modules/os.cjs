@@ -8,9 +8,14 @@
 // optimistic reads from the plan draft are correct and kept; the
 // tjs.env.HOME / tjs.env.TMPDIR reads remain as fallbacks for engines/builds
 // where those properties are absent.
+//
+// tmpdir() strips a trailing slash to match host node, but guards on
+// length > 1 so a value of exactly "/" is left as "/" (host node's
+// os.tmpdir() does the same length check — an unconditional strip would
+// turn "/" into ""). Pinned by test/node-shim-path.test.cjs (TMPDIR=/ row).
 module.exports = {
   homedir: () => tjs.homeDir ?? tjs.env.HOME ?? '/',
-  tmpdir: () => (tjs.tmpDir ?? tjs.env.TMPDIR ?? '/tmp').replace(/\/$/, ''),
+  tmpdir: () => { const v = tjs.tmpDir ?? tjs.env.TMPDIR ?? '/tmp'; return v.length > 1 && v.endsWith('/') ? v.slice(0, -1) : v; },
   platform: () => process.platform,
   arch: () => process.arch,
   EOL: '\n',

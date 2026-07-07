@@ -52,3 +52,16 @@ console.log(JSON.stringify({ home: os.homedir().startsWith('/'), tmp: os.tmpdir(
   const out = JSON.parse(r.stdout.trim());
   assert.deepStrictEqual(out, { home: true, tmp: true, plat: process.platform, eol: '\n' });
 });
+
+test('os.tmpdir root-edge (TMPDIR=/) matches host node', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-tmproot-'));
+  const f = path.join(dir, 'tmproot.cjs');
+  fs.writeFileSync(f, `console.log(JSON.stringify(require('node:os').tmpdir()));`);
+  const nodeOut = JSON.parse(require('node:child_process')
+    .execFileSync(process.execPath, [f], { encoding: 'utf8', env: { ...process.env, TMPDIR: '/' } }).trim());
+  const r = runLoader(f, [], { env: { TMPDIR: '/' } });
+  assert.strictEqual(r.status, 0, r.stderr);
+  const tjsOut = JSON.parse(r.stdout.trim());
+  assert.deepStrictEqual(tjsOut, nodeOut);
+});
