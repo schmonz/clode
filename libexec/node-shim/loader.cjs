@@ -73,7 +73,13 @@ function existsFileSync(p) { try { return FSS.stat(p).kind === 'file'; } catch {
 function wallProxy(ns) {
   return new Proxy({}, {
     get(_, prop) {
-      if (prop === Symbol.toPrimitive || prop === 'then' || prop === Symbol.iterator || prop === 'default') return undefined;
+      // Interop/introspection probes must read as a plain CJS module would (a
+      // real builtin has no __esModule and no Symbol.toStringTag), so ESM-interop
+      // helpers (`__toESM`) and Promise-unwrapping don't trip the wall on a
+      // module that is merely CAPTURED but never CALLED on this path. Any real
+      // API access still walls loudly.
+      if (prop === Symbol.toPrimitive || prop === 'then' || prop === Symbol.iterator
+          || prop === 'default' || prop === '__esModule' || prop === Symbol.toStringTag) return undefined;
       throw new Error(`node-shim: ${ns}.${String(prop)} not implemented`);
     },
   });
@@ -102,15 +108,20 @@ function sealSurface(ns, exportsVal) {
 /* ---- builtin registry (lazy) */
 const SHIM_DIR = P.join(P.dirname(P.resolve(tjs.args[2] ?? '')), 'modules'); // loader.cjs lives beside modules/
 const builtinCache = new Map();
-const KNOWN = ['assert','buffer','child_process','crypto','events','fs','fs/promises','module','net','os','path','process','stream','string_decoder','tls','tty','url','util','v8','vm','zlib','sea','readline','http','https','dgram','worker_threads','async_hooks','inspector','constants','querystring','timers','dns','http2','perf_hooks','diagnostics_channel'];
+const KNOWN = ['assert','buffer','child_process','crypto','events','fs','fs/promises','module','net','os','path','path/win32','path/posix','process','stream','stream/consumers','stream/promises','string_decoder','tls','tty','url','util','v8','vm','zlib','sea','readline','http','https','dgram','worker_threads','async_hooks','inspector','constants','querystring','timers','timers/promises','dns','dns/promises','http2','perf_hooks','diagnostics_channel'];
 function loadBuiltin(name) {
   if (builtinCache.has(name)) return builtinCache.get(name);
-  const base = name === 'fs/promises' ? 'fs' : name;
+  // Builtin subpaths (`<mod>/<sub>`: fs/promises, timers/promises, path/win32,
+  // path/posix) live in <mod>.cjs and expose the sub-surface as the module's
+  // `.<sub>` export — the same shape Node uses (path.win32, fs.promises, ...).
+  const slash = name.indexOf('/');
+  const base = slash === -1 ? name : name.slice(0, slash);
+  const sub = slash === -1 ? null : name.slice(slash + 1);
   const file = P.join(SHIM_DIR, `${base}.cjs`);
   let exportsVal;
   if (existsFileSync(file)) {
     const mod = evalModule(file);
-    exportsVal = name === 'fs/promises' ? mod.promises : mod;
+    exportsVal = sub ? mod[sub] : mod;
   } else {
     exportsVal = wallProxy(name);
   }
@@ -187,11 +198,89 @@ function makeRequire(fromDir) {
   return req;
 }
 
+/* ---- minimal ESM -> CJS transpile -------------------------------------------
+ * The bundle's text-rendering deps (string-width / strip-ansi / wrap-ansi and
+ * their graph: ansi-regex, get-east-asian-width, ansi-styles) are ESM-only
+ * (package "type":"module"). Host node's require() loads ESM; this loader's
+ * new Function() host does not. Rather than a full ESM engine, transpile the
+ * static import/export forms these well-behaved (Prettier-formatted, no TLA, no
+ * import.meta) packages use into CJS. Validated against the real packages: the
+ * transpiled string-width/strip-ansi/wrap-ansi produce byte-identical results
+ * (test/node-shim-esm.test.cjs). NOT a general ESM implementation — dynamic
+ * import(), top-level await, live-binding re-exports, and import.meta are NOT
+ * handled; a module needing them is a genuine later wall. */
+function esmDetect(src) {
+  return /(^|\n)[ \t]*export\s+(default|const|let|var|function|class|\{|async|\*)/.test(src)
+    || /(^|\n)[ \t]*import\s+[\s\S]*?from\s*['"]/.test(src)
+    || /(^|\n)[ \t]*import\s*['"]/.test(src);
+}
+let _esmN = 0;
+function esmCompileImport(clause, spec) {
+  clause = clause.trim();
+  const req = `require(${JSON.stringify(spec)})`;
+  if (clause.startsWith('* as ')) return `const ${clause.slice(5).trim()} = ${req};`;
+  const id = `__esm_${_esmN++}`;
+  const braceIdx = clause.indexOf('{');
+  let def = null, named = null;
+  if (braceIdx === -1) { def = clause.trim(); }
+  else {
+    const before = clause.slice(0, braceIdx).replace(/,\s*$/, '').trim();
+    if (before) def = before;
+    named = clause.slice(braceIdx + 1, clause.lastIndexOf('}'));
+  }
+  const out = [`const ${id} = ${req};`];
+  if (def) out.push(`const ${def} = __esmDefault(${id});`);
+  if (named) {
+    const parts = named.split(',').map((x) => x.trim()).filter(Boolean).map((x) => {
+      const mm = x.split(/\s+as\s+/); return mm.length === 2 ? `${mm[0]}: ${mm[1]}` : mm[0];
+    });
+    out.push(`const { ${parts.join(', ')} } = ${id};`);
+  }
+  return out.join(' ');
+}
+function esmToCjs(src) {
+  const collected = [];
+  let s = src;
+  s = s.replace(/(^|\n)([ \t]*)import\s+([\s\S]*?)\s+from\s*(['"])([^'"]+)\4\s*;?/g,
+    (m, nl, ind, clause, q, spec) => nl + ind + esmCompileImport(clause, spec));
+  s = s.replace(/(^|\n)([ \t]*)import\s*(['"])([^'"]+)\3\s*;?/g,
+    (m, nl, ind, q, spec) => `${nl}${ind}require(${JSON.stringify(spec)});`);
+  s = s.replace(/(^|\n)([ \t]*)export\s*\{([^}]*)\}\s*from\s*(['"])([^'"]+)\4\s*;?/g,
+    (m, nl, ind, names, q, spec) => {
+      const id = `__reexp_${_esmN++}`;
+      const assigns = names.split(',').map((x) => x.trim()).filter(Boolean).map((x) => {
+        const mm = x.split(/\s+as\s+/); return `module.exports.${mm[1] || mm[0]} = ${id}.${mm[0]};`;
+      });
+      return `${nl}${ind}{ const ${id} = require(${JSON.stringify(spec)}); ${assigns.join(' ')} }`;
+    });
+  s = s.replace(/(^|\n)([ \t]*)export\s+default\s+(function\b|class\b)/g,
+    (m, nl, ind, kw) => `${nl}${ind}module.exports.default = ${kw}`);
+  s = s.replace(/(^|\n)([ \t]*)export\s+default\s+/g, (m, nl, ind) => `${nl}${ind}module.exports.default = `);
+  s = s.replace(/(^|\n)([ \t]*)export\s+(async\s+)?function\s+([A-Za-z0-9_$]+)/g,
+    (m, nl, ind, asy, name) => { collected.push(name); return `${nl}${ind}${asy || ''}function ${name}`; });
+  s = s.replace(/(^|\n)([ \t]*)export\s+class\s+([A-Za-z0-9_$]+)/g,
+    (m, nl, ind, name) => { collected.push(name); return `${nl}${ind}class ${name}`; });
+  s = s.replace(/(^|\n)([ \t]*)export\s+(const|let|var)\s+([A-Za-z0-9_$]+)/g,
+    (m, nl, ind, kw, name) => { collected.push(name); return `${nl}${ind}${kw} ${name}`; });
+  s = s.replace(/(^|\n)([ \t]*)export\s*\{([^}]*)\}\s*;?/g,
+    (m, nl, ind, names) => {
+      const assigns = names.split(',').map((x) => x.trim()).filter(Boolean).map((x) => {
+        const mm = x.split(/\s+as\s+/); return `module.exports.${mm[1] || mm[0]} = ${mm[0]};`;
+      });
+      return `${nl}${ind}${assigns.join(' ')}`;
+    });
+  let tail = '';
+  for (const name of collected) tail += `\nmodule.exports.${name} = ${name};`;
+  return 'const __esmDefault = (m) => (m && m.__esModule) ? m.default : m; Object.defineProperty(module.exports, "__esModule", { value: true });\n'
+    + s + tail;
+}
+
 function evalModule(file, isEntry = false) {
   const cached = moduleCache.get(file);
   if (cached) return cached.exports;
   let src = readTextSync(file);
   if (src.startsWith('#!')) src = src.slice(src.indexOf('\n') + 1);
+  if (!isEntry && esmDetect(src)) src = esmToCjs(src);
   const module = { exports: {}, filename: file };
   if (isEntry) mainModule = module;
   moduleCache.set(file, module);
@@ -227,15 +316,74 @@ Object.defineProperty(globalThis, 'Buffer', {
 });
 globalThis.setImmediate ??= (fn, ...a) => setTimeout(fn, 0, ...a);
 globalThis.clearImmediate ??= clearTimeout;
+// Node's `global` === globalThis; the bundle references the bare `global`
+// identifier (e.g. `global.TEST...`). tjs exposes only globalThis, so alias it.
+globalThis.global ??= globalThis;
+
+// Intl.Segmenter polyfill: this tjs build ships NO `Intl` global at all, but the
+// bundle's `string-width` dep does `new Intl.Segmenter()` at load to split text
+// into grapheme clusters for display-width math. Provide a minimal Segmenter that
+// yields one segment per Unicode CODE POINT (String iteration is code-point aware).
+// DIVERGENCE: real grapheme clustering keeps combining marks / ZWJ-emoji / flag
+// pairs together in ONE cluster; a code-point split separates them. For width
+// this stays correct for ASCII, CJK, and per-code-point combining marks (they
+// re-join as zero-width by string-width's own rules), and only over-counts
+// multi-code-point emoji sequences — off the -p PONG path. A future path needing
+// true grapheme segmentation (or Intl.DateTimeFormat/NumberFormat/Collator, also
+// absent) is a real wall: wire a fuller Intl then. Locked by
+// test/node-shim-esm.test.cjs (which compares transpiled string-width to host).
+if (typeof globalThis.Intl === 'undefined') {
+  const MARK = /\p{Mark}/u;   // combining marks (accents, etc.)
+  const ZWJ = '‍';
+  class Segmenter {
+    constructor(_locales, options) { this._granularity = (options && options.granularity) || 'grapheme'; }
+    segment(input) {
+      const str = String(input);
+      const cps = Array.from(str);           // code-point aware
+      const clusters = [];
+      let i = 0, index = 0;
+      while (i < cps.length) {
+        let seg = cps[i]; i++;
+        // extend the cluster with trailing combining marks and ZWJ joins so a
+        // base+accent (and simple ZWJ emoji sequences) form ONE cluster —
+        // matching real grapheme segmentation for the common cases and, more
+        // importantly, not feeding string-width a lone mark it mishandles.
+        for (;;) {
+          if (i < cps.length && MARK.test(cps[i])) { seg += cps[i]; i++; continue; }
+          if (i < cps.length && cps[i] === ZWJ && i + 1 < cps.length) { seg += cps[i] + cps[i + 1]; i += 2; continue; }
+          break;
+        }
+        clusters.push({ segment: seg, index, input: str }); index += seg.length;
+      }
+      return { [Symbol.iterator]() { return clusters[Symbol.iterator](); } };
+    }
+    resolvedOptions() { return { granularity: this._granularity }; }
+  }
+  globalThis.Intl = { Segmenter };
+}
 globalThis.__nodeShim = {
   loadBuiltin, makeRequire, wallProxy, readTextSync, moduleLoad, resolveRequest, requireExt, KNOWN,
   version: 'm2',
 };
 
+// Async failures on the -p path settle in promise continuations the synchronous
+// try/catch below cannot see. tjs surfaces them via the WHATWG
+// 'unhandledrejection' event; print the reason + stack (Node prints unhandled
+// rejections by default) so an async wall is a NAMED error, not a silent exit 1.
+// QuickJS's Error#stack lacks the "Error: <msg>" head (see note above), so print
+// message and stack separately.
+globalThis.addEventListener?.('unhandledrejection', (ev) => {
+  const r = ev && ev.reason;
+  try { ev.preventDefault?.(); } catch { /* ignore */ }
+  console.error('node-shim: unhandledRejection:');
+  console.error(r && r.stack ? `${r}\n${r.stack}` : String(r));
+});
+
 const entry = tjs.args[3];
 if (!entry) { console.error('usage: tjs run loader.cjs <entry.cjs> [args...]'); tjs.exit(64); }
 const entryAbs = P.resolve(entry);
 process.argv = [tjs.exePath ?? 'tjs', entryAbs, ...tjs.args.slice(4)];
+if (tjs.env.CLODE_PROBE) { try { evalModule(P.resolve(tjs.env.CLODE_PROBE)); } catch (e) { console.error('probe err', e); } }
 try {
   evalModule(entryAbs, true);
 } catch (e) {

@@ -516,6 +516,22 @@ BunWebSocket.CONNECTING = 0; BunWebSocket.OPEN = 1; BunWebSocket.CLOSING = 2; Bu
 // sites get header support; Node's native one would silently drop the auth header.
 globalThis.WebSocket = BunWebSocket;
 
+// A ws-shaped module for when the real `ws` isn't loadable: capturing it (the
+// bundle does `require("ws")` / `P(require("ws"))` at module-load time, before
+// any socket is opened) must NOT be fatal — only CONSTRUCTING a WebSocket/Server
+// is a real "use". This matches this file's own contract ("fail loud at the
+// first WebSocket USE") and lets the non-WebSocket -p path, which merely captures
+// ws, proceed. BunWebSocket already fatals on construction; the Server forms fatal
+// on construction too. Locked by test/node-shim-bunshim.test.cjs.
+function _wsServerFatal() { _wsFatal(); }
+const _wsLazyModule = Object.assign(BunWebSocket, {
+  WebSocket: BunWebSocket,
+  default: BunWebSocket,
+  WebSocketServer: _wsServerFatal,
+  Server: _wsServerFatal,
+  createWebSocketStream: _wsServerFatal,
+});
+
 // undici: Node bundles undici internally but doesn't expose the bare module, and
 // the bundle's proxy path does require("undici").setGlobalDispatcher(new
 // EnvHttpProxyAgent(...)). We don't reimplement undici — real proxying is delegated
@@ -541,7 +557,7 @@ Module._load = function (request, parent, isMain) {
   if (Object.prototype.hasOwnProperty.call(BUN_BUILTINS, request)) return BUN_BUILTINS[request];
   // `ws` is a required host dependency: real module if installed, else fail loud
   // (no silent no-connect stub — see the WebSocket adapter above).
-  if (request === 'ws') { if (_ws) return _ws; _wsFatal(); }
+  if (request === 'ws') { return _ws || _wsLazyModule; }
   if (Object.prototype.hasOwnProperty.call(HOST_MODULES, request)) {
     try { return _load.call(this, request, parent, isMain); }   // prefer a real install
     catch (_) { return HOST_MODULES[request]; }                 // else the host stub

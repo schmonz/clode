@@ -23,7 +23,20 @@ class EventEmitter {
   }
   listenerCount(name) { return this.#listeners.get(name)?.length ?? 0; }
   listeners(name) { return (this.#listeners.get(name) ?? []).map((e) => e.fn); }
+  rawListeners(name) { return this.listeners(name); }
   addListener(name, fn) { return this.on(name, fn); }
+  // Prepend variants (Task 4 wall-adjacent): insert at the FRONT of the list.
+  prependListener(name, fn) { (this.#listeners.get(name) ?? this.#listeners.set(name, []).get(name)).unshift({ fn, once: false }); return this; }
+  prependOnceListener(name, fn) { (this.#listeners.get(name) ?? this.#listeners.set(name, []).get(name)).unshift({ fn, once: true }); return this; }
+  eventNames() { return [...this.#listeners.keys()].filter((k) => this.#listeners.get(k).length > 0); }
+  // setMaxListeners/getMaxListeners (Task 4 wall): the -p bundle subclasses
+  // EventEmitter and calls this.setMaxListeners(0) in its constructor. Real:
+  // stores the cap and returns it; 0 means unlimited (Node semantics).
+  #maxListeners = undefined;
+  setMaxListeners(n) { this.#maxListeners = n; return this; }
+  getMaxListeners() { return this.#maxListeners === undefined ? EventEmitter.defaultMaxListeners : this.#maxListeners; }
 }
+EventEmitter.defaultMaxListeners = 10;
+EventEmitter.EventEmitter = EventEmitter;
 module.exports = { EventEmitter, default: EventEmitter };
 module.exports.once = (emitter, name) => new Promise((res) => emitter.once(name, (...a) => res(a)));

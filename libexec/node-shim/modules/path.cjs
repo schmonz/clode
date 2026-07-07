@@ -106,5 +106,93 @@ function parse(p) {
   return { root, dir: dirname(p), base, ext, name: base.slice(0, base.length - ext.length) };
 }
 
-module.exports = { sep, delimiter, isAbsolute, normalize, join, resolve, dirname, basename, extname, relative, parse, posix: null };
+// ---- win32 surface (Task 4 wall) ----
+// The -p bundle does `require('path/win32')` and calls .join/.dirname/
+// .isAbsolute/.delimiter inside its Windows git-bash-detection branch (finding
+// `bin/bash.exe`). That branch is dead on darwin, but the module must load and
+// the methods must be REAL functions with correct Windows semantics (not the
+// posix impl — win32 uses `\` sep, `;` delimiter, drive/UNC roots). These are
+// genuine win32 implementations, characterized against host node's path.win32
+// by test/node-shim-path.test.cjs (win32 row). Only the members the boot uses
+// (isAbsolute/join/dirname/normalize + sep/delimiter) are implemented; the rest
+// of win32 (relative/parse/basename/extname) is added test-first if a later
+// path drives it.
+const win32sep = '\\';
+const win32delimiter = ';';
+
+function win32IsAbsolute(p) {
+  if (typeof p !== 'string' || p.length === 0) return false;
+  const c0 = p[0];
+  if (c0 === '/' || c0 === '\\') return true;                      // rooted / UNC
+  if (p.length > 2 && /[a-zA-Z]/.test(c0) && p[1] === ':') {
+    const c2 = p[2];
+    return c2 === '/' || c2 === '\\';                              // drive-absolute
+  }
+  return false;
+}
+
+// Length of the "root" prefix: UNC (\\server\share[\]), drive (C:[\]), or a
+// lone leading separator (root of current drive).
+function win32RootLen(p) {
+  let m = /^[\\/]{2}[^\\/]+[\\/]+[^\\/]+(?:[\\/]|$)/.exec(p);
+  if (m) return m[0].length;
+  m = /^[a-zA-Z]:[\\/]?/.exec(p);
+  if (m) return m[0].length;
+  if (/^[\\/]/.test(p)) return 1;
+  return 0;
+}
+
+function win32Normalize(p) {
+  if (p.length === 0) return '.';
+  let device = '';
+  let isAbs = false;
+  let rest = p;
+  let m = /^([\\/]{2}[^\\/]+[\\/]+[^\\/]+)([\\/]?)/.exec(p);
+  if (m) { device = m[1].replace(/\//g, '\\'); isAbs = true; rest = p.slice(m[0].length); }
+  else {
+    m = /^([a-zA-Z]:)([\\/]?)/.exec(p);
+    if (m) { device = m[1]; if (m[2]) isAbs = true; rest = p.slice(m[0].length); }
+    else if (/^[\\/]/.test(p)) { isAbs = true; rest = p.replace(/^[\\/]+/, ''); }
+  }
+  const normed = normalizeArray(rest.split(/[\\/]+/), !isAbs);
+  let tail = normed.join('\\');
+  if (!tail && !isAbs) tail = '.';
+  const root = device + (isAbs ? '\\' : '');
+  const out = root + tail;
+  return out === '' ? '.' : out;
+}
+
+function win32Join(...args) {
+  const parts = args.filter((a) => a !== '' && a != null);
+  if (parts.length === 0) return '.';
+  return win32Normalize(parts.join('\\'));
+}
+
+function win32Dirname(p) {
+  if (p.length === 0) return '.';
+  const rootLen = win32RootLen(p);
+  let lastSep = -1, seenNonSep = false;
+  for (let i = p.length - 1; i >= rootLen; i--) {
+    const c = p[i];
+    if (c === '\\' || c === '/') { if (seenNonSep) { lastSep = i; break; } }
+    else seenNonSep = true;
+  }
+  if (lastSep === -1) return rootLen > 0 ? p.slice(0, rootLen) : '.';
+  let dir = p.slice(0, lastSep);
+  if (dir.length < rootLen) dir = p.slice(0, rootLen);
+  return dir || '.';
+}
+
+const win32 = {
+  sep: win32sep,
+  delimiter: win32delimiter,
+  isAbsolute: win32IsAbsolute,
+  normalize: win32Normalize,
+  join: win32Join,
+  dirname: win32Dirname,
+};
+
+module.exports = { sep, delimiter, isAbsolute, normalize, join, resolve, dirname, basename, extname, relative, parse, posix: null, win32 };
 module.exports.posix = module.exports;
+win32.win32 = win32;
+win32.posix = module.exports;

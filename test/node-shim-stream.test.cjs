@@ -118,3 +118,54 @@ test('stream: async iteration over Readable matches node', (t) => {
   assert.strictEqual(r.status, 0, r.stderr);
   assert.strictEqual(r.stdout.trim(), 'PONG');
 });
+
+// Wall (Task 4): the -p bundle does `class X extends require('stream').Transform`
+// (SSE/text pipelines). Transform must be a real constructor whose subclass
+// _transform/_flush run and whose output ('data' chunks, then 'end') matches
+// host node.
+test('stream: Transform subclass (_transform + _flush) matches node', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const f = prog(`
+    const { Transform } = require('node:stream');
+    class Upper extends Transform {
+      _transform(chunk, enc, cb) { cb(null, chunk.toString().toUpperCase()); }
+      _flush(cb) { cb(null, '!'); }
+    }
+    const out = [];
+    const up = new Upper();
+    up.on('data', (d) => out.push(d.toString()));
+    up.on('end', () => console.log(JSON.stringify({ out, joined: out.join('') })));
+    up.write('po'); up.write('ng'); up.end();
+  `);
+  const node = JSON.parse(require('node:child_process')
+    .execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
+  assert.strictEqual(node.joined, 'PONG!');
+});
+
+// Wall (Task 4): the -p bundle captures require('stream/consumers') and
+// stream/promises to drain response/body streams. text/json/buffer over a
+// node-shim Readable must match host node.
+test('stream/consumers + stream/promises consume a Readable like node', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const f = prog(`
+    const { Readable } = require('stream');
+    const consumers = require('stream/consumers');
+    const sp = require('stream/promises');
+    (async () => {
+      const text = await consumers.text(Readable.from(['PO', 'NG']));
+      const json = await consumers.json(Readable.from(['{"a":', '1}']));
+      const buf = await consumers.buffer(Readable.from(['xy', 'z']));
+      const fin = typeof sp.finished === 'function' && typeof sp.pipeline === 'function';
+      console.log(JSON.stringify({ text, json, buf: buf.toString(), fin }));
+    })();
+  `);
+  const node = JSON.parse(require('node:child_process')
+    .execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
+  assert.strictEqual(node.text, 'PONG');
+});

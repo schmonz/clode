@@ -78,3 +78,20 @@ test('loader: unimplemented builtin fails loud with the contract message', (t) =
   assert.notStrictEqual(r.status, 0);
   assert.match(r.stderr, /node-shim: dgram\.createSocket not implemented/);
 });
+
+// Wall (Task 4): the -p bundle wraps some builtins with an ESM-interop helper
+// `__toESM(require('http'))` that reads `.__esModule` FIRST. A real CJS builtin
+// has no `__esModule` (reads as undefined), so the wallProxy must return
+// undefined for that interop probe — NOT wall — while still walling loudly on
+// any real API. This lets a module that merely *captures* an unimplemented
+// builtin (but never calls it on the -p path) load.
+test('loader: wallProxy is ESM-interop safe (__esModule undefined, real API walls)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-interop-'));
+  // The interop probe must NOT throw; the real method call still must.
+  fs.writeFileSync(path.join(dir, 'ok.cjs'),
+    'const h = require("node:dgram"); console.log(JSON.stringify({ esm: h.__esModule ?? null }));\n');
+  const ok = runLoader(path.join(dir, 'ok.cjs'));
+  assert.strictEqual(ok.status, 0, ok.stderr);
+  assert.deepStrictEqual(JSON.parse(ok.stdout.trim()), { esm: null });
+});
