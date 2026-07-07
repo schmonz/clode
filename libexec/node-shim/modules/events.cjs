@@ -40,3 +40,26 @@ EventEmitter.defaultMaxListeners = 10;
 EventEmitter.EventEmitter = EventEmitter;
 module.exports = { EventEmitter, default: EventEmitter };
 module.exports.once = (emitter, name) => new Promise((res) => emitter.once(name, (...a) => res(a)));
+
+// Module-level events.setMaxListeners(n, ...targets) (Node 15+) — DISTINCT from
+// the EventEmitter instance method. The -p bundle's AbortController helper (`Jl`)
+// calls `require('events').setMaxListeners(n, abortController.signal)` to raise
+// the listener cap on an AbortSignal; a missing module-level function throws
+// `TypeError: not a function` and aborts session loading (Stu) before the
+// Messages round-trip. Node: with no targets, sets EventEmitter.defaultMaxListeners;
+// with targets, sets the cap on each (an EventEmitter via its setMaxListeners, an
+// EventTarget/AbortSignal via a symbol-keyed slot). Returns undefined.
+// Characterized by test/node-shim-core.test.cjs (events.setMaxListeners row).
+const kMaxListeners = Symbol.for('nodejs.events.maxListeners');
+module.exports.setMaxListeners = function setMaxListeners(n = EventEmitter.defaultMaxListeners, ...targets) {
+  if (targets.length === 0) { EventEmitter.defaultMaxListeners = n; return; }
+  for (const t of targets) {
+    if (t && typeof t.setMaxListeners === 'function') t.setMaxListeners(n);
+    else if (t) { try { t[kMaxListeners] = n; } catch { /* frozen target: ignore */ } }
+  }
+};
+module.exports.getMaxListeners = function getMaxListeners(target) {
+  if (target && typeof target.getMaxListeners === 'function') return target.getMaxListeners();
+  if (target && target[kMaxListeners] !== undefined) return target[kMaxListeners];
+  return EventEmitter.defaultMaxListeners;
+};

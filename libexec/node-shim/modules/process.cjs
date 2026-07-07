@@ -145,7 +145,13 @@ module.exports = {
     }
     return tjs.exit(c ?? this.exitCode ?? 0);
   },
-  exitCode: 0,
+  // process.exitCode defaults to UNDEFINED in Node (a code is only present once
+  // set), NOT 0. The -p bundle guards `if (process.exitCode !== undefined) {
+  // /* graceful shutdown */ return }` right after startup — a default of 0 makes
+  // that guard fire and silently ABORTS the action before the Messages
+  // round-trip. exit() already falls back through `?? 0`, so undefined is safe.
+  // Characterized by test/node-shim-core.test.cjs (process.exitCode default row).
+  exitCode: undefined,
   // process.version (Task 4 wall): the boot gates on
   // process.version.match(/^v(\d+)\./) >= 22. A 'v'-prefixed semver string, kept
   // in step with versions.node (the shim presents as a Node 24 host).

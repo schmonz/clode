@@ -39,6 +39,62 @@ test('events/util/process characterization vs host node', (t) => {
   assert.strictEqual(r.stdout.trim(), nodeOut);
 });
 
+// Wall (Task 4, -p round-trip): process.exitCode defaults to UNDEFINED in node
+// (not 0). The bundle guards `if (process.exitCode !== undefined) { /* graceful
+// shutdown */ return }` right after startup — a default of 0 made that guard
+// fire and silently ABORT the action before the Messages POST.
+test('process.exitCode defaults to undefined (matches node), not 0', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-exitcode-'));
+  // Node's own default: a plain node run of the same fixture reports the same.
+  const nodeF = path.join(dir, 'nd.cjs');
+  fs.writeFileSync(nodeF, `console.log(JSON.stringify({ isUndef: process.exitCode === undefined, notVoid: process.exitCode !== undefined }));`);
+  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [nodeF], { encoding: 'utf8' }).trim());
+  assert.deepStrictEqual(node, { isUndef: true, notVoid: false }, 'node baseline');
+
+  // The shim must match: default undefined (so the bundle's graceful-shutdown
+  // guard `process.exitCode !== undefined` does NOT fire), AND remain settable
+  // as a property (the value reads back).
+  const f = path.join(dir, 'p.cjs');
+  fs.writeFileSync(f, `
+    const out = { isUndef: process.exitCode === undefined, notVoid: process.exitCode !== undefined };
+    process.exitCode = 3;               // still settable as a property
+    out.afterSet = process.exitCode;
+    console.log(JSON.stringify(out));`);
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), { isUndef: true, notVoid: false, afterSet: 3 });
+});
+
+// Wall (Task 4): events.setMaxListeners is a MODULE-LEVEL function (Node 15+),
+// distinct from the EventEmitter instance method. The bundle's AbortController
+// helper calls `require('events').setMaxListeners(n, signal)` on an AbortSignal;
+// a missing module function threw `TypeError: not a function` and crashed session
+// loading before the round-trip.
+test('events.setMaxListeners (module-level) is callable on emitters + AbortSignal', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-setmax-'));
+  const f = path.join(dir, 'p.cjs');
+  fs.writeFileSync(f, `
+    const events = require('node:events');
+    const out = { type: typeof events.setMaxListeners };
+    const ee = new events.EventEmitter();
+    events.setMaxListeners(15, ee);
+    out.ee = ee.getMaxListeners();
+    // On an AbortSignal (EventTarget): must not throw.
+    const ac = new AbortController();
+    events.setMaxListeners(20, ac.signal);
+    out.signalOk = true;
+    // No targets: sets the default.
+    events.setMaxListeners(9);
+    out.def = events.EventEmitter.defaultMaxListeners;
+    console.log(JSON.stringify(out));`);
+  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
+});
+
 test('process: env enumeration matches host node (Object.keys/spread)', (t) => {
   if (skipUnlessTjs(t)) return;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-envenum-'));
