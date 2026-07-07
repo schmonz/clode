@@ -28,6 +28,20 @@ const te = new TextEncoder();
 
 const constants = { F_OK: 0, X_OK: 1, W_OK: 2, R_OK: 4 };
 
+// latin1/binary decode: 1 byte -> 1 code point (0..255). This is the
+// extractor's core representation (extract-claude-js reads the native binary as
+// a latin1 string so byte regexes become string regexes). Chunked so a large
+// (multi-MB) binary does not blow String.fromCharCode's argument limit.
+function latin1Decode(bytes) {
+  let s = '';
+  const CH = 0x8000;
+  for (let i = 0; i < bytes.length; i += CH) {
+    s += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + CH, bytes.length)));
+  }
+  return s;
+}
+const isLatin1 = (enc) => enc === 'latin1' || enc === 'binary';
+
 class Stats {
   #kind;
   constructor(raw) { this.size = raw.size; this.mode = raw.mode; this.mtimeMs = raw.mtimeMs; this.#kind = raw.kind; }
@@ -51,8 +65,12 @@ function readAll(fd) {
 function readFileSync(p, opts) {
   const enc = typeof opts === 'string' ? opts : opts?.encoding;
   const fd = FSS.open(p, 'r');
-  try { const data = readAll(fd); return enc === 'utf8' || enc === 'utf-8' ? td.decode(data) : data; }
-  finally { FSS.close(fd); }
+  try {
+    const data = readAll(fd);
+    if (enc === 'utf8' || enc === 'utf-8') return td.decode(data);
+    if (isLatin1(enc)) return latin1Decode(data);
+    return data;
+  } finally { FSS.close(fd); }
 }
 
 function writeFileSync(p, data) {
@@ -115,7 +133,9 @@ const promises = {
   readFile: async (p, opts) => {
     const enc = typeof opts === 'string' ? opts : opts?.encoding;
     const data = await tjs.readFile(p); // Uint8Array, verified against pinned tjs v26.6.0
-    return enc === 'utf8' || enc === 'utf-8' ? td.decode(data) : data;
+    if (enc === 'utf8' || enc === 'utf-8') return td.decode(data);
+    if (isLatin1(enc)) return latin1Decode(data);
+    return data;
   },
   writeFile: async (p, data) => { writeFileSync(p, data); },
   stat: async (p) => statSync(p),

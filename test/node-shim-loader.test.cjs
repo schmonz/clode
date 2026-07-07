@@ -46,6 +46,30 @@ test('loader: CJS semantics under tjs', (t) => {
   });
 });
 
+test('loader: require.main is the entry module (node semantics)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-reqmain-'));
+  // A required child sees require.main !== module (it is not the entry);
+  // the entry sees require.main === module. Mirrors node's contract, which
+  // extract-claude-js.cjs relies on via `if (require.main === module)`.
+  fs.writeFileSync(path.join(dir, 'child.cjs'),
+    'module.exports = { childIsMain: require.main === module };\n');
+  fs.writeFileSync(path.join(dir, 'entry.cjs'), `
+const child = require('./child.cjs');
+console.log(JSON.stringify({
+  entryIsMain: require.main === module,
+  childIsMain: child.childIsMain,
+  mainIsEntry: require.main === module,
+  mainFilename: require.main && require.main.filename === __filename,
+}));
+`);
+  const r = runLoader(path.join(dir, 'entry.cjs'));
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), {
+    entryIsMain: true, childIsMain: false, mainIsEntry: true, mainFilename: true,
+  });
+});
+
 test('loader: unimplemented builtin fails loud with the contract message', (t) => {
   if (skipUnlessTjs(t)) return;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-wall-'));

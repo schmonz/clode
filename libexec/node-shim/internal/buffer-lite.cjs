@@ -33,6 +33,10 @@ class Buffer extends Uint8Array {
     if (typeof src === 'string') {
       if (enc === 'hex') return new Buffer(Uint8Array.from(src.match(/../g) ?? [], (h) => parseInt(h, 16)));
       if (enc === 'base64') return new Buffer(b64decode(src));
+      // latin1/binary: low-byte of each code point (NOT utf-8). This is the
+      // extractor's write path: Buffer.from(latin1Text, 'latin1') must map
+      // 1 char -> 1 byte or bytes >= 0x80 corrupt.
+      if (enc === 'latin1' || enc === 'binary') return new Buffer(Uint8Array.from({ length: src.length }, (_, i) => src.charCodeAt(i) & 0xff));
       return new Buffer(te.encode(src));
     }
     if (src instanceof ArrayBuffer) return new Buffer(new Uint8Array(src));
@@ -51,6 +55,11 @@ class Buffer extends Uint8Array {
   toString(enc) {
     if (enc === 'hex') return [...this].map((x) => x.toString(16).padStart(2, '0')).join('');
     if (enc === 'base64') return b64encode(this);
+    if (enc === 'latin1' || enc === 'binary') {
+      let s = ''; const CH = 0x8000;
+      for (let i = 0; i < this.length; i += CH) s += String.fromCharCode.apply(null, this.subarray(i, Math.min(i + CH, this.length)));
+      return s;
+    }
     return td.decode(this);
   }
   slice(a, b) { return new Buffer(super.slice(a, b)); }

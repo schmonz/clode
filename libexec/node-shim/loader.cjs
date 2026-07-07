@@ -100,6 +100,10 @@ function loadBuiltin(name) {
 
 /* ---- CJS module machinery */
 const moduleCache = new Map();
+// Node semantics: require.main is the ENTRY module object, shared across every
+// require(). The entry sees require.main === module; a required child sees
+// require.main !== module. extract-claude-js.cjs gates main() on exactly this.
+let mainModule = null;
 function resolveRequest(request, fromDir) {
   const bare = request.startsWith('node:') ? request.slice(5) : request;
   if (KNOWN.includes(bare)) return { builtin: bare };
@@ -142,15 +146,19 @@ function makeRequire(fromDir) {
     const r = resolveRequest(request, fromDir);
     return r.builtin ? `node:${r.builtin}` : r.file;
   };
+  // Live getter: mainModule is null until the entry module object is created,
+  // so every require() (whenever called) observes the same entry module.
+  Object.defineProperty(req, 'main', { configurable: true, enumerable: true, get: () => mainModule });
   return req;
 }
 
-function evalModule(file) {
+function evalModule(file, isEntry = false) {
   const cached = moduleCache.get(file);
   if (cached) return cached.exports;
   let src = readTextSync(file);
   if (src.startsWith('#!')) src = src.slice(src.indexOf('\n') + 1);
   const module = { exports: {}, filename: file };
+  if (isEntry) mainModule = module;
   moduleCache.set(file, module);
   const dir = P.dirname(file);
   const fn = new Function('exports', 'require', 'module', '__filename', '__dirname', src);
@@ -173,7 +181,7 @@ if (!entry) { console.error('usage: tjs run loader.cjs <entry.cjs> [args...]'); 
 const entryAbs = P.resolve(entry);
 process.argv = [tjs.exePath ?? 'tjs', entryAbs, ...tjs.args.slice(4)];
 try {
-  evalModule(entryAbs);
+  evalModule(entryAbs, true);
 } catch (e) {
   // QuickJS's Error#stack is the call-frame trace ONLY — it does not, unlike
   // V8, prepend "Error: <message>" as its first line — so print the message

@@ -50,3 +50,47 @@ test('fs characterization vs host node', (t) => {
   assert.strictEqual(r.status, 0, r.stderr);
   assert.strictEqual(r.stdout.trim(), nodeOut);
 });
+
+// latin1 byte round-trip: this is the extractor's core representation
+// (extract-claude-js reads the native binary as a latin1 string so 1 char == 1
+// byte, then writes Buffer.from(text, 'latin1')). readFileSync(,'latin1') must
+// return a string of code points 0..255, and Buffer.from(str,'latin1') must
+// re-encode low-byte (NOT utf-8, which would corrupt bytes >= 0x80).
+const LATIN1_PROG = `
+const fs = require('node:fs');
+const path = require('node:path');
+const dir = process.argv[2];
+// Every byte value 0..255, twice, so a naive utf-8 round-trip is visibly wrong.
+const src = Buffer.from(Array.from({ length: 512 }, (_, i) => i & 0xff));
+const srcPath = path.join(dir, 'bytes.bin');
+fs.writeFileSync(srcPath, src);
+const s = fs.readFileSync(srcPath, 'latin1');
+const outPath = path.join(dir, 'rt.bin');
+fs.writeFileSync(outPath, Buffer.from(s, 'latin1'));
+const rt = fs.readFileSync(outPath); // bytes
+console.log(JSON.stringify({
+  typeofRead: typeof s,
+  len: s.length,
+  cp0: s.charCodeAt(0), cp200: s.charCodeAt(200), cp255: s.charCodeAt(255),
+  roundTripLen: rt.length,
+  roundTripEqual: Buffer.from(rt).equals(src),
+}));
+`;
+
+test('fs.readFileSync latin1 + Buffer.from latin1 round-trip vs host node', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-latin1-'));
+  const f = path.join(base, 'l1.cjs');
+  fs.writeFileSync(f, LATIN1_PROG);
+  const nodeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-l1-node-'));
+  const tjsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-l1-tjs-'));
+  const nodeOut = require('node:child_process')
+    .execFileSync(process.execPath, [f, nodeDir], { encoding: 'utf8' }).trim();
+  const r = runLoader(f, [tjsDir]);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.stdout.trim(), nodeOut);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), {
+    typeofRead: 'string', len: 512, cp0: 0, cp200: 200, cp255: 255,
+    roundTripLen: 512, roundTripEqual: true,
+  });
+});
