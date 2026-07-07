@@ -28,6 +28,17 @@ quickjs-ng-js_exepath-netbsd patch 2026-07-06
 #   Applied to the guest's extracted quickjs-ng source (patch -p1) before cmake; upstream fix
 #   candidate. Enables the run-from-bytecode memory measurement the North Star turns on.
 # txiki-sync-fs.patch: adds __tjs_fs_sync global (sync POSIX fs for CJS interop), 2026-07-07
+# txiki-sync-spawn.patch: adds __tjs_spawn_sync global (sync posix_spawn + poll()-drain
+#   for CJS spawnSync interop), 2026-07-07. Main-thread blocking by design (like sync-fs);
+#   does NOT touch the JS stack size or run on a worker, so the worker C-stack caveat does
+#   NOT apply. cwd via posix_spawn_file_actions_addchdir_np (macOS 10.15+/glibc 2.29+),
+#   guarded #if __APPLE__||__GLIBC__; on a build without it, requesting cwd throws EINVAL.
+#   NOTE: addchdir_np is DEPRECATED on macOS 26 (superseded by the POSIX addchdir) and the
+#   build is -Werror, so the call is wrapped in a local -Wdeprecated-declarations pragma
+#   push/ignore/pop (clang+gcc) rather than forking the name per OS version — still
+#   functional on 26. NetBSD (M4) MUST re-check addchdir_np availability before the guest
+#   build; if absent, add a fallback there. Characterized by
+#   test/node-shim-child-process.test.cjs (sync rows).
 # txiki-default-stack-size.patch: raises TJS__DEFAULT_STACK_SIZE from txiki's stock 1MB
 #   release default to 4MB, 2026-07-07. The real extracted Claude Code bundle (cli.cjs,
 #   ~22MB minified) recurses deeper at startup than 1MB admits and overflows before the

@@ -1,0 +1,307 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -144,6 +144,7 @@ add_library(tjs STATIC
+     src/mod_engine.c
+     src/mod_fs.c
+     src/mod_fs_sync.c
++    src/mod_spawn_sync.c
+     src/mod_fswatch.c
+     src/mod_hashing.c
+     src/mod_os.c
+diff --git a/src/private.h b/src/private.h
+--- a/src/private.h
++++ b/src/private.h
+@@ -127,6 +127,7 @@ void tjs__mod_error_init(JSContext *ctx, JSValue ns);
+ void tjs__mod_ffi_init(JSContext *ctx, JSValue ns);
+ void tjs__mod_fs_init(JSContext *ctx, JSValue ns);
+ void tjs__mod_fs_sync_init(JSContext *ctx, JSValue ns);
++void tjs__mod_spawn_sync_init(JSContext *ctx, JSValue ns);
+ void tjs__mod_fswatch_init(JSContext *ctx, JSValue ns);
+ void tjs__mod_hashing_init(JSContext *ctx, JSValue ns);
+ void tjs__mod_httpclient_init(JSContext *ctx, JSValue ns);
+diff --git a/src/vm.c b/src/vm.c
+--- a/src/vm.c
++++ b/src/vm.c
+@@ -244,6 +244,7 @@ static void tjs__bootstrap_core(JSContext *ctx, JSValue ns) {
+ #endif
+     tjs__mod_fs_init(ctx, ns);
+     tjs__mod_fs_sync_init(ctx, ns);
++    tjs__mod_spawn_sync_init(ctx, ns);
+     tjs__mod_fswatch_init(ctx, ns);
+     tjs__mod_os_init(ctx, ns);
+     tjs__mod_process_init(ctx, ns);
+diff --git a/src/mod_spawn_sync.c b/src/mod_spawn_sync.c
+new file mode 100644
+--- /dev/null
++++ b/src/mod_spawn_sync.c
+@@ -0,0 +1,269 @@
++/* Synchronous spawn primitive for CommonJS interop (node-shim).
++ * posix_spawn + poll()-drain, main-thread blocking by design. Exposed as
++ * the global `__tjs_spawn_sync`. Mirrors mod_fs_sync.c; upstream candidate. */
++#include "private.h"
++#include "utils.h"
++#include <errno.h>
++#include <fcntl.h>
++#include <poll.h>
++#include <signal.h>
++#include <spawn.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/wait.h>
++#include <time.h>
++#include <unistd.h>
++
++extern char **environ;
++
++static const char *errno_code(int e) {
++    switch (e) {
++    case ENOENT:  return "ENOENT";
++    case EACCES:  return "EACCES";
++    case EPERM:   return "EPERM";
++    case ENOEXEC: return "ENOEXEC";
++    case E2BIG:   return "E2BIG";
++    case EINVAL:  return "EINVAL";
++    default:      return "EUNKNOWN";
++    }
++}
++
++static JSValue throw_errno(JSContext *ctx, int e, const char *op, const char *path) {
++    JSValue err = JS_NewError(ctx);
++    char buf[1152];
++    snprintf(buf, sizeof(buf), "%s, %s '%s'", errno_code(e), op, path ? path : "");
++    JS_DefinePropertyValueStr(ctx, err, "message", JS_NewString(ctx, buf), JS_PROP_C_W_E);
++    JS_DefinePropertyValueStr(ctx, err, "errno", JS_NewInt32(ctx, e), JS_PROP_C_W_E);
++    JS_DefinePropertyValueStr(ctx, err, "code", JS_NewString(ctx, errno_code(e)), JS_PROP_C_W_E);
++    JS_DefinePropertyValueStr(ctx, err, "syscall", JS_NewString(ctx, op), JS_PROP_C_W_E);
++    return JS_Throw(ctx, err);
++}
++
++/* growable byte buffer */
++typedef struct { uint8_t *data; size_t len, cap; } buf_t;
++static int buf_append(buf_t *b, const uint8_t *p, size_t n, size_t max) {
++    if (b->len >= max) return 0;
++    if (b->len + n > max) n = max - b->len;
++    if (n == 0) return 0;
++    if (b->len + n > b->cap) {
++        size_t nc = b->cap ? b->cap : 4096;
++        while (nc < b->len + n) nc *= 2;
++        uint8_t *nd = realloc(b->data, nc);
++        if (!nd) return -1;
++        b->data = nd; b->cap = nc;
++    }
++    memcpy(b->data + b->len, p, n);
++    b->len += n;
++    return 0;
++}
++
++static long now_ms(void) {
++    struct timespec ts;
++    clock_gettime(CLOCK_MONOTONIC, &ts);
++    return (long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
++}
++
++static char **js_string_array(JSContext *ctx, JSValueConst arr, int prepend_argc, const char *prepend) {
++    /* Build a NULL-terminated char** from a JS string[]; if prepend != NULL it
++     * becomes element 0 (argv[0]). Caller frees with free_string_array. */
++    JSValue lenv = JS_GetPropertyStr(ctx, arr, "length");
++    uint32_t n = 0; JS_ToUint32(ctx, &n, lenv); JS_FreeValue(ctx, lenv);
++    char **out = calloc((size_t)n + prepend_argc + 1, sizeof(char *));
++    if (!out) return NULL;
++    size_t i = 0;
++    if (prepend) out[i++] = strdup(prepend);
++    for (uint32_t k = 0; k < n; k++) {
++        JSValue e = JS_GetPropertyUint32(ctx, arr, k);
++        const char *s = JS_ToCString(ctx, e);
++        out[i++] = strdup(s ? s : "");
++        if (s) JS_FreeCString(ctx, s);
++        JS_FreeValue(ctx, e);
++    }
++    out[i] = NULL;
++    return out;
++}
++static void free_string_array(char **a) {
++    if (!a) return;
++    for (char **p = a; *p; p++) free(*p);
++    free(a);
++}
++
++static JSValue js_spawn_sync(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
++    const char *file = JS_ToCString(ctx, argv[0]);
++    if (!file) return JS_EXCEPTION;
++    JSValue opts = argv[2];
++
++    char **cargv = js_string_array(ctx, argv[1], 1, file);
++    JSValue envv = JS_GetPropertyStr(ctx, opts, "env");
++    char **cenv = JS_IsArray(envv) ? js_string_array(ctx, envv, 0, NULL) : NULL;
++    JS_FreeValue(ctx, envv);
++
++    JSValue cwdv = JS_GetPropertyStr(ctx, opts, "cwd");
++    const char *cwd = JS_IsString(cwdv) ? JS_ToCString(ctx, cwdv) : NULL;
++
++    JSValue inv = JS_GetPropertyStr(ctx, opts, "input");
++    size_t input_len = 0;
++    uint8_t *input = (!JS_IsUndefined(inv) && !JS_IsNull(inv)) ? JS_GetArrayBuffer(ctx, &input_len, inv) : NULL;
++
++    int64_t timeout_ms = 0, max_buffer = 1 << 24;
++    JSValue tv = JS_GetPropertyStr(ctx, opts, "timeoutMs");
++    if (JS_IsNumber(tv)) JS_ToInt64(ctx, &timeout_ms, tv);
++    JS_FreeValue(ctx, tv);
++    JSValue mv = JS_GetPropertyStr(ctx, opts, "maxBuffer");
++    if (JS_IsNumber(mv)) JS_ToInt64(ctx, &max_buffer, mv);
++    JS_FreeValue(ctx, mv);
++
++#if !defined(__APPLE__) && !defined(__GLIBC__)
++    if (cwd) {
++        JSValue e = throw_errno(ctx, EINVAL, "spawn_sync_cwd_unsupported", file);
++        goto fail_early_ret; /* handled below */
++    fail_early_ret:
++        free_string_array(cargv); free_string_array(cenv);
++        if (cwd) JS_FreeCString(ctx, cwd); JS_FreeValue(ctx, cwdv); JS_FreeValue(ctx, inv); JS_FreeCString(ctx, file);
++        return e;
++    }
++#endif
++
++    int outp[2], errp[2], inp[2] = {-1, -1}, devnull = -1;
++    pipe(outp); pipe(errp);
++    int use_stdin = (input != NULL);
++    if (use_stdin) pipe(inp); else devnull = open("/dev/null", O_RDONLY);
++
++    posix_spawn_file_actions_t fa;
++    posix_spawn_file_actions_init(&fa);
++    if (use_stdin) {
++        posix_spawn_file_actions_adddup2(&fa, inp[0], 0);
++        posix_spawn_file_actions_addclose(&fa, inp[0]);
++        posix_spawn_file_actions_addclose(&fa, inp[1]);
++    } else {
++        posix_spawn_file_actions_adddup2(&fa, devnull, 0);
++        posix_spawn_file_actions_addclose(&fa, devnull);
++    }
++    posix_spawn_file_actions_adddup2(&fa, outp[1], 1);
++    posix_spawn_file_actions_addclose(&fa, outp[0]);
++    posix_spawn_file_actions_addclose(&fa, outp[1]);
++    posix_spawn_file_actions_adddup2(&fa, errp[1], 2);
++    posix_spawn_file_actions_addclose(&fa, errp[0]);
++    posix_spawn_file_actions_addclose(&fa, errp[1]);
++#if defined(__APPLE__) || defined(__GLIBC__)
++    /* addchdir_np: since macOS 10.15 / glibc 2.29. Deprecated on macOS 26 for
++     * the POSIX posix_spawn_file_actions_addchdir, but still functional; the
++     * build is -Werror, so suppress the deprecation locally rather than fork
++     * the name per OS version. M4 (NetBSD) re-checks availability. */
++    if (cwd) {
++#if defined(__clang__)
++#pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wdeprecated-declarations"
++#elif defined(__GNUC__)
++#pragma GCC diagnostic push
++#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
++#endif
++        posix_spawn_file_actions_addchdir_np(&fa, cwd);
++#if defined(__clang__)
++#pragma clang diagnostic pop
++#elif defined(__GNUC__)
++#pragma GCC diagnostic pop
++#endif
++    }
++#endif
++
++    pid_t pid = 0;
++    int rc = posix_spawn(&pid, file, &fa, NULL, cargv, cenv ? cenv : environ);
++    posix_spawn_file_actions_destroy(&fa);
++    close(outp[1]); close(errp[1]);
++    if (use_stdin) close(inp[0]); else close(devnull);
++
++    JSValue result;
++    if (rc != 0) {
++        close(outp[0]); close(errp[0]);
++        if (use_stdin) close(inp[1]);
++        result = throw_errno(ctx, rc, "spawn", file);
++        goto cleanup;
++    }
++
++    if (use_stdin) {
++        void (*old)(int) = signal(SIGPIPE, SIG_IGN);
++        size_t off = 0;
++        while (off < input_len) {
++            ssize_t w = write(inp[1], input + off, input_len - off);
++            if (w < 0) { if (errno == EINTR) continue; break; }
++            off += (size_t)w;
++        }
++        close(inp[1]);
++        signal(SIGPIPE, old);
++    }
++
++    buf_t ob = {0}, eb = {0};
++    struct pollfd pfds[2] = { { outp[0], POLLIN, 0 }, { errp[0], POLLIN, 0 } };
++    int open_count = 2, timed_out = 0;
++    long start = now_ms();
++    uint8_t rbuf[65536];
++    while (open_count > 0) {
++        int to = -1;
++        if (timeout_ms > 0) {
++            long rem = timeout_ms - (now_ms() - start);
++            if (rem <= 0) { timed_out = 1; break; }
++            to = (int)rem;
++        }
++        int pr = poll(pfds, 2, to);
++        if (pr < 0) { if (errno == EINTR) continue; break; }
++        if (pr == 0) { timed_out = 1; break; }
++        for (int k = 0; k < 2; k++) {
++            if (pfds[k].fd < 0) continue;
++            if (pfds[k].revents & (POLLIN | POLLHUP | POLLERR)) {
++                ssize_t n = read(pfds[k].fd, rbuf, sizeof(rbuf));
++                if (n > 0) {
++                    buf_append(k == 0 ? &ob : &eb, rbuf, (size_t)n, (size_t)max_buffer);
++                    if ((int64_t)(ob.len + eb.len) >= max_buffer) { timed_out = 1; break; }
++                } else {
++                    close(pfds[k].fd); pfds[k].fd = -1; open_count--;
++                }
++            }
++        }
++        if (timed_out) break;
++    }
++    if (pfds[0].fd >= 0) close(pfds[0].fd);
++    if (pfds[1].fd >= 0) close(pfds[1].fd);
++    if (timed_out) kill(pid, SIGKILL);
++
++    int wstatus = 0;
++    while (waitpid(pid, &wstatus, 0) < 0 && errno == EINTR) {}
++    int has_status = WIFEXITED(wstatus), has_sig = WIFSIGNALED(wstatus);
++
++    result = JS_NewObject(ctx);
++    JS_DefinePropertyValueStr(ctx, result, "pid", JS_NewInt32(ctx, pid), JS_PROP_C_W_E);
++    JS_DefinePropertyValueStr(ctx, result, "status",
++        (has_status && !timed_out) ? JS_NewInt32(ctx, WEXITSTATUS(wstatus)) : JS_NULL, JS_PROP_C_W_E);
++    JS_DefinePropertyValueStr(ctx, result, "signal",
++        has_sig ? JS_NewInt32(ctx, WTERMSIG(wstatus)) : (timed_out ? JS_NewInt32(ctx, SIGKILL) : JS_NULL), JS_PROP_C_W_E);
++    JS_DefinePropertyValueStr(ctx, result, "stdout",
++        JS_NewArrayBufferCopy(ctx, ob.data ? ob.data : (const uint8_t *)"", ob.len), JS_PROP_C_W_E);
++    JS_DefinePropertyValueStr(ctx, result, "stderr",
++        JS_NewArrayBufferCopy(ctx, eb.data ? eb.data : (const uint8_t *)"", eb.len), JS_PROP_C_W_E);
++    JS_DefinePropertyValueStr(ctx, result, "timedOut", JS_NewBool(ctx, timed_out), JS_PROP_C_W_E);
++    free(ob.data); free(eb.data);
++
++cleanup:
++    free_string_array(cargv); free_string_array(cenv);
++    if (cwd) JS_FreeCString(ctx, cwd);
++    JS_FreeValue(ctx, cwdv); JS_FreeValue(ctx, inv);
++    JS_FreeCString(ctx, file);
++    return result;
++}
++
++static const JSCFunctionListEntry spawn_sync_funcs[] = {
++    JS_CFUNC_DEF("spawn", 3, js_spawn_sync),
++};
++
++void tjs__mod_spawn_sync_init(JSContext *ctx, JSValue ns) {
++    (void)ns;
++    JSValue global = JS_GetGlobalObject(ctx);
++    JSValue obj = JS_NewObject(ctx);
++    JS_SetPropertyFunctionList(ctx, obj, spawn_sync_funcs, countof(spawn_sync_funcs));
++    /* Expose the single entry directly as the callable global for ergonomics:
++     * __tjs_spawn_sync(file, args, opts). */
++    JSValue fn = JS_GetPropertyStr(ctx, obj, "spawn");
++    JS_DefinePropertyValueStr(ctx, global, "__tjs_spawn_sync", fn, JS_PROP_C_W_E);
++    JS_FreeValue(ctx, obj);
++    JS_FreeValue(ctx, global);
++}
