@@ -70,14 +70,14 @@ index 60150c3..1d1a1e8 100644
      src/mod_os.c
 diff --git a/src/mod_fs_sync.c b/src/mod_fs_sync.c
 new file mode 100644
-index 0000000..162dafa
+index 0000000..e074d8c
 --- /dev/null
 +++ b/src/mod_fs_sync.c
 @@ -0,0 +1,229 @@
 +/* Synchronous fs primitives for CommonJS interop (node-shim).
 + * POSIX-direct, main-thread blocking by design. Exposed as the
-+ * global `__tjs_fs_sync`. Upstream candidate: see
-+ * the accompanying feature-proposal writeup. */
++ * global `__tjs_fs_sync`. Upstream candidate:
++ * See the accompanying feature-proposal writeup. */
 +#include "private.h"
 +#include "utils.h"
 +#include <dirent.h>
@@ -143,7 +143,7 @@ index 0000000..162dafa
 +    uint8_t *buf = js_malloc(ctx, len ? len : 1);
 +    if (!buf) return JS_EXCEPTION;
 +    ssize_t n = (pos >= 0) ? pread(fd, buf, len, (off_t)pos) : read(fd, buf, len);
-+    if (n < 0) { js_free(ctx, buf); return throw_errno(ctx, "read", NULL); }
++    if (n < 0) { int _e = errno; js_free(ctx, buf); errno = _e; return throw_errno(ctx, "read", NULL); }
 +    JSValue ab = JS_NewArrayBufferCopy(ctx, buf, n);
 +    js_free(ctx, buf);
 +    return ab;
@@ -152,9 +152,9 @@ index 0000000..162dafa
 +static JSValue js_fss_write(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
 +    int fd; int64_t pos; size_t len; uint8_t *buf;
 +    if (JS_ToInt32(ctx, &fd, argv[0])) return JS_EXCEPTION;
++    if (JS_ToInt64(ctx, &pos, argv[2])) return JS_EXCEPTION;
 +    buf = JS_GetArrayBuffer(ctx, &len, argv[1]);
 +    if (!buf) return JS_EXCEPTION;
-+    if (JS_ToInt64(ctx, &pos, argv[2])) return JS_EXCEPTION;
 +    ssize_t n = (pos >= 0) ? pwrite(fd, buf, len, (off_t)pos) : write(fd, buf, len);
 +    if (n < 0) return throw_errno(ctx, "write", NULL);
 +    return JS_NewInt64(ctx, n);
@@ -328,12 +328,6 @@ index 673f63f..2d08f25 100644
      tjs__mod_os_init(ctx, ns);
      tjs__mod_process_init(ctx, ns);
 ```
-
-**Before posting:** the header comment at the top of `mod_fs_sync.c` above
-already reads "see the accompanying feature-proposal writeup"; the copy of
-this patch kept in our own repo still carries an internal repo-path
-reference in that same comment line, which must be genericized to match the
-version above before this PR is opened.
 
 ## API summary
 
