@@ -28,5 +28,11 @@ quickjs-ng-js_exepath-netbsd patch 2026-07-06
 #   Applied to the guest's extracted quickjs-ng source (patch -p1) before cmake; upstream fix
 #   candidate. Enables the run-from-bytecode memory measurement the North Star turns on.
 # txiki-sync-fs.patch: adds __tjs_fs_sync global (sync POSIX fs for CJS interop), 2026-07-07
+# txiki-default-stack-size.patch: raises TJS__DEFAULT_STACK_SIZE from txiki's stock 1MB
+#   release default to 4MB, 2026-07-07. The real extracted Claude Code bundle (cli.cjs,
+#   ~22MB minified) recurses deeper at startup than 1MB admits and overflows before the
+#   CJS entry finishes evaluating — the SOLE wall on the M2 `--version` boot. 4MB clears
+#   it with headroom (measured recursion depth 1034 -> 4155) and stays well under the 8MB
+#   main-thread C stack on macOS/Linux. Characterized by test/node-shim-stack.test.cjs.
 # upstream: js_exepath + repl-eof-spin (quickjs-ng), sync-fs (txiki) — prepared 2026-07-07, awaiting user go-ahead to post
 # before-posting: DONE 2026-07-07 — txiki-sync-fs.patch is submission-ready (header de-jargoned; C hardened: read errno-capture around js_free, write resolves pos before JS_GetArrayBuffer to avoid detach-dangling)

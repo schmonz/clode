@@ -1,0 +1,11 @@
+diff --git a/src/vm.c b/src/vm.c
+--- a/src/vm.c
++++ b/src/vm.c
+@@ -42,3 +42,6 @@
+ #ifdef NDEBUG
+-#define TJS__DEFAULT_STACK_SIZE (1024 * 1024)
++/* node-shim: the real extracted Claude Code bundle (cli.cjs, ~22MB minified)
++ * recurses past txiki's 1MB release default at startup; 4MB clears it with
++ * headroom and stays well under the 8MB main-thread C stack on macOS/Linux. */
++#define TJS__DEFAULT_STACK_SIZE (4 * 1024 * 1024)
+ #else
