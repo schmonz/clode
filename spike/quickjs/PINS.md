@@ -28,3 +28,4 @@ quickjs-ng-js_exepath-netbsd patch 2026-07-06
 #   Applied to the guest's extracted quickjs-ng source (patch -p1) before cmake; upstream fix
 #   candidate. Enables the run-from-bytecode memory measurement the North Star turns on.
 # txiki-sync-fs.patch: adds __tjs_fs_sync global (sync POSIX fs for CJS interop), 2026-07-07
+# upstream: js_exepath + repl-eof-spin (quickjs-ng), sync-fs (txiki) — prepared 2026-07-07, awaiting user go-ahead to post
