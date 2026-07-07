@@ -27,3 +27,4 @@ quickjs-ng-js_exepath-netbsd patch 2026-07-06
 #   the REPL on any BSD and busy-spins on EOF stdin (root cause: results/gate3-netbsd-aarch64.md).
 #   Applied to the guest's extracted quickjs-ng source (patch -p1) before cmake; upstream fix
 #   candidate. Enables the run-from-bytecode memory measurement the North Star turns on.
+# txiki-sync-fs.patch: adds __tjs_fs_sync global (sync POSIX fs for CJS interop), 2026-07-07
