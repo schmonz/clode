@@ -137,25 +137,22 @@ function resolveRequest(request, fromDir) {
     }
     throw new Error(`node-shim: cannot resolve '${request}' from ${fromDir}`);
   }
-  // bare specifier: walk up node_modules
+  // bare specifier: walk up node_modules, then NODE_PATH roots (the dep store).
+  const roots = [];
   let dir = fromDir;
-  for (;;) {
-    const pkgDir = P.join(dir, 'node_modules', request);
+  for (;;) { roots.push(P.join(dir, 'node_modules')); const p = P.dirname(dir); if (p === dir) break; dir = p; }
+  for (const r of (globalThis.process && process.env.NODE_PATH || '').split(':')) if (r) roots.push(r);
+  for (const nm of roots) {
+    const pkgDir = P.join(nm, request);
     const pkgJson = P.join(pkgDir, 'package.json');
     if (existsFileSync(pkgJson)) {
       const main = JSON.parse(readTextSync(pkgJson)).main || 'index.js';
       const entry = P.normalize(P.join(pkgDir, main));
-      for (const c of [entry, entry + '.js', entry + '.cjs', P.join(entry, 'index.js')]) {
-        if (existsFileSync(c)) return { file: c };
-      }
+      for (const c of [entry, entry + '.js', entry + '.cjs', P.join(entry, 'index.js')]) if (existsFileSync(c)) return { file: c };
     }
-    for (const c of [P.join(pkgDir, 'index.js'), P.join(pkgDir, 'index.cjs')]) {
-      if (existsFileSync(c)) return { file: c };
-    }
-    const parent = P.dirname(dir);
-    if (parent === dir) throw new Error(`node-shim: cannot resolve package '${request}' from ${fromDir}`);
-    dir = parent;
+    for (const c of [P.join(pkgDir, 'index.js'), P.join(pkgDir, 'index.cjs')]) if (existsFileSync(c)) return { file: c };
   }
+  throw new Error(`node-shim: cannot resolve package '${request}' from ${fromDir}`);
 }
 
 // The canonical resolver: builtin | json | evaluated CJS. Exposed so
@@ -204,16 +201,34 @@ function evalModule(file, isEntry = false) {
   return module.exports;
 }
 
+// Resolve a package ONLY from the ext roots (NODE_PATH + repo node_modules),
+// bypassing the node:/KNOWN shortcut in resolveRequest — so the npm `buffer`
+// package is reachable from modules/buffer.cjs despite sharing the same
+// specifier as the `buffer` builtin.
+function requireExt(name) {
+  const roots = [];
+  for (const r of (globalThis.process && process.env.NODE_PATH || '').split(':')) if (r) roots.push(P.join(r, name));
+  roots.push(P.join(P.dirname(SHIM_DIR), '..', '..', 'node_modules', name)); // repo node_modules fallback
+  for (const pkgDir of roots) {
+    const pkgJson = P.join(pkgDir, 'package.json');
+    if (!existsFileSync(pkgJson)) continue;
+    const main = JSON.parse(readTextSync(pkgJson)).main || 'index.js';
+    const entry = P.normalize(P.join(pkgDir, main));
+    for (const c of [entry, entry + '.js', entry + '.cjs', P.join(entry, 'index.js')]) if (existsFileSync(c)) return evalModule(c);
+  }
+  return undefined;
+}
+
 /* ---- globals, then entry */
 globalThis.process = loadBuiltin('process');
 Object.defineProperty(globalThis, 'Buffer', {
   configurable: true,
-  get() { return makeRequire(SHIM_DIR)('./../internal/buffer-lite.cjs').Buffer; },
+  get() { return loadBuiltin('buffer').Buffer; },
 });
 globalThis.setImmediate ??= (fn, ...a) => setTimeout(fn, 0, ...a);
 globalThis.clearImmediate ??= clearTimeout;
 globalThis.__nodeShim = {
-  loadBuiltin, makeRequire, wallProxy, readTextSync, moduleLoad, resolveRequest, KNOWN,
+  loadBuiltin, makeRequire, wallProxy, readTextSync, moduleLoad, resolveRequest, requireExt, KNOWN,
   version: 'm2',
 };
 
