@@ -119,6 +119,35 @@ test('stream: async iteration over Readable matches node', (t) => {
   assert.strictEqual(r.stdout.trim(), 'PONG');
 });
 
+// Wall (Task 4, -p round-trip): the bundle's execa-style stream cleanup
+// (get-stream's Q2n) calls `stream.destroy()` on consumed streams; a missing
+// method threw `TypeError: not a function`. destroy() must mark the stream
+// destroyed, emit 'close', be idempotent, and return the stream — matching node.
+test('stream: destroy() emits close, sets destroyed, is idempotent (matches node)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const f = prog(`
+    const { Readable, Writable } = require('node:stream');
+    const out = {};
+    const r = new Readable({ read() {} });
+    out.type_destroy = typeof r.destroy;
+    out.destroyed_before = r.destroyed;
+    out.returns_self = r.destroy() === r;
+    out.destroyed_after = r.destroyed;
+    r.on('close', () => {
+      out.close_fired = true;
+      // idempotent: a second destroy must not throw or double-fire synchronously
+      r.destroy();
+      const w = new Writable({ write(c, e, cb) { cb(); } });
+      out.w_destroy = typeof w.destroy;
+      w.on('close', () => { out.w_close = true; console.log(JSON.stringify(out)); });
+      w.destroy();
+    });`);
+  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
+});
+
 // Wall (Task 4): the -p bundle does `class X extends require('stream').Transform`
 // (SSE/text pipelines). Transform must be a real constructor whose subclass
 // _transform/_flush run and whose output ('data' chunks, then 'end') matches

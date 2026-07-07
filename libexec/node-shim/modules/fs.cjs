@@ -250,4 +250,41 @@ fsMod.close = (fd, cb) => { try { FSS.close(fd); if (cb) cb(null); } catch (e) {
 fsMod.Stats = Stats;
 fsMod.Dirent = Dirent;
 
+// fs.watchFile / unwatchFile / watch (Task 4 wall): the -p bundle installs a
+// config-file watcher via `fs.watchFile(path, opts, listener)` (its `mLt`
+// helper) at startup. A missing method throws `TypeError: not a function` (the
+// call is inside a try that swallows to the telemetry logger, but the throw
+// still abandons that init step). Node returns a StatWatcher (an EventEmitter
+// with ref/unref) from watchFile and an FSWatcher from watch.
+// DIVERGENCE: these register but never FIRE change events — this tjs build's
+// fs-watch surface is not wired to the sync-fs patch, and a one-shot `-p`
+// run does not depend on live config-change notifications (the file is read
+// once at startup). A path that genuinely needs change events is a future wall:
+// wire tjs.watch then. Characterized by test/node-shim-fs-watch.test.cjs.
+const { EventEmitter } = require('node:events');
+const _watchers = new Map();
+fsMod.watchFile = function watchFile(filename, options, listener) {
+  if (typeof options === 'function') { listener = options; }
+  const key = String(filename);
+  let w = _watchers.get(key);
+  if (!w) { w = new EventEmitter(); w.ref = () => w; w.unref = () => w; _watchers.set(key, w); }
+  if (typeof listener === 'function') w.on('change', listener);
+  return w;
+};
+fsMod.unwatchFile = function unwatchFile(filename, listener) {
+  const key = String(filename);
+  const w = _watchers.get(key);
+  if (!w) return;
+  if (typeof listener === 'function') w.removeListener('change', listener);
+  else { w.removeAllListeners('change'); _watchers.delete(key); }
+};
+fsMod.watch = function watch(filename, options, listener) {
+  if (typeof options === 'function') { listener = options; }
+  const w = new EventEmitter();
+  w.close = () => {};
+  w.ref = () => w; w.unref = () => w;
+  if (typeof listener === 'function') w.on('change', listener);
+  return w;
+};
+
 module.exports = fsMod;

@@ -109,10 +109,25 @@ function launchError(err, syscall, file, args) {
   return e;
 }
 
+// Node's `shell` option: when truthy, the command is run through a shell rather
+// than executed directly. Node builds a single command string ("file arg1 arg2")
+// and invokes `<shell> -c "<command>"` (shell defaults to /bin/sh on unix; a
+// string value names the shell). The -p bundle uses this for `ps aux | grep …`
+// (a pipeline) and the `"…/run-hook.cmd" session-start` session hook — both are
+// single command strings with an empty args array. Mirror node so those spawns
+// run instead of ENOENT-ing on a literal "ps aux | grep …" path.
+function applyShell(file, args, opts) {
+  if (!opts || !opts.shell) return { file, args };
+  const shellExe = typeof opts.shell === 'string' ? opts.shell : '/bin/sh';
+  const command = (args && args.length) ? [file, ...args].join(' ') : String(file);
+  return { file: shellExe, args: ['-c', command] };
+}
+
 function spawn(file, args = [], opts = {}) {
   if (!Array.isArray(args)) { opts = args || {}; args = []; }
   const env = opts.env || undefined;
   const stdio = normStdio(opts);
+  ({ file, args } = applyShell(file, args, opts));
   trace('spawn', file, JSON.stringify(args), 'stdio=', JSON.stringify(stdio));
   const child = new EventEmitter();
   let proc;
@@ -144,10 +159,27 @@ function spawn(file, args = [], opts = {}) {
   const wrapReadable = (s, which) => {
     if (!s) return null;
     const em = new EventEmitter();
+    em.readable = true;
+    em.destroyed = false;
+    // .destroy() — the bundle's execa-style stream cleanup (get-stream's `Q2n`)
+    // calls stdout/stderr.destroy() on the error path; a missing method throws
+    // `TypeError: not a function` and aborts that cleanup. Node's destroy marks
+    // destroyed and emits 'close'; idempotent. Cancels the reader so the drain
+    // loop stops.
+    em.destroy = (err) => {
+      if (em.destroyed) return em;
+      em.destroyed = true;
+      try { em._reader && em._reader.cancel(); } catch { /* already closed */ }
+      queueMicrotask(() => { if (err) em.emit('error', err); em.emit('close'); });
+      return em;
+    };
+    em.pause = () => em; em.resume = () => em;
     (async () => {
       try {
         const reader = s.getReader();
+        em._reader = reader;
         for (;;) {
+          if (em.destroyed) break;
           const { value, done } = await reader.read();
           if (done) break;
           if (value) em.emit('data', Buffer.from(value));
@@ -161,6 +193,10 @@ function spawn(file, args = [], opts = {}) {
   child.stdout = wrapReadable(proc.stdout, 'stdout');
   child.stderr = wrapReadable(proc.stderr, 'stderr');
   child.stdin = proc.stdin || null; // DIVERGENCE C: best-effort passthrough only
+  // Some callers (execa-style cleanup) call child.stdin.destroy(); guard it.
+  if (child.stdin && typeof child.stdin.destroy !== 'function') {
+    child.stdin.destroy = () => { try { child.stdin.close && child.stdin.close(); } catch { /* ignore */ } };
+  }
   child.kill = (sig) => { try { proc.kill(sig); return true; } catch { return false; } };
   child.ref = () => {}; child.unref = () => {};
   proc.wait().then(

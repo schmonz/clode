@@ -80,6 +80,43 @@ console.log(JSON.stringify({ home: os.homedir().startsWith('/'), tmp: os.tmpdir(
   assert.deepStrictEqual(out, { home: true, tmp: true, plat: process.platform, eol: '\n' });
 });
 
+// Wall (Task 4, -p round-trip): the bundle builds the system prompt's
+// environment block with `${os.type()} ${os.release()}` — a missing os.release
+// threw `TypeError: not a function` and crashed the query session before the
+// Messages POST. os.release/version/hostname/networkInterfaces/endianness/machine
+// must all be callable. DIVERGENCE (modules/os.cjs): release()/version() return
+// '' (this tjs build exposes no uname/kernel-release API) — asserted here so the
+// approximation is characterized, not merely mentioned.
+test('os.release/version/hostname/networkInterfaces/endianness are callable', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-osrel-'));
+  const f = path.join(dir, 'osrel.cjs');
+  fs.writeFileSync(f, `const os = require('node:os');
+console.log(JSON.stringify({
+  release: os.release(),
+  version: os.version(),
+  hostnameStr: typeof os.hostname() === 'string' && os.hostname().length > 0,
+  niObj: typeof os.networkInterfaces() === 'object',
+  endianness: os.endianness(),
+  machine: os.machine(),
+  // the exact call the bundle makes ('Darwin ' + release) must not throw:
+  envLine: os.type() + ' ' + os.release(),
+}));`);
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout.trim());
+  // DIVERGENCE assertions: release/version are the documented '' on this tjs.
+  assert.strictEqual(out.release, '');
+  assert.strictEqual(out.version, '');
+  assert.strictEqual(out.hostnameStr, true);
+  assert.strictEqual(out.niObj, true);
+  assert.ok(out.endianness === 'LE' || out.endianness === 'BE');
+  // the exact system-prompt env line the bundle builds (`os.type()+' '+release`)
+  // must be a string and not throw; on darwin it is type-prefixed.
+  assert.strictEqual(typeof out.envLine, 'string');
+  assert.ok(out.envLine.startsWith(require('node:os').type()));
+});
+
 // Wall (Task 4): the -p boot sizes parallelism from os.cpus().length. cpus()
 // must return a non-empty array of Node-shaped entries; the count must match
 // host node on this machine.

@@ -17,12 +17,29 @@ class Readable extends EventEmitter {
     super();
     this._reading = false;
     this._ended = false;
+    this.destroyed = false;
+    this.readableEnded = false;
     if (typeof opts.read === 'function') this._read = opts.read;
   }
   _read() {}
+  // destroy() (Task 4 wall): the bundle's execa-style stream cleanup does
+  // `stream.destroy()` on child/consumed streams (get-stream's `Q2n`), and
+  // stream/promises finished() waits on 'close' which destroy() emits. Node's
+  // destroy marks the stream destroyed, emits 'error' (only if given) then
+  // 'close', and is idempotent. DIVERGENCE: this does not abort an in-flight
+  // read/underlying resource (there is none for a plain node-shim Readable) —
+  // it is the observable destroyed/'close' contract, characterized in
+  // test/node-shim-stream.test.cjs.
+  destroy(err) {
+    if (this.destroyed) return this;
+    this.destroyed = true;
+    queueMicrotask(() => { if (err) this.emit('error', err); this.emit('close'); });
+    return this;
+  }
   push(chunk) {
     if (chunk === null) {
       this._ended = true;
+      this.readableEnded = true;
       queueMicrotask(() => this.emit('end'));
       return false;
     }
@@ -90,8 +107,15 @@ Readable.from = function from(iterable) {
 };
 
 class Writable extends EventEmitter {
-  constructor(opts = {}) { super(); this._ended = false; if (typeof opts.write === 'function') this._write = opts.write; }
+  constructor(opts = {}) { super(); this._ended = false; this.destroyed = false; this.writableEnded = false; if (typeof opts.write === 'function') this._write = opts.write; }
   _write(chunk, enc, cb) { cb(); }
+  // See Readable.destroy — same observable destroyed/'close' contract.
+  destroy(err) {
+    if (this.destroyed) return this;
+    this.destroyed = true;
+    queueMicrotask(() => { if (err) this.emit('error', err); this.emit('close'); });
+    return this;
+  }
   write(chunk, enc, cb) {
     const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
     if (typeof enc === 'function') { cb = enc; enc = undefined; }

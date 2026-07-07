@@ -166,6 +166,43 @@ test('exec (async, shell): stdout matches node', (t) => {
   assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
 });
 
+// Wall (Task 4, -p round-trip): the bundle spawns single command STRINGS with
+// { shell: true } — `ps aux | grep …` (a pipeline) for IDE detection and the
+// session-start hook. Without shell support the shim ENOENTs on a literal
+// "ps ... | grep ..." path. With shell:true it must route through /bin/sh -c and
+// produce node's observable stdout/exit.
+test('spawn: shell:true runs a pipeline command string like node', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const cp = require('node:child_process');
+    const c = cp.spawn('echo piped | cat', { shell: true });
+    let out = '';
+    c.stdout.on('data', (d) => { out += d.toString(); });
+    c.on('exit', (code) => { console.log(JSON.stringify({ code, out: out.trim() })); });`;
+  const f = prog(body);
+  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
+});
+
+// Wall (Task 4): execa-style cleanup calls child.stdout.destroy() on the error
+// path; the child stream wrappers must expose destroy() (emits 'close') so that
+// cleanup doesn't throw `TypeError: not a function`.
+test('spawn: child.stdout.destroy() is a function and emits close', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const cp = require('node:child_process');
+    const c = cp.spawn('/bin/echo', ['x']);
+    const typ = typeof c.stdout.destroy;
+    c.stdout.on('close', () => console.log(JSON.stringify({ typ, closed: true })));
+    c.on('exit', () => c.stdout.destroy());`;
+  const f = prog(body);
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), { typ: 'function', closed: true });
+});
+
 test('bun-shim-style feature detection now patches (real functions, not {})', (t) => {
   if (skipUnlessTjs(t)) return;
   const body = `

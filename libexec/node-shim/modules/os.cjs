@@ -55,6 +55,32 @@ module.exports = {
       default: return process.platform;
     }
   },
+  // os.release() (Task 4 wall): the -p bundle builds the system prompt's
+  // environment block with `${os.type()} ${os.release()}` (its `j_o` helper). A
+  // missing os.release throws `TypeError: not a function` and crashes the query
+  // session (surfaced as an error_during_execution result) BEFORE the Messages
+  // POST. DIVERGENCE: this tjs build exposes no uname/kernel-release API
+  // (tjs.system has cpus/loadAvg/networkInterfaces/uptime/userInfo only), so the
+  // real kernel-release string is unavailable — return the empty string. This is
+  // the OS-version suffix in a system-prompt line only (informational; the mock
+  // ignores content and a live prompt is unaffected in substance). A path that
+  // needs the true release is a future wall: add a tjs uname primitive then.
+  // Characterized by test/node-shim-path.test.cjs (os.release/hostname row).
+  release: () => '',
+  // os.version() — same unavailability; empty string DIVERGENCE (see release()).
+  version: () => '',
+  hostname: () => tjs.hostName ?? tjs.env.HOSTNAME ?? 'localhost',
+  networkInterfaces: () => (tjs.system && tjs.system.networkInterfaces) || {},
+  // arm64/x64 are little-endian; this tjs build targets arm64 (see process.arch).
+  endianness: () => 'LE',
+  machine: () => process.arch,
+  // Memory figures: tjs exposes no free/total memory API. DIVERGENCE: return 0 so
+  // callers that only read `.length`/compare-to-0 don't crash; a path needing real
+  // memory sizing is a future wall.
+  freemem: () => 0,
+  totalmem: () => 0,
+  getPriority: () => 0,
+  setPriority: () => {},
   EOL: '\n',
   // os.cpus()/availableParallelism (Task 4 wall): the -p boot sizes worker
   // parallelism from os.cpus().length. Backed by tjs.system.cpus, which is the
