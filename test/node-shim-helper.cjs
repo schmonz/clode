@@ -20,7 +20,7 @@ function runLoader(entry, args = [], opts = {}) {
     encoding: 'utf8',
     env: { ...process.env, ...(opts.env || {}) },
     input: opts.input,
-    timeout: 30000,
+    timeout: opts.timeout || 30000,
   });
   return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
 }
