@@ -21,6 +21,12 @@ out.push(Buffer.from('hello').slice(1, 3).toString());
 out.push(Buffer.from('aGk=', 'base64').toString());
 out.push(Buffer.byteLength('héllo'));
 out.push(Buffer.isBuffer(Buffer.alloc(2)), Buffer.alloc(2)[0]);
+out.push(Buffer.from('hi').toString('base64'));
+out.push(Buffer.from('hello').toString('base64'));
+out.push(Buffer.isBuffer(crypto.createHash('sha256').update('clode').digest()));
+out.push(crypto.createHash('sha256').update('clode').digest().toString('hex'));
+out.push(Buffer.from('ab').equals(Buffer.from('ab')));
+out.push(Buffer.from('ab').equals(Buffer.from('ac')));
 console.log(JSON.stringify(out));
 `;
 
