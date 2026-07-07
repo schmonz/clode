@@ -185,3 +185,25 @@ plus the require.main row and the fs latin1 row.
 - **latin1 decode is manual** (chunked `String.fromCharCode`) rather than
   `TextDecoder('latin1')`; produces node-identical bytes (proven by the 256-byte
   round-trip + the byte-identical extractor output).
+
+## M2 entry gates
+
+- **The fail-loud wall is MODULE-granular, not PROPERTY-granular.** A builtin
+  that is ABSENT entirely resolves to a `wallProxy` and throws the branded
+  `node-shim: <ns>.<prop> not implemented`. But a builtin that EXISTS yet is only
+  partially implemented returns `undefined` for an unimplemented property — e.g.
+  `modules/module.cjs` exports only `createRequire`, so `require('module').wrap`
+  is `undefined` and calling it crashes with a bare `TypeError: not a function`,
+  NOT the branded wall. Likewise `vm.Script.runInThisContext` is a real throw but
+  most of `vm`'s surface simply doesn't exist.
+  This is **acceptable for M1**: the exercised surface (`extract-claude-js.cjs` +
+  `clode-net.cjs`) is complete, and there is no silent-wrong-data path — an
+  unimplemented property still fails loudly (just with a generic `TypeError`, not
+  the branded message). Recorded here as an explicit **M2 ENTRY GATE**:
+  **property-level fail-loud walls + `Module.wrap` / a fuller `vm`** for the
+  `clode-extract.cjs` / `clode-main.cjs` consumers, which the real 240MB bundle
+  (not the synthetic Rung-2 fixture) will exercise.
+- **Full 240MB real-native-binary extraction under tjs** — Rung 2 proved the
+  extractor code paths on a synthetic fixture; a real darwin-arm64 provider binary
+  (carve + rewrite patches at scale, real Claude anchors matching) is unproven and
+  gates M2.
