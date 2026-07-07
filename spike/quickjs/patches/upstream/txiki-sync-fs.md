@@ -77,7 +77,7 @@ index 0000000..162dafa
 +/* Synchronous fs primitives for CommonJS interop (node-shim).
 + * POSIX-direct, main-thread blocking by design. Exposed as the
 + * global `__tjs_fs_sync`. Upstream candidate: see
-+ * spike/quickjs/patches/upstream/txiki-sync-fs.md in the clode repo. */
++ * the accompanying feature-proposal writeup. */
 +#include "private.h"
 +#include "utils.h"
 +#include <dirent.h>
@@ -329,6 +329,12 @@ index 673f63f..2d08f25 100644
      tjs__mod_process_init(ctx, ns);
 ```
 
+**Before posting:** the header comment at the top of `mod_fs_sync.c` above
+already reads "see the accompanying feature-proposal writeup"; the copy of
+this patch kept in our own repo still carries an internal repo-path
+reference in that same comment line, which must be genericized to match the
+version above before this PR is opened.
+
 ## API summary
 
 `__tjs_fs_sync` is a global object with these methods (all synchronous,
@@ -357,11 +363,13 @@ failure, mirroring the shape of Node's `fs` errors):
 We use this patch to back a `node:fs`-compatible CJS shim
 (`libexec/node-shim/modules/fs.cjs` in our repo) that layers Node's
 familiar `fs.readFileSync`/`fs.writeFileSync`/`fs.statSync`/
-`fs.mkdirSync`/etc. surface on top of these primitives in plain JS. Two
-levels of validation, both against the patched `tjs` binary:
+`fs.mkdirSync`/etc. surface on top of these primitives in plain JS. Before
+this patch, synchronous filesystem access was impossible under tjs (the only
+fs API is Promise-based); the smokes below show it now works. Two levels of
+validation, both against the patched `tjs` binary:
 
-**Smoke tests** (from our Task 1, run directly against `__tjs_fs_sync` with
-no shim layer in between):
+**Smoke tests** (from our initial smoke tests, run directly against
+`__tjs_fs_sync` with no shim layer in between):
 
 ```
 $ tjs eval 'const f=__tjs_fs_sync; const fd=f.open("/etc/hosts","r"); const ab=f.read(fd,64,-1); f.close(fd); console.log("sync-ok", ab.byteLength>0, f.stat("/etc/hosts").kind, f.realpath("/tmp").length>0)'
@@ -373,7 +381,8 @@ $ tjs eval 'try { __tjs_fs_sync.stat("/nonexistent-xyz") } catch (e) { console.l
 err-ok true true
 ```
 
-**Characterization tests** (from our Task 6): a scripted round-trip
+**Characterization tests** (from our later fs characterization test suite):
+a scripted round-trip
 exercising `open`/`read`/`write`/`close`/`stat`/`lstat`/`fstat`/`readdir`/
 `mkdir` (including recursive)/`rmdir`/`unlink`/`rename`/`symlink`/`readlink`/
 `realpath`/`access`/`chmod` — run once under host Node (`node:fs`) and once
@@ -385,7 +394,7 @@ that check — the primitives' behavior already matched what a Node-shaped
 
 ```
 $ node --test test/node-shim-fs.test.cjs
-✔ fs characterization vs host node (274.140458ms)
+✔ fs characterization vs host node (588.771666ms)
 ℹ tests 1
 ℹ pass 1
 ℹ fail 0
