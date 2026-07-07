@@ -41,6 +41,13 @@ function latin1Decode(bytes) {
   return s;
 }
 const isLatin1 = (enc) => enc === 'latin1' || enc === 'binary';
+// latin1/binary encode: low byte of each code point (mirror of latin1Decode /
+// buffer-lite's Buffer.from(,'latin1')).
+function latin1Encode(str) {
+  const out = new Uint8Array(str.length);
+  for (let i = 0; i < str.length; i++) out[i] = str.charCodeAt(i) & 0xff;
+  return out;
+}
 
 class Stats {
   #kind;
@@ -73,8 +80,18 @@ function readFileSync(p, opts) {
   } finally { FSS.close(fd); }
 }
 
-function writeFileSync(p, data) {
-  const bytes = typeof data === 'string' ? te.encode(data) : new Uint8Array(data.buffer ?? data, data.byteOffset ?? 0, data.byteLength ?? data.length);
+function writeFileSync(p, data, opts) {
+  let bytes;
+  if (typeof data === 'string') {
+    // Honor the string encoding; never silently fall back to UTF-8 for one we
+    // don't implement — that would corrupt bytes and hide the gap.
+    const enc = (typeof opts === 'string' ? opts : opts?.encoding) ?? 'utf8';
+    if (enc === 'utf8' || enc === 'utf-8') bytes = te.encode(data);
+    else if (isLatin1(enc)) bytes = latin1Encode(data);
+    else throw new Error(`node-shim: fs.writeFileSync encoding '${enc}' not implemented`);
+  } else {
+    bytes = new Uint8Array(data.buffer ?? data, data.byteOffset ?? 0, data.byteLength ?? data.length);
+  }
   const fd = FSS.open(p, 'w');
   try {
     const ab = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes.buffer : bytes.slice().buffer;

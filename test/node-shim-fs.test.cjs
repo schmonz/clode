@@ -77,6 +77,52 @@ console.log(JSON.stringify({
 }));
 `;
 
+// writeFileSync string-encoding honesty: a STRING data arg must honor its
+// encoding. Default (and 'utf8') is UTF-8; 'latin1'/'binary' byte-encodes
+// (charCode & 0xff), so bytes >= 0x80 survive instead of being UTF-8-mangled.
+const WRITE_LATIN1_PROG = `
+const fs = require('node:fs');
+const path = require('node:path');
+const dir = process.argv[2];
+// A latin1 string with code points >= 0x80 (each must land as ONE byte).
+const s = String.fromCharCode(0, 65, 0x80, 0xa0, 0xc0, 0xff, 200);
+const p = path.join(dir, 'l1-write.bin');
+fs.writeFileSync(p, s, 'latin1');
+const raw = fs.readFileSync(p); // bytes
+console.log(JSON.stringify({ bytes: Array.from(raw), len: raw.length }));
+`;
+
+test('fs.writeFileSync string honors latin1 encoding vs host node', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-wl1-'));
+  const f = path.join(base, 'wl1.cjs');
+  fs.writeFileSync(f, WRITE_LATIN1_PROG);
+  const nodeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-wl1-node-'));
+  const tjsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-wl1-tjs-'));
+  const nodeOut = require('node:child_process')
+    .execFileSync(process.execPath, [f, nodeDir], { encoding: 'utf8' }).trim();
+  const r = runLoader(f, [tjsDir]);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.stdout.trim(), nodeOut);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), {
+    bytes: [0, 65, 0x80, 0xa0, 0xc0, 0xff, 200], len: 7,
+  });
+});
+
+test('fs.writeFileSync string with an unimplemented encoding fails loud', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-wenc-'));
+  const f = path.join(base, 'wenc.cjs');
+  fs.writeFileSync(f, `
+const fs = require('node:fs');
+const path = require('node:path');
+fs.writeFileSync(path.join(process.argv[2], 'x.bin'), 'zzz', 'ucs2');
+`);
+  const r = runLoader(f, [base]);
+  assert.notStrictEqual(r.status, 0);
+  assert.match(r.stderr, /node-shim: fs\.writeFileSync encoding 'ucs2' not implemented/);
+});
+
 test('fs.readFileSync latin1 + Buffer.from latin1 round-trip vs host node', (t) => {
   if (skipUnlessTjs(t)) return;
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-latin1-'));
