@@ -145,7 +145,17 @@ function runBundle(opts = {}) {
   applyBundleEnv({ node, self, libexec, depsRoot, env });
 
   const argv = settingsPath ? ['--settings', settingsPath, ...args] : [...args];
-  const child = spawnFn(node, [cliPath, ...argv], { stdio: 'inherit', env });
+
+  // Experimental opt-in: run the bundle under the patched tjs via node-shim.
+  // Default (CLODE_ENGINE unset) is byte-identical to the node path below.
+  let child;
+  if (env.CLODE_ENGINE === 'tjs') {
+    const tjsBin = env.CLODE_TJS || path.join(libexec, '..', 'build', 'tjs', 'tjs');
+    const loader = path.join(libexec, 'node-shim', 'loader.cjs');
+    child = spawnFn(tjsBin, ['run', loader, cliPath, ...argv], { stdio: 'inherit', env });
+  } else {
+    child = spawnFn(node, [cliPath, ...argv], { stdio: 'inherit', env });
+  }
 
   // Ignore tty signals (child gets them from the shared group); forward directed ones.
   const handlers = {};
