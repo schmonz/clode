@@ -72,3 +72,20 @@ test('process.stdout.write flushes synchronously before immediate exit', (t) => 
   assert.strictEqual(r.status, 0, r.stderr);
   assert.strictEqual(r.stdout, 'flushed-bytes');
 });
+
+test('process.stdout.write: large payload writes fully (short-write loop)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-bigwrite-'));
+  const f = path.join(dir, 'bigwrite.cjs');
+  // ~200KB deterministic payload, then immediate exit — a single POSIX
+  // write(2) on a blocking pipe can legally short-write this, so the shim's
+  // writeSync must loop or bytes are silently dropped.
+  const N = 200000;
+  fs.writeFileSync(f, `const N = ${N};
+process.stdout.write('x'.repeat(N));
+process.exit(0);`);
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.stdout.length, N);
+  assert.strictEqual(r.stdout, 'x'.repeat(N));
+});

@@ -39,7 +39,16 @@ function detectPlatform() {
 
 function writeSync(fd, s) {
   const bytes = te.encode(String(s));
-  FSS.write(fd, bytes.buffer, -1);
+  let off = 0;
+  // POSIX write(2) on a blocking pipe may do a SHORT write for large
+  // payloads — loop until every byte lands or the carry-forward "must not
+  // lose bytes" goal is silently violated for big stdout/stderr output.
+  while (off < bytes.length) {
+    const chunk = off === 0 ? bytes.buffer : bytes.buffer.slice(off);
+    const n = FSS.write(fd, chunk, -1);
+    if (n <= 0) throw new Error('node-shim: stdio write failed');
+    off += n;
+  }
   return true;
 }
 function writeOut(s) { return writeSync(1, s); }
