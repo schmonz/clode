@@ -111,6 +111,33 @@ test('spawn: ENOENT surfaces as an async error event, never a sync throw', (t) =
   assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
 });
 
+// Host-node parity for the FULL launch-failure lifecycle: on a spawn ENOENT
+// node fires BOTH 'error' AND 'close' (order: error then close), 'close' with
+// (code,signal)=(-2,null), and does NOT fire 'exit'. A caller using the
+// 'close'-listener idiom must not hang. The fixture records the ordered event
+// sequence and ends with a bounded self-timer that prints whatever fired — so
+// if 'close' never came (a hang under the shim), the sequence would differ
+// from node's and the deepStrictEqual would fail rather than the test timing
+// out silently.
+test("spawn launch failure: fires 'error' THEN 'close' (no 'exit'), args match node", (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const cp = require('node:child_process');
+    const seq = [];
+    const c = cp.spawn('/no/such/binary-xyz', []);
+    c.on('error', (e) => { seq.push(['error', e.code]); });
+    c.on('exit', (code, sig) => { seq.push(['exit', code, sig]); });
+    c.on('close', (code, sig) => { seq.push(['close', code, sig]); });
+    setTimeout(() => { console.log(JSON.stringify(seq)); }, 250);`;
+  const f = prog(body);
+  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  // Sanity-anchor the oracle: node must show error then close(-2,null), no exit.
+  assert.deepStrictEqual(node, [['error', 'ENOENT'], ['close', -2, null]]);
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
+});
+
 test('execFile (async, callback): stdout + exit code match node', (t) => {
   if (skipUnlessTjs(t)) return;
   const body = `

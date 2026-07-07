@@ -25,12 +25,17 @@
 //   DIVERGENCE A (ENOENT is a SYNCHRONOUS throw, not a wait()-rejection):
 //   `tjs.spawn(["/no/such/bin"], {...})` THROWS immediately — a real Error
 //   with .code === 'ENOENT' and .message === 'ENOENT: no such file or
-//   directory' — instead of returning a process whose wait() later rejects.
-//   Host node's cp.spawn, by contrast, NEVER throws synchronously for a launch
-//   failure; it emits an async 'error' event next tick (verified against host
-//   node: `cp.spawn('/no/such/x').on('error', ...)` fires 'error', not a
-//   throw). spawn() below wraps the tjs.spawn() call in try/catch and defers
-//   the failure to a queued 'error' emit so the shim matches node's contract.
+//   directory' (and NO .errno — probed undefined) — instead of returning a
+//   process whose wait() later rejects. Host node's cp.spawn, by contrast,
+//   NEVER throws synchronously for a launch failure; it emits, asynchronously,
+//   BOTH 'error' THEN 'close' — and does NOT fire 'exit' (verified against host
+//   node v24.18.0: `cp.spawn('/no/such/x')` with both listeners logs
+//   [['error','ENOENT'],['close',-2,null]], no throw, no 'exit'). The 'close'
+//   args are (code, signal) = (-2, null): -2 is -errno for ENOENT, signal
+//   null. spawn() below wraps the tjs.spawn() call in try/catch and defers
+//   BOTH a queued 'error' AND 'close' emit (in that order) so the shim matches
+//   node's full launch-failure contract — emitting 'error' alone would silently
+//   hang a caller using the (more common) 'close'-listener lifecycle idiom.
 //
 //   DIVERGENCE B (no synchronous event-loop pump exists in this tjs build):
 //   there is no `tjs.runLoopOnce`/`tjs.engine.run`-style primitive reachable
@@ -110,12 +115,22 @@ function spawn(file, args = [], opts = {}) {
       cwd: opts.cwd, env, stdin: stdio.stdin, stdout: stdio.stdout, stderr: stdio.stderr,
     });
   } catch (err) {
-    // DIVERGENCE A: tjs.spawn throws sync on ENOENT; node emits 'error' async.
+    // DIVERGENCE A: tjs.spawn throws sync on ENOENT; node emits the failure
+    // asynchronously instead. On a launch failure host node (v24.18.0,
+    // verified) fires BOTH 'error' THEN 'close' — and does NOT fire 'exit'.
+    // The 'close' args are (code, signal) = (-2, null): code -2 is -errno for
+    // ENOENT (node's own value), signal null. We MUST emit 'close' too, else a
+    // caller using the (more common) 'close'-listener lifecycle idiom after a
+    // failed spawn waits forever — a silent hang the fail-loud standard forbids.
     child.pid = undefined;
     child.stdout = null; child.stderr = null; child.stdin = null;
     child.kill = () => false;
     child.ref = () => {}; child.unref = () => {};
-    queueMicrotask(() => child.emit('error', launchError(err, 'spawn', file, args)));
+    const closeCode = typeof err.errno === 'number' ? err.errno : -2; // -errno (ENOENT -> -2)
+    queueMicrotask(() => {
+      child.emit('error', launchError(err, 'spawn', file, args));
+      child.emit('close', closeCode, null);
+    });
     return child;
   }
   child.pid = proc.pid;
