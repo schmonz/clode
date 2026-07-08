@@ -6,14 +6,16 @@
 // capture stdout through a pipe — so isatty is false for every fd. Characterized
 // by test/node-shim-core.test.cjs (tty row).
 //
-// DIVERGENCE: isatty always returns false. This tjs build exposes no per-fd
-// terminal probe reachable from JS; `-p` is a non-interactive pipe/redirect
-// path where false is correct. A future interactive (TUI) path that must detect
-// a real terminal is a later wall — wire it test-first against a tjs primitive
-// then. ReadStream/WriteStream are constructor stand-ins for the ESM-interop
-// `typeof` / instanceof feature-detects the bundle performs; they are not the
-// interactive terminal streams (the -p path never instantiates them).
-function isatty(_fd) { return false; }
+// isatty over the public tjs stdio streams: fd 0/1/2 map to tjs.stdin/stdout/
+// stderr, whose .isTerminal is a real TIOCGWINSZ/isatty-backed probe. Other fds
+// aren't individually probeable from JS in this build → false (the bundle only
+// asks about 0/1/2).
+function isatty(fd) {
+  if (fd === 0) return !!tjs.stdin.isTerminal;
+  if (fd === 1) return !!tjs.stdout.isTerminal;
+  if (fd === 2) return !!tjs.stderr.isTerminal;
+  return false;
+}
 
 class ReadStream {}
 class WriteStream {}
