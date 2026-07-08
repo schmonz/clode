@@ -456,3 +456,37 @@ test('bun-shim-style feature detection now patches (real functions, not {})', (t
   assert.deepStrictEqual(JSON.parse(r.stdout.trim()),
     ['exec', 'execFile', 'execFileSync', 'execSync', 'spawn', 'spawnSync']);
 });
+
+// Numeric-fd stdio redirection (tjs Bash-tool wall): the bundle's Bash tool
+// opens a log file via fs.promises.open() and passes the FileHandle's fd as
+// child stdio ["pipe", fd, fd] so the subprocess writes stdout/stderr straight
+// into the file; it then closes its OWN fd right after spawn, relying on the
+// child having inherited its own dup. Under tjs this failed because tjs.spawn
+// ignored a numeric fd (child output never reached the file → the tool returned
+// empty / errored). Locks the full chain: fs.promises.open -> real fd ->
+// spawn inherits the fd -> child writes -> parent reads the file back. Diffed
+// against host node (which supports fd stdio natively).
+test('spawn: numeric fd in stdio redirects child output to a file (Bash-tool pattern)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const cp = require('node:child_process');
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const os = require('node:os');
+    (async () => {
+      const log = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cp-fd-')), 'out.txt');
+      const fh = await fs.promises.open(log, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_APPEND);
+      const c = cp.spawn('/bin/echo', ['redirected-to-fd'], { stdio: ['pipe', fh.fd, fh.fd] });
+      await fh.close(); // parent drops its fd; child keeps the inherited dup
+      c.on('exit', () => {
+        // child.stdout must be null (fd redirected, no parent-side pipe)
+        console.log(JSON.stringify({ stdoutNull: c.stdout === null, file: fs.readFileSync(log, 'utf8').trim() }));
+      });
+    })();`;
+  const f = prog(body);
+  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
+  assert.strictEqual(node.file, 'redirected-to-fd');
+});

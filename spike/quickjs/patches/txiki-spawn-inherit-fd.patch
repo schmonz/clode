@@ -1,0 +1,76 @@
+diff --git a/src/mod_process.c b/src/mod_process.c
+index 1e9b073..12985c4 100644
+--- a/src/mod_process.c
++++ b/src/mod_process.c
+@@ -336,6 +336,15 @@ static JSValue tjs_spawn(JSContext *ctx, JSValue this_val, int argc, JSValue *ar
+                     stdio[0].flags = UV_IGNORE;
+                 }
+                 JS_FreeCString(ctx, in);
++            } else if (JS_IsNumber(js_stdin)) {
++                /* Numeric fd: inherit (dup) the caller's fd into the child's
++                 * stdin. Node/libuv semantics — used by node-shim's
++                 * child_process to wire a child to a file/pipe fd. */
++                int fd;
++                if (!JS_ToInt32(ctx, &fd, js_stdin)) {
++                    stdio[0].flags = UV_INHERIT_FD;
++                    stdio[0].data.fd = fd;
++                }
+             }
+         }
+         JS_FreeValue(ctx, js_stdin);
+@@ -355,6 +364,16 @@ static JSValue tjs_spawn(JSContext *ctx, JSValue this_val, int argc, JSValue *ar
+                     stdio[1].flags = UV_IGNORE;
+                 }
+                 JS_FreeCString(ctx, out);
++            } else if (JS_IsNumber(js_stdout)) {
++                /* Numeric fd: inherit (dup) the caller's fd into the child's
++                 * stdout. Used by node-shim to redirect a child's stdout to a
++                 * log-file fd (the Bash tool opens the file, passes its fd, then
++                 * closes its own copy — the child keeps the inherited dup). */
++                int fd;
++                if (!JS_ToInt32(ctx, &fd, js_stdout)) {
++                    stdio[1].flags = UV_INHERIT_FD;
++                    stdio[1].data.fd = fd;
++                }
+             }
+         }
+         JS_FreeValue(ctx, js_stdout);
+@@ -374,6 +393,14 @@ static JSValue tjs_spawn(JSContext *ctx, JSValue this_val, int argc, JSValue *ar
+                     stdio[2].flags = UV_IGNORE;
+                 }
+                 JS_FreeCString(ctx, err);
++            } else if (JS_IsNumber(js_stderr)) {
++                /* Numeric fd: inherit (dup) the caller's fd into the child's
++                 * stderr (see stdout note above). */
++                int fd;
++                if (!JS_ToInt32(ctx, &fd, js_stderr)) {
++                    stdio[2].flags = UV_INHERIT_FD;
++                    stdio[2].data.fd = fd;
++                }
+             }
+         }
+         JS_FreeValue(ctx, js_stderr);
+@@ -396,7 +423,22 @@ static JSValue tjs_spawn(JSContext *ctx, JSValue this_val, int argc, JSValue *ar
+     int r = uv_spawn(tjs_get_loop(ctx), &p->process, &options);
+     if (r != 0) {
+         tjs_throw_errno(ctx, r);
+-        goto fail;
++        /* uv_spawn leaves the (already uv__handle_init'd) process handle owned by
++         * the loop even when it fails — libuv keeps it usable so the caller can
++         * close it (see the "expects initialized streams, even if the exec
++         * failed" note in uv_spawn). Freeing it synchronously via `goto fail`
++         * (tjs__free) is a use-after-free: a later uv_run/uv__run_closing_handles
++         * writes into the freed handle (heap-use-after-free, ASAN-confirmed on the
++         * child_process ENOENT launch-failure path). Release it through the same
++         * async uv_close path the exit/finalizer paths use; mark finalized so
++         * uv__close_cb frees p once the close completes. (The `fail:` label below
++         * still does a direct free — correct for the pre-uv_spawn goto-fail cases,
++         * where the handle was never handed to the loop.) */
++        p->finalized = true;
++        maybe_close(p);
++        JS_FreeValue(ctx, obj);
++        ret = JS_EXCEPTION;
++        goto cleanup;
+     }
+ 
+     JS_SetOpaque(obj, p);

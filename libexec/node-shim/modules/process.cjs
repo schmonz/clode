@@ -176,6 +176,30 @@ module.exports = {
     () => { const ms = performance.now(); return [Math.floor(ms / 1e3), Math.floor((ms % 1e3) * 1e6)]; },
     { bigint: () => BigInt(Math.floor(performance.now() * 1e6)) },
   ),
+  // process.memoryUsage() (tjs tool-use wall): the bundle's tool runner ($Ty)
+  // calls `process.memoryUsage()` immediately before EVERY tool's e.call() to
+  // capture an rss/heap/external baseline for the tengu_tool_use_success
+  // analytics delta (and again after, computing re.rss-X.rss etc.). tjs exposes
+  // NO memory API — no tjs.gc/rss/resourceUsage, verified against the pinned
+  // binary — so without this the property is undefined and the call throws
+  // TypeError "not a function". QuickJS collapses that throw onto the async $Ty
+  // frame (stack top is just `$Ty`, no deeper frame), so it surfaces to the
+  // model as "Error calling tool (X): not a function" and EVERY agentic tool
+  // call fails before the tool ever runs. Node's contract: returns
+  // {rss,heapTotal,heapUsed,external,arrayBuffers} in bytes, and memoryUsage.rss
+  // is itself a fast-path function returning the rss number. We have no real
+  // figures, so report zeros: the only consumers are analytics deltas, which
+  // stay well-defined at 0 (and h9m()'s rss/statm divide is darwin-guarded to a
+  // 4096 fallback). Locked by test/node-shim-core.test.cjs.
+  memoryUsage: Object.assign(
+    () => ({ rss: 0, heapTotal: 0, heapUsed: 0, external: 0, arrayBuffers: 0 }),
+    { rss: () => 0 },
+  ),
+  // process.cpuUsage() — used on the adjacent event-loop-stall diagnostics path
+  // (`cpu:process.cpuUsage()` alongside memoryUsage.rss()); tjs has no CPU
+  // accounting. Node returns cumulative {user,system} microseconds; zeros keep
+  // any prev-relative delta well-defined.
+  cpuUsage: () => ({ user: 0, system: 0 }),
   // Event registry: signals/exit are M2+ concerns (tjs.signal exists per the
   // gate-2 matrix); M1 records handlers without wiring delivery — loudly.
   // process EventEmitter surface (Task 4 wall): the -p boot registers handlers

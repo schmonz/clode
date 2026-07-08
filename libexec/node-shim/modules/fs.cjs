@@ -26,7 +26,45 @@ const path = require('node:path');
 const td = new TextDecoder();
 const te = new TextEncoder();
 
-const constants = { F_OK: 0, X_OK: 1, W_OK: 2, R_OK: 4 };
+// Access-mode + open-flag (O_*) constants. Node's numeric O_* values are
+// platform-specific; the shim presents per navigator.platform (see
+// process.cjs detectPlatform), so pick the matching table. These feed
+// fs.promises.open(path, flags): the bundle's Bash tool opens its log file
+// with `O_WRONLY|O_CREAT|O_APPEND|O_NOFOLLOW` (a numeric bitmask). Without the
+// flags every term is undefined -> NaN bitmask, and (before promises.open
+// existed) the call threw "not a function". The values must be self-consistent
+// with promises.open's bit interpretation below; darwin/linux match the real
+// kernel values so a consumer inspecting a specific bit reads node's answer.
+const _isDarwin = (() => {
+  const np = (typeof navigator !== 'undefined' && navigator.platform) || '';
+  return /^Mac/.test(np);
+})();
+const O = _isDarwin
+  ? { O_RDONLY: 0x0000, O_WRONLY: 0x0001, O_RDWR: 0x0002, O_CREAT: 0x0200,
+      O_EXCL: 0x0800, O_TRUNC: 0x0400, O_APPEND: 0x0008, O_NOFOLLOW: 0x0100,
+      O_NONBLOCK: 0x0004, O_SYNC: 0x0080, O_DIRECTORY: 0x100000, O_CLOEXEC: 0x1000000 }
+  : { O_RDONLY: 0, O_WRONLY: 1, O_RDWR: 2, O_CREAT: 0o100, O_EXCL: 0o200,
+      O_TRUNC: 0o1000, O_APPEND: 0o2000, O_NOFOLLOW: 0o400000, O_NONBLOCK: 0o4000,
+      O_SYNC: 0o4010000, O_DIRECTORY: 0o200000, O_CLOEXEC: 0o2000000 };
+const constants = { F_OK: 0, X_OK: 1, W_OK: 2, R_OK: 4, ...O };
+
+// Translate an open() flags argument (numeric O_* bitmask OR a node string like
+// 'r'/'w'/'a'/'r+'/'w+') into the string flag FSS.open understands. FSS.open
+// (mod_fs_sync.c) accepts only 'r'|'w'|'a'|'r+'|'w+'; map the numeric bits onto
+// the closest one. O_NOFOLLOW is dropped (best-effort; FSS.open has no NOFOLLOW
+// variant — a documented, benign divergence for the Bash log file).
+function flagsToString(flags) {
+  if (typeof flags === 'string') return flags;
+  if (typeof flags !== 'number') return 'r';
+  const rw = flags & 0o3; // low 2 bits: RDONLY(0)/WRONLY(1)/RDWR(2)
+  // FSS.open supports only 'r'|'w'|'a'|'r+'|'w+' (no 'a+') — collapse onto those.
+  if (flags & O.O_APPEND) return 'a';
+  if (flags & O.O_TRUNC) return (rw === O.O_RDWR) ? 'w+' : 'w';
+  if (flags & O.O_CREAT) return (rw === O.O_RDWR) ? 'w+' : 'w';
+  if (rw === O.O_RDWR) return 'r+';
+  if (rw === O.O_WRONLY) return 'w';
+  return 'r';
+}
 
 // latin1/binary decode: 1 byte -> 1 code point (0..255). This is the
 // extractor's core representation (extract-claude-js reads the native binary as
@@ -290,7 +328,7 @@ const fsMod = {
   unlinkSync: (p) => FSS.unlink(p),
   renameSync: (a, b) => FSS.rename(a, b),
   accessSync: (p, m) => FSS.access(p, m ?? constants.F_OK),
-  openSync: (p, flags) => FSS.open(p, flags ?? 'r'),
+  openSync: (p, flags) => FSS.open(p, flagsToString(flags ?? 'r')),
   closeSync: (fd) => FSS.close(fd),
   copyFileSync: (a, b) => writeFileSync(b, readFileSync(a)),
   symlinkSync: (target, p) => FSS.symlink(target, p),
@@ -319,6 +357,31 @@ function timeToMs(t) {
   if (typeof t === 'number') return t * 1000;
   if (typeof t === 'string') { const n = Number(t); return Number.isFinite(n) ? n * 1000 : Date.now(); }
   return Date.now();
+}
+
+// fs.promises FileHandle over a raw FSS fd. Node's FileHandle is richer, but
+// the shim provides the members deps actually reach: `fd` (a real inheritable
+// OS fd), close(), and best-effort read/write/stat/appendFile that reuse the
+// sync core. Not an EventEmitter (node's isn't relied on here).
+function makeFileHandle(fd, p) {
+  let closed = false;
+  return {
+    fd,
+    async close() { if (!closed) { closed = true; FSS.close(fd); } },
+    async read(buffer, offset, length, position) {
+      const bytesRead = readSync(fd, buffer, offset ?? 0, length ?? buffer.length, position ?? null);
+      return { bytesRead, buffer };
+    },
+    async write(data, a, b, c) {
+      const bytesWritten = writeSync(fd, data, a, b, c);
+      return { bytesWritten, buffer: data };
+    },
+    async writeFile(data, opts) { writeAll(fd, typeof data === 'string' ? encodeStr(data, typeof opts === 'string' ? opts : opts?.encoding) : new Uint8Array(data.buffer ?? data, data.byteOffset ?? 0, data.byteLength ?? data.length), null); },
+    async appendFile(data, opts) { writeAll(fd, typeof data === 'string' ? encodeStr(data, typeof opts === 'string' ? opts : opts?.encoding) : new Uint8Array(data.buffer ?? data, data.byteOffset ?? 0, data.byteLength ?? data.length), null); },
+    async stat() { return new Stats(FSS.fstat(fd)); },
+    async sync() {},
+    async datasync() {},
+  };
 }
 
 const promises = {
@@ -351,6 +414,16 @@ const promises = {
   // uv link — use it for the async surface (linkSync remains a wall).
   link: async (existing, p) => { await tjs.link(existing, p); },
   mkdtemp: async (prefix) => mkdtempSync(prefix),
+  // fs.promises.open(path, flags, mode) -> FileHandle. The Bash tool opens its
+  // per-command log file here and passes the FileHandle's real fd as child
+  // stdio ["pipe", fh.fd, fh.fd] so the subprocess writes stdout/stderr into
+  // the file; the tool then closes its own fd (the spawned child keeps the
+  // inherited dup — see child_process.cjs numeric-fd stdio + the tjs UV_INHERIT_FD
+  // patch) and reads the file back for the result. FSS.open returns a real,
+  // non-CLOEXEC (inheritable) fd, which is exactly what that pattern needs.
+  // FileHandle carries the fd plus the handful of methods the shape needs
+  // (close/read/write/stat/appendFile) routed through the existing sync core.
+  open: async (p, flags, mode) => makeFileHandle(FSS.open(p, flagsToString(flags)), p),
   fsync: async () => {},       // best-effort (see fsyncSync note)
   fdatasync: async () => {},
   rm: async (p, opts) => {

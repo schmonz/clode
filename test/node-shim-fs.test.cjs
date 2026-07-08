@@ -51,6 +51,46 @@ test('fs characterization vs host node', (t) => {
   assert.strictEqual(r.stdout.trim(), nodeOut);
 });
 
+// fs.promises.open + O_* constants (tjs Bash-tool wall): the bundle's Bash tool
+// opens a per-command log file with `fs.promises.open(path, O_WRONLY|O_CREAT|
+// O_APPEND|O_NOFOLLOW)` and passes the returned FileHandle's real fd as child
+// stdio so the subprocess writes into the file. Without promises.open (returning
+// a FileHandle with a numeric .fd) and the O_* constants, that throws
+// "not a function" and EVERY Bash tool call fails. Verify: the constants are
+// numbers, open() yields a FileHandle whose fd write+append lands bytes that
+// read back, and close() works — same observable answers as host node.
+const OPEN_PROG = `
+const fs = require('node:fs');
+const path = require('node:path');
+const dir = process.argv[2];
+(async () => {
+  const out = [];
+  out.push(['O_WRONLY','O_CREAT','O_APPEND','O_RDONLY','O_TRUNC'].every((k) => typeof fs.constants[k] === 'number'));
+  const p = path.join(dir, 'log.txt');
+  const fh = await fs.promises.open(p, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_APPEND);
+  out.push(typeof fh.fd === 'number' && fh.fd >= 0);
+  await fh.write(Buffer.from('line1\\n'));
+  await fh.appendFile('line2\\n');
+  await fh.close();
+  out.push(fs.readFileSync(p, 'utf8'));
+  console.log(JSON.stringify(out));
+})();
+`;
+
+test('fs.promises.open + O_* constants vs host node', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-open-'));
+  const f = path.join(base, 'open.cjs');
+  fs.writeFileSync(f, OPEN_PROG);
+  const nodeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-open-node-'));
+  const tjsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-open-tjs-'));
+  const nodeOut = require('node:child_process')
+    .execFileSync(process.execPath, [f, nodeDir], { encoding: 'utf8' }).trim();
+  const r = runLoader(f, [tjsDir]);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.stdout.trim(), nodeOut);
+});
+
 // latin1 byte round-trip: this is the extractor's core representation
 // (extract-claude-js reads the native binary as a latin1 string so 1 char == 1
 // byte, then writes Buffer.from(text, 'latin1')). readFileSync(,'latin1') must

@@ -234,6 +234,33 @@ console.log(JSON.stringify({ isNum: typeof a === 'number', nonneg: a >= 0, advan
   assert.strictEqual(r.stdout.trim(), nodeOut);
 });
 
+// Wall (tjs tool-use): $Ty, the bundle's tool runner, calls
+// `process.memoryUsage()` immediately before every tool's e.call() to record
+// an rss/heap/external baseline for tengu_tool_use_success analytics. tjs has
+// no memory API, so without the shim the property is undefined and the call
+// throws TypeError "not a function"; QuickJS collapses that onto the async
+// runner frame, surfacing to the model as "Error calling tool (X): not a
+// function" — EVERY agentic tool call fails before the tool runs. Node's
+// contract: an object with numeric rss/heapTotal/heapUsed/external/arrayBuffers
+// (bytes), plus a memoryUsage.rss() fast-path function. cpuUsage() is used on
+// an adjacent stall-diagnostics path and must also exist.
+test('process.memoryUsage()/cpuUsage(): numeric fields, does not throw', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-mem-'));
+  const f = path.join(dir, 'mem.cjs');
+  fs.writeFileSync(f, `const m = process.memoryUsage();
+const c = process.cpuUsage();
+console.log(JSON.stringify({
+  isObj: m && typeof m === 'object',
+  fields: ['rss','heapTotal','heapUsed','external','arrayBuffers'].every((k) => typeof m[k] === 'number'),
+  rssFn: typeof process.memoryUsage.rss === 'function' && typeof process.memoryUsage.rss() === 'number',
+  cpu: c && typeof c.user === 'number' && typeof c.system === 'number',
+}));`);
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), { isObj: true, fields: true, rssFn: true, cpu: true });
+});
+
 // Wall (Task 4): the -p bundle subclasses EventEmitter and calls
 // setMaxListeners(0) in its constructor; also uses prependListener/eventNames.
 // These must match host node's observable behavior.

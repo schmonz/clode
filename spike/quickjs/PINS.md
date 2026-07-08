@@ -127,3 +127,21 @@ quickjs-ng-js_exepath-netbsd patch 2026-07-06
 #   Fix: return JS_NewInt32(ctx, r) (the byte count) on the sync-complete path. Also
 #   fixes udp.js's identical latent hang. Upstream-txiki candidate. Locked by
 #   node-shim-child-process.test.cjs "persistent shell via child.stdin" row.
+# txiki-spawn-inherit-fd.patch: mod_process.c tjs_spawn() now accepts a NUMBER for
+#   stdin/stdout/stderr and inherits (dups) that fd into the child (UV_INHERIT_FD),
+#   in addition to the existing pipe-stream / 'inherit' / 'ignore' cases (2026-07-08).
+#   Symptom: under tjs EVERY Claude Code Bash tool call failed with "Error calling
+#   tool (Bash): not a function". Root cause chain: the Bash tool (rPe) opens a
+#   per-command log file via fs.promises.open() and passes the FileHandle's fd as
+#   child stdio ["pipe", fd, fd] so the subprocess writes stdout/stderr into the file
+#   (the tool reads the file back for the result — getStdout()); it then closes its
+#   OWN fd right after spawn, relying on the child having inherited its own dup. tjs
+#   spawn only understood pipe/'inherit'/'ignore' — a numeric fd fell through to the
+#   default (parent std fds), so the child's output never reached the log file (and,
+#   before the fs shim gained promises.open + O_* constants, the open() itself threw
+#   the "not a function"). A JS-only pipe->file bridge is impossible here: the parent
+#   fd is already closed by the time output flows, so the child MUST truly inherit the
+#   fd. Fix is the node/libuv-faithful one. Paired with node-shim fs.cjs (O_* consts +
+#   promises.open -> FileHandle{fd,close,...}) and child_process.cjs (numeric-fd stdio
+#   passthrough). Locked by node-shim-fs.test.cjs "fs.promises.open + O_* constants"
+#   and the live tjs Bash tool repro (echo ZQ returns ZQ). Upstream-txiki candidate.

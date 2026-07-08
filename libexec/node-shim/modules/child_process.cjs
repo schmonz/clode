@@ -85,13 +85,28 @@ function resolveExe(file, env) {
   return file; // let tjs.spawn surface the ENOENT
 }
 
+// Map one node stdio slot value to what tjs.spawn accepts. 'inherit'/'ignore'
+// pass through; a NUMBER is a raw fd the child should inherit (tjs.spawn's
+// numeric-fd -> UV_INHERIT_FD path, added in the mod_process.c patch) — the
+// Bash tool uses this to redirect a child's stdout/stderr into a log-file fd it
+// opened via fs.promises.open. A stream object or anything else falls back to a
+// 'pipe' (the shim then wraps proc.stdX as a node stream). When a slot is a
+// number/inherit/ignore, tjs.spawn creates no pipe, so proc.stdX is undefined
+// and child.stdX becomes null — matching node, where a redirected/inherited fd
+// yields no readable stream on the parent's ChildProcess.
+function normSlot(v, def) {
+  if (typeof v === 'number') return v;
+  if (v === 'inherit') return 'inherit';
+  if (v === 'ignore') return 'ignore';
+  return def;
+}
 function normStdio(opts) {
   const s = opts.stdio;
   const one = (i, def) => Array.isArray(s) ? (s[i] ?? def) : (s ?? def);
   return {
-    stdin: one(0, 'pipe') === 'inherit' ? 'inherit' : 'pipe',
-    stdout: one(1, 'pipe') === 'inherit' ? 'inherit' : 'pipe',
-    stderr: one(2, 'pipe') === 'inherit' ? 'inherit' : 'pipe',
+    stdin: normSlot(one(0, 'pipe'), 'pipe'),
+    stdout: normSlot(one(1, 'pipe'), 'pipe'),
+    stderr: normSlot(one(2, 'pipe'), 'pipe'),
   };
 }
 
