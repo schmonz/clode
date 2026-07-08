@@ -65,6 +65,7 @@
 //   extend test-first if a real call site needs it.
 const { EventEmitter } = require('node:events');
 const path = require('node:path');
+const { Readable } = require('node:stream');
 const FSS = globalThis.__tjs_fs_sync;
 
 // Opt-in spawn tracing (CLODE_SHIM_TRACE=1) — diagnostic for the -p wall-walk;
@@ -173,40 +174,51 @@ function spawn(file, args = [], opts = {}) {
     return child;
   }
   child.pid = proc.pid;
-  // Wrap tjs WHATWG streams as node-ish EventEmitters emitting 'data'/'end'.
+  // Wrap tjs WHATWG streams as a REAL node-shim stream.Readable (Task 4b fix),
+  // not a bare EventEmitter. The bundle's credential read goes through execa,
+  // and execa/get-stream's collector (`aLt` in the staged cli.cjs) gates on
+  // `typeof stream[Symbol.asyncIterator] === 'function'` (its `CYu` check)
+  // before it will even start consuming — a bare EventEmitter has no such
+  // method, so execa silently collected NOTHING from a spawned `security`
+  // read, `xbs()` returned null, and the bundle fell back to "Not logged in"
+  // even though the subscription credential was right there in the Keychain.
+  // Confirmed by diffing this same staged bundle's `-p` boot under host node
+  // (prints PONG) vs tjs (printed "Not logged in") — host node's real
+  // ChildProcess.stdout has .pipe()/[Symbol.asyncIterator]()/paused-mode
+  // buffering; the shim's old wrapReadable had none of the three. Reusing
+  // stream.cjs's Readable gives ALL of them (pipe, asyncIterator, on('data'))
+  // for free instead of forking a second stream implementation.
   const wrapReadable = (s, which) => {
     if (!s) return null;
-    const em = new EventEmitter();
-    em.readable = true;
-    em.destroyed = false;
-    // .destroy() — the bundle's execa-style stream cleanup (get-stream's `Q2n`)
-    // calls stdout/stderr.destroy() on the error path; a missing method throws
-    // `TypeError: not a function` and aborts that cleanup. Node's destroy marks
-    // destroyed and emits 'close'; idempotent. Cancels the reader so the drain
-    // loop stops.
-    em.destroy = (err) => {
-      if (em.destroyed) return em;
-      em.destroyed = true;
-      try { em._reader && em._reader.cancel(); } catch { /* already closed */ }
-      queueMicrotask(() => { if (err) em.emit('error', err); em.emit('close'); });
-      return em;
+    const r = new Readable({ read() {} });
+    // .destroy() must ALSO cancel the underlying WHATWG reader (stopping the
+    // drain loop below), on top of Readable's own destroyed/'close' contract
+    // — the execa-style cleanup (get-stream's `Q2n`) calls stdout.destroy()
+    // on the error/cleanup path.
+    const baseDestroy = r.destroy.bind(r);
+    r.destroy = (err) => {
+      if (r.destroyed) return r;
+      try { r._reader && r._reader.cancel(); } catch { /* already closed */ }
+      return baseDestroy(err);
     };
-    em.pause = () => em; em.resume = () => em;
     (async () => {
       try {
+        // Assigned synchronously (before the first await, since an async
+        // function body runs sync up to its first await) so a destroy() call
+        // made right after wrapReadable() returns can still find and cancel it.
         const reader = s.getReader();
-        em._reader = reader;
+        r._reader = reader;
         for (;;) {
-          if (em.destroyed) break;
+          if (r.destroyed) break;
           const { value, done } = await reader.read();
           if (done) break;
-          if (value) em.emit('data', Buffer.from(value));
+          if (value) r.push(Buffer.from(value));
         }
         trace('stream end', file, which);
-        em.emit('end');
-      } catch (e) { trace('stream error', file, which, String(e)); em.emit('error', e); }
+        r.push(null);
+      } catch (e) { trace('stream error', file, which, String(e)); r.emit('error', e); }
     })();
-    return em;
+    return r;
   };
   child.stdout = wrapReadable(proc.stdout, 'stdout');
   child.stderr = wrapReadable(proc.stderr, 'stderr');

@@ -19,6 +19,7 @@ class Readable extends EventEmitter {
     this._ended = false;
     this.destroyed = false;
     this.readableEnded = false;
+    this.readable = true; // Task 4b: child_process wraps a real child stdout/stderr in this
     if (typeof opts.read === 'function') this._read = opts.read;
   }
   _read() {}
@@ -36,10 +37,13 @@ class Readable extends EventEmitter {
     queueMicrotask(() => { if (err) this.emit('error', err); this.emit('close'); });
     return this;
   }
+  pause() { return this; }
+  resume() { return this; }
   push(chunk) {
     if (chunk === null) {
       this._ended = true;
       this.readableEnded = true;
+      this.readable = false;
       queueMicrotask(() => this.emit('end'));
       return false;
     }

@@ -323,6 +323,76 @@ test('spawn: child.stdout.destroy() is a function and emits close', (t) => {
   assert.deepStrictEqual(JSON.parse(r.stdout.trim()), { typ: 'function', closed: true });
 });
 
+// Task 4b wall (the tjs-subscription-boot fix): execa/get-stream's collector
+// (the staged bundle's `aLt`, confirmed by grepping the extracted cli.cjs)
+// requires child.stdout to support pipe(), [Symbol.asyncIterator](), AND
+// on('data') without dropping chunks — a bare EventEmitter (the old
+// wrapReadable) had only on('data')/'end', so execa silently collected
+// NOTHING from a spawned `security` read and the bundle read back "Not
+// logged in" even on a real subscription. These three rows characterize all
+// three consumption methods the shim's async child.stdout/stderr must now
+// support, each diffed against the host-node oracle for the same fixture.
+test('spawn: child.stdout.pipe(writable) collects data like node (execa/get-stream style)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const cp = require('node:child_process');
+    const { Writable } = require('node:stream');
+    const c = cp.spawn('/bin/echo', ['piped-data']);
+    let out = '';
+    const w = new Writable({ write(chunk, enc, cb) { out += chunk.toString(); cb(); } });
+    w.on('finish', () => console.log(JSON.stringify({ out: out.trim() })));
+    c.stdout.pipe(w);
+    c.on('exit', () => c.stdout.on('end', () => w.end()));`;
+  const f = prog(body);
+  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
+  assert.strictEqual(node.out, 'piped-data');
+});
+
+test('spawn: for await (const c of child.stdout) collects data like node (execa/get-stream style)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const cp = require('node:child_process');
+    (async () => {
+      const c = cp.spawn('/bin/echo', ['iterated-data']);
+      let out = '';
+      for await (const chunk of c.stdout) out += chunk.toString();
+      console.log(JSON.stringify({ out: out.trim() }));
+    })();`;
+  const f = prog(body);
+  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
+  assert.strictEqual(node.out, 'iterated-data');
+});
+
+// Buffer-until-consumed: the consumer attaches its 'data' listener a
+// MICROTASK after spawn() returns, not synchronously. A real child's stdout
+// arrives via genuine async I/O (well beyond a microtask), so a late-attached
+// listener must not miss it — the old wrapReadable emitted 'data' eagerly to
+// whoever happened to be listening at read time, no buffering; this pins that
+// the shim does not drop a chunk race like that.
+test('spawn: child.stdout data is not dropped when the consumer attaches a tick late', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const cp = require('node:child_process');
+    const c = cp.spawn('/bin/echo', ['late-attach']);
+    queueMicrotask(() => {
+      let out = '';
+      c.stdout.on('data', (d) => { out += d.toString(); });
+      c.on('exit', () => console.log(JSON.stringify({ out: out.trim() })));
+    });`;
+  const f = prog(body);
+  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
+  assert.strictEqual(node.out, 'late-attach');
+});
+
 test('bun-shim-style feature detection now patches (real functions, not {})', (t) => {
   if (skipUnlessTjs(t)) return;
   const body = `
