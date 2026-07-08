@@ -66,8 +66,11 @@ quickjs-ng-js_exepath-netbsd patch 2026-07-06
 #   AI_V4MAPPED, an RFC 3493 flag NetBSD never implemented -> shimmed to 0 when
 #   undefined (OR becomes a no-op); (b) mod_posix-socket.c's non-Apple branch
 #   getsockopt()s SO_DOMAIN/SO_PROTOCOL (Linux/FreeBSD extensions, absent on
-#   NetBSD) -> #ifdef-guarded like the file's own constants table. Full-tree
-#   sweep against NetBSD 10 headers shows no other unguarded socket/dns consts. The other M4 build walls
+#   NetBSD) -> #ifdef-guarded like the file's own constants table; (c) mod_ffi.c's
+#   LIBC_NAME/LIBM_NAME OS switch had no NetBSD branch (#error 'unknown os') ->
+#   added sonames libc.so.12/libm.so.0 (unversioned .so symlinks are comp.tgz-only).
+#   Full-tree sweeps: no other unguarded socket/dns consts vs NetBSD 10 headers,
+#   and mod_ffi.c:1260 was the only OS-switch #error in src/. The other M4 build walls
 #   need no patch: ada needs pkgsrc gcc12 (base g++ 10.5 lacks C++20 constexpr
 #   string); mimalloc 3.2.7 is broken on NetBSD upstream (its #if __NetBSD__
 #   options-table entry names the pre-rename mi_option_eager_commit_delay) ->
