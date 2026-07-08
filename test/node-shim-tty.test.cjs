@@ -6,7 +6,8 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { skipUnlessTjs } = require('./node-shim-helper.cjs');
+const { spawnSync } = require('node:child_process');
+const { skipUnlessTjs, LOADER, tjsPath } = require('./node-shim-helper.cjs');
 const { runLoaderPty, runNodePty, extractMark } = require('./node-shim-tty-helper.cjs');
 
 function fixture(body) {
@@ -172,4 +173,42 @@ test("process.stdin fires 'data' from on() alone, without resume()/setRawMode, m
   const tjsOut = extractMark((await runLoaderPty(f, { input: 'ab\n', inputDelayMs: 500, ms: 4000 })).out);
   assert.deepStrictEqual(tjsOut, nodeOut);
   assert.deepStrictEqual(tjsOut, { hex: '61620a' }); // 'ab\n'
+});
+
+// Characterization/regression lock: merely READING tjs.stdout/tjs.stderr/
+// tjs.stdin (as the old isatty(fd) implementation did) lazily constructs tjs's
+// async libuv stream wrapper for that fd, which as a side effect flips the fd
+// to O_NONBLOCK. That breaks writeSyncFd's blocking short-write loop: a
+// process.stdout.write() bigger than the pipe's kernel buffer (~64KB) then
+// throws EUNKNOWN / short-writes instead of blocking, silently losing bytes.
+// This is exactly the -p path's shape: chalk/supports-color calls
+// tty.isatty(1) at module load, then a later large stdout.write must still
+// land in full. Runs under a real PIPE (runLoader), NOT a PTY — the bug only
+// manifests on the non-terminal fast path. Must stay green: this test is RED
+// on the pre-fix isatty() (reads tjs.stdout/tjs.stderr/tjs.stdin) and GREEN
+// once isatty() decides via the side-effect-free fstat/S_IFCHR check instead.
+test('a large process.stdout.write after isatty(1) still lands in full under a pipe (regression: isatty must not flip fd to O_NONBLOCK)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const N = 512 * 1024;
+  const f = fixture(`
+    const tty = require('node:tty');
+    tty.isatty(1);
+    tty.isatty(2);
+    tty.isatty(0);
+    const payload = 'A'.repeat(${N});
+    process.stdout.write(payload);
+    process.stdout.write('@@LEN@@' + payload.length + '\\n');
+  `);
+  const opts = { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 };
+  const nodeR = spawnSync(process.execPath, [f], opts);
+  const tjsR = spawnSync(tjsPath(), ['run', LOADER, f], opts);
+  assert.strictEqual(nodeR.status, 0, `host node stderr: ${nodeR.stderr}`);
+  assert.strictEqual(tjsR.status, 0, `tjs stderr: ${tjsR.stderr}`);
+  assert.ok(!/EUNKNOWN/.test(tjsR.stderr), `tjs stderr contained EUNKNOWN: ${tjsR.stderr}`);
+  const nodeAcount = (nodeR.stdout.match(/A/g) || []).length;
+  const tjsAcount = (tjsR.stdout.match(/A/g) || []).length;
+  assert.strictEqual(nodeAcount, N, 'host node baseline: full payload landed');
+  assert.strictEqual(tjsAcount, N, 'tjs: full payload must land, not short-write/throw');
+  assert.match(nodeR.stdout, new RegExp(`@@LEN@@${N}`));
+  assert.match(tjsR.stdout, new RegExp(`@@LEN@@${N}`));
 });

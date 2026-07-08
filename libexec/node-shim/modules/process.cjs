@@ -25,6 +25,7 @@
 // green with this approach. The getWriter machinery is dropped entirely.
 // console.log is tjs-native and untouched by this change.
 const { writeSyncFd } = require('../internal/stdio-write.cjs');
+const { isTerminalFd } = require('../internal/terminal-fd.cjs');
 
 function detectPlatform() {
   const np = (typeof navigator !== 'undefined' && navigator.platform) || '';
@@ -86,24 +87,10 @@ function makeWriteStream(fd, writeFn) {
   s.setDefaultEncoding = function () { return this; };
   return s;
 }
-// isTerminal detection (found empirically, not in the original design):
-// merely READING tjs.stdout.isTerminal / tjs.stderr.isTerminal lazily
-// constructs tjs's async libuv-backed stream wrapper for that fd, which as a
-// side effect puts the underlying fd into O_NONBLOCK. That breaks the
-// writeSyncFd short-write-loop's blocking assumption for the (far more
-// common) non-TTY case — a large payload over a pipe whose kernel buffer
-// fills mid-write then throws EUNKNOWN instead of blocking. Confirmed via a
-// minimal repro: `void tjs.stdout;` alone, with no other change, makes a
-// >64KB process.stdout.write over a pipe fail the same way.
-// __tjs_fs_sync.fstat(fd) is a plain synchronous stat(2)/fstat(2) call with
-// no such side effect, so decide terminal-ness from the raw POSIX mode bits
-// (S_ISCHR) instead. Only once we already know fd IS a real terminal do we
-// touch tjs.stdout/tjs.stderr (inside tty.WriteStream, for width/height).
-const S_IFMT = 0o170000;
-const S_IFCHR = 0o020000;
-function isTerminalFd(fd) {
-  try { return (globalThis.__tjs_fs_sync.fstat(fd).mode & S_IFMT) === S_IFCHR; } catch { return false; }
-}
+// isTerminal detection: see internal/terminal-fd.cjs for the empirically-found
+// O_NONBLOCK side-effect writeup (reading tjs.stdout/tjs.stderr/tjs.stdin has
+// it; __tjs_fs_sync.fstat(fd) does not). isTerminalFd is shared with
+// modules/tty.cjs's isatty() so the mode-bit logic lives in one place.
 function makeStdout(fd, writeFn, isTerminal) {
   if (isTerminal) {
     const tty = require('node:tty');

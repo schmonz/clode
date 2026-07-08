@@ -6,14 +6,22 @@
 // capture stdout through a pipe — so isatty is false for every fd. Characterized
 // by test/node-shim-core.test.cjs (tty row).
 //
-// isatty over the public tjs stdio streams: fd 0/1/2 map to tjs.stdin/stdout/
-// stderr, whose .isTerminal is a real TIOCGWINSZ/isatty-backed probe. Other fds
-// aren't individually probeable from JS in this build → false (the bundle only
-// asks about 0/1/2).
+// isatty over fd 0/1/2 via the shared side-effect-free fstat/S_IFCHR check
+// (internal/terminal-fd.cjs). REGRESSION HISTORY: this used to read
+// tjs.stdin.isTerminal / tjs.stdout.isTerminal / tjs.stderr.isTerminal
+// directly — merely READING those tjs stdio streams lazily constructs tjs's
+// async libuv wrapper for that fd, which as a side effect flips the fd to
+// O_NONBLOCK. That broke writeSyncFd's blocking short-write loop: once
+// isatty(1) had been called (e.g. by chalk/supports-color at module load on
+// the -p path), a later process.stdout.write() bigger than the pipe's kernel
+// buffer (~64KB) would short-write and throw `EUNKNOWN, write ''`, silently
+// losing bytes on the non-TTY fast path. See
+// test/node-shim-tty.test.cjs ("a large process.stdout.write after
+// isatty(1)...") for the characterization lock. Other fds aren't individually
+// probeable from JS in this build → false (the bundle only asks about 0/1/2).
+const { isTerminalFd } = require('../internal/terminal-fd.cjs');
 function isatty(fd) {
-  if (fd === 0) return !!tjs.stdin.isTerminal;
-  if (fd === 1) return !!tjs.stdout.isTerminal;
-  if (fd === 2) return !!tjs.stderr.isTerminal;
+  if (fd === 0 || fd === 1 || fd === 2) return isTerminalFd(fd);
   return false;
 }
 
