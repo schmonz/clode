@@ -69,3 +69,40 @@ test('process.stdout emits resize with updated columns on SIGWINCH', async (t) =
   assert.match(nodeOut, /@@TTY@@\{"cols":100\}/);
   assert.match(tjsOut, /@@TTY@@\{"cols":100\}/);
 });
+
+test('process.stdin isTTY + setRawMode toggles isRaw, matching host node', async (t) => {
+  if (skipUnlessTjs(t)) return;
+  const f = fixture(`
+    const before = process.stdin.isRaw === true;
+    process.stdin.setRawMode(true);
+    const during = process.stdin.isRaw === true;
+    process.stdin.setRawMode(false);
+    console.log('@@TTY@@' + JSON.stringify({ isTTY: process.stdin.isTTY === true, before, during }));
+  `);
+  const nodeOut = extractMark((await runNodePty(f, { ms: 3000 })).out);
+  const tjsOut = extractMark((await runLoaderPty(f, { ms: 3000 })).out);
+  assert.deepStrictEqual(tjsOut, nodeOut);
+  assert.deepStrictEqual(tjsOut, { isTTY: true, before: false, during: true });
+});
+
+test('process.stdin delivers raw keystrokes in order, matching host node', async (t) => {
+  if (skipUnlessTjs(t)) return;
+  const f = fixture(`
+    process.stdin.setRawMode(true);
+    process.stdin.setEncoding('utf8');
+    let got = '';
+    process.stdin.on('data', (d) => {
+      got += d;
+      if (got.length >= 3) {
+        const hex = Buffer.from(got, 'utf8').toString('hex');
+        console.log('@@TTY@@' + JSON.stringify({ hex }));
+        process.exit(0);
+      }
+    });
+    process.stdin.resume();
+  `);
+  const nodeOut = extractMark((await runNodePty(f, { input: 'xyz', inputDelayMs: 500, ms: 4000 })).out);
+  const tjsOut = extractMark((await runLoaderPty(f, { input: 'xyz', inputDelayMs: 500, ms: 4000 })).out);
+  assert.deepStrictEqual(tjsOut, nodeOut);
+  assert.deepStrictEqual(tjsOut, { hex: '78797a' }); // 'xyz'
+});

@@ -117,6 +117,16 @@ function getStderr() { return _stderr || (_stderr = makeStdout(2, writeErr, isTe
 let _stdin;
 function getStdin() {
   if (_stdin) return _stdin;
+  // Terminal-ness decided via isTerminalFd (fstat S_IFCHR), NOT tjs.stdin.isTerminal:
+  // reading tjs.stdin lazily constructs tjs's async libuv stream wrapper and flips
+  // fd 0 to O_NONBLOCK as a side effect (same quirk as stdout/stderr above), which
+  // would break the non-TTY path's blocking-read assumption. Only the TTY branch
+  // below (which needs tjs.stdin.getReader() for the pump) may touch tjs.stdin.
+  if (isTerminalFd(0)) {
+    const tty = require('node:tty');
+    _stdin = new tty.ReadStream(0);
+    return _stdin;
+  }
   const { Readable } = require('node:stream');
   const s = new Readable({ read() {} });
   s.isTTY = undefined;   // piped/non-tty stdin, matching host node (undefined)
