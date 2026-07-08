@@ -216,6 +216,33 @@ function pipeline(...args) {
   return last;
 }
 
+// stream.finished(stream, [opts], cb): top-level callback form (the SDK/deps use
+// both this and the promises form). Fires cb(null) once the stream reaches a
+// terminal state ('end'/'finish'/'close') and cb(err) on 'error'; fires at most
+// once and returns a cleanup function that detaches the listeners, as Node does.
+function finished(stream, optsOrCb, maybeCb) {
+  const cb = typeof optsOrCb === 'function' ? optsOrCb : maybeCb;
+  let done = false;
+  const onEnd = () => settle(null);
+  const onErr = (e) => settle(e || new Error('stream error'));
+  function settle(err) {
+    if (done) return; done = true;
+    cleanup();
+    if (typeof cb === 'function') cb(err);
+  }
+  function cleanup() {
+    stream.removeListener?.('end', onEnd);
+    stream.removeListener?.('finish', onEnd);
+    stream.removeListener?.('close', onEnd);
+    stream.removeListener?.('error', onErr);
+  }
+  stream.on('end', onEnd);
+  stream.on('finish', onEnd);
+  stream.on('close', onEnd);
+  stream.on('error', onErr);
+  return cleanup;
+}
+
 // stream/consumers (Task 4 wall): consume a stream (a node-shim Readable, an
 // async-iterable, or a WHATWG ReadableStream via getReader) fully into a value.
 // The -p bundle captures require('stream/consumers'). Real, characterized by
@@ -249,5 +276,5 @@ const promises = {
   }),
 };
 
-module.exports = { Readable, Writable, PassThrough, Transform, pipeline, Stream: Readable, consumers, promises };
+module.exports = { Readable, Writable, PassThrough, Transform, pipeline, finished, Stream: Readable, consumers, promises };
 module.exports.default = module.exports;
