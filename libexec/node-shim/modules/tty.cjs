@@ -32,19 +32,24 @@ const { Readable } = require('node:stream');
 // and push Buffer chunks into this Node Readable so Ink's input loop sees live
 // keypresses. Started lazily (Node's stdin is paused until a consumer pulls) so
 // merely touching process.stdin doesn't hold the loop open on non-interactive
-// paths. DIVERGENCE (documented): backpressure is best-effort — we push every
-// chunk the reader yields rather than honoring highWaterMark pauses; Ink reads
-// keystrokes fast enough that this is not observable. Resume/pause flip a flag
-// the pump checks between reads.
+// paths. Three equivalent lazy-start triggers, matching host node's observable
+// "stdin flows once someone asks for data" behavior: resume(), an 'on(data)'
+// listener (the shim's base Readable.on() calls this._read() the first time a
+// 'data' listener is added — see stream.cjs — so overriding _read() to start
+// the pump wires this up for free), and setRawMode(true) (Ink's actual path).
+// _startPump is idempotent (guarded by _pumping) so it's safe to call from all
+// three. DIVERGENCE (documented): backpressure is best-effort — we push every
+// chunk the reader yields rather than honoring highWaterMark pauses/pause();
+// Ink reads keystrokes fast enough that this is not observable.
 class ReadStream extends Readable {
   constructor(fd) {
-    super({ read() {} });
+    super();
     this.fd = fd;
     this.isTTY = true;
     this.isRaw = false;
     this._pumping = false;
-    this._flowing = false;
   }
+  _read() { this._startPump(); }
   _startPump() {
     if (this._pumping) return;
     this._pumping = true;
@@ -76,10 +81,35 @@ class ReadStream extends Readable {
   // itself and emits 'data' directly, bypassing the base class's Buffer-only
   // push() when an encoding is set (matching host node's post-setEncoding
   // 'data'-emits-strings contract); with no encoding set, behavior is unchanged.
-  setEncoding(enc) { this._encoding = enc; return this; }
+  //
+  // For utf-8/utf8 (Ink's own encoding, the path that must be right), a
+  // multi-byte character can arrive split across two pump reads (e.g. the
+  // 4-byte emoji F0 9F 99 82 delivered as two separate keystroke chunks). Host
+  // node's internal StringDecoder buffers an incomplete trailing sequence and
+  // reassembles it on the next chunk; decoding each chunk independently would
+  // instead emit U+FFFD replacement characters for the split bytes. So we keep
+  // a SINGLE persistent TextDecoder for the lifetime of the stream and feed it
+  // chunks with { stream: true }, which carries incomplete trailing bytes
+  // forward exactly like StringDecoder does.
+  setEncoding(enc) {
+    this._encoding = enc;
+    const norm = String(enc).toLowerCase();
+    this._utf8Decoder = (norm === 'utf8' || norm === 'utf-8') ? new TextDecoder('utf-8') : null;
+    return this;
+  }
   push(chunk) {
     if (chunk !== null && this._encoding) {
       const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      if (this._utf8Decoder) {
+        const s = this._utf8Decoder.decode(b, { stream: true });
+        if (s.length) queueMicrotask(() => this.emit('data', s));
+        return true;
+      }
+      // DIVERGENCE (documented, not fixed): non-utf8 encodings decode each
+      // pump chunk independently with no carried decoder state, so a
+      // multi-byte sequence split across two reads will NOT reassemble here
+      // the way host node's StringDecoder would. Ink only ever uses utf8 (the
+      // path above), so this fallback is best-effort rather than faithful.
       queueMicrotask(() => this.emit('data', b.toString(this._encoding)));
       return true;
     }

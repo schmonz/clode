@@ -106,3 +106,70 @@ test('process.stdin delivers raw keystrokes in order, matching host node', async
   assert.deepStrictEqual(tjsOut, nodeOut);
   assert.deepStrictEqual(tjsOut, { hex: '78797a' }); // 'xyz'
 });
+
+// Characterization for the streaming-utf8-decode fix (Finding 1): the 4-byte
+// emoji U+1F642 (bytes F0 9F 99 82) is written to the PTY as TWO separate
+// writes ~500ms apart, so the shim's async pump necessarily delivers it as two
+// chunks. Each write is a raw Buffer (bypassing node-pty's string encoding, see
+// its CustomWriteStream.write: `typeof data === 'string' ? Buffer.from(data,
+// encoding) : Buffer.from(data)`) so the exact split bytes reach the pty fd
+// untouched. A persistent decoder must reassemble the sequence across the two
+// pump reads instead of emitting U+FFFD for the dangling lead bytes.
+test('a UTF-8 char split across two PTY writes reassembles via streaming decode, matching host node', async (t) => {
+  if (skipUnlessTjs(t)) return;
+  const f = fixture(`
+    process.stdin.setRawMode(true);
+    process.stdin.setEncoding('utf8');
+    let got = '';
+    process.stdin.on('data', (d) => {
+      got += d;
+      if (got.length > 0) {
+        const hex = Buffer.from(got, 'utf8').toString('hex');
+        console.log('@@TTY@@' + JSON.stringify({ got, hex }));
+        process.exit(0);
+      }
+    });
+  `);
+  const { loadPty } = require('./node-shim-tty-helper.cjs');
+  const { LOADER, tjsPath } = require('./node-shim-helper.cjs');
+  const pty = loadPty();
+  const emoji = Buffer.from('\u{1F642}', 'utf8'); // f0 9f 99 82 ('🙂')
+  const run = (cmd, args) => new Promise((resolve) => {
+    const p = pty.spawn(cmd, args, { name: 'xterm-256color', cols: 80, rows: 24, env: process.env });
+    let out = '';
+    let done = false;
+    p.onData((d) => { out += d; });
+    const finish = () => { if (done) return; done = true; try { p.kill(); } catch { /* */ } resolve(out); };
+    p.onExit(finish);
+    setTimeout(() => { try { p.write(emoji.subarray(0, 2)); } catch { /* */ } }, 300);
+    setTimeout(() => { try { p.write(emoji.subarray(2, 4)); } catch { /* */ } }, 800);
+    setTimeout(finish, 3000);
+  });
+  const nodeOut = extractMark(await run(process.execPath, [f]));
+  const tjsOut = extractMark(await run(tjsPath(), ['run', LOADER, f]));
+  assert.deepStrictEqual(tjsOut, nodeOut);
+  assert.deepStrictEqual(tjsOut, { got: '\u{1F642}', hex: 'f09f9982' });
+});
+
+// Characterization for the _read()-starts-the-pump fix (Finding 2): touching
+// process.stdin with ONLY an 'on(data)' listener — no resume(), no
+// setRawMode(true) — must still start the async fd-0 pump. The shim's base
+// Readable.on() calls this._read() on the first 'data' listener (stream.cjs),
+// and ReadStream._read() now starts the pump; before the fix ReadStream passed
+// a no-op read() to the base constructor and this trigger did nothing. Runs in
+// cooked (non-raw) mode, so the input needs a trailing newline for the PTY
+// line discipline to release it to the reading process.
+test("process.stdin fires 'data' from on() alone, without resume()/setRawMode, matching host node", async (t) => {
+  if (skipUnlessTjs(t)) return;
+  const f = fixture(`
+    process.stdin.on('data', (d) => {
+      const hex = Buffer.from(d).toString('hex');
+      console.log('@@TTY@@' + JSON.stringify({ hex }));
+      process.exit(0);
+    });
+  `);
+  const nodeOut = extractMark((await runNodePty(f, { input: 'ab\n', inputDelayMs: 500, ms: 4000 })).out);
+  const tjsOut = extractMark((await runLoaderPty(f, { input: 'ab\n', inputDelayMs: 500, ms: 4000 })).out);
+  assert.deepStrictEqual(tjsOut, nodeOut);
+  assert.deepStrictEqual(tjsOut, { hex: '61620a' }); // 'ab\n'
+});
