@@ -158,8 +158,28 @@ class Locale {
   minimize() { return this; }
 }
 
+// ECMA-402's three LEGACY constructors — Collator, NumberFormat, DateTimeFormat —
+// are callable WITHOUT `new` (web-compat): V8/Node return an instance either way,
+// and the bundle relies on it (the interactive TUI does `Intl.DateTimeFormat(...)`
+// with no `new` — an ES6 `class` throws "class constructors must be invoked with
+// 'new'", which crashed the TUI). Wrap those three so both call forms work; the
+// newer constructors (Segmenter/RelativeTimeFormat/DisplayNames/Locale) correctly
+// REQUIRE `new` in V8, so they stay plain classes. Locked by
+// test/node-shim-intl.test.cjs (node-parity on both call forms).
+const newOptional = (C) => {
+  const F = function (...args) { return new C(...args); };
+  F.prototype = C.prototype;
+  try { Object.defineProperty(F, 'name', { value: C.name }); } catch { /* ignore */ }
+  return F;
+};
+
 module.exports = {
-  Segmenter, NumberFormat, DateTimeFormat, RelativeTimeFormat, Collator, DisplayNames, Locale,
+  Segmenter,
+  NumberFormat: newOptional(NumberFormat),
+  DateTimeFormat: newOptional(DateTimeFormat),
+  RelativeTimeFormat,
+  Collator: newOptional(Collator),
+  DisplayNames, Locale,
   getCanonicalLocales: (l) => (Array.isArray(l) ? l.map(String) : [String(l)]),
   supportedValuesOf: () => [],
 };

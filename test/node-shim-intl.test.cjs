@@ -53,6 +53,38 @@ test('Intl.NumberFormat under tjs matches host node for the bundle option shapes
   assert.deepStrictEqual(JSON.parse(tjsOut), ['12.3K', '1.2M', '999', '1.0M', '1,234.5', '1,234,568', '0.50']);
 });
 
+test('Intl legacy constructors are callable without `new` (matches node) — the TUI crash', (t) => {
+  if (skipUnlessTjs(t)) return;
+  // ECMA-402: Collator/NumberFormat/DateTimeFormat work WITHOUT `new` (web-compat);
+  // the newer ones REQUIRE `new`. The bundle's TUI does `Intl.DateTimeFormat(...)`
+  // with no `new`, and an ES6 `class` threw "class constructors must be invoked with
+  // 'new'", crashing the interactive turn. Assert node-parity on both call forms.
+  const f = fixture(`
+    const out = {};
+    for (const k of ['DateTimeFormat','NumberFormat','Collator']) {
+      const C = Intl[k];
+      const wn = new C('en-US'), nn = C('en-US');
+      out[k] = { withNew: typeof (wn.format||wn.compare)==='function',
+                 noNew: typeof (nn.format||nn.compare)==='function',
+                 inst: (wn instanceof C) && (nn instanceof C) };
+    }
+    for (const k of ['Segmenter','RelativeTimeFormat','DisplayNames','Locale']) {
+      try { Intl[k](['en']); out[k+'_noNew']='NO-THROW'; } catch { out[k+'_noNew']='throws'; }
+    }
+    console.log(JSON.stringify(out));
+  `);
+  const tjsOut = runTjs(f);
+  const nodeOut = runNode(f);
+  assert.strictEqual(tjsOut, nodeOut, `tjs=${tjsOut} node=${nodeOut}`);
+  const o = JSON.parse(tjsOut);
+  for (const k of ['DateTimeFormat', 'NumberFormat', 'Collator']) {
+    assert.deepStrictEqual(o[k], { withNew: true, noNew: true, inst: true }, k);
+  }
+  for (const k of ['Segmenter', 'RelativeTimeFormat', 'DisplayNames', 'Locale']) {
+    assert.strictEqual(o[k + '_noNew'], 'throws', k);
+  }
+});
+
 test('Intl.DateTimeFormat under tjs formats the h23 timestamp shape the bundle uses', (t) => {
   if (skipUnlessTjs(t)) return;
   const f = fixture(`
