@@ -48,8 +48,21 @@ How we got there (parallel subagent workstreams, 2026-07-08):
   into freed memory). FIXED at the source: `txiki-spawn-fail-uaf.patch` (commit
   `e3e5a15`, upstream candidate) releases the handle via the async `uv_close` path
   instead of the direct free. So the "layout-sensitive SIGSEGV lottery" is closed.
-- **M2 (human-verified interactive turn) and M3 (render parity)** still ahead — the
-  TUI renders the login screen; drive a real turn next.
+- **M2 (interactive turn): mechanics WORK; 3 tjs-only "not a function" crashes on the
+  turn/session-init path found + fixed** (each traced via a bundle `ae.stack` probe in
+  the extracted `cli.cjs`, fixed as a shim gap, locked by a node-parity test):
+  `f2afbe8` **Intl polyfill** (`modules/intl.cjs` — quickjs-ng has no Intl; the loader
+  only shimmed Segmenter, so `new Intl.NumberFormat` was `new undefined()`);
+  `d39fd4d` **Readable.setEncoding** (hook/subprocess reader; now StringDecoder-backed);
+  `4bed83a` **child.stdin as a real Node Writable** (hook runner writes stdin;
+  fire-and-forget over getWriter since tjs child-stdin writes don't resolve). TUI now
+  boots clean (no error banner). Suite 122/118 pass/0 fail/4 skip.
+  **Auth "Not logged in" was NOT a tjs bug** — testing was over SSH (login Keychain
+  locked → `security` can't read the subscription credential); clean-env subscription
+  auth gives "42" under tjs == node. Confirm M2 end-to-end via a **VNC** turn (GUI
+  session, Keychain unlocked) or an API key. **M3 (render parity)** still ahead; note
+  the tjs interactive render is byte-heavy (~1.2MB vs node ~8KB/turn — redundant full
+  redraws, non-fatal), an M3/efficiency item.
 - **Build-environment follow-ups** (bit the UAF rebuild — recorded in PINS.md): the
   ~42k AppleDouble `._*` sidecars must be purged before building; `build-tjs.mjs`'s
   strict `git apply` can't re-sequence the overlapping sync-fs/sync-spawn patches on
