@@ -74,6 +74,33 @@ How we got there (parallel subagent workstreams, 2026-07-08):
 Plan: `docs/superpowers/plans/2026-07-08-phase3-tui-under-tjs.md`; design:
 `docs/superpowers/specs/2026-07-08-universal-binaries-phase3-tui-design.md`.
 
+## Endgame — automated API-surface gate (turn reactive handoff into a pre-ship gate)
+
+**Goal:** given a new upstream binary → extracted `cli.cjs`, tell us BEFORE shipping
+what the bundle needs and where tjs diverges from node — so agents polyfill from a
+work-list instead of the user hand-reproducing breakage. Full design (untracked, on
+disk): `docs/superpowers/specs/2026-07-08-api-surface-gate-design.md`.
+
+Two axes (do not conflate): **presence** (is the API defined — enumerable via the
+`wallProxy` `[wall]` misses) and **correctness** (defined but wrong — the v-flag
+regexp / UAF / setEncoding class — only a node-vs-tjs behavior diff sees these).
+Conclusive static enumeration is undecidable (computed dispatch); the reachable
+endgame is empirical + regression-gated (how Bun/Deno do Node-on-non-Node), with the
+**corpus as the only real lever** and every field miss becoming a permanent case.
+
+- **v0 SHIPPED: `scripts/apicheck.mjs`** — seed corpus of `clode` invocations run
+  under node AND tjs; reports the `[wall]` miss union (Axis 1), node-vs-tjs exit/
+  deterministic-stdout divergences (Axis 2), and the cross-version require-target
+  set-diff; exits non-zero as a CI gate. First run (2.1.204): **PASS — 0 walls, 0
+  divergences**, 2.1.198→2.1.204 require-set unchanged.
+- **v1 (next):** recording-Proxy hit-ledger for true per-module coverage %; checked-in
+  baseline manifest + known-good outputs; broaden corpus (tool uses, slash commands,
+  flags, hooks, MCP). **v2:** import deps'/Node's test suites as differential corpora;
+  frame-level TUI render parity (folds into M3).
+- Caution baked into the harness: THIS Claude Code session's env carries
+  `CLAUDE_CODE_BRIDGE_SESSION_ID` (child bundle auths via the parent bridge) — fine for
+  coverage/parity, but strip it to test real subscription auth.
+
 ## Phase 2 take-stock report (DONE)
 
 **Phase 2 is functionally complete (2026-07-07).** Both round-trip milestones PASS
