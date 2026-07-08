@@ -50,7 +50,34 @@ value is platform-shared). Full shim suite green (95 pass / 4 skip / 0 fail).
 `test/e2e-tui-tjs.test.cjs` is the opt-in M1 boot assertion scaffold
 (`CLODE_TJS` + `CLODE_LIVE_RENDER`), currently red on the frontier below.
 
-## The frontier (REMAINING): Ink commits but paints nothing
+## Walls fixed, round 2 (committed `e00506f`, with characterization tests)
+
+5. **Dynamic `import()` rejected under the loader** (`could not load`). quickjs's
+   native `import()` uses tjs's ESM loader, blind to the shim's CJS registry, so
+   the bundle's **~58** `await import("fs")` / `import("path")` startup calls
+   (config read via `frt`, realpath/mkdir) all threw. Routed `import(` → a global
+   `__tjsDynImport` that resolves via `require()` and returns an ESM-interop
+   namespace (named exports + `default`). NOTE: kept a **global**, not a
+   per-module `new Function` arg — the extra eval parameter perturbed the pinned
+   tjs codegen enough to **resurface a latent exit-time SIGSEGV** in the
+   child_process ENOENT path (the documented quickjs-ng heap-layout fragility;
+   the ENOENT handling itself was correct, only teardown crashed). Tradeoff:
+   `import()` resolves from the loader root, not the importing module's dir —
+   fine for the bundle's bare specifiers; a relative `import()` is a future wall.
+6. **`tty.ReadStream` was flowing-only** (the shim's base Readable `push` →
+   immediate `'data'`, no buffer, no `.read()`, no `'readable'`), but **Ink reads
+   stdin in PAUSED mode** — an `'readable'` listener + `.read()` loop (the
+   bundle's `suspendStdin`/`resumeStdin` add/remove `'readable'` listeners).
+   Confirmed with a node-vs-tjs probe: paused `read()` returned bytes under node,
+   nothing under tjs. Rewrote `ReadStream` to own both modes with an internal
+   byte queue; the persistent utf8 decoder is preserved across both.
+
+Both are REQUIRED for any interactive use, but **neither paints** — the render is
+still 13 bytes, and React still commits an empty tree in exactly ~4 scheduler
+ticks (unchanged by these fixes). So the paint gate is a **React Suspense wait**
+on a promise these don't resolve.
+
+## The frontier (REMAINING): React commits an empty tree, then Suspends forever
 
 After the four fixes, tjs no longer errors and runs its full startup, but stalls
 at **13 bytes forever** (25s+), silently — no error, no `[wall]`, no missing-method
@@ -89,13 +116,25 @@ never resolves under tjs — while React, having committed an empty first tree,
 sits idle (~4 scheduler ticks, no further state update to re-render).
 
 ### Next steps for closing the frontier
-0. **Prime suspect — stdin suspend/resume semantics.** Our `tty.ReadStream`
-   `pause()` is an inherited no-op and `resume()`/`setRawMode` (re)start the pump;
-   Ink's `suspendStdin`/`resumeStdin` may depend on real pause/resume flow-control
-   or on `process.stdin` emitting/withholding data in a way the pump diverges
-   from. Instrument `suspendStdin`/`resumeStdin` (and Ink's `pause`/`resume`) to
-   see which call the startup blocks in, and whether it awaits a stdin/`readable`
-   event our pump never emits.
+The signature is now unambiguous: **React commits an empty tree (~4 scheduler
+ticks) and goes idle** — no error, no wall, no missing method, stdin + import()
+both working. That is the textbook shape of a **Suspense boundary stuck on a
+thrown promise that never resolves** (the bundle uses `Suspense` 47×). The app
+root renders its fallback (null) and waits for an initial async resource; under
+node it resolves and re-renders the welcome, under tjs it never does.
+1. **Find the suspended promise.** Instrument to catch the promise a component
+   throws for Suspense (React calls `.then` on it). Candidates for a startup
+   Suspense resource: an initial config/context load, an MCP/tool init, or a
+   data source read via a Suspense-integrated cache (`use()` / a resource
+   wrapper). The `security` keychain read returned **exit 44 (not found)** in the
+   minimal harness (vs the credential existing) — worth checking whether an auth
+   resource suspends and never settles under tjs.
+2. **App-source insight would shortcut this.** The blocker is now in the bundle's
+   own React tree, not a shim primitive; the render-byte differential got us here
+   but can't see inside a suspended component. A minimal Ink+Suspense repro, or
+   the un-minified startup source, would localize the resource fast.
+3. (superseded) The earlier stdin suspend/resume suspicion is CLOSED — paused-mode
+   `read()` now works and did not change the paint behavior.
 1. **Find the un-resolving async init.** Instrument which promise/`useEffect`
    never settles between "startup done" and "first content paint". The app root
    renders null until some initial state is set; that state's source completes
