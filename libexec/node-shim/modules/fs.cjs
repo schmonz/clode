@@ -160,6 +160,81 @@ function readSync(fd, buf, offset, length, position) {
 const statSync = (p) => new Stats(FSS.stat(p));
 const lstatSync = (p) => new Stats(FSS.lstat(p));
 
+// Encode string data honoring encoding (shared by writeFileSync/appendFileSync/
+// writeSync); never silently mis-encode an unimplemented charset — fail loud.
+function encodeStr(data, enc) {
+  enc = enc || 'utf8';
+  if (enc === 'utf8' || enc === 'utf-8') return te.encode(data);
+  if (isLatin1(enc)) return latin1Encode(data);
+  throw new Error(`node-shim: fs string encoding '${enc}' not implemented`);
+}
+// Turn a Uint8Array view into a standalone ArrayBuffer for FSS.write (which
+// requires an ArrayBuffer, not a view).
+function toArrayBuffer(bytes) {
+  return bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes.buffer : bytes.slice().buffer;
+}
+function writeAll(fd, bytes, position) {
+  const ab = toArrayBuffer(bytes);
+  let written = 0;
+  while (written < ab.byteLength) {
+    const chunk = written === 0 ? ab : ab.slice(written);
+    written += FSS.write(fd, chunk, position == null ? -1 : position + written);
+  }
+  return written;
+}
+
+function appendFileSync(p, data, opts) {
+  const enc = typeof opts === 'string' ? opts : opts?.encoding;
+  const bytes = typeof data === 'string' ? encodeStr(data, enc)
+    : new Uint8Array(data.buffer ?? data, data.byteOffset ?? 0, data.byteLength ?? data.length);
+  // fd number given? append via that fd; else open path in append mode.
+  if (typeof p === 'number') { writeAll(p, bytes, null); return; }
+  const fd = FSS.open(p, 'a');
+  try { writeAll(fd, bytes, null); } finally { FSS.close(fd); }
+}
+
+// fs.writeSync(fd, buffer[, offset[, length[, position]]]) OR
+// fs.writeSync(fd, string[, position[, encoding]]). Returns bytes written.
+function writeSync(fd, data, a, b, c) {
+  let bytes, position;
+  if (typeof data === 'string') {
+    position = typeof a === 'number' ? a : null;
+    bytes = encodeStr(data, b);
+  } else {
+    const view = new Uint8Array(data.buffer ?? data, data.byteOffset ?? 0, data.byteLength ?? data.length);
+    const offset = typeof a === 'number' ? a : 0;
+    const length = typeof b === 'number' ? b : view.length - offset;
+    position = typeof c === 'number' ? c : null;
+    bytes = view.subarray(offset, offset + length);
+  }
+  const ab = toArrayBuffer(bytes);
+  return FSS.write(fd, ab, position == null ? -1 : position);
+}
+
+function rmSync(p, opts) {
+  let l;
+  try { l = lstatSync(p); } catch (e) { if (opts?.force && e.code === 'ENOENT') return; throw e; }
+  if (l.isDirectory()) {
+    if (!opts?.recursive) return FSS.rmdir(p);
+    for (const n of FSS.readdir(p)) rmSync(path.join(p, n), opts);
+    return FSS.rmdir(p);
+  }
+  return FSS.unlink(p);
+}
+
+// fs.mkdtempSync(prefix): create a uniquely-suffixed dir (Node appends 6 random
+// chars, mode 0o700) and return its path.
+const MKDTEMP_CHARS = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+function mkdtempSync(prefix) {
+  for (let attempt = 0; attempt < 16; attempt++) {
+    let suffix = '';
+    for (let i = 0; i < 6; i++) suffix += MKDTEMP_CHARS[Math.floor(Math.random() * MKDTEMP_CHARS.length)];
+    const p = prefix + suffix;
+    try { FSS.mkdir(p, 0o700); return p; } catch (e) { if (e.code !== 'EEXIST') throw e; }
+  }
+  throw new Error('node-shim: fs.mkdtempSync exhausted unique-name attempts');
+}
+
 function direntFor(parentPath, name) {
   let kind = 'file';
   try { kind = FSS.lstat(path.join(parentPath, name)).kind; } catch { /* broken link etc → treat as file */ }
@@ -220,6 +295,17 @@ const fsMod = {
   copyFileSync: (a, b) => writeFileSync(b, readFileSync(a)),
   symlinkSync: (target, p) => FSS.symlink(target, p),
   chmodSync: (p, m) => FSS.chmod(p, m),
+  appendFileSync,
+  writeSync,
+  rmSync,
+  mkdtempSync,
+  // fsync/fdatasync durability barriers: this tjs sync-fs patch exposes no fsync
+  // primitive. DIVERGENCE (documented, best-effort like futimes): resolve
+  // without forcing a flush. Correct RESULT (bytes already written via FSS.write);
+  // only the durability guarantee is weaker. A path needing a hard flush barrier
+  // is a future wall — wire a tjs fsync primitive then.
+  fsyncSync: () => {},
+  fdatasyncSync: () => {},
 };
 
 // Node's utimes/lutimes accept a Date, a number (Unix epoch SECONDS), or a
@@ -258,6 +344,15 @@ const promises = {
   rename: async (a, b) => FSS.rename(a, b),
   rmdir: async (p) => FSS.rmdir(p),
   copyFile: async (a, b) => { writeFileSync(b, readFileSync(a)); },
+  appendFile: async (p, data, opts) => { appendFileSync(p, data, opts); },
+  chmod: async (p, m) => FSS.chmod(p, m),
+  symlink: async (target, p) => FSS.symlink(target, p),
+  // hardlink: no SYNC primitive in the sync-fs patch, but tjs exposes an async
+  // uv link — use it for the async surface (linkSync remains a wall).
+  link: async (existing, p) => { await tjs.link(existing, p); },
+  mkdtemp: async (prefix) => mkdtempSync(prefix),
+  fsync: async () => {},       // best-effort (see fsyncSync note)
+  fdatasync: async () => {},
   rm: async (p, opts) => {
     const l = (() => { try { return lstatSync(p); } catch (e) { if (opts?.force && e.code === 'ENOENT') return null; throw e; } })();
     if (!l) return;
@@ -280,9 +375,25 @@ const cbWrap = (pfn) => (...args) => {
 };
 for (const name of ['readFile', 'writeFile', 'stat', 'lstat', 'access', 'readdir',
   'realpath', 'readlink', 'mkdir', 'unlink', 'rename', 'rmdir', 'copyFile', 'rm', 'opendir',
-  'utimes', 'lutimes']) {
+  'utimes', 'lutimes', 'appendFile', 'chmod', 'symlink', 'link', 'mkdtemp', 'fsync', 'fdatasync']) {
   fsMod[name] = cbWrap(promises[name]);
 }
+// fs.write / fs.read: callback receives (err, bytes, buffer) — extra trailing
+// arg beyond cbWrap's (err, val) shape, so wire them explicitly.
+fsMod.write = function write(fd, data, a, b, c, d) {
+  // write(fd, buffer[, offset[, length[, position]]], cb) OR
+  // write(fd, string[, position[, encoding]], cb)
+  const args = [a, b, c, d].filter((x) => typeof x !== 'function');
+  const cb = [a, b, c, d].find((x) => typeof x === 'function') || (() => {});
+  try {
+    const n = typeof data === 'string' ? writeSync(fd, data, args[0], args[1]) : writeSync(fd, data, args[0], args[1], args[2]);
+    cb(null, n, data);
+  } catch (e) { cb(e); }
+};
+fsMod.read = function read(fd, buffer, offset, length, position, cb) {
+  try { const n = readSync(fd, buffer, offset, length, position); cb(null, n, buffer); }
+  catch (e) { cb(e); }
+};
 // fs.futimes(fd, atime, mtime, cb): this tjs build exposes no fd-based utime
 // primitive reachable from a raw fd (uv_fs_futime lives only on a tjs File
 // object, not the FSS sync fds we use). DIVERGENCE (documented, best-effort):

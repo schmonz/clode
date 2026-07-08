@@ -89,8 +89,52 @@ function deprecate(fn, msg, code) {
   return deprecated;
 }
 
+// util.formatWithOptions(inspectOptions, format, ...args): like format but with
+// a leading inspect-options object. DIVERGENCE (documented): the options
+// (colors/depth/etc.) are accepted and ignored — output matches util.format for
+// the %s/%d/%j specifiers the bundle uses; a path depending on colored/deep
+// inspect output is a future wall.
+function formatWithOptions(_inspectOptions, ...args) {
+  return format(...args);
+}
+
+// util.callbackify(asyncFn): wrap a promise-returning function so it takes a
+// trailing node-style callback. Matches Node: resolves → cb(null, value) on a
+// later tick; rejects → cb(reason), and a FALSY rejection is wrapped in an Error
+// carrying `.reason` (so a truthy err is always delivered).
+function callbackify(original) {
+  if (typeof original !== 'function') throw new TypeError('The "original" argument must be of type Function');
+  function callbackified(...args) {
+    const cb = args.pop();
+    if (typeof cb !== 'function') throw new TypeError('The last argument must be of type Function');
+    const later = (globalThis.process && typeof process.nextTick === 'function')
+      ? process.nextTick.bind(process) : (fn, ...a) => queueMicrotask(() => fn(...a));
+    const self = this;
+    Promise.resolve(original.apply(self, args)).then(
+      (ret) => { later(cb.bind(self, null, ret)); },
+      (rej) => {
+        let err = rej;
+        if (!err) { err = new Error('Promise was rejected with a falsy value'); err.reason = rej; err.code = 'ERR_FALSY_VALUE_REJECTION'; }
+        later(cb.bind(self, err));
+      },
+    );
+  }
+  Object.setPrototypeOf(callbackified, Object.getPrototypeOf(original));
+  try { Object.defineProperties(callbackified, Object.getOwnPropertyDescriptors(original)); } catch { /* best effort */ }
+  return callbackified;
+}
+
+// util.stripVTControlCharacters(str): remove ANSI/VT escape sequences (Node's
+// exact regex).
+const ANSI_RE = new RegExp('[\\u001B\\u009B][[\\]()#;?]*(?:(?:(?:(?:;[-a-zA-Z\\d/#&.:=?%@~_]+)*|[a-zA-Z\\d]+(?:;[-a-zA-Z\\d/#&.:=?%@~_]*)*)?\\u0007)|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PR-TZcf-ntqry=><~]))', 'g');
+function stripVTControlCharacters(str) {
+  if (typeof str !== 'string') throw new TypeError('The "str" argument must be of type string');
+  return str.replace(ANSI_RE, '');
+}
+
 module.exports = {
-  format, promisify, inherits, inspect: inspect1, isDeepStrictEqual,
-  debuglog, debug: debuglog, deprecate,
+  format, formatWithOptions, promisify, callbackify, inherits, inspect: inspect1, isDeepStrictEqual,
+  debuglog, debug: debuglog, deprecate, stripVTControlCharacters,
   types: { isDate: (v) => v instanceof Date },
+  TextEncoder: globalThis.TextEncoder, TextDecoder: globalThis.TextDecoder,
 };
