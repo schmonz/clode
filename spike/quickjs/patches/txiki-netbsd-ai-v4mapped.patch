@@ -1,0 +1,16 @@
+diff --git a/src/mod_dns.c b/src/mod_dns.c
+index 130d261..8372ea3 100644
+--- a/src/mod_dns.c
++++ b/src/mod_dns.c
+@@ -99,6 +99,11 @@ static JSValue tjs_dns_getaddrinfo(JSContext *ctx, JSValue this_val, int argc, J
+     memset(&hints, 0, sizeof(hints));
+     hints.ai_socktype = SOCK_STREAM;
+     hints.ai_family = family;
++/* NetBSD never implemented the RFC 3493 AI_V4MAPPED flag; defining it to 0
++ * makes the OR a no-op there (v4-mapped lookups are best-effort anyway). */
++#ifndef AI_V4MAPPED
++#define AI_V4MAPPED 0
++#endif
+     hints.ai_flags = AI_ADDRCONFIG | AI_V4MAPPED;
+ 
+     int r = uv_getaddrinfo(tjs_get_loop(ctx), &gr->req, uv__getaddrinfo_cb, node, NULL, &hints);
