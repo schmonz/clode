@@ -4,24 +4,56 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 (Strategic feasibility risks live in `LONG-TERM.md`; in-flight designs in
 `docs/superpowers/`.)
 
-## NEXT UP — Phase 3 M1: close the "TUI boots but doesn't paint" frontier
+## NEXT UP — Phase 3 M1 ACHIEVED (TUI paints under tjs); loose ends below
 
-Phase 3 (interactive TUI under tjs) is UNDERWAY. Shim TTY layer (tasks 1–3) is
-**done + reviewed** (real `tty.ReadStream`/`WriteStream` over tjs `core.TTY`:
-isTTY, columns/rows, resize/SIGWINCH, working `setRawMode`, async keystroke pump,
-side-effect-free `isatty`; commits `94905f5`..`6521c1f`). M1 boot (task 4) is
-**in progress**: the real Ink TUI now boots and runs its full async startup under
-`CLODE_ENGINE=tjs`, and **four hard walls were found + fixed** via a node-vs-tjs
-render-byte differential (`efaf6d7`): the legacy `constants` module, `fs.utimes`/
-`lutimes`, `fs.Stats` Date accessors, and `tty.WriteStream` cursor/erase methods —
-each with characterization rows. **It does not yet paint.** FRONTIER (fully
-characterized in `spike/quickjs/results/phase3-m1-tui-boot.md`): hangs right after
-`setRawMode(true)` → the 13-byte reset write, React idle after ~4 scheduler ticks
-(commits an empty tree); the locus is Ink's `enterAlternateScreen`/`suspendStdin`/
-`resumeStdin` path. Prime suspect: `tty.ReadStream` pause/resume flow-control
-semantics vs Ink's stdin suspend/resume. Then M2 (human-verified interactive turn,
-the exit bar) and M3 (render parity). Plan:
-`docs/superpowers/plans/2026-07-08-phase3-tui-under-tjs.md`; design:
+**The interactive Claude Code TUI now RENDERS under `CLODE_ENGINE=tjs`.** The
+tui-diff oracle went 13 → **1603 bytes** (host node 2062); the screen shows the
+"Claude Code v2.1.202 / Opus" box, the `❯` prompt, "? for shortcuts", and
+"Not logged in · Run /login". Full trail: `spike/quickjs/results/phase3-m1-tui-boot.md`.
+
+How we got there (parallel subagent workstreams, 2026-07-08):
+- Shim TTY layer (tasks 1–3, reviewed): real `tty.ReadStream`/`WriteStream` over
+  `core.TTY` (isTTY, columns/rows, resize/SIGWINCH, `setRawMode`, async keystroke
+  pump + paused-mode `readable`/`read()`, side-effect-free `isatty`) — `94905f5`..`6521c1f`, `e00506f`.
+- Boot walls fixed via the node-vs-tjs render-byte differential (`efaf6d7`,
+  `e00506f`): legacy `constants` module, `fs.utimes`/`lutimes`, `fs.Stats` Date
+  accessors, `tty.WriteStream` cursor/erase methods, dynamic `import()` (→require),
+  paused-mode stdin.
+- **The paint blocker (root cause + fix, `bcf53eb`): a quickjs-ng libregexp bug —
+  Unicode property escapes `\p{…}`/`\P{…}` under the `v` (unicodeSets) flag match
+  non-members / miss members** (correct under `u`). Cascade: `string-width@≥7`
+  `baseVisible("t")→""→codePointAt undefined` → `get-east-asian-width` throws
+  during the REPL module's top-level init inside `launchRepl`; swallowed upstream
+  so `ink.render()` is never called. Fix: the loader downgrades `v`→`u` on
+  module-source regex literals that use `\p{}` but none of `v`'s exclusive features
+  (semantic no-op on a correct engine). Char test `test/node-shim-vflag-regex.test.cjs`.
+  Proper long-term fix belongs in quickjs-ng libregexp — **upstream candidate.**
+- The **API method-level coverage inventory** (`spike/quickjs/results/phase3-api-coverage.md`)
+  + 3 batches of proactive gap-fills (`17fe218`,`0b0723a`,`4f7add3`: assert,
+  querystring, string_decoder, fs/util/url/crypto/zlib/stream.finished). Key result:
+  the `-p PONG` and TUI paths fire **0 missing-method walls** — the real blockers
+  were engine/behavioral bugs, not missing APIs (validates the hybrid strategy).
+- The "TUI fetch hangs" theory was a **measurement artifact** (`7f0fa3a`): Ink
+  patches `console.error` in its ctor, swallowing the trace logs; the fetch
+  actually resolves 3/3 (proven via raw fd-2 writes). No fd-race/timer/TLS bug on
+  the fetch path. One genuine hardening fix did land: `__tjs_spawn_sync` was leaking
+  live fds into sync children — CLOEXEC fix `7b36cf5`.
+
+### Loose ends
+- **`-p PONG` + paint verified GREEN on current `main`.** BUT the shim suite has
+  **1 red: `child_process` "ENOENT surfaces as an async error event"** — the fixture
+  (spawn a missing binary + `on('error')`+`on('exit')`) prints the correct output
+  then **SIGSEGV/SIGBUS on teardown (exit 138/139), deterministic**. This is the
+  documented tjs codegen/heap-layout fragility (see [[tjs-atomics-cant-block-main]]
+  / the `Readable.destroy()` SIGSEGV note): logic-correct, sensitive to unrelated
+  layout shifts (was green at `bcf53eb`, flipped red by `7f0fa3a`'s one-line loader
+  edit). Proper fix is native quickjs-ng/tjs codegen — **top follow-up**; a
+  shim-side layout nudge would be whack-a-mole.
+- **M2 (human-verified interactive turn) and M3 (render parity)** still ahead — the
+  TUI renders the login screen; drive a real turn next.
+- Upstream candidates grew: quickjs-ng `v`-flag `\p{}` regexp bug; the tjs teardown
+  SIGSEGV; plus the phase-2 batch and `txiki-sync-spawn` CLOEXEC.
+Plan: `docs/superpowers/plans/2026-07-08-phase3-tui-under-tjs.md`; design:
 `docs/superpowers/specs/2026-07-08-universal-binaries-phase3-tui-design.md`.
 
 ## Phase 2 take-stock report (DONE)
