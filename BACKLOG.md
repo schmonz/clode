@@ -40,19 +40,24 @@ How we got there (parallel subagent workstreams, 2026-07-08):
   live fds into sync children — CLOEXEC fix `7b36cf5`.
 
 ### Loose ends
-- **`-p PONG` + paint verified GREEN on current `main`.** BUT the shim suite has
-  **1 red: `child_process` "ENOENT surfaces as an async error event"** — the fixture
-  (spawn a missing binary + `on('error')`+`on('exit')`) prints the correct output
-  then **SIGSEGV/SIGBUS on teardown (exit 138/139), deterministic**. This is the
-  documented tjs codegen/heap-layout fragility (see [[tjs-atomics-cant-block-main]]
-  / the `Readable.destroy()` SIGSEGV note): logic-correct, sensitive to unrelated
-  layout shifts (was green at `bcf53eb`, flipped red by `7f0fa3a`'s one-line loader
-  edit). Proper fix is native quickjs-ng/tjs codegen — **top follow-up**; a
-  shim-side layout nudge would be whack-a-mole.
+- **Shim suite now fully GREEN: 118 tests / 114 pass / 0 fail / 4 skip;** `-p PONG`
+  + TUI render (1603 bytes) verified. The previously-red `child_process` ENOENT test
+  was NOT "codegen fragility" — ASAN pinpointed a concrete **heap-use-after-free**:
+  `tjs_spawn`'s spawn-launch-failure path freed the `uv_process_t` handle
+  synchronously while libuv still owned it (a later `uv__run_closing_handles` wrote
+  into freed memory). FIXED at the source: `txiki-spawn-fail-uaf.patch` (commit
+  `e3e5a15`, upstream candidate) releases the handle via the async `uv_close` path
+  instead of the direct free. So the "layout-sensitive SIGSEGV lottery" is closed.
 - **M2 (human-verified interactive turn) and M3 (render parity)** still ahead — the
   TUI renders the login screen; drive a real turn next.
-- Upstream candidates grew: quickjs-ng `v`-flag `\p{}` regexp bug; the tjs teardown
-  SIGSEGV; plus the phase-2 batch and `txiki-sync-spawn` CLOEXEC.
+- **Build-environment follow-ups** (bit the UAF rebuild — recorded in PINS.md): the
+  ~42k AppleDouble `._*` sidecars must be purged before building; `build-tjs.mjs`'s
+  strict `git apply` can't re-sequence the overlapping sync-fs/sync-spawn patches on
+  an already-patched tree (GNU `patch --forward` works); and the binary needs a
+  `codesign -s - --force` re-sign after copying off the build dir (else exec dies
+  "code signing error"/SIGKILL). Worth hardening `build-tjs.mjs` for these.
+- Upstream candidates grew: quickjs-ng `v`-flag `\p{}` regexp bug; the
+  `txiki-spawn-fail-uaf` UAF; plus the phase-2 batch and `txiki-sync-spawn` CLOEXEC.
 Plan: `docs/superpowers/plans/2026-07-08-phase3-tui-under-tjs.md`; design:
 `docs/superpowers/specs/2026-07-08-universal-binaries-phase3-tui-design.md`.
 
