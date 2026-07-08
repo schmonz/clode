@@ -4,7 +4,18 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 (Strategic feasibility risks live in `LONG-TERM.md`; in-flight designs in
 `docs/superpowers/`.)
 
-## NEXT UP — Phase 3 M1+M2 ACHIEVED (TUI paints AND drives a human-verified turn under tjs); M3 next
+## NEXT UP — Phase 3: TUI paints (M1) + human-verified turn (M2) + AGENTIC TOOL USE all work under tjs; M3 (render parity) next
+
+**AGENTIC TOOL USE WORKS (`d4e197d`, independently verified):** a real Bash-tool turn
+runs a shell command and returns output under `CLODE_ENGINE=tjs`. Root cause was a
+cluster of tool-path shim gaps (NOT the async-gen codegen bug): `process.memoryUsage`/
+`cpuUsage` (broke ALL tools — the runner records an rss baseline before every call);
+plus the Bash tool's fd-redirection (`fs.promises.open`+`O_*` constants, and REAL
+numeric-fd inheritance in `tjs.spawn` via `txiki-spawn-inherit-fd.patch` → `UV_INHERIT_FD`,
+rebuilt+re-signed; child_process fd passthrough). Suite 128/124 pass/0 fail/4 skip. Found
+by subagent + watchdog verification (which caught an incomplete first fix and a
+confabulated co-diagnosis — dogfood of the gate's verify-don't-relay principle).
+
 
 **The interactive Claude Code TUI now RENDERS under `CLODE_ENGINE=tjs`.** The
 tui-diff oracle went 13 → **1603 bytes** (host node 2062); the screen shows the
