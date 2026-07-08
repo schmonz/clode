@@ -40,12 +40,20 @@ GCC12=/usr/pkg/gcc12/bin
 [ -x "$GCC12/g++" ] || { echo "FATAL: pkgsrc gcc12 not installed"; echo "=== GUEST-DONE ==="; exit 1; }
 LD_LIBRARY_PATH=/usr/pkg/gcc12/lib; export LD_LIBRARY_PATH
 
+# BUILD_WITH_MIMALLOC=OFF: mimalloc 3.2.7's options.c has a
+# #if defined(__NetBSD__) branch referencing mi_option_eager_commit_delay,
+# an enum member renamed to mi_option_deprecated_eager_commit_delay — so
+# mimalloc doesn't compile on NetBSD at all (upstream regression; report
+# candidate). System malloc instead; divergence vs darwin recorded, same
+# class as WASM-off.
 echo "=== BUILD-TJS ==="
 (cd txiki.js && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
    "-DCMAKE_C_COMPILER=$GCC12/gcc" "-DCMAKE_CXX_COMPILER=$GCC12/g++" \
    "-DFETCHCONTENT_SOURCE_DIR_SIMDE=$W/simde-src" \
    -DBUILD_WITH_WASM=OFF \
+   -DBUILD_WITH_MIMALLOC=OFF \
  && cmake --build build -j2); echo "tjs-build-exit=$?"
+[ -x ./txiki.js/build/tjs ] || { echo "FATAL: no tjs binary after build"; echo "=== GUEST-DONE ==="; exit 1; }
 ./txiki.js/build/tjs eval 'console.log("spawn_sync:", typeof __tjs_spawn_sync, "fs_sync:", typeof __tjs_fs_sync)' || true
 
 # Live-API reachability: pin IPv4 (slirp DNS is IPv6-first, IPv6 unroutable),
