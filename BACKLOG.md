@@ -97,6 +97,23 @@ endgame is empirical + regression-gated (how Bun/Deno do Node-on-non-Node), with
   baseline manifest + known-good outputs; broaden corpus (tool uses, slash commands,
   flags, hooks, MCP). **v2:** import deps'/Node's test suites as differential corpora;
   frame-level TUI render parity (folds into M3).
+- **Oracle principle (first-class):** *where the reference oracle doesn't exist, the
+  gate's golden-output baseline becomes the oracle.* `node`-differential only works on
+  platforms that don't need tjs; on NetBSD/SPARC there's no `node` to diff against, so
+  capture canonical/deterministic/normalized outputs (exit codes, crypto digests of
+  fixed inputs, fixed-content frames) on a reference platform, check them in, and diff
+  the exotic platform against the record. `node` moves UPSTREAM (re-mint the baseline
+  per upstream bump), doesn't vanish. This makes v1's baseline manifest load-bearing,
+  and it's exactly what catches big-endian divergences. Bonus: golden slice runs
+  offline/token-free.
+- **Platform reach (grounded):** tjs (portable C) reaches where Bun can't.
+  NetBSD/aarch64 headless PROVEN (M4, same-endian OS port). SPARC = the endianness +
+  strict-alignment phase change. The bundle uses wasm, but dominantly **Yoga (layout,
+  TUI-only)** — so headless `-p` is likely wasm-free and SPARC-headless may be reachable
+  before solving wamr-big-endian (the TUI needs it; wamr already works on aarch64, so
+  the open Q is narrowly big-endian). Byte-match surface (createHash×90, DataView×73,
+  Buffer.from×331) is what the oracle principle guards. VERIFY-NEXT: does `-p`
+  instantiate any wasm (tokenizer)? Full notes in the design doc.
 - **Activation policy (decided):** none of this touches the user hot path.
   `extract`/launch stay untouched (no marker, no log — CI notices new versions by
   diffing itself); users opt in only via explicit env flags (`CLODE_SHIM_TRACE`,
