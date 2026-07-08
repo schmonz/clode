@@ -33,5 +33,18 @@ const COMPRESSION_API = [
 
 const zlib = { constants };
 for (const name of COMPRESSION_API) zlib[name] = unimplemented(name);
+// Node also exposes the Z_*/ZSTD_* constants and the mode enums (DEFLATE/GZIP/…)
+// at the TOP LEVEL of the zlib module (legacy, but present), not only under
+// zlib.constants. It does NOT hoist the BROTLI_* keys. Deps read e.g.
+// `zlib.Z_MIN_CHUNK` / `zlib.Z_FINISH` directly — mirror the real top-level set
+// (everything except BROTLI_*) so those reads see the byte-identical value.
+for (const [k, v] of Object.entries(constants)) { if (!k.startsWith('BROTLI_') && !(k in zlib)) zlib[k] = v; }
+// The stream classes exist on host zlib; expose throw-on-construct constructors
+// so `typeof zlib.Inflate === 'function'` feature-detection matches, while an
+// actual instantiation fails loud (no native zlib — same contract as create*).
+for (const cls of ['Gzip', 'Gunzip', 'Unzip', 'Deflate', 'Inflate', 'DeflateRaw', 'InflateRaw', 'BrotliCompress', 'BrotliDecompress']) {
+  zlib[cls] = class { constructor() { throw new Error(`node-shim: zlib.${cls} not implemented (tjs has no native zlib)`); } };
+  Object.defineProperty(zlib[cls], 'name', { value: cls });
+}
 zlib.default = zlib;
 module.exports = zlib;
