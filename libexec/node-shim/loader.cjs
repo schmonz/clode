@@ -491,7 +491,6 @@ if (globalThis.process && globalThis.process.env && globalThis.process.env.CLODE
     const url = typeof input === 'string' ? input : (input && input.url) || String(input);
     console.error('[fetch] ->', method, url);
     const p = _fetch.call(this, input, init);
-    p.then(() => console.error('[fetch] settled-raw', method, url), (e) => console.error('[fetch] rejected-raw', method, url, String(e).slice(0,80)));
     return p.then(
       (res) => {
         console.error('[fetch] <-', method, url, 'status=', res.status, 'ce=', res.headers.get('content-encoding'), 'te=', res.headers.get('transfer-encoding'), 'cl=', res.headers.get('content-length'));
