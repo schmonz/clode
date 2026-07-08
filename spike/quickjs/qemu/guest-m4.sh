@@ -46,6 +46,15 @@ LD_LIBRARY_PATH=/usr/pkg/gcc12/lib; export LD_LIBRARY_PATH
 # mimalloc doesn't compile on NetBSD at all (upstream regression; report
 # candidate). System malloc instead; divergence vs darwin recorded, same
 # class as WASM-off.
+#
+# Strip -Werror for the guest build: txiki src uses clang/MSVC-isms
+# (#pragma region in text-coding.c/mod_ffi.c -> -Wunknown-pragmas) that
+# gcc12 rejects under -Werror; -Wall re-enables the warning after any
+# injected -Wno- flag, so demote wholesale. gcc's complaints stay visible
+# as warnings in this log (findings); upstream candidate for the pragmas.
+sed -i.bak '/list(APPEND tjs_cflags -Werror)/d' txiki.js/CMakeLists.txt
+grep -c 'Werror' txiki.js/CMakeLists.txt || true   # expect 0
+
 echo "=== BUILD-TJS ==="
 (cd txiki.js && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
    "-DCMAKE_C_COMPILER=$GCC12/gcc" "-DCMAKE_CXX_COMPILER=$GCC12/g++" \
