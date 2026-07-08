@@ -97,6 +97,12 @@ endgame is empirical + regression-gated (how Bun/Deno do Node-on-non-Node), with
   baseline manifest + known-good outputs; broaden corpus (tool uses, slash commands,
   flags, hooks, MCP). **v2:** import deps'/Node's test suites as differential corpora;
   frame-level TUI render parity (folds into M3).
+- **Activation policy (decided):** none of this touches the user hot path.
+  `extract`/launch stay untouched (no marker, no log — CI notices new versions by
+  diffing itself); users opt in only via explicit env flags (`CLODE_SHIM_TRACE`,
+  future `CLODE_API_LEDGER`), off by default (residue when off = a load-time check,
+  never per-call); dev/CI lean hard on the full gate out-of-band. Recording proxy is
+  constructed only when its flag is set, never in correctness runs (it perturbs).
 - Caution baked into the harness: THIS Claude Code session's env carries
   `CLAUDE_CODE_BRIDGE_SESSION_ID` (child bundle auths via the parent bridge) — fine for
   coverage/parity, but strip it to test real subscription auth.
