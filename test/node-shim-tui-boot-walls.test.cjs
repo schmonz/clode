@@ -98,6 +98,35 @@ test('fs.Stats exposes Date accessors and the standard numeric fields', (t) => {
   assert.strictEqual(v.hasNumericFields, true);
 });
 
+// --- Wall 5: dynamic import() rejected under the loader ("could not load"). The
+// bundle makes ~58 `await import("fs")`/`import("path")` calls for real startup
+// work; every one threw. Now routed through require() with an ESM-interop
+// namespace (named exports + default). ---
+test("dynamic import() resolves builtins via require (named + default)", (t) => {
+  if (skipUnlessTjs(t)) return;
+  const f = fixture(`
+    (async () => {
+      const fs = await import('fs');
+      const path = await import('path');
+      let rejected = false;
+      try { await import('no-such-module-xyz'); } catch { rejected = true; }
+      console.log(JSON.stringify({
+        fsPromises: typeof fs.promises, fsDefault: typeof fs.default,
+        pathJoin: typeof path.join, pathDirname: typeof path.dirname,
+        badRejected: rejected,
+      }));
+    })();
+  `);
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const v = JSON.parse(r.stdout.trim());
+  assert.strictEqual(v.fsPromises, 'object');
+  assert.strictEqual(v.fsDefault, 'object');   // ESM-interop default
+  assert.strictEqual(v.pathJoin, 'function');
+  assert.strictEqual(v.pathDirname, 'function');
+  assert.strictEqual(v.badRejected, true);     // a bad specifier rejects, never hangs
+});
+
 // --- Wall 4: tty.WriteStream lacked cursorTo/clearLine/moveCursor/clearScreenDown
 // (the readline methods node puts on tty.WriteStream). Ink calls them during
 // rendering; absent, they'd be "not a function". Assert they emit the right ANSI

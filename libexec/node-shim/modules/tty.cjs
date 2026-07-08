@@ -36,19 +36,36 @@ function tjsStreamForFd(fd) {
 
 const { Readable } = require('node:stream');
 
-// The async fd-0 keystroke pump: tjs.stdin is a WHATWG ReadableStream; read it
-// and push Buffer chunks into this Node Readable so Ink's input loop sees live
-// keypresses. Started lazily (Node's stdin is paused until a consumer pulls) so
-// merely touching process.stdin doesn't hold the loop open on non-interactive
-// paths. Three equivalent lazy-start triggers, matching host node's observable
-// "stdin flows once someone asks for data" behavior: resume(), an 'on(data)'
-// listener (the shim's base Readable.on() calls this._read() the first time a
-// 'data' listener is added — see stream.cjs — so overriding _read() to start
-// the pump wires this up for free), and setRawMode(true) (Ink's actual path).
-// _startPump is idempotent (guarded by _pumping) so it's safe to call from all
-// three. DIVERGENCE (documented): backpressure is best-effort — we push every
-// chunk the reader yields rather than honoring highWaterMark pauses/pause();
-// Ink reads keystrokes fast enough that this is not observable.
+// tty.ReadStream over tjs.stdin (a WHATWG ReadableStream). An async pump reads
+// tjs.stdin and feeds bytes to whichever consumption mode is in use. Unlike the
+// shim's base Readable (stream.cjs), which is FLOWING-ONLY (push → immediately
+// emit 'data', no buffer, no .read()), this stream supports BOTH modes, because
+// Ink drives stdin in PAUSED mode: it attaches an 'readable' listener and calls
+// .read() in a loop (see the bundle's suspendStdin/resumeStdin, which add/remove
+// 'readable' listeners). A flowing-only stream never fires 'readable' and has no
+// .read(), so Ink's keyboard input would never arrive — the reason the
+// interactive TUI hung at startup. So this class owns the read side entirely
+// (its own byte queue + decoder) rather than delegating to the base push/'data'.
+//
+// Modes:
+//  - PAUSED (default / after pause()): buffered bytes accumulate in _queue and a
+//    'readable' event fires; the consumer drains via read(n).
+//  - FLOWING (after resume() or an 'data' listener): buffered bytes are emitted
+//    as 'data' events as they arrive.
+// The pump starts lazily on the first of: resume(), an 'data'/'readable'
+// listener, setRawMode(true), or a read() call (matching node's "stdin flows
+// once someone asks for data" so merely touching process.stdin doesn't pin the
+// event loop on non-interactive paths). _startPump is idempotent (guarded by
+// _pumping). DIVERGENCE (documented): backpressure is best-effort — the pump
+// pushes every chunk the reader yields rather than honoring highWaterMark; Ink
+// consumes keystrokes fast enough that this is not observable.
+//
+// Encoding: with setEncoding('utf8') (Ink's own), bytes are decoded through a
+// SINGLE persistent TextDecoder fed { stream: true }, so a multi-byte character
+// split across two pump reads (e.g. the 4-byte emoji F0 9F 99 82 arriving as two
+// chunks) reassembles exactly like host node's StringDecoder, instead of
+// emitting U+FFFD. Non-utf8 encodings decode per read()/chunk (best-effort;
+// documented) — Ink only uses utf8.
 class ReadStream extends Readable {
   constructor(fd) {
     super();
@@ -56,6 +73,11 @@ class ReadStream extends Readable {
     this.isTTY = true;
     this.isRaw = false;
     this._pumping = false;
+    this._flowing = false;
+    this._ended = false;
+    this._queue = [];             // pending raw Buffers (paused-mode backlog)
+    this._encoding = null;
+    this._utf8Decoder = null;
   }
   _read() { this._startPump(); }
   _startPump() {
@@ -66,8 +88,8 @@ class ReadStream extends Readable {
       try {
         for (;;) {
           const { value, done } = await reader.read();
-          if (done) { this.push(null); break; }
-          if (value && value.length) this.push(Buffer.from(value));
+          if (done) { this._ended = true; if (this._flowing) queueMicrotask(() => this.emit('end')); else queueMicrotask(() => this.emit('readable')); break; }
+          if (value && value.length) this._ingest(Buffer.from(value));
         }
       } catch (e) {
         this.destroy(e);
@@ -76,54 +98,58 @@ class ReadStream extends Readable {
       }
     })();
   }
+  _ingest(buf) {
+    this._queue.push(buf);
+    if (this._flowing) this._flush();
+    else queueMicrotask(() => this.emit('readable'));
+  }
+  _flush() {
+    while (this._flowing && this._queue.length) {
+      const b = this._queue.shift();
+      this.emit('data', this._decode(b));
+    }
+  }
+  _decode(buf) {
+    if (this._utf8Decoder) return this._utf8Decoder.decode(buf, { stream: true });
+    if (this._encoding) return buf.toString(this._encoding);
+    return buf;
+  }
+  // Paused-mode read: return up to n bytes (all buffered if n omitted), or null
+  // when nothing is buffered (Ink's loop stops on null). Starts the pump so a
+  // first read() before any data still arms input.
+  read(n) {
+    if (this._queue.length === 0) {
+      this._startPump();
+      if (this._ended) queueMicrotask(() => this.emit('end'));
+      return null;
+    }
+    let b = this._queue.length === 1 ? this._queue.shift() : Buffer.concat(this._queue.splice(0));
+    if (typeof n === 'number' && n >= 0 && n < b.length) {
+      this._queue.unshift(b.subarray(n));
+      b = b.subarray(0, n);
+    }
+    return this._decode(b);
+  }
   setRawMode(mode) {
     try { tjs.stdin.setRawMode(!!mode); } catch { /* not a terminal */ }
     this.isRaw = !!mode;
     if (mode) this._startPump();
     return this;
   }
-  // setEncoding: the shim's node:stream Readable (a behavioral subset, see
-  // stream.cjs) has no real setEncoding/decoder machinery — push() always wraps
-  // non-Buffer chunks back into a Buffer via Buffer.from(String(chunk)), which
-  // would double-encode a decoded string. So this override decodes to a string
-  // itself and emits 'data' directly, bypassing the base class's Buffer-only
-  // push() when an encoding is set (matching host node's post-setEncoding
-  // 'data'-emits-strings contract); with no encoding set, behavior is unchanged.
-  //
-  // For utf-8/utf8 (Ink's own encoding, the path that must be right), a
-  // multi-byte character can arrive split across two pump reads (e.g. the
-  // 4-byte emoji F0 9F 99 82 delivered as two separate keystroke chunks). Host
-  // node's internal StringDecoder buffers an incomplete trailing sequence and
-  // reassembles it on the next chunk; decoding each chunk independently would
-  // instead emit U+FFFD replacement characters for the split bytes. So we keep
-  // a SINGLE persistent TextDecoder for the lifetime of the stream and feed it
-  // chunks with { stream: true }, which carries incomplete trailing bytes
-  // forward exactly like StringDecoder does.
   setEncoding(enc) {
     this._encoding = enc;
     const norm = String(enc).toLowerCase();
     this._utf8Decoder = (norm === 'utf8' || norm === 'utf-8') ? new TextDecoder('utf-8') : null;
     return this;
   }
-  push(chunk) {
-    if (chunk !== null && this._encoding) {
-      const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      if (this._utf8Decoder) {
-        const s = this._utf8Decoder.decode(b, { stream: true });
-        if (s.length) queueMicrotask(() => this.emit('data', s));
-        return true;
-      }
-      // DIVERGENCE (documented, not fixed): non-utf8 encodings decode each
-      // pump chunk independently with no carried decoder state, so a
-      // multi-byte sequence split across two reads will NOT reassemble here
-      // the way host node's StringDecoder would. Ink only ever uses utf8 (the
-      // path above), so this fallback is best-effort rather than faithful.
-      queueMicrotask(() => this.emit('data', b.toString(this._encoding)));
-      return true;
-    }
-    return super.push(chunk);
+  on(name, fn) {
+    const r = super.on(name, fn);
+    if (name === 'data') { this._flowing = true; this._startPump(); queueMicrotask(() => this._flush()); }
+    else if (name === 'readable') { this._startPump(); if (this._queue.length) queueMicrotask(() => this.emit('readable')); }
+    return r;
   }
-  resume() { this._startPump(); return super.resume(); }
+  resume() { this._flowing = true; this._startPump(); queueMicrotask(() => this._flush()); return this; }
+  pause() { this._flowing = false; return this; }
   ref() { return this; }
   unref() { return this; }
 }

@@ -212,3 +212,28 @@ test('a large process.stdout.write after isatty(1) still lands in full under a p
   assert.match(nodeR.stdout, new RegExp(`@@LEN@@${N}`));
   assert.match(tjsR.stdout, new RegExp(`@@LEN@@${N}`));
 });
+
+test('process.stdin paused mode: on(readable)+read() delivers bytes, matching host node', async (t) => {
+  if (skipUnlessTjs(t)) return;
+  // Ink drives stdin in PAUSED mode (an 'readable' listener + read() loop, not
+  // flowing 'data') — see the bundle's suspendStdin/resumeStdin. The shim's base
+  // Readable is flowing-only; tty.ReadStream adds a real paused-mode buffer.
+  const f = fixture(`
+    process.stdin.setRawMode(true);
+    let got = '';
+    process.stdin.on('readable', () => {
+      let c;
+      while ((c = process.stdin.read()) !== null) {
+        got += Buffer.isBuffer(c) ? c.toString('latin1') : c;
+        if (got.length >= 3) {
+          console.log('@@TTY@@' + JSON.stringify({ hex: Buffer.from(got, 'latin1').toString('hex') }));
+          process.exit(0);
+        }
+      }
+    });
+  `);
+  const nodeOut = extractMark((await runNodePty(f, { input: 'xyz', inputDelayMs: 500, ms: 4000 })).out);
+  const tjsOut = extractMark((await runLoaderPty(f, { input: 'xyz', inputDelayMs: 500, ms: 4000 })).out);
+  assert.deepStrictEqual(tjsOut, nodeOut);
+  assert.deepStrictEqual(tjsOut, { hex: '78797a' }); // 'xyz'
+});

@@ -277,12 +277,40 @@ function esmToCjs(src) {
     + s + tail;
 }
 
+// Dynamic import(): quickjs's native import() routes through tjs's ESM loader,
+// which knows nothing about this shim's CJS registry, so `await import("fs")`
+// (and the ~58 such calls the bundle makes for real startup work — config
+// reading, realpath/mkdir) reject with "could not load". Route them through
+// require() instead, returning an ESM-interop namespace (named exports + a
+// `default`). We rewrite the `import(` operator to the global helper
+// `__tjsDynImport` (installed once, below). The bundle is Bun-compiled CJS, so
+// every `import(` is a dynamic import; `import.meta` / static `import x from`
+// (no `(`) are not matched. Kept a GLOBAL (not a per-module `new Function` arg)
+// deliberately: adding a 6th eval parameter perturbed the pinned tjs build's
+// codegen enough to resurface a latent exit-time SIGSEGV in an unrelated path
+// (the documented quickjs-ng heap-layout fragility). The tradeoff: import()
+// specifiers resolve from the loader root, not the importing module's dir — fine
+// for the bare-builtin/package specifiers the bundle uses; a relative `import()`
+// (`./x`) would be a future wall.
+const DYN_IMPORT_RE = /(^|[^\w$.])import(\s*\()/g;
+globalThis.__tjsDynImport ??= (spec) => {
+  try {
+    const m = makeRequire(tjs.cwd)(spec);
+    if (m && typeof m === 'object') {
+      if (!('default' in m)) { try { Object.defineProperty(m, 'default', { value: m, configurable: true }); } catch { /* frozen — fall through */ } }
+      return Promise.resolve(m);
+    }
+    return Promise.resolve({ default: m });
+  } catch (e) { return Promise.reject(e); }
+};
+
 function evalModule(file, isEntry = false) {
   const cached = moduleCache.get(file);
   if (cached) return cached.exports;
   let src = readTextSync(file);
   if (src.startsWith('#!')) src = src.slice(src.indexOf('\n') + 1);
   if (!isEntry && esmDetect(src)) src = esmToCjs(src);
+  src = src.replace(DYN_IMPORT_RE, '$1__tjsDynImport$2');
   const module = { exports: {}, filename: file };
   if (isEntry) mainModule = module;
   moduleCache.set(file, module);
