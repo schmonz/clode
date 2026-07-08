@@ -4,7 +4,7 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 (Strategic feasibility risks live in `LONG-TERM.md`; in-flight designs in
 `docs/superpowers/`.)
 
-## NEXT UP — Phase 3 M1 ACHIEVED (TUI paints under tjs); loose ends below
+## NEXT UP — Phase 3 M1+M2 ACHIEVED (TUI paints AND drives a human-verified turn under tjs); M3 next
 
 **The interactive Claude Code TUI now RENDERS under `CLODE_ENGINE=tjs`.** The
 tui-diff oracle went 13 → **1603 bytes** (host node 2062); the screen shows the
@@ -48,20 +48,23 @@ How we got there (parallel subagent workstreams, 2026-07-08):
   into freed memory). FIXED at the source: `txiki-spawn-fail-uaf.patch` (commit
   `e3e5a15`, upstream candidate) releases the handle via the async `uv_close` path
   instead of the direct free. So the "layout-sensitive SIGSEGV lottery" is closed.
-- **M2 (interactive turn): mechanics WORK; 3 tjs-only "not a function" crashes on the
-  turn/session-init path found + fixed** (each traced via a bundle `ae.stack` probe in
-  the extracted `cli.cjs`, fixed as a shim gap, locked by a node-parity test):
+- **M2 ACHIEVED (2026-07-08): human-verified interactive turn on a real console under
+  `CLODE_ENGINE=tjs`** — "what is 6 + 7" → correct answer, TUI stayed coherent. Four
+  tjs-only interactive gaps fixed en route (each traced via a bundle `ae.stack` probe
+  in the extracted `cli.cjs`, fixed as a shim gap, locked by a node-parity test):
   `f2afbe8` **Intl polyfill** (`modules/intl.cjs` — quickjs-ng has no Intl; the loader
   only shimmed Segmenter, so `new Intl.NumberFormat` was `new undefined()`);
   `d39fd4d` **Readable.setEncoding** (hook/subprocess reader; now StringDecoder-backed);
   `4bed83a` **child.stdin as a real Node Writable** (hook runner writes stdin;
-  fire-and-forget over getWriter since tjs child-stdin writes don't resolve). TUI now
-  boots clean (no error banner). Suite 122/118 pass/0 fail/4 skip.
-  **Auth "Not logged in" was NOT a tjs bug** — testing was over SSH (login Keychain
-  locked → `security` can't read the subscription credential); clean-env subscription
-  auth gives "42" under tjs == node. Confirm M2 end-to-end via a **VNC** turn (GUI
-  session, Keychain unlocked) or an API key. **M3 (render parity)** still ahead; note
-  the tjs interactive render is byte-heavy (~1.2MB vs node ~8KB/turn — redundant full
+  fire-and-forget over getWriter since tjs child-stdin writes don't resolve);
+  `f7da37e` **Intl legacy constructors new-optional** — the TUI calls
+  `Intl.DateTimeFormat(...)` WITHOUT `new` (legal ECMA-402), ES6 `class` threw; this
+  one appeared ONLY on a real console turn (headless `-p` never renders dates → live
+  proof corpus coverage is the lever). Suite 124/120 pass/0 fail/4 skip.
+  **Auth "Not logged in" was NOT a tjs bug** — earlier testing was over SSH (login
+  Keychain locked → `security` can't read the subscription credential); on a real
+  console (unlocked) auth + the turn work. **M3 (render parity)** is the remaining
+  phase-3 milestone; the tjs interactive render is byte-heavy (~1.2MB vs node ~8KB/turn — redundant full
   redraws, non-fatal), an M3/efficiency item.
 - **Build-environment follow-ups** (bit the UAF rebuild — recorded in PINS.md): the
   ~42k AppleDouble `._*` sidecars must be purged before building; `build-tjs.mjs`'s
