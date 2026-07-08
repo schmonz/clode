@@ -1,0 +1,21 @@
+diff --git a/src/httpclient.c b/src/httpclient.c
+index 994db78..4de8476 100644
+--- a/src/httpclient.c
++++ b/src/httpclient.c
+@@ -718,7 +718,15 @@ static int tjs_httpclient_connect(TJSHttpClient *h) {
+     cci.port = uri->port;
+     cci.path = full_path;
+     cci.host = uri->host;
+-    cci.origin = uri->host;
++    /* Do NOT set cci.origin for the generic HTTP client: libwebsockets turns it
++     * into a real `Origin:` request header on EVERY fetch(), which is a
++     * browser/CORS concept that has no place on a server-side HTTP request and
++     * makes CORS-guarded APIs reject the call (e.g. api.anthropic.com -> 401
++     * "CORS requests are not allowed for this Organization"). host node / other
++     * server HTTP clients send no Origin. Leaving it NULL (already zeroed by the
++     * memset above) suppresses the header. (WebSocket handshakes, which legitimately
++     * use Origin, go through a different path and are unaffected.) */
++    cci.origin = NULL;
+     cci.ssl_connection = (use_ssl ? LCCSCF_USE_SSL : 0) | h->ssl_flags | LCCSCF_HTTP_NO_FOLLOW_REDIRECT;
+     cci.method = h->method;
+     cci.local_protocol_name = TJS_LWS_HTTP_PROTOCOL_NAME;

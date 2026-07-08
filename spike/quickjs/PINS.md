@@ -39,6 +39,14 @@ quickjs-ng-js_exepath-netbsd patch 2026-07-06
 #   functional on 26. NetBSD (M4) MUST re-check addchdir_np availability before the guest
 #   build; if absent, add a fallback there. Characterized by
 #   test/node-shim-child-process.test.cjs (sync rows).
+# txiki-no-origin-header.patch: httpclient.c tjs_httpclient_connect() no longer sets
+#   cci.origin (was = uri->host), 2026-07-07. libwebsockets turned that into a real
+#   `Origin:` header on EVERY fetch(), which CORS-guarded APIs reject (api.anthropic.com
+#   -> 401 "CORS requests are not allowed for this Organization"); host node sends no
+#   Origin. Not suppressible from JS (lws adds it beneath the fetch/Headers surface).
+#   Only the generic HTTP client path; WebSocket handshakes use a different path and
+#   still send Origin. Verified: httpbin.org/headers shows no Origin after the patch.
+#   Upstream candidate.
 # txiki-default-stack-size.patch: raises TJS__DEFAULT_STACK_SIZE from txiki's stock 1MB
 #   release default to 4MB, 2026-07-07. The real extracted Claude Code bundle (cli.cjs,
 #   ~22MB minified) recurses deeper at startup than 1MB admits and overflows before the
