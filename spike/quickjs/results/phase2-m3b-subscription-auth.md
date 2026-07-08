@@ -1,9 +1,27 @@
 # Phase 2 · M3b — live SUBSCRIPTION round-trip under tjs: walls, fixes, and the one remaining native bug
 
-**Status (2026-07-07): NOT yet reaching a live `PONG` via subscription.** The entire
-subscription-auth chain now works under the patched tjs **except one native
-libuv/tjs bug** (Wall #1 below). Everything else that blocked it is fixed and
-committed. This doc is the handoff for closing Wall #1.
+**Status (2026-07-07 evening): PASSING — live subscription `PONG` under tjs, 22/22 runs.**
+Re-verified against clean `main` (tjs binary built 20:15 with all four patches): the
+documented oracle below printed `PONG`, exit 0, on 12/12 plain runs **and 10/10 runs
+under 4-way CPU load**. Wall #1 (the fd-race) is **not reproducible on clean main**.
+`CLODE_SHIM_TRACE=1` shows why the trigger is gone: with the async-stream fix
+(`7ce7a89`) in place, the keychain credential read now runs **before** the spawn
+burst (it is the first spawn, completes with exit 0 before the burst's first `git`),
+so no `security` read overlaps the burst anymore. The failing observations recorded
+below predate that ordering (the credential read then happened *mid-burst*, likely as
+a retry after the pre-`7ce7a89` stream bug nulled the early read, and/or under the
+experimental throttling variants that were since reverted).
+
+**Residual risk (latent, unconfirmed):** the suspected native race itself was never
+disproven — if a future bundle version moves a piped read back into the burst window,
+it could resurface. Best candidate mechanism found while investigating (never
+confirmed live): libuv can deliver `UV_EOF` **without `read()` returning 0** via the
+`POLLHUP`/`UV__POLLRDHUP` short-circuit in `uv__stream_io`
+(`deps/libuv/src/unix/stream.c` ~line 1223, fed by kqueue `EV_EOF` translation in
+`kqueue.c` ~line 377) — a stale/misattributed `EV_EOF` on a reused socketpair fd
+would produce exactly the "immediate zero-byte EOF while the child is alive"
+signature. If the symptom recurs, instrument that branch first. The historical
+analysis below is kept for that eventuality.
 
 **Goal:** `CLODE_ENGINE=tjs`-style boot of the real Claude Code bundle, authenticated
 by the macOS **subscription** (Keychain/OAuth, NO `ANTHROPIC_API_KEY`), completing a
@@ -17,11 +35,11 @@ hits, and it exercises far more of the shim (sync+async spawn, execa, real fetch
 
 ---
 
-## The decisive oracle (use this to know when Wall #1 is closed)
+## The decisive oracle (PASSES as of 2026-07-07 evening)
 
-**Host node** running the SAME staged bundle prints `PONG`; **tjs** does not (yet).
-This differentiator is the ground truth — the bundle logic, bun-shim, and the
-subscription flow are all correct; only tjs-side plumbing differs.
+**Host node** running the SAME staged bundle prints `PONG`; **tjs now does too**
+(22/22, including under load). Kept verbatim as the regression oracle for future
+bundle-version bumps.
 
 ```bash
 export CLODE_PROVIDER_BIN="$HOME/.local/share/claude/versions/2.1.202"
@@ -33,8 +51,8 @@ cp libexec/bun-shim.cjs "$SCRATCH/bun-shim.cjs"
 env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL NODE_PATH="$PWD/node_modules" \
   ~/.local/bin/timeout 90 node "$SCRATCH/cli.cjs" -p 'say PONG' < /dev/null
 
-# TJS — currently prints "Not logged in · Please run /login" on MOST runs
-# (Wall #1); the target is a reliable "PONG":
+# TJS — now also prints "PONG", exit 0 (verified 22/22 on 2026-07-07; during the
+# Wall #1 investigation this printed "Not logged in · Please run /login" on most runs):
 env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL NODE_PATH="$PWD/node_modules" \
   ~/.local/bin/timeout 90 build/tjs/tjs run libexec/node-shim/loader.cjs \
   "$SCRATCH/cli.cjs" -p 'say PONG' < /dev/null
@@ -43,6 +61,7 @@ Add `CLODE_SHIM_TRACE=1` to see the child-process spawn burst and the failing
 `security` read. (No `timeout` on macOS — use `~/.local/bin/timeout`.)
 
 **Acceptance for Wall #1:** the tjs boot prints `PONG`, exit 0, reliably (≈10/10 runs).
+**MET 2026-07-07:** 12/12 plain + 10/10 under 4-way CPU load, all `PONG` exit 0.
 
 ---
 
@@ -85,7 +104,7 @@ The four committed txiki patches (build via `node scripts/build-tjs.mjs`): `txik
 
 ---
 
-## Wall #1 (REMAINING): a native libuv/tjs fd-race under concurrent spawn
+## Wall #1 (HISTORICAL — no longer reproducible on clean main): a native libuv/tjs fd-race under concurrent spawn
 
 **Symptom.** Under the bundle's startup burst of ~8–10 **concurrent** child spawns
 (git ×~4, ps, rg ×~3, the IDE-detection `ps aux | grep`, the session-start hook), a
