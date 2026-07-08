@@ -304,6 +304,42 @@ globalThis.__tjsDynImport ??= (spec) => {
   } catch (e) { return Promise.reject(e); }
 };
 
+// quickjs-ng (this pinned tjs) has a libregexp bug: Unicode property escapes
+// (\p{…}/\P{…}) are mis-compiled under the `v` (unicodeSets) flag — they match
+// NON-members (e.g. `/[\p{Control}\p{Format}]/v` and `/\p{Format}/v` both match the
+// ASCII letter "t") and MISS real members. The SAME escapes are correct under the
+// `u` flag. This breaks string-width@>=7: `baseVisible("t") === ""` →
+// `"".codePointAt(0)` is undefined → get-east-asian-width `validate` throws
+// `Expected a code point, got undefined`. That throw fires during Claude Code's
+// REPL module top-level init (launchRepl), is caught upstream, and leaves the TUI
+// unpainted (deterministic 13-byte paint stall). Full root-cause + minimal repro:
+// spike/quickjs/results/phase3-m1-tui-boot.md.
+//
+// Mitigation until libregexp is fixed: downgrade `v`→`u` on regex literals that use
+// property escapes but NONE of `v`'s exclusive features. `v` adds, over `u`: string
+// properties (\p{RGI_Emoji} and the \p{…_Sequence}/Basic_Emoji family), set
+// operations ([a--b], [a&&b], nested [[…]]), and \q{…} string literals. A property-
+// escape regex free of all those has identical meaning under `u`, where this tjs
+// compiles it correctly. Conservative by construction: we only touch a `/…/v`
+// literal whose body contains \p{ or \P{ (so plain division `a/b/v` is never a
+// candidate) and none of the v-only markers; downgrading v→u on such a literal is a
+// semantic no-op on a correct engine and the fix on this one.
+const V_FLAG_REGEX_RE = /\/((?:\\.|\[(?:\\.|[^\]\n])*\]|[^/\\\n])+)\/([dgimsuvy]*v[dgimsuvy]*)/g;
+const V_ONLY_MARKERS_RE = /\\[pP]\{(?:RGI_Emoji|Basic_Emoji|Emoji_Keycap_Sequence|RGI_Emoji_[A-Za-z_]+)\}|--|&&|\\q\{|\[\[/;
+function fixVFlagPropertyEscapes(src) {
+  // The property-escape regexes that hit the tjs bug (string-width, etc.) live in
+  // small node_modules ESM files, never the multi-MB Bun-compiled entry — and
+  // V_FLAG_REGEX_RE's regex-literal body pattern is too costly to run over
+  // megabytes. Gate on both an early substring check and a size ceiling.
+  if (src.length > (1 << 20)) return src;
+  if (src.indexOf('\\p{') === -1 && src.indexOf('\\P{') === -1) return src;
+  return src.replace(V_FLAG_REGEX_RE, (m, body, flags) => {
+    if (!/\\[pP]\{/.test(body)) return m;          // only property-escape regexes
+    if (V_ONLY_MARKERS_RE.test(body)) return m;     // keep v where v is load-bearing
+    return '/' + body + '/' + flags.replace('v', 'u');
+  });
+}
+
 function evalModule(file, isEntry = false) {
   const cached = moduleCache.get(file);
   if (cached) return cached.exports;
@@ -311,6 +347,7 @@ function evalModule(file, isEntry = false) {
   if (src.startsWith('#!')) src = src.slice(src.indexOf('\n') + 1);
   if (!isEntry && esmDetect(src)) src = esmToCjs(src);
   src = src.replace(DYN_IMPORT_RE, '$1__tjsDynImport$2');
+  src = fixVFlagPropertyEscapes(src);
   const module = { exports: {}, filename: file };
   if (isEntry) mainModule = module;
   moduleCache.set(file, module);
@@ -454,6 +491,7 @@ if (globalThis.process && globalThis.process.env && globalThis.process.env.CLODE
     const url = typeof input === 'string' ? input : (input && input.url) || String(input);
     console.error('[fetch] ->', method, url);
     const p = _fetch.call(this, input, init);
+    p.then(() => console.error('[fetch] settled-raw', method, url), (e) => console.error('[fetch] rejected-raw', method, url, String(e).slice(0,80)));
     return p.then(
       (res) => {
         console.error('[fetch] <-', method, url, 'status=', res.status, 'ce=', res.headers.get('content-encoding'), 'te=', res.headers.get('transfer-encoding'), 'cl=', res.headers.get('content-length'));

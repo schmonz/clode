@@ -1,10 +1,48 @@
 # Phase 3 · M1 — booting the interactive Ink TUI under tjs: walls fixed + the current frontier
 
-**Status (2026-07-08): IN PROGRESS — not yet painting.** The real Claude Code Ink
-TUI, launched under `CLODE_ENGINE=tjs`, now starts and runs its whole async
-startup (keychain, git, `fetch HEAD api.anthropic.com`, dozens of timers) under
-the phase-3 TTY shim, but **does not yet paint its first frame**. Four hard walls
-were found and fixed (committed); one frontier remains. This doc is the handoff.
+**Status (2026-07-08): PAINTING.** The real Claude Code Ink TUI, launched under
+`CLODE_ENGINE=tjs`, now renders its first frame — the "Claude Code v2.1.202" box,
+prompt `❯`, "? for shortcuts", "Not logged in · Run /login". The final paint
+blocker (below, **"The paint blocker — root cause"**) was a quickjs-ng regexp bug
+mis-compiling `\p{…}` under the `v` flag; it is worked around in the shim loader
+(commit + characterization test `test/node-shim-vflag-regex.test.cjs`). Oracle:
+tjs went from **13 → 1603 bytes** (host node 2062). A separate, still-open network
+bug (`fetch HEAD api.anthropic.com` stall, another agent's fd-race workstream)
+accounts for the remaining node/tjs byte gap but does NOT gate paint.
+
+## The paint blocker — root cause (quickjs-ng `\p{…}` under the `v` flag)
+
+**Symptom:** deterministic 13-byte stall. **Not** a paint/commit bug — the whole
+render pipeline is fine. Traced (clean-room minimal Ink proved React+reconciler
++scheduler+generic-Ink all paint under tjs; then reliable file-fd instrumentation
+of the real bundle — `process.stderr` is unreliable once Ink's `patchConsole`
+hijacks it) to: startup reaches `launchRepl` (`akt`), whose REPL-module lazy
+init calls `stringWidth("←/→ to navigate · ")`. `string-width@≥7`'s
+`baseVisible()` uses `/^[\p{Default_Ignorable_Code_Point}\p{Control}\p{Format}\p{Mark}\p{Surrogate}]+/v`.
+
+**The tjs bug:** quickjs-ng's libregexp mis-compiles Unicode property escapes
+under the `v` (unicodeSets) flag — they match NON-members and MISS members. e.g.
+`/[\p{Control}\p{Format}]/v` and `/\p{Format}/v` both match the ASCII letter
+`"t"`; and `/\p{Format}/v` does NOT match a real Format char (ZWSP). The SAME
+escapes are correct under the `u` flag, and the bug is independent of char-class
+vs alternation form (both wrong under `v`). Minimal repro:
+`scratchpad/paint/REPRO-vflag-charclass.cjs`. Present in both `tjs-snapshot` and
+the freshly-rebuilt `build/tjs/tjs` (the concurrent rebuild targets the fetch
+fd-race, not regexp).
+
+**The cascade:** `baseVisible("t") === ""` → `"".codePointAt(0)` is `undefined` →
+`get-east-asian-width`'s `validate` throws `Expected a code point, got undefined`
+→ the REPL module's top-level init throws → caught upstream → the app idles,
+never calling `ink.render(<App/>)` → only the 13-byte terminal-init write emerges.
+
+**The fix (shim, until libregexp is fixed):** `libexec/node-shim/loader.cjs`
+downgrades `v`→`u` on module-source regex literals that use `\p{…}`/`\P{…}` but
+none of `v`'s exclusive features (string properties `\p{RGI_Emoji}` &c., set
+operations `[a--b]`/`[a&&b]`/`[[…]]`, `\q{…}`). Such a regex is identical under
+`u`, where this tjs compiles it correctly. Gated to non-mega sources (the victims
+are small node_modules ESM files; the pattern is too costly over the multi-MB
+entry, and the entry carries no such regex). The proper fix belongs in
+quickjs-ng libregexp's `v`-flag property-escape handling.
 
 ## Method — the render-byte differential
 
