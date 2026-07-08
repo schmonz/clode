@@ -34,6 +34,29 @@ test('spawnSync: status + stdout + stderr match node', (t) => {
   assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
 });
 
+test('spawn: child.stdin is a Node Writable (on/write/end callable) — the hook-runner pattern', (t) => {
+  if (skipUnlessTjs(t)) return;
+  // The bundle's hook runner does exactly this to a spawned child's stdin:
+  //   stdin.on('error', …); stdin.write(json + '\n', 'utf8'); stdin.end()
+  // A raw WHATWG-writable passthrough has none of those methods, so stdin.write
+  // was undefined → "not a function" (the interactive SessionStart hook crash).
+  const body = `
+    const cp = require('node:child_process');
+    const c = cp.spawn('/bin/echo', ['ok']);
+    const types = { on: typeof c.stdin.on, once: typeof c.stdin.once, write: typeof c.stdin.write, end: typeof c.stdin.end };
+    let threw = null;
+    try { c.stdin.on('error', () => {}); c.stdin.write('hi\\n', 'utf8'); c.stdin.end(); }
+    catch (e) { threw = e.message; }
+    c.on('close', () => console.log(JSON.stringify({ types, threw, notNull: c.stdin != null })));`;
+  const f = prog(body);
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const got = JSON.parse(r.stdout.trim());
+  assert.deepStrictEqual(got.types, { on: 'function', once: 'function', write: 'function', end: 'function' });
+  assert.strictEqual(got.threw, null, 'the hook-runner stdin pattern must not throw');
+  assert.strictEqual(got.notNull, true);
+});
+
 test('spawnSync: stdin input echoes like node (cat)', (t) => {
   if (skipUnlessTjs(t)) return;
   const body = `

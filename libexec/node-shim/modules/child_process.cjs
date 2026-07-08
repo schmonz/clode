@@ -222,11 +222,47 @@ function spawn(file, args = [], opts = {}) {
   };
   child.stdout = wrapReadable(proc.stdout, 'stdout');
   child.stderr = wrapReadable(proc.stderr, 'stderr');
-  child.stdin = proc.stdin || null; // DIVERGENCE C: best-effort passthrough only
-  // Some callers (execa-style cleanup) call child.stdin.destroy(); guard it.
-  if (child.stdin && typeof child.stdin.destroy !== 'function') {
-    child.stdin.destroy = () => { try { child.stdin.close && child.stdin.close(); } catch { /* ignore */ } };
-  }
+  // child.stdin: wrap the tjs WHATWG WritableStream as a REAL node Writable
+  // (EventEmitter with write/end/on/once/destroy). The bundle's hook runner
+  // writes the hook-input JSON to the child's stdin (`stdin.on('error',…);
+  // stdin.write(…); stdin.end()`) — a raw passthrough has none of those methods,
+  // so `stdin.write` was undefined → "not a function" (the interactive
+  // SessionStart:startup hook failure, after the setEncoding one). Writes are
+  // best-effort fire-and-forget over getWriter(): the bundle resolves its own
+  // write-promise synchronously without awaiting delivery, and raw tjs
+  // child-stdin writes don't reliably resolve (DIVERGENCE C) — so we must never
+  // block on them. Characterized in test/node-shim-child-process.test.cjs.
+  const wrapWritable = (ws) => {
+    if (!ws) return null;
+    const w = new EventEmitter();
+    let writer = null;
+    const enc = new TextEncoder();
+    const getW = () => { if (!writer) { try { writer = ws.getWriter(); } catch { /* locked/closed */ } } return writer; };
+    w.writable = true;
+    w.write = (chunk, encOrCb, cb) => {
+      if (typeof encOrCb === 'function') cb = encOrCb;
+      try {
+        const bytes = Buffer.isBuffer(chunk) ? new Uint8Array(chunk) : enc.encode(String(chunk));
+        const wr = getW();
+        if (wr) wr.write(bytes).catch((e) => w.emit('error', e)); // fire-and-forget
+      } catch (e) { queueMicrotask(() => w.emit('error', e)); }
+      if (typeof cb === 'function') queueMicrotask(cb);
+      return true;
+    };
+    w.end = (chunk, encOrCb, cb) => {
+      if (typeof chunk === 'function') { cb = chunk; chunk = undefined; }
+      else if (typeof encOrCb === 'function') cb = encOrCb;
+      if (chunk != null) w.write(chunk);
+      try { const wr = getW(); if (wr) wr.close().catch(() => {}); } catch { /* ignore */ }
+      if (typeof cb === 'function') queueMicrotask(cb);
+      queueMicrotask(() => { w.emit('finish'); w.emit('close'); });
+      return w;
+    };
+    w.destroy = () => { try { const wr = getW(); if (wr) (wr.abort ? wr.abort() : wr.close()).catch(() => {}); } catch { /* ignore */ } queueMicrotask(() => w.emit('close')); return w; };
+    w.cork = () => {}; w.uncork = () => {}; w.setDefaultEncoding = () => w;
+    return w;
+  };
+  child.stdin = wrapWritable(proc.stdin);
   child.kill = (sig) => { try { proc.kill(sig); return true; } catch { return false; } };
   child.ref = () => {}; child.unref = () => {};
   proc.wait().then(
