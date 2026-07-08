@@ -39,8 +39,23 @@ class Readable extends EventEmitter {
   }
   pause() { return this; }
   resume() { return this; }
+  // setEncoding (Task: interactive TUI wall): the bundle's hook runner and other
+  // subprocess readers construct a stream reader that does
+  // `stream.setEncoding("utf-8"); stream.on("data", …)` — without this method
+  // `child.stdout.setEncoding` is undefined and `new <reader>(stdout)` throws
+  // "not a function" (the tjs-only SessionStart:startup hook failure). Node's
+  // contract: after setEncoding, all reads yield strings decoded with a
+  // StringDecoder (multibyte-safe across chunk boundaries); the remainder is
+  // flushed on 'end'. Locked by test/node-shim-stream.test.cjs.
+  setEncoding(enc) {
+    const { StringDecoder } = require('string_decoder');
+    this._decoder = new StringDecoder(enc);
+    this.readableEncoding = enc;
+    return this;
+  }
   push(chunk) {
     if (chunk === null) {
+      if (this._decoder) { const rem = this._decoder.end(); if (rem) queueMicrotask(() => this.emit('data', rem)); }
       this._ended = true;
       this.readableEnded = true;
       this.readable = false;
@@ -48,7 +63,9 @@ class Readable extends EventEmitter {
       return false;
     }
     const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
-    queueMicrotask(() => this.emit('data', b));
+    const out = this._decoder ? this._decoder.write(b) : b;
+    if (out === '') return true; // decoder buffered a partial multibyte sequence
+    queueMicrotask(() => this.emit('data', out));
     return true;
   }
   pipe(dest) {

@@ -36,6 +36,34 @@ test('stream: Readable->PassThrough->Writable matches node', (t) => {
   assert.strictEqual(node.joined, 'PONG');
 });
 
+test('stream: setEncoding makes data events strings, multibyte-safe across chunks (matches node)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  // The bundle's hook/subprocess reader does `stream.setEncoding("utf-8");
+  // stream.on("data", …)` — without setEncoding this threw "not a function"
+  // (the tjs-only SessionStart:startup hook failure). Assert: data events are
+  // strings, and a UTF-8 sequence split across two pushes decodes to one char.
+  const f = prog(`
+    const { Readable } = require('node:stream');
+    const euro = Buffer.from('€', 'utf8'); // 3 bytes: e2 82 ac
+    const out = { types: [], data: [] };
+    const r = new Readable({ read() {} });
+    r.setEncoding('utf8');
+    r.on('data', (d) => { out.types.push(typeof d); out.data.push(d); });
+    r.on('end', () => console.log(JSON.stringify(out)));
+    r.push(Buffer.from('hi '));
+    r.push(euro.subarray(0, 2)); // partial multibyte — should NOT emit yet
+    r.push(euro.subarray(2));    // completes the €
+    r.push(null);
+  `);
+  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const got = JSON.parse(r.stdout.trim());
+  assert.deepStrictEqual(got, node);
+  assert.ok(got.types.every((x) => x === 'string'), 'all data events are strings');
+  assert.strictEqual(got.data.join(''), 'hi €');
+});
+
 test('stream: .end(callback) with NO chunk runs cb, writes no data — Writable & PassThrough match node', (t) => {
   if (skipUnlessTjs(t)) return;
   const f = prog(`
