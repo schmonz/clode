@@ -39,6 +39,22 @@ quickjs-ng-js_exepath-netbsd patch 2026-07-06
 #   functional on 26. NetBSD (M4) MUST re-check addchdir_np availability before the guest
 #   build; if absent, add a fallback there. Characterized by
 #   test/node-shim-child-process.test.cjs (sync rows).
+#   UPDATE 2026-07-08: patch now also closes a native fd-inheritance LEAK. The
+#   original posix_spawn() passed attrp=NULL (no POSIX_SPAWN_CLOEXEC_DEFAULT) and
+#   created its stdio pipes without O_CLOEXEC, so EVERY non-cloexec parent fd
+#   leaked into each sync child — notably libwebsockets' in-flight outbound
+#   TCP/TLS socket for a live fetch(). When a burst of __tjs_spawn_sync children
+#   (keychain `security`, git, `ps aux|grep`) overlapped the fetch connect/TLS
+#   window, the inherited-then-closed socket corrupted the connection ("closed
+#   before established", rapid retries, never connects) — the M3b "Wall #1" fd-race
+#   and the TUI's hung `fetch HEAD api.anthropic.com`. FIX: set
+#   POSIX_SPAWN_CLOEXEC_DEFAULT on Apple (mirrors libuv's uv_spawn, whose async
+#   path never leaked precisely because it sets this flag) + create the pipes
+#   O_CLOEXEC (portable pipe()+fcntl; the dup2 file_actions clear cloexec on the
+#   child's 0/1/2 copies so stdio still works). PROVEN empirically: a sync child
+#   probing /dev/fd saw the fetch socket (fds 8,9) BEFORE the patch and only its
+#   own stdio AFTER; an async child never saw them either way. On non-Apple the
+#   flag is absent — the O_CLOEXEC pipes + already-cloexec runtime fds carry it.
 # txiki-no-origin-header.patch: httpclient.c tjs_httpclient_connect() no longer sets
 #   cci.origin (was = uri->host), 2026-07-07. libwebsockets turned that into a real
 #   `Origin:` header on EVERY fetch(), which CORS-guarded APIs reject (api.anthropic.com

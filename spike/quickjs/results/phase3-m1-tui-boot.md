@@ -276,3 +276,59 @@ the fetch both ruled out as causes.
 - Native fd-race (the fetch symptom): `spike/quickjs/results/phase2-m3b-subscription-auth.md`.
 - Oracle bundle: the staged `2.1.202` `cli.cjs` (M3b scratch) or any resolved
   provider; `build/tjs/tjs`.
+
+## Update (2026-07-08, native fd-race session): sync-spawn CLOEXEC leak FIXED; TUI fetch root-caused deeper (socket connects but transaction busy-loops)
+
+Dedicated native session on the "fetch dies under the TUI spawn burst" symptom
+(M3b Wall #1). Two distinct native mechanisms were separated with fd-level traces.
+
+### FIXED (committed): `__tjs_spawn_sync` leaked live fds into its children
+`src/mod_spawn_sync.c` called `posix_spawn(&pid, file, &fa, NULL, ...)` — **attrp
+= NULL, so no `POSIX_SPAWN_CLOEXEC_DEFAULT`** — and created its stdio pipes with
+plain `pipe()`/`open()` (no `O_CLOEXEC`). Every non-cloexec parent fd therefore
+leaked into each **synchronous** child (keychain `security`, `execSync` git, etc.).
+**Proven** with a `/dev/fd` probe: while a `fetch()` is live, a `execFileSync`
+child saw the lws fetch socket (extra fds 8,9) **before** the fix and only its own
+stdio **after**; an `async` (`uv_spawn`) child never saw them either way — because
+libuv's `uv_spawn` already sets `POSIX_SPAWN_CLOEXEC_DEFAULT` (`deps/libuv/src/
+unix/process.c:545`). Fix mirrors libuv: set `POSIX_SPAWN_CLOEXEC_DEFAULT` on Apple
++ make the pipes `O_CLOEXEC` (portable `pipe()`+`fcntl`; the `dup2` file-actions
+clear cloexec on the child's 0/1/2 so stdio still works). Rolled into
+`spike/quickjs/patches/txiki-sync-spawn.patch` (regenerated), provenance in PINS.md.
+Regression gates GREEN after rebuild: node-shim 101/101 pass + 4 skip; headless
+`-p 'say PONG'` round-trip prints PONG. This is the real, correct fix for the
+documented Wall #1 fd-leak-into-children mechanism (the `-p`/keychain path).
+
+### NOT fixed: the TUI's `fetch HEAD api.anthropic.com` is a SEPARATE, deeper bug
+The sync-spawn fix does **not** make the TUI fetch connect — reproduced 100% in a
+node-pty harness (`scratchpad/fdrace/tui-fetch.cjs`): at rest only the UDP DNS
+socket survives, no TCP socket (matches the earlier parked-state `lsof`). Native
+`fprintf` fd-tracing (lws `connect3.c` socket/connect + `lws-evlib.c` poll_cb +
+libuv `uv__close`, all env-gated, since reverted) established:
+- The `EHOSTUNREACH(65) → EINPROGRESS(36)` connect pattern is **normal** dual-stack
+  (IPv6 no-route, then IPv4) and is identical in the *isolated* run, which connects
+  in ~0.1 s / ~5 `poll_cb`s / `FETCH DONE 404`.
+- Under the TUI the IPv4 socket **does reach connected** (`poll_cb events=2`
+  WRITABLE) but the TLS/HTTP transaction then **busy-loops**: `poll_cb` fires dozens
+  of times on spurious `events=1` (READABLE) without progress, lws eventually tears
+  the wsi down and retries with a fresh socket — forever (never completes even at
+  60 s). So it is *not* purely "closed before established at connect"; the socket
+  connects and the **transaction** stalls, under the TUI's heavy concurrent
+  child-stdio-pipe fd churn (fds cycle through the same low numbers the lws socket
+  reuses).
+- **Hypothesis tested and REJECTED:** that `tjs__evlib_watcher_detach`'s async
+  `uv_close` defers `uv__platform_invalidate_fd`, letting a stale poll-batch event
+  reach the new watcher on a reused fd. Adding a **synchronous**
+  `uv__platform_invalidate_fd(loop, watcher->fd)` in `watcher_detach` was A/B-tested
+  (env-gated `TJS_NO_INVALIDATE`) and showed **no reliable effect** on retry count
+  or completion. Reverted (unverified → not shipped, per "verify the mechanism
+  before patching").
+- Still-open leading theory: fd-reuse crossing between libuv child-stdio pipes and
+  the lws TLS socket in the **shared** libuv+lws loop corrupts read-event delivery
+  (spurious level-triggered READABLE with no data, or the ServerHello read never
+  seen), stalling the mbedtls handshake/HTTP transaction. Next step: instrument the
+  actual `SSL_read`/`lws_service_fd` outcome on the connected socket under the
+  burst (does the read return EAGAIN spuriously, or 0/EOF?), and check whether a
+  libuv child-pipe `uv__io_close`→`invalidate_fd` on a *shared* fd number purges
+  the lws socket's legit read event. Repro harness: `scratchpad/fdrace/tui-fetch.cjs`
+  (100% red); leak proof: `scratchpad/fdrace/fdleak-async.cjs`.
