@@ -1,0 +1,631 @@
+# clode — tactical backlog
+
+Concrete clode-under-Node divergences from native Claude Code, to triage and fix.
+(Strategic feasibility risks live in `LONG-TERM.md`; in-flight designs in
+`docs/superpowers/`.)
+
+## NEXT UP — Phase 3 M1: close the "TUI boots but doesn't paint" frontier
+
+Phase 3 (interactive TUI under tjs) is UNDERWAY. Shim TTY layer (tasks 1–3) is
+**done + reviewed** (real `tty.ReadStream`/`WriteStream` over tjs `core.TTY`:
+isTTY, columns/rows, resize/SIGWINCH, working `setRawMode`, async keystroke pump,
+side-effect-free `isatty`; commits `94905f5`..`6521c1f`). M1 boot (task 4) is
+**in progress**: the real Ink TUI now boots and runs its full async startup under
+`CLODE_ENGINE=tjs`, and **four hard walls were found + fixed** via a node-vs-tjs
+render-byte differential (`efaf6d7`): the legacy `constants` module, `fs.utimes`/
+`lutimes`, `fs.Stats` Date accessors, and `tty.WriteStream` cursor/erase methods —
+each with characterization rows. **It does not yet paint.** FRONTIER (fully
+characterized in `spike/quickjs/results/phase3-m1-tui-boot.md`): hangs right after
+`setRawMode(true)` → the 13-byte reset write, React idle after ~4 scheduler ticks
+(commits an empty tree); the locus is Ink's `enterAlternateScreen`/`suspendStdin`/
+`resumeStdin` path. Prime suspect: `tty.ReadStream` pause/resume flow-control
+semantics vs Ink's stdin suspend/resume. Then M2 (human-verified interactive turn,
+the exit bar) and M3 (render parity). Plan:
+`docs/superpowers/plans/2026-07-08-phase3-tui-under-tjs.md`; design:
+`docs/superpowers/specs/2026-07-08-universal-binaries-phase3-tui-design.md`.
+
+## Phase 2 take-stock report (DONE)
+
+**Phase 2 is functionally complete (2026-07-07).** Both round-trip milestones PASS
+with live subscription auth (no API key):
+- **M3b (darwin/arm64):** 22/22 `PONG` incl. under CPU load —
+  `spike/quickjs/results/phase2-m3b-subscription-auth.md` (d7b2166). The feared
+  native fd-race is non-reproducible on clean main (trigger gone since `7ce7a89`);
+  latent-risk oracle + instrumentation pointer recorded in the doc.
+- **M4 (NetBSD 10.1/aarch64 guest):** 3/3 `PONG`, patched tjs built in-guest with
+  pkgsrc gcc12 in a ≈21-min fully-scripted run —
+  `spike/quickjs/results/phase2-m4-netbsd-aarch64.md`. Five build walls closed
+  (gcc12-for-ada, mimalloc-3.2.7-broken-on-NetBSD upstream regression, clang-only
+  `#pragma region` under -Werror, + 3 real portability bugs now in committed
+  `patches/txiki-netbsd-portability.patch`).
+
+Remaining per the design:
+- **Take stock** (the M4 milestone's second half): short report — actual shim effort
+  vs gate-4 predictions, remaining walls, phase-3 (TUI) + platform-sweep outlook.
+- **Upstream submissions** (prepared, awaiting user go-ahead per PINS.md): js_exepath
+  + repl-eof-spin (quickjs-ng); sync-fs, sync-spawn, no-origin-header (txiki); NEW
+  from M4: txiki-netbsd-portability (txiki PR), mimalloc NetBSD compile regression
+  (report), `#pragma region`-vs-gcc-Werror (txiki report).
+
+## Hermetic test execution (npm + SEA) — [SPEC 1 + 2a + 2b SHIPPED; suite is now pure node:test]
+
+Spec 1 (infra) SHIPPED 2026-07-03: `libexec/clode-paths.cjs` choke point (one
+`CLODE_STATE_ROOT` knob seals npm + SEA), `CLODE_NODE` canonicalized in run-all
+(shim footgun gone), per-file sandbox in `test_helper.bash`, preflight+postflight
+guard (`test/hermetic-guard.cjs`), `CLODE_NO_WATCH=1` in the sandbox (no detached-
+watcher teardown races). Design: `docs/superpowers/specs/2026-07-02-hermetic-testing-design.md`.
+
+**Spec 2a (bats→node foundation + bulk) SHIPPED 2026-07-03:** `test/e2e.cjs` is a
+constructed-clean node harness (`sandbox`/`runClode`/`mkProvider`/`fakeNpm`; every
+spawn's env built from scratch — nothing from `process.env` — with `CLODE_DEPS`
+pointed at a seeded no-`.deps-sig` store so `ensureDeps` takes its npm-free
+user-managed opt-out and the bundle boots offline WITHOUT npm; the bash harness had
+instead leaned on npm-on-PATH + an npm cache). The 16 plain-subprocess `.bats` files
+were converted 1:1 to `node:test` (one node test per `@test`, positive AND negative
+assertions preserved, matched to real launcher output) and deleted in-commit, and
+`test_harness_isolation.bats` was dropped (invariant now structural). `ls test/*.bats`
+is down to the 4 PTY/TUI files. Plan: `docs/superpowers/plans/2026-07-03-bats-to-node-2a.md`.
+Note found en route: the plan's two selfupdate labels were swapped — `test_selfupdate`
+(no underscore) is the extracted-bundle CACHE lifecycle; `test_self_update` (underscore)
+is `clode update` via a `file://` releases fixture + signals digest.
+
+**Spec 2b (PTY/TUI tail) SHIPPED 2026-07-03** (plan
+`docs/superpowers/plans/2026-07-03-bats-to-node-2b.md`): the last 4 `.bats` are gone,
+`test_helper.bash` is deleted, and `run-all.sh` runs node tests only — the suite is now
+**pure `node:test`** (Windows-portable, no bash framework). What landed:
+- `test/e2e-pty.cjs` — node:test PTY capture harness wrapping `tui-screen.cjs`
+  (`makeWsWorlds`/`seedClaudeProfile`/`capture`); `seedClaudeProfile` is the minimal
+  cwd-keyed `~/.claude.json` (onboarding + `projects[cwd]` trust) that gets a no-keystroke
+  capture past onboarding + the trust prompt.
+- `test_tui` → `e2e-tui.test.cjs` (all 4, incl. the once-quarantined #60) and
+  `test_doctor_parity` → `e2e-doctor-parity.test.cjs` + `refresh-doctor-golden.sh`.
+- `test_update` + `test_launcher` verify-and-deleted (coverage already in
+  `e2e-keying`/`e2e-selfupdate`/`e2e-resolve`).
+
+**Key discovery:** the TUI/doctor render tests are NOT hermetic — they spawn the REAL
+Claude Code bundle (the fake fixture can't render the Ink welcome box; #60's ws fatal
+only fires on real WebSocket construction). Worse, the real bundle **probes the macOS
+login Keychain** and pops system dialogs. So both live-render files are gated behind
+**`CLODE_LIVE_RENDER=1`** (opt-in) and SKIP in the default offline `npm test` — no
+bundle spawn, no Keychain, no network. clode's ws-fail-loud *contract* stays covered
+hermetically by `test/websocket.test.cjs`; the comparator by `doctor-parity.test.cjs`.
+
+**Residual (small):**
+- a Windows-portable (node-based) `fakeNpm` to replace the Spec 2a `.sh` shim
+  (`test/e2e.cjs`);
+- fold the `clode-run` update-guard `CLODE_CACHE` semantics decision if it recurs.
+
+**Curate the live `/doctor` parity allowlist (`e2e-doctor-parity` test 2, currently
+skipped).** The opt-in `CLODE_LIVE_RENDER=1` run (2026-07-03) showed the strict
+native-vs-clode comparison reds on pure environment noise, not clode bugs. Want (user
+decision): keep a STRICT comparison with a curated allowlist of areas we deem
+unimportant, failing on any other diff — that's the upstream-`/doctor`-format drift
+signal. To get there:
+- **Kill wrapping noise:** give clode's capture the REAL render deps (string-width/
+  strip-ansi/wrap-ansi), not the `seedRenderDeps` fakes, so line-wrapping matches native
+  (a `makeWsWorlds` variant that copies/symlinks the real `~/.local/share/clode/node_modules`
+  render deps + fake `ws`). The original bats used the real store for exactly this reason.
+- **Normalize section-title status glyphs** (`⚠`/`✔`/`◯`/`✗`) in `doctor-parity.cjs`
+  `parseScreen`, so a status flip (e.g. Diagnostics `✔`→`⚠` from a Keychain-cancel)
+  doesn't cascade into mis-grouped "ADDED/DROPPED block" noise.
+- **Extend the allowlist** to the volatile sections: `Updates` (version fetch / "Failed
+  to fetch versions"), `Remote Control` (auth/session lines), and the macOS
+  Keychain-writability warning in `Installation warnings`/`Diagnostics`.
+- Then un-skip test 2. Validation needs live captures (Keychain dialogs each cycle), so
+  batch it. Comparator logic itself stays covered by `doctor-parity.test.cjs`.
+
+The suite is not hermetic: it leaks the real machine's state in and its own
+fixtures out. Three symptoms observed in a single session on 2026-07-02:
+
+1. **Fixtures leak OUT into the real store:** four `0.0.0-clode-test` stub deps
+   (semver, string-width, strip-ansi, wrap-ansi) were seeded into
+   `~/.local/share/clode/node_modules` by a pre-`4a99d2b` test run, breaking
+   `clode-watch`'s real-semver test and degrading real clode runs (see the
+   dedicated item below).
+2. **Real environment leaks IN — provider on PATH:** `test_resolve.bats` #5
+   ("no provider yields exit 1") depends on the ambient PATH/HOME; a real
+   `~/.local/bin/claude` and/or the caller's node choice can defeat its
+   isolation.
+3. **Real environment leaks IN — node identity:** the same test passes only when
+   `CLODE_NODE=/opt/pkg/bin/node` (a real binary) and fails under the default
+   `command -v node` asdf *shim*, because the shim re-resolves under the test's
+   minimal PATH. Correct execution silently depends on an env var the runner
+   defaults wrong on this box.
+
+**Want:** a deliberate design (own superpowers spec → plan) for test hermeticity
+that:
+- seals both directions — no test can read or write the real
+  `~/.local/share/clode`, `~/.cache/clode`, `~/.local/bin`, or ambient PATH
+  provider; every test runs against a private, disposable HOME/store/cache/PATH.
+- **works identically for npm-layout AND SEA execution** (the two runtime shapes
+  clode ships), so a test passing under one can't rot under the other.
+- **is structurally hard to violate as tests are added** — e.g. a single enforced
+  sandbox fixture/harness all tests inherit, plus a preflight/CI guard that fails
+  if the real store shows `*-clode-test` deps or a test process escapes the
+  sandbox — rather than per-test discipline that erodes.
+- pins/handles the node identity explicitly (which node runs the suite) so
+  correctness doesn't hinge on an unset env var.
+
+Symptoms 1-3 are the concrete acceptance cases the design must close.
+
+**Coverage temporarily quarantined (restore in the bats→node conversion):** hermeticity
+work (2026-07-02) surfaced that `test_tui.bats` #58/#60 silently rode the dev's real
+`~/.claude.json` (onboarding + per-project trust). #58 fixed by seeding onboarding in
+the sandbox; **#60 ("TUI fails LOUD when the ws ext-dep is missing") is skipped** — its
+repro needs a hermetic per-project *trust-state* fixture (Claude Code's real
+`~/.claude.json` is ~76KB, keyed by `projects["<path>"]` trust flags). The conversion
+must rebuild that as a golden fixture and un-skip #60. Also quarantined: the anti-hermetic
+cases in `test_update`/`test_launcher`/`test_watch`/`test_doctor_parity`.
+
+## Test-fake deps leaked into the REAL clode store
+
+On 2026-07-02, four `0.0.0-clode-test` stub packages (`semver`, `string-width`,
+`strip-ansi`, `wrap-ansi`) were found sitting in the user's real dep store at
+`~/.local/share/clode/node_modules`, seeded by a test run *before* commit
+`4a99d2b "fix(test): never seed fake deps into an inherited CLODE_DEPS store"`.
+They made `clode-watch`'s `versionGt uses real semver` test fail (the fake
+`compare()` can't order prereleases) and would silently degrade real clode runs
+(e.g. a fake `string-width` returns wrong widths). Removed the four stubs by hand;
+they self-heal on the next run.
+
+- **Investigate:** confirm `4a99d2b` fully closes the seeding path — was that the
+  only vector, or can any other test still write into an inherited/real
+  `CLODE_DEPS`/`~/.local/share/clode`? Reproduce the pre-fix leak to be sure the
+  fix covers it.
+- **Prevent:** add a guard so a test can never mutate the real store — e.g. tests
+  that need a fake-dep store must point `CLODE_DEPS` at a tmp dir (see the
+  isolate-clode-runs guidance), and consider a CI/`run-all` preflight that fails
+  if `~/.local/share/clode/node_modules/*/package.json` reports a
+  `*-clode-test` version.
+
+## Where's `gh auth login` in the bottom status line?
+
+Open question, observed live: the bottom status line doesn't surface the expected
+`gh auth login` hint. Likely the same class as the auto-update nudge — status-line
+content the bundle computes that clode's environment (or a shim gap) changes.
+
+- **Investigate:** reproduce, compare against native, and locate where the bundle
+  builds that status-line item — is the hint suppressed, mis-evaluated (e.g. a
+  `gh`/auth probe behaving differently under the Node host), or rendered and just
+  not where expected?
+
+## Store our versions more parallel to how upstream stores binary versions
+
+Upstream keeps versioned binaries at `~/.local/share/claude/versions/<ver>` with a
+`~/.local/bin/claude` symlink to the active one. clode's cache (`~/.cache/clode/<KEY>`)
+keys on the provider binary — `<ver>` when the path encodes one, else
+`<basename>-<size+mtime>` — and now also stores an `.extractor-sig` so a changed
+extractor re-extracts. The two schemes aren't aligned: our `<KEY>` dirs don't map
+cleanly onto upstream's `versions/<ver>` layout, and the basename-sig fallback is
+opaque.
+
+- **Want:** make clode's per-version storage mirror upstream's more directly (e.g.
+  a `versions/<ver>` layout with an "active" pointer), so it's obvious which
+  extracted bundle corresponds to which upstream version, easy to GC stale ones,
+  and natural to diff/inspect side by side.
+- **Relates to:** the extractor-fingerprint re-extract (cache validity now depends
+  on `(binary, extractor)`), and the cache-key logic in `bin/clode` (`cache_key`).
+
+## Proactively steer the model toward clode's update path (system-prompt nudge)
+
+Idea, deferred. At launch, have `bin/clode` pass a short `--append-system-prompt`
+line telling the model it's running under clode and to update via `"$CLODE_SELF"
+update` (clode is not necessarily on PATH; `CLODE_SELF` is already exported), never
+`claude update`. The flag feeds the bundle's shared system-prompt builder (`Kn1`),
+so it reaches interactive sessions.
+
+- **Why maybe-later:** the `PreToolUse(Bash)` update hook (in the
+  complete-update-interception design) already denies model-issued `claude
+  update`/`upgrade` with a just-in-time message pointing at the right command, which
+  covers the common case. A proactive nudge would add value mainly by (a) reducing
+  attempts up front and (b) catching *non-`claude`-named* update attempts the hook's
+  regex won't match (e.g. `npm i -g @anthropic-ai/claude-code`).
+- **Revisit if:** the model keeps reaching for upstream update paths despite the
+  hook, or non-`claude` update attempts show up in practice.
+- **Tradeoff:** `--append-system-prompt` is single-value/last-wins, so a user's own
+  value would override clode's. If stacking is needed, the bundle also concatenates
+  an `appendSystemPrompt` from settings inside `Kn1`.
+
+## Reimplement the extraction toolchain in JavaScript (drop the Python dependency)
+
+Port `libexec/extract-claude-js` (and, in time, `libexec/inspect-claude-bundle`)
+from Python to JavaScript/Node. Worth doing on its own merits, and it removes a
+blocker to single-binary deployment.
+
+- **Why it's sensible independent of SEA:**
+  - **Same runtime as the thing it processes.** The artifact is a JS bundle that
+    clode already runs under host Node; carving/transforming it in that same Node
+    avoids a language boundary in the middle of the pipeline.
+  - **One fewer host dependency.** clode targets machines where toolchains are
+    scarce (NetBSD/pkgsrc, old macOS, non-x86); requiring a new-enough `python3`
+    cuts against that. Node is already required to run anything, so the extractor
+    can lean on it instead. (Aligns with the portability mission in `LONG-TERM.md`.)
+- **Why it also matters for SEA:** Node SEA packs JS + Node only, so a JS extractor
+  is a hard prerequisite for the single-binary story below.
+- **Port faithfully — same loud-failure contract.** Preserve, behavior-for-behavior:
+  the text-marker carve (`carve_blocks`), the prelude, and every splice
+  (`patch_autoupdater`, `patch_native_autoupdater`, the `/doctor` anchors) with their
+  *exactly-one-match-or-fail-loud* discipline, plus `verify` (residual-NUL / import-meta
+  checks). The `inspect-claude-bundle --strict` gate and its anchor set should move
+  too (or stay the source of truth until ported). Keep `extract_if_needed`'s
+  extractor-signature re-extract working across the language switch (the sig is over
+  the extractor file — a rewrite naturally busts caches once).
+- **Open question — translate the tests too?** The Python tests (`test/test_extract.py`,
+  `test/test_inspect.py`) would naturally become Node tests alongside their subjects.
+  Less clear for the **shell/bats** suites: they exercise the POSIX-sh launcher
+  (`bin/clode`) directly, so until `bin/clode` is itself JS (the SEA work below),
+  driving shell behavior from Node tests is awkward. Likely split: extractor/inspector
+  tests → Node; launcher tests stay bats until the launcher moves. Revisit per-component
+  as each is ported. Net goal where it lands: fewer test-host deps (no pytest; eventually
+  no bats), one toolchain.
+- **Relates to:** the "Port the toolchain to JS" prerequisite of the Node SEA entry
+  below (this is the extractor half of it).
+
+## DONE (2026-07-01): Isolate the fail-loud ext-dep tests so the repo can have a populated root `node_modules`
+
+**Implemented.** The fail-loud children now load a temp copy of the (self-contained)
+`bun-shim.cjs` from OUTSIDE the repo tree, with cwd in that temp dir, via the shared
+helper `test/isolated-shim.cjs` (`runShimChild`). `require("ws")` (in the shim AND in
+the `-e` body) walks a clean chain that can never reach `<repo>/node_modules`, so a
+stray root `npm install` can no longer make the deps resolvable and defeat the
+"dep ABSENT" assertions. `NODE_PATH` is still honored (appended after the clean walk)
+for the fake-dep cases. Updated: `test/{semver,websocket,yaml,text-utils}.test.cjs`
+(`snapshot-rewrite.test.cjs` needed no change — it uses the shim in-process and
+doesn't assert dep-absence). Proven green WITH a fake root `node_modules` present.
+Original note below for context.
+
+Discovered during the J5 test-harness port (2026-06-30): a plain `npm install` at
+the repo root **breaks the test suite**. The "fail-loud" ext-dep tests
+(`test/semver.test.cjs`, `text-utils`, `websocket`, `yaml`, `snapshot-rewrite`,
+and a bats case) assert that clode dies *loudly* when its runtime deps
+(`semver`/`ws`/`yaml`/`string-width`/`strip-ansi`/`wrap-ansi`) are **absent** — and
+they detect absence by the bun-shim resolving those names via an upward walk that
+reaches the repo-root `node_modules`. So any `npm install` that populates root
+`node_modules` with the `dependencies` block makes clode *find* those deps and the
+fail-loud assertions stop firing → red suite. (Reproduced at a clean commit in
+both worktrees.)
+
+- **Current workaround (in place):** J5's PTY harness deps live in a separate
+  `test/package.json` → `test/node_modules` (gitignored, not shipped), keeping root
+  `node_modules` empty. Works, but it means the repo can never have a normal
+  populated root `node_modules` (for devtools, type stubs, etc.) without breaking
+  tests — a latent footgun for any future contributor who runs `npm install`.
+- **Proper fix:** make each fail-loud test run its child `node` in an **isolated
+  module-resolution context** that GUARANTEES the dep is unresolvable regardless of
+  root `node_modules` — e.g. spawn the child with `NODE_PATH=''` AND a cwd/`HOME`
+  whose upward walk can't reach the repo `node_modules` (a temp dir), or an explicit
+  empty `--require`-shimmed resolver. Then the assertion tests "dep truly absent"
+  independent of the repo's install state, and the root can be populated normally.
+- **Payoff:** removes the "npm install breaks the suite" landmine; lets the J5
+  harness deps move to root devDependencies (the originally-spec'd design) and
+  simplifies any future tooling that expects a conventional `node_modules`.
+- **Scope:** ~5 test files (the fail-loud ones) + re-confirm the bats fail-loud
+  case. Out of scope for J5 itself; do before/with the launcher→JS work.
+
+## Node SEA single-binary releases + a platform build matrix
+
+The north-star packaging story: ship clode as a Node SEA (single executable
+application) — clode's own logic *plus* an embedded Node runtime in one
+self-contained binary — built in CI across an unusually broad OS/arch matrix. This
+leans all the way into clode's identity: a single artifact that runs where Anthropic
+ships nothing (old macOS, NetBSD/pkgsrc, non-x86, …), the run-everywhere counterpart
+to upstream's Bun-compiled binary. The strategic framing lives in `LONG-TERM.md`
+("Build a Node SEA"); this entry is the release-engineering half.
+
+**STATUS 2026-07-03: Windows SEA build Plan A SHIPPED — `clode.exe` builds and runs; the
+toolchain is now genuinely cross-platform (validated on Windows x64 AND Linux x64).**
+The bats→node migration (Specs 2a/2b) shipped, so the test sources are bash-free (the
+Windows trigger). "Plan A" (build + offline smoke, NO CI) — plan
+`docs/superpowers/plans/2026-07-03-windows-sea-build.md` — is done:
+- `platform-tag.cjs`: `win32 → windows` OS token + a `seaBin(repo, platform)` helper
+  (`clode.exe` on win32).
+- `build-sea.mjs`: rewritten to do **the same thing on every OS** rather than branch. The
+  toolchain is now invoked via JS APIs / JS CLIs under `node` — no shells, no `.bin`/`.cmd`
+  shims, no quote-stripping:
+  - **npm** runs via its own `npm-cli.js` under `node` (not `npm`/`npm.cmd`+shell). This is
+    what let the Windows `--define` quotes survive and sidesteps `cmd.exe`'s UNC-cwd refusal.
+  - **esbuild** and **postject** are called through their **JS APIs** (`buildSync`, `inject`),
+    not their CLIs. Key lesson: esbuild's published `bin/esbuild` is a NATIVE binary on POSIX
+    but a node shim on Windows, so "run the bin under node" is portable on neither — the API is.
+  - **signing** is extracted to `scripts/sea-sign.cjs <unsign|sign> <bin>`, a small Node CLI
+    that owns all `codesign`/`signtool` platform branching, so `build-sea.mjs` issues one
+    uniform call per phase.
+  - **rename-aside before write** (uniform): a just-run binary can stay locked briefly
+    (Windows image section / AV), so `buildBinary` renames the stale binary aside before
+    writing — harmless on POSIX, fixes a rebuild-then-run EBUSY on Windows.
+  - the only per-format branch left is postject's Mach-O segment name (macOS), passed as an
+    API option.
+- `sea-build`/`sea-smoke` tests locate the binary via `seaBin`; the POSIX-only exec-bit
+  assertion was dropped (runnability is proven uniformly by actually executing the binary).
+- **Validated:** fresh `CLODE_SEA=1 node --test --test-concurrency=1 test/sea-build.test.cjs
+  test/sea-smoke.test.cjs` ran green on Windows x64 (Node 24) and Linux x64 (Node 24) — build +
+  offline `--clode-version`/`--clode-help` pass; bundle-boot tests skip (no provider). Use
+  `--test-concurrency=1`: the two files share one build artifact and must not race (latent on
+  POSIX, fatal on Windows). Windows build must run from a real drive path, not a raw
+  `\\wsl.localhost\…` UNC path (Node's module resolution + npm choke on a UNC base) — a normal
+  `C:` checkout or a drive-mapped WSL tree (`net use Z: \\wsl.localhost\Ubuntu`) is fine.
+### Code-signing & Smart App Control — decision memo (2026-07-04)
+
+The question this answers: for the UNSIGNED `clode.exe`, *who* can't run it, on what basis we
+believe that, how we'd learn we're wrong, and the cheapest signing path when/if it's worth paying.
+**Current call: ship UNSIGNED.** Most Windows users run it today; revisit signing when a real
+SAC-blocked user reports it (or when Windows-PE local testing on the dev box is worth ~$120/yr).
+
+**Who is affected — is the unsigned binary blocked, warned, or clean?**
+- ❌ **Hard-blocked (no bypass):** Windows 11 with **Smart App Control (SAC) in Enforcement**. SAC
+  checks *all* executables regardless of how they arrived (download, copy, local build), so only
+  signing fixes it — and only once reputation builds. There is no per-file "Run anyway" for SAC;
+  the only escape is turning SAC off, which needs an OS reinstall to re-enable.
+- ⚠️ **Bypassable warning ("Run anyway"):** Win10 / Win11-without-SAC when the file carries
+  **Mark-of-the-Web** (browser/email download). One click, per file hash, until reputation accrues.
+- ✅ **Runs clean, no signing needed:** Windows 10 (all), Windows Server, any Win11 with SAC
+  Off/Evaluation, AND any Windows where the file has **no MOTW** — fetched via CLI (curl/wget/`gh`/
+  winget/scoop), git, or copied. clode's dev audience skews heavily into this bucket.
+
+**Why SAC is on on the dev box (and roughly who else it hits):** SAC auto-enables ONLY on a
+clean/OEM Win11 install (never on a Win10→11 upgrade). It starts in Evaluation, silently watches
+usage, then flips to Enforcement if the machine looks reputable (mostly-signed apps) or to Off if
+it runs lots of unsigned software. The dev box (Win11 Home, clean/OEM) passed the "looks clean"
+test *before* we started building unsigned binaries, so it locked to Enforcement; the user never
+chose it. So the affected group ≈ "newish clean-install Win11 users who mostly run mainstream
+software and got auto-enrolled" — a real, growing consumer slice, but it EXCLUDES Win10, Server,
+Win11-upgraded-from-10, dev/power-user machines (usually evaluated Off), and all CLI/git installs.
+
+**Basis / confidence:**
+- *Adversarially verified* (deep-research, 3-of-3 vote, primary Microsoft sources): SAC "blocks
+  execution of unsigned files unless the file has a positive reputation" and its checks "apply to
+  all executable files, not just those downloaded from the Internet"; the ISG decides allow/block
+  from hash+signing info, allowing only "known good" (signing is an INPUT, not authorization);
+  "even when signed, a newly created binary could still show a warning until its hash or publisher
+  certificate accumulates … positive reputation" (reputation is per file-hash+publisher); **EV
+  certs no longer bypass SmartScreen** ("this behavior no longer exists"); reputation builds
+  organically from download volume over weeks, no consumer submission mechanism. Sources:
+  learn.microsoft.com/windows/apps/package-and-deploy/smartscreen-reputation;
+  …/application-control/…/use-appcontrol-with-intelligent-security-graph;
+  learn.microsoft.com/azure/artifact-signing/faq; knowledge.digicert.com EV-SmartScreen alert.
+- *My-knowledge, NOT re-verified this run* (well-established MS docs — flagged so we don't overtrust):
+  SAC auto-enables only on clean/OEM Win11; the Evaluation→auto-on/off logic; one-way (reinstall to
+  re-enable); SmartScreen is MOTW-gated and CLI download tools usually don't set MOTW.
+- *Local evidence:* dev box `VerifiedAndReputablePolicyState=1`; CodeIntegrity event 3033 blocked
+  `clode.exe` from LOCAL disk (so it's the signing verdict, not the WSL/UNC path); confirmed on both
+  UNC and `C:`. The `windows-latest` CI runner has SAC off, which is why CI builds+smokes green.
+
+**How we'd know we're wrong (falsifiers to watch):**
+- Unsigned `clode.exe` runs fine on a machine the user insists has SAC on → our block belief or the
+  state read is wrong.
+- A plain Windows 10 / Server user reports a HARD block (not a bypassable warning) → SAC/MOTW model wrong.
+- Signing ships and SAC still blocks indefinitely with reputation never accruing → the "signing
+  eventually clears SAC" belief needs revisiting (may require a Microsoft submission).
+- A CLI/git/winget install triggers SmartScreen → the "CLI = no MOTW" assumption is off for that tool.
+- SAC turns itself OFF on the dev box after repeated unsigned-build blocks → contradicts "enforcement
+  is committed/one-way."
+- Still unknown: what fraction of Win11 actually ships SAC-enforcing (not established this run) — the
+  number that would size the affected population.
+
+**Cheapest signing path when it's worth it (ranked):**
+1. **Azure Trusted Signing** (Azure Artifact Signing) — ~$9.99/mo Basic (corroborated across the Azure
+   pricing page + 2 blogs, not formally re-verified), cloud HSM, CI-native (`azure/trusted-signing-action`).
+   **Individuals in US/Canada ARE eligible (verified, Azure FAQ).** Issues no EV — which no longer
+   matters. Best default.
+2. **SSL.com eSigner** — OV/IV $20/mo, EV $100/mo (verified); cloud, GitHub Action
+   (`sslcom/actions-codesigner`). Fallback if Azure individual onboarding blocks you.
+3. **Certum Open Source** — cheap for individuals BUT ships a PHYSICAL smartcard+reader → not
+   CI-friendly; only good for local signing.
+- Do NOT pay for EV to dodge SmartScreen (no longer works). Self-signed NEVER satisfies SAC.
+- Reality at any price: signing gets clode *evaluated* instead of hard-blocked-as-unsigned, but
+  per-(hash+publisher) reputation still ramps over weeks — no instant unlock.
+- `scripts/sea-sign.cjs` is already structured to add a real `signtool sign` on Windows when creds
+  are present; wiring is a small `release.yml` + `sea-sign.cjs` change behind a secret.
+**Plan B slice 1 — Windows CI build job — SHIPPED (2026-07-04).** `release.yml`'s build matrix
+now includes `windows-latest` (with a `defaults.run.shell: bash` so the existing bash steps run
+under Git Bash); every leg runs the offline SEA smokes (`--test-concurrency=1`) after the build;
+asset naming is `seaBin`-aware so the Windows asset is `clode-<ver>-windows-x64.exe`. Validated
+by a green three-OS `workflow_dispatch` draft run (run 28701118207): `build (windows-latest)`,
+`ubuntu-latest`, `macos-14` all succeeded and the draft carried
+`clode-0.1.0-{linux-glibc2.28-x64, macos-14-arm64, windows-x64.exe}`. CI is where the Windows PE
+is validated (the runner has no Smart App Control, unlike the dev box). Bug the CI pass caught +
+fixed: `stageDeps` shelled out to `tar` with a `D:\…\deps.tar` path, and under `shell: bash` `tar`
+is Git Bash's GNU tar, which read the drive-letter colon as a remote `host:path` ("Cannot connect
+to D:"); fixed to archive via `tar -cf -` (stdout) with the staging dir as cwd — no colon-bearing
+path args, uniform on GNU tar and bsdtar (commit 28be5c0).
+
+**Plan B slice 2 — real bundle boot on Windows — SUCCEEDED (2026-07-04, spike on branch
+`spike/windows-boot`, findings in `docs/superpowers/findings/2026-07-04-windows-boot-spike.md`).**
+`clode.exe --version` boots the real Claude Code bundle on `windows-latest` CI → prints
+`2.1.201 (Claude Code)`, and `sea-smoke.test.cjs`'s "boots the real bundle" + "reuses sea-deps"
+tests pass there (4 pass / 1 skip). Unknown #1 answered YES: `npm i -g @anthropic-ai/claude-code`
+delivers a real Bun-compiled `claude.exe` (~241MB); clode's byte-scan `bundle-carve` finds its
+`@bun-cjs` blocks and extracts JS from the PE with ZERO extractor changes. The ONLY runtime code
+fix needed was the `clode-sea.cjs` `tar -xf` → stdin+cwd change (commit `3f8b558`, mirrors the
+build-side fix). Provider on Windows comes via **npm**, not `downloads.claude.ai` (no Windows
+artifact — all platform keys 404).
+
+**Plan B slice 3 — permanent per-commit SEA CI gate — SHIPPED (2026-07-04, commit `f87dc87`).**
+`.github/workflows/ci.yml` runs on every push to `main` + every PR, matrix ubuntu/macOS/Windows:
+build `clode.exe` → offline SEA smoke → npm-install the Claude provider → REQUIRED real bundle
+boot (one `node --test sea-build+sea-smoke` run, `CLODE_CLAUDE_BIN` set, `-p` skipped offline).
+Validated by a green 3-OS PR (#10) then a green `main` run: boot **ran and passed on all three**
+(ubuntu found the nested `claude-code-linux-x64/claude`, macOS+Windows the `claude-code/bin/
+claude.exe`; clode's byte-scan extractor carves PE or ELF). Provider located via `npm root -g`
+(portable) — NOT `npm prefix -g/node_modules`, which is wrong on POSIX. This is the first-ever
+bundle-boot coverage on any platform in CI, and the runtime-path half of the "don't silently break
+a platform" safety net. `release.yml` untouched (standalone `ci.yml`). The windows-boot spike
+workflow + branch are retired.
+
+**Plan B slice 4 — Windows interactive TUI/session bringup — SUCCEEDED (2026-07-04, local
+human-in-the-loop spike on the SAC-disabled dev box; findings in
+`docs/superpowers/findings/2026-07-04-windows-tui-bringup.md`).** With SAC turned off
+(`VerifiedAndReputablePolicyState=0x0`, the decided dev-box trade-off) the unsigned `clode.exe` built
+from `main` runs a **fully working native-Windows Claude Code session** on a Pro/Max subscription
+(no API key): `clode.exe --version` → `2.1.201`; the Ink/React **TUI renders + accepts input + runs
+a turn** (user-driven); `-p "reply PONG"` round-trips through the subscription; **file + directory
+tools work**. Provider isolated via `CLODE_CLAUDE_BIN` (resolution stays deferred). **Zero code
+changes needed** — every probe passed on current `main`. Non-regression: WSL Linux suite unchanged
+(the only 2 fails are the pre-existing `ugrep`-absent `grep shadow` env tests, unrelated). Benign
+cosmetic-only noise: the `-p` "no stdin data received in 3s" launcher warning.
+
+**Unknown #2 — the POSIX shell-shim / tool-use path — CHARACTERIZED: WORKS on Windows (2026-07-04).**
+The make-or-break probe (`-p "Use the Bash tool to run exactly: echo HELLO123"`) returned `HELLO123`,
+exit 0 — `bun-shim.cjs`'s entirely-POSIX shell machinery (`$SHELL -c -l` / `exec -a` / argv0-shadow /
+shell-snapshot) **functions natively on Windows** through the real Bun `claude.exe` provider. The
+spike's central hypothesis (that it would break and need a porting slice) was wrong; **no shell-shim
+port is required to reach basic tool use.** (Earlier this line read "UNTESTED; only a real `-p`
+session (needs an API key) would exercise it" — resolved: a Pro/Max *subscription* `-p` session
+exercised it and it works.)
+
+**Plan B remaining:**
+- **code-signing** (only matters for SAC-Enforcement Win11 users — see the "Code-signing & Smart
+  App Control" decision memo above; deferred until a real SAC-blocked user reports it).
+- **Windows provider resolution — native-installer layout DONE (2026-07-04, commits `e69f753` +
+  `4cd28cf`; findings `docs/superpowers/findings/2026-07-04-windows-provider-resolution.md`).**
+  `clode.exe --version` now boots on native Windows with **no `CLODE_CLAUDE_BIN`**: resolver step 5
+  derives HOME via `clode-paths.homeDir` (`os.homedir()` fallback) and tries leaf names
+  `claude`/`claude.exe`, so it finds the native installer's `~/.local/bin/claude.exe` (a plain copy;
+  POSIX symlinks, Windows copies). Uniform, no platform branch. Still deferred:
+  - **npm `$basedir` sh-shim** (`followWrapper` can't follow the quoted `$basedir`-relative exec
+    target; npm is now upstream-de-emphasized "Advanced" — `CLODE_CLAUDE_BIN` bridges meanwhile);
+  - **WinGet** layout;
+  - step 3's **`providers/current`** join (hardcodes `/claude` + POSIX separator) → belongs to the
+    provider fetch/update slice below.
+- **Windows provider fetch/update — DONE (2026-07-05, commits `0a3e4e3`..`afccf9f`; findings
+  `docs/superpowers/findings/2026-07-05-windows-provider-fetch-update.md`).** `clode update` works on
+  native Windows: `providers/current` is now a **pointer file** (a tiny text file with the version)
+  behind the single `clode-current.cjs` seam — no symlink, no privilege needed; uniform on every
+  platform; the path still contains `/providers/<ver>/` so the shared-per-version cache key holds.
+  The downloaded platform is a **fixed arbitrary container** (`linux-x64`) that clode carves the JS
+  out of (never runs); the download URL uses the manifest's self-describing `binary` name while the
+  store keeps the canonical `claude`. Verified live on Windows: `clode update` fetched linux-x64
+  2.1.201, wrote a pointer-file `current`, and `clode.exe --version` (no `CLODE_CLAUDE_BIN`) resolved
+  via step 3 through the pointer and booted. Characterized win32 vs linux carves: same program, byte
+  differences are only cosmetic (minifier names, embedded-doc CRLF-vs-LF, Bun VFS prefix); linux ==
+  macOS byte-for-byte. (The earlier "no Windows artifact" note was the wrong endpoint —
+  `downloads.claude.ai/claude-code-releases/<ver>/<plat>/` serves every platform, `binary=claude.exe`
+  for win32.) Legacy symlink `current` self-heals on next update. Still deferred: **auto-fetch on
+  missing provider**, **WinGet**, **npm `$basedir` sh-shim resolution**.
+- **full `node --test` (non-SEA) suite green on Windows** — being done in cause-based slices:
+  - **Slice 1 — cross-platform runner + path/format — DONE (2026-07-05, commits `5fe5457`..`8cb4952`;
+    findings `docs/superpowers/findings/2026-07-05-windows-test-runner.md`).** `test/run.mjs` (a node
+    orchestrator) replaces the bash `run-all.sh` — `npm test` → `node test/run.mjs`, identical on every
+    OS (CLODE_NODE=execPath, platform-tagged NODE_PATH via `path.delimiter`, PTY-harness install via
+    `npm-cli.js` under node, hermetic guard `require()`d in-process around fs-discovered `test/*.test.cjs`,
+    dotfiles excluded to match the POSIX glob). `harness-preflight` smoke spawns node not `/bin/sh`.
+    Path/format fixed: `cacheKey` matches markers on either separator; resolve step 5 uses `path.join`;
+    `platformTag` regex + `clode-paths`/`clode-watch` asserts tolerate backslashes. **Verified:** node-pty
+    1.1.0 installs prebuilt on Windows + ConPTY spawns headlessly; POSIX suite unchanged (378/337/**fail 2**
+    ugrep-baseline/39); Windows now RUNS the whole suite — **pass 300 / fail 35 / skip 43**, with all the
+    path/format tests green. **No skips added.** The remaining 35 Windows failures are the honestly-deferred
+    buckets below.
+  - **Slice 2 — symlink fixtures — DONE (2026-07-05, commits `59faed4`..`8e4a26a`; findings
+    `docs/superpowers/findings/2026-07-05-windows-symlink-fixtures.md`).** No skips: the two *incidental*
+    symlink fixtures (e2e-resolve `~/.local/bin/claude`, clode-watch real-`semver`) became `fs.cpSync`
+    copies (uniform, privilege-free); the two *symlink-semantics* tests (resolve `5`/`5b`) were rewritten
+    to inject a mock `fsm` that simulates the symlink, testing clode's readlink+anchor logic on every
+    platform without a real OS symlink. Windows EPERM-symlink failures **18 → 2** (the 2 are the deferred
+    PTY `makeWsWorlds` node symlink); Windows suite **fail 35 → 28**; POSIX unchanged (378/337/fail 2/39).
+    Newly surfaced (was masked by the buildFixtures EPERM crash): the **e2e `claude on PATH last`** test
+    fails on Windows for a *non-symlink* reason — `whichClaude`/PATH resolution + exec of a bare `claude`
+    fixture file on Windows (no `.exe`, X_OK semantics). Folded into the resolution/PATH work below, not
+    symlinks. The `followWrapper` POSIX exec-wrapper tests (~4) remain — assess POSIX-only vs npm-shim.
+  - **Windows PATH provider (`whichClaude`) + `claude`-on-PATH exec:** step 6 (`claude` on PATH) uses a
+    bare `claude` name + `accessSync(X_OK)`; on Windows a PATH provider is `claude.exe`/`claude.cmd` and
+    X_OK differs. Surfaced by the e2e `claude on PATH last` failure. Small; pairs with the npm-shim slice.
+  - **Slices 3–5 (combined) — mostly DONE (2026-07-05, commits `d323459`..`b515e09`; findings
+    `docs/superpowers/findings/2026-07-05-windows-suite-remainder.md`).** Principle: fix portability bugs;
+    mock POSIX-shell/tool LOGIC uniformly (no gratuitous skips); capability-gate only real-shell/tool
+    integration. **POSIX is now fully green (`fail 0`)** — the 2 long-standing `ugrep`/`bfs` baseline fails
+    are fixed (the argv0-shadow tests source under `bash`, not dash, which couldn't parse `function name{}`).
+    **Windows failures 28 → 9.** Landed: `followWrapper` path.win32.isAbsolute; `e2e-dist` node file-scan
+    (no `grep`); `runBundle` signal-integration gated to POSIX; snapshot-rewrite real-`sh` integration gated
+    (logic covered by pure-string tests); inspect applet-version injectable-spawn mock; `clode-deps` fake-npm
+    injectable-spawn mock; `whichClaude` PATHEXT + `6b` mock; `writeUpdateGuardSettings` JSON.stringify escape
+    + `clode_update` exec-bit POSIX-gate; `makeWsWorlds` node copy (PTY/TUI now 2 pass/0 fail/4 live-render-skip
+    on Windows — the PTY "wildcard" was just the symlink).
+  - **Windows suite — final 9 residuals — DONE (2026-07-05). Suite is now GREEN on both platforms:
+    Windows `pass 329 / fail 0 / skip 50`; Linux (WSL) `pass 340 / fail 0 / skip 39` (the 11-skip delta is
+    the Windows-gated set).** What landed:
+    - **`warnAppletSkew` ×3** (`snapshot-rewrite.test.cjs`): made `warnAppletSkew(shadows, spawn=_rawSpawnSync)`
+      accept an injectable spawn (mirrors `hostAppletVersion`); the tests inject a `mockSpawn(code, stderr)`
+      instead of writing a `#!/bin/sh` stub (unrunnable on Windows).
+    - **`writeUpdateGuardSettings` test**: dropped the byte-for-byte assertion (the runtime `JSON.stringify`
+      escapes backslashes on Windows) — the `JSON.parse` + `command`-field checks already present cover it.
+    - **`rewritten grep shadow` ×2** (`e2e-argv0_shadow.test.cjs`): gated `BASH_SKIP` to also skip on `win32`
+      (POSIX-shell-under-bash with POSIX paths / stub applets has no Windows analog; logic covered by the
+      pure-string `rewriteSnapshot` tests).
+    - **`e2e claude on PATH last`**: the actual root cause was NOT the leaf name (X_OK is ignored on Windows
+      so a bare `claude` file resolves fine) but the **test hardcoding `:` as the PATH separator** — split on
+      `path.delimiter` (`;` on Windows) mashed `pathDir` into the next entry. Fixed both PATH joins in
+      `e2e-resolve.test.cjs` to use `path.delimiter`. (Test 3 only passed before because it resolves via step 5
+      first.)
+    - **`e2e-deps` ×2** (`auto-install`, `changed manifest`) — the BACKLOG's "clode-deps state quirk" guess was
+      wrong: these are the **launcher-level `e2e-deps.test.cjs`** tests (same test *names* as the unit file),
+      and they fail because `fakeNpm` emitted a `#!/bin/sh` shim clode can't spawn on Windows. Root cause is a
+      **real product bug**: clode-deps spawns `CLODE_NPM` directly, and Windows Node rejects direct `spawnSync`
+      of a `.cmd`/`.bat` with `EINVAL` (CVE-2024-27980 hardening) — so real `npm.cmd` would fail too. Fixed in
+      product code (`clode-deps.cjs` `npmInvocation`): on win32 a `.cmd`/`.bat` npm is routed through
+      `cmd.exe /d /s /c` (the Windows parallel of the sh launcher invoking npm); POSIX / `.exe` spawn verbatim.
+      Made `fakeNpm` cross-platform (a `.cmd`+paired `.cjs`, node invoked by absolute path since the sandbox
+      PATH carries no node) and gave the sandbox a `ComSpec` on win32 (the OS-shell constant, parallel to
+      `/bin/sh` being reachable via the POSIX sandbox PATH). The e2e now genuinely drives npm to completion on
+      Windows — closing a real `npm.cmd`-on-Windows capability gap, not just the test.
+  - **Next: add a Windows CI leg** to `ci.yml` (now genuinely green, 0 residuals).
+- **Windows (and Linux/macOS) arm64** — the npm registry ships `*-arm64` Bun providers; the SEA
+  build matrix is x64/darwin-arm64 only.
+  (macOS SEA build+smoke+boot is now continuously verified every commit by `ci.yml`, so the old
+  "re-verify on a Mac someday" caveat is retired.)
+
+**STATUS 2026-06-30: the JS-port prerequisites are DONE — SEA is now the next actionable frontier.**
+`clode` is fully JS+sh→JS: the extractor/inspector/signals are `.cjs`, the inline
+snippets are node, the test harness is JS, AND `bin/clode` is now a
+`#!/usr/bin/env node` launcher (the sh is deleted; `libexec/clode-main.cjs` +
+`clode-*.cjs` modules; bundle run via spawn-child+signal-forward). So "Port the
+toolchain to JS" below is COMPLETE. Remaining SEA work is the release-engineering:
+vendor the runtime ext-deps into the blob, per-target `postject` injection + Node
+build matrix, pin the embedded Node ahead of the bundle floor, replace curl/wget
+(already done — `clode-net` uses `fetch`). SEQUENCING (user-set): Node SEA for
+Mac+Linux first; convert bats→Node only when aiming at Windows (bats won't run
+there); then Windows SEA; QuickJS the further frontier.
+
+- **What it unlocks:** a zero-dependency install — `curl` one binary and run. No
+  host Node (clode carries its own), no Python, no npm, no curl/wget. Reaches hosts
+  that have no Node, or one too old for the bundle's creeping Node floor.
+- **Prerequisites (the real work):**
+  - **Port the toolchain to JS.** Node SEA packs JS+Node only, so the Python
+    extractor (`libexec/extract-claude-js`) and the shell launcher (`bin/clode`)
+    have to be reimplemented in JS to be SEA-packable. Drops the Python dependency
+    as a side effect. This is the big one and gates everything else. (The extractor
+    half is broken out above as "Reimplement the extraction toolchain in JavaScript"
+    — worth doing on its own, ahead of SEA.)
+  - **Vendor runtime deps** (`ws`, `yaml`, `string-width`, `strip-ansi`,
+    `wrap-ansi`, `semver`) into the SEA blob/assets instead of `ensure_deps`'
+    npm-install-on-first-run.
+  - **Per-target injection.** SEA blob injection (`postject`) runs against a target
+    Node binary and doesn't cross-compile freely, so the matrix needs a runner or
+    cross toolchain per target. Exotic targets (NetBSD, legacy macOS, non-x86) may
+    have no official Node build — supplying custom Node builds for them is precisely
+    the "matrix the likes of which the world has never seen" flex.
+  - **Pin + track the embedded Node** against the bundle's required major (today
+    >= 24, creeping); the SEA's Node must stay ahead of it.
+  - **Replace curl/wget** in the update path with Node's built-in `fetch` so the
+    last external tool dependency drops too.
+- **Keeps the runtime model:** the SEA still fetches upstream JS into the provider
+  store and extracts+runs it under the embedded Node; `clode update` /
+  re-extract-on-change are unchanged. The SEA changes *how clode itself is shipped*,
+  not how it runs Claude Code.
+- **Gating:** "once everything's working really well" (per `LONG-TERM.md`) — the
+  shim coverage, the extract-time durability gate, and the JS port want to be solid
+  first.
+- **Next step beyond SEA — QuickJS for true any-platform native builds.** Node SEA
+  still needs a Node binary per target, so the reachable set is bounded by where Node
+  itself builds. The further reach is to implement enough of the Node API surface that
+  the app (clode's own JS toolchain, once ported, plus the extracted bundle) runs under
+  **QuickJS**, which compiles to a native binary essentially anywhere — no per-target
+  Node required. The cost shifts to us: with QuickJS, providing the Node APIs the
+  bundle + toolchain use becomes *our* job (the same kind of host-API gap-filling the
+  `bun-shim` already does for `Bun.*`, one layer down). Sequencing: JS toolchain port →
+  Node SEA → QuickJS. Strategic framing + a Node-compat-layer pointer live in
+  `LONG-TERM.md` ("Build a Node SEA"). Phase 1 (technology qualification) ran
+  2026-07-05/06: **GO — build the phase-2 node-compat port on quickjs-ng (engine) +
+  txiki.js (IO layer); 27 of 62 Node-API keys are provided natively, 30 shimmable, 4
+  need scoped C, 1 hard (degrades to a stub), 0 architectural blockers, and the
+  North-Star bytecode memory path measured on darwin/aarch64 fits the mac68k-class ceiling (mac68k itself unmeasured, qemu boot gap)** — see
+  `docs/superpowers/specs/2026-07-05-universal-binaries-phase1-report.md`.
