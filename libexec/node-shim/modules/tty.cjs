@@ -17,8 +17,52 @@ function isatty(fd) {
   return false;
 }
 
+const { EventEmitter } = require('node:events');
+const { writeSyncFd } = require('../internal/stdio-write.cjs');
+
+// fd -> the tjs public stream that exposes width/height for that terminal.
+function tjsStreamForFd(fd) {
+  if (fd === 2) return tjs.stderr;
+  return tjs.stdout;
+}
+
 class ReadStream {}
-class WriteStream {}
+class WriteStream extends EventEmitter {
+  constructor(fd) {
+    super();
+    this.fd = fd;
+    this.isTTY = true;
+    this.writable = true;
+    this._tjs = tjsStreamForFd(fd);
+    // Node's tty.WriteStream emits 'resize' and refreshes columns/rows on
+    // SIGWINCH; Ink listens to process.stdout.on('resize'). columns/rows are
+    // getters so a resize is reflected even without the event.
+    this._onWinch = () => { this.emit('resize'); };
+    tjs.addSignalListener('SIGWINCH', this._onWinch);
+  }
+  get columns() { try { return this._tjs.width; } catch { return undefined; } }
+  get rows() { try { return this._tjs.height; } catch { return undefined; } }
+  write(chunk, enc, cb) {
+    writeSyncFd(this.fd, chunk);
+    if (typeof enc === 'function') enc();
+    else if (typeof cb === 'function') cb();
+    return true;
+  }
+  end(chunk, enc, cb) {
+    if (chunk != null && typeof chunk !== 'function') writeSyncFd(this.fd, chunk);
+    const done = typeof chunk === 'function' ? chunk : (typeof enc === 'function' ? enc : cb);
+    if (typeof done === 'function') done();
+    this.emit('finish');
+    return this;
+  }
+  cork() {}
+  uncork() {}
+  destroy() { try { tjs.removeSignalListener('SIGWINCH', this._onWinch); } catch { /* */ } return this; }
+  setDefaultEncoding() { return this; }
+  getWindowSize() { return [this.columns, this.rows]; }
+  getColorDepth() { return 24; }   // xterm-256color / truecolor; matches the bundle's assumption
+  hasColors(count) { return (count || 16) <= (1 << this.getColorDepth()); }
+}
 
 module.exports = { isatty, ReadStream, WriteStream };
 module.exports.default = module.exports;

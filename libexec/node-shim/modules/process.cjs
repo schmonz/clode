@@ -24,8 +24,7 @@
 // which is a pipe, and the flush test (test/node-shim-core.test.cjs) goes
 // green with this approach. The getWriter machinery is dropped entirely.
 // console.log is tjs-native and untouched by this change.
-const te = new TextEncoder();
-const FSS = globalThis.__tjs_fs_sync;
+const { writeSyncFd } = require('../internal/stdio-write.cjs');
 
 function detectPlatform() {
   const np = (typeof navigator !== 'undefined' && navigator.platform) || '';
@@ -37,20 +36,7 @@ function detectPlatform() {
   return 'linux';
 }
 
-function writeSync(fd, s) {
-  const bytes = te.encode(String(s));
-  let off = 0;
-  // POSIX write(2) on a blocking pipe may do a SHORT write for large
-  // payloads — loop until every byte lands or the carry-forward "must not
-  // lose bytes" goal is silently violated for big stdout/stderr output.
-  while (off < bytes.length) {
-    const chunk = off === 0 ? bytes.buffer : bytes.buffer.slice(off);
-    const n = FSS.write(fd, chunk, -1);
-    if (n <= 0) throw new Error('node-shim: stdio write failed');
-    off += n;
-  }
-  return true;
-}
+function writeSync(fd, s) { return writeSyncFd(fd, s); }
 function writeOut(s) {
   if (tjs.env.CLODE_SHIM_DEBUG) { try { writeSync(2, `[shim] stdout.write(${JSON.stringify(String(s)).slice(0, 120)})\n`); } catch { /* ignore */ } }
   return writeSync(1, s);
@@ -100,8 +86,33 @@ function makeWriteStream(fd, writeFn) {
   s.setDefaultEncoding = function () { return this; };
   return s;
 }
-function getStdout() { return _stdout || (_stdout = makeWriteStream(1, writeOut)); }
-function getStderr() { return _stderr || (_stderr = makeWriteStream(2, writeErr)); }
+// isTerminal detection (found empirically, not in the original design):
+// merely READING tjs.stdout.isTerminal / tjs.stderr.isTerminal lazily
+// constructs tjs's async libuv-backed stream wrapper for that fd, which as a
+// side effect puts the underlying fd into O_NONBLOCK. That breaks the
+// writeSyncFd short-write-loop's blocking assumption for the (far more
+// common) non-TTY case — a large payload over a pipe whose kernel buffer
+// fills mid-write then throws EUNKNOWN instead of blocking. Confirmed via a
+// minimal repro: `void tjs.stdout;` alone, with no other change, makes a
+// >64KB process.stdout.write over a pipe fail the same way.
+// __tjs_fs_sync.fstat(fd) is a plain synchronous stat(2)/fstat(2) call with
+// no such side effect, so decide terminal-ness from the raw POSIX mode bits
+// (S_ISCHR) instead. Only once we already know fd IS a real terminal do we
+// touch tjs.stdout/tjs.stderr (inside tty.WriteStream, for width/height).
+const S_IFMT = 0o170000;
+const S_IFCHR = 0o020000;
+function isTerminalFd(fd) {
+  try { return (globalThis.__tjs_fs_sync.fstat(fd).mode & S_IFMT) === S_IFCHR; } catch { return false; }
+}
+function makeStdout(fd, writeFn, isTerminal) {
+  if (isTerminal) {
+    const tty = require('node:tty');
+    return new tty.WriteStream(fd);
+  }
+  return makeWriteStream(fd, writeFn);   // unchanged non-TTY path
+}
+function getStdout() { return _stdout || (_stdout = makeStdout(1, writeOut, isTerminalFd(1))); }
+function getStderr() { return _stderr || (_stderr = makeStdout(2, writeErr, isTerminalFd(2))); }
 
 let _stdin;
 function getStdin() {
