@@ -16,9 +16,11 @@ TJS_TAG=$(awk '$1=="txiki.js"{print $2; exit}' spike/quickjs/PINS.md)
   || { echo "FATAL: mod_spawn_sync.c missing — sync-spawn patch not applied"; exit 1; }
 grep -q 'cci.origin = NULL' spike/quickjs/vendor/txiki.js/src/httpclient.c \
   || { echo "FATAL: no-origin patch not applied in vendor checkout"; exit 1; }
-COPYFILE_DISABLE=1 tar -czf "$DIST/txiki-$TJS_TAG.tar.gz" \
+# --no-xattrs: bsdtar otherwise records com.apple.provenance xattrs that make
+# NetBSD tar exit nonzero ("Error exit delayed") when it can't restore them.
+COPYFILE_DISABLE=1 tar --no-xattrs -czf "$DIST/txiki-$TJS_TAG.tar.gz" \
   -C spike/quickjs/vendor --exclude 'txiki.js/build' --exclude 'txiki.js/.git' \
-  --exclude '._*' txiki.js
+  --exclude 'txiki.js/.cache' --exclude '._*' txiki.js
 
 # 2. cli.cjs: same 2.1.202 extraction the M3b oracle used
 node libexec/extract-claude-js.cjs "$HOME/.local/share/claude/versions/2.1.202" "$DIST/cli.cjs"
@@ -29,7 +31,7 @@ STAGE=$(mktemp -d)
 cp libexec/bun-shim.cjs "$STAGE/"
 cp -R libexec/node-shim "$STAGE/"
 cp -R node_modules "$STAGE/"
-COPYFILE_DISABLE=1 tar -czf "$DIST/m4-runtime.tar.gz" --exclude '._*' \
+COPYFILE_DISABLE=1 tar --no-xattrs -czf "$DIST/m4-runtime.tar.gz" --exclude '._*' \
   -C "$STAGE" bun-shim.cjs node-shim node_modules
 rm -rf "$STAGE"
 

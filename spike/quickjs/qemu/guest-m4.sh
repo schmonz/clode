@@ -20,14 +20,29 @@ ftp -o simde.tgz   "$HOSTD/vendor/dist/simde-v0.8.2.tar.gz"
 ftp -o runtime.tgz "$HOSTD/vendor/dist/m4-runtime.tar.gz"
 ftp -o cli.cjs     "$HOSTD/vendor/dist/cli.cjs"
 ftp -o hosts.frag  "$HOSTD/vendor/dist/hosts.frag"
-tar xzf tjs.tgz && tar xzf simde.tgz && tar xzf runtime.tgz
+# Separate extractions (no && chain): xattr-restore warnings can make tar
+# exit nonzero without meaning a broken tree; the dir checks below are the
+# real gate.
+tar xzf tjs.tgz
+tar xzf simde.tgz
+tar xzf runtime.tgz
+for d in txiki.js simde-src node-shim node_modules; do
+  [ -d "$W/$d" ] || { echo "FATAL: $d missing after extraction"; echo "=== GUEST-DONE ==="; exit 1; }
+done
 
 # Patched-source sanity before burning ~15 build minutes:
 grep -c 'cci.origin = NULL' txiki.js/src/httpclient.c   # expect 1
 ls txiki.js/src/mod_spawn_sync.c
 
+# deps/ada needs C++20 constexpr std::string — beyond base g++ 10.5 (the
+# phase-1 gate-3 wall). Use pkgsrc gcc12 (pkg_add'd by the driver).
+GCC12=/usr/pkg/gcc12/bin
+[ -x "$GCC12/g++" ] || { echo "FATAL: pkgsrc gcc12 not installed"; echo "=== GUEST-DONE ==="; exit 1; }
+LD_LIBRARY_PATH=/usr/pkg/gcc12/lib; export LD_LIBRARY_PATH
+
 echo "=== BUILD-TJS ==="
 (cd txiki.js && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+   "-DCMAKE_C_COMPILER=$GCC12/gcc" "-DCMAKE_CXX_COMPILER=$GCC12/g++" \
    "-DFETCHCONTENT_SOURCE_DIR_SIMDE=$W/simde-src" \
    -DBUILD_WITH_WASM=OFF \
  && cmake --build build -j2); echo "tjs-build-exit=$?"

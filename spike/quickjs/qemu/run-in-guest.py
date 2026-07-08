@@ -50,6 +50,9 @@ skip_tjs = '--skip-tjs' in sys.argv
 script = 'guest-build.sh'
 if '--script' in sys.argv:
     script = sys.argv[sys.argv.index('--script') + 1]
+pkgs = 'cmake gmake libffi'
+if '--pkgs' in sys.argv:
+    pkgs = sys.argv[sys.argv.index('--pkgs') + 1]
 
 # One file captures everything: anita mirrors the serial console to stdout,
 # qemu noise arrives on stderr. Line-buffering keeps it tail -f friendly.
@@ -136,7 +139,7 @@ PKG_PATH = 'http://10.0.2.2:8080/vendor/dist/pkgs/%s' % pkgarch
 # "Can't assign requested address"); the ping proves the gateway path.
 setup = [
     ('dhcpcd -w && ping -o -w 30 10.0.2.2', 600, 3),
-    ('PKG_PATH=%s pkg_add cmake gmake libffi' % PKG_PATH, tmo, 3),
+    ('PKG_PATH=%s pkg_add %s' % (PKG_PATH, pkgs), tmo, 3),
     ('ftp -o /tmp/gb.sh http://10.0.2.2:8080/qemu/%s' % script, 600, 3),
 ]
 for cmd, t, tries in setup:
