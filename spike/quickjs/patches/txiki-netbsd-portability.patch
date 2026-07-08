@@ -1,0 +1,41 @@
+diff --git a/src/mod_dns.c b/src/mod_dns.c
+index 130d261..8372ea3 100644
+--- a/src/mod_dns.c
++++ b/src/mod_dns.c
+@@ -99,6 +99,11 @@ static JSValue tjs_dns_getaddrinfo(JSContext *ctx, JSValue this_val, int argc, J
+     memset(&hints, 0, sizeof(hints));
+     hints.ai_socktype = SOCK_STREAM;
+     hints.ai_family = family;
++/* NetBSD never implemented the RFC 3493 AI_V4MAPPED flag; defining it to 0
++ * makes the OR a no-op there (v4-mapped lookups are best-effort anyway). */
++#ifndef AI_V4MAPPED
++#define AI_V4MAPPED 0
++#endif
+     hints.ai_flags = AI_ADDRCONFIG | AI_V4MAPPED;
+ 
+     int r = uv_getaddrinfo(tjs_get_loop(ctx), &gr->req, uv__getaddrinfo_cb, node, NULL, &hints);
+diff --git a/src/mod_posix-socket.c b/src/mod_posix-socket.c
+index 83e656d..09938a5 100644
+--- a/src/mod_posix-socket.c
++++ b/src/mod_posix-socket.c
+@@ -298,14 +298,20 @@ static JSValue tjs_sock_get_info(JSContext *ctx, JSValue this_val) {
+         JS_SetPropertyStr(ctx, socket_info, "type", JS_NewInt32(ctx, val));
+         cnt++;
+     }
++/* SO_DOMAIN / SO_PROTOCOL are Linux/FreeBSD extensions; NetBSD has neither.
++ * Guard like the constants table below does — the fields are best-effort. */
++#ifdef SO_DOMAIN
+     if (getsockopt(s->sock, SOL_SOCKET, SO_DOMAIN, &val, &sock_val_len) == 0) {
+         JS_SetPropertyStr(ctx, socket_info, "domain", JS_NewInt32(ctx, val));
+         cnt++;
+     }
++#endif
++#ifdef SO_PROTOCOL
+     if (getsockopt(s->sock, SOL_SOCKET, SO_PROTOCOL, &val, &sock_val_len) == 0) {
+         JS_SetPropertyStr(ctx, socket_info, "protocol", JS_NewInt32(ctx, val));
+         cnt++;
+     }
++#endif
+ #endif
+ 
+     if (cnt > 0) {

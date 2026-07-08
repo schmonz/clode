@@ -61,10 +61,13 @@ quickjs-ng-js_exepath-netbsd patch 2026-07-06
 #   (or adds worker_threads support) in M3+ MUST re-check the worker C-stack size first.
 # upstream: js_exepath + repl-eof-spin (quickjs-ng), sync-fs (txiki) — prepared 2026-07-07, awaiting user go-ahead to post
 # before-posting: DONE 2026-07-07 — txiki-sync-fs.patch is submission-ready (header de-jargoned; C hardened: read errno-capture around js_free, write resolves pos before JS_GetArrayBuffer to avoid detach-dangling)
-# txiki-netbsd-ai-v4mapped.patch: mod_dns.c getaddrinfo hints used AI_V4MAPPED,
-#   which NetBSD never implemented (RFC 3493 flag absent from its libc) -> hard
-#   compile error, found by the M4 in-guest build 2026-07-07. Shimmed to 0 when
-#   undefined (OR becomes a no-op). Upstream candidate. The other M4 build walls
+# txiki-netbsd-portability.patch: two NetBSD compile walls found by the M4
+#   in-guest build 2026-07-07, one upstream-PR candidate: (a) mod_dns.c used
+#   AI_V4MAPPED, an RFC 3493 flag NetBSD never implemented -> shimmed to 0 when
+#   undefined (OR becomes a no-op); (b) mod_posix-socket.c's non-Apple branch
+#   getsockopt()s SO_DOMAIN/SO_PROTOCOL (Linux/FreeBSD extensions, absent on
+#   NetBSD) -> #ifdef-guarded like the file's own constants table. Full-tree
+#   sweep against NetBSD 10 headers shows no other unguarded socket/dns consts. The other M4 build walls
 #   need no patch: ada needs pkgsrc gcc12 (base g++ 10.5 lacks C++20 constexpr
 #   string); mimalloc 3.2.7 is broken on NetBSD upstream (its #if __NetBSD__
 #   options-table entry names the pre-rename mi_option_eager_commit_delay) ->
