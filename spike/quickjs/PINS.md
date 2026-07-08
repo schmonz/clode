@@ -92,3 +92,26 @@ quickjs-ng-js_exepath-netbsd patch 2026-07-06
 #   options-table entry names the pre-rename mi_option_eager_commit_delay) ->
 #   guest builds -DBUILD_WITH_MIMALLOC=OFF; txiki src #pragma region (clang/MSVC
 #   -ism) trips gcc -Wunknown-pragmas -> guest strips -Werror (upstream candidate).
+# txiki-spawn-fail-uaf.patch: mod_process.c tjs_spawn() fixed a heap-use-after-free
+#   on the spawn LAUNCH-FAILURE path (2026-07-08, ASAN-confirmed; upstream candidate).
+#   On uv_spawn() error (e.g. child_process ENOENT) it did tjs__free(p) synchronously,
+#   but libuv deliberately leaves the uv__handle_init'd process handle owned by the
+#   loop even on exec failure (the "expects initialized streams, even if the exec
+#   failed" note in uv_spawn) — so a later uv_run/uv__run_closing_handles WRITEs into
+#   the freed handle. Manifested as a nondeterministic teardown SIGSEGV/SIGBUS (exit
+#   139/138) after correct output, layout-sensitive (the "codegen fragility" the
+#   phase-2 notes chased). Fix: release the handle via the async uv_close path the
+#   exit/finalizer paths already use (p->finalized=true; maybe_close(p)) instead of
+#   the direct free; the pre-uv_spawn goto-fail cases keep the direct free (handle
+#   never handed to the loop). Root cause found with an ASAN tjs build
+#   (-DBUILD_WITH_ASAN=ON -DBUILD_WITH_MIMALLOC=OFF). Locked by the
+#   node-shim-child-process.test.cjs "ENOENT surfaces as an async error event" row.
+# BUILD CAVEATS re-confirmed 2026-07-08 (bit the rebuild): (1) the ~42k AppleDouble
+#   ._* sidecars on this NFS mount must be deleted before building (poison CMake/wamr
+#   globs). (2) sync-fs/sync-spawn have overlapping context in vm.c/private.h/
+#   CMakeLists — strict `git apply` (build-tjs.mjs) fails to re-apply/sequence them on
+#   an already-patched tree; GNU `patch -p1 --forward` (fuzzy) applies all 6 cleanly
+#   from pristine. (3) the linker-adhoc signature can be invalidated by copying the
+#   binary off the build dir on this mount (exec dies "Terminated due to code signing
+#   error", SIGKILL/137, even though `codesign -v` passes) — re-sign after copy:
+#   `codesign -s - --force build/tjs/tjs`.

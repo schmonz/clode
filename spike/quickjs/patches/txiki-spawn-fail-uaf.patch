@@ -1,0 +1,28 @@
+diff --git a/src/mod_process.c b/src/mod_process.c
+index 1e9b073..3fcfb3c 100644
+--- a/src/mod_process.c
++++ b/src/mod_process.c
+@@ -396,7 +396,22 @@ static JSValue tjs_spawn(JSContext *ctx, JSValue this_val, int argc, JSValue *ar
+     int r = uv_spawn(tjs_get_loop(ctx), &p->process, &options);
+     if (r != 0) {
+         tjs_throw_errno(ctx, r);
+-        goto fail;
++        /* uv_spawn leaves the (already uv__handle_init'd) process handle owned by
++         * the loop even when it fails — libuv keeps it usable so the caller can
++         * close it (see the "expects initialized streams, even if the exec
++         * failed" note in uv_spawn). Freeing it synchronously via `goto fail`
++         * (tjs__free) is a use-after-free: a later uv_run/uv__run_closing_handles
++         * writes into the freed handle (heap-use-after-free, ASAN-confirmed on the
++         * child_process ENOENT launch-failure path). Release it through the same
++         * async uv_close path the exit/finalizer paths use; mark finalized so
++         * uv__close_cb frees p once the close completes. (The `fail:` label below
++         * still does a direct free — correct for the pre-uv_spawn goto-fail cases,
++         * where the handle was never handed to the loop.) */
++        p->finalized = true;
++        maybe_close(p);
++        JS_FreeValue(ctx, obj);
++        ret = JS_EXCEPTION;
++        goto cleanup;
+     }
+ 
+     JS_SetOpaque(obj, p);
