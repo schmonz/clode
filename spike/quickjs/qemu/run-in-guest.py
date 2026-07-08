@@ -47,6 +47,9 @@ ARCHES = {
 arch, workdir, logfile = sys.argv[1], sys.argv[2], sys.argv[3]
 url, disk, mem, tmo, overall, pkgarch = ARCHES[arch]
 skip_tjs = '--skip-tjs' in sys.argv
+script = 'guest-build.sh'
+if '--script' in sys.argv:
+    script = sys.argv[sys.argv.index('--script') + 1]
 
 # One file captures everything: anita mirrors the serial console to stdout,
 # qemu noise arrives on stderr. Line-buffering keeps it tail -f friendly.
@@ -134,7 +137,7 @@ PKG_PATH = 'http://10.0.2.2:8080/vendor/dist/pkgs/%s' % pkgarch
 setup = [
     ('dhcpcd -w && ping -o -w 30 10.0.2.2', 600, 3),
     ('PKG_PATH=%s pkg_add cmake gmake libffi' % PKG_PATH, tmo, 3),
-    ('ftp -o /tmp/gb.sh http://10.0.2.2:8080/qemu/guest-build.sh', 600, 3),
+    ('ftp -o /tmp/gb.sh http://10.0.2.2:8080/qemu/%s' % script, 600, 3),
 ]
 for cmd, t, tries in setup:
     if run(cmd, t, tries) != 0:
