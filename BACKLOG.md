@@ -66,6 +66,13 @@ How we got there (parallel subagent workstreams, 2026-07-08):
   console (unlocked) auth + the turn work. **M3 (render parity)** is the remaining
   phase-3 milestone; the tjs interactive render is byte-heavy (~1.2MB vs node ~8KB/turn — redundant full
   redraws, non-fatal), an M3/efficiency item.
+- **Agentic tool use (Bash tool) fixed** (`1222660`, tjs C, upstream candidate): the
+  Bash tool feeds short commands to a PERSISTENT shell via stdin and every write hung
+  — `mod_streams.c` returned `JS_TRUE` on the `uv_try_write` sync-complete path where
+  the JS sinks (process.js/udp.js) expect a byte-count NUMBER, so they awaited an
+  onwrite never scheduled. Fix: return the count. Data was delivered; only the
+  write-ack was missing (also blocked close/EOF). This is the substrate for a coding
+  agent running commands under tjs. `txiki-stream-write-sync-number.patch`.
 - **Build-environment follow-ups** (bit the UAF rebuild — recorded in PINS.md): the
   ~42k AppleDouble `._*` sidecars must be purged before building; `build-tjs.mjs`'s
   strict `git apply` can't re-sequence the overlapping sync-fs/sync-spawn patches on
