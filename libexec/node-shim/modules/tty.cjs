@@ -162,6 +162,37 @@ class WriteStream extends EventEmitter {
   getWindowSize() { return [this.columns, this.rows]; }
   getColorDepth() { return 24; }   // xterm-256color / truecolor; matches the bundle's assumption
   hasColors(count) { return (count || 16) <= (1 << this.getColorDepth()); }
+  // Cursor / erase methods node exposes on tty.WriteStream (via readline). Ink
+  // and its deps call process.stdout.cursorTo/clearLine during rendering; absent
+  // here they'd be `not a function` and reject the render. Emit the ANSI directly
+  // (readline's own escapes). Each returns true and fires an optional callback,
+  // matching node's signature.
+  cursorTo(x, y, cb) {
+    if (typeof y === 'function') { cb = y; y = undefined; }
+    if (typeof x === 'number' && typeof y === 'number') writeSyncFd(this.fd, `\x1b[${y + 1};${x + 1}H`);
+    else if (typeof x === 'number') writeSyncFd(this.fd, `\x1b[${x + 1}G`);
+    if (typeof cb === 'function') cb();
+    return true;
+  }
+  moveCursor(dx, dy, cb) {
+    let s = '';
+    if (dx < 0) s += `\x1b[${-dx}D`; else if (dx > 0) s += `\x1b[${dx}C`;
+    if (dy < 0) s += `\x1b[${-dy}A`; else if (dy > 0) s += `\x1b[${dy}B`;
+    if (s) writeSyncFd(this.fd, s);
+    if (typeof cb === 'function') cb();
+    return true;
+  }
+  clearLine(dir, cb) {
+    // dir: -1 → left (\x1b[1K), 1 → right (\x1b[0K), 0 → whole line (\x1b[2K)
+    writeSyncFd(this.fd, dir < 0 ? '\x1b[1K' : dir > 0 ? '\x1b[0K' : '\x1b[2K');
+    if (typeof cb === 'function') cb();
+    return true;
+  }
+  clearScreenDown(cb) {
+    writeSyncFd(this.fd, '\x1b[0J');
+    if (typeof cb === 'function') cb();
+    return true;
+  }
 }
 
 module.exports = { isatty, ReadStream, WriteStream };

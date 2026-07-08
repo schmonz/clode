@@ -51,10 +51,32 @@ function latin1Encode(str) {
 
 class Stats {
   #kind;
-  constructor(raw) { this.size = raw.size; this.mode = raw.mode; this.mtimeMs = raw.mtimeMs; this.#kind = raw.kind; }
+  constructor(raw) {
+    this.size = raw.size;
+    this.mode = raw.mode;
+    this.#kind = raw.kind;
+    // FSS.stat exposes only mtimeMs (second-resolution: st_mtime*1000). Node's
+    // Stats carries atime/mtime/ctime/birthtime as both Date and *Ms/*Ns.
+    // DIVERGENCE (documented): this build reads only the whole-second mtime, so
+    // atime/ctime/birthtime are approximated as mtime, and sub-second precision
+    // is not observable (an mtime-precision probe will read "second" resolution).
+    // The Date accessors must exist regardless — deps do stat().mtime.getTime().
+    const ms = raw.mtimeMs;
+    this.mtimeMs = ms; this.atimeMs = ms; this.ctimeMs = ms; this.birthtimeMs = ms;
+    this.mtime = new Date(ms); this.atime = new Date(ms);
+    this.ctime = new Date(ms); this.birthtime = new Date(ms);
+    // Numeric fields Node always provides; not surfaced by FSS.stat → 0 defaults
+    // so property reads (e.g. dev/ino identity checks) don't throw.
+    this.dev = 0; this.ino = 0; this.nlink = 1; this.uid = 0; this.gid = 0;
+    this.rdev = 0; this.blksize = 4096; this.blocks = Math.ceil((raw.size || 0) / 512);
+  }
   isFile() { return this.#kind === 'file'; }
   isDirectory() { return this.#kind === 'dir'; }
   isSymbolicLink() { return this.#kind === 'symlink'; }
+  isBlockDevice() { return false; }
+  isCharacterDevice() { return this.#kind === 'char'; }
+  isFIFO() { return false; }
+  isSocket() { return false; }
 }
 
 // fs.Dirent — the shape readdir(withFileTypes) yields. FSS.readdir returns NAMES
@@ -200,6 +222,19 @@ const fsMod = {
   chmodSync: (p, m) => FSS.chmod(p, m),
 };
 
+// Node's utimes/lutimes accept a Date, a number (Unix epoch SECONDS), or a
+// numeric string; tjs.utime/tjs.lutime take milliseconds (they divide by 1000
+// for uv_fs_[l]utime, which keeps sub-second precision as a fractional second).
+// Convert to ms so a filesystem mtime-precision probe (create file → utimes →
+// stat, checking mtime%1000) sees real ms resolution.
+function timeToMs(t) {
+  if (t instanceof Date) return t.getTime();
+  if (typeof t === 'bigint') return Number(t) * 1000;
+  if (typeof t === 'number') return t * 1000;
+  if (typeof t === 'string') { const n = Number(t); return Number.isFinite(n) ? n * 1000 : Date.now(); }
+  return Date.now();
+}
+
 const promises = {
   readFile: async (p, opts) => {
     const enc = typeof opts === 'string' ? opts : opts?.encoding;
@@ -209,6 +244,8 @@ const promises = {
     return data;
   },
   writeFile: async (p, data) => { writeFileSync(p, data); },
+  utimes: async (p, atime, mtime) => { await tjs.utime(p, timeToMs(atime), timeToMs(mtime)); },
+  lutimes: async (p, atime, mtime) => { await tjs.lutime(p, timeToMs(atime), timeToMs(mtime)); },
   stat: async (p) => statSync(p),
   lstat: async (p) => lstatSync(p),
   mkdir: async (p, opts) => mkdirSync(p, opts),
@@ -242,9 +279,18 @@ const cbWrap = (pfn) => (...args) => {
   pfn(...args).then((v) => cb(null, v), (e) => cb(e));
 };
 for (const name of ['readFile', 'writeFile', 'stat', 'lstat', 'access', 'readdir',
-  'realpath', 'readlink', 'mkdir', 'unlink', 'rename', 'rmdir', 'copyFile', 'rm', 'opendir']) {
+  'realpath', 'readlink', 'mkdir', 'unlink', 'rename', 'rmdir', 'copyFile', 'rm', 'opendir',
+  'utimes', 'lutimes']) {
   fsMod[name] = cbWrap(promises[name]);
 }
+// fs.futimes(fd, atime, mtime, cb): this tjs build exposes no fd-based utime
+// primitive reachable from a raw fd (uv_fs_futime lives only on a tjs File
+// object, not the FSS sync fds we use). DIVERGENCE (documented, best-effort):
+// resolve without setting times. The bundle's futimes calls are not on the
+// startup mtime-precision path (that uses utimes on a path); a path that
+// genuinely needs fd-based times is a future wall — wire a tjs File handle then.
+fsMod.futimes = (fd, atime, mtime, cb) => { if (typeof cb === 'function') cb(null); };
+promises.futimes = async () => {};
 fsMod.open = (p, flags, mode, cb) => { const c = typeof cb === 'function' ? cb : (typeof mode === 'function' ? mode : flags); try { c(null, fsMod.openSync(p, typeof flags === 'string' || typeof flags === 'number' ? flags : 'r')); } catch (e) { c(e); } };
 fsMod.close = (fd, cb) => { try { FSS.close(fd); if (cb) cb(null); } catch (e) { if (cb) cb(e); } };
 fsMod.Stats = Stats;
