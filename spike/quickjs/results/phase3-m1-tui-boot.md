@@ -196,10 +196,83 @@ node it resolves and re-renders the welcome, under tjs it never does.
    `setImmediate`→`setTimeout(0)` polyfill delivers the React scheduler's
    continuation turns the way V8-node does (the 4-ticks-then-idle is the clue).
 
+## Update (2026-07-08, deep event-loop investigation): the loop is NOT the cause
+
+A focused investigation (dtrace on the live parked process + JS-level fault
+isolation) **disproves the "event-loop wedge / microtask-vs-timer starvation"
+theory** that was the top suspect, and re-characterizes the stall. Verified
+findings, in order of confidence:
+
+1. **The libuv loop is healthy — it does NOT wedge or starve.** dtrace on the
+   parked process (`uv__io_poll:entry/return`, `uv__run_timers`, `uv__hrtime`)
+   shows the loop **cycling normally**: the clock advances, `uv__io_poll` returns
+   on schedule, `uv__run_timers` runs every iteration, driven by the lws evlib
+   heartbeat (`tjs__evlib_timer_cb`, an unref'd `uv_timer` re-armed by
+   `lws_service_adjust_timeout` every ~1.9 s). The process sits at CPU ~0 because
+   it is **correctly idle**, blocked in `kevent` with a finite timeout, waiting
+   for work — not spinning, not frozen. The earlier "21 scheduled / 4 fired"
+   reading is the loop legitimately idling once the startup burst drains.
+2. **`setImmediate`/microtask ordering is NOT the problem.** Minimal repros under
+   `tjs run loader.cjs`: a self-rescheduling `setImmediate` storm does **not**
+   starve a `setTimeout(fn,1500)` (timer fires on time); an unbounded microtask
+   chain starves timers under **host node too** (expected, not tjs-specific);
+   `fetch`+timers+`setImmediate` all interleave correctly. So next-step #3 above
+   (the phase-2 "top TUI risk") is **CLOSED** — the polyfill delivers turns fine.
+3. **The paint failure is DETERMINISTIC (6/6 runs stall at exactly 13 bytes),
+   not a race.** So it is a semantic divergence in the render path, not timing.
+4. **The paint is NOT gated on `fetch HEAD api.anthropic.com`.** Faking that
+   request in the loader (resolve a synthetic 200, or reject fast) leaves the
+   paint at 13 bytes — the connectivity check is a red herring for the paint.
+5. **The render never *attempts* the frame write.** Instrumenting the shim's
+   `writeSyncFd`: under tjs there is **exactly one** `fd=1` write (the 13-byte
+   `ESC7 ESC[r ESC8 ESC[?25h`), no throw, no `EAGAIN`. So it is not a stdout
+   flush/backpressure problem — the code that would write the frame simply never
+   runs. The Ink renderer object *is* constructed (those 13 bytes come from its
+   constructor), but the first frame is never committed. This is consistent with
+   the "empty first tree / stuck Suspense" theory above, refined: the stall is
+   between Ink construction and first-frame commit, upstream of any capability
+   query, and independent of the loop and the fetch.
+
+### The fetch is separately broken (same native fd-race as M3b, distinct symptom)
+The `fetch HEAD api.anthropic.com` does hang under the TUI (but, per #4, that is
+not why the paint stalls). `lsof` + dtrace of the live process show: **DNS
+resolves fine** (`sendto`/`recvfrom` on the UDP resolver fd succeed), a TCP
+`connect()` is attempted and then **retried rapidly** (5× on one fd in ~1 ms),
+the connection is *"closed before established"*, and by the parked state **no TCP
+socket survives — only the UDP DNS socket lingers**. This is the exact
+`libwebsockets` "closed before established" signature and matches the **native
+fd-race documented in `phase2-m3b-subscription-auth.md`** (concurrent `uv_spawn`
+pipe fds leaking/colliding with other sockets under the bundle's startup burst).
+The TUI drives a *heavier* concurrent-spawn burst than `-p`, overlapping the
+fetch's connect/TLS window — so the same latent race now clobbers the lws socket.
+Not reproducible synthetically (fetch + 8-way spawn bursts, tight interleaving,
+busy→idle transitions all succeed) — it needs the bundle's exact spawn/stdio mix,
+exactly as M3b found. Candidate fix is the same: a tjs C patch to set `CLOEXEC`
+on spawn pipe fds / fix the fd-ordering window in `src/mod_process.c` +
+`uv_spawn`.
+
+### Where the paint hunt is blocked (for the next session)
+App-side bisection of the render path is **obstructed by the minified bundle**:
+(a) Ink patches `console`/`stderr` in its constructor, swallowing logs; (b) the
+bundle's internal `require("fs")` throws in module scope, so file-logging from
+injected probes silently fails; (c) **minified names collide across modules**
+(`Idt`, `Fta`, etc. are reused), so stack-frame names cannot be mapped to source
+anchors — markers injected immediately before a statement do not fire even though
+the statement demonstrably runs, because the *running* copy is a different
+module's same-named function. A reliable in-runtime logger exists
+(`globalThis.__tjs_fs_sync.write(2, …)`, or an env-gated loader hook) and fires
+from bundle top-level, but not from the mis-identified inner anchors. **Next
+session: get an un-minified (or source-mapped) startup bundle, or a vendored
+minimal Ink+React-concurrent app**, to localize the un-resolving initial render
+without fighting name collisions. The `use()`/Suspense-resource theory (item #1
+under "Next steps" above) remains the leading candidate, now with the loop and
+the fetch both ruled out as causes.
+
 ## Pointers
 - Fixes: `libexec/node-shim/modules/{constants,fs,tty}.cjs`; tests
   `test/node-shim-tui-boot-walls.test.cjs`, `test/e2e-tui-tjs.test.cjs`.
 - Shim TTY layer (phase-3 tasks 1–3): `spike/quickjs/results/` history +
   `docs/superpowers/plans/2026-07-08-phase3-tui-under-tjs.md`.
+- Native fd-race (the fetch symptom): `spike/quickjs/results/phase2-m3b-subscription-auth.md`.
 - Oracle bundle: the staged `2.1.202` `cli.cjs` (M3b scratch) or any resolved
   provider; `build/tjs/tjs`.
