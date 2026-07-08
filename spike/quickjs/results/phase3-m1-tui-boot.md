@@ -77,7 +77,55 @@ still 13 bytes, and React still commits an empty tree in exactly ~4 scheduler
 ticks (unchanged by these fixes). So the paint gate is a **React Suspense wait**
 on a promise these don't resolve.
 
-## The frontier (REMAINING): React commits an empty tree, then Suspends forever
+## RE-DIAGNOSIS (2026-07-08, deeper instrumentation): it's an EVENT-LOOP WEDGE, not a Suspense wait
+
+Timer-fire instrumentation overturned the Suspense theory. Over a 22-second run
+the bundle **schedules 21 timers** (delays 0/1500/3000/5000/10000/600000 ms) but
+**only 4 ever fire** — and those 4 are all the `delay=0` ones (the React scheduler
+ticks) that ran during the initial startup burst. Every `delay≥1500` timer is
+armed and never fires. So the libuv event loop stops making progress after the
+first burst; "React commits an empty tree then idles" is a *symptom* of the loop
+wedging, not a Suspense boundary.
+
+Evidence:
+- **CPU profile:** ~70–79% for the first ~6 s (heavy work / spin), then drops to
+  **0%** and stays there while the process remains alive — classic "spun, then
+  parked."
+- **Timers:** 4 of 21 fire (all `delay=0`); no `delay≥1500` timer fires in 22 s,
+  though the loader's setTimeout wrapper arms them via native `setTimeout`.
+- **A single pending `fetch`** (`HEAD api.anthropic.com`) never completes in-app —
+  yet the identical fetch standalone under tjs returns 404 in **75 ms**. So the
+  pending fetch is a *symptom* of the wedged loop, not the cause.
+- **Native stack (macOS `sample`) at the 0% wedge:** main thread in
+  `uv_run → uv__io_poll → kevent`, with `read` syscalls recurring across every
+  sample and occasional `uv__run_timers`/`js__evlib_timer_cb`.
+- **Ruled out:** the stdin pump (gating it off — `CLODE_NO_PUMP` — changed
+  nothing: still 4 fires, still no paint), Suspense/import()/paused-stdin (all
+  fixed, none changed the wedge), and `spawnSync` (none is called at startup).
+
+This is precisely the phase-2 take-stock's **#1 named TUI risk**: quickjs-ng drains
+the entire microtask queue before returning to libuv, and `setImmediate` is
+polyfilled as `setTimeout(0)`, so an event-loop / microtask-vs-timer ordering
+divergence can starve the timer phase. The recurring `read` in the native stack is
+a lead (cf. the phase-2 gate-3 finding that a `qjs -c` standalone busy-spins
+`poll + read(→0)` on EOF'd stdin — there is an upstream repl-eof-spin patch for a
+sibling case).
+
+### Next steps (event-loop level — a distinct, native-leaning investigation)
+1. **Find the microtask/read loop that starves libuv.** Instrument `queueMicrotask`
+   / `Promise` job counts and correlate with the CPU spike; identify the recurring
+   `read` fd in the native stack (dtrace/lldb on the tjs loop, or log every
+   `__tjs_fs_sync`/libuv read).
+2. **Check the `setImmediate`=`setTimeout(0)` polyfill under sustained load** — if
+   React or a stream reschedules via a path that never yields to the timer phase,
+   timers starve. A truer `setImmediate` (a check-phase primitive, or a
+   MessageChannel-backed macrotask) may be required — a tjs-level change.
+3. The un-minified bundle is available for reference at
+   `<scratchpad>/deminify/cli.pretty.js` (753k lines, js-beautify; var names still
+   minified) — use it to decode a hot function once the native `read`/loop is
+   localized.
+
+## (SUPERSEDED) Earlier theory: React commits an empty tree, then Suspends forever
 
 After the four fixes, tjs no longer errors and runs its full startup, but stalls
 at **13 bytes forever** (25s+), silently — no error, no `[wall]`, no missing-method
