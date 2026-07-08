@@ -447,34 +447,13 @@ globalThis.global ??= globalThis;
 // true grapheme segmentation (or Intl.DateTimeFormat/NumberFormat/Collator, also
 // absent) is a real wall: wire a fuller Intl then. Locked by
 // test/node-shim-esm.test.cjs (which compares transpiled string-width to host).
+// quickjs-ng ships no Intl. The bundle uses Segmenter, NumberFormat,
+// DateTimeFormat, RelativeTimeFormat, Collator, DisplayNames and Locale — all
+// polyfilled (en-US/en, scoped to the bundle's option shapes) in modules/intl.cjs.
+// Without NumberFormat the interactive TUI throws "not a function" the instant a
+// turn renders its token counts (`wuh` → new Intl.NumberFormat compact).
 if (typeof globalThis.Intl === 'undefined') {
-  const MARK = /\p{Mark}/u;   // combining marks (accents, etc.)
-  const ZWJ = '‍';
-  class Segmenter {
-    constructor(_locales, options) { this._granularity = (options && options.granularity) || 'grapheme'; }
-    segment(input) {
-      const str = String(input);
-      const cps = Array.from(str);           // code-point aware
-      const clusters = [];
-      let i = 0, index = 0;
-      while (i < cps.length) {
-        let seg = cps[i]; i++;
-        // extend the cluster with trailing combining marks and ZWJ joins so a
-        // base+accent (and simple ZWJ emoji sequences) form ONE cluster —
-        // matching real grapheme segmentation for the common cases and, more
-        // importantly, not feeding string-width a lone mark it mishandles.
-        for (;;) {
-          if (i < cps.length && MARK.test(cps[i])) { seg += cps[i]; i++; continue; }
-          if (i < cps.length && cps[i] === ZWJ && i + 1 < cps.length) { seg += cps[i] + cps[i + 1]; i += 2; continue; }
-          break;
-        }
-        clusters.push({ segment: seg, index, input: str }); index += seg.length;
-      }
-      return { [Symbol.iterator]() { return clusters[Symbol.iterator](); } };
-    }
-    resolvedOptions() { return { granularity: this._granularity }; }
-  }
-  globalThis.Intl = { Segmenter };
+  globalThis.Intl = evalModule(P.join(SHIM_DIR, 'intl.cjs'));
 }
 globalThis.__nodeShim = {
   loadBuiltin, makeRequire, wallProxy, readTextSync, moduleLoad, resolveRequest, requireExt, KNOWN,
