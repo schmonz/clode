@@ -115,3 +115,15 @@ quickjs-ng-js_exepath-netbsd patch 2026-07-06
 #   binary off the build dir on this mount (exec dies "Terminated due to code signing
 #   error", SIGKILL/137, even though `codesign -v` passes) — re-sign after copy:
 #   `codesign -s - --force build/tjs/tjs`.
+# txiki-stream-write-sync-number.patch: mod_streams.c tjs_stream_write() returned
+#   JS_TRUE (a boolean) when uv_try_write completed the write synchronously, but the
+#   JS writable sinks (core/process.js ProcessWritableStream, core/direct-sockets/
+#   udp.js) treat a NUMBER as "write done, don't wait" and anything else as "async —
+#   await the onwrite callback". A boolean is not a number, so small synchronous
+#   writes waited forever for an onwrite that never fires. Symptom (2026-07-08):
+#   Claude Code's Bash tool feeds short commands to a PERSISTENT shell via the
+#   shell's stdin; every such write hung → the interactive tool call never returned.
+#   Data was physically delivered (uv_try_write succeeded) but the write-ack didn't.
+#   Fix: return JS_NewInt32(ctx, r) (the byte count) on the sync-complete path. Also
+#   fixes udp.js's identical latent hang. Upstream-txiki candidate. Locked by
+#   node-shim-child-process.test.cjs "persistent shell via child.stdin" row.

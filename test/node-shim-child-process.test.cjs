@@ -34,6 +34,29 @@ test('spawnSync: status + stdout + stderr match node', (t) => {
   assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
 });
 
+test('spawn: writing a command to a persistent shell via child.stdin delivers + EOF closes it (Bash-tool pattern)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  // Claude Code's Bash tool feeds short commands to a persistent shell via stdin.
+  // A tjs C bug (mod_streams.c: sync-complete writes returned JS_TRUE where the JS
+  // sink expects a byte-count number → awaited an onwrite that never fires) hung
+  // every such write. This spawns a real shell, writes a command, ends stdin, and
+  // asserts the command ran and the process closed — i.e. delivery + EOF work.
+  const body = `
+    const cp = require('node:child_process');
+    const c = cp.spawn('/bin/sh', []);
+    let out = '';
+    c.stdout.on('data', (d) => { out += d; });
+    c.on('close', (code) => console.log(JSON.stringify({ code, out: out.trim() })));
+    c.stdin.write('echo STDIN-DELIVERED\\n');
+    c.stdin.end();`;
+  const f = prog(body);
+  const r = runLoader(f); // runLoader has a timeout; a hang here fails the test
+  assert.strictEqual(r.status, 0, r.stderr);
+  const got = JSON.parse(r.stdout.trim());
+  assert.strictEqual(got.code, 0, 'shell exited cleanly (got EOF)');
+  assert.strictEqual(got.out, 'STDIN-DELIVERED', 'the command reached the shell and ran');
+});
+
 test('spawn: child.stdin is a Node Writable (on/write/end callable) — the hook-runner pattern', (t) => {
   if (skipUnlessTjs(t)) return;
   // The bundle's hook runner does exactly this to a spawned child's stdin:

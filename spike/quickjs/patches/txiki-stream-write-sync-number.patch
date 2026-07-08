@@ -1,0 +1,21 @@
+diff --git a/src/mod_streams.c b/src/mod_streams.c
+index d96e0f1..0ed9eb4 100644
+--- a/src/mod_streams.c
++++ b/src/mod_streams.c
+@@ -298,7 +298,15 @@ static JSValue tjs_stream_write(JSContext *ctx, JSValue this_val, int argc, JSVa
+ 
+     if (r == (int) buf_ref.size) {
+         tjs_buf_ref_release(ctx, &buf_ref);
+-        return JS_TRUE;
++        /* Fully written synchronously via uv_try_write: return the byte COUNT (a
++         * number), not JS_TRUE. The JS writable sinks (core/process.js
++         * ProcessWritableStream, core/direct-sockets/udp.js) treat a number as
++         * "write complete, don't wait" and anything else as "async — await the
++         * onwrite callback". Returning JS_TRUE (a boolean) made them wait for an
++         * onwrite that never fires on the sync path, so every small child-stdin
++         * write hung forever (Claude Code's Bash tool feeds short commands to a
++         * persistent shell via stdin and blocked). Upstream-txiki candidate. */
++        return JS_NewInt32(ctx, r);
+     }
+ 
+     /* Do an async write, pin the buffer. */
