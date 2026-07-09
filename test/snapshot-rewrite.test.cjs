@@ -437,8 +437,10 @@ test('generated find explains a known skew at the point of use', { skip: SH_SKIP
   const got = fs.readFileSync(snap, 'utf8');
   assert.match(got, /known applet skew/);
   assert.match(got, /function grep \{[\s\S]*?exec "\$_bin" -G/);
-  // run the generated find: stderr carries the stub's error AND clode's diagnosis
-  const r = cp.spawnSync('sh', ['-c', `. "${snap}"; find . -name nope; echo "rc=$?"`],
+  // run the generated find: stderr carries the stub's error AND clode's diagnosis.
+  // bash, not sh: snapshots use the `function name {` form (bash/zsh — what the
+  // bundle actually sources them with); Ubuntu's sh is dash, which rejects it.
+  const r = cp.spawnSync('bash', ['-c', `. "${snap}"; find . -name nope; echo "rc=$?"`],
     { encoding: 'utf8', env });
   assert.match(r.stdout, /rc=1/, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
   assert.match(r.stderr, /Unsupported -regextype/);
