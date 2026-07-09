@@ -1,0 +1,22 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -36207,6 +36207,10 @@
+         goto fail;
+ 
+     function_size = sizeof(*b);
++    /* JSValue (8-byte under JS_NAN_BOXING) trailing array must be 8-aligned:
++       sizeof(*b) is only 4-mod-8 on 32-bit ABIs and strict-alignment
++       targets (sparc) SIGBUS on the 8-byte cpool loads. */
++    function_size = (function_size + 7) & ~7;
+     cpool_offset = function_size;
+     function_size += fd->cpool_count * sizeof(*fd->cpool);
+     vardefs_offset = function_size;
+@@ -38909,6 +38913,8 @@
+         goto fail;
+ 
+     function_size = sizeof(*b);
++    /* keep the JSValue cpool 8-aligned; see js_create_function */
++    function_size = (function_size + 7) & ~7;
+     cpool_offset = function_size;
+     function_size += bc.cpool_count * sizeof(*bc.cpool);
+     vardefs_offset = function_size;

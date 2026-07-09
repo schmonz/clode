@@ -145,3 +145,13 @@ quickjs-ng-js_exepath-netbsd patch 2026-07-06
 #   promises.open -> FileHandle{fd,close,...}) and child_process.cjs (numeric-fd stdio
 #   passthrough). Locked by node-shim-fs.test.cjs "fs.promises.open + O_* constants"
 #   and the live tjs Bash tool repro (echo ZQ returns ZQ). Upstream-txiki candidate.
+quickjs-ng-cpool-align patch 2026-07-09
+# patch: patches/quickjs-ng-cpool-align.patch rounds JSFunctionBytecode's cpool_offset
+#   up to 8 in js_create_function AND JS_ReadFunctionTag. sizeof(JSFunctionBytecode)
+#   is 4-mod-8 on 32-bit ABIs, so the trailing NAN-boxed JSValue cpool array is
+#   permanently misaligned; strict-alignment targets (sparc32 ldd) SIGBUS in the
+#   bytecode writer (gdb: quickjs.c:38005, ldd [%g1] with %g1 4-aligned; O2+O0 both
+#   fault; empty-cpool inputs pass). Latent UB on every 32-bit platform, loud only on
+#   strict alignment. In-memory layout only — zero effect on the serialized format.
+#   Root-caused + validated on NetBSD/sparc 10.1 (results/phase3-sparc-engine-verdict.md);
+#   darwin control unchanged. UPSTREAM CANDIDATE (strongest in batch).
