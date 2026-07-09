@@ -516,13 +516,18 @@ BunWebSocket.CONNECTING = 0; BunWebSocket.OPEN = 1; BunWebSocket.CLOSING = 2; Bu
 // sites get header support; Node's native one would silently drop the auth header.
 globalThis.WebSocket = BunWebSocket;
 
-// A ws-shaped module for when the real `ws` isn't loadable: capturing it (the
-// bundle does `require("ws")` / `P(require("ws"))` at module-load time, before
-// any socket is opened) must NOT be fatal — only CONSTRUCTING a WebSocket/Server
-// is a real "use". This matches this file's own contract ("fail loud at the
-// first WebSocket USE") and lets the non-WebSocket -p path, which merely captures
-// ws, proceed. BunWebSocket already fatals on construction; the Server forms fatal
-// on construction too. Locked by test/node-shim-bunshim.test.cjs.
+// A ws-shaped module for the TJS BRING-UP PATH ONLY, when the real `ws` isn't
+// loadable: under the node-shim loader `ws` can't load at all yet (it needs a
+// fuller tls/net than the shim provides), but the -p path merely CAPTURES it at
+// module-load time (`P(require("ws"))`) and never opens a socket — so there the
+// capture defers, and only CONSTRUCTING a WebSocket/Server fails loud.
+// Under real Node hosting, `ws` is a REQUIRED dep (bundled-deps decision,
+// BACKLOG.md "ws / bundled-deps": missing required dep = broken build): a failed
+// require('ws') is fatal AT REQUIRE — a plain throw would be swallowed by the
+// bundle's render-gating promise and the TUI would hang blank. Fail-loud contract
+// locked by test/websocket.test.cjs; the tjs deferral by
+// test/node-shim-bunshim.test.cjs.
+const UNDER_TJS = typeof globalThis.tjs !== 'undefined' || !!globalThis.__tjs_fs_sync;
 function _wsServerFatal() { _wsFatal(); }
 const _wsLazyModule = Object.assign(BunWebSocket, {
   WebSocket: BunWebSocket,
@@ -556,8 +561,13 @@ const _load = Module._load;
 Module._load = function (request, parent, isMain) {
   if (Object.prototype.hasOwnProperty.call(BUN_BUILTINS, request)) return BUN_BUILTINS[request];
   // `ws` is a required host dependency: real module if installed, else fail loud
-  // (no silent no-connect stub — see the WebSocket adapter above).
-  if (request === 'ws') { return _ws || _wsLazyModule; }
+  // AT REQUIRE (no silent no-connect stub — see the WebSocket adapter above).
+  // Only the tjs bring-up path defers to first USE via the lazy module.
+  if (request === 'ws') {
+    if (_ws) return _ws;
+    if (UNDER_TJS) return _wsLazyModule;
+    _wsFatal();
+  }
   if (Object.prototype.hasOwnProperty.call(HOST_MODULES, request)) {
     try { return _load.call(this, request, parent, isMain); }   // prefer a real install
     catch (_) { return HOST_MODULES[request]; }                 // else the host stub
