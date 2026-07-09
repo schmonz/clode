@@ -167,3 +167,15 @@ txiki-wurl-url patch 2026-07-09
 #   the gcc12/C++20 requirement that blocked sparc S2 on base gcc 10.5).
 #   NOT yet default: flipping build-tjs.mjs to -DTJS_USE_ADA=OFF requires a pinned-
 #   binary rebuild + full oracle re-run (house rule) — deliberate follow-up.
+gnu-make 4.4.1 ftp.gnu.org-source 2026-07-09
+# sparc rung toolchain (NO pkgsrc binaries exist for 32-bit sparc): built from
+#   source IN-GUEST and baked into wd0.img via persist boots (backup first:
+#   wd0.img.pristine-10.1). CAVEAT: plain ./configure installs it as
+#   /usr/local/bin/make — pass --program-prefix=g or symlink gmake (bake run 1
+#   hit this; run 2 fixed it).
+cmake 3.28.6 cmake.org-source 2026-07-09
+# sparc rung: bootstrap needs only C++11 (README.rst) so base g++ 10.5 works;
+#   satisfies every cmake_minimum_required in the txiki tree (max 3.18 =
+#   mimalloc, built OFF anyway); pre-4.x avoids compat removals while staying
+#   policy-close to the pkgsrc cmake 4.2.3 that proved the tree on aarch64.
+#   Built -O1 (cmake runtime speed irrelevant; cuts g++ TCG time + RAM).
