@@ -6,6 +6,46 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 
 ## NEXT UP — Phase 3: TUI paints (M1) + human-verified turn (M2) + AGENTIC TOOL USE all work under tjs; M3 (render parity) next
 
+### ▶ START HERE TOMORROW (session 2026-07-08 end)
+
+**Landed today (15 commits, `e3e5a15`..`2d1f249`; tree clean):** UAF/SIGSEGV fixed
+(ASAN); 5 interactive-path gaps (Intl polyfill, Intl-new-optional, setEncoding,
+child.stdin Writable, +the persistent-shell stdin hang); **agentic tool use** (Bash
+tool: memoryUsage/cpuUsage, fs.promises.open+O_*, tjs.spawn numeric-fd inherit). So
+under tjs now: **M1 paint + M2 human turn + slash commands + Bash tool all work.** v0
+API-surface gate shipped (`scripts/apicheck.mjs`). Full suite (with TUI-live-render):
+**514/474 pass/2 fail/1 todo** — the 2 fails are STALE ws tests (see below), not tjs.
+Endgame design (untracked): `docs/superpowers/specs/2026-07-08-api-surface-gate-design.md`.
+
+**Recommended first move — the ws / bundled-deps decision (brick #1 of self-attesting binaries):**
+1. Settle the shipped-binary deps contract: SEA `deps.tar` bundling is the only model
+   for shipped binaries; a missing REQUIRED dep = broken build → **fail loud** (user's rule).
+2. Revisit `8dc4947` (non-fatal `require('ws')` was a bring-up concession) — restore
+   fail-loud-at-require for required deps, or scope the lazy stub behind a dev flag.
+3. The 2 stale tests (`websocket.test.cjs`, `e2e-tui.test.cjs`) resolve as a
+   CONSEQUENCE of that decision — do NOT touch them in isolation.
+
+**Then / in parallel (ranked):**
+- **apicheck v1 = the embeddable oracle:** recording-Proxy per-module coverage %,
+  checked-in golden baselines + baseline manifest, and broaden the corpus to include
+  **tool-use turns** (today's OVr bug was invisible to headless `-p` — the corpus MUST
+  exercise tools). This artifact IS the future `clode selftest`.
+- **`clode selftest`** (self-attesting binary): wire the corpus+baselines into a shipped
+  `clode selftest [--json]` — a per-capability confidence map users run on their own box
+  (offline, node-free, token-free). Delivery vehicle for the oracle principle; design doc.
+- **M3 (render parity):** tjs interactive render ~1.2MB vs node ~8KB/turn (redundant
+  full redraws). Last phase-3 milestone; non-fatal.
+- **Upstream-txiki batch** (awaiting go-ahead): `txiki-spawn-fail-uaf`,
+  `txiki-stream-write-sync-number`, `txiki-spawn-inherit-fd`, the quickjs-ng v-flag
+  `\p{}` regexp bug, + the phase-2 batch (sync-fs, sync-spawn CLOEXEC, no-origin,
+  netbsd, default-stack-size).
+- **SPARC verify-next:** does the `-p` path instantiate any wasm (tokenizer), or is all
+  wasm behind the TUI (Yoga)? If `-p` is wasm-free, headless-SPARC decouples from
+  wamr-big-endian.
+- Minor: `process.resourceUsage` still undefined (unneeded so far; add if a path hits it).
+
+---
+
 **AGENTIC TOOL USE WORKS (`d4e197d`, independently verified):** a real Bash-tool turn
 runs a shell command and returns output under `CLODE_ENGINE=tjs`. Root cause was a
 cluster of tool-path shim gaps (NOT the async-gen codegen bug): `process.memoryUsage`/
