@@ -149,8 +149,24 @@ class Writable extends EventEmitter {
     // coerces the callback to a string and writes it as data (host node: no write).
     if (typeof chunk === 'function') { cb = chunk; chunk = enc = undefined; }
     else if (typeof enc === 'function') { cb = enc; enc = undefined; }
+    // Idempotence (host node v26, probed): 'finish' fires AT MOST ONCE. A second
+    // end() with no chunk/cb is a silent no-op (no 'error' event, no throw); with
+    // a cb, the cb gets ERR_STREAM_ALREADY_FINISHED. Without this guard, a
+    // pipe()'d Writable whose source-'end' auto-end raced an explicit caller
+    // end() re-emitted 'finish' — the load-sensitive double-print flake in
+    // test/node-shim-child-process.test.cjs (pipe row: child 'exit' can resolve
+    // before stdout 'end' under load, so BOTH end() paths run).
+    if (this._ended) {
+      if (typeof cb === 'function') {
+        queueMicrotask(() => cb(Object.assign(
+          new Error('end() called after stream was finished'),
+          { code: 'ERR_STREAM_ALREADY_FINISHED' })));
+      }
+      return this;
+    }
     if (chunk != null) this.write(chunk, enc);
     this._ended = true;
+    this.writableEnded = true;
     // Host node order: the end-callback runs BEFORE the 'finish' event.
     queueMicrotask(() => { if (cb) cb(); this.emit('finish'); });
     return this;
