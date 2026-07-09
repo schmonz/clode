@@ -120,17 +120,33 @@ globalThis.__clodeNativeUpdate = function () {
 const INSTALL_WARNINGS =
   /return\{installationType:.{0,400}?,warnings:(?<arr>[A-Za-z0-9_$]{1,6}),packageManager:/gs;
 
-// JS spliced before the diagnostics return: defensively push each clode skew
-// finding onto the warnings array `arr`. Safe by construction: cannot throw on
-// well-formed findings — bun-shim always records `name`, `applet`, and `why` as
-// strings (CLODE_SHADOWS), so the string operations below are always valid. A
-// no-op when there is no skew.
+// JS spliced before the diagnostics return, two steps in order:
+//   1. EAGER ensure: await the snapshot bridge (globalThis.__clodeEnsureSnapshot,
+//      exposed by patchSnapshotBridge below) so snapshot generation — which fires
+//      bun-shim's skew probe — completes BEFORE the findings are read. This is what
+//      makes the skew visible on the FIRST open of every warnings-rendering
+//      surface (the /doctor screen on <=2.1.204; `claude doctor` terminal and the
+//      /status warnings list on 2.1.205+), not only after the first shell command.
+//      Guarded + try/caught: a missing bridge or a failed generation degrades to
+//      today's lazy behavior, never breaks diagnostics. Legal `await`: the splice
+//      point is the top level of the (always-async) diagnostics builder — the
+//      anchor's `return{...}` sits directly inside `async function ...({probeKeychain...`
+//      (verified on 2.1.203/204/205; the functional tests in
+//      test/extract-hooks.test.cjs run the spliced builder for real).
+//   2. Defensively push each clode skew finding onto the warnings array `arr`.
+//      Safe by construction: bun-shim always records `name`, `applet`, and `why`
+//      as strings (CLODE_SHADOWS), so the string operations below are always
+//      valid. A no-op when there is no skew.
+// The forEach callback param is deliberately UN-MINIFIABLE (>6 chars): since
+// 2.1.203 the warnings array minifies to `s`, and a 1-6-char param (the old code
+// used `s`) can shadow it — `s.push` then hits the finding object and throws.
 function _skewContribution(arr) {
   return (
-    'globalThis.__clodeDoctor&&globalThis.__clodeDoctor.appletSkew&&'
-    + 'globalThis.__clodeDoctor.appletSkew.forEach(function(s){' + arr + '.push({'
-    + 'issue:"host "+s.applet+" rejects flags clode\\u2019s bundled /"+s.name+" uses \\u2014 "+s.why,'
-    + 'fix:s.fix||("set CLODE_"+s.applet.toUpperCase()+" to a compatible "+s.applet)'
+    'if(globalThis.__clodeEnsureSnapshot)try{await globalThis.__clodeEnsureSnapshot()}catch(__clodeErr){};'
+    + 'globalThis.__clodeDoctor&&globalThis.__clodeDoctor.appletSkew&&'
+    + 'globalThis.__clodeDoctor.appletSkew.forEach(function(__clodeSkw){' + arr + '.push({'
+    + 'issue:"host "+__clodeSkw.applet+" rejects flags clode\\u2019s bundled /"+__clodeSkw.name+" uses \\u2014 "+__clodeSkw.why,'
+    + 'fix:__clodeSkw.fix||("set CLODE_"+__clodeSkw.applet.toUpperCase()+" to a compatible "+__clodeSkw.applet)'
     + '})});'
   );
 }
@@ -146,61 +162,54 @@ function patchDoctorWarnings(body) {
   return [body.slice(0, cut) + inject + body.slice(cut), true];
 }
 
-// --- doctor eager-snapshot wiring --------------------------------------------
-// Make /doctor show the applet-skew on the FIRST open, not only after a shell
-// command. The skew probe (bun-shim's warnAppletSkew) runs when Claude generates
-// its shell snapshot, which Claude does lazily on first Bash use — so a fresh
-// /doctor is empty. We can't probe eagerly without the snapshot: the embedded flags
-// are built dynamically (ARGV0=${...} "$_cc_bin" -S dfs ...), so they only exist
-// once the snapshot script is generated. The fix: have /doctor trigger snapshot
-// generation (which fires our probe) and await it before rendering.
+// --- eager-snapshot bridge ----------------------------------------------------
+// Make the applet-skew findings show on the FIRST open of a warnings surface, not
+// only after a shell command. The skew probe (bun-shim's warnAppletSkew) runs when
+// Claude generates its shell snapshot, which Claude does lazily on first Bash use —
+// so a fresh /doctor (or /status, or `claude doctor`) is empty. We can't probe
+// eagerly without the snapshot: the embedded flags are built dynamically
+// (ARGV0=${...} "$_cc_bin" -S dfs ...), so they only exist once the snapshot script
+// is generated.
 //
-// Two anchors, both best-effort + fail-loud (never brick /doctor):
-//   1. SNAPSHOT_GEN — the no-arg generator `async function G(){let h=await S();
-//      return{provider:await I(h)}}`. Expose it as globalThis.__clodeEnsureSnapshot,
-//      set when its (eagerly-initialized) module body runs.
-//   2. DOCTOR_LOAD — the /doctor command's `load:()=>Promise.resolve().then(...)`.
-//      Chain an ensure-step before the original so generation completes (and the
-//      probe populates __clodeDoctor) before the screen renders.
-// If the bridge is unset when /doctor opens (generator module not yet initialized),
-// the ensure-step is a no-op and /doctor falls back to today's lazy behavior — no
-// regression. We apply BOTH or NEITHER (a half-wired patch is pointless).
+// One anchor, best-effort + fail-loud: SNAPSHOT_GEN — the no-arg generator
+// `async function G(){let h=await S();return{provider:await I(h)}}`. Expose it as
+// globalThis.__clodeEnsureSnapshot, set when its (eagerly-initialized) module body
+// runs. The CONSUMER of the bridge is the _skewContribution splice above: the
+// diagnostics builder awaits the bridge before reading findings, so generation
+// (and the probe) completes before any surface renders warnings.
 //
-// Short minified-id bounds ({1,6}/{1,8}) keep each anchor a tight linear scan over
+// HISTORY: through 2.1.204 a second anchor (DOCTOR_LOAD) chained the ensure-step
+// onto the /doctor command's `load:()=>Promise.resolve().then(...)`. Upstream
+// 2.1.205 reworked /doctor into a prompt-driven agent command
+// (`{name:"doctor",aliases:["checkup"],...,async getPromptForCommand...}`) with no
+// load site, killing that anchor — the SECOND upstream rework in this area. Riding
+// the diagnostics builder instead (a) needs NO doctor-command-shaped anchor at
+// all, and (b) covers every surface that renders the builder's warnings, per
+// version: the /doctor screen (<=2.1.204), `claude doctor` terminal + the /status
+// warnings list (2.1.205+). The 2.1.205 /doctor agent itself gathers install data
+// by running its own shell checks and never reads the builder, so it cannot render
+// clode's findings on any design; /status and `claude doctor` carry them instead
+// (and the stderr warning at snapshot time remains the always-on source of truth).
+//
+// If the bridge is unset when a surface opens (generator module not yet
+// initialized), the builder's ensure-step is a no-op and that surface falls back
+// to lazy behavior — no regression.
+//
+// Short minified-id bounds ({1,6}) keep the anchor a tight linear scan over
 // minified names without matching across unrelated code.
 const SNAPSHOT_GEN =
   /async function (?<gen>[A-Za-z0-9_$]{1,6})\(\)\{let (?<h>[A-Za-z0-9_$]{1,6})=await [A-Za-z0-9_$]{1,6}\(\);return\{provider:await [A-Za-z0-9_$]{1,6}\(\k<h>\)\}\}/g;
-const DOCTOR_LOAD =
-  /(?<prefix>name:"doctor".{0,240}?)load:\(\)=>Promise\.resolve\(\)\.then\((?<cb>\(\) => \([A-Za-z0-9_$]{1,8}\(\),[A-Za-z0-9_$]{1,8}\))\)/gs;
-// Defensive ensure-step: never throws (a sync throw becomes a rejection),
-// swallows errors so a snapshot failure can never brick /doctor; no-op when the
-// bridge isn't set yet.
-const _DOCTOR_ENSURE =
-  '()=>{var g=globalThis.__clodeEnsureSnapshot;'
-  + 'return g?Promise.resolve().then(g).catch(function(){}):void 0}';
 
-// Wire /doctor to generate the shell snapshot (firing the skew probe) before it
-// renders, so the applet-skew section shows on first open. Returns [body, applied];
-// applied is false (body unchanged) unless BOTH anchors match exactly once.
-function patchDoctorEager(body) {
+// Expose the snapshot generator as globalThis.__clodeEnsureSnapshot (the bridge
+// the _skewContribution splice awaits). Returns [body, applied]; applied is false
+// (body unchanged) unless the anchor matches exactly once.
+function patchSnapshotBridge(body) {
   const gens = [...body.matchAll(SNAPSHOT_GEN)];
-  const loads = [...body.matchAll(DOCTOR_LOAD)];
-  if (gens.length !== 1 || loads.length !== 1) return [body, false];
+  if (gens.length !== 1) return [body, false];
   const g = gens[0];
-  const L = loads[0];
-  const newLoad = 'load:()=>Promise.resolve().then(' + _DOCTOR_ENSURE
-    + ').then(' + L.groups.cb + ')';
-  // Splice the later offset first so the earlier splice's offsets stay valid.
   const gEnd = g.index + g[0].length;
   const expose = 'globalThis.__clodeEnsureSnapshot=' + g.groups.gen + ';';
-  const edits = [
-    [gEnd, gEnd, expose],
-    [L.index, L.index + L[0].length, L.groups.prefix + newLoad],
-  ].sort((a, b) => b[0] - a[0]);
-  for (const [start, end, repl] of edits) {
-    body = body.slice(0, start) + repl + body.slice(end);
-  }
-  return [body, true];
+  return [body.slice(0, gEnd) + expose + body.slice(gEnd), true];
 }
 
 // --- pkg-manager autoupdater redirect ----------------------------------------
@@ -270,9 +279,9 @@ function patchNativeAutoupdater(body) {
 
 // Rewrite *body* to be Node CJS-compatible and prepend the prelude. Replaces all
 // `import.meta` references with `__import_meta` (defined by the prelude), then
-// contributes the clode applet-skew finding to /doctor's installation warnings,
-// wires /doctor to refresh the skew probe before rendering, and redirects both
-// autoupdaters. Replacing inside strings is harmless.
+// contributes the clode applet-skew findings to the native installation-warnings
+// data (refreshing the skew probe eagerly via the snapshot bridge), exposes that
+// bridge, and redirects both autoupdaters. Replacing inside strings is harmless.
 function transform(body) {
   body = body.replace(/\bimport\.meta\b/g, '__import_meta');
   let applied;
@@ -284,13 +293,13 @@ function transform(body) {
       + 'version drift?). Skew still warns on stderr at startup; run '
       + 'inspect-claude-bundle --strict to confirm the surface.\n');
   }
-  let eager;
-  [body, eager] = patchDoctorEager(body);
-  if (!eager) {
+  let bridge;
+  [body, bridge] = patchSnapshotBridge(body);
+  if (!bridge) {
     process.stderr.write(
-      'clode: /doctor eager-snapshot hook NOT applied — generator or doctor-load '
-      + 'anchor not found exactly once (Claude version drift?). The applet-skew section '
-      + 'still appears after the first shell command; run inspect-claude-bundle --strict.\n');
+      'clode: eager-snapshot bridge NOT applied — snapshot-generator anchor not '
+      + 'found exactly once (Claude version drift?). Applet-skew findings still appear '
+      + 'after the first shell command; run inspect-claude-bundle --strict.\n');
   }
   let au;
   [body, au] = patchAutoupdater(body);
@@ -377,7 +386,7 @@ if (require.main === module) {
 module.exports = {
   pickEntry,
   patchDoctorWarnings,
-  patchDoctorEager,
+  patchSnapshotBridge,
   patchAutoupdater,
   patchNativeAutoupdater,
   transform,

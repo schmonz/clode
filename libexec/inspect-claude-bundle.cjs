@@ -96,8 +96,12 @@ function doctorHookAnchorPresent(data) {
   return [...data.matchAll(_DOCTOR_WARNINGS_ANCHOR)].length === 1;
 }
 
+// The eager-snapshot bridge (extract-claude-js patchSnapshotBridge) needs the
+// snapshot generator exactly once. Its old companion DOCTOR_LOAD anchor is
+// RETIRED: upstream 2.1.205 reworked /doctor into a prompt-driven agent command
+// with no load site; the eager work now rides the installation-warnings splice
+// (see _DOCTOR_WARNINGS_ANCHOR above), so no doctor-command-shaped anchor exists.
 const SNAPSHOT_GEN_ANCHOR = 'return{provider:await ';
-const DOCTOR_LOAD_ANCHOR = /name:"doctor".{0,240}?load:\(\)=>Promise\.resolve\(\)\.then\(\(\) => \(/gs;
 function snapshotGeneratorPresent(data) {
   return countSubstr(data, SNAPSHOT_GEN_ANCHOR) === 1;
 }
@@ -114,10 +118,6 @@ const _NATIVE_AUTOUPDATER_ANCHOR = /tengu_native_auto_updater_start",(?:\{\}|[A-
 const _NATIVE_AUTOUPDATER_PATCHED = 'process.env.CLODE_SELF?globalThis.__clodeNativeUpdate()';
 function nativeAutoupdaterHookAnchorPresent(data) {
   return [...data.matchAll(_NATIVE_AUTOUPDATER_ANCHOR)].length === 1 || data.includes(_NATIVE_AUTOUPDATER_PATCHED);
-}
-
-function doctorLoadAnchorPresent(data) {
-  return [...data.matchAll(DOCTOR_LOAD_ANCHOR)].length === 1;
 }
 
 const APPLET_VERSION = {
@@ -288,7 +288,6 @@ function inspect(p) {
     autoupdater_hook_anchor_present: autoupdaterHookAnchorPresent(data),
     native_autoupdater_hook_anchor_present: nativeAutoupdaterHookAnchorPresent(data),
     snapshot_generator_present: snapshotGeneratorPresent(data),
-    doctor_load_anchor_present: doctorLoadAnchorPresent(data),
     ripgrep_lever_present: ripgrepLeverPresent(data),
   };
 }
@@ -372,10 +371,7 @@ function gateProblems(cov) {
     p.push('in-TUI native autoupdater anchor missing/ambiguous (clode --clode-internal-update redirect would not apply)');
   }
   if (!getDefault(cov, 'snapshot_generator_present', true)) {
-    p.push('snapshot-generator anchor missing/ambiguous (/doctor eager-snapshot hook would not apply)');
-  }
-  if (!getDefault(cov, 'doctor_load_anchor_present', true)) {
-    p.push('/doctor load anchor missing/ambiguous (/doctor eager-snapshot hook would not apply)');
+    p.push('snapshot-generator anchor missing/ambiguous (eager-snapshot bridge would not apply)');
   }
   return p.sort();
 }
@@ -401,10 +397,10 @@ function coverage(r, shim) {
   const modulesMissing = Object.keys(mods).filter((m) => mods[m] === 'MISSING').sort();
   const modulesHostStub = Object.keys(mods).filter((m) => mods[m] === 'host-stub').sort();
   // KEY ORDER IS A --json BYTE CONTRACT (pyJson sortKeys:false) — keep in sync.
-  // NOTE: this object intentionally OMITS snapshot_generator_present and
-  // doctor_load_anchor_present (matches the oracle). gateProblems()/humanCoverage()
-  // read those via getDefault(cov, ..., true), so their branches are always-true /
-  // dead by design. Do NOT "fix" by adding them here — it changes --json + --strict.
+  // NOTE: this object intentionally OMITS snapshot_generator_present (matches the
+  // oracle): the eager bridge is best-effort, so gateProblems()/humanCoverage()
+  // read it via getDefault(cov, ..., true) and their branches are always-true /
+  // dead by design. Do NOT "fix" by adding it here — it changes --json + --strict.
   return {
     implemented: implemented.slice().sort(),
     stubbed: stubbed.slice().sort(),
@@ -539,10 +535,7 @@ function humanCoverage(r, cov) {
     L.push('MISSING/AMBIGUOUS in-TUI native autoupdater anchor (extract-claude-js native autoupdater redirect would not apply)');
   }
   if (!getDefault(cov, 'snapshot_generator_present', true)) {
-    L.push('MISSING/AMBIGUOUS snapshot-generator anchor (/doctor eager-snapshot hook would not apply)');
-  }
-  if (!getDefault(cov, 'doctor_load_anchor_present', true)) {
-    L.push('MISSING/AMBIGUOUS /doctor load anchor (/doctor eager-snapshot hook would not apply)');
+    L.push('MISSING/AMBIGUOUS snapshot-generator anchor (eager-snapshot bridge would not apply)');
   }
   return [L.join('\n'), unaccounted];
 }
@@ -618,7 +611,7 @@ module.exports = {
   ACCEPTED_MISSING_EXTERNALS, ACCEPTED_STUBBED_BUN, ACCEPTED_MISSING_BUN, ACCEPTED_BUN_MODULES,
   count, countSubstr, searchApplets, unknownSearchApplets, ripgrepLeverPresent,
   doctorHookAnchorPresent, snapshotGeneratorPresent, autoupdaterHookAnchorPresent,
-  nativeAutoupdaterHookAnchorPresent, doctorLoadAnchorPresent,
+  nativeAutoupdaterHookAnchorPresent,
   embeddedAppletVersions, hostAppletVersion, which, featureForAsset,
   inspect, probeShim, unreviewedExternals, gateProblems, coverage,
   humanSurface, humanApplets, humanCoverage,

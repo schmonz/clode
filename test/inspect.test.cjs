@@ -118,6 +118,21 @@ test('doctor anchor absent when only a bare warnings key remains', () => {
   assert.strictEqual(ins.doctorHookAnchorPresent(body), false);
 });
 
+test('doctor-load anchor retired: no export, no report field, snapshot gen kept', () => {
+  // Upstream 2.1.205 removed /doctor's load site; the eager-snapshot bridge now
+  // rides the installation-warnings splice, so the inspector tracks only
+  // SNAPSHOT_GEN (+ the warnings anchor) for it.
+  assert.ok(!('doctorLoadAnchorPresent' in ins));
+  const os = require('node:os');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'insp-doc-'));
+  const p = path.join(tmp, 'body.js');
+  fs.writeFileSync(p, 'async function A9(){let B9=await C9();return{provider:await D9(B9)}}');
+  const r = ins.inspect(p);
+  assert.ok(!('doctor_load_anchor_present' in r));
+  assert.strictEqual(r.snapshot_generator_present, true);
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
 test('autoupdater anchor present and absent', () => {
   const present = 'd("tengu_pkg_manager_auto_updater_start",e);'
     + 'let[_H,...AH]=a,qH=await o_(_H,AH,{cwd:x});';

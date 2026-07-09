@@ -16,14 +16,15 @@ const EXTRACT = path.join(REPO, 'libexec', 'extract-claude-js.cjs');
 const INSPECT = path.join(REPO, 'libexec', 'inspect-claude-bundle.cjs');
 
 // The provider binary versions covered by the golden manifest.
+// REBASED at the 2.1.205 doctor-hook redesign (eager-snapshot bridge + skew-splice
+// shadow fix): the injected patch text and the inspect --json shape changed, which
+// invalidates every older entry, and the 2.1.177–2.1.195 provider binaries were
+// not on hand to re-bless. Old shas live in git history; re-add a version here and
+// run test/update-golden-shas.cjs with its binary present to re-cover it.
 const VERSIONS = [
-  '2.1.177',
-  '2.1.179',
-  '2.1.183',
-  '2.1.185',
-  '2.1.186',
-  '2.1.193',
-  '2.1.195',
+  '2.1.203',
+  '2.1.204',
+  '2.1.205',
 ];
 
 function providersDir() {
