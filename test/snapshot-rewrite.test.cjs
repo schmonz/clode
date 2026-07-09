@@ -16,10 +16,13 @@ const HAS_SH = (() => {
   catch { return false; }
 })();
 // Also skip on Windows: even with Git Bash `sh` on PATH (as under CI's `shell: bash`), a
-// Windows `C:\…` snapshot path embedded in the POSIX shell script gets backslash-mangled,
-// so the generator never writes the file (ENOENT) — POSIX-shell snapshot GENERATION has no
-// Windows analog. The rewrite LOGIC is covered cross-platform by the pure-string
-// rewriteSnapshot(...) tests above.
+// Windows `C:\…` snapshot path embedded UNQUOTED in the POSIX shell script gets its
+// backslashes eaten as shell escapes, collapsing the whole path into ONE separator-less
+// RELATIVE filename — so the generator writes litter like
+// `C:UsersschmonzAppDataLocalTemp...snapshot-zsh-1.sh` into the test cwd (observed Jul 5
+// 2026 in the repo root) and the assertion's readFileSync of the intended path ENOENTs.
+// POSIX-shell snapshot GENERATION has no Windows analog. The rewrite LOGIC is covered
+// cross-platform by the pure-string rewriteSnapshot(...) tests above.
 const SH_SKIP = (process.platform === 'win32')
   ? 'POSIX-shell snapshot generation has no Windows analog (rewrite logic covered by the rewriteSnapshot string tests)'
   : (HAS_SH ? false : 'needs a POSIX shell (sh) to generate + verify a snapshot file; rewrite logic covered by the rewriteSnapshot string tests');
