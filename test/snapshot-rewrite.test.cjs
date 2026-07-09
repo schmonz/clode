@@ -139,6 +139,102 @@ test('collectShadows: returns known shadows with applet/env/flags, skips unknown
   ]);
 });
 
+// --- self-explaining skew failures: rewriteSnapshot(text, findings) ---------
+// When the generation-time probe found skew, the rewritten shadow must explain
+// the failure AT THE POINT OF USE: no exec (so the exit code can be inspected),
+// a per-applet rc test, a clode-authored stderr line carrying the probe's why +
+// fix, and the applet's own exit code propagated unchanged.
+
+const findFinding = {
+  name: 'find', applet: 'bfs',
+  why: "bfs: error: Unsupported -regextype 'findutils-default'.",
+  fix: 'install bfs ≥ 3.3 built with Oniguruma, or set CLODE_BFS to such a build',
+};
+
+test('rewriteSnapshot with a skew finding: shadow diagnoses on failure, exit code intact', () => {
+  const out = rewriteSnapshot(skewSnap, [findFinding]);
+  // the skewed find shadow: plain invocation (no exec), rc capture, applet rc test
+  assert.doesNotMatch(out, /exec "\$_bin" -S dfs/);
+  assert.match(out, /\n {2}"\$_bin" -S dfs -regextype findutils-default "\$@"\n/);
+  assert.match(out, /local _rc=\$\?/);
+  assert.match(out, /\[ "\$_rc" -ne 0 \] && printf/);
+  assert.match(out, /known applet skew/);
+  assert.match(out, /Oniguruma/);
+  assert.match(out, /return \$_rc/);
+  // the why's single quotes are shell-escaped, not raw (would end the quoted msg)
+  assert.match(out, /'\\''findutils-default'\\''/);
+  // the un-skewed grep shadow keeps the exec fast path
+  assert.match(out, /function grep \{[\s\S]*?exec "\$_bin" -G --ignore-files "\$@"/);
+});
+
+test('rewriteSnapshot without findings is byte-identical to the 1-arg form', () => {
+  assert.strictEqual(rewriteSnapshot(skewSnap, []), rewriteSnapshot(skewSnap));
+});
+
+test('CLODE_SHADOWS: each probe-bearing applet carries a shell rc test matching its skew predicate', () => {
+  assert.strictEqual(CLODE_SHADOWS.grep.skewRcTest, '[ "$_rc" -ge 2 ]');
+  assert.strictEqual(CLODE_SHADOWS.find.skewRcTest, '[ "$_rc" -ne 0 ]');
+  assert.strictEqual(CLODE_SHADOWS.rg.skewRcTest, '[ "$_rc" -ge 2 ]');
+});
+
+test('warnAppletSkew RETURNS the findings for the shadows it was given', () => {
+  const prev = process.env.CLODE_BFS;
+  process.env.CLODE_BFS = '/fake/bfs-return';
+  const spawn = mockSpawn(1, "bfs: error: Unsupported -regextype 'findutils-default'.");
+  try {
+    const shadows = [{ name: 'find', applet: 'bfs', env: 'CLODE_BFS', flags: '-regextype return-contract-unique' }];
+    let f1, f2;
+    captureStderr(() => { f1 = warnAppletSkew(shadows, spawn); });
+    const err2 = captureStderr(() => { f2 = warnAppletSkew(shadows, spawn); });
+    assert.strictEqual(f1.length, 1);
+    assert.strictEqual(f1[0].name, 'find');
+    assert.match(f1[0].why, /Unsupported -regextype/);
+    assert.match(f1[0].fix, /Oniguruma/);
+    // memoized second call: same finding back, but no duplicate stderr warning
+    assert.strictEqual(f2.length, 1);
+    assert.strictEqual(f2[0].name, 'find');
+    assert.strictEqual(err2, '');
+  } finally {
+    if (prev === undefined) delete process.env.CLODE_BFS; else process.env.CLODE_BFS = prev;
+  }
+});
+
+test('warnAppletSkew why skips the command echo + underline, keeps the real complaint', () => {
+  const prev = process.env.CLODE_BFS;
+  process.env.CLODE_BFS = '/fake/bfs-why';
+  // real bfs shape: line 1 echoes the command (contains the bin path), line 2 is
+  // the tilde underline, line 3 is the actual complaint
+  const spawn = mockSpawn(1, [
+    'bfs: error: /fake/bfs-why -S dfs -regextype why-extract-unique -quit .',
+    'bfs: error:             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~',
+    'bfs: error: Unsupported regex type.',
+  ].join('\n'));
+  try {
+    let f;
+    captureStderr(() => { f = warnAppletSkew([
+      { name: 'find', applet: 'bfs', env: 'CLODE_BFS', flags: '-regextype why-extract-unique' },
+    ], spawn); });
+    assert.strictEqual(f[0].why, 'bfs: error: Unsupported regex type.');
+  } finally {
+    if (prev === undefined) delete process.env.CLODE_BFS; else process.env.CLODE_BFS = prev;
+  }
+});
+
+test('warnAppletSkew returns [] when the applet accepts the flags', () => {
+  const prev = process.env.CLODE_BFS;
+  process.env.CLODE_BFS = '/fake/bfs-ok';
+  try {
+    captureStderr(() => {
+      const f = warnAppletSkew([
+        { name: 'find', applet: 'bfs', env: 'CLODE_BFS', flags: '-S dfs' },
+      ], mockSpawn(0, ''));
+      assert.deepStrictEqual(f, []);
+    });
+  } finally {
+    if (prev === undefined) delete process.env.CLODE_BFS; else process.env.CLODE_BFS = prev;
+  }
+});
+
 test('CLODE_SHADOWS probe specs: build a no-op invocation + skew predicate', () => {
   const find = CLODE_SHADOWS.find.probe(['-S', 'dfs', '-regextype', 'findutils-default']);
   assert.deepStrictEqual(find.args, ['-S', 'dfs', '-regextype', 'findutils-default', '-quit', '.']);
@@ -239,29 +335,59 @@ function snapshotCmd(snapPath){
   ].join('\n');
 }
 
+// The generation-time skew probe runs against whatever CLODE_BFS/CLODE_UGREP (or
+// PATH) resolves, and a skewed host applet legitimately changes the emitted
+// shadow (exec fast path vs skew trailer — see the skew tests below). These
+// generator tests assert the EXEC form, so they pin the applets to accepting
+// stubs to be deterministic on any host.
+function withOkApplets(fn){
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-okstub-'));
+  for (const stub of ['bfs', 'ugrep']){
+    fs.writeFileSync(path.join(dir, stub), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  }
+  const prevBfs = process.env.CLODE_BFS, prevUgrep = process.env.CLODE_UGREP;
+  process.env.CLODE_BFS = path.join(dir, 'bfs');
+  process.env.CLODE_UGREP = path.join(dir, 'ugrep');
+  const restore = () => {
+    if (prevBfs === undefined) delete process.env.CLODE_BFS; else process.env.CLODE_BFS = prevBfs;
+    if (prevUgrep === undefined) delete process.env.CLODE_UGREP; else process.env.CLODE_UGREP = prevUgrep;
+  };
+  let result;
+  try { result = fn(restore); } catch (e) { restore(); throw e; }
+  if (result !== 'deferred') restore();
+}
+
 test('child_process.execFileSync rewrites the snapshot-generator command (shell writes real-applet shadows)', { skip: SH_SKIP }, () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-cp-'));
-  fs.mkdirSync(path.join(dir, 'shell-snapshots'));
-  const snap = path.join(dir, 'shell-snapshots', 'snapshot-zsh-1.sh');
-  cp.execFileSync('sh', ['-c', snapshotCmd(snap)]);
-  const got = fs.readFileSync(snap, 'utf8');
-  assert.doesNotMatch(got, /ARGV0=ugrep|ARGV0=bfs|_cc_bin/);
-  assert.match(got, /exec "\$_bin" -G --ignore-files/);
-  assert.match(got, /exec "\$_bin" -S dfs -regextype findutils-default/);
+  withOkApplets(() => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-cp-'));
+    fs.mkdirSync(path.join(dir, 'shell-snapshots'));
+    const snap = path.join(dir, 'shell-snapshots', 'snapshot-zsh-1.sh');
+    cp.execFileSync('sh', ['-c', snapshotCmd(snap)]);
+    const got = fs.readFileSync(snap, 'utf8');
+    assert.doesNotMatch(got, /ARGV0=ugrep|ARGV0=bfs|_cc_bin/);
+    assert.match(got, /exec "\$_bin" -G --ignore-files/);
+    assert.match(got, /exec "\$_bin" -S dfs -regextype findutils-default/);
+  });
 });
 
 test('child_process.execFile (async) rewrites the snapshot-generator command', { skip: SH_SKIP }, (t, done) => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-cp-'));
-  fs.mkdirSync(path.join(dir, 'shell-snapshots'));
-  const snap = path.join(dir, 'shell-snapshots', 'snapshot-zsh-2.sh');
-  cp.execFile('sh', ['-c', snapshotCmd(snap)], (err) => {
-    try {
-      assert.ifError(err);
-      const got = fs.readFileSync(snap, 'utf8');
-      assert.doesNotMatch(got, /ARGV0=ugrep/);
-      assert.match(got, /exec "\$_bin" -G --ignore-files/);
-      done();
-    } catch (e) { done(e); }
+  withOkApplets((restore) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-cp-'));
+    fs.mkdirSync(path.join(dir, 'shell-snapshots'));
+    const snap = path.join(dir, 'shell-snapshots', 'snapshot-zsh-2.sh');
+    // the rewrite (and its probe) happen synchronously inside this call, but
+    // restore in the callback anyway so env stays pinned for the whole run
+    cp.execFile('sh', ['-c', snapshotCmd(snap)], (err) => {
+      try {
+        assert.ifError(err);
+        const got = fs.readFileSync(snap, 'utf8');
+        assert.doesNotMatch(got, /ARGV0=ugrep/);
+        assert.match(got, /exec "\$_bin" -G --ignore-files/);
+        done();
+      } catch (e) { done(e); }
+      finally { restore(); }
+    });
+    return 'deferred';
   });
 });
 
@@ -271,11 +397,51 @@ test('child_process passes through non-snapshot commands unchanged', { skip: SH_
 });
 
 test('child_process.spawnSync rewrites the snapshot-generator command', { skip: SH_SKIP }, () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-cp-'));
+  withOkApplets(() => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-cp-'));
+    fs.mkdirSync(path.join(dir, 'shell-snapshots'));
+    const snap = path.join(dir, 'shell-snapshots', 'snapshot-zsh-3.sh');
+    cp.spawnSync('sh', ['-c', snapshotCmd(snap)]);
+    const got = fs.readFileSync(snap, 'utf8');
+    assert.match(got, /exec "\$_bin" -G --ignore-files/);
+    assert.doesNotMatch(got, /ARGV0=ugrep/);
+  });
+});
+
+// End-to-end skew diagnosis: generate a snapshot while CLODE_BFS points at a
+// stub that rejects its flags (as a POSIX-only bfs would). The probe must mark
+// the find shadow skewed, the rewritten shadow must carry the diagnosis, and
+// RUNNING that find must print the self-explaining line on stderr AND still
+// propagate the applet's own exit code. CLODE_UGREP points at an accepting
+// stub, so the grep shadow must keep its exec fast path.
+test('generated find explains a known skew at the point of use', { skip: SH_SKIP }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-skewrun-'));
+  const bfsStub = path.join(dir, 'bfs-stub');
+  fs.writeFileSync(bfsStub,
+    '#!/bin/sh\necho "bfs: error: Unsupported -regextype \'findutils-default\'." >&2\nexit 1\n',
+    { mode: 0o755 });
+  const ugrepStub = path.join(dir, 'ugrep-stub');
+  fs.writeFileSync(ugrepStub, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   fs.mkdirSync(path.join(dir, 'shell-snapshots'));
-  const snap = path.join(dir, 'shell-snapshots', 'snapshot-zsh-3.sh');
-  cp.spawnSync('sh', ['-c', snapshotCmd(snap)]);
+  const snap = path.join(dir, 'shell-snapshots', 'snapshot-skew-1.sh');
+  const env = { ...process.env, CLODE_BFS: bfsStub, CLODE_UGREP: ugrepStub };
+  const prevBfs = process.env.CLODE_BFS, prevUgrep = process.env.CLODE_UGREP;
+  process.env.CLODE_BFS = bfsStub;      // the probe runs in THIS process
+  process.env.CLODE_UGREP = ugrepStub;
+  try {
+    cp.execFileSync('sh', ['-c', snapshotCmd(snap)]);
+  } finally {
+    if (prevBfs === undefined) delete process.env.CLODE_BFS; else process.env.CLODE_BFS = prevBfs;
+    if (prevUgrep === undefined) delete process.env.CLODE_UGREP; else process.env.CLODE_UGREP = prevUgrep;
+  }
   const got = fs.readFileSync(snap, 'utf8');
-  assert.match(got, /exec "\$_bin" -G --ignore-files/);
-  assert.doesNotMatch(got, /ARGV0=ugrep/);
+  assert.match(got, /known applet skew/);
+  assert.match(got, /function grep \{[\s\S]*?exec "\$_bin" -G/);
+  // run the generated find: stderr carries the stub's error AND clode's diagnosis
+  const r = cp.spawnSync('sh', ['-c', `. "${snap}"; find . -name nope; echo "rc=$?"`],
+    { encoding: 'utf8', env });
+  assert.match(r.stdout, /rc=1/, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
+  assert.match(r.stderr, /Unsupported -regextype/);
+  assert.match(r.stderr, /known applet skew/);
+  assert.match(r.stderr, /Oniguruma/);
 });

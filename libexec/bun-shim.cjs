@@ -74,8 +74,13 @@ const _rewriteSnapshotArg = (s) => {
     process.stderr.write(`clode: snapshot shadow rewrite skipped: ${e && e.message}\n`);
     return s;
   }
-  // Rewrite succeeded: probe the host applets for flag skew (best-effort, never fatal).
-  try { warnAppletSkew(collectShadows(s)); } catch (_) {}
+  // Rewrite succeeded: probe the host applets for flag skew (best-effort, never
+  // fatal). When the probe finds skew, rebuild with the findings so the affected
+  // shadows carry the self-explaining failure trailer (see buildShadow).
+  try {
+    const findings = warnAppletSkew(collectShadows(s));
+    if (findings && findings.length) rewritten = rewriteSnapshot(s, findings);
+  } catch (_) {}
   return rewritten;
 };
 // Rewrite any snapshot-generator command found in a child_process invocation.
@@ -155,16 +160,24 @@ if (!_wrapAnsiFn) wrapAnsi.__bunShimStub = true;
 // that support landed in bfs 3.3 ("all regex types from GNU find"). A POSIX-only build
 // — any version — rejects the flag, so "upgrade it" is wrong advice. ugrep/rg keep a
 // generic remedy until we learn their concrete requirements.
+// skewRcTest is the SHELL twin of probe().skew: the same exit-code semantics as
+// a POSIX test over `$_rc`, used by buildShadow's skew trailer so a rewritten
+// shadow can tell "the applet failed the way skew fails" from benign exits
+// (grep/rg exit 1 = "no match"; bfs is non-zero on any error). Keep the pair in
+// sync — the CLODE_SHADOWS unit test locks each twin to its predicate.
 const CLODE_SHADOWS = {
   grep: { applet: 'ugrep', env: 'CLODE_UGREP',
           fix: 'set CLODE_UGREP to a compatible ugrep, or upgrade it',
-          probe: (f) => ({ args: [...f, '-e', 'x', '/dev/null'], skew: (c) => c >= 2 }) },
+          probe: (f) => ({ args: [...f, '-e', 'x', '/dev/null'], skew: (c) => c >= 2 }),
+          skewRcTest: '[ "$_rc" -ge 2 ]' },
   find: { applet: 'bfs',   env: 'CLODE_BFS',
           fix: 'install bfs ≥ 3.3 built with Oniguruma, or set CLODE_BFS to such a build',
-          probe: (f) => ({ args: [...f, '-quit', '.'],           skew: (c) => c !== 0 }) },
+          probe: (f) => ({ args: [...f, '-quit', '.'],           skew: (c) => c !== 0 }),
+          skewRcTest: '[ "$_rc" -ne 0 ]' },
   rg:   { applet: 'rg',    env: 'CLODE_RG',
           fix: 'set CLODE_RG to a compatible rg, or upgrade it',
-          probe: (f) => ({ args: [...f, '--version'],            skew: (c) => c >= 2 }) },
+          probe: (f) => ({ args: [...f, '--version'],            skew: (c) => c >= 2 }),
+          skewRcTest: '[ "$_rc" -ge 2 ]' },
 };
 // A shadow body is the upstream multiplexer if it invokes an applet via argv0
 // against the provider binary. We detect the applet from ARGV0=/exec -a.
@@ -211,14 +224,36 @@ function parseShadow(body){
   return { applet, flags, guard };
 }
 
-function buildShadow(name, known, parsed){
+// Embed arbitrary text as a single shell word: single-quote it, escaping any
+// embedded single quote with the classic '\'' dance. The skew `why` is the host
+// applet's own stderr line, so it can contain anything.
+function shQuote(s){ return "'" + String(s).replace(/'/g, "'\\''") + "'"; }
+
+// Build the replacement shadow. Without a skew finding: exec the host applet
+// (fast path — the function's subshell is replaced). WITH a finding (the
+// generation-time probe saw this applet reject these flags): drop the exec so
+// the exit code is observable, and on a skew-shaped failure print a
+// self-explaining line — the probe's exact why + the applet-specific fix — to
+// stderr right where the cryptic applet error lands, then propagate the
+// applet's own exit code. This is the host-applet (foundation) configuration's
+// answer to skew: the diagnosis travels to the point of use, visible to the
+// user and to any agent reading the failed command's output.
+function buildShadow(name, known, parsed, finding){
   const { applet, env } = known;
   const flags = parsed.flags ? ' ' + parsed.flags : '';
-  return `function ${name} {\n` +
+  const head = `function ${name} {\n` +
     parsed.guard +
     `  local _bin="\${${env}:-$(command -v ${applet} 2>/dev/null)}"\n` +
-    `  [ -n "$_bin" ] || { echo "clode: ${name} needs '${applet}' (set ${env} or install it)" >&2; return 127; }\n` +
-    `  exec "$_bin"${flags} "$@"\n` +
+    `  [ -n "$_bin" ] || { echo "clode: ${name} needs '${applet}' (set ${env} or install it)" >&2; return 127; }\n`;
+  if (!finding) return head + `  exec "$_bin"${flags} "$@"\n}`;
+  const msg = shQuote(
+    `clode: known applet skew — host ${applet} rejects the flags this ${name} shadow uses ` +
+    `(${finding.why}). ${finding.fix}.`);
+  return head +
+    `  "$_bin"${flags} "$@"\n` +
+    `  local _rc=$?\n` +
+    `  ${known.skewRcTest} && printf '%s\n' ${msg} >&2\n` +
+    `  return $_rc\n` +
     `}`;
 }
 
@@ -243,8 +278,12 @@ function _eachShadow(text, cb){
   }
 }
 
-function rewriteSnapshot(text){
+// findings (optional): skew findings from warnAppletSkew for THIS snapshot's
+// shadows — a shadow with a finding is built with the self-explaining skew
+// trailer instead of the exec fast path. Omitted/empty = the pure rewrite.
+function rewriteSnapshot(text, findings){
   text = String(text);
+  const byName = new Map((findings || []).map((f) => [f.name, f]));
   let out = '', i = 0;
   _eachShadow(text, ({ name, parsed, mIndex, endIdx }) => {
     // Body looks like an upstream multiplexer shadow.
@@ -253,7 +292,7 @@ function rewriteSnapshot(text){
       throw new Error(`clode: unrecognized search shadow function ${name} -> ${parsed.applet}; ` +
         `update CLODE_SHADOWS in bun-shim.cjs`);
     }
-    out += text.slice(i, mIndex) + buildShadow(name, known, parsed);
+    out += text.slice(i, mIndex) + buildShadow(name, known, parsed, byName.get(name));
     i = endIdx;
   });
   out += text.slice(i);
@@ -279,7 +318,12 @@ function collectShadows(text){
 // would fail at use-time with a cryptic error far from here. Probe once per
 // (applet, flags) per process and warn loudly, naming the rejected flag. Absence
 // of the applet is NOT skew — the rewritten shadow's own guard fails loud on that.
-const _warnedSkew = new Set();
+// Probe results memoized per (resolved bin, applet, flags): finding object when
+// skew, null when the applet accepted the flags. The bin is part of the key so
+// a changed CLODE_* override re-probes. The stderr warning fires once per key;
+// the FINDING is returned on every call so a later snapshot generation in the
+// same process still gets its shadows built with the skew trailer.
+const _skewProbed = new Map();
 const _skewFindings = [];
 // Record a skew finding for BOTH surfaces: the loud stderr line (here, the source
 // of truth — independent of any bundle patching) and globalThis.__clodeDoctor,
@@ -292,31 +336,47 @@ function _recordSkew(f){
   g.__clodeDoctor.appletSkew = _skewFindings;
 }
 function warnAppletSkew(shadows, spawn = _rawSpawnSync){
+  const found = [];
   for (const sh of shadows){
     const known = CLODE_SHADOWS[sh.name];
     if (!known || !known.probe) continue;
     const bin = process.env[known.env] || which(known.applet);
     if (!bin) continue;
     const flags = sh.flags ? sh.flags.split(/\s+/).filter(Boolean) : [];
-    const key = sh.applet + '\0' + flags.join(' ');
-    if (_warnedSkew.has(key)) continue;
+    const key = bin + '\0' + sh.applet + '\0' + flags.join(' ');
+    if (_skewProbed.has(key)){
+      const memo = _skewProbed.get(key);
+      if (memo) found.push({ ...memo, name: sh.name });
+      continue;
+    }
     const { args, skew } = known.probe(flags);
     let r;
     try { r = spawn(bin, args, { encoding: 'utf8', timeout: 5000 }); }
     catch (_) { continue; }
     if (r.error || skew(r.status)){
-      _warnedSkew.add(key);
-      const why = String(r.stderr || '').trim().split('\n')[0]
+      // The most informative stderr line, not merely the first: bfs prefixes its
+      // real complaint with a command echo (contains the bin path) and a tilde
+      // underline — skip both shapes, fall back to the first line.
+      const lines = String(r.stderr || '').split('\n').map((l) => l.trim()).filter(Boolean);
+      const informative = lines.filter((l) =>
+        !l.includes(bin) && !/^[~^\s]*$/.test(l.replace(/^[^:]+:\s*(error:)?\s*/i, '')));
+      const why = informative[0] || lines[0]
         || (r.error && r.error.message) || `exit ${r.status}`;
       const fix = known.fix || `set ${known.env} to a compatible ${sh.applet}, or upgrade it`;
-      _recordSkew({ name: sh.name, applet: sh.applet, why, fix });
+      const finding = { name: sh.name, applet: sh.applet, why, fix };
+      _skewProbed.set(key, finding);
+      _recordSkew(finding);
+      found.push(finding);
       process.stderr.write(
         `clode: host ${sh.applet} rejects the flags Claude's embedded ${sh.applet} uses — ` +
         `\`${sh.name}\` will fail:\n` +
         `       ${why}\n` +
         `       ${fix}.\n`);
+    } else {
+      _skewProbed.set(key, null);
     }
   }
+  return found;
 }
 
 // --- hashing: Bun.hash default = Wyhash64 (returns BigInt). TODO: exact wyhash if values
