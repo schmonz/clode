@@ -29,7 +29,9 @@ test('CLODE_ENGINE=tjs: spawns tjs run <loader> cli.cjs --version', () => {
   const c = capture({ PATH: '/usr/bin', CLODE_ENGINE: 'tjs', CLODE_TJS: '/opt/tjs' });
   assert.strictEqual(c.cmd, '/opt/tjs');
   assert.strictEqual(c.argv[0], 'run');
-  assert.match(c.argv[1], /libexec\/node-shim\/loader\.cjs$/);
+  // path.join is separator-native (backslashes on win32), so build the
+  // expected loader path the same way the product does.
+  assert.strictEqual(c.argv[1], path.join('/libexec', 'node-shim', 'loader.cjs'));
   assert.strictEqual(c.argv[2], '/cache/cli.cjs');
   assert.deepStrictEqual(c.argv.slice(3), ['--version']);
 });
