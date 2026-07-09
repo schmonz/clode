@@ -102,7 +102,9 @@ function snapshotGeneratorPresent(data) {
   return countSubstr(data, SNAPSHOT_GEN_ANCHOR) === 1;
 }
 
-const _AUTOUPDATER_ANCHOR = /tengu_pkg_manager_auto_updater_start",[A-Za-z0-9_$]{1,6}\);let\[[A-Za-z0-9_$]{1,6},\.\.\.[A-Za-z0-9_$]{1,6}\]=[A-Za-z0-9_$]{1,6},[A-Za-z0-9_$]{1,6}=await [A-Za-z0-9_$]{1,6}\(/g;
+// Mirrors extract-claude-js.cjs AUTOUPDATER_SPAWN (sans capture groups it doesn't
+// need): comma form (<=2.1.202) OR split-let form (2.1.203+) after `=<cmd>`.
+const _AUTOUPDATER_ANCHOR = /tengu_pkg_manager_auto_updater_start",[A-Za-z0-9_$]{1,6}\);let\[(?<a>[A-Za-z0-9_$]{1,6}),\.\.\.(?<rest>[A-Za-z0-9_$]{1,6})\]=[A-Za-z0-9_$]{1,6}(?:,[A-Za-z0-9_$]{1,6}=await [A-Za-z0-9_$]{1,6}\(|;let [A-Za-z0-9_$]{1,6}=\k<a>;let [A-Za-z0-9_$]{1,6}=\k<rest>;let [A-Za-z0-9_$]{1,6}=await [A-Za-z0-9_$]{1,6}\()/g;
 const _AUTOUPDATER_PATCHED = 'process.env.CLODE_SELF?[process.env.CLODE_SELF,"--clode-internal-update"]';
 function autoupdaterHookAnchorPresent(data) {
   return [...data.matchAll(_AUTOUPDATER_ANCHOR)].length === 1 || data.includes(_AUTOUPDATER_PATCHED);

@@ -213,10 +213,18 @@ function patchDoctorEager(body) {
 // auto_updater_start telemetry call, before the `let[..]=cmd` destructure that
 // feeds the spawn — so the spawn sees clode's argv. exit 0 -> the bundle's existing
 // success path renders "Restart to apply"; the next clode launch re-extracts the
-// freshly-fetched provider. Anchor PROVEN against real 2.1.179; same identifier
-// bounding rationale as the doctor anchors (short minified ids, linear scan).
+// freshly-fetched provider. Same identifier bounding rationale as the doctor
+// anchors (short minified ids, linear scan).
+//
+// Two destructure shapes, alternated after `=<cmd>`:
+//   - comma form  `let[a,...b]=cmd,c=await f(`            — PROVEN real <=2.1.202 (2.1.179)
+//   - split form  `let[a,...b]=cmd;let x=a;let y=b;let z=await f(x,y,` — PROVEN real
+//     2.1.203-2.1.205 (upstream unchained the let; backrefs \k<a>/\k<rest> pin the
+//     aliases to the destructured parts so the scan can't drift to unrelated code).
+// Either way <cmd> is a `let`-declared local, and the override splices BEFORE the
+// destructure, so both shapes read clode's argv identically.
 const AUTOUPDATER_SPAWN =
-  /(?<pre>tengu_pkg_manager_auto_updater_start",[A-Za-z0-9_$]{1,6}\);)let\[[A-Za-z0-9_$]{1,6},\.\.\.[A-Za-z0-9_$]{1,6}\]=(?<cmd>[A-Za-z0-9_$]{1,6}),[A-Za-z0-9_$]{1,6}=await [A-Za-z0-9_$]{1,6}\(/g;
+  /(?<pre>tengu_pkg_manager_auto_updater_start",[A-Za-z0-9_$]{1,6}\);)let\[(?<a>[A-Za-z0-9_$]{1,6}),\.\.\.(?<rest>[A-Za-z0-9_$]{1,6})\]=(?<cmd>[A-Za-z0-9_$]{1,6})(?:,[A-Za-z0-9_$]{1,6}=await [A-Za-z0-9_$]{1,6}\(|;let [A-Za-z0-9_$]{1,6}=\k<a>;let [A-Za-z0-9_$]{1,6}=\k<rest>;let [A-Za-z0-9_$]{1,6}=await [A-Za-z0-9_$]{1,6}\()/g;
 
 // Override the pkg-manager autoupdater's spawn argv to call
 // `clode --clode-internal-update` (when CLODE_SELF is set). exit 0 -> the bundle's
