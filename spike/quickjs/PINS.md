@@ -155,3 +155,15 @@ quickjs-ng-cpool-align patch 2026-07-09
 #   strict alignment. In-memory layout only — zero effect on the serialized format.
 #   Root-caused + validated on NetBSD/sparc 10.1 (results/phase3-sparc-engine-verdict.md);
 #   darwin control unchanged. UPSTREAM CANDIDATE (strongest in batch).
+txiki-wurl-url patch 2026-07-09
+# patch: patches/txiki-wurl-url.patch — the ada-ectomy. Adds deps/wurl (~4.1k lines
+#   plain C11) implementing the ada_c subset src/url.c consumes, behind CMake option
+#   TJS_USE_ADA (default ON; OFF selects wurl). Characterized against the frozen WPT
+#   golden (1,317 cases): untagged 100% byte-exact; 112 nonAsciiHost-tagged = 79 exact
+#   + 34 LOUD accepted-rejects, zero value divergences. IDNA at L1' (punycode +
+#   oracle-generated allow-bitmap; bitmap can't be more permissive than golden by
+#   construction); L2 full UTS-46 is the done bar (seams marked L2 TODO). Binary
+#   -542KB and NO libc++ — with TJS_USE_ADA=OFF, tjs needs only a C compiler (kills
+#   the gcc12/C++20 requirement that blocked sparc S2 on base gcc 10.5).
+#   NOT yet default: flipping build-tjs.mjs to -DTJS_USE_ADA=OFF requires a pinned-
+#   binary rebuild + full oracle re-run (house rule) — deliberate follow-up.
