@@ -381,6 +381,11 @@ function makeFileHandle(fd, p) {
     async stat() { return new Stats(FSS.fstat(fd)); },
     async sync() {},
     async datasync() {},
+    // `await using fh = await fs.promises.open(...)` (bundle ≥2.1.204 Bash-tool
+    // output readers) requires @@asyncDispose; without it the declaration throws
+    // a code-less TypeError and every Bash result degrades to the persisted-file
+    // detour. Node's FileHandle disposal is close().
+    async [Symbol.asyncDispose]() { await this.close(); },
   };
 }
 

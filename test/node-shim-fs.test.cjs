@@ -117,6 +117,52 @@ console.log(JSON.stringify({
 }));
 `;
 
+// FileHandle disposal (tjs Bash-tool wall, bundle 2.1.204): the Bash tool's
+// output-file readers open with `await using fh = await fs.promises.open(...)`,
+// then fh.stat() for the size and positioned fh.read() for the window. A
+// FileHandle without Symbol.asyncDispose makes \`await using\` throw
+// "TypeError: value is not disposable" — no .code, so the tool reports
+// "output file could not be read (unknown)" and EVERY Bash result degrades to
+// the persisted-file detour. Verify: the await-using read round-trips like
+// host node, and disposal really closes the fd (fstat after the block EBADFs).
+const AWAIT_USING_PROG = `
+const fs = require('node:fs');
+const path = require('node:path');
+const dir = process.argv[2];
+(async () => {
+  const out = [];
+  const p = path.join(dir, 'out.txt');
+  fs.writeFileSync(p, '0123456789abcdef');
+  let fd;
+  {
+    await using fh = await fs.promises.open(p, 'r');
+    fd = fh.fd;
+    out.push(typeof fh[Symbol.asyncDispose]);
+    out.push((await fh.stat()).size);
+    const buf = Buffer.alloc(6);
+    const { bytesRead } = await fh.read(buf, 0, 6, 10);
+    out.push(bytesRead, buf.toString('utf8'));
+  }
+  try { fs.fstatSync(fd); out.push('still-open'); } catch (e) { out.push(e.code); }
+  console.log(JSON.stringify(out));
+})();
+`;
+
+test('fs.promises.open FileHandle supports await using vs host node', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-adisp-'));
+  const f = path.join(base, 'adisp.cjs');
+  fs.writeFileSync(f, AWAIT_USING_PROG);
+  const nodeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-adisp-node-'));
+  const tjsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-adisp-tjs-'));
+  const nodeOut = require('node:child_process')
+    .execFileSync(process.execPath, [f, nodeDir], { encoding: 'utf8' }).trim();
+  const r = runLoader(f, [tjsDir]);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.stdout.trim(), nodeOut);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), ['function', 16, 6, 'abcdef', 'EBADF']);
+});
+
 // writeFileSync string-encoding honesty: a STRING data arg must honor its
 // encoding. Default (and 'utf8') is UTF-8; 'latin1'/'binary' byte-encodes
 // (charCode & 0xff), so bytes >= 0x80 survive instead of being UTF-8-mangled.
