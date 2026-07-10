@@ -177,7 +177,6 @@ jobs:
             mimalloc: off
             ffi: off
             publish: true
-            soft-fail: true
           - leg: omnios-amd64            # PUBLISHED; cross-platform-actions, KVM (illumos rung)
             os: ubuntu-latest
             guest-platform: omnios

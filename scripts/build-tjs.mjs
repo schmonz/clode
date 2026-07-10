@@ -445,6 +445,27 @@ function fixupLwsHaikuDirent(dir) {
   console.log('fixup lws-haiku-dirent: applied');
 }
 
+function fixupLwsGetifaddrsPtrCast(dir) {
+  // lws's getifaddrs FALLBACK (compiled only where the OS lacks the real
+  // one — Haiku) walks ifc_buf with a char* cursor, but Haiku declares
+  // ifc_buf with a different pointer type -> "comparison of distinct
+  // pointer types" under -Werror (dry-run #16, 2026-07-10). Cast both
+  // uses; a no-op where the types already match. lws upstream candidate.
+  const f = path.join(dir, 'deps/libwebsockets/lib/misc/getifaddrs.c');
+  const src = fs.readFileSync(f, 'utf8');
+  const bad = 'for (p = ifconf.ifc_buf; p < ifconf.ifc_buf + ifconf.ifc_len; p += sz) {';
+  const good = 'for (p = (char *)ifconf.ifc_buf; p < (char *)ifconf.ifc_buf + ifconf.ifc_len; p += sz) {';
+  if (src.includes(good)) {
+    console.log('fixup lws-getifaddrs-ptr-cast: already applied');
+    return;
+  }
+  if (!src.includes(bad)) {
+    throw new Error('fixup lws-getifaddrs-ptr-cast: anchor not found (lws changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(bad, good));
+  console.log('fixup lws-getifaddrs-ptr-cast: applied');
+}
+
 let tjsDir;
 if (buildOnly) {
   // The patched tree was constructed by a prior --source-only run (possibly on
@@ -466,6 +487,7 @@ if (buildOnly) {
   fixupLibuvMidnightbsd(tjsDir);
   fixupLwsHaikuMallocUsableSize(tjsDir);
   fixupLwsHaikuDirent(tjsDir);
+  fixupLwsGetifaddrsPtrCast(tjsDir);
 }
 
 // ---- big-endian bundle regen, part 1: esbuild the plain-JS intermediates ----
