@@ -52,7 +52,10 @@ jobs:
           # slashes so bash `cp` accepts it on the Git Bash runner.
           BIN=$(node -e "const p=require('path');console.log(require('./scripts/platform-tag.cjs').seaBin('.').split(p.sep).join('/'))")
           EXT=""; case "$BIN" in *.exe) EXT=".exe" ;; esac
-          ASSET="clode-$V-$BASE$EXT"
+          # -node = the engine tag (user decision 2026-07-10): tjs builders
+          # own the bare clode-<ver>-<platform> names (release-matrix.yml);
+          # the transitional Node-SEA binaries are explicitly tagged.
+          ASSET="clode-$V-$BASE-node$EXT"
           cp "$BIN" "$ASSET"
           echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v7
@@ -78,14 +81,24 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$GITHUB_REF_TYPE" = tag ]; then
-            TAG="$GITHUB_REF_NAME"; DRAFT=""
+            # The tjs matrix workflow (release-matrix.yml) runs on the same
+            # tag and may win the race to create the release — attach, don't
+            # duplicate; create only if we got here first (mirror of its own
+            # discipline).
+            TAG="$GITHUB_REF_NAME"
+            echo "Publishing $TAG with: $(ls dist)"
+            gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+              || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+                   --target "$GITHUB_SHA" --title "$TAG" \
+                   --notes "Automated release."
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber dist/*
           else
-            V="$(cat VERSION)"; TAG="v$V-test.$GITHUB_RUN_NUMBER"; DRAFT="--draft"
+            V="$(cat VERSION)"; TAG="v$V-test.$GITHUB_RUN_NUMBER"
+            echo "Publishing $TAG (draft) with: $(ls dist)"
+            gh release create "$TAG" --draft \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "$TAG" \
+              --notes "Automated release. Assets: $(ls dist | tr '\n' ' ')" \
+              dist/*
           fi
-          echo "Publishing $TAG (draft=${DRAFT:-no}) with: $(ls dist)"
-          gh release create "$TAG" $DRAFT \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "$TAG" \
-            --notes "Automated release. Assets: $(ls dist | tr '\n' ' ')" \
-            dist/*

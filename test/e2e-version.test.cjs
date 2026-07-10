@@ -24,9 +24,9 @@ test('package.json version matches the VERSION file', () => {
   assert.strictEqual(pkgver, version);
 });
 
-test('VERSION is 0.1.0 and LICENSE is BSD-2-Clause', () => {
+test('VERSION is 0.1.2 and LICENSE is BSD-2-Clause', () => {
   const version = fs.readFileSync(path.join(REPO, 'VERSION'), 'utf8').trim();
-  assert.strictEqual(version, '0.1.0');
+  assert.strictEqual(version, '0.1.2');
   const license = fs.readFileSync(path.join(REPO, 'LICENSE'), 'utf8');
   assert.match(license, /BSD 2-Clause|Redistribution and use/i);
 });

@@ -34,7 +34,11 @@ jobs:
       matrix:
         include:
           # ---- T1 native runners
-          - leg: darwin-arm64-tjs        # PUBLISHED
+          # Naming (user decision 2026-07-10, closing the plan's "-tjs
+          # disposition" item): tjs builders own the CANONICAL name
+          # clode-<ver>-<platform>; the transitional Node-SEA binaries carry
+          # the -node engine tag instead (release.yml).
+          - leg: darwin-arm64            # PUBLISHED
             os: macos-14
             publish: true
           - leg: linux-x64-glibc         # CI smoke only (Decision 3)
@@ -72,7 +76,7 @@ jobs:
           # TCG class (non-blocking by design, like s390x) and dragonflybsd
           # (one environmental VM hang on record; hardens next cycle).
           # publish:true only materializes an artifact when the leg is green.
-          - leg: darwin-x64-tjs          # PUBLISHED (deferred from phase 1)
+          - leg: darwin-x64              # PUBLISHED (deferred from phase 1)
             os: macos-15-intel
             publish: true
           # ---- T1.5 extra musl arches. x86 execs natively on the x64 kernel
@@ -370,8 +374,8 @@ jobs:
           set -euo pipefail
           cd dist
           chmod +x clode-*
-          sha256sum clode-* > SHA256SUMS-tjs
-          cat SHA256SUMS-tjs
+          sha256sum clode-* > SHA256SUMS
+          cat SHA256SUMS
           cd ..
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             TAG="$GITHUB_REF_NAME"
