@@ -164,6 +164,16 @@ const cmakeArgs = ['-DCMAKE_BUILD_TYPE=Release', '-DTJS_USE_ADA=OFF'];
 if (wantStatic) {
   cmakeArgs.push('-DBUILD_WITH_FFI=OFF', '-DCMAKE_EXE_LINKER_FLAGS=-static');
 }
+if (process.platform === 'linux') {
+  // txiki-sync-spawn.patch declares posix_spawnattr_t attr used only inside
+  // the #ifdef POSIX_SPAWN_CLOEXEC_DEFAULT (Apple) block; txiki compiles
+  // -Werror on Unix, so gcc's -Wunused-variable kills every Linux leg
+  // (glibc + musl alike, found by the first matrix dispatch 2026-07-10).
+  // -Wno-error= demotes JUST that warning (gcc: beats a blanket -Werror
+  // regardless of flag order). Real fix = patch v2 scoping the decl into the
+  // ifdef — queued for the Q3 upstream batch; patches/ is frozen this phase.
+  cmakeArgs.push('-DCMAKE_C_FLAGS=-Wno-error=unused-variable');
+}
 run('cmake', ['-S', tjsDir, '-B', path.join(tjsDir, 'build'), ...cmakeArgs]);
 run('cmake', ['--build', path.join(tjsDir, 'build'), '-j', jobs]);
 
