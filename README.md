@@ -1,63 +1,65 @@
-# clode: run Claude Code under Node
+# clode: Claude Code, everywhere
 
-Claude Code used to `npm install` anywhere you had Node. Now it's
-a binary-only distribution targeting only the most popular recent
-operating systems and hardware platforms. Even older x86 (pre-AVX2)
-no longer suffices.
+Claude Code ships as a binary-only distribution for a handful of popular
+platforms. clode re-bases it onto a small C runtime — txiki.js/QuickJS —
+and takes it everywhere else: macOS, musl-static Linux across eight
+architectures (x64 to s390x to loongarch64), NetBSD, FreeBSD, OpenBSD,
+DragonFly, OmniOS, Solaris — with more (Haiku, MidnightBSD, OpenIndiana,
+the BSDs on arm64) in the pipeline.
 
-Clode fixes this. Anywhere you have Node, run the latest Claude Code.
+Two pieces:
+
+- **clode** — the builder: one self-contained native binary per platform,
+  needing no Node, no npm, nothing else on disk. The only thing we publish.
+- **quaude** — the product it makes: the current Claude Code bundle,
+  compiled to QuickJS bytecode and fused with a node-compatibility runtime
+  into one native executable. Derived work: you fuse it locally, and it is
+  never distributed.
+
+## Usage
+
+Grab `clode-<version>-<platform>` from Releases, then:
+
+```sh
+./clode-0.1.2-netbsd-amd64 build   # fetch + extract + fuse -> ./quaude
+./quaude                           # run it like `claude`
+```
+
+Every fuse self-verifies before reporting success: an offline canned
+Messages round-trip plus `--quaude-attest` manifest verification. `clode
+build` extracts from a Claude Code provider bundle — it finds an
+npm-installed one, or point `CLODE_CLAUDE_BIN` at it.
+
+The classic mode still works: with Node >= 24 on `PATH`, `clode` launches
+the extracted bundle directly under your host Node, anywhere you'd run
+`claude`. `clode update` keeps it current, and a daily changelog watch
+warns when an upstream change threatens the hack (`clode --clode-watch` on
+demand; `CLODE_NO_WATCH=1` off).
+
+Either way you'll live without: image/sharp, audio capture, computer-use,
+SQLite-backed bits, MSAL, runtime TypeScript, and anything else from
+`Bun.*` that's stubbed or missing.
 
 ## Beware
 
-Clode is a hilarious hack that will inevitably stop working. It attempts
+clode is a hilarious hack that will inevitably stop working. It attempts
 to be reasonably robust against many failure modes, but can't possibly
 defend against all of them.
 
 If you've been wishing you could run Claude Code directly on your weird
-machine, use Clode while you still can.
-
-## Usage
-
-Run `clode` anywhere you'd run `claude`.
-
-On first run, it'll install its `npm` dependencies into a user-owned dir, fetch and postprocess the latest upstream, then launch it.
-
-Updating is much the same as you're used to, modulo the postprocessing. After
-each `clode update`, a warn-only *signals* digest flags anything in the new
-release's notes or bundle that bears on clode's ability to keep running the JS
-under Node — e.g. a bundled-Bun-runtime bump, a raised Node floor, or new
-"requires the native binary" gating. It never blocks the update; in a source
-checkout it also writes a reviewable `signals/<ver>.json` snapshot. Override the
-notes source with `CLODE_CHANGELOG_URL` (air-gapped/testing).
-
-clode also watches for *concerning* upgrades on its own: about once a day a launch
-fires a background, changelog-only check, and if a newer Claude Code carries
-signals that bear on running under Node it prints a one-line notice next time you
-start. Run `clode --clode-watch` to check on demand, or set `CLODE_NO_WATCH=1` to
-turn the automatic check off.
-
-You'll have to live without:
-
-- image/sharp
-- audio capture
-- computer-use
-- SQLite-backed bits
-- MSAL
-- runtime TypeScript
-- anything else from `Bun.*` that's stubbed or missing
+machine, use clode while you still can.
 
 ## Installation
 
-### Dependencies
+From Releases: download, `chmod +x`, done. `SHA256SUMS` covers the native
+builders; every binary carries a SLSA provenance attestation
+(`gh attestation verify <file> --repo <owner/repo>`).
 
-- `node` >= 24 and `npm`
-- `ugrep` >= 7.5.0, `bfs` >= 3.x (built with Oniguruma), and `rg` for fast searches
+For the classic Node-launcher mode instead:
 
-The launcher itself is a Node program (`#!/usr/bin/env node`), so it needs `node`
-on `PATH` to start. An ES5-safe prologue prints a friendly "node too old" message
-on an outdated node; a truly missing node yields `env: node: not found`.
-
-Once you have those:
+- `node` >= 24 and `npm` (>= 20 suffices for `clode build` alone)
+- `ugrep` >= 7.5.0, `bfs` >= 3.x (built with Oniguruma), and `rg` for fast
+  searches
 
 ```sh
 npm pack
@@ -74,114 +76,27 @@ rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/clode"
 
 ## Development
 
-### Test dependencies
-
-- `node` >= 24 and `npm` (same as running clode)
-- `bats`
-- on Linux (and anywhere `node-pty` has no prebuilt binary): a C/C++ toolchain
-  to compile it — `python3`, `make`, and a C++ compiler (`g++`/`clang++`). These
-  are the standard `node-gyp` build deps.
-
-The PTY/TUI tests drive clode under a pseudo-terminal via `node-pty` +
-`@xterm/headless`. Those are declared in a separate `test/package.json`, and
-`npm test` installs them automatically on first run. Because `node-pty` carries a
-**native** binary, the harness installs into a per-platform directory
-(`test/.harness/<os>-<osver>-<arch>-node<major>/`) rather than a shared
-`test/node_modules`, so one machine's compiled binary can't clobber another's on a
-shared/NFS workdir — `NODE_PATH` points the tests at the right one. These tests are
-**not optional** — the suite fails loudly rather than skipping if the harness can't
-load.
-
-> **First install compiles `node-pty` and can take a few minutes.** `node-pty`
-> ships prebuilt binaries only for macOS and Windows; on **Linux** there is no
-> prebuild, so `npm install` compiles it from source with `node-gyp` (hence the
-> toolchain above). The very first build also downloads the Node C++ headers for
-> your Node version, so it may sit "quiet" for a while — it is not hung. Later
-> installs reuse the cached headers and finish in seconds.
->
-> If you install with a package manager that blocks dependency build scripts by
-> default (e.g. **pnpm** or **bun**), the compile is skipped and `node-pty` loads
-> with "no prebuilt binary"; approve its build script first (pnpm:
-> `pnpm approve-builds`, or add it to `onlyBuiltDependencies`; bun:
-> `trustedDependencies`). Plain `npm` runs the build script without prompting.
-
-> **A bare `npm install` at the repo root is tolerated, but unnecessary.** The
-> "fail-loud" tests (which assert clode dies with a clear message when a runtime dep
-> like `ws`/`yaml`/`semver` is absent) are now isolated from the repo's own
-> `node_modules` — they run their shim children from a temp copy outside the repo
-> tree — so a populated root `node_modules` no longer makes them pass vacuously. You
-> still don't need one: runtime deps install into a user-owned dir at runtime, and
-> test-harness deps live under `test/`.
-
-Run the whole suite:
-
 ```sh
 npm test               # offline suite (default; no network or login needed)
-npm run test:online    # also run the network/model tests (needs a logged-in ~/.claude)
+npm run test:online    # also the network/model tests (needs a logged-in ~/.claude)
 ```
 
-Run a subset directly (run `npm test` once first — it installs the PTY/TUI harness
-into `test/.harness/<tag>/` and the rest resolve it via `NODE_PATH`):
+The PTY/TUI tests drive clode under a pseudo-terminal; the harness
+self-installs into `test/.harness/<platform-tag>/` on first run. On Linux
+that first run compiles `node-pty` from source (needs `python3`, `make`, a
+C++ compiler) and can sit quiet for a few minutes — it is not hung.
 
-```sh
-node --test test/*.test.cjs   # JS unit, module, and differential tests
-bats test/                    # launcher + integration tests
-```
+Building the pieces from source:
 
-### Building a single-file binary (SEA)
-
-clode can be packaged as a stand-alone [Node SEA](https://nodejs.org/api/single-executable-applications.html) —
-one executable that embeds Node, the esbuilt launcher, and the runtime deps, so a
-target machine needs neither `node` nor `npm`:
-
-```sh
-node scripts/build-sea.mjs
-```
-
-The output is `build/<os>-<osver>-<arch>-node<major>/clode` (e.g.
-`build/darwin-25-arm64-node24/clode`). The build is self-provisioning: it installs
-its own build tools (`esbuild`, `postject`) and stages the runtime deps on first run,
-then caches them. On macOS it ad-hoc-signs the binary (required, or it won't launch).
-
-**Use an official, non-stripped Node** ≥ 24 as the build node — a nodejs.org build,
-or one from `asdf`/`nvm`. The SEA embeds *whichever `node` runs the script*, so:
-
-- A **stripped** node (some distro `/usr/bin/node`) corrupts under `postject` and the
-  result segfaults at startup. The build's self-check catches this and explains it.
-- A node that links **non-system libraries** (e.g. a pkgsrc/Homebrew node pulling in
-  `/opt/pkg/lib` or `/opt/homebrew` dylibs) produces a binary that only runs where
-  those libraries exist. An official build links only the OS's own libraries, so the
-  binary is portable across machines of the same OS/arch.
-
-To embed a specific Node, run the script *with* that Node
-(`~/.asdf/installs/nodejs/24.18.0/bin/node scripts/build-sea.mjs`).
-
-Everything lands under a per-platform tag dir (the same tuple the test harness uses),
-so builds for different OS/arch/Node coexist on a shared/NFS `build/` tree without
-colliding. Set `CLODE_CLAUDE_BIN=/path/to/claude` to have the build additionally boot
-the real bundle once as a deep self-check.
-
-### Fusing native binaries (`clode build`)
-
-Two subcommands fuse stand-alone native binaries from the pinned txiki.js
-runtime (`build/tjs/tjs`, built by `scripts/build-tjs.mjs`; override with
-`CLODE_TJS`). Both artifacts run with **no Node at all** on the machine:
-
-```sh
-clode build [--out PATH]          # fuse a "quaude" (default ./quaude):
-                                  #   the extracted Claude Code bundle compiled to
-                                  #   quickjs bytecode + the node-shim runtime
-clode build --self [--out PATH]   # fuse a native clode builder (default ./clode-native):
-                                  #   clode's own launcher + everything `clode build`
-                                  #   needs, so the BUILDER itself needs no Node
-```
-
-`clode build --self` embeds the esbuilt launcher from the newest
-`build/*/clode-main.bundle.cjs` (produce it with
-`node scripts/build-sea.mjs --bundle-only`; override with `CLODE_MAIN_BUNDLE`).
-The resulting `./clode-native` answers `--clode-version`/`--clode-help` and can
-itself run `clode-native build` to fuse a quaude. Every fuse self-verifies
-before reporting success (an offline canned Messages round-trip plus
-`--quaude-attest` manifest verification for quaude; version/help smokes for the
-builder). Fused binaries are derived work: they are fused locally and never
-distributed.
+- `node scripts/build-tjs.mjs` — the pinned, patched txiki.js runtime
+  (`build/tjs/tjs`). Pins in `spike/quickjs/PINS.md`; portability fixups
+  apply themselves with content verification.
+- `clode build --self` — fuse the native builder itself (embeds the
+  esbuilt launcher from `node scripts/build-sea.mjs --bundle-only` and the
+  pristine tjs template, so the result needs nothing on disk).
+- `node scripts/build-sea.mjs` — the transitional single-file
+  [Node SEA](https://nodejs.org/api/single-executable-applications.html)
+  (the `-node`-tagged release assets; Windows's only path today). Run it
+  with an official, non-stripped Node >= 24 — the SEA embeds whichever
+  `node` runs the script, and a stripped or non-system-lib node produces a
+  broken or non-portable binary.
