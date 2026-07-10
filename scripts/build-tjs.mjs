@@ -452,7 +452,10 @@ if (process.platform !== 'darwin') {
   // regardless of flag order). Real fix = patch v2 scoping the decl into the
   // ifdef + upstreaming the pragma cleanup — queued for the Q3 batch;
   // patches/ is frozen this phase.
-  cmakeArgs.push('-DCMAKE_C_FLAGS=-Wno-error=unused-variable -Wno-error=unknown-pragmas');
+  // sign-conversion: lws's dir-notify kqueue code trips it under DragonFly's
+  // older base gcc (dispatch #9) — a warning-behavior delta, not a bug class
+  // we own; demoted like the others (still visible as a warning).
+  cmakeArgs.push('-DCMAKE_C_FLAGS=-Wno-error=unused-variable -Wno-error=unknown-pragmas -Wno-error=sign-conversion');
 }
 run('cmake', ['-S', tjsDir, '-B', path.join(tjsDir, 'build'), ...cmakeArgs]);
 

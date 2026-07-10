@@ -206,9 +206,15 @@ runs:
           # checkout (+ its object files) here spares the vm-to-runner sync —
           # it is reconstructable from pins and never cached.
           rm -rf .matrix/tjs-vendor
+          # Bare-engine spawn probe: separates "tjs spawn is broken on this
+          # OS" from "something about the builder's specific spawn is" (the
+          # openbsd exit-127 hunt, dispatch #9 — template bytes verified
+          # perfect, exec still fails under the builder only).
+          .matrix/tjs-out/tjs eval 'tjs.spawn(["/bin/sh","-c","echo tjs-spawn-probe-ok"]).wait().then(function(r){console.log("tjs-spawn-exit:",JSON.stringify(r))})'
           CLODE_TJS="$PWD/.matrix/tjs-out/tjs" node bin/clode build --self --out "./${{ steps.name.outputs.asset }}"
           ./"${{ steps.name.outputs.asset }}" --clode-version
           if [ "${{ inputs.smoke }}" = full ]; then
+            CLODE_SHIM_TRACE=1 \
             CLODE_CLAUDE_BIN="$PWD/.matrix/provider-claude" \
             CLODE_CACHE="$PWD/.matrix/clode-cache" \
             CLODE_DEPS="$PWD/.matrix/clode-deps" \
