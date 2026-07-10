@@ -466,6 +466,25 @@ function fixupLwsGetifaddrsPtrCast(dir) {
   console.log('fixup lws-getifaddrs-ptr-cast: applied');
 }
 
+function fixupPosixSocketSockRdm(dir) {
+  // txiki's mod_posix-socket.c exposes SOCK_RDM unconditionally; Haiku
+  // does not define it (dry-run #17, 2026-07-10). Guard it like the file
+  // already guards SOL_PACKET/SOL_NETLINK. txiki upstream candidate.
+  const f = path.join(dir, 'src/mod_posix-socket.c');
+  const src = fs.readFileSync(f, 'utf8');
+  const bad = '    JS_PROT_INT_DEF(SOCK_RDM),\n';
+  const good = '#ifdef SOCK_RDM\n    JS_PROT_INT_DEF(SOCK_RDM),\n#endif\n';
+  if (src.includes(good)) {
+    console.log('fixup posix-socket-sock-rdm: already applied');
+    return;
+  }
+  if (!src.includes(bad)) {
+    throw new Error('fixup posix-socket-sock-rdm: anchor not found (mod_posix-socket.c changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(bad, good));
+  console.log('fixup posix-socket-sock-rdm: applied');
+}
+
 let tjsDir;
 if (buildOnly) {
   // The patched tree was constructed by a prior --source-only run (possibly on
@@ -488,6 +507,7 @@ if (buildOnly) {
   fixupLwsHaikuMallocUsableSize(tjsDir);
   fixupLwsHaikuDirent(tjsDir);
   fixupLwsGetifaddrsPtrCast(tjsDir);
+  fixupPosixSocketSockRdm(tjsDir);
 }
 
 // ---- big-endian bundle regen, part 1: esbuild the plain-JS intermediates ----
