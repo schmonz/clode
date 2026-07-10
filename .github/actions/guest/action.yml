@@ -2,10 +2,14 @@ name: guest
 description: >
   The ONE non-native entry point for the release matrix (plan Q2 "The guest
   action"): run a script on a guest platform, same contract for every leg.
-  v1 backends: "native" (host passthrough) and "alpine" (musl chroot on x86_64
-  hosts via jirutka/setup-alpine, incl. foreign arches under qemu-user with
-  fix-binary binfmt; docker container on arm64 hosts — setup-alpine cannot run
-  on aarch64 hosts yet, its apk-tools-url is hardcoded x86_64, PR #22 open).
+  v1 backends: "native" (host passthrough) and "alpine" (musl build
+  environment as a docker container — one mechanism for every host/guest arch
+  pair; foreign arches run under qemu-user via tonistiigi/binfmt fix-binary,
+  which ALSO lets later host steps exec the guest-built static binaries
+  directly). jirutka/setup-alpine was tried first and works, but its post-run
+  chroot teardown (webiny/action-post-run -> sudo /destroy.sh) breaks when
+  invoked from a nested composite action, failing otherwise-green jobs
+  (dispatch 29063991061, leg linux-x64-musl).
   Dispatcher stubs reserve the phase-2/3 backends (cross-platform-actions /
   vmactions / own-qemu recipes) so workflow YAML shape never changes; the
   endgame is own-qemu absorbing platforms one by one.
@@ -16,11 +20,11 @@ inputs:
       freebsd | openbsd | dragonflybsd | solaris | omnios | qemu-*.
     required: true
   arch:
-    description: "Guest architecture (alpine: x86_64 aarch64 s390x x86 armv7 armhf ppc64le riscv64 loongarch64)"
+    description: "Guest architecture (alpine: x86_64 aarch64 s390x x86 armv7 ppc64le riscv64 loongarch64)"
     required: false
     default: x86_64
   version:
-    description: "Guest OS version (alpine: release branch like 3.22)"
+    description: "Guest OS version (alpine: release like 3.22)"
     required: false
     default: "3.22"
   script:
@@ -47,7 +51,20 @@ runs:
       run: |
         set -euo pipefail
         case "${{ inputs.platform }}" in
-          native|alpine) ;;
+          native) ;;
+          alpine)
+            case "${{ inputs.arch }}" in
+              x86_64)      p=linux/amd64 ;;
+              aarch64)     p=linux/arm64 ;;
+              s390x)       p=linux/s390x ;;
+              ppc64le)     p=linux/ppc64le ;;
+              riscv64)     p=linux/riscv64 ;;
+              x86)         p=linux/386 ;;
+              armv7|armhf) p=linux/arm/v7 ;;
+              loongarch64) p=linux/loong64 ;;
+              *) echo "guest: unknown alpine arch '${{ inputs.arch }}'" >&2; exit 64 ;;
+            esac
+            echo "docker-platform=$p" >> "$GITHUB_OUTPUT" ;;
           netbsd|freebsd|openbsd|dragonflybsd|solaris|omnios)
             echo "guest: '${{ inputs.platform }}' is a phase-2 backend stub (cross-platform-actions/vmactions dispatch not implemented yet)" >&2
             exit 64 ;;
@@ -60,43 +77,30 @@ runs:
         esac
         echo "t0=$(date +%s)" >> "$GITHUB_OUTPUT"
 
-    # ---- alpine backend, x86_64 hosts: chroot (native or qemu-user binfmt).
-    # Side effect we rely on downstream: setup-alpine registers qemu-<arch>
-    # binfmt with fix-binary on the HOST, so foreign-arch static binaries the
-    # guest builds are directly executable by later host steps.
-    - name: Alpine chroot (setup-alpine)
-      if: inputs.platform == 'alpine' && runner.arch == 'X64'
-      uses: jirutka/setup-alpine@v1.4.1
-      with:
-        arch: ${{ inputs.arch }}
-        branch: v${{ inputs.version }}
-        packages: ${{ inputs.packages }}
-    - name: Run the guest script (alpine chroot)
-      if: inputs.platform == 'alpine' && runner.arch == 'X64'
-      shell: alpine.sh {0}
-      run: ${{ inputs.script }}
+    # binfmt (fix-binary) for every non-host arch: makes both the container
+    # AND later host steps able to exec foreign-arch binaries. Cheap (~5s),
+    # harmless when the guest arch is native.
+    - name: Register qemu binfmt
+      if: inputs.platform == 'alpine'
+      uses: docker/setup-qemu-action@v4
 
-    # ---- alpine backend, arm64 hosts: docker container (native aarch64 only
-    # in v1 — foreign arches on arm hosts wait for setup-alpine PR #22 or the
-    # phase-3 own-qemu backend).
     - name: Run the guest script (alpine container)
-      if: inputs.platform == 'alpine' && runner.arch == 'ARM64'
+      if: inputs.platform == 'alpine'
       shell: bash
       env:
         CLODE_GUEST_SCRIPT: ${{ inputs.script }}
+        CLODE_GUEST_PACKAGES: ${{ inputs.packages }}
       run: |
         set -euo pipefail
-        if [ "${{ inputs.arch }}" != "aarch64" ]; then
-          echo "guest: alpine on ARM64 hosts supports arch aarch64 only in v1 (got '${{ inputs.arch }}')" >&2
-          exit 64
-        fi
         printf '%s\n' "$CLODE_GUEST_SCRIPT" > "$RUNNER_TEMP/guest-script.sh"
         docker run --rm \
+          --platform "${{ steps.dispatch.outputs.docker-platform }}" \
           -v /home/runner/work:/home/runner/work \
           -w "$GITHUB_WORKSPACE" \
           -e RUNNER_TEMP -e GITHUB_WORKSPACE \
+          -e CLODE_GUEST_PACKAGES \
           "alpine:${{ inputs.version }}" \
-          sh -e -c "apk add -q ${{ inputs.packages }} && sh -e '$RUNNER_TEMP/guest-script.sh'"
+          sh -e -c '[ -z "$CLODE_GUEST_PACKAGES" ] || apk add -q $CLODE_GUEST_PACKAGES; sh -e "$RUNNER_TEMP/guest-script.sh"'
 
     # ---- native backend: host passthrough (exists so every leg can share one
     # YAML shape; native legs may also just run steps directly).

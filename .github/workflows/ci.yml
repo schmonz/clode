@@ -7,6 +7,36 @@ on:
 permissions:
   contents: read
 jobs:
+  # T1 native tjs legs, CI-smoke tier (release-matrix Decision 3): the same
+  # ./.github/actions/build-leg recipe the release matrix runs, minus attest.
+  # glibc Linux artifacts are smoke-only forever (published Linux = musl-static
+  # via the matrix); darwin here is the cheap early-warning twin of the
+  # published matrix leg. The tjs build restores from the shared cache, so a
+  # typical push pays only bundle+fuse+smoke.
+  tjs:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: darwin-arm64-tjs
+            os: macos-14
+          - leg: linux-x64-glibc
+            os: ubuntu-latest
+          - leg: linux-arm64-glibc
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .tool-versions
+      - uses: ./.github/actions/build-leg
+        with:
+          leg: ${{ matrix.leg }}
   sea:
     strategy:
       fail-fast: false
