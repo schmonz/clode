@@ -12,6 +12,7 @@
 //   4. --clode-help            -> print clodeHelp(), exit 0
 //   5. update [channel]        -> clodeUpdate, exit status
 //   6. --clode-internal-update -> clodeUpdate, exit status
+//   6b. build [--out PATH]     -> clodeBuild (fuse a quaude), exit status
 //   7. --clode-watch           -> clodeWatch(manual), exit 0
 //   8. default launch          -> require_node, resolve/extract/deps, watcher, run
 //
@@ -39,6 +40,9 @@ function clodeHelp(version) {
 Usage:
   clode [clode-options] [claude args...]   launch Claude Code (args pass through)
   clode update [channel|version]           fetch a fresh upstream provider, then exit
+  clode build [--out PATH]                 fuse a standalone quaude binary (the pinned
+                                           tjs runtime + the compiled Claude Code
+                                           bundle) on this machine; default ./quaude
 
 clode-specific options (consumed by clode; everything else goes to Claude Code):
   --clode-help        show this help and exit
@@ -54,6 +58,7 @@ Key environment overrides:
   CLODE_CLAUDE_BIN    upstream claude binary to extract from
   CLODE_NODE          host node
   CLODE_CACHE         extracted-bundle cache dir
+  CLODE_TJS           tjs template binary for 'clode build' (default build/tjs/tjs)
   CLODE_CHANGELOG_URL release-notes source for the post-update signals digest
 
 Run 'clode --help' for Claude Code's own help.
@@ -171,6 +176,14 @@ async function main(argv, opts = {}) {
   //    in-TUI autoupdater spawns (via CLODE_SELF); same fetch as `update`, then exit.
   if (first === '--clode-internal-update') {
     const status = await update.clodeUpdate(args[1], { env, libexec: LIBEXEC, here: HERE, node });
+    return process.exit(status);
+  }
+
+  // 6b. `clode build [--out PATH]`: fuse a standalone quaude binary on this
+  //     machine (builder namespace, not passthrough — Claude Code never sees it).
+  if (first === 'build') {
+    const fuse = require('./clode-fuse.cjs');
+    const status = await fuse.clodeBuild(args.slice(1), { env, libexec: LIBEXEC, here: HERE, version });
     return process.exit(status);
   }
 
