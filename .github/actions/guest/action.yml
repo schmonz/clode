@@ -78,8 +78,8 @@ runs:
               *) echo "guest: unknown alpine arch '${{ inputs.arch }}'" >&2; exit 64 ;;
             esac
             echo "docker-platform=$p" >> "$GITHUB_OUTPUT" ;;
-          netbsd|freebsd|openbsd|dragonflybsd|omnios) ;;   # cross-platform-actions
-          solaris) ;;                                      # vmactions
+          netbsd|freebsd|openbsd|dragonflybsd|omnios|midnightbsd|haiku) ;;  # cross-platform-actions
+          solaris|openindiana) ;;                                           # vmactions
           qemu-*)
             echo "guest: '${{ inputs.platform }}' is a phase-3 backend stub (own-qemu guest-recipe subsystem not implemented yet)" >&2
             exit 64 ;;
@@ -138,7 +138,7 @@ runs:
     # x64 Linux runners) and installs cpa.sh on the runner's PATH; the next
     # step executes inside the VM with the workspace rsynced both ways.
     - name: Start the guest VM (cross-platform-actions)
-      if: contains('netbsd freebsd openbsd dragonflybsd omnios', inputs.platform)
+      if: contains('netbsd freebsd openbsd dragonflybsd omnios midnightbsd haiku', inputs.platform)
       uses: cross-platform-actions/action@v1.3.0
       with:
         operating_system: ${{ inputs.platform }}
@@ -147,7 +147,7 @@ runs:
         cpu_count: 4
 
     - name: Run the guest script (in the VM via cpa.sh)
-      if: contains('netbsd freebsd openbsd dragonflybsd omnios', inputs.platform)
+      if: contains('netbsd freebsd openbsd dragonflybsd omnios midnightbsd haiku', inputs.platform)
       shell: cpa.sh {0}
       run: |
         set -e
@@ -159,6 +159,11 @@ runs:
             [ -z "$PKGS" ] || sudo env ASSUME_ALWAYS_YES=YES pkg install -y $PKGS ;;
           openbsd)
             [ -z "$PKGS" ] || sudo pkg_add $PKGS ;;
+          midnightbsd)
+            [ -z "$PKGS" ] || sudo mport install $PKGS ;;
+          haiku)
+            # Single-user system: the runner IS the (only) user; no sudo.
+            [ -z "$PKGS" ] || pkgman install -y $PKGS ;;
           omnios)
             # IPS: per-package so one run reports EVERY missing name (exit 4 =
             # already installed / nothing to do — fine). The script then fails
@@ -171,9 +176,10 @@ runs:
         esac
         ${{ inputs.script }}
 
-    # ---- vmactions backend: Solaris is the one v1 platform above's action
-    # lacks. Boots, rsyncs the workspace in, runs prepare + run as root in the
-    # VM, rsyncs back (copyback defaults true). Env vars are copied into the VM.
+    # ---- vmactions backend: the platforms cross-platform-actions lacks
+    # (Solaris; OpenIndiana). Boots, rsyncs the workspace in, runs prepare +
+    # run as root in the VM, rsyncs back (copyback defaults true). Env vars
+    # are copied into the VM. One step per OS — `uses:` cannot be dynamic.
     - name: Run the guest script (vmactions solaris VM)
       if: inputs.platform == 'solaris'
       uses: vmactions/solaris-vm@v1
@@ -183,6 +189,20 @@ runs:
         prepare: |
           for p in ${{ inputs.packages }}; do
             pkg install -q "$p" || [ $? -eq 4 ] || echo "guest: SOLARIS-PKG-MISS: $p" >&2
+          done
+        run: |
+          set -e
+          ${{ inputs.script }}
+
+    - name: Run the guest script (vmactions openindiana VM)
+      if: inputs.platform == 'openindiana'
+      uses: vmactions/openindiana-vm@v1
+      with:
+        release: ${{ inputs.version }}
+        usesh: true
+        prepare: |
+          for p in ${{ inputs.packages }}; do
+            pkg install -q "$p" || [ $? -eq 4 ] || echo "guest: OI-PKG-MISS: $p" >&2
           done
         run: |
           set -e

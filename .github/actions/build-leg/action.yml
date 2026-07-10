@@ -79,7 +79,7 @@ runs:
       run: |
         set -euo pipefail
         case "${{ inputs.guest-platform }}" in
-          netbsd|freebsd|openbsd|dragonflybsd|omnios|solaris) exec=guest ;;
+          netbsd|freebsd|openbsd|dragonflybsd|omnios|solaris|midnightbsd|haiku|openindiana) exec=guest ;;
           *) exec=host ;;
         esac
         echo "exec=$exec" >> "$GITHUB_OUTPUT"

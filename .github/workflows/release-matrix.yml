@@ -189,6 +189,79 @@ jobs:
             ffi: off
             publish: true
             timeout: 120                 # vmactions boot is slower than cpa
+          # ---- Sweep 2 (2026-07-10): the remaining easy adds on proven
+          # machinery. BSD arm64 = cpa's other architecture (TCG on GitHub
+          # runners — no /dev/kvm — hence the long timeouts); MidnightBSD +
+          # Haiku = cpa's remaining x86-64 catalog; OpenIndiana = the third
+          # illumos flavor via vmactions (the __sun fixups transfer). All
+          # soft-fail until they earn hard status.
+          - leg: netbsd-arm64            # PUBLISHED; cpa, TCG
+            os: ubuntu-latest
+            guest-platform: netbsd
+            guest-arch: arm64
+            guest-version: "10.1"
+            guest-packages: cmake gmake nodejs git-base bash
+            wasm: off
+            mimalloc: off
+            ffi: off
+            publish: true
+            timeout: 300
+            soft-fail: true
+          - leg: freebsd-arm64           # PUBLISHED; cpa, TCG
+            os: ubuntu-latest
+            guest-platform: freebsd
+            guest-arch: arm64
+            guest-version: "14.4"
+            guest-packages: cmake gmake node git bash
+            wasm: off
+            mimalloc: off
+            ffi: off
+            publish: true
+            timeout: 300
+            soft-fail: true
+          - leg: openbsd-arm64           # PUBLISHED; cpa, TCG
+            os: ubuntu-latest
+            guest-platform: openbsd
+            guest-arch: arm64
+            guest-version: "7.9"
+            guest-packages: cmake gmake node git bash
+            wasm: off
+            mimalloc: off
+            ffi: off
+            publish: true
+            timeout: 300
+            soft-fail: true
+          - leg: midnightbsd-amd64       # PUBLISHED; cpa, KVM (mport packages)
+            os: ubuntu-latest
+            guest-platform: midnightbsd
+            guest-version: "4.0.4"
+            guest-packages: cmake gmake node git bash
+            wasm: off
+            mimalloc: off
+            ffi: off
+            publish: true
+            soft-fail: true
+          - leg: haiku-x64               # PUBLISHED; cpa, KVM (a genuinely new OS rung)
+            os: ubuntu-latest
+            guest-platform: haiku
+            guest-version: r1beta5
+            guest-packages: cmake gcc nodejs git
+            wasm: off
+            mimalloc: off
+            ffi: off
+            publish: true
+            soft-fail: true
+          - leg: openindiana-amd64       # PUBLISHED; vmactions (3rd illumos flavor)
+            os: ubuntu-latest
+            guest-platform: openindiana
+            guest-version: 202604-build  # build-essential image
+            guest-packages: developer/build/cmake developer/build/gnu-make developer/versioning/git shell/bash runtime/nodejs
+            wasm: off
+            mimalloc: off
+            ffi: off
+            publish: true
+            timeout: 120
+            soft-fail: true
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout || 90 }}
     continue-on-error: ${{ matrix.soft-fail || false }}
