@@ -12,12 +12,15 @@
 //   [this bootstrap, as serialized quickjs bytecode]
 //   [tx1k1.js trailer, 12B: "tx1k1.js" + u32LE offset-of-bootstrap-bytecode]
 //
-// Responsibilities: locate + parse the archive; carve --quaude-* out of argv
-// BEFORE any bundle-visible code runs (the reserved namespace — everything else
-// belongs to Claude Code); boot-verify the manifest + loader members (cheap;
-// FULL verification of every member is --quaude-attest's job — policy per the
-// Q1a design memo §5); mount globalThis.__quaudeVFS; evaluate the archived
-// node-shim loader, which boots cli.qbc.
+// Responsibilities: locate + parse the archive; boot-verify the manifest +
+// loader members (cheap; FULL verification of every member is
+// --quaude-attest's job — policy per the Q1a design memo §5); for the quaude
+// role, carve --quaude-* out of argv BEFORE any bundle-visible code runs (the
+// reserved namespace — everything else belongs to Claude Code), while the
+// BUILDER role (a fused native clode) owns its whole argv and gets no carve;
+// mount globalThis.__quaudeVFS; evaluate the archived node-shim loader, which
+// boots the manifest's entry member (cli.qbc for quaude, the esbuilt
+// clode-main bundle for the builder).
 
 // The reserved argv namespace. quaude owns every `--quaude-*` flag; an unknown
 // one is an ERROR here (it must never reach the bundle). Pure + exported so the
@@ -73,37 +76,48 @@ async function main() {
   }
   await exef.close();
 
-  // 5) argv carve-out: strip --quaude-* BEFORE any bundle code can observe argv.
-  const { quaude, rest, unknown } = carveQuaudeArgs(tjs.args.slice(1));
-  if (unknown.length) {
-    die(`unknown option '${unknown[0]}' (the --quaude-* namespace is reserved; known: ${QUAUDE_FLAGS.join(', ')})`, 64);
-  }
-
-  // 6) boot-verify (fast integrity gate): the manifest and the loader we are
-  // about to evaluate must hash to what the index promises. Full per-member
-  // verification runs on --quaude-attest only (design memo §5 policy).
+  // 5) boot-verify (fast integrity gate): the manifest we are about to trust
+  // and the loader we are about to evaluate must hash to what the index
+  // promises. Full per-member verification runs on --quaude-attest only
+  // (design memo §5 policy).
   for (const name of ['manifest.json', 'node-shim/loader.cjs']) {
     const m = index.members.find((x) => x.name === name);
     if (!m || !files.get(name)) die(`archive is missing ${name}`, 70);
     if ((await sha256hex(files.get(name))) !== m.sha256) die(`${name} failed integrity check (corrupt fuse?)`, 70);
   }
 
-  // 7) --quaude-attest: manifest verbatim, then recompute EVERY member hash
-  // from the trailer being executed and compare against the index.
-  if (quaude.includes('--quaude-attest')) {
-    console.log(dec.decode(files.get('manifest.json')).replace(/\n$/, ''));
-    let ok = true;
-    for (const m of index.members) {
-      const got = await sha256hex(files.get(m.name));
-      if (got !== m.sha256) ok = false;
-      console.log(`${got === m.sha256 ? 'ok  ' : 'FAIL'} ${m.name} (${m.len} bytes)`);
+  // 6) role (manifest, just verified): quaude reserves the --quaude-* argv
+  // namespace; the BUILDER role (a fused native clode, Q1c) owns its whole
+  // argv — clode's own flags are all --clode-*/subcommands, so nothing is
+  // carved and there is no --quaude-attest short-circuit for it.
+  const manifest = JSON.parse(dec.decode(files.get('manifest.json')));
+  let rest = tjs.args.slice(1);
+  if ((manifest.role ?? 'quaude') !== 'builder') {
+    // argv carve-out: strip --quaude-* BEFORE any bundle code can observe argv.
+    const { quaude, rest: carved, unknown } = carveQuaudeArgs(rest);
+    if (unknown.length) {
+      die(`unknown option '${unknown[0]}' (the --quaude-* namespace is reserved; known: ${QUAUDE_FLAGS.join(', ')})`, 64);
     }
-    console.log(ok ? 'quaude-attest: all members verified' : 'quaude-attest: VERIFICATION FAILED');
-    tjs.exit(ok ? 0 : 1);
+    rest = carved;
+
+    // 7) --quaude-attest: manifest verbatim, then recompute EVERY member hash
+    // from the trailer being executed and compare against the index.
+    if (quaude.includes('--quaude-attest')) {
+      console.log(dec.decode(files.get('manifest.json')).replace(/\n$/, ''));
+      let ok = true;
+      for (const m of index.members) {
+        const got = await sha256hex(files.get(m.name));
+        if (got !== m.sha256) ok = false;
+        console.log(`${got === m.sha256 ? 'ok  ' : 'FAIL'} ${m.name} (${m.len} bytes)`);
+      }
+      console.log(ok ? 'quaude-attest: all members verified' : 'quaude-attest: VERIFICATION FAILED');
+      tjs.exit(ok ? 0 : 1);
+    }
   }
 
-  // 8) mount + boot: the archived loader resolves everything under /quaude/.
-  globalThis.__quaudeVFS = { files, index };
+  // 8) mount + boot: the archived loader resolves everything under /quaude/;
+  // the manifest rides along so the loader picks the role's entry member.
+  globalThis.__quaudeVFS = { files, index, manifest };
   globalThis.__quaudeArgs = rest;
   (0, new Function(dec.decode(files.get('node-shim/loader.cjs'))))();
 }

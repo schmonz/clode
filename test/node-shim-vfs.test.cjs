@@ -50,6 +50,22 @@ test('VFS mount: empty entry args yield argv [entry] alone', (t) => {
   assert.deepStrictEqual(out.argv, ['/quaude/cli.cjs']);
 });
 
+test('VFS mount: manifest.entry selects a SOURCE entry member (builder role, Q1c)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const r = spawnSync(tjsPath(), ['run', HARNESS, LOADER, SHIM_ROOT, 'build', '--out', 'x'], {
+    encoding: 'utf8', timeout: 30000,
+    env: { ...process.env, VFS_HARNESS_SOURCE_ENTRY: '1' },
+  });
+  assert.strictEqual(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout.trim());
+  assert.strictEqual(out.argv[0], '/quaude/main.cjs');      // manifest.entry, not cli.qbc
+  assert.deepStrictEqual(out.argv.slice(1), ['build', '--out', 'x']); // argv verbatim (no carve)
+  assert.strictEqual(out.filename, '/quaude/main.cjs');
+  assert.strictEqual(out.dirname, '/quaude');
+  assert.strictEqual(out.lib, 'vfs-lib-ok');                // relative require from the archive
+  assert.strictEqual(out.isMain, true);
+});
+
 test('.qbc entry from disk (no VFS): bytecode evaluates with the .cjs module identity', (t) => {
   if (skipUnlessTjs(t)) return;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-qbc-'));

@@ -62,7 +62,26 @@ console.log(JSON.stringify({
 const wrapped = 'globalThis.__quaude_entry = function (exports, require, module, __filename, __dirname) {\n' + miniCli + '\n};\n';
 files.set('cli.qbc', tjs.engine.serialize(tjs.engine.compile(enc.encode(wrapped), '/quaude/cli.cjs')));
 
-globalThis.__quaudeVFS = { files, index: { version: 0, members: [] } };
+// Builder-role variant (Q1c): with VFS_HARNESS_SOURCE_ENTRY set, mount a
+// manifest whose `entry` names a SOURCE member (the native clode builder ships
+// its esbuilt clode-main bundle as source, not bytecode) — the loader must boot
+// that member instead of the default cli.qbc.
+let manifest;
+if (tjs.env.VFS_HARNESS_SOURCE_ENTRY) {
+  files.set('main.cjs', enc.encode(`
+const lib = require('./lib.cjs');
+console.log(JSON.stringify({
+  argv: process.argv.slice(1),
+  filename: __filename,
+  dirname: __dirname,
+  lib: lib.value,
+  isMain: require.main === module,
+}));
+`));
+  manifest = { quaude: '1', role: 'builder', entry: 'main.cjs' };
+}
+
+globalThis.__quaudeVFS = { files, index: { version: 0, members: [] }, manifest };
 globalThis.__quaudeArgs = entryArgs;
 
 const loaderSrc = new TextDecoder().decode(files.get('node-shim/loader.cjs'));

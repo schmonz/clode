@@ -13,8 +13,9 @@
 //     validation, so signing must happen while the copy is still a plain
 //     binary; the kernel only validates mapped code pages, so the fused
 //     result executes fine — memo §6.1).
-//   stage-dir:   the extracted+hooked cache entry (cli.cjs + bun-shim.cjs).
-//   extras.json: node-side manifest fields (bundleVersion, clodeVersion,
+//   stage-dir:   quaude role — the extracted+hooked cache entry (cli.cjs +
+//     bun-shim.cjs); builder role — a staging dir with clode-main.bundle.cjs.
+//   extras.json: node-side manifest fields (role, bundleVersion, clodeVersion,
 //     hooks, template sha, quaude schema).
 //
 // Output layout (memo §2):
@@ -72,14 +73,33 @@ function deriveIdnaLevel() {
 }
 
 // ---- 1) members ------------------------------------------------------------
+// The extras file (written by clode-fuse.cjs) names the payload ROLE:
+//   quaude (default): the product — compiled Claude Code bundle + its runtime.
+//   builder: a native clode — the esbuilt clode-main bundle as a SOURCE entry
+//     (measured: 65KB, 0.24s boot under tjs — bytecode would force strict mode
+//     on the whole esbuild output for no meaningful parse win), plus the
+//     libexec support files `clode build` must materialize at fuse time
+//     (extractor, bun-shim, this worker, the bootstrap).
+// Both roles ship the node-shim tree and the ext-dep closure: the builder needs
+// the deps NOT for itself (clode-main imports node builtins only) but as the
+// member INPUTS for the quaude it fuses.
+const extras = JSON.parse(dec.decode(await mustRead(extrasPath, 'manifest extras')));
+const role = extras.role ?? 'quaude';
+const entryName = role === 'builder' ? 'clode-main.bundle.cjs' : 'cli.qbc';
 const members = [];
 
-// cli.cjs -> cli.qbc: replicate the loader's ENTRY transforms (shebang strip +
-// dynamic-import rewrite; fixVFlagPropertyEscapes self-gates off for >1MB
-// entries), wrap in the CJS wrapper as a module (=> strict), compile+serialize
-// under this very runtime. Keep the transform set in lockstep with
-// libexec/node-shim/loader.cjs — the transforms are frozen into the bytecode.
-{
+if (role === 'builder') {
+  members.push({ name: entryName, data: await mustRead(path.join(stageDir, 'clode-main.bundle.cjs'), 'esbuilt clode-main bundle') });
+  const libexecDir = path.dirname(shimDir);
+  for (const f of ['bun-shim.cjs', 'extract-claude-js.cjs', 'quaude-fuse.js', 'quaude-bootstrap.mjs']) {
+    members.push({ name: `libexec/${f}`, data: await mustRead(path.join(libexecDir, f), `libexec member ${f}`) });
+  }
+} else {
+  // cli.cjs -> cli.qbc: replicate the loader's ENTRY transforms (shebang strip +
+  // dynamic-import rewrite; fixVFlagPropertyEscapes self-gates off for >1MB
+  // entries), wrap in the CJS wrapper as a module (=> strict), compile+serialize
+  // under this very runtime. Keep the transform set in lockstep with
+  // libexec/node-shim/loader.cjs — the transforms are frozen into the bytecode.
   let src = dec.decode(await mustRead(path.join(stageDir, 'cli.cjs'), 'staged bundle'));
   if (src.startsWith('#!')) src = src.slice(src.indexOf('\n') + 1);
   src = src.replace(/(^|[^\w$.])import(\s*\()/g, '$1__tjsDynImport$2');
@@ -88,10 +108,10 @@ const members = [];
   const bc = tjs.engine.serialize(tjs.engine.compile(enc.encode(wrapped), '/quaude/cli.cjs'));
   console.log(`quaude-fuse: compiled cli.cjs -> cli.qbc (${bc.length} bytes, ${(performance.now() - t0).toFixed(0)}ms)`);
   members.push({ name: 'cli.qbc', data: bc });
-}
 
-// bun-shim from the extracted stage (version-locked to the bundle by the cache).
-members.push({ name: 'bun-shim.cjs', data: await mustRead(path.join(stageDir, 'bun-shim.cjs'), 'staged bun-shim') });
+  // bun-shim from the extracted stage (version-locked to the bundle by the cache).
+  members.push({ name: 'bun-shim.cjs', data: await mustRead(path.join(stageDir, 'bun-shim.cjs'), 'staged bun-shim') });
+}
 
 // node-shim tree: THE committed loader + modules + internal (the loader's VFS
 // seam activates when the bootstrap mounts the archive).
@@ -113,7 +133,6 @@ for (const dep of DEPS) {
 // ---- 2) manifest (single hashing pass: these shas feed BOTH the manifest and
 // the index; the index stays authoritative for offsets, the manifest is the
 // attestation identity) --------------------------------------------------------
-const extras = JSON.parse(dec.decode(await mustRead(extrasPath, 'manifest extras')));
 const memberShas = {};
 for (const m of members) {
   m.sha256 = await sha256hex(m.data);
@@ -121,6 +140,8 @@ for (const m of members) {
 }
 const manifest = {
   quaude: extras.quaude,
+  role,
+  entry: entryName,
   bundleVersion: extras.bundleVersion,
   clodeVersion: extras.clodeVersion,
   engine: { ...tjs.engine.versions },

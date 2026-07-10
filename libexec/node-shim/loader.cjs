@@ -565,10 +565,15 @@ globalThis.addEventListener?.('unhandledrejection', (ev) => {
 
 let entryAbs, extraArgv;
 if (__QVFS) {
-  // Fused quaude: tjs.args = [exePath, ...userArgs] (no 'run', no script path —
-  // the stock tx1k1.js standalone boot leaves argv untouched). --quaude-* flags
-  // were already carved out by the bootstrap into globalThis.__quaudeArgs.
-  entryAbs = '/quaude/cli.qbc';
+  // Fused binary: tjs.args = [exePath, ...userArgs] (no 'run', no script path —
+  // the stock tx1k1.js standalone boot leaves argv untouched). For quaude,
+  // --quaude-* flags were already carved out by the bootstrap into
+  // globalThis.__quaudeArgs; for the builder role, argv passes through whole.
+  // The manifest names the entry member (Q1c: the native clode builder ships
+  // its esbuilt clode-main bundle as a SOURCE member — measured 65KB / 0.24s
+  // boot, so bytecode buys nothing and would force strict mode on the whole
+  // esbuild output); absent manifest/entry keeps the quaude default, cli.qbc.
+  entryAbs = '/quaude/' + ((__QVFS.manifest && __QVFS.manifest.entry) || 'cli.qbc');
   extraArgv = globalThis.__quaudeArgs ?? tjs.args.slice(1);
 } else {
   const entry = tjs.args[3];

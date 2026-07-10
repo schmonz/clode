@@ -93,10 +93,12 @@ test('attest golden: stable manifest fields + full member verification', async (
 
   // GOLDEN (stable fields only — fusedAt deliberately unchecked beyond shape):
   assert.deepStrictEqual(Object.keys(manifest).sort(), [
-    'bundleVersion', 'clodeVersion', 'engine', 'fusedAt', 'hooks', 'idna',
-    'members', 'quaude', 'template',
+    'bundleVersion', 'clodeVersion', 'engine', 'entry', 'fusedAt', 'hooks',
+    'idna', 'members', 'quaude', 'role', 'template',
   ]);
   assert.strictEqual(manifest.quaude, '1');
+  assert.strictEqual(manifest.role, 'quaude');
+  assert.strictEqual(manifest.entry, 'cli.qbc');
   assert.strictEqual(manifest.bundleVersion, cacheKey(providerBin()));
   assert.strictEqual(manifest.clodeVersion, VERSION);
   assert.ok(manifest.engine.quickjs && manifest.engine.tjs, 'engine pins missing');
