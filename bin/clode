@@ -3,9 +3,15 @@
 // ES5-SAFE PROLOGUE: runs on ANY node so an old node still prints the friendly
 // floor error instead of a syntax crash. No const/arrow/require of modern code here.
 var MIN_NODE_MAJOR = 24;
+// `clode build` never runs the extracted bundle under node — the fuse worker
+// and the fused artifacts exec under tjs; node only orchestrates file work,
+// so its floor is what the orchestration code itself needs. v22 is the
+// living-proof floor: OpenBSD 7.9's newest packaged node (the matrix's
+// openbsd leg fuses there).
+var floor = process.argv[2] === 'build' ? 22 : MIN_NODE_MAJOR;
 var major = parseInt(String(process.versions.node).split('.')[0], 10);
-if (!(major >= MIN_NODE_MAJOR)) {
-  process.stderr.write('clode: node v' + process.versions.node + ' is too old; need >= v' + MIN_NODE_MAJOR + '\n');
+if (!(major >= floor)) {
+  process.stderr.write('clode: node v' + process.versions.node + ' is too old; need >= v' + floor + '\n');
   process.stderr.write("clode: (the extracted bundle uses newer JS, e.g. 'using' declarations)\n");
   process.exit(1);
 }

@@ -169,31 +169,89 @@ function fixupLwsDragonflySoPriority(dir) {
   // build dies on the undeclared constant (matrix dispatch #5, 2026-07-10;
   // lws upstream candidate — their own comment says "the BSDs don't have
   // SO_PRIORITY").
-  // TWO guard blocks share the shape (TCP_NODELAY's SOL_TCP branch and the
-  // SO_PRIORITY block) — fix EVERY __NetBSD__ exclusion line that lacks a
-  // DragonFly sibling, not just the first (the first-occurrence version of
-  // this fixup patched TCP_NODELAY and left SO_PRIORITY broken).
+  // lws treats "the BSDs" specially in FOUR compiled guard sites but its
+  // lists miss __DragonFly__ everywhere: unix-sockets.c has two NEGATIVE
+  // exclusion lists (SOL_TCP NODELAY branch + the SO_PRIORITY block), two
+  // POSITIVE lists (the tcp_proto declaration + the keepalive skip-tuning
+  // block), and dir-notify.c gates its kqueue backend on a positive
+  // single-line #elif. Fix EVERY __NetBSD__ guard line lacking a DragonFly
+  // sibling — the first-occurrence version of this fixup patched one block
+  // and left the rest broken (dispatch #6 lesson).
   const f = path.join(dir, 'deps/libwebsockets/lib/plat/unix/unix-sockets.c');
   const lines = fs.readFileSync(f, 'utf8').split('\n');
-  const isNetbsdGuard = (l) => /^\s*!defined\(__NetBSD__\) && \\$/.test(l);
-  if (!lines.some(isNetbsdGuard)) {
-    throw new Error('fixup lws-dragonfly-so-priority: anchor not found (lws changed under the pin — re-derive the fixup)');
+  const isGuard = (l) => /^\s*!?defined\(__NetBSD__\) (&&|\|\|) \\$/.test(l);
+  if (!lines.some(isGuard)) {
+    throw new Error('fixup lws-dragonfly-guards: anchor not found (lws changed under the pin — re-derive the fixup)');
   }
   let applied = 0;
   const out = [];
   for (const l of lines) {
-    if (isNetbsdGuard(l) && !(out.length && out[out.length - 1].includes('__DragonFly__'))) {
+    if (isGuard(l) && !(out.length && out[out.length - 1].includes('__DragonFly__'))) {
       out.push(l.replace('__NetBSD__', '__DragonFly__'));
       applied++;
     }
     out.push(l);
   }
-  if (applied) {
-    fs.writeFileSync(f, out.join('\n'));
-    console.log(`fixup lws-dragonfly-so-priority: applied (${applied} guard block(s))`);
-  } else {
-    console.log('fixup lws-dragonfly-so-priority: already applied');
+  if (applied) fs.writeFileSync(f, out.join('\n'));
+
+  // dir-notify.c: kqueue #elif (DragonFly has kqueue like its siblings).
+  const f2 = path.join(dir, 'deps/libwebsockets/lib/misc/dir-notify/dir-notify.c');
+  const src2 = fs.readFileSync(f2, 'utf8');
+  const kq = '#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)';
+  if (src2.includes(kq)) {
+    fs.writeFileSync(f2, src2.replace(kq, kq.replace('defined(__NetBSD__)', 'defined(__NetBSD__) || defined(__DragonFly__)')));
+    applied++;
+  } else if (!src2.includes('__DragonFly__')) {
+    throw new Error('fixup lws-dragonfly-guards: dir-notify anchor not found (lws changed under the pin — re-derive the fixup)');
   }
+
+  if (applied) {
+    console.log(`fixup lws-dragonfly-guards: applied (${applied} site(s))`);
+  } else {
+    console.log('fixup lws-dragonfly-guards: already applied');
+  }
+}
+
+function fixupLwsIpv6PrefGuard(dir) {
+  // lws's IPV6_PREFER_PUBLIC_ADDR block tests defined(IPV6_PREFER_SRC_PUBLIC)
+  // but then CALLS setsockopt with IPV6_ADDR_PREFERENCES — illumos defines
+  // the former and not the latter (it has IPV6_SRC_PREFERENCES instead), so
+  // OmniOS dies on the mismatch (dispatch #6, 2026-07-10). Make the guard
+  // test what the code uses; platform-neutral (a no-op wherever both macros
+  // exist). lws upstream candidate.
+  const f = path.join(dir, 'deps/libwebsockets/lib/plat/unix/unix-sockets.c');
+  const src = fs.readFileSync(f, 'utf8');
+  const bad = '#if defined(LWS_WITH_IPV6) && defined(IPV6_PREFER_SRC_PUBLIC)';
+  const good = '#if defined(LWS_WITH_IPV6) && defined(IPV6_PREFER_SRC_PUBLIC) && defined(IPV6_ADDR_PREFERENCES)';
+  if (src.includes(good)) {
+    console.log('fixup lws-ipv6-pref-guard: already applied');
+    return;
+  }
+  if (!src.includes(bad)) {
+    throw new Error('fixup lws-ipv6-pref-guard: anchor not found (lws changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(bad, good));
+  console.log('fixup lws-ipv6-pref-guard: applied');
+}
+
+function fixupQjsSunosB64(dir) {
+  // Solaris system headers declare b64_encode/b64_decode with different
+  // signatures; quickjs.c's file-local (static) codec of the same name is a
+  // conflicting-types compile error there (dispatch #6, 2026-07-10). Rename
+  // ours via macro under __sun — quickjs-ng upstream candidate.
+  const f = path.join(dir, 'deps/quickjs/quickjs.c');
+  const src = fs.readFileSync(f, 'utf8');
+  if (src.includes('qjs__b64_encode')) {
+    console.log('fixup qjs-sunos-b64: already applied');
+    return;
+  }
+  const anchor = '#include "cutils.h"\n';
+  if (!src.includes(anchor)) {
+    throw new Error('fixup qjs-sunos-b64: anchor not found (quickjs changed under the pin — re-derive the fixup)');
+  }
+  const guard = '#if defined(__sun)\n/* Solaris headers declare b64_encode/b64_decode (other signatures);\n   rename quickjs\'s file-local codec to dodge the clash. */\n#define b64_encode qjs__b64_encode\n#define b64_decode qjs__b64_decode\n#endif\n';
+  fs.writeFileSync(f, src.replace(anchor, guard + anchor));
+  console.log('fixup qjs-sunos-b64: applied');
 }
 
 function fixupMemMallocHOpenbsd(dir) {
@@ -251,8 +309,10 @@ if (buildOnly) {
   tjsDir = ensureCheckout('txiki.js', 'https://github.com/saghul/txiki.js.git');
   applyPatches(tjsDir, 'txiki-');
   fixupLwsDragonflySoPriority(tjsDir);
+  fixupLwsIpv6PrefGuard(tjsDir);
   fixupMemMallocHOpenbsd(tjsDir);
   fixupLibuvSunosDefpath(tjsDir);
+  fixupQjsSunosB64(tjsDir);
 }
 
 // ---- big-endian bundle regen, part 1: esbuild the plain-JS intermediates ----

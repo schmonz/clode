@@ -79,6 +79,42 @@ test('the ES5 prologue prints the exact floor message + exits 1 on an old node',
   assert.strictEqual(r.stdout, '');
 });
 
+test('the prologue floor relaxes to v22 for `clode build` (fuse runs under tjs, not node)', () => {
+  // `clode build` never runs the extracted bundle under node — the fuse
+  // worker and the fused artifacts exec under tjs; node only orchestrates
+  // file work. OpenBSD 7.9's newest packaged node is 22 (matrix openbsd leg,
+  // dispatch #6 2026-07-10) — the build path must clear the prologue there.
+  // CLODE_TJS points at a nonexistent template so the run fails FAST and
+  // CONTROLLED after the gate (proof it got past the floor check).
+  const harness =
+    "Object.defineProperty(process.versions,'node',{value:'22.0.0',configurable:true});" +
+    "process.argv=[process.argv[0],'clode','build'];" +
+    `require(${JSON.stringify(ENTRY)});`;
+  const r = spawnSync(NODE, ['-e', harness], {
+    encoding: 'utf8',
+    env: Object.assign({}, process.env, {
+      DYLD_INSERT_LIBRARIES: '',
+      CLODE_TJS: '/nonexistent/clode-test-tjs-template',
+    }),
+  });
+  assert.strictEqual(r.status, 1);
+  assert.doesNotMatch(r.stderr || '', /too old/);
+  assert.match(r.stderr || '', /no tjs template at/);
+});
+
+test('the prologue keeps a floor for `clode build` too — v20 is refused', () => {
+  const harness =
+    "Object.defineProperty(process.versions,'node',{value:'20.0.0',configurable:true});" +
+    "process.argv=[process.argv[0],'clode','build'];" +
+    `require(${JSON.stringify(ENTRY)});`;
+  const r = spawnSync(NODE, ['-e', harness], {
+    encoding: 'utf8',
+    env: Object.assign({}, process.env, { DYLD_INSERT_LIBRARIES: '' }),
+  });
+  assert.strictEqual(r.status, 1);
+  assert.match(r.stderr || '', /node v20\.0\.0 is too old; need >= v22/);
+});
+
 test('clodeHelp() interpolates the version and is newline-terminated', () => {
   const { clodeHelp } = require('../libexec/clode-main.cjs');
   const text = clodeHelp('9.9.9');
