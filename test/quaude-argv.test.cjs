@@ -9,8 +9,10 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 
-const BOOTSTRAP = path.resolve(__dirname, '../libexec/quaude-bootstrap.mjs');
+// import() needs a file:// URL on Windows (a bare D:\… path parses as protocol 'd:').
+const BOOTSTRAP = pathToFileURL(path.resolve(__dirname, '../libexec/quaude-bootstrap.mjs')).href;
 const load = () => import(BOOTSTRAP);
 
 test('carve: --quaude-attest is stripped into the quaude bucket, rest untouched in order', async () => {
