@@ -308,16 +308,15 @@ jobs:
           publish: ${{ matrix.publish && 'true' || 'false' }}
 
   # ---- Transitional Node-SEA legs (the -node engine tag; formerly their
-  # own workflow). Retired per platform as tjs legs prove out — Windows has
-  # no tjs leg yet (sync-spawn is posix_spawn; port is Q3+ work).
+  # own workflow). RETIREMENT EXECUTED 2026-07-10 (user call): the macOS and
+  # Linux SEA legs are gone — their tjs replacements are proven (darwin
+  # arm64/x64 native; Linux musl-static x8). SEA is now Windows-only, until
+  # the sync-spawn Windows port (Q3+) retires these last two.
   sea:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest      # linux-glibc2.28-x64
-          - os: ubuntu-24.04-arm   # linux-glibc2.28-arm64
-          - os: macos-14           # macos-14-arm64
           - os: windows-latest     # windows-x64
           - os: windows-11-arm     # windows-arm64
     runs-on: ${{ matrix.os }}

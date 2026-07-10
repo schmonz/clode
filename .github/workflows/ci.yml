@@ -24,6 +24,13 @@ jobs:
             os: ubuntu-latest
           - leg: linux-arm64-glibc
             os: ubuntu-24.04-arm
+          - leg: linux-x64-musl       # per-push twin of THE published Linux artifact
+            os: ubuntu-latest
+            guest-platform: alpine
+            guest-arch: x86_64
+            static: true
+          # VM legs stay release-matrix-only: a per-push VM boot is too
+          # expensive; they graduate in here only if that changes.
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     defaults:
@@ -37,14 +44,16 @@ jobs:
       - uses: ./.github/actions/build-leg
         with:
           leg: ${{ matrix.leg }}
+          guest-platform: ${{ matrix.guest-platform || 'native' }}
+          guest-arch: ${{ matrix.guest-arch || 'x86_64' }}
+          static: ${{ matrix.static && 'true' || 'false' }}
+  # SEA retirement executed 2026-07-10: Windows-only (macOS/Linux have proven
+  # tjs replacements); these two retire with the sync-spawn Windows port.
   sea:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest      # linux-x64
-          - os: ubuntu-24.04-arm   # linux-arm64
-          - os: macos-14           # darwin-arm64
           - os: windows-latest     # windows-x64
           - os: windows-11-arm     # windows-arm64
     runs-on: ${{ matrix.os }}
