@@ -1,0 +1,111 @@
+name: guest
+description: >
+  The ONE non-native entry point for the release matrix (plan Q2 "The guest
+  action"): run a script on a guest platform, same contract for every leg.
+  v1 backends: "native" (host passthrough) and "alpine" (musl chroot on x86_64
+  hosts via jirutka/setup-alpine, incl. foreign arches under qemu-user with
+  fix-binary binfmt; docker container on arm64 hosts — setup-alpine cannot run
+  on aarch64 hosts yet, its apk-tools-url is hardcoded x86_64, PR #22 open).
+  Dispatcher stubs reserve the phase-2/3 backends (cross-platform-actions /
+  vmactions / own-qemu recipes) so workflow YAML shape never changes; the
+  endgame is own-qemu absorbing platforms one by one.
+inputs:
+  platform:
+    description: >
+      Guest platform. v1: native | alpine. Reserved (phase 2/3): netbsd |
+      freebsd | openbsd | dragonflybsd | solaris | omnios | qemu-*.
+    required: true
+  arch:
+    description: "Guest architecture (alpine: x86_64 aarch64 s390x x86 armv7 armhf ppc64le riscv64 loongarch64)"
+    required: false
+    default: x86_64
+  version:
+    description: "Guest OS version (alpine: release branch like 3.22)"
+    required: false
+    default: "3.22"
+  script:
+    description: Shell script to run inside the guest (sh -e semantics)
+    required: true
+  cache-key:
+    description: Image/toolchain cache key (reserved for the vm/qemu backends)
+    required: false
+    default: ""
+  packages:
+    description: Packages to install in the guest before the script runs (alpine backend)
+    required: false
+    default: ""
+outputs:
+  elapsed-seconds:
+    description: Wall-clock seconds the guest script took
+    value: ${{ steps.timing.outputs.elapsed }}
+runs:
+  using: composite
+  steps:
+    - name: Dispatch (validate the backend)
+      id: dispatch
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "${{ inputs.platform }}" in
+          native|alpine) ;;
+          netbsd|freebsd|openbsd|dragonflybsd|solaris|omnios)
+            echo "guest: '${{ inputs.platform }}' is a phase-2 backend stub (cross-platform-actions/vmactions dispatch not implemented yet)" >&2
+            exit 64 ;;
+          qemu-*)
+            echo "guest: '${{ inputs.platform }}' is a phase-3 backend stub (own-qemu guest-recipe subsystem not implemented yet)" >&2
+            exit 64 ;;
+          *)
+            echo "guest: unknown platform '${{ inputs.platform }}'" >&2
+            exit 64 ;;
+        esac
+        echo "t0=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+    # ---- alpine backend, x86_64 hosts: chroot (native or qemu-user binfmt).
+    # Side effect we rely on downstream: setup-alpine registers qemu-<arch>
+    # binfmt with fix-binary on the HOST, so foreign-arch static binaries the
+    # guest builds are directly executable by later host steps.
+    - name: Alpine chroot (setup-alpine)
+      if: inputs.platform == 'alpine' && runner.arch == 'X64'
+      uses: jirutka/setup-alpine@v1.4.1
+      with:
+        arch: ${{ inputs.arch }}
+        branch: v${{ inputs.version }}
+        packages: ${{ inputs.packages }}
+    - name: Run the guest script (alpine chroot)
+      if: inputs.platform == 'alpine' && runner.arch == 'X64'
+      shell: alpine.sh {0}
+      run: ${{ inputs.script }}
+
+    # ---- alpine backend, arm64 hosts: docker container (native aarch64 only
+    # in v1 — foreign arches on arm hosts wait for setup-alpine PR #22 or the
+    # phase-3 own-qemu backend).
+    - name: Run the guest script (alpine container)
+      if: inputs.platform == 'alpine' && runner.arch == 'ARM64'
+      shell: bash
+      env:
+        CLODE_GUEST_SCRIPT: ${{ inputs.script }}
+      run: |
+        set -euo pipefail
+        if [ "${{ inputs.arch }}" != "aarch64" ]; then
+          echo "guest: alpine on ARM64 hosts supports arch aarch64 only in v1 (got '${{ inputs.arch }}')" >&2
+          exit 64
+        fi
+        printf '%s\n' "$CLODE_GUEST_SCRIPT" > "$RUNNER_TEMP/guest-script.sh"
+        docker run --rm \
+          -v /home/runner/work:/home/runner/work \
+          -w "$GITHUB_WORKSPACE" \
+          -e RUNNER_TEMP -e GITHUB_WORKSPACE \
+          "alpine:${{ inputs.version }}" \
+          sh -e -c "apk add -q ${{ inputs.packages }} && sh -e '$RUNNER_TEMP/guest-script.sh'"
+
+    # ---- native backend: host passthrough (exists so every leg can share one
+    # YAML shape; native legs may also just run steps directly).
+    - name: Run the guest script (native)
+      if: inputs.platform == 'native'
+      shell: bash
+      run: ${{ inputs.script }}
+
+    - name: Timing
+      id: timing
+      shell: bash
+      run: echo "elapsed=$(( $(date +%s) - ${{ steps.dispatch.outputs.t0 }} ))" >> "$GITHUB_OUTPUT"

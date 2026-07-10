@@ -1,0 +1,178 @@
+name: build-leg
+description: >
+  One release-matrix leg (plan Q2 pipeline shape): construct the patched tjs
+  tree from committed material (PINS.md tag+sha, spike/quickjs/patches/* in
+  the documented order) -> build tjs (natively, or inside a guest via
+  ./.github/actions/guest) -> esbuild clode-main -> fuse the self-contained
+  builder (clode build --self, embedded pristine template) -> self-smoke
+  (--clode-version always; full = ephemeral quaude fuse + PONG + attest
+  against a fetched provider, artifact NEVER uploaded) -> attest -> upload.
+  Only BUILDERS are ever published; quaudes are ephemeral runner files.
+inputs:
+  leg:
+    description: Leg tag; names the artifact clode-<version>-<leg>
+    required: true
+  guest-platform:
+    description: "'native' or a ./.github/actions/guest platform (v1: alpine)"
+    required: false
+    default: native
+  guest-arch:
+    description: Guest arch (alpine backend)
+    required: false
+    default: x86_64
+  guest-version:
+    description: Guest OS version (alpine branch)
+    required: false
+    default: "3.22"
+  static:
+    description: "'true': fully-static tjs (musl legs) + verify with file/ldd"
+    required: false
+    default: "false"
+  smoke:
+    description: "'full' (provider fetch + ephemeral quaude PONG) or 'version' (--clode-version only)"
+    required: false
+    default: full
+  attest:
+    description: "'true': actions/attest-build-provenance over the builder (caller must grant id-token+attestations write)"
+    required: false
+    default: "false"
+  publish:
+    description: "'true': artifact named for release collection; 'false': smoke- prefix (never attached to a release)"
+    required: false
+    default: "false"
+outputs:
+  asset:
+    description: The builder artifact filename
+    value: ${{ steps.name.outputs.asset }}
+runs:
+  using: composite
+  steps:
+    - name: Restore the built tjs (PINS+patches+recipe keyed)
+      id: tjs-cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/tjs-out
+        key: tjs-${{ inputs.leg }}-${{ hashFiles('spike/quickjs/PINS.md', 'spike/quickjs/patches/*.patch', 'scripts/build-tjs.mjs') }}
+
+    - name: Construct the patched tjs tree from pins (host, native speed)
+      if: steps.tjs-cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        CLODE_TJS_VENDOR: ${{ runner.temp }}/tjs-vendor
+      run: node scripts/build-tjs.mjs --source-only
+
+    - name: Build tjs (native)
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.guest-platform == 'native'
+      shell: bash
+      env:
+        CLODE_TJS_VENDOR: ${{ runner.temp }}/tjs-vendor
+        CLODE_TJS_OUT: ${{ runner.temp }}/tjs-out
+        CLODE_TJS_STATIC: ${{ inputs.static == 'true' && '1' || '' }}
+      run: node scripts/build-tjs.mjs --build-only
+
+    - name: Build tjs (guest)
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.guest-platform != 'native'
+      uses: ./.github/actions/guest
+      with:
+        platform: ${{ inputs.guest-platform }}
+        arch: ${{ inputs.guest-arch }}
+        version: ${{ inputs.guest-version }}
+        packages: build-base cmake git linux-headers nodejs
+        cache-key: tjs-${{ inputs.leg }}
+        script: |
+          export CLODE_TJS_VENDOR="${{ runner.temp }}/tjs-vendor"
+          export CLODE_TJS_OUT="${{ runner.temp }}/tjs-out"
+          export CLODE_TJS_STATIC="${{ inputs.static == 'true' && '1' || '' }}"
+          node scripts/build-tjs.mjs --build-only
+
+    # A cache HIT skips the guest setup, so foreign-arch legs still need
+    # fix-binary binfmt on the host to exec the cached tjs (fuse worker,
+    # smokes). Cheap and idempotent.
+    - name: Ensure qemu binfmt for foreign-arch host execution
+      if: inputs.guest-platform == 'alpine' && inputs.guest-arch != 'x86_64' && runner.arch == 'X64'
+      uses: docker/setup-qemu-action@v4
+
+    - name: Verify the binary is truly static (musl legs)
+      if: inputs.static == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        TJS="$RUNNER_TEMP/tjs-out/tjs"
+        f=$(file -b "$TJS"); echo "file: $f"
+        case "${{ inputs.guest-arch }}" in
+          x86_64) want="x86-64" ;;
+          aarch64) want="aarch64" ;;
+          s390x) want="S/390" ;;
+          *) want="" ;;
+        esac
+        case "$f" in *"$want"*) ;; *) echo "ERROR: arch marker '$want' not in file output" >&2; exit 1 ;; esac
+        case "$f" in *"statically linked"*|*"static-pie linked"*) ;; *) echo "ERROR: not statically linked" >&2; exit 1 ;; esac
+        ldd "$TJS" 2>&1 | head -3 || true   # informational: expect "not a dynamic executable"
+
+    - name: Host-exec smoke of the built tjs
+      shell: bash
+      run: |
+        set -euo pipefail
+        out=$("$RUNNER_TEMP/tjs-out/tjs" eval 'console.log(typeof __tjs_fs_sync === "object" ? "tjs-shim-ok" : "MISSING-SYNC-FS")')
+        echo "tjs host-exec: $out"
+        [ "$out" = tjs-shim-ok ]
+
+    - name: Install the runtime dep closure (fuse member inputs)
+      shell: bash
+      run: npm ci
+
+    - name: esbuild the clode-main bundle
+      shell: bash
+      run: node scripts/build-sea.mjs --bundle-only
+
+    - name: Fuse the self-contained builder (clode build --self)
+      id: name
+      shell: bash
+      env:
+        CLODE_TJS: ${{ runner.temp }}/tjs-out/tjs
+      run: |
+        set -euo pipefail
+        if [ "${GITHUB_REF_TYPE:-}" = tag ]; then V="${GITHUB_REF_NAME#v}"; else V="$(cat VERSION)"; fi
+        ASSET="clode-$V-${{ inputs.leg }}"
+        node bin/clode build --self --out "$ASSET"
+        echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
+
+    - name: Self-smoke --clode-version (host exec of the fused builder)
+      shell: bash
+      run: |
+        set -euo pipefail
+        ./"${{ steps.name.outputs.asset }}" --clode-version
+
+    - name: Full smoke — the builder builds the product (ephemeral, NEVER uploaded)
+      if: inputs.smoke == 'full'
+      shell: bash
+      run: |
+        set -uo pipefail
+        npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
+        PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f \( -name claude -o -name claude.exe \) -size +20M 2>/dev/null | head -1)"
+        if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found under @anthropic-ai/claude-code" >&2; exit 1; fi
+        echo "provider: $PROV"
+        set -e
+        CLODE_CLAUDE_BIN="$PROV" CLODE_CACHE="$RUNNER_TEMP/clode-cache" \
+          ./"${{ steps.name.outputs.asset }}" build --out "$RUNNER_TEMP/quaude-smoke"
+        rm -f "$RUNNER_TEMP/quaude-smoke"   # quaude is derived work: ephemeral, never leaves the runner
+
+    - name: Attest build provenance
+      if: inputs.attest == 'true'
+      uses: actions/attest-build-provenance@v4
+      with:
+        subject-path: ${{ steps.name.outputs.asset }}
+
+    - name: Upload the builder artifact
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.publish == 'true' && steps.name.outputs.asset || format('smoke-{0}', steps.name.outputs.asset) }}
+        path: ${{ steps.name.outputs.asset }}
+        if-no-files-found: error
+
+    - name: Upload the bare tjs binary (oracle jobs + debugging)
+      uses: actions/upload-artifact@v7
+      with:
+        name: tjs-${{ inputs.leg }}
+        path: ${{ runner.temp }}/tjs-out/tjs
+        if-no-files-found: error

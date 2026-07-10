@@ -1,0 +1,161 @@
+name: release-matrix
+
+# RELEASE MATRIX v1, phase 1 (plan Q2): T1 native legs + T1.5 Alpine/musl legs.
+# Publishes ONLY clode builders (canon: quaude is derived work, never leaves a
+# runner). glibc Linux legs are CI-smoke only (Decision 3) — the published
+# Linux artifacts are the musl-static ones. Phase 2/3 add the T2 vm legs and
+# T3 own-qemu legs through ./.github/actions/guest, whose YAML shape is fixed
+# here from day one.
+#
+# Triggers: a version tag (attaches to the same release the SEA workflow
+# creates), or manual dispatch (default: artifacts only, no release — the
+# dry-run mode; 'draft' mints a draft prerelease for inspection).
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "release handling: skip = artifacts only (dry-run), draft = draft prerelease"
+        type: choice
+        options: [skip, draft]
+        default: skip
+
+permissions:
+  contents: read
+
+jobs:
+  leg:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ---- T1 native runners
+          - leg: darwin-arm64-tjs        # PUBLISHED
+            os: macos-14
+            publish: true
+          - leg: linux-x64-glibc         # CI smoke only (Decision 3)
+            os: ubuntu-latest
+            publish: false
+          - leg: linux-arm64-glibc       # CI smoke only
+            os: ubuntu-24.04-arm
+            publish: false
+          # ---- T1.5 Alpine musl-static (the published Linux artifacts)
+          - leg: linux-x64-musl          # PUBLISHED
+            os: ubuntu-latest
+            guest-platform: alpine
+            guest-arch: x86_64
+            static: true
+            publish: true
+          - leg: linux-arm64-musl        # PUBLISHED (alpine container on the arm runner)
+            os: ubuntu-24.04-arm
+            guest-platform: alpine
+            guest-arch: aarch64
+            static: true
+            publish: true
+          - leg: linux-s390x-musl        # PUBLISHED; 64-bit BE oracle arch (qemu-user)
+            os: ubuntu-latest
+            guest-platform: alpine
+            guest-arch: s390x
+            static: true
+            publish: true
+            smoke: version               # PONG-class smoke lives in the be-oracle job
+            timeout: 300
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.timeout || 90 }}
+    permissions:
+      contents: read
+      id-token: write        # actions/attest-build-provenance
+      attestations: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .tool-versions
+      - uses: ./.github/actions/build-leg
+        with:
+          leg: ${{ matrix.leg }}
+          guest-platform: ${{ matrix.guest-platform || 'native' }}
+          guest-arch: ${{ matrix.guest-arch || 'x86_64' }}
+          static: ${{ matrix.static && 'true' || 'false' }}
+          smoke: ${{ matrix.smoke || 'full' }}
+          attest: ${{ matrix.publish && 'true' || 'false' }}
+          publish: ${{ matrix.publish && 'true' || 'false' }}
+
+  # 64-bit big-endian oracle (plan T1.5): the node-shim suite against the
+  # s390x-musl tjs under qemu-user binfmt. Provider-gated suites self-skip
+  # (no provider here); the engine/url grading and shim behavior rows run.
+  # Non-blocking by design — a BE regression is a finding, not a release gate,
+  # until the leg earns its way in (house rule: note it, don't grind).
+  be-oracle:
+    needs: leg
+    if: ${{ !cancelled() }}    # run even when an unrelated leg failed; missing artifact fails loudly
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .tool-versions
+      - uses: docker/setup-qemu-action@v4   # fix-binary binfmt: host node spawns s390x tjs
+      - uses: actions/download-artifact@v8
+        with:
+          name: tjs-linux-s390x-musl
+          path: ${{ runner.temp }}/tjs-s390x
+      - name: Install the runtime dep closure
+        run: npm ci
+      - name: BE oracle subset (node-shim suite + url characterization)
+        env:
+          CLODE_TJS: ${{ runner.temp }}/tjs-s390x/tjs
+        run: |
+          set -euo pipefail
+          chmod +x "$CLODE_TJS"
+          "$CLODE_TJS" eval 'console.log("s390x tjs alive:", tjs.version)'
+          node --test --test-concurrency=1 test/node-shim-*.test.cjs test/url-characterization.test.cjs
+
+  release:
+    needs: leg
+    if: github.ref_type == 'tag' || inputs.release == 'draft'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: clode-*          # published builders only (smoke-* and tjs-* stay CI artifacts)
+          path: dist
+          merge-multiple: true
+      - name: Attach builders + shas to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd dist
+          chmod +x clode-*
+          sha256sum clode-* > SHA256SUMS-tjs
+          cat SHA256SUMS-tjs
+          cd ..
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            TAG="$GITHUB_REF_NAME"
+            # The SEA release workflow may already have created this release —
+            # attach, don't duplicate; create only if we got here first.
+            gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+              || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+                   --target "$GITHUB_SHA" --title "$TAG" \
+                   --notes "Automated release (tjs matrix)."
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber dist/*
+          else
+            V="$(cat VERSION)"; TAG="v$V-matrix-test.$GITHUB_RUN_NUMBER"
+            echo "Draft prerelease $TAG with: $(ls dist)"
+            gh release create "$TAG" --draft --prerelease \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" --title "$TAG" \
+              --notes "Matrix dry-run. Assets: $(ls dist | tr '\n' ' ')" \
+              dist/*
+          fi
