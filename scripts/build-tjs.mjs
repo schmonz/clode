@@ -20,7 +20,7 @@
 //   --build-only   skip checkout/patches (tree must exist), cmake + smoke only
 //   (default: both — the local flow, unchanged)
 import { execFileSync } from 'node:child_process';
-import { cpus } from 'node:os';
+import os, { cpus } from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -159,6 +159,54 @@ if (buildOnly) {
   tjsDir = ensureCheckout('txiki.js', 'https://github.com/saghul/txiki.js.git');
   applyPatches(tjsDir, 'txiki-');
 }
+
+// ---- big-endian bundle regen, part 1: esbuild the plain-JS intermediates ----
+// txiki git-tracks src/bundles/c/** as pre-compiled LITTLE-ENDIAN quickjs
+// bytecode arrays (18 files) and gitignores the src/bundles/js/** intermediates
+// they came from. On a BIG-ENDIAN target the host-order bytecode checksum fails
+// at first boot ("SyntaxError: checksum error" -> vm.c TJS_NewRuntimeInternal
+// assert -> SIGABRT) — the sparc S2 Wall #4, same wall on s390x. The fix is to
+// regenerate the .c natively (= target endianness) from the JS bundles.
+//
+// The esbuild half is endian-NEUTRAL text, so it runs here in the source phase
+// on the fast native host (even for a cross-emulated guest leg) — exactly the
+// txiki Makefile's esbuild rules, pinned esbuild. The tjsc half (target-native
+// bytecode) runs in the build phase, gated on the target being big-endian.
+// Faithfully ports spike/quickjs/qemu/guest-sparc-s2.sh's regen stage.
+const JS_BUNDLES = [
+  { entry: 'src/js/polyfills/index.js', out: 'src/bundles/js/core/polyfills.js', extra: [] },
+  { entry: 'src/js/core/index.js', out: 'src/bundles/js/core/core.js', extra: [] },
+  { entry: 'src/js/run-main/index.js', out: 'src/bundles/js/core/run-main.js', extra: [] },
+  { entry: 'src/js/run-repl/repl.js', out: 'src/bundles/js/core/run-repl.js', extra: ['--log-override:direct-eval=silent'] },
+];
+function esbuildBundles(dir) {
+  const esbuild = ensureEsbuild(dir);
+  const stdlib = fs.readdirSync(path.join(dir, 'src/js/stdlib')).filter((f) => f.endsWith('.js'));
+  const common = ['--target=esnext', '--platform=neutral', '--format=esm', '--main-fields=main,module', '--minify', '--keep-names'];
+  const one = (entry, out, extra) => {
+    fs.mkdirSync(path.join(dir, path.dirname(out)), { recursive: true });
+    run(esbuild, [path.join(dir, entry), '--bundle', `--outfile=${path.join(dir, out)}`,
+      '--external:tjs:*', ...extra, ...common], { cwd: dir });
+  };
+  for (const b of JS_BUNDLES) one(b.entry, b.out, b.extra);
+  for (const f of stdlib) {
+    one(`src/js/stdlib/${f}`, `src/bundles/js/stdlib/${f}`, ['--external:tjs:*', '--external:buffer', '--external:crypto']);
+  }
+  console.log(`esbuilt ${JS_BUNDLES.length + stdlib.length} plain-JS bundles for the BE regen path`);
+}
+// esbuild @ the txiki pin, resolved from the checkout's own node_modules
+// (installed on demand — no repo-root dep, no npx network guess).
+function ensureEsbuild(dir) {
+  const pin = 'esbuild@0.28.1';
+  const bin = path.join(dir, 'node_modules', '.bin', process.platform === 'win32' ? 'esbuild.cmd' : 'esbuild');
+  if (!fs.existsSync(bin)) {
+    console.log(`installing ${pin} into the txiki checkout for the JS bundle regen ...`);
+    run('npm', ['install', '--no-save', '--no-audit', '--no-fund', pin], { cwd: dir });
+  }
+  return bin;
+}
+esbuildBundles(tjsDir);
+
 if (sourceOnly) {
   console.log(`source tree ready: ${tjsDir}`);
   process.exit(0);
@@ -186,6 +234,43 @@ if (process.platform === 'linux') {
   cmakeArgs.push('-DCMAKE_C_FLAGS=-Wno-error=unused-variable');
 }
 run('cmake', ['-S', tjsDir, '-B', path.join(tjsDir, 'build'), ...cmakeArgs]);
+
+// ---- big-endian bundle regen, part 2: tjsc-regenerate the .c natively -------
+// os.endianness() here reflects the TARGET: this script runs UNDER the tjs
+// toolchain's node (host node for native legs; the emulated guest node under
+// qemu-user for a cross leg), so 'BE' means the tjs we are about to build is
+// big-endian and the shipped LE bytecode arrays would fail its boot checksum.
+// CLODE_TJS_REGEN=1 forces it anywhere (used to validate the pipeline on an LE
+// control — the sparc campaign proved regen on a darwin control first).
+// LE targets skip this entirely: the published darwin/x64/arm-musl artifacts
+// keep the upstream shipped .c, byte-for-byte the validated pinned config.
+const beTarget = os.endianness() === 'BE';
+const forceRegen = process.env.CLODE_TJS_REGEN === '1';
+if (beTarget || forceRegen) {
+  console.log(`BE bundle regen: target endianness=${os.endianness()} force=${forceRegen} -> regenerating quickjs bytecode arrays natively`);
+  const tjsc = path.join(tjsDir, 'build', 'tjsc');
+  run('cmake', ['--build', path.join(tjsDir, 'build'), '--target', 'tjsc', '-j', jobs]);
+  if (!fs.existsSync(tjsc)) throw new Error(`BE regen: tjsc did not build at ${tjsc}`);
+  // Exactly the txiki Makefile's tjsc rules (module mode -m, strip -s, module
+  // name -n, C symbol prefix -p). core+stdlib come from the esbuilt bundles;
+  // worker-bootstrap + internal/path are tjsc'd straight from src/js sources.
+  const regen = (outC, name, prefix, inJs) => {
+    fs.mkdirSync(path.join(tjsDir, path.dirname(outC)), { recursive: true });
+    run(tjsc, ['-m', '-s', '-o', path.join(tjsDir, outC), '-n', name, '-p', prefix, path.join(tjsDir, inJs)], { cwd: tjsDir });
+  };
+  regen('src/bundles/c/core/polyfills.c', 'tjs:internal/polyfills', 'tjs__', 'src/bundles/js/core/polyfills.js');
+  regen('src/bundles/c/core/core.c', 'tjs:internal/bootstrap', 'tjs__', 'src/bundles/js/core/core.js');
+  regen('src/bundles/c/core/run-main.c', 'tjs:internal/run-main', 'tjs__', 'src/bundles/js/core/run-main.js');
+  regen('src/bundles/c/core/run-repl.c', 'tjs:internal/run-repl', 'tjs__', 'src/bundles/js/core/run-repl.js');
+  regen('src/bundles/c/core/worker-bootstrap.c', 'tjs:internal/worker-bootstrap', 'tjs__', 'src/js/worker/worker-bootstrap.js');
+  regen('src/bundles/c/internal/path.c', 'tjs:internal/path', 'tjs__internal_', 'src/js/internal/path.js');
+  for (const f of fs.readdirSync(path.join(tjsDir, 'src/js/stdlib')).filter((x) => x.endsWith('.js'))) {
+    const n = f.replace(/\.js$/, '');
+    regen(`src/bundles/c/stdlib/${n}.c`, `tjs:${n}`, 'tjs__', `src/bundles/js/stdlib/${f}`);
+  }
+  console.log('BE bundle regen: 18 bytecode arrays regenerated at target endianness');
+}
+
 run('cmake', ['--build', path.join(tjsDir, 'build'), '-j', jobs]);
 
 fs.mkdirSync(outDir, { recursive: true });
