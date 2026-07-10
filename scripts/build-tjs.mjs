@@ -205,6 +205,19 @@ function fixupLwsDragonflySoPriority(dir) {
     throw new Error('fixup lws-dragonfly-guards: dir-notify anchor not found (lws changed under the pin — re-derive the fixup)');
   }
 
+  // libwebsockets.h: the BSD list that pulls in <sys/socket.h> +
+  // <netinet/in.h> — without it every sockaddr_* in the lws headers is an
+  // incomplete type on DragonFly (dispatch #8, 2026-07-10).
+  const f3 = path.join(dir, 'deps/libwebsockets/include/libwebsockets.h');
+  const src3 = fs.readFileSync(f3, 'utf8');
+  const inc = '#if defined(__NetBSD__) || defined(__FreeBSD__) || defined(__QNX__) || defined(__OpenBSD__) || defined(__NuttX__)';
+  if (src3.includes(inc)) {
+    fs.writeFileSync(f3, src3.replace(inc, inc.replace('defined(__NetBSD__)', 'defined(__NetBSD__) || defined(__DragonFly__)')));
+    applied++;
+  } else if (!src3.includes('__DragonFly__')) {
+    throw new Error('fixup lws-dragonfly-guards: libwebsockets.h anchor not found (lws changed under the pin — re-derive the fixup)');
+  }
+
   if (applied) {
     console.log(`fixup lws-dragonfly-guards: applied (${applied} site(s))`);
   } else {

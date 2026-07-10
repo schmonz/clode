@@ -170,6 +170,18 @@ async function clodeBuild(args, opts) {
       template = path.join(work, 'template-tjs');
       fs.writeFileSync(template, Buffer.from(vfs.files.get('template/tjs')));
       fs.chmodSync(template, 0o755);
+      // Verify the materialized bytes against the manifest BEFORE exec'ing
+      // them: a truncated or corrupted write shows up as a bare exit-127
+      // spawn failure with no output (matrix openbsd leg, dispatch #8
+      // 2026-07-10) — this converts that into a precise loud error.
+      const want = vfs.manifest.template || {};
+      const got = fs.statSync(template).size;
+      if (want.len && got !== want.len) {
+        return fail(`build: embedded template materialized ${got} bytes; manifest says ${want.len} (shim fs write fault?)`);
+      }
+      if (want.sha256 && sha256File(template) !== want.sha256) {
+        return fail('build: embedded template sha256 mismatch after materialization (shim fs write fault?)');
+      }
       if (process.platform === 'darwin') {
         // Same discipline as the fuse copy below: a materialized Mach-O may
         // need its ad-hoc signature refreshed before it can exec.
@@ -286,7 +298,18 @@ async function clodeBuild(args, opts) {
       // quaude role has no use for it (its base IS the signed copy).
       ...(self ? [template] : [])], { env, timeout: 300000 });
     if (w.status !== 0) {
-      return fail(`build: fuse worker failed (exit ${w.status}):\n${w.stdout}${w.stderr}`);
+      let extra = '';
+      if (!w.stdout && !w.stderr) {
+        // A bare status with no output = the child never ran (exec failed
+        // inside the spawn; 127 is libuv's could-not-exec convention). Say
+        // what we tried to exec so a remote CI log is diagnosable.
+        try {
+          extra = `\n(no worker output — exec failure? template=${template} size=${fs.statSync(template).size})`;
+        } catch {
+          extra = `\n(no worker output — exec failure? template=${template} MISSING)`;
+        }
+      }
+      return fail(`build: fuse worker failed (exit ${w.status}):\n${w.stdout}${w.stderr}${extra}`);
     }
     clodeLog(w.stdout.trimEnd());
 
