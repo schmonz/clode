@@ -12,6 +12,9 @@
 .Cm update
 .Op Cm stable | latest | Ar version
 .Nm
+.Cm build
+.Op Fl -out Ar path
+.Nm
 .Fl -clode-help
 .Nm
 .Fl -clode-version
@@ -72,6 +75,30 @@ or
 falling back to
 .Cm latest
 \(em matching Claude Code's own default.
+.Pp
+.Nm build
+.Op Fl -out Ar path
+fuses a standalone
+.Dq quaude
+binary on this machine (default
+.Pa ./quaude ) :
+the pinned txiki.js runtime plus the extracted Claude Code bundle compiled to
+quickjs bytecode, self-contained (no Node, no npm, no network at run time).
+The build verifies itself before reporting success \(em a canned offline
+Messages round-trip and a
+.Fl -quaude-attest
+manifest verification \(em and fails loudly otherwise.
+The fused binary reserves only the
+.Fl -quaude-*
+option namespace
+.Pq currently Fl -quaude-attest ,
+passing everything else to Claude Code, and is derived work: it is fused
+locally and never distributed.
+The template runtime comes from
+.Ev CLODE_TJS
+(default
+.Pa build/tjs/tjs
+under the clode root).
 .Pp
 .Nm
 patches Claude Code's in-app auto-updater to run
@@ -145,6 +172,12 @@ Cache root (default
 .Pa ${XDG_CACHE_HOME:-$HOME/.cache}/clode ) .
 .It Ev CLODE_LIBEXEC
 Directory holding the extractor and Bun shim.
+.It Ev CLODE_TJS
+The txiki.js template binary
+.Nm build
+fuses from (default
+.Pa build/tjs/tjs
+under the clode root).
 .It Ev CLODE_NODE
 Host node (absolute path).
 .It Ev DISABLE_INSTALLATION_CHECKS
