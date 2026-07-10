@@ -297,6 +297,29 @@ function fixupLibuvSunosDefpath(dir) {
   console.log('fixup libuv-sunos-defpath: applied');
 }
 
+function fixupPosixSocketSunosMsghdr(dir) {
+  // illumos' default headers expose the OLD SysV msghdr (no msg_control/
+  // msg_controllen/msg_flags; iovec's iov_base is caddr_t) — txiki's
+  // mod_posix-socket.c needs the XPG4v2 struct. The canonical SunOS recipe
+  // is _XPG4_2 + __EXTENSIONS__, defined BEFORE any include; scoped to this
+  // one TU under __sun (matrix omnios leg, dispatch #7 2026-07-10; txiki
+  // upstream candidate). Solaris 11.4 compiled without it — watch that leg
+  // for regression and scope to __illumos__ if it objects.
+  const f = path.join(dir, 'src/mod_posix-socket.c');
+  const src = fs.readFileSync(f, 'utf8');
+  if (src.includes('_XPG4_2')) {
+    console.log('fixup posix-socket-sunos-msghdr: already applied');
+    return;
+  }
+  const anchor = '#include "private.h"\n';
+  if (!src.startsWith(anchor)) {
+    throw new Error('fixup posix-socket-sunos-msghdr: anchor not found (mod_posix-socket.c changed under the pin — re-derive the fixup)');
+  }
+  const guard = '#if defined(__sun)\n/* SunOS: select the XPG4v2 msghdr (msg_control/msg_flags) */\n#define _XPG4_2 1\n#define __EXTENSIONS__ 1\n#endif\n';
+  fs.writeFileSync(f, guard + src);
+  console.log('fixup posix-socket-sunos-msghdr: applied');
+}
+
 let tjsDir;
 if (buildOnly) {
   // The patched tree was constructed by a prior --source-only run (possibly on
@@ -313,6 +336,7 @@ if (buildOnly) {
   fixupMemMallocHOpenbsd(tjsDir);
   fixupLibuvSunosDefpath(tjsDir);
   fixupQjsSunosB64(tjsDir);
+  fixupPosixSocketSunosMsghdr(tjsDir);
 }
 
 // ---- big-endian bundle regen, part 1: esbuild the plain-JS intermediates ----

@@ -187,6 +187,11 @@ runs:
         packages: ${{ inputs.guest-packages }}
         cache-key: tjs-${{ inputs.leg }}
         script: |
+          # Hardened guests (cpa's OpenBSD image) mount /tmp noexec; the fuse
+          # materializes and EXECS the template from a mkdtemp under TMPDIR
+          # (exit 127, dispatch #7). The workspace is exec-able everywhere.
+          mkdir -p "$PWD/.matrix/tmp"
+          TMPDIR="$PWD/.matrix/tmp"; export TMPDIR
           CLODE_TJS_VENDOR="$PWD/.matrix/tjs-vendor"; export CLODE_TJS_VENDOR
           CLODE_TJS_OUT="$PWD/.matrix/tjs-out"; export CLODE_TJS_OUT
           CLODE_TJS_WASM="${{ inputs.wasm }}"; export CLODE_TJS_WASM
@@ -208,7 +213,7 @@ runs:
             CLODE_CACHE="$PWD/.matrix/clode-cache" \
             CLODE_DEPS="$PWD/.matrix/clode-deps" \
               ./"${{ steps.name.outputs.asset }}" build --out ./quaude-smoke
-            rm -rf ./quaude-smoke .matrix/clode-cache .matrix/clode-deps
+            rm -rf ./quaude-smoke .matrix/clode-cache .matrix/clode-deps .matrix/tmp
           fi
 
     - name: Verify the binary is truly static (musl legs)

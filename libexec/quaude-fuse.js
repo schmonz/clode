@@ -53,10 +53,20 @@ async function collect(dir, prefix, outArr) {
   for await (const item of await tjs.readDir(dir)) {
     const full = path.join(dir, item.name);
     const rel = `${prefix}/${item.name}`;
-    if (item.isDirectory) {
+    let { isDirectory, isFile } = item;
+    if (!isDirectory && !isFile) {
+      // SunOS dirents carry no d_type — libuv reports every entry UNKNOWN
+      // there, so both flags are false and the walk would silently collect
+      // NOTHING (matrix solaris leg, dispatch #7 2026-07-10). stat() the
+      // entry instead; on d_type platforms this branch never runs.
+      const st = await tjs.stat(full);
+      isDirectory = st.isDirectory;
+      isFile = st.isFile;
+    }
+    if (isDirectory) {
       if (item.name === 'node_modules' || item.name === '.bin') continue;
       await collect(full, rel, outArr);
-    } else if (item.isFile && !item.name.startsWith('._') && !item.name.startsWith('.DS_')) {
+    } else if (isFile && !item.name.startsWith('._') && !item.name.startsWith('.DS_')) {
       outArr.push({ name: rel, data: await tjs.readFile(full) });
     }
   }
