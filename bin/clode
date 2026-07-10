@@ -5,10 +5,10 @@
 var MIN_NODE_MAJOR = 24;
 // `clode build` never runs the extracted bundle under node — the fuse worker
 // and the fused artifacts exec under tjs; node only orchestrates file work,
-// so its floor is what the orchestration code itself needs. v22 is the
-// living-proof floor: OpenBSD 7.9's newest packaged node (the matrix's
-// openbsd leg fuses there).
-var floor = process.argv[2] === 'build' ? 22 : MIN_NODE_MAJOR;
+// so its floor is what the orchestration code itself needs. v20 is the
+// living-proof floor: OpenIndiana's packaged node is 20.x and OpenBSD 7.9's
+// is 22.x — the matrix's legs fuse on both (libexec parses clean down to 18).
+var floor = process.argv[2] === 'build' ? 20 : MIN_NODE_MAJOR;
 var major = parseInt(String(process.versions.node).split('.')[0], 10);
 if (!(major >= floor)) {
   process.stderr.write('clode: node v' + process.versions.node + ' is too old; need >= v' + floor + '\n');
