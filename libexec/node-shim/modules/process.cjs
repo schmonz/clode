@@ -136,11 +136,21 @@ module.exports = {
   // -p boot does process.execArgv.some(...) to detect debug/inspect flags; under
   // tjs there are none, so an empty array (matching a plain invocation).
   execArgv: [],
+  // process.env: reads/writes/deletes proxy through to tjs.env (which the
+  // runtime mirrors into the real environment, so spawned children inherit a
+  // write — Node semantics, characterized by test/node-shim-env.test.cjs).
+  // The set/deleteProperty traps and `writable: true` are load-bearing: without
+  // them an env assignment silently no-ops in sloppy mode and THROWS
+  // ("'X' is read-only") in strict mode — and the fused quaude runs the bundle
+  // as compiled-module bytecode, which is always strict. Node stringifies on
+  // write (String(v)); delete of a missing key is a no-op returning true.
   env: new Proxy({}, {
     get: (_, k) => (typeof k === 'string' ? tjs.env[k] : undefined),
+    set: (_, k, v) => { if (typeof k === 'string') { try { tjs.env[k] = String(v); } catch { /* setenv failure -> Node throws only on invalid names; swallow */ } } return true; },
+    deleteProperty: (_, k) => { if (typeof k === 'string') { try { delete tjs.env[k]; } catch { /* ignore */ } } return true; },
     has: (_, k) => typeof k === 'string' && k in tjs.env,
     ownKeys: () => Reflect.ownKeys(tjs.env),
-    getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true }),
+    getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true, writable: true }),
   }),
   platform: detectPlatform(),
   arch: 'arm64', // M4: derive per-platform (no arch signal in this tjs build)
