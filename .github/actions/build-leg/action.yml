@@ -8,28 +8,50 @@ description: >
   (--clode-version always; full = ephemeral quaude fuse + PONG + attest
   against a fetched provider, artifact NEVER uploaded) -> attest -> upload.
   Only BUILDERS are ever published; quaudes are ephemeral runner files.
+  Exec modes: `clode build` EXECS the tjs template (the fuse worker runs
+  under it) and then execs the fused output. Foreign-LINUX-arch legs get away
+  with host-side fuse+smoke because qemu-user binfmt execs the guest binaries;
+  BSD/illumos/Solaris binaries have no such escape, so for VM legs the whole
+  fuse + smoke runs INSIDE the guest (exec=guest, derived from the platform),
+  with tjs-vendor/tjs-out under the workspace — the VM sync boundary.
 inputs:
   leg:
     description: Leg tag; names the artifact clode-<version>-<leg>
     required: true
   guest-platform:
-    description: "'native' or a ./.github/actions/guest platform (v1: alpine)"
+    description: "'native' or a ./.github/actions/guest platform (alpine | netbsd | freebsd | openbsd | dragonflybsd | omnios | solaris)"
     required: false
     default: native
   guest-arch:
-    description: Guest arch (alpine backend)
+    description: Guest arch (see the guest action)
     required: false
     default: x86_64
   guest-version:
-    description: Guest OS version (alpine branch)
+    description: Guest OS version (see the guest action)
     required: false
     default: "3.22"
+  guest-packages:
+    description: Packages for the guest, named in the guest's package system (VM legs)
+    required: false
+    default: ""
   static:
     description: "'true': fully-static tjs (musl legs) + verify with file/ldd"
     required: false
     default: "false"
   wasm:
-    description: "'off': build tjs without WASM/WAMR (arches where WAMR's MAP_32BIT is undefined: s390x/ppc64le/riscv64)"
+    description: >
+      'off': build tjs without WASM/WAMR (Linux arches where WAMR's MAP_32BIT
+      is undefined: s390x/ppc64le/riscv64/loongarch64/armv7/x86 — and ALL
+      non-Linux VM legs: WAMR maps every non-Darwin/Windows/Android system to
+      its "linux" platform, whose posix_memmap.c needs Linux's 4-arg mremap).
+    required: false
+    default: "on"
+  mimalloc:
+    description: "'off': system malloc instead of mimalloc (mimalloc 3.2.7 does not compile on NetBSD; VM legs start off and re-enable as they prove)"
+    required: false
+    default: "on"
+  ffi:
+    description: "'off': no tjs:ffi (spares the guest a libffi dep; nothing shipped imports it)"
     required: false
     default: "on"
   smoke:
@@ -51,77 +73,47 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Resolve the exec mode and tree locations
+      id: mode
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "${{ inputs.guest-platform }}" in
+          netbsd|freebsd|openbsd|dragonflybsd|omnios|solaris) exec=guest ;;
+          *) exec=host ;;
+        esac
+        echo "exec=$exec" >> "$GITHUB_OUTPUT"
+        if [ "$exec" = guest ]; then
+          # The VM backends sync the WORKSPACE (rsync) — the tjs tree and
+          # output must live inside it to cross the boundary.
+          echo "vendor=$GITHUB_WORKSPACE/.matrix/tjs-vendor" >> "$GITHUB_OUTPUT"
+          echo "out=$GITHUB_WORKSPACE/.matrix/tjs-out" >> "$GITHUB_OUTPUT"
+        else
+          echo "vendor=$RUNNER_TEMP/tjs-vendor" >> "$GITHUB_OUTPUT"
+          echo "out=$RUNNER_TEMP/tjs-out" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Name the builder artifact
+      id: name
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ "${GITHUB_REF_TYPE:-}" = tag ]; then V="${GITHUB_REF_NAME#v}"; else V="$(cat VERSION)"; fi
+        echo "asset=clode-$V-${{ inputs.leg }}" >> "$GITHUB_OUTPUT"
+
     - name: Restore the built tjs (PINS+patches+recipe keyed)
       id: tjs-cache
       uses: actions/cache@v6
       with:
-        path: ${{ runner.temp }}/tjs-out
+        path: ${{ steps.mode.outputs.out }}
         key: tjs-${{ inputs.leg }}-${{ hashFiles('spike/quickjs/PINS.md', 'spike/quickjs/patches/*.patch', 'scripts/build-tjs.mjs') }}
 
     - name: Construct the patched tjs tree from pins (host, native speed)
       if: steps.tjs-cache.outputs.cache-hit != 'true'
       shell: bash
       env:
-        CLODE_TJS_VENDOR: ${{ runner.temp }}/tjs-vendor
+        CLODE_TJS_VENDOR: ${{ steps.mode.outputs.vendor }}
       run: node scripts/build-tjs.mjs --source-only
-
-    - name: Build tjs (native)
-      if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.guest-platform == 'native'
-      shell: bash
-      env:
-        CLODE_TJS_VENDOR: ${{ runner.temp }}/tjs-vendor
-        CLODE_TJS_OUT: ${{ runner.temp }}/tjs-out
-        CLODE_TJS_STATIC: ${{ inputs.static == 'true' && '1' || '' }}
-        CLODE_TJS_WASM: ${{ inputs.wasm }}
-      run: node scripts/build-tjs.mjs --build-only
-
-    - name: Build tjs (guest)
-      if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.guest-platform != 'native'
-      uses: ./.github/actions/guest
-      with:
-        platform: ${{ inputs.guest-platform }}
-        arch: ${{ inputs.guest-arch }}
-        version: ${{ inputs.guest-version }}
-        packages: build-base cmake git linux-headers nodejs
-        cache-key: tjs-${{ inputs.leg }}
-        script: |
-          export CLODE_TJS_VENDOR="${{ runner.temp }}/tjs-vendor"
-          export CLODE_TJS_OUT="${{ runner.temp }}/tjs-out"
-          export CLODE_TJS_STATIC="${{ inputs.static == 'true' && '1' || '' }}"
-          export CLODE_TJS_WASM="${{ inputs.wasm }}"
-          node scripts/build-tjs.mjs --build-only
-
-    # A cache HIT skips the guest setup, so foreign-arch legs still need
-    # fix-binary binfmt on the host to exec the cached tjs (fuse worker,
-    # smokes). Cheap and idempotent.
-    - name: Ensure qemu binfmt for foreign-arch host execution
-      if: inputs.guest-platform == 'alpine' && inputs.guest-arch != 'x86_64' && runner.arch == 'X64'
-      uses: docker/setup-qemu-action@v4
-
-    - name: Verify the binary is truly static (musl legs)
-      if: inputs.static == 'true'
-      shell: bash
-      run: |
-        set -euo pipefail
-        TJS="$RUNNER_TEMP/tjs-out/tjs"
-        f=$(file -b "$TJS"); echo "file: $f"
-        case "${{ inputs.guest-arch }}" in
-          x86_64) want="x86-64" ;;
-          aarch64) want="aarch64" ;;
-          s390x) want="S/390" ;;
-          *) want="" ;;
-        esac
-        case "$f" in *"$want"*) ;; *) echo "ERROR: arch marker '$want' not in file output" >&2; exit 1 ;; esac
-        case "$f" in *"statically linked"*|*"static-pie linked"*) ;; *) echo "ERROR: not statically linked" >&2; exit 1 ;; esac
-        ldd "$TJS" 2>&1 | head -3 || true   # informational: expect "not a dynamic executable"
-
-    - name: Host-exec smoke of the built tjs
-      shell: bash
-      run: |
-        set -euo pipefail
-        out=$("$RUNNER_TEMP/tjs-out/tjs" eval 'console.log(typeof __tjs_fs_sync === "object" ? "tjs-shim-ok" : "MISSING-SYNC-FS")')
-        echo "tjs host-exec: $out"
-        [ "$out" = tjs-shim-ok ]
 
     - name: Install the runtime dep closure (fuse member inputs)
       shell: bash
@@ -131,26 +123,141 @@ runs:
       shell: bash
       run: node scripts/build-sea.mjs --bundle-only
 
-    - name: Fuse the self-contained builder (clode build --self)
-      id: name
+    - name: Build tjs (native)
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.guest-platform == 'native'
       shell: bash
       env:
-        CLODE_TJS: ${{ runner.temp }}/tjs-out/tjs
+        CLODE_TJS_VENDOR: ${{ steps.mode.outputs.vendor }}
+        CLODE_TJS_OUT: ${{ steps.mode.outputs.out }}
+        CLODE_TJS_STATIC: ${{ inputs.static == 'true' && '1' || '' }}
+        CLODE_TJS_WASM: ${{ inputs.wasm }}
+        CLODE_TJS_MIMALLOC: ${{ inputs.mimalloc }}
+        CLODE_TJS_FFI: ${{ inputs.ffi }}
+      run: node scripts/build-tjs.mjs --build-only
+
+    - name: Build tjs (alpine guest)
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.guest-platform == 'alpine'
+      uses: ./.github/actions/guest
+      with:
+        platform: ${{ inputs.guest-platform }}
+        arch: ${{ inputs.guest-arch }}
+        version: ${{ inputs.guest-version }}
+        packages: build-base cmake git linux-headers nodejs
+        cache-key: tjs-${{ inputs.leg }}
+        script: |
+          export CLODE_TJS_VENDOR="${{ steps.mode.outputs.vendor }}"
+          export CLODE_TJS_OUT="${{ steps.mode.outputs.out }}"
+          export CLODE_TJS_STATIC="${{ inputs.static == 'true' && '1' || '' }}"
+          export CLODE_TJS_WASM="${{ inputs.wasm }}"
+          export CLODE_TJS_MIMALLOC="${{ inputs.mimalloc }}"
+          export CLODE_TJS_FFI="${{ inputs.ffi }}"
+          node scripts/build-tjs.mjs --build-only
+
+    # A cache HIT skips the guest setup, so foreign-arch legs still need
+    # fix-binary binfmt on the host to exec the cached tjs (fuse worker,
+    # smokes). Cheap and idempotent.
+    - name: Ensure qemu binfmt for foreign-arch host execution
+      if: inputs.guest-platform == 'alpine' && inputs.guest-arch != 'x86_64' && runner.arch == 'X64'
+      uses: docker/setup-qemu-action@v4
+
+    - name: Stage the provider for the in-VM full smoke
+      if: steps.mode.outputs.exec == 'guest' && inputs.smoke == 'full'
+      shell: bash
+      run: |
+        set -uo pipefail
+        npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
+        PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f \( -name claude -o -name claude.exe \) -size +20M 2>/dev/null | head -1)"
+        if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found under @anthropic-ai/claude-code" >&2; exit 1; fi
+        echo "provider: $PROV"
+        mkdir -p .matrix
+        cp "$PROV" .matrix/provider-claude   # bytes only — clode EXTRACTS from it, never execs it
+
+    # The whole exec surface in one guest invocation: build tjs (unless the
+    # cache delivered it), fuse the builder UNDER it, smoke the builder, and
+    # have the builder build an ephemeral quaude (internal PONG + attest).
+    # The guest's node only interprets our scripts; every exec'd artifact
+    # (fuse worker, builder, quaude) is guest-native.
+    - name: Build + fuse + smoke (inside the guest VM)
+      if: steps.mode.outputs.exec == 'guest'
+      uses: ./.github/actions/guest
+      with:
+        platform: ${{ inputs.guest-platform }}
+        arch: ${{ inputs.guest-arch }}
+        version: ${{ inputs.guest-version }}
+        packages: ${{ inputs.guest-packages }}
+        cache-key: tjs-${{ inputs.leg }}
+        script: |
+          CLODE_TJS_VENDOR="$PWD/.matrix/tjs-vendor"; export CLODE_TJS_VENDOR
+          CLODE_TJS_OUT="$PWD/.matrix/tjs-out"; export CLODE_TJS_OUT
+          CLODE_TJS_WASM="${{ inputs.wasm }}"; export CLODE_TJS_WASM
+          CLODE_TJS_MIMALLOC="${{ inputs.mimalloc }}"; export CLODE_TJS_MIMALLOC
+          CLODE_TJS_FFI="${{ inputs.ffi }}"; export CLODE_TJS_FFI
+          if [ ! -x .matrix/tjs-out/tjs ]; then
+            node scripts/build-tjs.mjs --build-only
+          else
+            echo "tjs cache hit: skipping the in-guest build"
+          fi
+          # The fuse needs only tjs-out + the repo tree; dropping the vendor
+          # checkout (+ its object files) here spares the vm-to-runner sync —
+          # it is reconstructable from pins and never cached.
+          rm -rf .matrix/tjs-vendor
+          CLODE_TJS="$PWD/.matrix/tjs-out/tjs" node bin/clode build --self --out "./${{ steps.name.outputs.asset }}"
+          ./"${{ steps.name.outputs.asset }}" --clode-version
+          if [ "${{ inputs.smoke }}" = full ]; then
+            CLODE_CLAUDE_BIN="$PWD/.matrix/provider-claude" \
+            CLODE_CACHE="$PWD/.matrix/clode-cache" \
+            CLODE_DEPS="$PWD/.matrix/clode-deps" \
+              ./"${{ steps.name.outputs.asset }}" build --out ./quaude-smoke
+            rm -rf ./quaude-smoke .matrix/clode-cache .matrix/clode-deps
+          fi
+
+    - name: Verify the binary is truly static (musl legs)
+      if: inputs.static == 'true'
+      shell: bash
       run: |
         set -euo pipefail
-        if [ "${GITHUB_REF_TYPE:-}" = tag ]; then V="${GITHUB_REF_NAME#v}"; else V="$(cat VERSION)"; fi
-        ASSET="clode-$V-${{ inputs.leg }}"
-        node bin/clode build --self --out "$ASSET"
-        echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
+        TJS="${{ steps.mode.outputs.out }}/tjs"
+        f=$(file -b "$TJS"); echo "file: $f"
+        case "${{ inputs.guest-arch }}" in
+          x86_64) want="x86-64" ;;
+          aarch64) want="aarch64" ;;
+          s390x) want="S/390" ;;
+          x86) want="80386" ;;
+          armv7|armhf) want="ARM" ;;
+          ppc64le) want="PowerPC" ;;
+          riscv64) want="RISC-V" ;;
+          loongarch64) want="LoongArch" ;;
+          *) want="" ;;
+        esac
+        case "$f" in *"$want"*) ;; *) echo "ERROR: arch marker '$want' not in file output" >&2; exit 1 ;; esac
+        case "$f" in *"statically linked"*|*"static-pie linked"*) ;; *) echo "ERROR: not statically linked" >&2; exit 1 ;; esac
+        ldd "$TJS" 2>&1 | head -3 || true   # informational: expect "not a dynamic executable"
+
+    - name: Host-exec smoke of the built tjs
+      if: steps.mode.outputs.exec != 'guest'
+      shell: bash
+      run: |
+        set -euo pipefail
+        out=$("${{ steps.mode.outputs.out }}/tjs" eval 'console.log(typeof __tjs_fs_sync === "object" ? "tjs-shim-ok" : "MISSING-SYNC-FS")')
+        echo "tjs host-exec: $out"
+        [ "$out" = tjs-shim-ok ]
+
+    - name: Fuse the self-contained builder (clode build --self)
+      if: steps.mode.outputs.exec != 'guest'
+      shell: bash
+      env:
+        CLODE_TJS: ${{ steps.mode.outputs.out }}/tjs
+      run: node bin/clode build --self --out "${{ steps.name.outputs.asset }}"
 
     - name: Self-smoke --clode-version (host exec of the fused builder)
+      if: steps.mode.outputs.exec != 'guest'
       shell: bash
       run: |
         set -euo pipefail
         ./"${{ steps.name.outputs.asset }}" --clode-version
 
     - name: Full smoke — the builder builds the product (ephemeral, NEVER uploaded)
-      if: inputs.smoke == 'full'
+      if: steps.mode.outputs.exec != 'guest' && inputs.smoke == 'full'
       shell: bash
       run: |
         set -uo pipefail
@@ -180,5 +287,5 @@ runs:
       uses: actions/upload-artifact@v7
       with:
         name: tjs-${{ inputs.leg }}
-        path: ${{ runner.temp }}/tjs-out/tjs
+        path: ${{ steps.mode.outputs.out }}/tjs
         if-no-files-found: error

@@ -40,6 +40,16 @@ const wantStatic = process.env.CLODE_TJS_STATIC === '1';
 // there. A real fix (guard MAP_32BIT to 0 when undefined, upstream WAMR) is
 // queued for the Q3 batch; patches/ is frozen this phase.
 const wantWasm = (process.env.CLODE_TJS_WASM || 'on').toLowerCase() !== 'off';
+// CLODE_TJS_MIMALLOC=off: system malloc instead of mimalloc. mimalloc 3.2.7
+// does not compile on NetBSD at all (its __NetBSD__ branch references the
+// renamed mi_option_eager_commit_delay enum member — upstream regression,
+// committed finding in spike/quickjs/qemu/guest-m4.sh). VM legs start with
+// it off and re-enable per-platform as they prove.
+const wantMimalloc = (process.env.CLODE_TJS_MIMALLOC || 'on').toLowerCase() !== 'off';
+// CLODE_TJS_FFI=off: drop tjs:ffi (needs system libffi headers in the guest;
+// nothing shipped imports it — bun:ffi is a throw-on-use stub). The STATIC
+// knob already implies this; VM legs set it independently of static.
+const wantFfi = (process.env.CLODE_TJS_FFI || 'on').toLowerCase() !== 'off';
 const run = (cmd, args, opts = {}) =>
   execFileSync(cmd, args, { stdio: 'inherit', ...opts });
 const runOut = (cmd, args, opts = {}) =>
@@ -205,7 +215,25 @@ function ensureEsbuild(dir) {
   }
   return bin;
 }
-esbuildBundles(tjsDir);
+if (buildOnly) {
+  // The source phase already esbuilt these, possibly on a DIFFERENT-OS host
+  // (the T2 VM legs sync the tree into a BSD/Solaris guest). The checkout's
+  // node_modules carries the host-platform esbuild binary, which such a guest
+  // cannot exec — so the build phase never runs esbuild; it only verifies the
+  // source phase delivered the bundles the BE-regen path may need.
+  const stdlib = fs.readdirSync(path.join(tjsDir, 'src/js/stdlib')).filter((f) => f.endsWith('.js'));
+  const expected = [
+    ...JS_BUNDLES.map((b) => b.out),
+    ...stdlib.map((f) => `src/bundles/js/stdlib/${f}`),
+  ];
+  const missing = expected.filter((p) => !fs.existsSync(path.join(tjsDir, p)));
+  if (missing.length) {
+    throw new Error(`--build-only: ${missing.length} js bundle(s) missing (run --source-only first): ${missing.slice(0, 3).join(', ')}${missing.length > 3 ? ' ...' : ''}`);
+  }
+  console.log(`js bundles verified present (${expected.length}, esbuilt by the source phase)`);
+} else {
+  esbuildBundles(tjsDir);
+}
 
 if (sourceOnly) {
   console.log(`source tree ready: ${tjsDir}`);
@@ -223,15 +251,26 @@ if (wantStatic) {
 if (!wantWasm) {
   cmakeArgs.push('-DBUILD_WITH_WASM=OFF');
 }
-if (process.platform === 'linux') {
+if (!wantMimalloc) {
+  cmakeArgs.push('-DBUILD_WITH_MIMALLOC=OFF');
+}
+if (!wantFfi) {
+  cmakeArgs.push('-DBUILD_WITH_FFI=OFF');
+}
+if (process.platform !== 'darwin') {
   // txiki-sync-spawn.patch declares posix_spawnattr_t attr used only inside
   // the #ifdef POSIX_SPAWN_CLOEXEC_DEFAULT (Apple) block; txiki compiles
-  // -Werror on Unix, so gcc's -Wunused-variable kills every Linux leg
-  // (glibc + musl alike, found by the first matrix dispatch 2026-07-10).
-  // -Wno-error= demotes JUST that warning (gcc: beats a blanket -Werror
+  // -Werror on Unix, so -Wunused-variable kills every non-Apple POSIX leg
+  // (Linux glibc + musl found by the first matrix dispatch 2026-07-10; the
+  // T2 BSD/Solaris legs share the mechanism — the macro is Apple-only).
+  // unknown-pragmas: txiki's text-coding.c/mod_ffi.c use clang/MSVC
+  // `#pragma region`, which gcc warns about — fatal under -Werror on the
+  // gcc BSDs (committed finding, spike/quickjs/qemu/guest-m4.sh).
+  // -Wno-error= demotes JUST these warnings (gcc: beats a blanket -Werror
   // regardless of flag order). Real fix = patch v2 scoping the decl into the
-  // ifdef — queued for the Q3 upstream batch; patches/ is frozen this phase.
-  cmakeArgs.push('-DCMAKE_C_FLAGS=-Wno-error=unused-variable');
+  // ifdef + upstreaming the pragma cleanup — queued for the Q3 batch;
+  // patches/ is frozen this phase.
+  cmakeArgs.push('-DCMAKE_C_FLAGS=-Wno-error=unused-variable -Wno-error=unknown-pragmas');
 }
 run('cmake', ['-S', tjsDir, '-B', path.join(tjsDir, 'build'), ...cmakeArgs]);
 

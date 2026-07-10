@@ -1,11 +1,13 @@
 name: release-matrix
 
-# RELEASE MATRIX v1, phase 1 (plan Q2): T1 native legs + T1.5 Alpine/musl legs.
-# Publishes ONLY clode builders (canon: quaude is derived work, never leaves a
-# runner). glibc Linux legs are CI-smoke only (Decision 3) — the published
-# Linux artifacts are the musl-static ones. Phase 2/3 add the T2 vm legs and
-# T3 own-qemu legs through ./.github/actions/guest, whose YAML shape is fixed
-# here from day one.
+# RELEASE MATRIX v1 (plan Q2), phases 1+2: T1 native legs, T1.5 Alpine/musl
+# legs (8 arches), T2 VM legs (BSD trio + DragonFly + illumos + Solaris —
+# fuse and smoke run INSIDE the guest; a BSD binary has no binfmt escape on a
+# Linux host). Publishes ONLY clode builders (canon: quaude is derived work,
+# never leaves a runner). glibc Linux legs are CI-smoke only (Decision 3) —
+# the published Linux artifacts are the musl-static ones. Phase 3 adds the
+# T3 own-qemu legs (netbsd aarch64/sparc/i386) through ./.github/actions/
+# guest, whose YAML shape is fixed here from day one.
 #
 # Triggers: a version tag (attaches to the same release the SEA workflow
 # creates), or manual dispatch (default: artifacts only, no release — the
@@ -64,6 +66,133 @@ jobs:
             smoke: version               # PONG-class smoke lives in the be-oracle job
             timeout: 300
             soft-fail: true              # slow qemu-user BE leg — non-blocking (plan T1.5)
+          # ---- Phase-2 legs (plan Q2 PHASE-2 PICKUP). ALL new legs start
+          # soft-fail and earn hard status by smoking green (house rule);
+          # publish:true only materializes an artifact when the leg is green.
+          - leg: darwin-x64-tjs          # PUBLISHED (deferred from phase 1)
+            os: macos-15-intel
+            publish: true
+            soft-fail: true
+          # ---- T1.5 extra musl arches. x86 execs natively on the x64 kernel
+          # (full smoke); the rest are qemu-user with version-smoke like s390x.
+          # wasm off: MAP_32BIT is x86_64/aarch64-only in musl headers — and
+          # 32-bit WAMR is worthless to us anyway.
+          - leg: linux-x86-musl          # PUBLISHED; 32-bit LE
+            os: ubuntu-latest
+            guest-platform: alpine
+            guest-arch: x86
+            static: true
+            wasm: off
+            publish: true
+            soft-fail: true
+          - leg: linux-armv7-musl        # PUBLISHED; qemu-user (Cobalt runners lack aarch32 EL0)
+            os: ubuntu-latest
+            guest-platform: alpine
+            guest-arch: armv7
+            static: true
+            wasm: off
+            publish: true
+            smoke: version
+            timeout: 300
+            soft-fail: true
+          - leg: linux-ppc64le-musl      # PUBLISHED; qemu-user
+            os: ubuntu-latest
+            guest-platform: alpine
+            guest-arch: ppc64le
+            static: true
+            wasm: off
+            publish: true
+            smoke: version
+            timeout: 300
+            soft-fail: true
+          - leg: linux-riscv64-musl      # PUBLISHED; qemu-user
+            os: ubuntu-latest
+            guest-platform: alpine
+            guest-arch: riscv64
+            static: true
+            wasm: off
+            publish: true
+            smoke: version
+            timeout: 300
+            soft-fail: true
+          - leg: linux-loongarch64-musl  # PUBLISHED; qemu-user (alpine >= 3.21)
+            os: ubuntu-latest
+            guest-platform: alpine
+            guest-arch: loongarch64
+            static: true
+            wasm: off
+            publish: true
+            smoke: version
+            timeout: 300
+            soft-fail: true
+          # ---- T2 VM legs: fuse + smoke run INSIDE the guest (exec=guest —
+          # BSD/illumos binaries have no binfmt escape on a Linux host).
+          # Config: wasm off (WAMR "linux"-platform mremap wall on every
+          # non-Linux POSIX), mimalloc off (NetBSD compile regression; start
+          # uniform, re-enable per-platform as legs prove), ffi off (spares a
+          # guest libffi dep; nothing shipped imports tjs:ffi). Engine config
+          # (quickjs + wurl + libuv) identical to the pinned oracle build.
+          - leg: netbsd-amd64            # PUBLISHED; cross-platform-actions, KVM
+            os: ubuntu-latest
+            guest-platform: netbsd
+            guest-version: "10.1"
+            guest-packages: cmake gmake nodejs git-base bash
+            wasm: off
+            mimalloc: off
+            ffi: off
+            publish: true
+            soft-fail: true
+          - leg: freebsd-amd64           # PUBLISHED; cross-platform-actions, KVM
+            os: ubuntu-latest
+            guest-platform: freebsd
+            guest-version: "14.4"
+            guest-packages: cmake gmake node git bash
+            wasm: off
+            mimalloc: off
+            ffi: off
+            publish: true
+            soft-fail: true
+          - leg: openbsd-amd64           # PUBLISHED; cross-platform-actions, KVM
+            os: ubuntu-latest
+            guest-platform: openbsd
+            guest-version: "7.9"
+            guest-packages: cmake gmake node git bash
+            wasm: off
+            mimalloc: off
+            ffi: off
+            publish: true
+            soft-fail: true
+          - leg: dragonflybsd-amd64      # PUBLISHED; cross-platform-actions, KVM
+            os: ubuntu-latest
+            guest-platform: dragonflybsd
+            guest-version: "6.4.2"
+            guest-packages: cmake gmake node git bash
+            wasm: off
+            mimalloc: off
+            ffi: off
+            publish: true
+            soft-fail: true
+          - leg: omnios-amd64            # PUBLISHED; cross-platform-actions, KVM (illumos rung)
+            os: ubuntu-latest
+            guest-platform: omnios
+            guest-version: r151058
+            guest-packages: developer/gcc14 developer/build/gnu-make ooce/developer/build/cmake ooce/runtime/node-22 developer/versioning/git shell/bash
+            wasm: off
+            mimalloc: off
+            ffi: off
+            publish: true
+            soft-fail: true
+          - leg: solaris-amd64           # PUBLISHED; vmactions (SunOS rung)
+            os: ubuntu-latest
+            guest-platform: solaris
+            guest-version: 11.4-gcc      # CBE image with gcc/g++ preinstalled
+            guest-packages: developer/build/cmake developer/build/gnu-make developer/versioning/git runtime/nodejs shell/bash
+            wasm: off
+            mimalloc: off
+            ffi: off
+            publish: true
+            timeout: 120                 # vmactions boot is slower than cpa
+            soft-fail: true
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout || 90 }}
     continue-on-error: ${{ matrix.soft-fail || false }}
@@ -84,8 +213,12 @@ jobs:
           leg: ${{ matrix.leg }}
           guest-platform: ${{ matrix.guest-platform || 'native' }}
           guest-arch: ${{ matrix.guest-arch || 'x86_64' }}
+          guest-version: ${{ matrix.guest-version || '3.22' }}
+          guest-packages: ${{ matrix.guest-packages || '' }}
           static: ${{ matrix.static && 'true' || 'false' }}
           wasm: ${{ matrix.wasm || 'on' }}
+          mimalloc: ${{ matrix.mimalloc || 'on' }}
+          ffi: ${{ matrix.ffi || 'on' }}
           smoke: ${{ matrix.smoke || 'full' }}
           attest: ${{ matrix.publish && 'true' || 'false' }}
           publish: ${{ matrix.publish && 'true' || 'false' }}

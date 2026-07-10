@@ -2,45 +2,58 @@ name: guest
 description: >
   The ONE non-native entry point for the release matrix (plan Q2 "The guest
   action"): run a script on a guest platform, same contract for every leg.
-  v1 backends: "native" (host passthrough) and "alpine" (musl build
-  environment as a docker container — one mechanism for every host/guest arch
-  pair; foreign arches run under qemu-user via tonistiigi/binfmt fix-binary,
-  which ALSO lets later host steps exec the guest-built static binaries
-  directly). jirutka/setup-alpine was tried first and works, but its post-run
-  chroot teardown (webiny/action-post-run -> sudo /destroy.sh) breaks when
-  invoked from a nested composite action, failing otherwise-green jobs
-  (dispatch 29063991061, leg linux-x64-musl).
-  Dispatcher stubs reserve the phase-2/3 backends (cross-platform-actions /
-  vmactions / own-qemu recipes) so workflow YAML shape never changes; the
+  The script runs with cwd = the synced workspace on every backend.
+  Backends: "native" (host passthrough); "alpine" (musl build environment as a
+  docker container — one mechanism for every host/guest arch pair; foreign
+  arches run under qemu-user via tonistiigi/binfmt fix-binary, which ALSO lets
+  later host steps exec the guest-built static binaries directly); "vm" via
+  cross-platform-actions (netbsd/freebsd/openbsd/dragonflybsd/omnios — QEMU,
+  KVM-accelerated on x64 Linux runners; the action starts a persistent VM and
+  cpa.sh runs the script inside it with rsync both ways); "solaris" via
+  vmactions/solaris-vm (the one v1 platform cross-platform-actions lacks).
+  jirutka/setup-alpine was tried first for the musl legs but its post-run
+  chroot teardown breaks when invoked from a nested composite action
+  (dispatch 29063991061). Remaining dispatcher stubs reserve the phase-3
+  backend (own-qemu guest recipes) so workflow YAML shape never changes; the
   endgame is own-qemu absorbing platforms one by one.
 inputs:
   platform:
     description: >
-      Guest platform. v1: native | alpine. Reserved (phase 2/3): netbsd |
-      freebsd | openbsd | dragonflybsd | solaris | omnios | qemu-*.
+      Guest platform: native | alpine | netbsd | freebsd | openbsd |
+      dragonflybsd | omnios | solaris. Reserved (phase 3): qemu-*.
     required: true
   arch:
-    description: "Guest architecture (alpine: x86_64 aarch64 s390x x86 armv7 ppc64le riscv64 loongarch64)"
+    description: >
+      Guest architecture (alpine: x86_64 aarch64 s390x x86 armv7 ppc64le
+      riscv64 loongarch64; vm backends: x86_64 or arm64 where the image
+      exists — cross-platform-actions accepts x86_64 as an alias).
     required: false
     default: x86_64
   version:
-    description: "Guest OS version (alpine: release like 3.22)"
+    description: >
+      Guest OS version (alpine: release like 3.22; netbsd: 10.1; freebsd:
+      14.4; openbsd: 7.9; dragonflybsd: 6.4.2; omnios: r151058; solaris:
+       11.4-gcc).
     required: false
     default: "3.22"
   script:
-    description: Shell script to run inside the guest (sh -e semantics)
+    description: Shell script to run inside the guest (POSIX sh -e semantics)
     required: true
   cache-key:
-    description: Image/toolchain cache key (reserved for the vm/qemu backends)
+    description: Image/toolchain cache key (reserved for the qemu backends)
     required: false
     default: ""
   packages:
-    description: Packages to install in the guest before the script runs (alpine backend)
+    description: >
+      Packages to install in the guest before the script runs, named in the
+      GUEST's package system (apk / pkgin / pkg / pkg_add / IPS). IPS backends
+      (omnios, solaris) install per-package and log misses loudly instead of
+      failing the whole transaction — one run surfaces every missing name.
     required: false
     default: ""
 outputs:
   elapsed-seconds:
-    description: Wall-clock seconds the guest script took
+    description: Wall-clock seconds the guest script took (including VM boot)
     value: ${{ steps.timing.outputs.elapsed }}
 runs:
   using: composite
@@ -65,9 +78,8 @@ runs:
               *) echo "guest: unknown alpine arch '${{ inputs.arch }}'" >&2; exit 64 ;;
             esac
             echo "docker-platform=$p" >> "$GITHUB_OUTPUT" ;;
-          netbsd|freebsd|openbsd|dragonflybsd|solaris|omnios)
-            echo "guest: '${{ inputs.platform }}' is a phase-2 backend stub (cross-platform-actions/vmactions dispatch not implemented yet)" >&2
-            exit 64 ;;
+          netbsd|freebsd|openbsd|dragonflybsd|omnios) ;;   # cross-platform-actions
+          solaris) ;;                                      # vmactions
           qemu-*)
             echo "guest: '${{ inputs.platform }}' is a phase-3 backend stub (own-qemu guest-recipe subsystem not implemented yet)" >&2
             exit 64 ;;
@@ -101,6 +113,60 @@ runs:
           -e CLODE_GUEST_PACKAGES \
           "alpine:${{ inputs.version }}" \
           sh -e -c '[ -z "$CLODE_GUEST_PACKAGES" ] || apk add -q $CLODE_GUEST_PACKAGES; sh -e "$RUNNER_TEMP/guest-script.sh"'
+
+    # ---- cross-platform-actions backend: boots a persistent QEMU VM (KVM on
+    # x64 Linux runners) and installs cpa.sh on the runner's PATH; the next
+    # step executes inside the VM with the workspace rsynced both ways.
+    - name: Start the guest VM (cross-platform-actions)
+      if: contains('netbsd freebsd openbsd dragonflybsd omnios', inputs.platform)
+      uses: cross-platform-actions/action@v1.3.0
+      with:
+        operating_system: ${{ inputs.platform }}
+        version: ${{ inputs.version }}
+        architecture: ${{ inputs.arch }}
+        cpu_count: 4
+
+    - name: Run the guest script (in the VM via cpa.sh)
+      if: contains('netbsd freebsd openbsd dragonflybsd omnios', inputs.platform)
+      shell: cpa.sh {0}
+      run: |
+        set -e
+        PKGS="${{ inputs.packages }}"
+        case "${{ inputs.platform }}" in
+          netbsd)
+            [ -z "$PKGS" ] || sudo pkgin -y install $PKGS ;;
+          freebsd|dragonflybsd)
+            [ -z "$PKGS" ] || sudo env ASSUME_ALWAYS_YES=YES pkg install -y $PKGS ;;
+          openbsd)
+            [ -z "$PKGS" ] || sudo pkg_add $PKGS ;;
+          omnios)
+            # IPS: per-package so one run reports EVERY missing name (exit 4 =
+            # already installed / nothing to do — fine). The script then fails
+            # loudly at the first missing tool.
+            for p in $PKGS; do
+              sudo pkg install -q "$p" || [ $? -eq 4 ] || echo "guest: OMNIOS-PKG-MISS: $p" >&2
+            done
+            # ooce packages land outside the default PATH
+            PATH="/opt/ooce/bin:$PATH"; export PATH ;;
+        esac
+        ${{ inputs.script }}
+
+    # ---- vmactions backend: Solaris is the one v1 platform above's action
+    # lacks. Boots, rsyncs the workspace in, runs prepare + run as root in the
+    # VM, rsyncs back (copyback defaults true). Env vars are copied into the VM.
+    - name: Run the guest script (vmactions solaris VM)
+      if: inputs.platform == 'solaris'
+      uses: vmactions/solaris-vm@v1
+      with:
+        release: ${{ inputs.version }}
+        usesh: true
+        prepare: |
+          for p in ${{ inputs.packages }}; do
+            pkg install -q "$p" || [ $? -eq 4 ] || echo "guest: SOLARIS-PKG-MISS: $p" >&2
+          done
+        run: |
+          set -e
+          ${{ inputs.script }}
 
     # ---- native backend: host passthrough (exists so every leg can share one
     # YAML shape; native legs may also just run steps directly).
