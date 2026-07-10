@@ -295,29 +295,36 @@ function fixupMemMallocHOpenbsd(dir) {
   console.log('fixup mem-malloc-h-openbsd: applied');
 }
 
-function fixupLibuvOpenbsdForkSpawn(dir) {
+function fixupLibuvBsdForkSpawn(dir) {
   // The pinned libuv (saghul's fork) uses posix_spawn on EVERY platform;
-  // upstream libuv uses it only on macOS. On OpenBSD the posix_spawn route
-  // fails CHILD-SIDE for even the simplest spawn — a bare-127 exit with no
-  // output: the matrix's bare-engine probe `tjs.spawn(["/bin/sh","-c",
-  // "echo ok"])` exits 127 (dispatch #11, 2026-07-10). Forcing
-  // posix_spawn_works=0 there selects the fork/exec fallback — the
-  // battle-tested path upstream uses everywhere else. WHY OpenBSD's libc
-  // posix_spawn objects is an open question for the libuv fork (report
-  // candidate); this pins the proven path meanwhile.
+  // upstream libuv uses it only on macOS. Two BSDs object, each in its own
+  // way (matrix dispatches #11/#12, 2026-07-10):
+  //   OpenBSD — child-side failure: even `tjs.spawn(["/bin/sh","-c","echo
+  //     ok"])` exits a bare 127 with no output.
+  //   DragonFly — parent-side EINVAL from uv_spawn on the same probe; prime
+  //     suspect is sigfillset()+posix_spawnattr_setsigdefault (the set
+  //     includes SIGKILL/SIGSTOP, which a strict sigaction rejects).
+  // Forcing posix_spawn_works=0 selects the fork/exec fallback — the
+  // battle-tested path upstream libuv uses everywhere off-macOS. The deeper
+  // whys are report candidates for the libuv fork.
   const f = path.join(dir, 'deps/libuv/src/unix/process.c');
   const src = fs.readFileSync(f, 'utf8');
-  if (src.includes('OpenBSD: posix_spawn route fails child-side')) {
-    console.log('fixup libuv-openbsd-fork-spawn: already applied');
+  const guard = '#if defined(__OpenBSD__) || defined(__DragonFly__)\n  /* OpenBSD/DragonFly: the posix_spawn route fails (child-side bare 127 /\n   * parent-side EINVAL); use the fork/exec fallback path. */\n  posix_spawn_works = 0;\n#elif !defined(__linux__)\n  posix_spawn_works = 1;';
+  if (src.includes('defined(__OpenBSD__) || defined(__DragonFly__)')) {
+    console.log('fixup libuv-bsd-fork-spawn: already applied');
     return;
   }
+  // Upgrade path: an earlier run wrote the OpenBSD-only guard.
+  const v1 = '#if defined(__OpenBSD__)\n  /* OpenBSD: posix_spawn route fails child-side (bare exit 127); use the\n   * fork/exec fallback path. */\n  posix_spawn_works = 0;\n#elif !defined(__linux__)\n  posix_spawn_works = 1;';
   const anchor = '#if !defined(__linux__)\n  posix_spawn_works = 1;';
-  if (!src.includes(anchor)) {
-    throw new Error('fixup libuv-openbsd-fork-spawn: anchor not found (libuv changed under the pin — re-derive the fixup)');
+  if (src.includes(v1)) {
+    fs.writeFileSync(f, src.replace(v1, guard));
+  } else if (src.includes(anchor)) {
+    fs.writeFileSync(f, src.replace(anchor, guard));
+  } else {
+    throw new Error('fixup libuv-bsd-fork-spawn: anchor not found (libuv changed under the pin — re-derive the fixup)');
   }
-  const guard = '#if defined(__OpenBSD__)\n  /* OpenBSD: posix_spawn route fails child-side (bare exit 127); use the\n   * fork/exec fallback path. */\n  posix_spawn_works = 0;\n#elif !defined(__linux__)\n  posix_spawn_works = 1;';
-  fs.writeFileSync(f, src.replace(anchor, guard));
-  console.log('fixup libuv-openbsd-fork-spawn: applied');
+  console.log('fixup libuv-bsd-fork-spawn: applied');
 }
 
 function fixupLibuvSunosDefpath(dir) {
@@ -383,7 +390,7 @@ if (buildOnly) {
   fixupLibuvSunosDefpath(tjsDir);
   fixupQjsSunosB64(tjsDir);
   fixupPosixSocketSunosMsghdr(tjsDir);
-  fixupLibuvOpenbsdForkSpawn(tjsDir);
+  fixupLibuvBsdForkSpawn(tjsDir);
 }
 
 // ---- big-endian bundle regen, part 1: esbuild the plain-JS intermediates ----
