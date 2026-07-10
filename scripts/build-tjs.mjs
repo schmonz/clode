@@ -33,15 +33,49 @@ function ensureCheckout(name, url) {
   return dir;
 }
 
+// Fallback idempotency proof for patches whose reverse-check fails because a
+// LATER patch edited overlapping context (sync-fs vs sync-spawn — the PINS.md
+// build caveat): every line the patch ADDS must be present verbatim in its
+// target file. Weaker than reverse-apply but still loud on a missing patch.
+function addedLinesPresent(dir, patchAbs) {
+  const text = fs.readFileSync(patchAbs, 'utf8');
+  let target = null;
+  const wanted = new Map(); // file -> [added lines]
+  for (const line of text.split('\n')) {
+    const m = line.match(/^\+\+\+ b\/(.+)$/);
+    if (m) { target = m[1]; continue; }
+    if (target && line.startsWith('+') && !line.startsWith('++')) {
+      const content = line.slice(1);
+      if (content.trim() === '') continue;
+      if (!wanted.has(target)) wanted.set(target, []);
+      wanted.get(target).push(content);
+    }
+  }
+  for (const [file, lines] of wanted) {
+    const p = path.join(dir, file);
+    if (!fs.existsSync(p)) return `${file}: missing`;
+    const body = fs.readFileSync(p, 'utf8').split('\n');
+    const have = new Set(body);
+    for (const l of lines) if (!have.has(l)) return `${file}: missing line ${JSON.stringify(l)}`;
+  }
+  return null; // all added content present
+}
+
 function applyPatches(dir, prefix) {
   for (const p of fs.readdirSync(patches).filter((f) => f.startsWith(prefix) && f.endsWith('.patch'))) {
     const abs = path.join(patches, p);
     try {
       execFileSync('git', ['-C', dir, 'apply', '--check', abs], { stdio: 'pipe' });
     } catch {
-      console.log(`patch ${p}: already applied or conflicting — verifying reverse-applies`);
-      execFileSync('git', ['-C', dir, 'apply', '--check', '--reverse', abs], { stdio: 'pipe' });
-      continue; // reverse-check passed => already applied
+      try {
+        execFileSync('git', ['-C', dir, 'apply', '--check', '--reverse', abs], { stdio: 'pipe' });
+        console.log(`patch ${p}: already applied (reverse-check)`);
+      } catch {
+        const missing = addedLinesPresent(dir, abs);
+        if (missing) throw new Error(`patch ${p}: neither applies nor verifies as applied (${missing})`);
+        console.log(`patch ${p}: already applied (content-presence; overlapping-context caveat)`);
+      }
+      continue;
     }
     run('git', ['-C', dir, 'apply', abs]);
     console.log(`patch ${p}: applied`);
@@ -52,7 +86,10 @@ const tjsDir = ensureCheckout('txiki.js', 'https://github.com/saghul/txiki.js.gi
 applyPatches(tjsDir, 'txiki-');
 
 const jobs = String(cpus().length);
-run('cmake', ['-S', tjsDir, '-B', path.join(tjsDir, 'build'), '-DCMAKE_BUILD_TYPE=Release']);
+// -DTJS_USE_ADA=OFF: our recipe selects the plain-C wurl URL parser (the
+// ada-ectomy). The upstream-facing patch keeps the option's default ON;
+// only OUR build flips it. Kills the C++20 toolchain requirement and libc++.
+run('cmake', ['-S', tjsDir, '-B', path.join(tjsDir, 'build'), '-DCMAKE_BUILD_TYPE=Release', '-DTJS_USE_ADA=OFF']);
 run('cmake', ['--build', path.join(tjsDir, 'build'), '-j', jobs]);
 
 fs.mkdirSync(outDir, { recursive: true });
