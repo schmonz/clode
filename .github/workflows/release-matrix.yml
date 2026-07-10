@@ -239,7 +239,11 @@ jobs:
             os: ubuntu-latest
             guest-platform: midnightbsd
             guest-version: "4.0.4"
-            guest-packages: cmake gmake node git bash
+            # no git: the 4.0.4 mport tree's git dep chain is broken
+            # (p5-Digest-HMAC wants perl >= 5.40.3, image ships 5.38.5 —
+            # dispatch #14); every cmake git usage is if(GIT_EXECUTABLE)-
+            # guarded, so the build does not need it.
+            guest-packages: cmake gmake node bash
             wasm: off
             mimalloc: off
             ffi: off
@@ -249,7 +253,10 @@ jobs:
             os: ubuntu-latest
             guest-platform: haiku
             guest-version: r1beta5
-            guest-packages: cmake gcc nodejs git
+            # provides-syntax: HaikuPorts package names are versioned
+            # (nodejs22 etc.) — cmd:X resolves whatever provides the command
+            # ("nodejs" alone: Name not found, dispatch #14).
+            guest-packages: cmd:cmake cmd:gcc cmd:node cmd:git cmd:make
             wasm: off
             mimalloc: off
             ffi: off
