@@ -423,6 +423,28 @@ function fixupLwsHaikuMallocUsableSize(dir) {
   console.log('fixup lws-haiku-malloc-usable-size: applied');
 }
 
+function fixupLwsHaikuDirent(dir) {
+  // Haiku's dirent has NO d_type (like SunOS/QNX) and defines no DT_*
+  // constants — lws's misc/dir.c already carries a stat-based fallback
+  // behind #if defined(__sun) || defined(__QNX__); Haiku joins that list
+  // at both guard sites (dry-run #15, 2026-07-10). lws upstream candidate.
+  const f = path.join(dir, 'deps/libwebsockets/lib/misc/dir.c');
+  const src = fs.readFileSync(f, 'utf8');
+  if (src.includes('__HAIKU__')) {
+    console.log('fixup lws-haiku-dirent: already applied');
+    return;
+  }
+  const pos = '#if defined(__sun) || defined(__QNX__)';
+  const neg = '#if !defined(__sun) && !defined(__QNX__)';
+  if (!src.includes(pos) || !src.includes(neg)) {
+    throw new Error('fixup lws-haiku-dirent: anchors not found (lws changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src
+    .replace(pos, '#if defined(__sun) || defined(__QNX__) || defined(__HAIKU__)')
+    .replace(neg, '#if !defined(__sun) && !defined(__QNX__) && !defined(__HAIKU__)'));
+  console.log('fixup lws-haiku-dirent: applied');
+}
+
 let tjsDir;
 if (buildOnly) {
   // The patched tree was constructed by a prior --source-only run (possibly on
@@ -443,6 +465,7 @@ if (buildOnly) {
   fixupLibuvBsdForkSpawn(tjsDir);
   fixupLibuvMidnightbsd(tjsDir);
   fixupLwsHaikuMallocUsableSize(tjsDir);
+  fixupLwsHaikuDirent(tjsDir);
 }
 
 // ---- big-endian bundle regen, part 1: esbuild the plain-JS intermediates ----
