@@ -96,6 +96,26 @@ runs:
       if: inputs.platform == 'alpine'
       uses: docker/setup-qemu-action@v4
 
+    # Docker Hub's official alpine publishes NO loong64 manifest on any tag
+    # (matrix dispatch #5, 2026-07-10). Alpine itself ships loongarch64 since
+    # 3.21 — import the sha512-verified minirootfs straight from dl-cdn
+    # (provenance BETTER than Hub: the bytes come from alpinelinux.org) under
+    # the same local tag the run step expects.
+    - name: Import alpine from the official minirootfs (arches Docker Hub lacks)
+      if: inputs.platform == 'alpine' && inputs.arch == 'loongarch64'
+      shell: bash
+      run: |
+        set -euo pipefail
+        docker image inspect "alpine:${{ inputs.version }}" >/dev/null 2>&1 && exit 0
+        BASE="https://dl-cdn.alpinelinux.org/alpine/v${{ inputs.version }}/releases/loongarch64"
+        REL=$(curl -fsSL "$BASE/latest-releases.yaml" | awk '$1 == "file:" && $2 ~ /^alpine-minirootfs-.*\.tar\.gz$/ {print $2; exit}')
+        [ -n "$REL" ] || { echo "guest: no minirootfs entry in $BASE/latest-releases.yaml" >&2; exit 1; }
+        cd "$RUNNER_TEMP"
+        curl -fsSLO "$BASE/$REL"
+        curl -fsSL "$BASE/$REL.sha512" -o "$REL.sha512"
+        sha512sum -c "$REL.sha512"
+        docker import --platform linux/loong64 "$REL" "alpine:${{ inputs.version }}"
+
     - name: Run the guest script (alpine container)
       if: inputs.platform == 'alpine'
       shell: bash

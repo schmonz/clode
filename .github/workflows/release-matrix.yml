@@ -176,7 +176,7 @@ jobs:
             os: ubuntu-latest
             guest-platform: omnios
             guest-version: r151058
-            guest-packages: developer/gcc14 developer/build/gnu-make ooce/developer/build/cmake ooce/runtime/node-22 developer/versioning/git shell/bash
+            guest-packages: developer/gcc14 developer/build/gnu-make ooce/developer/cmake ooce/runtime/node-22 developer/versioning/git shell/bash
             wasm: off
             mimalloc: off
             ffi: off

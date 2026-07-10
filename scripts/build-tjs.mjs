@@ -157,6 +157,88 @@ function applyPatches(dir, prefix) {
   }
 }
 
+// ---- source fixups: known upstream portability bugs, fixed at the exact
+// line with content verification. Recipe-workaround tier (like -Wno-error
+// and the WASM/mimalloc knobs) — patches/ is frozen this phase; each fixup
+// is an upstream candidate queued for the Q3 batch. They run in the SOURCE
+// phase so every leg builds the identical tree.
+function fixupLwsDragonflySoPriority(dir) {
+  // libwebsockets skips SO_PRIORITY (a Linux-only sockopt) on every BSD
+  // EXCEPT DragonFly: the exclusion list in unix-sockets.c names FreeBSD/
+  // NetBSD/OpenBSD/sun/Haiku/... but misses __DragonFly__, so the DragonFly
+  // build dies on the undeclared constant (matrix dispatch #5, 2026-07-10;
+  // lws upstream candidate — their own comment says "the BSDs don't have
+  // SO_PRIORITY").
+  // TWO guard blocks share the shape (TCP_NODELAY's SOL_TCP branch and the
+  // SO_PRIORITY block) — fix EVERY __NetBSD__ exclusion line that lacks a
+  // DragonFly sibling, not just the first (the first-occurrence version of
+  // this fixup patched TCP_NODELAY and left SO_PRIORITY broken).
+  const f = path.join(dir, 'deps/libwebsockets/lib/plat/unix/unix-sockets.c');
+  const lines = fs.readFileSync(f, 'utf8').split('\n');
+  const isNetbsdGuard = (l) => /^\s*!defined\(__NetBSD__\) && \\$/.test(l);
+  if (!lines.some(isNetbsdGuard)) {
+    throw new Error('fixup lws-dragonfly-so-priority: anchor not found (lws changed under the pin — re-derive the fixup)');
+  }
+  let applied = 0;
+  const out = [];
+  for (const l of lines) {
+    if (isNetbsdGuard(l) && !(out.length && out[out.length - 1].includes('__DragonFly__'))) {
+      out.push(l.replace('__NetBSD__', '__DragonFly__'));
+      applied++;
+    }
+    out.push(l);
+  }
+  if (applied) {
+    fs.writeFileSync(f, out.join('\n'));
+    console.log(`fixup lws-dragonfly-so-priority: applied (${applied} guard block(s))`);
+  } else {
+    console.log('fixup lws-dragonfly-so-priority: already applied');
+  }
+}
+
+function fixupMemMallocHOpenbsd(dir) {
+  // txiki's src/mem.c falls through to #include <malloc.h> on every platform
+  // that is not mimalloc/Apple — OpenBSD removed malloc.h entirely (stdlib.h
+  // is the home of malloc there, and malloc_usable_size does not exist; the
+  // usable-size helper already returns 0 on the #else branch). Matrix
+  // dispatch #5, 2026-07-10; txiki upstream candidate.
+  const f = path.join(dir, 'src/mem.c');
+  const src = fs.readFileSync(f, 'utf8');
+  if (src.includes('__OpenBSD__')) {
+    console.log('fixup mem-malloc-h-openbsd: already applied');
+    return;
+  }
+  const anchor = '#else\n#include <malloc.h>\n#endif';
+  if (!src.includes(anchor)) {
+    throw new Error('fixup mem-malloc-h-openbsd: anchor not found (mem.c changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(anchor, '#elif !defined(__OpenBSD__)\n#include <malloc.h>\n#endif'));
+  console.log('fixup mem-malloc-h-openbsd: applied');
+}
+
+function fixupLibuvSunosDefpath(dir) {
+  // Vendored libuv's unix/process.c (execvpe emulation) uses _PATH_DEFPATH
+  // and NAME_MAX bare. Solaris' paths.h (gcc fixincludes) lacks
+  // _PATH_DEFPATH, and SunOS famously omits NAME_MAX from limits.h (it is
+  // filesystem-dependent there). Guarded fallbacks — no-ops everywhere else
+  // (musl's own execvp.c, which this code was copied from, carries the same
+  // NAME_MAX fallback). Matrix dispatch #5, 2026-07-10; libuv upstream
+  // report candidate.
+  const f = path.join(dir, 'deps/libuv/src/unix/process.c');
+  const src = fs.readFileSync(f, 'utf8');
+  const guard = '#ifndef _PATH_DEFPATH\n# define _PATH_DEFPATH "/usr/bin:/bin"\n#endif\n#ifndef NAME_MAX\n# define NAME_MAX 255\n#endif\n';
+  if (src.includes('#ifndef _PATH_DEFPATH')) {
+    console.log('fixup libuv-sunos-defpath: already applied');
+    return;
+  }
+  const anchor = '#include <paths.h>\n';
+  if (!src.includes(anchor)) {
+    throw new Error('fixup libuv-sunos-defpath: anchor not found (libuv changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(anchor, anchor + guard));
+  console.log('fixup libuv-sunos-defpath: applied');
+}
+
 let tjsDir;
 if (buildOnly) {
   // The patched tree was constructed by a prior --source-only run (possibly on
@@ -168,6 +250,9 @@ if (buildOnly) {
 } else {
   tjsDir = ensureCheckout('txiki.js', 'https://github.com/saghul/txiki.js.git');
   applyPatches(tjsDir, 'txiki-');
+  fixupLwsDragonflySoPriority(tjsDir);
+  fixupMemMallocHOpenbsd(tjsDir);
+  fixupLibuvSunosDefpath(tjsDir);
 }
 
 // ---- big-endian bundle regen, part 1: esbuild the plain-JS intermediates ----
