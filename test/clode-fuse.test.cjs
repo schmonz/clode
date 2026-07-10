@@ -74,3 +74,16 @@ test('--clode-help documents clode build, build --self, and CLODE_TJS', () => {
   assert.match(r.stdout, /quaude/);
   assert.match(r.stdout, /CLODE_TJS/);
 });
+
+test('timeoutScale: default 1, integer >= 1 honored, junk rejected', () => {
+  // TCG-emulated guests run 10-20x slower than metal; CI's VM legs scale
+  // every build-pipeline hang guard via CLODE_TIMEOUT_SCALE (dispatch #14:
+  // the 5-min fuse-worker guard killed a healthy freebsd-arm64 compile).
+  const { timeoutScale } = require('../libexec/clode-fuse.cjs');
+  assert.strictEqual(timeoutScale({}), 1);
+  assert.strictEqual(timeoutScale(undefined), 1);
+  assert.strictEqual(timeoutScale({ CLODE_TIMEOUT_SCALE: '10' }), 10);
+  assert.strictEqual(timeoutScale({ CLODE_TIMEOUT_SCALE: '0' }), 1);
+  assert.strictEqual(timeoutScale({ CLODE_TIMEOUT_SCALE: '-3' }), 1);
+  assert.strictEqual(timeoutScale({ CLODE_TIMEOUT_SCALE: 'lots' }), 1);
+});

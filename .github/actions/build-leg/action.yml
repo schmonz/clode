@@ -192,6 +192,10 @@ runs:
           # (exit 127, dispatch #7). The workspace is exec-able everywhere.
           mkdir -p "$PWD/.matrix/tmp"
           TMPDIR="$PWD/.matrix/tmp"; export TMPDIR
+          # TCG-emulated guests run 10-20x slower than metal; scale the build
+          # pipeline's hang guards accordingly (harmless on KVM legs — these
+          # are guards, not pacing; dispatch #14 freebsd-arm64 finding).
+          CLODE_TIMEOUT_SCALE=10; export CLODE_TIMEOUT_SCALE
           CLODE_TJS_VENDOR="$PWD/.matrix/tjs-vendor"; export CLODE_TJS_VENDOR
           CLODE_TJS_OUT="$PWD/.matrix/tjs-out"; export CLODE_TJS_OUT
           CLODE_TJS_WASM="${{ inputs.wasm }}"; export CLODE_TJS_WASM

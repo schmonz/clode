@@ -94,6 +94,16 @@ function startPongMock() {
   });
 }
 
+// CLODE_TIMEOUT_SCALE: integer multiplier for every subprocess timeout in
+// the build pipeline (default 1). The timeouts are HANG guards, not pacing —
+// but a TCG-emulated guest runs 10-20x slower than metal, and the fuse
+// worker's 5-minute guard killed a healthy bytecode compile on the matrix's
+// freebsd-arm64 leg (dispatch #14, 2026-07-10). CI's VM legs set 10.
+function timeoutScale(env) {
+  const n = parseInt((env || {}).CLODE_TIMEOUT_SCALE, 10);
+  return Number.isFinite(n) && n >= 1 ? n : 1;
+}
+
 // Async spawn with capture + timeout (spawnSync would starve the in-process
 // mock server — the same reason the test harnesses spawn async).
 function run(cmd, args, opts = {}) {
@@ -122,6 +132,7 @@ async function clodeBuild(args, opts) {
   const verbose = !!env.CLODE_VERBOSE;
   const clodeLog = (m) => { if (verbose) stderr.write(m + '\n'); };
   const fail = (m) => { stderr.write('clode: ' + m + '\n'); return 1; };
+  const SCALE = timeoutScale(env);
 
   // -- argv: --self + --out only; anything else is an error (this is clode's
   // own namespace — nothing here passes through to Claude Code).
@@ -296,7 +307,7 @@ async function clodeBuild(args, opts) {
       path.join(libexec, 'quaude-bootstrap.mjs'), extrasPath, out,
       // --self embeds the PRISTINE template as a member (Decision 2); the
       // quaude role has no use for it (its base IS the signed copy).
-      ...(self ? [template] : [])], { env, timeout: 300000 });
+      ...(self ? [template] : [])], { env, timeout: 300000 * SCALE });
     if (w.status !== 0) {
       let extra = '';
       if (!w.stdout && !w.stderr) {
@@ -319,13 +330,13 @@ async function clodeBuild(args, opts) {
       clodeLog('clode: build: smoke --clode-version/--clode-help ...');
       const smokeEnv = { ...env };
       delete smokeEnv.NODE_PATH;
-      const v = await run(out, ['--clode-version'], { env: smokeEnv, cwd: work });
+      const v = await run(out, ['--clode-version'], { env: smokeEnv, cwd: work, timeout: 120000 * SCALE });
       if (v.status !== 0 || !/^clode /.test(v.stdout)) {
         stderr.write(`clode: build --self: SMOKE FAILED — the fused builder did not answer --clode-version\n`);
         stderr.write(`clode: build --self: exit=${v.status} stdout:\n${v.stdout}\nstderr:\n${v.stderr}\n`);
         return 1;
       }
-      const h = await run(out, ['--clode-help'], { env: smokeEnv, cwd: work });
+      const h = await run(out, ['--clode-help'], { env: smokeEnv, cwd: work, timeout: 120000 * SCALE });
       if (h.status !== 0 || !/clode build/.test(h.stdout)) {
         stderr.write(`clode: build --self: SMOKE FAILED — the fused builder did not answer --clode-help\n`);
         stderr.write(`clode: build --self: exit=${h.status} stdout:\n${h.stdout}\nstderr:\n${h.stderr}\n`);
@@ -344,7 +355,7 @@ async function clodeBuild(args, opts) {
     try {
       const smokeEnv = { ...env, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-clode-build-smoke' };
       delete smokeEnv.NODE_PATH;
-      pong = await run(out, ['-p', 'say PONG'], { env: smokeEnv, cwd: work });
+      pong = await run(out, ['-p', 'say PONG'], { env: smokeEnv, cwd: work, timeout: 120000 * SCALE });
     } finally { await mock.close(); }
     const posted = mock.requests.some((q) => q.method === 'POST' && /\/messages/.test(q.url));
     if (pong.status !== 0 || !/PONG/.test(pong.stdout) || !posted) {
@@ -354,7 +365,7 @@ async function clodeBuild(args, opts) {
     }
 
     // -- smoke 2: attest must verify every member from the trailer just written.
-    const attest = await run(out, ['--quaude-attest'], { env, cwd: work });
+    const attest = await run(out, ['--quaude-attest'], { env, cwd: work, timeout: 120000 * SCALE });
     if (attest.status !== 0 || !/quaude-attest: all members verified/.test(attest.stdout)) {
       stderr.write(`clode: build: ATTEST FAILED (exit ${attest.status}):\n${attest.stdout}\n${attest.stderr}\n`);
       return 1;
@@ -368,4 +379,4 @@ async function clodeBuild(args, opts) {
   }
 }
 
-module.exports = { clodeBuild, startPongMock, cannedSSE };
+module.exports = { clodeBuild, startPongMock, cannedSSE, timeoutScale };
