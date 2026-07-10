@@ -1,0 +1,206 @@
+[
+ {
+  "section": "parse",
+  "index": 277,
+  "kind": "parse-throws",
+  "case": "http://GOO​⁠﻿goo.com"
+ },
+ {
+  "section": "parse",
+  "index": 287,
+  "kind": "parse-throws",
+  "case": "http://www.foo。bar.com"
+ },
+ {
+  "section": "parse",
+  "index": 299,
+  "kind": "parse-throws",
+  "case": "http://Ｇｏ.com"
+ },
+ {
+  "section": "parse",
+  "index": 316,
+  "kind": "parse-throws",
+  "case": "http://０Ｘｃ０．０２５０．０１"
+ },
+ {
+  "section": "parse",
+  "index": 728,
+  "kind": "parse-throws",
+  "case": "file://a­b/p"
+ },
+ {
+  "section": "parse",
+  "index": 729,
+  "kind": "parse-throws",
+  "case": "file://a%C2%ADb/p"
+ },
+ {
+  "section": "parse",
+  "index": 730,
+  "kind": "parse-throws",
+  "case": "file://loC𝐀𝐋𝐇𝐨𝐬𝐭/usr/bin"
+ },
+ {
+  "section": "parse",
+  "index": 805,
+  "kind": "parse-throws",
+  "case": "https://a%C2%ADb/"
+ },
+ {
+  "section": "setters",
+  "index": 116,
+  "kind": "setter-noop",
+  "case": "https://example.com/"
+ },
+ {
+  "section": "setters",
+  "index": 165,
+  "kind": "setter-noop",
+  "case": "https://example.com/"
+ },
+ {
+  "section": "toascii",
+  "index": 24,
+  "kind": "toascii-reject",
+  "case": "ශ්‍රී"
+ },
+ {
+  "section": "toascii",
+  "index": 25,
+  "kind": "toascii-reject",
+  "case": "نامه‌ای"
+ },
+ {
+  "section": "toascii",
+  "index": 35,
+  "kind": "toascii-reject",
+  "case": "a­b"
+ },
+ {
+  "section": "toascii",
+  "index": 39,
+  "kind": "toascii-reject",
+  "case": "≠"
+ },
+ {
+  "section": "toascii",
+  "index": 40,
+  "kind": "toascii-reject",
+  "case": "≮"
+ },
+ {
+  "section": "toascii",
+  "index": 41,
+  "kind": "toascii-reject",
+  "case": "≯"
+ },
+ {
+  "section": "toascii",
+  "index": 42,
+  "kind": "toascii-reject",
+  "case": "=­̸"
+ },
+ {
+  "section": "toascii",
+  "index": 43,
+  "kind": "toascii-reject",
+  "case": "<­̸"
+ },
+ {
+  "section": "toascii",
+  "index": 44,
+  "kind": "toascii-reject",
+  "case": ">­̸"
+ },
+ {
+  "section": "toascii",
+  "index": 47,
+  "kind": "toascii-reject",
+  "case": "ශ්‍රී.com"
+ },
+ {
+  "section": "toascii",
+  "index": 48,
+  "kind": "toascii-reject",
+  "case": "نامه‌ای.com"
+ },
+ {
+  "section": "toascii",
+  "index": 59,
+  "kind": "toascii-reject",
+  "case": "look᠎out.net"
+ },
+ {
+  "section": "toascii",
+  "index": 60,
+  "kind": "toascii-reject",
+  "case": "look⁠out.net"
+ },
+ {
+  "section": "toascii",
+  "index": 61,
+  "kind": "toascii-reject",
+  "case": "look﻿out.net"
+ },
+ {
+  "section": "toascii",
+  "index": 65,
+  "kind": "toascii-reject",
+  "case": "looḱout.net"
+ },
+ {
+  "section": "toascii",
+  "index": 67,
+  "kind": "toascii-reject",
+  "case": "look⁫out.net"
+ },
+ {
+  "section": "toascii",
+  "index": 74,
+  "kind": "toascii-reject",
+  "case": "Ӏ.com"
+ },
+ {
+  "section": "toascii",
+  "index": 75,
+  "kind": "toascii-reject",
+  "case": "㛼.com"
+ },
+ {
+  "section": "toascii",
+  "index": 76,
+  "kind": "toascii-reject",
+  "case": "Ↄ.com"
+ },
+ {
+  "section": "toascii",
+  "index": 77,
+  "kind": "toascii-reject",
+  "case": "look͏out.net"
+ },
+ {
+  "section": "toascii",
+  "index": 79,
+  "kind": "toascii-reject",
+  "case": "ড়.com"
+ },
+ {
+  "section": "toascii",
+  "index": 80,
+  "kind": "toascii-reject",
+  "case": "ẞ.com"
+ },
+ {
+  "section": "toascii",
+  "index": 81,
+  "kind": "toascii-reject",
+  "case": "ẞ.foo.com"
+ },
+ {
+  "section": "toascii",
+  "index": 86,
+  "kind": "toascii-reject",
+  "case": "foò.bar.com"
+ }
+]
