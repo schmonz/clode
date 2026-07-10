@@ -214,7 +214,6 @@ runs:
           CLODE_TJS="$PWD/.matrix/tjs-out/tjs" node bin/clode build --self --out "./${{ steps.name.outputs.asset }}"
           ./"${{ steps.name.outputs.asset }}" --clode-version
           if [ "${{ inputs.smoke }}" = full ]; then
-            CLODE_SHIM_TRACE=1 \
             CLODE_CLAUDE_BIN="$PWD/.matrix/provider-claude" \
             CLODE_CACHE="$PWD/.matrix/clode-cache" \
             CLODE_DEPS="$PWD/.matrix/clode-deps" \

@@ -66,13 +66,15 @@ jobs:
             smoke: version               # PONG-class smoke lives in the be-oracle job
             timeout: 300
             soft-fail: true              # slow qemu-user BE leg — non-blocking (plan T1.5)
-          # ---- Phase-2 legs (plan Q2 PHASE-2 PICKUP). ALL new legs start
-          # soft-fail and earn hard status by smoking green (house rule);
+          # ---- Phase-2 legs (plan Q2 PHASE-2 PICKUP). New legs start
+          # soft-fail and EARN hard status by smoking green (house rule) —
+          # dispatches #5-#13 hardened everything except the slow qemu-user
+          # TCG class (non-blocking by design, like s390x) and dragonflybsd
+          # (one environmental VM hang on record; hardens next cycle).
           # publish:true only materializes an artifact when the leg is green.
           - leg: darwin-x64-tjs          # PUBLISHED (deferred from phase 1)
             os: macos-15-intel
             publish: true
-            soft-fail: true
           # ---- T1.5 extra musl arches. x86 execs natively on the x64 kernel
           # (full smoke); the rest are qemu-user with version-smoke like s390x.
           # wasm off: MAP_32BIT is x86_64/aarch64-only in musl headers — and
@@ -84,7 +86,6 @@ jobs:
             static: true
             wasm: off
             publish: true
-            soft-fail: true
           - leg: linux-armv7-musl        # PUBLISHED; qemu-user (Cobalt runners lack aarch32 EL0)
             os: ubuntu-latest
             guest-platform: alpine
@@ -141,7 +142,6 @@ jobs:
             mimalloc: off
             ffi: off
             publish: true
-            soft-fail: true
           - leg: freebsd-amd64           # PUBLISHED; cross-platform-actions, KVM
             os: ubuntu-latest
             guest-platform: freebsd
@@ -151,7 +151,6 @@ jobs:
             mimalloc: off
             ffi: off
             publish: true
-            soft-fail: true
           - leg: openbsd-amd64           # PUBLISHED; cross-platform-actions, KVM
             os: ubuntu-latest
             guest-platform: openbsd
@@ -161,7 +160,6 @@ jobs:
             mimalloc: off
             ffi: off
             publish: true
-            soft-fail: true
           - leg: dragonflybsd-amd64      # PUBLISHED; cross-platform-actions, KVM
             os: ubuntu-latest
             guest-platform: dragonflybsd
@@ -181,7 +179,6 @@ jobs:
             mimalloc: off
             ffi: off
             publish: true
-            soft-fail: true
           - leg: solaris-amd64           # PUBLISHED; vmactions (SunOS rung)
             os: ubuntu-latest
             guest-platform: solaris
@@ -192,7 +189,6 @@ jobs:
             ffi: off
             publish: true
             timeout: 120                 # vmactions boot is slower than cpa
-            soft-fail: true
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout || 90 }}
     continue-on-error: ${{ matrix.soft-fail || false }}
