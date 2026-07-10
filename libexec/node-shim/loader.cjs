@@ -50,9 +50,26 @@ const P = {
   },
 };
 
+/* ---- quaude VFS seam ---------------------------------------------------------
+ * When this loader boots inside a FUSED quaude binary, the first-stage bootstrap
+ * (libexec/quaude-bootstrap.mjs) has already read the archive appended to the
+ * executable and mounted it as globalThis.__quaudeVFS = { files: Map(relName ->
+ * Uint8Array), index } BEFORE evaluating this file. Every path under /quaude/
+ * then resolves from the archive; everything else falls through to the real fs.
+ * With no VFS mounted (`tjs run loader.cjs <entry>`), __QVFS is null and every
+ * seam below is a no-op — behavior is byte-identical to the unfused loader
+ * (regression net: the whole node-shim suite). Tests: test/node-shim-vfs.test.cjs. */
+const __QVFS = globalThis.__quaudeVFS || null;
+function __vfsGet(p) {
+  if (!__QVFS || typeof p !== 'string' || !p.startsWith('/quaude/')) return null;
+  return __QVFS.files.get(p.slice(8)) ?? null;
+}
+
 /* ---- read file as utf8 via sync fs */
 const td = new TextDecoder();
 function readTextSync(file) {
+  const vb = __vfsGet(file);
+  if (vb) return td.decode(vb);
   const fd = FSS.open(file, 'r');
   try {
     const size = FSS.fstat(fd).size;
@@ -67,7 +84,24 @@ function readTextSync(file) {
     return td.decode(all);
   } finally { FSS.close(fd); }
 }
-function existsFileSync(p) { try { return FSS.stat(p).kind === 'file'; } catch { return false; } }
+function existsFileSync(p) { if (__vfsGet(p)) return true; try { return FSS.stat(p).kind === 'file'; } catch { return false; } }
+
+/* ---- read file as bytes via sync fs (or the VFS) — for .qbc bytecode entries */
+function readBinSync(file) {
+  const vb = __vfsGet(file);
+  if (vb) return vb;
+  const fd = FSS.open(file, 'r');
+  try {
+    const size = FSS.fstat(fd).size;
+    const all = new Uint8Array(size); let got = 0;
+    while (got < size) {
+      const ab = FSS.read(fd, Math.min(1 << 20, size - got), got);
+      if (ab.byteLength === 0) break;
+      all.set(new Uint8Array(ab), got); got += ab.byteLength;
+    }
+    return all.subarray(0, got);
+  } finally { FSS.close(fd); }
+}
 
 /* ---- wall proxy */
 function wallProxy(ns) {
@@ -108,7 +142,9 @@ function sealSurface(ns, exportsVal) {
 }
 
 /* ---- builtin registry (lazy) */
-const SHIM_DIR = P.join(P.dirname(P.resolve(tjs.args[2] ?? '')), 'modules'); // loader.cjs lives beside modules/
+const SHIM_DIR = __QVFS
+  ? '/quaude/node-shim/modules'                                // fused: shims are archive members
+  : P.join(P.dirname(P.resolve(tjs.args[2] ?? '')), 'modules'); // loader.cjs lives beside modules/
 const builtinCache = new Map();
 const KNOWN = ['assert','buffer','child_process','crypto','events','fs','fs/promises','module','net','os','path','path/win32','path/posix','process','stream','stream/consumers','stream/promises','string_decoder','tls','tty','url','util','v8','vm','zlib','sea','readline','http','https','dgram','worker_threads','async_hooks','inspector','constants','querystring','timers','timers/promises','dns','dns/promises','http2','perf_hooks','diagnostics_channel'];
 function loadBuiltin(name) {
@@ -363,6 +399,9 @@ function evalModule(file, isEntry = false) {
 // specifier as the `buffer` builtin.
 function requireExt(name) {
   const roots = [];
+  // Fused quaude: the ext-dep closure ships as archive members; consult it first
+  // (the P.join fallback below embeds '..' segments __vfsGet cannot see).
+  if (__QVFS) roots.push('/quaude/node_modules/' + name);
   for (const r of (globalThis.process && process.env.NODE_PATH || '').split(':')) if (r) roots.push(P.join(r, name));
   roots.push(P.join(P.dirname(SHIM_DIR), '..', '..', 'node_modules', name)); // repo node_modules fallback
   for (const pkgDir of roots) {
@@ -373,6 +412,33 @@ function requireExt(name) {
     for (const c of [entry, entry + '.js', entry + '.cjs', P.join(entry, 'index.js')]) if (existsFileSync(c)) return evalModule(c);
   }
   return undefined;
+}
+
+/* ---- .qbc bytecode entry ------------------------------------------------------
+ * A `.qbc` entry is the CJS wrapper function around cli.cjs, compiled as an ES
+ * module by the fuse step (libexec/quaude-fuse.js) under the SAME tjs build:
+ *   globalThis.__quaude_entry = function (exports, require, module, __filename,
+ *   __dirname) { <transformed cli.cjs> };
+ * evalBytecode of that module completes synchronously (no imports / TLA), then
+ * the entry function is called with this loader's ordinary CJS machinery — so
+ * require(), module cache, and require.main behave exactly as for a source
+ * entry. The module identity (filename, cache key, __dirname) uses the .cjs
+ * name the bytecode was compiled from, so `require(__dirname + '/bun-shim.cjs')`
+ * and relative resolution inside the bundle are unchanged. NOTE: compiled
+ * modules are STRICT; the shims must stay strict-clean on the bundle's paths. */
+function evalBytecodeEntry(qbcFile) {
+  const origName = qbcFile.replace(/\.qbc$/, '.cjs');
+  const bytes = readBinSync(qbcFile);
+  const obj = tjs.engine.deserialize(bytes);
+  tjs.engine.evalBytecode(obj); // sets globalThis.__quaude_entry synchronously
+  const fn = globalThis.__quaude_entry;
+  if (typeof fn !== 'function') throw new Error(`node-shim: ${qbcFile} did not define __quaude_entry (not a quaude bytecode entry?)`);
+  delete globalThis.__quaude_entry;
+  const module = { exports: {}, filename: origName };
+  mainModule = module;
+  moduleCache.set(origName, module);
+  const dir = P.dirname(origName);
+  fn.call(module.exports, module.exports, makeRequire(dir), module, origName, dir);
 }
 
 /* ---- globals, then entry */
@@ -497,13 +563,26 @@ globalThis.addEventListener?.('unhandledrejection', (ev) => {
   console.error(r && r.stack ? `${r}\n${r.stack}` : String(r));
 });
 
-const entry = tjs.args[3];
-if (!entry) { console.error('usage: tjs run loader.cjs <entry.cjs> [args...]'); tjs.exit(64); }
-const entryAbs = P.resolve(entry);
-process.argv = [tjs.exePath ?? 'tjs', entryAbs, ...tjs.args.slice(4)];
+let entryAbs, extraArgv;
+if (__QVFS) {
+  // Fused quaude: tjs.args = [exePath, ...userArgs] (no 'run', no script path —
+  // the stock tx1k1.js standalone boot leaves argv untouched). --quaude-* flags
+  // were already carved out by the bootstrap into globalThis.__quaudeArgs.
+  entryAbs = '/quaude/cli.qbc';
+  extraArgv = globalThis.__quaudeArgs ?? tjs.args.slice(1);
+} else {
+  const entry = tjs.args[3];
+  if (!entry) { console.error('usage: tjs run loader.cjs <entry.cjs> [args...]'); tjs.exit(64); }
+  entryAbs = P.resolve(entry);
+  extraArgv = tjs.args.slice(4);
+}
+// argv[1] presents the .cjs identity for a bytecode entry (matching the module
+// identity evalBytecodeEntry establishes; the bundle inspects its own argv[1]).
+process.argv = [tjs.exePath ?? 'tjs', entryAbs.replace(/\.qbc$/, '.cjs'), ...extraArgv];
 if (tjs.env.CLODE_PROBE) { try { evalModule(P.resolve(tjs.env.CLODE_PROBE)); } catch (e) { console.error('probe err', e); } }
 try {
-  evalModule(entryAbs, true);
+  if (entryAbs.endsWith('.qbc')) evalBytecodeEntry(entryAbs);
+  else evalModule(entryAbs, true);
 } catch (e) {
   // QuickJS's Error#stack is the call-frame trace ONLY — it does not, unlike
   // V8, prepend "Error: <message>" as its first line — so print the message
