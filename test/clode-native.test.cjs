@@ -117,6 +117,42 @@ test('clode build --self fuses a native builder and its internal smokes pass', (
   assert.ok(fs.statSync(NATIVE).mode & 0o111, 'fused builder not executable');
 });
 
+// Host-node parse of the fused-file trailer (layout per quaude-bootstrap.mjs):
+// [exe][members][index JSON][QAUDEv0 footer 32B][bootstrap bc][tx1k1.js 12B].
+function readTrailerIndex(file) {
+  const buf = fs.readFileSync(file);
+  const tx = buf.subarray(buf.length - 12);
+  assert.strictEqual(tx.subarray(0, 8).toString('latin1'), 'tx1k1.js', 'missing tx1k1.js trailer');
+  const bcOffset = tx.readUInt32LE(8);
+  const footer = buf.subarray(bcOffset - 32, bcOffset);
+  assert.strictEqual(footer.subarray(0, 8).toString('latin1'), 'QAUDEv0\0', 'bad archive footer magic');
+  const indexOff = Number(footer.readBigUInt64LE(8));
+  const indexLen = Number(footer.readBigUInt64LE(16));
+  const index = JSON.parse(buf.subarray(indexOff, indexOff + indexLen).toString('utf8'));
+  const member = (name) => {
+    const m = index.members.find((x) => x.name === name);
+    return m && { ...m, data: buf.subarray(m.offset, m.offset + m.len) };
+  };
+  return { index, member };
+}
+
+test('the fused builder embeds the PRISTINE tjs template as a trailer member (Decision 2)', (t) => {
+  if (SKIP) { t.skip(SKIP); return; }
+  const { member } = readTrailerIndex(NATIVE);
+  const tpl = member('template/tjs');
+  assert.ok(tpl, 'builder trailer has no template/tjs member');
+  const want = fs.readFileSync(tjsPath());
+  assert.strictEqual(tpl.len, want.length, 'embedded template length differs from the pinned tjs');
+  const sha = (b) => require('node:crypto').createHash('sha256').update(b).digest('hex');
+  assert.strictEqual(tpl.sha256, sha(want), 'index sha for template/tjs is not the pinned tjs sha');
+  assert.strictEqual(sha(tpl.data), tpl.sha256, 'embedded template bytes do not match their index sha');
+  // The manifest's template identity must be the SAME artifact (one invariant,
+  // three witnesses: manifest, index, bytes).
+  const manifest = JSON.parse(member('manifest.json').data.toString('utf8'));
+  assert.strictEqual(manifest.template.sha256, tpl.sha256);
+  assert.strictEqual(manifest.template.len, tpl.len);
+});
+
 test('acceptance 1: --clode-version/--clode-help answer with node ABSENT from PATH', async (t) => {
   if (SKIP) { t.skip(SKIP); return; }
   // PATH = one empty dir: NOTHING external resolves, node included.
@@ -130,13 +166,14 @@ test('acceptance 1: --clode-version/--clode-help answer with node ABSENT from PA
   assert.match(h.stdout, /clode build --self/);
 });
 
-test('acceptance 2: the native builder BUILDS THE PRODUCT (quaude fuse + PONG + attest), node-free', async (t) => {
+test('acceptance 2: the native builder BUILDS THE PRODUCT (quaude fuse + PONG + attest), node-free AND template-free', async (t) => {
   if (SKIP) { t.skip(SKIP); return; }
   if (SKIP_PRODUCT) { t.skip(SKIP_PRODUCT); return; }
+  // NO CLODE_TJS and no build/tjs on the sandbox paths: the builder must use
+  // its EMBEDDED pristine template (Decision 2 — nothing on disk).
   const env = {
     PATH: '/usr/bin:/bin',                    // codesign + sh, no node (probed in before)
     HOME: DIR,                                // hermetic: nothing real is consulted
-    CLODE_TJS: tjsPath(),
     CLODE_CLAUDE_BIN: providerBin(),
     CLODE_CACHE: path.join(DIR, 'cache'),     // extraction cache stays in the sandbox
   };

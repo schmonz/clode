@@ -62,7 +62,8 @@ Key environment overrides:
   CLODE_CLAUDE_BIN    upstream claude binary to extract from
   CLODE_NODE          host node
   CLODE_CACHE         extracted-bundle cache dir
-  CLODE_TJS           tjs template binary for 'clode build' (default build/tjs/tjs)
+  CLODE_TJS           tjs template binary for 'clode build' (default: the fused
+                      builder's own embedded template, else build/tjs/tjs)
   CLODE_MAIN_BUNDLE   esbuilt clode-main bundle for 'clode build --self' (default:
                       newest build/*/clode-main.bundle.cjs)
   CLODE_CHANGELOG_URL release-notes source for the post-update signals digest

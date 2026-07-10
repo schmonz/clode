@@ -160,8 +160,25 @@ async function clodeBuild(args, opts) {
       clodeLog(`clode: build: materialized the fused payload -> ${mat}`);
     }
 
-    // -- template: the pinned tjs this repo builds (scripts/build-tjs.mjs).
-    const template = env.CLODE_TJS || path.join(ROOT, 'build', 'tjs', 'tjs');
+    // -- template resolution: an explicit CLODE_TJS wins (and must exist —
+    // fail loud, never fall through a typo); then the EMBEDDED pristine
+    // template a builder-role fuse carries (Q2 Decision 2 — the shipped
+    // builder needs nothing on disk); then the pinned tjs this repo builds
+    // (scripts/build-tjs.mjs).
+    let template = env.CLODE_TJS || null;
+    if (!template && vfs && vfs.manifest && vfs.manifest.role === 'builder' && vfs.files.get('template/tjs')) {
+      template = path.join(work, 'template-tjs');
+      fs.writeFileSync(template, Buffer.from(vfs.files.get('template/tjs')));
+      fs.chmodSync(template, 0o755);
+      if (process.platform === 'darwin') {
+        // Same discipline as the fuse copy below: a materialized Mach-O may
+        // need its ad-hoc signature refreshed before it can exec.
+        const cs = spawnSync('codesign', ['-s', '-', '--force', template], { encoding: 'utf8' });
+        if (cs.status !== 0) return fail(`build: codesign of the embedded template failed:\n${cs.stderr || cs.stdout}`);
+      }
+      clodeLog(`clode: build: using the embedded tjs template -> ${template}`);
+    }
+    if (!template) template = path.join(ROOT, 'build', 'tjs', 'tjs');
     if (!fs.existsSync(template)) {
       return fail(`build: no tjs template at '${template}' (run scripts/build-tjs.mjs, or set CLODE_TJS)`);
     }
@@ -264,7 +281,10 @@ async function clodeBuild(args, opts) {
     clodeLog(`clode: build: fusing ${out} ...`);
     const w = await run(template, ['run', path.join(libexec, 'quaude-fuse.js'),
       signedBase, stageDir, path.join(libexec, 'node-shim'), nmDir,
-      path.join(libexec, 'quaude-bootstrap.mjs'), extrasPath, out], { env, timeout: 300000 });
+      path.join(libexec, 'quaude-bootstrap.mjs'), extrasPath, out,
+      // --self embeds the PRISTINE template as a member (Decision 2); the
+      // quaude role has no use for it (its base IS the signed copy).
+      ...(self ? [template] : [])], { env, timeout: 300000 });
     if (w.status !== 0) {
       return fail(`build: fuse worker failed (exit ${w.status}):\n${w.stdout}${w.stderr}`);
     }

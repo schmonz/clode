@@ -22,9 +22,9 @@
 //   [signed-base][members...][index JSON][quaude footer 32B][bootstrap bc][tx1k1.js 12B]
 import path from 'tjs:path';
 
-const [signedBase, stageDir, shimDir, nmDir, bootstrapPath, extrasPath, out] = tjs.args.slice(3);
+const [signedBase, stageDir, shimDir, nmDir, bootstrapPath, extrasPath, out, templatePath] = tjs.args.slice(3);
 if (!out) {
-  console.error('usage: tjs run quaude-fuse.js <signed-base> <stage-dir> <node-shim-dir> <node_modules-dir> <bootstrap.mjs> <extras.json> <out>');
+  console.error('usage: tjs run quaude-fuse.js <signed-base> <stage-dir> <node-shim-dir> <node_modules-dir> <bootstrap.mjs> <extras.json> <out> [pristine-template]');
   tjs.exit(64);
 }
 
@@ -94,6 +94,11 @@ if (role === 'builder') {
   for (const f of ['bun-shim.cjs', 'extract-claude-js.cjs', 'quaude-fuse.js', 'quaude-bootstrap.mjs']) {
     members.push({ name: `libexec/${f}`, data: await mustRead(path.join(libexecDir, f), `libexec member ${f}`) });
   }
+  // The PRISTINE tjs template rides along (Q2 Decision 2): a shipped builder
+  // must be able to fuse with NOTHING on disk — `clode build` materializes this
+  // member when no CLODE_TJS/build-tree template exists. Pristine = the
+  // pre-signing bytes, so it matches the manifest's template identity exactly.
+  members.push({ name: 'template/tjs', data: await mustRead(templatePath, 'pristine tjs template') });
 } else {
   // cli.cjs -> cli.qbc: replicate the loader's ENTRY transforms (shebang strip +
   // dynamic-import rewrite; fixVFlagPropertyEscapes self-gates off for >1MB
