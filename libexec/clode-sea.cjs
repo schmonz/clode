@@ -12,7 +12,13 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 function seaMod() { try { return require('node:sea'); } catch { return null; } }
-function isSea(sea = seaMod()) { return !!(sea && sea.isSea && sea.isSea()); }
+// try/catch around the PROPERTY READS too, not just the require: a hostile
+// or fail-loud module object (the node-shim's wallProxy for anything
+// unshimmed) can throw on mere access — "am I a SEA?" must answer false,
+// never crash, on every runtime (v0.1.2 field report).
+function isSea(sea = seaMod()) {
+  try { return !!(sea && sea.isSea && sea.isSea()); } catch { return false; }
+}
 
 // Raw bytes of an embedded asset as a Buffer. getRawAsset returns an ArrayBuffer
 // for binary assets; Buffer.from wraps it without copying the backing store.

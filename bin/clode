@@ -15,9 +15,10 @@ if (!(major >= floor)) {
   process.stderr.write("clode: (the extracted bundle uses newer JS, e.g. 'using' declarations)\n");
   process.exit(1);
 }
-require(require('path').join(__dirname, '..', 'libexec', 'clode-main.cjs'))
+var clodeMain = require(require('path').join(__dirname, '..', 'libexec', 'clode-main.cjs'));
+clodeMain
   .main(process.argv.slice(2), { self: __filename })
   .catch(function (e) {
-    process.stderr.write('clode: ' + ((e && e.stack) || e) + '\n');
+    process.stderr.write('clode: ' + clodeMain.formatError(e) + '\n');
     process.exit(1);
   });

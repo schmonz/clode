@@ -286,13 +286,26 @@ function runAsNodeIfRequested() {
 // bundle, or `node libexec/clode-main.cjs`), behave like bin/clode's prologue caller.
 // Guarded so it does NOT run when bin/clode require()s us and calls main() itself.
 // runAsNodeIfRequested runs FIRST: under SEA re-invocation it takes over the process.
+// Print-worthy rendering of a caught error. V8 stacks embed the `Error:
+// message` header; QuickJS stacks are frames-only — printing e.stack alone
+// there LOSES the message (v0.1.2 field report printed a bare wall of `at`
+// lines). Prepend the message whenever the stack does not already carry it.
+function formatError(e) {
+  if (!e) return String(e);
+  const stack = e.stack ? String(e.stack) : '';
+  const msg = e.message ? String(e.message) : '';
+  if (!stack) return msg || String(e);
+  if (msg && stack.indexOf(msg) === -1) return (e.name || 'Error') + ': ' + msg + '\n' + stack;
+  return stack;
+}
+
 if (require.main === module) {
   if (!runAsNodeIfRequested()) {
     main(process.argv.slice(2), { self: process.execPath }).catch((e) => {
-      process.stderr.write('clode: ' + ((e && e.stack) || e) + '\n');
+      process.stderr.write('clode: ' + formatError(e) + '\n');
       process.exit(1);
     });
   }
 }
 
-module.exports = { main, clodeHelp, requireNode, runAsNodeIfRequested, prepareRuntimeDeps };
+module.exports = { formatError, main, clodeHelp, requireNode, runAsNodeIfRequested, prepareRuntimeDeps };
