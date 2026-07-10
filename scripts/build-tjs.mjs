@@ -373,6 +373,56 @@ function fixupPosixSocketSunosMsghdr(dir) {
   console.log('fixup posix-socket-sunos-msghdr: applied');
 }
 
+function fixupLibuvMidnightbsd(dir) {
+  // libuv's CMake OS detection has no idea what "MidnightBSD" is, so it
+  // builds WITHOUT the unix platform sources and every uv_* symbol is
+  // undefined at link (v0.1.2 tag run, 2026-07-10). MidnightBSD is a
+  // FreeBSD fork (its compiler defines __FreeBSD__ too) — teach every
+  // FreeBSD-family branch the sibling name. libuv upstream candidate.
+  const f = path.join(dir, 'deps/libuv/CMakeLists.txt');
+  let src = fs.readFileSync(f, 'utf8');
+  if (src.includes('MidnightBSD')) {
+    console.log('fixup libuv-midnightbsd: already applied');
+    return;
+  }
+  const subs = [
+    ['MATCHES "DragonFly|FreeBSD")', 'MATCHES "DragonFly|FreeBSD|MidnightBSD")'],
+    ['MATCHES "DragonFly|FreeBSD|NetBSD|OpenBSD")', 'MATCHES "DragonFly|FreeBSD|MidnightBSD|NetBSD|OpenBSD")'],
+    ['MATCHES "FreeBSD")', 'MATCHES "FreeBSD|MidnightBSD")'],
+    ['MATCHES "DragonFly|FreeBSD|Linux|NetBSD|OpenBSD")', 'MATCHES "DragonFly|FreeBSD|MidnightBSD|Linux|NetBSD|OpenBSD")'],
+  ];
+  let hits = 0;
+  for (const [from, to] of subs) {
+    while (src.includes(from)) { src = src.replace(from, to); hits++; }
+  }
+  if (!hits) {
+    throw new Error('fixup libuv-midnightbsd: no FreeBSD-family branches found (libuv changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src);
+  console.log(`fixup libuv-midnightbsd: applied (${hits} branch(es))`);
+}
+
+function fixupLwsHaikuMallocUsableSize(dir) {
+  // Haiku's libroot EXPORTS malloc_usable_size (so lws's cmake feature
+  // check passes and LWS_HAVE_MALLOC_USABLE_SIZE is set) but its malloc.h
+  // does NOT declare it -> implicit-declaration under -Werror in
+  // lws/core/alloc.c (v0.1.2 tag run, 2026-07-10). Declare it ourselves,
+  // Haiku-only. lws/Haiku upstream candidate.
+  const f = path.join(dir, 'deps/libwebsockets/lib/core/alloc.c');
+  const src = fs.readFileSync(f, 'utf8');
+  if (src.includes('__HAIKU__')) {
+    console.log('fixup lws-haiku-malloc-usable-size: already applied');
+    return;
+  }
+  const anchor = '#if defined(LWS_HAVE_MALLOC_USABLE_SIZE)\n\n#include <malloc.h>\n';
+  if (!src.includes(anchor)) {
+    throw new Error('fixup lws-haiku-malloc-usable-size: anchor not found (lws changed under the pin — re-derive the fixup)');
+  }
+  const decl = '#if defined(__HAIKU__)\n/* libroot exports it; the header does not declare it */\nextern size_t malloc_usable_size(void *ptr);\n#endif\n';
+  fs.writeFileSync(f, src.replace(anchor, anchor + decl));
+  console.log('fixup lws-haiku-malloc-usable-size: applied');
+}
+
 let tjsDir;
 if (buildOnly) {
   // The patched tree was constructed by a prior --source-only run (possibly on
@@ -391,6 +441,8 @@ if (buildOnly) {
   fixupQjsSunosB64(tjsDir);
   fixupPosixSocketSunosMsghdr(tjsDir);
   fixupLibuvBsdForkSpawn(tjsDir);
+  fixupLibuvMidnightbsd(tjsDir);
+  fixupLwsHaikuMallocUsableSize(tjsDir);
 }
 
 // ---- big-endian bundle regen, part 1: esbuild the plain-JS intermediates ----
