@@ -102,6 +102,20 @@ DNS (irrelevant — only 10.0.2.2 is dialed), C-stack headroom
 (`ulimit -s 16384` applied), gcc12/mimalloc/-Werror/wasm walls (same
 pre-closed workarounds as M4, all held).
 
+## Re-run 2026-07-09 (~21:31–21:38 EDT): THE WURL FLIP — 7/7 again
+
+Re-ran as the aarch64 oracle for making wurl the default URL parser
+(`-DTJS_USE_ADA=OFF`, now passed by both `scripts/build-tjs.mjs` and
+`guest-p3.sh`; `txiki-wurl-url.patch` in the tarball). Same machinery, same
+mock-only discipline. Evidence appended to `vendor/aarch64-p3-console.log`
+(the driver appends; the new run starts near line ~1470): guest cmake
+configure shows `-DTJS_USE_ADA=OFF`, `libwurl.a` built at [5%], and all six
+guest markers `p3-{build,engine,vflag,uyn,pong,agentic}-exit=0` +
+`GUEST-DONE`; host-side seventh probe verified in the port-B request log
+(`tool_result` content `AGENTIC-MARKER-NB64`, `is_error:false`). PONG and
+TOOLDONE both rendered. Notably the C++20/gcc12 requirement is now only
+build parity, not a hard need — ada is out of the default link.
+
 ## How to reproduce
 
 ```sh

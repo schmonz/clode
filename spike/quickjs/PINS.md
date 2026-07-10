@@ -165,8 +165,16 @@ txiki-wurl-url patch 2026-07-09
 #   construction); L2 full UTS-46 is the done bar (seams marked L2 TODO). Binary
 #   -542KB and NO libc++ — with TJS_USE_ADA=OFF, tjs needs only a C compiler (kills
 #   the gcc12/C++20 requirement that blocked sparc S2 on base gcc 10.5).
-#   NOT yet default: flipping build-tjs.mjs to -DTJS_USE_ADA=OFF requires a pinned-
-#   binary rebuild + full oracle re-run (house rule) — deliberate follow-up.
+#   DEFAULT since 2026-07-09: build-tjs.mjs (and guest-p3.sh) pass -DTJS_USE_ADA=OFF;
+#   pinned build/tjs/tjs is a wurl build (5,427,008 bytes, links only libSystem +
+#   libffi). ada remains selectable per-build via -DTJS_USE_ADA=ON (patch default
+#   stays ON upstream-facing). The prior ada binary is kept at
+#   build/tjs/tjs.ada-backup for one release cycle. Flip oracles (house rule) all
+#   green 2026-07-09: full node-shim suite (525 pass/0 fail) under bundle 2.1.204;
+#   url L1' grade (34 pinned accepted-rejects, fixture
+#   test/fixtures/url/accepted-rejects.json, both drift directions loud);
+#   quaude fuse+PONG+attest, build --self, clode-native acceptance 4/4;
+#   NetBSD/aarch64 guest scorecard re-run (see results/).
 gnu-make 4.4.1 ftp.gnu.org-source 2026-07-09
 # sparc rung toolchain (NO pkgsrc binaries exist for 32-bit sparc): built from
 #   source IN-GUEST and baked into wd0.img via persist boots (backup first:

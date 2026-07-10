@@ -33,14 +33,18 @@ grep -q 'return the byte COUNT' "$V/src/mod_streams.c" \
   || { echo "FATAL: stream-write-sync-number patch not applied"; exit 1; }
 grep -q 'KERN_PROC_PATHNAME' "$V/deps/quickjs/cutils.h" \
   || { echo "FATAL: quickjs-ng js_exepath NetBSD patch not applied in deps/quickjs"; exit 1; }
+[ -f "$V/deps/wurl/wurl_url.c" ] \
+  || { echo "FATAL: deps/wurl missing — wurl-url patch not applied"; exit 1; }
 # --no-xattrs: bsdtar otherwise records com.apple.provenance xattrs that make
 # NetBSD tar exit nonzero ("Error exit delayed") when it can't restore them.
 # Extra excludes vs stage-m4.sh: build-asan (the phase-3 UAF-hunt ASAN build),
 # website + node_modules (npm trees) — ~590MB of host-only scratch the guest
 # build never reads; without these the tarball balloons past 500MB.
+# --exclude 'txiki.js/build*' also drops build-asan/build-wurl/build-s2ctl
+# (host-side scratch builds from the wurl campaign).
 COPYFILE_DISABLE=1 tar --no-xattrs -czf "$DIST/txiki-$TJS_TAG.tar.gz" \
-  -C spike/quickjs/vendor --exclude 'txiki.js/build' --exclude 'txiki.js/.git' \
-  --exclude 'txiki.js/.cache' --exclude 'txiki.js/build-asan' \
+  -C spike/quickjs/vendor --exclude 'txiki.js/build*' --exclude 'txiki.js/.git' \
+  --exclude 'txiki.js/.cache' \
   --exclude 'txiki.js/website' --exclude 'txiki.js/node_modules' \
   --exclude '._*' txiki.js
 

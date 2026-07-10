@@ -43,6 +43,7 @@ grep -c 'JS_IsNumber(js_stdin)' txiki.js/src/mod_process.c       # expect 1 (spa
 grep -c 'return the byte COUNT' txiki.js/src/mod_streams.c       # expect 1 (stream-write-sync-number)
 grep -c 'expects initialized streams' txiki.js/src/mod_process.c # expect 1 (spawn-fail-uaf)
 ls txiki.js/src/mod_spawn_sync.c
+ls txiki.js/deps/wurl/wurl_url.c   # wurl-url patch (plain-C URL parser, our default)
 
 # The bundle's Bash tool shell discovery (jsg() in cli.cjs) accepts ONLY
 # paths containing "bash" or "zsh" — SHELL=/bin/sh and even CLAUDE_CODE_SHELL=
@@ -52,8 +53,9 @@ ls txiki.js/src/mod_spawn_sync.c
 BASH=/usr/pkg/bin/bash
 [ -x "$BASH" ] || { echo "FATAL: pkgsrc bash not installed (Bash tool shell discovery needs bash/zsh)"; echo "=== GUEST-DONE ==="; exit 1; }
 
-# deps/ada needs C++20 constexpr std::string — beyond base g++ 10.5 (the
-# phase-1 gate-3 wall). Use pkgsrc gcc12 (pkg_add'd by the driver).
+# With -DTJS_USE_ADA=OFF (wurl, plain C — our recipe's default) the C++20
+# wall is gone; gcc12 is kept for build parity with the recorded scorecard
+# runs (base gcc 10.5 should also work now — a future leaner-driver change).
 GCC12=/usr/pkg/gcc12/bin
 [ -x "$GCC12/g++" ] || { echo "FATAL: pkgsrc gcc12 not installed"; echo "=== GUEST-DONE ==="; exit 1; }
 LD_LIBRARY_PATH=/usr/pkg/gcc12/lib; export LD_LIBRARY_PATH
@@ -70,6 +72,7 @@ echo "=== BUILD-TJS ==="
    "-DFETCHCONTENT_SOURCE_DIR_SIMDE=$W/simde-src" \
    -DBUILD_WITH_WASM=OFF \
    -DBUILD_WITH_MIMALLOC=OFF \
+   -DTJS_USE_ADA=OFF \
  && cmake --build build -j2); echo "p3-build-exit=$?"
 [ -x ./txiki.js/build/tjs ] || { echo "FATAL: no tjs binary after build"; echo "=== GUEST-DONE ==="; exit 1; }
 TJS=./txiki.js/build/tjs
