@@ -309,15 +309,18 @@ function fixupLibuvBsdForkSpawn(dir) {
   // whys are report candidates for the libuv fork.
   const f = path.join(dir, 'deps/libuv/src/unix/process.c');
   const src = fs.readFileSync(f, 'utf8');
-  const guard = '#if defined(__OpenBSD__) || defined(__DragonFly__)\n  /* OpenBSD/DragonFly: the posix_spawn route fails (child-side bare 127 /\n   * parent-side EINVAL); use the fork/exec fallback path. */\n  posix_spawn_works = 0;\n#elif !defined(__linux__)\n  posix_spawn_works = 1;';
-  if (src.includes('defined(__OpenBSD__) || defined(__DragonFly__)')) {
+  const guard = '#if defined(__OpenBSD__) || defined(__DragonFly__) || defined(__HAIKU__)\n  /* OpenBSD/DragonFly/Haiku: the posix_spawn route fails (child-side bare\n   * 127 / parent-side EINVAL x2); use the fork/exec fallback path. */\n  posix_spawn_works = 0;\n#elif !defined(__linux__)\n  posix_spawn_works = 1;';
+  if (src.includes('defined(__OpenBSD__) || defined(__DragonFly__) || defined(__HAIKU__)')) {
     console.log('fixup libuv-bsd-fork-spawn: already applied');
     return;
   }
   // Upgrade path: an earlier run wrote the OpenBSD-only guard.
   const v1 = '#if defined(__OpenBSD__)\n  /* OpenBSD: posix_spawn route fails child-side (bare exit 127); use the\n   * fork/exec fallback path. */\n  posix_spawn_works = 0;\n#elif !defined(__linux__)\n  posix_spawn_works = 1;';
+  const v2 = '#if defined(__OpenBSD__) || defined(__DragonFly__)\n  /* OpenBSD/DragonFly: the posix_spawn route fails (child-side bare 127 /\n   * parent-side EINVAL); use the fork/exec fallback path. */\n  posix_spawn_works = 0;\n#elif !defined(__linux__)\n  posix_spawn_works = 1;';
   const anchor = '#if !defined(__linux__)\n  posix_spawn_works = 1;';
-  if (src.includes(v1)) {
+  if (src.includes(v2)) {
+    fs.writeFileSync(f, src.replace(v2, guard));
+  } else if (src.includes(v1)) {
     fs.writeFileSync(f, src.replace(v1, guard));
   } else if (src.includes(anchor)) {
     fs.writeFileSync(f, src.replace(anchor, guard));
