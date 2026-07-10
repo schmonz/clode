@@ -790,3 +790,32 @@ there); then Windows SEA; QuickJS the further frontier.
   need scoped C, 1 hard (degrades to a stub), 0 architectural blockers, and the
   North-Star bytecode memory path measured on darwin/aarch64 fits the mac68k-class ceiling (mac68k itself unmeasured, qemu boot gap)** — see
   `docs/superpowers/specs/2026-07-05-universal-binaries-phase1-report.md`.
+
+## node-shim Linux portability (first surfaced by the s390x BE oracle, 2026-07-09)
+
+The release-matrix s390x-musl leg is the FIRST time the node-shim suite runs
+against a **Linux** tjs (the pinned binary is darwin; the qemu guests are
+NetBSD). The BE oracle (run 29065977866) proved the engine is big-endian-clean
+(url characterization + crypto KAT + Buffer semantics all green), but surfaced
+darwin assumptions baked into the shim that a Linux target exposes. These are
+Linux-portability debt, NOT big-endian bugs — their own TDD workstream, and
+they'll matter for the eventual Linux-NATIVE (non-emulated) legs too:
+
+- **os.constants.signals is a hardcoded darwin table.** The shim returns
+  darwin signal numbers (SIGBUS=10) where Linux differs (SIGBUS=7); host-node
+  diff fails on Linux. Fix: per-platform signal tables (linux / darwin /
+  netbsd / the BSDs) in libexec/node-shim/modules/os.cjs (or constants.cjs).
+  TDD: characterize against host node per-platform.
+- **bun:ffi `suffix` hardcodes the macOS 'dylib'.** Should be platform-aware
+  (.so on Linux + the BSDs, .dylib on darwin, .dll on Windows) —
+  libexec/bun-shim.cjs BUN_BUILTINS['bun:ffi'].suffix. The bunshim test also
+  hardcodes the macOS extension; fix both.
+- **Audit for other hardcoded darwin assumptions** now that a Linux target
+  exists: library extensions, default paths, any os.constants.* /
+  process.* / signal / errno tables, DYLD_* vs LD_* env handling. Sweep
+  libexec/node-shim/** and libexec/bun-shim.cjs.
+
+Not matrix-blocking (the BE oracle scopes these out and is non-blocking); the
+published Linux builders are musl-static and smoke green (PONG + attest). This
+is about node-shim FIDELITY on Linux, which the shim-fidelity gate should grow
+to cover once a Linux tjs is a first-class local build target.
