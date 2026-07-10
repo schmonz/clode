@@ -463,7 +463,9 @@ if (sourceOnly) {
   process.exit(0);
 }
 
-const jobs = String(cpus().length);
+// os.cpus() is EMPTY on Haiku's node (tag run 2026-07-10: cmake --build
+// -j 0 → usage text) — floor at 1; node-on-Haiku report candidate.
+const jobs = String(Math.max(1, cpus().length));
 // -DTJS_USE_ADA=OFF: our recipe selects the plain-C wurl URL parser (the
 // ada-ectomy). The upstream-facing patch keeps the option's default ON;
 // only OUR build flips it. Kills the C++20 toolchain requirement and libc++.

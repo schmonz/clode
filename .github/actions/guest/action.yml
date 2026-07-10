@@ -160,7 +160,12 @@ runs:
           openbsd)
             [ -z "$PKGS" ] || sudo pkg_add $PKGS ;;
           midnightbsd)
-            [ -z "$PKGS" ] || sudo mport install $PKGS ;;
+            # mport exits nonzero for already-installed packages ("The most
+            # recent version of bash is already installed" -> exit 1, tag run
+            # 2026-07-10) — tolerate it; a genuinely missing tool fails
+            # loudly at its first use in the script.
+            [ -z "$PKGS" ] || sudo mport install $PKGS \
+              || echo "guest: mport exit tolerated (already-installed reports nonzero)" ;;
           haiku)
             # Single-user system: the runner IS the (only) user; no sudo.
             [ -z "$PKGS" ] || pkgman install -y $PKGS ;;
