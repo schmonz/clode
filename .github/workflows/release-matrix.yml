@@ -253,10 +253,11 @@ jobs:
             os: ubuntu-latest
             guest-platform: haiku
             guest-version: r1beta5
-            # provides-syntax: HaikuPorts package names are versioned
-            # (nodejs22 etc.) — cmd:X resolves whatever provides the command
-            # ("nodejs" alone: Name not found, dispatch #14).
-            guest-packages: cmd:cmake cmd:gcc cmd:node cmd:git cmd:make
+            # HaikuPorts ships exactly ONE node: nodejs20 (user-verified,
+            # 2026-07-10) — named explicitly; v20 clears the build floor
+            # (lowered to 20 for OpenIndiana the same day). cmd:X provides-
+            # syntax for the rest ("nodejs" alone: Name not found, #14).
+            guest-packages: cmd:cmake cmd:gcc nodejs20 cmd:git cmd:make
             wasm: off
             mimalloc: off
             ffi: off
