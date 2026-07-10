@@ -32,6 +32,14 @@ const vendor = process.env.CLODE_TJS_VENDOR || path.join(repo, 'spike/quickjs/ve
 const patches = path.join(repo, 'spike/quickjs/patches');
 const outDir = process.env.CLODE_TJS_OUT || path.join(repo, 'build/tjs');
 const wantStatic = process.env.CLODE_TJS_STATIC === '1';
+// CLODE_TJS_WASM=off: drop WASM/WAMR support. Needed on arches where WAMR's
+// posix_memmap.c references MAP_32BIT, a Linux mmap flag defined ONLY for
+// x86/x86_64/aarch64 — s390x/ppc64le/riscv64 fail to compile (first found on
+// the s390x BE-oracle leg 2026-07-09). That leg only runs --clode-version +
+// the node-shim suite (no bundle boot, no WebAssembly), so WASM-off is free
+// there. A real fix (guard MAP_32BIT to 0 when undefined, upstream WAMR) is
+// queued for the Q3 batch; patches/ is frozen this phase.
+const wantWasm = (process.env.CLODE_TJS_WASM || 'on').toLowerCase() !== 'off';
 const run = (cmd, args, opts = {}) =>
   execFileSync(cmd, args, { stdio: 'inherit', ...opts });
 const runOut = (cmd, args, opts = {}) =>
@@ -163,6 +171,9 @@ const jobs = String(cpus().length);
 const cmakeArgs = ['-DCMAKE_BUILD_TYPE=Release', '-DTJS_USE_ADA=OFF'];
 if (wantStatic) {
   cmakeArgs.push('-DBUILD_WITH_FFI=OFF', '-DCMAKE_EXE_LINKER_FLAGS=-static');
+}
+if (!wantWasm) {
+  cmakeArgs.push('-DBUILD_WITH_WASM=OFF');
 }
 if (process.platform === 'linux') {
   // txiki-sync-spawn.patch declares posix_spawnattr_t attr used only inside

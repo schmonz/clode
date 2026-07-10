@@ -59,11 +59,14 @@ jobs:
             guest-platform: alpine
             guest-arch: s390x
             static: true
+            wasm: off                    # WAMR's MAP_32BIT is x86/ARM-only; undefined on s390x
             publish: true
             smoke: version               # PONG-class smoke lives in the be-oracle job
             timeout: 300
+            soft-fail: true              # slow qemu-user BE leg — non-blocking (plan T1.5)
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout || 90 }}
+    continue-on-error: ${{ matrix.soft-fail || false }}
     permissions:
       contents: read
       id-token: write        # actions/attest-build-provenance
@@ -82,6 +85,7 @@ jobs:
           guest-platform: ${{ matrix.guest-platform || 'native' }}
           guest-arch: ${{ matrix.guest-arch || 'x86_64' }}
           static: ${{ matrix.static && 'true' || 'false' }}
+          wasm: ${{ matrix.wasm || 'on' }}
           smoke: ${{ matrix.smoke || 'full' }}
           attest: ${{ matrix.publish && 'true' || 'false' }}
           publish: ${{ matrix.publish && 'true' || 'false' }}

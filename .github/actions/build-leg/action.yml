@@ -28,6 +28,10 @@ inputs:
     description: "'true': fully-static tjs (musl legs) + verify with file/ldd"
     required: false
     default: "false"
+  wasm:
+    description: "'off': build tjs without WASM/WAMR (arches where WAMR's MAP_32BIT is undefined: s390x/ppc64le/riscv64)"
+    required: false
+    default: "on"
   smoke:
     description: "'full' (provider fetch + ephemeral quaude PONG) or 'version' (--clode-version only)"
     required: false
@@ -68,6 +72,7 @@ runs:
         CLODE_TJS_VENDOR: ${{ runner.temp }}/tjs-vendor
         CLODE_TJS_OUT: ${{ runner.temp }}/tjs-out
         CLODE_TJS_STATIC: ${{ inputs.static == 'true' && '1' || '' }}
+        CLODE_TJS_WASM: ${{ inputs.wasm }}
       run: node scripts/build-tjs.mjs --build-only
 
     - name: Build tjs (guest)
@@ -83,6 +88,7 @@ runs:
           export CLODE_TJS_VENDOR="${{ runner.temp }}/tjs-vendor"
           export CLODE_TJS_OUT="${{ runner.temp }}/tjs-out"
           export CLODE_TJS_STATIC="${{ inputs.static == 'true' && '1' || '' }}"
+          export CLODE_TJS_WASM="${{ inputs.wasm }}"
           node scripts/build-tjs.mjs --build-only
 
     # A cache HIT skips the guest setup, so foreign-arch legs still need
