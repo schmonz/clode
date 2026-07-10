@@ -13,6 +13,7 @@
 .Op Cm stable | latest | Ar version
 .Nm
 .Cm build
+.Op Fl -self
 .Op Fl -out Ar path
 .Nm
 .Fl -clode-help
@@ -100,6 +101,29 @@ The template runtime comes from
 .Pa build/tjs/tjs
 under the clode root).
 .Pp
+.Nm build
+.Fl -self
+.Op Fl -out Ar path
+fuses the builder itself: a standalone NATIVE
+.Nm
+binary (default
+.Pa ./clode-native )
+\(em the same txiki.js runtime plus clode's own launcher and everything
+.Nm build
+needs as inputs (shims, extractor, dependency closure) \(em which answers
+.Fl -clode-version
+and
+.Fl -clode-help
+and can itself run
+.Nm build
+to fuse a quaude, all without Node on the machine.
+The launcher bundle comes from
+.Ev CLODE_MAIN_BUNDLE
+(default: the newest
+.Pa build/*/clode-main.bundle.cjs ,
+produced by
+.Ic node scripts/build-sea.mjs --bundle-only ) .
+.Pp
 .Nm
 patches Claude Code's in-app auto-updater to run
 .Nm Fl -clode-internal-update
@@ -178,6 +202,11 @@ The txiki.js template binary
 fuses from (default
 .Pa build/tjs/tjs
 under the clode root).
+.It Ev CLODE_MAIN_BUNDLE
+The esbuilt clode-main bundle
+.Nm build Fl -self
+embeds (default: the newest
+.Pa build/*/clode-main.bundle.cjs ) .
 .It Ev CLODE_NODE
 Host node (absolute path).
 .It Ev DISABLE_INSTALLATION_CHECKS

@@ -26,7 +26,20 @@ test('clode build: unknown argument fails loudly before any work', () => {
   const r = runEntry(['build', '--frobnicate']);
   assert.strictEqual(r.status, 1);
   assert.match(r.stderr, /build: unknown argument '--frobnicate'/);
-  assert.match(r.stderr, /usage: clode build \[--out PATH\]/);
+  assert.match(r.stderr, /usage: clode build \[--self\] \[--out PATH\]/);
+});
+
+test('clode build --self: missing esbuilt bundle fails loudly and names the fix', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-self-'));
+  const fakeTjs = path.join(home, 'tjs');
+  fs.writeFileSync(fakeTjs, '#!/bin/sh\nexit 0\n');
+  const r = runEntry(['build', '--self'], {
+    CLODE_TJS: fakeTjs,
+    CLODE_MAIN_BUNDLE: '/nonexistent/clode-main.bundle.cjs',
+  });
+  assert.strictEqual(r.status, 1);
+  assert.match(r.stderr, /build --self: no esbuilt clode-main bundle at '\/nonexistent\/clode-main\.bundle\.cjs'/);
+  assert.match(r.stderr, /build-sea\.mjs --bundle-only|CLODE_MAIN_BUNDLE/);
 });
 
 test('clode build: missing tjs template fails loudly and names the fix', () => {
@@ -53,10 +66,11 @@ test('clode build: no resolvable provider fails loudly (after the template gate)
   assert.match(r.stderr, /build: no Claude Code binary found/);
 });
 
-test('--clode-help documents clode build and CLODE_TJS', () => {
+test('--clode-help documents clode build, build --self, and CLODE_TJS', () => {
   const r = runEntry(['--clode-help']);
   assert.strictEqual(r.status, 0);
   assert.match(r.stdout, /clode build \[--out PATH\]/);
+  assert.match(r.stdout, /clode build --self/);
   assert.match(r.stdout, /quaude/);
   assert.match(r.stdout, /CLODE_TJS/);
 });

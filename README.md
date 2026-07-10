@@ -160,3 +160,28 @@ Everything lands under a per-platform tag dir (the same tuple the test harness u
 so builds for different OS/arch/Node coexist on a shared/NFS `build/` tree without
 colliding. Set `CLODE_CLAUDE_BIN=/path/to/claude` to have the build additionally boot
 the real bundle once as a deep self-check.
+
+### Fusing native binaries (`clode build`)
+
+Two subcommands fuse stand-alone native binaries from the pinned txiki.js
+runtime (`build/tjs/tjs`, built by `scripts/build-tjs.mjs`; override with
+`CLODE_TJS`). Both artifacts run with **no Node at all** on the machine:
+
+```sh
+clode build [--out PATH]          # fuse a "quaude" (default ./quaude):
+                                  #   the extracted Claude Code bundle compiled to
+                                  #   quickjs bytecode + the node-shim runtime
+clode build --self [--out PATH]   # fuse a native clode builder (default ./clode-native):
+                                  #   clode's own launcher + everything `clode build`
+                                  #   needs, so the BUILDER itself needs no Node
+```
+
+`clode build --self` embeds the esbuilt launcher from the newest
+`build/*/clode-main.bundle.cjs` (produce it with
+`node scripts/build-sea.mjs --bundle-only`; override with `CLODE_MAIN_BUNDLE`).
+The resulting `./clode-native` answers `--clode-version`/`--clode-help` and can
+itself run `clode-native build` to fuse a quaude. Every fuse self-verifies
+before reporting success (an offline canned Messages round-trip plus
+`--quaude-attest` manifest verification for quaude; version/help smokes for the
+builder). Fused binaries are derived work: they are fused locally and never
+distributed.

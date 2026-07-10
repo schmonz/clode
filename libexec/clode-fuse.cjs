@@ -23,7 +23,20 @@
 //      --quaude-attest` — any failure exits nonzero and says why.
 //
 // Usage: clode build [--out PATH]        (default ./quaude)
-// Env:   CLODE_TJS  — the tjs template binary (default <root>/build/tjs/tjs)
+//        clode build --self [--out PATH] (default ./clode-native)
+// Env:   CLODE_TJS         — the tjs template binary (default <root>/build/tjs/tjs)
+//        CLODE_MAIN_BUNDLE — the esbuilt clode-main bundle for --self (default:
+//                            newest build/*/clode-main.bundle.cjs)
+//
+// --self fuses the BUILDER itself: the same trailer format with role "builder"
+// — the esbuilt clode-main bundle as a SOURCE entry (65KB; bytecode would force
+// strict mode on the esbuild output for no parse win — measured 0.24s boot),
+// plus everything `clode build` needs as fuse INPUTS on a machine with no
+// checkout and no node: the node-shim tree, the libexec support files
+// (extractor, bun-shim, worker, bootstrap), and the ext-dep closure (quaude
+// member inputs — clode-main itself imports node builtins only). When `build`
+// later RUNS under that fused builder, the payload is materialized back to
+// disk first (subprocesses — the template-tjs worker — need real files).
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -102,7 +115,7 @@ function run(cmd, args, opts = {}) {
 // bits (env/stderr/stdout) keep the unit-testable surface consistent with the
 // sibling subcommand modules.
 async function clodeBuild(args, opts) {
-  const { libexec, here, version } = opts;
+  const { here, version } = opts;
   const env = opts.env || process.env;
   const stderr = opts.stderr || process.stderr;
   const stdout = opts.stdout || process.stdout;
@@ -110,64 +123,134 @@ async function clodeBuild(args, opts) {
   const clodeLog = (m) => { if (verbose) stderr.write(m + '\n'); };
   const fail = (m) => { stderr.write('clode: ' + m + '\n'); return 1; };
 
-  // -- argv: only --out for v1; anything else is an error (this is clode's own
-  // namespace — nothing here passes through to Claude Code).
-  let out = 'quaude';
+  // -- argv: --self + --out only; anything else is an error (this is clode's
+  // own namespace — nothing here passes through to Claude Code).
+  let out = null;
+  let self = false;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--out' && args[i + 1]) { out = args[++i]; }
-    else return fail(`build: unknown argument '${args[i]}' (usage: clode build [--out PATH])`);
+    else if (args[i] === '--self') { self = true; }
+    else return fail(`build: unknown argument '${args[i]}' (usage: clode build [--self] [--out PATH])`);
   }
-  out = path.resolve(out);
+  out = path.resolve(out || (self ? 'clode-native' : 'quaude'));
 
-  // -- template: the pinned tjs this repo builds (scripts/build-tjs.mjs).
-  const ROOT = path.resolve(libexec, '..');
-  const template = env.CLODE_TJS || path.join(ROOT, 'build', 'tjs', 'tjs');
-  if (!fs.existsSync(template)) {
-    return fail(`build: no tjs template at '${template}' (run scripts/build-tjs.mjs, or set CLODE_TJS)`);
-  }
-
-  // -- upstream bundle: resolve + extract + hook via the existing machinery.
-  let bin = resolve.resolveClaudeBin({ env });
-  if (bin == null || !resolve.pathExists(bin)) {
-    return fail(bin == null
-      ? 'build: no Claude Code binary found (install the provider package, or set CLODE_CLAUDE_BIN)'
-      : `build: claude binary not found at '${bin}'`);
-  }
-  bin = resolve.followWrapper(bin);
-  const key = resolve.cacheKey(bin);
-  const cache = path.join(clodeCacheDir(env), key);
-  clodeLog(`clode: build: staging bundle ${key} ...`);
-  try {
-    extract.extractIfNeeded({ bin, cacheDir: cache, libexec, verbose, key });
-  } catch (e) {
-    return fail(`build: extraction failed: ${(e && e.message) || e}`);
-  }
-
-  // -- ext-dep closure: ensureDeps installs into the deps store unless the
-  // deps already ship beside this checkout (repo/npm layout).
-  deps.ensureDeps({ libexec, here, verbose, env });
-  const nmCandidates = [path.join(ROOT, 'node_modules'), path.join(depsStore(env), 'node_modules')];
-  const nmDir = nmCandidates.find((d) => { try { return fs.statSync(d).isDirectory(); } catch { return false; } });
-  if (!nmDir) return fail(`build: no node_modules with the runtime deps (looked in: ${nmCandidates.join(', ')})`);
-
-  // -- node-side manifest fields (the worker adds engine/idna/members/fusedAt).
-  const extras = {
-    quaude: '1', // quaude archive/manifest schema version
-    bundleVersion: key,
-    clodeVersion: version,
-    template: { sha256: sha256File(template), len: fs.statSync(template).size },
-    // The transforms baked into the fused artifact beyond the members
-    // themselves: the extractor that hooked cli.cjs (memo §6.9 — staleness of
-    // the frozen entry transforms is detectable via these + bundleVersion).
-    hooks: { 'extract-claude-js.cjs': sha256File(path.join(libexec, 'extract-claude-js.cjs')) },
-  };
-
-  // -- sign-then-append (memo §6.1): copy template -> re-sign the copy while it
-  // is still a plain Mach-O -> the worker appends. Never sign after appending.
+  const ROOT = path.resolve(opts.libexec, '..');
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-'));
-  const signedBase = path.join(work, 'template-signed');
-  const extrasPath = path.join(work, 'extras.json');
   try {
+    // -- fused-builder payload: when `build` runs under a fused NATIVE clode
+    // (the bootstrap mounted the builder-role VFS), the fuse inputs are archive
+    // members, but the worker is a template-tjs SUBPROCESS that needs real
+    // files — materialize libexec + node-shim + node_modules to disk once.
+    let libexec = opts.libexec;
+    let nmDir = null;
+    const vfs = globalThis.__quaudeVFS;
+    if (vfs && vfs.manifest && vfs.manifest.role === 'builder') {
+      const mat = path.join(work, 'payload');
+      for (const [name, bytes] of vfs.files) {
+        let dest;
+        if (name.startsWith('node-shim/')) dest = path.join(mat, 'libexec', name);
+        else if (name.startsWith('libexec/')) dest = path.join(mat, name);
+        else if (name.startsWith('node_modules/')) dest = path.join(mat, name);
+        else continue;
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.writeFileSync(dest, Buffer.from(bytes));
+      }
+      libexec = path.join(mat, 'libexec');
+      nmDir = path.join(mat, 'node_modules');
+      clodeLog(`clode: build: materialized the fused payload -> ${mat}`);
+    }
+
+    // -- template: the pinned tjs this repo builds (scripts/build-tjs.mjs).
+    const template = env.CLODE_TJS || path.join(ROOT, 'build', 'tjs', 'tjs');
+    if (!fs.existsSync(template)) {
+      return fail(`build: no tjs template at '${template}' (run scripts/build-tjs.mjs, or set CLODE_TJS)`);
+    }
+
+    // -- payload staging: the upstream Claude Code bundle (default), or the
+    // esbuilt clode-main bundle (--self).
+    let stageDir, key;
+    if (self) {
+      let bundle = env.CLODE_MAIN_BUNDLE;
+      if (bundle) {
+        if (!fs.existsSync(bundle)) return fail(`build --self: no esbuilt clode-main bundle at '${bundle}' (CLODE_MAIN_BUNDLE)`);
+      } else {
+        // Newest build/*/clode-main.bundle.cjs (per-platform tag dirs).
+        let newest = null;
+        try {
+          for (const d of fs.readdirSync(path.join(ROOT, 'build'))) {
+            const c = path.join(ROOT, 'build', d, 'clode-main.bundle.cjs');
+            try {
+              const m = fs.statSync(c).mtimeMs;
+              if (!newest || m > newest.m) newest = { c, m };
+            } catch { /* not this dir */ }
+          }
+        } catch { /* no build dir */ }
+        if (!newest) {
+          return fail('build --self: no esbuilt clode-main bundle found (run `node scripts/build-sea.mjs --bundle-only`, or set CLODE_MAIN_BUNDLE)');
+        }
+        bundle = newest.c;
+      }
+      // The bundle freezes clode's own logic; warn when libexec sources are
+      // newer (an honest staleness signal, not a gate).
+      try {
+        const bm = fs.statSync(bundle).mtimeMs;
+        const stale = fs.readdirSync(libexec).some((f) => /\.(cjs|mjs|js)$/.test(f)
+          && fs.statSync(path.join(libexec, f)).mtimeMs > bm);
+        if (stale) stderr.write(`clode: build --self: WARNING: ${bundle} is older than libexec sources; re-run \`node scripts/build-sea.mjs --bundle-only\`\n`);
+      } catch { /* best effort */ }
+      stageDir = path.join(work, 'stage');
+      fs.mkdirSync(stageDir, { recursive: true });
+      fs.copyFileSync(bundle, path.join(stageDir, 'clode-main.bundle.cjs'));
+      clodeLog(`clode: build: staging builder bundle ${bundle} ...`);
+    } else {
+      // Upstream bundle: resolve + extract + hook via the existing machinery.
+      let bin = resolve.resolveClaudeBin({ env });
+      if (bin == null || !resolve.pathExists(bin)) {
+        return fail(bin == null
+          ? 'build: no Claude Code binary found (install the provider package, or set CLODE_CLAUDE_BIN)'
+          : `build: claude binary not found at '${bin}'`);
+      }
+      bin = resolve.followWrapper(bin);
+      key = resolve.cacheKey(bin);
+      stageDir = path.join(clodeCacheDir(env), key);
+      clodeLog(`clode: build: staging bundle ${key} ...`);
+      try {
+        extract.extractIfNeeded({ bin, cacheDir: stageDir, libexec, verbose, key });
+      } catch (e) {
+        return fail(`build: extraction failed: ${(e && e.message) || e}`);
+      }
+    }
+
+    // -- ext-dep closure (both roles: quaude requires them at runtime; the
+    // builder ships them as the member INPUTS for the quaude it will fuse).
+    // Already materialized from the payload under a fused builder; otherwise
+    // ensureDeps installs into the deps store unless the deps ship beside
+    // this checkout (repo/npm layout).
+    if (!nmDir) {
+      deps.ensureDeps({ libexec, here, verbose, env });
+      const nmCandidates = [path.join(ROOT, 'node_modules'), path.join(depsStore(env), 'node_modules')];
+      nmDir = nmCandidates.find((d) => { try { return fs.statSync(d).isDirectory(); } catch { return false; } });
+      if (!nmDir) return fail(`build: no node_modules with the runtime deps (looked in: ${nmCandidates.join(', ')})`);
+    }
+
+    // -- node-side manifest fields (the worker adds engine/idna/members/fusedAt).
+    const extras = {
+      quaude: '1', // archive/manifest schema version (shared by both roles)
+      role: self ? 'builder' : 'quaude',
+      bundleVersion: key, // undefined for --self (no upstream bundle) — dropped by JSON
+      clodeVersion: version,
+      template: { sha256: sha256File(template), len: fs.statSync(template).size },
+      // The transforms baked into the fused artifact beyond the members
+      // themselves: the extractor that hooked cli.cjs (memo §6.9 — staleness of
+      // the frozen entry transforms is detectable via these + bundleVersion).
+      hooks: { 'extract-claude-js.cjs': sha256File(path.join(libexec, 'extract-claude-js.cjs')) },
+    };
+
+    // -- sign-then-append (memo §6.1): copy template -> re-sign the copy while
+    // it is still a plain Mach-O -> the worker appends. Never sign after
+    // appending.
+    const signedBase = path.join(work, 'template-signed');
+    const extrasPath = path.join(work, 'extras.json');
     fs.copyFileSync(template, signedBase);
     fs.chmodSync(signedBase, 0o755);
     if (process.platform === 'darwin') {
@@ -180,12 +263,35 @@ async function clodeBuild(args, opts) {
     // -- fuse, under the template itself.
     clodeLog(`clode: build: fusing ${out} ...`);
     const w = await run(template, ['run', path.join(libexec, 'quaude-fuse.js'),
-      signedBase, cache, path.join(libexec, 'node-shim'), nmDir,
+      signedBase, stageDir, path.join(libexec, 'node-shim'), nmDir,
       path.join(libexec, 'quaude-bootstrap.mjs'), extrasPath, out], { env, timeout: 300000 });
     if (w.status !== 0) {
       return fail(`build: fuse worker failed (exit ${w.status}):\n${w.stdout}${w.stderr}`);
     }
     clodeLog(w.stdout.trimEnd());
+
+    if (self) {
+      // -- builder smoke: its own flags must answer, with NODE_PATH stripped
+      // (self-containment proof at the same strength as the quaude smoke).
+      clodeLog('clode: build: smoke --clode-version/--clode-help ...');
+      const smokeEnv = { ...env };
+      delete smokeEnv.NODE_PATH;
+      const v = await run(out, ['--clode-version'], { env: smokeEnv, cwd: work });
+      if (v.status !== 0 || !/^clode /.test(v.stdout)) {
+        stderr.write(`clode: build --self: SMOKE FAILED — the fused builder did not answer --clode-version\n`);
+        stderr.write(`clode: build --self: exit=${v.status} stdout:\n${v.stdout}\nstderr:\n${v.stderr}\n`);
+        return 1;
+      }
+      const h = await run(out, ['--clode-help'], { env: smokeEnv, cwd: work });
+      if (h.status !== 0 || !/clode build/.test(h.stdout)) {
+        stderr.write(`clode: build --self: SMOKE FAILED — the fused builder did not answer --clode-help\n`);
+        stderr.write(`clode: build --self: exit=${h.status} stdout:\n${h.stdout}\nstderr:\n${h.stderr}\n`);
+        return 1;
+      }
+      stdout.write(`clode: fused ${out} (${fs.statSync(out).size} bytes, native clode builder)\n`);
+      stdout.write(`clode: smoke: --clode-version + --clode-help ok — run '${out} build' to fuse a quaude\n`);
+      return 0;
+    }
 
     // -- smoke 1: -p PONG against the canned mock. NODE_PATH is stripped so a
     // pass PROVES the binary is self-contained.

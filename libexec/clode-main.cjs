@@ -43,6 +43,10 @@ Usage:
   clode build [--out PATH]                 fuse a standalone quaude binary (the pinned
                                            tjs runtime + the compiled Claude Code
                                            bundle) on this machine; default ./quaude
+  clode build --self [--out PATH]          fuse a standalone NATIVE clode builder (tjs
+                                           runtime + clode's own launcher, no node
+                                           needed) that can itself run 'clode build';
+                                           default ./clode-native
 
 clode-specific options (consumed by clode; everything else goes to Claude Code):
   --clode-help        show this help and exit
@@ -59,6 +63,8 @@ Key environment overrides:
   CLODE_NODE          host node
   CLODE_CACHE         extracted-bundle cache dir
   CLODE_TJS           tjs template binary for 'clode build' (default build/tjs/tjs)
+  CLODE_MAIN_BUNDLE   esbuilt clode-main bundle for 'clode build --self' (default:
+                      newest build/*/clode-main.bundle.cjs)
   CLODE_CHANGELOG_URL release-notes source for the post-update signals digest
 
 Run 'clode --help' for Claude Code's own help.
@@ -179,8 +185,9 @@ async function main(argv, opts = {}) {
     return process.exit(status);
   }
 
-  // 6b. `clode build [--out PATH]`: fuse a standalone quaude binary on this
-  //     machine (builder namespace, not passthrough — Claude Code never sees it).
+  // 6b. `clode build [--self] [--out PATH]`: fuse a standalone quaude binary —
+  //     or, with --self, a standalone native clode builder — on this machine
+  //     (builder namespace, not passthrough — Claude Code never sees it).
   if (first === 'build') {
     const fuse = require('./clode-fuse.cjs');
     const status = await fuse.clodeBuild(args.slice(1), { env, libexec: LIBEXEC, here: HERE, version });
