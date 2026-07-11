@@ -101,12 +101,27 @@ runs:
         if [ "${GITHUB_REF_TYPE:-}" = tag ]; then V="${GITHUB_REF_NAME#v}"; else V="$(cat VERSION)"; fi
         echo "asset=clode-$V-${{ inputs.leg }}" >> "$GITHUB_OUTPUT"
 
-    - name: Restore the built tjs (PINS+patches+recipe keyed)
+    # The cache key carries the BUILD ENVIRONMENT axes, not just the leg
+    # name: guest-version varies per tier (ci = newest, release = oldest
+    # floor) and per floor-walk probe, and the runner IMAGE varies for native
+    # legs (release builds on the oldest hosted label, ci the newest). A
+    # version-blind key restored a 7.9-built tjs into an openbsd@7.6 probe
+    # (ld.so: can't load libc) and a 10.1-built one into netbsd@9.x
+    # (Undefined PLT symbol) — silently smoking the WRONG binary; a bumped
+    # pin (Renovate's included) would do the same. ImageOS is a hosted-runner
+    # machine env var (macos14/ubuntu24/...), not in the env context — read
+    # it in its own step. For guest legs it names the HOST image (irrelevant
+    # to the artifact; occasionally invalidates a cache early — harmless).
+    - name: Cache axes (runner image)
+      id: axes
+      shell: bash
+      run: echo "image=${ImageOS:-unknown}" >> "$GITHUB_OUTPUT"
+    - name: Restore the built tjs (PINS+patches+recipe+build-env keyed)
       id: tjs-cache
       uses: actions/cache@v6
       with:
         path: ${{ steps.mode.outputs.out }}
-        key: tjs-${{ inputs.leg }}-${{ hashFiles('spike/quickjs/PINS.md', 'spike/quickjs/patches/*.patch', 'scripts/build-tjs.mjs') }}
+        key: tjs-${{ inputs.leg }}-${{ steps.axes.outputs.image }}-${{ inputs.guest-version }}-${{ hashFiles('spike/quickjs/PINS.md', 'spike/quickjs/patches/*.patch', 'scripts/build-tjs.mjs') }}
 
     - name: Construct the patched tjs tree from pins (host, native speed)
       if: steps.tjs-cache.outputs.cache-hit != 'true'
