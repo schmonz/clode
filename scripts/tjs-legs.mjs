@@ -87,7 +87,10 @@ const LEGS = [
   // macos-15-intel, floor gate LC_VERSION_MIN_MACOSX 10.6. Walk receipts:
   // probe 1 = 29165326041 (crt wall), probe 2 = 29165510612 (CXX wall),
   // then the local Rosetta bench (PINS.md "darwin floor walk fixups").
-  // Real-Mavericks-box PONG receipt lands here when the box gets its turn.
+  // REAL-HARDWARE PROOF 2026-07-11: on Mavericks 10.9.5 (Darwin 13.4.0,
+  // x86_64) the builder ran, fetched the provider (mbedtls TLS), fused a
+  // quaude ON the box (29MB, bundle 2.1.179), PONG + attest green, quaude
+  // answers --version. The 10.6..10.9 gap is covered by the honest SDK.
   { leg: 'darwin-x64', os: 'macos-15-intel', publish: true,
     'macos-min': '10.6', 'macos-sdk': '10.6',
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
