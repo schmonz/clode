@@ -12,9 +12,9 @@ on:
   workflow_dispatch:
     inputs:
       image:
-        description: "toolchain image ref (pin by digest once known)"
+        description: "toolchain image ref (THE PIN: gcc 14.2 + MacOSX10.4u SDK, resolved from tag build-gcc-14.2-MacOSXSDK10.4u on 2026-07-11)"
         type: string
-        default: "ghcr.io/variantxyz/gcc-powerpc-apple-darwin8:latest"
+        default: "ghcr.io/variantxyz/gcc-powerpc-apple-darwin8@sha256:a9013745ae4a696dc3a047675a85e7c43b9453cdb1e26d9a7ac9738587c1e198"
 
 jobs:
   probe:
