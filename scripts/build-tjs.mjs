@@ -1182,7 +1182,15 @@ fs.mkdirSync(outDir, { recursive: true });
 fs.copyFileSync(path.join(tjsDir, 'build/tjs'), path.join(outDir, 'tjs'));
 fs.chmodSync(path.join(outDir, 'tjs'), 0o755);
 
-const smoke = runOut(path.join(outDir, 'tjs'),
-  ['eval', 'console.log(typeof __tjs_fs_sync === "object" ? "tjs-shim-ok" : "MISSING-SYNC-FS")']);
-if (smoke !== 'tjs-shim-ok') throw new Error(`smoke failed: ${smoke}`);
-console.log(`built ${path.join(outDir, 'tjs')} (${smoke})`);
+// CLODE_TJS_SMOKE=off: skip the exec smoke — for cross-target engines the
+// build host cannot execute the output (darwin-x86 i386: no runner and no
+// arm64 dev box can exec it; the floor gate + the real-hardware oracle
+// carry verification instead).
+if ((process.env.CLODE_TJS_SMOKE || 'on').toLowerCase() !== 'off') {
+  const smoke = runOut(path.join(outDir, 'tjs'),
+    ['eval', 'console.log(typeof __tjs_fs_sync === "object" ? "tjs-shim-ok" : "MISSING-SYNC-FS")']);
+  if (smoke !== 'tjs-shim-ok') throw new Error(`smoke failed: ${smoke}`);
+  console.log(`built ${path.join(outDir, 'tjs')} (${smoke})`);
+} else {
+  console.log(`built ${path.join(outDir, 'tjs')} (exec smoke SKIPPED: cross-target, CLODE_TJS_SMOKE=off)`);
+}
