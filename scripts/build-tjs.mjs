@@ -602,6 +602,27 @@ if (!wantMimalloc) {
 if (!wantFfi) {
   cmakeArgs.push('-DBUILD_WITH_FFI=OFF');
 }
+// macOS floor (darwin-x64 floor walk, spec 2026-07-11): release legs pin a
+// deployment target and an honest OLD SDK, so every post-floor API is a
+// compile error in CI — not a runtime crash on real old hardware (the
+// -mmacosx-version-min-against-modern-SDK shortcut weak-links 10.12+
+// symbols and dies on the box; rejected). Arch is pinned explicitly
+// whenever a floor is set: never trust the runner default once targets are
+// pinned. ci-tier and local builds leave these unset (stock SDK, no floor).
+const macosMin = process.env.CLODE_TJS_MACOS_MIN || '';
+const macosSdk = process.env.CLODE_TJS_MACOS_SDK || '';
+if (macosMin) {
+  cmakeArgs.push(`-DCMAKE_OSX_DEPLOYMENT_TARGET=${macosMin}`);
+  const macosArch = process.env.CLODE_TJS_MACOS_ARCH
+    || (process.arch === 'arm64' ? 'arm64' : 'x86_64');
+  cmakeArgs.push(`-DCMAKE_OSX_ARCHITECTURES=${macosArch}`);
+}
+if (macosSdk) {
+  if (!fs.existsSync(path.join(macosSdk, 'usr/include'))) {
+    throw new Error(`CLODE_TJS_MACOS_SDK: no SDK at ${macosSdk} (usr/include missing)`);
+  }
+  cmakeArgs.push(`-DCMAKE_OSX_SYSROOT=${macosSdk}`);
+}
 if (process.platform !== 'darwin') {
   // txiki-sync-spawn.patch declares posix_spawnattr_t attr used only inside
   // the #ifdef POSIX_SPAWN_CLOEXEC_DEFAULT (Apple) block; txiki compiles
