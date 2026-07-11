@@ -113,9 +113,12 @@ const LEGS = [
   // HARDWARE PROOF 2026-07-11 on Mavericks 10.9.5 (runs i386 natively):
   // shim smoke ok, async spawn via libuv's fork/exec route ok, sync
   // spawn via the v3 fork/exec sibling ok — both new spawn paths ran
-  // real children on real hardware. (True-Tiger execution awaits Tiger
-  // hardware or the qemu-ppc-era oracle legs; 10.4..10.9 gap covered by
-  // the honest SDK.)
+  // real children on real hardware. STRETCH PROVEN same day: an i386
+  // BUILDER was fused ON the box (CLODE_TJS=<this engine> + the x64
+  // builder + CLODE_MAIN_BUNDLE, 11.3MB, self-smoke green) — the first
+  // cross-arch fuse in the wild, cross-fuse prereq 3's proof-of-need.
+  // (True-Tiger execution awaits Tiger hardware or the qemu-ppc-era
+  // oracle legs; 10.4..10.9 gap covered by the honest SDK.)
   { leg: 'darwin-x86', os: 'macos-15-intel', publish: false,
     'macos-min': '10.4', 'macos-sdk': '10.4u', 'macos-arch': 'i386',
     'no-exec': true, wasm: 'off', mimalloc: 'off', ffi: 'off',
