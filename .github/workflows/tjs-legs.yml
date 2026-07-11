@@ -1,0 +1,69 @@
+name: tjs-legs
+
+# Reusable tjs builder-leg fan-out — the ONE place the leg job is defined
+# (user decision 2026-07-11: no duplication between the per-push and release
+# builds). The leg LIST lives in scripts/tjs-legs.mjs (single source of
+# truth, invariants locked by test/tjs-legs.test.cjs); this workflow turns
+# `node scripts/tjs-legs.mjs <tier>` into a matrix and runs the same
+# ./.github/actions/build-leg recipe for every entry.
+#
+# Callers: ci.yml (tier: ci — every OS, one arch each, publish/attest
+# stripped by the manifest) and release.yml (tier: release — the full
+# matrix). Permissions are NOT declared here: a called workflow can only
+# downgrade the caller's grant, so each caller passes exactly what its tier
+# needs (release: id-token + attestations for provenance; ci: contents read).
+
+on:
+  workflow_call:
+    inputs:
+      tier:
+        description: "leg subset: 'ci' (per-push) or 'release' (full matrix)"
+        type: string
+        required: true
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      legs: ${{ steps.legs.outputs.legs }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .tool-versions
+      - id: legs
+        run: echo "legs=$(node scripts/tjs-legs.mjs '${{ inputs.tier }}')" >> "$GITHUB_OUTPUT"
+
+  leg:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.legs) }}
+    runs-on: ${{ matrix.os }}
+    # 90 = the release default; native legs finish far under it either way.
+    timeout-minutes: ${{ matrix.timeout || 90 }}
+    continue-on-error: ${{ matrix.soft-fail || false }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .tool-versions
+      - uses: ./.github/actions/build-leg
+        with:
+          leg: ${{ matrix.leg }}
+          guest-platform: ${{ matrix.guest-platform || 'native' }}
+          guest-arch: ${{ matrix.guest-arch || 'x86_64' }}
+          guest-version: ${{ matrix.guest-version || '3.22' }}
+          guest-packages: ${{ matrix.guest-packages || '' }}
+          static: ${{ matrix.static && 'true' || 'false' }}
+          wasm: ${{ matrix.wasm || 'on' }}
+          mimalloc: ${{ matrix.mimalloc || 'on' }}
+          ffi: ${{ matrix.ffi || 'on' }}
+          smoke: ${{ matrix.smoke || 'full' }}
+          attest: ${{ matrix.publish && 'true' || 'false' }}
+          publish: ${{ matrix.publish && 'true' || 'false' }}
