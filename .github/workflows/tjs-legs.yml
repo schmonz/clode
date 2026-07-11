@@ -89,5 +89,7 @@ jobs:
           smoke: ${{ matrix.smoke || 'full' }}
           macos-min: ${{ matrix.macos-min || '' }}
           macos-sdk: ${{ matrix.macos-sdk || '' }}
+          macos-arch: ${{ matrix.macos-arch || '' }}
+          no-exec: ${{ matrix.no-exec && 'true' || 'false' }}
           attest: ${{ matrix.publish && 'true' || 'false' }}
           publish: ${{ matrix.publish && 'true' || 'false' }}

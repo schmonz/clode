@@ -39,9 +39,17 @@ inputs:
     required: false
     default: ""
   macos-sdk:
-    description: "Pinned old-SDK id to build against (known ids: '10.6'). Empty: the runner's stock SDK."
+    description: "Pinned old-SDK id to build against (known ids: '10.6', '10.4u'). Empty: the runner's stock SDK."
     required: false
     default: ""
+  macos-arch:
+    description: "Explicit target arch for the darwin floor build (e.g. 'i386'). Empty: the host arch."
+    required: false
+    default: ""
+  no-exec:
+    description: "'true': the runner cannot execute the target output (darwin-x86 i386). Build + floor-gate + upload the BARE engine only — no exec smoke, no fuse, no builder artifact."
+    required: false
+    default: "false"
   static:
     description: "'true': fully-static tjs (musl legs) + verify with file/ldd"
     required: false
@@ -169,6 +177,12 @@ runs:
           10.6)
             URL="https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.6.sdk.tar.xz"
             SHA="ad93f3e25c1ee71e457ced1a9c106c2e6741afb96252f259a5b7c625d1156fe8" ;;
+          # 10.4u ships its own startup objects (usr/lib/crt1.o, fat
+          # ppc/i386/ppc64/x86_64) — no Csu graft, unlike the stripped
+          # 10.6 repack.
+          10.4u)
+            URL="https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.4u.sdk.tar.xz"
+            SHA="d28276ce6b0f14af30f3bfdc171f8ef4033652da593578568f8be189506c1021" ;;
           *) echo "ERROR: unknown macos-sdk id '${{ inputs.macos-sdk }}'" >&2; exit 1 ;;
         esac
         DEST="${{ runner.temp }}/MacOSX${{ inputs.macos-sdk }}.sdk"
@@ -210,6 +224,8 @@ runs:
         CLODE_TJS_FFI: ${{ inputs.ffi }}
         CLODE_TJS_MACOS_MIN: ${{ inputs.macos-min }}
         CLODE_TJS_MACOS_SDK: ${{ steps.sdk.outputs.path }}
+        CLODE_TJS_MACOS_ARCH: ${{ inputs.macos-arch }}
+        CLODE_TJS_SMOKE: ${{ inputs.no-exec == 'true' && 'off' || 'on' }}
       run: node scripts/build-tjs.mjs --build-only
 
     - name: Build tjs (alpine guest)
@@ -325,7 +341,7 @@ runs:
         ldd "$TJS" 2>&1 | head -3 || true   # informational: expect "not a dynamic executable"
 
     - name: Host-exec smoke of the built tjs
-      if: steps.mode.outputs.exec != 'guest'
+      if: steps.mode.outputs.exec != 'guest' && inputs.no-exec != 'true'
       shell: bash
       run: |
         set -euo pipefail
@@ -334,14 +350,14 @@ runs:
         [ "$out" = tjs-shim-ok ]
 
     - name: Fuse the self-contained builder (clode build --self)
-      if: steps.mode.outputs.exec != 'guest'
+      if: steps.mode.outputs.exec != 'guest' && inputs.no-exec != 'true'
       shell: bash
       env:
         CLODE_TJS: ${{ steps.mode.outputs.out }}/tjs
       run: node bin/clode build --self --out "${{ steps.name.outputs.asset }}"
 
     - name: Self-smoke --clode-version (host exec of the fused builder)
-      if: steps.mode.outputs.exec != 'guest'
+      if: steps.mode.outputs.exec != 'guest' && inputs.no-exec != 'true'
       shell: bash
       run: |
         set -euo pipefail
@@ -351,14 +367,25 @@ runs:
     # LC_VERSION_MIN_MACOSX load command and refuses LC_BUILD_VERSION-only
     # binaries — and the version must be exactly the pinned floor. Gating
     # the SHIPPED asset (the fuse always runs) covers cache-hit paths too;
-    # the floor-carrying cache key guarantees the cached tjs matches.
+    # the floor-carrying cache key guarantees the cached tjs matches. On
+    # no-exec legs there is no asset (nothing on the runner can exec the
+    # target): gate the bare engine, plus its arch marker.
     - name: Floor gate — shipped asset carries LC_VERSION_MIN_MACOSX = the pinned floor
       if: inputs.macos-min != '' && runner.os == 'macOS'
       shell: bash
       run: |
         set -euo pipefail
+        if [ "${{ inputs.no-exec }}" = "true" ]; then
+          TARGET="${{ steps.mode.outputs.out }}/tjs"
+        else
+          TARGET="./${{ steps.name.outputs.asset }}"
+        fi
+        if [ -n "${{ inputs.macos-arch }}" ]; then
+          f=$(file -b "$TARGET"); echo "file: $f"
+          case "$f" in *"${{ inputs.macos-arch }}"*) ;; *) echo "ERROR: arch marker '${{ inputs.macos-arch }}' not in file output" >&2; exit 1 ;; esac
+        fi
         LOADCMDS="$RUNNER_TEMP/floor-gate-loadcmds"
-        otool -l "./${{ steps.name.outputs.asset }}" > "$LOADCMDS"
+        otool -l "$TARGET" > "$LOADCMDS"
         if grep -q LC_BUILD_VERSION "$LOADCMDS"; then
           echo "ERROR: LC_BUILD_VERSION present — pre-10.14 dyld needs LC_VERSION_MIN_MACOSX" >&2
           exit 1
@@ -371,7 +398,7 @@ runs:
         echo "floor gate ok: LC_VERSION_MIN_MACOSX $got"
 
     - name: Full smoke — the builder builds the product (ephemeral, NEVER uploaded)
-      if: steps.mode.outputs.exec != 'guest' && inputs.smoke == 'full'
+      if: steps.mode.outputs.exec != 'guest' && inputs.smoke == 'full' && inputs.no-exec != 'true'
       shell: bash
       run: |
         set -uo pipefail
@@ -391,6 +418,7 @@ runs:
         subject-path: ${{ steps.name.outputs.asset }}
 
     - name: Upload the builder artifact
+      if: inputs.no-exec != 'true'
       uses: actions/upload-artifact@v7
       with:
         name: ${{ inputs.publish == 'true' && steps.name.outputs.asset || format('smoke-{0}', steps.name.outputs.asset) }}
