@@ -73,7 +73,15 @@ const LEGS = [
   // hardened everything except the slow qemu-user TCG class (non-blocking by
   // design, like s390x). publish:true only materializes an artifact when the
   // leg is green.
-  { leg: 'darwin-x64', os: 'macos-15-intel', publish: true },  // deferred from phase 1
+  // darwin-x64 floor walk (spec 2026-07-11): release builds against the
+  // pinned 10.6 SDK with deployment target 10.6 — the oldest macOS with a
+  // real x86_64 userland, so one honest floor covers every 64-bit Intel Mac
+  // (and becomes the x86_64 SLICE of the universal fat binary later). ci
+  // would ride the stock runner SDK (fields stripped) if this leg joins ci.
+  // Floor status: MACHINERY LANDED, walk in progress — proven receipts get
+  // recorded here (probe run id + real-Mavericks-box PONG) per house rule.
+  { leg: 'darwin-x64', os: 'macos-15-intel', publish: true,
+    'macos-min': '10.6', 'macos-sdk': '10.6' },
   // ---- T1.5 extra musl arches. x86 execs natively on the x64 kernel (full
   // smoke); the rest are qemu-user with version-smoke like s390x. wasm off:
   // MAP_32BIT is x86_64/aarch64-only in musl headers — and 32-bit WAMR is
@@ -186,7 +194,8 @@ export function legsFor(tier) {
     return LEGS.map(({ ci, 'ci-os': _o, 'ci-guest-version': _v, ...leg }) => leg);
   }
   if (tier === 'ci') {
-    return LEGS.filter((l) => l.ci).map(({ ci, publish, 'ci-os': ciOs, 'ci-guest-version': ciVer, ...leg }) => {
+    return LEGS.filter((l) => l.ci).map(({ ci, publish, 'ci-os': ciOs, 'ci-guest-version': ciVer,
+      'macos-min': _mm, 'macos-sdk': _ms, ...leg }) => {
       if (ciOs) leg.os = ciOs;                          // ci rides the newest runner/guest
       if (ciVer) leg['guest-version'] = ciVer;
       if (VM(leg)) leg['soft-fail'] = true;  // house rule: new-to-CI VM legs earn hard status

@@ -98,6 +98,27 @@ test('ci legs match their release siblings byte-for-byte on engine config', () =
   }
 });
 
+test('darwin floor: macos-min/macos-sdk are release-only, native-darwin-only', () => {
+  const release = legsFor('release');
+  const ci = legsFor('ci');
+  // The darwin analog of the guest-version floor policy: release builds
+  // against the pinned old SDK (the proven floor), ci rides the runner's
+  // stock SDK (the newest end).
+  const dx = release.find((l) => l.leg === 'darwin-x64');
+  assert.strictEqual(dx['macos-min'], '10.6');
+  assert.strictEqual(dx['macos-sdk'], '10.6');
+  for (const l of release) {
+    if ('macos-min' in l || 'macos-sdk' in l) {
+      assert.ok(!l['guest-platform'] && l.os.startsWith('macos'),
+        `${l.leg}: macos-* floor fields belong only on native darwin legs`);
+    }
+  }
+  for (const l of ci) {
+    assert.ok(!('macos-min' in l) && !('macos-sdk' in l),
+      `${l.leg}: ci tier must strip the macos-* floor fields`);
+  }
+});
+
 test('version policy: ci rides the newest end, release the oldest floor', () => {
   const release = legsFor('release');
   const ci = legsFor('ci');
