@@ -104,7 +104,13 @@ const LEGS = [
   // leg is its motivating consumer). Same engine knobs as darwin-x64
   // (Darwin TLV needs 10.7+; Tiger ALSO has no posix_spawn — the
   // spawn-model axis fixups ride build-tjs.mjs).
-  // Floor status: MACHINERY LANDING, walk in progress.
+  // PROVEN floor (probe run 29168027051, 2026-07-11): honest 10.4u-SDK
+  // build (the repack ships its own fat crt1.o — no Csu graft), engine
+  // floor gate LC_VERSION_MIN_MACOSX 10.4 + i386 arch marker green on
+  // macos-15-intel. Walk = 6 Rosetta-bench rounds (build-only), headline
+  // fix = the spawn-model axis (UV__HAVE_POSIX_SPAWN + sync-spawn v3
+  // fork/exec sibling — pre-10.5 has no posix_spawn at all). Real-
+  // hardware receipt (ultimate-hat runs i386 natively) lands here next.
   { leg: 'darwin-x86', os: 'macos-15-intel', publish: false,
     'macos-min': '10.4', 'macos-sdk': '10.4u', 'macos-arch': 'i386',
     'no-exec': true, wasm: 'off', mimalloc: 'off', ffi: 'off',
