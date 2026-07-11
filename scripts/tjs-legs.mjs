@@ -82,9 +82,12 @@ const LEGS = [
   // lives in WAMR + mimalloc, and Darwin TLV needs a 10.7+ target — same
   // config every VM leg ships. ffi off: nothing shipped imports tjs:ffi,
   // and it spares the 10.6 sysroot a libffi question (also VM-leg parity).
-  // Floor status: local proof green 2026-07-11 (x86_64 tjs, LC_VERSION_MIN
-  // 10.6, exec'd under Rosetta on the arm64 dev box); probe receipts +
-  // real-Mavericks-box PONG land here per house rule.
+  // PROVEN floor (probe run 29166443318, 2026-07-11): honest 10.6-SDK
+  // build (Csu-grafted crt1.10.6.o), fuse + full quaude smoke green on
+  // macos-15-intel, floor gate LC_VERSION_MIN_MACOSX 10.6. Walk receipts:
+  // probe 1 = 29165326041 (crt wall), probe 2 = 29165510612 (CXX wall),
+  // then the local Rosetta bench (PINS.md "darwin floor walk fixups").
+  // Real-Mavericks-box PONG receipt lands here when the box gets its turn.
   { leg: 'darwin-x64', os: 'macos-15-intel', publish: true,
     'macos-min': '10.6', 'macos-sdk': '10.6',
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
