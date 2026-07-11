@@ -109,14 +109,30 @@ test('darwin floor: macos-min/macos-sdk are release-only, native-darwin-only', (
   assert.strictEqual(dx['macos-min'], '10.6');
   assert.strictEqual(dx['macos-sdk'], '10.6');
   for (const l of release) {
-    if ('macos-min' in l || 'macos-sdk' in l) {
+    if ('macos-min' in l || 'macos-sdk' in l || 'macos-arch' in l) {
       assert.ok(!l['guest-platform'] && l.os.startsWith('macos'),
         `${l.leg}: macos-* floor fields belong only on native darwin legs`);
     }
   }
   for (const l of ci) {
-    assert.ok(!('macos-min' in l) && !('macos-sdk' in l),
-      `${l.leg}: ci tier must strip the macos-* floor fields`);
+    assert.ok(!('macos-min' in l) && !('macos-sdk' in l)
+      && !('macos-arch' in l) && !('no-exec' in l),
+      `${l.leg}: ci tier must strip the macos-* floor fields and no-exec`);
+  }
+});
+
+test('darwin-x86 Tiger leg: engine-only i386 at floor 10.4', () => {
+  const release = legsFor('release');
+  const dt = release.find((l) => l.leg === 'darwin-x86');
+  assert.strictEqual(dt['macos-min'], '10.4');
+  assert.strictEqual(dt['macos-sdk'], '10.4u');
+  assert.strictEqual(dt['macos-arch'], 'i386');
+  assert.strictEqual(dt['no-exec'], true);
+  assert.strictEqual(dt.publish, false);
+  // No GitHub runner can exec the output of a no-exec leg — fusing and
+  // publishing a builder is impossible there by definition.
+  for (const l of release) {
+    if (l['no-exec']) assert.ok(!l.publish, `${l.leg}: no-exec legs must not publish`);
   }
 });
 

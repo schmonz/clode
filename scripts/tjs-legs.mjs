@@ -94,6 +94,21 @@ const LEGS = [
   { leg: 'darwin-x64', os: 'macos-15-intel', publish: true,
     'macos-min': '10.6', 'macos-sdk': '10.6',
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
+  // darwin-x86 Tiger walk (spec 2026-07-11-darwin-x86-tiger-walk): the
+  // i386 slice at floor 10.4 — second slice of the 4-way fat binary.
+  // ENGINE-ONLY (no-exec): no GitHub runner can execute i386 (mac
+  // runners are >=10.15, Rosetta 2 is x86_64-only), so the leg builds and
+  // floor-gates the bare tjs and publishes nothing; the fuse chain is
+  // proven on the Mavericks box (10.9 runs i386 natively), and a
+  // publishable i386 BUILDER waits on cross-fuse prerequisite 3 (this
+  // leg is its motivating consumer). Same engine knobs as darwin-x64
+  // (Darwin TLV needs 10.7+; Tiger ALSO has no posix_spawn — the
+  // spawn-model axis fixups ride build-tjs.mjs).
+  // Floor status: MACHINERY LANDING, walk in progress.
+  { leg: 'darwin-x86', os: 'macos-15-intel', publish: false,
+    'macos-min': '10.4', 'macos-sdk': '10.4u', 'macos-arch': 'i386',
+    'no-exec': true, wasm: 'off', mimalloc: 'off', ffi: 'off',
+    'soft-fail': true },
   // ---- T1.5 extra musl arches. x86 execs natively on the x64 kernel (full
   // smoke); the rest are qemu-user with version-smoke like s390x. wasm off:
   // MAP_32BIT is x86_64/aarch64-only in musl headers — and 32-bit WAMR is
@@ -207,7 +222,7 @@ export function legsFor(tier) {
   }
   if (tier === 'ci') {
     return LEGS.filter((l) => l.ci).map(({ ci, publish, 'ci-os': ciOs, 'ci-guest-version': ciVer,
-      'macos-min': _mm, 'macos-sdk': _ms, ...leg }) => {
+      'macos-min': _mm, 'macos-sdk': _ms, 'macos-arch': _ma, 'no-exec': _nx, ...leg }) => {
       if (ciOs) leg.os = ciOs;                          // ci rides the newest runner/guest
       if (ciVer) leg['guest-version'] = ciVer;
       if (VM(leg)) leg['soft-fail'] = true;  // house rule: new-to-CI VM legs earn hard status
