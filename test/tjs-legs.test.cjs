@@ -16,6 +16,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { execFileSync } = require('node:child_process');
+const fs = require('node:fs');
 const path = require('node:path');
 
 const REPO = path.resolve(__dirname, '..');
@@ -117,6 +118,16 @@ test('darwin floor: macos-min/macos-sdk are release-only, native-darwin-only', (
     assert.ok(!('macos-min' in l) && !('macos-sdk' in l),
       `${l.leg}: ci tier must strip the macos-* floor fields`);
   }
+});
+
+test('build-leg cache key carries the macos floor axes', () => {
+  // Same lesson as the version-blind key that restored a 7.9-built tjs
+  // into a 7.6 probe: a floor-blind key would smoke a stock-SDK binary.
+  const action = fs.readFileSync(
+    path.join(REPO, '.github/actions/build-leg/action.yml'), 'utf8');
+  const keyLine = action.split('\n').find((ln) => ln.trim().startsWith('key: tjs-'));
+  assert.ok(keyLine.includes('inputs.macos-min') && keyLine.includes('inputs.macos-sdk'),
+    `cache key must carry the macos floor axes, got: ${keyLine}`);
 });
 
 test('version policy: ci rides the newest end, release the oldest floor', () => {

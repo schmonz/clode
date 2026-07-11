@@ -34,6 +34,14 @@ inputs:
     description: Packages for the guest, named in the guest's package system (VM legs)
     required: false
     default: ""
+  macos-min:
+    description: "macOS deployment-target floor (native darwin legs). Empty: stock SDK, no floor."
+    required: false
+    default: ""
+  macos-sdk:
+    description: "Pinned old-SDK id to build against (known ids: '10.6'). Empty: the runner's stock SDK."
+    required: false
+    default: ""
   static:
     description: "'true': fully-static tjs (musl legs) + verify with file/ldd"
     required: false
@@ -121,7 +129,7 @@ runs:
       uses: actions/cache@v6
       with:
         path: ${{ steps.mode.outputs.out }}
-        key: tjs-${{ inputs.leg }}-${{ steps.axes.outputs.image }}-${{ inputs.guest-version }}-${{ hashFiles('spike/quickjs/PINS.md', 'spike/quickjs/patches/*.patch', 'scripts/build-tjs.mjs') }}
+        key: tjs-${{ inputs.leg }}-${{ steps.axes.outputs.image }}-${{ inputs.guest-version }}-${{ inputs.macos-min }}-${{ inputs.macos-sdk }}-${{ hashFiles('spike/quickjs/PINS.md', 'spike/quickjs/patches/*.patch', 'scripts/build-tjs.mjs') }}
 
     - name: Construct the patched tjs tree from pins (host, native speed)
       if: steps.tjs-cache.outputs.cache-hit != 'true'
@@ -138,6 +146,39 @@ runs:
       shell: bash
       run: node scripts/build-sea.mjs --bundle-only
 
+    # The honest-floor SDK (darwin-x64 floor walk, spec 2026-07-11): build
+    # against the REAL old headers so every post-floor API is a compile
+    # error, not a weak-linked runtime crash on old hardware. The pin is
+    # permanent (phracker/MacOSX-SDKs is archived) — no Renovate entry; the
+    # sha256 fails the build on any drift.
+    - name: Restore the pinned macOS SDK
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.guest-platform == 'native' && inputs.macos-sdk != ''
+      id: sdk-cache
+      uses: actions/cache@v6
+      with:
+        path: ${{ runner.temp }}/MacOSX${{ inputs.macos-sdk }}.sdk
+        key: macos-sdk-${{ inputs.macos-sdk }}-v1
+    - name: Fetch the pinned macOS SDK
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.guest-platform == 'native' && inputs.macos-sdk != ''
+      id: sdk
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "${{ inputs.macos-sdk }}" in
+          10.6)
+            URL="https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.6.sdk.tar.xz"
+            SHA="ad93f3e25c1ee71e457ced1a9c106c2e6741afb96252f259a5b7c625d1156fe8" ;;
+          *) echo "ERROR: unknown macos-sdk id '${{ inputs.macos-sdk }}'" >&2; exit 1 ;;
+        esac
+        DEST="${{ runner.temp }}/MacOSX${{ inputs.macos-sdk }}.sdk"
+        if [ ! -d "$DEST/usr/include" ]; then
+          curl -fsSL -o "${{ runner.temp }}/sdk.tar.xz" "$URL"
+          echo "$SHA  ${{ runner.temp }}/sdk.tar.xz" | shasum -a 256 -c -
+          tar -xJf "${{ runner.temp }}/sdk.tar.xz" -C "${{ runner.temp }}"
+          test -d "$DEST/usr/include"
+        fi
+        echo "path=$DEST" >> "$GITHUB_OUTPUT"
+
     - name: Build tjs (native)
       if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.guest-platform == 'native'
       shell: bash
@@ -148,6 +189,8 @@ runs:
         CLODE_TJS_WASM: ${{ inputs.wasm }}
         CLODE_TJS_MIMALLOC: ${{ inputs.mimalloc }}
         CLODE_TJS_FFI: ${{ inputs.ffi }}
+        CLODE_TJS_MACOS_MIN: ${{ inputs.macos-min }}
+        CLODE_TJS_MACOS_SDK: ${{ steps.sdk.outputs.path }}
       run: node scripts/build-tjs.mjs --build-only
 
     - name: Build tjs (alpine guest)
@@ -284,6 +327,29 @@ runs:
       run: |
         set -euo pipefail
         ./"${{ steps.name.outputs.asset }}" --clode-version
+
+    # The static floor gate: pre-10.14 dyld requires the old
+    # LC_VERSION_MIN_MACOSX load command and refuses LC_BUILD_VERSION-only
+    # binaries — and the version must be exactly the pinned floor. Gating
+    # the SHIPPED asset (the fuse always runs) covers cache-hit paths too;
+    # the floor-carrying cache key guarantees the cached tjs matches.
+    - name: Floor gate — shipped asset carries LC_VERSION_MIN_MACOSX = the pinned floor
+      if: inputs.macos-min != '' && runner.os == 'macOS'
+      shell: bash
+      run: |
+        set -euo pipefail
+        LOADCMDS="$RUNNER_TEMP/floor-gate-loadcmds"
+        otool -l "./${{ steps.name.outputs.asset }}" > "$LOADCMDS"
+        if grep -q LC_BUILD_VERSION "$LOADCMDS"; then
+          echo "ERROR: LC_BUILD_VERSION present — pre-10.14 dyld needs LC_VERSION_MIN_MACOSX" >&2
+          exit 1
+        fi
+        got=$(awk '/cmd LC_VERSION_MIN_MACOSX/{f=1} f && /version /{print $2; exit}' "$LOADCMDS")
+        if [ "$got" != "${{ inputs.macos-min }}" ]; then
+          echo "ERROR: LC_VERSION_MIN_MACOSX=$got, want ${{ inputs.macos-min }}" >&2
+          exit 1
+        fi
+        echo "floor gate ok: LC_VERSION_MIN_MACOSX $got"
 
     - name: Full smoke — the builder builds the product (ephemeral, NEVER uploaded)
       if: steps.mode.outputs.exec != 'guest' && inputs.smoke == 'full'

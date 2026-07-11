@@ -83,5 +83,7 @@ jobs:
           mimalloc: ${{ matrix.mimalloc || 'on' }}
           ffi: ${{ matrix.ffi || 'on' }}
           smoke: ${{ matrix.smoke || 'full' }}
+          macos-min: ${{ matrix.macos-min || '' }}
+          macos-sdk: ${{ matrix.macos-sdk || '' }}
           attest: ${{ matrix.publish && 'true' || 'false' }}
           publish: ${{ matrix.publish && 'true' || 'false' }}
