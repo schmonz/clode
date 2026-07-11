@@ -78,10 +78,16 @@ const LEGS = [
   // real x86_64 userland, so one honest floor covers every 64-bit Intel Mac
   // (and becomes the x86_64 SLICE of the universal fat binary later). ci
   // would ride the stock runner SDK (fields stripped) if this leg joins ci.
-  // Floor status: MACHINERY LANDED, walk in progress — proven receipts get
-  // recorded here (probe run id + real-Mavericks-box PONG) per house rule.
+  // wasm/mimalloc off: the ONLY thread-local storage in the whole stack
+  // lives in WAMR + mimalloc, and Darwin TLV needs a 10.7+ target — same
+  // config every VM leg ships. ffi off: nothing shipped imports tjs:ffi,
+  // and it spares the 10.6 sysroot a libffi question (also VM-leg parity).
+  // Floor status: local proof green 2026-07-11 (x86_64 tjs, LC_VERSION_MIN
+  // 10.6, exec'd under Rosetta on the arm64 dev box); probe receipts +
+  // real-Mavericks-box PONG land here per house rule.
   { leg: 'darwin-x64', os: 'macos-15-intel', publish: true,
-    'macos-min': '10.6', 'macos-sdk': '10.6' },
+    'macos-min': '10.6', 'macos-sdk': '10.6',
+    wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // ---- T1.5 extra musl arches. x86 execs natively on the x64 kernel (full
   // smoke); the rest are qemu-user with version-smoke like s390x. wasm off:
   // MAP_32BIT is x86_64/aarch64-only in musl headers — and 32-bit WAMR is

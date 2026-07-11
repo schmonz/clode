@@ -33,10 +33,10 @@ diff --git a/src/vm.c b/src/vm.c
      tjs__mod_process_init(ctx, ns);
 diff --git a/src/mod_spawn_sync.c b/src/mod_spawn_sync.c
 new file mode 100644
-index 0000000..fe5d4ec
+index 0000000..be513ee
 --- /dev/null
 +++ b/src/mod_spawn_sync.c
-@@ -0,0 +1,358 @@
+@@ -0,0 +1,414 @@
 +/* Synchronous spawn primitive for CommonJS interop (node-shim).
 + * posix_spawn + poll()-drain, main-thread blocking by design. Exposed as
 + * the global `__tjs_spawn_sync`. Mirrors mod_fs_sync.c; upstream candidate. */
@@ -52,6 +52,42 @@ index 0000000..fe5d4ec
 +#include <sys/wait.h>
 +#include <time.h>
 +#include <unistd.h>
++
++/* ---- old-darwin floor compat (macOS 10.6 SDK/floor; darwin floor walk
++ * 2026-07-11). Three walls: clock_gettime is 10.12+, O_CLOEXEC is 10.7+,
++ * posix_spawn_file_actions_addchdir_np is 10.15+. ---- */
++#if defined(__APPLE__)
++# include <AvailabilityMacros.h>
++# if MAC_OS_X_VERSION_MAX_ALLOWED >= 101500 && MAC_OS_X_VERSION_MIN_REQUIRED >= 101500
++#  define TJS__SPAWN_SYNC_HAS_ADDCHDIR 1
++# endif
++# if MAC_OS_X_VERSION_MAX_ALLOWED < 101200 || MAC_OS_X_VERSION_MIN_REQUIRED < 101200
++#  include <mach/mach_time.h>
++#  ifndef CLOCK_MONOTONIC
++#   define CLOCK_MONOTONIC 6
++#  endif
++static int tjs__clock_gettime_compat(int clk, struct timespec *ts) {
++    static mach_timebase_info_data_t tb;
++    uint64_t t;
++    (void)clk;
++    if (tb.denom == 0)
++        mach_timebase_info(&tb);
++    t = mach_absolute_time() * tb.numer / tb.denom;
++    ts->tv_sec = t / 1000000000ULL;
++    ts->tv_nsec = t % 1000000000ULL;
++    return 0;
++}
++#  define clock_gettime tjs__clock_gettime_compat
++# endif
++# ifndef O_CLOEXEC
++   /* pre-10.7: no O_CLOEXEC open flag. Safe here: the only O_CLOEXEC open is
++    * the child's /dev/null stdin, dup2'd in and closed right after the one
++    * spawn on this single-threaded path — nothing else can leak it. */
++#  define O_CLOEXEC 0
++# endif
++#else
++# define TJS__SPAWN_SYNC_HAS_ADDCHDIR 1
++#endif
 +
 +extern char **environ;
 +
@@ -213,7 +249,7 @@ index 0000000..fe5d4ec
 +    posix_spawn_file_actions_adddup2(&fa, errp[1], 2);
 +    posix_spawn_file_actions_addclose(&fa, errp[0]);
 +    posix_spawn_file_actions_addclose(&fa, errp[1]);
-+#if defined(__APPLE__) || defined(__GLIBC__)
++#if (defined(__APPLE__) && defined(TJS__SPAWN_SYNC_HAS_ADDCHDIR)) || defined(__GLIBC__)
 +    /* addchdir_np: since macOS 10.15 / glibc 2.29. Deprecated on macOS 26 for
 +     * the POSIX posix_spawn_file_actions_addchdir, but still functional; the
 +     * build is -Werror, so suppress the deprecation locally rather than fork
@@ -244,9 +280,9 @@ index 0000000..fe5d4ec
 +     * uv_spawn sets exactly this flag, which is why the async path never leaked.
 +     * On non-Apple the flag is absent; there the O_CLOEXEC pipes above plus
 +     * already-cloexec runtime fds carry the guarantee. */
-+    posix_spawnattr_t attr;
 +    posix_spawnattr_t *attrp = NULL;
 +#ifdef POSIX_SPAWN_CLOEXEC_DEFAULT
++    posix_spawnattr_t attr;
 +    if (posix_spawnattr_init(&attr) == 0) {
 +        if (posix_spawnattr_setflags(&attr, POSIX_SPAWN_CLOEXEC_DEFAULT) == 0)
 +            attrp = &attr;
@@ -256,7 +292,27 @@ index 0000000..fe5d4ec
 +#endif
 +
 +    pid_t pid = 0;
++#if defined(__APPLE__) && !defined(TJS__SPAWN_SYNC_HAS_ADDCHDIR)
++    /* No addchdir_np before macOS 10.15: parent-side chdir dance around the
++     * spawn — safe on the single JS thread this sync spawner runs on. A
++     * failed chdir(cwd) becomes the spawn error (same errno class node
++     * reports for a bad cwd). */
++    char oldcwd[1024];
++    int rc = 0;
++    oldcwd[0] = 0;
++    if (cwd) {
++        if (getcwd(oldcwd, sizeof(oldcwd)) == NULL)
++            oldcwd[0] = 0;
++        if (chdir(cwd) != 0)
++            rc = errno;
++    }
++    if (rc == 0)
++        rc = posix_spawn(&pid, file, &fa, attrp, cargv, cenv ? cenv : environ);
++    if (cwd && oldcwd[0] != 0)
++        chdir(oldcwd);
++#else
 +    int rc = posix_spawn(&pid, file, &fa, attrp, cargv, cenv ? cenv : environ);
++#endif
 +    if (attrp) posix_spawnattr_destroy(attrp);
 +    posix_spawn_file_actions_destroy(&fa);
 +    close(outp[1]); close(errp[1]);

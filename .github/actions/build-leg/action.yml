@@ -157,7 +157,8 @@ runs:
       uses: actions/cache@v6
       with:
         path: ${{ runner.temp }}/MacOSX${{ inputs.macos-sdk }}.sdk
-        key: macos-sdk-${{ inputs.macos-sdk }}-v1
+        # v2: the SDK dir now carries the Csu-built crt1.10.6.o graft.
+        key: macos-sdk-${{ inputs.macos-sdk }}-v2
     - name: Fetch the pinned macOS SDK
       if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.guest-platform == 'native' && inputs.macos-sdk != ''
       id: sdk
@@ -176,6 +177,24 @@ runs:
           echo "$SHA  ${{ runner.temp }}/sdk.tar.xz" | shasum -a 256 -c -
           tar -xJf "${{ runner.temp }}/sdk.tar.xz" -C "${{ runner.temp }}"
           test -d "$DEST/usr/include"
+        fi
+        # phracker repacks strip the startup objects, and every pre-10.8
+        # deployment target needs crt1.10.6.o (10.8+ switched to LC_MAIN) —
+        # probe 1 (run 29165326041) died on exactly this. Build it from
+        # Apple's open-source Csu (APSL) and graft it into the SDK: the v3
+        # recipe from Csu-85's own Makefile, proven locally 2026-07-11
+        # (816-byte .o; hello-world links and carries LC_VERSION_MIN 10.6).
+        if [ "${{ inputs.macos-sdk }}" = "10.6" ] && [ ! -f "$DEST/usr/lib/crt1.10.6.o" ]; then
+          CSU_URL="https://github.com/apple-oss-distributions/Csu/archive/refs/tags/Csu-85.tar.gz"
+          CSU_SHA="87a6bfb1030455e17128d5803e02815e35a1c8bd8bda7bd7f4141431a4d0eac6"
+          curl -fsSL -o "${{ runner.temp }}/csu.tar.gz" "$CSU_URL"
+          echo "$CSU_SHA  ${{ runner.temp }}/csu.tar.gz" | shasum -a 256 -c -
+          tar -xzf "${{ runner.temp }}/csu.tar.gz" -C "${{ runner.temp }}"
+          cc -r -arch x86_64 -Os -mmacosx-version-min=10.6 -isysroot "$DEST" \
+            -nostdlib -keep_private_externs \
+            "${{ runner.temp }}/Csu-Csu-85/start.s" "${{ runner.temp }}/Csu-Csu-85/crt.c" \
+            -o "$DEST/usr/lib/crt1.10.6.o" -DADD_PROGRAM_VARS
+          test -f "$DEST/usr/lib/crt1.10.6.o"
         fi
         echo "path=$DEST" >> "$GITHUB_OUTPUT"
 

@@ -55,6 +55,28 @@ quickjs-ng-js_exepath-netbsd patch 2026-07-06
 #   probing /dev/fd saw the fetch socket (fds 8,9) BEFORE the patch and only its
 #   own stdio AFTER; an async child never saw them either way. On non-Apple the
 #   flag is absent — the O_CLOEXEC pipes + already-cloexec runtime fds carry it.
+#   UPDATE 2026-07-11 (v2, darwin floor walk): old-darwin compat block at the top of
+#   mod_spawn_sync.c — clock_gettime emulated via Mach absolute time (SDK/floor < 10.12),
+#   O_CLOEXEC 0-fallback (< 10.7; safe: the one flagged open is the child's /dev/null
+#   stdin, dup2'd and closed around the single spawn on the single JS thread), and
+#   addchdir_np feature-gated on SDK+floor >= 10.15 (TJS__SPAWN_SYNC_HAS_ADDCHDIR) with a
+#   parent-side chdir dance fallback (same single-thread argument). Also lands the
+#   long-queued -Werror fix: posix_spawnattr_t attr decl scoped INTO the #ifdef
+#   POSIX_SPAWN_CLOEXEC_DEFAULT block (the -Wno-error=unused-variable demotion no longer
+#   fires for this file). Modern SDK/floor builds are guard-identical (no behavior change).
+# darwin floor walk fixups (2026-07-11, spec 2026-07-11-darwin-x64-floor-walk): the
+#   darwin-x64 release leg builds against a pinned MacOSX10.6.sdk (phracker repack,
+#   sha-pinned in build-leg/action.yml, crt1.10.6.o grafted from Apple Csu-85 — the
+#   repacks strip startup objects; probe 1 = run 29165326041). Ten fixup functions in
+#   scripts/build-tjs.mjs (grep 'OldDarwin\|CxxOnlyForAda') guard the post-10.6 API era:
+#   tjs cmake CXX-only-for-ada (pre-libc++ SDK has no lib'c++'; probe 2 = run
+#   29165510612), libuv hrtime/clock_gettime/fs-times/scandir/strnlen/spawn-cloexec/
+#   udp-ssm/kqueue-except/msg_x, lws scandir, mbedtls ms-time, quickjs-ng hrtime. Every
+#   guard keys on MAC_OS_X_VERSION_MAX_ALLOWED (SDK age) and/or MIN_REQUIRED (floor) —
+#   modern legs compile byte-identical code. All upstream candidates (libuv fork, lws,
+#   mbedtls, quickjs-ng, txiki). Proven locally 2026-07-11: full x86_64 10.6-floor tjs
+#   (wasm/mimalloc/ffi off), LC_VERSION_MIN_MACOSX 10.6, no LC_BUILD_VERSION, smoke
+#   green under Rosetta on the arm64 dev box.
 # txiki-no-origin-header.patch: httpclient.c tjs_httpclient_connect() no longer sets
 #   cci.origin (was = uri->host), 2026-07-07. libwebsockets turned that into a real
 #   `Origin:` header on EVERY fetch(), which CORS-guarded APIs reject (api.anthropic.com

@@ -488,6 +488,491 @@ function fixupPosixSocketSockRdm(dir) {
   console.log('fixup posix-socket-sock-rdm: applied');
 }
 
+function fixupTjsCmakeCxxOnlyForAda(dir) {
+  // txiki declares CXX as a project language, but since the ada-ectomy
+  // (TJS_USE_ADA=OFF selects the plain-C wurl) nothing C++ compiles — yet
+  // cmake still sanity-links clang++, which fails against pre-libc++ SDKs
+  // ("ld: library 'c++' not found", darwin floor-walk probe 2, run
+  // 29165510612, 2026-07-11). Require CXX only when ada is selected.
+  // txiki upstream candidate (also spares the base-gcc BSDs a g++ dep).
+  const f = path.join(dir, 'CMakeLists.txt');
+  const src = fs.readFileSync(f, 'utf8');
+  const cOnly = 'project(tjs LANGUAGES C)';
+  const adaLang = 'if(TJS_USE_ADA)\n    enable_language(CXX)\n';
+  if (src.includes(cOnly) && src.includes(adaLang)) {
+    console.log('fixup tjs-cmake-cxx-only-for-ada: already applied');
+    return;
+  }
+  const projAnchor = 'project(tjs LANGUAGES C CXX)';
+  const adaAnchor = 'if(TJS_USE_ADA)\n    add_subdirectory(deps/ada EXCLUDE_FROM_ALL)\n';
+  if (!src.includes(projAnchor) || !src.includes(adaAnchor)) {
+    throw new Error('fixup tjs-cmake-cxx-only-for-ada: anchor not found (CMakeLists.txt changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src
+    .replace(projAnchor, cOnly)
+    .replace(adaAnchor, 'if(TJS_USE_ADA)\n    enable_language(CXX)\n    add_subdirectory(deps/ada EXCLUDE_FROM_ALL)\n'));
+  console.log('fixup tjs-cmake-cxx-only-for-ada: applied');
+}
+
+function fixupLibuvHrtimeOldDarwin(dir) {
+  // libuv's uv__hrtime on macOS calls mach_continuous_time() bare — a
+  // 10.12+ API, undeclared in older SDK headers (darwin floor walk,
+  // 2026-07-11). Deployment floors below 10.12 fall back to
+  // mach_absolute_time() (stops during sleep — upstream libuv's own
+  // pre-1.45 behavior). __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ is
+  // compiler-predefined from -mmacosx-version-min; no header needed.
+  // No-op for every current leg (stock SDKs, modern floors); libuv
+  // upstream candidate.
+  const f = path.join(dir, 'deps/libuv/src/unix/darwin.c');
+  const src = fs.readFileSync(f, 'utf8');
+  const bad = '  return mach_continuous_time() * timebase.numer / timebase.denom;\n';
+  const good = '#if defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 101200\n'
+    + '  /* mach_continuous_time() is 10.12+; older deployment floors use\n'
+    + "   * mach_absolute_time() (libuv's own pre-1.45 behavior). */\n"
+    + '  return mach_absolute_time() * timebase.numer / timebase.denom;\n'
+    + '#else\n'
+    + '  return mach_continuous_time() * timebase.numer / timebase.denom;\n'
+    + '#endif\n';
+  if (src.includes('__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 101200')) {
+    console.log('fixup libuv-hrtime-old-darwin: already applied');
+    return;
+  }
+  if (!src.includes(bad)) {
+    throw new Error('fixup libuv-hrtime-old-darwin: anchor not found (libuv changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(bad, good));
+  console.log('fixup libuv-hrtime-old-darwin: applied');
+}
+
+function fixupLibuvStrnlenOldDarwin(dir) {
+  // strnlen() reached macOS libc/headers in 10.7; against the 10.6 SDK the
+  // declaration is missing (implicit-decl is a hard error in modern clang)
+  // and the libSystem stub lacks the symbol; process.c AND getaddrinfo.c
+  // call it (darwin floor walk, 2026-07-11). Same shape as the sunos
+  // strnlen accommodation libuv already carries in internal.h — and placed
+  // right next to it, covering every unix TU. Guarded on BOTH axes: an old
+  // SDK (MAX_ALLOWED — no declaration) or an old floor (MIN_REQUIRED —
+  // no runtime symbol on the target box). No-op everywhere else; libuv
+  // upstream candidate.
+  const f = path.join(dir, 'deps/libuv/src/unix/internal.h');
+  const src = fs.readFileSync(f, 'utf8');
+  const anchor = '#if defined(__sun)\n'
+    + '#if !defined(_POSIX_VERSION) || _POSIX_VERSION < 200809L\n'
+    + 'size_t strnlen(const char* s, size_t maxlen);\n'
+    + '#endif\n'
+    + '#endif\n';
+  const guard = '#if defined(__APPLE__)\n'
+    + '# include <AvailabilityMacros.h>\n'
+    + '# if MAC_OS_X_VERSION_MAX_ALLOWED < 1070 || MAC_OS_X_VERSION_MIN_REQUIRED < 1070\n'
+    + '/* strnlen() reached macOS libc in 10.7; older SDKs/floors get a local\n'
+    + ' * fallback (same accommodation as the __sun one above). */\n'
+    + 'static inline size_t uv__strnlen_compat(const char* s, size_t maxlen) {\n'
+    + '  size_t i;\n'
+    + '  for (i = 0; i < maxlen; i++)\n'
+    + '    if (s[i] == 0)\n'
+    + '      return i;\n'
+    + '  return maxlen;\n'
+    + '}\n'
+    + '#  define strnlen uv__strnlen_compat\n'
+    + '# endif\n'
+    + '#endif\n';
+  if (src.includes('uv__strnlen_compat')) {
+    console.log('fixup libuv-strnlen-old-darwin: already applied');
+    return;
+  }
+  if (!src.includes(anchor)) {
+    throw new Error('fixup libuv-strnlen-old-darwin: anchor not found (libuv changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(anchor, anchor + guard));
+  console.log('fixup libuv-strnlen-old-darwin: applied');
+}
+
+function fixupLibuvClockGettimeOldDarwin(dir) {
+  // clock_gettime()/CLOCK_MONOTONIC/CLOCK_REALTIME are macOS 10.12+; the
+  // 10.6 SDK has neither declaration nor symbol (darwin floor walk,
+  // 2026-07-11). uv_clock_gettime (core.c) is the one caller compiled on
+  // darwin. Emulate: REALTIME via gettimeofday (µs precision), MONOTONIC
+  // via Mach absolute time. Guarded on both axes like the strnlen compat;
+  // no-op everywhere else; libuv upstream candidate.
+  const f = path.join(dir, 'deps/libuv/src/unix/core.c');
+  const src = fs.readFileSync(f, 'utf8');
+  const anchor = '#include <time.h> /* clock_gettime */\n';
+  const guard = '#if defined(__APPLE__)\n'
+    + '# include <AvailabilityMacros.h>\n'
+    + '# if MAC_OS_X_VERSION_MAX_ALLOWED < 101200 || MAC_OS_X_VERSION_MIN_REQUIRED < 101200\n'
+    + '#  include <mach/mach_time.h>\n'
+    + '#  include <sys/time.h>\n'
+    + '#  ifndef CLOCK_REALTIME\n'
+    + '#   define CLOCK_REALTIME 0\n'
+    + '#  endif\n'
+    + '#  ifndef CLOCK_MONOTONIC\n'
+    + '#   define CLOCK_MONOTONIC 6\n'
+    + '#  endif\n'
+    + '/* clock_gettime() is macOS 10.12+; emulate for older SDKs/floors. */\n'
+    + 'static int uv__clock_gettime_compat(int clk, struct timespec* ts) {\n'
+    + '  if (clk == CLOCK_REALTIME) {\n'
+    + '    struct timeval tv;\n'
+    + '    if (gettimeofday(&tv, NULL))\n'
+    + '      return -1;\n'
+    + '    ts->tv_sec = tv.tv_sec;\n'
+    + '    ts->tv_nsec = tv.tv_usec * 1000;\n'
+    + '    return 0;\n'
+    + '  } else {\n'
+    + '    static mach_timebase_info_data_t tb;\n'
+    + '    uint64_t t;\n'
+    + '    if (tb.denom == 0)\n'
+    + '      mach_timebase_info(&tb);\n'
+    + '    t = mach_absolute_time() * tb.numer / tb.denom;\n'
+    + '    ts->tv_sec = t / 1000000000ULL;\n'
+    + '    ts->tv_nsec = t % 1000000000ULL;\n'
+    + '    return 0;\n'
+    + '  }\n'
+    + '}\n'
+    + '#  define clock_gettime uv__clock_gettime_compat\n'
+    + '# endif\n'
+    + '#endif\n';
+  if (src.includes('uv__clock_gettime_compat')) {
+    console.log('fixup libuv-clock-gettime-old-darwin: already applied');
+    return;
+  }
+  if (!src.includes(anchor)) {
+    throw new Error('fixup libuv-clock-gettime-old-darwin: anchor not found (libuv changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(anchor, anchor + guard));
+  console.log('fixup libuv-clock-gettime-old-darwin: applied');
+}
+
+function fixupLibuvFsTimesOldDarwin(dir) {
+  // The POSIX-2008 file-time APIs libuv's fs.c leans on are late-macOS:
+  // utimensat/futimens/UTIME_NOW/UTIME_OMIT are 10.13+, AT_FDCWD/
+  // AT_SYMLINK_NOFOLLOW are 10.10+, and pre-10.8 scandir() has the old
+  // prototypes (non-const filter, void* comparator) — all hard errors
+  // against the 10.6 SDK (darwin floor walk, 2026-07-11). Emulate the
+  // timestamp calls on µs-precision utimes()/futimes()/lutimes() (10.5+),
+  // resolving UTIME_NOW/UTIME_OMIT via gettimeofday/[lf]stat; cast the
+  // scandir callbacks behind an SDK-age guard. No-op everywhere else;
+  // libuv upstream candidate (upstream carried exactly these fallbacks in
+  // its pre-1.30 era).
+  const f = path.join(dir, 'deps/libuv/src/unix/fs.c');
+  const src = fs.readFileSync(f, 'utf8');
+  const anchor = '#include "internal.h"\n';
+  const guard = '#if defined(__APPLE__)\n'
+    + '# include <AvailabilityMacros.h>\n'
+    + '# if MAC_OS_X_VERSION_MAX_ALLOWED < 101300 || MAC_OS_X_VERSION_MIN_REQUIRED < 101300\n'
+    + '#  include <sys/time.h>\n'
+    + '#  include <sys/stat.h>\n'
+    + '#  include <string.h>\n'
+    + '#  ifndef UTIME_NOW\n'
+    + '#   define UTIME_NOW -1\n'
+    + '#  endif\n'
+    + '#  ifndef UTIME_OMIT\n'
+    + '#   define UTIME_OMIT -2\n'
+    + '#  endif\n'
+    + '#  ifndef AT_FDCWD\n'
+    + '#   define AT_FDCWD -2\n'
+    + '#  endif\n'
+    + '#  ifndef AT_SYMLINK_NOFOLLOW\n'
+    + '#   define AT_SYMLINK_NOFOLLOW 0x0020\n'
+    + '#  endif\n'
+    + '/* utimensat()/futimens() are macOS 10.13+; emulate on the µs-precision\n'
+    + ' * utimes() family (10.5+), resolving UTIME_NOW/UTIME_OMIT here. */\n'
+    + 'static int uv__ts_to_tv_compat(const struct timespec* ts, struct timeval* tv,\n'
+    + '                               const struct stat* cur, int is_mtime) {\n'
+    + '  if (ts->tv_nsec == UTIME_NOW)\n'
+    + '    return gettimeofday(tv, NULL);\n'
+    + '  if (ts->tv_nsec == UTIME_OMIT) {\n'
+    + '    tv->tv_sec = is_mtime ? cur->st_mtime : cur->st_atime;\n'
+    + '    tv->tv_usec = 0;\n'
+    + '    return 0;\n'
+    + '  }\n'
+    + '  tv->tv_sec = ts->tv_sec;\n'
+    + '  tv->tv_usec = ts->tv_nsec / 1000;\n'
+    + '  return 0;\n'
+    + '}\n'
+    + 'static int uv__utimensat_compat(int dirfd, const char* path,\n'
+    + '                                const struct timespec ts[2], int flags) {\n'
+    + '  struct stat cur;\n'
+    + '  struct timeval tv[2];\n'
+    + '  if (dirfd != AT_FDCWD) {\n'
+    + '    errno = ENOSYS;\n'
+    + '    return -1;\n'
+    + '  }\n'
+    + '  memset(&cur, 0, sizeof(cur));\n'
+    + '  if (ts[0].tv_nsec == UTIME_OMIT || ts[1].tv_nsec == UTIME_OMIT) {\n'
+    + '    int r = (flags & AT_SYMLINK_NOFOLLOW) ? lstat(path, &cur) : stat(path, &cur);\n'
+    + '    if (r)\n'
+    + '      return r;\n'
+    + '  }\n'
+    + '  if (uv__ts_to_tv_compat(&ts[0], &tv[0], &cur, 0) ||\n'
+    + '      uv__ts_to_tv_compat(&ts[1], &tv[1], &cur, 1))\n'
+    + '    return -1;\n'
+    + '  return (flags & AT_SYMLINK_NOFOLLOW) ? lutimes(path, tv) : utimes(path, tv);\n'
+    + '}\n'
+    + 'static int uv__futimens_compat(int fd, const struct timespec ts[2]) {\n'
+    + '  struct stat cur;\n'
+    + '  struct timeval tv[2];\n'
+    + '  memset(&cur, 0, sizeof(cur));\n'
+    + '  if (ts[0].tv_nsec == UTIME_OMIT || ts[1].tv_nsec == UTIME_OMIT)\n'
+    + '    if (fstat(fd, &cur))\n'
+    + '      return -1;\n'
+    + '  if (uv__ts_to_tv_compat(&ts[0], &tv[0], &cur, 0) ||\n'
+    + '      uv__ts_to_tv_compat(&ts[1], &tv[1], &cur, 1))\n'
+    + '    return -1;\n'
+    + '  return futimes(fd, tv);\n'
+    + '}\n'
+    + '#  define utimensat uv__utimensat_compat\n'
+    + '#  define futimens uv__futimens_compat\n'
+    + '# endif\n'
+    + '#endif\n';
+  const scandirOld = '  n = scandir(req->path, &dents, uv__fs_scandir_filter, uv__fs_scandir_sort);\n';
+  const scandirNew = '#if defined(__APPLE__) && defined(MAC_OS_X_VERSION_MAX_ALLOWED) && MAC_OS_X_VERSION_MAX_ALLOWED < 1080\n'
+    + '  /* pre-10.8 scandir prototypes: non-const filter, void* comparator. */\n'
+    + '  n = scandir(req->path, &dents,\n'
+    + '              (int (*)(struct dirent*)) uv__fs_scandir_filter,\n'
+    + '              (int (*)(const void*, const void*)) uv__fs_scandir_sort);\n'
+    + '#else\n'
+    + '  n = scandir(req->path, &dents, uv__fs_scandir_filter, uv__fs_scandir_sort);\n'
+    + '#endif\n';
+  if (src.includes('uv__utimensat_compat')) {
+    console.log('fixup libuv-fs-times-old-darwin: already applied');
+    return;
+  }
+  if (!src.includes(anchor) || !src.includes(scandirOld)) {
+    throw new Error('fixup libuv-fs-times-old-darwin: anchor not found (libuv changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(anchor, anchor + guard).replace(scandirOld, scandirNew));
+  console.log('fixup libuv-fs-times-old-darwin: applied');
+}
+
+function fixupLibuvSpawnCloexecOldDarwin(dir) {
+  // libuv's posix_spawn path guards two 10.7+ Apple extensions with a bare
+  // #ifdef __APPLE__: POSIX_SPAWN_CLOEXEC_DEFAULT and
+  // posix_spawn_file_actions_addinherit_np — both undeclared in the 10.6
+  // SDK (darwin floor walk, 2026-07-11). They arrived together and only
+  // make sense together (addinherit_np un-cloexecs what CLOEXEC_DEFAULT
+  // closed), so guard both on the macro's presence: compiled out against
+  // a 10.6 SDK (adddup2 covers every fd; children may inherit stray
+  // non-cloexec fds, the pre-10.7 status quo — libuv marks its own fds
+  // cloexec at creation), byte-identical on every modern SDK. libuv
+  // upstream candidate.
+  const f = path.join(dir, 'deps/libuv/src/unix/process.c');
+  const src = fs.readFileSync(f, 'utf8');
+  const flagsOld = '#ifdef __APPLE__\n  flags |= POSIX_SPAWN_CLOEXEC_DEFAULT;\n#endif\n';
+  const flagsNew = '#if defined(__APPLE__) && defined(POSIX_SPAWN_CLOEXEC_DEFAULT)\n  flags |= POSIX_SPAWN_CLOEXEC_DEFAULT;\n#endif\n';
+  const inheritOld = '#ifdef __APPLE__\n    if (fd == use_fd)\n        err = posix_spawn_file_actions_addinherit_np(actions, fd);\n    else\n#endif\n';
+  const inheritNew = '#if defined(__APPLE__) && defined(POSIX_SPAWN_CLOEXEC_DEFAULT)\n    if (fd == use_fd)\n        err = posix_spawn_file_actions_addinherit_np(actions, fd);\n    else\n#endif\n';
+  if (src.includes(flagsNew) && src.includes(inheritNew)) {
+    console.log('fixup libuv-spawn-cloexec-old-darwin: already applied');
+    return;
+  }
+  if (!src.includes(flagsOld) || !src.includes(inheritOld)) {
+    throw new Error('fixup libuv-spawn-cloexec-old-darwin: anchor not found (libuv changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(flagsOld, flagsNew).replace(inheritOld, inheritNew));
+  console.log('fixup libuv-spawn-cloexec-old-darwin: applied');
+}
+
+function fixupMbedtlsMsTimeOldDarwin(dir) {
+  // mbedtls' mbedtls_ms_time (platform_util.c) calls clock_gettime(
+  // CLOCK_MONOTONIC) bare — macOS 10.12+, hard error against the 10.6 SDK
+  // (darwin floor walk, 2026-07-11). Same emulation shape as the libuv
+  // core.c compat: monotonic ms via Mach absolute time. mbedtls upstream
+  // candidate.
+  const f = path.join(dir, 'deps/mbedtls/library/platform_util.c');
+  const src = fs.readFileSync(f, 'utf8');
+  const anchor = '#include "mbedtls/platform_util.h"\n';
+  const guard = '#if defined(__APPLE__)\n'
+    + '# include <AvailabilityMacros.h>\n'
+    + '# if MAC_OS_X_VERSION_MAX_ALLOWED < 101200 || MAC_OS_X_VERSION_MIN_REQUIRED < 101200\n'
+    + '#  include <mach/mach_time.h>\n'
+    + '#  include <time.h>\n'
+    + '#  ifndef CLOCK_MONOTONIC\n'
+    + '#   define CLOCK_MONOTONIC 6\n'
+    + '#  endif\n'
+    + '/* clock_gettime() is macOS 10.12+; emulate the one (monotonic) use in\n'
+    + ' * this file via Mach absolute time for older SDKs/floors. */\n'
+    + 'static int mbedtls_clock_gettime_compat(int clk, struct timespec* ts) {\n'
+    + '  static mach_timebase_info_data_t tb;\n'
+    + '  uint64_t t;\n'
+    + '  (void) clk;\n'
+    + '  if (tb.denom == 0)\n'
+    + '    mach_timebase_info(&tb);\n'
+    + '  t = mach_absolute_time() * tb.numer / tb.denom;\n'
+    + '  ts->tv_sec = t / 1000000000ULL;\n'
+    + '  ts->tv_nsec = t % 1000000000ULL;\n'
+    + '  return 0;\n'
+    + '}\n'
+    + '#  define clock_gettime mbedtls_clock_gettime_compat\n'
+    + '# endif\n'
+    + '#endif\n';
+  if (src.includes('mbedtls_clock_gettime_compat')) {
+    console.log('fixup mbedtls-ms-time-old-darwin: already applied');
+    return;
+  }
+  if (!src.includes(anchor)) {
+    throw new Error('fixup mbedtls-ms-time-old-darwin: anchor not found (mbedtls changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(anchor, anchor + guard));
+  console.log('fixup mbedtls-ms-time-old-darwin: applied');
+}
+
+function fixupLibuvUdpSsmOldDarwin(dir) {
+  // libuv's source-specific-multicast support (struct ip_mreq_source,
+  // IP_ADD_SOURCE_MEMBERSHIP, MCAST_JOIN_SOURCE_GROUP...) is guarded by a
+  // platform exclusion list; macOS grew SSM in 10.7, so the 10.6 SDK needs
+  // to join it (darwin floor walk, 2026-07-11). Feature-detect via the
+  // IP_ADD_SOURCE_MEMBERSHIP macro (netinet/in.h arrives via uv.h before
+  // both sites): old-darwin callers get the existing UV_ENOSYS branch,
+  // every other platform is byte-identical. Nothing shipped uses SSM.
+  // libuv upstream candidate. Applied to BOTH exclusion sites (helpers +
+  // caller) via replaceAll-equivalent.
+  const f = path.join(dir, 'deps/libuv/src/unix/udp.c');
+  const src = fs.readFileSync(f, 'utf8');
+  const old = '    !defined(QNX_IOPKT)\n';
+  const neu = '    !defined(QNX_IOPKT) &&                                          \\\n'
+    + '    (!defined(__APPLE__) || defined(IP_ADD_SOURCE_MEMBERSHIP))\n';
+  if (src.includes('IP_ADD_SOURCE_MEMBERSHIP))')) {
+    console.log('fixup libuv-udp-ssm-old-darwin: already applied');
+    return;
+  }
+  const count = src.split(old).length - 1;
+  if (count !== 2) {
+    throw new Error(`fixup libuv-udp-ssm-old-darwin: expected 2 exclusion sites, found ${count} (libuv changed under the pin — re-derive the fixup)`);
+  }
+  fs.writeFileSync(f, src.split(old).join(neu));
+  console.log('fixup libuv-udp-ssm-old-darwin: applied');
+}
+
+function fixupLibuvKqueueExceptOldDarwin(dir) {
+  // libuv's POLLPRI/OOB kqueue plumbing picks EVFILT_EXCEPT+NOTE_OOB under
+  // a bare #ifdef __APPLE__ (libuv/libuv#3947); the 10.6 SDK predates both
+  // (darwin floor walk, 2026-07-11). Feature-detect the filter instead:
+  // old darwin falls into the existing EV_OOBAND branch, which 10.6's
+  // sys/event.h defines (as EV_FLAG1) — the exact path libuv used on macOS
+  // before #3947. Both sites (registration + dispatch) swap identically.
+  // libuv upstream candidate.
+  const f = path.join(dir, 'deps/libuv/src/unix/kqueue.c');
+  const src = fs.readFileSync(f, 'utf8');
+  const newGuard = '#if defined(__APPLE__) && defined(EVFILT_EXCEPT)\n';
+  // kqueue.c has other, unrelated #ifdef __APPLE__ sites — anchor each of
+  // the two EVFILT ones on its own distinctive first comment line.
+  const regOld = '#ifdef __APPLE__\n      /*\n       * Use EVFILT_EXCEPT+ NOTE_OOB';
+  const regNew = newGuard + '      /*\n       * Use EVFILT_EXCEPT+ NOTE_OOB';
+  const dispOld = '#ifdef __APPLE__\n      /* Match EVFILT_EXCEPT used above for macOS. */';
+  const dispNew = newGuard + '      /* Match EVFILT_EXCEPT used above for macOS. */';
+  if (src.includes(newGuard)) {
+    console.log('fixup libuv-kqueue-except-old-darwin: already applied');
+    return;
+  }
+  if (!src.includes(regOld) || !src.includes(dispOld)) {
+    throw new Error('fixup libuv-kqueue-except-old-darwin: anchor not found (libuv changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(regOld, regNew).replace(dispOld, dispNew));
+  console.log('fixup libuv-kqueue-except-old-darwin: applied');
+}
+
+function fixupLwsScandirOldDarwin(dir) {
+  // lws' dir scanner passes a const-correct filter to scandir(); pre-10.8
+  // macOS declares scandir with a non-const filter (and alphasort with
+  // void* args), a hard error under modern clang's
+  // -Wincompatible-function-pointer-types (darwin floor walk, 2026-07-11).
+  // Same SDK-age cast guard as the libuv fs.c scandir compat. lws upstream
+  // candidate.
+  const f = path.join(dir, 'deps/libwebsockets/lib/misc/dir.c');
+  const src = fs.readFileSync(f, 'utf8');
+  const inclAnchor = '#include "private-lib-core.h"\n';
+  const incl = '#if defined(__APPLE__)\n#include <AvailabilityMacros.h>\n#endif\n';
+  const old = '\tn = scandir((char *)info->dirpath, &namelist, filter, alphasort);\n';
+  const neu = '#if defined(__APPLE__) && defined(MAC_OS_X_VERSION_MAX_ALLOWED) && MAC_OS_X_VERSION_MAX_ALLOWED < 1080\n'
+    + '\t/* pre-10.8 scandir prototypes: non-const filter, void* comparator. */\n'
+    + '\tn = scandir((char *)info->dirpath, &namelist,\n'
+    + '\t\t    (int (*)(struct dirent *))filter,\n'
+    + '\t\t    (int (*)(const void *, const void *))alphasort);\n'
+    + '#else\n'
+    + '\tn = scandir((char *)info->dirpath, &namelist, filter, alphasort);\n'
+    + '#endif\n';
+  if (src.includes('(int (*)(struct dirent *))filter')) {
+    console.log('fixup lws-scandir-old-darwin: already applied');
+    return;
+  }
+  if (!src.includes(old) || !src.includes(inclAnchor)) {
+    throw new Error('fixup lws-scandir-old-darwin: anchor not found (lws changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(inclAnchor, inclAnchor + incl).replace(old, neu));
+  console.log('fixup lws-scandir-old-darwin: applied');
+}
+
+function fixupLibuvMsgXOldDarwin(dir) {
+  // libuv's darwin batch-UDP path calls Apple's private recvmsg_x/
+  // sendmsg_x syscalls (~10.10+), declared by its own darwin-syscalls.h
+  // unconditionally — the 10.6 libSystem stub lacks the symbols, so the
+  // final link dies (darwin floor walk, 2026-07-11). Feature-gate the
+  // declarations (UV__DARWIN_HAS_MSG_X) and add that condition to the
+  // three mmsg guard sites in udp.c; old floors take the existing
+  // single-message fallbacks (UV_ENOSYS branch / plain sendmsg loop /
+  // using_recvmmsg=0), every other platform byte-identical. libuv
+  // upstream candidate.
+  const h = path.join(dir, 'deps/libuv/src/unix/darwin-syscalls.h');
+  let hs = fs.readFileSync(h, 'utf8');
+  const declOld = 'ssize_t recvmsg_x(int s, const struct mmsghdr* msgp, u_int cnt, int flags);\n'
+    + 'ssize_t sendmsg_x(int s, const struct mmsghdr* msgp, u_int cnt, int flags);\n';
+  const declNew = '#include <AvailabilityMacros.h>\n'
+    + '#if MAC_OS_X_VERSION_MAX_ALLOWED >= 101000 && MAC_OS_X_VERSION_MIN_REQUIRED >= 101000\n'
+    + '#define UV__DARWIN_HAS_MSG_X 1\n'
+    + 'ssize_t recvmsg_x(int s, const struct mmsghdr* msgp, u_int cnt, int flags);\n'
+    + 'ssize_t sendmsg_x(int s, const struct mmsghdr* msgp, u_int cnt, int flags);\n'
+    + '#endif\n';
+  const f = path.join(dir, 'deps/libuv/src/unix/udp.c');
+  let src = fs.readFileSync(f, 'utf8');
+  const applePart = 'defined(__APPLE__)';
+  const applePartNew = '(defined(__APPLE__) && defined(UV__DARWIN_HAS_MSG_X))';
+  const site1Old = '#if defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__)\n  struct sockaddr_in6 peers[20];';
+  const site2Old = 'int uv_udp_using_recvmmsg(const uv_udp_t* handle) {\n#if defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__)\n';
+  const site3Old = '#if defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__) || \\\n  (defined(__sun__) && defined(MSG_WAITFORONE)) || defined(__QNX__)\n';
+  if (hs.includes('UV__DARWIN_HAS_MSG_X')) {
+    console.log('fixup libuv-msg-x-old-darwin: already applied');
+    return;
+  }
+  if (!hs.includes(declOld) || !src.includes(site1Old) || !src.includes(site2Old) || !src.includes(site3Old)) {
+    throw new Error('fixup libuv-msg-x-old-darwin: anchor not found (libuv changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(h, hs.replace(declOld, declNew));
+  src = src.replace(site1Old, site1Old.replace(applePart, applePartNew));
+  src = src.replace(site2Old, site2Old.replace(applePart, applePartNew));
+  src = src.replace(site3Old, site3Old.replace(applePart, applePartNew));
+  fs.writeFileSync(f, src);
+  console.log('fixup libuv-msg-x-old-darwin: applied');
+}
+
+function fixupQjsHrtimeOldDarwin(dir) {
+  // quickjs-ng's js__hrtime_ns (cutils.h) calls clock_gettime(
+  // CLOCK_MONOTONIC) bare — macOS 10.12+, hard error against the 10.6 SDK
+  // (darwin floor walk, 2026-07-11). Older floors branch to Mach absolute
+  // time, same conversion libuv uses. quickjs-ng upstream candidate.
+  const f = path.join(dir, 'deps/quickjs/cutils.h');
+  const src = fs.readFileSync(f, 'utf8');
+  const anchor = '#ifdef __DJGPP\n  struct timeval tv;\n';
+  const guard = '#if defined(__APPLE__) && defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 101200\n'
+    + '  /* clock_gettime() is macOS 10.12+; older floors use Mach absolute\n'
+    + '   * time (mach/mach_time.h is included below). */\n'
+    + '  static mach_timebase_info_data_t tb;\n'
+    + '  if (tb.denom == 0)\n'
+    + '    mach_timebase_info(&tb);\n'
+    + '  return mach_absolute_time() * tb.numer / tb.denom;\n'
+    + '#elif defined(__DJGPP)\n  struct timeval tv;\n';
+  const inclAnchor = '#include <sys/time.h>\n';
+  const incl = '#if defined(__APPLE__)\n#include <mach/mach_time.h>\n#endif\n';
+  if (src.includes('__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 101200')) {
+    console.log('fixup qjs-hrtime-old-darwin: already applied');
+    return;
+  }
+  if (!src.includes(anchor) || !src.includes(inclAnchor)) {
+    throw new Error('fixup qjs-hrtime-old-darwin: anchor not found (quickjs-ng changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(inclAnchor, inclAnchor + incl).replace(anchor, guard));
+  console.log('fixup qjs-hrtime-old-darwin: applied');
+}
+
 let tjsDir;
 if (buildOnly) {
   // The patched tree was constructed by a prior --source-only run (possibly on
@@ -511,6 +996,18 @@ if (buildOnly) {
   fixupLwsHaikuDirent(tjsDir);
   fixupLwsGetifaddrsPtrCast(tjsDir);
   fixupPosixSocketSockRdm(tjsDir);
+  fixupTjsCmakeCxxOnlyForAda(tjsDir);
+  fixupLibuvHrtimeOldDarwin(tjsDir);
+  fixupLibuvStrnlenOldDarwin(tjsDir);
+  fixupLibuvClockGettimeOldDarwin(tjsDir);
+  fixupLibuvFsTimesOldDarwin(tjsDir);
+  fixupLibuvSpawnCloexecOldDarwin(tjsDir);
+  fixupLibuvUdpSsmOldDarwin(tjsDir);
+  fixupLibuvMsgXOldDarwin(tjsDir);
+  fixupLibuvKqueueExceptOldDarwin(tjsDir);
+  fixupLwsScandirOldDarwin(tjsDir);
+  fixupMbedtlsMsTimeOldDarwin(tjsDir);
+  fixupQjsHrtimeOldDarwin(tjsDir);
 }
 
 // ---- big-endian bundle regen, part 1: esbuild the plain-JS intermediates ----
