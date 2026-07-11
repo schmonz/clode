@@ -38,12 +38,13 @@ jobs:
           #include <stdio.h>
           int main(void) { printf("hello from powerpc-apple-darwin8\n"); return 0; }
           EOF
-          docker run --rm -v "$PWD:/w" -w /w "${{ inputs.image }}" sh -c '
+          # bash, not sh: the image's /bin/sh is dash (no pipefail — probe 2
+          # receipt). Tool names from probe 2's discovery step.
+          docker run --rm -v "$PWD:/w" -w /w "${{ inputs.image }}" bash -c '
             set -euxo pipefail
-            GCC=$(ls /usr/local/bin/*gcc* | grep -v ranlib | head -1)
-            "$GCC" -O2 -mmacosx-version-min=10.4 -static-libgcc hello.c -o hello-ppc
-            OTOOL=$(ls /usr/local/bin/*otool* 2>/dev/null | head -1 || true)
-            if [ -n "$OTOOL" ]; then "$OTOOL" -hv hello-ppc; "$OTOOL" -l hello-ppc | grep -A3 VERSION || true; fi
+            powerpc-apple-darwin8-gcc -O2 -mmacosx-version-min=10.4 -static-libgcc hello.c -o hello-ppc
+            powerpc-apple-darwin8-otool -hv hello-ppc
+            powerpc-apple-darwin8-otool -l hello-ppc | grep -B1 -A3 VERSION || true
           '
           file hello-ppc
 
