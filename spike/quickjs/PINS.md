@@ -21,6 +21,12 @@ netbsd-mac68k 10.1 cdn 2026-07-06
 #   ramdisk) at installation/instkernel/; work kernel netbsd-GENERIC.gz at binary/kernel/;
 #   sets base+comp+etc+text at binary/sets/. sysinst driver never written — rung blocked at qemu boot (no NetBSD-capable q800 -kernel path); see results/gate3-netbsd-mac68k.md
 #   No m68k pkgsrc binary packages assumed; build with base comp.tgz gcc + quickjs-ng cmake.
+# quickjs-ng patch stage MAINLINED 2026-07-11 (canonical-LE plan Task 1):
+#   build-tjs.mjs now applies quickjs-ng-*.patch to deps/quickjs in the source
+#   phase — previously these were guest-campaign patches applied by hand in the
+#   sparc/M4 scripts while the mainline submodule stayed pristine. cpool-align
+#   is pure alignment padding, js_exepath-netbsd is NetBSD-only code: behavior-
+#   neutral for every published leg (arm64 build + full suite green at wiring).
 quickjs-ng-js_exepath-netbsd patch 2026-07-06
 # patch: patches/quickjs-ng-js_exepath-netbsd.patch adds a NetBSD js_exepath() (sysctl
 #   KERN_PROC_PATHNAME) to cutils.h. Without it a `qjs -c` standalone silently falls back to

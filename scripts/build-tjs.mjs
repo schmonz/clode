@@ -1331,6 +1331,13 @@ if (buildOnly) {
 } else {
   tjsDir = ensureCheckout('txiki.js', 'https://github.com/saghul/txiki.js.git');
   applyPatches(tjsDir, 'txiki-');
+  // quickjs-ng patches apply to the submodule checkout (paths are relative
+  // to deps/quickjs, matching their a/quickjs.c form). Wired into the
+  // mainline 2026-07-11 (canonical-LE plan Task 1) — previously these were
+  // guest-campaign patches applied by hand (sparc/M4 scripts); cpool-align
+  // is pure alignment padding and js_exepath-netbsd is NetBSD-only, so
+  // mainlining them is behavior-neutral for every published leg.
+  applyPatches(path.join(tjsDir, 'deps/quickjs'), 'quickjs-ng-');
   fixupLwsDragonflySoPriority(tjsDir);
   fixupLwsIpv6PrefGuard(tjsDir);
   fixupMemMallocHOpenbsd(tjsDir);
