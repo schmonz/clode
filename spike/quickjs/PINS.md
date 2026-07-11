@@ -64,6 +64,30 @@ quickjs-ng-js_exepath-netbsd patch 2026-07-06
 #   long-queued -Werror fix: posix_spawnattr_t attr decl scoped INTO the #ifdef
 #   POSIX_SPAWN_CLOEXEC_DEFAULT block (the -Wno-error=unused-variable demotion no longer
 #   fires for this file). Modern SDK/floor builds are guard-identical (no behavior change).
+#   UPDATE 2026-07-11 (v3, Tiger walk): the spawn-model axis — posix_spawn itself is
+#   10.5+; below it (TJS__SPAWN_SYNC_HAS_POSIX_SPAWN undefined) a fork/exec sibling
+#   replaces the whole posix_spawn plumbing: same pipes, same poll-drain, child dup2s
+#   the wanted ends onto 0/1/2 + chdir(cwd) + execve (posix_spawn does no PATH search,
+#   so execve keeps exact parity). spawn.h include gated on the same macro.
+# Tiger walk fixups (2026-07-11, spec 2026-07-11-darwin-x86-tiger-walk): the pre-10.5
+#   era, enumerated on the same Rosetta bench (build-only — nothing local execs i386).
+#   New fixup family in scripts/build-tjs.mjs: libuv unsetenv-returns-void (10.4),
+#   _SC_NPROCESSORS_ONLN→sysctl HW_AVAILCPU, st_birthtimespec→ctime (<10.5), darwin
+#   sendfile→EINVAL-emul (<10.5), pthread_set/getname_np no-ops (<10.6), TIOCPTYGNAME→
+#   ptsname fallback (<10.5), close$NOCANCEL$UNIX2003→plain close (the $NOCANCEL/
+#   $UNIX2003 libSystem variants are 10.5 inventions — verified zero such symbols in
+#   the 10.4u stub), and THE BIG ONE: UV__HAVE_POSIX_SPAWN gates libuv's entire
+#   posix_spawn machinery so pre-10.5 compiles the fork/exec path alone (the same
+#   shape serves every no-spawn paleo-POSIX target: A/UX, IRIX). Plus strict-POSIX
+#   header-era fixes: mbedtls + lws requested _POSIX_C_SOURCE, and Tiger headers hide
+#   gmtime_r / all DT_* dirent constants under `#ifndef _POSIX_C_SOURCE` (the
+#   _DARWIN_C_SOURCE escape hatch only arrived with 10.5's UNIX03 work) — both now
+#   skip the request on Apple, where the headers expose everything by default. txiki
+#   mod_posix-socket libproc (10.5+) → portable getsockopt branch. The 10.4u SDK
+#   repack (sha-pinned in build-leg) SHIPS its startup objects — crt1.o is fat
+#   ppc/i386/ppc64/x86_64, no Csu graft needed (only the 10.6 repack was stripped) —
+#   and the same fat crt serves the future ppc walk. All guards axis-predicated;
+#   all upstream candidates (libuv fork, lws, mbedtls, txiki).
 # darwin floor walk fixups (2026-07-11, spec 2026-07-11-darwin-x64-floor-walk): the
 #   darwin-x64 release leg builds against a pinned MacOSX10.6.sdk (phracker repack,
 #   sha-pinned in build-leg/action.yml, crt1.10.6.o grafted from Apple Csu-85 — the

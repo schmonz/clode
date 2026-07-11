@@ -706,7 +706,16 @@ function fixupLibuvFsTimesOldDarwin(dir) {
     + '  if (uv__ts_to_tv_compat(&ts[0], &tv[0], &cur, 0) ||\n'
     + '      uv__ts_to_tv_compat(&ts[1], &tv[1], &cur, 1))\n'
     + '    return -1;\n'
+    + '#if defined(MAC_OS_X_VERSION_MAX_ALLOWED) && MAC_OS_X_VERSION_MAX_ALLOWED < 1050\n'
+    + '  /* No lutimes() before 10.5: honest ENOSYS for the nofollow form. */\n'
+    + '  if (flags & AT_SYMLINK_NOFOLLOW) {\n'
+    + '    errno = ENOSYS;\n'
+    + '    return -1;\n'
+    + '  }\n'
+    + '  return utimes(path, tv);\n'
+    + '#else\n'
     + '  return (flags & AT_SYMLINK_NOFOLLOW) ? lutimes(path, tv) : utimes(path, tv);\n'
+    + '#endif\n'
     + '}\n'
     + 'static int uv__futimens_compat(int fd, const struct timespec ts[2]) {\n'
     + '  struct stat cur;\n'
@@ -944,6 +953,344 @@ function fixupLibuvMsgXOldDarwin(dir) {
   console.log('fixup libuv-msg-x-old-darwin: applied');
 }
 
+// ---- Tiger-walk fixups (darwin floor 10.4, spec 2026-07-11-darwin-x86-
+// tiger-walk): the pre-10.5 era. Same discipline as the 10.6 family —
+// every guard keys on SDK age (MAC_OS_X_VERSION_MAX_ALLOWED) or floor
+// (MIN_REQUIRED / __ENVIRONMENT_..._MIN_REQUIRED__), never platform names;
+// modern builds compile byte-identical code. All upstream candidates.
+
+function fixupLibuvUnsetenvOldDarwin(dir) {
+  // Tiger's unsetenv() returns void — the POSIX int-returning form arrived
+  // with 10.5's UNIX03 conformance. Comparing void to 0 is a hard error.
+  const f = path.join(dir, 'deps/libuv/src/unix/core.c');
+  const src = fs.readFileSync(f, 'utf8');
+  const old = '  if (unsetenv(name) != 0)\n    return UV__ERR(errno);\n';
+  const neu = '#if defined(__APPLE__) && defined(MAC_OS_X_VERSION_MAX_ALLOWED) && MAC_OS_X_VERSION_MAX_ALLOWED < 1050\n'
+    + '  /* Tiger\'s unsetenv() returns void (the int form is 10.5+). */\n'
+    + '  unsetenv(name);\n'
+    + '#else\n'
+    + '  if (unsetenv(name) != 0)\n    return UV__ERR(errno);\n'
+    + '#endif\n';
+  if (src.includes('unsetenv() returns void')) {
+    console.log('fixup libuv-unsetenv-old-darwin: already applied');
+    return;
+  }
+  if (!src.includes(old)) {
+    throw new Error('fixup libuv-unsetenv-old-darwin: anchor not found (libuv changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(old, neu));
+  console.log('fixup libuv-unsetenv-old-darwin: applied');
+}
+
+function fixupLibuvNprocsOldDarwin(dir) {
+  // _SC_NPROCESSORS_ONLN reached sysconf in 10.5; Tiger asks sysctl
+  // (CTL_HW/HW_AVAILCPU) instead — Core Duo Tigers are real, defaulting
+  // to 1 would be wrong.
+  const f = path.join(dir, 'deps/libuv/src/unix/core.c');
+  const src = fs.readFileSync(f, 'utf8');
+  const inclAnchor = '#include <time.h> /* clock_gettime */\n';
+  const incl = '#if defined(__APPLE__)\n# include <sys/sysctl.h>\n#endif\n';
+  const old = '  if (rc < 0)\n    rc = sysconf(_SC_NPROCESSORS_ONLN);\n';
+  const neu = '#if defined(__APPLE__) && !defined(_SC_NPROCESSORS_ONLN)\n'
+    + '  /* Tiger\'s sysconf lacks _SC_NPROCESSORS_ONLN (10.5+); ask sysctl. */\n'
+    + '  if (rc < 0) {\n'
+    + '    int nprocs_mib[2] = { CTL_HW, HW_AVAILCPU };\n'
+    + '    int nprocs_sysctl;\n'
+    + '    size_t nprocs_len = sizeof(nprocs_sysctl);\n'
+    + '    if (sysctl(nprocs_mib, 2, &nprocs_sysctl, &nprocs_len, NULL, 0) == 0 &&\n'
+    + '        nprocs_sysctl > 0)\n'
+    + '      rc = nprocs_sysctl;\n'
+    + '  }\n'
+    + '#else\n'
+    + '  if (rc < 0)\n    rc = sysconf(_SC_NPROCESSORS_ONLN);\n'
+    + '#endif\n';
+  if (src.includes('HW_AVAILCPU')) {
+    console.log('fixup libuv-nprocs-old-darwin: already applied');
+    return;
+  }
+  if (!src.includes(old) || !src.includes(inclAnchor)) {
+    throw new Error('fixup libuv-nprocs-old-darwin: anchor not found (libuv changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(inclAnchor, inclAnchor + incl).replace(old, neu));
+  console.log('fixup libuv-nprocs-old-darwin: applied');
+}
+
+function fixupLibuvBirthtimeOldDarwin(dir) {
+  // Tiger's struct stat has no st_birthtimespec (10.5+); ctime is the
+  // closest available truth for uv_stat_t's birthtim.
+  const f = path.join(dir, 'deps/libuv/src/unix/fs.c');
+  const src = fs.readFileSync(f, 'utf8');
+  const old = '  dst->st_birthtim.tv_sec = src->st_birthtimespec.tv_sec;\n'
+    + '  dst->st_birthtim.tv_nsec = src->st_birthtimespec.tv_nsec;\n';
+  const neu = '#if defined(MAC_OS_X_VERSION_MAX_ALLOWED) && MAC_OS_X_VERSION_MAX_ALLOWED < 1050\n'
+    + '  /* Tiger\'s struct stat has no birthtime; ctime is the closest truth. */\n'
+    + '  dst->st_birthtim.tv_sec = src->st_ctimespec.tv_sec;\n'
+    + '  dst->st_birthtim.tv_nsec = src->st_ctimespec.tv_nsec;\n'
+    + '#else\n'
+    + old
+    + '#endif\n';
+  if (src.includes('no birthtime; ctime')) {
+    console.log('fixup libuv-birthtime-old-darwin: already applied');
+    return;
+  }
+  if (!src.includes(old)) {
+    throw new Error('fixup libuv-birthtime-old-darwin: anchor not found (libuv changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(old, neu));
+  console.log('fixup libuv-birthtime-old-darwin: applied');
+}
+
+function fixupLibuvSendfileOldDarwin(dir) {
+  // Darwin sendfile(2) arrived in 10.5. On Tiger, take the read/write
+  // emulation path libuv already has (the EINVAL fallback below the call).
+  const f = path.join(dir, 'deps/libuv/src/unix/fs.c');
+  const src = fs.readFileSync(f, 'utf8');
+  const old = '    len = req->bufsml[0].len;\n'
+    + '    r = sendfile(in_fd, out_fd, req->off, &len, NULL, 0);\n';
+  const neu = '#if defined(MAC_OS_X_VERSION_MAX_ALLOWED) && MAC_OS_X_VERSION_MAX_ALLOWED < 1050\n'
+    + '    /* sendfile(2) is 10.5+; force the EINVAL branch into the\n'
+    + '     * read/write emulation below. */\n'
+    + '    len = 0;\n'
+    + '    errno = EINVAL;\n'
+    + '    r = -1;\n'
+    + '#else\n'
+    + old
+    + '#endif\n';
+  if (src.includes('sendfile(2) is 10.5+')) {
+    console.log('fixup libuv-sendfile-old-darwin: already applied');
+    return;
+  }
+  if (!src.includes(old)) {
+    throw new Error('fixup libuv-sendfile-old-darwin: anchor not found (libuv changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(old, neu));
+  console.log('fixup libuv-sendfile-old-darwin: applied');
+}
+
+function fixupLibuvThreadSetnameOldDarwin(dir) {
+  // pthread_setname_np is 10.6+. Thread names are advisory — no-op below.
+  const f = path.join(dir, 'deps/libuv/src/unix/thread.c');
+  const src = fs.readFileSync(f, 'utf8');
+  const old = '  int err = pthread_setname_np(namebuf);\n'
+    + '  if (err)\n'
+    + '    return UV__ERR(errno);\n'
+    + '  return 0;\n';
+  const neu = '#if defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 1060\n'
+    + '  /* pthread_setname_np is 10.6+; names are advisory — no-op below. */\n'
+    + '  (void) namebuf;\n'
+    + '  return 0;\n'
+    + '#else\n'
+    + old
+    + '#endif\n';
+  if (src.includes('names are advisory')) {
+    console.log('fixup libuv-thread-setname-old-darwin: already applied');
+    return;
+  }
+  if (!src.includes(old)) {
+    throw new Error('fixup libuv-thread-setname-old-darwin: anchor not found (libuv changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(old, neu));
+  console.log('fixup libuv-thread-setname-old-darwin: applied');
+}
+
+function fixupLibuvNoPosixSpawnOldDarwin(dir) {
+  // Tiger has NO posix_spawn (it is 10.5+) — the spawn-model axis. libuv
+  // already carries a complete fork/exec sibling selected at runtime; this
+  // gates the entire posix_spawn machinery (types, helpers, the fast-path
+  // attempt in the chooser) behind UV__HAVE_POSIX_SPAWN so pre-10.5
+  // SDKs/floors compile the fork path alone. Four pure insertions/swaps;
+  // byte-identical everywhere else. libuv upstream candidate — and the
+  // same shape serves every no-spawn paleo-POSIX target (A/UX, IRIX).
+  const f = path.join(dir, 'deps/libuv/src/unix/process.c');
+  const src = fs.readFileSync(f, 'utf8');
+  if (src.includes('UV__HAVE_POSIX_SPAWN')) {
+    console.log('fixup libuv-no-posix-spawn-old-darwin: already applied');
+    return;
+  }
+  const inclOld = '#include <spawn.h>\n';
+  const inclNew = '#if defined(__APPLE__)\n'
+    + '# include <AvailabilityMacros.h>\n'
+    + '# if MAC_OS_X_VERSION_MAX_ALLOWED >= 1050 && MAC_OS_X_VERSION_MIN_REQUIRED >= 1050\n'
+    + '#  define UV__HAVE_POSIX_SPAWN 1\n'
+    + '# endif\n'
+    + '#else\n'
+    + '# define UV__HAVE_POSIX_SPAWN 1\n'
+    + '#endif\n'
+    + '#ifdef UV__HAVE_POSIX_SPAWN\n'
+    + '#include <spawn.h>\n'
+    + '#endif\n';
+  const stateStart = 'static uv_once_t posix_spawn_init_once = UV_ONCE_INIT;\n';
+  const stateEnd = '} posix_spawn_fncs;\n';
+  const machineryStart = '#if defined(__APPLE__)\nstatic void uv__spawn_init_can_use_setsid(void) {\n';
+  const forkFn = 'static int uv__spawn_and_init_child_fork(const uv_process_options_t* options,\n';
+  const chooserStart = '  uv_once(&posix_spawn_init_once, uv__spawn_init_posix_spawn);\n';
+  const chooserEnd = '  if (err != UV_ENOSYS)\n    return err;\n';
+  for (const [name, a] of [['include', inclOld], ['state-start', stateStart], ['state-end', stateEnd],
+    ['machinery-start', machineryStart], ['fork-fn', forkFn], ['chooser-start', chooserStart], ['chooser-end', chooserEnd]]) {
+    if (!src.includes(a)) throw new Error(`fixup libuv-no-posix-spawn-old-darwin: anchor '${name}' not found (libuv changed under the pin — re-derive the fixup)`);
+  }
+  const out = src
+    .replace(inclOld, inclNew)
+    .replace(stateStart, '#ifdef UV__HAVE_POSIX_SPAWN\n' + stateStart)
+    .replace(stateEnd, stateEnd + '#endif  /* UV__HAVE_POSIX_SPAWN */\n')
+    .replace(machineryStart, '#ifdef UV__HAVE_POSIX_SPAWN\n' + machineryStart)
+    .replace(forkFn, '#endif  /* UV__HAVE_POSIX_SPAWN */\n\n' + forkFn)
+    .replace(chooserStart, '#ifdef UV__HAVE_POSIX_SPAWN\n' + chooserStart)
+    .replace(chooserEnd, chooserEnd + '#endif  /* UV__HAVE_POSIX_SPAWN */\n');
+  fs.writeFileSync(f, out);
+  console.log('fixup libuv-no-posix-spawn-old-darwin: applied');
+}
+
+function fixupMbedtlsDarwinCSource(dir) {
+  // mbedtls defines _POSIX_C_SOURCE to surface gmtime_r on glibc; Tiger's
+  // time.h hides gmtime_r whenever _POSIX_C_SOURCE is defined AT ALL
+  // (`!defined(_ANSI_SOURCE) && !defined(_POSIX_C_SOURCE)` — the
+  // _DARWIN_C_SOURCE escape hatch only arrived with 10.5's UNIX03 work).
+  // Apple headers expose gmtime_r by default, so simply do not request
+  // strict POSIX there — the same shape as the __OpenBSD__ exclusion the
+  // file already carries. mbedtls upstream candidate.
+  const f = path.join(dir, 'deps/mbedtls/library/platform_util.c');
+  const src = fs.readFileSync(f, 'utf8');
+  const old = '#if !defined(_POSIX_C_SOURCE) && !defined(__OpenBSD__)\n';
+  const neu = '#if !defined(_POSIX_C_SOURCE) && !defined(__OpenBSD__) && !defined(__APPLE__)\n';
+  if (src.includes(neu)) {
+    console.log('fixup mbedtls-darwin-c-source: already applied');
+    return;
+  }
+  if (!src.includes(old)) {
+    throw new Error('fixup mbedtls-darwin-c-source: anchor not found (mbedtls changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(old, neu));
+  console.log('fixup mbedtls-darwin-c-source: applied');
+}
+
+function fixupLibuvThreadGetnameOldDarwin(dir) {
+  // pthread_getname_np is 10.6+ (the getname sibling of the setname
+  // fixup). Names are advisory: report an empty name below.
+  const f = path.join(dir, 'deps/libuv/src/unix/thread.c');
+  const src = fs.readFileSync(f, 'utf8');
+  const old = '  char thread_name[UV_PTHREAD_MAX_NAMELEN_NP];\n'
+    + '  if (pthread_getname_np(*tid, thread_name, sizeof(thread_name)) != 0)\n'
+    + '    return UV__ERR(errno);\n';
+  const neu = '  char thread_name[UV_PTHREAD_MAX_NAMELEN_NP];\n'
+    + '#if defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 1060\n'
+    + '  /* pthread_getname_np is 10.6+; report an empty (advisory) name. */\n'
+    + '  thread_name[0] = \'\\0\';\n'
+    + '#else\n'
+    + '  if (pthread_getname_np(*tid, thread_name, sizeof(thread_name)) != 0)\n'
+    + '    return UV__ERR(errno);\n'
+    + '#endif\n';
+  if (src.includes('report an empty (advisory) name')) {
+    console.log('fixup libuv-thread-getname-old-darwin: already applied');
+    return;
+  }
+  if (!src.includes(old)) {
+    throw new Error('fixup libuv-thread-getname-old-darwin: anchor not found (libuv changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(old, neu));
+  console.log('fixup libuv-thread-getname-old-darwin: applied');
+}
+
+function fixupLibuvTtyPtyOldDarwin(dir) {
+  // TIOCPTYGNAME (pty-master detection ioctl) is 10.5+; Tiger takes the
+  // generic ptsname() fallback branch the function already carries (and
+  // Tiger's stdlib.h declares ptsname — verified in the 10.4u SDK).
+  const f = path.join(dir, 'deps/libuv/src/unix/tty.c');
+  const src = fs.readFileSync(f, 'utf8');
+  const old = '#elif defined(__APPLE__)\n  char dummy[256];\n\n  result = ioctl(fd, TIOCPTYGNAME, &dummy) != 0;\n';
+  const neu = '#elif defined(__APPLE__) && defined(TIOCPTYGNAME)\n  char dummy[256];\n\n  result = ioctl(fd, TIOCPTYGNAME, &dummy) != 0;\n';
+  if (src.includes('defined(__APPLE__) && defined(TIOCPTYGNAME)')) {
+    console.log('fixup libuv-tty-pty-old-darwin: already applied');
+    return;
+  }
+  if (!src.includes(old)) {
+    throw new Error('fixup libuv-tty-pty-old-darwin: anchor not found (libuv changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(old, neu));
+  console.log('fixup libuv-tty-pty-old-darwin: applied');
+}
+
+function fixupLwsDarwinCSource(dir) {
+  // lws' core-net private header requests strict _POSIX_C_SOURCE; Tiger's
+  // sys/dirent.h hides ALL the DT_* constants under
+  // `#ifndef _POSIX_C_SOURCE` (pre-UNIX03 headers, no _DARWIN_C_SOURCE
+  // escape), killing lws/misc/dir.c. Apple headers expose everything lws
+  // needs by default — do not request strict POSIX there. Same shape as
+  // the mbedtls fixup. lws upstream candidate.
+  const f = path.join(dir, 'deps/libwebsockets/lib/core-net/private-lib-core-net.h');
+  const src = fs.readFileSync(f, 'utf8');
+  const old = '#if !defined(_POSIX_C_SOURCE)\n#define _POSIX_C_SOURCE 200112L\n#endif\n';
+  const neu = '#if !defined(_POSIX_C_SOURCE) && !defined(__APPLE__)\n#define _POSIX_C_SOURCE 200112L\n#endif\n';
+  if (src.includes(neu)) {
+    console.log('fixup lws-darwin-c-source: already applied');
+    return;
+  }
+  if (!src.includes(old)) {
+    throw new Error('fixup lws-darwin-c-source: anchor not found (lws changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(old, neu));
+  console.log('fixup lws-darwin-c-source: applied');
+}
+
+function fixupPosixSocketLibprocOldDarwin(dir) {
+  // txiki's mod_posix-socket.c uses libproc (proc_pidfdinfo) for socket
+  // info on Apple — libproc.h is 10.5+. Tiger takes the portable
+  // getsockopt(SO_TYPE) branch every non-Apple platform already uses
+  // (best-effort fields, like the file's own SO_DOMAIN guards). txiki
+  // upstream candidate.
+  const f = path.join(dir, 'src/mod_posix-socket.c');
+  const src = fs.readFileSync(f, 'utf8');
+  const inclOld = '#ifdef __APPLE__\n#include <libproc.h>\n#include <sys/proc_info.h>\n#endif\n';
+  const inclNew = '#ifdef __APPLE__\n'
+    + '#include <AvailabilityMacros.h>\n'
+    + '#if MAC_OS_X_VERSION_MAX_ALLOWED >= 1050 && MAC_OS_X_VERSION_MIN_REQUIRED >= 1050\n'
+    + '#define TJS__HAVE_LIBPROC 1\n'
+    + '#include <libproc.h>\n#include <sys/proc_info.h>\n'
+    + '#endif\n'
+    + '#endif\n';
+  const useOld = '#ifdef __APPLE__\n    struct socket_fdinfo sock_fd_info;';
+  const useNew = '#ifdef TJS__HAVE_LIBPROC\n    struct socket_fdinfo sock_fd_info;';
+  if (src.includes('TJS__HAVE_LIBPROC')) {
+    console.log('fixup posix-socket-libproc-old-darwin: already applied');
+    return;
+  }
+  if (!src.includes(inclOld) || !src.includes(useOld)) {
+    throw new Error('fixup posix-socket-libproc-old-darwin: anchor not found (mod_posix-socket.c changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(inclOld, inclNew).replace(useOld, useNew));
+  console.log('fixup posix-socket-libproc-old-darwin: applied');
+}
+
+function fixupLibuvCloseNocancelOldDarwin(dir) {
+  // libuv's uv__close_nocancel references the close$NOCANCEL[$UNIX2003]
+  // libSystem symbol variants — both 10.5 inventions (Tiger's libSystem
+  // has neither, verified: zero NOCANCEL/UNIX2003 symbols in the 10.4u
+  // stub). Tiger gets plain close(); the cancelable-close quirk the
+  // variant dodges doesn't exist there, and nothing in tjs uses pthread
+  // cancellation anyway. libuv upstream candidate.
+  const f = path.join(dir, 'deps/libuv/src/unix/core.c');
+  const src = fs.readFileSync(f, 'utf8');
+  const old = '#if defined(__LP64__) || TARGET_OS_IPHONE\n'
+    + '  extern int close$NOCANCEL(int);\n'
+    + '  return close$NOCANCEL(fd);\n';
+  const neu = '#if defined(MAC_OS_X_VERSION_MAX_ALLOWED) && MAC_OS_X_VERSION_MAX_ALLOWED < 1050\n'
+    + '  /* The $NOCANCEL/$UNIX2003 variants are 10.5 inventions; Tiger has\n'
+    + '   * only plain close() (and no cancelable-close quirk to dodge). */\n'
+    + '  return close(fd);\n'
+    + '#elif defined(__LP64__) || TARGET_OS_IPHONE\n'
+    + '  extern int close$NOCANCEL(int);\n'
+    + '  return close$NOCANCEL(fd);\n';
+  if (src.includes('10.5 inventions; Tiger has')) {
+    console.log('fixup libuv-close-nocancel-old-darwin: already applied');
+    return;
+  }
+  if (!src.includes(old)) {
+    throw new Error('fixup libuv-close-nocancel-old-darwin: anchor not found (libuv changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(old, neu));
+  console.log('fixup libuv-close-nocancel-old-darwin: applied');
+}
+
 function fixupQjsHrtimeOldDarwin(dir) {
   // quickjs-ng's js__hrtime_ns (cutils.h) calls clock_gettime(
   // CLOCK_MONOTONIC) bare — macOS 10.12+, hard error against the 10.6 SDK
@@ -1008,6 +1355,18 @@ if (buildOnly) {
   fixupLwsScandirOldDarwin(tjsDir);
   fixupMbedtlsMsTimeOldDarwin(tjsDir);
   fixupQjsHrtimeOldDarwin(tjsDir);
+  fixupLibuvUnsetenvOldDarwin(tjsDir);
+  fixupLibuvNprocsOldDarwin(tjsDir);
+  fixupLibuvBirthtimeOldDarwin(tjsDir);
+  fixupLibuvSendfileOldDarwin(tjsDir);
+  fixupLibuvThreadSetnameOldDarwin(tjsDir);
+  fixupLibuvNoPosixSpawnOldDarwin(tjsDir);
+  fixupLibuvThreadGetnameOldDarwin(tjsDir);
+  fixupLibuvTtyPtyOldDarwin(tjsDir);
+  fixupMbedtlsDarwinCSource(tjsDir);
+  fixupLwsDarwinCSource(tjsDir);
+  fixupPosixSocketLibprocOldDarwin(tjsDir);
+  fixupLibuvCloseNocancelOldDarwin(tjsDir);
 }
 
 // ---- big-endian bundle regen, part 1: esbuild the plain-JS intermediates ----

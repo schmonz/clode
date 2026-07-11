@@ -33,10 +33,10 @@ diff --git a/src/vm.c b/src/vm.c
      tjs__mod_process_init(ctx, ns);
 diff --git a/src/mod_spawn_sync.c b/src/mod_spawn_sync.c
 new file mode 100644
-index 0000000..be513ee
+index 0000000..fe8320b
 --- /dev/null
 +++ b/src/mod_spawn_sync.c
-@@ -0,0 +1,414 @@
+@@ -0,0 +1,449 @@
 +/* Synchronous spawn primitive for CommonJS interop (node-shim).
 + * posix_spawn + poll()-drain, main-thread blocking by design. Exposed as
 + * the global `__tjs_spawn_sync`. Mirrors mod_fs_sync.c; upstream candidate. */
@@ -46,7 +46,19 @@ index 0000000..be513ee
 +#include <fcntl.h>
 +#include <poll.h>
 +#include <signal.h>
++/* Tiger floor (spawn-model axis): posix_spawn is 10.5+; below it the
++ * fork/exec sibling further down serves instead. */
++#if defined(__APPLE__)
++# include <AvailabilityMacros.h>
++# if MAC_OS_X_VERSION_MAX_ALLOWED >= 1050 && MAC_OS_X_VERSION_MIN_REQUIRED >= 1050
++#  define TJS__SPAWN_SYNC_HAS_POSIX_SPAWN 1
++# endif
++#else
++# define TJS__SPAWN_SYNC_HAS_POSIX_SPAWN 1
++#endif
++#ifdef TJS__SPAWN_SYNC_HAS_POSIX_SPAWN
 +#include <spawn.h>
++#endif
 +#include <stdlib.h>
 +#include <string.h>
 +#include <sys/wait.h>
@@ -233,6 +245,7 @@ index 0000000..be513ee
 +        return e;
 +    }
 +
++#ifdef TJS__SPAWN_SYNC_HAS_POSIX_SPAWN
 +    posix_spawn_file_actions_t fa;
 +    posix_spawn_file_actions_init(&fa);
 +    if (use_stdin) {
@@ -315,6 +328,28 @@ index 0000000..be513ee
 +#endif
 +    if (attrp) posix_spawnattr_destroy(attrp);
 +    posix_spawn_file_actions_destroy(&fa);
++#else
++    /* Pre-10.5: fork/exec sibling — same pipes, same poll-drain. The child
++     * dup2s the wanted ends onto 0/1/2 (clearing their close-on-exec on the
++     * copies), chdirs if asked, and execves; every other descriptor is
++     * already close-on-exec. posix_spawn does no PATH search (that is
++     * posix_spawnp), so execve keeps exact parity with the modern path. */
++    pid_t pid = 0;
++    int rc = 0;
++    pid = fork();
++    if (pid < 0) {
++        rc = errno;
++    } else if (pid == 0) {
++        if (cwd && chdir(cwd) != 0)
++            _exit(127);
++        if (dup2(use_stdin ? inp[0] : devnull, 0) < 0 ||
++            dup2(outp[1], 1) < 0 ||
++            dup2(errp[1], 2) < 0)
++            _exit(127);
++        execve(file, cargv, cenv ? cenv : environ);
++        _exit(127);
++    }
++#endif  /* TJS__SPAWN_SYNC_HAS_POSIX_SPAWN */
 +    close(outp[1]); close(errp[1]);
 +    if (use_stdin) close(inp[0]); else close(devnull);
 +
