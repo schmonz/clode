@@ -109,8 +109,13 @@ const LEGS = [
   // floor gate LC_VERSION_MIN_MACOSX 10.4 + i386 arch marker green on
   // macos-15-intel. Walk = 6 Rosetta-bench rounds (build-only), headline
   // fix = the spawn-model axis (UV__HAVE_POSIX_SPAWN + sync-spawn v3
-  // fork/exec sibling — pre-10.5 has no posix_spawn at all). Real-
-  // hardware receipt (ultimate-hat runs i386 natively) lands here next.
+  // fork/exec sibling — pre-10.5 has no posix_spawn at all). REAL-
+  // HARDWARE PROOF 2026-07-11 on Mavericks 10.9.5 (runs i386 natively):
+  // shim smoke ok, async spawn via libuv's fork/exec route ok, sync
+  // spawn via the v3 fork/exec sibling ok — both new spawn paths ran
+  // real children on real hardware. (True-Tiger execution awaits Tiger
+  // hardware or the qemu-ppc-era oracle legs; 10.4..10.9 gap covered by
+  // the honest SDK.)
   { leg: 'darwin-x86', os: 'macos-15-intel', publish: false,
     'macos-min': '10.4', 'macos-sdk': '10.4u', 'macos-arch': 'i386',
     'no-exec': true, wasm: 'off', mimalloc: 'off', ffi: 'off',
