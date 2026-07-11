@@ -1506,18 +1506,17 @@ if (process.platform !== 'darwin') {
 }
 run('cmake', ['-S', tjsDir, '-B', path.join(tjsDir, 'build'), ...cmakeArgs]);
 
-// ---- big-endian bundle regen, part 2: tjsc-regenerate the .c natively -------
-// os.endianness() here reflects the TARGET: this script runs UNDER the tjs
-// toolchain's node (host node for native legs; the emulated guest node under
-// qemu-user for a cross leg), so 'BE' means the tjs we are about to build is
-// big-endian and the shipped LE bytecode arrays would fail its boot checksum.
-// CLODE_TJS_REGEN=1 forces it anywhere (used to validate the pipeline on an LE
-// control — the sparc campaign proved regen on a darwin control first).
-// LE targets skip this entirely: the published darwin/x64/arm-musl artifacts
-// keep the upstream shipped .c, byte-for-byte the validated pinned config.
-const beTarget = os.endianness() === 'BE';
+// ---- bundle regen: RETIRED as a BE requirement (canonical-LE, 2026-07-11) ----
+// quickjs-ng-canonical-le-bytecode.patch makes the serialized format
+// little-endian everywhere: BE readers swap on load, so the shipped LE
+// bytecode arrays boot on every endianness and the old
+// regen-on-BE-target rule (sparc wall #4; formerly keyed on
+// os.endianness()) is gone. CLODE_TJS_REGEN=1 keeps the machinery as a
+// validation lever — a regenerated bundle must behave identically to the
+// shipped one on the same host, which is exactly the check the sparc
+// campaign used on its darwin control.
 const forceRegen = process.env.CLODE_TJS_REGEN === '1';
-if (beTarget || forceRegen) {
+if (forceRegen) {
   console.log(`BE bundle regen: target endianness=${os.endianness()} force=${forceRegen} -> regenerating quickjs bytecode arrays natively`);
   const tjsc = path.join(tjsDir, 'build', 'tjsc');
   run('cmake', ['--build', path.join(tjsDir, 'build'), '--target', 'tjsc', '-j', jobs]);
