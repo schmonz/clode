@@ -111,7 +111,7 @@ test('version policy: ci rides the newest end, release the oldest floor', () => 
   assert.strictEqual(cin('darwin-arm64').os, 'macos-26');       // newest hosted arm64
   assert.strictEqual(rel('linux-x64-glibc').os, 'ubuntu-22.04');
   assert.strictEqual(cin('linux-x64-glibc').os, 'ubuntu-26.04');
-  assert.strictEqual(rel('freebsd-amd64')['guest-version'], '14.4');  // proven floor so far (walk pending)
+  assert.strictEqual(rel('freebsd-amd64')['guest-version'], '14.0');  // proven floor (oldest with living pkg repos)
   assert.strictEqual(cin('freebsd-amd64')['guest-version'], '15.1');  // newest in cpa catalog
   // ci-* keys never leak into emitted matrices.
   for (const l of [...release, ...ci]) {

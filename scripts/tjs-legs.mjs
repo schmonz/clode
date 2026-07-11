@@ -98,11 +98,23 @@ const LEGS = [
   { leg: 'netbsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'netbsd', 'guest-version': '10.1',
     'guest-packages': 'cmake gmake nodejs git-base bash',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true },  // cpa, KVM
-  { leg: 'freebsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'freebsd', 'guest-version': '14.4',
+  { leg: 'freebsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'freebsd',
+    // PROVEN floor (probe run 29157832721, honest in-guest build): 14.0 is
+    // the oldest whose pkg repos still exist — 12.x/13.x died with their
+    // branches at EOL (probes failed before any build). FreeBSD symbol
+    // versioning gives 14.0-built binaries forward-compat across 14.x/15.x.
+    'guest-version': '14.0',
     // renovate: datasource=custom.cpa-freebsd-x86-64 depName=freebsd-x86-64-guest versioning=loose
     'ci-guest-version': '15.1',
     'guest-packages': 'cmake gmake node git bash',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true },  // cpa, KVM
+  // OpenBSD is EXEMPT from publish-oldest: ld.so refuses on libc.so major
+  // mismatch and majors bump nearly every release, in BOTH directions
+  // (probe evidence: the 7.9-built tjs died on 7.6 with "can't load library
+  // libc.so") — so an old-built artifact serves only that one old release
+  // and breaks everyone current. Publish the newest instead; 7.6 is proven
+  // to BUILD (probe run 29157832086, honest build) but a 7.6 artifact would
+  // be useless to 7.9 users.
   { leg: 'openbsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'openbsd', 'guest-version': '7.9',
     'guest-packages': 'cmake gmake node git bash',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true },  // cpa, KVM
