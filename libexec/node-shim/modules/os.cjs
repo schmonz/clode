@@ -36,25 +36,38 @@ const SIGNALS_DARWIN = {
   SIGSYS: 12,
 };
 
+// process.platform -> node's os.type() spelling (uname -s). One case per
+// release-matrix identity; unknown values pass through untouched.
+function unameType(p) {
+  switch (p) {
+    case 'darwin': return 'Darwin';
+    case 'linux': return 'Linux';
+    case 'win32': return 'Windows_NT';
+    case 'freebsd': return 'FreeBSD';
+    case 'openbsd': return 'OpenBSD';
+    case 'netbsd': return 'NetBSD';
+    case 'dragonfly': return 'DragonFly';
+    case 'midnightbsd': return 'MidnightBSD';
+    case 'haiku': return 'Haiku';
+    case 'sunos': return 'SunOS';
+    case 'aix': return 'AIX';
+    default: return p;
+  }
+}
+
 module.exports = {
   homedir: () => tjs.homeDir ?? tjs.env.HOME ?? '/',
   tmpdir: () => { const v = tjs.tmpDir ?? tjs.env.TMPDIR ?? '/tmp'; return v.length > 1 && v.endsWith('/') ? v.slice(0, -1) : v; },
   platform: () => process.platform,
   arch: () => process.arch,
   // os.type() (Task 4 wall): the -p boot compares os.type() against 'OS400'
-  // (AIX/IBM i detection). Maps process.platform to Node's uname-style string.
-  type: () => {
-    switch (process.platform) {
-      case 'darwin': return 'Darwin';
-      case 'linux': return 'Linux';
-      case 'win32': return 'Windows_NT';
-      case 'freebsd': return 'FreeBSD';
-      case 'openbsd': return 'OpenBSD';
-      case 'sunos': return 'SunOS';
-      case 'aix': return 'AIX';
-      default: return process.platform;
-    }
-  },
+  // (AIX/IBM i detection). Maps process.platform to Node's uname-style string,
+  // covering every release-matrix identity now that detectPlatform is honest
+  // (netbsd/dragonfly/midnightbsd/haiku joined when the 'linux' fallthrough
+  // lie was fixed — see process.cjs detectPlatform). Characterized by
+  // test/node-shim-platform.test.cjs.
+  type: () => unameType(process.platform),
+  __typeFor: unameType,               // test hook (node-shim-platform.test.cjs)
   // os.release() (Task 4 wall): the -p bundle builds the system prompt's
   // environment block with `${os.type()} ${os.release()}` (its `j_o` helper). A
   // missing os.release throws `TypeError: not a function` and crashes the query

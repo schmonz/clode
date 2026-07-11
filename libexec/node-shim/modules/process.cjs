@@ -27,13 +27,39 @@
 const { writeSyncFd } = require('../internal/stdio-write.cjs');
 const { isTerminalFd } = require('../internal/terminal-fd.cjs');
 
-function detectPlatform() {
-  const np = (typeof navigator !== 'undefined' && navigator.platform) || '';
+// Honest process.platform for EVERY release-matrix leg. The old version
+// enumerated Mac/Win/Linux/FreeBSD/OpenBSD and DEFAULTED to 'linux', so 8 of
+// the 22 tjs builder legs (netbsd ×2, dragonflybsd, midnightbsd, the three
+// SunOS/illumos legs, haiku) lied — quaude-on-NetBSD read "Platform: linux"
+// in its own system prompt while uname said NetBSD. Primary signal:
+// navigator.userAgentData.platform, which txiki maps for its big five and
+// passes through VERBATIM (lowercase CMAKE_SYSTEM_NAME: 'netbsd',
+// 'dragonfly', 'sunos', 'midnightbsd', 'haiku', ...) for everything else —
+// matching node's process.platform convention for every known case, current
+// and future legs alike. Fallback: the legacy navigator.platform regexes,
+// whose txiki fallthrough is "<platform> <machine>" (first token = the same
+// lowercase name). Characterized by test/node-shim-platform.test.cjs.
+// DEFERRED (Q3 engine batch, needs uname on the tjs facade): process.arch,
+// os.release()/version(), per-platform O_*/signal tables.
+function detectPlatform(uaPlatform, navPlatform) {
+  const ua = uaPlatform
+    ?? (typeof navigator !== 'undefined' && navigator.userAgentData && navigator.userAgentData.platform)
+    ?? '';
+  switch (ua) {
+    case 'macOS': return 'darwin';
+    case 'Windows': return 'win32';
+    case 'Linux': return 'linux';
+    case 'FreeBSD': return 'freebsd';
+    case 'OpenBSD': return 'openbsd';
+    default: if (ua) return String(ua).toLowerCase();
+  }
+  const np = navPlatform ?? ((typeof navigator !== 'undefined' && navigator.platform) || '');
   if (/^Mac/.test(np)) return 'darwin';
   if (/^Win/.test(np)) return 'win32';
   if (/^Linux/.test(np)) return 'linux';
-  if (/FreeBSD/i.test(np)) return 'freebsd';
-  if (/OpenBSD/i.test(np)) return 'openbsd';
+  if (/^FreeBSD/i.test(np)) return 'freebsd';
+  if (/^OpenBSD/i.test(np)) return 'openbsd';
+  if (np) return np.split(' ')[0].toLowerCase();
   return 'linux';
 }
 
@@ -153,7 +179,8 @@ module.exports = {
     getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true, writable: true }),
   }),
   platform: detectPlatform(),
-  arch: 'arm64', // M4: derive per-platform (no arch signal in this tjs build)
+  __detectPlatform: detectPlatform,   // test hook (node-shim-platform.test.cjs)
+  arch: 'arm64', // M4: derive per-platform (no arch signal in this tjs build; Q3 uname-facade item)
   pid: tjs.pid,
   execPath: tjs.exePath ?? '/tjs',
   cwd: () => tjs.cwd,
