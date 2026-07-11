@@ -4,10 +4,11 @@ name: guest-versions
 # than a ci-tier pin (ci rides the newest end — bump the manifest pin and let
 # the leg prove it) or when a pinned image VANISHED from its catalog (a
 # pulled image breaks that leg outright — act before release day). Renovate
-# cannot do this: cpa publishes OS images as release ASSETS of its *-builder
-# repos and vmactions versions are conf filenames — no datasource reads
-# either. Logic lives in scripts/check-guest-versions.mjs (pure parts
-# characterized by test/check-guest-versions.test.cjs).
+# owns the EXPLICIT ci pins (customDatasources in .github/renovate.json bump
+# them via PR, automerge gated on green CI); this watcher backstops the rest:
+# implicit pins (pre-floor-walk OSes), floor existence (Renovate never checks
+# that), and runner labels. Logic lives in scripts/check-guest-versions.mjs
+# (pure parts characterized by test/check-guest-versions.test.cjs).
 
 on:
   schedule:

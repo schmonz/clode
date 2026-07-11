@@ -1,16 +1,19 @@
 #!/usr/bin/env node
 // Weekly guest-catalog watcher (.github/workflows/guest-versions.yml).
-// Renovate cannot do this job: cross-platform-actions publishes OS images as
-// release ASSETS of its *-builder repos, and vmactions versions are conf
-// filenames in the action repo — no Renovate datasource reads either. This
-// script compares the manifest's NEWEST-end pins (the ci tier — user
-// decision 2026-07-11: ci rides the newest version, release the oldest
-// proven floor) against the live catalogs and exits nonzero on drift:
-// either a newer image exists (bump the ci-* pin, let the leg prove it) or
-// a pinned image VANISHED (image pulled upstream — act before release day).
-// GH-hosted runner labels (macos/ubuntu) ride the same sweep via the
-// runner-images README. Pure logic (cmpVersions/drift) is characterized by
-// test/check-guest-versions.test.cjs; the network sweep runs in CI only.
+// Division of labor with Renovate: Renovate's BUILT-IN datasources can't
+// read these catalogs (cpa publishes OS images as release ASSETS of its
+// *-builder repos; vmactions versions are conf filenames), but its
+// customDatasources CAN — .github/renovate.json teaches it the EXPLICIT
+// ci-guest-version pins (annotated in scripts/tjs-legs.mjs), and it opens
+// bump PRs that automerge only on green CI. This watcher is the backstop
+// for everything Renovate doesn't own: OSes whose ci pin is still implicit
+// (base value, pre-floor-walk), release FLOORS that must still EXIST in
+// their catalog (a pulled image breaks release day — Renovate never checks
+// existence), and GH-hosted runner labels. It compares the manifest's pins
+// (ci tier = newest end, per the 2026-07-11 user decision) against the live
+// catalogs and exits nonzero on drift. Pure logic (cmpVersions/drift) is
+// characterized by test/check-guest-versions.test.cjs; the network sweep
+// runs in CI only.
 import { legsFor } from './tjs-legs.mjs';
 
 // Segment-wise natural compare over the formats the catalogs actually use:

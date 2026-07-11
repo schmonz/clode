@@ -39,9 +39,12 @@ const VM = (leg) => leg['guest-platform'] && !['native', 'alpine'].includes(leg[
 // alpine/musl legs are exempt: output is fully static, so the image version
 // is a toolchain detail, not a compat floor. Single-version catalogs
 // (dragonflybsd, midnightbsd, haiku, solaris — its variants are toolchains)
-// have no ends to split. scripts/check-guest-versions.mjs watches the
-// catalogs for drift (Renovate cannot: cpa publishes OS images as release
-// ASSETS of the *-builder repos, which no datasource reads).
+// have no ends to split. Freshness: Renovate owns the EXPLICIT ci pins (the
+// `// renovate:` annotations below + customDatasources in
+// .github/renovate.json — its built-in datasources can't read cpa's
+// release-asset catalogs, but its custom ones can); the weekly
+// scripts/check-guest-versions.mjs sweep backstops implicit pins, floor
+// existence, and runner labels.
 
 const LEGS = [
   // ---- T1 native runners
@@ -96,7 +99,8 @@ const LEGS = [
     'guest-packages': 'cmake gmake nodejs git-base bash',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true },  // cpa, KVM
   { leg: 'freebsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'freebsd', 'guest-version': '14.4',
-    'ci-guest-version': '15.1',  // newest in the cpa catalog (2026-07-11)
+    // renovate: datasource=custom.cpa-freebsd-x86-64 depName=freebsd-x86-64-guest versioning=loose
+    'ci-guest-version': '15.1',
     'guest-packages': 'cmake gmake node git bash',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true },  // cpa, KVM
   { leg: 'openbsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'openbsd', 'guest-version': '7.9',
@@ -110,7 +114,8 @@ const LEGS = [
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true },  // cpa, KVM (illumos rung)
   { leg: 'solaris-amd64', os: 'ubuntu-latest', 'guest-platform': 'solaris',
     'guest-version': '11.4-gcc',       // CBE image with gcc/g++ preinstalled
-    'ci-guest-version': '11.4-gcc-14', // newest vmactions conf (2026-07-11); same OS, newer image+toolchain
+    // renovate: datasource=custom.vmactions-solaris depName=solaris-guest versioning=loose
+    'ci-guest-version': '11.4-gcc-14', // same OS, newer image+toolchain (variants: renovate.json allowedVersions pins /gcc/)
     'guest-packages': 'developer/build/cmake developer/build/gnu-make developer/versioning/git runtime/nodejs shell/bash',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true,
     timeout: 120 },               // vmactions boot is slower than cpa

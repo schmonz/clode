@@ -16,6 +16,44 @@
         "ws"
       ],
       "ignoreTests": false
+    },
+    {
+      "description": "Guest-image ci pins (the NEWEST-end versions in scripts/tjs-legs.mjs): a bump must prove itself on the actual leg, so automerge waits for green CI. Release floor pins are policy-frozen and deliberately NOT extracted.",
+      "matchDatasources": ["custom.cpa-freebsd-x86-64", "custom.vmactions-solaris"],
+      "ignoreTests": false
+    },
+    {
+      "description": "solaris vmactions confs mix toolchain variants (gcc/clang) into one namespace; track only the gcc line the leg is built around.",
+      "matchDepNames": ["solaris-guest"],
+      "allowedVersions": "/gcc/"
     }
-  ]
+  ],
+  "customManagers": [
+    {
+      "description": "ci-guest-version pins in the tjs leg manifest, annotated in place with `// renovate: datasource=... depName=...` on the preceding line. JSONata transforms proven against the live APIs 2026-07-11.",
+      "customType": "regex",
+      "fileMatch": ["^scripts/tjs-legs\\.mjs$"],
+      "matchStrings": [
+        "// renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: versioning=(?<versioning>\\S+))?\\s*\\n\\s*'ci-guest-version': '(?<currentValue>[^']+)'"
+      ]
+    }
+  ],
+  "customDatasources": {
+    "cpa-freebsd-x86-64": {
+      "description": "OS versions = the x86-64 image assets of the newest cross-platform-actions/freebsd-builder release (Renovate's built-in github-releases datasource sees only the BUILDER's own version tags).",
+      "defaultRegistryUrlTemplate": "https://api.github.com/repos/cross-platform-actions/freebsd-builder/releases?per_page=1",
+      "format": "json",
+      "transformTemplates": [
+        "{ \"releases\": $[0].assets.name[$contains($, \"-x86-64.qcow2\")] ~> $map(function($n) {{ \"version\": $match($n, /freebsd-(.+)-x86-64/).groups[0] }}) }"
+      ]
+    },
+    "vmactions-solaris": {
+      "description": "vmactions guest versions are conf filenames in the action repo.",
+      "defaultRegistryUrlTemplate": "https://api.github.com/repos/vmactions/solaris-vm/contents/conf",
+      "format": "json",
+      "transformTemplates": [
+        "{ \"releases\": $[name ~> /\\.conf$/ and name != \"default.release.conf\"].name ~> $map(function($n) {{ \"version\": $replace($n, \".conf\", \"\") }}) }"
+      ]
+    }
+  }
 }
