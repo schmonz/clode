@@ -95,7 +95,16 @@ const LEGS = [
   // per-platform as legs prove), ffi off (spares a guest libffi dep; nothing
   // shipped imports tjs:ffi). Engine config (quickjs + wurl + libuv)
   // identical to the pinned oracle build.
-  { leg: 'netbsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'netbsd', 'guest-version': '10.1',
+  { leg: 'netbsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'netbsd',
+    // PROVEN floor (probe run 29160710037, honest build, 304 compile lines;
+    // 10.0 also proven, run 29160710641). 9.2 is DISQUALIFIED operationally:
+    // its guest wedged 89 min at pkgin install (dead-mirror-class hang for
+    // the 9.2-era repo path) until the 90-min wall — regardless of whether
+    // the build would have succeeded. NetBSD's COMPAT machinery carries a
+    // 9.4-built artifact forward across 10.x.
+    'guest-version': '9.4',
+    // renovate: datasource=custom.cpa-netbsd-x86-64 depName=netbsd-x86-64-guest versioning=loose
+    'ci-guest-version': '10.1',
     'guest-packages': 'cmake gmake nodejs git-base bash',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true },  // cpa, KVM
   { leg: 'freebsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'freebsd',
