@@ -1,0 +1,59 @@
+name: ppc-toolchain-probe
+
+# Phase A of the darwin-ppc walk (spec 2026-07-11-darwin-ppc-walk-design,
+# untracked): prove the pinned cross toolchain on a GHA runner before any
+# leg machinery exists. Dispatch-only scaffolding — absorbed into the leg
+# (and deleted) once the toolchain pin is proven. First rounds are
+# discovery: print the image digest (for the eventual by-digest pin) and
+# the toolchain's real binary names, then cross-compile a hello-world and
+# gate its Mach-O shape (ppc cputype, LC_VERSION_MIN 10.4). The artifact
+# goes to the Tiger VM oracle for the execution half of the receipt.
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "toolchain image ref (pin by digest once known)"
+        type: string
+        default: "ghcr.io/variantxyz/gcc-powerpc-apple-darwin8:latest"
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Pull and identify the image (digest for the pin)
+        run: |
+          set -euo pipefail
+          docker pull "${{ inputs.image }}"
+          docker image inspect --format 'id={{.Id}} digest={{index .RepoDigests 0}}' "${{ inputs.image }}"
+
+      - name: Discover the toolchain surface
+        run: |
+          docker run --rm "${{ inputs.image }}" sh -c 'ls /usr/local/bin 2>/dev/null | sort; echo ---; ls /usr/local 2>/dev/null'
+
+      - name: Cross-compile hello-world for powerpc-apple-darwin8
+        run: |
+          set -euxo pipefail
+          cat > hello.c <<'EOF'
+          #include <stdio.h>
+          int main(void) { printf("hello from powerpc-apple-darwin8\n"); return 0; }
+          EOF
+          docker run --rm -v "$PWD:/w" -w /w "${{ inputs.image }}" sh -c '
+            set -euxo pipefail
+            GCC=$(ls /usr/local/bin/*gcc* | grep -v ranlib | head -1)
+            "$GCC" -O2 -mmacosx-version-min=10.4 -static-libgcc hello.c -o hello-ppc
+            OTOOL=$(ls /usr/local/bin/*otool* 2>/dev/null | head -1 || true)
+            if [ -n "$OTOOL" ]; then "$OTOOL" -hv hello-ppc; "$OTOOL" -l hello-ppc | grep -A3 VERSION || true; fi
+          '
+          file hello-ppc
+
+      - name: Gate the Mach-O shape from the host side
+        run: |
+          set -euo pipefail
+          f=$(file -b hello-ppc); echo "file: $f"
+          case "$f" in *Mach-O*ppc*|*"Mach-O executable ppc"*) echo "arch marker ok" ;; *) echo "ERROR: not a ppc Mach-O" >&2; exit 1 ;; esac
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hello-ppc
+          path: hello-ppc
