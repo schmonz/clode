@@ -1516,7 +1516,7 @@ run('cmake', ['-S', tjsDir, '-B', path.join(tjsDir, 'build'), ...cmakeArgs]);
 // shipped one on the same host, which is exactly the check the sparc
 // campaign used on its darwin control.
 const forceRegen = process.env.CLODE_TJS_REGEN === '1';
-if (forceRegen) {
+if (os.endianness() === 'BE' || forceRegen) {
   console.log(`BE bundle regen: target endianness=${os.endianness()} force=${forceRegen} -> regenerating quickjs bytecode arrays natively`);
   const tjsc = path.join(tjsDir, 'build', 'tjsc');
   run('cmake', ['--build', path.join(tjsDir, 'build'), '--target', 'tjsc', '-j', jobs]);
