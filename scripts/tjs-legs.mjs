@@ -23,16 +23,39 @@
 
 const VM = (leg) => leg['guest-platform'] && !['native', 'alpine'].includes(leg['guest-platform']);
 
+// Version policy (user decision 2026-07-11): CI builds the NEWEST available
+// version of each OS (early warning on the front edge); release builds — and
+// publishes from — the OLDEST version that can still build (the compat
+// floor, glibc-style). The base `os`/`guest-version` fields are the RELEASE
+// values; `ci-os`/`ci-guest-version` override them for the ci tier where the
+// ends differ. The release floor is EMPIRICAL, not oldest-in-catalog: old
+// guest images carry old package repos (OpenBSD 6.8 ships node far below the
+// build floor of 20; FreeBSD 12's pkg repos vanished at EOL) — each floor is
+// walked down leg-by-leg via the tjs-legs.yml workflow_dispatch knob and
+// committed only once proven green. Floors still to walk (candidates from
+// the 2026-07-11 catalog sweep): netbsd 9.2, openbsd ≤7.9, freebsd ≤14.4,
+// omnios r151056, openindiana 202510-build, and the arm64 twins (netbsd
+// 10.0 / freebsd 12.4 / openbsd 6.8 — 300-min TCG legs, walk last). The
+// alpine/musl legs are exempt: output is fully static, so the image version
+// is a toolchain detail, not a compat floor. Single-version catalogs
+// (dragonflybsd, midnightbsd, haiku, solaris — its variants are toolchains)
+// have no ends to split. scripts/check-guest-versions.mjs watches the
+// catalogs for drift (Renovate cannot: cpa publishes OS images as release
+// ASSETS of the *-builder repos, which no datasource reads).
+
 const LEGS = [
   // ---- T1 native runners
   // Naming (user decision 2026-07-10): tjs builders own the CANONICAL name
   // clode-<ver>-<platform>; the transitional Node-SEA binaries carry the
   // -node engine tag instead.
-  { leg: 'darwin-arm64', os: 'macos-14', publish: true, ci: true },
+  // macos-14 = the oldest arm64 runner GitHub hosts (= the publish floor);
+  // ci rides the newest (macos-26).
+  { leg: 'darwin-arm64', os: 'macos-14', 'ci-os': 'macos-26', publish: true, ci: true },
   // glibc Linux artifacts are smoke-only forever (Decision 3): the published
-  // Linux artifacts are the musl-static ones.
-  { leg: 'linux-x64-glibc', os: 'ubuntu-latest', publish: false, ci: true },
-  { leg: 'linux-arm64-glibc', os: 'ubuntu-24.04-arm', publish: false, ci: true },
+  // Linux artifacts are the musl-static ones. Release pins the oldest hosted
+  // ubuntu (glibc floor for the smoke build), ci the newest.
+  { leg: 'linux-x64-glibc', os: 'ubuntu-22.04', 'ci-os': 'ubuntu-26.04', publish: false, ci: true },
+  { leg: 'linux-arm64-glibc', os: 'ubuntu-22.04-arm', 'ci-os': 'ubuntu-26.04-arm', publish: false, ci: true },
   // ---- T1.5 Alpine musl-static (the published Linux artifacts)
   { leg: 'linux-x64-musl', os: 'ubuntu-latest', 'guest-platform': 'alpine', 'guest-arch': 'x86_64',
     static: true, publish: true, ci: true },  // ci: per-push twin of THE published Linux artifact
@@ -73,6 +96,7 @@ const LEGS = [
     'guest-packages': 'cmake gmake nodejs git-base bash',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true },  // cpa, KVM
   { leg: 'freebsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'freebsd', 'guest-version': '14.4',
+    'ci-guest-version': '15.1',  // newest in the cpa catalog (2026-07-11)
     'guest-packages': 'cmake gmake node git bash',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true },  // cpa, KVM
   { leg: 'openbsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'openbsd', 'guest-version': '7.9',
@@ -85,7 +109,8 @@ const LEGS = [
     'guest-packages': 'developer/gcc14 developer/build/gnu-make ooce/developer/cmake ooce/runtime/node-22 developer/versioning/git shell/bash',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true },  // cpa, KVM (illumos rung)
   { leg: 'solaris-amd64', os: 'ubuntu-latest', 'guest-platform': 'solaris',
-    'guest-version': '11.4-gcc',  // CBE image with gcc/g++ preinstalled
+    'guest-version': '11.4-gcc',       // CBE image with gcc/g++ preinstalled
+    'ci-guest-version': '11.4-gcc-14', // newest vmactions conf (2026-07-11); same OS, newer image+toolchain
     'guest-packages': 'developer/build/cmake developer/build/gnu-make developer/versioning/git runtime/nodejs shell/bash',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true,
     timeout: 120 },               // vmactions boot is slower than cpa
@@ -125,10 +150,12 @@ const LEGS = [
 
 export function legsFor(tier) {
   if (tier === 'release') {
-    return LEGS.map(({ ci, ...leg }) => leg);
+    return LEGS.map(({ ci, 'ci-os': _o, 'ci-guest-version': _v, ...leg }) => leg);
   }
   if (tier === 'ci') {
-    return LEGS.filter((l) => l.ci).map(({ ci, publish, ...leg }) => {
+    return LEGS.filter((l) => l.ci).map(({ ci, publish, 'ci-os': ciOs, 'ci-guest-version': ciVer, ...leg }) => {
+      if (ciOs) leg.os = ciOs;                          // ci rides the newest runner/guest
+      if (ciVer) leg['guest-version'] = ciVer;
       if (VM(leg)) leg['soft-fail'] = true;  // house rule: new-to-CI VM legs earn hard status
       return leg;
     });
@@ -136,5 +163,22 @@ export function legsFor(tier) {
   throw new Error(`unknown tier '${tier}' (release | ci)`);
 }
 
-const tier = process.argv[2];
-console.log(JSON.stringify(legsFor(tier)));
+// CLI: tjs-legs.mjs <tier> [only-leg] [guest-version-override]
+// The optional args back the tjs-legs.yml workflow_dispatch probe (the
+// version-floor walk): pick ONE leg out of the tier, optionally at an
+// overridden guest version. Probes never publish.
+export function cli(tier, only, versionOverride) {
+  let legs = legsFor(tier);
+  if (only) {
+    legs = legs.filter((l) => l.leg === only);
+    if (!legs.length) throw new Error(`no such leg in tier '${tier}': ${only}`);
+    legs = legs.map((l) => ({ ...l, publish: false }));
+  }
+  if (versionOverride) legs = legs.map((l) => ({ ...l, 'guest-version': versionOverride }));
+  return legs;
+}
+
+import { pathToFileURL } from 'node:url';
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  console.log(JSON.stringify(cli(process.argv[2], process.argv[3], process.argv[4])));
+}

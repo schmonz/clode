@@ -78,7 +78,11 @@ test('ci tier: never publishes, VM legs are soft-fail', () => {
 test('ci legs match their release siblings byte-for-byte on engine config', () => {
   const release = legsFor('release');
   const ci = legsFor('ci');
-  const CONFIG = ['os', 'guest-platform', 'guest-arch', 'guest-version', 'guest-packages',
+  // os and guest-version are deliberately EXCLUDED: they are the per-tier
+  // version axis (user decision 2026-07-11 — ci builds the newest available
+  // version of each OS, release builds/publishes from the oldest proven
+  // floor). Everything that shapes the engine itself must stay identical.
+  const CONFIG = ['guest-platform', 'guest-arch', 'guest-packages',
     'static', 'wasm', 'mimalloc', 'ffi', 'smoke'];
   for (const l of ci) {
     const sib = release.find((r) => r.leg === l.leg);
@@ -91,5 +95,26 @@ test('ci legs match their release siblings byte-for-byte on engine config', () =
   for (const name of ['linux-x64-glibc', 'linux-arm64-glibc']) {
     const sib = release.find((r) => r.leg === name);
     if (sib) assert.ok(!sib.publish, `${name} must never publish (Decision 3)`);
+  }
+});
+
+test('version policy: ci rides the newest end, release the oldest floor', () => {
+  const release = legsFor('release');
+  const ci = legsFor('ci');
+  const rel = (n) => release.find((l) => l.leg === n);
+  const cin = (n) => ci.find((l) => l.leg === n);
+  // The ci-os / ci-guest-version override mechanics, pinned to the known
+  // ends from the 2026-07-11 catalog sweep. When a catalog moves, the
+  // freshness checker (scripts/check-guest-versions.mjs) flags it and these
+  // pins move with the manifest.
+  assert.strictEqual(rel('darwin-arm64').os, 'macos-14');       // oldest hosted arm64 = publish floor
+  assert.strictEqual(cin('darwin-arm64').os, 'macos-26');       // newest hosted arm64
+  assert.strictEqual(rel('linux-x64-glibc').os, 'ubuntu-22.04');
+  assert.strictEqual(cin('linux-x64-glibc').os, 'ubuntu-26.04');
+  assert.strictEqual(rel('freebsd-amd64')['guest-version'], '14.4');  // proven floor so far (walk pending)
+  assert.strictEqual(cin('freebsd-amd64')['guest-version'], '15.1');  // newest in cpa catalog
+  // ci-* keys never leak into emitted matrices.
+  for (const l of [...release, ...ci]) {
+    assert.ok(!('ci-os' in l) && !('ci-guest-version' in l), `${l.leg}: ci-* override keys must be stripped`);
   }
 });

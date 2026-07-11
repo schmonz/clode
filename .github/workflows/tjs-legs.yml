@@ -20,6 +20,24 @@ on:
         description: "leg subset: 'ci' (per-push) or 'release' (full matrix)"
         type: string
         required: true
+  # Single-leg probe (the version-floor walk): boot ONE leg, optionally at an
+  # overridden guest version, without paying for a whole matrix. E.g.
+  #   gh workflow run tjs-legs.yml -f only=openbsd-amd64 -f guest-version=7.5
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: "leg subset to draw from"
+        type: choice
+        options: [release, ci]
+        default: release
+      only:
+        description: "run only this leg (exact leg name); empty = whole tier"
+        type: string
+        default: ""
+      guest-version:
+        description: "override the leg's guest version (floor-walk probe)"
+        type: string
+        default: ""
 
 jobs:
   plan:
@@ -33,7 +51,7 @@ jobs:
         with:
           node-version-file: .tool-versions
       - id: legs
-        run: echo "legs=$(node scripts/tjs-legs.mjs '${{ inputs.tier }}')" >> "$GITHUB_OUTPUT"
+        run: echo "legs=$(node scripts/tjs-legs.mjs '${{ inputs.tier }}' '${{ inputs.only }}' '${{ inputs.guest-version }}')" >> "$GITHUB_OUTPUT"
 
   leg:
     needs: plan

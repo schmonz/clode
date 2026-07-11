@@ -1,0 +1,32 @@
+name: guest-versions
+
+# Weekly guest-catalog watcher: fails loudly when a NEWER guest image exists
+# than a ci-tier pin (ci rides the newest end — bump the manifest pin and let
+# the leg prove it) or when a pinned image VANISHED from its catalog (a
+# pulled image breaks that leg outright — act before release day). Renovate
+# cannot do this: cpa publishes OS images as release ASSETS of its *-builder
+# repos and vmactions versions are conf filenames — no datasource reads
+# either. Logic lives in scripts/check-guest-versions.mjs (pure parts
+# characterized by test/check-guest-versions.test.cjs).
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'   # Mondays 06:17 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .tool-versions
+      - name: Compare manifest pins against the live catalogs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/check-guest-versions.mjs | tee -a "$GITHUB_STEP_SUMMARY"
