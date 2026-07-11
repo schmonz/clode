@@ -19,7 +19,7 @@
     },
     {
       "description": "Guest-image ci pins (the NEWEST-end versions in scripts/tjs-legs.mjs): a bump must prove itself on the actual leg, so automerge waits for green CI. Release floor pins are policy-frozen and deliberately NOT extracted.",
-      "matchDatasources": ["custom.cpa-freebsd-x86-64", "custom.vmactions-solaris"],
+      "matchDatasources": ["custom.cpa-freebsd-x86-64", "custom.cpa-omnios-x86-64", "custom.vmactions-solaris"],
       "ignoreTests": false
     },
     {
@@ -45,6 +45,14 @@
       "format": "json",
       "transformTemplates": [
         "{ \"releases\": $[0].assets.name[$contains($, \"-x86-64.qcow2\")] ~> $map(function($n) {{ \"version\": $match($n, /freebsd-(.+)-x86-64/).groups[0] }}) }"
+      ]
+    },
+    "cpa-omnios-x86-64": {
+      "description": "OS versions = the x86-64 image assets of the newest cross-platform-actions/omnios-builder release.",
+      "defaultRegistryUrlTemplate": "https://api.github.com/repos/cross-platform-actions/omnios-builder/releases?per_page=1",
+      "format": "json",
+      "transformTemplates": [
+        "{ \"releases\": $[0].assets.name[$contains($, \"-x86-64.qcow2\")] ~> $map(function($n) {{ \"version\": $match($n, /omnios-(.+)-x86-64/).groups[0] }}) }"
       ]
     },
     "vmactions-solaris": {

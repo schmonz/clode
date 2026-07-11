@@ -109,7 +109,10 @@ const LEGS = [
   { leg: 'dragonflybsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'dragonflybsd', 'guest-version': '6.4.2',
     'guest-packages': 'cmake gmake node git bash',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true },  // cpa, KVM
-  { leg: 'omnios-amd64', os: 'ubuntu-latest', 'guest-platform': 'omnios', 'guest-version': 'r151058',
+  { leg: 'omnios-amd64', os: 'ubuntu-latest', 'guest-platform': 'omnios',
+    'guest-version': 'r151056',        // PROVEN floor (probe run 29154489454, 2026-07-11) — oldest in cpa catalog
+    // renovate: datasource=custom.cpa-omnios-x86-64 depName=omnios-x86-64-guest versioning=loose
+    'ci-guest-version': 'r151058',
     'guest-packages': 'developer/gcc14 developer/build/gnu-make ooce/developer/cmake ooce/runtime/node-22 developer/versioning/git shell/bash',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true },  // cpa, KVM (illumos rung)
   { leg: 'solaris-amd64', os: 'ubuntu-latest', 'guest-platform': 'solaris',
@@ -148,7 +151,11 @@ const LEGS = [
     'guest-packages': 'cmd:cmake cmd:gcc nodejs20 cmd:git cmd:make',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, 'soft-fail': true, ci: true },  // cpa, KVM (a genuinely new OS rung)
   { leg: 'openindiana-amd64', os: 'ubuntu-latest', 'guest-platform': 'openindiana',
-    'guest-version': '202604-build',  // build-essential image
+    // PROVEN floor (probe run 29154489921, 2026-07-11) — oldest vmactions
+    // conf; build-essential image. Release-only leg (illumos distro twin):
+    // no ci newest-end, so no split and no Renovate pin — the weekly watcher
+    // guards this floor's existence.
+    'guest-version': '202510-build',
     'guest-packages': 'developer/build/cmake developer/build/gnu-make developer/versioning/git shell/bash runtime/nodejs',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 120, 'soft-fail': true },  // vmactions (3rd illumos flavor)
 ];
