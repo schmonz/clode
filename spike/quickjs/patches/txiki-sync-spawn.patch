@@ -33,10 +33,10 @@ diff --git a/src/vm.c b/src/vm.c
      tjs__mod_process_init(ctx, ns);
 diff --git a/src/mod_spawn_sync.c b/src/mod_spawn_sync.c
 new file mode 100644
-index 0000000..96c0bcf
+index 0000000..fe5d4ec
 --- /dev/null
 +++ b/src/mod_spawn_sync.c
-@@ -0,0 +1,328 @@
+@@ -0,0 +1,358 @@
 +/* Synchronous spawn primitive for CommonJS interop (node-shim).
 + * posix_spawn + poll()-drain, main-thread blocking by design. Exposed as
 + * the global `__tjs_spawn_sync`. Mirrors mod_fs_sync.c; upstream candidate. */
@@ -63,6 +63,7 @@ index 0000000..96c0bcf
 +    case ENOEXEC: return "ENOEXEC";
 +    case E2BIG:   return "E2BIG";
 +    case EINVAL:  return "EINVAL";
++    case ESRCH:   return "ESRCH";
 +    default:      return "EUNKNOWN";
 +    }
 +}
@@ -349,8 +350,35 @@ index 0000000..96c0bcf
 +    return result;
 +}
 +
++/* kill(2) passthrough: __tjs_kill(pid, sig). sig is a signal NUMBER (0 = the
++ * POSIX liveness probe node's process.kill(pid, 0) exposes — tjs.kill cannot
++ * express it, its name-only parser rejects "0") or a signal NAME resolved by
++ * the same tjs_getsignum tjs.kill uses. Negative pid = process group, exactly
++ * kill(2). Throws the node error shape ({code:'ESRCH',...}) on failure. */
++static JSValue js_kill_sync(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
++    int32_t pid, sig;
++    if (JS_ToInt32(ctx, &pid, argv[0]))
++        return JS_EXCEPTION;
++    if (JS_IsNumber(argv[1])) {
++        if (JS_ToInt32(ctx, &sig, argv[1]))
++            return JS_EXCEPTION;
++    } else {
++        const char *sig_str = JS_ToCString(ctx, argv[1]);
++        if (!sig_str)
++            return JS_EXCEPTION;
++        sig = tjs_getsignum(sig_str);
++        JS_FreeCString(ctx, sig_str);
++        if (sig == -1)
++            return JS_ThrowTypeError(ctx, "spawn_sync.kill: unknown signal");
++    }
++    if (kill((pid_t)pid, sig) != 0)
++        return throw_errno(ctx, errno, "kill", NULL);
++    return JS_UNDEFINED;
++}
++
 +static const JSCFunctionListEntry spawn_sync_funcs[] = {
 +    JS_CFUNC_DEF("spawn", 3, js_spawn_sync),
++    JS_CFUNC_DEF("kill", 2, js_kill_sync),
 +};
 +
 +void tjs__mod_spawn_sync_init(JSContext *ctx, JSValue ns) {
@@ -362,6 +390,8 @@ index 0000000..96c0bcf
 +     * __tjs_spawn_sync(file, args, opts). */
 +    JSValue fn = JS_GetPropertyStr(ctx, obj, "spawn");
 +    JS_DefinePropertyValueStr(ctx, global, "__tjs_spawn_sync", fn, JS_PROP_C_W_E);
++    JSValue kfn = JS_GetPropertyStr(ctx, obj, "kill");
++    JS_DefinePropertyValueStr(ctx, global, "__tjs_kill", kfn, JS_PROP_C_W_E);
 +    JS_FreeValue(ctx, obj);
 +    JS_FreeValue(ctx, global);
 +}

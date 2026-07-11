@@ -163,6 +163,23 @@ module.exports = {
     }
     return tjs.exit(c ?? this.exitCode ?? 0);
   },
+  // process.kill(pid, signal='SIGTERM') over the __tjs_kill primitive
+  // (mod_spawn_sync.c): raw kill(2), so signal 0 (the liveness probe the
+  // bundle's background-task supervision leans on), negative pids (process
+  // groups — the Ctrl-Z suspend path is `process.kill(0,"SIGTSTP")`), and
+  // both name and number signals all behave like node. Node returns true on
+  // success and throws {code:'ESRCH'|'EPERM'} on failure — the primitive's
+  // errors already carry that shape. Without this, the suspend path printed
+  // "has been suspended" then died on a swallowed TypeError and never
+  // stopped. Characterized by test/node-shim-signals.test.cjs.
+  kill(pid, sig) {
+    const k = globalThis.__tjs_kill;
+    if (typeof k !== 'function') {
+      throw new Error('node-shim: process.kill needs __tjs_kill (rebuild tjs with txiki-sync-spawn.patch)');
+    }
+    k(pid, sig ?? 'SIGTERM');
+    return true;
+  },
   // process.exitCode defaults to UNDEFINED in Node (a code is only present once
   // set), NOT 0. The -p bundle guards `if (process.exitCode !== undefined) {
   // /* graceful shutdown */ return }` right after startup — a default of 0 makes
@@ -210,33 +227,65 @@ module.exports = {
   // accounting. Node returns cumulative {user,system} microseconds; zeros keep
   // any prev-relative delta well-defined.
   cpuUsage: () => ({ user: 0, system: 0 }),
-  // Event registry: signals/exit are M2+ concerns (tjs.signal exists per the
-  // gate-2 matrix); M1 records handlers without wiring delivery — loudly.
-  // process EventEmitter surface (Task 4 wall): the -p boot registers handlers
-  // and calls process.removeAllListeners('warning'). A real registry over
-  // __handlers backs on/once/off/removeListener/removeAllListeners/emit/listeners.
-  // DIVERGENCE: 'exit'/signal DELIVERY is not wired (tjs.exit does not run these,
-  // and signals aren't dispatched) — registration + manual emit work, but the
-  // runtime never auto-fires 'exit'/'SIGINT'/etc. The -p path registers then
-  // removes handlers (it does not depend on 'exit' delivery to flush output —
-  // its writes go straight through process.stdout.write/writeSync). Wire real
-  // delivery test-first if a future path depends on it.
+  // Event registry: process EventEmitter surface (Task 4 wall): the -p boot
+  // registers handlers and calls process.removeAllListeners('warning'). A real
+  // registry over __handlers backs on/once/off/removeListener/
+  // removeAllListeners/emit/listeners.
+  // Signal DELIVERY is wired: the first listener for a SIG* name arms a
+  // tjs.addSignalListener dispatcher (the API tty.cjs already uses for
+  // SIGWINCH; the uv_signal handle is unref'd inside tjs, so an armed signal
+  // never pins the event loop or blocks natural exit), and the last removal
+  // disarms it. The Ctrl-Z resume path depends on this: after
+  // process.kill(0,"SIGTSTP") stops the group, `fg` sends SIGCONT and the
+  // bundle's process.on("SIGCONT") handler must actually fire to re-enter raw
+  // mode and repaint. SIGKILL/SIGSTOP are uncatchable; arming failures fall
+  // back to registry-only (registration still works, delivery loudly absent
+  // under CLODE_SHIM_DEBUG). Characterized by test/node-shim-signals.test.cjs.
+  // DIVERGENCE: 'exit' delivery is still not wired (tjs.exit does not run
+  // handlers). The -p path registers then removes handlers (it does not depend
+  // on 'exit' delivery to flush output — its writes go straight through
+  // process.stdout.write/writeSync). Wire it test-first if a future path
+  // depends on it.
+  __wireSignal(name) {
+    if (typeof name !== 'string' || !/^SIG[A-Z0-9]+$/.test(name)) return;
+    if (name === 'SIGKILL' || name === 'SIGSTOP') return;   // uncatchable
+    const wired = (this.__sigWired ??= new Map());
+    if (wired.has(name)) return;
+    const dispatch = () => { this.emit(name, name); };       // node passes the signal name
+    try {
+      tjs.addSignalListener(name, dispatch);
+      wired.set(name, dispatch);
+    } catch (e) {
+      if (tjs.env.CLODE_SHIM_DEBUG) { try { writeErr(`[shim] signal ${name} not wireable: ${e?.message}\n`); } catch { /* ignore */ } }
+    }
+  },
+  __unwireSignalIfIdle(name) {
+    const wired = this.__sigWired;
+    if (!wired || !wired.has(name)) return;
+    if (this.listenerCount(name) > 0) return;
+    try { tjs.removeSignalListener(name, wired.get(name)); } catch { /* ignore */ }
+    wired.delete(name);
+  },
   on(name, fn) {
     if (tjs.env.CLODE_SHIM_DEBUG) { try { writeErr(`[shim] process.on(${name}) registered\n`); } catch { /* ignore */ } }
     (this.__handlers ??= []).push({ name, fn, once: false });
+    this.__wireSignal(name);
     return this;
   },
-  once(name, fn) { (this.__handlers ??= []).push({ name, fn, once: true }); return this; },
+  once(name, fn) { (this.__handlers ??= []).push({ name, fn, once: true }); this.__wireSignal(name); return this; },
   addListener(name, fn) { return this.on(name, fn); },
-  prependListener(name, fn) { (this.__handlers ??= []).unshift({ name, fn, once: false }); return this; },
+  prependListener(name, fn) { (this.__handlers ??= []).unshift({ name, fn, once: false }); this.__wireSignal(name); return this; },
   removeListener(name, fn) {
     if (this.__handlers) this.__handlers = this.__handlers.filter((h) => !(h.name === name && h.fn === fn));
+    this.__unwireSignalIfIdle(name);
     return this;
   },
   off(name, fn) { return this.removeListener(name, fn); },
   removeAllListeners(name) {
     if (!this.__handlers) return this;
     this.__handlers = name === undefined ? [] : this.__handlers.filter((h) => h.name !== name);
+    if (name === undefined) { for (const n of [...(this.__sigWired?.keys() ?? [])]) this.__unwireSignalIfIdle(n); }
+    else this.__unwireSignalIfIdle(name);
     return this;
   },
   listeners(name) { return (this.__handlers || []).filter((h) => h.name === name).map((h) => h.fn); },
