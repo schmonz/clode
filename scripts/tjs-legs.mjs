@@ -205,11 +205,13 @@ export function legsFor(tier) {
   throw new Error(`unknown tier '${tier}' (release | ci)`);
 }
 
-// CLI: tjs-legs.mjs <tier> [only-leg] [guest-version-override]
+// CLI: tjs-legs.mjs <tier> [only-leg] [guest-version-override] [macos-min-override]
 // The optional args back the tjs-legs.yml workflow_dispatch probe (the
 // version-floor walk): pick ONE leg out of the tier, optionally at an
-// overridden guest version. Probes never publish.
-export function cli(tier, only, versionOverride) {
+// overridden guest version — or, for the darwin floor walk, an overridden
+// deployment target (same bisect ritual, different version axis). Probes
+// never publish.
+export function cli(tier, only, versionOverride, macosMinOverride) {
   let legs = legsFor(tier);
   if (only) {
     legs = legs.filter((l) => l.leg === only);
@@ -217,10 +219,11 @@ export function cli(tier, only, versionOverride) {
     legs = legs.map((l) => ({ ...l, publish: false }));
   }
   if (versionOverride) legs = legs.map((l) => ({ ...l, 'guest-version': versionOverride }));
+  if (macosMinOverride) legs = legs.map((l) => ({ ...l, 'macos-min': macosMinOverride }));
   return legs;
 }
 
 import { pathToFileURL } from 'node:url';
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  console.log(JSON.stringify(cli(process.argv[2], process.argv[3], process.argv[4])));
+  console.log(JSON.stringify(cli(process.argv[2], process.argv[3], process.argv[4], process.argv[5])));
 }

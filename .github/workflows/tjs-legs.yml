@@ -38,6 +38,10 @@ on:
         description: "override the leg's guest version (floor-walk probe)"
         type: string
         default: ""
+      macos-min:
+        description: "override the leg's macOS deployment floor (darwin floor-walk probe)"
+        type: string
+        default: ""
 
 jobs:
   plan:
@@ -51,7 +55,7 @@ jobs:
         with:
           node-version-file: .tool-versions
       - id: legs
-        run: echo "legs=$(node scripts/tjs-legs.mjs '${{ inputs.tier }}' '${{ inputs.only }}' '${{ inputs.guest-version }}')" >> "$GITHUB_OUTPUT"
+        run: echo "legs=$(node scripts/tjs-legs.mjs '${{ inputs.tier }}' '${{ inputs.only }}' '${{ inputs.guest-version }}' '${{ inputs.macos-min }}')" >> "$GITHUB_OUTPUT"
 
   leg:
     needs: plan
