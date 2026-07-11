@@ -21,6 +21,24 @@ netbsd-mac68k 10.1 cdn 2026-07-06
 #   ramdisk) at installation/instkernel/; work kernel netbsd-GENERIC.gz at binary/kernel/;
 #   sets base+comp+etc+text at binary/sets/. sysinst driver never written — rung blocked at qemu boot (no NetBSD-capable q800 -kernel path); see results/gate3-netbsd-mac68k.md
 #   No m68k pkgsrc binary packages assumed; build with base comp.tgz gcc + quickjs-ng cmake.
+# quickjs-ng-canonical-le-bytecode.patch (2026-07-11, the ppc walk's Phase B and
+#   cross-fuse prerequisite 1): serialized bytecode is canonically LITTLE-ENDIAN.
+#   The pinned ng format was host-endian (bc_get/put_* = host memcpy, no endian bit
+#   in BC_VERSION; the JS_WRITE_OBJ_BSWAP "handled transparently" comment was a stub
+#   left from ng deleting Bellard's swap machinery). The patch: BE writers swap
+#   scalars (bc_put_u16/u32/u64, which also covers float64/bigint/wide-string paths)
+#   and walk the opcode stream LE-ward after atom conversion; BE readers mirror
+#   (swap operands to host BEFORE the existing atom-fixup walk — the walk already
+#   decoded every op via short_opcode_info, so the swap rides it); wide strings
+#   swapped on read; multi-byte-element typed arrays fail LOUDLY on BE (raw buffer
+#   payloads are not endian-portable; compiled module bytecode never contains them).
+#   bswap is an involution: ONE bc_bswap_op_operands helper serves both directions.
+#   LE hosts are provably byte-identical (spike/quickjs/bc-le-oracle.mjs: 6-item
+#   corpus incl. real clode-main bundles, sha-identical before/after; 583-test
+#   suite green). BE proof = the s390x leg booting SHIPPED LE arrays with regen
+#   disabled. RETIRES: the BE-regen path in build-tjs.mjs (sparc wall #4) and the
+#   native-regen prerequisite for BE cross-builds (unblocks darwin-ppc). Order-
+#   independent of cpool-align (verified both ways). Upstream candidate #1.
 # quickjs-ng patch stage MAINLINED 2026-07-11 (canonical-LE plan Task 1):
 #   build-tjs.mjs now applies quickjs-ng-*.patch to deps/quickjs in the source
 #   phase — previously these were guest-campaign patches applied by hand in the
