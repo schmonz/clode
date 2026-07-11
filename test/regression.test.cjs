@@ -8,7 +8,7 @@
 //
 //   2. PROVIDER PARITY (opt-in): the pipeline over REAL checksum-verified provider
 //      binaries vs a committed manifest (test/golden-shas.json) — the deeper "did
-//      upstream's format drift" check. Providers are present only after `clode update`;
+//      upstream's format drift" check. Providers are present only after `clode fetch`;
 //      absent versions SKIP (logged), so a bare environment stays green.
 //      Re-bless: node test/update-golden-shas.cjs
 //
@@ -37,7 +37,7 @@ console.error(`[regression] provider binaries present: ${present.join(', ') || '
 for (const v of VERSIONS) {
   test(`extract+inspect sha parity for ${v}`, (t) => {
     const bin = providerBin(v);
-    if (!bin) { t.skip(`no provider binary for ${v} (fetch with: clode update ${v})`); return; }
+    if (!bin) { t.skip(`no provider binary for ${v} (fetch with: clode fetch ${v})`); return; }
     const { cli_sha256, inspect_json_sha256 } = shasForBinary(bin);
     assert.strictEqual(cli_sha256, MANIFEST[v].cli_sha256, `cli_sha256 ${v}`);
     assert.strictEqual(inspect_json_sha256, MANIFEST[v].inspect_json_sha256, `inspect_json_sha256 ${v}`);

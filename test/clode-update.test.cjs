@@ -92,7 +92,7 @@ test('clode_update fetches the fixed platform into the provider store + current 
     assert.strictEqual(status, 0, 'update succeeded');
     assert.ok(fs.existsSync(path.join(fx.providers, V, 'claude')), 'provider binary landed');
     assert.strictEqual(fs.readFileSync(path.join(fx.providers, 'current'), 'utf8').trim(), V, 'current -> 9.9.9');
-    assert.match(err.text(), /updated to 9\.9\.9/, 'updated message');
+    assert.match(err.text(), /fetched 9\.9\.9/, 'updated message');
     // The fetched binary must byte-match the fixture (atomic temp->rename intact).
     assert.strictEqual(sha256Of(path.join(fx.providers, V, 'claude')), fx.sum);
     // chmod +x: the mode carries the execute bit.
@@ -152,7 +152,7 @@ test('platform not in manifest yields the exact error, return 1', async () => {
   } finally { cleanup(fx); }
 });
 
-test('clode update prints a warn-only signals digest and writes a snapshot', async () => {
+test('clode fetch prints a warn-only signals digest and writes a snapshot', async () => {
   const fx = fixture();
   const err = sink();
   try {
@@ -249,7 +249,7 @@ test('re-running update on the current version is a clean no-op', async () => {
     // Nothing changed: one clear line, no bogus "updated to" claim, and NO
     // signals digest diffing the version against itself.
     assert.match(out, /already up to date \(9\.9\.9\)/, 'clean up-to-date message');
-    assert.doesNotMatch(out, /updated to/, 'does not claim an update happened');
+    assert.doesNotMatch(out, /fetched/, 'does not claim a fetch happened');
     assert.doesNotMatch(out, /clode signals for/, 'no self-comparing digest');
     assert.strictEqual(fs.readFileSync(path.join(fx.providers, 'current'), 'utf8').trim(), V);
   } finally { cleanup(fx); }
@@ -267,7 +267,7 @@ test('switching back to an already-downloaded version still re-points + reports'
     assert.strictEqual(rc, 0);
     const out = err.text();
     assert.match(out, /already have 9\.9\.9/, 'reused the cached binary (no re-download)');
-    assert.match(out, /updated to 9\.9\.9/, 'a real re-point IS reported');
+    assert.match(out, /fetched 9\.9\.9/, 'a real re-point IS reported');
     assert.strictEqual(fs.readFileSync(path.join(fx.providers, 'current'), 'utf8').trim(), V);
   } finally { cleanup(fx); }
 });

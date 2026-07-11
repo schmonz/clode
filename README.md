@@ -32,7 +32,7 @@ npm-installed one, or point `CLODE_CLAUDE_BIN` at it.
 
 The classic mode still works: with Node >= 24 on `PATH`, `clode` launches
 the extracted bundle directly under your host Node, anywhere you'd run
-`claude`. `clode update` keeps it current, and a daily changelog watch
+`claude`. `clode fetch` keeps it current, and a daily changelog watch
 warns when an upstream change threatens the hack (`clode --clode-watch` on
 demand; `CLODE_NO_WATCH=1` off).
 

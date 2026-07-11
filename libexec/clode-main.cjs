@@ -10,7 +10,7 @@
 //   2. resolve SELF / HERE / LIBEXEC / CLODE_SELF_VERSION
 //   3. --clode-version         -> print "clode <VERSION>", exit 0
 //   4. --clode-help            -> print clodeHelp(), exit 0
-//   5. update [channel]        -> clodeUpdate, exit status
+//   5. fetch [channel]         -> clodeUpdate, exit status
 //   6. --clode-internal-update -> clodeUpdate, exit status
 //   6b. build [--out PATH]     -> clodeBuild (fuse a quaude), exit status
 //   7. --clode-watch           -> clodeWatch(manual), exit 0
@@ -39,7 +39,7 @@ function clodeHelp(version) {
 
 Usage:
   clode [clode-options] [claude args...]   launch Claude Code (args pass through)
-  clode update [channel|version]           fetch a fresh upstream provider, then exit
+  clode fetch [channel|version]            fetch a fresh upstream provider, then exit
   clode build [--out PATH]                 fuse a standalone quaude binary (the pinned
                                            tjs runtime + the compiled Claude Code
                                            bundle) on this machine; default ./quaude
@@ -173,8 +173,8 @@ async function main(argv, opts = {}) {
 
   const node = env.CLODE_NODE || process.execPath;
 
-  // 5. `clode update [channel]`: fetch a fresh provider, then exit — no Node floor.
-  if (first === 'update') {
+  // 5. `clode fetch [channel]`: fetch a fresh provider, then exit — no Node floor.
+  if (first === 'fetch') {
     const status = await update.clodeUpdate(args[1], { env, libexec: LIBEXEC, here: HERE, node });
     return process.exit(status);
   }
@@ -213,6 +213,7 @@ async function main(argv, opts = {}) {
   let bin = resolve.resolveClaudeBin({ env });
   if (bin == null) {
     process.stderr.write('clode: no Claude Code binary found.\n');
+    process.stderr.write("clode: run 'clode fetch [channel|version]' to fetch one, or\n");
     process.stderr.write('clode: install the provider package (e.g. claude-code), or set\n');
     process.stderr.write('clode: CLODE_CLAUDE_BIN=/path/to/claude\n');
     return process.exit(1);

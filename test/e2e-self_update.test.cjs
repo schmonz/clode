@@ -7,7 +7,7 @@ const { pathToFileURL } = require('node:url');
 const { sandbox, runClode, mkProvider } = require('./e2e.cjs');
 
 // test_self_update.bats setup(): a file:// releases fixture (channel files, a
-// platform provider binary, and a manifest with its sha256) that `clode update`
+// platform provider binary, and a manifest with its sha256) that `clode fetch`
 // fetches into the clode-owned provider store, PLUS an offline signals digest
 // (a local CHANGELOG.md fixture + a temp snapshot dir). The bats file unset
 // CLODE_STATE_ROOT and drove everything through XDG_DATA_HOME so its own per-test
@@ -55,11 +55,11 @@ function withReleases(t) {
   return { sbx, signalsDir };
 }
 
-test('clode update <channel> fetches and reports, then exits', (t) => {
+test('clode fetch <channel> fetches and reports, then exits', (t) => {
   const { sbx } = withReleases(t);
-  const r = runClode(sbx, ['update', 'stable'], { env: { CLODE_CLAUDE_BIN: '/nonexistent' } });
+  const r = runClode(sbx, ['fetch', 'stable'], { env: { CLODE_CLAUDE_BIN: '/nonexistent' } });
   assert.strictEqual(r.status, 0);
-  assert.match(r.output, /updated to 9\.9\.9/);
+  assert.match(r.output, /fetched 9\.9\.9/);
   assert.ok(fs.existsSync(path.join(providersDir(sbx), '9.9.9', 'claude')));
 });
 
@@ -71,9 +71,9 @@ test('clode --clode-internal-update <channel> fetches like update (non-interacti
   assert.ok(fs.existsSync(path.join(providersDir(sbx), '9.9.9', 'claude')));
 });
 
-test('clode update prints a warn-only signals digest and writes a snapshot', (t) => {
+test('clode fetch prints a warn-only signals digest and writes a snapshot', (t) => {
   const { sbx, signalsDir } = withReleases(t);
-  const r = runClode(sbx, ['update', 'stable'], { env: { CLODE_CLAUDE_BIN: '/nonexistent' } });
+  const r = runClode(sbx, ['fetch', 'stable'], { env: { CLODE_CLAUDE_BIN: '/nonexistent' } });
   assert.strictEqual(r.status, 0);                       // warn-only: never blocks
   assert.match(r.output, /clode signals for 9\.9\.9/);
   assert.match(r.output, /Upgraded the bundled Bun runtime/);   // HIGH release-note signal
@@ -82,12 +82,12 @@ test('clode update prints a warn-only signals digest and writes a snapshot', (t)
   assert.match(fs.readFileSync(snap, 'utf8'), /"version": "9\.9\.9"/);
 });
 
-test('after clode update, launching clode extracts the fetched provider', (t) => {
+test('after clode fetch, launching clode extracts the fetched provider', (t) => {
   const { sbx } = withReleases(t);
   const cache = path.join(sbx.dir, 'cache');
   // CLODE_CLAUDE_BIN is set inline for the update only (never persisted onto
   // sbx.env), so the plain launch resolves the fetched provider.
-  const u = runClode(sbx, ['update', 'stable'],
+  const u = runClode(sbx, ['fetch', 'stable'],
     { env: { CLODE_CACHE: cache, CLODE_CLAUDE_BIN: '/nonexistent' } });
   assert.strictEqual(u.status, 0);
   runClode(sbx, [], { env: { CLODE_CACHE: cache } });    // `|| true`: exit ignored

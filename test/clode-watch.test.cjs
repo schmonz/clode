@@ -273,7 +273,7 @@ test('clodeWatchBanner prints once for a HIGH notice that still applies', semver
   assert.match(t, /may affect running under Node/);
   // EXACT banner text (the deliberate silent-by-default exception).
   assert.strictEqual(t.trim(),
-    "clode: Claude Code 2.0.0 is available and may affect running under Node (run 'clode --clode-watch' for details, 'clode update' to take it).");
+    "clode: Claude Code 2.0.0 is available and may affect running under Node (run 'clode --clode-watch' for details, 'clode fetch' to take it).");
 });
 
 test('clodeWatchBanner is silent for a high=0 notice', semverOpts, () => {

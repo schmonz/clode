@@ -135,7 +135,7 @@ async function clodeWatch(manual, opts) {
   try { fs.mkdirSync(wd, { recursive: true }); } catch { return 0; }
   const notice = path.join(wd, 'watch-notice');
 
-  // Poll the SAME channel `clode update` would fetch: autoUpdatesChannel, else
+  // Poll the SAME channel `clode fetch` would fetch: autoUpdatesChannel, else
   // 'latest' (matching claude), against the resolved releases base (default URL
   // when CLODE_RELEASES_URL is unset). Keeps the nudge and the updater in step.
   const chan = resolveChannel(undefined, env);
@@ -187,7 +187,7 @@ async function clodeWatch(manual, opts) {
       if (digest) stderr.write(digest);
     }
     if (high === 1) {
-      stderr.write(`clode: ${latest} may affect running under Node (run 'clode update' to take it).\n`);
+      stderr.write(`clode: ${latest} may affect running under Node (run 'clode fetch' to take it).\n`);
     } else {
       stderr.write(`clode: ${latest} is available (no Node-impacting signals).\n`);
     }
@@ -216,7 +216,7 @@ function clodeWatchBanner(opts) {
   if (!cur) cur = n.current;
   if (!versionGt(n.latest, cur, { env, here })) return 0;
 
-  stderr.write(`clode: Claude Code ${n.latest} is available and may affect running under Node (run 'clode --clode-watch' for details, 'clode update' to take it).\n`);
+  stderr.write(`clode: Claude Code ${n.latest} is available and may affect running under Node (run 'clode --clode-watch' for details, 'clode fetch' to take it).\n`);
   return 0;
 }
 

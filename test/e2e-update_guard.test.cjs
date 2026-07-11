@@ -22,7 +22,7 @@ test('denies claude update with the clode-self command in the reason', () => {
   const r = runGuard('{"tool_name":"Bash","tool_input":{"command":"claude update"}}');
   const out = r.stdout || '';
   assert.match(out, /"permissionDecision":"deny"/);
-  assert.match(out, /\/opt\/clode\/bin\/clode update/);
+  assert.match(out, /\/opt\/clode\/bin\/clode fetch/);
 });
 
 test('denies claude upgrade even with surrounding tokens', () => {

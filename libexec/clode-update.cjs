@@ -280,7 +280,7 @@ async function clodeUpdate(channel, opts = {}) {
   // Atomically re-point current -> ver.
   setCurrent(env, ver);
 
-  err(`clode: updated to ${ver}. Relaunch clode to use it.`);
+  err(`clode: fetched ${ver} — now the active provider.`);
 
   // Warn-only post-update signals digest (never affects the exit status). Only
   // when the effective version actually changed — a same-version diff is noise.

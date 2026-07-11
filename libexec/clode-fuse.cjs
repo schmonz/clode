@@ -247,7 +247,7 @@ async function clodeBuild(args, opts) {
       let bin = resolve.resolveClaudeBin({ env });
       if (bin == null || !resolve.pathExists(bin)) {
         return fail(bin == null
-          ? 'build: no Claude Code binary found (install the provider package, or set CLODE_CLAUDE_BIN)'
+          ? "build: no Claude Code binary found — run 'clode fetch [channel|version]' to fetch one, or install the provider package, or set CLODE_CLAUDE_BIN"
           : `build: claude binary not found at '${bin}'`);
       }
       bin = resolve.followWrapper(bin);

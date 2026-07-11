@@ -17,7 +17,7 @@ process.stdin.on('end', () => {
         hookEventName: 'PreToolUse',
         permissionDecision: 'deny',
         permissionDecisionReason:
-          'clode manages updates. Run `' + self + ' update` instead — ' +
+          'clode manages updates. Run `' + self + ' fetch` instead — ' +
           '`claude update` targets a separate upstream install and will not update clode.',
       },
     }));
