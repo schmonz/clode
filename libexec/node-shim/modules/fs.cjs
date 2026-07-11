@@ -50,20 +50,28 @@ const constants = { F_OK: 0, X_OK: 1, W_OK: 2, R_OK: 4, ...O };
 
 // Translate an open() flags argument (numeric O_* bitmask OR a node string like
 // 'r'/'w'/'a'/'r+'/'w+') into the string flag FSS.open understands. FSS.open
-// (mod_fs_sync.c) accepts only 'r'|'w'|'a'|'r+'|'w+'; map the numeric bits onto
-// the closest one. O_NOFOLLOW is dropped (best-effort; FSS.open has no NOFOLLOW
-// variant — a documented, benign divergence for the Bash log file).
+// (mod_fs_sync.c) accepts 'r'|'w'|'a'|'r+'|'w+', each optionally suffixed 'n'
+// for O_NONBLOCK; map the numeric bits onto the closest one. O_NOFOLLOW is
+// dropped (best-effort; FSS.open has no NOFOLLOW variant — a documented,
+// benign divergence for the Bash log file). O_NONBLOCK is NOT droppable: the
+// bundle's drainStdin opens /dev/tty O_RDONLY|O_NONBLOCK and readSync()s until
+// EAGAIN — a blocking open/read there parks tjs's only thread in kernel read()
+// and wedges the whole engine (the /quit freeze). The 'n' suffix needs the
+// matching mod_fs_sync.c; an older engine rejects it with a LOUD
+// "fs_sync.open: bad flags" TypeError rather than silently blocking.
+// Characterized by test/node-shim-fs-nonblock.test.cjs.
 function flagsToString(flags) {
   if (typeof flags === 'string') return flags;
   if (typeof flags !== 'number') return 'r';
+  const nb = (flags & O.O_NONBLOCK) ? 'n' : '';
   const rw = flags & 0o3; // low 2 bits: RDONLY(0)/WRONLY(1)/RDWR(2)
   // FSS.open supports only 'r'|'w'|'a'|'r+'|'w+' (no 'a+') — collapse onto those.
-  if (flags & O.O_APPEND) return 'a';
-  if (flags & O.O_TRUNC) return (rw === O.O_RDWR) ? 'w+' : 'w';
-  if (flags & O.O_CREAT) return (rw === O.O_RDWR) ? 'w+' : 'w';
-  if (rw === O.O_RDWR) return 'r+';
-  if (rw === O.O_WRONLY) return 'w';
-  return 'r';
+  if (flags & O.O_APPEND) return 'a' + nb;
+  if (flags & O.O_TRUNC) return ((rw === O.O_RDWR) ? 'w+' : 'w') + nb;
+  if (flags & O.O_CREAT) return ((rw === O.O_RDWR) ? 'w+' : 'w') + nb;
+  if (rw === O.O_RDWR) return 'r+' + nb;
+  if (rw === O.O_WRONLY) return 'w' + nb;
+  return 'r' + nb;
 }
 
 // latin1/binary decode: 1 byte -> 1 code point (0..255). This is the

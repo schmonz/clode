@@ -12,10 +12,10 @@ index 60150c3..1d1a1e8 100644
      src/mod_os.c
 diff --git a/src/mod_fs_sync.c b/src/mod_fs_sync.c
 new file mode 100644
-index 0000000..e074d8c
+index 0000000..99e2d83
 --- /dev/null
 +++ b/src/mod_fs_sync.c
-@@ -0,0 +1,229 @@
+@@ -0,0 +1,247 @@
 +/* Synchronous fs primitives for CommonJS interop (node-shim).
 + * POSIX-direct, main-thread blocking by design. Exposed as the
 + * global `__tjs_fs_sync`. Upstream candidate:
@@ -38,6 +38,13 @@ index 0000000..e074d8c
 +    case EEXIST:  return "EEXIST";
 +    case EISDIR:  return "EISDIR";
 +    case ENOTDIR: return "ENOTDIR";
++    /* EAGAIN is load-bearing: nonblocking readers (drainStdin's /dev/tty
++     * sweep) loop until this exact code says "drained". EWOULDBLOCK may be
++     * the same value; the duplicate case would not compile where it is. */
++    case EAGAIN:  return "EAGAIN";
++#if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
++    case EWOULDBLOCK: return "EAGAIN";
++#endif
 +    case EINVAL:  return "EINVAL";
 +    case EBADF:   return "EBADF";
 +    case ELOOP:   return "ELOOP";
@@ -63,14 +70,25 @@ index 0000000..e074d8c
 +    const char *path = JS_ToCString(ctx, argv[0]);
 +    const char *flags = JS_ToCString(ctx, argv[1]);
 +    if (!path || !flags) return JS_EXCEPTION;
++    /* Optional trailing 'n' = O_NONBLOCK (e.g. "rn"). Node callers open ttys
++     * and FIFOs nonblocking and rely on read() raising EAGAIN instead of
++     * parking the (only) thread in the kernel. */
++    char base[4];
++    size_t flen = strlen(flags);
++    int nonblock = 0;
++    if (flen > 0 && flags[flen - 1] == 'n') { nonblock = 1; flen--; }
++    if (flen >= sizeof(base)) { JS_FreeCString(ctx, path); JS_FreeCString(ctx, flags);
++                                return JS_ThrowTypeError(ctx, "fs_sync.open: bad flags"); }
++    memcpy(base, flags, flen); base[flen] = '\0';  /* flen==0 -> base="" -> bad-flags throw below */
 +    int oflags;
-+    if (!strcmp(flags, "r")) oflags = O_RDONLY;
-+    else if (!strcmp(flags, "w")) oflags = O_WRONLY | O_CREAT | O_TRUNC;
-+    else if (!strcmp(flags, "a")) oflags = O_WRONLY | O_CREAT | O_APPEND;
-+    else if (!strcmp(flags, "r+")) oflags = O_RDWR;
-+    else if (!strcmp(flags, "w+")) oflags = O_RDWR | O_CREAT | O_TRUNC;
++    if (!strcmp(base, "r")) oflags = O_RDONLY;
++    else if (!strcmp(base, "w")) oflags = O_WRONLY | O_CREAT | O_TRUNC;
++    else if (!strcmp(base, "a")) oflags = O_WRONLY | O_CREAT | O_APPEND;
++    else if (!strcmp(base, "r+")) oflags = O_RDWR;
++    else if (!strcmp(base, "w+")) oflags = O_RDWR | O_CREAT | O_TRUNC;
 +    else { JS_FreeCString(ctx, path); JS_FreeCString(ctx, flags);
 +           return JS_ThrowTypeError(ctx, "fs_sync.open: bad flags"); }
++    if (nonblock) oflags |= O_NONBLOCK;
 +    int fd = open(path, oflags, 0666);
 +    JSValue ret = (fd < 0) ? throw_errno(ctx, "open", path) : JS_NewInt32(ctx, fd);
 +    JS_FreeCString(ctx, path); JS_FreeCString(ctx, flags);
