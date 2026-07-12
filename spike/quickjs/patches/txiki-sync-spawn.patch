@@ -36,7 +36,7 @@ new file mode 100644
 index 0000000..fe8320b
 --- /dev/null
 +++ b/src/mod_spawn_sync.c
-@@ -0,0 +1,449 @@
+@@ -0,0 +1,711 @@
 +/* Synchronous spawn primitive for CommonJS interop (node-shim).
 + * posix_spawn + poll()-drain, main-thread blocking by design. Exposed as
 + * the global `__tjs_spawn_sync`. Mirrors mod_fs_sync.c; upstream candidate. */
@@ -44,8 +44,10 @@ index 0000000..fe8320b
 +#include "utils.h"
 +#include <errno.h>
 +#include <fcntl.h>
++#if !defined(_WIN32)
 +#include <poll.h>
 +#include <signal.h>
++#endif
 +/* Tiger floor (spawn-model axis): posix_spawn is 10.5+; below it the
 + * fork/exec sibling further down serves instead. */
 +#if defined(__APPLE__)
@@ -53,7 +55,7 @@ index 0000000..fe8320b
 +# if MAC_OS_X_VERSION_MAX_ALLOWED >= 1050 && MAC_OS_X_VERSION_MIN_REQUIRED >= 1050
 +#  define TJS__SPAWN_SYNC_HAS_POSIX_SPAWN 1
 +# endif
-+#else
++#elif !defined(_WIN32)
 +# define TJS__SPAWN_SYNC_HAS_POSIX_SPAWN 1
 +#endif
 +#ifdef TJS__SPAWN_SYNC_HAS_POSIX_SPAWN
@@ -61,9 +63,15 @@ index 0000000..fe8320b
 +#endif
 +#include <stdlib.h>
 +#include <string.h>
++#if !defined(_WIN32)
 +#include <sys/wait.h>
-+#include <time.h>
 +#include <unistd.h>
++#endif
++#include <time.h>
++#if defined(_WIN32)
++#include <windows.h>
++#include <io.h>
++#endif
 +
 +/* ---- old-darwin floor compat (macOS 10.6 SDK/floor; darwin floor walk
 + * 2026-07-11). Three walls: clock_gettime is 10.12+, O_CLOEXEC is 10.7+,
@@ -101,7 +109,9 @@ index 0000000..fe8320b
 +# define TJS__SPAWN_SYNC_HAS_ADDCHDIR 1
 +#endif
 +
++#if !defined(_WIN32)
 +extern char **environ;
++#endif
 +
 +static const char *errno_code(int e) {
 +    switch (e) {
@@ -112,6 +122,7 @@ index 0000000..fe8320b
 +    case E2BIG:   return "E2BIG";
 +    case EINVAL:  return "EINVAL";
 +    case ESRCH:   return "ESRCH";
++    case EMFILE:  return "EMFILE";
 +    default:      return "EUNKNOWN";
 +    }
 +}
@@ -145,6 +156,7 @@ index 0000000..fe8320b
 +    return 0;
 +}
 +
++#if !defined(_WIN32)
 +static long now_ms(void) {
 +    struct timespec ts;
 +    clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -164,6 +176,7 @@ index 0000000..fe8320b
 +    }
 +    return 0;
 +}
++#endif  /* !_WIN32 */
 +
 +static char **js_string_array(JSContext *ctx, JSValueConst arr, int prepend_argc, const char *prepend) {
 +    /* Build a NULL-terminated char** from a JS string[]; if prepend != NULL it
@@ -190,6 +203,7 @@ index 0000000..fe8320b
 +    free(a);
 +}
 +
++#if !defined(_WIN32)
 +static JSValue js_spawn_sync(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
 +    const char *file = JS_ToCString(ctx, argv[0]);
 +    if (!file) return JS_EXCEPTION;
@@ -466,6 +480,254 @@ index 0000000..fe8320b
 +        return throw_errno(ctx, errno, "kill", NULL);
 +    return JS_UNDEFINED;
 +}
++#endif  /* !_WIN32 */
++
++#if defined(_WIN32)
++/* ---- Win32 sync spawn: CreateProcess + overlapped-pipe drain. The
++ * spawn-model axis's third value (posix_spawn / fork-exec / CreateProcess). ---- */
++
++/* argv -> one command line, MS C runtime quoting rules (quote args with
++ * spaces/tabs/quotes; escape inner quotes and the backslash run before one). */
++static void append_quoted(buf_t *cl, const char *arg) {
++    size_t len = strlen(arg);
++    int needs_quote = (len == 0) || strpbrk(arg, " \t\"") != NULL;
++    if (!needs_quote) { buf_append(cl, (const uint8_t *)arg, len, (size_t)-1); return; }
++    buf_append(cl, (const uint8_t *)"\"", 1, (size_t)-1);
++    for (size_t i = 0;; i++) {
++        size_t nbs = 0;
++        while (i < len && arg[i] == '\\') { nbs++; i++; }
++        if (i == len) {
++            for (size_t k = 0; k < nbs * 2; k++) buf_append(cl, (const uint8_t *)"\\", 1, (size_t)-1);
++            break;
++        } else if (arg[i] == '"') {
++            for (size_t k = 0; k < nbs * 2 + 1; k++) buf_append(cl, (const uint8_t *)"\\", 1, (size_t)-1);
++            buf_append(cl, (const uint8_t *)"\"", 1, (size_t)-1);
++        } else {
++            for (size_t k = 0; k < nbs; k++) buf_append(cl, (const uint8_t *)"\\", 1, (size_t)-1);
++            buf_append(cl, (const uint8_t *)&arg[i], 1, (size_t)-1);
++        }
++    }
++    buf_append(cl, (const uint8_t *)"\"", 1, (size_t)-1);
++}
++
++/* env string[] "K=V" -> the double-NUL-terminated block CreateProcess wants. */
++static char *build_env_block(char **cenv) {
++    if (!cenv) return NULL;
++    size_t total = 1;  /* trailing NUL of the block */
++    for (char **p = cenv; *p; p++) total += strlen(*p) + 1;
++    char *blk = malloc(total < 2 ? 2 : total);
++    if (!blk) return NULL;
++    size_t off = 0;
++    for (char **p = cenv; *p; p++) { size_t n = strlen(*p) + 1; memcpy(blk + off, *p, n); off += n; }
++    blk[off] = '\0';
++    return blk;
++}
++
++/* An overlapped-capable parent read-end: named-pipe server (overlapped, NOT
++ * inheritable) + client CreateFile write-end (inheritable, goes to the child).
++ * CreatePipe's anonymous pipes cannot do overlapped reads — hence this. */
++static volatile LONG g_pipe_serial = 0;
++static int make_overlapped_pipe(HANDLE *rd_out, HANDLE *wr_out) {
++    char name[128];
++    LONG serial = InterlockedIncrement(&g_pipe_serial);
++    snprintf(name, sizeof(name), "\\\\.\\pipe\\tjs_sync.%lu.%lu.%lu",
++             (unsigned long)GetCurrentProcessId(), (unsigned long)serial,
++             (unsigned long)GetTickCount());
++    SECURITY_ATTRIBUTES sa_srv;
++    sa_srv.nLength = sizeof(sa_srv); sa_srv.lpSecurityDescriptor = NULL; sa_srv.bInheritHandle = FALSE;
++    HANDLE rd = CreateNamedPipeA(name, PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED,
++                                 PIPE_TYPE_BYTE | PIPE_WAIT, 1, 65536, 65536, 0, &sa_srv);
++    if (rd == INVALID_HANDLE_VALUE) return -1;
++    SECURITY_ATTRIBUTES sa_cli;
++    sa_cli.nLength = sizeof(sa_cli); sa_cli.lpSecurityDescriptor = NULL; sa_cli.bInheritHandle = TRUE;
++    HANDLE wr = CreateFileA(name, GENERIC_WRITE, 0, &sa_cli, OPEN_EXISTING,
++                            FILE_ATTRIBUTE_NORMAL, NULL);
++    if (wr == INVALID_HANDLE_VALUE) { CloseHandle(rd); return -1; }
++    *rd_out = rd; *wr_out = wr;
++    return 0;
++}
++
++/* Complete a signaled overlapped read, append, re-arm. Sets *done at EOF /
++ * broken pipe; sets *overflow when the accumulator hits max_buffer. */
++static void spawn_win_complete(HANDLE h, OVERLAPPED *ov, uint8_t *b, buf_t *acc,
++                               int64_t max_buffer, int *pending, int *done, int *overflow) {
++    DWORD n = 0;
++    BOOL ok = GetOverlappedResult(h, ov, &n, FALSE);
++    if (ok && n > 0) {
++        buf_append(acc, b, n, (size_t)max_buffer);
++        if ((int64_t)acc->len >= max_buffer) { *overflow = 1; *pending = 0; *done = 1; return; }
++    } else if (!ok) {
++        DWORD e = GetLastError();
++        if (e == ERROR_IO_INCOMPLETE) return;  /* spurious: leave pending */
++        *pending = 0; *done = 1; return;        /* broken pipe / EOF / error */
++    } else { *pending = 0; *done = 1; return; } /* ok && n==0 -> EOF */
++    ResetEvent(ov->hEvent);
++    BOOL r = ReadFile(h, b, 65536, NULL, ov);
++    if (r || GetLastError() == ERROR_IO_PENDING) { *pending = 1; }
++    else { *pending = 0; *done = 1; }
++}
++
++static JSValue js_spawn_sync(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
++    const char *file = JS_ToCString(ctx, argv[0]);
++    if (!file) return JS_EXCEPTION;
++    JSValue opts = argv[2];
++
++    char **cargv = js_string_array(ctx, argv[1], 1, file);
++    if (!cargv) { JS_FreeCString(ctx, file); return JS_ThrowOutOfMemory(ctx); }
++    JSValue envv = JS_GetPropertyStr(ctx, opts, "env");
++    char **cenv = JS_IsArray(envv) ? js_string_array(ctx, envv, 0, NULL) : NULL;
++    JS_FreeValue(ctx, envv);
++
++    JSValue cwdv = JS_GetPropertyStr(ctx, opts, "cwd");
++    const char *cwd = JS_IsString(cwdv) ? JS_ToCString(ctx, cwdv) : NULL;
++
++    JSValue inv = JS_GetPropertyStr(ctx, opts, "input");
++    size_t input_len = 0;
++    uint8_t *input = (!JS_IsUndefined(inv) && !JS_IsNull(inv)) ? JS_GetArrayBuffer(ctx, &input_len, inv) : NULL;
++    int use_stdin = (input != NULL);
++
++    int64_t timeout_ms = 0, max_buffer = 1 << 24;
++    JSValue tv = JS_GetPropertyStr(ctx, opts, "timeoutMs");
++    if (JS_IsNumber(tv)) JS_ToInt64(ctx, &timeout_ms, tv);
++    JS_FreeValue(ctx, tv);
++    JSValue mv = JS_GetPropertyStr(ctx, opts, "maxBuffer");
++    if (JS_IsNumber(mv)) JS_ToInt64(ctx, &max_buffer, mv);
++    JS_FreeValue(ctx, mv);
++    if (timeout_ms < 0) timeout_ms = 0;
++    if (max_buffer <= 0) max_buffer = 1 << 24;
++
++    /* command line */
++    buf_t cl = {0};
++    for (char **p = cargv; *p; p++) { if (p != cargv) buf_append(&cl, (const uint8_t *)" ", 1, (size_t)-1); append_quoted(&cl, *p); }
++    buf_append(&cl, (const uint8_t *)"\0", 1, (size_t)-1);  /* CreateProcessA needs a writable NUL-terminated string */
++    char *envblk = build_env_block(cenv);
++
++    HANDLE out_rd = NULL, out_wr = NULL, err_rd = NULL, err_wr = NULL;
++    HANDLE in_rd = NULL, in_wr = NULL, nul_rd = INVALID_HANDLE_VALUE;
++    JSValue result;
++    if (make_overlapped_pipe(&out_rd, &out_wr) < 0 || make_overlapped_pipe(&err_rd, &err_wr) < 0) {
++        errno = EMFILE; result = throw_errno(ctx, errno, "pipe", file); goto cleanup;
++    }
++    if (use_stdin) {
++        SECURITY_ATTRIBUTES sa; sa.nLength = sizeof(sa); sa.lpSecurityDescriptor = NULL; sa.bInheritHandle = TRUE;
++        if (!CreatePipe(&in_rd, &in_wr, &sa, 0)) { errno = EMFILE; result = throw_errno(ctx, errno, "pipe", file); goto cleanup; }
++        SetHandleInformation(in_wr, HANDLE_FLAG_INHERIT, 0);
++    } else {
++        SECURITY_ATTRIBUTES sa; sa.nLength = sizeof(sa); sa.lpSecurityDescriptor = NULL; sa.bInheritHandle = TRUE;
++        nul_rd = CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ, &sa, OPEN_EXISTING, 0, NULL);
++    }
++
++    STARTUPINFOA si; ZeroMemory(&si, sizeof(si)); si.cb = sizeof(si);
++    si.dwFlags = STARTF_USESTDHANDLES;
++    si.hStdInput = use_stdin ? in_rd : nul_rd;
++    si.hStdOutput = out_wr;
++    si.hStdError = err_wr;
++    PROCESS_INFORMATION pi; ZeroMemory(&pi, sizeof(pi));
++    BOOL created = CreateProcessA(NULL, (char *)cl.data, NULL, NULL, TRUE,
++                                  0 /* ANSI env block, no special flags */, envblk, cwd, &si, &pi);
++    /* parent no longer needs the child-side ends */
++    if (out_wr) { CloseHandle(out_wr); out_wr = NULL; }
++    if (err_wr) { CloseHandle(err_wr); err_wr = NULL; }
++    if (in_rd) { CloseHandle(in_rd); in_rd = NULL; }
++    if (nul_rd != INVALID_HANDLE_VALUE) { CloseHandle(nul_rd); nul_rd = INVALID_HANDLE_VALUE; }
++    if (!created) {
++        DWORD e = GetLastError();
++        errno = (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? ENOENT : EINVAL;
++        result = throw_errno(ctx, errno, "spawn", file);
++        goto cleanup;
++    }
++
++    if (use_stdin) {
++        size_t off = 0;
++        while (off < input_len) {
++            DWORD wn = 0;
++            if (!WriteFile(in_wr, input + off, (DWORD)(input_len - off), &wn, NULL)) break;
++            off += wn;
++        }
++        CloseHandle(in_wr); in_wr = NULL;
++    }
++
++    buf_t ob = {0}, eb = {0};
++    uint8_t bo[65536], be[65536];
++    OVERLAPPED ov_out; ZeroMemory(&ov_out, sizeof(ov_out)); ov_out.hEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
++    OVERLAPPED ov_err; ZeroMemory(&ov_err, sizeof(ov_err)); ov_err.hEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
++    int out_pending = 0, out_done = 0, err_pending = 0, err_done = 0, overflow = 0, timed_out = 0, proc_exited = 0;
++    /* initial arm */
++    if (ReadFile(out_rd, bo, sizeof(bo), NULL, &ov_out) || GetLastError() == ERROR_IO_PENDING) out_pending = 1; else out_done = 1;
++    if (ReadFile(err_rd, be, sizeof(be), NULL, &ov_err) || GetLastError() == ERROR_IO_PENDING) err_pending = 1; else err_done = 1;
++
++    DWORD start = GetTickCount();
++    while (!out_done || !err_done) {
++        HANDLE waits[3]; int nwait = 0, idx_out = -1, idx_err = -1, idx_proc = -1;
++        if (out_pending) { idx_out = nwait; waits[nwait++] = ov_out.hEvent; }
++        if (err_pending) { idx_err = nwait; waits[nwait++] = ov_err.hEvent; }
++        if (!proc_exited) { idx_proc = nwait; waits[nwait++] = pi.hProcess; }
++        if (nwait == 0) break;
++        DWORD to = INFINITE;
++        if (timeout_ms > 0) {
++            DWORD el = GetTickCount() - start;
++            if (el >= (DWORD)timeout_ms) { timed_out = 1; break; }
++            to = (DWORD)timeout_ms - el;
++        }
++        DWORD w = WaitForMultipleObjects((DWORD)nwait, waits, FALSE, to);
++        if (w == WAIT_TIMEOUT) { timed_out = 1; break; }
++        int which = (int)(w - WAIT_OBJECT_0);
++        if (which == idx_out) spawn_win_complete(out_rd, &ov_out, bo, &ob, max_buffer, &out_pending, &out_done, &overflow);
++        else if (which == idx_err) spawn_win_complete(err_rd, &ov_err, be, &eb, max_buffer, &err_pending, &err_done, &overflow);
++        else if (which == idx_proc) proc_exited = 1;
++        if (overflow) { timed_out = 1; break; }
++    }
++    if (timed_out) TerminateProcess(pi.hProcess, 1);
++    CloseHandle(ov_out.hEvent); CloseHandle(ov_err.hEvent);
++
++    WaitForSingleObject(pi.hProcess, INFINITE);
++    DWORD code = 0; GetExitCodeProcess(pi.hProcess, &code);
++
++    result = JS_NewObject(ctx);
++    JS_DefinePropertyValueStr(ctx, result, "pid", JS_NewInt32(ctx, (int)pi.dwProcessId), JS_PROP_C_W_E);
++    JS_DefinePropertyValueStr(ctx, result, "status",
++        timed_out ? JS_NULL : JS_NewInt32(ctx, (int)code), JS_PROP_C_W_E);
++    JS_DefinePropertyValueStr(ctx, result, "signal", JS_NULL, JS_PROP_C_W_E);
++    JS_DefinePropertyValueStr(ctx, result, "stdout",
++        JS_NewArrayBufferCopy(ctx, ob.data ? ob.data : (const uint8_t *)"", ob.len), JS_PROP_C_W_E);
++    JS_DefinePropertyValueStr(ctx, result, "stderr",
++        JS_NewArrayBufferCopy(ctx, eb.data ? eb.data : (const uint8_t *)"", eb.len), JS_PROP_C_W_E);
++    JS_DefinePropertyValueStr(ctx, result, "timedOut", JS_NewBool(ctx, timed_out), JS_PROP_C_W_E);
++    free(ob.data); free(eb.data);
++    CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
++
++cleanup:
++    if (out_rd) CloseHandle(out_rd);
++    if (err_rd) CloseHandle(err_rd);
++    if (out_wr) CloseHandle(out_wr);
++    if (err_wr) CloseHandle(err_wr);
++    if (in_wr) CloseHandle(in_wr);
++    if (in_rd) CloseHandle(in_rd);
++    if (nul_rd != INVALID_HANDLE_VALUE) CloseHandle(nul_rd);
++    free(cl.data); free(envblk);
++    free_string_array(cargv); free_string_array(cenv);
++    if (cwd) JS_FreeCString(ctx, cwd);
++    JS_FreeValue(ctx, cwdv); JS_FreeValue(ctx, inv);
++    JS_FreeCString(ctx, file);
++    return result;
++}
++
++/* Minimal Win32 kill: signal 0 = liveness probe (OpenProcess), otherwise
++ * TerminateProcess. Node's process.kill on Windows terminates regardless of
++ * the named signal; ESRCH when the pid is gone. */
++static JSValue js_kill_sync(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
++    int32_t pid, sig = 0;
++    if (JS_ToInt32(ctx, &pid, argv[0])) return JS_EXCEPTION;
++    if (JS_IsNumber(argv[1])) { if (JS_ToInt32(ctx, &sig, argv[1])) return JS_EXCEPTION; }
++    HANDLE h = OpenProcess(sig == 0 ? PROCESS_QUERY_LIMITED_INFORMATION : PROCESS_TERMINATE,
++                           FALSE, (DWORD)pid);
++    if (!h) { errno = ESRCH; return throw_errno(ctx, errno, "kill", NULL); }
++    JSValue ret = JS_UNDEFINED;
++    if (sig != 0 && !TerminateProcess(h, 1)) { errno = EPERM; ret = throw_errno(ctx, errno, "kill", NULL); }
++    CloseHandle(h);
++    return ret;
++}
++#endif  /* _WIN32 */
 +
 +static const JSCFunctionListEntry spawn_sync_funcs[] = {
 +    JS_CFUNC_DEF("spawn", 3, js_spawn_sync),

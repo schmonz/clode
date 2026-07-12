@@ -35,3 +35,27 @@ test('fs-sync: mkdir arity guarded for _WIN32', () => {
 test('fs-sync: open forces O_BINARY on _WIN32', () => {
   assert.match(added, /oflags \|= O_BINARY/);
 });
+
+const spawnPatch = fs.readFileSync(
+  path.join(__dirname, '..', 'spike/quickjs/patches/txiki-sync-spawn.patch'), 'utf8');
+const spawnAdded = spawnPatch.split('\n').filter((l) => l.startsWith('+')).map((l) => l.slice(1)).join('\n');
+
+test('spawn-sync: POSIX includes guarded under !_WIN32', () => {
+  assert.match(spawnAdded, /#if !defined\(_WIN32\)[\s\S]*#include <poll\.h>/);
+});
+test('spawn-sync: Windows twin includes windows.h', () => {
+  assert.match(spawnAdded, /#if defined\(_WIN32\)[\s\S]*#include <windows\.h>/);
+});
+test('spawn-sync: Windows path uses CreateProcess', () => {
+  assert.match(spawnAdded, /CreateProcessA?\(/);
+});
+test('spawn-sync: Windows drain uses overlapped ReadFile + WaitForMultipleObjects', () => {
+  assert.match(spawnAdded, /FILE_FLAG_OVERLAPPED/);
+  assert.match(spawnAdded, /WaitForMultipleObjects/);
+});
+test('spawn-sync: missing exe maps to ENOENT', () => {
+  assert.match(spawnAdded, /ERROR_FILE_NOT_FOUND[\s\S]*ENOENT/);
+});
+test('spawn-sync: shared init exposes __tjs_spawn_sync (unguarded)', () => {
+  assert.match(spawnAdded, /__tjs_spawn_sync/);
+});
