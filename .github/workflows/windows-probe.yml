@@ -58,8 +58,11 @@ jobs:
         if: steps.build.outputs.build-status == '0'
         run: |
           set -euo pipefail
-          f=$(file -b "$GITHUB_WORKSPACE/.matrix/tjs-out/tjs" 2>/dev/null || file -b "$GITHUB_WORKSPACE/.matrix/tjs-out/tjs.exe")
-          echo "file: $f"
+          # `file` exits 0 (printing "cannot open") on a missing path, so
+          # resolve the built name first — mingw emits tjs.exe.
+          EXE="$GITHUB_WORKSPACE/.matrix/tjs-out/tjs.exe"
+          [ -f "$EXE" ] || EXE="$GITHUB_WORKSPACE/.matrix/tjs-out/tjs"
+          f=$(file -b "$EXE"); echo "file: $f"
           case "$f" in *PE32+*x86-64*|*"PE32+ executable"*) echo "PE shape ok" ;; *) echo "ERROR: not a PE32+ x86-64" >&2; exit 1 ;; esac
       - name: Boot under Wine — the success criterion
         if: steps.build.outputs.build-status == '0'
