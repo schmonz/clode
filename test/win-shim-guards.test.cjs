@@ -68,3 +68,10 @@ test('process.arch derives x64 on win32 (scoped, documented gap)', () => {
 test('process.execPath uses tjs.exePath', () => {
   assert.match(procSrc, /execPath:\s*tjs\.exePath/);
 });
+
+const urlSrc = fs.readFileSync(
+  path.join(__dirname, '..', 'libexec/node-shim/modules/url.cjs'), 'utf8');
+test('url.pathToFileURL handles Windows drive paths', () => {
+  assert.match(urlSrc, /replace\(\/\\\\\/g, ?'\/'\)/);
+  assert.match(urlSrc, /\[a-zA-Z\]:\$/);
+});

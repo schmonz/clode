@@ -7,7 +7,17 @@ function fileURLToPath(u) {
 }
 function pathToFileURL(p) {
   const path = require('node:path');
-  const abs = path.resolve(String(p));
+  let abs = path.resolve(String(p));
+  if (globalThis.process && process.platform === 'win32') {
+    // Windows: node emits file:///C:/dir/file. Convert backslashes to forward
+    // slashes, add a leading slash before the drive, and percent-encode each
+    // segment EXCEPT the drive-letter (its ':' must stay literal) and the '/'
+    // separators (never encoded — they're the join char).
+    abs = abs.replace(/\\/g, '/');
+    if (!abs.startsWith('/')) abs = '/' + abs;
+    const enc = abs.split('/').map((seg) => /^[a-zA-Z]:$/.test(seg) ? seg : encodeURIComponent(seg)).join('/');
+    return new URL('file://' + enc);
+  }
   return new URL('file://' + abs.split('/').map(encodeURIComponent).join('/'));
 }
 // ---- legacy url.parse/format/resolve/domainTo* -----------------------------
