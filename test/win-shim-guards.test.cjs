@@ -1,0 +1,42 @@
+'use strict';
+const { test } = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+
+const loaderSrc = fs.readFileSync(
+  path.join(__dirname, '..', 'libexec/node-shim/loader.cjs'), 'utf8');
+
+// Extract the marker-delimited path-helper block and eval it with a mocked
+// Windows `navigator` + `tjs`, so we test the REAL loader source in isolation.
+function loadP({ win, cwd }) {
+  const m = loaderSrc.match(/\/\* @loader-paths-start \*\/([\s\S]*?)\/\* @loader-paths-end \*\//);
+  assert.ok(m, 'loader-paths markers must exist');
+  const navigator = win ? { userAgentData: { platform: 'Windows' } } : { userAgentData: { platform: 'macOS' } };
+  const tjs = { cwd };
+  const sandbox = { navigator, tjs, module: { exports: {} } };
+  vm.createContext(sandbox);
+  vm.runInContext(m[1] + '\nmodule.exports = { P, IS_WIN };', sandbox);
+  return sandbox.module.exports;
+}
+
+test('loader P: Windows drive path is absolute and preserved', () => {
+  const { P, IS_WIN } = loadP({ win: true, cwd: 'C:\\proj' });
+  assert.equal(IS_WIN, true);
+  assert.equal(P.isAbs('C:\\Users\\x'), true);
+  assert.equal(P.isAbs('\\\\srv\\share'), true);
+  assert.equal(P.resolve('C:\\a\\b\\loader.cjs'), 'C:/a/b/loader.cjs');
+  assert.equal(P.dirname('C:\\a\\b\\loader.cjs'), 'C:/a/b');
+  assert.equal(P.join('C:\\a\\b', 'modules'), 'C:/a/b/modules');
+});
+
+test('loader P: POSIX behavior unchanged', () => {
+  const { P, IS_WIN } = loadP({ win: false, cwd: '/proj' });
+  assert.equal(IS_WIN, false);
+  assert.equal(P.isAbs('/a/b'), true);
+  assert.equal(P.isAbs('a/b'), false);
+  assert.equal(P.resolve('/a/b/loader.cjs'), '/a/b/loader.cjs');
+  assert.equal(P.dirname('/a/b/loader.cjs'), '/a/b');
+  assert.equal(P.join('/a/b', 'modules'), '/a/b/modules');
+});

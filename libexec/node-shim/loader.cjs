@@ -29,26 +29,49 @@
 const FSS = globalThis.__tjs_fs_sync;
 if (!FSS) { console.error('node-shim: this tjs lacks the sync-fs patch (run scripts/build-tjs.mjs)'); tjs.exit(2); }
 
-/* ---- tiny path helpers (self-contained; modules/path.cjs is the real one) */
+/* ---- tiny path helpers (self-contained; modules/path.cjs is the real one).
+ * Windows: the non-fused loader derives SHIM_DIR/entryAbs from real C:\ paths
+ * (tjs.args), so P must accept drive/UNC/backslash and preserve the drive.
+ * VFS paths (/quaude/...) never contain \ or a drive, so the fused path is
+ * untouched. process isn't built yet here — detect Windows via navigator, the
+ * same signal modules/process.cjs uses. Markers delimit the block for the
+ * extraction unit test (test/win-shim-guards.test.cjs). */
+/* @loader-paths-start */
+const IS_WIN = (() => {
+  const nav = (typeof navigator !== 'undefined' && navigator) || {};
+  const ua = (nav.userAgentData && nav.userAgentData.platform) || nav.platform || '';
+  return ua === 'Windows' || /^Win/.test(ua);
+})();
+const toSlash = IS_WIN ? (s) => String(s).replace(/\\/g, '/') : (s) => String(s);
 const P = {
-  isAbs: (p) => p.startsWith('/'),
-  dirname: (p) => { const s = p.replace(/\/+$/, ''); const i = s.lastIndexOf('/'); return i > 0 ? s.slice(0, i) : i === 0 ? '/' : '.'; },
-  join: (...a) => a.filter(Boolean).join('/').replace(/\/{2,}/g, '/'),
+  isAbs: (p) => IS_WIN
+    ? /^([a-zA-Z]:[\\/]|[\\/]{2}|[\\/])/.test(p)
+    : p.startsWith('/'),
+  dirname: (p) => { const s = toSlash(p).replace(/\/+$/, ''); const i = s.lastIndexOf('/'); return i > 0 ? s.slice(0, i) : i === 0 ? '/' : '.'; },
+  join: (...a) => toSlash(a.filter(Boolean).join('/')).replace(/\/{2,}/g, '/'),
   normalize(p) {
-    const abs = P.isAbs(p); const out = [];
+    p = toSlash(p);
+    let drive = '';
+    if (IS_WIN) { const m = /^([a-zA-Z]:)/.exec(p); if (m) { drive = m[1]; p = p.slice(drive.length); } }
+    const rooted = p.startsWith('/');
+    const abs = rooted || (!drive && P.isAbs(p));
+    const out = [];
     for (const seg of p.split('/')) {
       if (!seg || seg === '.') continue;
       if (seg === '..') { if (out.length && out[out.length - 1] !== '..') out.pop(); else if (!abs) out.push('..'); }
       else out.push(seg);
     }
-    return (abs ? '/' : '') + out.join('/') || (abs ? '/' : '.');
+    const body = out.join('/');
+    const root = drive + (rooted ? '/' : '');
+    return (root + body) || (root || (abs ? '/' : '.'));
   },
   resolve: (...a) => {
-    let r = tjs.cwd;
-    for (const s of a) r = P.isAbs(s) ? s : r + '/' + s;
+    let r = toSlash(tjs.cwd);
+    for (const s of a) r = P.isAbs(s) ? toSlash(s) : r + '/' + toSlash(s);
     return P.normalize(r);
   },
 };
+/* @loader-paths-end */
 
 /* ---- quaude VFS seam ---------------------------------------------------------
  * When this loader boots inside a FUSED quaude binary, the first-stage bootstrap
