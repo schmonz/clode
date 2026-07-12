@@ -1496,7 +1496,7 @@ function ensureEsbuild(dir) {
   const bin = path.join(dir, 'node_modules', '.bin', process.platform === 'win32' ? 'esbuild.cmd' : 'esbuild');
   if (!fs.existsSync(bin)) {
     console.log(`installing ${pin} into the txiki checkout for the JS bundle regen ...`);
-    run('npm', ['install', '--no-save', '--no-audit', '--no-fund', pin], { cwd: dir });
+    run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['install', '--no-save', '--no-audit', '--no-fund', pin], { cwd: dir });
   }
   return bin;
 }
