@@ -15,7 +15,7 @@ new file mode 100644
 index 0000000..99e2d83
 --- /dev/null
 +++ b/src/mod_fs_sync.c
-@@ -0,0 +1,247 @@
+@@ -0,0 +1,327 @@
 +/* Synchronous fs primitives for CommonJS interop (node-shim).
 + * POSIX-direct, main-thread blocking by design. Exposed as the
 + * global `__tjs_fs_sync`. Upstream candidate:
@@ -30,6 +30,22 @@ index 0000000..99e2d83
 +#include <string.h>
 +#include <sys/stat.h>
 +#include <unistd.h>
++
++/* ---- mingw/Win32 CRT gaps (Windows tjs port Phase 1) ---- */
++#if defined(_WIN32)
++#include <io.h>
++#include <direct.h>
++#include <windows.h>
++#endif
++#ifndef PATH_MAX
++#define PATH_MAX 4096
++#endif
++#ifndef O_NONBLOCK
++#define O_NONBLOCK 0
++#endif
++#ifndef S_ISLNK
++#define S_ISLNK(m) (0)
++#endif
 +
 +static const char *errno_code(int e) {
 +    switch (e) {
@@ -50,6 +66,7 @@ index 0000000..99e2d83
 +    case ELOOP:   return "ELOOP";
 +    case ENOSPC:  return "ENOSPC";
 +    case EPERM:   return "EPERM";
++    case ENOSYS:  return "ENOSYS";
 +    default:      return "EUNKNOWN";
 +    }
 +}
@@ -102,7 +119,19 @@ index 0000000..99e2d83
 +    if (len < 0 || len > 1 << 28) return JS_ThrowRangeError(ctx, "fs_sync.read: bad length");
 +    uint8_t *buf = js_malloc(ctx, len ? len : 1);
 +    if (!buf) return JS_EXCEPTION;
++#if defined(_WIN32)
++    ssize_t n;
++    if (pos >= 0) {
++        __int64 prev = _lseeki64(fd, 0, SEEK_CUR);
++        _lseeki64(fd, (__int64)pos, SEEK_SET);
++        n = _read(fd, buf, (unsigned)len);
++        if (prev >= 0) _lseeki64(fd, prev, SEEK_SET);
++    } else {
++        n = _read(fd, buf, (unsigned)len);
++    }
++#else
 +    ssize_t n = (pos >= 0) ? pread(fd, buf, len, (off_t)pos) : read(fd, buf, len);
++#endif
 +    if (n < 0) { int _e = errno; js_free(ctx, buf); errno = _e; return throw_errno(ctx, "read", NULL); }
 +    JSValue ab = JS_NewArrayBufferCopy(ctx, buf, n);
 +    js_free(ctx, buf);
@@ -115,7 +144,19 @@ index 0000000..99e2d83
 +    if (JS_ToInt64(ctx, &pos, argv[2])) return JS_EXCEPTION;
 +    buf = JS_GetArrayBuffer(ctx, &len, argv[1]);
 +    if (!buf) return JS_EXCEPTION;
++#if defined(_WIN32)
++    ssize_t n;
++    if (pos >= 0) {
++        __int64 prev = _lseeki64(fd, 0, SEEK_CUR);
++        _lseeki64(fd, (__int64)pos, SEEK_SET);
++        n = _write(fd, buf, (unsigned)len);
++        if (prev >= 0) _lseeki64(fd, prev, SEEK_SET);
++    } else {
++        n = _write(fd, buf, (unsigned)len);
++    }
++#else
 +    ssize_t n = (pos >= 0) ? pwrite(fd, buf, len, (off_t)pos) : write(fd, buf, len);
++#endif
 +    if (n < 0) return throw_errno(ctx, "write", NULL);
 +    return JS_NewInt64(ctx, n);
 +}
@@ -149,7 +190,11 @@ index 0000000..99e2d83
 +    return ret;                                                                          \
 +}
 +FSS_PATH_STAT(stat, stat)
++#if defined(_WIN32)
++FSS_PATH_STAT(lstat, stat)
++#else
 +FSS_PATH_STAT(lstat, lstat)
++#endif
 +
 +static JSValue js_fss_fstat(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
 +    int fd;
@@ -163,7 +208,11 @@ index 0000000..99e2d83
 +    const char *path = JS_ToCString(ctx, argv[0]);
 +    if (!path) return JS_EXCEPTION;
 +    char buf[PATH_MAX];
++#if defined(_WIN32)
++    char *r = _fullpath(buf, path, sizeof(buf));
++#else
 +    char *r = realpath(path, buf);
++#endif
 +    JSValue ret = r ? JS_NewString(ctx, buf) : throw_errno(ctx, "realpath", path);
 +    JS_FreeCString(ctx, path);
 +    return ret;
@@ -172,6 +221,12 @@ index 0000000..99e2d83
 +static JSValue js_fss_readlink(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
 +    const char *path = JS_ToCString(ctx, argv[0]);
 +    if (!path) return JS_EXCEPTION;
++#if defined(_WIN32)
++    errno = ENOSYS;
++    JSValue ret = throw_errno(ctx, "readlink", path);
++    JS_FreeCString(ctx, path);
++    return ret;
++#else
 +    char buf[PATH_MAX];
 +    ssize_t n = readlink(path, buf, sizeof(buf) - 1);
 +    JSValue ret;
@@ -179,6 +234,7 @@ index 0000000..99e2d83
 +    else { buf[n] = 0; ret = JS_NewString(ctx, buf); }
 +    JS_FreeCString(ctx, path);
 +    return ret;
++#endif
 +}
 +
 +static JSValue js_fss_readdir(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
@@ -219,7 +275,19 @@ index 0000000..99e2d83
 +    JS_FreeCString(ctx, p);                                                              \
 +    return ret;                                                                          \
 +}
++#if defined(_WIN32)
++static JSValue js_fss_mkdir(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
++    const char *p = JS_ToCString(ctx, argv[0]); int m;
++    if (!p) return JS_EXCEPTION;
++    if (JS_ToInt32(ctx, &m, argv[1])) { JS_FreeCString(ctx, p); return JS_EXCEPTION; }
++    (void)m;
++    JSValue ret = (_mkdir(p) < 0) ? throw_errno(ctx, "mkdir", p) : JS_UNDEFINED;
++    JS_FreeCString(ctx, p);
++    return ret;
++}
++#else
 +FSS_PATH_INT(mkdir, mkdir(p, (mode_t)m))
++#endif
 +FSS_PATH_INT(access, access(p, m))
 +FSS_PATH_INT(chmod, chmod(p, (mode_t)m))
 +
@@ -233,7 +301,19 @@ index 0000000..99e2d83
 +    return ret;                                                                          \
 +}
 +FSS_2PATH(rename, rename(a, b))
++#if defined(_WIN32)
++static JSValue js_fss_symlink(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
++    const char *a = JS_ToCString(ctx, argv[0]);
++    const char *b = JS_ToCString(ctx, argv[1]);
++    if (!a || !b) return JS_EXCEPTION;
++    errno = ENOSYS;
++    JSValue ret = throw_errno(ctx, "symlink", a);
++    JS_FreeCString(ctx, a); JS_FreeCString(ctx, b);
++    return ret;
++}
++#else
 +FSS_2PATH(symlink, symlink(a, b))
++#endif
 +
 +static const JSCFunctionListEntry fss_funcs[] = {
 +    JS_CFUNC_DEF("open", 2, js_fss_open),
