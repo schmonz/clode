@@ -70,7 +70,11 @@ jobs:
           set -uo pipefail
           EXE="$GITHUB_WORKSPACE/.matrix/tjs-out/tjs.exe"
           [ -f "$EXE" ] || EXE="$GITHUB_WORKSPACE/.matrix/tjs-out/tjs"
-          out=$(wine64 "$EXE" eval 'console.log(1+1)' 2>&1 | tr -d '\r')
+          # wine 9.0 (Ubuntu 26) unified the binary to `wine`; older had wine64.
+          WINE=$(command -v wine64 || command -v wine)
+          [ -n "$WINE" ] || { echo "no wine binary found" >&2; exit 1; }
+          echo "wine: $WINE"
+          out=$("$WINE" "$EXE" eval 'console.log(1+1)' 2>&1 | tr -d '\r')
           echo "wine boot: $out"
           echo "$out" | grep -qx 2 && echo "BOOT OK: tjs eval runs on Windows" || { echo "BOOT FAILED (see wall ledger)"; exit 1; }
       - name: Upload the PE (if built) for offline inspection
