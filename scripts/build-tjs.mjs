@@ -1345,6 +1345,23 @@ function fixupAtomicShim(dir) {
   console.log('fixup atomic-shim: applied');
 }
 
+function fixupStubSyncPrimitives(dir) {
+  // Phase-0 Windows survey (spec 2026-07-12): the sync primitives are
+  // POSIX-only (posix_spawn, <spawn.h>, poll) and cannot compile under
+  // mingw. When CLODE_TJS_STUB_SYNC=1, overwrite the two TUs with minimal
+  // stubs that still provide the init symbols vm.c calls (so the ENGINE
+  // links and boots `eval`). __tjs_fs_sync/__tjs_spawn_sync are absent —
+  // bare eval never touches them; Phase 1 writes the real Win32 bodies.
+  // Inert (returns immediately) for every other leg.
+  if (process.env.CLODE_TJS_STUB_SYNC !== '1') return;
+  const stub = (sym) => `#include "private.h"\n`
+    + `/* Phase-0 Windows stub (CLODE_TJS_STUB_SYNC); real impl is Phase 1. */\n`
+    + `void ${sym}(JSContext *ctx, JSValue ns) { (void)ctx; (void)ns; }\n`;
+  fs.writeFileSync(path.join(dir, 'src/mod_fs_sync.c'), stub('tjs__mod_fs_sync_init'));
+  fs.writeFileSync(path.join(dir, 'src/mod_spawn_sync.c'), stub('tjs__mod_spawn_sync_init'));
+  console.log('fixup stub-sync-primitives: applied (Phase-0 Windows stub)');
+}
+
 let tjsDir;
 if (buildOnly) {
   // The patched tree was constructed by a prior --source-only run (possibly on
@@ -1400,6 +1417,7 @@ if (buildOnly) {
   fixupPosixSocketLibprocOldDarwin(tjsDir);
   fixupLibuvCloseNocancelOldDarwin(tjsDir);
   fixupAtomicShim(tjsDir);
+  fixupStubSyncPrimitives(tjsDir);
 }
 
 // ---- big-endian bundle regen, part 1: esbuild the plain-JS intermediates ----
