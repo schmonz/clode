@@ -1345,6 +1345,30 @@ function fixupAtomicShim(dir) {
   console.log('fixup atomic-shim: applied');
 }
 
+function fixupLwsTxpacerPthreadWin(dir) {
+  // lws core-net/txpacer.c uses raw pthread inside #if LWS_HAVE_PTHREAD_H but
+  // never #include <pthread.h> — on POSIX a platform header supplies it; on
+  // mingw (winpthreads, the -posix variant) it does not, so pthread_t is an
+  // unknown type. winpthreads provides the symbols; just add the include.
+  // __MINGW32__-guarded → zero effect on every other leg (preprocessor drops
+  // it). lws upstream candidate.
+  const f = path.join(dir, 'deps/libwebsockets/lib/core-net/txpacer.c');
+  const src = fs.readFileSync(f, 'utf8');
+  if (src.includes('winpthreads: lws win platform header')) {
+    console.log('fixup lws-txpacer-pthread-win: already applied');
+    return;
+  }
+  const anchor = '#include "private-lib-core.h"\n\n#if defined(LWS_HAVE_PTHREAD_H)\n';
+  const inject = anchor + '#if defined(__MINGW32__)\n'
+    + '#include <pthread.h>  /* winpthreads: lws win platform header omits it */\n'
+    + '#endif\n';
+  if (!src.includes(anchor)) {
+    throw new Error('fixup lws-txpacer-pthread-win: anchor not found (lws changed under the pin — re-derive)');
+  }
+  fs.writeFileSync(f, src.replace(anchor, inject));
+  console.log('fixup lws-txpacer-pthread-win: applied');
+}
+
 function fixupStubSyncPrimitives(dir) {
   // Phase-0 Windows survey (spec 2026-07-12): the sync primitives are
   // POSIX-only (posix_spawn, <spawn.h>, poll) and cannot compile under
@@ -1417,6 +1441,7 @@ if (buildOnly) {
   fixupPosixSocketLibprocOldDarwin(tjsDir);
   fixupLibuvCloseNocancelOldDarwin(tjsDir);
   fixupAtomicShim(tjsDir);
+  fixupLwsTxpacerPthreadWin(tjsDir);
   fixupStubSyncPrimitives(tjsDir);
 }
 
