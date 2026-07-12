@@ -123,6 +123,23 @@ const LEGS = [
     'macos-min': '10.4', 'macos-sdk': '10.4u', 'macos-arch': 'i386',
     'no-exec': true, wasm: 'off', mimalloc: 'off', ffi: 'off',
     'soft-fail': true },
+  // darwin-ppc Tiger walk (spec 2026-07-11-darwin-ppc-walk): the ppc/BE32
+  // slice at floor 10.4 — third slice of the fat binary, first BE slice.
+  // CROSS-BUILT on ubuntu inside the digest-pinned VariantXYZ image (gcc
+  // 14.2 powerpc-apple-darwin8 + cctools-port ppc ld + baked 10.4u SDK) —
+  // the first darwin leg that is neither a mac runner nor a guest VM. No
+  // native SDK fetch (baked); no fuse/publish (no-exec: nothing in GHA
+  // execs ppc). ENGINE PROVEN on real Tiger PowerPC (run 29182716872):
+  // boots the LE bundles via canonical-LE, regexps/spawn/numerics correct.
+  // Walls cleared: __atomic_*_8 link (CLODE_TJS_ATOMIC_SHIM) + canonical-LE
+  // v5 regexp-endian discriminator. Publishable ppc BUILDER awaits
+  // cross-fuse (this leg + darwin-x86 are its consumers).
+  { leg: 'darwin-ppc', os: 'ubuntu-latest', publish: false,
+    'macos-min': '10.4', 'macos-arch': 'ppc',
+    // renovate: datasource=docker depName=ghcr.io/variantxyz/gcc-powerpc-apple-darwin8
+    'cross-image': 'ghcr.io/variantxyz/gcc-powerpc-apple-darwin8@sha256:a9013745ae4a696dc3a047675a85e7c43b9453cdb1e26d9a7ac9738587c1e198',
+    'no-exec': true, wasm: 'off', mimalloc: 'off', ffi: 'off',
+    'soft-fail': true },
   // ---- T1.5 extra musl arches. x86 execs natively on the x64 kernel (full
   // smoke); the rest are qemu-user with version-smoke like s390x. wasm off:
   // MAP_32BIT is x86_64/aarch64-only in musl headers — and 32-bit WAMR is
@@ -236,7 +253,7 @@ export function legsFor(tier) {
   }
   if (tier === 'ci') {
     return LEGS.filter((l) => l.ci).map(({ ci, publish, 'ci-os': ciOs, 'ci-guest-version': ciVer,
-      'macos-min': _mm, 'macos-sdk': _ms, 'macos-arch': _ma, 'no-exec': _nx, ...leg }) => {
+      'macos-min': _mm, 'macos-sdk': _ms, 'macos-arch': _ma, 'no-exec': _nx, 'cross-image': _ci, ...leg }) => {
       if (ciOs) leg.os = ciOs;                          // ci rides the newest runner/guest
       if (ciVer) leg['guest-version'] = ciVer;
       if (VM(leg)) leg['soft-fail'] = true;  // house rule: new-to-CI VM legs earn hard status

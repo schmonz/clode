@@ -110,15 +110,28 @@ test('darwin floor: macos-min/macos-sdk are release-only, native-darwin-only', (
   assert.strictEqual(dx['macos-sdk'], '10.6');
   for (const l of release) {
     if ('macos-min' in l || 'macos-sdk' in l || 'macos-arch' in l) {
-      assert.ok(!l['guest-platform'] && l.os.startsWith('macos'),
-        `${l.leg}: macos-* floor fields belong only on native darwin legs`);
+      // Native darwin legs run on a macos runner; the cross leg (darwin-ppc)
+      // builds a darwin target on ubuntu inside a toolchain image.
+      const nativeDarwin = !l['guest-platform'] && l.os.startsWith('macos');
+      assert.ok(nativeDarwin || 'cross-image' in l,
+        `${l.leg}: macos-* floor fields belong only on native-darwin or cross-image legs`);
     }
   }
   for (const l of ci) {
     assert.ok(!('macos-min' in l) && !('macos-sdk' in l)
-      && !('macos-arch' in l) && !('no-exec' in l),
-      `${l.leg}: ci tier must strip the macos-* floor fields and no-exec`);
+      && !('macos-arch' in l) && !('no-exec' in l) && !('cross-image' in l),
+      `${l.leg}: ci tier must strip the macos-* floor fields, no-exec, cross-image`);
   }
+});
+
+test('darwin-ppc cross leg: engine-only ppc at floor 10.4, digest-pinned image', () => {
+  const dp = legsFor('release').find((l) => l.leg === 'darwin-ppc');
+  assert.strictEqual(dp['macos-min'], '10.4');
+  assert.strictEqual(dp['macos-arch'], 'ppc');
+  assert.strictEqual(dp['no-exec'], true);
+  assert.strictEqual(dp.publish, false);
+  assert.ok(dp['cross-image'].includes('@sha256:'), 'cross-image must be digest-pinned');
+  assert.strictEqual(dp.os, 'ubuntu-latest');
 });
 
 test('darwin-x86 Tiger leg: engine-only i386 at floor 10.4', () => {

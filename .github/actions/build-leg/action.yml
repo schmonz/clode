@@ -50,6 +50,10 @@ inputs:
     description: "'true': the runner cannot execute the target output (darwin-x86 i386). Build + floor-gate + upload the BARE engine only — no exec smoke, no fuse, no builder artifact."
     required: false
     default: "false"
+  cross-image:
+    description: "Docker image (digest-pinned) providing a cross toolchain; when set, the engine is cross-built INSIDE it on an ubuntu runner (darwin-ppc). Implies no-exec."
+    required: false
+    default: ""
   static:
     description: "'true': fully-static tjs (musl legs) + verify with file/ldd"
     required: false
@@ -94,14 +98,18 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        case "${{ inputs.guest-platform }}" in
-          netbsd|freebsd|openbsd|dragonflybsd|omnios|solaris|midnightbsd|haiku|openindiana) exec=guest ;;
-          *) exec=host ;;
-        esac
+        if [ -n "${{ inputs.cross-image }}" ]; then
+          exec=cross   # cross-built inside a docker image on ubuntu (darwin-ppc)
+        else
+          case "${{ inputs.guest-platform }}" in
+            netbsd|freebsd|openbsd|dragonflybsd|omnios|solaris|midnightbsd|haiku|openindiana) exec=guest ;;
+            *) exec=host ;;
+          esac
+        fi
         echo "exec=$exec" >> "$GITHUB_OUTPUT"
-        if [ "$exec" = guest ]; then
-          # The VM backends sync the WORKSPACE (rsync) — the tjs tree and
-          # output must live inside it to cross the boundary.
+        if [ "$exec" = guest ] || [ "$exec" = cross ]; then
+          # The VM backends sync the WORKSPACE (rsync); the container build
+          # bind-mounts it. Either way the tjs tree + output must live inside.
           echo "vendor=$GITHUB_WORKSPACE/.matrix/tjs-vendor" >> "$GITHUB_OUTPUT"
           echo "out=$GITHUB_WORKSPACE/.matrix/tjs-out" >> "$GITHUB_OUTPUT"
         else
@@ -137,7 +145,7 @@ runs:
       uses: actions/cache@v6
       with:
         path: ${{ steps.mode.outputs.out }}
-        key: tjs-${{ inputs.leg }}-${{ steps.axes.outputs.image }}-${{ inputs.guest-version }}-${{ inputs.macos-min }}-${{ inputs.macos-sdk }}-${{ hashFiles('spike/quickjs/PINS.md', 'spike/quickjs/patches/*.patch', 'scripts/build-tjs.mjs') }}
+        key: tjs-${{ inputs.leg }}-${{ steps.axes.outputs.image }}-${{ inputs.guest-version }}-${{ inputs.macos-min }}-${{ inputs.macos-sdk }}-${{ inputs.cross-image }}-${{ hashFiles('spike/quickjs/PINS.md', 'spike/quickjs/patches/*.patch', 'scripts/build-tjs.mjs', 'scripts/darwin-ppc.toolchain.cmake', 'spike/quickjs/atomic-shim.c') }}
 
     - name: Construct the patched tjs tree from pins (host, native speed)
       if: steps.tjs-cache.outputs.cache-hit != 'true'
@@ -213,7 +221,7 @@ runs:
         echo "path=$DEST" >> "$GITHUB_OUTPUT"
 
     - name: Build tjs (native)
-      if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.guest-platform == 'native'
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.guest-platform == 'native' && inputs.cross-image == ''
       shell: bash
       env:
         CLODE_TJS_VENDOR: ${{ steps.mode.outputs.vendor }}
@@ -245,6 +253,32 @@ runs:
           export CLODE_TJS_MIMALLOC="${{ inputs.mimalloc }}"
           export CLODE_TJS_FFI="${{ inputs.ffi }}"
           node scripts/build-tjs.mjs --build-only
+
+    # Cross-build the engine inside the pinned toolchain image (darwin-ppc:
+    # first darwin leg that is neither a mac runner nor a guest VM). The
+    # source phase already ran on the ubuntu host (node + esbuild); the
+    # container only needs cmake + the cross toolchain (both baked) + node
+    # (apt) to drive build-tjs. The image bakes the 10.4u SDK, so no SDK
+    # fetch. Canonical-LE means the shipped LE bundles boot on the BE ppc
+    # target — no regen. CLODE_TJS_ATOMIC_SHIM: the 32-bit-BE __atomic_*_8
+    # link wall (proven on real ppc, run 29182716872).
+    - name: Build tjs (darwin cross container)
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.cross-image != ''
+      shell: bash
+      run: |
+        set -euo pipefail
+        docker pull "${{ inputs.cross-image }}"
+        docker run --rm -v "${{ github.workspace }}:/w" -w /w "${{ inputs.cross-image }}" bash -c '
+          set -euxo pipefail
+          if ! command -v node >/dev/null; then apt-get update -q && apt-get install -y -q nodejs >/dev/null 2>&1; fi
+          node --version
+          export CLODE_TJS_VENDOR=/w/.matrix/tjs-vendor
+          export CLODE_TJS_OUT=/w/.matrix/tjs-out
+          export CLODE_TJS_CROSS_FILE=/w/scripts/darwin-ppc.toolchain.cmake
+          export CLODE_TJS_ATOMIC_SHIM=1
+          export CLODE_TJS_WASM=${{ inputs.wasm }} CLODE_TJS_MIMALLOC=${{ inputs.mimalloc }} CLODE_TJS_FFI=${{ inputs.ffi }} CLODE_TJS_SMOKE=off
+          node scripts/build-tjs.mjs --build-only
+        '
 
     # A cache HIT skips the guest setup, so foreign-arch legs still need
     # fix-binary binfmt on the host to exec the cached tjs (fuse worker,
@@ -370,8 +404,25 @@ runs:
     # the floor-carrying cache key guarantees the cached tjs matches. On
     # no-exec legs there is no asset (nothing on the runner can exec the
     # target): gate the bare engine, plus its arch marker.
+    # Cross legs run on ubuntu (no host otool): gate the bare engine with the
+    # host `file` for the arch marker + the image's otool for the floor.
+    - name: Floor gate (cross container) — ppc Mach-O + LC_VERSION_MIN_MACOSX
+      if: inputs.macos-min != '' && inputs.cross-image != ''
+      shell: bash
+      run: |
+        set -euo pipefail
+        TJS="${{ steps.mode.outputs.out }}/tjs"
+        f=$(file -b "$TJS"); echo "file: $f"
+        case "$f" in *Mach-O*"${{ inputs.macos-arch }}"*) echo "arch marker ok" ;; *) echo "ERROR: not a ${{ inputs.macos-arch }} Mach-O" >&2; exit 1 ;; esac
+        LC=$(docker run --rm -v "${{ github.workspace }}:/w" -w /w "${{ inputs.cross-image }}" \
+          bash -c 'powerpc-apple-darwin8-otool -l .matrix/tjs-out/tjs')
+        echo "$LC" | grep -q LC_BUILD_VERSION && { echo "ERROR: LC_BUILD_VERSION present — pre-10.14 dyld needs LC_VERSION_MIN_MACOSX" >&2; exit 1; } || true
+        got=$(echo "$LC" | awk '/cmd LC_VERSION_MIN_MACOSX/{f=1} f && /version /{print $2; exit}')
+        [ "$got" = "${{ inputs.macos-min }}" ] || { echo "ERROR: LC_VERSION_MIN_MACOSX=$got, want ${{ inputs.macos-min }}" >&2; exit 1; }
+        echo "floor gate ok (cross): $f, LC_VERSION_MIN_MACOSX $got"
+
     - name: Floor gate — shipped asset carries LC_VERSION_MIN_MACOSX = the pinned floor
-      if: inputs.macos-min != '' && runner.os == 'macOS'
+      if: inputs.macos-min != '' && runner.os == 'macOS' && inputs.cross-image == ''
       shell: bash
       run: |
         set -euo pipefail
