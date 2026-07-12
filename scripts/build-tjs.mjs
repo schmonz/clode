@@ -1656,18 +1656,23 @@ if (forceRegen) {
 run('cmake', ['--build', path.join(tjsDir, 'build'), '-j', jobs]);
 
 fs.mkdirSync(outDir, { recursive: true });
-fs.copyFileSync(path.join(tjsDir, 'build/tjs'), path.join(outDir, 'tjs'));
-fs.chmodSync(path.join(outDir, 'tjs'), 0o755);
+// A Windows (mingw) cross target emits build/tjs.exe; keep the .exe suffix on
+// the output too (a Windows loader needs it, and clode reads its own exe by
+// name). Every other target emits build/tjs.
+const builtExe = fs.existsSync(path.join(tjsDir, 'build/tjs.exe'));
+const outName = builtExe ? 'tjs.exe' : 'tjs';
+fs.copyFileSync(path.join(tjsDir, builtExe ? 'build/tjs.exe' : 'build/tjs'), path.join(outDir, outName));
+fs.chmodSync(path.join(outDir, outName), 0o755);
 
 // CLODE_TJS_SMOKE=off: skip the exec smoke — for cross-target engines the
 // build host cannot execute the output (darwin-x86 i386: no runner and no
 // arm64 dev box can exec it; the floor gate + the real-hardware oracle
 // carry verification instead).
 if ((process.env.CLODE_TJS_SMOKE || 'on').toLowerCase() !== 'off') {
-  const smoke = runOut(path.join(outDir, 'tjs'),
+  const smoke = runOut(path.join(outDir, outName),
     ['eval', 'console.log(typeof __tjs_fs_sync === "object" ? "tjs-shim-ok" : "MISSING-SYNC-FS")']);
   if (smoke !== 'tjs-shim-ok') throw new Error(`smoke failed: ${smoke}`);
-  console.log(`built ${path.join(outDir, 'tjs')} (${smoke})`);
+  console.log(`built ${path.join(outDir, outName)} (${smoke})`);
 } else {
-  console.log(`built ${path.join(outDir, 'tjs')} (exec smoke SKIPPED: cross-target, CLODE_TJS_SMOKE=off)`);
+  console.log(`built ${path.join(outDir, outName)} (exec smoke SKIPPED: cross-target, CLODE_TJS_SMOKE=off)`);
 }
