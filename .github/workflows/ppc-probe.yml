@@ -54,6 +54,7 @@ jobs:
             export CLODE_TJS_VENDOR=/w/.matrix/tjs-vendor
             export CLODE_TJS_OUT=/w/.matrix/tjs-out
             export CLODE_TJS_CROSS_FILE=/w/scripts/darwin-ppc.toolchain.cmake
+            export CLODE_TJS_ATOMIC_SHIM=1
             export CLODE_TJS_WASM=off CLODE_TJS_MIMALLOC=off CLODE_TJS_FFI=off CLODE_TJS_SMOKE=off
             node scripts/build-tjs.mjs --build-only
           '

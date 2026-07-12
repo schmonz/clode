@@ -1320,6 +1320,31 @@ function fixupQjsHrtimeOldDarwin(dir) {
   console.log('fixup qjs-hrtime-old-darwin: applied');
 }
 
+function fixupAtomicShim(dir) {
+  // 32-bit targets without libatomic (darwin-ppc; sparc before it) need a
+  // fallback for the 8-byte __atomic_* calls quickjs-ng's Atomics builtin
+  // emits — the cross toolchain has none, so the final link fails with
+  // ___atomic_*_8 undefined. Add our pthread-mutex shim as a tjs source,
+  // guarded by the CLODE_ATOMIC_SHIM cmake option (build-tjs sets it from
+  // CLODE_TJS_ATOMIC_SHIM=1); a no-op for every native/64-bit leg.
+  const shimSrc = path.join(repo, 'spike/quickjs/atomic-shim.c');
+  fs.copyFileSync(shimSrc, path.join(dir, 'src/tjs-atomic-shim.c'));
+  const f = path.join(dir, 'CMakeLists.txt');
+  const src = fs.readFileSync(f, 'utf8');
+  if (src.includes('CLODE_ATOMIC_SHIM')) {
+    console.log('fixup atomic-shim: already applied');
+    return;
+  }
+  const anchor = 'add_executable(tjs-cli';
+  const inject = 'option(CLODE_ATOMIC_SHIM "Link a pthread __atomic_*_8 shim (32-bit targets lacking libatomic)" OFF)\n'
+    + 'if(CLODE_ATOMIC_SHIM)\n    target_sources(tjs PRIVATE src/tjs-atomic-shim.c)\nendif()\n\n';
+  if (!src.includes(anchor)) {
+    throw new Error('fixup atomic-shim: anchor not found (CMakeLists.txt changed under the pin — re-derive)');
+  }
+  fs.writeFileSync(f, src.replace(anchor, inject + anchor));
+  console.log('fixup atomic-shim: applied');
+}
+
 let tjsDir;
 if (buildOnly) {
   // The patched tree was constructed by a prior --source-only run (possibly on
@@ -1374,6 +1399,7 @@ if (buildOnly) {
   fixupLwsDarwinCSource(tjsDir);
   fixupPosixSocketLibprocOldDarwin(tjsDir);
   fixupLibuvCloseNocancelOldDarwin(tjsDir);
+  fixupAtomicShim(tjsDir);
 }
 
 // ---- big-endian bundle regen, part 1: esbuild the plain-JS intermediates ----
@@ -1483,6 +1509,10 @@ const crossFile = process.env.CLODE_TJS_CROSS_FILE || '';
 if (crossFile) {
   if (!fs.existsSync(crossFile)) throw new Error(`CLODE_TJS_CROSS_FILE: no file at ${crossFile}`);
   cmakeArgs.push(`-DCMAKE_TOOLCHAIN_FILE=${path.resolve(crossFile)}`);
+}
+// 32-bit targets lacking libatomic (ppc/sparc): link the __atomic_*_8 shim.
+if (process.env.CLODE_TJS_ATOMIC_SHIM === '1') {
+  cmakeArgs.push('-DCLODE_ATOMIC_SHIM=ON');
 }
 const macosMin = process.env.CLODE_TJS_MACOS_MIN || '';
 const macosSdk = process.env.CLODE_TJS_MACOS_SDK || '';
