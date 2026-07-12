@@ -237,6 +237,106 @@ jobs:
               test/node-shim-roundtrip.test.cjs \
               test/node-shim-agentic.test.cjs
 
+  # Phase 3B acceptance gate (windows-tjs-port spec): `clode build` cross-fuses
+  # a REAL quaude.exe (host worker -> mingw Windows tjs.exe base — Task 1's
+  # cross-fuse) and the fused binary self-loads its tx1k1 trailer + completes
+  # a turn on a real Windows kernel: the sub-project's proof AND (because the
+  # run job always installs the latest @anthropic-ai/claude-code) the standing
+  # Windows fuse bump gate. Same two-job split as windows-sync/windows-shim
+  # (cross-build on ubuntu, run on windows-latest — a job can't do both); the
+  # target build uses a scratch CLODE_TJS_VENDOR/CLODE_TJS_OUT (like those
+  # jobs) so it never re-patches the HOST build's tree.
+  windows-fuse-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .tool-versions
+      - name: Install runtime deps (fuse member inputs) + provider (fuse payload source)
+        run: |
+          npm ci
+          npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
+      - name: Install mingw-w64 (gcc-posix variant)
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+      - name: Build the HOST (linux) tjs — runs the fuse worker
+        run: |
+          set -euo pipefail
+          CLODE_TJS_WASM=off CLODE_TJS_MIMALLOC=off CLODE_TJS_FFI=off node scripts/build-tjs.mjs
+      - name: Source phase — construct the patched Windows tjs tree from pins
+        env:
+          CLODE_TJS_VENDOR: ${{ github.workspace }}/.matrix/tjs-vendor
+        run: node scripts/build-tjs.mjs --source-only
+      - name: Cross-build the TARGET (windows) tjs.exe — the fuse base
+        env:
+          CLODE_TJS_VENDOR: ${{ github.workspace }}/.matrix/tjs-vendor
+          CLODE_TJS_OUT: ${{ github.workspace }}/.matrix/tjs-out
+          CLODE_TJS_CROSS_FILE: ${{ github.workspace }}/scripts/windows-mingw.toolchain.cmake
+          CLODE_TJS_WASM: 'off'
+          CLODE_TJS_MIMALLOC: 'off'
+          CLODE_TJS_FFI: 'off'
+          CLODE_TJS_SMOKE: 'off'
+        run: node scripts/build-tjs.mjs --build-only
+      - name: Locate the built tjs.exe
+        id: find
+        run: |
+          set -euo pipefail
+          EXE="$GITHUB_WORKSPACE/.matrix/tjs-out/tjs.exe"
+          [ -f "$EXE" ] || EXE="$(find "$GITHUB_WORKSPACE/.matrix/tjs-out" -name tjs.exe -type f | head -1)"
+          [ -f "$EXE" ]
+          echo "exe=$EXE" >> "$GITHUB_OUTPUT"
+      - name: Cross-fuse quaude.exe (host worker -> windows base)
+        run: |
+          set -euo pipefail
+          HOST_TJS="$PWD/build/tjs/tjs"
+          [ -f "$HOST_TJS" ] || { echo "ERROR: no host tjs at $HOST_TJS" >&2; exit 1; }
+          WIN_TJS="${{ steps.find.outputs.exe }}"
+          PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f \( -name claude -o -name claude.exe \) -size +20M 2>/dev/null | head -1)"
+          if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
+          echo "host=$HOST_TJS target=$WIN_TJS provider=$PROV"
+          CLODE_TJS="$HOST_TJS" CLODE_TARGET_TEMPLATE="$WIN_TJS" CLODE_CLAUDE_BIN="$PROV" \
+            node bin/clode build --out "$PWD/quaude.exe"
+          test -f "$PWD/quaude.exe"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: quaude-windows-x64
+          path: quaude.exe
+          if-no-files-found: error
+
+  windows-fuse-run:
+    needs: windows-fuse-build
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .tool-versions
+      - uses: actions/download-artifact@v8
+        with:
+          name: quaude-windows-x64
+          path: .
+      - name: Install the Claude provider (npm, latest — the fuse bump gate)
+        run: npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
+      - name: Run the fused-quaude oracle on the real Windows kernel
+        run: |
+          set -euo pipefail
+          chmod +x ./quaude.exe || true
+          PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f \( -name claude -o -name claude.exe \) -size +20M 2>/dev/null | head -1)"
+          if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
+          echo "provider: $PROV"
+          CLODE_QUAUDE_EXE="$PWD/quaude.exe" CLODE_PROVIDER_BIN="$PROV" \
+            node --test --test-concurrency=1 test/quaude-fused-win.test.cjs
+
   test:
     strategy:
       fail-fast: false
