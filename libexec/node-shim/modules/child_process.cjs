@@ -73,16 +73,27 @@ const FSS = globalThis.__tjs_fs_sync;
 const TRACE = !!(globalThis.process && globalThis.process.env && globalThis.process.env.CLODE_SHIM_TRACE);
 function trace() { if (TRACE) { try { console.error('[cp]', ...arguments); } catch { /* best effort */ } } }
 
+const CP_IS_WIN = (globalThis.process && process.platform === 'win32');
+
 function resolveExe(file, env) {
-  // Node resolves a bare command via PATH for spawn; a path with a slash is used
-  // as-is. Mirror that so a bundle spawn of a bare tool behaves like node.
-  if (file.includes('/')) return file;
-  for (const dir of String((env && env.PATH) || process.env.PATH || '').split(':')) {
+  // Node resolves a bare command via PATH for spawn; a path with a separator is
+  // used as-is. On Windows the separator is \ or / or a drive letter, PATH is
+  // ;-delimited, and a bare name without an extension is probed against PATHEXT
+  // (.COM;.EXE;.BAT;.CMD;...) — this is how the bundle's Bash tool finds bash.exe.
+  if (file.includes('/') || (CP_IS_WIN && (file.includes('\\') || /^[a-zA-Z]:/.test(file)))) return file;
+  const delim = CP_IS_WIN ? ';' : ':';
+  const exts = CP_IS_WIN
+    ? String(process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
+    : [''];
+  const alreadyHasExt = CP_IS_WIN && /\.[^.\\/]+$/.test(file);
+  for (const dir of String((env && env.PATH) || process.env.PATH || '').split(delim)) {
     if (!dir) continue;
-    const p = path.join(dir, file);
-    try { if (FSS.stat(p).kind === 'file') return p; } catch { /* keep looking */ }
+    for (const ext of (alreadyHasExt ? [''] : exts)) {
+      const p = path.join(dir, file + ext);
+      try { if (FSS.stat(p).kind === 'file') return p; } catch { /* keep looking */ }
+    }
   }
-  return file; // let tjs.spawn surface the ENOENT
+  return file; // let spawn surface the ENOENT
 }
 
 // Map one node stdio slot value to what tjs.spawn accepts. 'inherit'/'ignore'
@@ -152,8 +163,15 @@ function signalName(n) {
 // run instead of ENOENT-ing on a literal "ps aux | grep …" path.
 function applyShell(file, args, opts) {
   if (!opts || !opts.shell) return { file, args };
-  const shellExe = typeof opts.shell === 'string' ? opts.shell : '/bin/sh';
   const command = (args && args.length) ? [file, ...args].join(' ') : String(file);
+  if (CP_IS_WIN) {
+    // Node's exact Windows convention: cmd.exe /d /s /c "<command>", with the
+    // /c payload passed VERBATIM (windowsVerbatimArguments) — NOT argv-quoted.
+    // The spawn primitive must not re-quote these args; see __winVerbatim below.
+    const comspec = (globalThis.process && process.env.ComSpec) || 'cmd.exe';
+    return { file: comspec, args: ['/d', '/s', '/c', command], __winVerbatim: true };
+  }
+  const shellExe = typeof opts.shell === 'string' ? opts.shell : '/bin/sh';
   return { file: shellExe, args: ['-c', command] };
 }
 
@@ -161,13 +179,16 @@ function spawn(file, args = [], opts = {}) {
   if (!Array.isArray(args)) { opts = args || {}; args = []; }
   const env = opts.env || undefined;
   const stdio = normStdio(opts);
-  ({ file, args } = applyShell(file, args, opts));
+  const shelled = applyShell(file, args, opts);
+  file = shelled.file; args = shelled.args;
+  const winVerbatim = !!shelled.__winVerbatim;
   trace('spawn', file, JSON.stringify(args), 'stdio=', JSON.stringify(stdio));
   const child = new EventEmitter();
   let proc;
   try {
     proc = tjs.spawn([resolveExe(file, env || process.env), ...args], {
       cwd: opts.cwd, env, stdin: stdio.stdin, stdout: stdio.stdout, stderr: stdio.stderr,
+      windowsVerbatimArguments: winVerbatim,
     });
   } catch (err) {
     // DIVERGENCE A: tjs.spawn throws sync on ENOENT; node emits the failure
@@ -292,7 +313,17 @@ function spawn(file, args = [], opts = {}) {
 // Node result shape; encoding/toString + PATH resolution + shell done here.
 function spawnSync(file, args = [], opts = {}) {
   if (!Array.isArray(args)) { opts = args || {}; args = []; }
-  ({ file, args } = applyShell(file, args, opts));
+  const shelled = applyShell(file, args, opts);
+  file = shelled.file; args = shelled.args;
+  const winVerbatim = !!shelled.__winVerbatim;
+  // KNOWN LIMITATION (Phase 2, JS-only scope): __tjs_spawn_sync's C primitive
+  // builds one command line via MS-argv quoting and has no verbatim mode, so
+  // the win shell-mode /c payload above is re-quoted by the C side rather than
+  // passed through raw. cmd.exe tolerates the argv-quoted /c argument for the
+  // common command shapes the bundle uses (no embedded quotes). If Task 5's
+  // Windows oracle hits a real cmd-quoting wall, escalate to a C
+  // windowsVerbatimArguments flag on __tjs_spawn_sync (a wall-walk item) —
+  // NOT a Phase-2 JS change.
   trace('spawnSync', file, JSON.stringify(args));
   if (typeof globalThis.__tjs_spawn_sync !== 'function') {
     throw new Error('node-shim: child_process.spawnSync needs __tjs_spawn_sync (rebuild tjs with txiki-sync-spawn.patch — see child_process.cjs header)');
@@ -379,11 +410,16 @@ function execFileSync(file, args, opts) {
   return r.stdout;
 }
 
-// exec/execSync run a command string through the shell, mirroring node.
+// exec/execSync run a command string through the shell, mirroring node
+// (cmd.exe on Windows via applyShell, /bin/sh on POSIX).
 function exec(command, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = {}; }
-  return execFile('/bin/sh', ['-c', command], opts || {}, cb);
+  const { file, args } = applyShell(command, [], { ...(opts || {}), shell: true });
+  return execFile(file, args, opts || {}, cb);
 }
-function execSync(command, opts) { return execFileSync('/bin/sh', ['-c', command], opts || {}); }
+function execSync(command, opts) {
+  const { file, args } = applyShell(command, [], { ...(opts || {}), shell: true });
+  return execFileSync(file, args, opts || {});
+}
 
 module.exports = { spawn, spawnSync, execFile, execFileSync, exec, execSync };

@@ -40,3 +40,18 @@ test('loader P: POSIX behavior unchanged', () => {
   assert.equal(P.dirname('/a/b/loader.cjs'), '/a/b');
   assert.equal(P.join('/a/b', 'modules'), '/a/b/modules');
 });
+
+const cpSrc = fs.readFileSync(
+  path.join(__dirname, '..', 'libexec/node-shim/modules/child_process.cjs'), 'utf8');
+
+test('child_process: resolveExe probes PATHEXT and splits PATH on ; on win32', () => {
+  assert.match(cpSrc, /PATHEXT/);
+  assert.match(cpSrc, /CP_IS_WIN\s*\?\s*';'\s*:\s*':'/);
+});
+test('child_process: shell-mode uses cmd.exe /d /s /c on win32', () => {
+  assert.match(cpSrc, /ComSpec/);
+  assert.match(cpSrc, /\/d \/s \/c/);
+});
+test('child_process: win32 exe-resolution recognizes backslash/drive as pathed', () => {
+  assert.match(cpSrc, /\[a-zA-Z\]:/);
+});
