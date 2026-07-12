@@ -143,7 +143,10 @@ async function clodeBuild(args, opts) {
     else if (args[i] === '--self') { self = true; }
     else return fail(`build: unknown argument '${args[i]}' (usage: clode build [--self] [--out PATH])`);
   }
-  out = path.resolve(out || (self ? 'clode-native' : 'quaude'));
+  // On Windows a bare `clode build` should yield a runnable .exe. An explicit
+  // --out is respected verbatim (the user owns that name); only the DEFAULT
+  // gains .exe. win32-guarded → POSIX default (quaude / clode-native) unchanged.
+  out = path.resolve(out || (self ? 'clode-native' : 'quaude') + (process.platform === 'win32' ? '.exe' : ''));
 
   const ROOT = path.resolve(opts.libexec, '..');
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-'));
@@ -178,7 +181,10 @@ async function clodeBuild(args, opts) {
     // (scripts/build-tjs.mjs).
     let template = env.CLODE_TJS || null;
     if (!template && vfs && vfs.manifest && vfs.manifest.role === 'builder' && vfs.files.get('template/tjs')) {
-      template = path.join(work, 'template-tjs');
+      // The embedded template is materialized to disk and spawned as the fuse
+      // WORKER. On Windows name it .exe so CreateProcess execs the PE
+      // unambiguously (a bare extension-less name is fragile). POSIX unchanged.
+      template = path.join(work, process.platform === 'win32' ? 'template-tjs.exe' : 'template-tjs');
       fs.writeFileSync(template, Buffer.from(vfs.files.get('template/tjs')));
       fs.chmodSync(template, 0o755);
       // Verify the materialized bytes against the manifest BEFORE exec'ing

@@ -87,3 +87,13 @@ test('fs.mkdirSync recursive walk is separator-aware (win32-safe)', () => {
   assert.match(fsSrc, /split\(\/\[\\\\\/\]\/\)/);
   assert.doesNotMatch(fsSrc, /path\.resolve\(p\)\.split\('\/'\)/);
 });
+
+const fuseSrc = fs.readFileSync(path.join(__dirname, '..', 'libexec/clode-fuse.cjs'), 'utf8');
+
+test('clode-fuse: default --out gets .exe on win32', () => {
+  // the default (no --out) appends .exe on Windows: quaude -> quaude.exe
+  assert.match(fuseSrc, /win32['"]?\s*\?\s*['"]\.exe['"]\s*:\s*['"]['"]/);
+});
+test('clode-fuse: the materialized template is named .exe on win32', () => {
+  assert.match(fuseSrc, /template-tjs\.exe/);
+});
