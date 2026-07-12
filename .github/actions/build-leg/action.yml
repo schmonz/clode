@@ -151,6 +151,13 @@ runs:
         path: ${{ steps.mode.outputs.out }}
         key: tjs-${{ inputs.leg }}-${{ steps.axes.outputs.image }}-${{ inputs.guest-version }}-${{ inputs.macos-min }}-${{ inputs.macos-sdk }}-${{ inputs.cross-image }}-${{ hashFiles('spike/quickjs/PINS.md', 'spike/quickjs/patches/*.patch', 'scripts/build-tjs.mjs', 'scripts/darwin-ppc.toolchain.cmake', 'scripts/windows-mingw.toolchain.cmake', 'spike/quickjs/atomic-shim.c') }}
 
+    - name: Force LF line endings for the tjs checkout (native Windows)
+      if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        git config --global core.autocrlf false
+        git config --global core.eol lf
+
     - name: Construct the patched tjs tree from pins (host, native speed)
       if: steps.tjs-cache.outputs.cache-hit != 'true'
       shell: bash
