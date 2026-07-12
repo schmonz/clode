@@ -25,6 +25,7 @@ const legsFor = (tier) => JSON.parse(
 
 // The OS an entry exercises: its guest platform, or the runner's own OS.
 const osOf = (l) => {
+  if (l.leg.startsWith('windows')) return 'windows';
   const gp = l['guest-platform'];
   if (gp && gp !== 'native') return gp === 'alpine' ? 'linux' : gp;
   return l.os.startsWith('macos') ? 'darwin' : 'linux';
@@ -46,6 +47,7 @@ test('release tier: every published leg is present (golden)', () => {
     'omnios-amd64', 'openbsd-amd64', 'openbsd-arm64',
     'openindiana-amd64',
     'solaris-amd64',
+    'windows-x64',
   ]);
 });
 
@@ -143,9 +145,15 @@ test('darwin-x86 Tiger leg: engine-only i386 at floor 10.4', () => {
   assert.strictEqual(dt['no-exec'], true);
   assert.strictEqual(dt.publish, false);
   // No GitHub runner can exec the output of a no-exec leg — fusing and
-  // publishing a builder is impossible there by definition.
+  // publishing a builder is impossible there by definition... UNLESS the fuse
+  // mechanism itself never execs the target. windows-x64 is the deliberate
+  // exception: it publishes via CLODE_TARGET_TEMPLATE (Phase-3B's append-only
+  // PE-trailer embedding), proven on real windows-latest without ever
+  // executing the cross-built .exe on the ubuntu builder host.
   for (const l of release) {
-    if (l['no-exec']) assert.ok(!l.publish, `${l.leg}: no-exec legs must not publish`);
+    if (l['no-exec'] && l.leg !== 'windows-x64') {
+      assert.ok(!l.publish, `${l.leg}: no-exec legs must not publish`);
+    }
   }
 });
 

@@ -140,6 +140,18 @@ const LEGS = [
     'cross-image': 'ghcr.io/variantxyz/gcc-powerpc-apple-darwin8@sha256:a9013745ae4a696dc3a047675a85e7c43b9453cdb1e26d9a7ac9738587c1e198',
     'no-exec': true, wasm: 'off', mimalloc: 'off', ffi: 'off',
     'soft-fail': true },
+  // windows-x64 (Phase 3A): the first Windows leg. Cross-built on ubuntu with
+  // mingw-w64 (CLODE_TJS_CROSS_FILE, a cross FILE not a docker cross-image);
+  // no-exec (the runner can't run a .exe). PUBLISHES a cross-fused clode.exe
+  // --self builder (CLODE_TARGET_TEMPLATE, the Phase-3B mechanism) — the
+  // self-contained Windows clode. Engine PROVEN on real windows-latest across
+  // Phases 1/2/3B (sync primitives, node-shim, PE-trailer self-load+PONG).
+  // Same wasm/mimalloc/ffi-off config as the other floor legs. soft-fail while
+  // it earns hard status.
+  { leg: 'windows-x64', os: 'ubuntu-latest', publish: true, ci: true,
+    'cross-file': 'scripts/windows-mingw.toolchain.cmake',
+    'no-exec': true, wasm: 'off', mimalloc: 'off', ffi: 'off',
+    'soft-fail': true },
   // ---- T1.5 extra musl arches. x86 execs natively on the x64 kernel (full
   // smoke); the rest are qemu-user with version-smoke like s390x. wasm off:
   // MAP_32BIT is x86_64/aarch64-only in musl headers — and 32-bit WAMR is
