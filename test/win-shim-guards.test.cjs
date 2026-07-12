@@ -55,3 +55,16 @@ test('child_process: shell-mode uses cmd.exe /d /s /c on win32', () => {
 test('child_process: win32 exe-resolution recognizes backslash/drive as pathed', () => {
   assert.match(cpSrc, /\[a-zA-Z\]:/);
 });
+
+const osSrc = fs.readFileSync(path.join(__dirname, '..', 'libexec/node-shim/modules/os.cjs'), 'utf8');
+const procSrc = fs.readFileSync(path.join(__dirname, '..', 'libexec/node-shim/modules/process.cjs'), 'utf8');
+
+test('os.EOL is CRLF on win32', () => {
+  assert.match(osSrc, /EOL:.*win32.*\\r\\n/);
+});
+test('process.arch derives x64 on win32 (scoped, documented gap)', () => {
+  assert.match(procSrc, /arch:.*win32.*x64/);
+});
+test('process.execPath uses tjs.exePath', () => {
+  assert.match(procSrc, /execPath:\s*tjs\.exePath/);
+});

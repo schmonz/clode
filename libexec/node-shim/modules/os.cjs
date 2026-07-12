@@ -94,7 +94,7 @@ module.exports = {
   totalmem: () => 0,
   getPriority: () => 0,
   setPriority: () => {},
-  EOL: '\n',
+  EOL: (globalThis.process && process.platform === 'win32') ? '\r\n' : '\n',
   // os.cpus()/availableParallelism (Task 4 wall): the -p boot sizes worker
   // parallelism from os.cpus().length. Backed by tjs.system.cpus, which is the
   // real per-core table in Node's exact shape (model/speed/times{user,nice,sys,

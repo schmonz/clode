@@ -180,7 +180,10 @@ module.exports = {
   }),
   platform: detectPlatform(),
   __detectPlatform: detectPlatform,   // test hook (node-shim-platform.test.cjs)
-  arch: 'arm64', // M4: derive per-platform (no arch signal in this tjs build; Q3 uname-facade item)
+  // arch: no arch signal in this tjs build (the Q3 uname-facade gap). Scope the
+  // value to the proven leg: x64 on the windows-x64 leg, arm64 elsewhere. A
+  // future win-arm64 leg must derive this honestly rather than inherit x64.
+  arch: (detectPlatform() === 'win32') ? 'x64' : 'arm64',
   pid: tjs.pid,
   execPath: tjs.exePath ?? '/tjs',
   cwd: () => tjs.cwd,
