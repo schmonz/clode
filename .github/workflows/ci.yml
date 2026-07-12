@@ -279,6 +279,7 @@ jobs:
         run: |
           set -euo pipefail
           PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f \( -name claude -o -name claude.exe \) -size +20M 2>/dev/null | head -1)"
+          if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found (PONG would silently skip)" >&2; exit 1; fi
           CLODE_QUAUDE_EXE="$PWD/quaude.exe" CLODE_PROVIDER_BIN="$PROV" \
             node --test --test-concurrency=1 test/quaude-fused-win.test.cjs
 
