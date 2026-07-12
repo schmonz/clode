@@ -411,15 +411,16 @@ function execFileSync(file, args, opts) {
 }
 
 // exec/execSync run a command string through the shell, mirroring node
-// (cmd.exe on Windows via applyShell, /bin/sh on POSIX).
+// (cmd.exe on Windows via applyShell, /bin/sh on POSIX). Delegate {shell:true}
+// through so applyShell runs ONCE inside spawn/spawnSync — pre-resolving here
+// and re-entering spawn drops the win __winVerbatim flag (cmd /c must stay
+// verbatim; a double applyShell re-quotes it).
 function exec(command, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = {}; }
-  const { file, args } = applyShell(command, [], { ...(opts || {}), shell: true });
-  return execFile(file, args, opts || {}, cb);
+  return execFile(command, [], { ...(opts || {}), shell: true }, cb);
 }
 function execSync(command, opts) {
-  const { file, args } = applyShell(command, [], { ...(opts || {}), shell: true });
-  return execFileSync(file, args, opts || {});
+  return execFileSync(command, [], { ...(opts || {}), shell: true });
 }
 
 module.exports = { spawn, spawnSync, execFile, execFileSync, exec, execSync };
