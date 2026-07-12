@@ -43,6 +43,7 @@ const IS_WIN = (() => {
   return ua === 'Windows' || /^Win/.test(ua);
 })();
 const toSlash = IS_WIN ? (s) => String(s).replace(/\\/g, '/') : (s) => String(s);
+const NODE_PATH_DELIM = IS_WIN ? ';' : ':';
 const P = {
   isAbs: (p) => IS_WIN
     ? /^([a-zA-Z]:[\\/]|[\\/]{2}|[\\/])/.test(p)
@@ -213,7 +214,7 @@ function resolveRequest(request, fromDir) {
   const roots = [];
   let dir = fromDir;
   for (;;) { roots.push(P.join(dir, 'node_modules')); const p = P.dirname(dir); if (p === dir) break; dir = p; }
-  for (const r of (globalThis.process && process.env.NODE_PATH || '').split(':')) if (r) roots.push(r);
+  for (const r of (globalThis.process && process.env.NODE_PATH || '').split(NODE_PATH_DELIM)) if (r) roots.push(r);
   for (const nm of roots) {
     const pkgDir = P.join(nm, request);
     const pkgJson = P.join(pkgDir, 'package.json');
@@ -425,7 +426,7 @@ function requireExt(name) {
   // Fused quaude: the ext-dep closure ships as archive members; consult it first
   // (the P.join fallback below embeds '..' segments __vfsGet cannot see).
   if (__QVFS) roots.push('/quaude/node_modules/' + name);
-  for (const r of (globalThis.process && process.env.NODE_PATH || '').split(':')) if (r) roots.push(P.join(r, name));
+  for (const r of (globalThis.process && process.env.NODE_PATH || '').split(NODE_PATH_DELIM)) if (r) roots.push(P.join(r, name));
   roots.push(P.join(P.dirname(SHIM_DIR), '..', '..', 'node_modules', name)); // repo node_modules fallback
   for (const pkgDir of roots) {
     const pkgJson = P.join(pkgDir, 'package.json');

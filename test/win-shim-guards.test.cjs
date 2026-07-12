@@ -75,3 +75,9 @@ test('url.pathToFileURL handles Windows drive paths', () => {
   assert.match(urlSrc, /replace\(\/\\\\\/g, ?'\/'\)/);
   assert.match(urlSrc, /\[a-zA-Z\]:\$/);
 });
+
+const loaderSrc2 = fs.readFileSync(path.join(__dirname, '..', 'libexec/node-shim/loader.cjs'), 'utf8');
+test('loader splits NODE_PATH on the platform delimiter', () => {
+  assert.match(loaderSrc2, /NODE_PATH_DELIM\s*=\s*IS_WIN\s*\?\s*';'\s*:\s*':'/);
+  assert.doesNotMatch(loaderSrc2, /process\.env\.NODE_PATH \|\| ''\)\.split\(':'\)/);
+});

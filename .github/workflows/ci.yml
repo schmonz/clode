@@ -212,6 +212,8 @@ jobs:
           path: .
       - name: Install the Claude provider (npm, latest — this is the bump gate)
         run: npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
+      - name: Install runtime deps (semver et al.) for the oracles
+        run: npm ci
       - name: Run the three tjs oracles on the real Windows kernel
         run: |
           set -euo pipefail
