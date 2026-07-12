@@ -152,6 +152,14 @@ const LEGS = [
     'cross-file': 'scripts/windows-mingw.toolchain.cmake',
     'no-exec': true, wasm: 'off', mimalloc: 'off', ffi: 'off',
     'soft-fail': true },
+  // windows-x64-native (native engine leg): compiles tjs.exe ON windows-latest
+  // with mingw-w64 (CLODE_TJS_WIN_MINGW — Ninja + hosted mingw gcc, NOT the
+  // ubuntu cross), so build-leg's exec=host machinery does build + fuse + PONG
+  // in ONE windows job (like darwin). The PROVING leg for "Windows as a normal
+  // leg"; the cross windows-x64 above still PUBLISHES. publish:false here.
+  // soft-fail while it earns hard status. Same wasm/mimalloc/ffi-off config.
+  { leg: 'windows-x64-native', os: 'windows-latest', ci: true, publish: false,
+    wasm: 'off', mimalloc: 'off', ffi: 'off', 'soft-fail': true },
   // ---- T1.5 extra musl arches. x86 execs natively on the x64 kernel (full
   // smoke); the rest are qemu-user with version-smoke like s390x. wasm off:
   // MAP_32BIT is x86_64/aarch64-only in musl headers — and 32-bit WAMR is
