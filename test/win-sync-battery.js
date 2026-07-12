@@ -15,14 +15,14 @@ function spawnEval(js, opts = {}) {
 
 // 1. small stdout
 {
-  const r = spawnEval(`tjs.stdout.write(new TextEncoder().encode('hello-stdout'))`);
+  const r = spawnEval(`__tjs_fs_sync.write(1, new TextEncoder().encode('hello-stdout').buffer, -1)`);
   check('spawn small stdout byte-exact', dec.decode(r.stdout) === 'hello-stdout', dec.decode(r.stdout));
   check('spawn small exit status 0', r.status === 0, String(r.status));
 }
 
 // 2. big interleaved stdout + stderr (>64KB each)
 {
-  const js = `const e=new TextEncoder();for(let i=0;i<5000;i++){tjs.stdout.write(e.encode('O'.repeat(20)));tjs.stderr.write(e.encode('E'.repeat(20)));}`;
+  const js = `const e=new TextEncoder();for(let i=0;i<5000;i++){__tjs_fs_sync.write(1,e.encode('O'.repeat(20)).buffer,-1);__tjs_fs_sync.write(2,e.encode('E'.repeat(20)).buffer,-1);}`;
   const r = spawnEval(js, { maxBuffer: 8 << 20 });
   const out = dec.decode(r.stdout), err = dec.decode(r.stderr);
   check('big stdout length', out.length === 100000, String(out.length));
@@ -33,7 +33,7 @@ function spawnEval(js, opts = {}) {
 
 // 3. exit-with-buffered (write then exit immediately — the drain race)
 {
-  const r = spawnEval(`tjs.stdout.write(new TextEncoder().encode('LASTBYTES'));tjs.exit(0)`);
+  const r = spawnEval(`__tjs_fs_sync.write(1,new TextEncoder().encode('LASTBYTES').buffer,-1);tjs.exit(0)`);
   check('exit-with-buffered captured', dec.decode(r.stdout) === 'LASTBYTES', dec.decode(r.stdout));
 }
 
@@ -41,7 +41,7 @@ function spawnEval(js, opts = {}) {
 {
   const payload = 'round-trip-42';
   const ab = enc.encode(payload).buffer;
-  const js = `const b=new Uint8Array(1024);const n=__tjs_fs_sync.read(0,1024,-1);tjs.stdout.write(new Uint8Array(n));`;
+  const js = `const ab=__tjs_fs_sync.read(0,1024,-1);__tjs_fs_sync.write(1,ab,-1);`;
   const r = spawnEval(js, { input: ab });
   check('stdin echo round-trip', dec.decode(r.stdout) === payload, dec.decode(r.stdout));
 }
