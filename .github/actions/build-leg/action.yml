@@ -224,6 +224,21 @@ runs:
         fi
         echo "path=$DEST" >> "$GITHUB_OUTPUT"
 
+    # Native Windows engine leg (windows-x64-native, Task 1): the hosted
+    # windows-latest runner has neither mingw-w64 gcc nor Ninja pre-installed
+    # for our use — install both via chocolatey (idempotent; skipped on a
+    # tjs cache hit). thread-model is echoed for the wall-walk: lws/txpacer
+    # needs POSIX threading (winpthreads), not the win32-threads variant.
+    - name: Install mingw-w64 + Ninja (native Windows engine leg)
+      if: runner.os == 'Windows' && steps.tjs-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        choco install -y mingw ninja 2>&1 | tail -5
+        gcc --version | head -1
+        gcc -v 2>&1 | grep -i "thread model" || true
+        ninja --version
+
     - name: Build tjs (native)
       if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.guest-platform == 'native' && inputs.cross-image == '' && inputs.cross-file == ''
       shell: bash
@@ -238,6 +253,7 @@ runs:
         CLODE_TJS_MACOS_SDK: ${{ steps.sdk.outputs.path }}
         CLODE_TJS_MACOS_ARCH: ${{ inputs.macos-arch }}
         CLODE_TJS_SMOKE: ${{ inputs.no-exec == 'true' && 'off' || 'on' }}
+        CLODE_TJS_WIN_MINGW: ${{ runner.os == 'Windows' && '1' || '' }}
       run: node scripts/build-tjs.mjs --build-only
 
     - name: Build tjs (alpine guest)
@@ -394,12 +410,28 @@ runs:
         case "$f" in *"statically linked"*|*"static-pie linked"*) ;; *) echo "ERROR: not statically linked" >&2; exit 1 ;; esac
         ldd "$TJS" 2>&1 | head -3 || true   # informational: expect "not a dynamic executable"
 
+    # Resolves the built tjs path once ahead of the exec=host steps below
+    # (.exe on native Windows, plain `tjs` everywhere else). Same shape as
+    # `steps.bare` further down, but that resolver runs AFTER these steps
+    # (it feeds the windows-x64 cross-fuse + the tail bare-tjs upload), so
+    # it can't be reused here without reordering it — this is a second,
+    # narrower resolver instead.
+    - name: Resolve the built tjs path (.exe on native Windows)
+      id: tjsbin
+      shell: bash
+      run: |
+        set -euo pipefail
+        P="${{ steps.mode.outputs.out }}/tjs"
+        [ -f "$P" ] || P="${{ steps.mode.outputs.out }}/tjs.exe"
+        [ -f "$P" ]
+        echo "path=$P" >> "$GITHUB_OUTPUT"
+
     - name: Host-exec smoke of the built tjs
       if: steps.mode.outputs.exec != 'guest' && inputs.no-exec != 'true'
       shell: bash
       run: |
         set -euo pipefail
-        out=$("${{ steps.mode.outputs.out }}/tjs" eval 'console.log(typeof __tjs_fs_sync === "object" ? "tjs-shim-ok" : "MISSING-SYNC-FS")')
+        out=$("${{ steps.tjsbin.outputs.path }}" eval 'console.log(typeof __tjs_fs_sync === "object" ? "tjs-shim-ok" : "MISSING-SYNC-FS")')
         echo "tjs host-exec: $out"
         [ "$out" = tjs-shim-ok ]
 
@@ -407,7 +439,7 @@ runs:
       if: steps.mode.outputs.exec != 'guest' && inputs.no-exec != 'true'
       shell: bash
       env:
-        CLODE_TJS: ${{ steps.mode.outputs.out }}/tjs
+        CLODE_TJS: ${{ steps.tjsbin.outputs.path }}
       run: node bin/clode build --self --out "${{ steps.name.outputs.asset }}"
 
     - name: Self-smoke --clode-version (host exec of the fused builder)
