@@ -8,8 +8,11 @@ set(CMAKE_SYSTEM_NAME Windows)
 set(CMAKE_SYSTEM_PROCESSOR x86_64)
 
 set(_triple x86_64-w64-mingw32)
-set(CMAKE_C_COMPILER ${_triple}-gcc)
-set(CMAKE_CXX_COMPILER ${_triple}-g++)
+# The POSIX threading variant (winpthreads-backed) — lws/txpacer and other
+# deps use raw pthread, which the WIN32 threading variant lacks. apt installs
+# both; the default alternative is win32, so name the -posix binaries here.
+set(CMAKE_C_COMPILER ${_triple}-gcc-posix)
+set(CMAKE_CXX_COMPILER ${_triple}-g++-posix)
 set(CMAKE_RC_COMPILER ${_triple}-windres)
 set(CMAKE_AR ${_triple}-ar CACHE FILEPATH "ar")
 set(CMAKE_RANLIB ${_triple}-ranlib CACHE FILEPATH "ranlib")
