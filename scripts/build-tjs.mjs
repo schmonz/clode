@@ -23,8 +23,9 @@ import { execFileSync } from 'node:child_process';
 import os, { cpus } from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const repo = path.resolve(new URL('..', import.meta.url).pathname);
+const repo = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const sourceOnly = process.argv.includes('--source-only');
 const buildOnly = process.argv.includes('--build-only');
 if (sourceOnly && buildOnly) throw new Error('pick one of --source-only / --build-only');
