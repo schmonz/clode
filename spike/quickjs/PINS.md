@@ -35,10 +35,25 @@ netbsd-mac68k 10.1 cdn 2026-07-06
 #   bswap is an involution: ONE bc_bswap_op_operands helper serves both directions.
 #   LE hosts are provably byte-identical (spike/quickjs/bc-le-oracle.mjs: 6-item
 #   corpus incl. real clode-main bundles, sha-identical before/after; 583-test
-#   suite green). BE proof = the s390x leg booting SHIPPED LE arrays with regen
-#   disabled. RETIRES: the BE-regen path in build-tjs.mjs (sparc wall #4) and the
-#   native-regen prerequisite for BE cross-builds (unblocks darwin-ppc). Order-
-#   independent of cpool-align (verified both ways). Upstream candidate #1.
+#   suite green). v2 (bc_csum): the checksum hashes u32 WORDS and its header field
+#   was raw host-order put_u32 — both now LE (else "checksum error" at first bundle
+#   load on BE; s390x run 29170436816). v4 (THE REGEXP WALL): compiled regexp
+#   literals are libregexp's OWN bytecode, stored as an opaque cpool STRING and
+#   handed to the interpreter's OP_regexp verbatim — never touched by the JS-bytecode
+#   swap, so LE-compiled lre bytecode read garbage on BE and abort()'d in
+#   lre_exec_backtrack (unknown opcode) via any string.replace(/re/,..). Fix
+#   js_re_recompile_le(): on BE, recompile from the pattern at the TWO cross-endian
+#   entry points (OP_regexp + JS_ReadRegExp); `new RegExp` keeps fresh-native
+#   bytecode. Must mask LRE_FLAG_NAMED_GROUPS (bit 7) from the header flags before
+#   recompiling — it is a COMPUTED output bit lre_compile re-derives, and feeding it
+#   back as input corrupts the compile. Debug saga: gdbstub-on-real-s390x named it
+#   (local force-BE bench CANNOT reproduce a BE-only abort — LP64 LE hardware — and
+#   silently served stale objects; soft-fail masked the inner failure for 2 rounds).
+#   BE PROOF (run 29179165193, 2026-07-12): the s390x leg BOOTS shipped LE arrays,
+#   FUSES a builder, regexps exec — all with regen disabled. RETIRES: the BE-regen
+#   path in build-tjs.mjs (sparc wall #4) and the native-regen prerequisite for BE
+#   cross-builds (unblocks darwin-ppc Phase B). Order-independent of cpool-align.
+#   Upstream candidate #1.
 # quickjs-ng patch stage MAINLINED 2026-07-11 (canonical-LE plan Task 1):
 #   build-tjs.mjs now applies quickjs-ng-*.patch to deps/quickjs in the source
 #   phase — previously these were guest-campaign patches applied by hand in the
