@@ -1345,6 +1345,32 @@ function fixupAtomicShim(dir) {
   console.log('fixup atomic-shim: applied');
 }
 
+function fixupTjsCmakeWinStack(dir) {
+  // txiki bumps tjs-cli's stack to 8MB with the MSVC linker flag /STACK:,
+  // guarded on plain WIN32 — but mingw's GNU ld rejects /STACK: (reads it as
+  // a filename). Make the WIN32 branch MSVC-vs-GNU aware. Inside the WIN32
+  // guard, so no effect on any non-Windows leg. txiki upstream candidate.
+  const f = path.join(dir, 'CMakeLists.txt');
+  const src = fs.readFileSync(f, 'utf8');
+  if (src.includes('-Wl,--stack,8388608')) {
+    console.log('fixup tjs-cmake-win-stack: already applied');
+    return;
+  }
+  const old = 'if(WIN32)\n    target_link_options(tjs-cli PRIVATE "/STACK:8388608")\nendif()';
+  const neu = 'if(WIN32)\n'
+    + '    if(MSVC)\n'
+    + '        target_link_options(tjs-cli PRIVATE "/STACK:8388608")\n'
+    + '    else()\n'
+    + '        target_link_options(tjs-cli PRIVATE -Wl,--stack,8388608)\n'
+    + '    endif()\n'
+    + 'endif()';
+  if (!src.includes(old)) {
+    throw new Error('fixup tjs-cmake-win-stack: anchor not found (CMakeLists changed under the pin — re-derive)');
+  }
+  fs.writeFileSync(f, src.replace(old, neu));
+  console.log('fixup tjs-cmake-win-stack: applied');
+}
+
 function fixupLwsTxpacerPthreadWin(dir) {
   // lws core-net/txpacer.c uses raw pthread inside #if LWS_HAVE_PTHREAD_H but
   // never #include <pthread.h> — on POSIX a platform header supplies it; on
@@ -1441,6 +1467,7 @@ if (buildOnly) {
   fixupPosixSocketLibprocOldDarwin(tjsDir);
   fixupLibuvCloseNocancelOldDarwin(tjsDir);
   fixupAtomicShim(tjsDir);
+  fixupTjsCmakeWinStack(tjsDir);
   fixupLwsTxpacerPthreadWin(tjsDir);
   fixupStubSyncPrimitives(tjsDir);
 }
