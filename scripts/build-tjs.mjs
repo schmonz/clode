@@ -1481,7 +1481,7 @@ function esbuildBundles(dir) {
   const one = (entry, out, extra) => {
     fs.mkdirSync(path.join(dir, path.dirname(out)), { recursive: true });
     run(esbuild, [path.join(dir, entry), '--bundle', `--outfile=${path.join(dir, out)}`,
-      '--external:tjs:*', ...extra, ...common], { cwd: dir });
+      '--external:tjs:*', ...extra, ...common], { cwd: dir, shell: process.platform === 'win32' });
   };
   for (const b of JS_BUNDLES) one(b.entry, b.out, b.extra);
   for (const f of stdlib) {
@@ -1496,7 +1496,7 @@ function ensureEsbuild(dir) {
   const bin = path.join(dir, 'node_modules', '.bin', process.platform === 'win32' ? 'esbuild.cmd' : 'esbuild');
   if (!fs.existsSync(bin)) {
     console.log(`installing ${pin} into the txiki checkout for the JS bundle regen ...`);
-    run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['install', '--no-save', '--no-audit', '--no-fund', pin], { cwd: dir });
+    run('npm', ['install', '--no-save', '--no-audit', '--no-fund', pin], { cwd: dir, shell: process.platform === 'win32' });
   }
   return bin;
 }
