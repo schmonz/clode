@@ -177,7 +177,7 @@ jobs:
   darwin-universal:
     needs: leg
     if: ${{ !cancelled() }}
-    runs-on: macos-14
+    runs-on: macos-26
     continue-on-error: true
     timeout-minutes: 30
     permissions:
