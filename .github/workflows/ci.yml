@@ -261,6 +261,26 @@ jobs:
           chmod +x "$EXE" || true
           "$EXE" --clode-version
           "$EXE" --clode-help | head -20
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .tool-versions
+      - name: Install the Claude provider (npm, latest — native-build bump gate)
+        run: npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
+      - name: NATIVE BUILD — the published clode.exe builds a quaude.exe on Windows
+        run: |
+          set -euo pipefail
+          EXE="$(find dl -name '*.exe' -type f | head -1)"
+          PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f \( -name claude -o -name claude.exe \) -size +20M 2>/dev/null | head -1)"
+          if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
+          echo "builder: $EXE  provider: $PROV"
+          CLODE_CLAUDE_BIN="$PROV" "$EXE" build --out "$PWD/quaude.exe"
+          test -f "$PWD/quaude.exe"
+      - name: PONG — the natively-built quaude.exe completes a wire turn
+        run: |
+          set -euo pipefail
+          PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f \( -name claude -o -name claude.exe \) -size +20M 2>/dev/null | head -1)"
+          CLODE_QUAUDE_EXE="$PWD/quaude.exe" CLODE_PROVIDER_BIN="$PROV" \
+            node --test --test-concurrency=1 test/quaude-fused-win.test.cjs
 
   test:
     strategy:
