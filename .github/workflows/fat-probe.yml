@@ -1,0 +1,99 @@
+name: fat-probe
+
+# Plumbing validation for the four-arch macOS universal binary (release.yml's
+# darwin-universal job). Builds ONLY the four fast darwin legs (no slow TCG
+# legs — those gate the real release's needs:leg), then runs the SAME lipo +
+# fat-fuse + gate. Dispatch-only; deleted once the release integration is
+# proven (like ppc-probe before it). The leg configs come from the manifest
+# (node scripts/tjs-legs.mjs) — no duplicated recipe.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      legs: ${{ steps.legs.outputs.legs }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .tool-versions
+      - id: legs
+        run: echo "legs=$(node scripts/tjs-legs.mjs release | node -e 'const l=JSON.parse(require("fs").readFileSync(0));console.log(JSON.stringify(l.filter(x=>x.leg.startsWith("darwin-"))))')" >> "$GITHUB_OUTPUT"
+
+  leg:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.legs) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .tool-versions
+      - uses: ./.github/actions/build-leg
+        with:
+          leg: ${{ matrix.leg }}
+          macos-min: ${{ matrix.macos-min || '' }}
+          macos-sdk: ${{ matrix.macos-sdk || '' }}
+          macos-arch: ${{ matrix.macos-arch || '' }}
+          no-exec: ${{ matrix.no-exec && 'true' || 'false' }}
+          cross-image: ${{ matrix.cross-image || '' }}
+          wasm: ${{ matrix.wasm || 'on' }}
+          mimalloc: ${{ matrix.mimalloc || 'on' }}
+          ffi: ${{ matrix.ffi || 'on' }}
+          smoke: version
+          attest: 'false'
+          publish: 'false'
+
+  fat:
+    needs: leg
+    if: ${{ !cancelled() }}
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .tool-versions
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: tjs-darwin-*
+          path: ${{ runner.temp }}/slices
+      - name: lipo + gate the four-arch fat engine
+        run: |
+          set -euo pipefail
+          S="${{ runner.temp }}/slices"
+          FAT="${{ runner.temp }}/tjs-darwin-universal"
+          lipo -create -output "$FAT" \
+            "$S/tjs-darwin-arm64/tjs" "$S/tjs-darwin-x64/tjs" \
+            "$S/tjs-darwin-x86/tjs" "$S/tjs-darwin-ppc/tjs"
+          chmod +x "$FAT"; info=$(lipo -info "$FAT"); echo "$info"
+          for a in ppc i386 x86_64 arm64; do case "$info" in *"$a"*) ;; *) echo "MISSING $a" >&2; exit 1 ;; esac; done
+          for a in ppc i386 x86_64 arm64; do
+            v=$(otool -arch "$a" -l "$FAT" | awk '/LC_VERSION_MIN_MACOSX/{m=1} m&&/version/{print $2; exit}')
+            echo "  $a floor: ${v:-<build-version>}"
+          done
+          echo "FAT=$FAT" >> "$GITHUB_ENV"
+      - name: fat-fuse a universal builder + smoke the arm64 slice
+        env:
+          CLODE_TJS: ${{ env.FAT }}
+        run: |
+          set -euo pipefail
+          npm ci
+          node scripts/build-sea.mjs --bundle-only
+          node bin/clode build --self --out clode-darwin-universal
+          lipo -info clode-darwin-universal
+          ./clode-darwin-universal --clode-version
+      - uses: actions/upload-artifact@v7
+        with:
+          name: clode-darwin-universal-probe
+          path: clode-darwin-universal
+          if-no-files-found: error

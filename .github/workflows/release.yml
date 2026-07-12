@@ -166,11 +166,92 @@ jobs:
           FILES=$(ls test/node-shim-*.test.cjs | grep -vE "$EXCLUDE")
           node --test --test-concurrency=1 $FILES test/url-characterization.test.cjs
 
+  # The four-arch macOS universal binary: lipo the four darwin ENGINE slices
+  # (ppc/i386/x86_64/arm64) into one fat Mach-O, then fuse ONE canonical-LE
+  # trailer over it — the trailer is arch-agnostic (canonical-LE proven on
+  # real ppc), so every slice reads it. Runs on macos-arm64: the fat
+  # template's arm64 slice drives the fuse worker + codesign (proven to
+  # handle a ppc-containing fat). Soft until it earns hard status. Publishes
+  # clode-<ver>-darwin-universal (picked up by the release job's clode-*
+  # pattern); the bare fat engine stays a CI artifact.
+  darwin-universal:
+    needs: leg
+    if: ${{ !cancelled() }}
+    runs-on: macos-14
+    continue-on-error: true
+    timeout-minutes: 30
+    permissions:
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .tool-versions
+      - name: Download the four darwin engine slices
+        uses: actions/download-artifact@v8
+        with:
+          pattern: tjs-darwin-*
+          path: ${{ runner.temp }}/slices
+      - name: lipo the four slices into a fat engine + gate
+        id: fat
+        run: |
+          set -euo pipefail
+          S="${{ runner.temp }}/slices"
+          for a in arm64 x64 x86 ppc; do test -f "$S/tjs-darwin-$a/tjs" || { echo "missing slice $a" >&2; exit 1; }; done
+          FAT="${{ runner.temp }}/tjs-darwin-universal"
+          lipo -create -output "$FAT" \
+            "$S/tjs-darwin-arm64/tjs" "$S/tjs-darwin-x64/tjs" \
+            "$S/tjs-darwin-x86/tjs" "$S/tjs-darwin-ppc/tjs"
+          chmod +x "$FAT"
+          info=$(lipo -info "$FAT"); echo "$info"
+          for a in ppc i386 x86_64 arm64; do
+            case "$info" in *"$a"*) ;; *) echo "ERROR: fat binary missing $a slice" >&2; exit 1 ;; esac
+          done
+          # per-slice floors intact (each carries its own LC_VERSION_MIN /
+          # LC_BUILD_VERSION — canonical-LE lets one trailer span them all).
+          for a in ppc i386 x86_64 arm64; do
+            v=$(otool -arch "$a" -l "$FAT" | awk '/LC_VERSION_MIN_MACOSX/{m=1} m&&/version/{print $2; exit}')
+            echo "  $a: LC_VERSION_MIN_MACOSX ${v:-<build-version>}"
+          done
+          echo "fat=$FAT" >> "$GITHUB_OUTPUT"
+      - name: Name the universal builder
+        id: name
+        run: |
+          if [ "${GITHUB_REF_TYPE:-}" = tag ]; then V="${GITHUB_REF_NAME#v}"; else V="$(cat VERSION)"; fi
+          echo "asset=clode-$V-darwin-universal" >> "$GITHUB_OUTPUT"
+      - name: Upload the bare fat engine (CI artifact)
+        uses: actions/upload-artifact@v7
+        with:
+          name: tjs-darwin-universal
+          path: ${{ steps.fat.outputs.fat }}
+          if-no-files-found: error
+      - name: Install deps + esbuild the clode-main bundle
+        run: |
+          npm ci
+          node scripts/build-sea.mjs --bundle-only
+      - name: Fat-fuse the universal builder (arm64 slice drives; trailer spans all)
+        env:
+          CLODE_TJS: ${{ steps.fat.outputs.fat }}
+        run: node bin/clode build --self --out "${{ steps.name.outputs.asset }}"
+      - name: Self-smoke the arm64 slice
+        run: ./"${{ steps.name.outputs.asset }}" --clode-version
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: ${{ steps.name.outputs.asset }}
+      - name: Upload the universal builder (published)
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.name.outputs.asset }}
+          path: ${{ steps.name.outputs.asset }}
+          if-no-files-found: error
+
   # ONE gate for the whole release: every HARD leg in BOTH families must
   # succeed (needs:), or nothing publishes. Soft legs (continue-on-error)
   # never block; their artifacts ship only when green.
   release:
-    needs: [leg, sea]
+    needs: [leg, sea, darwin-universal]
     if: github.ref_type == 'tag' || inputs.release == 'draft'
     runs-on: ubuntu-latest
     permissions:
