@@ -84,7 +84,8 @@ module.exports = {
   version: () => '',
   hostname: () => tjs.hostName ?? tjs.env.HOSTNAME ?? 'localhost',
   networkInterfaces: () => (tjs.system && tjs.system.networkInterfaces) || {},
-  // arm64/x64 are little-endian; this tjs build targets arm64 (see process.arch).
+  // arm64/x64 are little-endian; process.arch is now leg-scoped (arm64 on
+  // most legs, x64 on win32 — see process.cjs), and both are LE.
   endianness: () => 'LE',
   machine: () => process.arch,
   // Memory figures: tjs exposes no free/total memory API. DIVERGENCE: return 0 so

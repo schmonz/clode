@@ -81,3 +81,9 @@ test('loader splits NODE_PATH on the platform delimiter', () => {
   assert.match(loaderSrc2, /NODE_PATH_DELIM\s*=\s*IS_WIN\s*\?\s*';'\s*:\s*':'/);
   assert.doesNotMatch(loaderSrc2, /process\.env\.NODE_PATH \|\| ''\)\.split\(':'\)/);
 });
+
+const fsSrc = fs.readFileSync(path.join(__dirname, '..', 'libexec/node-shim/modules/fs.cjs'), 'utf8');
+test('fs.mkdirSync recursive walk is separator-aware (win32-safe)', () => {
+  assert.match(fsSrc, /split\(\/\[\\\\\/\]\/\)/);
+  assert.doesNotMatch(fsSrc, /path\.resolve\(p\)\.split\('\/'\)/);
+});

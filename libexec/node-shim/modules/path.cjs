@@ -113,10 +113,9 @@ function parse(p) {
 // the methods must be REAL functions with correct Windows semantics (not the
 // posix impl — win32 uses `\` sep, `;` delimiter, drive/UNC roots). These are
 // genuine win32 implementations, characterized against host node's path.win32
-// by test/node-shim-path.test.cjs (win32 row). Only the members the boot uses
-// (isAbsolute/join/dirname/normalize + sep/delimiter) are implemented; the rest
-// of win32 (relative/parse/basename/extname) is added test-first if a later
-// path drives it.
+// by test/node-shim-path.test.cjs (win32 row). The full surface used by the
+// posix impl (isAbsolute/join/dirname/normalize/relative/parse/basename/
+// extname + sep/delimiter) is implemented for win32 as well.
 const win32sep = '\\';
 const win32delimiter = ';';
 

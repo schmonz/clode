@@ -185,10 +185,15 @@ function writeFileSync(p, data, opts) {
 
 function mkdirSync(p, opts) {
   if (opts?.recursive) {
-    const parts = path.resolve(p).split('/').filter(Boolean);
-    let cur = '';
-    for (const part of parts) {
-      cur += '/' + part;
+    const abs = path.resolve(p);
+    const isWin = (globalThis.process && process.platform === 'win32');
+    const sep = isWin ? '\\' : '/';
+    const segs = abs.split(/[\\/]/);
+    // First segment is the root: '' (posix/rooted) or a drive like 'C:' (win).
+    let cur = segs.shift() || '';
+    for (const part of segs) {
+      if (!part) continue;
+      cur += sep + part;
       try { FSS.mkdir(cur, 0o777); } catch (e) { if (e.code !== 'EEXIST') throw e; }
     }
     return;

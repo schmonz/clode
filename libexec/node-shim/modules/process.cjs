@@ -9,8 +9,10 @@
 //     cwd/exePath/pid — exit() genuinely is a function).
 //   - tjs.platform does not exist on the global; navigator.platform
 //     ('MacIntel' / 'Linux x86_64' / 'Win32' / ...) is the real signal.
-//   - tjs has no arch signal in this build; hardcoded 'arm64' below.
-//     M4 (NetBSD/mac68k guest) must revisit this.
+//   - tjs has no arch signal in this build; arch is a scoped ternary below
+//     ((detectPlatform() === 'win32') ? 'x64' : 'arm64') — a documented gap,
+//     not a real signal. M4 (NetBSD/mac68k guest) and any non-x64 Windows
+//     leg must revisit this.
 //
 // stdout/stderr writes: Task-3 used tjs.stdout.getWriter().write(...) and
 // never awaited the returned promise — a write() immediately followed by
