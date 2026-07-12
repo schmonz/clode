@@ -120,9 +120,13 @@ test('darwin floor: macos-min/macos-sdk are release-only, native-darwin-only', (
     }
   }
   for (const l of ci) {
+    // no-exec is NOT stripped: it is a tier-invariant target fact (the
+    // runner literally cannot exec the output, e.g. windows-x64's mingw
+    // cross build) — dropping it in ci would make build-leg's exec-guards
+    // misfire and try to EXEC the un-execable binary.
     assert.ok(!('macos-min' in l) && !('macos-sdk' in l)
-      && !('macos-arch' in l) && !('no-exec' in l) && !('cross-image' in l),
-      `${l.leg}: ci tier must strip the macos-* floor fields, no-exec, cross-image`);
+      && !('macos-arch' in l) && !('cross-image' in l),
+      `${l.leg}: ci tier must strip the macos-* floor fields, cross-image`);
   }
 });
 

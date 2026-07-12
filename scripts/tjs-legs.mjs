@@ -265,7 +265,7 @@ export function legsFor(tier) {
   }
   if (tier === 'ci') {
     return LEGS.filter((l) => l.ci).map(({ ci, publish, 'ci-os': ciOs, 'ci-guest-version': ciVer,
-      'macos-min': _mm, 'macos-sdk': _ms, 'macos-arch': _ma, 'no-exec': _nx, 'cross-image': _ci, ...leg }) => {
+      'macos-min': _mm, 'macos-sdk': _ms, 'macos-arch': _ma, 'cross-image': _ci, ...leg }) => {
       if (ciOs) leg.os = ciOs;                          // ci rides the newest runner/guest
       if (ciVer) leg['guest-version'] = ciVer;
       if (VM(leg)) leg['soft-fail'] = true;  // house rule: new-to-CI VM legs earn hard status

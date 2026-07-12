@@ -54,6 +54,10 @@ inputs:
     description: "Docker image (digest-pinned) providing a cross toolchain; when set, the engine is cross-built INSIDE it on an ubuntu runner (darwin-ppc). Implies no-exec."
     required: false
     default: ""
+  cross-file:
+    description: "CMake cross-toolchain FILE (mingw Windows): when set, the engine is cross-built on the ubuntu host with CLODE_TJS_CROSS_FILE. Implies no-exec. Unlike cross-image (docker), the build runs directly on the host."
+    required: false
+    default: ""
   static:
     description: "'true': fully-static tjs (musl legs) + verify with file/ldd"
     required: false
@@ -98,8 +102,8 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        if [ -n "${{ inputs.cross-image }}" ]; then
-          exec=cross   # cross-built inside a docker image on ubuntu (darwin-ppc)
+        if [ -n "${{ inputs.cross-image }}" ] || [ -n "${{ inputs.cross-file }}" ]; then
+          exec=cross   # cross-built on ubuntu: docker image (darwin-ppc) or a cmake cross-file (windows mingw)
         else
           case "${{ inputs.guest-platform }}" in
             netbsd|freebsd|openbsd|dragonflybsd|omnios|solaris|midnightbsd|haiku|openindiana) exec=guest ;;
@@ -221,7 +225,7 @@ runs:
         echo "path=$DEST" >> "$GITHUB_OUTPUT"
 
     - name: Build tjs (native)
-      if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.guest-platform == 'native' && inputs.cross-image == ''
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.guest-platform == 'native' && inputs.cross-image == '' && inputs.cross-file == ''
       shell: bash
       env:
         CLODE_TJS_VENDOR: ${{ steps.mode.outputs.vendor }}
@@ -279,6 +283,22 @@ runs:
           export CLODE_TJS_WASM=${{ inputs.wasm }} CLODE_TJS_MIMALLOC=${{ inputs.mimalloc }} CLODE_TJS_FFI=${{ inputs.ffi }} CLODE_TJS_SMOKE=off
           node scripts/build-tjs.mjs --build-only
         '
+
+    - name: Build tjs (windows mingw cross-file)
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.cross-file != ''
+      shell: bash
+      env:
+        CLODE_TJS_VENDOR: ${{ steps.mode.outputs.vendor }}
+        CLODE_TJS_OUT: ${{ steps.mode.outputs.out }}
+        CLODE_TJS_CROSS_FILE: ${{ github.workspace }}/${{ inputs.cross-file }}
+        CLODE_TJS_WASM: ${{ inputs.wasm }}
+        CLODE_TJS_MIMALLOC: ${{ inputs.mimalloc }}
+        CLODE_TJS_FFI: ${{ inputs.ffi }}
+        CLODE_TJS_SMOKE: 'off'
+      run: |
+        set -euo pipefail
+        sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+        node scripts/build-tjs.mjs --build-only
 
     # A cache HIT skips the guest setup, so foreign-arch legs still need
     # fix-binary binfmt on the host to exec the cached tjs (fuse worker,
@@ -397,6 +417,64 @@ runs:
         set -euo pipefail
         ./"${{ steps.name.outputs.asset }}" --clode-version
 
+    # Resolves the bare-engine path once (.exe on windows cross-file, plain
+    # `tjs` everywhere else) — feeds both the cross-fuse template below
+    # (windows-x64 only) and the unconditional bare-tjs upload at the tail.
+    - name: Resolve the bare-engine path (.exe on windows cross-file)
+      id: bare
+      shell: bash
+      run: |
+        set -euo pipefail
+        P="${{ steps.mode.outputs.out }}/tjs"
+        [ -f "$P" ] || P="${{ steps.mode.outputs.out }}/tjs.exe"
+        [ -f "$P" ]
+        echo "path=$P" >> "$GITHUB_OUTPUT"
+
+    # no-exec skips the fuse above (nothing on the runner can exec the
+    # target). For windows-x64 (cross-file), publish anyway: build a HOST
+    # (linux) tjs to run the fuse worker, then CROSS-FUSE a clode.exe --self
+    # builder onto the cross-built windows tjs.exe via CLODE_TARGET_TEMPLATE
+    # (the Phase-3B mechanism, proven on real windows-latest). All three
+    # steps are cross-file+publish-guarded so no other leg enters them.
+    - name: Build the HOST (linux) tjs — runs the fuse worker (cross-file publish)
+      if: inputs.cross-file != '' && inputs.publish == 'true'
+      shell: bash
+      env:
+        CLODE_TJS_VENDOR: ${{ runner.temp }}/host-tjs-vendor
+        CLODE_TJS_OUT: ${{ runner.temp }}/host-tjs-out
+        CLODE_TJS_WASM: 'off'
+        CLODE_TJS_MIMALLOC: 'off'
+        CLODE_TJS_FFI: 'off'
+      run: |
+        set -euo pipefail
+        node scripts/build-tjs.mjs   # full native build into a SEPARATE tree (not the .matrix windows tree)
+        test -x "${{ runner.temp }}/host-tjs-out/tjs"
+
+    - name: Cross-fuse the self-contained clode.exe builder (no-exec target)
+      if: inputs.cross-file != '' && inputs.publish == 'true'
+      shell: bash
+      env:
+        CLODE_TJS: ${{ runner.temp }}/host-tjs-out/tjs
+        CLODE_TARGET_TEMPLATE: ${{ steps.bare.outputs.path }}
+      run: |
+        set -euo pipefail
+        node bin/clode build --self --out "${{ steps.name.outputs.asset }}.exe"
+        test -f "${{ steps.name.outputs.asset }}.exe"
+
+    - name: Attest the cross-fused builder (cross-file publish)
+      if: inputs.cross-file != '' && inputs.publish == 'true' && inputs.attest == 'true'
+      uses: actions/attest-build-provenance@v4
+      with:
+        subject-path: ${{ steps.name.outputs.asset }}.exe
+
+    - name: Upload the cross-fused builder (cross-file publish)
+      if: inputs.cross-file != '' && inputs.publish == 'true'
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ steps.name.outputs.asset }}
+        path: ${{ steps.name.outputs.asset }}.exe
+        if-no-files-found: error
+
     # The static floor gate: pre-10.14 dyld requires the old
     # LC_VERSION_MIN_MACOSX load command and refuses LC_BUILD_VERSION-only
     # binaries — and the version must be exactly the pinned floor. Gating
@@ -463,7 +541,7 @@ runs:
         rm -f "$RUNNER_TEMP/quaude-smoke"   # quaude is derived work: ephemeral, never leaves the runner
 
     - name: Attest build provenance
-      if: inputs.attest == 'true'
+      if: inputs.attest == 'true' && inputs.no-exec != 'true'
       uses: actions/attest-build-provenance@v4
       with:
         subject-path: ${{ steps.name.outputs.asset }}
@@ -480,5 +558,5 @@ runs:
       uses: actions/upload-artifact@v7
       with:
         name: tjs-${{ inputs.leg }}
-        path: ${{ steps.mode.outputs.out }}/tjs
+        path: ${{ steps.bare.outputs.path }}
         if-no-files-found: error
