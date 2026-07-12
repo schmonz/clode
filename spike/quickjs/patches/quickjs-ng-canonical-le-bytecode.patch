@@ -14,10 +14,36 @@ diff --git a/quickjs.c b/quickjs.c
  #include "cutils.h"
  #include "list.h"
  #include "quickjs.h"
-@@ -37746,6 +37752,60 @@
+@@ -1302,6 +1308,8 @@
+ static JSValue js_new_string8_len(JSContext *ctx, const char *buf, int len);
+ static JSValue js_compile_regexp(JSContext *ctx, JSValueConst pattern,
+                                  JSValueConst flags);
++static JSValue js_re_recompile_le(JSContext *ctx, JSValueConst pattern,
++                                  JSValueConst le_bc_val);
+ static JSValue js_regexp_constructor_internal(JSContext *ctx, JSValueConst ctor,
+                                               JSValue pattern, JSValue bc);
+ static void gc_decref(JSRuntime *rt);
+@@ -18316,6 +18324,15 @@
+ 
+         CASE(OP_regexp):
+             {
++                if (is_be()) {
++                    /* canonical-LE: the cpool bytecode is little-endian;
++                       recompile from the pattern for this host. */
++                    JSValue nbc = js_re_recompile_le(ctx, sp[-2], sp[-1]);
++                    if (JS_IsException(nbc))
++                        goto exception;
++                    JS_FreeValue(ctx, sp[-1]);
++                    sp[-1] = nbc;
++                }
+                 sp[-2] = js_regexp_constructor_internal(ctx, JS_UNDEFINED,
+                                                         sp[-2], sp[-1]);
+                 sp--;
+@@ -37745,6 +37762,60 @@
+     return bc_tag_str[tag];
  }
  #endif
- 
++
 +/* Serialized bytecode is canonically LITTLE-ENDIAN: the format the in-tree
 +   precompiled bundles and every little-endian host already produce. Writers
 +   on big-endian hosts convert on emit; readers on big-endian hosts convert
@@ -71,11 +97,10 @@ diff --git a/quickjs.c b/quickjs.c
 +        break;
 +    }
 +}
-+
+ 
  static void bc_put_u8(BCWriterState *s, uint8_t v)
  {
-     dbuf_putc(&s->dbuf, v);
-@@ -37753,16 +37813,22 @@
+@@ -37753,16 +37824,22 @@
  
  static void bc_put_u16(BCWriterState *s, uint16_t v)
  {
@@ -98,7 +123,7 @@ diff --git a/quickjs.c b/quickjs.c
      dbuf_put(&s->dbuf, (uint8_t *)&v, sizeof(v));
  }
  
-@@ -37844,7 +37910,12 @@
+@@ -37844,7 +37921,12 @@
  
      h = 0;
      for (i = 0; i+4 < n; i += 4) {
@@ -112,7 +137,7 @@ diff --git a/quickjs.c b/quickjs.c
          h *= 0x9e370001;
      }
      a = b = c = 0;
-@@ -37895,6 +37966,10 @@
+@@ -37895,6 +37977,10 @@
          default:
              break;
          }
@@ -123,7 +148,7 @@ diff --git a/quickjs.c b/quickjs.c
          pos += len;
      }
  
-@@ -38196,6 +38271,12 @@
+@@ -38196,6 +38282,12 @@
      JSObject *p = JS_VALUE_GET_OBJ(obj);
      JSTypedArray *ta = p->u.typed_array;
  
@@ -136,7 +161,7 @@ diff --git a/quickjs.c b/quickjs.c
      bc_put_u8(s, BC_TAG_TYPED_ARRAY);
      bc_put_u8(s, p->class_id - JS_CLASS_UINT8C_ARRAY);
      bc_put_leb128(s, p->u.array.count);
-@@ -38501,6 +38582,10 @@
+@@ -38501,6 +38593,10 @@
      // don't include version and checksum fields in checksum
      d = &s->dbuf;
      h = bc_csum(&d->buf[5], d->size - 5);
@@ -147,7 +172,7 @@ diff --git a/quickjs.c b/quickjs.c
      put_u32(&d->buf[1], h);
      return d->buf;
   fail:
-@@ -38609,6 +38694,8 @@
+@@ -38609,6 +38705,8 @@
          return bc_read_error_end(s);
      }
      v = get_u16(s->ptr);
@@ -156,7 +181,7 @@ diff --git a/quickjs.c b/quickjs.c
      *pval = v;
      s->ptr += 2;
      return 0;
-@@ -38622,6 +38709,8 @@
+@@ -38622,6 +38720,8 @@
          return bc_read_error_end(s);
      }
      v = get_u32(s->ptr);
@@ -165,7 +190,7 @@ diff --git a/quickjs.c b/quickjs.c
      *pval = v;
      s->ptr += 4;
      return 0;
-@@ -38635,6 +38724,8 @@
+@@ -38635,6 +38735,8 @@
          return bc_read_error_end(s);
      }
      v = get_u64(s->ptr);
@@ -174,7 +199,7 @@ diff --git a/quickjs.c b/quickjs.c
      *pval = v;
      s->ptr += 8;
      return 0;
-@@ -38751,8 +38842,14 @@
+@@ -38751,8 +38853,14 @@
      }
      memcpy(str8(p), s->ptr, size);
      s->ptr += size;
@@ -190,7 +215,7 @@ diff --git a/quickjs.c b/quickjs.c
  #ifdef ENABLE_DUMPS // JS_DUMP_READ_OBJECT
      if (check_dump_flag(s->ctx->rt, JS_DUMP_READ_OBJECT)) {
          bc_read_trace(s, "%s", ""); // hex dump and indentation
-@@ -38789,6 +38886,10 @@
+@@ -38789,6 +38897,10 @@
      while (pos < bc_len) {
          op = bc_buf[pos];
          len = short_opcode_info(op).size;
@@ -201,7 +226,7 @@ diff --git a/quickjs.c b/quickjs.c
          switch(short_opcode_info(op).fmt) {
          case OP_FMT_atom:
          case OP_FMT_atom_u8:
-@@ -39351,6 +39452,11 @@
+@@ -39351,6 +39463,11 @@
          return JS_EXCEPTION;
      if (array_tag >= JS_TYPED_ARRAY_COUNT)
          return JS_ThrowTypeError(ctx, "invalid typed array");
@@ -213,60 +238,78 @@ diff --git a/quickjs.c b/quickjs.c
      if (bc_get_leb128(s, &len))
          return JS_EXCEPTION;
      if (bc_get_leb128(s, &offset))
-@@ -39488,6 +39594,56 @@
-         js_free_string(ctx->rt, pattern);
-         js_free_string(ctx->rt, bc);
-         return JS_ThrowInternalError(ctx, "bad regexp bytecode");
+@@ -39468,6 +39585,55 @@
+     return JS_EXCEPTION;
+ }
+ 
++/* canonical-LE: the compiled regexp is libregexp's OWN bytecode format,
++   embedded (in a function cpool via OP_regexp, or as a serialized JSRegExp)
++   as an opaque 8-bit byte string copied verbatim by JS_WriteString. Its
++   internal u16/u32 fields are read host-order by the lre interpreter, so a
++   little-endian-compiled regexp reads garbage and aborts in
++   lre_exec_backtrack on a big-endian host. Rather than teach a second
++   opcode walker the REOP format, recompile from the pattern on big-endian
++   hosts. Called ONLY on the cross-endian paths (OP_regexp cpool literal +
++   JS_ReadRegExp); `new RegExp` compiles fresh-native and never comes here.
++   Flags live in the canonical-LE header (u16 at RE_HEADER_FLAGS=0); mask off
++   the COMPUTED bit LRE_FLAG_NAMED_GROUPS which lre_compile re-derives from
++   the pattern (feeding it back as input corrupts the compile). Neither arg
++   is consumed. quickjs-ng upstream candidate. */
++static JSValue js_re_recompile_le(JSContext *ctx, JSValueConst pattern,
++                                  JSValueConst le_bc_val)
++{
++    JSString *le_bc = JS_VALUE_GET_STRING(le_bc_val);
++    const uint8_t *hdr = str8(le_bc);
++    int re_flags, re_bytecode_len = 0;
++    char error_msg[64];
++    size_t pat_len;
++    const char *pat_cstr;
++    uint8_t *re_bytecode_buf;
++    JSValue bc_val;
++    JSString *new_bc;
++
++    if (le_bc->is_wide_char || le_bc->len < 2)
++        return JS_ThrowInternalError(ctx, "bad regexp bytecode");
++    re_flags = (hdr[0] | (hdr[1] << 8)) & ~LRE_FLAG_NAMED_GROUPS;
++    pat_cstr = JS_ToCStringLen2(ctx, &pat_len, pattern,
++                               !(re_flags & LRE_FLAG_UNICODE));
++    if (!pat_cstr)
++        return JS_EXCEPTION;
++    re_bytecode_buf = lre_compile(&re_bytecode_len, error_msg, sizeof(error_msg),
++                                  pat_cstr, pat_len, re_flags, ctx);
++    JS_FreeCString(ctx, pat_cstr);
++    if (!re_bytecode_buf)
++        return JS_ThrowInternalError(ctx, "regexp recompile failed: %s", error_msg);
++    bc_val = js_new_string8_len(ctx, (void *)&re_bytecode_buf, sizeof(re_bytecode_buf));
++    if (JS_IsException(bc_val)) {
++        js_free(ctx, re_bytecode_buf);
++        return JS_EXCEPTION;
 +    }
++    new_bc = JS_VALUE_GET_STRING(bc_val);
++    new_bc->kind = JS_STRING_KIND_INDIRECT;
++    new_bc->len = re_bytecode_len;
++    return bc_val;
++}
 +
-+    if (is_be()) {
-+        /* canonical-LE: the compiled regexp is libregexp's OWN bytecode
-+           format, embedded here as an opaque 8-bit byte string (copied
-+           verbatim by JS_WriteString/JS_ReadString). Its internal u16/u32
-+           fields are read host-order by the lre interpreter, so a
-+           little-endian-compiled regexp aborts in lre_exec_backtrack on a
-+           big-endian host. Rather than teach a second opcode walker the
-+           REOP format, recompile from the pattern on big-endian hosts to
-+           get native bytecode; little-endian hosts keep the stored bytes
-+           verbatim (byte-identical serialization). The flags live in the
-+           canonical-LE header (u16 at RE_HEADER_FLAGS=0), read explicitly
-+           little-endian here. (quickjs-ng upstream candidate, paired with
-+           the JS-bytecode canonical-LE patch.) */
-+        const uint8_t *le_bc = str8(bc);
-+        int re_flags = le_bc[0] | (le_bc[1] << 8);
-+        char error_msg[64];
-+        int re_bytecode_len = 0;
-+        size_t pat_len;
-+        const char *pat_cstr;
-+        uint8_t *re_bytecode_buf;
-+        JSValue bc_val;
-+        JSString *new_bc;
-+
-+        pat_cstr = JS_ToCStringLen2(ctx, &pat_len, JS_MKPTR(JS_TAG_STRING, pattern),
-+                                    !(re_flags & LRE_FLAG_UNICODE));
-+        if (!pat_cstr) {
-+            js_free_string(ctx->rt, pattern);
-+            js_free_string(ctx->rt, bc);
-+            return JS_EXCEPTION;
-+        }
-+        re_bytecode_buf = lre_compile(&re_bytecode_len, error_msg, sizeof(error_msg),
-+                                      pat_cstr, pat_len, re_flags, ctx);
-+        JS_FreeCString(ctx, pat_cstr);
-+        js_free_string(ctx->rt, bc);   /* discard the little-endian bytecode */
-+        if (!re_bytecode_buf) {
-+            js_free_string(ctx->rt, pattern);
-+            return JS_ThrowInternalError(ctx, "regexp recompile failed: %s", error_msg);
-+        }
-+        bc_val = js_new_string8_len(ctx, (void *)&re_bytecode_buf, sizeof(re_bytecode_buf));
-+        if (JS_IsException(bc_val)) {
-+            js_free(ctx, re_bytecode_buf);
-+            js_free_string(ctx->rt, pattern);
-+            return JS_EXCEPTION;
-+        }
-+        new_bc = JS_VALUE_GET_STRING(bc_val);
-+        new_bc->kind = JS_STRING_KIND_INDIRECT;
-+        new_bc->len = re_bytecode_len;
-+        bc = new_bc;
+ static JSValue JS_ReadRegExp(BCReaderState *s)
+ {
+     JSContext *ctx = s->ctx;
+@@ -39490,6 +39656,18 @@
+         return JS_ThrowInternalError(ctx, "bad regexp bytecode");
      }
  
++    if (is_be()) {
++        /* canonical-LE: recompile from the pattern (see js_re_recompile_le). */
++        JSValue nbc = js_re_recompile_le(ctx, JS_MKPTR(JS_TAG_STRING, pattern),
++                                         JS_MKPTR(JS_TAG_STRING, bc));
++        js_free_string(ctx->rt, bc);
++        if (JS_IsException(nbc)) {
++            js_free_string(ctx->rt, pattern);
++            return JS_EXCEPTION;
++        }
++        bc = JS_VALUE_GET_STRING(nbc);
++    }
++
      return js_regexp_constructor_internal(ctx, JS_UNDEFINED,
+                                           JS_MKPTR(JS_TAG_STRING, pattern),
+                                           JS_MKPTR(JS_TAG_STRING, bc));
