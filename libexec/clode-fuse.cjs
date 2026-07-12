@@ -323,9 +323,15 @@ async function clodeBuild(args, opts) {
     const w = await run(template, ['run', path.join(libexec, 'quaude-fuse.js'),
       signedBase, stageDir, path.join(libexec, 'node-shim'), nmDir,
       path.join(libexec, 'quaude-bootstrap.mjs'), extrasPath, out,
-      // --self embeds the PRISTINE template as a member (Decision 2); the
-      // quaude role has no use for it (its base IS the signed copy).
-      ...(self ? [template] : [])], { env, timeout: 300000 * SCALE });
+      // --self embeds the PRISTINE base template as a member (Decision 2) so a
+      // fused builder can materialize+exec it as the fuse worker with nothing
+      // else on disk. This MUST be baseTemplate (the target-platform base,
+      // = crossTarget for a cross-fuse), NOT `template` (the HOST engine that
+      // runs THIS worker) — else a cross-fused builder ships a host-arch
+      // template it cannot exec on the target. Native --self: baseTemplate ===
+      // template, so this is unchanged there. The quaude role embeds nothing
+      // (its base IS the signed copy).
+      ...(self ? [baseTemplate] : [])], { env, timeout: 300000 * SCALE });
     if (w.status !== 0) {
       let extra = '';
       if (!w.stdout && !w.stderr) {
