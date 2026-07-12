@@ -59,3 +59,9 @@ test('spawn-sync: missing exe maps to ENOENT', () => {
 test('spawn-sync: shared init exposes __tjs_spawn_sync (unguarded)', () => {
   assert.match(spawnAdded, /__tjs_spawn_sync/);
 });
+
+test('build-tjs: the Phase-0 sync stub is fully retired', () => {
+  const drv = fs.readFileSync(path.join(__dirname, '..', 'scripts/build-tjs.mjs'), 'utf8');
+  assert.doesNotMatch(drv, /CLODE_TJS_STUB_SYNC/, 'CLODE_TJS_STUB_SYNC must be gone');
+  assert.doesNotMatch(drv, /fixupStubSyncPrimitives/, 'fixupStubSyncPrimitives must be gone');
+});
