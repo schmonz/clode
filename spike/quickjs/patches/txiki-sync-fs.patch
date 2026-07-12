@@ -15,7 +15,7 @@ new file mode 100644
 index 0000000..99e2d83
 --- /dev/null
 +++ b/src/mod_fs_sync.c
-@@ -0,0 +1,327 @@
+@@ -0,0 +1,329 @@
 +/* Synchronous fs primitives for CommonJS interop (node-shim).
 + * POSIX-direct, main-thread blocking by design. Exposed as the
 + * global `__tjs_fs_sync`. Upstream candidate:
@@ -35,7 +35,6 @@ index 0000000..99e2d83
 +#if defined(_WIN32)
 +#include <io.h>
 +#include <direct.h>
-+#include <windows.h>
 +#endif
 +#ifndef PATH_MAX
 +#define PATH_MAX 4096
@@ -106,6 +105,9 @@ index 0000000..99e2d83
 +    else { JS_FreeCString(ctx, path); JS_FreeCString(ctx, flags);
 +           return JS_ThrowTypeError(ctx, "fs_sync.open: bad flags"); }
 +    if (nonblock) oflags |= O_NONBLOCK;
++#if defined(_WIN32)
++    oflags |= O_BINARY;   /* mingw defaults to text mode; force byte-exact I/O */
++#endif
 +    int fd = open(path, oflags, 0666);
 +    JSValue ret = (fd < 0) ? throw_errno(ctx, "open", path) : JS_NewInt32(ctx, fd);
 +    JS_FreeCString(ctx, path); JS_FreeCString(ctx, flags);

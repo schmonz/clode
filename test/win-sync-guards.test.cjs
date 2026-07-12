@@ -32,3 +32,6 @@ test('fs-sync: S_ISLNK guarded', () => {
 test('fs-sync: mkdir arity guarded for _WIN32', () => {
   assert.match(added, /_mkdir\(p\)/);
 });
+test('fs-sync: open forces O_BINARY on _WIN32', () => {
+  assert.match(added, /oflags \|= O_BINARY/);
+});
