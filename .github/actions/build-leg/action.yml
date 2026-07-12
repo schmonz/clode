@@ -428,8 +428,8 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        P="${{ steps.mode.outputs.out }}/tjs"
-        [ -f "$P" ] || P="${{ steps.mode.outputs.out }}/tjs.exe"
+        P="${{ steps.mode.outputs.out }}/tjs.exe"
+        [ -f "$P" ] || P="${{ steps.mode.outputs.out }}/tjs"
         [ -f "$P" ]
         echo "path=$P" >> "$GITHUB_OUTPUT"
 
@@ -464,8 +464,8 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        P="${{ steps.mode.outputs.out }}/tjs"
-        [ -f "$P" ] || P="${{ steps.mode.outputs.out }}/tjs.exe"
+        P="${{ steps.mode.outputs.out }}/tjs.exe"
+        [ -f "$P" ] || P="${{ steps.mode.outputs.out }}/tjs"
         [ -f "$P" ]
         echo "path=$P" >> "$GITHUB_OUTPUT"
 
