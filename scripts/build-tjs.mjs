@@ -1472,21 +1472,33 @@ if (!wantFfi) {
 // symbols and dies on the box; rejected). Arch is pinned explicitly
 // whenever a floor is set: never trust the runner default once targets are
 // pinned. ci-tier and local builds leave these unset (stock SDK, no floor).
+// Cross-compile (the darwin-ppc walk, Phase C): CLODE_TJS_CROSS_FILE points
+// at a CMake toolchain file (scripts/darwin-ppc.toolchain.cmake) that owns
+// ALL target config — compiler triple, deployment floor, warning demotions.
+// The macOS-native OSX_* flags below assume a real macOS host (xcodebuild)
+// and are skipped when cross; so is the -DCMAKE_C_FLAGS demotion push, which
+// would clobber the toolchain file's -mmacosx-version-min (the demotions
+// live in the toolchain file's *_FLAGS_INIT instead).
+const crossFile = process.env.CLODE_TJS_CROSS_FILE || '';
+if (crossFile) {
+  if (!fs.existsSync(crossFile)) throw new Error(`CLODE_TJS_CROSS_FILE: no file at ${crossFile}`);
+  cmakeArgs.push(`-DCMAKE_TOOLCHAIN_FILE=${path.resolve(crossFile)}`);
+}
 const macosMin = process.env.CLODE_TJS_MACOS_MIN || '';
 const macosSdk = process.env.CLODE_TJS_MACOS_SDK || '';
-if (macosMin) {
+if (macosMin && !crossFile) {
   cmakeArgs.push(`-DCMAKE_OSX_DEPLOYMENT_TARGET=${macosMin}`);
   const macosArch = process.env.CLODE_TJS_MACOS_ARCH
     || (process.arch === 'arm64' ? 'arm64' : 'x86_64');
   cmakeArgs.push(`-DCMAKE_OSX_ARCHITECTURES=${macosArch}`);
 }
-if (macosSdk) {
+if (macosSdk && !crossFile) {
   if (!fs.existsSync(path.join(macosSdk, 'usr/include'))) {
     throw new Error(`CLODE_TJS_MACOS_SDK: no SDK at ${macosSdk} (usr/include missing)`);
   }
   cmakeArgs.push(`-DCMAKE_OSX_SYSROOT=${macosSdk}`);
 }
-if (process.platform !== 'darwin') {
+if (process.platform !== 'darwin' && !crossFile) {
   // txiki-sync-spawn.patch declares posix_spawnattr_t attr used only inside
   // the #ifdef POSIX_SPAWN_CLOEXEC_DEFAULT (Apple) block; txiki compiles
   // -Werror on Unix, so -Wunused-variable kills every non-Apple POSIX leg

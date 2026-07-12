@@ -1,60 +1,75 @@
-name: ppc-toolchain-probe
+name: ppc-engine-probe
 
-# Phase A of the darwin-ppc walk (spec 2026-07-11-darwin-ppc-walk-design,
-# untracked): prove the pinned cross toolchain on a GHA runner before any
-# leg machinery exists. Dispatch-only scaffolding — absorbed into the leg
-# (and deleted) once the toolchain pin is proven. First rounds are
-# discovery: print the image digest (for the eventual by-digest pin) and
-# the toolchain's real binary names, then cross-compile a hello-world and
-# gate its Mach-O shape (ppc cputype, LC_VERSION_MIN 10.4). The artifact
-# goes to the Tiger VM oracle for the execution half of the receipt.
+# The darwin-ppc walk, Phase C bench (spec 2026-07-11-darwin-ppc-walk-design).
+# Cross-compiles the tjs ENGINE for powerpc-apple-darwin8 inside the pinned
+# VariantXYZ toolchain image, gates the Mach-O shape, uploads the bare engine
+# for the Tiger VM oracle. Standalone + dispatch-only while the walk is in
+# progress; folds into the manifest + build-leg once green. Rich discovery in
+# the build step so a failure maps the environment (no local docker here —
+# this IS the ppc bench).
 on:
   workflow_dispatch:
     inputs:
       image:
-        description: "toolchain image ref (THE PIN: gcc 14.2 + MacOSX10.4u SDK, resolved from tag build-gcc-14.2-MacOSXSDK10.4u on 2026-07-11)"
+        description: "toolchain image (digest-pinned: gcc 14.2 + MacOSX10.4u SDK)"
         type: string
         default: "ghcr.io/variantxyz/gcc-powerpc-apple-darwin8@sha256:a9013745ae4a696dc3a047675a85e7c43b9453cdb1e26d9a7ac9738587c1e198"
 
 jobs:
-  probe:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
-      - name: Pull and identify the image (digest for the pin)
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .tool-versions
+
+      # Source phase on the host (node + esbuild): construct the patched tjs
+      # tree + bundles from committed pins. No BE-regen (canonical-LE makes the
+      # shipped LE bundles boot on the BE ppc target).
+      - name: Construct the patched tjs tree (host)
+        env:
+          CLODE_TJS_VENDOR: ${{ github.workspace }}/.matrix/tjs-vendor
+        run: |
+          npm ci
+          node scripts/build-tjs.mjs --source-only
+
+      - name: Cross-build the tjs engine (inside the toolchain image)
         run: |
           set -euo pipefail
           docker pull "${{ inputs.image }}"
-          docker image inspect --format 'id={{.Id}} digest={{index .RepoDigests 0}}' "${{ inputs.image }}"
-
-      - name: Discover the toolchain surface
-        run: |
-          docker run --rm "${{ inputs.image }}" sh -c 'ls /usr/local/bin 2>/dev/null | sort; echo ---; ls /usr/local 2>/dev/null'
-
-      - name: Cross-compile hello-world for powerpc-apple-darwin8
-        run: |
-          set -euxo pipefail
-          cat > hello.c <<'EOF'
-          #include <stdio.h>
-          int main(void) { printf("hello from powerpc-apple-darwin8\n"); return 0; }
-          EOF
-          # bash, not sh: the image's /bin/sh is dash (no pipefail — probe 2
-          # receipt). Tool names from probe 2's discovery step.
-          docker run --rm -v "$PWD:/w" -w /w "${{ inputs.image }}" bash -c '
-            set -euxo pipefail
-            powerpc-apple-darwin8-gcc -O2 -mmacosx-version-min=10.4 -static-libgcc hello.c -o hello-ppc
-            powerpc-apple-darwin8-otool -hv hello-ppc
-            powerpc-apple-darwin8-otool -l hello-ppc | grep -B1 -A3 VERSION || true
+          docker run --rm -v "${{ github.workspace }}:/w" -w /w "${{ inputs.image }}" bash -c '
+            set -uxo pipefail
+            echo "===== DISCOVERY ====="
+            uname -a; cat /etc/os-release | head -2
+            echo "--- toolchain bins ---"; ls /usr/local/bin | grep powerpc || true
+            echo "--- cmake / node ---"; which cmake node nodejs || true; cmake --version | head -1
+            echo "--- 10.4u SDK ---"; find / -maxdepth 6 -name "MacOSX10.4*" -type d 2>/dev/null | head
+            echo "--- existing darwin toolchain files ---"; find / -name "*.cmake" 2>/dev/null | grep -iE "darwin|osxcross|toolchain" | head
+            echo "===== NODE ====="
+            if ! command -v node >/dev/null; then apt-get update -q && apt-get install -y -q nodejs >/dev/null 2>&1 || true; fi
+            node --version || nodejs --version || { echo "NO NODE — will need a static node"; exit 90; }
+            echo "===== BUILD ====="
+            export CLODE_TJS_VENDOR=/w/.matrix/tjs-vendor
+            export CLODE_TJS_OUT=/w/.matrix/tjs-out
+            export CLODE_TJS_CROSS_FILE=/w/scripts/darwin-ppc.toolchain.cmake
+            export CLODE_TJS_WASM=off CLODE_TJS_MIMALLOC=off CLODE_TJS_FFI=off CLODE_TJS_SMOKE=off
+            node scripts/build-tjs.mjs --build-only
           '
-          file hello-ppc
 
-      - name: Gate the Mach-O shape from the host side
+      - name: Gate the ppc Mach-O engine
         run: |
           set -euo pipefail
-          f=$(file -b hello-ppc); echo "file: $f"
+          TJS=.matrix/tjs-out/tjs
+          f=$(file -b "$TJS"); echo "file: $f"
           case "$f" in *Mach-O*ppc*|*"Mach-O executable ppc"*) echo "arch marker ok" ;; *) echo "ERROR: not a ppc Mach-O" >&2; exit 1 ;; esac
+          # otool from the image (host file(1) already confirmed ppc); floor via the image's otool
+          docker run --rm -v "${{ github.workspace }}:/w" -w /w "${{ inputs.image }}" \
+            bash -c 'powerpc-apple-darwin8-otool -l .matrix/tjs-out/tjs | grep -A3 "LC_VERSION_MIN\|LC_BUILD_VERSION" | head' || true
 
       - uses: actions/upload-artifact@v7
         with:
-          name: hello-ppc
-          path: hello-ppc
+          name: tjs-darwin-ppc
+          path: .matrix/tjs-out/tjs
+          if-no-files-found: error
