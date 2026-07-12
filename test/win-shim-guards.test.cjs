@@ -97,3 +97,14 @@ test('clode-fuse: default --out gets .exe on win32', () => {
 test('clode-fuse: the materialized template is named .exe on win32', () => {
   assert.match(fuseSrc, /template-tjs\.exe/);
 });
+
+const buildTjsSrc = fs.readFileSync(path.join(__dirname, '..', 'scripts/build-tjs.mjs'), 'utf8');
+
+test('build-tjs: CLODE_TJS_WIN_MINGW selects Ninja + mingw gcc', () => {
+  assert.match(buildTjsSrc, /CLODE_TJS_WIN_MINGW/);
+  assert.match(buildTjsSrc, /-G['"]?,?\s*['"]Ninja['"]/);
+  assert.match(buildTjsSrc, /CMAKE_C_COMPILER=gcc/);
+});
+test('build-tjs: win-mingw and cross-file are mutually exclusive', () => {
+  assert.match(buildTjsSrc, /CLODE_TJS_WIN_MINGW[\s\S]{0,200}crossFile[\s\S]{0,80}throw|crossFile[\s\S]{0,80}CLODE_TJS_WIN_MINGW[\s\S]{0,80}throw/);
+});

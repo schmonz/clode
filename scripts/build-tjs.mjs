@@ -1562,6 +1562,21 @@ if (crossFile) {
   if (!fs.existsSync(crossFile)) throw new Error(`CLODE_TJS_CROSS_FILE: no file at ${crossFile}`);
   cmakeArgs.push(`-DCMAKE_TOOLCHAIN_FILE=${path.resolve(crossFile)}`);
 }
+// Native Windows build with a HOSTED mingw toolchain (the windows-x64-native
+// leg): use the SAME gcc-posix compiler the cross build uses, but on the
+// Windows runner itself so the output can be executed (exec=host). Ninja
+// because the default Windows generator is Visual Studio (MSVC), and mingw gcc
+// as the compiler. NO cross toolchain file — this is a native build, so
+// CMAKE_SYSTEM_NAME stays the host's Windows. The -Wno-error demotions below
+// (:~1599, gated on !darwin && !crossFile) and the build/tjs.exe detection
+// (:~1644) already apply. Mutually exclusive with a cross file.
+const winMingw = process.env.CLODE_TJS_WIN_MINGW === '1';
+if (winMingw && crossFile) {
+  throw new Error('CLODE_TJS_WIN_MINGW and CLODE_TJS_CROSS_FILE are mutually exclusive (native-hosted vs cross)');
+}
+if (winMingw) {
+  cmakeArgs.push('-G', 'Ninja', '-DCMAKE_C_COMPILER=gcc', '-DCMAKE_CXX_COMPILER=g++');
+}
 // 32-bit targets lacking libatomic (ppc/sparc): link the __atomic_*_8 shim.
 if (process.env.CLODE_TJS_ATOMIC_SHIM === '1') {
   cmakeArgs.push('-DCLODE_ATOMIC_SHIM=ON');
