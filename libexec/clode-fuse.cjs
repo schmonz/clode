@@ -205,6 +205,18 @@ async function clodeBuild(args, opts) {
     if (!fs.existsSync(template)) {
       return fail(`build: no tjs template at '${template}' (run scripts/build-tjs.mjs, or set CLODE_TJS)`);
     }
+    // CROSS-FUSE (cross-fuse design, prereq 3): CLODE_TARGET_TEMPLATE names a
+    // FOREIGN-platform tjs to receive the trailer, while the worker still runs
+    // under the host `template` (CLODE_TJS). Sound because canonical-LE makes
+    // the compiled bytecode endian-portable and the pinned quickjs-ng gives
+    // both engines the same BC_VERSION/fingerprint (attest records both). The
+    // host cannot exec the foreign output, so codesign + the PONG/attest smoke
+    // are skipped — the target's own oracle (its VM/hardware) proves it.
+    const crossTarget = env.CLODE_TARGET_TEMPLATE || null;
+    if (crossTarget && !fs.existsSync(crossTarget)) {
+      return fail(`build: no CLODE_TARGET_TEMPLATE at '${crossTarget}'`);
+    }
+    const baseTemplate = crossTarget || template;
 
     // -- payload staging: the upstream Claude Code bundle (default), or the
     // esbuilt clode-main bundle (--self).
@@ -279,7 +291,7 @@ async function clodeBuild(args, opts) {
       role: self ? 'builder' : 'quaude',
       bundleVersion: key, // undefined for --self (no upstream bundle) — dropped by JSON
       clodeVersion: version,
-      template: { sha256: sha256File(template), len: fs.statSync(template).size },
+      template: { sha256: sha256File(baseTemplate), len: fs.statSync(baseTemplate).size },
       // The transforms baked into the fused artifact beyond the members
       // themselves: the extractor that hooked cli.cjs (memo §6.9 — staleness of
       // the frozen entry transforms is detectable via these + bundleVersion).
@@ -291,9 +303,9 @@ async function clodeBuild(args, opts) {
     // appending.
     const signedBase = path.join(work, 'template-signed');
     const extrasPath = path.join(work, 'extras.json');
-    fs.copyFileSync(template, signedBase);
+    fs.copyFileSync(baseTemplate, signedBase);
     fs.chmodSync(signedBase, 0o755);
-    if (process.platform === 'darwin') {
+    if (process.platform === 'darwin' && !crossTarget) {
       const cs = spawnSync('codesign', ['-s', '-', '--force', signedBase], { encoding: 'utf8' });
       if (cs.status !== 0) return fail(`build: codesign of the template copy failed:\n${cs.stderr || cs.stdout}`);
       clodeLog('clode: build: template copy re-signed (ad-hoc)');
@@ -323,6 +335,15 @@ async function clodeBuild(args, opts) {
       return fail(`build: fuse worker failed (exit ${w.status}):\n${w.stdout}${w.stderr}${extra}`);
     }
     clodeLog(w.stdout.trimEnd());
+
+    // Cross-fuse: the trailer is written to a foreign-platform base the host
+    // cannot exec, so stop here — no PONG/attest/version smoke. The output is
+    // proven on the target's own oracle (its VM/hardware). attest still runs
+    // THERE (it verifies member shas from the trailer, arch-independent).
+    if (crossTarget) {
+      stdout.write(`clode: cross-fused ${out} (${fs.statSync(out).size} bytes, target ${path.basename(crossTarget)}) — smoke on the target\n`);
+      return 0;
+    }
 
     if (self) {
       // -- builder smoke: its own flags must answer, with NODE_PATH stripped
