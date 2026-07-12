@@ -183,6 +183,53 @@ function win32Dirname(p) {
   return dir || '.';
 }
 
+function win32Basename(p, ext) {
+  const rootLen = win32RootLen(p);
+  let s = p.slice(rootLen).replace(/[\\/]+$/, '');
+  const i = Math.max(s.lastIndexOf('\\'), s.lastIndexOf('/'));
+  let b = i === -1 ? s : s.slice(i + 1);
+  if (ext && b.endsWith(ext) && b !== ext) b = b.slice(0, -ext.length);
+  return b;
+}
+
+function win32Extname(p) {
+  const b = win32Basename(p);
+  const i = b.lastIndexOf('.');
+  return i <= 0 ? '' : b.slice(i);
+}
+
+function win32Resolve(...args) {
+  // Mirror posix resolve()'s cwd source (process.cwd()); node uses per-drive
+  // cwds, but the bundle passes absolute paths or joins under one root, so a
+  // single-cwd resolve is sufficient (extend if a wall drives per-drive cwd).
+  let resolved = '';
+  let abs = false;
+  for (let i = args.length - 1; i >= -1 && !abs; i--) {
+    const p = i >= 0 ? args[i] : process.cwd();
+    if (!p) continue;
+    resolved = resolved ? p + '\\' + resolved : p;
+    abs = win32IsAbsolute(p);
+  }
+  return win32Normalize(resolved) || '.';
+}
+
+function win32Relative(from, to) {
+  const f = win32Resolve(from), t = win32Resolve(to);
+  if (f.toLowerCase() === t.toLowerCase()) return '';
+  const fp = f.split('\\').filter(Boolean), tp = t.split('\\').filter(Boolean);
+  let i = 0;
+  while (i < fp.length && i < tp.length && fp[i].toLowerCase() === tp[i].toLowerCase()) i++;
+  return [...Array(fp.length - i).fill('..'), ...tp.slice(i)].join('\\');
+}
+
+function win32Parse(p) {
+  const rootLen = win32RootLen(p);
+  const root = p.slice(0, rootLen);
+  const base = win32Basename(p);
+  const ext = win32Extname(p);
+  return { root, dir: win32Dirname(p), base, ext, name: base.slice(0, base.length - ext.length) };
+}
+
 const win32 = {
   sep: win32sep,
   delimiter: win32delimiter,
@@ -190,9 +237,20 @@ const win32 = {
   normalize: win32Normalize,
   join: win32Join,
   dirname: win32Dirname,
+  basename: win32Basename,
+  extname: win32Extname,
+  resolve: win32Resolve,
+  relative: win32Relative,
+  parse: win32Parse,
 };
 
-module.exports = { sep, delimiter, isAbsolute, normalize, join, resolve, dirname, basename, extname, relative, parse, posix: null, win32 };
-module.exports.posix = module.exports;
+const posix = { sep, delimiter, isAbsolute, normalize, join, resolve, dirname, basename, extname, relative, parse, posix: null, win32 };
+posix.posix = posix;
 win32.win32 = win32;
-win32.posix = module.exports;
+win32.posix = posix;
+
+// Node's require('path') is platform-specific: win32 on Windows, posix elsewhere.
+// The bundle's Windows code paths were written against win32 (they already run
+// on Windows under Bun). The loader uses its OWN P helpers, so this switch does
+// not affect module resolution.
+module.exports = (globalThis.process && process.platform === 'win32') ? win32 : posix;

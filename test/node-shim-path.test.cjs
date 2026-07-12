@@ -8,6 +8,12 @@ const os = require('node:os');
 const path = require('node:path');
 const { runLoader, skipUnlessTjs } = require('./node-shim-helper.cjs');
 
+// Direct in-process load of the shim module itself (no tjs binary needed):
+// pure string logic, so it is characterized here without the loader/runLoader
+// detour. Path convention matches test/win-shim-guards.test.cjs's inline
+// path.join(__dirname, '..', 'libexec/node-shim/modules/<name>.cjs').
+const PATH_MODULE = path.join(__dirname, '..', 'libexec/node-shim/modules/path.cjs');
+
 const TABLE = `
 const p = require('node:path');
 const u = require('node:url');
@@ -66,6 +72,29 @@ console.log(JSON.stringify(cases));
   const r = runLoader(f);
   assert.strictEqual(r.status, 0, r.stderr);
   assert.deepStrictEqual(JSON.parse(r.stdout.trim()), nodeOut);
+});
+
+// Task 3: complete the win32 surface (resolve/basename/extname/relative/parse)
+// so require('path') can return win32 on Windows without crashing on a
+// missing method. Loaded directly in-process (no tjs binary required).
+test('path.win32.basename/extname', () => {
+  const p = require(PATH_MODULE).win32;
+  assert.equal(p.basename('C:\\a\\b\\file.txt'), 'file.txt');
+  assert.equal(p.basename('C:\\a\\b\\file.txt', '.txt'), 'file');
+  assert.equal(p.extname('C:\\a\\b\\file.txt'), '.txt');
+  assert.equal(p.extname('C:\\a\\b\\file'), '');
+});
+test('path.win32.resolve/relative/parse', () => {
+  const p = require(PATH_MODULE).win32;
+  assert.equal(p.resolve('C:\\a', 'b', 'c'), 'C:\\a\\b\\c');
+  assert.equal(p.resolve('C:\\a\\b', 'D:\\x'), 'D:\\x');
+  assert.equal(p.relative('C:\\a\\b', 'C:\\a\\c'), '..\\c');
+  const parsed = p.parse('C:\\a\\b\\file.txt');
+  assert.equal(parsed.dir, 'C:\\a\\b');
+  assert.equal(parsed.base, 'file.txt');
+  assert.equal(parsed.ext, '.txt');
+  assert.equal(parsed.name, 'file');
+  assert.equal(parsed.root, 'C:\\');
 });
 
 test('os module basics under tjs', (t) => {
