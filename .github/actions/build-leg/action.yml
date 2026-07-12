@@ -437,7 +437,7 @@ runs:
     # (the Phase-3B mechanism, proven on real windows-latest). All three
     # steps are cross-file+publish-guarded so no other leg enters them.
     - name: Build the HOST (linux) tjs — runs the fuse worker (cross-file publish)
-      if: inputs.cross-file != '' && inputs.publish == 'true'
+      if: inputs.cross-file != ''
       shell: bash
       env:
         CLODE_TJS_VENDOR: ${{ runner.temp }}/host-tjs-vendor
@@ -451,7 +451,7 @@ runs:
         test -x "${{ runner.temp }}/host-tjs-out/tjs"
 
     - name: Cross-fuse the self-contained clode.exe builder (no-exec target)
-      if: inputs.cross-file != '' && inputs.publish == 'true'
+      if: inputs.cross-file != ''
       shell: bash
       env:
         CLODE_TJS: ${{ runner.temp }}/host-tjs-out/tjs
@@ -468,10 +468,10 @@ runs:
         subject-path: ${{ steps.name.outputs.asset }}.exe
 
     - name: Upload the cross-fused builder (cross-file publish)
-      if: inputs.cross-file != '' && inputs.publish == 'true'
+      if: inputs.cross-file != ''
       uses: actions/upload-artifact@v7
       with:
-        name: ${{ steps.name.outputs.asset }}
+        name: ${{ inputs.publish == 'true' && steps.name.outputs.asset || format('smoke-{0}', steps.name.outputs.asset) }}
         path: ${{ steps.name.outputs.asset }}.exe
         if-no-files-found: error
 
