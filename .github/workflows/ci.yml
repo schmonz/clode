@@ -214,23 +214,28 @@ jobs:
         run: npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
       - name: Install runtime deps (semver et al.) for the oracles
         run: npm ci
-      - name: Run the three tjs oracles on the real Windows kernel
+      - name: Run the substantive tjs oracles on the real Windows kernel
         run: |
           set -euo pipefail
           chmod +x ./tjs.exe || true
           PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f \( -name claude -o -name claude.exe \) -size +20M 2>/dev/null | head -1)"
           if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
           echo "provider: $PROV"
-          # node-shim-roundtrip/agentic gate on CLODE_TJS + CLODE_PROVIDER_BIN;
-          # e2e-tui-tjs gates separately on CLODE_TJS + CLODE_LIVE_RENDER=1 +
-          # CLODE_CLAUDE_BIN (the resolveClaudeBin seam, not CLODE_PROVIDER_BIN)
-          # — set all four so none of the three oracles merely skip.
+          # roundtrip (boot + wire turn) and agentic (a real Bash-tool turn
+          # spawning bash.exe) prove the node-shim runs the bundle across the
+          # whole Windows surface (loader paths, child_process exe/shell/PATHEXT,
+          # path.win32, os/process dirs, NODE_PATH, pathToFileURL, deps). Both
+          # gate on CLODE_TJS + CLODE_PROVIDER_BIN.
+          #
+          # e2e-tui-tjs is DEFERRED to Phase 3: it drives the full bin/clode
+          # launcher inside a native PTY (node-pty/ConPTY + @xterm/headless),
+          # neither of which is provisioned here — and that path is the Windows
+          # launcher, not the node-shim. TUI-under-tjs is already proven on
+          # POSIX; the Windows ConPTY capture lands with the Phase-3 launcher.
           CLODE_TJS="$PWD/tjs.exe" CLODE_PROVIDER_BIN="$PROV" \
-          CLODE_LIVE_RENDER=1 CLODE_CLAUDE_BIN="$PROV" \
             node --test --test-concurrency=1 \
               test/node-shim-roundtrip.test.cjs \
-              test/node-shim-agentic.test.cjs \
-              test/e2e-tui-tjs.test.cjs
+              test/node-shim-agentic.test.cjs
 
   test:
     strategy:
