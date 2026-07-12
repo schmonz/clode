@@ -238,10 +238,12 @@ diff --git a/quickjs.c b/quickjs.c
      if (bc_get_leb128(s, &len))
          return JS_EXCEPTION;
      if (bc_get_leb128(s, &offset))
-@@ -39468,6 +39585,55 @@
+@@ -39466,6 +39583,75 @@
+  fail:
+     JS_FreeValue(ctx, obj);
      return JS_EXCEPTION;
- }
- 
++}
++
 +/* canonical-LE: the compiled regexp is libregexp's OWN bytecode format,
 +   embedded (in a function cpool via OP_regexp, or as a serialized JSRegExp)
 +   as an opaque 8-bit byte string copied verbatim by JS_WriteString. Its
@@ -268,8 +270,28 @@ diff --git a/quickjs.c b/quickjs.c
 +    JSValue bc_val;
 +    JSString *new_bc;
 +
-+    if (le_bc->is_wide_char || le_bc->len < 2)
++    if (le_bc->is_wide_char || le_bc->len < 8)
 +        return JS_ThrowInternalError(ctx, "bad regexp bytecode");
++    /* OP_regexp fires for BOTH deserialized cpool literals (canonical-LE)
++       AND freshly-parsed literals in running code (native-BE) — recompiling
++       the latter would misread its native header flags as LE and drop e.g.
++       the global flag. Discriminate structurally: the RE_HEADER_BYTECODE_LEN
++       u32 must satisfy RE_HEADER_LEN + len <= total only in the CORRECT
++       endianness (the wrong reading is astronomically large). If the native
++       reading is already plausible, the bytecode is native — return it
++       untouched. Only recompile when the little-endian reading is the
++       plausible one. */
++    {
++        uint32_t cap = (uint32_t)le_bc->len - 8;
++        uint32_t len_native = get_u32(hdr + 4);
++        uint32_t len_le = hdr[4] |
++                          (hdr[5] << 8) |
++                          (hdr[6] << 16) |
++                          ((uint32_t)hdr[7] << 24);
++        if (len_native <= cap || !(len_le <= cap))
++            return JS_DupValue(ctx, le_bc_val);  /* already native */
++    }
++    /* Flags are a u16 at RE_HEADER_FLAGS in the canonical-LE header. */
 +    re_flags = (hdr[0] | (hdr[1] << 8)) & ~LRE_FLAG_NAMED_GROUPS;
 +    pat_cstr = JS_ToCStringLen2(ctx, &pat_len, pattern,
 +                               !(re_flags & LRE_FLAG_UNICODE));
@@ -289,15 +311,15 @@ diff --git a/quickjs.c b/quickjs.c
 +    new_bc->kind = JS_STRING_KIND_INDIRECT;
 +    new_bc->len = re_bytecode_len;
 +    return bc_val;
-+}
-+
- static JSValue JS_ReadRegExp(BCReaderState *s)
- {
-     JSContext *ctx = s->ctx;
-@@ -39490,6 +39656,18 @@
-         return JS_ThrowInternalError(ctx, "bad regexp bytecode");
-     }
+ }
  
+ static JSValue JS_ReadRegExp(BCReaderState *s)
+@@ -39488,6 +39674,18 @@
+         js_free_string(ctx->rt, pattern);
+         js_free_string(ctx->rt, bc);
+         return JS_ThrowInternalError(ctx, "bad regexp bytecode");
++    }
++
 +    if (is_be()) {
 +        /* canonical-LE: recompile from the pattern (see js_re_recompile_le). */
 +        JSValue nbc = js_re_recompile_le(ctx, JS_MKPTR(JS_TAG_STRING, pattern),
@@ -308,8 +330,6 @@ diff --git a/quickjs.c b/quickjs.c
 +            return JS_EXCEPTION;
 +        }
 +        bc = JS_VALUE_GET_STRING(nbc);
-+    }
-+
+     }
+ 
      return js_regexp_constructor_internal(ctx, JS_UNDEFINED,
-                                           JS_MKPTR(JS_TAG_STRING, pattern),
-                                           JS_MKPTR(JS_TAG_STRING, bc));
