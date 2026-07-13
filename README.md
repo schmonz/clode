@@ -21,7 +21,7 @@ Two pieces:
 Grab `clode-<version>-<platform>` from Releases, then:
 
 ```sh
-./clode-0.1.2-netbsd-amd64 build   # fetch + extract + fuse -> ./quaude
+./clode-0.1.2-netbsd9.4-amd64 build   # fetch + extract + fuse -> ./quaude
 ./quaude                           # run it like `claude`
 ```
 
@@ -54,6 +54,15 @@ machine, use clode while you still can.
 From Releases: download, `chmod +x`, done. `SHA256SUMS` covers the native
 builders; every binary carries a SLSA provenance attestation
 (`gh attestation verify <file> --repo <owner/repo>`).
+
+Asset names carry the platform's compat floor:
+`clode-<version>-<os><floor>-<arch>`, e.g. `clode-0.1.2-darwin10.6-x64`
+needs macOS >= 10.6, `clode-0.1.2-netbsd9.4-amd64` needs NetBSD >= 9.4.
+Bare names (`clode-<version>-windows-x64`, `clode-<version>-linux-x64-musl`)
+are floorless — Windows targets a stable ABI and the musl Linux builds are
+fully static, so they run anywhere. `clode-<version>-darwin-universal`
+is also bare: a 4-slice fat binary that runs each arch at its own slice
+floor (ppc/i386 10.4, x86_64 10.6, arm64 11.0).
 
 For the classic Node-launcher mode instead:
 
