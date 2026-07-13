@@ -39,7 +39,7 @@ test('clode build --self: missing esbuilt bundle fails loudly and names the fix'
   });
   assert.strictEqual(r.status, 1);
   assert.match(r.stderr, /build --self: no esbuilt clode-main bundle at '\/nonexistent\/clode-main\.bundle\.cjs'/);
-  assert.match(r.stderr, /build-sea\.mjs --bundle-only|CLODE_MAIN_BUNDLE/);
+  assert.match(r.stderr, /build-bundle\.mjs|CLODE_MAIN_BUNDLE/);
 });
 
 test('clode build: missing tjs template fails loudly and names the fix', () => {

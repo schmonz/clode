@@ -244,7 +244,7 @@ async function clodeBuild(args, opts) {
           }
         } catch { /* no build dir */ }
         if (!newest) {
-          return fail('build --self: no esbuilt clode-main bundle found (run `node scripts/build-sea.mjs --bundle-only`, or set CLODE_MAIN_BUNDLE)');
+          return fail('build --self: no esbuilt clode-main bundle found (run `node scripts/build-bundle.mjs`, or set CLODE_MAIN_BUNDLE)');
         }
         bundle = newest.c;
       }
