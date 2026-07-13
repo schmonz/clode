@@ -63,6 +63,13 @@ test('ci tier: every release OS is exercised, exactly one leg per VM OS', () => 
   for (const os of ciOSes) {
     if (os === 'linux' || os === 'darwin') continue; // native tier keeps its historical multi-leg set
     const legs = ci.filter((l) => osOf(l) === os);
+    if (os === 'windows') {
+      // Phase A of cl.exe: the mingw publisher windows-x64 + the transient
+      // cl.exe proving leg windows-x64-msvc. Phase B collapses back to one.
+      assert.deepStrictEqual(legs.map((l) => l.leg).sort(), ['windows-x64', 'windows-x64-msvc'],
+        `windows: expected the mingw+msvc pair, got ${legs.map((l) => l.leg)}`);
+      continue;
+    }
     assert.strictEqual(legs.length, 1, `${os}: expected exactly one ci leg, got ${legs.map((l) => l.leg)}`);
   }
 });

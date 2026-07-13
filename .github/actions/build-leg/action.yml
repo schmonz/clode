@@ -74,6 +74,10 @@ inputs:
     description: "'off': no tjs:ffi (spares the guest a libffi dep; nothing shipped imports it)"
     required: false
     default: "on"
+  msvc:
+    description: "'true': build the Windows engine with MSVC cl.exe (VS dev env) instead of mingw gcc"
+    required: false
+    default: "false"
   smoke:
     description: "'full' (provider fetch + ephemeral quaude PONG) or 'version' (--clode-version only)"
     required: false
@@ -233,7 +237,7 @@ runs:
     # tjs cache hit). thread-model is echoed for the wall-walk: lws/txpacer
     # needs POSIX threading (winpthreads), not the win32-threads variant.
     - name: Install mingw-w64 + Ninja (native Windows engine leg)
-      if: runner.os == 'Windows' && steps.tjs-cache.outputs.cache-hit != 'true'
+      if: runner.os == 'Windows' && steps.tjs-cache.outputs.cache-hit != 'true' && inputs.msvc != 'true'
       shell: bash
       run: |
         set -euo pipefail
@@ -241,6 +245,12 @@ runs:
         gcc --version | head -1
         gcc -v 2>&1 | grep -i "thread model" || true
         ninja --version
+
+    - name: Activate the MSVC dev environment (native Windows cl.exe leg)
+      if: runner.os == 'Windows' && steps.tjs-cache.outputs.cache-hit != 'true' && inputs.msvc == 'true'
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
 
     - name: Build tjs (native)
       if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.guest-platform == 'native' && inputs.cross-image == ''
@@ -256,7 +266,8 @@ runs:
         CLODE_TJS_MACOS_SDK: ${{ steps.sdk.outputs.path }}
         CLODE_TJS_MACOS_ARCH: ${{ inputs.macos-arch }}
         CLODE_TJS_SMOKE: ${{ inputs.no-exec == 'true' && 'off' || 'on' }}
-        CLODE_TJS_WIN_MINGW: ${{ runner.os == 'Windows' && '1' || '' }}
+        CLODE_TJS_WIN_MINGW: ${{ runner.os == 'Windows' && inputs.msvc != 'true' && '1' || '' }}
+        CLODE_TJS_WIN_MSVC: ${{ runner.os == 'Windows' && inputs.msvc == 'true' && '1' || '' }}
       run: node scripts/build-tjs.mjs --build-only
 
     - name: Build tjs (alpine guest)

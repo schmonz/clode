@@ -150,6 +150,13 @@ const LEGS = [
   // windows-x64-tests job against this leg's tjs-windows-x64 artifact.
   { leg: 'windows-x64', os: 'windows-latest', publish: true, ci: true,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
+  // windows-x64-msvc (cl.exe proving leg, transient): compiles tjs.exe with
+  // MSVC cl.exe on windows-latest (CLODE_TJS_WIN_MSVC) to prove the compiler
+  // swap without risking the mingw windows-x64 publisher. publish:false,
+  // soft-fail while it earns green. Phase B flips windows-x64 to msvc:true and
+  // DELETES this leg. Same wasm/mimalloc/ffi-off config.
+  { leg: 'windows-x64-msvc', os: 'windows-latest', msvc: true, ci: true, publish: false,
+    wasm: 'off', mimalloc: 'off', ffi: 'off', 'soft-fail': true },
   // ---- T1.5 extra musl arches. x86 execs natively on the x64 kernel (full
   // smoke); the rest are qemu-user with version-smoke like s390x. wasm off:
   // MAP_32BIT is x86_64/aarch64-only in musl headers — and 32-bit WAMR is

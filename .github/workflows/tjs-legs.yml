@@ -86,6 +86,7 @@ jobs:
           wasm: ${{ matrix.wasm || 'on' }}
           mimalloc: ${{ matrix.mimalloc || 'on' }}
           ffi: ${{ matrix.ffi || 'on' }}
+          msvc: ${{ matrix.msvc || '' }}
           smoke: ${{ matrix.smoke || 'full' }}
           macos-min: ${{ matrix.macos-min || '' }}
           macos-sdk: ${{ matrix.macos-sdk || '' }}
