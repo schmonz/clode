@@ -167,7 +167,7 @@ runs:
 
     - name: esbuild the clode-main bundle
       shell: bash
-      run: node scripts/build-sea.mjs --bundle-only
+      run: node scripts/build-bundle.mjs
 
     # The honest-floor SDK (darwin-x64 floor walk, spec 2026-07-11): build
     # against the REAL old headers so every post-floor API is a compile

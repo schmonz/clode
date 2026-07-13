@@ -254,7 +254,7 @@ async function clodeBuild(args, opts) {
         const bm = fs.statSync(bundle).mtimeMs;
         const stale = fs.readdirSync(libexec).some((f) => /\.(cjs|mjs|js)$/.test(f)
           && fs.statSync(path.join(libexec, f)).mtimeMs > bm);
-        if (stale) stderr.write(`clode: build --self: WARNING: ${bundle} is older than libexec sources; re-run \`node scripts/build-sea.mjs --bundle-only\`\n`);
+        if (stale) stderr.write(`clode: build --self: WARNING: ${bundle} is older than libexec sources; re-run \`node scripts/build-bundle.mjs\`\n`);
       } catch { /* best effort */ }
       stageDir = path.join(work, 'stage');
       fs.mkdirSync(stageDir, { recursive: true });

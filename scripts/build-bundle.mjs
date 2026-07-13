@@ -1,0 +1,93 @@
+#!/usr/bin/env node
+'use strict';
+// Build the esbuilt clode-main bundle (build/<tag>/clode-main.bundle.cjs) that
+// `clode build --self` embeds into a quaude in place of the upstream Claude Code
+// payload (libexec/clode-fuse.cjs). This is NOT the SEA builder — the Node
+// Single Executable Application pipeline (deps asset, sea-config, blob, postject,
+// re-sign, embed) was retired in Phase 4 ("retire the Node SEA builder"). This
+// script keeps only the esbuild half that scripts/build-sea.mjs used to do first.
+import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+import fs from 'node:fs';
+import path from 'node:path';
+import url from 'node:url';
+
+const require = createRequire(import.meta.url);
+const { platformTag } = require('./platform-tag.cjs');
+
+const REPO = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '..');
+// All build artifacts (toolchain node_modules + the bundle) live under a per-platform
+// tag dir so a shared/NFS `build/` tree can host mutually-incompatible builds
+// (different OS/OS-version/arch/node) without collision.
+const TOOLCHAIN = path.join(REPO, 'build', platformTag());
+const OUT = TOOLCHAIN;
+fs.mkdirSync(OUT, { recursive: true });
+
+// Run npm by launching its OWN JS CLI under THIS node, rather than the `npm`/`npm.cmd`
+// launcher. Uniform on every OS, and it sidesteps the Windows-only `npm.cmd`+shell path
+// (cmd.exe can't run from a UNC cwd and strips quotes from args). npm ships inside every
+// node install; the file sits at a different spot on Windows vs POSIX, so probe both.
+function npmCliPath() {
+  const d = path.dirname(process.execPath);
+  const found = [
+    path.join(d, 'node_modules', 'npm', 'bin', 'npm-cli.js'),              // Windows dist layout
+    path.join(d, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'), // POSIX dist layout
+  ].find((p) => fs.existsSync(p));
+  if (!found) throw new Error(`build-bundle: could not locate npm-cli.js next to ${process.execPath}`);
+  return found;
+}
+const NPM_CLI = npmCliPath();
+function runNpm(args, opts) { execFileSync(process.execPath, [NPM_CLI, ...args], opts); }
+
+// Load a build-only toolchain package's JS API (esbuild) from the per-tag dir. We use
+// the API, not the CLI: esbuild's published bin/esbuild is a NATIVE binary on POSIX but
+// a node shim on Windows (so "run the bin under node" isn't portable either way), and the
+// API takes real values — no shell, no quote-stripping, no bin-shape guessing.
+const toolRequire = createRequire(path.join(TOOLCHAIN, 'package.json'));
+
+// Provision the build-only toolchain (esbuild) INTO the per-tag dir, so each host
+// installs its own native binaries side by side instead of overwriting a shared
+// build/node_modules. Idempotent: skips the install once the .bin shim is present.
+function ensureToolchain() {
+  const bin = (name) => path.join(TOOLCHAIN, 'node_modules', '.bin', name);
+  if (fs.existsSync(bin('esbuild'))) return;
+  // npm --prefix needs the manifest in the prefix dir; the committed source of truth
+  // is build/package.json (build-only devDeps, kept out of the repo-root node_modules).
+  fs.copyFileSync(path.join(REPO, 'build', 'package.json'), path.join(TOOLCHAIN, 'package.json'));
+  // Prefer a reproducible, pinned install: copy the committed lockfile and `npm ci`.
+  // Fall back to `npm install` only when no lockfile is present.
+  const lock = path.join(REPO, 'build', 'package-lock.json');
+  const cmd = fs.existsSync(lock)
+    ? (fs.copyFileSync(lock, path.join(TOOLCHAIN, 'package-lock.json')), ['ci'])
+    : ['install'];
+  console.error(`toolchain: installing esbuild into ${path.relative(REPO, TOOLCHAIN)}`);
+  runNpm([cmd[0], '--no-audit', '--no-fund', ...cmd.slice(1)], { stdio: 'inherit', cwd: TOOLCHAIN });
+}
+
+// clode's version lives in the VERSION file at the repo root. The esbuilt bundle's
+// __dirname is build/<tag> (not the package root), so the runtime file-read in
+// clode-main can't find it — inject it at build time as a define. clode-main prefers
+// the VERSION file when present (npm/source layout) and falls back to this constant
+// (bundle/quaude), so both paths report the real version.
+function repoVersion() {
+  try { return fs.readFileSync(path.join(REPO, 'VERSION'), 'utf8').replace(/\n+$/, '') || 'dev'; }
+  catch { return 'dev'; }
+}
+
+function esbuildBundle() {
+  const bundle = path.join(OUT, 'clode-main.bundle.cjs');
+  // define values are strings that must be valid JSON — JSON.stringify(version) yields the
+  // quoted "0.1.0" esbuild expects. Passing it as a real object (not a CLI arg) means no shell
+  // and nothing to strip the quotes, unlike a `--define:...="0.1.0"` command line.
+  toolRequire('esbuild').buildSync({
+    entryPoints: [path.join(REPO, 'libexec', 'clode-main.cjs')],
+    bundle: true, platform: 'node', format: 'cjs', target: 'node24',
+    define: { __CLODE_BUNDLE_VERSION__: JSON.stringify(repoVersion()) },
+    outfile: bundle,
+  });
+  return bundle;
+}
+
+ensureToolchain();
+const bundle = esbuildBundle();
+console.error(`esbuild → ${bundle}`);

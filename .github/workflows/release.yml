@@ -229,7 +229,7 @@ jobs:
       - name: Install deps + esbuild the clode-main bundle
         run: |
           npm ci
-          node scripts/build-sea.mjs --bundle-only
+          node scripts/build-bundle.mjs
       - name: Fat-fuse the universal builder (arm64 slice drives; trailer spans all)
         env:
           CLODE_TJS: ${{ steps.fat.outputs.fat }}
