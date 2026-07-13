@@ -63,15 +63,6 @@ test('ci tier: every release OS is exercised, exactly one leg per VM OS', () => 
   for (const os of ciOSes) {
     if (os === 'linux' || os === 'darwin') continue; // native tier keeps its historical multi-leg set
     const legs = ci.filter((l) => osOf(l) === os);
-    if (os === 'windows') {
-      // windows permits exactly the native+cross pair (Phase 3B/3C): the
-      // cross windows-x64 (publishes) plus the native windows-x64-native
-      // (proving leg, publish:false) — named explicitly so an uncovered OS
-      // or a stray third windows leg both still fail.
-      assert.deepStrictEqual(legs.map((l) => l.leg).sort(), ['windows-x64', 'windows-x64-native'],
-        `windows: expected exactly the native+cross pair, got ${legs.map((l) => l.leg)}`);
-      continue;
-    }
     assert.strictEqual(legs.length, 1, `${os}: expected exactly one ci leg, got ${legs.map((l) => l.leg)}`);
   }
 });
@@ -130,8 +121,8 @@ test('darwin floor: macos-min/macos-sdk are release-only, native-darwin-only', (
   }
   for (const l of ci) {
     // no-exec is NOT stripped: it is a tier-invariant target fact (the
-    // runner literally cannot exec the output, e.g. windows-x64's mingw
-    // cross build) — dropping it in ci would make build-leg's exec-guards
+    // runner literally cannot exec the output, e.g. the darwin-x86 i386
+    // floor build) — dropping it in ci would make build-leg's exec-guards
     // misfire and try to EXEC the un-execable binary.
     assert.ok(!('macos-min' in l) && !('macos-sdk' in l)
       && !('macos-arch' in l) && !('cross-image' in l),
@@ -157,14 +148,11 @@ test('darwin-x86 Tiger leg: engine-only i386 at floor 10.4', () => {
   assert.strictEqual(dt['macos-arch'], 'i386');
   assert.strictEqual(dt['no-exec'], true);
   assert.strictEqual(dt.publish, false);
-  // No GitHub runner can exec the output of a no-exec leg — fusing and
-  // publishing a builder is impossible there by definition... UNLESS the fuse
-  // mechanism itself never execs the target. windows-x64 is the deliberate
-  // exception: it publishes via CLODE_TARGET_TEMPLATE (Phase-3B's append-only
-  // PE-trailer embedding), proven on real windows-latest without ever
-  // executing the cross-built .exe on the ubuntu builder host.
+  // No GitHub runner can exec the output of a no-exec leg, so it cannot fuse
+  // or publish a builder — the engine-only floor legs (darwin-ppc, darwin-x86)
+  // are proven but never published.
   for (const l of release) {
-    if (l['no-exec'] && l.leg !== 'windows-x64') {
+    if (l['no-exec']) {
       assert.ok(!l.publish, `${l.leg}: no-exec legs must not publish`);
     }
   }
