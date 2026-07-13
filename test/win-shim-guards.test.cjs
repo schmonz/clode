@@ -107,4 +107,6 @@ test('build-tjs: CLODE_TJS_WIN_MINGW selects Ninja + mingw gcc', () => {
 });
 test('build-tjs: win-mingw and cross-file are mutually exclusive', () => {
   assert.match(buildTjsSrc, /CLODE_TJS_WIN_MINGW[\s\S]{0,200}crossFile[\s\S]{0,80}throw|crossFile[\s\S]{0,80}CLODE_TJS_WIN_MINGW[\s\S]{0,80}throw/);
+  assert.match(buildTjsSrc, /CLODE_TJS_WIN_MSVC is exclusive with/);
+  assert.match(buildTjsSrc, /winMsvc\s*&&\s*\(crossFile\s*\|\|\s*winMingw\)/);
 });

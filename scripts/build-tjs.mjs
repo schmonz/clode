@@ -1578,6 +1578,18 @@ if (winMingw && crossFile) {
 if (winMingw) {
   cmakeArgs.push('-G', 'Ninja', '-DCMAKE_C_COMPILER=gcc', '-DCMAKE_CXX_COMPILER=g++');
 }
+// Native Windows build with MSVC cl.exe (the windows-x64-msvc proving leg,
+// then the windows-x64 publisher after Phase B). Ninja + cl (the VS dev
+// environment is activated in build-leg so cl + the Windows SDK + ninja are on
+// PATH). Mutually exclusive with the mingw and cross paths. cl needs no
+// -Wno-error demotion (txiki applies -Werror only on its Unix path).
+const winMsvc = process.env.CLODE_TJS_WIN_MSVC === '1';
+if (winMsvc && (crossFile || winMingw)) {
+  throw new Error('CLODE_TJS_WIN_MSVC is exclusive with CLODE_TJS_WIN_MINGW / CLODE_TJS_CROSS_FILE');
+}
+if (winMsvc) {
+  cmakeArgs.push('-G', 'Ninja', '-DCMAKE_C_COMPILER=cl', '-DCMAKE_CXX_COMPILER=cl');
+}
 // 32-bit targets lacking libatomic (ppc/sparc): link the __atomic_*_8 shim.
 if (process.env.CLODE_TJS_ATOMIC_SHIM === '1') {
   cmakeArgs.push('-DCLODE_ATOMIC_SHIM=ON');
@@ -1596,7 +1608,7 @@ if (macosSdk && !crossFile) {
   }
   cmakeArgs.push(`-DCMAKE_OSX_SYSROOT=${macosSdk}`);
 }
-if (process.platform !== 'darwin' && !crossFile) {
+if (process.platform !== 'darwin' && !crossFile && !winMsvc) {
   // txiki-sync-spawn.patch declares posix_spawnattr_t attr used only inside
   // the #ifdef POSIX_SPAWN_CLOEXEC_DEFAULT (Apple) block; txiki compiles
   // -Werror on Unix, so -Wunused-variable kills every non-Apple POSIX leg
