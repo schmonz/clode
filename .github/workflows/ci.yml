@@ -111,6 +111,51 @@ jobs:
               test/node-shim-roundtrip.test.cjs \
               test/node-shim-agentic.test.cjs
 
+  # Windows ConPTY TUI render (windows-tjs-port spec, sub-project D). The FIRST
+  # CI PTY harness on any platform: drive the real bin/clode LAUNCHER
+  # (CLODE_ENGINE=tjs → clode-run.cjs spawns tjs.exe run loader cli → the real
+  # Claude Code bundle → Ink) inside a real ConPTY (node-pty) with an xterm
+  # emulator on the far end, and assert the welcome box painted. Runs the SAME
+  # test/e2e-tui-tjs.test.cjs as POSIX, un-gated here via CLODE_LIVE_RENDER=1 —
+  # true on Windows because there is no Keychain GUI modal to hang on (the reason
+  # POSIX CI can't run it). Consumes the windows-x64 leg's tjs-windows-x64 engine.
+  # Because it installs the latest provider it is also a Windows render bump gate.
+  # Render-only; the ConPTY INPUT round-trip is the tracked follow-on (D2).
+  windows-x64-tui:
+    needs: tjs
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .tool-versions
+      - uses: actions/download-artifact@v8
+        with:
+          name: tjs-windows-x64
+          path: .
+      - name: Install the Claude provider (npm, latest — the render bump gate)
+        run: npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
+      - name: Install root runtime deps (render seed deps)
+        run: npm ci
+      - name: Install the PTY harness (node-pty win32-x64 prebuilt + @xterm/headless)
+        run: npm install --prefix test
+      - name: Preflight — node-pty can open a ConPTY on this kernel
+        run: node test/harness-preflight.cjs
+      - name: Render the real TUI under ConPTY and assert the welcome box
+        run: |
+          set -euo pipefail
+          PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f \( -name claude -o -name claude.exe \) -size +20M 2>/dev/null | head -1)"
+          if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
+          echo "provider: $PROV"
+          chmod +x ./tjs.exe || true
+          CLODE_TJS="$PWD/tjs.exe" CLODE_CLAUDE_BIN="$PROV" CLODE_LIVE_RENDER=1 \
+            node --test --test-concurrency=1 test/e2e-tui-tjs.test.cjs
+
   test:
     strategy:
       fail-fast: false
