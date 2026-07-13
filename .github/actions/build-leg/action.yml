@@ -82,6 +82,10 @@ inputs:
     description: "MSVC target arch for the dev-env (x64 | arm64); default x64"
     required: false
     default: "x64"
+  floor:
+    description: "Compat floor token injected into the published asset name (clode-<ver>-<os><floor>-<arch>); empty = bare name"
+    required: false
+    default: ""
   smoke:
     description: "'full' (provider fetch + ephemeral quaude PONG) or 'version' (--clode-version only)"
     required: false
@@ -131,7 +135,13 @@ runs:
       run: |
         set -euo pipefail
         if [ "${GITHUB_REF_TYPE:-}" = tag ]; then V="${GITHUB_REF_NAME#v}"; else V="$(cat VERSION)"; fi
-        echo "asset=clode-$V-${{ inputs.leg }}" >> "$GITHUB_OUTPUT"
+        LEG="${{ inputs.leg }}"; FLOOR="${{ inputs.floor }}"
+        if [ -n "$FLOOR" ]; then
+          OS="${LEG%-*}"; ARCH="${LEG##*-}"
+          echo "asset=clode-$V-${OS}${FLOOR}-${ARCH}" >> "$GITHUB_OUTPUT"
+        else
+          echo "asset=clode-$V-${LEG}" >> "$GITHUB_OUTPUT"
+        fi
 
     # The cache key carries the BUILD ENVIRONMENT axes, not just the leg
     # name: guest-version varies per tier (ci = newest, release = oldest

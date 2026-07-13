@@ -88,6 +88,7 @@ jobs:
           ffi: ${{ matrix.ffi || 'on' }}
           msvc: ${{ matrix.msvc || '' }}
           msvc-arch: ${{ matrix.msvc-arch || 'x64' }}
+          floor: ${{ matrix.floor || '' }}
           smoke: ${{ matrix.smoke || 'full' }}
           macos-min: ${{ matrix.macos-min || '' }}
           macos-sdk: ${{ matrix.macos-sdk || '' }}

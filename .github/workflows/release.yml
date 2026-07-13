@@ -203,15 +203,27 @@ jobs:
           pattern: clode-*          # published builders (smoke-* and tjs-* stay CI artifacts)
           path: dist
           merge-multiple: true
-      - name: Release gate — refuse an arm64-less release
+      - name: Release gate — required-platform assets present
         run: |
           set -euo pipefail
-          if ! ls dist/clode-*windows-arm64* >/dev/null 2>&1; then
-            echo "RELEASE GATE: no windows-arm64 builder in the asset set — refusing to publish an arm64-less release." >&2
-            echo "(Phase 4 dropped the SEA arm64 leg; restore a windows-arm64 tjs leg in step 5 before releasing.)" >&2
-            exit 1
-          fi
-          echo "release gate ok: windows-arm64 builder present"
+          # {os arch} pairs that MUST be in the release (floor-agnostic glob).
+          # Only currently-existing required legs go here so the gate stays
+          # SATISFIABLE. The paused NetBSD/sparc sub-project ADDS `netbsd sparc`
+          # to this list when that leg lands (per its own spec). Do NOT add it
+          # now — netbsd-sparc doesn't exist yet, and gating on it would fail
+          # every release immediately.
+          REQUIRED="windows arm64"
+          missing=0
+          set -- $REQUIRED
+          while [ $# -ge 2 ]; do
+            os="$1"; arch="$2"; shift 2
+            if ! ls dist/clode-*-"$os"*-"$arch" >/dev/null 2>&1; then
+              echo "RELEASE GATE: missing required asset for $os/$arch" >&2
+              missing=1
+            fi
+          done
+          [ "$missing" = 0 ] || { echo "refusing to publish an incomplete release" >&2; exit 1; }
+          echo "release gate ok: all required-platform assets present"
       - name: Attach builders + shas to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
