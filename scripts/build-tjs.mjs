@@ -1518,7 +1518,22 @@ function fixupModFsSyncMsvc(dir) {
     + '#include <io.h>\n'
     + '#include <direct.h>\n'
     + '#endif';
-  fs.writeFileSync(f, src.replace(anchor, inject));
+  // MSVC's <sys/stat.h> defines the _S_IF* bits but NOT the POSIX S_IS*
+  // test macros. stat_to_js uses S_ISREG/S_ISDIR/S_ISLNK; the file already
+  // supplies an S_ISLNK fallback via #ifndef — join S_ISREG/S_ISDIR to that
+  // same #ifndef block (mingw/POSIX already define all three, so the guards
+  // make these inert there — no _MSC_VER needed, mirroring the existing
+  // S_ISLNK). Without them MSVC parses S_ISREG(m) as an implicit function
+  // call and the LINK fails (LNK2019, run 2026-07-13). <sys/stat.h> is
+  // already included above these guards.
+  const statAnchor = '#ifndef S_ISLNK\n#define S_ISLNK(m) (0)\n#endif';
+  const statInject = '#ifndef S_ISREG\n#define S_ISREG(m) (((m) & _S_IFMT) == _S_IFREG)\n#endif\n'
+    + '#ifndef S_ISDIR\n#define S_ISDIR(m) (((m) & _S_IFMT) == _S_IFDIR)\n#endif\n'
+    + statAnchor;
+  if (!src.includes(statAnchor)) {
+    throw new Error('fixup mod-fs-sync-msvc: S_ISLNK anchor not found (mod_fs_sync.c changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(anchor, inject).replace(statAnchor, statInject));
   console.log('fixup mod-fs-sync-msvc: applied');
 }
 
