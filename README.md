@@ -91,12 +91,9 @@ Building the pieces from source:
 - `node scripts/build-tjs.mjs` — the pinned, patched txiki.js runtime
   (`build/tjs/tjs`). Pins in `spike/quickjs/PINS.md`; portability fixups
   apply themselves with content verification.
+- `node scripts/build-bundle.mjs` — esbuild the launcher bundle
+  (`clode-main.bundle.cjs`) that `clode build` and `clode build --self`
+  embed into a fused quaude in place of the upstream Claude Code payload.
 - `clode build --self` — fuse the native builder itself (embeds the
-  esbuilt launcher from `node scripts/build-sea.mjs --bundle-only` and the
-  pristine tjs template, so the result needs nothing on disk).
-- `node scripts/build-sea.mjs` — the transitional single-file
-  [Node SEA](https://nodejs.org/api/single-executable-applications.html)
-  (the `-node`-tagged release assets; Windows's only path today). Run it
-  with an official, non-stripped Node >= 24 — the SEA embeds whichever
-  `node` runs the script, and a stripped or non-system-lib node produces a
-  broken or non-portable binary.
+  esbuilt launcher bundle and the pristine tjs template, so the result
+  needs nothing on disk).

@@ -34,7 +34,7 @@ process.env.NODE_PATH = [path.join(HARNESS, 'node_modules'), process.env.NODE_PA
   .filter(Boolean).join(path.delimiter);
 
 // npm via its own npm-cli.js under THIS node (cross-platform; no npm/.cmd/shell) — same
-// approach as scripts/build-sea.mjs.
+// approach as scripts/build-bundle.mjs.
 function npmCliPath() {
   const d = path.dirname(process.execPath);
   const found = [

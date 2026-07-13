@@ -1,13 +1,15 @@
 name: release
 
 # THE release workflow (unified 2026-07-10, user call — formerly two files:
-# the SEA-only release.yml and this matrix): tjs builder legs (T1 native,
-# T1.5 Alpine/musl x8, T2 VM guests — fuse and smoke run INSIDE the guest; a
-# BSD binary has no binfmt escape on a Linux host) PLUS the transitional
-# Node-SEA legs (the -node-tagged assets; Windows's only path today). ONE
-# release job gates on BOTH families: every hard leg must succeed or nothing
-# publishes; soft legs (continue-on-error) contribute artifacts only when
-# green. One SHA256SUMS covers every asset; every asset is SLSA-attested.
+# the SEA-only release.yml and this matrix; the SEA legs themselves retired
+# Phase 4, 2026-07-13): tjs builder legs (T1 native, T1.5 Alpine/musl x8, T2
+# VM guests — fuse and smoke run INSIDE the guest; a BSD binary has no binfmt
+# escape on a Linux host) are now the ONLY builder family. The release job
+# gates on every hard leg succeeding, or nothing publishes; soft legs
+# (continue-on-error) contribute artifacts only when green. A release-gate
+# tripwire additionally refuses to publish without a windows-arm64 builder
+# (Phase 4 dropped the SEA arm64 leg with no tjs replacement yet). One
+# SHA256SUMS covers every asset; every asset is SLSA-attested.
 # Publishes ONLY clode builders (canon: quaude is derived work, never leaves
 # a runner). glibc Linux legs are CI-smoke only (Decision 3) — the published
 # Linux artifacts are the musl-static ones. Phase 3 adds the T3 own-qemu
@@ -45,68 +47,6 @@ jobs:
       attestations: write
     with:
       tier: release
-
-  # ---- Transitional Node-SEA legs (the -node engine tag; formerly their
-  # own workflow). RETIREMENT EXECUTED 2026-07-10 (user call): the macOS and
-  # Linux SEA legs are gone — their tjs replacements are proven (darwin
-  # arm64/x64 native; Linux musl-static x8). SEA is now Windows-only, until
-  # the sync-spawn Windows port (Q3+) retires these last two.
-  sea:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest     # windows-x64
-          - os: windows-11-arm     # windows-arm64
-    runs-on: ${{ matrix.os }}
-    permissions:
-      contents: read
-      id-token: write        # actions/attest-build-provenance
-      attestations: write
-    defaults:
-      run:
-        shell: bash          # windows runners default to pwsh; force Git Bash
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
-        with:
-          node-version-file: .tool-versions
-      - name: Assert Node matches the .tool-versions pin
-        run: |
-          set -euo pipefail
-          want=$(sed -n 's/^nodejs //p' .tool-versions)
-          have=$(node -v); have=${have#v}
-          [ "$have" = "$want" ] || { echo "node skew: .tool-versions=$want but runtime=$have" >&2; exit 1; }
-          echo "node $have matches .tool-versions pin"
-      - name: Build the SEA binary
-        run: node scripts/build-sea.mjs
-      - name: Offline SEA smoke (build + --clode-version/--clode-help)
-        run: CLODE_SEA=1 node --test --test-concurrency=1 test/sea-build.test.cjs test/sea-smoke.test.cjs
-      - name: Name the binary
-        id: name
-        run: |
-          set -euo pipefail
-          if [ "$GITHUB_REF_TYPE" = tag ]; then V="${GITHUB_REF_NAME#v}"; else V="$(cat VERSION)"; fi
-          BASE=$(node -e "console.log(require('./scripts/platform-tag.cjs').platformTag())")
-          BASE=${BASE%-node*}
-          # seaBin returns an OS-NATIVE path; normalize to forward slashes
-          # so bash `cp` accepts it on the Git Bash runner.
-          BIN=$(node -e "const p=require('path');console.log(require('./scripts/platform-tag.cjs').seaBin('.').split(p.sep).join('/'))")
-          EXT=""; case "$BIN" in *.exe) EXT=".exe" ;; esac
-          # -node = the engine tag: tjs builders own the bare
-          # clode-<ver>-<platform> names.
-          ASSET="clode-$V-$BASE-node$EXT"
-          cp "$BIN" "$ASSET"
-          echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
-      - name: Attest build provenance
-        uses: actions/attest-build-provenance@v4
-        with:
-          subject-path: ${{ steps.name.outputs.asset }}
-      - uses: actions/upload-artifact@v7
-        with:
-          name: ${{ steps.name.outputs.asset }}
-          path: ${{ steps.name.outputs.asset }}
-          if-no-files-found: error
 
   # 64-bit big-endian oracle (plan T1.5): the node-shim suite against the
   # s390x-musl tjs under qemu-user binfmt. Provider-gated suites self-skip
@@ -247,11 +187,11 @@ jobs:
           path: ${{ steps.name.outputs.asset }}
           if-no-files-found: error
 
-  # ONE gate for the whole release: every HARD leg in BOTH families must
-  # succeed (needs:), or nothing publishes. Soft legs (continue-on-error)
-  # never block; their artifacts ship only when green.
+  # ONE gate for the whole release: every HARD leg must succeed (needs:), or
+  # nothing publishes. Soft legs (continue-on-error) never block; their
+  # artifacts ship only when green.
   release:
-    needs: [leg, sea, darwin-universal]
+    needs: [leg, darwin-universal]
     if: github.ref_type == 'tag' || inputs.release == 'draft'
     runs-on: ubuntu-latest
     permissions:
@@ -260,9 +200,18 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
-          pattern: clode-*          # published builders + SEA binaries (smoke-* and tjs-* stay CI artifacts)
+          pattern: clode-*          # published builders (smoke-* and tjs-* stay CI artifacts)
           path: dist
           merge-multiple: true
+      - name: Release gate — refuse an arm64-less release
+        run: |
+          set -euo pipefail
+          if ! ls dist/clode-*windows-arm64* >/dev/null 2>&1; then
+            echo "RELEASE GATE: no windows-arm64 builder in the asset set — refusing to publish an arm64-less release." >&2
+            echo "(Phase 4 dropped the SEA arm64 leg; restore a windows-arm64 tjs leg in step 5 before releasing.)" >&2
+            exit 1
+          fi
+          echo "release gate ok: windows-arm64 builder present"
       - name: Attach builders + shas to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -275,8 +224,9 @@ jobs:
           cd ..
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             TAG="$GITHUB_REF_NAME"
-            # The SEA release workflow may already have created this release —
-            # attach, don't duplicate; create only if we got here first.
+            # A previous run of this same workflow (e.g. re-dispatch) may
+            # already have created this release — attach, don't duplicate;
+            # create only if we got here first.
             gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
               || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
                    --target "$GITHUB_SHA" --title "$TAG" \
