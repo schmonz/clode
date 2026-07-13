@@ -153,6 +153,14 @@ const LEGS = [
   // leg deleted — mingw is retired.)
   { leg: 'windows-x64', os: 'windows-latest', msvc: true, publish: true, ci: true,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
+  // windows-arm64 (the Windows finale): native MSVC ARM64 on the windows-11-arm
+  // runner (msvc-arch:arm64 → the dev-env's cl targets ARM64), exec=host build +
+  // fuse + PONG like windows-x64. PUBLISHES clode-<ver>-windows-arm64 — the asset
+  // the release.yml tripwire requires (Phase 4 dropped the SEA arm64 leg). Starts
+  // soft-fail (new-to-CI); graduates to hard once green. Finer signals run in
+  // ci.yml's windows-arm64-tests job.
+  { leg: 'windows-arm64', os: 'windows-11-arm', msvc: true, 'msvc-arch': 'arm64',
+    publish: true, ci: true, wasm: 'off', mimalloc: 'off', ffi: 'off', 'soft-fail': true },
   // ---- T1.5 extra musl arches. x86 execs natively on the x64 kernel (full
   // smoke); the rest are qemu-user with version-smoke like s390x. wasm off:
   // MAP_32BIT is x86_64/aarch64-only in musl headers — and 32-bit WAMR is

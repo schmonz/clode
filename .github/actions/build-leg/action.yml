@@ -78,6 +78,10 @@ inputs:
     description: "'true': build the Windows engine with MSVC cl.exe (VS dev env) instead of mingw gcc"
     required: false
     default: "false"
+  msvc-arch:
+    description: "MSVC target arch for the dev-env (x64 | arm64); default x64"
+    required: false
+    default: "x64"
   smoke:
     description: "'full' (provider fetch + ephemeral quaude PONG) or 'version' (--clode-version only)"
     required: false
@@ -235,7 +239,7 @@ runs:
       if: runner.os == 'Windows' && steps.tjs-cache.outputs.cache-hit != 'true' && inputs.msvc == 'true'
       uses: ilammy/msvc-dev-cmd@v1
       with:
-        arch: x64
+        arch: ${{ inputs.msvc-arch }}
 
     - name: Build tjs (native)
       if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.guest-platform == 'native' && inputs.cross-image == ''

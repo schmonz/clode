@@ -126,6 +126,47 @@ jobs:
           CLODE_TJS="$PWD/tjs.exe" \
             node --test --test-concurrency=1 test/node-shim-tty.test.cjs
 
+  # Windows shim + sync-primitive coverage on the ARM64 kernel — the same
+  # rationale as windows-x64-tests, exercised against the windows-arm64 leg's
+  # native MSVC ARM64 engine. No tui counterpart yet (out of scope).
+  windows-arm64-tests:
+    needs: tjs
+    runs-on: windows-11-arm
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .tool-versions
+      - uses: actions/download-artifact@v8
+        with:
+          name: tjs-windows-arm64
+          path: .
+      - name: Install the Claude provider (npm, latest — the bundle-bump gate)
+        run: npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
+      - name: Install runtime deps (semver et al.) for the oracles
+        run: npm ci
+      - name: Sync-primitive battery on the real Windows kernel
+        run: |
+          set -euo pipefail
+          chmod +x ./tjs.exe || true
+          ./tjs.exe run test/win-sync-battery.js | tee battery.out
+          grep -q '^BATTERY OK' battery.out
+      - name: node-shim oracles (roundtrip + agentic) on the real Windows kernel
+        run: |
+          set -euo pipefail
+          PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f \( -name claude -o -name claude.exe \) -size +20M 2>/dev/null | head -1)"
+          if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
+          echo "provider: $PROV"
+          CLODE_TJS="$PWD/tjs.exe" CLODE_PROVIDER_BIN="$PROV" \
+            node --test --test-concurrency=1 \
+              test/node-shim-roundtrip.test.cjs \
+              test/node-shim-agentic.test.cjs
+
   test:
     strategy:
       fail-fast: false
