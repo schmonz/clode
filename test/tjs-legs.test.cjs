@@ -174,6 +174,37 @@ test('build-leg cache key carries the macos floor axes', () => {
     `cache key must carry the macos floor axes, got: ${keyLine}`);
 });
 
+test('floored legs carry a name-safe floor; unfloored do not', () => {
+  const release = legsFor('release');
+  const FLOORED_OS = /^(darwin|netbsd|freebsd|openbsd|dragonflybsd|midnightbsd|omnios|solaris|openindiana|haiku)/;
+  for (const l of release) {
+    const isFlooredOs = FLOORED_OS.test(l.leg);
+    if (l.floor !== undefined) {
+      assert.match(l.floor, /^[A-Za-z0-9.]+$/, `${l.leg}: floor '${l.floor}' must be name-safe`);
+      assert.ok(isFlooredOs, `${l.leg}: only floored-OS legs may carry a floor`);
+    }
+    // every PUBLISHED floored-OS leg must declare a floor
+    if (l.publish && isFlooredOs) {
+      assert.ok(l.floor, `${l.leg}: published floored-OS leg must declare a floor`);
+    }
+    // unfloored published legs must NOT carry a floor
+    if (l.publish && !isFlooredOs) {
+      assert.strictEqual(l.floor, undefined, `${l.leg}: unfloored leg must not carry a floor`);
+    }
+  }
+});
+
+test('floor survives the ci-tier destructure (build-leg needs it for the smoke asset name)', () => {
+  const ci = legsFor('ci');
+  const rel = legsFor('release');
+  for (const l of ci) {
+    const sib = rel.find((r) => r.leg === l.leg);
+    if (sib && sib.floor !== undefined) {
+      assert.strictEqual(l.floor, sib.floor, `${l.leg}: ci tier must not strip/alter floor`);
+    }
+  }
+});
+
 test('version policy: ci rides the newest end, release the oldest floor', () => {
   const release = legsFor('release');
   const ci = legsFor('ci');

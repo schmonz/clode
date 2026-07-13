@@ -53,7 +53,7 @@ const LEGS = [
   // -node engine tag instead.
   // macos-14 = the oldest arm64 runner GitHub hosts (= the publish floor);
   // ci rides the newest (macos-26).
-  { leg: 'darwin-arm64', os: 'macos-14', 'ci-os': 'macos-26', publish: true, ci: true },
+  { leg: 'darwin-arm64', os: 'macos-14', 'ci-os': 'macos-26', publish: true, ci: true, floor: '11.0' },
   // glibc Linux artifacts are smoke-only forever (Decision 3): the published
   // Linux artifacts are the musl-static ones. Release pins the oldest hosted
   // ubuntu (glibc floor for the smoke build), ci the newest.
@@ -92,7 +92,7 @@ const LEGS = [
   // quaude ON the box (29MB, bundle 2.1.179), PONG + attest green, quaude
   // answers --version. The 10.6..10.9 gap is covered by the honest SDK.
   { leg: 'darwin-x64', os: 'macos-15-intel', publish: true,
-    'macos-min': '10.6', 'macos-sdk': '10.6',
+    'macos-min': '10.6', 'macos-sdk': '10.6', floor: '10.6',
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // darwin-x86 Tiger walk (spec 2026-07-11-darwin-x86-tiger-walk): the
   // i386 slice at floor 10.4 — second slice of the 4-way fat binary.
@@ -120,7 +120,7 @@ const LEGS = [
   // (True-Tiger execution awaits Tiger hardware or the qemu-ppc-era
   // oracle legs; 10.4..10.9 gap covered by the honest SDK.)
   { leg: 'darwin-x86', os: 'macos-15-intel', publish: false,
-    'macos-min': '10.4', 'macos-sdk': '10.4u', 'macos-arch': 'i386',
+    'macos-min': '10.4', 'macos-sdk': '10.4u', 'macos-arch': 'i386', floor: '10.4',
     'no-exec': true, wasm: 'off', mimalloc: 'off', ffi: 'off',
     'soft-fail': true },
   // darwin-ppc Tiger walk (spec 2026-07-11-darwin-ppc-walk): the ppc/BE32
@@ -135,7 +135,7 @@ const LEGS = [
   // v5 regexp-endian discriminator. Publishable ppc BUILDER awaits
   // cross-fuse (this leg + darwin-x86 are its consumers).
   { leg: 'darwin-ppc', os: 'ubuntu-latest', publish: false,
-    'macos-min': '10.4', 'macos-arch': 'ppc',
+    'macos-min': '10.4', 'macos-arch': 'ppc', floor: '10.4',
     // renovate: datasource=docker depName=ghcr.io/variantxyz/gcc-powerpc-apple-darwin8
     'cross-image': 'ghcr.io/variantxyz/gcc-powerpc-apple-darwin8@sha256:a9013745ae4a696dc3a047675a85e7c43b9453cdb1e26d9a7ac9738587c1e198',
     'no-exec': true, wasm: 'off', mimalloc: 'off', ffi: 'off',
@@ -192,7 +192,7 @@ const LEGS = [
     'guest-version': '9.4',
     // renovate: datasource=custom.cpa-netbsd-x86-64 depName=netbsd-x86-64-guest versioning=loose
     'ci-guest-version': '10.1',
-    'guest-packages': 'cmake gmake nodejs git-base bash',
+    'guest-packages': 'cmake gmake nodejs git-base bash', floor: '9.4',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true },  // cpa, KVM
   { leg: 'freebsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'freebsd',
     // PROVEN floor (probe run 29157832721, honest in-guest build): 14.0 is
@@ -202,7 +202,7 @@ const LEGS = [
     'guest-version': '14.0',
     // renovate: datasource=custom.cpa-freebsd-x86-64 depName=freebsd-x86-64-guest versioning=loose
     'ci-guest-version': '15.1',
-    'guest-packages': 'cmake gmake node git bash',
+    'guest-packages': 'cmake gmake node git bash', floor: '14.0',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true },  // cpa, KVM
   // OpenBSD is EXEMPT from publish-oldest: ld.so refuses on libc.so major
   // mismatch and majors bump nearly every release, in BOTH directions
@@ -212,22 +212,24 @@ const LEGS = [
   // to BUILD (probe run 29157832086, honest build) but a 7.6 artifact would
   // be useless to 7.9 users.
   { leg: 'openbsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'openbsd', 'guest-version': '7.9',
-    'guest-packages': 'cmake gmake node git bash',
+    'guest-packages': 'cmake gmake node git bash', floor: '7.9',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true },  // cpa, KVM
   { leg: 'dragonflybsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'dragonflybsd', 'guest-version': '6.4.2',
-    'guest-packages': 'cmake gmake node git bash',
+    'guest-packages': 'cmake gmake node git bash', floor: '6.4.2',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true },  // cpa, KVM
   { leg: 'omnios-amd64', os: 'ubuntu-latest', 'guest-platform': 'omnios',
     'guest-version': 'r151056',        // PROVEN floor (probe run 29154489454, 2026-07-11) — oldest in cpa catalog
     // renovate: datasource=custom.cpa-omnios-x86-64 depName=omnios-x86-64-guest versioning=loose
     'ci-guest-version': 'r151058',
     'guest-packages': 'developer/gcc14 developer/build/gnu-make ooce/developer/cmake ooce/runtime/node-22 developer/versioning/git shell/bash',
+    floor: 'r151056',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true },  // cpa, KVM (illumos rung)
   { leg: 'solaris-amd64', os: 'ubuntu-latest', 'guest-platform': 'solaris',
     'guest-version': '11.4-gcc',       // CBE image with gcc/g++ preinstalled
     // renovate: datasource=custom.vmactions-solaris depName=solaris-guest versioning=loose
     'ci-guest-version': '11.4-gcc-14', // same OS, newer image+toolchain (variants: renovate.json allowedVersions pins /gcc/)
     'guest-packages': 'developer/build/cmake developer/build/gnu-make developer/versioning/git runtime/nodejs shell/bash',
+    floor: '11.4',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true,
     timeout: 120 },               // vmactions boot is slower than cpa
   // ---- Sweep 2 (2026-07-10): the remaining easy adds on proven machinery.
@@ -237,26 +239,26 @@ const LEGS = [
   // vmactions (the __sun fixups transfer). All soft-fail until they earn
   // hard status.
   { leg: 'netbsd-arm64', os: 'ubuntu-latest', 'guest-platform': 'netbsd', 'guest-arch': 'arm64',
-    'guest-version': '10.1', 'guest-packages': 'cmake gmake nodejs git-base bash',
+    'guest-version': '10.1', 'guest-packages': 'cmake gmake nodejs git-base bash', floor: '10.1',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 300, 'soft-fail': true },  // cpa, TCG
   { leg: 'freebsd-arm64', os: 'ubuntu-latest', 'guest-platform': 'freebsd', 'guest-arch': 'arm64',
-    'guest-version': '14.4', 'guest-packages': 'cmake gmake node git bash',
+    'guest-version': '14.4', 'guest-packages': 'cmake gmake node git bash', floor: '14.4',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 300, 'soft-fail': true },  // cpa, TCG
   { leg: 'openbsd-arm64', os: 'ubuntu-latest', 'guest-platform': 'openbsd', 'guest-arch': 'arm64',
-    'guest-version': '7.9', 'guest-packages': 'cmake gmake node git bash',
+    'guest-version': '7.9', 'guest-packages': 'cmake gmake node git bash', floor: '7.9',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 300, 'soft-fail': true },  // cpa, TCG
   { leg: 'midnightbsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'midnightbsd', 'guest-version': '4.0.4',
     // no git: the 4.0.4 mport tree's git dep chain is broken (p5-Digest-HMAC
     // wants perl >= 5.40.3, image ships 5.38.5 — dispatch #14); every cmake
     // git usage is if(GIT_EXECUTABLE)-guarded, so the build does not need it.
-    'guest-packages': 'cmake gmake node bash',
+    'guest-packages': 'cmake gmake node bash', floor: '4.0.4',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, 'soft-fail': true, ci: true },  // cpa, KVM (mport packages)
   { leg: 'haiku-x64', os: 'ubuntu-latest', 'guest-platform': 'haiku', 'guest-version': 'r1beta5',
     // HaikuPorts ships exactly ONE node: nodejs20 (user-verified, 2026-07-10)
     // — named explicitly; v20 clears the build floor (lowered to 20 for
     // OpenIndiana the same day). cmd:X provides-syntax for the rest
     // ("nodejs" alone: Name not found, #14).
-    'guest-packages': 'cmd:cmake cmd:gcc nodejs20 cmd:git cmd:make',
+    'guest-packages': 'cmd:cmake cmd:gcc nodejs20 cmd:git cmd:make', floor: 'r1beta5',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, 'soft-fail': true, ci: true },  // cpa, KVM (a genuinely new OS rung)
   { leg: 'openindiana-amd64', os: 'ubuntu-latest', 'guest-platform': 'openindiana',
     // PROVEN floor (probe run 29154489921, 2026-07-11) — oldest vmactions
@@ -265,6 +267,7 @@ const LEGS = [
     // guards this floor's existence.
     'guest-version': '202510-build',
     'guest-packages': 'developer/build/cmake developer/build/gnu-make developer/versioning/git shell/bash runtime/nodejs',
+    floor: '202510',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 120, 'soft-fail': true },  // vmactions (3rd illumos flavor)
 ];
 
