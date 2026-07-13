@@ -59,3 +59,20 @@ test('process.platform + os.type() are honest for every release-matrix identity'
   assert.strictEqual(r.status, 0, r.stderr);
   assert.strictEqual(r.stdout.trim(), 'OK');
 });
+
+// winArch is a pure function of an injected env object, so it's testable by
+// direct import rather than a fixture run under the loader — no live tjs
+// binary needed. process.cjs itself is NOT requireable outside the loader in
+// general (tjs.pid/tjs.exePath are read eagerly at module-eval time), so a
+// minimal global.tjs stub is installed first purely to satisfy that
+// module-load-time read; winArch itself never touches it when called with an
+// explicit env argument (only its default parameter would).
+global.tjs = { pid: 0, exePath: '/tjs', env: {} };
+const { winArch } = require('../libexec/node-shim/modules/process.cjs');
+
+test('winArch derives honest Windows arch from PROCESSOR_ARCHITECTURE', () => {
+  assert.strictEqual(winArch({ PROCESSOR_ARCHITECTURE: 'ARM64' }), 'arm64');
+  assert.strictEqual(winArch({ PROCESSOR_ARCHITECTURE: 'AMD64' }), 'x64');
+  assert.strictEqual(winArch({ PROCESSOR_ARCHITECTURE: 'X86' }), 'ia32');
+  assert.strictEqual(winArch({}), 'x64');   // absent -> safe existing default
+});

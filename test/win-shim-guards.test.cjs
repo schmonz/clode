@@ -62,8 +62,9 @@ const procSrc = fs.readFileSync(path.join(__dirname, '..', 'libexec/node-shim/mo
 test('os.EOL is CRLF on win32', () => {
   assert.match(osSrc, /EOL:.*win32.*\\r\\n/);
 });
-test('process.arch derives x64 on win32 (scoped, documented gap)', () => {
-  assert.match(procSrc, /arch:.*win32.*x64/);
+test('process.arch derives honest arch on win32 via winArch(PROCESSOR_ARCHITECTURE)', () => {
+  assert.match(procSrc, /arch:.*win32.*winArch\(\)/);
+  assert.match(procSrc, /PROCESSOR_ARCHITECTURE/);
 });
 test('process.execPath uses tjs.exePath', () => {
   assert.match(procSrc, /execPath:\s*tjs\.exePath/);

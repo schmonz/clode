@@ -9,10 +9,10 @@
 //     cwd/exePath/pid — exit() genuinely is a function).
 //   - tjs.platform does not exist on the global; navigator.platform
 //     ('MacIntel' / 'Linux x86_64' / 'Win32' / ...) is the real signal.
-//   - tjs has no arch signal in this build; arch is a scoped ternary below
-//     ((detectPlatform() === 'win32') ? 'x64' : 'arm64') — a documented gap,
-//     not a real signal. M4 (NetBSD/mac68k guest) and any non-x64 Windows
-//     leg must revisit this.
+//   - tjs has no arch signal outside win32 (arch below defaults non-win32 to
+//     'arm64' — a documented gap; M4 (NetBSD/mac68k guest) must revisit
+//     this). On win32, arch is now honestly derived from
+//     PROCESSOR_ARCHITECTURE (winArch, below) — no non-x64 gap remains there.
 //
 // stdout/stderr writes: Task-3 used tjs.stdout.getWriter().write(...) and
 // never awaited the returned promise — a write() immediately followed by
@@ -63,6 +63,17 @@ function detectPlatform(uaPlatform, navPlatform) {
   if (/^OpenBSD/i.test(np)) return 'openbsd';
   if (np) return np.split(' ')[0].toLowerCase();
   return 'linux';
+}
+
+// Honest Windows arch from PROCESSOR_ARCHITECTURE (ARM64 | AMD64 | x86), set by
+// the OS for every process. Our tjs.exe is a NATIVE binary (not under WoW64), so
+// this reports the true arch — no PROCESSOR_ARCHITEW6432 dance. Fixes both legs:
+// x64 -> 'x64', arm64 -> 'arm64'.
+function winArch(env = (typeof tjs !== 'undefined' && tjs.env) || {}) {
+  const pa = String(env.PROCESSOR_ARCHITECTURE || '').toUpperCase();
+  if (pa === 'ARM64') return 'arm64';
+  if (pa === 'X86') return 'ia32';
+  return 'x64'; // AMD64 or unknown -> x64 (the safe existing default)
 }
 
 function writeSync(fd, s) { return writeSyncFd(fd, s); }
@@ -182,10 +193,13 @@ module.exports = {
   }),
   platform: detectPlatform(),
   __detectPlatform: detectPlatform,   // test hook (node-shim-platform.test.cjs)
-  // arch: no arch signal in this tjs build (the Q3 uname-facade gap). Scope the
-  // value to the proven leg: x64 on the windows-x64 leg, arm64 elsewhere. A
-  // future win-arm64 leg must derive this honestly rather than inherit x64.
-  arch: (detectPlatform() === 'win32') ? 'x64' : 'arm64',
+  winArch,                            // test hook (node-shim-platform.test.cjs)
+  // arch: win32 is now derived honestly from PROCESSOR_ARCHITECTURE (winArch,
+  // above) — set by the OS for every process, true for our native (non-WoW64)
+  // tjs.exe. The non-win32 'arm64' default remains the deferred Q3
+  // uname-facade gap (no arch signal in this tjs build outside win32); leave
+  // that branch unchanged until Q3 revisits it.
+  arch: (detectPlatform() === 'win32') ? winArch() : 'arm64',
   pid: tjs.pid,
   execPath: tjs.exePath ?? '/tjs',
   cwd: () => tjs.cwd,
