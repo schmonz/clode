@@ -31,6 +31,18 @@ const osOf = (l) => {
   return l.os.startsWith('macos') ? 'darwin' : 'linux';
 };
 
+test('every leg declares a runner os (tjs-legs.yml runs-on: matrix.os)', () => {
+  // A leg without `os` yields an empty runs-on, which fails the WHOLE leg-matrix
+  // expansion (not just that leg) — GHA rejects the matrix, no leg jobs run.
+  // netbsd-sparc shipped without os and broke the matrix (2026-07-13); this guards it.
+  for (const tier of ['release', 'ci']) {
+    for (const l of legsFor(tier)) {
+      assert.ok(typeof l.os === 'string' && l.os.length > 0,
+        `${l.leg} (${tier}): missing runner os — empty runs-on breaks the whole leg matrix`);
+    }
+  }
+});
+
 test('release tier: every published leg is present (golden)', () => {
   const release = legsFor('release');
   const published = release.filter((l) => l.publish).map((l) => l.leg).sort();

@@ -277,7 +277,7 @@ const LEGS = [
   // clode-<ver>-netbsd10.1-sparc. soft-fail (TCG flake non-blocking); the release
   // required-assets tripwire gates on the sparc asset. First user of the own-qemu
   // guest backend.
-  { leg: 'netbsd-sparc', 'guest-platform': 'qemu-netbsd-sparc', 'guest-arch': 'sparc',
+  { leg: 'netbsd-sparc', os: 'ubuntu-latest', 'guest-platform': 'qemu-netbsd-sparc', 'guest-arch': 'sparc',
     floor: '10.1', publish: true, ci: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
 ];
