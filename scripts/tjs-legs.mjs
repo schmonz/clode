@@ -141,22 +141,18 @@ const LEGS = [
     'no-exec': true, wasm: 'off', mimalloc: 'off', ffi: 'off',
     'soft-fail': true },
   // windows-x64 (native engine leg): compiles tjs.exe ON windows-latest with
-  // mingw-w64 (CLODE_TJS_WIN_MINGW — Ninja + hosted mingw gcc, NOT an ubuntu
-  // cross), so build-leg's exec=host machinery does build + fuse + PONG in
-  // ONE windows job (like darwin) and PUBLISHES clode-<ver>-windows-x64 the
-  // normal exec=host way. The canonical Windows leg — a hard gate (a broken
-  // publisher must fail red). Same wasm/mimalloc/ffi-off config as the other
-  // floor legs. The finer shim + sync-primitive signals run in ci.yml's
-  // windows-x64-tests job against this leg's tjs-windows-x64 artifact.
-  { leg: 'windows-x64', os: 'windows-latest', publish: true, ci: true,
+  // MSVC cl.exe (CLODE_TJS_WIN_MSVC — the Activate-MSVC-dev-env step +
+  // ilammy/msvc-dev-cmd), so build-leg's exec=host machinery does build +
+  // fuse + PONG in ONE windows job (like darwin) and PUBLISHES
+  // clode-<ver>-windows-x64 the normal exec=host way. The canonical Windows
+  // leg — a hard gate (a broken publisher must fail red). Same
+  // wasm/mimalloc/ffi-off config as the other floor legs. The finer shim +
+  // sync-primitive signals run in ci.yml's windows-x64-tests job against this
+  // leg's tjs-windows-x64 artifact. (Phase B: cl.exe proven on the transient
+  // windows-x64-msvc leg, then flipped in as the canonical compiler and that
+  // leg deleted — mingw is retired.)
+  { leg: 'windows-x64', os: 'windows-latest', msvc: true, publish: true, ci: true,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
-  // windows-x64-msvc (cl.exe proving leg, transient): compiles tjs.exe with
-  // MSVC cl.exe on windows-latest (CLODE_TJS_WIN_MSVC) to prove the compiler
-  // swap without risking the mingw windows-x64 publisher. publish:false,
-  // soft-fail while it earns green. Phase B flips windows-x64 to msvc:true and
-  // DELETES this leg. Same wasm/mimalloc/ffi-off config.
-  { leg: 'windows-x64-msvc', os: 'windows-latest', msvc: true, ci: true, publish: false,
-    wasm: 'off', mimalloc: 'off', ffi: 'off', 'soft-fail': true },
   // ---- T1.5 extra musl arches. x86 execs natively on the x64 kernel (full
   // smoke); the rest are qemu-user with version-smoke like s390x. wasm off:
   // MAP_32BIT is x86_64/aarch64-only in musl headers — and 32-bit WAMR is

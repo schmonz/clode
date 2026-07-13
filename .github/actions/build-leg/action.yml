@@ -231,21 +231,6 @@ runs:
         fi
         echo "path=$DEST" >> "$GITHUB_OUTPUT"
 
-    # Native Windows engine leg (windows-x64): the hosted
-    # windows-latest runner has neither mingw-w64 gcc nor Ninja pre-installed
-    # for our use — install both via chocolatey (idempotent; skipped on a
-    # tjs cache hit). thread-model is echoed for the wall-walk: lws/txpacer
-    # needs POSIX threading (winpthreads), not the win32-threads variant.
-    - name: Install mingw-w64 + Ninja (native Windows engine leg)
-      if: runner.os == 'Windows' && steps.tjs-cache.outputs.cache-hit != 'true' && inputs.msvc != 'true'
-      shell: bash
-      run: |
-        set -euo pipefail
-        choco install -y mingw ninja 2>&1 | tail -5
-        gcc --version | head -1
-        gcc -v 2>&1 | grep -i "thread model" || true
-        ninja --version
-
     - name: Activate the MSVC dev environment (native Windows cl.exe leg)
       if: runner.os == 'Windows' && steps.tjs-cache.outputs.cache-hit != 'true' && inputs.msvc == 'true'
       uses: ilammy/msvc-dev-cmd@v1
