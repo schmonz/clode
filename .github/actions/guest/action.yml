@@ -15,7 +15,12 @@ description: >
   chroot teardown breaks when invoked from a nested composite action
   (dispatch 29063991061). Remaining dispatcher stubs reserve the phase-3
   backend (own-qemu guest recipes) so workflow YAML shape never changes; the
-  endgame is own-qemu absorbing platforms one by one.
+  endgame is own-qemu absorbing platforms one by one. "qemu-netbsd-sparc" is
+  the first own-qemu leg: it boots a pinned, pre-fetched NetBSD/sparc image
+  under qemu-system-sparc (sun4m) and drives it over the serial console via
+  spike/quickjs/qemu/ci-sparc-driver.py — there is no GHA-native "run a
+  script in this VM" shell for it (unlike cpa.sh below), so the driver runs
+  the recipe itself instead of a `shell:` step.
 inputs:
   platform:
     description: >
@@ -40,7 +45,12 @@ inputs:
     description: Shell script to run inside the guest (POSIX sh -e semantics)
     required: true
   cache-key:
-    description: Image/toolchain cache key (reserved for the qemu backends)
+    description: >
+      Image/toolchain cache key (reserved for the qemu backends). For
+      qemu-netbsd-sparc this is the exact ci-images release asset filename
+      to fetch (e.g. wd0-pristine-10.1.img.zst or
+      wd0-baked-10.1-gmake-cmake.img.zst, see spike/quickjs/qemu/CI-IMAGES.md);
+      empty defaults to the pristine per-run image at `version`.
     required: false
     default: ""
   packages:
@@ -80,6 +90,7 @@ runs:
             echo "docker-platform=$p" >> "$GITHUB_OUTPUT" ;;
           netbsd|freebsd|openbsd|dragonflybsd|omnios|midnightbsd|haiku) ;;  # cross-platform-actions
           solaris|openindiana) ;;                                           # vmactions
+          qemu-netbsd-sparc) ;;  # own-qemu backend (ci-sparc-driver.py) — see below; the first phase-3 leg
           qemu-*)
             echo "guest: '${{ inputs.platform }}' is a phase-3 backend stub (own-qemu guest-recipe subsystem not implemented yet)" >&2
             exit 64 ;;
@@ -212,6 +223,64 @@ runs:
         run: |
           set -e
           ${{ inputs.script }}
+
+    # ---- own-qemu backend: qemu-netbsd-sparc. No GHA-native "run in
+    # qemu-sun4m" shell exists (unlike cpa.sh above), so ci-sparc-driver.py
+    # itself drives the guest over the serial console. Structural first pass
+    # (netbsd-sparc-matrix-leg Task 2): the mechanism (provision, fetch+
+    # verify the pinned image, invoke the driver) is wired end to end here;
+    # the driver's boot/recipe behavior is proven and tuned in the Task-4 CI
+    # wall-walk, not here.
+    - name: Provision qemu-system-sparc + anita (own-qemu backend)
+      if: inputs.platform == 'qemu-netbsd-sparc'
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update -qq
+        sudo apt-get install -y --no-install-recommends qemu-system-sparc zstd
+        pip install --user anita pexpect
+
+    - name: Fetch + verify the pinned NetBSD/sparc image (own-qemu backend)
+      if: inputs.platform == 'qemu-netbsd-sparc'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        # cache-key doubles as the exact ci-images asset filename for this
+        # backend (see the input's description above); empty falls back to
+        # the pristine per-run image at `version`.
+        ASSET: ${{ inputs.cache-key != '' && inputs.cache-key || format('wd0-pristine-{0}.img.zst', inputs.version) }}
+      run: |
+        set -euo pipefail
+        WORK="$RUNNER_TEMP/qemu-sparc"
+        mkdir -p "$WORK"
+        gh release download ci-images -R "${{ github.repository }}" -p "$ASSET" -D "$WORK" --clobber
+        PIN=$(awk -v f="$ASSET" '$2 == f' spike/quickjs/qemu/sparc-images.sha256)
+        [ -n "$PIN" ] || { echo "guest: no sha256 pin for '$ASSET' in spike/quickjs/qemu/sparc-images.sha256" >&2; exit 1; }
+        ( cd "$WORK" && echo "$PIN" | sha256sum -c - )
+        zstd -d -f "$WORK/$ASSET" -o "$WORK/wd0.img"
+        echo "CI_SPARC_WORKDIR=$WORK" >> "$GITHUB_ENV"
+
+    - name: Run the guest script (own-qemu sparc via ci-sparc-driver.py)
+      if: inputs.platform == 'qemu-netbsd-sparc'
+      shell: bash
+      env:
+        CLODE_GUEST_SCRIPT: ${{ inputs.script }}
+      run: |
+        set -euo pipefail
+        # Bridge inputs.script into ci-sparc-driver.py's recipe-file model:
+        # the guest fetches this file over :8180 and runs it with sh. For
+        # the driver's GUEST-DONE/*-exit verdict to mean anything, the
+        # recipe must follow the marker vocabulary already used by
+        # spike/quickjs/qemu/guest-sparc-*.sh — build-leg recipes (Task 3)
+        # are expected to emit it; exact wiring refined in Task 3/4.
+        RECIPE_REL=".ci-sparc-guest-script.sh"
+        printf '%s\n' "$CLODE_GUEST_SCRIPT" > "$GITHUB_WORKSPACE/$RECIPE_REL"
+        python3 spike/quickjs/qemu/ci-sparc-driver.py \
+          --workdir "$CI_SPARC_WORKDIR" \
+          --workspace "$GITHUB_WORKSPACE" \
+          --recipe "$RECIPE_REL" \
+          --machine SS-20 \
+          --memory 512M
 
     # ---- native backend: host passthrough (exists so every leg can share one
     # YAML shape; native legs may also just run steps directly).
