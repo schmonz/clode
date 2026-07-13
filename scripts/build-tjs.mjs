@@ -1396,6 +1396,132 @@ function fixupLwsTxpacerPthreadWin(dir) {
   console.log('fixup lws-txpacer-pthread-win: applied');
 }
 
+function fixupModFsSyncMsvc(dir) {
+  // cl.exe (MSVC-native Windows leg, Phase A CI proving run 2026-07-13) has
+  // neither <dirent.h> nor <unistd.h> — mingw ships both as Win32 wrappers,
+  // MSVC ships neither. txiki-sync-fs.patch (our own added module) includes
+  // both unconditionally. _MSC_VER-guarded so mingw and every POSIX/darwin
+  // leg keep the byte-identical <dirent.h>/<unistd.h> path; only cl.exe gets
+  // the shim. dirent: minimal opendir/readdir/closedir over
+  // FindFirstFileA/FindNextFileA/FindClose, just enough for the readdir
+  // loop below (js_fss_readdir already skips "." and ".." itself, so the
+  // shim returns them like POSIX readdir does). unistd: MSVC's <io.h>
+  // (already included below, unconditionally under _WIN32) declares
+  // read/write/close/access/unlink/lseek etc. as deprecated aliases for the
+  // _-prefixed names, and <direct.h> (also already included) covers
+  // mkdir/rmdir/getcwd — nothing else from unistd.h is used in this file.
+  // realpath is NOT remapped here: js_fss_realpath already branches
+  // _WIN32-vs-POSIX at the call site (_fullpath vs realpath), so a
+  // `#define realpath` would be dead code, not a fix. Sync-fs upstream
+  // candidate (see the patch header).
+  const f = path.join(dir, 'src/mod_fs_sync.c');
+  const src = fs.readFileSync(f, 'utf8');
+  if (src.includes('MSVC has neither <dirent.h>')) {
+    console.log('fixup mod-fs-sync-msvc: already applied');
+    return;
+  }
+  const anchor = '#include "private.h"\n'
+    + '#include "utils.h"\n'
+    + '#include <dirent.h>\n'
+    + '#include <errno.h>\n'
+    + '#include <fcntl.h>\n'
+    + '#include <limits.h>\n'
+    + '#include <stdlib.h>\n'
+    + '#include <string.h>\n'
+    + '#include <sys/stat.h>\n'
+    + '#include <unistd.h>\n'
+    + '\n'
+    + '/* ---- mingw/Win32 CRT gaps (Windows tjs port Phase 1) ---- */\n'
+    + '#if defined(_WIN32)\n'
+    + '#include <io.h>\n'
+    + '#include <direct.h>\n'
+    + '#endif';
+  if (!src.includes(anchor)) {
+    throw new Error('fixup mod-fs-sync-msvc: anchor not found (mod_fs_sync.c changed under the pin — re-derive the fixup)');
+  }
+  const direntShim = '#if defined(_MSC_VER)\n'
+    + '/* MSVC has neither <dirent.h> nor <unistd.h> (mingw ships both as Win32\n'
+    + ' * wrappers over the same Win32 APIs). Minimal opendir/readdir/closedir\n'
+    + ' * shim over FindFirstFileA/FindNextFileA/FindClose — just enough for the\n'
+    + ' * readdir loop below, which already skips "." and ".." itself, so the\n'
+    + ' * shim need not filter them either. */\n'
+    + '#include <windows.h>\n'
+    + '#include <stdio.h>\n'
+    + '#include <stdlib.h>\n'
+    + '/* POSIX types MSVC lacks (mingw has both via its POSIX headers, so these\n'
+    + ' * are _MSC_VER-only and never redefine there). mode_t: chmod(p,(mode_t)m)\n'
+    + ' * casts to it and MSVC\'s chmod takes an int pmode, so int is the exact\n'
+    + ' * fit. ssize_t: the js_fss_read/js_fss_write _WIN32 branches declare it;\n'
+    + ' * Windows spells it SSIZE_T in <BaseTsd.h> (pulled in by <windows.h>\n'
+    + ' * above). */\n'
+    + 'typedef int mode_t;\n'
+    + 'typedef SSIZE_T ssize_t;\n'
+    + 'typedef struct DIR {\n'
+    + '    HANDLE handle;\n'
+    + '    WIN32_FIND_DATAA data;\n'
+    + '    int first;\n'
+    + '} DIR;\n'
+    + 'struct dirent {\n'
+    + '    char d_name[MAX_PATH];\n'
+    + '};\n'
+    + 'static DIR *opendir(const char *path) {\n'
+    + '    char pattern[MAX_PATH];\n'
+    + '    snprintf(pattern, sizeof(pattern), "%s\\\\*", path);\n'
+    + '    pattern[sizeof(pattern) - 1] = \'\\0\';\n'
+    + '    DIR *d = (DIR *)malloc(sizeof(DIR));\n'
+    + '    if (!d) return NULL;\n'
+    + '    d->handle = FindFirstFileA(pattern, &d->data);\n'
+    + '    if (d->handle == INVALID_HANDLE_VALUE) { free(d); return NULL; }\n'
+    + '    d->first = 1;\n'
+    + '    return d;\n'
+    + '}\n'
+    + 'static struct dirent *readdir(DIR *d) {\n'
+    + '    static struct dirent de;\n'
+    + '    if (!d->first && !FindNextFileA(d->handle, &d->data)) return NULL;\n'
+    + '    d->first = 0;\n'
+    + '    snprintf(de.d_name, sizeof(de.d_name), "%s", d->data.cFileName);\n'
+    + '    de.d_name[sizeof(de.d_name) - 1] = \'\\0\';\n'
+    + '    return &de;\n'
+    + '}\n'
+    + 'static int closedir(DIR *d) {\n'
+    + '    if (!d) return -1;\n'
+    + '    FindClose(d->handle);\n'
+    + '    free(d);\n'
+    + '    return 0;\n'
+    + '}\n'
+    + '#else\n'
+    + '#include <dirent.h>\n'
+    + '#endif';
+  const inject = '#if defined(_MSC_VER)\n'
+    + '#ifndef _CRT_NONSTDC_NO_WARNINGS\n'
+    + '#define _CRT_NONSTDC_NO_WARNINGS\n'
+    + '#endif\n'
+    + '#ifndef _CRT_SECURE_NO_WARNINGS\n'
+    + '#define _CRT_SECURE_NO_WARNINGS\n'
+    + '#endif\n'
+    + '#endif\n'
+    + '#include "private.h"\n'
+    + '#include "utils.h"\n'
+    + direntShim + '\n'
+    + '#include <errno.h>\n'
+    + '#include <fcntl.h>\n'
+    + '#include <limits.h>\n'
+    + '#include <stdlib.h>\n'
+    + '#include <string.h>\n'
+    + '#include <sys/stat.h>\n'
+    + '#if !defined(_MSC_VER)\n'
+    + '#include <unistd.h>\n'
+    + '#endif\n'
+    + '\n'
+    + '/* ---- mingw/Win32 CRT gaps (Windows tjs port Phase 1) ---- */\n'
+    + '#if defined(_WIN32)\n'
+    + '#include <io.h>\n'
+    + '#include <direct.h>\n'
+    + '#endif';
+  fs.writeFileSync(f, src.replace(anchor, inject));
+  console.log('fixup mod-fs-sync-msvc: applied');
+}
+
 let tjsDir;
 if (buildOnly) {
   // The patched tree was constructed by a prior --source-only run (possibly on
@@ -1453,6 +1579,7 @@ if (buildOnly) {
   fixupAtomicShim(tjsDir);
   fixupTjsCmakeWinStack(tjsDir);
   fixupLwsTxpacerPthreadWin(tjsDir);
+  fixupModFsSyncMsvc(tjsDir);
 }
 
 // ---- big-endian bundle regen, part 1: esbuild the plain-JS intermediates ----
