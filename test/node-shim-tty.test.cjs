@@ -50,6 +50,10 @@ test('process.stdout columns/rows/isTTY under an 80x24 PTY match host node', asy
 
 test('process.stdout emits resize with updated columns on SIGWINCH', async (t) => {
   if (skipUnlessTjs(t)) return;
+  // SIGWINCH is not a Windows signal, and node itself emits no stdout 'resize'
+  // via node-pty's p.resize() under ConPTY (the nodeOut assertion fails there
+  // too) — this is a platform-absent capability, not a shim divergence.
+  if (process.platform === 'win32') { t.skip('SIGWINCH/resize N/A on Windows ConPTY (node emits none either)'); return; }
   const f = fixture(`
     process.stdout.on('resize', () => {
       console.log('@@TTY@@' + JSON.stringify({ cols: process.stdout.columns }));
@@ -169,10 +173,21 @@ test("process.stdin fires 'data' from on() alone, without resume()/setRawMode, m
       process.exit(0);
     });
   `);
-  const nodeOut = extractMark((await runNodePty(f, { input: 'ab\n', inputDelayMs: 500, ms: 4000 })).out);
-  const tjsOut = extractMark((await runLoaderPty(f, { input: 'ab\n', inputDelayMs: 500, ms: 4000 })).out);
-  assert.deepStrictEqual(tjsOut, nodeOut);
-  assert.deepStrictEqual(tjsOut, { hex: '61620a' }); // 'ab\n'
+  // Cooked (non-raw) mode: the PTY line discipline releases input only on its
+  // line terminator — LF on POSIX, CR on Windows ConPTY console line-input. Send
+  // the platform's terminator so the line completes for both readers (the fixture
+  // hardcoding '\n' was the POSIX-only assumption).
+  const input = process.platform === 'win32' ? 'ab\r' : 'ab\n';
+  const nodeOut = extractMark((await runNodePty(f, { input, inputDelayMs: 500, ms: 4000 })).out);
+  const tjsOut = extractMark((await runLoaderPty(f, { input, inputDelayMs: 500, ms: 4000 })).out);
+  assert.deepStrictEqual(tjsOut, nodeOut);   // load-bearing: the shim matches host node
+  if (process.platform === 'win32') {
+    // Assert delivery + shim/node parity without hardcoding the exact Windows
+    // terminator bytes (CR may arrive as 0d or be translated); 'ab' must lead.
+    assert.ok(tjsOut && /^6162/.test(tjsOut.hex), `expected 'ab'+terminator, got ${JSON.stringify(tjsOut)}`);
+  } else {
+    assert.deepStrictEqual(tjsOut, { hex: '61620a' }); // 'ab\n'
+  }
 });
 
 // Characterization/regression lock: merely READING tjs.stdout/tjs.stderr/
