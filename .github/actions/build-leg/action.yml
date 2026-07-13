@@ -227,7 +227,7 @@ runs:
         fi
         echo "path=$DEST" >> "$GITHUB_OUTPUT"
 
-    # Native Windows engine leg (windows-x64-native, Task 1): the hosted
+    # Native Windows engine leg (windows-x64): the hosted
     # windows-latest runner has neither mingw-w64 gcc nor Ninja pre-installed
     # for our use — install both via chocolatey (idempotent; skipped on a
     # tjs cache hit). thread-model is echoed for the wall-walk: lws/txpacer

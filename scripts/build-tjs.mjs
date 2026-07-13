@@ -1563,7 +1563,7 @@ if (crossFile) {
   if (!fs.existsSync(crossFile)) throw new Error(`CLODE_TJS_CROSS_FILE: no file at ${crossFile}`);
   cmakeArgs.push(`-DCMAKE_TOOLCHAIN_FILE=${path.resolve(crossFile)}`);
 }
-// Native Windows build with a HOSTED mingw toolchain (the windows-x64-native
+// Native Windows build with a HOSTED mingw toolchain (the windows-x64
 // leg): use the SAME gcc-posix compiler the cross build uses, but on the
 // Windows runner itself so the output can be executed (exec=host). Ninja
 // because the default Windows generator is Visual Studio (MSVC), and mingw gcc

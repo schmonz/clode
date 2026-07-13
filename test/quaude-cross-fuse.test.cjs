@@ -3,7 +3,7 @@
 // valid trailer stack onto a FOREIGN base and skips the host smoke. Proven
 // locally (byte-append on the host) — a stand-in foreign base (a copy of the
 // host tjs named tjs.exe) exercises the cross path; the real PE base + self-load
-// is CI (test/quaude-fused-win.test.cjs). Layout per quaude-bootstrap.mjs:
+// is CI (the windows-x64 leg's exec=host native fuse + PONG). Layout per quaude-bootstrap.mjs:
 // [base][members][index JSON][QAUDEv0 footer 32B][bootstrap bc][tx1k1.js 12B].
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
