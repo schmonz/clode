@@ -206,13 +206,11 @@ jobs:
       - name: Release gate — required-platform assets present
         run: |
           set -euo pipefail
-          # {os arch} pairs that MUST be in the release (floor-agnostic glob).
-          # Only currently-existing required legs go here so the gate stays
-          # SATISFIABLE. The paused NetBSD/sparc sub-project ADDS `netbsd sparc`
-          # to this list when that leg lands (per its own spec). Do NOT add it
-          # now — netbsd-sparc doesn't exist yet, and gating on it would fail
-          # every release immediately.
-          REQUIRED="windows arm64"
+          # {os arch} pairs that MUST be in the release (floor-agnostic glob;
+          # `dist/clode-*-netbsd*-sparc` matches the floored
+          # `clode-<ver>-netbsd10.1-sparc`). Only currently-existing required
+          # legs go here so the gate stays SATISFIABLE.
+          REQUIRED="windows arm64  netbsd sparc"
           missing=0
           set -- $REQUIRED
           while [ $# -ge 2 ]; do

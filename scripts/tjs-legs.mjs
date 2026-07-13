@@ -269,6 +269,17 @@ const LEGS = [
     'guest-packages': 'developer/build/cmake developer/build/gnu-make developer/versioning/git shell/bash runtime/nodejs',
     floor: '202510',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 120, 'soft-fail': true },  // vmactions (3rd illumos flavor)
+  // netbsd-sparc (the first truly-weird platform; cross-fuse A+B1+C): the sparc
+  // tjs ENGINE is built once via the source-hash tjs-cache (TCG bake on miss);
+  // per-run cross-fuses the clode --self builder on the x64 runner (Layer A,
+  // CLODE_TARGET_TEMPLATE=sparc engine), then boots the pristine sparc image and
+  // runs clode-on-sparc to FUSE a quaude + PONG (Layer C). Publishes
+  // clode-<ver>-netbsd10.1-sparc. soft-fail (TCG flake non-blocking); the release
+  // required-assets tripwire gates on the sparc asset. First user of the own-qemu
+  // guest backend.
+  { leg: 'netbsd-sparc', 'guest-platform': 'qemu-netbsd-sparc', 'guest-arch': 'sparc',
+    floor: '10.1', publish: true, ci: true, 'soft-fail': true, timeout: 3600,
+    wasm: 'off', mimalloc: 'off', ffi: 'off' },
 ];
 
 export function legsFor(tier) {

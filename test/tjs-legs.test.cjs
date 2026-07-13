@@ -43,7 +43,7 @@ test('release tier: every published leg is present (golden)', () => {
     'linux-ppc64le-musl', 'linux-riscv64-musl', 'linux-s390x-musl',
     'linux-x64-musl', 'linux-x86-musl',
     'midnightbsd-amd64',
-    'netbsd-amd64', 'netbsd-arm64',
+    'netbsd-amd64', 'netbsd-arm64', 'netbsd-sparc',
     'omnios-amd64', 'openbsd-amd64', 'openbsd-arm64',
     'openindiana-amd64',
     'solaris-amd64',
@@ -162,6 +162,22 @@ test('darwin-x86 Tiger leg: engine-only i386 at floor 10.4', () => {
       assert.ok(!l.publish, `${l.leg}: no-exec legs must not publish`);
     }
   }
+});
+
+test('netbsd-sparc leg: own-qemu cross-fuse, floored at 10.1, soft-fail VM leg', () => {
+  const release = legsFor('release');
+  const ns = release.find((l) => l.leg === 'netbsd-sparc');
+  assert.ok(ns, 'netbsd-sparc leg must be present in the release tier');
+  assert.strictEqual(ns['guest-platform'], 'qemu-netbsd-sparc');
+  assert.strictEqual(ns['guest-arch'], 'sparc');
+  assert.strictEqual(ns.floor, '10.1');
+  assert.strictEqual(ns.publish, true);
+  assert.strictEqual(ns['soft-fail'], true);
+  // VM(leg): guest-platform set and not native/alpine — the own-qemu
+  // backend is a VM leg like every cpa/vmactions leg, so the "ci tier: VM
+  // legs are soft-fail" house rule applies to it the same way.
+  assert.ok(ns['guest-platform'] && !['native', 'alpine'].includes(ns['guest-platform']),
+    'netbsd-sparc must be recognized as a VM leg (own-qemu backend)');
 });
 
 test('build-leg cache key carries the macos floor axes', () => {

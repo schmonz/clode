@@ -114,12 +114,13 @@ runs:
           exec=cross   # cross-built on ubuntu inside a docker toolchain image (darwin-ppc)
         else
           case "${{ inputs.guest-platform }}" in
+            qemu-*) exec=qemu ;;  # own-qemu leg (netbsd-sparc): engine bakes in-guest, builder cross-fuses on the x64 runner, smoke runs via a backend recipe — see the qemu-* steps below
             netbsd|freebsd|openbsd|dragonflybsd|omnios|solaris|midnightbsd|haiku|openindiana) exec=guest ;;
             *) exec=host ;;
           esac
         fi
         echo "exec=$exec" >> "$GITHUB_OUTPUT"
-        if [ "$exec" = guest ] || [ "$exec" = cross ]; then
+        if [ "$exec" = guest ] || [ "$exec" = cross ] || [ "$exec" = qemu ]; then
           # The VM backends sync the WORKSPACE (rsync); the container build
           # bind-mounts it. Either way the tjs tree + output must live inside.
           echo "vendor=$GITHUB_WORKSPACE/.matrix/tjs-vendor" >> "$GITHUB_OUTPUT"
@@ -313,6 +314,113 @@ runs:
           node scripts/build-tjs.mjs --build-only
         '
 
+    # ---- own-qemu qemu-* legs (netbsd-sparc: first user, plan
+    # netbsd-sparc-matrix-leg Task 3 — STRUCTURAL first pass). Unlike a
+    # guest/cross leg (fuse + smoke run wholly inside/under the foreign
+    # environment), a qemu-* leg splits three ways because the guest has no
+    # node (guest-sparc-*.sh's cc/cmake/gmake-direct recipes, not
+    # build-tjs.mjs): (A) here — the ENGINE alone bakes in-guest via the
+    # own-qemu backend on a tjs-cache miss, synced OUT to
+    # steps.mode.outputs.out by the backend (Task 4 tunes the exact recipe +
+    # sync — the GUEST-DONE/*-exit marker vocabulary already used by
+    # spike/quickjs/qemu/guest-sparc-*.sh); (B) below — the clode --self
+    # BUILDER cross-fuses ON the x64 runner; (C) further below — the SMOKE
+    # hands the backend a recipe. Guarded so every other leg (exec=host/
+    # guest/cross, windows) is untouched.
+    - name: Build the engine (own-qemu guest, qemu-* legs)
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && startsWith(inputs.guest-platform, 'qemu-')
+      uses: ./.github/actions/guest
+      with:
+        platform: ${{ inputs.guest-platform }}
+        arch: ${{ inputs.guest-arch }}
+        version: ${{ inputs.guest-version }}
+        # The BAKED image (gmake+cmake preinstalled) for the cache-miss
+        # bake — see spike/quickjs/qemu/CI-IMAGES.md. TODO(Task 4): this
+        # naming pattern is proven for netbsd-sparc only; a future qemu-*
+        # leg may need its own convention.
+        cache-key: wd0-baked-${{ inputs.guest-version }}-gmake-cmake.img.zst
+        script: |
+          # TODO(Task 4): fold in the proven guest-sparc-*.sh recipe shape
+          # (POSIX sh, cc/cmake/gmake directly — no node in the guest; fetch
+          # inputs over http://10.0.2.2:8180 via `ftp -o`; emit per-phase
+          # `<phase>-exit=<N>` markers; end with '=== GUEST-DONE ==='). This
+          # placeholder only marks the structural seam.
+          set -eux
+          mkdir -p "$PWD/.matrix/tjs-out"
+          echo "TODO-Task-4: in-guest engine bake not yet wired" > "$PWD/.matrix/tjs-out/.placeholder"
+          echo "engine-bake-exit=0"
+          echo "=== GUEST-DONE ==="
+
+    # (B) Cross-fuse the clode --self BUILDER on the x64 runner, targeting
+    # the sparc engine synced out above (the retired windows cross-file
+    # leg's mechanism — git show 594f53c~1 — adapted for sparc): build a
+    # HOST (linux) tjs to run the fuse worker, then fuse against the
+    # foreign-arch TEMPLATE via CLODE_TARGET_TEMPLATE. Unlike windows (whose
+    # no-exec native build already produced a bare tjs.exe locally), the
+    # sparc bare engine only exists after the guest step above (or a
+    # tjs-cache hit) landed it at steps.mode.outputs.out.
+    - name: Build the HOST (linux) tjs — runs the fuse worker (qemu-* cross-fuse)
+      if: startsWith(inputs.guest-platform, 'qemu-')
+      shell: bash
+      env:
+        CLODE_TJS_VENDOR: ${{ runner.temp }}/host-tjs-vendor
+        CLODE_TJS_OUT: ${{ runner.temp }}/host-tjs-out
+        CLODE_TJS_WASM: 'off'
+        CLODE_TJS_MIMALLOC: 'off'
+        CLODE_TJS_FFI: 'off'
+      run: |
+        set -euo pipefail
+        node scripts/build-tjs.mjs   # full native build into a SEPARATE tree (not the .matrix qemu tree)
+        test -x "${{ runner.temp }}/host-tjs-out/tjs"
+
+    - name: Cross-fuse the self-contained builder (qemu-* leg)
+      if: startsWith(inputs.guest-platform, 'qemu-')
+      shell: bash
+      env:
+        CLODE_TJS: ${{ runner.temp }}/host-tjs-out/tjs
+        CLODE_TARGET_TEMPLATE: ${{ steps.mode.outputs.out }}/tjs
+      run: |
+        set -euo pipefail
+        node bin/clode build --self --out "${{ steps.name.outputs.asset }}"
+        test -f "${{ steps.name.outputs.asset }}"
+
+    # (C) The runtime smoke: hand the own-qemu backend a recipe that stages
+    # the cross-fused sparc clode builder + an x64 provider binary on :8180
+    # and runs clode-on-sparc to `build --out quaude` + a PONG check. Uses
+    # the PRISTINE image (no toolchain needed for a runtime smoke) — see
+    # CI-IMAGES.md.
+    - name: Stage the provider for the own-qemu smoke (qemu-* legs)
+      if: startsWith(inputs.guest-platform, 'qemu-') && inputs.smoke == 'full'
+      shell: bash
+      run: |
+        set -uo pipefail
+        npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
+        PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f \( -name claude -o -name claude.exe \) -size +20M 2>/dev/null | head -1)"
+        if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found under @anthropic-ai/claude-code" >&2; exit 1; fi
+        echo "provider: $PROV"
+        mkdir -p .matrix/qemu-smoke
+        cp "$PROV" .matrix/qemu-smoke/provider-claude       # bytes only — clode EXTRACTS from it, never execs it
+        cp "${{ steps.name.outputs.asset }}" .matrix/qemu-smoke/clode-builder
+
+    - name: Smoke via the own-qemu backend (qemu-* legs)
+      if: startsWith(inputs.guest-platform, 'qemu-') && inputs.smoke == 'full'
+      uses: ./.github/actions/guest
+      with:
+        platform: ${{ inputs.guest-platform }}
+        arch: ${{ inputs.guest-arch }}
+        version: ${{ inputs.guest-version }}
+        cache-key: wd0-pristine-${{ inputs.guest-version }}.img.zst
+        script: |
+          # TODO(Task 4): wire the real fetch-stage-run-verify recipe
+          # (H=http://10.0.2.2:8180; ftp -o clode-builder "$H/.matrix/qemu-smoke/clode-builder";
+          # ftp -o provider-claude "$H/.matrix/qemu-smoke/provider-claude"; chmod +x both;
+          # CLODE_CLAUDE_BIN=./provider-claude ./clode-builder build --out quaude;
+          # PONG check against ./quaude; emit smoke-exit=<N>). Placeholder
+          # only marks the structural seam — see Task 4 wall-walk.
+          set -eux
+          echo "smoke-exit=0"
+          echo "=== GUEST-DONE ==="
+
     # A cache HIT skips the guest setup, so foreign-arch legs still need
     # fix-binary binfmt on the host to exec the cached tjs (fuse worker,
     # smokes). Cheap and idempotent.
@@ -412,8 +520,12 @@ runs:
     # `steps.bare` further down, but that resolver runs AFTER these steps
     # (it feeds the tail bare-tjs upload), so it can't be reused here
     # without reordering it — this is a second, narrower resolver instead.
+    # exec=qemu is excluded throughout this block: the sparc engine cannot
+    # host-exec on the x64 runner, and qemu-* legs fuse+smoke via the
+    # dedicated cross-fuse + own-qemu-backend steps above instead.
     - name: Resolve the built tjs path (.exe on native Windows)
       id: tjsbin
+      if: steps.mode.outputs.exec != 'guest' && steps.mode.outputs.exec != 'qemu'
       shell: bash
       run: |
         set -euo pipefail
@@ -423,7 +535,7 @@ runs:
         echo "path=$P" >> "$GITHUB_OUTPUT"
 
     - name: Host-exec smoke of the built tjs
-      if: steps.mode.outputs.exec != 'guest' && inputs.no-exec != 'true'
+      if: steps.mode.outputs.exec != 'guest' && steps.mode.outputs.exec != 'qemu' && inputs.no-exec != 'true'
       shell: bash
       run: |
         set -euo pipefail
@@ -432,14 +544,14 @@ runs:
         [ "$out" = tjs-shim-ok ]
 
     - name: Fuse the self-contained builder (clode build --self)
-      if: steps.mode.outputs.exec != 'guest' && inputs.no-exec != 'true'
+      if: steps.mode.outputs.exec != 'guest' && steps.mode.outputs.exec != 'qemu' && inputs.no-exec != 'true'
       shell: bash
       env:
         CLODE_TJS: ${{ steps.tjsbin.outputs.path }}
       run: node bin/clode build --self --out "${{ steps.name.outputs.asset }}"
 
     - name: Self-smoke --clode-version (host exec of the fused builder)
-      if: steps.mode.outputs.exec != 'guest' && inputs.no-exec != 'true'
+      if: steps.mode.outputs.exec != 'guest' && steps.mode.outputs.exec != 'qemu' && inputs.no-exec != 'true'
       shell: bash
       run: |
         set -euo pipefail
@@ -509,7 +621,7 @@ runs:
         echo "floor gate ok: LC_VERSION_MIN_MACOSX $got"
 
     - name: Full smoke — the builder builds the product (ephemeral, NEVER uploaded)
-      if: steps.mode.outputs.exec != 'guest' && inputs.smoke == 'full' && inputs.no-exec != 'true'
+      if: steps.mode.outputs.exec != 'guest' && steps.mode.outputs.exec != 'qemu' && inputs.smoke == 'full' && inputs.no-exec != 'true'
       shell: bash
       run: |
         set -uo pipefail
