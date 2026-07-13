@@ -43,11 +43,3 @@ test('platformTag() with no args produces the host tuple', () => {
 test('osToken maps win32 to the stable "windows" token (no OS-version split)', () => {
   assert.strictEqual(osToken('win32'), 'windows');
 });
-
-test('seaBin names the SEA output binary — .exe only on win32', () => {
-  const path = require('node:path');
-  const { seaBin } = require('../scripts/platform-tag.cjs');
-  assert.strictEqual(path.basename(seaBin('/repo', 'win32')), 'clode.exe');
-  assert.strictEqual(path.basename(seaBin('/repo', 'linux')), 'clode');
-  assert.strictEqual(path.basename(seaBin('/repo', 'darwin')), 'clode');
-});

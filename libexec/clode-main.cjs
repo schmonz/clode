@@ -101,27 +101,6 @@ function requireNode(node, opts = {}) {
   return hosttools.requireNodeVersionOrExit({ versionString: ver, stderr, exit });
 }
 
-// Resolve where the bundle's runtime deps and support files come from, branching on
-// SEA — but only to produce ON-DISK dirs that mirror the npm/source layout, so the
-// rest of the launcher runs unchanged against them:
-//   - SEA: materialize the ext-deps into a depsRoot-shaped dir (seaDepsRoot) and the
-//     bun-shim + extractor into a libexec-shaped dir (seaLibexec), from embedded
-//     assets (no npm).
-//   - npm/source: ensureDeps installs the ext-deps; both dirs stay undefined so the
-//     caller uses the real LIBEXEC and the default DEPS_ROOT.
-// sea/deps are injected (default to the real modules) so the branch is unit-testable
-// without a real SEA.
-function prepareRuntimeDeps(opts) {
-  const { sea, deps, cacheRoot, libexec, here, verbose, env } = opts;
-  if (sea.isSea()) {
-    const seaDepsRoot = sea.materializeDeps({ cacheDir: cacheRoot });   // holds node_modules/
-    const seaLibexec = sea.materializeLibexec({ destDir: path.join(cacheRoot, 'sea-deps', 'libexec') });
-    return { seaDepsRoot, seaLibexec };
-  }
-  deps.ensureDeps({ libexec, here, verbose, env });
-  return { seaDepsRoot: undefined, seaLibexec: undefined };
-}
-
 // main(argv, {self}) — async because it awaits clodeUpdate/clodeWatch.
 async function main(argv, opts = {}) {
   const env = process.env;
@@ -203,11 +182,7 @@ async function main(argv, opts = {}) {
   }
 
   // 8. DEFAULT LAUNCH.
-  // Under a SEA the binary is its own node, so an external CLODE_NODE is irrelevant and
-  // must not gate the launch (runBundle also forces node=self under SEA); otherwise the
-  // resolved `node` applies.
-  const sea = require('./clode-sea.cjs');
-  const launchNode = sea.isSea() ? process.execPath : node;
+  const launchNode = node;
   requireNode(launchNode);
 
   let bin = resolve.resolveClaudeBin({ env });
@@ -230,21 +205,14 @@ async function main(argv, opts = {}) {
   const cacheRoot = clodeCacheDir(env);
   const cache = path.join(cacheRoot, key);
 
-  // Under a SEA the ext-deps + support files are materialized from embedded assets
-  // into dirs shaped like the npm/source layout (a depsRoot and a libexec); otherwise
-  // ensureDeps installs and the real LIBEXEC/DEPS_ROOT apply. Everything downstream
-  // then runs UNCHANGED against LAUNCH_LIBEXEC / depsRoot — no SEA-specific branches.
-  const { seaDepsRoot, seaLibexec } = prepareRuntimeDeps({
-    sea, deps, cacheRoot, libexec: LIBEXEC, here: HERE, verbose, env,
-  });
-  const LAUNCH_LIBEXEC = seaLibexec || LIBEXEC;
+  // ensureDeps installs the ext-deps; the real LIBEXEC/DEPS_ROOT apply.
+  deps.ensureDeps({ libexec: LIBEXEC, here: HERE, verbose, env });
 
-  extract.extractIfNeeded({ bin, cacheDir: cache, libexec: LAUNCH_LIBEXEC, verbose, key });
+  extract.extractIfNeeded({ bin, cacheDir: cache, libexec: LIBEXEC, verbose, key });
 
   // Where the runtime ext-deps (ws, yaml, string-width, ...) live: ensure_deps's
-  // DEPS_ROOT in the npm/source path, or the materialized sea-deps dir under SEA. Its
-  // node_modules joins NODE_PATH via runBundle -> applyNodePath, unchanged either way.
-  const depsRoot = seaDepsRoot || depsStore(env);
+  // DEPS_ROOT. Its node_modules joins NODE_PATH via runBundle -> applyNodePath.
+  const depsRoot = depsStore(env);
 
   // Watcher: on real sessions only (never on print-and-exit, which run no model),
   // surface any prior HIGH notice, then maybe fire a fresh detached cycle.
@@ -253,40 +221,22 @@ async function main(argv, opts = {}) {
     watch.clodeWatchMaybe({ env, self });
   }
 
-  const settingsPath = run.guardSettingsForArgs(args, { node: launchNode, libexec: LAUNCH_LIBEXEC, env });
+  const settingsPath = run.guardSettingsForArgs(args, { node: launchNode, libexec: LIBEXEC, env });
   run.runBundle({
     node: launchNode,
     cliPath: path.join(cache, 'cli.cjs'),
     args,
     settingsPath,
     self,
-    libexec: LAUNCH_LIBEXEC,
+    libexec: LIBEXEC,
     depsRoot,
     env,
   });
 }
 
-// SEA "run as node" mode: when clode-run spawns the SEA binary to execute the
-// extracted cli.cjs, it sets CLODE_SEA_RUN_AS_NODE. In that mode, behave like plain
-// `node <script> [args]`: strip the sentinel (the bundle must never see it), reshape
-// argv, and run the script as the main module. Returns true when it handled the run.
-function runAsNodeIfRequested() {
-  if (process.env.CLODE_SEA_RUN_AS_NODE !== '1') return false;
-  delete process.env.CLODE_SEA_RUN_AS_NODE;             // never leaks to the bundle
-  const rest = process.argv.slice(2);                    // [script, ...args]
-  const script = require('node:path').resolve(rest[0]);
-  process.argv = [process.execPath, script, ...rest.slice(1)];
-  // In a SEA the global `require` (embedderRequire) resolves ONLY built-in modules;
-  // createRequire yields a filesystem-capable require for the extracted cli.cjs (and
-  // it behaves identically outside a SEA, so this one path serves both).
-  require('node:module').createRequire(script)(script);
-  return true;
-}
-
-// Self-run entry: when this module is the process's main module (the esbuilt SEA
+// Self-run entry: when this module is the process's main module (the esbuilt
 // bundle, or `node libexec/clode-main.cjs`), behave like bin/clode's prologue caller.
 // Guarded so it does NOT run when bin/clode require()s us and calls main() itself.
-// runAsNodeIfRequested runs FIRST: under SEA re-invocation it takes over the process.
 // Print-worthy rendering of a caught error. V8 stacks embed the `Error:
 // message` header; QuickJS stacks are frames-only — printing e.stack alone
 // there LOSES the message (v0.1.2 field report printed a bare wall of `at`
@@ -301,12 +251,10 @@ function formatError(e) {
 }
 
 if (require.main === module) {
-  if (!runAsNodeIfRequested()) {
-    main(process.argv.slice(2), { self: process.execPath }).catch((e) => {
-      process.stderr.write('clode: ' + formatError(e) + '\n');
-      process.exit(1);
-    });
-  }
+  main(process.argv.slice(2), { self: process.execPath }).catch((e) => {
+    process.stderr.write('clode: ' + formatError(e) + '\n');
+    process.exit(1);
+  });
 }
 
-module.exports = { formatError, main, clodeHelp, requireNode, runAsNodeIfRequested, prepareRuntimeDeps };
+module.exports = { formatError, main, clodeHelp, requireNode };

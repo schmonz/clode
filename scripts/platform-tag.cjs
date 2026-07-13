@@ -55,19 +55,9 @@ function platformTag({
   return `${token}-${arch}-node${nodeMajor}`;
 }
 
-// The per-tag SEA build output dir (toolchain node_modules, bundle, deps.tar, blob, bin).
-function seaOut(repo) {
-  return path.join(repo, 'build', platformTag());
-}
-
-// The per-tag SEA output BINARY (sibling of seaOut's dir). .exe on Windows.
-function seaBin(repo, platform = process.platform) {
-  return path.join(seaOut(repo), platform === 'win32' ? 'clode.exe' : 'clode');
-}
-
 // The per-tag PTY/TUI test-harness dir (node_modules with node-pty's native binary).
 function harnessDir(repo) {
   return path.join(repo, 'test', '.harness', platformTag());
 }
 
-module.exports = { macosVersion, linuxGlibc, osToken, platformTag, seaOut, seaBin, harnessDir };
+module.exports = { macosVersion, linuxGlibc, osToken, platformTag, harnessDir };

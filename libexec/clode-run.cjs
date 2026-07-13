@@ -13,7 +13,6 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const hosttools = require('./clode-hosttools.cjs');
-const sea = require('./clode-sea.cjs');
 const { cacheBase } = require('./clode-paths.cjs');
 
 // sh `: "${VAR:=value}"` — assign when unset OR empty. Mutates env.
@@ -130,17 +129,9 @@ function runBundle(opts = {}) {
     procOff = (s, cb) => process.removeListener(s, cb),
     exit = (c) => process.exit(c),
     stderr = process.stderr,
-    isSea = sea.isSea,
   } = opts;
 
-  // Under a SEA there is no separate host node: the SEA binary IS its own node. Force
-  // node=self and set the run-as-node sentinel so the spawned child re-enters
-  // clode-main -> runAsNodeIfRequested and executes cli.cjs as plain node would.
-  let node = nodeArg;
-  if (isSea()) {
-    node = process.execPath;
-    env.CLODE_SEA_RUN_AS_NODE = '1';
-  }
+  const node = nodeArg;
 
   applyBundleEnv({ node, self, libexec, depsRoot, env });
 

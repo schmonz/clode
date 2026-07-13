@@ -14,7 +14,6 @@ function capture(env) {
     settingsPath: null, self: '/bin/clode', libexec: '/libexec', env,
     spawn: (cmd, argv, opts) => { calls.push({ cmd, argv, opts }); return child; },
     procOn: () => {}, procOff: () => {}, exit: () => {}, stderr: { write() {} },
-    isSea: () => false,
   });
   return calls[0];
 }
