@@ -3,7 +3,7 @@
 # the qemu-sun4m boot + ci-sparc-driver.py path can be walked in minutes locally
 # instead of via GHA round-trips. The 8GB decompressed wd0.img is RAM-backed
 # (--tmpfs) at run time; nothing here needs the tiny VM disk beyond the layers.
-FROM debian:12
+FROM debian:13
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
