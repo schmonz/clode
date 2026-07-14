@@ -318,6 +318,23 @@ const LEGS = [
     'atomic-shim': false, tier2: true, verify: 'qemu-user', 'no-exec': true,
     publish: true, 'soft-fail': true, timeout: 1800,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
+  // netbsd-m68k (TIER-2, built-not-run): 32-bit BIG-endian NetBSD userland,
+  // cross-built via a NetBSD `build.sh -m <port> tools`+`distribution`
+  // toolchain (the showcase — any NetBSD arch is one command; no per-arch
+  // cross-gcc packaging). No cross-image; netbsd-src routes build-leg through
+  // ./.github/actions/netbsd-crossbuild. m68k has no MACHINE of its own, so a
+  // port carries the shared m68k--netbsdelf toolchain (atari — classic, stable,
+  // in every branch; the userland ELF is arch-based, runs on any m68k NetBSD).
+  // verify=none: NetBSD has no qemu-user, so it is built-not-run (the file is an
+  // m68k NetBSD ELF; qemu-system-m68k virt full-smoke is the level-3 upgrade,
+  // out of scope). atomic-shim on (m68k lacks 8-byte libatomic, like sparc/ppc).
+  { leg: 'netbsd-m68k', os: 'ubuntu-latest', 'guest-arch': 'm68k',
+    'netbsd-src': 'netbsd-10', 'netbsd-machine': 'atari',
+    'cross-file': 'scripts/netbsd-m68k.toolchain.cmake',
+    'atomic-shim': true, tier2: true, verify: 'none', 'no-exec': true,
+    floor: '10.1', 'guest-version': '10.1',
+    publish: true, 'soft-fail': true, timeout: 3600,
+    wasm: 'off', mimalloc: 'off', ffi: 'off' },
 ];
 
 export function legsFor(tier) {

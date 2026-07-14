@@ -100,5 +100,7 @@ jobs:
           atomic-shim: ${{ matrix.atomic-shim && 'true' || 'false' }}
           tier2: ${{ matrix.tier2 && 'true' || 'false' }}
           verify: ${{ matrix.verify || 'smoke' }}
+          netbsd-src: ${{ matrix.netbsd-src || '' }}
+          netbsd-machine: ${{ matrix.netbsd-machine || '' }}
           attest: ${{ matrix.publish && 'true' || 'false' }}
           publish: ${{ matrix.publish && 'true' || 'false' }}

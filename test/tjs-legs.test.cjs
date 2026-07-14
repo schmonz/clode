@@ -56,7 +56,7 @@ test('release tier: every published leg is present (golden)', () => {
     'linux-s390x', 'linux-s390x-musl',
     'linux-x64-musl', 'linux-x86-musl',
     'midnightbsd-amd64',
-    'netbsd-amd64', 'netbsd-arm64', 'netbsd-sparc',
+    'netbsd-amd64', 'netbsd-arm64', 'netbsd-m68k', 'netbsd-sparc',
     'omnios-amd64', 'openbsd-amd64', 'openbsd-arm64',
     'openindiana-amd64',
     'solaris-amd64',
@@ -251,6 +251,24 @@ test('linux-s390x leg: 64-bit BE Debian-cross tier-2, qemu-user verified (canoni
   assert.strictEqual(l['atomic-shim'], false, 's390x has native 64-bit atomics');
   assert.ok(/s390x/.test(l['cross-file'] || ''), 'must point at the s390x toolchain file');
   assert.ok(/s390x/.test(l['cross-apt'] || ''), 'cross-apt must install the s390x gcc');
+});
+
+test('netbsd-m68k leg: NetBSD build.sh cross, tier-2 built-not-run', () => {
+  const l = legsFor('release').find((x) => x.leg === 'netbsd-m68k');
+  assert.ok(l, 'netbsd-m68k leg must be present');
+  assert.strictEqual(l['guest-arch'], 'm68k');
+  assert.strictEqual(l.verify, 'none', 'NetBSD has no qemu-user — built-not-run');
+  assert.strictEqual(l['no-exec'], true);
+  assert.strictEqual(l.tier2, true);
+  assert.strictEqual(l.publish, true);
+  assert.strictEqual(l['atomic-shim'], true, 'm68k lacks 8-byte libatomic');
+  assert.notStrictEqual(l['netbsd-src'], undefined, 'must pin a NetBSD src rev for build.sh');
+  assert.ok(l['netbsd-machine'], 'must name an m68k NetBSD port for build.sh -m');
+  assert.ok(/m68k/.test(l['cross-file'] || ''), 'must point at the m68k toolchain file');
+  assert.strictEqual(l.floor, '10.1');
+  // No cross-image: this cross leg builds its toolchain via build.sh, not a
+  // docker image.
+  assert.strictEqual(l['cross-image'], undefined);
 });
 
 test('build-leg cache key carries the macos floor axes', () => {

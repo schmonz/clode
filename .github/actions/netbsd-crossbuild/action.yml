@@ -1,0 +1,65 @@
+name: netbsd-crossbuild
+description: >
+  Produce a NetBSD cross-toolchain + sysroot via build.sh for the given MACHINE.
+  The showcase of the tier-2 NetBSD path: any NetBSD architecture is one
+  `build.sh -m <machine> tools` + `distribution` away — no per-arch cross-gcc
+  packaging. Outputs TOOLDIR (the m68k--netbsdelf-* cross tools) and DESTDIR
+  (the sysroot: /usr/include + /usr/lib) for a CMake toolchain file to consume.
+  build.sh is slow (tools + a full distribution); the result is cached on
+  (machine, src-rev) so only a pin bump pays it again.
+inputs:
+  machine:
+    description: "NetBSD MACHINE (e.g. m68k / sun3 / mac68k)"
+    required: true
+  src-rev:
+    description: "NetBSD src git rev/tag/branch to pin (build.sh input)"
+    required: true
+outputs:
+  tooldir:
+    description: "the build.sh TOOLDIR (contains bin/<machine-triple>-*)"
+    value: ${{ steps.b.outputs.tooldir }}
+  destdir:
+    description: "the build.sh DESTDIR sysroot"
+    value: ${{ steps.b.outputs.destdir }}
+runs:
+  using: composite
+  steps:
+    # Cache the whole toolchain+sysroot on (machine, src-rev): a hit skips the
+    # entire build.sh run. The paths live under RUNNER_TEMP (stable across the
+    # job) so the cache restore lands where the toolchain file expects them.
+    - name: Restore the build.sh toolchain + sysroot
+      id: nbcache
+      uses: actions/cache@v6
+      with:
+        path: |
+          ${{ runner.temp }}/nbsd-tool
+          ${{ runner.temp }}/nbsd-dest
+        key: netbsd-crossbuild-${{ inputs.machine }}-${{ inputs.src-rev }}-v1
+    - id: b
+      shell: bash
+      run: |
+        set -euo pipefail
+        TOOL="$RUNNER_TEMP/nbsd-tool"; DEST="$RUNNER_TEMP/nbsd-dest"
+        echo "tooldir=$TOOL" >> "$GITHUB_OUTPUT"
+        echo "destdir=$DEST" >> "$GITHUB_OUTPUT"
+        if [ -x "$TOOL/bin/m68k--netbsdelf-gcc" ] && [ -d "$DEST/usr/include" ]; then
+          echo "build.sh toolchain restored from cache — skipping the build"
+          exit 0
+        fi
+        SRC="$RUNNER_TEMP/nbsd-src"
+        # Shallow-fetch the pinned src (a tag/branch fast-paths --branch; a bare
+        # rev falls back to a filtered clone + checkout).
+        git clone --depth 1 --branch "${{ inputs.src-rev }}" https://github.com/NetBSD/src "$SRC" 2>/dev/null \
+          || { git clone --filter=blob:none https://github.com/NetBSD/src "$SRC"; git -C "$SRC" checkout "${{ inputs.src-rev }}"; }
+        cd "$SRC"
+        # -U unprivileged (no root); -T/-D place the tools + sysroot under
+        # RUNNER_TEMP so the cache can carry them. `tools` builds the cross
+        # toolchain; `distribution` populates DESTDIR's headers + libs (the
+        # sysroot the tjs cross-build links against). Heavy but cached.
+        ./build.sh -m "${{ inputs.machine }}" -U -T "$TOOL" -D "$DEST" -j "$(nproc)" tools
+        ./build.sh -m "${{ inputs.machine }}" -U -T "$TOOL" -D "$DEST" -j "$(nproc)" distribution
+        test -x "$TOOL/bin/m68k--netbsdelf-gcc" || { echo "build.sh: no m68k--netbsdelf-gcc under $TOOL/bin" >&2; ls "$TOOL/bin" | head; exit 1; }
+        test -d "$DEST/usr/include" || { echo "build.sh: no sysroot headers under $DEST/usr/include" >&2; exit 1; }
+        # Free the src tree once the toolchain + sysroot are built (keeps the
+        # cache small and the runner disk clear).
+        rm -rf "$SRC"

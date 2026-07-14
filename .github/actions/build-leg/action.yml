@@ -74,6 +74,14 @@ inputs:
     description: "post-build validation rung: 'smoke' (qemu-system fuse+PONG, the sparc leg), 'qemu-user' (binfmt-run the cross-fused builder: level-2 --clode-version required, level-2.5 full fuse attempted+logged), 'none' (tier-2, built-not-run — NetBSD has no qemu-user)."
     required: false
     default: smoke
+  netbsd-src:
+    description: "When set, cross-build the engine with a NetBSD build.sh toolchain (./.github/actions/netbsd-crossbuild) instead of a Debian cross-image. The value is the NetBSD src git rev/tag/branch to pin (netbsd-m68k). Implies exec=cross."
+    required: false
+    default: ""
+  netbsd-machine:
+    description: "NetBSD MACHINE (port) for build.sh -m; any m68k port shares the m68k--netbsdelf toolchain (e.g. atari, sun3, mac68k). Required when netbsd-src is set."
+    required: false
+    default: ""
   static:
     description: "'true': fully-static tjs (musl legs) + verify with file/ldd"
     required: false
@@ -130,8 +138,11 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        if [ -n "${{ inputs.cross-image }}" ]; then
-          exec=cross   # cross-built on ubuntu inside a docker toolchain image (darwin-ppc)
+        if [ -n "${{ inputs.cross-image }}" ] || [ -n "${{ inputs.netbsd-src }}" ]; then
+          exec=cross   # cross-built on ubuntu: inside a docker toolchain image
+                       # (darwin-ppc) OR against a NetBSD build.sh toolchain
+                       # (netbsd-m68k) — either way vendor/out live under .matrix
+                       # for the shared cross-fuse, and no host exec/fuse runs.
         else
           case "${{ inputs.guest-platform }}" in
             qemu-*) exec=qemu ;;  # own-qemu leg (netbsd-sparc): engine bakes in-guest, builder cross-fuses on the x64 runner, smoke runs via a backend recipe — see the qemu-* steps below
@@ -347,6 +358,37 @@ runs:
           export CLODE_TJS_WASM=$WASM CLODE_TJS_MIMALLOC=$MIMALLOC CLODE_TJS_FFI=$FFI CLODE_TJS_SMOKE=off
           node scripts/build-tjs.mjs --build-only
         '
+
+    # ---- NetBSD build.sh cross legs (netbsd-m68k): the other exec=cross path.
+    # Instead of a docker toolchain image, a NetBSD build.sh cross-toolchain +
+    # sysroot are produced on the runner (the showcase — any NetBSD arch is one
+    # build.sh command), then build-tjs cross-compiles against them via the
+    # netbsd-<arch> CMake toolchain file. No docker; the cross gcc is an x86_64
+    # binary emitting m68k NetBSD ELF. atomic-shim on (m68k lacks 8-byte
+    # libatomic, like sparc/ppc). The build.sh toolchain is heavy but cached in
+    # the composite, and only runs on a tjs-cache miss.
+    - name: Build the NetBSD cross-toolchain (build.sh)
+      id: nbxc
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.netbsd-src != ''
+      uses: ./.github/actions/netbsd-crossbuild
+      with:
+        machine: ${{ inputs.netbsd-machine }}
+        src-rev: ${{ inputs.netbsd-src }}
+    - name: Cross-build tjs against the NetBSD toolchain
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.netbsd-src != ''
+      shell: bash
+      env:
+        CLODE_TJS_VENDOR: ${{ steps.mode.outputs.vendor }}
+        CLODE_TJS_OUT: ${{ steps.mode.outputs.out }}
+        CLODE_TJS_CROSS_FILE: ${{ inputs.cross-file }}
+        CLODE_NETBSD_TOOLDIR: ${{ steps.nbxc.outputs.tooldir }}
+        CLODE_NETBSD_DESTDIR: ${{ steps.nbxc.outputs.destdir }}
+        CLODE_TJS_ATOMIC_SHIM: ${{ inputs.atomic-shim == 'true' && '1' || '0' }}
+        CLODE_TJS_WASM: ${{ inputs.wasm }}
+        CLODE_TJS_MIMALLOC: ${{ inputs.mimalloc }}
+        CLODE_TJS_FFI: ${{ inputs.ffi }}
+        CLODE_TJS_SMOKE: 'off'
+      run: node scripts/build-tjs.mjs --build-only
 
     # ---- own-qemu qemu-* legs (netbsd-sparc: first user, plan
     # netbsd-sparc-matrix-leg Task 3 — STRUCTURAL first pass). Unlike a
