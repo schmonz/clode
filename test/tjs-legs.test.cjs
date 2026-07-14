@@ -205,7 +205,7 @@ test('darwin-x86 Tiger leg: engine-only i386 at floor 10.4', () => {
   }
 });
 
-test('netbsd-sparc leg: own-qemu cross-fuse, floored at 10.1, soft-fail VM leg', () => {
+test('netbsd-sparc leg: own-qemu cross-fuse, floored at 10.1, VM leg', () => {
   const release = legsFor('release');
   const ns = release.find((l) => l.leg === 'netbsd-sparc');
   assert.ok(ns, 'netbsd-sparc leg must be present in the release tier');
@@ -218,12 +218,31 @@ test('netbsd-sparc leg: own-qemu cross-fuse, floored at 10.1, soft-fail VM leg',
   assert.strictEqual(ns['guest-version'], '10.1',
     "netbsd-sparc must pin guest-version:'10.1' or the image asset names default to alpine 3.22");
   assert.strictEqual(ns.publish, true);
-  assert.strictEqual(ns['soft-fail'], true);
-  // VM(leg): guest-platform set and not native/alpine — the own-qemu
-  // backend is a VM leg like every cpa/vmactions leg, so the "ci tier: VM
-  // legs are soft-fail" house rule applies to it the same way.
+  // On the RELEASE tier a publisher is NOT soft-fail (deterministic contents —
+  // see the determinism test below). On CI it IS soft-fail (VM house rule).
+  assert.strictEqual(ns['soft-fail'], undefined, 'release publishers must not be soft-fail');
   assert.ok(ns['guest-platform'] && !['native', 'alpine'].includes(ns['guest-platform']),
     'netbsd-sparc must be recognized as a VM leg (own-qemu backend)');
+  const ci = legsFor('ci').find((l) => l.leg === 'netbsd-sparc');
+  assert.strictEqual(ci['soft-fail'], true, 'on CI, netbsd-sparc is soft-fail (VM house rule)');
+});
+
+test('release tier: publishing legs are NOT soft-fail (deterministic contents)', () => {
+  // User doctrine 2026-07-14: slow releases over non-deterministic contents. A
+  // release ships a FIXED manifest — every publisher must be green, so a
+  // TCG/qemu flake fails the leg job (needs:[leg]) rather than silently dropping
+  // the asset. Only engine-only legs (publish:false: darwin-x86/ppc) may stay
+  // soft — they ship no asset.
+  for (const l of legsFor('release')) {
+    if (l.publish) {
+      assert.notStrictEqual(l['soft-fail'], true,
+        `${l.leg}: a release PUBLISHER must not be soft-fail (would make release contents non-deterministic)`);
+    }
+  }
+  // CI keeps soft-fail (that's the on-ramp for new legs); the two tiers differ
+  // here on purpose.
+  const ciSoft = legsFor('ci').filter((l) => l['soft-fail'] === true);
+  assert.ok(ciSoft.length > 0, 'CI tier still uses soft-fail for its VM legs');
 });
 
 test('linux-riscv64 leg: Debian-cross tier-2, qemu-user verified, publishes', () => {

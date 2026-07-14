@@ -339,7 +339,21 @@ const LEGS = [
 
 export function legsFor(tier) {
   if (tier === 'release') {
-    return LEGS.map(({ ci, 'ci-os': _o, 'ci-guest-version': _v, ...leg }) => leg);
+    // DETERMINISTIC RELEASE CONTENTS (user doctrine 2026-07-14: slow releases
+    // over non-deterministic contents). A release publishes a FIXED manifest —
+    // every publishing leg. soft-fail is a CI concept (a flaky new leg must not
+    // block per-push CI); on the release tier it would let a TCG/qemu flake
+    // silently DROP a declared asset, so two runs of the same commit could ship
+    // different sets. Strip it from PUBLISHERS: the release job's `needs: [leg]`
+    // then requires the whole matrix green (rerun-failed the flakes), and
+    // if-no-files-found:error guarantees a green leg produced its asset. Legs
+    // that publish nothing (engine-only darwin-x86/ppc) KEEP soft-fail — they add
+    // no asset, so a flake there must not block the release. Demote a
+    // chronically-flaky publisher explicitly (drop publish), never silently.
+    return LEGS.map(({ ci, 'ci-os': _o, 'ci-guest-version': _v, ...leg }) => {
+      if (leg.publish) delete leg['soft-fail'];
+      return leg;
+    });
   }
   if (tier === 'ci') {
     return LEGS.filter((l) => l.ci).map(({ ci, publish, 'ci-os': ciOs, 'ci-guest-version': ciVer,

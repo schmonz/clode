@@ -187,9 +187,13 @@ jobs:
           path: ${{ steps.name.outputs.asset }}
           if-no-files-found: error
 
-  # ONE gate for the whole release: every HARD leg must succeed (needs:), or
-  # nothing publishes. Soft legs (continue-on-error) never block; their
-  # artifacts ship only when green.
+  # DETERMINISTIC RELEASE (user doctrine 2026-07-14): a release ships a FIXED
+  # manifest — every publishing leg. On the release tier soft-fail is stripped
+  # from publishers (scripts/tjs-legs.mjs), so `needs: [leg]` requires the WHOLE
+  # matrix green: a TCG/qemu flake FAILS the leg job → release is skipped → no
+  # mint (rerun-failed the flaked legs until green — slow over non-deterministic).
+  # Only engine-only legs (darwin-x86/ppc, publish:false) stay soft — they ship
+  # no asset. The gate below is a secondary asset-presence guard.
   release:
     needs: [leg, darwin-universal]
     if: github.ref_type == 'tag' || inputs.release == 'draft'
