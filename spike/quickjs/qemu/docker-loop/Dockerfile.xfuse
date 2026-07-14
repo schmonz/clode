@@ -1,0 +1,14 @@
+# clode-xfuse — linux/x86_64 image for wall #4 (cross-fuse), mirroring the CI
+# x64 runner. Two jobs: (a) build a linux-x64 host `tjs` (the fuse WORKER) from
+# the same txiki-v26.6.0-s2 source the sparc tjs came from → identical
+# BC_VERSION → cross-fuse compatible; (b) run `node bin/clode build --self`
+# with CLODE_TARGET_TEMPLATE=<sparc tjs> to append the trailer onto the sparc
+# base. node for the launcher; cmake/ninja/gcc for the tjs build.
+FROM node:24-bookworm-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      cmake ninja-build build-essential git ca-certificates xxd file \
+ && rm -rf /var/lib/apt/lists/*
+
+CMD ["/bin/bash"]
