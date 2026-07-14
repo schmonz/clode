@@ -399,30 +399,12 @@ runs:
     # no-exec native build already produced a bare tjs.exe locally), the
     # sparc bare engine only exists after the guest step above (or a
     # tjs-cache hit) landed it at steps.mode.outputs.out.
-    - name: Build the HOST (linux) tjs — runs the fuse worker (qemu-* cross-fuse)
+    - name: Cross-fuse the qemu-* builder against the in-guest engine
       if: startsWith(inputs.guest-platform, 'qemu-')
-      shell: bash
-      env:
-        CLODE_TJS_VENDOR: ${{ runner.temp }}/host-tjs-vendor
-        CLODE_TJS_OUT: ${{ runner.temp }}/host-tjs-out
-        CLODE_TJS_WASM: 'off'
-        CLODE_TJS_MIMALLOC: 'off'
-        CLODE_TJS_FFI: 'off'
-      run: |
-        set -euo pipefail
-        node scripts/build-tjs.mjs   # full native build into a SEPARATE tree (not the .matrix qemu tree)
-        test -x "${{ runner.temp }}/host-tjs-out/tjs"
-
-    - name: Cross-fuse the self-contained builder (qemu-* leg)
-      if: startsWith(inputs.guest-platform, 'qemu-')
-      shell: bash
-      env:
-        CLODE_TJS: ${{ runner.temp }}/host-tjs-out/tjs
-        CLODE_TARGET_TEMPLATE: ${{ steps.mode.outputs.out }}/tjs
-      run: |
-        set -euo pipefail
-        node bin/clode build --self --out "${{ steps.name.outputs.asset }}"
-        test -f "${{ steps.name.outputs.asset }}"
+      uses: ./.github/actions/cross-fuse
+      with:
+        target-template: ${{ steps.mode.outputs.out }}/tjs
+        out-asset: ${{ steps.name.outputs.asset }}
 
     # (C) The runtime smoke: hand the own-qemu backend a recipe that stages
     # the cross-fused sparc clode builder + an x64 provider binary on :8180

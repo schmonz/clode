@@ -1,0 +1,39 @@
+name: cross-fuse
+description: >
+  Build a host (linux) tjs to run the fuse worker, then cross-fuse the clode
+  --self BUILDER against a foreign-arch target tjs template (CLODE_TARGET_TEMPLATE).
+  Emits a tier-2 clode builder at <out-asset>. The host smoke is skipped (the
+  output is target-arch); validation is the caller's job (qemu-user / qemu-system
+  / none). NB: for ELF targets only — Mach-O (darwin) targets need the template
+  pre-signed and are NOT wired through here.
+inputs:
+  target-template:
+    description: "Path to the cross-built target tjs (the engine to append onto)"
+    required: true
+  out-asset:
+    description: "Output path for the cross-fused clode builder"
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Build the HOST (linux) tjs — runs the fuse worker
+      shell: bash
+      env:
+        CLODE_TJS_VENDOR: ${{ runner.temp }}/host-tjs-vendor
+        CLODE_TJS_OUT: ${{ runner.temp }}/host-tjs-out
+        CLODE_TJS_WASM: 'off'
+        CLODE_TJS_MIMALLOC: 'off'
+        CLODE_TJS_FFI: 'off'
+      run: |
+        set -euo pipefail
+        node scripts/build-tjs.mjs   # full native build into a SEPARATE tree
+        test -x "${{ runner.temp }}/host-tjs-out/tjs"
+    - name: Cross-fuse the self-contained builder
+      shell: bash
+      env:
+        CLODE_TJS: ${{ runner.temp }}/host-tjs-out/tjs
+        CLODE_TARGET_TEMPLATE: ${{ inputs.target-template }}
+      run: |
+        set -euo pipefail
+        node bin/clode build --self --out "${{ inputs.out-asset }}"
+        test -f "${{ inputs.out-asset }}"
