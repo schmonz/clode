@@ -5,12 +5,16 @@
 # CLODE_NETBSD_DESTDIR (the `build.sh distribution` sysroot: /usr/include +
 # /usr/lib). Consumed via CLODE_TJS_CROSS_FILE like the Debian cross files.
 #
-# CMAKE_SYSTEM_NAME Generic (not NetBSD): a bare build.sh cross gcc + a DESTDIR
-# sysroot is not a full CMake-hosted NetBSD, and Generic keeps CMake from
-# probing host-NetBSD assumptions. Canonical-LE carries the shipped LE bytecode
-# onto this BE target; the __atomic_*_8 pthread shim (CLODE_TJS_ATOMIC_SHIM=1 on
-# the leg) covers m68k's missing 8-byte libatomic, exactly like sparc/ppc.
-set(CMAKE_SYSTEM_NAME Generic)
+# CMAKE_SYSTEM_NAME NetBSD (with a toolchain file → CMAKE_CROSSCOMPILING): loads
+# CMake's Platform/NetBSD module so target platform facts are correct — notably
+# CMAKE_DL_LIBS is empty (NetBSD's dlopen lives in libc, no separate libdl),
+# whereas Generic applied Linux-like defaults and appended `-ldl`, which does not
+# exist on NetBSD (`ld: cannot find -ldl`, run 29358769733). The feature probes
+# are try_compile (link against the sysroot), which work cross; nothing here
+# try_runs a target binary. Canonical-LE carries the shipped LE bytecode onto
+# this BE target; the __atomic_*_8 pthread shim (CLODE_TJS_ATOMIC_SHIM=1 on the
+# leg) covers m68k's missing 8-byte libatomic, exactly like sparc/ppc.
+set(CMAKE_SYSTEM_NAME NetBSD)
 set(CMAKE_SYSTEM_PROCESSOR m68k)
 set(_tooldir $ENV{CLODE_NETBSD_TOOLDIR})
 set(_sysroot $ENV{CLODE_NETBSD_DESTDIR})
