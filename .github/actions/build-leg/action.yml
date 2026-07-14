@@ -54,6 +54,22 @@ inputs:
     description: "Docker image (digest-pinned) providing a cross toolchain; when set, the engine is cross-built INSIDE it on an ubuntu runner (darwin-ppc). Implies no-exec."
     required: false
     default: ""
+  cross-file:
+    description: "CMake toolchain file (repo-relative) the exec=cross build passes as CLODE_TJS_CROSS_FILE. Default = the darwin-ppc file (back-compat); the tier-2 Debian cross legs point it at scripts/linux-<arch>.toolchain.cmake."
+    required: false
+    default: "scripts/darwin-ppc.toolchain.cmake"
+  cross-apt:
+    description: "Space-separated apt packages installed INSIDE the cross-image before the build (e.g. 'cmake make gcc-riscv64-linux-gnu g++-riscv64-linux-gnu'). Empty for images that bake their toolchain (darwin-ppc)."
+    required: false
+    default: ""
+  atomic-shim:
+    description: "'true': link the __atomic_*_8 pthread shim (CLODE_TJS_ATOMIC_SHIM=1) for 32-bit targets lacking 8-byte libatomic (darwin-ppc, netbsd-m68k). 'false' for native-64-bit-atomic targets (s390x/riscv64)."
+    required: false
+    default: "false"
+  tier2:
+    description: "'true': after the cross-built target engine lands, cross-fuse a tier-2 clode BUILDER against it via ./.github/actions/cross-fuse and upload it (ELF-only — darwin is excluded, Mach-O needs a pre-signed template)."
+    required: false
+    default: "false"
   static:
     description: "'true': fully-static tjs (musl legs) + verify with file/ldd"
     required: false
@@ -164,7 +180,7 @@ runs:
       uses: actions/cache@v6
       with:
         path: ${{ steps.mode.outputs.out }}
-        key: tjs-${{ inputs.leg }}-${{ steps.axes.outputs.image }}-${{ inputs.guest-version }}-${{ inputs.macos-min }}-${{ inputs.macos-sdk }}-${{ inputs.cross-image }}-${{ hashFiles('spike/quickjs/PINS.md', 'spike/quickjs/patches/*.patch', 'scripts/build-tjs.mjs', 'scripts/darwin-ppc.toolchain.cmake', 'spike/quickjs/atomic-shim.c') }}
+        key: tjs-${{ inputs.leg }}-${{ steps.axes.outputs.image }}-${{ inputs.guest-version }}-${{ inputs.macos-min }}-${{ inputs.macos-sdk }}-${{ inputs.cross-image }}-${{ hashFiles('spike/quickjs/PINS.md', 'spike/quickjs/patches/*.patch', 'scripts/build-tjs.mjs', 'scripts/*.toolchain.cmake', 'spike/quickjs/atomic-shim.c') }}
 
     - name: Force LF line endings for the tjs checkout (native Windows)
       if: runner.os == 'Windows'
@@ -288,29 +304,43 @@ runs:
           export CLODE_TJS_FFI="${{ inputs.ffi }}"
           node scripts/build-tjs.mjs --build-only
 
-    # Cross-build the engine inside the pinned toolchain image (darwin-ppc:
-    # first darwin leg that is neither a mac runner nor a guest VM). The
-    # source phase already ran on the ubuntu host (node + esbuild); the
-    # container only needs cmake + the cross toolchain (both baked) + node
-    # (apt) to drive build-tjs. The image bakes the 10.4u SDK, so no SDK
-    # fetch. Canonical-LE means the shipped LE bundles boot on the BE ppc
-    # target — no regen. CLODE_TJS_ATOMIC_SHIM: the 32-bit-BE __atomic_*_8
-    # link wall (proven on real ppc, run 29182716872).
-    - name: Build tjs (darwin cross container)
+    # Cross-build the engine inside a toolchain image on the ubuntu runner —
+    # the generic exec=cross path. The source phase already ran on the host
+    # (node + esbuild), so the container drives build-tjs --build-only against
+    # the bind-mounted patched tree using the LEG's toolchain file
+    # (inputs.cross-file) + atomic-shim policy (inputs.atomic-shim). Two image
+    # styles: (a) a BAKED-toolchain image (darwin-ppc's VariantXYZ: cmake +
+    # cross gcc + 10.4u SDK all baked, cross-apt empty); (b) a stock Debian
+    # image where the leg names its toolchain via cross-apt (cmake + make +
+    # gcc-<triple> + g++-<triple>). node comes from apt if the image lacks it.
+    # Canonical-LE means the shipped LE bundles boot on every-endian targets —
+    # no regen. atomic-shim links the __atomic_*_8 pthread shim for 32-bit
+    # targets lacking 8-byte libatomic (darwin-ppc: run 29182716872; m68k).
+    - name: Build tjs (cross container)
       if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.cross-image != ''
       shell: bash
+      env:
+        CROSS_APT: ${{ inputs.cross-apt }}
+        CROSS_FILE: ${{ inputs.cross-file }}
+        ATOMIC_SHIM: ${{ inputs.atomic-shim == 'true' && '1' || '0' }}
+        WASM: ${{ inputs.wasm }}
+        MIMALLOC: ${{ inputs.mimalloc }}
+        FFI: ${{ inputs.ffi }}
       run: |
         set -euo pipefail
         docker pull "${{ inputs.cross-image }}"
-        docker run --rm -v "${{ github.workspace }}:/w" -w /w "${{ inputs.cross-image }}" bash -c '
+        docker run --rm \
+          -e CROSS_APT -e CROSS_FILE -e ATOMIC_SHIM -e WASM -e MIMALLOC -e FFI \
+          -v "${{ github.workspace }}:/w" -w /w "${{ inputs.cross-image }}" bash -c '
           set -euxo pipefail
+          if [ -n "$CROSS_APT" ]; then apt-get update -q && apt-get install -y -q $CROSS_APT >/dev/null; fi
           if ! command -v node >/dev/null; then apt-get update -q && apt-get install -y -q nodejs >/dev/null 2>&1; fi
           node --version
           export CLODE_TJS_VENDOR=/w/.matrix/tjs-vendor
           export CLODE_TJS_OUT=/w/.matrix/tjs-out
-          export CLODE_TJS_CROSS_FILE=/w/scripts/darwin-ppc.toolchain.cmake
-          export CLODE_TJS_ATOMIC_SHIM=1
-          export CLODE_TJS_WASM=${{ inputs.wasm }} CLODE_TJS_MIMALLOC=${{ inputs.mimalloc }} CLODE_TJS_FFI=${{ inputs.ffi }} CLODE_TJS_SMOKE=off
+          export CLODE_TJS_CROSS_FILE=/w/$CROSS_FILE
+          export CLODE_TJS_ATOMIC_SHIM=$ATOMIC_SHIM
+          export CLODE_TJS_WASM=$WASM CLODE_TJS_MIMALLOC=$MIMALLOC CLODE_TJS_FFI=$FFI CLODE_TJS_SMOKE=off
           node scripts/build-tjs.mjs --build-only
         '
 
@@ -405,6 +435,30 @@ runs:
       with:
         target-template: ${{ steps.mode.outputs.out }}/tjs
         out-asset: ${{ steps.name.outputs.asset }}
+
+    # Tier-2 cross legs (linux-s390x/riscv64, netbsd-m68k): the exec=cross
+    # build above cross-compiled a foreign-ELF engine to steps.mode.outputs.out
+    # that this ubuntu runner cannot execute (no-exec). Cross-fuse a tier-2
+    # clode BUILDER against it on the runner exactly like the qemu-* path (host
+    # linux tjs runs the fuse worker; CLODE_TARGET_TEMPLATE = the foreign
+    # engine). ELF-only — darwin cross legs are excluded (Mach-O needs a
+    # pre-signed template). Validation is verify=qemu-user|none (Task 3), not a
+    # host exec. Because these legs are no-exec, the normal fuse/upload path is
+    # skipped, so this block owns the builder artifact upload.
+    - name: Cross-fuse the tier-2 builder against the cross-built engine
+      if: inputs.tier2 == 'true'
+      uses: ./.github/actions/cross-fuse
+      with:
+        target-template: ${{ steps.mode.outputs.out }}/tjs
+        out-asset: ${{ steps.name.outputs.asset }}
+
+    - name: Upload the tier-2 cross-fused builder
+      if: inputs.tier2 == 'true'
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.publish == 'true' && steps.name.outputs.asset || format('smoke-{0}', steps.name.outputs.asset) }}
+        path: ${{ steps.name.outputs.asset }}
+        if-no-files-found: error
 
     # (C) The runtime smoke: hand the own-qemu backend a recipe that stages
     # the cross-fused sparc clode builder + an x64 provider binary on :8180

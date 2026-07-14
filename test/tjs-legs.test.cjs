@@ -158,6 +158,32 @@ test('darwin-ppc cross leg: engine-only ppc at floor 10.4, digest-pinned image',
   assert.strictEqual(dp.os, 'ubuntu-latest');
 });
 
+test('darwin-ppc keeps the atomic-shim now that the exec=cross step is generalized', () => {
+  // The exec=cross build step USED to hardcode CLODE_TJS_CROSS_FILE=
+  // darwin-ppc.toolchain.cmake and CLODE_TJS_ATOMIC_SHIM=1. Task 2.5
+  // parameterized both (so the tier-2 Debian cross legs can supply their own
+  // toolchain + turn the shim off). darwin-ppc must therefore now carry
+  // atomic-shim:true explicitly, or its __atomic_*_8 link wall returns.
+  const dp = legsFor('release').find((l) => l.leg === 'darwin-ppc');
+  assert.strictEqual(dp['atomic-shim'], true,
+    'darwin-ppc must declare atomic-shim:true (was hardcoded in the exec=cross step)');
+  // darwin-ppc leaves cross-file unset → the workflow default (its own file).
+  assert.strictEqual(dp['cross-file'], undefined);
+});
+
+test('build-leg exec=cross step is parameterized, not darwin-ppc-hardcoded', () => {
+  const action = fs.readFileSync(
+    path.join(REPO, '.github/actions/build-leg/action.yml'), 'utf8');
+  // The generalized step must consume the leg's cross-file + atomic-shim, not
+  // literal darwin-ppc values.
+  assert.ok(/CLODE_TJS_CROSS_FILE=\/w\/\$CROSS_FILE/.test(action),
+    'exec=cross must use the CROSS_FILE env (inputs.cross-file), not a literal path');
+  assert.ok(/CLODE_TJS_ATOMIC_SHIM=\$ATOMIC_SHIM/.test(action),
+    'exec=cross must use the ATOMIC_SHIM env (inputs.atomic-shim), not a literal 1');
+  assert.ok(!/CLODE_TJS_CROSS_FILE=\/w\/scripts\/darwin-ppc\.toolchain\.cmake/.test(action),
+    'the darwin-ppc toolchain path must no longer be hardcoded in the build step');
+});
+
 test('darwin-x86 Tiger leg: engine-only i386 at floor 10.4', () => {
   const release = legsFor('release');
   const dt = release.find((l) => l.leg === 'darwin-x86');

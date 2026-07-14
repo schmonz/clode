@@ -138,6 +138,11 @@ const LEGS = [
     'macos-min': '10.4', 'macos-arch': 'ppc', floor: '10.4',
     // renovate: datasource=docker depName=ghcr.io/variantxyz/gcc-powerpc-apple-darwin8
     'cross-image': 'ghcr.io/variantxyz/gcc-powerpc-apple-darwin8@sha256:a9013745ae4a696dc3a047675a85e7c43b9453cdb1e26d9a7ac9738587c1e198',
+    // cross-file defaults to scripts/darwin-ppc.toolchain.cmake; the image
+    // bakes its toolchain so cross-apt stays empty. atomic-shim: the 32-bit-BE
+    // __atomic_*_8 link wall (formerly hardcoded in the exec=cross step, now a
+    // per-leg field so the tier-2 Debian cross legs can turn it off).
+    'atomic-shim': true,
     'no-exec': true, wasm: 'off', mimalloc: 'off', ffi: 'off',
     'soft-fail': true },
   // windows-x64 (native engine leg): compiles tjs.exe ON windows-latest with

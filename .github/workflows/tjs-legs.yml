@@ -95,5 +95,9 @@ jobs:
           macos-arch: ${{ matrix.macos-arch || '' }}
           no-exec: ${{ matrix.no-exec && 'true' || 'false' }}
           cross-image: ${{ matrix.cross-image || '' }}
+          cross-file: ${{ matrix.cross-file || 'scripts/darwin-ppc.toolchain.cmake' }}
+          cross-apt: ${{ matrix.cross-apt || '' }}
+          atomic-shim: ${{ matrix.atomic-shim && 'true' || 'false' }}
+          tier2: ${{ matrix.tier2 && 'true' || 'false' }}
           attest: ${{ matrix.publish && 'true' || 'false' }}
           publish: ${{ matrix.publish && 'true' || 'false' }}
