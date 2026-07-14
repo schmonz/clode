@@ -51,7 +51,7 @@ jobs:
       legs: ${{ steps.legs.outputs.legs }}
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .tool-versions
       - id: legs
@@ -72,7 +72,7 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .tool-versions
       - uses: ./.github/actions/build-leg

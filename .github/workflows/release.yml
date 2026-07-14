@@ -61,7 +61,7 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .tool-versions
       - uses: docker/setup-qemu-action@v4   # fix-binary binfmt: host node spawns s390x tjs
@@ -125,7 +125,7 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .tool-versions
       - name: Download the four darwin engine slices
