@@ -26,14 +26,14 @@ exec docker run --rm \
     export TMPDIR=/work/tmp
     echo "[bake] decompressing baked toolchain image -> tmpfs..."
     zstd -d -q /img/wd0-baked-10.1-gmake-cmake.img.zst -o /work/workdir/wd0.img
-    # Stage where the COMMITTED ci-sparc-bake.sh expects (same layout CI uses).
+    # Stage where the COMMITTED ci-guest-bake.sh expects (same layout CI uses).
     echo "[bake] staging canonical-LE source tarballs into .matrix/qemu-bake ..."
     cp /dist/txiki-canonical-le.tar.gz /dist/simde-v0.8.2.tar.gz /work/workspace/.matrix/qemu-bake/
-    cp /repo/ci-sparc-bake.sh /work/workspace/ci-sparc-bake.sh
+    cp /repo/ci-guest-bake.sh /work/workspace/ci-guest-bake.sh
     echo "[bake] launching driver (this is a long TCG build)..."
     /opt/venv/bin/python3 /repo/ci-sparc-driver.py \
       --workdir /work/workdir --workspace /work/workspace \
-      --recipe ci-sparc-bake.sh \
+      --recipe ci-guest-bake.sh \
       --memory 512M --machine SS-20 \
       --overall-timeout 9000 --setup-timeout 900 --recipe-timeout 5400 &
     dpid=$!

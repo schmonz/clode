@@ -1,5 +1,5 @@
 #!/bin/sh
-# smoke.sh — run the COMMITTED spike/quickjs/qemu/ci-sparc-smoke.sh in the local
+# smoke.sh — run the COMMITTED spike/quickjs/qemu/ci-guest-smoke.sh in the local
 # loop, so docker-loop exercises the EXACT recipe CI ships (no fork). Stages the
 # cross-fused builder + the minimal provider where the recipe expects them
 # (.matrix/qemu-smoke/{clode-builder,provider-min}), boots the pristine image.
@@ -23,10 +23,10 @@ exec docker run --rm \
     zstd -d -q /img/wd0-pristine-10.1.img.zst -o /work/workdir/wd0.img
     cp /out/clode-sparc /work/workspace/.matrix/qemu-smoke/clode-builder
     cp /out/claude-min  /work/workspace/.matrix/qemu-smoke/provider-min
-    cp /repo/ci-sparc-smoke.sh /work/workspace/ci-sparc-smoke.sh
+    cp /repo/ci-guest-smoke.sh /work/workspace/ci-guest-smoke.sh
     /opt/venv/bin/python3 /repo/ci-sparc-driver.py \
       --workdir /work/workdir --workspace /work/workspace \
-      --recipe ci-sparc-smoke.sh \
+      --recipe ci-guest-smoke.sh \
       --memory 512M --machine SS-20 \
       --overall-timeout 5400 --setup-timeout 600 --recipe-timeout 3600 &
     dpid=$!

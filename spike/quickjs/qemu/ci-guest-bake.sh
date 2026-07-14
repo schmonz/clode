@@ -1,5 +1,5 @@
 #!/bin/sh
-# ci-sparc-bake.sh — the netbsd-sparc ENGINE bake, run IN the BAKED (gmake+cmake)
+# ci-guest-bake.sh — the in-guest ENGINE bake, run IN a BAKED (gmake+cmake)
 # sun4m guest by ci-sparc-driver.py on a tjs-cache MISS. Builds the
 # clode-compatible sparc `tjs` from clode's PINNED canonical-LE source, then
 # SYNCS IT OUT over the serial console (gzip|base64, framed) so the x64 runner
@@ -53,6 +53,11 @@ grep -c 'function_size + 7' txiki.js/deps/quickjs/quickjs.c   # cpool-align, exp
 # Strip -Werror (clang/MSVC pragmas trip gcc -Wunknown-pragmas)
 sed -i.bak '/list(APPEND tjs_cflags -Werror)/d' txiki.js/CMakeLists.txt
 
+# CLODE_GUEST_ATOMIC_SHIM=1 (default): link the __atomic_*_8 pthread shim for
+# 32-bit targets with no libatomic (sparc, m68k). Set 0 for native-64-bit-atomics.
+SHIM="${CLODE_GUEST_ATOMIC_SHIM:-1}"
+SHIM_LDFLAGS=""
+if [ "$SHIM" = 1 ]; then
 echo "=== ATOMIC-SHIM ==="
 cat > atomic-shim.c <<'EOF'
 #include <pthread.h>
@@ -73,6 +78,8 @@ OPS(1, uint8_t) OPS(2, uint16_t) OPS(4, uint32_t) OPS(8, uint64_t)
 _Bool __atomic_is_lock_free(size_t sz, const volatile void *p){ (void)sz; (void)p; return 0; }
 EOF
 cc -O2 -c atomic-shim.c -o "$W/atomic-shim.o"; echo "cle-shim-cc-exit=$?"
+SHIM_LDFLAGS="$W/atomic-shim.o"
+fi
 
 echo "=== CONFIGURE ==="
 date
@@ -82,7 +89,7 @@ GMAKE=/usr/local/bin/gmake
    "-DCMAKE_MAKE_PROGRAM=$GMAKE" \
    "-DFETCHCONTENT_SOURCE_DIR_SIMDE=$W/simde-src" \
    -DTJS_USE_ADA=OFF -DBUILD_WITH_FFI=OFF -DBUILD_WITH_MIMALLOC=OFF -DBUILD_WITH_WASM=OFF \
-   "-DCMAKE_EXE_LINKER_FLAGS=$W/atomic-shim.o")
+   "-DCMAKE_EXE_LINKER_FLAGS=$SHIM_LDFLAGS")
 echo "cle-configure-exit=$?"
 date
 

@@ -1,5 +1,5 @@
 #!/bin/sh
-# ci-sparc-smoke.sh — the netbsd-sparc runtime smoke, run IN the sun4m guest by
+# ci-guest-smoke.sh — the in-guest runtime smoke, run IN a qemu-system guest by
 # ci-sparc-driver.py. Proven end-to-end in the docker-loop wall-walk (2026-07-14).
 # The caller (CI build-leg, or docker-loop) stages two files under the served
 # workspace at .matrix/qemu-smoke/, reachable at http://10.0.2.2:8180/.matrix/qemu-smoke/ :

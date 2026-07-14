@@ -355,7 +355,7 @@ runs:
       run: |
         set -euo pipefail
         { echo 'script<<CLODE_BAKE_EOF'
-          cat spike/quickjs/qemu/ci-sparc-bake.sh
+          cat spike/quickjs/qemu/ci-guest-bake.sh
           echo 'CLODE_BAKE_EOF'; } >> "$GITHUB_OUTPUT"
 
     - name: Bake the sparc engine in-guest (own-qemu, qemu-* cache miss)
@@ -453,7 +453,7 @@ runs:
       run: |
         set -euo pipefail
         { echo 'script<<CLODE_SMOKE_EOF'
-          cat spike/quickjs/qemu/ci-sparc-smoke.sh
+          cat spike/quickjs/qemu/ci-guest-smoke.sh
           echo 'CLODE_SMOKE_EOF'; } >> "$GITHUB_OUTPUT"
 
     - name: Smoke via the own-qemu backend (qemu-* legs)
@@ -464,7 +464,7 @@ runs:
         arch: ${{ inputs.guest-arch }}
         version: ${{ inputs.guest-version }}
         cache-key: wd0-pristine-${{ inputs.guest-version }}.img.zst
-        # The proven fuse+PONG recipe (spike/quickjs/qemu/ci-sparc-smoke.sh): fetch
+        # The proven fuse+PONG recipe (spike/quickjs/qemu/ci-guest-smoke.sh): fetch
         # clode-builder + provider-min over :8180, clode-on-sparc fuses a quaude +
         # internal PONG/attest smoke. smoke-exit=0 == fused + PONG + attest.
         script: ${{ steps.smoke-recipe.outputs.script }}
