@@ -283,8 +283,14 @@ runs:
       with:
         arch: ${{ inputs.msvc-arch }}
 
+    # netbsd-src legs are exec=cross but keep guest-platform 'native' (they run
+    # on the ubuntu runner), so they must be excluded here too — else this host
+    # build pre-populates .matrix/tjs-out with an x86-64 CMakeCache that the
+    # later NetBSD cross-build (--build-only) reuses (CMake caches the compiler
+    # per build dir), silently shipping a HOST binary. Caught the m68k leg
+    # 2026-07-14 (run 29354107445 uploaded an x86-64 ELF labeled netbsd-m68k).
     - name: Build tjs (native)
-      if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.guest-platform == 'native' && inputs.cross-image == ''
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.guest-platform == 'native' && inputs.cross-image == '' && inputs.netbsd-src == ''
       shell: bash
       env:
         CLODE_TJS_VENDOR: ${{ steps.mode.outputs.vendor }}
@@ -491,6 +497,34 @@ runs:
     # pre-signed template). Validation is verify=qemu-user|none (Task 3), not a
     # host exec. Because these legs are no-exec, the normal fuse/upload path is
     # skipped, so this block owns the builder artifact upload.
+    # Arch gate (all tier-2 cross legs): the cross-built engine MUST be the
+    # target arch, not the host. A cross leg that emits an x86-64 binary means
+    # the toolchain file was bypassed (e.g. a stale host CMakeCache — the m68k
+    # bug, run 29354107445). For verify=none legs (m68k) nothing runs the
+    # binary, so this `file` check is the ONLY arch proof — fail loud here,
+    # before a wrong-arch builder is fused + uploaded.
+    - name: Arch gate — the cross-built engine is the target arch, not the host
+      if: inputs.tier2 == 'true'
+      shell: bash
+      env:
+        ARCH: ${{ inputs.guest-arch }}
+      run: |
+        set -euo pipefail
+        f=$(file -b "${{ steps.mode.outputs.out }}/tjs"); echo "engine: $f"
+        echo "$f" | grep -qiE 'x86-64|x86_64' \
+          && { echo "ERROR: cross engine is host x86-64 — the $ARCH toolchain was not used" >&2; exit 1; } || true
+        case "$ARCH" in
+          riscv64) want='RISC-V' ;;
+          s390x)   want='S/390' ;;
+          m68k)    want='Motorola|m68k' ;;
+          *)       want='' ;;
+        esac
+        if [ -n "$want" ]; then
+          echo "$f" | grep -qiE "$want" \
+            || { echo "ERROR: engine is not $ARCH (want /$want/) — got: $f" >&2; exit 1; }
+        fi
+        echo "arch gate ok: $ARCH"
+
     - name: Cross-fuse the tier-2 builder against the cross-built engine
       if: inputs.tier2 == 'true'
       uses: ./.github/actions/cross-fuse
