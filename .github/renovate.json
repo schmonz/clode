@@ -3,24 +3,15 @@
   "extends": [
     "config:recommended"
   ],
+  "description": "Dependency doctrine (2026-07-14): pin versions (rangeStrategy pin), pin the behaviors we rely on with tests, then bump as eagerly as possible — behind GREEN CI, so we are always first to know when something breaks. automerge waits for tests by DEFAULT: there is deliberately NO global ignoreTests (it previously merged BEFORE CI, inverting the doctrine — breakage landed on main instead of being caught in the PR). The one exception to eagerness is npm supply chain (see the npm rule): tests cannot catch a malicious publish, so time is the guard.",
   "automerge": true,
-  "ignoreTests": true,
+  "rangeStrategy": "pin",
+  "dependencyDashboard": true,
   "packageRules": [
     {
-      "matchPackageNames": [
-        "string-width",
-        "strip-ansi",
-        "wrap-ansi",
-        "semver",
-        "yaml",
-        "ws"
-      ],
-      "ignoreTests": false
-    },
-    {
-      "description": "Guest-image ci pins (the NEWEST-end versions in scripts/tjs-legs.mjs): a bump must prove itself on the actual leg, so automerge waits for green CI. Release floor pins are policy-frozen and deliberately NOT extracted.",
-      "matchDatasources": ["custom.cpa-freebsd-x86-64", "custom.cpa-netbsd-x86-64", "custom.cpa-omnios-x86-64", "custom.vmactions-solaris"],
-      "ignoreTests": false
+      "description": "npm supply chain is a DIFFERENT threat model: tests catch breakage, not a malicious/compromised publish (it passes every test and still backdoors). Time is the only defense — a bad release is typically yanked within days. Hold every npm update 7 days before it is eligible to automerge. The deliberate exception to eager bumping.",
+      "matchDatasources": ["npm"],
+      "minimumReleaseAge": "7 days"
     },
     {
       "description": "solaris vmactions confs mix toolchain variants (gcc/clang) into one namespace; track only the gcc line the leg is built around.",
