@@ -465,43 +465,52 @@ runs:
         if-no-files-found: error
 
     # Validate the cross-fused builder under qemu-user (verify=qemu-user, the
-    # s390x/riscv64 tier-2 legs). binfmt fix-binary (docker/setup-qemu-action,
-    # the same mechanism the alpine qemu-user musl legs use) execs the foreign
-    # ELF transparently. level-2 = the builder self-loads + prints its version
-    # (proves the bootstrap canonical-LE bytecode reads + runs on $ARCH — for
-    # 64-bit-BE s390x this is THE canonical-LE-on-64-bit-BE runtime proof).
-    # level-2.5 = the full fuse+PONG under qemu-user (no OS image), ATTEMPTED
-    # and its outcome LOGGED — never a silent downgrade; tier-2 stands on
-    # level-2 either way.
+    # s390x/riscv64 tier-2 legs). docker/setup-qemu-action registers binfmt, then
+    # the foreign ELF runs INSIDE a matching-arch Debian rootfs (the runner has
+    # no target glibc — the alpine musl legs get away with bare-host binfmt only
+    # because they are fully static; these are glibc cross builds, so they need a
+    # target libc, and the rootfs provides it). libatomic is linked statically
+    # (toolchain file), so glibc is the only runtime dep. level-2 = the builder
+    # self-loads + prints its version (proves the bootstrap canonical-LE bytecode
+    # reads + runs on $ARCH — for 64-bit-BE s390x this IS the
+    # canonical-LE-on-64-bit-BE runtime proof). level-2.5 = the full fuse+PONG in
+    # the same rootfs (provider carved on the x64 host), ATTEMPTED and its outcome
+    # LOGGED — never a silent downgrade; tier-2 stands on level-2 either way.
     - name: Register qemu-user binfmt (verify=qemu-user)
       if: inputs.verify == 'qemu-user'
       uses: docker/setup-qemu-action@v4
     - name: Validate the tier-2 builder under qemu-user (verify=qemu-user)
       if: inputs.verify == 'qemu-user'
       shell: bash
+      env:
+        ARCH: ${{ inputs.guest-arch }}          # s390x | riscv64
+        ASSET: ${{ steps.name.outputs.asset }}
+        ROOTFS: ${{ inputs.guest-arch }}/debian:trixie-slim
       run: |
         set -euo pipefail
-        BIN="./${{ steps.name.outputs.asset }}"
-        ARCH="${{ inputs.guest-arch }}"   # s390x | riscv64
-        # level-2 (required): self-load + version under binfmt.
-        "$BIN" --clode-version | tee "$RUNNER_TEMP/qu-ver.txt"
+        # level-2 (required): self-load + version, foreign ELF under binfmt in a
+        # target-arch glibc rootfs.
+        docker run --rm --platform "linux/$ARCH" -v "$PWD:/w" -w /w "$ROOTFS" \
+          ./"$ASSET" --clode-version | tee "$RUNNER_TEMP/qu-ver.txt"
         grep -qE '^clode ' "$RUNNER_TEMP/qu-ver.txt" \
           || { echo "level-2 FAILED: no 'clode <ver>' from the $ARCH builder under qemu-user" >&2; exit 1; }
         echo "level-2 (self-load) OK on $ARCH"
-        # level-2.5 (attempted, logged): the full fuse+PONG under qemu-user. The
-        # fuse compiles the 19MB cli.cjs under the emulated engine — slow/heavy;
-        # if qemu-user cannot carry it, record the bound and keep the leg green
-        # on level-2. Host-carve a minimal provider (fast, on the x64 runner).
+        # level-2.5 (attempted, logged): the full fuse+PONG. The fuse compiles the
+        # 19MB cli.cjs under the emulated engine — slow/heavy; if qemu-user cannot
+        # carry it, record the bound and keep the leg green on level-2. The
+        # minimal provider is carved on the x64 host (fast), then read in-rootfs.
         npm i -g @anthropic-ai/claude-code 2>&1 | tail -3 || true
         PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f \( -name claude -o -name claude.exe \) -size +20M 2>/dev/null | head -1)"
-        if [ -n "$PROV" ] && node scripts/make-min-provider.cjs "$PROV" "$RUNNER_TEMP/provider-min" 2>/dev/null; then
-          if CLODE_CLAUDE_BIN="$RUNNER_TEMP/provider-min" CLODE_CACHE="$RUNNER_TEMP/clode-cache-qu" \
-               "$BIN" build --out "$RUNNER_TEMP/quaude-qu" 2>&1 | tee "$RUNNER_TEMP/qu-fuse.txt" | grep -q 'PONG round-trip ok'; then
+        if [ -n "$PROV" ] && node scripts/make-min-provider.cjs "$PROV" .matrix/qu-provider-min 2>/dev/null; then
+          if docker run --rm --platform "linux/$ARCH" -v "$PWD:/w" -w /w \
+               -e CLODE_CLAUDE_BIN=/w/.matrix/qu-provider-min -e CLODE_CACHE=/w/.matrix/qu-cache \
+               "$ROOTFS" ./"$ASSET" build --out /w/.matrix/quaude-qu \
+               2>&1 | tee "$RUNNER_TEMP/qu-fuse.txt" | grep -q 'PONG round-trip ok'; then
             echo "level-2.5 (full fuse+PONG under qemu-user) OK on $ARCH"
           else
             echo "level-2.5 NOT achieved on $ARCH (qemu-user could not carry the full fuse) — tier-2 self-load stands; see the log above."
           fi
-          rm -f "$RUNNER_TEMP/quaude-qu"
+          rm -f .matrix/quaude-qu
         else
           echo "level-2.5 SKIPPED on $ARCH (no provider available to carve) — tier-2 self-load stands."
         fi

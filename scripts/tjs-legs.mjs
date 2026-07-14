@@ -285,6 +285,39 @@ const LEGS = [
   { leg: 'netbsd-sparc', os: 'ubuntu-latest', 'guest-platform': 'qemu-netbsd-sparc', 'guest-arch': 'sparc',
     floor: '10.1', 'guest-version': '10.1', publish: true, ci: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
+  // ---- cross-toolchain tier-2 (2026-07-14): cross-compiled on the x64 runner
+  // inside a stock Debian image (cross-apt names the gcc-<triple>), then the
+  // shared cross-fuse (tier2:true) emits a clode BUILDER against the foreign
+  // engine — no runner can exec the target, so no-exec:true and the tier2 block
+  // owns the upload. atomic-shim off: s390x/riscv64 have native 64-bit atomics.
+  // Engine knobs match the VM legs (wasm/mimalloc/ffi off). soft-fail until they
+  // earn hard status (house rule). Not in the ci tier — release-only, like the
+  // arch twins. cross-image is a rolling Debian tag (Renovate-tracked).
+  //
+  // linux-riscv64 (64-bit LE): the easy LE cross proof — no canonical-LE
+  // special-casing needed. verify=qemu-user (level-2 self-load required,
+  // level-2.5 full fuse attempted+logged).
+  { leg: 'linux-riscv64', os: 'ubuntu-latest', 'guest-arch': 'riscv64',
+    // renovate: datasource=docker depName=debian
+    'cross-image': 'debian:trixie',
+    'cross-file': 'scripts/linux-riscv64.toolchain.cmake',
+    'cross-apt': 'cmake make gcc-riscv64-linux-gnu g++-riscv64-linux-gnu',
+    'atomic-shim': false, tier2: true, verify: 'qemu-user', 'no-exec': true,
+    publish: true, 'soft-fail': true, timeout: 1800,
+    wasm: 'off', mimalloc: 'off', ffi: 'off' },
+  // linux-s390x (64-bit BIG-endian): the canonical-LE-on-64-bit-BE witness.
+  // Its qemu-user level-2 self-load proves the canonical-LE reader deserializes
+  // the shipped LE core bytecode on a 64-bit BE arch (sparc proved 32-bit BE) —
+  // the runtime half of the canonical-LE story. Same Debian-cross tier-2 shape
+  // as riscv64; atomic-shim off (s390x has native 64-bit atomics).
+  { leg: 'linux-s390x', os: 'ubuntu-latest', 'guest-arch': 's390x',
+    // renovate: datasource=docker depName=debian
+    'cross-image': 'debian:trixie',
+    'cross-file': 'scripts/linux-s390x.toolchain.cmake',
+    'cross-apt': 'cmake make gcc-s390x-linux-gnu g++-s390x-linux-gnu',
+    'atomic-shim': false, tier2: true, verify: 'qemu-user', 'no-exec': true,
+    publish: true, 'soft-fail': true, timeout: 1800,
+    wasm: 'off', mimalloc: 'off', ffi: 'off' },
 ];
 
 export function legsFor(tier) {

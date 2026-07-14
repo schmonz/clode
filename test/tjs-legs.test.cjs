@@ -52,7 +52,8 @@ test('release tier: every published leg is present (golden)', () => {
     'freebsd-amd64', 'freebsd-arm64',
     'haiku-x64',
     'linux-arm64-musl', 'linux-armv7-musl', 'linux-loongarch64-musl',
-    'linux-ppc64le-musl', 'linux-riscv64-musl', 'linux-s390x-musl',
+    'linux-ppc64le-musl', 'linux-riscv64', 'linux-riscv64-musl',
+    'linux-s390x', 'linux-s390x-musl',
     'linux-x64-musl', 'linux-x86-musl',
     'midnightbsd-amd64',
     'netbsd-amd64', 'netbsd-arm64', 'netbsd-sparc',
@@ -192,12 +193,14 @@ test('darwin-x86 Tiger leg: engine-only i386 at floor 10.4', () => {
   assert.strictEqual(dt['macos-arch'], 'i386');
   assert.strictEqual(dt['no-exec'], true);
   assert.strictEqual(dt.publish, false);
-  // No GitHub runner can exec the output of a no-exec leg, so it cannot fuse
-  // or publish a builder — the engine-only floor legs (darwin-ppc, darwin-x86)
-  // are proven but never published.
+  // No GitHub runner can exec the output of a no-exec leg. A no-exec leg can
+  // only publish a builder when it is ALSO tier2: the cross-fuse produces the
+  // foreign-arch builder WITHOUT executing it (validated later under qemu-user).
+  // The engine-only floor legs (darwin-ppc, darwin-x86) are no-exec + non-tier2
+  // (Mach-O needs a pre-signed template) — proven but never published.
   for (const l of release) {
-    if (l['no-exec']) {
-      assert.ok(!l.publish, `${l.leg}: no-exec legs must not publish`);
+    if (l['no-exec'] && !l.tier2) {
+      assert.ok(!l.publish, `${l.leg}: no-exec non-tier2 legs must not publish`);
     }
   }
 });
@@ -221,6 +224,33 @@ test('netbsd-sparc leg: own-qemu cross-fuse, floored at 10.1, soft-fail VM leg',
   // legs are soft-fail" house rule applies to it the same way.
   assert.ok(ns['guest-platform'] && !['native', 'alpine'].includes(ns['guest-platform']),
     'netbsd-sparc must be recognized as a VM leg (own-qemu backend)');
+});
+
+test('linux-riscv64 leg: Debian-cross tier-2, qemu-user verified, publishes', () => {
+  const l = legsFor('release').find((x) => x.leg === 'linux-riscv64');
+  assert.ok(l, 'linux-riscv64 leg must be present');
+  assert.strictEqual(l['guest-arch'], 'riscv64');
+  assert.strictEqual(l.verify, 'qemu-user');
+  assert.strictEqual(l['no-exec'], true, 'cross leg cannot exec the target on the runner');
+  assert.strictEqual(l.tier2, true, 'tier2 emits + uploads the cross-fused builder');
+  assert.strictEqual(l.publish, true);
+  assert.strictEqual(l['atomic-shim'], false, 'riscv64 has native 64-bit atomics');
+  assert.ok(l['cross-image'], 'exec=cross needs a cross-image');
+  assert.ok(l['cross-file'] && /riscv64/.test(l['cross-file']), 'must point at the riscv64 toolchain file');
+  assert.ok(/riscv64/.test(l['cross-apt'] || ''), 'cross-apt must install the riscv64 gcc');
+});
+
+test('linux-s390x leg: 64-bit BE Debian-cross tier-2, qemu-user verified (canonical-LE proof)', () => {
+  const l = legsFor('release').find((x) => x.leg === 'linux-s390x');
+  assert.ok(l, 'linux-s390x leg must be present');
+  assert.strictEqual(l['guest-arch'], 's390x');
+  assert.strictEqual(l.verify, 'qemu-user');
+  assert.strictEqual(l['no-exec'], true);
+  assert.strictEqual(l.tier2, true);
+  assert.strictEqual(l.publish, true);
+  assert.strictEqual(l['atomic-shim'], false, 's390x has native 64-bit atomics');
+  assert.ok(/s390x/.test(l['cross-file'] || ''), 'must point at the s390x toolchain file');
+  assert.ok(/s390x/.test(l['cross-apt'] || ''), 'cross-apt must install the s390x gcc');
 });
 
 test('build-leg cache key carries the macos floor axes', () => {
