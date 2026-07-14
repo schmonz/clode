@@ -1,6 +1,6 @@
 {
   "name": "clode",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "Run the latest Claude Code under Node on any machine: clode extracts the upstream bundle and runs it under a host Node via a small Bun shim. Install with `npm install -g .`; the runtime deps below are installed automatically on first run for non-npm installs.",
   "bin": {
