@@ -70,6 +70,10 @@ inputs:
     description: "'true': after the cross-built target engine lands, cross-fuse a tier-2 clode BUILDER against it via ./.github/actions/cross-fuse and upload it (ELF-only — darwin is excluded, Mach-O needs a pre-signed template)."
     required: false
     default: "false"
+  verify:
+    description: "post-build validation rung: 'smoke' (qemu-system fuse+PONG, the sparc leg), 'qemu-user' (binfmt-run the cross-fused builder: level-2 --clode-version required, level-2.5 full fuse attempted+logged), 'none' (tier-2, built-not-run — NetBSD has no qemu-user)."
+    required: false
+    default: smoke
   static:
     description: "'true': fully-static tjs (musl legs) + verify with file/ldd"
     required: false
@@ -460,13 +464,55 @@ runs:
         path: ${{ steps.name.outputs.asset }}
         if-no-files-found: error
 
+    # Validate the cross-fused builder under qemu-user (verify=qemu-user, the
+    # s390x/riscv64 tier-2 legs). binfmt fix-binary (docker/setup-qemu-action,
+    # the same mechanism the alpine qemu-user musl legs use) execs the foreign
+    # ELF transparently. level-2 = the builder self-loads + prints its version
+    # (proves the bootstrap canonical-LE bytecode reads + runs on $ARCH — for
+    # 64-bit-BE s390x this is THE canonical-LE-on-64-bit-BE runtime proof).
+    # level-2.5 = the full fuse+PONG under qemu-user (no OS image), ATTEMPTED
+    # and its outcome LOGGED — never a silent downgrade; tier-2 stands on
+    # level-2 either way.
+    - name: Register qemu-user binfmt (verify=qemu-user)
+      if: inputs.verify == 'qemu-user'
+      uses: docker/setup-qemu-action@v4
+    - name: Validate the tier-2 builder under qemu-user (verify=qemu-user)
+      if: inputs.verify == 'qemu-user'
+      shell: bash
+      run: |
+        set -euo pipefail
+        BIN="./${{ steps.name.outputs.asset }}"
+        ARCH="${{ inputs.guest-arch }}"   # s390x | riscv64
+        # level-2 (required): self-load + version under binfmt.
+        "$BIN" --clode-version | tee "$RUNNER_TEMP/qu-ver.txt"
+        grep -qE '^clode ' "$RUNNER_TEMP/qu-ver.txt" \
+          || { echo "level-2 FAILED: no 'clode <ver>' from the $ARCH builder under qemu-user" >&2; exit 1; }
+        echo "level-2 (self-load) OK on $ARCH"
+        # level-2.5 (attempted, logged): the full fuse+PONG under qemu-user. The
+        # fuse compiles the 19MB cli.cjs under the emulated engine — slow/heavy;
+        # if qemu-user cannot carry it, record the bound and keep the leg green
+        # on level-2. Host-carve a minimal provider (fast, on the x64 runner).
+        npm i -g @anthropic-ai/claude-code 2>&1 | tail -3 || true
+        PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f \( -name claude -o -name claude.exe \) -size +20M 2>/dev/null | head -1)"
+        if [ -n "$PROV" ] && node scripts/make-min-provider.cjs "$PROV" "$RUNNER_TEMP/provider-min" 2>/dev/null; then
+          if CLODE_CLAUDE_BIN="$RUNNER_TEMP/provider-min" CLODE_CACHE="$RUNNER_TEMP/clode-cache-qu" \
+               "$BIN" build --out "$RUNNER_TEMP/quaude-qu" 2>&1 | tee "$RUNNER_TEMP/qu-fuse.txt" | grep -q 'PONG round-trip ok'; then
+            echo "level-2.5 (full fuse+PONG under qemu-user) OK on $ARCH"
+          else
+            echo "level-2.5 NOT achieved on $ARCH (qemu-user could not carry the full fuse) — tier-2 self-load stands; see the log above."
+          fi
+          rm -f "$RUNNER_TEMP/quaude-qu"
+        else
+          echo "level-2.5 SKIPPED on $ARCH (no provider available to carve) — tier-2 self-load stands."
+        fi
+
     # (C) The runtime smoke: hand the own-qemu backend a recipe that stages
     # the cross-fused sparc clode builder + an x64 provider binary on :8180
     # and runs clode-on-sparc to `build --out quaude` + a PONG check. Uses
     # the PRISTINE image (no toolchain needed for a runtime smoke) — see
     # CI-IMAGES.md.
     - name: Stage the builder + minimal provider for the own-qemu smoke (qemu-* legs)
-      if: startsWith(inputs.guest-platform, 'qemu-') && inputs.smoke == 'full'
+      if: startsWith(inputs.guest-platform, 'qemu-') && inputs.smoke == 'full' && inputs.verify == 'smoke'
       shell: bash
       run: |
         set -uo pipefail
@@ -484,7 +530,7 @@ runs:
 
     - name: Load the sparc smoke recipe (single committed source)
       id: smoke-recipe
-      if: startsWith(inputs.guest-platform, 'qemu-') && inputs.smoke == 'full'
+      if: startsWith(inputs.guest-platform, 'qemu-') && inputs.smoke == 'full' && inputs.verify == 'smoke'
       shell: bash
       run: |
         set -euo pipefail
@@ -493,7 +539,7 @@ runs:
           echo 'CLODE_SMOKE_EOF'; } >> "$GITHUB_OUTPUT"
 
     - name: Smoke via the own-qemu backend (qemu-* legs)
-      if: startsWith(inputs.guest-platform, 'qemu-') && inputs.smoke == 'full'
+      if: startsWith(inputs.guest-platform, 'qemu-') && inputs.smoke == 'full' && inputs.verify == 'smoke'
       uses: ./.github/actions/guest
       with:
         platform: ${{ inputs.guest-platform }}

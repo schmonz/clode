@@ -99,5 +99,6 @@ jobs:
           cross-apt: ${{ matrix.cross-apt || '' }}
           atomic-shim: ${{ matrix.atomic-shim && 'true' || 'false' }}
           tier2: ${{ matrix.tier2 && 'true' || 'false' }}
+          verify: ${{ matrix.verify || 'smoke' }}
           attest: ${{ matrix.publish && 'true' || 'false' }}
           publish: ${{ matrix.publish && 'true' || 'false' }}
