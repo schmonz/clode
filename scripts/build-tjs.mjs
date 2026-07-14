@@ -1336,13 +1336,22 @@ function fixupAtomicShim(dir) {
     console.log('fixup atomic-shim: already applied');
     return;
   }
+  // Attach the shim to the EXECUTABLE (tjs-cli), not the `tjs` static library
+  // (libtjs_core.a). The shim resolves __atomic_*_8 refs that live in a
+  // DIFFERENT archive (libqjs.a / quickjs). GNU ld resolves archives in a
+  // single left-to-right pass, so a shim buried in libtjs_core.a does NOT
+  // back-fill libqjs.a's later refs (netbsd-m68k link wall, run 29359104009);
+  // as a direct object of tjs-cli its symbols are unconditionally present and
+  // resolve every archive regardless of order (darwin-ppc's Mach-O ld already
+  // tolerated the library form — a direct object works for it too). Appended at
+  // end-of-file so both targets are defined when target_sources runs.
   const anchor = 'add_executable(tjs-cli';
-  const inject = 'option(CLODE_ATOMIC_SHIM "Link a pthread __atomic_*_8 shim (32-bit targets lacking libatomic)" OFF)\n'
-    + 'if(CLODE_ATOMIC_SHIM)\n    target_sources(tjs PRIVATE src/tjs-atomic-shim.c)\nendif()\n\n';
   if (!src.includes(anchor)) {
-    throw new Error('fixup atomic-shim: anchor not found (CMakeLists.txt changed under the pin — re-derive)');
+    throw new Error('fixup atomic-shim: tjs-cli target not found (CMakeLists.txt changed under the pin — re-derive)');
   }
-  fs.writeFileSync(f, src.replace(anchor, inject + anchor));
+  const inject = '\noption(CLODE_ATOMIC_SHIM "Link a pthread __atomic_*_8 shim (32-bit targets lacking libatomic)" OFF)\n'
+    + 'if(CLODE_ATOMIC_SHIM)\n    target_sources(tjs-cli PRIVATE src/tjs-atomic-shim.c)\nendif()\n';
+  fs.writeFileSync(f, src + inject);
   console.log('fixup atomic-shim: applied');
 }
 
