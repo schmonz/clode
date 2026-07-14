@@ -278,7 +278,7 @@ const LEGS = [
   // required-assets tripwire gates on the sparc asset. First user of the own-qemu
   // guest backend.
   { leg: 'netbsd-sparc', os: 'ubuntu-latest', 'guest-platform': 'qemu-netbsd-sparc', 'guest-arch': 'sparc',
-    floor: '10.1', publish: true, ci: true, 'soft-fail': true, timeout: 3600,
+    floor: '10.1', 'guest-version': '10.1', publish: true, ci: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
 ];
 

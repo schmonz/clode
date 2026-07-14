@@ -183,6 +183,11 @@ test('netbsd-sparc leg: own-qemu cross-fuse, floored at 10.1, soft-fail VM leg',
   assert.strictEqual(ns['guest-platform'], 'qemu-netbsd-sparc');
   assert.strictEqual(ns['guest-arch'], 'sparc');
   assert.strictEqual(ns.floor, '10.1');
+  // guest-version MUST be pinned: without it the matrix falls to the alpine
+  // default '3.22' and the image-asset names format() to wd0-*-3.22 (the
+  // original Wall #1 — "no assets match the file pattern"). Lock it at the floor.
+  assert.strictEqual(ns['guest-version'], '10.1',
+    "netbsd-sparc must pin guest-version:'10.1' or the image asset names default to alpine 3.22");
   assert.strictEqual(ns.publish, true);
   assert.strictEqual(ns['soft-fail'], true);
   // VM(leg): guest-platform set and not native/alpine — the own-qemu

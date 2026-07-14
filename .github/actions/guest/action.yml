@@ -238,7 +238,12 @@ runs:
         set -euo pipefail
         sudo apt-get update -qq
         sudo apt-get install -y --no-install-recommends qemu-system-sparc zstd
-        pip install --user anita pexpect
+        # NB: the REAL anita (Andreas Gustafsson's NetBSD test tool, whose
+        # anita.Anita/anita.ISO/shell_cmd API ci-sparc-driver.py uses) is on
+        # gson.org, NOT PyPI — `pip install anita` grabs an unrelated logic-proof
+        # teaching package (RUNBOOK.md "DRIFT (wrong anita)"). Pin 2.18.
+        pip install --user pexpect http://www.gson.org/netbsd/anita/download/anita-2.18.tar.gz
+        python3 -c "import anita, pexpect"   # fail loud if the wrong package slipped in
 
     - name: Fetch + verify the pinned NetBSD/sparc image (own-qemu backend)
       if: inputs.platform == 'qemu-netbsd-sparc'

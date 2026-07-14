@@ -327,29 +327,69 @@ runs:
     # BUILDER cross-fuses ON the x64 runner; (C) further below — the SMOKE
     # hands the backend a recipe. Guarded so every other leg (exec=host/
     # guest/cross, windows) is untouched.
-    - name: Build the engine (own-qemu guest, qemu-* legs)
+    - name: Prepare the pinned tjs source + simde for the in-guest engine bake (qemu-* cache miss)
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && startsWith(inputs.guest-platform, 'qemu-')
+      shell: bash
+      env:
+        CLODE_TJS_VENDOR: ${{ steps.mode.outputs.vendor }}
+      run: |
+        set -euo pipefail
+        # Patched canonical-LE txiki source (clones txiki + quickjs-ng, applies
+        # patches/ — incl. the canonical-LE bytecode patch the cross-fuse REQUIRES;
+        # a non-canonical-LE engine gives "checksum error" on the cross-fused
+        # builder — proven in the docker-loop wall-walk 2026-07-14).
+        node scripts/build-tjs.mjs --source-only
+        mkdir -p .matrix/qemu-bake
+        tar czf .matrix/qemu-bake/txiki-canonical-le.tar.gz -C "$CLODE_TJS_VENDOR" txiki.js
+        # simde (txiki v26.6.0 pins v0.8.2 — the guest build is offline, so stage
+        # it; repackage so it extracts to simde-src/ as the bake recipe expects).
+        curl -fsSL https://github.com/simd-everywhere/simde/archive/refs/tags/v0.8.2.tar.gz -o "$RUNNER_TEMP/simde.tgz"
+        rm -rf "$RUNNER_TEMP/simde-src"; mkdir -p "$RUNNER_TEMP/simde-src"
+        tar xzf "$RUNNER_TEMP/simde.tgz" -C "$RUNNER_TEMP/simde-src" --strip-components=1
+        tar czf .matrix/qemu-bake/simde-v0.8.2.tar.gz -C "$RUNNER_TEMP" simde-src
+
+    - name: Load the sparc bake recipe (single committed source)
+      id: bake-recipe
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && startsWith(inputs.guest-platform, 'qemu-')
+      shell: bash
+      run: |
+        set -euo pipefail
+        { echo 'script<<CLODE_BAKE_EOF'
+          cat spike/quickjs/qemu/ci-sparc-bake.sh
+          echo 'CLODE_BAKE_EOF'; } >> "$GITHUB_OUTPUT"
+
+    - name: Bake the sparc engine in-guest (own-qemu, qemu-* cache miss)
       if: steps.tjs-cache.outputs.cache-hit != 'true' && startsWith(inputs.guest-platform, 'qemu-')
       uses: ./.github/actions/guest
       with:
         platform: ${{ inputs.guest-platform }}
         arch: ${{ inputs.guest-arch }}
         version: ${{ inputs.guest-version }}
-        # The BAKED image (gmake+cmake preinstalled) for the cache-miss
-        # bake — see spike/quickjs/qemu/CI-IMAGES.md. TODO(Task 4): this
-        # naming pattern is proven for netbsd-sparc only; a future qemu-*
-        # leg may need its own convention.
+        # BAKED image (gmake+cmake preinstalled) for the cache-miss bake — see CI-IMAGES.md.
         cache-key: wd0-baked-${{ inputs.guest-version }}-gmake-cmake.img.zst
-        script: |
-          # TODO(Task 4): fold in the proven guest-sparc-*.sh recipe shape
-          # (POSIX sh, cc/cmake/gmake directly — no node in the guest; fetch
-          # inputs over http://10.0.2.2:8180 via `ftp -o`; emit per-phase
-          # `<phase>-exit=<N>` markers; end with '=== GUEST-DONE ==='). This
-          # placeholder only marks the structural seam.
-          set -eux
-          mkdir -p "$PWD/.matrix/tjs-out"
-          echo "TODO-Task-4: in-guest engine bake not yet wired" > "$PWD/.matrix/tjs-out/.placeholder"
-          echo "engine-bake-exit=0"
-          echo "=== GUEST-DONE ==="
+        script: ${{ steps.bake-recipe.outputs.script }}
+
+    - name: Decode + verify the synced-out sparc engine (qemu-* cache miss)
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && startsWith(inputs.guest-platform, 'qemu-')
+      shell: bash
+      run: |
+        set -euo pipefail
+        # The bake syncs the tjs OUT as a gzip|base64 block on the serial console;
+        # ci-sparc-driver.py wrote that console to $CI_SPARC_WORKDIR (set in
+        # GITHUB_ENV by the guest action). Decode it to steps.mode.outputs.out/tjs
+        # (where the cross-fuse reads CLODE_TARGET_TEMPLATE, and what the tjs-cache
+        # saves). Verify against the guest's cksum marker.
+        LOG="$CI_SPARC_WORKDIR/ci-sparc-console.log"
+        test -f "$LOG" || { echo "no console log at $LOG" >&2; exit 1; }
+        OUT="${{ steps.mode.outputs.out }}"; mkdir -p "$OUT"
+        awk '/TJS-GZB64-BEGIN/{f=1;next} /TJS-GZB64-END/{f=0} f' "$LOG" \
+          | tr -d '\r' | grep -E '^[A-Za-z0-9+/=]+$' | base64 -d | gunzip > "$OUT/tjs"
+        chmod +x "$OUT/tjs"
+        want=$(grep -oE 'bake-tjs-cksum=[0-9]+ bake-tjs-len=[0-9]+' "$LOG" | tail -1)
+        got=$(cksum "$OUT/tjs" | awk '{print "bake-tjs-cksum="$1" bake-tjs-len="$2}')
+        echo "want: $want"; echo "got : $got"
+        { [ -n "$want" ] && [ "$want" = "$got" ]; } || { echo "engine sync-out cksum/len mismatch" >&2; exit 1; }
+        file "$OUT/tjs"
 
     # (B) Cross-fuse the clode --self BUILDER on the x64 runner, targeting
     # the sparc engine synced out above (the retired windows cross-file
@@ -389,7 +429,7 @@ runs:
     # and runs clode-on-sparc to `build --out quaude` + a PONG check. Uses
     # the PRISTINE image (no toolchain needed for a runtime smoke) — see
     # CI-IMAGES.md.
-    - name: Stage the provider for the own-qemu smoke (qemu-* legs)
+    - name: Stage the builder + minimal provider for the own-qemu smoke (qemu-* legs)
       if: startsWith(inputs.guest-platform, 'qemu-') && inputs.smoke == 'full'
       shell: bash
       run: |
@@ -399,8 +439,22 @@ runs:
         if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found under @anthropic-ai/claude-code" >&2; exit 1; fi
         echo "provider: $PROV"
         mkdir -p .matrix/qemu-smoke
-        cp "$PROV" .matrix/qemu-smoke/provider-claude       # bytes only — clode EXTRACTS from it, never execs it
+        # Pre-carve the 240MB Bun provider to a ~17.5MB synthetic provider: the
+        # in-guest carve of the full binary OOMs the 512MB sun4m + is TCG-glacial
+        # (>35min); the minimal one fits and is fast. Arch-independent — the
+        # extracted cli.cjs is identical. (proven: docker-loop wall-walk 2026-07-14)
+        node scripts/make-min-provider.cjs "$PROV" .matrix/qemu-smoke/provider-min
         cp "${{ steps.name.outputs.asset }}" .matrix/qemu-smoke/clode-builder
+
+    - name: Load the sparc smoke recipe (single committed source)
+      id: smoke-recipe
+      if: startsWith(inputs.guest-platform, 'qemu-') && inputs.smoke == 'full'
+      shell: bash
+      run: |
+        set -euo pipefail
+        { echo 'script<<CLODE_SMOKE_EOF'
+          cat spike/quickjs/qemu/ci-sparc-smoke.sh
+          echo 'CLODE_SMOKE_EOF'; } >> "$GITHUB_OUTPUT"
 
     - name: Smoke via the own-qemu backend (qemu-* legs)
       if: startsWith(inputs.guest-platform, 'qemu-') && inputs.smoke == 'full'
@@ -410,16 +464,10 @@ runs:
         arch: ${{ inputs.guest-arch }}
         version: ${{ inputs.guest-version }}
         cache-key: wd0-pristine-${{ inputs.guest-version }}.img.zst
-        script: |
-          # TODO(Task 4): wire the real fetch-stage-run-verify recipe
-          # (H=http://10.0.2.2:8180; ftp -o clode-builder "$H/.matrix/qemu-smoke/clode-builder";
-          # ftp -o provider-claude "$H/.matrix/qemu-smoke/provider-claude"; chmod +x both;
-          # CLODE_CLAUDE_BIN=./provider-claude ./clode-builder build --out quaude;
-          # PONG check against ./quaude; emit smoke-exit=<N>). Placeholder
-          # only marks the structural seam — see Task 4 wall-walk.
-          set -eux
-          echo "smoke-exit=0"
-          echo "=== GUEST-DONE ==="
+        # The proven fuse+PONG recipe (spike/quickjs/qemu/ci-sparc-smoke.sh): fetch
+        # clode-builder + provider-min over :8180, clode-on-sparc fuses a quaude +
+        # internal PONG/attest smoke. smoke-exit=0 == fused + PONG + attest.
+        script: ${{ steps.smoke-recipe.outputs.script }}
 
     # A cache HIT skips the guest setup, so foreign-arch legs still need
     # fix-binary binfmt on the host to exec the cached tjs (fuse worker,
