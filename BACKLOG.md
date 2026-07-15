@@ -78,6 +78,20 @@ well-tested, and reasonably fast** as we can possibly make it." Sequencing:
   NOT remove the codesign thin-on-failure fix (the arm64 slice is still present,
   so old-macOS codesign still needs it).
 
+### Known runtime bugs
+
+- **`clode fetch` looks eternally stuck at 0 bytes.** Reported 2026-07-15.
+  ROOT CAUSE CONFIRMED: `clode-net.cjs:56-59` `downloadFile` buffers the ENTIRE
+  ~240MB provider binary via `res.arrayBuffer()` then `writeFileSync`s ONCE at the
+  end — so the dest file is 0 bytes for the whole download and only appears full at
+  completion (looks hung). The download itself is fine: streamed 243.6MB in 3.9s @
+  62.9MB/s on this Mavericks host node. Under tjs it's worse — a 243MB arrayBuffer
+  likely hangs/OOMs the node-shim fetch, and the fs write may truncate (ties to the
+  config 0-byte bug). FIX: stream `res.body` → `fs.createWriteStream(dest)` via
+  `stream/promises pipeline`, with progress (bytes/total). Removes the memory spike,
+  shows movement, and is robust under tjs. Same fix helps the changelog/manifest
+  paths (small, but consistency). Belongs with the daily-driver hardening track.
+
 ### Known quaude runtime bugs
 
 - **quaude does not persist config across invocations (NetBSD/arm64 at least).**
