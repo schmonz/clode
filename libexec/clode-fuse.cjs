@@ -104,6 +104,41 @@ function timeoutScale(env) {
   return Number.isFinite(n) && n >= 1 ? n : 1;
 }
 
+// Ad-hoc codesign a Mach-O template so it can exec / be appended to. On old
+// macOS (Mavericks) the bundled codesign_allocate cannot sign a FAT binary that
+// carries an arm64 slice — it dies "malformed object (unknown load command 5)".
+// When signing a fat template fails and the host arch is one of its slices, thin
+// to the host slice IN PLACE and retry: the worker only needs the host slice,
+// and the fused output degrades to a host-arch quaude (honest — a box whose
+// tooling can't sign the arm64 slice can neither run nor verify a universal one).
+// Modern hosts sign the fat template unchanged, so universal output is preserved.
+// Injectable spawnSync/platform/arch keep it unit-testable. Returns
+// { ok: true } | { ok: false, error }.
+function codesignAdHoc(file, opts = {}) {
+  const sp = opts.spawnSync || spawnSync;
+  const platform = opts.platform || process.platform;
+  const arch = opts.arch || process.arch;
+  const log = opts.log || (() => {});
+  if (platform !== 'darwin') return { ok: true };
+  const sign = () => sp('codesign', ['-s', '-', '--force', file], { encoding: 'utf8' });
+  let cs = sign();
+  if (cs.status === 0) return { ok: true };
+  // Signing failed. If the template is fat and the host arch is a slice, thin to
+  // it and retry (the Mavericks path). node arch 'x64' -> Mach-O arch 'x86_64'.
+  const hostSlice = arch === 'x64' ? 'x86_64' : arch;
+  const info = sp('lipo', ['-archs', file], { encoding: 'utf8' });
+  const archs = info.status === 0 ? String(info.stdout).trim().split(/\s+/) : [];
+  if (archs.length > 1 && archs.includes(hostSlice)) {
+    const thin = sp('lipo', [file, '-thin', hostSlice, '-output', file], { encoding: 'utf8' });
+    if (thin.status === 0) {
+      log(`clode: build: thinned fat template to ${hostSlice} (host codesign cannot sign the fat binary)`);
+      cs = sign();
+      if (cs.status === 0) return { ok: true };
+    }
+  }
+  return { ok: false, error: cs.stderr || cs.stdout };
+}
+
 // Async spawn with capture + timeout (spawnSync would starve the in-process
 // mock server — the same reason the test harnesses spawn async).
 function run(cmd, args, opts = {}) {
@@ -201,9 +236,10 @@ async function clodeBuild(args, opts) {
       }
       if (process.platform === 'darwin') {
         // Same discipline as the fuse copy below: a materialized Mach-O may
-        // need its ad-hoc signature refreshed before it can exec.
-        const cs = spawnSync('codesign', ['-s', '-', '--force', template], { encoding: 'utf8' });
-        if (cs.status !== 0) return fail(`build: codesign of the embedded template failed:\n${cs.stderr || cs.stdout}`);
+        // need its ad-hoc signature refreshed before it can exec. On old macOS
+        // a fat template can't be signed — thin-to-host-and-retry (see helper).
+        const r = codesignAdHoc(template, { log: clodeLog });
+        if (!r.ok) return fail(`build: codesign of the embedded template failed:\n${r.error}`);
       }
       clodeLog(`clode: build: using the embedded tjs template -> ${template}`);
     }
@@ -312,8 +348,12 @@ async function clodeBuild(args, opts) {
     fs.copyFileSync(baseTemplate, signedBase);
     fs.chmodSync(signedBase, 0o755);
     if (process.platform === 'darwin' && !crossTarget) {
-      const cs = spawnSync('codesign', ['-s', '-', '--force', signedBase], { encoding: 'utf8' });
-      if (cs.status !== 0) return fail(`build: codesign of the template copy failed:\n${cs.stderr || cs.stdout}`);
+      // Normal case: signedBase is a copy of `template`, already thinned above if
+      // the host couldn't sign the fat binary — so this signs a host-arch slice
+      // and succeeds first try. The retry logic is kept for the CLODE_TJS path
+      // (an explicit fat template that skipped the embedded-materialize branch).
+      const r = codesignAdHoc(signedBase, { log: clodeLog });
+      if (!r.ok) return fail(`build: codesign of the template copy failed:\n${r.error}`);
       clodeLog('clode: build: template copy re-signed (ad-hoc)');
     }
     fs.writeFileSync(extrasPath, JSON.stringify(extras));
@@ -412,4 +452,4 @@ async function clodeBuild(args, opts) {
   }
 }
 
-module.exports = { clodeBuild, startPongMock, cannedSSE, timeoutScale };
+module.exports = { clodeBuild, startPongMock, cannedSSE, timeoutScale, codesignAdHoc };

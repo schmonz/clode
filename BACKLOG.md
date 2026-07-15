@@ -4,6 +4,106 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 (Strategic feasibility risks live in `LONG-TERM.md`; in-flight designs in
 `docs/superpowers/`.)
 
+## ★ ACTIVE FRONTIER (2026-07-14) — the general-purpose cross-build matrix
+
+North star (user, 2026-07-14): a cross-build matrix "as **reproducible, large,
+well-tested, and reasonably fast** as we can possibly make it." Sequencing:
+**(1) bank the NetBSD approach FULLY, then (2) resume the general machinery.**
+
+- **DONE:** the tier-2 cross program — 4 weird arches green + v0.1.3 cut
+  (netbsd-sparc, linux-riscv64, linux-s390x, netbsd-m68k). The exec=cross path is
+  parameterized (cross-file/cross-apt/atomic-shim/tier2); a `verify` rung
+  (smoke|qemu-user|none) + an ELF **arch gate** (`file(1)` — because verify=none
+  legs had no arch check and shipped an x86-64 labeled m68k once). NetBSD
+  `build.sh` cross proven generic (m68k).
+
+- **NEXT (task #8, v0.1.4): bank NetBSD fully — the arch fleet.** 43 MACHINE_ARCH
+  values, ~20-24 distinct buildable. Generalize `netbsd-m68k.toolchain.cmake` →
+  ONE param'd file (triple+processor from the leg); one leg per arch; batch
+  wall-walk (canonical-LE handles BE; atomic-shim for 32-bit-no-64bit-atomics;
+  ia64/or1k/vax/m68000 may not build). The three m68k fixes are already generic
+  NetBSD-cross wins (CMAKE_SYSTEM_NAME NetBSD, atomic-shim-in-exe, native-build
+  guard).
+
+- **Then: the four quality bars for the WHOLE matrix (native + cpa/vmactions VM +
+  Debian-cross + NetBSD build.sh + darwin cross):**
+  - *reproducible* — immutable pins everywhere: SHA-pin `netbsd-src` (deferred
+    from v0.1.3; needs fetch-by-SHA in the composite) + a Renovate annotation;
+    digest-pinned images; honest-floor SDKs. The Renovate doctrine (`f2a3c11`)
+    backs this.
+  - *large* — the NetBSD fleet, then the same treatment for other build.sh-class
+    and Debian-cross-class targets.
+  - *well-tested* — push verify coverage up: qemu-user where it exists,
+    qemu-system (NetBSD level-3) as the upgrade, arch gate everywhere, attest.
+  - *reasonably fast* — cross-build over in-guest TCG where possible (cross =
+    minutes vs TCG = ~hour); cache toolchains (machine+src-rev) + tjs
+    (source-hash); tmpfs for disk-bound local loops.
+
+### Known shipped-artifact bugs
+
+- **`clode-0.1.3-darwin-universal build` fails at codesign of the tjs template
+  (Mavericks / old macOS host).** Reported 2026-07-15:
+  ```
+  clode: build: codesign of the embedded template failed:
+  codesign_allocate: for architecture arm64 object: .../template-tjs
+    malformed object (unknown load command 5)
+  the codesign_allocate helper tool cannot be found or used
+  ```
+  The **native `darwin10.6-x64` build works**; only the **darwin-universal** one
+  breaks. Hypothesis: the universal clode carries a **fat (x64+arm64) tjs
+  template**; Mavericks-era `codesign_allocate` chokes on the arm64 slice's newer
+  load command (LC 5) and can't sign it. A thin-x64 template signs fine (why the
+  native x64 build works). Likely fixes to weigh: (a) on old-macOS hosts, thin the
+  template to the host arch before codesign (lipo -thin $(uname -m)); (b) ship a
+  host-arch-thin template in the universal artifact for the builder role; (c)
+  detect the old `codesign_allocate` and skip/replace signing. **Directly bears on
+  the "retire host-Node → fuse tjs into every clode" decision** (below / host-Node
+  thread): a tjs-everywhere clode makes the fuse+codesign path load-bearing on
+  every host, so this wart must be solid first.
+
+- **darwin-universal i386/ppc slices are `no-exec` — clode by construction,
+  unverified.** The universal artifact lipo's four bare tjs engines (arm64, x64,
+  i386, ppc) then fuses ONE canonical-LE trailer spanning all slices, so running
+  the i386 or ppc slice carves the same payload and *is* full clode — NOT just the
+  engine. But i386/ppc are cross-built and never smoked (no such macOS in CI), so
+  an arch-specific boot bug would only surface on real hardware. Test-coverage
+  gap, not a packaging defect (same class as the arch-gate lesson: green ≠
+  verified-on-arch). **User will smoke the shipped binary on Tiger/PowerPC**
+  (2026-07-15) — fold the result back here.
+
+- **CLEANUP (not a bug): the builder embeds an all-four-slice fat template, but
+  only arm64+x64 are real build hosts** (i386/ppc are no-exec engine-only slices —
+  nobody runs `clode build` on a PowerPC Mac). Embedding an arm64+x64 template
+  instead of the full fat one trims builder bloat with no capability loss. Does
+  NOT remove the codesign thin-on-failure fix (the arm64 slice is still present,
+  so old-macOS codesign still needs it).
+
+### Platform wishlist (reachable-frontier tracker)
+
+- **NetBSD: every arch** — in progress (task #8 above). The showcase of the
+  build.sh path. **Buildable so far** (generic toolchain, local proof): m68k (CI),
+  sparc64, alpha. **Grinding:** hppa, macppc, pmax (mipsel), sgimips (mipseb).
+- **NetBSD hard-arch tier — toolchain builds, ENGINE needs upstream compiler work:**
+  - **vax** (32-bit LE) — `vax--netbsdelf` toolchain builds, but the tjs engine
+    compile FAILS: VAX has **non-IEEE floating point** (F/D/G format), and quickjs
+    assumes IEEE. Confirmed 2026-07-14. Path (per the 2026-07-10 plan's "VAX
+    contingency"): **a soft-float IEEE mode for GCC's VAX backend** so quickjs's
+    IEEE-double bit patterns / NaN-boxing compile unchanged — a real GCC-backend
+    patch (precedent in other backends), not a leg tweak. Bytecode donor = the
+    i386 leg (32→32 LE). Deferred as a dedicated project; run
+    docker-loop/netbsd-fleet.sh vax with the log-persist harness to capture the
+    exact IEEE-assuming construct when we pursue it.
+  - (Expect ia64, or1k, m68000/sun2 to land here too as the sweep reaches them.)
+- **MorphOS** (PowerPC AmigaOS-family) — **tier-3, needs a libuv port.** Fits the
+  mission (weird PPC boxes where native Claude can't run) and endianness is solved
+  (canonical-LE on BE, proven). BLOCKER: MorphOS is non-POSIX (no epoll/kqueue,
+  Amiga exec API), so txiki's **libuv has no MorphOS backend** — the same reason
+  there is no modern Node.js for MorphOS. That's a "write a libuv platform"
+  project, not a cross-toolchain file. NB the *hardware* MorphOS runs on is
+  already reachable via NetBSD/macppc (PPC) and NetBSD/m68k (classic Amiga) — so
+  the fleet covers the boxes without porting to the OS. Revisit only if a libuv
+  backend appears or someone wants to write one.
+
 ## NEXT UP — Phase 3: TUI paints (M1) + human-verified turn (M2) + AGENTIC TOOL USE all work under tjs; M3 (render parity) next
 
 ### ▶ START HERE TOMORROW (session 2026-07-08 end)

@@ -75,6 +75,73 @@ test('--clode-help documents clode build, build --self, and CLODE_TJS', () => {
   assert.match(r.stdout, /CLODE_TJS/);
 });
 
+// codesignAdHoc: ad-hoc sign a Mach-O template; on old macOS (Mavericks) whose
+// codesign_allocate cannot sign a fat binary's arm64 slice ("unknown load
+// command 5"), thin to the host arch and retry. Modern hosts sign the fat binary
+// unchanged (universal output preserved). Injected spawnSync drives each path.
+function scriptSpawn(handler) {
+  const calls = [];
+  const fn = (cmd, args, _o) => { calls.push([cmd, ...(args || [])].join(' ')); return handler(cmd, args || [], calls); };
+  fn.calls = calls;
+  return fn;
+}
+
+test('codesignAdHoc: non-darwin is a no-op (no spawn at all)', () => {
+  const { codesignAdHoc } = require('../libexec/clode-fuse.cjs');
+  const sp = scriptSpawn(() => { throw new Error('should not spawn'); });
+  assert.deepStrictEqual(codesignAdHoc('/t', { platform: 'linux', spawnSync: sp }), { ok: true });
+  assert.strictEqual(sp.calls.length, 0);
+});
+
+test('codesignAdHoc: one-shot when codesign succeeds (no lipo, universal preserved)', () => {
+  const { codesignAdHoc } = require('../libexec/clode-fuse.cjs');
+  const sp = scriptSpawn((cmd) => (cmd === 'codesign' ? { status: 0 } : { status: 1 }));
+  assert.deepStrictEqual(codesignAdHoc('/t', { platform: 'darwin', arch: 'arm64', spawnSync: sp }), { ok: true });
+  assert.deepStrictEqual(sp.calls, ['codesign -s - --force /t']);
+});
+
+test('codesignAdHoc: fat-template sign failure thins to host arch and retries (Mavericks)', () => {
+  const { codesignAdHoc } = require('../libexec/clode-fuse.cjs');
+  let signs = 0;
+  const sp = scriptSpawn((cmd, args) => {
+    if (cmd === 'codesign') { signs += 1; return signs === 1 ? { status: 1, stderr: 'unknown load command 5' } : { status: 0 }; }
+    if (cmd === 'lipo' && args[0] === '-archs') return { status: 0, stdout: 'x86_64 arm64\n' };
+    if (cmd === 'lipo') return { status: 0 };
+    return { status: 1 };
+  });
+  const logged = [];
+  const r = codesignAdHoc('/tmp/template-tjs', { platform: 'darwin', arch: 'x64', spawnSync: sp, log: (m) => logged.push(m) });
+  assert.deepStrictEqual(r, { ok: true });
+  assert.strictEqual(signs, 2);
+  assert.ok(sp.calls.includes('lipo /tmp/template-tjs -thin x86_64 -output /tmp/template-tjs'), sp.calls.join('\n'));
+  assert.ok(logged.some((m) => /thinned fat template to x86_64/.test(m)), logged.join('\n'));
+});
+
+test('codesignAdHoc: single-arch template that fails to sign stays failed — never thins', () => {
+  const { codesignAdHoc } = require('../libexec/clode-fuse.cjs');
+  const sp = scriptSpawn((cmd, args) => {
+    if (cmd === 'codesign') return { status: 1, stderr: 'boom' };
+    if (cmd === 'lipo' && args[0] === '-archs') return { status: 0, stdout: 'x86_64\n' };
+    return { status: 1 };
+  });
+  const r = codesignAdHoc('/t', { platform: 'darwin', arch: 'x64', spawnSync: sp });
+  assert.strictEqual(r.ok, false);
+  assert.match(r.error, /boom/);
+  assert.ok(!sp.calls.some((c) => /-thin/.test(c)), sp.calls.join('\n'));
+});
+
+test('codesignAdHoc: fat template lacking the host slice stays failed — never thins', () => {
+  const { codesignAdHoc } = require('../libexec/clode-fuse.cjs');
+  const sp = scriptSpawn((cmd, args) => {
+    if (cmd === 'codesign') return { status: 1, stderr: 'nope' };
+    if (cmd === 'lipo' && args[0] === '-archs') return { status: 0, stdout: 'x86_64 i386\n' };
+    return { status: 1 };
+  });
+  const r = codesignAdHoc('/t', { platform: 'darwin', arch: 'arm64', spawnSync: sp });
+  assert.strictEqual(r.ok, false);
+  assert.ok(!sp.calls.some((c) => /-thin/.test(c)), sp.calls.join('\n'));
+});
+
 test('timeoutScale: default 1, integer >= 1 honored, junk rejected', () => {
   // TCG-emulated guests run 10-20x slower than metal; CI's VM legs scale
   // every build-pipeline hang guard via CLODE_TIMEOUT_SCALE (dispatch #14:
