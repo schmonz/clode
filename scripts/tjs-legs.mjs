@@ -303,7 +303,10 @@ const LEGS = [
     'cross-file': 'scripts/linux-riscv64.toolchain.cmake',
     'cross-apt': 'cmake make gcc-riscv64-linux-gnu g++-riscv64-linux-gnu',
     'atomic-shim': false, tier2: true, verify: 'qemu-user', 'no-exec': true,
-    publish: true, 'soft-fail': true, timeout: 1800,
+    // publish:false — glibc-dynamic with no ABI floor (Decision 3: glibc Linux
+    // artifacts are smoke-only; the PUBLISHED riscv64/s390x Linux artifacts are
+    // the musl-static twins). This leg stays as canonical-LE + qemu-user proof.
+    publish: false, 'soft-fail': true, timeout: 1800,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // linux-s390x (64-bit BIG-endian): the canonical-LE-on-64-bit-BE witness.
   // Its qemu-user level-2 self-load proves the canonical-LE reader deserializes
@@ -316,7 +319,10 @@ const LEGS = [
     'cross-file': 'scripts/linux-s390x.toolchain.cmake',
     'cross-apt': 'cmake make gcc-s390x-linux-gnu g++-s390x-linux-gnu',
     'atomic-shim': false, tier2: true, verify: 'qemu-user', 'no-exec': true,
-    publish: true, 'soft-fail': true, timeout: 1800,
+    // publish:false — glibc-dynamic with no ABI floor (Decision 3: glibc Linux
+    // artifacts are smoke-only; the PUBLISHED riscv64/s390x Linux artifacts are
+    // the musl-static twins). This leg stays as canonical-LE + qemu-user proof.
+    publish: false, 'soft-fail': true, timeout: 1800,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // netbsd-m68k (TIER-2, built-not-run): 32-bit BIG-endian NetBSD userland,
   // cross-built via a NetBSD `build.sh -m <port> tools`+`distribution`
@@ -350,7 +356,10 @@ const LEGS = [
     'cross-file': 'scripts/netbsd.toolchain.cmake',
     'atomic-shim': false, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
-    publish: true, timeout: 3600,
+    // publish:false + soft-fail: fleet legs ONBOARD as proving legs (built +
+    // arch-gated in CI, non-blocking) and flip to publish:true only once CI-green
+    // — a new build.sh arch must not gate a release before it is proven.
+    publish: false, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
 ];
 

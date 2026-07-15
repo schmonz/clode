@@ -52,11 +52,10 @@ test('release tier: every published leg is present (golden)', () => {
     'freebsd-amd64', 'freebsd-arm64',
     'haiku-x64',
     'linux-arm64-musl', 'linux-armv7-musl', 'linux-loongarch64-musl',
-    'linux-ppc64le-musl', 'linux-riscv64', 'linux-riscv64-musl',
-    'linux-s390x', 'linux-s390x-musl',
+    'linux-ppc64le-musl', 'linux-riscv64-musl', 'linux-s390x-musl',
     'linux-x64-musl', 'linux-x86-musl',
     'midnightbsd-amd64',
-    'netbsd-amd64', 'netbsd-arm64', 'netbsd-m68k', 'netbsd-sparc', 'netbsd-sparc64',
+    'netbsd-amd64', 'netbsd-arm64', 'netbsd-m68k', 'netbsd-sparc',
     'omnios-amd64', 'openbsd-amd64', 'openbsd-arm64',
     'openindiana-amd64',
     'solaris-amd64',
@@ -251,8 +250,8 @@ test('linux-riscv64 leg: Debian-cross tier-2, qemu-user verified, publishes', ()
   assert.strictEqual(l['guest-arch'], 'riscv64');
   assert.strictEqual(l.verify, 'qemu-user');
   assert.strictEqual(l['no-exec'], true, 'cross leg cannot exec the target on the runner');
-  assert.strictEqual(l.tier2, true, 'tier2 emits + uploads the cross-fused builder');
-  assert.strictEqual(l.publish, true);
+  assert.strictEqual(l.tier2, true, 'tier2 emits the cross-fused builder (smoke artifact)');
+  assert.strictEqual(l.publish, false, 'glibc-dynamic no-floor — proves the machinery; musl-static twin ships (Decision 3)');
   assert.strictEqual(l['atomic-shim'], false, 'riscv64 has native 64-bit atomics');
   assert.ok(l['cross-image'], 'exec=cross needs a cross-image');
   assert.ok(l['cross-file'] && /riscv64/.test(l['cross-file']), 'must point at the riscv64 toolchain file');
@@ -266,7 +265,7 @@ test('linux-s390x leg: 64-bit BE Debian-cross tier-2, qemu-user verified (canoni
   assert.strictEqual(l.verify, 'qemu-user');
   assert.strictEqual(l['no-exec'], true);
   assert.strictEqual(l.tier2, true);
-  assert.strictEqual(l.publish, true);
+  assert.strictEqual(l.publish, false, 'glibc-dynamic no-floor — proves the machinery; musl-static twin ships (Decision 3)');
   assert.strictEqual(l['atomic-shim'], false, 's390x has native 64-bit atomics');
   assert.ok(/s390x/.test(l['cross-file'] || ''), 'must point at the s390x toolchain file');
   assert.ok(/s390x/.test(l['cross-apt'] || ''), 'cross-apt must install the s390x gcc');
