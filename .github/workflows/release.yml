@@ -111,14 +111,17 @@ jobs:
   # trailer over it — the trailer is arch-agnostic (canonical-LE proven on
   # real ppc), so every slice reads it. Runs on macos-arm64: the fat
   # template's arm64 slice drives the fuse worker + codesign (proven to
-  # handle a ppc-containing fat). Soft until it earns hard status. Publishes
-  # clode-<ver>-darwin-universal (picked up by the release job's clode-*
-  # pattern); the bare fat engine stays a CI artifact.
+  # handle a ppc-containing fat). HARD (no continue-on-error): the universal is
+  # four arches or it is not release-ready — the lipo step exit-1's on any
+  # missing slice, and that must block the release, not silently ship an
+  # incomplete darwin (all four slice legs are hard too). `if: !cancelled()` so
+  # a failed slice leg still runs this job to surface the exact "missing slice"
+  # error before it fails. Publishes clode-<ver>-darwin-universal (picked up by
+  # the release job's clode-* pattern); the bare fat engine stays a CI artifact.
   darwin-universal:
     needs: leg
     if: ${{ !cancelled() }}
     runs-on: macos-26
-    continue-on-error: true
     timeout-minutes: 30
     permissions:
       id-token: write
@@ -213,8 +216,10 @@ jobs:
           # {os arch} pairs that MUST be in the release (floor-agnostic glob;
           # `dist/clode-*-netbsd*-sparc` matches the floored
           # `clode-<ver>-netbsd10.1-sparc`). Only currently-existing required
-          # legs go here so the gate stays SATISFIABLE.
-          REQUIRED="windows arm64  netbsd sparc"
+          # legs go here so the gate stays SATISFIABLE. darwin universal =
+          # `clode-<ver>-darwin-universal` (the sole, four-arch darwin asset —
+          # no darwin release without it).
+          REQUIRED="windows arm64  netbsd sparc  darwin universal"
           missing=0
           set -- $REQUIRED
           while [ $# -ge 2 ]; do

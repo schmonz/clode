@@ -183,6 +183,21 @@ test('build-leg exec=cross step is parameterized, not darwin-ppc-hardcoded', () 
     'the darwin-ppc toolchain path must no longer be hardcoded in the build step');
 });
 
+test('release.yml: darwin-universal hard-gates (no continue-on-error) + tripwire requires it', () => {
+  const wf = fs.readFileSync(path.join(REPO, '.github/workflows/release.yml'), 'utf8');
+  // Isolate the darwin-universal job block (up to the next top-level 2-space job key).
+  const m = wf.match(/\n {2}darwin-universal:\n([\s\S]*?)\n {2}\w[\w-]*:/);
+  assert.ok(m, 'darwin-universal job block not found');
+  assert.ok(!/continue-on-error:\s*true/.test(m[1]),
+    'darwin-universal must NOT be continue-on-error — the universal is four arches or the release is blocked');
+  // The lipo step must still hard-require all four slices present.
+  assert.ok(/for a in arm64 x64 x86 ppc;.*test -f/.test(wf),
+    'darwin-universal must assert all four slices exist before lipo');
+  // The release gate must require the darwin-universal asset.
+  assert.ok(/REQUIRED="[^"]*darwin universal[^"]*"/.test(wf),
+    'release tripwire must require the darwin universal asset');
+});
+
 test('darwin-x86 Tiger leg: engine-only i386 at floor 10.4', () => {
   const release = legsFor('release');
   const dt = release.find((l) => l.leg === 'darwin-x86');
@@ -229,8 +244,10 @@ test('release tier: publishing legs are NOT soft-fail (deterministic contents)',
   // User doctrine 2026-07-14: slow releases over non-deterministic contents. A
   // release ships a FIXED manifest — every publisher must be green, so a
   // TCG/qemu flake fails the leg job (needs:[leg]) rather than silently dropping
-  // the asset. Only engine-only legs (publish:false: darwin-x86/ppc) may stay
-  // soft — they ship no asset.
+  // the asset. Engine-only NON-darwin legs (linux-riscv64/s390x + the NetBSD
+  // cross fleet) may stay soft — they ship no asset. The darwin slices are the
+  // exception: they publish nothing individually but ARE hard (see the next
+  // test) because the universal needs all four.
   for (const l of legsFor('release')) {
     if (l.publish) {
       assert.notStrictEqual(l['soft-fail'], true,
@@ -241,6 +258,24 @@ test('release tier: publishing legs are NOT soft-fail (deterministic contents)',
   // here on purpose.
   const ciSoft = legsFor('ci').filter((l) => l['soft-fail'] === true);
   assert.ok(ciSoft.length > 0, 'CI tier still uses soft-fail for its VM legs');
+});
+
+test('release tier: all four darwin slices are HARD (universal is 4 arches or nothing)', () => {
+  // The darwin release is exactly ONE artifact — clode-<ver>-darwin-universal —
+  // a fat Mach-O of all four slices. None of the slices publishes on its own, but
+  // every one is a REQUIRED ingredient: a missing slice must block the release,
+  // not ship a 2/3-arch fat. So none may be soft-fail (unlike the non-darwin
+  // engine-only legs). The universal job (release.yml) enforces the same at
+  // assembly time: its lipo step exit-1's on any missing slice and is NOT
+  // continue-on-error.
+  const rel = legsFor('release');
+  for (const name of ['darwin-arm64', 'darwin-x64', 'darwin-x86', 'darwin-ppc']) {
+    const l = rel.find((x) => x.leg === name);
+    assert.ok(l, `${name} slice leg must exist`);
+    assert.strictEqual(l.publish, false, `${name}: a darwin slice ships via the universal, never on its own`);
+    assert.notStrictEqual(l['soft-fail'], true,
+      `${name}: darwin slices are HARD — the universal is four arches or it is not release-ready`);
+  }
 });
 
 test('linux-riscv64 leg: Debian-cross tier-2, qemu-user verified, publishes', () => {

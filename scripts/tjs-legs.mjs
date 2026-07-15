@@ -127,8 +127,10 @@ const LEGS = [
   // oracle legs; 10.4..10.9 gap covered by the honest SDK.)
   { leg: 'darwin-x86', os: 'macos-15-intel', publish: false,
     'macos-min': '10.4', 'macos-sdk': '10.4u', 'macos-arch': 'i386', floor: '10.4',
-    'no-exec': true, wasm: 'off', mimalloc: 'off', ffi: 'off',
-    'soft-fail': true },
+    // HARD (not soft-fail): the universal binary is four arches or it is not
+    // release-ready — a missing i386 slice must block the release, not ship a
+    // 3-arch fat. Cross-build (baked SDK), no TCG/qemu flake to tolerate.
+    'no-exec': true, wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // darwin-ppc Tiger walk (spec 2026-07-11-darwin-ppc-walk): the ppc/BE32
   // slice at floor 10.4 — third slice of the fat binary, first BE slice.
   // CROSS-BUILT on ubuntu inside the digest-pinned VariantXYZ image (gcc
@@ -149,8 +151,9 @@ const LEGS = [
     // __atomic_*_8 link wall (formerly hardcoded in the exec=cross step, now a
     // per-leg field so the tier-2 Debian cross legs can turn it off).
     'atomic-shim': true,
-    'no-exec': true, wasm: 'off', mimalloc: 'off', ffi: 'off',
-    'soft-fail': true },
+    // HARD (not soft-fail): four arches or not release-ready (see darwin-x86).
+    // Cross-build via a digest-pinned image — deterministic, no flake to tolerate.
+    'no-exec': true, wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // windows-x64 (native engine leg): compiles tjs.exe ON windows-latest with
   // MSVC cl.exe (CLODE_TJS_WIN_MSVC — the Activate-MSVC-dev-env step +
   // ilammy/msvc-dev-cmd), so build-leg's exec=host machinery does build +
