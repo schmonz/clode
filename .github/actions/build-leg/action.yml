@@ -295,7 +295,7 @@ runs:
     # per build dir), silently shipping a HOST binary. Caught the m68k leg
     # 2026-07-14 (run 29354107445 uploaded an x86-64 ELF labeled netbsd-m68k).
     - name: Build tjs (native)
-      if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.guest-platform == 'native' && inputs.cross-image == '' && inputs.netbsd-src == ''
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.guest-platform == 'native' && inputs.cross-image == '' && inputs.cross-dockerfile == '' && inputs.netbsd-src == ''
       shell: bash
       env:
         CLODE_TJS_VENDOR: ${{ steps.mode.outputs.vendor }}
