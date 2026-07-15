@@ -113,6 +113,16 @@ well-tested, and reasonably fast** as we can possibly make it." Sequencing:
   config/creds-persistence bug above (same login/onboarding surface); a fix pass
   should cover both. Confirm whether it also repros on quaude/NetBSD.
 
+- **quaude TUI leaves stale frames on screen (daily-driver report, 2026-07-15).**
+  Previous commands/output persist after they should clear: a finished `/login`
+  still shows near the bottom; `/doctor` shows "queued" after it already ran (and
+  up-arrow could clear it). The repaint isn't ERASING prior lines — either the
+  cursor-up + clear-to-EOL sequence isn't emitted/honored under the tjs tty shim,
+  or the Ink diff-render redundantly repaints without clearing (cf. the M3
+  render-parity note: tjs interactive render ~1.2MB vs node ~8KB/turn). Likely a
+  node-shim `tty`/write or ANSI-erase gap. Repro: interactive quaude, run a slash
+  command, watch it linger. Part of the M3 render-parity frontier but concrete.
+
 ### Platform wishlist (reachable-frontier tracker)
 
 - **NetBSD: every arch** — in progress (task #8 above). The showcase of the
