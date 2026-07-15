@@ -20,6 +20,11 @@ on:
         description: "leg subset: 'ci' (per-push) or 'release' (full matrix)"
         type: string
         required: true
+      only:
+        description: "leg subset filter: 'darwin' (the 4 slices), 'notdarwin' (the rest), or empty (whole tier). release.yml splits darwin out so the universal doesn't wait on the whole matrix."
+        type: string
+        required: false
+        default: ""
   # Single-leg probe (the version-floor walk): boot ONE leg, optionally at an
   # overridden guest version, without paying for a whole matrix. E.g.
   #   gh workflow run tjs-legs.yml -f only=openbsd-amd64 -f guest-version=7.5

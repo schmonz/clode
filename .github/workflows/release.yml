@@ -39,6 +39,11 @@ jobs:
   # between the two GHA builds); the job itself is the reusable
   # tjs-legs.yml. tier: release = the full matrix, publish/attest live.
   # Job stays named 'leg' so the needs: edges below hold.
+  # Everything EXCEPT the 4 darwin slices. Split out so the darwin-universal lipo
+  # (and the daily-driver darwin artifact) doesn't wait on the whole matrix — the
+  # slow NetBSD fleet legs in particular. Job stays named 'leg' so be-oracle's and
+  # the release gate's needs: edges hold. (Revert = drop only:notdarwin here +
+  # only:darwin on darwin-slices, fold darwin-universal's needs back to [leg].)
   leg:
     uses: ./.github/workflows/tjs-legs.yml
     permissions:
@@ -47,6 +52,19 @@ jobs:
       attestations: write
     with:
       tier: release
+      only: notdarwin
+
+  # The 4 darwin slices (arm64/x64/x86/ppc) as their OWN job so darwin-universal
+  # gates on just these, not the full matrix.
+  darwin-slices:
+    uses: ./.github/workflows/tjs-legs.yml
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    with:
+      tier: release
+      only: darwin
 
   # 64-bit big-endian oracle (plan T1.5): the node-shim suite against the
   # s390x-musl tjs under qemu-user binfmt. Provider-gated suites self-skip
@@ -119,7 +137,7 @@ jobs:
   # error before it fails. Publishes clode-<ver>-darwin-universal (picked up by
   # the release job's clode-* pattern); the bare fat engine stays a CI artifact.
   darwin-universal:
-    needs: leg
+    needs: darwin-slices
     if: ${{ !cancelled() }}
     runs-on: macos-26
     timeout-minutes: 30
@@ -198,7 +216,7 @@ jobs:
   # Only engine-only legs (darwin-x86/ppc, publish:false) stay soft — they ship
   # no asset. The gate below is a secondary asset-presence guard.
   release:
-    needs: [leg, darwin-universal]
+    needs: [leg, darwin-slices, darwin-universal]
     if: github.ref_type == 'tag' || inputs.release == 'draft'
     runs-on: ubuntu-latest
     permissions:

@@ -467,12 +467,22 @@ export function legsFor(tier) {
 // overridden guest version — or, for the darwin floor walk, an overridden
 // deployment target (same bisect ritual, different version axis). Probes
 // never publish.
+// The four darwin slices — release.yml runs them as a SEPARATE job (only:darwin)
+// so the darwin-universal lipo waits ONLY on them, not the whole matrix (incl. the
+// slow NetBSD fleet). The rest run as only:notdarwin. Keep in sync with the
+// universal's four-arch contract.
+export const DARWIN_SLICES = ['darwin-arm64', 'darwin-x64', 'darwin-x86', 'darwin-ppc'];
+
 export function cli(tier, only, versionOverride, macosMinOverride) {
   let legs = legsFor(tier);
-  if (only) {
-    legs = legs.filter((l) => l.leg === only);
+  if (only === 'darwin') {
+    legs = legs.filter((l) => DARWIN_SLICES.includes(l.leg));       // the universal's ingredients
+  } else if (only === 'notdarwin') {
+    legs = legs.filter((l) => !DARWIN_SLICES.includes(l.leg));      // everything else
+  } else if (only) {
+    legs = legs.filter((l) => l.leg === only);                     // single-leg probe (floor walk)
     if (!legs.length) throw new Error(`no such leg in tier '${tier}': ${only}`);
-    legs = legs.map((l) => ({ ...l, publish: false }));
+    legs = legs.map((l) => ({ ...l, publish: false }));            // probes never publish
   }
   if (versionOverride) legs = legs.map((l) => ({ ...l, 'guest-version': versionOverride }));
   if (macosMinOverride) legs = legs.map((l) => ({ ...l, 'macos-min': macosMinOverride }));

@@ -20,8 +20,23 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const REPO = path.resolve(__dirname, '..');
-const legsFor = (tier) => JSON.parse(
-  execFileSync(process.execPath, [path.join(REPO, 'scripts', 'tjs-legs.mjs'), tier], { encoding: 'utf8' }));
+const legsFor = (tier, only) => JSON.parse(
+  execFileSync(process.execPath,
+    [path.join(REPO, 'scripts', 'tjs-legs.mjs'), tier, ...(only ? [only] : [])], { encoding: 'utf8' }));
+
+test('release tier splits cleanly into darwin / notdarwin (universal decoupling)', () => {
+  const all = legsFor('release').map((l) => l.leg).sort();
+  const darwin = legsFor('release', 'darwin').map((l) => l.leg).sort();
+  const notdarwin = legsFor('release', 'notdarwin').map((l) => l.leg).sort();
+  // darwin = exactly the 4 slices
+  assert.deepStrictEqual(darwin, ['darwin-arm64', 'darwin-ppc', 'darwin-x64', 'darwin-x86']);
+  // notdarwin excludes every darwin leg
+  assert.ok(!notdarwin.some((n) => n.startsWith('darwin-')), 'notdarwin must contain no darwin slice');
+  // the two are a partition of the whole tier (no leg lost, none double-counted)
+  assert.deepStrictEqual([...darwin, ...notdarwin].sort(), all,
+    'darwin ∪ notdarwin must equal the whole release tier');
+  assert.strictEqual(darwin.length + notdarwin.length, all.length);
+});
 
 // The OS an entry exercises: its guest platform, or the runner's own OS.
 const osOf = (l) => {
