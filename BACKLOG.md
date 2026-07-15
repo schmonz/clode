@@ -78,6 +78,41 @@ well-tested, and reasonably fast** as we can possibly make it." Sequencing:
   NOT remove the codesign thin-on-failure fix (the arm64 slice is still present,
   so old-macOS codesign still needs it).
 
+### Known quaude runtime bugs
+
+- **quaude does not persist config across invocations (NetBSD/arm64 at least).**
+  Reported 2026-07-15: every `quaude` launch requires choosing the theme AGAIN and
+  logging in AGAIN — neither the config (`~/.claude.json` / theme) nor the
+  credentials survive the process exit. Two likely-independent faults to check:
+  1. **Config write — STRONG LEAD (2026-07-15): observed `~/.claude.json` at 0
+     BYTES** right after a fused quaude run on Mavericks (also broke that build's
+     `-p` smoke: "Unexpected end of JSON input"). So it's not a wrong-path issue —
+     quaude **truncates the file to empty**: the node-shim fs open('w')/write (or a
+     write-then-rename atomic-save) truncates then the write no-ops or fails,
+     leaving 0 bytes. Repros on BOTH NetBSD/arm64 (user) and Mavericks/x64 (here),
+     so it's a general node-shim fs write fault under tjs, NOT keychain/arch. Next:
+     find the exact `~/.claude.json` write in the shim, add a failing test that a
+     write of non-empty JSON reads back non-empty under tjs.
+  2. **Credentials** — native CC stores login in the OS keychain (macOS) or a
+     credentials file; under tjs there may be no keychain-equivalent, so the token
+     isn't saved. Check the credential store path CC uses and whether the node-shim
+     implements it (vs a fail-loud/no-op stub swallowing the write).
+  Oracle: diff where native CC vs quaude read/write config+creds; the recording
+  Proxy on the fs/os surface will show a silent no-op if that's the cause. **Repro
+  platform: NetBSD/arm64** (confirm whether it also repros on other quaude arches /
+  darwin-universal — narrows keychain-specific vs general path/write fault).
+
+- **quaude login browser-launcher does not open the browser (macOS/arm64 at
+  least).** Reported 2026-07-15: during login, CC should open the OAuth URL in the
+  default browser; under quaude it doesn't launch. Native CC opens URLs via the
+  platform opener (`open` on macOS, `xdg-open`/`start` elsewhere) or a Bun API —
+  under tjs the node-shim child_process spawn of `open` (or the Bun opener) is
+  likely a no-op/stub or spawns wrong. Check the exact open-URL path CC uses and
+  whether the shim reaches `/usr/bin/open`. Workaround for the user meanwhile: the
+  login URL is usually printed — open it manually. Likely related to the
+  config/creds-persistence bug above (same login/onboarding surface); a fix pass
+  should cover both. Confirm whether it also repros on quaude/NetBSD.
+
 ### Platform wishlist (reachable-frontier tracker)
 
 - **NetBSD: every arch** — in progress (task #8 above). The showcase of the
