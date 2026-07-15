@@ -56,7 +56,7 @@ test('release tier: every published leg is present (golden)', () => {
     'linux-s390x', 'linux-s390x-musl',
     'linux-x64-musl', 'linux-x86-musl',
     'midnightbsd-amd64',
-    'netbsd-amd64', 'netbsd-arm64', 'netbsd-m68k', 'netbsd-sparc',
+    'netbsd-amd64', 'netbsd-arm64', 'netbsd-m68k', 'netbsd-sparc', 'netbsd-sparc64',
     'omnios-amd64', 'openbsd-amd64', 'openbsd-arm64',
     'openindiana-amd64',
     'solaris-amd64',
@@ -288,6 +288,19 @@ test('netbsd-m68k leg: NetBSD build.sh cross, tier-2 built-not-run', () => {
   // No cross-image: this cross leg builds its toolchain via build.sh, not a
   // docker image.
   assert.strictEqual(l['cross-image'], undefined);
+});
+
+test('netbsd-sparc64 fleet leg: generic toolchain, 64-bit BE, tier-2 built-not-run', () => {
+  const l = legsFor('release').find((x) => x.leg === 'netbsd-sparc64');
+  assert.ok(l, 'netbsd-sparc64 leg must be present');
+  assert.strictEqual(l['guest-arch'], 'sparc64');
+  assert.strictEqual(l['netbsd-machine'], 'sparc64');
+  assert.strictEqual(l['cross-file'], 'scripts/netbsd.toolchain.cmake',
+    'fleet legs use the GENERIC toolchain (triple discovered from the tooldir)');
+  assert.strictEqual(l['atomic-shim'], false, 'sparc64 is 64-bit — inlines atomics, no shim');
+  assert.strictEqual(l.verify, 'none');
+  assert.strictEqual(l.tier2, true);
+  assert.notStrictEqual(l['netbsd-src'], undefined);
 });
 
 test('build-leg cache key carries the macos floor axes', () => {

@@ -335,6 +335,23 @@ const LEGS = [
     floor: '10.1', 'guest-version': '10.1',
     publish: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
+  // ---- NetBSD arch fleet (v0.1.4). The build.sh cross path proven generic:
+  // scripts/netbsd.toolchain.cmake DISCOVERS the cross triple from the build.sh
+  // tooldir, so a fleet arch is just {netbsd-machine (a port), guest-arch,
+  // atomic-shim}. All tier-2 built-not-run (verify=none, no qemu-user for
+  // NetBSD); the arch gate (file(1)) is the proof. atomic-shim only on 32-bit
+  // arches lacking 8-byte libatomic.
+  //
+  // netbsd-sparc64 (64-bit BE): distinct from the 32-bit netbsd-sparc (own-qemu).
+  // Proven locally 2026-07-14 (docker-loop netbsd-fleet.sh): sparc64--netbsd
+  // toolchain, ELF 64-bit MSB SPARC V9 NetBSD, no shim (64-bit inlines atomics).
+  { leg: 'netbsd-sparc64', os: 'ubuntu-latest', 'guest-arch': 'sparc64',
+    'netbsd-src': 'netbsd-10', 'netbsd-machine': 'sparc64',
+    'cross-file': 'scripts/netbsd.toolchain.cmake',
+    'atomic-shim': false, tier2: true, verify: 'none', 'no-exec': true,
+    floor: '10.1', 'guest-version': '10.1',
+    publish: true, timeout: 3600,
+    wasm: 'off', mimalloc: 'off', ffi: 'off' },
 ];
 
 export function legsFor(tier) {
