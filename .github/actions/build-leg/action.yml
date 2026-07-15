@@ -517,6 +517,11 @@ runs:
           riscv64) want='RISC-V' ;;
           s390x)   want='S/390' ;;
           m68k)    want='Motorola|m68k' ;;
+          sparc64) want='SPARC' ;;
+          alpha)   want='Alpha' ;;
+          hppa)    want='PA-RISC' ;;
+          powerpc) want='PowerPC' ;;
+          mipsel|mipseb) want='MIPS' ;;
           *)       want='' ;;
         esac
         if [ -n "$want" ]; then
