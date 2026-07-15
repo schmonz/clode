@@ -529,6 +529,22 @@ const BUN_BUILTINS = {
     suffix: process.platform === 'darwin' ? 'dylib' : 'so',
   },
 };
+
+// bun:sqlite (Claude Code history/todos) -> the tjs:sqlite-backed shim. The
+// backend Database class differs by runtime and one of them is async, so it's
+// resolved here at bun-shim load: under tjs the quaude bootstrap has already
+// awaited import('tjs:sqlite') and stashed it on the global (sync to read here);
+// under the classic Node launcher node:sqlite's DatabaseSync is a drop-in (same
+// minimal prepare/exec/close + Statement all/run interface, verified 2026-07-15).
+// Absent both, the shim's Database throws a clear "backend not loaded" — fail-
+// loud, not silent.
+const bunSqlite = require('./bun-sqlite.cjs');
+BUN_BUILTINS['bun:sqlite'] = bunSqlite;
+if (globalThis.__clodeTjsSqliteDatabase) {
+  bunSqlite.__setBackend(globalThis.__clodeTjsSqliteDatabase);
+} else {
+  try { bunSqlite.__setBackend(require('node:sqlite').DatabaseSync); } catch (_) { /* tjs bootstrap sets it, or fail-loud on use */ }
+}
 // --- WebSocket / `ws`: the bundle is written for BUN's WebSocket, which takes a
 // SINGLE options object — new WebSocket(url, {protocols, headers, tls, proxy}).
 // Node's global WebSocket (undici/WHATWG) ignores `headers`, so the Bearer auth
