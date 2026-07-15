@@ -42,7 +42,9 @@ runs:
         TOOL="$RUNNER_TEMP/nbsd-tool"; DEST="$RUNNER_TEMP/nbsd-dest"
         echo "tooldir=$TOOL" >> "$GITHUB_OUTPUT"
         echo "destdir=$DEST" >> "$GITHUB_OUTPUT"
-        if [ -x "$TOOL/bin/m68k--netbsdelf-gcc" ] && [ -d "$DEST/usr/include" ]; then
+        # Any NetBSD arch's cross gcc is <arch>--netbsd[elf]-gcc — glob, don't
+        # hardcode m68k (that broke sparc64: sparc64--netbsd-gcc).
+        if ls "$TOOL"/bin/*--netbsd*-gcc >/dev/null 2>&1 && [ -d "$DEST/usr/include" ]; then
           echo "build.sh toolchain restored from cache — skipping the build"
           exit 0
         fi
@@ -55,10 +57,13 @@ runs:
         # -U unprivileged (no root); -T/-D place the tools + sysroot under
         # RUNNER_TEMP so the cache can carry them. `tools` builds the cross
         # toolchain; `distribution` populates DESTDIR's headers + libs (the
-        # sysroot the tjs cross-build links against). Heavy but cached.
-        ./build.sh -m "${{ inputs.machine }}" -U -T "$TOOL" -D "$DEST" -j "$(nproc)" tools
-        ./build.sh -m "${{ inputs.machine }}" -U -T "$TOOL" -D "$DEST" -j "$(nproc)" distribution
-        test -x "$TOOL/bin/m68k--netbsdelf-gcc" || { echo "build.sh: no m68k--netbsdelf-gcc under $TOOL/bin" >&2; ls "$TOOL/bin" | head; exit 1; }
+        # sysroot the tjs cross-build links against). Heavy but cached. Cap -j at
+        # 2: the 64-bit userland build (sparc64) OOM'd a 16GB runner at -j nproc;
+        # the cap only slows the rare cache-miss.
+        J="$(nproc)"; [ "$J" -gt 2 ] && J=2
+        ./build.sh -m "${{ inputs.machine }}" -U -T "$TOOL" -D "$DEST" -j "$J" tools
+        ./build.sh -m "${{ inputs.machine }}" -U -T "$TOOL" -D "$DEST" -j "$J" distribution
+        ls "$TOOL"/bin/*--netbsd*-gcc >/dev/null 2>&1 || { echo "build.sh: no *--netbsd*-gcc under $TOOL/bin" >&2; ls "$TOOL/bin" | head; exit 1; }
         test -d "$DEST/usr/include" || { echo "build.sh: no sysroot headers under $DEST/usr/include" >&2; exit 1; }
         # Free the src tree once the toolchain + sysroot are built (keeps the
         # cache small and the runner disk clear).

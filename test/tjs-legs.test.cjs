@@ -301,6 +301,16 @@ test('netbsd-sparc64 fleet leg: generic toolchain, 64-bit BE, tier-2 built-not-r
   assert.notStrictEqual(l['netbsd-src'], undefined);
 });
 
+test('NetBSD build.sh cross legs (m68k, sparc64) run per-push in CI, soft-fail', () => {
+  const ci = legsFor('ci');
+  for (const name of ['netbsd-m68k', 'netbsd-sparc64']) {
+    const l = ci.find((x) => x.leg === name);
+    assert.ok(l, `${name} must be in the ci tier (early warning on the cross path)`);
+    assert.strictEqual(l['soft-fail'], true, `${name} in ci must be soft-fail (build.sh cross is non-blocking)`);
+    assert.ok(l['netbsd-src'], `${name} must route through build.sh (netbsd-src)`);
+  }
+});
+
 test('build-leg cache key carries the macos floor axes', () => {
   // Same lesson as the version-blind key that restored a 7.9-built tjs
   // into a 7.6 probe: a floor-blind key would smoke a stock-SDK binary.

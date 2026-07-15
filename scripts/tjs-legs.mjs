@@ -345,7 +345,7 @@ const LEGS = [
     'cross-file': 'scripts/netbsd-m68k.toolchain.cmake',
     'atomic-shim': true, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
-    publish: true, 'soft-fail': true, timeout: 3600,
+    publish: true, ci: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // ---- NetBSD arch fleet (v0.1.4). The build.sh cross path proven generic:
   // scripts/netbsd.toolchain.cmake DISCOVERS the cross triple from the build.sh
@@ -365,7 +365,7 @@ const LEGS = [
     // publish:false + soft-fail: fleet legs ONBOARD as proving legs (built +
     // arch-gated in CI, non-blocking) and flip to publish:true only once CI-green
     // — a new build.sh arch must not gate a release before it is proven.
-    publish: false, 'soft-fail': true, timeout: 3600,
+    publish: false, ci: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
 ];
 
