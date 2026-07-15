@@ -100,46 +100,37 @@ test('codesignAdHoc: one-shot when codesign succeeds (no lipo, universal preserv
   assert.deepStrictEqual(sp.calls, ['codesign -s - --force /t']);
 });
 
-test('codesignAdHoc: fat-template sign failure thins to host arch and retries (Mavericks)', () => {
+test('codesignAdHoc: fat-template sign failure thins IN PLACE to host arch and retries (Mavericks)', () => {
   const { codesignAdHoc } = require('../libexec/clode-fuse.cjs');
   let signs = 0;
-  const sp = scriptSpawn((cmd, args) => {
-    if (cmd === 'codesign') { signs += 1; return signs === 1 ? { status: 1, stderr: 'unknown load command 5' } : { status: 0 }; }
-    if (cmd === 'lipo' && args[0] === '-archs') return { status: 0, stdout: 'x86_64 arm64\n' };
-    if (cmd === 'lipo') return { status: 0 };
+  const sp = scriptSpawn((cmd) => {
+    if (cmd === 'codesign') { signs += 1; return signs === 1 ? { status: 1, stderr: 'malformed object (unknown load command 5)' } : { status: 0 }; }
+    if (cmd === 'lipo') return { status: 0 }; // fat with the host slice -> thin succeeds
     return { status: 1 };
   });
   const logged = [];
   const r = codesignAdHoc('/tmp/template-tjs', { platform: 'darwin', arch: 'x64', spawnSync: sp, log: (m) => logged.push(m) });
   assert.deepStrictEqual(r, { ok: true });
   assert.strictEqual(signs, 2);
+  // in-place thin: -output == input, no `-archs` probe (old lipo lacks it)
   assert.ok(sp.calls.includes('lipo /tmp/template-tjs -thin x86_64 -output /tmp/template-tjs'), sp.calls.join('\n'));
+  assert.ok(!sp.calls.some((c) => /-archs/.test(c)), 'must not use the -archs flag (absent on old lipo)');
   assert.ok(logged.some((m) => /thinned fat template to x86_64/.test(m)), logged.join('\n'));
 });
 
-test('codesignAdHoc: single-arch template that fails to sign stays failed — never thins', () => {
+test('codesignAdHoc: sign fails and thin fails (single-arch / no host slice) — stays failed, no false success', () => {
   const { codesignAdHoc } = require('../libexec/clode-fuse.cjs');
-  const sp = scriptSpawn((cmd, args) => {
-    if (cmd === 'codesign') return { status: 1, stderr: 'boom' };
-    if (cmd === 'lipo' && args[0] === '-archs') return { status: 0, stdout: 'x86_64\n' };
+  let signs = 0;
+  const sp = scriptSpawn((cmd) => {
+    if (cmd === 'codesign') { signs += 1; return { status: 1, stderr: 'boom' }; }
+    if (cmd === 'lipo') return { status: 1, stderr: 'must be a fat file' }; // already thin / missing slice
     return { status: 1 };
   });
   const r = codesignAdHoc('/t', { platform: 'darwin', arch: 'x64', spawnSync: sp });
   assert.strictEqual(r.ok, false);
   assert.match(r.error, /boom/);
-  assert.ok(!sp.calls.some((c) => /-thin/.test(c)), sp.calls.join('\n'));
-});
-
-test('codesignAdHoc: fat template lacking the host slice stays failed — never thins', () => {
-  const { codesignAdHoc } = require('../libexec/clode-fuse.cjs');
-  const sp = scriptSpawn((cmd, args) => {
-    if (cmd === 'codesign') return { status: 1, stderr: 'nope' };
-    if (cmd === 'lipo' && args[0] === '-archs') return { status: 0, stdout: 'x86_64 i386\n' };
-    return { status: 1 };
-  });
-  const r = codesignAdHoc('/t', { platform: 'darwin', arch: 'arm64', spawnSync: sp });
-  assert.strictEqual(r.ok, false);
-  assert.ok(!sp.calls.some((c) => /-thin/.test(c)), sp.calls.join('\n'));
+  assert.strictEqual(signs, 1); // no second sign after the failed thin
+  assert.ok(sp.calls.some((c) => /-thin x86_64/.test(c)), 'attempts the thin directly');
 });
 
 test('timeoutScale: default 1, integer >= 1 honored, junk rejected', () => {

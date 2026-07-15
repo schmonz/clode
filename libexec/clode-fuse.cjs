@@ -123,18 +123,18 @@ function codesignAdHoc(file, opts = {}) {
   const sign = () => sp('codesign', ['-s', '-', '--force', file], { encoding: 'utf8' });
   let cs = sign();
   if (cs.status === 0) return { ok: true };
-  // Signing failed. If the template is fat and the host arch is a slice, thin to
-  // it and retry (the Mavericks path). node arch 'x64' -> Mach-O arch 'x86_64'.
+  // Signing failed. On old macOS (Mavericks, verified 10.9.5) codesign_allocate
+  // cannot sign a fat Mach-O carrying an arm64 slice. Thin to the host slice IN
+  // PLACE and retry. Attempt the thin DIRECTLY: old `lipo` has no `-archs` flag,
+  // and `lipo -thin` succeeds iff the file is fat AND contains the slice (else it
+  // errors harmlessly — already-thin or missing-slice → we keep the sign error).
+  // node arch 'x64' -> Mach-O arch 'x86_64'.
   const hostSlice = arch === 'x64' ? 'x86_64' : arch;
-  const info = sp('lipo', ['-archs', file], { encoding: 'utf8' });
-  const archs = info.status === 0 ? String(info.stdout).trim().split(/\s+/) : [];
-  if (archs.length > 1 && archs.includes(hostSlice)) {
-    const thin = sp('lipo', [file, '-thin', hostSlice, '-output', file], { encoding: 'utf8' });
-    if (thin.status === 0) {
-      log(`clode: build: thinned fat template to ${hostSlice} (host codesign cannot sign the fat binary)`);
-      cs = sign();
-      if (cs.status === 0) return { ok: true };
-    }
+  const thin = sp('lipo', [file, '-thin', hostSlice, '-output', file], { encoding: 'utf8' });
+  if (thin.status === 0) {
+    log(`clode: build: thinned fat template to ${hostSlice} (host codesign cannot sign the fat binary)`);
+    cs = sign();
+    if (cs.status === 0) return { ok: true };
   }
   return { ok: false, error: cs.stderr || cs.stdout };
 }
