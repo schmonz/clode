@@ -118,6 +118,25 @@ test('ci legs match their release siblings byte-for-byte on engine config', () =
   }
 });
 
+test('glibc legs are a CI-only canary: built in CI, filtered out of release', () => {
+  // Ship only musl-static (Decision 3), so glibc gates nothing — but keep it
+  // building in CI as a second-libc/dynamic-link canary AND the warm
+  // glibc-dynamic path for a future musl-less Linux arch (alpha/hppa/sparc64).
+  const inRel = new Set(legsFor('release').map((l) => l.leg));
+  const inCi = new Set(legsFor('ci').map((l) => l.leg));
+  for (const name of ['linux-x64-glibc', 'linux-arm64-glibc']) {
+    assert.ok(inCi.has(name), `${name}: must build in CI (the canary)`);
+    assert.ok(!inRel.has(name), `${name}: must NOT be in the release tier (smoke-only, ships nothing)`);
+  }
+  // the `ciOnly` marker is internal — it must not leak into either tier's output.
+  // (`smoke` is a DIFFERENT, legitimate field: the qemu-user smoke MODE.)
+  for (const tier of ['release', 'ci']) {
+    for (const l of legsFor(tier)) {
+      assert.ok(!('ciOnly' in l), `${l.leg} (${tier}): internal 'ciOnly' marker leaked into leg output`);
+    }
+  }
+});
+
 test('darwin floor: macos-min/macos-sdk are release-only, native-darwin-only', () => {
   const release = legsFor('release');
   const ci = legsFor('ci');
@@ -398,7 +417,8 @@ test('version policy: ci rides the newest end, release the oldest floor', () => 
   // pins move with the manifest.
   assert.strictEqual(rel('darwin-arm64').os, 'macos-14');       // oldest hosted arm64 = publish floor
   assert.strictEqual(cin('darwin-arm64').os, 'macos-26');       // newest hosted arm64
-  assert.strictEqual(rel('linux-x64-glibc').os, 'ubuntu-22.04');
+  // glibc is a CI-only canary (absent from release); ci still rides the newest.
+  assert.strictEqual(rel('linux-x64-glibc'), undefined, 'glibc is ciOnly — not in the release tier');
   assert.strictEqual(cin('linux-x64-glibc').os, 'ubuntu-26.04');
   assert.strictEqual(rel('freebsd-amd64')['guest-version'], '14.0');  // proven floor (oldest with living pkg repos)
   assert.strictEqual(cin('freebsd-amd64')['guest-version'], '15.1');  // newest in cpa catalog

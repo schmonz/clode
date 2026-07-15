@@ -60,11 +60,20 @@ const LEGS = [
   // — darwin ships exactly ONE artifact, clode-<ver>-darwin-universal (user pref
   // 2026-07-15). i386/ppc were never standalone (no-exec) — universal-only.
   { leg: 'darwin-arm64', os: 'macos-14', 'ci-os': 'macos-26', publish: false, ci: true, floor: '11.0' },
-  // glibc Linux artifacts are smoke-only forever (Decision 3): the published
-  // Linux artifacts are the musl-static ones. Release pins the oldest hosted
-  // ubuntu (glibc floor for the smoke build), ci the newest.
-  { leg: 'linux-x64-glibc', os: 'ubuntu-22.04', 'ci-os': 'ubuntu-26.04', publish: false, ci: true },
-  { leg: 'linux-arm64-glibc', os: 'ubuntu-22.04-arm', 'ci-os': 'ubuntu-26.04-arm', publish: false, ci: true },
+  // glibc Linux: a CI-only CANARY (ciOnly:true → built in CI, filtered OUT of the
+  // release tier; NB `smoke` is a different, taken field — the qemu-user smoke
+  // MODE on the musl legs). The published Linux artifacts are musl-static
+  // (Decision 3), so
+  // glibc ships nothing today and must not gate a release. It earns its keep two
+  // ways: (1) a second-libc, dynamic-link canary — a distinct compile+link
+  // environment that catches non-portable code the static-musl build hides (musl's
+  // tiny thread stack, getaddrinfo/NSS, symbol visibility); (2) the WARM
+  // glibc-dynamic path we promote to a PUBLISHER the day we target a musl-less
+  // Linux arch — musl has no port for alpha, hppa, or sparc64, so Linux on those
+  // needs glibc-dynamic. The base os pins the oldest hosted ubuntu (the glibc
+  // ABI floor we'd build that shipping binary against); ci rides the newest.
+  { leg: 'linux-x64-glibc', os: 'ubuntu-22.04', 'ci-os': 'ubuntu-26.04', publish: false, ci: true, ciOnly: true },
+  { leg: 'linux-arm64-glibc', os: 'ubuntu-22.04-arm', 'ci-os': 'ubuntu-26.04-arm', publish: false, ci: true, ciOnly: true },
   // ---- T1.5 Alpine musl-static (the published Linux artifacts)
   { leg: 'linux-x64-musl', os: 'ubuntu-latest', 'guest-platform': 'alpine', 'guest-arch': 'x86_64',
     static: true, publish: true, ci: true },  // ci: per-push twin of THE published Linux artifact
@@ -431,13 +440,17 @@ export function legsFor(tier) {
     // that publish nothing (engine-only darwin-x86/ppc) KEEP soft-fail — they add
     // no asset, so a flake there must not block the release. Demote a
     // chronically-flaky publisher explicitly (drop publish), never silently.
-    return LEGS.map(({ ci, 'ci-os': _o, 'ci-guest-version': _v, ...leg }) => {
+    // ciOnly legs (the glibc canary) are CI-only: they ship nothing today, so they
+    // must not appear in — let alone gate — a release. Filter them out here; they
+    // stay in the ci tier below. (When a musl-less Linux arch makes glibc a real
+    // publisher, drop its `ciOnly` and give it `publish:true`.)
+    return LEGS.filter((l) => !l.ciOnly).map(({ ci, ciOnly, 'ci-os': _o, 'ci-guest-version': _v, ...leg }) => {
       if (leg.publish) delete leg['soft-fail'];
       return leg;
     });
   }
   if (tier === 'ci') {
-    return LEGS.filter((l) => l.ci).map(({ ci, publish, 'ci-os': ciOs, 'ci-guest-version': ciVer,
+    return LEGS.filter((l) => l.ci).map(({ ci, publish, ciOnly, 'ci-os': ciOs, 'ci-guest-version': ciVer,
       'macos-min': _mm, 'macos-sdk': _ms, 'macos-arch': _ma, 'cross-image': _ci, ...leg }) => {
       if (ciOs) leg.os = ciOs;                          // ci rides the newest runner/guest
       if (ciVer) leg['guest-version'] = ciVer;
