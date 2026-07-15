@@ -35,9 +35,20 @@ function sha256Of(filePath) {
 // GET a URL. url may be https://, http:// or file://.
 //   - destPath omitted: resolve the body as a utf8 string (stdout-capture case).
 //   - destPath given:   write raw bytes to destPath, resolve true (download case).
+//   - opts.onProgress(received, total): called per response chunk in dest mode;
+//     `total` is the content-length (0 if the server omits it).
 // Rejects on failure so the caller's error path fires.
-async function downloadFile(url, destPath) {
+//
+// Dest mode STREAMS res.body → destPath chunk-by-chunk (res.body.getReader(), a
+// WHATWG primitive present under both host node and the tjs fetch). This replaces
+// an earlier `Buffer.from(await res.arrayBuffer())` that buffered the ENTIRE
+// (~240MB) provider binary in memory and wrote once at the end: the dest sat at 0
+// bytes for the whole download (looked "eternally stuck"), and a 243MB arrayBuffer
+// hangs/OOMs under tjs. Streaming removes the memory spike, shows real movement,
+// and is robust under tjs.
+async function downloadFile(url, destPath, opts) {
   const wantFile = destPath != null && destPath !== '';
+  const onProgress = opts && typeof opts.onProgress === 'function' ? opts.onProgress : null;
 
   if (url.startsWith('file://')) {
     const src = fileURLToPath(url);
@@ -54,8 +65,23 @@ async function downloadFile(url, destPath) {
     throw new Error(`clode: download failed (HTTP ${res.status}) for ${url}`);
   }
   if (wantFile) {
-    const buf = Buffer.from(await res.arrayBuffer()); // raw bytes, binary-safe
-    fs.writeFileSync(destPath, buf);
+    const total = Number(res.headers.get('content-length')) || 0;
+    const reader = res.body.getReader();
+    const fd = fs.openSync(destPath, 'w');
+    let received = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        // value is a Uint8Array chunk; write it straight through, no buffering.
+        const buf = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+        fs.writeSync(fd, buf, 0, buf.length);
+        received += value.byteLength;
+        if (onProgress) onProgress(received, total);
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
     return true;
   }
   return await res.text();

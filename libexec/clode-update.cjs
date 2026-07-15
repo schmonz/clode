@@ -261,8 +261,30 @@ async function clodeUpdate(channel, opts = {}) {
     err(`clode: fetching Claude Code ${ver} (${plat})...`);
     fs.mkdirSync(dest, { recursive: true });
     const tmp = path.join(dest, '.claude.partial');
+    // Progress rendering: the provider binary is ~240MB, so a silent download
+    // "looks eternally stuck". Update in place on a TTY (\r + clear-to-EOL);
+    // fall back to a newline every 10% for a piped/log stderr. Throttled to
+    // integer-percent changes (or ~4MB steps when content-length is absent).
+    const isTTY = !!stderr.isTTY;
+    let lastStep = -1;
+    const onProgress = (received, total) => {
+      let line, step;
+      if (total > 0) {
+        step = Math.floor((received / total) * 100);
+        if (step === lastStep) return;
+        line = `clode: fetching ${ver} — ${step}% (${(received / 1048576).toFixed(1)}/${(total / 1048576).toFixed(1)} MB)`;
+      } else {
+        step = Math.floor(received / 4194304);
+        if (step === lastStep) return;
+        line = `clode: fetching ${ver} — ${(received / 1048576).toFixed(1)} MB`;
+      }
+      lastStep = step;
+      if (isTTY) stderr.write(`\r${line}\x1b[K`);
+      else if (total <= 0 || step % 10 === 0) stderr.write(`${line}\n`);
+    };
     try {
-      await downloadFile(`${base}/${ver}/${plat}/${binaryFor(manifestText, plat)}`, tmp);
+      await downloadFile(`${base}/${ver}/${plat}/${binaryFor(manifestText, plat)}`, tmp, { onProgress });
+      if (isTTY && lastStep >= 0) stderr.write('\n'); // finish the in-place line
     } catch {
       try { fs.unlinkSync(tmp); } catch { /* absent */ }
       err('clode: download failed');

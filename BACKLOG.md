@@ -81,16 +81,21 @@ well-tested, and reasonably fast** as we can possibly make it." Sequencing:
 ### Known runtime bugs
 
 - **`clode fetch` looks eternally stuck at 0 bytes.** Reported 2026-07-15.
-  ROOT CAUSE CONFIRMED: `clode-net.cjs:56-59` `downloadFile` buffers the ENTIRE
-  ~240MB provider binary via `res.arrayBuffer()` then `writeFileSync`s ONCE at the
-  end — so the dest file is 0 bytes for the whole download and only appears full at
-  completion (looks hung). The download itself is fine: streamed 243.6MB in 3.9s @
-  62.9MB/s on this Mavericks host node. Under tjs it's worse — a 243MB arrayBuffer
-  likely hangs/OOMs the node-shim fetch, and the fs write may truncate (ties to the
-  config 0-byte bug). FIX: stream `res.body` → `fs.createWriteStream(dest)` via
-  `stream/promises pipeline`, with progress (bytes/total). Removes the memory spike,
-  shows movement, and is robust under tjs. Same fix helps the changelog/manifest
-  paths (small, but consistency). Belongs with the daily-driver hardening track.
+  **FIXED 2026-07-15 (session "daily-driver").** ROOT CAUSE was `clode-net.cjs`
+  `downloadFile` buffering the ENTIRE ~240MB provider binary via `res.arrayBuffer()`
+  then `writeFileSync`ing ONCE at the end — dest sat at 0 bytes the whole download
+  (looked hung) and a 243MB arrayBuffer hangs/OOMs under tjs. FIX SHIPPED: dest mode
+  now STREAMS `res.body.getReader()` → `fs.openSync/writeSync/closeSync` chunk-by-
+  chunk (a WHATWG primitive verified working under BOTH host node AND the tjs fetch —
+  `fs.createWriteStream`/`Readable.fromWeb`/`stream/promises pipeline` were the
+  original plan but createWriteStream is ABSENT from the node-shim, so the fd-loop is
+  the portable choice). Added optional `opts.onProgress(received, total)`; the
+  provider-fetch caller (`clode-update.cjs`) renders a throttled in-place TTY
+  progress line (percent + MB) / 10%-newline for piped stderr. New test
+  `test/clode-net.test.cjs` "streams to dest with incremental progress" (multi-chunk
+  server, asserts per-chunk monotonic progress summing to content-length). Full
+  offline suite green (450 pass / 0 fail). NOTE: this DECOUPLES from the config
+  0-byte bug — the fs write does NOT truncate (see corrected config entry below).
 
 ### Known quaude runtime bugs
 
@@ -98,15 +103,28 @@ well-tested, and reasonably fast** as we can possibly make it." Sequencing:
   Reported 2026-07-15: every `quaude` launch requires choosing the theme AGAIN and
   logging in AGAIN — neither the config (`~/.claude.json` / theme) nor the
   credentials survive the process exit. Two likely-independent faults to check:
-  1. **Config write — STRONG LEAD (2026-07-15): observed `~/.claude.json` at 0
-     BYTES** right after a fused quaude run on Mavericks (also broke that build's
-     `-p` smoke: "Unexpected end of JSON input"). So it's not a wrong-path issue —
-     quaude **truncates the file to empty**: the node-shim fs open('w')/write (or a
-     write-then-rename atomic-save) truncates then the write no-ops or fails,
-     leaving 0 bytes. Repros on BOTH NetBSD/arm64 (user) and Mavericks/x64 (here),
-     so it's a general node-shim fs write fault under tjs, NOT keychain/arch. Next:
-     find the exact `~/.claude.json` write in the shim, add a failing test that a
-     write of non-empty JSON reads back non-empty under tjs.
+  1. **Config write — LEADING HYPOTHESIS DISPROVEN (2026-07-15, session
+     "daily-driver").** Observed `~/.claude.json` at 0 BYTES right after a fused
+     quaude run on Mavericks (also broke that build's `-p` smoke: "Unexpected end of
+     JSON input"). The suspected cause — "the node-shim fs open('w')/write truncates
+     then the write no-ops" — is **WRONG**: reproduced all four plausible CC write
+     patterns directly under the real tjs (`__tjs_fs_sync` via `tjs-darwin-x86`) —
+     direct `writeFileSync`, atomic write+`rename`, chunked `write` with explicit
+     position, and chunked with position −1 — a realistic 5240-byte `~/.claude.json`
+     ROUND-TRIPS INTACT every time. The shim fs write does NOT truncate. So the
+     0-byte file comes from CC's OWN write path, not the fs primitive. **New prime
+     suspects (need real extracted CC to confirm):** (a) `Bun.write(path, data)` is a
+     `TODO()` throw-stub in `bun-shim.cjs` (line ~511) — if CC persists config via
+     `Bun.write` it THROWS, never writing; (b) `Bun.file(path)` is likewise a
+     throw-stub — if CC reads config via `Bun.file().json()` the read fails too;
+     (c) `fs.createWriteStream` is ABSENT from the node-shim — a WriteStream-based
+     save would throw. The 0-byte artifact itself implies SOMETHING truncates then
+     the real write throws/no-ops — most likely CC touches/opens the file (fs, ok)
+     then fills it via `Bun.write` (throws). NEXT: fetch+extract a real CC, grep the
+     `~/.claude.json` write path (Bun.write vs fs vs WriteStream), then un-stub the
+     specific Bun API (real `Bun.write`/`Bun.file` over node:fs) and/or add
+     `fs.createWriteStream` to the shim — with an oracle diff of native-vs-quaude on
+     the config read/write surface.
   2. **Credentials** — native CC stores login in the OS keychain (macOS) or a
      credentials file; under tjs there may be no keychain-equivalent, so the token
      isn't saved. Check the credential store path CC uses and whether the node-shim

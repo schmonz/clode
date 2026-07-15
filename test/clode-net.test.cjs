@@ -106,3 +106,60 @@ test('downloadFile(http://) string + dest modes over localhost', async () => {
     server.close();
   }
 });
+
+// dest mode must STREAM the body to disk chunk-by-chunk rather than buffer the
+// whole (~240MB) response via arrayBuffer() and writeFileSync once at the end
+// (BACKLOG "clode fetch looks eternally stuck at 0 bytes"): the arrayBuffer
+// approach leaves the dest at 0 bytes for the whole download (looks hung) and
+// OOMs/hangs a 243MB buffer under tjs. Contract: onProgress fires per chunk with
+// a monotonically increasing received count that ends at total (from
+// content-length), proving incremental streaming, and the bytes stay intact.
+test('downloadFile(http://) streams to dest with incremental progress', async () => {
+  // three distinct chunks, flushed with gaps so a buffering impl can't coalesce
+  const chunks = [
+    Buffer.alloc(4096, 0x41),
+    Buffer.alloc(4096, 0x42),
+    Buffer.alloc(4096, 0x43),
+  ];
+  const payload = Buffer.concat(chunks);
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, {
+      'content-type': 'application/octet-stream',
+      'content-length': String(payload.length),
+    });
+    let i = 0;
+    const pump = () => {
+      if (i < chunks.length) {
+        res.write(chunks[i++]);
+        setTimeout(pump, 10);
+      } else {
+        res.end();
+      }
+    };
+    pump();
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  try {
+    const dir = tmpdir();
+    const dst = path.join(dir, 'stream.bin');
+    const seen = [];
+    const ok = await downloadFile(`http://127.0.0.1:${port}/`, dst, {
+      onProgress: (received, total) => seen.push([received, total]),
+    });
+    assert.strictEqual(ok, true);
+    assert.ok(payload.equals(fs.readFileSync(dst)), 'streamed bytes intact');
+    // fired more than once => genuinely chunk-by-chunk, not one buffered write
+    assert.ok(seen.length >= 2, `onProgress should fire per chunk, got ${seen.length}`);
+    // monotonically increasing, ends at total, total is the content-length
+    let prev = 0;
+    for (const [received, total] of seen) {
+      assert.ok(received > prev, 'received must strictly increase');
+      assert.strictEqual(total, payload.length, 'total is content-length');
+      prev = received;
+    }
+    assert.strictEqual(prev, payload.length, 'final received equals total');
+  } finally {
+    server.close();
+  }
+});
