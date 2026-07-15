@@ -140,15 +140,25 @@ well-tested, and reasonably fast** as we can possibly make it." Sequencing:
   darwin-universal — narrows keychain-specific vs general path/write fault).
 
 - **quaude login browser-launcher does not open the browser (macOS/arm64 at
-  least).** Reported 2026-07-15: during login, CC should open the OAuth URL in the
-  default browser; under quaude it doesn't launch. Native CC opens URLs via the
-  platform opener (`open` on macOS, `xdg-open`/`start` elsewhere) or a Bun API —
-  under tjs the node-shim child_process spawn of `open` (or the Bun opener) is
-  likely a no-op/stub or spawns wrong. Check the exact open-URL path CC uses and
-  whether the shim reaches `/usr/bin/open`. Workaround for the user meanwhile: the
-  login URL is usually printed — open it manually. Likely related to the
-  config/creds-persistence bug above (same login/onboarding surface); a fix pass
-  should cover both. Confirm whether it also repros on quaude/NetBSD.
+  least).** Reported 2026-07-15. **"spawn detached/ignore gap" LEAD DISPROVEN
+  (2026-07-15, session "daily-driver").** Traced CC's actual login opener in the
+  extracted 2.1.179 cli.cjs: `v4(url)` → `Gl1(url)` runs on darwin
+  `let K=(Mw()?.browser ?? process.env.BROWSER)||"open"; {code}=await g8(K,[url]);
+  return code===0` where `g8`→`o_` is CC's execa-based exec runner. Every layer
+  works under real tjs (`tjs-darwin-x86` + node-shim loader): (1) `child_process
+  .spawn("open",[url],{stdio:"ignore",detached:true})` LAUNCHES (marker-file proof);
+  (2) `resolveExe` PATH-resolves bare `open`→`/usr/bin/open`; (3) bare `open` spawns
+  and returns its own exit code (bogus-flag test → code 1 + usage, i.e. it ran).
+  NOTE `spawn` silently DROPS `opts.detached` (never threaded to `tjs.spawn`,
+  child_process.cjs ~L189) — harmless for `open` (returns immediately) but a latent
+  gap worth closing. Ruled out: `Mw()` is `m6.attacherCaps` (in-memory), NOT the
+  config reader, so it does NOT throw on the 0-byte config. **Could NOT reproduce a
+  shim-level defect** — the mechanism works at every testable layer. NEXT: needs an
+  INTERACTIVE real-quaude login (opens a real browser / OAuth) to repro — likely
+  either environment/onboarding state poisoned by the now-fixed 0-byte config, or a
+  timing/`o_`-option nuance. Re-test login on a fresh quaude now that config
+  persists before investing more. Workaround: the login URL is printed — open it
+  manually.
 
 - **quaude TUI leaves stale frames on screen (daily-driver report, 2026-07-15).**
   Previous commands/output persist after they should clear: a finished `/login`
