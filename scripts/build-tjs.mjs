@@ -1321,6 +1321,33 @@ function fixupQjsHrtimeOldDarwin(dir) {
   console.log('fixup qjs-hrtime-old-darwin: applied');
 }
 
+function fixupQjsX87FpcwI386Darwin(dir) {
+  // cutils.h gates x87 FP-precision control on `#if defined(__i386__) &&
+  // !defined(_MSC_VER)` — inline asm (fnstcw/fldcw) that the OLDER osxcross-1.1
+  // clang rejects ("invalid lvalue in asm output"). osxcross-1.1 is the darwin-x86
+  // i386 cross toolchain (master osxcross refuses the 10.4 SDK the Tiger floor
+  // needs). The x87 dance only matters when the compiler emits x87 FP — but EVERY
+  // Intel Mac has SSE2, and the darwin-x86 toolchain compiles with -mfpmath=sse
+  // (64-bit doubles via SSE, no x87), so the control is a no-op there. Exclude
+  // __APPLE__ from the guard so Apple i386 takes the SAME empty macros that
+  // x64/arm64/ppc already use (the surrounding code never touches the var outside
+  // these macros — proven by those platforms compiling it empty today). quickjs-ng
+  // upstream candidate.
+  const f = path.join(dir, 'deps/quickjs/cutils.h');
+  const src = fs.readFileSync(f, 'utf8');
+  const anchor = '#if defined(__i386__) && !defined(_MSC_VER)';
+  const patched = '#if defined(__i386__) && !defined(_MSC_VER) && !defined(__APPLE__)';
+  if (src.includes(patched)) {
+    console.log('fixup qjs-x87-fpcw-i386-darwin: already applied');
+    return;
+  }
+  if (!src.includes(anchor) || !src.includes('JS_X87_FPCW_SAVE_AND_ADJUST')) {
+    throw new Error('fixup qjs-x87-fpcw-i386-darwin: anchor not found (quickjs-ng changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(anchor, patched));
+  console.log('fixup qjs-x87-fpcw-i386-darwin: applied');
+}
+
 function fixupAtomicShim(dir) {
   // 32-bit targets without libatomic (darwin-ppc; sparc before it) need a
   // fallback for the 8-byte __atomic_* calls quickjs-ng's Atomics builtin
@@ -1588,6 +1615,7 @@ if (buildOnly) {
   fixupLwsScandirOldDarwin(tjsDir);
   fixupMbedtlsMsTimeOldDarwin(tjsDir);
   fixupQjsHrtimeOldDarwin(tjsDir);
+  fixupQjsX87FpcwI386Darwin(tjsDir);
   fixupLibuvUnsetenvOldDarwin(tjsDir);
   fixupLibuvNprocsOldDarwin(tjsDir);
   fixupLibuvBirthtimeOldDarwin(tjsDir);
