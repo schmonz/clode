@@ -170,7 +170,7 @@ const SHIM_DIR = __QVFS
   ? '/quaude/node-shim/modules'                                // fused: shims are archive members
   : P.join(P.dirname(P.resolve(tjs.args[2] ?? '')), 'modules'); // loader.cjs lives beside modules/
 const builtinCache = new Map();
-const KNOWN = ['assert','buffer','child_process','crypto','events','fs','fs/promises','module','net','os','path','path/win32','path/posix','process','stream','stream/consumers','stream/promises','string_decoder','tls','tty','url','util','v8','vm','zlib','sea','readline','http','https','dgram','worker_threads','async_hooks','inspector','constants','querystring','timers','timers/promises','dns','dns/promises','http2','perf_hooks','diagnostics_channel'];
+const KNOWN = ['assert','buffer','child_process','crypto','events','fs','fs/promises','module','net','os','path','path/win32','path/posix','process','stream','stream/consumers','stream/promises','string_decoder','tls','tty','url','util','v8','vm','zlib','sea','readline','http','https','dgram','worker_threads','async_hooks','inspector','constants','querystring','timers','timers/promises','dns','dns/promises','http2','perf_hooks','diagnostics_channel','sqlite'];
 function loadBuiltin(name) {
   if (builtinCache.has(name)) return builtinCache.get(name);
   // Builtin subpaths (`<mod>/<sub>`: fs/promises, timers/promises, path/win32,

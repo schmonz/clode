@@ -119,11 +119,12 @@ async function main() {
   // the manifest rides along so the loader picks the role's entry member.
   globalThis.__quaudeVFS = { files, index, manifest };
   globalThis.__quaudeArgs = rest;
-  // Pre-load the tjs:sqlite backend for the bun:sqlite shim: new Database() is
-  // sync but import('tjs:sqlite') is async, so await it HERE (before the loader
-  // boots bun-shim + the cli) and stash the class; bun-shim reads it sync. Non-
-  // fatal — a build without tjs:sqlite just leaves bun:sqlite fail-loud on use.
-  try { globalThis.__clodeTjsSqliteDatabase = (await import('tjs:sqlite')).Database; } catch (_) { /* no sqlite in this engine */ }
+  // Pre-load tjs:sqlite for the node-shim's node:sqlite provider (which bun:sqlite
+  // maps onto): node's DatabaseSync is sync but import('tjs:sqlite') is async, so
+  // await it HERE (before the loader boots the cli) and stash the module;
+  // node-shim/modules/sqlite.cjs reads it sync. Non-fatal — a build without
+  // tjs:sqlite just leaves node:sqlite (and bun:sqlite) fail-loud on use.
+  try { globalThis.__clodeTjsSqlite = await import('tjs:sqlite'); } catch (_) { /* no sqlite in this engine */ }
   (0, new Function(dec.decode(files.get('node-shim/loader.cjs'))))();
 }
 

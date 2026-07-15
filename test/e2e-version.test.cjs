@@ -24,9 +24,11 @@ test('package.json version matches the VERSION file', () => {
   assert.strictEqual(pkgver, version);
 });
 
-test('VERSION is 0.1.2 and LICENSE is BSD-2-Clause', () => {
+test('VERSION is a valid semver and LICENSE is BSD-2-Clause', () => {
+  // Don't hardcode the number (it broke silently on the 0.1.3 bump); the exact
+  // value is covered by the --clode-version + package.json-matches tests above.
   const version = fs.readFileSync(path.join(REPO, 'VERSION'), 'utf8').trim();
-  assert.strictEqual(version, '0.1.2');
+  assert.match(version, /^\d+\.\d+\.\d+$/, `VERSION '${version}' must be x.y.z`);
   const license = fs.readFileSync(path.join(REPO, 'LICENSE'), 'utf8');
   assert.match(license, /BSD 2-Clause|Redistribution and use/i);
 });

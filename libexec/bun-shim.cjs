@@ -530,21 +530,49 @@ const BUN_BUILTINS = {
   },
 };
 
-// bun:sqlite (Claude Code history/todos) -> the tjs:sqlite-backed shim. The
-// backend Database class differs by runtime and one of them is async, so it's
-// resolved here at bun-shim load: under tjs the quaude bootstrap has already
-// awaited import('tjs:sqlite') and stashed it on the global (sync to read here);
-// under the classic Node launcher node:sqlite's DatabaseSync is a drop-in (same
-// minimal prepare/exec/close + Statement all/run interface, verified 2026-07-15).
-// Absent both, the shim's Database throws a clear "backend not loaded" — fail-
-// loud, not silent.
-const bunSqlite = require('./bun-sqlite.cjs');
-BUN_BUILTINS['bun:sqlite'] = bunSqlite;
-if (globalThis.__clodeTjsSqliteDatabase) {
-  bunSqlite.__setBackend(globalThis.__clodeTjsSqliteDatabase);
-} else {
-  try { bunSqlite.__setBackend(require('node:sqlite').DatabaseSync); } catch (_) { /* tjs bootstrap sets it, or fail-loud on use */ }
-}
+// bun:sqlite (Claude Code history/todos) -> node:sqlite. The Bun->Node layer of
+// a two-part design (user, 2026-07-15): map Bun's SQLite API onto node:sqlite,
+// which is NATIVE under the classic Node launcher and provided by
+// node-shim/modules/sqlite.cjs (over tjs:sqlite) under quaude. node:sqlite is a
+// rich modern API (get/all/run natively), so this mapping is thin. INLINED so
+// bun-shim stays self-contained (the extractor cache + isolated-shim test copy
+// bun-shim.cjs ALONE); node:sqlite is a builtin, not a sibling file. Fail-loud if
+// no SQLite backend exists. Tests: test/bun-sqlite.test.cjs.
+BUN_BUILTINS['bun:sqlite'] = (() => {
+  let NodeDb;
+  try { NodeDb = require('node:sqlite').DatabaseSync; } catch (_) { NodeDb = null; }
+  const notImpl = (name) => { const f = function () { throw new Error(`bun:sqlite.${name} not yet implemented`); }; f.__bunSqliteStub = true; return f; };
+  class Statement {
+    constructor(s) { this._s = s; }
+    all(...p) { return this._s.all(...p); }
+    get(...p) { const r = this._s.get(...p); return r == null ? undefined : r; }
+    values(...p) { return this._s.all(...p).map((row) => Object.values(row)); }
+    run(...p) { return this._s.run(...p); }   // node:sqlite run() -> {changes,lastInsertRowid}
+  }
+  Statement.prototype.iterate = notImpl('Statement.iterate');
+  Statement.prototype.as = notImpl('Statement.as');
+  class Database {
+    constructor(path) {
+      if (!NodeDb) throw new Error('bun:sqlite: no node:sqlite backend in this runtime');
+      this._db = new NodeDb(path);
+    }
+    query(sql) { return new Statement(this._db.prepare(sql)); }   // Bun caches query; node prepares
+    prepare(sql) { return new Statement(this._db.prepare(sql)); }
+    exec(sql) { this._db.exec(sql); }
+    run(sql, ...p) { return new Statement(this._db.prepare(sql)).run(...p); }
+    transaction(fn) {
+      const db = this;
+      return function (...a) {
+        db.exec('BEGIN');
+        try { const r = fn.apply(this, a); db.exec('COMMIT'); return r; } catch (e) { db.exec('ROLLBACK'); throw e; }
+      };
+    }
+    close() { this._db.close(); }
+  }
+  Database.prototype.serialize = notImpl('Database.serialize');
+  Database.prototype.loadExtension = notImpl('Database.loadExtension');
+  return { Database, default: Database };
+})();
 // --- WebSocket / `ws`: the bundle is written for BUN's WebSocket, which takes a
 // SINGLE options object — new WebSocket(url, {protocols, headers, tls, proxy}).
 // Node's global WebSocket (undici/WHATWG) ignores `headers`, so the Bearer auth
