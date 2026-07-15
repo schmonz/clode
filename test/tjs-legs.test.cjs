@@ -47,7 +47,6 @@ test('release tier: every published leg is present (golden)', () => {
   const release = legsFor('release');
   const published = release.filter((l) => l.publish).map((l) => l.leg).sort();
   assert.deepStrictEqual(published, [
-    'darwin-arm64', 'darwin-x64',
     'dragonflybsd-amd64',
     'freebsd-amd64', 'freebsd-arm64',
     'haiku-x64',

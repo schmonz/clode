@@ -53,7 +53,13 @@ const LEGS = [
   // -node engine tag instead.
   // macos-14 = the oldest arm64 runner GitHub hosts (= the publish floor);
   // ci rides the newest (macos-26).
-  { leg: 'darwin-arm64', os: 'macos-14', 'ci-os': 'macos-26', publish: true, ci: true, floor: '11.0' },
+  // publish:false: the arm64/x64 legs still build + fuse + smoke (validation) and
+  // upload their bare ENGINE slice (tjs-darwin-*), which release.yml's
+  // darwin-universal job lipo's into the shipped 4-arch fat binary. The single-
+  // arch builders are redundant with the universal (which contains their slices)
+  // — darwin ships exactly ONE artifact, clode-<ver>-darwin-universal (user pref
+  // 2026-07-15). i386/ppc were never standalone (no-exec) — universal-only.
+  { leg: 'darwin-arm64', os: 'macos-14', 'ci-os': 'macos-26', publish: false, ci: true, floor: '11.0' },
   // glibc Linux artifacts are smoke-only forever (Decision 3): the published
   // Linux artifacts are the musl-static ones. Release pins the oldest hosted
   // ubuntu (glibc floor for the smoke build), ci the newest.
@@ -91,7 +97,7 @@ const LEGS = [
   // x86_64) the builder ran, fetched the provider (mbedtls TLS), fused a
   // quaude ON the box (29MB, bundle 2.1.179), PONG + attest green, quaude
   // answers --version. The 10.6..10.9 gap is covered by the honest SDK.
-  { leg: 'darwin-x64', os: 'macos-15-intel', publish: true,
+  { leg: 'darwin-x64', os: 'macos-15-intel', publish: false,  // slice-only; ships via darwin-universal
     'macos-min': '10.6', 'macos-sdk': '10.6', floor: '10.6',
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // darwin-x86 Tiger walk (spec 2026-07-11-darwin-x86-tiger-walk): the
@@ -188,16 +194,16 @@ const LEGS = [
   // shipped imports tjs:ffi). Engine config (quickjs + wurl + libuv)
   // identical to the pinned oracle build.
   { leg: 'netbsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'netbsd',
-    // PROVEN floor (probe run 29160710037, honest build, 304 compile lines;
-    // 10.0 also proven, run 29160710641). 9.2 is DISQUALIFIED operationally:
-    // its guest wedged 89 min at pkgin install (dead-mirror-class hang for
-    // the 9.2-era repo path) until the 90-min wall — regardless of whether
-    // the build would have succeeded. NetBSD's COMPAT machinery carries a
-    // 9.4-built artifact forward across 10.x.
-    'guest-version': '9.4',
+    // Floor at 10.1 to match every other NetBSD arch (user decision 2026-07-15:
+    // "10.x for everything"). NetBSD 9.x goes unsupported once 11.0 leaves RC, so
+    // there's no reason to keep the old 9.4 floor (9.4/10.0 both built cleanly —
+    // probes 29160710037/29160710641 — but 9.x's audience is evaporating).
+    // COMPAT carries a 10.1 build forward across 10.x. (Reach note: 10.0 users
+    // would need a 10.0 floor; dropped as marginal vs. a tidy uniform 10.1.)
+    'guest-version': '10.1',
     // renovate: datasource=custom.cpa-netbsd-x86-64 depName=netbsd-x86-64-guest versioning=loose
     'ci-guest-version': '10.1',
-    'guest-packages': 'cmake gmake nodejs git-base bash', floor: '9.4',
+    'guest-packages': 'cmake gmake nodejs git-base bash', floor: '10.1',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true },  // cpa, KVM
   { leg: 'freebsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'freebsd',
     // PROVEN floor (probe run 29157832721, honest in-guest build): 14.0 is
