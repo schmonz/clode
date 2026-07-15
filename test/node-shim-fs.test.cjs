@@ -91,6 +91,49 @@ test('fs.promises.open + O_* constants vs host node', (t) => {
   assert.strictEqual(r.stdout.trim(), nodeOut);
 });
 
+// writeFileSync(fd, data): the fd-as-first-arg form. Claude Code's atomic config
+// writer (saveConfigWithLock -> the atomic-write helper) does exactly this:
+//   const fd = fs.openSync(tmp, O_WRONLY|O_CREAT|O_EXCL, mode);
+//   fs.writeFileSync(fd, JSON.stringify(config), { encoding: 'utf-8' });
+//   fs.fsyncSync(fd); fs.closeSync(fd); fs.renameSync(tmp, '~/.claude.json');
+// A shim writeFileSync that assumes arg1 is a PATH re-opens the fd NUMBER as a
+// path (creating a bogus file named "8"), leaving the real temp fd 0 bytes — so
+// the rename clobbers the config to 0 bytes (the observed "config not persisted"
+// / "Unexpected end of JSON input" daily-driver bug). Same observable answers as
+// host node: the temp reads back the written JSON, and no bogus numeric file.
+const FDWRITE_PROG = `
+const fs = require('node:fs');
+const path = require('node:path');
+const dir = process.argv[2];
+const out = [];
+const tmp = path.join(dir, 'cfg.json.tmp');
+const data = JSON.stringify({ theme: 'dark', n: 999, s: 'x'.repeat(50) });
+const fd = fs.openSync(tmp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
+fs.writeFileSync(fd, data, { encoding: 'utf-8' });
+fs.fsyncSync(fd);
+fs.closeSync(fd);
+const target = path.join(dir, 'cfg.json');
+fs.renameSync(tmp, target);
+out.push(fs.readFileSync(target, 'utf8'));       // must equal data (not '')
+out.push(fs.statSync(target).size);              // must equal data byte length
+out.push(fs.readdirSync(dir).sort());            // must NOT contain a bogus "<fd>" file
+console.log(JSON.stringify(out));
+`;
+
+test('fs.writeFileSync(fd, data) writes to the fd (CC atomic-write) vs host node', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-fdw-'));
+  const f = path.join(base, 'fdw.cjs');
+  fs.writeFileSync(f, FDWRITE_PROG);
+  const nodeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-fdw-node-'));
+  const tjsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-fdw-tjs-'));
+  const nodeOut = require('node:child_process')
+    .execFileSync(process.execPath, [f, nodeDir], { encoding: 'utf8' }).trim();
+  const r = runLoader(f, [tjsDir]);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.stdout.trim(), nodeOut);
+});
+
 // latin1 byte round-trip: this is the extractor's core representation
 // (extract-claude-js reads the native binary as a latin1 string so 1 char == 1
 // byte, then writes Buffer.from(text, 'latin1')). readFileSync(,'latin1') must

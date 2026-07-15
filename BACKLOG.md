@@ -103,28 +103,33 @@ well-tested, and reasonably fast** as we can possibly make it." Sequencing:
   Reported 2026-07-15: every `quaude` launch requires choosing the theme AGAIN and
   logging in AGAIN — neither the config (`~/.claude.json` / theme) nor the
   credentials survive the process exit. Two likely-independent faults to check:
-  1. **Config write — LEADING HYPOTHESIS DISPROVEN (2026-07-15, session
-     "daily-driver").** Observed `~/.claude.json` at 0 BYTES right after a fused
-     quaude run on Mavericks (also broke that build's `-p` smoke: "Unexpected end of
-     JSON input"). The suspected cause — "the node-shim fs open('w')/write truncates
-     then the write no-ops" — is **WRONG**: reproduced all four plausible CC write
-     patterns directly under the real tjs (`__tjs_fs_sync` via `tjs-darwin-x86`) —
-     direct `writeFileSync`, atomic write+`rename`, chunked `write` with explicit
-     position, and chunked with position −1 — a realistic 5240-byte `~/.claude.json`
-     ROUND-TRIPS INTACT every time. The shim fs write does NOT truncate. So the
-     0-byte file comes from CC's OWN write path, not the fs primitive. **New prime
-     suspects (need real extracted CC to confirm):** (a) `Bun.write(path, data)` is a
-     `TODO()` throw-stub in `bun-shim.cjs` (line ~511) — if CC persists config via
-     `Bun.write` it THROWS, never writing; (b) `Bun.file(path)` is likewise a
-     throw-stub — if CC reads config via `Bun.file().json()` the read fails too;
-     (c) `fs.createWriteStream` is ABSENT from the node-shim — a WriteStream-based
-     save would throw. The 0-byte artifact itself implies SOMETHING truncates then
-     the real write throws/no-ops — most likely CC touches/opens the file (fs, ok)
-     then fills it via `Bun.write` (throws). NEXT: fetch+extract a real CC, grep the
-     `~/.claude.json` write path (Bun.write vs fs vs WriteStream), then un-stub the
-     specific Bun API (real `Bun.write`/`Bun.file` over node:fs) and/or add
-     `fs.createWriteStream` to the shim — with an oracle diff of native-vs-quaude on
-     the config read/write surface.
+  1. **Config write — ROOT CAUSE FOUND + FIXED (2026-07-15, session
+     "daily-driver").** The 0-byte `~/.claude.json` (also broke `-p` smoke:
+     "Unexpected end of JSON input") was **the node-shim `fs.writeFileSync` not
+     supporting the fd-as-first-arg form.** Extracted the real CC (`clode-extract`
+     on the native `~/.local/share/claude/versions/2.1.179`, no fetch) and read its
+     atomic config writer `ED6` (`saveConfigWithLock`):
+     `const fd = fs.openSync(tmp, O_WRONLY|O_CREAT|O_EXCL, 0o600);
+      fs.writeFileSync(fd, JSON.stringify(cfg), {encoding:'utf-8'});
+      fs.fsyncSync(fd); fs.closeSync(fd); fs.renameSync(tmp, ~/.claude.json)`.
+     The shim's `writeFileSync(p,...)` assumed `p` is a PATH and did
+     `FSS.open(p,'w')` — passed the fd NUMBER (e.g. 8) it opened a bogus file
+     literally named "8" (config bytes went THERE) and left the real temp fd 0
+     bytes, so the atomic `rename` clobbered the config to empty. Reproduced under
+     real tjs (bogus `./8` @ 33 bytes, temp @ 0). Arch-independent → explains both
+     NetBSD/arm64 and Mavericks/x64. FIX SHIPPED (`fs.cjs` writeFileSync): if arg1
+     is a number, `writeAll(fd, bytes, null)` to the caller's fd WITHOUT opening or
+     closing a path (Node semantics). New characterization test
+     `node-shim-fs.test.cjs` "writeFileSync(fd, data) ... vs host node" (mirrors
+     ED6: openSync temp → writeFileSync(fd) → fsync → close → rename; asserts the
+     target reads back the JSON and no bogus numeric file). Prior WRONG suspects
+     ruled out: `Bun.write`/`Bun.file` — CC uses **neither** (0 occurrences in
+     cli.cjs); the shim fs primitive does NOT truncate (path form always worked).
+     **LIKELY CO-FIX (verify): the credentials-not-persisted half.** Any CC writer
+     that routes through `ED6`/an fd-first `writeFileSync` (settings, the file-based
+     credential store CC falls back to when no keychain — quaude has no Bun keychain)
+     was wiped the same way. Confirm `~/.claude/.credentials.json` now persists
+     under quaude; if creds use a different path, re-check keychain vs file store.
   2. **Credentials** — native CC stores login in the OS keychain (macOS) or a
      credentials file; under tjs there may be no keychain-equivalent, so the token
      isn't saved. Check the credential store path CC uses and whether the node-shim

@@ -175,12 +175,17 @@ function writeFileSync(p, data, opts) {
   } else {
     bytes = new Uint8Array(data.buffer ?? data, data.byteOffset ?? 0, data.byteLength ?? data.length);
   }
+  // fd-as-first-arg form: fs.writeFileSync(fd, data) writes to the caller's ALREADY
+  // OPEN fd (at its current position) and must NOT open/close a path. Claude Code's
+  // atomic config writer relies on exactly this: openSync(tmp, O_CREAT|O_EXCL) ->
+  // writeFileSync(fd, json) -> fsync -> close -> rename(tmp, ~/.claude.json).
+  // Treating the fd NUMBER as a path (FSS.open(8,'w')) wrote the bytes to a bogus
+  // file literally named "8" and left the real temp fd 0 bytes, so the rename wiped
+  // the config to 0 bytes ("config not persisted" / "Unexpected end of JSON input"
+  // daily-driver bug). Characterized by node-shim-fs.test.cjs.
+  if (typeof p === 'number') { writeAll(p, bytes, null); return; }
   const fd = FSS.open(p, 'w');
-  try {
-    const ab = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes.buffer : bytes.slice().buffer;
-    let written = 0;
-    while (written < ab.byteLength) written += FSS.write(fd, written === 0 ? ab : ab.slice(written), -1);
-  } finally { FSS.close(fd); }
+  try { writeAll(fd, bytes, null); } finally { FSS.close(fd); }
 }
 
 function mkdirSync(p, opts) {
