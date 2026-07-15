@@ -1,15 +1,24 @@
-# De-risk image: osxcross toolchain (x86_64 + i386 apple-darwin10) baked with the
-# phracker MacOSX10.6 SDK. Cached as a docker layer so engine-build iterations are
-# fast (the ~20-min osxcross compile runs ONCE). Becomes ci/osxcross-darwin once
-# proven + published to ghcr.io/schmonz, pinned by digest.
-FROM debian:bookworm-slim
+# osxcross cross-toolchain (x86_64 + i386 apple-darwin) for the darwin-x64/x86
+# slices — replaces the deprecating macos-15-intel native build. BUILT IN CI (no
+# registry: the phracker Apple SDKs are fetched, never re-hosted) with GHA layer
+# caching, so the ~20-min osxcross compile runs only on a cache miss. Pinned for
+# reproducibility: base by digest, both osxcross checkouts by commit, SDKs + Csu by
+# sha256. The only unpinned axis is apt package versions (low-risk for a toolchain;
+# the engine's arch-gate + PONG smoke catch any drift).
+#
+# renovate: datasource=docker depName=debian
+FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
       clang llvm-dev cmake ninja-build git patch python3 libssl-dev liblzma-dev \
       libxml2-dev zlib1g-dev libbz2-dev cpio file curl ca-certificates xz-utils \
       uuid-dev bzip2 make nodejs npm \
     && rm -rf /var/lib/apt/lists/*
-RUN git clone --depth 1 https://github.com/tpoechtrager/osxcross.git /opt/osxcross
+
+# osxcross MASTER (x86_64/i386-apple-darwin10) + the phracker MacOSX10.6 SDK.
+ARG OSXCROSS_REF=e172cefb9b7fabb7c7f7df73f8f74bc876a42904
+RUN git clone https://github.com/tpoechtrager/osxcross.git /opt/osxcross \
+    && git -C /opt/osxcross checkout "${OSXCROSS_REF}"
 WORKDIR /opt/osxcross
 RUN curl -fsSL -o tarballs/MacOSX10.6.sdk.tar.xz \
       https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.6.sdk.tar.xz \
@@ -31,11 +40,14 @@ RUN SDKLIB=/opt/osxcross/target/SDK/MacOSX10.6.sdk/usr/lib \
          -o "$SDKLIB/crt1.10.6.o" -DADD_PROGRAM_VARS \
     && test -f "$SDKLIB/crt1.10.6.o" \
     && rm -rf /tmp/csu.tar.gz /tmp/Csu-Csu-85
+
 # i386 slice (darwin-x86, floor 10.4 / Tiger): osxcross MASTER refuses SDK <= 10.5
 # ("Use 'osxcross-1.1' branch"), so the 10.4u SDK gets a SEPARATE legacy checkout
 # in /opt/osxcross-legacy. 10.4u is fat (ppc/i386/ppc64/x86_64) and ships its own
 # crt1.o, so no Csu graft. Produces the *-apple-darwin8 wrappers.
-RUN git clone --branch osxcross-1.1 --depth 1 https://github.com/tpoechtrager/osxcross.git /opt/osxcross-legacy \
+ARG OSXCROSS_LEGACY_REF=f547d14e6ac6c5bb0ddd7563651eb29057e1d755
+RUN git clone https://github.com/tpoechtrager/osxcross.git /opt/osxcross-legacy \
+    && git -C /opt/osxcross-legacy checkout "${OSXCROSS_LEGACY_REF}" \
     && cd /opt/osxcross-legacy \
     && curl -fsSL -o tarballs/MacOSX10.4u.sdk.tar.xz \
          https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.4u.sdk.tar.xz \

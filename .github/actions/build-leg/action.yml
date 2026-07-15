@@ -54,6 +54,10 @@ inputs:
     description: "Docker image (digest-pinned) providing a cross toolchain; when set, the engine is cross-built INSIDE it on an ubuntu runner (darwin-ppc). Implies no-exec."
     required: false
     default: ""
+  cross-dockerfile:
+    description: "Directory with a Dockerfile for the cross-toolchain image, BUILT IN CI with GHA layer caching (no registry — the darwin osxcross legs, so the phracker Apple SDKs are never re-hosted). Mutually exclusive with cross-image; implies no-exec."
+    required: false
+    default: ""
   cross-file:
     description: "CMake toolchain file (repo-relative) the exec=cross build passes as CLODE_TJS_CROSS_FILE. Default = the darwin-ppc file (back-compat); the tier-2 Debian cross legs point it at scripts/linux-<arch>.toolchain.cmake."
     required: false
@@ -138,11 +142,12 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        if [ -n "${{ inputs.cross-image }}" ] || [ -n "${{ inputs.netbsd-src }}" ]; then
-          exec=cross   # cross-built on ubuntu: inside a docker toolchain image
-                       # (darwin-ppc) OR against a NetBSD build.sh toolchain
-                       # (netbsd-m68k) — either way vendor/out live under .matrix
-                       # for the shared cross-fuse, and no host exec/fuse runs.
+        if [ -n "${{ inputs.cross-image }}" ] || [ -n "${{ inputs.cross-dockerfile }}" ] || [ -n "${{ inputs.netbsd-src }}" ]; then
+          exec=cross   # cross-built on ubuntu: inside a docker toolchain image —
+                       # pinned+pulled (darwin-ppc) OR built-in-CI from a Dockerfile
+                       # (darwin-x64/x86 osxcross) — OR against a NetBSD build.sh
+                       # toolchain (netbsd-m68k). Either way vendor/out live under
+                       # .matrix for the shared cross-fuse; no host exec/fuse runs.
         else
           case "${{ inputs.guest-platform }}" in
             qemu-*) exec=qemu ;;  # own-qemu leg (netbsd-sparc): engine bakes in-guest, builder cross-fuses on the x64 runner, smoke runs via a backend recipe — see the qemu-* steps below
@@ -195,7 +200,7 @@ runs:
       uses: actions/cache@v6
       with:
         path: ${{ steps.mode.outputs.out }}
-        key: tjs-${{ inputs.leg }}-${{ steps.axes.outputs.image }}-${{ inputs.guest-version }}-${{ inputs.macos-min }}-${{ inputs.macos-sdk }}-${{ inputs.cross-image }}-${{ hashFiles('spike/quickjs/PINS.md', 'spike/quickjs/patches/*.patch', 'scripts/build-tjs.mjs', 'scripts/*.toolchain.cmake', 'spike/quickjs/atomic-shim.c') }}
+        key: tjs-${{ inputs.leg }}-${{ steps.axes.outputs.image }}-${{ inputs.guest-version }}-${{ inputs.macos-min }}-${{ inputs.macos-sdk }}-${{ inputs.cross-image }}-${{ inputs.cross-dockerfile }}-${{ hashFiles('spike/quickjs/PINS.md', 'spike/quickjs/patches/*.patch', 'scripts/build-tjs.mjs', 'scripts/*.toolchain.cmake', 'spike/quickjs/atomic-shim.c', 'ci/osxcross-darwin/Dockerfile') }}
 
     - name: Force LF line endings for the tjs checkout (native Windows)
       if: runner.os == 'Windows'
@@ -337,8 +342,26 @@ runs:
     # Canonical-LE means the shipped LE bundles boot on every-endian targets —
     # no regen. atomic-shim links the __atomic_*_8 pthread shim for 32-bit
     # targets lacking 8-byte libatomic (darwin-ppc: run 29182716872; m68k).
+    # Option-2 (darwin osxcross): build the toolchain image IN CI with GHA layer
+    # caching instead of pulling a registry image — the phracker Apple SDKs are
+    # fetched during the build and never re-hosted. Cache-hit reuses the identical
+    # image; only a cache miss (Dockerfile change / ~7-day eviction) pays the
+    # ~20-min osxcross compile. Loaded as a local tag the run step below consumes.
+    - name: Set up buildx (cross-dockerfile legs)
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.cross-dockerfile != ''
+      uses: docker/setup-buildx-action@v3
+    - name: Build the cross-toolchain image (GHA-cached, no registry)
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.cross-dockerfile != ''
+      uses: docker/build-push-action@v6
+      with:
+        context: ${{ inputs.cross-dockerfile }}
+        load: true
+        tags: clode-cross-toolchain:${{ inputs.leg }}
+        cache-from: type=gha,scope=xc-${{ inputs.leg }}
+        cache-to: type=gha,mode=max,scope=xc-${{ inputs.leg }}
+
     - name: Build tjs (cross container)
-      if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.cross-image != ''
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && (inputs.cross-image != '' || inputs.cross-dockerfile != '')
       shell: bash
       env:
         CROSS_APT: ${{ inputs.cross-apt }}
@@ -347,12 +370,16 @@ runs:
         WASM: ${{ inputs.wasm }}
         MIMALLOC: ${{ inputs.mimalloc }}
         FFI: ${{ inputs.ffi }}
+        CROSS_IMAGE: ${{ inputs.cross-image }}
       run: |
         set -euo pipefail
-        docker pull "${{ inputs.cross-image }}"
+        # cross-image → pull the pinned registry image (ppc); else use the local
+        # tag the buildx step just loaded (darwin osxcross, built from Dockerfile).
+        if [ -n "$CROSS_IMAGE" ]; then IMG="$CROSS_IMAGE"; docker pull "$IMG";
+        else IMG="clode-cross-toolchain:${{ inputs.leg }}"; fi
         docker run --rm \
           -e CROSS_APT -e CROSS_FILE -e ATOMIC_SHIM -e WASM -e MIMALLOC -e FFI \
-          -v "${{ github.workspace }}:/w" -w /w "${{ inputs.cross-image }}" bash -c '
+          -v "${{ github.workspace }}:/w" -w /w "$IMG" bash -c '
           set -euxo pipefail
           if [ -n "$CROSS_APT" ]; then apt-get update -q && apt-get install -y -q $CROSS_APT >/dev/null; fi
           if ! command -v node >/dev/null; then apt-get update -q && apt-get install -y -q nodejs >/dev/null 2>&1; fi
@@ -812,6 +839,21 @@ runs:
         got=$(echo "$LC" | awk '/cmd LC_VERSION_MIN_MACOSX/{f=1} f && /version /{print $2; exit}')
         [ "$got" = "${{ inputs.macos-min }}" ] || { echo "ERROR: LC_VERSION_MIN_MACOSX=$got, want ${{ inputs.macos-min }}" >&2; exit 1; }
         echo "floor gate ok (cross): $f, LC_VERSION_MIN_MACOSX $got"
+
+    # osxcross cross-dockerfile legs (darwin-x64/x86): verify the bare engine is
+    # the TARGET Mach-O arch, not a host x86-64 (the cross-file was bypassed). Host
+    # `file` needs no otool. The 10.6/10.4 floor is fixed by the toolchain file's
+    # -mmacosx-version-min and printed per-slice by the universal lipo job.
+    - name: Arch gate (cross-dockerfile) — bare engine is the target Mach-O arch
+      if: inputs.macos-arch != '' && inputs.cross-dockerfile != ''
+      shell: bash
+      run: |
+        set -euo pipefail
+        f=$(file -b "${{ steps.mode.outputs.out }}/tjs"); echo "file: $f"
+        case "$f" in
+          *Mach-O*"${{ inputs.macos-arch }}"*) echo "arch marker ok: ${{ inputs.macos-arch }}" ;;
+          *) echo "ERROR: not a ${{ inputs.macos-arch }} Mach-O (cross-file bypassed?) — got: $f" >&2; exit 1 ;;
+        esac
 
     - name: Floor gate — shipped asset carries LC_VERSION_MIN_MACOSX = the pinned floor
       if: inputs.macos-min != '' && runner.os == 'macOS' && inputs.cross-image == ''

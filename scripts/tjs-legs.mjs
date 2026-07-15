@@ -106,8 +106,15 @@ const LEGS = [
   // x86_64) the builder ran, fetched the provider (mbedtls TLS), fused a
   // quaude ON the box (29MB, bundle 2.1.179), PONG + attest green, quaude
   // answers --version. The 10.6..10.9 gap is covered by the honest SDK.
-  { leg: 'darwin-x64', os: 'macos-15-intel', publish: false,  // slice-only; ships via darwin-universal
-    'macos-min': '10.6', 'macos-sdk': '10.6', floor: '10.6',
+  { leg: 'darwin-x64', os: 'ubuntu-latest', publish: false,  // slice-only; ships via darwin-universal
+    // CROSS-BUILT on ubuntu via the osxcross image (ci/osxcross-darwin, built in
+    // CI with GHA layer cache) — off the deprecating macos-15-intel runner
+    // (proven end-to-end on real Mavericks). no-exec: a Mach-O can't run on the
+    // Linux builder (the universal job can smoke the x64 slice under Rosetta on
+    // macos-26). macos-min/arch feed the floor gate; the cross toolchain file
+    // (scripts/darwin-x64.toolchain.cmake) carries the actual 10.6 floor.
+    'cross-dockerfile': 'ci/osxcross-darwin', 'cross-file': 'scripts/darwin-x64.toolchain.cmake',
+    'macos-min': '10.6', 'macos-arch': 'x86_64', floor: '10.6', 'no-exec': true,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // darwin-x86 Tiger walk (spec 2026-07-11-darwin-x86-tiger-walk): the
   // i386 slice at floor 10.4 — second slice of the 4-way fat binary.
@@ -134,12 +141,15 @@ const LEGS = [
   // cross-arch fuse in the wild, cross-fuse prereq 3's proof-of-need.
   // (True-Tiger execution awaits Tiger hardware or the qemu-ppc-era
   // oracle legs; 10.4..10.9 gap covered by the honest SDK.)
-  { leg: 'darwin-x86', os: 'macos-15-intel', publish: false,
-    'macos-min': '10.4', 'macos-sdk': '10.4u', 'macos-arch': 'i386', floor: '10.4',
-    // HARD (not soft-fail): the universal binary is four arches or it is not
-    // release-ready — a missing i386 slice must block the release, not ship a
-    // 3-arch fat. Cross-build (baked SDK), no TCG/qemu flake to tolerate.
-    'no-exec': true, wasm: 'off', mimalloc: 'off', ffi: 'off' },
+  // CROSS-BUILT on ubuntu via the osxcross image (i386-apple-darwin8, LEGACY
+  // osxcross-1.1 + 10.4u SDK — see ci/osxcross-darwin/Dockerfile) — off the
+  // macos-15-intel runner, proven on real Mavericks (10.9 runs i386). HARD (not
+  // soft-fail): four arches or not release-ready — a missing i386 slice must
+  // block the release, not ship a 3-arch fat. Deterministic cross-build, no flake.
+  { leg: 'darwin-x86', os: 'ubuntu-latest', publish: false,
+    'cross-dockerfile': 'ci/osxcross-darwin', 'cross-file': 'scripts/darwin-x86.toolchain.cmake',
+    'macos-min': '10.4', 'macos-arch': 'i386', floor: '10.4', 'no-exec': true,
+    wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // darwin-ppc Tiger walk (spec 2026-07-11-darwin-ppc-walk): the ppc/BE32
   // slice at floor 10.4 — third slice of the fat binary, first BE slice.
   // CROSS-BUILT on ubuntu inside the digest-pinned VariantXYZ image (gcc

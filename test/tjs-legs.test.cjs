@@ -152,22 +152,23 @@ test('glibc legs are a CI-only canary: built in CI, filtered out of release', ()
   }
 });
 
-test('darwin floor: macos-min/macos-sdk are release-only, native-darwin-only', () => {
+test('darwin floor: macos-* fields are release-only, on native-darwin or cross legs', () => {
   const release = legsFor('release');
   const ci = legsFor('ci');
-  // The darwin analog of the guest-version floor policy: release builds
-  // against the pinned old SDK (the proven floor), ci rides the runner's
-  // stock SDK (the newest end).
+  // darwin-x64 is now CROSS-built via osxcross (off the deprecating Intel runner):
+  // the image supplies the SDK (no macos-sdk field) and the toolchain file carries
+  // the 10.6 floor; macos-min stays for the floor gate.
   const dx = release.find((l) => l.leg === 'darwin-x64');
   assert.strictEqual(dx['macos-min'], '10.6');
-  assert.strictEqual(dx['macos-sdk'], '10.6');
+  assert.strictEqual(dx['cross-dockerfile'], 'ci/osxcross-darwin');
+  assert.strictEqual(dx['cross-file'], 'scripts/darwin-x64.toolchain.cmake');
   for (const l of release) {
     if ('macos-min' in l || 'macos-sdk' in l || 'macos-arch' in l) {
-      // Native darwin legs run on a macos runner; the cross leg (darwin-ppc)
-      // builds a darwin target on ubuntu inside a toolchain image.
+      // macos-* floor fields belong on native-darwin (macos runner) or a darwin
+      // CROSS leg on ubuntu — pinned image (darwin-ppc) or built-in-CI (x64/x86).
       const nativeDarwin = !l['guest-platform'] && l.os.startsWith('macos');
-      assert.ok(nativeDarwin || 'cross-image' in l,
-        `${l.leg}: macos-* floor fields belong only on native-darwin or cross-image legs`);
+      assert.ok(nativeDarwin || 'cross-image' in l || 'cross-dockerfile' in l,
+        `${l.leg}: macos-* floor fields belong only on native-darwin or cross legs`);
     }
   }
   for (const l of ci) {
@@ -236,7 +237,9 @@ test('darwin-x86 Tiger leg: engine-only i386 at floor 10.4', () => {
   const release = legsFor('release');
   const dt = release.find((l) => l.leg === 'darwin-x86');
   assert.strictEqual(dt['macos-min'], '10.4');
-  assert.strictEqual(dt['macos-sdk'], '10.4u');
+  // cross-built via legacy osxcross now — the image supplies the 10.4u SDK.
+  assert.strictEqual(dt['cross-dockerfile'], 'ci/osxcross-darwin');
+  assert.strictEqual(dt['cross-file'], 'scripts/darwin-x86.toolchain.cmake');
   assert.strictEqual(dt['macos-arch'], 'i386');
   assert.strictEqual(dt['no-exec'], true);
   assert.strictEqual(dt.publish, false);

@@ -100,6 +100,7 @@ jobs:
           macos-arch: ${{ matrix.macos-arch || '' }}
           no-exec: ${{ matrix.no-exec && 'true' || 'false' }}
           cross-image: ${{ matrix.cross-image || '' }}
+          cross-dockerfile: ${{ matrix.cross-dockerfile || '' }}
           cross-file: ${{ matrix.cross-file || 'scripts/darwin-ppc.toolchain.cmake' }}
           cross-apt: ${{ matrix.cross-apt || '' }}
           atomic-shim: ${{ matrix.atomic-shim && 'true' || 'false' }}
