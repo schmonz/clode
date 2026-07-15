@@ -269,3 +269,48 @@ test('fs.readFileSync latin1 + Buffer.from latin1 round-trip vs host node', (t) 
     roundTripLen: 512, roundTripEqual: true,
   });
 });
+
+// A no-encoding read MUST return a real Buffer, not a bare Uint8Array. CC reads
+// bytes then calls Buffer methods (.toString('hex') for hashes/ids, .readUInt8/
+// .readUInt32BE for binary/image parsing, Buffer.isBuffer for type dispatch). A
+// Uint8Array is duck-close enough to pass smoke but silently wrong: .toString('hex')
+// decimal-joins, .readUInt8 is undefined — no wall, no throw. Covers readFileSync,
+// fd readSync's own path is separate; here the SYNC + PROMISES no-encoding returns.
+// A1-audit finding #1 (2026-07-15). Diffs node vs the shim.
+const BUFRET_PROG = `
+const fs = require('node:fs');
+const path = require('node:path');
+const dir = process.argv[2];
+(async () => {
+  const p = path.join(dir, 'bytes.bin');
+  fs.writeFileSync(p, Buffer.from([0x61, 0x62, 0x63, 0xff, 0x00]));
+  const out = {};
+  const b = fs.readFileSync(p);                       // no encoding
+  out.syncIsBuffer = Buffer.isBuffer(b);
+  out.syncHex = b.toString('hex');
+  out.syncReadUInt8 = typeof b.readUInt8 === 'function' ? b.readUInt8(3) : 'no-fn';
+  out.syncSliceIsBuffer = Buffer.isBuffer(b.slice(0, 2));
+  const pb = await fs.promises.readFile(p);           // no encoding (promises)
+  out.promIsBuffer = Buffer.isBuffer(pb);
+  out.promHex = pb.toString('hex');
+  console.log(JSON.stringify(out));
+})();
+`;
+
+test('fs no-encoding reads return a real Buffer vs host node', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-bufret-'));
+  const f = path.join(base, 'bufret.cjs');
+  fs.writeFileSync(f, BUFRET_PROG);
+  const nodeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-bufret-node-'));
+  const tjsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-bufret-tjs-'));
+  const nodeOut = require('node:child_process')
+    .execFileSync(process.execPath, [f, nodeDir], { encoding: 'utf8' }).trim();
+  const r = runLoader(f, [tjsDir]);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.stdout.trim(), nodeOut);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), {
+    syncIsBuffer: true, syncHex: '616263ff00', syncReadUInt8: 255,
+    syncSliceIsBuffer: true, promIsBuffer: true, promHex: '616263ff00',
+  });
+});

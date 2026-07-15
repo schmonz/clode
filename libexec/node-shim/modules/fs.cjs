@@ -152,6 +152,17 @@ function readAll(fd) {
   return out.subarray(0, got);
 }
 
+// A no-encoding read returns a Buffer in node — CC then calls Buffer methods on
+// it (.toString('hex') for hashes/ids, .readUInt8/.readUInt32BE for binary/image
+// parsing, Buffer.isBuffer for type dispatch). `data` is a Uint8Array; Buffer.from
+// over its backing ArrayBuffer is a zero-copy VIEW of exactly these bytes. Without
+// this the return was a bare Uint8Array — duck-close enough to pass smoke but
+// silently wrong (.toString('hex') decimal-joins, .readUInt8 is undefined). This
+// was the deferred "Buffer returns upgrade" (A1-audit finding #1, 2026-07-15).
+function asBuffer(data) {
+  return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+}
+
 function readFileSync(p, opts) {
   const enc = typeof opts === 'string' ? opts : opts?.encoding;
   const fd = FSS.open(p, 'r');
@@ -159,7 +170,7 @@ function readFileSync(p, opts) {
     const data = readAll(fd);
     if (enc === 'utf8' || enc === 'utf-8') return td.decode(data);
     if (isLatin1(enc)) return latin1Decode(data);
-    return data;
+    return asBuffer(data);
   } finally { FSS.close(fd); }
 }
 
@@ -413,7 +424,7 @@ const promises = {
     const data = await tjs.readFile(p); // Uint8Array, verified against pinned tjs v26.6.0
     if (enc === 'utf8' || enc === 'utf-8') return td.decode(data);
     if (isLatin1(enc)) return latin1Decode(data);
-    return data;
+    return asBuffer(data);
   },
   writeFile: async (p, data) => { writeFileSync(p, data); },
   utimes: async (p, atime, mtime) => { await tjs.utime(p, timeToMs(atime), timeToMs(mtime)); },
