@@ -41,7 +41,7 @@ Usage:
   clode build [--out PATH]                 build a standalone quaude binary (the pinned
                                            tjs runtime + the compiled Claude Code
                                            bundle) on this machine; default ./quaude
-  clode build --naude                      bundle Claude Code as a Node SEA; Node hosts only
+  clode build --naude [--out PATH]         bundle Claude Code as a Node SEA; Node hosts only
   clode fetch [channel|version]            fetch a fresh upstream provider, then exit
   clode watch                              run one update-signal check now (newer version
                                            + signals that bear on repackaging), print a

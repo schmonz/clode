@@ -188,8 +188,13 @@ function seaSign(phase, bin) {
 // Embed THIS node (the running interpreter) + the blob into a stand-alone binary. The steps
 // are identical on every OS except the two genuinely per-format bits: the Mach-O segment name
 // postject needs on macOS, and the OS signing (isolated in sea-sign.cjs).
-async function buildBinary(blob) {
-  const bin = seaBin(REPO, 'naude');                 // naude.exe on win32, naude elsewhere
+//
+// outOverride (from --out) picks WHERE the final binary lands; the scratch dir (TOOLCHAIN/OUT
+// — bundle, deps.tar, blob, sea-config) is unaffected either way, same convention as
+// clode-fuse.cjs's quaude --out (an explicit path is the user's, verbatim; only the default
+// gets the per-tag treatment, here build/<tag>/naude instead of a bare basename).
+async function buildBinary(blob, outOverride) {
+  const bin = outOverride || seaBin(REPO, 'naude');  // naude.exe on win32, naude elsewhere
   fs.mkdirSync(path.dirname(bin), { recursive: true });
   // A just-run binary can stay locked briefly (Windows keeps the image section open past
   // process exit, and AV may be scanning the ~90MB file), so overwriting it in place can throw
@@ -272,9 +277,26 @@ function parseCliArg(argv) {
   return resolved;
 }
 
+// Parse `--out <path>`: where the final naude binary is written. OPTIONAL —
+// defaults to seaBin(REPO, 'naude') (build/<tag>/naude[.exe]) when absent, same
+// as every other --out consumer in this repo. Resolved to an absolute path here
+// (once) so every downstream consumer (buildBinary, the log line) gets the same
+// value regardless of the caller's cwd.
+export function parseOutArg(argv) {
+  const i = argv.indexOf('--out');
+  if (i < 0) return null;
+  const p = argv[i + 1];
+  if (!p) {
+    console.error('build-naude: --out requires a path argument.');
+    process.exit(1);
+  }
+  return path.resolve(p);
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const cliCjs = parseCliArg(argv);
+  const outOverride = parseOutArg(argv);
   fs.mkdirSync(OUT, { recursive: true });
   ensureToolchain();
   const bundle = esbuildBundle();
@@ -285,7 +307,7 @@ async function main() {
   const { tar, sigFile } = stageDeps();
   const { cfgPath, blob } = writeSeaConfig({ bundle, cliCjs, tar, sigFile });
   execFileSync(process.execPath, ['--experimental-sea-config', cfgPath], { stdio: 'inherit' });
-  const bin = await buildBinary(blob);
+  const bin = await buildBinary(blob, outOverride);
   smokeCheck(bin);
   console.error(`naude SEA → ${bin}`);
 }

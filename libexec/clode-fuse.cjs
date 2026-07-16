@@ -174,22 +174,37 @@ async function clodeBuild(args, opts) {
   const fail = (m) => { stderr.write('clode: ' + m + '\n'); return 1; };
   const SCALE = timeoutScale(env);
 
+  // -- argv: parsed ONCE for the whole subcommand, before either branch below
+  // consumes it. --naude used to short-circuit BEFORE this validation
+  // existed, which meant an unknown flag after --naude was silently ignored,
+  // --naude + --self silently picked one target and dropped the other, and
+  // --out was forwarded to a stub that quietly dropped it too (build wrote to
+  // build/<tag>/naude and exited 0 regardless of what the user asked for).
+  // Unifying the parse means both branches share one unknown-arg contract.
+  let naude = false;
+  let self = false;
+  let out = null;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--naude') { naude = true; }
+    else if (args[i] === '--self') { self = true; }
+    else if (args[i] === '--out' && args[i + 1]) { out = args[++i]; }
+    else return fail(`build: unknown argument '${args[i]}' (usage: clode build [--self] [--out PATH])`);
+  }
+  // --naude (a Node SEA) and --self (the native clode builder) are different
+  // build TARGETS, not composable modifiers — silently picking one would
+  // build something other than what the user asked for.
+  if (naude && self) {
+    return fail('build: --naude and --self are different build targets (Node SEA vs the native clode builder) — pick one');
+  }
+
   // -- naude branch (Task 4): `clode build --naude` bakes Claude Code into a
   // Node SEA instead of fusing a quaude. It reuses the SAME resolve + extract
   // machinery as the quaude path to land the user's cli.cjs, then hands that
   // cli.cjs to scripts/build-naude.mjs (which runs the esbuild/postject SEA
   // pipeline — Node >= 24 hosts only) and RETURNS, never touching the fuse.
-  if (args.includes('--naude')) {
+  if (naude) {
     const ROOT = path.resolve(opts.libexec, '..');
-    // --out is honored on the quaude path; pass it through so a future
-    // build-naude --out is respected. NOTE (Task 4): build-naude.mjs does NOT
-    // yet accept --out (it writes to build/<tag>/naude); this is a pass-through
-    // stub — build-naude ignores an unknown flag's presence today, so we only
-    // forward --out when explicitly given.
-    const outArgs = [];
-    for (let i = 0; i < args.length; i++) {
-      if (args[i] === '--out' && args[i + 1]) { outArgs.push('--out', args[++i]); }
-    }
+    const outArgs = out ? ['--out', out] : [];
     // Reuse the quaude path's resolve/extract helpers verbatim — no duplication.
     let bin = resolve.resolveClaudeBin({ env });
     if (bin == null || !resolve.pathExists(bin)) {
@@ -223,16 +238,9 @@ async function clodeBuild(args, opts) {
     return 0;
   }
 
-  // -- argv: --self + --out only; anything else is an error (this is clode's
-  // own namespace — nothing here passes through to Claude Code).
-  let out = null;
-  let self = false;
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--out' && args[i + 1]) { out = args[++i]; }
-    else if (args[i] === '--self') { self = true; }
-    else return fail(`build: unknown argument '${args[i]}' (usage: clode build [--self] [--out PATH])`);
-  }
-  // On Windows a bare `clode build` should yield a runnable .exe. An explicit
+  // naude/self/out were already parsed + validated above (shared with the
+  // --naude branch, which returned before reaching here). On Windows a bare
+  // `clode build` should yield a runnable .exe. An explicit
   // --out is respected verbatim (the user owns that name); only the DEFAULT
   // gains .exe. win32-guarded → POSIX default (quaude / clode-native) unchanged.
   out = path.resolve(out || (self ? 'clode-native' : 'quaude') + (process.platform === 'win32' ? '.exe' : ''));

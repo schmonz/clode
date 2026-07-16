@@ -121,3 +121,49 @@ test('clode build (no --naude): never invokes build-naude.mjs (regression guard)
     assert.ok(!naude, `default build must NOT invoke build-naude.mjs; calls:\n${JSON.stringify(r.calls, null, 2)}`);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// Bug 1: --naude used to short-circuit BEFORE the shared argv validation loop,
+// so an unknown flag after --naude was silently ignored instead of failing
+// loud like the quaude path does. Argv is now parsed ONCE, before either
+// branch, so both get the same unknown-arg contract. No provider/env setup
+// needed — an unknown arg must fail before any resolve/extract work happens.
+test('clode build --naude --bogus: unknown argument fails loud (no spawn, no resolve)', async () => {
+  const r = await runBuild(['--naude', '--bogus'], { ...process.env, DYLD_INSERT_LIBRARIES: '' });
+  assert.strictEqual(r.status, 1);
+  assert.match(r.stderr, /unknown argument '--bogus'/);
+  assert.strictEqual(r.calls.length, 0, `no subprocess should have been spawned; calls:\n${JSON.stringify(r.calls, null, 2)}`);
+});
+
+// --naude and --self are different build TARGETS (Node SEA vs the native
+// clode builder) — silently picking one for the user (the old behavior:
+// --naude won, --self was dropped) is exactly the kind of silent-wrong-output
+// this task flags. Must fail loud instead.
+test('clode build --naude --self: different targets, fails loud (does not silently pick one)', async () => {
+  const r = await runBuild(['--naude', '--self'], { ...process.env, DYLD_INSERT_LIBRARIES: '' });
+  assert.strictEqual(r.status, 1);
+  assert.match(r.stderr, /--naude/);
+  assert.match(r.stderr, /--self/);
+  assert.strictEqual(r.calls.length, 0, `no subprocess should have been spawned; calls:\n${JSON.stringify(r.calls, null, 2)}`);
+});
+
+// Bug 1 continued: --naude --out used to be silently swallowed by
+// build-naude.mjs's parseCliArg (which only reads --cli) — the build would
+// exit 0, print success, and write to build/<tag>/naude instead of the path
+// the user asked for. --out must now actually be forwarded.
+test('clode build --naude --out PATH: forwards --out to build-naude.mjs', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-out-'));
+  try {
+    const { env } = seedProvider(dir);
+    const wantOut = path.join(dir, 'somewhere', 'naude-out');
+    const r = await runBuild(['--naude', '--out', wantOut], env);
+
+    const naude = r.calls.find((c) => Array.isArray(c.args)
+      && c.args.some((a) => typeof a === 'string' && a.endsWith(path.join('scripts', 'build-naude.mjs'))));
+    assert.ok(naude, `build-naude.mjs was not invoked; calls:\n${JSON.stringify(r.calls, null, 2)}`);
+    const outIdx = naude.args.indexOf('--out');
+    assert.ok(outIdx >= 0, `--out not forwarded to build-naude; args: ${JSON.stringify(naude.args)}`);
+    assert.strictEqual(naude.args[outIdx + 1], wantOut);
+
+    assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
