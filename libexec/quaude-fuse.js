@@ -131,6 +131,12 @@ if (role === 'builder') {
   // clode-fuse.cjs's materialization step writes this member back to
   // <payload>/package.json, the parent of <payload>/libexec.
   members.push({ name: 'package.json', data: await mustRead(path.join(path.dirname(libexecDir), 'package.json'), 'package.json member') });
+  // package-lock.json, BARE member name, same reasoning as package.json just
+  // above: the lockfile gate's (assertClosureMatchesLockfile,
+  // clode-fuse.cjs) SOURCE OF TRUTH. A fused builder ships no repo checkout,
+  // so when it later runs `clode build`, its clode-fuse.cjs needs this on
+  // disk to verify node_modules matches the lockfile before embedding.
+  members.push({ name: 'package-lock.json', data: await mustRead(path.join(path.dirname(libexecDir), 'package-lock.json'), 'package-lock.json member') });
   // The PRISTINE tjs template rides along (Q2 Decision 2): a shipped builder
   // must be able to fuse with NOTHING on disk — `clode build` materializes this
   // member when no CLODE_TJS/build-tree template exists. Pristine = the
@@ -207,6 +213,12 @@ const manifest = {
   idna: deriveIdnaLevel(),
   template: extras.template,
   hooks: extras.hooks,
+  // The declared bill of materials, name@version, computed node-side
+  // (clode-fuse.cjs's computeDepClosure) and carried verbatim — answers "what
+  // is in this quaude?" from manifest.json alone, without cross-referencing
+  // package.json + node_modules. Distinct from DEPS (bare names, above,
+  // consumed only to collect members) — never itself re-emitted.
+  bom: extras.bom,
   // The clode that built this quaude (clode-fuse.cjs's opts.self, rides in via
   // extras.json). Read by the bootstrap (quaude-bootstrap.mjs) to bake
   // CLODE_SELF, so the patched in-app updater can call back to a real builder

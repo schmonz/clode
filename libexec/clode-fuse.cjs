@@ -79,7 +79,15 @@ function readDirectDeps(pkgJsonPath) {
 // skip, when a declared dependency is missing under nmDir — the whole point
 // of computing this at BUILD time is to catch that before it becomes a
 // runtime "Cannot find module" deep in a session.
-function computeDepClosure(nmDir, directDeps) {
+//
+// opts.versions: an optional Map the walk fills as a side effect, name ->
+// the version each package's OWN package.json declares (i.e. what is
+// actually on disk, about to be embedded). Callers use this to render the
+// manifest BOM (name@version) and to gate node_modules against
+// package-lock.json (assertClosureMatchesLockfile, below) without a second
+// read pass over the same files.
+function computeDepClosure(nmDir, directDeps, opts = {}) {
+  const versions = opts.versions;
   const seen = new Set();
   const queue = directDeps.map((name) => ({ name, via: 'package.json' }));
   while (queue.length) {
@@ -93,9 +101,70 @@ function computeDepClosure(nmDir, directDeps) {
     } catch (e) {
       throw new Error(`ext-dep closure: '${name}' (required by ${via}) not found under ${nmDir} (run clode once, or npm install) [${(e && e.message) || e}]`);
     }
+    if (versions) versions.set(name, pkg.version);
+    // Only `dependencies` are followed. `optionalDependencies` are
+    // deliberately NOT walked: quaude runs under tjs (no native addon
+    // support) and a SEA cannot carry .node binaries either, so an optional
+    // dep that happens to be a native addon could never load in either
+    // target even if embedded — and "optional" already means the package
+    // works without it. (Today's closure declares none; this is the general
+    // rule, not a reaction to a specific package.)
     for (const dep of Object.keys(pkg.dependencies || {})) queue.push({ name: dep, via: name });
+
+    // Peer dependencies are NOT walked either — same reasoning as
+    // optionalDependencies above, confirmed concretely by the one package
+    // that has any: `ws`'s peers (bufferutil, utf-8-validate) are both native
+    // addons, both marked optional in peerDependenciesMeta, and neither is
+    // installed. Silently skipping an OPTIONAL peer is fine (it is optional
+    // by the package's own declaration). But silently skipping a REQUIRED
+    // (non-optional) peer would be the exact duplication-audit-§1 bug through
+    // a new door: a future dep bump could add a real, load-bearing peer that
+    // this walk never follows, quaude would still build+PONG+attest clean,
+    // and it would fail "Cannot find module" the moment Claude Code actually
+    // exercised that code path. So: fail loud instead, naming the package and
+    // the peer, so a human decides (embed it as a real dependency, or mark it
+    // optional upstream) rather than shipping a silently-broken binary.
+    // Nothing triggers this today — that is the point; it is a tripwire.
+    const peerMeta = pkg.peerDependenciesMeta || {};
+    for (const peer of Object.keys(pkg.peerDependencies || {})) {
+      const optional = !!(peerMeta[peer] && peerMeta[peer].optional);
+      if (!optional) {
+        throw new Error(`ext-dep closure: '${name}' declares a REQUIRED peer dependency '${peer}' that computeDepClosure does not follow (only optional peers are skipped, by design — see the comment above) — either add '${peer}' to package.json's dependencies so it is embedded, or mark it optional in '${name}'s peerDependenciesMeta, then rebuild`);
+      }
+    }
   }
   return [...seen].sort();
+}
+
+// npm ci guarantees node_modules matches package-lock.json bit-for-bit; a
+// dev's plain `npm install` does not — it can leave node_modules AHEAD of (or
+// behind) the lockfile, same package name, different resolved version.
+// computeDepClosure above embeds whatever bytes are ACTUALLY on disk, so
+// without this gate a stale/dirty node_modules would silently ship a quaude
+// with an unpinned dependency version, and nothing would ever say so.
+//
+// Deliberately targeted, not `npm ci` shelled out: this only reads (never
+// mutates) node_modules and package-lock.json, checking EXACTLY the closure
+// we are about to embed (closureVersions, filled by computeDepClosure's
+// walk — no second directory read). Fails loud, naming the package, both
+// versions, and the fix.
+function assertClosureMatchesLockfile(closureVersions, lockfilePath) {
+  let lock;
+  try {
+    lock = JSON.parse(fs.readFileSync(lockfilePath, 'utf8'));
+  } catch (e) {
+    throw new Error(`cannot read '${lockfilePath}' to verify the ext-dep closure matches the lockfile (${(e && e.message) || e})`);
+  }
+  const packages = lock.packages || {};
+  for (const [name, diskVersion] of closureVersions) {
+    const entry = packages[`node_modules/${name}`];
+    if (!entry || !entry.version) {
+      throw new Error(`ext-dep closure: '${name}' (resolved ${diskVersion} under node_modules) has no entry in '${lockfilePath}' — node_modules is out of sync with the lockfile; run 'npm ci'`);
+    }
+    if (entry.version !== diskVersion) {
+      throw new Error(`ext-dep closure: '${name}' is ${diskVersion} under node_modules but package-lock.json pins ${entry.version} — node_modules is out of sync with the lockfile; run 'npm ci'`);
+    }
+  }
 }
 
 // A minimal in-process stand-in for the Anthropic Messages API, answering every
@@ -387,6 +456,13 @@ async function clodeBuild(args, opts) {
         // later computes the closure for the quaude it fuses (duplication
         // audit §1).
         else if (name === 'package.json') dest = path.join(mat, name);
+        // package-lock.json (bare, archive ROOT): the lockfile gate's SOURCE
+        // OF TRUTH (assertClosureMatchesLockfile below). Same reasoning as
+        // package.json just above — a fused builder ships no repo checkout,
+        // so without this member a builder-fused `clode build` would have
+        // nowhere to read package-lock.json from when it later gates the
+        // closure for the quaude it fuses.
+        else if (name === 'package-lock.json') dest = path.join(mat, name);
         else continue;
         fs.mkdirSync(path.dirname(dest), { recursive: true });
         fs.writeFileSync(dest, Buffer.from(bytes));
@@ -402,6 +478,10 @@ async function clodeBuild(args, opts) {
     // otherwise), unlike the `ROOT` const above (which is fixed to
     // opts.libexec's parent and stays virtual under a fused builder).
     const pkgJsonPath = path.join(path.dirname(libexec), 'package.json');
+    // Same tree as pkgJsonPath, same reasoning: the lockfile gate's source of
+    // truth (assertClosureMatchesLockfile below) — mat/package-lock.json under
+    // a fused builder (materialized above), the real checkout otherwise.
+    const lockfilePath = path.join(path.dirname(libexec), 'package-lock.json');
 
     // -- template resolution: an explicit CLODE_TJS wins (and must exist —
     // fail loud, never fall through a typo); then the EMBEDDED pristine
@@ -544,12 +624,33 @@ async function clodeBuild(args, opts) {
     // hand-maintained list living in quaude-fuse.js that silently rotted
     // whenever package.json's dependencies changed without a matching edit
     // there (duplication audit §1).
+    // closureVersions is filled as a side effect of the walk (name -> the
+    // version each package's OWN package.json declares) — it feeds BOTH the
+    // lockfile gate and the manifest BOM below, off one read pass.
     let extDeps;
+    const closureVersions = new Map();
     try {
-      extDeps = computeDepClosure(nmDir, readDirectDeps(pkgJsonPath));
+      extDeps = computeDepClosure(nmDir, readDirectDeps(pkgJsonPath), { versions: closureVersions });
     } catch (e) {
       return fail(`build: ${(e && e.message) || e}`);
     }
+
+    // -- lockfile gate: node_modules must match package-lock.json (Task b).
+    // `npm ci` guarantees this; a dev's `npm install` does not — a
+    // stale/dirty node_modules would otherwise silently embed an unpinned
+    // dependency version. See assertClosureMatchesLockfile's comment for why
+    // this reads targeted files rather than shelling out to `npm ci`.
+    try {
+      assertClosureMatchesLockfile(closureVersions, lockfilePath);
+    } catch (e) {
+      return fail(`build: ${(e && e.message) || e}`);
+    }
+
+    // -- manifest BOM (Task a): the resolved closure as name@version, so "what
+    // is in this quaude?" is answerable at a glance from manifest.json alone,
+    // without cross-referencing package.json + node_modules by hand. Sorted
+    // the same as extDeps (deterministic, diffable across builds).
+    const depsBom = extDeps.map((name) => `${name}@${closureVersions.get(name)}`);
 
     // -- node-side manifest fields (the worker adds engine/idna/members/fusedAt).
     const extras = {
@@ -567,6 +668,13 @@ async function clodeBuild(args, opts) {
       // walked from nmDir just above. NOT part of the quaude manifest (the
       // worker consumes this from extras.json but never re-emits it).
       deps: extDeps,
+      // The declared bill of materials — name@version for every package in
+      // the closure just above — carried through to manifest.json verbatim
+      // (Task a). Distinct from `deps` (bare names, the worker's own member-
+      // collection input, never re-emitted): `bom` IS re-emitted, into the
+      // shipped manifest, so a built quaude states its own closure without
+      // needing extras.json (which does not ship).
+      bom: depsBom,
       // The clode that built this quaude. Its patched in-app updater calls back
       // here (CLODE_SELF): a baked binary cannot rebuild itself. null when unknown,
       // so the updater fails loud rather than spawning something wrong. NOTE:
@@ -684,5 +792,5 @@ async function clodeBuild(args, opts) {
 
 module.exports = {
   clodeBuild, startPongMock, cannedSSE, smokeTarget, timeoutScale, codesignAdHoc,
-  readDirectDeps, computeDepClosure,
+  readDirectDeps, computeDepClosure, assertClosureMatchesLockfile,
 };

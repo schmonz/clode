@@ -93,7 +93,7 @@ test('attest golden: stable manifest fields + full member verification', async (
 
   // GOLDEN (stable fields only — fusedAt deliberately unchecked beyond shape):
   assert.deepStrictEqual(Object.keys(manifest).sort(), [
-    'builder', 'bundleVersion', 'clodeVersion', 'engine', 'entry', 'fusedAt', 'hooks',
+    'bom', 'builder', 'bundleVersion', 'clodeVersion', 'engine', 'entry', 'fusedAt', 'hooks',
     'idna', 'members', 'quaude', 'role', 'template',
   ]);
   assert.strictEqual(manifest.quaude, '1');
@@ -111,18 +111,39 @@ test('attest golden: stable manifest fields + full member verification', async (
   assert.strictEqual(manifest.hooks['extract-claude-js.cjs'],
     sha256File(path.join(REPO, 'libexec/extract-claude-js.cjs')));
   assert.ok(!Number.isNaN(Date.parse(manifest.fusedAt)), 'fusedAt not ISO-parseable');
-  for (const m of ['cli.qbc', 'bun-shim.cjs', 'node-shim/loader.cjs', 'node-shim/modules/process.cjs', 'libexec/target-env.cjs']) {
+  // target-env.cjs is a BARE member name (archive root, no libexec/ prefix —
+  // see quaude-fuse.js's comment on why): pre-existing test bug fixed
+  // in-passing here (this exact assertion block is what Task a's BOM checks
+  // extend below) — 'libexec/target-env.cjs' never was a real member name.
+  for (const m of ['cli.qbc', 'bun-shim.cjs', 'node-shim/loader.cjs', 'node-shim/modules/process.cjs', 'target-env.cjs']) {
     assert.ok(manifest.members[m], `manifest missing member ${m}`);
   }
   // The shipped loader member must be byte-identical to the committed loader.
   assert.strictEqual(manifest.members['node-shim/loader.cjs'].sha256,
     sha256File(path.join(REPO, 'libexec/node-shim/loader.cjs')));
 
+  // BOM (Task a): the declared closure as name@version — states what this
+  // quaude embeds without cross-referencing package.json + node_modules.
+  const pkg = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8'));
+  assert.ok(Array.isArray(manifest.bom) && manifest.bom.length >= Object.keys(pkg.dependencies).length,
+    `bom implausibly small: ${JSON.stringify(manifest.bom)}`);
+  for (const spec of manifest.bom) assert.match(spec, /^[^@]+@\S+$/, `not a name@version spec: ${spec}`);
+  assert.ok(manifest.bom.some((s) => s.startsWith('semver@')), manifest.bom.join(', '));
+  // Every declared direct dependency must appear (by name) in the BOM.
+  for (const name of Object.keys(pkg.dependencies)) {
+    assert.ok(manifest.bom.some((s) => s.startsWith(`${name}@`)), `'${name}' missing from manifest.bom`);
+  }
+
   // Verification: every member line ok, summary present, count matches
-  // manifest members + manifest.json itself.
+  // manifest members + manifest.json itself + one SET-verification line per
+  // declared BOM entry (Task a stretch goal: attest also checks that every
+  // declared package landed members, not just that present members are intact).
   const memberLines = lines.filter((l) => /^(ok {2}|FAIL) /.test(l));
   assert.strictEqual(memberLines.filter((l) => l.startsWith('FAIL')).length, 0);
-  assert.strictEqual(memberLines.length, Object.keys(manifest.members).length + 1);
+  assert.strictEqual(memberLines.length, Object.keys(manifest.members).length + 1 + manifest.bom.length);
+  const bomLines = memberLines.filter((l) => l.includes(' bom: '));
+  assert.strictEqual(bomLines.length, manifest.bom.length);
+  assert.ok(bomLines.every((l) => l.startsWith('ok  ')), bomLines.join('\n'));
   assert.strictEqual(lines.filter(Boolean).pop(), 'quaude-attest: all members verified');
 });
 

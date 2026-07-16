@@ -62,3 +62,23 @@ test('QUAUDE_FLAGS is the single source of truth for the known set', async () =>
     assert.deepStrictEqual(r.unknown, []);
   }
 });
+
+// depNameFromSpec: manifest.bom entries are "name@version" (Task a); this is
+// the --quaude-attest SET-verification helper that recovers the package name
+// to check for presence under node_modules/<name>/. Split on the LAST '@',
+// not the first — a scoped package's spec (e.g. "@scope/name@1.2.3") has a
+// leading '@' that is not the version separator.
+test('depNameFromSpec: plain package name@version', async () => {
+  const { depNameFromSpec } = await load();
+  assert.strictEqual(depNameFromSpec('semver@7.6.0'), 'semver');
+});
+
+test('depNameFromSpec: scoped package name@version splits on the LAST @', async () => {
+  const { depNameFromSpec } = await load();
+  assert.strictEqual(depNameFromSpec('@scope/name@1.2.3'), '@scope/name');
+});
+
+test('depNameFromSpec: no @ at all returns the spec verbatim (never throws)', async () => {
+  const { depNameFromSpec } = await load();
+  assert.strictEqual(depNameFromSpec('nakedname'), 'nakedname');
+});

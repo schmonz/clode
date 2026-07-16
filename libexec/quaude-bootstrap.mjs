@@ -40,6 +40,16 @@ export function carveQuaudeArgs(args, known = QUAUDE_FLAGS) {
   return { quaude, rest, unknown };
 }
 
+// manifest.bom entries are "name@version" (Task a); scoped packages
+// (@scope/name@version) have a leading '@' that is NOT the version
+// separator, so this splits on the LAST '@', not the first. Pure + exported
+// for the same reason carveQuaudeArgs is: host-node unit tests
+// (test/quaude-argv.test.cjs) can exercise it without a fused binary.
+export function depNameFromSpec(spec) {
+  const i = spec.lastIndexOf('@');
+  return i > 0 ? spec.slice(0, i) : spec;
+}
+
 async function sha256hex(bytes) {
   const d = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
   return Array.from(d, (b) => b.toString(16).padStart(2, '0')).join('');
@@ -185,6 +195,20 @@ async function main() {
         const got = await sha256hex(files.get(m.name));
         if (got !== m.sha256) ok = false;
         console.log(`${got === m.sha256 ? 'ok  ' : 'FAIL'} ${m.name} (${m.len} bytes)`);
+      }
+      // SET verification (Task a, stretch goal): the per-member loop above
+      // only proves that whatever IS in the archive is intact — it says
+      // nothing about a whole declared package being silently ABSENT.
+      // manifest.bom (name@version) is the declared closure; check that every
+      // one of them actually landed a member in this same archive. `files`
+      // already holds every member this trailer carries (step 4, above), so
+      // this is a presence check, not a new read.
+      for (const spec of manifest.bom || []) {
+        const name = depNameFromSpec(spec);
+        const marker = `node_modules/${name}/package.json`;
+        const present = files.has(marker);
+        if (!present) ok = false;
+        console.log(`${present ? 'ok  ' : 'FAIL'} bom: ${spec} -> ${marker}`);
       }
       console.log(ok ? 'quaude-attest: all members verified' : 'quaude-attest: VERIFICATION FAILED');
       tjs.exit(ok ? 0 : 1);

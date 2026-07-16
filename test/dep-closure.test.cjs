@@ -21,7 +21,7 @@ const path = require('node:path');
 
 const REPO = path.resolve(__dirname, '..');
 const NM = path.join(REPO, 'node_modules');
-const { readDirectDeps, computeDepClosure } = require('../libexec/clode-fuse.cjs');
+const { readDirectDeps, computeDepClosure, assertClosureMatchesLockfile } = require('../libexec/clode-fuse.cjs');
 
 // Build a fake flat node_modules from {name: {dependencies}} — the layout npm
 // produces for this closure (no version conflicts, every package a direct child).
@@ -137,4 +137,143 @@ test('computeDepClosure: a missing TRANSITIVE fails loud and names who required 
     assert.throws(() => computeDepClosure(nm, ['top']),
       /ext-dep closure: 'gone' \(required by top\) not found/);
   } finally { fs.rmSync(nm, { recursive: true, force: true }); }
+});
+
+// ---- Task (c): optional vs required peer dependencies -----------------------
+// The one real-world case (ws -> bufferutil/utf-8-validate, both optional):
+// neither is followed, neither fails the build. A REQUIRED peer is a
+// different door onto the same duplication-audit-§1 bug (a dep silently not
+// reaching quaude) — so that one must fail loud instead of being skipped.
+
+test('computeDepClosure: an OPTIONAL peer dependency is skipped silently, not followed', () => {
+  const nm = fakeNm({
+    top: {
+      dependencies: {},
+      peerDependencies: { 'maybe-peer': '^1' },
+      peerDependenciesMeta: { 'maybe-peer': { optional: true } },
+    },
+    // 'maybe-peer' is deliberately NOT installed here — the real-world case
+    // (ws's bufferutil/utf-8-validate are both absent today too). Proves the
+    // walk never even looks it up: if it did, this would throw ENOENT/missing
+    // instead of just excluding it.
+  });
+  try {
+    assert.deepStrictEqual(computeDepClosure(nm, ['top']), ['top']);
+  } finally { fs.rmSync(nm, { recursive: true, force: true }); }
+});
+
+test('computeDepClosure: a REQUIRED (non-optional) peer dependency fails loud — the tripwire', () => {
+  const nm = fakeNm({
+    top: {
+      dependencies: {},
+      peerDependencies: { 'required-peer': '^1' },
+      // no peerDependenciesMeta entry for it -> required by default.
+    },
+  });
+  try {
+    assert.throws(() => computeDepClosure(nm, ['top']),
+      /'top' declares a REQUIRED peer dependency 'required-peer'/);
+  } finally { fs.rmSync(nm, { recursive: true, force: true }); }
+});
+
+test('computeDepClosure: a peer marked optional:false fails loud, same as an unlisted peer', () => {
+  const nm = fakeNm({
+    top: {
+      dependencies: {},
+      peerDependencies: { 'required-peer': '^1' },
+      peerDependenciesMeta: { 'required-peer': { optional: false } },
+    },
+  });
+  try {
+    assert.throws(() => computeDepClosure(nm, ['top']),
+      /'top' declares a REQUIRED peer dependency 'required-peer'/);
+  } finally { fs.rmSync(nm, { recursive: true, force: true }); }
+});
+
+test('GATE: the real closure has no REQUIRED peer today (ws\'s peers are both optional) — confirms the decision', () => {
+  // Not a re-derivation of the decision (already established: ws is the only
+  // package with peers, both optional) — a live check that a future dep bump
+  // hasn't quietly added a required one, which would throw here first.
+  const direct = readDirectDeps(path.join(REPO, 'package.json'));
+  assert.doesNotThrow(() => computeDepClosure(NM, direct));
+});
+
+// ---- Task (a): the manifest BOM (name@version) -------------------------------
+
+test('computeDepClosure: opts.versions captures each package\'s own version (BOM plumbing)', () => {
+  const nm = fakeNm({
+    a: { version: '1.2.3', dependencies: { b: '^1' } },
+    b: { version: '4.5.6' },
+  });
+  try {
+    const versions = new Map();
+    const closure = computeDepClosure(nm, ['a'], { versions });
+    assert.deepStrictEqual(closure, ['a', 'b']);
+    assert.strictEqual(versions.get('a'), '1.2.3');
+    assert.strictEqual(versions.get('b'), '4.5.6');
+  } finally { fs.rmSync(nm, { recursive: true, force: true }); }
+});
+
+test('GATE: the real closure resolves a version for every package (the manifest BOM)', () => {
+  const direct = readDirectDeps(path.join(REPO, 'package.json'));
+  const versions = new Map();
+  const closure = computeDepClosure(NM, direct, { versions });
+  const bom = closure.map((name) => `${name}@${versions.get(name)}`);
+  for (const name of closure) {
+    assert.ok(versions.get(name), `no version resolved for '${name}'`);
+  }
+  assert.ok(bom.some((s) => s.startsWith('semver@')), bom.join(', '));
+  assert.strictEqual(bom.length, closure.length);
+});
+
+// ---- Task (b): node_modules must match package-lock.json --------------------
+
+function fakeLockfile(packages) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dep-lock-'));
+  const lockfilePath = path.join(dir, 'package-lock.json');
+  fs.writeFileSync(lockfilePath, JSON.stringify({ lockfileVersion: 3, packages }));
+  return { dir, lockfilePath };
+}
+
+test('assertClosureMatchesLockfile: matching versions pass silently', () => {
+  const { dir, lockfilePath } = fakeLockfile({ 'node_modules/semver': { version: '7.6.0' } });
+  try {
+    assert.doesNotThrow(() => assertClosureMatchesLockfile(new Map([['semver', '7.6.0']]), lockfilePath));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('assertClosureMatchesLockfile: node_modules AHEAD of the lockfile (npm install, not npm ci) fails loud, naming both versions and the fix', () => {
+  const { dir, lockfilePath } = fakeLockfile({ 'node_modules/semver': { version: '7.6.0' } });
+  try {
+    assert.throws(
+      () => assertClosureMatchesLockfile(new Map([['semver', '7.5.0']]), lockfilePath),
+      /'semver' is 7\.5\.0 under node_modules but package-lock\.json pins 7\.6\.0.*npm ci/,
+    );
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('assertClosureMatchesLockfile: a package missing from the lockfile fails loud and names the fix', () => {
+  const { dir, lockfilePath } = fakeLockfile({});
+  try {
+    assert.throws(
+      () => assertClosureMatchesLockfile(new Map([['ghost', '1.0.0']]), lockfilePath),
+      /'ghost'.*no entry in.*npm ci/,
+    );
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('assertClosureMatchesLockfile: an unreadable lockfile fails loud (never a silent pass)', () => {
+  assert.throws(() => assertClosureMatchesLockfile(new Map(), '/nonexistent/package-lock.json'),
+    /cannot read .* to verify the ext-dep closure matches the lockfile/);
+});
+
+test('GATE: the real node_modules matches the real package-lock.json right now', () => {
+  // Proves the gate is wired correctly against THIS checkout's actual
+  // lockfile shape (v3, packages keyed by 'node_modules/<name>') — a
+  // real-world sanity check alongside the synthetic-lockfile unit tests
+  // above, which grade the comparison logic in isolation.
+  const direct = readDirectDeps(path.join(REPO, 'package.json'));
+  const versions = new Map();
+  computeDepClosure(NM, direct, { versions });
+  assert.doesNotThrow(() => assertClosureMatchesLockfile(versions, path.join(REPO, 'package-lock.json')));
 });
