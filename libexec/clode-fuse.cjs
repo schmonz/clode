@@ -338,14 +338,29 @@ async function clodeBuild(args, opts) {
         }
         bundle = newest.c;
       }
-      // The bundle freezes clode's own logic; warn when libexec sources are
-      // newer (an honest staleness signal, not a gate).
-      try {
-        const bm = fs.statSync(bundle).mtimeMs;
-        const stale = fs.readdirSync(libexec).some((f) => /\.(cjs|mjs|js)$/.test(f)
-          && fs.statSync(path.join(libexec, f)).mtimeMs > bm);
-        if (stale) stderr.write(`clode: build --self: WARNING: ${bundle} is older than libexec sources; re-run \`node scripts/build-bundle.mjs\`\n`);
-      } catch { /* best effort */ }
+      // The bundle freezes clode's own logic as of whenever it was esbuilt, so a
+      // stale one silently fuses a WRONG builder — this has already bitten once
+      // (the sparc cross-fuse campaign hit an 8-day-stale bundle that crashed
+      // inside the fused builder's extractIfNeeded; the fix at the time was a
+      // convention — "run build-bundle.mjs first" — and conventions don't hold,
+      // as this same skew recurring here proves). So this is a hard gate, not a
+      // warning: fail loud and name the exact command rather than fuse a builder
+      // that answers a dead flag surface. Deliberately the simple "newest mtime
+      // under libexec/*.cjs" rule (a superset of clode-main's real require graph)
+      // rather than a clever per-module dependency walk — obviously correct beats
+      // clever here. Applies even when CLODE_MAIN_BUNDLE was set explicitly: an
+      // override picks WHICH bundle, not whether it's fresh, and the failure mode
+      // (wrong builder fused silently) is identical either way.
+      const bm = fs.statSync(bundle).mtimeMs;
+      // Exclude AppleDouble sidecars (this mount litters libexec/._*.cjs — see
+      // git-gc-fails-appledouble): they are not real sources, and their mtimes
+      // can drift independently of the file they shadow, which would make the
+      // gate cry wolf on a genuinely fresh bundle.
+      const staleSrc = fs.readdirSync(libexec).find((f) => /\.(cjs|mjs|js)$/.test(f) && !f.startsWith('._')
+        && fs.statSync(path.join(libexec, f)).mtimeMs > bm);
+      if (staleSrc) {
+        return fail(`build --self: ${bundle} is older than libexec/${staleSrc} — a stale bundle would fuse a WRONG builder (dead flag surface / extractIfNeeded crash); re-run \`node scripts/build-bundle.mjs\` and try again`);
+      }
       stageDir = path.join(work, 'stage');
       fs.mkdirSync(stageDir, { recursive: true });
       fs.copyFileSync(bundle, path.join(stageDir, 'clode-main.bundle.cjs'));

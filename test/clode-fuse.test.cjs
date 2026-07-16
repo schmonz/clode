@@ -42,6 +42,51 @@ test('clode build --self: missing esbuilt bundle fails loudly and names the fix'
   assert.match(r.stderr, /build-bundle\.mjs|CLODE_MAIN_BUNDLE/);
 });
 
+// Regression coverage for the bootstrap↔clode-main skew (sparc cross-fuse
+// campaign hit an 8-day-stale bundle that crashed inside the fused builder's
+// extractIfNeeded): a bundle older than libexec sources must fail loud
+// instead of silently fusing a WRONG builder, and a fresh one must not be
+// blocked by the same gate.
+test('clode build --self: stale esbuilt bundle fails loud and names the fix', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-stale-'));
+  const fakeTjs = path.join(home, 'tjs');
+  fs.writeFileSync(fakeTjs, '#!/bin/sh\nexit 0\n');
+  const bundle = path.join(home, 'clode-main.bundle.cjs');
+  fs.writeFileSync(bundle, '// stale stand-in\n');
+  // Pin the bundle's mtime to well before any real libexec source, so the
+  // gate fires deterministically no matter when this test runs.
+  const old = new Date(1000);
+  fs.utimesSync(bundle, old, old);
+  const r = runEntry(['build', '--self'], {
+    CLODE_TJS: fakeTjs,
+    CLODE_MAIN_BUNDLE: bundle,
+  });
+  assert.strictEqual(r.status, 1);
+  assert.match(r.stderr, /is older than libexec\//);
+  assert.match(r.stderr, /build-bundle\.mjs/);
+});
+
+test('clode build --self: fresh esbuilt bundle passes the staleness gate', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-fresh-'));
+  const fakeTjs = path.join(home, 'tjs');
+  fs.writeFileSync(fakeTjs, '#!/bin/sh\nexit 0\n');
+  const bundle = path.join(home, 'clode-main.bundle.cjs');
+  fs.writeFileSync(bundle, '// fresh stand-in\n');
+  // Pin the bundle's mtime well into the future so it postdates every real
+  // libexec source regardless of when this test runs. The dummy CLODE_TJS
+  // is not a real tjs binary, so the run still fails further down the
+  // pipeline (e.g. at codesign) — that's expected; this test only asserts
+  // the staleness gate itself did not block a fresh bundle.
+  const future = new Date(Date.now() + 1000 * 60 * 60 * 24 * 365 * 50);
+  fs.utimesSync(bundle, future, future);
+  const r = runEntry(['build', '--self'], {
+    CLODE_TJS: fakeTjs,
+    CLODE_MAIN_BUNDLE: bundle,
+  });
+  assert.doesNotMatch(r.stderr, /is older than libexec\//);
+  assert.doesNotMatch(r.stderr, /no esbuilt clode-main bundle/);
+});
+
 test('clode build: missing tjs template fails loudly and names the fix', () => {
   const r = runEntry(['build'], { CLODE_TJS: '/nonexistent/tjs' });
   assert.strictEqual(r.status, 1);
