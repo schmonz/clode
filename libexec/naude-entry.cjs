@@ -31,6 +31,7 @@ const fs = require('node:fs');
 const { spawn } = require('node:child_process');
 const seaHelpers = require('./naude-sea.cjs');
 const { shapeTargetEnv } = require('./target-env.cjs');
+const { isExecutableFile } = require('./clode-hosttools.cjs');
 // Baked at build time by scripts/build-naude.mjs (esbuild --define): the absolute
 // path of the clode that built this naude. A naude cannot rebuild itself, so its
 // patched in-app updater calls back to that builder. Undefined in a plain
@@ -101,12 +102,16 @@ function runNaude(opts = {}) {
     NODE_PATH: priorNodePath ? nodeModules + path.delimiter + priorNodePath : nodeModules,
   });
   // The contract every built target applies to itself (was the runner's job).
+  // `exists` (mere presence) answers the trustd question; rg candidates need
+  // `isExec` (isFile + +x) — see target-env.cjs's findOnPath for why the two
+  // must not be conflated.
   shapeTargetEnv({
     env: childEnv,
     self: builder,
     platform: process.platform,
     delimiter: path.delimiter,
     exists: fs.existsSync,
+    isExec: isExecutableFile,
     dirname: path.dirname,
   });
 

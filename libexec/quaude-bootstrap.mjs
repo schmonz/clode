@@ -55,9 +55,19 @@ function tjsPlatform(uaPlatform) {
   }
 }
 
+// POSIX st_mode bits (no node:fs constants module under tjs): S_IFMT/S_IFREG
+// isolate the file-type bits, S_IXUSR|S_IXGRP|S_IXOTH the executable ones.
+// Verified against a real tjs.stat: a regular file's mode is 0o100644 or
+// 0o100755, a directory's is 0o040755 (S_IFMT masks to 0o100000 / 0o040000).
+const S_IFMT = 0o170000;
+const S_IFREG = 0o100000;
+const S_IXALL = 0o111;
+
 // The env contract every built target applies to itself. ASYNC because tjs has
-// no statSync: probe every candidate target-env can ask about (probePaths), then
-// answer synchronously from the result. Exported + primitive-injected so it
+// no statSync: probe every candidate target-env can ask about (probePaths),
+// stat each one ONCE, then answer shapeTargetEnv's two DIFFERENT questions
+// ("does it exist?" vs "can I run it?" — see target-env.cjs's findOnPath)
+// synchronously from that single pass. Exported + primitive-injected so it
 // unit-tests under host node — the file's existing carveQuaudeArgs pattern.
 export async function bootstrapTargetEnv(tjs, opts) {
   const {
@@ -70,9 +80,17 @@ export async function bootstrapTargetEnv(tjs, opts) {
   const delimiter = platform === 'win32' ? ';' : ':';
   const sep = platform === 'win32' ? '\\' : '/';
 
-  const present = new Set();
+  // path -> {exists, isExec}, filled from ONE tjs.stat per candidate.
+  const stats = new Map();
   for (const p of probe({ env: tjs.env, platform, delimiter })) {
-    try { await tjs.stat(p); present.add(p); } catch { /* absent */ }
+    try {
+      const st = await tjs.stat(p);
+      const mode = st.mode || 0;
+      const isFile = (mode & S_IFMT) === S_IFREG;
+      stats.set(p, { exists: true, isExec: isFile && (mode & S_IXALL) !== 0 });
+    } catch {
+      stats.set(p, { exists: false, isExec: false }); // absent, EACCES, etc.
+    }
   }
 
   return shape({
@@ -80,7 +98,8 @@ export async function bootstrapTargetEnv(tjs, opts) {
     self: builder,
     platform,
     delimiter,
-    exists: (p) => present.has(p),
+    exists: (p) => Boolean(stats.get(p)?.exists),
+    isExec: (p) => Boolean(stats.get(p)?.isExec),
     dirname: (p) => { const i = p.lastIndexOf(sep); return i <= 0 ? sep : p.slice(0, i); },
   });
 }

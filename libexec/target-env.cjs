@@ -27,6 +27,7 @@ function shapeTargetEnv(opts) {
     platform,
     delimiter = ':',
     exists,
+    isExec,
     dirname,
   } = opts;
 
@@ -44,7 +45,7 @@ function shapeTargetEnv(opts) {
   // Point the Grep tool at a real ripgrep when one exists. rg stays OPTIONAL —
   // none found means leave the config alone (the bundle falls back to its
   // embedded search). CLODE_RG wins verbatim.
-  const rg = env.CLODE_RG || findOnPath({ env, platform, delimiter, exists });
+  const rg = env.CLODE_RG || findOnPath({ env, platform, delimiter, isExec });
   if (rg) {
     setIfUnset(env, 'USE_BUILTIN_RIPGREP', '0');
     const rgdir = dirname(rg);
@@ -76,9 +77,17 @@ function rgCandidates({ env, platform, delimiter }) {
   return (env.PATH || '').split(delimiter).filter(Boolean).map((dir) => dir + sep + bin);
 }
 
-function findOnPath({ env, platform, delimiter, exists }) {
+// "Does a path exist?" and "can I run this path?" are different questions —
+// a DIRECTORY or a non-executable file both EXIST, but the Grep tool cannot
+// run either of them. `command -v`/`[ -x ]` semantics (what the retired sh
+// launcher used) ask the second question; `exists` here would silently answer
+// the first and let a same-named directory or non-executable file "win" a PATH
+// slot, switching off USE_BUILTIN_RIPGREP's embedded-search fallback for a tool
+// that can never run. So rg candidates are asked with `isExec`, never `exists`
+// — that predicate is reserved for genuine existence checks (trustd, above).
+function findOnPath({ env, platform, delimiter, isExec }) {
   for (const cand of rgCandidates({ env, platform, delimiter })) {
-    if (exists(cand)) return cand;
+    if (isExec(cand)) return cand;
   }
   return null;
 }

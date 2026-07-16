@@ -12,6 +12,7 @@ function opts(over = {}) {
     platform: 'linux',
     delimiter: ':',
     exists: () => false,
+    isExec: () => false,
     dirname: (p) => p.slice(0, p.lastIndexOf('/')) || '/',
   }, over);
 }
@@ -37,10 +38,17 @@ test('cert store: only on darwin, only when the modern trust stack is absent', (
   assert.strictEqual(linux.CLAUDE_CODE_CERT_STORE, undefined);
 });
 
+// Every rg test below poisons `exists` (throws if called) so a regression that
+// goes back to asking "does it exist?" for an rg candidate fails LOUD, not
+// silently — that is exactly how this bug hid the first time (target-env.cjs's
+// findOnPath must consult isExec, never exists; see the comment there).
+const poisonedExists = () => { throw new Error('exists() must never be consulted for an rg candidate'); };
+
 test('ripgrep: a real rg on PATH switches off the builtin and leaves PATH ALONE', () => {
   const env = shapeTargetEnv(opts({
     env: { PATH: '/usr/bin:/opt/rg/bin' },
-    exists: (p) => p === '/opt/rg/bin/rg',
+    exists: poisonedExists,
+    isExec: (p) => p === '/opt/rg/bin/rg',
   }));
   assert.strictEqual(env.USE_BUILTIN_RIPGREP, '0');
   // Discovery only ever finds rg in a PATH dir, so that dir is ALREADY reachable.
@@ -53,7 +61,8 @@ test('ripgrep: a real rg on PATH switches off the builtin and leaves PATH ALONE'
 test('ripgrep: an rg dir at the FRONT of PATH is not duplicated either', () => {
   const env = shapeTargetEnv(opts({
     env: { PATH: '/opt/rg/bin:/usr/bin' },
-    exists: (p) => p === '/opt/rg/bin/rg',
+    exists: poisonedExists,
+    isExec: (p) => p === '/opt/rg/bin/rg',
   }));
   assert.strictEqual(env.PATH, '/opt/rg/bin:/usr/bin');
 });
@@ -61,14 +70,15 @@ test('ripgrep: an rg dir at the FRONT of PATH is not duplicated either', () => {
 test('ripgrep: CLODE_RG wins verbatim over PATH discovery', () => {
   const env = shapeTargetEnv(opts({
     env: { PATH: '/usr/bin', CLODE_RG: '/custom/rg' },
-    exists: () => true,
+    exists: poisonedExists,
+    isExec: () => true,
   }));
   assert.strictEqual(env.USE_BUILTIN_RIPGREP, '0');
   assert.strictEqual(env.PATH, '/custom:/usr/bin');
 });
 
 test('ripgrep: no rg anywhere leaves the search config untouched (rg is OPTIONAL)', () => {
-  const env = shapeTargetEnv(opts({ env: { PATH: '/usr/bin' }, exists: () => false }));
+  const env = shapeTargetEnv(opts({ env: { PATH: '/usr/bin' }, exists: poisonedExists, isExec: () => false }));
   assert.strictEqual(env.USE_BUILTIN_RIPGREP, undefined);
   assert.strictEqual(env.PATH, '/usr/bin');
 });
@@ -76,9 +86,34 @@ test('ripgrep: no rg anywhere leaves the search config untouched (rg is OPTIONAL
 test('ripgrep: CLODE_RG already on PATH is not duplicated', () => {
   const env = shapeTargetEnv(opts({
     env: { PATH: '/usr/bin:/opt/rg/bin', CLODE_RG: '/opt/rg/bin/rg' },
-    exists: () => true,
+    exists: poisonedExists,
+    isExec: () => true,
   }));
   assert.strictEqual(env.PATH, '/usr/bin:/opt/rg/bin', 'membership is whole-segment ANYWHERE in PATH, not just the front');
+});
+
+// THE BUG: a DIRECTORY (or a non-executable file) named `rg` sitting earlier on
+// PATH than a real rg must NOT win. The retired sh launcher's `[ -x ]` rejected
+// both; the port that replaced it with a bare existence check would have let
+// either "win" a PATH slot the embedded-search fallback then never got — this
+// is the on-box repro from the review, pinned as a regression test.
+test('ripgrep: a DIRECTORY named rg on PATH does not win — existence is not runnability', () => {
+  const env = shapeTargetEnv(opts({
+    env: { PATH: '/usr/bin' },
+    exists: (p) => p === '/usr/bin/rg', // a directory named rg EXISTS at that path
+    isExec: () => false,                // but it is not a regular executable file
+  }));
+  assert.strictEqual(env.USE_BUILTIN_RIPGREP, undefined, 'a directory must not disable the embedded-search fallback');
+  assert.strictEqual(env.PATH, '/usr/bin', 'PATH must not be rewritten for an unrunnable candidate');
+});
+
+test('ripgrep: a non-executable FILE named rg on PATH does not win either', () => {
+  const env = shapeTargetEnv(opts({
+    env: { PATH: '/usr/bin' },
+    exists: (p) => p === '/usr/bin/rg',
+    isExec: () => false, // exists, is a regular file, but lacks +x
+  }));
+  assert.strictEqual(env.USE_BUILTIN_RIPGREP, undefined);
 });
 
 test('CLODE_SELF points at the clode builder, so the in-TUI updater can call back', () => {
@@ -120,11 +155,11 @@ test('probePaths lists every path shapeTargetEnv might test', () => {
 test('shapeTargetEnv never probes a path probePaths did not predict', () => {
   const env = { PATH: '/usr/bin:/opt/rg/bin' };
   const predicted = new Set(probePaths({ env, platform: 'darwin', delimiter: ':' }));
-  shapeTargetEnv(opts({
-    env, platform: 'darwin',
-    exists: (p) => {
-      assert.ok(predicted.has(p), `probed an unpredicted path: ${p}`);
-      return false;
-    },
-  }));
+  const guard = (p) => {
+    assert.ok(predicted.has(p), `probed an unpredicted path: ${p}`);
+    return false;
+  };
+  // Both predicates are covered: trustd goes through `exists`, rg candidates
+  // through `isExec` — a probePaths drift on either seam must fail loud here.
+  shapeTargetEnv(opts({ env, platform: 'darwin', exists: guard, isExec: guard }));
 });
