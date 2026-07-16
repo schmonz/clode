@@ -146,22 +146,32 @@ There is no launch to hook it to anymore, so
 .Nm Cm build
 is where the check runs.
 .Pp
+The
 .Nm
-itself is a Node program
-.Pq Li #!/usr/bin/env node ,
-so it needs
+you download is itself a native, self-contained binary \(en no
+.Xr node 1 ,
+no npm, nothing else at run time; it builds a quaude on a machine that has
+never heard of Node.
+Running
+.Nm
+from a source checkout (or an npm install) is the other shape:
+.Pa bin/clode
+is a Node program
+.Pq Li #!/usr/bin/env node
+and needs
 .Xr node 1
 on
 .Ev PATH
-to build with (the binaries it builds do not: quaude needs no Node at all,
-and naude needs Node only because a Node SEA is Node).
+.Ar >= 20 .
 An ES5-safe prologue prints a friendly
 .Dq node too old
 message on an outdated node; a truly missing node yields
 .Li "env: node: not found" .
-The floor is Node
-.Ar >= 20
-for every command.
+Either shape,
+.Nm Cm build Fl -naude
+needs Node
+.Ar >= 24
+on the host, because a Node SEA is built from a real Node.
 .Sh ENVIRONMENT
 .Bl -tag -width CLODE_CHANGELOG_URL
 .It Ev CLODE_VERBOSE
