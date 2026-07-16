@@ -16,11 +16,15 @@
 // loader members (cheap; FULL verification of every member is
 // --quaude-attest's job — policy per the Q1a design memo §5); for the quaude
 // role, carve --quaude-* out of argv BEFORE any bundle-visible code runs (the
-// reserved namespace — everything else belongs to Claude Code), while the
-// BUILDER role (a fused native clode) owns its whole argv and gets no carve;
-// mount globalThis.__quaudeVFS; evaluate the archived node-shim loader, which
-// boots the manifest's entry member (cli.qbc for quaude, the esbuilt
-// clode-main bundle for the builder).
+// reserved namespace — everything else belongs to Claude Code) and apply the
+// target-env contract (target-env.cjs — DISABLE_INSTALLATION_CHECKS, the rg
+// PATH shaping, CLODE_SELF), while the BUILDER role (a fused native clode)
+// owns its whole argv, gets no carve, and gets NO target-env contract either
+// (that contract is Claude-Code-target-shaped; applying it to the builder
+// itself would leak the CI builder path that built it into CLODE_SELF for no
+// reader to use); mount globalThis.__quaudeVFS; evaluate the archived
+// node-shim loader, which boots the manifest's entry member (cli.qbc for
+// quaude, the esbuilt clode-main bundle for the builder).
 
 // The reserved argv namespace. quaude owns every `--quaude-*` flag; an unknown
 // one is an ERROR here (it must never reach the bundle). Pure + exported so the
@@ -154,8 +158,9 @@ async function main() {
   // argv — clode's own flags are all --clode-*/subcommands, so nothing is
   // carved and there is no --quaude-attest short-circuit for it.
   const manifest = JSON.parse(dec.decode(files.get('manifest.json')));
+  const isBuilder = (manifest.role ?? 'quaude') === 'builder';
   let rest = tjs.args.slice(1);
-  if ((manifest.role ?? 'quaude') !== 'builder') {
+  if (!isBuilder) {
     // argv carve-out: strip --quaude-* BEFORE any bundle code can observe argv.
     const { quaude, rest: carved, unknown } = carveQuaudeArgs(rest);
     if (unknown.length) {
@@ -176,16 +181,26 @@ async function main() {
       console.log(ok ? 'quaude-attest: all members verified' : 'quaude-attest: VERIFICATION FAILED');
       tjs.exit(ok ? 0 : 1);
     }
-  }
 
-  // 7.5) Apply the target env contract before ANY bundle code runs. target-env.cjs
-  // is a member: evaluate it the same way the loader is evaluated below (it is
-  // CJS, so hand it a module shim), then adapt it to tjs primitives.
-  const tem = { exports: {} };
-  (0, new Function('module', 'exports', dec.decode(files.get('libexec/target-env.cjs'))))(tem, tem.exports);
-  globalThis.__clodeShapeTargetEnv = tem.exports.shapeTargetEnv;
-  globalThis.__clodeProbePaths = tem.exports.probePaths;
-  await bootstrapTargetEnv(tjs, { builder: manifest.builder || null });
+    // 7.5) Apply the target env contract before ANY bundle code runs. target-env.cjs
+    // is a member: evaluate it the same way the loader is evaluated below (it is
+    // CJS, so hand it a module shim), then adapt it to tjs primitives.
+    //
+    // BUILDER-role only exception: a fused native clode is the BUILDER, not a
+    // built target — applying this contract to itself would set
+    // DISABLE_INSTALLATION_CHECKS/NODE_USE_ENV_PROXY on the builder's own
+    // process for no reason, could prepend an rg dir to the builder's PATH, and
+    // (worse) would stamp CLODE_SELF = manifest.builder — the path of the clode
+    // that built THIS clode on the CI runner — into the builder's env, a
+    // provenance leak with no consumer (nothing in the builder reads
+    // CLODE_SELF; every write site overrides it) and a reproducibility hazard
+    // for a published clode-native asset. So: quaude only.
+    const tem = { exports: {} };
+    (0, new Function('module', 'exports', dec.decode(files.get('libexec/target-env.cjs'))))(tem, tem.exports);
+    globalThis.__clodeShapeTargetEnv = tem.exports.shapeTargetEnv;
+    globalThis.__clodeProbePaths = tem.exports.probePaths;
+    await bootstrapTargetEnv(tjs, { builder: manifest.builder || null });
+  }
 
   // 8) mount + boot: the archived loader resolves everything under /quaude/;
   // the manifest rides along so the loader picks the role's entry member.
