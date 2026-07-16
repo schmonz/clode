@@ -207,8 +207,10 @@ async function main(argv, opts = {}) {
   const cacheRoot = clodeCacheDir(env);
   const cache = path.join(cacheRoot, key);
 
-  // ensureDeps installs the ext-deps; the real LIBEXEC/DEPS_ROOT apply.
-  deps.ensureDeps({ libexec: LIBEXEC, here: HERE, verbose, env });
+  // Ensure the ext-deps are PRESENT (the real LIBEXEC/DEPS_ROOT apply). install:false
+  // is the D2 user-runtime contract: never shell npm — a fused binary carries its
+  // deps as members, dev/CI has them in node_modules; anything else fails loud.
+  deps.ensureDeps({ libexec: LIBEXEC, here: HERE, verbose, env, install: false });
 
   extract.extractIfNeeded({ bin, cacheDir: cache, libexec: LIBEXEC, verbose, key });
 

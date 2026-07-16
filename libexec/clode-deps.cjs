@@ -94,6 +94,11 @@ function ensureDeps(opts = {}) {
     stderr = process.stderr,
     exit = process.exit,
     spawn = spawnSync,
+    // install=false is the USER RUNTIME contract (retire-node-runtime D2): never
+    // shell npm — a real user runs the fused binary (deps embedded) or a managed
+    // CLODE_DEPS. Only the build/CI caller (clode-fuse gathering deps to embed)
+    // leaves it true. Default true preserves the existing build behavior.
+    install = true,
   } = opts;
   const npmPath = 'npmPath' in opts ? opts.npmPath : env.CLODE_NPM;
   const emit = opts.log || ((m) => stderr.write(m + '\n'));
@@ -130,6 +135,17 @@ function ensureDeps(opts = {}) {
   if (isDir(path.join(depsRoot, 'node_modules')) &&
       readSig(path.join(depsRoot, '.deps-sig')) === sig) {
     return; // already fresh for this manifest
+  }
+
+  // D2: the user runtime never shells npm. Deps ship embedded in the fused binary
+  // (materialized as a sibling node_modules -> the early return above), so reaching
+  // here on the runtime path means a non-fused clode with no deps present. Fail
+  // loud toward the binary/build rather than silently installing.
+  if (!install) {
+    stderr.write('clode: runtime dependencies (ws, yaml, string-width, ...) not found.\n');
+    stderr.write('clode: run a fused clode binary (its deps are embedded), or `clode build` one,\n');
+    stderr.write('clode: or set CLODE_DEPS to a node_modules you populate yourself.\n');
+    return exit(1);
   }
 
   clodeLog('clode: installing dependencies...');

@@ -69,6 +69,38 @@ function run(opts) {
   return { exitCode, err };
 }
 
+// --- runtime path: NO host-npm fallback (D2, retire-node-runtime item 2) ----
+// The USER runtime must never shell npm. When deps aren't already present it
+// fails loud (use the fused binary / `clode build` / a managed CLODE_DEPS),
+// instead of the old auto-install. `install` defaults to true so the build/CI
+// caller (clode-fuse gathering deps to embed) is unchanged.
+test('install:false (runtime) never shells npm — fails loud, installs nothing', () => {
+  const { here, libexec, deps } = makePkg();
+  const log = { calls: [] };
+  const { exitCode, err } = run({
+    here, libexec, npmPath: 'npm', spawn: fakeNpmOk(log), install: false,
+    env: { CLODE_DEPS: deps },
+  });
+  assert.strictEqual(log.calls.length, 0, 'must not invoke npm at runtime');
+  assert.strictEqual(exitCode, 1);
+  assert.match(err, /clode build|fused|binary|CLODE_DEPS/);
+  assert.ok(!fs.existsSync(path.join(deps, 'node_modules', '.installed')), 'nothing installed');
+});
+
+test('install:false still honors the present-deps early returns (no failure)', () => {
+  // a user-managed CLODE_DEPS (node_modules, no .deps-sig) must be left alone,
+  // NOT treated as "missing" — even on the runtime path.
+  const { here, libexec, deps } = makePkg();
+  fs.mkdirSync(path.join(deps, 'node_modules'), { recursive: true });
+  const log = { calls: [] };
+  const { exitCode } = run({
+    here, libexec, npmPath: 'npm', spawn: fakeNpmOk(log), install: false,
+    env: { CLODE_DEPS: deps },
+  });
+  assert.strictEqual(exitCode, null, 'user-managed deps present -> no failure');
+  assert.strictEqual(log.calls.length, 0);
+});
+
 // --- auto-install ----------------------------------------------------------
 test('auto-install runs when the deps dir is empty, and records a sig', () => {
   const { here, libexec, deps } = makePkg();
