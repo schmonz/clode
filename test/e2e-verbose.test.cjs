@@ -18,10 +18,10 @@ function withProvider(t, label = 'tok') {
   return sbx;
 }
 
-// The --clode-help / --clode-verbose dispatch (clode-main.cjs steps 1/4) is clode's
+// The --help / --verbose dispatch (clode-main.cjs steps 1/4) is clode's
 // OWN flag handling — unaffected by the runner's retirement — so it's exercised with
 // a direct spawn of bin/clode, not a model runner. (The default-launch cases that used
-// to sit alongside these — "emits no chatter", "--clode-verbose un-mutes progress",
+// to sit alongside these — "emits no chatter", "--verbose un-mutes progress",
 // "CLODE_VERBOSE=1 env" — asserted on the runner actually booting the bundle; that
 // premise is gone, and they were deleted rather than forced onto a model runner that
 // doesn't speak clode's own verbose/extract chatter at all.)
@@ -34,18 +34,18 @@ function run(sbx, args = [], opts = {}) {
   return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '', output: (r.stdout || '') + (r.stderr || '') };
 }
 
-test('--clode-help prints clode-specific options and exits 0', (t) => {
+test('--help prints clode-specific options and exits 0', (t) => {
   const sbx = withProvider(t);
-  const r = run(sbx, ['--clode-help']);
+  const r = run(sbx, ['--help']);
   assert.strictEqual(r.status, 0);
-  assert.match(r.output, /--clode-verbose/);
-  assert.match(r.output, /--clode-version/);
-  assert.match(r.output, /clode-specific options/i);
+  assert.match(r.output, /--verbose/);
+  assert.match(r.output, /--version/);
+  assert.match(r.output, /Options:/);
 });
 
-test('--clode-verbose is stripped before clode-flag dispatch (works in any position)', (t) => {
+test('--verbose composes as a leading flag before --help (no more any-position stripping)', (t) => {
   const sbx = withProvider(t);
-  const r = run(sbx, ['--clode-verbose', '--clode-help']);
+  const r = run(sbx, ['--verbose', '--help']);
   assert.strictEqual(r.status, 0);
   assert.match(r.output, /run the latest Claude Code/);
 });

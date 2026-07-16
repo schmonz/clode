@@ -17,10 +17,10 @@ chmod +x clode-sparc
 ls -l clode-sparc
 file clode-sparc 2>/dev/null || true
 
-echo "=== SELF-LOAD: --clode-version ==="
-(ulimit -t 1800; ./clode-sparc --clode-version); echo "selfload-version-exit=$?"
+echo "=== SELF-LOAD: --version ==="
+(ulimit -t 1800; ./clode-sparc --version); echo "selfload-version-exit=$?"
 
-echo "=== SELF-LOAD: --clode-help (must mention 'clode build') ==="
-(ulimit -t 900; ./clode-sparc --clode-help 2>&1 | grep -c 'clode build'); echo "selfload-help-exit=$?"
+echo "=== SELF-LOAD: --help (must mention 'clode build') ==="
+(ulimit -t 900; ./clode-sparc --help 2>&1 | grep -c 'clode build'); echo "selfload-help-exit=$?"
 
 echo "=== GUEST-DONE ==="

@@ -95,7 +95,7 @@ test('the packed launcher runs and reports its version', (t) => {
   const { tmp, tgz } = pack(t);
   spawnSync('tar', ['xzf', tgz, '-C', tmp]);   // tar xzf "$TGZ" -C "$PACKDIR"
   const bin = path.join(tmp, 'package', 'bin', 'clode');
-  const r = spawnSync(NODE, [bin, '--clode-version'], { encoding: 'utf8' });
+  const r = spawnSync(NODE, [bin, '--version'], { encoding: 'utf8' });
   assert.strictEqual(r.status, 0);                                       // [ "$status" -eq 0 ]
   assert.strictEqual(((r.stdout || '') + (r.stderr || '')).trim(), `clode ${VERSION}`); // [ "$output" = "clode $v" ]
 });

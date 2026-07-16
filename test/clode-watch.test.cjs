@@ -270,10 +270,10 @@ test('clodeWatchBanner prints once for a HIGH notice that still applies', semver
   assert.strictEqual(rc, 0);
   const t = err.text();
   assert.match(t, /2\.0\.0/);
-  assert.match(t, /may affect running under Node/);
+  assert.match(t, /may affect how clode repackages it/);
   // EXACT banner text (the deliberate silent-by-default exception).
   assert.strictEqual(t.trim(),
-    "clode: Claude Code 2.0.0 is available and may affect running under Node (run 'clode --clode-watch' for details, 'clode fetch' to take it).");
+    "clode: Claude Code 2.0.0 is available and may affect how clode repackages it (run 'clode watch' for details, 'clode fetch' to take it).");
 });
 
 test('clodeWatchBanner is silent for a high=0 notice', semverOpts, () => {
@@ -340,13 +340,13 @@ test('clodeWatchMaybe fires when the throttle is stale (interval 0)', () => {
 
 // --- clodeWatchFire (detached spawn) ---------------------------------------
 
-test('clodeWatchFire spawns the parameterized self --clode-watch and never throws', () => {
+test('clodeWatchFire spawns the parameterized self `watch` subcommand and never throws', () => {
   const dir = tmpdir();
   const marker = path.join(dir, 'fired');
-  // A tiny stub launcher: on `--clode-watch` it touches the marker, then exits.
+  // A tiny stub launcher: on `watch` it touches the marker, then exits.
   const stub = path.join(dir, 'stub.sh');
   fs.writeFileSync(stub,
-    `#!/bin/sh\n[ "$1" = --clode-watch ] && : > "${marker}"\n`);
+    `#!/bin/sh\n[ "$1" = watch ] && : > "${marker}"\n`);
   fs.chmodSync(stub, 0o755);
   // Must not throw even for a bogus self.
   assert.doesNotThrow(() => clodeWatchFire({ self: '/nonexistent/launcher-xyz' }));

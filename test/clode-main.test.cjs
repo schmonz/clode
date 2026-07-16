@@ -1,7 +1,7 @@
 'use strict';
 // Unit tests for the JS launcher entry: bin/clode (ES5-safe prologue) +
 // libexec/clode-main.cjs (the dispatch spine). Covers the print-and-exit paths
-// (--clode-version, --clode-help) and the prologue's old-node floor guard. The
+// (--version, --help) and the prologue's old-node floor guard. The
 // full DEFAULT-launch wiring is smoke-tested separately (see the task's fixture
 // smoke); the FULL bats parity gate runs against this same entry.
 const { test } = require('node:test');
@@ -27,27 +27,53 @@ function runEntry(args, extraEnv) {
   });
 }
 
-test('--clode-version prints "clode <VERSION>" from the VERSION file and exits 0', () => {
-  const r = runEntry(['--clode-version']);
+test('--version prints "clode <VERSION>" from the VERSION file and exits 0', () => {
+  const r = runEntry(['--version']);
   assert.strictEqual(r.status, 0);
   assert.strictEqual(r.stdout, `clode ${VERSION}\n`);
   assert.strictEqual(r.stderr, '');
 });
 
-test('--clode-help prints clode-specific options and exits 0', () => {
-  const r = runEntry(['--clode-help']);
+test('--help prints clode-specific options and exits 0', () => {
+  const r = runEntry(['--help']);
   assert.strictEqual(r.status, 0);
-  assert.match(r.stdout, /--clode-watch/);
-  assert.match(r.stdout, /--clode-verbose/);
-  assert.match(r.stdout, /--clode-version/);
+  assert.match(r.stdout, /clode watch/);
+  assert.match(r.stdout, /--verbose/);
+  assert.match(r.stdout, /--version/);
   assert.match(r.stdout, /run the latest Claude Code under a portable tjs runtime/);
   assert.match(r.stdout, new RegExp(`clode ${VERSION.replace(/\./g, '\\.')} —`));
-  // ends with the passthrough hint line + trailing newline
-  assert.ok(r.stdout.endsWith("Run 'clode --help' for Claude Code's own help.\n"));
+  // ends with the last env-override line + trailing newline
+  assert.ok(r.stdout.endsWith('post-update signals digest\n'));
 });
 
-test('--clode-help is dispatched only as the outer FIRST arg — not one level in', () => {
-  // Proves the first-arg-only dispatch cuts both ways: '--clode-help' only triggers
+test('the surface is unprefixed: --version/--help/--verbose', () => {
+  // The prefix existed only to dodge Claude's argv under passthrough. No
+  // passthrough, no prefix, no aliases.
+  assert.match(runEntry(['--version']).stdout, /^clode \d/);
+  assert.match(runEntry(['--help']).stdout, /clode build/);
+  assert.strictEqual(runEntry(['--clode-version']).status, 2);
+  assert.strictEqual(runEntry(['--clode-help']).status, 2);
+});
+
+test('watch is a subcommand, not a flag', () => {
+  const r = runEntry(['watch']);
+  assert.notStrictEqual(r.status, 2, 'watch must dispatch');
+  assert.strictEqual(runEntry(['--clode-watch']).status, 2, '--clode-watch must no longer dispatch');
+});
+
+test('help advertises the builder surface and never mentions running Claude Code', () => {
+  const { stdout } = runEntry(['--help']);
+  // The tagline and the CLODE_ENGINE env-override line are left as-is (Task 6
+  // only renames flags / drops --self+CLODE_MAIN_BUNDLE — a docs task rewrites
+  // the runner-framed prose). What Task 6 IS responsible for: no stale passthrough
+  // claim, no promise of the --self/update surface this task doesn't ship.
+  assert.doesNotMatch(stdout, /pass(es)? through|launch Claude Code \(|--self\b/i);
+  assert.doesNotMatch(stdout, /clode update/, 'update is Phase 4 — do not promise it');
+  for (const cmd of ['build', 'fetch', 'watch']) assert.match(stdout, new RegExp('clode ' + cmd));
+});
+
+test('--help is dispatched only as the outer FIRST arg — not one level in', () => {
+  // Proves the first-arg-only dispatch cuts both ways: '--help' only triggers
   // clode's own help when it IS the outer args[0]. Nested one level in (as a `build`
   // sub-argument) it is just an unrecognized build flag — and `build` is clode's own
   // namespace with NO passthrough (unlike a launch, which would forward an unknown
@@ -55,17 +81,20 @@ test('--clode-help is dispatched only as the outer FIRST arg — not one level i
   // replaces the old proof-by-passthrough (running with no bin resolvable to show it
   // "fell through" to the default launch) now that the launch path is gone — `build`
   // gives the same first-arg-only proof without depending on it.
-  const r = runEntry(['build', '--clode-help']);
-  assert.doesNotMatch(r.stdout || '', /--clode-watch/);
+  const r = runEntry(['build', '--help']);
+  assert.doesNotMatch(r.stdout || '', /Key environment overrides/);
   assert.notStrictEqual(r.status, 0);
-  assert.match(r.stderr || '', /unknown argument '--clode-help'/);
+  assert.match(r.stderr || '', /unknown argument '--help'/);
   assert.match(r.stderr || '', /usage: clode build/);
 });
 
 test('the ES5 prologue prints the exact floor message + exits 1 on an old node', () => {
   // Fake an old node by redefining process.versions.node BEFORE requiring the
   // entry, so the prologue's own floor check trips (the entry is required, not
-  // spawned, so the fake version is in effect at prologue-eval time).
+  // spawned, so the fake version is in effect at prologue-eval time). The floor
+  // is v20 for every command now — clode never runs the extracted bundle under
+  // node (that died with the runner), so there is no higher-floor command left
+  // to special-case; the old build-only v20/v24 split collapsed into one floor.
   const harness =
     "Object.defineProperty(process.versions,'node',{value:'18.0.0',configurable:true});" +
     `require(${JSON.stringify(ENTRY)});`;
@@ -76,12 +105,12 @@ test('the ES5 prologue prints the exact floor message + exits 1 on an old node',
   assert.strictEqual(r.status, 1);
   assert.strictEqual(
     r.stderr,
-    'clode: node v18.0.0 is too old; need >= v24\n' +
+    'clode: node v18.0.0 is too old; need >= v20\n' +
     "clode: (the extracted bundle uses newer JS, e.g. 'using' declarations)\n");
   assert.strictEqual(r.stdout, '');
 });
 
-test('the prologue floor relaxes to v20 for `clode build` (fuse runs under tjs, not node)', () => {
+test('the prologue floor is v20 end-to-end for `clode build` (fuse runs under tjs, not node)', () => {
   // `clode build` never runs the extracted bundle under node — the fuse
   // worker and the fused artifacts exec under tjs; node only orchestrates
   // file work. OpenIndiana packages node 20 and OpenBSD 7.9 node 22 (matrix
@@ -156,6 +185,7 @@ test('clodeHelp() interpolates the version and is newline-terminated', () => {
   const { clodeHelp } = require('../libexec/clode-main.cjs');
   const text = clodeHelp('9.9.9');
   assert.ok(text.startsWith('clode 9.9.9 — '));
-  assert.ok(text.endsWith("Run 'clode --help' for Claude Code's own help.\n"));
-  assert.match(text, /--clode-watch/);
+  assert.ok(text.endsWith('post-update signals digest\n'));
+  assert.match(text, /clode watch/);
+  assert.doesNotMatch(text, /--clode-watch|--self/);
 });

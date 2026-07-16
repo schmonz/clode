@@ -5,7 +5,7 @@ description: >
   the documented order) -> build tjs (natively, or inside a guest via
   ./.github/actions/guest) -> esbuild clode-main -> fuse the self-contained
   builder (clode build --self, embedded pristine template) -> self-smoke
-  (--clode-version always; full = ephemeral quaude fuse + PONG + attest
+  (--version always; full = ephemeral quaude fuse + PONG + attest
   against a fetched provider, artifact NEVER uploaded) -> attest -> upload.
   Only BUILDERS are ever published; quaudes are ephemeral runner files.
   Exec modes: `clode build` EXECS the tjs template (the fuse worker runs
@@ -75,7 +75,7 @@ inputs:
     required: false
     default: "false"
   verify:
-    description: "post-build validation rung: 'smoke' (qemu-system fuse+PONG, the sparc leg), 'qemu-user' (binfmt-run the cross-fused builder: level-2 --clode-version required, level-2.5 full fuse attempted+logged), 'none' (tier-2, built-not-run — NetBSD has no qemu-user)."
+    description: "post-build validation rung: 'smoke' (qemu-system fuse+PONG, the sparc leg), 'qemu-user' (binfmt-run the cross-fused builder: level-2 --version required, level-2.5 full fuse attempted+logged), 'none' (tier-2, built-not-run — NetBSD has no qemu-user)."
     required: false
     default: smoke
   netbsd-src:
@@ -119,7 +119,7 @@ inputs:
     required: false
     default: ""
   smoke:
-    description: "'full' (provider fetch + ephemeral quaude PONG) or 'version' (--clode-version only)"
+    description: "'full' (provider fetch + ephemeral quaude PONG) or 'version' (--version only)"
     required: false
     default: full
   attest:
@@ -599,7 +599,7 @@ runs:
         # level-2 (required): self-load + version, foreign ELF under binfmt in a
         # target-arch glibc rootfs.
         docker run --rm --platform "linux/$ARCH" -v "$PWD:/w" -w /w "$ROOTFS" \
-          ./"$ASSET" --clode-version | tee "$RUNNER_TEMP/qu-ver.txt"
+          ./"$ASSET" --version | tee "$RUNNER_TEMP/qu-ver.txt"
         grep -qE '^clode ' "$RUNNER_TEMP/qu-ver.txt" \
           || { echo "level-2 FAILED: no 'clode <ver>' from the $ARCH builder under qemu-user" >&2; exit 1; }
         echo "level-2 (self-load) OK on $ARCH"
@@ -731,7 +731,7 @@ runs:
           # perfect, exec still fails under the builder only).
           .matrix/tjs-out/tjs eval 'tjs.spawn(["/bin/sh","-c","echo tjs-spawn-probe-ok"]).wait().then(function(r){console.log("tjs-spawn-exit:",JSON.stringify(r))})'
           CLODE_TJS="$PWD/.matrix/tjs-out/tjs" node bin/clode build --self --out "./${{ steps.name.outputs.asset }}"
-          ./"${{ steps.name.outputs.asset }}" --clode-version
+          ./"${{ steps.name.outputs.asset }}" --version
           if [ "${{ inputs.smoke }}" = full ]; then
             CLODE_CLAUDE_BIN="$PWD/.matrix/provider-claude" \
             CLODE_CACHE="$PWD/.matrix/clode-cache" \
@@ -797,12 +797,12 @@ runs:
         CLODE_TJS: ${{ steps.tjsbin.outputs.path }}
       run: node bin/clode build --self --out "${{ steps.name.outputs.asset }}"
 
-    - name: Self-smoke --clode-version (host exec of the fused builder)
+    - name: Self-smoke --version (host exec of the fused builder)
       if: steps.mode.outputs.exec != 'guest' && steps.mode.outputs.exec != 'qemu' && inputs.no-exec != 'true'
       shell: bash
       run: |
         set -euo pipefail
-        ./"${{ steps.name.outputs.asset }}" --clode-version
+        ./"${{ steps.name.outputs.asset }}" --version
 
     # Resolves the bare-engine path once (.exe on windows, plain `tjs`
     # everywhere else) — feeds the bare-tjs upload at the tail.

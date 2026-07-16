@@ -6,115 +6,82 @@
 // guarantees that before it loads us.
 //
 // Dispatch order (exact, from main()):
-//   1. strip --clode-verbose from argv (any position) -> CLODE_VERBOSE=1
+//   1. --verbose (leading position only) -> CLODE_VERBOSE=1
 //   2. resolve SELF / HERE / LIBEXEC / CLODE_SELF_VERSION
-//   3. --clode-version         -> print "clode <VERSION>", exit 0
-//   4. --clode-help            -> print clodeHelp(), exit 0
-//   5. fetch [channel]         -> clodeUpdate, exit status
-//   6. --clode-internal-update -> refuse (not a real update yet), exit 1
-//   6b. build [--out PATH]     -> clodeBuild (fuse a quaude), exit status
-//   7. --clode-watch           -> clodeWatch(manual), exit 0
-//   8. anything else           -> usage error, exit 2 (clode BUILDS targets; it
-//                                 never runs Claude Code itself — see clode-fuse.cjs
-//                                 / naude-entry.cjs for what DOES run it)
+//   3. --version                -> print "clode <VERSION>", exit 0
+//   4. --help                   -> print clodeHelp(), exit 0
+//   5. fetch [channel]          -> clodeUpdate, exit status
+//   6. --clode-internal-update  -> refuse (not a real update yet), exit 1
+//   6b. build [--out PATH]      -> check watch signals, then clodeBuild (fuse a
+//                                  quaude), exit status — this is the ONE place
+//                                  upstream drift is checked (see step 7's note)
+//   7. watch                    -> clodeWatch(manual), exit 0
+//   8. anything else            -> usage error, exit 2 (clode BUILDS targets; it
+//                                  never runs Claude Code itself — see clode-fuse.cjs
+//                                  / naude-entry.cjs for what DOES run it)
 //
 // Pure Node stdlib + sibling .cjs requires (the sub-modules pull the ext-deps).
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
 
-const hosttools = require('./clode-hosttools.cjs');
 const update = require('./clode-update.cjs');
 const watch = require('./clode-watch.cjs');
 
-// clode's own help (clode-specific flags only — `clode --help` still passes
-// through to Claude Code). Byte-for-byte the sh clode_help heredoc, version
-// interpolated. Ends with a trailing newline (like the heredoc).
+// clode's own help. Formerly a clode-specific subset of a passthrough launcher's
+// help (Claude Code's own --help took over for anything clode didn't recognize);
+// now that there's no passthrough, this IS clode's whole help. Task 6 dropped the
+// --clode- prefix (no more argv collision to dodge) and the --self/CLODE_MAIN_BUNDLE
+// entries (build --self left the user-facing surface — release tooling still calls
+// it, it's just not advertised). Ends with a trailing newline (like the old heredoc).
 function clodeHelp(version) {
   return `clode ${version} — run the latest Claude Code under a portable tjs runtime, no Bun.
 
 Usage:
-  clode [clode-options] [claude args...]   launch Claude Code (args pass through)
-  clode fetch [channel|version]            fetch a fresh upstream provider, then exit
-  clode build [--out PATH]                 fuse a standalone quaude binary (the pinned
+  clode build [--out PATH]                 build a standalone quaude binary (the pinned
                                            tjs runtime + the compiled Claude Code
                                            bundle) on this machine; default ./quaude
-  clode build --self [--out PATH]          fuse a standalone NATIVE clode builder (tjs
-                                           runtime + clode's own launcher, no node
-                                           needed) that can itself run 'clode build';
-                                           default ./clode-native
   clode build --naude                      bundle Claude Code as a Node SEA; Node hosts only
+  clode fetch [channel|version]            fetch a fresh upstream provider, then exit
+  clode watch                              run one update-signal check now (newer version
+                                           + signals that bear on repackaging), print a
+                                           summary, and exit
 
-clode-specific options (consumed by clode; everything else goes to Claude Code):
-  --clode-help        show this help and exit
-  --clode-version     print clode's own version and exit
-  --clode-verbose     show clode's progress (extract/deps/etc.); silent by default,
-                      so a normal launch emits only Claude Code's own output
-  --clode-watch       run one update-signal check now (newer version + signals
-                      that bear on running under Node), print a summary, and exit
+Options:
+  --help              show this help and exit
+  --version           print clode's own version and exit
+  --verbose           show clode's progress (extract/deps/etc.); silent by default,
+                      so a normal run emits only build/fetch's own output
 
 Key environment overrides:
   CLODE_ENGINE        runtime for the extracted bundle: 'tjs' (default) or 'node'
                       (the host-Node oracle — dev/CI reference, needs host node)
-  CLODE_VERBOSE=1     same as --clode-verbose
-  CLODE_NO_WATCH=1    disable the opportunistic on-launch update-signal check
+  CLODE_VERBOSE=1     same as --verbose
+  CLODE_NO_WATCH=1    disable the opportunistic update-signal check that runs
+                      during 'clode build'
   CLODE_CLAUDE_BIN    upstream claude binary to extract from
   CLODE_NODE          host node
   CLODE_CACHE         extracted-bundle cache dir
   CLODE_TJS           tjs template binary for 'clode build' (default: the fused
                       builder's own embedded template, else build/tjs/tjs)
-  CLODE_MAIN_BUNDLE   esbuilt clode-main bundle for 'clode build --self' (default:
-                      newest build/*/clode-main.bundle.cjs)
   CLODE_CHANGELOG_URL release-notes source for the post-update signals digest
-
-Run 'clode --help' for Claude Code's own help.
 `;
-}
-
-// Port of require_node's floor check for the RESOLVED bundle node.
-//  - node === process.execPath: the launcher IS this node, so checkNodeVersion
-//    on process.versions.node suffices (no subprocess).
-//  - node differs (CLODE_NODE set): it must run AND meet the floor. If it won't
-//    run (not executable, or the version probe fails) -> the exact "no usable
-//    node" error; if it runs but is too old -> the exact two-line "too old" error.
-// Prints the EXACT sh messages and exits 1 on failure; returns on success.
-function requireNode(node, opts = {}) {
-  const stderr = opts.stderr || process.stderr;
-  const exit = opts.exit || process.exit;
-  const spawn = opts.spawn || spawnSync;
-
-  if (node === process.execPath) {
-    return hosttools.requireNodeVersionOrExit({ stderr, exit });
-  }
-
-  // Alternate node (CLODE_NODE): probe its version by spawning it.
-  let ver = '';
-  if (hosttools.isExecutableFile(node)) {
-    const r = spawn(node, ['-e', 'process.stdout.write(process.versions.node)'], { encoding: 'utf8' });
-    if (r && r.status === 0 && r.stdout) ver = String(r.stdout).trim();
-  }
-  if (!ver) {
-    stderr.write(`clode: no usable node at '${node}' (set CLODE_NODE)\n`);
-    return exit(1);
-  }
-  return hosttools.requireNodeVersionOrExit({ versionString: ver, stderr, exit });
 }
 
 // main(argv, {self}) — async because it awaits clodeUpdate/clodeWatch.
 async function main(argv, opts = {}) {
   const env = process.env;
 
-  // 1. Pull clode's own flags out of argv FIRST (any position) so the bundle never
-  //    sees them. --clode-verbose un-silences clode's progress chatter; it is
-  //    dropped, every other arg keeps its relative order (matches the sh rotate).
-  let seenVerbose = false;
-  const args = [];
-  for (const a of argv) {
-    if (a === '--clode-verbose') seenVerbose = true;
-    else args.push(a);
+  // 1. --verbose un-silences clode's progress chatter. It's an ordinary LEADING
+  //    flag now (args[0] only) — the old any-position stripping loop existed
+  //    solely to keep it from colliding with Claude Code's argv under
+  //    passthrough; passthrough is gone, so there's nothing left to protect it
+  //    from and no reason to scan the whole argv for it.
+  let args = argv;
+  if (args[0] === '--verbose') {
+    env.CLODE_VERBOSE = '1';
+    args = args.slice(1);
   }
-  if (seenVerbose) env.CLODE_VERBOSE = '1';
   const verbose = !!env.CLODE_VERBOSE;
 
   // 2. Resolve this launcher's real path + the shipped layout.
@@ -138,14 +105,14 @@ async function main(argv, opts = {}) {
 
   const first = args[0];
 
-  // 3. --clode-version: print clode's own version, no launch.
-  if (first === '--clode-version') {
+  // 3. --version: print clode's own version, no launch (there is no launch).
+  if (first === '--version') {
     process.stdout.write(`clode ${version}\n`);
     return process.exit(0);
   }
 
-  // 4. --clode-help: clode's own flags (Claude Code's --help still passes through).
-  if (first === '--clode-help') {
+  // 4. --help: clode's own — and, since Task 5, ONLY — help.
+  if (first === '--help') {
     process.stdout.write(clodeHelp(version));
     return process.exit(0);
   }
@@ -174,14 +141,20 @@ async function main(argv, opts = {}) {
   //     or, with --self, a standalone native clode builder — on this machine
   //     (builder namespace, not passthrough — Claude Code never sees it).
   if (first === 'build') {
+    // Upstream drift threatens our ability to repackage, so check when we
+    // repackage. (This ran on every launch when clode was a runner; there is
+    // no launch anymore, so `build` — the moment upstream drift actually
+    // matters — is where the check moved.)
+    watch.clodeWatchBanner({ env, here: HERE });
+    watch.clodeWatchMaybe({ env, self });
     const fuse = require('./clode-fuse.cjs');
     const status = await fuse.clodeBuild(args.slice(1), { env, libexec: LIBEXEC, here: HERE, version, self });
     return process.exit(status);
   }
 
-  // 7. `clode --clode-watch`: one stateless update-signal cycle (manual: prints a
+  // 7. `clode watch`: one stateless update-signal cycle (manual: prints a
   //    summary to stderr), then exit 0.
-  if (first === '--clode-watch') {
+  if (first === 'watch') {
     await watch.clodeWatch('manual', { env, libexec: LIBEXEC, here: HERE, node });
     return process.exit(0);
   }
@@ -217,4 +190,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { formatError, main, clodeHelp, requireNode };
+module.exports = { formatError, main, clodeHelp };

@@ -216,7 +216,7 @@ function clodeWatchBanner(opts) {
   if (!cur) cur = n.current;
   if (!versionGt(n.latest, cur, { env, here })) return 0;
 
-  stderr.write(`clode: Claude Code ${n.latest} is available and may affect running under Node (run 'clode --clode-watch' for details, 'clode fetch' to take it).\n`);
+  stderr.write(`clode: Claude Code ${n.latest} is available and may affect how clode repackages it (run 'clode watch' for details, 'clode fetch' to take it).\n`);
   return 0;
 }
 
@@ -228,7 +228,7 @@ function clodeWatchFire(opts) {
   const self = opts.self;
   try {
     const { spawn } = require('node:child_process');
-    const child = spawn(self, ['--clode-watch'],
+    const child = spawn(self, ['watch'],
       { detached: true, stdio: 'ignore' });
     child.on('error', () => { /* swallow ENOENT for a bogus self */ });
     child.unref();

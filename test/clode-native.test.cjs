@@ -3,7 +3,7 @@
 // ./clode-native (tjs template + builder-role trailer: esbuilt clode-main as a
 // source entry, node-shim tree, libexec fuse inputs, ext-dep closure), and that
 // binary must complete the whole chain WITHOUT node:
-//   1. --clode-version / --clode-help with PATH stripped to an empty dir;
+//   1. --version / --help with PATH stripped to an empty dir;
 //   2. `clode-native build` fuses a quaude whose internal mandatory smoke
 //      (canned PONG round-trip + attest) passes — with node absent from PATH
 //      (/usr/bin:/bin keeps codesign, loses node) — THE NATIVE BUILDER BUILDS
@@ -112,7 +112,7 @@ test('clode build --self fuses a native builder and its internal smokes pass', (
   if (SKIP) { t.skip(SKIP); return; }
   assert.strictEqual(BUILD.status, 0, `clode build --self failed:\n${BUILD.stdout}\n${BUILD.stderr}`);
   assert.match(BUILD.stdout, /clode: fused .*native clode builder/);
-  assert.match(BUILD.stdout, /--clode-version \+ --clode-help ok/);
+  assert.match(BUILD.stdout, /--version \+ --help ok/);
   assert.ok(fs.statSync(NATIVE).size > 6 * 1024 * 1024, 'fused builder implausibly small');
   assert.ok(fs.statSync(NATIVE).mode & 0o111, 'fused builder not executable');
 });
@@ -153,17 +153,21 @@ test('the fused builder embeds the PRISTINE tjs template as a trailer member (De
   assert.strictEqual(manifest.template.len, tpl.len);
 });
 
-test('acceptance 1: --clode-version/--clode-help answer with node ABSENT from PATH', async (t) => {
+test('acceptance 1: --version/--help answer with node ABSENT from PATH', async (t) => {
   if (SKIP) { t.skip(SKIP); return; }
   // PATH = one empty dir: NOTHING external resolves, node included.
   const env = { PATH: EMPTY_PATH, HOME: DIR };
-  const v = await runNative(NATIVE, ['--clode-version'], env, 60000);
+  const v = await runNative(NATIVE, ['--version'], env, 60000);
   assert.strictEqual(v.status, 0, v.stderr);
   assert.strictEqual(v.stdout, `clode ${VERSION}\n`);
-  const h = await runNative(NATIVE, ['--clode-help'], env, 60000);
+  const h = await runNative(NATIVE, ['--help'], env, 60000);
   assert.strictEqual(h.status, 0, h.stderr);
-  assert.match(h.stdout, /clode-specific options/);
-  assert.match(h.stdout, /clode build --self/);
+  assert.match(h.stdout, /Options:/);
+  assert.match(h.stdout, /clode build \[--out PATH\]/);
+  // build --self left the USER surface (Task 6): the fused NATIVE builder still
+  // answers to it (this whole test proves that), but its own --help must not
+  // advertise it.
+  assert.doesNotMatch(h.stdout, /--self/);
 });
 
 test('acceptance 1b: BARE invocation is a clean usage error, not a wall stack (v0.1.2 field report)', async (t) => {

@@ -460,23 +460,23 @@ async function clodeBuild(args, opts) {
     if (self) {
       // -- builder smoke: its own flags must answer, with NODE_PATH stripped
       // (self-containment proof at the same strength as the quaude smoke).
-      clodeLog('clode: build: smoke --clode-version/--clode-help ...');
+      clodeLog('clode: build: smoke --version/--help ...');
       const smokeEnv = { ...env };
       delete smokeEnv.NODE_PATH;
-      const v = await spawnRun(out, ['--clode-version'], { env: smokeEnv, cwd: work, timeout: 120000 * SCALE });
+      const v = await spawnRun(out, ['--version'], { env: smokeEnv, cwd: work, timeout: 120000 * SCALE });
       if (v.status !== 0 || !/^clode /.test(v.stdout)) {
-        stderr.write(`clode: build --self: SMOKE FAILED — the fused builder did not answer --clode-version\n`);
+        stderr.write(`clode: build --self: SMOKE FAILED — the fused builder did not answer --version\n`);
         stderr.write(`clode: build --self: exit=${v.status} stdout:\n${v.stdout}\nstderr:\n${v.stderr}\n`);
         return 1;
       }
-      const h = await spawnRun(out, ['--clode-help'], { env: smokeEnv, cwd: work, timeout: 120000 * SCALE });
+      const h = await spawnRun(out, ['--help'], { env: smokeEnv, cwd: work, timeout: 120000 * SCALE });
       if (h.status !== 0 || !/clode build/.test(h.stdout)) {
-        stderr.write(`clode: build --self: SMOKE FAILED — the fused builder did not answer --clode-help\n`);
+        stderr.write(`clode: build --self: SMOKE FAILED — the fused builder did not answer --help\n`);
         stderr.write(`clode: build --self: exit=${h.status} stdout:\n${h.stdout}\nstderr:\n${h.stderr}\n`);
         return 1;
       }
       stdout.write(`clode: fused ${out} (${fs.statSync(out).size} bytes, native clode builder)\n`);
-      stdout.write(`clode: smoke: --clode-version + --clode-help ok — run '${out} build' to fuse a quaude\n`);
+      stdout.write(`clode: smoke: --version + --help ok — run '${out} build' to fuse a quaude\n`);
       return 0;
     }
 

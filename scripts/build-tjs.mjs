@@ -36,7 +36,7 @@ const wantStatic = process.env.CLODE_TJS_STATIC === '1';
 // CLODE_TJS_WASM=off: drop WASM/WAMR support. Needed on arches where WAMR's
 // posix_memmap.c references MAP_32BIT, a Linux mmap flag defined ONLY for
 // x86/x86_64/aarch64 — s390x/ppc64le/riscv64 fail to compile (first found on
-// the s390x BE-oracle leg 2026-07-09). That leg only runs --clode-version +
+// the s390x BE-oracle leg 2026-07-09). That leg only runs --version +
 // the node-shim suite (no bundle boot, no WebAssembly), so WASM-off is free
 // there. A real fix (guard MAP_32BIT to 0 when undefined, upstream WAMR) is
 // queued for the Q3 batch; patches/ is frozen this phase.

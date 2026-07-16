@@ -196,7 +196,7 @@ jobs:
           CLODE_TJS: ${{ steps.fat.outputs.fat }}
         run: node bin/clode build --self --out "${{ steps.name.outputs.asset }}"
       - name: Self-smoke the arm64 slice
-        run: ./"${{ steps.name.outputs.asset }}" --clode-version
+        run: ./"${{ steps.name.outputs.asset }}" --version
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v4
         with:

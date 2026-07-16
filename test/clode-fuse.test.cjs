@@ -66,13 +66,16 @@ test('clode build: no resolvable provider fails loudly (after the template gate)
   assert.match(r.stderr, /build: no Claude Code binary found/);
 });
 
-test('--clode-help documents clode build, build --self, and CLODE_TJS', () => {
-  const r = runEntry(['--clode-help']);
+test('--help documents clode build and CLODE_TJS, but not the undocumented --self', () => {
+  const r = runEntry(['--help']);
   assert.strictEqual(r.status, 0);
   assert.match(r.stdout, /clode build \[--out PATH\]/);
-  assert.match(r.stdout, /clode build --self/);
   assert.match(r.stdout, /quaude/);
   assert.match(r.stdout, /CLODE_TJS/);
+  // build --self left the user surface (Task 6): dispatch still works (release
+  // tooling calls it), but it's no longer documented.
+  assert.doesNotMatch(r.stdout, /--self/);
+  assert.doesNotMatch(r.stdout, /CLODE_MAIN_BUNDLE/);
 });
 
 // codesignAdHoc: ad-hoc sign a Mach-O template; on old macOS (Mavericks) whose
