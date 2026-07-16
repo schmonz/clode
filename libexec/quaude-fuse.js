@@ -151,7 +151,13 @@ if (role === 'builder') {
   console.log(`quaude-fuse: compiled cli.cjs -> cli.qbc (${bc.length} bytes, ${(performance.now() - t0).toFixed(0)}ms)`);
   members.push({ name: 'cli.qbc', data: bc });
 
-  // bun-shim from the extracted stage (version-locked to the bundle by the cache).
+  // bun-shim from the extracted stage (version-locked to the bundle by the
+  // cache). scripts/build-naude.mjs reads it from this same staged location
+  // (stagedBunShim) for the same reason — both build targets bake the shim the
+  // bundle was extracted with, never one reached back for from the repo
+  // (duplication audit §5: naude used to read REPO/libexec/bun-shim.cjs and
+  // agreed with this only by accident, because clode-extract.cjs re-copies the
+  // shim over the cached one on every cache hit).
   members.push({ name: 'bun-shim.cjs', data: await mustRead(path.join(stageDir, 'bun-shim.cjs'), 'staged bun-shim') });
 
   // The env contract the bootstrap applies before booting the bundle.

@@ -10,7 +10,9 @@
 // does NOT embed extract-claude-js.cjs.
 //
 // The SEA's `main` is the esbuilt `libexec/naude-entry.cjs`; its assets are the deps
-// tarball (+ sig), the `bun-shim.cjs`, and the `cli.cjs` given by `--cli`.
+// tarball (+ sig), the `bun-shim.cjs`, and the `cli.cjs` given by `--cli`. The bun-shim
+// is read from the extract STAGE DIR beside that cli.cjs — version-locked to the bundle
+// by the cache, the same rule quaude's fuse follows (see stagedBunShim).
 //
 // Recovered from clode's first-release SEA build (scripts/build-sea.mjs, retired in
 // 13eeb86) and repointed at naude. The proven cross-platform machinery (per-tag
@@ -146,8 +148,9 @@ function stageDeps() {
 }
 
 // PURE sea-config generator: the node:sea config object naude's SEA embeds. main = the
-// esbuilt naude-entry bundle; assets = the deps tarball (+ sig), the bun-shim, and the
-// BAKED cli.cjs (the caller's Claude Code, given via `--cli`). Crucially there is NO
+// esbuilt naude-entry bundle; assets = the deps tarball (+ sig), the bun-shim (staged
+// beside the cli.cjs — see stagedBunShim), and the BAKED cli.cjs (the caller's Claude
+// Code, given via `--cli`). Crucially there is NO
 // `extract-claude-js.cjs` asset — naude bakes CC, it never extracts at runtime. Exported
 // and side-effect-free so it's unit-testable without building a real SEA.
 export function naudeSeaConfig({ mainBundle, cliCjs, bunShim, tar, sig, out }) {
@@ -164,11 +167,35 @@ export function naudeSeaConfig({ mainBundle, cliCjs, bunShim, tar, sig, out }) {
   };
 }
 
+// The bun-shim to bake, from the SAME staged location quaude reads (duplication
+// audit §5). `--cli` names the extracted stage dir's cli.cjs; the shim is its
+// sibling there, put there by the extract stage — so both build targets are
+// version-locked to the bundle they were extracted with, exactly as
+// quaude-fuse.js's "version-locked to the bundle by the cache" comment says.
+// This used to read REPO/libexec/bun-shim.cjs, ignoring the stage dir the
+// --naude branch had just populated. The bytes agreed only BY ACCIDENT:
+// clode-extract.cjs re-copies libexec/bun-shim.cjs over the cached one on every
+// cache hit. If the shim is ever pinned per bundle version — which is the stated
+// intent — naude would silently bake a DIFFERENT shim than quaude from the same
+// inputs, and the parity oracle would not catch it.
+export function stagedBunShim(cliCjs) {
+  return path.join(path.dirname(cliCjs), 'bun-shim.cjs');
+}
+
 function writeSeaConfig({ bundle, cliCjs, tar, sigFile }) {
+  const bunShim = stagedBunShim(cliCjs);
+  if (!fs.existsSync(bunShim)) {
+    // Fail loud rather than silently baking no shim (or reaching back to the
+    // repo for one): the shim MUST come from the same stage as the cli.cjs.
+    console.error(`build-naude: no bun-shim.cjs beside the staged --cli: ${bunShim}`);
+    console.error('The bun-shim is version-locked to the bundle by the extract cache; pass a --cli from a');
+    console.error("staged cache dir (what `clode build --naude` does), not a bare cli.cjs.");
+    process.exit(1);
+  }
   const cfg = naudeSeaConfig({
     mainBundle: bundle,
     cliCjs,
-    bunShim: path.join(REPO, 'libexec', 'bun-shim.cjs'),
+    bunShim,
     tar,
     sig: sigFile,
     out: OUT,
