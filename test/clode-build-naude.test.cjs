@@ -167,3 +167,26 @@ test('clode build --naude --out PATH: forwards --out to build-naude.mjs', async 
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// Bug 2: under a FUSED builder (a native clode running under tjs, VFS
+// mounted with manifest.role 'builder'), there is no scripts/ dir on disk
+// and process.execPath is tjs, not node — spawning build-naude.mjs would
+// exec-fail with a mystery exit. Must fail loud and early, naming the real
+// alternatives, instead of letting the user hit exec garbage.
+test('clode build --naude under a fused builder: fails loud with the Node>=24 / quaude alternative', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-fused-'));
+  try {
+    const { env } = seedProvider(dir);
+    globalThis.__quaudeVFS = { manifest: { role: 'builder' } };
+    try {
+      const r = await runBuild(['--naude'], env);
+      assert.strictEqual(r.status, 1);
+      assert.match(r.stderr, /Node\s*>=\s*24/);
+      assert.match(r.stderr, /fused builder/);
+      assert.match(r.stderr, /clode build/, 'should name the quaude alternative');
+      assert.strictEqual(r.calls.length, 0, `no subprocess should have been spawned; calls:\n${JSON.stringify(r.calls, null, 2)}`);
+    } finally {
+      delete globalThis.__quaudeVFS;
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

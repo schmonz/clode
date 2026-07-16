@@ -203,6 +203,18 @@ async function clodeBuild(args, opts) {
   // cli.cjs to scripts/build-naude.mjs (which runs the esbuild/postject SEA
   // pipeline — Node >= 24 hosts only) and RETURNS, never touching the fuse.
   if (naude) {
+    // A fused NATIVE clode (the builder-role VFS the quaude/self path
+    // materializes below) runs under tjs and ships no scripts/ dir on disk —
+    // there is nothing for a Node SEA pipeline to spawn, and process.execPath
+    // is the tjs template, not a Node >= 24 host. Without this guard the user
+    // got a mystery exit (exec failure garbage, or a bare exit-127 with no
+    // output); fail loud instead, naming the real alternatives. Same
+    // fused-builder signal the materialization step below already keys on —
+    // no new global.
+    const vfs = globalThis.__quaudeVFS;
+    if (vfs && vfs.manifest && vfs.manifest.role === 'builder') {
+      return fail('build --naude: naude requires a Node >= 24 host; this is a fused builder running under tjs — use `clode build` (quaude) here, or run clode under node to build a naude');
+    }
     const ROOT = path.resolve(opts.libexec, '..');
     const outArgs = out ? ['--out', out] : [];
     // Reuse the quaude path's resolve/extract helpers verbatim — no duplication.
