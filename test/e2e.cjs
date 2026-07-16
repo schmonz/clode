@@ -62,6 +62,11 @@ function sandbox(t) {
     CLODE_NODE: NODE,
     CLODE_NO_WATCH: '1',
     CLODE_OFFLINE: '1',
+    // These e2e tests boot a FAKE bundle (mkProvider prints a label) to exercise
+    // LAUNCHER mechanics (resolve/cache/extract/verbose/selfupdate) — engine-agnostic,
+    // and CI has no tjs. tjs is the runtime default now, so pin the sandbox to the
+    // host-Node oracle; a test that wants the tjs engine overrides via opts.env.
+    CLODE_ENGINE: 'node',
   };
   // On Windows, clode must reach the command interpreter to run a .cmd (e.g. npm.cmd) —
   // the parallel of /bin/sh being reachable via the POSIX sandbox PATH above. ComSpec is

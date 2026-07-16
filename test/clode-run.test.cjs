@@ -261,7 +261,7 @@ test('runBundle really spawns node and passes through its exit code', () => {
     fs.writeFileSync(cli, 'process.exit(7);\n');
     runBundle({
       node: NODE, cliPath: cli, args: [], settingsPath: null, self: 'x',
-      libexec: REAL_LIBEXEC, env: { ...process.env },
+      libexec: REAL_LIBEXEC, env: { ...process.env, CLODE_ENGINE: 'node' }, // oracle vehicle (default is tjs)
       procOn: () => {}, procOff: () => {},
       exit: (c) => {
         try { assert.strictEqual(c, 7); resolve(); } catch (e) { reject(e); }
@@ -294,7 +294,7 @@ function runHelper(cliBody) {
       `  cliPath: ${JSON.stringify(cli)},\n` +
       `  args: [], settingsPath: null, self: 'x',\n` +
       `  libexec: ${JSON.stringify(REAL_LIBEXEC)},\n` +
-      `  env: { ...process.env },\n` +
+      `  env: { ...process.env, CLODE_ENGINE: 'node' },\n` + // oracle vehicle (default is tjs)
       `});\n`);
     // detached:true => new session + process group; the helper (and its grandchild)
     // are isolated from the test runner's group. stdio ignored to keep output clean.
