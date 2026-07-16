@@ -30,17 +30,30 @@ standalone target from it.
 itself never executes Claude Code \(en the target it builds does.
 .Pp
 .Nm Cm build
-extracts the upstream JavaScript bundle and fuses it with a pinned
+extracts the upstream JavaScript bundle and builds it into a self-contained
+binary that needs nothing else at run time \(en no Node, no npm, no network.
+There are two such targets, differing in engine and in where each can be
+built, not in what they need at run time.
+By default,
+.Nm Cm build
+compiles the bundle to bytecode for a pinned
 .Xr tjs 1
-(QuickJS) runtime into
-.Dq quaude ,
-a self-contained binary that needs nothing else at run time \(en no Node, no
-npm, no network.
+(QuickJS) runtime, producing
+.Dq quaude ;
+because tjs is portable,
+.Nm
+can build a quaude on a machine that has never had Node installed.
 .Nm Cm build Fl -naude
 instead bakes the bundle into a Node SEA
 (single executable application), called
-.Dq naude ,
-for hosts that already have Node.
+.Dq naude :
+a copy of the build machine's own Node binary with the bundle embedded, so
+a built naude is just as self-contained at run time as a quaude.
+Building one needs a real Node
+.Ar >= 24
+to copy from, so naude can only be built where Node already exists; it
+serves as quaude's higher-fidelity twin \(en real Node built-ins, and the
+reference side of the shim's Node-parity checks.
 .Nm
 never installs, names, or replaces anything called
 .Ar claude ;
@@ -115,10 +128,11 @@ under the clode root).
 .Fl -naude
 .Op Fl -out Ar path
 bundles Claude Code as a Node SEA instead of a quaude: the extracted bundle is
-baked into a self-contained binary built from the host Node.
-Node hosts only \(em the SEA build pipeline requires Node
+baked into a self-contained binary built from the host Node, and runs with no
+Node installed, exactly like a quaude.
+Build machines only \(em the SEA build pipeline requires Node
 .Ar >= 24
-on the build machine.
+on the build machine, not on the machine that runs the result.
 Like a quaude, a naude carries Anthropic's code and is derived work: it is
 built locally and never distributed.
 .Pp
@@ -180,6 +194,13 @@ When non-empty, un-mutes clode's own progress output (same as
 .It Ev CLODE_CLAUDE_BIN
 Absolute path to the upstream claude binary to build from (highest
 precedence).
+.It Ev CLODE_VERSION_DIR
+Absolute path to the claude binary of a specific already-fetched version to
+build from; checked after
+.Ev CLODE_CLAUDE_BIN
+and before the provider's
+.Cm current
+pointer.
 .It Ev CLODE_PROVIDERS
 Store for binaries fetched by
 .Nm Cm fetch
