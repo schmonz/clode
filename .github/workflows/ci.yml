@@ -193,3 +193,50 @@ jobs:
         run: npm ci
       - name: Full node:test suite (includes the shim-fidelity gate)
         run: npm test
+
+  # node-shim oracle — the node-vs-tjs behavioral diff, run under a REAL tjs.
+  # WHY THIS JOB EXISTS: the `test` job above (npm test) never builds a tjs, so
+  # every `skipUnlessTjs` node-shim oracle test SILENTLY SKIPS there — the diff
+  # that catches shim-vs-node divergence was disabled in the default path. That
+  # gap let a real bug ship: fs.readFileSync returned a bare Uint8Array (not a
+  # Buffer), so .toString('hex')/.readUInt8 were silently wrong and the Edit tool
+  # failed under tjs — no wall, no crash, green everywhere (fixed 2026-07-15,
+  # A1 audit). A dedicated, visible job is the standing guard: this class cannot
+  # hide again. Reuses the CI-tier linux-x64-musl leg's bare-engine artifact
+  # (tjs-<leg>, uploaded expressly "for oracle jobs") — no rebuild. Same run
+  # pattern release.yml's be-oracle proved green on s390x-musl.
+  node-shim-oracle:
+    needs: tjs
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .tool-versions
+      - uses: actions/download-artifact@v8
+        with:
+          name: tjs-linux-x64-musl   # bare static engine from the CI-tier leg
+          path: ${{ runner.temp }}/tjs
+      - name: Install the runtime dep closure (ws/yaml/semver/string-width/... for the shim)
+        run: npm ci
+      - name: node-shim oracle suite (every module diffed vs host node, under tjs)
+        env:
+          CLODE_TJS: ${{ runner.temp }}/tjs/tjs
+        run: |
+          set -euo pipefail
+          chmod +x "$CLODE_TJS"
+          "$CLODE_TJS" eval 'console.log("linux-x64-musl tjs alive:", tjs.version)'
+          # EXCLUDED — env/portability matters tracked separately, NOT shim-vs-node
+          # data-correctness (identical rationale to release.yml's be-oracle):
+          #   node-shim-tty            no controlling terminal on a headless runner
+          #                            (PTY path is covered by windows-x64-tui + e2e-pty)
+          #   node-shim-child-process  musl addchdir limit (#if __APPLE__||__GLIBC__)
+          #   node-shim-core           shim signal table hardcodes DARWIN values
+          #                            (SIGBUS 10 vs Linux 7) — Linux-portability bug, filed
+          #   node-shim-bunshim        bun:ffi suffix hardcodes macOS 'dylib' (Linux .so)
+          EXCLUDE='node-shim-tty|node-shim-child-process|node-shim-core|node-shim-bunshim'
+          FILES=$(ls test/node-shim-*.test.cjs | grep -vE "$EXCLUDE")
+          node --test --test-concurrency=1 $FILES
