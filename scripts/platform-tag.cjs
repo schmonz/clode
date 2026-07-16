@@ -60,4 +60,8 @@ function harnessDir(repo) {
   return path.join(repo, 'test', '.harness', platformTag());
 }
 
-module.exports = { macosVersion, linuxGlibc, osToken, platformTag, harnessDir };
+// SEA output binary path for a given base name (e.g. 'naude'): <repo>/build/<tag>/<base>[.exe].
+function seaOut(repo, base) { return path.join(repo, 'build', platformTag(), base); }
+function seaBin(repo, base) { return seaOut(repo, base) + (process.platform === 'win32' ? '.exe' : ''); }
+
+module.exports = { macosVersion, linuxGlibc, osToken, platformTag, harnessDir, seaBin, seaOut };
