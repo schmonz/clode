@@ -139,14 +139,20 @@ async function main(argv, opts = {}) {
   //     or, with --self, a standalone native clode builder — on this machine
   //     (builder namespace, not passthrough — Claude Code never sees it).
   if (first === 'build') {
+    const buildArgs = args.slice(1);
     // Upstream drift threatens our ability to repackage, so check when we
     // repackage. (This ran on every launch when clode was a runner; there is
     // no launch anymore, so `build` — the moment upstream drift actually
-    // matters — is where the check moved.)
-    watch.clodeWatchBanner({ env, here: HERE });
-    watch.clodeWatchMaybe({ env, self });
+    // matters — is where the check moved.) --self fuses the BUILDER, not a
+    // Claude Code target: it has no upstream bundle to drift, and it is release
+    // bootstrap (CI legs, cross-fuse guests) rather than a user invocation — so
+    // it gets no watch trigger, never mind the network fetch inside one.
+    if (!buildArgs.includes('--self')) {
+      watch.clodeWatchBanner({ env, here: HERE });
+      watch.clodeWatchMaybe({ env, self });
+    }
     const fuse = require('./clode-fuse.cjs');
-    const status = await fuse.clodeBuild(args.slice(1), { env, libexec: LIBEXEC, here: HERE, version, self });
+    const status = await fuse.clodeBuild(buildArgs, { env, libexec: LIBEXEC, here: HERE, version, self });
     return process.exit(status);
   }
 
