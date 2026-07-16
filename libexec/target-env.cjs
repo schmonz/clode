@@ -49,8 +49,12 @@ function shapeTargetEnv(opts) {
     setIfUnset(env, 'USE_BUILTIN_RIPGREP', '0');
     const rgdir = dirname(rg);
     const cur = env.PATH || '';
-    // Prepend rg dir unless it's already at the beginning of PATH
-    if (cur.split(delimiter)[0] !== rgdir) {
+    // Whole-segment membership test, matching applyRipgrepEnv's
+    // `case ":$PATH:" in *":$_rgdir:"*)` — not just the first segment.
+    // This is nearly always a no-op: PATH discovery finds rg in a dir that,
+    // by construction, is already on PATH somewhere. The prepend only fires
+    // for an explicit CLODE_RG pointing at a dir outside PATH.
+    if (!cur.split(delimiter).includes(rgdir)) {
       env.PATH = cur ? rgdir + delimiter + cur : rgdir;
     }
   }

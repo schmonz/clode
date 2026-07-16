@@ -37,13 +37,25 @@ test('cert store: only on darwin, only when the modern trust stack is absent', (
   assert.strictEqual(linux.CLAUDE_CODE_CERT_STORE, undefined);
 });
 
-test('ripgrep: a real rg on PATH switches off the builtin and stays reachable', () => {
+test('ripgrep: a real rg on PATH switches off the builtin and leaves PATH ALONE', () => {
   const env = shapeTargetEnv(opts({
     env: { PATH: '/usr/bin:/opt/rg/bin' },
     exists: (p) => p === '/opt/rg/bin/rg',
   }));
   assert.strictEqual(env.USE_BUILTIN_RIPGREP, '0');
-  assert.strictEqual(env.PATH, '/opt/rg/bin:/usr/bin:/opt/rg/bin', 'rg dir is prepended so the bundle resolves `rg` by name');
+  // Discovery only ever finds rg in a PATH dir, so that dir is ALREADY reachable.
+  // Prepending it would reorder PATH and change which binary wins for every other
+  // tool in it — applyRipgrepEnv's whole-segment membership test exists to avoid
+  // exactly that, so honor it: PATH is untouched.
+  assert.strictEqual(env.PATH, '/usr/bin:/opt/rg/bin');
+});
+
+test('ripgrep: an rg dir at the FRONT of PATH is not duplicated either', () => {
+  const env = shapeTargetEnv(opts({
+    env: { PATH: '/opt/rg/bin:/usr/bin' },
+    exists: (p) => p === '/opt/rg/bin/rg',
+  }));
+  assert.strictEqual(env.PATH, '/opt/rg/bin:/usr/bin');
 });
 
 test('ripgrep: CLODE_RG wins verbatim over PATH discovery', () => {
@@ -61,12 +73,12 @@ test('ripgrep: no rg anywhere leaves the search config untouched (rg is OPTIONAL
   assert.strictEqual(env.PATH, '/usr/bin');
 });
 
-test('ripgrep: an rg dir already on PATH is not duplicated', () => {
+test('ripgrep: CLODE_RG already on PATH is not duplicated', () => {
   const env = shapeTargetEnv(opts({
-    env: { PATH: '/opt/rg/bin:/usr/bin' },
-    exists: (p) => p === '/opt/rg/bin/rg',
+    env: { PATH: '/usr/bin:/opt/rg/bin', CLODE_RG: '/opt/rg/bin/rg' },
+    exists: () => true,
   }));
-  assert.strictEqual(env.PATH, '/opt/rg/bin:/usr/bin');
+  assert.strictEqual(env.PATH, '/usr/bin:/opt/rg/bin', 'membership is whole-segment ANYWHERE in PATH, not just the front');
 });
 
 test('CLODE_SELF points at the clode builder, so the in-TUI updater can call back', () => {
