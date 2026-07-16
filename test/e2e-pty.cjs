@@ -6,53 +6,9 @@
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-const { REPO, NODE, seedRenderDeps } = require('./e2e.cjs');
+const { REPO, NODE } = require('./e2e.cjs');
 
 const TUI_SCREEN = path.join(REPO, 'test', 'tui-screen.cjs');
-
-// Fake no-connect ws (verbatim from test_tui.bats): enough for the bundle's startup
-// require() to succeed and the TUI to render; never connects (Remote Control unused).
-const FAKE_WS = `const { EventEmitter } = require('events');
-class WebSocket extends EventEmitter {
-  constructor(u){ super(); this.url = u; this.readyState = 0; }
-  send(){} close(){} ping(){} terminate(){} addEventListener(){} removeEventListener(){}
-}
-WebSocket.CONNECTING=0; WebSocket.OPEN=1; WebSocket.CLOSING=2; WebSocket.CLOSED=3;
-WebSocket.WebSocket=WebSocket; WebSocket.default=WebSocket;
-class WebSocketServer extends EventEmitter {}
-WebSocket.WebSocketServer=WebSocketServer; WebSocket.Server=WebSocketServer;
-module.exports=WebSocket;
-`;
-
-function writeMod(nmDir, name, body) {
-  const d = path.join(nmDir, name);
-  fs.mkdirSync(d, { recursive: true });
-  fs.writeFileSync(path.join(d, 'package.json'),
-    JSON.stringify({ name, version: '0.0.0-clode-test', main: 'index.js' }) + '\n');
-  fs.writeFileSync(path.join(d, 'index.js'), body);
-}
-
-const worldNode = (prefix) => path.join(prefix, 'bin', 'node' + path.extname(NODE));
-
-// Build the withws/ and nows/ node prefixes the TUI tests need under sbx.dir/world.
-// Each has bin/node -> real NODE and lib/node_modules with functional-fake render deps;
-// withws also gets fake ws. The bundle resolves ws only via NODE_PATH derived from
-// $CLODE_NODE's prefix (set_node_path), so the chosen prefix decides ws visibility.
-function makeWsWorlds(sbx) {
-  const root = path.join(sbx.dir, 'world');
-  const out = {};
-  for (const which of ['withws', 'nows']) {
-    const prefix = path.join(root, which);
-    fs.mkdirSync(path.join(prefix, 'bin'), { recursive: true });
-    const nm = path.join(prefix, 'lib', 'node_modules');
-    fs.mkdirSync(nm, { recursive: true });
-    fs.cpSync(NODE, worldNode(prefix)); // copy (not symlink): symlinks need privilege on Windows
-    seedRenderDeps(nm);
-    if (which === 'withws') writeMod(nm, 'ws', FAKE_WS);
-    out[which] = prefix;
-  }
-  return out;
-}
 
 // Minimal synthetic ~/.claude.json: past onboarding + the capture cwd pre-trusted, so a
 // fixed-duration no-keystroke capture never blocks on the theme-onboarding or the
@@ -73,7 +29,7 @@ function seedClaudeProfile(home, opts = {}) {
 // Drive opts.cmd under a PTY via tui-screen.cjs; return the rendered screen (stdout).
 // tui-screen self-terminates after opts.seconds, so no external timeout is needed.
 // opts: { seconds, cmd:[...], sendHex?, thenHex?:[...], rows?, cols?, env? }. cmd[0] is
-// the absolute program to run under the PTY (e.g. a world node + BIN, or a native binary).
+// the absolute program to run under the PTY (e.g. a built quaude, or a native binary).
 function capture(sbx, opts) {
   const args = [String(opts.seconds)];
   if (opts.sendHex) args.push('--send-hex', opts.sendHex);
@@ -87,4 +43,4 @@ function capture(sbx, opts) {
   return r.stdout || '';
 }
 
-module.exports = { makeWsWorlds, seedClaudeProfile, capture, worldNode, TUI_SCREEN };
+module.exports = { seedClaudeProfile, capture, TUI_SCREEN };

@@ -4,7 +4,22 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
-const { sandbox, runClode, mkProvider } = require('./e2e.cjs');
+const { spawnSync } = require('node:child_process');
+const { sandbox, mkProvider, REPO, NODE } = require('./e2e.cjs');
+
+const BIN = path.join(REPO, 'bin', 'clode');
+
+// `fetch` and `--clode-internal-update` (clode-main.cjs steps 5/6) are clode's OWN
+// namespace — dispatched before any bin resolution/extraction, so unaffected by the
+// runner's retirement. Exercised with a direct spawn of bin/clode, not a model runner.
+function run(sbx, args = [], opts = {}) {
+  const r = spawnSync(NODE, [BIN, ...args], {
+    encoding: 'utf8',
+    env: { ...sbx.env, ...(opts.env || {}) },
+    cwd: opts.cwd || REPO,
+  });
+  return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '', output: (r.stdout || '') + (r.stderr || '') };
+}
 
 // test_self_update.bats setup(): a file:// releases fixture (channel files, a
 // platform provider binary, and a manifest with its sha256) that `clode fetch`
@@ -57,7 +72,7 @@ function withReleases(t) {
 
 test('clode fetch <channel> fetches and reports, then exits', (t) => {
   const { sbx } = withReleases(t);
-  const r = runClode(sbx, ['fetch', 'stable'], { env: { CLODE_CLAUDE_BIN: '/nonexistent' } });
+  const r = run(sbx, ['fetch', 'stable'], { env: { CLODE_CLAUDE_BIN: '/nonexistent' } });
   assert.strictEqual(r.status, 0);
   assert.match(r.output, /fetched 9\.9\.9/);
   assert.ok(fs.existsSync(path.join(providersDir(sbx), '9.9.9', 'claude')));
@@ -71,7 +86,7 @@ test('clode --clode-internal-update <channel> refuses rather than impersonating 
   // refusal fires even though this fixture's fetch would otherwise succeed (the
   // channel/manifest/provider are all real and resolvable).
   const { sbx } = withReleases(t);
-  const r = runClode(sbx, ['--clode-internal-update', 'stable'],
+  const r = run(sbx, ['--clode-internal-update', 'stable'],
     { env: { CLODE_CLAUDE_BIN: '/nonexistent' } });
   assert.notStrictEqual(r.status, 0);
   assert.match(r.output, /cannot update itself|clode update/i);
@@ -82,23 +97,11 @@ test('clode --clode-internal-update <channel> refuses rather than impersonating 
 
 test('clode fetch prints a warn-only signals digest and writes a snapshot', (t) => {
   const { sbx, signalsDir } = withReleases(t);
-  const r = runClode(sbx, ['fetch', 'stable'], { env: { CLODE_CLAUDE_BIN: '/nonexistent' } });
+  const r = run(sbx, ['fetch', 'stable'], { env: { CLODE_CLAUDE_BIN: '/nonexistent' } });
   assert.strictEqual(r.status, 0);                       // warn-only: never blocks
   assert.match(r.output, /clode signals for 9\.9\.9/);
   assert.match(r.output, /Upgraded the bundled Bun runtime/);   // HIGH release-note signal
   const snap = path.join(signalsDir, '9.9.9.json');
   assert.ok(fs.existsSync(snap));
   assert.match(fs.readFileSync(snap, 'utf8'), /"version": "9\.9\.9"/);
-});
-
-test('after clode fetch, launching clode extracts the fetched provider', (t) => {
-  const { sbx } = withReleases(t);
-  const cache = path.join(sbx.dir, 'cache');
-  // CLODE_CLAUDE_BIN is set inline for the update only (never persisted onto
-  // sbx.env), so the plain launch resolves the fetched provider.
-  const u = runClode(sbx, ['fetch', 'stable'],
-    { env: { CLODE_CACHE: cache, CLODE_CLAUDE_BIN: '/nonexistent' } });
-  assert.strictEqual(u.status, 0);
-  runClode(sbx, [], { env: { CLODE_CACHE: cache } });    // `|| true`: exit ignored
-  assert.ok(fs.existsSync(path.join(cache, '9.9.9', 'cli.cjs')));
 });

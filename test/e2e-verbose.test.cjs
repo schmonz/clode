@@ -1,7 +1,10 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
-const { sandbox, runClode, mkProvider } = require('./e2e.cjs');
+const { spawnSync } = require('node:child_process');
+const { sandbox, mkProvider, REPO, NODE } = require('./e2e.cjs');
+
+const BIN = path.join(REPO, 'bin', 'clode');
 
 // test_verbose.bats setup: a fake provider that prints "CLODE-FIXTURE <label>" and
 // CLODE_CLAUDE_BIN pointing at it. (CLODE_LIBEXEC/CLODE_CACHE from the bats setup are
@@ -15,9 +18,25 @@ function withProvider(t, label = 'tok') {
   return sbx;
 }
 
+// The --clode-help / --clode-verbose dispatch (clode-main.cjs steps 1/4) is clode's
+// OWN flag handling — unaffected by the runner's retirement — so it's exercised with
+// a direct spawn of bin/clode, not a model runner. (The default-launch cases that used
+// to sit alongside these — "emits no chatter", "--clode-verbose un-mutes progress",
+// "CLODE_VERBOSE=1 env" — asserted on the runner actually booting the bundle; that
+// premise is gone, and they were deleted rather than forced onto a model runner that
+// doesn't speak clode's own verbose/extract chatter at all.)
+function run(sbx, args = [], opts = {}) {
+  const r = spawnSync(NODE, [BIN, ...args], {
+    encoding: 'utf8',
+    env: { ...sbx.env, ...(opts.env || {}) },
+    cwd: opts.cwd || REPO,
+  });
+  return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '', output: (r.stdout || '') + (r.stderr || '') };
+}
+
 test('--clode-help prints clode-specific options and exits 0', (t) => {
   const sbx = withProvider(t);
-  const r = runClode(sbx, ['--clode-help']);
+  const r = run(sbx, ['--clode-help']);
   assert.strictEqual(r.status, 0);
   assert.match(r.output, /--clode-verbose/);
   assert.match(r.output, /--clode-version/);
@@ -26,31 +45,7 @@ test('--clode-help prints clode-specific options and exits 0', (t) => {
 
 test('--clode-verbose is stripped before clode-flag dispatch (works in any position)', (t) => {
   const sbx = withProvider(t);
-  const r = runClode(sbx, ['--clode-verbose', '--clode-help']);
+  const r = run(sbx, ['--clode-verbose', '--clode-help']);
   assert.strictEqual(r.status, 0);
   assert.match(r.output, /run the latest Claude Code/);
-});
-
-test('default launch emits NO clode chatter (only the bundle output)', (t) => {
-  const sbx = withProvider(t);
-  const r = runClode(sbx, []);
-  assert.strictEqual(r.status, 0);
-  assert.match(r.output, /CLODE-FIXTURE tok/);          // the bundle ran
-  assert.doesNotMatch(r.output, /extracting JS/);       // ...but clode stayed quiet
-  assert.doesNotMatch(r.output, /^clode:/m);
-});
-
-test('--clode-verbose un-mutes clode progress, and is consumed (bundle still boots)', (t) => {
-  const sbx = withProvider(t);
-  const r = runClode(sbx, ['--clode-verbose']);
-  assert.strictEqual(r.status, 0);
-  assert.match(r.output, /extracting JS/);
-  assert.match(r.output, /CLODE-FIXTURE tok/);          // flag consumed, not passed on
-});
-
-test('CLODE_VERBOSE=1 env is equivalent to the flag', (t) => {
-  const sbx = withProvider(t);
-  const r = runClode(sbx, [], { env: { CLODE_VERBOSE: '1' } });
-  assert.strictEqual(r.status, 0);
-  assert.match(r.output, /extracting JS/);
 });

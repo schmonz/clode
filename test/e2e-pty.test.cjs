@@ -3,20 +3,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { sandbox } = require('./e2e.cjs');
-const { makeWsWorlds, seedClaudeProfile, worldNode } = require('./e2e-pty.cjs');
-
-test('makeWsWorlds builds withws (with ws) and nows (without ws)', (t) => {
-  const sbx = sandbox(t);
-  const { withws, nows } = makeWsWorlds(sbx);
-  // both worlds have a node copy + fake render deps
-  for (const p of [withws, nows]) {
-    assert.ok(fs.existsSync(worldNode(p)), 'world node copy exists');
-    assert.ok(fs.existsSync(path.join(p, 'lib', 'node_modules', 'string-width', 'package.json')));
-  }
-  // ws present ONLY in withws
-  assert.ok(fs.existsSync(path.join(withws, 'lib', 'node_modules', 'ws', 'index.js')));
-  assert.ok(!fs.existsSync(path.join(nows, 'lib', 'node_modules', 'ws')));
-});
+const { seedClaudeProfile } = require('./e2e-pty.cjs');
 
 test('seedClaudeProfile writes a cwd-keyed trusted profile', (t) => {
   const sbx = sandbox(t);

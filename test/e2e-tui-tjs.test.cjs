@@ -1,7 +1,9 @@
 'use strict';
-// M1 (phase 3): the real Ink TUI renders under CLODE_ENGINE=tjs. Opt-in — spawns
-// the real Claude Code bundle under the patched tjs (touches the Keychain, may
-// touch the network). Gates: CLODE_TJS (or build/tjs/tjs) + CLODE_LIVE_RENDER=1.
+// M1 (phase 3): the real Ink TUI renders under a built quaude (tjs + node-shim).
+// Opt-in — builds a real quaude (`clode build`) and spawns IT directly (touches the
+// Keychain, may touch the network; no launcher/CLODE_ENGINE involved — a fused
+// quaude carries its own engine and deps as members). Gates: CLODE_TJS (or
+// build/tjs/tjs) + CLODE_LIVE_RENDER=1 + a resolvable provider.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -9,38 +11,47 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { sandbox, REPO } = require('./e2e.cjs');
-const { makeWsWorlds, seedClaudeProfile, capture, worldNode } = require('./e2e-pty.cjs');
+const { seedClaudeProfile, capture } = require('./e2e-pty.cjs');
 const { resolveClaudeBin } = require('../libexec/clode-resolve.cjs');
 const { tjsPath } = require('./node-shim-helper.cjs');
 
-const BIN = path.join(REPO, 'bin', 'clode');
+const ENTRY = path.join(REPO, 'bin', 'clode');
 function realProvider() {
   try { const p = resolveClaudeBin({ env: process.env }); if (p && fs.existsSync(p)) return p; } catch { /* */ }
   const home = path.join(os.homedir(), '.local', 'bin', 'claude');
   return fs.existsSync(home) ? home : null;
 }
 
-let SKIP = null, SCREEN = '', SBX = null;
-before(async () => {
+let SKIP = null, SCREEN = '', SBX = null, DIR = null;
+before(() => {
   if (!tjsPath()) { SKIP = 'no tjs binary (CLODE_TJS or build/tjs/tjs)'; return; }
   if (process.env.CLODE_LIVE_RENDER !== '1') { SKIP = 'live-render opt-in only (set CLODE_LIVE_RENDER=1)'; return; }
   const provider = realProvider();
   if (!provider) { SKIP = 'no resolvable Claude Code provider'; return; }
   SBX = sandbox();
-  SBX.env.CLODE_CLAUDE_BIN = provider;
-  SBX.env.CLODE_ENGINE = 'tjs';
-  SBX.env.CLODE_TJS = tjsPath();
   seedClaudeProfile(SBX.home, { cwd: REPO });
-  const { withws } = makeWsWorlds(SBX);
-  // Warm the per-binary extract cache so a (re)extract never eats the timed capture.
-  spawnSync(worldNode(withws), [BIN, '--version'],
-    { env: { ...SBX.env, CLODE_NODE: worldNode(withws) }, encoding: 'utf8' });
-  SCREEN = capture(SBX, { seconds: 12, cmd: [worldNode(withws), BIN],
-    env: { CLODE_NODE: worldNode(withws) } });
+  DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-tui-tjs-'));
+  const quaude = path.join(DIR, 'quaude');
+  const build = spawnSync(process.execPath, [ENTRY, 'build', '--out', quaude], {
+    encoding: 'utf8',
+    timeout: 300000,
+    env: {
+      ...process.env,
+      CLODE_CLAUDE_BIN: provider,
+      CLODE_CACHE: path.join(DIR, 'cache'),   // hermetic: never the real cache
+      CLODE_TJS: tjsPath(),
+      DYLD_INSERT_LIBRARIES: '',
+    },
+  });
+  if (build.status !== 0) { SKIP = `clode build failed:\n${build.stdout}\n${build.stderr}`; return; }
+  SCREEN = capture(SBX, { seconds: 12, cmd: [quaude] });
 });
-after(() => { if (SBX) { try { fs.rmSync(SBX.dir, { recursive: true, force: true }); } catch { /* */ } } });
+after(() => {
+  if (SBX) { try { fs.rmSync(SBX.dir, { recursive: true, force: true }); } catch { /* */ } }
+  if (DIR) { try { fs.rmSync(DIR, { recursive: true, force: true }); } catch { /* */ } }
+});
 
-test('TUI renders the welcome box (Claude Code) under CLODE_ENGINE=tjs', (t) => {
+test('TUI renders the welcome box (Claude Code) under a built quaude', (t) => {
   if (SKIP) { t.skip(SKIP); return; }
   assert.match(SCREEN, /Claude Code/);
 });

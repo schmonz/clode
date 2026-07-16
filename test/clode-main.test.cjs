@@ -46,21 +46,20 @@ test('--clode-help prints clode-specific options and exits 0', () => {
   assert.ok(r.stdout.endsWith("Run 'clode --help' for Claude Code's own help.\n"));
 });
 
-test('--clode-help is dispatched before any arg that merely contains the text', () => {
-  // A prompt containing "--clode-help" but not as the first arg must NOT trigger
-  // clode's help (that would be a real session). We only assert the FIRST-arg
-  // gate here by checking a non-first occurrence is not the version/help path:
-  // run with no bin resolvable so it hits the default-launch bin error, proving
-  // it did not short-circuit on the embedded flag.
-  const r = runEntry(['-p', 'explain --clode-help'], {
-    HOME: fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'clode-nohome-')),
-    CLODE_CLAUDE_BIN: '',
-    CLODE_VERSION_DIR: '',
-    PATH: '/nonexistent',
-  });
-  // No clode help on stdout; it went down the launch path and failed to find a bin.
+test('--clode-help is dispatched only as the outer FIRST arg — not one level in', () => {
+  // Proves the first-arg-only dispatch cuts both ways: '--clode-help' only triggers
+  // clode's own help when it IS the outer args[0]. Nested one level in (as a `build`
+  // sub-argument) it is just an unrecognized build flag — and `build` is clode's own
+  // namespace with NO passthrough (unlike a launch, which would forward an unknown
+  // flag quietly): an unrecognized argument is a hard, immediate usage error. This
+  // replaces the old proof-by-passthrough (running with no bin resolvable to show it
+  // "fell through" to the default launch) now that the launch path is gone — `build`
+  // gives the same first-arg-only proof without depending on it.
+  const r = runEntry(['build', '--clode-help']);
   assert.doesNotMatch(r.stdout || '', /--clode-watch/);
-  assert.match(r.stderr || '', /no Claude Code binary found|claude binary not found|too old|no usable node/);
+  assert.notStrictEqual(r.status, 0);
+  assert.match(r.stderr || '', /unknown argument '--clode-help'/);
+  assert.match(r.stderr || '', /usage: clode build/);
 });
 
 test('the ES5 prologue prints the exact floor message + exits 1 on an old node', () => {

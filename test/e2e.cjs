@@ -4,13 +4,12 @@
 // CONSTRUCTED-CLEAN env (nothing from the real process.env), so no test can read or
 // write real machine state (the hermetic-guard enforces it) and the suite is
 // Windows-portable (no bash). Pure Node stdlib.
-const { spawnSync, execFileSync } = require('node:child_process');
+const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
 const REPO = path.resolve(__dirname, '..');
-const BIN = path.join(REPO, 'bin', 'clode');
 const NODE = process.env.CLODE_NODE || process.execPath;
 const MKFIXTURE = path.join(REPO, 'test', 'mkfixture.cjs');
 
@@ -62,11 +61,6 @@ function sandbox(t) {
     CLODE_NODE: NODE,
     CLODE_NO_WATCH: '1',
     CLODE_OFFLINE: '1',
-    // These e2e tests boot a FAKE bundle (mkProvider prints a label) to exercise
-    // LAUNCHER mechanics (resolve/cache/extract/verbose/selfupdate) — engine-agnostic,
-    // and CI has no tjs. tjs is the runtime default now, so pin the sandbox to the
-    // host-Node oracle; a test that wants the tjs engine overrides via opts.env.
-    CLODE_ENGINE: 'node',
   };
   // On Windows, clode must reach the command interpreter to run a .cmd (e.g. npm.cmd) —
   // the parallel of /bin/sh being reachable via the POSIX sandbox PATH above. ComSpec is
@@ -79,23 +73,6 @@ function sandbox(t) {
     t.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } });
   }
   return { dir, home, stateRoot, env };
-}
-
-// Spawn bin/clode with the sandbox env. opts.env merges over sbx.env; opts.input is
-// stdin. Returns status/signal/stdout/stderr plus `output` = stdout+stderr (matching
-// bats `run`'s merged $output).
-function runClode(sbx, args = [], opts = {}) {
-  const r = spawnSync(NODE, [opts.bin || BIN, ...args], {
-    encoding: 'utf8',
-    env: { ...sbx.env, ...(opts.env || {}) },
-    input: opts.input,
-    cwd: opts.cwd || REPO,
-  });
-  return {
-    status: r.status, signal: r.signal,
-    stdout: r.stdout || '', stderr: r.stderr || '',
-    output: (r.stdout || '') + (r.stderr || ''),
-  };
 }
 
 // Fake provider binary at `dest`, printing "CLODE-FIXTURE <label>" when booted.
@@ -148,4 +125,4 @@ function fakeNpm(dest, opts = {}) {
   return dest;
 }
 
-module.exports = { sandbox, runClode, mkProvider, fakeNpm, seedRenderDeps, REPO, BIN, NODE };
+module.exports = { sandbox, mkProvider, fakeNpm, seedRenderDeps, REPO, NODE };

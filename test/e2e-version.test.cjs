@@ -2,18 +2,23 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const { sandbox, runClode, REPO } = require('./e2e.cjs');
+const { spawnSync } = require('node:child_process');
+const { sandbox, REPO, NODE } = require('./e2e.cjs');
 
-// Repo-file single-source-of-truth checks + one launcher --clode-version case.
-// The VERSION file, package.json, and LICENSE are read straight from REPO (no
-// subprocess); only the --clode-version reporting is exercised through the launcher.
+const BIN = path.join(REPO, 'bin', 'clode');
+
+// Repo-file single-source-of-truth checks + one --clode-version case. The VERSION
+// file, package.json, and LICENSE are read straight from REPO (no subprocess); only
+// the --clode-version reporting is exercised via a direct spawn of bin/clode —
+// clode's own flag dispatch (clode-main.cjs step 3), unaffected by the runner's
+// retirement (it prints and exits before any bin resolution).
 
 test('clode --clode-version reports the shipped VERSION', (t) => {
   const sbx = sandbox(t);
-  const r = runClode(sbx, ['--clode-version']);
+  const r = spawnSync(NODE, [BIN, '--clode-version'], { encoding: 'utf8', env: sbx.env });
   assert.strictEqual(r.status, 0);
   const version = fs.readFileSync(path.join(REPO, 'VERSION'), 'utf8').trim();
-  assert.strictEqual(r.output.trim(), `clode ${version}`);
+  assert.strictEqual((r.stdout || '').trim(), `clode ${version}`);
 });
 
 test('package.json version matches the VERSION file', () => {

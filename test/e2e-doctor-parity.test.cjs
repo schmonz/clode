@@ -1,12 +1,14 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { sandbox, REPO, NODE } = require('./e2e.cjs');
-const { capture, seedClaudeProfile, makeWsWorlds, worldNode } = require('./e2e-pty.cjs');
+const { capture, seedClaudeProfile } = require('./e2e-pty.cjs');
+const { tjsPath } = require('./node-shim-helper.cjs');
 
-const BIN = path.join(REPO, 'bin', 'clode');
+const ENTRY = path.join(REPO, 'bin', 'clode');
 const DOCTOR_PARITY = path.join(REPO, 'test', 'doctor-parity.cjs');
 
 // Hex the bats sent: type "/doctor" then Enter, at 4s and 6s.
@@ -21,10 +23,17 @@ function version(cmd, env) {
   const r = spawnSync(cmd[0], cmd.slice(1).concat('--version'), { encoding: 'utf8', env });
   return ((r.stdout || '') + (r.stderr || '')).split('\n')[0].trim();
 }
+// The built quaude must be self-contained: no NODE_PATH ever (matches
+// quaude-build.test.cjs's own invariant for the same binary).
+function cleanEnv(extra) {
+  const env = { ...process.env, ...extra };
+  delete env.NODE_PATH;
+  return env;
+}
 
-let SKIP = null, NATIVE = '', CLODE = '', SBX = null;
+let SKIP = null, NATIVE = '', CLODE = '', SBX = null, DIR = null;
 
-before(async () => {
+before(() => {
   // OPT-IN ONLY. This spawns the REAL Claude Code bundle, which probes the macOS login
   // Keychain (auth/Remote-Control status) and pops system dialogs, and may touch the
   // network. Keep it OUT of the default offline `npm test`; a dev opts in explicitly.
@@ -32,33 +41,43 @@ before(async () => {
     SKIP = 'live-render opt-in only (set CLODE_LIVE_RENDER=1; spawns the real bundle, touches Keychain)';
     return;
   }
+  if (!tjsPath()) { SKIP = 'no tjs binary (CLODE_TJS or build/tjs/tjs)'; return; }
   const native = nativeClaude();
   if (!native) { SKIP = 'native claude not on PATH (environmental)'; return; }
-  const nver = version([native], { ...process.env, DISABLE_AUTOUPDATER: '1' });
+  const nver = version([native], cleanEnv({ DISABLE_AUTOUPDATER: '1' }));
   if (!nver) { SKIP = 'native claude did not run here'; return; }
   SBX = sandbox();
-  // clode must run the SAME provider bundle as native (the constructed-clean PATH has no
-  // provider); otherwise version-match and the comparison are meaningless.
-  SBX.env.CLODE_CLAUDE_BIN = native;
   // Past-onboarding + trusted profile keyed by the capture cwd (REPO), so the fixed-
   // duration no-keystroke capture reaches the interactive prompt where /doctor works.
   seedClaudeProfile(SBX.home, { cwd: REPO });
-  // clode's bundle constructs a WebSocket at TUI startup; under the bun-shim that needs a
-  // resolvable `ws` or it fails loud instead of rendering /doctor. Give it a fake ws via
-  // the withws world node (native has Bun's built-in WebSocket and needs no world).
-  const { withws } = makeWsWorlds(SBX);
-  const wnode = worldNode(withws);
-  const cver = version([wnode, BIN], { ...SBX.env, CLODE_NODE: wnode });
+  DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-doctor-parity-'));
+  const quaude = path.join(DIR, 'quaude');
+  // clode must build FROM the SAME provider bundle as native (the constructed-clean PATH
+  // has no provider); otherwise version-match and the comparison are meaningless. A fused
+  // quaude carries its deps (incl. a real `ws`) as members — no world/fake-ws needed.
+  const build = spawnSync(process.execPath, [ENTRY, 'build', '--out', quaude], {
+    encoding: 'utf8',
+    timeout: 300000,
+    env: {
+      ...process.env,
+      CLODE_CLAUDE_BIN: native,
+      CLODE_CACHE: path.join(DIR, 'cache'),   // hermetic: never the real cache
+      CLODE_TJS: tjsPath(),
+      DYLD_INSERT_LIBRARIES: '',
+    },
+  });
+  if (build.status !== 0) { SKIP = `clode build failed:\n${build.stdout}\n${build.stderr}`; return; }
+  const cver = version([quaude], cleanEnv());
   if (nver !== cver) { SKIP = `version mismatch: native='${nver}' clode='${cver}'`; return; }
-  // Warm clode's cache so a (re)extract never eats the timed capture.
-  spawnSync(wnode, [BIN, '--version'], { env: { ...SBX.env, CLODE_NODE: wnode }, encoding: 'utf8' });
   const capOpts = { seconds: 16, thenHex: THEN_HEX, rows: 120, cols: 100 };
   NATIVE = capture(SBX, { ...capOpts, cmd: [native], env: { DISABLE_AUTOUPDATER: '1' } });
-  CLODE  = capture(SBX, { ...capOpts, cmd: [wnode, BIN],
-    env: { CLODE_NODE: wnode, DISABLE_AUTOUPDATER: '1' } });
+  CLODE  = capture(SBX, { ...capOpts, cmd: [quaude], env: { DISABLE_AUTOUPDATER: '1' } });
 });
 
-after(() => { if (SBX) { try { fs.rmSync(SBX.dir, { recursive: true, force: true }); } catch { /* */ } } });
+after(() => {
+  if (SBX) { try { fs.rmSync(SBX.dir, { recursive: true, force: true }); } catch { /* */ } }
+  if (DIR) { try { fs.rmSync(DIR, { recursive: true, force: true }); } catch { /* */ } }
+});
 
 test('both /doctor renders were captured', (t) => {
   if (SKIP) { t.skip(SKIP); return; }
