@@ -14,7 +14,9 @@
 //   6. --clode-internal-update -> refuse (not a real update yet), exit 1
 //   6b. build [--out PATH]     -> clodeBuild (fuse a quaude), exit status
 //   7. --clode-watch           -> clodeWatch(manual), exit 0
-//   8. default launch          -> require_node, resolve/extract/deps, watcher, run
+//   8. anything else           -> usage error, exit 2 (clode BUILDS targets; it
+//                                 never runs Claude Code itself — see clode-fuse.cjs
+//                                 / naude-entry.cjs for what DOES run it)
 //
 // Pure Node stdlib + sibling .cjs requires (the sub-modules pull the ext-deps).
 
@@ -23,13 +25,8 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const hosttools = require('./clode-hosttools.cjs');
-const resolve = require('./clode-resolve.cjs');
-const extract = require('./clode-extract.cjs');
-const deps = require('./clode-deps.cjs');
 const update = require('./clode-update.cjs');
 const watch = require('./clode-watch.cjs');
-const run = require('./clode-run.cjs');
-const { clodeCacheDir, depsStore } = require('./clode-paths.cjs');
 
 // clode's own help (clode-specific flags only — `clode --help` still passes
 // through to Claude Code). Byte-for-byte the sh clode_help heredoc, version
@@ -189,59 +186,12 @@ async function main(argv, opts = {}) {
     return process.exit(0);
   }
 
-  // 8. DEFAULT LAUNCH.
-  const launchNode = node;
-  requireNode(launchNode);
-
-  let bin = resolve.resolveClaudeBin({ env });
-  if (bin == null) {
-    process.stderr.write('clode: no Claude Code binary found.\n');
-    process.stderr.write("clode: run 'clode fetch [channel|version]' to fetch one, or\n");
-    process.stderr.write('clode: install the provider package (e.g. claude-code), or set\n');
-    process.stderr.write('clode: CLODE_CLAUDE_BIN=/path/to/claude\n');
-    return process.exit(1);
-  }
-  if (!resolve.pathExists(bin)) {
-    process.stderr.write(`clode: claude binary not found at '${bin}'\n`);
-    return process.exit(1);
-  }
-  // Follow a tiny exec-wrapper to the real single-file bundle, so we extract (and
-  // cache-key off) the binary that actually carries the JS.
-  bin = resolve.followWrapper(bin);
-
-  const key = resolve.cacheKey(bin);
-  const cacheRoot = clodeCacheDir(env);
-  const cache = path.join(cacheRoot, key);
-
-  // Ensure the ext-deps are PRESENT (the real LIBEXEC/DEPS_ROOT apply). install:false
-  // is the D2 user-runtime contract: never shell npm — a fused binary carries its
-  // deps as members, dev/CI has them in node_modules; anything else fails loud.
-  deps.ensureDeps({ libexec: LIBEXEC, here: HERE, verbose, env, install: false });
-
-  extract.extractIfNeeded({ bin, cacheDir: cache, libexec: LIBEXEC, verbose, key });
-
-  // Where the runtime ext-deps (ws, yaml, string-width, ...) live: ensure_deps's
-  // DEPS_ROOT. Its node_modules joins NODE_PATH via runBundle -> applyNodePath.
-  const depsRoot = depsStore(env);
-
-  // Watcher: on real sessions only (never on print-and-exit, which run no model),
-  // surface any prior HIGH notice, then maybe fire a fresh detached cycle.
-  if (first !== '--version' && first !== '-v' && first !== '--help' && first !== '-h') {
-    watch.clodeWatchBanner({ env, here: HERE });
-    watch.clodeWatchMaybe({ env, self });
-  }
-
-  const settingsPath = run.guardSettingsForArgs(args, { node: launchNode, libexec: LIBEXEC, env });
-  run.runBundle({
-    node: launchNode,
-    cliPath: path.join(cache, 'cli.cjs'),
-    args,
-    settingsPath,
-    self,
-    libexec: LIBEXEC,
-    depsRoot,
-    env,
-  });
+  // 8. No default launch: clode BUILDS Claude Code targets, it never runs them.
+  // (quaude runs it under tjs; naude under node.) An unrecognized argv is a
+  // usage error — there is nothing to pass it through to.
+  process.stderr.write(`clode: unknown command '${first ?? ''}'\n`);
+  process.stderr.write(clodeHelp(version));
+  return process.exit(2);
 }
 
 // Self-run entry: when this module is the process's main module (the esbuilt

@@ -166,20 +166,22 @@ test('acceptance 1: --clode-version/--clode-help answer with node ABSENT from PA
   assert.match(h.stdout, /clode build --self/);
 });
 
-test('acceptance 1b: BARE invocation fails with a friendly message, not a wall stack (v0.1.2 field report)', async (t) => {
+test('acceptance 1b: BARE invocation is a clean usage error, not a wall stack (v0.1.2 field report)', async (t) => {
   if (SKIP) { t.skip(SKIP); return; }
   // The exact first-user scenario: download the builder, run it with no
   // arguments. v0.1.2 shipped a crash here — clode-main's isSea() probed
   // require('node:sea'), the shim had no sea module, the wallProxy threw on
   // the .isSea PROPERTY READ (outside seaMod()'s try/catch), and the QuickJS
   // stack (which carries no `Error: message` header) printed bare. Contract
-  // now: the classic launch path proceeds past isSea() and fails CONTROLLED
-  // at provider/node resolution, with an actionable message.
+  // now (task 5, "delete the runner"): clode never runs Claude Code at all —
+  // there is no launch path left to fail controlled INTO, so a bare
+  // invocation is just an unrecognized command: print the usage error and
+  // exit 2, never a bare QuickJS stack.
   const env = { PATH: EMPTY_PATH, HOME: DIR };
   const r = await runNative(NATIVE, [], env, 60000);
-  assert.strictEqual(r.status, 1);
+  assert.strictEqual(r.status, 2);
   assert.doesNotMatch(r.stderr, /not implemented|at isSea/);
-  assert.match(r.stderr, /no Claude Code binary found|no usable node|claude binary not found/);
+  assert.match(r.stderr, /unknown command/);
 });
 
 test('acceptance 2: the native builder BUILDS THE PRODUCT (quaude fuse + PONG + attest), node-free AND template-free', async (t) => {

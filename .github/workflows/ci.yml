@@ -71,10 +71,11 @@ jobs:
               test/node-shim-agentic.test.cjs
 
   # Windows ConPTY TUI render (windows-tjs-port spec, sub-project D). The FIRST
-  # CI PTY harness on any platform: drive the real bin/clode LAUNCHER
-  # (CLODE_ENGINE=tjs → clode-run.cjs spawns tjs.exe run loader cli → the real
-  # Claude Code bundle → Ink) inside a real ConPTY (node-pty) with an xterm
-  # emulator on the far end, and assert the welcome box painted. Runs the SAME
+  # CI PTY harness on any platform: build a real quaude (`clode build`) and drive
+  # IT directly (tjs.exe + node-shim + the real Claude Code bundle → Ink; no
+  # launcher involved — a fused quaude carries its own engine and deps as
+  # members) inside a real ConPTY (node-pty) with an xterm emulator on the far
+  # end, and assert the welcome box painted. Runs the SAME
   # test/e2e-tui-tjs.test.cjs as POSIX, un-gated here via CLODE_LIVE_RENDER=1 —
   # true on Windows because there is no Keychain GUI modal to hang on (the reason
   # POSIX CI can't run it). Consumes the windows-x64 leg's tjs-windows-x64 engine.
@@ -251,10 +252,7 @@ jobs:
           if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
           echo "provider: $PROV"
           export CLODE_PROVIDER_BIN="$PROV"
-          # Plus the end-to-end tjs-DEFAULT launch (e2e-tjs-default): the `test` job
-          # has no tjs so it skips there; this job builds one, so it's the place the
-          # actual shipping default (bundle booted under tjs) gets exercised e2e.
-          node --test --test-concurrency=1 $FILES test/e2e-tjs-default.test.cjs
+          node --test --test-concurrency=1 $FILES
       # The packaged targets themselves: build a real naude (Node SEA) and a real
       # quaude (fused tjs) from the same CC and diff them. The model oracle above
       # runs cli.cjs under two engines; only this covers the PACKAGING. Nothing in
