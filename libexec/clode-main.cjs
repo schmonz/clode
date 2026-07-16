@@ -47,6 +47,7 @@ Usage:
                                            runtime + clode's own launcher, no node
                                            needed) that can itself run 'clode build';
                                            default ./clode-native
+  clode build --naude                      bundle Claude Code as a Node SEA; Node hosts only
 
 clode-specific options (consumed by clode; everything else goes to Claude Code):
   --clode-help        show this help and exit

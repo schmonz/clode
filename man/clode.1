@@ -13,7 +13,7 @@
 .Op Cm stable | latest | Ar version
 .Nm
 .Cm build
-.Op Fl -self
+.Op Fl -self | Fl -naude
 .Op Fl -out Ar path
 .Nm
 .Fl -clode-help
@@ -130,6 +130,17 @@ The launcher bundle comes from
 .Pa build/*/clode-main.bundle.cjs ,
 produced by
 .Ic node scripts/build-sea.mjs --bundle-only ) .
+.Pp
+.Nm build
+.Fl -naude
+bundles Claude Code as a Node SEA (single executable application) instead of a
+quaude: the extracted bundle is baked into a self-contained binary built from the
+host Node.
+Node hosts only \(em the SEA build pipeline requires Node
+.Ar >= 24
+on the build machine.
+Like a quaude, a naude carries Anthropic's code and is derived work: it is built
+locally and never distributed.
 .Pp
 .Nm
 patches Claude Code's in-app auto-updater to run

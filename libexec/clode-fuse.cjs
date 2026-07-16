@@ -164,10 +164,60 @@ async function clodeBuild(args, opts) {
   const env = opts.env || process.env;
   const stderr = opts.stderr || process.stderr;
   const stdout = opts.stdout || process.stdout;
+  // The one spawn seam every build step goes through (the fuse worker, the
+  // smokes, and the naude build). Injectable so the --naude wiring (and any
+  // future step) is testable without spawning a real subprocess; defaults to
+  // the module-level async `run`.
+  const spawnRun = opts.run || run;
   const verbose = !!env.CLODE_VERBOSE;
   const clodeLog = (m) => { if (verbose) stderr.write(m + '\n'); };
   const fail = (m) => { stderr.write('clode: ' + m + '\n'); return 1; };
   const SCALE = timeoutScale(env);
+
+  // -- naude branch (Task 4): `clode build --naude` bakes Claude Code into a
+  // Node SEA instead of fusing a quaude. It reuses the SAME resolve + extract
+  // machinery as the quaude path to land the user's cli.cjs, then hands that
+  // cli.cjs to scripts/build-naude.mjs (which runs the esbuild/postject SEA
+  // pipeline — Node >= 24 hosts only) and RETURNS, never touching the fuse.
+  if (args.includes('--naude')) {
+    const ROOT = path.resolve(opts.libexec, '..');
+    // --out is honored on the quaude path; pass it through so a future
+    // build-naude --out is respected. NOTE (Task 4): build-naude.mjs does NOT
+    // yet accept --out (it writes to build/<tag>/naude); this is a pass-through
+    // stub — build-naude ignores an unknown flag's presence today, so we only
+    // forward --out when explicitly given.
+    const outArgs = [];
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '--out' && args[i + 1]) { outArgs.push('--out', args[++i]); }
+    }
+    // Reuse the quaude path's resolve/extract helpers verbatim — no duplication.
+    let bin = resolve.resolveClaudeBin({ env });
+    if (bin == null || !resolve.pathExists(bin)) {
+      return fail(bin == null
+        ? "build --naude: no Claude Code binary found — run 'clode fetch [channel|version]' to fetch one, or install the provider package, or set CLODE_CLAUDE_BIN"
+        : `build --naude: claude binary not found at '${bin}'`);
+    }
+    bin = resolve.followWrapper(bin);
+    const key = resolve.cacheKey(bin);
+    const stageDir = path.join(clodeCacheDir(env), key);
+    clodeLog(`clode: build --naude: staging bundle ${key} ...`);
+    try {
+      extract.extractIfNeeded({ bin, cacheDir: stageDir, libexec: opts.libexec, verbose, key });
+    } catch (e) {
+      return fail(`build --naude: extraction failed: ${(e && e.message) || e}`);
+    }
+    const cliPath = path.join(stageDir, 'cli.cjs');
+    clodeLog(`clode: build --naude: building the Node SEA from ${cliPath} ...`);
+    const r = await spawnRun(process.execPath,
+      [path.join(ROOT, 'scripts', 'build-naude.mjs'), '--cli', cliPath, ...outArgs],
+      { env, timeout: 600000 * SCALE });
+    if (r.status !== 0) {
+      return fail(`build --naude: build-naude failed (exit ${r.status}):\n${r.stdout}${r.stderr}`);
+    }
+    if (r.stdout) clodeLog(r.stdout.trimEnd());
+    stdout.write('clode: built naude (Node SEA with Claude Code baked in)\n');
+    return 0;
+  }
 
   // -- argv: --self + --out only; anything else is an error (this is clode's
   // own namespace — nothing here passes through to Claude Code).
@@ -360,7 +410,7 @@ async function clodeBuild(args, opts) {
 
     // -- fuse, under the template itself.
     clodeLog(`clode: build: fusing ${out} ...`);
-    const w = await run(template, ['run', path.join(libexec, 'quaude-fuse.js'),
+    const w = await spawnRun(template, ['run', path.join(libexec, 'quaude-fuse.js'),
       signedBase, stageDir, path.join(libexec, 'node-shim'), nmDir,
       path.join(libexec, 'quaude-bootstrap.mjs'), extrasPath, out,
       // --self embeds the PRISTINE base template as a member (Decision 2) so a
@@ -403,13 +453,13 @@ async function clodeBuild(args, opts) {
       clodeLog('clode: build: smoke --clode-version/--clode-help ...');
       const smokeEnv = { ...env };
       delete smokeEnv.NODE_PATH;
-      const v = await run(out, ['--clode-version'], { env: smokeEnv, cwd: work, timeout: 120000 * SCALE });
+      const v = await spawnRun(out, ['--clode-version'], { env: smokeEnv, cwd: work, timeout: 120000 * SCALE });
       if (v.status !== 0 || !/^clode /.test(v.stdout)) {
         stderr.write(`clode: build --self: SMOKE FAILED — the fused builder did not answer --clode-version\n`);
         stderr.write(`clode: build --self: exit=${v.status} stdout:\n${v.stdout}\nstderr:\n${v.stderr}\n`);
         return 1;
       }
-      const h = await run(out, ['--clode-help'], { env: smokeEnv, cwd: work, timeout: 120000 * SCALE });
+      const h = await spawnRun(out, ['--clode-help'], { env: smokeEnv, cwd: work, timeout: 120000 * SCALE });
       if (h.status !== 0 || !/clode build/.test(h.stdout)) {
         stderr.write(`clode: build --self: SMOKE FAILED — the fused builder did not answer --clode-help\n`);
         stderr.write(`clode: build --self: exit=${h.status} stdout:\n${h.stdout}\nstderr:\n${h.stderr}\n`);
@@ -428,7 +478,7 @@ async function clodeBuild(args, opts) {
     try {
       const smokeEnv = { ...env, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-clode-build-smoke' };
       delete smokeEnv.NODE_PATH;
-      pong = await run(out, ['-p', 'say PONG'], { env: smokeEnv, cwd: work, timeout: 120000 * SCALE });
+      pong = await spawnRun(out, ['-p', 'say PONG'], { env: smokeEnv, cwd: work, timeout: 120000 * SCALE });
     } finally { await mock.close(); }
     const posted = mock.requests.some((q) => q.method === 'POST' && /\/messages/.test(q.url));
     if (pong.status !== 0 || !/PONG/.test(pong.stdout) || !posted) {
@@ -438,7 +488,7 @@ async function clodeBuild(args, opts) {
     }
 
     // -- smoke 2: attest must verify every member from the trailer just written.
-    const attest = await run(out, ['--quaude-attest'], { env, cwd: work, timeout: 120000 * SCALE });
+    const attest = await spawnRun(out, ['--quaude-attest'], { env, cwd: work, timeout: 120000 * SCALE });
     if (attest.status !== 0 || !/quaude-attest: all members verified/.test(attest.stdout)) {
       stderr.write(`clode: build: ATTEST FAILED (exit ${attest.status}):\n${attest.stdout}\n${attest.stderr}\n`);
       return 1;
