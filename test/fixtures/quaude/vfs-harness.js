@@ -34,6 +34,13 @@ async function collect(dir, prefix) {
 files.set('node-shim/loader.cjs', await tjs.readFile(loaderPath));
 await collect(path.join(shimRoot, 'modules'), 'node-shim/modules');
 await collect(path.join(shimRoot, 'internal'), 'node-shim/internal');
+// target-env.cjs: bare member name (no libexec/ prefix), exactly like the
+// real fuse (libexec/quaude-fuse.js) — the loader's fused SHIM_DIR has no
+// 'libexec' ancestor in the archive namespace, so modules/process.cjs's
+// relative require('../../target-env.cjs') only resolves if this rides at
+// the archive root. Without this member, loading the 'process' builtin
+// (which the loader does eagerly, before any entry code runs) throws.
+files.set('target-env.cjs', await tjs.readFile(path.join(path.dirname(shimRoot), 'target-env.cjs')));
 
 // Mini members standing in for the extracted bundle + deps.
 files.set('lib.cjs', enc.encode(`module.exports = { value: 'vfs-lib-ok' };\n`));

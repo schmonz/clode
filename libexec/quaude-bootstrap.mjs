@@ -45,18 +45,25 @@ async function sha256hex(bytes) {
   return Array.from(d, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-// tjs -> node spelling. Same mapping the node-shim's detectPlatform uses
-// (libexec/node-shim/modules/process.cjs:46); tjs.system.platform is EMPTY, so
+// tjs -> node spelling. This used to duplicate the node-shim's detectPlatform
+// switch (libexec/node-shim/modules/process.cjs) character-for-character; the
+// switch itself now lives ONCE, as target-env.cjs's mapPlatform — the same
+// require-free member this bootstrap already evaluates early for
+// shapeTargetEnv/probePaths (see globalThis.__clodeMapPlatform, installed
+// alongside those below, in main()). `map` is a real DI parameter (not just a
+// global read), matching bootstrapTargetEnv's existing shape/probe seam,
+// so host-node tests can inject target-env.cjs's mapPlatform directly instead
+// of relying on main() (which never runs outside the fused binary) to
+// populate the global. tjs.system.platform is EMPTY, so
 // navigator.userAgentData.platform is the only source this early.
-function tjsPlatform(uaPlatform) {
-  switch (uaPlatform) {
-    case 'macOS': return 'darwin';
-    case 'Windows': return 'win32';
-    case 'Linux': return 'linux';
-    case 'FreeBSD': return 'freebsd';
-    case 'OpenBSD': return 'openbsd';
-    default: return uaPlatform ? String(uaPlatform).toLowerCase() : 'linux';
-  }
+function tjsPlatform(uaPlatform, map = globalThis.__clodeMapPlatform) {
+  // No map installed and none injected (e.g. a host-node caller that never
+  // ran main()): fall back to the same "no signal" default target-env.cjs's
+  // mapPlatform uses, rather than silently miscategorizing. This is NOT a
+  // second copy of the 5-case switch — only the empty-input default survives
+  // here, so there is nothing left to drift.
+  if (typeof map === 'function') return map(uaPlatform);
+  return uaPlatform ? String(uaPlatform).toLowerCase() : 'linux';
 }
 
 // POSIX st_mode bits (no node:fs constants module under tjs): S_IFMT/S_IFREG
@@ -78,9 +85,10 @@ export async function bootstrapTargetEnv(tjs, opts) {
     builder,
     shape = globalThis.__clodeShapeTargetEnv,
     probe = globalThis.__clodeProbePaths,
+    map = globalThis.__clodeMapPlatform,
     uaPlatform = (typeof navigator !== 'undefined' && navigator.userAgentData && navigator.userAgentData.platform),
   } = opts;
-  const platform = tjsPlatform(uaPlatform);
+  const platform = tjsPlatform(uaPlatform, map);
   const delimiter = platform === 'win32' ? ';' : ':';
   const sep = platform === 'win32' ? '\\' : '/';
 
@@ -195,10 +203,18 @@ async function main() {
     // provenance leak with no consumer (nothing in the builder reads
     // CLODE_SELF; every write site overrides it) and a reproducibility hazard
     // for a published clode-native asset. So: quaude only.
+    // BARE member name 'target-env.cjs' (no libexec/ prefix): the node-shim's
+    // process.cjs also requires this member (relative to its fused SHIM_DIR,
+    // which has no 'libexec' ancestor in the archive namespace — see
+    // quaude-fuse.js), so this and that require must agree on where it lives.
     const tem = { exports: {} };
-    (0, new Function('module', 'exports', dec.decode(files.get('libexec/target-env.cjs'))))(tem, tem.exports);
+    (0, new Function('module', 'exports', dec.decode(files.get('target-env.cjs'))))(tem, tem.exports);
     globalThis.__clodeShapeTargetEnv = tem.exports.shapeTargetEnv;
     globalThis.__clodeProbePaths = tem.exports.probePaths;
+    // The shared uaPlatform->node switch (see tjsPlatform, above) — installed
+    // from the same evaluated member as shapeTargetEnv/probePaths, so there is
+    // exactly one copy of the mapping running under tjs.
+    globalThis.__clodeMapPlatform = tem.exports.mapPlatform;
     await bootstrapTargetEnv(tjs, { builder: manifest.builder || null });
   }
 

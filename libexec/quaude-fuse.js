@@ -101,9 +101,18 @@ const members = [];
 if (role === 'builder') {
   members.push({ name: entryName, data: await mustRead(path.join(stageDir, 'clode-main.bundle.cjs'), 'esbuilt clode-main bundle') });
   const libexecDir = path.dirname(shimDir);
-  for (const f of ['bun-shim.cjs', 'extract-claude-js.cjs', 'quaude-fuse.js', 'quaude-bootstrap.mjs', 'target-env.cjs']) {
+  for (const f of ['bun-shim.cjs', 'extract-claude-js.cjs', 'quaude-fuse.js', 'quaude-bootstrap.mjs']) {
     members.push({ name: `libexec/${f}`, data: await mustRead(path.join(libexecDir, f), `libexec member ${f}`) });
   }
+  // target-env.cjs member name is BARE (no libexec/ prefix), matching how
+  // node-shim/* is stored below: the node-shim loader (SHIM_DIR =
+  // '/quaude/node-shim/modules' when fused) requires it via a relative
+  // '../../target-env.cjs' from modules/, which only lands on the archive
+  // root — a 'libexec/' prefix here would 404 that require. clode-fuse.cjs's
+  // materialization step special-cases this bare name back onto disk at
+  // libexec/target-env.cjs (sibling to node-shim/, matching this repo's own
+  // layout) for the self-fuse path.
+  members.push({ name: 'target-env.cjs', data: await mustRead(path.join(libexecDir, 'target-env.cjs'), 'target-env.cjs member') });
   // The PRISTINE tjs template rides along (Q2 Decision 2): a shipped builder
   // must be able to fuse with NOTHING on disk — `clode build` materializes this
   // member when no CLODE_TJS/build-tree template exists. Pristine = the
@@ -128,7 +137,11 @@ if (role === 'builder') {
   members.push({ name: 'bun-shim.cjs', data: await mustRead(path.join(stageDir, 'bun-shim.cjs'), 'staged bun-shim') });
 
   // The env contract the bootstrap applies before booting the bundle.
-  members.push({ name: 'libexec/target-env.cjs', data: await mustRead(path.join(path.dirname(shimDir), 'target-env.cjs'), 'libexec member target-env.cjs') });
+  // BARE member name (no libexec/ prefix) — see the builder branch's comment
+  // above for why: the node-shim loader's fused SHIM_DIR has no 'libexec'
+  // ancestor in the archive namespace, so process.cjs's relative require must
+  // find this at the archive root.
+  members.push({ name: 'target-env.cjs', data: await mustRead(path.join(path.dirname(shimDir), 'target-env.cjs'), 'target-env.cjs member') });
 }
 
 // node-shim tree: THE committed loader + modules + internal (the loader's VFS

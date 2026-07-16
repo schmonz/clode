@@ -28,6 +28,12 @@
 // console.log is tjs-native and untouched by this change.
 const { writeSyncFd } = require('../internal/stdio-write.cjs');
 const { isTerminalFd } = require('../internal/terminal-fd.cjs');
+// The 5-case uaPlatform->node switch below used to be duplicated
+// character-for-character in quaude-bootstrap.mjs's tjsPlatform; it now lives
+// ONCE in target-env.cjs's mapPlatform (the require-free member quaude's
+// fused bootstrap evaluates pre-node-shim). This module runs under the
+// node-shim, where require exists, so it just requires the shared file.
+const { mapPlatform } = require('../../target-env.cjs');
 
 // Honest process.platform for EVERY release-matrix leg. The old version
 // enumerated Mac/Win/Linux/FreeBSD/OpenBSD and DEFAULTED to 'linux', so 8 of
@@ -38,23 +44,20 @@ const { isTerminalFd } = require('../internal/terminal-fd.cjs');
 // passes through VERBATIM (lowercase CMAKE_SYSTEM_NAME: 'netbsd',
 // 'dragonfly', 'sunos', 'midnightbsd', 'haiku', ...) for everything else —
 // matching node's process.platform convention for every known case, current
-// and future legs alike. Fallback: the legacy navigator.platform regexes,
-// whose txiki fallthrough is "<platform> <machine>" (first token = the same
-// lowercase name). Characterized by test/node-shim-platform.test.cjs.
-// DEFERRED (Q3 engine batch, needs uname on the tjs facade): process.arch,
-// os.release()/version(), per-platform O_*/signal tables.
+// and future legs alike. That mapping is target-env.cjs's mapPlatform (shared
+// with quaude-bootstrap.mjs's tjsPlatform — see the require above). Fallback,
+// LOCAL to this module: the legacy navigator.platform regexes, for when ua is
+// empty — quaude's fused bootstrap never has this second signal, so it stays
+// out of the shared mapping. txiki's fallthrough there is "<platform>
+// <machine>" (first token = the same lowercase name). Characterized by
+// test/node-shim-platform.test.cjs. DEFERRED (Q3 engine batch, needs uname on
+// the tjs facade): process.arch, os.release()/version(), per-platform
+// O_*/signal tables.
 function detectPlatform(uaPlatform, navPlatform) {
   const ua = uaPlatform
     ?? (typeof navigator !== 'undefined' && navigator.userAgentData && navigator.userAgentData.platform)
     ?? '';
-  switch (ua) {
-    case 'macOS': return 'darwin';
-    case 'Windows': return 'win32';
-    case 'Linux': return 'linux';
-    case 'FreeBSD': return 'freebsd';
-    case 'OpenBSD': return 'openbsd';
-    default: if (ua) return String(ua).toLowerCase();
-  }
+  if (ua) return mapPlatform(ua);
   const np = navPlatform ?? ((typeof navigator !== 'undefined' && navigator.platform) || '');
   if (/^Mac/.test(np)) return 'darwin';
   if (/^Win/.test(np)) return 'win32';

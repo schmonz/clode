@@ -92,6 +92,31 @@ function findOnPath({ env, platform, delimiter, isExec }) {
   return null;
 }
 
+// uaPlatform (navigator.userAgentData.platform) -> node's process.platform
+// spelling. Lives HERE, not in quaude-bootstrap.mjs or the node-shim, because
+// this is the one require-free member both evaluate early: quaude's fused
+// bootstrap runs this switch pre-node-shim (via the same `new Function`
+// evaluation it uses for shapeTargetEnv/probePaths), and the node-shim's
+// process.cjs requires this file directly (it has require by then). One copy
+// keeps the two from drifting apart the way they already had — see both call
+// sites for the shared comment.
+//
+// NO navigator.platform regex fallback here: quaude's bootstrap never has a
+// second signal to fall back to (tjs.system.platform is empty), so its
+// fallback for empty/absent input is 'linux' — the last branch below. The
+// node-shim's detectPlatform has that second signal and keeps its own
+// regex-based fallback locally, only calling into this switch first.
+function mapPlatform(uaPlatform) {
+  switch (uaPlatform) {
+    case 'macOS': return 'darwin';
+    case 'Windows': return 'win32';
+    case 'Linux': return 'linux';
+    case 'FreeBSD': return 'freebsd';
+    case 'OpenBSD': return 'openbsd';
+    default: return uaPlatform ? String(uaPlatform).toLowerCase() : 'linux';
+  }
+}
+
 // Every path shapeTargetEnv may test, computed WITHOUT touching a filesystem.
 //
 // This exists for quaude: tjs has no statSync (only async tjs.stat), so its
@@ -106,4 +131,4 @@ function probePaths({ env, platform, delimiter = ':' }) {
   return paths;
 }
 
-module.exports = { shapeTargetEnv, probePaths };
+module.exports = { shapeTargetEnv, probePaths, mapPlatform };

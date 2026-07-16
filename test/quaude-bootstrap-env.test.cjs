@@ -6,7 +6,7 @@ const assert = require('node:assert');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
-const { shapeTargetEnv, probePaths } = require('../libexec/target-env.cjs');
+const { shapeTargetEnv, probePaths, mapPlatform } = require('../libexec/target-env.cjs');
 
 // quaude-bootstrap.mjs has a top-level `await main()` (gated on globalThis.tjs,
 // so it's a no-op under host node) — that alone makes the module ASYNC, and
@@ -44,11 +44,12 @@ function fakeTjs(over = {}) {
   };
 }
 // Platform arrives via navigator.userAgentData.platform under tjs, not tjs.system.
-// shape/probe are injected directly here — outside the real fused binary there
-// is no globalThis.__clodeShapeTargetEnv/__clodeProbePaths (those are set only
-// by main(), which never runs under host node); the module's default params
-// read those globals, exactly as the fused path installs them.
-const opts = (over = {}) => Object.assign({ uaPlatform: 'Linux', shape: shapeTargetEnv, probe: probePaths }, over);
+// shape/probe/map are injected directly here — outside the real fused binary
+// there is no globalThis.__clodeShapeTargetEnv/__clodeProbePaths/__clodeMapPlatform
+// (those are set only by main(), which never runs under host node); the
+// module's default params read those globals, exactly as the fused path
+// installs them.
+const opts = (over = {}) => Object.assign({ uaPlatform: 'Linux', shape: shapeTargetEnv, probe: probePaths, map: mapPlatform }, over);
 
 test('applies the contract to tjs.env', async () => {
   const { bootstrapTargetEnv } = await loadBootstrap();

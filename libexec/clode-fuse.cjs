@@ -254,6 +254,12 @@ async function clodeBuild(args, opts) {
         if (name.startsWith('node-shim/')) dest = path.join(mat, 'libexec', name);
         else if (name.startsWith('libexec/')) dest = path.join(mat, name);
         else if (name.startsWith('node_modules/')) dest = path.join(mat, name);
+        // target-env.cjs rides at the archive ROOT (bare name, no libexec/
+        // prefix — see quaude-fuse.js: the fused node-shim's SHIM_DIR has no
+        // 'libexec' ancestor in the archive namespace, so process.cjs's
+        // relative require needs it there). On disk it belongs beside
+        // node-shim/, i.e. libexec/target-env.cjs, same as this repo.
+        else if (name === 'target-env.cjs') dest = path.join(mat, 'libexec', name);
         else continue;
         fs.mkdirSync(path.dirname(dest), { recursive: true });
         fs.writeFileSync(dest, Buffer.from(bytes));
