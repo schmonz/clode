@@ -12,9 +12,12 @@
 // (its own argv0, signals, and main-module identity). Two branches, keyed on the
 // NAUDE_RUN_AS_NODE env sentinel:
 //   - unset (+ isSea): the first pass — materialize deps (-> depsRoot) and the
-//     named assets (-> workDir), then spawn process.execPath (the naude binary)
-//     with NAUDE_RUN_AS_NODE=<workDir>/cli.cjs, NODE_PATH prepended with
-//     <depsRoot>/node_modules, and the user args passed through; wait; mirror exit.
+//     named assets (-> workDir), then shape the child env with the target-env
+//     contract (shapeTargetEnv — was the retired runner's applyBundleEnv job;
+//     CLODE_SELF points at the baked-in builder, see BAKED_BUILDER below), spawn
+//     process.execPath (the naude binary) with NAUDE_RUN_AS_NODE=<workDir>/cli.cjs,
+//     NODE_PATH prepended with <depsRoot>/node_modules, and the user args passed
+//     through; wait; mirror exit.
 //   - set: the re-invoked "plain node" pass — run the target cli.cjs as the main
 //     module (fix process.argv, then require it; the baked cli.cjs self-requires
 //     the bun-shim, NODE_PATH resolves the deps).
@@ -24,8 +27,15 @@
 // unit-test WITHOUT building a real SEA.
 const path = require('node:path');
 const os = require('node:os');
+const fs = require('node:fs');
 const { spawn } = require('node:child_process');
 const seaHelpers = require('./naude-sea.cjs');
+const { shapeTargetEnv } = require('./target-env.cjs');
+// Baked at build time by scripts/build-naude.mjs (esbuild --define): the absolute
+// path of the clode that built this naude. A naude cannot rebuild itself, so its
+// patched in-app updater calls back to that builder. Undefined in a plain
+// `require()` of this module (tests) -> no CLODE_SELF, updater fails loud.
+const BAKED_BUILDER = typeof __CLODE_BUILDER__ === 'string' ? __CLODE_BUILDER__ : null;
 
 // Reshape argv to plain-node form and run the target as the main module. Defaults
 // to the real behavior: set process.argv = [execPath, script, ...userArgs], then
@@ -71,6 +81,7 @@ function runNaude(opts = {}) {
     procOff = (s, cb) => process.removeListener(s, cb),
     exit = (c) => process.exit(c),
     onExit,
+    builder = BAKED_BUILDER,
   } = opts;
 
   // Unpack the deps tarball to a sig-keyed cache dir (holds node_modules/), and the
@@ -88,6 +99,15 @@ function runNaude(opts = {}) {
   const childEnv = Object.assign({}, env, {
     NAUDE_RUN_AS_NODE: cliPath,
     NODE_PATH: priorNodePath ? nodeModules + path.delimiter + priorNodePath : nodeModules,
+  });
+  // The contract every built target applies to itself (was the runner's job).
+  shapeTargetEnv({
+    env: childEnv,
+    self: builder,
+    platform: process.platform,
+    delimiter: path.delimiter,
+    exists: fs.existsSync,
+    dirname: path.dirname,
   });
 
   // Re-invoke the naude binary itself (its own node) as plain node, args passed

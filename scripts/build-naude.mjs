@@ -77,13 +77,18 @@ function ensureToolchain() {
 
 // esbuild the naude SEA `main` — libexec/naude-entry.cjs (the SEA entry that materializes
 // the embedded assets and runs the baked cli.cjs), NOT clode-main. naude carries no
-// build-time version define: naude-entry has no version constant to inject; the baked
-// cli.cjs reports its own version.
+// build-time VERSION define: naude-entry has no version constant to inject; the baked
+// cli.cjs reports its own version. It DOES carry a BUILDER define (below) — the clode
+// that is building this naude, so its patched in-app updater can call back here
+// (CLODE_SELF) because a baked SEA cannot rebuild itself. define values are strings
+// that must be valid JS source — JSON.stringify(path) yields the quoted string literal
+// esbuild expects (see build-bundle.mjs's __CLODE_BUNDLE_VERSION__ for the same pattern).
 function esbuildBundle() {
   const bundle = path.join(OUT, 'naude-entry.bundle.cjs');
   toolRequire('esbuild').buildSync({
     entryPoints: [path.join(REPO, 'libexec', 'naude-entry.cjs')],
     bundle: true, platform: 'node', format: 'cjs', target: 'node24',
+    define: { __CLODE_BUILDER__: JSON.stringify(process.env.CLODE_SELF || process.argv[1]) },
     outfile: bundle,
   });
   return bundle;

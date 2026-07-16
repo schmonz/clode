@@ -159,3 +159,38 @@ test('first pass: NODE_PATH prepends the deps node_modules, preserving a prior v
     call.opts.env.NODE_PATH,
     path.join('/deps', 'node_modules') + path.delimiter + '/pre');
 });
+
+// --- first pass: the target-env contract lands in the child's env ------------
+test('first pass shapes the child env with the target contract', () => {
+  let call = null;
+  runNaude({
+    argv: [], execPath: '/naude', env: { PATH: '/usr/bin' }, cacheDir: os.tmpdir(), workDir: '/work',
+    sea: fakeSea(),
+    materializeDeps: () => '/deps',
+    materializeAssets: ({ destDir }) => destDir,
+    spawn: (cmd, args, o) => { call = o; return { on() {} }; },
+    procOn: () => {}, procOff: () => {}, exit: () => {},
+    onExit: (cb) => cb(0, null),
+  });
+  // The contract the runner used to apply at launch; naude applies it to itself.
+  assert.strictEqual(call.env.DISABLE_INSTALLATION_CHECKS, '1');
+  assert.strictEqual(call.env.NODE_USE_ENV_PROXY, '1');
+  // NODE_PATH stays naude's own business (materialized deps), not target-env's.
+  assert.match(call.env.NODE_PATH, /\/deps\/node_modules/);
+});
+
+test('first pass points CLODE_SELF at the clode that built this naude', () => {
+  let call = null;
+  runNaude({
+    argv: [], execPath: '/naude', env: {}, cacheDir: os.tmpdir(), workDir: '/work',
+    sea: fakeSea(),
+    builder: '/usr/local/bin/clode',            // what the esbuild define supplies
+    materializeDeps: () => '/deps',
+    materializeAssets: ({ destDir }) => destDir,
+    spawn: (cmd, args, o) => { call = o; return { on() {} }; },
+    procOn: () => {}, procOff: () => {}, exit: () => {},
+    onExit: (cb) => cb(0, null),
+  });
+  assert.strictEqual(call.env.CLODE_SELF, '/usr/local/bin/clode',
+    'a baked naude cannot update itself; the in-TUI updater must call the builder');
+});
