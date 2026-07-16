@@ -1,11 +1,40 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
+const os = require('node:os');
+const path = require('node:path');
 const { runNaude } = require('../libexec/naude-entry.cjs');
 
 function fakeSea() {
   const assets = { 'cli.cjs': 'CLI', 'bun-shim.cjs': 'SHIM', 'deps.tar': '', 'deps.sig': 'sig0' };
   return { isSea: () => true, getRawAsset: (n) => { const b = Buffer.from(assets[n] || ''); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); } };
+}
+
+// A fake child that records the signals it is asked to kill with (mirrors the
+// clode-run.test.cjs fakeChild, adapted to naude's spawn seam shape which returns
+// a plain object rather than an EventEmitter — naude drives exit via the onExit seam).
+function fakeChild() {
+  return { killed: [], kill(sig) { this.killed.push(sig); return true; }, on() {} };
+}
+
+// Run the first pass with sensible defaults, letting the caller override seams and
+// capture what happened. Returns { call, child, exited, handlers, registered, removed }.
+function firstPass(overrides = {}) {
+  const captured = { call: null, exited: 'unset', handlers: {}, registered: [], removed: [] };
+  const child = overrides.child || fakeChild();
+  runNaude(Object.assign({
+    argv: ['--version'], execPath: '/naude',
+    sea: fakeSea(), env: {}, cacheDir: os.tmpdir(),
+    materializeDeps: () => '/deps',
+    materializeAssets: ({ destDir }) => destDir,
+    workDir: '/work',
+    spawn: (cmd, args, opts) => { captured.call = { cmd, args, opts }; return child; },
+    procOn: (s, cb) => { captured.handlers[s] = cb; captured.registered.push(s); },
+    procOff: (s) => { captured.removed.push(s); },
+    exit: (c) => { captured.exited = c; },
+  }, overrides));
+  captured.child = child;
+  return captured;
 }
 
 test('first pass (isSea, no sentinel) re-invokes execPath in run-as-node with cli.cjs + NODE_PATH', () => {
@@ -29,11 +58,63 @@ test('first pass (isSea, no sentinel) re-invokes execPath in run-as-node with cl
 
 test('second pass (sentinel set) runs the target cli.cjs as main', () => {
   let required = null;
+  const env = { NAUDE_RUN_AS_NODE: '/work/cli.cjs' };
   runNaude({
     argv: ['--version'], execPath: '/naude',
-    env: { NAUDE_RUN_AS_NODE: '/work/cli.cjs' },
+    env,
     requireMain: (p, argv) => { required = { p, argv }; },
   });
   assert.strictEqual(required.p, '/work/cli.cjs');
   assert.deepStrictEqual(required.argv, ['/naude', '/work/cli.cjs', '--version']);
+  // Minor: the sentinel is stripped before the target runs, so the baked cli.cjs
+  // never sees NAUDE_RUN_AS_NODE (and never mistakes itself for a first pass).
+  assert.ok(!('NAUDE_RUN_AS_NODE' in env), 'sentinel deleted from the target env');
+});
+
+// --- first pass: exit-status mapping (ports of clode-run's exit semantics) ----
+test('first pass: a signal death maps to 128+signum (SIGTERM -> 143)', () => {
+  const { exited } = firstPass({ onExit: (cb) => cb(null, 'SIGTERM') });
+  assert.strictEqual(exited, 128 + os.constants.signals.SIGTERM);
+  assert.strictEqual(exited, 143);
+});
+
+test('first pass: a null exit code maps to 1', () => {
+  const { exited } = firstPass({ onExit: (cb) => cb(null, null) });
+  assert.strictEqual(exited, 1);
+});
+
+test('first pass: a non-zero exit code passes through', () => {
+  const { exited } = firstPass({ onExit: (cb) => cb(7, null) });
+  assert.strictEqual(exited, 7);
+});
+
+// --- first pass: signal model (tty vs directed) -------------------------------
+test('first pass: ignores tty signals (SIGINT/SIGQUIT), forwards directed (SIGTERM/SIGHUP)', () => {
+  const cap = firstPass({ onExit: () => {} });
+  for (const s of ['SIGINT', 'SIGQUIT', 'SIGTERM', 'SIGHUP']) {
+    assert.strictEqual(typeof cap.handlers[s], 'function', `handler registered for ${s}`);
+  }
+  // tty signals reach the child directly via the shared foreground group; forwarding
+  // would double-deliver, so these handlers are NO-OPs.
+  cap.handlers.SIGINT();
+  cap.handlers.SIGQUIT();
+  assert.deepStrictEqual(cap.child.killed, [], 'tty signals must not be forwarded');
+  // directed signals reach only our pid, so they ARE forwarded to the child.
+  cap.handlers.SIGTERM();
+  cap.handlers.SIGHUP();
+  assert.deepStrictEqual(cap.child.killed, ['SIGTERM', 'SIGHUP']);
+});
+
+test('first pass: every registered signal handler is torn down when the child exits', () => {
+  const cap = firstPass({ onExit: (cb) => cb(0, null) });
+  assert.deepStrictEqual([...cap.removed].sort(), [...cap.registered].sort(),
+    'every registered signal handler is removed on exit');
+});
+
+// --- first pass: NODE_PATH prepend preserves a prior value --------------------
+test('first pass: NODE_PATH prepends the deps node_modules, preserving a prior value', () => {
+  const { call } = firstPass({ env: { NODE_PATH: '/pre' }, onExit: () => {} });
+  assert.strictEqual(
+    call.opts.env.NODE_PATH,
+    path.join('/deps', 'node_modules') + path.delimiter + '/pre');
 });
