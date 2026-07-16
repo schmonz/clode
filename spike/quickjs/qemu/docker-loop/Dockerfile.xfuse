@@ -4,7 +4,7 @@
 # BC_VERSION → cross-fuse compatible; (b) run `node bin/clode build --self`
 # with CLODE_TARGET_TEMPLATE=<sparc tjs> to append the trailer onto the sparc
 # base. node for the launcher; cmake/ninja/gcc for the tjs build.
-FROM node:24-bookworm-slim
+FROM node:24.18.0-bookworm-slim
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
