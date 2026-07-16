@@ -91,6 +91,13 @@ function runQuaudeModelAsync(cli, args = [], opts = {}) {
   return dispatchAsync(quaudeCommand(cli, args, opts), opts);
 }
 
+// A PACKAGED target (a built naude or quaude): it carries its own engine and its
+// own baked cli.cjs, so it takes the user's args directly. Same async dispatch —
+// the mock server lives in the caller's event loop either way.
+function runBinaryAsync(bin, args = [], opts = {}) {
+  return dispatchAsync({ cmd: bin, argv: args }, opts);
+}
+
 // The provider both models bake: the upstream Bun-packaged CC binary. Honors the
 // tests' CLODE_PROVIDER_BIN first, else clode's own resolution (CLODE_CLAUDE_BIN,
 // the provider store, PATH).
@@ -131,6 +138,6 @@ function stageProviderCli(opts = {}) {
 module.exports = {
   REPO, LOADER, DEPS,
   runNaudeModel, runQuaudeModel,
-  runNaudeModelAsync, runQuaudeModelAsync,
+  runNaudeModelAsync, runQuaudeModelAsync, runBinaryAsync,
   resolveProviderBin, stageCli, stageProviderCli,
 };
