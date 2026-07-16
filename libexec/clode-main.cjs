@@ -11,7 +11,7 @@
 //   3. --clode-version         -> print "clode <VERSION>", exit 0
 //   4. --clode-help            -> print clodeHelp(), exit 0
 //   5. fetch [channel]         -> clodeUpdate, exit status
-//   6. --clode-internal-update -> clodeUpdate, exit status
+//   6. --clode-internal-update -> refuse (not a real update yet), exit 1
 //   6b. build [--out PATH]     -> clodeBuild (fuse a quaude), exit status
 //   7. --clode-watch           -> clodeWatch(manual), exit 0
 //   8. default launch          -> require_node, resolve/extract/deps, watcher, run
@@ -161,11 +161,16 @@ async function main(argv, opts = {}) {
     return process.exit(status);
   }
 
-  // 6. `clode --clode-internal-update [channel]`: the non-interactive entry the
-  //    in-TUI autoupdater spawns (via CLODE_SELF); same fetch as `update`, then exit.
+  // 6. `clode --clode-internal-update [channel]`: the callback the built target's
+  //    patched in-app updater invokes (via CLODE_SELF). It CANNOT be today's fetch:
+  //    fetching a newer Claude Code into the provider store does nothing for a
+  //    target that has the old one baked into its bytecode — it would report
+  //    success and change nothing. The real thing (fetch -> rebuild the target ->
+  //    swap it in place) is Phase 4; until then, refuse rather than lie.
   if (first === '--clode-internal-update') {
-    const status = await update.clodeUpdate(args[1], { env, libexec: LIBEXEC, here: HERE, node });
-    return process.exit(status);
+    process.stderr.write('clode: a built Claude Code binary cannot update itself in place.\n');
+    process.stderr.write("clode: run 'clode fetch' to get a newer Claude Code, then 'clode build' to rebuild.\n");
+    return process.exit(1);
   }
 
   // 6b. `clode build [--self] [--out PATH]`: fuse a standalone quaude binary —

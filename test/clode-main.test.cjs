@@ -7,7 +7,10 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
+const { pathToFileURL } = require('node:url');
 const { spawnSync } = require('node:child_process');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -113,6 +116,41 @@ test('the prologue keeps a floor for `clode build` too — v18 is refused', () =
   });
   assert.strictEqual(r.status, 1);
   assert.match(r.stderr || '', /node v18\.19\.0 is too old; need >= v20/);
+});
+
+test('--clode-internal-update refuses rather than impersonating an update', () => {
+  // A real, LOCAL (file://) releases fixture — the bug this guards against is that
+  // clodeUpdate can genuinely SUCCEED (fetch + verify + re-point `current`) and
+  // still leave a baked target's old bytecode running. Proving the refusal fires
+  // means proving it fires even when the fetch it preempts would have worked.
+  // Every piece of clode state (providers store, signals snapshot dir, settings
+  // HOME) is redirected into this test's own tmpdirs — a fetch that "succeeds"
+  // here must never touch the real ~/.local/share/clode or this repo's signals/.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-iu-'));
+  const releases = path.join(tmp, 'repo');
+  const V = '9.9.9';
+  const PLAT = 'linux-x64';
+  const platDir = path.join(releases, V, PLAT);
+  fs.mkdirSync(platDir, { recursive: true });
+  const providerSrc = path.join(platDir, 'claude');
+  fs.writeFileSync(providerSrc, 'clode-test fixture provider, never executed\n');
+  const sum = crypto.createHash('sha256').update(fs.readFileSync(providerSrc)).digest('hex');
+  fs.writeFileSync(path.join(releases, 'latest'), V + '\n');
+  fs.writeFileSync(path.join(releases, V, 'manifest.json'),
+    `{"platforms":{"${PLAT}":{"checksum":"${sum}"}}}\n`);
+
+  const r = runEntry(['--clode-internal-update'], {
+    CLODE_RELEASES_URL: pathToFileURL(releases).href,
+    CLODE_FETCH_PLATFORM: PLAT,
+    CLODE_STATE_ROOT: fs.mkdtempSync(path.join(os.tmpdir(), 'clode-iu-state-')),
+    CLODE_SIGNALS_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'clode-iu-signals-')),
+    HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'clode-iu-home-')),
+  });
+  assert.notStrictEqual(r.status, 0, 'must not report success for an update it cannot perform');
+  assert.match(r.stderr, /cannot update itself|clode update/i);
+  // The bug being prevented: fetching a provider is NOT updating a baked target.
+  assert.doesNotMatch(r.stdout + r.stderr, /now the active provider/,
+    'a baked target still runs its OLD bytecode after a fetch — never claim otherwise');
 });
 
 test('clodeHelp() interpolates the version and is newline-terminated', () => {

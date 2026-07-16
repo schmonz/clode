@@ -63,12 +63,21 @@ test('clode fetch <channel> fetches and reports, then exits', (t) => {
   assert.ok(fs.existsSync(path.join(providersDir(sbx), '9.9.9', 'claude')));
 });
 
-test('clode --clode-internal-update <channel> fetches like update (non-interactive)', (t) => {
+test('clode --clode-internal-update <channel> refuses rather than impersonating an update', (t) => {
+  // This is the patched in-app autoupdater's callback (CLODE_SELF spawns it). It
+  // must NOT alias `fetch`: fetching a newer Claude Code into the provider store
+  // changes nothing for a target whose old Claude Code is baked into its bytecode —
+  // it would report success and leave the running binary untouched. Prove the
+  // refusal fires even though this fixture's fetch would otherwise succeed (the
+  // channel/manifest/provider are all real and resolvable).
   const { sbx } = withReleases(t);
   const r = runClode(sbx, ['--clode-internal-update', 'stable'],
     { env: { CLODE_CLAUDE_BIN: '/nonexistent' } });
-  assert.strictEqual(r.status, 0);
-  assert.ok(fs.existsSync(path.join(providersDir(sbx), '9.9.9', 'claude')));
+  assert.notStrictEqual(r.status, 0);
+  assert.match(r.output, /cannot update itself|clode update/i);
+  assert.doesNotMatch(r.output, /now the active provider/);
+  assert.ok(!fs.existsSync(path.join(providersDir(sbx), '9.9.9', 'claude')),
+    'a refused update must not fetch anything into the provider store');
 });
 
 test('clode fetch prints a warn-only signals digest and writes a snapshot', (t) => {
