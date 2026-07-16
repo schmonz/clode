@@ -222,6 +222,11 @@ jobs:
           path: ${{ runner.temp }}/tjs
       - name: Install the runtime dep closure (ws/yaml/semver/string-width/... for the shim)
         run: npm ci
+      # The naude-vs-quaude parity gate stages cli.cjs from a real Bun-packaged
+      # provider; with none present it SKIPS, which is exactly the silent-green
+      # this job exists to prevent. Same provisioning the windows-x64 job uses.
+      - name: Install the Claude provider (npm, latest — the parity gate's input)
+        run: npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
       - name: node-shim oracle suite (every module diffed vs host node, under tjs)
         env:
           CLODE_TJS: ${{ runner.temp }}/tjs/tjs
@@ -239,7 +244,29 @@ jobs:
           #   node-shim-bunshim        bun:ffi suffix hardcodes macOS 'dylib' (Linux .so)
           EXCLUDE='node-shim-tty|node-shim-child-process|node-shim-core|node-shim-bunshim'
           FILES=$(ls test/node-shim-*.test.cjs | grep -vE "$EXCLUDE")
+          # The parity gate's input: cli.cjs is staged from this provider and run
+          # under BOTH targets' runtimes (naude = node, quaude = tjs+shim), then
+          # diffed. Fail loud if it is missing — a skipped oracle is not a pass.
+          PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f -name claude -size +20M 2>/dev/null | head -1)"
+          if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
+          echo "provider: $PROV"
+          export CLODE_PROVIDER_BIN="$PROV"
           # Plus the end-to-end tjs-DEFAULT launch (e2e-tjs-default): the `test` job
           # has no tjs so it skips there; this job builds one, so it's the place the
           # actual shipping default (bundle booted under tjs) gets exercised e2e.
           node --test --test-concurrency=1 $FILES test/e2e-tjs-default.test.cjs
+      # The packaged targets themselves: build a real naude (Node SEA) and a real
+      # quaude (fused tjs) from the same CC and diff them. The model oracle above
+      # runs cli.cjs under two engines; only this covers the PACKAGING. Nothing in
+      # CI built a naude before, which is how a bug that killed every naude on its
+      # first boot ("sea.getRawAsset is not a function") stayed green.
+      - name: full-binary oracle — real naude vs real quaude
+        env:
+          CLODE_TJS: ${{ runner.temp }}/tjs
+          CLODE_ORACLE_BINARIES: '1'
+        run: |
+          set -euo pipefail
+          PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f -name claude -size +20M 2>/dev/null | head -1)"
+          if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
+          CLODE_PROVIDER_BIN="$PROV" CLODE_CLAUDE_BIN="$PROV" \
+            node --test --test-timeout=1200000 test/oracle-binaries.test.cjs
