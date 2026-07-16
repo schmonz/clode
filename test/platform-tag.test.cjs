@@ -1,7 +1,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
+const path = require('node:path');
 const {
-  macosVersion, linuxGlibc, osToken, platformTag,
+  macosVersion, linuxGlibc, osToken, platformTag, seaOut, seaBin,
 } = require('../scripts/platform-tag.cjs');
 
 test('macosVersion keeps two components only for the 10.x era', () => {
@@ -42,4 +43,18 @@ test('platformTag() with no args produces the host tuple', () => {
 
 test('osToken maps win32 to the stable "windows" token (no OS-version split)', () => {
   assert.strictEqual(osToken('win32'), 'windows');
+});
+
+test('seaOut is <repo>/build/<tag>/<base>', () => {
+  assert.strictEqual(seaOut('/r', 'naude'), path.join('/r', 'build', platformTag(), 'naude'));
+});
+
+test('seaBin is seaOut plus the platform exe suffix', () => {
+  const suffix = process.platform === 'win32' ? '.exe' : '';
+  assert.strictEqual(seaBin('/r', 'naude'), seaOut('/r', 'naude') + suffix);
+});
+
+test('seaBin/seaOut honor the base param (not hardcoded)', () => {
+  assert.ok(seaOut('/r', 'clode').endsWith(path.join('build', platformTag(), 'clode')));
+  assert.ok(seaBin('/r', 'clode').includes('clode'));
 });

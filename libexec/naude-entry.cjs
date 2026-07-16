@@ -59,7 +59,7 @@ function runNaude(opts = {}) {
   // First pass: materialize the embedded assets and re-invoke ourselves as node.
   const {
     sea = seaHelpers,
-    cacheDir = os.tmpdir(),
+    cacheDir = env.NAUDE_CACHE || os.tmpdir(),
     materializeDeps = seaHelpers.materializeDeps,
     materializeAssets = seaHelpers.materializeAssets,
     spawn: spawnFn = spawn,

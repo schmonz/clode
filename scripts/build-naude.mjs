@@ -233,7 +233,7 @@ function smokeCheck(bin) {
   try {
     const r = spawnSync(bin, ['--version'], {
       encoding: 'utf8', timeout: 120000,
-      env: { ...process.env, CLODE_CACHE: cache },
+      env: { ...process.env, NAUDE_CACHE: cache },
     });
     if (r.status !== 0 || /Cannot find module|MODULE_NOT_FOUND/.test(r.stderr || '')) {
       console.error(`naude self-check FAILED${r.signal ? ` (crashed with ${r.signal})` : ''}: ` +

@@ -111,6 +111,21 @@ test('first pass: every registered signal handler is torn down when the child ex
     'every registered signal handler is removed on exit');
 });
 
+// --- first pass: NAUDE_CACHE env plumbs the deps-materialization cache dir -----
+test('first pass: NAUDE_CACHE env sets the cacheDir passed to materializeDeps', () => {
+  let seenCacheDir = null;
+  runNaude({
+    argv: ['--version'], execPath: '/naude',
+    sea: fakeSea(), env: { NAUDE_CACHE: '/custom' },
+    materializeDeps: ({ cacheDir }) => { seenCacheDir = cacheDir; return '/deps'; },
+    materializeAssets: ({ destDir }) => destDir,
+    spawn: () => ({ on() {} }),
+    procOn: () => {}, procOff: () => {}, exit: () => {},
+    onExit: (cb) => cb(0, null),
+  });
+  assert.strictEqual(seenCacheDir, '/custom');
+});
+
 // --- first pass: NODE_PATH prepend preserves a prior value --------------------
 test('first pass: NODE_PATH prepends the deps node_modules, preserving a prior value', () => {
   const { call } = firstPass({ env: { NODE_PATH: '/pre' }, onExit: () => {} });
