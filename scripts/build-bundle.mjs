@@ -45,11 +45,13 @@ function ensureToolchain() {
   const bin = (name) => path.join(TOOLCHAIN, 'node_modules', '.bin', name);
   if (fs.existsSync(bin('esbuild'))) return;
   // npm --prefix needs the manifest in the prefix dir; the committed source of truth
-  // is build/package.json (build-only devDeps, kept out of the repo-root node_modules).
-  fs.copyFileSync(path.join(REPO, 'build', 'package.json'), path.join(TOOLCHAIN, 'package.json'));
+  // is deps/clode/package.json (clode's OWN build-time toolchain — esbuild/postject —
+  // kept OUT of deps/clode/node_modules because they're native per-platform binaries;
+  // see deps/clode/package.json's description for the full asymmetry rationale).
+  fs.copyFileSync(path.join(REPO, 'deps', 'clode', 'package.json'), path.join(TOOLCHAIN, 'package.json'));
   // Prefer a reproducible, pinned install: copy the committed lockfile and `npm ci`.
   // Fall back to `npm install` only when no lockfile is present.
-  const lock = path.join(REPO, 'build', 'package-lock.json');
+  const lock = path.join(REPO, 'deps', 'clode', 'package-lock.json');
   const cmd = fs.existsSync(lock)
     ? (fs.copyFileSync(lock, path.join(TOOLCHAIN, 'package-lock.json')), ['ci'])
     : ['install'];

@@ -1,6 +1,6 @@
+# build/ is GENERATED OUTPUT ONLY (per-platform-tag toolchain dirs, tjs/, blobs) —
+# no manifests live here anymore (see deps/clode, deps/claude).
 build/*
-!build/package.json
-!build/package-lock.json
 node_modules/
 test/.harness/
 *.tgz
