@@ -14,6 +14,7 @@ import url from 'node:url';
 
 const require = createRequire(import.meta.url);
 const { platformTag } = require('./platform-tag.cjs');
+const { npmCliPath } = require('./lib/npm-cli.cjs');
 
 const REPO = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '..');
 // All build artifacts (toolchain node_modules + the bundle) live under a per-platform
@@ -23,20 +24,12 @@ const TOOLCHAIN = path.join(REPO, 'build', platformTag());
 const OUT = TOOLCHAIN;
 fs.mkdirSync(OUT, { recursive: true });
 
-// Run npm by launching its OWN JS CLI under THIS node, rather than the `npm`/`npm.cmd`
-// launcher. Uniform on every OS, and it sidesteps the Windows-only `npm.cmd`+shell path
-// (cmd.exe can't run from a UNC cwd and strips quotes from args). npm ships inside every
-// node install; the file sits at a different spot on Windows vs POSIX, so probe both.
-function npmCliPath() {
-  const d = path.dirname(process.execPath);
-  const found = [
-    path.join(d, 'node_modules', 'npm', 'bin', 'npm-cli.js'),              // Windows dist layout
-    path.join(d, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'), // POSIX dist layout
-  ].find((p) => fs.existsSync(p));
-  if (!found) throw new Error(`build-bundle: could not locate npm-cli.js next to ${process.execPath}`);
-  return found;
-}
-const NPM_CLI = npmCliPath();
+// npmCliPath/runNpm (the "run npm's OWN JS CLI under THIS node" trick — see
+// scripts/lib/npm-cli.cjs for the full rationale) are shared with build-naude.mjs,
+// which had a byte-identical copy of this logic. NPM_CLI is resolved eagerly here
+// (not lazily inside runNpm) so a missing npm fails loud immediately, before any
+// other work — preserved from the pre-extraction behavior of this file.
+const NPM_CLI = npmCliPath({ prefix: 'build-bundle' });
 function runNpm(args, opts) { execFileSync(process.execPath, [NPM_CLI, ...args], opts); }
 
 // Load a build-only toolchain package's JS API (esbuild) from the per-tag dir. We use
