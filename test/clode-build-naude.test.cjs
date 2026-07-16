@@ -52,11 +52,38 @@ function seedProvider(dir) {
   return { env, cliPath, stageDir };
 }
 
+// A stand-in for the SMOKE spawn (`<bin> -p 'say PONG'`, clode-fuse's
+// smokeTarget): `clode build --naude` now runs the same NODE_PATH-stripped
+// PONG-against-the-mock proof the quaude path always ran (duplication audit
+// §2), so a stub that merely returns status 0 no longer satisfies the build —
+// and rightly so: that was exactly the hole (`--version` with ambient env
+// proved almost nothing). This stub behaves like a WORKING target instead: it
+// POSTs the mock's /messages (so the assert-the-POST-landed check sees real
+// traffic) and prints PONG. Nothing about the smoke is weakened — the honest
+// end-to-end version runs against a REAL naude in test/naude-smoke.test.cjs.
+function fakeSmokeTarget(opts) {
+  const base = (opts.env || {}).ANTHROPIC_BASE_URL;
+  if (!base) return Promise.resolve({ status: 1, stdout: '', stderr: 'no ANTHROPIC_BASE_URL' });
+  return new Promise((resolve) => {
+    const req = require('node:http').request(`${base}/v1/messages`, { method: 'POST' }, (res) => {
+      res.resume();
+      res.on('end', () => resolve({ status: 0, stdout: 'PONG\n', stderr: '' }));
+    });
+    req.on('error', (e) => resolve({ status: 1, stdout: '', stderr: String(e) }));
+    req.end('{}');
+  });
+}
+
 // Drive clodeBuild with the spawn seam captured. `runResult` is what the
-// injected run() resolves to for every spawn (default success + no output).
+// injected run() resolves to for every NON-smoke spawn (default success + no
+// output); smoke spawns (`-p`) are answered by fakeSmokeTarget above.
 async function runBuild(args, env, runResult = { status: 0, stdout: '', stderr: '' }) {
   const calls = [];
-  const run = (cmd, cmdArgs, opts) => { calls.push({ cmd, args: cmdArgs, opts }); return Promise.resolve(runResult); };
+  const run = (cmd, cmdArgs, opts) => {
+    calls.push({ cmd, args: cmdArgs, opts });
+    if (Array.isArray(cmdArgs) && cmdArgs[0] === '-p') return fakeSmokeTarget(opts);
+    return Promise.resolve(runResult);
+  };
   const stderrBuf = []; const stdoutBuf = [];
   const status = await clodeBuild(args, {
     here: REPO,
@@ -165,6 +192,79 @@ test('clode build --naude --out PATH: forwards --out to build-naude.mjs', async 
     assert.strictEqual(naude.args[outIdx + 1], wantOut);
 
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// Duplication audit §2: `clode build --naude` used to run NO smoke of its own
+// — it only checked build-naude.mjs's exit status. So it printed success for a
+// naude that could not reach the API, could not resolve a dep `--version`
+// never touches, or that only worked because the build machine's ambient
+// NODE_PATH leaked in. (build-naude.mjs's own self-check was
+// `spawnSync(bin, ['--version'])` with `{...process.env}` INHERITED, grepping
+// stderr for /Cannot find module/.) The equivalent quaude bug was impossible.
+// Both paths now go through the SAME shared smokeTarget.
+test('clode build --naude: runs the shared PONG smoke on the binary it just built', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-smoke-'));
+  try {
+    const { env } = seedProvider(dir);
+    const wantOut = path.join(dir, 'naude-out');
+    const r = await runBuild(['--naude', '--out', wantOut], env);
+    assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
+
+    const smoke = r.calls.find((c) => Array.isArray(c.args) && c.args[0] === '-p');
+    assert.ok(smoke, `no smoke spawn; calls:\n${JSON.stringify(r.calls.map((c) => c.args), null, 2)}`);
+    // It smokes the binary that was just BUILT, not some other path.
+    assert.strictEqual(smoke.cmd, wantOut);
+    assert.deepStrictEqual(smoke.args, ['-p', 'say PONG']);
+    // Pointed at the canned in-process mock, with a dummy key — never the real API.
+    assert.match(smoke.opts.env.ANTHROPIC_BASE_URL, /^http:\/\/127\.0\.0\.1:\d+$/);
+    assert.ok(smoke.opts.env.ANTHROPIC_API_KEY, 'the smoke needs a (dummy) key set');
+    // And it says PONG round-trip, not just "built".
+    assert.match(r.stdout, /PONG round-trip ok/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// The self-containment proof, and the whole reason the old --version check was
+// worthless: with the build host's NODE_PATH inherited, a naude missing a dep
+// from its own payload can still resolve it from the ambient env and look fine.
+test('clode build --naude: the smoke strips NODE_PATH (self-containment proof)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-nodepath-'));
+  try {
+    const { env } = seedProvider(dir);
+    env.NODE_PATH = '/some/ambient/node_modules';   // the build host's leak
+    const r = await runBuild(['--naude', '--out', path.join(dir, 'naude-out')], env);
+    assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
+
+    const smoke = r.calls.find((c) => Array.isArray(c.args) && c.args[0] === '-p');
+    assert.ok(smoke, 'no smoke spawn');
+    assert.ok(!('NODE_PATH' in smoke.opts.env),
+      `NODE_PATH leaked into the naude smoke — a pass would no longer prove self-containment; env had: ${smoke.opts.env.NODE_PATH}`);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// The failure the old wiring could not produce: a built naude that boots but
+// never completes the round-trip must FAIL the build, not print success.
+test('clode build --naude: a naude that never POSTs fails the build loudly', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-nopost-'));
+  try {
+    const { env } = seedProvider(dir);
+    const calls = [];
+    // Every spawn "succeeds" with no output — exactly what the OLD --naude
+    // branch accepted as proof (it checked only the child's exit status).
+    const run = (cmd, cmdArgs, opts) => {
+      calls.push({ cmd, args: cmdArgs, opts });
+      return Promise.resolve({ status: 0, stdout: '', stderr: '' });
+    };
+    const stderrBuf = []; const stdoutBuf = [];
+    const status = await clodeBuild(['--naude', '--out', path.join(dir, 'naude-out')], {
+      here: REPO, version: 'clode-test', libexec: LIBEXEC, env, run,
+      stderr: { write: (s) => stderrBuf.push(s) },
+      stdout: { write: (s) => stdoutBuf.push(s) },
+    });
+    assert.strictEqual(status, 1, 'a naude that never POSTed must fail the build');
+    assert.match(stderrBuf.join(''), /SMOKE FAILED/);
+    assert.match(stderrBuf.join(''), /posted=false/);
+    assert.doesNotMatch(stdoutBuf.join(''), /built naude/, 'must not claim success');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 

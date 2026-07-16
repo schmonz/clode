@@ -49,6 +49,7 @@ const resolve = require('./clode-resolve.cjs');
 const extract = require('./clode-extract.cjs');
 const deps = require('./clode-deps.cjs');
 const { clodeCacheDir, depsStore } = require('./clode-paths.cjs');
+const { seaBin } = require('../scripts/platform-tag.cjs');
 
 function sha256File(p) {
   return crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
@@ -135,6 +136,33 @@ function startPongMock() {
       close: () => new Promise((r) => server.close(r)),
     }));
   });
+}
+
+// The shared build-target smoke (duplication audit §2): run `<bin> -p 'say
+// PONG'` against the in-process canned Messages mock, with NODE_PATH
+// deliberately stripped (a pass PROVES the binary resolves every module from
+// its own payload, not the build host's ambient NODE_PATH), and assert the
+// mock actually RECEIVED the POST (a hang or a silently-broken client would
+// otherwise exit clean without ever calling out). Before this was factored
+// out, only quaude ran this proof; `clode build --naude` checked nothing
+// beyond the child's exit status, so a naude that booted but couldn't reach
+// the API — or only "worked" because the build host's NODE_PATH leaked in —
+// still printed success. Per-target bits (quaude's --quaude-attest; naude's
+// build-time stripped-node/SIGSEGV diagnostic) stay OUT of this function and
+// live with their own target.
+async function smokeTarget(bin, { spawnRun, env, cwd, timeout }) {
+  const mock = await startPongMock();
+  let result;
+  try {
+    const smokeEnv = { ...env, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-clode-build-smoke' };
+    delete smokeEnv.NODE_PATH;
+    result = await spawnRun(bin, ['-p', 'say PONG'], { env: smokeEnv, cwd, timeout });
+  } finally { await mock.close(); }
+  const posted = mock.requests.some((q) => q.method === 'POST' && /\/messages/.test(q.url));
+  if (result.status !== 0 || !/PONG/.test(result.stdout) || !posted) {
+    return { ok: false, status: result.status, posted, stdout: result.stdout, stderr: result.stderr };
+  }
+  return { ok: true };
 }
 
 // CLODE_TIMEOUT_SCALE: integer multiplier for every subprocess timeout in
@@ -289,7 +317,36 @@ async function clodeBuild(args, opts) {
       return fail(`build --naude: build-naude failed (exit ${r.status}):\n${r.stdout}${r.stderr}`);
     }
     if (r.stdout) clodeLog(r.stdout.trimEnd());
+
+    // -- smoke: the SAME shared contract quaude's build already runs (mock +
+    // NODE_PATH-stripped -p PONG + assert-the-POST-landed — smokeTarget,
+    // duplication audit §2). Before this, `clode build --naude` only checked
+    // build-naude's exit status: build-naude.mjs's OWN self-check
+    // (smokeCheck) proves the baked bundle boots, but never proves it can
+    // actually reach the API — the equivalent quaude bug was impossible. The
+    // naude output path mirrors build-naude.mjs's own default (an explicit
+    // --out wins; otherwise its per-platform-tag seaBin default).
+    const naudeOut = out || seaBin(ROOT, 'naude');
+    const naudeWork = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-smoke-'));
+    try {
+      clodeLog('clode: build --naude: smoke -p against the canned Messages mock ...');
+      const smoke = await smokeTarget(naudeOut, {
+        spawnRun,
+        env: { ...env, NAUDE_CACHE: path.join(naudeWork, 'cache') },
+        cwd: naudeWork,
+        timeout: 120000 * SCALE,
+      });
+      if (!smoke.ok) {
+        stderr.write('clode: build --naude: SMOKE FAILED — the built naude did not complete the mock round-trip\n');
+        stderr.write(`clode: build --naude: exit=${smoke.status} posted=${smoke.posted} stdout:\n${smoke.stdout}\nstderr:\n${smoke.stderr}\n`);
+        return 1;
+      }
+    } finally {
+      try { fs.rmSync(naudeWork, { recursive: true, force: true }); } catch { /* best effort */ }
+    }
+
     stdout.write('clode: built naude (Node SEA with Claude Code baked in)\n');
+    stdout.write(`clode: smoke: PONG round-trip ok — run '${naudeOut}' to use it\n`);
     return 0;
   }
 
@@ -598,24 +655,19 @@ async function clodeBuild(args, opts) {
       return 0;
     }
 
-    // -- smoke 1: -p PONG against the canned mock. NODE_PATH is stripped so a
-    // pass PROVES the binary is self-contained.
+    // -- smoke 1: the shared contract (smokeTarget, duplication audit §2) —
+    // mock + NODE_PATH-stripped -p PONG + assert-the-POST-landed. NODE_PATH is
+    // stripped so a pass PROVES the binary is self-contained.
     clodeLog('clode: build: smoke -p against the canned Messages mock ...');
-    const mock = await startPongMock();
-    let pong;
-    try {
-      const smokeEnv = { ...env, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-clode-build-smoke' };
-      delete smokeEnv.NODE_PATH;
-      pong = await spawnRun(out, ['-p', 'say PONG'], { env: smokeEnv, cwd: work, timeout: 120000 * SCALE });
-    } finally { await mock.close(); }
-    const posted = mock.requests.some((q) => q.method === 'POST' && /\/messages/.test(q.url));
-    if (pong.status !== 0 || !/PONG/.test(pong.stdout) || !posted) {
+    const smoke = await smokeTarget(out, { spawnRun, env, cwd: work, timeout: 120000 * SCALE });
+    if (!smoke.ok) {
       stderr.write(`clode: build: SMOKE FAILED — the fused quaude did not complete the mock round-trip\n`);
-      stderr.write(`clode: build: exit=${pong.status} posted=${posted} stdout:\n${pong.stdout}\nstderr:\n${pong.stderr}\n`);
+      stderr.write(`clode: build: exit=${smoke.status} posted=${smoke.posted} stdout:\n${smoke.stdout}\nstderr:\n${smoke.stderr}\n`);
       return 1;
     }
 
-    // -- smoke 2: attest must verify every member from the trailer just written.
+    // -- smoke 2: attest must verify every member from the trailer just written
+    // (quaude-only — naude has no manifest/trailer to attest).
     const attest = await spawnRun(out, ['--quaude-attest'], { env, cwd: work, timeout: 120000 * SCALE });
     if (attest.status !== 0 || !/quaude-attest: all members verified/.test(attest.stdout)) {
       stderr.write(`clode: build: ATTEST FAILED (exit ${attest.status}):\n${attest.stdout}\n${attest.stderr}\n`);
@@ -631,6 +683,6 @@ async function clodeBuild(args, opts) {
 }
 
 module.exports = {
-  clodeBuild, startPongMock, cannedSSE, timeoutScale, codesignAdHoc,
+  clodeBuild, startPongMock, cannedSSE, smokeTarget, timeoutScale, codesignAdHoc,
   readDirectDeps, computeDepClosure,
 };
