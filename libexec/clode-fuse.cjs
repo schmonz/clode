@@ -296,6 +296,31 @@ function run(cmd, args, opts = {}) {
   });
 }
 
+// Shared argv contract for `clode build [--naude|--self] [--out PATH]`.
+// Exported so clode-main.cjs can validate BEFORE deciding whether to fire
+// the watch trigger: a build that will not happen (bad/unknown argv) must
+// not phone home or write <cache>/clode/last-watch — see clode-main.cjs's
+// build branch. Returns { naude, self, out } on success or { error } on a
+// bad argv; never throws, never writes anywhere (pure parse).
+function parseBuildArgs(args) {
+  let naude = false;
+  let self = false;
+  let out = null;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--naude') { naude = true; }
+    else if (args[i] === '--self') { self = true; }
+    else if (args[i] === '--out' && args[i + 1]) { out = args[++i]; }
+    else return { error: `build: unknown argument '${args[i]}' (usage: clode build [--self] [--out PATH])` };
+  }
+  // --naude (a Node SEA) and --self (the native clode builder) are different
+  // build TARGETS, not composable modifiers — silently picking one would
+  // build something other than what the user asked for.
+  if (naude && self) {
+    return { error: 'build: --naude and --self are different build targets (Node SEA vs the native clode builder) — pick one' };
+  }
+  return { naude, self, out };
+}
+
 // clode build [--out PATH]. Returns the exit status (0 on success). Injectable
 // bits (env/stderr/stdout) keep the unit-testable surface consistent with the
 // sibling subcommand modules.
@@ -315,27 +340,17 @@ async function clodeBuild(args, opts) {
   const SCALE = timeoutScale(env);
 
   // -- argv: parsed ONCE for the whole subcommand, before either branch below
-  // consumes it. --naude used to short-circuit BEFORE this validation
+  // consumes it (parseBuildArgs below — the same function clode-main.cjs
+  // calls to gate the watch trigger, so there is exactly one unknown-arg
+  // contract, not two). --naude used to short-circuit BEFORE this validation
   // existed, which meant an unknown flag after --naude was silently ignored,
   // --naude + --self silently picked one target and dropped the other, and
   // --out was forwarded to a stub that quietly dropped it too (build wrote to
   // build/<tag>/naude and exited 0 regardless of what the user asked for).
-  // Unifying the parse means both branches share one unknown-arg contract.
-  let naude = false;
-  let self = false;
-  let out = null;
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--naude') { naude = true; }
-    else if (args[i] === '--self') { self = true; }
-    else if (args[i] === '--out' && args[i + 1]) { out = args[++i]; }
-    else return fail(`build: unknown argument '${args[i]}' (usage: clode build [--self] [--out PATH])`);
-  }
-  // --naude (a Node SEA) and --self (the native clode builder) are different
-  // build TARGETS, not composable modifiers — silently picking one would
-  // build something other than what the user asked for.
-  if (naude && self) {
-    return fail('build: --naude and --self are different build targets (Node SEA vs the native clode builder) — pick one');
-  }
+  const parsed = parseBuildArgs(args);
+  if (parsed.error) return fail(parsed.error);
+  const { naude, self, out: parsedOut } = parsed;
+  let out = parsedOut;
 
   // -- naude branch (Task 4): `clode build --naude` bakes Claude Code into a
   // Node SEA instead of fusing a quaude. It reuses the SAME resolve + extract
@@ -791,6 +806,6 @@ async function clodeBuild(args, opts) {
 }
 
 module.exports = {
-  clodeBuild, startPongMock, cannedSSE, smokeTarget, timeoutScale, codesignAdHoc,
+  clodeBuild, parseBuildArgs, startPongMock, cannedSSE, smokeTarget, timeoutScale, codesignAdHoc,
   readDirectDeps, computeDepClosure, assertClosureMatchesLockfile,
 };

@@ -15,10 +15,18 @@ const ROOT = path.resolve(__dirname, '..');
 const ENTRY = path.join(ROOT, 'bin', 'clode');
 const NODE = process.execPath;
 
+// Every spawn here defaults CLODE_WATCH_DIR to a fresh, private temp dir —
+// NOT the real ~/.cache/clode (this file's tests inherit process.env, so
+// without this override a `clode build` that fires the watch trigger would
+// write the real machine's <cache>/clode/last-watch, which is exactly the
+// hermeticity violation the repo's guard (test/run.mjs) polices on a clean
+// CI runner). Tests that need to inspect the watch dir pass their own
+// CLODE_WATCH_DIR via extraEnv, which wins (Object.assign, later key wins).
 function runEntry(args, extraEnv) {
+  const watchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-fuse-test-watch-'));
   return spawnSync(NODE, [ENTRY, ...args], {
     encoding: 'utf8',
-    env: Object.assign({}, process.env, { DYLD_INSERT_LIBRARIES: '' }, extraEnv || {}),
+    env: Object.assign({}, process.env, { DYLD_INSERT_LIBRARIES: '', CLODE_WATCH_DIR: watchDir }, extraEnv || {}),
   });
 }
 
@@ -27,6 +35,47 @@ test('clode build: unknown argument fails loudly before any work', () => {
   assert.strictEqual(r.status, 1);
   assert.match(r.stderr, /build: unknown argument '--frobnicate'/);
   assert.match(r.stderr, /usage: clode build \[--self\] \[--out PATH\]/);
+});
+
+// Regression: an invalid `clode build` used to fire the watch trigger — spawning
+// a detached network check and writing <cache>/clode/last-watch — BEFORE argv
+// validation ever ran, so a build that was about to be REJECTED phoned home and
+// mutated the user's cache anyway (the "before any work" contract the test
+// above pins by name). clode-main.cjs now calls clode-fuse's parseBuildArgs and
+// gates the watch trigger on it succeeding FIRST. This test asserts the
+// watch dir stays untouched — no last-watch, and the dir itself never gets
+// created — when the build is invalid.
+test('clode build <bad arg>: does not fire the watch trigger (a rejected build must not phone home)', () => {
+  const watchDir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'clode-watch-')), 'nested');
+  const r = runEntry(['build', '--frobnicate'], { CLODE_WATCH_DIR: watchDir });
+  assert.strictEqual(r.status, 1);
+  assert.ok(!fs.existsSync(watchDir), 'watch dir must not even be created for a rejected build');
+});
+
+// The flip side: a VALID build must still fire the watch (that is the feature
+// clode-watch.cjs's header describes — upstream drift is checked at the one
+// place it matters). This build fails further downstream (no resolvable
+// provider), but argv itself is valid, so the watch trigger must have already
+// fired by the time it gets there.
+test('clode build: a valid build still fires the watch trigger', () => {
+  const watchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-watch-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-validwatch-'));
+  const fakeTjs = path.join(home, 'tjs');
+  fs.writeFileSync(fakeTjs, '#!/bin/sh\nexit 0\n');
+  const r = runEntry(['build'], {
+    HOME: home,
+    CLODE_STATE_ROOT: home,
+    CLODE_TJS: fakeTjs,
+    CLODE_CLAUDE_BIN: '',
+    CLODE_VERSION_DIR: '',
+    PATH: '/nonexistent',
+    CLODE_WATCH_DIR: watchDir,
+    CLODE_OFFLINE: '1',
+  });
+  assert.strictEqual(r.status, 1);
+  assert.match(r.stderr, /build: no Claude Code binary found/);
+  assert.ok(fs.existsSync(path.join(watchDir, 'last-watch')),
+    'a valid build must still fire the watch trigger — do not regress the feature');
 });
 
 test('clode build --self: missing esbuilt bundle fails loudly and names the fix', () => {

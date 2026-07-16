@@ -20,10 +20,16 @@ const VERSION = fs.readFileSync(path.join(ROOT, 'VERSION'), 'utf8').replace(/\n+
 
 // Run the entry under the current node with a clean-ish env (empty
 // DYLD_INSERT_LIBRARIES so the AVX shim never crashes a spawned node on old Macs).
+// CLODE_WATCH_DIR defaults to a fresh private temp dir on every call: `clode watch`
+// (below) unconditionally mkdir's its watch dir before it does anything else, and
+// this file inherits process.env, so without an override a spawned `clode watch`
+// would create the REAL ~/.cache/clode on the machine running the suite — exactly
+// the hermeticity violation test/run.mjs's guard polices on a clean CI runner.
 function runEntry(args, extraEnv) {
+  const watchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-main-test-watch-'));
   return spawnSync(NODE, [ENTRY, ...args], {
     encoding: 'utf8',
-    env: Object.assign({}, process.env, { DYLD_INSERT_LIBRARIES: '' }, extraEnv || {}),
+    env: Object.assign({}, process.env, { DYLD_INSERT_LIBRARIES: '', CLODE_WATCH_DIR: watchDir }, extraEnv || {}),
   });
 }
 
@@ -127,6 +133,11 @@ test('the prologue floor is v20 end-to-end for `clode build` (fuse runs under tj
     env: Object.assign({}, process.env, {
       DYLD_INSERT_LIBRARIES: '',
       CLODE_TJS: '/nonexistent/clode-test-tjs-template',
+      // This is a valid `clode build` (past argv validation), so it fires the
+      // watch trigger — not what this test is about, and without an override
+      // it would phone home / touch the real cache dir (this harness inherits
+      // process.env, unlike runEntry above). CLODE_NO_WATCH keeps it hermetic.
+      CLODE_NO_WATCH: '1',
     }),
   });
   assert.strictEqual(r.status, 1);

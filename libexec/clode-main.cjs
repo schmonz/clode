@@ -140,6 +140,20 @@ async function main(argv, opts = {}) {
   //     (builder namespace, not passthrough — Claude Code never sees it).
   if (first === 'build') {
     const buildArgs = args.slice(1);
+    const fuse = require('./clode-fuse.cjs');
+    // Validate argv BEFORE anything else in this branch: a build that is
+    // going to be REJECTED must not phone home or touch the cache. (Regression
+    // fixed here: `clode build <bad-arg>` used to fire the watch trigger below
+    // — spawning a detached network check and writing <cache>/clode/last-watch
+    // — and only THEN discover the argv was invalid, i.e. a rejected command
+    // mutated the user's cache anyway. parseBuildArgs is the SAME parser
+    // clodeBuild itself uses — imported, not re-implemented, so there is one
+    // unknown-arg contract, not two.)
+    const parsed = fuse.parseBuildArgs(buildArgs);
+    if (parsed.error) {
+      process.stderr.write('clode: ' + parsed.error + '\n');
+      return process.exit(1);
+    }
     // Upstream drift threatens our ability to repackage, so check when we
     // repackage. (This ran on every launch when clode was a runner; there is
     // no launch anymore, so `build` — the moment upstream drift actually
@@ -147,11 +161,10 @@ async function main(argv, opts = {}) {
     // Claude Code target: it has no upstream bundle to drift, and it is release
     // bootstrap (CI legs, cross-fuse guests) rather than a user invocation — so
     // it gets no watch trigger, never mind the network fetch inside one.
-    if (!buildArgs.includes('--self')) {
+    if (!parsed.self) {
       watch.clodeWatchBanner({ env, here: HERE });
       watch.clodeWatchMaybe({ env, self });
     }
-    const fuse = require('./clode-fuse.cjs');
     const status = await fuse.clodeBuild(buildArgs, { env, libexec: LIBEXEC, here: HERE, version, self });
     return process.exit(status);
   }
