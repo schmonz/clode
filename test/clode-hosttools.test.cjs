@@ -7,12 +7,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const {
-  MIN_NODE_MAJOR,
-  findTool,
-  checkNodeVersion,
-  requireNodeVersionOrExit,
-} = require('../libexec/clode-hosttools.cjs');
+const { findTool } = require('../libexec/clode-hosttools.cjs');
 
 // --- helpers ---------------------------------------------------------------
 function tmpdir() {
@@ -55,63 +50,5 @@ test('findTool walks PATH in order and finds the first match', () => {
 test('findTool returns null when nothing is found', () => {
   const dir = tmpdir();
   assert.strictEqual(findTool('definitely-not-a-tool', { env: { PATH: dir } }), null);
-});
-
-// --- checkNodeVersion / requireNodeVersionOrExit ---------------------------
-test('MIN_NODE_MAJOR matches the sh launcher floor (24)', () => {
-  assert.strictEqual(MIN_NODE_MAJOR, 24);
-});
-
-test('checkNodeVersion accepts the running node', () => {
-  const r = checkNodeVersion();
-  assert.strictEqual(r.ok, true);
-  assert.ok(r.major >= MIN_NODE_MAJOR);
-});
-
-test('checkNodeVersion rejects an old version', () => {
-  const r = checkNodeVersion('18.19.0');
-  assert.deepStrictEqual(r, { ok: false, major: 18 });
-});
-
-test('requireNodeVersionOrExit prints the EXACT too-old message and exits 1', () => {
-  const lines = [];
-  let code;
-  requireNodeVersionOrExit({
-    versionString: '18.19.0',
-    stderr: { write: (s) => lines.push(s) },
-    exit: (c) => { code = c; },
-  });
-  assert.strictEqual(code, 1);
-  assert.strictEqual(lines[0], 'clode: node v18.19.0 is too old; need >= v24\n');
-  assert.strictEqual(
-    lines[1],
-    "clode: (the extracted bundle uses newer JS, e.g. 'using' declarations)\n",
-  );
-});
-
-test('requireNodeVersionOrExit prints the EXACT no-usable-node message and exits 1', () => {
-  const lines = [];
-  let code;
-  requireNodeVersionOrExit({
-    nodePath: '/no/such/node',
-    isExec: () => false,
-    stderr: { write: (s) => lines.push(s) },
-    exit: (c) => { code = c; },
-  });
-  assert.strictEqual(code, 1);
-  assert.strictEqual(lines[0], "clode: no usable node at '/no/such/node' (set CLODE_NODE)\n");
-});
-
-test('requireNodeVersionOrExit is a no-op (returns ok) for a good version', () => {
-  const lines = [];
-  let code;
-  const r = requireNodeVersionOrExit({
-    versionString: '24.6.0',
-    stderr: { write: (s) => lines.push(s) },
-    exit: (c) => { code = c; },
-  });
-  assert.strictEqual(code, undefined);
-  assert.deepStrictEqual(lines, []);
-  assert.strictEqual(r.ok, true);
 });
 

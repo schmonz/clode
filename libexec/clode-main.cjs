@@ -2,8 +2,8 @@
 // clode-main — the JS launcher spine. Ports bin/clode's main() control flow
 // (bin/clode:549) faithfully, wiring the already-built sub-modules into a complete
 // launcher. Entry is bin/clode (an ES5-safe prologue that require()s this and
-// calls main()). This module runs on modern Node (>= MIN_NODE_MAJOR); the prologue
-// guarantees that before it loads us.
+// calls main()). This module runs on modern Node (>= bin/clode's inlined v20
+// floor); the prologue guarantees that before it loads us.
 //
 // Dispatch order (exact, from main()):
 //   1. --verbose (leading position only) -> CLODE_VERBOSE=1
