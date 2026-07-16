@@ -73,4 +73,4 @@ function materializeAssets({ sea = seaMod(), destDir, names }) {
   return destDir;
 }
 
-module.exports = { isSea, materializeDeps, materializeAssets };
+module.exports = { seaMod, isSea, materializeDeps, materializeAssets };

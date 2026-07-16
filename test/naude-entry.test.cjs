@@ -10,6 +10,32 @@ function fakeSea() {
   return { isSea: () => true, getRawAsset: (n) => { const b = Buffer.from(assets[n] || ''); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); } };
 }
 
+// The default `sea` MUST be the node:sea module — the thing whose getRawAsset the
+// materializers call. Passing naude-sea.cjs (the HELPERS module) here type-checks
+// and unit-passes, then dies in the real SEA with "sea.getRawAsset is not a
+// function" on the very first boot. Every other test in this file injects both a
+// fake sea AND stubbed materializers, so nothing else exercises this seam: assert
+// on the DEFAULT, with only the materializers stubbed, or the bug hides again.
+test('first pass defaults `sea` to the node:sea module, not the helpers module', () => {
+  const seen = {};
+  runNaude({
+    argv: [], execPath: '/naude', env: {}, cacheDir: os.tmpdir(), workDir: '/work',
+    // NOTE: no `sea` override — the default is what is under test.
+    materializeDeps: ({ sea }) => { seen.deps = sea; return '/deps'; },
+    materializeAssets: ({ sea, destDir }) => { seen.assets = sea; return destDir; },
+    spawn: () => ({ on() {} }),
+    procOn: () => {}, procOff: () => {}, exit: () => {},
+    onExit: (cb) => cb(0, null),
+  });
+  for (const [who, sea] of Object.entries(seen)) {
+    assert.strictEqual(typeof sea?.getRawAsset, 'function',
+      `materialize${who === 'deps' ? 'Deps' : 'Assets'} was handed an object with no getRawAsset — it cannot read a single embedded asset`);
+    assert.strictEqual(typeof sea?.isSea, 'function', 'the sea seam must be the node:sea module');
+  }
+  assert.ok(!('materializeDeps' in (seen.deps || {})),
+    'the helpers module leaked in as `sea` — that is the shape of the boot-killing bug');
+});
+
 // A fake child that records the signals it is asked to kill with (mirrors the
 // clode-run.test.cjs fakeChild, adapted to naude's spawn seam shape which returns
 // a plain object rather than an EventEmitter — naude drives exit via the onExit seam).

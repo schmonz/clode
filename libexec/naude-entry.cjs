@@ -58,7 +58,11 @@ function runNaude(opts = {}) {
 
   // First pass: materialize the embedded assets and re-invoke ourselves as node.
   const {
-    sea = seaHelpers,
+    // The node:sea MODULE — what the materializers read assets from
+    // (sea.getRawAsset). NOT seaHelpers, which merely wraps it: handing the
+    // helpers module in here unit-passes against stubbed materializers and then
+    // dies on the first real boot with "sea.getRawAsset is not a function".
+    sea = seaHelpers.seaMod(),
     cacheDir = env.NAUDE_CACHE || os.tmpdir(),
     materializeDeps = seaHelpers.materializeDeps,
     materializeAssets = seaHelpers.materializeAssets,
