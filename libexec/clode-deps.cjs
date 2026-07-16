@@ -142,9 +142,13 @@ function ensureDeps(opts = {}) {
   // here on the runtime path means a non-fused clode with no deps present. Fail
   // loud toward the binary/build rather than silently installing.
   if (!install) {
-    stderr.write('clode: runtime dependencies (ws, yaml, string-width, ...) not found.\n');
-    stderr.write('clode: run a fused clode binary (its deps are embedded), or `clode build` one,\n');
-    stderr.write('clode: or set CLODE_DEPS to a node_modules you populate yourself.\n');
+    // Reachable only on a non-fused clode (bin/clode under node) whose deps aren't
+    // present — in practice a SOURCE CHECKOUT that never ran `npm install`. Point
+    // there first; a released binary carries its deps as members and never lands here.
+    stderr.write('clode: runtime dependencies (ws, yaml, string-width, ...) are not installed.\n');
+    stderr.write('clode: - in a source checkout, run `npm install` (or `npm ci`) here.\n');
+    stderr.write('clode: - otherwise use a released clode binary (deps are embedded), or point\n');
+    stderr.write('clode:   CLODE_DEPS at a node_modules you have populated with them.\n');
     return exit(1);
   }
 

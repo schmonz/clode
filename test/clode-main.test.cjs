@@ -37,7 +37,7 @@ test('--clode-help prints clode-specific options and exits 0', () => {
   assert.match(r.stdout, /--clode-watch/);
   assert.match(r.stdout, /--clode-verbose/);
   assert.match(r.stdout, /--clode-version/);
-  assert.match(r.stdout, /run the latest Claude Code under a host Node/);
+  assert.match(r.stdout, /run the latest Claude Code under a portable tjs runtime/);
   assert.match(r.stdout, new RegExp(`clode ${VERSION.replace(/\./g, '\\.')} —`));
   // ends with the passthrough hint line + trailing newline
   assert.ok(r.stdout.endsWith("Run 'clode --help' for Claude Code's own help.\n"));

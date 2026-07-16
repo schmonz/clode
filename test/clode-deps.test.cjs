@@ -83,7 +83,9 @@ test('install:false (runtime) never shells npm — fails loud, installs nothing'
   });
   assert.strictEqual(log.calls.length, 0, 'must not invoke npm at runtime');
   assert.strictEqual(exitCode, 1);
-  assert.match(err, /clode build|fused|binary|CLODE_DEPS/);
+  // actionable for the reachable audience: dev checkout -> npm install; else binary / CLODE_DEPS
+  assert.match(err, /npm install/);
+  assert.match(err, /CLODE_DEPS/);
   assert.ok(!fs.existsSync(path.join(deps, 'node_modules', '.installed')), 'nothing installed');
 });
 
