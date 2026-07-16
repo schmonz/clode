@@ -37,7 +37,7 @@ const CORPUS = [
 function run(engine, item) {
   const env = { ...process.env };
   if (engine === 'tjs') { env.CLODE_ENGINE = 'tjs'; env.CLODE_TJS = TJS; env.CLODE_SHIM_TRACE = '1'; }
-  else { delete env.CLODE_ENGINE; delete env.CLODE_SHIM_TRACE; }
+  else { env.CLODE_ENGINE = 'node'; delete env.CLODE_SHIM_TRACE; } // =node: the host-Node oracle (default is now tjs)
   const r = spawnSync(CLODE, item.args, { input: '', env, encoding: 'utf8', timeout: TIMEOUT });
   const walls = [...new Set((r.stderr || '')
     .split('\n').filter((l) => l.includes('[wall]'))

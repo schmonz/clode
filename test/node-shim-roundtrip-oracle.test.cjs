@@ -63,7 +63,7 @@ test('oracle: host node cli.cjs -p prints the mock response', async (t) => {
         ANTHROPIC_BASE_URL: mock.url,
         ANTHROPIC_API_KEY: 'sk-ant-mock',            // dummy; the mock ignores it. NOT a secret.
         NODE_PATH: path.join(REPO, 'node_modules'),
-        CLODE_ENGINE: '',                            // oracle is plain node, not the tjs branch
+        CLODE_ENGINE: 'node',                        // oracle is plain node (the =node opt-in; default is tjs)
       },
       timeout: 60000,
     });

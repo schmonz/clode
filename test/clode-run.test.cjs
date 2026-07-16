@@ -116,7 +116,7 @@ function fakeChild() {
 }
 
 test('runBundle spawns node with cli.cjs + --settings + args, stdio inherit, mutated env', () => {
-  const env = {};
+  const env = { CLODE_ENGINE: 'node' }; // the host-Node oracle path (default is tjs)
   let call = null;
   const child = fakeChild();
   runBundle({
@@ -138,7 +138,7 @@ test('runBundle omits --settings when settingsPath is null', () => {
   const child = fakeChild();
   runBundle({
     node: NODE, cliPath: '/cache/cli.cjs', args: ['--version'], settingsPath: null,
-    self: 'x', libexec: REAL_LIBEXEC, env: {},
+    self: 'x', libexec: REAL_LIBEXEC, env: { CLODE_ENGINE: 'node' },
     spawn: (cmd, a) => { call = { cmd, a }; return child; },
     procOn: () => {}, procOff: () => {}, exit: () => {},
   });
@@ -223,13 +223,34 @@ test('runBundle reports a launch error and exits 1', () => {
   let exited = null;
   let msg = '';
   runBundle({
-    node: NODE, cliPath: '/cli.cjs', args: [], settingsPath: null, self: 'x', libexec: REAL_LIBEXEC, env: {},
+    node: NODE, cliPath: '/cli.cjs', args: [], settingsPath: null, self: 'x', libexec: REAL_LIBEXEC,
+    env: { CLODE_ENGINE: 'node' },
     spawn: () => child, procOn: () => {}, exit: (c) => { exited = c; }, procOff: () => {},
     stderr: { write: (s) => { msg += s; } },
   });
   child.emit('error', new Error('boom'));
   assert.strictEqual(exited, 1);
   assert.match(msg, /clode: failed to launch node: boom/);
+});
+
+// S4: the default (tjs) launch has NO silent host-Node fallback. When the engine
+// can't launch, fail loud pointing to build-tjs / CLODE_TJS / the =node oracle.
+test('runBundle default(tjs) launch failure fails loud with build/oracle guidance', () => {
+  const child = fakeChild();
+  let exited = null;
+  let msg = '';
+  runBundle({
+    node: NODE, cliPath: '/cli.cjs', args: [], settingsPath: null, self: 'x', libexec: REAL_LIBEXEC,
+    env: {}, // unset CLODE_ENGINE => tjs (the default)
+    spawn: () => child, procOn: () => {}, exit: (c) => { exited = c; }, procOff: () => {},
+    stderr: { write: (s) => { msg += s; } },
+  });
+  child.emit('error', new Error('ENOENT'));
+  assert.strictEqual(exited, 1);
+  assert.match(msg, /failed to launch tjs/);
+  assert.match(msg, /build-tjs\.mjs/);
+  assert.match(msg, /CLODE_ENGINE=node/);
+  assert.doesNotMatch(msg, /failed to launch node/); // no node fallback message
 });
 
 // --- runBundle: real spawn (exit-code passthrough end to end) -----------------

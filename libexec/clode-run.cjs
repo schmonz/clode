@@ -137,10 +137,14 @@ function runBundle(opts = {}) {
 
   const argv = settingsPath ? ['--settings', settingsPath, ...args] : [...args];
 
-  // Experimental opt-in: run the bundle under the patched tjs via node-shim.
-  // Default (CLODE_ENGINE unset) is byte-identical to the node path below.
+  // tjs is THE runtime (retire-node-runtime): CLODE_ENGINE unset or =tjs runs the
+  // bundle under the patched tjs via node-shim. CLODE_ENGINE=node is the opt-in
+  // host-Node oracle (dev/CI only — higher-fidelity to upstream Bun, the reference
+  // tjs is verified against). Per S4 there is NO silent host-Node user fallback:
+  // if the tjs engine can't launch, we fail loud pointing to the oracle/build.
+  const useTjs = env.CLODE_ENGINE !== 'node';
   let child;
-  if (env.CLODE_ENGINE === 'tjs') {
+  if (useTjs) {
     const tjsBin = env.CLODE_TJS || path.join(libexec, '..', 'build', 'tjs', 'tjs');
     const loader = path.join(libexec, 'node-shim', 'loader.cjs');
     child = spawnFn(tjsBin, ['run', loader, cliPath, ...argv], { stdio: 'inherit', env });
@@ -169,7 +173,13 @@ function runBundle(opts = {}) {
   });
   child.on('error', (e) => {
     cleanup();
-    stderr.write('clode: failed to launch ' + (env.CLODE_ENGINE === 'tjs' ? 'tjs' : 'node') + ': ' + e.message + '\n');
+    if (useTjs) {
+      stderr.write(`clode: failed to launch tjs (${e.message}).\n`);
+      stderr.write("clode: build an engine with 'node scripts/build-tjs.mjs', set CLODE_TJS=/path/to/tjs,\n");
+      stderr.write('clode: or set CLODE_ENGINE=node to run the extracted bundle under the host-Node oracle.\n');
+    } else {
+      stderr.write('clode: failed to launch node: ' + e.message + '\n');
+    }
     exit(1);
   });
   return child;
