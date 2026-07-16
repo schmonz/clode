@@ -101,7 +101,7 @@ const members = [];
 if (role === 'builder') {
   members.push({ name: entryName, data: await mustRead(path.join(stageDir, 'clode-main.bundle.cjs'), 'esbuilt clode-main bundle') });
   const libexecDir = path.dirname(shimDir);
-  for (const f of ['bun-shim.cjs', 'extract-claude-js.cjs', 'quaude-fuse.js', 'quaude-bootstrap.mjs']) {
+  for (const f of ['bun-shim.cjs', 'extract-claude-js.cjs', 'quaude-fuse.js', 'quaude-bootstrap.mjs', 'target-env.cjs']) {
     members.push({ name: `libexec/${f}`, data: await mustRead(path.join(libexecDir, f), `libexec member ${f}`) });
   }
   // The PRISTINE tjs template rides along (Q2 Decision 2): a shipped builder
@@ -126,6 +126,9 @@ if (role === 'builder') {
 
   // bun-shim from the extracted stage (version-locked to the bundle by the cache).
   members.push({ name: 'bun-shim.cjs', data: await mustRead(path.join(stageDir, 'bun-shim.cjs'), 'staged bun-shim') });
+
+  // The env contract the bootstrap applies before booting the bundle.
+  members.push({ name: 'libexec/target-env.cjs', data: await mustRead(path.join(path.dirname(shimDir), 'target-env.cjs'), 'libexec member target-env.cjs') });
 }
 
 // node-shim tree: THE committed loader + modules + internal (the loader's VFS
@@ -163,6 +166,11 @@ const manifest = {
   idna: deriveIdnaLevel(),
   template: extras.template,
   hooks: extras.hooks,
+  // The clode that built this quaude (clode-fuse.cjs's opts.self, rides in via
+  // extras.json). Read by the bootstrap (quaude-bootstrap.mjs) to bake
+  // CLODE_SELF, so the patched in-app updater can call back to a real builder
+  // instead of the baked binary trying (and failing) to rebuild itself.
+  builder: extras.builder ?? null,
   fusedAt: new Date().toISOString(),
   members: memberShas,
 };

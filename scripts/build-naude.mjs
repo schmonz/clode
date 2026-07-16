@@ -88,7 +88,11 @@ function esbuildBundle() {
   toolRequire('esbuild').buildSync({
     entryPoints: [path.join(REPO, 'libexec', 'naude-entry.cjs')],
     bundle: true, platform: 'node', format: 'cjs', target: 'node24',
-    define: { __CLODE_BUILDER__: JSON.stringify(process.env.CLODE_SELF || process.argv[1]) },
+    // Only clode knows the builder path (it passes CLODE_SELF). argv[1] here is
+    // build-naude.mjs's OWN path — baking that would point the updater at a
+    // non-CLI. Unknown must stay null so CLODE_SELF is left unset and the
+    // patched updater fails loud.
+    define: { __CLODE_BUILDER__: JSON.stringify(process.env.CLODE_SELF || null) },
     outfile: bundle,
   });
   return bundle;

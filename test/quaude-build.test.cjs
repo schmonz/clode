@@ -93,7 +93,7 @@ test('attest golden: stable manifest fields + full member verification', async (
 
   // GOLDEN (stable fields only — fusedAt deliberately unchecked beyond shape):
   assert.deepStrictEqual(Object.keys(manifest).sort(), [
-    'bundleVersion', 'clodeVersion', 'engine', 'entry', 'fusedAt', 'hooks',
+    'builder', 'bundleVersion', 'clodeVersion', 'engine', 'entry', 'fusedAt', 'hooks',
     'idna', 'members', 'quaude', 'role', 'template',
   ]);
   assert.strictEqual(manifest.quaude, '1');
@@ -101,13 +101,17 @@ test('attest golden: stable manifest fields + full member verification', async (
   assert.strictEqual(manifest.entry, 'cli.qbc');
   assert.strictEqual(manifest.bundleVersion, cacheKey(providerBin()));
   assert.strictEqual(manifest.clodeVersion, VERSION);
+  // The clode (bin/clode, this test's ENTRY) that built this quaude — read by
+  // the bootstrap to bake CLODE_SELF, so the patched in-app updater can call
+  // back to a real builder instead of the baked binary trying to rebuild itself.
+  assert.strictEqual(manifest.builder, fs.realpathSync(ENTRY));
   assert.ok(manifest.engine.quickjs && manifest.engine.tjs, 'engine pins missing');
   assert.ok(['uts46', 'l1'].includes(manifest.idna), `underived idna: ${manifest.idna}`);
   assert.strictEqual(manifest.template.sha256, sha256File(tjsPath()));
   assert.strictEqual(manifest.hooks['extract-claude-js.cjs'],
     sha256File(path.join(REPO, 'libexec/extract-claude-js.cjs')));
   assert.ok(!Number.isNaN(Date.parse(manifest.fusedAt)), 'fusedAt not ISO-parseable');
-  for (const m of ['cli.qbc', 'bun-shim.cjs', 'node-shim/loader.cjs', 'node-shim/modules/process.cjs']) {
+  for (const m of ['cli.qbc', 'bun-shim.cjs', 'node-shim/loader.cjs', 'node-shim/modules/process.cjs', 'libexec/target-env.cjs']) {
     assert.ok(manifest.members[m], `manifest missing member ${m}`);
   }
   // The shipped loader member must be byte-identical to the committed loader.

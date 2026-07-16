@@ -173,7 +173,7 @@ async function main(argv, opts = {}) {
   //     (builder namespace, not passthrough — Claude Code never sees it).
   if (first === 'build') {
     const fuse = require('./clode-fuse.cjs');
-    const status = await fuse.clodeBuild(args.slice(1), { env, libexec: LIBEXEC, here: HERE, version });
+    const status = await fuse.clodeBuild(args.slice(1), { env, libexec: LIBEXEC, here: HERE, version, self });
     return process.exit(status);
   }
 

@@ -177,6 +177,11 @@ test('first pass shapes the child env with the target contract', () => {
   assert.strictEqual(call.env.NODE_USE_ENV_PROXY, '1');
   // NODE_PATH stays naude's own business (materialized deps), not target-env's.
   assert.match(call.env.NODE_PATH, /\/deps\/node_modules/);
+  // No `builder` override here (the default seam) -> BAKED_BUILDER is null in a
+  // plain require() of this module -> CLODE_SELF must stay unset. A regression
+  // in that guard would otherwise go unnoticed by every OTHER test in this file
+  // (they all pass `builder` explicitly).
+  assert.strictEqual(call.env.CLODE_SELF, undefined, 'no builder baked -> updater must fail loud, not spawn something wrong');
 });
 
 test('first pass points CLODE_SELF at the clode that built this naude', () => {

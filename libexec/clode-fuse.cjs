@@ -208,9 +208,13 @@ async function clodeBuild(args, opts) {
     }
     const cliPath = path.join(stageDir, 'cli.cjs');
     clodeLog(`clode: build --naude: building the Node SEA from ${cliPath} ...`);
+    // build-naude.mjs runs as a SEPARATE process — its esbuild --define reads
+    // CLODE_SELF from ITS OWN env (process.env), never opts.self directly — so
+    // the builder path (opts.self, this function's own param, NOT the local
+    // `self` boolean above) must be handed down through the child's env.
     const r = await spawnRun(process.execPath,
       [path.join(ROOT, 'scripts', 'build-naude.mjs'), '--cli', cliPath, ...outArgs],
-      { env, timeout: 600000 * SCALE });
+      { env: { ...env, ...(opts.self ? { CLODE_SELF: opts.self } : {}) }, timeout: 600000 * SCALE });
     if (r.status !== 0) {
       return fail(`build --naude: build-naude failed (exit ${r.status}):\n${r.stdout}${r.stderr}`);
     }
@@ -388,6 +392,12 @@ async function clodeBuild(args, opts) {
       // themselves: the extractor that hooked cli.cjs (memo §6.9 — staleness of
       // the frozen entry transforms is detectable via these + bundleVersion).
       hooks: { 'extract-claude-js.cjs': sha256File(path.join(libexec, 'extract-claude-js.cjs')) },
+      // The clode that built this quaude. Its patched in-app updater calls back
+      // here (CLODE_SELF): a baked binary cannot rebuild itself. null when unknown,
+      // so the updater fails loud rather than spawning something wrong. NOTE:
+      // opts.self, not the local `self` boolean above (that one means "fuse the
+      // builder itself", i.e. --self — an unrelated flag that happens to share a name).
+      builder: opts.self || null,
     };
 
     // -- sign-then-append (memo §6.1): copy template -> re-sign the copy while

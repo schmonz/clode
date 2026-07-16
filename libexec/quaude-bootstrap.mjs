@@ -41,6 +41,50 @@ async function sha256hex(bytes) {
   return Array.from(d, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+// tjs -> node spelling. Same mapping the node-shim's detectPlatform uses
+// (libexec/node-shim/modules/process.cjs:46); tjs.system.platform is EMPTY, so
+// navigator.userAgentData.platform is the only source this early.
+function tjsPlatform(uaPlatform) {
+  switch (uaPlatform) {
+    case 'macOS': return 'darwin';
+    case 'Windows': return 'win32';
+    case 'Linux': return 'linux';
+    case 'FreeBSD': return 'freebsd';
+    case 'OpenBSD': return 'openbsd';
+    default: return uaPlatform ? String(uaPlatform).toLowerCase() : 'linux';
+  }
+}
+
+// The env contract every built target applies to itself. ASYNC because tjs has
+// no statSync: probe every candidate target-env can ask about (probePaths), then
+// answer synchronously from the result. Exported + primitive-injected so it
+// unit-tests under host node — the file's existing carveQuaudeArgs pattern.
+export async function bootstrapTargetEnv(tjs, opts) {
+  const {
+    builder,
+    shape = globalThis.__clodeShapeTargetEnv,
+    probe = globalThis.__clodeProbePaths,
+    uaPlatform = (typeof navigator !== 'undefined' && navigator.userAgentData && navigator.userAgentData.platform),
+  } = opts;
+  const platform = tjsPlatform(uaPlatform);
+  const delimiter = platform === 'win32' ? ';' : ':';
+  const sep = platform === 'win32' ? '\\' : '/';
+
+  const present = new Set();
+  for (const p of probe({ env: tjs.env, platform, delimiter })) {
+    try { await tjs.stat(p); present.add(p); } catch { /* absent */ }
+  }
+
+  return shape({
+    env: tjs.env,
+    self: builder,
+    platform,
+    delimiter,
+    exists: (p) => present.has(p),
+    dirname: (p) => { const i = p.lastIndexOf(sep); return i <= 0 ? sep : p.slice(0, i); },
+  });
+}
+
 async function main() {
   const dec = new TextDecoder();
   const die = (msg, code) => { console.error(`quaude: ${msg}`); tjs.exit(code); };
@@ -114,6 +158,15 @@ async function main() {
       tjs.exit(ok ? 0 : 1);
     }
   }
+
+  // 7.5) Apply the target env contract before ANY bundle code runs. target-env.cjs
+  // is a member: evaluate it the same way the loader is evaluated below (it is
+  // CJS, so hand it a module shim), then adapt it to tjs primitives.
+  const tem = { exports: {} };
+  (0, new Function('module', 'exports', dec.decode(files.get('libexec/target-env.cjs'))))(tem, tem.exports);
+  globalThis.__clodeShapeTargetEnv = tem.exports.shapeTargetEnv;
+  globalThis.__clodeProbePaths = tem.exports.probePaths;
+  await bootstrapTargetEnv(tjs, { builder: manifest.builder || null });
 
   // 8) mount + boot: the archived loader resolves everything under /quaude/;
   // the manifest rides along so the loader picks the role's entry member.
