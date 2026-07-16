@@ -1,27 +1,31 @@
 #!/usr/bin/env node
-// clode API-surface gate — v0. See docs/superpowers/specs/2026-07-08-api-surface-gate-design.md
+// clode API-surface gate — v1. See docs/superpowers/specs/2026-07-08-api-surface-gate-design.md
 //
-// Two axes over a seed corpus of `clode` invocations, using ONLY existing
-// instrumentation (wallProxy's [wall] log + node as a reference oracle):
-//   Axis 1 (presence):   collect the union of [wall] misses (exercised-but-
-//                        unimplemented APIs) — the polyfill work-list.
-//   Axis 2 (correctness):run each command under node AND tjs; flag exit-code
-//                        divergence always, and stdout divergence for the
-//                        deterministic commands (model prose is non-deterministic,
-//                        so `-p` prompts are exit+wall only, NOT stdout-compared).
+// Two axes over a seed corpus of Claude Code invocations, run under clode's two
+// BUILD TARGETS' runtimes (see test/oracle-models.cjs) rather than any launcher:
+//   naude  — cli.cjs under real node. The REFERENCE (native built-ins).
+//   quaude — cli.cjs under tjs + the node-shim. The SUBJECT.
+// Both run the SAME staged cli.cjs, so the only variable is the engine.
+//
+//   Axis 1 (presence):    collect the union of [wall] misses (exercised-but-
+//                         unimplemented APIs) on the quaude side — the polyfill
+//                         work-list.
+//   Axis 2 (correctness): flag exit-code divergence always, and stdout divergence
+//                         for the deterministic commands (model prose is non-
+//                         deterministic, so `-p` prompts are exit+wall only).
 // Plus a cross-version require-target set-diff ("did the surface expand?").
 //
-// Exit non-zero if any wall miss or any (applicable) divergence is found — so this
-// is a CI gate. Runs under host node; orchestrates bin/clode.
-import { spawnSync } from 'node:child_process';
+// Exit non-zero on any wall miss or (applicable) divergence — this is a CI gate.
+// Needs a Bun-packaged CC provider to stage cli.cjs; without one it SKIPS (exit 0).
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import os from 'node:os';
 
+const require = createRequire(import.meta.url);
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const CLODE = path.join(REPO, 'bin', 'clode');
-const TJS = process.env.CLODE_TJS || path.join(REPO, 'build', 'tjs', 'tjs');
+const models = require(path.join(REPO, 'test', 'oracle-models.cjs'));
 const TIMEOUT = 60000;
 
 // Seed corpus. `deterministic` commands get strict stdout parity; `-p` model
@@ -34,15 +38,10 @@ const CORPUS = [
   { id: 'p-arith',  args: ['-p', 'what is 6 times 7? reply with only the number'], deterministic: false },
 ];
 
-function run(engine, item) {
-  const env = { ...process.env };
-  if (engine === 'tjs') { env.CLODE_ENGINE = 'tjs'; env.CLODE_TJS = TJS; env.CLODE_SHIM_TRACE = '1'; }
-  else { env.CLODE_ENGINE = 'node'; delete env.CLODE_SHIM_TRACE; } // =node: the host-Node oracle (default is now tjs)
-  const r = spawnSync(CLODE, item.args, { input: '', env, encoding: 'utf8', timeout: TIMEOUT });
-  const walls = [...new Set((r.stderr || '')
+function wallsOf(stderr) {
+  return [...new Set((stderr || '')
     .split('\n').filter((l) => l.includes('[wall]'))
     .map((l) => l.replace(/^.*\[wall\]\s*/, '').trim()).filter(Boolean))];
-  return { status: r.status, signal: r.signal, stdout: (r.stdout || ''), walls };
 }
 
 function requireTargets(file) {
@@ -61,43 +60,75 @@ function cachedVersions() {
     .sort();
 }
 
-console.log('# clode API-surface gate (v0)\n');
-const allWalls = new Set();
-const divergences = [];
-
-for (const item of CORPUS) {
-  const t = run('tjs', item);
-  const n = run('node', item);
-  t.walls.forEach((w) => allWalls.add(w));
-  const exitDiverge = t.status !== n.status || t.signal !== n.signal;
-  const stdoutDiverge = item.deterministic && t.stdout.trim() !== n.stdout.trim();
-  if (exitDiverge) divergences.push(`${item.id}: exit tjs=${t.status}/${t.signal} node=${n.status}/${n.signal}`);
-  if (stdoutDiverge) divergences.push(`${item.id}: stdout differs (deterministic cmd)`);
-  const mark = (exitDiverge || stdoutDiverge) ? 'DIVERGE' : 'ok';
-  console.log(`- ${item.id.padEnd(10)} ${mark.padEnd(8)} exit(tjs=${t.status ?? t.signal},node=${n.status ?? n.signal}) walls=${t.walls.length}${t.walls.length ? ' [' + t.walls.join(', ') + ']' : ''}`);
-}
-
-console.log('\n## Axis 1 — exercised-but-unimplemented (walls)');
-console.log(allWalls.size ? [...allWalls].map((w) => '  - ' + w).join('\n') : '  (none — every API the corpus exercised is implemented)');
-
-console.log('\n## Axis 2 — node-vs-tjs divergences');
-console.log(divergences.length ? divergences.map((d) => '  - ' + d).join('\n') : '  (none)');
-
-console.log('\n## Version delta — require-target set-diff');
-const vers = cachedVersions();
-if (vers.length >= 2) {
+function versionDelta(log) {
+  log('\n## Version delta — require-target set-diff');
+  const vers = cachedVersions();
+  if (vers.length < 2) { log('  (need >=2 cached versions)'); return; }
   const [a, b] = [vers[vers.length - 2], vers[vers.length - 1]];
   const sa = requireTargets(path.join(os.homedir(), '.cache', 'clode', a, 'cli.cjs'));
   const sb = requireTargets(path.join(os.homedir(), '.cache', 'clode', b, 'cli.cjs'));
-  const added = [...sb].filter((x) => !sa.has(x));
-  const removed = [...sa].filter((x) => !sb.has(x));
-  console.log(`  ${a} (${sa.size}) -> ${b} (${sb.size})`);
-  console.log('  added:   ' + (added.join(', ') || '(none)'));
-  console.log('  removed: ' + (removed.join(', ') || '(none)'));
-} else {
-  console.log('  (need >=2 cached versions)');
+  log(`  ${a} (${sa.size}) -> ${b} (${sb.size})`);
+  log('  added:   ' + ([...sb].filter((x) => !sa.has(x)).join(', ') || '(none)'));
+  log('  removed: ' + ([...sa].filter((x) => !sb.has(x)).join(', ') || '(none)'));
 }
 
-const failed = allWalls.size > 0 || divergences.length > 0;
-console.log(`\n${failed ? 'GATE: FAIL' : 'GATE: PASS'} (walls=${allWalls.size}, divergences=${divergences.length})`);
-process.exit(failed ? 1 : 0);
+// The gate. Everything it touches the world through is injectable, so the wiring
+// and the axes are unit-testable without a provider (test/apicheck-decoupled).
+// Returns the process exit status.
+export function runGate(opts = {}) {
+  const log = opts.log || ((s) => console.log(s));
+  const corpus = opts.corpus || CORPUS;
+  const runNaude = opts.runNaude || models.runNaudeModel;
+  const runQuaude = opts.runQuaude || models.runQuaudeModel;
+  const stage = opts.stage || (() => models.stageProviderCli({ env: opts.env || process.env }));
+
+  log('# clode API-surface gate (v1: naude reference vs quaude subject)\n');
+
+  const staged = stage();
+  if (!staged) {
+    log('SKIP: no Bun-packaged Claude Code provider resolved.');
+    log('  The gate stages cli.cjs from a real provider binary; point CLODE_PROVIDER_BIN');
+    log("  or CLODE_CLAUDE_BIN at one, or run 'clode fetch'.");
+    return 0;
+  }
+
+  const baseEnv = { ...(opts.env || process.env) };
+  const allWalls = new Set();
+  const divergences = [];
+
+  for (const item of corpus) {
+    const q = runQuaude(staged.cli, item.args, {
+      cwd: staged.dir, timeout: TIMEOUT,
+      env: { ...baseEnv, CLODE_SHIM_TRACE: '1' },
+    });
+    const nEnv = { ...baseEnv };
+    delete nEnv.CLODE_SHIM_TRACE;
+    const n = runNaude(staged.cli, item.args, { cwd: staged.dir, timeout: TIMEOUT, env: nEnv });
+
+    const walls = wallsOf(q.stderr);
+    walls.forEach((w) => allWalls.add(w));
+    const exitDiverge = q.status !== n.status || q.signal !== n.signal;
+    const stdoutDiverge = item.deterministic && (q.stdout || '').trim() !== (n.stdout || '').trim();
+    if (exitDiverge) divergences.push(`${item.id}: exit quaude=${q.status}/${q.signal} naude=${n.status}/${n.signal}`);
+    if (stdoutDiverge) divergences.push(`${item.id}: stdout differs (deterministic cmd)`);
+    const mark = (exitDiverge || stdoutDiverge) ? 'DIVERGE' : 'ok';
+    log(`- ${item.id.padEnd(10)} ${mark.padEnd(8)} exit(quaude=${q.status ?? q.signal},naude=${n.status ?? n.signal}) walls=${walls.length}${walls.length ? ' [' + walls.join(', ') + ']' : ''}`);
+  }
+
+  log('\n## Axis 1 — exercised-but-unimplemented (walls, quaude side)');
+  log(allWalls.size ? [...allWalls].map((w) => '  - ' + w).join('\n') : '  (none — every API the corpus exercised is implemented)');
+
+  log('\n## Axis 2 — naude-vs-quaude divergences');
+  log(divergences.length ? divergences.map((d) => '  - ' + d).join('\n') : '  (none)');
+
+  if (opts.versionDelta !== false) versionDelta(log);
+
+  const failed = allWalls.size > 0 || divergences.length > 0;
+  log(`\n${failed ? 'GATE: FAIL' : 'GATE: PASS'} (walls=${allWalls.size}, divergences=${divergences.length})`);
+  return failed ? 1 : 0;
+}
+
+// Only run when invoked as a script — importing this module must never spawn.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  process.exit(runGate());
+}
