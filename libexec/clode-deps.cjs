@@ -1,9 +1,14 @@
 'use strict';
-// clode-deps — JS port of bin/clode's ensure_deps: resolve clode's runtime npm
-// deps (the package.json manifest) into a user-owned dir, installing on first run
-// and re-installing when the manifest changes (sig-gated). These back the bundle's
-// ext-deps (ws, yaml, string-width, ...). Pure Node stdlib + sibling .cjs requires;
-// runs before any ext-deps are ensured. Behavior-for-behavior with the sh launcher.
+// clode-deps — JS port of bin/clode's ensure_deps: resolve the BUILT TARGETS'
+// (Claude Code's) runtime npm deps — the deps/claude/package.json manifest —
+// into a user-owned dir, installing on first run and re-installing when the
+// manifest changes (sig-gated). These are what `clode build` embeds as the
+// ext-dep closure (ws, yaml, string-width, ...); they are NOT clode's own deps
+// — clode itself has none (see test/clode-self-deps.test.cjs). Pure Node
+// stdlib + sibling .cjs requires; runs before any ext-deps are ensured.
+// Behavior-for-behavior with the sh launcher (which predates the deps/claude
+// split — read "clode's runtime deps" in any surviving sh-era comment as "the
+// deps clode builds INTO its targets").
 //
 // User-owned => no sudo. CLODE_DEPS overrides the dir AND, if already populated with
 // a node_modules but no clode-written .deps-sig, opts out of auto-install (you manage
@@ -73,11 +78,15 @@ function runNpmQuiet(verbose, npm, args, spawn, stderr, env) {
   return false;
 }
 
-// Resolve + (re)install clode's runtime npm deps. Mirrors ensure_deps:
+// Resolve + (re)install the built targets' (Claude Code's) runtime npm deps.
+// Mirrors ensure_deps:
 //   - DEPS_ROOT = CLODE_DEPS | ${XDG_DATA_HOME:-$HOME/.local/share}/clode
-//   - manifest search order: LIBEXEC/package.json, then HERE/../package.json
-//   - early returns: no manifest; deps ship in clode's own $HERE/../node_modules;
-//     a user-managed CLODE_DEPS (node_modules, no .deps-sig); the sig gate (fresh).
+//   - manifest search order: LIBEXEC/deps/claude/package.json, then
+//     HERE/../deps/claude/package.json (the normal repo layout: ROOT/deps/claude)
+//   - early returns: no manifest; deps already installed at a sibling
+//     deps/claude/node_modules ($HERE/../deps/claude/node_modules — a source
+//     checkout that already ran `npm install --prefix deps/claude`); a
+//     user-managed CLODE_DEPS (node_modules, no .deps-sig); the sig gate (fresh).
 //   - else: log, resolve npm (CLODE_NPM verbatim, else `command -v npm`; none ->
 //     two-line fail-loud + exit 1), mkdir DEPS_ROOT, copy manifest, `npm install
 //     --prefix DEPS_ROOT --no-audit --no-fund --omit=dev` (run_quiet; failure ->
@@ -107,18 +116,29 @@ function ensureDeps(opts = {}) {
   // DEPS_ROOT="${CLODE_DEPS:-${XDG_DATA_HOME:-$HOME/.local/share}/clode}"
   const depsRoot = depsStore(env);
 
-  // manifest: first of LIBEXEC/package.json, HERE/../package.json that is a file.
+  // manifest: first of LIBEXEC/deps/claude/package.json,
+  // HERE/../deps/claude/package.json that is a file. Both resolve to the same
+  // ROOT/deps/claude/package.json in the normal repo layout; the two-tier
+  // search only matters when CLODE_LIBEXEC points somewhere other than the
+  // real checkout (an alternate packaging layout that ships its own
+  // deps/claude alongside the libexec scripts).
   let manifest = '';
   for (const c of [
-    path.join(libexec, 'package.json'),
-    path.join(here, '..', 'package.json'),
+    path.join(libexec, 'deps', 'claude', 'package.json'),
+    path.join(here, '..', 'deps', 'claude', 'package.json'),
   ]) {
     if (isFile(c)) { manifest = c; break; }
   }
   if (!manifest) return; // no manifest shipped -> nothing to ensure
 
-  // An npm install ships clode's deps in its own node_modules -> nothing to install.
-  if (isDir(path.join(here, '..', 'node_modules'))) return;
+  // deps/claude/node_modules already installed beside this checkout (a dev ran
+  // `npm install --prefix deps/claude`, or CI already did it) -> nothing to
+  // install here; clode-fuse.cjs's nmDir resolution finds it directly. This
+  // used to check $HERE/../node_modules (the REPO ROOT's own node_modules,
+  // from `npm install -g .`) — that was the exact conflation this whole
+  // restructuring removes: a root-level node_modules was never "clode's own"
+  // deps (clode has none), it was Claude Code's, mis-homed at the repo root.
+  if (isDir(path.join(here, '..', 'deps', 'claude', 'node_modules'))) return;
 
   // A CLODE_DEPS dir with node_modules but no clode-written .deps-sig is user-managed:
   // trust it, never auto-install. (Our own managed dir HAS a .deps-sig, so it falls
@@ -143,10 +163,11 @@ function ensureDeps(opts = {}) {
   // loud toward the binary/build rather than silently installing.
   if (!install) {
     // Reachable only on a non-fused clode (bin/clode under node) whose deps aren't
-    // present — in practice a SOURCE CHECKOUT that never ran `npm install`. Point
-    // there first; a released binary carries its deps as members and never lands here.
+    // present — in practice a SOURCE CHECKOUT that never ran
+    // `npm install --prefix deps/claude`. Point there first; a released binary
+    // carries its deps as members and never lands here.
     stderr.write('clode: runtime dependencies (ws, yaml, string-width, ...) are not installed.\n');
-    stderr.write('clode: - in a source checkout, run `npm install` (or `npm ci`) here.\n');
+    stderr.write('clode: - in a source checkout, run `npm install --prefix deps/claude` (or `npm ci --prefix deps/claude`) here.\n');
     stderr.write('clode: - otherwise use a released clode binary (deps are embedded), or point\n');
     stderr.write('clode:   CLODE_DEPS at a node_modules you have populated with them.\n');
     return exit(1);

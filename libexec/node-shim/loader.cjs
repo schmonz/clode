@@ -427,7 +427,9 @@ function requireExt(name) {
   // (the P.join fallback below embeds '..' segments __vfsGet cannot see).
   if (__QVFS) roots.push('/quaude/node_modules/' + name);
   for (const r of (globalThis.process && process.env.NODE_PATH || '').split(NODE_PATH_DELIM)) if (r) roots.push(P.join(r, name));
-  roots.push(P.join(P.dirname(SHIM_DIR), '..', '..', 'node_modules', name)); // repo node_modules fallback
+  // repo fallback: deps/claude/node_modules — Claude Code's deps (not clode's
+  // own; clode has none), installed alongside a real checkout.
+  roots.push(P.join(P.dirname(SHIM_DIR), '..', '..', 'deps', 'claude', 'node_modules', name));
   for (const pkgDir of roots) {
     const pkgJson = P.join(pkgDir, 'package.json');
     if (!existsFileSync(pkgJson)) continue;

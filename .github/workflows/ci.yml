@@ -52,7 +52,7 @@ jobs:
       - name: Install the Claude provider (npm, latest — the bundle-bump gate)
         run: npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
       - name: Install runtime deps (semver et al.) for the oracles
-        run: npm ci
+        run: npm ci --prefix deps/claude
       - name: Sync-primitive battery on the real Windows kernel
         run: |
           set -euo pipefail
@@ -101,7 +101,7 @@ jobs:
       - name: Install the Claude provider (npm, latest — the render bump gate)
         run: npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
       - name: Install root runtime deps (render seed deps)
-        run: npm ci
+        run: npm ci --prefix deps/claude
       - name: Install the PTY harness (node-pty win32-x64 prebuilt + @xterm/headless)
         run: npm install --prefix test
       - name: Preflight — node-pty can open a ConPTY on this kernel
@@ -150,7 +150,7 @@ jobs:
       - name: Install the Claude provider (npm, latest — the bundle-bump gate)
         run: npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
       - name: Install runtime deps (semver et al.) for the oracles
-        run: npm ci
+        run: npm ci --prefix deps/claude
       - name: Sync-primitive battery on the real Windows kernel
         run: |
           set -euo pipefail
@@ -191,7 +191,7 @@ jobs:
           have=$(node -v); have=${have#v}
           [ "$have" = "$want" ] || { echo "node skew: .tool-versions=$want but runtime=$have" >&2; exit 1; }
       - name: Install runtime deps (the six Bun-backing packages, locked) for the fidelity gate
-        run: npm ci
+        run: npm ci --prefix deps/claude
       - name: Full node:test suite (includes the shim-fidelity gate)
         run: npm test
 
@@ -222,7 +222,7 @@ jobs:
           name: tjs-linux-x64-musl   # bare static engine from the CI-tier leg
           path: ${{ runner.temp }}/tjs
       - name: Install the runtime dep closure (ws/yaml/semver/string-width/... for the shim)
-        run: npm ci
+        run: npm ci --prefix deps/claude
       # The naude-vs-quaude parity gate stages cli.cjs from a real Bun-packaged
       # provider; with none present it SKIPS, which is exactly the silent-green
       # this job exists to prevent. Same provisioning the windows-x64 job uses.

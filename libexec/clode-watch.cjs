@@ -40,18 +40,20 @@ function envOf(opts) {
 
 // ---------------------------------------------------------------------------
 // version_gt A B -> true iff A is strictly greater than B, using the real
-// `semver` ext-dep (the same module the bundle uses). semver is resolved from
-// clode's dep store (CLODE_DEPS / XDG_DATA_HOME) AND clode's own node_modules
-// ($here/../node_modules, the `npm install -g` layout) — resolved explicitly so
-// we never fall back to ambient resolution. Conservative (false) if semver is
-// unavailable or the versions are garbage, so the watcher under-alarms rather
-// than false-alarms.
+// `semver` ext-dep (the same module the bundle uses — Claude Code's dep, not
+// clode's own; clode has none). semver is resolved from clode's dep store
+// (CLODE_DEPS / XDG_DATA_HOME) AND a sibling deps/claude/node_modules
+// ($here/../deps/claude/node_modules, a source checkout that already ran
+// `npm install --prefix deps/claude`) — resolved explicitly so we never fall
+// back to ambient resolution. Conservative (false) if semver is unavailable or
+// the versions are garbage, so the watcher under-alarms rather than
+// false-alarms.
 function loadSemver(opts) {
   const env = envOf(opts);
   const store = cpaths.depsStore(env);
   const cands = [path.join(store, 'node_modules')];
   const here = (opts && opts.here) || null;
-  if (here) cands.push(path.join(here, '..', 'node_modules'));
+  if (here) cands.push(path.join(here, '..', 'deps', 'claude', 'node_modules'));
   for (const base of cands) {
     const pkg = path.join(base, 'semver');
     if (fs.existsSync(path.join(pkg, 'package.json'))) {

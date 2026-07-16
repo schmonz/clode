@@ -64,7 +64,7 @@ test('agentic Bash round-trip under tjs: tool_result carries real stdout inline'
         ...process.env,
         ANTHROPIC_BASE_URL: mock.url,
         ANTHROPIC_API_KEY: 'sk-ant-mock',              // dummy; NOT a secret
-        NODE_PATH: path.join(REPO, 'node_modules'),
+        NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules'),
       }, 120000);
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
     assert.match(r.stdout, /TOOLDONE/, `stdout:\n${r.stdout}`);

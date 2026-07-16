@@ -124,7 +124,7 @@ test('attest golden: stable manifest fields + full member verification', async (
 
   // BOM (Task a): the declared closure as name@version — states what this
   // quaude embeds without cross-referencing package.json + node_modules.
-  const pkg = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8'));
+  const pkg = JSON.parse(fs.readFileSync(path.join(REPO, 'deps', 'claude', 'package.json'), 'utf8'));
   assert.ok(Array.isArray(manifest.bom) && manifest.bom.length >= Object.keys(pkg.dependencies).length,
     `bom implausibly small: ${JSON.stringify(manifest.bom)}`);
   for (const spec of manifest.bom) assert.match(spec, /^[^@]+@\S+$/, `not a name@version spec: ${spec}`);

@@ -18,7 +18,10 @@ const path = require('node:path');
 
 const REPO = path.resolve(__dirname, '..');
 const LOADER = path.join(REPO, 'libexec/node-shim/loader.cjs');
-const DEPS = path.join(REPO, 'node_modules');
+// Claude Code's ext-deps (deps/claude/package.json) — NOT clode's own; clode
+// has none (test/clode-self-deps.test.cjs). Both models load cli.cjs, which
+// requires these.
+const DEPS = path.join(REPO, 'deps', 'claude', 'node_modules');
 
 // NODE_PATH := our ext-deps, ahead of anything the caller already had. Never
 // carries CLODE_ENGINE through: the models ARE the engine choice.

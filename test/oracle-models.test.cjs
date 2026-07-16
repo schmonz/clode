@@ -91,5 +91,5 @@ test('caller env is preserved and NODE_PATH is prepended, not clobbered', () => 
     spawn: (cmd, args, opts) => { c = { cmd, args, env: opts.env }; return { status: 0 }; },
   });
   assert.strictEqual(c.env.ANTHROPIC_BASE_URL, 'http://mock');
-  assert.strictEqual(c.env.NODE_PATH, path.join(REPO, 'node_modules') + path.delimiter + '/pre-existing');
+  assert.strictEqual(c.env.NODE_PATH, path.join(REPO, 'deps', 'claude', 'node_modules') + path.delimiter + '/pre-existing');
 });

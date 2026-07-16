@@ -14,7 +14,7 @@ function ferossPath() {
   for (const root of (process.env.NODE_PATH || '').split(path.delimiter).filter(Boolean)) {
     if (fs.existsSync(path.join(root, 'buffer', 'package.json'))) return root;
   }
-  const local = path.join(REPO, 'node_modules');
+  const local = path.join(REPO, 'deps', 'claude', 'node_modules');
   return fs.existsSync(path.join(local, 'buffer', 'package.json')) ? local : null;
 }
 

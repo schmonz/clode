@@ -1,0 +1,15 @@
+{
+  "name": "clode-target-deps",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Claude Code's runtime deps (the upstream Bun-packaged bundle's ext-dep closure) — buffer/semver/string-width/strip-ansi/wrap-ansi/ws/yaml, walked transitively by libexec/clode-fuse.cjs's computeDepClosure. NOT clode's own deps: clode (bin/clode, libexec/*.cjs, scripts/*.mjs) requires only node builtins, see test/clode-self-deps.test.cjs. These are what `clode build`/`clode build --naude` EMBED into the built quaude/naude so Claude Code can run inside it; they also feed the test harness's parity oracles (node-vs-tjs). Installed for real (deps/claude/node_modules is gitignored, NOT deps/clode's manifest-only treatment): these are pure JS, so one install serves quaude, naude, and the tests alike — unlike deps/clode's esbuild/postject, which are native per-platform binaries and must be installed per build-tag dir instead.",
+  "dependencies": {
+    "buffer": "^6.0.3",
+    "semver": "^7",
+    "string-width": "^8.0.0",
+    "strip-ansi": "^7",
+    "wrap-ansi": "^10.0.0",
+    "ws": "^8",
+    "yaml": "^2"
+  }
+}

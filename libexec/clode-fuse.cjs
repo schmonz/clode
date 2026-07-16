@@ -449,20 +449,17 @@ async function clodeBuild(args, opts) {
         // relative require needs it there). On disk it belongs beside
         // node-shim/, i.e. libexec/target-env.cjs, same as this repo.
         else if (name === 'target-env.cjs') dest = path.join(mat, 'libexec', name);
-        // package.json (bare, archive ROOT): the ext-dep closure's direct-deps
-        // SOURCE OF TRUTH (readDirectDeps below). A fused builder ships no
-        // repo checkout, so without this member a builder-fused `clode build`
-        // (self-hosting) would have nowhere to read package.json from when it
-        // later computes the closure for the quaude it fuses (duplication
+        // deps/claude/package.json + deps/claude/package-lock.json (archive
+        // paths preserved verbatim under mat/ — no bare-name special-casing
+        // needed like target-env.cjs above): the ext-dep closure's direct-deps
+        // SOURCE OF TRUTH (readDirectDeps below) and the lockfile gate's SOURCE
+        // OF TRUTH (assertClosureMatchesLockfile below) — Claude Code's deps,
+        // NOT clode's own (clode has none). A fused builder ships no repo
+        // checkout, so without these members a builder-fused `clode build`
+        // (self-hosting) would have nowhere to read them from when it later
+        // computes/gates the closure for the quaude it fuses (duplication
         // audit §1).
-        else if (name === 'package.json') dest = path.join(mat, name);
-        // package-lock.json (bare, archive ROOT): the lockfile gate's SOURCE
-        // OF TRUTH (assertClosureMatchesLockfile below). Same reasoning as
-        // package.json just above — a fused builder ships no repo checkout,
-        // so without this member a builder-fused `clode build` would have
-        // nowhere to read package-lock.json from when it later gates the
-        // closure for the quaude it fuses.
-        else if (name === 'package-lock.json') dest = path.join(mat, name);
+        else if (name.startsWith('deps/claude/')) dest = path.join(mat, name);
         else continue;
         fs.mkdirSync(path.dirname(dest), { recursive: true });
         fs.writeFileSync(dest, Buffer.from(bytes));
@@ -471,17 +468,19 @@ async function clodeBuild(args, opts) {
       nmDir = path.join(mat, 'node_modules');
       clodeLog(`clode: build: materialized the fused payload -> ${mat}`);
     }
-    // ROOT/package.json is the ext-dep closure's source of truth (readDirectDeps
-    // below). `libexec` is the local var above — REASSIGNED to mat/libexec
-    // under a fused builder — so this always points at the tree that actually
-    // has package.json on disk (mat under a fused builder, the real checkout
-    // otherwise), unlike the `ROOT` const above (which is fixed to
-    // opts.libexec's parent and stays virtual under a fused builder).
-    const pkgJsonPath = path.join(path.dirname(libexec), 'package.json');
+    // ROOT/deps/claude/package.json is the ext-dep closure's source of truth
+    // (readDirectDeps below) — Claude Code's runtime deps (buffer, ws, yaml,
+    // ...), not clode's own (clode has none; see deps/claude/package.json's
+    // description). `libexec` is the local var above — REASSIGNED to
+    // mat/libexec under a fused builder — so this always points at the tree
+    // that actually has the manifest on disk (mat under a fused builder, the
+    // real checkout otherwise), unlike the `ROOT` const above (which is fixed
+    // to opts.libexec's parent and stays virtual under a fused builder).
+    const pkgJsonPath = path.join(path.dirname(libexec), 'deps', 'claude', 'package.json');
     // Same tree as pkgJsonPath, same reasoning: the lockfile gate's source of
-    // truth (assertClosureMatchesLockfile below) — mat/package-lock.json under
-    // a fused builder (materialized above), the real checkout otherwise.
-    const lockfilePath = path.join(path.dirname(libexec), 'package-lock.json');
+    // truth (assertClosureMatchesLockfile below) — mat/deps/claude/package-lock.json
+    // under a fused builder (materialized above), the real checkout otherwise.
+    const lockfilePath = path.join(path.dirname(libexec), 'deps', 'claude', 'package-lock.json');
 
     // -- template resolution: an explicit CLODE_TJS wins (and must exist —
     // fail loud, never fall through a typo); then the EMBEDDED pristine
@@ -608,10 +607,11 @@ async function clodeBuild(args, opts) {
     // builder ships them as the member INPUTS for the quaude it will fuse).
     // Already materialized from the payload under a fused builder; otherwise
     // ensureDeps installs into the deps store unless the deps ship beside
-    // this checkout (repo/npm layout).
+    // this checkout (deps/claude/node_modules — Claude Code's deps, not
+    // clode's own; repo/npm layout).
     if (!nmDir) {
       deps.ensureDeps({ libexec, here, verbose, env });
-      const nmCandidates = [path.join(ROOT, 'node_modules'), path.join(depsStore(env), 'node_modules')];
+      const nmCandidates = [path.join(ROOT, 'deps', 'claude', 'node_modules'), path.join(depsStore(env), 'node_modules')];
       nmDir = nmCandidates.find((d) => { try { return fs.statSync(d).isDirectory(); } catch { return false; } });
       if (!nmDir) return fail(`build: no node_modules with the runtime deps (looked in: ${nmCandidates.join(', ')})`);
     }

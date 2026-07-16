@@ -20,7 +20,9 @@ const os = require('node:os');
 const path = require('node:path');
 
 const REPO = path.resolve(__dirname, '..');
-const NM = path.join(REPO, 'node_modules');
+// Claude Code's runtime deps (deps/claude/package.json) — NOT clode's own;
+// clode has none (test/clode-self-deps.test.cjs).
+const NM = path.join(REPO, 'deps', 'claude', 'node_modules');
 const { readDirectDeps, computeDepClosure, assertClosureMatchesLockfile } = require('../libexec/clode-fuse.cjs');
 
 // Build a fake flat node_modules from {name: {dependencies}} — the layout npm
@@ -35,8 +37,8 @@ function fakeNm(spec) {
 }
 
 test('readDirectDeps: package.json dependencies are the source of truth', () => {
-  const deps = readDirectDeps(path.join(REPO, 'package.json'));
-  const pkg = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8'));
+  const deps = readDirectDeps(path.join(REPO, 'deps', 'claude', 'package.json'));
+  const pkg = JSON.parse(fs.readFileSync(path.join(REPO, 'deps', 'claude', 'package.json'), 'utf8'));
   assert.deepStrictEqual(deps.sort(), Object.keys(pkg.dependencies).sort());
   // devDependencies must never ride along — quaude ships a RUNTIME closure.
   for (const d of Object.keys(pkg.devDependencies || {})) {
@@ -53,7 +55,7 @@ test('readDirectDeps: an unreadable manifest throws (never a silent empty closur
 // independently here (walking node_modules manifests) so this test grades the
 // production walk rather than restating it.
 test('GATE: the closure covers every package.json dependency + their transitives', () => {
-  const direct = readDirectDeps(path.join(REPO, 'package.json'));
+  const direct = readDirectDeps(path.join(REPO, 'deps', 'claude', 'package.json'));
   const closure = computeDepClosure(NM, direct);
 
   // 1. Every DIRECT dependency reaches quaude.
@@ -194,7 +196,7 @@ test('GATE: the real closure has no REQUIRED peer today (ws\'s peers are both op
   // Not a re-derivation of the decision (already established: ws is the only
   // package with peers, both optional) — a live check that a future dep bump
   // hasn't quietly added a required one, which would throw here first.
-  const direct = readDirectDeps(path.join(REPO, 'package.json'));
+  const direct = readDirectDeps(path.join(REPO, 'deps', 'claude', 'package.json'));
   assert.doesNotThrow(() => computeDepClosure(NM, direct));
 });
 
@@ -215,7 +217,7 @@ test('computeDepClosure: opts.versions captures each package\'s own version (BOM
 });
 
 test('GATE: the real closure resolves a version for every package (the manifest BOM)', () => {
-  const direct = readDirectDeps(path.join(REPO, 'package.json'));
+  const direct = readDirectDeps(path.join(REPO, 'deps', 'claude', 'package.json'));
   const versions = new Map();
   const closure = computeDepClosure(NM, direct, { versions });
   const bom = closure.map((name) => `${name}@${versions.get(name)}`);
@@ -272,8 +274,8 @@ test('GATE: the real node_modules matches the real package-lock.json right now',
   // lockfile shape (v3, packages keyed by 'node_modules/<name>') — a
   // real-world sanity check alongside the synthetic-lockfile unit tests
   // above, which grade the comparison logic in isolation.
-  const direct = readDirectDeps(path.join(REPO, 'package.json'));
+  const direct = readDirectDeps(path.join(REPO, 'deps', 'claude', 'package.json'));
   const versions = new Map();
   computeDepClosure(NM, direct, { versions });
-  assert.doesNotThrow(() => assertClosureMatchesLockfile(versions, path.join(REPO, 'package-lock.json')));
+  assert.doesNotThrow(() => assertClosureMatchesLockfile(versions, path.join(REPO, 'deps', 'claude', 'package-lock.json')));
 });

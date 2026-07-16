@@ -22,12 +22,20 @@
 // to measure the shim's wrapped behavior, or the guard will silently keep measuring the
 // raw package and miss both the fix and any regression of it.
 
+// Claude Code's runtime deps (deps/claude/package.json) — NOT clode's own;
+// clode has none (test/clode-self-deps.test.cjs). Resolved via an explicit
+// path (not a bare require(pkg), which would walk up from test/ and never
+// find node_modules — deps/claude is not an ancestor of test/) the same way
+// oracle-models.cjs's DEPS constant does.
+const path = require('node:path');
+const DEPS_DIR = path.join(__dirname, '..', 'deps', 'claude', 'node_modules');
+
 function req(pkg) {
   let m;
-  try { m = require(pkg); }
+  try { m = require(path.join(DEPS_DIR, pkg)); }
   catch (e) {
     throw new Error(
-      `shim-fidelity: dep '${pkg}' not installed — run \`npm ci\` at the repo root first ` +
+      `shim-fidelity: dep '${pkg}' not installed — run \`npm ci --prefix deps/claude\` first ` +
       `(${e.message})`);
   }
   return (m && m.default) || m;

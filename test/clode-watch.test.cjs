@@ -128,10 +128,10 @@ test('versionGt works with a semver exposing only compare() (no gt)', () => {
   assert.strictEqual(versionGt('1.0.0', '1.0.0', { env }), false, 'equal');
 });
 
-test('versionGt resolves semver via clode\'s own node_modules (npm-global layout)', semverOpts, () => {
+test('versionGt resolves semver via a sibling deps/claude/node_modules (source checkout layout)', semverOpts, () => {
   const tmp = tmpdir();
   const appBin = path.join(tmp, 'app', 'bin');
-  const appNm = path.join(tmp, 'app', 'node_modules');
+  const appNm = path.join(tmp, 'app', 'deps', 'claude', 'node_modules');
   fs.mkdirSync(appBin, { recursive: true });
   fs.mkdirSync(appNm, { recursive: true });
   fs.cpSync(path.join(REAL_STORE, 'node_modules', 'semver'),

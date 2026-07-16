@@ -22,16 +22,21 @@ function tmpdir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'clode-deps-'));
 }
 
-// A standalone package layout: bin/ is HERE, ../package.json is the manifest,
-// libexec/ carries no manifest (so we exercise the here/../package.json fallback).
+// A standalone package layout: bin/ is HERE, ../deps/claude/package.json is
+// the manifest (Claude Code's deps, not clode's own), libexec/ carries no
+// manifest (so we exercise the here/../deps/claude/package.json fallback).
+// `deps` here is the CLODE_DEPS store (unrelated to the repo's deps/claude —
+// this is the user-owned install target, ~/.local/share/clode by default).
 function makePkg() {
   const root = tmpdir();
   const here = path.join(root, 'bin');
   const libexec = path.join(root, 'libexec');
+  const targetDeps = path.join(root, 'deps', 'claude');
   fs.mkdirSync(here, { recursive: true });
   fs.mkdirSync(libexec, { recursive: true });
-  fs.writeFileSync(path.join(root, 'package.json'), '{"name":"clode","dependencies":{}}\n');
-  const deps = path.join(root, 'deps');
+  fs.mkdirSync(targetDeps, { recursive: true });
+  fs.writeFileSync(path.join(targetDeps, 'package.json'), '{"name":"clode-target-deps","dependencies":{}}\n');
+  const deps = path.join(root, 'store');
   return { root, here, libexec, deps };
 }
 
@@ -141,7 +146,7 @@ test('a changed manifest triggers a reinstall', () => {
   run({ here, libexec, npmPath: 'npm', spawn, env: { CLODE_DEPS: deps } });
   log.calls.length = 0;
   // mutate the manifest -> size (and mtime) change -> sig changes
-  fs.appendFileSync(path.join(root, 'package.json'), '\n');
+  fs.appendFileSync(path.join(root, 'deps', 'claude', 'package.json'), '\n');
   run({ here, libexec, npmPath: 'npm', spawn, env: { CLODE_DEPS: deps } });
   assert.match(log.calls.join('\n'), /install/);
 });
@@ -172,11 +177,16 @@ test('a user-managed CLODE_DEPS (node_modules, no .deps-sig) is left alone', () 
   assert.doesNotMatch(log.calls.join('\n'), /install/);
 });
 
-test("deps shipped in clode's own node_modules (npm install -g .) -> no auto-install", () => {
+test('deps already installed at a sibling deps/claude/node_modules -> no auto-install', () => {
+  // what `npm install --prefix deps/claude` leaves next to bin/
+  // ($HERE/../deps/claude/node_modules) — a source checkout that already
+  // provisioned Claude Code's deps. This used to check $HERE/../node_modules
+  // (`npm install -g .`'s layout) and call it "clode's own node_modules" —
+  // that framing was the exact root-vs-target conflation this restructuring
+  // removes: clode itself has no runtime deps to ship there.
   const { root, here, libexec, deps } = makePkg();
   const log = { calls: [] };
-  // what `npm install -g .` leaves next to bin/ ($HERE/../node_modules)
-  fs.mkdirSync(path.join(root, 'node_modules', '.shipped'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'deps', 'claude', 'node_modules', '.shipped'), { recursive: true });
   run({ here, libexec, npmPath: 'npm', spawn: fakeNpmOk(log), env: { CLODE_DEPS: deps } });
   assert.doesNotMatch(log.calls.join('\n'), /install/);
 });
@@ -194,14 +204,17 @@ test('no manifest anywhere -> nothing to ensure (no install, no exit)', () => {
 });
 
 // --- manifest search order -------------------------------------------------
-test('the manifest in libexec/package.json wins over here/../package.json', () => {
+test('the manifest in libexec/deps/claude/package.json wins over here/../deps/claude/package.json', () => {
   const { here, libexec, deps } = makePkg();
   const log = { calls: [] };
-  // put a manifest in libexec too; ensure_deps prefers it (first in search order)
-  fs.writeFileSync(path.join(libexec, 'package.json'), '{"name":"clode-libexec"}\n');
+  // put a manifest in libexec's own deps/claude too; ensure_deps prefers it
+  // (first in search order) — an alternate packaging layout where
+  // CLODE_LIBEXEC ships its own deps/claude alongside the libexec scripts.
+  fs.mkdirSync(path.join(libexec, 'deps', 'claude'), { recursive: true });
+  fs.writeFileSync(path.join(libexec, 'deps', 'claude', 'package.json'), '{"name":"clode-libexec-target-deps"}\n');
   run({ here, libexec, npmPath: 'npm', spawn: fakeNpmOk(log), env: { CLODE_DEPS: deps } });
   const copied = fs.readFileSync(path.join(deps, 'package.json'), 'utf8');
-  assert.match(copied, /clode-libexec/);
+  assert.match(copied, /clode-libexec-target-deps/);
 });
 
 // --- DEPS_ROOT resolution --------------------------------------------------

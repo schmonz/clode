@@ -95,9 +95,10 @@ function esbuildBundle() {
   return bundle;
 }
 
-// Stage the shipped runtime deps (root package.json) and tar the resulting node_modules
-// as the embedded deps asset. A sha256 of the tar is the sig materializeDeps keys the
-// extraction cache on.
+// Stage the shipped runtime deps (deps/claude/package.json — Claude Code's
+// deps, baked into the built target; NOT clode's own, clode has none) and tar
+// the resulting node_modules as the embedded deps asset. A sha256 of the tar
+// is the sig materializeDeps keys the extraction cache on.
 //
 // Two things keep this fast and NFS-friendly:
 //   1. Stage on LOCAL disk (os.tmpdir), never the (possibly NFS) build dir. npm writing
@@ -110,8 +111,8 @@ function stageDeps() {
   const tar = path.join(OUT, 'deps.tar');
   const sigFile = path.join(OUT, 'deps.sig');
   const lockHashFile = path.join(OUT, 'deps.lockhash');
-  const lock = path.join(REPO, 'package-lock.json');
-  const manifest = fs.existsSync(lock) ? lock : path.join(REPO, 'package.json');
+  const lock = path.join(REPO, 'deps', 'claude', 'package-lock.json');
+  const manifest = fs.existsSync(lock) ? lock : path.join(REPO, 'deps', 'claude', 'package.json');
   const lockHash = crypto.createHash('sha256').update(fs.readFileSync(manifest)).digest('hex');
   if (fs.existsSync(tar) && fs.existsSync(sigFile) && fs.existsSync(lockHashFile)
       && fs.readFileSync(lockHashFile, 'utf8') === lockHash) {
@@ -120,15 +121,15 @@ function stageDeps() {
   }
   const staging = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-deps-'));
   try {
-    fs.copyFileSync(path.join(REPO, 'package.json'), path.join(staging, 'package.json'));
+    fs.copyFileSync(path.join(REPO, 'deps', 'claude', 'package.json'), path.join(staging, 'package.json'));
     // Prefer a reproducible install: copy the committed lockfile and `npm ci` (exact,
     // locked versions). Fall back to `npm install` only if no lockfile is present.
     const cmd = fs.existsSync(lock)
       ? (fs.copyFileSync(lock, path.join(staging, 'package-lock.json')), ['ci', '--omit=dev'])
       : ['install', '--omit=dev'];
     // Run npm IN the staging dir (cwd), not via --prefix: with --prefix, npm mis-derives
-    // the root package name from the prefix's basename when cwd is a different package
-    // (the repo root, also named "clode"), and `npm ci` then fails the lockfile sync check.
+    // the root package name from the prefix's basename when cwd is a different package,
+    // and `npm ci` then fails the lockfile sync check.
     runNpm([cmd[0], '--no-audit', '--no-fund', ...cmd.slice(1)], { stdio: 'inherit', cwd: staging });
     // Archive to STDOUT (`-f -`) with the staging dir as the process cwd, instead of passing
     // OS-native paths as tar arguments. On Windows under a bash PATH `tar` resolves to GNU tar,

@@ -218,7 +218,7 @@ runs:
 
     - name: Install the runtime dep closure (fuse member inputs)
       shell: bash
-      run: npm ci
+      run: npm ci --prefix deps/claude
 
     - name: esbuild the clode-main bundle
       shell: bash

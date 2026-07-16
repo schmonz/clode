@@ -123,20 +123,21 @@ if (role === 'builder') {
   // libexec/target-env.cjs (sibling to node-shim/, matching this repo's own
   // layout) for the self-fuse path.
   members.push({ name: 'target-env.cjs', data: await mustRead(path.join(libexecDir, 'target-env.cjs'), 'target-env.cjs member') });
-  // package.json, BARE member name (archive root, same reasoning as
-  // target-env.cjs): the ext-dep closure's SOURCE OF TRUTH. A fused builder
-  // ships no repo checkout, so when IT later runs `clode build`, its
-  // clode-fuse.cjs needs a package.json on disk to walk `dependencies` from
-  // (duplication audit §1 — the closure is derived, never hand-listed).
-  // clode-fuse.cjs's materialization step writes this member back to
-  // <payload>/package.json, the parent of <payload>/libexec.
-  members.push({ name: 'package.json', data: await mustRead(path.join(path.dirname(libexecDir), 'package.json'), 'package.json member') });
-  // package-lock.json, BARE member name, same reasoning as package.json just
-  // above: the lockfile gate's (assertClosureMatchesLockfile,
-  // clode-fuse.cjs) SOURCE OF TRUTH. A fused builder ships no repo checkout,
-  // so when it later runs `clode build`, its clode-fuse.cjs needs this on
-  // disk to verify node_modules matches the lockfile before embedding.
-  members.push({ name: 'package-lock.json', data: await mustRead(path.join(path.dirname(libexecDir), 'package-lock.json'), 'package-lock.json member') });
+  // deps/claude/package.json, member name matches its real repo path (unlike
+  // target-env.cjs, no bare-root special-casing needed — clode-fuse.cjs's
+  // materialization step just re-joins `mat` + this name verbatim): the ext-dep
+  // closure's SOURCE OF TRUTH — Claude Code's runtime deps, NOT clode's own
+  // (clode has none). A fused builder ships no repo checkout, so when IT later
+  // runs `clode build`, its clode-fuse.cjs needs this manifest on disk to walk
+  // `dependencies` from (duplication audit §1 — the closure is derived, never
+  // hand-listed).
+  members.push({ name: 'deps/claude/package.json', data: await mustRead(path.join(path.dirname(libexecDir), 'deps', 'claude', 'package.json'), 'deps/claude/package.json member') });
+  // deps/claude/package-lock.json, same reasoning as package.json just above:
+  // the lockfile gate's (assertClosureMatchesLockfile, clode-fuse.cjs) SOURCE
+  // OF TRUTH. A fused builder ships no repo checkout, so when it later runs
+  // `clode build`, its clode-fuse.cjs needs this on disk to verify
+  // node_modules matches the lockfile before embedding.
+  members.push({ name: 'deps/claude/package-lock.json', data: await mustRead(path.join(path.dirname(libexecDir), 'deps', 'claude', 'package-lock.json'), 'deps/claude/package-lock.json member') });
   // The PRISTINE tjs template rides along (Q2 Decision 2): a shipped builder
   // must be able to fuse with NOTHING on disk — `clode build` materializes this
   // member when no CLODE_TJS/build-tree template exists. Pristine = the

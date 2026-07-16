@@ -88,7 +88,7 @@ jobs:
           name: tjs-linux-s390x-musl
           path: ${{ runner.temp }}/tjs-s390x
       - name: Install the runtime dep closure
-        run: npm ci
+        run: npm ci --prefix deps/claude
       - name: BE oracle — engine + endianness subset (node-shim + url golden)
         env:
           CLODE_TJS: ${{ runner.temp }}/tjs-s390x/tjs
@@ -189,7 +189,7 @@ jobs:
           if-no-files-found: error
       - name: Install deps + esbuild the clode-main bundle
         run: |
-          npm ci
+          npm ci --prefix deps/claude
           node scripts/build-bundle.mjs
       - name: Fat-fuse the universal builder (arm64 slice drives; trailer spans all)
         env:

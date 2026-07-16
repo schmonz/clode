@@ -9,14 +9,5 @@
   "scripts": {
     "test": "node test/run.mjs",
     "test:online": "node test/run.mjs --online"
-  },
-  "dependencies": {
-    "buffer": "^6.0.3",
-    "semver": "^7",
-    "string-width": "^8.0.0",
-    "strip-ansi": "^7",
-    "wrap-ansi": "^10.0.0",
-    "ws": "^8",
-    "yaml": "^2"
   }
 }

@@ -17,7 +17,7 @@ const INPUTS = ['PONG', 'hello world', ESC + '[31mred' + ESC + '[0m', '古池や
 
 // Oracle: the real ESM packages under host node.
 async function hostWidths() {
-  const root = path.resolve(__dirname, '..', 'node_modules');
+  const root = path.resolve(__dirname, '..', 'deps', 'claude', 'node_modules');
   const sw = (await import(path.join(root, 'string-width', 'index.js'))).default;
   const sa = (await import(path.join(root, 'strip-ansi', 'index.js'))).default;
   const wa = (await import(path.join(root, 'wrap-ansi', 'index.js'))).default;
@@ -48,7 +48,7 @@ console.log(JSON.stringify({
   wrapped: wrapAnsi('the quick brown fox jumps', 10),
 }));
 `);
-  const r = runLoader(f, [], { env: { NODE_PATH: path.resolve(__dirname, '..', 'node_modules') } });
+  const r = runLoader(f, [], { env: { NODE_PATH: path.resolve(__dirname, '..', 'deps', 'claude', 'node_modules') } });
   assert.strictEqual(r.status, 0, r.stderr);
   assert.deepStrictEqual(JSON.parse(r.stdout.trim()), oracle);
 });
