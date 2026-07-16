@@ -35,7 +35,7 @@ const watch = require('./clode-watch.cjs');
 // entries (build --self left the user-facing surface — release tooling still calls
 // it, it's just not advertised). Ends with a trailing newline (like the old heredoc).
 function clodeHelp(version) {
-  return `clode ${version} — run the latest Claude Code under a portable tjs runtime, no Bun.
+  return `clode ${version} — build a standalone Claude Code binary for your machine.
 
 Usage:
   clode build [--out PATH]                 build a standalone quaude binary (the pinned
@@ -54,8 +54,6 @@ Options:
                       so a normal run emits only build/fetch's own output
 
 Key environment overrides:
-  CLODE_ENGINE        runtime for the extracted bundle: 'tjs' (default) or 'node'
-                      (the host-Node oracle — dev/CI reference, needs host node)
   CLODE_VERBOSE=1     same as --verbose
   CLODE_NO_WATCH=1    disable the opportunistic update-signal check that runs
                       during 'clode build'

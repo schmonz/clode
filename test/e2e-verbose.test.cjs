@@ -47,5 +47,5 @@ test('--verbose composes as a leading flag before --help (no more any-position s
   const sbx = withProvider(t);
   const r = run(sbx, ['--verbose', '--help']);
   assert.strictEqual(r.status, 0);
-  assert.match(r.output, /run the latest Claude Code/);
+  assert.match(r.output, /build a standalone Claude Code binary for your machine/);
 });

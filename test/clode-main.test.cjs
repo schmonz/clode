@@ -40,7 +40,7 @@ test('--help prints clode-specific options and exits 0', () => {
   assert.match(r.stdout, /clode watch/);
   assert.match(r.stdout, /--verbose/);
   assert.match(r.stdout, /--version/);
-  assert.match(r.stdout, /run the latest Claude Code under a portable tjs runtime/);
+  assert.match(r.stdout, /build a standalone Claude Code binary for your machine/);
   assert.match(r.stdout, new RegExp(`clode ${VERSION.replace(/\./g, '\\.')} —`));
   // ends with the last env-override line + trailing newline
   assert.ok(r.stdout.endsWith('post-update signals digest\n'));
@@ -63,12 +63,13 @@ test('watch is a subcommand, not a flag', () => {
 
 test('help advertises the builder surface and never mentions running Claude Code', () => {
   const { stdout } = runEntry(['--help']);
-  // The tagline and the CLODE_ENGINE env-override line are left as-is (Task 6
-  // only renames flags / drops --self+CLODE_MAIN_BUNDLE — a docs task rewrites
-  // the runner-framed prose). What Task 6 IS responsible for: no stale passthrough
-  // claim, no promise of the --self/update surface this task doesn't ship.
+  // Task 7 rewrote the tagline and dropped the CLODE_ENGINE env-override line
+  // (the runner they described no longer exists): no runner-framed prose survives.
   assert.doesNotMatch(stdout, /pass(es)? through|launch Claude Code \(|--self\b/i);
   assert.doesNotMatch(stdout, /clode update/, 'update is Phase 4 — do not promise it');
+  assert.doesNotMatch(stdout, /CLODE_ENGINE/, 'the retired engine selector must not be advertised');
+  assert.doesNotMatch(stdout, /runs? (the )?(latest )?Claude Code|under (a |the )?(host )?(Node|tjs)( runtime)?/i,
+    'help must not frame clode as a runner');
   for (const cmd of ['build', 'fetch', 'watch']) assert.match(stdout, new RegExp('clode ' + cmd));
 });
 

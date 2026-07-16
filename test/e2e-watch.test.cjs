@@ -66,8 +66,9 @@ test('clode watch runs a cycle, writes a notice, prints a summary, exits 0', (t)
   // grep -qx 'high=1' "$CLODE_WATCH_DIR/watch-notice": the notice records a HIGH signal.
   const notice = fs.readFileSync(noticePath(sbx), 'utf8');
   assert.match(notice, /^high=1$/m);
-  // echo "$output" | grep -qi "running under Node": the manual summary flags it.
-  assert.match(r.output, /running under Node/i);
+  // the manual summary flags it — reframed from "running under Node" (there is
+  // no launch anymore) to how clode repackages it.
+  assert.match(r.output, /may affect how clode repackages it/i);
 });
 
 test('clode watch does not reach the bundle (no node/provider needed)', (t) => {

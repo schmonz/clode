@@ -187,9 +187,9 @@ async function clodeWatch(manual, opts) {
       if (digest) stderr.write(digest);
     }
     if (high === 1) {
-      stderr.write(`clode: ${latest} may affect running under Node (run 'clode fetch' to take it).\n`);
+      stderr.write(`clode: ${latest} may affect how clode repackages it (run 'clode fetch' to take it).\n`);
     } else {
-      stderr.write(`clode: ${latest} is available (no Node-impacting signals).\n`);
+      stderr.write(`clode: ${latest} is available (no repackaging-impacting signals).\n`);
     }
   }
 

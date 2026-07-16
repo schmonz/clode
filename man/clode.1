@@ -3,75 +3,76 @@
 .Os
 .Sh NAME
 .Nm clode
-.Nd run the latest Claude Code under a portable tjs runtime, no Bun
+.Nd build a standalone Claude Code binary for your machine
 .Sh SYNOPSIS
 .Nm
-.Op Fl -clode-verbose
-.Op Ar claude-args ...
-.Nm
-.Cm update
-.Op Cm stable | latest | Ar version
-.Nm
 .Cm build
-.Op Fl -self | Fl -naude
+.Op Fl -naude
 .Op Fl -out Ar path
 .Nm
-.Fl -clode-help
+.Cm fetch
+.Op Cm stable | latest | Ar version
 .Nm
-.Fl -clode-version
+.Cm watch
 .Nm
-.Fl -clode-watch
+.Fl -help
 .Nm
-.Fl -clode-internal-update
-.Op Ar channel
+.Fl -version
+.Nm
+.Fl -verbose
 .Sh DESCRIPTION
 .Nm
-locates an upstream
+is a builder, not a runner: it fetches an upstream
 .Xr claude 1
-binary (from a provider package or your own install), extracts its JavaScript
-bundle once, caches it per binary under your cache directory, and runs it under
-a portable
+binary (from a provider package or your own install) and BUILDS a
+standalone target from it.
+.Nm
+itself never executes Claude Code \(en the target it builds does.
+.Pp
+.Nm Cm build
+extracts the upstream JavaScript bundle and fuses it with a pinned
 .Xr tjs 1
-(QuickJS) runtime.
-Set
-.Ev CLODE_ENGINE Ns = Ns Ar node
-to run the bundle under the host Node instead \(en the development/CI oracle that
-.Nm Ns 's
-tjs shim is verified against.
-A changed provider binary re-extracts on next launch, so updates are
-transparent.
+(QuickJS) runtime into
+.Dq quaude ,
+a self-contained binary that needs nothing else at run time \(en no Node, no
+npm, no network.
+.Nm Cm build Fl -naude
+instead bakes the bundle into a Node SEA
+(single executable application), called
+.Dq naude ,
+for hosts that already have Node.
 .Nm
 never installs, names, or replaces anything called
 .Ar claude ;
 it reads the upstream binary only as the source of the bundle and never
 redistributes it.
+Both quaude and naude carry Anthropic's code and are derived work: each is
+built locally, on your machine, and never distributed.
 .Pp
-.Fl -clode-version
+.Fl -version
 prints clode's own version and exits, and
-.Fl -clode-help
+.Fl -help
 prints clode's own options and exits.
-All other arguments pass through to Claude Code.
-.Pp
-By default
-.Nm
-emits nothing of its own \(em only Claude Code's output \(em so it is a
-transparent stand-in.
-.Fl -clode-verbose
+.Fl -verbose
 (or
 .Ev CLODE_VERBOSE Ns = Ns Cm 1 )
 un-mutes clode's own progress, such as bundle extraction and dependency
 installation.
-The flag may appear in any position and is consumed by
-.Nm ;
-it is never passed through to Claude Code.
+The flag is recognized only in the leading position.
 Errors are always shown regardless.
 .Pp
-.Nm update
+.Nm Cm fetch
 .Op Cm stable | latest | Ar version
-fetches the latest upstream Claude Code host-agnostically (a fixed
+fetches an upstream Claude Code host-agnostically (a fixed
 .Cm linux-x64
 build \(em the embedded JavaScript is the same on every platform) into clode's
-provider store and verifies its checksum; the next launch extracts and runs it.
+provider store and verifies its checksum.
+This is the build's input step:
+.Nm Cm build
+does not fetch on its own \(em it resolves an already-present provider and
+fails with a pointer to
+.Nm Cm fetch
+if none is found.
 With no argument the channel is taken from the
 .Cm autoUpdatesChannel
 setting in
@@ -84,9 +85,9 @@ falling back to
 .Cm latest
 \(em matching Claude Code's own default.
 .Pp
-.Nm build
+.Nm Cm build
 .Op Fl -out Ar path
-fuses a standalone
+builds a standalone
 .Dq quaude
 binary on this machine (default
 .Pa ./quaude ) :
@@ -96,76 +97,54 @@ The build verifies itself before reporting success \(em a canned offline
 Messages round-trip and a
 .Fl -quaude-attest
 manifest verification \(em and fails loudly otherwise.
-The fused binary reserves only the
+The built binary reserves only the
 .Fl -quaude-*
 option namespace
-.Pq currently Fl -quaude-attest ,
-passing everything else to Claude Code, and is derived work: it is fused
-locally and never distributed.
+.Pq currently Fl -quaude-attest
+for itself and passes everything else to Claude Code \(en quaude is the one
+that executes Claude Code and needs a passthrough namespace;
+.Nm
+itself no longer does.
 The template runtime comes from
 .Ev CLODE_TJS
 (default
 .Pa build/tjs/tjs
 under the clode root).
 .Pp
-.Nm build
-.Fl -self
-.Op Fl -out Ar path
-fuses the builder itself: a standalone NATIVE
-.Nm
-binary (default
-.Pa ./clode-native )
-\(em the same txiki.js runtime plus clode's own launcher and everything
-.Nm build
-needs as inputs (shims, extractor, dependency closure) \(em which answers
-.Fl -clode-version
-and
-.Fl -clode-help
-and can itself run
-.Nm build
-to fuse a quaude, all without Node on the machine.
-The launcher bundle comes from
-.Ev CLODE_MAIN_BUNDLE
-(default: the newest
-.Pa build/*/clode-main.bundle.cjs ,
-produced by
-.Ic node scripts/build-sea.mjs --bundle-only ) .
-.Pp
-.Nm build
+.Nm Cm build
 .Fl -naude
-bundles Claude Code as a Node SEA (single executable application) instead of a
-quaude: the extracted bundle is baked into a self-contained binary built from the
-host Node.
+.Op Fl -out Ar path
+bundles Claude Code as a Node SEA instead of a quaude: the extracted bundle is
+baked into a self-contained binary built from the host Node.
 Node hosts only \(em the SEA build pipeline requires Node
 .Ar >= 24
 on the build machine.
-Like a quaude, a naude carries Anthropic's code and is derived work: it is built
-locally and never distributed.
+Like a quaude, a naude carries Anthropic's code and is derived work: it is
+built locally and never distributed.
 .Pp
+A Claude Code binary built by
 .Nm
-patches Claude Code's in-app auto-updater to run
-.Nm Fl -clode-internal-update
-.Op Ar channel ,
-a non-interactive form of
-.Nm update ,
-so the in-TUI
-.Ic claude update
-affordance (and the automatic updater) fetch via clode rather than the npm path
-that cannot apply under clode; the bundle's
-.Dq Update installed \(em Restart to apply
-message then means relaunch to run the freshly fetched version.
-You normally invoke
-.Nm update
-directly rather than
-.Fl -clode-internal-update .
+cannot update itself in place: its bundle is baked into its own bytecode.
+Where an npm-installed Claude Code's in-app updater would fetch and apply a
+new version, a quaude or naude's patched updater callback refuses instead
+of lying about success; take a new version by running
+.Nm Cm fetch
+then
+.Nm Cm build
+again.
 .Pp
-.Fl -clode-watch
-runs one update-signal check (is a newer Claude Code available, and does its
-changelog carry signals that bear on running under Node?), prints a summary, and
-exits.
-A normal launch also performs this check opportunistically, at most once per day,
-fully in the background, and prints a one-line notice on the next launch only when
-a newer version carries such signals.
+.Nm Cm watch
+runs one check now for upstream changes that threaten clode's ability to
+repackage Claude Code \(en either a break in the shim's correctness or a
+Bun/Node API clode does not yet cover \(em prints a summary, and exits.
+.Nm Cm build
+also performs this check opportunistically, at most once per day, fully in
+the background, and prints a one-line notice on the next
+.Nm Cm build
+only when a newer version carries such signals.
+There is no launch to hook it to anymore, so
+.Nm Cm build
+is where the check runs.
 .Pp
 .Nm
 itself is a Node program
@@ -174,49 +153,48 @@ so it needs
 .Xr node 1
 on
 .Ev PATH
-to start.
+to build with (the binaries it builds do not: quaude needs no Node at all,
+and naude needs Node only because a Node SEA is Node).
 An ES5-safe prologue prints a friendly
 .Dq node too old
 message on an outdated node; a truly missing node yields
 .Li "env: node: not found" .
+The floor is Node
+.Ar >= 20
+for every command.
 .Sh ENVIRONMENT
-.Bl -tag -width CLODE_VERSION_DIR
-.It Ev CLODE_ENGINE
-Runtime for the extracted bundle:
-.Ar tjs
-(the default portable runtime) or
-.Ar node
-(the host-Node oracle \(en a development/CI reference that needs a host node on
-.Ev PATH ) .
-An unrecognized value is rejected.
+.Bl -tag -width CLODE_CHANGELOG_URL
 .It Ev CLODE_VERBOSE
 When non-empty, un-mutes clode's own progress output (same as
-.Fl -clode-verbose ) .
+.Fl -verbose ) .
 .It Ev CLODE_CLAUDE_BIN
-Absolute path to the upstream claude binary (highest precedence).
-.It Ev CLODE_VERSION_DIR
-A specific on-disk version path to run.
+Absolute path to the upstream claude binary to build from (highest
+precedence).
 .It Ev CLODE_PROVIDERS
 Store for binaries fetched by
-.Nm update
+.Nm Cm fetch
 (default
 .Pa ${XDG_DATA_HOME:-$HOME/.local/share}/clode/providers ) .
 .It Ev CLODE_RELEASES_URL
 Base URL for
-.Nm update
+.Nm Cm fetch
 downloads.
 .It Ev CLODE_FETCH_PLATFORM
 Which platform's build
-.Nm update
+.Nm Cm fetch
 fetches (default
 .Cm linux-x64 ) .
 .It Ev CLODE_NO_WATCH
-If set, disable the opportunistic on-launch update-signal check.
+If set, disable the opportunistic drift check that
+.Nm Cm build
+fires.
 .It Ev CLODE_WATCH_INTERVAL
 Seconds between opportunistic checks (default 86400).
 .It Ev CLODE_WATCH_DIR
 Directory for watcher state (throttle + notice); default
 .Pa ${XDG_CACHE_HOME:-$HOME/.cache}/clode .
+.It Ev CLODE_CHANGELOG_URL
+Release-notes source the watcher scans for repackaging-impacting signals.
 .It Ev CLODE_CACHE
 Cache root (default
 .Pa ${XDG_CACHE_HOME:-$HOME/.cache}/clode ) .
@@ -224,19 +202,12 @@ Cache root (default
 Directory holding the extractor and Bun shim.
 .It Ev CLODE_TJS
 The txiki.js template binary
-.Nm build
-fuses from (default
+.Nm Cm build
+builds from (default
 .Pa build/tjs/tjs
 under the clode root).
-.It Ev CLODE_MAIN_BUNDLE
-The esbuilt clode-main bundle
-.Nm build Fl -self
-embeds (default: the newest
-.Pa build/*/clode-main.bundle.cjs ) .
 .It Ev CLODE_NODE
 Host node (absolute path).
-.It Ev DISABLE_INSTALLATION_CHECKS
-Set to 0 to re-enable the upstream npm-deprecation notices (default 1).
 .El
 .Sh FILES
 .Bl -tag -width Ds

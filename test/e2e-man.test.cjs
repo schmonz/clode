@@ -50,12 +50,29 @@ test('man page documents CLODE_NODE', () => {
   assert.match(man, /CLODE_NODE/);
 });
 
-test('man page documents --clode-watch', () => {
-  assert.match(man, /clode-watch/);
+test('man page documents the watch subcommand', () => {
+  // watch was a flag (--clode-watch) before the runner was retired; it is now
+  // a subcommand (`clode watch`), triggered by `clode build` rather than a launch.
+  assert.match(man, /^\.Cm watch$/m);
 });
 
 test('man page documents CLODE_NO_WATCH', () => {
   assert.match(man, /CLODE_NO_WATCH/);
+});
+
+test('the docs describe a builder, not a runner', () => {
+  const docs = {
+    'man/clode.1': man,
+    'README.md': fs.readFileSync(path.join(REPO, 'README.md'), 'utf8'),
+    'package.json': JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8')).description,
+  };
+  for (const [name, text] of Object.entries(docs)) {
+    assert.doesNotMatch(text, /runs? (the )?(latest )?Claude Code|under (a |the )?(host )?(Node|tjs)( runtime)?/i,
+      `${name} still frames clode as a runner`);
+    assert.doesNotMatch(text, /CLODE_ENGINE|pass(es)? through to Claude/i, `${name} references the retired runner surface`);
+  }
+  // And it must promise only what exists: update is Phase 4.
+  assert.doesNotMatch(docs['man/clode.1'], /^\.Cm update$/m, 'man documents an update subcommand that does not exist');
 });
 
 test('mandoc lint runs without error (if mandoc available)', (t) => {
