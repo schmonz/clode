@@ -29,9 +29,19 @@ function modelEnv(opts) {
   return env;
 }
 
-function dispatch(cmd, args, opts) {
+// The argv each model runs. One builder, so the sync and async dispatches can
+// never drift apart on the thing the oracle is actually comparing.
+function naudeCommand(cli, args, opts) {
+  return { cmd: opts.node || process.execPath, argv: [cli, ...args] };
+}
+function quaudeCommand(cli, args, opts) {
+  const tjs = opts.tjs || process.env.CLODE_TJS || path.join(REPO, 'build/tjs/tjs');
+  return { cmd: tjs, argv: ['run', LOADER, cli, ...args] };
+}
+
+function dispatchSync({ cmd, argv }, opts) {
   const spawn = opts.spawn || require('node:child_process').spawnSync;
-  const r = spawn(cmd, args, {
+  const r = spawn(cmd, argv, {
     encoding: 'utf8',
     input: opts.input !== undefined ? opts.input : '',
     cwd: opts.cwd,
@@ -41,16 +51,44 @@ function dispatch(cmd, args, opts) {
   return { status: r.status, signal: r.signal ?? null, stdout: r.stdout || '', stderr: r.stderr || '' };
 }
 
+// Async dispatch. REQUIRED whenever the caller hosts the mock Anthropic server
+// in-process: spawnSync blocks this event loop until the child exits, so the
+// mock can never accept the child's connection and both sides wait forever.
+// (Repros with a bare http server + a spawnSync'd client — it is an event-loop
+// property, not a bundle bug.) stdin is 'ignore' so `-p` does not block on it.
+function dispatchAsync({ cmd, argv }, opts) {
+  const spawn = opts.spawn || require('node:child_process').spawn;
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    const child = spawn(cmd, argv, {
+      cwd: opts.cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: modelEnv(opts),
+    });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', (d) => { stdout += d; });
+    child.stderr.on('data', (d) => { stderr += d; });
+    const to = opts.timeout ? setTimeout(() => child.kill('SIGKILL'), opts.timeout) : null;
+    const done = (status, signal) => { if (to) clearTimeout(to); resolve({ status, signal: signal ?? null, stdout, stderr, ms: Date.now() - t0 }); };
+    child.on('exit', (status, signal) => done(status, signal));
+    child.on('error', (e) => { stderr += String(e); done(null, null); });
+  });
+}
+
 // naude-model — what a naude binary does: run the baked cli.cjs under node.
 function runNaudeModel(cli, args = [], opts = {}) {
-  const node = opts.node || process.execPath;
-  return dispatch(node, [cli, ...args], opts);
+  return dispatchSync(naudeCommand(cli, args, opts), opts);
+}
+function runNaudeModelAsync(cli, args = [], opts = {}) {
+  return dispatchAsync(naudeCommand(cli, args, opts), opts);
 }
 
 // quaude-model — what a quaude binary does: run cli under tjs + the node-shim.
 function runQuaudeModel(cli, args = [], opts = {}) {
-  const tjs = opts.tjs || process.env.CLODE_TJS || path.join(REPO, 'build/tjs/tjs');
-  return dispatch(tjs, ['run', LOADER, cli, ...args], opts);
+  return dispatchSync(quaudeCommand(cli, args, opts), opts);
+}
+function runQuaudeModelAsync(cli, args = [], opts = {}) {
+  return dispatchAsync(quaudeCommand(cli, args, opts), opts);
 }
 
 // The provider both models bake: the upstream Bun-packaged CC binary. Honors the
@@ -93,5 +131,6 @@ function stageProviderCli(opts = {}) {
 module.exports = {
   REPO, LOADER, DEPS,
   runNaudeModel, runQuaudeModel,
+  runNaudeModelAsync, runQuaudeModelAsync,
   resolveProviderBin, stageCli, stageProviderCli,
 };

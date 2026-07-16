@@ -46,6 +46,43 @@ test('both models return the spawn result shape', () => {
   assert.deepStrictEqual(r, { status: 3, signal: null, stdout: 'out', stderr: 'err' });
 });
 
+// The async variants exist because the mock Anthropic server lives IN the test
+// process: spawnSync blocks this event loop, so the mock could never answer the
+// child's POST and the child hangs forever. Same argv, non-blocking dispatch.
+test('async models build the SAME argv as their sync twins', async () => {
+  const { runNaudeModelAsync, runQuaudeModelAsync } = require('./oracle-models.cjs');
+  const seen = [];
+  const fakeSpawn = (cmd, args) => {
+    seen.push({ cmd, args });
+    return {
+      stdout: { on() {} }, stderr: { on() {} },
+      on: (ev, cb) => { if (ev === 'exit') setImmediate(() => cb(0, null)); },
+      kill() {},
+    };
+  };
+  await runNaudeModelAsync('/x/cli.cjs', ['-p', 'hi'], { node: '/n/node', spawn: fakeSpawn });
+  await runQuaudeModelAsync('/x/cli.cjs', ['-p', 'hi'], { tjs: '/t/tjs', spawn: fakeSpawn });
+  assert.deepStrictEqual(seen[0], { cmd: '/n/node', args: ['/x/cli.cjs', '-p', 'hi'] });
+  assert.deepStrictEqual(seen[1], { cmd: '/t/tjs', args: ['run', path.join(REPO, 'libexec/node-shim/loader.cjs'), '/x/cli.cjs', '-p', 'hi'] });
+});
+
+test('async models collect output and resolve on exit', async () => {
+  const { runNaudeModelAsync } = require('./oracle-models.cjs');
+  const r = await runNaudeModelAsync('/x/cli.cjs', [], {
+    node: '/n/node',
+    spawn: () => ({
+      stdout: { on: (e, cb) => { if (e === 'data') cb('PONG'); } },
+      stderr: { on: (e, cb) => { if (e === 'data') cb('warn'); } },
+      on: (ev, cb) => { if (ev === 'exit') setImmediate(() => cb(0, null)); },
+      kill() {},
+    }),
+  });
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(r.stdout, 'PONG');
+  assert.strictEqual(r.stderr, 'warn');
+  assert.ok(typeof r.ms === 'number');
+});
+
 test('caller env is preserved and NODE_PATH is prepended, not clobbered', () => {
   let c = null;
   runNaudeModel('/x/cli.cjs', [], {
