@@ -54,6 +54,49 @@ function sha256File(p) {
   return crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 }
 
+// Read package.json's declared `dependencies` — the SOURCE OF TRUTH for the
+// ext-dep closure (duplication audit §1). Throws (not a silent []) when the
+// manifest is missing/unparseable: the whole closure hinges on this, so a bad
+// read must fail the build loudly rather than silently embed nothing.
+function readDirectDeps(pkgJsonPath) {
+  let pkg;
+  try {
+    pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
+  } catch (e) {
+    throw new Error(`cannot read '${pkgJsonPath}' to compute the ext-dep closure (${(e && e.message) || e})`);
+  }
+  return Object.keys(pkg.dependencies || {});
+}
+
+// Walk the runtime ext-dep closure from package.json's direct `dependencies`,
+// resolving each package's OWN dependencies from ITS manifest under nmDir (a
+// flat node_modules — every package here is a direct child, matching how
+// ensureDeps/npm install lays this closure out today: no version conflicts).
+// This is the ONE place that decides which packages quaude embeds — it must
+// never be hand-listed a second time (that drifted silently: duplication
+// audit §1, the failure this replaces). Fails loud (throws), not a silent
+// skip, when a declared dependency is missing under nmDir — the whole point
+// of computing this at BUILD time is to catch that before it becomes a
+// runtime "Cannot find module" deep in a session.
+function computeDepClosure(nmDir, directDeps) {
+  const seen = new Set();
+  const queue = directDeps.map((name) => ({ name, via: 'package.json' }));
+  while (queue.length) {
+    const { name, via } = queue.shift();
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const pkgPath = path.join(nmDir, name, 'package.json');
+    let pkg;
+    try {
+      pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    } catch (e) {
+      throw new Error(`ext-dep closure: '${name}' (required by ${via}) not found under ${nmDir} (run clode once, or npm install) [${(e && e.message) || e}]`);
+    }
+    for (const dep of Object.keys(pkg.dependencies || {})) queue.push({ name: dep, via: name });
+  }
+  return [...seen].sort();
+}
+
 // A minimal in-process stand-in for the Anthropic Messages API, answering every
 // POST .../messages with the canonical streaming-SSE single-turn "PONG". A
 // product-side mirror of test/mock-anthropic-helper.cjs (which is not shipped);
@@ -280,6 +323,13 @@ async function clodeBuild(args, opts) {
         // relative require needs it there). On disk it belongs beside
         // node-shim/, i.e. libexec/target-env.cjs, same as this repo.
         else if (name === 'target-env.cjs') dest = path.join(mat, 'libexec', name);
+        // package.json (bare, archive ROOT): the ext-dep closure's direct-deps
+        // SOURCE OF TRUTH (readDirectDeps below). A fused builder ships no
+        // repo checkout, so without this member a builder-fused `clode build`
+        // (self-hosting) would have nowhere to read package.json from when it
+        // later computes the closure for the quaude it fuses (duplication
+        // audit §1).
+        else if (name === 'package.json') dest = path.join(mat, name);
         else continue;
         fs.mkdirSync(path.dirname(dest), { recursive: true });
         fs.writeFileSync(dest, Buffer.from(bytes));
@@ -288,6 +338,13 @@ async function clodeBuild(args, opts) {
       nmDir = path.join(mat, 'node_modules');
       clodeLog(`clode: build: materialized the fused payload -> ${mat}`);
     }
+    // ROOT/package.json is the ext-dep closure's source of truth (readDirectDeps
+    // below). `libexec` is the local var above — REASSIGNED to mat/libexec
+    // under a fused builder — so this always points at the tree that actually
+    // has package.json on disk (mat under a fused builder, the real checkout
+    // otherwise), unlike the `ROOT` const above (which is fixed to
+    // opts.libexec's parent and stays virtual under a fused builder).
+    const pkgJsonPath = path.join(path.dirname(libexec), 'package.json');
 
     // -- template resolution: an explicit CLODE_TJS wins (and must exist —
     // fail loud, never fall through a typo); then the EMBEDDED pristine
@@ -422,6 +479,21 @@ async function clodeBuild(args, opts) {
       if (!nmDir) return fail(`build: no node_modules with the runtime deps (looked in: ${nmCandidates.join(', ')})`);
     }
 
+    // The closure travels to the fuse worker as DATA (extras.json below), not
+    // code: quaude-fuse.js runs under tjs and cannot require() a shared node
+    // module to recompute this itself. Computed HONESTLY from package.json's
+    // `dependencies` + their transitive closure (readDirectDeps/
+    // computeDepClosure, above) — this used to be a second, independently
+    // hand-maintained list living in quaude-fuse.js that silently rotted
+    // whenever package.json's dependencies changed without a matching edit
+    // there (duplication audit §1).
+    let extDeps;
+    try {
+      extDeps = computeDepClosure(nmDir, readDirectDeps(pkgJsonPath));
+    } catch (e) {
+      return fail(`build: ${(e && e.message) || e}`);
+    }
+
     // -- node-side manifest fields (the worker adds engine/idna/members/fusedAt).
     const extras = {
       quaude: '1', // archive/manifest schema version (shared by both roles)
@@ -433,6 +505,11 @@ async function clodeBuild(args, opts) {
       // themselves: the extractor that hooked cli.cjs (memo §6.9 — staleness of
       // the frozen entry transforms is detectable via these + bundleVersion).
       hooks: { 'extract-claude-js.cjs': sha256File(path.join(libexec, 'extract-claude-js.cjs')) },
+      // The ext-dep closure quaude-fuse.js must embed as members (duplication
+      // audit §1) — package.json's dependencies + their transitive closure,
+      // walked from nmDir just above. NOT part of the quaude manifest (the
+      // worker consumes this from extras.json but never re-emits it).
+      deps: extDeps,
       // The clode that built this quaude. Its patched in-app updater calls back
       // here (CLODE_SELF): a baked binary cannot rebuild itself. null when unknown,
       // so the updater fails loud rather than spawning something wrong. NOTE:
@@ -553,4 +630,7 @@ async function clodeBuild(args, opts) {
   }
 }
 
-module.exports = { clodeBuild, startPongMock, cannedSSE, timeoutScale, codesignAdHoc };
+module.exports = {
+  clodeBuild, startPongMock, cannedSSE, timeoutScale, codesignAdHoc,
+  readDirectDeps, computeDepClosure,
+};

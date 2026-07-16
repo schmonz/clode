@@ -15,8 +15,10 @@
 //     result executes fine — memo §6.1).
 //   stage-dir:   quaude role — the extracted+hooked cache entry (cli.cjs +
 //     bun-shim.cjs); builder role — a staging dir with clode-main.bundle.cjs.
-//   extras.json: node-side manifest fields (role, bundleVersion, clodeVersion,
-//     hooks, template sha, quaude schema).
+//   extras.json: node-side fields (role, bundleVersion, clodeVersion, hooks,
+//     template sha, quaude schema) PLUS `deps` — the ext-dep closure to embed.
+//     The closure travels as DATA precisely because this worker runs under tjs
+//     and cannot require() the node-side module that derives it.
 //
 // Output layout (memo §2):
 //   [signed-base][members...][index JSON][quaude footer 32B][bootstrap bc][tx1k1.js 12B]
@@ -30,14 +32,6 @@ if (!out) {
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
-
-// The ext-dep closure the loader can require at runtime: the shipped deps from
-// the root package.json (string-width, strip-ansi, wrap-ansi, semver, ws, yaml,
-// buffer) plus their runtime closure (ansi-regex, ansi-styles,
-// get-east-asian-width, base64-js, ieee754) — the exact set clode's launch
-// path stages via NODE_PATH today.
-const DEPS = ['string-width', 'strip-ansi', 'wrap-ansi', 'semver', 'ws', 'yaml',
-  'ansi-regex', 'ansi-styles', 'get-east-asian-width', 'buffer', 'base64-js', 'ieee754'];
 
 async function sha256hex(bytes) {
   const d = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
@@ -98,6 +92,22 @@ const role = extras.role ?? 'quaude';
 const entryName = role === 'builder' ? 'clode-main.bundle.cjs' : 'cli.qbc';
 const members = [];
 
+// The ext-dep closure: package.json's `dependencies` plus their transitive
+// closure, computed by clode-fuse.cjs (node side) and handed here as DATA —
+// this worker runs UNDER TJS and cannot require() a shared node module to
+// recompute it itself. This used to be a hardcoded list living right here,
+// which silently drifted from package.json whenever a dependency was added
+// without a matching edit to this file (duplication audit §1: a transitive
+// bump or a new direct dep rotted the list identically, with no signal until
+// a user hit "Cannot find module" deep in a session). A missing/empty deps
+// array means an old clode-fuse.cjs fused this worker — fail loud rather than
+// silently ship a quaude with an empty ext-dep closure.
+const DEPS = extras.deps;
+if (!Array.isArray(DEPS) || DEPS.length === 0) {
+  console.error('quaude-fuse: extras.json has no non-empty "deps" array (the ext-dep closure) — built by a stale clode-fuse.cjs?');
+  tjs.exit(1);
+}
+
 if (role === 'builder') {
   members.push({ name: entryName, data: await mustRead(path.join(stageDir, 'clode-main.bundle.cjs'), 'esbuilt clode-main bundle') });
   const libexecDir = path.dirname(shimDir);
@@ -113,6 +123,14 @@ if (role === 'builder') {
   // libexec/target-env.cjs (sibling to node-shim/, matching this repo's own
   // layout) for the self-fuse path.
   members.push({ name: 'target-env.cjs', data: await mustRead(path.join(libexecDir, 'target-env.cjs'), 'target-env.cjs member') });
+  // package.json, BARE member name (archive root, same reasoning as
+  // target-env.cjs): the ext-dep closure's SOURCE OF TRUTH. A fused builder
+  // ships no repo checkout, so when IT later runs `clode build`, its
+  // clode-fuse.cjs needs a package.json on disk to walk `dependencies` from
+  // (duplication audit §1 — the closure is derived, never hand-listed).
+  // clode-fuse.cjs's materialization step writes this member back to
+  // <payload>/package.json, the parent of <payload>/libexec.
+  members.push({ name: 'package.json', data: await mustRead(path.join(path.dirname(libexecDir), 'package.json'), 'package.json member') });
   // The PRISTINE tjs template rides along (Q2 Decision 2): a shipped builder
   // must be able to fuse with NOTHING on disk — `clode build` materializes this
   // member when no CLODE_TJS/build-tree template exists. Pristine = the
@@ -150,7 +168,11 @@ members.push({ name: 'node-shim/loader.cjs', data: await mustRead(path.join(shim
 await collect(path.join(shimDir, 'modules'), 'node-shim/modules', members);
 await collect(path.join(shimDir, 'internal'), 'node-shim/internal', members);
 
-// ext-dep closure.
+// ext-dep closure (DEPS = extras.deps, derived node-side — see above). The
+// node side already fails the build if a listed package is missing from
+// node_modules, so this guard is the belt to that braces: it catches a package
+// whose dir exists but is EMPTY (nothing collected), which the manifest-only
+// check up there cannot see.
 for (const dep of DEPS) {
   const before = members.length;
   try { await collect(path.join(nmDir, dep), `node_modules/${dep}`, members); }
