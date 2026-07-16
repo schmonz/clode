@@ -239,4 +239,7 @@ jobs:
           #   node-shim-bunshim        bun:ffi suffix hardcodes macOS 'dylib' (Linux .so)
           EXCLUDE='node-shim-tty|node-shim-child-process|node-shim-core|node-shim-bunshim'
           FILES=$(ls test/node-shim-*.test.cjs | grep -vE "$EXCLUDE")
-          node --test --test-concurrency=1 $FILES
+          # Plus the end-to-end tjs-DEFAULT launch (e2e-tjs-default): the `test` job
+          # has no tjs so it skips there; this job builds one, so it's the place the
+          # actual shipping default (bundle booted under tjs) gets exercised e2e.
+          node --test --test-concurrency=1 $FILES test/e2e-tjs-default.test.cjs
