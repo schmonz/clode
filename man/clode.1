@@ -3,7 +3,7 @@
 .Os
 .Sh NAME
 .Nm clode
-.Nd run the latest Claude Code under host Node, no Bun runtime
+.Nd run the latest Claude Code under a portable tjs runtime, no Bun
 .Sh SYNOPSIS
 .Nm
 .Op Fl -clode-verbose
@@ -30,7 +30,14 @@ locates an upstream
 .Xr claude 1
 binary (from a provider package or your own install), extracts its JavaScript
 bundle once, caches it per binary under your cache directory, and runs it under
-the system Node.
+a portable
+.Xr tjs 1
+(QuickJS) runtime.
+Set
+.Ev CLODE_ENGINE Ns = Ns Ar node
+to run the bundle under the host Node instead \(en the development/CI oracle that
+.Nm Ns 's
+tjs shim is verified against.
 A changed provider binary re-extracts on next launch, so updates are
 transparent.
 .Nm
@@ -163,6 +170,14 @@ message on an outdated node; a truly missing node yields
 .Li "env: node: not found" .
 .Sh ENVIRONMENT
 .Bl -tag -width CLODE_VERSION_DIR
+.It Ev CLODE_ENGINE
+Runtime for the extracted bundle:
+.Ar tjs
+(the default portable runtime) or
+.Ar node
+(the host-Node oracle \(en a development/CI reference that needs a host node on
+.Ev PATH ) .
+An unrecognized value is rejected.
 .It Ev CLODE_VERBOSE
 When non-empty, un-mutes clode's own progress output (same as
 .Fl -clode-verbose ) .

@@ -35,7 +35,7 @@ const { clodeCacheDir, depsStore } = require('./clode-paths.cjs');
 // through to Claude Code). Byte-for-byte the sh clode_help heredoc, version
 // interpolated. Ends with a trailing newline (like the heredoc).
 function clodeHelp(version) {
-  return `clode ${version} — run the latest Claude Code under a host Node, no Bun runtime.
+  return `clode ${version} — run the latest Claude Code under a portable tjs runtime, no Bun.
 
 Usage:
   clode [clode-options] [claude args...]   launch Claude Code (args pass through)
@@ -57,6 +57,8 @@ clode-specific options (consumed by clode; everything else goes to Claude Code):
                       that bear on running under Node), print a summary, and exit
 
 Key environment overrides:
+  CLODE_ENGINE        runtime for the extracted bundle: 'tjs' (default) or 'node'
+                      (the host-Node oracle — dev/CI reference, needs host node)
   CLODE_VERBOSE=1     same as --clode-verbose
   CLODE_NO_WATCH=1    disable the opportunistic on-launch update-signal check
   CLODE_CLAUDE_BIN    upstream claude binary to extract from

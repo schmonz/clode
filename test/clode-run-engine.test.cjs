@@ -50,3 +50,29 @@ test('CLODE_ENGINE=node: the host-Node oracle opt-in spawns node cli.cjs directl
   assert.strictEqual(c.cmd, '/usr/bin/node');
   assert.deepStrictEqual(c.argv, ['/cache/cli.cjs', '--version']);
 });
+
+// A whitespace-padded 'node' still selects the node oracle (a common shell-export slip).
+test('CLODE_ENGINE=" node " (padded): still the node oracle, not a silent tjs run', () => {
+  const c = capture({ PATH: '/usr/bin', CLODE_ENGINE: ' node ' });
+  assert.strictEqual(c.cmd, '/usr/bin/node');
+});
+
+// An UNKNOWN engine value fails loud rather than silently defaulting to tjs — the
+// selector is node|tjs|unset, nothing else (retire-node-runtime item 4 hardening).
+test('CLODE_ENGINE=nonsense: fails loud, spawns nothing, exits 1', () => {
+  const calls = [];
+  let code = null; let msg = '';
+  const child = { on() {}, kill() {} };
+  runBundle({
+    node: '/usr/bin/node', cliPath: '/cache/cli.cjs', args: ['--version'],
+    settingsPath: null, self: '/bin/clode', libexec: '/libexec',
+    env: { PATH: '/usr/bin', CLODE_ENGINE: 'noed' },
+    spawn: (cmd, argv, opts) => { calls.push({ cmd, argv, opts }); return child; },
+    procOn: () => {}, procOff: () => {}, exit: (c) => { code = c; },
+    stderr: { write: (s) => { msg += s; } },
+  });
+  assert.strictEqual(calls.length, 0, 'must not spawn any engine');
+  assert.strictEqual(code, 1);
+  assert.match(msg, /CLODE_ENGINE/);
+  assert.match(msg, /noed/);
+});

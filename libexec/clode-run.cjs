@@ -142,7 +142,17 @@ function runBundle(opts = {}) {
   // host-Node oracle (dev/CI only — higher-fidelity to upstream Bun, the reference
   // tjs is verified against). Per S4 there is NO silent host-Node user fallback:
   // if the tjs engine can't launch, we fail loud pointing to the oracle/build.
-  const useTjs = env.CLODE_ENGINE !== 'node';
+  //
+  // The selector is exactly node|tjs|unset (trimmed). An unrecognized value is a
+  // typo/mistake, NOT a license to silently pick the default — fail loud so a
+  // `CLODE_ENGINE=Node`/`noed` slip can't quietly run the wrong engine.
+  const engine = (env.CLODE_ENGINE || '').trim();
+  if (engine && engine !== 'node' && engine !== 'tjs') {
+    stderr.write(`clode: unknown CLODE_ENGINE '${engine}' — use 'tjs' (default) or 'node' (the host-Node oracle).\n`);
+    exit(1);
+    return;
+  }
+  const useTjs = engine !== 'node';
   let child;
   if (useTjs) {
     const tjsBin = env.CLODE_TJS || path.join(libexec, '..', 'build', 'tjs', 'tjs');
