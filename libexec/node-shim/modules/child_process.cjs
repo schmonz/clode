@@ -302,7 +302,28 @@ function spawn(file, args = [], opts = {}) {
   child.kill = (sig) => { try { proc.kill(sig); return true; } catch { return false; } };
   child.ref = () => {}; child.unref = () => {};
   proc.wait().then(
-    (st) => { trace('wait resolved', file, 'exit=', st.exit_status); child.exitCode = st.exit_status; child.emit('exit', st.exit_status, st.term_signal || null); child.emit('close', st.exit_status, st.term_signal || null); },
+    // A KILLED child is not a SUCCESSFUL child. tjs's wait() reports
+    // {exit_status, term_signal} and sets exit_status=0 for a signal kill
+    // (verified: SIGKILL -> {"exit_status":0,"term_signal":"SIGKILL"}; `exit 3` ->
+    // {"exit_status":3,"term_signal":null}). Node's contract is different and is
+    // what every caller codes against: a signal-terminated child reports code=null
+    // + signal=<name>, and exitCode=null/signalCode=<name>. Passing exit_status
+    // through made a killed child indistinguishable from a clean exit 0 — so the
+    // one question everyone asks (`code === 0`?) answered "it worked" about a
+    // process we had just killed. That is how "ATTEST FAILED (exit 0)" happened on
+    // haiku-x64 (a 20-minute timeout SIGKILL reported as success, 2026-07-17), and
+    // Claude Code's Bash tool kills timed-out commands through this same path.
+    // signalCode must be set even when null: node always exposes it, and a missing
+    // key is its own divergence. Oracle: test/node-shim-child-process.test.cjs.
+    (st) => {
+      const signal = st.term_signal || null;
+      const code = signal ? null : st.exit_status;
+      trace('wait resolved', file, 'exit=', st.exit_status, 'signal=', signal);
+      child.exitCode = code;
+      child.signalCode = signal;
+      child.emit('exit', code, signal);
+      child.emit('close', code, signal);
+    },
     (e) => { trace('wait rejected', file, String(e)); child.emit('error', e); },
   );
   return child;

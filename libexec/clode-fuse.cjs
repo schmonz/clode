@@ -492,7 +492,10 @@ async function smokeTarget(bin, { spawnRun, env, cwd, timeout }) {
   } finally { await mock.close(); }
   const posted = mock.requests.some((q) => q.method === 'POST' && /\/messages/.test(q.url));
   if (result.status !== 0 || !/PONG/.test(result.stdout) || !posted) {
-    return { ok: false, status: result.status, posted, stdout: result.stdout, stderr: result.stderr };
+    // `how` carries run()'s verdict verbatim (timed out / killed / exit N). A smoke
+    // that HUNG and one that exited nonzero are different bugs; reporting only a
+    // status makes them look identical to whoever reads the failure.
+    return { ok: false, status: result.status, how: describeExit(result), posted, stdout: result.stdout, stderr: result.stderr };
   }
   return { ok: true };
 }
@@ -544,6 +547,14 @@ function codesignAdHoc(file, opts = {}) {
 
 // Async spawn with capture + timeout (spawnSync would starve the in-process
 // mock server — the same reason the test harnesses spawn async).
+//
+// Reports HOW a child ended, not just a number. `run` fires the timeout, so it is
+// the only place that knows a kill was ours; throwing that away and handing the
+// caller a bare status turned "we SIGKILLed this after 20 minutes" into "exit
+// null", or — before the node-shim reported signal kills correctly — into the
+// actively false "exit 0". Both sent a real investigation after a phantom
+// (haiku-x64, 2026-07-17). timedOut/signal cost nothing and are the difference
+// between a diagnosis and a hunt.
 function run(cmd, args, opts = {}) {
   return new Promise((ok) => {
     const child = spawn(cmd, args, {
@@ -551,12 +562,29 @@ function run(cmd, args, opts = {}) {
       env: opts.env, cwd: opts.cwd,
     });
     let stdout = '', stderr = '';
+    let timedOut = false;
+    const timeoutMs = opts.timeout || 120000;
     child.stdout.on('data', (d) => { stdout += d; });
     child.stderr.on('data', (d) => { stderr += d; });
-    const to = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* */ } }, opts.timeout || 120000);
-    child.on('exit', (status) => { clearTimeout(to); ok({ status, stdout, stderr }); });
-    child.on('error', (e) => { clearTimeout(to); ok({ status: null, stdout, stderr: stderr + String(e) }); });
+    const to = setTimeout(() => { timedOut = true; try { child.kill('SIGKILL'); } catch { /* */ } }, timeoutMs);
+    child.on('exit', (status, signal) => {
+      clearTimeout(to);
+      ok({ status, signal: signal || null, timedOut, timeoutMs, stdout, stderr });
+    });
+    child.on('error', (e) => {
+      clearTimeout(to);
+      ok({ status: null, signal: null, timedOut, timeoutMs, stdout, stderr: stderr + String(e) });
+    });
   });
+}
+
+// How a child ended, in words a human can act on. "exit 0" for a process we
+// killed is a lie; "exit null" is a riddle. Used by every LOUD failure path below
+// so the reader learns whether the thing crashed, was killed, or simply said no.
+function describeExit(r) {
+  if (r && r.timedOut) return `TIMED OUT after ${Math.round((r.timeoutMs || 0) / 1000)}s and was SIGKILLed`;
+  if (r && r.signal) return `killed by ${r.signal}`;
+  return `exit ${r ? r.status : '?'}`;
 }
 
 // Shared argv contract for `clode build [--naude|--self] [--out PATH]`.
@@ -669,7 +697,7 @@ async function clodeBuild(args, opts) {
       [path.join(ROOT, 'scripts', 'build-naude.mjs'), '--cli', cliPath, ...outArgs],
       { env: { ...env, ...(opts.self ? { CLODE_SELF: opts.self } : {}) }, timeout: 600000 * SCALE });
     if (r.status !== 0) {
-      return fail(`build --naude: build-naude failed (exit ${r.status}):\n${r.stdout}${r.stderr}`);
+      return fail(`build --naude: build-naude failed (${describeExit(r)}):\n${r.stdout}${r.stderr}`);
     }
     if (r.stdout) clodeLog(r.stdout.trimEnd());
 
@@ -694,7 +722,7 @@ async function clodeBuild(args, opts) {
       });
       if (!smoke.ok) {
         stderr.write('clode: build --naude: SMOKE FAILED — the built naude did not complete the mock round-trip\n');
-        stderr.write(`clode: build --naude: exit=${smoke.status} posted=${smoke.posted} stdout:\n${smoke.stdout}\nstderr:\n${smoke.stderr}\n`);
+        stderr.write(`clode: build --naude: ${smoke.how} posted=${smoke.posted} stdout:\n${smoke.stdout}\nstderr:\n${smoke.stderr}\n`);
         return 1;
       }
     } finally {
@@ -1028,7 +1056,7 @@ async function clodeBuild(args, opts) {
           extra = `\n(no worker output — exec failure? template=${template} MISSING)`;
         }
       }
-      return fail(`build: fuse worker failed (exit ${w.status}):\n${w.stdout}${w.stderr}${extra}`);
+      return fail(`build: fuse worker failed (${describeExit(w)}):\n${w.stdout}${w.stderr}${extra}`);
     }
     clodeLog(w.stdout.trimEnd());
 
@@ -1050,13 +1078,13 @@ async function clodeBuild(args, opts) {
       const v = await spawnRun(out, ['--version'], { env: smokeEnv, cwd: work, timeout: 120000 * SCALE });
       if (v.status !== 0 || !/^clode /.test(v.stdout)) {
         stderr.write(`clode: build --self: SMOKE FAILED — the fused builder did not answer --version\n`);
-        stderr.write(`clode: build --self: exit=${v.status} stdout:\n${v.stdout}\nstderr:\n${v.stderr}\n`);
+        stderr.write(`clode: build --self: ${describeExit(v)} stdout:\n${v.stdout}\nstderr:\n${v.stderr}\n`);
         return 1;
       }
       const h = await spawnRun(out, ['--help'], { env: smokeEnv, cwd: work, timeout: 120000 * SCALE });
       if (h.status !== 0 || !/clode build/.test(h.stdout)) {
         stderr.write(`clode: build --self: SMOKE FAILED — the fused builder did not answer --help\n`);
-        stderr.write(`clode: build --self: exit=${h.status} stdout:\n${h.stdout}\nstderr:\n${h.stderr}\n`);
+        stderr.write(`clode: build --self: ${describeExit(h)} stdout:\n${h.stdout}\nstderr:\n${h.stderr}\n`);
         return 1;
       }
       stdout.write(`clode: fused ${out} (${fs.statSync(out).size} bytes, native clode builder)\n`);
@@ -1071,7 +1099,7 @@ async function clodeBuild(args, opts) {
     const smoke = await smokeTarget(out, { spawnRun, env, cwd: work, timeout: 120000 * SCALE });
     if (!smoke.ok) {
       stderr.write(`clode: build: SMOKE FAILED — the fused quaude did not complete the mock round-trip\n`);
-      stderr.write(`clode: build: exit=${smoke.status} posted=${smoke.posted} stdout:\n${smoke.stdout}\nstderr:\n${smoke.stderr}\n`);
+      stderr.write(`clode: build: ${smoke.how} posted=${smoke.posted} stdout:\n${smoke.stdout}\nstderr:\n${smoke.stderr}\n`);
       return 1;
     }
 
@@ -1079,7 +1107,7 @@ async function clodeBuild(args, opts) {
     // (quaude-only — naude has no manifest/trailer to attest).
     const attest = await spawnRun(out, ['--quaude-attest'], { env, cwd: work, timeout: 120000 * SCALE });
     if (attest.status !== 0 || !/quaude-attest: all members verified/.test(attest.stdout)) {
-      stderr.write(`clode: build: ATTEST FAILED (exit ${attest.status}):\n${attest.stdout}\n${attest.stderr}\n`);
+      stderr.write(`clode: build: ATTEST FAILED (${describeExit(attest)}):\n${attest.stdout}\n${attest.stderr}\n`);
       return 1;
     }
 
@@ -1092,7 +1120,7 @@ async function clodeBuild(args, opts) {
 }
 
 module.exports = {
-  clodeBuild, parseBuildArgs, startPongMock, cannedSSE, smokeTarget, timeoutScale, codesignAdHoc,
+  clodeBuild, parseBuildArgs, startPongMock, cannedSSE, smokeTarget, timeoutScale, codesignAdHoc, describeExit,
   readDirectDeps, computeDepClosure, assertClosureMatchesLockfile,
   scanBareSpecifiers, specifierPackageName, isBuiltinSpecifier, shimProvidedModules,
   assertNoUnknownBareSpecifiers, KNOWN_UNREACHABLE, resolveClaudeNmDir,

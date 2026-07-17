@@ -251,6 +251,28 @@ test('codesignAdHoc: sign fails and thin fails (single-arch / no host slice) —
   assert.ok(sp.calls.some((c) => /-thin x86_64/.test(c)), 'attempts the thin directly');
 });
 
+// The build's failure messages are read by someone who was not watching. "exit 0"
+// for a process we SIGKILLed is a lie; "exit null" is a riddle. Both happened for
+// real: haiku-x64's attest hung on a 64KB pipe write, clode's own 20-minute guard
+// killed it, the node-shim reported the kill as exit 0, and `clode build` announced
+// "ATTEST FAILED (exit 0)" — which cost a day chasing a process that had supposedly
+// exited cleanly while printing nothing (2026-07-17). This pins the three verdicts
+// so no failure path can go back to printing a bare number.
+test('describeExit: says timed out / killed / exited, never a bare misleading number', () => {
+  const { describeExit } = require('../libexec/clode-fuse.cjs');
+  // The one that mattered: OUR timeout fired, so say so, with the budget it blew.
+  assert.match(describeExit({ timedOut: true, timeoutMs: 1200000, status: null, signal: 'SIGKILL' }),
+    /TIMED OUT after 1200s and was SIGKILLed/);
+  // Killed by someone else (OOM killer, a user, a supervisor): name the signal.
+  assert.strictEqual(describeExit({ timedOut: false, status: null, signal: 'SIGSEGV' }), 'killed by SIGSEGV');
+  // Ordinary refusal: the code is the whole story.
+  assert.strictEqual(describeExit({ timedOut: false, status: 7, signal: null }), 'exit 7');
+  assert.strictEqual(describeExit({ timedOut: false, status: 0, signal: null }), 'exit 0');
+  // A timeout wins over the signal it sent — the signal is our own doing and
+  // "killed by SIGKILL" would hide WHY.
+  assert.match(describeExit({ timedOut: true, timeoutMs: 5000, status: null, signal: 'SIGKILL' }), /TIMED OUT after 5s/);
+});
+
 test('timeoutScale: default 1, integer >= 1 honored, junk rejected', () => {
   // TCG-emulated guests run 10-20x slower than metal; CI's VM legs scale
   // every build-pipeline hang guard via CLODE_TIMEOUT_SCALE (dispatch #14:

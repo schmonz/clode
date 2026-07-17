@@ -34,6 +34,60 @@ test('spawnSync: status + stdout + stderr match node', (t) => {
   assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
 });
 
+// A KILLED child is not a SUCCESSFUL child. node reports code=null + signal for a
+// signal-terminated child, and exitCode=null/signalCode=<sig>; the shim used to
+// hand back tjs's raw `exit_status` (0 for a signal kill), so every caller that
+// asks the ONE question everyone asks — `code === 0`? — concluded the thing it had
+// just killed had succeeded.
+//
+// This is not academic. It is how a whole day went sideways (2026-07-17): a hung
+// attest on haiku-x64 was SIGKILLed by clode's own 20-minute timeout, the shim
+// reported exit 0, and clode printed "ATTEST FAILED (exit 0)" — sending the
+// investigation after a process that supposedly exited cleanly while printing
+// nothing, when the truth was "we killed it". Claude Code's Bash tool kills
+// timed-out commands through this same path, so a timed-out command looked
+// successful too.
+//
+// The oracle existed and this case simply was not in it — it only ever tests what
+// someone thought to compare.
+test('spawn: a SIGKILLed child reports code=null + the signal, like node (not exit 0)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const cp = require('node:child_process');
+    const c = cp.spawn('/bin/sh', ['-c', 'sleep 30']);
+    setTimeout(() => c.kill('SIGKILL'), 300);
+    c.on('exit', (code, signal) => {
+      console.log(JSON.stringify({ code, signal, exitCode: c.exitCode, signalCode: c.signalCode }));
+    });`;
+  const f = prog(body);
+  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  // Pin node's own contract too, so a node change is loud rather than silently
+  // redefining what the shim must match.
+  assert.deepStrictEqual(node, { code: null, signal: 'SIGKILL', exitCode: null, signalCode: 'SIGKILL' });
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
+});
+
+// The other half of the same seam: a NORMAL exit must keep reporting its code (and
+// a null signal). A fix that mapped every exit to null would pass the test above
+// and break everything else.
+test('spawn: a normally-exiting child still reports its code + null signal', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const cp = require('node:child_process');
+    const c = cp.spawn('/bin/sh', ['-c', 'exit 3']);
+    c.on('exit', (code, signal) => {
+      console.log(JSON.stringify({ code, signal, exitCode: c.exitCode, signalCode: c.signalCode }));
+    });`;
+  const f = prog(body);
+  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  assert.deepStrictEqual(node, { code: 3, signal: null, exitCode: 3, signalCode: null });
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
+});
+
 test('spawn: writing a command to a persistent shell via child.stdin delivers + EOF closes it (Bash-tool pattern)', (t) => {
   if (skipUnlessTjs(t)) return;
   // Claude Code's Bash tool feeds short commands to a persistent shell via stdin.
