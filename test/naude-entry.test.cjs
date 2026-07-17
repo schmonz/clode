@@ -76,8 +76,13 @@ test('first pass (isSea, no sentinel) re-invokes execPath in run-as-node with cl
     onExit: (cb) => cb(0, null),
   });
   assert.strictEqual(call.cmd, '/naude');
-  assert.strictEqual(call.opts.env.NAUDE_RUN_AS_NODE, '/work/cli.cjs');
-  assert.match(call.opts.env.NODE_PATH, /\/deps\/node_modules/);
+  // path.join/-delimiter, not POSIX literals: runNaude builds these with
+  // path.join, so on Windows they come back '\work\cli.cjs' and
+  // '\deps\node_modules'. Literals here asserted a POSIX-only shape and failed
+  // every windows-latest run. (The test at :160 below already had this right.)
+  assert.strictEqual(call.opts.env.NAUDE_RUN_AS_NODE, path.join('/work', 'cli.cjs'));
+  assert.ok(call.opts.env.NODE_PATH.includes(path.join('/deps', 'node_modules')),
+    `NODE_PATH lacks the materialized deps dir: ${call.opts.env.NODE_PATH}`);
   assert.deepStrictEqual(call.args, ['--version']);
   assert.strictEqual(exited, 0);
 });
@@ -176,7 +181,9 @@ test('first pass shapes the child env with the target contract', () => {
   assert.strictEqual(call.env.DISABLE_INSTALLATION_CHECKS, '1');
   assert.strictEqual(call.env.NODE_USE_ENV_PROXY, '1');
   // NODE_PATH stays naude's own business (materialized deps), not target-env's.
-  assert.match(call.env.NODE_PATH, /\/deps\/node_modules/);
+  // path.join, not a POSIX literal — see the note at the first-pass test above.
+  assert.ok(call.env.NODE_PATH.includes(path.join('/deps', 'node_modules')),
+    `NODE_PATH lacks the materialized deps dir: ${call.env.NODE_PATH}`);
   // No `builder` override here (the default seam) -> BAKED_BUILDER is null in a
   // plain require() of this module -> CLODE_SELF must stay unset. A regression
   // in that guard would otherwise go unnoticed by every OTHER test in this file

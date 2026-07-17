@@ -28,7 +28,13 @@ test('parseOutArg: absent -> null (caller falls back to the default seaBin path)
 test('parseOutArg: resolves a given path to absolute', async () => {
   const { parseOutArg } = await import('../scripts/build-naude.mjs');
   assert.strictEqual(parseOutArg(['--out', 'relative/naude']), path.resolve('relative/naude'));
-  assert.strictEqual(parseOutArg(['--out', '/abs/naude']), '/abs/naude');
+  // An already-absolute path survives unchanged. The expectation is built with
+  // path.resolve rather than written as a literal because "absolute" is
+  // platform-specific: on Windows path.resolve('/abs/naude') is 'D:\abs\naude'
+  // (drive-qualified), so the hardcoded POSIX literal this replaces asserted
+  // something only true on POSIX and failed every windows-latest CI run.
+  const abs = path.resolve(`${path.sep}abs${path.sep}naude`);
+  assert.strictEqual(parseOutArg(['--out', abs]), abs);
 });
 
 // Duplication audit §5: the two paths used to state OPPOSITE intents about
