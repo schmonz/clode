@@ -167,6 +167,202 @@ function assertClosureMatchesLockfile(closureVersions, lockfilePath) {
   }
 }
 
+// ---- dep-closure DRIFT gate --------------------------------------------------
+// Every gate above (readDirectDeps, computeDepClosure, assertClosureMatchesLockfile)
+// computes flawlessly from ONE unverified premise: deps/claude/package.json's
+// direct dependencies are a human's transcription of what Claude Code's bundle
+// actually requires, written once and never checked against the bundle itself.
+// If upstream adds a require() the seed list doesn't know about, every layer
+// below still builds green and PONGs clean — the gap only shows up as a runtime
+// "Cannot find module" deep in a user's session, long after 'clode build'
+// printed success. This closes that gap: scan the EXTRACTED cli.cjs +
+// bun-shim.cjs for every bare (non-builtin, non-relative) package specifier they
+// reference, and fail the build loud if one isn't accounted for — by the
+// computed closure, by bun-shim.cjs's own runtime module resolution (bun:
+// pseudo-modules, host-module stubs like undici), or by the justified
+// KNOWN_UNREACHABLE allowlist below. Measured against the real 2.1.210 bundle;
+// full analysis in .superpowers/sdd/seed-drift-report.md — that measurement is
+// what found node-fetch missing (now in deps/claude/package.json) and is what
+// justifies every KNOWN_UNREACHABLE entry.
+//
+// Deliberately regex, not an AST parse (cli.cjs is ~19MB; a full parse of every
+// build is not worth the cost for a presence scan). Two forms only:
+//   require("x") / __require("x")  — Bun's/esbuild's CJS require, the ONLY form
+//     that actually resolves a module at runtime in this bundle.
+//   import("x")                    — dynamic import, also a real runtime call.
+// Static `import x from "y"` is DELIBERATELY not scanned: Claude Code ships
+// embedded skill/reference documentation (design-system self-check scripts, SDK
+// usage examples) as STRING literals inside cli.cjs, many of which are
+// themselves ESM source text quoting real package names for the reader/model —
+// scanning declarative `from '...'` on the real bundle turned up a dozen "bare
+// names" that were 100% prose/doc noise (down to literal English words like
+// 'now' and 'wide' caught by "...from 'now'"/"...from 'wide'" in comments), and
+// zero real findings beyond what require()/import() already found. Since
+// cli.cjs demonstrably loads and runs (a real build's PONG smoke proves it),
+// any literal ESM `import ... from` text in the file CANNOT be live code (it
+// would be a SyntaxError in the CJS module Node/tjs actually execute) — it is
+// always inert string content.
+const SPECIFIER_PATTERNS = [
+  /(?:require|__require)\(["']([a-zA-Z0-9_/:@.-]+)["']\)/g,
+  /\bimport\(["']([a-zA-Z0-9_/:@.-]+)["']\)/g,
+];
+
+const NODE_BUILTINS = new Set(require('node:module').builtinModules);
+
+// A specifier is a node builtin if EITHER the literal spec or its node:-prefix-
+// stripped form is builtin: some builtins are only requireable bare ('fs'), a
+// few only with the prefix ('node:sqlite', 'node:test' — Module.builtinModules
+// lists those WITH the prefix and does not also list the bare form), so a
+// single-form check misses one direction or the other.
+function isBuiltinSpecifier(spec) {
+  const bare = spec.startsWith('node:') ? spec.slice(5) : spec;
+  return NODE_BUILTINS.has(spec) || NODE_BUILTINS.has(bare);
+}
+
+// '@scope/name/sub/path' -> '@scope/name'; 'pkg/sub/path' -> 'pkg'. Same
+// granularity as the closure (readDirectDeps/computeDepClosure operate on
+// package names, not import subpaths).
+function specifierPackageName(spec) {
+  if (spec.startsWith('@')) return spec.split('/').slice(0, 2).join('/');
+  return spec.split('/')[0];
+}
+
+// Every bare (non-builtin, non-relative/absolute) package NAME `file`
+// references via require()/__require()/dynamic import(). Reads latin1 (1 char
+// == 1 byte, same convention as extract-claude-js.cjs) so this scans the raw
+// carved bytes without a re-encode.
+function scanBareSpecifiers(file) {
+  const src = fs.readFileSync(file, 'latin1');
+  const names = new Set();
+  for (const re of SPECIFIER_PATTERNS) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(src))) {
+      const spec = m[1];
+      if (!spec || spec.startsWith('.') || spec.startsWith('/')) continue;
+      if (isBuiltinSpecifier(spec)) continue;
+      names.add(specifierPackageName(spec));
+    }
+  }
+  return names;
+}
+
+// Modules libexec/bun-shim.cjs answers itself before Node's/tjs's own resolver
+// ever sees them: `bun:*` pseudo-modules (bun:ffi, bun:sqlite — a Module._load
+// hook intercepts these) and HOST_MODULES stubs (undici — real proxying is
+// delegated to Node's NODE_USE_ENV_PROXY instead of reimplementing it). These
+// are NOT npm packages quaude/naude embed, so the dep-closure gate must not
+// demand them from the closure. Introspected by SPAWNING bun-shim.cjs in a
+// child process — never require()'d in-process here — because bun-shim.cjs
+// installs a process-wide Module._load hook and other globals (globalThis.
+// WebSocket, an fs.readSync patch) meant for a RUNNING quaude/naude, not
+// clode's own builder process. This keeps bun-shim.cjs's own
+// module.exports.__bunBuiltins/__hostModules the ONE place this list is
+// declared, rather than a second hand-maintained list here that could drift
+// the same way the old fuse-time dep list did (duplication audit §1, the same
+// failure through a new door).
+function shimProvidedModules(libexecDir, opts = {}) {
+  const sp = opts.spawnSync || spawnSync;
+  const shimPath = path.join(libexecDir, 'bun-shim.cjs');
+  const script = `const s=require(${JSON.stringify(shimPath)});`
+    + `process.stdout.write(JSON.stringify([...(s.__bunBuiltins||[]),...(s.__hostModules||[])]))`;
+  const r = sp(process.execPath, ['-e', script], { encoding: 'utf8' });
+  if (r.status !== 0 || !r.stdout) {
+    throw new Error(`dep-closure gate: could not introspect '${shimPath}' for shim-provided modules (exit ${r.status}): ${r.stderr || ''}`);
+  }
+  return new Set(JSON.parse(r.stdout));
+}
+
+// Specifiers the real 2.1.210 bundle references that are demonstrably NEVER
+// reached by anything clode builds or tests — each verified BY HAND against the
+// extracted bundle (full analysis: .superpowers/sdd/seed-drift-report.md), not
+// assumed. An entry without a concrete reason is a bug, not a convenience: this
+// list is a decision record, not a dumping ground.
+const KNOWN_UNREACHABLE = {
+  // ajv is fully vendored INTO cli.cjs (its own `Ajv` class ships in the
+  // bundle) and IS instantiated: `new V9c.Ajv({allErrors:!0,validateFormats:!1})`.
+  // The 'ajv/dist/runtime/...' requires only appear inside ajv's OWN
+  // standalone code-generation feature (a tagged-template string ajv emits
+  // when asked to produce a SEPARATELY-requirable validator file) — a feature
+  // that only activates with an explicit `code:{source:true}}` option, which
+  // CC's one `new Ajv(...)` call site does not pass. Dead text inside a
+  // vendored package's unused feature, not a live require.
+  ajv: "vendored + instantiated without standalone codegen (`code:{source:true}}`); the require() text is inert inside ajv's own unused codegen template",
+  // Same codegen feature, and doubly dead here: CC's one Ajv instance also
+  // passes `validateFormats:!1` (false), so the format-validation feature
+  // ajv-formats provides is switched off outright.
+  'ajv-formats': 'same dead ajv codegen path as `ajv` above, and CC disables format validation (`validateFormats:false`) so this would never even be reached if codegen were live',
+  // Bun-only heap/GC introspection (a `Bun.heapStats`-shaped API) for a
+  // diagnostics feature. The one call site wraps it in its own try/catch and
+  // silently produces no heap stats on failure — bun:jsc is not stubbed by
+  // bun-shim.cjs (unlike bun:ffi/bun:sqlite) and is not resolvable under Node
+  // or tjs, but nothing downstream depends on it succeeding.
+  'bun:jsc': 'Bun-only heap introspection, call site wrapped in try/catch, degrades to "no heap stats" — never available or needed under Node/tjs',
+  // esbuild/playwright/playwright-core/react/react-dom/typescript/ts-morph all
+  // come from the SAME embedded region (~16.7-17.0MB into the 19.8MB bundle):
+  // a "design system self-check" skill/reference script CC ships as example
+  // source TEXT (for the model to write out and run, or to show the user), not
+  // code that runs inside cli.cjs's own process. Proven inert, not assumed:
+  // that region contains literal ESM `import x from 'y'` declarative-import
+  // syntax, which cannot appear in cli.cjs's own live code (cli.cjs is Bun's
+  // CJS output and demonstrably loads+runs — a real `import` statement there
+  // would be a SyntaxError). A doc block quoting real package names is not a
+  // dependency.
+  esbuild: 'embedded design-system self-check skill/doc TEXT (the region contains literal ESM `import` syntax, proving it is a string, not live cli.cjs code) — same region as ts-morph/typescript/react/playwright below',
+  playwright: 'embedded design-system self-check skill/doc TEXT, same region as esbuild above — guarded there by try/catch + a NO_RENDER_CHECK flag in the doc text itself',
+  'playwright-core': "appears inside a shell-command EXAMPLE string (\"xvfb-run -a node -e '...require(\\'playwright-core\\')...'\"), not a require() cli.cjs itself executes",
+  react: 'appears inside a string literal fed to esbuild as virtual entry CONTENTS ("window.__dsReact=require(\\"react\\");"), building some OTHER bundle — not a require() cli.cjs itself executes',
+  'react-dom': 'same virtual-esbuild-entry string as react above, same reasoning',
+  typescript: 'embedded design-system self-check skill/doc TEXT, same region as esbuild above',
+  'ts-morph': 'embedded design-system self-check skill/doc TEXT, same region as esbuild above',
+};
+
+// THE GATE: every bare package specifier `files` reference must be explained —
+// by the computed ext-dep closure, by bun-shim.cjs's own runtime module
+// resolution, or by the justified KNOWN_UNREACHABLE allowlist above. Anything
+// else fails the build LOUD, naming the package and the fix, rather than
+// shipping a quaude/naude that PONGs clean today and throws "Cannot find
+// module" the first time a user's session reaches the untested code path.
+function assertNoUnknownBareSpecifiers(files, closure, libexecDir, opts = {}) {
+  const known = new Set(closure);
+  const shimProvided = shimProvidedModules(libexecDir, opts);
+  const unknown = new Map(); // name -> first file it was seen in
+  for (const file of files) {
+    if (!fs.existsSync(file)) continue;
+    for (const name of scanBareSpecifiers(file)) {
+      if (known.has(name) || shimProvided.has(name) || KNOWN_UNREACHABLE[name]) continue;
+      if (!unknown.has(name)) unknown.set(name, file);
+    }
+  }
+  if (unknown.size) {
+    const lines = [...unknown.entries()]
+      .map(([name, file]) => `  - '${name}' (seen in ${path.basename(file)})`);
+    throw new Error(
+      `dep-closure gate: the bundle references package(s) not covered by the ext-dep `
+      + `closure, bun-shim's own module resolution, or the KNOWN_UNREACHABLE allowlist:\n`
+      + `${lines.join('\n')}\n`
+      + `  Fix: if it's genuinely needed, add it to deps/claude/package.json's `
+      + `dependencies (then npm install); if it's dead/optional code, add it to `
+      + `KNOWN_UNREACHABLE in libexec/clode-fuse.cjs with a concrete reason.`);
+  }
+}
+
+// Resolve node_modules for the ext-dep closure the same way in both build
+// targets that embed Claude Code (the quaude/--self shared block below, and
+// `clode build --naude` above it): ensureDeps (installs into the deps store
+// unless deps ship beside this checkout), then the two candidate locations an
+// npm/repo layout can leave it in. Throws (never a silent null) — the whole
+// ext-dep closure hinges on finding this directory. Factored out so this
+// resolution logic lives in exactly one place (the reason this whole file
+// exists — see computeDepClosure's comment on duplication audit §1).
+function resolveClaudeNmDir({ libexec, here, verbose, env, ROOT }) {
+  deps.ensureDeps({ libexec, here, verbose, env });
+  const nmCandidates = [path.join(ROOT, 'deps', 'claude', 'node_modules'), path.join(depsStore(env), 'node_modules')];
+  const nmDir = nmCandidates.find((d) => { try { return fs.statSync(d).isDirectory(); } catch { return false; } });
+  if (!nmDir) throw new Error(`no node_modules with the runtime deps (looked in: ${nmCandidates.join(', ')})`);
+  return nmDir;
+}
+
 // A minimal in-process stand-in for the Anthropic Messages API, answering every
 // POST .../messages with the canonical streaming-SSE single-turn "PONG". A
 // product-side mirror of test/mock-anthropic-helper.cjs (which is not shipped);
@@ -389,6 +585,24 @@ async function clodeBuild(args, opts) {
       return fail(`build --naude: extraction failed: ${(e && e.message) || e}`);
     }
     const cliPath = path.join(stageDir, 'cli.cjs');
+
+    // -- dep-closure DRIFT gate (see the full rationale on assertNoUnknownBareSpecifiers,
+    // above): naude embeds the same Claude Code bundle and the same ext-dep
+    // closure (build-naude.mjs runs its own `npm ci` against deps/claude's
+    // manifest/lockfile below) as quaude, so it needs the same protection
+    // against a package the bundle references but the seed list never learned
+    // about. Computed fresh here — this branch returns before reaching the
+    // quaude/--self shared block's own closure computation.
+    try {
+      const nmDir = resolveClaudeNmDir({ libexec: opts.libexec, here, verbose, env, ROOT });
+      const pkgJsonPath = path.join(ROOT, 'deps', 'claude', 'package.json');
+      const extDeps = computeDepClosure(nmDir, readDirectDeps(pkgJsonPath));
+      assertNoUnknownBareSpecifiers(
+        [cliPath, path.join(stageDir, 'bun-shim.cjs')], extDeps, opts.libexec, { env });
+    } catch (e) {
+      return fail(`build --naude: ${(e && e.message) || e}`);
+    }
+
     clodeLog(`clode: build --naude: building the Node SEA from ${cliPath} ...`);
     // build-naude.mjs runs as a SEPARATE process — its esbuild --define reads
     // CLODE_SELF from ITS OWN env (process.env), never opts.self directly — so
@@ -634,10 +848,11 @@ async function clodeBuild(args, opts) {
     // this checkout (deps/claude/node_modules — Claude Code's deps, not
     // clode's own; repo/npm layout).
     if (!nmDir) {
-      deps.ensureDeps({ libexec, here, verbose, env });
-      const nmCandidates = [path.join(ROOT, 'deps', 'claude', 'node_modules'), path.join(depsStore(env), 'node_modules')];
-      nmDir = nmCandidates.find((d) => { try { return fs.statSync(d).isDirectory(); } catch { return false; } });
-      if (!nmDir) return fail(`build: no node_modules with the runtime deps (looked in: ${nmCandidates.join(', ')})`);
+      try {
+        nmDir = resolveClaudeNmDir({ libexec, here, verbose, env, ROOT });
+      } catch (e) {
+        return fail(`build: ${(e && e.message) || e}`);
+      }
     }
 
     // The closure travels to the fuse worker as DATA (extras.json below), not
@@ -657,6 +872,20 @@ async function clodeBuild(args, opts) {
       extDeps = computeDepClosure(nmDir, readDirectDeps(pkgJsonPath), { versions: closureVersions });
     } catch (e) {
       return fail(`build: ${(e && e.message) || e}`);
+    }
+
+    // -- dep-closure DRIFT gate (see assertNoUnknownBareSpecifiers's comment,
+    // above, for the full rationale): quaude only — --self ships clode's OWN
+    // esbuilt bundle, not Claude Code's, so there is nothing to scan for that
+    // role (stageDir holds clode-main.bundle.cjs, not cli.cjs/bun-shim.cjs).
+    if (!self) {
+      try {
+        assertNoUnknownBareSpecifiers(
+          [path.join(stageDir, 'cli.cjs'), path.join(stageDir, 'bun-shim.cjs')],
+          extDeps, libexec, { env });
+      } catch (e) {
+        return fail(`build: ${(e && e.message) || e}`);
+      }
     }
 
     // -- lockfile gate: node_modules must match package-lock.json (Task b).
@@ -817,4 +1046,6 @@ async function clodeBuild(args, opts) {
 module.exports = {
   clodeBuild, parseBuildArgs, startPongMock, cannedSSE, smokeTarget, timeoutScale, codesignAdHoc,
   readDirectDeps, computeDepClosure, assertClosureMatchesLockfile,
+  scanBareSpecifiers, specifierPackageName, isBuiltinSpecifier, shimProvidedModules,
+  assertNoUnknownBareSpecifiers, KNOWN_UNREACHABLE, resolveClaudeNmDir,
 };

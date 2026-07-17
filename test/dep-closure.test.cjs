@@ -23,7 +23,12 @@ const REPO = path.resolve(__dirname, '..');
 // Claude Code's runtime deps (deps/claude/package.json) — NOT clode's own;
 // clode has none (test/clode-self-deps.test.cjs).
 const NM = path.join(REPO, 'deps', 'claude', 'node_modules');
-const { readDirectDeps, computeDepClosure, assertClosureMatchesLockfile } = require('../libexec/clode-fuse.cjs');
+const LIBEXEC = path.join(REPO, 'libexec');
+const {
+  readDirectDeps, computeDepClosure, assertClosureMatchesLockfile,
+  scanBareSpecifiers, specifierPackageName, isBuiltinSpecifier, shimProvidedModules,
+  assertNoUnknownBareSpecifiers, KNOWN_UNREACHABLE,
+} = require('../libexec/clode-fuse.cjs');
 
 // Build a fake flat node_modules from {name: {dependencies}} — the layout npm
 // produces for this closure (no version conflicts, every package a direct child).
@@ -278,4 +283,146 @@ test('GATE: the real node_modules matches the real package-lock.json right now',
   const versions = new Map();
   computeDepClosure(NM, direct, { versions });
   assert.doesNotThrow(() => assertClosureMatchesLockfile(versions, path.join(REPO, 'deps', 'claude', 'package-lock.json')));
+});
+
+// ---- The dep-closure DRIFT gate (seed-drift closure) -------------------------
+// Everything above grades the closure computed FROM package.json's 7(now 8)
+// declared deps. Nothing above checks package.json's deps against what the
+// bundle ITSELF references — that belief was never verified. These tests grade
+// scanBareSpecifiers/assertNoUnknownBareSpecifiers, which close that gap: see
+// .superpowers/sdd/seed-drift-report.md for the full measurement against the
+// real 2.1.210 bundle that justifies every KNOWN_UNREACHABLE entry below.
+
+function fakeSrcFile(content) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dep-drift-src-'));
+  const file = path.join(dir, 'fake-cli.cjs');
+  fs.writeFileSync(file, content);
+  return file;
+}
+
+test('scanBareSpecifiers: finds require()/__require()/import() bare specifiers', () => {
+  const file = fakeSrcFile(
+    'require("semver");'
+    + '__require("yaml");'
+    + 'x=await import("undici");'
+  );
+  try {
+    assert.deepStrictEqual([...scanBareSpecifiers(file)].sort(), ['semver', 'undici', 'yaml']);
+  } finally { fs.rmSync(path.dirname(file), { recursive: true, force: true }); }
+});
+
+test('scanBareSpecifiers: skips relative/absolute paths and node builtins (bare and node:-prefixed forms)', () => {
+  const file = fakeSrcFile(
+    'require("./local");'
+    + 'require("/abs/path");'
+    + 'require("fs");'
+    + 'require("node:path");'
+    + 'require("node:sqlite");'  // only requireable WITH the node: prefix
+    + 'require("semver");'
+  );
+  try {
+    assert.deepStrictEqual([...scanBareSpecifiers(file)], ['semver']);
+  } finally { fs.rmSync(path.dirname(file), { recursive: true, force: true }); }
+});
+
+test('scanBareSpecifiers: collapses subpath specifiers to the package name (scoped and unscoped)', () => {
+  const file = fakeSrcFile(
+    'require("@modelcontextprotocol/sdk/server/index.js");'
+    + 'require("ajv/dist/runtime/uri");'
+  );
+  try {
+    assert.deepStrictEqual([...scanBareSpecifiers(file)].sort(), ['@modelcontextprotocol/sdk', 'ajv']);
+  } finally { fs.rmSync(path.dirname(file), { recursive: true, force: true }); }
+});
+
+test('scanBareSpecifiers: never scans declarative ESM `from \'...\'` (proven noise on the real bundle — see seed-drift-report.md)', () => {
+  // If this regex were included, embedded doc/skill text ("import {x} from 'y'"
+  // shown to the model) would produce false positives — including specifiers
+  // that are not even valid package names, like `from 'now'` inside a comment
+  // on the real bundle. Confirm the scanner does not have this failure mode.
+  const file = fakeSrcFile("import { build } from 'esbuild';\nimport { z } from 'zod';\n");
+  try {
+    assert.deepStrictEqual([...scanBareSpecifiers(file)], []);
+  } finally { fs.rmSync(path.dirname(file), { recursive: true, force: true }); }
+});
+
+test('isBuiltinSpecifier / specifierPackageName: unit sanity', () => {
+  assert.ok(isBuiltinSpecifier('fs'));
+  assert.ok(isBuiltinSpecifier('node:sqlite'));
+  assert.ok(!isBuiltinSpecifier('sqlite')); // bare form does NOT resolve — must check both directions
+  assert.ok(!isBuiltinSpecifier('semver'));
+  assert.strictEqual(specifierPackageName('@scope/name/sub/path'), '@scope/name');
+  assert.strictEqual(specifierPackageName('pkg/sub/path'), 'pkg');
+  assert.strictEqual(specifierPackageName('bun:ffi'), 'bun:ffi');
+});
+
+test('shimProvidedModules: reflects libexec/bun-shim.cjs\'s own __bunBuiltins/__hostModules (bun:ffi, bun:sqlite, undici)', () => {
+  const provided = shimProvidedModules(LIBEXEC);
+  assert.ok(provided.has('bun:ffi'), [...provided].join(', '));
+  assert.ok(provided.has('bun:sqlite'), [...provided].join(', '));
+  assert.ok(provided.has('undici'), [...provided].join(', '));
+  // bun:jsc is genuinely NOT shim-provided (it lives in KNOWN_UNREACHABLE
+  // instead, justified by the try/catch around its one call site) — a
+  // regression here would silently widen what "provided" means.
+  assert.ok(!provided.has('bun:jsc'));
+});
+
+test('GATE: an unknown bare specifier fails the build loud, naming the package and the fix', () => {
+  const file = fakeSrcFile('require("totally-unlisted-package");');
+  try {
+    assert.throws(
+      () => assertNoUnknownBareSpecifiers([file], ['semver'], LIBEXEC),
+      /'totally-unlisted-package'.*deps\/claude\/package\.json.*KNOWN_UNREACHABLE/s,
+    );
+  } finally { fs.rmSync(path.dirname(file), { recursive: true, force: true }); }
+});
+
+test('GATE: a bundle referencing only closure packages + builtins passes clean', () => {
+  const file = fakeSrcFile('require("semver");require("fs");require("./local");');
+  try {
+    assert.doesNotThrow(() => assertNoUnknownBareSpecifiers([file], ['semver'], LIBEXEC));
+  } finally { fs.rmSync(path.dirname(file), { recursive: true, force: true }); }
+});
+
+test('GATE: the KNOWN_UNREACHABLE allowlist is honored (a listed specifier does not fail the build)', () => {
+  const file = fakeSrcFile('require("ajv/dist/runtime/uri");');
+  try {
+    assert.doesNotThrow(() => assertNoUnknownBareSpecifiers([file], [], LIBEXEC));
+  } finally { fs.rmSync(path.dirname(file), { recursive: true, force: true }); }
+});
+
+test('GATE: shim-provided modules (bun:ffi, undici, ...) do not fail the build even though they are not in the closure', () => {
+  const file = fakeSrcFile('require("bun:ffi");x=await import("bun:ffi");require("undici");');
+  try {
+    assert.doesNotThrow(() => assertNoUnknownBareSpecifiers([file], [], LIBEXEC));
+  } finally { fs.rmSync(path.dirname(file), { recursive: true, force: true }); }
+});
+
+test('GATE: a missing file (e.g. bun-shim.cjs not staged) is skipped, not a crash', () => {
+  assert.doesNotThrow(() => assertNoUnknownBareSpecifiers(['/nonexistent/cli.cjs'], ['semver'], LIBEXEC));
+});
+
+test('KNOWN_UNREACHABLE is a decision record, not a dumping ground: every entry has a concrete, non-empty reason', () => {
+  for (const [name, reason] of Object.entries(KNOWN_UNREACHABLE)) {
+    assert.strictEqual(typeof reason, 'string', `'${name}' entry must be a string reason`);
+    assert.ok(reason.trim().length > 20, `'${name}' entry's reason is too short to be a real justification: ${JSON.stringify(reason)}`);
+  }
+});
+
+test('GATE (integration): the REAL extracted cli.cjs + bun-shim.cjs, scanned against the REAL closure, passes today', (t) => {
+  // The acceptance test for the whole gate: stage the real upstream bundle
+  // (test/oracle-models.cjs's stageCli — same layout `clode build` produces:
+  // cli.cjs beside bun-shim.cjs) and run the SAME check clode-fuse.cjs runs at
+  // build time, with the SAME real closure. A regression here means either a
+  // real gap re-opened, or the gate itself would break a real build — the
+  // thing the brief calls the acceptance test. Skips (does not fail) when no
+  // Bun-packaged provider is available, matching every other provider-gated
+  // test in this suite (test/e2e-assets.test.cjs, scripts/apicheck.mjs).
+  const { stageProviderCli } = require('./oracle-models.cjs');
+  const staged = stageProviderCli({ env: process.env });
+  if (!staged) { t.skip('no Bun-packaged CC provider'); return; }
+  const direct = readDirectDeps(path.join(REPO, 'deps', 'claude', 'package.json'));
+  const closure = computeDepClosure(NM, direct);
+  assert.doesNotThrow(() => assertNoUnknownBareSpecifiers(
+    [staged.cli, path.join(staged.dir, 'bun-shim.cjs')], closure, LIBEXEC));
 });
