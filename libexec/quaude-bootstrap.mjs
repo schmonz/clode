@@ -190,12 +190,41 @@ async function main() {
     // from the trailer being executed and compare against the index.
     if (quaude.includes('--quaude-attest')) {
       console.log(dec.decode(files.get('manifest.json')).replace(/\n$/, ''));
+      // ---- TEMPORARY PROBE (haiku attest, 2026-07-17) — REVERT BEFORE MERGE ----
+      // On haiku-x64 attest prints the manifest and then NOTHING (zero `ok` lines,
+      // no verdict), yet exits 0. Green at ccd89c2 (12-package closure), broken
+      // since 9e968b4 (18). These four probes separate the surviving hypotheses:
+      //   A prints  -> output works; execution really stopped later (kills "tjs.exit
+      //                dropped the writes")
+      //   A missing -> everything after the FIRST write is lost -> output problem
+      //   B prints, C does not -> the first digest never settles (crypto.subtle
+      //                hangs) or dies; exit 0 then comes from the event loop
+      //                draining, not from tjs.exit
+      //   ERR prints -> something is throwing and being swallowed
+      // files.size + the byte counts test the memory/size hypothesis the bisect
+      // points at (the only artifact change at 9e968b4 was +6 embedded packages).
+      let probeBytes = 0;
+      for (const [, v] of files) probeBytes += (v && v.length) || 0;
+      console.log(`PROBE-A past-manifest members=${index.members.length} files=${files.size} bytes=${probeBytes}`);
       let ok = true;
-      for (const m of index.members) {
-        const got = await sha256hex(files.get(m.name));
-        if (got !== m.sha256) ok = false;
-        console.log(`${got === m.sha256 ? 'ok  ' : 'FAIL'} ${m.name} (${m.len} bytes)`);
+      try {
+        let probeI = 0;
+        for (const m of index.members) {
+          const probeData = files.get(m.name);
+          if (probeI < 3) {
+            console.log(`PROBE-B[${probeI}] member=${m.name} len=${m.len} data=${probeData ? probeData.length : 'MISSING'}`);
+          }
+          const got = await sha256hex(probeData);
+          if (probeI < 3) console.log(`PROBE-C[${probeI}] digested=${m.name} sha=${got.slice(0, 8)}`);
+          probeI++;
+          if (got !== m.sha256) ok = false;
+          console.log(`${got === m.sha256 ? 'ok  ' : 'FAIL'} ${m.name} (${m.len} bytes)`);
+        }
+      } catch (e) {
+        console.log(`PROBE-ERR ${(e && e.name) || '?'}: ${(e && e.message) || e}`);
+        tjs.exit(3);
       }
+      // ---- END TEMPORARY PROBE ----
       // SET verification (Task a, stretch goal): the per-member loop above
       // only proves that whatever IS in the archive is intact — it says
       // nothing about a whole declared package being silently ABSENT.
