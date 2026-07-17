@@ -352,7 +352,14 @@ jobs:
       # first boot ("sea.getRawAsset is not a function") stayed green.
       - name: full-binary oracle — real naude vs real quaude
         env:
-          CLODE_TJS: ${{ runner.temp }}/tjs
+          # /tjs/tjs, not /tjs: download-artifact unpacks INTO ${{ runner.temp }}/tjs,
+          # so that dir is the artifact, and the engine is the file inside it. Pointing
+          # CLODE_TJS at the DIRECTORY made `clode build` read it as the template —
+          # "EISDIR: illegal operation on a directory, read". Wrong since this step was
+          # written, and invisible twice over: the job used to die at an earlier step
+          # (the drifted autoupdater anchor), and then skipped entirely once a hard leg
+          # failed. The two steps above always had it right.
+          CLODE_TJS: ${{ runner.temp }}/tjs/tjs
           CLODE_ORACLE_BINARIES: '1'
         run: |
           set -euo pipefail
