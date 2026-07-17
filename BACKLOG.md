@@ -44,13 +44,19 @@ well-tested, and reasonably fast** as we can possibly make it." Sequencing:
 - **REGRESSION: `--quaude-attest` on Haiku exits 0 after printing only the manifest —
   so `clode build` is BROKEN on Haiku at HEAD** (leg `haiku-x64`, run 29570793188,
   2026-07-17). The leg is `soft-fail: true`, so CI never said a word.
-  **It bisects to `9e968b4`** (job conclusions: 14c1a2b success, ccd89c2 success,
-  9e968b4 FAIL, fad3d26 FAIL, 3c6fd7f FAIL). The two middle runs are red for a
-  DIFFERENT reason — the dep-closure `-e` P0 killed every leg there — so the attest
-  failure only became visible once that was fixed. The prime suspect is therefore
-  9e968b4's other change: **the closure grew 12 -> 18 packages** (node-fetch + 5
-  transitive), which means more members embedded and more members for attest to
-  digest. That is the lead to chase first; it is correlation, not yet proof.
+  **Suspect range: `ccd89c2..3c6fd7f` — NOT "bisects to 9e968b4"** (an earlier version
+  of this entry said that; it was wrong). Job conclusions: 14c1a2b success, ccd89c2
+  success, 9e968b4 FAIL, fad3d26 FAIL, 3c6fd7f FAIL. But the two middle runs died at
+  the dep-closure `-e` P0, which killed EVERY leg — not at attest. The attest failure
+  first appears in the run where haiku finally got PAST that gate (3c6fd7f). So "haiku
+  went red at 9e968b4" and "attest broke at 9e968b4" are different claims, and only
+  the first is evidenced.
+  Suspects, therefore: 9e968b4's closure growth (12 -> 18 packages, so more members to
+  digest) AND the three commits that fixed the P0 (c409ffb/a97398d/3c6fd7f — the last
+  of which edits `bun-shim.cjs`, a quaude MEMBER).
+  The size hypothesis looks WEAK on measurement: the darwin baseline is 521 members /
+  37,425,709 bytes held, with `cli.qbc` alone at 26,693,716 — the six added packages
+  are roughly 1MB of that, which should tip nothing over.
   **Shipping impact:** v0.1.3 was cut BEFORE 9e968b4, so the published Haiku binary
   predates the growth and is fine. A Haiku user on HEAD cannot build a quaude.
   Evidence from the log: `clode: build: ATTEST FAILED (exit 0)` followed by the
