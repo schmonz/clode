@@ -564,8 +564,25 @@ function run(cmd, args, opts = {}) {
     let stdout = '', stderr = '';
     let timedOut = false;
     const timeoutMs = opts.timeout || 120000;
-    child.stdout.on('data', (d) => { stdout += d; });
-    child.stderr.on('data', (d) => { stderr += d; });
+    // ---- TEMPORARY PROBE round 3 (haiku attest) — DO NOT MERGE ----
+    // haiku's attest wedges after exactly 65,536 bytes of an 85,696-byte manifest.
+    // That number is AMBIGUOUS: it is both "what the pipe buffer holds" (parent never
+    // drained -> child blocked) and "what uv_try_write writes inline" (parent drained
+    // fine, but the child's queued async uv_write never fired). Same byte count, two
+    // different bugs, in two different processes.
+    // TIMING separates them. This logs when the PARENT sees bytes:
+    //   64KB at t~0, then silence to the kill -> the parent DRAINED; the CHILD's async
+    //     write is broken (tjs mod_streams / libuv-Haiku)
+    //   nothing until t~1200s -> the parent never drained; the READER is broken (our
+    //     node-shim child_process, running under clode-native)
+    // Local darwin control: a 200KB child stdout drains fully under tjs+node-shim
+    // (204800 bytes, 4 chunks) — so whatever this is, it is Haiku-only.
+    const t0 = Date.now();
+    const plog = (m) => { try { process.stderr.write(`PROBE-PARENT +${((Date.now() - t0) / 1000).toFixed(1)}s ${m}\n`); } catch { /* */ } };
+    plog(`spawned ${cmd} timeout=${timeoutMs}ms`);
+    child.stdout.on('data', (d) => { stdout += d; plog(`stdout +${d.length} (total ${stdout.length})`); });
+    child.stderr.on('data', (d) => { stderr += d; plog(`stderr +${d.length}`); });
+    // ---- END TEMPORARY PROBE ----
     const to = setTimeout(() => { timedOut = true; try { child.kill('SIGKILL'); } catch { /* */ } }, timeoutMs);
     child.on('exit', (status, signal) => {
       clearTimeout(to);
@@ -1105,7 +1122,14 @@ async function clodeBuild(args, opts) {
 
     // -- smoke 2: attest must verify every member from the trailer just written
     // (quaude-only — naude has no manifest/trailer to attest).
-    const attest = await spawnRun(out, ['--quaude-attest'], { env, cwd: work, timeout: 120000 * SCALE });
+    // ---- TEMPORARY PROBE round 3 (haiku) — DO NOT MERGE ----
+    // 120000*SCALE is 1200s on a VM leg (CLODE_TIMEOUT_SCALE=10), so every haiku
+    // iteration spends 20 minutes waiting to rediscover a hang that happens
+    // instantly — attest wedges on its FIRST write. 45s is far more than a healthy
+    // attest needs even under TCG (the darwin control finishes it in ~2s; the whole
+    // point of SCALE is the bytecode COMPILE, which is a different spawn and keeps
+    // its scale). This is probe-cycle economics only: main keeps 120000*SCALE.
+    const attest = await spawnRun(out, ['--quaude-attest'], { env, cwd: work, timeout: 45000 });
     if (attest.status !== 0 || !/quaude-attest: all members verified/.test(attest.stdout)) {
       stderr.write(`clode: build: ATTEST FAILED (${describeExit(attest)}):\n${attest.stdout}\n${attest.stderr}\n`);
       return 1;
