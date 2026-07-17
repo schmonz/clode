@@ -8,8 +8,9 @@
 //      an accidental drop is a release regression, not a refactor).
 //   2. ci tier covers every OS (guest-platform ∪ native) the release tier
 //      builds, exactly one leg per OS.
-//   3. ci never publishes/attests, and every ci VM leg is soft-fail (house
-//      rule: new-to-CI legs earn hard status).
+//   3. ci never publishes/attests, and a ci VM leg is soft-fail ONLY if we do not
+//      ship it (house rule: new-to-CI legs earn hard status — but shipping IS the
+//      earning, so if we publish it, CI gates it).
 //   4. a ci leg's engine config (static/wasm/mimalloc/ffi/guest-version/
 //      guest-packages) is byte-identical to its release sibling — CI must
 //      smoke what the release will ship, not a variant.
@@ -99,15 +100,36 @@ test('ci tier: every release OS is exercised, exactly one leg per VM OS', () => 
   }
 });
 
-test('ci tier: never publishes, VM legs are soft-fail', () => {
+// IF WE PUBLISH IT, CI GATES IT (user, 2026-07-17). The house rule — new-to-CI VM
+// legs run soft-fail until they earn hard status — is right for a leg being
+// bootstrapped and wrong for one we ship: shipping IS the earning. This used to
+// soft-fail every VM leg regardless, so ten shipped platforms could regress on main
+// in silence and only bite at release, where the same leg is hard. haiku-x64 did
+// exactly that at 9e968b4 and CI shrugged for three commits.
+//
+// Both directions are asserted, because both failures are real: a shipped leg that
+// goes soft hides regressions, and an unshipped experiment that goes hard blocks
+// merges on a platform nobody gets. `publish` is stripped from the ci tier, so the
+// release tier is the authority on what we ship.
+test('ci tier: never publishes; VM legs are soft-fail UNLESS we ship that leg', () => {
   const ci = legsFor('ci');
+  const shipped = new Set(legsFor('release').filter((l) => l.publish).map((l) => l.leg));
+  let gated = 0;
   for (const l of ci) {
     assert.ok(!l.publish, `${l.leg}: ci must not publish`);
     const gp = l['guest-platform'];
-    if (gp && gp !== 'native' && gp !== 'alpine') {
+    if (!gp || gp === 'native' || gp === 'alpine') continue;   // not a VM leg
+    if (shipped.has(l.leg)) {
+      assert.ok(!l['soft-fail'],
+        `${l.leg}: we SHIP this leg, so CI must GATE it — a regression here must not `
+        + 'land silently and ambush the release, where this same leg is hard. Stop '
+        + 'shipping it (drop publish) rather than softening its gate.');
+      gated++;
+    } else {
       assert.strictEqual(l['soft-fail'], true, `${l.leg}: new-to-CI VM legs start soft-fail`);
     }
   }
+  assert.ok(gated > 0, 'no shipped VM leg gates CI — the invariant is not being exercised');
 });
 
 test('ci legs match their release siblings byte-for-byte on engine config', () => {
@@ -268,13 +290,17 @@ test('netbsd-sparc leg: own-qemu cross-fuse, floored at 10.1, VM leg', () => {
   assert.strictEqual(ns['guest-version'], '10.1',
     "netbsd-sparc must pin guest-version:'10.1' or the image asset names default to alpine 3.22");
   assert.strictEqual(ns.publish, true);
-  // On the RELEASE tier a publisher is NOT soft-fail (deterministic contents —
-  // see the determinism test below). On CI it IS soft-fail (VM house rule).
+  // Not soft-fail on EITHER tier now: release strips it from publishers
+  // (deterministic contents — see the determinism test below), and as of
+  // 2026-07-17 so does ci — if we ship it, CI gates it. This leg used to be soft
+  // on ci under the VM house rule, which is how a shipped platform could regress
+  // on main unheard (haiku-x64 did, at 9e968b4).
   assert.strictEqual(ns['soft-fail'], undefined, 'release publishers must not be soft-fail');
   assert.ok(ns['guest-platform'] && !['native', 'alpine'].includes(ns['guest-platform']),
     'netbsd-sparc must be recognized as a VM leg (own-qemu backend)');
   const ci = legsFor('ci').find((l) => l.leg === 'netbsd-sparc');
-  assert.strictEqual(ci['soft-fail'], true, 'on CI, netbsd-sparc is soft-fail (VM house rule)');
+  assert.strictEqual(ci['soft-fail'], undefined,
+    'netbsd-sparc publishes, so CI must gate it — a VM leg we ship has earned hard status');
 });
 
 test('release tier: publishing legs are NOT soft-fail (deterministic contents)', () => {
@@ -373,12 +399,24 @@ test('netbsd-sparc64 fleet leg: generic toolchain, 64-bit BE, tier-2 built-not-r
   assert.notStrictEqual(l['netbsd-src'], undefined);
 });
 
-test('NetBSD build.sh cross legs (m68k, sparc64) run per-push in CI, soft-fail', () => {
+// Both run per-push for early warning on the build.sh cross path; they differ on
+// whether they GATE, and the discriminator is shipping, not the build path:
+// netbsd-m68k publishes (so CI gates it — 2026-07-17), netbsd-sparc64 does not yet
+// (so it stays non-blocking under the VM house rule). "build.sh cross is
+// non-blocking" was the old reason m68k was soft; shipping an artifact overrides it.
+test('NetBSD build.sh cross legs (m68k, sparc64) run per-push in CI; the shipped one gates', () => {
   const ci = legsFor('ci');
+  const shipped = new Set(legsFor('release').filter((x) => x.publish).map((x) => x.leg));
   for (const name of ['netbsd-m68k', 'netbsd-sparc64']) {
     const l = ci.find((x) => x.leg === name);
     assert.ok(l, `${name} must be in the ci tier (early warning on the cross path)`);
-    assert.strictEqual(l['soft-fail'], true, `${name} in ci must be soft-fail (build.sh cross is non-blocking)`);
+    if (shipped.has(name)) {
+      assert.strictEqual(l['soft-fail'], undefined,
+        `${name} publishes, so CI must gate it (if we ship it, CI gates it)`);
+    } else {
+      assert.strictEqual(l['soft-fail'], true,
+        `${name} ships nothing yet, so it must stay non-blocking in CI`);
+    }
     assert.ok(l['netbsd-src'], `${name} must route through build.sh (netbsd-src)`);
   }
 });

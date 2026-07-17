@@ -464,7 +464,28 @@ export function legsFor(tier) {
       'macos-min': _mm, 'macos-sdk': _ms, 'macos-arch': _ma, 'cross-image': _ci, ...leg }) => {
       if (ciOs) leg.os = ciOs;                          // ci rides the newest runner/guest
       if (ciVer) leg['guest-version'] = ciVer;
-      if (VM(leg)) leg['soft-fail'] = true;  // house rule: new-to-CI VM legs earn hard status
+      // House rule: new-to-CI VM legs earn hard status. But a leg we SHIP has
+      // already earned it — IF WE PUBLISH IT, CI GATES IT (user, 2026-07-17).
+      // This used to soft-fail every VM leg regardless of publish, so ten shipped
+      // platforms (netbsd/freebsd/openbsd/dragonfly/omnios/solaris/midnightbsd/
+      // haiku/netbsd-sparc/netbsd-m68k) could regress on main in total silence and
+      // only bite at release, where the SAME leg is hard (the release tier strips
+      // soft-fail from publishers — see its comment above; this is that doctrine,
+      // applied one tier earlier). That is not hypothetical: haiku-x64 broke at
+      // 9e968b4 and CI shrugged for three commits (BACKLOG "Known shipped-artifact
+      // bugs"). A silent regression is indistinguishable from working code.
+      // The cost is real and accepted: a qemu/cpa infra flake on a shipped leg now
+      // reddens CI. That is the cheaper failure — rerun a flake; you cannot rerun
+      // a regression you were never told about. Demote a chronically-flaky
+      // publisher by dropping `publish` (an explicit decision to stop shipping it),
+      // never by quietly softening its gate.
+      // DELETE, not just "don't add": four publishers (midnightbsd, haiku,
+      // netbsd-sparc, netbsd-m68k) carry an explicit `soft-fail: true` in their
+      // LEGS entry from when they were new, so merely skipping the VM default
+      // would leave them soft. Same shape as the release tier's
+      // `if (leg.publish) delete leg['soft-fail']`.
+      if (publish) delete leg['soft-fail'];
+      else if (VM(leg)) leg['soft-fail'] = true;
       return leg;
     });
   }
