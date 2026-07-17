@@ -7,8 +7,15 @@ for iterating [[haiku-tjs-write-deadlock]] without 22-min CI round trips.
 1. Image (once, LOCAL disk — never the NFS repo):
    `curl -sL -o /private/tmp/haiku-vm/haiku-r1beta5.qcow2 \
       https://github.com/cross-platform-actions/haiku-builder/releases/download/v0.1.0/haiku-r1beta5-x86-64.qcow2`
-2. Boot: `spike/quickjs/qemu/haiku-box.sh` (backgrounded). TCG (no accel on arm64
+2. Boot **fully detached** so a harness/session task-cleanup can't kill the VM out
+   from under a long build:
+   `cd /private/tmp/haiku-vm && nohup bash <repo>/spike/quickjs/qemu/haiku-box.sh > qemu.log 2>&1 </dev/null & disown`
+   (macOS has no `setsid`; nohup + disown orphans qemu to launchd, ppid 1). Do NOT
+   launch it as a tracked background task — those get reaped. TCG (no accel on arm64
    mac for an x86 guest) — ~3 min to desktop.
+   **If the VM dies mid-build, it's cheap:** the qcow2 is PERSISTENT (no snapshot),
+   so installed packages, the txiki tree, and every built .o survive. Reboot, redo
+   steps 3-4, and `cmake --build` resumes from the objects already on disk.
 3. **sshd does NOT auto-start** (the cpa image only sets up ssh for its build-time
    provisioning). Open a Terminal via the GUI, driven over the qemu monitor with
    `haiku-hmon.py` (screenshot/click/type; QMP for ABSOLUTE clicks — HMP mouse_move
