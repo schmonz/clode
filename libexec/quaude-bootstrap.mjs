@@ -190,38 +190,45 @@ async function main() {
     // from the trailer being executed and compare against the index.
     if (quaude.includes('--quaude-attest')) {
       console.log(dec.decode(files.get('manifest.json')).replace(/\n$/, ''));
-      // ---- TEMPORARY PROBE (haiku attest, 2026-07-17) — REVERT BEFORE MERGE ----
-      // On haiku-x64 attest prints the manifest and then NOTHING (zero `ok` lines,
-      // no verdict), yet exits 0. Green at ccd89c2 (12-package closure), broken
-      // since 9e968b4 (18). These four probes separate the surviving hypotheses:
-      //   A prints  -> output works; execution really stopped later (kills "tjs.exit
-      //                dropped the writes")
-      //   A missing -> everything after the FIRST write is lost -> output problem
-      //   B prints, C does not -> the first digest never settles (crypto.subtle
-      //                hangs) or dies; exit 0 then comes from the event loop
-      //                draining, not from tjs.exit
-      //   ERR prints -> something is throwing and being swallowed
-      // files.size + the byte counts test the memory/size hypothesis the bisect
-      // points at (the only artifact change at 9e968b4 was +6 embedded packages).
+      // ---- TEMPORARY PROBE round 2 (haiku attest, 2026-07-17) — DO NOT MERGE ----
+      // Round 1 measured the failure exactly: haiku emits 65,536 of the manifest's
+      // 85,696 bytes and stops. 65536 = the pipe buffer. Upstream tjs_stream_write
+      // writes inline via uv_try_write and, on a SHORT write, queues the remainder as
+      // an async uv_write — a path our output had never taken, because everything we
+      // print used to fit inline (the 12-package manifest was 64,040 bytes: 1,496
+      // under the line; 9e968b4's +126 members pushed it to 85,696).
+      //
+      // Two stories still fit, and round 1 could not separate them because it printed
+      // to the SAME stdout that is stuck:
+      //   (A) the script runs fine, digests everything, and tjs.exit(0) discards the
+      //       ~21KB of queued stdout — attest actually PASSED and we never saw it say
+      //       so. (I wrongly killed this earlier as "size-independent": the queue only
+      //       FORMS above 64KB, so it is exactly size-dependent.)
+      //   (B) the script really stalls at the first await.
+      // So print to STDERR — a different pipe, not backpressured by stdout's pending
+      // write (clode-fuse.cjs:1082 prints attest.stderr, so it reaches the log).
+      // A/B/C appearing => (A), an output-loss bug, not a stall. PROBE-Z says whether
+      // attest reached its verdict, and with what ok.
       let probeBytes = 0;
       for (const [, v] of files) probeBytes += (v && v.length) || 0;
-      console.log(`PROBE-A past-manifest members=${index.members.length} files=${files.size} bytes=${probeBytes}`);
+      console.error(`PROBE-A past-manifest members=${index.members.length} files=${files.size} bytes=${probeBytes} manifestBytes=${files.get('manifest.json').length}`);
       let ok = true;
       try {
         let probeI = 0;
         for (const m of index.members) {
           const probeData = files.get(m.name);
           if (probeI < 3) {
-            console.log(`PROBE-B[${probeI}] member=${m.name} len=${m.len} data=${probeData ? probeData.length : 'MISSING'}`);
+            console.error(`PROBE-B[${probeI}] member=${m.name} len=${m.len} data=${probeData ? probeData.length : 'MISSING'}`);
           }
           const got = await sha256hex(probeData);
-          if (probeI < 3) console.log(`PROBE-C[${probeI}] digested=${m.name} sha=${got.slice(0, 8)}`);
+          if (probeI < 3) console.error(`PROBE-C[${probeI}] digested=${m.name} sha=${got.slice(0, 8)}`);
           probeI++;
           if (got !== m.sha256) ok = false;
           console.log(`${got === m.sha256 ? 'ok  ' : 'FAIL'} ${m.name} (${m.len} bytes)`);
         }
+        console.error(`PROBE-Z loop-complete verified=${probeI}/${index.members.length} ok=${ok}`);
       } catch (e) {
-        console.log(`PROBE-ERR ${(e && e.name) || '?'}: ${(e && e.message) || e}`);
+        console.error(`PROBE-ERR ${(e && e.name) || '?'}: ${(e && e.message) || e}`);
         tjs.exit(3);
       }
       // ---- END TEMPORARY PROBE ----
