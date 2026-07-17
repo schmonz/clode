@@ -730,6 +730,16 @@ runs:
           # openbsd exit-127 hunt, dispatch #9 — template bytes verified
           # perfect, exec still fails under the builder only).
           .matrix/tjs-out/tjs eval 'tjs.spawn(["/bin/sh","-c","echo tjs-spawn-probe-ok"]).wait().then(function(r){console.log("tjs-spawn-exit:",JSON.stringify(r))})'
+          # Bare-engine READ-DRAIN probe, same spirit as the spawn probe above:
+          # separates "this OS's tjs cannot drain a pipe" from "something about
+          # the builder's use of it". A child writing 200KB (>> the 64KB pipe
+          # buffer) can only finish if the parent drains WHILE it runs. On
+          # haiku-x64 it does not: the reader delivers nothing until EOF, so any
+          # child writing more than a bufferful deadlocks — which is what wedged
+          # --quaude-attest once its manifest crossed 64KB (2026-07-17). Bounded
+          # (20s) and `|| true`: this reports, it never fails a leg. Darwin
+          # control: OK bytes=204800 firstAt=20ms totalMs=23.
+          .matrix/tjs-out/tjs eval 'var t0=Date.now(),n=0,first=-1,fin=false;var p=tjs.spawn(["/bin/sh","-c","dd if=/dev/zero bs=1024 count=200 2>/dev/null"],{stdout:"pipe"});var rd=p.stdout.getReader();setTimeout(function(){if(!fin){console.log("tjs-read-probe: STALLED bytes="+n+" firstAt="+first+" -- pipe read does not drain mid-run; any child writing >64KB deadlocks");tjs.exit(0);}},20000);(async function(){for(;;){var r=await rd.read();if(r.done)break;if(first<0)first=Date.now()-t0;n+=r.value.length;}fin=true;console.log("tjs-read-probe: OK bytes="+n+" firstAt="+first+"ms totalMs="+(Date.now()-t0));tjs.exit(0);})();' || true
           # So any build/<artifact-name>/ this invocation touches matches the
           # SHIPPED name (floor included), not the guest's own honest,
           # floor-less OS version — see scripts/platform-tag.cjs's artifactDir.
