@@ -363,6 +363,41 @@ function resolveClaudeNmDir({ libexec, here, verbose, env, ROOT }) {
   return nmDir;
 }
 
+// Land the user's upstream Claude Code bundle on disk, extracted and ready to
+// fuse (quaude) or bake into a SEA (naude). BOTH `clode build` targets need the
+// identical five-step sequence — resolve the binary, follow a wrapper, key a
+// cache dir by its identity, extract if that dir is cold — and they ran it
+// twice, in parallel copies, for long enough that the naude copy grew a comment
+// claiming it reused the quaude one ("no duplication"). It did not.
+//
+// `prefix` names the failing target ('build' / 'build --naude') so the caller's
+// errors still say WHICH build died — the only real difference between the two
+// former copies. `libexec` is a parameter rather than a closure read because the
+// quaude caller may hand us the MATERIALIZED libexec (a fused builder unpacks
+// its VFS to a temp dir and rebinds it), while naude always passes the on-disk
+// one. Errors come back as { error } for the caller to route through its own
+// fail() — this helper never writes to stderr or picks an exit code.
+function stageUpstreamCli({ env, libexec, verbose, prefix, log }) {
+  let bin = resolve.resolveClaudeBin({ env });
+  if (bin == null || !resolve.pathExists(bin)) {
+    return {
+      error: bin == null
+        ? `${prefix}: no Claude Code binary found — run 'clode fetch [channel|version]' to fetch one, or install the provider package, or set CLODE_CLAUDE_BIN`
+        : `${prefix}: claude binary not found at '${bin}'`,
+    };
+  }
+  bin = resolve.followWrapper(bin);
+  const key = resolve.cacheKey(bin);
+  const stageDir = path.join(clodeCacheDir(env), key);
+  if (log) log(`clode: ${prefix}: staging bundle ${key} ...`);
+  try {
+    extract.extractIfNeeded({ bin, cacheDir: stageDir, libexec, verbose, key });
+  } catch (e) {
+    return { error: `${prefix}: extraction failed: ${(e && e.message) || e}` };
+  }
+  return { stageDir, key, cliPath: path.join(stageDir, 'cli.cjs') };
+}
+
 // A minimal in-process stand-in for the Anthropic Messages API, answering every
 // POST .../messages with the canonical streaming-SSE single-turn "PONG". A
 // product-side mirror of test/mock-anthropic-helper.cjs (which is not shipped);
@@ -568,23 +603,13 @@ async function clodeBuild(args, opts) {
     }
     const ROOT = path.resolve(opts.libexec, '..');
     const outArgs = out ? ['--out', out] : [];
-    // Reuse the quaude path's resolve/extract helpers verbatim — no duplication.
-    let bin = resolve.resolveClaudeBin({ env });
-    if (bin == null || !resolve.pathExists(bin)) {
-      return fail(bin == null
-        ? "build --naude: no Claude Code binary found — run 'clode fetch [channel|version]' to fetch one, or install the provider package, or set CLODE_CLAUDE_BIN"
-        : `build --naude: claude binary not found at '${bin}'`);
-    }
-    bin = resolve.followWrapper(bin);
-    const key = resolve.cacheKey(bin);
-    const stageDir = path.join(clodeCacheDir(env), key);
-    clodeLog(`clode: build --naude: staging bundle ${key} ...`);
-    try {
-      extract.extractIfNeeded({ bin, cacheDir: stageDir, libexec: opts.libexec, verbose, key });
-    } catch (e) {
-      return fail(`build --naude: extraction failed: ${(e && e.message) || e}`);
-    }
-    const cliPath = path.join(stageDir, 'cli.cjs');
+    // The same resolve+extract the quaude path runs (stageUpstreamCli) — shared
+    // for real now, prefix-parameterized so the errors still name this target.
+    const staged = stageUpstreamCli({
+      env, libexec: opts.libexec, verbose, prefix: 'build --naude', log: clodeLog,
+    });
+    if (staged.error) return fail(staged.error);
+    const { stageDir, cliPath } = staged;
 
     // -- dep-closure DRIFT gate (see the full rationale on assertNoUnknownBareSpecifiers,
     // above): naude embeds the same Claude Code bundle and the same ext-dep
@@ -823,22 +848,13 @@ async function clodeBuild(args, opts) {
       fs.copyFileSync(bundle, path.join(stageDir, 'clode-main.bundle.cjs'));
       clodeLog(`clode: build: staging builder bundle ${bundle} ...`);
     } else {
-      // Upstream bundle: resolve + extract + hook via the existing machinery.
-      let bin = resolve.resolveClaudeBin({ env });
-      if (bin == null || !resolve.pathExists(bin)) {
-        return fail(bin == null
-          ? "build: no Claude Code binary found — run 'clode fetch [channel|version]' to fetch one, or install the provider package, or set CLODE_CLAUDE_BIN"
-          : `build: claude binary not found at '${bin}'`);
-      }
-      bin = resolve.followWrapper(bin);
-      key = resolve.cacheKey(bin);
-      stageDir = path.join(clodeCacheDir(env), key);
-      clodeLog(`clode: build: staging bundle ${key} ...`);
-      try {
-        extract.extractIfNeeded({ bin, cacheDir: stageDir, libexec, verbose, key });
-      } catch (e) {
-        return fail(`build: extraction failed: ${(e && e.message) || e}`);
-      }
+      // Upstream bundle: resolve + extract + hook via the existing machinery —
+      // `libexec` here is the possibly-materialized one (a fused builder rebinds
+      // it above), which is why stageUpstreamCli takes it as an argument.
+      const staged = stageUpstreamCli({ env, libexec, verbose, prefix: 'build', log: clodeLog });
+      if (staged.error) return fail(staged.error);
+      key = staged.key;
+      stageDir = staged.stageDir;
     }
 
     // -- ext-dep closure (both roles: quaude requires them at runtime; the

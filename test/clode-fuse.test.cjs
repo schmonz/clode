@@ -78,6 +78,27 @@ test('clode build: a valid build still fires the watch trigger', () => {
     'a valid build must still fire the watch trigger — do not regress the feature');
 });
 
+// The naude branch resolves + extracts the upstream cli.cjs through the SAME
+// helper as the quaude branch (stageUpstreamCli), differing only in the error
+// prefix it injects. This pins that prefix: a shared helper must not flatten
+// `build --naude:` into a bare `build:` — the user has to learn WHICH build
+// failed. Paired with the `clode build:` case above; together they are the
+// regression guard for the extraction.
+test('clode build --naude: no binary fails loudly, prefixed for the naude target', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-naude-nobin-'));
+  const r = runEntry(['build', '--naude'], {
+    HOME: home,
+    CLODE_STATE_ROOT: home,
+    CLODE_CLAUDE_BIN: '',
+    CLODE_VERSION_DIR: '',
+    PATH: '/nonexistent',
+    CLODE_OFFLINE: '1',
+  });
+  assert.strictEqual(r.status, 1);
+  assert.match(r.stderr, /build --naude: no Claude Code binary found/);
+  assert.match(r.stderr, /clode fetch/);
+});
+
 test('clode build --self: missing esbuilt bundle fails loudly and names the fix', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-self-'));
   const fakeTjs = path.join(home, 'tjs');
