@@ -34,6 +34,16 @@ jobs:
   # a shim/Bash-tool regression — what the leg's end-to-end PONG cannot.
   windows-x64-tests:
     needs: tjs
+    # Run once `tjs` FINISHES, whatever its conclusion — do NOT skip because some
+    # OTHER leg failed. This job consumes ONE named artifact; a leg it does not use
+    # has no bearing on whether it can run. Plain `needs: tjs` skips the moment any
+    # HARD leg fails, which silently deletes this signal: when haiku-x64 was promoted
+    # to gating (2026-07-17), a single real haiku regression skipped this job and the
+    # three windows jobs in one stroke — a broken gate masking working gates, the
+    # exact disease that let the dep-closure P0 through (node-shim-oracle skipped at
+    # 9e968b4 for the same reason). If the artifact this job needs is genuinely
+    # missing, download-artifact fails it LOUDLY, which is the honest answer.
+    if: ${{ !cancelled() }}
     runs-on: windows-latest
     defaults:
       run:
@@ -83,6 +93,16 @@ jobs:
   # Render-only; the ConPTY INPUT round-trip is the tracked follow-on (D2).
   windows-x64-tui:
     needs: tjs
+    # Run once `tjs` FINISHES, whatever its conclusion — do NOT skip because some
+    # OTHER leg failed. This job consumes ONE named artifact; a leg it does not use
+    # has no bearing on whether it can run. Plain `needs: tjs` skips the moment any
+    # HARD leg fails, which silently deletes this signal: when haiku-x64 was promoted
+    # to gating (2026-07-17), a single real haiku regression skipped this job and the
+    # three windows jobs in one stroke — a broken gate masking working gates, the
+    # exact disease that let the dep-closure P0 through (node-shim-oracle skipped at
+    # 9e968b4 for the same reason). If the artifact this job needs is genuinely
+    # missing, download-artifact fails it LOUDLY, which is the honest answer.
+    if: ${{ !cancelled() }}
     runs-on: windows-latest
     defaults:
       run:
@@ -132,6 +152,16 @@ jobs:
   # native MSVC ARM64 engine. No tui counterpart yet (out of scope).
   windows-arm64-tests:
     needs: tjs
+    # Run once `tjs` FINISHES, whatever its conclusion — do NOT skip because some
+    # OTHER leg failed. This job consumes ONE named artifact; a leg it does not use
+    # has no bearing on whether it can run. Plain `needs: tjs` skips the moment any
+    # HARD leg fails, which silently deletes this signal: when haiku-x64 was promoted
+    # to gating (2026-07-17), a single real haiku regression skipped this job and the
+    # three windows jobs in one stroke — a broken gate masking working gates, the
+    # exact disease that let the dep-closure P0 through (node-shim-oracle skipped at
+    # 9e968b4 for the same reason). If the artifact this job needs is genuinely
+    # missing, download-artifact fails it LOUDLY, which is the honest answer.
+    if: ${{ !cancelled() }}
     runs-on: windows-11-arm
     defaults:
       run:
@@ -208,6 +238,16 @@ jobs:
   # pattern release.yml's be-oracle proved green on s390x-musl.
   node-shim-oracle:
     needs: tjs
+    # Run once `tjs` FINISHES, whatever its conclusion — do NOT skip because some
+    # OTHER leg failed. This job consumes ONE named artifact; a leg it does not use
+    # has no bearing on whether it can run. Plain `needs: tjs` skips the moment any
+    # HARD leg fails, which silently deletes this signal: when haiku-x64 was promoted
+    # to gating (2026-07-17), a single real haiku regression skipped this job and the
+    # three windows jobs in one stroke — a broken gate masking working gates, the
+    # exact disease that let the dep-closure P0 through (node-shim-oracle skipped at
+    # 9e968b4 for the same reason). If the artifact this job needs is genuinely
+    # missing, download-artifact fails it LOUDLY, which is the honest answer.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     defaults:
       run:
