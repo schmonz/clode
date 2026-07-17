@@ -740,6 +740,17 @@ runs:
           # (20s) and `|| true`: this reports, it never fails a leg. Darwin
           # control: OK bytes=204800 firstAt=20ms totalMs=23.
           .matrix/tjs-out/tjs eval 'var t0=Date.now(),n=0,first=-1,fin=false;var p=tjs.spawn(["/bin/sh","-c","dd if=/dev/zero bs=1024 count=200 2>/dev/null"],{stdout:"pipe"});var rd=p.stdout.getReader();setTimeout(function(){if(!fin){console.log("tjs-read-probe: STALLED bytes="+n+" firstAt="+first+" -- pipe read does not drain mid-run; any child writing >64KB deadlocks");tjs.exit(0);}},20000);(async function(){for(;;){var r=await rd.read();if(r.done)break;if(first<0)first=Date.now()-t0;n+=r.value.length;}fin=true;console.log("tjs-read-probe: OK bytes="+n+" firstAt="+first+"ms totalMs="+(Date.now()-t0));tjs.exit(0);})();' || true
+          # Bare-engine WRITER probe — the cell the read probe above does NOT cover.
+          # That one is sh-as-child -> tjs-as-parent, and it passes on haiku (OK
+          # bytes=204800 firstAt=7ms), which exonerates the engine's READ path. The
+          # real failure is tjs on BOTH sides: a quaude child writing an 85KB
+          # manifest to a clode-native parent. This is that: a tjs CHILD writing
+          # 85KB (>64KB pipe buffer) to a tjs parent. Darwin control: OK
+          # bytes=85001. If haiku STALLS here, tjs cannot WRITE past a pipe buffer
+          # (mod_streams' async uv_write path, first exercised when our manifest
+          # crossed 64KB); if it passes, the engine is clean on both sides and the
+          # bug is ours, above it. Bounded + `|| true`: reports, never fails a leg.
+          .matrix/tjs-out/tjs eval 'var t0=Date.now(),n=0,first=-1,fin=false;var p=tjs.spawn([tjs.exePath,"eval","console.log(\"x\".repeat(85000))"],{stdout:"pipe"});var rd=p.stdout.getReader();setTimeout(function(){if(!fin){console.log("tjs-writer-probe: STALLED bytes="+n+" firstAt="+first+" -- a tjs CHILD cannot write >64KB to a pipe");tjs.exit(0);}},20000);(async function(){for(;;){var r=await rd.read();if(r.done)break;if(first<0)first=Date.now()-t0;n+=r.value.length;}fin=true;console.log("tjs-writer-probe: OK bytes="+n+" firstAt="+first+"ms totalMs="+(Date.now()-t0));tjs.exit(0);})();' || true
           # So any build/<artifact-name>/ this invocation touches matches the
           # SHIPPED name (floor included), not the guest's own honest,
           # floor-less OS version — see scripts/platform-tag.cjs's artifactDir.
