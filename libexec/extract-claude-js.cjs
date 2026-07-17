@@ -225,15 +225,21 @@ function patchSnapshotBridge(body) {
 // freshly-fetched provider. Same identifier bounding rationale as the doctor
 // anchors (short minified ids, linear scan).
 //
-// Two destructure shapes, alternated after `=<cmd>`:
+// Three destructure shapes, alternated after `=<cmd>`:
 //   - comma form  `let[a,...b]=cmd,c=await f(`            — PROVEN real <=2.1.202 (2.1.179)
 //   - split form  `let[a,...b]=cmd;let x=a;let y=b;let z=await f(x,y,` — PROVEN real
 //     2.1.203-2.1.205 (upstream unchained the let; backrefs \k<a>/\k<rest> pin the
 //     aliases to the destructured parts so the scan can't drift to unrelated code).
-// Either way <cmd> is a `let`-declared local, and the override splices BEFORE the
-// destructure, so both shapes read clode's argv identically.
+//   - direct form `let[a,...b]=cmd;let z=await f(a,b,`    — PROVEN real 2.1.210
+//     (2.1.207 still emits the split form; upstream dropped the intermediate
+//     aliases and now passes the destructured parts straight to the call). The
+//     backrefs move to the CALL ARGS (\k<a>,\k<rest>), which pins this shape at
+//     least as tightly as the split form's aliases did.
+// Every shape has <cmd> as a `let`-declared local, and the override splices BEFORE
+// the destructure, so all three read clode's argv identically — the alternation is
+// a shape CHECK, not part of the rewrite.
 const AUTOUPDATER_SPAWN =
-  /(?<pre>tengu_pkg_manager_auto_updater_start",[A-Za-z0-9_$]{1,6}\);)let\[(?<a>[A-Za-z0-9_$]{1,6}),\.\.\.(?<rest>[A-Za-z0-9_$]{1,6})\]=(?<cmd>[A-Za-z0-9_$]{1,6})(?:,[A-Za-z0-9_$]{1,6}=await [A-Za-z0-9_$]{1,6}\(|;let [A-Za-z0-9_$]{1,6}=\k<a>;let [A-Za-z0-9_$]{1,6}=\k<rest>;let [A-Za-z0-9_$]{1,6}=await [A-Za-z0-9_$]{1,6}\()/g;
+  /(?<pre>tengu_pkg_manager_auto_updater_start",[A-Za-z0-9_$]{1,6}\);)let\[(?<a>[A-Za-z0-9_$]{1,6}),\.\.\.(?<rest>[A-Za-z0-9_$]{1,6})\]=(?<cmd>[A-Za-z0-9_$]{1,6})(?:,[A-Za-z0-9_$]{1,6}=await [A-Za-z0-9_$]{1,6}\(|;let [A-Za-z0-9_$]{1,6}=\k<a>;let [A-Za-z0-9_$]{1,6}=\k<rest>;let [A-Za-z0-9_$]{1,6}=await [A-Za-z0-9_$]{1,6}\(|;let [A-Za-z0-9_$]{1,6}=await [A-Za-z0-9_$]{1,6}\(\k<a>,\k<rest>,)/g;
 
 // Override the pkg-manager autoupdater's spawn argv to call
 // `clode --clode-internal-update` (when CLODE_SELF is set). exit 0 -> the bundle's
