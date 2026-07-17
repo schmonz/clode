@@ -21,7 +21,7 @@
 //     Keeps platformTag()'s existing `${osToken}-${arch}-node${nodeMajor}`
 //     shape — that shape is correct HERE, and only here.
 //   * platform-INDEPENDENT bundles (clode-main.bundle.cjs,
-//     naude-entry.bundle.cjs — see scripts/build-bundle.mjs and
+//     naude-entry.bundle.cjs — see scripts/build-clode-main.mjs and
 //     scripts/build-naude.mjs) are pure JS with no native/platform coupling
 //     at all, so they are keyed by NEITHER of the above: they live at
 //     build/bundle/, unkeyed (one copy, whichever host esbuilt it last).
@@ -100,10 +100,10 @@ function toolchainDir(repo) {
   return path.join(repo, 'build', 'toolchain', platformTag());
 }
 
-// The VERSION file at the repo root — the same source scripts/build-bundle.mjs's
+// The VERSION file at the repo root — the same source scripts/build-clode-main.mjs's
 // own repoVersion() reads (for the embedded __CLODE_BUNDLE_VERSION__ define).
 // Duplicated on purpose, not shared: this is a 3-line leaf read and platform-tag.cjs
-// must stay a dependency-free leaf module (build-bundle.mjs already requires THIS
+// must stay a dependency-free leaf module (build-clode-main.mjs already requires THIS
 // file; the reverse would be backwards).
 function repoVersion(repo) {
   try { return fs.readFileSync(path.join(repo, 'VERSION'), 'utf8').replace(/\n+$/, '') || 'dev'; }

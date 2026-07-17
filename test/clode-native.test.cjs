@@ -76,7 +76,7 @@ before(() => {
   EMPTY_PATH = path.join(DIR, 'empty-path-dir');
   fs.mkdirSync(EMPTY_PATH);
   const bundle = stageMainBundle(DIR);
-  if (!bundle) { SKIP = 'no esbuilt clode-main bundle and no esbuild toolchain (run scripts/build-bundle.mjs)'; return; }
+  if (!bundle) { SKIP = 'no esbuilt clode-main bundle and no esbuild toolchain (run scripts/build-clode-main.mjs)'; return; }
   NATIVE = path.join(DIR, 'clode-native');
   QUAUDE = path.join(DIR, 'quaude-from-native');
   // Fuse the builder under HOST node (that is how a dev machine mints it).

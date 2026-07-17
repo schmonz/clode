@@ -109,7 +109,7 @@ test('clode build --self: missing esbuilt bundle fails loudly and names the fix'
   });
   assert.strictEqual(r.status, 1);
   assert.match(r.stderr, /build --self: no esbuilt clode-main bundle at '\/nonexistent\/clode-main\.bundle\.cjs'/);
-  assert.match(r.stderr, /build-bundle\.mjs|CLODE_MAIN_BUNDLE/);
+  assert.match(r.stderr, /build-clode-main\.mjs|CLODE_MAIN_BUNDLE/);
 });
 
 // Regression coverage for the bootstrap↔clode-main skew (sparc cross-fuse
@@ -133,7 +133,7 @@ test('clode build --self: stale esbuilt bundle fails loud and names the fix', ()
   });
   assert.strictEqual(r.status, 1);
   assert.match(r.stderr, /is older than libexec\//);
-  assert.match(r.stderr, /build-bundle\.mjs/);
+  assert.match(r.stderr, /build-clode-main\.mjs/);
 });
 
 test('clode build --self: fresh esbuilt bundle passes the staleness gate', () => {

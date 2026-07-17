@@ -36,7 +36,7 @@ fs.mkdirSync(OUT, { recursive: true });
 // which had a byte-identical copy of this logic. NPM_CLI is resolved eagerly here
 // (not lazily inside runNpm) so a missing npm fails loud immediately, before any
 // other work — preserved from the pre-extraction behavior of this file.
-const NPM_CLI = npmCliPath({ prefix: 'build-bundle' });
+const NPM_CLI = npmCliPath({ prefix: 'build-clode-main' });
 function runNpm(args, opts) { execFileSync(process.execPath, [NPM_CLI, ...args], opts); }
 
 // Load a build-only toolchain package's JS API (esbuild) from the per-tag dir. We use

@@ -46,7 +46,7 @@ const BUNDLE_DIR = path.join(REPO, 'build', 'bundle');
 const OUT = artifactDir(REPO);
 
 // npmCliPath/runNpm (the "run npm's OWN JS CLI under THIS node" trick — see
-// scripts/lib/npm-cli.cjs for the full rationale) are shared with build-bundle.mjs,
+// scripts/lib/npm-cli.cjs for the full rationale) are shared with build-clode-main.mjs,
 // which had a byte-identical copy of this logic. Resolved LAZILY (inside runNpm, on
 // every call) rather than once up front — preserved from the pre-extraction behavior
 // of this file.
@@ -87,7 +87,7 @@ function ensureToolchain() {
 // that is building this naude, so its patched in-app updater can call back here
 // (CLODE_SELF) because a baked SEA cannot rebuild itself. define values are strings
 // that must be valid JS source — JSON.stringify(path) yields the quoted string literal
-// esbuild expects (see build-bundle.mjs's __CLODE_BUNDLE_VERSION__ for the same pattern).
+// esbuild expects (see build-clode-main.mjs's __CLODE_BUNDLE_VERSION__ for the same pattern).
 function esbuildBundle() {
   const bundle = path.join(BUNDLE_DIR, 'naude-entry.bundle.cjs');
   toolRequire('esbuild').buildSync({

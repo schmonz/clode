@@ -48,7 +48,7 @@ let SKIP = null, DIR = null, OUT = null, BUILD = null;
 before(() => {
   if (!tjsPath()) { SKIP = 'no tjs binary (CLODE_TJS or build/tjs/tjs)'; return; }
   const bundle = stageMainBundle();
-  if (!bundle) { SKIP = 'no esbuilt clode-main bundle (run node scripts/build-bundle.mjs)'; return; }
+  if (!bundle) { SKIP = 'no esbuilt clode-main bundle (run node scripts/build-clode-main.mjs)'; return; }
   DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'xfuse-'));
   const foreign = path.join(DIR, 'tjs.exe');           // foreign-base stand-in
   fs.copyFileSync(tjsPath(), foreign);

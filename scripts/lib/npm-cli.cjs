@@ -4,9 +4,9 @@
 // (cmd.exe can't run from a UNC cwd and strips quotes from args). npm ships inside every
 // node install; the file sits at a different spot on Windows vs POSIX, so probe both.
 //
-// Shared by build-bundle.mjs and build-naude.mjs — the two build scripts carried
+// Shared by build-clode-main.mjs and build-naude.mjs — the two build scripts carried
 // byte-identical copies of this logic, differing only in the thrown-error prefix
-// ('build-bundle:' / 'build-naude:'). Both functions take an optional options bag so
+// ('build-clode-main:' / 'build-naude:'). Both functions take an optional options bag so
 // each caller keeps its own prefix; existsSync/execFileSync/execPath are ALSO
 // overridable there — solely so tests can probe the candidate order and error text
 // without touching the real filesystem or shelling real npm.

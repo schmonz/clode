@@ -796,7 +796,7 @@ async function clodeBuild(args, opts) {
       if (bundle) {
         if (!fs.existsSync(bundle)) return fail(`build --self: no esbuilt clode-main bundle at '${bundle}' (CLODE_MAIN_BUNDLE)`);
       } else {
-        // Newest build/*/clode-main.bundle.cjs. `node scripts/build-bundle.mjs`
+        // Newest build/*/clode-main.bundle.cjs. `node scripts/build-clode-main.mjs`
         // now writes ONE unkeyed copy at build/bundle/ (the bundle is platform-
         // INDEPENDENT pure JS — see that script's OUT comment), so this usually
         // finds exactly one candidate. The scan itself stays GENERIC (any
@@ -816,7 +816,7 @@ async function clodeBuild(args, opts) {
           }
         } catch { /* no build dir */ }
         if (!newest) {
-          return fail('build --self: no esbuilt clode-main bundle found (run `node scripts/build-bundle.mjs`, or set CLODE_MAIN_BUNDLE)');
+          return fail('build --self: no esbuilt clode-main bundle found (run `node scripts/build-clode-main.mjs`, or set CLODE_MAIN_BUNDLE)');
         }
         bundle = newest.c;
       }
@@ -824,7 +824,7 @@ async function clodeBuild(args, opts) {
       // stale one silently fuses a WRONG builder — this has already bitten once
       // (the sparc cross-fuse campaign hit an 8-day-stale bundle that crashed
       // inside the fused builder's extractIfNeeded; the fix at the time was a
-      // convention — "run build-bundle.mjs first" — and conventions don't hold,
+      // convention — "run build-clode-main.mjs first" — and conventions don't hold,
       // as this same skew recurring here proves). So this is a hard gate, not a
       // warning: fail loud and name the exact command rather than fuse a builder
       // that answers a dead flag surface. Deliberately the simple "newest mtime
@@ -841,7 +841,7 @@ async function clodeBuild(args, opts) {
       const staleSrc = fs.readdirSync(libexec).find((f) => /\.(cjs|mjs|js)$/.test(f) && !f.startsWith('._')
         && fs.statSync(path.join(libexec, f)).mtimeMs > bm);
       if (staleSrc) {
-        return fail(`build --self: ${bundle} is older than libexec/${staleSrc} — a stale bundle would fuse a WRONG builder (dead flag surface / extractIfNeeded crash); re-run \`node scripts/build-bundle.mjs\` and try again`);
+        return fail(`build --self: ${bundle} is older than libexec/${staleSrc} — a stale bundle would fuse a WRONG builder (dead flag surface / extractIfNeeded crash); re-run \`node scripts/build-clode-main.mjs\` and try again`);
       }
       stageDir = path.join(work, 'stage');
       fs.mkdirSync(stageDir, { recursive: true });

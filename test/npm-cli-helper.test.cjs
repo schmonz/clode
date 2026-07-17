@@ -1,6 +1,6 @@
 'use strict';
 // Unit tests for scripts/lib/npm-cli.cjs — the npm-CLI resolver + runner shared by
-// build-bundle.mjs and build-naude.mjs (previously byte-identical copies, differing
+// build-clode-main.mjs and build-naude.mjs (previously byte-identical copies, differing
 // only in the thrown-error prefix). Everything here is injected (existsSync,
 // execFileSync); no real npm is ever shelled.
 const test = require('node:test');
