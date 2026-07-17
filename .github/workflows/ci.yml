@@ -253,6 +253,58 @@ jobs:
           echo "provider: $PROV"
           export CLODE_PROVIDER_BIN="$PROV"
           node --test --test-concurrency=1 $FILES
+      # The BUILDER, driven the way a user drives it: fuse a native clode, then
+      # make THAT binary build a quaude with node absent from PATH.
+      #
+      # WHY THIS STEP EXISTS (same disease as this job's own header, caught again
+      # 2026-07-16): clode-native's acceptances 2+3 are the only proof that the
+      # node-free builder can build the product, and they skip silently without
+      # CLODE_PROVIDER_BIN. No workflow named the file, so they ran ONLY under
+      # `npm test` — a job with no tjs and no provider, where they always skipped.
+      # A commit then made the dep-closure gate spawn `process.execPath -e` to
+      # introspect the bun-shim; under a fused builder process.execPath IS the
+      # fused clode (no node on the box, no `-e`), so EVERY `clode build` under
+      # clode-native died at the gate — on pushed main, with CI fully green. The
+      # binary that is the entire point of the Q1 split was 100% broken and
+      # nothing said a word. This step is the standing guard.
+      #
+      # It runs HERE because this job already has the three things the
+      # acceptances need — a real tjs, deps/claude, and a real Bun provider — so
+      # the guard costs one step, not one job.
+      - name: the native builder BUILDS THE PRODUCT (node-free, real provider)
+        env:
+          CLODE_TJS: ${{ runner.temp }}/tjs/tjs
+        run: |
+          set -euo pipefail
+          # `build --self` embeds this; without it the fuse has no payload.
+          node scripts/build-clode-main.mjs
+          PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f -name claude -size +20M 2>/dev/null | head -1)"
+          if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
+          echo "provider: $PROV"
+          # The acceptances prove node-freeness by running the fused builder with
+          # PATH=/usr/bin:/bin, and they SKIP if a node lives there ("cannot prove
+          # node-freeness here"). Surface that up front: if this runner image ever
+          # puts node on the minimal PATH, the skipped-0 assertion below would fail
+          # with a confusing message about skips instead of the real reason.
+          if PATH=/usr/bin:/bin command -v node; then
+            echo "ERROR: this runner has node on /usr/bin:/bin, so the node-free proof cannot run." >&2
+            echo "       Give test/clode-native.test.cjs a synthetic minimal PATH, or run this step" >&2
+            echo "       on an image without a system node — do NOT just drop the assertion." >&2
+            exit 1
+          fi
+          echo "minimal PATH has no node — the node-free proof can run"
+          # A skipped acceptance is not a pass: this test skips itself when the
+          # provider is absent, so assert it actually RAN rather than trusting a
+          # green exit. That distinction is the whole reason this step exists.
+          # Both summary forms are matched on purpose — node prints "ℹ skipped N"
+          # (spec reporter) or "# skipped N" (tap), and pinning the wrong one
+          # would make this guard fire always or never. Verified locally: node 24
+          # emits the spec form even when piped.
+          CLODE_PROVIDER_BIN="$PROV" CLODE_CLAUDE_BIN="$PROV" \
+            node --test --test-timeout=1200000 test/clode-native.test.cjs 2>&1 | tee native.out
+          grep -qE '^(ℹ|#) skipped 0$' native.out \
+            || { echo "ERROR: a clode-native acceptance SKIPPED (or the summary format changed) — the node-free builder went unproven" >&2; exit 1; }
+
       # The packaged targets themselves: build a real naude (Node SEA) and a real
       # quaude (fused tjs) from the same CC and diff them. The model oracle above
       # runs cli.cjs under two engines; only this covers the PACKAGING. Nothing in

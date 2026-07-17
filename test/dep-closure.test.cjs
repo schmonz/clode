@@ -18,6 +18,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const REPO = path.resolve(__dirname, '..');
 // Claude Code's runtime deps (deps/claude/package.json) — NOT clode's own;
@@ -365,6 +366,66 @@ test('shimProvidedModules: reflects libexec/bun-shim.cjs\'s own __bunBuiltins/__
   // instead, justified by the try/catch around its one call site) — a
   // regression here would silently widen what "provided" means.
   assert.ok(!provided.has('bun:jsc'));
+});
+
+// THE PARSE GATE. shimProvidedModules() READS bun-shim.cjs's `const PROVIDES`
+// literal out of the source text instead of executing the shim, because
+// `clode build` must work on a host with no node: under a fused native builder
+// process.execPath is the fused clode itself (see that function's comment for the
+// full story). Text and truth can only disagree here if the parse breaks — so
+// this asserts the two agree, by EXECUTING the real shim (in a CHILD process:
+// requiring it would hook this test runner's own Module._load) and comparing what
+// it reports to what the gate read statically.
+//
+// Reformat PROVIDES into something JSON.parse rejects — single quotes, a comment,
+// a trailing comma, a computed value — and this goes red here, in CI, under node,
+// rather than in a user's build. Not tautological: one side is a regex+JSON.parse
+// over bytes, the other is the module's real exports.
+test('PARSE GATE: the statically-read PROVIDES matches what a RUNNING bun-shim reports', () => {
+  const script = `const s=require(${JSON.stringify(path.join(LIBEXEC, 'bun-shim.cjs'))});`
+    + `process.stdout.write(JSON.stringify([...s.__bunBuiltins,...s.__hostModules]))`;
+  const r = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, `could not execute the real bun-shim: ${r.stderr}`);
+  const live = JSON.parse(r.stdout).sort();
+  const parsed = [...shimProvidedModules(LIBEXEC)].sort();
+  assert.deepStrictEqual(parsed, live,
+    'the dep-closure gate reads bun-shim.cjs\'s PROVIDES as TEXT — keep that literal JSON-shaped (double quotes, no comments/trailing commas/expressions)');
+});
+
+// The DANGEROUS direction. A name in PROVIDES that the shim does not actually
+// intercept is silent: the gate happily excuses cli.cjs's `require("bun:foo")`
+// from the ext-dep closure, the build goes green with PONG and attest, and the
+// user's quaude throws "Cannot find module" the first time a session reaches it.
+// (The reverse — an impl that PROVIDES omits — is fail-safe: the gate would
+// demand it from the closure and stop the build loudly.) So prove each declared
+// name really resolves THROUGH the shim's Module._load hook, in a child process
+// where that hook is installed for real.
+test('every name PROVIDES declares is actually intercepted by the shim (declared != implemented)', () => {
+  const script = `const s=require(${JSON.stringify(path.join(LIBEXEC, 'bun-shim.cjs'))});`
+    + `const bad=[];for(const n of [...s.__bunBuiltins,...s.__hostModules]){`
+    + `try{if(require(n)==null)bad.push(n+' (resolved to null)')}catch(e){bad.push(n+' ('+e.code+')')}}`
+    + `process.stdout.write(JSON.stringify(bad))`;
+  const r = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, `could not execute the real bun-shim: ${r.stderr}`);
+  assert.deepStrictEqual(JSON.parse(r.stdout), [],
+    'PROVIDES names a module the shim does not actually resolve — the dep-closure gate would excuse it from the closure and the quaude would throw "Cannot find module" at RUN time');
+});
+
+// The gate must not silently pass when it cannot find or parse the declaration —
+// a gate that quietly concluded "nothing is shim-provided" would demand bun:ffi
+// and bun:sqlite from the ext-dep closure and fail the build for a nonsense
+// reason. Every failure names what to fix instead.
+test('shimProvidedModules: a missing or non-JSON PROVIDES fails loud and says why', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-provides-'));
+  assert.throws(() => shimProvidedModules(dir), /cannot read .*bun-shim\.cjs/);
+  fs.writeFileSync(path.join(dir, 'bun-shim.cjs'), '// a shim with no declaration\n');
+  assert.throws(() => shimProvidedModules(dir), /no 'const PROVIDES = \{\.\.\.\}' declaration/);
+  // The exact regression the JSON-shaped contract exists to catch: valid JS,
+  // invalid JSON.
+  fs.writeFileSync(path.join(dir, 'bun-shim.cjs'), "const PROVIDES = { 'bunBuiltins': ['bun:ffi'], 'hostModules': [] };\n");
+  assert.throws(() => shimProvidedModules(dir), /not JSON-shaped/);
+  fs.writeFileSync(path.join(dir, 'bun-shim.cjs'), 'const PROVIDES = {"bunBuiltins": "nope", "hostModules": []};\n');
+  assert.throws(() => shimProvidedModules(dir), /malformed/);
 });
 
 test('GATE: an unknown bare specifier fails the build loud, naming the package and the fix', () => {

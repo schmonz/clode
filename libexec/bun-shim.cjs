@@ -19,6 +19,35 @@
  * Every property exists so the module body never trips on `Bun.X is undefined`
  * at load time — unimplemented features fail only when actually exercised.
  */
+// THE SINGLE SOURCE OF TRUTH for what this shim answers itself, before Node's or
+// tjs's own resolver ever sees the request: `bun:*` pseudo-modules (intercepted
+// by the Module._load hook below) and HOST_MODULES stubs. These are NOT npm
+// packages quaude/naude embed, so clode's dep-closure gate must not demand them
+// from the ext-dep closure — it reads THIS declaration to know that.
+//
+// WHY IT IS SHAPED LIKE JSON, up here, away from the implementations. The gate
+// runs inside `clode build`, which must work on a machine with no node: under a
+// fused native builder process.execPath IS the fused clode binary. So the gate
+// can neither spawn a host to ask this file (it used to — `process.execPath -e`
+// — and that broke EVERY build under clode-native) nor require() it in-process
+// (requiring this file installs the Module._load hook and sets globalThis.Bun —
+// machinery for a RUNNING quaude/naude, not clode's own builder). It therefore
+// READS these names out of this source text with JSON.parse. Keep this literal
+// JSON-shaped — double quotes, no comments, no trailing commas, no expressions —
+// or that parse fails LOUD and the build stops.
+//
+// Declaring the NAMES here rather than deriving them from the tables below is
+// deliberate: BUN_BUILTINS is assembled in two places ('bun:ffi' in its literal,
+// 'bun:sqlite' attached afterward), so the names have no single readable home
+// down there. Now they have one up here, the tables are keyed off it, and
+// test/dep-closure.test.cjs asserts the tables and this list agree — so a
+// new stub cannot appear without being declared, and this cannot drift from what
+// the shim really intercepts.
+const PROVIDES = {
+  "bunBuiltins": ["bun:ffi", "bun:sqlite"],
+  "hostModules": ["undici"]
+};
+
 const cp = require('child_process');
 const fs = require('fs');
 const net = require('net');
@@ -681,8 +710,14 @@ Module._load = function (request, parent, isMain) {
 
 module.exports = Bun;
 module.exports.__bunFFI = BUN_BUILTINS['bun:ffi'];
-module.exports.__hostModules = Object.keys(HOST_MODULES);   // external npm modules we stub
-module.exports.__bunBuiltins = Object.keys(BUN_BUILTINS);   // bun: modules we resolve
+// Straight from PROVIDES (the declaration at the top of this file), NOT
+// Object.keys() of the tables: clode's dep-closure gate reads that same literal
+// out of this file's TEXT — it has no interpreter to spare (see PROVIDES). Both
+// consumers therefore read one list, so what a running shim reports and what the
+// gate believes cannot disagree. test/dep-closure.test.cjs keeps the list
+// honest against the tables it names.
+module.exports.__hostModules = PROVIDES.hostModules;        // external npm modules we stub
+module.exports.__bunBuiltins = PROVIDES.bunBuiltins;        // bun: modules we resolve
 module.exports.rewriteSnapshot = rewriteSnapshot;
 module.exports.collectShadows = collectShadows;
 module.exports._wsArgs = _wsArgs;

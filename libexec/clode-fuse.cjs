@@ -252,25 +252,57 @@ function scanBareSpecifiers(file) {
 // hook intercepts these) and HOST_MODULES stubs (undici — real proxying is
 // delegated to Node's NODE_USE_ENV_PROXY instead of reimplementing it). These
 // are NOT npm packages quaude/naude embed, so the dep-closure gate must not
-// demand them from the closure. Introspected by SPAWNING bun-shim.cjs in a
-// child process — never require()'d in-process here — because bun-shim.cjs
-// installs a process-wide Module._load hook and other globals (globalThis.
-// WebSocket, an fs.readSync patch) meant for a RUNNING quaude/naude, not
-// clode's own builder process. This keeps bun-shim.cjs's own
-// module.exports.__bunBuiltins/__hostModules the ONE place this list is
-// declared, rather than a second hand-maintained list here that could drift
-// the same way the old fuse-time dep list did (duplication audit §1, the same
-// failure through a new door).
+// demand them from the closure.
+//
+// Read straight out of bun-shim.cjs's SOURCE TEXT — its `const PROVIDES = {...}`
+// declaration, kept JSON-shaped expressly so this parse is a JSON.parse and not a
+// guess. Both ways of EXECUTING the shim to ask it are closed to us:
+//   - SPAWNING a host — what this did, via `process.execPath -e` — assumes
+//     process.execPath is a Node. Under a fused native builder it is the fused
+//     clode binary itself: there is no node on the box (that is the entire point
+//     of that artifact), it has no `-e`, and it exited 2 with its own usage. That
+//     broke EVERY `clode build` under clode-native while CI stayed green.
+//   - REQUIRING it in-process installs bun-shim's process-wide Module._load hook
+//     and globals (globalThis.Bun/WebSocket, an fs.readSync patch) — machinery
+//     meant for a RUNNING quaude/naude, not clode's own builder.
+// Reading the text has neither problem, and it makes the gate host-free: nothing
+// in `clode build`'s dep-closure path now needs an interpreter (scanBareSpecifiers
+// is already a regex over these same bytes; the closure walk is fs + JSON).
+//
+// bun-shim.cjs remains the ONE place these names live — this reads its actual
+// source, not a generated mirror of it, so there is no second copy to rot and no
+// refresh step to forget. (A mirror + a drift test was the first cut of this fix;
+// one truth beats two truths plus a policeman.) The shim's own exports come from
+// that same literal, so a running shim and this gate cannot disagree about what
+// is shim-provided.
 function shimProvidedModules(libexecDir, opts = {}) {
-  const sp = opts.spawnSync || spawnSync;
+  const readFile = opts.readFileSync || fs.readFileSync;
   const shimPath = path.join(libexecDir, 'bun-shim.cjs');
-  const script = `const s=require(${JSON.stringify(shimPath)});`
-    + `process.stdout.write(JSON.stringify([...(s.__bunBuiltins||[]),...(s.__hostModules||[])]))`;
-  const r = sp(process.execPath, ['-e', script], { encoding: 'utf8' });
-  if (r.status !== 0 || !r.stdout) {
-    throw new Error(`dep-closure gate: could not introspect '${shimPath}' for shim-provided modules (exit ${r.status}): ${r.stderr || ''}`);
+  let src;
+  try {
+    src = readFile(shimPath, 'utf8');
+  } catch (e) {
+    throw new Error(`dep-closure gate: cannot read '${shimPath}' for shim-provided modules [${(e && e.message) || e}]`);
   }
-  return new Set(JSON.parse(r.stdout));
+  // Anchored to the declaration, non-greedy to its first `};` — PROVIDES is
+  // JSON-shaped by contract (bun-shim.cjs says so where it is defined), so this
+  // is a parse, not a heuristic. Every failure below is LOUD: a gate that
+  // silently found no shim-provided modules would demand bun:ffi/bun:sqlite from
+  // the ext-dep closure and fail the build for a nonsense reason.
+  const m = /const PROVIDES = (\{[\s\S]*?\});/.exec(src);
+  if (!m) {
+    throw new Error(`dep-closure gate: no 'const PROVIDES = {...}' declaration in '${shimPath}' — it is the single source of truth for shim-provided modules; restore it (and keep it JSON-shaped) rather than routing around this`);
+  }
+  let data;
+  try {
+    data = JSON.parse(m[1]);
+  } catch (e) {
+    throw new Error(`dep-closure gate: '${shimPath}'s PROVIDES is not JSON-shaped (single quotes? a comment? a trailing comma? an expression?) — it must stay literal JSON so this gate can read it without an interpreter [${(e && e.message) || e}]`);
+  }
+  if (!Array.isArray(data.bunBuiltins) || !Array.isArray(data.hostModules)) {
+    throw new Error(`dep-closure gate: '${shimPath}'s PROVIDES is malformed (want {"bunBuiltins":[], "hostModules":[]})`);
+  }
+  return new Set([...data.bunBuiltins, ...data.hostModules]);
 }
 
 // Specifiers the real 2.1.210 bundle references that are demonstrably NEVER
