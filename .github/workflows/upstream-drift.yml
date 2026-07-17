@@ -1,0 +1,58 @@
+name: upstream-drift
+# THE DAILY QUESTION: did a new Claude Code break clode?
+#
+# clode reads a bundle it does not own, so upstream can break us without breaking
+# itself — and the failure is silent by nature: an anchor that no longer matches
+# means a hook is NOT applied, while everything still builds and PONGs. 2.1.210
+# reshaped the pkg-manager autoupdater site (2.1.207 was fine), the redirect
+# stopped applying, and nobody noticed for weeks.
+#
+# WHY A SEPARATE JOB, when ci.yml also installs the provider: attribution. This
+# asks a DIFFERENT question than a push does. A push asks "did my diff break
+# clode?"; this asks "did Anthropic's release break clode?" Collapsing them into
+# one red light is how an upstream break lands on an innocent commit and someone
+# spends a session bisecting job conclusions to discover it was never their code.
+# Red HERE means upstream moved. It says so in the job name.
+#
+# Same doctrine as guest-versions.yml (the weekly sweep that backstops implicit
+# pins) — scripts/tjs-legs.mjs states it: Renovate owns explicit pins, a scheduled
+# sweep backstops the implicit ones. The provider is an implicit pin (every job
+# installs latest), so this is that backstop.
+#
+# START SMALL, FLESH OUT (user, 2026-07-17): one check today — every hook anchor is
+# present. Add checks to scripts/upstream-drift-check.mjs as we find more ways
+# upstream can break us. Deliberately NOT built on `inspect --strict`: that gates on
+# every unimplemented Bun.* member and is chronically red on versions that work
+# fine, and a job that is always red teaches people to ignore it.
+on:
+  schedule:
+    - cron: '23 5 * * *'   # daily 05:23 UTC (off the hour; nothing else runs then)
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  anchors:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .tool-versions
+      # LATEST, deliberately unpinned — the whole point is to find out what the
+      # newest release does to us, before a pinned bump (or a user) does.
+      - name: Install the latest Claude Code
+        run: npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
+      - name: Every clode hook anchor still matches the newest bundle
+        run: |
+          set -euo pipefail
+          VER="$(npm view @anthropic-ai/claude-code version)"
+          echo "upstream Claude Code: $VER"
+          PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f -name claude -size +20M 2>/dev/null | head -1)"
+          # A missing provider must fail, not skip: "we could not check" is not
+          # "nothing changed", and this job's only product is a trustworthy answer.
+          if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found under @anthropic-ai/claude-code" >&2; exit 1; fi
+          echo "provider: $PROV"
+          node scripts/upstream-drift-check.mjs "$PROV"
