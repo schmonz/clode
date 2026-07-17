@@ -41,6 +41,46 @@ well-tested, and reasonably fast** as we can possibly make it." Sequencing:
 
 ### Known shipped-artifact bugs
 
+- **REGRESSION: `--quaude-attest` on Haiku exits 0 after printing only the manifest —
+  so `clode build` is BROKEN on Haiku at HEAD** (leg `haiku-x64`, run 29570793188,
+  2026-07-17). The leg is `soft-fail: true`, so CI never said a word.
+  **It bisects to `9e968b4`** (job conclusions: 14c1a2b success, ccd89c2 success,
+  9e968b4 FAIL, fad3d26 FAIL, 3c6fd7f FAIL). The two middle runs are red for a
+  DIFFERENT reason — the dep-closure `-e` P0 killed every leg there — so the attest
+  failure only became visible once that was fixed. The prime suspect is therefore
+  9e968b4's other change: **the closure grew 12 -> 18 packages** (node-fetch + 5
+  transitive), which means more members embedded and more members for attest to
+  digest. That is the lead to chase first; it is correlation, not yet proof.
+  **Shipping impact:** v0.1.3 was cut BEFORE 9e968b4, so the published Haiku binary
+  predates the growth and is fine. A Haiku user on HEAD cannot build a quaude.
+  Evidence from the log: `clode: build: ATTEST FAILED (exit 0)` followed by the
+  manifest JSON and then **nothing** — zero `ok  <member>` lines, zero `ok  bom:` lines,
+  and no `quaude-attest:` line anywhere in the job output (grep count 0), yet the
+  process exited **0**.
+  Reading `quaude-bootstrap.mjs` (step 7): it prints the manifest, then loops members
+  computing `await sha256hex(...)`, then the bom loop, then the verdict line, then
+  `tjs.exit`. Output stops between the manifest and the FIRST member line. Two
+  hypotheses, both consistent with exit 0:
+  1. `crypto.subtle.digest` never settles on Haiku → the async function suspends at the
+     first `await`, the event loop drains, tjs exits 0 naturally (no verdict, no
+     `tjs.exit`). Fits "zero lines" best.
+  2. `tjs.exit` drops queued stdout writes → verification really passed (hence 0) but
+     every line after the manifest was lost.
+  NOT a timeout: `run()` reports `status: null` on a SIGKILL, and we saw a true 0.
+  NOT the dep-closure gate (that is fixed; this build got all the way past PONG).
+  Distinguishing them needs a Haiku box: print a marker before/after the first digest,
+  or flush/await before `tjs.exit`. If (1), attest is silently vacuous on any platform
+  where WebCrypto stalls — worth knowing, since "exit 0" is what the build trusts.
+  A third hypothesis the bisect suggests, and the cheapest to test: **the bigger
+  closure simply exceeds what that VM can hold** — the bootstrap holds every member in
+  memory (`files`) and then digests a ~20MB `cli.qbc` on top; 6 more packages may be
+  the straw. If so the symptom would be a death during/just after the manifest print,
+  which is what we see (though it does not obviously explain exit 0). Cheap experiment:
+  build a quaude on Haiku with the pre-9e968b4 12-package closure and see if attest
+  recovers.
+  Note `clode-fuse.cjs` already treats a missing verdict line as failure (it checks the
+  string, not just the status), which is the only reason this surfaced at all.
+
 - **`clode-0.1.3-darwin-universal build` fails at codesign of the tjs template
   (Mavericks / old macOS host).** Reported 2026-07-15:
   ```
