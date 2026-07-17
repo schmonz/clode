@@ -17,7 +17,7 @@ then run `clode fetch` and `clode build` to:
 `quaude` is `claude` under QuickJS. Run it on your weird computer. Have fun.
 
 (If your computer's Node-compatible and you want that runtime instead,
-`clode build --naude` writes `naude`, skipping steps 4 and 5.)
+`clode build --naude` writes `naude`, replacing steps 4 and 5 with an embedded Node interpreter.)
 
 ## Runtime dependencies
 
