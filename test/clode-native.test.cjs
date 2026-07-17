@@ -17,8 +17,11 @@
 //
 // Freshness: the builder's behavior is frozen in the esbuilt bundle, so the
 // test esbuilds a FRESH bundle into the tmp dir when a toolchain is available
-// (any build/*/node_modules/esbuild — reads only; the hermetic guard watches
-// build/ for writes), falling back to the newest committed-layout bundle.
+// (build/toolchain/<platformTag>/node_modules/esbuild — reads only; the
+// hermetic guard watches build/ for writes), falling back to the newest
+// already-esbuilt bundle (typically build/bundle/, but scanned generically —
+// see scripts/platform-tag.cjs's file header for why the toolchain and the
+// bundle live at different keys/locations).
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -28,6 +31,7 @@ const { spawn, spawnSync } = require('node:child_process');
 const { createRequire } = require('node:module');
 const { tjsPath, skipUnlessTjs, REPO } = require('./node-shim-helper.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('./mock-anthropic-helper.cjs');
+const { toolchainDir } = require('../scripts/platform-tag.cjs');
 
 const ENTRY = path.join(REPO, 'bin', 'clode');
 const VERSION = fs.readFileSync(path.join(REPO, 'VERSION'), 'utf8').replace(/\n+$/, '');
@@ -37,22 +41,25 @@ function providerBin() { const p = process.env.CLODE_PROVIDER_BIN; return p && f
 // repo. Returns null when neither a toolchain nor a prebuilt bundle exists.
 function stageMainBundle(dir) {
   const buildDir = path.join(REPO, 'build');
+  // Fresh esbuild: THIS host's own toolchain install, at its fixed
+  // platform+node-major-keyed location (toolchainDir) — not a scan, since
+  // there is exactly one toolchain dir for this host.
+  const tool = path.join(toolchainDir(REPO), 'package.json');
+  try {
+    const esbuild = createRequire(tool)('esbuild');
+    const out = path.join(dir, 'clode-main.bundle.cjs');
+    esbuild.buildSync({
+      entryPoints: [path.join(REPO, 'libexec', 'clode-main.cjs')],
+      bundle: true, platform: 'node', format: 'cjs', target: 'node24',
+      define: { __CLODE_BUNDLE_VERSION__: JSON.stringify(VERSION) },
+      outfile: out,
+    });
+    return out;
+  } catch { /* toolchain not installed on this host */ }
+  // Fallback: newest already-esbuilt build/*/clode-main.bundle.cjs (generic
+  // scan — same rationale as clode-fuse.cjs's CLODE_MAIN_BUNDLE default).
   let tags = [];
-  try { tags = fs.readdirSync(buildDir); } catch { /* no build dir */ }
-  for (const d of tags) {
-    const tool = path.join(buildDir, d, 'package.json');
-    try {
-      const esbuild = createRequire(tool)('esbuild');
-      const out = path.join(dir, 'clode-main.bundle.cjs');
-      esbuild.buildSync({
-        entryPoints: [path.join(REPO, 'libexec', 'clode-main.cjs')],
-        bundle: true, platform: 'node', format: 'cjs', target: 'node24',
-        define: { __CLODE_BUNDLE_VERSION__: JSON.stringify(VERSION) },
-        outfile: out,
-      });
-      return out;
-    } catch { /* toolchain not in this tag dir */ }
-  }
+  try { tags = fs.readdirSync(buildDir); } catch { return null; }
   let newest = null;
   for (const d of tags) {
     const c = path.join(buildDir, d, 'clode-main.bundle.cjs');

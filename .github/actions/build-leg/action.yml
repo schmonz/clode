@@ -730,6 +730,10 @@ runs:
           # openbsd exit-127 hunt, dispatch #9 — template bytes verified
           # perfect, exec still fails under the builder only).
           .matrix/tjs-out/tjs eval 'tjs.spawn(["/bin/sh","-c","echo tjs-spawn-probe-ok"]).wait().then(function(r){console.log("tjs-spawn-exit:",JSON.stringify(r))})'
+          # So any build/<artifact-name>/ this invocation touches matches the
+          # SHIPPED name (floor included), not the guest's own honest,
+          # floor-less OS version — see scripts/platform-tag.cjs's artifactDir.
+          CLODE_ASSET_NAME="${{ steps.name.outputs.asset }}"; export CLODE_ASSET_NAME
           CLODE_TJS="$PWD/.matrix/tjs-out/tjs" node bin/clode build --self --out "./${{ steps.name.outputs.asset }}"
           ./"${{ steps.name.outputs.asset }}" --version
           if [ "${{ inputs.smoke }}" = full ]; then
@@ -795,6 +799,10 @@ runs:
       shell: bash
       env:
         CLODE_TJS: ${{ steps.tjsbin.outputs.path }}
+        # So any build/<artifact-name>/ this invocation touches matches the
+        # SHIPPED name (floor included) instead of this runner's own honest,
+        # floor-less OS version — see scripts/platform-tag.cjs's artifactDir.
+        CLODE_ASSET_NAME: ${{ steps.name.outputs.asset }}
       run: node bin/clode build --self --out "${{ steps.name.outputs.asset }}"
 
     - name: Self-smoke --version (host exec of the fused builder)

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-// Build the esbuilt clode-main bundle (build/<tag>/clode-main.bundle.cjs) that
+// Build the esbuilt clode-main bundle (build/bundle/clode-main.bundle.cjs) that
 // `clode build --self` embeds into a quaude in place of the upstream Claude Code
 // payload (libexec/clode-fuse.cjs). This is NOT the SEA builder — the Node
 // Single Executable Application pipeline (deps asset, sea-config, blob, postject,
@@ -13,15 +13,22 @@ import path from 'node:path';
 import url from 'node:url';
 
 const require = createRequire(import.meta.url);
-const { platformTag } = require('./platform-tag.cjs');
+const { toolchainDir } = require('./platform-tag.cjs');
 const { npmCliPath } = require('./lib/npm-cli.cjs');
 
 const REPO = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '..');
-// All build artifacts (toolchain node_modules + the bundle) live under a per-platform
-// tag dir so a shared/NFS `build/` tree can host mutually-incompatible builds
-// (different OS/OS-version/arch/node) without collision.
-const TOOLCHAIN = path.join(REPO, 'build', platformTag());
-const OUT = TOOLCHAIN;
+// The native tool cache (esbuild) — keyed by platform+node-major (toolchainDir;
+// see scripts/platform-tag.cjs's file header for why this key, and why it must
+// NOT be the artifact-name key). A shared/NFS `build/` tree can then host
+// mutually-incompatible toolchain installs (different OS/OS-version/arch/node)
+// without collision.
+const TOOLCHAIN = toolchainDir(REPO);
+// The bundle itself is platform-INDEPENDENT pure JS (no native code, no
+// platform-specific define beyond the repo VERSION) — it is keyed by NOTHING,
+// so it gets its own unkeyed home, distinct from the (platform-keyed) toolchain
+// that built it and from any (artifact-named) shippable output.
+const OUT = path.join(REPO, 'build', 'bundle');
+fs.mkdirSync(TOOLCHAIN, { recursive: true });
 fs.mkdirSync(OUT, { recursive: true });
 
 // npmCliPath/runNpm (the "run npm's OWN JS CLI under THIS node" trick — see

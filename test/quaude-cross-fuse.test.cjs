@@ -17,8 +17,9 @@ const REPO = path.join(__dirname, '..');
 const ENTRY = path.join(REPO, 'bin', 'clode');
 
 function stageMainBundle() {
-  // Newest build/*/clode-main.bundle.cjs (per-platform tag dirs), same as
-  // test/clode-native.test.cjs.
+  // Newest build/*/clode-main.bundle.cjs — generic scan (typically finds the
+  // single unkeyed build/bundle/ copy; see scripts/platform-tag.cjs's file
+  // header), same fallback as test/clode-native.test.cjs.
   const buildDir = path.join(REPO, 'build');
   let tags = [];
   try { tags = fs.readdirSync(buildDir); } catch { return null; }

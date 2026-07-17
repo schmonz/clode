@@ -33,6 +33,11 @@ runs:
       env:
         CLODE_TJS: ${{ runner.temp }}/host-tjs-out/tjs
         CLODE_TARGET_TEMPLATE: ${{ inputs.target-template }}
+        # So any build/<artifact-name>/ this invocation touches matches the
+        # tier-2 SHIPPED asset name — see scripts/platform-tag.cjs's artifactDir.
+        # Both callers pass out-asset = steps.name.outputs.asset (the bare
+        # asset name), same convention as their upload-artifact `path:`.
+        CLODE_ASSET_NAME: ${{ inputs.out-asset }}
       run: |
         set -euo pipefail
         node bin/clode build --self --out "${{ inputs.out-asset }}"

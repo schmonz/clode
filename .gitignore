@@ -1,5 +1,10 @@
-# build/ is GENERATED OUTPUT ONLY (per-platform-tag toolchain dirs, tjs/, blobs) —
-# no manifests live here anymore (see deps/clode, deps/claude).
+# build/ is GENERATED OUTPUT ONLY — no manifests live here anymore (see
+# deps/clode, deps/claude). Three differently-keyed subtrees (see
+# scripts/platform-tag.cjs's file header for the why): build/<artifact-name>/
+# (shippable per-host output — naude, clode --self, deps.tar/sig, sea-*),
+# build/toolchain/<platform>-node<major>/ (the esbuild/postject tool cache),
+# build/bundle/ (the platform-independent esbuilt bundles), plus build/tjs/
+# (see below).
 build/*
 node_modules/
 test/.harness/

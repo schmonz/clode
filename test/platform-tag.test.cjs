@@ -2,7 +2,8 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const {
-  macosVersion, linuxGlibc, osToken, platformTag, seaOut, seaBin,
+  macosVersion, linuxGlibc, osToken, platformTag, toolchainDir,
+  hostOsVersionToken, artifactName, artifactDir, seaOut, seaBin,
 } = require('../scripts/platform-tag.cjs');
 
 test('macosVersion keeps two components only for the 10.x era', () => {
@@ -45,16 +46,70 @@ test('osToken maps win32 to the stable "windows" token (no OS-version split)', (
   assert.strictEqual(osToken('win32'), 'windows');
 });
 
-test('seaOut is <repo>/build/<tag>/<base>', () => {
-  assert.strictEqual(seaOut('/r', 'naude'), path.join('/r', 'build', platformTag(), 'naude'));
+test('toolchainDir is <repo>/build/toolchain/<platformTag>', () => {
+  assert.strictEqual(toolchainDir('/r'), path.join('/r', 'build', 'toolchain', platformTag()));
+});
+
+test('hostOsVersionToken: darwin uses "darwin", not "macos", padded to major.minor', () => {
+  if (process.platform !== 'darwin') return;
+  assert.match(hostOsVersionToken('darwin'), /^darwin(10\.\d+|\d+\.\d+)$/);
+  assert.doesNotMatch(hostOsVersionToken('darwin'), /^macos/);
+});
+
+test('hostOsVersionToken: win32 is the bare "windows" token (no floor exists to match)', () => {
+  assert.strictEqual(hostOsVersionToken('win32'), 'windows');
+});
+
+test('hostOsVersionToken: unknown platforms degrade honestly (no invented floor)', () => {
+  assert.match(hostOsVersionToken('freebsd'), /^freebsd-\d+$/);
+});
+
+test('artifactName is a pure formatter: clode-<version>-<token>-<arch>', () => {
+  assert.strictEqual(
+    artifactName({ version: '0.1.3', token: 'darwin11.0', arch: 'arm64' }),
+    'clode-0.1.3-darwin11.0-arm64');
+});
+
+test('artifactName defaults token to hostOsVersionToken() (the host, not a floor)', () => {
+  assert.strictEqual(
+    artifactName({ version: '0.1.3', arch: 'arm64' }),
+    `clode-0.1.3-${hostOsVersionToken()}-arm64`);
+});
+
+test('artifactDir is <repo>/build/<artifactName>', () => {
+  assert.strictEqual(
+    artifactDir('/r', { version: '0.1.3', env: {} }),
+    path.join('/r', 'build', artifactName({ version: '0.1.3' })));
+});
+
+test('artifactDir: CLODE_ASSET_NAME overrides the WHOLE name (CI floor support)', () => {
+  assert.strictEqual(
+    artifactDir('/r', { version: '0.1.3', env: { CLODE_ASSET_NAME: 'clode-0.1.3-darwin11.0-arm64' } }),
+    path.join('/r', 'build', 'clode-0.1.3-darwin11.0-arm64'));
+});
+
+test('seaOut is <repo>/build/<artifactName>/<base>, not the toolchain tag', () => {
+  assert.strictEqual(
+    seaOut('/r', 'naude', { version: '0.1.3', env: {} }),
+    path.join('/r', 'build', artifactName({ version: '0.1.3' }), 'naude'));
+  assert.notStrictEqual(seaOut('/r', 'naude', { version: '0.1.3', env: {} }),
+    path.join('/r', 'build', platformTag(), 'naude'));
 });
 
 test('seaBin is seaOut plus the platform exe suffix', () => {
   const suffix = process.platform === 'win32' ? '.exe' : '';
-  assert.strictEqual(seaBin('/r', 'naude'), seaOut('/r', 'naude') + suffix);
+  const opts = { version: '0.1.3', env: {} };
+  assert.strictEqual(seaBin('/r', 'naude', opts), seaOut('/r', 'naude', opts) + suffix);
 });
 
 test('seaBin/seaOut honor the base param (not hardcoded)', () => {
-  assert.ok(seaOut('/r', 'clode').endsWith(path.join('build', platformTag(), 'clode')));
-  assert.ok(seaBin('/r', 'clode').includes('clode'));
+  const opts = { version: '0.1.3', env: {} };
+  assert.ok(seaOut('/r', 'clode', opts).endsWith(path.join(artifactName({ version: '0.1.3' }), 'clode')));
+  assert.ok(seaBin('/r', 'clode', opts).includes('clode'));
+});
+
+test('seaOut/seaBin honor CLODE_ASSET_NAME through the opts.env override', () => {
+  const opts = { env: { CLODE_ASSET_NAME: 'clode-0.1.3-darwin11.0-arm64' } };
+  assert.strictEqual(seaOut('/r', 'naude', opts),
+    path.join('/r', 'build', 'clode-0.1.3-darwin11.0-arm64', 'naude'));
 });

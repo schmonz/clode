@@ -409,8 +409,9 @@ async function clodeBuild(args, opts) {
     // (smokeCheck) proves the baked bundle boots, but never proves it can
     // actually reach the API — the equivalent quaude bug was impossible. The
     // naude output path mirrors build-naude.mjs's own default (an explicit
-    // --out wins; otherwise its per-platform-tag seaBin default).
-    const naudeOut = out || seaBin(ROOT, 'naude');
+    // --out wins; otherwise its artifact-named seaBin default — see
+    // scripts/platform-tag.cjs's artifactDir for why that key, not platformTag()).
+    const naudeOut = out || seaBin(ROOT, 'naude', { version });
     const naudeWork = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-smoke-'));
     try {
       clodeLog('clode: build --naude: smoke -p against the canned Messages mock ...');
@@ -556,7 +557,15 @@ async function clodeBuild(args, opts) {
       if (bundle) {
         if (!fs.existsSync(bundle)) return fail(`build --self: no esbuilt clode-main bundle at '${bundle}' (CLODE_MAIN_BUNDLE)`);
       } else {
-        // Newest build/*/clode-main.bundle.cjs (per-platform tag dirs).
+        // Newest build/*/clode-main.bundle.cjs. `node scripts/build-bundle.mjs`
+        // now writes ONE unkeyed copy at build/bundle/ (the bundle is platform-
+        // INDEPENDENT pure JS — see that script's OUT comment), so this usually
+        // finds exactly one candidate. The scan itself stays GENERIC (any
+        // build/* subdir) rather than hardcoding build/bundle/: a long-lived dev
+        // box's build/ tree can still carry old per-platform-tag-dir bundles
+        // from before this layout existed (gitignored litter, never migrated —
+        // see scripts/platform-tag.cjs's file header), and "newest wins" must
+        // keep working across both layouts without special-casing either.
         let newest = null;
         try {
           for (const d of fs.readdirSync(path.join(ROOT, 'build'))) {

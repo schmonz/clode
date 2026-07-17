@@ -27,15 +27,23 @@ import path from 'node:path';
 import url from 'node:url';
 
 const require = createRequire(import.meta.url);
-const { platformTag, seaBin } = require('./platform-tag.cjs');
+const { toolchainDir, artifactDir, seaBin } = require('./platform-tag.cjs');
 const { runNpm: runNpmShared } = require('./lib/npm-cli.cjs');
 
 const REPO = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '..');
-// All build artifacts (toolchain node_modules, bundle, deps.tar, blob, and the final
-// binary) live under a per-platform tag dir so a shared/NFS `build/` tree can host
-// mutually-incompatible builds (different OS/OS-version/arch/node) without collision.
-const TOOLCHAIN = path.join(REPO, 'build', platformTag());
-const OUT = TOOLCHAIN;
+// Three DIFFERENT keys for three different things — see scripts/platform-tag.cjs's
+// file header for the full rationale (a future reader must not re-merge them):
+//   * TOOLCHAIN (esbuild+postject node_modules) — a native tool cache, keyed by
+//     platform+node-major (toolchainDir). Never shipped.
+//   * BUNDLE_DIR (the esbuilt naude-entry.bundle.cjs) — platform-INDEPENDENT pure
+//     JS, keyed by NOTHING (one unkeyed location shared with clode-main.bundle.cjs).
+//   * OUT (deps.tar/.sig, sea-config.json, sea-prep.blob, and the final naude
+//     binary) — the SHIPPABLE artifact + its intermediates, keyed by the artifact
+//     name (artifactDir; CLODE_ASSET_NAME overrides it — see its comment). This is
+//     what buys "if it's in build/clode-*, it's shippable."
+const TOOLCHAIN = toolchainDir(REPO);
+const BUNDLE_DIR = path.join(REPO, 'build', 'bundle');
+const OUT = artifactDir(REPO);
 
 // npmCliPath/runNpm (the "run npm's OWN JS CLI under THIS node" trick — see
 // scripts/lib/npm-cli.cjs for the full rationale) are shared with build-bundle.mjs,
@@ -81,7 +89,7 @@ function ensureToolchain() {
 // that must be valid JS source — JSON.stringify(path) yields the quoted string literal
 // esbuild expects (see build-bundle.mjs's __CLODE_BUNDLE_VERSION__ for the same pattern).
 function esbuildBundle() {
-  const bundle = path.join(OUT, 'naude-entry.bundle.cjs');
+  const bundle = path.join(BUNDLE_DIR, 'naude-entry.bundle.cjs');
   toolRequire('esbuild').buildSync({
     entryPoints: [path.join(REPO, 'libexec', 'naude-entry.cjs')],
     bundle: true, platform: 'node', format: 'cjs', target: 'node24',
@@ -219,10 +227,10 @@ function seaSign(phase, bin) {
 // are identical on every OS except the two genuinely per-format bits: the Mach-O segment name
 // postject needs on macOS, and the OS signing (isolated in sea-sign.cjs).
 //
-// outOverride (from --out) picks WHERE the final binary lands; the scratch dir (TOOLCHAIN/OUT
-// — bundle, deps.tar, blob, sea-config) is unaffected either way, same convention as
-// clode-fuse.cjs's quaude --out (an explicit path is the user's, verbatim; only the default
-// gets the per-tag treatment, here build/<tag>/naude instead of a bare basename).
+// outOverride (from --out) picks WHERE the final binary lands; OUT (deps.tar, blob,
+// sea-config) is unaffected either way, same convention as clode-fuse.cjs's quaude
+// --out (an explicit path is the user's, verbatim; only the default gets the
+// artifact-name treatment, here build/<artifact-name>/naude instead of a bare basename).
 async function buildBinary(blob, outOverride) {
   const bin = outOverride || seaBin(REPO, 'naude');  // naude.exe on win32, naude elsewhere
   fs.mkdirSync(path.dirname(bin), { recursive: true });
@@ -308,8 +316,8 @@ function parseCliArg(argv) {
 }
 
 // Parse `--out <path>`: where the final naude binary is written. OPTIONAL —
-// defaults to seaBin(REPO, 'naude') (build/<tag>/naude[.exe]) when absent, same
-// as every other --out consumer in this repo. Resolved to an absolute path here
+// defaults to seaBin(REPO, 'naude') (build/<artifact-name>/naude[.exe]) when
+// absent, same as every other --out consumer in this repo. Resolved to an absolute path here
 // (once) so every downstream consumer (buildBinary, the log line) gets the same
 // value regardless of the caller's cwd.
 export function parseOutArg(argv) {
@@ -327,6 +335,8 @@ async function main() {
   const argv = process.argv.slice(2);
   const cliCjs = parseCliArg(argv);
   const outOverride = parseOutArg(argv);
+  fs.mkdirSync(TOOLCHAIN, { recursive: true });
+  fs.mkdirSync(BUNDLE_DIR, { recursive: true });
   fs.mkdirSync(OUT, { recursive: true });
   ensureToolchain();
   const bundle = esbuildBundle();
