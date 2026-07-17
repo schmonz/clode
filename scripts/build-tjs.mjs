@@ -489,6 +489,73 @@ function fixupPosixSocketSockRdm(dir) {
   console.log('fixup posix-socket-sock-rdm: applied');
 }
 
+function fixupLibuvHaikuStdioPipe(dir) {
+  // saghul's libuv fork creates child stdio as a SOCK_STREAM socketpair (with
+  // SO_SNDBUF/SO_RCVBUF forced to 64KB). On Haiku that socketpair's write
+  // flow-control is BROKEN: a BLOCKING write past the ~64KB buffer returns EPIPE
+  // ("Broken pipe") instead of blocking, and the peer read gets nothing. So a
+  // spawned child that writes > 64KB to its stdout before exiting deadlocks — its
+  // write EPIPEs and drops the rest, the parent hangs reading nothing. This first
+  // bit when the quaude ext-dep closure grew (9e968b4) and pushed --quaude-attest's
+  // manifest print past 64KB (64,040 -> 85,696): every Haiku `clode build` then hung
+  // in attest and clode's own timeout SIGKILLed it. Root-caused on a local Haiku box
+  // (spike/quickjs/qemu/HAIKU-BOX.md): instrumented the child's fwrite (=65536,
+  // ferror=1, errno=EPIPE); sh children and tjs-over-a-real-pipe both work; removing
+  // just the setsockopt did NOT help — the socketpair itself is the fault. Every
+  // platform uses this socketpair; only Haiku's blocks-vs-EPIPEs semantics is wrong
+  // (OpenBSD/DragonFly share the fork/exec path and don't deadlock). libuv upstream
+  // candidate.
+  //
+  // Fix: use a real pipe() for the common UNIDIRECTIONAL child stdio
+  // (stdin/stdout/stderr); a single pipe cannot serve a bidirectional
+  // (UV_READABLE_PIPE && UV_WRITABLE_PIPE) container, so keep the socketpair only
+  // there. uv__make_pipe gives fds[0]=read / fds[1]=write, and the caller keeps
+  // fds[0] (parent) while the child gets fds[1] — correct for a WRITABLE (stdout/
+  // stderr) child; for a READABLE (stdin) child, swap so the child gets the read
+  // end. Verified both directions on the box (85KB stdout, no deadlock; a stdin
+  // child read all its input).
+  const f = path.join(dir, 'deps/libuv/src/unix/process.c');
+  const src = fs.readFileSync(f, 'utf8');
+  if (src.includes('uv__make_pipe(fds, 0)')) {
+    console.log('fixup libuv-haiku-stdio-pipe: already applied');
+    return;
+  }
+  const anchor = '      ret = uv_socketpair(SOCK_STREAM, 0, fds, 0, 0);\n'
+    + '\n'
+    + '      if (ret == 0)\n'
+    + '        for (i = 0; i < 2; i++) {\n'
+    + '          setsockopt(fds[i], SOL_SOCKET, SO_RCVBUF, &size, sizeof(size));\n'
+    + '          setsockopt(fds[i], SOL_SOCKET, SO_SNDBUF, &size, sizeof(size));\n'
+    + '        }';
+  if (!src.includes(anchor)) {
+    throw new Error('fixup libuv-haiku-stdio-pipe: anchor not found (libuv changed under the pin — re-derive the fixup)');
+  }
+  const repl = '#if defined(__HAIKU__)\n'
+    + '      /* Haiku SOCK_STREAM socketpair stdio deadlocks (write > 64KB EPIPEs\n'
+    + '       * instead of blocking); use a real pipe() for unidirectional stdio,\n'
+    + '       * keeping the socketpair only for a bidirectional container. */\n'
+    + '      if ((container->flags & (UV_READABLE_PIPE | UV_WRITABLE_PIPE))\n'
+    + '          != (UV_READABLE_PIPE | UV_WRITABLE_PIPE)) {\n'
+    + '        ret = uv__make_pipe(fds, 0);  /* fds[0]=read, fds[1]=write; child gets fds[1] */\n'
+    + '        if (ret == 0 && (container->flags & UV_READABLE_PIPE)) {\n'
+    + '          int tmp = fds[0]; fds[0] = fds[1]; fds[1] = tmp;  /* stdin child needs the read end */\n'
+    + '        }\n'
+    + '        (void) size;\n'
+    + '      } else {\n'
+    + '        ret = uv_socketpair(SOCK_STREAM, 0, fds, 0, 0);\n'
+    + '        if (ret == 0)\n'
+    + '          for (i = 0; i < 2; i++) {\n'
+    + '            setsockopt(fds[i], SOL_SOCKET, SO_RCVBUF, &size, sizeof(size));\n'
+    + '            setsockopt(fds[i], SOL_SOCKET, SO_SNDBUF, &size, sizeof(size));\n'
+    + '          }\n'
+    + '      }\n'
+    + '#else\n'
+    + anchor + '\n'
+    + '#endif';
+  fs.writeFileSync(f, src.replace(anchor, repl));
+  console.log('fixup libuv-haiku-stdio-pipe: applied');
+}
+
 function fixupTjsCmakeCxxOnlyForAda(dir) {
   // txiki declares CXX as a project language, but since the ada-ectomy
   // (TJS_USE_ADA=OFF selects the plain-C wurl) nothing C++ compiles — yet
@@ -1603,6 +1670,7 @@ if (buildOnly) {
   fixupLwsHaikuDirent(tjsDir);
   fixupLwsGetifaddrsPtrCast(tjsDir);
   fixupPosixSocketSockRdm(tjsDir);
+  fixupLibuvHaikuStdioPipe(tjsDir);
   fixupTjsCmakeCxxOnlyForAda(tjsDir);
   fixupLibuvHrtimeOldDarwin(tjsDir);
   fixupLibuvStrnlenOldDarwin(tjsDir);
