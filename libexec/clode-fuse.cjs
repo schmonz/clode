@@ -906,6 +906,13 @@ async function clodeBuild(args, opts) {
       stageDir = path.join(work, 'stage');
       fs.mkdirSync(stageDir, { recursive: true });
       fs.copyFileSync(bundle, path.join(stageDir, 'clode-main.bundle.cjs'));
+      // Sibling bundle from the same build-clode-main.mjs run: the naude entry
+      // point, pre-esbuilt off the user path (Task 4). Carried alongside
+      // clode-main.bundle.cjs so the fuse worker (quaude-fuse.js) can ship it
+      // as a builder-role member too. The stale-bundle gate above already
+      // guarantees clode-main.bundle.cjs's freshness; since both bundles come
+      // from the same script run, no separate freshness gate is needed here.
+      fs.copyFileSync(path.join(path.dirname(bundle), 'naude-entry.bundle.cjs'), path.join(stageDir, 'naude-entry.bundle.cjs'));
       clodeLog(`clode: build: staging builder bundle ${bundle} ...`);
     } else {
       // Upstream bundle: resolve + extract + hook via the existing machinery —

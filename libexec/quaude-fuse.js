@@ -110,6 +110,11 @@ if (!Array.isArray(DEPS) || DEPS.length === 0) {
 
 if (role === 'builder') {
   members.push({ name: entryName, data: await mustRead(path.join(stageDir, 'clode-main.bundle.cjs'), 'esbuilt clode-main bundle') });
+  // The naude entry point: pre-esbuilt off the user path (Task 4), staged
+  // alongside clode-main.bundle.cjs by clode-fuse.cjs's --self staging step.
+  // Carried here (not built at naude-assembly time) so a later task can build
+  // a naude without esbuild present on the user side.
+  members.push({ name: 'naude-entry.bundle.cjs', data: await mustRead(path.join(stageDir, 'naude-entry.bundle.cjs'), 'esbuilt naude-entry bundle') });
   const libexecDir = path.dirname(shimDir);
   for (const f of ['bun-shim.cjs', 'extract-claude-js.cjs', 'quaude-fuse.js', 'quaude-bootstrap.mjs']) {
     members.push({ name: `libexec/${f}`, data: await mustRead(path.join(libexecDir, f), `libexec member ${f}`) });

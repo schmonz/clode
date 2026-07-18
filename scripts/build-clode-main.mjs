@@ -90,6 +90,24 @@ function esbuildBundle() {
   return bundle;
 }
 
+// The naude entry point, esbuilt off the user path (Task 4). Unlike
+// clode-main.bundle.cjs, it carries NO define: Task 3 already turned the
+// builder path into a SEA asset rather than an esbuild-time constant, and
+// naude-entry has no version/builder constant of its own — so this bundle is
+// our-source-only and safe to carry as a builder-role member (see
+// libexec/quaude-fuse.js's builder-role member loop).
+function esbuildNaudeEntry() {
+  const bundle = path.join(OUT, 'naude-entry.bundle.cjs');
+  toolRequire('esbuild').buildSync({
+    entryPoints: [path.join(REPO, 'libexec', 'naude-entry.cjs')],
+    bundle: true, platform: 'node', format: 'cjs', target: 'node24',
+    outfile: bundle,
+  });
+  return bundle;
+}
+
 ensureToolchain();
 const bundle = esbuildBundle();
 console.error(`esbuild → ${bundle}`);
+const naudeEntryBundle = esbuildNaudeEntry();
+console.error(`esbuild → ${naudeEntryBundle}`);
