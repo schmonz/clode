@@ -329,7 +329,16 @@ async function main() {
       const platform = tjsPlatform(undefined, globalThis.__clodeMapPlatform);
       const sep = platform === 'win32' ? '\\' : '/';
       const tmpBase = tjs.tmpDir ?? tjs.env.TMPDIR ?? (platform === 'win32' ? 'C:\\Windows\\Temp' : '/tmp');
-      const guardSettingsFile = tmpBase.replace(/[\\/]+$/, '') + sep + `clode-guard-${tjs.pid}.json`;
+      // Name the settings file DETERMINISTICALLY by the target's own path, not by
+      // pid. tjs wires no process-exit hook (process.cjs: "tjs.exit does not run
+      // handlers"), so a per-pid file would leak one tiny JSON per boot with no
+      // way to clean it up in-process. Its CONTENTS are identical for a given
+      // exePath, so a hash-of-exePath name makes the write idempotent: at most
+      // ONE file per distinct quaude binary, and concurrent sessions of the same
+      // binary write byte-identical content to the same path (no collision, no
+      // accumulation) — no cleanup needed.
+      const guardKey = (await sha256hex(new TextEncoder().encode(tjs.exePath))).slice(0, 16);
+      const guardSettingsFile = tmpBase.replace(/[\\/]+$/, '') + sep + `clode-guard-${guardKey}.json`;
       const guardSettings = {
         hooks: {
           PreToolUse: [
