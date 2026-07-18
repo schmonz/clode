@@ -184,8 +184,8 @@ test('first pass shapes the child env with the target contract', () => {
   // path.join, not a POSIX literal — see the note at the first-pass test above.
   assert.ok(call.env.NODE_PATH.includes(path.join('/deps', 'node_modules')),
     `NODE_PATH lacks the materialized deps dir: ${call.env.NODE_PATH}`);
-  // No `builder` override here (the default seam) -> BAKED_BUILDER is null in a
-  // plain require() of this module -> CLODE_SELF must stay unset. A regression
+  // No `builder` override here (the default seam) -> bakedBuilder(sea) is null
+  // for this fakeSea() (no getAsset) -> CLODE_SELF must stay unset. A regression
   // in that guard would otherwise go unnoticed by every OTHER test in this file
   // (they all pass `builder` explicitly).
   assert.strictEqual(call.env.CLODE_SELF, undefined, 'no builder baked -> updater must fail loud, not spawn something wrong');
@@ -196,7 +196,7 @@ test('first pass points CLODE_SELF at the clode that built this naude', () => {
   runNaude({
     argv: [], execPath: '/naude', env: {}, cacheDir: os.tmpdir(), workDir: '/work',
     sea: fakeSea(),
-    builder: '/usr/local/bin/clode',            // what the esbuild define supplies
+    builder: '/usr/local/bin/clode',            // an explicit override (not the asset seam)
     materializeDeps: () => '/deps',
     materializeAssets: ({ destDir }) => destDir,
     spawn: (cmd, args, o) => { call = o; return { on() {} }; },
@@ -205,4 +205,53 @@ test('first pass points CLODE_SELF at the clode that built this naude', () => {
   });
   assert.strictEqual(call.env.CLODE_SELF, '/usr/local/bin/clode',
     'a baked naude cannot update itself; the in-TUI updater must call the builder');
+});
+
+// --- the DEFAULT builder path: sourced from the SEA `builder` asset, not an -----
+// --- esbuild define. [[naude-real-on-node24-host]]: over-stubbed DI tests once ---
+// --- let a 100%-fatal boot bug ship green because EVERY test stubbed both `sea` --
+// --- and `builder`, so the seam between them never ran. These two tests pass a --
+// --- fake `sea` and DELIBERATELY do NOT override `builder`, so the real default -
+// --- (reading `sea.getAsset('builder', 'utf8')`) is what's under test.
+test('first pass: no `builder` override -> reads the builder asset off the real `sea` seam', () => {
+  let call = null;
+  const sea = Object.assign(fakeSea(), {
+    getAsset: (name, enc) => {
+      if (name !== 'builder') throw new Error(`no such asset: ${name}`);
+      assert.strictEqual(enc, 'utf8');
+      return '/usr/local/bin/clode';
+    },
+  });
+  runNaude({
+    argv: [], execPath: '/naude', env: {}, cacheDir: os.tmpdir(), workDir: '/work',
+    sea,
+    // NOTE: no `builder` override — the default (bakedBuilder(sea)) is under test.
+    materializeDeps: () => '/deps',
+    materializeAssets: ({ destDir }) => destDir,
+    spawn: (cmd, args, o) => { call = o; return { on() {} }; },
+    procOn: () => {}, procOff: () => {}, exit: () => {},
+    onExit: (cb) => cb(0, null),
+  });
+  assert.strictEqual(call.env.CLODE_SELF, '/usr/local/bin/clode',
+    'the default builder path must come from the sea.getAsset(\'builder\') seam');
+});
+
+test('first pass: no `builder` override + the builder asset is absent (getAsset throws) -> CLODE_SELF unset', () => {
+  let call = null;
+  const sea = Object.assign(fakeSea(), {
+    getAsset: () => { throw new Error('No such asset: builder'); },
+  });
+  runNaude({
+    argv: [], execPath: '/naude', env: {}, cacheDir: os.tmpdir(), workDir: '/work',
+    sea,
+    // NOTE: no `builder` override here either — the null path must come from
+    // bakedBuilder catching the thrown getAsset, not from a stubbed `builder`.
+    materializeDeps: () => '/deps',
+    materializeAssets: ({ destDir }) => destDir,
+    spawn: (cmd, args, o) => { call = o; return { on() {} }; },
+    procOn: () => {}, procOff: () => {}, exit: () => {},
+    onExit: (cb) => cb(0, null),
+  });
+  assert.strictEqual(call.env.CLODE_SELF, undefined,
+    'no builder asset -> updater must fail loud, not spawn something wrong');
 });

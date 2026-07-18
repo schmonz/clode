@@ -1,6 +1,8 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 test('naude sea-config embeds the baked cli.cjs + bun-shim + deps, NOT the extractor', async () => {
@@ -12,6 +14,39 @@ test('naude sea-config embeds the baked cli.cjs + bun-shim + deps, NOT the extra
   assert.ok(cfg.assets['deps.tar'] && cfg.assets['deps.sig']);
   assert.ok(!('extract-claude-js.cjs' in cfg.assets), 'naude must NOT embed the extractor');
   assert.strictEqual(cfg.main, '/b/entry.js');
+});
+
+// The builder path (the clode that built this naude, for the in-app updater's
+// callback) used to be baked via esbuild --define __CLODE_BUILDER__. Now it's a
+// SEA asset — runtime data, not a build-time string burned into the bundle —
+// so the SAME esbuilt naude-entry bundle serves every build regardless of who
+// built it. naudeSeaConfig writes the builder path to a file and adds it as
+// the `builder` asset.
+test('naude sea-config: a non-empty `builder` is written to a file and added as an asset', async () => {
+  const { naudeSeaConfig } = await import('../scripts/build-naude.mjs');
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-sea-config-'));
+  try {
+    const cfg = naudeSeaConfig({ mainBundle: '/b/entry.js', cliCjs: '/cache/cli.cjs',
+      bunShim: '/lx/bun-shim.cjs', tar: '/o/deps.tar', sig: '/o/deps.sig', out,
+      builder: '/abs/clode' });
+    assert.ok(cfg.assets.builder, 'expected a `builder` asset when `builder` is a non-empty string');
+    assert.strictEqual(fs.readFileSync(cfg.assets.builder, 'utf8'), '/abs/clode');
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+});
+
+test('naude sea-config: a null `builder` adds no `builder` asset (the fail-loud null path)', async () => {
+  const { naudeSeaConfig } = await import('../scripts/build-naude.mjs');
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-sea-config-'));
+  try {
+    const cfg = naudeSeaConfig({ mainBundle: '/b/entry.js', cliCjs: '/cache/cli.cjs',
+      bunShim: '/lx/bun-shim.cjs', tar: '/o/deps.tar', sig: '/o/deps.sig', out,
+      builder: null });
+    assert.ok(!('builder' in cfg.assets), 'no builder -> no `builder` asset -> updater fails loud');
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
 });
 
 // Bug 1 (--out for naude): the flag used to be forwarded by clode-fuse.cjs but

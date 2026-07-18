@@ -164,17 +164,31 @@ function stageDeps() {
 // Code, given via `--cli`). Crucially there is NO
 // `extract-claude-js.cjs` asset — naude bakes CC, it never extracts at runtime. Exported
 // and side-effect-free so it's unit-testable without building a real SEA.
-export function naudeSeaConfig({ mainBundle, cliCjs, bunShim, tar, sig, out }) {
+// `builder` is the absolute path of the clode building this naude (a naude cannot
+// rebuild itself, so its patched in-app updater calls back to the builder — see
+// naude-entry.cjs's bakedBuilder). It used to be burned into the bundle via an
+// esbuild --define; now it's runtime data, a `builder` asset, so the SAME esbuilt
+// naude-entry bundle serves every build regardless of who built it. A non-empty
+// string is written to <out>/builder.txt and added as the asset; null/empty omits
+// the asset entirely, preserving the "no builder -> updater fails loud" contract
+// naude-entry.cjs's bakedBuilder implements on the read side.
+export function naudeSeaConfig({ mainBundle, cliCjs, bunShim, tar, sig, out, builder }) {
+  const assets = {
+    'deps.tar': tar,
+    'deps.sig': sig,
+    'bun-shim.cjs': bunShim,
+    'cli.cjs': cliCjs,
+  };
+  if (builder) {
+    const builderFile = path.join(out, 'builder.txt');
+    fs.writeFileSync(builderFile, builder);
+    assets.builder = builderFile;
+  }
   return {
     main: mainBundle,
     output: path.join(out, 'sea-prep.blob'),
     disableExperimentalSEAWarning: true,   // don't print node's SEA warning on every run
-    assets: {
-      'deps.tar': tar,
-      'deps.sig': sig,
-      'bun-shim.cjs': bunShim,
-      'cli.cjs': cliCjs,
-    },
+    assets,
   };
 }
 

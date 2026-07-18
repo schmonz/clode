@@ -14,7 +14,7 @@
 //   - unset (+ isSea): the first pass — materialize deps (-> depsRoot) and the
 //     named assets (-> workDir), then shape the child env with the target-env
 //     contract (shapeTargetEnv — was the retired runner's applyBundleEnv job;
-//     CLODE_SELF points at the baked-in builder, see BAKED_BUILDER below), spawn
+//     CLODE_SELF points at the builder, see bakedBuilder below), spawn
 //     process.execPath (the naude binary) with NAUDE_RUN_AS_NODE=<workDir>/cli.cjs,
 //     NODE_PATH prepended with <depsRoot>/node_modules, and the user args passed
 //     through; wait; mirror exit.
@@ -32,11 +32,21 @@ const { spawn } = require('node:child_process');
 const seaHelpers = require('./naude-sea.cjs');
 const { shapeTargetEnv } = require('./target-env.cjs');
 const { isExecutableFile } = require('./clode-hosttools.cjs');
-// Baked at build time by scripts/build-naude.mjs (esbuild --define): the absolute
-// path of the clode that built this naude. A naude cannot rebuild itself, so its
-// patched in-app updater calls back to that builder. Undefined in a plain
-// `require()` of this module (tests) -> no CLODE_SELF, updater fails loud.
-const BAKED_BUILDER = typeof __CLODE_BUILDER__ === 'string' ? __CLODE_BUILDER__ : null;
+// The absolute path of the clode that built this naude, read as a SEA asset (
+// runtime data) rather than an esbuild --define (a build-time string burned
+// into the bundle) — so the SAME esbuilt naude-entry bundle serves every
+// build regardless of who built it. A naude cannot rebuild itself, so its
+// patched in-app updater calls back to this builder. Absent asset / no `sea`
+// seam (a plain `require()` of this module in tests) -> null, same as before
+// -> no CLODE_SELF, updater fails loud.
+function bakedBuilder(sea) {
+  try {
+    const b = sea && sea.getAsset && sea.getAsset('builder', 'utf8');
+    return b ? (String(b).trim() || null) : null;
+  } catch {
+    return null;
+  }
+}
 
 // Reshape argv to plain-node form and run the target as the main module. Defaults
 // to the real behavior: set process.argv = [execPath, script, ...userArgs], then
@@ -82,7 +92,7 @@ function runNaude(opts = {}) {
     procOff = (s, cb) => process.removeListener(s, cb),
     exit = (c) => process.exit(c),
     onExit,
-    builder = BAKED_BUILDER,
+    builder = bakedBuilder(sea),
   } = opts;
 
   // Unpack the deps tarball to a sig-keyed cache dir (holds node_modules/), and the
