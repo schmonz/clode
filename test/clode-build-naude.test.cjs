@@ -74,10 +74,19 @@ function fakeSmokeTarget(opts) {
   });
 }
 
+// The pinned Node the naude branch now ALWAYS ensures (clode carries no Node;
+// naude embeds a sha-verified pinned Node fetched into a versioned store). The
+// wiring tests inject this via opts.ensureNode so they never touch the network:
+// the naude build spawns UNDER this path and passes it down as --node.
+const FAKE_NODE = path.join('/pinned', 'node', 'bin', 'node');
+
 // Drive clodeBuild with the spawn seam captured. `runResult` is what the
 // injected run() resolves to for every NON-smoke spawn (default success + no
 // output); smoke spawns (`-p`) are answered by fakeSmokeTarget above.
-async function runBuild(args, env, runResult = { status: 0, stdout: '', stderr: '' }) {
+// `ensureNode` is the injected pinned-node seam (default: resolves FAKE_NODE);
+// pass a thrower to exercise the "pinned node unavailable" refusal.
+async function runBuild(args, env, runResult = { status: 0, stdout: '', stderr: '' },
+  ensureNode = async () => FAKE_NODE) {
   const calls = [];
   const run = (cmd, cmdArgs, opts) => {
     calls.push({ cmd, args: cmdArgs, opts });
@@ -91,6 +100,7 @@ async function runBuild(args, env, runResult = { status: 0, stdout: '', stderr: 
     libexec: LIBEXEC,
     env,
     run,
+    ensureNode,
     stderr: { write: (s) => stderrBuf.push(s) },
     stdout: { write: (s) => stdoutBuf.push(s) },
   });
@@ -108,13 +118,24 @@ test('clode build --naude: extracts cli.cjs and invokes build-naude.mjs with it'
       && c.args.some((a) => typeof a === 'string' && a.endsWith(path.join('scripts', 'build-naude.mjs'))));
     assert.ok(naude, `build-naude.mjs was not invoked; calls:\n${JSON.stringify(r.calls, null, 2)}`);
 
-    // It runs under this node, and passes the extracted cli.cjs via --cli.
-    assert.strictEqual(naude.cmd, process.execPath);
+    // It runs UNDER the pinned node (not process.execPath — clode carries no
+    // Node; naude embeds the fetched pinned Node), passes that same node as
+    // --node, and passes the extracted cli.cjs via --cli.
+    assert.strictEqual(naude.cmd, FAKE_NODE, 'build-naude must run under the pinned node');
+    const nodeIdx = naude.args.indexOf('--node');
+    assert.ok(nodeIdx >= 0 && naude.args[nodeIdx + 1] === FAKE_NODE,
+      `--node must be the pinned node; args: ${JSON.stringify(naude.args)}`);
     const cliIdx = naude.args.indexOf('--cli');
     assert.ok(cliIdx >= 0, `--cli not passed to build-naude; args: ${JSON.stringify(naude.args)}`);
     assert.strictEqual(naude.args[cliIdx + 1], cliPath,
       'the --cli value must be the cli.cjs the SAME extract path produced');
     assert.ok(fs.existsSync(cliPath), 'extracted cli.cjs should exist on disk');
+
+    // The assembler inputs are passed explicitly (Task 5/6): the prebuilt
+    // bundle, a resolved node_modules, the postject dir, and the builder path.
+    for (const flag of ['--bundle', '--nmdir', '--postject', '--builder']) {
+      assert.ok(naude.args.includes(flag), `${flag} not passed to build-naude; args: ${JSON.stringify(naude.args)}`);
+    }
 
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
@@ -268,23 +289,72 @@ test('clode build --naude: a naude that never POSTs fails the build loudly', asy
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-// Bug 2: under a FUSED builder (a native clode running under tjs, VFS
-// mounted with manifest.role 'builder'), there is no scripts/ dir on disk
-// and process.execPath is tjs, not node — spawning build-naude.mjs would
-// exec-fail with a mystery exit. Must fail loud and early, naming the real
-// alternatives, instead of letting the user hit exec garbage.
-test('clode build --naude under a fused builder: fails loud with the Node>=24 / quaude alternative', async () => {
+// The old fused-builder refusal ("naude requires a Node >= 24 host") is GONE:
+// clode carries no Node, and the naude branch now FETCHES a sha-verified pinned
+// Node into a versioned store (Task 1). The only remaining refusal is "the
+// pinned node could not be obtained" — first build, offline — and it must name
+// the fix (`clode fetch --naude` with network), not spawn anything.
+test('clode build --naude: pinned node unavailable fails loud, names `clode fetch --naude`', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-nonode-'));
+  try {
+    const { env } = seedProvider(dir);
+    const boom = async () => { throw new Error('offline: getaddrinfo ENOTFOUND nodejs.org'); };
+    const r = await runBuild(['--naude'], env, undefined, boom);
+    assert.strictEqual(r.status, 1);
+    assert.match(r.stderr, /pinned node/i);
+    assert.match(r.stderr, /clode fetch --naude/, 'should name the fetch fix');
+    const naude = r.calls.find((c) => Array.isArray(c.args)
+      && c.args.some((a) => typeof a === 'string' && a.endsWith(path.join('scripts', 'build-naude.mjs'))));
+    assert.ok(!naude, `no build-naude should have been spawned; calls:\n${JSON.stringify(r.calls, null, 2)}`);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// Under a FUSED builder (native clode under tjs, VFS role 'builder', no
+// checkout on disk) the naude branch MATERIALIZES the builder-role payload
+// (build-naude.mjs + platform-tag.cjs + the prebuilt bundle + postject + the
+// ext-dep manifests/node_modules) to disk and spawns build-naude UNDER the
+// fetched pinned node — it no longer refuses. This isolates the WIRING: the
+// dep-closure gate is satisfied honestly by carrying the REAL declared deps
+// (so it tracks whatever bun-shim actually requires) with empty transitive
+// stubs; the gate itself has its own tests, and the full fused build is proven
+// for real, node absent from PATH, in test/clode-native.test.cjs.
+test('clode build --naude under a fused builder: materializes + spawns build-naude under the pinned node', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-fused-'));
   try {
     const { env } = seedProvider(dir);
-    globalThis.__quaudeVFS = { manifest: { role: 'builder' } };
+    const enc = new TextEncoder();
+    // The naude branch reads the closure from the MATERIALIZED payload, so the
+    // fused VFS must carry deps/claude's manifest + a node_modules that resolves
+    // every declared dep. Derive from the real manifest (extractIfNeeded
+    // refreshes the real bun-shim into the stage on every hit — so its real
+    // requires, semver/yaml/ws, must be covered by the closure).
+    const realDeps = Object.keys(require('../deps/claude/package.json').dependencies || {});
+    const files = new Map([
+      ['deps/claude/package.json', enc.encode(JSON.stringify({
+        dependencies: Object.fromEntries(realDeps.map((d) => [d, '0.0.0'])),
+      }))],
+      ['scripts/build-naude.mjs', enc.encode('// materialized build-naude stub\n')],
+      ['scripts/platform-tag.cjs', enc.encode('module.exports = {};\n')],
+      ['naude-entry.bundle.cjs', enc.encode('// materialized bundle stub\n')],
+      ['deps/clode/node_modules/postject/dist/api.js', enc.encode('// postject stub\n')],
+    ]);
+    for (const d of realDeps) {
+      files.set(`node_modules/${d}/package.json`, enc.encode(JSON.stringify({ name: d, version: '0.0.0', dependencies: {} })));
+    }
+    globalThis.__quaudeVFS = { manifest: { role: 'builder' }, files };
     try {
       const r = await runBuild(['--naude'], env);
-      assert.strictEqual(r.status, 1);
-      assert.match(r.stderr, /Node\s*>=\s*24/);
-      assert.match(r.stderr, /fused builder/);
-      assert.match(r.stderr, /clode build/, 'should name the quaude alternative');
-      assert.strictEqual(r.calls.length, 0, `no subprocess should have been spawned; calls:\n${JSON.stringify(r.calls, null, 2)}`);
+      const naude = r.calls.find((c) => Array.isArray(c.args)
+        && c.args.some((a) => typeof a === 'string' && a.endsWith(path.join('scripts', 'build-naude.mjs'))));
+      assert.ok(naude, `build-naude was not spawned under a fused builder; stderr:\n${r.stderr}\ncalls:\n${JSON.stringify(r.calls, null, 2)}`);
+      assert.strictEqual(naude.cmd, FAKE_NODE, 'must run under the pinned node, not tjs');
+      // The materialized script lives under a temp payload dir, not the (absent) checkout.
+      const scriptArg = naude.args.find((a) => typeof a === 'string' && a.endsWith(path.join('scripts', 'build-naude.mjs')));
+      assert.ok(!scriptArg.startsWith(REPO), `build-naude must be the MATERIALIZED copy, not the checkout: ${scriptArg}`);
+      for (const flag of ['--node', '--bundle', '--nmdir', '--postject', '--builder']) {
+        assert.ok(naude.args.includes(flag), `${flag} missing; args: ${JSON.stringify(naude.args)}`);
+      }
+      assert.doesNotMatch(r.stderr, /fused builder|Node\s*>=\s*24/, 'the old refusal must be gone');
     } finally {
       delete globalThis.__quaudeVFS;
     }

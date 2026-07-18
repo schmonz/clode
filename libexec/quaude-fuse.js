@@ -116,6 +116,15 @@ if (role === 'builder') {
   // a naude without esbuild present on the user side.
   members.push({ name: 'naude-entry.bundle.cjs', data: await mustRead(path.join(stageDir, 'naude-entry.bundle.cjs'), 'esbuilt naude-entry bundle') });
   const libexecDir = path.dirname(shimDir);
+  // The naude ASSEMBLER: scripts/build-naude.mjs (spawned under the fetched
+  // pinned node) and its one repo-local require, scripts/platform-tag.cjs. A
+  // fused builder ships no scripts/ dir, so `clode build --naude` under
+  // clode-native materializes these (clode-fuse.cjs's materializeFusedPayload)
+  // and spawns the copy. Member names keep their scripts/ path (re-joined onto
+  // the payload dir verbatim). Committed files that always exist → mustRead.
+  for (const f of ['build-naude.mjs', 'platform-tag.cjs']) {
+    members.push({ name: `scripts/${f}`, data: await mustRead(path.join(path.dirname(libexecDir), 'scripts', f), `naude assembler member scripts/${f}`) });
+  }
   for (const f of ['bun-shim.cjs', 'extract-claude-js.cjs', 'quaude-fuse.js', 'quaude-bootstrap.mjs']) {
     members.push({ name: `libexec/${f}`, data: await mustRead(path.join(libexecDir, f), `libexec member ${f}`) });
   }

@@ -49,7 +49,41 @@ const resolve = require('./clode-resolve.cjs');
 const extract = require('./clode-extract.cjs');
 const deps = require('./clode-deps.cjs');
 const { clodeCacheDir, depsStore } = require('./clode-paths.cjs');
+const { ensurePinnedNode } = require('./clode-node.cjs');
 const { seaBin } = require('../scripts/platform-tag.cjs');
+
+// Materialize the builder-role VFS members to `mat` on disk. A fused NATIVE
+// clode runs under tjs and ships NO checkout — so any subprocess it must spawn
+// (the fuse WORKER for a quaude/--self build, or scripts/build-naude.mjs for a
+// naude build) needs real files. This is the SUPERSET both build targets need:
+// the node-shim tree + libexec support + ext-dep node_modules + deps manifests
+// (quaude/--self), plus the prebuilt naude bundle, postject, and the naude
+// assembler scripts (build --naude). Extra members a given target doesn't use
+// are harmless. Member-name -> on-disk-home mapping mirrors quaude-fuse.js's
+// archive namespace (target-env.cjs and the naude bundle ride at the archive
+// ROOT; everything else keeps its path).
+function materializeFusedPayload(vfs, mat) {
+  for (const [name, bytes] of vfs.files) {
+    let dest;
+    if (name.startsWith('node-shim/')) dest = path.join(mat, 'libexec', name);
+    else if (name.startsWith('libexec/')) dest = path.join(mat, name);
+    else if (name.startsWith('node_modules/')) dest = path.join(mat, name);
+    // target-env.cjs rides at the archive ROOT (bare name) but belongs beside
+    // node-shim/ on disk, i.e. libexec/target-env.cjs — see quaude-fuse.js.
+    else if (name === 'target-env.cjs') dest = path.join(mat, 'libexec', name);
+    // deps/claude (ext-dep closure + lockfile sources of truth) AND deps/clode
+    // (postject's carried JS — build --naude's --postject) keep their paths.
+    else if (name.startsWith('deps/')) dest = path.join(mat, name);
+    // The naude assembler + its one sibling require (platform-tag.cjs). A fused
+    // builder ships no scripts/ dir; build --naude spawns the MATERIALIZED copy.
+    else if (name.startsWith('scripts/')) dest = path.join(mat, name);
+    // The prebuilt naude SEA main, carried at the archive root (Task 4).
+    else if (name === 'naude-entry.bundle.cjs') dest = path.join(mat, name);
+    else continue;
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, Buffer.from(bytes));
+  }
+}
 
 function sha256File(p) {
   return crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
@@ -649,57 +683,100 @@ async function clodeBuild(args, opts) {
   // cli.cjs to scripts/build-naude.mjs (which runs the esbuild/postject SEA
   // pipeline — Node >= 24 hosts only) and RETURNS, never touching the fuse.
   if (naude) {
-    // A fused NATIVE clode (the builder-role VFS the quaude/self path
-    // materializes below) runs under tjs and ships no scripts/ dir on disk —
-    // there is nothing for a Node SEA pipeline to spawn, and process.execPath
-    // is the tjs template, not a Node >= 24 host. Without this guard the user
-    // got a mystery exit (exec failure garbage, or a bare exit-127 with no
-    // output); fail loud instead, naming the real alternatives. Same
-    // fused-builder signal the materialization step below already keys on —
-    // no new global.
     const vfs = globalThis.__quaudeVFS;
-    if (vfs && vfs.manifest && vfs.manifest.role === 'builder') {
-      return fail('build --naude: naude requires a Node >= 24 host; this is a fused builder running under tjs — use `clode build` (quaude) here, or run clode under node to build a naude');
-    }
+    const fusedBuilder = !!(vfs && vfs.manifest && vfs.manifest.role === 'builder');
     const ROOT = path.resolve(opts.libexec, '..');
     const outArgs = out ? ['--out', out] : [];
+
     // The same resolve+extract the quaude path runs (stageUpstreamCli) — shared
     // for real now, prefix-parameterized so the errors still name this target.
+    // Done FIRST: the provider (the cli.cjs to embed) is the cheap, local,
+    // primary input — a missing one must fail before we reach out for a node.
     const staged = stageUpstreamCli({
       env, libexec: opts.libexec, verbose, prefix: 'build --naude', log: clodeLog,
     });
     if (staged.error) return fail(staged.error);
     const { stageDir, cliPath } = staged;
 
-    // -- dep-closure DRIFT gate (see the full rationale on assertNoUnknownBareSpecifiers,
-    // above): naude embeds the same Claude Code bundle and the same ext-dep
-    // closure (build-naude.mjs runs its own `npm ci` against deps/claude's
-    // manifest/lockfile below) as quaude, so it needs the same protection
-    // against a package the bundle references but the seed list never learned
-    // about. Computed fresh here — this branch returns before reaching the
-    // quaude/--self shared block's own closure computation.
+    // -- the pinned Node naude embeds. clode carries NO Node, ever (not baked,
+    // not a fallback): the naude engine is a sha-verified pinned Node fetched
+    // on demand into a versioned store (idempotent — cached after first fetch),
+    // which is exactly what lets the SHIPPED clode-native (running under tjs,
+    // with no host node on disk) assemble a naude. build --naude runs the
+    // fetched node BOTH as the assembler (build-naude.mjs spawns under it) and
+    // as the SEA base it embeds — so two people on the same clode get the same
+    // naude, independent of whatever node happens to be on PATH. Injectable
+    // (opts.ensureNode) so the wiring is testable without the network.
+    const ensureNode = opts.ensureNode || ensurePinnedNode;
+    let nodePath;
     try {
-      const nmDir = resolveClaudeNmDir({ libexec: opts.libexec, here, verbose, env, ROOT });
-      const pkgJsonPath = path.join(ROOT, 'deps', 'claude', 'package.json');
-      const extDeps = computeDepClosure(nmDir, readDirectDeps(pkgJsonPath));
-      assertNoUnknownBareSpecifiers(
-        [cliPath, path.join(stageDir, 'bun-shim.cjs')], extDeps, opts.libexec, { env });
+      nodePath = await ensureNode({ env, log: clodeLog });
     } catch (e) {
-      return fail(`build --naude: ${(e && e.message) || e}`);
+      return fail(`build --naude: could not get the pinned node — the first naude build needs network; run \`clode fetch --naude\` while online, then retry: ${(e && e.message) || e}`);
     }
 
-    clodeLog(`clode: build --naude: building the Node SEA from ${cliPath} ...`);
-    // build-naude.mjs runs as a SEPARATE process — its esbuild --define reads
-    // CLODE_SELF from ITS OWN env (process.env), never opts.self directly — so
-    // the builder path (opts.self, this function's own param, NOT the local
-    // `self` boolean above) must be handed down through the child's env.
-    const r = await spawnRun(process.execPath,
-      [path.join(ROOT, 'scripts', 'build-naude.mjs'), '--cli', cliPath, ...outArgs],
-      { env: { ...env, ...(opts.self ? { CLODE_SELF: opts.self } : {}) }, timeout: 600000 * SCALE });
-    if (r.status !== 0) {
-      return fail(`build --naude: build-naude failed (${describeExit(r)}):\n${r.stdout}${r.stderr}`);
+    // -- fused-builder payload: a native clode ships no checkout, so the naude
+    // assembler (scripts/build-naude.mjs + its platform-tag.cjs sibling), the
+    // prebuilt SEA bundle, postject, and the ext-dep node_modules/manifests are
+    // carried as archive members — materialize them to disk so the spawned
+    // pinned node can read them. Non-fused (a checkout) reads them in place.
+    let payloadDir = null;
+    if (fusedBuilder) {
+      payloadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-payload-'));
+      materializeFusedPayload(vfs, payloadDir);
+      clodeLog(`clode: build --naude: materialized the fused payload -> ${payloadDir}`);
     }
-    if (r.stdout) clodeLog(r.stdout.trimEnd());
+    const assembleRoot = fusedBuilder ? payloadDir : ROOT;
+    const buildNaudeScript = path.join(assembleRoot, 'scripts', 'build-naude.mjs');
+    const bundlePath = fusedBuilder
+      ? path.join(payloadDir, 'naude-entry.bundle.cjs')
+      : path.join(ROOT, 'build', 'bundle', 'naude-entry.bundle.cjs');
+    const postjectDir = path.join(assembleRoot, 'deps', 'clode', 'node_modules', 'postject');
+    const nmDir = fusedBuilder
+      ? path.join(payloadDir, 'node_modules')
+      : resolveClaudeNmDir({ libexec: opts.libexec, here, verbose, env, ROOT });
+
+    try {
+      // -- dep-closure DRIFT gate (see the full rationale on assertNoUnknownBareSpecifiers,
+      // above): naude embeds the same Claude Code bundle and the same ext-dep
+      // closure as quaude, so it needs the same protection against a package the
+      // bundle references but the seed list never learned about. Computed fresh
+      // here — this branch returns before reaching the quaude/--self shared
+      // block's own closure computation. Sources of truth follow assembleRoot
+      // (the materialized payload under a fused builder, the checkout otherwise).
+      try {
+        const pkgJsonPath = path.join(assembleRoot, 'deps', 'claude', 'package.json');
+        const extDeps = computeDepClosure(nmDir, readDirectDeps(pkgJsonPath));
+        assertNoUnknownBareSpecifiers(
+          [cliPath, path.join(stageDir, 'bun-shim.cjs')], extDeps, opts.libexec, { env });
+      } catch (e) {
+        return fail(`build --naude: ${(e && e.message) || e}`);
+      }
+
+      clodeLog(`clode: build --naude: building the Node SEA from ${cliPath} under ${nodePath} ...`);
+      // build-naude.mjs runs as a SEPARATE process UNDER the fetched pinned node
+      // (the ONLY node a clode-native has). Every input is passed explicitly:
+      // --node (embed + sea-config), --bundle (the prebuilt SEA main), --nmdir
+      // (the deps to tar), --postject (its carried JS), --builder (the clode
+      // whose updater callback this naude will invoke — was a CLODE_SELF env
+      // passthrough, now a first-class flag; empty when this build has no self).
+      const r = await spawnRun(nodePath, [
+        buildNaudeScript,
+        '--cli', cliPath,
+        '--node', nodePath,
+        '--bundle', bundlePath,
+        '--nmdir', nmDir,
+        '--builder', String(opts.self || ''),
+        '--postject', postjectDir,
+        ...outArgs,
+      ], { env, timeout: 600000 * SCALE });
+      if (r.status !== 0) {
+        return fail(`build --naude: build-naude failed (${describeExit(r)}):\n${r.stdout}${r.stderr}`);
+      }
+      if (r.stdout) clodeLog(r.stdout.trimEnd());
+    } finally {
+      if (payloadDir) { try { fs.rmSync(payloadDir, { recursive: true, force: true }); } catch { /* best effort */ } }
+    }
 
     // -- smoke: the SAME shared contract quaude's build already runs (mock +
     // NODE_PATH-stripped -p PONG + assert-the-POST-landed — smokeTarget,
@@ -752,33 +829,13 @@ async function clodeBuild(args, opts) {
     let nmDir = null;
     const vfs = globalThis.__quaudeVFS;
     if (vfs && vfs.manifest && vfs.manifest.role === 'builder') {
+      // Materialize the builder-role members to disk (the fuse WORKER is a
+      // template-tjs subprocess that needs real files). Shared with the naude
+      // branch's own materialization above — one member-name -> on-disk-home
+      // map (materializeFusedPayload); this target uses libexec + node_modules +
+      // deps/claude (the naude-only members it also lands are unused here).
       const mat = path.join(work, 'payload');
-      for (const [name, bytes] of vfs.files) {
-        let dest;
-        if (name.startsWith('node-shim/')) dest = path.join(mat, 'libexec', name);
-        else if (name.startsWith('libexec/')) dest = path.join(mat, name);
-        else if (name.startsWith('node_modules/')) dest = path.join(mat, name);
-        // target-env.cjs rides at the archive ROOT (bare name, no libexec/
-        // prefix — see quaude-fuse.js: the fused node-shim's SHIM_DIR has no
-        // 'libexec' ancestor in the archive namespace, so process.cjs's
-        // relative require needs it there). On disk it belongs beside
-        // node-shim/, i.e. libexec/target-env.cjs, same as this repo.
-        else if (name === 'target-env.cjs') dest = path.join(mat, 'libexec', name);
-        // deps/claude/package.json + deps/claude/package-lock.json (archive
-        // paths preserved verbatim under mat/ — no bare-name special-casing
-        // needed like target-env.cjs above): the ext-dep closure's direct-deps
-        // SOURCE OF TRUTH (readDirectDeps below) and the lockfile gate's SOURCE
-        // OF TRUTH (assertClosureMatchesLockfile below) — Claude Code's deps,
-        // NOT clode's own (clode has none). A fused builder ships no repo
-        // checkout, so without these members a builder-fused `clode build`
-        // (self-hosting) would have nowhere to read them from when it later
-        // computes/gates the closure for the quaude it fuses (duplication
-        // audit §1).
-        else if (name.startsWith('deps/claude/')) dest = path.join(mat, name);
-        else continue;
-        fs.mkdirSync(path.dirname(dest), { recursive: true });
-        fs.writeFileSync(dest, Buffer.from(bytes));
-      }
+      materializeFusedPayload(vfs, mat);
       libexec = path.join(mat, 'libexec');
       nmDir = path.join(mat, 'node_modules');
       clodeLog(`clode: build: materialized the fused payload -> ${mat}`);
