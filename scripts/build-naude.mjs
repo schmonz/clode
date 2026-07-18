@@ -416,6 +416,14 @@ async function main() {
 // Run the pipeline ONLY when invoked as the entry script. Importing this module (e.g. the
 // pure-config unit test) must run nothing — postject/a real node embed aren't available
 // or wanted everywhere.
-if (process.argv[1] && import.meta.url === url.pathToFileURL(process.argv[1]).href) {
+//
+// REALPATH BOTH SIDES: node resolves import.meta.url through symlinks (its ESM
+// default) but leaves process.argv[1] as passed. When the two disagree only by a
+// symlink — e.g. clode-native materializes this script under os.tmpdir(), which
+// on macOS is /tmp -> /private/tmp — a raw URL compare is FALSE, so main() never
+// runs and the build silently exits 0 with no binary. Comparing realpaths of
+// both makes the is-main check hold regardless of how the path was spelled.
+const argvMain = process.argv[1] ? fs.realpathSync(process.argv[1]) : null;
+if (argvMain && argvMain === fs.realpathSync(url.fileURLToPath(import.meta.url))) {
   await main();
 }
