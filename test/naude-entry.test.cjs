@@ -3,6 +3,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const os = require('node:os');
 const path = require('node:path');
+const fs = require('node:fs');
 const { runNaude } = require('../libexec/naude-entry.cjs');
 
 function fakeSea() {
@@ -249,6 +250,109 @@ test('first pass declares CLODE_TARGET_KIND=naude and CLODE_TARGET=<the naude ex
   });
   assert.strictEqual(call.env.CLODE_TARGET_KIND, 'naude');
   assert.strictEqual(call.env.CLODE_TARGET, '/naude');
+});
+
+// --- guard dispatch: `--clode-update-guard` short-circuits everything else ----
+// A fake stdin that synchronously drives the standard flowing-mode `.on('data',
+// ...)` / `.on('end', ...)` pair naude-entry uses to read stdin — matches how a
+// real process.stdin behaves closely enough for this seam (data emitted before
+// end), without needing a real stream.
+function fakeStdin(jsonStr) {
+  return {
+    on(event, cb) {
+      if (event === 'data') cb(Buffer.from(jsonStr));
+      if (event === 'end') cb();
+      return this;
+    },
+  };
+}
+
+function fakeStdout() {
+  const chunks = [];
+  return { chunks, write(s) { chunks.push(s); } };
+}
+
+test('guard dispatch: --clode-update-guard reads stdin, emits the deny verdict, exits 0, never spawns', () => {
+  const stdout = fakeStdout();
+  let exited = 'unset';
+  let spawnCalled = false;
+  runNaude({
+    argv: ['--clode-update-guard'],
+    stdin: fakeStdin(JSON.stringify({ tool_input: { command: 'claude update' } })),
+    stdout,
+    exit: (c) => { exited = c; },
+    spawn: () => { spawnCalled = true; return { on() {} }; },
+  });
+  assert.strictEqual(exited, 0);
+  assert.strictEqual(spawnCalled, false, 'the bundle must never be spawned for the guard-dispatch invocation');
+  assert.strictEqual(stdout.chunks.length, 1);
+  const verdict = JSON.parse(stdout.chunks[0]);
+  assert.strictEqual(verdict.hookSpecificOutput.permissionDecision, 'deny');
+});
+
+test('guard dispatch: allowed command -> no stdout write, exit 0, no spawn', () => {
+  const stdout = fakeStdout();
+  let exited = 'unset';
+  let spawnCalled = false;
+  runNaude({
+    argv: ['--clode-update-guard'],
+    stdin: fakeStdin(JSON.stringify({ tool_input: { command: 'ls -la' } })),
+    stdout,
+    exit: (c) => { exited = c; },
+    spawn: () => { spawnCalled = true; return { on() {} }; },
+  });
+  assert.strictEqual(exited, 0);
+  assert.strictEqual(spawnCalled, false);
+  assert.strictEqual(stdout.chunks.length, 0, 'an allowed command emits nothing (bare exit 0 = allow)');
+});
+
+test('guard dispatch: unparseable stdin fails OPEN (no crash, no stdout, exit 0)', () => {
+  const stdout = fakeStdout();
+  let exited = 'unset';
+  runNaude({
+    argv: ['--clode-update-guard'],
+    stdin: fakeStdin('not json'),
+    stdout,
+    exit: (c) => { exited = c; },
+    spawn: () => { throw new Error('must not spawn'); },
+  });
+  assert.strictEqual(exited, 0);
+  assert.strictEqual(stdout.chunks.length, 0);
+});
+
+// --- guard injection: CLODE_TARGET wires --settings into the child argv ------
+test('first pass: env.CLODE_TARGET set -> child argv gets --settings <file>, file wires the PreToolUse guard hook', () => {
+  // NOTE: no onExit override here — the default (registers on the fake child's
+  // inert `on('exit', ...)`) never fires, so the settings file survives long
+  // enough to inspect. (A firing onExit would run cleanup() and unlink it —
+  // see the dedicated cleanup test below.)
+  const cap = firstPass({ env: { CLODE_TARGET: '/opt/naude' } });
+  const idx = cap.call.args.indexOf('--settings');
+  assert.ok(idx !== -1, '--settings must be appended to the child argv');
+  const file = cap.call.args[idx + 1];
+  assert.ok(file, '--settings must be followed by a path');
+  const written = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.strictEqual(
+    written.hooks.PreToolUse[0].hooks[0].command,
+    '"/opt/naude" --clode-update-guard');
+  assert.strictEqual(written.hooks.PreToolUse[0].matcher, 'Bash');
+  fs.rmSync(file, { force: true });
+});
+
+test('first pass: env.CLODE_TARGET unset -> no --settings added to the child argv', () => {
+  const cap = firstPass({ onExit: (cb) => cb(0, null) });
+  assert.strictEqual(cap.call.args.indexOf('--settings'), -1);
+});
+
+test('first pass: the guard settings file is best-effort removed when the child exits', () => {
+  let writtenFile = null;
+  const cap = firstPass({
+    env: { CLODE_TARGET: '/opt/naude' },
+    onExit: (cb) => cb(0, null),
+  });
+  const idx = cap.call.args.indexOf('--settings');
+  writtenFile = cap.call.args[idx + 1];
+  assert.strictEqual(fs.existsSync(writtenFile), false, 'the ephemeral settings file must be removed on exit');
 });
 
 test('first pass: no `builder` override + the builder asset is absent (getAsset throws) -> CLODE_SELF unset', () => {

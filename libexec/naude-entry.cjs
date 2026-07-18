@@ -32,6 +32,7 @@ const { spawn } = require('node:child_process');
 const seaHelpers = require('./naude-sea.cjs');
 const { shapeTargetEnv } = require('./target-env.cjs');
 const { isExecutableFile } = require('./clode-hosttools.cjs');
+const { guardVerdict } = require('./update-guard.cjs');
 // The absolute path of the clode that built this naude, read as a SEA asset (
 // runtime data) rather than an esbuild --define (a build-time string burned
 // into the bundle) — so the SAME esbuilt naude-entry bundle serves every
@@ -66,7 +67,33 @@ function runNaude(opts = {}) {
     execPath = process.execPath,
     env = process.env,
     requireMain = defaultRequireMain,
+    stdin = process.stdin,
+    stdout = process.stdout,
+    exit = (c) => process.exit(c),
   } = opts;
+
+  // Guard dispatch: naude's own patched updater hook calls back
+  // `<naude> --clode-update-guard` as a PreToolUse(Bash) command. Read the whole
+  // hook-input JSON off stdin, ask the pure guardVerdict, and emit its answer (or
+  // nothing, on any parse failure — fail OPEN) — all BEFORE materializing a
+  // single asset or spawning the bundle. This branch never reaches the
+  // NAUDE_RUN_AS_NODE check below; it always exits 0 itself.
+  if (argv[0] === '--clode-update-guard') {
+    let data = '';
+    stdin.on('data', (chunk) => { data += chunk; });
+    stdin.on('end', () => {
+      let verdict = null;
+      try {
+        const parsed = JSON.parse(data);
+        verdict = guardVerdict((parsed.tool_input || {}).command);
+      } catch {
+        verdict = null;
+      }
+      if (verdict) stdout.write(JSON.stringify(verdict));
+      exit(0);
+    });
+    return;
+  }
 
   // Second pass: we are the re-invoked "plain node". Run the target cli.cjs as the
   // main module. Strip the sentinel so the baked cli.cjs never sees it.
@@ -90,7 +117,6 @@ function runNaude(opts = {}) {
     spawn: spawnFn = spawn,
     procOn = (s, cb) => process.on(s, cb),
     procOff = (s, cb) => process.removeListener(s, cb),
-    exit = (c) => process.exit(c),
     onExit,
     builder = bakedBuilder(sea),
   } = opts;
@@ -127,9 +153,35 @@ function runNaude(opts = {}) {
     dirname: path.dirname,
   });
 
+  // Guard injection: when the raw incoming env declares CLODE_TARGET (the
+  // launched-as-a-target contract — see target-env.cjs), wire the model's Bash
+  // tool through the update guard by writing an ephemeral PreToolUse settings
+  // file and appending --settings to the child's argv. CLODE_TARGET unset ->
+  // skip entirely (e.g. a bare `require()` in a test, or a context with no
+  // known target binary to call back into).
+  let guardSettingsFile = null;
+  const childArgv = [...argv];
+  if (env.CLODE_TARGET) {
+    guardSettingsFile = path.join(cacheDir || os.tmpdir(), 'clode-guard-' + process.pid + '.json');
+    const guardSettings = {
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: 'Bash',
+            hooks: [
+              { type: 'command', command: '"' + env.CLODE_TARGET + '" --clode-update-guard' },
+            ],
+          },
+        ],
+      },
+    };
+    fs.writeFileSync(guardSettingsFile, JSON.stringify(guardSettings));
+    childArgv.push('--settings', guardSettingsFile);
+  }
+
   // Re-invoke the naude binary itself (its own node) as plain node, args passed
   // through, stdio inherited — the child owns the tty and the model session.
-  const child = spawnFn(execPath, [...argv], { stdio: 'inherit', env: childEnv });
+  const child = spawnFn(execPath, childArgv, { stdio: 'inherit', env: childEnv });
 
   // Signal model (mirrors the retired runBundle): the child stays in our foreground
   // process group, so the kernel delivers tty signals (Ctrl-C=SIGINT, Ctrl-\=SIGQUIT)
@@ -146,7 +198,10 @@ function runNaude(opts = {}) {
     handlers[s] = () => { try { child.kill(s); } catch {} };
     procOn(s, handlers[s]);
   }
-  const cleanup = () => { for (const s of Object.keys(handlers)) procOff(s, handlers[s]); };
+  const cleanup = () => {
+    for (const s of Object.keys(handlers)) procOff(s, handlers[s]);
+    if (guardSettingsFile) { try { fs.rmSync(guardSettingsFile, { force: true }); } catch {} }
+  };
 
   // The exit hook is injectable (onExit) so tests drive it synchronously; the real
   // wiring listens on child's 'exit'.
