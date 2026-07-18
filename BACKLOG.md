@@ -423,29 +423,6 @@ endgame is empirical + regression-gated (how Bun/Deno do Node-on-non-Node), with
   `CLAUDE_CODE_BRIDGE_SESSION_ID` (child bundle auths via the parent bridge) — fine for
   coverage/parity, but strip it to test real subscription auth.
 
-## Phase 2 take-stock report (DONE)
-
-**Phase 2 is functionally complete (2026-07-07).** Both round-trip milestones PASS
-with live subscription auth (no API key):
-- **M3b (darwin/arm64):** 22/22 `PONG` incl. under CPU load —
-  `spike/quickjs/results/phase2-m3b-subscription-auth.md` (d7b2166). The feared
-  native fd-race is non-reproducible on clean main (trigger gone since `7ce7a89`);
-  latent-risk oracle + instrumentation pointer recorded in the doc.
-- **M4 (NetBSD 10.1/aarch64 guest):** 3/3 `PONG`, patched tjs built in-guest with
-  pkgsrc gcc12 in a ≈21-min fully-scripted run —
-  `spike/quickjs/results/phase2-m4-netbsd-aarch64.md`. Five build walls closed
-  (gcc12-for-ada, mimalloc-3.2.7-broken-on-NetBSD upstream regression, clang-only
-  `#pragma region` under -Werror, + 3 real portability bugs now in committed
-  `patches/txiki-netbsd-portability.patch`).
-
-Remaining per the design:
-- **Take stock** (the M4 milestone's second half): short report — actual shim effort
-  vs gate-4 predictions, remaining walls, phase-3 (TUI) + platform-sweep outlook.
-- **Upstream submissions** (prepared, awaiting user go-ahead per PINS.md): js_exepath
-  + repl-eof-spin (quickjs-ng); sync-fs, sync-spawn, no-origin-header (txiki); NEW
-  from M4: txiki-netbsd-portability (txiki PR), mimalloc NetBSD compile regression
-  (report), `#pragma region`-vs-gcc-Werror (txiki report).
-
 ## Hermetic test execution (npm + SEA) — [SPEC 1 + 2a + 2b SHIPPED; suite is now pure node:test]
 
 Spec 1 (infra) SHIPPED 2026-07-03: `libexec/clode-paths.cjs` choke point (one
@@ -659,47 +636,6 @@ blocker to single-binary deployment.
   no bats), one toolchain.
 - **Relates to:** the "Port the toolchain to JS" prerequisite of the Node SEA entry
   below (this is the extractor half of it).
-
-## DONE (2026-07-01): Isolate the fail-loud ext-dep tests so the repo can have a populated root `node_modules`
-
-**Implemented.** The fail-loud children now load a temp copy of the (self-contained)
-`bun-shim.cjs` from OUTSIDE the repo tree, with cwd in that temp dir, via the shared
-helper `test/isolated-shim.cjs` (`runShimChild`). `require("ws")` (in the shim AND in
-the `-e` body) walks a clean chain that can never reach `<repo>/node_modules`, so a
-stray root `npm install` can no longer make the deps resolvable and defeat the
-"dep ABSENT" assertions. `NODE_PATH` is still honored (appended after the clean walk)
-for the fake-dep cases. Updated: `test/{semver,websocket,yaml,text-utils}.test.cjs`
-(`snapshot-rewrite.test.cjs` needed no change — it uses the shim in-process and
-doesn't assert dep-absence). Proven green WITH a fake root `node_modules` present.
-Original note below for context.
-
-Discovered during the J5 test-harness port (2026-06-30): a plain `npm install` at
-the repo root **breaks the test suite**. The "fail-loud" ext-dep tests
-(`test/semver.test.cjs`, `text-utils`, `websocket`, `yaml`, `snapshot-rewrite`,
-and a bats case) assert that clode dies *loudly* when its runtime deps
-(`semver`/`ws`/`yaml`/`string-width`/`strip-ansi`/`wrap-ansi`) are **absent** — and
-they detect absence by the bun-shim resolving those names via an upward walk that
-reaches the repo-root `node_modules`. So any `npm install` that populates root
-`node_modules` with the `dependencies` block makes clode *find* those deps and the
-fail-loud assertions stop firing → red suite. (Reproduced at a clean commit in
-both worktrees.)
-
-- **Current workaround (in place):** J5's PTY harness deps live in a separate
-  `test/package.json` → `test/node_modules` (gitignored, not shipped), keeping root
-  `node_modules` empty. Works, but it means the repo can never have a normal
-  populated root `node_modules` (for devtools, type stubs, etc.) without breaking
-  tests — a latent footgun for any future contributor who runs `npm install`.
-- **Proper fix:** make each fail-loud test run its child `node` in an **isolated
-  module-resolution context** that GUARANTEES the dep is unresolvable regardless of
-  root `node_modules` — e.g. spawn the child with `NODE_PATH=''` AND a cwd/`HOME`
-  whose upward walk can't reach the repo `node_modules` (a temp dir), or an explicit
-  empty `--require`-shimmed resolver. Then the assertion tests "dep truly absent"
-  independent of the repo's install state, and the root can be populated normally.
-- **Payoff:** removes the "npm install breaks the suite" landmine; lets the J5
-  harness deps move to root devDependencies (the originally-spec'd design) and
-  simplifies any future tooling that expects a conventional `node_modules`.
-- **Scope:** ~5 test files (the fail-loud ones) + re-confirm the bats fail-loud
-  case. Out of scope for J5 itself; do before/with the launcher→JS work.
 
 ## Node SEA single-binary releases + a platform build matrix
 
