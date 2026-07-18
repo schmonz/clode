@@ -21,19 +21,21 @@ const { spawnSync } = require('node:child_process');
 const { nodeStore } = require('./clode-paths.cjs');
 const { downloadFile, sha256Of } = require('./clode-net.cjs');
 
-const PIN_PATH = path.join(__dirname, '..', 'deps', 'clode', 'node-pin.json');
-
-// Loaded once at require time — this feature hinges entirely on the pin file,
-// so a missing/unparseable pin fails loud immediately rather than surfacing
-// as a confusing error deep inside ensurePinnedNode.
+// The pin (version + trusted sha256s) is INLINED at bundle time: a JSON require
+// esbuild resolves at build. That is load-bearing for the shipped clode-native,
+// which runs under tjs with NO checkout on disk — a __dirname-relative
+// fs.readFileSync resolved to a bogus '/deps/clode/node-pin.json' there and
+// killed every naude build. A plain checkout resolves the same require to the
+// real deps/clode/node-pin.json. Either way the feature hinges on it, so a
+// missing/malformed pin fails loud at require time, not deep inside a fetch.
 let PIN;
 try {
-  PIN = JSON.parse(fs.readFileSync(PIN_PATH, 'utf8'));
+  PIN = require('../deps/clode/node-pin.json');
 } catch (err) {
-  throw new Error(`clode-node: could not read/parse pin file ${PIN_PATH}: ${err.message}`);
+  throw new Error(`clode-node: could not load the pinned-node manifest (deps/clode/node-pin.json): ${err.message}`);
 }
 if (!PIN || typeof PIN.version !== 'string' || !PIN.sha256 || typeof PIN.sha256 !== 'object') {
-  throw new Error(`clode-node: ${PIN_PATH} is missing required "version"/"sha256" fields`);
+  throw new Error('clode-node: deps/clode/node-pin.json is missing required "version"/"sha256" fields');
 }
 
 const PINNED_VERSION = PIN.version;

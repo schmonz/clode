@@ -688,38 +688,14 @@ async function clodeBuild(args, opts) {
     const ROOT = path.resolve(opts.libexec, '..');
     const outArgs = out ? ['--out', out] : [];
 
-    // The same resolve+extract the quaude path runs (stageUpstreamCli) — shared
-    // for real now, prefix-parameterized so the errors still name this target.
-    // Done FIRST: the provider (the cli.cjs to embed) is the cheap, local,
-    // primary input — a missing one must fail before we reach out for a node.
-    const staged = stageUpstreamCli({
-      env, libexec: opts.libexec, verbose, prefix: 'build --naude', log: clodeLog,
-    });
-    if (staged.error) return fail(staged.error);
-    const { stageDir, cliPath } = staged;
-
-    // -- the pinned Node naude embeds. clode carries NO Node, ever (not baked,
-    // not a fallback): the naude engine is a sha-verified pinned Node fetched
-    // on demand into a versioned store (idempotent — cached after first fetch),
-    // which is exactly what lets the SHIPPED clode-native (running under tjs,
-    // with no host node on disk) assemble a naude. build --naude runs the
-    // fetched node BOTH as the assembler (build-naude.mjs spawns under it) and
-    // as the SEA base it embeds — so two people on the same clode get the same
-    // naude, independent of whatever node happens to be on PATH. Injectable
-    // (opts.ensureNode) so the wiring is testable without the network.
-    const ensureNode = opts.ensureNode || ensurePinnedNode;
-    let nodePath;
-    try {
-      nodePath = await ensureNode({ env, log: clodeLog });
-    } catch (e) {
-      return fail(`build --naude: could not get the pinned node — the first naude build needs network; run \`clode fetch --naude\` while online, then retry: ${(e && e.message) || e}`);
-    }
-
-    // -- fused-builder payload: a native clode ships no checkout, so the naude
-    // assembler (scripts/build-naude.mjs + its platform-tag.cjs sibling), the
-    // prebuilt SEA bundle, postject, and the ext-dep node_modules/manifests are
-    // carried as archive members — materialize them to disk so the spawned
-    // pinned node can read them. Non-fused (a checkout) reads them in place.
+    // -- fused-builder payload: a native clode ships NO checkout on disk, so
+    // every real file a naude build touches is carried as an archive member —
+    // the extractor + bun-shim (provider extraction), the ext-dep
+    // node_modules/manifests (closure), the naude assembler (build-naude.mjs +
+    // its platform-tag.cjs sibling), the prebuilt SEA bundle, and postject.
+    // Materialize them FIRST, before anything reads from disk, and thread the
+    // materialized libexec (`effLibexec`) through extraction + the gate.
+    // Non-fused (a checkout) uses everything in place.
     let payloadDir = null;
     if (fusedBuilder) {
       payloadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-payload-'));
@@ -727,28 +703,57 @@ async function clodeBuild(args, opts) {
       clodeLog(`clode: build --naude: materialized the fused payload -> ${payloadDir}`);
     }
     const assembleRoot = fusedBuilder ? payloadDir : ROOT;
-    const buildNaudeScript = path.join(assembleRoot, 'scripts', 'build-naude.mjs');
-    const bundlePath = fusedBuilder
-      ? path.join(payloadDir, 'naude-entry.bundle.cjs')
-      : path.join(ROOT, 'build', 'bundle', 'naude-entry.bundle.cjs');
-    const postjectDir = path.join(assembleRoot, 'deps', 'clode', 'node_modules', 'postject');
-    const nmDir = fusedBuilder
-      ? path.join(payloadDir, 'node_modules')
-      : resolveClaudeNmDir({ libexec: opts.libexec, here, verbose, env, ROOT });
+    const effLibexec = fusedBuilder ? path.join(payloadDir, 'libexec') : opts.libexec;
 
     try {
+      // The same resolve+extract the quaude path runs (stageUpstreamCli). Done
+      // FIRST: the provider (the cli.cjs to embed) is the cheap, local, primary
+      // input — a missing one must fail before we reach out for a node.
+      const staged = stageUpstreamCli({
+        env, libexec: effLibexec, verbose, prefix: 'build --naude', log: clodeLog,
+      });
+      if (staged.error) return fail(staged.error);
+      const { stageDir, cliPath } = staged;
+
+      // -- the pinned Node naude embeds. clode carries NO Node, ever (not baked,
+      // not a fallback): the naude engine is a sha-verified pinned Node fetched
+      // on demand into a versioned store (idempotent — cached after first
+      // fetch), which is exactly what lets the SHIPPED clode-native (running
+      // under tjs, with no host node on disk) assemble a naude. build --naude
+      // runs the fetched node BOTH as the assembler (build-naude.mjs spawns
+      // under it) and as the SEA base it embeds — so two people on the same
+      // clode get the same naude, independent of whatever node is on PATH.
+      // Injectable (opts.ensureNode) so the wiring is testable without network.
+      const ensureNode = opts.ensureNode || ensurePinnedNode;
+      let nodePath;
+      try {
+        nodePath = await ensureNode({ env, log: clodeLog });
+      } catch (e) {
+        return fail(`build --naude: could not get the pinned node — the first naude build needs network; run \`clode fetch --naude\` while online, then retry: ${(e && e.message) || e}`);
+      }
+
+      const buildNaudeScript = path.join(assembleRoot, 'scripts', 'build-naude.mjs');
+      const bundlePath = fusedBuilder
+        ? path.join(payloadDir, 'naude-entry.bundle.cjs')
+        : path.join(ROOT, 'build', 'bundle', 'naude-entry.bundle.cjs');
+      const postjectDir = path.join(assembleRoot, 'deps', 'clode', 'node_modules', 'postject');
+      const nmDir = fusedBuilder
+        ? path.join(payloadDir, 'node_modules')
+        : resolveClaudeNmDir({ libexec: effLibexec, here, verbose, env, ROOT });
+
       // -- dep-closure DRIFT gate (see the full rationale on assertNoUnknownBareSpecifiers,
       // above): naude embeds the same Claude Code bundle and the same ext-dep
       // closure as quaude, so it needs the same protection against a package the
       // bundle references but the seed list never learned about. Computed fresh
       // here — this branch returns before reaching the quaude/--self shared
-      // block's own closure computation. Sources of truth follow assembleRoot
-      // (the materialized payload under a fused builder, the checkout otherwise).
+      // block's own closure computation. Sources of truth follow assembleRoot/
+      // effLibexec (the materialized payload under a fused builder, the checkout
+      // otherwise).
       try {
         const pkgJsonPath = path.join(assembleRoot, 'deps', 'claude', 'package.json');
         const extDeps = computeDepClosure(nmDir, readDirectDeps(pkgJsonPath));
         assertNoUnknownBareSpecifiers(
-          [cliPath, path.join(stageDir, 'bun-shim.cjs')], extDeps, opts.libexec, { env });
+          [cliPath, path.join(stageDir, 'bun-shim.cjs')], extDeps, effLibexec, { env });
       } catch (e) {
         return fail(`build --naude: ${(e && e.message) || e}`);
       }

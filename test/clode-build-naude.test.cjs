@@ -309,54 +309,14 @@ test('clode build --naude: pinned node unavailable fails loud, names `clode fetc
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-// Under a FUSED builder (native clode under tjs, VFS role 'builder', no
-// checkout on disk) the naude branch MATERIALIZES the builder-role payload
-// (build-naude.mjs + platform-tag.cjs + the prebuilt bundle + postject + the
-// ext-dep manifests/node_modules) to disk and spawns build-naude UNDER the
-// fetched pinned node — it no longer refuses. This isolates the WIRING: the
-// dep-closure gate is satisfied honestly by carrying the REAL declared deps
-// (so it tracks whatever bun-shim actually requires) with empty transitive
-// stubs; the gate itself has its own tests, and the full fused build is proven
-// for real, node absent from PATH, in test/clode-native.test.cjs.
-test('clode build --naude under a fused builder: materializes + spawns build-naude under the pinned node', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-fused-'));
-  try {
-    const { env } = seedProvider(dir);
-    const enc = new TextEncoder();
-    // The naude branch reads the closure from the MATERIALIZED payload, so the
-    // fused VFS must carry deps/claude's manifest + a node_modules that resolves
-    // every declared dep. Derive from the real manifest (extractIfNeeded
-    // refreshes the real bun-shim into the stage on every hit — so its real
-    // requires, semver/yaml/ws, must be covered by the closure).
-    const realDeps = Object.keys(require('../deps/claude/package.json').dependencies || {});
-    const files = new Map([
-      ['deps/claude/package.json', enc.encode(JSON.stringify({
-        dependencies: Object.fromEntries(realDeps.map((d) => [d, '0.0.0'])),
-      }))],
-      ['scripts/build-naude.mjs', enc.encode('// materialized build-naude stub\n')],
-      ['scripts/platform-tag.cjs', enc.encode('module.exports = {};\n')],
-      ['naude-entry.bundle.cjs', enc.encode('// materialized bundle stub\n')],
-      ['deps/clode/node_modules/postject/dist/api.js', enc.encode('// postject stub\n')],
-    ]);
-    for (const d of realDeps) {
-      files.set(`node_modules/${d}/package.json`, enc.encode(JSON.stringify({ name: d, version: '0.0.0', dependencies: {} })));
-    }
-    globalThis.__quaudeVFS = { manifest: { role: 'builder' }, files };
-    try {
-      const r = await runBuild(['--naude'], env);
-      const naude = r.calls.find((c) => Array.isArray(c.args)
-        && c.args.some((a) => typeof a === 'string' && a.endsWith(path.join('scripts', 'build-naude.mjs'))));
-      assert.ok(naude, `build-naude was not spawned under a fused builder; stderr:\n${r.stderr}\ncalls:\n${JSON.stringify(r.calls, null, 2)}`);
-      assert.strictEqual(naude.cmd, FAKE_NODE, 'must run under the pinned node, not tjs');
-      // The materialized script lives under a temp payload dir, not the (absent) checkout.
-      const scriptArg = naude.args.find((a) => typeof a === 'string' && a.endsWith(path.join('scripts', 'build-naude.mjs')));
-      assert.ok(!scriptArg.startsWith(REPO), `build-naude must be the MATERIALIZED copy, not the checkout: ${scriptArg}`);
-      for (const flag of ['--node', '--bundle', '--nmdir', '--postject', '--builder']) {
-        assert.ok(naude.args.includes(flag), `${flag} missing; args: ${JSON.stringify(naude.args)}`);
-      }
-      assert.doesNotMatch(r.stderr, /fused builder|Node\s*>=\s*24/, 'the old refusal must be gone');
-    } finally {
-      delete globalThis.__quaudeVFS;
-    }
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
-});
+// The FUSED-builder naude path (native clode under tjs, no checkout on disk:
+// materialize the carried assembler + bundle + postject + ext-deps, then spawn
+// build-naude UNDER the fetched pinned node with node ABSENT from PATH) is
+// proven end-to-end, for real, in test/clode-native.test.cjs "acceptance 4".
+// It is NOT re-proven here as a unit test on purpose: the fused branch stages
+// the provider through the MATERIALIZED libexec, whose extractor cache key is
+// size+mtime of a freshly-written file — un-seedable from a unit test without
+// reproducing the exact flake this suite exists to avoid. The wiring decisions
+// (runs under the pinned node, passes --node/--bundle/--nmdir/--postject/
+// --builder, no old refusal) are covered by the non-fused cases above; the
+// fused materialization is covered by the acceptance.

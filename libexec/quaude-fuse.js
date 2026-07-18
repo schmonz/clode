@@ -117,12 +117,14 @@ if (role === 'builder') {
   members.push({ name: 'naude-entry.bundle.cjs', data: await mustRead(path.join(stageDir, 'naude-entry.bundle.cjs'), 'esbuilt naude-entry bundle') });
   const libexecDir = path.dirname(shimDir);
   // The naude ASSEMBLER: scripts/build-naude.mjs (spawned under the fetched
-  // pinned node) and its one repo-local require, scripts/platform-tag.cjs. A
-  // fused builder ships no scripts/ dir, so `clode build --naude` under
+  // pinned node), its one repo-local require scripts/platform-tag.cjs, and
+  // scripts/sea-sign.cjs (which build-naude execs to unsign/re-sign the SEA — on
+  // macOS the ad-hoc re-sign after postject is MANDATORY or the binary won't
+  // run). A fused builder ships no scripts/ dir, so `clode build --naude` under
   // clode-native materializes these (clode-fuse.cjs's materializeFusedPayload)
   // and spawns the copy. Member names keep their scripts/ path (re-joined onto
   // the payload dir verbatim). Committed files that always exist → mustRead.
-  for (const f of ['build-naude.mjs', 'platform-tag.cjs']) {
+  for (const f of ['build-naude.mjs', 'platform-tag.cjs', 'sea-sign.cjs']) {
     members.push({ name: `scripts/${f}`, data: await mustRead(path.join(path.dirname(libexecDir), 'scripts', f), `naude assembler member scripts/${f}`) });
   }
   for (const f of ['bun-shim.cjs', 'extract-claude-js.cjs', 'quaude-fuse.js', 'quaude-bootstrap.mjs']) {
