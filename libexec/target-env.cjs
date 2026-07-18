@@ -24,6 +24,8 @@ function shapeTargetEnv(opts) {
   const {
     env,
     self = null,
+    targetKind = null,
+    targetPath = null,
     platform,
     delimiter = ':',
     exists,
@@ -66,6 +68,14 @@ function shapeTargetEnv(opts) {
   // Code and rebuilds. No builder known -> leave unset, so the updater fails
   // loud rather than doing something wrong.
   if (self) env.CLODE_SELF = self;
+
+  // The target declares WHAT IT IS and WHERE IT LIVES so the patched updater's
+  // callback (CLODE_SELF --clode-internal-update, inheriting this env) can rebuild
+  // the right kind and swap the right file. No binary-detection: a target knows
+  // what it is; a sniffer would also try to "update" a builder (itself a QAUDEv0
+  // artifact). Absent -> unset, same fail-loud contract as a missing CLODE_SELF.
+  if (targetKind) env.CLODE_TARGET_KIND = targetKind;
+  if (targetPath) env.CLODE_TARGET = targetPath;
 
   return env;
 }

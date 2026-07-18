@@ -128,6 +128,25 @@ test('CLODE_SELF: absent builder leaves it unset (the updater then fails loud, n
   assert.strictEqual(shapeTargetEnv(opts({})).CLODE_SELF, undefined);
 });
 
+test('target identity: CLODE_TARGET_KIND + CLODE_TARGET set when given', () => {
+  const env = shapeTargetEnv(opts({ self: '/b/clode', targetKind: 'quaude', targetPath: '/usr/local/bin/quaude' }));
+  assert.strictEqual(env.CLODE_TARGET_KIND, 'quaude');
+  assert.strictEqual(env.CLODE_TARGET, '/usr/local/bin/quaude');
+  assert.strictEqual(env.CLODE_SELF, '/b/clode');
+});
+
+test('target identity: absent kind/path leave the vars unset (no-builder-style fail-loud contract)', () => {
+  const env = shapeTargetEnv(opts());   // no targetKind/targetPath
+  assert.ok(!('CLODE_TARGET_KIND' in env));
+  assert.ok(!('CLODE_TARGET' in env));
+});
+
+test('target identity: naude kind rides the same seam', () => {
+  const env = shapeTargetEnv(opts({ self: '/b/clode', targetKind: 'naude', targetPath: '/opt/naude' }));
+  assert.strictEqual(env.CLODE_TARGET_KIND, 'naude');
+  assert.strictEqual(env.CLODE_TARGET, '/opt/naude');
+});
+
 test('windows: PATH uses the caller-supplied delimiter', () => {
   const env = shapeTargetEnv(opts({
     env: { PATH: 'C:\\bin', CLODE_RG: 'C:\\rg\\rg.exe' },
