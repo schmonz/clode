@@ -10,6 +10,7 @@
 // BYTE-IDENTICAL inline copy; test/update-guard-drift.test.cjs enforces that.
 // If you change the logic here, change it there too — the drift test will fail
 // otherwise.
+// >>> guardVerdict (canonical; drift-tested against libexec/update-guard.cjs) >>>
 const PKG = /@anthropic-ai\/claude-code\b/;
 const CLAUDE_UPDATE = /\bclaude\s+(?:update|upgrade)\b/;
 const INSTALLER = /\b(?:curl|wget)\b[^\n|]*\|[^\n]*\b(?:sh|bash)\b/;
@@ -31,4 +32,5 @@ function guardVerdict(command, opts) {
     },
   };
 }
+// <<< guardVerdict <<<
 module.exports = { guardVerdict };

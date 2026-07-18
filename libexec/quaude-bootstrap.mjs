@@ -128,9 +128,75 @@ export async function bootstrapTargetEnv(tjs, opts) {
   });
 }
 
+// >>> guardVerdict (canonical; drift-tested against libexec/update-guard.cjs) >>>
+const PKG = /@anthropic-ai\/claude-code\b/;
+const CLAUDE_UPDATE = /\bclaude\s+(?:update|upgrade)\b/;
+const INSTALLER = /\b(?:curl|wget)\b[^\n|]*\|[^\n]*\b(?:sh|bash)\b/;
+function guardVerdict(command, opts) {
+  const cmd = typeof command === 'string' ? command : '';
+  const globalInstall = PKG.test(cmd)
+    && (/(?:^|\s)(?:-g|--global)(?=\s|$)/.test(cmd) || /\byarn\s+global\s+add\b/.test(cmd));
+  const installer = INSTALLER.test(cmd) && (PKG.test(cmd) || /claude/i.test(cmd));
+  if (!(CLAUDE_UPDATE.test(cmd) || globalInstall || installer)) return null;
+  return {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason:
+        'clode manages Claude Code for this binary — it rebuilds itself to a '
+        + 'newer version automatically when upstream ships one (restart to apply). '
+        + '`claude update` / reinstalling will not change this binary (it targets a '
+        + 'separate install).',
+    },
+  };
+}
+// <<< guardVerdict <<<
+export { guardVerdict };
+
 async function main() {
   const dec = new TextDecoder();
   const die = (msg, code) => { console.error(`quaude: ${msg}`); tjs.exit(code); };
+
+  // 0) Guard dispatch: quaude's own patched updater hook calls back
+  // `"<quaude>" --clode-update-guard` as a PreToolUse(Bash) command (wired by
+  // the --settings injection below, step 8). Read the whole hook-input JSON
+  // off tjs.stdin, ask the pure guardVerdict above, and emit its answer (or
+  // nothing, on any parse failure — fail OPEN) — all BEFORE the archive is
+  // ever read. Mirrors naude-entry.cjs's runNaude guard-dispatch branch.
+  // Write via the synchronous __tjs_fs_sync patch (a raw-engine global, not
+  // a node-shim addition — see mod_fs_sync.c), NOT tjs.stdout.getWriter():
+  // process.cjs documents that an unawaited writer.write() immediately
+  // followed by exit() can lose bytes; a synchronous write(2) before exit()
+  // cannot.
+  const g = tjs.args.slice(1);
+  if (g[0] === '--clode-update-guard') {
+    let text = '';
+    try {
+      const reader = tjs.stdin.getReader();
+      const chunks = [];
+      let total = 0;
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value && value.length) { chunks.push(value); total += value.length; }
+      }
+      const buf = new Uint8Array(total);
+      let off = 0;
+      for (const c of chunks) { buf.set(c, off); off += c.length; }
+      text = dec.decode(buf);
+    } catch { /* unreadable stdin -> fail open below */ }
+    let verdict = null;
+    try {
+      const parsed = JSON.parse(text);
+      verdict = guardVerdict((parsed.tool_input || {}).command);
+    } catch { verdict = null; }
+    if (verdict) {
+      const enc = new TextEncoder().encode(JSON.stringify(verdict));
+      globalThis.__tjs_fs_sync.write(1, enc.buffer, -1);
+    }
+    tjs.exit(0);
+    return;
+  }
 
   const exef = await tjs.open(tjs.exePath, 'rb');
   const exeSize = (await exef.stat()).size;
@@ -242,6 +308,33 @@ async function main() {
     // exactly one copy of the mapping running under tjs.
     globalThis.__clodeMapPlatform = tem.exports.mapPlatform;
     await bootstrapTargetEnv(tjs, { builder: manifest.builder || null });
+
+    // 7.6) Guard injection: wire the model's Bash tool through the update
+    // guard by writing an ephemeral PreToolUse settings file and appending
+    // --settings to the argv the loader hands the bundle (step 8, below).
+    // The hook calls back into tjs.exePath — quaude's own binary (the
+    // analogue of naude-entry.cjs's execPath; see its matching injection).
+    // tjs.exePath falsy -> skip entirely (nothing known to call back into).
+    if (tjs.exePath) {
+      const platform = tjsPlatform(undefined, globalThis.__clodeMapPlatform);
+      const sep = platform === 'win32' ? '\\' : '/';
+      const tmpBase = tjs.tmpDir ?? tjs.env.TMPDIR ?? (platform === 'win32' ? 'C:\\Windows\\Temp' : '/tmp');
+      const guardSettingsFile = tmpBase.replace(/[\\/]+$/, '') + sep + `clode-guard-${tjs.pid}.json`;
+      const guardSettings = {
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: 'Bash',
+              hooks: [
+                { type: 'command', command: '"' + tjs.exePath + '" --clode-update-guard' },
+              ],
+            },
+          ],
+        },
+      };
+      await tjs.writeFile(guardSettingsFile, new TextEncoder().encode(JSON.stringify(guardSettings)));
+      rest = [...rest, '--settings', guardSettingsFile];
+    }
   }
 
   // 8) mount + boot: the archived loader resolves everything under /quaude/;
