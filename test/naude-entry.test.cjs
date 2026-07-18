@@ -84,7 +84,13 @@ test('first pass (isSea, no sentinel) re-invokes execPath in run-as-node with cl
   assert.strictEqual(call.opts.env.NAUDE_RUN_AS_NODE, path.join('/work', 'cli.cjs'));
   assert.ok(call.opts.env.NODE_PATH.includes(path.join('/deps', 'node_modules')),
     `NODE_PATH lacks the materialized deps dir: ${call.opts.env.NODE_PATH}`);
-  assert.deepStrictEqual(call.args, ['--version']);
+  // execPath is truthy here, so guard injection (see the dedicated tests below)
+  // now always appends --settings <file> after the user's own args — assert
+  // the user arg survives untouched at the front rather than an exact array
+  // match, and clean up the ephemeral file this run wrote.
+  assert.strictEqual(call.args[0], '--version');
+  const settingsIdx = call.args.indexOf('--settings');
+  if (settingsIdx !== -1) fs.rmSync(call.args[settingsIdx + 1], { force: true });
   assert.strictEqual(exited, 0);
 });
 
@@ -147,7 +153,10 @@ test('first pass: every registered signal handler is torn down when the child ex
 test('first pass: NAUDE_CACHE env sets the cacheDir passed to materializeDeps', () => {
   let seenCacheDir = null;
   runNaude({
-    argv: ['--version'], execPath: '/naude',
+    // execPath: '' — this test isn't about guard injection, and injection
+    // would try to write its ephemeral settings file under the (nonexistent)
+    // '/custom' cacheDir asserted below, which is unrelated ENOENT noise.
+    argv: ['--version'], execPath: '',
     sea: fakeSea(), env: { NAUDE_CACHE: '/custom' },
     materializeDeps: ({ cacheDir }) => { seenCacheDir = cacheDir; return '/deps'; },
     materializeAssets: ({ destDir }) => destDir,
@@ -320,13 +329,20 @@ test('guard dispatch: unparseable stdin fails OPEN (no crash, no stdout, exit 0)
   assert.strictEqual(stdout.chunks.length, 0);
 });
 
-// --- guard injection: CLODE_TARGET wires --settings into the child argv ------
-test('first pass: env.CLODE_TARGET set -> child argv gets --settings <file>, file wires the PreToolUse guard hook', () => {
+// --- guard injection: execPath (the naude's OWN path) wires --settings into --
+// --- the child argv. This is the real production data flow: shapeTargetEnv ----
+// puts execPath into the CHILD's env.CLODE_TARGET during boot (see the
+// `CLODE_TARGET=<the naude exe>` test above) — nothing ever sets it on the RAW
+// incoming env before the process starts. So the gate MUST read execPath, not
+// env.CLODE_TARGET, or the hook is permanently inert in real boots (it only
+// ever passed before because unit tests injected env.CLODE_TARGET by hand).
+test('first pass: execPath present (env.CLODE_TARGET NOT set) -> child argv gets --settings <file>, file wires the PreToolUse guard hook from execPath', () => {
   // NOTE: no onExit override here — the default (registers on the fake child's
   // inert `on('exit', ...)`) never fires, so the settings file survives long
   // enough to inspect. (A firing onExit would run cleanup() and unlink it —
-  // see the dedicated cleanup test below.)
-  const cap = firstPass({ env: { CLODE_TARGET: '/opt/naude' } });
+  // see the dedicated cleanup test below.) env stays {} — no CLODE_TARGET
+  // anywhere — proving injection fires from execPath alone.
+  const cap = firstPass({ execPath: '/opt/naude', env: {} });
   const idx = cap.call.args.indexOf('--settings');
   assert.ok(idx !== -1, '--settings must be appended to the child argv');
   const file = cap.call.args[idx + 1];
@@ -339,15 +355,14 @@ test('first pass: env.CLODE_TARGET set -> child argv gets --settings <file>, fil
   fs.rmSync(file, { force: true });
 });
 
-test('first pass: env.CLODE_TARGET unset -> no --settings added to the child argv', () => {
-  const cap = firstPass({ onExit: (cb) => cb(0, null) });
+test('first pass: execPath falsy (no own binary to call back into) -> no --settings added to the child argv', () => {
+  const cap = firstPass({ execPath: '', onExit: (cb) => cb(0, null) });
   assert.strictEqual(cap.call.args.indexOf('--settings'), -1);
 });
 
 test('first pass: the guard settings file is best-effort removed when the child exits', () => {
   let writtenFile = null;
   const cap = firstPass({
-    env: { CLODE_TARGET: '/opt/naude' },
     onExit: (cb) => cb(0, null),
   });
   const idx = cap.call.args.indexOf('--settings');

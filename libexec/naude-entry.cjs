@@ -153,15 +153,18 @@ function runNaude(opts = {}) {
     dirname: path.dirname,
   });
 
-  // Guard injection: when the raw incoming env declares CLODE_TARGET (the
-  // launched-as-a-target contract — see target-env.cjs), wire the model's Bash
-  // tool through the update guard by writing an ephemeral PreToolUse settings
-  // file and appending --settings to the child's argv. CLODE_TARGET unset ->
-  // skip entirely (e.g. a bare `require()` in a test, or a context with no
-  // known target binary to call back into).
+  // Guard injection: wire the model's Bash tool through the update guard by
+  // writing an ephemeral PreToolUse settings file and appending --settings to
+  // the child's argv. The hook calls back into execPath — the naude's own
+  // binary (the same path shapeTargetEnv just wrote into childEnv.CLODE_TARGET
+  // for the child to see). execPath falsy -> skip entirely (e.g. a bare
+  // `require()` in a test, or a context with no known own binary to call back
+  // into). Note: this must NOT read env.CLODE_TARGET — that's the RAW incoming
+  // env, which in a real boot is unset (shapeTargetEnv only ever sets it on
+  // the childEnv copy), so gating on it left the hook permanently inert.
   let guardSettingsFile = null;
   const childArgv = [...argv];
-  if (env.CLODE_TARGET) {
+  if (execPath) {
     guardSettingsFile = path.join(cacheDir || os.tmpdir(), 'clode-guard-' + process.pid + '.json');
     const guardSettings = {
       hooks: {
@@ -169,7 +172,7 @@ function runNaude(opts = {}) {
           {
             matcher: 'Bash',
             hooks: [
-              { type: 'command', command: '"' + env.CLODE_TARGET + '" --clode-update-guard' },
+              { type: 'command', command: '"' + execPath + '" --clode-update-guard' },
             ],
           },
         ],
