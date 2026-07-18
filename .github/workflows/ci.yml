@@ -311,9 +311,22 @@ jobs:
       # It runs HERE because this job already has the three things the
       # acceptances need — a real tjs, deps/claude, and a real Bun provider — so
       # the guard costs one step, not one job.
+      # Cache the pinned Node naude embeds so acceptance 4 (below) downloads it
+      # from nodejs.org at most once per pin, not every run — and a transient
+      # nodejs.org outage reuses the cache instead of turning this step red. Keyed
+      # on the pin file so a version bump misses and re-fetches automatically.
+      - name: Cache the pinned Node (naude engine)
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/clode-nodes
+          key: pinned-node-${{ hashFiles('deps/clode/node-pin.json') }}-${{ runner.os }}-${{ runner.arch }}
       - name: the native builder BUILDS THE PRODUCT (node-free, real provider)
         env:
           CLODE_TJS: ${{ runner.temp }}/tjs/tjs
+          # acceptance 4 (naude) fetches the pinned Node into this persistent,
+          # cached store instead of a per-run temp dir (test/clode-native.test.cjs
+          # honors CLODE_NODES); acceptances 1-3 (quaude) ignore it.
+          CLODE_NODES: ${{ runner.temp }}/clode-nodes
         run: |
           set -euo pipefail
           # `build --self` embeds this; without it the fuse has no payload.
@@ -367,3 +380,60 @@ jobs:
           if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
           CLODE_PROVIDER_BIN="$PROV" CLODE_CLAUDE_BIN="$PROV" \
             node --test --test-timeout=1200000 test/oracle-binaries.test.cjs
+
+  # node-shim oracle on DARWIN — the same node-vs-tjs behavioral diff as
+  # node-shim-oracle above, but on macOS against a real darwin tjs.
+  # WHY A SEPARATE JOB: the node-shim is darwin-oriented (signal table, dylib
+  # suffix, spawn env handling), so a class of divergences appears ONLY on
+  # darwin and the linux oracle cannot see it. Concretely: a process.env mutation
+  # did not reach a default-env spawned child under tjs — but only on darwin,
+  # because on linux tjs mirrors env into the real environ, so node-shim-env
+  # passed there and the bug was invisible in CI until a dev box hit it
+  # (2026-07-18). No darwin shim run = that whole class hides. This job is the
+  # standing guard. It also runs the child-process/core/bunshim tests the linux
+  # oracle must EXCLUDE for musl/signal/dylib portability — on darwin they are
+  # native behavior and pass. Consumes the darwin-arm64 leg's bare engine.
+  node-shim-oracle-darwin:
+    needs: tjs
+    # Run once `tjs` FINISHES, whatever its conclusion (same rationale as the
+    # windows/node-shim-oracle jobs): this consumes ONE named artifact; a leg it
+    # does not use has no bearing on whether it can run.
+    if: ${{ !cancelled() }}
+    runs-on: macos-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .tool-versions
+      - uses: actions/download-artifact@v8
+        with:
+          name: tjs-darwin-arm64   # bare arm64 engine from the CI-tier darwin leg
+          path: ${{ runner.temp }}/tjs
+      - name: Install the runtime dep closure (ws/yaml/semver/string-width/... for the shim)
+        run: npm ci --prefix deps/claude
+      # The parity/roundtrip oracles stage cli.cjs from a real Bun-packaged
+      # provider; with none present they SKIP, the silent-green these jobs exist
+      # to prevent. Same provisioning as the linux oracle.
+      - name: Install the Claude provider (npm, latest — the oracle's input)
+        run: npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
+      - name: node-shim oracle suite (every module diffed vs host node, under a darwin tjs)
+        env:
+          CLODE_TJS: ${{ runner.temp }}/tjs/tjs
+        run: |
+          set -euo pipefail
+          chmod +x "$CLODE_TJS"
+          "$CLODE_TJS" eval 'console.log("darwin-arm64 tjs alive:", tjs.version)'
+          # EXCLUDE only the PTY suite: node-shim-tty needs a controlling terminal
+          # / node-pty, covered by windows-x64-tui + the POSIX e2e. Everything else
+          # runs here — including child-process/core/bunshim, which the linux
+          # oracle excludes for portability and which are the point of a darwin run.
+          EXCLUDE='node-shim-tty'
+          FILES=$(ls test/node-shim-*.test.cjs | grep -vE "$EXCLUDE")
+          PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f -name claude -size +20M 2>/dev/null | head -1)"
+          if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
+          echo "provider: $PROV"
+          export CLODE_PROVIDER_BIN="$PROV"
+          node --test --test-concurrency=1 $FILES

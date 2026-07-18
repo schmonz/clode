@@ -250,7 +250,11 @@ test('acceptance 3: quaude-from-native passes the agentic Bash mock oracle', asy
 test('acceptance 4: the native builder BUILDS A NAUDE (fetch node + assemble + PONG), node absent from PATH', async (t) => {
   if (SKIP) { t.skip(SKIP); return; }
   if (SKIP_PRODUCT) { t.skip(SKIP_PRODUCT); return; }
-  const NODES = path.join(DIR, 'nodes');
+  // A caller (CI) may point CLODE_NODES at a persistent, cached store so the
+  // ~40MB pinned-node download happens once across runs and a transient
+  // nodejs.org outage doesn't fail the build; a plain local run gets a hermetic
+  // per-test store under DIR.
+  const NODES = process.env.CLODE_NODES || path.join(DIR, 'nodes');
   const NAUDE = path.join(DIR, 'naude-from-native');
   // Obtain the pinned Node into a sandbox store via the HOST clode first. This
   // both (a) gates cleanly on the environment — offline / a sha problem fails
