@@ -506,26 +506,15 @@ repro needs a hermetic per-project *trust-state* fixture (Claude Code's real
 must rebuild that as a golden fixture and un-skip #60. Also quarantined: the anti-hermetic
 cases in `test_update`/`test_launcher`/`test_watch`/`test_doctor_parity`.
 
-## Test-fake deps leaked into the REAL clode store
+## RESOLVED (2026-07-18 sweep): Test-fake deps leaked into the REAL clode store
 
-On 2026-07-02, four `0.0.0-clode-test` stub packages (`semver`, `string-width`,
-`strip-ansi`, `wrap-ansi`) were found sitting in the user's real dep store at
-`~/.local/share/clode/node_modules`, seeded by a test run *before* commit
-`4a99d2b "fix(test): never seed fake deps into an inherited CLODE_DEPS store"`.
-They made `clode-watch`'s `versionGt uses real semver` test fail (the fake
-`compare()` can't order prereleases) and would silently degrade real clode runs
-(e.g. a fake `string-width` returns wrong widths). Removed the four stubs by hand;
-they self-heal on the next run.
-
-- **Investigate:** confirm `4a99d2b` fully closes the seeding path — was that the
-  only vector, or can any other test still write into an inherited/real
-  `CLODE_DEPS`/`~/.local/share/clode`? Reproduce the pre-fix leak to be sure the
-  fix covers it.
-- **Prevent:** add a guard so a test can never mutate the real store — e.g. tests
-  that need a fake-dep store must point `CLODE_DEPS` at a tmp dir (see the
-  isolate-clode-runs guidance), and consider a CI/`run-all` preflight that fails
-  if `~/.local/share/clode/node_modules/*/package.json` reports a
-  `*-clode-test` version.
+Both halves closed. **Investigate:** `4a99d2b` ("never seed fake deps into an
+inherited CLODE_DEPS store") closed the seeding vector. **Prevent:** the guard the
+item asked for now exists — `test/hermetic-guard.cjs` `preflight(dataStore)` reads
+every `node_modules/*/package.json` and refuses to run if any version contains
+`clode-test`. (History: on 2026-07-02, four `0.0.0-clode-test` stubs — `semver`,
+`string-width`, `strip-ansi`, `wrap-ansi` — had leaked into
+`~/.local/share/clode/node_modules` and broke `clode-watch`'s real-semver test.)
 
 ## Where's `gh auth login` in the bottom status line?
 
@@ -575,42 +564,30 @@ so it reaches interactive sessions.
   value would override clode's. If stacking is needed, the bundle also concatenates
   an `appendSystemPrompt` from settings inside `Kn1`.
 
-## Reimplement the extraction toolchain in JavaScript (drop the Python dependency)
+## RESOLVED (2026-07-18 sweep): Reimplement the extraction toolchain in JavaScript
 
-Port `libexec/extract-claude-js` (and, in time, `libexec/inspect-claude-bundle`)
-from Python to JavaScript/Node. Worth doing on its own merits, and it removes a
-blocker to single-binary deployment.
-
-- **Why it's sensible independent of SEA:**
-  - **Same runtime as the thing it processes.** The artifact is a JS bundle that
-    clode already runs under host Node; carving/transforming it in that same Node
-    avoids a language boundary in the middle of the pipeline.
-  - **One fewer host dependency.** clode targets machines where toolchains are
-    scarce (NetBSD/pkgsrc, old macOS, non-x86); requiring a new-enough `python3`
-    cuts against that. Node is already required to run anything, so the extractor
-    can lean on it instead. (Aligns with the portability mission in `LONG-TERM.md`.)
-- **Why it also matters for SEA:** Node SEA packs JS + Node only, so a JS extractor
-  is a hard prerequisite for the single-binary story below.
-- **Port faithfully — same loud-failure contract.** Preserve, behavior-for-behavior:
-  the text-marker carve (`carve_blocks`), the prelude, and every splice
-  (`patch_autoupdater`, `patch_native_autoupdater`, the `/doctor` anchors) with their
-  *exactly-one-match-or-fail-loud* discipline, plus `verify` (residual-NUL / import-meta
-  checks). The `inspect-claude-bundle --strict` gate and its anchor set should move
-  too (or stay the source of truth until ported). Keep `extract_if_needed`'s
-  extractor-signature re-extract working across the language switch (the sig is over
-  the extractor file — a rewrite naturally busts caches once).
-- **Open question — translate the tests too?** The Python tests (`test/test_extract.py`,
-  `test/test_inspect.py`) would naturally become Node tests alongside their subjects.
-  Less clear for the **shell/bats** suites: they exercise the POSIX-sh launcher
-  (`bin/clode`) directly, so until `bin/clode` is itself JS (the SEA work below),
-  driving shell behavior from Node tests is awkward. Likely split: extractor/inspector
-  tests → Node; launcher tests stay bats until the launcher moves. Revisit per-component
-  as each is ported. Net goal where it lands: fewer test-host deps (no pytest; eventually
-  no bats), one toolchain.
-- **Relates to:** the "Port the toolchain to JS" prerequisite of the Node SEA entry
-  below (this is the extractor half of it).
+Done 2026-06-30. `1f229d6` ported `extract-claude-js` to JS (byte-identical across
+7 goldens), `17540d7` dropped Python from the runtime (bin + libexec are node+sh
+only), and `262705a` dropped it from the test runner — clode is now **python-free**.
+The extractor and inspector are `libexec/extract-claude-js.cjs` /
+`libexec/inspect-claude-bundle.cjs`, preserving the exactly-one-match-or-fail-loud
+carve/splice/verify contract. (The old bats-vs-node test split question is moot: the
+suite is now pure `node:test` and `bin/clode`'s launcher role largely gave way to the
+tjs/native builder path.)
 
 ## Node SEA single-binary releases + a platform build matrix
+
+> **SUPERSEDED (2026-07-18 sweep) — retained for reference.** The SEA packaging
+> approach below was retired in favour of the tjs-engine cross-build matrix
+> (`scripts/tjs-legs.mjs`, ~44 legs across the OS/arch fleet); `scripts/build-sea.mjs`
+> is gone, and even the Windows-only SEA holdout was later dropped for MSVC-native
+> tjs. What survives as clode's Node path is `naude` (`scripts/build-naude.mjs`), a
+> different thing. **Still-live within this section:** (1) the **code-signing / SAC
+> decision memo** below is a lasting reference — its "ship unsigned" decision applies
+> to the tjs binaries too; (2) one concrete open item — Windows `signtool` wiring in
+> `release.yml` behind a secret (`sea-sign.cjs` stub exists), deferred until a user is
+> actually SAC-blocked. Everything else here (SEA build steps, Windows-SEA Plan B
+> slices, the 2026-06-30 JS-port prereq status) is historical.
 
 The north-star packaging story: ship clode as a Node SEA (single executable
 application) — clode's own logic *plus* an embedded Node runtime in one
