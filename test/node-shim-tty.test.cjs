@@ -54,19 +54,39 @@ test('process.stdout emits resize with updated columns on SIGWINCH', async (t) =
   // via node-pty's p.resize() under ConPTY (the nodeOut assertion fails there
   // too) — this is a platform-absent capability, not a shim divergence.
   if (process.platform === 'win32') { t.skip('SIGWINCH/resize N/A on Windows ConPTY (node emits none either)'); return; }
+  // The fixture prints @@READY@@ AFTER its resize listener is registered, so the
+  // driver resizes only once the child is actually listening — no guess that
+  // "700ms is enough to boot".
   const f = fixture(`
     process.stdout.on('resize', () => {
       console.log('@@TTY@@' + JSON.stringify({ cols: process.stdout.columns }));
     });
-    setTimeout(() => {}, 3000); // stay alive for the resize
+    console.log('@@READY@@');
+    setInterval(() => {}, 1000); // stay alive for the resize
   `);
   const { loadPty } = require('./node-shim-tty-helper.cjs');
   const pty = loadPty();
+  // Condition-based waiting, NOT fixed timers: a tjs child's PTY stdout can
+  // surface with large, variable latency (the child prints at t=0 but the line
+  // may not reach the master for >1s), so the old "resize@700ms, read-then-
+  // kill@2500ms" raced the flush and flaked under load — the resize line often
+  // arrived AFTER the kill. Here we resize once the child signals READY, then
+  // resolve the instant the resize line arrives (or after a generous cap that
+  // only trips on a real failure). SIGWINCH delivery + the resize event both
+  // work under tjs; only the flush timing was fragile.
+  const CAP_MS = 20000;
   const run = (cmd, args) => new Promise((resolve) => {
     const p = pty.spawn(cmd, args, { name: 'xterm-256color', cols: 80, rows: 24, env: process.env });
-    let out = ''; p.onData((d) => { out += d; });
-    setTimeout(() => { try { p.resize(100, 30); } catch { /* */ } }, 700);
-    setTimeout(() => { try { p.kill(); } catch { /* */ } resolve(out); }, 2500);
+    let out = '';
+    let resized = false;
+    let settled = false;
+    const finish = () => { if (settled) return; settled = true; clearTimeout(cap); try { p.kill(); } catch { /* */ } resolve(out); };
+    p.onData((d) => {
+      out += d;
+      if (!resized && out.includes('@@READY@@')) { resized = true; try { p.resize(100, 30); } catch { /* */ } }
+      if (/@@TTY@@\{"cols":100\}/.test(out)) finish();
+    });
+    const cap = setTimeout(finish, CAP_MS); // only trips on genuine failure
   });
   const { LOADER, tjsPath } = require('./node-shim-helper.cjs');
   const nodeOut = await run(process.execPath, [f]);
