@@ -11,6 +11,14 @@ inputs:
   machine:
     description: "NetBSD MACHINE (e.g. m68k / sun3 / mac68k)"
     required: true
+  arch:
+    description: >
+      NetBSD MACHINE_ARCH (build.sh -a). REQUIRED for multi-arch ports that have
+      no default (evbarm -> earmv7hf/aarch64, sbmips -> mips64eb, evbsh3 -> sh3el);
+      build.sh aborts "No MACHINE_ARCH provided" without it. Leave empty for
+      single-arch ports (i386, alpha, sparc64, vax, …) that pick their own default.
+    required: false
+    default: ""
   src-rev:
     description: "NetBSD src git rev/tag/branch to pin (build.sh input)"
     required: true
@@ -34,7 +42,7 @@ runs:
         path: |
           ${{ runner.temp }}/nbsd-tool
           ${{ runner.temp }}/nbsd-dest
-        key: netbsd-crossbuild-${{ inputs.machine }}-${{ inputs.src-rev }}-v1
+        key: netbsd-crossbuild-${{ inputs.machine }}-${{ inputs.arch }}-${{ inputs.src-rev }}-v1
     - id: b
       shell: bash
       run: |
@@ -61,8 +69,11 @@ runs:
         # 2: the 64-bit userland build (sparc64) OOM'd a 16GB runner at -j nproc;
         # the cap only slows the rare cache-miss.
         J="$(nproc)"; [ "$J" -gt 2 ] && J=2
-        ./build.sh -m "${{ inputs.machine }}" -U -T "$TOOL" -D "$DEST" -j "$J" tools
-        ./build.sh -m "${{ inputs.machine }}" -U -T "$TOOL" -D "$DEST" -j "$J" distribution
+        # Multi-arch ports (evbarm/sbmips/evbsh3) have no default MACHINE_ARCH and
+        # abort without -a; single-arch ports pick their own, so pass -a only when set.
+        ARCHOPT=(); [ -n "${{ inputs.arch }}" ] && ARCHOPT=(-a "${{ inputs.arch }}")
+        ./build.sh -m "${{ inputs.machine }}" "${ARCHOPT[@]}" -U -T "$TOOL" -D "$DEST" -j "$J" tools
+        ./build.sh -m "${{ inputs.machine }}" "${ARCHOPT[@]}" -U -T "$TOOL" -D "$DEST" -j "$J" distribution
         ls "$TOOL"/bin/*--netbsd*-gcc >/dev/null 2>&1 || { echo "build.sh: no *--netbsd*-gcc under $TOOL/bin" >&2; ls "$TOOL/bin" | head; exit 1; }
         test -d "$DEST/usr/include" || { echo "build.sh: no sysroot headers under $DEST/usr/include" >&2; exit 1; }
         # Free the src tree once the toolchain + sysroot are built (keeps the

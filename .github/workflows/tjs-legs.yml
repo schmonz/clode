@@ -108,5 +108,6 @@ jobs:
           verify: ${{ matrix.verify || 'smoke' }}
           netbsd-src: ${{ matrix.netbsd-src || '' }}
           netbsd-machine: ${{ matrix.netbsd-machine || '' }}
+          netbsd-arch: ${{ matrix.netbsd-arch || '' }}
           attest: ${{ matrix.publish && 'true' || 'false' }}
           publish: ${{ matrix.publish && 'true' || 'false' }}

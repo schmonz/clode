@@ -435,10 +435,12 @@ const LEGS = [
     floor: '10.1', 'guest-version': '10.1',
     publish: false, ci: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
-  // ---- Fleet batch 3 (v0.1.4): the next 6 build.sh cross arches, extending the
-  // fleet toward the ~20-24 buildable of NetBSD's 43 MACHINE_ARCH. Same pattern:
-  // {netbsd-machine (a PORT — build.sh -m gives that port's DEFAULT MACHINE_ARCH,
-  // the composite takes no -a), guest-arch (drives the file(1) gate), atomic-shim}.
+  // ---- Fleet batch 3 (v0.1.4): 5 more build.sh cross arches, extending the fleet
+  // toward the ~20-24 buildable of NetBSD's 43 MACHINE_ARCH. Pattern:
+  // {netbsd-machine (a PORT), guest-arch (drives the file(1) gate), atomic-shim}.
+  // Single-arch ports (i386) take build.sh -m alone; MULTI-arch ports (evbarm,
+  // sbmips, evbsh3) have no default and abort "No MACHINE_ARCH provided" without an
+  // explicit netbsd-arch (build.sh -a), added to the crossbuild composite in this batch.
   // ALL ONBOARDING (publish:false + soft-fail, non-blocking, no-exec — NetBSD has no
   // qemu-user). atomic-shim on the 32-bit arches lacking inlined 8-byte atomics
   // (i386 has cmpxchg8b, ARMv7 has ldrexd → no shim; vax/sh3 → shim). canonical-LE
@@ -458,7 +460,7 @@ const LEGS = [
   // netbsd-earmv7hf (ARM32 LE hardfloat): evbarm's default arch; ARMv7 ldrexd
   // inlines 8-byte atomics → no shim.
   { leg: 'netbsd-earmv7hf', os: 'ubuntu-latest', 'guest-arch': 'earmv7hf',
-    'netbsd-src': 'netbsd-10', 'netbsd-machine': 'evbarm',
+    'netbsd-src': 'netbsd-10', 'netbsd-machine': 'evbarm', 'netbsd-arch': 'earmv7hf',
     'cross-file': 'scripts/netbsd.toolchain.cmake',
     'atomic-shim': false, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
@@ -475,24 +477,19 @@ const LEGS = [
   // netbsd-mips64eb (MIPS64 BIG-endian): the sbmips port; 64-bit inlines atomics,
   // no shim. canonical-LE bytecode proof on a 3rd 64-bit-BE target.
   { leg: 'netbsd-mips64eb', os: 'ubuntu-latest', 'guest-arch': 'mips64eb',
-    'netbsd-src': 'netbsd-10', 'netbsd-machine': 'sbmips',
+    'netbsd-src': 'netbsd-10', 'netbsd-machine': 'sbmips', 'netbsd-arch': 'mips64eb',
     'cross-file': 'scripts/netbsd.toolchain.cmake',
     'atomic-shim': false, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
     publish: false, ci: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
-  // netbsd-vax (VAX LE, 32-bit): KNOWN hard-arch (BACKLOG). Onboarded as a wall —
-  // build.sh may produce a toolchain the engine can't yet compile clean on.
-  { leg: 'netbsd-vax', os: 'ubuntu-latest', 'guest-arch': 'vax',
-    'netbsd-src': 'netbsd-10', 'netbsd-machine': 'vax',
-    'cross-file': 'scripts/netbsd.toolchain.cmake',
-    'atomic-shim': true, tier2: true, verify: 'none', 'no-exec': true,
-    floor: '10.1', 'guest-version': '10.1',
-    publish: false, ci: true, 'soft-fail': true, timeout: 3600,
-    wasm: 'off', mimalloc: 'off', ffi: 'off' },
+  // NOTE: netbsd-vax was dropped 2026-07-18 — a confirmed ENGINE wall, not just a
+  // toolchain risk: build.sh produces a working vax toolchain but quickjs fails to
+  // compile (deps/quickjs/dtoa.c, VAX's non-IEEE-754 float format). Not worth a
+  // soft-fail leg; revisit only if the engine gains VAX float support.
   // netbsd-sh3el (Renesas SuperH SH-3, LE 32-bit): the evbsh3 port; 32-bit → shim.
   { leg: 'netbsd-sh3el', os: 'ubuntu-latest', 'guest-arch': 'sh3el',
-    'netbsd-src': 'netbsd-10', 'netbsd-machine': 'evbsh3',
+    'netbsd-src': 'netbsd-10', 'netbsd-machine': 'evbsh3', 'netbsd-arch': 'sh3el',
     'cross-file': 'scripts/netbsd.toolchain.cmake',
     'atomic-shim': true, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',

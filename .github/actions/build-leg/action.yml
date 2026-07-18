@@ -86,6 +86,10 @@ inputs:
     description: "NetBSD MACHINE (port) for build.sh -m; any m68k port shares the m68k--netbsdelf toolchain (e.g. atari, sun3, mac68k). Required when netbsd-src is set."
     required: false
     default: ""
+  netbsd-arch:
+    description: "NetBSD MACHINE_ARCH for build.sh -a. Required for multi-arch ports with no default (evbarm/sbmips/evbsh3); leave empty for single-arch ports."
+    required: false
+    default: ""
   static:
     description: "'true': fully-static tjs (musl legs) + verify with file/ldd"
     required: false
@@ -406,6 +410,7 @@ runs:
       uses: ./.github/actions/netbsd-crossbuild
       with:
         machine: ${{ inputs.netbsd-machine }}
+        arch: ${{ inputs.netbsd-arch }}
         src-rev: ${{ inputs.netbsd-src }}
     - name: Cross-build tjs against the NetBSD toolchain
       if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.netbsd-src != ''
@@ -551,7 +556,6 @@ runs:
           mipsel|mipseb|mips64eb) want='MIPS' ;;
           i386)    want='80386|Intel 386' ;;
           earmv7hf) want='ARM' ;;
-          vax)     want='VAX' ;;
           sh3el)   want='Renesas SH|SuperH|SH,' ;;
           *)       want='' ;;
         esac
