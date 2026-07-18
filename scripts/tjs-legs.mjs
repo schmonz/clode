@@ -387,7 +387,7 @@ const LEGS = [
     // publish:false + soft-fail: fleet legs ONBOARD as proving legs (built +
     // arch-gated in CI, non-blocking) and flip to publish:true only once CI-green
     // — a new build.sh arch must not gate a release before it is proven.
-    publish: false, ci: true, 'soft-fail': true, timeout: 3600,
+    publish: true, ci: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // ---- Fleet batch 2 (2026-07-15): the next 5 build.sh cross arches, all
   // ONBOARDING (publish:false + soft-fail — built + arch-gated in CI, non-blocking,
@@ -401,7 +401,7 @@ const LEGS = [
     'cross-file': 'scripts/netbsd.toolchain.cmake',
     'atomic-shim': false, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
-    publish: false, ci: true, 'soft-fail': true, timeout: 3600,
+    publish: true, ci: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // netbsd-hppa (32-bit BE PA-RISC): weak atomics (ldcw only) — shim on.
   { leg: 'netbsd-hppa', os: 'ubuntu-latest', 'guest-arch': 'hppa',
@@ -409,7 +409,7 @@ const LEGS = [
     'cross-file': 'scripts/netbsd.toolchain.cmake',
     'atomic-shim': true, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
-    publish: false, ci: true, 'soft-fail': true, timeout: 3600,
+    publish: true, ci: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // netbsd-macppc (32-bit BE PowerPC): 32-bit lwarx/stwcx — 8-byte needs shim.
   { leg: 'netbsd-macppc', os: 'ubuntu-latest', 'guest-arch': 'powerpc',
@@ -417,7 +417,7 @@ const LEGS = [
     'cross-file': 'scripts/netbsd.toolchain.cmake',
     'atomic-shim': true, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
-    publish: false, ci: true, 'soft-fail': true, timeout: 3600,
+    publish: true, ci: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // netbsd-pmax (32-bit LE MIPS, DECstation): MIPS32 ll/sc is 32-bit — shim on.
   { leg: 'netbsd-pmax', os: 'ubuntu-latest', 'guest-arch': 'mipsel',
@@ -425,7 +425,7 @@ const LEGS = [
     'cross-file': 'scripts/netbsd.toolchain.cmake',
     'atomic-shim': true, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
-    publish: false, ci: true, 'soft-fail': true, timeout: 3600,
+    publish: true, ci: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // netbsd-sgimips (32-bit BE MIPS, SGI): the mipseb twin of pmax — shim on.
   { leg: 'netbsd-sgimips', os: 'ubuntu-latest', 'guest-arch': 'mipseb',
@@ -433,7 +433,7 @@ const LEGS = [
     'cross-file': 'scripts/netbsd.toolchain.cmake',
     'atomic-shim': true, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
-    publish: false, ci: true, 'soft-fail': true, timeout: 3600,
+    publish: true, ci: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // ---- Fleet batch 3 (v0.1.4): 5 more build.sh cross arches, extending the fleet
   // toward the ~20-24 buildable of NetBSD's 43 MACHINE_ARCH. Pattern:
@@ -493,7 +493,7 @@ const LEGS = [
     'cross-file': 'scripts/netbsd.toolchain.cmake',
     'atomic-shim': true, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
-    publish: false, ci: true, 'soft-fail': true, timeout: 3600,
+    publish: true, ci: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
 ];
 
