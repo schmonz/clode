@@ -241,7 +241,7 @@ test('writeSeaConfig: threads `builder` through to the config (the deferred wiri
     fs.writeFileSync(path.join(stage, 'bun-shim.cjs'), '// staged bun-shim\n');
     const { cfgPath } = writeSeaConfig({
       bundle: '/b/naude-entry.bundle.cjs', cliCjs, tar: '/o/deps.tar', sigFile: '/o/deps.sig',
-      builder: '/abs/clode',
+      builder: '/abs/clode', outDir: stage,
     });
     const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
     assert.ok(cfg.assets.builder, 'sea-config.json must carry a `builder` asset when --builder is given');
@@ -260,7 +260,7 @@ test('writeSeaConfig: a null builder omits the asset (fail-loud-not-wrong, prese
     fs.writeFileSync(path.join(stage, 'bun-shim.cjs'), '// staged bun-shim\n');
     const { cfgPath } = writeSeaConfig({
       bundle: '/b/naude-entry.bundle.cjs', cliCjs, tar: '/o/deps.tar', sigFile: '/o/deps.sig',
-      builder: null,
+      builder: null, outDir: stage,
     });
     const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
     assert.ok(!('builder' in cfg.assets), 'no builder -> no `builder` asset -> updater fails loud');

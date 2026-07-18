@@ -279,6 +279,11 @@ test('clode build --naude: a naude that never POSTs fails the build loudly', asy
     const stderrBuf = []; const stdoutBuf = [];
     const status = await clodeBuild(['--naude', '--out', path.join(dir, 'naude-out')], {
       here: REPO, version: 'clode-test', libexec: LIBEXEC, env, run,
+      // Inject the pinned-node seam — WITHOUT it the naude branch calls the real
+      // ensurePinnedNode, which fetches Node from the network into the default
+      // store: a hidden network hit + a hermeticity violation (it writes
+      // ~/.local/share/clode/nodes). This test is about the smoke, not the node.
+      ensureNode: async () => FAKE_NODE,
       stderr: { write: (s) => stderrBuf.push(s) },
       stdout: { write: (s) => stdoutBuf.push(s) },
     });

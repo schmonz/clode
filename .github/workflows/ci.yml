@@ -331,6 +331,11 @@ jobs:
           set -euo pipefail
           # `build --self` embeds this; without it the fuse has no payload.
           node scripts/build-clode-main.mjs
+          # Provision postject into deps/clode: quaude-fuse.js carries it as a
+          # builder member (soft — skipped if absent), and acceptance 4's naude
+          # build needs it on disk. Without this the fused clode-native ships no
+          # postject and the naude assembly dies "Cannot find module .../postject".
+          npm ci --prefix deps/clode 2>&1 | tail -3
           PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f -name claude -size +20M 2>/dev/null | head -1)"
           if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
           echo "provider: $PROV"

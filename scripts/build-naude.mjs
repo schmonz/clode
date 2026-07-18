@@ -218,14 +218,15 @@ export function stagedBunShim(cliCjs) {
 // builder asset at all, regardless of CLODE_SELF/--builder, and its patched
 // updater always failed loud with no callback target. Exported so a test can
 // assert the threading without a full build.
-export function writeSeaConfig({ bundle, cliCjs, tar, sigFile, builder }) {
+export function writeSeaConfig({ bundle, cliCjs, tar, sigFile, builder, outDir = OUT }) {
   // Ensure the artifact dir exists before writing into it (sea-config.json here,
-  // builder.txt via naudeSeaConfig). A full build's main() already made it and a
-  // dev box has build/<tag>/ from a prior run, so this only bites a clean
-  // checkout calling writeSeaConfig directly (the unit tests, on CI) — where it
-  // hit ENOENT. naudeSeaConfig stays a pure config builder (it takes a synthetic
-  // `out` in other tests); the dir-ensuring lives here, at the write boundary.
-  fs.mkdirSync(OUT, { recursive: true });
+  // builder.txt via naudeSeaConfig). A full build's main() already made OUT and a
+  // dev box has build/<tag>/ from a prior run, so this only bit a clean checkout
+  // calling writeSeaConfig directly (the unit tests, on CI) — ENOENT. `outDir`
+  // (default OUT) lets those tests write into a TEMP dir instead of the real
+  // repo build/, so they stay hermetic (run.mjs's guard flags a real-dir write);
+  // naudeSeaConfig stays a pure config builder that takes a synthetic `out`.
+  fs.mkdirSync(outDir, { recursive: true });
   const bunShim = stagedBunShim(cliCjs);
   if (!fs.existsSync(bunShim)) {
     // Fail loud rather than silently baking no shim (or reaching back to the
@@ -241,10 +242,10 @@ export function writeSeaConfig({ bundle, cliCjs, tar, sigFile, builder }) {
     bunShim,
     tar,
     sig: sigFile,
-    out: OUT,
+    out: outDir,
     builder,
   });
-  const p = path.join(OUT, 'sea-config.json');
+  const p = path.join(outDir, 'sea-config.json');
   fs.writeFileSync(p, JSON.stringify(cfg, null, 2));
   return { cfgPath: p, blob: cfg.output };
 }
