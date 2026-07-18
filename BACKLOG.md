@@ -192,18 +192,30 @@ well-tested, and reasonably fast** as we can possibly make it." Sequencing:
 ### Platform wishlist (reachable-frontier tracker)
 
 - **NetBSD: every arch** — in progress (task #8 above). The showcase of the
-  build.sh path. **Buildable so far** (generic toolchain, local proof): m68k (CI),
-  sparc64, alpha. **Grinding:** hppa, macppc, pmax (mipsel), sgimips (mipseb).
-- **NetBSD hard-arch tier — toolchain builds, ENGINE needs upstream compiler work:**
-  - **vax** (32-bit LE) — `vax--netbsdelf` toolchain builds, but the tjs engine
-    compile FAILS: VAX has **non-IEEE floating point** (F/D/G format), and quickjs
-    assumes IEEE. Confirmed 2026-07-14. Path (per the 2026-07-10 plan's "VAX
-    contingency"): **a soft-float IEEE mode for GCC's VAX backend** so quickjs's
-    IEEE-double bit patterns / NaN-boxing compile unchanged — a real GCC-backend
-    patch (precedent in other backends), not a leg tweak. Bytecode donor = the
-    i386 leg (32→32 LE). Deferred as a dedicated project; run
-    docker-loop/netbsd-fleet.sh vax with the log-persist harness to capture the
-    exact IEEE-assuming construct when we pursue it.
+  build.sh path. **PUBLISHED (11, 2026-07-18):** amd64, arm64, sparc, m68k,
+  sparc64, alpha, hppa, macppc, pmax (mipsel), sgimips (mipseb), sh3el (SuperH).
+  The `-a MACHINE_ARCH` composite input (2026-07-18) unlocked multi-arch ports
+  (evbarm/sbmips/evbsh3 abort `build.sh -m` without it). Walls below.
+- **NetBSD hard-arch tier — three distinct wall classes (batch-3 diagnoses,
+  2026-07-18, run 29654544915), all left soft-fail onboarding:**
+  - **i386** (32-bit LE x86) — toolchain builds; **quickjs** compile FAILS at
+    `cutils.h:678` in the `JS_X87_FPCW_SAVE_AND_ADJUST` macro (x87 FPU control-word
+    save — only compiled on 32-bit x86): `a label can only be part of a statement
+    and a declaration is not a statement` (C: declaration after a label). A small
+    carried quickjs patch (statement/`{}` after the label) should clear it — the
+    cheapest wall here, and it's the bytecode donor for vax.
+  - **riscv64** (64-bit LE) — toolchain builds; **libuv** `src/unix/async.c:422`
+    fails to ASSEMBLE: `unrecognized opcode '0x0100000f'` (a `fence`/`pause`-class
+    instruction the netbsd-10 riscv assembler predates). Try a `-march`/`-mno-*`
+    toolchain flag or a small libuv patch; toolchain-version-bound, not our code.
+  - **mips64eb** (64-bit BE) — **NOT an engine wall.** NetBSD `build.sh
+    distribution` fails building the sbmips userland (`usr.sbin/crash` →
+    `unknown type name 'bool'`) at the `netbsd-10` pin. A NetBSD-src/sbmips issue;
+    try a different src pin or a newer branch. The engine never got a chance.
+  - **vax** (32-bit LE) — dropped from the fleet (was a leg, removed 2026-07-18):
+    toolchain builds, but quickjs assumes IEEE floats and VAX has **non-IEEE** F/D/G
+    format. Real fix = a soft-float IEEE mode for GCC's VAX backend (a GCC-backend
+    project, not a leg tweak); bytecode donor = the i386 leg once i386 lands.
   - (Expect ia64, or1k, m68000/sun2 to land here too as the sweep reaches them.)
 - **MorphOS** (PowerPC AmigaOS-family) — **tier-3, needs a libuv port.** Fits the
   mission (weird PPC boxes where native Claude can't run) and endianness is solved
