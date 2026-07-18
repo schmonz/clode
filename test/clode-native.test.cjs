@@ -246,3 +246,39 @@ test('acceptance 3: quaude-from-native passes the agentic Bash mock oracle', asy
     assert.ok(followUp.body.includes(MARKER), `tool_result lacks the command's stdout:\n${followUp.body.slice(0, 2000)}`);
   } finally { await mock.close(); }
 });
+
+test('acceptance 4: the native builder BUILDS A NAUDE (fetch node + assemble + PONG), node absent from PATH', async (t) => {
+  if (SKIP) { t.skip(SKIP); return; }
+  if (SKIP_PRODUCT) { t.skip(SKIP_PRODUCT); return; }
+  const NODES = path.join(DIR, 'nodes');
+  const NAUDE = path.join(DIR, 'naude-from-native');
+  // Obtain the pinned Node into a sandbox store via the HOST clode first. This
+  // both (a) gates cleanly on the environment — offline / a sha problem fails
+  // HERE, distinctly from an assembly bug below — and (b) warms the store so the
+  // node-free build proves the ASSEMBLY without a network round-trip inside it.
+  // (`clode fetch --naude` under tjs shares clode-net with the provider fetch,
+  // proven elsewhere; the claim under test is that clode-native assembles a
+  // working naude with no node on PATH.)
+  const fetch = spawnSync(process.execPath, [ENTRY, 'fetch', '--naude'], {
+    encoding: 'utf8', timeout: 300000,
+    env: { ...process.env, CLODE_NODES: NODES, DYLD_INSERT_LIBRARIES: '' },
+  });
+  if (fetch.status !== 0) { t.skip(`pinned node unavailable in this environment (offline?): ${fetch.stderr || fetch.stdout}`); return; }
+
+  // The proof: clode-native (tjs, no host node) fetches the pinned node from the
+  // warm store, materializes its carried assembler + bundle + postject, spawns
+  // build-naude UNDER the pinned node, and the resulting naude PONGs — all with
+  // node ABSENT from PATH (PATH = /usr/bin:/bin has tar + sh + codesign only).
+  const env = {
+    PATH: '/usr/bin:/bin',
+    HOME: DIR,
+    CLODE_CLAUDE_BIN: providerBin(),
+    CLODE_CACHE: path.join(DIR, 'cache'),
+    CLODE_NODES: NODES,
+  };
+  const r = await runNative(NATIVE, ['build', '--naude', '--out', NAUDE], env);
+  assert.strictEqual(r.status, 0, `native naude build failed:\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
+  assert.match(r.stdout, /built naude/);
+  assert.match(r.stdout, /PONG round-trip ok/);   // the mandatory smoke ran on the built naude
+  assert.ok(fs.statSync(NAUDE).size > 30 * 1024 * 1024, 'built naude implausibly small');
+});
