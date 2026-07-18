@@ -105,3 +105,166 @@ test('stagedBunShim: quaude and naude resolve the same shim for the same stage',
       `naude and quaude must bake the same shim for stage ${stage}`);
   }
 });
+
+// ---------------------------------------------------------------------------
+// Task 5 (clode-fetches-naude-engine): the fetched node + prebuilt bundle +
+// carried postject, no esbuild/npm on the user path. The five new flags all
+// default to the checkout's own locations/running node, so a plain
+// `node scripts/build-naude.mjs --cli ...` keeps working unchanged.
+// ---------------------------------------------------------------------------
+
+test('parseNodeArg: absent -> process.execPath (the plain-checkout default)', async () => {
+  const { parseNodeArg } = await import('../scripts/build-naude.mjs');
+  assert.strictEqual(parseNodeArg(['--cli', '/x/cli.cjs']), process.execPath);
+});
+
+test('parseNodeArg: --node <path> resolves to an absolute path, NOT process.execPath', async () => {
+  const { parseNodeArg } = await import('../scripts/build-naude.mjs');
+  const got = parseNodeArg(['--node', '/opt/fetched-node/bin/node']);
+  assert.strictEqual(got, path.resolve('/opt/fetched-node/bin/node'));
+  assert.notStrictEqual(got, process.execPath);
+});
+
+test('parseBundleArg: absent -> the checkout default (build/bundle/naude-entry.bundle.cjs)', async () => {
+  const { parseBundleArg } = await import('../scripts/build-naude.mjs');
+  const REPO = path.resolve(__dirname, '..');
+  assert.strictEqual(parseBundleArg([]), path.join(REPO, 'build', 'bundle', 'naude-entry.bundle.cjs'));
+});
+
+test('parseBundleArg: --bundle <path> wins over the default', async () => {
+  const { parseBundleArg } = await import('../scripts/build-naude.mjs');
+  assert.strictEqual(parseBundleArg(['--bundle', '/staged/naude-entry.bundle.cjs']),
+    path.resolve('/staged/naude-entry.bundle.cjs'));
+});
+
+test('parseNmdirArg: absent -> the checkout default (deps/claude/node_modules)', async () => {
+  const { parseNmdirArg } = await import('../scripts/build-naude.mjs');
+  const REPO = path.resolve(__dirname, '..');
+  assert.strictEqual(parseNmdirArg([]), path.join(REPO, 'deps', 'claude', 'node_modules'));
+});
+
+test('parseNmdirArg: --nmdir <path> wins over the default', async () => {
+  const { parseNmdirArg } = await import('../scripts/build-naude.mjs');
+  assert.strictEqual(parseNmdirArg(['--nmdir', '/mat/node_modules']), path.resolve('/mat/node_modules'));
+});
+
+test('parsePostjectArg: absent -> the checkout default (deps/clode/node_modules/postject)', async () => {
+  const { parsePostjectArg } = await import('../scripts/build-naude.mjs');
+  const REPO = path.resolve(__dirname, '..');
+  assert.strictEqual(parsePostjectArg([]), path.join(REPO, 'deps', 'clode', 'node_modules', 'postject'));
+});
+
+test('parsePostjectArg: --postject <dir> wins over the default', async () => {
+  const { parsePostjectArg } = await import('../scripts/build-naude.mjs');
+  assert.strictEqual(parsePostjectArg(['--postject', '/mat/postject']), path.resolve('/mat/postject'));
+});
+
+// parseBuilderArg: --builder wins; else CLODE_SELF (the historical esbuild
+// --define source, kept as an env fallback); else null (fail-loud-not-wrong).
+test('parseBuilderArg: --builder <path> wins over CLODE_SELF', async () => {
+  const { parseBuilderArg } = await import('../scripts/build-naude.mjs');
+  assert.strictEqual(parseBuilderArg(['--builder', '/abs/clode'], { CLODE_SELF: '/other/clode' }), '/abs/clode');
+});
+
+test('parseBuilderArg: absent --builder falls back to env.CLODE_SELF', async () => {
+  const { parseBuilderArg } = await import('../scripts/build-naude.mjs');
+  assert.strictEqual(parseBuilderArg([], { CLODE_SELF: '/env/clode' }), '/env/clode');
+});
+
+test('parseBuilderArg: neither --builder nor CLODE_SELF -> null (fail-loud-not-wrong)', async () => {
+  const { parseBuilderArg } = await import('../scripts/build-naude.mjs');
+  assert.strictEqual(parseBuilderArg([], {}), null);
+});
+
+// generateBlob: the SEA-config pass now runs the GIVEN --node, not
+// process.execPath. Asserted via the injectable execFileSync seam (matching
+// scripts/lib/npm-cli.cjs's pattern) — no real Node >= 24 SEA-config pass runs.
+test('generateBlob: runs the GIVEN node, not process.execPath', async () => {
+  const { generateBlob } = await import('../scripts/build-naude.mjs');
+  const calls = [];
+  const fakeExec = (cmd, args, opts) => { calls.push({ cmd, args, opts }); };
+  generateBlob('/fake/fetched/node', '/some/sea-config.json', { execFileSync: fakeExec });
+  assert.strictEqual(calls.length, 1);
+  assert.strictEqual(calls[0].cmd, '/fake/fetched/node');
+  assert.notStrictEqual(calls[0].cmd, process.execPath);
+  assert.deepStrictEqual(calls[0].args, ['--experimental-sea-config', '/some/sea-config.json']);
+});
+
+// buildBinary: embeds the GIVEN --node's bytes, not process.execPath's, and
+// injects via the GIVEN --postject. Asserted via injectable seams (readNode,
+// requirePostject, sign) so this runs with no real postject/codesign.
+test('buildBinary: embeds the bytes read from the GIVEN --node, not process.execPath', async () => {
+  const { buildBinary } = await import('../scripts/build-naude.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-buildbinary-'));
+  try {
+    const blob = path.join(dir, 'sea-prep.blob');
+    fs.writeFileSync(blob, 'BLOB-BYTES');
+    const bin = path.join(dir, 'naude-out', 'naude');
+    const fakeNodeBytes = 'FAKE-FETCHED-NODE-BYTES';
+    const readCalls = [];
+    let injectCall = null;
+    const signCalls = [];
+    const got = await buildBinary({
+      nodePath: '/fake/fetched/node',
+      postjectDir: '/fake/postject/dir',
+      blob,
+      outOverride: bin,
+      readNode: (p) => { readCalls.push(p); return Buffer.from(fakeNodeBytes); },
+      requirePostject: (dir) => {
+        assert.strictEqual(dir, '/fake/postject/dir');
+        return { inject: async (binPath, name, data, opts) => { injectCall = { binPath, name, data, opts }; } };
+      },
+      sign: (phase, binPath) => { signCalls.push({ phase, binPath }); },
+    });
+    assert.strictEqual(got, bin);
+    assert.deepStrictEqual(readCalls, ['/fake/fetched/node']);
+    // The bytes actually on disk are what readNode returned, NOT this host's
+    // real process.execPath (which would be a real, much larger Mach-O/ELF/PE).
+    assert.strictEqual(fs.readFileSync(bin, 'utf8'), fakeNodeBytes);
+    assert.ok(injectCall, 'postject.inject was never called');
+    assert.strictEqual(injectCall.binPath, bin);
+    assert.deepStrictEqual(signCalls.map((c) => c.phase), ['unsign', 'sign']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The deferred wiring THIS task lands: writeSeaConfig used to silently drop
+// `builder` instead of passing it to naudeSeaConfig, so every naude built
+// through this path baked NO builder asset regardless of --builder/CLODE_SELF.
+test('writeSeaConfig: threads `builder` through to the config (the deferred wiring, landed)', async () => {
+  const { writeSeaConfig } = await import('../scripts/build-naude.mjs');
+  const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-writeseaconfig-'));
+  try {
+    const cliCjs = path.join(stage, 'cli.cjs');
+    fs.writeFileSync(cliCjs, '// staged cli.cjs\n');
+    fs.writeFileSync(path.join(stage, 'bun-shim.cjs'), '// staged bun-shim\n');
+    const { cfgPath } = writeSeaConfig({
+      bundle: '/b/naude-entry.bundle.cjs', cliCjs, tar: '/o/deps.tar', sigFile: '/o/deps.sig',
+      builder: '/abs/clode',
+    });
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    assert.ok(cfg.assets.builder, 'sea-config.json must carry a `builder` asset when --builder is given');
+    assert.strictEqual(fs.readFileSync(cfg.assets.builder, 'utf8'), '/abs/clode');
+  } finally {
+    fs.rmSync(stage, { recursive: true, force: true });
+  }
+});
+
+test('writeSeaConfig: a null builder omits the asset (fail-loud-not-wrong, preserved)', async () => {
+  const { writeSeaConfig } = await import('../scripts/build-naude.mjs');
+  const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-writeseaconfig-null-'));
+  try {
+    const cliCjs = path.join(stage, 'cli.cjs');
+    fs.writeFileSync(cliCjs, '// staged cli.cjs\n');
+    fs.writeFileSync(path.join(stage, 'bun-shim.cjs'), '// staged bun-shim\n');
+    const { cfgPath } = writeSeaConfig({
+      bundle: '/b/naude-entry.bundle.cjs', cliCjs, tar: '/o/deps.tar', sigFile: '/o/deps.sig',
+      builder: null,
+    });
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    assert.ok(!('builder' in cfg.assets), 'no builder -> no `builder` asset -> updater fails loud');
+  } finally {
+    fs.rmSync(stage, { recursive: true, force: true });
+  }
+});

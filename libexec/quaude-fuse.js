@@ -143,6 +143,39 @@ if (role === 'builder') {
   // `clode build`, its clode-fuse.cjs needs this on disk to verify
   // node_modules matches the lockfile before embedding.
   members.push({ name: 'deps/claude/package-lock.json', data: await mustRead(path.join(path.dirname(libexecDir), 'deps', 'claude', 'package-lock.json'), 'deps/claude/package-lock.json member') });
+  // postject's pure-JS pieces (dist/api.js does the actual SEA-blob inject;
+  // dist/cli.js + package.json ride along for completeness) — so a fused
+  // builder can eventually assemble a naude without a host esbuild/postject
+  // toolchain (mirrors how clode-main.bundle.cjs / naude-entry.bundle.cjs,
+  // above, are carried as our-source-only members). Resolved from the
+  // checkout's deps/clode/node_modules/postject — the SAME tree
+  // `npm ci --prefix deps/clode` populates and scripts/build-naude.mjs's
+  // --postject default reads (one code path, two resolutions — checkout vs a
+  // future fused-payload materialization — exactly like the deps/claude/
+  // package.json member above, which resolves the same way in both cases
+  // because libexecDir itself is already rebound upstream).
+  //
+  // Deliberately NOT a hard requirement yet (unlike deps/claude/package.json,
+  // a committed file that must always exist): no CI job runs
+  // `npm ci --prefix deps/clode` today — that lands with the fetch/materialize
+  // wiring (a later task). A missing directory here just means this fused
+  // builder was minted on a host that hasn't provisioned postject, and won't
+  // be able to assemble a naude until it is (or until a later task teaches it
+  // to fetch one) — skip with a loud warning instead of failing the whole
+  // fuse over a capability nothing yet exercises end-to-end.
+  const postjectDir = path.join(path.dirname(libexecDir), 'deps', 'clode', 'node_modules', 'postject');
+  let postjectPresent = false;
+  try { postjectPresent = (await tjs.stat(postjectDir)).isDirectory; } catch { /* not provisioned on this host */ }
+  if (postjectPresent) {
+    for (const f of ['package.json', 'dist/cli.js', 'dist/api.js']) {
+      members.push({
+        name: `deps/clode/node_modules/postject/${f}`,
+        data: await mustRead(path.join(postjectDir, f), `postject member ${f}`),
+      });
+    }
+  } else {
+    console.log(`quaude-fuse: ${postjectDir} not provisioned — carrying no postject (this builder cannot assemble a naude until 'npm ci --prefix deps/clode' has been run somewhere in its lineage)`);
+  }
   // The PRISTINE tjs template rides along (Q2 Decision 2): a shipped builder
   // must be able to fuse with NOTHING on disk — `clode build` materializes this
   // member when no CLODE_TJS/build-tree template exists. Pristine = the
