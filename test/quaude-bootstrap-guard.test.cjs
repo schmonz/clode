@@ -11,6 +11,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { guardVerdict: canonicalGuardVerdict } = require('../libexec/update-guard.cjs');
+const CORPUS = require('./update-guard-corpus.cjs');
 
 const START = /\/\/ >>> guardVerdict.*>>>\s*\n/;
 const END = /\/\/ <<< guardVerdict <<</;
@@ -31,18 +32,6 @@ function loadInlinedGuardVerdict() {
   return factory();
 }
 
-const CORPUS = {
-  deny: [
-    'claude update',
-    'bash -c "claude update"',
-    'npm i -g @anthropic-ai/claude-code',
-  ],
-  allow: [
-    'claude --version',
-    'npm i lodash',
-  ],
-};
-
 test('quaude-bootstrap.mjs inline guardVerdict matches libexec/update-guard.cjs on the shared corpus', () => {
   const inlined = loadInlinedGuardVerdict();
   for (const cmd of CORPUS.deny) {
@@ -52,5 +41,9 @@ test('quaude-bootstrap.mjs inline guardVerdict matches libexec/update-guard.cjs 
   for (const cmd of CORPUS.allow) {
     assert.deepStrictEqual(inlined(cmd), canonicalGuardVerdict(cmd), `allow mismatch for: ${cmd}`);
     assert.strictEqual(canonicalGuardVerdict(cmd), null, `corpus sanity: expected canonical ALLOW for: ${cmd}`);
+  }
+  for (const cmd of CORPUS.failOpen) {
+    assert.deepStrictEqual(inlined(cmd), canonicalGuardVerdict(cmd), `failOpen mismatch for: ${cmd}`);
+    assert.strictEqual(canonicalGuardVerdict(cmd), null, `corpus sanity: expected canonical ALLOW (fail-open) for: ${cmd}`);
   }
 });

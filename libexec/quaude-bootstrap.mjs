@@ -191,8 +191,18 @@ async function main() {
       verdict = guardVerdict((parsed.tool_input || {}).command);
     } catch { verdict = null; }
     if (verdict) {
-      const enc = new TextEncoder().encode(JSON.stringify(verdict));
-      globalThis.__tjs_fs_sync.write(1, enc.buffer, -1);
+      // write(2) on a blocking pipe/tty may short-write large payloads --
+      // loop until every byte lands (mirrors node-shim's writeSyncFd in
+      // libexec/node-shim/internal/stdio-write.cjs). Fail OPEN: if a write
+      // returns <= 0, stop and fall through to exit(0) rather than throwing.
+      const bytes = new TextEncoder().encode(JSON.stringify(verdict));
+      let off = 0;
+      while (off < bytes.length) {
+        const chunk = off === 0 ? bytes.buffer : bytes.buffer.slice(off);
+        const n = globalThis.__tjs_fs_sync.write(1, chunk, -1);
+        if (n <= 0) break;
+        off += n;
+      }
     }
     tjs.exit(0);
     return;
