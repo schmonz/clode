@@ -68,25 +68,17 @@ well-tested, and reasonably fast** as we can possibly make it." Sequencing:
   manifest is small (<64KB, gets through); the hundreds of `ok <member>` lines are the
   bulk stream that stalled — so it looked like "only the manifest, then nothing, exit 0."
 
-- **`clode-0.1.3-darwin-universal build` fails at codesign of the tjs template
-  (Mavericks / old macOS host).** Reported 2026-07-15:
-  ```
-  clode: build: codesign of the embedded template failed:
-  codesign_allocate: for architecture arm64 object: .../template-tjs
-    malformed object (unknown load command 5)
-  the codesign_allocate helper tool cannot be found or used
-  ```
-  The **native `darwin10.6-x64` build works**; only the **darwin-universal** one
-  breaks. Hypothesis: the universal clode carries a **fat (x64+arm64) tjs
-  template**; Mavericks-era `codesign_allocate` chokes on the arm64 slice's newer
-  load command (LC 5) and can't sign it. A thin-x64 template signs fine (why the
-  native x64 build works). Likely fixes to weigh: (a) on old-macOS hosts, thin the
-  template to the host arch before codesign (lipo -thin $(uname -m)); (b) ship a
-  host-arch-thin template in the universal artifact for the builder role; (c)
-  detect the old `codesign_allocate` and skip/replace signing. **Directly bears on
-  the "retire host-Node → fuse tjs into every clode" decision** (below / host-Node
-  thread): a tjs-everywhere clode makes the fuse+codesign path load-bearing on
-  every host, so this wart must be solid first.
+- **RESOLVED 2026-07-15: darwin-universal codesign on old macOS.** The universal
+  clode carries a fat (x64+arm64) tjs template; Mavericks-era `codesign_allocate`
+  choked on the arm64 slice's newer load command (LC 5). Fixed by `233190a` +
+  `efbd4c5` (fix (a) from the original weigh-list): on the builder path, thin the
+  fat template to the host arch before codesign via a direct in-place
+  `lipo <file> -thin <hostSlice> -output <file>` — no `-archs` probe (old `lipo`
+  rejects that flag, which is why the first attempt's probe silently no-op'd the
+  thin). Proven end-to-end on REAL hardware (OS X 10.9.5 Mavericks, Darwin 13.4):
+  `clode build` logs "thinned fat template to x86_64", re-signs, fuses a working
+  29MB x86_64 quaude from the fat engine; 10/10 unit tests on the direct-thin
+  contract. The fuse+codesign path is now solid for the tjs-everywhere clode.
 
 - **darwin-universal i386/ppc slices are `no-exec` — clode by construction,
   unverified.** The universal artifact lipo's four bare tjs engines (arm64, x64,
