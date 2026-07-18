@@ -53,6 +53,14 @@ test('missing CLODE_TARGET: loud, non-zero, nothing spawned', async () => {
   assert.strictEqual(d.calls.build.length, 0);
 });
 
+test('target no longer exists: loud, non-zero, no fetch/build/swap', async () => {
+  const d = drive({ CLODE_TARGET_KIND: 'quaude', CLODE_TARGET: '/usr/local/bin/quaude' },
+    { existsSync: () => false });
+  assert.strictEqual(await d.p, 1);
+  assert.match(d.err(), /no longer exists/);
+  assert.strictEqual(d.calls.fetch.length + d.calls.build.length + d.calls.swap.length, 0);
+});
+
 test('unwritable target dir: fail BEFORE building', async () => {
   const d = drive({ CLODE_TARGET_KIND: 'quaude', CLODE_TARGET: '/usr/local/bin/quaude' },
     { accessSync: () => { throw new Error('EACCES'); } });
