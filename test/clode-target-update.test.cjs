@@ -24,11 +24,18 @@ function drive(env, over = {}) {
   return { p, calls, err: () => err.join(''), out: () => out.join('') };
 }
 
+// The temp path targetUpdate builds for a target — computed with path.join so the
+// assertions match on win32 (backslash separators) as well as POSIX, instead of
+// hardcoding a forward-slash string. randToken is '7' (the harness default).
+function tmpFor(target) {
+  return path.join(path.dirname(target), `.${path.basename(target)}.update-7`);
+}
+
 test('quaude: fetch -> build --out <temp in target dir> -> swap; exit 0', async () => {
   const d = drive({ CLODE_TARGET_KIND: 'quaude', CLODE_TARGET: '/usr/local/bin/quaude' });
   assert.strictEqual(await d.p, 0);
   assert.deepStrictEqual(d.calls.fetch, ['stable']);
-  assert.deepStrictEqual(d.calls.build[0], ['--out', '/usr/local/bin/.quaude.update-7']);
+  assert.deepStrictEqual(d.calls.build[0], ['--out', tmpFor('/usr/local/bin/quaude')]);
   assert.strictEqual(d.calls.swap.length, 1);
   assert.strictEqual(d.calls.swap[0][1], '/usr/local/bin/quaude');
 });
@@ -36,7 +43,7 @@ test('quaude: fetch -> build --out <temp in target dir> -> swap; exit 0', async 
 test('naude: build carries --naude', async () => {
   const d = drive({ CLODE_TARGET_KIND: 'naude', CLODE_TARGET: '/opt/naude' });
   assert.strictEqual(await d.p, 0);
-  assert.deepStrictEqual(d.calls.build[0], ['--naude', '--out', '/opt/.naude.update-7']);
+  assert.deepStrictEqual(d.calls.build[0], ['--naude', '--out', tmpFor('/opt/naude')]);
 });
 
 test('unknown kind: loud, non-zero, no fetch/build/swap', async () => {
@@ -83,7 +90,7 @@ test('rebuild fails (status != 0): loud, non-zero, temp removed, NO swap', async
     { build: async () => 1 });
   assert.strictEqual(await d.p, 1);
   assert.strictEqual(d.calls.swap.length, 0, 'a failed build must never swap');
-  assert.ok(d.calls.rm.includes('/usr/local/bin/.quaude.update-7'));
+  assert.ok(d.calls.rm.includes(tmpFor('/usr/local/bin/quaude')));
 });
 
 test('swap fails: loud, non-zero, temp removed (target unchanged is the swap seam\'s job)', async () => {
@@ -91,5 +98,5 @@ test('swap fails: loud, non-zero, temp removed (target unchanged is the swap sea
     { swap: () => { throw new Error('EBUSY'); } });
   assert.strictEqual(await d.p, 1);
   assert.match(d.err(), /swap/i);
-  assert.ok(d.calls.rm.includes('/usr/local/bin/.quaude.update-7'));
+  assert.ok(d.calls.rm.includes(tmpFor('/usr/local/bin/quaude')));
 });
