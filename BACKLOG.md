@@ -192,8 +192,9 @@ well-tested, and reasonably fast** as we can possibly make it." Sequencing:
 ### Platform wishlist (reachable-frontier tracker)
 
 - **NetBSD: every arch** — in progress (task #8 above). The showcase of the
-  build.sh path. **PUBLISHED (11, 2026-07-18):** amd64, arm64, sparc, m68k,
-  sparc64, alpha, hppa, macppc, pmax (mipsel), sgimips (mipseb), sh3el (SuperH).
+  build.sh path. **PUBLISHED (12, 2026-07-18):** amd64, arm64, sparc, m68k,
+  sparc64, alpha, hppa, macppc, pmax (mipsel), sgimips (mipseb), sh3el (SuperH),
+  earmv7hf (32-bit ARM).
   The `-a MACHINE_ARCH` composite input (2026-07-18) unlocked multi-arch ports
   (evbarm/sbmips/evbsh3 abort `build.sh -m` without it). Walls below.
 - **NetBSD hard-arch tier — three distinct wall classes (batch-3 diagnoses,

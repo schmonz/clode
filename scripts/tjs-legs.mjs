@@ -464,7 +464,7 @@ const LEGS = [
     'cross-file': 'scripts/netbsd.toolchain.cmake',
     'atomic-shim': false, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
-    publish: false, ci: true, 'soft-fail': true, timeout: 3600,
+    publish: true, ci: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // netbsd-riscv64 (RV64 LE): the riscv port's 64-bit default; 64-bit inlines atomics.
   { leg: 'netbsd-riscv64', os: 'ubuntu-latest', 'guest-arch': 'riscv64',

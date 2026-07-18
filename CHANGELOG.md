@@ -50,8 +50,9 @@ daily-driver bugs that shipped in 0.1.3.
 - **Expanded published NetBSD coverage.** Promoted six proven-green NetBSD cross
   builds to first-class published, release-gating artifacts:
   **sparc64, alpha, hppa, macppc, pmax, sgimips** (joining amd64, arm64, sparc,
-  m68k), plus a new **sh3el** (SuperH) build. Every published platform is now
-  locked by a golden-set test — it cannot silently drop from a future release.
+  m68k), plus two new arches: **earmv7hf** (32-bit ARM) and **sh3el** (SuperH) —
+  twelve NetBSD architectures in all. Every published platform is now locked by a
+  golden-set test — it cannot silently drop from a future release.
 - Windows is MSVC-native for both x64 and arm64; the Node-SEA builder is retired
   everywhere except where noted.
 
