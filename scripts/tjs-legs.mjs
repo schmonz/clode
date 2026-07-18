@@ -435,6 +435,69 @@ const LEGS = [
     floor: '10.1', 'guest-version': '10.1',
     publish: false, ci: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
+  // ---- Fleet batch 3 (v0.1.4): the next 6 build.sh cross arches, extending the
+  // fleet toward the ~20-24 buildable of NetBSD's 43 MACHINE_ARCH. Same pattern:
+  // {netbsd-machine (a PORT — build.sh -m gives that port's DEFAULT MACHINE_ARCH,
+  // the composite takes no -a), guest-arch (drives the file(1) gate), atomic-shim}.
+  // ALL ONBOARDING (publish:false + soft-fail, non-blocking, no-exec — NetBSD has no
+  // qemu-user). atomic-shim on the 32-bit arches lacking inlined 8-byte atomics
+  // (i386 has cmpxchg8b, ARMv7 has ldrexd → no shim; vax/sh3 → shim). canonical-LE
+  // carries the shipped LE bytecode onto the BE target (mips64eb — new 64-bit-BE
+  // engine coverage beyond s390x/sparc64). Confidence varies (i386 high; the
+  // port-default arch for evbarm/riscv/sbmips/evbsh3 is CI-adjudicated; vax is a
+  // KNOWN hard-arch — see BACKLOG "NetBSD hard-arch tier" — onboarded as a wall).
+  //
+  // netbsd-i386 (x86-32 LE): the 32-bit x86 port, cmpxchg8b → no shim.
+  { leg: 'netbsd-i386', os: 'ubuntu-latest', 'guest-arch': 'i386',
+    'netbsd-src': 'netbsd-10', 'netbsd-machine': 'i386',
+    'cross-file': 'scripts/netbsd.toolchain.cmake',
+    'atomic-shim': false, tier2: true, verify: 'none', 'no-exec': true,
+    floor: '10.1', 'guest-version': '10.1',
+    publish: false, ci: true, 'soft-fail': true, timeout: 3600,
+    wasm: 'off', mimalloc: 'off', ffi: 'off' },
+  // netbsd-earmv7hf (ARM32 LE hardfloat): evbarm's default arch; ARMv7 ldrexd
+  // inlines 8-byte atomics → no shim.
+  { leg: 'netbsd-earmv7hf', os: 'ubuntu-latest', 'guest-arch': 'earmv7hf',
+    'netbsd-src': 'netbsd-10', 'netbsd-machine': 'evbarm',
+    'cross-file': 'scripts/netbsd.toolchain.cmake',
+    'atomic-shim': false, tier2: true, verify: 'none', 'no-exec': true,
+    floor: '10.1', 'guest-version': '10.1',
+    publish: false, ci: true, 'soft-fail': true, timeout: 3600,
+    wasm: 'off', mimalloc: 'off', ffi: 'off' },
+  // netbsd-riscv64 (RV64 LE): the riscv port's 64-bit default; 64-bit inlines atomics.
+  { leg: 'netbsd-riscv64', os: 'ubuntu-latest', 'guest-arch': 'riscv64',
+    'netbsd-src': 'netbsd-10', 'netbsd-machine': 'riscv',
+    'cross-file': 'scripts/netbsd.toolchain.cmake',
+    'atomic-shim': false, tier2: true, verify: 'none', 'no-exec': true,
+    floor: '10.1', 'guest-version': '10.1',
+    publish: false, ci: true, 'soft-fail': true, timeout: 3600,
+    wasm: 'off', mimalloc: 'off', ffi: 'off' },
+  // netbsd-mips64eb (MIPS64 BIG-endian): the sbmips port; 64-bit inlines atomics,
+  // no shim. canonical-LE bytecode proof on a 3rd 64-bit-BE target.
+  { leg: 'netbsd-mips64eb', os: 'ubuntu-latest', 'guest-arch': 'mips64eb',
+    'netbsd-src': 'netbsd-10', 'netbsd-machine': 'sbmips',
+    'cross-file': 'scripts/netbsd.toolchain.cmake',
+    'atomic-shim': false, tier2: true, verify: 'none', 'no-exec': true,
+    floor: '10.1', 'guest-version': '10.1',
+    publish: false, ci: true, 'soft-fail': true, timeout: 3600,
+    wasm: 'off', mimalloc: 'off', ffi: 'off' },
+  // netbsd-vax (VAX LE, 32-bit): KNOWN hard-arch (BACKLOG). Onboarded as a wall —
+  // build.sh may produce a toolchain the engine can't yet compile clean on.
+  { leg: 'netbsd-vax', os: 'ubuntu-latest', 'guest-arch': 'vax',
+    'netbsd-src': 'netbsd-10', 'netbsd-machine': 'vax',
+    'cross-file': 'scripts/netbsd.toolchain.cmake',
+    'atomic-shim': true, tier2: true, verify: 'none', 'no-exec': true,
+    floor: '10.1', 'guest-version': '10.1',
+    publish: false, ci: true, 'soft-fail': true, timeout: 3600,
+    wasm: 'off', mimalloc: 'off', ffi: 'off' },
+  // netbsd-sh3el (Renesas SuperH SH-3, LE 32-bit): the evbsh3 port; 32-bit → shim.
+  { leg: 'netbsd-sh3el', os: 'ubuntu-latest', 'guest-arch': 'sh3el',
+    'netbsd-src': 'netbsd-10', 'netbsd-machine': 'evbsh3',
+    'cross-file': 'scripts/netbsd.toolchain.cmake',
+    'atomic-shim': true, tier2: true, verify: 'none', 'no-exec': true,
+    floor: '10.1', 'guest-version': '10.1',
+    publish: false, ci: true, 'soft-fail': true, timeout: 3600,
+    wasm: 'off', mimalloc: 'off', ffi: 'off' },
 ];
 
 export function legsFor(tier) {

@@ -548,7 +548,11 @@ runs:
           alpha)   want='Alpha' ;;
           hppa)    want='PA-RISC' ;;
           powerpc) want='PowerPC' ;;
-          mipsel|mipseb) want='MIPS' ;;
+          mipsel|mipseb|mips64eb) want='MIPS' ;;
+          i386)    want='80386|Intel 386' ;;
+          earmv7hf) want='ARM' ;;
+          vax)     want='VAX' ;;
+          sh3el)   want='Renesas SH|SuperH|SH,' ;;
           *)       want='' ;;
         esac
         if [ -n "$want" ]; then
