@@ -118,7 +118,15 @@ async function main(argv, opts = {}) {
   const node = env.CLODE_NODE || process.execPath;
 
   // 5. `clode fetch [channel]`: fetch a fresh provider, then exit — no Node floor.
+  //    `clode fetch --naude` is a separate target: it fetches the PINNED NODE
+  //    (Task 1's clode-node.cjs) into the local store instead, so a later
+  //    `clode build --naude` can run without the user having Node installed.
   if (first === 'fetch') {
+    if (args.slice(1).includes('--naude')) {
+      const p = await require('./clode-node.cjs').ensurePinnedNode({ env, log: (m) => process.stderr.write(m + '\n') });
+      process.stdout.write('clode: pinned node ready at ' + p + '\n');
+      return process.exit(0);
+    }
     const status = await update.clodeUpdate(args[1], { env, libexec: LIBEXEC, here: HERE, node });
     return process.exit(status);
   }
