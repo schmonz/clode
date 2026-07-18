@@ -442,3 +442,74 @@ jobs:
           echo "provider: $PROV"
           export CLODE_PROVIDER_BIN="$PROV"
           node --test --test-concurrency=1 $FILES
+
+  # HARD GATE for the target self-update callback (2026-07-18): a built target
+  # (quaude AND naude) rebuilds ITSELF to a newer Claude Code — build from an OLD
+  # provider, run `--clode-internal-update`, assert the on-disk binary flipped to
+  # the NEW version and still PONGs. test/quaude-naude-selfupdate.test.cjs opt-ins
+  # on CLODE_PROVIDER_BIN and derives OLD/NEW as the oldest/newest real provider
+  # in the clode store, so this job's whole job is to PUT TWO real versions there
+  # (CI otherwise has one). Isolated from node-shim-oracle on purpose: this drives
+  # several minutes of real target builds; a slow/red run here must not redden or
+  # slow that gate. Consumes the CI-tier linux-x64-musl bare engine, same as the
+  # other oracle jobs.
+  self-update-e2e:
+    needs: tjs
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .tool-versions
+      - uses: actions/download-artifact@v8
+        with:
+          name: tjs-linux-x64-musl
+          path: ${{ runner.temp }}/tjs
+      - name: Install the runtime dep closure (for the shim + the rebuild)
+        run: npm ci --prefix deps/claude
+      - name: Provision postject (deps/clode) so the fused clode-native can assemble a naude
+        run: npm ci --prefix deps/clode 2>&1 | tail -3
+      - name: Cache the pinned Node (naude engine — the naude rebuild embeds it)
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/clode-nodes
+          key: pinned-node-${{ hashFiles('deps/clode/node-pin.json') }}-${{ runner.os }}-${{ runner.arch }}
+      - name: a target rebuilds itself to a newer Claude Code (self-update e2e, both kinds)
+        env:
+          CLODE_TJS: ${{ runner.temp }}/tjs/tjs
+          CLODE_NODES: ${{ runner.temp }}/clode-nodes
+        run: |
+          set -euo pipefail
+          chmod +x "$CLODE_TJS"
+          # `build --self` (run by the test's before()) needs a fresh esbuilt bundle.
+          node scripts/build-clode-main.mjs
+          # Two real provider versions in a sandbox clode store: the two NEWEST
+          # published on npm (the registry keeps old versions, unlike a rolling
+          # release CDN — so this does not go stale). The test bakes the older into
+          # the initial target and updates to the newer.
+          STORE="${{ runner.temp }}/selfupd-providers"
+          VERS=$(npm view @anthropic-ai/claude-code versions --json \
+            | node -e 'const v=JSON.parse(require("fs").readFileSync(0,"utf8")); process.stdout.write(v.slice(-2).join(" "))')
+          echo "provisioning two provider versions: $VERS"
+          # Global install per version (the SAME `npm i -g` + find-in-npm-root
+          # pattern the windows/node-shim-oracle jobs prove yields a real >20M
+          # `claude` bin), copying each into the sandbox store before the next
+          # global install clobbers it. Not a --prefix install (unverified here).
+          LATEST=""
+          for V in $VERS; do
+            npm i -g "@anthropic-ai/claude-code@$V" >/dev/null 2>&1
+            BIN="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f -name claude -size +20M 2>/dev/null | head -1)"
+            if [ -z "$BIN" ]; then echo "ERROR: no claude >20M for $V" >&2; exit 1; fi
+            mkdir -p "$STORE/$V"; cp "$BIN" "$STORE/$V/claude"; chmod +x "$STORE/$V/claude"
+            LATEST="$V"
+          done
+          echo "store: $STORE (newest = $LATEST)"
+          # A skipped acceptance is not a pass — assert it actually RAN both cases.
+          CLODE_PROVIDER_BIN="$STORE/$LATEST/claude" CLODE_PROVIDERS="$STORE" \
+            node --test --test-timeout=1800000 test/quaude-naude-selfupdate.test.cjs 2>&1 | tee selfupd.out
+          grep -qE '^(ℹ|#) skipped 0$' selfupd.out \
+            || { echo "ERROR: the self-update e2e SKIPPED (or the summary format changed) — the callback went unproven" >&2; exit 1; }
