@@ -219,6 +219,13 @@ export function stagedBunShim(cliCjs) {
 // updater always failed loud with no callback target. Exported so a test can
 // assert the threading without a full build.
 export function writeSeaConfig({ bundle, cliCjs, tar, sigFile, builder }) {
+  // Ensure the artifact dir exists before writing into it (sea-config.json here,
+  // builder.txt via naudeSeaConfig). A full build's main() already made it and a
+  // dev box has build/<tag>/ from a prior run, so this only bites a clean
+  // checkout calling writeSeaConfig directly (the unit tests, on CI) — where it
+  // hit ENOENT. naudeSeaConfig stays a pure config builder (it takes a synthetic
+  // `out` in other tests); the dir-ensuring lives here, at the write boundary.
+  fs.mkdirSync(OUT, { recursive: true });
   const bunShim = stagedBunShim(cliCjs);
   if (!fs.existsSync(bunShim)) {
     // Fail loud rather than silently baking no shim (or reaching back to the
