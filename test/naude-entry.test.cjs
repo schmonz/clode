@@ -236,6 +236,21 @@ test('first pass: no `builder` override -> reads the builder asset off the real 
     'the default builder path must come from the sea.getAsset(\'builder\') seam');
 });
 
+test('first pass declares CLODE_TARGET_KIND=naude and CLODE_TARGET=<the naude exe>', () => {
+  let call = null;
+  runNaude({
+    argv: [], execPath: '/naude', env: {}, cacheDir: os.tmpdir(), workDir: '/work',
+    sea: fakeSea(),
+    materializeDeps: () => '/deps',
+    materializeAssets: ({ destDir }) => destDir,
+    spawn: (cmd, args, o) => { call = o; return { on() {} }; },
+    procOn: () => {}, procOff: () => {}, exit: () => {},
+    onExit: (cb) => cb(0, null),
+  });
+  assert.strictEqual(call.env.CLODE_TARGET_KIND, 'naude');
+  assert.strictEqual(call.env.CLODE_TARGET, '/naude');
+});
+
 test('first pass: no `builder` override + the builder asset is absent (getAsset throws) -> CLODE_SELF unset', () => {
   let call = null;
   const sea = Object.assign(fakeSea(), {

@@ -118,6 +118,8 @@ export async function bootstrapTargetEnv(tjs, opts) {
   return shape({
     env: tjs.env,
     self: builder,
+    targetKind: 'quaude',
+    targetPath: tjs.exePath,
     platform,
     delimiter,
     exists: (p) => Boolean(stats.get(p)?.exists),

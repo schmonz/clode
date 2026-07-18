@@ -118,6 +118,8 @@ function runNaude(opts = {}) {
   shapeTargetEnv({
     env: childEnv,
     self: builder,
+    targetKind: 'naude',
+    targetPath: execPath,
     platform: process.platform,
     delimiter: path.delimiter,
     exists: fs.existsSync,
