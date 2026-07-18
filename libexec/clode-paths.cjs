@@ -7,7 +7,7 @@
 // ensured); env is injected for testability.
 //
 // Precedence (high→low): specific override (CLODE_DEPS/CLODE_CACHE/CLODE_PROVIDERS/
-// CLODE_WATCH_DIR) > CLODE_STATE_ROOT > XDG_* > HOME.
+// CLODE_NODES/CLODE_WATCH_DIR) > CLODE_STATE_ROOT > XDG_* > HOME.
 const os = require('node:os');
 const path = require('node:path');
 
@@ -45,6 +45,9 @@ function depsStore(env = process.env) {
 function providersDir(env = process.env) {
   return env.CLODE_PROVIDERS || path.join(clodeDataDir(env), 'providers');
 }
+function nodeStore(env = process.env) {
+  return env.CLODE_NODES || path.join(clodeDataDir(env), 'nodes');
+}
 // watchDir builds on cacheBase, NOT clodeCacheDir — it must ignore CLODE_CACHE (the
 // pre-refactor clode-watch.watchDir did), else the watcher writes into the version-
 // keyed bundle cache and collides (test_keying/test_selfupdate).
@@ -52,4 +55,4 @@ function watchDir(env = process.env) {
   return env.CLODE_WATCH_DIR || cacheBase(env);
 }
 
-module.exports = { homeDir, clodeDataDir, clodeCacheDir, depsStore, providersDir, watchDir, cacheBase };
+module.exports = { homeDir, clodeDataDir, clodeCacheDir, depsStore, providersDir, nodeStore, watchDir, cacheBase };
