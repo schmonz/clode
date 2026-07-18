@@ -158,14 +158,17 @@ test('the prologue keeps a floor for `clode build` too — v18 is refused', () =
   assert.match(r.stderr || '', /node v18\.19\.0 is too old; need >= v20/);
 });
 
-test('--clode-internal-update refuses rather than impersonating an update', () => {
+test('--clode-internal-update refuses when the environment has no target to update', () => {
   // A real, LOCAL (file://) releases fixture — the bug this guards against is that
   // clodeUpdate can genuinely SUCCEED (fetch + verify + re-point `current`) and
   // still leave a baked target's old bytecode running. Proving the refusal fires
   // means proving it fires even when the fetch it preempts would have worked.
-  // Every piece of clode state (providers store, signals snapshot dir, settings
-  // HOME) is redirected into this test's own tmpdirs — a fetch that "succeeds"
-  // here must never touch the real ~/.local/share/clode or this repo's signals/.
+  // Here bare `clode` (not a built quaude/naude) invokes --clode-internal-update:
+  // CLODE_TARGET_KIND / CLODE_TARGET are unset, so targetUpdate must refuse
+  // BEFORE ever touching the fetch/build/swap path. Every piece of clode state
+  // (providers store, signals snapshot dir, settings HOME) is redirected into
+  // this test's own tmpdirs — a fetch that "succeeds" here must never touch the
+  // real ~/.local/share/clode or this repo's signals/.
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-iu-'));
   const releases = path.join(tmp, 'repo');
   const V = '9.9.9';
@@ -185,9 +188,11 @@ test('--clode-internal-update refuses rather than impersonating an update', () =
     CLODE_STATE_ROOT: fs.mkdtempSync(path.join(os.tmpdir(), 'clode-iu-state-')),
     CLODE_SIGNALS_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'clode-iu-signals-')),
     HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'clode-iu-home-')),
+    CLODE_TARGET_KIND: '',
+    CLODE_TARGET: '',
   });
   assert.notStrictEqual(r.status, 0, 'must not report success for an update it cannot perform');
-  assert.match(r.stderr, /cannot update itself|clode update/i);
+  assert.match(r.stderr, /CLODE_TARGET_KIND/);
   // The bug being prevented: fetching a provider is NOT updating a baked target.
   assert.doesNotMatch(r.stdout + r.stderr, /now the active provider/,
     'a baked target still runs its OLD bytecode after a fetch — never claim otherwise');

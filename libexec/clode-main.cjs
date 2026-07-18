@@ -11,7 +11,8 @@
 //   3. --version                -> print "clode <VERSION>", exit 0
 //   4. --help                   -> print clodeHelp(), exit 0
 //   5. fetch [channel]          -> clodeUpdate, exit status
-//   6. --clode-internal-update  -> refuse (not a real update yet), exit 1
+//   6. --clode-internal-update  -> targetUpdate: fetch, rebuild the target's
+//                                  kind, swap in place, exit status
 //   6b. build [--out PATH]      -> check watch signals, then clodeBuild (fuse a
 //                                  quaude), exit status — this is the ONE place
 //                                  upstream drift is checked (see step 7's note)
@@ -132,15 +133,21 @@ async function main(argv, opts = {}) {
   }
 
   // 6. `clode --clode-internal-update [channel]`: the callback the built target's
-  //    patched in-app updater invokes (via CLODE_SELF). It CANNOT be today's fetch:
-  //    fetching a newer Claude Code into the provider store does nothing for a
-  //    target that has the old one baked into its bytecode — it would report
-  //    success and change nothing. The real thing (fetch -> rebuild the target ->
-  //    swap it in place) is Phase 4; until then, refuse rather than lie.
+  //    patched in-app updater invokes (via CLODE_SELF). It reads what the target
+  //    declared about itself (CLODE_TARGET_KIND / CLODE_TARGET), fetches a newer
+  //    Claude Code, rebuilds THAT kind of target into a temp in the target's own
+  //    dir (clodeBuild smokes PONG + attest), and swaps it in place. Any failure:
+  //    loud, non-zero, target unchanged (never exit 0 over an unchanged binary —
+  //    upstream would print "Restart to apply" over a rebuild that never happened).
   if (first === '--clode-internal-update') {
-    process.stderr.write('clode: a built Claude Code binary cannot update itself in place.\n');
-    process.stderr.write("clode: run 'clode fetch' to get a newer Claude Code, then 'clode build' to rebuild.\n");
-    return process.exit(1);
+    const { targetUpdate } = require('./clode-target-update.cjs');
+    const fuse = require('./clode-fuse.cjs');
+    const status = await targetUpdate(args[1], {
+      env,
+      fetch: (channel) => update.clodeUpdate(channel, { env, libexec: LIBEXEC, here: HERE, node }),
+      build: (buildArgs) => fuse.clodeBuild(buildArgs, { env, libexec: LIBEXEC, here: HERE, version, self }),
+    });
+    return process.exit(status);
   }
 
   // 6b. `clode build [--self] [--out PATH]`: fuse a standalone quaude binary —
