@@ -267,10 +267,19 @@ jobs:
             # A previous run of this same workflow (e.g. re-dispatch) may
             # already have created this release — attach, don't duplicate;
             # create only if we got here first.
+            # Release notes = this version's CHANGELOG.md section (single source
+            # of truth). Keyed off VERSION, not the tag, so it works whether the
+            # tag carries a v-prefix or not. Falls back to a generic line if a
+            # version has no entry — a missing changelog must never block a release.
+            VER="$(cat VERSION)"
+            awk -v v="## $VER" '$0==v{g=1;next} /^## /&&g{exit} g{print}' \
+              CHANGELOG.md > "$RUNNER_TEMP/relnotes.md"
+            [ -s "$RUNNER_TEMP/relnotes.md" ] \
+              || echo "Automated release (tjs matrix)." > "$RUNNER_TEMP/relnotes.md"
             gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
               || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
-                   --target "$GITHUB_SHA" --title "$TAG" \
-                   --notes "Automated release (tjs matrix)."
+                   --target "$GITHUB_SHA" --title "clode $VER" \
+                   --notes-file "$RUNNER_TEMP/relnotes.md"
             gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber dist/*
           else
             V="$(cat VERSION)"; TAG="v$V-matrix-test.$GITHUB_RUN_NUMBER"
