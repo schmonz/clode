@@ -11,6 +11,10 @@ test('denies claude update / upgrade', () => {
   denied('claude   upgrade');
   denied('sudo claude update --force');
   denied('cd /x && claude update');
+  // Fail-safe: a shell wrapping the command in quotes must not slip through.
+  denied('bash -c "claude update"');
+  denied("sh -c 'claude upgrade'");
+  denied('ssh host "claude update"');
 });
 test('denies a GLOBAL install of the package by any manager', () => {
   denied('npm i -g @anthropic-ai/claude-code');
@@ -29,8 +33,15 @@ test('ALLOWS running the tool and unrelated commands', () => {
   allowed('claude');
   allowed('npm i -g typescript');       // global install of a DIFFERENT package
   allowed('npm i lodash');
-  allowed('git commit -m "claude update guard"');   // the words, not the command
   allowed('echo updating');
+});
+test('accepted safe over-deny: the words in quoted data are denied (fail-safe)', () => {
+  // "claude update" appearing inside quoted data (e.g. a commit message) is
+  // denied even though it isn't really an update command. This is a
+  // deliberate, safe over-deny: under-denying a real `claude update` hidden
+  // behind a shell quote (bash -c "claude update") would be a security bug,
+  // and a wrong deny here is self-explanatory and recoverable.
+  denied('git commit -m "claude update guard"');
 });
 test('ALLOWS on empty / non-string input (fail-open)', () => {
   allowed('');
