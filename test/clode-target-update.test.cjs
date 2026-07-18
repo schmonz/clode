@@ -17,7 +17,7 @@ function drive(env, over = {}) {
     accessSync: over.accessSync || (() => {}),          // writable dir
     rmSync: (p2) => calls.rm.push(p2),
     randToken: '7',
-    fetch: over.fetch || (async (c) => calls.fetch.push(c)),
+    fetch: over.fetch || (async (c) => { calls.fetch.push(c); return 0; }),
     build: over.build || (async (a) => { calls.build.push(a); return 0; }),
     swap: over.swap || ((t, tg, o) => calls.swap.push([t, tg, o])),
   });
@@ -67,6 +67,15 @@ test('unwritable target dir: fail BEFORE building', async () => {
   assert.strictEqual(await d.p, 1);
   assert.match(d.err(), /not writable/i);
   assert.strictEqual(d.calls.build.length, 0, 'must not build when the dir is unwritable');
+});
+
+test('fetch returns non-zero status (no throw): loud, non-zero, NO build, NO swap', async () => {
+  const d = drive({ CLODE_TARGET_KIND: 'quaude', CLODE_TARGET: '/usr/local/bin/quaude' },
+    { fetch: async () => 1 });
+  assert.strictEqual(await d.p, 1);
+  assert.match(d.err(), /could not fetch/i);
+  assert.strictEqual(d.calls.build.length, 0, 'a failed fetch must never build');
+  assert.strictEqual(d.calls.swap.length, 0, 'a failed fetch must never swap');
 });
 
 test('rebuild fails (status != 0): loud, non-zero, temp removed, NO swap', async () => {

@@ -40,9 +40,14 @@ async function targetUpdate(channel, opts) {
   try { accessSync(dir, fs.constants.W_OK); }
   catch { return fail(`the target's directory is not writable: ${dir} — rerun with permission to replace ${path.basename(target)}`); }
 
-  // 1) fetch a newer Claude Code (clode's existing fetch path).
-  try { await fetch(channel); }
+  // 1) fetch a newer Claude Code (clode's existing fetch path). clodeUpdate
+  //    signals failure (unresolved version, manifest fetch, checksum
+  //    mismatch) by RETURNING non-zero, not by throwing — check both, and
+  //    never proceed to build/swap on either kind of failure.
+  let fetchStatus;
+  try { fetchStatus = await fetch(channel); }
   catch (e) { return fail(`could not fetch a newer Claude Code: ${(e && e.message) || e}`); }
+  if (fetchStatus !== 0) { return fail(`could not fetch a newer Claude Code (status ${fetchStatus}) — the target is unchanged`); }
 
   // 2) rebuild THIS kind into a temp IN THE TARGET'S DIR. clodeBuild smokes
   //    PONG (+ attest for quaude) and exits non-zero on any failure.
