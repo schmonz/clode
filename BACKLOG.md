@@ -41,6 +41,23 @@ well-tested, and reasonably fast** as we can possibly make it." Sequencing:
 
 ### Known shipped-artifact bugs
 
+- **`dragonflybsd-amd64` leg red — UPSTREAM VM-IMAGE infra, NOT our code (2026-07-18,
+  track-only per user).** The leg fails at guest SETUP, before any tjs build:
+  `Error updating repositories!` + `mount_hammer2: cluster_connect(/dev/da0s1d@ROOT)
+  failed` — the DragonFlyBSD 6.4.2 guest can't update pkg repos / mount its FS.
+  Persistent across runs; it's the ONLY non-green job while everything that's ours
+  (test both OS, node-shim-oracle ×2, self-update-e2e, windows) is green, so the run
+  reads "failure" over a lie about our code. We use `cross-platform-actions/action@v1.3.0`
+  (`.github/actions/guest`), NOT vmactions (that's only solaris/openindiana here).
+  Can't route around it: **6.4.2 is the ONLY DragonFlyBSD version cpa supports.** No
+  open upstream issue tracks it — cpa has none dragonfly-specific (closest: #111 "No
+  space left on device"); vmactions/dragonflybsd-vm (a different action) has ZERO open
+  and CLOSED prior art that IS our symptom (#12 "low disk space only on DragonflyBSD",
+  #5 "Installing packages is broken") — so this is a recurring DFly-VM-image class
+  problem. The leg is `publish: true` + hard-gating with NO `soft-fail` and NO Renovate
+  annotation on its guest-version. When ready to act: demote to soft-fail (a leg whose
+  guest won't boot ships nothing anyway) and/or file a cpa issue with the two error
+  strings above + the closed-vmactions links. For now: watch upstream.
 - **REGRESSION: `--quaude-attest` on Haiku exits 0 after printing only the manifest —
   so `clode build` is BROKEN on Haiku at HEAD** (leg `haiku-x64`, run 29570793188,
   2026-07-17). The leg is `soft-fail: true`, so CI never said a word.
