@@ -25,8 +25,12 @@ test('nodeAsset: unsupported platform fails loud (Windows is out of scope)', () 
 test('ensurePinnedNode: sha mismatch fails loud and leaves nothing behind', async () => {
   const store = fs.mkdtempSync(path.join(os.tmpdir(), 'nodestore-'));
   const env = { CLODE_STATE_ROOT: store };
+  // Pin platform/arch to a SUPPORTED target (like the happy-path test below):
+  // otherwise this resolves the HOST platform, and on win32 — where naude is a
+  // deferred follow-on with no pinned Node — ensurePinnedNode throws "not
+  // supported" before it ever reaches the sha check, so the assertion misses.
   await assert.rejects(
-    ensurePinnedNode({ env, download: async (url, dest) => { fs.writeFileSync(dest, 'not-a-node'); }, verify: async () => 'deadbeef'.repeat(8) }),
+    ensurePinnedNode({ env, platform: 'linux', arch: 'x64', download: async (url, dest) => { fs.writeFileSync(dest, 'not-a-node'); }, verify: async () => 'deadbeef'.repeat(8) }),
     /sha mismatch/i);
   // nothing left in the versioned dir
   assert.ok(!fs.existsSync(path.join(store, 'share', 'clode', 'nodes', PINNED_VERSION)));
