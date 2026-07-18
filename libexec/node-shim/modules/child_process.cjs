@@ -177,7 +177,15 @@ function applyShell(file, args, opts) {
 
 function spawn(file, args = [], opts = {}) {
   if (!Array.isArray(args)) { opts = args || {}; args = []; }
-  const env = opts.env || undefined;
+  // Default the child's environment to the CURRENT env (tjs.env), not undefined.
+  // Node inherits the live process.env — including mutations — when `env` is
+  // omitted; tjs.env is the object process.env's set/deleteProperty traps write
+  // through (process.cjs), so it carries those mutations. Passing undefined here
+  // let tjs snapshot the original C environ instead, so `process.env.X = v`
+  // followed by a default-env spawn dropped X in the child (a silent divergence
+  // from node; the runtime does NOT mirror tjs.env back into the real environ on
+  // this engine, contrary to the old assumption).
+  const env = opts.env || tjs.env;
   const stdio = normStdio(opts);
   const shelled = applyShell(file, args, opts);
   file = shelled.file; args = shelled.args;
@@ -349,7 +357,10 @@ function spawnSync(file, args = [], opts = {}) {
   if (typeof globalThis.__tjs_spawn_sync !== 'function') {
     throw new Error('node-shim: child_process.spawnSync needs __tjs_spawn_sync (rebuild tjs with txiki-sync-spawn.patch — see child_process.cjs header)');
   }
-  const env = opts.env ? Object.entries(opts.env).map(([k, v]) => `${k}=${v}`) : undefined;
+  // Default to the CURRENT env (tjs.env), not undefined — see spawn() above:
+  // a default-env child must inherit process.env mutations, and this engine
+  // does not mirror tjs.env into the real environ, so it must be passed.
+  const env = Object.entries(opts.env || tjs.env).map(([k, v]) => `${k}=${v}`);
   let input;
   if (opts.input != null) {
     const b = Buffer.isBuffer(opts.input) ? opts.input : Buffer.from(String(opts.input));
