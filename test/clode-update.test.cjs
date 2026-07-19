@@ -21,11 +21,46 @@ const LIBEXEC = path.join(REPO_ROOT, 'libexec');
 const HERE = path.join(REPO_ROOT, 'bin');
 const NODE = process.env.CLODE_NODE || process.execPath;
 
-const { clodeUpdate, binaryFor } = require('../libexec/clode-update.cjs');
+const { clodeUpdate, binaryFor, providerFor, manifestPlatforms } = require('../libexec/clode-update.cjs');
 const { sha256Of } = require('../libexec/clode-net.cjs');
 
 const V = '9.9.9';
 const PLAT = 'linux-x64';
+
+const PLATFORMS = ['darwin-arm64','darwin-x64','linux-arm64','linux-x64','linux-arm64-musl','linux-x64-musl','win32-x64','win32-arm64'];
+
+test('providerFor: exact os+arch match wins', () => {
+  assert.strictEqual(providerFor('darwin','arm64', PLATFORMS), 'darwin-arm64');
+  assert.strictEqual(providerFor('win32','arm64', PLATFORMS), 'win32-arm64');
+  assert.strictEqual(providerFor('linux','x64', PLATFORMS, { isMusl: false }), 'linux-x64');
+});
+
+test('providerFor: linux musl runtime prefers the -musl build', () => {
+  assert.strictEqual(providerFor('linux','x64', PLATFORMS, { isMusl: true }), 'linux-x64-musl');
+  assert.strictEqual(providerFor('linux','arm64', PLATFORMS, { isMusl: true }), 'linux-arm64-musl');
+});
+
+test('providerFor: same-OS, arch don\'t-care (the darwin-ppc payoff)', () => {
+  // upstream ships no darwin-ppc/-i386; a darwin target still carves a DARWIN provider (any arch — don't-care)
+  assert.match(providerFor('darwin','ppc', PLATFORMS), /^darwin-/);
+  assert.match(providerFor('darwin','ia32', PLATFORMS), /^darwin-/);
+});
+
+test('providerFor: exotic OS falls back to linux-x64 and LOGS', () => {
+  const logs = [];
+  assert.strictEqual(providerFor('netbsd','sparc', PLATFORMS, { log: (m) => logs.push(m) }), 'linux-x64');
+  assert.strictEqual(providerFor('freebsd','x64', PLATFORMS, { log: (m) => logs.push(m) }), 'linux-x64');
+  assert.ok(logs.some((l) => /no upstream provider for netbsd-sparc/.test(l)), 'exotic fallback must be logged');
+});
+
+test('providerFor: linux musl falls back to glibc build when no -musl exists', () => {
+  assert.strictEqual(providerFor('linux','x64', ['linux-x64','darwin-arm64'], { isMusl: true }), 'linux-x64');
+});
+
+test('manifestPlatforms parses the platform keys, [] on garbage', () => {
+  assert.deepStrictEqual(manifestPlatforms(JSON.stringify({ platforms: { 'darwin-arm64': {}, 'linux-x64': {} } })).sort(), ['darwin-arm64','linux-x64']);
+  assert.deepStrictEqual(manifestPlatforms('not json'), []);
+});
 
 // A stderr sink so we can assert on the (stderr-bound) messages + signals digest.
 function sink() {

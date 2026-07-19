@@ -40,18 +40,45 @@ function isDir(p) {
 function releasesUrl(env) {
   return env.CLODE_RELEASES_URL || 'https://downloads.claude.ai/claude-code-releases';
 }
-// The platform whose binary we download. ARBITRARY BY DESIGN: clode never runs this
-// binary — it byte-scans it for the @bun-cjs blocks and carves the JS out to run under
-// host Node. Claude Code ships the SAME PROGRAM on every platform (it branches on
-// process.platform at RUNTIME), so any platform's binary carves to a behaviorally
-// identical bundle. The carve is NOT byte-identical across platforms — separate
-// per-platform Bun builds assign different minifier identifier names, embed bundled
-// text assets with the build OS's line endings (CRLF on win32, LF on linux/macOS), and
-// bake in Bun's VFS path prefix (/$bunfs vs B:/~BUN) — but none of that is behavioral
-// (verified: win32 vs linux carves differ only in those cosmetics; linux == macOS
-// byte-for-byte). We fix it to linux-x64: always present, canonical LF, and one shared
-// per-version cache entry for all hosts (host-derived selection would fragment that
-// cache for no benefit). Overridable via CLODE_FETCH_PLATFORM.
+// Node process.platform/arch -> the upstream manifest platform string to fetch.
+// Bun specializes each per-platform Claude Code build at compile time (folds
+// process.platform/arch AND dead-code-eliminates the other platforms' branches),
+// so a linux-x64 carve behaves as LINUX on every host (proven 2026-07-19). We
+// therefore match the target's OS. Arch is don't-care for the carve: tjs loads no
+// native .node addons and the sole arch-switch is moot, so any same-OS build
+// carves the right OS branches. OSes upstream does not build (netbsd/freebsd/...)
+// fall back to linux-x64 (Unix-closest branches), LOGGED, never silently.
+function manifestPlatforms(manifestText) {
+  try { const m = JSON.parse(manifestText); return Object.keys(m.platforms || m); }
+  catch { return []; }
+}
+
+// glibc runtime absent => musl (mirrors scripts/platform-tag.cjs linuxGlibc()).
+function isMuslRuntime() {
+  try { return !process.report.getReport().header.glibcVersionRuntime; }
+  catch { return false; }
+}
+
+function providerFor(platform, arch, available, opts = {}) {
+  const log = opts.log || (() => {});
+  const has = (p) => available.includes(p);
+  if (platform === 'linux') {
+    const musl = 'isMusl' in opts ? opts.isMusl : isMuslRuntime();
+    const exact = `linux-${arch}${musl ? '-musl' : ''}`;
+    if (has(exact)) return exact;
+    if (has(`linux-${arch}`)) return `linux-${arch}`;
+    const anyLinux = available.find((p) => p.startsWith('linux-'));
+    if (anyLinux) return anyLinux;
+  } else if (platform === 'darwin' || platform === 'win32') {
+    const exact = `${platform}-${arch}`;
+    if (has(exact)) return exact;
+    const sameOs = available.find((p) => p.startsWith(platform + '-')); // arch don't-care
+    if (sameOs) return sameOs;
+  }
+  log(`clode: no upstream provider for ${platform}-${arch}; carving linux-x64 (Unix-closest branches)`);
+  return has('linux-x64') ? 'linux-x64' : (available.find((p) => p.startsWith('linux-')) || 'linux-x64');
+}
+
 function fetchPlatform(env) {
   return env.CLODE_FETCH_PLATFORM || 'linux-x64';
 }
@@ -324,4 +351,4 @@ async function clodeUpdate(channel, opts = {}) {
   return 0;
 }
 
-module.exports = { clodeUpdate, clodeSignalsReport, resolveChannel, releasesUrl, binaryFor };
+module.exports = { clodeUpdate, clodeSignalsReport, resolveChannel, releasesUrl, binaryFor, providerFor, manifestPlatforms };
