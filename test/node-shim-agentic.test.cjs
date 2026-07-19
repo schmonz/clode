@@ -140,6 +140,7 @@ test('a darwin-carved quaude takes the macOS branch (managed-settings under /Lib
   try {
     const r = await bootP(cli, dir, ['-p', 'hi', '--debug', '--debug-to-stderr'],
       { ...process.env, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock', NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules') }, 120000);
+    assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
     assert.match(r.stderr, /\/Library\/Application Support\/ClaudeCode/, 'darwin carve must use the macOS managed-settings path');
     assert.doesNotMatch(r.stderr, /\/etc\/claude-code/, 'darwin carve must NOT use the linux managed-settings path');
   } finally { await mock.close(); }

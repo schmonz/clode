@@ -122,11 +122,16 @@ test('binaryFor reads the manifest platform binary name, defaults to claude', ()
 test('clode_update with no CLODE_FETCH_PLATFORM selects the host-OS provider', async () => {
   const fx = fixture();
   delete fx.env.CLODE_FETCH_PLATFORM;
-  // host platform per providerFor(process.platform, process.arch, [all 8])
-  const expected = providerFor(process.platform, process.arch, PLATFORMS);
-  // Serve `expected` (not PLAT) from the fixture repo: reuse the fixture's fake
-  // provider binary bytes, drop them under the expected platform dir, and point
-  // the manifest at that platform's checksum.
+  // Host-independent target: "<host os>-ppc" is a platform upstream never
+  // ships (no arch called ppc), so it can never collide with the OLD
+  // hardcoded default of 'linux-x64' on ANY runner (linux, darwin, win32).
+  // Serving ONLY this platform from the fixture repo means a regression back
+  // to a hardcoded 'linux-x64' fetch has nothing to find here and fails.
+  // It also exercises providerFor's same-OS "arch don't-care" fallback,
+  // since process.arch is never literally 'ppc'.
+  const expected = process.platform + '-ppc';
+  // Reuse the fixture's fake provider binary bytes, drop them under the
+  // expected platform dir, and point the manifest at that platform's checksum.
   const claudeSrc = path.join(fx.repo, V, PLAT, 'claude');
   const destDir = path.join(fx.repo, V, expected);
   fs.mkdirSync(destDir, { recursive: true });

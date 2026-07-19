@@ -57,7 +57,7 @@ const { toolchainDir } = require('../scripts/platform-tag.cjs');
 const cpaths = require('../libexec/clode-paths.cjs');
 
 const ENTRY = path.join(REPO, 'bin', 'clode');
-const PLAT = 'linux-x64'; // clode-update's fixed carve platform (CLODE_FETCH_PLATFORM default)
+const PLAT = 'linux-x64'; // clode-update's fallback carve platform when CLODE_FETCH_PLATFORM is unset
 
 // -- A fresh (or newest available) esbuilt clode-main bundle, written OUTSIDE
 // the repo. Copied from test/clode-native.test.cjs's stageMainBundle — same
