@@ -117,3 +117,30 @@ test('agentic Edit round-trip under tjs: overwriting an existing file works (Fil
       `Edit tool_result is the shim-gap "not a function":\n${editResult.body.slice(0, 800)}`);
   } finally { await mock.close(); }
 });
+
+// Regression guard for the provider-axis bug: a quaude carved from a LINUX
+// provider still behaves as linux on macOS (reads /etc/claude-code for
+// managed settings) even though it's running under a darwin engine. Only a
+// quaude carved from a DARWIN provider takes the correct macOS branch
+// (managed-settings under /Library/Application Support/ClaudeCode). `clode
+// fetch` now picks the OS-matched provider (see the sibling fix), and this
+// test locks that in end-to-end: stage a bundle from a real darwin `claude`
+// binary, run it under the mock-agentic harness with --debug-to-stderr, and
+// assert the debug log shows the macOS path and never the linux one.
+// Gated: needs a tjs engine (skipUnlessTjs) AND a real darwin provider binary
+// via CLODE_DARWIN_PROVIDER_BIN (this repo's own fetched provider is
+// linux-x64, so this SKIPs on a linux-provider box — that's expected, not a
+// failure).
+test('a darwin-carved quaude takes the macOS branch (managed-settings under /Library)', async (t) => {
+  if (skipUnlessTjs(t)) return;
+  const bin = process.env.CLODE_DARWIN_PROVIDER_BIN;
+  if (!bin || !fs.existsSync(bin)) { t.skip('no CLODE_DARWIN_PROVIDER_BIN'); return; }
+  const { cli, dir } = stageBundle(bin);
+  const mock = await startMockAnthropic({ respond: () => cannedSSE('hi') });
+  try {
+    const r = await bootP(cli, dir, ['-p', 'hi', '--debug', '--debug-to-stderr'],
+      { ...process.env, ANTHROPIC_BASE_URL: mock.url, ANTHROPIC_API_KEY: 'sk-ant-mock', NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules') }, 120000);
+    assert.match(r.stderr, /\/Library\/Application Support\/ClaudeCode/, 'darwin carve must use the macOS managed-settings path');
+    assert.doesNotMatch(r.stderr, /\/etc\/claude-code/, 'darwin carve must NOT use the linux managed-settings path');
+  } finally { await mock.close(); }
+});
