@@ -5,9 +5,14 @@
 //   sha256_of     (bin/clode:93)   ->  sha256Of(path)
 //
 // The sh launcher shells out to curl/wget for downloads and sha256sum/shasum for
-// checksums. This port drops those external tools: it uses Node's built-in fetch
-// (http/https), fs (file://) and crypto (sha256). Dropping curl/wget is an
-// explicit project goal.
+// checksums. Downloads drop those external tools — built-in fetch (http/https)
+// and fs (file://); dropping curl/wget is an explicit project goal. sha256Of,
+// however, stays an EXTERNAL dependency (like the sh launcher, and like our
+// rg/bfs/ugrep): under the tjs target there is no native crypto, so a pure-JS
+// SHA-256 of the ~265MB provider pegged the main thread for minutes (the "hangs
+// writing to disk" report — really a silent post-download verify). It resolves
+// its digest tool via host-provision.cjs's KAT-verified provision(). See
+// sha256Of below.
 //
 // Callers in the update flow (bin/clode:357/364/378 -> future clode-update):
 //   - resolve version / manifest: capture the body as a string.
@@ -21,15 +26,25 @@
 // copy for file://), never a utf8 round-trip, so a 240MB binary is not corrupted.
 
 const fs = require('node:fs');
-const crypto = require('node:crypto');
 const { fileURLToPath } = require('node:url');
+const { provision, parseSha256 } = require('./host-provision.cjs');
+const { spawnSync } = require('node:child_process');
 
 // hex sha256 of a file's bytes -> lowercase, identical to `sha256sum` /
-// `shasum -a 256` output (just the digest, no filename).
-function sha256Of(filePath) {
-  const h = crypto.createHash('sha256');
-  h.update(fs.readFileSync(filePath));
-  return h.digest('hex');
+// `shasum -a 256` output (just the digest, no filename). Resolves a host digest
+// tool via provision (KAT-verified, cached) and FAILS LOUD if none exists — never
+// a pure-JS fallback (that was the multi-minute main-thread grind on the tjs
+// target). opts forward to provision for testing (env/findTool/spawn/fs/dataDir).
+function sha256Of(filePath, opts = {}) {
+  const { candidate, path: bin } = provision('sha256', opts);
+  const spawn = opts.spawn || spawnSync;
+  const r = spawn(bin, candidate.args(filePath), { encoding: 'utf8', maxBuffer: 1 << 20 });
+  if (!r || r.status !== 0) {
+    throw new Error(`clode: ${bin} failed to hash ${filePath} (status ${r ? r.status : 'spawn error'})`);
+  }
+  const digest = parseSha256(r.stdout);
+  if (!digest) throw new Error(`clode: could not parse a sha256 digest from ${bin}`);
+  return digest;
 }
 
 // GET a URL. url may be https://, http:// or file://.

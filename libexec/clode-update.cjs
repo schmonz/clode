@@ -22,6 +22,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { downloadFile, sha256Of } = require('./clode-net.cjs');
+const { provision } = require('./host-provision.cjs');
 const cpaths = require('./clode-paths.cjs');
 const { currentVersion, setCurrent } = require('./clode-current.cjs');
 
@@ -235,6 +236,16 @@ async function clodeUpdate(channel, opts = {}) {
     return 1;
   }
 
+  // Verifying the download's sha256 against the manifest checksum is mandatory
+  // (upstream's integrity gate). Provision the digest tool NOW — before a ~265MB
+  // download — so a toolless host fails instantly, not after minutes of transfer.
+  try {
+    provision('sha256', { env });
+  } catch (e) {
+    err(e.message);
+    return 1;
+  }
+
   const providers = providersDir(env);
   const dest = path.join(providers, ver);
   const bin = path.join(dest, 'claude');
@@ -243,7 +254,7 @@ async function clodeUpdate(channel, opts = {}) {
   // diff's baseline.
   const prevVer = currentVersion(env);
 
-  const haveIt = isFile(bin) && sha256Of(bin) === sum;
+  const haveIt = isFile(bin) && sha256Of(bin, { env }) === sum;
 
   // Nothing to do: we already have this exact build AND `current` already points
   // at it. Report it cleanly and stop — no false "updated to", and no signals
@@ -290,7 +301,7 @@ async function clodeUpdate(channel, opts = {}) {
       err('clode: download failed');
       return 1;
     }
-    if (sha256Of(tmp) !== sum) {
+    if (sha256Of(tmp, { env }) !== sum) {
       try { fs.unlinkSync(tmp); } catch { /* absent */ }
       err(`clode: checksum mismatch for ${ver} (corrupt or tampered download)`);
       return 1;

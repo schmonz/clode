@@ -102,6 +102,28 @@ test('clode_update fetches the fixed platform into the provider store + current 
   } finally { cleanup(fx); }
 });
 
+// sha256Of is an external dependency now (it shells out to a host digest tool —
+// the same integrity check upstream does, computed natively). On the vanishingly
+// rare host with none of those tools we must FAIL LOUD, and do it BEFORE the
+// ~265MB download rather than after minutes of wasted transfer.
+test('clode_update fails LOUD before downloading when no sha256 digest tool exists', async () => {
+  const fx = fixture();
+  const err = sink();
+  // A host with none of the digest tools on PATH and no CLODE_SHA256 override.
+  const env = { ...fx.env, PATH: '', CLODE_SHA256: '' };
+  try {
+    const status = await clodeUpdate('stable', opts(env, err));
+    assert.strictEqual(status, 1, 'must fail when it cannot verify the download');
+    assert.match(err.text(), /no sha256 digest tool|install one of/i,
+      'prints an actionable message naming the missing tools');
+    // Preflight fires before the download: no unverified binary, no partial left.
+    assert.strictEqual(fs.existsSync(path.join(fx.providers, V, 'claude')), false,
+      'no unverified binary installed');
+    assert.strictEqual(fs.existsSync(path.join(fx.providers, V, '.claude.partial')), false,
+      'no partial download left behind');
+  } finally { cleanup(fx); }
+});
+
 test('a bad checksum aborts the update without moving "current"', async () => {
   const fx = fixture();
   fs.writeFileSync(path.join(fx.repo, V, 'manifest.json'),

@@ -20,7 +20,7 @@ function tmpdir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'clode-net-'));
 }
 
-// --- sha256Of --------------------------------------------------------------
+// --- sha256Of: real host tool (integration) --------------------------------
 
 test('sha256Of matches the known digest of "hello"', () => {
   const dir = tmpdir();
