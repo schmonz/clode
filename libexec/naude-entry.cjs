@@ -33,6 +33,7 @@ const seaHelpers = require('./naude-sea.cjs');
 const { shapeTargetEnv } = require('./target-env.cjs');
 const { isExecutableFile } = require('./clode-hosttools.cjs');
 const { guardVerdict } = require('./update-guard.cjs');
+require('./host-provision.cjs'); // ensure esbuild bundles it into the SEA for runtime provision('tar')
 // The absolute path of the clode that built this naude, read as a SEA asset (
 // runtime data) rather than an esbuild --define (a build-time string burned
 // into the bundle) — so the SAME esbuilt naude-entry bundle serves every

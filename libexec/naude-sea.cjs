@@ -9,7 +9,6 @@
 // UNCHANGED against those dirs, so SEA and source share one path.
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 
 function seaMod() { try { return require('node:sea'); } catch { return null; } }
 // try/catch around the PROPERTY READS too, not just the require: a hostile
@@ -28,8 +27,10 @@ function assetBuffer(sea, name) { return Buffer.from(sea.getRawAsset(name)); }
 // that dir — shaped like a clode DEPS_ROOT (it contains node_modules/), so the caller
 // hands it to the normal launch path as depsRoot with no SEA-specific handling.
 // Idempotent (skips if already unpacked) and atomic (temp dir + rename).
-function materializeDeps({ sea = seaMod(), cacheDir }) {
-  const sig = assetBuffer(sea, 'deps.sig').toString('utf8').trim();
+function materializeDeps({ sea = seaMod(), cacheDir, assetBuffer: getAsset = assetBuffer, spawn, env = process.env } = {}) {
+  const { provision } = require('./host-provision.cjs');
+  const { execFileSync } = require('node:child_process');
+  const sig = getAsset(sea, 'deps.sig').toString('utf8').trim();
   const dir = path.join(cacheDir, 'sea-deps', sig);
   if (fs.existsSync(path.join(dir, 'node_modules'))) return dir;   // already materialized
   const tmp = dir + '.partial-' + process.pid;
@@ -39,8 +40,15 @@ function materializeDeps({ sea = seaMod(), cacheDir }) {
   // as tar args. On Windows under a bash PATH, `tar` is Git Bash's GNU tar, which reads an archive
   // path like `C:\…\deps.tar` as a remote `host:path` (the drive-letter colon) and dies "Cannot
   // connect". Streaming the buffer to stdin with no colon-bearing path args is uniform on GNU tar
-  // (Windows/Linux) and bsdtar (macOS) — the runtime mirror of the build-side archive step.
-  execFileSync('tar', ['-xf', '-'], { cwd: tmp, input: assetBuffer(sea, 'deps.tar'), maxBuffer: 1 << 30 });
+  // (Windows/Linux) and bsdtar (macOS) — the runtime mirror of the build-side archive step. Which
+  // tar binary that is comes from provision('tar') (host-provision.cjs), the SAME KAT-verified
+  // resolver the builder uses — not a bare 'tar' literal, so a tar-less PATH fails loud with an
+  // install hint instead of a raw ENOENT.
+  const { path: tarBin } = provision('tar', { env, spawn });
+  const runExtract = spawn
+    ? (bin, args) => spawn(bin, args, { cwd: tmp, input: getAsset(sea, 'deps.tar'), maxBuffer: 1 << 30 })
+    : (bin, args) => execFileSync(bin, args, { cwd: tmp, input: getAsset(sea, 'deps.tar'), maxBuffer: 1 << 30 });
+  runExtract(tarBin, ['-xf', '-']);
   fs.mkdirSync(path.dirname(dir), { recursive: true });
   try {
     fs.renameSync(tmp, dir);                          // atomic publish
