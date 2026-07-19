@@ -75,3 +75,45 @@ test('agentic Bash round-trip under tjs: tool_result carries real stdout inline'
     assert.ok(!followUp.body.includes('Output too large'), 'tool_result degraded to the persisted-file detour');
   } finally { await mock.close(); }
 });
+
+// Editing / overwriting an EXISTING file: the bundle's atomic write restores the
+// original file mode via `await handle.chmod(...)` on a promises.open FileHandle.
+// The shim FileHandle lacked chmod, so every Edit / Write-over-existing threw a
+// bare "not a function" (quaude self-test 2026-07-19) while Write of a NEW file
+// worked. Oracle: the file is actually mutated on disk, and the Edit tool_result
+// is not the shim-gap error.
+test('agentic Edit round-trip under tjs: overwriting an existing file works (FileHandle.chmod)', async (t) => {
+  if (skipUnlessTjs(t)) return;
+  const bin = providerBin();
+  if (!bin) { t.skip('no CLODE_PROVIDER_BIN'); return; }
+  const { cli, dir } = stageBundle(bin);
+  const target = path.join(dir, 'edit-target.txt');
+  fs.writeFileSync(target, 'hello world\nsecond line\n');
+  const READ_ID = 'toolu_read_edit';
+  const EDIT_ID = 'toolu_edit_edit';
+  // Read (satisfy read-before-edit) -> Edit -> done, keyed off request content.
+  const mock = await startMockAnthropic({
+    respond: (body) =>
+      body.includes(EDIT_ID) ? cannedSSE('EDITDONE')
+        : body.includes(READ_ID) ? cannedToolUseSSE('Edit', { file_path: target, old_string: 'world', new_string: 'universe' }, EDIT_ID)
+          : cannedToolUseSSE('Read', { file_path: target }, READ_ID),
+  });
+  try {
+    const r = await bootP(cli, dir,
+      ['-p', 'edit the file', '--dangerously-skip-permissions'],
+      {
+        ...process.env,
+        ANTHROPIC_BASE_URL: mock.url,
+        ANTHROPIC_API_KEY: 'sk-ant-mock',
+        NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules'),
+      }, 120000);
+    assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
+    // Ground-truth oracle: the edit actually landed on disk.
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), 'hello universe\nsecond line\n', 'Edit did not apply on disk');
+    // And the Edit tool_result must not be the FileHandle-shim-gap error.
+    const editResult = mock.requests.find((q) => q.body && q.body.includes(EDIT_ID) && q.body.includes('tool_result'));
+    assert.ok(editResult, 'no follow-up POST carrying the Edit tool_result');
+    assert.ok(!/"content":"not a function","is_error":true,"tool_use_id":"toolu_edit_edit"/.test(editResult.body),
+      `Edit tool_result is the shim-gap "not a function":\n${editResult.body.slice(0, 800)}`);
+  } finally { await mock.close(); }
+});

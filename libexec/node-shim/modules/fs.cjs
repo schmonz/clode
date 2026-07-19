@@ -408,6 +408,13 @@ function makeFileHandle(fd, p) {
     async writeFile(data, opts) { writeAll(fd, typeof data === 'string' ? encodeStr(data, typeof opts === 'string' ? opts : opts?.encoding) : new Uint8Array(data.buffer ?? data, data.byteOffset ?? 0, data.byteLength ?? data.length), null); },
     async appendFile(data, opts) { writeAll(fd, typeof data === 'string' ? encodeStr(data, typeof opts === 'string' ? opts : opts?.encoding) : new Uint8Array(data.buffer ?? data, data.byteOffset ?? 0, data.byteLength ?? data.length), null); },
     async stat() { return new Stats(FSS.fstat(fd)); },
+    // FileHandle.chmod: the bundle's atomic write (Write-overwrite + Edit) writes
+    // a temp file then RESTORES the original file's mode via `await handle.chmod`
+    // ("Applied original permissions to temp file"). Missing this method made
+    // every overwrite/Edit of an existing file throw a bare "not a function"
+    // (Write of a NEW file skips it — no original mode to restore). No fd-based
+    // fchmod primitive exists; chmod the captured path (same inode).
+    async chmod(mode) { FSS.chmod(p, mode); },
     async sync() {},
     async datasync() {},
     // `await using fh = await fs.promises.open(...)` (bundle ≥2.1.204 Bash-tool
