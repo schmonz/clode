@@ -52,3 +52,35 @@ test('findTool returns null when nothing is found', () => {
   assert.strictEqual(findTool('definitely-not-a-tool', { env: { PATH: dir } }), null);
 });
 
+// --- findTool: Windows resolves bare tool names via PATHEXT -----------------
+// On Windows the host tools are certutil.exe / tar.exe; a bare-name PATH walk
+// (the POSIX `command -v` behavior) finds nothing, so provision('sha256'|'tar')
+// wrongly reports "no tool found" even though certutil/tar ship with Windows.
+// Host-independent: inject isWin + isExec, match on basename (path.join's
+// separator differs by host).
+test('findTool probes PATHEXT for a bare name on win32 (certutil -> certutil.EXE)', () => {
+  const isExec = (p) => /[\\/]certutil\.EXE$/.test(p); // only the .EXE exists
+  const found = findTool('certutil', {
+    isWin: true,
+    env: { PATH: 'C:\\Windows\\System32', PATHEXT: '.COM;.EXE;.BAT;.CMD' },
+    isExec,
+  });
+  assert.match(found || '', /certutil\.EXE$/);
+});
+
+test('findTool on win32 leaves a name that already has an extension alone', () => {
+  const isExec = (p) => /[\\/]tar\.exe$/.test(p) && !/tar\.exe\./.test(p);
+  const found = findTool('tar.exe', {
+    isWin: true,
+    env: { PATH: 'C:\\tools', PATHEXT: '.COM;.EXE' },
+    isExec,
+  });
+  assert.match(found || '', /[\\/]tar\.exe$/);
+});
+
+test('findTool on non-win32 does NOT append extensions (POSIX bare name)', () => {
+  const dir = tmpdir();
+  const rg = makeExe(dir, 'rg');
+  assert.strictEqual(findTool('rg', { isWin: false, env: { PATH: dir } }), rg);
+});
+

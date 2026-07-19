@@ -31,14 +31,27 @@ function isExecutableFile(p) {
 // Replacement for `command -v NAME` with the CLODE_* override pattern
 // (`${OVERRIDE:-$(command -v NAME)}`): return the override if it is set and
 // executable, else walk PATH for an executable `name`, else null.
+// On Windows a bare tool name resolves to name+PATHEXT (certutil -> certutil.exe,
+// tar -> tar.exe); without probing PATHEXT the walk finds nothing and provision
+// wrongly reports "no tool found" for tools that ship WITH Windows. Mirrors
+// child_process.cjs's resolveExe. isWin is injectable for host-independent tests.
 function findTool(name, opts = {}) {
-  const { override, env = process.env, isExec = isExecutableFile } = opts;
+  const {
+    override, env = process.env, isExec = isExecutableFile,
+    isWin = process.platform === 'win32',
+  } = opts;
   if (override && isExec(override)) return override;
-  const PATH = env.PATH || '';
-  for (const dir of PATH.split(path.delimiter)) {
+  const delim = isWin ? ';' : ':';
+  const hasExt = isWin && /\.[^.\\/]+$/.test(name); // e.g. an explicit "tar.exe"
+  const exts = isWin && !hasExt
+    ? String(env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
+    : [''];
+  for (const dir of (env.PATH || '').split(delim)) {
     if (!dir) continue; // an empty PATH element means CWD in sh; clode never relies on it
-    const cand = path.join(dir, name);
-    if (isExec(cand)) return cand;
+    for (const ext of exts) {
+      const cand = path.join(dir, name + ext);
+      if (isExec(cand)) return cand;
+    }
   }
   return null;
 }
