@@ -441,8 +441,13 @@ const LEGS = [
   // Single-arch ports (i386) take build.sh -m alone; MULTI-arch ports (evbarm,
   // sbmips, evbsh3) have no default and abort "No MACHINE_ARCH provided" without an
   // explicit netbsd-arch (build.sh -a), added to the crossbuild composite in this batch.
-  // ALL ONBOARDING (publish:false + soft-fail, non-blocking, no-exec — NetBSD has no
-  // qemu-user). atomic-shim on the 32-bit arches lacking inlined 8-byte atomics
+  // Onboarded as no-exec probes (soft-fail, non-blocking — NetBSD has no qemu-user).
+  // Those that earned a green cross-build were promoted to publish:true and SHIPPED in
+  // 0.20260718.1 (earmv7hf, and batch-2 sgimips/sh3el/etc). Those that have NEVER built
+  // (i386, riscv64, mips64eb) are held ciOnly:true — built in CI to see if they compile,
+  // but filtered OUT of the release matrix (legsFor('release')): a never-built arch must
+  // not ride — let alone gate — a release. Drop ciOnly + set publish:true once green.
+  // atomic-shim on the 32-bit arches lacking inlined 8-byte atomics
   // (i386 has cmpxchg8b, ARMv7 has ldrexd → no shim; vax/sh3 → shim). canonical-LE
   // carries the shipped LE bytecode onto the BE target (mips64eb — new 64-bit-BE
   // engine coverage beyond s390x/sparc64). Confidence varies (i386 high; the
@@ -455,7 +460,7 @@ const LEGS = [
     'cross-file': 'scripts/netbsd.toolchain.cmake',
     'atomic-shim': false, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
-    publish: false, ci: true, 'soft-fail': true, timeout: 3600,
+    publish: false, ci: true, ciOnly: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // netbsd-earmv7hf (ARM32 LE hardfloat): evbarm's default arch; ARMv7 ldrexd
   // inlines 8-byte atomics → no shim.
@@ -472,7 +477,7 @@ const LEGS = [
     'cross-file': 'scripts/netbsd.toolchain.cmake',
     'atomic-shim': false, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
-    publish: false, ci: true, 'soft-fail': true, timeout: 3600,
+    publish: false, ci: true, ciOnly: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // netbsd-mips64eb (MIPS64 BIG-endian): the sbmips port; 64-bit inlines atomics,
   // no shim. canonical-LE bytecode proof on a 3rd 64-bit-BE target.
@@ -481,7 +486,7 @@ const LEGS = [
     'cross-file': 'scripts/netbsd.toolchain.cmake',
     'atomic-shim': false, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
-    publish: false, ci: true, 'soft-fail': true, timeout: 3600,
+    publish: false, ci: true, ciOnly: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // NOTE: netbsd-vax was dropped 2026-07-18 — a confirmed ENGINE wall, not just a
   // toolchain risk: build.sh produces a working vax toolchain but quickjs fails to
