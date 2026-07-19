@@ -63,7 +63,7 @@ test('os.EOL is CRLF on win32', () => {
   assert.match(osSrc, /EOL:.*win32.*\\r\\n/);
 });
 test('process.arch derives honest arch on win32 via winArch(PROCESSOR_ARCHITECTURE)', () => {
-  assert.match(procSrc, /arch:.*win32.*winArch\(\)/);
+  assert.match(procSrc, /get arch\(\).*win32.*winArch\(\)/);
   assert.match(procSrc, /PROCESSOR_ARCHITECTURE/);
 });
 test('process.execPath uses tjs.exePath', () => {

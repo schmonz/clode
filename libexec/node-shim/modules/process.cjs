@@ -79,6 +79,38 @@ function winArch(env = (typeof tjs !== 'undefined' && tjs.env) || {}) {
   return 'x64'; // AMD64 or unknown -> x64 (the safe existing default)
 }
 
+// uname -m machine string -> node process.arch value (the non-win32 arch source).
+// The old hardcoded 'arm64' here was the Mavericks-build bug: on an x86_64 host it
+// made codesignAdHoc (clode-fuse.cjs) thin the genuinely-fat tjs template down to
+// arm64. Covers the arches our targets run on; unknown -> 'x64' (safe, never the
+// arm64 lie). NetBSD reports 'evbarm' on arm64 — mapping, not passthrough.
+function machineToNodeArch(machine) {
+  const m = String(machine || '').trim().toLowerCase();
+  if (m === 'x86_64' || m === 'amd64') return 'x64';
+  if (m === 'arm64' || m === 'aarch64' || m === 'evbarm') return 'arm64';
+  if (m === 'i386' || m === 'i486' || m === 'i586' || m === 'i686' || m === 'x86') return 'ia32';
+  if (m === 'arm' || /^armv[4-8]/.test(m)) return 'arm';
+  if (m === 'ppc64le' || m === 'ppc64') return 'ppc64';
+  if (m === 'ppc' || m === 'powerpc') return 'ppc';
+  if (m === 's390x') return 's390x';
+  if (m === 'riscv64') return 'riscv64';
+  return m || 'x64';
+}
+
+// Honest non-win32 arch: `uname -m`, mapped. Lazy + cached — process.arch is read
+// well after boot (the build's codesignAdHoc), so the child_process shim is loaded
+// by then and this never runs at module-eval. uname-unavailable -> 'x64' (safe).
+let _unixArch;
+function unixArch() {
+  if (_unixArch) return _unixArch;
+  let m = '';
+  try {
+    const r = require('node:child_process').spawnSync('uname', ['-m'], { encoding: 'utf8' });
+    m = r && r.stdout != null ? String(r.stdout).trim() : '';
+  } catch { m = ''; }
+  return (_unixArch = machineToNodeArch(m));
+}
+
 function writeSync(fd, s) { return writeSyncFd(fd, s); }
 function writeOut(s) {
   if (tjs.env.CLODE_SHIM_DEBUG) { try { writeSync(2, `[shim] stdout.write(${JSON.stringify(String(s)).slice(0, 120)})\n`); } catch { /* ignore */ } }
@@ -197,12 +229,15 @@ module.exports = {
   platform: detectPlatform(),
   __detectPlatform: detectPlatform,   // test hook (node-shim-platform.test.cjs)
   winArch,                            // test hook (node-shim-platform.test.cjs)
-  // arch: win32 is now derived honestly from PROCESSOR_ARCHITECTURE (winArch,
-  // above) — set by the OS for every process, true for our native (non-WoW64)
-  // tjs.exe. The non-win32 'arm64' default remains the deferred Q3
-  // uname-facade gap (no arch signal in this tjs build outside win32); leave
-  // that branch unchanged until Q3 revisits it.
-  arch: (detectPlatform() === 'win32') ? winArch() : 'arm64',
+  machineToNodeArch,                  // test hook (node-shim-platform.test.cjs)
+  // arch: honest on every platform now. win32 from PROCESSOR_ARCHITECTURE
+  // (winArch); non-win32 from `uname -m` mapped to node's arch spelling
+  // (unixArch/machineToNodeArch). Lazy getter — arch is read at build time
+  // (codesignAdHoc), long after boot, so the uname spawn never fires at
+  // module-eval. This retires the old hardcoded 'arm64' that broke `clode build`
+  // on x86_64 macOS (it thinned the fat tjs template to arm64). See
+  // shim-platform-honesty + the universal-template diagnosis.
+  get arch() { return detectPlatform() === 'win32' ? winArch() : unixArch(); },
   pid: tjs.pid,
   execPath: tjs.exePath ?? '/tjs',
   cwd: () => tjs.cwd,

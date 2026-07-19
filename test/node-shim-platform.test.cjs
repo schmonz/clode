@@ -47,6 +47,13 @@ for (const [ua, nav, plat, type] of cases) {
 const live = process.__detectPlatform(navigator.userAgentData?.platform, navigator.platform);
 if (process.platform !== live) out.push('FAIL live platform ' + process.platform + ' != ' + live);
 if (os.type() !== os.__typeFor(process.platform)) out.push('FAIL live type ' + os.type());
+// Live arch honesty: process.arch must equal machineToNodeArch(uname -m), never a
+// hardcoded 'arm64' on an x86_64 host (the Mavericks-build bug).
+try {
+  const mach = String(require('node:child_process').execFileSync('uname', ['-m'], { encoding: 'utf8' })).trim();
+  const want = process.machineToNodeArch(mach);
+  if (mach && process.arch !== want) out.push('FAIL live arch ' + process.arch + ' != ' + want + ' (uname ' + mach + ')');
+} catch (e) { /* uname unavailable: skip */ }
 console.log(out.length ? out.join('\\n') : 'OK');
 `;
 
@@ -68,11 +75,29 @@ test('process.platform + os.type() are honest for every release-matrix identity'
 // module-load-time read; winArch itself never touches it when called with an
 // explicit env argument (only its default parameter would).
 global.tjs = { pid: 0, exePath: '/tjs', env: {} };
-const { winArch } = require('../libexec/node-shim/modules/process.cjs');
+const { winArch, machineToNodeArch } = require('../libexec/node-shim/modules/process.cjs');
 
 test('winArch derives honest Windows arch from PROCESSOR_ARCHITECTURE', () => {
   assert.strictEqual(winArch({ PROCESSOR_ARCHITECTURE: 'ARM64' }), 'arm64');
   assert.strictEqual(winArch({ PROCESSOR_ARCHITECTURE: 'AMD64' }), 'x64');
   assert.strictEqual(winArch({ PROCESSOR_ARCHITECTURE: 'X86' }), 'ia32');
   assert.strictEqual(winArch({}), 'x64');   // absent -> safe existing default
+});
+
+// machineToNodeArch: `uname -m` machine string -> node process.arch value. This
+// is the non-win32 arch source (the old hardcoded 'arm64' was the Mavericks-build
+// bug: on an x86_64 host it made codesignAdHoc thin the fat tjs template to
+// arm64). Pure, so testable by direct import.
+test('machineToNodeArch maps uname -m to node process.arch values', () => {
+  assert.strictEqual(machineToNodeArch('x86_64'), 'x64');
+  assert.strictEqual(machineToNodeArch('amd64'), 'x64');       // BSD
+  assert.strictEqual(machineToNodeArch('arm64'), 'arm64');     // darwin
+  assert.strictEqual(machineToNodeArch('aarch64'), 'arm64');   // linux
+  assert.strictEqual(machineToNodeArch('evbarm'), 'arm64');    // NetBSD arm64 — mapping, not passthrough
+  assert.strictEqual(machineToNodeArch('i686'), 'ia32');
+  assert.strictEqual(machineToNodeArch('i386'), 'ia32');
+  assert.strictEqual(machineToNodeArch('armv7l'), 'arm');
+  assert.strictEqual(machineToNodeArch('powerpc'), 'ppc');
+  assert.strictEqual(machineToNodeArch('Arm64'), 'arm64');     // case-insensitive
+  assert.strictEqual(machineToNodeArch(''), 'x64');            // unknown/empty -> safe default (NOT the old arm64 lie)
 });
