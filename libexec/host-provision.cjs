@@ -59,6 +59,41 @@ const REGISTRY = {
     },
     installHint: 'install one of: sha256sum, shasum, gsha256sum, sha256, cksum, openssl, digest, certutil (or set CLODE_SHA256 to a sha256sum-compatible program). Needed to verify downloads.',
   },
+  tar: {
+    id: 'tar',
+    overrideEnv: 'CLODE_TAR',
+    candidates: [
+      { name: 'tar', args: (f) => ['-xf', f] },
+      { name: 'gtar', args: (f) => ['-xf', f] },
+      { name: 'bsdtar', args: (f) => ['-xf', f] },
+    ],
+    // Round-trip KAT: create a tar of a known file with the candidate, extract
+    // it with the candidate, and confirm the byte-exact content. No embedded
+    // archive constant needed, and it proves create+extract actually work.
+    verify({ path: bin, run, fs }) {
+      const base = path.join(os.tmpdir(), `clode-kat-tar-${process.pid}`);
+      const src = base + '.src';
+      const dst = base + '.dst';
+      const arc = base + '.tar';
+      try {
+        fs.rmSync(src, { recursive: true, force: true });
+        fs.rmSync(dst, { recursive: true, force: true });
+        fs.mkdirSync(src, { recursive: true });
+        fs.mkdirSync(dst, { recursive: true });
+        fs.writeFileSync(path.join(src, 'ok'), 'clode-tar-kat');
+        const c = run(bin, ['-cf', arc, '-C', src, 'ok']);
+        if (!c || c.status !== 0) return false;
+        const x = run(bin, ['-xf', arc, '-C', dst]);
+        if (!x || x.status !== 0) return false;
+        return fs.readFileSync(path.join(dst, 'ok'), 'utf8') === 'clode-tar-kat';
+      } catch {
+        return false;
+      } finally {
+        for (const p of [src, dst, arc]) { try { fs.rmSync(p, { recursive: true, force: true }); } catch { /* absent */ } }
+      }
+    },
+    installHint: 'install tar (or gtar/bsdtar), or set CLODE_TAR. Needed to unpack downloads.',
+  },
 };
 // Introspection alias.
 const SHA256_TOOLS = REGISTRY.sha256.candidates;

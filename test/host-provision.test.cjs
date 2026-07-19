@@ -145,3 +145,20 @@ test('provision resolves a real sha256 tool on this host (integration)', () => {
   assert.ok(got.path && got.candidate, 'a real digest tool resolved');
   assert.ok(REGISTRY.sha256.candidates.some((c) => c.name === got.candidate.name));
 });
+
+// --- tar: real-host integration (create + extract round-trip KAT) ---------
+test('provision resolves a real tar on this host (integration)', () => {
+  const got = provision('tar', { dataDir: tmpDataDir() });
+  assert.ok(got.path, 'a real tar resolved');
+  assert.ok(['tar', 'gtar', 'bsdtar'].includes(got.candidate.name));
+});
+
+test('provision(tar) fails loud when no tar is found', () => {
+  assert.throws(
+    () => provision('tar', {
+      env: { PATH: '' }, findTool: () => null,
+      spawn: () => { throw new Error('must not spawn'); }, fs, dataDir: tmpDataDir(),
+    }),
+    /tar|install/i
+  );
+});
