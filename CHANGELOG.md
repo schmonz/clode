@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.20260719.1
+
+`clode fetch` now downloads the upstream build that matches your
+platform (it was always grabbing the Linux x64 one), and verifies it
+with your system's own sha256 tool instead of a slow pure-JS one — no
+more apparent hang.
+
+Fix editing and overwriting existing files in `quaude` (they were
+failing outright).
+
+Fix building `quaude` on Intel Macs.
+
+Still not ready for daily driving, but closer.
+
 ## 0.20260718.1
 
 Switch to date-based versioning.
