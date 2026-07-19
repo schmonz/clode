@@ -130,7 +130,7 @@ test('provision throws an actionable error when no tool is found', () => {
       env: { PATH: '' }, findTool: () => null,
       spawn: () => { throw new Error('must not spawn'); }, fs, dataDir,
     }),
-    /sha256|digest tool|install/i
+    /set CLODE_SHA256/
   );
 });
 
@@ -159,6 +159,6 @@ test('provision(tar) fails loud when no tar is found', () => {
       env: { PATH: '' }, findTool: () => null,
       spawn: () => { throw new Error('must not spawn'); }, fs, dataDir: tmpDataDir(),
     }),
-    /tar|install/i
+    /CLODE_TAR/
   );
 });

@@ -78,7 +78,6 @@ test('ensurePinnedNode: happy path downloads, verifies, extracts, and returns no
 });
 
 test('tarExtract resolves tar via provision and uses the resolved binary', () => {
-  const { tarExtract } = require('../libexec/clode-node.cjs');
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-node-'));
   const calls = [];
   // Real tar on the host resolves; assert the actual extract used a resolved path.
@@ -94,7 +93,8 @@ test('tarExtract resolves tar via provision and uses the resolved binary', () =>
     dataDir,
   });
   assert.strictEqual(fs.readFileSync(path.join(destDir, 'hello'), 'utf8'), 'hi');
-  assert.ok(calls.some((b) => /tar|gtar|bsdtar/.test(b)), 'used a provisioned tar binary');
+  assert.ok(calls.some((b) => path.isAbsolute(b) && /tar|gtar|bsdtar/.test(b)),
+    'used a provision-resolved (absolute) tar path');
 });
 
 test('nodeBinPath: <nodeStore>/<version>/bin/node, whether or not it exists', () => {

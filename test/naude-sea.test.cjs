@@ -56,5 +56,6 @@ test('materializeDeps resolves tar via provision (uses a real tar binary)', () =
     env: { ...process.env, CLODE_STATE_ROOT: cacheDir },
   });
   assert.ok(fs.existsSync(path.join(dir, 'node_modules', '.marker')), 'deps extracted');
-  assert.ok(calls.some((b) => /tar|gtar|bsdtar/.test(b)), 'used a provisioned tar');
+  assert.ok(calls.some((b) => path.isAbsolute(b) && /tar|gtar|bsdtar/.test(b)),
+    'used a provision-resolved (absolute) tar path');
 });
