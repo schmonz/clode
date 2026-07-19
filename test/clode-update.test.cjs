@@ -119,6 +119,32 @@ test('binaryFor reads the manifest platform binary name, defaults to claude', ()
   assert.strictEqual(binaryFor('not json', 'linux-x64'), 'claude'); // parse error -> default
 });
 
+test('clode_update with no CLODE_FETCH_PLATFORM selects the host-OS provider', async () => {
+  const fx = fixture();
+  delete fx.env.CLODE_FETCH_PLATFORM;
+  // host platform per providerFor(process.platform, process.arch, [all 8])
+  const expected = providerFor(process.platform, process.arch, PLATFORMS);
+  // Serve `expected` (not PLAT) from the fixture repo: reuse the fixture's fake
+  // provider binary bytes, drop them under the expected platform dir, and point
+  // the manifest at that platform's checksum.
+  const claudeSrc = path.join(fx.repo, V, PLAT, 'claude');
+  const destDir = path.join(fx.repo, V, expected);
+  fs.mkdirSync(destDir, { recursive: true });
+  const dest = path.join(destDir, 'claude');
+  fs.copyFileSync(claudeSrc, dest);
+  const sum = sha256Of(dest);
+  fs.writeFileSync(path.join(fx.repo, V, 'manifest.json'),
+    JSON.stringify({ platforms: { [expected]: { checksum: sum } } }) + '\n');
+  const err = sink();
+  try {
+    const status = await clodeUpdate('stable', opts(fx.env, err));
+    assert.strictEqual(status, 0, `stderr:\n${err.text()}`);
+    assert.match(err.text(),
+      new RegExp(`fetching Claude Code ${V} \\(${expected.replace(/[-]/g, '\\$&')}\\)`),
+      'fetched message names the host-matched platform');
+  } finally { cleanup(fx); }
+});
+
 test('clode_update fetches the fixed platform into the provider store + current pointer', async () => {
   const fx = fixture();
   const err = sink();

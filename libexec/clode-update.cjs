@@ -79,8 +79,9 @@ function providerFor(platform, arch, available, opts = {}) {
   return has('linux-x64') ? 'linux-x64' : (available.find((p) => p.startsWith('linux-')) || 'linux-x64');
 }
 
-function fetchPlatform(env) {
-  return env.CLODE_FETCH_PLATFORM || 'linux-x64';
+function fetchPlatform(env, manifestText, opts) {
+  if (env.CLODE_FETCH_PLATFORM) return env.CLODE_FETCH_PLATFORM;
+  return providerFor(process.platform, process.arch, manifestPlatforms(manifestText || ''), opts);
 }
 function changelogUrl(env) {
   return env.CLODE_CHANGELOG_URL ||
@@ -247,8 +248,6 @@ async function clodeUpdate(channel, opts = {}) {
     return 1;
   }
 
-  const plat = fetchPlatform(env);
-
   // Fetch + parse the manifest for this version's platform checksum.
   let manifestText;
   try {
@@ -257,6 +256,7 @@ async function clodeUpdate(channel, opts = {}) {
     err(`clode: failed to fetch manifest for ${ver}`);
     return 1;
   }
+  const plat = fetchPlatform(env, manifestText, { log: err });
   const sum = checksumFor(manifestText, plat);
   if (!/^[0-9a-f]/.test(sum)) {
     err(`clode: platform ${plat} not in manifest for ${ver}`);
