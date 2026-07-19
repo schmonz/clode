@@ -108,10 +108,17 @@ test('agentic Edit round-trip under tjs: overwriting an existing file works (Fil
         NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules'),
       }, 120000);
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
-    // Ground-truth oracle: the edit actually landed on disk.
-    assert.strictEqual(fs.readFileSync(target, 'utf8'), 'hello universe\nsecond line\n', 'Edit did not apply on disk');
-    // And the Edit tool_result must not be the FileHandle-shim-gap error.
     const editResult = mock.requests.find((q) => q.body && q.body.includes(EDIT_ID) && q.body.includes('tool_result'));
+    // Ground-truth oracle: the edit actually landed on disk. On failure, surface
+    // what the Edit tool actually REPORTED (its tool_result carries any exception
+    // the atomic write threw — e.g. a chmod/rename error) so a platform-specific
+    // regression names its own failing step instead of just "did not apply".
+    const onDisk = fs.readFileSync(target, 'utf8');
+    assert.strictEqual(onDisk, 'hello universe\nsecond line\n',
+      `Edit did not apply on disk.\n on-disk: ${JSON.stringify(onDisk)}\n`
+      + ` Edit tool_result: ${editResult ? editResult.body.slice(0, 700) : '<none>'}\n`
+      + ` stderr tail:\n${(r.stderr || '').slice(-1200)}`);
+    // And the Edit tool_result must not be the FileHandle-shim-gap error.
     assert.ok(editResult, 'no follow-up POST carrying the Edit tool_result');
     assert.ok(!/"content":"not a function","is_error":true,"tool_use_id":"toolu_edit_edit"/.test(editResult.body),
       `Edit tool_result is the shim-gap "not a function":\n${editResult.body.slice(0, 800)}`);

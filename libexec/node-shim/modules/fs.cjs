@@ -39,6 +39,22 @@ const _isDarwin = (() => {
   const np = (typeof navigator !== 'undefined' && navigator.platform) || '';
   return /^Mac/.test(np);
 })();
+const _isWin = (() => {
+  const np = (typeof navigator !== 'undefined' && navigator.platform) || '';
+  if (/^Win/.test(np)) return true;
+  return !!(globalThis.process && globalThis.process.platform === 'win32');
+})();
+// Node's fs.chmod on Windows never throws for a normal mode — libuv's _wchmod
+// only honors the write bit and ignores the rest. tjs can raise for a mode
+// Windows can't represent, which aborts the bundle's atomic write (open temp ->
+// writeFile -> chmod(restore original mode) -> rename over target): that chmod is
+// wrapped in a try/catch that RETHROWS any error it doesn't recognize as
+// "fchmod unsupported", so a throwing chmod leaves the ORIGINAL file untouched
+// ("Edit did not apply on disk"). Match Node: best-effort, swallow on win32.
+function chmodBestEffort(p, mode) {
+  try { FSS.chmod(p, mode); }
+  catch (e) { if (!_isWin) throw e; }
+}
 const O = _isDarwin
   ? { O_RDONLY: 0x0000, O_WRONLY: 0x0001, O_RDWR: 0x0002, O_CREAT: 0x0200,
       O_EXCL: 0x0800, O_TRUNC: 0x0400, O_APPEND: 0x0008, O_NOFOLLOW: 0x0100,
@@ -361,7 +377,7 @@ const fsMod = {
   closeSync: (fd) => FSS.close(fd),
   copyFileSync: (a, b) => writeFileSync(b, readFileSync(a)),
   symlinkSync: (target, p) => FSS.symlink(target, p),
-  chmodSync: (p, m) => FSS.chmod(p, m),
+  chmodSync: (p, m) => chmodBestEffort(p, m),
   appendFileSync,
   writeSync,
   rmSync,
@@ -414,7 +430,7 @@ function makeFileHandle(fd, p) {
     // every overwrite/Edit of an existing file throw a bare "not a function"
     // (Write of a NEW file skips it — no original mode to restore). No fd-based
     // fchmod primitive exists; chmod the captured path (same inode).
-    async chmod(mode) { FSS.chmod(p, mode); },
+    async chmod(mode) { chmodBestEffort(p, mode); },
     async sync() {},
     async datasync() {},
     // `await using fh = await fs.promises.open(...)` (bundle ≥2.1.204 Bash-tool
@@ -449,7 +465,7 @@ const promises = {
   rmdir: async (p) => FSS.rmdir(p),
   copyFile: async (a, b) => { writeFileSync(b, readFileSync(a)); },
   appendFile: async (p, data, opts) => { appendFileSync(p, data, opts); },
-  chmod: async (p, m) => FSS.chmod(p, m),
+  chmod: async (p, m) => chmodBestEffort(p, m),
   symlink: async (target, p) => FSS.symlink(target, p),
   // hardlink: no SYNC primitive in the sync-fs patch, but tjs exposes an async
   // uv link — use it for the async surface (linkSync remains a wall).
