@@ -33,12 +33,16 @@ const EXTRACTOR = path.join(REPO, 'libexec/extract-claude-js.cjs');
 const NET_DRIVER = `
 'use strict';
 const net = require(${JSON.stringify(NET)});
-const [srcFile, downloadSrc, downloadDest] = process.argv.slice(2);
+const [srcFile, downloadSrc, downloadDest, htCache] = process.argv.slice(2);
+// Pin provision('sha256')'s hosttools.json cache to a throwaway dir so this
+// child (run under both node and tjs, inheriting the test's HOME) never writes
+// the real ~/.local/share/clode that the suite's hermetic guard watches.
+const shaOpts = { dataDir: htCache };
 (async () => {
-  process.stdout.write('sha256=' + net.sha256Of(srcFile) + '\\n');
+  process.stdout.write('sha256=' + net.sha256Of(srcFile, shaOpts) + '\\n');
   const ok = await net.downloadFile('file://' + downloadSrc, downloadDest);
   process.stdout.write('download=' + ok + '\\n');
-  process.stdout.write('copy_sha256=' + net.sha256Of(downloadDest) + '\\n');
+  process.stdout.write('copy_sha256=' + net.sha256Of(downloadDest, shaOpts) + '\\n');
 })().catch((e) => { process.stderr.write(String(e && e.stack || e) + '\\n'); process.exit(1); });
 `;
 
@@ -58,9 +62,10 @@ test('Rung 1: clode-net sha256Of + file:// downloadFile match node & known diges
 
   const nodeDest = path.join(dir, 'copy-node.bin');
   const tjsDest = path.join(dir, 'copy-tjs.bin');
+  const htCache = path.join(dir, 'hosttools'); // throwaway provision cache (not the real store)
 
-  const nodeOut = execFileSync(process.execPath, [driver, srcFile, dlSrc, nodeDest], { encoding: 'utf8' }).trim();
-  const r = runLoader(driver, [srcFile, dlSrc, tjsDest]);
+  const nodeOut = execFileSync(process.execPath, [driver, srcFile, dlSrc, nodeDest, htCache], { encoding: 'utf8' }).trim();
+  const r = runLoader(driver, [srcFile, dlSrc, tjsDest, htCache]);
   assert.strictEqual(r.status, 0, r.stderr);
 
   // tjs output == node output, and the sha256 is the known digest of 'clode'.

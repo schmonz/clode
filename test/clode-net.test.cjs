@@ -20,6 +20,14 @@ function tmpdir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'clode-net-'));
 }
 
+// provision('sha256') caches the chosen host tool to clodeDataDir/hosttools.json.
+// Left to default env that resolves to the REAL ~/.local/share/clode, which the
+// suite's hermetic guard watches — a write there fails the whole run on a clean
+// box (it's masked on a dev box where the store already exists). Pin the cache to
+// a throwaway dir so the real store is never touched.
+const SHA_DATADIR = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-net-sha-'));
+const sha = (f) => sha256Of(f, { dataDir: SHA_DATADIR });
+
 // --- sha256Of: real host tool (integration) --------------------------------
 
 test('sha256Of matches the known digest of "hello"', () => {
@@ -27,7 +35,7 @@ test('sha256Of matches the known digest of "hello"', () => {
   const f = path.join(dir, 'hello.txt');
   fs.writeFileSync(f, 'hello'); // no trailing newline
   assert.strictEqual(
-    sha256Of(f),
+    sha(f),
     '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'
   );
 });
@@ -38,8 +46,8 @@ test('sha256Of matches crypto over binary bytes (0x00-0xff), lowercase hex', () 
   const buf = Buffer.from(Array.from({ length: 256 }, (_, i) => i));
   fs.writeFileSync(f, buf);
   const expected = crypto.createHash('sha256').update(buf).digest('hex');
-  assert.strictEqual(sha256Of(f), expected);
-  assert.match(sha256Of(f), /^[0-9a-f]{64}$/);
+  assert.strictEqual(sha(f), expected);
+  assert.match(sha(f), /^[0-9a-f]{64}$/);
 });
 
 // --- downloadFile: file:// -------------------------------------------------
@@ -63,7 +71,7 @@ test('downloadFile(file://) dest mode writes identical bytes (binary-safe)', asy
   const got = fs.readFileSync(dst);
   assert.ok(buf.equals(got), 'dest bytes must equal source bytes');
   // sha256 of copy must equal sha256 of source (the update flow's check)
-  assert.strictEqual(sha256Of(dst), sha256Of(src));
+  assert.strictEqual(sha(dst), sha(src));
 });
 
 test('downloadFile(file://) missing file rejects (caller error path)', async () => {

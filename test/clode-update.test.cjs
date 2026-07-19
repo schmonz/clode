@@ -27,6 +27,13 @@ const { sha256Of } = require('../libexec/clode-net.cjs');
 const V = '9.9.9';
 const PLAT = 'linux-x64';
 
+// Real-host sha256Of caches its chosen tool to clodeDataDir/hosttools.json. In
+// tests it must not touch the real ~/.local/share/clode (the suite's hermetic
+// guard watches it). clodeUpdate already threads its isolated env through to
+// sha256Of; these direct test-side calls get a throwaway cache dir instead.
+const SHA_DATADIR = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-upd-sha-'));
+const sha = (f) => sha256Of(f, { dataDir: SHA_DATADIR });
+
 const PLATFORMS = ['darwin-arm64','darwin-x64','linux-arm64','linux-x64','linux-arm64-musl','linux-x64-musl','win32-x64','win32-arm64'];
 
 test('providerFor: exact os+arch match wins', () => {
@@ -84,7 +91,7 @@ function fixture() {
   const mk = spawnSync(NODE, [path.join(REPO_ROOT, 'test', 'mkfixture.cjs'), claudeSrc, 'v'],
     { encoding: 'utf8' });
   assert.strictEqual(mk.status, 0, 'mkfixture built the fake provider binary');
-  const sum = sha256Of(claudeSrc);
+  const sum = sha(claudeSrc);
 
   fs.writeFileSync(path.join(repo, 'stable'), V + '\n');
   fs.writeFileSync(path.join(repo, 'latest'), V + '\n');
@@ -137,7 +144,7 @@ test('clode_update with no CLODE_FETCH_PLATFORM selects the host-OS provider', a
   fs.mkdirSync(destDir, { recursive: true });
   const dest = path.join(destDir, 'claude');
   fs.copyFileSync(claudeSrc, dest);
-  const sum = sha256Of(dest);
+  const sum = sha(dest);
   fs.writeFileSync(path.join(fx.repo, V, 'manifest.json'),
     JSON.stringify({ platforms: { [expected]: { checksum: sum } } }) + '\n');
   const err = sink();
@@ -160,7 +167,7 @@ test('clode_update fetches the fixed platform into the provider store + current 
     assert.strictEqual(fs.readFileSync(path.join(fx.providers, 'current'), 'utf8').trim(), V, 'current -> 9.9.9');
     assert.match(err.text(), /fetched 9\.9\.9/, 'updated message');
     // The fetched binary must byte-match the fixture (atomic temp->rename intact).
-    assert.strictEqual(sha256Of(path.join(fx.providers, V, 'claude')), fx.sum);
+    assert.strictEqual(sha(path.join(fx.providers, V, 'claude')), fx.sum);
     // chmod +x: the mode carries the execute bit.
     if (process.platform !== 'win32') {
       assert.ok(fs.statSync(path.join(fx.providers, V, 'claude')).mode & 0o111, 'executable');
@@ -265,7 +272,7 @@ function addVersion(fx, ver) {
   const mk = spawnSync(NODE, [path.join(REPO_ROOT, 'test', 'mkfixture.cjs'), src, 'v'],
     { encoding: 'utf8' });
   assert.strictEqual(mk.status, 0, 'mkfixture built the extra provider binary');
-  const sum = sha256Of(src);
+  const sum = sha(src);
   fs.writeFileSync(path.join(fx.repo, ver, 'manifest.json'),
     JSON.stringify({ platforms: { [PLAT]: { checksum: sum } } }) + '\n');
   return sum;
