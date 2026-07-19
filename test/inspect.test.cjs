@@ -102,7 +102,6 @@ test('human_applets flags host skew', () => {
 
 test('ws is accepted external, not a coverage gap', () => {
   assert.ok(ins.ACCEPTED_MISSING_EXTERNALS.has('ws'));
-  assert.deepStrictEqual(ins.unreviewedExternals(['ws']), []);
 });
 
 test('doctor hook anchor present', () => {
@@ -186,11 +185,6 @@ test('gate_problems clean for known applets and present lever', () => {
     search_applets_unknown: [], ripgrep_lever_present: true,
   };
   assert.deepStrictEqual(ins.gateProblems(cov), []);
-});
-
-test('unreviewed_externals filters accepted', () => {
-  assert.deepStrictEqual(ins.unreviewedExternals(['undici', 'esbuild']), ['undici']);
-  assert.deepStrictEqual(ins.unreviewedExternals(['esbuild', 'react', 'typescript']), []);
 });
 
 test('gate_problems returns unreviewed items', () => {

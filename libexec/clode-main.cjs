@@ -7,7 +7,7 @@
 //
 // Dispatch order (exact, from main()):
 //   1. --verbose (leading position only) -> CLODE_VERBOSE=1
-//   2. resolve SELF / HERE / LIBEXEC / CLODE_SELF_VERSION
+//   2. resolve SELF / HERE / LIBEXEC / VERSION
 //   3. --version                -> print "clode <VERSION>", exit 0
 //   4. --help                   -> print clodeHelp(), exit 0
 //   5. fetch [channel]          -> clodeUpdate, exit status

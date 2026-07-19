@@ -345,10 +345,6 @@ const ACCEPTED_MISSING_EXTERNALS = new Set([
   'ajv/dist/runtime/uri', 'ajv/dist/runtime/validation_error',
 ]);
 
-function unreviewedExternals(modulesMissing) {
-  return [...modulesMissing].filter((m) => !ACCEPTED_MISSING_EXTERNALS.has(m)).sort();
-}
-
 const ACCEPTED_STUBBED_BUN = new Set(['serve', 'listen', 'file', 'write', 'Terminal', 'Transpiler',
   'YAML', 'stringWidth', 'stripANSI', 'wrapAnsi', 'semver']);
 const ACCEPTED_MISSING_BUN = new Set(['SQL']);
@@ -616,7 +612,7 @@ module.exports = {
   doctorHookAnchorPresent, snapshotGeneratorPresent, autoupdaterHookAnchorPresent,
   nativeAutoupdaterHookAnchorPresent,
   embeddedAppletVersions, hostAppletVersion, which, featureForAsset,
-  inspect, probeShim, unreviewedExternals, gateProblems, coverage,
+  inspect, probeShim, gateProblems, coverage,
   humanSurface, humanApplets, humanCoverage,
 };
 

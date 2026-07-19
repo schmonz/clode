@@ -101,8 +101,6 @@ const REGISTRY = {
     installHint: 'install tar (or gtar/bsdtar), or set CLODE_TAR. Needed to unpack downloads.',
   },
 };
-// Introspection alias.
-const SHA256_TOOLS = REGISTRY.sha256.candidates;
 
 function cachePath(dataDir) {
   return path.join(dataDir, 'hosttools.json');
@@ -164,4 +162,4 @@ function provision(id, opts = {}) {
   throw new Error(`clode: no ${id} tool found on PATH — ${req.installHint}`);
 }
 
-module.exports = { provision, parseSha256, REGISTRY, SHA256_TOOLS };
+module.exports = { provision, parseSha256, REGISTRY };
