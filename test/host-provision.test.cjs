@@ -92,17 +92,21 @@ test('provision re-probes when the cached tool is no longer executable', () => {
 });
 
 // --- provision: CLODE_SHA256 override jumps the queue ---------------------
-test('provision honors the CLODE_SHA256 override', () => {
+test('provision honors an absolute-path CLODE_SHA256 override (real findTool)', () => {
   const dataDir = tmpDataDir();
+  // A real executable file at an absolute path outside PATH.
+  const bindir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-ov-'));
+  const ovPath = path.join(bindir, 'mysha');
+  fs.writeFileSync(ovPath, '#!/bin/sh\n', { mode: 0o755 });
   const seen = [];
   const got = provision('sha256', {
-    env: { CLODE_SHA256: '/opt/mysha', PATH: '/usr/bin' },
-    findTool: (name) => (name === '/opt/mysha' ? '/opt/mysha' : null),
+    env: { CLODE_SHA256: ovPath, PATH: '/usr/bin:/bin' }, // override is NOT on PATH
+    // no findTool injection -> real hosttools.findTool
     spawn: realSha256Spawn(seen),
     fs, dataDir,
   });
-  assert.strictEqual(got.path, '/opt/mysha');
-  assert.strictEqual(seen[0][0], '/opt/mysha', 'override tried before PATH candidates');
+  assert.strictEqual(got.path, ovPath, 'absolute-path override must resolve via findTool override option');
+  assert.strictEqual(seen[0][0], ovPath, 'override tool is the one actually run');
 });
 
 // --- provision: a present-but-wrong-output tool fails its KAT, next wins ---

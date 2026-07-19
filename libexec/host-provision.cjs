@@ -78,9 +78,8 @@ function writeCache(fs, file, cache) {
 
 function candidateList(req, env) {
   const list = req.candidates.slice();
-  if (req.overrideEnv && env[req.overrideEnv]) {
-    list.unshift({ name: env[req.overrideEnv], args: req.candidates[0].args });
-  }
+  const ov = req.overrideEnv && env[req.overrideEnv];
+  if (ov) list.unshift({ name: ov, args: req.candidates[0].args, override: ov });
   return list;
 }
 
@@ -110,7 +109,7 @@ function provision(id, opts = {}) {
   // 2. Probe: first candidate whose KAT passes wins.
   const run = (bin, args) => spawn(bin, args, { encoding: 'utf8', maxBuffer: 1 << 20 });
   for (const cand of candidateList(req, env)) {
-    const bin = findTool(cand.name, { env });
+    const bin = findTool(cand.name, { env, override: cand.override });
     if (!bin) continue;
     let ok = false;
     try { ok = req.verify({ candidate: cand, path: bin, run, fs, env }); } catch { ok = false; }
