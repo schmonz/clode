@@ -60,13 +60,19 @@ function nodeBinPath(env = process.env) {
   return path.join(nodeStore(env), PINNED_VERSION, 'bin', 'node');
 }
 
-// Default extract seam: a spawned `tar -xzf <tarball> -C <destDir>`.
-function tarExtract(tarball, destDir) {
+// Default extract seam: a spawned `tar -xzf <tarball> -C <destDir>`, with the
+// tar binary itself resolved via host-provision (a KAT-verified tar/gtar/
+// bsdtar on PATH), not hardcoded — so a host whose tar lives elsewhere or is
+// named gtar/bsdtar still works, and a toolless host fails loud up front.
+function tarExtract(tarball, destDir, opts = {}) {
+  const { provision } = require('./host-provision.cjs');
+  const { spawn = spawnSync, env = process.env, dataDir } = opts;
   fs.mkdirSync(destDir, { recursive: true });
-  const res = spawnSync('tar', ['-xzf', tarball, '-C', destDir], { stdio: 'inherit' });
+  const { path: tarBin } = provision('tar', { env, dataDir, spawn });
+  const res = spawn(tarBin, ['-xzf', tarball, '-C', destDir], { stdio: 'inherit' });
   if (res.error) throw res.error;
   if (res.status !== 0) {
-    throw new Error(`clode-node: tar -xzf ${tarball} -C ${destDir} exited ${res.status}`);
+    throw new Error(`clode-node: ${tarBin} -xzf ${tarball} -C ${destDir} exited ${res.status}`);
   }
 }
 
@@ -143,4 +149,4 @@ async function ensurePinnedNode(opts = {}) {
   }
 }
 
-module.exports = { PINNED_VERSION, nodeAsset, ensurePinnedNode, nodeBinPath };
+module.exports = { PINNED_VERSION, nodeAsset, ensurePinnedNode, nodeBinPath, tarExtract };

@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { nodeAsset, ensurePinnedNode, nodeBinPath, PINNED_VERSION } = require('../libexec/clode-node.cjs');
+const { nodeAsset, ensurePinnedNode, nodeBinPath, PINNED_VERSION, tarExtract } = require('../libexec/clode-node.cjs');
 
 test('nodeAsset: darwin-arm64 -> a nodejs.org url + the pinned sha', () => {
   const a = nodeAsset('darwin', 'arm64');
@@ -75,6 +75,26 @@ test('ensurePinnedNode: happy path downloads, verifies, extracts, and returns no
   // no leftover temp download
   assert.ok(!fs.existsSync(path.join(store, 'share', 'clode', 'nodes', '.tmp')) ||
     fs.readdirSync(path.join(store, 'share', 'clode', 'nodes', '.tmp')).length === 0);
+});
+
+test('tarExtract resolves tar via provision and uses the resolved binary', () => {
+  const { tarExtract } = require('../libexec/clode-node.cjs');
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-node-'));
+  const calls = [];
+  // Real tar on the host resolves; assert the actual extract used a resolved path.
+  const destDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-node-dst-'));
+  // Build a tiny gzip tarball with the host tar to feed the real extract.
+  const src = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-node-src-'));
+  fs.writeFileSync(path.join(src, 'hello'), 'hi');
+  const arc = path.join(src, 'a.tgz');
+  require('node:child_process').spawnSync('tar', ['-czf', arc, '-C', src, 'hello']);
+  tarExtract(arc, destDir, {
+    env: { ...process.env },
+    spawn: (bin, args, o) => { calls.push(bin); return require('node:child_process').spawnSync(bin, args, o); },
+    dataDir,
+  });
+  assert.strictEqual(fs.readFileSync(path.join(destDir, 'hello'), 'utf8'), 'hi');
+  assert.ok(calls.some((b) => /tar|gtar|bsdtar/.test(b)), 'used a provisioned tar binary');
 });
 
 test('nodeBinPath: <nodeStore>/<version>/bin/node, whether or not it exists', () => {
