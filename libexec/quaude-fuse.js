@@ -127,6 +127,10 @@ if (role === 'builder') {
   for (const f of ['build-naude.mjs', 'platform-tag.cjs', 'sea-sign.cjs']) {
     members.push({ name: `scripts/${f}`, data: await mustRead(path.join(path.dirname(libexecDir), 'scripts', f), `naude assembler member scripts/${f}`) });
   }
+  // host-provision.cjs rides here as forwarded bytes, same as its loop-siblings
+  // above — never require()'d from this materialized dir, only carried so a
+  // self-fused clode-native can re-fuse targets. The quaude-product role below
+  // deliberately omits it: no runtime provision() consumer on that side.
   for (const f of ['bun-shim.cjs', 'extract-claude-js.cjs', 'quaude-fuse.js', 'quaude-bootstrap.mjs', 'host-provision.cjs']) {
     members.push({ name: `libexec/${f}`, data: await mustRead(path.join(libexecDir, f), `libexec member ${f}`) });
   }

@@ -5,9 +5,15 @@
 // SAME way at runtime: probe PATH for a candidate, RUN it on a known input and
 // verify the exact expected output (the KAT — "does this actually work"), cache
 // the winner to ~/.local/share/clode/hosttools.json, and fail loud with an
-// install hint if none works. The registry is just code, so it already ships in
-// every artifact; the bake injects nothing and never resolves target-runtime
-// tools (cross-build safety). Dependency-free: Node stdlib + sibling requires.
+// install hint if none works. The registry is just code: it is consumed at
+// runtime by the clode builder (esbuild-inlined into clode-main.bundle.cjs)
+// and by naude (bundled into naude-entry.bundle.cjs), and rides as a forwarded
+// member in the builder-role quaude fuse so a self-fused clode-native can
+// re-fuse targets. The quaude PRODUCT carries no provision consumer
+// (trailer-member deps, bundle-discovered shell, updates delegated to
+// CLODE_SELF), so it deliberately does not ship it. The bake injects nothing
+// and never resolves target-runtime tools (cross-build safety). Dependency-free:
+// Node stdlib + sibling requires.
 const nodeFs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');

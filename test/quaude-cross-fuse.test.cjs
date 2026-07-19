@@ -72,7 +72,7 @@ test('cross-fused output carries a valid trailer stack over the foreign base', (
   assert.ok(names.includes('manifest.json'), `index lacks manifest.json: ${names.join(',')}`);
   assert.ok(names.includes('node-shim/loader.cjs'), `index lacks node-shim/loader.cjs: ${names.join(',')}`);
   assert.ok(names.includes('libexec/host-provision.cjs'),
-    `host-provision.cjs must be fused so quaude can provision at runtime: ${names.join(',')}`);
+    `host-provision.cjs must ride in the builder-role fuse so a self-fused clode-native can re-fuse targets that provision host tools: ${names.join(',')}`);
 });
 
 test('cross-fused output keeps its .exe name and a nonzero size', (t) => {
