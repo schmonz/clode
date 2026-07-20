@@ -69,7 +69,14 @@ function tarExtract(tarball, destDir, opts = {}) {
   const { spawn = spawnSync, env = process.env, dataDir } = opts;
   fs.mkdirSync(destDir, { recursive: true });
   const { path: tarBin } = provision('tar', { env, dataDir, spawn });
-  const res = spawn(tarBin, ['-xzf', tarball, '-C', destDir], { stdio: 'inherit' });
+  // Pass the tarball by BASENAME with cwd=its dir, never as an absolute path: on
+  // Windows under a bash PATH, `tar` is Git Bash's GNU tar, which reads an absolute
+  // archive arg like `C:\…\node.tar.gz` as a remote `host:path` (the drive-letter
+  // colon) and dies "Cannot connect". A bare basename has no colon and works
+  // uniformly on GNU tar (Windows/Linux) and bsdtar (macOS). `-C` is a change-dir,
+  // not remote-parsed, so an absolute destDir is fine. Mirrors naude-sea.cjs.
+  const res = spawn(tarBin, ['-xzf', path.basename(tarball), '-C', destDir],
+    { stdio: 'inherit', cwd: path.dirname(tarball) });
   if (res.error) throw res.error;
   if (res.status !== 0) {
     throw new Error(`clode-node: ${tarBin} -xzf ${tarball} -C ${destDir} exited ${res.status}`);

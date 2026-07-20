@@ -81,15 +81,24 @@ const REGISTRY = {
       const src = base + '.src';
       const dst = base + '.dst';
       const arc = base + '.tar';
+      // Pass the archive by BASENAME with cwd=its dir, never as an absolute path.
+      // On Windows under a bash PATH, `tar` is Git Bash's GNU tar, which reads an
+      // absolute archive arg like `C:\…\x.tar` as a remote `host:path` (the
+      // drive-letter colon → host "C") and dies "Cannot connect to C:". A bare
+      // basename has no colon, so create/extract work uniformly on GNU tar
+      // (Windows/Linux) and bsdtar (macOS). `-C <dir>` is a change-dir, not
+      // remote-parsed, so an absolute path there is fine. Mirrors naude-sea.cjs.
+      const arcDir = path.dirname(arc);
+      const arcName = path.basename(arc);
       try {
         fs.rmSync(src, { recursive: true, force: true });
         fs.rmSync(dst, { recursive: true, force: true });
         fs.mkdirSync(src, { recursive: true });
         fs.mkdirSync(dst, { recursive: true });
         fs.writeFileSync(path.join(src, 'ok'), 'clode-tar-kat');
-        const c = run(bin, ['-cf', arc, '-C', src, 'ok']);
+        const c = run(bin, ['-cf', arcName, '-C', src, 'ok'], { cwd: arcDir });
         if (!c || c.status !== 0) return false;
-        const x = run(bin, ['-xf', arc, '-C', dst]);
+        const x = run(bin, ['-xf', arcName, '-C', dst], { cwd: arcDir });
         if (!x || x.status !== 0) return false;
         return fs.readFileSync(path.join(dst, 'ok'), 'utf8') === 'clode-tar-kat';
       } catch {
@@ -146,7 +155,7 @@ function provision(id, opts = {}) {
   }
 
   // 2. Probe: first candidate whose KAT passes wins.
-  const run = (bin, args) => spawn(bin, args, { encoding: 'utf8', maxBuffer: 1 << 20 });
+  const run = (bin, args, extra) => spawn(bin, args, { encoding: 'utf8', maxBuffer: 1 << 20, ...extra });
   for (const cand of candidateList(req, env)) {
     const bin = findTool(cand.name, { env, override: cand.override });
     if (!bin) continue;

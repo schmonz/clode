@@ -55,6 +55,29 @@ function chmodBestEffort(p, mode) {
   try { FSS.chmod(p, mode); }
   catch (e) { if (!_isWin) throw e; }
 }
+// tjs's rename (__tjs_fs_sync.rename, mod_fs_sync.c) is the C library rename(a,b)
+// with no _WIN32 special-casing. POSIX rename(2) atomically REPLACES an existing
+// target; the Windows CRT rename() instead FAILS (errno EEXIST, sometimes EACCES/
+// EPERM) when the destination exists. The bundle's atomic write ends in
+// rename(temp, target) OVER the existing file, so on Windows that step throws, the
+// write aborts, unlink(temp) runs, and the ORIGINAL file is left untouched — the
+// "Edit did not apply on disk" bug. Emulate POSIX replace on win32 only: drop the
+// existing target, then rename. Non-atomic on this fallback path (a crash in the gap
+// loses the destination) — acceptable for an edit, and it NEVER runs on POSIX, where
+// FSS.rename already replaces. node's fs.rename is likewise replace-on-Windows
+// (libuv passes MOVEFILE_REPLACE_EXISTING), so this matches node's contract.
+function renameReplace(a, b) {
+  try {
+    FSS.rename(a, b);
+  } catch (e) {
+    if (_isWin && e && (e.code === 'EEXIST' || e.code === 'EACCES' || e.code === 'EPERM')) {
+      FSS.unlink(b);      // remove the existing destination, then retry the rename
+      FSS.rename(a, b);
+    } else {
+      throw e;
+    }
+  }
+}
 const O = _isDarwin
   ? { O_RDONLY: 0x0000, O_WRONLY: 0x0001, O_RDWR: 0x0002, O_CREAT: 0x0200,
       O_EXCL: 0x0800, O_TRUNC: 0x0400, O_APPEND: 0x0008, O_NOFOLLOW: 0x0100,
@@ -371,7 +394,7 @@ const fsMod = {
   },
   rmdirSync: (p) => FSS.rmdir(p),
   unlinkSync: (p) => FSS.unlink(p),
-  renameSync: (a, b) => FSS.rename(a, b),
+  renameSync: (a, b) => renameReplace(a, b),
   accessSync: (p, m) => FSS.access(p, m ?? constants.F_OK),
   openSync: (p, flags) => FSS.open(p, flagsToString(flags ?? 'r')),
   closeSync: (fd) => FSS.close(fd),
@@ -461,7 +484,7 @@ const promises = {
   realpath: async (p) => FSS.realpath(p),
   readlink: async (p) => FSS.readlink(p),
   unlink: async (p) => FSS.unlink(p),
-  rename: async (a, b) => FSS.rename(a, b),
+  rename: async (a, b) => renameReplace(a, b),
   rmdir: async (p) => FSS.rmdir(p),
   copyFile: async (a, b) => { writeFileSync(b, readFileSync(a)); },
   appendFile: async (p, data, opts) => { appendFileSync(p, data, opts); },

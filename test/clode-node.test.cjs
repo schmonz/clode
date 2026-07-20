@@ -86,7 +86,12 @@ test('tarExtract resolves tar via provision and uses the resolved binary', () =>
   const src = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-node-src-'));
   fs.writeFileSync(path.join(src, 'hello'), 'hi');
   const arc = path.join(src, 'a.tgz');
-  require('node:child_process').spawnSync('tar', ['-czf', arc, '-C', src, 'hello']);
+  // Build the fixture archive by BASENAME with cwd=its dir: an absolute `-czf C:\…\a.tgz`
+  // is misread as a remote host:path by Git Bash's GNU tar on Windows (the drive-letter
+  // colon). Colon-free is uniform across GNU tar / bsdtar. (Same rule tarExtract itself
+  // follows.)
+  require('node:child_process').spawnSync('tar', ['-czf', path.basename(arc), '-C', src, 'hello'],
+    { cwd: path.dirname(arc) });
   tarExtract(arc, destDir, {
     env: { ...process.env },
     spawn: (bin, args, o) => { calls.push(bin); return require('node:child_process').spawnSync(bin, args, o); },

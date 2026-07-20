@@ -28,7 +28,14 @@ test('findTool returns the override when it is executable', () => {
   assert.strictEqual(findTool('rg', { override: rg, env: { PATH: '' } }), rg);
 });
 
-test('findTool ignores a non-executable override and walks PATH', () => {
+// These two exercise the REAL filesystem with bare (extension-less) executables +
+// X_OK — POSIX host-tool semantics. On win32 findTool resolves via PATHEXT and never
+// probes a bare `rg`, so the POSIX form cannot match; skip it there and cover the
+// same behavior with the win32 real-FS twins immediately below (write `rg.exe`, expect
+// PATHEXT resolution). Real Windows findTool coverage also comes from the
+// `provision resolves a real sha256/tar tool` integration tests in host-provision.
+test('findTool ignores a non-executable override and walks PATH',
+  { skip: process.platform === 'win32' }, () => {
   const dir = tmpdir();
   const bad = path.join(dir, 'notexec'); // never created -> not executable
   const bindir = path.join(dir, 'bin');
@@ -37,7 +44,18 @@ test('findTool ignores a non-executable override and walks PATH', () => {
   assert.strictEqual(found, rg);
 });
 
-test('findTool walks PATH in order and finds the first match', () => {
+test('findTool on win32 ignores a non-executable override and walks PATH (PATHEXT)',
+  { skip: process.platform !== 'win32' }, () => {
+  const dir = tmpdir();
+  const bad = path.join(dir, 'notexec'); // never created -> not executable
+  const bindir = path.join(dir, 'bin');
+  makeExe(bindir, 'rg.exe');             // the real tool ships as rg.exe
+  const found = findTool('rg', { override: bad, env: { PATH: bindir } });
+  assert.match(found || '', /[\\/]rg\.exe$/i); // PATHEXT resolved rg -> rg.EXE
+});
+
+test('findTool walks PATH in order and finds the first match',
+  { skip: process.platform === 'win32' }, () => {
   const dir = tmpdir();
   const d1 = path.join(dir, 'a');
   const d2 = path.join(dir, 'b');
@@ -45,6 +63,18 @@ test('findTool walks PATH in order and finds the first match', () => {
   makeExe(d2, 'rg');
   const found = findTool('rg', { env: { PATH: [d1, d2].join(path.delimiter) } });
   assert.strictEqual(found, rg1);
+});
+
+test('findTool on win32 walks PATH in order and finds the first match (PATHEXT)',
+  { skip: process.platform !== 'win32' }, () => {
+  const dir = tmpdir();
+  const d1 = path.join(dir, 'a');
+  const d2 = path.join(dir, 'b');
+  makeExe(d1, 'rg.exe');
+  makeExe(d2, 'rg.exe');
+  const found = findTool('rg', { env: { PATH: [d1, d2].join(path.delimiter) } });
+  assert.ok(found && found.toLowerCase().startsWith(d1.toLowerCase()),
+    `expected a match under ${d1}, got ${found}`);
 });
 
 test('findTool returns null when nothing is found', () => {
@@ -79,8 +109,12 @@ test('findTool on win32 leaves a name that already has an extension alone', () =
 });
 
 test('findTool on non-win32 does NOT append extensions (POSIX bare name)', () => {
-  const dir = tmpdir();
-  const rg = makeExe(dir, 'rg');
-  assert.strictEqual(findTool('rg', { isWin: false, env: { PATH: dir } }), rg);
+  // isWin:false must resolve the BARE name with no PATHEXT probing. Host-independent:
+  // inject isExec keyed on basename (path.join's separator differs by host) and use a
+  // synthetic POSIX PATH — a real Windows tmpdir path would break the POSIX ':' split
+  // on the drive-letter colon, and X_OK is a no-op on Windows.
+  const isExec = (p) => /[\\/]rg$/.test(p); // only a bare `rg` (no appended extension)
+  const found = findTool('rg', { isWin: false, env: { PATH: '/opt/bin' }, isExec });
+  assert.match(found || '', /[\\/]rg$/);
 });
 

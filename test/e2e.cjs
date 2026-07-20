@@ -66,8 +66,15 @@ function sandbox(t) {
   // the parallel of /bin/sh being reachable via the POSIX sandbox PATH above. ComSpec is
   // an OS constant (path to cmd.exe), not real user/app state, so surfacing it keeps the
   // sandbox hermetic while letting the Windows .cmd-spawn paths work.
+  //
+  // Likewise the POSIX PATH above (/usr/bin:/bin) is where the host sha256/tar tools
+  // provision() needs live on Unix; the Windows equivalents (certutil.exe, tar.exe) ship
+  // in %SystemRoot%\System32. Append it so provision('sha256'|'tar') resolves on Windows —
+  // System32 is an OS constant like ComSpec, not user/app state, so this stays hermetic.
   if (process.platform === 'win32') {
     env.ComSpec = process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe';
+    const sys32 = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32');
+    env.PATH = env.PATH + path.delimiter + sys32;
   }
   if (t && typeof t.after === 'function') {
     t.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } });
