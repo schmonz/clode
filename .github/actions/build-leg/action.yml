@@ -312,8 +312,11 @@ runs:
         CLODE_TJS_MACOS_SDK: ${{ steps.sdk.outputs.path }}
         CLODE_TJS_MACOS_ARCH: ${{ inputs.macos-arch }}
         CLODE_TJS_SMOKE: ${{ inputs.no-exec == 'true' && 'off' || 'on' }}
+        # Windows compiler: build-tjs.mjs now defaults to MSVC (cl) on win32, so the
+        # msvc legs need no explicit flag (the msvc-dev-cmd step above puts cl + the
+        # Windows SDK + ninja on PATH). mingw is retired — kept only as the explicit
+        # opt-in for a hypothetical non-msvc Windows leg.
         CLODE_TJS_WIN_MINGW: ${{ runner.os == 'Windows' && inputs.msvc != 'true' && '1' || '' }}
-        CLODE_TJS_WIN_MSVC: ${{ runner.os == 'Windows' && inputs.msvc == 'true' && '1' || '' }}
       run: node scripts/build-tjs.mjs --build-only
 
     - name: Build tjs (alpine guest)

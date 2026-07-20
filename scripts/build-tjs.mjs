@@ -19,6 +19,18 @@
 //   --source-only  stop after checkout + sha-verify + patches
 //   --build-only   skip checkout/patches (tree must exist), cmake + smoke only
 //   (default: both — the local flow, unchanged)
+//
+// Windows toolchain: the native build uses MSVC (cl.exe) by DEFAULT — the canonical
+// compiler for the shipping windows-x64 / windows-arm64 legs (scripts/tjs-legs.mjs
+// msvc:true); mingw is retired. Prerequisites: Visual Studio 2022 Build Tools with
+// the "Desktop development with C++" workload, which bundles cl.exe, the Windows SDK,
+// cmake, AND ninja:
+//   winget install --id Microsoft.VisualStudio.2022.BuildTools -e \
+//     --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+// Then run from a "x64 Native Tools Command Prompt for VS 2022" (or after vcvars64.bat
+// / vcvarsall.bat <arch>, so cl+cmake+ninja are on PATH):
+//   node scripts/build-tjs.mjs --build-only        # -> build/tjs/tjs.exe, no env flag
+// CLODE_TJS_WIN_MINGW=1 opts into the retired mingw-gcc path instead.
 import { execFileSync } from 'node:child_process';
 import os, { cpus } from 'node:os';
 import fs from 'node:fs';
@@ -1810,31 +1822,31 @@ if (crossFile) {
   if (!fs.existsSync(crossFile)) throw new Error(`CLODE_TJS_CROSS_FILE: no file at ${crossFile}`);
   cmakeArgs.push(`-DCMAKE_TOOLCHAIN_FILE=${path.resolve(crossFile)}`);
 }
-// Native Windows build with a HOSTED mingw toolchain (the windows-x64
-// leg): use the SAME gcc-posix compiler the cross build uses, but on the
-// Windows runner itself so the output can be executed (exec=host). Ninja
-// because the default Windows generator is Visual Studio (MSVC), and mingw gcc
-// as the compiler. NO cross toolchain file — this is a native build, so
-// CMAKE_SYSTEM_NAME stays the host's Windows. The -Wno-error demotions below
-// (:~1599, gated on !darwin && !crossFile) and the build/tjs.exe detection
-// (:~1644) already apply. Mutually exclusive with a cross file.
+// Native Windows compiler selection. MSVC cl.exe is the canonical compiler — the
+// shipping windows-x64 / windows-arm64 publisher legs build with it (scripts/
+// tjs-legs.mjs msvc:true; the VS dev env is activated in build-leg so cl + the
+// Windows SDK + ninja are on PATH) — so on a native win32 build it is the DEFAULT
+// and needs NO env flag. mingw is retired, kept only as an explicit opt-in:
+// CLODE_TJS_WIN_MINGW=1 selects the hosted gcc-posix toolchain instead. Both force
+// Ninja because cmake's default Windows generator is multi-config Visual Studio,
+// which puts the binary outside build/tjs/'s expected layout. A cross toolchain
+// file (crossFile) owns compiler selection and excludes both. cl needs no
+// -Wno-error demotion (txiki applies -Werror only on its Unix path); mingw gcc does
+// (handled by the !winMsvc branch at :~1870).
 const winMingw = process.env.CLODE_TJS_WIN_MINGW === '1';
 if (winMingw && crossFile) {
   throw new Error('CLODE_TJS_WIN_MINGW and CLODE_TJS_CROSS_FILE are mutually exclusive (native-hosted vs cross)');
 }
-if (winMingw) {
-  cmakeArgs.push('-G', 'Ninja', '-DCMAKE_C_COMPILER=gcc', '-DCMAKE_CXX_COMPILER=g++');
-}
-// Native Windows build with MSVC cl.exe (the windows-x64-msvc proving leg,
-// then the windows-x64 publisher after Phase B). Ninja + cl (the VS dev
-// environment is activated in build-leg so cl + the Windows SDK + ninja are on
-// PATH). Mutually exclusive with the mingw and cross paths. cl needs no
-// -Wno-error demotion (txiki applies -Werror only on its Unix path).
-const winMsvc = process.env.CLODE_TJS_WIN_MSVC === '1';
-if (winMsvc && (crossFile || winMingw)) {
+// CLODE_TJS_WIN_MSVC=1 is still accepted (now redundant on win32) for back-compat;
+// still loud if it conflicts with an explicit mingw/cross request.
+if (process.env.CLODE_TJS_WIN_MSVC === '1' && (crossFile || winMingw)) {
   throw new Error('CLODE_TJS_WIN_MSVC is exclusive with CLODE_TJS_WIN_MINGW / CLODE_TJS_CROSS_FILE');
 }
-if (winMsvc) {
+const winMsvc = !winMingw && !crossFile
+  && (process.platform === 'win32' || process.env.CLODE_TJS_WIN_MSVC === '1');
+if (winMingw) {
+  cmakeArgs.push('-G', 'Ninja', '-DCMAKE_C_COMPILER=gcc', '-DCMAKE_CXX_COMPILER=g++');
+} else if (winMsvc) {
   cmakeArgs.push('-G', 'Ninja', '-DCMAKE_C_COMPILER=cl', '-DCMAKE_CXX_COMPILER=cl');
 }
 // 32-bit targets lacking libatomic (ppc/sparc): link the __atomic_*_8 shim.
