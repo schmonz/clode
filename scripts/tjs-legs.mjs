@@ -460,7 +460,15 @@ const LEGS = [
     'cross-file': 'scripts/netbsd.toolchain.cmake',
     'atomic-shim': false, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
-    publish: false, ci: true, ciOnly: true, 'soft-fail': true, timeout: 3600,
+    // RETIRED 2026-07-22 (ci:false). Has NEVER once built since it landed in
+    // fleet batch 3 (083b0d5, 2026-07-18): 0 pass / 15 fail across the sampled
+    // CI runs, while every other NetBSD leg is 15/15 green. Nobody has made a
+    // specific effort at the failure, so each push only spent a 3600s qemu slot
+    // and reviewer attention re-reading a known-red leg. publish:false + ciOnly
+    // means it gated nothing (absent from the release tier), so retiring it
+    // costs zero coverage. The definition — the hard-won netbsd-src/machine/arch
+    // triple — stays for whoever picks it up; flip ci back to true then.
+    publish: false, ci: false, ciOnly: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // netbsd-earmv7hf (ARM32 LE hardfloat): evbarm's default arch; ARMv7 ldrexd
   // inlines 8-byte atomics → no shim.
@@ -477,7 +485,15 @@ const LEGS = [
     'cross-file': 'scripts/netbsd.toolchain.cmake',
     'atomic-shim': false, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
-    publish: false, ci: true, ciOnly: true, 'soft-fail': true, timeout: 3600,
+    // RETIRED 2026-07-22 (ci:false). Has NEVER once built since it landed in
+    // fleet batch 3 (083b0d5, 2026-07-18): 0 pass / 15 fail across the sampled
+    // CI runs, while every other NetBSD leg is 15/15 green. Nobody has made a
+    // specific effort at the failure, so each push only spent a 3600s qemu slot
+    // and reviewer attention re-reading a known-red leg. publish:false + ciOnly
+    // means it gated nothing (absent from the release tier), so retiring it
+    // costs zero coverage. The definition — the hard-won netbsd-src/machine/arch
+    // triple — stays for whoever picks it up; flip ci back to true then.
+    publish: false, ci: false, ciOnly: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // netbsd-mips64eb (MIPS64 BIG-endian): the sbmips port; 64-bit inlines atomics,
   // no shim. canonical-LE bytecode proof on a 3rd 64-bit-BE target.
@@ -486,7 +502,15 @@ const LEGS = [
     'cross-file': 'scripts/netbsd.toolchain.cmake',
     'atomic-shim': false, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
-    publish: false, ci: true, ciOnly: true, 'soft-fail': true, timeout: 3600,
+    // RETIRED 2026-07-22 (ci:false). Has NEVER once built since it landed in
+    // fleet batch 3 (083b0d5, 2026-07-18): 0 pass / 15 fail across the sampled
+    // CI runs, while every other NetBSD leg is 15/15 green. Nobody has made a
+    // specific effort at the failure, so each push only spent a 3600s qemu slot
+    // and reviewer attention re-reading a known-red leg. publish:false + ciOnly
+    // means it gated nothing (absent from the release tier), so retiring it
+    // costs zero coverage. The definition — the hard-won netbsd-src/machine/arch
+    // triple — stays for whoever picks it up; flip ci back to true then.
+    publish: false, ci: false, ciOnly: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // NOTE: netbsd-vax was dropped 2026-07-18 — a confirmed ENGINE wall, not just a
   // toolchain risk: build.sh produces a working vax toolchain but quickjs fails to

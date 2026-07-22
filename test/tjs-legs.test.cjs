@@ -319,10 +319,18 @@ test('release tier: publishing legs are NOT soft-fail (deterministic contents)',
         `${l.leg}: a release PUBLISHER must not be soft-fail (would make release contents non-deterministic)`);
     }
   }
-  // CI keeps soft-fail (that's the on-ramp for new legs); the two tiers differ
-  // here on purpose.
-  const ciSoft = legsFor('ci').filter((l) => l['soft-fail'] === true);
-  assert.ok(ciSoft.length > 0, 'CI tier still uses soft-fail for its VM legs');
+  // CI keeps soft-fail as the ON-RAMP for legs we do not ship; publishers are
+  // hard in BOTH tiers. That on-ramp may legitimately be EMPTY — 2026-07-22
+  // retired the last three occupants (netbsd i386/mips64eb/riscv64, ci:false)
+  // after they never once built — so assert its CONTENTS, not a nonzero count:
+  // a leg we SHIP must never sit on the on-ramp. The per-leg mapping itself
+  // (shipped => gated, unshipped VM => soft) is enforced by the 'ci tier: never
+  // publishes; VM legs are soft-fail UNLESS we ship that leg' test above.
+  const shippedLegs = new Set(legsFor('release').filter((l) => l.publish).map((l) => l.leg));
+  for (const l of legsFor('ci').filter((l) => l['soft-fail'] === true)) {
+    assert.ok(!shippedLegs.has(l.leg),
+      `${l.leg}: a SHIPPED leg must GATE ci, not sit on the soft-fail on-ramp`);
+  }
 });
 
 test('release tier: all four darwin slices are HARD (universal is 4 arches or nothing)', () => {
