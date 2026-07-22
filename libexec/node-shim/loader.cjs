@@ -49,11 +49,25 @@ const P = {
     ? /^([a-zA-Z]:[\\/]|[\\/]{2}|[\\/])/.test(p)
     : p.startsWith('/'),
   dirname: (p) => { const s = toSlash(p).replace(/\/+$/, ''); const i = s.lastIndexOf('/'); return i > 0 ? s.slice(0, i) : i === 0 ? '/' : '.'; },
-  join: (...a) => toSlash(a.filter(Boolean).join('/')).replace(/\/{2,}/g, '/'),
+  join: (...a) => {
+    const s = toSlash(a.filter(Boolean).join('/'));
+    // Collapse interior slash runs, but keep a leading Windows UNC '//' (\\server\share)
+    // — the same root P.normalize preserves; a blanket /\/{2,}/->/ would strip it.
+    const lead = (IS_WIN && s.startsWith('//')) ? '//' : '';
+    return lead + s.slice(lead.length).replace(/\/{2,}/g, '/');
+  },
   normalize(p) {
     p = toSlash(p);
     let drive = '';
     if (IS_WIN) { const m = /^([a-zA-Z]:)/.exec(p); if (m) { drive = m[1]; p = p.slice(drive.length); } }
+    // A Windows UNC path (\\server\share\... -> //server/share/...) has a TWO-slash
+    // root that must survive normalization. The seg loop below drops the two leading
+    // empty segments, so remember to re-emit '//' (not '/') for it — otherwise
+    // //wsl.localhost/... collapses to /wsl.localhost/..., which resolves to nothing
+    // (a real dev-box wall: the shim couldn't find its own modules from a \\wsl$
+    // checkout). POSIX '//' is implementation-defined and we keep collapsing it, so
+    // gate on IS_WIN.
+    const unc = IS_WIN && !drive && /^\/\/[^/]/.test(p);
     const rooted = p.startsWith('/');
     const abs = rooted || (!drive && P.isAbs(p));
     const out = [];
@@ -63,7 +77,7 @@ const P = {
       else out.push(seg);
     }
     const body = out.join('/');
-    const root = drive + (rooted ? '/' : '');
+    const root = drive + (unc ? '//' : (rooted ? '/' : ''));
     return (root + body) || (root || (abs ? '/' : '.'));
   },
   resolve: (...a) => {
@@ -138,7 +152,11 @@ function wallProxy(ns) {
       // API access still walls loudly.
       if (prop === Symbol.toPrimitive || prop === 'then' || prop === Symbol.iterator
           || prop === 'default' || prop === '__esModule' || prop === Symbol.toStringTag) return undefined;
-      if (globalThis.process?.env?.CLODE_SHIM_TRACE) { try { console.error('[wall]', ns + '.' + String(prop)); } catch { /* best effort */ } }
+      // Read the trace flag from tjs.env, NOT globalThis.process.env: if a builtin
+      // (e.g. process itself) failed to load, globalThis.process IS a wallProxy, and
+      // reading its `.env` re-enters THIS get trap → unbounded self-recursion
+      // (RangeError: Maximum call stack size exceeded). tjs.env is the raw engine env.
+      if (tjs.env.CLODE_SHIM_TRACE) { try { console.error('[wall]', ns + '.' + String(prop)); } catch { /* best effort */ } }
       throw new Error(`node-shim: ${ns}.${String(prop)} not implemented`);
     },
   });
@@ -159,7 +177,11 @@ function sealSurface(ns, exportsVal) {
   return new Proxy(exportsVal, {
     get(target, prop) {
       if (prop in target || SEAL_ALLOW.has(prop) || typeof prop === 'symbol') return target[prop];
-      if (globalThis.process?.env?.CLODE_SHIM_TRACE) { try { console.error('[wall]', ns + '.' + String(prop)); } catch { /* best effort */ } }
+      // Read the trace flag from tjs.env, NOT globalThis.process.env: if a builtin
+      // (e.g. process itself) failed to load, globalThis.process IS a wallProxy, and
+      // reading its `.env` re-enters THIS get trap → unbounded self-recursion
+      // (RangeError: Maximum call stack size exceeded). tjs.env is the raw engine env.
+      if (tjs.env.CLODE_SHIM_TRACE) { try { console.error('[wall]', ns + '.' + String(prop)); } catch { /* best effort */ } }
       throw new Error(`node-shim: ${ns}.${String(prop)} not implemented`);
     },
   });

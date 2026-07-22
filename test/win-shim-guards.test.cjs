@@ -31,6 +31,18 @@ test('loader P: Windows drive path is absolute and preserved', () => {
   assert.equal(P.join('C:\\a\\b', 'modules'), 'C:/a/b/modules');
 });
 
+test('loader P: Windows UNC path preserves the \\\\server\\share root', () => {
+  // A \\server\share (\\wsl.localhost\...) checkout must keep its TWO-slash root
+  // through normalize/join, or the shim resolves its own modules to a bogus
+  // single-slash path and every builtin walls (observed as a boot stack overflow
+  // via the wallProxy). Regression guard for the UNC dev-box wall.
+  const { P } = loadP({ win: true, cwd: '\\\\wsl.localhost\\Ubuntu' });
+  assert.equal(P.normalize('//wsl.localhost/Ubuntu/x/loader.cjs'), '//wsl.localhost/Ubuntu/x/loader.cjs');
+  assert.equal(P.resolve('\\\\wsl.localhost\\Ubuntu\\a\\loader.cjs'), '//wsl.localhost/Ubuntu/a/loader.cjs');
+  assert.equal(P.dirname('//wsl.localhost/Ubuntu/a/loader.cjs'), '//wsl.localhost/Ubuntu/a');
+  assert.equal(P.join('//wsl.localhost/Ubuntu/a/node-shim', 'modules'), '//wsl.localhost/Ubuntu/a/node-shim/modules');
+});
+
 test('loader P: POSIX behavior unchanged', () => {
   const { P, IS_WIN } = loadP({ win: false, cwd: '/proj' });
   assert.equal(IS_WIN, false);
@@ -106,8 +118,11 @@ test('build-tjs: CLODE_TJS_WIN_MINGW selects Ninja + mingw gcc', () => {
   assert.match(buildTjsSrc, /-G['"]?,?\s*['"]Ninja['"]/);
   assert.match(buildTjsSrc, /CMAKE_C_COMPILER=gcc/);
 });
-test('build-tjs: win-mingw and cross-file are mutually exclusive', () => {
+test('build-tjs: win32 defaults to MSVC (cl); mingw is the opt-in; both exclude cross', () => {
+  // MSVC (cl) is the DEFAULT native win32 compiler — no env flag needed; the shipping
+  // legs build with it and mingw is retired (CLODE_TJS_WIN_MINGW=1 opts back in).
+  assert.match(buildTjsSrc, /winMsvc\s*=\s*!winMingw\s*&&\s*!crossFile\s*&&\s*\(process\.platform === 'win32'/);
   assert.match(buildTjsSrc, /CLODE_TJS_WIN_MINGW[\s\S]{0,200}crossFile[\s\S]{0,80}throw|crossFile[\s\S]{0,80}CLODE_TJS_WIN_MINGW[\s\S]{0,80}throw/);
   assert.match(buildTjsSrc, /CLODE_TJS_WIN_MSVC is exclusive with/);
-  assert.match(buildTjsSrc, /winMsvc\s*&&\s*\(crossFile\s*\|\|\s*winMingw\)/);
+  assert.match(buildTjsSrc, /CLODE_TJS_WIN_MSVC === '1'\s*&&\s*\(crossFile\s*\|\|\s*winMingw\)/);
 });
