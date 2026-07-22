@@ -165,7 +165,25 @@ runs:
         PKGS="${{ inputs.packages }}"
         case "${{ inputs.platform }}" in
           netbsd)
-            [ -z "$PKGS" ] || sudo pkgin -y install $PKGS ;;
+            # PINNED to the 2026Q1 quarterly. pkgin's default repo tracks the
+            # CURRENT quarterly (the 10.1 path 302s to 10.0_<currentQ>), and the
+            # 2026Q2 NetBSD/x86_64 bulk build shipped NO nodejs package at all —
+            # verified against the repo index: 2026Q2 has only unrelated node-*
+            # /nodejs-version entries, while 2026Q1 has nodejs-20/22/24/25. This
+            # guest NEEDS node to run scripts/build-tjs.mjs, so the leg died with
+            # "nodejs is not available in the repository" (green 2026-07-19, red
+            # from 2026-07-22). Deliberately NOT tolerating pkgin's nonzero exit:
+            # that would mask the missing interpreter and fail later as
+            # "node: not found" (exactly how the midnightbsd leg failed).
+            # REVISIT: drop this pin once a later quarterly publishes nodejs again
+            # (2026Q1 will eventually be pruned from the mirror).
+            [ -z "$PKGS" ] || {
+              printf '%s\n' \
+                "https://cdn.NetBSD.org/pub/pkgsrc/packages/NetBSD/$(uname -p)/10.0_2026Q1/All" \
+                | sudo tee /usr/pkg/etc/pkgin/repositories.conf >/dev/null
+              sudo pkgin -y update
+              sudo pkgin -y install $PKGS
+            } ;;
           freebsd|dragonflybsd)
             [ -z "$PKGS" ] || sudo env ASSUME_ALWAYS_YES=YES pkg install -y $PKGS ;;
           openbsd)
