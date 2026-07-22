@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.20260719.1
+## 0.20260722.1
 
 Turns out the JavaScript we carve out of an upstream Claude binary is platform-specific after all. `clode fetch` now downloads the closest match for your platform.
 
