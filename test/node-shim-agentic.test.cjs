@@ -44,6 +44,23 @@ function bootP(cli, dir, args, env, timeoutMs) {
 const MARKER = 'AGENTIC-MARKER-7391';
 const TOOL_ID = 'toolu_mock_bash_1';
 
+// Pull the actual tool_result block for a tool_use_id out of a follow-up POST
+// body. The raw body is a big /messages JSON whose leading bytes are the system
+// prompt + prior turns, so a plain body.slice() truncates BEFORE the tool_result
+// content — and that content is exactly what carries the exception a failed
+// atomic write reported. Parse it out instead.
+function toolResultContent(body, id) {
+  try {
+    const j = JSON.parse(body);
+    for (const m of j.messages || []) {
+      for (const b of (Array.isArray(m.content) ? m.content : [])) {
+        if (b && b.type === 'tool_result' && b.tool_use_id === id) return JSON.stringify(b.content);
+      }
+    }
+  } catch { /* not JSON / shape drift — caller falls back to a raw slice */ }
+  return null;
+}
+
 test('agentic Bash round-trip under tjs: tool_result carries real stdout inline', async (t) => {
   if (skipUnlessTjs(t)) return;
   const bin = providerBin();
@@ -99,8 +116,10 @@ test('agentic Edit round-trip under tjs: overwriting an existing file works (Fil
           : cannedToolUseSSE('Read', { file_path: target }, READ_ID),
   });
   try {
+    // --debug-to-stderr surfaces the bundle's atomic-write breadcrumbs (and any
+    // exception it caught) so a failure on disk has a named cause, not silence.
     const r = await bootP(cli, dir,
-      ['-p', 'edit the file', '--dangerously-skip-permissions'],
+      ['-p', 'edit the file', '--dangerously-skip-permissions', '--debug', '--debug-to-stderr'],
       {
         ...process.env,
         ANTHROPIC_BASE_URL: mock.url,
@@ -110,14 +129,16 @@ test('agentic Edit round-trip under tjs: overwriting an existing file works (Fil
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
     const editResult = mock.requests.find((q) => q.body && q.body.includes(EDIT_ID) && q.body.includes('tool_result'));
     // Ground-truth oracle: the edit actually landed on disk. On failure, surface
-    // what the Edit tool actually REPORTED (its tool_result carries any exception
-    // the atomic write threw — e.g. a chmod/rename error) so a platform-specific
+    // what the Edit tool actually REPORTED — the tool_result CONTENT (parsed out,
+    // not a leading raw slice that truncates before it) carries any exception the
+    // atomic write threw (e.g. a chmod/rename error code) so a platform-specific
     // regression names its own failing step instead of just "did not apply".
     const onDisk = fs.readFileSync(target, 'utf8');
+    const editContent = editResult && toolResultContent(editResult.body, EDIT_ID);
     assert.strictEqual(onDisk, 'hello universe\nsecond line\n',
       `Edit did not apply on disk.\n on-disk: ${JSON.stringify(onDisk)}\n`
-      + ` Edit tool_result: ${editResult ? editResult.body.slice(0, 700) : '<none>'}\n`
-      + ` stderr tail:\n${(r.stderr || '').slice(-1200)}`);
+      + ` Edit tool_result content: ${editContent || (editResult ? editResult.body.slice(0, 1500) : '<none>')}\n`
+      + ` stderr tail:\n${(r.stderr || '').slice(-3000)}`);
     // And the Edit tool_result must not be the FileHandle-shim-gap error.
     assert.ok(editResult, 'no follow-up POST carrying the Edit tool_result');
     assert.ok(!/"content":"not a function","is_error":true,"tool_use_id":"toolu_edit_edit"/.test(editResult.body),

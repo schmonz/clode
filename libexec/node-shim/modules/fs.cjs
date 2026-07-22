@@ -99,8 +99,22 @@ const constants = { F_OK: 0, X_OK: 1, W_OK: 2, R_OK: 4, ...O };
 // matching mod_fs_sync.c; an older engine rejects it with a LOUD
 // "fs_sync.open: bad flags" TypeError rather than silently blocking.
 // Characterized by test/node-shim-fs-nonblock.test.cjs.
+// Node's string open flags carry modifiers FSS.open (which accepts only
+// r|w|a|r+|w+, optionally 'n'-suffixed) does not: 'x' (O_EXCL — fail if exists)
+// and 's' (O_SYNC). Collapse them onto the supported set — the SAME lossy mapping
+// flagsToString already applies to NUMERIC flags (O_EXCL/O_SYNC dropped, O_APPEND
+// wins). Node's atomic writers (the config saver, and Edit/Write via a temp file)
+// open the temp with 'wx'/'ax'; passing those through verbatim made FSS.open throw
+// "fs_sync.open: bad flags", so EVERY atomic write silently failed — on Windows the
+// bundle's Edit "did not apply on disk". FSS has no 'a+' (read+append), so a+/ax+/as+
+// collapse to 'a' just as the numeric path collapses O_APPEND to 'a'.
+const NODE_STR_FLAGS = {
+  r: 'r', rs: 'r', sr: 'r', 'r+': 'r+', 'rs+': 'r+', 'sr+': 'r+',
+  w: 'w', wx: 'w', xw: 'w', 'w+': 'w+', 'wx+': 'w+', 'xw+': 'w+',
+  a: 'a', ax: 'a', xa: 'a', as: 'a', 'a+': 'a', 'ax+': 'a', 'xa+': 'a', 'as+': 'a',
+};
 function flagsToString(flags) {
-  if (typeof flags === 'string') return flags;
+  if (typeof flags === 'string') return NODE_STR_FLAGS[flags] || flags;
   if (typeof flags !== 'number') return 'r';
   const nb = (flags & O.O_NONBLOCK) ? 'n' : '';
   const rw = flags & 0o3; // low 2 bits: RDONLY(0)/WRONLY(1)/RDWR(2)
