@@ -156,7 +156,7 @@ function wallProxy(ns) {
       // (e.g. process itself) failed to load, globalThis.process IS a wallProxy, and
       // reading its `.env` re-enters THIS get trap → unbounded self-recursion
       // (RangeError: Maximum call stack size exceeded). tjs.env is the raw engine env.
-      if (tjs.env.CLODE_SHIM_TRACE) { try { console.error('[wall]', ns + '.' + String(prop)); } catch { /* best effort */ } }
+      if (tjs?.env?.CLODE_SHIM_TRACE) { try { console.error('[wall]', ns + '.' + String(prop)); } catch { /* best effort */ } }
       throw new Error(`node-shim: ${ns}.${String(prop)} not implemented`);
     },
   });
@@ -181,7 +181,7 @@ function sealSurface(ns, exportsVal) {
       // (e.g. process itself) failed to load, globalThis.process IS a wallProxy, and
       // reading its `.env` re-enters THIS get trap → unbounded self-recursion
       // (RangeError: Maximum call stack size exceeded). tjs.env is the raw engine env.
-      if (tjs.env.CLODE_SHIM_TRACE) { try { console.error('[wall]', ns + '.' + String(prop)); } catch { /* best effort */ } }
+      if (tjs?.env?.CLODE_SHIM_TRACE) { try { console.error('[wall]', ns + '.' + String(prop)); } catch { /* best effort */ } }
       throw new Error(`node-shim: ${ns}.${String(prop)} not implemented`);
     },
   });
