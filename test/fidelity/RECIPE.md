@@ -63,7 +63,7 @@ Each row: `| id | action | expected | axes | test |`
 | id | action | expected | axes | test |
 |---|---|---|---|---|
 | C1 | → write a small file (the 0-byte config class) | small file written correctly, non-zero | platform | test/node-shim-fs.test.cjs |
-| C2 | → produce a large (>64 KB) tool output / write a large file (Haiku pipe deadlock class) | large output/write completes, no deadlock | platform | NEW |
+| C2 | → produce a large (>64 KB) tool output / write a large file (Haiku pipe deadlock class) | large output/write completes, no deadlock | platform | test/node-shim-large-output.test.cjs |
 | C3 | ? read a large file (large Read output through the shim) | large file read correctly | platform | NEW |
 | C4 | ? binary / non-UTF-8 content (Buffer vs Uint8Array read class) | binary content round-trips correctly | platform | NEW |
 
@@ -72,7 +72,7 @@ Each row: `| id | action | expected | axes | test |`
 | id | action | expected | axes | test |
 |---|---|---|---|---|
 | D1 | → `/quit` exits cleanly (O_NONBLOCK sync-open wedge) | clean exit, no wedge | platform | test/node-shim-fs-nonblock.test.cjs |
-| D2 | → Ctrl-Z suspends and `fg` resumes (SIGTSTP delivery) | suspend/resume works | platform | NEW |
+| D2 | → Ctrl-Z suspends and `fg` resumes (SIGTSTP delivery) | suspend/resume works | platform | test/node-shim-ctrlz-pty.test.cjs |
 | D3 | → a killed child is reported as killed, not exit 0 | killed child reported as killed | platform | test/node-shim-child-process.test.cjs |
 | D4 | → `process.env` mutations reach child processes | env mutations visible to children | platform | test/node-shim-env.test.cjs |
 | D5 | ? Ctrl-C interrupts a running turn/tool without corrupting the TUI | interrupt works, TUI stays coherent | platform | NEW |
@@ -83,7 +83,7 @@ Each row: `| id | action | expected | axes | test |`
 | id | action | expected | axes | test |
 |---|---|---|---|---|
 | E1 | → spawn a child that fails to launch (no UAF/SIGSEGV) | clean failure, no crash | platform | test/node-shim-child-process.test.cjs |
-| E2 | → no fd leak into sync children (CLOEXEC) | no fd leak | platform | NEW |
+| E2 | ? no fd leak into sync children (CLOEXEC) | no fd leak | platform | test/node-shim-cloexec.test.cjs |
 | E3 | ? a long-running / backgrounded Bash command; pipes between commands | backgrounding and pipes work | platform | NEW |
 | E4 | ? `detached` semantics (dropped `opts.detached` — latent; the login opener) | detached semantics honored | - | NEW |
 
@@ -92,7 +92,7 @@ Each row: `| id | action | expected | axes | test |`
 | id | action | expected | axes | test |
 |---|---|---|---|---|
 | F1 | → the welcome box + prompt paint (the `v`-flag `\p{}` regexp bug) | welcome box + prompt paint correctly | - | test/node-shim-vflag-regex.test.cjs |
-| F2 | → a full human turn stays coherent (Intl polyfill; setEncoding; child.stdin) | turn renders coherently | - | NEW |
+| F2 | → a full human turn stays coherent (Intl polyfill; setEncoding; child.stdin) | turn renders coherently | - | test/node-shim-agentic.test.cjs |
 | F3 | ? OPEN: stale frames — a finished `/login`/`/doctor` lingers; repaint does not erase prior lines | repaint erases prior lines | - | NEW |
 | F4 | ? OPEN: trust-prompt freeze under iTerm2 — keystrokes reach the read pump but the input handler does not advance the prompt | trust prompt advances on keystroke | platform: iTerm2 | NEW |
 | F5 | ? wide / emoji / combining chars; bracketed paste; scrollback | renders correctly | - | NEW |
