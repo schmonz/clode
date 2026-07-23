@@ -103,6 +103,30 @@ test('agentic multi-turn under tjs: a 2-tool loop keeps both tool_results cohere
   } finally { await mock.close(); }
 });
 
+// H3 — --continue restores the prior session's context. Establish a token in
+// turn 1, then --continue turn 2: the turn-2 request to the model must replay
+// turn-1's message (session persisted + restored) under quaude. Hermetic
+// CLAUDE_CONFIG_DIR so the session lives in a temp dir shared across both runs.
+test('agentic --continue restores the prior session context under tjs', async (t) => {
+  if (skipUnlessTjs(t)) return;
+  const bin = providerBin(); if (!bin) { t.skip('no CLODE_PROVIDER_BIN'); return; }
+  const { cli, dir } = stageBundle(bin);
+  const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'sesscfg-'));
+  const TOKEN = `${MARK}-SESSION`;
+  const mock = await startMockAnthropic({ respond: () => cannedSSE('TURNDONE') });
+  try {
+    const env = { ...mockEnv(dir, mock.url), CLAUDE_CONFIG_DIR: cfg };
+    const r1 = await bootP(cli, dir, ['-p', `remember this token: ${TOKEN}`], env, 120000);
+    assert.strictEqual(r1.status, 0, `turn1 stderr:\n${r1.stderr}`);
+    const after1 = mock.requests.length;
+    const r2 = await bootP(cli, dir, ['--continue', '-p', 'what token did I give you?'], env, 120000);
+    assert.strictEqual(r2.status, 0, `turn2 stderr:\n${r2.stderr}`);
+    const turn2 = mock.requests.slice(after1);
+    assert.ok(turn2.some((q) => q.body && q.body.includes(TOKEN)),
+      `--continue did not replay turn-1 context (token ${TOKEN} absent from turn-2 requests)`);
+  } finally { await mock.close(); }
+});
+
 // H4 — a PreToolUse(Bash) hook fires under quaude and denies (dogfood: the
 // update-guard). Exercises settings loading (--settings), hook matching, hook
 // COMMAND spawn (a child process reading the hook-input JSON), and the deny

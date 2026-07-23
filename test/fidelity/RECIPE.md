@@ -114,8 +114,8 @@ Each row: `| id | action | expected | axes | test |`
 | id | action | expected | axes | test |
 |---|---|---|---|---|
 | H1 | → a multi-turn conversation stays coherent (context, tool results across turns) | conversation stays coherent | - | test/fidelity/agentic-tools.test.cjs |
-| H2 | ? slash commands parse and run (`/model`, `/doctor`, `/clear`, `/resume`) | slash commands run correctly | - | NEW |
-| H3 | ? `--continue` / `--resume` restore a prior session | session restores | - | NEW |
+| H2 | → slash-command dispatch is identical under naude and quaude (`/status` in -p, two-engine differential) | slash commands parse/dispatch correctly | - | test/fidelity/slash-command-diff.test.cjs |
+| H3 | → `--continue` restores a prior session's context (token replayed to the model on the next turn) | session restores | - | test/fidelity/agentic-tools.test.cjs |
 | H4 | → a PreToolUse hook fires (dogfood: the `claude update` guard denies) | hook fires and denies | - | test/fidelity/agentic-tools.test.cjs |
 | H5 | → an MCP server connects over WebSocket and a tool from it is callable (Phase-2 native WS transport, end-to-end) | MCP tool callable over ws | - | test/fidelity/agentic-mcp-ws.test.cjs |
 | H6 | → subagent / Task dispatch is identical under naude and quaude (two-engine differential) | quaude Task result == naude | - | test/fidelity/agentic-subagent-diff.test.cjs |
