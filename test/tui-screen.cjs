@@ -39,8 +39,9 @@ const EXTRA_PROBES = [
 // it (re-encoded UTF-8). All current fixtures are ASCII (/doctor, CR), so this is
 // exact; a byte >= 0x80 would need a Buffer write to stay faithful to the bytes.
 function parseArgs(argv) {
-  const sends = []; let rows = 40, cols = 100;
-  while (argv.length >= 2 && ['--send-hex', '--then-hex', '--rows', '--cols'].includes(argv[1])) {
+  const sends = []; const resizes = []; let rows = 40, cols = 100;
+  const FLAGS = ['--send-hex', '--then-hex', '--rows', '--cols', '--resize'];
+  while (argv.length >= 2 && FLAGS.includes(argv[1])) {
     const v = argv[2];
     if (argv[1] === '--send-hex') sends.push([1.5, Buffer.from(v, 'hex').toString('latin1')]);
     else if (argv[1] === '--then-hex') {
@@ -48,18 +49,25 @@ function parseArgs(argv) {
       sends.push([parseFloat(delay), Buffer.from(hex, 'hex').toString('latin1')]);
     } else if (argv[1] === '--rows') rows = parseInt(v, 10);
     else if (argv[1] === '--cols') cols = parseInt(v, 10);
+    else if (argv[1] === '--resize') {
+      // COLSxROWS@DELAY — at DELAY seconds, resize the PTY (delivers SIGWINCH to
+      // the child) and the emulator, so a resize-reflow can be asserted.
+      const [dim, delay] = v.split('@');
+      const [c, r] = dim.split('x').map((n) => parseInt(n, 10));
+      resizes.push([parseFloat(delay), c, r]);
+    }
     argv = [argv[0]].concat(argv.slice(3));
   }
   sends.sort((a, b) => a[0] - b[0]);
   if (argv.length < 3 || argv[1] !== '--') {
-    process.stderr.write('usage: tui-screen.cjs SECONDS [--send-hex HEX] [--then-hex HEX@DELAY] [--rows R --cols C] -- cmd ...\n');
+    process.stderr.write('usage: tui-screen.cjs SECONDS [--send-hex HEX] [--then-hex HEX@DELAY] [--resize COLSxROWS@DELAY] [--rows R --cols C] -- cmd ...\n');
     process.exit(2);
   }
-  return { secs: parseFloat(argv[0]), cmd: argv.slice(2), sends, rows, cols };
+  return { secs: parseFloat(argv[0]), cmd: argv.slice(2), sends, resizes, rows, cols };
 }
 
 async function main() {
-  const { secs, cmd, sends, rows, cols } = parseArgs(process.argv.slice(2));
+  const { secs, cmd, sends, resizes, rows, cols } = parseArgs(process.argv.slice(2));
   const term = new Terminal({ rows, cols, allowProposedApi: true });
   const child = pty.spawn(cmd[0], cmd.slice(1), { name: 'xterm-256color', cols, rows, env: process.env });
 
@@ -76,6 +84,9 @@ async function main() {
   let exited = false;
   child.onExit(() => { exited = true; });
   for (const [delay, bytes] of sends) setTimeout(() => { try { child.write(bytes); } catch { /* */ } }, delay * 1000);
+  for (const [delay, c, r] of resizes) setTimeout(() => {
+    try { child.resize(c, r); term.resize(c, r); } catch { /* closing */ }
+  }, delay * 1000);
 
   const start = Date.now();
   await new Promise((res) => {

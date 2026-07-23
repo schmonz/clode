@@ -22,18 +22,29 @@ function seedClaudeProfile(home, opts = {}) {
       hasCompletedProjectOnboarding: true,
     } };
   }
+  // Pre-approve an ANTHROPIC_API_KEY so the interactive TUI treats it as logged
+  // in (the bundle stores the last-20 chars of the approved key — `JQ(e) =
+  // e.trim().slice(-20)`; `-p` auto-approves, the TUI does not). This clears
+  // the "Not logged in" gate; note the interactive first turn additionally
+  // blocks on a startup gate that needs real network, so a live mock turn in
+  // the TUI is not reachable offline (see RECIPE G2). Opt-in for future
+  // interactive-turn harnesses that run online.
+  if (opts.apiKey) {
+    profile.customApiKeyResponses = { approved: [String(opts.apiKey).trim().slice(-20)], rejected: [] };
+  }
   fs.mkdirSync(home, { recursive: true });
   fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify(profile));
 }
 
 // Drive opts.cmd under a PTY via tui-screen.cjs; return the rendered screen (stdout).
 // tui-screen self-terminates after opts.seconds, so no external timeout is needed.
-// opts: { seconds, cmd:[...], sendHex?, thenHex?:[...], rows?, cols?, env? }. cmd[0] is
+// opts: { seconds, cmd:[...], sendHex?, thenHex?:[...], resize?:['COLSxROWS@DELAY'], rows?, cols?, env? }. cmd[0] is
 // the absolute program to run under the PTY (e.g. a built quaude, or a native binary).
 function capture(sbx, opts) {
   const args = [String(opts.seconds)];
   if (opts.sendHex) args.push('--send-hex', opts.sendHex);
   for (const th of opts.thenHex || []) args.push('--then-hex', th);
+  for (const rz of opts.resize || []) args.push('--resize', rz);
   if (opts.rows) args.push('--rows', String(opts.rows));
   if (opts.cols) args.push('--cols', String(opts.cols));
   args.push('--', ...opts.cmd);
