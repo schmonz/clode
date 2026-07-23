@@ -56,6 +56,7 @@ Each row: `| id | action | expected | axes | test |`
 |---|---|---|---|---|
 | B1 | → Bash tool runs a command and returns output (persistent-shell write-ack; tool rss baseline; numeric-fd inherit) | command output returned correctly | platform | test/node-shim-child-process.test.cjs |
 | B2 | ? each tool exercised once and compared: Read, Write, Edit, Grep, Glob, Bash, WebFetch (and TodoWrite / Task where relevant) | each tool's output matches upstream | applets on Grep/Glob | NEW |
+| B4 | → agentic tool round-trips (Bash, Edit, Write, Grep) produce the correct client-observable under quaude | tool dispatched, side effect / tool_result correct | applets on Grep | test/fidelity/agentic-tools.test.cjs |
 | B3 | ? a tool that writes then a tool that reads back (round-trip integrity) | write-then-read round-trips correctly | - | NEW |
 
 ## C. File I/O across sizes
