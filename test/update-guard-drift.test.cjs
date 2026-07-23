@@ -29,3 +29,22 @@ test('quaude-bootstrap.mjs carries a byte-identical inline copy of update-guard.
   const inlined = extract(path.join(__dirname, '..', 'libexec', 'quaude-bootstrap.mjs'));
   assert.strictEqual(inlined, canonical);
 });
+
+const START_G = /\/\/ >>> guardGating.*>>>\s*\n/;
+const END_G = /\/\/ <<< guardGating <<</;
+function extractGating(file) {
+  const src = fs.readFileSync(file, 'utf8');
+  const sm = START_G.exec(src);
+  assert.ok(sm, `${file}: missing guardGating start marker`);
+  const startIdx = sm.index + sm[0].length;
+  const em = END_G.exec(src);
+  assert.ok(em, `${file}: missing guardGating end marker`);
+  assert.ok(em.index > startIdx, `${file}: guardGating markers out of order`);
+  return src.slice(startIdx, em.index).trim();
+}
+
+test('quaude-bootstrap.mjs carries a byte-identical inline copy of update-guard.cjs guardGating', () => {
+  const canonical = extractGating(path.join(__dirname, '..', 'libexec', 'update-guard.cjs'));
+  const inlined = extractGating(path.join(__dirname, '..', 'libexec', 'quaude-bootstrap.mjs'));
+  assert.strictEqual(inlined, canonical);
+});

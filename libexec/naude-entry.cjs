@@ -32,7 +32,7 @@ const { spawn } = require('node:child_process');
 const seaHelpers = require('./naude-sea.cjs');
 const { shapeTargetEnv } = require('./target-env.cjs');
 const { isExecutableFile } = require('./clode-hosttools.cjs');
-const { guardVerdict } = require('./update-guard.cjs');
+const { guardVerdict, shouldInjectGuard } = require('./update-guard.cjs');
 require('./host-provision.cjs'); // ensure esbuild bundles it into the SEA for runtime provision('tar')
 // The absolute path of the clode that built this naude, read as a SEA asset (
 // runtime data) rather than an esbuild --define (a build-time string burned
@@ -165,7 +165,7 @@ function runNaude(opts = {}) {
   // the childEnv copy), so gating on it left the hook permanently inert.
   let guardSettingsFile = null;
   const childArgv = [...argv];
-  if (execPath) {
+  if (execPath && shouldInjectGuard(childArgv)) {
     guardSettingsFile = path.join(cacheDir || os.tmpdir(), 'clode-guard-' + process.pid + '.json');
     const guardSettings = {
       hooks: {
