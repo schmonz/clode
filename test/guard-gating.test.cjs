@@ -20,3 +20,17 @@ test('SUBCOMMANDS contains the reported case and its alias', () => {
   assert.ok(SUBCOMMANDS.has('remote-control'));
   assert.ok(SUBCOMMANDS.has('rc'));
 });
+
+test('bridge-spawned model sessions ARE guarded (they carry --print)', () => {
+  // A Remote Control bridge is a non-model server (skipped, above), but when a
+  // phone/claude.ai starts coding, the bridge spawns a model session via the
+  // quaude binary with `--print --sdk-url … --session-id … --input-format
+  // stream-json`. That spawn re-enters quaude-bootstrap step 7.6, and --print
+  // must make shouldInjectGuard return true so the update-guard covers the
+  // model session (which CAN run Bash). This locks that coverage.
+  const spawnArgv = ['--print', '--sdk-url', 'wss://bridge.example', '--session-id',
+    'cse_abc', '--input-format', 'stream-json', '--output-format', 'stream-json'];
+  assert.strictEqual(shouldInjectGuard(spawnArgv), true);
+  // --print wins even if a subcommand-like token precedes it (defensive).
+  assert.strictEqual(shouldInjectGuard(['rc', '--print', 'x']), true);
+});
