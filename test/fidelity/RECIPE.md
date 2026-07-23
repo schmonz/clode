@@ -66,6 +66,7 @@ Each row: `| id | action | expected | axes | test |`
 | C2 | → produce a large (>64 KB) tool output / write a large file (Haiku pipe deadlock class) | large output/write completes, no deadlock | platform | test/node-shim-large-output.test.cjs |
 | C3 | ? read a large file (large Read output through the shim) | large file read correctly | platform | NEW |
 | C4 | ? binary / non-UTF-8 content (Buffer vs Uint8Array read class) | binary content round-trips correctly | platform | NEW |
+| C5 | → fs truncate (truncateSync / promises.truncate / FileHandle.truncate) matches node | truncate shrinks/extends like node (bundle uses it for output files + file edits) | - | test/node-shim-truncate.test.cjs |
 
 ## D. Process control (quit / signals / TTY)
 

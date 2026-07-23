@@ -415,6 +415,22 @@ const fsMod = {
   copyFileSync: (a, b) => writeFileSync(b, readFileSync(a)),
   symlinkSync: (target, p) => FSS.symlink(target, p),
   chmodSync: (p, m) => chmodBestEffort(p, m),
+  // fs.truncate/truncateSync: the bundle reaches truncate via fs.promises and
+  // FileHandle (below); the sync form has no fd-less primitive in the sync-fs
+  // patch, so emulate by read-then-rewrite (shrink slices, extend zero-pads) —
+  // Buffer-free (this module runs under the bare loader with no global Buffer).
+  truncateSync: (p, len = 0) => {
+    const buf = readFileSync(p);
+    let out;
+    if (buf.length >= len) out = buf.subarray(0, len);
+    else { out = new Uint8Array(len); out.set(buf); }
+    writeFileSync(p, out);
+  },
+  truncate: (p, len, cb) => {
+    const done = typeof len === 'function' ? len : cb;
+    const n = typeof len === 'function' ? 0 : (len ?? 0);
+    promises.truncate(p, n).then(() => done && done(null), (e) => done && done(e));
+  },
   appendFileSync,
   writeSync,
   rmSync,
@@ -468,6 +484,11 @@ function makeFileHandle(fd, p) {
     // (Write of a NEW file skips it — no original mode to restore). No fd-based
     // fchmod primitive exists; chmod the captured path (same inode).
     async chmod(mode) { chmodBestEffort(p, mode); },
+    // FileHandle.truncate: the bundle truncates a FileHandle in file-restore /
+    // edit paths (`await fh.truncate(0)` then rewrite). No fd-based ftruncate in
+    // the sync-fs patch; tjs's async file handle HAS a real truncate, so open the
+    // captured path and truncate that inode (same-inode, like chmod above).
+    async truncate(len = 0) { const th = await tjs.open(p, 'r+'); try { await th.truncate(len); } finally { await th.close(); } },
     async sync() {},
     async datasync() {},
     // `await using fh = await fs.promises.open(...)` (bundle ≥2.1.204 Bash-tool
@@ -499,6 +520,9 @@ const promises = {
   readlink: async (p) => FSS.readlink(p),
   unlink: async (p) => FSS.unlink(p),
   rename: async (a, b) => renameReplace(a, b),
+  // fs.promises.truncate(path, len): the bundle shrinks large Bash-output files
+  // here. tjs's async file handle exposes a real truncate primitive.
+  truncate: async (p, len = 0) => { const th = await tjs.open(p, 'r+'); try { await th.truncate(len); } finally { await th.close(); } },
   rmdir: async (p) => FSS.rmdir(p),
   copyFile: async (a, b) => { writeFileSync(b, readFileSync(a)); },
   appendFile: async (p, data, opts) => { appendFileSync(p, data, opts); },
