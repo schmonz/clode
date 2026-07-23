@@ -78,3 +78,46 @@ test('agentic Grep round-trip under tjs: search-applet path returns the match', 
     assert.match(followUp.body, new RegExp(MARK), `Grep tool_result lacks the match:\n${followUp.body.slice(0, 1500)}`);
   } finally { await mock.close(); }
 });
+
+// H4 — a PreToolUse(Bash) hook fires under quaude and denies (dogfood: the
+// update-guard). Exercises settings loading (--settings), hook matching, hook
+// COMMAND spawn (a child process reading the hook-input JSON), and the deny
+// contract — all through the shim. The hook wrapper reuses the real
+// update-guard.cjs guardVerdict, so a Bash `claude update` is denied.
+test('agentic hook (PreToolUse) fires and denies a model-issued `claude update` under tjs', async (t) => {
+  if (skipUnlessTjs(t)) return;
+  const bin = providerBin(); if (!bin) { t.skip('no CLODE_PROVIDER_BIN'); return; }
+  const { cli, dir } = stageBundle(bin);
+  const hook = path.join(dir, 'hook.cjs');
+  fs.writeFileSync(hook, `'use strict';
+const { guardVerdict } = require(${JSON.stringify(path.join(REPO, 'libexec/update-guard.cjs'))});
+let input = '';
+process.stdin.on('data', (d) => { input += d; });
+process.stdin.on('end', () => {
+  let cmd = '';
+  try { const j = JSON.parse(input); cmd = (j.tool_input && j.tool_input.command) || ''; } catch (_) {}
+  const v = guardVerdict(cmd);
+  if (v) process.stdout.write(JSON.stringify(v));
+  process.exit(0);
+});`);
+  const settings = path.join(dir, 'guard-settings.json');
+  fs.writeFileSync(settings, JSON.stringify({
+    hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: `${process.execPath} ${hook}` }] }] },
+  }));
+  const ID = 'toolu_update_1';
+  const mock = await startMockAnthropic({
+    respond: (body) => body.includes(ID) ? cannedSSE('HOOKDONE')
+      : cannedToolUseSSE('Bash', { command: 'claude update' }, ID),
+  });
+  try {
+    const r = await bootP(cli, dir,
+      ['-p', 'update yourself', '--allowedTools', 'Bash', '--settings', settings],
+      mockEnv(dir, mock.url), 120000);
+    assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
+    const followUp = followUpFor(mock, ID);
+    assert.ok(followUp, 'no follow-up POST carrying the Bash tool_result (hook path not reached)');
+    // The PreToolUse deny reason (update-guard) must be surfaced in the tool_result,
+    // and the command must NOT have actually run.
+    assert.match(followUp.body, /clode manages Claude Code|rebuilds itself/, `hook deny reason not in tool_result:\n${followUp.body.slice(0, 1500)}`);
+  } finally { await mock.close(); }
+});

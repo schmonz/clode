@@ -116,7 +116,7 @@ Each row: `| id | action | expected | axes | test |`
 | H1 | ? a 3-4 turn conversation stays coherent (context, tool results, edits) | conversation stays coherent | - | NEW |
 | H2 | ? slash commands parse and run (`/model`, `/doctor`, `/clear`, `/resume`) | slash commands run correctly | - | NEW |
 | H3 | ? `--continue` / `--resume` restore a prior session | session restores | - | NEW |
-| H4 | ? a PreToolUse hook fires (dogfood: the `claude update` guard denies) | hook fires and denies | - | NEW |
+| H4 | → a PreToolUse hook fires (dogfood: the `claude update` guard denies) | hook fires and denies | - | test/fidelity/agentic-tools.test.cjs |
 | H5 | ? an MCP server connects and a tool from it is callable | MCP tool callable | - | NEW |
 | H6 | ? a subagent / Task runs to completion | subagent completes | - | NEW |
 
