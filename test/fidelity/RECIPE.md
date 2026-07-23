@@ -78,7 +78,7 @@ Each row: `| id | action | expected | axes | test |`
 | D2 | → Ctrl-Z suspends and `fg` resumes (SIGTSTP delivery) | suspend/resume works | platform | test/node-shim-ctrlz-pty.test.cjs |
 | D3 | → a killed child is reported as killed, not exit 0 | killed child reported as killed | platform | test/node-shim-child-process.test.cjs |
 | D4 | → `process.env` mutations reach child processes | env mutations visible to children | platform | test/node-shim-env.test.cjs |
-| D5 | ? Ctrl-C interrupts a running turn/tool without corrupting the TUI — needs a live in-flight turn to interrupt, which shares the G2 offline-interactive wall (no turn dials the mock offline); interrupt-of-a-tool is covered non-interactively by the killed-child path (D3) | interrupt works, TUI stays coherent | platform | NEW (blocked: see G2) |
+| D5 | ? Ctrl-C interrupts a running turn/tool without corrupting the TUI. Now reachable via the G2 live-turn harness (real credentials), but the observable is not stable in a FINAL-frame capture: Claude Code restores your prompt into the input box on interrupt, which is indistinguishable from "never submitted", and no "Interrupted" text survives to the last frame. Needs frame-SEQUENCE capture (assert the spinner appears then stops mid-stream) rather than a final-frame diff. Interrupt-of-a-tool is covered non-interactively by the killed-child path (D3) | interrupt works, TUI stays coherent | platform | NEW (needs frame-sequence capture) |
 | D6 | → SIGWINCH resize reflows the TUI (PTY differential: resize 100→60 cols mid-run; quaude reflows to the same width as native, no stale wide frame — proves the shim delivers SIGWINCH + updated `process.stdout.columns`) | TUI reflows on resize | platform | test/fidelity/interactive-resize-diff.test.cjs |
 
 ## E. Subprocess / spawn
@@ -106,7 +106,7 @@ Each row: `| id | action | expected | axes | test |`
 | id | action | expected | axes | test |
 |---|---|---|---|---|
 | G1 | → `clode fetch` shows real progress (0-byte streaming bug) | real progress shown | - | test/clode-net.test.cjs |
-| G2 | ? provider fetch + a real streaming model response render incrementally — substance covered by proxy: turn/tool/response handling (H1/H3/H4/B4) + the streamed-SSE path every agentic test exercises + the TUI paint (F6). A LIVE interactive turn against the mock is not reachable offline: the interactive first turn blocks on a startup gate that needs real network (native dials 0 connections to `ANTHROPIC_BASE_URL` in the TUI, where `-p` hits it instantly) — same for all engines, no quaude divergence | incremental render | - | agentic-tools.test.cjs + interactive-render-diff.test.cjs (proxy) |
+| G2 | → a real streaming model response renders in the live TUI (PTY, REAL credentials + real API: the interactive first turn validates creds with claude.ai before firing, so a mock key spins forever without ever dialing `ANTHROPIC_BASE_URL` — the only interactive row a mock cannot reach). Prompt's answer is absent from the prompt text so the echoed input can't be mistaken for the response; native doubles as the logged-in/online probe and skips both when it can't complete | incremental render | - | test/fidelity/interactive-live-turn.test.cjs |
 | G3 | ? login opens a browser / prints the URL, and auth then persists (the disproven-lead login item — re-test now that config persists) | login flow completes and persists | platform | NEW |
 | G4 | ? Vertex/Bedrock auth path (the once-missing `node-fetch`) | auth path works | - | NEW |
 
