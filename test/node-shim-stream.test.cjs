@@ -202,6 +202,108 @@ test('stream: Transform subclass (_transform + _flush) matches node', (t) => {
   assert.strictEqual(node.joined, 'PONG!');
 });
 
+// Wall (Task 5, headless `remote-control` crash): the bundle's ws load chain does
+// `util.inherits(X, require('stream'))` (e.g. ws's createWebSocketStream). A
+// plain-object stream export has no .prototype, so setPrototypeOf throws
+// "TypeError: not an object" — thrown async and swallowed by the node-shim
+// unhandledRejection handler, silently no-op'ing the headless subcommand instead
+// of reaching the honest loud failure. require('stream') must BE the Stream
+// constructor (a function), and util.inherits/instanceof against it must behave
+// like host node.
+test('stream: require("stream") is the Stream constructor — util.inherits(X, stream) works, matches node', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const f = prog(`
+    const stream = require('node:stream');
+    const util = require('node:util');
+    const out = {};
+    out.type = typeof stream;
+    function C() {}
+    util.inherits(C, stream); // must NOT throw
+    out.inheritsOk = true;
+    out.instanceofStream = new C() instanceof stream;
+    console.log(JSON.stringify(out));
+  `);
+  const node = JSON.parse(require('node:child_process')
+    .execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const got = JSON.parse(r.stdout.trim());
+  assert.deepStrictEqual(got, node);
+  assert.strictEqual(got.type, 'function');
+  assert.strictEqual(got.inheritsOk, true);
+  assert.strictEqual(got.instanceofStream, true);
+});
+
+// Every name previously reachable off the plain-object export must still resolve
+// off the Stream constructor, and each sub-class must remain a real, subclassable
+// constructor (the -p bundle's `class X extends require('stream').Transform`
+// pattern, generalized).
+test('stream: sub-classes (Readable/Writable/PassThrough/Transform) still resolve off require("stream") and are subclassable', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const f = prog(`
+    const stream = require('node:stream');
+    const { Readable, Writable, PassThrough, Transform } = require('node:stream');
+    const out = {};
+    // Node-faithful surface — real host node exports every one of these off
+    // require('stream') too (checked below against a live node oracle).
+    out.types = {
+      Readable: typeof stream.Readable,
+      Writable: typeof stream.Writable,
+      PassThrough: typeof stream.PassThrough,
+      Transform: typeof stream.Transform,
+      pipeline: typeof stream.pipeline,
+      finished: typeof stream.finished,
+      promises: typeof stream.promises,
+      Stream: typeof stream.Stream,
+    };
+    // Destructured names are the SAME functions as the properties (identity),
+    // not just same-shaped — a real regression if the reshape ever forked them.
+    out.identity = {
+      Readable: Readable === stream.Readable,
+      Writable: Writable === stream.Writable,
+      PassThrough: PassThrough === stream.PassThrough,
+      Transform: Transform === stream.Transform,
+    };
+    class R2 extends Readable {}
+    class W2 extends Writable {}
+    class P2 extends PassThrough {}
+    class T2 extends Transform {}
+    out.subclassable = {
+      Readable: new R2({ read() {} }) instanceof Readable,
+      Writable: new W2({ write(c, e, cb) { cb(); } }) instanceof Writable,
+      PassThrough: new P2() instanceof PassThrough,
+      Transform: new T2() instanceof Transform,
+    };
+    console.log(JSON.stringify(out));
+  `);
+  const node = JSON.parse(require('node:child_process')
+    .execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const got = JSON.parse(r.stdout.trim());
+  assert.deepStrictEqual(got, node);
+  for (const name of ['Readable', 'Writable', 'PassThrough', 'Transform', 'pipeline', 'finished', 'Stream']) {
+    assert.strictEqual(got.types[name], 'function', `${name} not a function off require('stream')`);
+  }
+  assert.strictEqual(got.types.promises, 'object', "promises not the promises namespace off require('stream')");
+  assert.ok(Object.values(got.identity).every(Boolean), `destructured names diverged from properties: ${JSON.stringify(got.identity)}`);
+  assert.ok(Object.values(got.subclassable).every(Boolean), `a sub-class was not subclassable: ${JSON.stringify(got.subclassable)}`);
+
+  // Shim-only conveniences (real node does NOT put these off require('stream') —
+  // 'stream/consumers' is a separate require there): confirmed present here so
+  // require('stream').consumers / .default (used internally by the shim's own
+  // module resolution) keep working, without holding them to the node oracle.
+  const f2 = prog(`
+    const stream = require('node:stream');
+    console.log(JSON.stringify({ consumers: typeof stream.consumers, default: typeof stream.default }));
+  `);
+  const r2 = runLoader(f2);
+  assert.strictEqual(r2.status, 0, r2.stderr);
+  const got2 = JSON.parse(r2.stdout.trim());
+  assert.strictEqual(got2.consumers, 'object');
+  assert.strictEqual(got2.default, 'function');
+});
+
 // Wall (Task 4): the -p bundle captures require('stream/consumers') and
 // stream/promises to drain response/body streams. text/json/buffer over a
 // node-shim Readable must match host node.

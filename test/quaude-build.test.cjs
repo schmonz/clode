@@ -190,6 +190,26 @@ test('strict-mode sweep: agentic Bash mock oracle against the fused quaude', asy
   } finally { await mock.close(); }
 });
 
+// Task 5: the headless `quaude remote-control` subcommand loads a module
+// cluster that (pre-fix) crashed at `util.inherits(X, require('stream'))` before
+// ever reaching the committed cBo() gate-off notice (Task 2) — the shim's
+// node:stream exported a plain object with no .prototype, so setPrototypeOf
+// threw "TypeError: not an object", async and swallowed by the node-shim
+// unhandledRejection handler: a silent no-op (exit 0, nothing printed) instead
+// of an honest failure. With node:stream reshaped to the real Stream
+// constructor (libexec/node-shim/modules/stream.cjs), the crash is gone and
+// this subcommand now reaches the same honest, non-zero, non-crashing failure
+// as the interactive path.
+test('quaude remote-control fails loud under quaude (no swallowed crash)', async (t) => {
+  if (SKIP) { t.skip(SKIP); return; }
+  const r = await runQuaude(['remote-control'], cleanEnv(), 30000);
+  const out = (r.stdout || '') + (r.stderr || '');
+  assert.doesNotMatch(out, /unhandledRejection/, 'must not silently swallow the crash');
+  assert.doesNotMatch(out, /not an object/, 'must not hit the util.inherits TypeError');
+  assert.match(out, /Remote Control isn.t available in quaude yet/, 'must reach the honest gate-off notice');
+  assert.notStrictEqual(r.status, 0, 'headless remote-control must exit non-zero');
+});
+
 test('TUI paint smoke under the fused quaude (CLODE_LIVE_RENDER-gated)', (t) => {
   if (SKIP) { t.skip(SKIP); return; }
   if (process.env.CLODE_LIVE_RENDER !== '1') { t.skip('live-render opt-in only (set CLODE_LIVE_RENDER=1)'); return; }

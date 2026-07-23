@@ -309,5 +309,34 @@ const promises = {
   }),
 };
 
-module.exports = { Readable, Writable, PassThrough, Transform, pipeline, finished, Stream: Readable, consumers, promises };
-module.exports.default = module.exports;
+// node:stream's module export IS the legacy Stream constructor (a function,
+// subclass of EventEmitter), with the concrete stream classes hung off it as
+// properties. Legacy-stream code subclasses the module itself
+// (`util.inherits(X, require('stream'))`, e.g. ws's createWebSocketStream); a
+// plain-object export has no .prototype and crashes that at load with
+// `TypeError: not an object` (Object.setPrototypeOf(X.prototype, undefined))
+// — thrown async and swallowed by the node-shim unhandledRejection handler,
+// so the headless `remote-control` subcommand silently no-op'd instead of
+// reaching the loud WS_MISSING exit. Match Node: export the constructor, with
+// every previously-exported name still reachable as a property of it.
+//
+// DIVERGENCE (deliberately not fixed here): in real Node, Readable/Writable
+// (and transitively PassThrough/Transform) extend this legacy Stream class,
+// so `new Readable() instanceof require('stream')` is true. This shim's
+// Readable/Writable extend EventEmitter directly (unchanged, per Task 5's
+// "don't touch existing class bodies unless proven necessary" — the headless
+// ws-load crash never required it), so that instanceof check is false here.
+// util.inherits(X, require('stream')) — the actual crashing pattern — only
+// needs Stream to be a function with a .prototype, which holds regardless.
+class Stream extends EventEmitter {}
+Stream.Readable = Readable;
+Stream.Writable = Writable;
+Stream.PassThrough = PassThrough;
+Stream.Transform = Transform;
+Stream.pipeline = pipeline;
+Stream.finished = finished;
+Stream.consumers = consumers;
+Stream.promises = promises;
+Stream.Stream = Stream;
+Stream.default = Stream;
+module.exports = Stream;
