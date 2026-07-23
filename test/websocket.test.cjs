@@ -57,3 +57,9 @@ test('fail-loud: missing ws cannot be swallowed — new WebSocket prints to stde
   assert.doesNotMatch(r.stdout, /CONTINUED/, 'must not continue past a swallowed failure');
   assert.match(r.stderr, /ws/);
 });
+
+test('__clodeWsUnavailable is true in an isolated shim child (no ws)', () => {
+  const r = runShimChild(`console.log('WSFLAG=' + globalThis.__clodeWsUnavailable);`);
+  assert.strictEqual(r.status, 0, 'reading the flag must not exit the process');
+  assert.match(r.stdout, /WSFLAG=true/);
+});

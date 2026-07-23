@@ -649,6 +649,13 @@ BunWebSocket.CONNECTING = 0; BunWebSocket.OPEN = 1; BunWebSocket.CLOSING = 2; Bu
 // sites get header support; Node's native one would silently drop the auth header.
 globalThis.WebSocket = BunWebSocket;
 
+// Single source of truth for "this engine has no working WebSocket transport":
+// true under tjs (the node-shim loader can't load `ws` — see the adapter above),
+// false the moment a future engine can load a real `ws`. The extract-time
+// remote-control patch (extract-claude-js.cjs) reads this to gate WebSocket
+// features off with an honest notice instead of a swallowed async crash.
+globalThis.__clodeWsUnavailable = !_realWS();
+
 // A ws-shaped module for the TJS BRING-UP PATH ONLY, when the real `ws` isn't
 // loadable: under the node-shim loader `ws` can't load at all yet (it needs a
 // fuller tls/net than the shim provides), but the -p path merely CAPTURES it at
