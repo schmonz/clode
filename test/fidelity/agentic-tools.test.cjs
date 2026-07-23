@@ -79,6 +79,30 @@ test('agentic Grep round-trip under tjs: search-applet path returns the match', 
   } finally { await mock.close(); }
 });
 
+// H1 — multi-turn coherence: a 2-tool conversation loop (Bash echo A -> result
+// -> Bash echo B -> result -> final). Both tool_results must carry their own
+// stdout, in order — the turn loop stays coherent across turns under quaude.
+test('agentic multi-turn under tjs: a 2-tool loop keeps both tool_results coherent', async (t) => {
+  if (skipUnlessTjs(t)) return;
+  const bin = providerBin(); if (!bin) { t.skip('no CLODE_PROVIDER_BIN'); return; }
+  const { cli, dir } = stageBundle(bin);
+  const ID1 = 'toolu_mt_1', ID2 = 'toolu_mt_2';
+  const A = MARK + '-A', B = MARK + '-B';
+  const mock = await startMockAnthropic({
+    respond: (body) => body.includes(ID2) ? cannedSSE('MULTIDONE')
+      : body.includes(ID1) ? cannedToolUseSSE('Bash', { command: `echo ${B}` }, ID2)
+        : cannedToolUseSSE('Bash', { command: `echo ${A}` }, ID1),
+  });
+  try {
+    const r = await bootP(cli, dir, ['-p', 'run two commands', '--allowedTools', 'Bash'], mockEnv(dir, mock.url), 120000);
+    assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
+    assert.match(r.stdout, /MULTIDONE/, `did not reach the final turn:\n${r.stdout}`);
+    const fu1 = followUpFor(mock, ID1), fu2 = followUpFor(mock, ID2);
+    assert.ok(fu1 && fu1.body.includes(A), 'turn-1 tool_result missing echo A');
+    assert.ok(fu2 && fu2.body.includes(B), 'turn-2 tool_result missing echo B');
+  } finally { await mock.close(); }
+});
+
 // H4 — a PreToolUse(Bash) hook fires under quaude and denies (dogfood: the
 // update-guard). Exercises settings loading (--settings), hook matching, hook
 // COMMAND spawn (a child process reading the hook-input JSON), and the deny

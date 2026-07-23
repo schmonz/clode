@@ -113,7 +113,7 @@ Each row: `| id | action | expected | axes | test |`
 
 | id | action | expected | axes | test |
 |---|---|---|---|---|
-| H1 | ? a 3-4 turn conversation stays coherent (context, tool results, edits) | conversation stays coherent | - | NEW |
+| H1 | → a multi-turn conversation stays coherent (context, tool results across turns) | conversation stays coherent | - | test/fidelity/agentic-tools.test.cjs |
 | H2 | ? slash commands parse and run (`/model`, `/doctor`, `/clear`, `/resume`) | slash commands run correctly | - | NEW |
 | H3 | ? `--continue` / `--resume` restore a prior session | session restores | - | NEW |
 | H4 | → a PreToolUse hook fires (dogfood: the `claude update` guard denies) | hook fires and denies | - | test/fidelity/agentic-tools.test.cjs |
