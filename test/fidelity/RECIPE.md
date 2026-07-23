@@ -67,6 +67,7 @@ Each row: `| id | action | expected | axes | test |`
 | C3 | ? read a large file (large Read output through the shim) | large file read correctly | platform | NEW |
 | C4 | ? binary / non-UTF-8 content (Buffer vs Uint8Array read class) | binary content round-trips correctly | platform | NEW |
 | C5 | → fs truncate (truncateSync / promises.truncate / FileHandle.truncate) matches node | truncate shrinks/extends like node (bundle uses it for output files + file edits) | - | test/node-shim-truncate.test.cjs |
+| C6 | → fs streaming layer (createReadStream / createWriteStream) + cpSync + realpathSync.native match node | readline-over-createReadStream (NDJSON scans) works; stream write round-trips; recursive copy | - | test/node-shim-fs-streams.test.cjs |
 
 ## D. Process control (quit / signals / TTY)
 

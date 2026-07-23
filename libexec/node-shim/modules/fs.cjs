@@ -384,6 +384,78 @@ function readdirCore(p, opts) {
   return out;
 }
 
+// fs.createReadStream: a Readable that streams a file's bytes (chunked). The
+// bundle drives readline.createInterface({input: fs.createReadStream(file)}) over
+// this for NDJSON/transcript line-scans (19 sites), plus direct data/end
+// consumers. Read via tjs.readFile then push into the shim's stream.Readable in a
+// microtask, so listeners attach before the first chunk. Honors {encoding,start,end}.
+function createReadStream(p, opts) {
+  const stream = require('node:stream');
+  const o = typeof opts === 'string' ? { encoding: opts } : (opts || {});
+  const start = typeof o.start === 'number' ? o.start : 0;
+  const hasEnd = typeof o.end === 'number';
+  const r = new stream.Readable({ read() {} });
+  r.path = p;
+  r.close = r.destroy;
+  if (o.encoding) r.setEncoding(o.encoding);
+  queueMicrotask(async () => {
+    try {
+      let data = await tjs.readFile(p);
+      if (start || hasEnd) data = data.subarray(start, hasEnd ? o.end + 1 : data.length);
+      const CH = 65536;
+      for (let i = 0; i < data.length; i += CH) r.push(data.subarray(i, Math.min(i + CH, data.length)));
+      r.push(null);
+    } catch (e) { r.emit('error', e); }
+  });
+  return r;
+}
+
+// fs.createWriteStream: a Writable that overwrites ('w') or appends ('a') a file
+// (17 sites). {mode} sets the file mode, {start} positions writes. Writes route
+// through the sync core (writeAll); the fd is closed on 'finish'/'close'.
+function createWriteStream(p, opts) {
+  const stream = require('node:stream');
+  const o = typeof opts === 'string' ? { encoding: opts } : (opts || {});
+  const fd = FSS.open(p, flagsToString(o.flags || 'w'));
+  if (typeof o.mode === 'number') chmodBestEffort(p, o.mode);
+  let pos = typeof o.start === 'number' ? o.start : null;
+  const w = new stream.Writable({
+    write(chunk, enc, cb) {
+      try {
+        const bytes = typeof chunk === 'string' ? encodeStr(chunk, typeof enc === 'string' ? enc : o.encoding) : chunk;
+        writeAll(fd, bytes, pos);
+        if (pos !== null) pos += bytes.length;
+        cb();
+      } catch (e) { cb(e); }
+    },
+  });
+  w.path = p;
+  let closed = false;
+  const closeFd = () => { if (!closed) { closed = true; try { FSS.close(fd); } catch (_) { /* already closed */ } } };
+  w.on('finish', closeFd);
+  w.on('close', closeFd);
+  return w;
+}
+
+// fs.cpSync: recursive copy (dir/file/symlink), mirroring promises.rm's recursion.
+function cpSync(src, dest, opts = {}) {
+  const st = lstatSync(src);
+  if (st.isSymbolicLink && st.isSymbolicLink()) { FSS.symlink(FSS.readlink(src), dest); return; }
+  if (st.isDirectory()) {
+    mkdirSync(dest, { recursive: true });
+    for (const n of FSS.readdir(src)) cpSync(path.join(src, n), path.join(dest, n), opts);
+    return;
+  }
+  writeFileSync(dest, readFileSync(src));
+}
+
+// fs.utimesSync: the sync-fs patch exposes no sync utime; tjs.utime is async.
+// Best-effort — fire the async utime (the bundle stamps files it just wrote,
+// where a slightly-deferred mtime is observably fine) rather than throw.
+function utimesSync(p, atime, mtime) {
+  try { const r = tjs.utime(p, timeToMs(atime), timeToMs(mtime)); if (r && r.catch) r.catch(() => {}); } catch (_) { /* best-effort */ }
+}
+
 const fsMod = {
   constants,
   readFileSync, writeFileSync, mkdirSync, readSync,
@@ -391,6 +463,10 @@ const fsMod = {
   fstatSync: (fd) => new Stats(FSS.fstat(fd)),
   existsSync: (p) => { try { FSS.stat(p); return true; } catch { return false; } },
   realpathSync: (p) => FSS.realpath(p),
+  createReadStream,
+  createWriteStream,
+  cpSync,
+  utimesSync,
   readlinkSync: (p) => FSS.readlink(p),
   readdirSync: (p, opts) => readdirCore(p, opts),
   opendirSync: (p) => {
@@ -555,6 +631,9 @@ const promises = {
     return FSS.unlink(p);
   },
 };
+// realpathSync.native (4 sites) — same resolution as realpathSync here.
+fsMod.realpathSync.native = fsMod.realpathSync;
+promises.cp = async (src, dest, opts) => cpSync(src, dest, opts);
 fsMod.promises = promises;
 
 // Node's callback fs APIs take an optional options arg before the callback; the

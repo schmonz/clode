@@ -62,7 +62,12 @@ class Readable extends EventEmitter {
       queueMicrotask(() => this.emit('end'));
       return false;
     }
-    const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+    // Node's push accepts Buffer/Uint8Array/string. A raw Uint8Array (e.g.
+    // fs.createReadStream pushing tjs.readFile bytes) must be treated as BYTES,
+    // not String()'d into "104,101,..." — wrap it as a zero-copy Buffer view.
+    const b = Buffer.isBuffer(chunk) ? chunk
+      : (chunk instanceof Uint8Array ? Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+        : Buffer.from(String(chunk)));
     const out = this._decoder ? this._decoder.write(b) : b;
     if (out === '') return true; // decoder buffered a partial multibyte sequence
     queueMicrotask(() => this.emit('data', out));
@@ -138,7 +143,9 @@ class Writable extends EventEmitter {
     return this;
   }
   write(chunk, enc, cb) {
-    const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+    const b = Buffer.isBuffer(chunk) ? chunk
+      : (chunk instanceof Uint8Array ? Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+        : Buffer.from(String(chunk)));
     if (typeof enc === 'function') { cb = enc; enc = undefined; }
     this._write(b, enc, (err) => { if (err) this.emit('error', err); if (cb) cb(err); });
     return true;
