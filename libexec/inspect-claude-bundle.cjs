@@ -123,6 +123,17 @@ function nativeAutoupdaterHookAnchorPresent(data) {
   return [...data.matchAll(_NATIVE_AUTOUPDATER_ANCHOR)].length === 1 || data.includes(_NATIVE_AUTOUPDATER_PATCHED);
 }
 
+// Remote Control gate-off (extract-claude-js patchRemoteControlUnavailable) needs
+// the cBo api.anthropic.com reason exactly once. Already-patched bundles carry the
+// injected guard, so accept that marker too (mirrors the autoupdater checks).
+const _REMOTE_CONTROL_ANCHOR =
+  /if\(!?[A-Za-z0-9_$]{1,8}\(\)\)return"Remote Control is only available when using Claude via api\.anthropic\.com\."/g;
+const _REMOTE_CONTROL_PATCHED = 'globalThis.__clodeWsUnavailable)return"';
+function remoteControlHookAnchorPresent(data) {
+  return [...data.matchAll(_REMOTE_CONTROL_ANCHOR)].length === 1
+    || data.includes(_REMOTE_CONTROL_PATCHED);
+}
+
 const APPLET_VERSION = {
   ugrep: /\bugrep (\d+\.\d+\.\d+)/,
   bfs: /\bbfs (\d+\.\d+(?:\.\d+)?)/,
@@ -290,6 +301,7 @@ function inspect(p) {
     doctor_hook_anchor_present: doctorHookAnchorPresent(data),
     autoupdater_hook_anchor_present: autoupdaterHookAnchorPresent(data),
     native_autoupdater_hook_anchor_present: nativeAutoupdaterHookAnchorPresent(data),
+    remote_control_hook_anchor_present: remoteControlHookAnchorPresent(data),
     snapshot_generator_present: snapshotGeneratorPresent(data),
     ripgrep_lever_present: ripgrepLeverPresent(data),
   };
@@ -369,6 +381,9 @@ function gateProblems(cov) {
   if (!getDefault(cov, 'native_autoupdater_hook_anchor_present', true)) {
     p.push('in-TUI native autoupdater anchor missing/ambiguous (clode --clode-internal-update redirect would not apply)');
   }
+  if (!getDefault(cov, 'remote_control_hook_anchor_present', true)) {
+    p.push('Remote Control cBo reason anchor missing/ambiguous (quaude gate-off notice would not apply -> silent no-op)');
+  }
   if (!getDefault(cov, 'snapshot_generator_present', true)) {
     p.push('snapshot-generator anchor missing/ambiguous (eager-snapshot bridge would not apply)');
   }
@@ -414,6 +429,7 @@ function coverage(r, shim) {
     doctor_hook_anchor_present: getDefault(r, 'doctor_hook_anchor_present', true),
     autoupdater_hook_anchor_present: getDefault(r, 'autoupdater_hook_anchor_present', true),
     native_autoupdater_hook_anchor_present: getDefault(r, 'native_autoupdater_hook_anchor_present', true),
+    remote_control_hook_anchor_present: getDefault(r, 'remote_control_hook_anchor_present', true),
   };
 }
 
@@ -610,7 +626,7 @@ module.exports = {
   ACCEPTED_MISSING_EXTERNALS, ACCEPTED_STUBBED_BUN, ACCEPTED_MISSING_BUN, ACCEPTED_BUN_MODULES,
   count, countSubstr, searchApplets, unknownSearchApplets, ripgrepLeverPresent,
   doctorHookAnchorPresent, snapshotGeneratorPresent, autoupdaterHookAnchorPresent,
-  nativeAutoupdaterHookAnchorPresent,
+  nativeAutoupdaterHookAnchorPresent, remoteControlHookAnchorPresent,
   embeddedAppletVersions, hostAppletVersion, which, featureForAsset,
   inspect, probeShim, gateProblems, coverage,
   humanSurface, humanApplets, humanCoverage,

@@ -146,6 +146,18 @@ test('native autoupdater anchor present and absent', () => {
   assert.strictEqual(ins.nativeAutoupdaterHookAnchorPresent('no native autoupdater'), false);
 });
 
+test('remoteControlHookAnchorPresent: true on the real cBo reason, false when absent/ambiguous', () => {
+  const one = 'if(!K8e())return"Remote Control is only available when using Claude via api.anthropic.com.";';
+  assert.strictEqual(ins.remoteControlHookAnchorPresent(one), true);
+  assert.strictEqual(ins.remoteControlHookAnchorPresent('nothing'), false);
+  assert.strictEqual(ins.remoteControlHookAnchorPresent(one + one), false);
+  // already-patched bundles still count as present
+  assert.strictEqual(
+    ins.remoteControlHookAnchorPresent('if(globalThis.__clodeWsUnavailable)return"x";' + one),
+    true,
+  );
+});
+
 test('gate_problems flags missing native autoupdater anchor', () => {
   const cov = {
     stubbed: [], missing: [], bun_modules_unhandled: [], modules_missing: [],
