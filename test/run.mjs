@@ -78,10 +78,24 @@ if (guard.preflight(REAL_STORE).length) {
 }
 const before = guard.snapshot(GUARD_WATCH);
 
-// Run the node tests: discover test/*.test.cjs (no shell glob) and run under THIS node.
+// Run the node tests: discover test/**/*.test.cjs (no shell glob) and run under THIS
+// node. Recurses into subdirectories so test/fidelity/ is GATED like everything else —
+// it was silently unreachable while the RECIPE audit reported its rows as guarded,
+// which is precisely the "we ship it, so CI gates it" rule being violated in the dark.
 // Exclude dotfiles (leading '.') to match the POSIX glob's default — e.g. gitignored
-// AppleDouble `._*.test.cjs` sidecars must NOT be picked up as test modules.
-const files = fs.readdirSync('test').filter((f) => f.endsWith('.test.cjs') && !f.startsWith('.')).map((f) => path.join('test', f));
+// AppleDouble `._*.test.cjs` sidecars must NOT be picked up as test modules — and
+// dot-directories (test/.harness) for the same reason.
+function discoverTests(dir) {
+  const out = [];
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (e.name.startsWith('.')) continue;
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) { if (e.name !== 'node_modules') out.push(...discoverTests(p)); }
+    else if (e.name.endsWith('.test.cjs')) out.push(p);
+  }
+  return out;
+}
+const files = discoverTests('test').sort();
 const res = spawnSync(process.execPath, ['--test', ...files], { stdio: 'inherit' });
 let fails = res.status === 0 ? 0 : 1;
 
