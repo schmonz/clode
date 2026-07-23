@@ -6,7 +6,7 @@ const path = require('node:path');
 export function auditRows(text, exists = (p) => fs.existsSync(p)) {
   const guarded = [], gaps = [];
   for (const line of text.split('\n')) {
-    const m = line.match(/^\|\s*([A-I]\d+)\s*\|(.*)$/);
+    const m = line.match(/^\|\s*([A-Z]\d+)\s*\|(.*)$/);
     if (!m) continue;
     const cells = m[2].split('|').map((c) => c.trim());
     const [action, , , testRef] = cells;      // action, expected, axes, test

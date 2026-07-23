@@ -17,5 +17,5 @@ test('runRow localizes a quaude-only divergence to the engine/shim', async () =>
   const fakeRun = (bin) => Promise.resolve({ status: bin === '/q' ? 1 : 0, signal: null, stdout: '', stderr: '', files: [] });
   const r = await runRow({ id: 'X2', args: [] }, { claude: '/c', naude: '/n', quaude: '/q' }, { run: fakeRun });
   assert.match(r.verdict, /diverge/);
-  assert.match(r.verdict, /engine|shim|quaude/);
+  assert.match(r.verdict, /engine\/shim/);
 });
