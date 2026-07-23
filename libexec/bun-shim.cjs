@@ -673,10 +673,11 @@ BunWebSocket.CONNECTING = 0; BunWebSocket.OPEN = 1; BunWebSocket.CLOSING = 2; Bu
 globalThis.WebSocket = BunWebSocket;
 
 // Single source of truth for "this engine has no working WebSocket transport":
-// true under tjs (the node-shim loader can't load `ws` — see the adapter above),
-// false the moment a future engine can load a real `ws`. The extract-time
-// remote-control patch (extract-claude-js.cjs) reads this to gate WebSocket
-// features off with an honest notice instead of a swallowed async crash.
+// false whenever a real transport resolved (npm `ws` on Node hosts, or the
+// engine's native WebSocket under tjs); true only where neither exists.
+// The extract-time remote-control patch (extract-claude-js.cjs) reads this
+// to gate WebSocket features off with an honest notice instead of a
+// swallowed async crash.
 globalThis.__clodeWsUnavailable = !_wsTransportAvailable();
 
 // A ws-shaped module for the TJS BRING-UP PATH ONLY, when the real `ws` isn't

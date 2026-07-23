@@ -216,7 +216,7 @@ test('strict-mode sweep: agentic Bash mock oracle against the fused quaude', asy
 // the known fidelity risks between the native tjs WS and what the Bun/ws
 // bundle expects: `binaryType` (nodebuffer vs arraybuffer), close/`onerror`
 // event shapes, and permessage-deflate.
-test('quaude remote-control: transport wired, no swallowed crash, no unavailable notice', async (t) => {
+test('quaude remote-control: no swallowed crash, Phase-1 unavailable notice gone', async (t) => {
   if (SKIP) { t.skip(SKIP); return; }
   const r = await runQuaude(['remote-control'], cleanEnv(), 30000);
   const out = (r.stdout || '') + (r.stderr || '');
