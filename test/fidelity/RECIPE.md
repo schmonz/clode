@@ -99,6 +99,7 @@ Each row: `| id | action | expected | axes | test |`
 | F3 | ? OPEN: stale frames — a finished `/login`/`/doctor` lingers; repaint does not erase prior lines | repaint erases prior lines | - | NEW |
 | F4 | ? OPEN: trust-prompt freeze under iTerm2 — keystrokes reach the read pump but the input handler does not advance the prompt | trust prompt advances on keystroke | platform: iTerm2 | NEW |
 | F5 | ? wide / emoji / combining chars; bracketed paste; scrollback | renders correctly | - | NEW |
+| F6 | → initial TUI render (welcome box + prompt + wide/unicode banner glyphs) matches native Claude Code, no corruption (PTY differential) | quaude paint == native | platform | test/fidelity/interactive-render-diff.test.cjs |
 
 ## G. Network / fetch / auth
 
