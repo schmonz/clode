@@ -175,6 +175,15 @@ test('gate_problems flags missing doctor anchor', () => {
   assert.ok(ins.gateProblems(cov).some((p) => p.includes('/doctor')));
 });
 
+test('gate_problems flags missing remote control anchor', () => {
+  const cov = {
+    stubbed: [], missing: [], bun_modules_unhandled: [], modules_missing: [],
+    search_applets_unknown: [], ripgrep_lever_present: true,
+    remote_control_hook_anchor_present: false,
+  };
+  assert.ok(ins.gateProblems(cov).some((p) => p.includes('Remote Control')));
+});
+
 test('gate_problems includes unknown applet', () => {
   const cov = {
     stubbed: [], missing: [], bun_modules_unhandled: [], modules_missing: [],

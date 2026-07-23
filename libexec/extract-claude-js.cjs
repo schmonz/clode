@@ -214,10 +214,9 @@ function patchSnapshotBridge(body) {
 
 // --- Remote Control honest gate-off under quaude -----------------------------
 // Remote Control opens a `ws`/WebSocket bridge. Under tjs the ws stack can't load
-// (a bundled module does `util.inherits(X, require('stream'))`, and the shim's
-// node:stream is a plain object with no .prototype -> setPrototypeOf TypeError,
-// thrown async and swallowed by the node-shim unhandledRejection handler -> the
-// feature silently no-ops). The bundle already has a graceful path: cBo() returns
+// (the tjs runtime lacks the WebSocket transport `ws` module). An earlier
+// node:stream .prototype TypeError is now fixed at the root, leaving `ws`
+// absence as the only reason this gate persists). The bundle already has a graceful path: cBo() returns
 // a reason string, Vei() renders it and never enables the bridge. We make cBo()
 // return a quaude-specific reason when globalThis.__clodeWsUnavailable is set
 // (bun-shim.cjs), so the crashing module never loads and the session survives.
