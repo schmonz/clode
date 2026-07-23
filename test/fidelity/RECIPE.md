@@ -83,7 +83,7 @@ Each row: `| id | action | expected | axes | test |`
 | id | action | expected | axes | test |
 |---|---|---|---|---|
 | E1 | → spawn a child that fails to launch (no UAF/SIGSEGV) | clean failure, no crash | platform | test/node-shim-child-process.test.cjs |
-| E2 | ? no fd leak into sync children (CLOEXEC) | no fd leak | platform | test/node-shim-cloexec.test.cjs |
+| E2 | → no fd leak into sync children (CLOEXEC) | no fd leak | platform | test/node-shim-cloexec.test.cjs |
 | E3 | ? a long-running / backgrounded Bash command; pipes between commands | backgrounding and pipes work | platform | NEW |
 | E4 | ? `detached` semantics (dropped `opts.detached` — latent; the login opener) | detached semantics honored | - | NEW |
 

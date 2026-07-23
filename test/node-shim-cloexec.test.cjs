@@ -45,29 +45,16 @@ const BODY = `
     leaked: (r.stdout || '').includes('OPENED'),
   }));`;
 
-// FAILS: reproduced live (2026-07-23) two independent ways against the
-// currently-available build/tjs/tjs (x86_64 mach-o, dated 2026-07-18) — both
-// through this JS-level oracle AND by calling globalThis.__tjs_spawn_sync
-// directly (bypassing the node-shim fs/child_process layer entirely, so this
-// is not a shim-JS bug): a parent fd opened before spawnSync IS visible in
-// the child (`exec 3<&FD` succeeds and reads the file's real content),
-// where host node correctly errors (Bad file descriptor). The mod_spawn_sync.c
-// source (spike/quickjs/vendor/txiki.js/src/mod_spawn_sync.c) reads as
-// correct — it sets POSIX_SPAWN_CLOEXEC_DEFAULT via posix_spawnattr, and a
-// standalone C repro of that exact mechanism on this same box DOES prevent
-// the leak — so the fix logic itself is sound in isolation. Most likely
-// explanation: build/tjs/tjs predates a full recompile that actually picked
-// up mod_spawn_sync.c's fix (the vendor checkout shows patched source dated
-// 2026-07-12, before the binary's 2026-07-18 mtime, but recompilation was
-// not independently confirmed — `nm -u` shows posix_spawnattr_setflags
-// imported, but libuv's OWN async uv_spawn also calls that API, so its
-// presence doesn't disambiguate which call site was actually compiled).
-// NEXT STEP for systematic-debugging: rebuild tjs clean from the current
-// vendor checkout (a fresh `node scripts/build-tjs.mjs --build-only` with a
-// scratch CLODE_TJS_OUT, NOT overwriting the shared build/tjs/tjs — this repo
-// is a shared working tree) and re-run this test against that binary before
-// assuming a code-level regression.
-test.skip('a parent-opened fd does not leak into a sync-spawned child (CLOEXEC), matching node', (t) => {
+// RESOLVED (2026-07-23): this initially FAILED against the then-current
+// build/tjs/tjs (dated 2026-07-18), which leaked the parent fd. Root cause was
+// NOT a code regression — the mod_spawn_sync.c fix (7b36cf5, in-source since
+// 2026-07-12: POSIX_SPAWN_CLOEXEC_DEFAULT via posix_spawnattr) was correct all
+// along. The Jul-18 binary was a STALE INCREMENTAL BUILD: the object cache
+// carried a pre-patch mod_spawn_sync.o that was never recompiled. A clean
+// rebuild (`node scripts/build-tjs.mjs --build-only` after clearing the vendor
+// build/ object cache) produced a native-arm64 tjs that no longer leaks —
+// quaude now matches node (leaked:false). This test is now active and locks it.
+test('a parent-opened fd does not leak into a sync-spawned child (CLOEXEC), matching node', (t) => {
   if (skipUnlessTjs(t)) return;
   const f = prog(BODY);
   const node = JSON.parse(execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
