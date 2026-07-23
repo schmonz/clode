@@ -149,3 +149,21 @@ test('DOCTOR_LOAD patch retired: no patchDoctorEager export, no load-site rewrit
   const [out] = ex.patchSnapshotBridge(load);
   assert.strictEqual(out, load);
 });
+
+// --- Remote Control honest gate-off --------------------------------------------
+
+test('patchRemoteControlUnavailable injects the wsUnavailable guard before the api.anthropic.com reason', () => {
+  const [out, applied] = ex.patchRemoteControlUnavailable(read('cbo-remote-control-2.1.218.js'));
+  assert.strictEqual(applied, true);
+  // guard is injected as its own statement, immediately before the anchored reason
+  assert.match(
+    out,
+    /if\(globalThis\.__clodeWsUnavailable\)return"Remote Control isn\\u2019t available in quaude yet \\u2014 its engine has no WebSocket transport\.";if\(!K8e\(\)\)return"Remote Control is only available when using Claude via api\.anthropic\.com\."/,
+  );
+});
+
+test('patchRemoteControlUnavailable refuses ambiguous or absent anchors', () => {
+  assert.strictEqual(ex.patchRemoteControlUnavailable('nothing to see')[1], false);
+  const one = 'if(!K8e())return"Remote Control is only available when using Claude via api.anthropic.com.";';
+  assert.strictEqual(ex.patchRemoteControlUnavailable(one + one)[1], false);
+});

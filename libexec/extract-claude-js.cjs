@@ -212,6 +212,34 @@ function patchSnapshotBridge(body) {
   return [body.slice(0, gEnd) + expose + body.slice(gEnd), true];
 }
 
+// --- Remote Control honest gate-off under quaude -----------------------------
+// Remote Control opens a `ws`/WebSocket bridge. Under tjs the ws stack can't load
+// (a bundled module does `util.inherits(X, require('stream'))`, and the shim's
+// node:stream is a plain object with no .prototype -> setPrototypeOf TypeError,
+// thrown async and swallowed by the node-shim unhandledRejection handler -> the
+// feature silently no-ops). The bundle already has a graceful path: cBo() returns
+// a reason string, Vei() renders it and never enables the bridge. We make cBo()
+// return a quaude-specific reason when globalThis.__clodeWsUnavailable is set
+// (bun-shim.cjs), so the crashing module never loads and the session survives.
+//
+// Anchor: the stable, unminified English literal below (the api.anthropic.com
+// reason), preceded by its own `if(<minified>())` guard. We splice our statement
+// in front of that guard so it runs before every other cBo check (lBo, the first
+// check, only ever returns null). Same exactly-once + fail-loud contract as the
+// other patches; the strict gate lives in inspect-claude-bundle.cjs.
+const RC_NOTICE =
+  'Remote Control isn\\u2019t available in quaude yet \\u2014 its engine has no WebSocket transport.';
+const REMOTE_CONTROL_ANCHOR =
+  /if\(!?[A-Za-z0-9_$]{1,8}\(\)\)return"Remote Control is only available when using Claude via api\.anthropic\.com\."/g;
+
+function patchRemoteControlUnavailable(body) {
+  const m = [...body.matchAll(REMOTE_CONTROL_ANCHOR)];
+  if (m.length !== 1) return [body, false];
+  const inject = 'if(globalThis.__clodeWsUnavailable)return"' + RC_NOTICE + '";';
+  const cut = m[0].index;
+  return [body.slice(0, cut) + inject + body.slice(cut), true];
+}
+
 // --- pkg-manager autoupdater redirect ----------------------------------------
 // Claude Code's in-TUI autoupdater (the pkg-manager path) spawns an npm/install
 // command to fetch a new version, then shows "Update installed · Restart to apply".
@@ -323,6 +351,14 @@ function transform(body) {
       + 'not found exactly once (Claude version drift?). `clode fetch` still '
       + 'works; run inspect-claude-bundle --strict.\n');
   }
+  let rc;
+  [body, rc] = patchRemoteControlUnavailable(body);
+  if (!rc) {
+    process.stderr.write(
+      'clode: Remote Control gate-off hook NOT applied — cBo api.anthropic.com '
+      + 'reason anchor not found exactly once (Claude version drift?). Remote Control '
+      + 'may silently no-op under quaude; run inspect-claude-bundle --strict.\n');
+  }
   return PRELUDE + body + '\n';
 }
 
@@ -395,6 +431,7 @@ module.exports = {
   patchSnapshotBridge,
   patchAutoupdater,
   patchNativeAutoupdater,
+  patchRemoteControlUnavailable,
   transform,
   verify,
   contentChecks,

@@ -1,0 +1,1 @@
+async function cBo(){if(lBo())return null;if(!K8e())return"Remote Control is only available when using Claude via api.anthropic.com.";if(xq())return"Remote Control is not available inside a cloud session.";if(I2t())return"Remote Control is disabled by your organization's policy (managed setting `disableRemoteControl`).";return null}
