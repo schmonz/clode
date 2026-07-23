@@ -20,11 +20,13 @@ function isoDir() {
 }
 // Run `node -e '<prelude requiring the isolated shim as Bun>; <body>'`. env overrides
 // (e.g. NODE_PATH for fake-dep cases) merge over a base with NODE_PATH cleared.
-function runShimChild(body, env = {}) {
+// `preamble`, if given, runs BEFORE the shim is required (e.g. to inject a fake
+// native WebSocket + fake `tjs` global) — backward-compatible with 1- and 2-arg calls.
+function runShimChild(body, env = {}, preamble = '') {
   const dir = isoDir();
   const shim = path.join(dir, 'bun-shim.cjs');
   return spawnSync(process.execPath,
-    ['-e', `const Bun=require(${JSON.stringify(shim)});\n${body}`],
+    ['-e', `${preamble ? preamble + '\n' : ''}const Bun=require(${JSON.stringify(shim)});\n${body}`],
     { encoding: 'utf8', cwd: dir, env: { ...process.env, NODE_PATH: '', ...env } });
 }
 module.exports = { isoDir, runShimChild, shimPath: () => path.join(isoDir(), 'bun-shim.cjs') };

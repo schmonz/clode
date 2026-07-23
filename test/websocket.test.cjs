@@ -63,3 +63,24 @@ test('__clodeWsUnavailable is true in an isolated shim child (no ws)', () => {
   assert.strictEqual(r.status, 0, 'reading the flag must not exit the process');
   assert.match(r.stdout, /WSFLAG=true/);
 });
+
+test('under tjs with no npm ws, BunWebSocket delegates to the native WS with {headers, protocols} and flips the flag', () => {
+  const preamble = `
+    globalThis.tjs = globalThis.tjs || {};                 // make UNDER_TJS true
+    globalThis.__captured = null;
+    globalThis.WebSocket = function FakeNative(url, opts){ globalThis.__captured = { url, opts }; };
+  `;
+  const body = `
+    // the shim has now overridden globalThis.WebSocket with BunWebSocket, capturing FakeNative
+    new globalThis.WebSocket('wss://bridge.example', { protocols: ['mcp'], headers: { Authorization: 'Bearer T' } });
+    const c = globalThis.__captured;
+    const ok = !!(c && c.url === 'wss://bridge.example'
+      && c.opts && c.opts.headers && c.opts.headers.Authorization === 'Bearer T'
+      && Array.isArray(c.opts.protocols) && c.opts.protocols[0] === 'mcp');
+    console.log('DELEGATED=' + ok);
+    console.log('FLAG=' + globalThis.__clodeWsUnavailable);
+  `;
+  const r = runShimChild(body, {}, preamble);
+  assert.match(r.stdout, /DELEGATED=true/, r.stdout + r.stderr);
+  assert.match(r.stdout, /FLAG=false/, r.stdout + r.stderr);
+});

@@ -616,6 +616,25 @@ BUN_BUILTINS['bun:sqlite'] = (() => {
 // host-provided deps generally. ---
 let _ws; try { _ws = require('ws'); } catch (_) {}
 const _realWS = () => _ws && (_ws.WebSocket || _ws.default || _ws);
+// Capture the engine's native WebSocket BEFORE the override below. Under tjs this
+// is txiki's libwebsockets-backed WS, which (unlike Node's undici WS) accepts a
+// { headers } option — the bridge's Bearer auth, the reason we wanted npm `ws`.
+// Detect the engine once so BunWebSocket and the capability flag agree.
+const UNDER_TJS = typeof globalThis.tjs !== 'undefined' || !!globalThis.__tjs_fs_sync;
+const _nativeWS = globalThis.WebSocket;
+// A usable transport: npm ws (any host), or — under tjs — the header-capable native WS.
+const _wsTransportAvailable = () => !!_realWS() || (UNDER_TJS && typeof _nativeWS === 'function');
+// Translate Bun's { protocols, headers, ... } to the native WS 2nd-arg options object.
+function _nativeWsOptions(opts){
+  if (opts && typeof opts === 'object' && !Array.isArray(opts)) {
+    const o = {};
+    if (opts.headers) o.headers = opts.headers;
+    if (opts.protocols) o.protocols = opts.protocols;
+    return o;
+  }
+  if (opts !== undefined) return { protocols: opts };   // WHATWG form: 2nd arg is protocols
+  return undefined;
+}
 const WS_MISSING =
   "clode: WebSocket features (Remote Control, MCP-over-WebSocket) need the npm 'ws' " +
   "package, which isn't installed.\n" +
@@ -640,13 +659,17 @@ function _wsArgs(url, opts){
 }
 function BunWebSocket(url, opts){
   const WS = _realWS();
-  if (!WS) _wsFatal();
-  const [u, p, o] = _wsArgs(url, opts);
-  return new WS(u, p, o);                         // ws instance: addEventListener/send/close/binaryType
+  if (WS) { const [u, p, o] = _wsArgs(url, opts); return new WS(u, p, o); }   // npm ws (Node hosts)
+  if (UNDER_TJS && typeof _nativeWS === 'function') {                          // native tjs WS (header-capable)
+    return new _nativeWS(url, _nativeWsOptions(opts));
+  }
+  _wsFatal();                                                                  // Node without ws, or no native WS
 }
 BunWebSocket.CONNECTING = 0; BunWebSocket.OPEN = 1; BunWebSocket.CLOSING = 2; BunWebSocket.CLOSED = 3;
 // Override the global so the bundle's `new globalThis.WebSocket(url,{headers})`
 // sites get header support; Node's native one would silently drop the auth header.
+// Under tjs, BunWebSocket now delegates to the captured native WS (_nativeWS), which
+// IS header-capable — see _nativeWsOptions above.
 globalThis.WebSocket = BunWebSocket;
 
 // Single source of truth for "this engine has no working WebSocket transport":
@@ -654,7 +677,7 @@ globalThis.WebSocket = BunWebSocket;
 // false the moment a future engine can load a real `ws`. The extract-time
 // remote-control patch (extract-claude-js.cjs) reads this to gate WebSocket
 // features off with an honest notice instead of a swallowed async crash.
-globalThis.__clodeWsUnavailable = !_realWS();
+globalThis.__clodeWsUnavailable = !_wsTransportAvailable();
 
 // A ws-shaped module for the TJS BRING-UP PATH ONLY, when the real `ws` isn't
 // loadable: under the node-shim loader `ws` can't load at all yet (it needs a
@@ -667,7 +690,6 @@ globalThis.__clodeWsUnavailable = !_realWS();
 // bundle's render-gating promise and the TUI would hang blank. Fail-loud contract
 // locked by test/websocket.test.cjs; the tjs deferral by
 // test/node-shim-bunshim.test.cjs.
-const UNDER_TJS = typeof globalThis.tjs !== 'undefined' || !!globalThis.__tjs_fs_sync;
 function _wsServerFatal() { _wsFatal(); }
 const _wsLazyModule = Object.assign(BunWebSocket, {
   WebSocket: BunWebSocket,
