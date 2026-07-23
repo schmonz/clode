@@ -8,10 +8,15 @@ const hosttools = require('../../libexec/clode-hosttools.cjs');
 
 export function appletTempDir(config) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-applets-'));
+  // On Windows an extensionless stub is undiscoverable BY DESIGN: findTool honors
+  // PATHEXT, so it probes rg.COM/.EXE/.BAT/.CMD and never a bare `rg`. Give the
+  // stub a PATHEXT-carrying name and batch content there, a shebang script
+  // elsewhere — otherwise the applet axis silently "finds nothing" on Windows.
+  const win = process.platform === 'win32';
   for (const name of ['rg', 'ugrep', 'bfs']) {
     if (config[name]) {
-      const p = path.join(dir, name);
-      fs.writeFileSync(p, '#!/bin/sh\nexit 0\n');
+      const p = path.join(dir, win ? `${name}.cmd` : name);
+      fs.writeFileSync(p, win ? '@echo off\r\nexit /b 0\r\n' : '#!/bin/sh\nexit 0\n');
       fs.chmodSync(p, 0o755);
     }
   }
