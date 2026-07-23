@@ -117,7 +117,7 @@ Each row: `| id | action | expected | axes | test |`
 | H2 | ? slash commands parse and run (`/model`, `/doctor`, `/clear`, `/resume`) | slash commands run correctly | - | NEW |
 | H3 | ? `--continue` / `--resume` restore a prior session | session restores | - | NEW |
 | H4 | → a PreToolUse hook fires (dogfood: the `claude update` guard denies) | hook fires and denies | - | test/fidelity/agentic-tools.test.cjs |
-| H5 | ? an MCP server connects and a tool from it is callable | MCP tool callable | - | NEW |
+| H5 | → an MCP server connects over WebSocket and a tool from it is callable (Phase-2 native WS transport, end-to-end) | MCP tool callable over ws | - | test/fidelity/agentic-mcp-ws.test.cjs |
 | H6 | → subagent / Task dispatch is identical under naude and quaude (two-engine differential) | quaude Task result == naude | - | test/fidelity/agentic-subagent-diff.test.cjs |
 
 ## I. Update flows
