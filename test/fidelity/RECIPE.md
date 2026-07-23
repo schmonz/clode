@@ -121,8 +121,8 @@ Each row: `| id | action | expected | axes | test |`
 
 | id | action | expected | axes | test |
 |---|---|---|---|---|
-| I1 | self-update (rebuild callback) succeeds on all three | self-update succeeds | - | NEW |
-| I2 | the `claude update` guard denies a model-issued update on all three | update denied | - | NEW |
+| I1 | → self-update (rebuild callback) succeeds on all three | self-update succeeds | - | NEW |
+| I2 | → the `claude update` guard denies a model-issued update on all three | update denied | - | NEW |
 
 ## J. Remote Control / WebSocket
 
