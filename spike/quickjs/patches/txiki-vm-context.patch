@@ -1,9 +1,9 @@
 diff --git a/src/mod_vm.c b/src/mod_vm.c
 new file mode 100644
-index 0000000..30bfccf
+index 0000000..3899c83
 --- /dev/null
 +++ b/src/mod_vm.c
-@@ -0,0 +1,113 @@
+@@ -0,0 +1,132 @@
 +/* node:vm context isolation primitive for the node-shim. Exposed as the global
 + * `__tjs_vm`. quickjs-ng supports multiple JSContexts per JSRuntime — each with
 + * its OWN global object, sharing one heap — so a child context gives a workflow
@@ -99,9 +99,28 @@ index 0000000..30bfccf
 +    return rv;
 +}
 +
++/* getGlobal(wrapper, key) -> value: read `key` off the child context's global
++ * (live cross-context return). Used to mirror context-global writes back onto the
++ * sandbox object (Node's contextified-sandbox behavior). */
++static JSValue js_vm_get_global(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
++    (void)this_val; (void)argc;
++    JSContext *child = JS_GetOpaque2(ctx, argv[0], tjs_vm_ctx_class_id);
++    if (!child)
++        return JS_EXCEPTION;
++    const char *key = JS_ToCString(ctx, argv[1]);
++    if (!key)
++        return JS_EXCEPTION;
++    JSValue g = JS_GetGlobalObject(child);
++    JSValue v = JS_GetPropertyStr(child, g, key);
++    JS_FreeValue(child, g);
++    JS_FreeCString(ctx, key);
++    return v;
++}
++
 +static const JSCFunctionListEntry vm_funcs[] = {
 +    JS_CFUNC_DEF("create", 0, js_vm_create),
 +    JS_CFUNC_DEF("setGlobal", 3, js_vm_set_global),
++    JS_CFUNC_DEF("getGlobal", 2, js_vm_get_global),
 +    JS_CFUNC_DEF("run", 3, js_vm_run),
 +};
 +
