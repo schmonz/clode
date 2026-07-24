@@ -72,6 +72,7 @@ test('release tier: every published leg is present (golden)', () => {
     'midnightbsd-amd64',
     'netbsd-alpha', 'netbsd-amd64', 'netbsd-arm64', 'netbsd-earmv7hf',
     'netbsd-hppa', 'netbsd-m68k', 'netbsd-macppc', 'netbsd-pmax',
+    'netbsd-riscv64',
     'netbsd-sgimips', 'netbsd-sh3el', 'netbsd-sparc', 'netbsd-sparc64',
     'omnios-amd64', 'openbsd-amd64', 'openbsd-arm64',
     'openindiana-amd64',

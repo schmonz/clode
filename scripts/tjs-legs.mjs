@@ -489,13 +489,15 @@ const LEGS = [
     'cross-file': 'scripts/netbsd.toolchain.cmake',
     'atomic-shim': false, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
-    // REVIVED 2026-07-24 (ci:true, soft-fail): the wall was diagnosed and fixed.
-    // libuv failed to ASSEMBLE — uv__cpu_relax hand-encodes the RISC-V PAUSE as
-    // `.insn 0x0100000f`, a form the netbsd-10 riscv assembler predates; build-
-    // tjs's fixupLibuvRiscvCpuRelax emits the identical bytes via `.word`. Back on
-    // the CI on-ramp (ciOnly, publish:false) to confirm the fix builds; promote to
-    // publish once green. Cross-built + no-exec, so a green leg = it compiled.
-    publish: false, ci: true, ciOnly: true, 'soft-fail': true, timeout: 3600,
+    // SHIPPED 2026-07-24 (publish:true): revived and proven green (twice) after
+    // fixupLibuvRiscvCpuRelax — uv__cpu_relax hand-encoded the RISC-V PAUSE as
+    // `.insn 0x0100000f`, which the netbsd-10 riscv assembler predates; the fixup
+    // emits the identical bytes via `.word`. A deterministic cross-build (no flaky
+    // qemu), so it earns a hard release gate like earmv7hf. Ships as
+    // clode-<ver>-netbsd10.1-riscv64. soft-fail is stripped from publishers on the
+    // release tier (so the release requires it green); it stays soft on the CI
+    // on-ramp. no-exec: a green cross leg means it compiled + linked.
+    publish: true, ci: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // netbsd-mips64eb (MIPS64 BIG-endian): the sbmips port; 64-bit inlines atomics,
   // no shim. canonical-LE bytecode proof on a 3rd 64-bit-BE target.
