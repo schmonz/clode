@@ -120,6 +120,7 @@ Each row: `| id | action | expected | axes | test |`
 | H4 | → a PreToolUse hook fires (dogfood: the `claude update` guard denies) | hook fires and denies | - | test/fidelity/agentic-tools.test.cjs |
 | H5 | → an MCP server connects over WebSocket and a tool from it is callable (Phase-2 native WS transport, end-to-end) | MCP tool callable over ws | - | test/fidelity/agentic-mcp-ws.test.cjs |
 | H6 | → subagent / Task dispatch is identical under naude and quaude (two-engine differential) | quaude Task result == naude | - | test/fidelity/agentic-subagent-diff.test.cjs |
+| H7 | → a Workflow runs to COMPLETION under quaude (real vm context isolation — the Date.now/Math.random determinism guard stays in the child context) | wf_<id>.json status:completed, result ok, marker logged | - | test/fidelity/agentic-workflow-complete.test.cjs |
 
 ## I. Update flows
 

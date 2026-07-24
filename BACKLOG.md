@@ -229,6 +229,19 @@ well-tested, and reasonably fast** as we can possibly make it." Sequencing:
   subagents via `Agent`, `WebFetch`/`WebSearch`, background `Bash`, `Monitor`,
   and `AskUserQuestion` all pass under quaude); only `Workflow` fails.
 
+- **RESOLVED 2026-07-24 — `Workflow` COMPLETES under quaude (real vm context isolation).** The whole
+  chain is fixed: node:vm shim (`45d15bf`) + txiki no-abort (`221850f`) + REAL per-context global
+  isolation — `636c674`/`476dec7` add the `__tjs_vm` child-context primitive (`src/mod_vm.c`:
+  `JS_NewContext` gives each context its OWN global on the shared heap), `ac89685` rewrites
+  `modules/vm.cjs` off the `with`+eval fake sandbox onto it. Root cause was the engine's
+  `Date.now`/`Math.random` determinism guard: installed into the context's global, it clobbered the
+  engine's/txiki's SHARED global (no isolation → one global). A real child `JSContext` contains it.
+  PROVEN: `test/node-shim-vm-isolation.test.cjs` (a guard in one context leaves a second context + the
+  engine global intact, matching node) and `test/fidelity/agentic-workflow-complete.test.cjs` (a
+  `log()+return` workflow reaches `status:completed`, `result:{ok:true}`, marker logged, exit 0, 0
+  Date.now-guard hits). The txiki no-abort patch stays as orthogonal robustness. Investigation kept
+  below for the record.
+
 - **NEXT WALL after the node:vm fix — `Workflow` run SIGABRTs at txiki `tjs__execute_jobs`
   (discovered 2026-07-24, quaude-vmfix built with the vm shim).** With node:vm working, a
   workflow now runs PAST the loader (trace shows it reaching a `fetch` to the API) and then
