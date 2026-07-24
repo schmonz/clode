@@ -110,7 +110,12 @@ runs:
           "$NBMAKE" -C "$SRC/etc" distrib-dirs
           "$NBMAKE" -C "$SRC" includes
           for libdir in csu libc libm libpthread libutil; do
-            "$NBMAKE" -C "$SRC/lib/$libdir" -j "$J" dependall install
+            # `obj` FIRST: create the object directory so `dependall` builds into
+            # it and `install` finds the result. Without it, install ran before
+            # anything was built — "crt0.o: stat: No such file" in lib/csu (run
+            # 30076907416). `distribution` gets this from a tree-wide `make obj`;
+            # composing by hand, each lib needs its own obj target.
+            "$NBMAKE" -C "$SRC/lib/$libdir" -j "$J" obj dependall install
           done
           test -e "$DEST"/usr/lib/libc.* || { echo "light sysroot: no libc under $DEST/usr/lib" >&2; ls "$DEST/usr/lib" 2>/dev/null | head; exit 1; }
         else
