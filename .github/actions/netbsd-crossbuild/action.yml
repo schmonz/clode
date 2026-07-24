@@ -37,7 +37,7 @@ runs:
     # job) so the cache restore lands where the toolchain file expects them.
     - name: Restore the build.sh toolchain + sysroot
       id: nbcache
-      uses: actions/cache@v6
+      uses: actions/cache@v6.1.0
       with:
         path: |
           ${{ runner.temp }}/nbsd-tool

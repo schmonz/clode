@@ -4,13 +4,13 @@
   "private": true,
   "description": "Claude Code's runtime deps (the upstream Bun-packaged bundle's ext-dep closure) — buffer/node-fetch/semver/string-width/strip-ansi/wrap-ansi/ws/yaml, walked transitively by libexec/clode-fuse.cjs's computeDepClosure. NOT clode's own deps: clode (bin/clode, libexec/*.cjs, scripts/*.mjs) requires only node builtins, see test/clode-self-deps.test.cjs. These are what `clode build`/`clode build --naude` EMBED into the built quaude/naude so Claude Code can run inside it; they also feed the test harness's parity oracles (node-vs-tjs). Installed for real (deps/claude/node_modules is gitignored, NOT deps/clode's manifest-only treatment): these are pure JS, so one install serves quaude, naude, and the tests alike — unlike deps/clode's esbuild/postject, which are native per-platform binaries and must be installed per build-tag dir instead. node-fetch was ADDED by the dep-closure drift gate (seed-drift-report.md): the bundled `gaxios` HTTP client (Google Cloud auth transport for the CLAUDE_CODE_USE_VERTEX/CLAUDE_CODE_USE_BEDROCK backends) does `(await import(\"node-fetch\")).default` with no try/catch whenever `window` is undefined — i.e. always, under Node/tjs — so a Vertex/Bedrock session would have hit `Cannot find module 'node-fetch'` deep in a run with the old 7-package seed list.",
   "dependencies": {
-    "buffer": "^6.0.3",
-    "node-fetch": "^3",
-    "semver": "^7",
-    "string-width": "^8.0.0",
-    "strip-ansi": "^7",
-    "wrap-ansi": "^10.0.0",
-    "ws": "^8.21.0",
-    "yaml": "^2"
+    "buffer": "6.0.3",
+    "node-fetch": "3.3.2",
+    "semver": "7.8.5",
+    "string-width": "8.2.2",
+    "strip-ansi": "7.2.0",
+    "wrap-ansi": "10.0.0",
+    "ws": "8.21.1",
+    "yaml": "2.9.0"
   }
 }

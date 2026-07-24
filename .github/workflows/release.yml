@@ -78,12 +78,12 @@ jobs:
     continue-on-error: true
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
         with:
           node-version-file: .tool-versions
-      - uses: docker/setup-qemu-action@v4   # fix-binary binfmt: host node spawns s390x tjs
-      - uses: actions/download-artifact@v8
+      - uses: docker/setup-qemu-action@v4.2.0   # fix-binary binfmt: host node spawns s390x tjs
+      - uses: actions/download-artifact@v8.0.1
         with:
           name: tjs-linux-s390x-musl
           path: ${{ runner.temp }}/tjs-s390x
@@ -156,12 +156,12 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
         with:
           node-version-file: .tool-versions
       - name: Download the four darwin engine slices
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v8.0.1
         with:
           pattern: tjs-darwin-*
           path: ${{ runner.temp }}/slices
@@ -197,7 +197,7 @@ jobs:
           # them, one per slice.
           echo "asset=clode-$V-macos" >> "$GITHUB_OUTPUT"
       - name: Upload the bare fat engine (CI artifact)
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: tjs-darwin-universal
           path: ${{ steps.fat.outputs.fat }}
@@ -216,11 +216,11 @@ jobs:
       - name: Self-smoke the arm64 slice
         run: ./"${{ steps.name.outputs.asset }}" --version
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v4
+        uses: actions/attest-build-provenance@v4.1.1
         with:
           subject-path: ${{ steps.name.outputs.asset }}
       - name: Upload the universal builder (published)
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: ${{ steps.name.outputs.asset }}
           path: ${{ steps.name.outputs.asset }}
@@ -240,8 +240,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/download-artifact@v8.0.1
         with:
           pattern: clode-*          # published builders (smoke-* and tjs-* stay CI artifacts)
           path: dist
