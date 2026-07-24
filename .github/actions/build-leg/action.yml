@@ -363,7 +363,7 @@ runs:
       uses: docker/setup-buildx-action@v4.2.0
     - name: Build the cross-toolchain image (GHA-cached, no registry)
       if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.cross-dockerfile != ''
-      uses: docker/build-push-action@v6.19.2
+      uses: docker/build-push-action@v7.3.0
       with:
         context: ${{ inputs.cross-dockerfile }}
         load: true
