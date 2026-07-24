@@ -460,15 +460,13 @@ const LEGS = [
     'cross-file': 'scripts/netbsd.toolchain.cmake',
     'atomic-shim': false, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
-    // RETIRED 2026-07-22 (ci:false). Has NEVER once built since it landed in
-    // fleet batch 3 (083b0d5, 2026-07-18): 0 pass / 15 fail across the sampled
-    // CI runs, while every other NetBSD leg is 15/15 green. Nobody has made a
-    // specific effort at the failure, so each push only spent a 3600s qemu slot
-    // and reviewer attention re-reading a known-red leg. publish:false + ciOnly
-    // means it gated nothing (absent from the release tier), so retiring it
-    // costs zero coverage. The definition — the hard-won netbsd-src/machine/arch
-    // triple — stays for whoever picks it up; flip ci back to true then.
-    publish: false, ci: false, ciOnly: true, 'soft-fail': true, timeout: 3600,
+    // REVIVED 2026-07-24 (ci:true, soft-fail): the wall was diagnosed and fixed.
+    // quickjs compiled fail on 32-bit x86 — JS_X87_FPCW_SAVE_AND_ADJUST expands
+    // to a declaration right after the `handle_float64:` label (illegal pre-C23);
+    // build-tjs's fixupQjsX87FpcwLabelStmt inserts a null statement there. Back
+    // on the CI on-ramp (ciOnly, publish:false) to confirm the fix builds; promote
+    // to publish once green. Cross-built + no-exec, so a green leg = it compiled.
+    publish: false, ci: true, ciOnly: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // netbsd-earmv7hf (ARM32 LE hardfloat): evbarm's default arch; ARMv7 ldrexd
   // inlines 8-byte atomics → no shim.
@@ -485,15 +483,13 @@ const LEGS = [
     'cross-file': 'scripts/netbsd.toolchain.cmake',
     'atomic-shim': false, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
-    // RETIRED 2026-07-22 (ci:false). Has NEVER once built since it landed in
-    // fleet batch 3 (083b0d5, 2026-07-18): 0 pass / 15 fail across the sampled
-    // CI runs, while every other NetBSD leg is 15/15 green. Nobody has made a
-    // specific effort at the failure, so each push only spent a 3600s qemu slot
-    // and reviewer attention re-reading a known-red leg. publish:false + ciOnly
-    // means it gated nothing (absent from the release tier), so retiring it
-    // costs zero coverage. The definition — the hard-won netbsd-src/machine/arch
-    // triple — stays for whoever picks it up; flip ci back to true then.
-    publish: false, ci: false, ciOnly: true, 'soft-fail': true, timeout: 3600,
+    // REVIVED 2026-07-24 (ci:true, soft-fail): the wall was diagnosed and fixed.
+    // libuv failed to ASSEMBLE — uv__cpu_relax hand-encodes the RISC-V PAUSE as
+    // `.insn 0x0100000f`, a form the netbsd-10 riscv assembler predates; build-
+    // tjs's fixupLibuvRiscvCpuRelax emits the identical bytes via `.word`. Back on
+    // the CI on-ramp (ciOnly, publish:false) to confirm the fix builds; promote to
+    // publish once green. Cross-built + no-exec, so a green leg = it compiled.
+    publish: false, ci: true, ciOnly: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // netbsd-mips64eb (MIPS64 BIG-endian): the sbmips port; 64-bit inlines atomics,
   // no shim. canonical-LE bytecode proof on a 3rd 64-bit-BE target.
@@ -502,14 +498,14 @@ const LEGS = [
     'cross-file': 'scripts/netbsd.toolchain.cmake',
     'atomic-shim': false, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
-    // RETIRED 2026-07-22 (ci:false). Has NEVER once built since it landed in
-    // fleet batch 3 (083b0d5, 2026-07-18): 0 pass / 15 fail across the sampled
-    // CI runs, while every other NetBSD leg is 15/15 green. Nobody has made a
-    // specific effort at the failure, so each push only spent a 3600s qemu slot
-    // and reviewer attention re-reading a known-red leg. publish:false + ciOnly
-    // means it gated nothing (absent from the release tier), so retiring it
-    // costs zero coverage. The definition — the hard-won netbsd-src/machine/arch
-    // triple — stays for whoever picks it up; flip ci back to true then.
+    // STAYS RETIRED 2026-07-24 (ci:false) — a DIFFERENT class of wall from its
+    // i386/riscv64 batch-mates, which were fixed and revived. mips64eb never
+    // reaches our engine: NetBSD's own `build.sh distribution` fails building the
+    // sbmips userland (usr.sbin/crash → "unknown type name 'bool'") at the
+    // netbsd-10 pin, so no source fixup of ours (txiki/quickjs/libuv) can touch
+    // it. The next step is NetBSD-side: bump this leg's netbsd-src to a branch
+    // where sbmips/crash builds, or carry a NetBSD-src patch — neither derivable
+    // or verifiable offline. Definition stays for whoever picks it up.
     publish: false, ci: false, ciOnly: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // NOTE: netbsd-vax was dropped 2026-07-18 — a confirmed ENGINE wall, not just a

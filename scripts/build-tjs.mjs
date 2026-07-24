@@ -1427,6 +1427,63 @@ function fixupQjsX87FpcwI386Darwin(dir) {
   console.log('fixup qjs-x87-fpcw-i386-darwin: applied');
 }
 
+function fixupQjsX87FpcwLabelStmt(dir) {
+  // On real 32-bit x86 (NetBSD/i386 — which keeps the x87 macro, unlike Apple
+  // i386 above where it's emptied), JS_X87_FPCW_SAVE_AND_ADJUST expands to a
+  // DECLARATION (`unsigned short cw;`, the x87 control-word save). quickjs.c
+  // invokes it as the very first thing after the `handle_float64:` label:
+  //     handle_float64:
+  //         JS_X87_FPCW_SAVE_AND_ADJUST(fpcw);
+  // and C before C23 forbids a declaration as the statement a label introduces —
+  // "a label can only be part of a statement and a declaration is not a
+  // statement" — so netbsd-i386's gcc rejects it (reported at cutils.h in the
+  // macro body; run 29654544915). `fpcw` is read again by JS_X87_FPCW_RESTORE a
+  // few lines down in the SAME scope, so the macro cannot be wrapped in a block
+  // (the var would fall out of scope). Insert a null statement after the label
+  // instead. Universally safe: on every non-i386 target the macro is empty, so
+  // this is just `handle_float64: ; switch (...)`. quickjs-ng upstream candidate.
+  const f = path.join(dir, 'deps/quickjs/quickjs.c');
+  const src = fs.readFileSync(f, 'utf8');
+  const marker = '/* i386: a label needs a statement; the x87 macro is a declaration */';
+  if (src.includes(marker)) {
+    console.log('fixup qjs-x87-fpcw-label-stmt: already applied');
+    return;
+  }
+  const anchor = '    handle_float64:\n        JS_X87_FPCW_SAVE_AND_ADJUST(fpcw);';
+  const patched = `    handle_float64:\n        ; ${marker}\n        JS_X87_FPCW_SAVE_AND_ADJUST(fpcw);`;
+  if (!src.includes(anchor)) {
+    throw new Error('fixup qjs-x87-fpcw-label-stmt: anchor not found (quickjs-ng changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(anchor, patched));
+  console.log('fixup qjs-x87-fpcw-label-stmt: applied');
+}
+
+function fixupLibuvRiscvCpuRelax(dir) {
+  // libuv's uv__cpu_relax spin-loop hint hand-encodes the RISC-V PAUSE
+  // (Zihintpause) as `.insn 0x0100000f`. The netbsd-10 riscv assembler predates
+  // that `.insn <imm>` form and rejects it: "unrecognized opcode '0x0100000f'"
+  // (netbsd-riscv64, run 29654544915). Emit the identical four bytes with
+  // `.word`, a fundamental GAS directive every assembler accepts — the machine
+  // code is byte-for-byte what upstream intended (a CPU that predates Zihintpause
+  // decodes 0x0100000f as a plain FENCE, the correct fallback). The hint is a
+  // pure spin-loop optimization; correctness never depended on it. This line is
+  // inside `#elif defined(__riscv) && __riscv_xlen == 64`, so the edit is inert
+  // on every non-riscv build. libuv upstream candidate.
+  const f = path.join(dir, 'deps/libuv/src/unix/async.c');
+  const src = fs.readFileSync(f, 'utf8');
+  const anchor = '__asm__ volatile(".insn 0x0100000f" ::: "memory");';
+  const patched = '__asm__ volatile(".word 0x0100000f" ::: "memory");';
+  if (src.includes(patched)) {
+    console.log('fixup libuv-riscv-cpu-relax: already applied');
+    return;
+  }
+  if (!src.includes(anchor)) {
+    throw new Error('fixup libuv-riscv-cpu-relax: anchor not found (libuv changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(f, src.replace(anchor, patched));
+  console.log('fixup libuv-riscv-cpu-relax: applied');
+}
+
 function fixupAtomicShim(dir) {
   // 32-bit targets without libatomic (darwin-ppc; sparc before it) need a
   // fallback for the 8-byte __atomic_* calls quickjs-ng's Atomics builtin
@@ -1696,6 +1753,8 @@ if (buildOnly) {
   fixupMbedtlsMsTimeOldDarwin(tjsDir);
   fixupQjsHrtimeOldDarwin(tjsDir);
   fixupQjsX87FpcwI386Darwin(tjsDir);
+  fixupQjsX87FpcwLabelStmt(tjsDir);     // netbsd-i386: label + declaration
+  fixupLibuvRiscvCpuRelax(tjsDir);      // netbsd-riscv64: .insn -> .word
   fixupLibuvUnsetenvOldDarwin(tjsDir);
   fixupLibuvNprocsOldDarwin(tjsDir);
   fixupLibuvBirthtimeOldDarwin(tjsDir);
