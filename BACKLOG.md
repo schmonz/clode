@@ -189,6 +189,17 @@ well-tested, and reasonably fast** as we can possibly make it." Sequencing:
   node-shim `tty`/write or ANSI-erase gap. Repro: interactive quaude, run a slash
   command, watch it linger. Part of the M3 render-parity frontier but concrete.
 
+- **quaude's fullscreen renderer promptly crashes before it can draw a fullscreen
+  (NetBSD/arm64 at least). FIX BEFORE NEXT RELEASE.** Reported 2026-07-24
+  (daily-driver). Whatever enters the Ink fullscreen / alternate-screen path takes
+  quaude down before a single fullscreen frame paints — the feature is unusable, not
+  merely degraded. Unknown whether it's a node-shim tty/altscreen gap (enter/exit
+  alternate-screen `\e[?1049h`, raw-mode transition, or resize on that path) or an
+  engine-level crash. NEXT: capture the crash output on NetBSD/arm64
+  (`--debug-to-stderr`, or the handle/unhandledRejection dump) to get the failing
+  call; confirm whether it repros on other quaude arches (narrows shim-tty vs
+  general). Relates to the stale-frames + M3 render-parity TUI frontier above.
+
 - **`Workflow` (multi-agent orchestration) was dead under quaude — node:vm shim
   SHIPPED 2026-07-24 (`modules/vm.cjs` gains createContext/runInContext/etc;
   `test/node-shim-vm.test.cjs` RED→GREEN; full live workflow re-verify still pending
