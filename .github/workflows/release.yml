@@ -118,9 +118,20 @@ jobs:
           #                         bug, first surfaced here; separate TDD pass.
           #   node-shim-bunshim     bun:ffi suffix hardcodes the macOS 'dylib'
           #                         (Linux .so) — platform-aware fix pending.
+          #   node-shim-cloexec     CLOEXEC-on-exec fd inheritance into a sync
+          #                         child: qemu-user's fd/exec syscall translation,
+          #                         same emulation class as child-process. Un-
+          #                         skipped 2026-07-24 (160e53e); native arm64 has
+          #                         NO leak, so this is the emulator, not the shim.
+          #   node-shim-large-output  >64KB child stdout through a pipe: qemu-user
+          #                         pipe-buffer/poll emulation short-reads, same
+          #                         class as child-process; not endianness.
           # Non-blocking (continue-on-error): a NEW data-correctness red stands
-          # out against this green baseline. House rule: note it, don't grind.
-          EXCLUDE='node-shim-tty|node-shim-child-process|node-shim-core|node-shim-bunshim'
+          # out against this green baseline. House rule: note it, don't grind. The
+          # six excluded files are ALL process/pipe/TTY/platform I/O under qemu-user
+          # — NONE is an endianness test, so the BE signal (engine + url golden)
+          # stays clean. A red here again means a REAL data-correctness regression.
+          EXCLUDE='node-shim-tty|node-shim-child-process|node-shim-core|node-shim-bunshim|node-shim-cloexec|node-shim-large-output'
           FILES=$(ls test/node-shim-*.test.cjs | grep -vE "$EXCLUDE")
           node --test --test-concurrency=1 $FILES test/url-characterization.test.cjs
 
