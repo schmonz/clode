@@ -74,20 +74,27 @@ async function main() {
     }
   }
 
-  // Report table: quaude ÷ naude when both present.
-  console.log('\nscenario                  quaude     naude    ratio  class');
-  console.log('------------------------  --------  --------  -------  -----');
+  // Report table. quaude is the product; its absolute wall + peak RSS are the
+  // headline. `claude` (native, optimized) is the CEILING to close on. `naude`
+  // (same bundle under V8) is only the interpreter-tax ORACLE — it drives the
+  // class (WATCH/HOT ≈ QuickJS hotspot vs a JIT of the SAME code), not the goal.
+  const mb = (b) => (typeof b === 'number' ? (b / 1048576).toFixed(0) + 'M' : '-');
+  console.log('\nscenario                  quaude      RSS    claude  q/claude   tax(q/naude)');
+  console.log('------------------------  --------  -------  --------  --------  ------------');
   for (const [name, byRt] of Object.entries(results)) {
     const q = byRt.quaude?.stat?.median;
+    const c = byRt.claude?.stat?.median;
     const n = byRt.naude?.stat?.median;
-    const r = q && n ? ratio(q, n) : null;
-    const cls = byRt.quaude?.timedOut ? 'TIMEOUT' : r ? classify(r) : '-';
+    const qc = q && c ? ratio(q, c) : null;
+    const qn = q && n ? ratio(q, n) : null;
+    const tax = byRt.quaude?.timedOut ? 'TIMEOUT' : qn ? `${qn.toFixed(1)}× ${classify(qn)}` : '-';
     console.log(
       name.padEnd(24),
       (q ? q.toFixed(0) + 'ms' : '-').padStart(8),
-      (n ? n.toFixed(0) + 'ms' : '-').padStart(8),
-      (r ? r.toFixed(1) + '×' : '-').padStart(7),
-      ' ' + cls,
+      mb(byRt.quaude?.peakRss).padStart(7),
+      (c ? c.toFixed(0) + 'ms' : '-').padStart(8),
+      (qc ? qc.toFixed(1) + '×' : '-').padStart(8),
+      ' ' + tax,
     );
   }
 
