@@ -576,6 +576,17 @@ function codesignAdHoc(file, opts = {}) {
   const sign = () => sp('codesign', ['-s', '-', '--force', file], { encoding: 'utf8' });
   let cs = sign();
   if (cs.status === 0) return { ok: true };
+  // Pre-10.5 Darwin (Tiger 10.4, PowerPC, verified 8.11.0) ships NO codesign at
+  // all — it arrived in 10.5 Leopard — and requires no signatures: unsigned
+  // Mach-O execs fine there. spawnSync of a missing binary yields ENOENT with no
+  // stderr (hence the empty "codesign ... failed:" the bring-up hit). Treat
+  // codesign-absent as a no-op success, not a hard failure. NB this is distinct
+  // from the fat-template thin path below — that is a codesign that RAN and
+  // refused; this is a codesign that does not exist.
+  if (cs.error && cs.error.code === 'ENOENT') {
+    log('clode: build: no codesign on this Darwin (pre-10.5) — leaving the template unsigned');
+    return { ok: true };
+  }
   // Signing failed. On old macOS (Mavericks, verified 10.9.5) codesign_allocate
   // cannot sign a fat Mach-O carrying an arm64 slice. Thin to the host slice IN
   // PLACE and retry — the fused BUILDER (--self) degrades to host-arch, which is

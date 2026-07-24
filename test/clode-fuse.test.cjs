@@ -251,6 +251,17 @@ test('codesignAdHoc: sign fails and thin fails (single-arch / no host slice) —
   assert.ok(sp.calls.some((c) => /-thin x86_64/.test(c)), 'attempts the thin directly');
 });
 
+test('codesignAdHoc: no codesign on the box (pre-10.5 Darwin/Tiger) is a no-op success', () => {
+  const { codesignAdHoc } = require('../libexec/clode-fuse.cjs');
+  // spawnSync of a missing binary: ENOENT error, null status, no stderr.
+  const sp = scriptSpawn(() => ({ error: { code: 'ENOENT' }, status: null }));
+  const logged = [];
+  const r = codesignAdHoc('/t', { platform: 'darwin', arch: 'ppc', spawnSync: sp, log: (m) => logged.push(m) });
+  assert.deepStrictEqual(r, { ok: true }, 'codesign-absent must not fail the build');
+  assert.deepStrictEqual(sp.calls, ['codesign -s - --force /t'], 'one attempt, no lipo (thin path never reached)');
+  assert.ok(logged.some((m) => /no codesign/.test(m)), logged.join('\n'));
+});
+
 // thinToHostSlice: quaude is built to run where it is built, so its (possibly
 // universal) template is thinned to the host slice — a lean single-arch quaude,
 // not a 4-arch one. The BUILDER (--self) is exempt (must stay fat to run on any
