@@ -134,7 +134,7 @@ jobs:
   # missing slice, and that must block the release, not silently ship an
   # incomplete darwin (all four slice legs are hard too). `if: !cancelled()` so
   # a failed slice leg still runs this job to surface the exact "missing slice"
-  # error before it fails. Publishes clode-<ver>-darwin-universal (picked up by
+  # error before it fails. Publishes clode-<ver>-macos (picked up by
   # the release job's clode-* pattern); the bare fat engine stays a CI artifact.
   darwin-universal:
     needs: darwin-slices
@@ -180,7 +180,11 @@ jobs:
         id: name
         run: |
           if [ "${GITHUB_REF_TYPE:-}" = tag ]; then V="${GITHUB_REF_NAME#v}"; else V="$(cat VERSION)"; fi
-          echo "asset=clode-$V-darwin-universal" >> "$GITHUB_OUTPUT"
+          # Shipped as plain `macos`: the whole point of a Universal binary is that
+          # you do NOT pick an arch — one download works everywhere. It also carries
+          # no floor (unlike clode-<ver>-netbsd10.1-sparc) because it spans four of
+          # them, one per slice.
+          echo "asset=clode-$V-macos" >> "$GITHUB_OUTPUT"
       - name: Upload the bare fat engine (CI artifact)
         uses: actions/upload-artifact@v7
         with:
@@ -234,19 +238,18 @@ jobs:
       - name: Release gate — required-platform assets present
         run: |
           set -euo pipefail
-          # {os arch} pairs that MUST be in the release (floor-agnostic glob;
-          # `dist/clode-*-netbsd*-sparc` matches the floored
-          # `clode-<ver>-netbsd10.1-sparc`). Only currently-existing required
-          # legs go here so the gate stays SATISFIABLE. darwin universal =
-          # `clode-<ver>-darwin-universal` (the sole, four-arch darwin asset —
-          # no darwin release without it).
-          REQUIRED="windows arm64  netbsd sparc  darwin universal"
+          # Asset globs that MUST be in the release, floor-agnostic
+          # (`clode-*-netbsd*-sparc` matches the floored
+          # `clode-<ver>-netbsd10.1-sparc`). Only currently-existing required legs
+          # go here so the gate stays SATISFIABLE. macOS ships exactly ONE asset —
+          # `clode-<ver>-macos`, the four-arch Universal binary — and it carries no
+          # arch suffix by design, which is why this is a glob list rather than the
+          # former {os arch} pairs.
+          REQUIRED="clode-*-windows*-arm64  clode-*-netbsd*-sparc  clode-*-macos"
           missing=0
-          set -- $REQUIRED
-          while [ $# -ge 2 ]; do
-            os="$1"; arch="$2"; shift 2
-            if ! ls dist/clode-*-"$os"*-"$arch" >/dev/null 2>&1; then
-              echo "RELEASE GATE: missing required asset for $os/$arch" >&2
+          for g in $REQUIRED; do
+            if ! ls dist/$g >/dev/null 2>&1; then
+              echo "RELEASE GATE: missing required asset matching $g" >&2
               missing=1
             fi
           done

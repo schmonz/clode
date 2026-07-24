@@ -252,9 +252,10 @@ test('release.yml: darwin-universal hard-gates (no continue-on-error) + tripwire
   // The lipo step must still hard-require all four slices present.
   assert.ok(/for a in arm64 x64 x86 ppc;.*test -f/.test(wf),
     'darwin-universal must assert all four slices exist before lipo');
-  // The release gate must require the darwin-universal asset.
-  assert.ok(/REQUIRED="[^"]*darwin universal[^"]*"/.test(wf),
-    'release tripwire must require the darwin universal asset');
+  // The release gate must require the macOS universal asset (shipped as plain
+  // `clode-<ver>-macos` — a Universal binary you download without picking an arch).
+  assert.ok(/REQUIRED="[^"]*clode-\*-macos[^"]*"/.test(wf),
+    'release tripwire must require the macOS universal asset');
 });
 
 test('darwin-x86 Tiger leg: engine-only i386 at floor 10.4', () => {
@@ -334,7 +335,7 @@ test('release tier: publishing legs are NOT soft-fail (deterministic contents)',
 });
 
 test('release tier: all four darwin slices are HARD (universal is 4 arches or nothing)', () => {
-  // The darwin release is exactly ONE artifact — clode-<ver>-darwin-universal —
+  // The darwin release is exactly ONE artifact — clode-<ver>-macos —
   // a fat Mach-O of all four slices. None of the slices publishes on its own, but
   // every one is a REQUIRED ingredient: a missing slice must block the release,
   // not ship a 2/3-arch fat. So none may be soft-fail (unlike the non-darwin

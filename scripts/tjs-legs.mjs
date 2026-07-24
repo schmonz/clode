@@ -57,7 +57,7 @@ const LEGS = [
   // upload their bare ENGINE slice (tjs-darwin-*), which release.yml's
   // darwin-universal job lipo's into the shipped 4-arch fat binary. The single-
   // arch builders are redundant with the universal (which contains their slices)
-  // — darwin ships exactly ONE artifact, clode-<ver>-darwin-universal (user pref
+  // — darwin ships exactly ONE artifact, clode-<ver>-macos (user pref
   // 2026-07-15). i386/ppc were never standalone (no-exec) — universal-only.
   { leg: 'darwin-arm64', os: 'macos-14', 'ci-os': 'macos-26', publish: false, ci: true, floor: '11.0' },
   // glibc Linux: a CI-only CANARY (ciOnly:true → built in CI, filtered OUT of the
