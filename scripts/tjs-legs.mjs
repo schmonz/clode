@@ -469,10 +469,12 @@ const LEGS = [
     // REVIVED 2026-07-24 (ci:true, soft-fail): the wall was diagnosed and fixed.
     // quickjs compiled fail on 32-bit x86 — JS_X87_FPCW_SAVE_AND_ADJUST expands
     // to a declaration right after the `handle_float64:` label (illegal pre-C23);
-    // build-tjs's fixupQjsX87FpcwLabelStmt inserts a null statement there. Back
-    // on the CI on-ramp (ciOnly, publish:false) to confirm the fix builds; promote
-    // to publish once green. Cross-built + no-exec, so a green leg = it compiled.
-    publish: false, ci: true, ciOnly: true, 'soft-fail': true, timeout: 3600,
+    // build-tjs's fixupQjsX87FpcwLabelStmt inserts a null statement there. Both
+    // fixes proven green (run 30079326329). SHIPPED 2026-07-24: a deterministic
+    // cross-build earns a hard release gate like earmv7hf/riscv64. Ships as
+    // clode-<ver>-netbsd10.1-i386. soft-fail stripped from publishers on the
+    // release tier; stays soft on the CI on-ramp. no-exec: green = it built.
+    publish: true, ci: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // netbsd-earmv7hf (ARM32 LE hardfloat): evbarm's default arch; ARMv7 ldrexd
   // inlines 8-byte atomics → no shim.
@@ -503,20 +505,19 @@ const LEGS = [
   // no shim. canonical-LE bytecode proof on a 3rd 64-bit-BE target.
   { leg: 'netbsd-mips64eb', os: 'ubuntu-latest', 'guest-arch': 'mips64eb',
     'netbsd-src': 'netbsd-10', 'netbsd-machine': 'sbmips', 'netbsd-arch': 'mips64eb',
-    'netbsd-sysroot': 'light',
     'cross-file': 'scripts/netbsd.toolchain.cmake',
     'atomic-shim': false, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
-    // REVIVED 2026-07-24 (ci:true, soft-fail) via the LIGHT sysroot. mips64eb's
-    // wall was never our engine: NetBSD's own `build.sh distribution` fails
-    // building the sbmips userland (usr.sbin/crash → "unknown type name 'bool'")
-    // at netbsd-10. netbsd-sysroot:'light' skips userland entirely — it composes
-    // the sysroot from `make includes` + the runtime libs (see netbsd-crossbuild)
-    // — so crash never builds. First user of the light path; the lib set is
-    // empirical (CI iterates until tjs cross-links). Once proven complete, the
-    // other NetBSD legs can converge onto light too (Phase B — the real payoff:
-    // no leg builds userland it throws away). Cross-built + no-exec: green = it
-    // compiled and linked.
+    // REVIVED 2026-07-24 (ci:true, soft-fail) via OPTION 1: the blessed full
+    // `build.sh distribution`, with a one-line NetBSD-src fixup for the sbmips
+    // wall. mips64eb's failure was never our engine — distribution died building
+    // usr.sbin/crash ("unknown type name 'bool'" in sys/arch/mips/include/
+    // systemsw.h, which isn't self-contained). netbsd-crossbuild patches that
+    // header (sbmips-scoped) before distribution, so the known-complete sysroot
+    // path builds unchanged. The lighter compose-your-own sysroot path was
+    // explored (it got METALOG + includes working; csu was the next wall) and
+    // DEFERRED to the backlog as its own project — see BACKLOG.md. Cross-built +
+    // no-exec: green = it compiled and linked. Promote to publish once green.
     publish: false, ci: true, ciOnly: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // NOTE: netbsd-vax was dropped 2026-07-18 — a confirmed ENGINE wall, not just a

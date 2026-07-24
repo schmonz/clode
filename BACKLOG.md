@@ -279,22 +279,39 @@ well-tested, and reasonably fast** as we can possibly make it." Sequencing:
   earmv7hf (32-bit ARM).
   The `-a MACHINE_ARCH` composite input (2026-07-18) unlocked multi-arch ports
   (evbarm/sbmips/evbsh3 abort `build.sh -m` without it). Walls below.
-- **NetBSD hard-arch tier — three distinct wall classes (batch-3 diagnoses,
-  2026-07-18, run 29654544915), all left soft-fail onboarding:**
-  - **i386** (32-bit LE x86) — toolchain builds; **quickjs** compile FAILS at
-    `cutils.h:678` in the `JS_X87_FPCW_SAVE_AND_ADJUST` macro (x87 FPU control-word
-    save — only compiled on 32-bit x86): `a label can only be part of a statement
-    and a declaration is not a statement` (C: declaration after a label). A small
-    carried quickjs patch (statement/`{}` after the label) should clear it — the
-    cheapest wall here, and it's the bytecode donor for vax.
-  - **riscv64** (64-bit LE) — toolchain builds; **libuv** `src/unix/async.c:422`
-    fails to ASSEMBLE: `unrecognized opcode '0x0100000f'` (a `fence`/`pause`-class
-    instruction the netbsd-10 riscv assembler predates). Try a `-march`/`-mno-*`
-    toolchain flag or a small libuv patch; toolchain-version-bound, not our code.
-  - **mips64eb** (64-bit BE) — **NOT an engine wall.** NetBSD `build.sh
-    distribution` fails building the sbmips userland (`usr.sbin/crash` →
-    `unknown type name 'bool'`) at the `netbsd-10` pin. A NetBSD-src/sbmips issue;
-    try a different src pin or a newer branch. The engine never got a chance.
+- **NetBSD hard-arch tier — batch-3 (diagnoses 2026-07-18 run 29654544915;
+  RESOLVED 2026-07-24, run 30079326329):**
+  - **i386** (32-bit LE x86) — **SHIPPED.** Two walls: (1) `quickjs.c`'s
+    `JS_X87_FPCW_SAVE_AND_ADJUST` expands to a declaration right after the
+    `handle_float64:` label (illegal pre-C23) — fixed by `fixupQjsX87FpcwLabelStmt`
+    (null statement after the label); (2) i486 baseline has no `cmpxchg8b`, so
+    8-byte atomics are `__atomic_*_8` libcalls with no libatomic — fixed by
+    `atomic-shim: true`. Publishes `clode-<ver>-netbsd10.1-i386`.
+  - **riscv64** (64-bit LE) — **SHIPPED.** `libuv` `uv__cpu_relax` hand-encoded the
+    RISC-V PAUSE as `.insn 0x0100000f`, which the netbsd-10 riscv assembler
+    predates — fixed by `fixupLibuvRiscvCpuRelax` (`.word`, identical bytes).
+    Publishes `clode-<ver>-netbsd10.1-riscv64`.
+  - **mips64eb** (64-bit BE) — **NOT an engine wall; option 1 in flight.** NetBSD
+    `build.sh distribution` died building `usr.sbin/crash` — `sys/arch/mips/include/
+    systemsw.h:56` declares `bool system_set_clockfns(...)` without including
+    `<sys/stdbool.h>` (not self-contained; only bites via crash's db_syncobj.c
+    include order on sbmips). netbsd-crossbuild now patches that header
+    (sbmips-scoped) before distribution. **Upstream candidate** (send-pr /
+    tech-toolchain@) — a clean self-contained-header one-liner. Verifying; promote
+    to publish once green.
+  - **DEFERRED PROJECT — `build.sh` light sysroot / "sysroot without userland".**
+    mips64eb motivated exploring a lighter DESTDIR: compose it from `distrib-dirs`
+    + `make includes` + the runtime libs instead of a full `distribution`, so no
+    leg builds userland it throws away (and userland bugs like crash never fire).
+    Prototype scaffolding EXISTS, dormant, in `.github/actions/netbsd-crossbuild`
+    (`sysroot-mode: light` branch) + the `netbsd-sysroot` field plumbing — no leg
+    uses it now. Got METALOG (`distrib-dirs`) + `includes` working across rounds;
+    the open wall is `lib/csu` not building `crt0.o` standalone (likely needs an
+    arch-subdir recurse or a whole-`lib` build). Worth finishing because: it speeds
+    EVERY NetBSD leg, and there is no blessed `build.sh sysroot` operation — so a
+    working recipe is both a fix and a plausible **upstream feature** (tech-build@/
+    tech-toolchain@), with our transcript as the motivation. When picking up:
+    finish csu, then converge the other NetBSD legs onto light (Phase B).
   - **vax** (32-bit LE) — dropped from the fleet (was a leg, removed 2026-07-18):
     toolchain builds, but quickjs assumes IEEE floats and VAX has **non-IEEE** F/D/G
     format. Real fix = a soft-float IEEE mode for GCC's VAX backend (a GCC-backend
