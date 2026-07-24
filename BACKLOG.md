@@ -189,6 +189,72 @@ well-tested, and reasonably fast** as we can possibly make it." Sequencing:
   node-shim `tty`/write or ANSI-erase gap. Repro: interactive quaude, run a slash
   command, watch it linger. Part of the M3 render-parity frontier but concrete.
 
+- **`Workflow` (multi-agent orchestration) was dead under quaude — node:vm shim
+  SHIPPED 2026-07-24 (`modules/vm.cjs` gains createContext/runInContext/etc;
+  `test/node-shim-vm.test.cjs` RED→GREEN; full live workflow re-verify still pending
+  a quaude rebuild) — the script
+  LOADER, not the builtins (diagnosed 2026-07-24, session
+  "modern-mavericks-renovate", self-hosted: quaude diagnosing quaude).** Every
+  workflow fails `not a function`, 0 agents, ~120-210ms, no transcript dir
+  written. ISOLATED: agent-less micro-workflows — a bare `return {ok:true}` (no
+  builtins at all), a `log()`-only, and a `phase()`-only — ALL fail identically,
+  so the fault is at script **compile/instantiation**, BEFORE any builtin
+  (`phase`/`agent`/`log`/`parallel`/`pipeline`) or user code runs. It is NOT a
+  missing workflow global. ROOT CAUSE: the workflow engine loads scripts through
+  **`node:vm`**, which the node-shim/txiki doesn't implement → the vm entrypoint is
+  undefined → "not a function" at load. CORRECTED 2026-07-24 (same session, deeper
+  read of the EXTRACTED `cli.cjs`, not just the Bun binary): the method is NOT
+  `compileFunction` — that string is **0× in cli.cjs** (the 4× seen in the Bun binary
+  were Bun's own node:vm runtime internals, a red herring). cli.cjs has **7
+  `require("vm")` sites** and uses the **`vm.Script` + `vm.createContext` +
+  `script.runInContext`** family (`runInContext` 21× is the clean signal;
+  `compileFunction`/`runInNewContext`/`runInThisContext` all 0×). node:vm is a SHARED
+  dependency across those ~7 sites — not only the workflow engine but also a command/
+  tool sandbox (its site carries the `["sh","cat","rg",...]` allowlist), a REPL
+  "replay" eval (`class … extends Error … "REPL replay:"`), and a `{code: string
+  "JavaScript code"}`-schema tool — so ALL of them are latently dead under quaude for
+  the same reason; one `node:vm` shim unblocks the class. CAVEAT: the workflow loader's
+  exact vm call wasn't pinned to a line, but the method FAMILY (Script/runInContext) is
+  confirmed for cli.cjs and compileFunction is ruled out. FIX: add a `node:vm` module to
+  the node-shim implementing `Script`, `createContext`, and `runInContext` (NOT just
+  compileFunction). Harder than a `Function`-constructor swap — createContext/
+  runInContext imply a sandboxed global scope — back it with a quickjs-ng realm/new
+  global if reachable. For the WORKFLOW case isolation isn't needed (it just injects
+  agent/phase/log/parallel/pipeline/args/budget as globals and runs), so a cheap
+  approximation — `Function(...Object.keys(sandbox), code)(...Object.values(sandbox))`
+  — likely lights it up; true isolation for the tool-sandbox/REPL sites is a harder
+  follow-on. Loses vm's `filename`/`lineOffset` stack niceties. Verify with a
+  bare-return workflow, then the full agent()-spawning one. SCOPE:
+  this was the ONLY broken surface in a same-session tire-kick (6/7 green — plain
+  subagents via `Agent`, `WebFetch`/`WebSearch`, background `Bash`, `Monitor`,
+  and `AskUserQuestion` all pass under quaude); only `Workflow` fails.
+
+- **NEXT WALL after the node:vm fix — `Workflow` run SIGABRTs at txiki `tjs__execute_jobs`
+  (discovered 2026-07-24, quaude-vmfix built with the vm shim).** With node:vm working, a
+  workflow now runs PAST the loader (trace shows it reaching a `fetch` to the API) and then
+  the whole process hard-aborts:
+  `vendor/txiki.js/src/vm.c:734: tjs__execute_jobs: Assertion (JS_IsException(event)) == (0) failed`.
+  That line is txiki's UNHANDLED-PROMISE-REJECTION path: an unhandled rejection in the workflow's
+  async orchestration fires the tracker, which calls `new PromiseRejectionEvent("unhandledrejection",
+  promise, reason)` (txiki's 3-positional-arg C ABI, `vm.c:733`) and `CHECK_EQ`s that the ctor didn't
+  throw — it DID → abort. REPRODUCED deterministically offline (a `-p`+mock run of a bare
+  `log()+return` workflow SIGABRTs at the same line; scratchpad `live-wf.cjs`). ISOLATION done:
+  (1) raw `tjs run loader.cjs <script>` with a plain `Promise.reject(...)` SURVIVES (dumps the
+  rejection, exit 0) — so txiki's own `PromiseRejectionEvent` polyfill
+  (`js/polyfills/event-target-polyfill.js:75`, ctor `(type, promise, reason)`) is fine in isolation;
+  (2) the bundle does NOT override `PromiseRejectionEvent` (0 occurrences in cli.cjs) — so it is NOT a
+  simple ABI swap; (3) CLODE_SHIM_TRACE shows NO `[wall]` — the rejection is not a missing node-shim
+  API. So the exact reason the ctor throws (bad `reason`/`promise` value? freed `promise_event_ctor`
+  during teardown, `vm.c:562-563`? a global `Event` interaction?) needs C-level instrumentation (print
+  before `vm.c:734`) + a `tjs` rebuild to see — beyond static analysis. RECOMMENDED FIX (robustness,
+  the right posture regardless of the reason): make `tjs__execute_jobs` DEGRADE instead of assert — if
+  building/dispatching the unhandledrejection event throws, `tjs_dump_error` + clear + continue (Node
+  never aborts the process on an unhandled rejection by default). That is a txiki C patch → needs
+  `scripts/build-tjs.mjs` + a fresh `clode build`. Open sub-question: WHAT in the workflow's async path
+  rejects unhandled in the first place (could still be a node-shim gap the async orchestration hits) —
+  worth a look once the abort is downgraded and the reason becomes visible. node:vm shim itself is
+  confirmed working; this is a distinct, deeper wall.
+
 ### Platform wishlist (reachable-frontier tracker)
 
 - **NetBSD: every arch** — in progress (task #8 above). The showcase of the
