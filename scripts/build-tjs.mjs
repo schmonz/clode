@@ -1033,6 +1033,64 @@ function fixupLibuvTtyKqueueOldDarwin(dir) {
   console.log('fixup libuv-tty-kqueue-old-darwin: applied');
 }
 
+function fixupTjsHandleDump(dir) {
+  // Diagnostic primitive: __tjs_dump_handles() returns a text list of every
+  // live libuv handle (type, fd, active/ref/closing) via uv_walk. For
+  // event-loop-idle hangs (main thread parked in kevent) it answers "which fd
+  // is the loop waiting on" — the question external tools (sample/lsof) can't.
+  // Injected into vm.c: bootstrap_core lives here and TJS_GetRuntime/TJS_GetLoop
+  // + uv.h are already in scope, so no CMakeLists/private.h changes. Zero cost
+  // unless called. libuv upstream candidate for a general handle-introspection.
+  const marker = 'CLODE handle-dump';
+  const f = path.join(dir, 'src/vm.c');
+  const src = fs.readFileSync(f, 'utf8');
+  if (src.includes(marker)) {
+    console.log('fixup tjs-handle-dump: already applied');
+    return;
+  }
+  const fnAnchor = 'static void tjs__bootstrap_core(JSContext *ctx, JSValue ns) {';
+  const regAnchor = '    tjs__mod_spawn_sync_init(ctx, ns);\n';
+  if (!src.includes(fnAnchor) || !src.includes(regAnchor)) {
+    throw new Error('fixup tjs-handle-dump: anchor not found (txiki vm.c changed under the pin — re-derive)');
+  }
+  const cfns =
+    '/* ' + marker + ': uv_walk-based live-handle listing for hang diagnosis. */\n' +
+    'typedef struct { char *p; int off; int cap; } tjs__clode_hd;\n' +
+    'static void tjs__clode_handle_walk_cb(uv_handle_t *h, void *arg) {\n' +
+    '    tjs__clode_hd *d = (tjs__clode_hd *)arg;\n' +
+    '    if (d->off >= d->cap - 160) return;\n' +
+    '    uv_os_fd_t osfd; int fd = -1;\n' +
+    '    if (uv_fileno(h, &osfd) == 0) fd = (int)(intptr_t)osfd;\n' +
+    '    int n = snprintf(d->p + d->off, (size_t)(d->cap - d->off),\n' +
+    '        "%s fd=%d active=%d ref=%d closing=%d\\n",\n' +
+    '        uv_handle_type_name(h->type), fd,\n' +
+    '        uv_is_active(h) ? 1 : 0, uv_has_ref(h) ? 1 : 0, uv_is_closing(h) ? 1 : 0);\n' +
+    '    if (n > 0) d->off += n;\n' +
+    '}\n' +
+    'static JSValue tjs__clode_dump_handles(JSContext *ctx, JSValueConst this_val,\n' +
+    '                                       int argc, JSValueConst *argv) {\n' +
+    '    (void)this_val; (void)argc; (void)argv;\n' +
+    '    uv_loop_t *loop = TJS_GetLoop(TJS_GetRuntime(ctx));\n' +
+    '    char buf[8192]; buf[0] = 0;\n' +
+    '    tjs__clode_hd d = { buf, 0, (int)sizeof(buf) };\n' +
+    '    uv_walk(loop, tjs__clode_handle_walk_cb, &d);\n' +
+    '    return JS_NewString(ctx, buf);\n' +
+    '}\n';
+  const regBlock =
+    regAnchor +
+    '    { /* ' + marker + ' */\n' +
+    '        JSValue global = JS_GetGlobalObject(ctx);\n' +
+    '        JS_DefinePropertyValueStr(ctx, global, "__tjs_dump_handles",\n' +
+    '            JS_NewCFunction(ctx, tjs__clode_dump_handles, "__tjs_dump_handles", 0), JS_PROP_C_W_E);\n' +
+    '        JS_FreeValue(ctx, global);\n' +
+    '    }\n';
+  const out = src
+    .replace(fnAnchor, cfns + '\n' + fnAnchor)
+    .replace(regAnchor, regBlock);
+  fs.writeFileSync(f, out);
+  console.log('fixup tjs-handle-dump: applied');
+}
+
 function fixupLibuvMsgXOldDarwin(dir) {
   // libuv's darwin batch-UDP path calls Apple's private recvmsg_x/
   // sendmsg_x syscalls (~10.10+), declared by its own darwin-syscalls.h
@@ -1792,6 +1850,7 @@ if (buildOnly) {
   fixupLibuvMsgXOldDarwin(tjsDir);
   fixupLibuvKqueueExceptOldDarwin(tjsDir);
   fixupLibuvTtyKqueueOldDarwin(tjsDir);
+  fixupTjsHandleDump(tjsDir);
   fixupLwsScandirOldDarwin(tjsDir);
   fixupMbedtlsMsTimeOldDarwin(tjsDir);
   fixupQjsHrtimeOldDarwin(tjsDir);
