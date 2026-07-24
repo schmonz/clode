@@ -422,6 +422,31 @@ extend the allowlist, un-skip. Validation needs live captures (Keychain dialogs 
 cycle) — batch it. (Related: un-skip `test_tui` #60, TUI-fails-loud-on-missing-ws, once
 its hermetic per-project trust-state fixture is rebuilt.)
 
+## The test suite requires host Node — can't run on clode's own target platforms (2026-07-24)
+
+The suite is `node --test test/*.test.cjs`, orchestrated by `test/run.mjs` off
+`process.execPath` (a real node). So the tests can only run where a modern host Node
+already exists — which is precisely **not** where clode is aimed. On a target platform
+(native binary won't run, no modern node) the suite is simply unrunnable.
+
+Observed 2026-07-24 on `netbsd11-arm64` (NetBSD 11.0_RC2, aarch64), running clode as
+`quaude` (txiki.js + QuickJS-ng 0.15.1): no `node`/`tjs`/`qjs` on the box, `test/.harness`
+ships node24 only for darwin/linux/win x64+arm64 (no NetBSD leg), so `npm test` cannot
+execute and a `bun-shim.cjs` change made *for that platform* could not be verified
+locally — only by pushing to CI. The irony is sharp: the shim runs under tjs/QuickJS in
+production (quaude), but its contract is exercised only under node (naude), and the tests
+can't run on the very runtime/OS they most need to validate.
+
+Want: run the suite — or a meaningful, runtime-agnostic subset of the pure-logic tests
+(rewriteSnapshot, CLODE_SHADOWS, translators, arg rewriting) — **under tjs/quaude**, so
+the shim is validated on the runtimes clode actually ships to, and so target-platform
+work is verifiable in place. Blocker: the tests bind to the `node:test` API + `node:`
+builtins; running them under tjs needs either a `node:test` shim on the tjs side or a port
+of the pure-logic tests to a runtime-neutral harness. Relates to the `tjs-legs.yml` CI
+leg (extend it from smoke to the shim-contract suite) and to the node-floor squeeze in
+`LONG-TERM.md` (a node-only test story quietly re-imports the node dependency clode exists
+to shed).
+
 ## RESOLVED (2026-07-18 sweep): Test-fake deps leaked into the REAL clode store
 
 Both halves closed. **Investigate:** `4a99d2b` ("never seed fake deps into an
