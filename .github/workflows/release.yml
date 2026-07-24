@@ -110,8 +110,12 @@ jobs:
           #   node-shim-tty         PTY/TTY: no controlling terminal under
           #                         qemu-user headless emulation (harness).
           #   node-shim-child-process  nested child spawn under qemu-user
-          #                         binfmt (cwd -> status:null) + the musl
-          #                         addchdir limit (#if __APPLE__||__GLIBC__).
+          #                         binfmt (cwd -> status:null). NB: the musl
+          #                         addchdir limit that ALSO broke cwd here is now
+          #                         FIXED (txiki-sync-spawn.patch parent-chdir
+          #                         dance); native musl runs this file in ci.yml's
+          #                         node-shim-oracle. Only the qemu-user emulation
+          #                         issue keeps it excluded on the BE legs.
           #   node-shim-core        os.constants.signals: the shim's signal
           #                         table is hardcoded DARWIN values (SIGBUS 10
           #                         vs Linux 7) — a real Linux-portability shim

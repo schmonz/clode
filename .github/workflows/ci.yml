@@ -279,11 +279,15 @@ jobs:
           # data-correctness (identical rationale to release.yml's be-oracle):
           #   node-shim-tty            no controlling terminal on a headless runner
           #                            (PTY path is covered by windows-x64-tui + e2e-pty)
-          #   node-shim-child-process  musl addchdir limit (#if __APPLE__||__GLIBC__)
           #   node-shim-core           shim signal table hardcodes DARWIN values
           #                            (SIGBUS 10 vs Linux 7) — Linux-portability bug, filed
           #   node-shim-bunshim        bun:ffi suffix hardcodes macOS 'dylib' (Linux .so)
-          EXCLUDE='node-shim-tty|node-shim-child-process|node-shim-core|node-shim-bunshim'
+          # node-shim-child-process is NO LONGER excluded: its `spawnSync: cwd` row is
+          # the one that failed here — musl rejected posix_spawn cwd (the addchdir_np
+          # gate was #ifdef __GLIBC__), so tar's KAT and `clode fetch --naude` died
+          # "no tar tool found on PATH". Fixed in txiki-sync-spawn.patch (parent-side
+          # chdir dance on musl); this file now runs on musl as the standing guard.
+          EXCLUDE='node-shim-tty|node-shim-core|node-shim-bunshim'
           FILES=$(ls test/node-shim-*.test.cjs | grep -vE "$EXCLUDE")
           # The parity gate's input: cli.cjs is staged from this provider and run
           # under BOTH targets' runtimes (naude = node, quaude = tjs+shim), then

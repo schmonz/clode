@@ -36,7 +36,7 @@ new file mode 100644
 index 0000000..fe8320b
 --- /dev/null
 +++ b/src/mod_spawn_sync.c
-@@ -0,0 +1,711 @@
+@@ -0,0 +1,719 @@
 +/* Synchronous spawn primitive for CommonJS interop (node-shim).
 + * posix_spawn + poll()-drain, main-thread blocking by design. Exposed as
 + * the global `__tjs_spawn_sync`. Mirrors mod_fs_sync.c; upstream candidate. */
@@ -107,6 +107,19 @@ index 0000000..fe8320b
 +# endif
 +#else
 +# define TJS__SPAWN_SYNC_HAS_ADDCHDIR 1
++#endif
++
++/* Is `cwd` handled IN the child at spawn time via
++ * posix_spawn_file_actions_addchdir_np? glibc 2.29+ and macOS 10.15+ ship it;
++ * musl only gained it in 1.2.5, so do NOT assume it there. Where this is
++ * undefined the posix_spawn path uses the parent-side chdir dance below (safe
++ * on this single-threaded sync spawner) and the fork/exec fallback chdirs in
++ * the child — so `cwd` still works. This is what fixes musl (clode's shipped
++ * Linux binary), where a bare `#ifdef __GLIBC__` gate rejected every cwd and
++ * silently broke tar extraction, e.g. `clode fetch --naude` reporting a bogus
++ * "no tar tool found on PATH" (the tar KAT passes cwd). */
++#if (defined(__APPLE__) && defined(TJS__SPAWN_SYNC_HAS_ADDCHDIR)) || defined(__GLIBC__)
++# define TJS__SPAWN_SYNC_CHDIR_VIA_FA 1
 +#endif
 +
 +#if !defined(_WIN32)
@@ -232,15 +245,9 @@ index 0000000..fe8320b
 +    if (timeout_ms < 0) timeout_ms = 0;          /* negative timeout => no timeout */
 +    if (max_buffer <= 0) max_buffer = 1 << 24;   /* nonpositive cap => default 16MB */
 +
-+#if !defined(__APPLE__) && !defined(__GLIBC__)
-+    if (cwd) {
-+        /* build the error before freeing file (throw_errno copies the message) */
-+        JSValue e = throw_errno(ctx, EINVAL, "spawn_sync_cwd_unsupported", file);
-+        free_string_array(cargv); free_string_array(cenv);
-+        JS_FreeCString(ctx, cwd); JS_FreeValue(ctx, cwdv); JS_FreeValue(ctx, inv); JS_FreeCString(ctx, file);
-+        return e;
-+    }
-+#endif
++    /* No cwd rejection here: every build handles cwd. posix_spawn builds route
++     * it either through addchdir_np (TJS__SPAWN_SYNC_CHDIR_VIA_FA) or the
++     * parent-side chdir dance below; the fork/exec fallback chdirs in the child. */
 +
 +    int outp[2] = {-1, -1}, errp[2] = {-1, -1}, inp[2] = {-1, -1}, devnull = -1;
 +    int use_stdin = (input != NULL);
@@ -276,7 +283,7 @@ index 0000000..fe8320b
 +    posix_spawn_file_actions_adddup2(&fa, errp[1], 2);
 +    posix_spawn_file_actions_addclose(&fa, errp[0]);
 +    posix_spawn_file_actions_addclose(&fa, errp[1]);
-+#if (defined(__APPLE__) && defined(TJS__SPAWN_SYNC_HAS_ADDCHDIR)) || defined(__GLIBC__)
++#ifdef TJS__SPAWN_SYNC_CHDIR_VIA_FA
 +    /* addchdir_np: since macOS 10.15 / glibc 2.29. Deprecated on macOS 26 for
 +     * the POSIX posix_spawn_file_actions_addchdir, but still functional; the
 +     * build is -Werror, so suppress the deprecation locally rather than fork
@@ -319,10 +326,11 @@ index 0000000..fe8320b
 +#endif
 +
 +    pid_t pid = 0;
-+#if defined(__APPLE__) && !defined(TJS__SPAWN_SYNC_HAS_ADDCHDIR)
-+    /* No addchdir_np before macOS 10.15: parent-side chdir dance around the
-+     * spawn — safe on the single JS thread this sync spawner runs on. A
-+     * failed chdir(cwd) becomes the spawn error (same errno class node
++#ifndef TJS__SPAWN_SYNC_CHDIR_VIA_FA
++    /* posix_spawn build with no file-actions addchdir_np (pre-10.15 macOS, and
++     * musl, whose addchdir_np landed only in 1.2.5): parent-side chdir dance
++     * around the spawn — safe on the single JS thread this sync spawner runs
++     * on. A failed chdir(cwd) becomes the spawn error (same errno class node
 +     * reports for a bad cwd). */
 +    char oldcwd[1024];
 +    int rc = 0;
