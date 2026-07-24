@@ -1,20 +1,32 @@
 # clode: Claude Code, everywhere
 
-Claude Code ships binaries for a handful of popular platforms. What about everyone else?
+When your OS isn't popular or your computer isn't recent, how do you run Claude Code?
 
-This repo, that's what.
+[Download `clode`](https://github.com/schmonz/clode/releases/latest/) for your potato, then do this once:
 
-[Download `clode` for your system](https://github.com/schmonz/clode/releases/latest),
-then run `clode fetch` and `clode build` to:
+```sh
+mv clode-* clode && chmod +x clode
+./clode fetch && ./clode build
+```
 
-1. Fetch upstream `claude` (Linux-x64, not that it matters)
+Do this as many times as necessary until you believe it:
+
+```sh
+./quaude
+```
+
+Have fun.
+
+## What? How'd that work?!?
+
+This repo contains no Anthropic code, only a tool that does these things by request:
+
+1. Fetch upstream `claude` (nearest match for your OS and arch)
 2. Extract its embedded JavaScript
 3. Rebase Bun-specific calls onto Node equivalents
 4. Back Node API with (mostly) [txiki.js](https://txikijs.org)
 5. Compile to [QuickJS-NG](https://quickjs-ng.github.io/quickjs/) bytecode
 6. Write native `quaude`
-
-`quaude` is `claude` under QuickJS. Run it on your weird computer. Have fun.
 
 (If your computer's Node-compatible and you want that runtime instead,
 `clode build --naude` writes `naude`, replacing steps 4 and 5 with an embedded Node interpreter.)
@@ -24,7 +36,6 @@ then run `clode fetch` and `clode build` to:
 - `bash` for basic tool use
 - `bfs` >= 3.x (built with Oniguruma)
 - `ugrep` >= 7.5.0
-- `rg`
 
 ## Updating
 
