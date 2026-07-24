@@ -137,7 +137,8 @@ const TXIKI_PATCH_ORDER = [
   'txiki-sync-fs.patch',
   'txiki-sync-spawn.patch',
   'txiki-wurl-url.patch',
-  'txiki-unhandledrejection-no-abort.patch',  // last: diffed against the fully-patched tree (vm.c ~L731)
+  'txiki-unhandledrejection-no-abort.patch',  // diffed against the fully-patched tree (vm.c ~L731)
+  'txiki-vm-context.patch',                   // real per-context global: new mod_vm.c + CMakeLists/private.h/vm.c wiring
 ];
 
 function orderedPatches(prefix) {

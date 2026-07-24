@@ -1,0 +1,160 @@
+diff --git a/src/mod_vm.c b/src/mod_vm.c
+new file mode 100644
+index 0000000..a3bb43f
+--- /dev/null
++++ b/src/mod_vm.c
+@@ -0,0 +1,130 @@
++/* node:vm context isolation primitive for the node-shim. Exposed as the global
++ * `__tjs_vm`. quickjs-ng supports multiple JSContexts per JSRuntime — each with
++ * its OWN global object, sharing one heap — so a child context gives a workflow
++ * script a genuinely separate global. This is what keeps the Workflow engine's
++ * Date.now/Math.random determinism guard (installed into the context's global)
++ * from clobbering the engine's / txiki's shared global.
++ * See docs/superpowers/plans/2026-07-24-vm-context-isolation.md. */
++#include "private.h"
++#include "utils.h"
++#include <string.h>
++
++static JSClassID tjs_vm_ctx_class_id;
++
++static void tjs_vm_ctx_finalizer(JSRuntime *rt, JSValue val) {
++    (void)rt;
++    JSContext *child = JS_GetOpaque(val, tjs_vm_ctx_class_id);
++    if (child)
++        JS_FreeContext(child);
++}
++
++static JSClassDef tjs_vm_ctx_class = {
++    "VMContext",
++    .finalizer = tjs_vm_ctx_finalizer,
++};
++
++/* create() -> opaque wrapper around a fresh child JSContext (own global). */
++static JSValue js_vm_create(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
++    (void)this_val; (void)argc; (void)argv;
++    JSContext *child = JS_NewContext(JS_GetRuntime(ctx));
++    if (!child)
++        return JS_ThrowOutOfMemory(ctx);
++    JSValue obj = JS_NewObjectClass(ctx, tjs_vm_ctx_class_id);
++    if (JS_IsException(obj)) {
++        JS_FreeContext(child);
++        return obj;
++    }
++    JS_SetOpaque(obj, child);
++    return obj;
++}
++
++/* setGlobal(wrapper, key, value): define `key` on the child context's global.
++ * value is a main-context JSValue; same-runtime cross-context sharing is legal
++ * (used to inject the engine's live builtins agent/log/... as child globals). */
++static JSValue js_vm_set_global(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
++    (void)this_val; (void)argc;
++    JSContext *child = JS_GetOpaque2(ctx, argv[0], tjs_vm_ctx_class_id);
++    if (!child)
++        return JS_EXCEPTION;
++    const char *key = JS_ToCString(ctx, argv[1]);
++    if (!key)
++        return JS_EXCEPTION;
++    JSValue g = JS_GetGlobalObject(child);
++    JS_SetPropertyStr(child, g, key, JS_DupValue(ctx, argv[2]));
++    JS_FreeValue(child, g);
++    JS_FreeCString(ctx, key);
++    return JS_UNDEFINED;
++}
++
++/* run(wrapper, code, filename) -> result. Evals `code` in the child context's
++ * global scope. Result is transported to the caller context via a JSON round-trip
++ * (safe for primitives/plain objects across the context boundary). A child
++ * exception is re-thrown into the caller context as a TypeError carrying its
++ * message. */
++static JSValue js_vm_run(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
++    (void)this_val;
++    JSContext *child = JS_GetOpaque2(ctx, argv[0], tjs_vm_ctx_class_id);
++    if (!child)
++        return JS_EXCEPTION;
++    const char *code = JS_ToCString(ctx, argv[1]);
++    if (!code)
++        return JS_EXCEPTION;
++    const char *file = (argc > 2 && !JS_IsUndefined(argv[2])) ? JS_ToCString(ctx, argv[2]) : NULL;
++
++    JSValue rv = JS_Eval(child, code, strlen(code), file ? file : "<vm>", JS_EVAL_TYPE_GLOBAL);
++    JS_FreeCString(ctx, code);
++    if (file)
++        JS_FreeCString(ctx, file);
++
++    if (JS_IsException(rv)) {
++        JSValue exc = JS_GetException(child);
++        const char *msg = JS_ToCString(child, exc);
++        JSValue err = JS_ThrowTypeError(ctx, "%s", msg ? msg : "vm.run failed");
++        if (msg)
++            JS_FreeCString(child, msg);
++        JS_FreeValue(child, exc);
++        JS_FreeValue(child, rv);
++        return err;
++    }
++
++    /* JSON.stringify(rv) in the child, JS_ParseJSON in the caller. */
++    JSValue g = JS_GetGlobalObject(child);
++    JSValue json = JS_GetPropertyStr(child, g, "JSON");
++    JSValue strfn = JS_GetPropertyStr(child, json, "stringify");
++    JSValue s = JS_Call(child, strfn, json, 1, (JSValueConst *)&rv);
++    JS_FreeValue(child, rv);
++    JS_FreeValue(child, strfn);
++    JS_FreeValue(child, json);
++    JS_FreeValue(child, g);
++
++    if (JS_IsException(s) || JS_IsUndefined(s)) {
++        JS_FreeValue(child, s);
++        return JS_UNDEFINED;
++    }
++    const char *sc = JS_ToCString(child, s);
++    JS_FreeValue(child, s);
++    if (!sc)
++        return JS_UNDEFINED;
++    JSValue out = JS_ParseJSON(ctx, sc, strlen(sc), "<vm-result>");
++    JS_FreeCString(child, sc);
++    return out;
++}
++
++static const JSCFunctionListEntry vm_funcs[] = {
++    JS_CFUNC_DEF("create", 0, js_vm_create),
++    JS_CFUNC_DEF("setGlobal", 3, js_vm_set_global),
++    JS_CFUNC_DEF("run", 3, js_vm_run),
++};
++
++void tjs__mod_vm_init(JSContext *ctx, JSValue ns) {
++    (void)ns;
++    JSRuntime *rt = JS_GetRuntime(ctx);
++    JS_NewClassID(rt, &tjs_vm_ctx_class_id);
++    JS_NewClass(rt, tjs_vm_ctx_class_id, &tjs_vm_ctx_class);
++
++    JSValue global = JS_GetGlobalObject(ctx);
++    JSValue obj = JS_NewObject(ctx);
++    JS_SetPropertyFunctionList(ctx, obj, vm_funcs, countof(vm_funcs));
++    JS_DefinePropertyValueStr(ctx, global, "__tjs_vm", obj, JS_PROP_C_W_E);
++    JS_FreeValue(ctx, global);
++}
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -146,3 +146,4 @@
+     src/mod_fs_sync.c
+     src/mod_spawn_sync.c
++    src/mod_vm.c
+     src/mod_fswatch.c
+diff --git a/src/private.h b/src/private.h
+--- a/src/private.h
++++ b/src/private.h
+@@ -129,3 +129,4 @@ void tjs__mod_fs_init(JSContext *ctx, JSValue ns);
+ void tjs__mod_fs_sync_init(JSContext *ctx, JSValue ns);
+ void tjs__mod_spawn_sync_init(JSContext *ctx, JSValue ns);
++void tjs__mod_vm_init(JSContext *ctx, JSValue ns);
+ void tjs__mod_fswatch_init(JSContext *ctx, JSValue ns);
+diff --git a/src/vm.c b/src/vm.c
+--- a/src/vm.c
++++ b/src/vm.c
+@@ -246,3 +246,4 @@ static void tjs__bootstrap_core(JSContext *ctx, JSValue ns) {
+     tjs__mod_fs_sync_init(ctx, ns);
+     tjs__mod_spawn_sync_init(ctx, ns);
++    tjs__mod_vm_init(ctx, ns);
+     tjs__mod_fswatch_init(ctx, ns);
