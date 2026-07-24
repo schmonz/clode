@@ -627,6 +627,37 @@ function describeExit(r) {
 // not phone home or write <cache>/clode/last-watch — see clode-main.cjs's
 // build branch. Returns { naude, self, out } on success or { error } on a
 // bad argv; never throws, never writes anywhere (pure parse).
+// A TTY-only, in-place phase spinner for `clode build` — the build is discrete
+// phases with no known total (extract → fuse → smoke), so unlike `clode fetch`'s
+// byte bar this is an animated phase LABEL, not a percentage. Mirrors
+// clode-update's download progress: redraw with `\r … \x1b[K`, clear with the
+// same. `active` should be `stderr.isTTY && !CLODE_VERBOSE` — piped/CI builds and
+// the verbose firehose (which prints its own phase lines) render nothing. The
+// interval is unref'd so it can never keep the process alive on an unexpected
+// throw; every normal exit path calls done().
+function makePhaseSpinner(stderr, active) {
+  const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+  let iv = null, label = '', start = 0, frame = 0;
+  const draw = () => {
+    const s = ((Date.now() - start) / 1000).toFixed(1);
+    stderr.write(`\r${FRAMES[frame]} ${label}… (${s}s)\x1b[K`);
+    frame = (frame + 1) % FRAMES.length;
+  };
+  return {
+    phase(next) {
+      if (!active) return;
+      label = next; start = Date.now(); frame = 0;
+      if (!iv) { iv = setInterval(draw, 100); if (iv && iv.unref) iv.unref(); }
+      draw();
+    },
+    done() {
+      if (iv) { clearInterval(iv); iv = null; }
+      if (active && label) stderr.write('\r\x1b[K');
+      label = '';
+    },
+  };
+}
+
 function parseBuildArgs(args) {
   let naude = false;
   let self = false;
@@ -661,7 +692,11 @@ async function clodeBuild(args, opts) {
   const spawnRun = opts.run || run;
   const verbose = !!env.CLODE_VERBOSE;
   const clodeLog = (m) => { if (verbose) stderr.write(m + '\n'); };
-  const fail = (m) => { stderr.write('clode: ' + m + '\n'); return 1; };
+  // Progress spinner: TTY-only, and off under CLODE_VERBOSE (which prints its own
+  // phase lines). phase()/done() are no-ops otherwise, so piped/CI builds are
+  // byte-for-byte unchanged. done() is called before every terminal write.
+  const spin = makePhaseSpinner(stderr, !!stderr.isTTY && !verbose);
+  const fail = (m) => { spin.done(); stderr.write('clode: ' + m + '\n'); return 1; };
   const SCALE = timeoutScale(env);
 
   // -- argv: parsed ONCE for the whole subcommand, before either branch below
@@ -912,6 +947,7 @@ async function clodeBuild(args, opts) {
 
     // -- payload staging: the upstream Claude Code bundle (default), or the
     // esbuilt clode-main bundle (--self).
+    spin.phase('Extracting bundle');
     let stageDir, key;
     if (self) {
       let bundle = env.CLODE_MAIN_BUNDLE;
@@ -1100,6 +1136,7 @@ async function clodeBuild(args, opts) {
     fs.writeFileSync(extrasPath, JSON.stringify(extras));
 
     // -- fuse, under the template itself.
+    spin.phase('Fusing');
     clodeLog(`clode: build: fusing ${out} ...`);
     const w = await spawnRun(template, ['run', path.join(libexec, 'quaude-fuse.js'),
       signedBase, stageDir, path.join(libexec, 'node-shim'), nmDir,
@@ -1134,6 +1171,7 @@ async function clodeBuild(args, opts) {
     // proven on the target's own oracle (its VM/hardware). attest still runs
     // THERE (it verifies member shas from the trailer, arch-independent).
     if (crossTarget) {
+      spin.done();
       stdout.write(`clode: cross-fused ${out} (${fs.statSync(out).size} bytes, target ${path.basename(crossTarget)}) — smoke on the target\n`);
       return 0;
     }
@@ -1141,10 +1179,12 @@ async function clodeBuild(args, opts) {
     if (self) {
       // -- builder smoke: its own flags must answer, with NODE_PATH stripped
       // (self-containment proof at the same strength as the quaude smoke).
+      spin.phase('Smoking');
       clodeLog('clode: build: smoke --version/--help ...');
       const smokeEnv = { ...env };
       delete smokeEnv.NODE_PATH;
       const v = await spawnRun(out, ['--version'], { env: smokeEnv, cwd: work, timeout: 120000 * SCALE });
+      spin.done();
       if (v.status !== 0 || !/^clode /.test(v.stdout)) {
         stderr.write(`clode: build --self: SMOKE FAILED — the fused builder did not answer --version\n`);
         stderr.write(`clode: build --self: ${describeExit(v)} stdout:\n${v.stdout}\nstderr:\n${v.stderr}\n`);
@@ -1165,7 +1205,9 @@ async function clodeBuild(args, opts) {
     // mock + NODE_PATH-stripped -p PONG + assert-the-POST-landed. NODE_PATH is
     // stripped so a pass PROVES the binary is self-contained.
     clodeLog('clode: build: smoke -p against the canned Messages mock ...');
+    spin.phase('Smoking');
     const smoke = await smokeTarget(out, { spawnRun, env, cwd: work, timeout: 120000 * SCALE });
+    spin.done();
     if (!smoke.ok) {
       stderr.write(`clode: build: SMOKE FAILED — the fused quaude did not complete the mock round-trip\n`);
       stderr.write(`clode: build: ${smoke.how} posted=${smoke.posted} stdout:\n${smoke.stdout}\nstderr:\n${smoke.stderr}\n`);
@@ -1184,12 +1226,13 @@ async function clodeBuild(args, opts) {
     stdout.write(`clode: smoke: PONG round-trip ok, attest ok — run '${out}' to use it\n`);
     return 0;
   } finally {
+    spin.done(); // safety net: stop the animation on any exit path (throws, early returns)
     try { fs.rmSync(work, { recursive: true, force: true }); } catch { /* best effort */ }
   }
 }
 
 module.exports = {
-  clodeBuild, parseBuildArgs, startPongMock, cannedSSE, smokeTarget, timeoutScale, codesignAdHoc, describeExit,
+  clodeBuild, parseBuildArgs, makePhaseSpinner, startPongMock, cannedSSE, smokeTarget, timeoutScale, codesignAdHoc, describeExit,
   readDirectDeps, computeDepClosure, assertClosureMatchesLockfile,
   scanBareSpecifiers, specifierPackageName, isBuiltinSpecifier, shimProvidedModules,
   assertNoUnknownBareSpecifiers, KNOWN_UNREACHABLE, resolveClaudeNmDir,
