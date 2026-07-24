@@ -1,6 +1,6 @@
 {
   "name": "clode",
-  "version": "0.20260722.1",
+  "version": "0.20260723.1",
   "private": true,
   "description": "Build a standalone Claude Code binary for any machine: clode repackages the upstream Claude Code bundle into a single executable, either a portable QuickJS/tjs binary (quaude) or a Node SEA (naude). clode contains no Anthropic code; you supply your own Claude Code and build locally.",
   "engines": {

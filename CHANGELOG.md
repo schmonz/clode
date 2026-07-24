@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.20260723.1
+
+Add and run a battery of tests for behavioral fidelity with `claude`, then fix what turned up:
+
+- Reading and writing files as streams
+- Truncating files
+- Copying trees
+
+All together, `/remote-control` silently failed before and works now. Probably other things work too.
+
+Still not ready for daily driving, but probably much closer. I'm excited to try.
+
 ## 0.20260722.1
 
 Turns out the JavaScript we carve out of an upstream Claude binary is platform-specific after all. `clode fetch` now downloads the closest match for your platform.
