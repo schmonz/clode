@@ -25,3 +25,4 @@ spike/quickjs/vendor/
 
 # patched-tjs build output (scripts/build-tjs.mjs)
 build/tjs/
+bench/results/

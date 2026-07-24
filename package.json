@@ -8,6 +8,8 @@
   },
   "scripts": {
     "test": "node test/run.mjs",
-    "test:online": "node test/run.mjs --online"
+    "test:online": "node test/run.mjs --online",
+    "bench": "node bench/run.mjs",
+    "bench:gate": "node bench/run.mjs --gate"
   }
 }
