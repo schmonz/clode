@@ -1,9 +1,9 @@
 diff --git a/src/mod_vm.c b/src/mod_vm.c
 new file mode 100644
-index 0000000..a3bb43f
+index 0000000..30bfccf
 --- /dev/null
 +++ b/src/mod_vm.c
-@@ -0,0 +1,130 @@
+@@ -0,0 +1,113 @@
 +/* node:vm context isolation primitive for the node-shim. Exposed as the global
 + * `__tjs_vm`. quickjs-ng supports multiple JSContexts per JSRuntime — each with
 + * its OWN global object, sharing one heap — so a child context gives a workflow
@@ -63,10 +63,12 @@ index 0000000..a3bb43f
 +}
 +
 +/* run(wrapper, code, filename) -> result. Evals `code` in the child context's
-+ * global scope. Result is transported to the caller context via a JSON round-trip
-+ * (safe for primitives/plain objects across the context boundary). A child
-+ * exception is re-thrown into the caller context as a TypeError carrying its
-+ * message. */
++ * global scope and returns the completion value LIVE (same runtime/heap, so a
++ * child-context value — crucially a Promise, for an async workflow — is valid in
++ * the caller context; do NOT JSON-serialize, that would destroy Promises/
++ * functions). Cross-realm divergence: the value's prototype is the child's (e.g.
++ * `x instanceof Object` uses the child's Object) — acceptable per the vm-context
++ * design. A child exception is re-thrown into the caller as a TypeError. */
 +static JSValue js_vm_run(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
 +    (void)this_val;
 +    JSContext *child = JS_GetOpaque2(ctx, argv[0], tjs_vm_ctx_class_id);
@@ -93,27 +95,8 @@ index 0000000..a3bb43f
 +        return err;
 +    }
 +
-+    /* JSON.stringify(rv) in the child, JS_ParseJSON in the caller. */
-+    JSValue g = JS_GetGlobalObject(child);
-+    JSValue json = JS_GetPropertyStr(child, g, "JSON");
-+    JSValue strfn = JS_GetPropertyStr(child, json, "stringify");
-+    JSValue s = JS_Call(child, strfn, json, 1, (JSValueConst *)&rv);
-+    JS_FreeValue(child, rv);
-+    JS_FreeValue(child, strfn);
-+    JS_FreeValue(child, json);
-+    JS_FreeValue(child, g);
-+
-+    if (JS_IsException(s) || JS_IsUndefined(s)) {
-+        JS_FreeValue(child, s);
-+        return JS_UNDEFINED;
-+    }
-+    const char *sc = JS_ToCString(child, s);
-+    JS_FreeValue(child, s);
-+    if (!sc)
-+        return JS_UNDEFINED;
-+    JSValue out = JS_ParseJSON(ctx, sc, strlen(sc), "<vm-result>");
-+    JS_FreeCString(child, sc);
-+    return out;
++    /* Return the live value (shared runtime — valid across contexts). */
++    return rv;
 +}
 +
 +static const JSCFunctionListEntry vm_funcs[] = {
