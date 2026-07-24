@@ -254,6 +254,22 @@ well-tested, and reasonably fast** as we can possibly make it." Sequencing:
   rejects unhandled in the first place (could still be a node-shim gap the async orchestration hits) —
   worth a look once the abort is downgraded and the reason becomes visible. node:vm shim itself is
   confirmed working; this is a distinct, deeper wall.
+  **UPDATE 2026-07-24 — downgraded the abort, and it exposed the true blocker.** Patched txiki
+  `tjs__execute_jobs` to degrade instead of `CHECK_EQ`-abort when the PromiseRejectionEvent ctor throws
+  (dump ctor error + rejection reason, drop it, keep draining). Rebuilt tjs + a fresh quaude — no more
+  SIGABRT (`-p` exits 1 cleanly) and the dumped reason is:
+  `Date.now() / new Date() are unavailable in workflow scripts (breaks resume)...` — the workflow
+  ENGINE's own determinism guard, firing on a `log()+return` script that never calls Date.now. ROOT
+  CAUSE (the real one): the engine relies on **true vm context isolation** to keep its own real `Date`
+  (it uses `new globalThis.Date(...)` explicitly) separate from the script sandbox's guarded `Date`; the
+  node:vm shim's `with`+eval approximation has NO isolation (documented divergence), so the guarded Date
+  and the engine's Date collapse into one global → the engine/builtins hit their own guard → unhandled
+  rejection → (previously) abort. So a truly-working Workflow under quaude needs REAL context isolation
+  in the vm shim (a quickjs-ng realm / separate global — hard from JS) or a workflow-engine change that
+  doesn't lean on isolation for the guards. The txiki no-abort patch is a genuine, independent win and
+  should ship regardless (it's `spike/quickjs/patches/txiki-unhandledrejection-no-abort.patch.WIP` —
+  formalize when patches/ unfreezes). The node:vm shim (committed `45d15bf`) also stands — it unblocks the
+  non-workflow vm consumers (REPL eval, command sandbox) that don't rely on isolation.
 
 ### Platform wishlist (reachable-frontier tracker)
 

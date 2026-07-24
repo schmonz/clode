@@ -1,0 +1,27 @@
+diff --git a/src/vm.c b/src/vm.c
+index 673f63f..ffdddd8 100644
+--- a/src/vm.c
++++ b/src/vm.c
+@@ -726,7 +731,21 @@ void tjs__execute_jobs(JSContext *ctx) {
+         args[2] = pr->reason;
+ 
+         JSValue event = JS_CallConstructor(ctx, qrt->builtins.promise_event_ctor, countof(args), args);
+-        CHECK_EQ(JS_IsException(event), 0);
++        if (JS_IsException(event)) {
++            /* clode: the PromiseRejectionEvent constructor threw. Do NOT SIGABRT the
++             * whole process (the old CHECK_EQ). Degrade like Node: dump the ctor
++             * error AND the underlying rejection reason (so it is visible), drop this
++             * rejection, and keep draining the rest. */
++            tjs_dump_error(ctx);
++            JS_Throw(ctx, JS_DupValue(ctx, pr->reason));
++            tjs_dump_error(ctx);
++            JS_FreeValue(ctx, event_name);
++            list_del(&pr->link);
++            JS_FreeValue(ctx, pr->promise);
++            JS_FreeValue(ctx, pr->reason);
++            js_free(ctx, pr);
++            continue;
++        }
+         JSValue ret = tjs__dispatch_event(ctx, &event);
+ 
+         JS_FreeValue(ctx, event);

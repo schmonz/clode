@@ -137,6 +137,7 @@ const TXIKI_PATCH_ORDER = [
   'txiki-sync-fs.patch',
   'txiki-sync-spawn.patch',
   'txiki-wurl-url.patch',
+  'txiki-unhandledrejection-no-abort.patch',  // last: diffed against the fully-patched tree (vm.c ~L731)
 ];
 
 function orderedPatches(prefix) {
