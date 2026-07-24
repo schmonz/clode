@@ -200,6 +200,24 @@ well-tested, and reasonably fast** as we can possibly make it." Sequencing:
   call; confirm whether it repros on other quaude arches (narrows shim-tty vs
   general). Relates to the stale-frames + M3 render-parity TUI frontier above.
 
+- **quaude TUI won't exit on double-Ctrl-C — the second press doesn't tear down
+  (Tiger/PPC Darwin 8, daily-driver 2026-07-24). Likely FIX BEFORE NEXT RELEASE.**
+  After the libuv tty write-side fix `ecf8985` the TUI draws AND reads input: the
+  FIRST Ctrl-C correctly shows "Press Ctrl-C again to exit" (so the raw 0x03 byte
+  reaches the handler — input is fine). But the SECOND Ctrl-C does not actually
+  exit — the process stays alive on its tty and the only escape was `kill -TERM
+  <pid>` from another shell. So the fault is the EXIT / teardown path, not input:
+  the double-Ctrl-C confirm fires but the shutdown wedges before the process dies.
+  Strong suspect: a blocking SYNC tty op during raw-mode restore / alternate-screen
+  leave on Darwin 8 — the same class as the already-fixed `/quit` wedge (`O_NONBLOCK`
+  in the sync tty open, see quaude-tty-quit memo). Either that fix doesn't cover this
+  exit path or Darwin 8 needs more. NEXT: trace the second-Ctrl-C shutdown on Tiger
+  (which sync call blocks — tty restore, an alt-screen-leave write, or process.exit)
+  and confirm whether the `/quit` O_NONBLOCK fix reaches it. Workaround: kill from
+  another shell. Also observed alongside: couldn't copy the printed OAuth URL out of
+  the frozen-feeling login screen (secondary — a selection/scrollback issue, not the
+  exit bug).
+
 - **`Workflow` (multi-agent orchestration) was dead under quaude — node:vm shim
   SHIPPED 2026-07-24 (`modules/vm.cjs` gains createContext/runInContext/etc;
   `test/node-shim-vm.test.cjs` RED→GREEN; full live workflow re-verify still pending
