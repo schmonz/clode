@@ -201,7 +201,7 @@ runs:
       run: echo "image=${ImageOS:-unknown}" >> "$GITHUB_OUTPUT"
     - name: Restore the built tjs (PINS+patches+recipe+build-env keyed)
       id: tjs-cache
-      uses: actions/cache@v6
+      uses: actions/cache@v6.1.0
       with:
         path: ${{ steps.mode.outputs.out }}
         key: tjs-${{ inputs.leg }}-${{ steps.axes.outputs.image }}-${{ inputs.guest-version }}-${{ inputs.macos-min }}-${{ inputs.macos-sdk }}-${{ inputs.cross-image }}-${{ inputs.cross-dockerfile }}-${{ hashFiles('spike/quickjs/PINS.md', 'spike/quickjs/patches/*.patch', 'scripts/build-tjs.mjs', 'scripts/*.toolchain.cmake', 'spike/quickjs/atomic-shim.c', 'ci/osxcross-darwin/Dockerfile') }}
@@ -236,7 +236,7 @@ runs:
     - name: Restore the pinned macOS SDK
       if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.guest-platform == 'native' && inputs.macos-sdk != ''
       id: sdk-cache
-      uses: actions/cache@v6
+      uses: actions/cache@v6.1.0
       with:
         path: ${{ runner.temp }}/MacOSX${{ inputs.macos-sdk }}.sdk
         # v2: the SDK dir now carries the Csu-built crt1.10.6.o graft.
@@ -288,7 +288,7 @@ runs:
 
     - name: Activate the MSVC dev environment (native Windows cl.exe leg)
       if: runner.os == 'Windows' && steps.tjs-cache.outputs.cache-hit != 'true' && inputs.msvc == 'true'
-      uses: ilammy/msvc-dev-cmd@v1
+      uses: ilammy/msvc-dev-cmd@v1.13.0
       with:
         arch: ${{ inputs.msvc-arch }}
 
@@ -356,10 +356,10 @@ runs:
     # ~20-min osxcross compile. Loaded as a local tag the run step below consumes.
     - name: Set up buildx (cross-dockerfile legs)
       if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.cross-dockerfile != ''
-      uses: docker/setup-buildx-action@v4
+      uses: docker/setup-buildx-action@v4.2.0
     - name: Build the cross-toolchain image (GHA-cached, no registry)
       if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.cross-dockerfile != ''
-      uses: docker/build-push-action@v6
+      uses: docker/build-push-action@v6.19.2
       with:
         context: ${{ inputs.cross-dockerfile }}
         load: true
@@ -577,7 +577,7 @@ runs:
 
     - name: Upload the tier-2 cross-fused builder
       if: inputs.tier2 == 'true'
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@v7.0.1
       with:
         name: ${{ inputs.publish == 'true' && steps.name.outputs.asset || format('smoke-{0}', steps.name.outputs.asset) }}
         path: ${{ steps.name.outputs.asset }}
@@ -597,7 +597,7 @@ runs:
     # LOGGED — never a silent downgrade; tier-2 stands on level-2 either way.
     - name: Register qemu-user binfmt (verify=qemu-user)
       if: inputs.verify == 'qemu-user'
-      uses: docker/setup-qemu-action@v4
+      uses: docker/setup-qemu-action@v4.2.0
     - name: Validate the tier-2 builder under qemu-user (verify=qemu-user)
       if: inputs.verify == 'qemu-user'
       shell: bash
@@ -684,7 +684,7 @@ runs:
     # smokes). Cheap and idempotent.
     - name: Ensure qemu binfmt for foreign-arch host execution
       if: inputs.guest-platform == 'alpine' && inputs.guest-arch != 'x86_64' && runner.arch == 'X64'
-      uses: docker/setup-qemu-action@v4
+      uses: docker/setup-qemu-action@v4.2.0
 
     - name: Stage the provider for the in-VM full smoke
       if: steps.mode.outputs.exec == 'guest' && inputs.smoke == 'full'
@@ -917,20 +917,20 @@ runs:
 
     - name: Attest build provenance
       if: inputs.attest == 'true' && inputs.no-exec != 'true'
-      uses: actions/attest-build-provenance@v4
+      uses: actions/attest-build-provenance@v4.1.1
       with:
         subject-path: ${{ steps.name.outputs.asset }}
 
     - name: Upload the builder artifact
       if: inputs.no-exec != 'true'
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@v7.0.1
       with:
         name: ${{ inputs.publish == 'true' && steps.name.outputs.asset || format('smoke-{0}', steps.name.outputs.asset) }}
         path: ${{ steps.name.outputs.asset }}
         if-no-files-found: error
 
     - name: Upload the bare tjs binary (oracle jobs + debugging)
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@v7.0.1
       with:
         name: tjs-${{ inputs.leg }}
         path: ${{ steps.bare.outputs.path }}

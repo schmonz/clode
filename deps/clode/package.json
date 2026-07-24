@@ -3,7 +3,7 @@
   "private": true,
   "description": "clode's OWN build-time toolchain (esbuild, postject) — what `clode build`/`clode build --naude` compile and package WITH. Distinct from deps/claude (what the BUILT apps need at runtime) and from clode's own runtime surface (node builtins only, see test/clode-self-deps.test.cjs). MANIFEST ONLY, never installed here: esbuild/postject ship native per-platform binaries, so scripts/build-bundle.mjs and scripts/build-naude.mjs each copy this manifest into a per-platform-tag build/<tag> dir and `npm ci`/`npm install` THERE instead of into deps/clode/node_modules.",
   "devDependencies": {
-    "esbuild": "^0.28.0",
-    "postject": "^1.0.0-alpha.6"
+    "esbuild": "0.28.1",
+    "postject": "1.0.0-alpha.6"
   }
 }

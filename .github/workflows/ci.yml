@@ -49,13 +49,13 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           submodules: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v7.0.0
         with:
           node-version-file: .tool-versions
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@v8.0.1
         with:
           name: tjs-windows-x64
           path: .
@@ -108,13 +108,13 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           submodules: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v7.0.0
         with:
           node-version-file: .tool-versions
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@v8.0.1
         with:
           name: tjs-windows-x64
           path: .
@@ -167,13 +167,13 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           submodules: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v7.0.0
         with:
           node-version-file: .tool-versions
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@v8.0.1
         with:
           name: tjs-windows-arm64
           path: .
@@ -210,8 +210,8 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
         with:
           node-version-file: .tool-versions
       - name: Assert Node matches the .tool-versions pin
@@ -253,11 +253,11 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
         with:
           node-version-file: .tool-versions
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@v8.0.1
         with:
           name: tjs-linux-x64-musl   # bare static engine from the CI-tier leg
           path: ${{ runner.temp }}/tjs
@@ -316,7 +316,7 @@ jobs:
       # nodejs.org outage reuses the cache instead of turning this step red. Keyed
       # on the pin file so a version bump misses and re-fetches automatically.
       - name: Cache the pinned Node (naude engine)
-        uses: actions/cache@v4
+        uses: actions/cache@v4.3.0
         with:
           path: ${{ runner.temp }}/clode-nodes
           key: pinned-node-${{ hashFiles('deps/clode/node-pin.json') }}-${{ runner.os }}-${{ runner.arch }}
@@ -409,11 +409,11 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
         with:
           node-version-file: .tool-versions
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@v8.0.1
         with:
           name: tjs-darwin-arm64   # bare arm64 engine from the CI-tier darwin leg
           path: ${{ runner.temp }}/tjs
@@ -461,11 +461,11 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
         with:
           node-version-file: .tool-versions
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@v8.0.1
         with:
           name: tjs-linux-x64-musl
           path: ${{ runner.temp }}/tjs
@@ -474,7 +474,7 @@ jobs:
       - name: Provision postject (deps/clode) so the fused clode-native can assemble a naude
         run: npm ci --prefix deps/clode 2>&1 | tail -3
       - name: Cache the pinned Node (naude engine — the naude rebuild embeds it)
-        uses: actions/cache@v4
+        uses: actions/cache@v4.3.0
         with:
           path: ${{ runner.temp }}/clode-nodes
           key: pinned-node-${{ hashFiles('deps/clode/node-pin.json') }}-${{ runner.os }}-${{ runner.arch }}
