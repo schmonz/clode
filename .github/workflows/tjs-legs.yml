@@ -109,5 +109,6 @@ jobs:
           netbsd-src: ${{ matrix.netbsd-src || '' }}
           netbsd-machine: ${{ matrix.netbsd-machine || '' }}
           netbsd-arch: ${{ matrix.netbsd-arch || '' }}
+          netbsd-sysroot: ${{ matrix.netbsd-sysroot || 'full' }}
           attest: ${{ matrix.publish && 'true' || 'false' }}
           publish: ${{ matrix.publish && 'true' || 'false' }}

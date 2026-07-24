@@ -22,6 +22,18 @@ inputs:
   src-rev:
     description: "NetBSD src git rev/tag/branch to pin (build.sh input)"
     required: true
+  sysroot-mode:
+    description: >
+      'full' (default): `build.sh distribution` — the blessed target, builds all
+      of userland to populate DESTDIR. 'light': compose the sysroot from
+      `make includes` + the runtime libraries only (csu/libc/libm/libpthread/
+      libutil), skipping userland entirely. 'light' dodges NetBSD-src userland
+      bugs that never touch the engine (e.g. sbmips usr.sbin/crash fails to build
+      at netbsd-10) and is much faster, at the cost of an EMPIRICAL completeness
+      bar: the set of libs must be enough for tjs to cross-link. Kept opt-in so
+      the proven 'full' legs are untouched until 'light' is confirmed complete.
+    required: false
+    default: "full"
 outputs:
   tooldir:
     description: "the build.sh TOOLDIR (contains bin/<machine-triple>-*)"
@@ -42,7 +54,10 @@ runs:
         path: |
           ${{ runner.temp }}/nbsd-tool
           ${{ runner.temp }}/nbsd-dest
-        key: netbsd-crossbuild-${{ inputs.machine }}-${{ inputs.arch }}-${{ inputs.src-rev }}-v1
+        # A light sysroot is a different artifact than a full one, so it must not
+        # share a cache entry. Full keeps the historical key unchanged (the 8
+        # green legs' caches stay valid); light gets its own suffix.
+        key: netbsd-crossbuild-${{ inputs.machine }}-${{ inputs.arch }}-${{ inputs.src-rev }}${{ inputs.sysroot-mode == 'light' && '-light' || '' }}-v1
     - id: b
       shell: bash
       run: |
@@ -73,7 +88,28 @@ runs:
         # abort without -a; single-arch ports pick their own, so pass -a only when set.
         ARCHOPT=(); [ -n "${{ inputs.arch }}" ] && ARCHOPT=(-a "${{ inputs.arch }}")
         ./build.sh -m "${{ inputs.machine }}" "${ARCHOPT[@]}" -U -T "$TOOL" -D "$DEST" -j "$J" tools
-        ./build.sh -m "${{ inputs.machine }}" "${ARCHOPT[@]}" -U -T "$TOOL" -D "$DEST" -j "$J" distribution
+        if [ "${{ inputs.sysroot-mode }}" = light ]; then
+          # LIGHT sysroot: there is no blessed build.sh "sysroot only" operation,
+          # so compose one from make targets one level down via the nbmake wrapper
+          # `tools` produced. `makewrapper` bakes MACHINE/MACHINE_ARCH/DESTDIR/
+          # TOOLDIR into nbmake-<machine>. `includes` installs all system headers;
+          # then build+install ONLY the runtime libraries tjs links against, in
+          # dependency order (csu first for crt*.o, then libc, then its dependents).
+          # This never descends into usr.sbin, so userland bugs (e.g. sbmips
+          # usr.sbin/crash "unknown type name 'bool'" at netbsd-10) never fire.
+          # The lib list is the EMPIRICAL part: if tjs later fails to link on a
+          # missing symbol, add the owning lib subdir here.
+          ./build.sh -m "${{ inputs.machine }}" "${ARCHOPT[@]}" -U -T "$TOOL" -D "$DEST" -j "$J" makewrapper
+          NBMAKE=$(ls "$TOOL"/bin/nbmake-* 2>/dev/null | head -1)
+          [ -x "$NBMAKE" ] || { echo "build.sh: no nbmake-* wrapper under $TOOL/bin" >&2; ls "$TOOL/bin" | head; exit 1; }
+          "$NBMAKE" -C "$SRC" includes
+          for libdir in csu libc libm libpthread libutil; do
+            "$NBMAKE" -C "$SRC/lib/$libdir" -j "$J" dependall install
+          done
+          test -e "$DEST"/usr/lib/libc.* || { echo "light sysroot: no libc under $DEST/usr/lib" >&2; ls "$DEST/usr/lib" 2>/dev/null | head; exit 1; }
+        else
+          ./build.sh -m "${{ inputs.machine }}" "${ARCHOPT[@]}" -U -T "$TOOL" -D "$DEST" -j "$J" distribution
+        fi
         ls "$TOOL"/bin/*--netbsd*-gcc >/dev/null 2>&1 || { echo "build.sh: no *--netbsd*-gcc under $TOOL/bin" >&2; ls "$TOOL/bin" | head; exit 1; }
         test -d "$DEST/usr/include" || { echo "build.sh: no sysroot headers under $DEST/usr/include" >&2; exit 1; }
         # Free the src tree once the toolchain + sysroot are built (keeps the

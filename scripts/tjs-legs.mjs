@@ -495,18 +495,21 @@ const LEGS = [
   // no shim. canonical-LE bytecode proof on a 3rd 64-bit-BE target.
   { leg: 'netbsd-mips64eb', os: 'ubuntu-latest', 'guest-arch': 'mips64eb',
     'netbsd-src': 'netbsd-10', 'netbsd-machine': 'sbmips', 'netbsd-arch': 'mips64eb',
+    'netbsd-sysroot': 'light',
     'cross-file': 'scripts/netbsd.toolchain.cmake',
     'atomic-shim': false, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
-    // STAYS RETIRED 2026-07-24 (ci:false) — a DIFFERENT class of wall from its
-    // i386/riscv64 batch-mates, which were fixed and revived. mips64eb never
-    // reaches our engine: NetBSD's own `build.sh distribution` fails building the
-    // sbmips userland (usr.sbin/crash → "unknown type name 'bool'") at the
-    // netbsd-10 pin, so no source fixup of ours (txiki/quickjs/libuv) can touch
-    // it. The next step is NetBSD-side: bump this leg's netbsd-src to a branch
-    // where sbmips/crash builds, or carry a NetBSD-src patch — neither derivable
-    // or verifiable offline. Definition stays for whoever picks it up.
-    publish: false, ci: false, ciOnly: true, 'soft-fail': true, timeout: 3600,
+    // REVIVED 2026-07-24 (ci:true, soft-fail) via the LIGHT sysroot. mips64eb's
+    // wall was never our engine: NetBSD's own `build.sh distribution` fails
+    // building the sbmips userland (usr.sbin/crash → "unknown type name 'bool'")
+    // at netbsd-10. netbsd-sysroot:'light' skips userland entirely — it composes
+    // the sysroot from `make includes` + the runtime libs (see netbsd-crossbuild)
+    // — so crash never builds. First user of the light path; the lib set is
+    // empirical (CI iterates until tjs cross-links). Once proven complete, the
+    // other NetBSD legs can converge onto light too (Phase B — the real payoff:
+    // no leg builds userland it throws away). Cross-built + no-exec: green = it
+    // compiled and linked.
+    publish: false, ci: true, ciOnly: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // NOTE: netbsd-vax was dropped 2026-07-18 — a confirmed ENGINE wall, not just a
   // toolchain risk: build.sh produces a working vax toolchain but quickjs fails to

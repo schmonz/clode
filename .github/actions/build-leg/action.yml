@@ -90,6 +90,10 @@ inputs:
     description: "NetBSD MACHINE_ARCH for build.sh -a. Required for multi-arch ports with no default (evbarm/sbmips/evbsh3); leave empty for single-arch ports."
     required: false
     default: ""
+  netbsd-sysroot:
+    description: "Sysroot build mode for netbsd-crossbuild: 'full' (build.sh distribution, default) or 'light' (make includes + runtime libs only, skips userland). See netbsd-crossbuild."
+    required: false
+    default: "full"
   static:
     description: "'true': fully-static tjs (musl legs) + verify with file/ldd"
     required: false
@@ -415,6 +419,7 @@ runs:
         machine: ${{ inputs.netbsd-machine }}
         arch: ${{ inputs.netbsd-arch }}
         src-rev: ${{ inputs.netbsd-src }}
+        sysroot-mode: ${{ inputs.netbsd-sysroot }}
     - name: Cross-build tjs against the NetBSD toolchain
       if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.netbsd-src != ''
       shell: bash
