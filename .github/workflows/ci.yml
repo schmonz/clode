@@ -316,7 +316,7 @@ jobs:
       # nodejs.org outage reuses the cache instead of turning this step red. Keyed
       # on the pin file so a version bump misses and re-fetches automatically.
       - name: Cache the pinned Node (naude engine)
-        uses: actions/cache@v4.3.0
+        uses: actions/cache@v6.1.0
         with:
           path: ${{ runner.temp }}/clode-nodes
           key: pinned-node-${{ hashFiles('deps/clode/node-pin.json') }}-${{ runner.os }}-${{ runner.arch }}
@@ -474,7 +474,7 @@ jobs:
       - name: Provision postject (deps/clode) so the fused clode-native can assemble a naude
         run: npm ci --prefix deps/clode 2>&1 | tail -3
       - name: Cache the pinned Node (naude engine — the naude rebuild embeds it)
-        uses: actions/cache@v4.3.0
+        uses: actions/cache@v6.1.0
         with:
           path: ${{ runner.temp }}/clode-nodes
           key: pinned-node-${{ hashFiles('deps/clode/node-pin.json') }}-${{ runner.os }}-${{ runner.arch }}
