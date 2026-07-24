@@ -92,7 +92,12 @@ runs:
           # LIGHT sysroot: there is no blessed build.sh "sysroot only" operation,
           # so compose one from make targets one level down via the nbmake wrapper
           # `tools` produced. `makewrapper` bakes MACHINE/MACHINE_ARCH/DESTDIR/
-          # TOOLDIR into nbmake-<machine>. `includes` installs all system headers;
+          # TOOLDIR (and MKUNPRIVED, from -U) into nbmake-<machine>. `distrib-dirs`
+          # then creates the DESTDIR hierarchy AND seeds the METALOG that
+          # unprivileged installs append to — `distribution` normally does this via
+          # installworld, so skipping straight to `includes` failed with "open
+          # DESTDIR/METALOG: No such file or directory" + a missing usr/include
+          # (run 30074218732). After that, `includes` installs all system headers,
           # then build+install ONLY the runtime libraries tjs links against, in
           # dependency order (csu first for crt*.o, then libc, then its dependents).
           # This never descends into usr.sbin, so userland bugs (e.g. sbmips
@@ -102,6 +107,7 @@ runs:
           ./build.sh -m "${{ inputs.machine }}" "${ARCHOPT[@]}" -U -T "$TOOL" -D "$DEST" -j "$J" makewrapper
           NBMAKE=$(ls "$TOOL"/bin/nbmake-* 2>/dev/null | head -1)
           [ -x "$NBMAKE" ] || { echo "build.sh: no nbmake-* wrapper under $TOOL/bin" >&2; ls "$TOOL/bin" | head; exit 1; }
+          "$NBMAKE" -C "$SRC/etc" distrib-dirs
           "$NBMAKE" -C "$SRC" includes
           for libdir in csu libc libm libpthread libutil; do
             "$NBMAKE" -C "$SRC/lib/$libdir" -j "$J" dependall install

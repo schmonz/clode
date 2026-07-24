@@ -454,11 +454,17 @@ const LEGS = [
   // port-default arch for evbarm/riscv/sbmips/evbsh3 is CI-adjudicated; vax is a
   // KNOWN hard-arch — see BACKLOG "NetBSD hard-arch tier" — onboarded as a wall).
   //
-  // netbsd-i386 (x86-32 LE): the 32-bit x86 port, cmpxchg8b → no shim.
+  // netbsd-i386 (x86-32 LE): the 32-bit x86 port. atomic-shim ON — the netbsd-10
+  // i386 toolchain targets the i486 baseline (i486--netbsdelf-gcc), which has NO
+  // cmpxchg8b (that is i586/Pentium), so gcc emits __atomic_*_8 LIBCALLS for the
+  // 8-byte atomics quickjs's Atomics builtin needs, and there is no libatomic in
+  // the sysroot → link fails on __atomic_compare_exchange_8 et al (run
+  // 30071235373). Same wall as m68k/ppc/sparc; our pthread-mutex shim resolves it.
+  // (The earlier "cmpxchg8b → no shim" note was wrong: i486 predates cmpxchg8b.)
   { leg: 'netbsd-i386', os: 'ubuntu-latest', 'guest-arch': 'i386',
     'netbsd-src': 'netbsd-10', 'netbsd-machine': 'i386',
     'cross-file': 'scripts/netbsd.toolchain.cmake',
-    'atomic-shim': false, tier2: true, verify: 'none', 'no-exec': true,
+    'atomic-shim': true, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
     // REVIVED 2026-07-24 (ci:true, soft-fail): the wall was diagnosed and fixed.
     // quickjs compiled fail on 32-bit x86 — JS_X87_FPCW_SAVE_AND_ADJUST expands
