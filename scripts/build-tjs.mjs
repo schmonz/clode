@@ -993,6 +993,46 @@ function fixupLwsScandirOldDarwin(dir) {
   console.log('fixup lws-scandir-old-darwin: applied');
 }
 
+function fixupLibuvTtyKqueueOldDarwin(dir) {
+  // On pre-10.6 Darwin (Tiger, kernel major < 10) kqueue ACCEPTS a tty fd at
+  // registration (no EINVAL — so libuv's uv__stream_try_select detection decides
+  // kqueue is fine) but then mis-signals it readable at runtime, so libuv issues
+  // a BLOCKING read() on the tty that never returns → the interactive TUI hangs
+  // before drawing a single frame. Confirmed by ktrace on 10.4.11/PPC:
+  //   kevent(...) → RET 1;  read(0, ...) → (blocked; only unblocked by SIGKILL)
+  // `-p` (socket I/O) is unaffected — only the TTY is broken. Force the proven
+  // select() path (a select(2) helper thread) for ttys on those kernels; select
+  // polls ttys correctly on old Darwin. Gated on Darwin major < 10 at runtime, so
+  // modern Darwin (arm64/x64, major ≥ 10) is a strict no-op. uv__stream_try_select
+  // is __APPLE__-only, so the added uname() never runs on Linux. libuv upstream
+  // candidate.
+  const f = path.join(dir, 'deps/libuv/src/unix/stream.c');
+  const src = fs.readFileSync(f, 'utf8');
+  const marker = 'CLODE tty-kqueue fixup';
+  if (src.includes(marker)) {
+    console.log('fixup libuv-tty-kqueue-old-darwin: already applied');
+    return;
+  }
+  const incAnchor = '#include <unistd.h>\n';
+  const gateAnchor = '  if (ret == 0 || (events[0].flags & EV_ERROR) == 0 || events[0].data != EINVAL)\n    return 0;\n';
+  if (!src.includes(incAnchor) || !src.includes(gateAnchor)) {
+    throw new Error('fixup libuv-tty-kqueue-old-darwin: anchor not found (libuv changed under the pin — re-derive the fixup)');
+  }
+  const gateNew =
+    '  if (ret == 0 || (events[0].flags & EV_ERROR) == 0 || events[0].data != EINVAL) {\n' +
+    '    /* ' + marker + ': pre-10.6 Darwin (Tiger) mis-signals ttys via kqueue,\n' +
+    '       hanging on a blocking read(); force the select() path for ttys there. */\n' +
+    '    struct utsname clode_uts;\n' +
+    '    if (!(isatty(*fd) && uname(&clode_uts) == 0 && atoi(clode_uts.release) < 10))\n' +
+    '      return 0;\n' +
+    '  }\n';
+  const out = src
+    .replace(incAnchor, incAnchor + '#include <sys/utsname.h> /* CLODE tty-kqueue fixup: uname() */\n')
+    .replace(gateAnchor, gateNew);
+  fs.writeFileSync(f, out);
+  console.log('fixup libuv-tty-kqueue-old-darwin: applied');
+}
+
 function fixupLibuvMsgXOldDarwin(dir) {
   // libuv's darwin batch-UDP path calls Apple's private recvmsg_x/
   // sendmsg_x syscalls (~10.10+), declared by its own darwin-syscalls.h
@@ -1751,6 +1791,7 @@ if (buildOnly) {
   fixupLibuvUdpSsmOldDarwin(tjsDir);
   fixupLibuvMsgXOldDarwin(tjsDir);
   fixupLibuvKqueueExceptOldDarwin(tjsDir);
+  fixupLibuvTtyKqueueOldDarwin(tjsDir);
   fixupLwsScandirOldDarwin(tjsDir);
   fixupMbedtlsMsTimeOldDarwin(tjsDir);
   fixupQjsHrtimeOldDarwin(tjsDir);
