@@ -14,6 +14,11 @@
       "minimumReleaseAge": "7 days"
     },
     {
+      "description": "The age hold is npm-ONLY (see the npm rule). GitHub-Actions/Docker pins are supply-chain HARDENING — pinning a floating @v6 to an exact version/digest is the safe direction, not a freshness-chasing bump — so an age gate does them no good and actively harms: PR #20 bundled ~20 actions into one rolling `pin dependencies` batch whose age window reset every time ANY of the 20 released, so it never aged and sat open 10 days. Zero the hold explicitly for these datasources so a green-CI action/docker pin or bump automerges immediately.",
+      "matchDatasources": ["github-tags", "github-releases", "docker"],
+      "minimumReleaseAge": "0 days"
+    },
+    {
       "description": "solaris vmactions confs mix toolchain variants (gcc/clang) into one namespace; track only the gcc line the leg is built around.",
       "matchDepNames": ["solaris-guest"],
       "allowedVersions": "/gcc/"
