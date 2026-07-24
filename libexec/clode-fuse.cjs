@@ -554,6 +554,19 @@ function timeoutScale(env) {
 // Modern hosts sign the fat template unchanged, so universal output is preserved.
 // Injectable spawnSync/platform/arch keep it unit-testable. Returns
 // { ok: true } | { ok: false, error }.
+// Thin a fat (universal) Mach-O to the host arch slice, IN PLACE. `lipo -thin`
+// succeeds iff the file is fat AND contains the slice; on an already-thin binary
+// (or one missing the slice) it errors harmlessly and we report thinned:false.
+// Old `lipo` has no `-archs` flag, so probe by attempting the thin directly.
+// node arch 'x64' -> Mach-O arch 'x86_64'. Injectable spawnSync/arch for tests.
+function thinToHostSlice(file, opts = {}) {
+  const sp = opts.spawnSync || spawnSync;
+  const arch = opts.arch || process.arch;
+  const slice = arch === 'x64' ? 'x86_64' : arch;
+  const r = sp('lipo', [file, '-thin', slice, '-output', file], { encoding: 'utf8' });
+  return { thinned: r.status === 0, slice };
+}
+
 function codesignAdHoc(file, opts = {}) {
   const sp = opts.spawnSync || spawnSync;
   const platform = opts.platform || process.platform;
@@ -565,14 +578,13 @@ function codesignAdHoc(file, opts = {}) {
   if (cs.status === 0) return { ok: true };
   // Signing failed. On old macOS (Mavericks, verified 10.9.5) codesign_allocate
   // cannot sign a fat Mach-O carrying an arm64 slice. Thin to the host slice IN
-  // PLACE and retry. Attempt the thin DIRECTLY: old `lipo` has no `-archs` flag,
-  // and `lipo -thin` succeeds iff the file is fat AND contains the slice (else it
-  // errors harmlessly — already-thin or missing-slice → we keep the sign error).
-  // node arch 'x64' -> Mach-O arch 'x86_64'.
-  const hostSlice = arch === 'x64' ? 'x86_64' : arch;
-  const thin = sp('lipo', [file, '-thin', hostSlice, '-output', file], { encoding: 'utf8' });
-  if (thin.status === 0) {
-    log(`clode: build: thinned fat template to ${hostSlice} (host codesign cannot sign the fat binary)`);
+  // PLACE and retry — the fused BUILDER (--self) degrades to host-arch, which is
+  // honest (a box that can't sign the arm64 slice can neither run nor verify a
+  // universal one). Quaude output is thinned proactively before it ever reaches
+  // here, so this reactive path is now only the --self fat-builder fallback.
+  const t = thinToHostSlice(file, { spawnSync: sp, arch });
+  if (t.thinned) {
+    log(`clode: build: thinned fat template to ${t.slice} (host codesign cannot sign the fat binary)`);
     cs = sign();
     if (cs.status === 0) return { ok: true };
   }
@@ -1124,11 +1136,23 @@ async function clodeBuild(args, opts) {
     const extrasPath = path.join(work, 'extras.json');
     fs.copyFileSync(baseTemplate, signedBase);
     fs.chmodSync(signedBase, 0o755);
+    if (process.platform === 'darwin' && !crossTarget && !self) {
+      // A quaude is built to run on THIS machine, so it needs only the host slice.
+      // Thin a fat/universal template down to the host arch: no point fusing a
+      // 4-arch quaude carrying ppc/i386/other slices this box will never exec, and
+      // it sidesteps the Mavericks fat-sign problem for free (the sign below then
+      // always operates on a thin binary). The BUILDER (--self) is deliberately
+      // NOT thinned here — the shipped universal clode must run on any Mac, and
+      // its embedded template's sha is verified on materialization. A no-op on an
+      // already-thin template (the common native case).
+      const t = thinToHostSlice(signedBase, {});
+      if (t.thinned) clodeLog(`clode: build: thinned quaude template to ${t.slice} (host-arch only)`);
+    }
     if (process.platform === 'darwin' && !crossTarget) {
-      // Normal case: signedBase is a copy of `template`, already thinned above if
-      // the host couldn't sign the fat binary — so this signs a host-arch slice
-      // and succeeds first try. The retry logic is kept for the CLODE_TJS path
-      // (an explicit fat template that skipped the embedded-materialize branch).
+      // signedBase is a copy of `template` — thinned to the host slice just above
+      // for a quaude, or still fat for the --self builder (codesignAdHoc's reactive
+      // thin covers the Mavericks fat-builder case). Sign the plain Mach-O before
+      // the worker appends (never sign after appending).
       const r = codesignAdHoc(signedBase, { log: clodeLog });
       if (!r.ok) return fail(`build: codesign of the template copy failed:\n${r.error}`);
       clodeLog('clode: build: template copy re-signed (ad-hoc)');
@@ -1232,7 +1256,7 @@ async function clodeBuild(args, opts) {
 }
 
 module.exports = {
-  clodeBuild, parseBuildArgs, makePhaseSpinner, startPongMock, cannedSSE, smokeTarget, timeoutScale, codesignAdHoc, describeExit,
+  clodeBuild, parseBuildArgs, makePhaseSpinner, startPongMock, cannedSSE, smokeTarget, timeoutScale, codesignAdHoc, thinToHostSlice, describeExit,
   readDirectDeps, computeDepClosure, assertClosureMatchesLockfile,
   scanBareSpecifiers, specifierPackageName, isBuiltinSpecifier, shimProvidedModules,
   assertNoUnknownBareSpecifiers, KNOWN_UNREACHABLE, resolveClaudeNmDir,

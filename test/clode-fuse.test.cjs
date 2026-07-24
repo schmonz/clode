@@ -251,6 +251,35 @@ test('codesignAdHoc: sign fails and thin fails (single-arch / no host slice) —
   assert.ok(sp.calls.some((c) => /-thin x86_64/.test(c)), 'attempts the thin directly');
 });
 
+// thinToHostSlice: quaude is built to run where it is built, so its (possibly
+// universal) template is thinned to the host slice — a lean single-arch quaude,
+// not a 4-arch one. The BUILDER (--self) is exempt (must stay fat to run on any
+// Mac). Injected spawnSync drives each path.
+test('thinToHostSlice: fat template thins in place to the host slice (x64 -> x86_64)', () => {
+  const { thinToHostSlice } = require('../libexec/clode-fuse.cjs');
+  const sp = scriptSpawn(() => ({ status: 0 })); // fat + has the slice -> thin succeeds
+  const r = thinToHostSlice('/tmp/tjs', { arch: 'x64', spawnSync: sp });
+  assert.deepStrictEqual(r, { thinned: true, slice: 'x86_64' });
+  assert.deepStrictEqual(sp.calls, ['lipo /tmp/tjs -thin x86_64 -output /tmp/tjs']);
+  assert.ok(!sp.calls.some((c) => /-archs/.test(c)), 'old lipo has no -archs flag');
+});
+
+test('thinToHostSlice: arm64 maps straight through (no x86_64 rename)', () => {
+  const { thinToHostSlice } = require('../libexec/clode-fuse.cjs');
+  const sp = scriptSpawn(() => ({ status: 0 }));
+  const r = thinToHostSlice('/tmp/tjs', { arch: 'arm64', spawnSync: sp });
+  assert.deepStrictEqual(r, { thinned: true, slice: 'arm64' });
+  assert.deepStrictEqual(sp.calls, ['lipo /tmp/tjs -thin arm64 -output /tmp/tjs']);
+});
+
+test('thinToHostSlice: already-thin template is a harmless no-op (thinned:false)', () => {
+  const { thinToHostSlice } = require('../libexec/clode-fuse.cjs');
+  const sp = scriptSpawn(() => ({ status: 1, stderr: 'must be a fat file' }));
+  const r = thinToHostSlice('/tmp/tjs', { arch: 'arm64', spawnSync: sp });
+  assert.strictEqual(r.thinned, false);
+  assert.strictEqual(r.slice, 'arm64');
+});
+
 // The build's failure messages are read by someone who was not watching. "exit 0"
 // for a process we SIGKILLed is a lie; "exit null" is a riddle. Both happened for
 // real: haiku-x64's attest hung on a 64KB pipe write, clode's own 20-minute guard
