@@ -66,6 +66,36 @@ const { Readable } = require('node:stream');
 // chunks) reassembles exactly like host node's StringDecoder, instead of
 // emitting U+FFFD. Non-utf8 encodings decode per read()/chunk (best-effort;
 // documented) — Ink only uses utf8.
+// ---- quaude enhancement (NOT upstream fidelity): tty tracking suppression ----
+// Upstream Claude Code enables mouse tracking (\e[?1000/1002/1003h) and focus
+// reporting (\e[?1004h). Those make the terminal stream an event per mouse-move
+// and focus change — trivial on fast hardware, RUINOUS under quaude on a slow
+// box: each event drags Ink through a parse + a full (~1.2MB under tjs) redraw,
+// so the flood starves keystrokes and freezes the UI (proven on Tiger: SGR mouse
+// motion \e[<..M flooding input, terminal "crazy slow", the login code prompt
+// unable to submit). quaude targets constrained hardware, so default these OFF:
+// strip the mode-ENABLE escapes from tty OUTPUT so the terminal never streams
+// them, and (belt-and-suspenders) drop any such events that still arrive on INPUT
+// (e.g. a mode left enabled by a killed prior run). Opt back in per capability:
+// CLODE_TTY_MOUSE=1 / CLODE_TTY_FOCUS=1.
+function _ttyEnv(name) { return !!(typeof tjs !== 'undefined' && tjs.env && tjs.env[name]); }
+function _suppressMouse() { return !_ttyEnv('CLODE_TTY_MOUSE'); }
+function _suppressFocus() { return !_ttyEnv('CLODE_TTY_FOCUS'); }
+// Strip DECSET enables for the tracking modes from an output chunk, preserving
+// any other modes set in the same `\e[?..h` sequence.
+function _filterTrackingEnables(chunk) {
+  const m = _suppressMouse(), f = _suppressFocus();
+  if (!m && !f) return chunk;
+  const str = typeof chunk === 'string' ? chunk : (Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk));
+  if (str.indexOf('\x1b[?') === -1) return chunk;
+  return str.replace(/\x1b\[\?([\d;]+)h/g, (seq, modes) => {
+    const list = modes.split(';');
+    const kept = list.filter((n) => !((m && (n === '1000' || n === '1001' || n === '1002' || n === '1003')) || (f && n === '1004')));
+    if (kept.length === list.length) return seq;
+    return kept.length ? ('\x1b[?' + kept.join(';') + 'h') : '';
+  });
+}
+
 class ReadStream extends Readable {
   constructor(fd) {
     super();
@@ -78,6 +108,7 @@ class ReadStream extends Readable {
     this._queue = [];             // pending raw Buffers (paused-mode backlog)
     this._encoding = null;
     this._utf8Decoder = null;
+    this._floodCarry = null;      // partial trailing escape held across pump reads
   }
   _read() { this._startPump(); }
   _startPump() {
@@ -99,9 +130,38 @@ class ReadStream extends Readable {
     })();
   }
   _ingest(buf) {
+    buf = this._stripFloodEvents(buf);
+    if (!buf || buf.length === 0) return;   // chunk was entirely mouse/focus noise
     this._queue.push(buf);
     if (this._flowing) this._flush();
     else queueMicrotask(() => this.emit('readable'));
+  }
+  // Drop mouse (SGR: \e[<..M/m) and focus (\e[I / \e[O) events on input — the
+  // safety net for a tracking mode left enabled by a killed prior run (the output
+  // suppression above stops us enabling them in the first place). Carries a
+  // partial trailing escape across pump reads.
+  _stripFloodEvents(buf) {
+    const dm = _suppressMouse(), df = _suppressFocus();
+    if (!dm && !df) return buf;
+    if (this._floodCarry && this._floodCarry.length) { buf = Buffer.concat([this._floodCarry, buf]); this._floodCarry = null; }
+    const out = [];
+    let i = 0;
+    const n = buf.length;
+    while (i < n) {
+      if (buf[i] === 0x1b && i + 1 < n && buf[i + 1] === 0x5b) {   // ESC [
+        if (i + 2 >= n) { this._floodCarry = buf.subarray(i); break; }
+        const c2 = buf[i + 2];
+        if (df && (c2 === 0x49 || c2 === 0x4f)) { i += 3; continue; }   // CSI I / CSI O (focus)
+        if (dm && c2 === 0x3c) {                                        // CSI < (SGR mouse)
+          let j = i + 3;
+          while (j < n && buf[j] !== 0x4d && buf[j] !== 0x6d) j++;      // consume until M or m
+          if (j >= n) { this._floodCarry = buf.subarray(i); break; }    // incomplete sequence
+          i = j + 1; continue;
+        }
+      }
+      out.push(buf[i]); i++;
+    }
+    return Buffer.from(out);
   }
   _flush() {
     while (this._flowing && this._queue.length) {
@@ -169,7 +229,7 @@ class WriteStream extends EventEmitter {
   get columns() { try { return this._tjs.width; } catch { return undefined; } }
   get rows() { try { return this._tjs.height; } catch { return undefined; } }
   write(chunk, enc, cb) {
-    writeSyncFd(this.fd, chunk);
+    writeSyncFd(this.fd, _filterTrackingEnables(chunk));   // suppress mouse/focus tracking enables
     if (typeof enc === 'function') enc();
     else if (typeof cb === 'function') cb();
     return true;
