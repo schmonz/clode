@@ -22,7 +22,7 @@ test('bun-shim loads under the loader and installs its bun:ffi hook', (t) => {
       hasBun: typeof globalThis.Bun === 'object',
       bunVersion: typeof Bun.version === 'string',
       which: typeof Bun.which === 'function',
-      ffiSuffix: ffi.suffix,                       // 'dylib' on darwin
+      ffiSuffix: ffi.suffix,                       // platform dynamic-lib ext: dylib/dll/so
       deepEq: Bun.deepEquals({ a: 1 }, { a: 1 }),  // util.isDeepStrictEqual
     }));`);
   const r = runLoader(f);
@@ -31,7 +31,10 @@ test('bun-shim loads under the loader and installs its bun:ffi hook', (t) => {
   assert.strictEqual(out.hasBun, true);
   assert.strictEqual(out.bunVersion, true);
   assert.strictEqual(out.which, true);
-  assert.strictEqual(out.ffiSuffix, 'dylib');
+  // The shared-library suffix is the running platform's, matching real Bun.FFI:
+  // dylib (darwin) / dll (win32) / so (linux, the BSDs, …).
+  assert.strictEqual(out.ffiSuffix,
+    process.platform === 'win32' ? 'dll' : process.platform === 'darwin' ? 'dylib' : 'so');
   assert.strictEqual(out.deepEq, true);
 });
 

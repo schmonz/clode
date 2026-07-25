@@ -682,7 +682,7 @@ const BUN_BUILTINS = {
     ptr() { throw new Error('bun:ffi.ptr unavailable in Node host'); },
     CString: class CString {},
     FFIType: {},
-    suffix: process.platform === 'darwin' ? 'dylib' : 'so',
+    suffix: process.platform === 'win32' ? 'dll' : process.platform === 'darwin' ? 'dylib' : 'so',
   },
 };
 
