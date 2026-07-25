@@ -454,6 +454,20 @@ function _recordSkew(f){
   g.__clodeDoctor = g.__clodeDoctor || {};
   g.__clodeDoctor.appletSkew = _skewFindings;
 }
+
+const _rgSurfaced = new Set();
+// Loud, at the point of use: ugrep rejected an rg→ugrep translation at runtime.
+// exit >=2 only (1 == no match). Records to /doctor so the app's fallback can't hide it.
+function _surfaceRgSkew(rewritten, status){
+  if (!(status >= 2)) return;
+  const key = rewritten.join('\0');
+  if (_rgSurfaced.has(key)) return;
+  _rgSurfaced.add(key);
+  const why = `host ugrep exited ${status} for a translated rg command: ${rewritten.join(' ')}`;
+  process.stderr.write(`clode: rg→ugrep translation was rejected by ugrep — ${why}\n` +
+    `       file an issue with this command; meanwhile run ugrep directly.\n`);
+  _recordSkew({ name: 'rg', applet: 'ugrep', why, fix: 'refine the rg→ugrep translation (rgToUgrep)' });
+}
 function warnAppletSkew(shadows, spawn = _rawSpawnSync){
   const found = [];
   for (const sh of shadows){
@@ -526,6 +540,7 @@ function spawn(cmdOrOpts, maybeOpts){
   let cmd, opts;
   if (Array.isArray(cmdOrOpts)) { cmd = cmdOrOpts; opts = maybeOpts||{}; }
   else { opts = cmdOrOpts||{}; cmd = opts.cmd; }
+  const _origCmd = cmd;
   cmd = _rewriteRgSpawn(cmd);
   const exe = cmd[0];
   const env = opts.env || process.env;
@@ -550,7 +565,9 @@ function spawn(cmdOrOpts, maybeOpts){
   // Resolve exited on BOTH 'exit' and 'error' so a late spawn failure can never
   // hang an awaiter or crash via an unhandled 'error' event.
   const exited = new Promise((res)=>{
-    let done = false; const fin = (c)=>{ if(!done){ done=true; res(c); } };
+    let done = false; const fin = (c)=>{ if(!done){ done=true;
+      if (cmd !== _origCmd && _origCmd[0] === 'rg') _surfaceRgSkew(cmd, c);
+      res(c); } };
     child.on('exit', (code)=>fin(code??0));
     child.on('error', ()=>fin(1));
   });
@@ -564,6 +581,7 @@ spawn.sync = function(cmdOrOpts){
   const cmd0 = Array.isArray(cmdOrOpts)?cmdOrOpts:(cmdOrOpts.cmd);
   const cmd = _rewriteRgSpawn(cmd0);
   const r = cp.spawnSync(cmd[0], cmd.slice(1), {encoding:'buffer'});
+  if (cmd !== cmd0 && cmd0[0] === 'rg') _surfaceRgSkew(cmd, r.status);
   return { exitCode: r.status??0, stdout: r.stdout||Buffer.alloc(0), stderr: r.stderr||Buffer.alloc(0), success: (r.status===0) };
 };
 
