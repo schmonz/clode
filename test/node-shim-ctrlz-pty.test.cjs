@@ -69,8 +69,9 @@ function waitFor(pred, ms, what) {
 test('Ctrl-Z (real PTY keystroke) SIGTSTPs a tjs child; SIGCONT resumes and fires the handler', async (t) => {
   if (skipUnlessTjs(t)) return;
   if (process.env.CLODE_LIVE_RENDER !== '1') { t.skip('needs a real job-control terminal: set CLODE_LIVE_RENDER=1 on an interactive rig'); return; }
-  let pty;
-  try { pty = loadPty(); } catch (e) { t.skip(`no node-pty harness: ${e.message}`); return; }
+  // node-pty is a REQUIRED harness dep (run.mjs builds it, patching platforms
+  // upstream omits) — a load failure here is a real failure, not a skip.
+  const pty = loadPty();
 
   const prog = writeProg(`
 process.on('SIGCONT', () => { console.log('RESUMED'); process.exit(0); });

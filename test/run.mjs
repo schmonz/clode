@@ -50,26 +50,31 @@ function harnessOk() {
 }
 
 // Install the PTY/TUI harness into the tagged dir if preflight fails, then re-check.
-// The harness (node-pty, a native addon) does NOT build on every platform clode
-// targets — e.g. NetBSD, where node-pty's pty.cc uses Linux <pty.h> symbols. Its
-// absence is NOT fatal: the PTY/TUI tests gate themselves and skip when node-pty
-// can't load (node-shim-ctrlz-pty's loadPty try/catch, the tjs-gated TUI tests).
-// So a failed install WARNS and lets the rest of the suite run, rather than
-// aborting every test on a platform where a single native addon won't compile.
+// The harness (node-pty, a native addon) is REQUIRED, not optional — a missing
+// node-pty must never SILENTLY drop PTY/TUI coverage. node-pty doesn't ship a
+// __NetBSD__ forkpty branch, so we install sources WITHOUT the native build
+// (--ignore-scripts), patch deps for platforms upstream omits (test/harness-patch.cjs),
+// THEN build the addons. If it still can't build, that's a LOUD hard failure to fix,
+// not a skip.
 if (!harnessOk()) {
   console.error(`run: installing PTY test harness deps into test/.harness/${TAG} ...`);
   fs.mkdirSync(HARNESS, { recursive: true });
   fs.copyFileSync(path.join('test', 'package.json'), path.join(HARNESS, 'package.json'));
   const lock = path.join('test', 'package-lock.json');
   if (fs.existsSync(lock)) fs.copyFileSync(lock, path.join(HARNESS, 'package-lock.json'));
-  let installed = false;
+  const { patchNodePty } = require('./harness-patch.cjs');
   try {
-    execFileSync(process.execPath, [npmCliPath(), 'install'], { cwd: HARNESS, stdio: 'inherit' });
-    installed = harnessOk();
-  } catch { /* install failed — handled by the warning below */ }
-  if (!installed) {
-    console.error('run: PTY test harness unavailable — PTY/TUI tests will SKIP ' +
-      '(node-pty could not be built on this platform; the rest of the suite still runs)');
+    execFileSync(process.execPath, [npmCliPath(), 'install', '--ignore-scripts'], { cwd: HARNESS, stdio: 'inherit' });
+    patchNodePty(HARNESS);   // idempotent; adds the __NetBSD__ branch before the build
+    execFileSync(process.execPath, [npmCliPath(), 'rebuild'], { cwd: HARNESS, stdio: 'inherit' });
+  } catch (e) {
+    console.error(`run: PTY test harness install/build failed: ${e && e.message}`);
+  }
+  if (!harnessOk()) {
+    console.error('run: PTY test harness (node-pty) is REQUIRED but could not be built.\n' +
+      '     Fix the node-pty build for this platform — do NOT skip PTY coverage.\n' +
+      '     If upstream lacks a branch for this OS, extend test/harness-patch.cjs.');
+    process.exit(2);
   }
 }
 
