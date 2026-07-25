@@ -129,14 +129,15 @@ test('binaryFor reads the manifest platform binary name, defaults to claude', ()
 test('clode_update with no CLODE_FETCH_PLATFORM selects the host-OS provider', async () => {
   const fx = fixture();
   delete fx.env.CLODE_FETCH_PLATFORM;
-  // Host-independent target: "<host os>-ppc" is a platform upstream never
-  // ships (no arch called ppc), so it can never collide with the OLD
-  // hardcoded default of 'linux-x64' on ANY runner (linux, darwin, win32).
-  // Serving ONLY this platform from the fixture repo means a regression back
-  // to a hardcoded 'linux-x64' fetch has nothing to find here and fails.
-  // It also exercises providerFor's same-OS "arch don't-care" fallback,
-  // since process.arch is never literally 'ppc'.
-  const expected = process.platform + '-ppc';
+  // On OSes upstream BUILDS for (darwin/win32/linux), providerFor picks a same-OS
+  // provider (arch don't-care): serve "<host os>-ppc", a platform upstream never
+  // ships (no arch 'ppc'), so a regression to a hardcoded 'linux-x64' finds nothing
+  // here and fails, and process.arch is never literally 'ppc' so it exercises the
+  // don't-care fallback. On OSes upstream does NOT build (netbsd/freebsd/...), there
+  // is NO host-OS provider — providerFor carves linux-x64 (Unix-closest) — so serve
+  // and expect that instead.
+  const hasUpstream = ['darwin', 'win32', 'linux'].includes(process.platform);
+  const expected = hasUpstream ? process.platform + '-ppc' : 'linux-x64';
   // Reuse the fixture's fake provider binary bytes, drop them under the
   // expected platform dir, and point the manifest at that platform's checksum.
   const claudeSrc = path.join(fx.repo, V, PLAT, 'claude');

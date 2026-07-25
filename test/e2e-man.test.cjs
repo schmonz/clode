@@ -67,8 +67,17 @@ test('the docs describe a builder, not a runner', () => {
     'package.json': JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8')).description,
   };
   for (const [name, text] of Object.entries(docs)) {
-    assert.doesNotMatch(text, /runs? (the )?(latest )?Claude Code|under (a |the )?(host )?(Node|tjs)( runtime)?/i,
-      `${name} still frames clode as a runner`);
+    // The regression to guard against is the RUNNER model: docs describing CLODE
+    // ITSELF as running Claude Code, or as a runtime that hosts it "under Node/tjs",
+    // or the retired CLODE_ENGINE/passthrough surface. NOT guarded against (and must
+    // stay allowed): a rhetorical "how do you run Claude Code?" — the reader's PROBLEM,
+    // answered by the builder example right below it — and "quaude runs Claude Code",
+    // which is the model (quaude IS the runner; clode BUILDS it). So we match
+    // clode-as-subject-runs and the under-a-runtime framing, not a bare "run Claude Code".
+    assert.doesNotMatch(text, /\bclode\b[^.\n]*\bruns?\b[^.\n]*Claude Code/i,
+      `${name} describes clode itself as running Claude Code (clode builds; quaude runs)`);
+    assert.doesNotMatch(text, /runs? (the )?(latest )?Claude Code (under|on|via|with)\b|under (a |the )?(host )?(Node|tjs)( runtime)?/i,
+      `${name} frames clode as a runtime that hosts Claude Code`);
     assert.doesNotMatch(text, /CLODE_ENGINE|pass(es)? through to Claude/i, `${name} references the retired runner surface`);
   }
   // And it must promise only what exists: update is Phase 4.
