@@ -1091,37 +1091,257 @@ function fixupTjsHandleDump(dir) {
   console.log('fixup tjs-handle-dump: applied');
 }
 
-function fixupLwsAsyncDnsDarwin(dir) {
-  // On macOS, DNS configuration lives in SystemConfiguration (scutil --dns),
-  // NOT /etc/resolv.conf — which is frequently stale/non-authoritative (e.g. a
-  // dead qemu forwarder 10.0.2.3 left in resolv.conf). lws's own async DNS
-  // resolver reads /etc/resolv.conf directly and has no failover, so on such a
-  // box it queries the dead nameserver and PARKS FOREVER (event loop idle in
-  // kevent, 2 UDP sockets open) — proven on Tiger: interactive login token
-  // exchange hangs while the system resolver (getaddrinfo, which uses the
-  // authoritative config) resolves fine. Disabling LWS_WITH_SYS_ASYNC_DNS on
-  // Darwin routes lws through getaddrinfo — the correct resolver on macOS,
-  // where resolv.conf is not the source of truth. libuv/lws upstream candidate.
-  const marker = 'CLODE lws-async-dns-darwin';
-  const f = path.join(dir, 'CMakeLists.txt');
+function fixupHttpclientAsyncDns(dir) {
+  // Route every fetch's DNS through uv_getaddrinfo (libuv threadpool — async,
+  // non-blocking, kqueue-free on every platform) instead of letting lws resolve
+  // the hostname itself. lws's built-in async DNS reads /etc/resolv.conf, lacks
+  // robust failover, and on Darwin its response path depends on kqueue
+  // readability that is unreliable on old macOS (Tiger) — it parks the event
+  // loop forever on a stale/dead nameserver (proven: Tiger login token-exchange
+  // hangs, 2 UDP sockets, main thread idle in kevent). We resolve to an IP with
+  // uv_getaddrinfo, then hand lws the IP (lws does no DNS). Reuses the patterns
+  // already in-tree: lws-utils.c (IP -> cci.address) and mod_dns.c (async cb).
+  // ws.c has the same lws-DNS pattern; left as a follow-up (not the login path),
+  // so LWS_WITH_SYS_ASYNC_DNS stays enabled for it. Runs AFTER the txiki patches
+  // (anchors on the post-no-origin-header connect fn). libuv/lws candidate.
+  const marker = 'Async DNS: resolve uri->host via uv_getaddrinfo';
+  const f = path.join(dir, 'src/httpclient.c');
   const src = fs.readFileSync(f, 'utf8');
   if (src.includes(marker)) {
-    console.log('fixup lws-async-dns-darwin: already applied');
+    console.log('fixup httpclient-async-dns: already applied');
     return;
   }
-  const anchor = 'if(CMAKE_SYSTEM_NAME STREQUAL "Android")\n    set(LWS_WITH_SYS_ASYNC_DNS OFF CACHE BOOL "" FORCE)';
+  const anchor = `/* Parse URL and initiate an lws client connection.  Returns 0 on success. */
+static int tjs_httpclient_connect(TJSHttpClient *h) {
+    JSContext *ctx = h->ctx;
+
+    lws_parse_uri_t *uri = lws_parse_uri_create(h->url_str);
+    if (!uri) {
+        return -1;
+    }
+
+    bool use_ssl = !strcmp(uri->scheme, "https");
+
+    char full_path[TJS_PATH_MAX];
+    snprintf(full_path, sizeof(full_path), "/%s", uri->path);
+
+    struct lws_context *lws_ctx = tjs__lws_get_context(ctx);
+    if (!lws_ctx) {
+        lws_parse_uri_destroy(&uri);
+        return -1;
+    }
+
+    struct lws_client_connect_info cci;
+    memset(&cci, 0, sizeof(cci));
+
+    cci.context = lws_ctx;
+    cci.address = uri->host;
+    cci.port = uri->port;
+    cci.path = full_path;
+    cci.host = uri->host;
+    /* Do NOT set cci.origin for the generic HTTP client: libwebsockets turns it
+     * into a real \`Origin:\` request header on EVERY fetch(), which is a
+     * browser/CORS concept that has no place on a server-side HTTP request and
+     * makes CORS-guarded APIs reject the call (e.g. api.anthropic.com -> 401
+     * "CORS requests are not allowed for this Organization"). host node / other
+     * server HTTP clients send no Origin. Leaving it NULL (already zeroed by the
+     * memset above) suppresses the header. (WebSocket handshakes, which legitimately
+     * use Origin, go through a different path and are unaffected.) */
+    cci.origin = NULL;
+    cci.ssl_connection = (use_ssl ? LCCSCF_USE_SSL : 0) | h->ssl_flags | LCCSCF_HTTP_NO_FOLLOW_REDIRECT;
+    cci.method = h->method;
+    cci.local_protocol_name = TJS_LWS_HTTP_PROTOCOL_NAME;
+    cci.userdata = h;
+    cci.pwsi = &h->wsi;
+    cci.vhost = tjs__lws_select_vhost(ctx, uri->scheme, uri->host, uri->port);
+
+    tjs__lws_conn_ref(ctx);
+
+    struct lws *wsi = lws_client_connect_via_info(&cci);
+
+    lws_parse_uri_destroy(&uri);
+
+    if (!wsi) {
+        tjs__lws_conn_unref(ctx);
+        h->wsi = NULL;
+        return -1;
+    }
+
+    lws_cancel_service(lws_ctx);
+
+    if (h->timeout > 0) {
+        lws_set_timer_usecs(wsi, (lws_usec_t) h->timeout * LWS_USEC_PER_SEC / 1000);
+    }
+
+    return 0;
+}`;
   if (!src.includes(anchor)) {
-    throw new Error('fixup lws-async-dns-darwin: anchor not found (txiki CMakeLists changed under the pin — re-derive)');
+    throw new Error('fixup httpclient-async-dns: anchor not found (txiki httpclient.c changed under the pin — re-derive)');
   }
-  const out = src.replace(
-    anchor,
-    '# ' + marker + ': macOS DNS lives in SystemConfiguration, not resolv.conf;\n'
-      + '# lws async DNS reads resolv.conf and hangs on a stale/dead nameserver.\n'
-      + 'if(CMAKE_SYSTEM_NAME STREQUAL "Android" OR CMAKE_SYSTEM_NAME STREQUAL "Darwin")\n'
-      + '    set(LWS_WITH_SYS_ASYNC_DNS OFF CACHE BOOL "" FORCE)',
-  );
-  fs.writeFileSync(f, out);
-  console.log('fixup lws-async-dns-darwin: applied');
+  const replacement = `/* ${marker} (libuv threadpool — non-
+ * blocking and kqueue-free on every platform), then connect lws to the resolved
+ * IP.  We do NOT let lws resolve the hostname itself: its built-in async DNS
+ * reads /etc/resolv.conf directly, lacks robust failover, and on Darwin its
+ * response path depends on kqueue readability that is unreliable on old macOS
+ * (Tiger) — it parks the event loop forever on a stale/dead nameserver.
+ * Routing every fetch through the OS resolver via uv_getaddrinfo fixes this
+ * uniformly.  Mirrors the proven patterns already in-tree: lws-utils.c (IP ->
+ * cci.address, keep the name in cci.host for the Host header + SNI) and
+ * mod_dns.c (the async uv_getaddrinfo callback form). */
+typedef struct {
+    uv_getaddrinfo_t req;
+    TJSHttpClient *h;
+    lws_parse_uri_t *uri; /* kept alive until the resolve callback runs */
+    char full_path[TJS_PATH_MAX];
+    bool use_ssl;
+} TJSHttpConnectReq;
+
+/* Deliver a pre-connection failure to JS.  Used when we fail before lws ever
+ * produces a wsi (DNS error, or lws_client_connect_via_info() returns NULL), so
+ * no lws callback will fire — this mirrors the CLIENT_CONNECTION_ERROR teardown.
+ * Balances the tjs__lws_conn_ref() taken before the async resolve. */
+static void tjs_httpclient_conn_fail(TJSHttpClient *h, const char *msg) {
+    tjs__lws_conn_unref(h->ctx);
+    h->wsi = NULL;
+
+    if (!h->completed) {
+        h->completed = true;
+        JSValue args[2];
+        args[0] = JS_NewString(h->ctx, "CONNECTION_ERROR");
+        args[1] = JS_NewString(h->ctx, msg ? msg : "Connection error");
+        maybe_invoke_callback(h, HC_CALLBACK_COMPLETE, 2, args);
+    }
+
+    /* Drop the prevent-GC self-reference; the finalizer frees the client. */
+    if (!JS_IsUndefined(h->this_val)) {
+        JSValue val = h->this_val;
+        h->this_val = JS_UNDEFINED;
+        JS_FreeValue(h->ctx, val);
+    }
+}
+
+static void tjs_httpclient_resolve_cb(uv_getaddrinfo_t *req, int status, struct addrinfo *res) {
+    TJSHttpConnectReq *cr = req->data;
+    TJSHttpClient *h = cr->h;
+    JSContext *ctx = h->ctx; /* the runtime context, valid independent of h */
+
+    if (status != 0) {
+        tjs_httpclient_conn_fail(h, uv_strerror(status));
+        lws_parse_uri_destroy(&cr->uri);
+        js_free(ctx, cr);
+        return;
+    }
+
+    char ip_str[INET6_ADDRSTRLEN];
+    if (res->ai_family == AF_INET6) {
+        struct sockaddr_in6 *sa6 = (struct sockaddr_in6 *) res->ai_addr;
+        uv_inet_ntop(AF_INET6, &sa6->sin6_addr, ip_str, sizeof(ip_str));
+    } else {
+        struct sockaddr_in *sa = (struct sockaddr_in *) res->ai_addr;
+        uv_inet_ntop(AF_INET, &sa->sin_addr, ip_str, sizeof(ip_str));
+    }
+    uv_freeaddrinfo(res);
+
+    struct lws_context *lws_ctx = tjs__lws_get_context(ctx);
+    if (!lws_ctx) {
+        tjs_httpclient_conn_fail(h, "no lws context");
+        lws_parse_uri_destroy(&cr->uri);
+        js_free(ctx, cr);
+        return;
+    }
+
+    struct lws_client_connect_info cci;
+    memset(&cci, 0, sizeof(cci));
+
+    cci.context = lws_ctx;
+    cci.address = ip_str;      /* resolved IP — lws does no DNS.  lws copies the
+                                * connect strings into the wsi (the old sync path
+                                * destroyed the uri right after this call), so a
+                                * stack ip_str is safe. */
+    cci.port = cr->uri->port;
+    cci.path = cr->full_path;
+    cci.host = cr->uri->host;  /* Host header + SNI keep the hostname */
+    /* Do NOT set cci.origin for the generic HTTP client: libwebsockets turns it
+     * into a real \`Origin:\` request header on EVERY fetch(), which is a
+     * browser/CORS concept that has no place on a server-side HTTP request and
+     * makes CORS-guarded APIs reject the call (e.g. api.anthropic.com -> 401
+     * "CORS requests are not allowed for this Organization"). host node / other
+     * server HTTP clients send no Origin. Leaving it NULL (already zeroed by the
+     * memset above) suppresses the header. (WebSocket handshakes, which legitimately
+     * use Origin, go through a different path and are unaffected.) */
+    cci.origin = NULL;
+    cci.ssl_connection = (cr->use_ssl ? LCCSCF_USE_SSL : 0) | h->ssl_flags | LCCSCF_HTTP_NO_FOLLOW_REDIRECT;
+    cci.method = h->method;
+    cci.local_protocol_name = TJS_LWS_HTTP_PROTOCOL_NAME;
+    cci.userdata = h;
+    cci.pwsi = &h->wsi;
+    cci.vhost = tjs__lws_select_vhost(ctx, cr->uri->scheme, cr->uri->host, cr->uri->port);
+
+    struct lws *wsi = lws_client_connect_via_info(&cci);
+
+    if (!wsi) {
+        tjs_httpclient_conn_fail(h, "Connection failed");
+    } else {
+        lws_cancel_service(lws_ctx);
+        if (h->timeout > 0) {
+            lws_set_timer_usecs(wsi, (lws_usec_t) h->timeout * LWS_USEC_PER_SEC / 1000);
+        }
+    }
+
+    lws_parse_uri_destroy(&cr->uri);
+    js_free(ctx, cr);
+}
+
+/* Parse the URL and kick off an async DNS resolve; the callback connects lws.
+ * Returns 0 if the resolve was started (the request is now in flight — any
+ * failure arrives asynchronously via the completion callback), -1 on an
+ * immediate setup failure (the JS caller throws synchronously on -1). */
+static int tjs_httpclient_connect(TJSHttpClient *h) {
+    JSContext *ctx = h->ctx;
+
+    lws_parse_uri_t *uri = lws_parse_uri_create(h->url_str);
+    if (!uri) {
+        return -1;
+    }
+
+    if (!tjs__lws_get_context(ctx)) {
+        lws_parse_uri_destroy(&uri);
+        return -1;
+    }
+
+    TJSHttpConnectReq *cr = js_malloc(ctx, sizeof(*cr));
+    if (!cr) {
+        lws_parse_uri_destroy(&uri);
+        return -1;
+    }
+    cr->h = h;
+    cr->uri = uri;
+    cr->use_ssl = !strcmp(uri->scheme, "https");
+    snprintf(cr->full_path, sizeof(cr->full_path), "/%s", uri->path);
+    cr->req.data = cr;
+
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+
+    /* Ref before the async resolve so the shared lws context stays alive across
+     * it; tjs_httpclient_conn_fail() unrefs on any pre-connection failure, and
+     * the CLOSED/CONNECTION_ERROR callback unrefs once connected. */
+    tjs__lws_conn_ref(ctx);
+
+    int r = uv_getaddrinfo(&TJS_GetRuntime(ctx)->loop, &cr->req, tjs_httpclient_resolve_cb, uri->host, NULL, &hints);
+    if (r != 0) {
+        tjs__lws_conn_unref(ctx);
+        lws_parse_uri_destroy(&uri);
+        js_free(ctx, cr);
+        return -1;
+    }
+
+    return 0;
+}`;
+  fs.writeFileSync(f, src.replace(anchor, replacement));
+  console.log('fixup httpclient-async-dns: applied');
 }
 
 function fixupLibuvMsgXOldDarwin(dir) {
@@ -1884,7 +2104,7 @@ if (buildOnly) {
   fixupLibuvKqueueExceptOldDarwin(tjsDir);
   fixupLibuvTtyKqueueOldDarwin(tjsDir);
   fixupTjsHandleDump(tjsDir);
-  fixupLwsAsyncDnsDarwin(tjsDir);
+  fixupHttpclientAsyncDns(tjsDir);
   fixupLwsScandirOldDarwin(tjsDir);
   fixupMbedtlsMsTimeOldDarwin(tjsDir);
   fixupQjsHrtimeOldDarwin(tjsDir);
