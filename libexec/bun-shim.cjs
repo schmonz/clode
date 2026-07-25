@@ -256,6 +256,43 @@ function rgToUgrep(argv) {
   return [...pre, ...tail, ...pos];
 }
 
+// Shell twin of rgToUgrep — the body of the injected/rewritten `function rg`.
+// Uses bash/zsh arrays (the snapshot is sourced by bash/zsh, never dash). Must
+// stay byte-identical in output to rgToUgrep; test/rg-to-ugrep.test.cjs locks it.
+function rgShadowBody() {
+  return [
+    'function rg {',
+    '  local _bin="${CLODE_UGREP:-$(command -v ugrep 2>/dev/null)}"',
+    `  [ -n "$_bin" ] || { echo "clode: rg needs 'ugrep' (set CLODE_UGREP or install it)" >&2; return 127; }`,
+    '  local -a _tail _pos; local _ignore=1 _end=0 _a _g',
+    '  while [ $# -gt 0 ]; do',
+    '    _a=$1',
+    '    if [ $_end -eq 1 ]; then _pos+=("$_a"); shift; continue; fi',
+    '    case "$_a" in',
+    '      --) _end=1; _pos+=("$_a") ;;',
+    '      --no-ignore) _ignore=0 ;;',
+    '      --smart-case) _tail+=(-j) ;;',
+    '      --hidden) _tail+=(-.) ;;',
+    '      --glob=*) _g=${_a#--glob=}; case "$_g" in "!"*) _tail+=("--exclude=${_g#!}");; *) _tail+=("--include=$_g");; esac ;;',
+    '      --glob) shift; _g=$1; case "$_g" in "!"*) _tail+=("--exclude=${_g#!}");; *) _tail+=("--include=$_g");; esac ;;',
+    `      --json|--files|--vimgrep|--stats|--type|--type=*) echo "clode: rg→ugrep shim doesn't translate \${_a%%=*} (rg-only); use ugrep directly" >&2; return 2 ;;`,
+    '      -S) _tail+=(-j) ;;',
+    `      -t|-t*) echo "clode: rg→ugrep shim doesn't translate -t (rg-only); use ugrep directly" >&2; return 2 ;;`,
+    '      -g) shift; _g=$1; case "$_g" in "!"*) _tail+=("--exclude=${_g#!}");; *) _tail+=("--include=$_g");; esac ;;',
+    '      -g*) _g=${_a#-g}; case "$_g" in "!"*) _tail+=("--exclude=${_g#!}");; *) _tail+=("--include=$_g");; esac ;;',
+    '      -A|-B|-C|-m|-e|-f) _tail+=("$_a" "$2"); shift ;;',
+    '      -) _pos+=("$_a") ;;',
+    '      -*) _tail+=("$_a") ;;',
+    '      *) _pos+=("$_a") ;;',
+    '    esac',
+    '    shift',
+    '  done',
+    '  local -a _pre=(-r); [ $_ignore -eq 1 ] && _pre+=(--ignore-files); _pre+=(-I)',
+    '  exec "$_bin" "${_pre[@]}" "${_tail[@]}" "${_pos[@]}"',
+    '}',
+  ].join('\n');
+}
+
 // A shadow body is the upstream multiplexer if it invokes an applet via argv0
 // against the provider binary. We detect the applet from ARGV0=/exec -a.
 const SHADOW_APPLET = /(?:ARGV0=|exec -a )([A-Za-z0-9_+-]+)\b/;
@@ -803,4 +840,5 @@ module.exports.warnAppletSkew = warnAppletSkew;
 module.exports.CLODE_SHADOWS = CLODE_SHADOWS;
 module.exports.rgToUgrep = rgToUgrep;
 module.exports.RgTranslateError = RgTranslateError;
+module.exports.rgShadowBody = rgShadowBody;
 globalThis.Bun = globalThis.Bun || module.exports;   // ensure global even if required directly
