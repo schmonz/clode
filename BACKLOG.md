@@ -52,16 +52,49 @@ Instances found (2026-07-25, on netbsd11-arm64, agents repeatedly tripping):
   → `build/tjs/<osToken>-<arch>/tjs`; all local defaults redirected (build-tjs.mjs,
   node-shim-helper, clode-fuse, oracle-models, live-roundtrip/doctor shells). CI's
   CLODE_TJS/CLODE_TJS_OUT overrides untouched.
-- **TODO — the tjs SOURCE+BUILD dir.** `spike/quickjs/vendor/txiki.js` is a SHARED
-  checkout that build-tjs.mjs patches IN-PLACE (line ~2075) and builds in
-  `<checkout>/build` (line ~2309). Every platform mutates the same source tree →
-  half-patched corruption (observed: `txiki-sync-spawn.patch` neither-applies-nor-
-  verifies, blocking the native NetBSD tjs build). `spike/quickjs/vendor/` is also a
-  dumping ground of cross-platform console logs (aarch64/sparc/m4/p3) + AppleDouble
-  `._*` NFS turds. Fix: default `CLODE_TJS_VENDOR` (build-tjs.mjs:47) to a
-  platform-unique path (e.g. build/tjs-src/<osToken>-<arch>/), so each platform
-  clones/patches/builds in isolation; keep a shared pristine SOURCE cache only if it
-  stays read-only. Consider a `tjsSrcDir` in platform-tag.cjs mirroring `tjsDir`.
+- **TODO (NEXT — the keystone) — the tjs SOURCE+BUILD dir.**
+  `spike/quickjs/vendor/txiki.js` is a SHARED checkout that build-tjs.mjs patches
+  IN-PLACE (line ~2075) and builds in `<checkout>/build` (line ~2309). Every platform
+  mutates the same source tree → half-patched corruption (observed:
+  `txiki-sync-spawn.patch` neither-applies-nor-verifies, blocking the native NetBSD
+  tjs build). `spike/quickjs/vendor/` is also a dumping ground of cross-platform
+  console logs (aarch64/sparc/m4/p3) + AppleDouble `._*` NFS turds.
+  **CHOSEN DESIGN (user, 2026-07-25): shared pristine cache + per-platform build
+  copy.** Keep ONE read-only pristine source clone at `vendor/<name>` (build-tjs.mjs's
+  `ensureCheckout` already clones `--recurse-submodules` at the pinned SHA with a
+  provenance gate — it must NEVER be patched/built in again). Before patch+build, copy
+  it into a platform-unique work dir (add a `tjsSrcDir(repo, {token,arch})` to
+  platform-tag.cjs, mirroring `tjsDir`), and apply patches + cmake THERE (`tjsDir` local
+  var → the copy). Implementation cares: (a) the shared checkout is CURRENTLY dirty
+  (patched in-place by past builds) — get a pristine copy without depending on its
+  working-tree state (prefer `git clone --local <pristine> <copy>` which materializes
+  HEAD/the pin, ignoring working-tree dirt, then `submodule update --init` from the
+  local `.git/modules` cache — verify it works offline); (b) submodules
+  libuv/mbedtls/quickjs AND the untracked `deps/wamr` must survive the copy (a naive
+  `git clean -fdx` would delete wamr); (c) NEVER run destructive git ops in the SHARED
+  cache — only in the disposable per-platform copy; (d) `CLODE_TJS_STATIC`/`CLODE_TJS_WASM`
+  knobs still apply. Verify by actually building native NetBSD tjs → `build/tjs/netbsd-11-arm64/tjs`,
+  then the ~200 "no tjs" test skips become runs (see the tjs-must-be-built item above),
+  and clode's tjs/libuv can be checked for the 64-bit-time_t issue (see NetBSD time_t item).
+  Risk note: this is the SHARED tree — do it carefully with verification, not hastily.
+  **KEY FINDING (2026-07-25): a per-platform source COPY is NOT needed.** `applyPatches`
+  (build-tjs.mjs:2081/2088) applies ONE UNCONDITIONAL patch list to every target, so the
+  patched source is platform-INDEPENDENT; and cmake already builds out-of-tree via
+  `-S <src> -B <builddir>` (line 2309) — it just nests -B *inside* the source today. So
+  the minimal isolation is: (a) point cmake -B at a platform-unique OUT-OF-TREE dir
+  (build/tjs-build/<osToken>-<arch>/) so build artifacts stop contending; (b) keep ONE
+  shared patched source (patch idempotently; reset-to-pristine to recover from a corrupt
+  half-patch). Only the one-time initial patch is a shared mutation — guard it (lock or
+  idempotent reset), or give each builder a `git worktree` (copy-free, shares the object
+  store) if concurrent independent patching is ever needed. User (2026-07-25) deferred
+  this to AFTER NetBSD+fidelity are green ("smash to green, then build system").
+  **Build-system rethink goal (user, 2026-07-25): take the next step toward FULL CROSS
+  BUILDS** — build any target from any host. So the isolation design should generalize
+  the host≠target split that's already latent (CLODE_TJS_OUT/cross-file/CLODE_TARGET_*):
+  platform keys become TARGET keys (token/arch injectable — tjsDir/tjsBin already accept
+  them), the shared patched source feeds N per-target out-of-tree builds, and the tag
+  vocabulary (platform-tag.cjs) is the single axis for output + build dirs across the
+  whole matrix. Don't just isolate NetBSD — make the mechanism target-parametric.
 - **OK — `test/.harness/<platformTag>/`** is already platform-tagged (the stale
   `darwin-25-arm64-node24` dir on the NetBSD box is correctly namespaced, not a
   collision). node-pty's native binary lives there, so it is NOT a shared-artifact
