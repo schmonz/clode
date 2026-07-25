@@ -16,10 +16,10 @@ function loadPty() {
   }
 }
 
-function ptyRun({ cmd, args = [], cols = 80, rows = 24, input, inputDelayMs = 400, ms = 4000 }) {
+function ptyRun({ cmd, args = [], cols = 80, rows = 24, input, inputDelayMs = 400, ms = 4000, env }) {
   const pty = loadPty();
   return new Promise((resolve) => {
-    const p = pty.spawn(cmd, args, { name: 'xterm-256color', cols, rows, env: process.env });
+    const p = pty.spawn(cmd, args, { name: 'xterm-256color', cols, rows, env: env || process.env });
     let out = '';
     let done = false;
     p.onData((d) => { out += d; });

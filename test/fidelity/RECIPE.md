@@ -41,6 +41,29 @@ Each row: `| id | action | expected | axes | test |`
 
 ---
 
+## Intentional divergences
+
+Deliberate departures from upstream Claude behavior. The scoping doctrine:
+prefer a fix that *reduces* diffs; if a divergence is genuinely wanted, gate it
+on a condition that is **false on the reference platform** so the harness sees
+nothing; and if it must fire everywhere, make it a **knob** whose set value
+reproduces upstream exactly, put it at a layer symmetric across naude+quaude,
+and **pin it here** so it is subtracted, not discovered. An unconditional
+divergence is allowed only with strong, documented justification recorded in
+this table. Every row must cite a test that (a) bounds the divergence and (b)
+proves the parity path.
+
+| id | divergence | scope / when it fires | justification | knob → parity | pinned by |
+|---|---|---|---|---|---|
+| X1 | TTY mouse (1000/1001/1002/1003) + focus (1004) tracking defaulted OFF: enable escapes stripped from stdout, stray events dropped from stdin | quaude only (node-shim tty layer); fires on every platform | upstream's per-event redraw flood freezes the UI on constrained hardware (proven on Tiger: SGR motion flood starves keystrokes, login prompt unsubmittable) | `CLODE_TTY_MOUSE=1` / `CLODE_TTY_FOCUS=1` → byte-exact upstream passthrough | test/fidelity/tty-tracking-divergence.test.cjs |
+
+The keychain fallback (darwin-AND-keychain-available → plaintext creds) is
+**not** listed here: it is gated false-on-reference (a fidelity-test mac has
+keychain available, so the gate never fires and behavior is identical to
+Claude), so it needs no pin. See row A2.
+
+---
+
 ## A. Config & credential persistence
 
 | id | action | expected | axes | test |
