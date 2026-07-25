@@ -175,8 +175,216 @@ function applyShell(file, args, opts) {
   return { file: shellExe, args: ['-c', command] };
 }
 
+// ---- quaude enhancement (NOT upstream fidelity): headless-macOS keychain ----
+// Upstream Claude Code assumes every macOS has a GUI login session and stores
+// credentials in the login Keychain via `security`. On a HEADLESS macOS box
+// (over SSH, no window session — e.g. a Mac mini or a vintage machine driven
+// remotely) the login Keychain is unavailable and upstream dead-ends: it prints
+// "Run `security unlock-keychain`" and never persists the token, so every launch
+// demands /login again. That is a deliberate upstream assumption, not a bug we
+// can fix upstream-faithfully — so this is an intentional DIVERGENCE for the
+// mission of running on whatever computer: when the real Keychain is usable
+// (Tahoe, a headful Mac) we pass every `security` call through untouched (full
+// fidelity); when it is NOT usable, we back the credential `security` ops with a
+// file so the token persists. Detection is a real round-trip probe (write+read+
+// delete a throwaway item with CC's exact flags) — robust against both a locked/
+// absent session AND an ancient `security` CLI that lacks -U/-w/-X (Tiger's 2005
+// build rejects them). Scoped to exactly the credential subcommands; everything
+// else is untouched. Store: ~/.claude/.keychain-emulation.json (quaude-private).
+// _kcMode: undefined=unprobed | 'passthrough' (modern keychain, CC untouched) |
+// 'translate' (old keychain reachable, adapt flags to real keychain) | 'emulate'
+// (no keychain — headless/locked — back with a file). Probed once, lazily.
+// _kcCaps holds the detected per-flag capabilities of the local `security`.
+let _kcMode, _kcCaps;
+function _kcFilePath() {
+  const home = (tjs.env && (tjs.env.HOME || tjs.env.USERPROFILE)) || '';
+  return path.join(home, '.claude', '.keychain-emulation.json');
+}
+function _kcLoad() {
+  try {
+    const fd = FSS.open(_kcFilePath(), 'r');
+    try {
+      const ab = FSS.read(fd, 1 << 20, 0);
+      const txt = new TextDecoder().decode(new Uint8Array(ab));
+      return txt ? JSON.parse(txt) : {};
+    } finally { FSS.close(fd); }
+  } catch { return {}; }
+}
+function _kcSave(db) {
+  const p = _kcFilePath(), tmp = p + '.tmp';
+  const bytes = new TextEncoder().encode(JSON.stringify(db)).buffer;
+  const fd = FSS.open(tmp, 'w');
+  try { FSS.write(fd, bytes, -1); } finally { FSS.close(fd); }
+  FSS.rename(tmp, p);
+}
+function _kcSplitArgs(s) {
+  const out = []; let cur = '', q = null, has = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (q) { if (c === q) { q = null; } else cur += c; }
+    else if (c === '"' || c === "'") { q = c; has = true; }
+    else if (c === ' ' || c === '\t') { if (has || cur) { out.push(cur); cur = ''; has = false; } }
+    else cur += c;
+  }
+  if (has || cur) out.push(cur);
+  return out;
+}
+function _kcSecurityArgs(file, args, opts) {
+  if (path.basename(String(file || '')) === 'security' && Array.isArray(args) && args.length) return args;
+  // exec/execSync pass the whole command STRING as `file` with opts.shell set
+  if (opts && opts.shell && typeof file === 'string') {
+    const m = /^\s*(?:\S*\/)?security\s+(.+)$/.exec(file);
+    if (m) return _kcSplitArgs(m[1]);
+  }
+  return null;
+}
+function _kcHandleFile(args) { // 'emulate' backend: no reachable keychain -> file store
+  const sub = args[0];
+  const val = (f) => { const i = args.indexOf(f); return i >= 0 ? args[i + 1] : null; };
+  // report the keychain "available" (CC's J4i keys on exit 36) so CC takes the
+  // keychain path — which we then back with the file.
+  if (sub === 'show-keychain-info') return { stdout: '', code: 36 };
+  const acct = val('-a'), svc = val('-s');
+  if (sub === 'find-generic-password') {
+    const db = _kcLoad();
+    const has = db[svc] && Object.prototype.hasOwnProperty.call(db[svc], acct);
+    if (!has) return { stdout: '', code: 44 }; // errSecItemNotFound (CC treats 0/44/36 as "no item")
+    return { stdout: db[svc][acct] + '\n', code: 0 }; // -w prints the password; CC .trim()s it
+  }
+  if (sub === 'add-generic-password') {
+    const hex = val('-X');
+    const pw = hex != null ? Buffer.from(hex, 'hex').toString('utf8') : (val('-w') || val('-p') || '');
+    const db = _kcLoad(); (db[svc] = db[svc] || {})[acct] = pw; _kcSave(db);
+    return { stdout: '', code: 0 };
+  }
+  if (sub === 'delete-generic-password') {
+    const db = _kcLoad(); if (db[svc]) { delete db[svc][acct]; _kcSave(db); }
+    return { stdout: '', code: 0 };
+  }
+  return null; // any other security subcommand: don't emulate — pass through
+}
+function _kcRealSec(sargs) { // run REAL `security` synchronously (bypass this intercept)
+  return spawnSync('security', sargs, { __kcBypass: true, stdio: ['ignore', 'pipe', 'pipe'], timeout: 3000, encoding: 'utf8' });
+}
+// Old `security find-generic-password -g` prints the secret to STDERR, either
+// `password: "..."` (printable, C-escaped) or `password: 0x<hex>` (binary).
+function _kcParseG(text) {
+  let m = /password:\s*0x([0-9a-fA-F]+)/.exec(text || '');
+  if (m) { try { return Buffer.from(m[1], 'hex').toString('utf8'); } catch { return null; } }
+  m = /password:\s*"((?:[^"\\]|\\.)*)"/.exec(text || '');
+  if (m) return m[1].replace(/\\(.)/g, '$1');
+  return null;
+}
+// 'translate' backend: the login keychain IS reachable but the local `security`
+// is an OLDER build missing some of CC's flags (-U/-X/-w). We drive the REAL
+// keychain, choosing per operation the BEST flag this version actually supports
+// (detected in _kcDetect → _kcCaps), so every point on the Tiger→Tahoe spectrum
+// uses its best available path — e.g. -X (hex, no argv exposure) when present,
+// falling to -p (token visible in `ps` — a transient exposure, acceptable only
+// as a last resort) only where -X is absent. NOT fidelity; UNTESTED until a
+// headful old-macOS box is available.
+function _kcHandleTranslate(args) {
+  const c = _kcCaps || {};
+  const sub = args[0];
+  const val = (f) => { const i = args.indexOf(f); return i >= 0 ? args[i + 1] : null; };
+  if (sub === 'show-keychain-info') return { stdout: '', code: 36 }; // old build returns 0, not CC's expected 36
+  const acct = val('-a'), svc = val('-s');
+  if (sub === 'find-generic-password') {
+    if (c.canW) {
+      const r = _kcRealSec(['find-generic-password', '-a', acct, '-w', '-s', svc]);
+      if (r && r.status === 0 && typeof r.stdout === 'string' && r.stdout.length) return { stdout: r.stdout, code: 0 };
+      return { stdout: '', code: 44 };
+    }
+    const r = _kcRealSec(['find-generic-password', '-a', acct, '-s', svc, '-g']);
+    if (!r || r.status !== 0) return { stdout: '', code: 44 };
+    const pw = _kcParseG((r.stderr || '') + (r.stdout || ''));
+    if (pw == null) return { stdout: '', code: 44 };
+    return { stdout: pw + '\n', code: 0 }; // present on stdout as CC's -w expects
+  }
+  if (sub === 'add-generic-password') {
+    const hex = val('-X');
+    const passArg = (c.canX && hex != null)
+      ? ['-X', hex]                                                             // best: hex, no argv exposure
+      : ['-p', hex != null ? Buffer.from(hex, 'hex').toString('utf8') : (val('-w') || val('-p') || '')];
+    let sargs;
+    if (c.canU) sargs = ['add-generic-password', '-U', '-a', acct, '-s', svc, ...passArg];
+    else { if (c.canDelete) _kcRealSec(['delete-generic-password', '-a', acct, '-s', svc]); sargs = ['add-generic-password', '-a', acct, '-s', svc, ...passArg]; }
+    const r = _kcRealSec(sargs);
+    return { stdout: '', code: (r && r.status === 0) ? 0 : (r ? r.status : 1) };
+  }
+  if (sub === 'delete-generic-password') { if (c.canDelete) _kcRealSec(['delete-generic-password', '-a', acct, '-s', svc]); return { stdout: '', code: 0 }; }
+  return null;
+}
+// Probe the LOCAL `security` once: is the keychain reachable, and which of CC's
+// flags does this version support? Returns a capability record; a throwaway item
+// is written/read/deleted with progressively older flags so each is tested
+// independently (handles the whole Tiger→Tahoe spectrum, not just the endpoints).
+function _kcDetect() {
+  const A = '__clode_kc_probe__', S = 'clode-keychain-probe';
+  try {
+    _kcRealSec(['delete-generic-password', '-a', A, '-s', S]); // clean slate
+    // WRITE: prefer -X (hex); fall back to -p (plaintext). Failure of both ⇒ unreachable.
+    let canX = false;
+    let w = _kcRealSec(['add-generic-password', '-a', A, '-s', S, '-X', '636c6f6465']);
+    if (w && w.status === 0) canX = true;
+    else { w = _kcRealSec(['add-generic-password', '-a', A, '-s', S, '-p', 'clode']); }
+    if (!w || w.status !== 0) return { reachable: false };
+    // READ: prefer -w (stdout); fall back to -g (stderr, parsed).
+    let canW = false, canG = false;
+    let r = _kcRealSec(['find-generic-password', '-a', A, '-w', '-s', S]);
+    if (r && r.status === 0 && typeof r.stdout === 'string' && r.stdout.indexOf('clode') >= 0) canW = true;
+    if (!canW) { r = _kcRealSec(['find-generic-password', '-a', A, '-s', S, '-g']); if (r && r.status === 0 && _kcParseG((r.stderr || '') + (r.stdout || '')) === 'clode') canG = true; }
+    if (!canW && !canG) { _kcRealSec(['delete-generic-password', '-a', A, '-s', S]); return { reachable: false }; } // wrote but unreadable ⇒ treat as unusable
+    // UPDATE via -U, and whether delete-generic-password exists (for the no-U path).
+    const u = _kcRealSec(['add-generic-password', '-U', '-a', A, '-s', S, '-X', '7570']);
+    const canU = !!(u && u.status === 0);
+    const d = _kcRealSec(['delete-generic-password', '-a', A, '-s', S]);
+    const canDelete = !!(d && d.status === 0);
+    return { reachable: true, canX, canW, canG, canU, canDelete };
+  } catch { return { reachable: false }; }
+}
+function _kcProbe() {
+  _kcCaps = _kcDetect();
+  if (!_kcCaps.reachable) return 'emulate';                          // headless/locked: file store
+  if (_kcCaps.canX && _kcCaps.canW && _kcCaps.canU) return 'passthrough'; // modern: leave CC untouched
+  return 'translate';                                                // in-between: adapt per-flag
+}
+function _kcFakeChild(stdout, code) {
+  const child = new EventEmitter();
+  child.pid = -1;
+  const outR = new Readable({ read() {} });
+  if (stdout) outR.push(Buffer.from(stdout));
+  outR.push(null);
+  const errR = new Readable({ read() {} }); errR.push(null);
+  child.stdout = outR; child.stderr = errR;
+  child.stdin = { writable: true, write() { return true; }, end() { return this; }, on() { return this; }, once() { return this; }, destroy() { return this; }, emit() {} };
+  child.kill = () => true; child.ref = () => {}; child.unref = () => {};
+  child.exitCode = null; child.signalCode = null;
+  queueMicrotask(() => { child.exitCode = code; child.emit('exit', code, null); child.emit('close', code, null); });
+  return child;
+}
+function _kcSyncResult(stdout, code, enc) {
+  const outBuf = Buffer.from(stdout || '');
+  const out = (enc && enc !== 'buffer') ? outBuf.toString(enc) : outBuf;
+  const err = (enc && enc !== 'buffer') ? '' : Buffer.alloc(0);
+  return { pid: -1, status: code, signal: null, stdout: out, stderr: err, output: [null, out, err] };
+}
+function _kcMaybe(file, args, opts, sync) {
+  if (opts && opts.__kcBypass) return null;
+  const kcArgs = _kcSecurityArgs(file, args, opts);
+  if (!kcArgs) return null;
+  if (_kcMode === undefined) _kcMode = _kcProbe();
+  if (_kcMode === 'passthrough') return null;
+  const em = (_kcMode === 'translate') ? _kcHandleTranslate(kcArgs) : _kcHandleFile(kcArgs);
+  if (!em) return null;
+  trace('keychain', _kcMode, kcArgs[0]);
+  return sync ? _kcSyncResult(em.stdout, em.code, opts.encoding) : _kcFakeChild(em.stdout, em.code);
+}
+// ---- end quaude headless-macOS keychain enhancement --------------------------
+
 function spawn(file, args = [], opts = {}) {
   if (!Array.isArray(args)) { opts = args || {}; args = []; }
+  { const _kc = _kcMaybe(file, args, opts, false); if (_kc) return _kc; }
   // Default the child's environment to the CURRENT env (tjs.env), not undefined.
   // Node inherits the live process.env — including mutations — when `env` is
   // omitted; tjs.env is the object process.env's set/deleteProperty traps write
@@ -342,6 +550,7 @@ function spawn(file, args = [], opts = {}) {
 // Node result shape; encoding/toString + PATH resolution + shell done here.
 function spawnSync(file, args = [], opts = {}) {
   if (!Array.isArray(args)) { opts = args || {}; args = []; }
+  { const _kc = _kcMaybe(file, args, opts, true); if (_kc) return _kc; }
   const shelled = applyShell(file, args, opts);
   file = shelled.file; args = shelled.args;
   const winVerbatim = !!shelled.__winVerbatim;
