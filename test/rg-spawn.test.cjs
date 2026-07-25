@@ -73,3 +73,22 @@ test('rg spawn.sync: ugrep exit 1 (no match) does NOT surface', () => {
   }
   assert.doesNotMatch(buf, /surface/);
 });
+
+test('_rewriteRgSpawn: CLODE_RG_DEBUG logs the rewrite; unset is silent', () => {
+  withStubUgrep(() => {
+    const origErr = process.stderr.write; let buf = '';
+    process.stderr.write = (s) => { buf += s; return true; };
+    const prev = process.env.CLODE_RG_DEBUG;
+    try {
+      delete process.env.CLODE_RG_DEBUG;
+      _rewriteRgSpawn(['rg', 'foo']);
+      assert.doesNotMatch(buf, /rg-debug/);
+      process.env.CLODE_RG_DEBUG = '1';
+      _rewriteRgSpawn(['rg', 'bar']);
+      assert.match(buf, /rg-debug:/);
+    } finally {
+      process.stderr.write = origErr;
+      if (prev === undefined) delete process.env.CLODE_RG_DEBUG; else process.env.CLODE_RG_DEBUG = prev;
+    }
+  });
+});

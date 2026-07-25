@@ -531,8 +531,13 @@ function _rewriteRgSpawn(cmd) {
   if (exe !== 'rg') return cmd;
   const ugrep = process.env.CLODE_UGREP || which('ugrep');
   if (!ugrep) return cmd;
-  try { return [ugrep, ...rgToUgrep(cmd.slice(1))]; }
-  catch (e) { if (e instanceof RgTranslateError) { process.stderr.write(e.message + '\n'); } return cmd; }
+  try {
+    const rewritten = [ugrep, ...rgToUgrep(cmd.slice(1))];
+    if (process.env.CLODE_RG_DEBUG) {
+      process.stderr.write(`clode rg-debug: ${cmd.join(' ')} => ${rewritten.join(' ')}\n`);
+    }
+    return rewritten;
+  } catch (e) { if (e instanceof RgTranslateError) { process.stderr.write(e.message + '\n'); } return cmd; }
 }
 
 // --- spawn: approximate Bun.spawn -> Node child_process ---
