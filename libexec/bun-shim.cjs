@@ -208,6 +208,54 @@ const CLODE_SHADOWS = {
           probe: (f) => ({ args: [...f, '--version'],            skew: (c) => c >= 2 }),
           skewRcTest: '[ "$_rc" -ge 2 ]' },
 };
+
+// rg → ugrep argv translation. Spec: docs/superpowers/specs/2026-07-24-rg-to-ugrep-routing-design.md
+// Faithful for the common set; throws on rg-only flags rather than mis-search.
+class RgTranslateError extends Error {
+  constructor(flag) {
+    super(`clode: rg→ugrep shim doesn't translate ${flag} (rg-only); use ugrep directly`);
+    this.name = 'RgTranslateError'; this.flag = flag; this.code = 'CLODE_RG_UNTRANSLATABLE';
+  }
+}
+// rg-only, no faithful ugrep spelling.
+const _RG_DENY_LONG = new Set(['--json', '--files', '--vimgrep', '--stats', '--type']);
+// short flags that consume the next argv as their value (pass verbatim, kept adjacent).
+const _RG_VALUE_SHORT = new Set(['A', 'B', 'C', 'm', 'e', 'f']);
+function _pushGlob(tail, g) {
+  if (g == null) throw new RgTranslateError('--glob (missing value)');
+  tail.push(g[0] === '!' ? '--exclude=' + g.slice(1) : '--include=' + g);
+}
+function rgToUgrep(argv) {
+  const tail = [], pos = [];
+  let injectIgnore = true, endOpts = false;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (endOpts || a === '-' || a[0] !== '-') { pos.push(a); continue; }
+    if (a === '--') { endOpts = true; pos.push(a); continue; }
+    if (a.startsWith('--')) {
+      const eq = a.indexOf('=');
+      const name = eq === -1 ? a : a.slice(0, eq);
+      const inline = eq === -1 ? null : a.slice(eq + 1);
+      if (name === '--no-ignore') { injectIgnore = false; continue; }
+      if (name === '--smart-case') { tail.push('-j'); continue; }
+      if (name === '--hidden') { tail.push('-.'); continue; }
+      if (name === '--glob') { _pushGlob(tail, inline != null ? inline : argv[++i]); continue; }
+      if (_RG_DENY_LONG.has(name)) throw new RgTranslateError(name);
+      tail.push(a); continue; // pass verbatim
+    }
+    const ch = a[1];
+    if (a === '-S') { tail.push('-j'); continue; }
+    if (ch === 't') throw new RgTranslateError('-t');
+    if (ch === 'g') { _pushGlob(tail, a.length > 2 ? a.slice(2) : argv[++i]); continue; }
+    if (_RG_VALUE_SHORT.has(ch) && a.length === 2) { tail.push(a, argv[++i]); continue; }
+    tail.push(a); continue; // pass verbatim (-i, -n, -A3, …)
+  }
+  const pre = ['-r'];
+  if (injectIgnore) pre.push('--ignore-files');
+  pre.push('-I');
+  return [...pre, ...tail, ...pos];
+}
+
 // A shadow body is the upstream multiplexer if it invokes an applet via argv0
 // against the provider binary. We detect the applet from ARGV0=/exec -a.
 const SHADOW_APPLET = /(?:ARGV0=|exec -a )([A-Za-z0-9_+-]+)\b/;
@@ -753,4 +801,6 @@ module.exports.collectShadows = collectShadows;
 module.exports._wsArgs = _wsArgs;
 module.exports.warnAppletSkew = warnAppletSkew;
 module.exports.CLODE_SHADOWS = CLODE_SHADOWS;
+module.exports.rgToUgrep = rgToUgrep;
+module.exports.RgTranslateError = RgTranslateError;
 globalThis.Bun = globalThis.Bun || module.exports;   // ensure global even if required directly
