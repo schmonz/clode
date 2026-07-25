@@ -37,6 +37,19 @@ txiki.js/deps/libuv); it MUST compile with NetBSD 64-bit-time_t symbols or quaud
 will truncate timestamps the same way. Verify (and patch the tjs build if needed)
 once the native tjs build is unblocked. Report the pkgsrc node build bug upstream.
 
+## Native tjs on NetBSD needs CLODE_TJS_WASM=off (WAMR uses Linux mremap) (2026-07-25)
+
+Building native tjs on netbsd11-arm64 fails in WAMR: `deps/wamr/core/shared/platform/
+common/posix/posix_memmap.c` uses Linux-only `mremap(..., MREMAP_MAYMOVE)` (NetBSD has
+no such mremap). Same class as the documented MAP_32BIT breakage on s390x/ppc64le/
+riscv64. STOPGAP for green: build with `CLODE_TJS_WASM=off` (build-tjs.mjs already
+supports it — drops WASM/WAMR; "nothing shipped imports it", bun:ffi is a throw-on-use
+stub). TODO: decide whether NetBSD (and other non-Linux BSDs) should ship WASM at all;
+if yes, patch WAMR's posix_memmap.c with a non-Linux mremap fallback (munmap+mmap or
+guard the MREMAP path) and upstream it. For now WASM-off is the shipping posture on
+platforms where WAMR won't build — record it in the per-target build config, not as an
+ad-hoc env flag a human must remember.
+
 ## ★ Build-working-dir isolation — no shared-tree tromping (2026-07-25)
 
 Principle (user, 2026-07-25): "cross-build a zillion clodes and quaudes and they
