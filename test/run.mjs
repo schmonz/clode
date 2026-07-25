@@ -50,19 +50,27 @@ function harnessOk() {
 }
 
 // Install the PTY/TUI harness into the tagged dir if preflight fails, then re-check.
+// The harness (node-pty, a native addon) does NOT build on every platform clode
+// targets — e.g. NetBSD, where node-pty's pty.cc uses Linux <pty.h> symbols. Its
+// absence is NOT fatal: the PTY/TUI tests gate themselves and skip when node-pty
+// can't load (node-shim-ctrlz-pty's loadPty try/catch, the tjs-gated TUI tests).
+// So a failed install WARNS and lets the rest of the suite run, rather than
+// aborting every test on a platform where a single native addon won't compile.
 if (!harnessOk()) {
   console.error(`run: installing PTY test harness deps into test/.harness/${TAG} ...`);
   fs.mkdirSync(HARNESS, { recursive: true });
   fs.copyFileSync(path.join('test', 'package.json'), path.join(HARNESS, 'package.json'));
   const lock = path.join('test', 'package-lock.json');
   if (fs.existsSync(lock)) fs.copyFileSync(lock, path.join(HARNESS, 'package-lock.json'));
+  let installed = false;
   try {
     execFileSync(process.execPath, [npmCliPath(), 'install'], { cwd: HARNESS, stdio: 'inherit' });
-  } catch {
-    console.error('run: harness dep install failed (see npm output above)');
-    process.exit(2);
+    installed = harnessOk();
+  } catch { /* install failed — handled by the warning below */ }
+  if (!installed) {
+    console.error('run: PTY test harness unavailable — PTY/TUI tests will SKIP ' +
+      '(node-pty could not be built on this platform; the rest of the suite still runs)');
   }
-  if (!harnessOk()) { console.error('run: PTY test harness unavailable (see above)'); process.exit(2); }
 }
 
 // Hermetic guard (pure node; required in-process). Watch the real dirs a test must never touch.
