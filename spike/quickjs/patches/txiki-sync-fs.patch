@@ -15,7 +15,7 @@ new file mode 100644
 index 0000000..99e2d83
 --- /dev/null
 +++ b/src/mod_fs_sync.c
-@@ -0,0 +1,329 @@
+@@ -0,0 +1,337 @@
 +/* Synchronous fs primitives for CommonJS interop (node-shim).
 + * POSIX-direct, main-thread blocking by design. Exposed as the
 + * global `__tjs_fs_sync`. Upstream candidate:
@@ -41,6 +41,9 @@ index 0000000..99e2d83
 +#endif
 +#ifndef O_NONBLOCK
 +#define O_NONBLOCK 0
++#endif
++#ifndef O_CLOEXEC
++#define O_CLOEXEC 0   /* pre-10.7 darwin lacks it; there the sync-spawn primitive's file_actions still isolate the child */
 +#endif
 +#ifndef S_ISLNK
 +#define S_ISLNK(m) (0)
@@ -105,6 +108,11 @@ index 0000000..99e2d83
 +    else { JS_FreeCString(ctx, path); JS_FreeCString(ctx, flags);
 +           return JS_ThrowTypeError(ctx, "fs_sync.open: bad flags"); }
 +    if (nonblock) oflags |= O_NONBLOCK;
++    /* CLOEXEC by default, matching libuv/Node (every fd it opens is FD_CLOEXEC):
++     * a parent-only fd must never leak into a spawned child. The sync-spawn
++     * primitive's POSIX_SPAWN_CLOEXEC_DEFAULT covers only Apple; this is the
++     * portable guarantee on every platform (NetBSD/Linux/BSD). */
++    oflags |= O_CLOEXEC;
 +#if defined(_WIN32)
 +    oflags |= O_BINARY;   /* mingw defaults to text mode; force byte-exact I/O */
 +#endif
