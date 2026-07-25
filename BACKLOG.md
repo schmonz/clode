@@ -90,6 +90,14 @@ Instances found (2026-07-25, on netbsd11-arm64, agents repeatedly tripping):
   then the ~200 "no tjs" test skips become runs (see the tjs-must-be-built item above),
   and clode's tjs/libuv can be checked for the 64-bit-time_t issue (see NetBSD time_t item).
   Risk note: this is the SHARED tree — do it carefully with verification, not hastily.
+  **FRAGILITY FINDING (2026-07-25):** the patch set is order- AND context-fragile —
+  several patches are diffed against a partially-patched tree and lean on the
+  addedLinesPresent reverse-check, so `git checkout -- . && git clean -fd src/` does NOT
+  reproduce a fresh clone (observed: after an in-place reset, txiki-wurl-url.patch
+  "neither applies nor verifies" on CMakeLists.txt's TJS_USE_ADA option). So the
+  isolation design must get each build's source by COPYING FROM PRISTINE (git clone
+  --local at the pin, or a fresh checkout), never by resetting an already-patched tree.
+  (Cleanup option: re-diff every patch against pristine to drop the order/context coupling.)
   **KEY FINDING (2026-07-25): a per-platform source COPY is NOT needed.** `applyPatches`
   (build-tjs.mjs:2081/2088) applies ONE UNCONDITIONAL patch list to every target, so the
   patched source is platform-INDEPENDENT; and cmake already builds out-of-tree via
