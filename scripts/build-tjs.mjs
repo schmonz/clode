@@ -36,14 +36,20 @@ import os, { cpus } from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
+const require = createRequire(import.meta.url);
+const { tjsDir } = require('./platform-tag.cjs');
 const repo = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const sourceOnly = process.argv.includes('--source-only');
 const buildOnly = process.argv.includes('--build-only');
 if (sourceOnly && buildOnly) throw new Error('pick one of --source-only / --build-only');
 const vendor = process.env.CLODE_TJS_VENDOR || path.join(repo, 'spike/quickjs/vendor');
 const patches = path.join(repo, 'spike/quickjs/patches');
-const outDir = process.env.CLODE_TJS_OUT || path.join(repo, 'build/tjs');
+// Default output is platform-unique (build/tjs/<osToken>-<arch>) so a shared
+// (NFS) tree can't have one platform's build clobber another's. CI overrides the
+// whole path via CLODE_TJS_OUT (per-target), so this default is local-build only.
+const outDir = process.env.CLODE_TJS_OUT || tjsDir(repo);
 const wantStatic = process.env.CLODE_TJS_STATIC === '1';
 // CLODE_TJS_WASM=off: drop WASM/WAMR support. Needed on arches where WAMR's
 // posix_memmap.c references MAP_32BIT, a Linux mmap flag defined ONLY for

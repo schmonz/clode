@@ -5,11 +5,16 @@ const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
+const { tjsBin } = require('../scripts/platform-tag.cjs');
+
 const REPO = path.resolve(__dirname, '..');
 const LOADER = path.join(REPO, 'libexec/node-shim/loader.cjs');
 
 function tjsPath() {
-  const cand = process.env.CLODE_TJS || path.join(REPO, 'build/tjs/tjs');
+  // Default is the platform-unique path (build/tjs/<osToken>-<arch>) — never the
+  // bare build/tjs/tjs, whose shared location let a foreign-platform binary linger
+  // and defeat this gate (a macOS Mach-O on a NetBSD tree → exec format error).
+  const cand = process.env.CLODE_TJS || tjsBin(REPO);
   return fs.existsSync(cand) ? cand : null;
 }
 

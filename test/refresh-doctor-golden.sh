@@ -22,7 +22,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 : "${CLODE_NODE:=$(command -v node)}"
-: "${CLODE_TJS:=build/tjs/tjs}"
+: "${CLODE_TJS:=$("$CLODE_NODE" -p "require('./scripts/platform-tag.cjs').tjsBin(process.cwd())")}"
 NATIVE="$(command -v claude || { echo 'no native claude on PATH' >&2; exit 2; })"
 [ -x "$CLODE_TJS" ] || { echo "no tjs template at '$CLODE_TJS' (set CLODE_TJS, or run scripts/build-tjs.mjs)" >&2; exit 2; }
 

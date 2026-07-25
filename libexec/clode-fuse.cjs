@@ -50,7 +50,7 @@ const extract = require('./clode-extract.cjs');
 const deps = require('./clode-deps.cjs');
 const { clodeCacheDir, depsStore } = require('./clode-paths.cjs');
 const { ensurePinnedNode } = require('./clode-node.cjs');
-const { seaBin } = require('../scripts/platform-tag.cjs');
+const { seaBin, tjsBin } = require('../scripts/platform-tag.cjs');
 
 // Materialize the builder-role VFS members to `mat` on disk. A fused NATIVE
 // clode runs under tjs and ships NO checkout — so any subprocess it must spawn
@@ -951,7 +951,7 @@ async function clodeBuild(args, opts) {
       }
       clodeLog(`clode: build: using the embedded tjs template -> ${template}`);
     }
-    if (!template) template = path.join(ROOT, 'build', 'tjs', 'tjs');
+    if (!template) template = tjsBin(ROOT);
     if (!fs.existsSync(template)) {
       return fail(`build: no tjs template at '${template}' (run scripts/build-tjs.mjs, or set CLODE_TJS)`);
     }

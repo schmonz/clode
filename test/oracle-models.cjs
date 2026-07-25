@@ -15,6 +15,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { tjsBin } = require('../scripts/platform-tag.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 const LOADER = path.join(REPO, 'libexec/node-shim/loader.cjs');
@@ -38,7 +39,7 @@ function naudeCommand(cli, args, opts) {
   return { cmd: opts.node || process.execPath, argv: [cli, ...args] };
 }
 function quaudeCommand(cli, args, opts) {
-  const tjs = opts.tjs || process.env.CLODE_TJS || path.join(REPO, 'build/tjs/tjs');
+  const tjs = opts.tjs || process.env.CLODE_TJS || tjsBin(REPO);
   return { cmd: tjs, argv: ['run', LOADER, cli, ...args] };
 }
 

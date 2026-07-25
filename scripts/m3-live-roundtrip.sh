@@ -9,7 +9,7 @@ if [ "$CLODE_LIVE_ROUNDTRIP" != "1" ]; then echo "SKIP: set CLODE_LIVE_ROUNDTRIP
 if [ -z "$ANTHROPIC_API_KEY" ]; then echo "SKIP: export ANTHROPIC_API_KEY (never committed)"; exit 0; fi
 if [ -z "$CLODE_PROVIDER_BIN" ] || [ ! -f "$CLODE_PROVIDER_BIN" ]; then echo "SKIP: set CLODE_PROVIDER_BIN to a fetched darwin-arm64 binary"; exit 0; fi
 REPO=$(cd "$(dirname "$0")/.." && pwd)
-TJS="${CLODE_TJS:-$REPO/build/tjs/tjs}"
+TJS="${CLODE_TJS:-$(node -p "require('$REPO/scripts/platform-tag.cjs').tjsBin('$REPO')")}"
 [ -x "$TJS" ] || { echo "SKIP: no tjs at $TJS (run scripts/build-tjs.mjs)"; exit 0; }
 SCRATCH=$(mktemp -d)
 node "$REPO/libexec/extract-claude-js.cjs" "$CLODE_PROVIDER_BIN" "$SCRATCH/cli.cjs"
