@@ -66,12 +66,14 @@ test('rewriteSnapshot: works on install-path-style snapshots too (resolver-agnos
   assert.doesNotMatch(out, /_cc_bin|ARGV0=/);
 });
 
-test('rewriteSnapshot: rewrites an rg shadow when present', () => {
+test('rewriteSnapshot: rewrites an upstream rg shadow to the ugrep twin', () => {
   const snap = 'function rg {\n  local _cc_bin="$HOME/.local/bin/claude"\n' +
     '  ARGV0=rg "$_cc_bin" --color=never "$@"\n}\n';
   const out = rewriteSnapshot(snap);
-  assert.match(out, /local _bin="\$\{CLODE_RG:-\$\(command -v rg 2>\/dev\/null\)\}"/);
-  assert.match(out, /exec "\$_bin" --color=never "\$@"/);
+  assert.match(out, /local _bin="\$\{CLODE_UGREP:-\$\(command -v ugrep 2>\/dev\/null\)\}"/);
+  assert.match(out, /clode: rg needs 'ugrep'/);
+  assert.doesNotMatch(out, /ARGV0=rg/);
+  assert.doesNotMatch(out, /--color=never/); // upstream ripgrep flags are dropped, not passed to ugrep
 });
 
 test('rewriteSnapshot: throws on a multiplexer shadow with an unknown applet', () => {

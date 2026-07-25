@@ -203,9 +203,9 @@ const CLODE_SHADOWS = {
           fix: 'install bfs ≥ 3.3 built with Oniguruma, or set CLODE_BFS to such a build',
           probe: (f) => ({ args: [...f, '-quit', '.'],           skew: (c) => c !== 0 }),
           skewRcTest: '[ "$_rc" -ne 0 ]' },
-  rg:   { applet: 'rg',    env: 'CLODE_RG',
-          fix: 'set CLODE_RG to a compatible rg, or upgrade it',
-          probe: (f) => ({ args: [...f, '--version'],            skew: (c) => c >= 2 }),
+  rg:   { applet: 'rg',    env: 'CLODE_UGREP', translate: true,
+          fix: 'set CLODE_UGREP to a compatible ugrep, or upgrade it',
+          probe: (f) => ({ args: ['--version'],                  skew: (c) => c >= 2 }),
           skewRcTest: '[ "$_rc" -ge 2 ]' },
 };
 
@@ -353,6 +353,7 @@ function shQuote(s){ return "'" + String(s).replace(/'/g, "'\\''") + "'"; }
 // answer to skew: the diagnosis travels to the point of use, visible to the
 // user and to any agent reading the failed command's output.
 function buildShadow(name, known, parsed, finding){
+  if (known.translate) return rgShadowBody(); // rg → full ugrep-translating body; upstream flags dropped
   const { applet, env } = known;
   const flags = parsed.flags ? ' ' + parsed.flags : '';
   const head = `function ${name} {\n` +
