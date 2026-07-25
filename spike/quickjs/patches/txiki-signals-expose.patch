@@ -1,0 +1,19 @@
+diff --git a/src/signals.c b/src/signals.c
+index 5db61d5..2350254 100644
+--- a/src/signals.c
++++ b/src/signals.c
+@@ -182,6 +182,14 @@ void tjs__mod_signals_init(JSContext *ctx, JSValue ns) {
+             JS_SetPropertyStr(ctx, signals, signame, JS_NewInt32(ctx, i));
+         }
+     }
++    /* CLODE: also expose the OS-derived name->number map on the global as
++     * __tjs_signals (mirroring __tjs_kill/__tjs_spawn_sync). These numbers come
++     * from <signal.h> at build time (tjs_signal_map's #ifdef'd designated
++     * initializers), so the node-shim's os.constants.signals is CORRECT on every
++     * platform instead of a hardcoded darwin table. */
++    JSValue __clode_global = JS_GetGlobalObject(ctx);
++    JS_DefinePropertyValueStr(ctx, __clode_global, "__tjs_signals", JS_DupValue(ctx, signals), JS_PROP_C_W_E);
++    JS_FreeValue(ctx, __clode_global);
+     JS_SetPropertyStr(ctx, ns, "signals", signals);
+ 
+     JS_SetPropertyFunctionList(ctx, ns, tjs_signal_funcs, countof(tjs_signal_funcs));

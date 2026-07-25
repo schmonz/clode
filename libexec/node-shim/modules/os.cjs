@@ -36,6 +36,19 @@ const SIGNALS_DARWIN = {
   SIGSYS: 12,
 };
 
+// The REAL os.constants.signals. Merge the darwin base with the OS-derived map tjs
+// exposes as globalThis.__tjs_signals. The darwin base carries the full set of
+// well-known signal NAMES Node lists — including aliases (SIGIOT≡SIGABRT, SIGIO)
+// that tjs's number-indexed map can't represent (one name per number). __tjs_signals
+// carries the OS-CORRECT NUMBERS from <signal.h> at tjs build time, so it overrides
+// where a platform differs (e.g. linux's SIGCHLD:17) and ADDS platform-specific
+// signals the darwin table lacks (e.g. NetBSD's SIGPWR:32). On the BSDs the numbers
+// already agree, so the merge is exactly the host table; nowhere is a per-platform
+// table hand-maintained. Fall back to darwin alone for an older/non-tjs host.
+const SIGNALS = (globalThis.__tjs_signals && Object.keys(globalThis.__tjs_signals).length)
+  ? { ...SIGNALS_DARWIN, ...globalThis.__tjs_signals }
+  : SIGNALS_DARWIN;
+
 // process.platform -> node's os.type() spelling (uname -s). One case per
 // release-matrix identity; unknown values pass through untouched.
 function unameType(p) {
@@ -104,6 +117,6 @@ module.exports = {
   availableParallelism: () => ((tjs.system && tjs.system.cpus && tjs.system.cpus.length) || 1),
   loadavg: () => (tjs.system && tjs.system.loadAvg) || [0, 0, 0],
   uptime: () => (tjs.system && tjs.system.uptime) || 0,
-  constants: { signals: SIGNALS_DARWIN },
+  constants: { signals: SIGNALS },
   userInfo: () => ({ username: tjs.env.USER ?? 'unknown', homedir: module.exports.homedir() }),
 };

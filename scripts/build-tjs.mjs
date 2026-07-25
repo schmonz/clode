@@ -157,6 +157,7 @@ const TXIKI_PATCH_ORDER = [
   'txiki-wurl-url.patch',
   'txiki-unhandledrejection-no-abort.patch',  // diffed against the fully-patched tree (vm.c ~L731)
   'txiki-vm-context.patch',                   // real per-context global: new mod_vm.c + CMakeLists/private.h/vm.c wiring
+  'txiki-signals-expose.patch',               // expose the OS-derived signal name->number map as globalThis.__tjs_signals (signals.c only; order-independent)
 ];
 
 function orderedPatches(prefix) {
