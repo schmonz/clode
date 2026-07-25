@@ -4,6 +4,57 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 (Strategic feasibility risks live in `LONG-TERM.md`; in-flight designs in
 `docs/superpowers/`.)
 
+## ★ Build-working-dir isolation — no shared-tree tromping (2026-07-25)
+
+Principle (user, 2026-07-25): "cross-build a zillion clodes and quaudes and they
+can't be tromping on each other." On a shared NFS tree, EVERY build output AND
+every build WORKING dir must be platform-unique (or per-invocation isolated), so
+concurrent/cross builds never corrupt each other. Existence-only gates then can't
+mistake a foreign-platform artifact for a local one.
+
+Instances found (2026-07-25, on netbsd11-arm64, agents repeatedly tripping):
+- **DONE — `build/tjs/tjs` output.** A single shared path; a macOS Mach-O sat
+  there and a NetBSD checkout tried to exec it (exec format error), defeating
+  `skipUnlessTjs`'s existence-only gate. Fixed: platform-tag.cjs `tjsDir`/`tjsBin`
+  → `build/tjs/<osToken>-<arch>/tjs`; all local defaults redirected (build-tjs.mjs,
+  node-shim-helper, clode-fuse, oracle-models, live-roundtrip/doctor shells). CI's
+  CLODE_TJS/CLODE_TJS_OUT overrides untouched.
+- **TODO — the tjs SOURCE+BUILD dir.** `spike/quickjs/vendor/txiki.js` is a SHARED
+  checkout that build-tjs.mjs patches IN-PLACE (line ~2075) and builds in
+  `<checkout>/build` (line ~2309). Every platform mutates the same source tree →
+  half-patched corruption (observed: `txiki-sync-spawn.patch` neither-applies-nor-
+  verifies, blocking the native NetBSD tjs build). `spike/quickjs/vendor/` is also a
+  dumping ground of cross-platform console logs (aarch64/sparc/m4/p3) + AppleDouble
+  `._*` NFS turds. Fix: default `CLODE_TJS_VENDOR` (build-tjs.mjs:47) to a
+  platform-unique path (e.g. build/tjs-src/<osToken>-<arch>/), so each platform
+  clones/patches/builds in isolation; keep a shared pristine SOURCE cache only if it
+  stays read-only. Consider a `tjsSrcDir` in platform-tag.cjs mirroring `tjsDir`.
+- **OK — `test/.harness/<platformTag>/`** is already platform-tagged (the stale
+  `darwin-25-arm64-node24` dir on the NetBSD box is correctly namespaced, not a
+  collision). node-pty's native binary lives there, so it is NOT a shared-artifact
+  problem — it's a build-availability problem (no `__NetBSD__` branch; see below).
+
+Sweep needed: audit ALL of build/ and any in-tree scratch (spike/, .matrix/) for
+un-keyed working dirs and apply the principle. platform-tag.cjs is the single source
+of truth for the keys. See [[stay-on-main-branch]] context — this is main-line work.
+
+## node-pty won't build on NetBSD — make it available, don't silent-skip (2026-07-25)
+
+node-pty 1.1.0's `src/unix/pty.cc` forkpty include block (lines ~36-48) has
+branches for __linux__/__APPLE__/__FreeBSD__/__OpenBSD__ but NO `__NetBSD__`, so
+NetBSD includes no header → forkpty/openpty/B38400/VTIME/cfsetispeed all undeclared,
+the addon fails to compile, and the PTY/TUI test harness can't install. NetBSD has
+these in `<util.h>` + `<termios.h>` (link `-lutil`) — identical to the OpenBSD
+branch. Fix = a ~2-line patch (pty.cc NetBSD branch + binding.gyp adds netbsd to the
+`-lutil` link condition), applied durably during harness install (clode already has
+a patch-apply discipline for tjs), and upstreamable to node-pty. User's call
+(2026-07-25): silent-skip on a missing native addon is NOT desirable — make it
+available or make skipping a conscious, tracked choice, never an incidental default.
+STOPGAP shipped: run.mjs no longer hard-aborts the whole suite when the harness
+can't build (it warns + runs the non-PTY suite, PTY tests skip) — but that warn is a
+backstop for genuinely-unsupported platforms, NOT the answer for NetBSD; the answer
+is the pty.cc patch so the PTY tests actually RUN.
+
 ## ★ ACTIVE FRONTIER (2026-07-14) — the general-purpose cross-build matrix
 
 North star (user, 2026-07-14): a cross-build matrix "as **reproducible, large,
