@@ -1091,6 +1091,39 @@ function fixupTjsHandleDump(dir) {
   console.log('fixup tjs-handle-dump: applied');
 }
 
+function fixupLwsAsyncDnsDarwin(dir) {
+  // On macOS, DNS configuration lives in SystemConfiguration (scutil --dns),
+  // NOT /etc/resolv.conf — which is frequently stale/non-authoritative (e.g. a
+  // dead qemu forwarder 10.0.2.3 left in resolv.conf). lws's own async DNS
+  // resolver reads /etc/resolv.conf directly and has no failover, so on such a
+  // box it queries the dead nameserver and PARKS FOREVER (event loop idle in
+  // kevent, 2 UDP sockets open) — proven on Tiger: interactive login token
+  // exchange hangs while the system resolver (getaddrinfo, which uses the
+  // authoritative config) resolves fine. Disabling LWS_WITH_SYS_ASYNC_DNS on
+  // Darwin routes lws through getaddrinfo — the correct resolver on macOS,
+  // where resolv.conf is not the source of truth. libuv/lws upstream candidate.
+  const marker = 'CLODE lws-async-dns-darwin';
+  const f = path.join(dir, 'CMakeLists.txt');
+  const src = fs.readFileSync(f, 'utf8');
+  if (src.includes(marker)) {
+    console.log('fixup lws-async-dns-darwin: already applied');
+    return;
+  }
+  const anchor = 'if(CMAKE_SYSTEM_NAME STREQUAL "Android")\n    set(LWS_WITH_SYS_ASYNC_DNS OFF CACHE BOOL "" FORCE)';
+  if (!src.includes(anchor)) {
+    throw new Error('fixup lws-async-dns-darwin: anchor not found (txiki CMakeLists changed under the pin — re-derive)');
+  }
+  const out = src.replace(
+    anchor,
+    '# ' + marker + ': macOS DNS lives in SystemConfiguration, not resolv.conf;\n'
+      + '# lws async DNS reads resolv.conf and hangs on a stale/dead nameserver.\n'
+      + 'if(CMAKE_SYSTEM_NAME STREQUAL "Android" OR CMAKE_SYSTEM_NAME STREQUAL "Darwin")\n'
+      + '    set(LWS_WITH_SYS_ASYNC_DNS OFF CACHE BOOL "" FORCE)',
+  );
+  fs.writeFileSync(f, out);
+  console.log('fixup lws-async-dns-darwin: applied');
+}
+
 function fixupLibuvMsgXOldDarwin(dir) {
   // libuv's darwin batch-UDP path calls Apple's private recvmsg_x/
   // sendmsg_x syscalls (~10.10+), declared by its own darwin-syscalls.h
@@ -1851,6 +1884,7 @@ if (buildOnly) {
   fixupLibuvKqueueExceptOldDarwin(tjsDir);
   fixupLibuvTtyKqueueOldDarwin(tjsDir);
   fixupTjsHandleDump(tjsDir);
+  fixupLwsAsyncDnsDarwin(tjsDir);
   fixupLwsScandirOldDarwin(tjsDir);
   fixupMbedtlsMsTimeOldDarwin(tjsDir);
   fixupQjsHrtimeOldDarwin(tjsDir);
