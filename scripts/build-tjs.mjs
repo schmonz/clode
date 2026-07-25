@@ -58,17 +58,29 @@ const wantStatic = process.env.CLODE_TJS_STATIC === '1';
 // the node-shim suite (no bundle boot, no WebAssembly), so WASM-off is free
 // there. A real fix (guard MAP_32BIT to 0 when undefined, upstream WAMR) is
 // queued for the Q3 batch; patches/ is frozen this phase.
-const wantWasm = (process.env.CLODE_TJS_WASM || 'on').toLowerCase() !== 'off';
+// Lean-POSIX targets — the BSDs, illumos, and other non-Linux/Darwin/Windows Unix —
+// default WASM/mimalloc/FFI OFF so a NATIVE `node scripts/build-tjs.mjs` on such a
+// host matches the SHIPPING recipe (scripts/tjs-legs.mjs: every T2 VM leg sets
+// wasm/mimalloc/ffi off) with no flags to remember: they can't build WAMR (Linux
+// mremap/MAP_32BIT), hit the mimalloc 3.2.7 compile regression, and ship no tjs:ffi.
+// Explicit CLODE_TJS_* still wins (CI sets them; a proven platform can re-enable).
+const _leanPosix = !['linux', 'darwin', 'win32'].includes(process.platform);
+const _tjsKnob = (env, onByDefault) => (process.env[env] || (onByDefault ? 'on' : 'off')).toLowerCase() !== 'off';
+const wantWasm = _tjsKnob('CLODE_TJS_WASM', !_leanPosix);
 // CLODE_TJS_MIMALLOC=off: system malloc instead of mimalloc. mimalloc 3.2.7
 // does not compile on NetBSD at all (its __NetBSD__ branch references the
 // renamed mi_option_eager_commit_delay enum member — upstream regression,
 // committed finding in spike/quickjs/qemu/guest-m4.sh). VM legs start with
 // it off and re-enable per-platform as they prove.
-const wantMimalloc = (process.env.CLODE_TJS_MIMALLOC || 'on').toLowerCase() !== 'off';
+const wantMimalloc = _tjsKnob('CLODE_TJS_MIMALLOC', !_leanPosix);
 // CLODE_TJS_FFI=off: drop tjs:ffi (needs system libffi headers in the guest;
 // nothing shipped imports it — bun:ffi is a throw-on-use stub). The STATIC
 // knob already implies this; VM legs set it independently of static.
-const wantFfi = (process.env.CLODE_TJS_FFI || 'on').toLowerCase() !== 'off';
+const wantFfi = _tjsKnob('CLODE_TJS_FFI', !_leanPosix);
+if (_leanPosix && !(process.env.CLODE_TJS_WASM || process.env.CLODE_TJS_MIMALLOC || process.env.CLODE_TJS_FFI)) {
+  console.error(`build-tjs: ${process.platform} is a lean-POSIX target — defaulting wasm/mimalloc/ffi OFF ` +
+    `to match scripts/tjs-legs.mjs (override any with CLODE_TJS_WASM/MIMALLOC/FFI=on)`);
+}
 const run = (cmd, args, opts = {}) =>
   execFileSync(cmd, args, { stdio: 'inherit', ...opts });
 const runOut = (cmd, args, opts = {}) =>
