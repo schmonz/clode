@@ -100,6 +100,25 @@ function toolchainDir(repo) {
   return path.join(repo, 'build', 'toolchain', platformTag());
 }
 
+// The per-platform tjs template binary. A FOURTH keyed thing (see the file
+// header's three): the patched txiki.js/QuickJS engine is a NATIVE binary, so it
+// MUST be keyed by platform to survive a shared (NFS) tree that many platforms
+// build into — a bare `build/tjs/tjs` let a macOS build and a NetBSD build clobber
+// each other (and left a foreign-arch binary that defeated existence-only gates).
+// Its axis is OS+arch ONLY: unlike toolchainDir it carries NO node major (tjs is a
+// C binary with no node coupling), and unlike an artifact dir it carries no clode
+// VERSION (tjs is versioned by its own source PIN, not clode's release). token/arch
+// are injectable so a cross-build can name the TARGET's dir, not the host's.
+function tjsDir(repo, { token = osToken(), arch = process.arch } = {}) {
+  return path.join(repo, 'build', 'tjs', `${token}-${arch}`);
+}
+// The tjs binary inside tjsDir. Host exe suffix (.exe on win32) — consumers resolve
+// the host's own binary; CI cross-builds name the output path explicitly via
+// CLODE_TJS_OUT instead of resolving through here.
+function tjsBin(repo, opts = {}) {
+  return path.join(tjsDir(repo, opts), process.platform === 'win32' ? 'tjs.exe' : 'tjs');
+}
+
 // The VERSION file at the repo root — the same source scripts/build-clode-main.mjs's
 // own repoVersion() reads (for the embedded __CLODE_BUNDLE_VERSION__ define).
 // Duplicated on purpose, not shared: this is a 3-line leaf read and platform-tag.cjs
@@ -169,4 +188,5 @@ function seaBin(repo, base, opts = {}) { return seaOut(repo, base, opts) + (proc
 module.exports = {
   macosVersion, linuxGlibc, osToken, platformTag, harnessDir, toolchainDir,
   repoVersion, hostOsVersionToken, artifactName, artifactDir, seaBin, seaOut,
+  tjsDir, tjsBin,
 };

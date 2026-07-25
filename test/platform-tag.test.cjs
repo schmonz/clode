@@ -4,6 +4,7 @@ const path = require('node:path');
 const {
   macosVersion, linuxGlibc, osToken, platformTag, toolchainDir,
   hostOsVersionToken, artifactName, artifactDir, seaOut, seaBin,
+  tjsDir, tjsBin,
 } = require('../scripts/platform-tag.cjs');
 
 test('macosVersion keeps two components only for the 10.x era', () => {
@@ -48,6 +49,27 @@ test('osToken maps win32 to the stable "windows" token (no OS-version split)', (
 
 test('toolchainDir is <repo>/build/toolchain/<platformTag>', () => {
   assert.strictEqual(toolchainDir('/r'), path.join('/r', 'build', 'toolchain', platformTag()));
+});
+
+test('tjsDir is <repo>/build/tjs/<osToken>-<arch> — keyed by OS+arch only, NOT node major', () => {
+  // Pure formatter over injected token/arch (like platformTag/artifactName).
+  assert.strictEqual(
+    tjsDir('/r', { token: 'netbsd-11', arch: 'arm64' }),
+    path.join('/r', 'build', 'tjs', 'netbsd-11-arm64'));
+  assert.strictEqual(
+    tjsDir('/r', { token: 'linux-glibc2.28', arch: 'x64' }),
+    path.join('/r', 'build', 'tjs', 'linux-glibc2.28-x64'));
+  // host default = osToken()-arch; tjs is a native C binary, node-independent,
+  // so its key must NOT carry a node major (that would wrongly split the cache).
+  assert.strictEqual(tjsDir('/r'), path.join('/r', 'build', 'tjs', `${osToken()}-${process.arch}`));
+  assert.doesNotMatch(tjsDir('/r'), /node\d+/);
+});
+
+test('tjsBin is <tjsDir>/tjs (host exe suffix)', () => {
+  const exe = process.platform === 'win32' ? 'tjs.exe' : 'tjs';
+  assert.strictEqual(
+    tjsBin('/r', { token: 'netbsd-11', arch: 'arm64' }),
+    path.join('/r', 'build', 'tjs', 'netbsd-11-arm64', exe));
 });
 
 test('hostOsVersionToken: darwin uses "darwin", not "macos", padded to major.minor', () => {
