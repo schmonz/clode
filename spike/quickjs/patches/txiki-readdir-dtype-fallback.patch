@@ -1,0 +1,49 @@
+diff --git a/src/mod_fs.c b/src/mod_fs.c
+index 25e94a4..016826c 100644
+--- a/src/mod_fs.c
++++ b/src/mod_fs.c
+@@ -396,6 +396,44 @@ static void uv__fs_req_cb(uv_fs_t *req) {
+             arg = JS_NewObjectProto(ctx, JS_NULL);
+             JS_DefinePropertyValueStr(ctx, arg, "done", JS_NewBool(ctx, d->done), JS_PROP_C_W_E);
+             if (fr->req.result != 0) {
++                /* CLODE: some filesystems (NFS, and others that omit d_type in
++                 * readdir) hand back UV_DIRENT_UNKNOWN. Node/libuv consumers still
++                 * see the real type; lstat the entry to resolve it so isFile /
++                 * isDirectory / isSymbolicLink are correct everywhere, not only where
++                 * d_type is populated. lstat (not stat) preserves symlink identity. */
++                if (fr->dirent.type == UV_DIRENT_UNKNOWN && JS_IsString(d->path)) {
++                    const char *dpath = JS_ToCString(ctx, d->path);
++                    if (dpath) {
++                        size_t n = strlen(dpath) + 1 + strlen(fr->dirent.name) + 1;
++                        char *full = js_malloc(ctx, n);
++                        if (full) {
++                            snprintf(full, n, "%s/%s", dpath, fr->dirent.name);
++                            uv_fs_t sreq;
++                            if (uv_fs_lstat(NULL, &sreq, full, NULL) == 0) {
++                                uint64_t m = sreq.statbuf.st_mode & S_IFMT;
++                                fr->dirent.type = m == S_IFDIR    ? UV_DIRENT_DIR
++                                                : m == S_IFREG    ? UV_DIRENT_FILE
++#ifdef S_IFLNK
++                                                : m == S_IFLNK    ? UV_DIRENT_LINK
++#endif
++#ifdef S_IFIFO
++                                                : m == S_IFIFO    ? UV_DIRENT_FIFO
++#endif
++#ifdef S_IFSOCK
++                                                : m == S_IFSOCK   ? UV_DIRENT_SOCKET
++#endif
++                                                : m == S_IFCHR    ? UV_DIRENT_CHAR
++#ifdef S_IFBLK
++                                                : m == S_IFBLK    ? UV_DIRENT_BLOCK
++#endif
++                                                : UV_DIRENT_UNKNOWN;
++                            }
++                            uv_fs_req_cleanup(&sreq);
++                            js_free(ctx, full);
++                        }
++                        JS_FreeCString(ctx, dpath);
++                    }
++                }
+                 JSValue item = tjs_new_dirent(ctx, &fr->dirent);
+                 JS_DefinePropertyValueStr(ctx, arg, "value", item, JS_PROP_C_W_E);
+             }
