@@ -509,11 +509,24 @@ function hash(input, seed){
 }
 hash.wyhash = hash; hash.crc32 = (b)=>{ const z=require('zlib'); return z.crc32 ? z.crc32(b) : 0; };
 
+// If cmd[0] is bare `rg`, rewrite to ugrep with translated argv (spec: rg-to-ugrep).
+// ugrep-absent → cmd untouched, so the app's not-found fallback path is preserved.
+function _rewriteRgSpawn(cmd) {
+  if (!Array.isArray(cmd) || cmd.length === 0) return cmd;
+  const exe = cmd[0];
+  if (exe !== 'rg') return cmd;
+  const ugrep = process.env.CLODE_UGREP || which('ugrep');
+  if (!ugrep) return cmd;
+  try { return [ugrep, ...rgToUgrep(cmd.slice(1))]; }
+  catch (e) { if (e instanceof RgTranslateError) { process.stderr.write(e.message + '\n'); } return cmd; }
+}
+
 // --- spawn: approximate Bun.spawn -> Node child_process ---
 function spawn(cmdOrOpts, maybeOpts){
   let cmd, opts;
   if (Array.isArray(cmdOrOpts)) { cmd = cmdOrOpts; opts = maybeOpts||{}; }
   else { opts = cmdOrOpts||{}; cmd = opts.cmd; }
+  cmd = _rewriteRgSpawn(cmd);
   const exe = cmd[0];
   const env = opts.env || process.env;
   // Bun resolves the executable synchronously and THROWS if it isn't found, so
@@ -548,7 +561,8 @@ function spawn(cmdOrOpts, maybeOpts){
   };
 }
 spawn.sync = function(cmdOrOpts){
-  const cmd = Array.isArray(cmdOrOpts)?cmdOrOpts:(cmdOrOpts.cmd);
+  const cmd0 = Array.isArray(cmdOrOpts)?cmdOrOpts:(cmdOrOpts.cmd);
+  const cmd = _rewriteRgSpawn(cmd0);
   const r = cp.spawnSync(cmd[0], cmd.slice(1), {encoding:'buffer'});
   return { exitCode: r.status??0, stdout: r.stdout||Buffer.alloc(0), stderr: r.stderr||Buffer.alloc(0), success: (r.status===0) };
 };
@@ -846,4 +860,5 @@ module.exports.CLODE_SHADOWS = CLODE_SHADOWS;
 module.exports.rgToUgrep = rgToUgrep;
 module.exports.RgTranslateError = RgTranslateError;
 module.exports.rgShadowBody = rgShadowBody;
+module.exports._rewriteRgSpawn = _rewriteRgSpawn;
 globalThis.Bun = globalThis.Bun || module.exports;   // ensure global even if required directly
