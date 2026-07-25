@@ -399,7 +399,7 @@ function _eachShadow(text, cb){
 function rewriteSnapshot(text, findings){
   text = String(text);
   const byName = new Map((findings || []).map((f) => [f.name, f]));
-  let out = '', i = 0;
+  let out = '', i = 0, sawAny = false, sawRg = false, lastEnd = -1;
   _eachShadow(text, ({ name, parsed, mIndex, endIdx }) => {
     // Body looks like an upstream multiplexer shadow.
     const known = CLODE_SHADOWS[name];
@@ -408,9 +408,13 @@ function rewriteSnapshot(text, findings){
         `update CLODE_SHADOWS in bun-shim.cjs`);
     }
     out += text.slice(i, mIndex) + buildShadow(name, known, parsed, byName.get(name));
-    i = endIdx;
+    i = endIdx; lastEnd = out.length; sawAny = true;
+    if (name === 'rg') sawRg = true;
   });
   out += text.slice(i);
+  // Additive: a real snapshot that shadows find/grep but not rg gets an injected
+  // ugrep-translating rg shadow, spliced right after the last rewritten shadow.
+  if (sawAny && !sawRg) out = out.slice(0, lastEnd) + '\n' + rgShadowBody() + out.slice(lastEnd);
   return out;
 }
 

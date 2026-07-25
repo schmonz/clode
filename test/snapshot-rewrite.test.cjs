@@ -76,6 +76,26 @@ test('rewriteSnapshot: rewrites an upstream rg shadow to the ugrep twin', () => 
   assert.doesNotMatch(out, /--color=never/); // upstream ripgrep flags are dropped, not passed to ugrep
 });
 
+test('rewriteSnapshot: injects an rg shadow when find/grep present but rg absent', () => {
+  const out = rewriteSnapshot(skewSnap); // skewSnap has find+grep, no rg
+  assert.match(out, /function rg \{/);
+  assert.match(out, /local _bin="\$\{CLODE_UGREP:-\$\(command -v ugrep 2>\/dev\/null\)\}"/);
+  // injected AFTER the existing shadows, exactly once
+  assert.strictEqual((out.match(/function rg \{/g) || []).length, 1);
+});
+
+test('rewriteSnapshot: does NOT inject rg into a string with no shadows', () => {
+  const plain = 'export PATH=/usr/bin\nfunction hello { echo hi; }\n';
+  assert.strictEqual(rewriteSnapshot(plain), plain);
+});
+
+test('rewriteSnapshot: does NOT double-inject when an rg shadow already exists', () => {
+  const snap = skewSnap + '\nfunction rg {\n  local _cc_bin="${CLAUDE_CODE_EXECPATH:-}"\n' +
+    '  ARGV0=rg "$_cc_bin" "$@"\n}\n';
+  const out = rewriteSnapshot(snap);
+  assert.strictEqual((out.match(/function rg \{/g) || []).length, 1);
+});
+
 test('rewriteSnapshot: throws on a multiplexer shadow with an unknown applet', () => {
   const snap = 'function sk {\n  local _cc_bin="${CLAUDE_CODE_EXECPATH:-}"\n' +
     '  ARGV0=skim "$_cc_bin" --tac "$@"\n}\n';
