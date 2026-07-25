@@ -4,6 +4,39 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 (Strategic feasibility risks live in `LONG-TERM.md`; in-flight designs in
 `docs/superpowers/`.)
 
+## tjs must be BUILT + REQUIRED by the suite, not skipped (2026-07-25)
+
+On netbsd11-arm64, 200 of 240 suite skips are "no tjs binary (CLODE_TJS or
+build/tjs/…)". tjs builds on EVERY target platform (the whole cross-build matrix
+— a solved problem), so skipping on its absence is the same silent-coverage-loss
+anti-pattern as the old node-pty skip (now fixed: node-pty is built + required,
+7d1763f). The suite should ensure tjs is built (like the PTY harness) and tests
+should REQUIRE it, converting ~200 skips into runs. Blocked here only because the
+native tjs build can't run — see the vendor-dir corruption below. Once that's
+isolated and tjs builds, wire a build-or-require step into test/run.mjs (mirror the
+node-pty harness path) and drop skipUnlessTjs's silent-skip in favor of a loud
+requirement. User framing (2026-07-25): "Isn't tjs known to build on every platform
+we target?" — yes; don't skip on a buildable artifact's absence.
+
+## NetBSD 64-bit time_t: write-side utimes truncation in the pkgsrc host node (2026-07-25)
+
+`fs.utimesSync(f, new Date('2076-...'))` under the pkgsrc host node writes a mtime
+of 1940 — a signed-32-bit time_t wrap (2076 ≈ 2^32 s). Disambiguated: the OS `stat`
+(and `ls`) read back the SAME 1940, so libuv WROTE the truncated value; the kernel
+stored it faithfully (not a read bug). NetBSD/arm64 has had 64-bit time_t forever;
+this is the NetBSD symbol-versioning trap — 64-bit time is exposed via renamed libc
+symbols (`__utimes50`/`__stat50`/…; cf. `nm -D /opt/pkg/bin/bfs` → `U __fstat50`),
+and a binary built without the correct NetBSD libc headers links the OLD 32-bit
+`utimes`. So the pkgsrc node 24 (or its bundled libuv) was compiled to call 32-bit
+`utimes`, not `__utimes50` — an upstream pkgsrc/node BUILD defect, not clode code.
+Two consequences: (1) the host-node test surface — `clode-fuse` staleness test's
+50-year utimes wrapped to 1940 and spuriously fired the gate; made robust by capping
+the pin at 2038 (representable everywhere) rather than relying on the broken far
+date. (2) THE ONE WE OWN — clode's tjs build vendors libuv (spike/quickjs/vendor/
+txiki.js/deps/libuv); it MUST compile with NetBSD 64-bit-time_t symbols or quaude
+will truncate timestamps the same way. Verify (and patch the tjs build if needed)
+once the native tjs build is unblocked. Report the pkgsrc node build bug upstream.
+
 ## ★ Build-working-dir isolation — no shared-tree tromping (2026-07-25)
 
 Principle (user, 2026-07-25): "cross-build a zillion clodes and quaudes and they

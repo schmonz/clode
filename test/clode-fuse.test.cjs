@@ -142,12 +142,16 @@ test('clode build --self: fresh esbuilt bundle passes the staleness gate', () =>
   fs.writeFileSync(fakeTjs, '#!/bin/sh\nexit 0\n');
   const bundle = path.join(home, 'clode-main.bundle.cjs');
   fs.writeFileSync(bundle, '// fresh stand-in\n');
-  // Pin the bundle's mtime well into the future so it postdates every real
-  // libexec source regardless of when this test runs. The dummy CLODE_TJS
-  // is not a real tjs binary, so the run still fails further down the
-  // pipeline (e.g. at codesign) — that's expected; this test only asserts
-  // the staleness gate itself did not block a fresh bundle.
-  const future = new Date(Date.now() + 1000 * 60 * 60 * 24 * 365 * 50);
+  // Pin the bundle's mtime into the future so it postdates every real libexec
+  // source. Cap at 2038-01-01: NetBSD's fs.utimes truncates to a signed 32-bit
+  // time_t (a node/libuv Y2038 bug, observed on netbsd11-arm64 2026-07), so a
+  // 50-year date (2076) WRAPS to 1940 and would read as OLDER than libexec,
+  // spuriously firing the staleness gate. A pre-2038 date still postdates any
+  // real source and is representable on every platform. The dummy CLODE_TJS is
+  // not a real tjs binary, so the run still fails further down the pipeline
+  // (e.g. at codesign) — expected; this test only asserts the staleness gate
+  // itself did not block a fresh bundle.
+  const future = new Date(Math.min(Date.now() + 1000 * 60 * 60 * 24 * 365 * 50, Date.UTC(2038, 0, 1)));
   fs.utimesSync(bundle, future, future);
   const r = runEntry(['build', '--self'], {
     CLODE_TJS: fakeTjs,
