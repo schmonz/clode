@@ -1217,52 +1217,60 @@ static void tjs_httpclient_resolve_cb(uv_getaddrinfo_t *req, int status, struct 
         return;
     }
 
-    char ip_str[INET6_ADDRSTRLEN];
-    if (res->ai_family == AF_INET6) {
-        struct sockaddr_in6 *sa6 = (struct sockaddr_in6 *) res->ai_addr;
-        uv_inet_ntop(AF_INET6, &sa6->sin6_addr, ip_str, sizeof(ip_str));
-    } else {
-        struct sockaddr_in *sa = (struct sockaddr_in *) res->ai_addr;
-        uv_inet_ntop(AF_INET, &sa->sin_addr, ip_str, sizeof(ip_str));
-    }
-    uv_freeaddrinfo(res);
-
     struct lws_context *lws_ctx = tjs__lws_get_context(ctx);
     if (!lws_ctx) {
         tjs_httpclient_conn_fail(h, "no lws context");
+        uv_freeaddrinfo(res);
         lws_parse_uri_destroy(&cr->uri);
         js_free(ctx, cr);
         return;
     }
 
-    struct lws_client_connect_info cci;
-    memset(&cci, 0, sizeof(cci));
+    /* Try each resolved address in turn. getaddrinfo returns IPv6 first for a
+     * dual-stack host, but a v4-only box has no route to it and
+     * lws_client_connect_via_info() returns NULL — so fall through to the next
+     * address (the IPv4 one) instead of failing the whole fetch. This is the
+     * resolver-order fallback every DNS client does; AI_ADDRCONFIG is not enough
+     * (NetBSD counts loopback/link-local IPv6 as "configured" and returns AAAA). */
+    struct lws *wsi = NULL;
+    for (struct addrinfo *ai = res; ai && !wsi; ai = ai->ai_next) {
+        char ip_str[INET6_ADDRSTRLEN];
+        if (ai->ai_family == AF_INET6) {
+            uv_inet_ntop(AF_INET6, &((struct sockaddr_in6 *) ai->ai_addr)->sin6_addr, ip_str, sizeof(ip_str));
+        } else if (ai->ai_family == AF_INET) {
+            uv_inet_ntop(AF_INET, &((struct sockaddr_in *) ai->ai_addr)->sin_addr, ip_str, sizeof(ip_str));
+        } else {
+            continue;
+        }
 
-    cci.context = lws_ctx;
-    cci.address = ip_str;      /* resolved IP — lws does no DNS.  lws copies the
-                                * connect strings into the wsi (the old sync path
-                                * destroyed the uri right after this call), so a
-                                * stack ip_str is safe. */
-    cci.port = cr->uri->port;
-    cci.path = cr->full_path;
-    cci.host = cr->uri->host;  /* Host header + SNI keep the hostname */
-    /* Do NOT set cci.origin for the generic HTTP client: libwebsockets turns it
-     * into a real \`Origin:\` request header on EVERY fetch(), which is a
-     * browser/CORS concept that has no place on a server-side HTTP request and
-     * makes CORS-guarded APIs reject the call (e.g. api.anthropic.com -> 401
-     * "CORS requests are not allowed for this Organization"). host node / other
-     * server HTTP clients send no Origin. Leaving it NULL (already zeroed by the
-     * memset above) suppresses the header. (WebSocket handshakes, which legitimately
-     * use Origin, go through a different path and are unaffected.) */
-    cci.origin = NULL;
-    cci.ssl_connection = (cr->use_ssl ? LCCSCF_USE_SSL : 0) | h->ssl_flags | LCCSCF_HTTP_NO_FOLLOW_REDIRECT;
-    cci.method = h->method;
-    cci.local_protocol_name = TJS_LWS_HTTP_PROTOCOL_NAME;
-    cci.userdata = h;
-    cci.pwsi = &h->wsi;
-    cci.vhost = tjs__lws_select_vhost(ctx, cr->uri->scheme, cr->uri->host, cr->uri->port);
+        struct lws_client_connect_info cci;
+        memset(&cci, 0, sizeof(cci));
+        cci.context = lws_ctx;
+        cci.address = ip_str;      /* resolved IP — lws does no DNS.  lws copies the
+                                    * connect strings into the wsi, so a stack
+                                    * ip_str is safe. */
+        cci.port = cr->uri->port;
+        cci.path = cr->full_path;
+        cci.host = cr->uri->host;  /* Host header + SNI keep the hostname */
+        /* Do NOT set cci.origin for the generic HTTP client: libwebsockets turns it
+         * into a real \`Origin:\` request header on EVERY fetch(), which is a
+         * browser/CORS concept that has no place on a server-side HTTP request and
+         * makes CORS-guarded APIs reject the call (e.g. api.anthropic.com -> 401
+         * "CORS requests are not allowed for this Organization"). host node / other
+         * server HTTP clients send no Origin. Leaving it NULL (already zeroed by the
+         * memset above) suppresses the header. (WebSocket handshakes, which legitimately
+         * use Origin, go through a different path and are unaffected.) */
+        cci.origin = NULL;
+        cci.ssl_connection = (cr->use_ssl ? LCCSCF_USE_SSL : 0) | h->ssl_flags | LCCSCF_HTTP_NO_FOLLOW_REDIRECT;
+        cci.method = h->method;
+        cci.local_protocol_name = TJS_LWS_HTTP_PROTOCOL_NAME;
+        cci.userdata = h;
+        cci.pwsi = &h->wsi;
+        cci.vhost = tjs__lws_select_vhost(ctx, cr->uri->scheme, cr->uri->host, cr->uri->port);
 
-    struct lws *wsi = lws_client_connect_via_info(&cci);
+        wsi = lws_client_connect_via_info(&cci);
+    }
+    uv_freeaddrinfo(res);
 
     if (!wsi) {
         tjs_httpclient_conn_fail(h, "Connection failed");
