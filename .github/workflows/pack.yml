@@ -57,6 +57,21 @@ jobs:
         with:
           pattern: tjs-*
           path: engines
+      # actions/download-artifact flattens when its pattern matches EXACTLY ONE
+      # artifact (the single-leg probe: engines/tjs), but creates per-artifact
+      # tjs-<leg>/ subdirs when several match (the whole-matrix path — the same
+      # layout release.yml's darwin-universal reads as slices/tjs-darwin-<a>/tjs,
+      # and what collectInputs expects). A bare engine has lost its leg identity;
+      # re-nest it under the leg we dispatched so the aggregator can map it.
+      - name: Re-nest a flattened single-leg engine under its tjs-<leg>/ dir
+        if: ${{ inputs.only != '' }}
+        run: |
+          set -euo pipefail
+          for f in tjs tjs.exe; do
+            if [ -f "engines/$f" ]; then
+              d="engines/tjs-${{ inputs.only }}"; mkdir -p "$d"; mv "engines/$f" "$d/$f"
+            fi
+          done
       - name: Assemble the templates manifest + pin-versioned pack
         run: |
           set -euo pipefail
