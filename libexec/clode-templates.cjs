@@ -32,4 +32,30 @@ function resolveTarget(manifest, name) {
   return Object.prototype.hasOwnProperty.call(manifest.targets, name) ? manifest.targets[name] : null;
 }
 
-module.exports = { parseManifest, listTargets, resolveTarget, TemplatesError };
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+
+// Resolve a target's engine to a local executable path — pin-check, cache by
+// engine name, else fetch + sha256-verify + cache + chmod. `fetch(url)->Promise<Buffer>`
+// is injectable (clode-net in production; a stub in tests). NO compiler involved:
+// the engine is fuse-base data, not something this host executes.
+async function obtainEngine(entry, opts) {
+  if (opts.manifestPin !== opts.thisPin) {
+    throw new TemplatesError(`templates pin ${opts.manifestPin} != this clode's tjs pin ${opts.thisPin} — download the pack for your clode version`);
+  }
+  const dest = path.join(opts.cacheDir, entry.engine);
+  const verify = (buf) => {
+    const got = crypto.createHash('sha256').update(buf).digest('hex');
+    if (got !== entry.sha256) throw new TemplatesError(`engine ${entry.engine}: sha256 ${got} != manifest ${entry.sha256}`);
+  };
+  if (fs.existsSync(dest)) { verify(fs.readFileSync(dest)); return dest; }
+  const buf = await opts.fetch((opts.baseUrl || '') + entry.engine);
+  verify(buf);
+  fs.mkdirSync(opts.cacheDir, { recursive: true });
+  fs.writeFileSync(dest, buf);
+  fs.chmodSync(dest, 0o755);
+  return dest;
+}
+
+module.exports = { parseManifest, listTargets, resolveTarget, obtainEngine, TemplatesError };

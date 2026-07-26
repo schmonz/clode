@@ -720,6 +720,29 @@ function loadManifest(opts) {
   return tpl.parseManifest(require('node:fs').readFileSync(p, 'utf8'));
 }
 
+// Default engine fetch: WHATWG fetch (present under both host node and tjs) to a
+// Buffer. An engine is ~7 MB, so buffering is fine here (unlike the ~240 MB
+// provider, which streams). Injectable via opts.fetchEngine.
+async function defaultEngineFetch(url) {
+  const r = await fetch(url);
+  if (!r || !r.ok) throw new Error(`fetch ${url}: HTTP ${r ? r.status : '?'}`);
+  return Buffer.from(await r.arrayBuffer());
+}
+
+// This clode's own tjs pin, to gate an engine/manifest against a version mismatch.
+// A fused clode bakes CLODE_TJS_PIN at build time; a dev checkout derives it from
+// PINS.md (same "vX.Y.Z-<sha7>" shape the manifest uses).
+function thisTjsPin(env, opts) {
+  if (env.CLODE_TJS_PIN) return env.CLODE_TJS_PIN;
+  try {
+    const root = path.resolve(opts.libexec || '.', '..');
+    const pins = require('node:fs').readFileSync(path.join(root, 'spike/quickjs/PINS.md'), 'utf8');
+    const m = pins.match(/txiki\.js\s+(v[0-9.]+)\s+([0-9a-f]{7,})/i);
+    if (m) return `${m[1]}-${m[2].slice(0, 7)}`;
+  } catch { /* fused clode with no PINS.md must bake CLODE_TJS_PIN */ }
+  return null;
+}
+
 // clode build [--out PATH]. Returns the exit status (0 on success). Injectable
 // bits (env/stderr/stdout) keep the unit-testable surface consistent with the
 // sibling subcommand modules.
@@ -766,6 +789,28 @@ async function clodeBuild(args, opts) {
     spin.done();
     for (const t of tpl.listTargets(manifest)) stdout.write(`${t.name}\t${t.tag}\t[${t.verified}]\n`);
     return 0;
+  }
+  if (parsed.target) {
+    // Resolve the target's prebuilt engine (pin-checked, sha-verified, cached),
+    // then hand it to the EXISTING compile-free cross-fuse path as the foreign
+    // base (CLODE_TARGET_TEMPLATE). No compiler on this host — the engine is data.
+    let manifest;
+    try { manifest = loadManifest(opts); } catch (e) { return fail(e.message); }
+    const entry = tpl.resolveTarget(manifest, parsed.target);
+    if (!entry) return fail(`build: unknown target '${parsed.target}' (see: clode build --list-targets)`);
+    let enginePath;
+    try {
+      enginePath = await tpl.obtainEngine(entry, {
+        cacheDir: opts.templateCacheDir || path.join(clodeCacheDir(env), 'templates'),
+        baseUrl: env.CLODE_TEMPLATES_BASEURL || '',
+        fetch: opts.fetchEngine || defaultEngineFetch,
+        thisPin: thisTjsPin(env, opts),
+        manifestPin: manifest.tjsPin,
+      });
+    } catch (e) { return fail(e.message); }
+    env.CLODE_TARGET_TEMPLATE = enginePath;
+    clodeLog(`clode: build --target ${parsed.target}: engine ${path.basename(enginePath)} -> cross-fuse`);
+    // fall through to the normal build+fuse flow, which honors CLODE_TARGET_TEMPLATE.
   }
 
   // -- naude branch (Task 4): `clode build --naude` bakes Claude Code into a

@@ -34,3 +34,35 @@ test('resolveTarget returns the entry or null', () => {
   assert.strictEqual(resolveTarget(m, 'linux-x64').engine, 'tjs-linux-x64-deadbeef');
   assert.strictEqual(resolveTarget(m, 'nope'), null);
 });
+
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const { obtainEngine } = require('../libexec/clode-templates.cjs');
+
+test('obtainEngine: pin mismatch is refused', async () => {
+  await assert.rejects(
+    () => obtainEngine({ engine: 'e', sha256: 'x' }, { cacheDir: os.tmpdir(), thisPin: 'A', manifestPin: 'B', fetch: async () => Buffer.alloc(0) }),
+    (e) => e instanceof TemplatesError && /pin/i.test(e.message));
+});
+
+test('obtainEngine: fetch, verify sha, cache, chmod; second call cached', async () => {
+  const bytes = Buffer.from('ENGINE-BYTES');
+  const sha = crypto.createHash('sha256').update(bytes).digest('hex');
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eng-'));
+  let calls = 0;
+  const fetch = async (url) => { calls++; assert.match(url, /base\/tjs-x-abc/); return bytes; };
+  const p = await obtainEngine({ engine: 'tjs-x-abc', sha256: sha }, { cacheDir, baseUrl: 'base/', fetch, thisPin: 'P', manifestPin: 'P' });
+  assert.strictEqual(fs.readFileSync(p).toString(), 'ENGINE-BYTES');
+  assert.ok(fs.statSync(p).mode & 0o111, 'executable');
+  await obtainEngine({ engine: 'tjs-x-abc', sha256: sha }, { cacheDir, baseUrl: 'base/', fetch, thisPin: 'P', manifestPin: 'P' });
+  assert.strictEqual(calls, 1, 'cached second time');
+});
+
+test('obtainEngine: sha mismatch is refused', async () => {
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eng2-'));
+  await assert.rejects(
+    () => obtainEngine({ engine: 'e', sha256: 'f'.repeat(64) }, { cacheDir, baseUrl: 'b/', fetch: async () => Buffer.from('x'), thisPin: 'P', manifestPin: 'P' }),
+    (e) => e instanceof TemplatesError && /sha256/.test(e.message));
+});
