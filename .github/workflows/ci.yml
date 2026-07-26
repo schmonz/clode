@@ -6,6 +6,12 @@ on:
   workflow_dispatch: {}
 permissions:
   contents: read
+# One live run per ref: a newer push (or PR update) cancels the superseded run
+# instead of piling four full matrices onto the runners at once. main and each PR
+# get their own group so they never cancel each other.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   # tjs legs, CI tier (user decision 2026-07-11): every OS in the release
   # matrix on every push, ONE arch each — the manifest (scripts/tjs-legs.mjs)
