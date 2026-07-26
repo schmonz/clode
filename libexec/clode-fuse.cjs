@@ -709,6 +709,17 @@ function parseBuildArgs(args) {
   return { naude, self, out, target, listTargets };
 }
 
+// Default output basename for a quaude/--self build (the naude branch names its
+// own). The `.exe` suffix follows the TARGET platform, not the host: a
+// `--target windows-*` cross-built from POSIX must still be a .exe, and a POSIX
+// `--target` built FROM Windows must NOT be. With no --target (a native build)
+// it follows the host. An explicit --out is respected verbatim by the caller.
+function defaultBuildOut({ target, self, hostPlatform }) {
+  const name = self ? 'clode-native' : 'quaude';
+  const isWin = target ? /^windows-/.test(target) : hostPlatform === 'win32';
+  return name + (isWin ? '.exe' : '');
+}
+
 // The default GitHub release download root. Overridable via CLODE_RELEASE_BASE
 // (forks / mirrors). No trailing slash.
 const CLODE_RELEASE_BASE_DEFAULT = 'https://github.com/schmonz/clode/releases/download';
@@ -1001,11 +1012,10 @@ async function clodeBuild(args, opts) {
   }
 
   // naude/self/out were already parsed + validated above (shared with the
-  // --naude branch, which returned before reaching here). On Windows a bare
-  // `clode build` should yield a runnable .exe. An explicit
-  // --out is respected verbatim (the user owns that name); only the DEFAULT
-  // gains .exe. win32-guarded → POSIX default (quaude / clode-native) unchanged.
-  out = path.resolve(out || (self ? 'clode-native' : 'quaude') + (process.platform === 'win32' ? '.exe' : ''));
+  // --naude branch, which returned before reaching here). The default name's
+  // .exe follows the TARGET, not the host (see defaultBuildOut); an explicit
+  // --out is respected verbatim (the user owns that name).
+  out = path.resolve(out || defaultBuildOut({ target: parsed.target, self, hostPlatform: process.platform }));
 
   const ROOT = path.resolve(opts.libexec, '..');
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-'));
@@ -1393,7 +1403,7 @@ async function clodeBuild(args, opts) {
 }
 
 module.exports = {
-  clodeBuild, parseBuildArgs, makePhaseSpinner, startPongMock, cannedSSE, smokeTarget, timeoutScale, codesignAdHoc, thinToHostSlice, describeExit,
+  clodeBuild, parseBuildArgs, defaultBuildOut, makePhaseSpinner, startPongMock, cannedSSE, smokeTarget, timeoutScale, codesignAdHoc, thinToHostSlice, describeExit,
   readDirectDeps, computeDepClosure, assertClosureMatchesLockfile,
   scanBareSpecifiers, specifierPackageName, isBuiltinSpecifier, shimProvidedModules,
   assertNoUnknownBareSpecifiers, KNOWN_UNREACHABLE, resolveClaudeNmDir,
