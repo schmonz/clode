@@ -25,8 +25,8 @@ test('isatty(0/1/2) is true under a PTY, matching host node', async (t) => {
       i0: tty.isatty(0), i1: tty.isatty(1), i2: tty.isatty(2), i9: tty.isatty(9),
     }));
   `);
-  const nodeOut = extractMark((await runNodePty(f, { ms: 3000 })).out);
-  const tjsOut = extractMark((await runLoaderPty(f, { ms: 3000 })).out);
+  const nodeOut = extractMark((await runNodePty(f, { ms: 12000 })).out);
+  const tjsOut = extractMark((await runLoaderPty(f, { ms: 12000 })).out);
   assert.deepStrictEqual(tjsOut, nodeOut);
   assert.deepStrictEqual(tjsOut, { i0: true, i1: true, i2: true, i9: false });
 });
@@ -41,8 +41,8 @@ test('process.stdout columns/rows/isTTY under an 80x24 PTY match host node', asy
       colors: (process.stdout.hasColors ? process.stdout.hasColors() : null),
     }));
   `);
-  const nodeOut = extractMark((await runNodePty(f, { cols: 80, rows: 24, ms: 3000 })).out);
-  const tjsOut = extractMark((await runLoaderPty(f, { cols: 80, rows: 24, ms: 3000 })).out);
+  const nodeOut = extractMark((await runNodePty(f, { cols: 80, rows: 24, ms: 12000 })).out);
+  const tjsOut = extractMark((await runLoaderPty(f, { cols: 80, rows: 24, ms: 12000 })).out);
   assert.deepStrictEqual(tjsOut, nodeOut);
   assert.strictEqual(tjsOut.cols, 80);
   assert.strictEqual(tjsOut.rows, 24);
@@ -104,8 +104,8 @@ test('process.stdin isTTY + setRawMode toggles isRaw, matching host node', async
     process.stdin.setRawMode(false);
     console.log('@@TTY@@' + JSON.stringify({ isTTY: process.stdin.isTTY === true, before, during }));
   `);
-  const nodeOut = extractMark((await runNodePty(f, { ms: 3000 })).out);
-  const tjsOut = extractMark((await runLoaderPty(f, { ms: 3000 })).out);
+  const nodeOut = extractMark((await runNodePty(f, { ms: 12000 })).out);
+  const tjsOut = extractMark((await runLoaderPty(f, { ms: 12000 })).out);
   assert.deepStrictEqual(tjsOut, nodeOut);
   assert.deepStrictEqual(tjsOut, { isTTY: true, before: false, during: true });
 });
@@ -125,9 +125,12 @@ test('process.stdin delivers raw keystrokes in order, matching host node', async
       }
     });
     process.stdin.resume();
+    // Raw mode + listener are live: signal readiness so the driver writes only
+    // now (not on a fixed timer a loaded boot can outrun — see the pty helper).
+    console.log('@@READY@@');
   `);
-  const nodeOut = extractMark((await runNodePty(f, { input: 'xyz', inputDelayMs: 500, ms: 4000 })).out);
-  const tjsOut = extractMark((await runLoaderPty(f, { input: 'xyz', inputDelayMs: 500, ms: 4000 })).out);
+  const nodeOut = extractMark((await runNodePty(f, { input: 'xyz', readyMark: '@@READY@@', ms: 12000 })).out);
+  const tjsOut = extractMark((await runLoaderPty(f, { input: 'xyz', readyMark: '@@READY@@', ms: 12000 })).out);
   assert.deepStrictEqual(tjsOut, nodeOut);
   assert.deepStrictEqual(tjsOut, { hex: '78797a' }); // 'xyz'
 });
@@ -183,7 +186,7 @@ test('a UTF-8 char split across two PTY writes reassembles via streaming decode,
       }
     });
     p.onExit(finish);
-    setTimeout(finish, 5000);
+    setTimeout(finish, 12000);
   });
   const nodeOut = extractMark(await run(process.execPath, [f]));
   const tjsOut = extractMark(await run(tjsPath(), ['run', LOADER, f]));
@@ -213,8 +216,8 @@ test("process.stdin fires 'data' from on() alone, without resume()/setRawMode, m
   // the platform's terminator so the line completes for both readers (the fixture
   // hardcoding '\n' was the POSIX-only assumption).
   const input = process.platform === 'win32' ? 'ab\r' : 'ab\n';
-  const nodeOut = extractMark((await runNodePty(f, { input, inputDelayMs: 500, ms: 4000 })).out);
-  const tjsOut = extractMark((await runLoaderPty(f, { input, inputDelayMs: 500, ms: 4000 })).out);
+  const nodeOut = extractMark((await runNodePty(f, { input, inputDelayMs: 500, ms: 12000 })).out);
+  const tjsOut = extractMark((await runLoaderPty(f, { input, inputDelayMs: 500, ms: 12000 })).out);
   assert.deepStrictEqual(tjsOut, nodeOut);   // load-bearing: the shim matches host node
   if (process.platform === 'win32') {
     // Assert delivery + shim/node parity without hardcoding the exact Windows
@@ -281,9 +284,12 @@ test('process.stdin paused mode: on(readable)+read() delivers bytes, matching ho
         }
       }
     });
+    // Raw mode + paused-mode reader are live: signal readiness so the driver
+    // writes only now (not on a fixed timer a loaded boot can outrun).
+    console.log('@@READY@@');
   `);
-  const nodeOut = extractMark((await runNodePty(f, { input: 'xyz', inputDelayMs: 500, ms: 4000 })).out);
-  const tjsOut = extractMark((await runLoaderPty(f, { input: 'xyz', inputDelayMs: 500, ms: 4000 })).out);
+  const nodeOut = extractMark((await runNodePty(f, { input: 'xyz', readyMark: '@@READY@@', ms: 12000 })).out);
+  const tjsOut = extractMark((await runLoaderPty(f, { input: 'xyz', readyMark: '@@READY@@', ms: 12000 })).out);
   assert.deepStrictEqual(tjsOut, nodeOut);
   assert.deepStrictEqual(tjsOut, { hex: '78797a' }); // 'xyz'
 });
