@@ -710,17 +710,22 @@ function parseBuildArgs(args) {
 }
 
 // Resolve the output basename for a quaude/--self build (the naude branch names
-// its own). A windows TARGET always ends in .exe so the binary actually runs:
-// the default name gets it, AND an explicit --out gets it appended when missing
-// (`--out quaude-windows-x64` → `quaude-windows-x64.exe`). A non-windows target
-// never gets .exe (a POSIX `--target` built FROM Windows must not). "windows" is
-// decided by the TARGET; with no --target (a native build) it follows the host.
-// An explicit --out is otherwise respected verbatim (extension, path, all of it).
+// its own).
+//   - Explicit --out is respected VERBATIM, with ONE exception: a `--target
+//     windows-*` cross-build appends .exe if missing (`--out quaude-windows-x64`
+//     → `quaude-windows-x64.exe`) so the produced binary runs on Windows. A
+//     native build's explicit --out is left ALONE — the CI builder legs pass the
+//     bare asset name `clode-<ver>-windows-x64` (no .exe) and attest/publish it
+//     under exactly that name, so appending .exe there breaks the release.
+//   - The DEFAULT name (no --out) is quaude/clode-native, with .exe iff the build
+//     is for windows — the TARGET when cross-building, else the host.
 function resolveBuildOut({ out, target, self, hostPlatform }) {
+  if (out) {
+    if (target && /^windows-/.test(target) && !/\.exe$/i.test(out)) return out + '.exe';
+    return out;
+  }
   const isWin = target ? /^windows-/.test(target) : hostPlatform === 'win32';
-  let name = out || (self ? 'clode-native' : 'quaude');
-  if (isWin && !/\.exe$/i.test(name)) name += '.exe';
-  return name;
+  return (self ? 'clode-native' : 'quaude') + (isWin ? '.exe' : '');
 }
 
 // The default GitHub release download root. Overridable via CLODE_RELEASE_BASE
