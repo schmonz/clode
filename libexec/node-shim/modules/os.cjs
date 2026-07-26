@@ -36,18 +36,32 @@ const SIGNALS_DARWIN = {
   SIGSYS: 12,
 };
 
-// The REAL os.constants.signals. Merge the darwin base with the OS-derived map tjs
-// exposes as globalThis.__tjs_signals. The darwin base carries the full set of
-// well-known signal NAMES Node lists — including aliases (SIGIOT≡SIGABRT, SIGIO)
-// that tjs's number-indexed map can't represent (one name per number). __tjs_signals
-// carries the OS-CORRECT NUMBERS from <signal.h> at tjs build time, so it overrides
-// where a platform differs (e.g. linux's SIGCHLD:17) and ADDS platform-specific
-// signals the darwin table lacks (e.g. NetBSD's SIGPWR:32). On the BSDs the numbers
-// already agree, so the merge is exactly the host table; nowhere is a per-platform
-// table hand-maintained. Fall back to darwin alone for an older/non-tjs host.
-const SIGNALS = (globalThis.__tjs_signals && Object.keys(globalThis.__tjs_signals).length)
-  ? { ...SIGNALS_DARWIN, ...globalThis.__tjs_signals }
-  : SIGNALS_DARWIN;
+// Linux's os.constants.signals differs from darwin's in BOTH numbers (SIGBUS 7,
+// SIGUSR1 10, SIGCHLD 17, …) AND its name SET (SIGSTKFLT/SIGPWR/SIGPOLL/SIGUNUSED
+// exist; SIGINFO/SIGEMT do NOT). A darwin base overlaid with __tjs_signals leaks
+// darwin-only names (SIGINFO) that Linux node lacks, so os.constants.signals fails
+// deep-equality there (node-shim-core, excluded until now). Match node's Linux
+// table exactly instead. Node lists SIGABRT/SIGIOT (6), SIGIO/SIGPOLL (29) and
+// SIGSYS/SIGUNUSED (31) as aliases.
+const SIGNALS_LINUX = {
+  SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGILL: 4, SIGTRAP: 5, SIGABRT: 6, SIGIOT: 6,
+  SIGBUS: 7, SIGFPE: 8, SIGKILL: 9, SIGUSR1: 10, SIGSEGV: 11, SIGUSR2: 12,
+  SIGPIPE: 13, SIGALRM: 14, SIGTERM: 15, SIGCHLD: 17, SIGSTKFLT: 16, SIGCONT: 18,
+  SIGSTOP: 19, SIGTSTP: 20, SIGTTIN: 21, SIGTTOU: 22, SIGURG: 23, SIGXCPU: 24,
+  SIGXFSZ: 25, SIGVTALRM: 26, SIGPROF: 27, SIGWINCH: 28, SIGIO: 29, SIGPOLL: 29,
+  SIGPWR: 30, SIGSYS: 31, SIGUNUSED: 31,
+};
+
+// os.constants.signals must deep-equal host node's ON THIS PLATFORM (node-shim-core).
+// darwin and the BSDs already match the darwin base (numbers agree; __tjs_signals
+// fills any platform extras like NetBSD's SIGPWR). Linux needs its own table (above)
+// — the exact-set difference can't be reached by overlaying darwin. Select by
+// platform; unknown platforms keep the darwin-base + __tjs_signals merge.
+const _tjsSig = globalThis.__tjs_signals && Object.keys(globalThis.__tjs_signals).length
+  ? globalThis.__tjs_signals : null;
+const SIGNALS = process.platform === 'linux'
+  ? SIGNALS_LINUX
+  : (_tjsSig ? { ...SIGNALS_DARWIN, ..._tjsSig } : SIGNALS_DARWIN);
 
 // process.platform -> node's os.type() spelling (uname -s). One case per
 // release-matrix identity; unknown values pass through untouched.

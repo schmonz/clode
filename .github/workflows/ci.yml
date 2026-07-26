@@ -281,19 +281,21 @@ jobs:
           set -euo pipefail
           chmod +x "$CLODE_TJS"
           "$CLODE_TJS" eval 'console.log("linux-x64-musl tjs alive:", tjs.version)'
-          # EXCLUDED — env/portability matters tracked separately, NOT shim-vs-node
-          # data-correctness (identical rationale to release.yml's be-oracle):
-          #   node-shim-tty            no controlling terminal on a headless runner
-          #                            (PTY path is covered by windows-x64-tui + e2e-pty)
-          #   node-shim-core           shim signal table hardcodes DARWIN values
-          #                            (SIGBUS 10 vs Linux 7) — Linux-portability bug, filed
-          #   node-shim-bunshim        bun:ffi suffix hardcodes macOS 'dylib' (Linux .so)
-          # node-shim-child-process is NO LONGER excluded: its `spawnSync: cwd` row is
-          # the one that failed here — musl rejected posix_spawn cwd (the addchdir_np
-          # gate was #ifdef __GLIBC__), so tar's KAT and `clode fetch --naude` died
-          # "no tar tool found on PATH". Fixed in txiki-sync-spawn.patch (parent-side
-          # chdir dance on musl); this file now runs on musl as the standing guard.
-          EXCLUDE='node-shim-tty|node-shim-core|node-shim-bunshim'
+          # EXCLUDED — only the ONE test that needs hardware this runner lacks:
+          #   node-shim-tty   no controlling terminal on a headless runner
+          #                   (PTY path is covered by windows-x64-tui + e2e-pty)
+          # node-shim-core and node-shim-bunshim are NO LONGER excluded: the two
+          # Linux-portability bugs they caught are FIXED and now gated here —
+          #   node-shim-core     os.constants.signals is OS-derived per platform
+          #                      (SIGBUS 7 etc. on Linux; os.cjs SIGNALS_LINUX +
+          #                      __tjs_signals), no longer a hardcoded darwin table.
+          #   node-shim-bunshim  bun:ffi suffix is platform-aware ('so' on Linux).
+          # node-shim-child-process was un-excluded earlier: its `spawnSync: cwd` row
+          # failed because musl rejected posix_spawn cwd (the addchdir_np gate was
+          # #ifdef __GLIBC__), so tar's KAT and `clode fetch --naude` died "no tar
+          # tool found on PATH". Fixed in txiki-sync-spawn.patch (parent-side chdir
+          # dance on musl); this file runs on musl as the standing guard.
+          EXCLUDE='node-shim-tty'
           FILES=$(ls test/node-shim-*.test.cjs | grep -vE "$EXCLUDE")
           # The parity gate's input: cli.cjs is staged from this provider and run
           # under BOTH targets' runtimes (naude = node, quaude = tjs+shim), then
