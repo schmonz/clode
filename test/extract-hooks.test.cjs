@@ -162,8 +162,32 @@ test('patchRemoteControlUnavailable injects the wsUnavailable guard before the a
   );
 });
 
+// The availability gate as upstream now emits it (2.1.207-era): a minified
+// `async function X(){...}` returning null when Remote Control is available or a
+// reason string when not. The stable "not available inside a cloud session"
+// literal pins it; minified ids vary.
+const RC_GATE = 'async function VUo(){if(qUo())return null;if(!DVe())return H4_();'
+  + 'if(qW())return"Remote Control is not available inside a cloud session.";'
+  + 'if(!zUo())return"Remote Control requires a claude.ai subscription.";return null;}';
+
+test('patchRemoteControlUnavailable injects the gate-off as the function\'s first statement', () => {
+  const [out, applied] = ex.patchRemoteControlUnavailable('var x=1;' + RC_GATE);
+  assert.strictEqual(applied, true);
+  // The gate-off runs BEFORE the first `return null` (available) path.
+  assert.match(out, /async function VUo\(\)\{if\(globalThis\.__clodeWsUnavailable\)return"Remote Control isn.*transport\.";if\(qUo\(\)\)return null;/);
+});
+
+const RC_INLINE = 'if(!K8e())return"Remote Control is only available when using Claude via api.anthropic.com.";';
+
 test('patchRemoteControlUnavailable refuses ambiguous or absent anchors', () => {
   assert.strictEqual(ex.patchRemoteControlUnavailable('nothing to see')[1], false);
-  const one = 'if(!K8e())return"Remote Control is only available when using Claude via api.anthropic.com.";';
-  assert.strictEqual(ex.patchRemoteControlUnavailable(one + one)[1], false);
+  assert.strictEqual(ex.patchRemoteControlUnavailable(RC_GATE + RC_GATE)[1], false);      // two gates
+  assert.strictEqual(ex.patchRemoteControlUnavailable(RC_INLINE + RC_INLINE)[1], false);  // two inlines
+});
+
+test('patchRemoteControlUnavailable still supports the old inline shape (<=2.1.218)', () => {
+  const [out, applied] = ex.patchRemoteControlUnavailable('x;' + RC_INLINE);
+  assert.strictEqual(applied, true);
+  // Gate-off spliced immediately before the inline api.anthropic.com reason guard.
+  assert.match(out, /if\(globalThis\.__clodeWsUnavailable\)return"[^"]*";if\(!K8e\(\)\)return"Remote Control is only available/);
 });

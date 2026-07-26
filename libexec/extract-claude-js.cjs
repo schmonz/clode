@@ -221,22 +221,42 @@ function patchSnapshotBridge(body) {
 // return a quaude-specific reason when globalThis.__clodeWsUnavailable is set
 // (bun-shim.cjs), so the crashing module never loads and the session survives.
 //
-// Anchor: the stable, unminified English literal below (the api.anthropic.com
-// reason), preceded by its own `if(<minified>())` guard. We splice our statement
-// in front of that guard so it runs before every other cBo check (lBo, the first
-// check, only ever returns null). Same exactly-once + fail-loud contract as the
+// Anchor: the availability gate itself (formerly cBo, an inline
+// `if(<fn>())return"...api.anthropic.com."`). Upstream (2.1.207-era) hoisted the
+// api.anthropic.com reason into a `var mbr=...` returned by a helper, so that
+// inline literal is gone; the gate is now a minified `async function X(){ ... }`
+// that returns null when Remote Control IS available or a reason string when not.
+// We pin it by its stable opening — `if(..())return null` (available), then the
+// first-party helper return, then the STABLE English "not available inside a cloud
+// session" literal — with minified-id wildcards (same style as the autoupdater
+// anchor). `pre` captures `async function X(){`; we splice the gate-off as the
+// function's FIRST statement so __clodeWsUnavailable wins before ANY available
+// (`return null`) path is reached. Same exactly-once + fail-loud contract as the
 // other patches; the strict gate lives in inspect-claude-bundle.cjs.
 const RC_NOTICE =
   'Remote Control isn\\u2019t available in quaude yet \\u2014 its engine has no WebSocket transport.';
-const REMOTE_CONTROL_ANCHOR =
+const REMOTE_CONTROL_GATE_ANCHOR =
+  /(?<pre>async function [A-Za-z0-9_$]{1,8}\(\)\{)if\([A-Za-z0-9_$]{1,8}\(\)\)return null;if\(!?[A-Za-z0-9_$]{1,8}\(\)\)return [A-Za-z0-9_$]{1,8}\(\);if\([A-Za-z0-9_$]{1,8}\(\)\)return"Remote Control is not available inside a cloud session\."/g;
+// Old shape (<=2.1.218): the api.anthropic.com reason was returned inline behind
+// its own `if(<fn>())` guard; splice in front of that guard. Kept so clode still
+// gates Remote Control on the last old-shape releases (same multi-shape support
+// as patchDoctorWarnings's 2.1.179/2.1.205 anchors).
+const REMOTE_CONTROL_INLINE_ANCHOR =
   /if\(!?[A-Za-z0-9_$]{1,8}\(\)\)return"Remote Control is only available when using Claude via api\.anthropic\.com\."/g;
 
 function patchRemoteControlUnavailable(body) {
-  const m = [...body.matchAll(REMOTE_CONTROL_ANCHOR)];
-  if (m.length !== 1) return [body, false];
   const inject = 'if(globalThis.__clodeWsUnavailable)return"' + RC_NOTICE + '";';
-  const cut = m[0].index;
-  return [body.slice(0, cut) + inject + body.slice(cut), true];
+  const gate = [...body.matchAll(REMOTE_CONTROL_GATE_ANCHOR)];
+  if (gate.length === 1) {
+    const cut = gate[0].index + gate[0].groups.pre.length;   // after `async function X(){`
+    return [body.slice(0, cut) + inject + body.slice(cut), true];
+  }
+  const inline = [...body.matchAll(REMOTE_CONTROL_INLINE_ANCHOR)];
+  if (inline.length === 1) {
+    const cut = inline[0].index;                             // before the reason guard
+    return [body.slice(0, cut) + inject + body.slice(cut), true];
+  }
+  return [body, false];
 }
 
 // --- pkg-manager autoupdater redirect ----------------------------------------

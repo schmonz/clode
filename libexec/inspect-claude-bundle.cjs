@@ -124,13 +124,19 @@ function nativeAutoupdaterHookAnchorPresent(data) {
 }
 
 // Remote Control gate-off (extract-claude-js patchRemoteControlUnavailable) needs
-// the cBo api.anthropic.com reason exactly once. Already-patched bundles carry the
-// injected guard, so accept that marker too (mirrors the autoupdater checks).
-const _REMOTE_CONTROL_ANCHOR =
+// its anchor exactly once. Two shapes, in lockstep with extract-claude-js.cjs:
+// the new (>=2.1.219) availability-gate function pinned by its stable "not available
+// inside a cloud session" reason, and the old (<=2.1.218) inline api.anthropic.com
+// reason guard. Already-patched bundles carry the injected guard, so accept that
+// marker too (mirrors the autoupdater checks).
+const _REMOTE_CONTROL_GATE_ANCHOR =
+  /async function [A-Za-z0-9_$]{1,8}\(\)\{if\([A-Za-z0-9_$]{1,8}\(\)\)return null;if\(!?[A-Za-z0-9_$]{1,8}\(\)\)return [A-Za-z0-9_$]{1,8}\(\);if\([A-Za-z0-9_$]{1,8}\(\)\)return"Remote Control is not available inside a cloud session\."/g;
+const _REMOTE_CONTROL_INLINE_ANCHOR =
   /if\(!?[A-Za-z0-9_$]{1,8}\(\)\)return"Remote Control is only available when using Claude via api\.anthropic\.com\."/g;
 const _REMOTE_CONTROL_PATCHED = 'globalThis.__clodeWsUnavailable)return"';
 function remoteControlHookAnchorPresent(data) {
-  return [...data.matchAll(_REMOTE_CONTROL_ANCHOR)].length === 1
+  return [...data.matchAll(_REMOTE_CONTROL_GATE_ANCHOR)].length === 1
+    || [...data.matchAll(_REMOTE_CONTROL_INLINE_ANCHOR)].length === 1
     || data.includes(_REMOTE_CONTROL_PATCHED);
 }
 
