@@ -133,7 +133,7 @@ jobs:
           # excluded files are ALL process/pipe/TTY I/O under qemu-user — NONE is an
           # endianness test, so the BE signal (engine + url golden) stays clean.
           # A red here again means a REAL data-correctness regression.
-          EXCLUDE='node-shim-tty|node-shim-child-process|node-shim-cloexec|node-shim-large-output'
+          EXCLUDE='node-shim-tty|node-shim-ctrlz-pty|node-shim-child-process|node-shim-cloexec|node-shim-large-output'
           FILES=$(ls test/node-shim-*.test.cjs | grep -vE "$EXCLUDE")
           node --test --test-concurrency=1 $FILES test/url-characterization.test.cjs
 
