@@ -2,33 +2,37 @@
 
 When your OS isn't popular or your computer isn't recent, how do you run Claude Code?
 
-[Download `clode`](https://github.com/schmonz/clode/releases/latest/) for your potato, then do this once:
+[Download clode](https://github.com/schmonz/clode/releases/latest/) to your fastest machine, then build `quaude`s for your whole collection:
 
 ```sh
 mv clode-* clode && chmod +x clode
-./clode fetch && ./clode build
+for i in darwin-arm64 darwin-ppc netbsd-sparc linux-s390x windows-x64; do
+  ./clode build --target $i --out quaude-$i
+done
 ```
 
-Do this as many times as necessary until you believe it:
+`quaude-darwin-arm64` and `quaude-windows-x64` might not be that interesting. Claude Code already ships for those platforms. But `quaude-darwin-ppc`, `quaude-netbsd-sparc`, `quaude-linux-s390x`?
+
+For the complete list of targets:
 
 ```sh
-./quaude
+clode build --list-targets
 ```
 
 Have fun.
 
-## What? How'd that work?!?
+## What? How?!?
 
-This repo contains no Anthropic code, only a tool that does these things by request:
+This repo contains no Anthropic code, only a tool that, by request:
 
-1. Fetch upstream `claude` (nearest match for your OS and arch)
-2. Extract its embedded JavaScript
-3. Rebase Bun-specific calls onto Node equivalents
-4. Back Node API with (mostly) [txiki.js](https://txikijs.org)
-5. Compile to [QuickJS-NG](https://quickjs-ng.github.io/quickjs/) bytecode
-6. Write native `quaude`
+1. Fetches upstream `claude` (nearest match for your target OS and arch)
+2. Extracts its embedded JavaScript
+3. Rebases Bun-specific calls onto Node equivalents
+4. Backs Node API with (mostly) [txiki.js](https://txikijs.org)
+5. Compiles to [QuickJS-NG](https://quickjs-ng.github.io/quickjs/) bytecode
+6. Writes `quaude`
 
-(If your computer's Node-compatible and you want that runtime instead,
+(If your host is Node-compatible and you want that runtime instead,
 `clode build --naude` writes `naude`, replacing steps 4 and 5 with an embedded Node interpreter.)
 
 ## Runtime dependencies
