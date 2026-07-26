@@ -685,19 +685,28 @@ function parseBuildArgs(args) {
   let naude = false;
   let self = false;
   let out = null;
+  let target = null;
+  let listTargets = false;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--naude') { naude = true; }
     else if (args[i] === '--self') { self = true; }
+    else if (args[i] === '--list-targets') { listTargets = true; }
     else if (args[i] === '--out' && args[i + 1]) { out = args[++i]; }
-    else return { error: `build: unknown argument '${args[i]}' (usage: clode build [--self] [--out PATH])` };
+    else if (args[i] === '--target') {
+      if (!args[i + 1]) return { error: 'build: --target needs a platform (see: clode build --list-targets)' };
+      target = args[++i];
+    }
+    else return { error: `build: unknown argument '${args[i]}' (usage: clode build [--self|--naude|--target Y|--list-targets] [--out PATH])` };
   }
-  // --naude (a Node SEA) and --self (the native clode builder) are different
-  // build TARGETS, not composable modifiers — silently picking one would
-  // build something other than what the user asked for.
-  if (naude && self) {
-    return { error: 'build: --naude and --self are different build targets (Node SEA vs the native clode builder) — pick one' };
+  // --naude (a Node SEA), --self (the native clode builder), and --target Y (a
+  // cross-fused quaude for a foreign platform) are different build TARGETS, not
+  // composable modifiers — silently picking one would build something other than
+  // what the user asked for.
+  const chosen = [naude && '--naude', self && '--self', target && '--target'].filter(Boolean);
+  if (chosen.length > 1) {
+    return { error: `build: ${chosen.join(' and ')} are different build targets — pick one` };
   }
-  return { naude, self, out };
+  return { naude, self, out, target, listTargets };
 }
 
 // clode build [--out PATH]. Returns the exit status (0 on success). Injectable
