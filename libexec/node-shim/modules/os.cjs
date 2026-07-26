@@ -36,32 +36,17 @@ const SIGNALS_DARWIN = {
   SIGSYS: 12,
 };
 
-// Linux's os.constants.signals differs from darwin's in BOTH numbers (SIGBUS 7,
-// SIGUSR1 10, SIGCHLD 17, …) AND its name SET (SIGSTKFLT/SIGPWR/SIGPOLL/SIGUNUSED
-// exist; SIGINFO/SIGEMT do NOT). A darwin base overlaid with __tjs_signals leaks
-// darwin-only names (SIGINFO) that Linux node lacks, so os.constants.signals fails
-// deep-equality there (node-shim-core, excluded until now). Match node's Linux
-// table exactly instead. Node lists SIGABRT/SIGIOT (6), SIGIO/SIGPOLL (29) and
-// SIGSYS/SIGUNUSED (31) as aliases.
-const SIGNALS_LINUX = {
-  SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGILL: 4, SIGTRAP: 5, SIGABRT: 6, SIGIOT: 6,
-  SIGBUS: 7, SIGFPE: 8, SIGKILL: 9, SIGUSR1: 10, SIGSEGV: 11, SIGUSR2: 12,
-  SIGPIPE: 13, SIGALRM: 14, SIGTERM: 15, SIGCHLD: 17, SIGSTKFLT: 16, SIGCONT: 18,
-  SIGSTOP: 19, SIGTSTP: 20, SIGTTIN: 21, SIGTTOU: 22, SIGURG: 23, SIGXCPU: 24,
-  SIGXFSZ: 25, SIGVTALRM: 26, SIGPROF: 27, SIGWINCH: 28, SIGIO: 29, SIGPOLL: 29,
-  SIGPWR: 30, SIGSYS: 31, SIGUNUSED: 31,
-};
-
 // os.constants.signals must deep-equal host node's ON THIS PLATFORM (node-shim-core).
-// darwin and the BSDs already match the darwin base (numbers agree; __tjs_signals
-// fills any platform extras like NetBSD's SIGPWR). Linux needs its own table (above)
-// — the exact-set difference can't be reached by overlaying darwin. Select by
-// platform; unknown platforms keep the darwin-base + __tjs_signals merge.
+// The signals patch (txiki-signals-expose.patch) now builds globalThis.__tjs_signals
+// EXACTLY like node's node_constants.cc — a fixed signal-name list #ifdef-guarded
+// against this engine's own <signal.h> — so it is byte-identical to node's table on
+// every platform (aliases like SIGIOT≡SIGABRT included, no foreign-platform signals,
+// correct per-OS numbers). Use it directly; SIGNALS_DARWIN is only a fallback for an
+// OLD engine built before that patch (its number-loop map dropped aliases and was
+// darwin-shaped — the latent per-platform bugbear this replaces).
 const _tjsSig = globalThis.__tjs_signals && Object.keys(globalThis.__tjs_signals).length
   ? globalThis.__tjs_signals : null;
-const SIGNALS = process.platform === 'linux'
-  ? SIGNALS_LINUX
-  : (_tjsSig ? { ...SIGNALS_DARWIN, ..._tjsSig } : SIGNALS_DARWIN);
+const SIGNALS = _tjsSig || SIGNALS_DARWIN;
 
 // process.platform -> node's os.type() spelling (uname -s). One case per
 // release-matrix identity; unknown values pass through untouched.

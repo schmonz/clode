@@ -1,19 +1,133 @@
 diff --git a/src/signals.c b/src/signals.c
-index 5db61d5..2350254 100644
+index 5db61d5..f8077ee 100644
 --- a/src/signals.c
 +++ b/src/signals.c
-@@ -182,6 +182,14 @@ void tjs__mod_signals_init(JSContext *ctx, JSValue ns) {
+@@ -182,6 +182,128 @@ void tjs__mod_signals_init(JSContext *ctx, JSValue ns) {
              JS_SetPropertyStr(ctx, signals, signame, JS_NewInt32(ctx, i));
          }
      }
-+    /* CLODE: also expose the OS-derived name->number map on the global as
-+     * __tjs_signals (mirroring __tjs_kill/__tjs_spawn_sync). These numbers come
-+     * from <signal.h> at build time (tjs_signal_map's #ifdef'd designated
-+     * initializers), so the node-shim's os.constants.signals is CORRECT on every
-+     * platform instead of a hardcoded darwin table. */
-+    JSValue __clode_global = JS_GetGlobalObject(ctx);
-+    JS_DefinePropertyValueStr(ctx, __clode_global, "__tjs_signals", JS_DupValue(ctx, signals), JS_PROP_C_W_E);
-+    JS_FreeValue(ctx, __clode_global);
++    /* CLODE: expose a COMPLETE, node-shaped signal name->number map as
++     * globalThis.__tjs_signals. node builds os.constants.signals from a fixed name
++     * list guarded by #ifdef (node_constants.cc), so it carries the aliases
++     * (SIGIOT==SIGABRT, SIGPOLL==SIGIO) and exactly the signals THIS engine's
++     * <signal.h> defines. The list below is node's (confirmed byte-identical to node
++     * on Linux/darwin/NetBSD; node deliberately OMITS SIGUNUSED though glibc defines
++     * it). The `signals` map above is tjs's own number-indexed table (one name per
++     * number, so aliases are lost); this map is the node-faithful one, so the
++     * node-shim's os.constants.signals matches host node on every platform — no
++     * hand-maintained per-platform table. */
++    static const struct { const char *name; int num; } clode_sig_list[] = {
++#define CLODE_SIG(n) { #n, n }
++#ifdef SIGHUP
++        CLODE_SIG(SIGHUP),
++#endif
++#ifdef SIGINT
++        CLODE_SIG(SIGINT),
++#endif
++#ifdef SIGQUIT
++        CLODE_SIG(SIGQUIT),
++#endif
++#ifdef SIGILL
++        CLODE_SIG(SIGILL),
++#endif
++#ifdef SIGTRAP
++        CLODE_SIG(SIGTRAP),
++#endif
++#ifdef SIGABRT
++        CLODE_SIG(SIGABRT),
++#endif
++#ifdef SIGIOT
++        CLODE_SIG(SIGIOT),
++#endif
++#ifdef SIGBUS
++        CLODE_SIG(SIGBUS),
++#endif
++#ifdef SIGFPE
++        CLODE_SIG(SIGFPE),
++#endif
++#ifdef SIGKILL
++        CLODE_SIG(SIGKILL),
++#endif
++#ifdef SIGUSR1
++        CLODE_SIG(SIGUSR1),
++#endif
++#ifdef SIGSEGV
++        CLODE_SIG(SIGSEGV),
++#endif
++#ifdef SIGUSR2
++        CLODE_SIG(SIGUSR2),
++#endif
++#ifdef SIGPIPE
++        CLODE_SIG(SIGPIPE),
++#endif
++#ifdef SIGALRM
++        CLODE_SIG(SIGALRM),
++#endif
++#ifdef SIGTERM
++        CLODE_SIG(SIGTERM),
++#endif
++#ifdef SIGCHLD
++        CLODE_SIG(SIGCHLD),
++#endif
++#ifdef SIGSTKFLT
++        CLODE_SIG(SIGSTKFLT),
++#endif
++#ifdef SIGCONT
++        CLODE_SIG(SIGCONT),
++#endif
++#ifdef SIGSTOP
++        CLODE_SIG(SIGSTOP),
++#endif
++#ifdef SIGTSTP
++        CLODE_SIG(SIGTSTP),
++#endif
++#ifdef SIGTTIN
++        CLODE_SIG(SIGTTIN),
++#endif
++#ifdef SIGTTOU
++        CLODE_SIG(SIGTTOU),
++#endif
++#ifdef SIGURG
++        CLODE_SIG(SIGURG),
++#endif
++#ifdef SIGXCPU
++        CLODE_SIG(SIGXCPU),
++#endif
++#ifdef SIGXFSZ
++        CLODE_SIG(SIGXFSZ),
++#endif
++#ifdef SIGVTALRM
++        CLODE_SIG(SIGVTALRM),
++#endif
++#ifdef SIGPROF
++        CLODE_SIG(SIGPROF),
++#endif
++#ifdef SIGWINCH
++        CLODE_SIG(SIGWINCH),
++#endif
++#ifdef SIGIO
++        CLODE_SIG(SIGIO),
++#endif
++#ifdef SIGPOLL
++        CLODE_SIG(SIGPOLL),
++#endif
++#ifdef SIGPWR
++        CLODE_SIG(SIGPWR),
++#endif
++#ifdef SIGINFO
++        CLODE_SIG(SIGINFO),
++#endif
++#ifdef SIGSYS
++        CLODE_SIG(SIGSYS),
++#endif
++#undef CLODE_SIG
++    };
++    JSValue clode_sigs = JS_NewObject(ctx);
++    for (size_t clode_k = 0; clode_k < countof(clode_sig_list); clode_k++)
++        JS_SetPropertyStr(ctx, clode_sigs, clode_sig_list[clode_k].name, JS_NewInt32(ctx, clode_sig_list[clode_k].num));
++    JSValue clode_global = JS_GetGlobalObject(ctx);
++    JS_DefinePropertyValueStr(ctx, clode_global, "__tjs_signals", clode_sigs, JS_PROP_C_W_E);
++    JS_FreeValue(ctx, clode_global);
      JS_SetPropertyStr(ctx, ns, "signals", signals);
  
      JS_SetPropertyFunctionList(ctx, ns, tjs_signal_funcs, countof(tjs_signal_funcs));
