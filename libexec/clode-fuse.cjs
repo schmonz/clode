@@ -709,6 +709,17 @@ function parseBuildArgs(args) {
   return { naude, self, out, target, listTargets };
 }
 
+// Load the templates manifest for --list-targets / --target. v1 reads
+// env.CLODE_TEMPLATES_MANIFEST (a local path — offline + tests); the fetch path
+// (download the manifest for this clode's tjs pin) lands with --target.
+function loadManifest(opts) {
+  const env = opts.env || process.env;
+  const tpl = require('./clode-templates.cjs');
+  const p = env.CLODE_TEMPLATES_MANIFEST;
+  if (!p) throw new tpl.TemplatesError('no templates manifest (set CLODE_TEMPLATES_MANIFEST; the fetch path lands with --target)');
+  return tpl.parseManifest(require('node:fs').readFileSync(p, 'utf8'));
+}
+
 // clode build [--out PATH]. Returns the exit status (0 on success). Injectable
 // bits (env/stderr/stdout) keep the unit-testable surface consistent with the
 // sibling subcommand modules.
@@ -743,6 +754,19 @@ async function clodeBuild(args, opts) {
   if (parsed.error) return fail(parsed.error);
   const { naude, self, out: parsedOut } = parsed;
   let out = parsedOut;
+
+  // --list-targets / --target Y: the template-pack surface (spec:
+  // 2026-07-25-universal-cross-build). The manifest is the source of truth for
+  // which platforms clode can cross-build a quaude for. v1 reads a local manifest
+  // via CLODE_TEMPLATES_MANIFEST (offline + tests); the fetch path lands next.
+  const tpl = require('./clode-templates.cjs');
+  if (parsed.listTargets) {
+    let manifest;
+    try { manifest = loadManifest(opts); } catch (e) { return fail(e.message); }
+    spin.done();
+    for (const t of tpl.listTargets(manifest)) stdout.write(`${t.name}\t${t.tag}\t[${t.verified}]\n`);
+    return 0;
+  }
 
   // -- naude branch (Task 4): `clode build --naude` bakes Claude Code into a
   // Node SEA instead of fusing a quaude. It reuses the SAME resolve + extract
