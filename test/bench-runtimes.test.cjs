@@ -1,6 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
+const path = require('node:path');
 const { resolveRuntimes, presentRuntimes } = require('../bench/lib/runtimes.cjs');
 
 test('env override wins and marks present', () => {
@@ -15,13 +16,17 @@ test('env override wins and marks present', () => {
 });
 
 test('build-dir fallback probes default artifact name', () => {
+  // resolveRuntimes joins buildDir + basename with path.join, so the default is
+  // OS-native (\build\quaude on Windows). Compute the expectation the same way
+  // rather than hardcoding a POSIX separator.
+  const want = path.join('/build', 'quaude');
   const list = resolveRuntimes({
     env: {},
     buildDir: '/build',
-    existsSync: (p) => p === '/build/quaude',
+    existsSync: (p) => p === want,
   });
   const q = list.find((r) => r.name === 'quaude');
-  assert.strictEqual(q.bin, '/build/quaude');
+  assert.strictEqual(q.bin, want);
   assert.strictEqual(q.present, true);
 });
 
