@@ -274,6 +274,27 @@ jobs:
       # this job exists to prevent. Same provisioning the windows-x64 job uses.
       - name: Install the Claude provider (npm, latest — the parity gate's input)
         run: npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
+      # Live-network gate (regression guard): nothing else in CI makes a real
+      # outbound connection — every API turn is opt-in and skips — which is how an
+      # IPv6-first fetch-connect regression once shipped (f8f6e1d: connected to only
+      # the first resolved address, so a v4-only host died at wsi=NULL). A
+      # credential-free HEAD proves the built engine can DNS + TLS-connect + get a
+      # response. Retries so a transient network blip doesn't flake the gate.
+      - name: Live-connect smoke — the engine reaches the internet over TLS
+        env:
+          CLODE_TJS: ${{ runner.temp }}/tjs/tjs
+        run: |
+          set -uo pipefail
+          chmod +x "$CLODE_TJS"
+          # Raw `tjs eval` has no node-shim `process`, so signal via a marker the
+          # shell checks (a rejected fetch -> no OK marker -> the gate fails).
+          P='fetch("https://example.com/",{method:"HEAD"}).then(function(r){console.log("LIVE-CONNECT-OK "+r.status)}).catch(function(e){console.log("LIVE-CONNECT-FAIL "+String(e))})'
+          for i in 1 2 3; do
+            out=$("$CLODE_TJS" eval "$P" 2>&1 || true); echo "$out"
+            case "$out" in *LIVE-CONNECT-OK*) exit 0 ;; esac
+            echo "retry $i…"; sleep 3
+          done
+          echo "live-connect smoke: the engine could not establish a TLS connection" >&2; exit 1
       - name: node-shim oracle suite (every module diffed vs host node, under tjs)
         env:
           CLODE_TJS: ${{ runner.temp }}/tjs/tjs
@@ -436,6 +457,23 @@ jobs:
       # to prevent. Same provisioning as the linux oracle.
       - name: Install the Claude provider (npm, latest — the oracle's input)
         run: npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
+      # Live-network gate (regression guard) — see the linux node-shim-oracle copy.
+      # A credential-free HEAD proves the darwin engine can DNS + TLS-connect.
+      - name: Live-connect smoke — the engine reaches the internet over TLS
+        env:
+          CLODE_TJS: ${{ runner.temp }}/tjs/tjs
+        run: |
+          set -uo pipefail
+          chmod +x "$CLODE_TJS"
+          # Raw `tjs eval` has no node-shim `process`, so signal via a marker the
+          # shell checks (a rejected fetch -> no OK marker -> the gate fails).
+          P='fetch("https://example.com/",{method:"HEAD"}).then(function(r){console.log("LIVE-CONNECT-OK "+r.status)}).catch(function(e){console.log("LIVE-CONNECT-FAIL "+String(e))})'
+          for i in 1 2 3; do
+            out=$("$CLODE_TJS" eval "$P" 2>&1 || true); echo "$out"
+            case "$out" in *LIVE-CONNECT-OK*) exit 0 ;; esac
+            echo "retry $i…"; sleep 3
+          done
+          echo "live-connect smoke: the engine could not establish a TLS connection" >&2; exit 1
       - name: node-shim oracle suite (every module diffed vs host node, under a darwin tjs)
         env:
           CLODE_TJS: ${{ runner.temp }}/tjs/tjs

@@ -825,3 +825,17 @@ UTF-8 streaming decode and stdin-under-pty delivery are correct. The other 207
 fidelity rows pass on NetBSD; 13 skip (all honest opt-in/prereq gates: live-render
 tier, MCP-ws, darwin-provider, oracle-binaries, live-roundtrip). NEXT: rig up the
 interactive-PTY / live-render tier to actually run here (currently opt-in-skipped).
+
+## RESOLVED (2026-07-26): CI now has a live-connect smoke (was: no live-network test)
+
+The f8f6e1d fetch rewrite broke outbound connect on IPv6-first/v4-only hosts and
+shipped uncaught because CI has NO live-network test — every real API turn is
+opt-in (CLODE_LIVE_ONLINE / CLODE_LIVE_ROUNDTRIP) and skips in CI. The fidelity
+run on NetBSD with real creds is what caught it (quaude rendered "Unable to connect
+to API"). Add a minimal live-connect smoke to a leg that has egress: a single
+`fetch()` to a stable HTTPS endpoint (e.g. a HEAD to example.com, asserting a 2xx/3xx)
+under the built engine, so a connect/DNS/TLS regression reddens CI instead of
+shipping. Does NOT need credentials or tokens — just proves the engine can establish
+a TLS connection. (The fix — resolver-order address fallback — is in
+scripts/build-tjs.mjs's fixupHttpclientAsyncDns; this gap is the reason it went
+unnoticed until a human ran fidelity on a real box.)
