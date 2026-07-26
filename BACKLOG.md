@@ -801,3 +801,27 @@ Not matrix-blocking (the BE oracle scopes these out and is non-blocking); the
 published Linux builders are musl-static and smoke green (PONG + attest). This
 is about node-shim FIDELITY on Linux, which the shim-fidelity gate should grow
 to cover once a Linux tjs is a first-class local build target.
+
+## RESOLVED (2026-07-26): node-shim-tty split-UTF-8 PTY row was a load-sensitive race, not a shim bug
+
+First finding from running the fidelity/oracle differential on netbsd11-arm64 (the
+suite had only ever run on modern macOS): `test/node-shim-tty.test.cjs` "a UTF-8 char
+split across two PTY writes reassembles via streaming decode" FAILED (tjsOut=null)
+during the full suite. Root-caused (systematic-debugging) — NOT a product bug:
+- Raw `tjs.stdin.setRawMode(true)` + `getReader().read()` DELIVERS pty keystrokes on
+  NetBSD (proven: 'ABC' -> 65,66,67). `isTerminalFd(0)` correctly returns true under
+  a pty (fstat mode 020620 = S_IFCHR). The shim's process.stdin pump delivers ASCII
+  and reassembles the split emoji correctly (CHUNK1 len=0 holds the lead bytes,
+  CHUNK2 -> '🙂') — 5/5 at the original 300/800ms timing IN ISOLATION.
+- The failure only appeared under full-suite LOAD: a slower child boot let the first
+  write (300ms) land while the pty was still COOKED (before the child's setRawMode),
+  so the leading bytes f0 9f were line-disciplined away. A test timing race, not a
+  tjs/shim stdin bug.
+
+FIX (shipped 2026-07-26): the test now waits for the child to print `@@READY@@` (raw
+mode set + listener attached) before writing, then splits the char across two chunks
+with a gap. Deterministic on all platforms/loads; 9/9 green, repeated. The shim's
+UTF-8 streaming decode and stdin-under-pty delivery are correct. The other 207
+fidelity rows pass on NetBSD; 13 skip (all honest opt-in/prereq gates: live-render
+tier, MCP-ws, darwin-provider, oracle-binaries, live-roundtrip). NEXT: rig up the
+interactive-PTY / live-render tier to actually run here (currently opt-in-skipped).

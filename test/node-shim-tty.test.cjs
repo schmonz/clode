@@ -154,6 +154,12 @@ test('a UTF-8 char split across two PTY writes reassembles via streaming decode,
         process.exit(0);
       }
     });
+    // Signal readiness (raw mode set + listener attached) so the harness writes
+    // only AFTER we can receive. Without this, a slow/loaded child boot lets the
+    // first write land while the pty is still in COOKED mode, so the leading bytes
+    // are line-disciplined away — a load-sensitive race (surfaced on NetBSD under
+    // the full fidelity suite), not a shim bug: the split-UTF-8 decode is correct.
+    console.log('@@READY@@');
   `);
   const { loadPty } = require('./node-shim-tty-helper.cjs');
   const { LOADER, tjsPath } = require('./node-shim-helper.cjs');
@@ -163,12 +169,21 @@ test('a UTF-8 char split across two PTY writes reassembles via streaming decode,
     const p = pty.spawn(cmd, args, { name: 'xterm-256color', cols: 80, rows: 24, env: process.env });
     let out = '';
     let done = false;
-    p.onData((d) => { out += d; });
+    let armed = false;
     const finish = () => { if (done) return; done = true; try { p.kill(); } catch { /* */ } resolve(out); };
+    p.onData((d) => {
+      out += d;
+      // Write the split char only AFTER the child says it is ready (raw mode +
+      // listener), then split across two chunks with a gap so the streaming
+      // decoder must hold the incomplete leading bytes across a chunk boundary.
+      if (!armed && out.includes('@@READY@@')) {
+        armed = true;
+        try { p.write(emoji.subarray(0, 2)); } catch { /* */ }
+        setTimeout(() => { try { p.write(emoji.subarray(2, 4)); } catch { /* */ } }, 200);
+      }
+    });
     p.onExit(finish);
-    setTimeout(() => { try { p.write(emoji.subarray(0, 2)); } catch { /* */ } }, 300);
-    setTimeout(() => { try { p.write(emoji.subarray(2, 4)); } catch { /* */ } }, 800);
-    setTimeout(finish, 3000);
+    setTimeout(finish, 5000);
   });
   const nodeOut = extractMark(await run(process.execPath, [f]));
   const tjsOut = extractMark(await run(tjsPath(), ['run', LOADER, f]));
