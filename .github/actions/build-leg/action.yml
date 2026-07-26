@@ -456,11 +456,15 @@ runs:
         CLODE_TJS_VENDOR: ${{ steps.mode.outputs.vendor }}
       run: |
         set -euo pipefail
-        # Patched canonical-LE txiki source (clones txiki + quickjs-ng, applies
+        # The patched canonical-LE txiki source (clones txiki + quickjs-ng, applies
         # patches/ — incl. the canonical-LE bytecode patch the cross-fuse REQUIRES;
         # a non-canonical-LE engine gives "checksum error" on the cross-fused
-        # builder — proven in the docker-loop wall-walk 2026-07-14).
-        node scripts/build-tjs.mjs --source-only
+        # builder — proven in the docker-loop wall-walk 2026-07-14) was ALREADY
+        # constructed at $CLODE_TJS_VENDOR by the "Construct the patched tjs tree
+        # from pins" step above (same --source-only, same vendor). Do NOT re-run it
+        # here: patches now apply unconditionally onto a PRISTINE clone (no
+        # already-applied fallback), so a second --source-only over the patched
+        # tree fails at the first patch. Just package the tree that step produced.
         mkdir -p .matrix/qemu-bake
         tar czf .matrix/qemu-bake/txiki-canonical-le.tar.gz -C "$CLODE_TJS_VENDOR" txiki.js
         # simde (txiki v26.6.0 pins v0.8.2 — the guest build is offline, so stage
