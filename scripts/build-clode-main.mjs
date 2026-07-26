@@ -76,6 +76,18 @@ function repoVersion() {
   catch { return 'dev'; }
 }
 
+// The tjs pin (vX.Y.Z-<sha7>) this clode targets, from PINS.md — baked in so a
+// fused clode with no PINS.md can derive its own templates-pack release URL for
+// `build --target` auto-fetch (libexec/clode-fuse.cjs thisTjsPin). Empty string
+// if PINS.md is unreadable; the runtime then falls back to CLODE_TJS_PIN/PINS.md.
+function bakedTjsPin() {
+  try {
+    const pins = fs.readFileSync(path.join(REPO, 'spike/quickjs/PINS.md'), 'utf8');
+    const m = pins.match(/txiki\.js\s+(v[0-9.]+)\s+([0-9a-f]{7,})/i);
+    return m ? `${m[1]}-${m[2].slice(0, 7)}` : '';
+  } catch { return ''; }
+}
+
 function esbuildBundle() {
   const bundle = path.join(OUT, 'clode-main.bundle.cjs');
   // define values are strings that must be valid JSON — JSON.stringify(version) yields the
@@ -84,7 +96,10 @@ function esbuildBundle() {
   toolRequire('esbuild').buildSync({
     entryPoints: [path.join(REPO, 'libexec', 'clode-main.cjs')],
     bundle: true, platform: 'node', format: 'cjs', target: 'node24',
-    define: { __CLODE_BUNDLE_VERSION__: JSON.stringify(repoVersion()) },
+    define: {
+      __CLODE_BUNDLE_VERSION__: JSON.stringify(repoVersion()),
+      __CLODE_BAKED_TJS_PIN__: JSON.stringify(bakedTjsPin()),
+    },
     outfile: bundle,
   });
   return bundle;

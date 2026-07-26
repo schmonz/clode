@@ -709,15 +709,58 @@ function parseBuildArgs(args) {
   return { naude, self, out, target, listTargets };
 }
 
-// Load the templates manifest for --list-targets / --target. v1 reads
-// env.CLODE_TEMPLATES_MANIFEST (a local path — offline + tests); the fetch path
-// (download the manifest for this clode's tjs pin) lands with --target.
-function loadManifest(opts) {
+// The default GitHub release download root. Overridable via CLODE_RELEASE_BASE
+// (forks / mirrors). No trailing slash.
+const CLODE_RELEASE_BASE_DEFAULT = 'https://github.com/schmonz/clode/releases/download';
+
+// The release download base for THIS clode's pack: the templates manifest and its
+// engines are published as assets of this clode version's release (release.yml's
+// templates-pack job). Ends with a slash so `<base><asset>` composes. Precedence:
+// CLODE_TEMPLATES_BASEURL (an explicit base — offline mirror / a pinned release),
+// else <CLODE_RELEASE_BASE>/v<version>/. Null when there is no version to key on.
+function releaseBaseUrl(env, opts) {
+  const explicit = env.CLODE_TEMPLATES_BASEURL;
+  if (explicit) return explicit.endsWith('/') ? explicit : explicit + '/';
+  const version = String(opts.version || '').replace(/^v/, '');
+  if (!version) return null;
+  const root = (env.CLODE_RELEASE_BASE || CLODE_RELEASE_BASE_DEFAULT).replace(/\/$/, '');
+  return `${root}/v${version}/`;
+}
+
+// Default manifest fetch: WHATWG fetch -> text (a small JSON). Injectable via
+// opts.fetchManifest.
+async function defaultManifestFetch(url) {
+  const r = await fetch(url);
+  if (!r || !r.ok) throw new Error(`fetch ${url}: HTTP ${r ? r.status : '?'}`);
+  return await r.text();
+}
+
+// Resolve the templates manifest AND the base URL its engines live under, for
+// --list-targets / --target. Precedence:
+//   1. CLODE_TEMPLATES_MANIFEST — a LOCAL manifest path (offline + tests); engines
+//      come from CLODE_TEMPLATES_BASEURL (or a dir the caller pre-populated).
+//   2. Otherwise fetch templates-<pin>.json from THIS clode version's release
+//      (no env vars needed); engines come from that same release base.
+// Returns { manifest, baseUrl }. Fails loud when it can neither read nor derive.
+async function resolveManifest(opts) {
   const env = opts.env || process.env;
   const tpl = require('./clode-templates.cjs');
-  const p = env.CLODE_TEMPLATES_MANIFEST;
-  if (!p) throw new tpl.TemplatesError('no templates manifest (set CLODE_TEMPLATES_MANIFEST; the fetch path lands with --target)');
-  return tpl.parseManifest(require('node:fs').readFileSync(p, 'utf8'));
+  const local = env.CLODE_TEMPLATES_MANIFEST;
+  if (local) {
+    return {
+      manifest: tpl.parseManifest(require('node:fs').readFileSync(local, 'utf8')),
+      baseUrl: env.CLODE_TEMPLATES_BASEURL || '',
+    };
+  }
+  const pin = thisTjsPin(env, opts);
+  if (!pin) throw new tpl.TemplatesError("cannot derive this clode's tjs pin — set CLODE_TJS_PIN, or CLODE_TEMPLATES_MANIFEST for an offline manifest");
+  const base = releaseBaseUrl(env, opts);
+  if (!base) throw new tpl.TemplatesError('cannot derive the release URL (no clode version) — set CLODE_TEMPLATES_MANIFEST or CLODE_TEMPLATES_BASEURL');
+  const fetchManifest = opts.fetchManifest || defaultManifestFetch;
+  let text;
+  try { text = await fetchManifest(`${base}templates-${pin}.json`); }
+  catch (e) { throw new tpl.TemplatesError(`fetch templates manifest for ${pin}: ${e.message}`); }
+  return { manifest: tpl.parseManifest(text), baseUrl: base };
 }
 
 // Default engine fetch: WHATWG fetch (present under both host node and tjs) to a
@@ -734,6 +777,10 @@ async function defaultEngineFetch(url) {
 // PINS.md (same "vX.Y.Z-<sha7>" shape the manifest uses).
 function thisTjsPin(env, opts) {
   if (env.CLODE_TJS_PIN) return env.CLODE_TJS_PIN;
+  // Baked into the bundle from PINS.md at build time (esbuild define), so a fused
+  // clode with no PINS.md still knows its pin. Undefined in a raw dev checkout
+  // (same guard shape as __CLODE_BUNDLE_VERSION__) -> fall through to PINS.md.
+  if (typeof __CLODE_BAKED_TJS_PIN__ !== 'undefined' && __CLODE_BAKED_TJS_PIN__) return __CLODE_BAKED_TJS_PIN__;
   try {
     const root = path.resolve(opts.libexec || '.', '..');
     const pins = require('node:fs').readFileSync(path.join(root, 'spike/quickjs/PINS.md'), 'utf8');
@@ -785,7 +832,7 @@ async function clodeBuild(args, opts) {
   const tpl = require('./clode-templates.cjs');
   if (parsed.listTargets) {
     let manifest;
-    try { manifest = loadManifest(opts); } catch (e) { return fail(e.message); }
+    try { ({ manifest } = await resolveManifest(opts)); } catch (e) { return fail(e.message); }
     spin.done();
     for (const t of tpl.listTargets(manifest)) stdout.write(`${t.name}\t${t.tag}\t[${t.verified}]\n`);
     return 0;
@@ -794,15 +841,15 @@ async function clodeBuild(args, opts) {
     // Resolve the target's prebuilt engine (pin-checked, sha-verified, cached),
     // then hand it to the EXISTING compile-free cross-fuse path as the foreign
     // base (CLODE_TARGET_TEMPLATE). No compiler on this host — the engine is data.
-    let manifest;
-    try { manifest = loadManifest(opts); } catch (e) { return fail(e.message); }
+    let manifest, baseUrl;
+    try { ({ manifest, baseUrl } = await resolveManifest(opts)); } catch (e) { return fail(e.message); }
     const entry = tpl.resolveTarget(manifest, parsed.target);
     if (!entry) return fail(`build: unknown target '${parsed.target}' (see: clode build --list-targets)`);
     let enginePath;
     try {
       enginePath = await tpl.obtainEngine(entry, {
         cacheDir: opts.templateCacheDir || path.join(clodeCacheDir(env), 'templates'),
-        baseUrl: env.CLODE_TEMPLATES_BASEURL || '',
+        baseUrl,
         fetch: opts.fetchEngine || defaultEngineFetch,
         thisPin: thisTjsPin(env, opts),
         manifestPin: manifest.tjsPin,
@@ -1349,4 +1396,5 @@ module.exports = {
   readDirectDeps, computeDepClosure, assertClosureMatchesLockfile,
   scanBareSpecifiers, specifierPackageName, isBuiltinSpecifier, shimProvidedModules,
   assertNoUnknownBareSpecifiers, KNOWN_UNREACHABLE, resolveClaudeNmDir,
+  resolveManifest, releaseBaseUrl, thisTjsPin,
 };
