@@ -71,7 +71,7 @@ test('release tier: every published leg is present (golden)', () => {
     'linux-x64-musl', 'linux-x86-musl',
     'midnightbsd-amd64',
     'netbsd-alpha', 'netbsd-amd64', 'netbsd-arm64', 'netbsd-earmv7hf',
-    'netbsd-hppa', 'netbsd-i386', 'netbsd-m68k', 'netbsd-macppc', 'netbsd-pmax',
+    'netbsd-hppa', 'netbsd-i386', 'netbsd-m68k', 'netbsd-macppc', 'netbsd-mips64eb', 'netbsd-pmax',
     'netbsd-riscv64',
     'netbsd-sgimips', 'netbsd-sh3el', 'netbsd-sparc', 'netbsd-sparc64',
     'omnios-amd64', 'openbsd-amd64', 'openbsd-arm64',

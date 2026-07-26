@@ -517,8 +517,12 @@ const LEGS = [
     // path builds unchanged. The lighter compose-your-own sysroot path was
     // explored (it got METALOG + includes working; csu was the next wall) and
     // DEFERRED to the backlog as its own project — see BACKLOG.md. Cross-built +
-    // no-exec: green = it compiled and linked. Promote to publish once green.
-    publish: false, ci: true, ciOnly: true, 'soft-fail': true, timeout: 3600,
+    // no-exec: green = it compiled and linked. SHIPPED 2026-07-27: proven green
+    // (run 30258990845) alongside i386/riscv64 — a deterministic cross-build (no
+    // flaky qemu) earns a hard release gate like them. Ships as
+    // clode-<ver>-netbsd10.1-mips64eb; soft-fail is stripped from publishers on the
+    // release tier (release requires it green), stays soft on the CI on-ramp.
+    publish: true, ci: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // NOTE: netbsd-vax was dropped 2026-07-18 — a confirmed ENGINE wall, not just a
   // toolchain risk: build.sh produces a working vax toolchain but quickjs fails to
