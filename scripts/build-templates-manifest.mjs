@@ -20,3 +20,132 @@ export function buildManifest({ tjsPin, inputs }) {
   }
   return { schema: 1, tjsPin, targets };
 }
+
+// --- CI aggregator: turn the matrix's per-leg bare-engine artifacts into
+// manifest inputs, using the leg descriptor (scripts/tjs-legs.mjs) as the ONE
+// source of truth for which platforms are real targets and how each was
+// verified. No build-leg change needed — every leg already uploads its bare
+// engine as `tjs-<leg>`; this maps those to the pack. ---
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { legsFor } from './tjs-legs.mjs';
+
+// The manifest target key is the platform, not the build recipe: for a given
+// OS+arch we build BOTH a glibc validation twin and the musl-static artifact we
+// actually ship (linux-x64-glibc vs linux-x64-musl). Only the libc suffix is
+// stripped — arch tails like -sparc64/-m68k are the platform.
+export function cleanTargetName(legName) {
+  return legName.replace(/-(musl|glibc)$/, '');
+}
+
+// How much we trust an engine, from what the leg did with it:
+//   smoke  — built AND ran the product (full pipeline) on the target
+//   version — booted the engine, --version only (heavy qemu-user arches)
+//   attest-only — never executed here (no-exec cross: arch/floor-gated only)
+//   emulated — ran under emulation, may flake
+export function deriveVerified(leg) {
+  if (leg['no-exec']) return 'attest-only';
+  if (leg.smoke === 'version') return 'version';
+  if (leg['soft-fail']) return 'emulated';
+  return 'smoke';
+}
+
+function platOf(leg) {
+  const gp = leg['guest-platform'];
+  if (!gp || gp === 'native') return leg.leg.split('-')[0];
+  if (gp === 'alpine') return 'linux';
+  const m = gp.match(/^qemu-([a-z0-9]+)/);
+  if (m) return m[1];
+  return gp;
+}
+function archOf(leg) {
+  return leg['guest-arch'] || leg['macos-arch'] || leg.leg.split('-').slice(1).join('-');
+}
+
+// Human-readable platform identity for `clode build --list-targets`:
+// <platform>[-<floor>]-<arch>, e.g. netbsd-10.1-sparc, linux-x86_64.
+export function deriveTag(leg) {
+  const plat = platOf(leg);
+  const arch = archOf(leg);
+  return leg.floor ? `${plat}-${leg.floor}-${arch}` : `${plat}-${arch}`;
+}
+
+// Same derivation as clode's thisTjsPin (libexec/clode-fuse.cjs): the published
+// pin MUST equal what a fetching clode computes, or obtainEngine refuses the pack.
+export function tjsPinFromPins(text) {
+  const m = text.match(/txiki\.js\s+(v[0-9.]+)\s+([0-9a-f]{7,})/i);
+  return m ? `${m[1]}-${m[2].slice(0, 7)}` : null;
+}
+
+// The real cross-build targets: the publish:true legs (release tier is the
+// deterministic, publish-carrying source of truth — the ci tier strips publish).
+// Returned as an object keyed by leg name for O(1) artifact lookup.
+export function manifestTargets(tier = 'release') {
+  const out = {};
+  for (const leg of legsFor(tier)) if (leg.publish) out[leg.leg] = leg;
+  return out;
+}
+
+// Map a directory of downloaded `tjs-<leg>/` artifacts (actions/download-artifact
+// with no name = one subdir per artifact) to buildManifest inputs. Artifacts for
+// non-target legs (validation twins) or non-engine artifacts (builders) are
+// skipped, not errors — a subset dispatch produces a subset pack.
+export function collectInputs(enginesDir, targetsByLeg, pin) {
+  const inputs = [];
+  const skipped = [];
+  for (const ent of fs.readdirSync(enginesDir, { withFileTypes: true })) {
+    if (!ent.isDirectory() || !ent.name.startsWith('tjs-')) continue;
+    const leg = ent.name.slice('tjs-'.length);
+    const spec = targetsByLeg[leg];
+    const dir = path.join(enginesDir, ent.name);
+    const file = ['tjs', 'tjs.exe'].map((f) => path.join(dir, f)).find((f) => fs.existsSync(f));
+    if (!spec || !file) { skipped.push(leg); continue; }
+    const name = cleanTargetName(leg);
+    inputs.push({
+      name,
+      tag: deriveTag(spec),
+      engine: `tjs-${name}-${pin}`,
+      file,
+      verified: deriveVerified(spec),
+    });
+  }
+  return { inputs, skipped };
+}
+
+function parseArgs(argv) {
+  const a = {};
+  for (let i = 0; i < argv.length; i++) {
+    const k = argv[i];
+    if (k.startsWith('--')) a[k.slice(2)] = (argv[i + 1] && !argv[i + 1].startsWith('--')) ? argv[++i] : true;
+  }
+  return a;
+}
+
+// CLI: build-templates-manifest.mjs --engines DIR --out FILE [--pin P] [--pack DIR] [--tier release]
+// Assembles the manifest from downloaded leg engines; with --pack, also stages
+// the engines under their pin-versioned pack names + the manifest into one dir
+// for a single release upload.
+function main(argv) {
+  const a = parseArgs(argv);
+  if (!a.engines || !a.out) {
+    process.stderr.write('usage: --engines DIR --out FILE [--pin P] [--pack DIR] [--tier release|ci]\n');
+    process.exit(2);
+  }
+  const pin = a.pin || tjsPinFromPins(fs.readFileSync(a.pins || 'spike/quickjs/PINS.md', 'utf8'));
+  if (!pin) { process.stderr.write('cannot derive tjs pin (pass --pin or provide PINS.md)\n'); process.exit(1); }
+  const targets = manifestTargets(a.tier || 'release');
+  const { inputs, skipped } = collectInputs(a.engines, targets, pin);
+  const manifest = buildManifest({ tjsPin: pin, inputs });
+  fs.writeFileSync(a.out, JSON.stringify(manifest, null, 2) + '\n');
+  if (a.pack) {
+    fs.mkdirSync(a.pack, { recursive: true });
+    for (const it of inputs) fs.copyFileSync(it.file, path.join(a.pack, it.engine));
+    fs.writeFileSync(path.join(a.pack, `templates-${pin}.json`), JSON.stringify(manifest, null, 2) + '\n');
+  }
+  process.stderr.write(`manifest: pin=${pin}, ${inputs.length} target(s)` +
+    (skipped.length ? `, skipped ${skipped.length}: ${skipped.join(', ')}` : '') + '\n');
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main(process.argv.slice(2));
+}

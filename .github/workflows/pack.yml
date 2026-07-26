@@ -1,0 +1,74 @@
+name: templates-pack
+
+# The compiler-free cross-build PACK (universal-cross-build spec): assemble the
+# templates manifest + the pin-versioned bare tjs engines a downloaded clode
+# fetches to cross-build a quaude for any target. Every tjs leg ALREADY uploads
+# its bare engine as `tjs-<leg>` (build-leg's tail upload); this workflow feeds
+# those to scripts/build-templates-manifest.mjs, which uses the leg descriptor
+# (scripts/tjs-legs.mjs) as the source of truth for which platforms are real
+# publish targets and how each was verified.
+#
+# Dispatch-only, and parameterized by `only` so the wiring can be proven on ONE
+# cheap leg (linux-x64-musl: an alpine container, no qemu) before the full
+# release matrix pays for it. release.yml runs the SAME aggregate job over its
+# whole matrix to publish the real pack as release assets — this is the cheap
+# iteration harness for that job.
+
+on:
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "single leg to build (e.g. linux-x64-musl) or empty for the whole release matrix"
+        type: string
+        default: linux-x64-musl
+
+permissions:
+  contents: read
+
+jobs:
+  legs:
+    uses: ./.github/workflows/tjs-legs.yml
+    permissions:
+      contents: read
+    with:
+      tier: release
+      only: ${{ inputs.only }}
+
+  pack:
+    needs: legs
+    # Assemble whatever engines the dispatched subset produced — a one-leg probe
+    # yields a one-target manifest, which is a valid (partial) pack. Run even if a
+    # leg failed so a green leg's engine still packs; the aggregator simply omits
+    # any target whose engine artifact is absent.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version-file: .tool-versions
+      # No merge: each `tjs-<leg>` artifact lands in its own subdir under engines/,
+      # which is exactly the shape collectInputs() expects (one dir per leg).
+      - name: Download every leg's bare engine
+        uses: actions/download-artifact@v8.0.1
+        with:
+          pattern: tjs-*
+          path: engines
+      - name: Assemble the templates manifest + pin-versioned pack
+        run: |
+          set -euo pipefail
+          ls -1 engines || { echo "no engine artifacts to pack" >&2; exit 1; }
+          node scripts/build-templates-manifest.mjs \
+            --engines engines --tier release \
+            --out templates.json --pack pack
+          echo "=== manifest ==="; cat templates.json
+          echo "=== pack ==="; ls -1 pack
+      - name: Upload the assembled pack (manifest + engines)
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: templates-pack
+          path: pack
+          if-no-files-found: error
