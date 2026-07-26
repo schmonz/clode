@@ -709,15 +709,18 @@ function parseBuildArgs(args) {
   return { naude, self, out, target, listTargets };
 }
 
-// Default output basename for a quaude/--self build (the naude branch names its
-// own). The `.exe` suffix follows the TARGET platform, not the host: a
-// `--target windows-*` cross-built from POSIX must still be a .exe, and a POSIX
-// `--target` built FROM Windows must NOT be. With no --target (a native build)
-// it follows the host. An explicit --out is respected verbatim by the caller.
-function defaultBuildOut({ target, self, hostPlatform }) {
-  const name = self ? 'clode-native' : 'quaude';
+// Resolve the output basename for a quaude/--self build (the naude branch names
+// its own). A windows TARGET always ends in .exe so the binary actually runs:
+// the default name gets it, AND an explicit --out gets it appended when missing
+// (`--out quaude-windows-x64` → `quaude-windows-x64.exe`). A non-windows target
+// never gets .exe (a POSIX `--target` built FROM Windows must not). "windows" is
+// decided by the TARGET; with no --target (a native build) it follows the host.
+// An explicit --out is otherwise respected verbatim (extension, path, all of it).
+function resolveBuildOut({ out, target, self, hostPlatform }) {
   const isWin = target ? /^windows-/.test(target) : hostPlatform === 'win32';
-  return name + (isWin ? '.exe' : '');
+  let name = out || (self ? 'clode-native' : 'quaude');
+  if (isWin && !/\.exe$/i.test(name)) name += '.exe';
+  return name;
 }
 
 // The default GitHub release download root. Overridable via CLODE_RELEASE_BASE
@@ -1012,10 +1015,9 @@ async function clodeBuild(args, opts) {
   }
 
   // naude/self/out were already parsed + validated above (shared with the
-  // --naude branch, which returned before reaching here). The default name's
-  // .exe follows the TARGET, not the host (see defaultBuildOut); an explicit
-  // --out is respected verbatim (the user owns that name).
-  out = path.resolve(out || defaultBuildOut({ target: parsed.target, self, hostPlatform: process.platform }));
+  // --naude branch, which returned before reaching here). A windows target's
+  // output always ends in .exe — default OR explicit --out (see resolveBuildOut).
+  out = path.resolve(resolveBuildOut({ out, target: parsed.target, self, hostPlatform: process.platform }));
 
   const ROOT = path.resolve(opts.libexec, '..');
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-'));
@@ -1403,7 +1405,7 @@ async function clodeBuild(args, opts) {
 }
 
 module.exports = {
-  clodeBuild, parseBuildArgs, defaultBuildOut, makePhaseSpinner, startPongMock, cannedSSE, smokeTarget, timeoutScale, codesignAdHoc, thinToHostSlice, describeExit,
+  clodeBuild, parseBuildArgs, resolveBuildOut, makePhaseSpinner, startPongMock, cannedSSE, smokeTarget, timeoutScale, codesignAdHoc, thinToHostSlice, describeExit,
   readDirectDeps, computeDepClosure, assertClosureMatchesLockfile,
   scanBareSpecifiers, specifierPackageName, isBuiltinSpecifier, shimProvidedModules,
   assertNoUnknownBareSpecifiers, KNOWN_UNREACHABLE, resolveClaudeNmDir,

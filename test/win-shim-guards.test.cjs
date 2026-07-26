@@ -102,10 +102,15 @@ test('fs.mkdirSync recursive walk is separator-aware (win32-safe)', () => {
 });
 
 const fuseSrc = fs.readFileSync(path.join(__dirname, '..', 'libexec/clode-fuse.cjs'), 'utf8');
+const { resolveBuildOut } = require(path.join(__dirname, '..', 'libexec/clode-fuse.cjs'));
 
-test('clode-fuse: default --out gets .exe on win32', () => {
-  // the default (no --out) appends .exe on Windows: quaude -> quaude.exe
-  assert.match(fuseSrc, /win32['"]?\s*\?\s*['"]\.exe['"]\s*:\s*['"]['"]/);
+test('clode-fuse: a windows target output ends in .exe (default and explicit --out)', () => {
+  // Behavioral (was a source-grep for the old inline `win32 ? '.exe'`): the .exe
+  // now follows the TARGET, and an explicit --out gains it too.
+  assert.strictEqual(resolveBuildOut({ out: null, target: 'windows-x64', self: false, hostPlatform: 'linux' }), 'quaude.exe');
+  assert.strictEqual(resolveBuildOut({ out: null, target: null, self: false, hostPlatform: 'win32' }), 'quaude.exe'); // native windows host
+  assert.strictEqual(resolveBuildOut({ out: 'quaude-windows-x64', target: 'windows-x64', self: false, hostPlatform: 'linux' }), 'quaude-windows-x64.exe');
+  assert.strictEqual(resolveBuildOut({ out: null, target: 'linux-x64', self: false, hostPlatform: 'win32' }), 'quaude'); // non-windows target: no .exe
 });
 test('clode-fuse: the materialized template is named .exe on win32', () => {
   assert.match(fuseSrc, /template-tjs\.exe/);

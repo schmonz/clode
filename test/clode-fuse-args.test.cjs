@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { parseBuildArgs, defaultBuildOut } = require('../libexec/clode-fuse.cjs');
+const { parseBuildArgs, resolveBuildOut } = require('../libexec/clode-fuse.cjs');
 
 test('parseBuildArgs: --list-targets', () => {
   assert.deepStrictEqual(parseBuildArgs(['--list-targets']),
@@ -27,21 +27,31 @@ test('parseBuildArgs: plain build unchanged', () => {
     { naude: false, self: false, out: null, target: null, listTargets: false });
 });
 
-// defaultBuildOut: the .exe suffix follows the TARGET platform, not the host —
+// resolveBuildOut: the .exe suffix follows the TARGET platform, not the host —
 // the cross-build naming bug (keying off process.platform got both backwards).
-test('defaultBuildOut: .exe follows the target, not the host', () => {
+test('resolveBuildOut: default name — .exe follows the target, not the host', () => {
   // windows target from a POSIX host -> still .exe
-  assert.strictEqual(defaultBuildOut({ target: 'windows-x64', self: false, hostPlatform: 'linux' }), 'quaude.exe');
-  assert.strictEqual(defaultBuildOut({ target: 'windows-arm64', self: false, hostPlatform: 'darwin' }), 'quaude.exe');
+  assert.strictEqual(resolveBuildOut({ out: null, target: 'windows-x64', self: false, hostPlatform: 'linux' }), 'quaude.exe');
+  assert.strictEqual(resolveBuildOut({ out: null, target: 'windows-arm64', self: false, hostPlatform: 'darwin' }), 'quaude.exe');
   // POSIX target from a Windows host -> NO .exe
-  assert.strictEqual(defaultBuildOut({ target: 'netbsd-sparc', self: false, hostPlatform: 'win32' }), 'quaude');
-  assert.strictEqual(defaultBuildOut({ target: 'linux-x64', self: false, hostPlatform: 'win32' }), 'quaude');
+  assert.strictEqual(resolveBuildOut({ out: null, target: 'netbsd-sparc', self: false, hostPlatform: 'win32' }), 'quaude');
+  assert.strictEqual(resolveBuildOut({ out: null, target: 'linux-x64', self: false, hostPlatform: 'win32' }), 'quaude');
 });
 
-test('defaultBuildOut: no --target follows the host; --self names clode-native', () => {
-  assert.strictEqual(defaultBuildOut({ target: null, self: false, hostPlatform: 'win32' }), 'quaude.exe');
-  assert.strictEqual(defaultBuildOut({ target: null, self: false, hostPlatform: 'linux' }), 'quaude');
-  assert.strictEqual(defaultBuildOut({ target: null, self: true, hostPlatform: 'win32' }), 'clode-native.exe');
-  assert.strictEqual(defaultBuildOut({ target: 'windows-x64', self: true, hostPlatform: 'linux' }), 'clode-native.exe');
-  assert.strictEqual(defaultBuildOut({ target: null, self: true, hostPlatform: 'linux' }), 'clode-native');
+test('resolveBuildOut: an explicit --out for a windows target gains .exe if missing', () => {
+  // the field-report case: `--out quaude-windows-x64` must run on Windows
+  assert.strictEqual(resolveBuildOut({ out: 'quaude-windows-x64', target: 'windows-x64', self: false, hostPlatform: 'linux' }), 'quaude-windows-x64.exe');
+  // already has .exe -> not doubled (case-insensitive)
+  assert.strictEqual(resolveBuildOut({ out: 'q.exe', target: 'windows-x64', self: false, hostPlatform: 'linux' }), 'q.exe');
+  assert.strictEqual(resolveBuildOut({ out: 'q.EXE', target: 'windows-x64', self: false, hostPlatform: 'linux' }), 'q.EXE');
+  // non-windows target -> explicit --out respected verbatim, no .exe appended
+  assert.strictEqual(resolveBuildOut({ out: 'quaude-netbsd-sparc', target: 'netbsd-sparc', self: false, hostPlatform: 'win32' }), 'quaude-netbsd-sparc');
+});
+
+test('resolveBuildOut: no --target follows the host; --self names clode-native', () => {
+  assert.strictEqual(resolveBuildOut({ out: null, target: null, self: false, hostPlatform: 'win32' }), 'quaude.exe');
+  assert.strictEqual(resolveBuildOut({ out: null, target: null, self: false, hostPlatform: 'linux' }), 'quaude');
+  assert.strictEqual(resolveBuildOut({ out: null, target: null, self: true, hostPlatform: 'win32' }), 'clode-native.exe');
+  assert.strictEqual(resolveBuildOut({ out: null, target: 'windows-x64', self: true, hostPlatform: 'linux' }), 'clode-native.exe');
+  assert.strictEqual(resolveBuildOut({ out: null, target: null, self: true, hostPlatform: 'linux' }), 'clode-native');
 });
