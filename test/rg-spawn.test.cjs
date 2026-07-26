@@ -41,7 +41,14 @@ test('_rewriteRgSpawn: ugrep absent → cmd untouched (app keeps its fallback)',
 
 const bun = require('../libexec/bun-shim.cjs');
 
-test('rg spawn.sync: ugrep usage error (exit >=2) surfaces a clode diagnostic + /doctor', () => {
+// These two drive the REAL spawn path against an executable ugrep stub — a
+// `#!/bin/sh` script, which Windows cannot exec (no shebang, no chmod bit), so
+// the stub never returns exit 2 and nothing surfaces. The surfacing logic itself
+// is OS-agnostic; only this harness (a shell-script stub) is POSIX-only. The
+// unit translator tests above/below run everywhere.
+const posixExec = { skip: process.platform === 'win32' ? 'needs an executable /bin/sh ugrep stub' : false };
+
+test('rg spawn.sync: ugrep usage error (exit >=2) surfaces a clode diagnostic + /doctor', posixExec, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-skew-'));
   const ugrep = path.join(dir, 'ugrep');
   fs.writeFileSync(ugrep, '#!/bin/sh\necho "ugrep: unknown option" >&2\nexit 2\n', { mode: 0o755 });
@@ -59,7 +66,7 @@ test('rg spawn.sync: ugrep usage error (exit >=2) surfaces a clode diagnostic + 
   assert.ok(globalThis.__clodeDoctor.appletSkew.some((f) => f.name === 'rg'));
 });
 
-test('rg spawn.sync: ugrep exit 1 (no match) does NOT surface', () => {
+test('rg spawn.sync: ugrep exit 1 (no match) does NOT surface', posixExec, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-nomatch-'));
   const ugrep = path.join(dir, 'ugrep');
   fs.writeFileSync(ugrep, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
