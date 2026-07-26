@@ -539,6 +539,19 @@ function spawn(file, args = [], opts = {}) {
       child.signalCode = signal;
       child.emit('exit', code, signal);
       child.emit('close', code, signal);
+      // The child is gone, but a FORKED grandchild can inherit and hold the stdio
+      // pipes open: dash (musl/alpine's /bin/sh) runs `sh -c 'sleep 30'` as a
+      // CHILD rather than exec-replacing, so SIGKILLing the sh leaves an orphaned
+      // sleep (reparented to init) still holding the pipe. tjs's eager drain loop
+      // then stays blocked on reader.read() with no EOF, keeping the event loop
+      // alive so the process never exits — the node-shim-oracle SIGKILL hang (musl
+      // only; NetBSD sh exec-replaces, so no orphan and no hang). Node doesn't keep
+      // the loop alive for an unconsumed child stream once the child has exited.
+      // Cancel the SOURCE readers so each drain loop ends with EOF; data already
+      // pushed into the node Readable still flushes to a late consumer.
+      const endReader = (rd) => { try { if (rd && rd._reader) rd._reader.cancel(); } catch { /* already closed */ } };
+      endReader(child.stdout);
+      endReader(child.stderr);
     },
     (e) => { trace('wait rejected', file, String(e)); child.emit('error', e); },
   );

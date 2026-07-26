@@ -88,6 +88,36 @@ test('spawn: a normally-exiting child still reports its code + null signal', (t)
   assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
 });
 
+// A FORKED grandchild that outlives a KILLED child and inherits its stdio pipe
+// must not keep the runtime alive after the child exits. dash (musl/alpine's
+// /bin/sh) runs `sh -c 'sleep 30'` as a CHILD instead of exec-replacing, so
+// SIGKILLing the sh left a live orphaned `sleep` holding the pipe; tjs's eager
+// stdout drain then blocked on read() with no EOF and the process hung forever
+// (the node-shim-oracle SIGKILL hang — musl only, since NetBSD sh exec-replaces,
+// leaving no orphan). `sh -c 'sleep 30 & wait'` forces that fork on EVERY platform:
+// the sh forks sleep and waits, so SIGKILLing the sh orphans a live sleep on the
+// pipe. Node drains + exits (~350ms); the shim must too — a hang surfaces here as
+// runLoader's timeout -> status null (verified: fails without the reader-cancel).
+test('spawn: a killed child\'s orphaned grandchild on the pipe does not hang the runtime', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const cp = require('node:child_process');
+    const c = cp.spawn('/bin/sh', ['-c', 'sleep 30 & wait']);
+    setTimeout(() => c.kill('SIGKILL'), 300);
+    c.on('exit', (code, signal) => { console.log(JSON.stringify({ code, signal })); });
+    // No process.exit and no stdout consumer: the runtime must still DRAIN + exit.`;
+  const f = prog(body);
+  // No live-node reference here: with a piped stdout AND a forced-fork orphan, node
+  // ITSELF blocks ~30s on some hosts, so it is not a clean timing oracle for this
+  // fixture. The value contract (a signal-killed child is code=null + the signal)
+  // is already pinned by the SIGKILL test above; this test guards the RUNTIME
+  // draining. Without the reader-cancel on child exit, the orphaned sleep holds the
+  // pipe, tjs's eager drain never sees EOF, and runLoader times out -> status null.
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, `hung (orphan pipe kept the loop alive)? stderr=${r.stderr}`);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), { code: null, signal: 'SIGKILL' });
+});
+
 test('spawn: writing a command to a persistent shell via child.stdin delivers + EOF closes it (Bash-tool pattern)', (t) => {
   if (skipUnlessTjs(t)) return;
   // Claude Code's Bash tool feeds short commands to a persistent shell via stdin.
