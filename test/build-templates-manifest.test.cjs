@@ -115,3 +115,17 @@ test('collectInputs feeds buildManifest end-to-end', () => {
   assert.strictEqual(m.targets['netbsd-amd64'].sha256,
     crypto.createHash('sha256').update('NB').digest('hex'));
 });
+
+test('buildManifest: compression is declared when set, absent otherwise; sha stays the DECOMPRESSED engine', () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'bmc-'));
+  fs.mkdirSync(path.join(d, 'tjs-netbsd-amd64'));
+  fs.writeFileSync(path.join(d, 'tjs-netbsd-amd64', 'tjs'), 'ENGINE');
+  const { inputs } = collectInputs(d, manifestTargets('release'), 'v26.6.0-1a230d3');
+  const raw = buildManifest({ tjsPin: 'v26.6.0-1a230d3', inputs });
+  assert.strictEqual(raw.compression, undefined, 'no compression field when unset (backward compatible)');
+  const gz = buildManifest({ tjsPin: 'v26.6.0-1a230d3', inputs, compression: 'gzip' });
+  assert.strictEqual(gz.compression, 'gzip');
+  // sha256 is of the engine bytes themselves, independent of wire compression
+  assert.strictEqual(gz.targets['netbsd-amd64'].sha256,
+    crypto.createHash('sha256').update('ENGINE').digest('hex'));
+});

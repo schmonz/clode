@@ -14,7 +14,8 @@ const http = require('node:http');
 const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 
-const { downloadFile, sha256Of } = require('../libexec/clode-net.cjs');
+const zlib = require('node:zlib');
+const { downloadFile, sha256Of, gunzipBuffer } = require('../libexec/clode-net.cjs');
 
 function tmpdir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'clode-net-'));
@@ -170,4 +171,20 @@ test('downloadFile(http://) streams to dest with incremental progress', async ()
   } finally {
     server.close();
   }
+});
+
+// gunzipBuffer: inflate gzip bytes to a Buffer. Prefers a native gzip CLI, falls
+// back to the in-process DecompressionStream — this asserts the observable
+// contract (correct inflation of arbitrary binary) regardless of which path ran.
+test('gunzipBuffer inflates gzip bytes (binary-exact)', async () => {
+  const original = crypto.randomBytes(200000); // non-text, spans a real engine-ish size
+  const gz = zlib.gzipSync(original);
+  const out = await gunzipBuffer(gz, { dataDir: SHA_DATADIR }); // pin provision's cache (hermetic)
+  assert.ok(Buffer.isBuffer(out), 'returns a Buffer');
+  assert.strictEqual(Buffer.compare(out, original), 0, 'inflated bytes are byte-identical');
+});
+
+test('gunzipBuffer roundtrips a small known string', async () => {
+  const out = await gunzipBuffer(zlib.gzipSync(Buffer.from('clode')), { dataDir: SHA_DATADIR });
+  assert.strictEqual(out.toString(), 'clode');
 });

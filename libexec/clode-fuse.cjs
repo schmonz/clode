@@ -853,6 +853,7 @@ async function clodeBuild(args, opts) {
         fetch: opts.fetchEngine || defaultEngineFetch,
         thisPin: thisTjsPin(env, opts),
         manifestPin: manifest.tjsPin,
+        compression: manifest.compression,
       });
     } catch (e) { return fail(e.message); }
     env.CLODE_TARGET_TEMPLATE = enginePath;

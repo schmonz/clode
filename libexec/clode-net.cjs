@@ -26,9 +26,13 @@
 // copy for file://), never a utf8 round-trip, so a 240MB binary is not corrupted.
 
 const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { fileURLToPath } = require('node:url');
 const { provision, parseSha256 } = require('./host-provision.cjs');
 const { spawnSync } = require('node:child_process');
+
+let gunzipSeq = 0;
 
 // hex sha256 of a file's bytes -> lowercase, identical to `sha256sum` /
 // `shasum -a 256` output (just the digest, no filename). Resolves a host digest
@@ -102,4 +106,47 @@ async function downloadFile(url, destPath, opts) {
   return await res.text();
 }
 
-module.exports = { downloadFile, sha256Of };
+// In-process gzip inflate, present under BOTH host node and the tjs target
+// (DecompressionStream + Response are WHATWG primitives tjs's fetch already
+// carries). The no-tool fallback for gunzipBuffer — a ~5-7MB engine inflates in
+// milliseconds, so a host without a gzip CLI still unpacks the pack.
+async function gunzipViaStream(gzBytes) {
+  if (typeof DecompressionStream !== 'function' || typeof Response !== 'function') {
+    throw new Error('clode: no gzip tool on PATH and no in-process gzip (DecompressionStream) — install gzip, or set CLODE_GZIP, to unpack the templates pack.');
+  }
+  const ds = new DecompressionStream('gzip');
+  // Start draining BEFORE writing so a single large write can't deadlock on backpressure.
+  const out = new Response(ds.readable).arrayBuffer();
+  const w = ds.writable.getWriter();
+  const u8 = gzBytes.byteOffset != null
+    ? new Uint8Array(gzBytes.buffer, gzBytes.byteOffset, gzBytes.byteLength)
+    : new Uint8Array(gzBytes);
+  await w.write(u8);
+  await w.close();
+  return Buffer.from(await out);
+}
+
+// Inflate gzip bytes to a Buffer. PREFERS a native decompressor (fast — the
+// project's exec-a-host-tool convention, like sha256Of/tar), resolved + KAT'd via
+// host-provision; falls back to gunzipViaStream when no gzip CLI is on PATH. The
+// caller sha256-verifies the INFLATED bytes, so a wrong/broken decompressor is
+// caught there, never shipped. opts forward to provision (env/findTool/spawn/fs).
+async function gunzipBuffer(gzBytes, opts = {}) {
+  const spawn = opts.spawn || spawnSync;
+  let tool = null;
+  try { tool = provision('gzip', opts); } catch { tool = null; }
+  if (tool) {
+    const tmp = path.join(os.tmpdir(), `clode-gz-${process.pid}-${gunzipSeq++}.gz`);
+    try {
+      fs.writeFileSync(tmp, gzBytes);
+      const r = spawn(tool.path, tool.candidate.args(tmp), { encoding: 'buffer', maxBuffer: 1 << 28 });
+      if (r && r.status === 0 && r.stdout && r.stdout.length) return Buffer.from(r.stdout);
+      // native tool present but this inflate failed → fall through to the stream path
+    } finally {
+      try { fs.unlinkSync(tmp); } catch { /* absent */ }
+    }
+  }
+  return gunzipViaStream(gzBytes);
+}
+
+module.exports = { downloadFile, sha256Of, gunzipBuffer };

@@ -162,3 +162,20 @@ test('provision(tar) fails loud when no tar is found', () => {
     /CLODE_TAR/
   );
 });
+
+// --- gzip: real-host integration (KAT inflates the embedded blob) ----------
+test('provision resolves a real gzip decompressor on this host (integration)', () => {
+  const got = provision('gzip', { dataDir: tmpDataDir() });
+  assert.ok(got.path, 'a real gzip tool resolved');
+  assert.ok(['gzip', 'gunzip', 'zcat', 'pigz'].includes(got.candidate.name));
+});
+
+test('provision(gzip) fails loud when no decompressor is found', () => {
+  assert.throws(
+    () => provision('gzip', {
+      env: { PATH: '' }, findTool: () => null,
+      spawn: () => { throw new Error('must not spawn'); }, fs, dataDir: tmpDataDir(),
+    }),
+    /CLODE_GZIP/
+  );
+});

@@ -69,3 +69,37 @@ test('obtainEngine: sha mismatch is refused', async () => {
     () => obtainEngine({ engine: 'e', sha256: 'f'.repeat(64) }, { cacheDir, baseUrl: 'b/', fetch: async () => Buffer.from('x'), thisPin: 'P', manifestPin: 'P' }),
     (e) => e instanceof TemplatesError && /sha256/.test(e.message));
 });
+
+test('obtainEngine: gzip fetches <engine>.gz, inflates, verifies the DECOMPRESSED sha, caches decompressed', async () => {
+  const zlib = require('node:zlib');
+  const engineBytes = Buffer.from('DECOMPRESSED-ENGINE-BYTES');
+  const sha = crypto.createHash('sha256').update(engineBytes).digest('hex'); // sha of the ENGINE, not the .gz
+  const gz = zlib.gzipSync(engineBytes);
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'enggz-'));
+  let fetchedUrl = null;
+  const fetch = async (url) => { fetchedUrl = url; return gz; };
+  const gunzip = async (buf) => zlib.gunzipSync(buf); // injected: no host gzip tool needed in the unit test
+  const p = await obtainEngine(
+    { engine: 'tjs-x-abc', sha256: sha },
+    { cacheDir, baseUrl: 'base/', fetch, gunzip, thisPin: 'P', manifestPin: 'P', compression: 'gzip' });
+  assert.match(fetchedUrl, /base\/tjs-x-abc\.gz$/, 'fetches the .gz asset');
+  assert.strictEqual(path.basename(p), 'tjs-x-abc', 'cache holds the decompressed engine, not .gz');
+  assert.strictEqual(fs.readFileSync(p).toString(), 'DECOMPRESSED-ENGINE-BYTES');
+});
+
+test('obtainEngine: a decompressor that yields wrong bytes still fails the sha gate', async () => {
+  const engineBytes = Buffer.from('GOOD');
+  const sha = crypto.createHash('sha256').update(engineBytes).digest('hex');
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'enggz2-'));
+  await assert.rejects(
+    () => obtainEngine({ engine: 'e', sha256: sha },
+      { cacheDir, baseUrl: 'b/', fetch: async () => Buffer.from('ignored'), gunzip: async () => Buffer.from('WRONG'), thisPin: 'P', manifestPin: 'P', compression: 'gzip' }),
+    (e) => e instanceof TemplatesError && /sha256/.test(e.message));
+});
+
+test('obtainEngine: unsupported compression is refused', async () => {
+  await assert.rejects(
+    () => obtainEngine({ engine: 'e', sha256: 'x' },
+      { cacheDir: os.tmpdir(), fetch: async () => Buffer.alloc(0), thisPin: 'P', manifestPin: 'P', compression: 'brotli' }),
+    (e) => e instanceof TemplatesError && /compression/i.test(e.message));
+});

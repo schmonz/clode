@@ -8,17 +8,23 @@
 // 2026-07-25-universal-cross-build-compiler-free-quaude-design.md.
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 
 // inputs: [{ name, tag, engine, file, verified }] — name = target key (e.g.
 // 'linux-x64'), tag = platform-tag, engine = published asset filename, file =
 // local path to the engine bytes, verified = 'smoke'|'attest-only'|'unverified'.
-export function buildManifest({ tjsPin, inputs }) {
+export function buildManifest({ tjsPin, inputs, compression }) {
   const targets = {};
   for (const it of inputs) {
+    // sha256 of the DECOMPRESSED engine (it.file) — the integrity target clode
+    // verifies AFTER inflating, independent of how the asset ships on the wire.
     const sha256 = crypto.createHash('sha256').update(fs.readFileSync(it.file)).digest('hex');
     targets[it.name] = { tag: it.tag, engine: it.engine, sha256, verified: it.verified || 'unknown' };
   }
-  return { schema: 1, tjsPin, targets };
+  const manifest = { schema: 1, tjsPin, targets };
+  // Engines ship gzip'd (asset = <engine>.gz); absent = raw (backward compatible).
+  if (compression) manifest.compression = compression;
+  return manifest;
 }
 
 // --- CI aggregator: turn the matrix's per-leg bare-engine artifacts into
@@ -143,14 +149,21 @@ function main(argv) {
   if (!pin) { process.stderr.write('cannot derive tjs pin (pass --pin or provide PINS.md)\n'); process.exit(1); }
   const targets = manifestTargets(a.tier || 'release');
   const { inputs, skipped } = collectInputs(a.engines, targets, pin);
-  const manifest = buildManifest({ tjsPin: pin, inputs });
+  // Packing implies gzip'd engine assets (the shipping format) — declare it in the
+  // manifest so a fetching clode knows to request <engine>.gz and inflate it.
+  const gzipPack = !!a.pack;
+  const manifest = buildManifest({ tjsPin: pin, inputs, compression: gzipPack ? 'gzip' : undefined });
   fs.writeFileSync(a.out, JSON.stringify(manifest, null, 2) + '\n');
   if (a.pack) {
     fs.mkdirSync(a.pack, { recursive: true });
-    for (const it of inputs) fs.copyFileSync(it.file, path.join(a.pack, it.engine));
+    for (const it of inputs) {
+      const gz = zlib.gzipSync(fs.readFileSync(it.file), { level: 9 });
+      fs.writeFileSync(path.join(a.pack, `${it.engine}.gz`), gz);
+    }
     fs.writeFileSync(path.join(a.pack, `templates-${pin}.json`), JSON.stringify(manifest, null, 2) + '\n');
   }
   process.stderr.write(`manifest: pin=${pin}, ${inputs.length} target(s)` +
+    (gzipPack ? ', gzip' : '') +
     (skipped.length ? `, skipped ${skipped.length}: ${skipped.join(', ')}` : '') + '\n');
 }
 

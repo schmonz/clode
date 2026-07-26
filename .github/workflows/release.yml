@@ -237,7 +237,8 @@ jobs:
   # reads slices/tjs-darwin-<a>/tjs), which is what collectInputs expects.
   # Published as clode-templates-<pin> so the release job's clode-* + merge-multiple
   # flattens the manifest + engines into dist/ — a clode then fetches
-  # templates-<pin>.json + each tjs-<target>-<pin> by URL on demand.
+  # templates-<pin>.json + each tjs-<target>-<pin>.gz by URL on demand (engines ship
+  # gzip'd; clode inflates + sha-verifies the decompressed engine — manifest.compression).
   templates-pack:
     needs: [leg, darwin-slices]
     if: ${{ !cancelled() }}

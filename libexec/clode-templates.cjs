@@ -44,13 +44,30 @@ async function obtainEngine(entry, opts) {
   if (opts.manifestPin !== opts.thisPin) {
     throw new TemplatesError(`templates pin ${opts.manifestPin} != this clode's tjs pin ${opts.thisPin} — download the pack for your clode version`);
   }
+  // Engines ship gzip'd (manifest.compression) to shrink the download; the CACHE
+  // holds the DECOMPRESSED engine (ready to fuse), and entry.sha256 is that
+  // decompressed engine's digest — the integrity gate, verified AFTER inflation,
+  // so a wrong decompressor is caught here and never fused.
+  const compression = opts.compression || entry.compression || null;
+  if (compression && compression !== 'gzip') {
+    throw new TemplatesError(`engine ${entry.engine}: unsupported compression '${compression}'`);
+  }
   const dest = path.join(opts.cacheDir, entry.engine);
   const verify = (buf) => {
     const got = crypto.createHash('sha256').update(buf).digest('hex');
     if (got !== entry.sha256) throw new TemplatesError(`engine ${entry.engine}: sha256 ${got} != manifest ${entry.sha256}`);
   };
   if (fs.existsSync(dest)) { verify(fs.readFileSync(dest)); return dest; }
-  const buf = await opts.fetch((opts.baseUrl || '') + entry.engine);
+  const asset = compression === 'gzip' ? `${entry.engine}.gz` : entry.engine;
+  const raw = await opts.fetch((opts.baseUrl || '') + asset);
+  let buf;
+  if (compression === 'gzip') {
+    // Injectable for tests; defaults to the native-CLI-then-DecompressionStream path.
+    const gunzip = opts.gunzip || ((b) => require('./clode-net.cjs').gunzipBuffer(b, opts));
+    buf = await gunzip(raw);
+  } else {
+    buf = raw;
+  }
   verify(buf);
   fs.mkdirSync(opts.cacheDir, { recursive: true });
   fs.writeFileSync(dest, buf);

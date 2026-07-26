@@ -36,6 +36,14 @@ function parseSha256(out) {
 
 const SHA256_KAT = { input: 'clode', expected: '300fd6ab1ddbf36ccacc4c9f21c6ad497b421906f337c032ec8d4396eebc5e2c' };
 
+// A fixed gzip stream of exactly "clode" (produced by zlib). Decompression is
+// deterministic, so ANY conforming decompressor inflates this to "clode" — the
+// KAT proves the resolved tool actually inflates gzip, on any platform.
+const GZIP_KAT = {
+  gz: [31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 75, 206, 201, 79, 73, 5, 0, 82, 5, 130, 22, 5, 0, 0, 0],
+  expected: 'clode',
+};
+
 const REGISTRY = {
   sha256: {
     id: 'sha256',
@@ -108,6 +116,29 @@ const REGISTRY = {
       }
     },
     installHint: 'install tar (or gtar/bsdtar), or set CLODE_TAR. Needed to unpack downloads.',
+  },
+  gzip: {
+    id: 'gzip',
+    overrideEnv: 'CLODE_GZIP',
+    // Decompressors, most-universal first. Each inflates a file arg to stdout.
+    candidates: [
+      { name: 'gzip', args: (f) => ['-dc', f] },
+      { name: 'gunzip', args: (f) => ['-c', f] },
+      { name: 'zcat', args: (f) => [f] },
+      { name: 'pigz', args: (f) => ['-dc', f] },
+    ],
+    // Inflate the embedded known gzip blob; verify the exact inflated bytes.
+    verify({ candidate, path: bin, run, fs }) {
+      const tmp = path.join(os.tmpdir(), `clode-kat-gzip-${process.pid}.gz`);
+      fs.writeFileSync(tmp, Buffer.from(GZIP_KAT.gz));
+      try {
+        const r = run(bin, candidate.args(tmp));
+        return !!r && r.status === 0 && String(r.stdout).replace(/\s+$/, '') === GZIP_KAT.expected;
+      } finally {
+        try { fs.unlinkSync(tmp); } catch { /* absent */ }
+      }
+    },
+    installHint: 'install gzip (or gunzip/zcat/pigz), or set CLODE_GZIP to a `gzip -dc`-compatible decompressor. Needed to unpack the templates pack.',
   },
 };
 
