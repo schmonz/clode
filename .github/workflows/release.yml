@@ -230,6 +230,58 @@ jobs:
           path: ${{ steps.name.outputs.asset }}
           if-no-files-found: error
 
+  # The compiler-free cross-build PACK (universal-cross-build spec): assemble the
+  # templates manifest + the pin-versioned bare engines a downloaded clode fetches
+  # to cross-build a quaude for any published target. The SAME aggregate job
+  # pack.yml iterates on, here over the whole release matrix. Engines are the bare
+  # tjs each leg already uploads (tjs-<leg>) — no rebuild, no compiler. With many
+  # legs the pattern download nests each under tjs-<leg>/ (as darwin-universal
+  # reads slices/tjs-darwin-<a>/tjs), which is what collectInputs expects.
+  # Published as clode-templates-<pin> so the release job's clode-* + merge-multiple
+  # flattens the manifest + engines into dist/ — a clode then fetches
+  # templates-<pin>.json + each tjs-<target>-<pin> by URL on demand.
+  templates-pack:
+    needs: [leg, darwin-slices]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version-file: .tool-versions
+      - name: Download every leg's bare engine
+        uses: actions/download-artifact@v8.0.1
+        with:
+          pattern: tjs-*
+          path: engines
+      - name: Assemble the manifest + pin-versioned pack
+        run: |
+          set -euo pipefail
+          node scripts/build-templates-manifest.mjs \
+            --engines engines --tier release \
+            --out "$RUNNER_TEMP/templates.json" --pack pack
+          echo "=== manifest ==="; cat pack/templates-*.json
+          echo "=== pack ==="; ls -1 pack
+      # v<version>-<sha7> — the same pin clode's thisTjsPin derives from PINS.md
+      # (and build-templates-manifest stamps into the manifest). sed, not node, to
+      # avoid nesting quotes inside this YAML run scalar.
+      - name: Name the pack (pin)
+        id: name
+        run: |
+          set -euo pipefail
+          pin=$(sed -n 's/^txiki\.js \(v[0-9.]*\) \([0-9a-f]\{7\}\).*/\1-\2/p' spike/quickjs/PINS.md)
+          [ -n "$pin" ] || { echo "could not derive tjs pin from PINS.md" >&2; exit 1; }
+          echo "pin=$pin" >> "$GITHUB_OUTPUT"
+      - name: Upload the pack for the release job
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: clode-templates-${{ steps.name.outputs.pin }}
+          path: pack
+          if-no-files-found: error
+
   # DETERMINISTIC RELEASE (user doctrine 2026-07-14): a release ships a FIXED
   # manifest — every publishing leg. On the release tier soft-fail is stripped
   # from publishers (scripts/tjs-legs.mjs), so `needs: [leg]` requires the WHOLE
@@ -238,7 +290,7 @@ jobs:
   # Only engine-only legs (darwin-x86/ppc, publish:false) stay soft — they ship
   # no asset. The gate below is a secondary asset-presence guard.
   release:
-    needs: [leg, darwin-slices, darwin-universal]
+    needs: [leg, darwin-slices, darwin-universal, templates-pack]
     if: github.ref_type == 'tag' || inputs.release == 'draft'
     runs-on: ubuntu-latest
     permissions:
@@ -277,7 +329,11 @@ jobs:
           set -euo pipefail
           cd dist
           chmod +x clode-*
-          sha256sum clode-* > SHA256SUMS
+          # The pack rides in via the clode-templates-<pin> artifact (merge-multiple
+          # flattened its engines + manifest here). Cover them in SHA256SUMS too —
+          # tjs-*/templates-*.json are globbed only if present so a pack-less run
+          # (none built) still succeeds.
+          sha256sum clode-* $(ls tjs-* templates-*.json 2>/dev/null || true) > SHA256SUMS
           cat SHA256SUMS
           cd ..
           if [ "$GITHUB_REF_TYPE" = tag ]; then
