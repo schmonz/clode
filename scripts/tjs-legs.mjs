@@ -59,7 +59,7 @@ const LEGS = [
   // arch builders are redundant with the universal (which contains their slices)
   // — darwin ships exactly ONE artifact, clode-<ver>-macos (user pref
   // 2026-07-15). i386/ppc were never standalone (no-exec) — universal-only.
-  { leg: 'darwin-arm64', os: 'macos-14', 'ci-os': 'macos-26', publish: false, ci: true, floor: '11.0' },
+  { leg: 'darwin-arm64', os: 'macos-14', 'ci-os': 'macos-26', publish: false, pack: true, ci: true, floor: '11.0' },
   // glibc Linux: a CI-only CANARY (ciOnly:true → built in CI, filtered OUT of the
   // release tier; NB `smoke` is a different, taken field — the qemu-user smoke
   // MODE on the musl legs). The published Linux artifacts are musl-static
@@ -106,7 +106,7 @@ const LEGS = [
   // x86_64) the builder ran, fetched the provider (mbedtls TLS), fused a
   // quaude ON the box (29MB, bundle 2.1.179), PONG + attest green, quaude
   // answers --version. The 10.6..10.9 gap is covered by the honest SDK.
-  { leg: 'darwin-x64', os: 'ubuntu-latest', publish: false,  // slice-only; ships via darwin-universal
+  { leg: 'darwin-x64', os: 'ubuntu-latest', publish: false, pack: true,  // slice-only builder (ships via darwin-universal); engine IS a cross-build --target
     // CROSS-BUILT on ubuntu via the osxcross image (ci/osxcross-darwin, built in
     // CI with GHA layer cache) — off the deprecating macos-15-intel runner
     // (proven end-to-end on real Mavericks). no-exec: a Mach-O can't run on the
@@ -146,7 +146,7 @@ const LEGS = [
   // macos-15-intel runner, proven on real Mavericks (10.9 runs i386). HARD (not
   // soft-fail): four arches or not release-ready — a missing i386 slice must
   // block the release, not ship a 3-arch fat. Deterministic cross-build, no flake.
-  { leg: 'darwin-x86', os: 'ubuntu-latest', publish: false,
+  { leg: 'darwin-x86', os: 'ubuntu-latest', publish: false, pack: true,
     'cross-dockerfile': 'ci/osxcross-darwin', 'cross-file': 'scripts/darwin-x86.toolchain.cmake',
     'macos-min': '10.4', 'macos-arch': 'i386', floor: '10.4', 'no-exec': true,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
@@ -161,7 +161,7 @@ const LEGS = [
   // Walls cleared: __atomic_*_8 link (CLODE_TJS_ATOMIC_SHIM) + canonical-LE
   // v5 regexp-endian discriminator. Publishable ppc BUILDER awaits
   // cross-fuse (this leg + darwin-x86 are its consumers).
-  { leg: 'darwin-ppc', os: 'ubuntu-latest', publish: false,
+  { leg: 'darwin-ppc', os: 'ubuntu-latest', publish: false, pack: true,
     'macos-min': '10.4', 'macos-arch': 'ppc', floor: '10.4',
     // renovate: datasource=docker depName=ghcr.io/variantxyz/gcc-powerpc-apple-darwin8
     'cross-image': 'ghcr.io/variantxyz/gcc-powerpc-apple-darwin8@sha256:a9013745ae4a696dc3a047675a85e7c43b9453cdb1e26d9a7ac9738587c1e198',

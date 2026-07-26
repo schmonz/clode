@@ -45,6 +45,11 @@ export function cleanTargetName(legName) {
 //   emulated — ran under emulation, may flake
 export function deriveVerified(leg) {
   if (leg['no-exec']) return 'attest-only';
+  // A pack-only engine (pack && !publish, i.e. the darwin slices): the engine is
+  // real and pre-signed, but CI never fuses-and-runs the PRODUCT on a Mac (the
+  // slice job builds the universal, it doesn't smoke a fused quaude), so a
+  // cross-built --target darwin-* is attested, not product-verified here.
+  if (leg.pack && !leg.publish) return 'attest-only';
   if (leg.smoke === 'version') return 'version';
   if (leg['soft-fail']) return 'emulated';
   return 'smoke';
@@ -77,12 +82,15 @@ export function tjsPinFromPins(text) {
   return m ? `${m[1]}-${m[2].slice(0, 7)}` : null;
 }
 
-// The real cross-build targets: the publish:true legs (release tier is the
-// deterministic, publish-carrying source of truth — the ci tier strips publish).
-// Returned as an object keyed by leg name for O(1) artifact lookup.
+// The real cross-build targets: legs that either PUBLISH a standalone builder
+// asset (publish:true) OR are pack-only engine targets (pack:true) — the darwin
+// slices ship their builder via the universal binary (publish:false) but their
+// pre-signed engines are perfectly good cross-build --targets. Release tier is
+// the deterministic source of truth (the ci tier strips publish). Returned as an
+// object keyed by leg name for O(1) artifact lookup.
 export function manifestTargets(tier = 'release') {
   const out = {};
-  for (const leg of legsFor(tier)) if (leg.publish) out[leg.leg] = leg;
+  for (const leg of legsFor(tier)) if (leg.publish || leg.pack) out[leg.leg] = leg;
   return out;
 }
 

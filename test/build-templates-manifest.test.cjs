@@ -45,6 +45,7 @@ test('deriveVerified maps leg exec-fidelity to a trust level', () => {
   assert.strictEqual(deriveVerified({ smoke: 'version' }), 'version');      // booted, --version only
   assert.strictEqual(deriveVerified({ 'no-exec': true, smoke: 'full' }), 'attest-only'); // never executed
   assert.strictEqual(deriveVerified({ 'soft-fail': true }), 'emulated');    // ran under emulation, may flake
+  assert.strictEqual(deriveVerified({ pack: true, publish: false }), 'attest-only'); // pack-only engine (darwin slice): product never fused+run in CI
   assert.strictEqual(deriveVerified({}), 'smoke');                          // default: full smoke
 });
 
@@ -62,12 +63,18 @@ test('tjsPinFromPins derives vVERSION-sha7 (matches clode thisTjsPin format)', (
   assert.strictEqual(tjsPinFromPins('no txiki here'), null);
 });
 
-test('manifestTargets(release) = the publish:true legs, indexed by leg name', () => {
+test('manifestTargets(release) = the publish:true OR pack:true legs, indexed by leg name', () => {
   const t = manifestTargets('release');
   assert.ok(t['linux-x64-musl'], 'a published musl leg is a target');
   assert.ok(t['netbsd-m68k'], 'a no-exec cross leg is still a target');
+  // The darwin slices ship their builder via the universal binary (publish:false)
+  // but their pre-signed engines ARE first-class cross-build --targets (pack:true).
+  assert.ok(t['darwin-arm64'], 'a pack-only darwin slice is a cross-build target');
+  assert.ok(t['darwin-ppc'], 'the darwin ppc slice is a cross-build target');
   assert.ok(!t['linux-x64-glibc'], 'the validation-twin glibc leg is NOT a target');
   assert.strictEqual(t['linux-x64-musl'].publish, true);
+  assert.strictEqual(t['darwin-arm64'].publish, false, 'darwin ships its builder via the universal, not a standalone asset');
+  assert.strictEqual(t['darwin-arm64'].pack, true);
 });
 
 test('collectInputs maps downloaded tjs-<leg>/ engine dirs to manifest inputs', () => {
