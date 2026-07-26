@@ -77,23 +77,32 @@ runs:
         git clone --depth 1 --branch "${{ inputs.src-rev }}" https://github.com/NetBSD/src "$SRC" 2>/dev/null \
           || { git clone --filter=blob:none https://github.com/NetBSD/src "$SRC"; git -C "$SRC" checkout "${{ inputs.src-rev }}"; }
         cd "$SRC"
-        # NetBSD-src fixup (sbmips only): sys/arch/mips/include/systemsw.h declares
-        # `bool system_set_clockfns(...)` but does not include <sys/stdbool.h>, so
-        # it is not self-contained. It compiles in a normal kernel build (bool is
-        # already in scope) but `usr.sbin/crash` on sbmips pulls it in via
-        # db_syncobj.c -> sys/mutex.h -> machine/mutex.h -> machine/intr.h ->
-        # systemsw.h in an order where bool is undefined -> "unknown type name
-        # 'bool'" -> `build.sh distribution` dies (run 29654544915). Make the
-        # header self-contained. Idempotent; scoped to sbmips so the green mips
-        # siblings (pmax/sgimips, which do not build db_syncobj.c) are untouched.
-        # A clean upstream candidate (send-pr / tech-toolchain@).
-        CRASH_HDR="$SRC/sys/arch/mips/include/systemsw.h"
+        # NetBSD-src fixup (sbmips only): sys/arch/sbmips/include/systemsw.h declares
+        # `bool system_set_clockfns(...)` but includes only <sys/types.h>, not
+        # <sys/stdbool.h>, so it is not self-contained. It compiles in a normal
+        # kernel build (bool is already in scope) but `usr.sbin/crash` on sbmips
+        # pulls it in via db_syncobj.c -> sys/mutex.h -> machine/mutex.h ->
+        # machine/intr.h -> machine/systemsw.h (machine -> sbmips/include) in an
+        # order where bool is undefined -> "unknown type name 'bool'" ->
+        # `build.sh distribution` dies (run 29654544915; still red at 89757039203
+        # because the header lives under sbmips/, not mips/ — there is no
+        # sys/arch/mips/include/systemsw.h in netbsd-10, so the old path silently
+        # skipped). Make the header self-contained. Idempotent; scoped to sbmips so
+        # the green mips siblings (pmax/sgimips, which do not build db_syncobj.c)
+        # are untouched. A clean upstream candidate (send-pr / tech-toolchain@).
+        CRASH_HDR="$SRC/sys/arch/sbmips/include/systemsw.h"
         if [ "${{ inputs.machine }}" = sbmips ] && [ -f "$CRASH_HDR" ] && ! grep -q 'sys/stdbool.h' "$CRASH_HDR"; then
-          # Insert the include before the first `bool` declaration (awk, not sed:
-          # GNU vs BSD sed differ on \n in the replacement; awk is portable).
-          awk '/^bool system_set_clockfns/ && !d { print "#include <sys/stdbool.h>"; d=1 } { print }' \
+          # Insert the include before the `bool` declaration (awk, not sed: GNU vs
+          # BSD sed differ on \n in the replacement; awk is portable). The decl is
+          # `bool<TAB>system_set_clockfns`, so match one-or-more space/tab.
+          awk '/^bool[ \t]+system_set_clockfns/ && !d { print "#include <sys/stdbool.h>"; d=1 } { print }' \
             "$CRASH_HDR" > "$CRASH_HDR.tmp" && mv "$CRASH_HDR.tmp" "$CRASH_HDR"
-          echo "patched $CRASH_HDR: added <sys/stdbool.h> (self-contained header for the crash build)"
+          if grep -q 'sys/stdbool.h' "$CRASH_HDR"; then
+            echo "patched $CRASH_HDR: added <sys/stdbool.h> (self-contained header for the crash build)"
+          else
+            echo "ERROR: sbmips systemsw.h fixup matched nothing — the bool decl moved (NetBSD-src drift)" >&2
+            exit 1
+          fi
         fi
         # -U unprivileged (no root); -T/-D place the tools + sysroot under
         # RUNNER_TEMP so the cache can carry them. `tools` builds the cross
