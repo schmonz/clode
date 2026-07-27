@@ -112,13 +112,21 @@ function snapshotGeneratorPresent(data) {
 // gate that says the redirect WOULD apply, so a shape the extractor accepts and
 // this rejects (or vice versa) is a lie in one direction or the other.
 const _AUTOUPDATER_ANCHOR = /tengu_pkg_manager_auto_updater_start",[A-Za-z0-9_$]{1,6}\);let\[(?<a>[A-Za-z0-9_$]{1,6}),\.\.\.(?<rest>[A-Za-z0-9_$]{1,6})\]=[A-Za-z0-9_$]{1,6}(?:,[A-Za-z0-9_$]{1,6}=await [A-Za-z0-9_$]{1,6}\(|;let [A-Za-z0-9_$]{1,6}=\k<a>;let [A-Za-z0-9_$]{1,6}=\k<rest>;let [A-Za-z0-9_$]{1,6}=await [A-Za-z0-9_$]{1,6}\(|;let [A-Za-z0-9_$]{1,6}=await [A-Za-z0-9_$]{1,6}\(\k<a>,\k<rest>,)/g;
-const _AUTOUPDATER_PATCHED = 'process.env.CLODE_SELF?[process.env.CLODE_SELF,"--clode-internal-update"]';
+// Notify-only marker: the pkg patch fires the check with the current-version
+// global (extract-claude-js patchAutoupdater). Matches an already-patched bundle
+// whose base anchor is gone (the injected reassignment sits between the telemetry
+// and the destructure).
+const _AUTOUPDATER_PATCHED = 'globalThis.__clodeCheckUpdate(globalThis.__clodeCurrentVersion';
 function autoupdaterHookAnchorPresent(data) {
   return [...data.matchAll(_AUTOUPDATER_ANCHOR)].length === 1 || data.includes(_AUTOUPDATER_PATCHED);
 }
 
 const _NATIVE_AUTOUPDATER_ANCHOR = /tengu_native_auto_updater_start",(?:\{\}|[A-Za-z0-9_$]{1,6})\);try\{let [A-Za-z0-9_$]{1,6}=await [A-Za-z0-9_$]{1,6}\([A-Za-z0-9_$]{1,6}\),/g;
-const _NATIVE_AUTOUPDATER_PATCHED = 'process.env.CLODE_SELF?globalThis.__clodeNativeUpdate()';
+// Notify-only marker: the native patch replaces the installer call with
+// `await globalThis.__clodeCheckUpdate("<version>")` (extract-claude-js
+// patchNativeAutoupdater). The `("` distinguishes it from the pkg patch's call
+// (which passes the current-version global, not a literal).
+const _NATIVE_AUTOUPDATER_PATCHED = 'await globalThis.__clodeCheckUpdate("';
 function nativeAutoupdaterHookAnchorPresent(data) {
   return [...data.matchAll(_NATIVE_AUTOUPDATER_ANCHOR)].length === 1 || data.includes(_NATIVE_AUTOUPDATER_PATCHED);
 }

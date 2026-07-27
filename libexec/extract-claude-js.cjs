@@ -260,18 +260,28 @@ function patchRemoteControlUnavailable(body) {
   return [body, false];
 }
 
-// --- pkg-manager autoupdater redirect ----------------------------------------
+// --- pkg-manager autoupdater NOTIFY (no install, no CLODE_SELF) ---------------
 // Claude Code's in-TUI autoupdater (the pkg-manager path) spawns an npm/install
-// command to fetch a new version, then shows "Update installed · Restart to apply".
-// Under clode there is no npm-managed install to update, so that spawn fails. We
-// redirect the spawn's argv to `"$CLODE_SELF" --clode-internal-update` (clode's own
-// host-agnostic fetch into the provider store) when CLODE_SELF is set, leaving the
-// argv untouched otherwise. The override is spliced right after the
-// auto_updater_start telemetry call, before the `let[..]=cmd` destructure that
-// feeds the spawn — so the spawn sees clode's argv. exit 0 -> the bundle's existing
-// success path renders "Restart to apply"; the next clode launch re-extracts the
-// freshly-fetched provider. Same identifier bounding rationale as the doctor
-// anchors (short minified ids, linear scan).
+// command `cmd` (destructured as `let[a,...b]=cmd`) then treats `code===0` as
+// "Update installed · Restart to apply". A built target has no npm-managed install
+// to update, so we must NOT run an installer AND must not falsely claim an update
+// was installed. The native path (above) is the PRIMARY notify surface — it binds
+// latestVersion into the notice. Here (defensive/secondary, since a built target's
+// detected install-type usually routes to the native path) we, spliced right after
+// the auto_updater_start telemetry and before the destructure:
+//   1. fire globalThis.__clodeCheckUpdate(...) for its latestVersion side-effect
+//      (the Task 4 notice reads it), and
+//   2. reassign `cmd` to a non-installing no-op argv (["false"]) so the spawn
+//      cannot install anything AND exits non-zero — the `code===0` false-success
+//      branch is NOT taken (no bogus "Restart to apply"); the else branch is a
+//      debug log, not a user-facing claim.
+// NEVER references CLODE_SELF. NOTE: unlike the native path, this site binds no
+// nearby VERSION literal, so the check receives globalThis.__clodeCurrentVersion
+// (may be unset -> ""); checkUpdate degrades to best-effort. Wiring a robust
+// current-version here (module-global version-constant discovery) and pinning the
+// exact portable no-op argv are Task 6 characterization items — the native path
+// carries the authoritative notice meanwhile. Same identifier bounding rationale as
+// the doctor anchors (short minified ids, linear scan).
 //
 // Three destructure shapes, alternated after `=<cmd>`:
 //   - comma form  `let[a,...b]=cmd,c=await f(`            — PROVEN real <=2.1.202 (2.1.179)
@@ -289,45 +299,60 @@ function patchRemoteControlUnavailable(body) {
 const AUTOUPDATER_SPAWN =
   /(?<pre>tengu_pkg_manager_auto_updater_start",[A-Za-z0-9_$]{1,6}\);)let\[(?<a>[A-Za-z0-9_$]{1,6}),\.\.\.(?<rest>[A-Za-z0-9_$]{1,6})\]=(?<cmd>[A-Za-z0-9_$]{1,6})(?:,[A-Za-z0-9_$]{1,6}=await [A-Za-z0-9_$]{1,6}\(|;let [A-Za-z0-9_$]{1,6}=\k<a>;let [A-Za-z0-9_$]{1,6}=\k<rest>;let [A-Za-z0-9_$]{1,6}=await [A-Za-z0-9_$]{1,6}\(|;let [A-Za-z0-9_$]{1,6}=await [A-Za-z0-9_$]{1,6}\(\k<a>,\k<rest>,)/g;
 
-// Override the pkg-manager autoupdater's spawn argv to call
-// `clode --clode-internal-update` (when CLODE_SELF is set). exit 0 -> the bundle's
-// existing success path shows "Update installed · Restart to apply"; next launch
-// re-extracts. Returns [newBody, applied]; applied false unless exactly one match
-// (fail-loud).
+// Neutralize the pkg-manager autoupdater to notify-only: fire __clodeCheckUpdate
+// (side-effect: latestVersion for the notice) and reassign the spawn argv to a
+// non-installing, non-zero-exit no-op so nothing installs and no false success is
+// claimed. Never spawns CLODE_SELF. Returns [newBody, applied]; applied false
+// unless exactly one match (fail-loud).
 function patchAutoupdater(body) {
   const m = [...body.matchAll(AUTOUPDATER_SPAWN)];
   if (m.length !== 1) return [body, false];
   const cmd = m[0].groups.cmd;
   const pre = m[0].groups.pre;
-  const override = cmd + '=process.env.CLODE_SELF?[process.env.CLODE_SELF,"--clode-internal-update"]:' + cmd + ';';
+  const override = cmd
+    + '=(globalThis.__clodeCheckUpdate&&globalThis.__clodeCheckUpdate('
+    + 'globalThis.__clodeCurrentVersion||""),["false"]);';
   const cut = m[0].index + pre.length;
   return [body.slice(0, cut) + override + body.slice(cut), true];
 }
 
-// --- native autoupdater redirect ---------------------------------------------
+// --- native autoupdater NOTIFY (no install, no CLODE_SELF) --------------------
 // Claude Code's in-TUI NATIVE autoupdater installs in-process: after the
-// `tengu_native_auto_updater_start` telemetry it does `try{let T=await <fn>(<arg>),…`
-// where <fn> returns {wasUpdated,latestVersion,lockFailed}. Under clode that native
-// install is wrong (clode runs extracted JS, not a native install). We replace the
-// call with a CLODE_SELF-guarded clode spawn (globalThis.__clodeNativeUpdate, set
-// in the prelude) that resolves a success-shaped result, so the bundle's existing
-// "Restart to apply" path runs and the next launch re-extracts. The `,` after the
-// call bounds <arg>. Same fail-loud contract as the pkg-manager redirect. Anchor
-// PROVEN against real 2.1.179.
+// `tengu_native_auto_updater_start` telemetry it does
+// `try{let S=await <fn>(<arg>),w={...,VERSION:"x.y.z",...},…` where <fn> returns
+// {wasUpdated,latestVersion,lockFailed} and the NEXT declarator binds the running
+// bundle's metadata object (whose VERSION field is the current version). A built
+// target runs extracted JS where no in-place native install (and no clode) exists,
+// so we NEVER install. Instead we replace `await <fn>(<arg>)` with
+// `await globalThis.__clodeCheckUpdate("<version>")` (installed by the PRELUDE):
+// it resolves the three-state upstream check and returns a {wasUpdated:false,
+// latestVersion, lockFailed:false, __clodeState} shape, so the bundle never renders
+// "Restart to apply" and the Task 4 notice patch reads latestVersion from it.
+//
+// How the CURRENT version reaches the check: the metadata object bound as the very
+// next declarator carries `VERSION:"x.y.z"` as a STRING LITERAL. We read that
+// literal via a (non-consuming) lookahead and pass it directly as the argument, so
+// the compared `current` is the real running version WITHOUT a global that nothing
+// reliably sets and WITHOUT reordering the declarators (the object binding is left
+// verbatim). The `.{0,300}?` bound skips the fields before VERSION (~180 chars real)
+// non-greedily so it can't drift to an unrelated VERSION; growth past it fails the
+// exactly-once match (fail-loud skip, caught by inspect --strict) rather than
+// mis-injecting. Anchor VERIFIED exactly-once (correct version captured) on real
+// 2.1.204 / 2.1.210 / 2.1.218 and the 2.1.179 fixture.
 const NATIVE_AUTOUPDATER =
-  /(?<pre>tengu_native_auto_updater_start",(?:\{\}|[A-Za-z0-9_$]{1,6})\);try\{let [A-Za-z0-9_$]{1,6}=await )(?<call>[A-Za-z0-9_$]{1,6}\([A-Za-z0-9_$]{1,6}\)),/g;
+  /(?<pre>tengu_native_auto_updater_start",(?:\{\}|[A-Za-z0-9_$]{1,6})\);try\{let [A-Za-z0-9_$]{1,6}=await )(?<call>[A-Za-z0-9_$]{1,6}\([A-Za-z0-9_$]{1,6}\)),(?=[A-Za-z0-9_$]{1,6}=\{.{0,300}?VERSION:"(?<ver>[0-9][^"]{0,20})")/gs;
 
-// Redirect the in-TUI NATIVE autoupdater to clode's internal fetch (when
-// CLODE_SELF is set). Replaces `await <fn>(<arg>)` with
-// `await (process.env.CLODE_SELF?globalThis.__clodeNativeUpdate():<fn>(<arg>))`.
-// Returns [newBody, applied]; applied false unless exactly one match (fail-loud).
+// Redirect the in-TUI NATIVE autoupdater to the notify-only check with the real
+// running version. Replaces `await <fn>(<arg>)` with
+// `await globalThis.__clodeCheckUpdate("<version>")`; never installs, never spawns
+// CLODE_SELF. Returns [newBody, applied]; applied false unless exactly one match
+// (fail-loud).
 function patchNativeAutoupdater(body) {
   const m = [...body.matchAll(NATIVE_AUTOUPDATER)];
   if (m.length !== 1) return [body, false];
   const pre = m[0].groups.pre;
-  const call = m[0].groups.call;
-  const override = pre + '(process.env.CLODE_SELF?globalThis.__clodeNativeUpdate():'
-    + call + '),';
+  const ver = m[0].groups.ver;   // string literal, no quotes/backslashes (regex-bounded)
+  const override = pre + 'globalThis.__clodeCheckUpdate("' + ver + '"),';
   return [body.slice(0, m[0].index) + override + body.slice(m[0].index + m[0][0].length), true];
 }
 
