@@ -4,6 +4,20 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 (Strategic feasibility risks live in `LONG-TERM.md`; in-flight designs in
 `docs/superpowers/`.)
 
+## Auto-update → notify-only; retire CLODE_SELF rebuild (2026-07-27)
+
+DECISION (user): a built target's in-app auto-update becomes a version CHECK +
+notify, never an install/rebuild — because clode now cross-builds and quaude/naude
+get installed where no clode exists, so CLODE_SELF can't point anywhere meaningful.
+Behavior: newer upstream on the configured channel → a message like the manual
+`claude update` case naming the version; already current → nothing; can't reach the
+channel → subtle "ⓘ couldn't check for updates". Feasibility PROVEN 2026-07-27: the
+check is one HTTPS GET of `<releasesUrl>/<channel>` + `Bun.semver.order` vs the
+bundle's VERSION (live: 2.1.218 vs latest→2.1.220, stable→2.1.212). Supersedes the
+CLODE_SELF/`--clode-internal-update`/`targetUpdate` rebuild callback (retire it;
+KEEP the update-guard model-deny). Full task-by-task plan:
+`docs/superpowers/plans/2026-07-27-auto-update-notify-only.md`. Not yet implemented.
+
 ## tjs must be BUILT + REQUIRED by the suite, not skipped (2026-07-25)
 
 On netbsd11-arm64, 200 of 240 suite skips are "no tjs binary (CLODE_TJS or
