@@ -57,12 +57,16 @@ function skipReason() {
 }
 
 // Extract a fresh cli.cjs from the real provider, mirroring the oracle's stageBundle:
-// libexec/extract-claude-js.cjs <bin> <out> writes the baked Claude Code JS. We only
-// need cli.cjs here (build-naude bakes bun-shim.cjs itself).
+// libexec/extract-claude-js.cjs <bin> <out> writes the baked Claude Code JS.
+// build-naude requires bun-shim.cjs staged BESIDE the --cli (it is version-locked
+// to the bundle by the extract cache — a bare cli.cjs is rejected, which is what
+// `clode build --naude` stages from its cache dir). Mirror that here: copy the
+// checkout's libexec/bun-shim.cjs next to the extracted cli.cjs.
 function stageCli(bin) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-smoke-stage-'));
   const cli = path.join(dir, 'cli.cjs');
   execFileSync(process.execPath, [path.join(REPO, 'libexec/extract-claude-js.cjs'), bin, cli], { stdio: 'pipe' });
+  fs.copyFileSync(path.join(REPO, 'libexec/bun-shim.cjs'), path.join(dir, 'bun-shim.cjs'));
   return { dir, cli };
 }
 
