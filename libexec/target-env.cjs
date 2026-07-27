@@ -23,9 +23,6 @@ function setIfUnset(env, name, value) {
 function shapeTargetEnv(opts) {
   const {
     env,
-    self = null,
-    targetKind = null,
-    targetPath = null,
     platform,
     delimiter = ':',
     exists,
@@ -62,20 +59,12 @@ function shapeTargetEnv(opts) {
     }
   }
 
-  // Claude Code's in-app autoupdater is patched (extract-claude-js.cjs) to spawn
-  // CLODE_SELF --clode-internal-update. A baked target CANNOT rewrite its own
-  // bytecode, so this points at the clode BUILDER, which fetches a newer Claude
-  // Code and rebuilds. No builder known -> leave unset, so the updater fails
-  // loud rather than doing something wrong.
-  if (self) env.CLODE_SELF = self;
-
-  // The target declares WHAT IT IS and WHERE IT LIVES so the patched updater's
-  // callback (CLODE_SELF --clode-internal-update, inheriting this env) can rebuild
-  // the right kind and swap the right file. No binary-detection: a target knows
-  // what it is; a sniffer would also try to "update" a builder (itself a QAUDEv0
-  // artifact). Absent -> unset, same fail-loud contract as a missing CLODE_SELF.
-  if (targetKind) env.CLODE_TARGET_KIND = targetKind;
-  if (targetPath) env.CLODE_TARGET = targetPath;
+  // NOTE: a built target used to bake env pointing back at the clode BUILDER
+  // that made it, so Claude Code's patched in-app updater could spawn a rebuild.
+  // That rebuild machinery is RETIRED — auto-update is now a check-and-notify
+  // (extract-claude-js.cjs's patches call globalThis.__clodeCheckUpdate, no
+  // builder, no rebuild) — so a target no longer declares a builder path or its
+  // own kind/path here. Nothing reads that env anymore.
 
   return env;
 }

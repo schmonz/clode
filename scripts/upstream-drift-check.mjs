@@ -62,7 +62,7 @@ const SHIM = path.join(REPO, 'libexec', 'bun-shim.cjs');
 // the next person what actually breaks for users.
 const ANCHORS = {
   autoupdater_hook_anchor_present:
-    'the in-TUI pkg-manager autoupdater redirect (clode --clode-internal-update) would not apply',
+    'the in-TUI pkg-manager autoupdater redirect (notify-only __clodeCheckUpdate) would not apply',
   native_autoupdater_hook_anchor_present:
     'the in-TUI NATIVE autoupdater redirect would not apply — a built target would try to install over itself',
   doctor_hook_anchor_present:

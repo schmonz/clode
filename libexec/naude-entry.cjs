@@ -26,14 +26,14 @@
 //
 // Task 5 (auto-update notify-only, naude parity): a naude cannot rebuild
 // itself, so its baked cli.cjs's in-app updater used to spawn a rebuild back
-// through CLODE_SELF (the clode that built it). That spawn is RETIRED (Task
-// 3): the shared autoupdater patches (extract-claude-js.cjs) now call
+// through the clode that built it. That spawn is RETIRED (Task 3): the shared
+// autoupdater patches (extract-claude-js.cjs) now call
 // globalThis.__clodeCheckUpdate(current) instead — a pure check-and-notify,
-// no builder, no rebuild. naude no longer wires up CLODE_SELF at all (was
-// bakedBuilder/the `builder` SEA asset, both removed); installCheckUpdateGlobal
-// below provides the SAME global the quaude PRELUDE installs, so the notify
-// path works even against a cli.cjs whose own PRELUDE patch didn't apply
-// (version drift).
+// no builder, no rebuild. naude no longer bakes any builder path at all (the
+// old bakedBuilder / `builder` SEA asset are both removed);
+// installCheckUpdateGlobal below provides the SAME global the quaude PRELUDE
+// installs, so the notify path works even against a cli.cjs whose own PRELUDE
+// patch didn't apply (version drift).
 //
 // Everything the two branches touch (sea, spawn, env, exit, materializeDeps,
 // materializeAssets, requireMain, the exit hook) is injectable, so both branches
@@ -179,13 +179,11 @@ function runNaude(opts = {}) {
   // The contract every built target applies to itself (was the runner's job).
   // `exists` (mere presence) answers the trustd question; rg candidates need
   // `isExec` (isFile + +x) — see target-env.cjs's findOnPath for why the two
-  // must not be conflated. No `self` (CLODE_SELF): Task 5 retires it — a naude
-  // cannot rebuild itself and the notify-only autoupdater (Task 3) never spawns
-  // a builder, so there is nothing left for CLODE_SELF to point at.
+  // must not be conflated. No builder path / target kind is baked: the rebuild
+  // updater is retired (Task 3), so the notify-only autoupdater never needs to
+  // know what this target is or who built it.
   shapeTargetEnv({
     env: childEnv,
-    targetKind: 'naude',
-    targetPath: execPath,
     platform: process.platform,
     delimiter: path.delimiter,
     exists: fs.existsSync,
@@ -196,12 +194,8 @@ function runNaude(opts = {}) {
   // Guard injection: wire the model's Bash tool through the update guard by
   // writing an ephemeral PreToolUse settings file and appending --settings to
   // the child's argv. The hook calls back into execPath — the naude's own
-  // binary (the same path shapeTargetEnv just wrote into childEnv.CLODE_TARGET
-  // for the child to see). execPath falsy -> skip entirely (e.g. a bare
-  // `require()` in a test, or a context with no known own binary to call back
-  // into). Note: this must NOT read env.CLODE_TARGET — that's the RAW incoming
-  // env, which in a real boot is unset (shapeTargetEnv only ever sets it on
-  // the childEnv copy), so gating on it left the hook permanently inert.
+  // binary. execPath falsy -> skip entirely (e.g. a bare `require()` in a test,
+  // or a context with no known own binary to call back into).
   let guardSettingsFile = null;
   const childArgv = [...argv];
   if (execPath && shouldInjectGuard(childArgv)) {

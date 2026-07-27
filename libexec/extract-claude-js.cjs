@@ -260,7 +260,7 @@ function patchRemoteControlUnavailable(body) {
   return [body, false];
 }
 
-// --- pkg-manager autoupdater INSTALLER-NEUTRALIZATION (no install, no CLODE_SELF) --
+// --- pkg-manager autoupdater INSTALLER-NEUTRALIZATION (no install, no rebuild) --
 // This is NOT a notice surface. Task 6 characterization proved the ONLY surface the
 // three-state notify reaches the user through is the doctor/status installation-
 // warnings list (patchUpdateNotice, below) — the in-TUI autoupdater widgets (native
@@ -273,7 +273,7 @@ function patchRemoteControlUnavailable(body) {
 // we reassign `cmd` to a non-installing no-op argv (["false"]) so the spawn cannot
 // install anything AND exits non-zero: the `code===0` false-success branch is NOT taken
 // (no bogus "Restart to apply"); the else branch is a debug log, not a user-facing claim.
-// NEVER references CLODE_SELF.
+// NEVER spawns a builder or rebuild.
 //
 // The override also carries a discarded `globalThis.__clodeCheckUpdate(...)` call — see
 // patchAutoupdater's inline note: it is a deliberate no-op-result side-effect, kept only
@@ -299,8 +299,8 @@ const AUTOUPDATER_SPAWN =
 
 // Neutralize the pkg-manager autoupdater: reassign the spawn argv to a
 // non-installing, non-zero-exit no-op so nothing installs and no false success is
-// claimed. Never spawns CLODE_SELF. Returns [newBody, applied]; applied false
-// unless exactly one match (fail-loud).
+// claimed. Never spawns a builder/rebuild. Returns [newBody, applied]; applied
+// false unless exactly one match (fail-loud).
 function patchAutoupdater(body) {
   const m = [...body.matchAll(AUTOUPDATER_SPAWN)];
   if (m.length !== 1) return [body, false];
@@ -318,7 +318,7 @@ function patchAutoupdater(body) {
   return [body.slice(0, cut) + override + body.slice(cut), true];
 }
 
-// --- native autoupdater INSTALLER-NEUTRALIZATION (no install, no CLODE_SELF) ------
+// --- native autoupdater INSTALLER-NEUTRALIZATION (no install, no rebuild) ------
 // Like the pkg patch above, this is NOT a notice surface (Task 6: the native widget
 // renders only install outcomes, nothing for notify-only). It exists to stop the
 // in-process installer. Claude Code's NATIVE autoupdater installs in-process: after
@@ -350,8 +350,8 @@ const NATIVE_AUTOUPDATER =
 // Redirect the in-TUI NATIVE autoupdater to the notify-only check with the real
 // running version. Replaces `await <fn>(<arg>)` with
 // `await globalThis.__clodeCheckUpdate("<version>")`; never installs, never spawns
-// CLODE_SELF. Returns [newBody, applied]; applied false unless exactly one match
-// (fail-loud).
+// a builder/rebuild. Returns [newBody, applied]; applied false unless exactly one
+// match (fail-loud).
 function patchNativeAutoupdater(body) {
   const m = [...body.matchAll(NATIVE_AUTOUPDATER)];
   if (m.length !== 1) return [body, false];

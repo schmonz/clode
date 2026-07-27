@@ -10,8 +10,8 @@
 // and by naude (bundled into naude-entry.bundle.cjs), and rides as a forwarded
 // member in the builder-role quaude fuse so a self-fused clode-native can
 // re-fuse targets. The quaude PRODUCT carries no provision consumer
-// (trailer-member deps, bundle-discovered shell, updates delegated to
-// CLODE_SELF), so it deliberately does not ship it. The bake injects nothing
+// (trailer-member deps, bundle-discovered shell, updates are notify-only — a
+// version check, no rebuild), so it deliberately does not ship it. The bake injects nothing
 // and never resolves target-runtime tools (cross-build safety). Dependency-free:
 // Node stdlib + sibling requires.
 const nodeFs = require('node:fs');

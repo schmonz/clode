@@ -19,15 +19,9 @@
 //   --nmdir    a resolved node_modules to tar as the deps asset. This script
 //              never `npm ci`s it — the caller (a checkout's deps/claude, or
 //              a fused builder's materialized payload) already has it on disk.
-//   --builder  the clode building this naude (its patched updater's callback
-//              target). Used to be burned into the bundle via an esbuild
-//              --define; now it rides as a `builder` SEA asset (naudeSeaConfig,
-//              Task 3) — the deferred wiring THIS task lands: writeSeaConfig
-//              actually threads it through (previously it did not, so every
-//              naude built through this path baked NO builder at all).
 //   --postject the directory carrying postject's JS API (dist/api.js) this
 //              script calls to inject the SEA blob.
-// All five default to the checkout's own locations/running node, so a plain
+// All default to the checkout's own locations/running node, so a plain
 // `node scripts/build-naude.mjs --cli <staged cli.cjs>` still builds a working
 // naude on a host that has them (unchanged end-user experience for a dev
 // checkout); the flags exist for a caller that has already resolved/fetched
@@ -94,19 +88,6 @@ export function parseBundleArg(argv) {
 export function parseNmdirArg(argv) {
   const i = argv.indexOf('--nmdir');
   return i >= 0 && argv[i + 1] ? path.resolve(argv[i + 1]) : path.join(REPO, 'deps', 'claude', 'node_modules');
-}
-
-// --builder <path>: the clode building this naude — see naudeSeaConfig's
-// comment for the full rationale. OPTIONAL. Precedence: an explicit --builder
-// wins; else CLODE_SELF from `env` (the historical source, preserved as a
-// fallback so nothing that already sets it breaks); else null. A null builder
-// is not an error here — it is the fail-loud-not-wrong invariant: no builder
-// known now means no `builder` asset later, and the baked updater refuses to
-// call back to a non-existent path rather than guessing one.
-export function parseBuilderArg(argv, env = process.env) {
-  const i = argv.indexOf('--builder');
-  if (i >= 0) return argv[i + 1] || null;
-  return env.CLODE_SELF || null;
 }
 
 // --postject <dir>: postject's own package directory (contains its
@@ -187,13 +168,10 @@ export function stageDeps(nmdir) {
 // writeSeaConfig, below) to the checkout's own libexec/target-update-check.cjs — clode's
 // own code, version-independent, not staged per-bundle like bunShim.
 //
-// `builder` is the absolute path of the clode building this naude — was read by
-// naude-entry.cjs's (now-removed) bakedBuilder to feed CLODE_SELF for the RETIRED
-// spawn-a-rebuild callback (Task 5 dropped that read side). The write side here is
-// left in place: harmless unread data today, and still exercised by
-// test/naude-build.test.cjs. A non-empty string is written to <out>/builder.txt and
-// added as the asset; null/empty omits the asset entirely.
-export function naudeSeaConfig({ mainBundle, cliCjs, bunShim, tar, sig, out, builder, targetUpdateCheck }) {
+// The old `builder` asset (the path of the clode building this naude, once fed to
+// the retired spawn-a-rebuild callback) is GONE: auto-update is notify-only now,
+// so nothing reads a builder path and nothing writes one.
+export function naudeSeaConfig({ mainBundle, cliCjs, bunShim, tar, sig, out, targetUpdateCheck }) {
   const assets = {
     'deps.tar': tar,
     'deps.sig': sig,
@@ -201,11 +179,6 @@ export function naudeSeaConfig({ mainBundle, cliCjs, bunShim, tar, sig, out, bui
     'cli.cjs': cliCjs,
     'target-update-check.cjs': targetUpdateCheck,
   };
-  if (builder) {
-    const builderFile = path.join(out, 'builder.txt');
-    fs.writeFileSync(builderFile, builder);
-    assets.builder = builderFile;
-  }
   return {
     main: mainBundle,
     output: path.join(out, 'sea-prep.blob'),
@@ -224,27 +197,23 @@ export function stagedBunShim(cliCjs) {
 }
 
 // Writes sea-config.json from naudeSeaConfig, resolving the bun-shim from the
-// staged location beside --cli. `builder` (Task 5's deferred wiring, landed
-// here): threaded straight through to naudeSeaConfig — previously this
-// function silently omitted it, so every naude built via this path baked NO
-// builder asset at all, regardless of CLODE_SELF/--builder, and its patched
-// updater always failed loud with no callback target. `targetUpdateCheck`
-// (auto-update notify-only, naude parity — Task 5) defaults to the checkout's
-// OWN libexec/target-update-check.cjs: unlike the bun-shim, this member is
-// clode's own code, not staged per-bundle, so there is nothing to reach back
-// for — it always exists at this fixed, version-independent location (a fused
-// builder's materializeFusedPayload restores it to the same relative spot
-// under REPO, so the default resolves correctly whether this script runs from
-// a checkout or a fused-builder's materialized payload). Exported so a test
-// can assert the threading without a full build.
+// staged location beside --cli. `targetUpdateCheck` (auto-update notify-only,
+// naude parity — Task 5) defaults to the checkout's OWN
+// libexec/target-update-check.cjs: unlike the bun-shim, this member is clode's
+// own code, not staged per-bundle, so there is nothing to reach back for — it
+// always exists at this fixed, version-independent location (a fused builder's
+// materializeFusedPayload restores it to the same relative spot under REPO, so
+// the default resolves correctly whether this script runs from a checkout or a
+// fused-builder's materialized payload). Exported so a test can assert the
+// threading without a full build.
 export function writeSeaConfig({
-  bundle, cliCjs, tar, sigFile, builder, outDir = OUT,
+  bundle, cliCjs, tar, sigFile, outDir = OUT,
   targetUpdateCheck = path.join(REPO, 'libexec', 'target-update-check.cjs'),
 }) {
-  // Ensure the artifact dir exists before writing into it (sea-config.json here,
-  // builder.txt via naudeSeaConfig). A full build's main() already made OUT and a
-  // dev box has build/<tag>/ from a prior run, so this only bit a clean checkout
-  // calling writeSeaConfig directly (the unit tests, on CI) — ENOENT. `outDir`
+  // Ensure the artifact dir exists before writing into it (sea-config.json here).
+  // A full build's main() already made OUT and a dev box has build/<tag>/ from a
+  // prior run, so this only bit a clean checkout calling writeSeaConfig directly
+  // (the unit tests, on CI) — ENOENT. `outDir`
   // (default OUT) lets those tests write into a TEMP dir instead of the real
   // repo build/, so they stay hermetic (run.mjs's guard flags a real-dir write);
   // naudeSeaConfig stays a pure config builder that takes a synthetic `out`.
@@ -272,7 +241,6 @@ export function writeSeaConfig({
     tar,
     sig: sigFile,
     out: outDir,
-    builder,
     targetUpdateCheck,
   });
   const p = path.join(outDir, 'sea-config.json');
@@ -425,7 +393,6 @@ async function main() {
   const nodePath = parseNodeArg(argv);
   const bundle = parseBundleArg(argv);
   const nmdir = parseNmdirArg(argv);
-  const builder = parseBuilderArg(argv);
   const postjectDir = parsePostjectArg(argv);
   fs.mkdirSync(OUT, { recursive: true });
 
@@ -444,7 +411,7 @@ async function main() {
   }
 
   const { tar, sigFile } = stageDeps(nmdir);
-  const { cfgPath, blob } = writeSeaConfig({ bundle, cliCjs, tar, sigFile, builder });
+  const { cfgPath, blob } = writeSeaConfig({ bundle, cliCjs, tar, sigFile });
   generateBlob(nodePath, cfgPath);
   const bin = await buildBinary({ nodePath, postjectDir, blob, outOverride });
   smokeCheck(bin);

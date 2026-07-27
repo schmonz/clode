@@ -18,11 +18,10 @@
 // role, carve --quaude-* out of argv BEFORE any bundle-visible code runs (the
 // reserved namespace — everything else belongs to Claude Code) and apply the
 // target-env contract (target-env.cjs — DISABLE_INSTALLATION_CHECKS, the rg
-// PATH shaping, CLODE_SELF), while the BUILDER role (a fused native clode)
-// owns its whole argv, gets no carve, and gets NO target-env contract either
-// (that contract is Claude-Code-target-shaped; applying it to the builder
-// itself would leak the CI builder path that built it into CLODE_SELF for no
-// reader to use); mount globalThis.__quaudeVFS; evaluate the archived
+// PATH shaping), while the BUILDER role (a fused native clode) owns its whole
+// argv, gets no carve, and gets NO target-env contract either (that contract
+// is Claude-Code-target-shaped and pointless for the builder itself); mount
+// globalThis.__quaudeVFS; evaluate the archived
 // node-shim loader, which boots the manifest's entry member (cli.qbc for
 // quaude, the esbuilt clode-main bundle for the builder).
 
@@ -90,9 +89,8 @@ const S_IXALL = 0o111;
 // ("does it exist?" vs "can I run it?" — see target-env.cjs's findOnPath)
 // synchronously from that single pass. Exported + primitive-injected so it
 // unit-tests under host node — the file's existing carveQuaudeArgs pattern.
-export async function bootstrapTargetEnv(tjs, opts) {
+export async function bootstrapTargetEnv(tjs, opts = {}) {
   const {
-    builder,
     shape = globalThis.__clodeShapeTargetEnv,
     probe = globalThis.__clodeProbePaths,
     map = globalThis.__clodeMapPlatform,
@@ -117,9 +115,6 @@ export async function bootstrapTargetEnv(tjs, opts) {
 
   return shape({
     env: tjs.env,
-    self: builder,
-    targetKind: 'quaude',
-    targetPath: tjs.exePath,
     platform,
     delimiter,
     exists: (p) => Boolean(stats.get(p)?.exists),
@@ -326,12 +321,8 @@ async function main() {
     // BUILDER-role only exception: a fused native clode is the BUILDER, not a
     // built target — applying this contract to itself would set
     // DISABLE_INSTALLATION_CHECKS/NODE_USE_ENV_PROXY on the builder's own
-    // process for no reason, could prepend an rg dir to the builder's PATH, and
-    // (worse) would stamp CLODE_SELF = manifest.builder — the path of the clode
-    // that built THIS clode on the CI runner — into the builder's env, a
-    // provenance leak with no consumer (nothing in the builder reads
-    // CLODE_SELF; every write site overrides it) and a reproducibility hazard
-    // for a published clode-native asset. So: quaude only.
+    // process for no reason and could prepend an rg dir to the builder's PATH.
+    // So: quaude only.
     // BARE member name 'target-env.cjs' (no libexec/ prefix): the node-shim's
     // process.cjs also requires this member (relative to its fused SHIM_DIR,
     // which has no 'libexec' ancestor in the archive namespace — see
@@ -344,7 +335,7 @@ async function main() {
     // from the same evaluated member as shapeTargetEnv/probePaths, so there is
     // exactly one copy of the mapping running under tjs.
     globalThis.__clodeMapPlatform = tem.exports.mapPlatform;
-    await bootstrapTargetEnv(tjs, { builder: manifest.builder || null });
+    await bootstrapTargetEnv(tjs);
 
     // 7.6) Guard injection: wire the model's Bash tool through the update
     // guard by writing an ephemeral PreToolUse settings file and appending

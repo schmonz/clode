@@ -276,7 +276,10 @@ test('first pass never sets CLODE_SELF, even with a stray `builder` override or 
     'a real SEA `builder` asset must not resurrect CLODE_SELF');
 });
 
-test('first pass declares CLODE_TARGET_KIND=naude and CLODE_TARGET=<the naude exe>', () => {
+test('first pass never declares CLODE_TARGET_KIND / CLODE_TARGET (rebuild machinery retired)', () => {
+  // These once told the rebuild callback what kind of target to rebuild and
+  // where. Auto-update is notify-only now (a version check, no rebuild), so the
+  // target no longer needs to declare its own identity to the env.
   let call = null;
   runNaude({
     argv: [], execPath: '/naude', env: {}, cacheDir: os.tmpdir(), workDir: '/work',
@@ -287,8 +290,8 @@ test('first pass declares CLODE_TARGET_KIND=naude and CLODE_TARGET=<the naude ex
     procOn: () => {}, procOff: () => {}, exit: () => {},
     onExit: (cb) => cb(0, null),
   });
-  assert.strictEqual(call.env.CLODE_TARGET_KIND, 'naude');
-  assert.strictEqual(call.env.CLODE_TARGET, '/naude');
+  assert.ok(!('CLODE_TARGET_KIND' in call.env), 'CLODE_TARGET_KIND is retired');
+  assert.ok(!('CLODE_TARGET' in call.env), 'CLODE_TARGET is retired');
 });
 
 // --- guard dispatch: `--clode-update-guard` short-circuits everything else ----

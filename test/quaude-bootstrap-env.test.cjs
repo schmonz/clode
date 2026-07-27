@@ -54,23 +54,24 @@ const opts = (over = {}) => Object.assign({ uaPlatform: 'Linux', shape: shapeTar
 test('applies the contract to tjs.env', async () => {
   const { bootstrapTargetEnv } = await loadBootstrap();
   const tjs = fakeTjs();
-  await bootstrapTargetEnv(tjs, opts({ builder: null }));
+  await bootstrapTargetEnv(tjs, opts());
   assert.strictEqual(tjs.env.DISABLE_INSTALLATION_CHECKS, '1');
   assert.strictEqual(tjs.env.NODE_USE_ENV_PROXY, '1');
 });
 
-test('points CLODE_SELF at the builder from the manifest', async () => {
+test('no rebuild env baked: CLODE_SELF / CLODE_TARGET* stay unset (auto-update is notify-only)', async () => {
   const { bootstrapTargetEnv } = await loadBootstrap();
   const tjs = fakeTjs();
-  await bootstrapTargetEnv(tjs, opts({ builder: '/usr/local/bin/clode' }));
-  assert.strictEqual(tjs.env.CLODE_SELF, '/usr/local/bin/clode',
-    'a baked quaude cannot rewrite its own bytecode; the updater must call clode');
+  await bootstrapTargetEnv(tjs, opts());
+  assert.ok(!('CLODE_SELF' in tjs.env), 'CLODE_SELF is retired — no rebuild callback');
+  assert.ok(!('CLODE_TARGET_KIND' in tjs.env), 'CLODE_TARGET_KIND is retired');
+  assert.ok(!('CLODE_TARGET' in tjs.env), 'CLODE_TARGET is retired');
 });
 
 test('finds a real rg via the async tjs.stat probe', async () => {
   const { bootstrapTargetEnv } = await loadBootstrap();
   const tjs = fakeTjs({ env: { PATH: '/usr/bin:/opt/rg/bin' }, present: ['/opt/rg/bin/rg'] });
-  await bootstrapTargetEnv(tjs, opts({ builder: null }));
+  await bootstrapTargetEnv(tjs, opts());
   assert.strictEqual(tjs.env.USE_BUILTIN_RIPGREP, '0');
   // shapeTargetEnv's whole-segment membership test (target-env.test.cjs: "leaves
   // PATH ALONE"): rg's dir is already reachable via PATH, so nothing is prepended.
@@ -80,7 +81,7 @@ test('finds a real rg via the async tjs.stat probe', async () => {
 test('no rg present: search config untouched', async () => {
   const { bootstrapTargetEnv } = await loadBootstrap();
   const tjs = fakeTjs({ env: { PATH: '/usr/bin' } });
-  await bootstrapTargetEnv(tjs, opts({ builder: null }));
+  await bootstrapTargetEnv(tjs, opts());
   assert.strictEqual(tjs.env.USE_BUILTIN_RIPGREP, undefined);
 });
 
@@ -94,7 +95,7 @@ test('a directory named rg on PATH does not win — quaude rejects it too', asyn
     env: { PATH: '/usr/bin' },
     present: { '/usr/bin/rg': S_IFDIR | 0o755 },
   });
-  await bootstrapTargetEnv(tjs, opts({ builder: null }));
+  await bootstrapTargetEnv(tjs, opts());
   assert.strictEqual(tjs.env.USE_BUILTIN_RIPGREP, undefined, 'a directory must not disable the embedded-search fallback');
   assert.strictEqual(tjs.env.PATH, '/usr/bin', 'PATH must not be rewritten for an unrunnable candidate');
 });
@@ -105,20 +106,20 @@ test('a non-executable file named rg on PATH does not win either', async () => {
     env: { PATH: '/usr/bin' },
     present: { '/usr/bin/rg': S_IFREG | 0o644 }, // regular file, no +x anywhere
   });
-  await bootstrapTargetEnv(tjs, opts({ builder: null }));
+  await bootstrapTargetEnv(tjs, opts());
   assert.strictEqual(tjs.env.USE_BUILTIN_RIPGREP, undefined);
 });
 
 test("maps navigator's 'macOS' to darwin, and old darwin gets the bundled cert store", async () => {
   const { bootstrapTargetEnv } = await loadBootstrap();
   const tjs = fakeTjs();                       // trustd absent
-  await bootstrapTargetEnv(tjs, opts({ builder: null, uaPlatform: 'macOS' }));
+  await bootstrapTargetEnv(tjs, opts({ uaPlatform: 'macOS' }));
   assert.strictEqual(tjs.env.CLAUDE_CODE_CERT_STORE, 'bundled');
 });
 
 test('modern darwin (trustd present) leaves the cert store alone', async () => {
   const { bootstrapTargetEnv } = await loadBootstrap();
   const tjs = fakeTjs({ present: ['/usr/libexec/trustd'] });
-  await bootstrapTargetEnv(tjs, opts({ builder: null, uaPlatform: 'macOS' }));
+  await bootstrapTargetEnv(tjs, opts({ uaPlatform: 'macOS' }));
   assert.strictEqual(tjs.env.CLAUDE_CODE_CERT_STORE, undefined);
 });

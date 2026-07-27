@@ -118,33 +118,15 @@ test('ripgrep: a non-executable FILE named rg on PATH does not win either', () =
   assert.strictEqual(env.USE_BUILTIN_RIPGREP, undefined);
 });
 
-test('CLODE_SELF points at the clode builder, so the in-TUI updater can call back', () => {
-  const env = shapeTargetEnv(opts({ self: '/usr/local/bin/clode' }));
-  assert.strictEqual(env.CLODE_SELF, '/usr/local/bin/clode');
-});
-
-test('CLODE_SELF: absent builder leaves it unset (the updater then fails loud, not wrong)', () => {
-  assert.strictEqual(shapeTargetEnv(opts({ self: null })).CLODE_SELF, undefined);
-  assert.strictEqual(shapeTargetEnv(opts({})).CLODE_SELF, undefined);
-});
-
-test('target identity: CLODE_TARGET_KIND + CLODE_TARGET set when given', () => {
-  const env = shapeTargetEnv(opts({ self: '/b/clode', targetKind: 'quaude', targetPath: '/usr/local/bin/quaude' }));
-  assert.strictEqual(env.CLODE_TARGET_KIND, 'quaude');
-  assert.strictEqual(env.CLODE_TARGET, '/usr/local/bin/quaude');
-  assert.strictEqual(env.CLODE_SELF, '/b/clode');
-});
-
-test('target identity: absent kind/path leave the vars unset (no-builder-style fail-loud contract)', () => {
-  const env = shapeTargetEnv(opts());   // no targetKind/targetPath
-  assert.ok(!('CLODE_TARGET_KIND' in env));
-  assert.ok(!('CLODE_TARGET' in env));
-});
-
-test('target identity: naude kind rides the same seam', () => {
-  const env = shapeTargetEnv(opts({ self: '/b/clode', targetKind: 'naude', targetPath: '/opt/naude' }));
-  assert.strictEqual(env.CLODE_TARGET_KIND, 'naude');
-  assert.strictEqual(env.CLODE_TARGET, '/opt/naude');
+// Auto-update is notify-only now (a version check, no rebuild), so a built
+// target no longer bakes a builder path or its own kind/path into the env.
+// These vars are RETIRED — shapeTargetEnv must never set them, even if a stale
+// caller still passes the old opts.
+test('no rebuild env baked: CLODE_SELF / CLODE_TARGET_KIND / CLODE_TARGET are never set', () => {
+  const env = shapeTargetEnv(opts({ self: '/usr/local/bin/clode', targetKind: 'quaude', targetPath: '/usr/local/bin/quaude' }));
+  assert.ok(!('CLODE_SELF' in env), 'CLODE_SELF is retired');
+  assert.ok(!('CLODE_TARGET_KIND' in env), 'CLODE_TARGET_KIND is retired');
+  assert.ok(!('CLODE_TARGET' in env), 'CLODE_TARGET is retired');
 });
 
 test('windows: PATH uses the caller-supplied delimiter', () => {

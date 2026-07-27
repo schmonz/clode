@@ -88,37 +88,25 @@ test('writeSeaConfig: fails loud when targetUpdateCheck does not exist', async (
   }
 });
 
-// The builder path (the clode that built this naude, for the in-app updater's
-// callback) used to be baked via esbuild --define __CLODE_BUILDER__. Now it's a
-// SEA asset — runtime data, not a build-time string burned into the bundle —
-// so the SAME esbuilt naude-entry bundle serves every build regardless of who
-// built it. naudeSeaConfig writes the builder path to a file and adds it as
-// the `builder` asset.
-test('naude sea-config: a non-empty `builder` is written to a file and added as an asset', async () => {
+// The `builder` path (the clode that built this naude, once fed to the in-app
+// updater's rebuild callback) is RETIRED: auto-update is notify-only now (a
+// version check, no rebuild), so naudeSeaConfig writes no `builder` asset and
+// there is no --builder flag to parse. This guards the retirement.
+test('naude sea-config: never bakes a `builder` asset (rebuild callback retired)', async () => {
   const { naudeSeaConfig } = await import('../scripts/build-naude.mjs');
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-sea-config-'));
   try {
     const cfg = naudeSeaConfig({ mainBundle: '/b/entry.js', cliCjs: '/cache/cli.cjs',
-      bunShim: '/lx/bun-shim.cjs', tar: '/o/deps.tar', sig: '/o/deps.sig', out,
-      builder: '/abs/clode' });
-    assert.ok(cfg.assets.builder, 'expected a `builder` asset when `builder` is a non-empty string');
-    assert.strictEqual(fs.readFileSync(cfg.assets.builder, 'utf8'), '/abs/clode');
+      bunShim: '/lx/bun-shim.cjs', tar: '/o/deps.tar', sig: '/o/deps.sig', out });
+    assert.ok(!('builder' in cfg.assets), 'the builder asset is retired (notify-only auto-update)');
   } finally {
     fs.rmSync(out, { recursive: true, force: true });
   }
 });
 
-test('naude sea-config: a null `builder` adds no `builder` asset (the fail-loud null path)', async () => {
-  const { naudeSeaConfig } = await import('../scripts/build-naude.mjs');
-  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-sea-config-'));
-  try {
-    const cfg = naudeSeaConfig({ mainBundle: '/b/entry.js', cliCjs: '/cache/cli.cjs',
-      bunShim: '/lx/bun-shim.cjs', tar: '/o/deps.tar', sig: '/o/deps.sig', out,
-      builder: null });
-    assert.ok(!('builder' in cfg.assets), 'no builder -> no `builder` asset -> updater fails loud');
-  } finally {
-    fs.rmSync(out, { recursive: true, force: true });
-  }
+test('build-naude no longer exports parseBuilderArg (the --builder write-side is retired)', async () => {
+  const mod = await import('../scripts/build-naude.mjs');
+  assert.strictEqual(mod.parseBuilderArg, undefined, 'parseBuilderArg is gone');
 });
 
 // Bug 1 (--out for naude): the flag used to be forwarded by clode-fuse.cjs but
@@ -180,7 +168,7 @@ test('stagedBunShim: quaude and naude resolve the same shim for the same stage',
 
 // ---------------------------------------------------------------------------
 // Task 5 (clode-fetches-naude-engine): the fetched node + prebuilt bundle +
-// carried postject, no esbuild/npm on the user path. The five new flags all
+// carried postject, no esbuild/npm on the user path. The new flags all
 // default to the checkout's own locations/running node, so a plain
 // `node scripts/build-naude.mjs --cli ...` keeps working unchanged.
 // ---------------------------------------------------------------------------
@@ -229,23 +217,6 @@ test('parsePostjectArg: absent -> the checkout default (deps/clode/node_modules/
 test('parsePostjectArg: --postject <dir> wins over the default', async () => {
   const { parsePostjectArg } = await import('../scripts/build-naude.mjs');
   assert.strictEqual(parsePostjectArg(['--postject', '/mat/postject']), path.resolve('/mat/postject'));
-});
-
-// parseBuilderArg: --builder wins; else CLODE_SELF (the historical esbuild
-// --define source, kept as an env fallback); else null (fail-loud-not-wrong).
-test('parseBuilderArg: --builder <path> wins over CLODE_SELF', async () => {
-  const { parseBuilderArg } = await import('../scripts/build-naude.mjs');
-  assert.strictEqual(parseBuilderArg(['--builder', '/abs/clode'], { CLODE_SELF: '/other/clode' }), '/abs/clode');
-});
-
-test('parseBuilderArg: absent --builder falls back to env.CLODE_SELF', async () => {
-  const { parseBuilderArg } = await import('../scripts/build-naude.mjs');
-  assert.strictEqual(parseBuilderArg([], { CLODE_SELF: '/env/clode' }), '/env/clode');
-});
-
-test('parseBuilderArg: neither --builder nor CLODE_SELF -> null (fail-loud-not-wrong)', async () => {
-  const { parseBuilderArg } = await import('../scripts/build-naude.mjs');
-  assert.strictEqual(parseBuilderArg([], {}), null);
 });
 
 // generateBlob: the SEA-config pass now runs the GIVEN --node, not
@@ -301,10 +272,10 @@ test('buildBinary: embeds the bytes read from the GIVEN --node, not process.exec
   }
 });
 
-// The deferred wiring THIS task lands: writeSeaConfig used to silently drop
-// `builder` instead of passing it to naudeSeaConfig, so every naude built
-// through this path baked NO builder asset regardless of --builder/CLODE_SELF.
-test('writeSeaConfig: threads `builder` through to the config (the deferred wiring, landed)', async () => {
+// The retirement, at the writeSeaConfig layer: even if a stale caller still
+// passed a `builder`, the produced sea-config.json must carry no `builder`
+// asset (notify-only auto-update — nothing reads a builder path anymore).
+test('writeSeaConfig: produces no `builder` asset (rebuild callback retired)', async () => {
   const { writeSeaConfig } = await import('../scripts/build-naude.mjs');
   const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-writeseaconfig-'));
   try {
@@ -313,29 +284,10 @@ test('writeSeaConfig: threads `builder` through to the config (the deferred wiri
     fs.writeFileSync(path.join(stage, 'bun-shim.cjs'), '// staged bun-shim\n');
     const { cfgPath } = writeSeaConfig({
       bundle: '/b/naude-entry.bundle.cjs', cliCjs, tar: '/o/deps.tar', sigFile: '/o/deps.sig',
-      builder: '/abs/clode', outDir: stage,
+      outDir: stage,
     });
     const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
-    assert.ok(cfg.assets.builder, 'sea-config.json must carry a `builder` asset when --builder is given');
-    assert.strictEqual(fs.readFileSync(cfg.assets.builder, 'utf8'), '/abs/clode');
-  } finally {
-    fs.rmSync(stage, { recursive: true, force: true });
-  }
-});
-
-test('writeSeaConfig: a null builder omits the asset (fail-loud-not-wrong, preserved)', async () => {
-  const { writeSeaConfig } = await import('../scripts/build-naude.mjs');
-  const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-writeseaconfig-null-'));
-  try {
-    const cliCjs = path.join(stage, 'cli.cjs');
-    fs.writeFileSync(cliCjs, '// staged cli.cjs\n');
-    fs.writeFileSync(path.join(stage, 'bun-shim.cjs'), '// staged bun-shim\n');
-    const { cfgPath } = writeSeaConfig({
-      bundle: '/b/naude-entry.bundle.cjs', cliCjs, tar: '/o/deps.tar', sigFile: '/o/deps.sig',
-      builder: null, outDir: stage,
-    });
-    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
-    assert.ok(!('builder' in cfg.assets), 'no builder -> no `builder` asset -> updater fails loud');
+    assert.ok(!('builder' in cfg.assets), 'the builder asset is retired (notify-only auto-update)');
   } finally {
     fs.rmSync(stage, { recursive: true, force: true });
   }

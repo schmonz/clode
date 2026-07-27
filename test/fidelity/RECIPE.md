@@ -149,7 +149,7 @@ Claude), so it needs no pin. See row A2.
 
 | id | action | expected | axes | test |
 |---|---|---|---|---|
-| I1 | → self-update (rebuild callback) succeeds on all three | self-update succeeds | - | test/quaude-naude-selfupdate.test.cjs |
+| I1 | → auto-update is notify-only on all three: a built target checks upstream and notifies (names the newer version), never rebuilds/installs | update check + notice, no rebuild | - | test/target-update-check.test.cjs |
 | I2 | → the `claude update` guard denies a model-issued update on all three | update denied | - | test/quaude-naude-updateguard.test.cjs |
 
 ## J. Remote Control / WebSocket

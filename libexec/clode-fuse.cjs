@@ -965,16 +965,13 @@ async function clodeBuild(args, opts) {
       // build-naude.mjs runs as a SEPARATE process UNDER the fetched pinned node
       // (the ONLY node a clode-native has). Every input is passed explicitly:
       // --node (embed + sea-config), --bundle (the prebuilt SEA main), --nmdir
-      // (the deps to tar), --postject (its carried JS), --builder (the clode
-      // whose updater callback this naude will invoke — was a CLODE_SELF env
-      // passthrough, now a first-class flag; empty when this build has no self).
+      // (the deps to tar), --postject (its carried JS).
       const r = await spawnRun(nodePath, [
         buildNaudeScript,
         '--cli', cliPath,
         '--node', nodePath,
         '--bundle', bundlePath,
         '--nmdir', nmDir,
-        '--builder', String(opts.self || ''),
         '--postject', postjectDir,
         ...outArgs,
       ], { env, timeout: 600000 * SCALE });
@@ -1275,12 +1272,6 @@ async function clodeBuild(args, opts) {
       // shipped manifest, so a built quaude states its own closure without
       // needing extras.json (which does not ship).
       bom: depsBom,
-      // The clode that built this quaude. Its patched in-app updater calls back
-      // here (CLODE_SELF): a baked binary cannot rebuild itself. null when unknown,
-      // so the updater fails loud rather than spawning something wrong. NOTE:
-      // opts.self, not the local `self` boolean above (that one means "fuse the
-      // builder itself", i.e. --self — an unrelated flag that happens to share a name).
-      builder: opts.self || null,
     };
 
     // -- sign-then-append (memo §6.1): copy template -> re-sign the copy while

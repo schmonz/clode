@@ -405,10 +405,10 @@ function gateProblems(cov) {
     p.push('/doctor installation-warnings anchor missing/ambiguous (applet-skew hook would not apply)');
   }
   if (!getDefault(cov, 'autoupdater_hook_anchor_present', true)) {
-    p.push('in-TUI autoupdater anchor missing/ambiguous (clode --clode-internal-update redirect would not apply)');
+    p.push('in-TUI autoupdater anchor missing/ambiguous (notify-only __clodeCheckUpdate redirect would not apply)');
   }
   if (!getDefault(cov, 'native_autoupdater_hook_anchor_present', true)) {
-    p.push('in-TUI native autoupdater anchor missing/ambiguous (clode --clode-internal-update redirect would not apply)');
+    p.push('in-TUI native autoupdater anchor missing/ambiguous (notify-only __clodeCheckUpdate redirect would not apply)');
   }
   if (!getDefault(cov, 'update_notice_hook_anchor_present', true)) {
     p.push('installation-warnings version+warnings anchor missing/ambiguous (three-state update notice would not surface on /status or `claude doctor`)');

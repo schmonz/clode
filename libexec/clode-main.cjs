@@ -11,9 +11,7 @@
 //   3. --version                -> print "clode <VERSION>", exit 0
 //   4. --help                   -> print clodeHelp(), exit 0
 //   5. fetch [channel]          -> clodeUpdate, exit status
-//   6. --clode-internal-update  -> targetUpdate: fetch, rebuild the target's
-//                                  kind, swap in place, exit status
-//   6b. build [--out PATH]      -> check watch signals, then clodeBuild (fuse a
+//   6. build [--out PATH]       -> check watch signals, then clodeBuild (fuse a
 //                                  quaude), exit status — this is the ONE place
 //                                  upstream drift is checked (see step 7's note)
 //   7. watch                    -> clodeWatch(manual), exit 0
@@ -88,7 +86,7 @@ async function main(argv, opts = {}) {
   //      LIBEXEC = CLODE_LIBEXEC | __dirname          (sh: $HERE/../libexec)
   //      ROOT    = resolve(__dirname, '..')           (the package root, sh: $HERE/..)
   //      HERE    = ROOT/bin                           (sh $HERE: the bin/ dir; HERE/.. = ROOT)
-  //    SELF is the launcher path (symlink-resolved) for CLODE_SELF + the watcher fire.
+  //    SELF is the launcher path (symlink-resolved), threaded to clodeBuild + the watcher fire.
   let self = opts.self || __filename;
   try { self = fs.realpathSync(self); } catch { /* keep as-is */ }
   const LIBEXEC = env.CLODE_LIBEXEC || __dirname;
@@ -132,25 +130,7 @@ async function main(argv, opts = {}) {
     return process.exit(status);
   }
 
-  // 6. `clode --clode-internal-update [channel]`: the callback the built target's
-  //    patched in-app updater invokes (via CLODE_SELF). It reads what the target
-  //    declared about itself (CLODE_TARGET_KIND / CLODE_TARGET), fetches a newer
-  //    Claude Code, rebuilds THAT kind of target into a temp in the target's own
-  //    dir (clodeBuild smokes PONG + attest), and swaps it in place. Any failure:
-  //    loud, non-zero, target unchanged (never exit 0 over an unchanged binary —
-  //    upstream would print "Restart to apply" over a rebuild that never happened).
-  if (first === '--clode-internal-update') {
-    const { targetUpdate } = require('./clode-target-update.cjs');
-    const fuse = require('./clode-fuse.cjs');
-    const status = await targetUpdate(args[1], {
-      env,
-      fetch: (channel) => update.clodeUpdate(channel, { env, libexec: LIBEXEC, here: HERE, node }),
-      build: (buildArgs) => fuse.clodeBuild(buildArgs, { env, libexec: LIBEXEC, here: HERE, version, self }),
-    });
-    return process.exit(status);
-  }
-
-  // 6b. `clode build [--self] [--out PATH]`: fuse a standalone quaude binary —
+  // 6. `clode build [--self] [--out PATH]`: fuse a standalone quaude binary —
   //     or, with --self, a standalone native clode builder — on this machine
   //     (builder namespace, not passthrough — Claude Code never sees it).
   if (first === 'build') {

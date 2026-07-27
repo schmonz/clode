@@ -132,10 +132,12 @@ test('clode build --naude: extracts cli.cjs and invokes build-naude.mjs with it'
     assert.ok(fs.existsSync(cliPath), 'extracted cli.cjs should exist on disk');
 
     // The assembler inputs are passed explicitly (Task 5/6): the prebuilt
-    // bundle, a resolved node_modules, the postject dir, and the builder path.
-    for (const flag of ['--bundle', '--nmdir', '--postject', '--builder']) {
+    // bundle, a resolved node_modules, and the postject dir. (--builder is
+    // RETIRED — auto-update is notify-only, so no builder path is threaded.)
+    for (const flag of ['--bundle', '--nmdir', '--postject']) {
       assert.ok(naude.args.includes(flag), `${flag} not passed to build-naude; args: ${JSON.stringify(naude.args)}`);
     }
+    assert.ok(!naude.args.includes('--builder'), `--builder must not be passed (retired); args: ${JSON.stringify(naude.args)}`);
 
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }

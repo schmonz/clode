@@ -9,9 +9,11 @@ const { sandbox, mkProvider, REPO, NODE } = require('./e2e.cjs');
 
 const BIN = path.join(REPO, 'bin', 'clode');
 
-// `fetch` and `--clode-internal-update` (clode-main.cjs steps 5/6) are clode's OWN
-// namespace — dispatched before any bin resolution/extraction, so unaffected by the
-// runner's retirement. Exercised with a direct spawn of bin/clode, not a model runner.
+// `fetch` (clode-main.cjs step 5) is clode's OWN namespace — dispatched before any
+// bin resolution/extraction, so unaffected by the runner's retirement. Exercised
+// with a direct spawn of bin/clode, not a model runner. (The old
+// `--clode-internal-update` rebuild-callback dispatch is RETIRED — auto-update is
+// notify-only now — so there is no longer an internal-update command to exercise.)
 function run(sbx, args = [], opts = {}) {
   const r = spawnSync(NODE, [BIN, ...args], {
     encoding: 'utf8',
@@ -78,22 +80,17 @@ test('clode fetch <channel> fetches and reports, then exits', (t) => {
   assert.ok(fs.existsSync(path.join(providersDir(sbx), '9.9.9', 'claude')));
 });
 
-test('clode --clode-internal-update <channel> refuses when there is no declared target', (t) => {
-  // This is the patched in-app autoupdater's callback (CLODE_SELF spawns it). Bare
-  // `clode` (not a built quaude/naude) has no CLODE_TARGET_KIND/CLODE_TARGET, so
-  // targetUpdate must refuse BEFORE ever fetching — proving the refusal fires even
-  // though this fixture's fetch would otherwise succeed (the channel/manifest/
-  // provider are all real and resolvable) shows it isn't aliasing `fetch`: fetching
-  // a newer Claude Code into the provider store changes nothing for a target whose
-  // old Claude Code is baked into its bytecode.
+test('clode --clode-internal-update is retired: an unknown command, not a rebuild', (t) => {
+  // The old patched in-app autoupdater's rebuild callback dispatched here; it is
+  // GONE (auto-update is notify-only). clode now treats it as any other unknown
+  // command — usage error, no fetch, provider store untouched.
   const { sbx } = withReleases(t);
   const r = run(sbx, ['--clode-internal-update', 'stable'],
-    { env: { CLODE_CLAUDE_BIN: '/nonexistent', CLODE_TARGET_KIND: '', CLODE_TARGET: '' } });
+    { env: { CLODE_CLAUDE_BIN: '/nonexistent' } });
   assert.notStrictEqual(r.status, 0);
-  assert.match(r.output, /CLODE_TARGET_KIND/);
-  assert.doesNotMatch(r.output, /now the active provider/);
+  assert.match(r.output, /unknown command/);
   assert.ok(!fs.existsSync(path.join(providersDir(sbx), '9.9.9', 'claude')),
-    'a refused update must not fetch anything into the provider store');
+    'a retired command must not fetch anything into the provider store');
 });
 
 test('clode fetch prints a warn-only signals digest and writes a snapshot', (t) => {

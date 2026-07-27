@@ -280,11 +280,6 @@ const manifest = {
   // package.json + node_modules. Distinct from DEPS (bare names, above,
   // consumed only to collect members) — never itself re-emitted.
   bom: extras.bom,
-  // The clode that built this quaude (clode-fuse.cjs's opts.self, rides in via
-  // extras.json). Read by the bootstrap (quaude-bootstrap.mjs) to bake
-  // CLODE_SELF, so the patched in-app updater can call back to a real builder
-  // instead of the baked binary trying (and failing) to rebuild itself.
-  builder: extras.builder ?? null,
   fusedAt: new Date().toISOString(),
   members: memberShas,
 };
