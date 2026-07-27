@@ -131,6 +131,20 @@ function nativeAutoupdaterHookAnchorPresent(data) {
   return [...data.matchAll(_NATIVE_AUTOUPDATER_ANCHOR)].length === 1 || data.includes(_NATIVE_AUTOUPDATER_PATCHED);
 }
 
+// The update NOTICE (extract-claude-js patchUpdateNotice) rides the installation-
+// warnings surface — where the three-state notify actually reaches the user, since
+// the native autoupdater widget only renders install outcomes (Task 6). It needs the
+// diagnostics-return anchor with the version field (second) AND the warnings array,
+// exactly once. Mirrors extract-claude-js.cjs UPDATE_NOTICE_ANCHOR. An already-
+// patched bundle carries the awaited check keyed off __clodeCheckUpdate before the
+// return, so accept that marker too (mirrors the autoupdater checks).
+const _UPDATE_NOTICE_ANCHOR =
+  /return\{installationType:[A-Za-z0-9_$]{1,6},version:[A-Za-z0-9_$]{1,6},.{0,400}?,warnings:[A-Za-z0-9_$]{1,6},packageManager:/gs;
+const _UPDATE_NOTICE_PATCHED = 'var __clodeUpd=await globalThis.__clodeCheckUpdate(';
+function updateNoticeHookAnchorPresent(data) {
+  return [...data.matchAll(_UPDATE_NOTICE_ANCHOR)].length === 1 || data.includes(_UPDATE_NOTICE_PATCHED);
+}
+
 // Remote Control gate-off (extract-claude-js patchRemoteControlUnavailable) needs
 // its anchor exactly once. Two shapes, in lockstep with extract-claude-js.cjs:
 // the new (>=2.1.219) availability-gate function pinned by its stable "not available
@@ -315,6 +329,7 @@ function inspect(p) {
     doctor_hook_anchor_present: doctorHookAnchorPresent(data),
     autoupdater_hook_anchor_present: autoupdaterHookAnchorPresent(data),
     native_autoupdater_hook_anchor_present: nativeAutoupdaterHookAnchorPresent(data),
+    update_notice_hook_anchor_present: updateNoticeHookAnchorPresent(data),
     remote_control_hook_anchor_present: remoteControlHookAnchorPresent(data),
     snapshot_generator_present: snapshotGeneratorPresent(data),
     ripgrep_lever_present: ripgrepLeverPresent(data),
@@ -395,6 +410,9 @@ function gateProblems(cov) {
   if (!getDefault(cov, 'native_autoupdater_hook_anchor_present', true)) {
     p.push('in-TUI native autoupdater anchor missing/ambiguous (clode --clode-internal-update redirect would not apply)');
   }
+  if (!getDefault(cov, 'update_notice_hook_anchor_present', true)) {
+    p.push('installation-warnings version+warnings anchor missing/ambiguous (three-state update notice would not surface on /status or `claude doctor`)');
+  }
   if (!getDefault(cov, 'remote_control_hook_anchor_present', true)) {
     p.push('Remote Control cBo reason anchor missing/ambiguous (quaude gate-off notice would not apply -> silent no-op)');
   }
@@ -443,6 +461,7 @@ function coverage(r, shim) {
     doctor_hook_anchor_present: getDefault(r, 'doctor_hook_anchor_present', true),
     autoupdater_hook_anchor_present: getDefault(r, 'autoupdater_hook_anchor_present', true),
     native_autoupdater_hook_anchor_present: getDefault(r, 'native_autoupdater_hook_anchor_present', true),
+    update_notice_hook_anchor_present: getDefault(r, 'update_notice_hook_anchor_present', true),
     remote_control_hook_anchor_present: getDefault(r, 'remote_control_hook_anchor_present', true),
   };
 }
@@ -563,6 +582,9 @@ function humanCoverage(r, cov) {
   if (!getDefault(cov, 'native_autoupdater_hook_anchor_present', true)) {
     L.push('MISSING/AMBIGUOUS in-TUI native autoupdater anchor (extract-claude-js native autoupdater redirect would not apply)');
   }
+  if (!getDefault(cov, 'update_notice_hook_anchor_present', true)) {
+    L.push('MISSING/AMBIGUOUS installation-warnings version+warnings anchor (extract-claude-js update-notice would not surface)');
+  }
   if (!getDefault(cov, 'snapshot_generator_present', true)) {
     L.push('MISSING/AMBIGUOUS snapshot-generator anchor (eager-snapshot bridge would not apply)');
   }
@@ -640,7 +662,7 @@ module.exports = {
   ACCEPTED_MISSING_EXTERNALS, ACCEPTED_STUBBED_BUN, ACCEPTED_MISSING_BUN, ACCEPTED_BUN_MODULES,
   count, countSubstr, searchApplets, unknownSearchApplets, ripgrepLeverPresent,
   doctorHookAnchorPresent, snapshotGeneratorPresent, autoupdaterHookAnchorPresent,
-  nativeAutoupdaterHookAnchorPresent, remoteControlHookAnchorPresent,
+  nativeAutoupdaterHookAnchorPresent, updateNoticeHookAnchorPresent, remoteControlHookAnchorPresent,
   embeddedAppletVersions, hostAppletVersion, which, featureForAsset,
   inspect, probeShim, gateProblems, coverage,
   humanSurface, humanApplets, humanCoverage,

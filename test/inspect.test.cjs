@@ -146,6 +146,28 @@ test('native autoupdater anchor present and absent', () => {
   assert.strictEqual(ins.nativeAutoupdaterHookAnchorPresent('no native autoupdater'), false);
 });
 
+test('update notice anchor present (raw + already-patched) and absent', () => {
+  const raw = 'return{installationType:t,version:r,installationPath:n,'
+    + 'warnings:s,packageManager:f}';
+  assert.strictEqual(ins.updateNoticeHookAnchorPresent(raw), true);
+  // no version field -> not present (would be the skew-only anchor)
+  assert.strictEqual(ins.updateNoticeHookAnchorPresent(
+    'return{installationType:t,warnings:s,packageManager:f}'), false);
+  assert.strictEqual(ins.updateNoticeHookAnchorPresent('no diagnostics here'), false);
+  // already-patched bundles still count as present
+  assert.strictEqual(ins.updateNoticeHookAnchorPresent(
+    'var __clodeUpd=await globalThis.__clodeCheckUpdate(r);'), true);
+});
+
+test('gate_problems flags missing update notice anchor', () => {
+  const cov = {
+    stubbed: [], missing: [], bun_modules_unhandled: [], modules_missing: [],
+    search_applets_unknown: [], ripgrep_lever_present: true,
+    update_notice_hook_anchor_present: false,
+  };
+  assert.ok(ins.gateProblems(cov).some((p) => p.includes('update notice')));
+});
+
 test('remoteControlHookAnchorPresent: true on the real cBo reason, false when absent/ambiguous', () => {
   const one = 'if(!K8e())return"Remote Control is only available when using Claude via api.anthropic.com.";';
   assert.strictEqual(ins.remoteControlHookAnchorPresent(one), true);

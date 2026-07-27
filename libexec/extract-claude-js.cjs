@@ -372,6 +372,71 @@ function patchUpdateHint(body) {
   return [body.replace(UPDATE_HINT, 'clode build (this binary is managed by clode)'), true];
 }
 
+// --- update NOTICE on the installation-warnings surface -----------------------
+// Where the three-state notify actually REACHES the user. Task 6 characterization
+// pinned this against the real 2.1.218 bundle: the in-TUI NATIVE autoupdater widget
+// (patchNativeAutoupdater's site) is a pure auto-INSTALLER status widget — its JSX
+// renders ONLY install-outcome lines ("Checking for updates" / "Update installed ·
+// Restart to update" / "Auto-update failed · Run claude doctor") and returns null
+// unless an install is in-flight/succeeded/failed. With notify-only (wasUpdated
+// ALWAYS false, and __clodeCheckUpdate never throwing) it renders NOTHING for all
+// three states, and — being gated by the bundle's own sEe()/Bmt() enable checks —
+// may not run at all. So the notice cannot ride that widget.
+//
+// Instead it rides clode's OWN surface: the doctor/status "Installation warnings"
+// list, the same {issue,fix} array the applet-skew contribution (patchDoctorWarnings
+// above) pushes onto. That surface renders on `/status` and `claude doctor` (2.1.205+)
+// by calling the async diagnostics builder DIRECTLY — independent of the autoupdater
+// gates — so it is a reliable trigger. The builder's own return object exposes the
+// current version (`version:<id>`) and the warnings array (`warnings:<id>`) in scope
+// at the anchor, so the check runs self-contained with the REAL running version and
+// needs no global (resolving the __clodeCurrentVersion "" gap for the notice) and no
+// second call site.
+//
+// Three states -> three outcomes: newer -> one warning naming the version + the
+// clode-managed rebuild wording; unknown (offline / channel error) -> a subtle
+// "couldn't check for updates" note; current -> nothing pushed. NEVER "Auto-update
+// failed" (the check resolves; it never throws into the builder). Independent,
+// fail-loud, exactly-once anchor (separate from the skew patch so neither can break
+// the other); the strict gate lives in inspect-claude-bundle.cjs.
+//
+// Anchor: `return{installationType:<id>,version:(?<ver>...)` (version is always the
+// SECOND field) ... `,warnings:(?<arr>...),packageManager:`. Splice the contribution
+// (an awaited check + conditional push) immediately BEFORE the `return{` — legal
+// `await` because the builder is async (same splice point the skew contribution uses).
+const UPDATE_NOTICE_ANCHOR =
+  /return\{installationType:[A-Za-z0-9_$]{1,6},version:(?<ver>[A-Za-z0-9_$]{1,6}),.{0,400}?,warnings:(?<arr>[A-Za-z0-9_$]{1,6}),packageManager:/gs;
+
+// JS spliced before the diagnostics return: fire the notify-only check with the
+// in-scope current version and push at most one {issue,fix} onto the warnings array.
+// Guarded + try/caught so a missing bridge or a check failure degrades to no notice,
+// never breaks diagnostics. Un-minifiable ids (>6 chars) so they cannot shadow the
+// builder's own minified locals (same rule as _skewContribution).
+function _updateNoticeContribution(arr, ver) {
+  return (
+    'if(globalThis.__clodeCheckUpdate)try{'
+    + 'var __clodeUpd=await globalThis.__clodeCheckUpdate(' + ver + ');'
+    + 'if(__clodeUpd&&__clodeUpd.__clodeState==="newer")' + arr + '.push({'
+    + 'issue:"A newer Claude Code ("+__clodeUpd.latestVersion+") is available on your channel.",'
+    + 'fix:"This binary is managed by clode \\u2014 rebuild with `clode build` to update."});'
+    + 'else if(__clodeUpd&&__clodeUpd.__clodeState==="unknown")' + arr + '.push({'
+    + 'issue:"\\u24D8 couldn\\u2019t check for updates",'
+    + 'fix:"Network lookup failed \\u2014 retry when online. Managed by clode (rebuild with `clode build`)."});'
+    + '}catch(__clodeUpdErr){}'
+  );
+}
+
+// Splice the update-notice contribution before the diagnostics return. Returns
+// [newBody, applied]; applied is false (body unchanged) unless the anchor matches
+// exactly once.
+function patchUpdateNotice(body) {
+  const m = [...body.matchAll(UPDATE_NOTICE_ANCHOR)];
+  if (m.length !== 1) return [body, false];
+  const inject = _updateNoticeContribution(m[0].groups.arr, m[0].groups.ver);
+  const cut = m[0].index;
+  return [body.slice(0, cut) + inject + body.slice(cut), true];
+}
+
 // Rewrite *body* to be Node CJS-compatible and prepend the prelude. Replaces all
 // `import.meta` references with `__import_meta` (defined by the prelude), then
 // contributes the clode applet-skew findings to the native installation-warnings
@@ -419,6 +484,15 @@ function transform(body) {
       'clode: update-hint rewrite NOT applied — "npm i -g @anthropic-ai/claude-code" '
       + 'remediation string not found (Claude version drift?). The notify path still '
       + 'works; run inspect-claude-bundle --strict.\n');
+  }
+  let un;
+  [body, un] = patchUpdateNotice(body);
+  if (!un) {
+    process.stderr.write(
+      'clode: update-notice hook NOT applied — installation-warnings anchor '
+      + '(return{installationType:...,version:...,warnings:...}) not found exactly once '
+      + '(Claude version drift?). The three-state update notice will not surface on '
+      + '/status or `claude doctor`; run inspect-claude-bundle --strict.\n');
   }
   let rc;
   [body, rc] = patchRemoteControlUnavailable(body);
@@ -501,6 +575,7 @@ module.exports = {
   patchAutoupdater,
   patchNativeAutoupdater,
   patchUpdateHint,
+  patchUpdateNotice,
   patchRemoteControlUnavailable,
   transform,
   verify,
