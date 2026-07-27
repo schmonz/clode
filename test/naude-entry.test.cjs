@@ -6,6 +6,17 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { runNaude } = require('../libexec/naude-entry.cjs');
 
+// Task 5 (naude notify-only parity): naude must expose the SAME
+// globalThis.__clodeCheckUpdate global the quaude PRELUDE installs (extract-
+// claude-js.cjs), and must no longer wire up a CLODE_SELF/--clode-internal-update
+// spawn-back-to-the-builder callback — a naude cannot rebuild itself, and the
+// notify-only autoupdater patch (Task 3) never spawns anything.
+test('naude exposes __clodeCheckUpdate and does not spawn a builder on update', () => {
+  const src = require('node:fs').readFileSync(require.resolve('../libexec/naude-entry.cjs'), 'utf8');
+  assert.match(src, /__clodeCheckUpdate/);
+  assert.doesNotMatch(src, /--clode-internal-update/);
+});
+
 function fakeSea() {
   const assets = { 'cli.cjs': 'CLI', 'bun-shim.cjs': 'SHIM', 'deps.tar': '', 'deps.sig': 'sig0' };
   return { isSea: () => true, getRawAsset: (n) => { const b = Buffer.from(assets[n] || ''); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); } };
@@ -194,56 +205,47 @@ test('first pass shapes the child env with the target contract', () => {
   // path.join, not a POSIX literal — see the note at the first-pass test above.
   assert.ok(call.env.NODE_PATH.includes(path.join('/deps', 'node_modules')),
     `NODE_PATH lacks the materialized deps dir: ${call.env.NODE_PATH}`);
-  // No `builder` override here (the default seam) -> bakedBuilder(sea) is null
-  // for this fakeSea() (no getAsset) -> CLODE_SELF must stay unset. A regression
-  // in that guard would otherwise go unnoticed by every OTHER test in this file
-  // (they all pass `builder` explicitly).
-  assert.strictEqual(call.env.CLODE_SELF, undefined, 'no builder baked -> updater must fail loud, not spawn something wrong');
+  // Task 5: naude never sets CLODE_SELF at all any more (bakedBuilder/the
+  // `builder` seam were removed) — the notify-only autoupdater (Task 3) never
+  // spawns a builder, so there is nothing left for it to point at.
+  assert.strictEqual(call.env.CLODE_SELF, undefined, 'naude must never set CLODE_SELF (Task 5: retired)');
 });
 
-test('first pass points CLODE_SELF at the clode that built this naude', () => {
+// Task 5 (auto-update notify-only): a naude cannot rebuild itself, and the
+// notify-only autoupdater patch never spawns a builder, so CLODE_SELF is
+// GONE — not merely unset-by-default. Both a stray `builder` opt override and
+// a real SEA `builder` asset (either of which used to seed CLODE_SELF) must
+// have zero effect now; this guards against the wiring quietly coming back.
+test('first pass never sets CLODE_SELF, even with a stray `builder` override or a real SEA `builder` asset', () => {
   let call = null;
   runNaude({
     argv: [], execPath: '/naude', env: {}, cacheDir: os.tmpdir(), workDir: '/work',
     sea: fakeSea(),
-    builder: '/usr/local/bin/clode',            // an explicit override (not the asset seam)
+    builder: '/usr/local/bin/clode',            // a stray override — must be ignored
     materializeDeps: () => '/deps',
     materializeAssets: ({ destDir }) => destDir,
     spawn: (cmd, args, o) => { call = o; return { on() {} }; },
     procOn: () => {}, procOff: () => {}, exit: () => {},
     onExit: (cb) => cb(0, null),
   });
-  assert.strictEqual(call.env.CLODE_SELF, '/usr/local/bin/clode',
-    'a baked naude cannot update itself; the in-TUI updater must call the builder');
-});
+  assert.strictEqual(call.env.CLODE_SELF, undefined,
+    'a stray `builder` override must not resurrect CLODE_SELF');
 
-// --- the DEFAULT builder path: sourced from the SEA `builder` asset, not an -----
-// --- esbuild define. [[naude-real-on-node24-host]]: over-stubbed DI tests once ---
-// --- let a 100%-fatal boot bug ship green because EVERY test stubbed both `sea` --
-// --- and `builder`, so the seam between them never ran. These two tests pass a --
-// --- fake `sea` and DELIBERATELY do NOT override `builder`, so the real default -
-// --- (reading `sea.getAsset('builder', 'utf8')`) is what's under test.
-test('first pass: no `builder` override -> reads the builder asset off the real `sea` seam', () => {
-  let call = null;
+  let call2 = null;
   const sea = Object.assign(fakeSea(), {
-    getAsset: (name, enc) => {
-      if (name !== 'builder') throw new Error(`no such asset: ${name}`);
-      assert.strictEqual(enc, 'utf8');
-      return '/usr/local/bin/clode';
-    },
+    getAsset: (name) => (name === 'builder' ? '/usr/local/bin/clode' : (() => { throw new Error(`no such asset: ${name}`); })()),
   });
   runNaude({
     argv: [], execPath: '/naude', env: {}, cacheDir: os.tmpdir(), workDir: '/work',
     sea,
-    // NOTE: no `builder` override — the default (bakedBuilder(sea)) is under test.
     materializeDeps: () => '/deps',
     materializeAssets: ({ destDir }) => destDir,
-    spawn: (cmd, args, o) => { call = o; return { on() {} }; },
+    spawn: (cmd, args, o) => { call2 = o; return { on() {} }; },
     procOn: () => {}, procOff: () => {}, exit: () => {},
     onExit: (cb) => cb(0, null),
   });
-  assert.strictEqual(call.env.CLODE_SELF, '/usr/local/bin/clode',
-    'the default builder path must come from the sea.getAsset(\'builder\') seam');
+  assert.strictEqual(call2.env.CLODE_SELF, undefined,
+    'a real SEA `builder` asset must not resurrect CLODE_SELF');
 });
 
 test('first pass declares CLODE_TARGET_KIND=naude and CLODE_TARGET=<the naude exe>', () => {
@@ -370,22 +372,3 @@ test('first pass: the guard settings file is best-effort removed when the child 
   assert.strictEqual(fs.existsSync(writtenFile), false, 'the ephemeral settings file must be removed on exit');
 });
 
-test('first pass: no `builder` override + the builder asset is absent (getAsset throws) -> CLODE_SELF unset', () => {
-  let call = null;
-  const sea = Object.assign(fakeSea(), {
-    getAsset: () => { throw new Error('No such asset: builder'); },
-  });
-  runNaude({
-    argv: [], execPath: '/naude', env: {}, cacheDir: os.tmpdir(), workDir: '/work',
-    sea,
-    // NOTE: no `builder` override here either — the null path must come from
-    // bakedBuilder catching the thrown getAsset, not from a stubbed `builder`.
-    materializeDeps: () => '/deps',
-    materializeAssets: ({ destDir }) => destDir,
-    spawn: (cmd, args, o) => { call = o; return { on() {} }; },
-    procOn: () => {}, procOff: () => {}, exit: () => {},
-    onExit: (cb) => cb(0, null),
-  });
-  assert.strictEqual(call.env.CLODE_SELF, undefined,
-    'no builder asset -> updater must fail loud, not spawn something wrong');
-});

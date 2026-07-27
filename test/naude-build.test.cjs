@@ -8,12 +8,84 @@ const path = require('node:path');
 test('naude sea-config embeds the baked cli.cjs + bun-shim + deps, NOT the extractor', async () => {
   const { naudeSeaConfig } = await import('../scripts/build-naude.mjs');
   const cfg = naudeSeaConfig({ mainBundle: '/b/entry.js', cliCjs: '/cache/cli.cjs',
-    bunShim: '/lx/bun-shim.cjs', tar: '/o/deps.tar', sig: '/o/deps.sig', out: '/o' });
+    bunShim: '/lx/bun-shim.cjs', tar: '/o/deps.tar', sig: '/o/deps.sig', out: '/o',
+    targetUpdateCheck: '/lx/target-update-check.cjs' });
   assert.strictEqual(cfg.assets['cli.cjs'], '/cache/cli.cjs');
   assert.strictEqual(cfg.assets['bun-shim.cjs'], '/lx/bun-shim.cjs');
   assert.ok(cfg.assets['deps.tar'] && cfg.assets['deps.sig']);
   assert.ok(!('extract-claude-js.cjs' in cfg.assets), 'naude must NOT embed the extractor');
   assert.strictEqual(cfg.main, '/b/entry.js');
+});
+
+// Task 5 (auto-update notify-only, naude parity): the baked cli.cjs's own
+// PRELUDE resolves target-update-check.cjs dynamically off __dirname at
+// runtime (naude-entry.cjs's materialized workDir) — it MUST ride as a real
+// SEA asset, the same way bun-shim.cjs and cli.cjs do, or the notify-only
+// autoupdater 404s the moment it fires. See naudeSeaConfig's own comment for
+// the full rationale.
+test('naude sea-config embeds target-update-check.cjs (the notify-only autoupdater dependency)', async () => {
+  const { naudeSeaConfig } = await import('../scripts/build-naude.mjs');
+  const cfg = naudeSeaConfig({ mainBundle: '/b/entry.js', cliCjs: '/cache/cli.cjs',
+    bunShim: '/lx/bun-shim.cjs', tar: '/o/deps.tar', sig: '/o/deps.sig', out: '/o',
+    targetUpdateCheck: '/lx/target-update-check.cjs' });
+  assert.strictEqual(cfg.assets['target-update-check.cjs'], '/lx/target-update-check.cjs');
+});
+
+// writeSeaConfig: defaults targetUpdateCheck to the checkout's OWN
+// libexec/target-update-check.cjs (clode's own code, not staged per-bundle
+// like the bun-shim) — a plain `node scripts/build-naude.mjs --cli ...` keeps
+// working with no new flag required.
+test('writeSeaConfig: defaults targetUpdateCheck to the checkout libexec/target-update-check.cjs', async () => {
+  const { writeSeaConfig } = await import('../scripts/build-naude.mjs');
+  const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-writeseaconfig-tuc-'));
+  try {
+    const cliCjs = path.join(stage, 'cli.cjs');
+    fs.writeFileSync(cliCjs, '// staged cli.cjs\n');
+    fs.writeFileSync(path.join(stage, 'bun-shim.cjs'), '// staged bun-shim\n');
+    const { cfgPath } = writeSeaConfig({
+      bundle: '/b/naude-entry.bundle.cjs', cliCjs, tar: '/o/deps.tar', sigFile: '/o/deps.sig',
+      outDir: stage,
+    });
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    const REPO = path.resolve(__dirname, '..');
+    assert.strictEqual(cfg.assets['target-update-check.cjs'], path.join(REPO, 'libexec', 'target-update-check.cjs'));
+    assert.ok(fs.existsSync(cfg.assets['target-update-check.cjs']), 'the default must point at a real, existing file');
+  } finally {
+    fs.rmSync(stage, { recursive: true, force: true });
+  }
+});
+
+// writeSeaConfig: fail loud (not a silently-missing asset) when an explicit
+// targetUpdateCheck override does not exist — mirrors the existing bun-shim
+// fail-loud check just above it in the source.
+test('writeSeaConfig: fails loud when targetUpdateCheck does not exist', async () => {
+  const { writeSeaConfig } = await import('../scripts/build-naude.mjs');
+  const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-writeseaconfig-tuc-missing-'));
+  try {
+    const cliCjs = path.join(stage, 'cli.cjs');
+    fs.writeFileSync(cliCjs, '// staged cli.cjs\n');
+    fs.writeFileSync(path.join(stage, 'bun-shim.cjs'), '// staged bun-shim\n');
+    // build-naude.mjs is ESM and this guard calls process.exit(1) directly —
+    // assert it out-of-process (a fresh node importing the module and calling
+    // writeSeaConfig with a bogus override) rather than trying to catch an
+    // exit call in-process.
+    const script = `
+      import('${path.resolve(__dirname, '..', 'scripts', 'build-naude.mjs')}').then(({ writeSeaConfig }) => {
+        writeSeaConfig({
+          bundle: '/b/naude-entry.bundle.cjs',
+          cliCjs: ${JSON.stringify(cliCjs)},
+          tar: '/o/deps.tar', sigFile: '/o/deps.sig',
+          outDir: ${JSON.stringify(stage)},
+          targetUpdateCheck: '/nonexistent/target-update-check.cjs',
+        });
+      });
+    `;
+    const r = require('node:child_process').spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
+    assert.strictEqual(r.status, 1, `expected exit 1; got ${r.status}\nstderr:\n${r.stderr}`);
+    assert.match(r.stderr, /target-update-check\.cjs not found/);
+  } finally {
+    fs.rmSync(stage, { recursive: true, force: true });
+  }
 });
 
 // The builder path (the clode that built this naude, for the in-app updater's

@@ -13,14 +13,27 @@
 // NAUDE_RUN_AS_NODE env sentinel:
 //   - unset (+ isSea): the first pass — materialize deps (-> depsRoot) and the
 //     named assets (-> workDir), then shape the child env with the target-env
-//     contract (shapeTargetEnv — was the retired runner's applyBundleEnv job;
-//     CLODE_SELF points at the builder, see bakedBuilder below), spawn
-//     process.execPath (the naude binary) with NAUDE_RUN_AS_NODE=<workDir>/cli.cjs,
-//     NODE_PATH prepended with <depsRoot>/node_modules, and the user args passed
-//     through; wait; mirror exit.
-//   - set: the re-invoked "plain node" pass — run the target cli.cjs as the main
-//     module (fix process.argv, then require it; the baked cli.cjs self-requires
-//     the bun-shim, NODE_PATH resolves the deps).
+//     contract (shapeTargetEnv — was the retired runner's applyBundleEnv job),
+//     spawn process.execPath (the naude binary) with
+//     NAUDE_RUN_AS_NODE=<workDir>/cli.cjs, NODE_PATH prepended with
+//     <depsRoot>/node_modules, and the user args passed through; wait; mirror
+//     exit.
+//   - set: the re-invoked "plain node" pass — install the notify-only
+//     __clodeCheckUpdate global (installCheckUpdateGlobal, below), then run the
+//     target cli.cjs as the main module (fix process.argv, then require it;
+//     the baked cli.cjs self-requires the bun-shim, NODE_PATH resolves the
+//     deps).
+//
+// Task 5 (auto-update notify-only, naude parity): a naude cannot rebuild
+// itself, so its baked cli.cjs's in-app updater used to spawn a rebuild back
+// through CLODE_SELF (the clode that built it). That spawn is RETIRED (Task
+// 3): the shared autoupdater patches (extract-claude-js.cjs) now call
+// globalThis.__clodeCheckUpdate(current) instead — a pure check-and-notify,
+// no builder, no rebuild. naude no longer wires up CLODE_SELF at all (was
+// bakedBuilder/the `builder` SEA asset, both removed); installCheckUpdateGlobal
+// below provides the SAME global the quaude PRELUDE installs, so the notify
+// path works even against a cli.cjs whose own PRELUDE patch didn't apply
+// (version drift).
 //
 // Everything the two branches touch (sea, spawn, env, exit, materializeDeps,
 // materializeAssets, requireMain, the exit hook) is injectable, so both branches
@@ -33,21 +46,36 @@ const seaHelpers = require('./naude-sea.cjs');
 const { shapeTargetEnv } = require('./target-env.cjs');
 const { isExecutableFile } = require('./clode-hosttools.cjs');
 const { guardVerdict, shouldInjectGuard } = require('./update-guard.cjs');
+const { checkUpdate } = require('./target-update-check.cjs');
 require('./host-provision.cjs'); // ensure esbuild bundles it into the SEA for runtime provision('tar')
-// The absolute path of the clode that built this naude, read as a SEA asset (
-// runtime data) rather than an esbuild --define (a build-time string burned
-// into the bundle) — so the SAME esbuilt naude-entry bundle serves every
-// build regardless of who built it. A naude cannot rebuild itself, so its
-// patched in-app updater calls back to this builder. Absent asset / no `sea`
-// seam (a plain `require()` of this module in tests) -> null, same as before
-// -> no CLODE_SELF, updater fails loud.
-function bakedBuilder(sea) {
-  try {
-    const b = sea && sea.getAsset && sea.getAsset('builder', 'utf8');
-    return b ? (String(b).trim() || null) : null;
-  } catch {
-    return null;
-  }
+
+// Install globalThis.__clodeCheckUpdate exactly as the quaude PRELUDE does
+// (extract-claude-js.cjs): a pure check-upstream-and-notify, never an install
+// or rebuild. target-update-check.cjs is required with a STATIC specifier here
+// (unlike cli.cjs's own baked `require(__dirname + '/target-update-check.cjs')`),
+// so esbuild bundles it straight into naude-entry.bundle.cjs — no separate SEA
+// asset needed for THIS call site. (cli.cjs's own dynamic require is a
+// different consumer with a different resolution rule; see the
+// materializeAssets `names` list below for why target-update-check.cjs still
+// rides as a materialized asset.) Bun.semver.order is read at CALL time, not
+// here, because globalThis.Bun is only set once the baked cli.cjs's own
+// prelude has run (its `globalThis.Bun = ... require(bun-shim.cjs)` line runs
+// before any of its own code, including the updater that eventually calls
+// this) — falls back to a crude string comparator if Bun is somehow absent.
+function installCheckUpdateGlobal() {
+  globalThis.__clodeCheckUpdate = function (current) {
+    const semverOrder = (globalThis.Bun && globalThis.Bun.semver && globalThis.Bun.semver.order)
+      ? globalThis.Bun.semver.order
+      : (a, b) => (a === b ? 0 : (a > b ? 1 : -1));
+    return checkUpdate({ current, env: process.env, semverOrder })
+      .then((r) => ({
+        wasUpdated: false,
+        latestVersion: r.state === 'newer' ? r.latest : null,
+        lockFailed: false,
+        __clodeState: r.state,
+      }))
+      .catch(() => ({ wasUpdated: false, latestVersion: null, lockFailed: false, __clodeState: 'unknown' }));
+  };
 }
 
 // Reshape argv to plain-node form and run the target as the main module. Defaults
@@ -97,10 +125,15 @@ function runNaude(opts = {}) {
   }
 
   // Second pass: we are the re-invoked "plain node". Run the target cli.cjs as the
-  // main module. Strip the sentinel so the baked cli.cjs never sees it.
+  // main module. Strip the sentinel so the baked cli.cjs never sees it. Install
+  // the notify-only __clodeCheckUpdate global BEFORE requiring cli.cjs (its own
+  // baked PRELUDE unconditionally re-assigns the same global once it loads —
+  // this call is defense-in-depth for a cli.cjs whose PRELUDE patch didn't
+  // apply, not a race).
   const target = env.NAUDE_RUN_AS_NODE;
   if (target) {
     delete env.NAUDE_RUN_AS_NODE;
+    installCheckUpdateGlobal();
     requireMain(target, [execPath, target, ...argv]);
     return;
   }
@@ -119,15 +152,20 @@ function runNaude(opts = {}) {
     procOn = (s, cb) => process.on(s, cb),
     procOff = (s, cb) => process.removeListener(s, cb),
     onExit,
-    builder = bakedBuilder(sea),
   } = opts;
 
   // Unpack the deps tarball to a sig-keyed cache dir (holds node_modules/), and the
-  // baked cli.cjs + bun-shim into a work dir. workDir is injectable for tests; the
-  // default is a stable dir under the deps cache root.
+  // baked cli.cjs + bun-shim + target-update-check.cjs into a work dir. workDir is
+  // injectable for tests; the default is a stable dir under the deps cache root.
+  // target-update-check.cjs rides alongside cli.cjs (not merely bundled into THIS
+  // esbuilt entry, above) because cli.cjs's own baked PRELUDE resolves it
+  // dynamically as `require(__dirname + '/target-update-check.cjs')` — __dirname
+  // there is workDir, so the file must actually exist on disk here or that
+  // require 404s the moment the notify-only autoupdater fires (mirrors quaude-
+  // fuse.js's product-role member of the same name, same reasoning).
   const depsRoot = materializeDeps({ sea, cacheDir });
   const workDir = opts.workDir || path.join(cacheDir, 'sea-deps', 'naude');
-  materializeAssets({ sea, destDir: workDir, names: ['cli.cjs', 'bun-shim.cjs'] });
+  materializeAssets({ sea, destDir: workDir, names: ['cli.cjs', 'bun-shim.cjs', 'target-update-check.cjs'] });
   const cliPath = path.join(workDir, 'cli.cjs');
 
   // Build the child env: sentinel points at the baked cli.cjs; NODE_PATH PREPENDS
@@ -141,10 +179,11 @@ function runNaude(opts = {}) {
   // The contract every built target applies to itself (was the runner's job).
   // `exists` (mere presence) answers the trustd question; rg candidates need
   // `isExec` (isFile + +x) — see target-env.cjs's findOnPath for why the two
-  // must not be conflated.
+  // must not be conflated. No `self` (CLODE_SELF): Task 5 retires it — a naude
+  // cannot rebuild itself and the notify-only autoupdater (Task 3) never spawns
+  // a builder, so there is nothing left for CLODE_SELF to point at.
   shapeTargetEnv({
     env: childEnv,
-    self: builder,
     targetKind: 'naude',
     targetPath: execPath,
     platform: process.platform,

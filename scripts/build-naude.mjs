@@ -170,24 +170,36 @@ export function stageDeps(nmdir) {
 
 // PURE sea-config generator: the node:sea config object naude's SEA embeds. main = the
 // esbuilt naude-entry bundle; assets = the deps tarball (+ sig), the bun-shim (staged
-// beside the cli.cjs — see stagedBunShim), and the BAKED cli.cjs (the caller's Claude
-// Code, given via `--cli`). Crucially there is NO
+// beside the cli.cjs — see stagedBunShim), the BAKED cli.cjs (the caller's Claude
+// Code, given via `--cli`), and target-update-check.cjs (below). Crucially there is NO
 // `extract-claude-js.cjs` asset — naude bakes CC, it never extracts at runtime. Exported
 // and side-effect-free so it's unit-testable without building a real SEA.
-// `builder` is the absolute path of the clode building this naude (a naude cannot
-// rebuild itself, so its patched in-app updater calls back to the builder — see
-// naude-entry.cjs's bakedBuilder). It used to be burned into the bundle via an
-// esbuild --define; now it's runtime data, a `builder` asset, so the SAME esbuilt
-// naude-entry bundle serves every build regardless of who built it. A non-empty
-// string is written to <out>/builder.txt and added as the asset; null/empty omits
-// the asset entirely, preserving the "no builder -> updater fails loud" contract
-// naude-entry.cjs's bakedBuilder implements on the read side.
-export function naudeSeaConfig({ mainBundle, cliCjs, bunShim, tar, sig, out, builder }) {
+//
+// target-update-check.cjs: the baked cli.cjs's own PRELUDE (extract-claude-js.cjs)
+// resolves it dynamically at runtime as `require(__dirname + '/target-update-check.cjs')`
+// to back globalThis.__clodeCheckUpdate — the notify-only autoupdater (Task 3) calls
+// that instead of spawning a rebuild. __dirname there is naude-entry.cjs's materialized
+// workDir (same dir cli.cjs itself lands in — see naude-entry.cjs's materializeAssets
+// `names` list), so this member MUST ride as a real SEA asset, not merely get bundled
+// into naude-entry.bundle.cjs by esbuild (which only covers naude-entry.cjs's OWN static
+// requires, not cli.cjs's dynamic one). Mirrors quaude-fuse.js's identically-named
+// product-role member for the same reason. `targetUpdateCheck` defaults (in
+// writeSeaConfig, below) to the checkout's own libexec/target-update-check.cjs — clode's
+// own code, version-independent, not staged per-bundle like bunShim.
+//
+// `builder` is the absolute path of the clode building this naude — was read by
+// naude-entry.cjs's (now-removed) bakedBuilder to feed CLODE_SELF for the RETIRED
+// spawn-a-rebuild callback (Task 5 dropped that read side). The write side here is
+// left in place: harmless unread data today, and still exercised by
+// test/naude-build.test.cjs. A non-empty string is written to <out>/builder.txt and
+// added as the asset; null/empty omits the asset entirely.
+export function naudeSeaConfig({ mainBundle, cliCjs, bunShim, tar, sig, out, builder, targetUpdateCheck }) {
   const assets = {
     'deps.tar': tar,
     'deps.sig': sig,
     'bun-shim.cjs': bunShim,
     'cli.cjs': cliCjs,
+    'target-update-check.cjs': targetUpdateCheck,
   };
   if (builder) {
     const builderFile = path.join(out, 'builder.txt');
@@ -216,9 +228,19 @@ export function stagedBunShim(cliCjs) {
 // here): threaded straight through to naudeSeaConfig — previously this
 // function silently omitted it, so every naude built via this path baked NO
 // builder asset at all, regardless of CLODE_SELF/--builder, and its patched
-// updater always failed loud with no callback target. Exported so a test can
-// assert the threading without a full build.
-export function writeSeaConfig({ bundle, cliCjs, tar, sigFile, builder, outDir = OUT }) {
+// updater always failed loud with no callback target. `targetUpdateCheck`
+// (auto-update notify-only, naude parity — Task 5) defaults to the checkout's
+// OWN libexec/target-update-check.cjs: unlike the bun-shim, this member is
+// clode's own code, not staged per-bundle, so there is nothing to reach back
+// for — it always exists at this fixed, version-independent location (a fused
+// builder's materializeFusedPayload restores it to the same relative spot
+// under REPO, so the default resolves correctly whether this script runs from
+// a checkout or a fused-builder's materialized payload). Exported so a test
+// can assert the threading without a full build.
+export function writeSeaConfig({
+  bundle, cliCjs, tar, sigFile, builder, outDir = OUT,
+  targetUpdateCheck = path.join(REPO, 'libexec', 'target-update-check.cjs'),
+}) {
   // Ensure the artifact dir exists before writing into it (sea-config.json here,
   // builder.txt via naudeSeaConfig). A full build's main() already made OUT and a
   // dev box has build/<tag>/ from a prior run, so this only bit a clean checkout
@@ -236,6 +258,13 @@ export function writeSeaConfig({ bundle, cliCjs, tar, sigFile, builder, outDir =
     console.error("staged cache dir (what `clode build --naude` does), not a bare cli.cjs.");
     process.exit(1);
   }
+  if (!fs.existsSync(targetUpdateCheck)) {
+    // Fail loud: without this asset the baked cli.cjs's own
+    // `require(__dirname + '/target-update-check.cjs')` 404s the moment the
+    // notify-only autoupdater fires (see naudeSeaConfig's comment).
+    console.error(`build-naude: target-update-check.cjs not found at: ${targetUpdateCheck}`);
+    process.exit(1);
+  }
   const cfg = naudeSeaConfig({
     mainBundle: bundle,
     cliCjs,
@@ -244,6 +273,7 @@ export function writeSeaConfig({ bundle, cliCjs, tar, sigFile, builder, outDir =
     sig: sigFile,
     out: outDir,
     builder,
+    targetUpdateCheck,
   });
   const p = path.join(outDir, 'sea-config.json');
   fs.writeFileSync(p, JSON.stringify(cfg, null, 2));
