@@ -64,6 +64,27 @@ test('checkUpdate: unknown when semver comparison throws (garbage body)', async 
   assert.strictEqual(r.state, 'unknown');
 });
 
+// The check runs inside the diagnostics builder that /status and `claude doctor`
+// await, so a stalled channel GET must fail fast to 'unknown' (the "couldn't check"
+// note), not block the screen for undici's ~300s default.
+test('checkUpdate: a hung fetch aborts on the bounded signal -> unknown, promptly', async () => {
+  // fetchImpl never resolves on its own; it only settles when the injected
+  // AbortSignal.timeout fires. A tiny timeoutMs keeps the test fast + deterministic
+  // (the timing is injected, not slept-through).
+  let sawSignal = null;
+  const hungFetch = (_url, opts) => new Promise((_resolve, reject) => {
+    sawSignal = opts && opts.signal;
+    if (sawSignal) sawSignal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+    // otherwise: never resolves
+  });
+  const started = Date.now();
+  const r = await checkUpdate({ current: '2.1.218', channel: 'latest',
+    fetchImpl: hungFetch, semverOrder: order, timeoutMs: 20 });
+  assert.deepStrictEqual(r, { state: 'unknown', latest: null, current: '2.1.218' });
+  assert.ok(sawSignal, 'resolveLatest must pass an { signal } to fetch');
+  assert.ok(Date.now() - started < 2000, 'must not block for the real fetch timeout');
+});
+
 // The PRELUDE's __clodeCheckUpdate wraps checkUpdate into the bundle's
 // {wasUpdated,latestVersion,lockFailed} shape and never reports wasUpdated.
 test('__clodeCheckUpdate returns a never-installed, notify-only shape', async () => {

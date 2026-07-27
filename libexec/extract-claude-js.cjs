@@ -260,28 +260,26 @@ function patchRemoteControlUnavailable(body) {
   return [body, false];
 }
 
-// --- pkg-manager autoupdater NOTIFY (no install, no CLODE_SELF) ---------------
-// Claude Code's in-TUI autoupdater (the pkg-manager path) spawns an npm/install
-// command `cmd` (destructured as `let[a,...b]=cmd`) then treats `code===0` as
-// "Update installed · Restart to apply". A built target has no npm-managed install
-// to update, so we must NOT run an installer AND must not falsely claim an update
-// was installed. The native path (above) is the PRIMARY notify surface — it binds
-// latestVersion into the notice. Here (defensive/secondary, since a built target's
-// detected install-type usually routes to the native path) we, spliced right after
-// the auto_updater_start telemetry and before the destructure:
-//   1. fire globalThis.__clodeCheckUpdate(...) for its latestVersion side-effect
-//      (the Task 4 notice reads it), and
-//   2. reassign `cmd` to a non-installing no-op argv (["false"]) so the spawn
-//      cannot install anything AND exits non-zero — the `code===0` false-success
-//      branch is NOT taken (no bogus "Restart to apply"); the else branch is a
-//      debug log, not a user-facing claim.
-// NEVER references CLODE_SELF. NOTE: unlike the native path, this site binds no
-// nearby VERSION literal, so the check receives globalThis.__clodeCurrentVersion
-// (may be unset -> ""); checkUpdate degrades to best-effort. Wiring a robust
-// current-version here (module-global version-constant discovery) and pinning the
-// exact portable no-op argv are Task 6 characterization items — the native path
-// carries the authoritative notice meanwhile. Same identifier bounding rationale as
-// the doctor anchors (short minified ids, linear scan).
+// --- pkg-manager autoupdater INSTALLER-NEUTRALIZATION (no install, no CLODE_SELF) --
+// This is NOT a notice surface. Task 6 characterization proved the ONLY surface the
+// three-state notify reaches the user through is the doctor/status installation-
+// warnings list (patchUpdateNotice, below) — the in-TUI autoupdater widgets (native
+// AND pkg) render only install OUTCOMES and show nothing for notify-only. So this
+// patch and the native one below serve ONE purpose: stop the installer from running
+// and from claiming a bogus success. Claude Code's pkg-manager path spawns an
+// npm/install command `cmd` (destructured as `let[a,...b]=cmd`) then treats `code===0`
+// as "Update installed · Restart to apply". A built target has no npm-managed install,
+// so — spliced right after the auto_updater_start telemetry and before the destructure —
+// we reassign `cmd` to a non-installing no-op argv (["false"]) so the spawn cannot
+// install anything AND exits non-zero: the `code===0` false-success branch is NOT taken
+// (no bogus "Restart to apply"); the else branch is a debug log, not a user-facing claim.
+// NEVER references CLODE_SELF.
+//
+// The override also carries a discarded `globalThis.__clodeCheckUpdate(...)` call — see
+// patchAutoupdater's inline note: it is a deliberate no-op-result side-effect, kept only
+// so the notify-only intent is legible at the patched site and the strict already-patched
+// marker (_AUTOUPDATER_PATCHED) stays stable; the notice does NOT read it. Same identifier
+// bounding rationale as the doctor anchors (short minified ids, linear scan).
 //
 // Three destructure shapes, alternated after `=<cmd>`:
 //   - comma form  `let[a,...b]=cmd,c=await f(`            — PROVEN real <=2.1.202 (2.1.179)
@@ -299,8 +297,7 @@ function patchRemoteControlUnavailable(body) {
 const AUTOUPDATER_SPAWN =
   /(?<pre>tengu_pkg_manager_auto_updater_start",[A-Za-z0-9_$]{1,6}\);)let\[(?<a>[A-Za-z0-9_$]{1,6}),\.\.\.(?<rest>[A-Za-z0-9_$]{1,6})\]=(?<cmd>[A-Za-z0-9_$]{1,6})(?:,[A-Za-z0-9_$]{1,6}=await [A-Za-z0-9_$]{1,6}\(|;let [A-Za-z0-9_$]{1,6}=\k<a>;let [A-Za-z0-9_$]{1,6}=\k<rest>;let [A-Za-z0-9_$]{1,6}=await [A-Za-z0-9_$]{1,6}\(|;let [A-Za-z0-9_$]{1,6}=await [A-Za-z0-9_$]{1,6}\(\k<a>,\k<rest>,)/g;
 
-// Neutralize the pkg-manager autoupdater to notify-only: fire __clodeCheckUpdate
-// (side-effect: latestVersion for the notice) and reassign the spawn argv to a
+// Neutralize the pkg-manager autoupdater: reassign the spawn argv to a
 // non-installing, non-zero-exit no-op so nothing installs and no false success is
 // claimed. Never spawns CLODE_SELF. Returns [newBody, applied]; applied false
 // unless exactly one match (fail-loud).
@@ -309,6 +306,11 @@ function patchAutoupdater(body) {
   if (m.length !== 1) return [body, false];
   const cmd = m[0].groups.cmd;
   const pre = m[0].groups.pre;
+  // `<cmd>=(<discarded check>,["false"]);` — the check result is DELIBERATELY
+  // discarded (comma operator): __clodeCurrentVersion is never set (always ""), and
+  // the notice rides patchUpdateNotice, not this path. The call is kept only to make
+  // the notify-only intent legible here and to keep _AUTOUPDATER_PATCHED (the strict
+  // already-patched marker) stable; ["false"] is the only load-bearing part.
   const override = cmd
     + '=(globalThis.__clodeCheckUpdate&&globalThis.__clodeCheckUpdate('
     + 'globalThis.__clodeCurrentVersion||""),["false"]);';
@@ -316,18 +318,21 @@ function patchAutoupdater(body) {
   return [body.slice(0, cut) + override + body.slice(cut), true];
 }
 
-// --- native autoupdater NOTIFY (no install, no CLODE_SELF) --------------------
-// Claude Code's in-TUI NATIVE autoupdater installs in-process: after the
-// `tengu_native_auto_updater_start` telemetry it does
+// --- native autoupdater INSTALLER-NEUTRALIZATION (no install, no CLODE_SELF) ------
+// Like the pkg patch above, this is NOT a notice surface (Task 6: the native widget
+// renders only install outcomes, nothing for notify-only). It exists to stop the
+// in-process installer. Claude Code's NATIVE autoupdater installs in-process: after
+// the `tengu_native_auto_updater_start` telemetry it does
 // `try{let S=await <fn>(<arg>),w={...,VERSION:"x.y.z",...},…` where <fn> returns
 // {wasUpdated,latestVersion,lockFailed} and the NEXT declarator binds the running
 // bundle's metadata object (whose VERSION field is the current version). A built
 // target runs extracted JS where no in-place native install (and no clode) exists,
 // so we NEVER install. Instead we replace `await <fn>(<arg>)` with
 // `await globalThis.__clodeCheckUpdate("<version>")` (installed by the PRELUDE):
-// it resolves the three-state upstream check and returns a {wasUpdated:false,
-// latestVersion, lockFailed:false, __clodeState} shape, so the bundle never renders
-// "Restart to apply" and the Task 4 notice patch reads latestVersion from it.
+// it resolves to a {wasUpdated:false, latestVersion, lockFailed:false, __clodeState}
+// shape, so the bundle never renders "Restart to apply". The notice itself is
+// produced separately by patchUpdateNotice (the diagnostics warnings surface); the
+// <version> literal is captured here only to keep this call honest/self-consistent.
 //
 // How the CURRENT version reaches the check: the metadata object bound as the very
 // next declarator carries `VERSION:"x.y.z"` as a STRING LITERAL. We read that

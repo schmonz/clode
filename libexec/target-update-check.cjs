@@ -23,13 +23,33 @@ function releasesBase(env) {
   return (env && env.CLODE_RELEASES_URL) || DEFAULT_RELEASES;
 }
 
+// How long a channel GET may take before it fails fast to 'unknown'. This check
+// runs inside the diagnostics builder that /status and `claude doctor` await, so an
+// offline/slow-DNS default-'latest' lookup must NOT stall that screen for undici's
+// ~300s default — it degrades to the "couldn't check" note in a few seconds.
+const FETCH_TIMEOUT_MS = 3000;
+
+// Build the { signal } passed to fetch: a short abort timeout when the runtime
+// supports AbortSignal.timeout (Node >=17.3, and tjs's shim). If it's absent we
+// simply pass no signal — the check still works, it just isn't time-bounded.
+function timeoutSignal(ms) {
+  try {
+    if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+      return AbortSignal.timeout(ms);
+    }
+  } catch { /* fall through to no-signal */ }
+  return undefined;
+}
+
 // Resolve the latest version string for a channel. A numeric channel ("2.1.5")
-// IS the version; otherwise GET <base>/<channel> and trim CR/LF. Throws on any
-// fetch/HTTP failure so checkUpdate can map it to 'unknown'.
-async function resolveLatest(channel, { env = {}, fetchImpl = fetch } = {}) {
+// IS the version (no fetch); otherwise GET <base>/<channel> and trim CR/LF, bounded
+// by FETCH_TIMEOUT_MS. Throws on any fetch/HTTP failure — including an abort/timeout
+// — so checkUpdate maps it to 'unknown' (the "couldn't check" note).
+async function resolveLatest(channel, { env = {}, fetchImpl = fetch, timeoutMs = FETCH_TIMEOUT_MS } = {}) {
   const chan = resolveChannel(channel, env);
   if (/^\d/.test(chan)) return chan;
-  const res = await fetchImpl(`${releasesBase(env)}/${chan}`);
+  const signal = timeoutSignal(timeoutMs);
+  const res = await fetchImpl(`${releasesBase(env)}/${chan}`, signal ? { signal } : {});
   if (!res || !res.ok) throw new Error(`channel ${chan}: HTTP ${res && res.status}`);
   return (await res.text()).replace(/[\r\n]+/g, '').trim();
 }
@@ -37,9 +57,9 @@ async function resolveLatest(channel, { env = {}, fetchImpl = fetch } = {}) {
 // Three-state result. current = the running bundle's VERSION. semverOrder is
 // Bun.semver.order (npm semver compare): >0 means latest is newer than current.
 // Any failure (fetch, empty body, unparseable version) collapses to 'unknown'.
-async function checkUpdate({ current, channel, env = {}, fetchImpl = fetch, semverOrder }) {
+async function checkUpdate({ current, channel, env = {}, fetchImpl = fetch, semverOrder, timeoutMs }) {
   let latest;
-  try { latest = await resolveLatest(channel, { env, fetchImpl }); }
+  try { latest = await resolveLatest(channel, { env, fetchImpl, timeoutMs }); }
   catch { return { state: 'unknown', latest: null, current }; }
   if (!latest) return { state: 'unknown', latest: null, current };
   let newer;
