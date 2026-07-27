@@ -495,6 +495,31 @@ Object.defineProperty(globalThis, 'Buffer', {
   configurable: true,
   get() { return loadBuiltin('buffer').Buffer; },
 });
+// Route an uncaught exception (from a timer callback, chiefly) through process's
+// 'uncaughtException' listeners, matching host node: a registered handler runs
+// and the process SURVIVES; with no handler, node prints the error + stack and
+// exits 1. Claude Code registers such a handler (crash telemetry + recovery), so
+// without this a throw in e.g. the AsyncAgent stall-watchdog setTimeout callback
+// would never reach it — the txiki default swallows it (errors masked) or, in the
+// real async path, surfaces a bare one-frame trace that killed the session.
+// 'uncaughtExceptionMonitor' listeners are notified but never suppress the throw.
+function __shimUncaught(e) {
+  const p = globalThis.process;
+  const count = p && typeof p.listenerCount === 'function'
+    ? p.listenerCount('uncaughtException') + p.listenerCount('uncaughtExceptionMonitor')
+    : 0;
+  if (p && typeof p.emit === 'function' && count > 0) {
+    try { if (p.listenerCount('uncaughtExceptionMonitor') > 0) p.emit('uncaughtExceptionMonitor', e); }
+    catch (_) { /* monitors must not alter control flow */ }
+    p.emit('uncaughtException', e);
+    return;
+  }
+  try { console.error(e && e.stack ? `${e}\n${e.stack}` : String(e)); } catch (_) { /* ignore */ }
+  try { (p && typeof p.exit === 'function' ? p.exit : (c) => tjs.exit(c))(1); }
+  catch (_) { try { tjs.exit(1); } catch (__) { /* ignore */ } }
+}
+globalThis.__shimUncaught = __shimUncaught;
+
 // Node's timer functions return a Timeout/Immediate OBJECT (ref/unref/hasRef/
 // refresh + Symbol.toPrimitive→id); txiki's return a bare NUMBER. The extracted
 // bundle pervasively uses the Node idiom `setTimeout(...).unref()` (e.g. its
@@ -525,15 +550,27 @@ Object.defineProperty(globalThis, 'Buffer', {
       [Symbol.toPrimitive]() { return this._id; },
     };
   }
+  // A throw inside a timer callback runs OUTSIDE any caller try/catch (it fires
+  // on a later event-loop turn). Node routes it to process 'uncaughtException'
+  // listeners; the txiki default silently swallows it, so the bundle's
+  // uncaughtException handler (crash telemetry + recovery) never runs and a
+  // recoverable error is instead lost — or, in the real async agent stall
+  // watchdog, surfaced as a raw one-frame trace that broke the session. Wrap
+  // every timer callback so a throw goes through __shimUncaught (below), exactly
+  // like host node. See test/node-shim-uncaught.test.cjs.
+  const guard = (fn) => function () {
+    try { return fn.apply(this, arguments); }
+    catch (e) { __shimUncaught(e); }
+  };
   globalThis.setTimeout = function (fn, d, ...a) {
-    let cb = fn;
-    if (TRACE) { const id = ++n; console.error('[timer] setTimeout#' + id + ' delay=' + d); cb = function () { console.error('[timer] fire setTimeout#' + id); return fn.apply(this, arguments); }; }
+    let cb = guard(fn);
+    if (TRACE) { const id = ++n; console.error('[timer] setTimeout#' + id + ' delay=' + d); const inner = cb; cb = function () { console.error('[timer] fire setTimeout#' + id); return inner.apply(this, arguments); }; }
     const self = this;
     const rearm = () => _st.call(self, cb, d, ...a);
     return makeHandle(_st.call(self, cb, d, ...a), 'timeout', rearm);
   };
   globalThis.setInterval = function (fn, d, ...a) {
-    let cb = fn;
+    let cb = guard(fn);
     if (TRACE) { const id = ++n; console.error('[timer] setInterval#' + id + ' delay=' + d); }
     return makeHandle(_si.call(this, cb, d, ...a), 'interval', null);
   };
@@ -607,6 +644,15 @@ if (globalThis.process && globalThis.process.env && globalThis.process.env.CLODE
 globalThis.addEventListener?.('unhandledrejection', (ev) => {
   const r = ev && ev.reason;
   try { ev.preventDefault?.(); } catch { /* ignore */ }
+  // Route to the bundle's process 'unhandledRejection' listeners when present
+  // (Claude Code registers one), matching host node, so the app handles it
+  // instead of only seeing this stderr line. No listener -> print as before.
+  const p = globalThis.process;
+  if (p && typeof p.emit === 'function' && typeof p.listenerCount === 'function'
+      && p.listenerCount('unhandledRejection') > 0) {
+    p.emit('unhandledRejection', r, ev && ev.promise);
+    return;
+  }
   console.error('node-shim: unhandledRejection:');
   console.error(r && r.stack ? `${r}\n${r.stack}` : String(r));
 });
