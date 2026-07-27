@@ -51,6 +51,78 @@ test('fs characterization vs host node', (t) => {
   assert.strictEqual(r.stdout.trim(), nodeOut);
 });
 
+// copy preserves executable mode (plugin-install fidelity): Claude Code's
+// git-subdir plugin installer `cpSync`s a git-checked-out tree (git writes hook
+// scripts as 0755) into the version cache. A content-only copy that drops the
+// mode leaves run-hook.cmd at 0644 → `/bin/sh` can't exec it → "SessionStart
+// hook error". copyFileSync/cpSync must preserve the source's perm bits exactly
+// as host node does. Reports octal perms of copies made both ways.
+const COPYMODE_PROG = `
+const fs = require('node:fs');
+const path = require('node:path');
+const dir = process.argv[2];
+const out = [];
+const src = path.join(dir, 'run-hook.cmd');
+fs.writeFileSync(src, '#!/bin/sh\\necho hi\\n');
+fs.chmodSync(src, 0o755);
+out.push((fs.statSync(src).mode & 0o7777).toString(8));
+const cf = path.join(dir, 'copy.cmd');
+fs.copyFileSync(src, cf);
+out.push((fs.statSync(cf).mode & 0o7777).toString(8));
+const srcDir = path.join(dir, 'tree'); fs.mkdirSync(srcDir);
+fs.writeFileSync(path.join(srcDir, 'exe'), 'x'); fs.chmodSync(path.join(srcDir, 'exe'), 0o755);
+fs.writeFileSync(path.join(srcDir, 'plain'), 'y'); fs.chmodSync(path.join(srcDir, 'plain'), 0o644);
+fs.cpSync(srcDir, path.join(dir, 'treecopy'), { recursive: true });
+out.push((fs.statSync(path.join(dir, 'treecopy', 'exe')).mode & 0o7777).toString(8));
+out.push((fs.statSync(path.join(dir, 'treecopy', 'plain')).mode & 0o7777).toString(8));
+console.log(JSON.stringify(out));
+`;
+
+test('copyFileSync/cpSync preserve mode vs host node', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-cpmode-'));
+  const f = path.join(base, 'cpmode.cjs');
+  fs.writeFileSync(f, COPYMODE_PROG);
+  const nodeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-cpmode-node-'));
+  const tjsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-cpmode-tjs-'));
+  const nodeOut = require('node:child_process')
+    .execFileSync(process.execPath, [f, nodeDir], { encoding: 'utf8' }).trim();
+  const r = runLoader(f, [tjsDir]);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.stdout.trim(), nodeOut);
+});
+
+// cpSync self-recursion guard: copying a directory into a subdirectory of
+// itself (or onto itself) must throw ERR_FS_CP_EINVAL like host node — NOT
+// recurse forever building .../sub/sub/sub until it dies on ENAMETOOLONG / a
+// blown stack. Report the caught error codes for both cases.
+const CPGUARD_PROG = `
+const fs = require('node:fs');
+const path = require('node:path');
+const dir = process.argv[2];
+const out = [];
+fs.writeFileSync(path.join(dir, 'f'), 'x');
+try { fs.cpSync(dir, path.join(dir, 'sub'), { recursive: true }); out.push('NO_THROW'); }
+catch (e) { out.push(e.code); }
+try { fs.cpSync(dir, dir, { recursive: true }); out.push('NO_THROW'); }
+catch (e) { out.push(e.code); }
+console.log(JSON.stringify(out));
+`;
+
+test('cpSync self-recursion throws EINVAL like host node', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-cpguard-'));
+  const f = path.join(base, 'cpguard.cjs');
+  fs.writeFileSync(f, CPGUARD_PROG);
+  const nodeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-cpguard-node-'));
+  const tjsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-cpguard-tjs-'));
+  const nodeOut = require('node:child_process')
+    .execFileSync(process.execPath, [f, nodeDir], { encoding: 'utf8' }).trim();
+  const r = runLoader(f, [tjsDir]);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.stdout.trim(), nodeOut);
+});
+
 // fs.promises.open + O_* constants (tjs Bash-tool wall): the bundle's Bash tool
 // opens a per-command log file with `fs.promises.open(path, O_WRONLY|O_CREAT|
 // O_APPEND|O_NOFOLLOW)` and passes the returned FileHandle's real fd as child

@@ -438,15 +438,41 @@ function createWriteStream(p, opts) {
 }
 
 // fs.cpSync: recursive copy (dir/file/symlink), mirroring promises.rm's recursion.
+// Guards against copying a directory onto itself or into a subdirectory of
+// itself (host node throws ERR_FS_CP_EINVAL) — otherwise cpDir would recurse
+// forever building .../sub/sub/sub until ENAMETOOLONG or a blown stack. The
+// check runs once on the public entry, not per recursion.
 function cpSync(src, dest, opts = {}) {
+  const a = path.resolve(src);
+  const b = path.resolve(dest);
+  if (a === b) {
+    const e = new Error(`src and dest cannot be the same ${a}`);
+    e.code = 'ERR_FS_CP_EINVAL';
+    throw e;
+  }
+  if (b.startsWith(a + path.sep)) {
+    const e = new Error(`Cannot copy ${a} to a subdirectory of self ${b}`);
+    e.code = 'ERR_FS_CP_EINVAL';
+    throw e;
+  }
+  cpDir(src, dest, opts);
+}
+
+// Recursive copy worker (no self-recursion guard — the public cpSync vetted the
+// roots once). Preserves each source's permission bits, as host node's cp does:
+// load-bearing for plugin installs, where a git-subdir plugin's hook scripts are
+// checked out 0755 then cpSync'd into the version cache — dropping +x makes the
+// SessionStart hook non-executable ("hook error: Permission denied").
+function cpDir(src, dest, opts) {
   const st = lstatSync(src);
   if (st.isSymbolicLink && st.isSymbolicLink()) { FSS.symlink(FSS.readlink(src), dest); return; }
   if (st.isDirectory()) {
     mkdirSync(dest, { recursive: true });
-    for (const n of FSS.readdir(src)) cpSync(path.join(src, n), path.join(dest, n), opts);
+    for (const n of FSS.readdir(src)) cpDir(path.join(src, n), path.join(dest, n), opts);
     return;
   }
   writeFileSync(dest, readFileSync(src));
+  chmodBestEffort(dest, st.mode & 0o7777);
 }
 
 // fs.utimesSync: the sync-fs patch exposes no sync utime; tjs.utime is async.
@@ -488,7 +514,7 @@ const fsMod = {
   accessSync: (p, m) => FSS.access(p, m ?? constants.F_OK),
   openSync: (p, flags) => FSS.open(p, flagsToString(flags ?? 'r')),
   closeSync: (fd) => FSS.close(fd),
-  copyFileSync: (a, b) => writeFileSync(b, readFileSync(a)),
+  copyFileSync: (a, b) => { writeFileSync(b, readFileSync(a)); chmodBestEffort(b, statSync(a).mode & 0o7777); },
   symlinkSync: (target, p) => FSS.symlink(target, p),
   chmodSync: (p, m) => chmodBestEffort(p, m),
   // fs.truncate/truncateSync: the bundle reaches truncate via fs.promises and
@@ -600,7 +626,7 @@ const promises = {
   // here. tjs's async file handle exposes a real truncate primitive.
   truncate: async (p, len = 0) => { const th = await tjs.open(p, 'r+'); try { await th.truncate(len); } finally { await th.close(); } },
   rmdir: async (p) => FSS.rmdir(p),
-  copyFile: async (a, b) => { writeFileSync(b, readFileSync(a)); },
+  copyFile: async (a, b) => { writeFileSync(b, readFileSync(a)); chmodBestEffort(b, statSync(a).mode & 0o7777); },
   appendFile: async (p, data, opts) => { appendFileSync(p, data, opts); },
   chmod: async (p, m) => chmodBestEffort(p, m),
   symlink: async (target, p) => FSS.symlink(target, p),
