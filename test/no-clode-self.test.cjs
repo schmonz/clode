@@ -3,13 +3,16 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { execSync } = require('node:child_process');
-// NOTE: pattern is CLODE_SELF + clode-internal-update only. `targetUpdate` as a
-// bare token would collide with the SURVIVING notify-only check (targetUpdateCheck
-// / target-update-check.cjs); those two literals fully identify the retired
-// rebuild machinery without that false match.
-test('CLODE_SELF / --clode-internal-update are gone from libexec/scripts/bin', () => {
+// Pattern covers the whole retired surface: CLODE_SELF, the --clode-internal-update
+// callback verb, the deleted clode-target-update module, AND the targetUpdate
+// rebuild function. `targetUpdate[^C]` matches a reintroduced targetUpdate(...) call
+// but NOT the SURVIVING notify-only check `targetUpdateCheck` / `target-update-check.cjs`
+// (the [^C] excludes the "Check" suffix; `clode-target-update` has the clode- prefix
+// that `target-update-check.cjs` lacks). So a rebuild callback can't sneak back
+// without also naming CLODE_SELF.
+test('retired CLODE_SELF/targetUpdate rebuild surface is gone from libexec/scripts/bin', () => {
   const hits = execSync(
-    "grep -rl 'CLODE_SELF\\|clode-internal-update' libexec scripts bin || true",
+    "grep -rlE 'CLODE_SELF|clode-internal-update|clode-target-update|targetUpdate[^C]' libexec scripts bin || true",
     { encoding: 'utf8' }).trim();
-  assert.strictEqual(hits, '', `still references CLODE_SELF/internal-update:\n${hits}`);
+  assert.strictEqual(hits, '', `still references retired rebuild machinery:\n${hits}`);
 });
