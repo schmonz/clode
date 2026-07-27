@@ -356,6 +356,22 @@ function patchNativeAutoupdater(body) {
   return [body.slice(0, m[0].index) + override + body.slice(m[0].index + m[0][0].length), true];
 }
 
+// --- update remediation hint: clode wording, not npm --------------------------
+// The pkg-manager remediation string tells a normal user to `npm i -g
+// @anthropic-ai/claude-code` (in both the "Update available! Run:" hint and the
+// "Auto-update failed …" banner). For a clode-managed target that advice is wrong
+// — there is no npm-managed install here to update; see the update-guard doc for
+// the manual `claude update` deny wording this matches. Rewrite the command to the
+// clode story instead. Same fail-loud contract as the other patches: unchanged +
+// applied=false unless the literal is found (Claude version drift, or the string
+// is split/templated on this version — see inspect-claude-bundle --strict).
+const UPDATE_HINT = /npm i -g @anthropic-ai\/claude-code/g;
+
+function patchUpdateHint(body) {
+  if (!UPDATE_HINT.test(body)) return [body, false];
+  return [body.replace(UPDATE_HINT, 'clode build (this binary is managed by clode)'), true];
+}
+
 // Rewrite *body* to be Node CJS-compatible and prepend the prelude. Replaces all
 // `import.meta` references with `__import_meta` (defined by the prelude), then
 // contributes the clode applet-skew findings to the native installation-warnings
@@ -394,6 +410,14 @@ function transform(body) {
     process.stderr.write(
       'clode: in-TUI NATIVE autoupdater hook NOT applied — native apply anchor '
       + 'not found exactly once (Claude version drift?). `clode fetch` still '
+      + 'works; run inspect-claude-bundle --strict.\n');
+  }
+  let uh;
+  [body, uh] = patchUpdateHint(body);
+  if (!uh) {
+    process.stderr.write(
+      'clode: update-hint rewrite NOT applied — "npm i -g @anthropic-ai/claude-code" '
+      + 'remediation string not found (Claude version drift?). The notify path still '
       + 'works; run inspect-claude-bundle --strict.\n');
   }
   let rc;
@@ -476,6 +500,7 @@ module.exports = {
   patchSnapshotBridge,
   patchAutoupdater,
   patchNativeAutoupdater,
+  patchUpdateHint,
   patchRemoteControlUnavailable,
   transform,
   verify,

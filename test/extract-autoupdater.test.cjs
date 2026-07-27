@@ -12,6 +12,7 @@ const path = require('node:path');
 const {
   patchAutoupdater,
   patchNativeAutoupdater,
+  patchUpdateHint,
 } = require('../libexec/extract-claude-js.cjs');
 
 // --- native path -------------------------------------------------------------
@@ -80,6 +81,23 @@ test('pkg-manager autoupdater matches the real direct-form (2.1.210+) shape', ()
 test('pkg-manager autoupdater patch is fail-loud: no match -> unchanged, applied false', () => {
   const body = 'no pkg autoupdater here';
   const [out, applied] = patchAutoupdater(body);
+  assert.strictEqual(applied, false);
+  assert.strictEqual(out, body);
+});
+
+// --- update remediation hint -------------------------------------------------
+
+test('update remediation hint is clode wording, not npm', () => {
+  const body = 'let m="Update available! Run: npm i -g @anthropic-ai/claude-code";';
+  const [out, applied] = patchUpdateHint(body);
+  assert.strictEqual(applied, true);
+  assert.match(out, /managed by clode/i);
+  assert.doesNotMatch(out, /npm i -g @anthropic-ai\/claude-code/);
+});
+
+test('update remediation hint patch is fail-loud: no match -> unchanged, applied false', () => {
+  const body = 'no npm remediation string here';
+  const [out, applied] = patchUpdateHint(body);
   assert.strictEqual(applied, false);
   assert.strictEqual(out, body);
 });
