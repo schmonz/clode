@@ -63,3 +63,21 @@ test('checkUpdate: unknown when semver comparison throws (garbage body)', async 
     semverOrder: () => { throw new Error('Invalid Version'); } });
   assert.strictEqual(r.state, 'unknown');
 });
+
+// The PRELUDE's __clodeCheckUpdate wraps checkUpdate into the bundle's
+// {wasUpdated,latestVersion,lockFailed} shape and never reports wasUpdated.
+test('__clodeCheckUpdate returns a never-installed, notify-only shape', async () => {
+  const { checkUpdate } = require('../libexec/target-update-check.cjs');
+  // Simulate the PRELUDE wrapper inline (the PRELUDE string builds this).
+  async function clodeCheckUpdate(current, deps) {
+    const r = await checkUpdate({ current, ...deps });
+    return { wasUpdated: false, latestVersion: r.state === 'newer' ? r.latest : null,
+      lockFailed: false, __clodeState: r.state };
+  }
+  const order = (a, b) => (a === b ? 0 : a > b ? 1 : -1);
+  const fetchImpl = async () => ({ ok: true, status: 200, text: async () => '2.1.220' });
+  const r = await clodeCheckUpdate('2.1.218', { channel: 'latest', fetchImpl, semverOrder: order });
+  assert.strictEqual(r.wasUpdated, false);
+  assert.strictEqual(r.__clodeState, 'newer');
+  assert.strictEqual(r.latestVersion, '2.1.220');
+});

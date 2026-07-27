@@ -76,21 +76,22 @@ const __import_meta = {
   main: require.main === module,
   resolve: (s) => require('url').pathToFileURL(require.resolve(s)).href,
 };
-// clode's native-autoupdater redirect calls this (when CLODE_SELF is set): spawn
-// clode's own host-agnostic fetch instead of upstream's in-process native install,
-// then resolve a success-shaped result so the bundle renders "Restart to apply".
-globalThis.__clodeNativeUpdate = function () {
-  return new Promise(function (resolve) {
-    var child = require('child_process').spawn(
-      process.env.CLODE_SELF, ['--clode-internal-update'], { stdio: 'inherit' });
-    // Report success only when clode's update actually succeeded (exit 0), so a
-    // failed fetch doesn't drive the bundle's "Restart to apply" path onto an
-    // unchanged version. \`--clode-internal-update\` propagates clode_update's status.
-    child.on('exit', function (code) {
-      resolve({ wasUpdated: code === 0, latestVersion: null, lockFailed: false }); });
-    child.on('error', function () {
-      resolve({ wasUpdated: false, latestVersion: null, lockFailed: false }); });
-  });
+// clode's in-app autoupdater is patched (below) to CHECK for a newer upstream
+// Claude Code and notify — never install/rebuild (a built target may run where
+// no clode exists). This resolves the three-state check and returns the bundle's
+// {wasUpdated,latestVersion,lockFailed} shape with wasUpdated ALWAYS false, plus
+// a __clodeState tag the notice patch reads.
+globalThis.__clodeCheckUpdate = function (current) {
+  var chk = require(__dirname + '/target-update-check.cjs');
+  var semverOrder = (globalThis.Bun && globalThis.Bun.semver && globalThis.Bun.semver.order)
+    ? globalThis.Bun.semver.order : function (a, b) { return a === b ? 0 : (a > b ? 1 : -1); };
+  return chk.checkUpdate({ current: current, env: process.env, semverOrder: semverOrder })
+    .then(function (r) {
+      return { wasUpdated: false,
+        latestVersion: r.state === 'newer' ? r.latest : null,
+        lockFailed: false, __clodeState: r.state };
+    })
+    .catch(function () { return { wasUpdated: false, latestVersion: null, lockFailed: false, __clodeState: 'unknown' }; });
 };
 // ------------------------------------------------------
 `;

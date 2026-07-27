@@ -131,7 +131,7 @@ if (role === 'builder') {
   // above — never require()'d from this materialized dir, only carried so a
   // self-fused clode-native can re-fuse targets. The quaude-product role below
   // deliberately omits it: no runtime provision() consumer on that side.
-  for (const f of ['bun-shim.cjs', 'extract-claude-js.cjs', 'quaude-fuse.js', 'quaude-bootstrap.mjs', 'host-provision.cjs']) {
+  for (const f of ['bun-shim.cjs', 'extract-claude-js.cjs', 'quaude-fuse.js', 'quaude-bootstrap.mjs', 'host-provision.cjs', 'target-update-check.cjs']) {
     members.push({ name: `libexec/${f}`, data: await mustRead(path.join(libexecDir, f), `libexec member ${f}`) });
   }
   // target-env.cjs member name is BARE (no libexec/ prefix), matching how
@@ -226,6 +226,13 @@ if (role === 'builder') {
   // ancestor in the archive namespace, so process.cjs's relative require must
   // find this at the archive root.
   members.push({ name: 'target-env.cjs', data: await mustRead(path.join(path.dirname(shimDir), 'target-env.cjs'), 'target-env.cjs member') });
+
+  // The PRELUDE's __clodeCheckUpdate does `require(__dirname + '/target-update-check.cjs')`
+  // from inside cli.qbc, whose __dirname is the archive root ('/quaude') — same
+  // resolution rule as bun-shim.cjs/target-env.cjs above (BARE member name, no
+  // libexec/ prefix, so qvfsRead's '/quaude/'-stripping finds it). Without this
+  // member the notify-only autoupdater path would 404 the moment it's invoked.
+  members.push({ name: 'target-update-check.cjs', data: await mustRead(path.join(path.dirname(shimDir), 'target-update-check.cjs'), 'target-update-check.cjs member') });
 }
 
 // node-shim tree: THE committed loader + modules + internal (the loader's VFS

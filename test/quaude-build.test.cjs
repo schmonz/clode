@@ -115,7 +115,7 @@ test('attest golden: stable manifest fields + full member verification', async (
   // see quaude-fuse.js's comment on why): pre-existing test bug fixed
   // in-passing here (this exact assertion block is what Task a's BOM checks
   // extend below) — 'libexec/target-env.cjs' never was a real member name.
-  for (const m of ['cli.qbc', 'bun-shim.cjs', 'node-shim/loader.cjs', 'node-shim/modules/process.cjs', 'target-env.cjs']) {
+  for (const m of ['cli.qbc', 'bun-shim.cjs', 'node-shim/loader.cjs', 'node-shim/modules/process.cjs', 'target-env.cjs', 'target-update-check.cjs']) {
     assert.ok(manifest.members[m], `manifest missing member ${m}`);
   }
   // The shipped loader member must be byte-identical to the committed loader.
