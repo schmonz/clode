@@ -45,6 +45,32 @@ test('native autoupdater is redirected to the notify check, not CLODE_SELF', () 
   assert.match(out, /,w=\{FOO:"bar",VERSION:"2\.1\.218",BAZ:"q"\};/);
 });
 
+test('native autoupdater patch is left-bounded: an ENGINE_VERSION decoy before the real VERSION field does not capture the decoy', () => {
+  // Without a left boundary on `VERSION:"`, the non-greedy `.{0,300}?` lookahead
+  // locks onto the FIRST `VERSION:"` substring it finds — including the tail of
+  // `ENGINE_VERSION:"` — and would silently capture "9.9.9" instead of the real
+  // "2.1.230". This is the exact bug the negative lookbehind
+  // `(?<![A-Za-z0-9_$])` fixes: it requires the char before VERSION:" to not be
+  // an identifier char, so the lookahead skips the decoy and finds the real,
+  // standalone VERSION field instead.
+  const body = 'M("tengu_native_auto_updater_start",{});try{'
+    + 'let S=await zmt(d),w={ENGINE_VERSION:"9.9.9",VERSION:"2.1.230",BAZ:"q"};A=1;';
+  const [out, applied] = patchNativeAutoupdater(body);
+  assert.strictEqual(applied, true);
+  assert.match(out, /__clodeCheckUpdate\("2\.1\.230"\)/);
+  assert.doesNotMatch(out, /__clodeCheckUpdate\("9\.9\.9"\)/);
+});
+
+test('native autoupdater patch is fail-loud on a decoy-only body: no real standalone VERSION -> unchanged, applied false', () => {
+  // No real standalone VERSION field anywhere (only the ENGINE_VERSION decoy) ->
+  // zero matches -> fail-loud skip, never a silent wrong-version injection.
+  const body = 'M("tengu_native_auto_updater_start",{});try{'
+    + 'let S=await zmt(d),w={ENGINE_VERSION:"9.9.9",BAZ:"q"};A=1;';
+  const [out, applied] = patchNativeAutoupdater(body);
+  assert.strictEqual(applied, false);
+  assert.strictEqual(out, body);
+});
+
 test('native autoupdater patch applies to the real 2.1.179 fixture', () => {
   const fx = fs.readFileSync(
     path.join(__dirname, 'fixtures/autoupdater/native-2.1.179.js'), 'latin1');

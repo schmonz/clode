@@ -141,9 +141,27 @@ test('autoupdater anchor present and absent', () => {
 
 test('native autoupdater anchor present and absent', () => {
   const present = 'd("tengu_native_auto_updater_start",{});'
-    + 'try{let T=await _mH(w),Z={};';
+    + 'try{let T=await _mH(w),Z={VERSION:"2.1.218"};';
   assert.strictEqual(ins.nativeAutoupdaterHookAnchorPresent(present), true);
   assert.strictEqual(ins.nativeAutoupdaterHookAnchorPresent('no native autoupdater'), false);
+});
+
+test('native autoupdater anchor: VERSION lookahead is left-bounded against an ENGINE_VERSION decoy', () => {
+  // A decoy field (*_VERSION:) BEFORE the real standalone VERSION: field must not
+  // fool the anchor into matching early with no real VERSION in view — same
+  // left-boundary fix as extract-claude-js.cjs NATIVE_AUTOUPDATER. The anchor
+  // itself doesn't capture the version (that's the extractor's job); it just
+  // needs to still report "present" when a REAL standalone VERSION follows.
+  const withDecoy = 'd("tengu_native_auto_updater_start",{});'
+    + 'try{let T=await _mH(w),Z={ENGINE_VERSION:"9.9.9",VERSION:"2.1.230"};';
+  assert.strictEqual(ins.nativeAutoupdaterHookAnchorPresent(withDecoy), true);
+
+  // Decoy-only object (no standalone VERSION field at all) -> anchor absent, same
+  // fail-loud posture the extractor's patch takes (applied:false, not a silent
+  // wrong-version match on the ENGINE_VERSION suffix).
+  const decoyOnly = 'd("tengu_native_auto_updater_start",{});'
+    + 'try{let T=await _mH(w),Z={ENGINE_VERSION:"9.9.9"};';
+  assert.strictEqual(ins.nativeAutoupdaterHookAnchorPresent(decoyOnly), false);
 });
 
 test('update notice anchor present (raw + already-patched) and absent', () => {

@@ -344,8 +344,23 @@ function patchAutoupdater(body) {
 // exactly-once match (fail-loud skip, caught by inspect --strict) rather than
 // mis-injecting. Anchor VERIFIED exactly-once (correct version captured) on real
 // 2.1.204 / 2.1.210 / 2.1.218 and the 2.1.179 fixture.
+//
+// LEFT BOUNDARY ON `VERSION:"`: without one, the non-greedy `.{0,300}?` can lock
+// onto a `VERSION:"` that is really the SUFFIX of a longer field name — e.g.
+// `{ENGINE_VERSION:"9.9.9",...,VERSION:"2.1.230",...}` matches at the
+// `ENGINE_VERSION:"` occurrence and silently captures "9.9.9" as `ver`
+// (applied:true, WRONG version, no fail-loud skip — exactly the failure mode this
+// patch exists to avoid). The negative lookbehind `(?<![A-Za-z0-9_$])` requires
+// the character before `VERSION:"` to NOT be an identifier character, so the
+// lookahead only matches a real standalone `VERSION:"` field (as the first field
+// right after `{`, or after a `,` separator) and correctly skips past an
+// `*_VERSION:"` decoy to find the real one. A decoy-only object (no standalone
+// VERSION field at all) then correctly produces zero matches -> fail-loud skip,
+// same contract as every other anchor here. Mirrored into
+// inspect-claude-bundle.cjs's _NATIVE_AUTOUPDATER_ANCHOR so the strict gate can't
+// diverge from what this patch actually accepts.
 const NATIVE_AUTOUPDATER =
-  /(?<pre>tengu_native_auto_updater_start",(?:\{\}|[A-Za-z0-9_$]{1,6})\);try\{let [A-Za-z0-9_$]{1,6}=await )(?<call>[A-Za-z0-9_$]{1,6}\([A-Za-z0-9_$]{1,6}\)),(?=[A-Za-z0-9_$]{1,6}=\{.{0,300}?VERSION:"(?<ver>[0-9][^"]{0,20})")/gs;
+  /(?<pre>tengu_native_auto_updater_start",(?:\{\}|[A-Za-z0-9_$]{1,6})\);try\{let [A-Za-z0-9_$]{1,6}=await )(?<call>[A-Za-z0-9_$]{1,6}\([A-Za-z0-9_$]{1,6}\)),(?=[A-Za-z0-9_$]{1,6}=\{.{0,300}?(?<![A-Za-z0-9_$])VERSION:"(?<ver>[0-9][^"]{0,20})")/gs;
 
 // Redirect the in-TUI NATIVE autoupdater to the notify-only check with the real
 // running version. Replaces `await <fn>(<arg>)` with
