@@ -17,6 +17,34 @@ test('naude exposes __clodeCheckUpdate and does not spawn a builder on update', 
   assert.doesNotMatch(src, /--clode-internal-update/);
 });
 
+// Task 5 review fix (round 1): the source-text test above proves naude-entry
+// CAN provide __clodeCheckUpdate; it does NOT prove the baked cli.cjs's own
+// PRELUDE can actually resolve `require(__dirname + '/target-update-check.cjs')`
+// at runtime — that resolution succeeds only because the first pass's
+// materializeAssets call requests 'target-update-check.cjs' alongside
+// cli.cjs/bun-shim.cjs, so it lands on disk in the SAME workDir cli.cjs's
+// __dirname points at. Nothing else in the suite pins that literal in the
+// `names` array (naude-build.test.cjs covers the SEA-asset/build-time layer;
+// naude-sea.test.cjs's materializeAssets test uses its own hardcoded names) —
+// a silent removal here would still pass all other tests and only the
+// environment-gated naude-smoke test would ever catch it.
+test('first pass materializes target-update-check.cjs alongside cli.cjs (the notify-only autoupdater dependency)', () => {
+  let names = null;
+  runNaude({
+    argv: [], execPath: '/naude', env: {}, cacheDir: os.tmpdir(), workDir: '/work',
+    sea: fakeSea(),
+    materializeDeps: () => '/deps',
+    materializeAssets: (opts) => { names = opts.names; return opts.destDir; },
+    spawn: () => ({ on() {} }),
+    procOn: () => {}, procOff: () => {}, exit: () => {},
+    onExit: (cb) => cb(0, null),
+  });
+  assert.ok(Array.isArray(names) && names.includes('target-update-check.cjs'),
+    `materializeAssets must be called with 'target-update-check.cjs' in its names array, or cli.cjs's own ` +
+    `PRELUDE require(__dirname + '/target-update-check.cjs') 404s the moment the notify-only autoupdater fires. ` +
+    `Got: ${JSON.stringify(names)}`);
+});
+
 function fakeSea() {
   const assets = { 'cli.cjs': 'CLI', 'bun-shim.cjs': 'SHIM', 'deps.tar': '', 'deps.sig': 'sig0' };
   return { isSea: () => true, getRawAsset: (n) => { const b = Buffer.from(assets[n] || ''); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); } };
