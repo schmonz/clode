@@ -853,7 +853,7 @@ async function clodeBuild(args, opts) {
     let manifest;
     try { ({ manifest } = await resolveManifest(opts)); } catch (e) { return fail(e.message); }
     spin.done();
-    for (const t of tpl.listTargets(manifest)) stdout.write(`${t.name}\t${t.tag}\t[${t.verified}]\n`);
+    for (const t of tpl.listTargets(manifest)) stdout.write(`${t.name}\t${t.tag}\n`);
     return 0;
   }
   if (parsed.target) {

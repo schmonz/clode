@@ -20,11 +20,15 @@ function parseManifest(text) {
   return m;
 }
 
-// Sorted list of { name, tag, verified } for `build --list-targets`.
+// Sorted list of { name, tag } for `build --list-targets`. The build-time
+// verify level (smoke/attest-only/…) is intentionally NOT surfaced here — it's
+// low signal for a user choosing a target (the target either exists and is
+// pinned+sha-verified at fetch, or it doesn't). It stays in the manifest as
+// build metadata.
 function listTargets(manifest) {
   return Object.keys(manifest.targets).sort().map((name) => {
     const t = manifest.targets[name];
-    return { name, tag: t.tag, verified: t.verified || 'unknown' };
+    return { name, tag: t.tag };
   });
 }
 

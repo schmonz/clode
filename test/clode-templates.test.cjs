@@ -23,10 +23,11 @@ test('parseManifest throws TemplatesError on bad JSON / missing targets', () => 
   assert.throws(() => parseManifest('{"schema":1}'), (e) => e instanceof TemplatesError && /targets/.test(e.message));
 });
 
-test('listTargets is sorted with name/tag/verified', () => {
+test('listTargets is sorted name/tag, without the build-time verify annotation', () => {
   const l = listTargets(parseManifest(FIX));
   assert.deepStrictEqual(l.map((t) => t.name), ['linux-x64', 'netbsd-sparc']);
-  assert.strictEqual(l[0].verified, 'smoke');
+  assert.deepStrictEqual(l[0], { name: 'linux-x64', tag: 'linux-glibc2.28-x64' });
+  assert.strictEqual('verified' in l[0], false);
 });
 
 test('resolveTarget returns the entry or null', () => {
