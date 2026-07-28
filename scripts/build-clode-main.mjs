@@ -76,14 +76,15 @@ function repoVersion() {
   catch { return 'dev'; }
 }
 
-// The tjs pin (vX.Y.Z-<sha7>) this clode targets, from PINS.md — baked in so a
-// fused clode with no PINS.md can derive its own templates-pack release URL for
-// `build --target` auto-fetch (libexec/clode-fuse.cjs thisTjsPin). Empty string
-// if PINS.md is unreadable; the runtime then falls back to CLODE_TJS_PIN/PINS.md.
+// The tjs pin (<ver>-<sha7>, no leading v) this clode targets, from PINS.md — baked
+// in so a fused clode with no PINS.md can derive its own templates-pack release URL
+// for `build --target` auto-fetch (libexec/clode-fuse.cjs thisTjsPin). MUST match
+// tjsPinFromPins + thisTjsPin exactly. Empty string if PINS.md is unreadable; the
+// runtime then falls back to CLODE_TJS_PIN/PINS.md.
 function bakedTjsPin() {
   try {
     const pins = fs.readFileSync(path.join(REPO, 'spike/quickjs/PINS.md'), 'utf8');
-    const m = pins.match(/txiki\.js\s+(v[0-9.]+)\s+([0-9a-f]{7,})/i);
+    const m = pins.match(/txiki\.js\s+v?([0-9.]+)\s+([0-9a-f]{7,})/i);
     return m ? `${m[1]}-${m[2].slice(0, 7)}` : '';
   } catch { return ''; }
 }

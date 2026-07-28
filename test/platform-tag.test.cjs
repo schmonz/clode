@@ -72,10 +72,10 @@ test('tjsBin is <tjsDir>/tjs (host exe suffix)', () => {
     path.join('/r', 'build', 'tjs', 'netbsd-11-arm64', exe));
 });
 
-test('hostOsVersionToken: darwin uses "darwin", not "macos", padded to major.minor', () => {
+test('hostOsVersionToken: darwin is the canonical dashed "macos-<ver>", padded to major.minor', () => {
   if (process.platform !== 'darwin') return;
-  assert.match(hostOsVersionToken('darwin'), /^darwin(10\.\d+|\d+\.\d+)$/);
-  assert.doesNotMatch(hostOsVersionToken('darwin'), /^macos/);
+  assert.match(hostOsVersionToken('darwin'), /^macos-(10\.\d+|\d+\.\d+)$/);
+  assert.doesNotMatch(hostOsVersionToken('darwin'), /^darwin/);
 });
 
 test('hostOsVersionToken: win32 is the bare "windows" token (no floor exists to match)', () => {
@@ -88,8 +88,17 @@ test('hostOsVersionToken: unknown platforms degrade honestly (no invented floor)
 
 test('artifactName is a pure formatter: clode-<version>-<token>-<arch>', () => {
   assert.strictEqual(
-    artifactName({ version: '0.1.3', token: 'darwin11.0', arch: 'arm64' }),
-    'clode-0.1.3-darwin11.0-arm64');
+    artifactName({ version: '0.1.3', token: 'macos-11.0', arch: 'arm64' }),
+    'clode-0.1.3-macos-11.0-arm64');
+});
+
+test('artifactName canonicalizes the arch (x64->amd64, ia32->i386)', () => {
+  assert.strictEqual(
+    artifactName({ version: '0.1.3', token: 'macos-10.6', arch: 'x64' }),
+    'clode-0.1.3-macos-10.6-amd64');
+  assert.strictEqual(
+    artifactName({ version: '0.1.3', token: 'macos-10.4', arch: 'ia32' }),
+    'clode-0.1.3-macos-10.4-i386');
 });
 
 test('artifactName defaults token to hostOsVersionToken() (the host, not a floor)', () => {
@@ -106,8 +115,8 @@ test('artifactDir is <repo>/build/<artifactName>', () => {
 
 test('artifactDir: CLODE_ASSET_NAME overrides the WHOLE name (CI floor support)', () => {
   assert.strictEqual(
-    artifactDir('/r', { version: '0.1.3', env: { CLODE_ASSET_NAME: 'clode-0.1.3-darwin11.0-arm64' } }),
-    path.join('/r', 'build', 'clode-0.1.3-darwin11.0-arm64'));
+    artifactDir('/r', { version: '0.1.3', env: { CLODE_ASSET_NAME: 'clode-0.1.3-macos-11.0-arm64' } }),
+    path.join('/r', 'build', 'clode-0.1.3-macos-11.0-arm64'));
 });
 
 test('seaOut is <repo>/build/<artifactName>/<base>, not the toolchain tag', () => {
@@ -131,7 +140,7 @@ test('seaBin/seaOut honor the base param (not hardcoded)', () => {
 });
 
 test('seaOut/seaBin honor CLODE_ASSET_NAME through the opts.env override', () => {
-  const opts = { env: { CLODE_ASSET_NAME: 'clode-0.1.3-darwin11.0-arm64' } };
+  const opts = { env: { CLODE_ASSET_NAME: 'clode-0.1.3-macos-11.0-arm64' } };
   assert.strictEqual(seaOut('/r', 'naude', opts),
-    path.join('/r', 'build', 'clode-0.1.3-darwin11.0-arm64', 'naude'));
+    path.join('/r', 'build', 'clode-0.1.3-macos-11.0-arm64', 'naude'));
 });

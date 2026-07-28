@@ -793,7 +793,7 @@ async function defaultEngineFetch(url) {
 
 // This clode's own tjs pin, to gate an engine/manifest against a version mismatch.
 // A fused clode bakes CLODE_TJS_PIN at build time; a dev checkout derives it from
-// PINS.md (same "vX.Y.Z-<sha7>" shape the manifest uses).
+// PINS.md (same "<ver>-<sha7>" shape the manifest uses, no leading v).
 function thisTjsPin(env, opts) {
   if (env.CLODE_TJS_PIN) return env.CLODE_TJS_PIN;
   // Baked into the bundle from PINS.md at build time (esbuild define), so a fused
@@ -803,7 +803,7 @@ function thisTjsPin(env, opts) {
   try {
     const root = path.resolve(opts.libexec || '.', '..');
     const pins = require('node:fs').readFileSync(path.join(root, 'spike/quickjs/PINS.md'), 'utf8');
-    const m = pins.match(/txiki\.js\s+(v[0-9.]+)\s+([0-9a-f]{7,})/i);
+    const m = pins.match(/txiki\.js\s+v?([0-9.]+)\s+([0-9a-f]{7,})/i);
     if (m) return `${m[1]}-${m[2].slice(0, 7)}`;
   } catch { /* fused clode with no PINS.md must bake CLODE_TJS_PIN */ }
   return null;

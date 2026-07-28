@@ -35,13 +35,16 @@ export function buildManifest({ tjsPin, inputs, compression }) {
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { legsFor } from './tjs-legs.mjs';
+import canon from './canonical-name.cjs';
+const { targetName, tagFor } = canon;
 
 // The manifest target key is the platform, not the build recipe: for a given
 // OS+arch we build BOTH a glibc validation twin and the musl-static artifact we
-// actually ship (linux-x64-glibc vs linux-x64-musl). Only the libc suffix is
-// stripped — arch tails like -sparc64/-m68k are the platform.
+// actually ship (linux-x64-glibc vs linux-x64-musl). The libc suffix is dropped and
+// the os/arch canonicalized (darwin->macos, x64->amd64) via the canonical-name source
+// of truth, so the manifest key == the download asset's os/arch.
 export function cleanTargetName(legName) {
-  return legName.replace(/-(musl|glibc)$/, '');
+  return targetName(legName);
 }
 
 // How much we trust an engine, from what the leg did with it:
@@ -61,30 +64,22 @@ export function deriveVerified(leg) {
   return 'smoke';
 }
 
-function platOf(leg) {
-  const gp = leg['guest-platform'];
-  if (!gp || gp === 'native') return leg.leg.split('-')[0];
-  if (gp === 'alpine') return 'linux';
-  const m = gp.match(/^qemu-([a-z0-9]+)/);
-  if (m) return m[1];
-  return gp;
-}
-function archOf(leg) {
-  return leg['guest-arch'] || leg['macos-arch'] || leg.leg.split('-').slice(1).join('-');
-}
-
-// Human-readable platform identity for `clode build --list-targets`:
-// <platform>[-<floor>]-<arch>, e.g. netbsd-10.1-sparc, linux-x86_64.
+// Human-readable platform identity for `clode build --list-targets`. This is the
+// SAME builder as the published asset name's tag (canonical os/arch, DASHED floor,
+// libc suffix), so `--list-targets` shows exactly the download name minus `clode-<v>-`.
+// Derived from the leg TOKEN (not guest-arch/macos-arch, which are native spellings
+// like x86_64/aarch64) so the tag stays canonical (amd64/arm64/…).
 export function deriveTag(leg) {
-  const plat = platOf(leg);
-  const arch = archOf(leg);
-  return leg.floor ? `${plat}-${leg.floor}-${arch}` : `${plat}-${arch}`;
+  return tagFor(leg.leg, leg.floor);
 }
 
-// Same derivation as clode's thisTjsPin (libexec/clode-fuse.cjs): the published
-// pin MUST equal what a fetching clode computes, or obtainEngine refuses the pack.
+// Same derivation as clode's thisTjsPin (libexec/clode-fuse.cjs) AND build-clode-main's
+// baked pin: all three MUST agree or obtainEngine refuses the pack. Pin format is
+// `<ver>-<sha7>` — the leading `v` from PINS.md is dropped (matches the engine name
+// scheme <engine>-<os>-<arch>-<ver>[-<sha7>]); the txiki source sha is kept because
+// tjs is source-built (it nails the tree incl. the quickjs-ng submodule).
 export function tjsPinFromPins(text) {
-  const m = text.match(/txiki\.js\s+(v[0-9.]+)\s+([0-9a-f]{7,})/i);
+  const m = text.match(/txiki\.js\s+v?([0-9.]+)\s+([0-9a-f]{7,})/i);
   return m ? `${m[1]}-${m[2].slice(0, 7)}` : null;
 }
 

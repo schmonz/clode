@@ -11,7 +11,7 @@
 //     CI actually publishes (build-leg/action.yml's `steps.name`) so
 //     "build/clode-*" always means "shippable". CI overrides the whole name
 //     via CLODE_ASSET_NAME so a release leg's dir carries its deliberate
-//     compat FLOOR (e.g. darwin11.0) instead of the build host's real
+//     compat FLOOR (e.g. macos-11.0) instead of the build host's real
 //     version — a floor is a chosen target, not a fact about the box.
 //   * the TOOLCHAIN dir (build/toolchain/<platform>-node<major>/, see
 //     toolchainDir) — the native tool cache (esbuild/postject node_modules)
@@ -47,6 +47,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { canonArch } = require('./canonical-name.cjs');
 
 function readProductVersion() {
   return execFileSync('sw_vers', ['-productVersion'], { encoding: 'utf8' });
@@ -130,42 +131,43 @@ function repoVersion(repo) {
 }
 
 // The LOCAL, no-floor "own OS version" token for the artifact name, in the SAME
-// vocabulary CI uses for the OS+FLOOR component of a published asset name
-// (build-leg/action.yml's `asset=clode-$V-${OS}${FLOOR}-${ARCH}`): the OS word CI
-// uses (`darwin`, not `macos`), with the version glued on with NO separator
-// (mirrors CI's raw OS+FLOOR string concatenation, e.g. `darwin11.0`).
+// canonical vocabulary the published asset name uses (see scripts/canonical-name.cjs):
+// the OS word `macos` for Darwin and the version DASHED on (`macos-11.0`), matching
+// the asset name's `<os>-<floor>-<arch>` shape so a local build dir looks exactly
+// like the shippable name minus the floor's "deliberately chosen" status.
 //
 // Unlike a release leg's FLOOR (scripts/tjs-legs.mjs — a deliberately CHOSEN old
-// compat target, e.g. darwin-arm64's floor: '11.0'), this is the host's ACTUAL
+// compat target, e.g. macos-arm64's floor: '11.0'), this is the host's ACTUAL
 // running OS version: a local build is not built against an old SDK, so it must
 // never claim that floor (see CLODE_ASSET_NAME on artifactDir for how CI gets its
 // real, floor-carrying name instead of this one).
 function hostOsVersionToken(platform = process.platform) {
   if (platform === 'darwin') {
     const v = macosVersion();
-    // CI's darwin floors are always major.minor (10.6, 11.0, ...). macosVersion()
-    // returns a bare marketing major for 11+ (e.g. "26") — pad it to match that
-    // SHAPE rather than inventing a fake minor version that isn't true.
-    return `darwin${v.includes('.') ? v : `${v}.0`}`;
+    // macOS floors are always major.minor (10.6, 11.0, ...). macosVersion() returns
+    // a bare marketing major for 11+ (e.g. "26") — pad it to match that SHAPE rather
+    // than inventing a fake minor version that isn't true.
+    return `macos-${v.includes('.') ? v : `${v}.0`}`;
   }
-  if (platform === 'linux') return `linux-${linuxGlibc()}`; // no CI linux floor exists to shape-match; keep the honest token
-  if (platform === 'win32') return 'windows';                // CI: ABI-stable, no floor either
-  // Anything else: no established CI floor vocabulary to match for this OS —
-  // degrade honestly to the raw kernel/OS major (osToken's fallback shape).
-  // Never invent a floor-shaped value for a platform that doesn't have one.
+  if (platform === 'linux') return `linux-${linuxGlibc()}`; // no linux floor to shape-match; keep the honest token
+  if (platform === 'win32') return 'windows';                // ABI-stable, no floor either
+  // Anything else: no established floor vocabulary for this OS — degrade honestly to
+  // the raw kernel/OS major (osToken's fallback shape). Never invent a floor-shaped
+  // value for a platform that doesn't have one.
   return `${platform}-${String(os.release()).split('.')[0]}`;
 }
 
-// Pure formatter for the local artifact name: clode-<version>-<token>-<arch>.
-// `token` defaults to hostOsVersionToken() (see its comment for why that is NOT
-// osToken()/platformTag()'s token). Every input injectable, same discipline as
-// platformTag().
+// Pure formatter for the local artifact name: clode-<version>-<token>-<arch>, with
+// the arch canonicalized (x64->amd64, ia32->i386) through the canonical-name source
+// of truth so a local build dir == the published asset name. `token` defaults to
+// hostOsVersionToken() (see its comment for why that is NOT osToken()/platformTag()'s
+// token). Every input injectable, same discipline as platformTag().
 function artifactName({
   version,
   token = hostOsVersionToken(),
   arch = process.arch,
 } = {}) {
-  return `clode-${version}-${token}-${arch}`;
+  return `clode-${version}-${token}-${canonArch(arch)}`;
 }
 
 // The directory holding THIS host's SHIPPABLE outputs — see the file header for

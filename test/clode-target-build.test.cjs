@@ -10,7 +10,7 @@ function manifestFile() {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'tpl-'));
   const f = path.join(d, 'templates.json');
   fs.writeFileSync(f, JSON.stringify({
-    schema: 1, tjsPin: 'v26.6.0-1a230d3',
+    schema: 1, tjsPin: '26.6.0-1a230d3',
     targets: {
       'linux-x64':    { tag: 'linux-glibc2.28-x64', engine: 'e1', sha256: 'a'.repeat(64), verified: 'smoke' },
       'netbsd-sparc': { tag: 'netbsd-10.1-sparc',    engine: 'e2', sha256: 'b'.repeat(64), verified: 'attest-only' },
@@ -64,7 +64,7 @@ test('clode build --target: resolves + obtains the engine, sets CLODE_TARGET_TEM
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'tgt-'));
   const mf = path.join(d, 'm.json');
   fs.writeFileSync(mf, JSON.stringify({
-    schema: 1, tjsPin: 'v26.6.0-1a230d3',   // matches spike/quickjs/PINS.md → thisTjsPin derives the same
+    schema: 1, tjsPin: '26.6.0-1a230d3',   // matches spike/quickjs/PINS.md → thisTjsPin derives the same
     targets: { 'linux-x64': { tag: 'linux-glibc2.28-x64', engine: 'tjs-linux-x64-abc', sha256: sha, verified: 'smoke' } },
   }));
   const cacheDir = path.join(d, 'cache');

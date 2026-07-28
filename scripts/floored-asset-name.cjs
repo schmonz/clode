@@ -1,11 +1,10 @@
 'use strict';
-// The published builder asset filename. Floored legs encode their compat floor
-// (clode-<ver>-<os><floor>-<arch>); unfloored legs stay bare. build-leg's bash
-// mirrors this (os=${leg%-*}, arch=${leg##*-}); keep the two in sync.
-function flooredAssetName(leg, version, floor) {
-  if (!floor) return `clode-${version}-${leg}`;
-  const dash = leg.lastIndexOf('-');
-  const os = leg.slice(0, dash), arch = leg.slice(dash + 1);
-  return `clode-${version}-${os}${floor}-${arch}`;
-}
+// The published builder asset filename. Now a thin delegate to the canonical-name
+// source of truth (scripts/canonical-name.cjs) — kept so existing importers and the
+// bash mirror's reference stay valid. build-leg's bash must produce the SAME string;
+// the canonical rules (os->macos, arch->amd64/i386, DASHED floor, libc suffix) live in
+// canonical-name so bash can call it (`node scripts/canonical-name.cjs …`) instead of
+// re-implementing the split.
+const { assetName } = require('./canonical-name.cjs');
+function flooredAssetName(leg, version, floor) { return assetName(leg, version, floor); }
 module.exports = { flooredAssetName };
