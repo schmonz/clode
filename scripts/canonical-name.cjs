@@ -94,3 +94,25 @@ module.exports = {
   OS_MAP, ARCH_MAP, canonOs, canonArch, splitLeg, targetName, tagFor, assetName, engineName,
   targetToNode,
 };
+
+// CLI so CI/release BASH can consume the canonical names without re-implementing the
+// split (the whole point of one source of truth): `node scripts/canonical-name.cjs
+// <cmd> <leg> ...`. Commands:
+//   asset  <leg> <version> [floor]  -> the published builder asset filename
+//   tag    <leg> [floor]            -> the --list-targets / asset tag
+//   target <leg>                    -> the canonical <os>-<arch> target name
+// Prints the result on stdout, nothing else. Exits non-zero with a usage line on a bad
+// command so a `set -e` bash step fails loud rather than emitting a wrong name.
+if (require.main === module) {
+  const [cmd, leg, a, b] = process.argv.slice(2);
+  const out = (s) => process.stdout.write(String(s) + '\n');
+  try {
+    if (cmd === 'asset') { if (!leg || !a) throw 0; out(assetName(leg, a, b || '')); }
+    else if (cmd === 'tag') { if (!leg) throw 0; out(tagFor(leg, a || '')); }
+    else if (cmd === 'target') { if (!leg) throw 0; out(targetName(leg)); }
+    else throw 0;
+  } catch {
+    process.stderr.write('usage: canonical-name.cjs asset <leg> <version> [floor] | tag <leg> [floor] | target <leg>\n');
+    process.exit(2);
+  }
+}
