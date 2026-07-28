@@ -81,3 +81,16 @@ test('the download-name == list-targets-tag invariant: assetName == clode-<v>-<t
     assert.strictEqual(C.assetName(leg, '9.9.9', floor), `clode-9.9.9-${C.tagFor(leg, floor)}`);
   }
 });
+
+test('targetToNode: canonical + leg-token targets -> node platform/arch', () => {
+  assert.deepStrictEqual(C.targetToNode('macos-amd64'), { platform: 'darwin', arch: 'x64' });
+  assert.deepStrictEqual(C.targetToNode('macos-arm64'), { platform: 'darwin', arch: 'arm64' });
+  assert.deepStrictEqual(C.targetToNode('linux-amd64'), { platform: 'linux', arch: 'x64' });
+  assert.deepStrictEqual(C.targetToNode('linux-arm64'), { platform: 'linux', arch: 'arm64' });
+  assert.deepStrictEqual(C.targetToNode('darwin-x64'), { platform: 'darwin', arch: 'x64' }); // raw leg token
+});
+
+test('targetToNode: a non-Node OS returns null (caller rejects)', () => {
+  assert.strictEqual(C.targetToNode('netbsd-sparc'), null);
+  assert.strictEqual(C.targetToNode('haiku-amd64'), null);
+});

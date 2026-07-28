@@ -7,7 +7,9 @@
 //
 // The store lives at clode-paths.cjs's nodeStore(env) — <clodeDataDir>/nodes
 // by default, overridable via CLODE_NODES (or CLODE_STATE_ROOT, which moves
-// the whole data dir). Layout: <nodeStore>/<version>/bin/node.
+// the whole data dir). Layout: <nodeStore>/<version>/<platform>-<arch>/bin/node
+// — per-platform, so a naude cross-build fetching Node for a non-host target
+// stores alongside the host's node instead of clobbering it.
 //
 // download/verify/extract/log are all injectable seams (default to clode-net's
 // downloadFile/sha256Of + a `tar -xzf` spawn) so callers — and every test in
@@ -55,9 +57,24 @@ function nodeAsset(platform, arch) {
   return { url, sha256, filename };
 }
 
+// Resolve a user-facing `--target` (canonical or leg token) to a pinned Node
+// asset. naude only reaches Node platforms; a well-formed but non-Node target is a
+// loud, actionable refusal (quaude is the answer there), NOT a silent skip.
+function targetToNodeAsset(target) {
+  const { targetToNode } = require('../scripts/canonical-name.cjs');
+  const nt = targetToNode(target);
+  if (!nt) {
+    throw new Error(`clode-node: '${target}' is not a Node platform — naude cannot target it; cross-build a quaude instead (clode build --target ${target})`);
+  }
+  return nodeAsset(nt.platform, nt.arch); // throws its own clear error if the pin lacks this key
+}
+
 // Where the pinned node's binary lives, whether or not it has been fetched yet.
-function nodeBinPath(env = process.env) {
-  return path.join(nodeStore(env), PINNED_VERSION, 'bin', 'node');
+// Per-(version,platform,arch): a naude cross-build fetches Node for a target
+// platform that need not be the host's, so the store must hold more than one
+// platform's node at once without one clobbering another.
+function nodeBinPath(env = process.env, platform = process.platform, arch = process.arch) {
+  return path.join(nodeStore(env), PINNED_VERSION, `${platform}-${arch}`, 'bin', 'node');
 }
 
 // Default extract seam: a spawned `tar -xzf <tarball> -C <destDir>`, with the
@@ -117,7 +134,7 @@ async function ensurePinnedNode(opts = {}) {
     arch = process.arch,
   } = opts;
 
-  const binPath = nodeBinPath(env);
+  const binPath = nodeBinPath(env, platform, arch);
   if (fs.existsSync(binPath)) {
     return binPath;
   }
@@ -144,7 +161,7 @@ async function ensurePinnedNode(opts = {}) {
     fs.mkdirSync(extractedInto, { recursive: true });
     await extract(tarballPath, extractedInto);
 
-    const versionDir = path.join(store, PINNED_VERSION);
+    const versionDir = path.join(store, PINNED_VERSION, `${platform}-${arch}`);
     flattenExtractedTopDir(extractedInto, versionDir);
 
     if (!fs.existsSync(binPath)) {
@@ -156,4 +173,4 @@ async function ensurePinnedNode(opts = {}) {
   }
 }
 
-module.exports = { PINNED_VERSION, nodeAsset, ensurePinnedNode, nodeBinPath, tarExtract };
+module.exports = { PINNED_VERSION, nodeAsset, ensurePinnedNode, nodeBinPath, tarExtract, targetToNodeAsset };
