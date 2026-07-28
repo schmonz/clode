@@ -276,6 +276,43 @@ test('buildBinary: embeds the bytes read from the GIVEN --node, not process.exec
   }
 });
 
+// ---------------------------------------------------------------------------
+// Task 3 (naude cross-build): the node role split. blob-gen (--experimental-
+// sea-config, RUNS) and embed (postject byte-injection, does NOT run) split
+// by node VERSION not arch — see build-naude.mjs's parseNodesArg comment.
+// ---------------------------------------------------------------------------
+
+test('parseNodesArg: --node sets both roles; --blobgen-node/--embed-node split them', async () => {
+  const { parseNodesArg } = await import('../scripts/build-naude.mjs');
+  assert.deepStrictEqual(parseNodesArg(['--node', '/n']), { blobgen: '/n', embed: '/n' });
+  assert.deepStrictEqual(
+    parseNodesArg(['--blobgen-node', '/host', '--embed-node', '/target']),
+    { blobgen: '/host', embed: '/target' });
+});
+
+test('parseNodesArg: --embed-node alone inherits --blobgen-node for blob-gen only if given', async () => {
+  const { parseNodesArg } = await import('../scripts/build-naude.mjs');
+  // blobgen missing -> undefined (main resolves/validates); embed explicit
+  assert.deepStrictEqual(parseNodesArg(['--embed-node', '/t']), { blobgen: undefined, embed: '/t' });
+});
+
+test('buildBinary embeds the GIVEN (foreign) node, independent of the blob-gen node', async () => {
+  const { buildBinary } = await import('../scripts/build-naude.mjs');
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-xembed-'));
+  const foreignNode = path.join(d, 'foreign-node'); fs.writeFileSync(foreignNode, 'FOREIGN-NODE-BYTES');
+  const blob = path.join(d, 'sea-prep.blob'); fs.writeFileSync(blob, 'BLOB');
+  const out = path.join(d, 'naude-x');
+  let injected = null, signed = [];
+  await buildBinary({
+    nodePath: foreignNode, postjectDir: '/pj', blob, outOverride: out,
+    readNode: (p) => fs.readFileSync(p),
+    requirePostject: () => ({ inject: async (bin) => { injected = fs.readFileSync(bin, 'utf8'); } }),
+    sign: (phase) => signed.push(phase),
+  });
+  assert.strictEqual(injected, 'FOREIGN-NODE-BYTES', 'the FOREIGN node bytes were the SEA base');
+  assert.deepStrictEqual(signed, ['unsign', 'sign']);
+});
+
 // The retirement, at the writeSeaConfig layer: even if a stale caller still
 // passed a `builder`, the produced sea-config.json must carry no `builder`
 // asset (notify-only auto-update — nothing reads a builder path anymore).

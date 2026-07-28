@@ -74,6 +74,26 @@ export function parseNodeArg(argv) {
   return i >= 0 && argv[i + 1] ? path.resolve(argv[i + 1]) : process.execPath;
 }
 
+// The naude build uses Node in two roles that split by VERSION, not arch (the
+// SEA blob is arch-neutral): blob-gen RUNS a node (--experimental-sea-config),
+// embed INJECTS a node's bytes (postject). Native build: one node, both roles
+// (--node). Cross-build: --blobgen-node (host arch, runs) + --embed-node (target
+// arch, data). --node is the alias that sets both. Unlike parseNodeArg, this
+// does NOT resolve/default here — main() resolves+validates the pair (a
+// missing blobgen is a hard error there, not silently process.execPath).
+export function parseNodesArg(argv) {
+  const get = (flag) => { const i = argv.indexOf(flag); return i >= 0 ? argv[i + 1] : undefined; };
+  const both = get('--node');
+  return { blobgen: get('--blobgen-node') ?? both, embed: get('--embed-node') ?? both };
+}
+
+// The OS whose signing rules apply to the OUTPUT — the TARGET, not the host.
+// Defaults to the host platform (native build). Node spelling (darwin/linux/win32).
+export function parseTargetOsArg(argv) {
+  const i = argv.indexOf('--target-os');
+  return i >= 0 ? argv[i + 1] : process.platform;
+}
+
 // --bundle <path>: the pre-esbuilt SEA `main`. OPTIONAL — defaults to the
 // checkout's unkeyed bundle location (BUNDLE_DIR), matching where
 // scripts/build-clode-main.mjs writes it.
@@ -252,9 +272,13 @@ export function writeSeaConfig({
 // command per phase on every OS; the codesign/signtool branching lives inside that CLI.
 // phase is 'unsign' (before injection) or 'sign' (after). This is a build-time helper step
 // (codesign/signtool), not part of the embedded target, so it always runs under the AUTHORING
-// node (process.execPath — the node running this script), independent of --node.
-function seaSign(phase, bin) {
-  execFileSync(process.execPath, [path.join(REPO, 'scripts', 'sea-sign.cjs'), phase, bin], { stdio: 'inherit' });
+// node (process.execPath — the node running this script), independent of --node. targetOs
+// (default host process.platform) is the OS whose signing rules apply — the CROSS-BUILD
+// output's OS, not necessarily the host running this script — forwarded to sea-sign.cjs as
+// a third arg so it branches on the TARGET, not its own process.platform.
+function seaSign(phase, bin, targetOs = process.platform) {
+  execFileSync(process.execPath,
+    [path.join(REPO, 'scripts', 'sea-sign.cjs'), phase, bin, targetOs], { stdio: 'inherit' });
 }
 
 // Run the GIVEN node with `--experimental-sea-config` to materialize the SEA
@@ -282,7 +306,7 @@ export function generateBlob(nodePath, cfgPath, { execFileSync: exec = execFileS
 // node's bytes were embedded, not process.execPath's" without a real postject
 // inject or OS codesign pass.
 export async function buildBinary({
-  nodePath, postjectDir, blob, outOverride,
+  nodePath, postjectDir, blob, outOverride, targetOs = process.platform,
   readNode = (p) => fs.readFileSync(p),
   requirePostject: reqPostject = (dir) => requireAbs(dir),
   sign = seaSign,
@@ -307,15 +331,16 @@ export async function buildBinary({
   // some filesystems (autofs / network mounts). A plain read+write avoids it.
   fs.writeFileSync(bin, readNode(nodePath)); // embed the GIVEN node
   fs.chmodSync(bin, 0o755);                          // no-op on Windows, harmless
-  sign('unsign', bin);                                // strip any signature so postject can rewrite
+  sign('unsign', bin, targetOs);                      // strip any signature so postject can rewrite
   // Inject the blob via postject's JS API (same portability reason as esbuild used to be).
   await reqPostject(postjectDir).inject(bin, 'NODE_SEA_BLOB', fs.readFileSync(blob), {
     sentinelFuse: 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2',
     // Mach-O stores the blob in a named segment; irrelevant (and omitted) on PE/ELF — the one
     // unavoidable per-format detail, expressed here as an option rather than a code branch.
-    machoSegmentName: process.platform === 'darwin' ? 'NODE_SEA' : undefined,
+    // Keyed off the TARGET os (a cross-build's output may not match the host's).
+    machoSegmentName: targetOs === 'darwin' ? 'NODE_SEA' : undefined,
   });
-  sign('sign', bin);                                  // re-apply the OS signature (ad-hoc on macOS)
+  sign('sign', bin, targetOs);                        // re-apply the OS signature (ad-hoc on macOS)
   return bin;
 }
 
@@ -390,7 +415,12 @@ async function main() {
   const argv = process.argv.slice(2);
   const cliCjs = parseCliArg(argv);
   const outOverride = parseOutArg(argv);
-  const nodePath = parseNodeArg(argv);
+  const { blobgen, embed } = parseNodesArg(argv);
+  if (!blobgen || !embed) {
+    console.error('build-naude: need a node — pass --node <path> (both roles) or --blobgen-node + --embed-node');
+    process.exit(1);
+  }
+  const targetOs = parseTargetOsArg(argv);
   const bundle = parseBundleArg(argv);
   const nmdir = parseNmdirArg(argv);
   const postjectDir = parsePostjectArg(argv);
@@ -403,18 +433,25 @@ async function main() {
     process.exit(1);
   }
 
-  const nodeVersion = execFileSync(nodePath, ['-p', 'process.versions.node'], { encoding: 'utf8' }).trim();
+  // The >=24 guard checks the BLOB-GEN node — the one that actually RUNS
+  // (--experimental-sea-config). The embed node's bytes are never executed
+  // here, so its version is unconstrained by this guard.
+  const nodeVersion = execFileSync(blobgen, ['-p', 'process.versions.node'], { encoding: 'utf8' }).trim();
   const major = parseInt(nodeVersion.split('.')[0], 10);
   if (major < 24) {
-    console.error(`SEA embed node (${nodePath}) is v${nodeVersion}; need >= v24`);
+    console.error(`SEA blob-gen node (${blobgen}) is v${nodeVersion}; need >= v24`);
     process.exit(1);
   }
 
   const { tar, sigFile } = stageDeps(nmdir);
   const { cfgPath, blob } = writeSeaConfig({ bundle, cliCjs, tar, sigFile });
-  generateBlob(nodePath, cfgPath);
-  const bin = await buildBinary({ nodePath, postjectDir, blob, outOverride });
-  smokeCheck(bin);
+  generateBlob(blobgen, cfgPath);                                                 // host node RUNS
+  const bin = await buildBinary({ nodePath: embed, postjectDir, blob, outOverride, targetOs }); // target node EMBEDDED
+  if (blobgen === embed) {
+    smokeCheck(bin);                                // native only — can't exec a foreign binary
+  } else {
+    console.error(`naude cross-build: skipping run-smoke (target ${targetOs} binary, attest-only)`);
+  }
   console.error(`naude SEA → ${bin}`);
 }
 

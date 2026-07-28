@@ -15,20 +15,34 @@
 //     * win32/linux -> nothing (Windows dist is intentionally unsigned — no cert; ELF needs none)
 const { execFileSync } = require('node:child_process');
 
-const [phase, bin] = process.argv.slice(2);
-if (!bin || (phase !== 'unsign' && phase !== 'sign')) {
-  console.error('usage: sea-sign.cjs <unsign|sign> <binary>');
-  process.exit(2);
-}
-
 function run(cmd, args) { execFileSync(cmd, args, { stdio: 'inherit' }); }
 
-if (phase === 'unsign') {
-  if (process.platform === 'darwin') run('codesign', ['--remove-signature', bin]);
-  else if (process.platform === 'win32') {
-    try { run('signtool', ['remove', '/s', bin]); }
-    catch { console.error('sea-sign: signtool unavailable — shipping unsigned'); }
+// Sign for the TARGET os, not necessarily the host's — a cross-build's output
+// binary is for another platform than the one running this script. Defaults to
+// the host (process.platform), matching every native (host==target) build.
+function sign(phase, bin, os = process.platform) {
+  if (phase === 'unsign') {
+    if (os === 'darwin') run('codesign', ['--remove-signature', bin]);
+    else if (os === 'win32') {
+      try { run('signtool', ['remove', '/s', bin]); }
+      catch { console.error('sea-sign: signtool unavailable — shipping unsigned'); }
+    }
+  } else { // sign
+    if (os === 'darwin') run('codesign', ['--sign', '-', bin]); // ad-hoc; required or it won't run
   }
-} else { // sign
-  if (process.platform === 'darwin') run('codesign', ['--sign', '-', bin]); // ad-hoc; required or it won't run
+}
+
+module.exports = { sign };
+
+// Run as a CLI only when invoked directly (build-naude.mjs's seaSign shells
+// out to this file as a subprocess); importing it (a future unit test, or
+// anything else that requires this module for its exported `sign`) must not
+// touch — let alone validate-and-exit(2) on — the REQUIRING process's own argv.
+if (require.main === module) {
+  const [phase, bin, targetOsArg] = process.argv.slice(2);
+  if (!bin || (phase !== 'unsign' && phase !== 'sign')) {
+    console.error('usage: sea-sign.cjs <unsign|sign> <binary> [target-os]');
+    process.exit(2);
+  }
+  sign(phase, bin, targetOsArg);
 }
