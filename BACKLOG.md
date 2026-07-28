@@ -14,8 +14,14 @@ toolchain triples) stay map-only. OS word: `macos` for the Darwin era (floor =
 macOS product version — fixes misleading `darwin11.0`), universal asset stays
 `clode-<v>-macos`; RESERVE `macos-classic<-ver>-<arch>` (m68k/ppc) for the Retro68
 Classic Mac OS track. Asset/tag floor separator = DASHED `<os>-<floor>-<arch>` so
-the download name == `--list-targets` tag. DONE: dropped the low-signal verify
-annotation from `--list-targets` (6122700). Remaining is a real release-affecting
+the download name == `--list-targets` tag. ENGINE artifacts carry the same os/arch
+tokens (`tjs-<cleanTargetName>-<pin>`, pack `clode-templates-<pin>`) → canonicalize
+those too. PIN format reworked to `<engine>-<os>-<arch>-<ver>[-<sha7>]`: drop the `v`,
+source-sha only for source-built (tjs `26.6.0-1a230d3`), version-only for official
+binaries (node `24.18.0`); Node/naude aligned to the same shape (forward-looking — naude
+embeds the --node binary, not published). quickjs-ng NOT in the pin (txiki sha captures
+the submodule). Both the PINS.md producer (`tjsPinFromPins`) AND the fetch-side recompute
+must match. DONE: dropped the low-signal verify annotation from `--list-targets` (6122700). Remaining is a real release-affecting
 refactor (single `scripts/canonical-name.cjs` source of truth → floored-asset-name +
 deriveTag + platform-tag + the build-leg bash mirror + the release tripwire; leg-token
 rename optional/follow-up) — can't run CI/release here to verify, so plan:
