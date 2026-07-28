@@ -964,9 +964,9 @@ async function clodeBuild(args, opts) {
       // needs no signer at all: system `codesign` handles the former, nothing
       // needs signing for the latter.
       const hostPlatform = opts.hostPlatform || process.platform;
-      const ensureRcodesign = opts.ensureRcodesign || require('./clode-rcodesign.cjs').ensureRcodesign;
       let signerBin = null;
       if (nt && nt.platform === 'darwin' && hostPlatform !== 'darwin') {
+        const ensureRcodesign = opts.ensureRcodesign || require('./clode-rcodesign.cjs').ensureRcodesign;
         try {
           signerBin = await ensureRcodesign({ env, log: clodeLog, platform: hostPlatform, arch: process.arch });
         } catch (e) {

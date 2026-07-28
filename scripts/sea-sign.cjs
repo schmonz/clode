@@ -34,7 +34,7 @@ function sign(phase, bin, os = process.platform, opts = {}) {
   const { host = process.platform, signerBin, run = defaultRun } = opts;
   if (os === 'darwin' && host !== 'darwin') {
     if (!signerBin) {
-      throw new Error(`sea-sign: a darwin target built on ${host} needs rcodesign — none provided`);
+      throw new Error(`sea-sign: a macOS target built on ${host} needs rcodesign — none provided`);
     }
     if (phase === 'sign') {
       const tmp = bin + '.rcs';
