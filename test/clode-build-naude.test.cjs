@@ -374,16 +374,20 @@ test('clode build --naude --target macos-*: on a non-darwin host, provisions rco
   try {
     const { env } = seedProvider(dir);
     let rcodesignFetched = 0;
+    let fetchedWith = null;
     const r = await runBuild(
       ['--naude', '--target', 'macos-amd64', '--out', path.join(dir, 'out')],
       env, { status: 0, stdout: '', stderr: '' }, async () => FAKE_NODE,
       {
         hostPlatform: 'linux',
-        ensureRcodesign: async () => { rcodesignFetched++; return '/t/rcodesign'; },
+        ensureRcodesign: async (opts) => { rcodesignFetched++; fetchedWith = opts; return '/t/rcodesign'; },
       });
 
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
     assert.strictEqual(rcodesignFetched, 1, 'a darwin target on a linux host must fetch rcodesign');
+    // Fetched for the HOST platform (the injected linux), not the darwin
+    // TARGET — a process.platform slip here would fetch for the wrong host.
+    assert.strictEqual(fetchedWith?.platform, 'linux', 'rcodesign must be fetched for the HOST platform (injected linux)');
     const naude = r.calls.find((c) => Array.isArray(c.args)
       && c.args.some((a) => typeof a === 'string' && a.endsWith(path.join('scripts', 'build-naude.mjs'))));
     assert.ok(naude, `build-naude.mjs was not invoked; calls:\n${JSON.stringify(r.calls, null, 2)}`);

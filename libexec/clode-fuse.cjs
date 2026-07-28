@@ -970,7 +970,7 @@ async function clodeBuild(args, opts) {
         try {
           signerBin = await ensureRcodesign({ env, log: clodeLog, platform: hostPlatform, arch: process.arch });
         } catch (e) {
-          return fail(`build --naude: could not get rcodesign — first off-Mac darwin sign needs network — run \`clode fetch --naude\` while online, then retry: ${(e && e.message) || e}`);
+          return fail(`build --naude: could not get rcodesign — first off-Mac sign needs network — run \`clode fetch --naude\` while online, then retry: ${(e && e.message) || e}`);
         }
       }
 
