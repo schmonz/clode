@@ -657,23 +657,29 @@ opaque.
 
 ## Proactively steer the model toward clode's update path (system-prompt nudge)
 
-Idea, deferred. At launch, have `bin/clode` pass a short `--append-system-prompt`
-line telling the model it's running under clode and to update via `"$CLODE_SELF"
-update` (clode is not necessarily on PATH; `CLODE_SELF` is already exported), never
-`claude update`. The flag feeds the bundle's shared system-prompt builder (`Kn1`),
-so it reaches interactive sessions.
+Idea, deferred. **UPDATED 2026-07-27 for the notify-only world** (auto-update is now
+check-and-notify; `CLODE_SELF`/`--clode-internal-update` retired). At launch, have
+`bin/clode` pass a short `--append-system-prompt` line telling the model it's running
+under clode/quaude, that Claude Code here is **managed by clode and updated by
+rebuilding** (`clode build`) — not by `claude update`, `claude upgrade`, or
+`npm i -g @anthropic-ai/claude-code` — and that the target itself surfaces a
+"newer version available" note (in `/status` + `claude doctor`) when upstream ships
+one. The flag feeds the bundle's shared system-prompt builder (`Kn1`), so it reaches
+interactive sessions.
 
-- **Why maybe-later:** the `PreToolUse(Bash)` update hook (in the
-  complete-update-interception design) already denies model-issued `claude
-  update`/`upgrade` with a just-in-time message pointing at the right command, which
-  covers the common case. A proactive nudge would add value mainly by (a) reducing
-  attempts up front and (b) catching *non-`claude`-named* update attempts the hook's
-  regex won't match (e.g. `npm i -g @anthropic-ai/claude-code`).
-- **Revisit if:** the model keeps reaching for upstream update paths despite the
-  hook, or non-`claude` update attempts show up in practice.
+- **Why maybe-later:** the `PreToolUse(Bash)` **update-guard** (`libexec/update-guard.cjs`,
+  SHIPPED) already denies model-issued `claude update`/`upgrade` + the npm/curl global
+  installs with a just-in-time message pointing at clode. So the reactive case is
+  covered. A proactive nudge would add value mainly by (a) reducing attempts up front
+  and (b) catching *non-guard-matched* update phrasings before they're attempted.
+- **Revisit if:** the model keeps reaching for upstream update paths despite the guard,
+  or non-matched update attempts show up in practice.
 - **Tradeoff:** `--append-system-prompt` is single-value/last-wins, so a user's own
-  value would override clode's. If stacking is needed, the bundle also concatenates
-  an `appendSystemPrompt` from settings inside `Kn1`.
+  value would override clode's. If stacking is needed, the bundle also concatenates an
+  `appendSystemPrompt` from settings inside `Kn1`.
+- **Note (2026-07-27):** the guard message + the notify surface together already tell
+  both the model and the human the right path, so the nudge is now lower-value than
+  when first written. Keep deferred unless the guard proves insufficient in practice.
 
 ## RESOLVED (2026-07-18 sweep): Reimplement the extraction toolchain in JavaScript
 

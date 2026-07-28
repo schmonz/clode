@@ -69,6 +69,9 @@ const KNOWN_BUN = new Set([
   'enableANSIColors', 'isMainThread', 'plugin', 'registerMacro', 'Cookie',
   'CookieMap', 'S3Client', 'redis', 'sql', 'SQL', 's3', 'YAML', 'JSONL',
   'jest', 'cron', 'Security', 'Database', 'FFI', 'embeddedFiles', '$',
+  // ant: Bun.ant.getPeerUid (unix-socket peer-credential probe). New in 2.1.220;
+  // single call site, try/catch-guarded with a null fallback (reviewed 2026-07-27).
+  'ant',
 ]);
 
 const KNOWN_SEARCH_APPLETS = new Set(['ugrep', 'bfs']);
@@ -394,7 +397,9 @@ const ACCEPTED_MISSING_EXTERNALS = new Set([
 
 const ACCEPTED_STUBBED_BUN = new Set(['serve', 'listen', 'file', 'write', 'Terminal', 'Transpiler',
   'YAML', 'stringWidth', 'stripANSI', 'wrapAnsi', 'semver']);
-const ACCEPTED_MISSING_BUN = new Set(['SQL']);
+// SQL: accepted-missing (no SQL feature on the core path). ant: Bun.ant.getPeerUid
+// is guarded (single try/catch call site, null fallback) — safe to leave unimplemented.
+const ACCEPTED_MISSING_BUN = new Set(['SQL', 'ant']);
 const ACCEPTED_BUN_MODULES = new Set(['bun:jsc']);
 
 function gateProblems(cov) {
