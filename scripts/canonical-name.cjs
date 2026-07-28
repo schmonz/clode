@@ -79,8 +79,10 @@ function engineName(engine, leg, pin) {
 // caller turns that into "naude is Node-only; use quaude". Node publishes only
 // darwin/linux/win32; win32 is intentionally absent here (naude-on-Windows cross is
 // a separate, unproven follow-on).
-const OS_TO_NODE = { macos: 'darwin', darwin: 'darwin', linux: 'linux' };
-const ARCH_TO_NODE = { amd64: 'x64', x64: 'x64', arm64: 'arm64' };
+// keyed by canonOs() output (macos, linux), not raw process.platform
+const OS_TO_NODE = { macos: 'darwin', linux: 'linux' };
+// keyed by canonArch() output (amd64, arm64), not raw process.arch
+const ARCH_TO_NODE = { amd64: 'x64', arm64: 'arm64' };
 function targetToNode(target) {
   const { os, arch } = splitLeg(target);
   const platform = OS_TO_NODE[canonOs(os)];

@@ -469,7 +469,7 @@ async function main() {
   if (blobgen === embed) {
     smokeCheck(bin);                                // native only — can't exec a foreign binary
   } else {
-    console.error(`naude cross-build: skipping run-smoke (target ${targetOs} binary, attest-only)`);
+    console.error(`naude cross-build: skipping run-smoke (foreign-target binary, attest-only)`);
   }
   console.error(`naude SEA → ${bin}`);
 }
