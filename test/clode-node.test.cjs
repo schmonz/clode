@@ -18,17 +18,46 @@ test('nodeAsset: darwin-arm64 -> a nodejs.org url + the pinned sha', () => {
   assert.strictEqual(a.filename, `node-v${PINNED_VERSION}-darwin-arm64.tar.gz`);
 });
 
-test('nodeAsset: unsupported platform fails loud (Windows is out of scope)', () => {
-  assert.throws(() => nodeAsset('win32', 'x64'), /naude.*not supported|unsupported/i);
+test('nodeAsset: unsupported platform fails loud', () => {
+  assert.throws(() => nodeAsset('freebsd', 'x64'), /naude.*not supported|unsupported/i);
+});
+
+test('nodeAsset: win32 is a .zip from nodejs.org', () => {
+  const a = require('../libexec/clode-node.cjs').nodeAsset('win32', 'x64');
+  assert.match(a.filename, /node-v.*-win-x64\.zip$/);
+  assert.match(a.url, /nodejs\.org\/dist\/.*win-x64\.zip$/);
+  assert.ok(/^[0-9a-f]{64}$/.test(a.sha256));
+});
+test('nodeBinPath: win32 is node.exe at the top (not bin/node)', () => {
+  const p = require('../libexec/clode-node.cjs').nodeBinPath({ CLODE_NODES: '/s' }, 'win32', 'x64');
+  assert.ok(p.endsWith(path.join('win32-x64', 'node.exe')), p);
+});
+test('ensurePinnedNode: win32 extracts a .zip via the injected extract, flattens node.exe', async () => {
+  const store = fs.mkdtempSync(path.join(os.tmpdir(), 'wn-'));
+  const env = { CLODE_NODES: store };
+  const { ensurePinnedNode, nodeAsset } = require('../libexec/clode-node.cjs');
+  const p = await ensurePinnedNode({
+    env, platform: 'win32', arch: 'x64',
+    download: async (_u, dst) => { fs.mkdirSync(path.dirname(dst), { recursive: true }); fs.writeFileSync(dst, 'ZIP'); },
+    verify: async () => nodeAsset('win32', 'x64').sha256,
+    extract: async (_zip, into) => {
+      // emulate the win32 zip layout: node-v<ver>-win-x64/node.exe at the top
+      const top = path.join(into, 'node-vX-win-x64');
+      fs.mkdirSync(top, { recursive: true });
+      fs.writeFileSync(path.join(top, 'node.exe'), 'WINNODE');
+    },
+  });
+  assert.ok(p.endsWith(path.join('win32-x64', 'node.exe')), p);
+  assert.strictEqual(fs.readFileSync(p, 'utf8'), 'WINNODE');
 });
 
 test('ensurePinnedNode: sha mismatch fails loud and leaves nothing behind', async () => {
   const store = fs.mkdtempSync(path.join(os.tmpdir(), 'nodestore-'));
   const env = { CLODE_STATE_ROOT: store };
   // Pin platform/arch to a SUPPORTED target (like the happy-path test below):
-  // otherwise this resolves the HOST platform, and on win32 — where naude is a
-  // deferred follow-on with no pinned Node — ensurePinnedNode throws "not
-  // supported" before it ever reaches the sha check, so the assertion misses.
+  // otherwise this resolves the HOST platform, and on a platform with no
+  // pinned Node at all, ensurePinnedNode throws "not supported" before it
+  // ever reaches the sha check, so the assertion misses.
   await assert.rejects(
     ensurePinnedNode({ env, platform: 'linux', arch: 'x64', download: async (url, dest) => { fs.writeFileSync(dest, 'not-a-node'); }, verify: async () => 'deadbeef'.repeat(8) }),
     /sha mismatch/i);
@@ -100,6 +129,34 @@ test('tarExtract resolves tar via provision and uses the resolved binary', () =>
   assert.strictEqual(fs.readFileSync(path.join(destDir, 'hello'), 'utf8'), 'hi');
   assert.ok(calls.some((b) => path.isAbsolute(b) && /tar|gtar|bsdtar/.test(b)),
     'used a provision-resolved (absolute) tar path');
+});
+
+test('tarExtract resolves unzip via provision for a .zip and extracts it', () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-node-'));
+  const calls = [];
+  const destDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-node-zdst-'));
+  const src = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-node-zsrc-'));
+  // A fixed, deterministic tiny zip (STORED, entry "hello" = "hi"), same shape
+  // as host-provision's ZIP_KAT — avoids depending on a `zip` creator tool
+  // just to build the test fixture.
+  const zipBytes = Buffer.from([
+    80, 75, 3, 4, 20, 0, 0, 0, 0, 0, 0, 0, 33, 0, 172, 42, 147, 216, 2, 0, 0,
+    0, 2, 0, 0, 0, 5, 0, 0, 0, 104, 101, 108, 108, 111, 104, 105, 80, 75, 1,
+    2, 20, 3, 20, 0, 0, 0, 0, 0, 0, 0, 33, 0, 172, 42, 147, 216, 2, 0, 0, 0,
+    2, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 1, 0, 0, 0, 0, 104,
+    101, 108, 108, 111, 80, 75, 5, 6, 0, 0, 0, 0, 1, 0, 1, 0, 51, 0, 0, 0,
+    37, 0, 0, 0, 0, 0,
+  ]);
+  const arc = path.join(src, 'a.zip');
+  fs.writeFileSync(arc, zipBytes);
+  tarExtract(arc, destDir, {
+    env: { ...process.env },
+    spawn: (bin, args, o) => { calls.push(bin); return require('node:child_process').spawnSync(bin, args, o); },
+    dataDir,
+  });
+  assert.strictEqual(fs.readFileSync(path.join(destDir, 'hello'), 'utf8'), 'hi');
+  assert.ok(calls.some((b) => path.isAbsolute(b) && /unzip/.test(b)),
+    'used a provision-resolved (absolute) unzip path');
 });
 
 test('nodeBinPath: <nodeStore>/<version>/<platform>-<arch>/bin/node, whether or not it exists', () => {

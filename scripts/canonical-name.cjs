@@ -76,11 +76,10 @@ function engineName(engine, leg, pin) {
 // spelling, for the naude Node fetch (clode-node.cjs speaks Node's names). Accepts
 // both a canonical target (macos-amd64) and a raw leg token (darwin-x64). Returns
 // null for a well-formed target whose OS is not one Node ships a binary for — the
-// caller turns that into "naude is Node-only; use quaude". Node publishes only
-// darwin/linux/win32; win32 is intentionally absent here (naude-on-Windows cross is
-// a separate, unproven follow-on).
-// keyed by canonOs() output (macos, linux), not raw process.platform
-const OS_TO_NODE = { macos: 'darwin', linux: 'linux' };
+// caller turns that into "naude is Node-only; use quaude". Node publishes
+// darwin/linux/win32.
+// keyed by canonOs() output (macos, linux, windows), not raw process.platform
+const OS_TO_NODE = { macos: 'darwin', linux: 'linux', windows: 'win32' };
 // keyed by canonArch() output (amd64, arm64), not raw process.arch
 const ARCH_TO_NODE = { amd64: 'x64', arm64: 'arm64' };
 function targetToNode(target) {

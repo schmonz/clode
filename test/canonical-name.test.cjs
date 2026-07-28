@@ -94,3 +94,8 @@ test('targetToNode: a non-Node OS returns null (caller rejects)', () => {
   assert.strictEqual(C.targetToNode('netbsd-sparc'), null);
   assert.strictEqual(C.targetToNode('haiku-amd64'), null);
 });
+
+test('targetToNode: windows targets map to win32', () => {
+  assert.deepStrictEqual(C.targetToNode('windows-x64'), { platform: 'win32', arch: 'x64' });
+  assert.deepStrictEqual(C.targetToNode('windows-arm64'), { platform: 'win32', arch: 'arm64' });
+});

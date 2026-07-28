@@ -44,6 +44,24 @@ const GZIP_KAT = {
   expected: 'clode',
 };
 
+// A fixed, deterministic ZIP (STORED, no compression, fixed 1980-01-01 DOS
+// timestamp so the bytes never change build to build) containing one entry
+// "ok" whose content is "clode". Built with Python's zlib-free zipfile module:
+//   zipfile.ZipFile(buf, 'w', zipfile.ZIP_STORED).writestr(
+//     zipfile.ZipInfo('ok', date_time=(1980,1,1,0,0,0)), 'clode')
+// Any conforming unzip extracts entry "ok" to exactly "clode" — the KAT proves
+// the resolved tool actually extracts a zip, on any platform.
+const ZIP_KAT = {
+  zip: [
+    80, 75, 3, 4, 20, 0, 0, 0, 0, 0, 0, 0, 33, 0, 82, 5, 130, 22, 5, 0, 0, 0,
+    5, 0, 0, 0, 2, 0, 0, 0, 111, 107, 99, 108, 111, 100, 101, 80, 75, 1, 2, 20,
+    3, 20, 0, 0, 0, 0, 0, 0, 0, 33, 0, 82, 5, 130, 22, 5, 0, 0, 0, 5, 0, 0, 0,
+    2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 1, 0, 0, 0, 0, 111, 107, 80, 75,
+    5, 6, 0, 0, 0, 0, 1, 0, 1, 0, 48, 0, 0, 0, 37, 0, 0, 0, 0, 0,
+  ],
+  expected: 'clode',
+};
+
 const REGISTRY = {
   sha256: {
     id: 'sha256',
@@ -139,6 +157,35 @@ const REGISTRY = {
       }
     },
     installHint: 'install gzip (or gunzip/zcat/pigz), or set CLODE_GZIP to a `gzip -dc`-compatible decompressor. Needed to unpack the templates pack.',
+  },
+  unzip: {
+    id: 'unzip',
+    overrideEnv: 'CLODE_UNZIP',
+    candidates: [
+      { name: 'unzip', args: (f, destDir) => ['-o', '-q', f, '-d', destDir] },
+    ],
+    // Extract the embedded known zip to a temp dir; verify the exact content
+    // of its single entry. Round-trip-free (unlike tar) since unzip only
+    // extracts — mirrors GZIP_KAT's embedded-blob shape instead.
+    verify({ candidate, path: bin, run, fs }) {
+      const base = path.join(os.tmpdir(), `clode-kat-unzip-${process.pid}`);
+      const zip = `${base}.zip`;
+      const dest = `${base}.dst`;
+      try {
+        fs.rmSync(dest, { recursive: true, force: true });
+        fs.mkdirSync(dest, { recursive: true });
+        fs.writeFileSync(zip, Buffer.from(ZIP_KAT.zip));
+        const r = run(bin, candidate.args(zip, dest));
+        if (!r || r.status !== 0) return false;
+        return fs.readFileSync(path.join(dest, 'ok'), 'utf8') === ZIP_KAT.expected;
+      } catch {
+        return false;
+      } finally {
+        try { fs.unlinkSync(zip); } catch { /* absent */ }
+        try { fs.rmSync(dest, { recursive: true, force: true }); } catch { /* absent */ }
+      }
+    },
+    installHint: 'install unzip, or set CLODE_UNZIP to an unzip-compatible extractor. Needed to unpack Windows Node downloads.',
   },
 };
 

@@ -179,3 +179,20 @@ test('provision(gzip) fails loud when no decompressor is found', () => {
     /CLODE_GZIP/
   );
 });
+
+// --- unzip: real-host integration (KAT extracts the embedded zip) ---------
+test('provision resolves a real unzip on this host (integration)', () => {
+  const got = provision('unzip', { dataDir: tmpDataDir() });
+  assert.ok(got.path, 'a real unzip resolved');
+  assert.strictEqual(got.candidate.name, 'unzip');
+});
+
+test('provision(unzip) fails loud when no extractor is found', () => {
+  assert.throws(
+    () => provision('unzip', {
+      env: { PATH: '' }, findTool: () => null,
+      spawn: () => { throw new Error('must not spawn'); }, fs, dataDir: tmpDataDir(),
+    }),
+    /CLODE_UNZIP/
+  );
+});

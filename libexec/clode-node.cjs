@@ -44,15 +44,20 @@ const PINNED_VERSION = PIN.version;
 
 // platform/arch -> { url, sha256, filename }. platform/arch are node's own
 // process.platform/process.arch spellings (darwin/linux/win32, arm64/x64) —
-// the same vocabulary target-env.cjs's mapPlatform produces. Windows is a
-// real, deliberate absence: naude is out of scope there for now.
+// the same vocabulary target-env.cjs's mapPlatform produces. The pin KEY for
+// Windows stays `win32-<arch>` (matching process.platform), but nodejs.org's
+// actual asset filename/URL spells the OS segment `win-<arch>` (not
+// `win32-<arch>`) and ships a `.zip`, not a `.tar.gz` — everyone else keeps
+// `<platform>-<arch>.tar.gz`.
 function nodeAsset(platform, arch) {
   const key = `${platform}-${arch}`;
   const sha256 = PIN.sha256[key];
   if (!sha256) {
     throw new Error(`clode-node: naude on ${platform}-${arch} is not supported (no pinned Node for this platform)`);
   }
-  const filename = `node-v${PINNED_VERSION}-${key}.tar.gz`;
+  const isWin = platform === 'win32';
+  const ext = isWin ? 'zip' : 'tar.gz';
+  const filename = `node-v${PINNED_VERSION}-${isWin ? `win-${arch}` : key}.${ext}`;
   const url = `https://nodejs.org/dist/v${PINNED_VERSION}/${filename}`;
   return { url, sha256, filename };
 }
@@ -72,19 +77,37 @@ function targetToNodeAsset(target) {
 // Where the pinned node's binary lives, whether or not it has been fetched yet.
 // Per-(version,platform,arch): a naude cross-build fetches Node for a target
 // platform that need not be the host's, so the store must hold more than one
-// platform's node at once without one clobbering another.
+// platform's node at once without one clobbering another. win32's archive has
+// no bin/ dir — node.exe sits at the top of the version dir — everyone else
+// keeps bin/node.
 function nodeBinPath(env = process.env, platform = process.platform, arch = process.arch) {
-  return path.join(nodeStore(env), PINNED_VERSION, `${platform}-${arch}`, 'bin', 'node');
+  const leaf = platform === 'win32' ? ['node.exe'] : ['bin', 'node'];
+  return path.join(nodeStore(env), PINNED_VERSION, `${platform}-${arch}`, ...leaf);
 }
 
 // Default extract seam: a spawned `tar -xzf <tarball> -C <destDir>`, with the
 // tar binary itself resolved via host-provision (a KAT-verified tar/gtar/
 // bsdtar on PATH), not hardcoded — so a host whose tar lives elsewhere or is
 // named gtar/bsdtar still works, and a toolless host fails loud up front.
+// win32's Node asset is a `.zip` (GNU tar can't read it), so a `.zip` tarball
+// branches to a host-provision-resolved `unzip` instead; every other platform
+// is unchanged.
 function tarExtract(tarball, destDir, opts = {}) {
   const { provision } = require('./host-provision.cjs');
   const { spawn = spawnSync, env = process.env, dataDir } = opts;
   fs.mkdirSync(destDir, { recursive: true });
+  if (tarball.endsWith('.zip')) {
+    const { path: unzipBin } = provision('unzip', { env, dataDir, spawn });
+    // Same colon-avoidance as the tar branch below: basename + cwd, never an
+    // absolute archive path.
+    const res = spawn(unzipBin, ['-o', '-q', path.basename(tarball), '-d', destDir],
+      { stdio: 'inherit', cwd: path.dirname(tarball) });
+    if (res.error) throw res.error;
+    if (res.status !== 0) {
+      throw new Error(`clode-node: ${unzipBin} -o -q ${tarball} -d ${destDir} exited ${res.status}`);
+    }
+    return;
+  }
   const { path: tarBin } = provision('tar', { env, dataDir, spawn });
   // Pass the tarball by BASENAME with cwd=its dir, never as an absolute path: on
   // Windows under a bash PATH, `tar` is Git Bash's GNU tar, which reads an absolute
