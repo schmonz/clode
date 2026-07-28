@@ -21,11 +21,30 @@ source-sha only for source-built (tjs `26.6.0-1a230d3`), version-only for offici
 binaries (node `24.18.0`); Node/naude aligned to the same shape (forward-looking — naude
 embeds the --node binary, not published). quickjs-ng NOT in the pin (txiki sha captures
 the submodule). Both the PINS.md producer (`tjsPinFromPins`) AND the fetch-side recompute
-must match. DONE: dropped the low-signal verify annotation from `--list-targets` (6122700). Remaining is a real release-affecting
-refactor (single `scripts/canonical-name.cjs` source of truth → floored-asset-name +
-deriveTag + platform-tag + the build-leg bash mirror + the release tripwire; leg-token
-rename optional/follow-up) — can't run CI/release here to verify, so plan:
-`docs/superpowers/plans/2026-07-27-arch-artifact-name-rationalization.md`.
+must match.
+
+DONE (2026-07-28): dropped the low-signal verify annotation from `--list-targets`
+(6122700); the canonical-name refactor SHIPPED (76a8ce7) — single
+`scripts/canonical-name.cjs` source of truth, consumed by floored-asset-name +
+build-templates cleanTargetName/deriveTag + platform-tag; the three pin producers
+(tjsPinFromPins / clode-fuse thisTjsPin / build-clode-main bakedTjsPin) all drop the
+`v` together. Invariant proven end-to-end: download name == `--list-targets` tag ==
+the engine a fetching clode looks for (incl. the NetBSD port-name legs
+macppc/pmax/sgimips → ppc/mipsel/mipseb via a TOTAL canonArch). Full offline suite
+green. See memory [[canonical-artifact-names]].
+
+REMAINING (all CI/release-coupled — can't verify here, deferred to the release pass):
+- build-leg bash asset-name mirror (`.github/actions/build-leg/action.yml`) → call
+  `node scripts/canonical-name.cjs <leg> <ver> <floor>` instead of re-implementing
+  the split, so bash and JS can never drift.
+- `release.yml` asset tripwire names + the CI engine-upload names (CI must upload the
+  engine under the canonical `tjs-<os>-<arch>-<pin>` name a fetching clode expects).
+- SHIPPING the pin-format change is release-atomic: an old clode's baked pin
+  (`v26.6.0-…`) vs a new manifest (`26.6.0-…`) mismatches → obtainEngine refuses.
+  Land it with a release, not before.
+- Optional leg-token rename (plan path B) — internal-token uniformity, bigger blast
+  radius; follow-up only.
+Plan: `docs/superpowers/plans/2026-07-27-arch-artifact-name-rationalization.md`.
 
 ## Auto-update → notify-only; retire CLODE_SELF rebuild (2026-07-27)
 
@@ -39,7 +58,19 @@ check is one HTTPS GET of `<releasesUrl>/<channel>` + `Bun.semver.order` vs the
 bundle's VERSION (live: 2.1.218 vs latest→2.1.220, stable→2.1.212). Supersedes the
 CLODE_SELF/`--clode-internal-update`/`targetUpdate` rebuild callback (retire it;
 KEEP the update-guard model-deny). Full task-by-task plan:
-`docs/superpowers/plans/2026-07-27-auto-update-notify-only.md`. Not yet implemented.
+`docs/superpowers/plans/2026-07-27-auto-update-notify-only.md`.
+
+SHIPPED (2026-07-28): target-side `check-for-newer-version` module (6a53bc6), fused
++ exposed as `__clodeCheckUpdate` in the PRELUDE (10084b9), the autoupdater patched
+to NOTIFY not rebuild (4698b99), naude parity + CLODE_SELF spawn wiring dropped
+(71349ac), three-state notice surfaced on doctor/status + PTY pin (1cabc30), fetch
+bounded (ed86dfa), mock golden re-blessed (c494d40). Gated by
+`test/target-update-check.test.cjs` (RECIPE I1) + the surviving update-guard
+model-deny `test/quaude-naude-updateguard.test.cjs` (RECIPE I2). The retired rebuild
+surface is now gate-enforced gone (`test/no-clode-self.test.cjs`, pure-Node walk) and
+the obsolete `self-update-e2e` CI job (ran the deleted rebuild test) was removed
+(d19b37a); the notify e2e `test/e2e-self_update.test.cjs` runs in the main suite.
+DONE.
 
 ## tjs must be BUILT + REQUIRED by the suite, not skipped (2026-07-25)
 
