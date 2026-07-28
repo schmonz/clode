@@ -1,0 +1,265 @@
+name: naude-cross
+# On-demand proof that a Linux host can cross-build a naude that actually
+# boots on a real target machine. Started as darwin-only (off-mac-darwin-
+# signing spec, Task 5: a SIGNED darwin naude, off-Mac via rcodesign); this
+# file now also covers win32 (naude-for-windows spec, Task 3: an UNSIGNED
+# win32 naude — win32 SEA cross-signing off-Windows is unproven, so the
+# win32 `run-win-*` jobs are themselves the empirical "does an unsigned PE
+# boot" test). Off-Mac darwin signing (rcodesign, Tasks 1-4) is gated on its
+# own offline unit tests on every push (test/clode-rcodesign.test.cjs,
+# test/clode-build-naude.test.cjs, test/clode-fuse-args.test.cjs); this
+# workflow is NOT that gate — it is the empirical "does the artifact those
+# units certify actually EXECUTE on a real machine" check, deliberately
+# manual: cross-built naude is unshipped (naude publishing at all is still
+# unshipped — see the naude-cross-build spec) and rarely built, so paying
+# multiple runners' wall-clock time (a network-heavy pinned-Node fetch, then
+# a full OS boot) on every push would buy nothing the offline units don't
+# already cover. Fire it by hand (`gh workflow run naude-cross.yml`) whenever
+# the cross-build pipeline changes, or on the optional weekly schedule below
+# (disabled by default — uncomment to opt in to drift detection).
+on:
+  workflow_dispatch: {}
+  # schedule:
+  #   - cron: '0 6 * * 1'   # weekly Monday 06:00 UTC drift check — off by default
+permissions:
+  contents: read
+jobs:
+  # ubuntu-latest cross-builds a darwin-arm64 naude: fetches the pinned darwin
+  # Node (the embed target) + the pinned rcodesign (the off-Mac signer), signs
+  # it ad-hoc, and uploads the result. Nothing here can EXECUTE the output —
+  # a Linux host cannot run a Mach-O — so this job is attest-only by
+  # construction; the `run` job below is what actually proves it boots.
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version-file: .tool-versions
+      - name: Install runtime deps (the ext-dep closure) for the naude build
+        run: npm ci --prefix deps/claude
+      - name: Install the Claude provider (npm, latest — the naude build's input)
+        run: npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
+      - name: Provision postject into deps/clode (the naude assembler needs it on disk)
+        run: npm ci --prefix deps/clode 2>&1 | tail -3
+      - name: Build the clode-main + naude-entry bundles
+        run: node scripts/build-clode-main.mjs
+      - name: Cross-build a signed darwin-arm64 naude (fetches pinned Node + rcodesign)
+        run: |
+          set -euo pipefail
+          PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f -name claude -size +20M 2>/dev/null | head -1)"
+          if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
+          echo "provider: $PROV"
+          CLODE_CLAUDE_BIN="$PROV" CLODE_PROVIDER_BIN="$PROV" \
+            node bin/clode build --naude --target macos-arm64 --out "$RUNNER_TEMP/naude-darwin"
+      - name: Upload the cross-built darwin naude
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: naude-darwin
+          path: ${{ runner.temp }}/naude-darwin
+          if-no-files-found: error
+
+  # macos-14 (Apple Silicon) downloads the ubuntu-built binary and runs it for
+  # real. THIS is the definitive proof: an artifact assembled on a Linux
+  # runner, signed off-Mac by rcodesign instead of the system `codesign`,
+  # executes on a real Mac kernel.
+  run:
+    needs: build
+    runs-on: macos-14
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          name: naude-darwin
+          path: .
+      - name: Boot the Linux-built, off-Mac-signed darwin naude on a real Mac
+        run: |
+          set -euo pipefail
+          chmod +x ./naude-darwin
+          ./naude-darwin --version | tee version.out
+          grep -q '(Claude Code)' version.out
+
+  # The REVERSE arch cross: an arm64 Linux host cross-builds a darwin-X64 naude.
+  # (`build` above is x64-Linux -> arm64-Darwin; this is arm64-Linux -> x64-Darwin,
+  # so the two jobs together exercise both host-arch/target-arch crossings.) All
+  # pins exist: linux-arm64 Node (blob-gen), darwin-x64 Node (embed), linux-arm64
+  # rcodesign (signer). Attest-only here; run-x64 boots it on an Intel target.
+  build-arm64:
+    runs-on: ubuntu-24.04-arm
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version-file: .tool-versions
+      - name: Install runtime deps (the ext-dep closure) for the naude build
+        run: npm ci --prefix deps/claude
+      - name: Install the Claude provider (npm, latest — the naude build's input)
+        run: npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
+      - name: Provision postject into deps/clode (the naude assembler needs it on disk)
+        run: npm ci --prefix deps/clode 2>&1 | tail -3
+      - name: Build the clode-main + naude-entry bundles
+        run: node scripts/build-clode-main.mjs
+      - name: Cross-build a signed darwin-X64 naude from arm64 Linux (fetches pinned Node + rcodesign)
+        run: |
+          set -euo pipefail
+          PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f -name claude -size +20M 2>/dev/null | head -1)"
+          if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
+          echo "provider: $PROV"
+          CLODE_CLAUDE_BIN="$PROV" CLODE_PROVIDER_BIN="$PROV" \
+            node bin/clode build --naude --target macos-amd64 --out "$RUNNER_TEMP/naude-darwin-x64"
+      - name: Upload the arm64-Linux-cross-built darwin-x64 naude
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: naude-darwin-x64
+          path: ${{ runner.temp }}/naude-darwin-x64
+          if-no-files-found: error
+
+  # macos-14 (Apple Silicon) boots the arm64-Linux-built darwin-X64 binary under
+  # Rosetta — proving the reverse cross end-to-end (an x64 Mach-O, cross-built on
+  # arm64 Linux, signed off-Mac, executes on a Mac).
+  run-x64:
+    needs: build-arm64
+    runs-on: macos-14
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          name: naude-darwin-x64
+          path: .
+      - name: Boot the arm64-Linux-built x64 darwin naude under Rosetta
+        run: |
+          set -euo pipefail
+          softwareupdate --install-rosetta --agree-to-license 2>/dev/null || true
+          chmod +x ./naude-darwin-x64
+          arch -x86_64 ./naude-darwin-x64 --version | tee version.out
+          grep -q '(Claude Code)' version.out
+
+  # ubuntu-latest cross-builds a win32-x64 naude (naude-for-windows spec, Task 3).
+  # win32 SEA output is UNSIGNED by design (Windows-host cross-signing is
+  # unproven — see clode-main.cjs's help note); this job never executes the
+  # PE it produces (a Linux host cannot run one) — attest-only by construction,
+  # same as the darwin `build` job above. The `run-win-x64` job below is the
+  # actual boot proof.
+  build-win-x64:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version-file: .tool-versions
+      - name: Install runtime deps (the ext-dep closure) for the naude build
+        run: npm ci --prefix deps/claude
+      - name: Install the Claude provider (npm, latest — the naude build's input)
+        run: npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
+      - name: Provision postject into deps/clode (the naude assembler needs it on disk)
+        run: npm ci --prefix deps/clode 2>&1 | tail -3
+      - name: Build the clode-main + naude-entry bundles
+        run: node scripts/build-clode-main.mjs
+      - name: Cross-build an unsigned win32-x64 naude (fetches the pinned win32 Node)
+        run: |
+          set -euo pipefail
+          PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f -name claude -size +20M 2>/dev/null | head -1)"
+          if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
+          echo "provider: $PROV"
+          CLODE_CLAUDE_BIN="$PROV" CLODE_PROVIDER_BIN="$PROV" \
+            node bin/clode build --naude --target windows-x64 --out "$RUNNER_TEMP/naude-win-x64"
+      - name: Upload the cross-built win32-x64 naude
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: naude-win-x64
+          path: ${{ runner.temp }}/naude-win-x64
+          if-no-files-found: error
+
+  # windows-latest downloads the ubuntu-built win32-x64 binary and runs it for
+  # real. THIS answers the open spike question: does an unsigned, Linux-cross-
+  # built PE actually boot on a real Windows kernel. The downloaded artifact is
+  # the exact --out file (no extension, per build-naude.mjs's outOverride
+  # convention) — renamed to .exe here since Windows resolves an executable by
+  # extension (Git Bash itself will run the PE unnamed, but a bare rename is
+  # simplest and matches how a real user would receive it).
+  run-win-x64:
+    needs: build-win-x64
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          name: naude-win-x64
+          path: .
+      - name: Boot the Linux-built, unsigned win32-x64 naude on real Windows
+        run: |
+          set -euo pipefail
+          mv naude-win-x64 naude.exe
+          ./naude.exe --version | tee version.out
+          grep -q '(Claude Code)' version.out
+
+  # The arm64 win32 cross: ubuntu-latest cross-builds a win32-arm64 naude.
+  # Attest-only here (a Linux host cannot run a PE of any arch); run-win-arm64
+  # boots it on a real Windows-on-Arm runner.
+  build-win-arm64:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version-file: .tool-versions
+      - name: Install runtime deps (the ext-dep closure) for the naude build
+        run: npm ci --prefix deps/claude
+      - name: Install the Claude provider (npm, latest — the naude build's input)
+        run: npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
+      - name: Provision postject into deps/clode (the naude assembler needs it on disk)
+        run: npm ci --prefix deps/clode 2>&1 | tail -3
+      - name: Build the clode-main + naude-entry bundles
+        run: node scripts/build-clode-main.mjs
+      - name: Cross-build an unsigned win32-arm64 naude (fetches the pinned win32 Node)
+        run: |
+          set -euo pipefail
+          PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f -name claude -size +20M 2>/dev/null | head -1)"
+          if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
+          echo "provider: $PROV"
+          CLODE_CLAUDE_BIN="$PROV" CLODE_PROVIDER_BIN="$PROV" \
+            node bin/clode build --naude --target windows-arm64 --out "$RUNNER_TEMP/naude-win-arm64"
+      - name: Upload the cross-built win32-arm64 naude
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: naude-win-arm64
+          path: ${{ runner.temp }}/naude-win-arm64
+          if-no-files-found: error
+
+  # windows-11-arm boots the Linux-built win32-arm64 binary — the arm64 half
+  # of the same open spike question (`run-win-x64`'s comment applies here too).
+  run-win-arm64:
+    needs: build-win-arm64
+    runs-on: windows-11-arm
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          name: naude-win-arm64
+          path: .
+      - name: Boot the Linux-built, unsigned win32-arm64 naude on real Windows-on-Arm
+        run: |
+          set -euo pipefail
+          mv naude-win-arm64 naude.exe
+          ./naude.exe --version | tee version.out
+          grep -q '(Claude Code)' version.out
