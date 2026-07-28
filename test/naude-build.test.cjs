@@ -4,6 +4,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 
 test('naude sea-config embeds the baked cli.cjs + bun-shim + deps, NOT the extractor', async () => {
   const { naudeSeaConfig } = await import('../scripts/build-naude.mjs');
@@ -69,8 +70,11 @@ test('writeSeaConfig: fails loud when targetUpdateCheck does not exist', async (
     // assert it out-of-process (a fresh node importing the module and calling
     // writeSeaConfig with a bogus override) rather than trying to catch an
     // exit call in-process.
+    // pathToFileURL, not the raw path: on Windows an absolute path (D:\\...) is not a
+    // valid ESM specifier (ERR_UNSUPPORTED_ESM_URL_SCHEME, protocol 'd:').
+    const modUrl = pathToFileURL(path.resolve(__dirname, '..', 'scripts', 'build-naude.mjs')).href;
     const script = `
-      import('${path.resolve(__dirname, '..', 'scripts', 'build-naude.mjs')}').then(({ writeSeaConfig }) => {
+      import(${JSON.stringify(modUrl)}).then(({ writeSeaConfig }) => {
         writeSeaConfig({
           bundle: '/b/naude-entry.bundle.cjs',
           cliCjs: ${JSON.stringify(cliCjs)},
