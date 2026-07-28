@@ -292,10 +292,15 @@ export function writeSeaConfig({
 // node (process.execPath — the node running this script), independent of --node. targetOs
 // (default host process.platform) is the OS whose signing rules apply — the CROSS-BUILD
 // output's OS, not necessarily the host running this script — forwarded to sea-sign.cjs as
-// a third arg so it branches on the TARGET, not its own process.platform.
-function seaSign(phase, bin, targetOs = process.platform) {
+// a third arg so it branches on the TARGET, not its own process.platform. signerBin (Task 4,
+// off-Mac darwin signing) is the rcodesign path clode-fuse.cjs's naude branch provisioned when
+// the target is darwin and this host isn't; forwarded as a 4th argv ONLY when given — sea-sign.cjs's
+// CLI is the positional->opts adapter that turns it into `{ signerBin }` for `sign()`. Absent
+// (native/non-darwin builds), the argv stays 3-wide, unchanged from before this task.
+function seaSign(phase, bin, targetOs = process.platform, signerBin) {
   execFileSync(process.execPath,
-    [path.join(REPO, 'scripts', 'sea-sign.cjs'), phase, bin, targetOs], { stdio: 'inherit' });
+    [path.join(REPO, 'scripts', 'sea-sign.cjs'), phase, bin, targetOs, ...(signerBin ? [signerBin] : [])],
+    { stdio: 'inherit' });
 }
 
 // Run the GIVEN node with `--experimental-sea-config` to materialize the SEA
@@ -323,7 +328,7 @@ export function generateBlob(nodePath, cfgPath, { execFileSync: exec = execFileS
 // node's bytes were embedded, not process.execPath's" without a real postject
 // inject or OS codesign pass.
 export async function buildBinary({
-  nodePath, postjectDir, blob, outOverride, targetOs = process.platform,
+  nodePath, postjectDir, blob, outOverride, targetOs = process.platform, signerBin,
   readNode = (p) => fs.readFileSync(p),
   requirePostject: reqPostject = (dir) => requireAbs(dir),
   sign = seaSign,
@@ -348,7 +353,7 @@ export async function buildBinary({
   // some filesystems (autofs / network mounts). A plain read+write avoids it.
   fs.writeFileSync(bin, readNode(nodePath)); // embed the GIVEN node
   fs.chmodSync(bin, 0o755);                          // no-op on Windows, harmless
-  sign('unsign', bin, targetOs);                      // strip any signature so postject can rewrite
+  sign('unsign', bin, targetOs, signerBin);           // strip any signature so postject can rewrite
   // Inject the blob via postject's JS API (same portability reason as esbuild used to be).
   await reqPostject(postjectDir).inject(bin, 'NODE_SEA_BLOB', fs.readFileSync(blob), {
     sentinelFuse: 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2',
@@ -357,7 +362,7 @@ export async function buildBinary({
     // Keyed off the TARGET os (a cross-build's output may not match the host's).
     machoSegmentName: targetOs === 'darwin' ? 'NODE_SEA' : undefined,
   });
-  sign('sign', bin, targetOs);                        // re-apply the OS signature (ad-hoc on macOS)
+  sign('sign', bin, targetOs, signerBin);             // re-apply the OS signature (ad-hoc on macOS)
   return bin;
 }
 
@@ -412,6 +417,17 @@ function parseCliArg(argv) {
   return resolved;
 }
 
+// --darwin-signer <path>: the rcodesign binary to sign a darwin-target output with,
+// when this build is running on a non-darwin host (clode-fuse.cjs's naude branch
+// provisions it via ensureRcodesign and passes it here — Task 4). OPTIONAL — absent
+// means either a native darwin build (system codesign) or a non-darwin target (no
+// signing needed); sea-sign.cjs itself throws loud if a darwin target ever reaches
+// it off-Mac with no signer given.
+export function parseDarwinSignerArg(argv) {
+  const i = argv.indexOf('--darwin-signer');
+  return i >= 0 ? argv[i + 1] : null;
+}
+
 // Parse `--out <path>`: where the final naude binary is written. OPTIONAL —
 // defaults to seaBin(REPO, 'naude') (build/<artifact-name>/naude[.exe]) when
 // absent, same as every other --out consumer in this repo. Resolved to an absolute path here
@@ -440,6 +456,7 @@ async function main() {
     process.exit(1);
   }
   const targetOs = parseTargetOsArg(argv);
+  const signerBin = parseDarwinSignerArg(argv);
   const bundle = parseBundleArg(argv);
   const nmdir = parseNmdirArg(argv);
   const postjectDir = parsePostjectArg(argv);
@@ -465,7 +482,7 @@ async function main() {
   const { tar, sigFile } = stageDeps(nmdir);
   const { cfgPath, blob } = writeSeaConfig({ bundle, cliCjs, tar, sigFile });
   generateBlob(blobgen, cfgPath);                                                 // host node RUNS
-  const bin = await buildBinary({ nodePath: embed, postjectDir, blob, outOverride, targetOs }); // target node EMBEDDED
+  const bin = await buildBinary({ nodePath: embed, postjectDir, blob, outOverride, targetOs, signerBin }); // target node EMBEDDED
   if (blobgen === embed) {
     smokeCheck(bin);                                // native only — can't exec a foreign binary
   } else {

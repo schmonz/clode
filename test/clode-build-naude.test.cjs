@@ -87,7 +87,7 @@ const FAKE_NODE = path.join('/pinned', 'node', 'bin', 'node');
 // `ensureNode` is the injected pinned-node seam (default: resolves FAKE_NODE);
 // pass a thrower to exercise the "pinned node unavailable" refusal.
 async function runBuild(args, env, runResult = { status: 0, stdout: '', stderr: '' },
-  ensureNode = async () => FAKE_NODE) {
+  ensureNode = async () => FAKE_NODE, extraOpts = {}) {
   const calls = [];
   const run = (cmd, cmdArgs, opts) => {
     calls.push({ cmd, args: cmdArgs, opts });
@@ -104,6 +104,7 @@ async function runBuild(args, env, runResult = { status: 0, stdout: '', stderr: 
     ensureNode,
     stderr: { write: (s) => stderrBuf.push(s) },
     stdout: { write: (s) => stdoutBuf.push(s) },
+    ...extraOpts,
   });
   return { status, calls, stderr: stderrBuf.join(''), stdout: stdoutBuf.join('') };
 }
@@ -355,6 +356,117 @@ test('clode build --naude: pinned node unavailable fails loud, names `clode fetc
     const r = await runBuild(['--naude'], env, undefined, boom);
     assert.strictEqual(r.status, 1);
     assert.match(r.stderr, /pinned node/i);
+    assert.match(r.stderr, /clode fetch --naude/, 'should name the fetch fix');
+    const naude = r.calls.find((c) => Array.isArray(c.args)
+      && c.args.some((a) => typeof a === 'string' && a.endsWith(path.join('scripts', 'build-naude.mjs'))));
+    assert.ok(!naude, `no build-naude should have been spawned; calls:\n${JSON.stringify(r.calls, null, 2)}`);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// Task 4 (off-Mac darwin signing): a darwin-target naude cross-build on a
+// non-darwin host has no `codesign` on the host — it needs rcodesign
+// (apple-codesign), fetched via clode-rcodesign.cjs's ensureRcodesign and
+// threaded to build-naude.mjs as --darwin-signer. hostPlatform/ensureRcodesign
+// are injected here exactly like ensureNode above, so this stays hermetic (no
+// real network hit, no real host-platform dependency for the test itself).
+test('clode build --naude --target macos-*: on a non-darwin host, provisions rcodesign + passes --darwin-signer', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-signer-'));
+  try {
+    const { env } = seedProvider(dir);
+    let rcodesignFetched = 0;
+    const r = await runBuild(
+      ['--naude', '--target', 'macos-amd64', '--out', path.join(dir, 'out')],
+      env, { status: 0, stdout: '', stderr: '' }, async () => FAKE_NODE,
+      {
+        hostPlatform: 'linux',
+        ensureRcodesign: async () => { rcodesignFetched++; return '/t/rcodesign'; },
+      });
+
+    assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
+    assert.strictEqual(rcodesignFetched, 1, 'a darwin target on a linux host must fetch rcodesign');
+    const naude = r.calls.find((c) => Array.isArray(c.args)
+      && c.args.some((a) => typeof a === 'string' && a.endsWith(path.join('scripts', 'build-naude.mjs'))));
+    assert.ok(naude, `build-naude.mjs was not invoked; calls:\n${JSON.stringify(r.calls, null, 2)}`);
+    const i = naude.args.indexOf('--darwin-signer');
+    assert.ok(i >= 0 && naude.args[i + 1] === '/t/rcodesign', 'the signer path is threaded to build-naude');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('clode build --naude --target macos-*: on a DARWIN host, fetches NO rcodesign (system codesign)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-signer-darwinhost-'));
+  try {
+    const { env } = seedProvider(dir);
+    const r = await runBuild(
+      ['--naude', '--target', 'macos-amd64', '--out', path.join(dir, 'out')],
+      env, { status: 0, stdout: '', stderr: '' }, async () => FAKE_NODE,
+      {
+        hostPlatform: 'darwin',
+        ensureRcodesign: async () => { throw new Error('must not be called: darwin host uses system codesign'); },
+      });
+
+    assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
+    const naude = r.calls.find((c) => Array.isArray(c.args)
+      && c.args.some((a) => typeof a === 'string' && a.endsWith(path.join('scripts', 'build-naude.mjs'))));
+    assert.ok(naude, `build-naude.mjs was not invoked; calls:\n${JSON.stringify(r.calls, null, 2)}`);
+    assert.ok(!naude.args.includes('--darwin-signer'),
+      `a darwin host must not pass --darwin-signer; args: ${JSON.stringify(naude.args)}`);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('clode build --naude --target linux-*: non-darwin target on a non-darwin host fetches NO rcodesign', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-signer-linuxtarget-'));
+  try {
+    const { env } = seedProvider(dir);
+    const r = await runBuild(
+      ['--naude', '--target', 'linux-arm64', '--out', path.join(dir, 'out')],
+      env, { status: 0, stdout: '', stderr: '' }, async () => FAKE_NODE,
+      {
+        hostPlatform: 'linux',
+        ensureRcodesign: async () => { throw new Error('must not be called: target is not darwin'); },
+      });
+
+    assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
+    const naude = r.calls.find((c) => Array.isArray(c.args)
+      && c.args.some((a) => typeof a === 'string' && a.endsWith(path.join('scripts', 'build-naude.mjs'))));
+    assert.ok(naude, `build-naude.mjs was not invoked; calls:\n${JSON.stringify(r.calls, null, 2)}`);
+    assert.ok(!naude.args.includes('--darwin-signer'),
+      `a non-darwin target must not pass --darwin-signer; args: ${JSON.stringify(naude.args)}`);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('clode build --naude (native, no --target): fetches NO rcodesign regardless of injected hostPlatform', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-signer-native-'));
+  try {
+    const { env } = seedProvider(dir);
+    const r = await runBuild(
+      ['--naude'], env, { status: 0, stdout: '', stderr: '' }, async () => FAKE_NODE,
+      {
+        hostPlatform: 'linux',
+        ensureRcodesign: async () => { throw new Error('must not be called: native build, no explicit darwin target'); },
+      });
+
+    assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
+    const naude = r.calls.find((c) => Array.isArray(c.args)
+      && c.args.some((a) => typeof a === 'string' && a.endsWith(path.join('scripts', 'build-naude.mjs'))));
+    assert.ok(naude, `build-naude.mjs was not invoked; calls:\n${JSON.stringify(r.calls, null, 2)}`);
+    assert.ok(!naude.args.includes('--darwin-signer'),
+      `a native build must not pass --darwin-signer; args: ${JSON.stringify(naude.args)}`);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('clode build --naude --target macos-*: rcodesign fetch failure fails loud, names `clode fetch --naude`', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-signer-boom-'));
+  try {
+    const { env } = seedProvider(dir);
+    const r = await runBuild(
+      ['--naude', '--target', 'macos-amd64'],
+      env, { status: 0, stdout: '', stderr: '' }, async () => FAKE_NODE,
+      {
+        hostPlatform: 'linux',
+        ensureRcodesign: async () => { throw new Error('offline: getaddrinfo ENOTFOUND github.com'); },
+      });
+
+    assert.strictEqual(r.status, 1);
     assert.match(r.stderr, /clode fetch --naude/, 'should name the fetch fix');
     const naude = r.calls.find((c) => Array.isArray(c.args)
       && c.args.some((a) => typeof a === 'string' && a.endsWith(path.join('scripts', 'build-naude.mjs'))));

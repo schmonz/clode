@@ -951,6 +951,29 @@ async function clodeBuild(args, opts) {
         return fail(`build --naude: could not get the pinned node(s) — the first cross-build needs network; run \`clode fetch --naude\` while online, then retry: ${(e && e.message) || e}`);
       }
 
+      // -- off-Mac darwin signing (Task 4): a darwin-target build has no
+      // `codesign` on a non-darwin HOST, so it needs rcodesign (apple-codesign)
+      // instead. `hostPlatform` is injectable (opts.hostPlatform) so this stays
+      // testable without the test process's own process.platform standing in
+      // for a fixture — same shape as opts.ensureNode. Fetched keyed by the
+      // HOST's platform/arch (rcodesign RUNS where the build runs, signing an
+      // output for elsewhere), via `nt` (already resolved above, and already
+      // null for a native build/non-Node target) rather than re-deriving
+      // targetToNode(parsed.target) — parsed.target may be undefined here, and
+      // targetToNode(undefined) throws. A darwin host or a non-darwin target
+      // needs no signer at all: system `codesign` handles the former, nothing
+      // needs signing for the latter.
+      const hostPlatform = opts.hostPlatform || process.platform;
+      const ensureRcodesign = opts.ensureRcodesign || require('./clode-rcodesign.cjs').ensureRcodesign;
+      let signerBin = null;
+      if (nt && nt.platform === 'darwin' && hostPlatform !== 'darwin') {
+        try {
+          signerBin = await ensureRcodesign({ env, log: clodeLog, platform: hostPlatform, arch: process.arch });
+        } catch (e) {
+          return fail(`build --naude: could not get rcodesign — first off-Mac darwin sign needs network — run \`clode fetch --naude\` while online, then retry: ${(e && e.message) || e}`);
+        }
+      }
+
       const buildNaudeScript = path.join(assembleRoot, 'scripts', 'build-naude.mjs');
       const bundlePath = fusedBuilder
         ? path.join(payloadDir, 'naude-entry.bundle.cjs')
@@ -999,6 +1022,7 @@ async function clodeBuild(args, opts) {
         '--bundle', bundlePath,
         '--nmdir', nmDir,
         '--postject', postjectDir,
+        ...(signerBin ? ['--darwin-signer', signerBin] : []),
         ...outArgs,
       ], { env, timeout: 600000 * SCALE });
       if (r.status !== 0) {

@@ -354,3 +354,30 @@ test('writeSeaConfig: produces no `builder` asset (rebuild callback retired)', a
     fs.rmSync(stage, { recursive: true, force: true });
   }
 });
+
+// Task 4 (off-Mac darwin signing): --darwin-signer <path> threads the rcodesign
+// binary (provisioned by clode-fuse.cjs's naude branch) down to buildBinary's
+// two sign() calls. Absent -> null, same "no flag given" contract as every
+// other parse* helper in this file.
+test('parseDarwinSignerArg: absent -> null; given -> the path', async () => {
+  const { parseDarwinSignerArg } = await import('../scripts/build-naude.mjs');
+  assert.strictEqual(parseDarwinSignerArg(['--cli', '/x']), null);
+  assert.strictEqual(parseDarwinSignerArg(['--darwin-signer', '/t/rcodesign']), '/t/rcodesign');
+});
+
+test('buildBinary forwards signerBin into both sign phases', async () => {
+  const { buildBinary } = await import('../scripts/build-naude.mjs');
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-signer-'));
+  const node = path.join(d, 'node'); fs.writeFileSync(node, 'N');
+  const blob = path.join(d, 'b'); fs.writeFileSync(blob, 'B');
+  const seen = [];
+  await buildBinary({
+    nodePath: node, postjectDir: '/pj', blob, outOverride: path.join(d, 'out'),
+    targetOs: 'darwin', signerBin: '/t/rcodesign',
+    readNode: (p) => fs.readFileSync(p),
+    requirePostject: () => ({ inject: async () => {} }),
+    sign: (phase, bin, os, signerBin) => seen.push({ phase, os, signerBin }),
+  });
+  assert.deepStrictEqual(seen.map((s) => s.signerBin), ['/t/rcodesign', '/t/rcodesign']);
+  assert.deepStrictEqual(seen.map((s) => s.phase), ['unsign', 'sign']);
+});
