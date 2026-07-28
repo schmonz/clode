@@ -42,8 +42,11 @@ Usage:
                                            bundle) on this machine; default ./quaude
   clode build --naude [--out PATH]         bundle Claude Code as a Node SEA; Node hosts only
   clode build --naude --target Y           cross-build a naude for macos/linux (the Node
-                                           platforms wired today); anything else: plain
-                                           --target builds a quaude instead
+                                           platforms wired today), FROM a linux or macos
+                                           host (a macos target signs off-Mac via a
+                                           fetched signer; Windows-host cross-signing is
+                                           unproven); anything else: plain --target builds
+                                           a quaude instead
   clode fetch [channel|version]            fetch a fresh upstream provider, then exit
   clode watch                              run one update-signal check now (newer version
                                            + signals that bear on repackaging), print a
