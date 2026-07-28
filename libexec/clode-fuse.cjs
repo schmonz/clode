@@ -856,10 +856,12 @@ async function clodeBuild(args, opts) {
     for (const t of tpl.listTargets(manifest)) stdout.write(`${t.name}\t${t.tag}\n`);
     return 0;
   }
-  if (parsed.target) {
+  if (parsed.target && !naude) {
     // Resolve the target's prebuilt engine (pin-checked, sha-verified, cached),
     // then hand it to the EXISTING compile-free cross-fuse path as the foreign
     // base (CLODE_TARGET_TEMPLATE). No compiler on this host — the engine is data.
+    // (naude + --target skips this entirely: a naude cross-build resolves pinned
+    // NODEs, not a tjs engine template — see the naude branch below.)
     let manifest, baseUrl;
     try { ({ manifest, baseUrl } = await resolveManifest(opts)); } catch (e) { return fail(e.message); }
     const entry = tpl.resolveTarget(manifest, parsed.target);
@@ -922,17 +924,31 @@ async function clodeBuild(args, opts) {
       // not a fallback): the naude engine is a sha-verified pinned Node fetched
       // on demand into a versioned store (idempotent — cached after first
       // fetch), which is exactly what lets the SHIPPED clode-native (running
-      // under tjs, with no host node on disk) assemble a naude. build --naude
-      // runs the fetched node BOTH as the assembler (build-naude.mjs spawns
-      // under it) and as the SEA base it embeds — so two people on the same
-      // clode get the same naude, independent of whatever node is on PATH.
-      // Injectable (opts.ensureNode) so the wiring is testable without network.
+      // under tjs, with no host node on disk) assemble a naude. Injectable
+      // (opts.ensureNode) so the wiring is testable without network — see below
+      // for the native-vs-cross role split.
       const ensureNode = opts.ensureNode || ensurePinnedNode;
-      let nodePath;
+      const { targetToNode } = require('../scripts/canonical-name.cjs');
+      // A non-Node --target (netbsd-sparc, ...) is a loud refusal naming quaude
+      // — checked and failed BEFORE any node is fetched (host or target): there
+      // is no reason to reach for a node, even the host's own, on a request
+      // that can never succeed.
+      let nt = null, targetOs = process.platform;
+      if (parsed.target) {
+        nt = targetToNode(parsed.target);
+        if (!nt) return fail(`build --naude: '${parsed.target}' is not a Node platform — naude cannot target it; cross-build a quaude instead (clode build --target ${parsed.target})`);
+        targetOs = nt.platform;
+      }
+      let blobgenNode, embedNode;
       try {
-        nodePath = await ensureNode({ env, log: clodeLog });
+        // blob-gen always runs on THIS host's arch (it executes
+        // --experimental-sea-config); embed must be the TARGET's node
+        // (postject injects its bytes into the output) — native build (no
+        // --target): one node, both roles, unchanged from before this task.
+        blobgenNode = await ensureNode({ env, log: clodeLog, platform: process.platform, arch: process.arch });
+        embedNode = nt ? await ensureNode({ env, log: clodeLog, platform: nt.platform, arch: nt.arch }) : blobgenNode;
       } catch (e) {
-        return fail(`build --naude: could not get the pinned node — the first naude build needs network; run \`clode fetch --naude\` while online, then retry: ${(e && e.message) || e}`);
+        return fail(`build --naude: could not get the pinned node(s) — the first cross-build needs network; run \`clode fetch --naude\` while online, then retry: ${(e && e.message) || e}`);
       }
 
       const buildNaudeScript = path.join(assembleRoot, 'scripts', 'build-naude.mjs');
@@ -961,15 +977,25 @@ async function clodeBuild(args, opts) {
         return fail(`build --naude: ${(e && e.message) || e}`);
       }
 
-      clodeLog(`clode: build --naude: building the Node SEA from ${cliPath} under ${nodePath} ...`);
-      // build-naude.mjs runs as a SEPARATE process UNDER the fetched pinned node
-      // (the ONLY node a clode-native has). Every input is passed explicitly:
-      // --node (embed + sea-config), --bundle (the prebuilt SEA main), --nmdir
-      // (the deps to tar), --postject (its carried JS).
-      const r = await spawnRun(nodePath, [
+      clodeLog(`clode: build --naude: building the Node SEA from ${cliPath} under ${blobgenNode} (embed: ${embedNode}) ...`);
+      // build-naude.mjs runs as a SEPARATE process UNDER the blob-gen node (the
+      // one that RUNS --experimental-sea-config). Every input is passed
+      // explicitly: --blobgen-node/--embed-node (split roles — native passes
+      // the same path for both, but named explicitly rather than via the
+      // --node alias so this call site never depends on which case it is),
+      // --target-os (the signing rules the OUTPUT needs, not the host's),
+      // --bundle (the prebuilt SEA main), --nmdir (the deps to tar), --postject
+      // (its carried JS). A separate spawn seam (opts.spawnRun) from the
+      // module's shared spawnRun: this task's tests need to capture the
+      // build-naude argv without also stubbing every OTHER spawn in the
+      // function (the smoke below keeps using the shared seam).
+      const spawnRunFn = opts.spawnRun || spawnRun;
+      const r = await spawnRunFn(blobgenNode, [
         buildNaudeScript,
         '--cli', cliPath,
-        '--node', nodePath,
+        '--blobgen-node', blobgenNode,
+        '--embed-node', embedNode,
+        '--target-os', targetOs,
         '--bundle', bundlePath,
         '--nmdir', nmDir,
         '--postject', postjectDir,
@@ -992,11 +1018,23 @@ async function clodeBuild(args, opts) {
     // naude output path mirrors build-naude.mjs's own default (an explicit
     // --out wins; otherwise its artifact-named seaBin default — see
     // scripts/platform-tag.cjs's artifactDir for why that key, not platformTag()).
-    const naudeOut = out || seaBin(ROOT, 'naude', { version });
+    const naudeOut = out || seaBin(ROOT, 'naude', { version, target: parsed.target });
+    if (parsed.target) {
+      // Cross-build: the host cannot exec a foreign binary (the whole point of
+      // a cross build) — attest instead of smoking, exactly like the quaude
+      // cross-fuse path. build-naude.mjs already self-checked the assembled
+      // structure (its own postject-injection smokeCheck) and skipped ITS
+      // run-smoke when blobgen !== embed; there is nothing left this host can
+      // safely execute. smokeTarget is deliberately never reached here.
+      stdout.write(`clode: cross-built naude for ${parsed.target} (attest-only — run it on the target)\n`);
+      stdout.write(`clode: naude -> ${naudeOut}\n`);
+      return 0;
+    }
+    const smokeTargetFn = opts.smokeTarget || smokeTarget;
     const naudeWork = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-smoke-'));
     try {
       clodeLog('clode: build --naude: smoke -p against the canned Messages mock ...');
-      const smoke = await smokeTarget(naudeOut, {
+      const smoke = await smokeTargetFn(naudeOut, {
         spawnRun,
         env: { ...env, NAUDE_CACHE: path.join(naudeWork, 'cache') },
         cwd: naudeWork,

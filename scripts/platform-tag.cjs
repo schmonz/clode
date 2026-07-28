@@ -185,7 +185,23 @@ function artifactDir(repo, { version, env = process.env } = {}) {
 // SEA output binary path for a given base name (e.g. 'naude'): <repo>/build/<artifact-name>/<base>[.exe].
 // opts ({ version, env }) forwards to artifactDir — see its comment.
 function seaOut(repo, base, opts = {}) { return path.join(artifactDir(repo, opts), base); }
-function seaBin(repo, base, opts = {}) { return seaOut(repo, base, opts) + (process.platform === 'win32' ? '.exe' : ''); }
+// The `.exe` suffix must key off the TARGET being built for, not the host running
+// clode: a cross-build's output runs on the target, so a host-driven `process.platform`
+// check would be wrong (and, worse, silently right by luck on a non-Windows host cross-
+// building for one — see canonical-name.cjs's targetToNode). `opts.target` (a canonical
+// target/leg token) wins when present; no target (native build) falls back to the host,
+// which is the pre-existing, still-correct behavior for every current caller.
+function seaBin(repo, base, opts = {}) {
+  const { target } = opts;
+  let win32;
+  if (target) {
+    const { targetToNode } = require('./canonical-name.cjs');
+    win32 = targetToNode(target)?.platform === 'win32'; // no windows target exists today -> always false
+  } else {
+    win32 = process.platform === 'win32';
+  }
+  return seaOut(repo, base, opts) + (win32 ? '.exe' : '');
+}
 
 module.exports = {
   macosVersion, linuxGlibc, osToken, platformTag, harnessDir, toolchainDir,

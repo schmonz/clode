@@ -77,7 +77,8 @@ function fakeSmokeTarget(opts) {
 // The pinned Node the naude branch now ALWAYS ensures (clode carries no Node;
 // naude embeds a sha-verified pinned Node fetched into a versioned store). The
 // wiring tests inject this via opts.ensureNode so they never touch the network:
-// the naude build spawns UNDER this path and passes it down as --node.
+// the naude build spawns UNDER this path and passes it down as both
+// --blobgen-node and --embed-node (native: one node, both roles — Task 4).
 const FAKE_NODE = path.join('/pinned', 'node', 'bin', 'node');
 
 // Drive clodeBuild with the spawn seam captured. `runResult` is what the
@@ -118,13 +119,18 @@ test('clode build --naude: extracts cli.cjs and invokes build-naude.mjs with it'
       && c.args.some((a) => typeof a === 'string' && a.endsWith(path.join('scripts', 'build-naude.mjs'))));
     assert.ok(naude, `build-naude.mjs was not invoked; calls:\n${JSON.stringify(r.calls, null, 2)}`);
 
-    // It runs UNDER the pinned node (not process.execPath — clode carries no
-    // Node; naude embeds the fetched pinned Node), passes that same node as
-    // --node, and passes the extracted cli.cjs via --cli.
-    assert.strictEqual(naude.cmd, FAKE_NODE, 'build-naude must run under the pinned node');
-    const nodeIdx = naude.args.indexOf('--node');
-    assert.ok(nodeIdx >= 0 && naude.args[nodeIdx + 1] === FAKE_NODE,
-      `--node must be the pinned node; args: ${JSON.stringify(naude.args)}`);
+    // It runs UNDER the blob-gen node (not process.execPath — clode carries no
+    // Node; naude embeds the fetched pinned Node), passes that same node in
+    // BOTH split roles (Task 4: a native build is blobgen===embed, but the
+    // call site always uses the split flags, never the --node alias), and
+    // passes the extracted cli.cjs via --cli.
+    assert.strictEqual(naude.cmd, FAKE_NODE, 'build-naude must run under the pinned (blob-gen) node');
+    for (const flag of ['--blobgen-node', '--embed-node']) {
+      const idx = naude.args.indexOf(flag);
+      assert.ok(idx >= 0 && naude.args[idx + 1] === FAKE_NODE,
+        `${flag} must be the pinned node; args: ${JSON.stringify(naude.args)}`);
+    }
+    assert.ok(!naude.args.includes('--node'), `native build must not use the --node alias; args: ${JSON.stringify(naude.args)}`);
     const cliIdx = naude.args.indexOf('--cli');
     assert.ok(cliIdx >= 0, `--cli not passed to build-naude; args: ${JSON.stringify(naude.args)}`);
     assert.strictEqual(naude.args[cliIdx + 1], cliPath,
