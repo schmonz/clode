@@ -159,12 +159,14 @@ test('tarExtract resolves unzip via provision for a .zip and extracts it', () =>
     'used a provision-resolved (absolute) unzip path');
 });
 
-test('nodeBinPath: <nodeStore>/<version>/<platform>-<arch>/bin/node, whether or not it exists', () => {
+test('nodeBinPath: <nodeStore>/<version>/<platform>-<arch>/<leaf>, whether or not it exists', () => {
   const env = { CLODE_STATE_ROOT: '/nowhere-real' };
   const p = require('../libexec/clode-paths.cjs');
   // No platform/arch args: defaults to the host, so single-arg callers still work.
+  // The leaf is host-shaped like the function: node.exe at top on win32, else bin/node.
+  const leaf = process.platform === 'win32' ? ['node.exe'] : ['bin', 'node'];
   assert.strictEqual(nodeBinPath(env),
-    path.join(p.nodeStore(env), PINNED_VERSION, `${process.platform}-${process.arch}`, 'bin', 'node'));
+    path.join(p.nodeStore(env), PINNED_VERSION, `${process.platform}-${process.arch}`, ...leaf));
 });
 
 const { targetToNodeAsset } = require('../libexec/clode-node.cjs');
