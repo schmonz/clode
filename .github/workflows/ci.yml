@@ -305,8 +305,11 @@ jobs:
           # EXCLUDED — the PTY tests, which need a controlling terminal + the
           # node-pty harness dep this bare-engine runner has neither of:
           #   node-shim-tty        no controlling terminal on a headless runner
-          #   node-shim-ctrlz-pty  keystroke job control; needs node-pty (absent here)
-          #                        (PTY path is covered by windows-x64-tui + e2e-pty)
+          # (Ctrl-Z is no longer a node-shim test: node-shim-ctrlz-pty was replaced by
+          #  test/e2e-ctrlz-tui.test.cjs — a real quaude TUI survives-Ctrl-Z regression
+          #  guard, opt-in via CLODE_LIVE_RENDER; the SIGTSTP/SIGCONT wiring stays in
+          #  node-shim-signals. The new node-shim-api-surface-gate IS picked up here —
+          #  it hard-gates upstream Bun.*/require drift against the latest provider.)
           # node-shim-core and node-shim-bunshim are NO LONGER excluded: the two
           # Linux-portability bugs they caught are FIXED and now gated here —
           #   node-shim-core     os.constants.signals is OS-derived per platform
@@ -318,7 +321,7 @@ jobs:
           # #ifdef __GLIBC__), so tar's KAT and `clode fetch --naude` died "no tar
           # tool found on PATH". Fixed in txiki-sync-spawn.patch (parent-side chdir
           # dance on musl); this file runs on musl as the standing guard.
-          EXCLUDE='node-shim-tty|node-shim-ctrlz-pty'
+          EXCLUDE='node-shim-tty'
           FILES=$(ls test/node-shim-*.test.cjs | grep -vE "$EXCLUDE")
           # The parity gate's input: cli.cjs is staged from this provider and run
           # under BOTH targets' runtimes (naude = node, quaude = tjs+shim), then
@@ -483,11 +486,13 @@ jobs:
           set -euo pipefail
           chmod +x "$CLODE_TJS"
           "$CLODE_TJS" eval 'console.log("darwin-arm64 tjs alive:", tjs.version)'
-          # EXCLUDE only the PTY suite: node-shim-tty and node-shim-ctrlz-pty need a
-          # controlling terminal / node-pty, covered by windows-x64-tui + the POSIX
-          # e2e. Everything else runs here — including child-process/core/bunshim,
-          # which the linux oracle excludes for portability and are the point of a darwin run.
-          EXCLUDE='node-shim-tty|node-shim-ctrlz-pty'
+          # EXCLUDE only node-shim-tty (needs a controlling terminal, covered by
+          # windows-x64-tui + the POSIX e2e). Everything else runs here — including
+          # child-process/core/bunshim (which the linux oracle excludes for portability)
+          # AND the new node-shim-api-surface-gate (hard-gates upstream Bun.*/require
+          # drift against the latest provider this job installs). (Ctrl-Z moved to the
+          # opt-in test/e2e-ctrlz-tui.test.cjs; the wiring stays in node-shim-signals.)
+          EXCLUDE='node-shim-tty'
           FILES=$(ls test/node-shim-*.test.cjs | grep -vE "$EXCLUDE")
           PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f -name claude -size +20M 2>/dev/null | head -1)"
           if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
