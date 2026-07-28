@@ -30,7 +30,7 @@ test('clode build --list-targets prints the available targets', async () => {
   assert.strictEqual(status, 0, err.text());
   assert.match(out.text(), /linux-x64/);
   assert.match(out.text(), /netbsd-sparc/);
-  assert.match(out.text(), /attest-only/);
+  assert.match(out.text(), /netbsd-10\.1-sparc/); // the tag renders (the build-verify annotation was intentionally dropped, 6122700)
 });
 
 test('clode build --list-targets without a manifest fails loud', async () => {
