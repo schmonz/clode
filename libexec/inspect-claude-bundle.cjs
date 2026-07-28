@@ -72,6 +72,11 @@ const KNOWN_BUN = new Set([
   // ant: Bun.ant.getPeerUid (unix-socket peer-credential probe). New in 2.1.220;
   // single call site, try/catch-guarded with a null fallback (reviewed 2026-07-27).
   'ant',
+  // Reviewed 2026-07-27 (API-gate pass): TOML (Bun.TOML.parse — niche config parse,
+  // stubbed with a clear error), WebView (feature-detected via `"WebView" in Bun`,
+  // must stay ABSENT so the guard skips it), isStandaloneExecutable (feature-detect
+  // via `===true`; shim provides an honest `false`).
+  'TOML', 'WebView', 'isStandaloneExecutable',
 ]);
 
 const KNOWN_SEARCH_APPLETS = new Set(['ugrep', 'bfs']);
@@ -396,10 +401,15 @@ const ACCEPTED_MISSING_EXTERNALS = new Set([
 ]);
 
 const ACCEPTED_STUBBED_BUN = new Set(['serve', 'listen', 'file', 'write', 'Terminal', 'Transpiler',
-  'YAML', 'stringWidth', 'stripANSI', 'wrapAnsi', 'semver']);
+  'YAML', 'stringWidth', 'stripANSI', 'wrapAnsi', 'semver',
+  // connect (TCP direct-dial), TOML (config parse): niche/feature-gated; stubbed
+  // in bun-shim with clear errors rather than left raw-undefined (API-gate pass).
+  'connect', 'TOML']);
 // SQL: accepted-missing (no SQL feature on the core path). ant: Bun.ant.getPeerUid
-// is guarded (single try/catch call site, null fallback) — safe to leave unimplemented.
-const ACCEPTED_MISSING_BUN = new Set(['SQL', 'ant']);
+// guarded (try/catch, null fallback). WebView: feature-detected via `"WebView" in
+// Bun` — must stay ABSENT so the guard skips it (adding it would flip the detect
+// and try to call the stub). All safe to leave unimplemented.
+const ACCEPTED_MISSING_BUN = new Set(['SQL', 'ant', 'WebView']);
 const ACCEPTED_BUN_MODULES = new Set(['bun:jsc']);
 
 function gateProblems(cov) {

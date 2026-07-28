@@ -1,14 +1,14 @@
 {
   "2.1.210": {
     "cli_sha256": "dc080fc96e4581143d4821eaafeb3123e36eff3b964490b5d21831f7c0371f10",
-    "inspect_json_sha256": "ad23741c6c0b874fc152de6ceefac8b05d3dc03897a97c793f5ef9dd11ee47a0"
+    "inspect_json_sha256": "f1c7471c8e49867fb4a4c66dc4ca95eb17cca28ab6d5f235230c550297026355"
   },
   "2.1.215": {
     "cli_sha256": "8fb9c8e48f5d4e6db11bdc76bfd7b3c23a42b5030dd945bc0cdafee8525972dc",
-    "inspect_json_sha256": "4f06d78741a18a789cb8db17675f8c420f493d7273789d47739d629cc9cfd672"
+    "inspect_json_sha256": "779cba18276e2dd9788bc9c1104123934d21b4a34f976bcd2a55fbe1b081d1ce"
   },
   "2.1.218": {
     "cli_sha256": "0ea94d4d6b8e499c0a375064c977a34af4bc951aaca97669455d56609647610a",
-    "inspect_json_sha256": "51c8ebe61653d3457ef6bc1c6d6fa0d4ee34d2e4c1f1dc184a4a8177bee26ec0"
+    "inspect_json_sha256": "e6815306954b91f45c10bf78a72a87fc9e0991f434b6c09ffa51fa0c52b0f8fc"
   }
 }

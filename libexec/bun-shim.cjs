@@ -656,6 +656,12 @@ const Bun = {
   // app take its on-disk path. TODO: if a feature needs an embedded asset, supply it.
   embeddedFiles: [],
 
+  // Bun.isStandaloneExecutable: whether running as a Bun `--compile` binary.
+  // quaude (tjs) / naude (Node SEA) are NOT Bun standalone executables, so false
+  // is the CORRECT answer. Explicit (not a stub) so the value is honest and the
+  // bundle's `Bun.isStandaloneExecutable===true` feature-detect resolves cleanly.
+  isStandaloneExecutable: false,
+
   // --- heavy / not-yet-done ---
   Terminal: TODO('Terminal'),        // PTY for the TUI — likely needs node-pty
   Transpiler: Object.assign(
@@ -665,6 +671,19 @@ const Bun = {
   serve: TODO('serve'),
   file: TODO('file'),
   write: TODO('write'),
+  // connect: Bun's TCP client (the "direct_dial" MCP-over-TCP transport). Niche,
+  // feature-gated (not on the core path). Stub with a CLEAR error rather than
+  // leave it undefined — a raw `Bun.connect is not a function` under quickjs has
+  // no symbol name and is a debugging trap. Implement (map to node:net.Socket) if
+  // TCP direct-dial becomes a needed feature.
+  connect: TODO('connect'),
+  // TOML: Bun.TOML.parse (config parsing). Niche/feature-gated (JSON is the norm).
+  // Object stub so `Bun.TOML.parse(...)` throws a clear error instead of the raw
+  // "not a function". Implement via a toml dep (cf. Bun.YAML) if a TOML config
+  // path is actually exercised.
+  TOML: Object.assign(
+    { parse(){ throw new Error('Bun.TOML.parse not yet implemented in the Node host shim'); } },
+    { __bunShimStub: true }),
   spawnSync: spawn.sync,
 };
 
