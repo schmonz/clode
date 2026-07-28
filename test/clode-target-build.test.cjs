@@ -80,3 +80,20 @@ test('clode build --target: resolves + obtains the engine, sets CLODE_TARGET_TEM
   assert.strictEqual(fs.readFileSync(cached).toString(), 'FAKE-ENGINE-FOR-Y');
   assert.strictEqual(env.CLODE_TARGET_TEMPLATE, cached, 'cross-fuse template set to the obtained engine');
 });
+
+test('parseBuildArgs: --naude --target composes (cross-build a naude)', () => {
+  const r = fuse.parseBuildArgs(['--naude', '--target', 'linux-arm64']);
+  assert.deepStrictEqual({ naude: r.naude, target: r.target, error: r.error },
+    { naude: true, target: 'linux-arm64', error: undefined });
+});
+
+test('parseBuildArgs: --self stays exclusive with --naude and --target', () => {
+  assert.match(fuse.parseBuildArgs(['--self', '--naude']).error, /different build targets/);
+  assert.match(fuse.parseBuildArgs(['--self', '--target', 'linux-arm64']).error, /different build targets/);
+});
+
+test('parseBuildArgs: singletons unchanged', () => {
+  assert.strictEqual(fuse.parseBuildArgs(['--naude']).error, undefined);
+  assert.strictEqual(fuse.parseBuildArgs(['--target', 'linux-arm64']).error, undefined);
+  assert.strictEqual(fuse.parseBuildArgs(['--self']).error, undefined);
+});

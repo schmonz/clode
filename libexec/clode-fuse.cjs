@@ -698,13 +698,13 @@ function parseBuildArgs(args) {
     }
     else return { error: `build: unknown argument '${args[i]}' (usage: clode build [--self|--naude|--target Y|--list-targets] [--out PATH])` };
   }
-  // --naude (a Node SEA), --self (the native clode builder), and --target Y (a
-  // cross-fused quaude for a foreign platform) are different build TARGETS, not
-  // composable modifiers — silently picking one would build something other than
-  // what the user asked for.
-  const chosen = [naude && '--naude', self && '--self', target && '--target'].filter(Boolean);
-  if (chosen.length > 1) {
-    return { error: `build: ${chosen.join(' and ')} are different build targets — pick one` };
+  // --self is the odd one out: it builds the native clode BUILDER, never a
+  // product, so it composes with nothing. --naude and --target DO compose:
+  // "--naude --target T" means cross-build a naude for T (blob-gen on the host,
+  // embed a fetched target-arch node). --target alone is a cross-fused quaude.
+  if (self && (naude || target)) {
+    const other = naude ? '--naude' : '--target';
+    return { error: `build: --self and ${other} are different build targets — pick one` };
   }
   return { naude, self, out, target, listTargets };
 }
