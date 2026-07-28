@@ -149,6 +149,46 @@ test('clode build --naude: extracts cli.cjs and invokes build-naude.mjs with it'
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('clode build --naude --target: cross-build resolves TWO nodes, split flags + target-os, attests (no smoke)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-xbuild-'));
+  try {
+    const { env } = seedProvider(dir);
+    // A distinct node per (platform,arch) so we can prove BOTH roles were fetched:
+    // the host-arch node runs blob-gen, the TARGET-arch node is embedded (Task 4).
+    const seen = [];
+    const ensureNode = async ({ platform, arch }) => {
+      seen.push(`${platform}-${arch}`);
+      return path.join('/pinned', `${platform}-${arch}`, 'node');
+    };
+    const r = await runBuild(
+      ['--naude', '--target', 'linux-arm64', '--out', path.join(dir, 'naude-cross')],
+      env, { status: 0, stdout: '', stderr: '' }, ensureNode);
+
+    assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
+    // blob-gen = THIS host's arch; embed = the requested target (linux-arm64).
+    assert.ok(seen.includes('linux-arm64'), `target node not fetched; saw ${JSON.stringify(seen)}`);
+    assert.ok(seen.some((k) => k.endsWith(process.arch)), `host blob-gen node not fetched; saw ${JSON.stringify(seen)}`);
+
+    const naude = r.calls.find((c) => Array.isArray(c.args)
+      && c.args.some((a) => typeof a === 'string' && a.endsWith(path.join('scripts', 'build-naude.mjs'))));
+    assert.ok(naude, `build-naude.mjs was not invoked; calls:\n${JSON.stringify(r.calls, null, 2)}`);
+
+    // The split flags carry the two DISTINCT nodes; --target-os drives signing for
+    // the TARGET (linux -> sign nothing); the --node alias is never used for a cross build.
+    const bg = naude.args[naude.args.indexOf('--blobgen-node') + 1];
+    const em = naude.args[naude.args.indexOf('--embed-node') + 1];
+    assert.ok(bg.endsWith(path.join(`${process.platform}-${process.arch}`, 'node')),
+      `blobgen node should be the host-arch node; got ${bg}`);
+    assert.strictEqual(em, path.join('/pinned', 'linux-arm64', 'node'), 'embed node should be the target node');
+    assert.strictEqual(naude.args[naude.args.indexOf('--target-os') + 1], 'linux', 'target os threaded for signing');
+    assert.ok(!naude.args.includes('--node'), 'cross build must not use the --node alias');
+
+    // ATTEST, not smoke: a cross build never spawns the `-p` smoke round-trip.
+    assert.ok(!r.calls.some((c) => Array.isArray(c.args) && c.args[0] === '-p'),
+      'cross build must attest (return before smoke), not run the -p smoke');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('clode build --naude: does NOT run the quaude fuse', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-nofuse-'));
   try {

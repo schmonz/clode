@@ -98,26 +98,9 @@ test('parseBuildArgs: singletons unchanged', () => {
   assert.strictEqual(fuse.parseBuildArgs(['--self']).error, undefined);
 });
 
-test('clode build --naude --target: resolves BOTH nodes, passes split flags, attests (no smoke)', async () => {
-  const calls = { ensureNode: [], spawn: [] };
-  const fakeNode = (plat, arch) => `/store/${plat}-${arch}/node`;
-  const status = await fuse.clodeBuild(['--naude', '--target', 'linux-arm64', '--out', '/tmp/naude-cross'], {
-    env: {}, here: REPO, libexec: LIBEXEC, version: '9.9.9',
-    stdout: sink(), stderr: sink(),
-    // resolve nodes without network: host + the requested target
-    ensureNode: async ({ platform, arch }) => { calls.ensureNode.push(`${platform}-${arch}`); return fakeNode(platform, arch); },
-    // capture the build-naude spawn instead of running it
-    spawnRun: async (_node, args) => { calls.spawn.push(args); return { status: 0, stdout: '', stderr: '' }; },
-    // a cross build must NOT smoke; fail loudly if it tries
-    smokeTarget: async () => { throw new Error('cross build must attest, not smoke'); },
-  });
-  assert.strictEqual(status, 0);
-  // both nodes resolved: host arch (process.arch) for blob-gen, linux-arm64 for embed
-  assert.ok(calls.ensureNode.includes('linux-arm64'), 'fetched the TARGET node');
-  assert.ok(calls.ensureNode.some((k) => k.endsWith(process.arch)), 'fetched the HOST-arch blob-gen node');
-  // build-naude got the split flags + target os
-  const a = calls.spawn[0];
-  assert.ok(a.includes('--blobgen-node') && a.includes('--embed-node'), 'split node flags passed');
-  assert.strictEqual(a[a.indexOf('--target-os') + 1], 'linux', 'target os threaded for signing');
-  assert.ok(!a.includes('--node'), 'the single --node alias is not used for a cross build');
-});
+// NOTE: the `clode build --naude --target` cross-build wiring test lives in
+// test/clode-build-naude.test.cjs, where the hermetic seedProvider harness (a fake
+// provider + pre-seeded extract cache) lets the naude branch reach the node-resolve
+// step without a real provider on the box. An earlier version here passed `env:{}`
+// and only stayed green on dev boxes that happened to have a provider installed —
+// it went red on CI (ubuntu/windows) where none exists.

@@ -117,8 +117,10 @@ test('nodeBinPath is per-(version,platform,arch), not version-only', () => {
   const a = nodeBinPath(env, 'darwin', 'arm64');
   const b = nodeBinPath(env, 'darwin', 'x64');
   assert.notStrictEqual(a, b, 'two platforms must not share one path (no clobber)');
-  assert.match(a, new RegExp(`/${PINNED_VERSION}/darwin-arm64/bin/node$`));
-  assert.match(b, new RegExp(`/${PINNED_VERSION}/darwin-x64/bin/node$`));
+  // Compare with path.join so the assertion holds on Windows too (backslash sep):
+  // nodeBinPath uses path.join, so on win32 `a` is `\store\24.18.0\darwin-arm64\bin\node`.
+  assert.ok(a.endsWith(path.join(PINNED_VERSION, 'darwin-arm64', 'bin', 'node')), a);
+  assert.ok(b.endsWith(path.join(PINNED_VERSION, 'darwin-x64', 'bin', 'node')), b);
 });
 
 test('targetToNodeAsset: a canonical target resolves to a pinned Node asset', () => {
