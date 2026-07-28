@@ -4,6 +4,23 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 (Strategic feasibility risks live in `LONG-TERM.md`; in-flight designs in
 `docs/superpowers/`.)
 
+## Arch / artifact-name rationalization (2026-07-27)
+
+DECISIONS locked with user: canonical arch = common Unix/Debian vocabulary
+(amd64/arm64/i386/ppc/sparc/m68k/…), NOT Node's (x64/ia32 have no name for the
+weird-platform matrix) — remap our x64→amd64, x86→i386, haiku-x64→haiku-amd64;
+external spellings (Node process.arch, provider strings, NetBSD MACHINE_ARCH,
+toolchain triples) stay map-only. OS word: `macos` for the Darwin era (floor =
+macOS product version — fixes misleading `darwin11.0`), universal asset stays
+`clode-<v>-macos`; RESERVE `macos-classic<-ver>-<arch>` (m68k/ppc) for the Retro68
+Classic Mac OS track. Asset/tag floor separator = DASHED `<os>-<floor>-<arch>` so
+the download name == `--list-targets` tag. DONE: dropped the low-signal verify
+annotation from `--list-targets` (6122700). Remaining is a real release-affecting
+refactor (single `scripts/canonical-name.cjs` source of truth → floored-asset-name +
+deriveTag + platform-tag + the build-leg bash mirror + the release tripwire; leg-token
+rename optional/follow-up) — can't run CI/release here to verify, so plan:
+`docs/superpowers/plans/2026-07-27-arch-artifact-name-rationalization.md`.
+
 ## Auto-update → notify-only; retire CLODE_SELF rebuild (2026-07-27)
 
 DECISION (user): a built target's in-app auto-update becomes a version CHECK +
