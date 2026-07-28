@@ -98,7 +98,7 @@ Claude), so it needs no pin. See row A2.
 | id | action | expected | axes | test |
 |---|---|---|---|---|
 | D1 | → `/quit` exits cleanly (O_NONBLOCK sync-open wedge) | clean exit, no wedge | platform | test/node-shim-fs-nonblock.test.cjs |
-| D2 | → Ctrl-Z suspends and `fg` resumes (SIGTSTP delivery) | suspend/resume works | platform | test/node-shim-ctrlz-pty.test.cjs |
+| D2 | → Ctrl-Z self-suspends and resume repaints (raw-mode SIGTSTP handler; the crash-on-suspend regression) | suspend/resume works, TUI stays alive | platform | test/e2e-ctrlz-tui.test.cjs |
 | D3 | → a killed child is reported as killed, not exit 0 | killed child reported as killed | platform | test/node-shim-child-process.test.cjs |
 | D4 | → `process.env` mutations reach child processes | env mutations visible to children | platform | test/node-shim-env.test.cjs |
 | D5 | ? Ctrl-C interrupts a running turn/tool without corrupting the TUI. Now reachable via the G2 live-turn harness (real credentials), but the observable is not stable in a FINAL-frame capture: Claude Code restores your prompt into the input box on interrupt, which is indistinguishable from "never submitted", and no "Interrupted" text survives to the last frame. Needs frame-SEQUENCE capture (assert the spinner appears then stops mid-stream) rather than a final-frame diff. Interrupt-of-a-tool is covered non-interactively by the killed-child path (D3) | interrupt works, TUI stays coherent | platform | NEW (needs frame-sequence capture) |
