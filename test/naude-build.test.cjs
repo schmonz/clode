@@ -296,6 +296,27 @@ test('parseNodesArg: --embed-node alone inherits --blobgen-node for blob-gen onl
   assert.deepStrictEqual(parseNodesArg(['--embed-node', '/t']), { blobgen: undefined, embed: '/t' });
 });
 
+// resolveBuildNodes: the header's documented standalone contract — "a plain
+// `node scripts/build-naude.mjs --cli <staged cli.cjs>` still builds a working
+// naude" — means neither node flag given must default BOTH roles to the
+// running node, not hard-fail. test/oracle-binaries.test.cjs:38 relies on
+// exactly this (calls build-naude with bare --cli, no --node).
+test('resolveBuildNodes: neither flag given -> both default to the running node (bare --cli contract)', async () => {
+  const { resolveBuildNodes } = await import('../scripts/build-naude.mjs');
+  assert.deepStrictEqual(resolveBuildNodes({ blobgen: undefined, embed: undefined }, '/run'),
+    { blobgen: '/run', embed: '/run' });
+});
+
+test('resolveBuildNodes: both split flags given -> passed through unchanged', async () => {
+  const { resolveBuildNodes } = await import('../scripts/build-naude.mjs');
+  assert.deepStrictEqual(resolveBuildNodes({ blobgen: '/a', embed: '/b' }), { blobgen: '/a', embed: '/b' });
+});
+
+test('resolveBuildNodes: exactly one split flag given -> throws (a cross build needs both)', async () => {
+  const { resolveBuildNodes } = await import('../scripts/build-naude.mjs');
+  assert.throws(() => resolveBuildNodes({ blobgen: undefined, embed: '/t' }), /need a node/);
+});
+
 test('buildBinary embeds the GIVEN (foreign) node, independent of the blob-gen node', async () => {
   const { buildBinary } = await import('../scripts/build-naude.mjs');
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-xembed-'));

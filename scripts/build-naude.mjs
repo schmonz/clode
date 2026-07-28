@@ -78,13 +78,30 @@ export function parseNodeArg(argv) {
 // SEA blob is arch-neutral): blob-gen RUNS a node (--experimental-sea-config),
 // embed INJECTS a node's bytes (postject). Native build: one node, both roles
 // (--node). Cross-build: --blobgen-node (host arch, runs) + --embed-node (target
-// arch, data). --node is the alias that sets both. Unlike parseNodeArg, this
-// does NOT resolve/default here — main() resolves+validates the pair (a
-// missing blobgen is a hard error there, not silently process.execPath).
+// arch, data). --node is the alias that sets both. A PURE reflection of argv —
+// does NOT resolve/default (that's resolveBuildNodes, below): neither flag given
+// here means both come back undefined, not silently process.execPath.
 export function parseNodesArg(argv) {
   const get = (flag) => { const i = argv.indexOf(flag); return i >= 0 ? argv[i + 1] : undefined; };
   const both = get('--node');
   return { blobgen: get('--blobgen-node') ?? both, embed: get('--embed-node') ?? both };
+}
+
+// Resolve parseNodesArg's raw result into the pair main() actually builds with.
+// Neither flag given (the file header's documented standalone contract: a plain
+// `node scripts/build-naude.mjs --cli <staged cli.cjs>` still builds, no --node
+// needed) -> both roles default to the RUNNING node (`running`, i.e.
+// process.execPath in production — parameterized here so this is unit-testable
+// without process.execPath standing in for a fixture). Exactly ONE of the split
+// flags given is a genuine misuse (a cross build needs both halves, or neither) —
+// throws rather than silently filling the other half in from the given one,
+// which would guess an arch/version pairing nobody asked for.
+export function resolveBuildNodes({ blobgen, embed }, running = process.execPath) {
+  if (blobgen === undefined && embed === undefined) return { blobgen: running, embed: running };
+  if (!blobgen || !embed) {
+    throw new Error('build-naude: need a node — pass --node <path> (both roles) or BOTH --blobgen-node and --embed-node');
+  }
+  return { blobgen, embed };
 }
 
 // The OS whose signing rules apply to the OUTPUT — the TARGET, not the host.
@@ -415,9 +432,11 @@ async function main() {
   const argv = process.argv.slice(2);
   const cliCjs = parseCliArg(argv);
   const outOverride = parseOutArg(argv);
-  const { blobgen, embed } = parseNodesArg(argv);
-  if (!blobgen || !embed) {
-    console.error('build-naude: need a node — pass --node <path> (both roles) or --blobgen-node + --embed-node');
+  let blobgen, embed;
+  try {
+    ({ blobgen, embed } = resolveBuildNodes(parseNodesArg(argv)));
+  } catch (e) {
+    console.error(e.message);
     process.exit(1);
   }
   const targetOs = parseTargetOsArg(argv);
