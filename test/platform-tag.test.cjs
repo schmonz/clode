@@ -144,3 +144,24 @@ test('seaOut/seaBin honor CLODE_ASSET_NAME through the opts.env override', () =>
   assert.strictEqual(seaOut('/r', 'naude', opts),
     path.join('/r', 'build', 'clode-0.1.3-macos-11.0-arm64', 'naude'));
 });
+
+// Task 4 gave seaBin a `target` param (a cross-build's output is for the TARGET,
+// not the host — see seaBin's file-header comment) but no test exercised it with
+// a truthy value. A Node platform target (linux-arm64) must resolve to NO .exe
+// suffix regardless of the host running the build (a darwin host cross-building
+// for linux must not name the output linux-arm64/naude.exe).
+test('seaBin: a truthy Node-platform target names by the TARGET, not the host (no .exe)', () => {
+  const opts = { version: '0.1.3', target: 'linux-arm64', env: {} };
+  assert.doesNotMatch(seaBin('/r', 'naude', opts), /\.exe$/);
+});
+
+// A target that is NOT a Node platform (targetToNode returns null — e.g. a
+// quaude-only target like netbsd-sparc) must not throw: seaBin's
+// `targetToNode(target)?.platform === 'win32'` optional-chaining reads straight
+// through the null. (naude itself refuses such a target elsewhere — this only
+// proves seaBin's own formatter never blows up on one.)
+test('seaBin: a non-Node target does not throw (targetToNode -> null, optional chaining)', () => {
+  const opts = { version: '0.1.3', target: 'netbsd-sparc', env: {} };
+  assert.doesNotThrow(() => seaBin('/r', 'naude', opts));
+  assert.doesNotMatch(seaBin('/r', 'naude', opts), /\.exe$/);
+});

@@ -41,6 +41,9 @@ Usage:
                                            tjs runtime + the compiled Claude Code
                                            bundle) on this machine; default ./quaude
   clode build --naude [--out PATH]         bundle Claude Code as a Node SEA; Node hosts only
+  clode build --naude --target Y           composes with --naude: cross-builds a naude for
+                                           Node platform Y (darwin/linux only; anything else
+                                           has no Node build — use plain --target for a quaude)
   clode fetch [channel|version]            fetch a fresh upstream provider, then exit
   clode watch                              run one update-signal check now (newer version
                                            + signals that bear on repackaging), print a
