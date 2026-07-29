@@ -37,6 +37,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { resetCheckoutToPristine } from './tjs-source-reset.mjs';
 
 const require = createRequire(import.meta.url);
 const { tjsDir: platformTjsDir } = require('./platform-tag.cjs'); // aliased: this file has its own `tjsDir` (the source build dir)
@@ -107,6 +108,10 @@ function ensureCheckout(name, url) {
   if (head !== pinSha(name)) {
     throw new Error(`${name}: checkout HEAD ${head} != PINS.md sha ${pinSha(name)} (tag ${pin(name)})`);
   }
+  // Return PRISTINE source: applyPatches mutates the tree in place with no
+  // rollback, so a killed/failed prior build leaves it partially patched and
+  // poisons the next build. Reset here so every build starts clean (reentrancy).
+  resetCheckoutToPristine(dir, { run });
   return dir;
 }
 
@@ -2293,7 +2298,16 @@ if (process.platform !== 'darwin' && !crossFile && !winMsvc) {
   // we own; demoted like the others (still visible as a warning).
   cmakeArgs.push('-DCMAKE_C_FLAGS=-Wno-error=unused-variable -Wno-error=unknown-pragmas -Wno-error=sign-conversion');
 }
-run('cmake', ['-S', tjsDir, '-B', path.join(tjsDir, 'build'), ...cmakeArgs]);
+// Build OUT OF the shared txiki source: `<tjsDir>/build` was nested inside the
+// SHARED checkout (spike/quickjs/vendor/txiki.js), so every platform's build tromped
+// the same path on a shared NFS tree. `outDir` is already TARGET-unique
+// (platformTjsDir=build/tjs/<osToken>-<arch>, or CLODE_TJS_OUT per cross target), so a
+// build dir INSIDE it inherits that uniqueness — no contention even for two targets
+// cross-built from one host. Only the one-time source PATCH stays a shared mutation
+// (guarded by applyPatches' idempotence); the compile no longer touches the source tree.
+const buildDir = path.join(outDir, 'build');
+fs.mkdirSync(buildDir, { recursive: true });
+run('cmake', ['-S', tjsDir, '-B', buildDir, ...cmakeArgs]);
 
 // ---- bundle regen: RETIRED as a BE requirement (canonical-LE, 2026-07-11) ----
 // quickjs-ng-canonical-le-bytecode.patch makes the serialized format
@@ -2307,8 +2321,8 @@ run('cmake', ['-S', tjsDir, '-B', path.join(tjsDir, 'build'), ...cmakeArgs]);
 const forceRegen = process.env.CLODE_TJS_REGEN === '1';
 if (forceRegen) {
   console.log(`BE bundle regen: target endianness=${os.endianness()} force=${forceRegen} -> regenerating quickjs bytecode arrays natively`);
-  const tjsc = path.join(tjsDir, 'build', 'tjsc');
-  run('cmake', ['--build', path.join(tjsDir, 'build'), '--target', 'tjsc', '-j', jobs]);
+  const tjsc = path.join(buildDir, 'tjsc');
+  run('cmake', ['--build', buildDir, '--target', 'tjsc', '-j', jobs]);
   if (!fs.existsSync(tjsc)) throw new Error(`BE regen: tjsc did not build at ${tjsc}`);
   // Exactly the txiki Makefile's tjsc rules (module mode -m, strip -s, module
   // name -n, C symbol prefix -p). core+stdlib come from the esbuilt bundles;
@@ -2330,15 +2344,15 @@ if (forceRegen) {
   console.log('BE bundle regen: 18 bytecode arrays regenerated at target endianness');
 }
 
-run('cmake', ['--build', path.join(tjsDir, 'build'), '-j', jobs]);
+run('cmake', ['--build', buildDir, '-j', jobs]);
 
 fs.mkdirSync(outDir, { recursive: true });
 // A Windows (mingw) cross target emits build/tjs.exe; keep the .exe suffix on
 // the output too (a Windows loader needs it, and clode reads its own exe by
 // name). Every other target emits build/tjs.
-const builtExe = fs.existsSync(path.join(tjsDir, 'build/tjs.exe'));
+const builtExe = fs.existsSync(path.join(buildDir, 'tjs.exe'));
 const outName = builtExe ? 'tjs.exe' : 'tjs';
-fs.copyFileSync(path.join(tjsDir, builtExe ? 'build/tjs.exe' : 'build/tjs'), path.join(outDir, outName));
+fs.copyFileSync(path.join(buildDir, builtExe ? 'tjs.exe' : 'tjs'), path.join(outDir, outName));
 fs.chmodSync(path.join(outDir, outName), 0o755);
 
 // CLODE_TJS_SMOKE=off: skip the exec smoke — for cross-target engines the
