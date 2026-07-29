@@ -303,11 +303,21 @@ port + 4 misc platform funcs uv_exepath/cpu_info/loadavg/uptime) + `patches/libt
 (txiki's SIG*-in-static-init fixes) + the cosmo toolchain/compat/prelude + CMAKE_RANLIB=cosmoranlib
 (host ranlib can't index cosmo fat archives). Lean profile (mimalloc/ffi/wasm/sqlite OFF); the tjs
 CMake target is the STATIC LIB (libtjs_core.a), the executable is `tjs-cli`.
-**REMAINING — RUNTIME, not build: `tjs.com eval '…'` HANGS** (boots, process stays alive, no output/
-exit). A cosmo runtime issue — suspect the poll(2) event loop (posix-poll.c under cosmo's poll) not
-returning, or a stdio/uv_write block (cf. the haiku uv_write deadlock class). NEXT: trace where it
-hangs (—debug/strace-equiv, or bisect: does `tjs eval '1'` with no console.log exit? isolate event
-loop vs stdio-write). Then Phase C (TLS), D (fuse), E (leg). Below is the earlier characterization:
+**REMAINING — RUNTIME hang, ROOT CAUSE LOCALIZED (2026-07-29 via cosmo `--strace`):** the tjs.com
+APE boots then spins in an infinite loop:
+  `openat("tjs:internal/bootstrap", O_RDONLY) → ENOENT`
+  `pread(fd=2, 65536, offset) → EBADF`  (repeats forever, offset crawling, position advanced on error)
+tjs's module loader fails to resolve the compiled-in builtin `tjs:internal/bootstrap` from the
+bytecode registry, falls through to a filesystem/fd load path, and spins on a bad descriptor (fd 2).
+NOT missing bundles — `strings tjs | grep internal/bootstrap` = 2, the bundle bytecode C arrays
+(src/bundles/c/core/*.c) are compiled in. So it's builtin-module RESOLUTION under cosmo (why the
+registry lookup misses → openat), plus a loader bug (the pread-EBADF fallback should fail loud, not
+loop). Bisect fact: hang correlates with stdout fd-type (pipe stdout → exits; regular file/​/dev/null/
+closed → hang) because the fd table shifts and changes whether the loader lands on fd 2. NEXT:
+(a) why does the `tjs:internal/*` builtin registry miss under cosmo (bytecode registration / module
+resolver path — check builtins.c / the module loader vs how bundles register); (b) make the pread
+fallback fail loudly. Repro: `tjs eval 'tjs.exit(0)' >/tmp/x` hangs; `… | cat` exits. Then Phase C
+(TLS), D (fuse), E (leg). Below is the earlier characterization:
 
 PHASE B EARLIER (2026-07-29) — the full txiki tree CONFIGURES under the cosmo toolchain and
 its CORE COMPILES: quickjs, wurl, txiki's C modules, and the patched libuv all build. Landed:
