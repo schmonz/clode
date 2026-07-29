@@ -25,10 +25,12 @@ all fine) — the gaps are input/socket-event-delivery:
    fresh object but LINKED the stale archive, so runtime always ran old code (nm on the object said
    "fixed", disasm of the final elf said "still reopens"). FIX FOR THE BUILD LOOP: force-clean
    `deps/libuv/libuv.a` (+ `.aarch64/libuv.a`) before `gmake tjs-cli`, or do a clean build — never
-   trust the incremental archive under cosmocc. REMAINING: (a) productize — strip the abandoned
-   osx_select WIP from the scratchpad working copy, land the reopen-skip in `patches/libuv-cosmo.patch`,
-   verify a clean `build-tjs` run; (b) re-run the interactive/live-creds fidelity rows now that TTY
-   input works. (Superseded osx_select notes below kept for the record.)
+   trust the incremental archive under cosmocc. PRODUCTIZED ✅: reopen-skip landed in
+   `patches/libuv-cosmo.patch` (commit b4f7b41, applies clean to pristine); a from-scratch `build-tjs`
+   cosmo run (pristine vendor reset → committed patch, NO osx_select cruft) built a working engine and
+   the clean engine passes the TTY read (`TTY-READ len=1`, strace ttyname_r=0/POLLNVAL=0). REMAINING:
+   re-run the interactive/live-creds fidelity rows (F6 render / D6 resize / G2 live-turn) against cosmo
+   now that TTY input works — they were blocked by this bug. (Superseded osx_select notes below.)
 
    ~~TTY (interactive) stdin reads never fire — ROOT-CAUSED (macOS-host-specific).~~ The interactive
    TUI can't be driven (trust prompt won't advance on any key). Engine-level differential nails it:
