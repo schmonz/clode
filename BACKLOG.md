@@ -296,7 +296,20 @@ libuv 1.52.2):
   GCC defaults to C23 which hard-errors implicit decls). Errno runtime→UV translation still owed for
   correct error NAMING (not exercised by the timer test).
 
-PHASE B — the tjs.com APE BUILDS (2026-07-29). The full txiki tree compiles and LINKS under
+PHASE B — the tjs.com APE RUNS JavaScript under Cosmopolitan (2026-07-29). ✅ `tjs eval` works
+(`COSMO RUNS: 42 | 26.6.0`), ✅ the poll(2) event loop works (setTimeout fires, promises resolve),
+✅ a genuine 9.9MB APE. The boot HANG is FIXED — two libuv-cosmo bugs, both committed in
+patches/libuv-cosmo.patch: (1) **UV__ERR sign** — libuv guards it with `#if EDOM > 0`, but cosmo's
+errno macros are runtime symbols so the preprocessor reads EDOM as 0 and picks the NON-negating
+form → every libuv error came back +errno → `uv_fs_open` of a missing file returned +2 (a bogus fd),
+and tjs's module loader spun on `pread(2)→EBADF`. Forced the negating form under __COSMOPOLITAN__.
+(2) **uv_exepath** — `readlink(/proc/self/exe)` is not portable across cosmo's host OSes; use
+Cosmopolitan's `GetProgramExecutableName()`. NEXT: Phase C (TLS — a real HTTPS to the API, mbedtls
+built-in), D (zipos fuse), E (leg + multi-OS CI). Build-cache note: incremental cmake-on-NFS
+under-recompiles (mtime staleness); use `rm -rf build` or Ninja for dev — a non-issue for build-tjs
+(builds clean each run). Below: the earlier build-complete characterization.
+
+PHASE B EARLIER — the tjs.com APE BUILDS (2026-07-29). The full txiki tree compiles and LINKS under
 Cosmopolitan into a 9.9MB `tjs` Actually Portable Executable that BOOTS (starts running). Every
 BUILD-level cosmo gap is solved, all as clean guarded patches: `patches/libuv-cosmo.patch` (libuv
 port + 4 misc platform funcs uv_exepath/cpu_info/loadavg/uptime) + `patches/libtjs-cosmo.patch`
