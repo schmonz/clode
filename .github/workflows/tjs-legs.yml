@@ -103,6 +103,7 @@ jobs:
           cross-dockerfile: ${{ matrix.cross-dockerfile || '' }}
           cross-file: ${{ matrix.cross-file || 'scripts/darwin-ppc.toolchain.cmake' }}
           cross-apt: ${{ matrix.cross-apt || '' }}
+          cosmo: ${{ matrix.cosmo && 'true' || 'false' }}
           atomic-shim: ${{ matrix.atomic-shim && 'true' || 'false' }}
           tier2: ${{ matrix.tier2 && 'true' || 'false' }}
           verify: ${{ matrix.verify || 'smoke' }}

@@ -65,20 +65,33 @@ const wantStatic = process.env.CLODE_TJS_STATIC === '1';
 // wasm/mimalloc/ffi off) with no flags to remember: they can't build WAMR (Linux
 // mremap/MAP_32BIT), hit the mimalloc 3.2.7 compile regression, and ship no tjs:ffi.
 // Explicit CLODE_TJS_* still wins (CI sets them; a proven platform can re-enable).
+// CLODE_TJS_TARGET=cosmo — the Cosmopolitan APE leg (spike/quickjs/results/
+// cosmo-fidelity-run.md): ONE fat (x86-64 + aarch64) Actually Portable
+// Executable that runs native on Linux/macOS/Windows/BSD. It is NOT keyed off
+// the host platform (cosmo cross-builds from any host); it is its own target
+// token that forces the lean profile, provisions cosmocc, applies the two named
+// cosmo patches, drives scripts/cosmo.toolchain.cmake, and builds tjs-cli.
+const cosmoTarget = (process.env.CLODE_TJS_TARGET || '').toLowerCase() === 'cosmo';
 const _leanPosix = !['linux', 'darwin', 'win32'].includes(process.platform);
 const _tjsKnob = (env, onByDefault) => (process.env[env] || (onByDefault ? 'on' : 'off')).toLowerCase() !== 'off';
-const wantWasm = _tjsKnob('CLODE_TJS_WASM', !_leanPosix);
+let wantWasm = _tjsKnob('CLODE_TJS_WASM', !_leanPosix);
 // CLODE_TJS_MIMALLOC=off: system malloc instead of mimalloc. mimalloc 3.2.7
 // does not compile on NetBSD at all (its __NetBSD__ branch references the
 // renamed mi_option_eager_commit_delay enum member — upstream regression,
 // committed finding in spike/quickjs/qemu/guest-m4.sh). VM legs start with
 // it off and re-enable per-platform as they prove.
-const wantMimalloc = _tjsKnob('CLODE_TJS_MIMALLOC', !_leanPosix);
+let wantMimalloc = _tjsKnob('CLODE_TJS_MIMALLOC', !_leanPosix);
 // CLODE_TJS_FFI=off: drop tjs:ffi (needs system libffi headers in the guest;
 // nothing shipped imports it — bun:ffi is a throw-on-use stub). The STATIC
 // knob already implies this; VM legs set it independently of static.
-const wantFfi = _tjsKnob('CLODE_TJS_FFI', !_leanPosix);
-if (_leanPosix && !(process.env.CLODE_TJS_WASM || process.env.CLODE_TJS_MIMALLOC || process.env.CLODE_TJS_FFI)) {
+let wantFfi = _tjsKnob('CLODE_TJS_FFI', !_leanPosix);
+// cosmo FORCES the lean profile regardless of host or explicit knobs: WAMR
+// (Linux mremap/MAP_32BIT), mimalloc, and tjs:ffi do not build under cosmocc —
+// the verified recipe builds none of them (cosmo-fidelity-run.md §1.4).
+if (cosmoTarget) { wantWasm = false; wantMimalloc = false; wantFfi = false; }
+if (cosmoTarget) {
+  console.error('build-tjs: cosmo target — forcing wasm/mimalloc/ffi OFF (the lean profile; none build under cosmocc)');
+} else if (_leanPosix && !(process.env.CLODE_TJS_WASM || process.env.CLODE_TJS_MIMALLOC || process.env.CLODE_TJS_FFI)) {
   console.error(`build-tjs: ${process.platform} is a lean-POSIX target — defaulting wasm/mimalloc/ffi OFF ` +
     `to match scripts/tjs-legs.mjs (override any with CLODE_TJS_WASM/MIMALLOC/FFI=on)`);
 }
@@ -95,6 +108,91 @@ function pinFields(component) {
 }
 const pin = (component) => pinFields(component)[1];
 const pinSha = (component) => pinFields(component)[2];
+
+// ---- cosmocc toolchain provisioning (CLODE_TJS_TARGET=cosmo) --------------
+// The cosmo APE is built with cosmocc, a single self-contained toolchain zip.
+// Provision it the SAME shape clode-node.cjs fetches the pinned Node: download →
+// sha256-verify against the pin (fail loud) → extract → cache. The download uses
+// clode-net's downloadFile/sha256Of (the no-curl seam); the extract routes
+// through host-provision's KAT-verified `unzip` (libexec/host-provision.cjs).
+// Cross-build-safe: only the cosmo target reaches here, and only in the build
+// phase. Pin: cosmocc-4.0.2.zip (github.com/jart/cosmopolitan).
+const COSMOCC_VERSION = '4.0.2';
+const COSMOCC_SHA256 = '85b8c37a406d862e656ad4ec14be9f6ce474c1b436b9615e91a55208aced3f44';
+const COSMOCC_URL = `https://cosmo.zip/pub/cosmocc/cosmocc-${COSMOCC_VERSION}.zip`;
+
+// cosmocc ships its OWN ar/ranlib (host ranlib can't index cosmo's fat archives —
+// see scripts/cosmo.toolchain.cmake). The zip may land them non-exec on some
+// hosts/unzip; force +x on the tools the toolchain file invokes. Idempotent.
+function ensureCosmoToolsExec(binDir) {
+  for (const t of ['cosmoranlib', 'cosmoar', 'cosmocc', 'cosmoc++']) {
+    const p = path.join(binDir, t);
+    if (fs.existsSync(p)) { try { fs.chmodSync(p, 0o755); } catch { /* best effort */ } }
+  }
+}
+
+// Return the cosmocc bin dir (what scripts/cosmo.toolchain.cmake reads as
+// CLODE_COSMOCC). Honors an explicit CLODE_COSMOCC install; otherwise fetches +
+// verifies + extracts into the clode cache (CLODE_CACHE or ~/.cache/clode).
+async function provisionCosmocc() {
+  const { downloadFile, sha256Of } = require(path.join(repo, 'libexec/clode-net.cjs'));
+  const { provision } = require(path.join(repo, 'libexec/host-provision.cjs'));
+
+  const explicit = process.env.CLODE_COSMOCC;
+  if (explicit && fs.existsSync(path.join(explicit, 'cosmocc'))) {
+    ensureCosmoToolsExec(explicit);
+    console.log(`cosmo: using CLODE_COSMOCC=${explicit}`);
+    return explicit;
+  }
+
+  const cacheRoot = process.env.CLODE_CACHE || path.join(os.homedir(), '.cache', 'clode');
+  const dir = path.join(cacheRoot, 'cosmocc', COSMOCC_VERSION);
+  const binDir = path.join(dir, 'bin');
+  if (fs.existsSync(path.join(binDir, 'cosmocc'))) {
+    ensureCosmoToolsExec(binDir);
+    console.log(`cosmo: cosmocc ${COSMOCC_VERSION} already provisioned at ${binDir}`);
+    return binDir;
+  }
+
+  const zip = path.join(cacheRoot, 'cosmocc', `cosmocc-${COSMOCC_VERSION}.zip`);
+  fs.mkdirSync(path.dirname(zip), { recursive: true });
+  if (!fs.existsSync(zip)) {
+    console.log(`cosmo: downloading ${COSMOCC_URL} (441MB) ...`);
+    const part = `${zip}.part`;
+    await downloadFile(COSMOCC_URL, part);
+    fs.renameSync(part, zip);
+  }
+  const got = sha256Of(zip);
+  if (got !== COSMOCC_SHA256) {
+    fs.rmSync(zip, { force: true });
+    throw new Error(`cosmo: cosmocc-${COSMOCC_VERSION}.zip sha mismatch (expected ${COSMOCC_SHA256}, got ${got}) — refusing to use it`);
+  }
+  const { path: unzipBin } = provision('unzip');
+  fs.mkdirSync(dir, { recursive: true });
+  run(unzipBin, ['-o', '-q', zip, '-d', dir]);
+  if (!fs.existsSync(path.join(binDir, 'cosmocc'))) {
+    throw new Error(`cosmo: extraction of ${zip} did not produce ${binDir}/cosmocc`);
+  }
+  ensureCosmoToolsExec(binDir);
+  console.log(`cosmo: cosmocc ${COSMOCC_VERSION} provisioned at ${binDir}`);
+  return binDir;
+}
+
+// Apply the two NAMED cosmo patches. They are deliberately NOT prefixed
+// txiki-/quickjs-ng-, so orderedPatches()'s auto-apply globs skip them: they are
+// cosmo-only. Both are __COSMOPOLITAN__-guarded (behavior-neutral for other
+// targets) but still edit CMakeLists/source, so they must never touch the
+// default legs. libuv-cosmo.patch is based at deps/libuv (a submodule) — applied
+// THERE; libtjs-cosmo.patch is based at the txiki root (src/*).
+function applyCosmoPatches(dir) {
+  // The cosmo patches live in the repo-root patches/ dir (NOT spike/quickjs/
+  // patches/, which holds the txiki-*/quickjs-ng-* engine patches).
+  const cosmoPatches = path.join(repo, 'patches');
+  run('git', ['-C', path.join(dir, 'deps/libuv'), 'apply', path.join(cosmoPatches, 'libuv-cosmo.patch')]);
+  console.log('patch libuv-cosmo.patch: applied (deps/libuv)');
+  run('git', ['-C', dir, 'apply', path.join(cosmoPatches, 'libtjs-cosmo.patch')]);
+  console.log('patch libtjs-cosmo.patch: applied');
+}
 
 function ensureCheckout(name, url) {
   const dir = path.join(vendor, name);
@@ -2125,6 +2223,10 @@ if (buildOnly) {
   fixupTjsCmakeWinStack(tjsDir);
   fixupLwsTxpacerPthreadWin(tjsDir);
   fixupModFsSyncMsvc(tjsDir);
+  // cosmo patches apply LAST: they were generated against the fully-fixed-up
+  // tree (their libuv udp.c context includes the SSM guard fixupLibuvUdpSsmOld-
+  // Darwin adds), so they must go on top of every source fixup, not before them.
+  if (cosmoTarget) applyCosmoPatches(tjsDir);
 }
 
 // ---- big-endian bundle regen, part 1: esbuild the plain-JS intermediates ----
@@ -2215,6 +2317,27 @@ if (!wantMimalloc) {
 }
 if (!wantFfi) {
   cmakeArgs.push('-DBUILD_WITH_FFI=OFF');
+}
+// cosmo: provision cosmocc and point the build at the cosmo cross toolchain +
+// the rest of the lean profile. Done HERE (before crossFile is read below) so
+// the toolchain file and CLODE_COSMOCC are in the environment cmake sees. The
+// extra OFFs match the verified recipe (cosmo-fidelity-run.md §1.4): SQLITE/LTO
+// and the CLI's mimalloc are dropped so nothing pulls a dep cosmocc can't build.
+if (cosmoTarget) {
+  const cosmoccBin = await provisionCosmocc();
+  process.env.CLODE_COSMOCC = cosmoccBin;
+  // cosmocc's cosmoar/cosmoranlib wrappers `exec` their per-arch backends
+  // (x86_64-linux-cosmo-ranlib, ...) by BARE name — those live in the cosmocc
+  // bin dir, so it MUST be on PATH when cmake drives the archive/index step or
+  // the static libs get no symbol index and the tjs-cli link fails undefined.
+  if (!(process.env.PATH || '').split(path.delimiter).includes(cosmoccBin)) {
+    process.env.PATH = `${cosmoccBin}${path.delimiter}${process.env.PATH || ''}`;
+  }
+  if (!process.env.CLODE_TJS_CROSS_FILE) {
+    process.env.CLODE_TJS_CROSS_FILE = path.join(repo, 'scripts/cosmo.toolchain.cmake');
+  }
+  cmakeArgs.push('-DBUILD_WITH_SQLITE=OFF', '-DBUILD_WITH_LTO=OFF',
+    '-DLWS_WITH_SQLITE3=OFF', '-DQJS_BUILD_CLI_WITH_MIMALLOC=OFF');
 }
 // macOS floor (darwin-x64 floor walk, spec 2026-07-11): release legs pin a
 // deployment target and an honest OLD SDK, so every post-floor API is a
@@ -2344,7 +2467,12 @@ if (forceRegen) {
   console.log('BE bundle regen: 18 bytecode arrays regenerated at target endianness');
 }
 
-run('cmake', ['--build', buildDir, '-j', jobs]);
+// cosmo builds ONLY the tjs-cli executable target (OUTPUT_NAME tjs): the default
+// (all-targets) build drags in tjsc/qjs tools and demos that cosmocc can't build,
+// and cosmo's engine IS the tjs-cli APE, not the `tjs` static lib (libtjs_core.a).
+const buildArgs = ['--build', buildDir, '-j', jobs];
+if (cosmoTarget) buildArgs.push('--target', 'tjs-cli');
+run('cmake', buildArgs);
 
 fs.mkdirSync(outDir, { recursive: true });
 // A Windows (mingw) cross target emits build/tjs.exe; keep the .exe suffix on
@@ -2360,10 +2488,17 @@ fs.chmodSync(path.join(outDir, outName), 0o755);
 // arm64 dev box can exec it; the floor gate + the real-hardware oracle
 // carry verification instead).
 if ((process.env.CLODE_TJS_SMOKE || 'on').toLowerCase() !== 'off') {
-  const smoke = runOut(path.join(outDir, outName),
-    ['eval', 'console.log(typeof __tjs_fs_sync === "object" ? "tjs-shim-ok" : "MISSING-SYNC-FS")']);
+  const engine = path.join(outDir, outName);
+  const evalArgs = ['eval', 'console.log(typeof __tjs_fs_sync === "object" ? "tjs-shim-ok" : "MISSING-SYNC-FS")'];
+  // A cosmo APE is a DOS/MBR 'MZ' fat binary; on macOS (and any host that won't
+  // exec the raw MZ) it runs through its own shell prologue — `/bin/sh -c '"$@"'
+  // sh <ape> <args>`, exactly the isApeFile route clode-fuse.cjs uses. On Linux/
+  // BSD the APE execs directly, but the sh wrapper is a POSIX no-op there too.
+  const smoke = cosmoTarget
+    ? runOut('/bin/sh', ['-c', '"$@"', 'sh', engine, ...evalArgs])
+    : runOut(engine, evalArgs);
   if (smoke !== 'tjs-shim-ok') throw new Error(`smoke failed: ${smoke}`);
-  console.log(`built ${path.join(outDir, outName)} (${smoke})`);
+  console.log(`built ${engine} (${smoke})`);
 } else {
   console.log(`built ${path.join(outDir, outName)} (exec smoke SKIPPED: cross-target, CLODE_TJS_SMOKE=off)`);
 }

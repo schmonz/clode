@@ -536,6 +536,26 @@ const LEGS = [
     floor: '10.1', 'guest-version': '10.1',
     publish: true, ci: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
+  // ---- Cosmopolitan APE leg (Task 4b, spike/quickjs/results/cosmo-fidelity-run.md):
+  // ONE fat (x86-64 + aarch64) Actually Portable Executable that runs native on
+  // Linux/macOS/Windows/BSD — ADDED beside the tjs legs, never a replacement.
+  // build-tjs.mjs's CLODE_TJS_TARGET=cosmo provisions cosmocc 4.0.2, forces the
+  // lean profile, applies patches/libuv-cosmo.patch + patches/libtjs-cosmo.patch,
+  // and builds the tjs-cli APE via scripts/cosmo.toolchain.cmake (the `cosmo: true`
+  // marker routes build-leg down that path). The cross "toolchain" is cosmocc,
+  // self-provisioned by build-tjs (NOT a Docker cross-image), so no cross-image/
+  // cross-apt; wasm/mimalloc/ffi off (none build under cosmocc). Built on ubuntu:
+  // Linux execs the APE, so the builder fuses + PONGs on the runner, and the SAME
+  // .com is then exercised on macOS/Windows/BSD runners (PONG + attest each — the
+  // multi-OS fan-out; see BACKLOG "Cosmopolitan APE leg" → PHASE E CI note).
+  // ONBOARDING: publish:false + soft-fail — a new CI leg earns hard status by
+  // staying green (house rule). Flip to publish:true once the fan-out is green.
+  // Large timeout: the first build downloads cosmocc (441MB) + compiles the full
+  // lean tree; the tjs-cache keys on recipe so repeat builds are cheap.
+  { leg: 'cosmo', os: 'ubuntu-latest', cosmo: true,
+    'cross-file': 'scripts/cosmo.toolchain.cmake',
+    publish: false, ci: true, 'soft-fail': true, timeout: 3600,
+    wasm: 'off', mimalloc: 'off', ffi: 'off' },
 ];
 
 export function legsFor(tier) {

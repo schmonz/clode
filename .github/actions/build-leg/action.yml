@@ -66,6 +66,10 @@ inputs:
     description: "Space-separated apt packages installed INSIDE the cross-image before the build (e.g. 'cmake make gcc-riscv64-linux-gnu g++-riscv64-linux-gnu'). Empty for images that bake their toolchain (darwin-ppc)."
     required: false
     default: ""
+  cosmo:
+    description: "'true': the Cosmopolitan APE leg. build-tjs.mjs's CLODE_TJS_TARGET=cosmo self-provisions cosmocc, forces the lean profile, applies patches/libuv-cosmo.patch + patches/libtjs-cosmo.patch, and builds the tjs-cli APE via scripts/cosmo.toolchain.cmake. Runs the normal native (exec=host) source+build+fuse+smoke path — the fat APE execs on the ubuntu runner via clode-fuse's isApeFile /bin/sh route. The SAME .com is then exercised on other-OS runners downstream (the multi-OS fan-out)."
+    required: false
+    default: "false"
   atomic-shim:
     description: "'true': link the __atomic_*_8 pthread shim (CLODE_TJS_ATOMIC_SHIM=1) for 32-bit targets lacking 8-byte libatomic (darwin-ppc, netbsd-m68k). 'false' for native-64-bit-atomic targets (s390x/riscv64)."
     required: false
@@ -224,6 +228,9 @@ runs:
       shell: bash
       env:
         CLODE_TJS_VENDOR: ${{ steps.mode.outputs.vendor }}
+        # cosmo: the source phase applies the two named cosmo patches (they are
+        # OUT of the auto-apply globs), so it needs the target token too.
+        CLODE_TJS_TARGET: ${{ inputs.cosmo == 'true' && 'cosmo' || '' }}
       run: node scripts/build-tjs.mjs --source-only
 
     - name: Install the runtime dep closure (fuse member inputs)
@@ -298,6 +305,17 @@ runs:
       with:
         arch: ${{ inputs.msvc-arch }}
 
+    # cosmo: cache the provisioned cosmocc toolchain (a 441MB download) so only
+    # the first build on a fresh runner pays for it. build-tjs's provisionCosmocc
+    # sha256-verifies against the pin regardless, so a stale/partial cache can't
+    # poison the build. Keyed on the pinned cosmocc version (bump = new cache).
+    - name: Cache the cosmocc toolchain (cosmo APE leg)
+      if: inputs.cosmo == 'true' && steps.tjs-cache.outputs.cache-hit != 'true'
+      uses: actions/cache@v6.1.0
+      with:
+        path: ~/.cache/clode/cosmocc
+        key: cosmocc-4.0.2
+
     # netbsd-src legs are exec=cross but keep guest-platform 'native' (they run
     # on the ubuntu runner), so they must be excluded here too — else this host
     # build pre-populates .matrix/tjs-out with an x86-64 CMakeCache that the
@@ -318,6 +336,11 @@ runs:
         CLODE_TJS_MACOS_SDK: ${{ steps.sdk.outputs.path }}
         CLODE_TJS_MACOS_ARCH: ${{ inputs.macos-arch }}
         CLODE_TJS_SMOKE: ${{ inputs.no-exec == 'true' && 'off' || 'on' }}
+        # cosmo: CLODE_TJS_TARGET=cosmo makes build-tjs provision cosmocc, drive
+        # scripts/cosmo.toolchain.cmake, force the lean profile, and build the
+        # tjs-cli APE. Inert ('') for every other native leg. The wasm/mimalloc/
+        # ffi env above is already 'off' for the cosmo leg (tjs-legs.mjs).
+        CLODE_TJS_TARGET: ${{ inputs.cosmo == 'true' && 'cosmo' || '' }}
         # Windows compiler: build-tjs.mjs now defaults to MSVC (cl) on win32, so the
         # msvc legs need no explicit flag (the msvc-dev-cmd step above puts cl + the
         # Windows SDK + ninja on PATH). mingw is retired — kept only as the explicit
