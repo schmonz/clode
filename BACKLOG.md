@@ -4,6 +4,20 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 (Strategic feasibility risks live in `LONG-TERM.md`; in-flight designs in
 `docs/superpowers/`. Done items are DELETED from here — git history is the record.)
 
+## TRIAGED — Tiger/PPC double-Ctrl-C "wedge" is FAITHFUL, not a bug (2026-07-29)
+
+Filed here so it is NOT re-chased. On slow-DNS boxes (Tiger/PPC VM), the TUI's double-Ctrl-C
+appears to hang but actually exits cleanly (RC=0) after a ~65s teardown. Cause: `tjs.exit`→
+`mod_os.c:38 exit()`→ C atexit → libuv `uv__threadpool_cleanup`→`pthread_join` blocks on a pending
+`getaddrinfo` worker whose DNS lookup takes ~65s on that box. **Plain Node hangs identically** in a
+dev-host differential (dispatch a blocking libuv threadpool op, then `process.exit` → both Node and
+quaude wait for the join) — so it's libuv-inherent, shared with real Claude Code. The pending lookup
+is bundle-driven (api.anthropic.com warmup + status.claude.com + Datadog, captured from naude). A
+`_exit()` speedup was REJECTED (would diverge from Node; violates the fidelity doctrine). Mitigation
+for slow-network boxes: `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (drops the status/telemetry
+resolves; api.anthropic.com stays). Maintainer decision (2026-07-29): accept faithful + document;
+removed from release blockers. Full method + repro in memory `tiger-ctrlc-teardown-threadpool-join`.
+
 ## Arch / artifact-name rationalization — release-atomic remainder (2026-07-27)
 
 The canonical-name refactor SHIPPED (single `scripts/canonical-name.cjs` source of truth;
