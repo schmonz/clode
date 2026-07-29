@@ -696,6 +696,41 @@ index 0000000..4987025
 +  *size = n;
 +  return 0;
 +}
+diff --git a/src/unix/thread.c b/src/unix/thread.c
+index 2f7572c..361e2c4 100644
+--- a/src/unix/thread.c
++++ b/src/unix/thread.c
+@@ -832,7 +832,16 @@ void uv_cond_wait(uv_cond_t* cond, uv_mutex_t* mutex) {
+ #else /* !(defined(__APPLE__) && defined(__MACH__)) */
+ 
+ void uv_cond_wait(uv_cond_t* cond, uv_mutex_t* mutex) {
+-  if (pthread_cond_wait(cond, mutex))
++  int r;
++  /* Retry on EINTR: Cosmopolitan's pthread_cond_wait can return EINTR when a
++   * signal (e.g. SIGCHLD from a spawned child exiting) interrupts the underlying
++   * futex; POSIX pthreads swallow it. Retrying is behavior-neutral on compliant
++   * platforms, which never surface EINTR here — without this, spawning any child
++   * that exits aborts the whole process. */
++  do
++    r = pthread_cond_wait(cond, mutex);
++  while (r == EINTR);
++  if (r)
+     abort();
+ }
+ 
+@@ -859,7 +868,11 @@ int uv_cond_timedwait(uv_cond_t* cond, uv_mutex_t* mutex, uint64_t timeout) {
+ #endif
+   ts.tv_sec = timeout / NANOSEC;
+   ts.tv_nsec = timeout % NANOSEC;
+-  r = pthread_cond_timedwait(cond, mutex, &ts);
++  /* Retry on EINTR (Cosmopolitan surfaces it, e.g. SIGCHLD; POSIX swallows it).
++   * ts is an absolute deadline here, so re-waiting is correct. */
++  do
++    r = pthread_cond_timedwait(cond, mutex, &ts);
++  while (r == EINTR);
+ #endif
+ 
+ 
 diff --git a/src/unix/udp.c b/src/unix/udp.c
 index 1ae906d..b4a5f29 100644
 --- a/src/unix/udp.c
