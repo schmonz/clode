@@ -25,8 +25,15 @@ set(CMAKE_AR           "${_cc}/cosmoar" CACHE FILEPATH "ar")
 # gnu17: cosmocc's GCC defaults to C23, which hard-errors implicit declarations
 # that older C (libuv/quickjs) still relies on. _DEFAULT_SOURCE (not the strict
 # _POSIX/_XOPEN caps) so Cosmopolitan's default-source declarations are visible.
-set(CMAKE_C_FLAGS_INIT   "-std=gnu17 -D_DEFAULT_SOURCE")
-set(CMAKE_CXX_FLAGS_INIT "-D_DEFAULT_SOURCE")
+# cosmo-compat supplies POSIX header aliases Cosmopolitan omits (e.g.
+# <sys/syslog.h> -> <syslog.h>, <net/route.h>, which libwebsockets includes).
+# The -Wno-error demotions match build-tjs's existing recipe-workarounds: deps
+# (libwebsockets) compile with conversion/sign warnings that are errors only
+# under cosmocc's strict default; demote to warnings, don't fork the dep.
+set(_cosmo_demote "-Wno-error=sign-conversion -Wno-error=conversion -Wno-error=sign-compare -Wno-error=sign-compare -Wno-error=switch-outside-range -Wno-error=unused-variable")
+set(_cosmo_prelude "-include ${CMAKE_CURRENT_LIST_DIR}/cosmo-compat/cosmo-prelude.h")
+set(CMAKE_C_FLAGS_INIT   "-std=gnu17 -D_DEFAULT_SOURCE -isystem ${CMAKE_CURRENT_LIST_DIR}/cosmo-compat ${_cosmo_prelude} ${_cosmo_demote}")
+set(CMAKE_CXX_FLAGS_INIT "-D_DEFAULT_SOURCE -isystem ${CMAKE_CURRENT_LIST_DIR}/cosmo-compat ${_cosmo_prelude} ${_cosmo_demote}")
 
 # cosmocc produces the fat APE itself; don't let CMake try to build shared libs.
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
