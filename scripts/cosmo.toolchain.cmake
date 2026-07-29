@@ -20,7 +20,11 @@ endif()
 
 set(CMAKE_C_COMPILER   "${_cc}/cosmocc")
 set(CMAKE_CXX_COMPILER "${_cc}/cosmoc++")
-set(CMAKE_AR           "${_cc}/cosmoar" CACHE FILEPATH "ar")
+set(CMAKE_AR           "${_cc}/cosmoar"     CACHE FILEPATH "ar")
+# MUST use cosmo's ranlib: the host ranlib can't index cosmo's fat objects, so
+# static archives (libtjs_core.a) get a broken symbol table and the final link
+# fails with undefined TJS_*/core symbols.
+set(CMAKE_RANLIB       "${_cc}/cosmoranlib" CACHE FILEPATH "ranlib")
 
 # gnu17: cosmocc's GCC defaults to C23, which hard-errors implicit declarations
 # that older C (libuv/quickjs) still relies on. _DEFAULT_SOURCE (not the strict

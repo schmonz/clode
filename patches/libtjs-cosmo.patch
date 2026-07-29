@@ -1,0 +1,221 @@
+diff --git a/src/mod_os.c b/src/mod_os.c
+index 8c589b3..e30e580 100644
+--- a/src/mod_os.c
++++ b/src/mod_os.c
+@@ -509,7 +509,13 @@ static JSValue tjs_availableParallelism(JSContext *ctx, JSValue this_val, int ar
+     return JS_NewUint32(ctx, uv_available_parallelism());
+ }
+ 
++/* Cosmopolitan: entries hold runtime (host-specific) constants, so the table
++ * can't live in .rodata — cosmocc runtime-initializes a non-const one. */
++#ifdef __COSMOPOLITAN__
++static JSCFunctionListEntry tjs_os_funcs[] = {
++#else
+ static const JSCFunctionListEntry tjs_os_funcs[] = {
++#endif
+     TJS_CONST(AF_INET),
+     TJS_CONST(AF_INET6),
+     TJS_CONST(AF_UNSPEC),
+diff --git a/src/mod_posix-socket.c b/src/mod_posix-socket.c
+index f8575a9..0aa0eae 100644
+--- a/src/mod_posix-socket.c
++++ b/src/mod_posix-socket.c
+@@ -667,7 +667,12 @@ static JSValue tjs_sock_sockaddr_inet(JSContext *ctx, JSValue this_val, int argc
+ 
+ // only the more common options are defined here
+ /* clang-format off */
++/* Cosmopolitan: runtime-constant values → cosmocc runtime-inits a non-const table. */
++#ifdef __COSMOPOLITAN__
++static JSCFunctionListEntry defines_list[] = {
++#else
+ static const JSCFunctionListEntry defines_list[] = {
++#endif
+     JS_PROT_INT_DEF(AF_INET),
+     JS_PROT_INT_DEF(AF_INET6),
+ 
+diff --git a/src/signals.c b/src/signals.c
+index f8077ee..50f3046 100644
+--- a/src/signals.c
++++ b/src/signals.c
+@@ -192,7 +192,12 @@ void tjs__mod_signals_init(JSContext *ctx, JSValue ns) {
+      * number, so aliases are lost); this map is the node-faithful one, so the
+      * node-shim's os.constants.signals matches host node on every platform — no
+      * hand-maintained per-platform table. */
++    /* Cosmopolitan: SIG* are runtime values → cosmocc runtime-inits a non-const table. */
++#ifdef __COSMOPOLITAN__
++    static struct { const char *name; int num; } clode_sig_list[] = {
++#else
+     static const struct { const char *name; int num; } clode_sig_list[] = {
++#endif
+ #define CLODE_SIG(n) { #n, n }
+ #ifdef SIGHUP
+         CLODE_SIG(SIGHUP),
+diff --git a/src/utils.c b/src/utils.c
+index 6553d6b..f6ee168 100644
+--- a/src/utils.c
++++ b/src/utils.c
+@@ -273,112 +273,130 @@ void tjs_buf_ref_release(JSContext *ctx, TJSBufferRef *ref) {
+     ref->size = 0;
+ }
+ 
++/* Cosmopolitan: SIG* are runtime (host-specific) values, not integer constant
++ * expressions, so they can't index a static designated-initializer array.
++ * Populate the map at load time via a constructor instead; both modes share the
++ * TJS_SIG(SIGxxx) list below. */
++#ifdef __COSMOPOLITAN__
++#define TJS_SIG(s) tjs_signal_map[s] = #s;
++#define TJS_SIGNAL_MAP_SIZE 65
++const char *tjs_signal_map[TJS_SIGNAL_MAP_SIZE];
++size_t tjs_signal_map_count = TJS_SIGNAL_MAP_SIZE;
++__attribute__((constructor)) static void tjs__init_signal_map(void) {
++#else
++#define TJS_SIG(s) [s] = #s,
+ const char *tjs_signal_map[] = {
++#endif
+ #ifdef SIGHUP
+-    [SIGHUP] = "SIGHUP",
++    TJS_SIG(SIGHUP)
+ #endif
+ #ifdef SIGINT
+-    [SIGINT] = "SIGINT",
++    TJS_SIG(SIGINT)
+ #endif
+ #ifdef SIGQUIT
+-    [SIGQUIT] = "SIGQUIT",
++    TJS_SIG(SIGQUIT)
+ #endif
+ #ifdef SIGILL
+-    [SIGILL] = "SIGILL",
++    TJS_SIG(SIGILL)
+ #endif
+ #ifdef SIGTRAP
+-    [SIGTRAP] = "SIGTRAP",
++    TJS_SIG(SIGTRAP)
+ #endif
+ #ifdef SIGABRT
+-    [SIGABRT] = "SIGABRT",
++    TJS_SIG(SIGABRT)
+ #endif
+ #ifdef SIGBUS
+-    [SIGBUS] = "SIGBUS",
++    TJS_SIG(SIGBUS)
+ #endif
+ #ifdef SIGFPE
+-    [SIGFPE] = "SIGFPE",
++    TJS_SIG(SIGFPE)
+ #endif
+ #ifdef SIGKILL
+-    [SIGKILL] = "SIGKILL",
++    TJS_SIG(SIGKILL)
+ #endif
+ #ifdef SIGUSR1
+-    [SIGUSR1] = "SIGUSR1",
++    TJS_SIG(SIGUSR1)
+ #endif
+ #ifdef SIGSEGV
+-    [SIGSEGV] = "SIGSEGV",
++    TJS_SIG(SIGSEGV)
+ #endif
+ #ifdef SIGUSR2
+-    [SIGUSR2] = "SIGUSR2",
++    TJS_SIG(SIGUSR2)
+ #endif
+ #ifdef SIGPIPE
+-    [SIGPIPE] = "SIGPIPE",
++    TJS_SIG(SIGPIPE)
+ #endif
+ #ifdef SIGALRM
+-    [SIGALRM] = "SIGALRM",
++    TJS_SIG(SIGALRM)
+ #endif
+ #ifdef SIGTERM
+-    [SIGTERM] = "SIGTERM",
++    TJS_SIG(SIGTERM)
+ #endif
+ #ifdef SIGSTKFLT
+-    [SIGSTKFLT] = "SIGSTKFLT",
++    TJS_SIG(SIGSTKFLT)
+ #endif
+ #ifdef SIGCHLD
+-    [SIGCHLD] = "SIGCHLD",
++    TJS_SIG(SIGCHLD)
+ #endif
+ #ifdef SIGCONT
+-    [SIGCONT] = "SIGCONT",
++    TJS_SIG(SIGCONT)
+ #endif
+ #ifdef SIGSTOP
+-    [SIGSTOP] = "SIGSTOP",
++    TJS_SIG(SIGSTOP)
+ #endif
+ #ifdef SIGTSTP
+-    [SIGTSTP] = "SIGTSTP",
++    TJS_SIG(SIGTSTP)
+ #endif
+ #ifdef SIGBREAK
+-    [SIGBREAK] = "SIGBREAK",
++    TJS_SIG(SIGBREAK)
+ #endif
+ #ifdef SIGTTIN
+-    [SIGTTIN] = "SIGTTIN",
++    TJS_SIG(SIGTTIN)
+ #endif
+ #ifdef SIGTTOU
+-    [SIGTTOU] = "SIGTTOU",
++    TJS_SIG(SIGTTOU)
+ #endif
+ #ifdef SIGURG
+-    [SIGURG] = "SIGURG",
++    TJS_SIG(SIGURG)
+ #endif
+ #ifdef SIGXCPU
+-    [SIGXCPU] = "SIGXCPU",
++    TJS_SIG(SIGXCPU)
+ #endif
+ #ifdef SIGXFSZ
+-    [SIGXFSZ] = "SIGXFSZ",
++    TJS_SIG(SIGXFSZ)
+ #endif
+ #ifdef SIGVTALRM
+-    [SIGVTALRM] = "SIGVTALRM",
++    TJS_SIG(SIGVTALRM)
+ #endif
+ #ifdef SIGPROF
+-    [SIGPROF] = "SIGPROF",
++    TJS_SIG(SIGPROF)
+ #endif
+ #ifdef SIGWINCH
+-    [SIGWINCH] = "SIGWINCH",
++    TJS_SIG(SIGWINCH)
+ #endif
+ #ifdef SIGPOLL
+-    [SIGPOLL] = "SIGPOLL",
++    TJS_SIG(SIGPOLL)
+ #endif
+ #ifdef SIGLOST
+-    [SIGLOST] = "SIGLOST",
++    TJS_SIG(SIGLOST)
+ #endif
+ #ifdef SIGPWR
+-    [SIGPWR] = "SIGPWR",
++    TJS_SIG(SIGPWR)
+ #endif
+ #ifdef SIGINFO
+-    [SIGINFO] = "SIGINFO",
++    TJS_SIG(SIGINFO)
+ #endif
+ #ifdef SIGSYS
+-    [SIGSYS] = "SIGSYS",
++    TJS_SIG(SIGSYS)
+ #endif
++#ifdef __COSMOPOLITAN__
++}
++#else
+ };
+ 
+ size_t tjs_signal_map_count = ARRAY_SIZE(tjs_signal_map);
++#endif
++#undef TJS_SIG
+ 
+ const char *tjs_getsig(int sig) {
+     if (sig < 0 || sig >= tjs_signal_map_count || !tjs_signal_map[sig]) {
