@@ -304,8 +304,13 @@ errno macros are runtime symbols so the preprocessor reads EDOM as 0 and picks t
 form → every libuv error came back +errno → `uv_fs_open` of a missing file returned +2 (a bogus fd),
 and tjs's module loader spun on `pread(2)→EBADF`. Forced the negating form under __COSMOPOLITAN__.
 (2) **uv_exepath** — `readlink(/proc/self/exe)` is not portable across cosmo's host OSes; use
-Cosmopolitan's `GetProgramExecutableName()`. NEXT: Phase C (TLS — a real HTTPS to the API, mbedtls
-built-in), D (zipos fuse), E (leg + multi-OS CI). Build-cache note: incremental cmake-on-NFS
+Cosmopolitan's `GetProgramExecutableName()`. PHASE C (TLS) — DONE (2026-07-29), zero extra work: HTTPS just works under cosmo. Verified from the
+tjs.com APE: `fetch("https://example.com")` → 200; **`fetch("https://api.anthropic.com/v1/messages")`
+→ 401** (the real target reached securely — 401 = needs a key); and cert verification is genuinely
+ON (`expired.badssl.com` rejected: "server's cert didn't look good, expired"). mbedtls + libwebsockets
+build and run correctly under cosmo, CA bundle resolves. So the engine can already do quaude's secure
+API traffic. NEXT: D (zipos fuse — embed the quaude payload into the APE),
+E (leg + multi-OS CI). Build-cache note: incremental cmake-on-NFS
 under-recompiles (mtime staleness); use `rm -rf build` or Ninja for dev — a non-issue for build-tjs
 (builds clean each run). Below: the earlier build-complete characterization.
 
