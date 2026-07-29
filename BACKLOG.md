@@ -296,7 +296,20 @@ libuv 1.52.2):
   GCC defaults to C23 which hard-errors implicit decls). Errno runtime→UV translation still owed for
   correct error NAMING (not exercised by the timer test).
 
-PHASE B IN PROGRESS (2026-07-29) — the full txiki tree CONFIGURES under the cosmo toolchain and
+PHASE B — the tjs.com APE BUILDS (2026-07-29). The full txiki tree compiles and LINKS under
+Cosmopolitan into a 9.9MB `tjs` Actually Portable Executable that BOOTS (starts running). Every
+BUILD-level cosmo gap is solved, all as clean guarded patches: `patches/libuv-cosmo.patch` (libuv
+port + 4 misc platform funcs uv_exepath/cpu_info/loadavg/uptime) + `patches/libtjs-cosmo.patch`
+(txiki's SIG*-in-static-init fixes) + the cosmo toolchain/compat/prelude + CMAKE_RANLIB=cosmoranlib
+(host ranlib can't index cosmo fat archives). Lean profile (mimalloc/ffi/wasm/sqlite OFF); the tjs
+CMake target is the STATIC LIB (libtjs_core.a), the executable is `tjs-cli`.
+**REMAINING — RUNTIME, not build: `tjs.com eval '…'` HANGS** (boots, process stays alive, no output/
+exit). A cosmo runtime issue — suspect the poll(2) event loop (posix-poll.c under cosmo's poll) not
+returning, or a stdio/uv_write block (cf. the haiku uv_write deadlock class). NEXT: trace where it
+hangs (—debug/strace-equiv, or bisect: does `tjs eval '1'` with no console.log exit? isolate event
+loop vs stdio-write). Then Phase C (TLS), D (fuse), E (leg). Below is the earlier characterization:
+
+PHASE B EARLIER (2026-07-29) — the full txiki tree CONFIGURES under the cosmo toolchain and
 its CORE COMPILES: quickjs, wurl, txiki's C modules, and the patched libuv all build. Landed:
 `scripts/cosmo.toolchain.cmake` (CLODE_COSMOCC, CMAKE_SYSTEM_NAME=Cosmopolitan via
 `scripts/cmake/Platform/Cosmopolitan.cmake`, -std=gnu17/_DEFAULT_SOURCE, -isystem cosmo-compat,
