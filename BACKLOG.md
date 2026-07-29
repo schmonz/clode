@@ -28,9 +28,16 @@ all fine) — the gaps are input/socket-event-delivery:
    trust the incremental archive under cosmocc. PRODUCTIZED ✅: reopen-skip landed in
    `patches/libuv-cosmo.patch` (commit b4f7b41, applies clean to pristine); a from-scratch `build-tjs`
    cosmo run (pristine vendor reset → committed patch, NO osx_select cruft) built a working engine and
-   the clean engine passes the TTY read (`TTY-READ len=1`, strace ttyname_r=0/POLLNVAL=0). REMAINING:
-   re-run the interactive/live-creds fidelity rows (F6 render / D6 resize / G2 live-turn) against cosmo
-   now that TTY input works — they were blocked by this bug. (Superseded osx_select notes below.)
+   the clean engine passes the TTY read (`TTY-READ len=1`, strace ttyname_r=0/POLLNVAL=0). INTERACTIVE FIDELITY VERIFIED ✅
+   (2026-07-29, manual PTY differential): F6 render (welcome box + prompt paint clean, no corruption),
+   D6 resize (reflows narrower, no stale frame), and **G2 live-creds turn (real API streamed "Paris"
+   in the interactive TUI)** all PASS on cosmo — the rows that were blocked by this bug. Driven via the
+   /bin/sh trampoline in tmux (the "human differential oracle") because the automated node-pty harness
+   can't drive the cosmo APE: node `execve` returns ENOEXEC on the MZ APE (the shell only runs it via
+   its ENOEXEC→/bin/sh fallback, and `assimilate -m` does NOT produce a real arm64 Mach-O — it warns and
+   leaves an APE). CI FOLLOW-UP (to gate cosmo interactive automatically): teach the fidelity harness
+   (`test/e2e-pty.cjs` capture + the `version()` checks in `interactive-*.test.cjs`) to detect an APE
+   (MZ magic / ENOEXEC) and spawn it via `/bin/sh -c '"$@"' sh <ape> …`. (Superseded osx_select notes below.)
 
    ~~TTY (interactive) stdin reads never fire — ROOT-CAUSED (macOS-host-specific).~~ The interactive
    TUI can't be driven (trust prompt won't advance on any key). Engine-level differential nails it:
