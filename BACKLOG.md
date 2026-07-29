@@ -11,7 +11,26 @@ surfaced two real cosmo-only divergences (native tjs passes both). Cosmo's args-
 path is SOLID (8/9 offline agentic rows pass; real-creds `-p` returns a live "PONG"; TLS/spawn/fs/render
 all fine) — the gaps are input/socket-event-delivery:
 
-1. **TTY (interactive) stdin reads never fire — ROOT-CAUSED (macOS-host-specific).** The interactive
+1. **TTY (interactive) stdin reads never fire — ROOT-CAUSED + FIXED (2026-07-29).** ✅ Cosmo quaude
+   is now interactively driveable on macOS (trust prompt advances to the main prompt; `ttyread3.js`
+   RED→GREEN: keystroke read len=1 b0=65; end-to-end fused quaude.com verified). **REAL fix (tiny):**
+   in `deps/libuv/src/unix/tty.c` `uv_tty_init`, SKIP the tty reopen under `__COSMOPOLITAN__` — force
+   `r = -1` so libuv's existing "reopen failed → use the original fd" fallback kicks in. Why: cosmo's
+   `ttyname_r(0)` returns the generic `/dev/tty` alias, and reopening it yields a fd that `poll()`
+   immediately POLLNVALs (busy-spin, 1.8M polls, keystrokes never delivered). The ORIGINAL tty fd
+   `poll()`s correctly in raw mode (proven by a standalone cosmo C test: `poll` on raw fd0 → POLLIN;
+   `select` does NOT work, so osx_select was the WRONG approach and is abandoned). After the fix,
+   strace shows ttyname_r=0, POLLNVAL=0, and the keystroke reads. **The multi-hour red herring:**
+   cosmoar's incremental archive NEVER replaced `tty.c.o` inside `libuv.a` — every rebuild compiled a
+   fresh object but LINKED the stale archive, so runtime always ran old code (nm on the object said
+   "fixed", disasm of the final elf said "still reopens"). FIX FOR THE BUILD LOOP: force-clean
+   `deps/libuv/libuv.a` (+ `.aarch64/libuv.a`) before `gmake tjs-cli`, or do a clean build — never
+   trust the incremental archive under cosmocc. REMAINING: (a) productize — strip the abandoned
+   osx_select WIP from the scratchpad working copy, land the reopen-skip in `patches/libuv-cosmo.patch`,
+   verify a clean `build-tjs` run; (b) re-run the interactive/live-creds fidelity rows now that TTY
+   input works. (Superseded osx_select notes below kept for the record.)
+
+   ~~TTY (interactive) stdin reads never fire — ROOT-CAUSED (macOS-host-specific).~~ The interactive
    TUI can't be driven (trust prompt won't advance on any key). Engine-level differential nails it:
    bare cosmo `tjs` reads a **PIPE** stdin fine (`READ len=6`, identical to native) but a **TTY**
    keystroke times out (`setRawMode` succeeds, `uv_read_start` on the tty never fires) — native reads
