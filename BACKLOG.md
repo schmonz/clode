@@ -309,8 +309,15 @@ tjs.com APE: `fetch("https://example.com")` → 200; **`fetch("https://api.anthr
 → 401** (the real target reached securely — 401 = needs a key); and cert verification is genuinely
 ON (`expired.badssl.com` rejected: "server's cert didn't look good, expired"). mbedtls + libwebsockets
 build and run correctly under cosmo, CA bundle resolves. So the engine can already do quaude's secure
-API traffic. NEXT: D (zipos fuse — embed the quaude payload into the APE),
-E (leg + multi-OS CI). Build-cache note: incremental cmake-on-NFS
+API traffic. PHASE D (fuse) — MECHANISM PROVEN COMPATIBLE (2026-07-29), and the zipos-vs-trailer design fork is
+RESOLVED in favor of the EXISTING trailer fuse (no zipos rework). Confirmed on the cosmo tjs.com APE:
+(1) appending a 200KB trailer does NOT break the APE (cosmo's zipos tolerates trailing data — it
+scans backward for its EOCD and skips our trailer); (2) `tjs.exePath` resolves; (3) the APE opens +
+positional-reads its OWN executable tail (the `tx1k1.js` 12-byte trailer read in
+src/js/run-main/index.js works). So fusing quaude = run the EXISTING `libexec/clode-fuse.cjs` with the
+cosmo tjs.com as the template (append [bytecode][TPK payload][tx1k1 trailer]); the APE reads it exactly
+like the native tjs template. NEXT (implementation, overlaps E): materialize a quaude payload + invoke
+clode-fuse with the cosmo APE template → boot quaude.com. Then E (leg + multi-OS CI). Build-cache note: incremental cmake-on-NFS
 under-recompiles (mtime staleness); use `rm -rf build` or Ninja for dev — a non-issue for build-tjs
 (builds clean each run). Below: the earlier build-complete characterization.
 
