@@ -252,22 +252,38 @@ fat x86-64+aarch64 APEs. Pin sha256 `85b8c37a406d862e656ad4ec14be9f6ce474c1b436b
 (cosmocc-4.0.2.zip, 441MB). Slots into the existing `CLODE_TJS_CROSS_FILE` seam (a cosmo CMake
 toolchain file), a `cosmo` target token, the lean profile (wasm/mimalloc/ffi off).
 
-SPIKE PROGRESS (this box, arm64 macOS):
+FEASIBILITY: PROVEN. The two scary unknowns (engine core, errno model) are both resolved; the rest
+is a bounded, well-understood port. Spike (this box, arm64 macOS, cosmocc 4.0.2):
 - ✓ Step 1: cosmocc builds + a `hello.com` APE runs native.
-- ✓ Step 2: **bare QuickJS-ng (quickjs.c+libregexp.c+libunicode.c+dtoa.c) compiles under cosmocc
-  with ZERO source changes** → a 2.7MB `qjs.com` APE that ran and evaluated real JS correctly.
-  The ENGINE CORE is not a blocker.
-- ✓ Crux recon (libuv): cosmo defines `__COSMOPOLITAN__` + `__unix__`, NOT `__linux__`/`__APPLE__`,
-  so libuv's backend #ifdef chain matches NOTHING out of the box — it needs a platform-selection
-  port, not new event-loop code. cosmo HAS `poll.h` (absent: epoll, eventfd; present: a kqueue-ish
-  sys/event.h). So the port = teach libuv "on `__COSMOPOLITAN__` compile `posix-poll.c` + self-pipe
-  wakeup" — the SAME posix-poll backend the paleo-POSIX/Jaguar frontier needs. ONE port, TWO
-  frontiers.
+- ✓ Step 2: **bare QuickJS-ng compiles under cosmocc with ZERO source changes** → a 2.7MB `qjs.com`
+  APE that ran and evaluated real JS. The ENGINE CORE is not a blocker.
+- ✓ THE CRUX (errno) — CRACKED. libuv maps its error enum to system errno (`UV_E2BIG=(-E2BIG)`),
+  but cosmo's errno macros are NOT compile-time constants: they're linker/runtime symbols resolving
+  to the HOST OS's native value (probed: `EAGAIN=35` on macOS = the BSD value, would be 11 on Linux)
+  — the SAME .com yields different errno per host, so they can't be constant. Enum init → "not an
+  integer constant". FIX (proven to clear the blocker): patch libuv's `include/uv/errno.h` guards
+  (`#if defined(E2BIG) && !defined(_WIN32)` → also `&& !defined(__COSMOPOLITAN__)`) to force libuv's
+  FIXED -40xx codes. FOLLOW-UP for correctness: runtime errno→UV translation (like libuv's Windows
+  path), since stored `-errno` (host value) won't equal the fixed UV codes — hot-path retries use raw
+  `errno==EAGAIN` (runtime, fine); only public error NAMING needs the translation.
+- ✓ Remaining libuv work CHARACTERIZED — a bounded source-portability port, "teach libuv that
+  `__COSMOPOLITAN__` is a generic-POSIX + poll platform": (a) cosmo defines `__COSMOPOLITAN__`/
+  `__unix__` (not `__linux__`/`__APPLE__`) and ships `poll.h` (no epoll/eventfd; has a kqueue-ish
+  sys/event.h) → select `posix-poll.c` + self-pipe wakeup [the SAME backend paleo-POSIX/Jaguar
+  needs — one port, two frontiers]; (b) add cosmo to libuv's platform `#ifdef` guards + its
+  header dispatch (`uv/unix.h`) so system headers get included; (c) DROP the GNU-branch feature
+  macros `_POSIX_C_SOURCE=200112`/`_XOPEN_SOURCE=500` — they HIDE `if_nametoindex` et al. in cosmo's
+  headers (cosmo guards them under default/BSD-source); (d) write `cosmo.c` platform file for the
+  hurd.c-class misc funcs (exepath/cpu_info/rss/uptime/loadavg). NB cosmocc HARD-enforces
+  `-Werror=implicit-function-declaration` (no `-w`/`-Wno-*`/`-std` suppresses it) so every missing
+  decl is a real fix. libuv's event-loop hooks are self-contained in `posix-poll.c` already.
 
-NEXT (needs user in the loop — it's the shared posix-poll design decision):
-- Step 3: the libuv `__COSMOPOLITAN__` platform patch (select posix-poll.c, self-pipe wakeup, no
-  epoll/eventfd) → build lean txiki.js → `tjs.com` that runs a timer/PONG on Linux.
-- Step 4: run that same `.com` on Mac+Windows+BSD (the APE portability payoff).
+NEXT — execute as a REVIEWABLE patch series (not overnight scratchpad whack-a-mole), per the user's
+"make it work, revisit design in light of paleo-Unix afterward":
+- Step 3: land the libuv-cosmo patch (errno guards + platform teaching + posix-poll + cosmo.c) in
+  build-tjs's patches/ → a `tjs.com`; TLS is IN-SCOPE (quaude needs HTTPS to the API → mbedtls under
+  cosmo, expected easy per getentropy); wurl + full lean txiki via a cosmo CMake toolchain file.
+- Step 4: run that same `.com` on Linux+Mac+Windows+BSD (the APE portability payoff).
 Design forks for productization: (a) FUSING — APE already uses its tail as a ZIP store (zipos,
 `/zip/…`); our quaude trailer-append collides, so embed quaude's payload in the APE zipos instead;
 (b) TLS scope for v1 (defer mbedtls, ship lean no-TLS first?); (c) mac Gatekeeper on APE (assimilate
