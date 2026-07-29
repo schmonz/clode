@@ -35,9 +35,15 @@ all fine) — the gaps are input/socket-event-delivery:
    /bin/sh trampoline in tmux (the "human differential oracle") because the automated node-pty harness
    can't drive the cosmo APE: node `execve` returns ENOEXEC on the MZ APE (the shell only runs it via
    its ENOEXEC→/bin/sh fallback, and `assimilate -m` does NOT produce a real arm64 Mach-O — it warns and
-   leaves an APE). CI FOLLOW-UP (to gate cosmo interactive automatically): teach the fidelity harness
-   (`test/e2e-pty.cjs` capture + the `version()` checks in `interactive-*.test.cjs`) to detect an APE
-   (MZ magic / ENOEXEC) and spawn it via `/bin/sh -c '"$@"' sh <ape> …`. (Superseded osx_select notes below.)
+   leaves an APE). AUTOMATED HARNESS NOW APE-AWARE ✅ (2026-07-29,
+   72bdcc5): `test/e2e-pty.cjs` gained `apeCmd()` (detects MZ magic → wraps `/bin/sh -c '"$@"' sh <ape> …`);
+   `capture()` applies it centrally and the `version()` checks in interactive-render/-resize/-live-turn use
+   it. Cosmo APE subjects now gate automatically: **F6 render 2/2, D6 resize 2/2, G2 live-turn (real creds)
+   2/2, I1 update-notify 3/3.** Non-APE subjects unchanged (native-tjs F6 still 2/2). RUN RECIPE: build-based
+   rows want `CLODE_TJS=<cosmo APE engine>` (e.g. a from-`build-tjs` cosmo `tjs`) + `CLODE_LIVE_RENDER=1`
+   (+`CLODE_LIVE_ONLINE=1` for G2); update-notify wants `CLODE_QUAUDE=<a fused cosmo quaude.com>`. F3
+   stale-frames still skips — unrelated env precondition (needs a logged-in `/doctor`), not cosmo-specific.
+   (Superseded osx_select notes below.)
 
    ~~TTY (interactive) stdin reads never fire — ROOT-CAUSED (macOS-host-specific).~~ The interactive
    TUI can't be driven (trust prompt won't advance on any key). Engine-level differential nails it:
