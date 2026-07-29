@@ -10,6 +10,27 @@ const { REPO, NODE } = require('./e2e.cjs');
 
 const TUI_SCREEN = path.join(REPO, 'test', 'tui-screen.cjs');
 
+// A Cosmopolitan APE subject (e.g. a cosmo-built quaude) begins with the DOS
+// 'MZ' magic and cannot be execve'd on a POSIX host — the kernel returns
+// ENOEXEC, and only a shell's ENOEXEC fallback runs it. node's spawn/node-pty
+// do NOT do that fallback, so any harness that spawns a built quaude directly
+// (version checks, PTY capture) would fail on cosmo. Detect the MZ magic and run
+// it the way clode-fuse's isApeFile path does: `/bin/sh -c '"$@"' sh <ape> …`.
+// Non-APE binaries (native Claude, naude SEA, native-tjs quaude) are unchanged.
+function isApeFile(bin) {
+  try {
+    const fd = fs.openSync(bin, 'r');
+    const b = Buffer.alloc(2);
+    const n = fs.readSync(fd, b, 0, 2, 0);
+    fs.closeSync(fd);
+    return n === 2 && b[0] === 0x4d && b[1] === 0x5a; // 'MZ'
+  } catch { return false; }
+}
+function apeCmd(cmd) {
+  if (!Array.isArray(cmd) || cmd.length === 0 || !isApeFile(cmd[0])) return cmd;
+  return ['/bin/sh', '-c', '"$@"', 'sh', ...cmd];
+}
+
 // Minimal synthetic ~/.claude.json: past onboarding + the capture cwd pre-trusted, so a
 // fixed-duration no-keystroke capture never blocks on the theme-onboarding or the
 // per-project trust prompt. Keyed by cwd (regenerated per run). If a future Claude Code
@@ -47,11 +68,11 @@ function capture(sbx, opts) {
   for (const rz of opts.resize || []) args.push('--resize', rz);
   if (opts.rows) args.push('--rows', String(opts.rows));
   if (opts.cols) args.push('--cols', String(opts.cols));
-  args.push('--', ...opts.cmd);
+  args.push('--', ...apeCmd(opts.cmd));
   const env = { ...sbx.env, ...(opts.env || {}), TERM: 'xterm-256color' };
   for (const k of ['TMUX', 'TMUX_PANE', 'TERM_PROGRAM', 'NODE_PATH']) delete env[k];
   const r = spawnSync(NODE, [TUI_SCREEN, ...args], { encoding: 'utf8', env, maxBuffer: 8 * 1024 * 1024 });
   return r.stdout || '';
 }
 
-module.exports = { seedClaudeProfile, capture, TUI_SCREEN };
+module.exports = { seedClaudeProfile, capture, apeCmd, TUI_SCREEN };

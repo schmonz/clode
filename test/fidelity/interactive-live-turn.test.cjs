@@ -25,7 +25,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { REPO } = require('../e2e.cjs');
-const { capture } = require('../e2e-pty.cjs');
+const { capture, apeCmd } = require('../e2e-pty.cjs');
 const { tjsPath } = require('../node-shim-helper.cjs');
 
 const ENTRY = path.join(REPO, 'bin', 'clode');
@@ -41,7 +41,8 @@ function nativeClaude() {
   return p && fs.existsSync(p) ? p : null;
 }
 function version(cmd, env) {
-  const r = spawnSync(cmd[0], cmd.slice(1).concat('--version'), { encoding: 'utf8', env });
+  const w = apeCmd(cmd.concat('--version'));
+  const r = spawnSync(w[0], w.slice(1), { encoding: 'utf8', env });
   return ((r.stdout || '') + (r.stderr || '')).split('\n')[0].trim();
 }
 function cleanEnv(extra) { const e = { ...process.env, ...extra }; delete e.NODE_PATH; return e; }
