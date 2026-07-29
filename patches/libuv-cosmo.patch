@@ -592,10 +592,10 @@ index c6ba419..13c462f 100644
  #ifndef NI_MAXHOST
 diff --git a/src/unix/cosmo.c b/src/unix/cosmo.c
 new file mode 100644
-index 0000000..bf5dd59
+index 0000000..4987025
 --- /dev/null
 +++ b/src/unix/cosmo.c
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,100 @@
 +/* Copyright libuv project contributors. All rights reserved.
 + *
 + * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -633,6 +633,8 @@ index 0000000..bf5dd59
 +
 +#include <errno.h>
 +#include <unistd.h>
++#include <string.h>
++#include <cosmo.h>
 +
 +/* Cosmopolitan's libc exports no interface index<->name helpers. Absent an
 + * interface scope, if_nametoindex() reports "no scope" (0), which leaves
@@ -681,11 +683,17 @@ index 0000000..bf5dd59
 +int uv_exepath(char* buffer, size_t* size) {
 +  if (buffer == NULL || size == NULL || *size == 0)
 +    return UV_EINVAL;
-+  ssize_t n = readlink("/proc/self/exe", buffer, *size - 1);
-+  if (n < 0)
-+    return UV__ERR(errno);
++  /* Cosmopolitan resolves the running APE's absolute path per host OS; use it
++   * (readlink("/proc/self/exe") is not portable across cosmo's host OSes). */
++  const char* exe = GetProgramExecutableName();
++  if (exe == NULL || exe[0] == '\0')
++    return UV_ENOENT;
++  size_t n = strlen(exe);
++  if (n >= *size)
++    n = *size - 1;
++  memcpy(buffer, exe, n);
 +  buffer[n] = '\0';
-+  *size = (size_t) n;
++  *size = n;
 +  return 0;
 +}
 diff --git a/src/unix/udp.c b/src/unix/udp.c
