@@ -240,6 +240,39 @@ well-tested, and reasonably fast** as we can possibly make it."
   no epoll/kqueue). The hardware is already reachable via NetBSD/macppc (PPC) + NetBSD/m68k, so
   the fleet covers the boxes without porting the OS. Revisit only if a libuv backend appears.
 
+## Cosmopolitan APE leg — ADDITIVE "one .com everywhere" (spike, 2026-07-28)
+
+One `quaude.com` running native on Linux/macOS/Windows/BSD, x86-64 AND arm64, from one build.
+Upside beyond portability: Cosmopolitan gives `fork()`/`exec()` on Windows → agentic-Bash/
+child_process could match POSIX fidelity where the win32 SEA can't. ADDITIVE beside the tjs legs,
+never a replacement.
+
+Toolchain: cosmocc **4.0.2** (github.com/jart/cosmopolitan), single self-contained zip, produces
+fat x86-64+aarch64 APEs. Pin sha256 `85b8c37a406d862e656ad4ec14be9f6ce474c1b436b9615e91a55208aced3f44`
+(cosmocc-4.0.2.zip, 441MB). Slots into the existing `CLODE_TJS_CROSS_FILE` seam (a cosmo CMake
+toolchain file), a `cosmo` target token, the lean profile (wasm/mimalloc/ffi off).
+
+SPIKE PROGRESS (this box, arm64 macOS):
+- ✓ Step 1: cosmocc builds + a `hello.com` APE runs native.
+- ✓ Step 2: **bare QuickJS-ng (quickjs.c+libregexp.c+libunicode.c+dtoa.c) compiles under cosmocc
+  with ZERO source changes** → a 2.7MB `qjs.com` APE that ran and evaluated real JS correctly.
+  The ENGINE CORE is not a blocker.
+- ✓ Crux recon (libuv): cosmo defines `__COSMOPOLITAN__` + `__unix__`, NOT `__linux__`/`__APPLE__`,
+  so libuv's backend #ifdef chain matches NOTHING out of the box — it needs a platform-selection
+  port, not new event-loop code. cosmo HAS `poll.h` (absent: epoll, eventfd; present: a kqueue-ish
+  sys/event.h). So the port = teach libuv "on `__COSMOPOLITAN__` compile `posix-poll.c` + self-pipe
+  wakeup" — the SAME posix-poll backend the paleo-POSIX/Jaguar frontier needs. ONE port, TWO
+  frontiers.
+
+NEXT (needs user in the loop — it's the shared posix-poll design decision):
+- Step 3: the libuv `__COSMOPOLITAN__` platform patch (select posix-poll.c, self-pipe wakeup, no
+  epoll/eventfd) → build lean txiki.js → `tjs.com` that runs a timer/PONG on Linux.
+- Step 4: run that same `.com` on Mac+Windows+BSD (the APE portability payoff).
+Design forks for productization: (a) FUSING — APE already uses its tail as a ZIP store (zipos,
+`/zip/…`); our quaude trailer-append collides, so embed quaude's payload in the APE zipos instead;
+(b) TLS scope for v1 (defer mbedtls, ship lean no-TLS first?); (c) mac Gatekeeper on APE (assimilate
+or rcodesign ad-hoc); Windows APE runs unsigned. Spike artifacts live in scratchpad (untracked).
+
 ## Phase 3 — still open (render parity + apicheck v1 + upstream-txiki batch)
 
 M1/M2/agentic Bash under tjs SHIPPED; these remain:
