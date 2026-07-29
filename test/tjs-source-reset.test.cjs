@@ -18,6 +18,10 @@ const path = require('node:path');
 
 const git = (dir, ...args) => execFileSync('git', ['-C', dir, ...args], { stdio: 'ignore' });
 const quietRun = (cmd, args) => execFileSync(cmd, args, { stdio: 'ignore' });
+// Read a file with line endings normalized: Git-for-Windows' core.autocrlf
+// smudges LF->CRLF on checkout, so a reverted 'ORIGINAL\n' reads back as
+// 'ORIGINAL\r\n'. The revert still happened — the EOL is irrelevant to it.
+const readLF = (p) => fs.readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
 
 function initRepo(dir) {
   fs.mkdirSync(dir, { recursive: true });
@@ -46,7 +50,7 @@ test('resetCheckoutToPristine: reverts tracked, sweeps untracked, preserves keep
 
     resetCheckoutToPristine(root, { run: quietRun });
 
-    assert.strictEqual(fs.readFileSync(path.join(root, 'tracked.c'), 'utf8'), 'ORIGINAL\n',
+    assert.strictEqual(readLF(path.join(root, 'tracked.c')), 'ORIGINAL\n',
       'tracked edit reverted');
     assert.ok(!fs.existsSync(path.join(root, 'mod_new.c')), 'patch-created src removed');
     assert.ok(!fs.existsSync(path.join(root, 'deps/wurl')), 'patch-created deps/wurl removed');
@@ -91,7 +95,7 @@ test('resetCheckoutToPristine: resets submodule working trees recursively', asyn
 
     resetCheckoutToPristine(main, { run: quietRun });
 
-    assert.strictEqual(fs.readFileSync(path.join(main, 'deps/sub/lib.c'), 'utf8'), 'ORIG\n',
+    assert.strictEqual(readLF(path.join(main, 'deps/sub/lib.c')), 'ORIG\n',
       'submodule tracked edit reverted');
     assert.ok(!fs.existsSync(path.join(main, 'deps/sub/untracked.c')),
       'submodule untracked file removed');
