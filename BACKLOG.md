@@ -316,7 +316,19 @@ scans backward for its EOCD and skips our trailer); (2) `tjs.exePath` resolves; 
 positional-reads its OWN executable tail (the `tx1k1.js` 12-byte trailer read in
 src/js/run-main/index.js works). So fusing quaude = run the EXISTING `libexec/clode-fuse.cjs` with the
 cosmo tjs.com as the template (append [bytecode][TPK payload][tx1k1 trailer]); the APE reads it exactly
-like the native tjs template. PHASE D FUSE WORKS END-TO-END (2026-07-29): `CLODE_TJS=<cosmo-tjs> clode build` produces a 49.6MB
+like the native tjs template. PHASE D DONE — quaude.com does a FULL AGENTIC TURN under Cosmopolitan (2026-07-29). `clode build`
+smoke PASSES: "PONG round-trip ok, attest ok". So the fused 49.6MB `quaude.com` APE is a fully
+working Claude Code single binary: boots, runs the CLI, TLS to the API, AND completes a full agentic
+turn (prompt → API → streaming response → output → sha attest). The last runtime bug was the
+agentic-turn SIGABRT (bfb6299): a threadpool worker's futex(FUTEX_WAIT) returned EINTR when SIGCHLD
+(a spawned child, e.g. `rg`, exiting) interrupted it, and libuv's uv_cond_wait/timedwait abort() on
+any non-zero pthread return (POSIX swallows EINTR; cosmo surfaces it) → spawning any child that exits
+aborted quaude. Fixed by retrying on EINTR. THREE genuine latent libuv bugs found+fixed this arc, all
+upstreamable: UV__ERR sign (#if EDOM>0), uv_exepath (GetProgramExecutableName), uv_cond_wait EINTR.
+NEXT: Phase E — wire the `cosmo` target into build-tjs.mjs + tjs-legs.mjs + multi-OS CI (run the SAME
+.com on Linux/mac/Windows/BSD); the fuse's APE-spawn (clode-fuse MZ→/bin/sh) is done.
+
+PHASE D FUSE WORKS END-TO-END (2026-07-29): `CLODE_TJS=<cosmo-tjs> clode build` produces a 49.6MB
 `quaude.com` APE (cosmo engine + full quaude payload: Claude bundle + node-shim + bytecode) that
 BOOTS and runs Claude Code — `--version` → 2.1.218, `--help` prints the full CLI. Fix shipped
 (90d59d4, clode-fuse.cjs): the fuse spawns the template engine (to append the payload) and
