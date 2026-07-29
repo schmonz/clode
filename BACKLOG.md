@@ -63,24 +63,21 @@ Principle (user, 2026-07-25): "cross-build a zillion clodes and quaudes and they
 can't be tromping on each other." On a shared NFS tree, EVERY build output AND
 every build WORKING dir must be platform-unique (or per-invocation isolated), so
 concurrent/cross builds never corrupt each other. Existence-only gates then can't
-mistake a foreign-platform artifact for a local one. (`build/tjs/tjs` output → per-target
-`build/tjs/<osToken>-<arch>/tjs` is done; the cmake build dir → out-of-tree per-target
-`<outDir>/build` is in flight this session.)
+mistake a foreign-platform artifact for a local one. (DONE: `build/tjs/tjs` output → per-target
+`build/tjs/<osToken>-<arch>/tjs`; the cmake build dir → out-of-tree per-target `<outDir>/build`;
+and build-tjs is now REENTRANT — ensureCheckout resets the vendored source to a pristine pin
+before applyPatches, so a killed/failed build can't poison the next, via
+`scripts/tjs-source-reset.mjs` + `test/tjs-source-reset.test.cjs`. That reset also sweeps the
+NFS AppleDouble `._*` turds that were making `git clean` exit non-zero mid-sweep.)
 
-STILL OPEN — the shared txiki SOURCE:
-- `spike/quickjs/vendor/txiki.js` is a SHARED checkout that build-tjs.mjs patches IN-PLACE.
-  The compile no longer contends (out-of-tree build dir), but the one-time source PATCH is
-  still a shared mutation. **FRAGILITY FINDING (2026-07-25):** the patch set is order- AND
-  context-fragile (several patches diff against a partially-patched tree + lean on
-  addedLinesPresent), so `git checkout -- . && git clean -fd src/` does NOT reproduce a
-  fresh clone. So concurrent independent patching needs each build's source COPIED FROM
-  PRISTINE (`git clone --local` at the pin, or a `git worktree`), never a reset of an
-  already-patched tree. **KEY FINDING:** `applyPatches` is ONE unconditional patch list
-  (platform-independent), so a per-platform source COPY is only needed for CONCURRENT
-  patching, not for the build itself. Guard the one-time patch (lock or idempotent) for now;
-  give each builder a worktree if concurrent independent patching is ever needed.
-- Also: `spike/quickjs/vendor/` collects cross-platform console logs + AppleDouble `._*` NFS
-  turds — sweep them.
+STILL OPEN — true CONCURRENT-build isolation of the shared txiki SOURCE:
+- Reentrancy (sequential self-heal) is shipped, but the reset-before-patch still mutates the
+  ONE shared `spike/quickjs/vendor/txiki.js` checkout, so two builds running AT THE SAME TIME
+  on this box still race on it. `applyPatches` is one unconditional, platform-independent patch
+  list, so per-target source copies are needed ONLY for concurrent patching, not for the build
+  itself. When concurrent local builds are actually exercised, give each build its own source
+  via `git worktree`/`git clone --local` at the pin under `<outDir>`, keyed like the build dir.
+  (CI legs already each run on a fresh checkout, so CI isn't exposed; this is a local-dev axis.)
 - **Build-system rethink goal (user):** take the next step toward FULL CROSS BUILDS — build
   any target from any host. Generalize the host≠target split (CLODE_TJS_OUT/cross-file/
   CLODE_TARGET_*): platform keys become TARGET keys (token/arch injectable; tjsDir/tjsBin
@@ -90,6 +87,27 @@ STILL OPEN — the shared txiki SOURCE:
 
 Sweep needed: audit ALL of build/ and any in-tree scratch (spike/, .matrix/) for un-keyed
 working dirs and apply the principle. platform-tag.cjs is the single source of truth for the keys.
+
+AppleDouble `._*` root cause + the mount fix (2026-07-28): the turds are NOT files that need
+xattrs — recent macOS (13+) auto-stamps `com.apple.provenance` on every file it writes (git
+checkout, build copies, even `touch`), and the tree's NFSv3 mount (`ap-juicer:/export/code/trees`)
+has nowhere to store an xattr inline, so each stamped file spawns a `._<file>` sidecar. PROVEN the
+copy-tool levers can't stop it: `cp -X` AND `ditto --noextattr --norsrc` STILL made sidecars —
+the kernel re-stamps provenance at create time, so it isn't copied, it's re-added (COPYFILE_DISABLE
+is likewise futile). The only durable "never happens" fix is STORAGE-side: give the volume native
+xattr storage. Plan: keep Mavericks/NetBSD/Linux on **NFSv3** (none of them generate AppleDouble —
+provenance is macOS-13+, and non-macOS clients never write `._*`), mount ONLY the recent-macOS box
+**NFSv4 with named attributes** — recent macOS is the sole generator, so stopping it there stops the
+whole shared tree. CONTINGENT on verifying macOS-over-NFSv4 actually maps xattrs to native named
+attributes rather than STILL writing AppleDouble (its NFSv4 support is historically partial): 30-sec
+test on a v4 mount — `touch probe.c; ls ._probe.c` (sidecar present = v4 didn't help; absent with
+`xattr -l probe.c` showing provenance = native storage, win). Server prereqs: NFSv4 named-attr
+export + xattr-capable backing FS. One-time `find <tree> -name '._*' -delete` clears the residue.
+User's read (2026-07-28): this NFS friction is probably a nudge to **replace NFS with Syncthing** —
+peer-to-peer sync per host, no shared-mount xattr-fallback problem at all (each box has a real local
+FS). If Syncthing lands, this whole AppleDouble class evaporates and the reset's `._*` sweep becomes
+vestigial. Meanwhile the build is already robust to the turds (the reset sweeps them), so this is an
+infra-hygiene task, not a correctness one.
 
 ## node-pty won't build on NetBSD — make it available, don't silent-skip (2026-07-25)
 
@@ -207,11 +225,17 @@ well-tested, and reasonably fast** as we can possibly make it."
     `crt0.o` standalone. Worth finishing — it speeds EVERY NetBSD leg, and there's no blessed
     `build.sh sysroot` op, so a working recipe is a plausible upstream feature. Finish csu, then
     converge the other NetBSD legs onto light.
-- **Paleo-POSIX host (macOS floor-walk) — CHOSEN FRONTIER (user, 2026-07-28).** Build the
-  select/fork event-loop backend for pre-kqueue/pre-epoll systems: walk the darwin floor older
-  (Tiger 10.4 proven → Jaguar 10.2; kqueue is the 10.3 cliff). KEYSTONE — the same select/fork
-  host later unlocks A/UX, IRIX, and old-everything from one mechanism. (Design pending —
-  brainstorm the libuv select-backend scope + a Jaguar test rig.)
+- **Paleo-POSIX host (macOS floor-walk) — HELD until Tiger is solid (user, 2026-07-28).**
+  Walk the darwin floor older (Tiger 10.4 proven → Jaguar 10.2; kqueue is the 10.3 cliff) so the
+  event loop runs on pre-kqueue systems. KEYSTONE — the same backend later unlocks A/UX, IRIX,
+  and old-everything from one mechanism. Decision (user): do NOT reach down to Jaguar until the
+  current floor (Tiger) is trustworthy — reaching below a shaky floor multiplies risk. **Scoping
+  insight (2026-07-28):** it is NOT "write a select backend from scratch" — our vendored libuv
+  already ships `deps/libuv/src/unix/posix-poll.c` (a `poll(2)`-based `uv__io_poll`, used by
+  AIX/generic-POSIX). So the real work is: compile libuv against `posix-poll.c` instead of
+  `kqueue.c` for the pre-kqueue Darwin target, and determine whether old-Darwin `poll(2)` is
+  reliable (it was historically buggy on pipes/ttys — the reason libuv prefers kqueue on Apple);
+  if poll can't drive the loop, fall back to `select()` under it. Resume once Tiger is solid.
 - **MorphOS** (PowerPC AmigaOS-family) — tier-3, needs a libuv port (non-POSIX Amiga exec API,
   no epoll/kqueue). The hardware is already reachable via NetBSD/macppc (PPC) + NetBSD/m68k, so
   the fleet covers the boxes without porting the OS. Revisit only if a libuv backend appears.
