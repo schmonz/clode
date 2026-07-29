@@ -316,8 +316,18 @@ scans backward for its EOCD and skips our trailer); (2) `tjs.exePath` resolves; 
 positional-reads its OWN executable tail (the `tx1k1.js` 12-byte trailer read in
 src/js/run-main/index.js works). So fusing quaude = run the EXISTING `libexec/clode-fuse.cjs` with the
 cosmo tjs.com as the template (append [bytecode][TPK payload][tx1k1 trailer]); the APE reads it exactly
-like the native tjs template. NEXT (implementation, overlaps E): materialize a quaude payload + invoke
-clode-fuse with the cosmo APE template → boot quaude.com. Then E (leg + multi-OS CI). Build-cache note: incremental cmake-on-NFS
+like the native tjs template. PHASE D FUSE WORKS END-TO-END (2026-07-29): `CLODE_TJS=<cosmo-tjs> clode build` produces a 49.6MB
+`quaude.com` APE (cosmo engine + full quaude payload: Claude bundle + node-shim + bytecode) that
+BOOTS and runs Claude Code — `--version` → 2.1.218, `--help` prints the full CLI. Fix shipped
+(90d59d4, clode-fuse.cjs): the fuse spawns the template engine (to append the payload) and
+smoke-tests the result by spawning it; an APE begins with the DOS 'MZ' header so execve rejects it
+(ENOEXEC) on non-Windows hosts — detect MZ-magic templates and spawn via /bin/sh (ENOEXEC→script
+fallback). REMAINING — RUNTIME: the full mock AGENTIC round-trip SIGABRTs (smoke: "did not complete
+the mock round-trip", SIGABRT, empty stdout/stderr) — an abort() in a deeper node-shim path under
+cosmo exercised by real agent execution (streaming/tool-use/fs), same CLASS as the boot hang. CLI
+paths (--version/--help) and basic -p don't crash. NEXT: reproduce with the mock (startPongMock) +
+--debug-to-stderr to find the aborting op, likely another cosmo libc/errno/syscall gap. Then E
+(wire the cosmo leg into build-tjs.mjs + tjs-legs.mjs + multi-OS CI). Build-cache note: incremental cmake-on-NFS
 under-recompiles (mtime staleness); use `rm -rf build` or Ninja for dev — a non-issue for build-tjs
 (builds clean each run). Below: the earlier build-complete characterization.
 
