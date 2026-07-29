@@ -325,8 +325,26 @@ agentic-turn SIGABRT (bfb6299): a threadpool worker's futex(FUTEX_WAIT) returned
 any non-zero pthread return (POSIX swallows EINTR; cosmo surfaces it) → spawning any child that exits
 aborted quaude. Fixed by retrying on EINTR. THREE genuine latent libuv bugs found+fixed this arc, all
 upstreamable: UV__ERR sign (#if EDOM>0), uv_exepath (GetProgramExecutableName), uv_cond_wait EINTR.
-NEXT: Phase E — wire the `cosmo` target into build-tjs.mjs + tjs-legs.mjs + multi-OS CI (run the SAME
-.com on Linux/mac/Windows/BSD); the fuse's APE-spawn (clode-fuse MZ→/bin/sh) is done.
+SELF-MODIFICATION CHECK (2026-07-29): cosmocc 4.0.2 APEs do NOT auto-assimilate — VERIFIED our
+quaude.com is byte-identical (same sha256) before/after a run, APE header + tx1k1 trailer intact. So
+the shipped binary stays a pristine portable APE (runs on every host after any run) and the fuse
+trailer/attest are stable. (Old APEs self-modified their header on first run; cosmocc 4.x makes
+assimilation explicit — `--assimilate` only.)
+
+NEXT — two threads:
+- FIDELITY (catch remaining runtime diffs): the core agentic turn passes, but the debug run surfaced
+  child_process/spawn divergences under cosmo — `spawn rg` error surfaced as `-78` (should be
+  ENOENT/-2 — an errno→UV code/naming gap, the translation still owed), and a spawned hook's stdout
+  was `null` (`cannot read property 'setEncoding' of null` — spawn stream setup). Bash tool / hooks /
+  rg-search all ride child_process, so these matter. Run the test/fidelity/ suite (agentic-tools,
+  agentic-subagent-diff, agentic-workflow-complete) with CLODE_PROVIDER_BIN=naude vs the cosmo quaude
+  to enumerate diffs; likely more libuv-process / node-shim-spawn cosmo gaps to fix.
+- PHASE E (wire the leg): build-tjs.mjs cosmo target = apply patches/libuv-cosmo.patch +
+  patches/libtjs-cosmo.patch + CLODE_TJS_CROSS_FILE=scripts/cosmo.toolchain.cmake + force lean
+  (mimalloc/ffi/wasm/sqlite OFF) + build target `tjs-cli` + chmod +x on cosmoranlib; provision
+  cosmocc 4.0.2 (pin sha 85b8c37a…); add a cosmo leg to scripts/tjs-legs.mjs + multi-OS CI (run the
+  SAME .com on Linux/mac/Windows/BSD). Do this AFTER fidelity so it codifies the final patch set.
+  Fuse APE-spawn (clode-fuse MZ→/bin/sh) already done.
 
 PHASE D FUSE WORKS END-TO-END (2026-07-29): `CLODE_TJS=<cosmo-tjs> clode build` produces a 49.6MB
 `quaude.com` APE (cosmo engine + full quaude payload: Claude bundle + node-shim + bytecode) that
