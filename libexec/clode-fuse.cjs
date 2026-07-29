@@ -612,9 +612,27 @@ function codesignAdHoc(file, opts = {}) {
 // actively false "exit 0". Both sent a real investigation after a phantom
 // (haiku-x64, 2026-07-17). timedOut/signal cost nothing and are the difference
 // between a diagnosis and a hunt.
+// A Cosmopolitan APE template/quaude begins with the DOS 'MZ' header, not a
+// Mach-O/ELF magic, so on a non-Windows host execve rejects it (ENOEXEC) — an
+// APE runs only via a shell, whose ENOEXEC fallback interprets the APE's own
+// shell header and re-execs it properly. Detect and route those through /bin/sh.
+function isApeFile(p) {
+  try {
+    const fd = fs.openSync(p, 'r');
+    try { const b = Buffer.alloc(2); fs.readSync(fd, b, 0, 2, 0); return b[0] === 0x4d && b[1] === 0x5a; }
+    finally { fs.closeSync(fd); }
+  } catch { return false; }
+}
+
 function run(cmd, args, opts = {}) {
   return new Promise((ok) => {
-    const child = spawn(cmd, args, {
+    let spawnCmd = cmd, spawnArgs = args;
+    if (process.platform !== 'win32' && isApeFile(cmd)) {
+      // `sh -c '"$@"' sh <ape> <args...>` runs the APE (execve->ENOEXEC->script).
+      spawnCmd = '/bin/sh';
+      spawnArgs = ['-c', '"$@"', 'sh', cmd, ...args];
+    }
+    const child = spawn(spawnCmd, spawnArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: opts.env, cwd: opts.cwd,
     });
