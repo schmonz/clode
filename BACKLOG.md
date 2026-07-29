@@ -26,6 +26,25 @@ all fine) — the gaps are input/socket-event-delivery:
    the Tiger fixup). Multi-site `#if __APPLE__ → || __COSMOPOLITAN__` patch + cross-host care; feasible
    via fast incremental rebuild (cosmo build tree persists). RED test: the `ttyread3.js` engine-level
    tty differential (cosmo TIMEOUT vs native READ).
+   ROOT CAUSE PROVEN (2026-07-29) via cosmo `--strace`: `ppoll({...,{9,POLLIN,[POLLNVAL]}},...)→1` on
+   EVERY poll — **cosmo's poll()/ppoll() returns POLLNVAL for the macOS tty fd** (the classic macOS
+   "ttys/char-devices aren't pollable via poll()" limitation — the exact reason libuv uses kqueue+select
+   on Apple). So the poll-based io loop never sees the tty readable → keystrokes never delivered. strace
+   also shows the tty reopen `openat("/dev/tty",O_RDWR|O_NOCTTY)→9 ENOTTY` and `socketpair`=0, so the
+   osx_select select()-thread (the CORRECT fix — select() DOES work on macOS ttys) never engaged.
+   TOOLING (reusable, KEY): cosmo APEs support `--strace` (syscalls+returns) and `--ftrace` (function
+   calls), symbolized via the `tjs.com.dbg`/`tjs.*.elf` sidecars next to the engine. This is THE way to
+   debug the cosmo APE — C `fprintf`/`write(2)`/`open()`-probes all produce NO output (tjs redirects fd2;
+   probe writes vanish), so DON'T instrument with prints; use --strace/--ftrace. `__COSMOPOLITAN__` IS a
+   predefined macro (`cosmocc -dM -E`), confirmed effective (a `#error` inside the tty.c cosmo `#if`
+   fired). Fast incremental rebuild: rm the target .o + `gmake tjs-cli` in the persisted build tree.
+   REMAINING FIX WORK: make the osx_select select()-thread actually ENGAGE for the cosmo tty —
+   `uv__stream_try_select` isn't wiring up the socketpair/thread (fd 9 is polled directly, POLLNVAL).
+   Likely the `/dev/tty` reopen→ENOTTY makes the reopened fd's `isatty` gate fail (my cosmo branch bails
+   `if(!isatty(*fd)) return 0`), OR skip the reopen under cosmo. Also verify select() works on the fd
+   that poll POLLNVALs (it should on macOS — that's osx_select's premise). WIP osx_select port
+   (compiles, doesn't yet engage) lives in the scratchpad cosmo-vendor working copy; repo untouched.
+
    FIX ATTEMPT 1 (2026-07-29, INCONCLUSIVE — observability wall): ported the osx_select select()-thread
    path to `__COSMOPOLITAN__` (guards in stream.c/tty.c/internal.h + `select` field via
    `UV_STREAM_PRIVATE_PLATFORM_FIELDS` in cosmo.h + kqueue-probe bypass since cosmo's sys/event.h is a
