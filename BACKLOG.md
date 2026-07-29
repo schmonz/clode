@@ -4,6 +4,32 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 (Strategic feasibility risks live in `LONG-TERM.md`; in-flight designs in
 `docs/superpowers/`. Done items are DELETED from here — git history is the record.)
 
+## Cosmo APE fidelity gaps — posix-poll fd-event delivery (2026-07-29)
+
+Full fidelity run of a FRESH cosmo quaude (fused from the committed Phase-E leg) on the dev host
+surfaced two real cosmo-only divergences (native tjs passes both). Cosmo's args-driven/`-p` agentic
+path is SOLID (8/9 offline agentic rows pass; real-creds `-p` returns a live "PONG"; TLS/spawn/fs/render
+all fine) — the gaps are input/socket-event-delivery:
+
+1. **stdin / fd-0 reads never fire.** The interactive TUI cannot be driven: the trust prompt does not
+   advance on Enter/arrows/chars, and piped stdin is dropped too ("no stdin data received in 3s" with
+   `echo x | quaude.com -p …`). The process is foreground + owns the controlling tty + renders cleanly
+   (output OK) + stderr clean — it just never gets read events on fd 0. So interactive-on-macOS
+   (trust, live turn, any keypress) is unusable; agentic-via-args is unaffected. Blocks the G2
+   requires-creds interactive live-turn on cosmo.
+2. **MCP-over-WebSocket client never connects** (`agentic-mcp-ws.test.cjs`: native ✔ 22s, cosmo ✖
+   "MCP server never got initialize — ws transport failed to connect, seen=[]"). Remote Control's ws
+   is likely the same. Note the API HTTPS socket DOES work (PONG), so it's specific to this
+   connect/localhost-ws path, not all sockets.
+
+Likely COMMON ROOT: libuv-cosmo uses `posix-poll.c` (generic poll backend + self-pipe wakeup); poll()
+event delivery is incomplete for these fd classes (tty/pipe POLLIN on fd 0; the ws client
+connect-completion) while connected-API-socket I/O works. One posix-poll fix probably closes both.
+Investigate `src/unix/posix-poll.c` fd registration/event mapping under `__COSMOPOLITAN__` +
+how tjs's tty/stream handles register on fd 0. Cosmo leg is additive/soft-fail so this does NOT block
+the leg, but it bounds cosmo to non-interactive/agentic use until fixed. See memory
+`cosmo-libc-additive-leg`.
+
 ## TRIAGED — Tiger/PPC double-Ctrl-C "wedge" is FAITHFUL, not a bug (2026-07-29)
 
 Filed here so it is NOT re-chased. On slow-DNS boxes (Tiger/PPC VM), the TUI's double-Ctrl-C
