@@ -11,24 +11,41 @@ surfaced two real cosmo-only divergences (native tjs passes both). Cosmo's args-
 path is SOLID (8/9 offline agentic rows pass; real-creds `-p` returns a live "PONG"; TLS/spawn/fs/render
 all fine) — the gaps are input/socket-event-delivery:
 
-1. **stdin / fd-0 reads never fire.** The interactive TUI cannot be driven: the trust prompt does not
-   advance on Enter/arrows/chars, and piped stdin is dropped too ("no stdin data received in 3s" with
-   `echo x | quaude.com -p …`). The process is foreground + owns the controlling tty + renders cleanly
-   (output OK) + stderr clean — it just never gets read events on fd 0. So interactive-on-macOS
-   (trust, live turn, any keypress) is unusable; agentic-via-args is unaffected. Blocks the G2
-   requires-creds interactive live-turn on cosmo.
+1. **TTY (interactive) stdin reads never fire — ROOT-CAUSED (macOS-host-specific).** The interactive
+   TUI can't be driven (trust prompt won't advance on any key). Engine-level differential nails it:
+   bare cosmo `tjs` reads a **PIPE** stdin fine (`READ len=6`, identical to native) but a **TTY**
+   keystroke times out (`setRawMode` succeeds, `uv_read_start` on the tty never fires) — native reads
+   it. Cause: libuv's macOS tty workaround `uv__stream_osx_select` (a per-tty `select()` thread feeding
+   a socketpair the main loop can watch; `deps/libuv/src/unix/stream.c:145-405`, chosen at
+   `tty.c:219`) is ALL `#if defined(__APPLE__)`. macOS's kqueue/poll can't reliably watch tty fds —
+   that's WHY the workaround exists (there's even a CLODE Tiger fixup at stream.c:315 forcing select
+   for ttys). **Cosmo doesn't define `__APPLE__`**, so it isn't compiled → cosmo reads ttys via generic
+   `poll()`, which on a macOS host doesn't deliver tty read events. **macOS-HOST-SPECIFIC**: cosmo on
+   Linux/BSD uses poll on ttys (works there), so cosmo interactive likely works off-mac. FIX = port the
+   osx_select select()-thread path to `__COSMOPOLITAN__` (force it for ttys, skip the kqueue probe like
+   the Tiger fixup). Multi-site `#if __APPLE__ → || __COSMOPOLITAN__` patch + cross-host care; feasible
+   via fast incremental rebuild (cosmo build tree persists). RED test: the `ttyread3.js` engine-level
+   tty differential (cosmo TIMEOUT vs native READ).
+   FIX ATTEMPT 1 (2026-07-29, INCONCLUSIVE — observability wall): ported the osx_select select()-thread
+   path to `__COSMOPOLITAN__` (guards in stream.c/tty.c/internal.h + `select` field via
+   `UV_STREAM_PRIVATE_PLATFORM_FIELDS` in cosmo.h + kqueue-probe bypass since cosmo's sys/event.h is a
+   stub). COMPILES + links (fast incremental: edit `$SP/cosmo-vendor` libuv → `gmake tjs-cli` in
+   `$SP/cosmo-out/build`, cosmocc on PATH). Read STILL times out, and I could NOT verify why: stdin is
+   `type=tty`/`isTerminal=true`, yet NO C probe fires — not fprintf(stderr), not write(2), not even an
+   absolute-path open()+write at a GUARANTEED-hit point (`uv_guess_handle`). JS console.error + tjs
+   writeFileSync reach disk; ALL C-level output vanishes on the stripped mac cosmo APE. So EITHER tjs's
+   stdin bypasses `uv_tty_init` (osx_select port = wrong layer) OR C observability is broken on the mac
+   APE. NEXT: use real tooling (lldb on a debug-symbol cosmo build, or a NON-APE mac cosmo-libuv build) —
+   blind file-probes don't work here; a Linux cosmo build won't reproduce (mac-host-only bug). Repo is
+   UNTOUCHED (all WIP in the ephemeral scratchpad working copy).
 2. **MCP-over-WebSocket client never connects** (`agentic-mcp-ws.test.cjs`: native ✔ 22s, cosmo ✖
-   "MCP server never got initialize — ws transport failed to connect, seen=[]"). Remote Control's ws
-   is likely the same. Note the API HTTPS socket DOES work (PONG), so it's specific to this
-   connect/localhost-ws path, not all sockets.
+   "MCP server never got initialize — ws transport failed to connect, seen=[]"). SEPARATE from #1 (ws
+   is a socket, not a tty; the API HTTPS socket works → not all sockets). Localhost-ws connect path;
+   investigate separately (lws under cosmo / connect-completion). Not yet root-caused.
 
-Likely COMMON ROOT: libuv-cosmo uses `posix-poll.c` (generic poll backend + self-pipe wakeup); poll()
-event delivery is incomplete for these fd classes (tty/pipe POLLIN on fd 0; the ws client
-connect-completion) while connected-API-socket I/O works. One posix-poll fix probably closes both.
-Investigate `src/unix/posix-poll.c` fd registration/event mapping under `__COSMOPOLITAN__` +
-how tjs's tty/stream handles register on fd 0. Cosmo leg is additive/soft-fail so this does NOT block
-the leg, but it bounds cosmo to non-interactive/agentic use until fixed. See memory
-`cosmo-libc-additive-leg`.
+Cosmo's args-driven/`-p` agentic path is SOLID (8/9 offline rows; real-creds `-p` returns live PONG;
+TLS/spawn/fs/render fine) — these gaps bound cosmo to non-interactive/agentic on macOS. Additive
+soft-fail leg, so NOT a leg blocker. See memory `cosmo-libc-additive-leg`.
 
 ## TRIAGED — Tiger/PPC double-Ctrl-C "wedge" is FAITHFUL, not a bug (2026-07-29)
 
