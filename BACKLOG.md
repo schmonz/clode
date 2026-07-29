@@ -278,12 +278,31 @@ is a bounded, well-understood port. Spike (this box, arm64 macOS, cosmocc 4.0.2)
   `-Werror=implicit-function-declaration` (no `-w`/`-Wno-*`/`-std` suppresses it) so every missing
   decl is a real fix. libuv's event-loop hooks are self-contained in `posix-poll.c` already.
 
-NEXT — execute as a REVIEWABLE patch series (not overnight scratchpad whack-a-mole), per the user's
-"make it work, revisit design in light of paleo-Unix afterward":
-- Step 3: land the libuv-cosmo patch (errno guards + platform teaching + posix-poll + cosmo.c) in
-  build-tjs's patches/ → a `tjs.com`; TLS is IN-SCOPE (quaude needs HTTPS to the API → mbedtls under
-  cosmo, expected easy per getentropy); wurl + full lean txiki via a cosmo CMake toolchain file.
-- Step 4: run that same `.com` on Linux+Mac+Windows+BSD (the APE portability payoff).
+PHASE A DONE (2026-07-29) — **libuv's event loop RUNS under Cosmopolitan as an APE** (timer test:
+3 ticks, uv_run returned 0). A working libuv-on-Cosmopolitan port, which did not exist publicly.
+Clean, upstreamable patch (scratchpad `patches-wip/libuv-cosmo.patch`, 637 lines, 5 files, all
+`#ifdef __COSMOPOLITAN__`-guarded → behavior-neutral for other targets, applies clean to pristine
+libuv 1.52.2):
+- `include/uv/errno.h`: guards force libuv's fixed -40xx codes under `__COSMOPOLITAN__` (like _WIN32).
+- `include/uv/unix.h`: dispatch cosmo → new `include/uv/cosmo.h`.
+- `include/uv/cosmo.h` (NEW): `#include "uv/posix.h"` (poll(2) loop fields) + declares the interface
+  helpers cosmo's libc lacks.
+- `src/unix/cosmo.c` (NEW): `if_nametoindex`/`if_indextoname` (documented stubs — no interface scope;
+  quaude's global-DNS path never uses them) + `uv_interface_addresses` (empty; no getifaddrs on cosmo).
+- `src/unix/udp.c`: add `__COSMOPOLITAN__` to the two existing source-specific-multicast guards
+  (SSM absent on cosmo → ENOSYS, like OpenBSD/NetBSD). Source set = generic-POSIX + posix-poll.c
+  (drop bsd-ifaddrs.c → cosmo.c); build defines `_GNU_SOURCE _DEFAULT_SOURCE` (NOT the strict
+  `_POSIX_C_SOURCE`/`_XOPEN_SOURCE` which hide cosmo's default-source decls); `-std=gnu17` (cosmocc's
+  GCC defaults to C23 which hard-errors implicit decls). Errno runtime→UV translation still owed for
+  correct error NAMING (not exercised by the timer test).
+
+NEXT:
+- Phase B: full lean txiki.js under cosmo via a `scripts/cosmo.toolchain.cmake` (+ a txiki CMake
+  cosmo branch selecting the ported libuv source set) → a `tjs.com` that boots + runs event-loop JS.
+- Phase C: TLS (mbedtls under cosmo — quaude needs HTTPS to the API; expected easy per getentropy).
+- Phase D: zipos-fuse the quaude payload into the APE (/zip/).
+- Phase E: wire the cosmo target into build-tjs.mjs + scripts/tjs-legs.mjs; multi-OS CI
+  (Linux+Mac+Windows+BSD run the SAME .com); land the libuv-cosmo patch in patches/ once end-to-end.
 Design forks for productization: (a) FUSING — APE already uses its tail as a ZIP store (zipos,
 `/zip/…`); our quaude trailer-append collides, so embed quaude's payload in the APE zipos instead;
 (b) TLS scope for v1 (defer mbedtls, ship lean no-TLS first?); (c) mac Gatekeeper on APE (assimilate
