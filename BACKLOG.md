@@ -296,9 +296,19 @@ libuv 1.52.2):
   GCC defaults to C23 which hard-errors implicit decls). Errno runtime→UV translation still owed for
   correct error NAMING (not exercised by the timer test).
 
-NEXT:
-- Phase B: full lean txiki.js under cosmo via a `scripts/cosmo.toolchain.cmake` (+ a txiki CMake
-  cosmo branch selecting the ported libuv source set) → a `tjs.com` that boots + runs event-loop JS.
+PHASE B IN PROGRESS (2026-07-29) — the full txiki tree CONFIGURES under the cosmo toolchain and
+its CORE COMPILES: quickjs, wurl, txiki's C modules, and the patched libuv all build. Landed:
+`scripts/cosmo.toolchain.cmake` (CLODE_COSMOCC, CMAKE_SYSTEM_NAME=Cosmopolitan via
+`scripts/cmake/Platform/Cosmopolitan.cmake`, -std=gnu17/_DEFAULT_SOURCE, -isystem cosmo-compat,
+force-included prelude, -Wno-error demotions) + `scripts/cosmo-compat/` (sys/syslog.h, net/route.h
+aliases cosmo omits; cosmo-prelude.h = u_int, SO_PRIORITY, if_* decls). libuv patch has the CMake
+Cosmopolitan source-selection branch. Build via: `--source-only` then apply patches/libuv-cosmo.patch
+to deps/libuv, then cmake with the toolchain (-DBUILD_WITH_MIMALLOC/FFI/WASM/SQLITE=OFF, target tjs).
+REMAINING for a `tjs.com` (a `patches/txiki-cosmo.patch`): txiki's OWN "constants aren't constant
+under cosmo" spots — static arrays indexed by SIG* (src/utils.c `tjs_signal_map`; also signals.c
+"modding const structs", mod_os.c, mod_posix-socket.c) must be built at RUNTIME, exactly the class
+of the libuv errno fix. Then re-check the libwebsockets tail (SO_PRIORITY handled by the prelude;
+watch for more). Then link → run the tjs.com APE.
 - Phase C: TLS (mbedtls under cosmo — quaude needs HTTPS to the API; expected easy per getentropy).
 - Phase D: zipos-fuse the quaude payload into the APE (/zip/).
 - Phase E: wire the cosmo target into build-tjs.mjs + scripts/tjs-legs.mjs; multi-OS CI
