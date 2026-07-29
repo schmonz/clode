@@ -592,10 +592,10 @@ index c6ba419..13c462f 100644
  #ifndef NI_MAXHOST
 diff --git a/src/unix/cosmo.c b/src/unix/cosmo.c
 new file mode 100644
-index 0000000..4987025
+index 0000000..c44beb1
 --- /dev/null
 +++ b/src/unix/cosmo.c
-@@ -0,0 +1,100 @@
+@@ -0,0 +1,317 @@
 +/* Copyright libuv project contributors. All rights reserved.
 + *
 + * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -696,6 +696,223 @@ index 0000000..4987025
 +  *size = n;
 +  return 0;
 +}
++
++/* Translate a POSITIVE system errno to libuv fixed UV_E* codes. Under cosmo
++ * the enum uses fixed -40xx values (errno macros are runtime symbols), but
++ * syscalls set the runtime errno; without this libuv returns -runtime_errno
++ * which uv_err_name/uv_strerror cannot name, so the node-shim e.code checks
++ * (e.g. ENOENT for a missing spawn binary) fail. Map at the UV__ERR boundary. */
++int uv__translate_sys_errno(int e) {
++  if (e <= 0) return e;
++#ifdef E2BIG
++  if (e == E2BIG) return UV_E2BIG;
++#endif
++#ifdef EACCES
++  if (e == EACCES) return UV_EACCES;
++#endif
++#ifdef EADDRINUSE
++  if (e == EADDRINUSE) return UV_EADDRINUSE;
++#endif
++#ifdef EADDRNOTAVAIL
++  if (e == EADDRNOTAVAIL) return UV_EADDRNOTAVAIL;
++#endif
++#ifdef EAFNOSUPPORT
++  if (e == EAFNOSUPPORT) return UV_EAFNOSUPPORT;
++#endif
++#ifdef EAGAIN
++  if (e == EAGAIN) return UV_EAGAIN;
++#endif
++#ifdef EALREADY
++  if (e == EALREADY) return UV_EALREADY;
++#endif
++#ifdef EBADF
++  if (e == EBADF) return UV_EBADF;
++#endif
++#ifdef EBUSY
++  if (e == EBUSY) return UV_EBUSY;
++#endif
++#ifdef ECANCELED
++  if (e == ECANCELED) return UV_ECANCELED;
++#endif
++#ifdef ECHARSET
++  if (e == ECHARSET) return UV_ECHARSET;
++#endif
++#ifdef ECONNABORTED
++  if (e == ECONNABORTED) return UV_ECONNABORTED;
++#endif
++#ifdef ECONNREFUSED
++  if (e == ECONNREFUSED) return UV_ECONNREFUSED;
++#endif
++#ifdef ECONNRESET
++  if (e == ECONNRESET) return UV_ECONNRESET;
++#endif
++#ifdef EDESTADDRREQ
++  if (e == EDESTADDRREQ) return UV_EDESTADDRREQ;
++#endif
++#ifdef EEXIST
++  if (e == EEXIST) return UV_EEXIST;
++#endif
++#ifdef EFAULT
++  if (e == EFAULT) return UV_EFAULT;
++#endif
++#ifdef EFBIG
++  if (e == EFBIG) return UV_EFBIG;
++#endif
++#ifdef EFTYPE
++  if (e == EFTYPE) return UV_EFTYPE;
++#endif
++#ifdef EHOSTDOWN
++  if (e == EHOSTDOWN) return UV_EHOSTDOWN;
++#endif
++#ifdef EHOSTUNREACH
++  if (e == EHOSTUNREACH) return UV_EHOSTUNREACH;
++#endif
++#ifdef EILSEQ
++  if (e == EILSEQ) return UV_EILSEQ;
++#endif
++#ifdef EINTR
++  if (e == EINTR) return UV_EINTR;
++#endif
++#ifdef EINVAL
++  if (e == EINVAL) return UV_EINVAL;
++#endif
++#ifdef EIO
++  if (e == EIO) return UV_EIO;
++#endif
++#ifdef EISCONN
++  if (e == EISCONN) return UV_EISCONN;
++#endif
++#ifdef EISDIR
++  if (e == EISDIR) return UV_EISDIR;
++#endif
++#ifdef ELOOP
++  if (e == ELOOP) return UV_ELOOP;
++#endif
++#ifdef EMFILE
++  if (e == EMFILE) return UV_EMFILE;
++#endif
++#ifdef EMLINK
++  if (e == EMLINK) return UV_EMLINK;
++#endif
++#ifdef EMSGSIZE
++  if (e == EMSGSIZE) return UV_EMSGSIZE;
++#endif
++#ifdef ENAMETOOLONG
++  if (e == ENAMETOOLONG) return UV_ENAMETOOLONG;
++#endif
++#ifdef ENETDOWN
++  if (e == ENETDOWN) return UV_ENETDOWN;
++#endif
++#ifdef ENETUNREACH
++  if (e == ENETUNREACH) return UV_ENETUNREACH;
++#endif
++#ifdef ENFILE
++  if (e == ENFILE) return UV_ENFILE;
++#endif
++#ifdef ENOBUFS
++  if (e == ENOBUFS) return UV_ENOBUFS;
++#endif
++#ifdef ENODATA
++  if (e == ENODATA) return UV_ENODATA;
++#endif
++#ifdef ENODEV
++  if (e == ENODEV) return UV_ENODEV;
++#endif
++#ifdef ENOENT
++  if (e == ENOENT) return UV_ENOENT;
++#endif
++#ifdef ENOEXEC
++  if (e == ENOEXEC) return UV_ENOEXEC;
++#endif
++#ifdef ENOMEM
++  if (e == ENOMEM) return UV_ENOMEM;
++#endif
++#ifdef ENONET
++  if (e == ENONET) return UV_ENONET;
++#endif
++#ifdef ENOPROTOOPT
++  if (e == ENOPROTOOPT) return UV_ENOPROTOOPT;
++#endif
++#ifdef ENOSPC
++  if (e == ENOSPC) return UV_ENOSPC;
++#endif
++#ifdef ENOSYS
++  if (e == ENOSYS) return UV_ENOSYS;
++#endif
++#ifdef ENOTCONN
++  if (e == ENOTCONN) return UV_ENOTCONN;
++#endif
++#ifdef ENOTDIR
++  if (e == ENOTDIR) return UV_ENOTDIR;
++#endif
++#ifdef ENOTEMPTY
++  if (e == ENOTEMPTY) return UV_ENOTEMPTY;
++#endif
++#ifdef ENOTSOCK
++  if (e == ENOTSOCK) return UV_ENOTSOCK;
++#endif
++#ifdef ENOTSUP
++  if (e == ENOTSUP) return UV_ENOTSUP;
++#endif
++#ifdef ENOTTY
++  if (e == ENOTTY) return UV_ENOTTY;
++#endif
++#ifdef ENXIO
++  if (e == ENXIO) return UV_ENXIO;
++#endif
++#ifdef EOVERFLOW
++  if (e == EOVERFLOW) return UV_EOVERFLOW;
++#endif
++#ifdef EPERM
++  if (e == EPERM) return UV_EPERM;
++#endif
++#ifdef EPIPE
++  if (e == EPIPE) return UV_EPIPE;
++#endif
++#ifdef EPROTO
++  if (e == EPROTO) return UV_EPROTO;
++#endif
++#ifdef EPROTONOSUPPORT
++  if (e == EPROTONOSUPPORT) return UV_EPROTONOSUPPORT;
++#endif
++#ifdef EPROTOTYPE
++  if (e == EPROTOTYPE) return UV_EPROTOTYPE;
++#endif
++#ifdef ERANGE
++  if (e == ERANGE) return UV_ERANGE;
++#endif
++#ifdef EREMOTEIO
++  if (e == EREMOTEIO) return UV_EREMOTEIO;
++#endif
++#ifdef EROFS
++  if (e == EROFS) return UV_EROFS;
++#endif
++#ifdef ESHUTDOWN
++  if (e == ESHUTDOWN) return UV_ESHUTDOWN;
++#endif
++#ifdef ESOCKTNOSUPPORT
++  if (e == ESOCKTNOSUPPORT) return UV_ESOCKTNOSUPPORT;
++#endif
++#ifdef ESPIPE
++  if (e == ESPIPE) return UV_ESPIPE;
++#endif
++#ifdef ESRCH
++  if (e == ESRCH) return UV_ESRCH;
++#endif
++#ifdef ETIMEDOUT
++  if (e == ETIMEDOUT) return UV_ETIMEDOUT;
++#endif
++#ifdef ETXTBSY
++  if (e == ETXTBSY) return UV_ETXTBSY;
++#endif
++#ifdef EUNATCH
++  if (e == EUNATCH) return UV_EUNATCH;
++#endif
++#ifdef EXDEV
++  if (e == EXDEV) return UV_EXDEV;
++#endif
++  return -e;
++}
 diff --git a/src/unix/thread.c b/src/unix/thread.c
 index 2f7572c..361e2c4 100644
 --- a/src/unix/thread.c
@@ -752,18 +969,25 @@ index 1ae906d..b4a5f29 100644
      (!defined(__APPLE__) || defined(IP_ADD_SOURCE_MEMBERSHIP))
    int err;
 diff --git a/src/uv-common.h b/src/uv-common.h
-index 0348a4f..a4fe875 100644
+index 0348a4f..78e70ad 100644
 --- a/src/uv-common.h
 +++ b/src/uv-common.h
-@@ -42,7 +42,10 @@
+@@ -42,7 +42,17 @@
  # include <stdatomic.h>
  #endif
  
 -#if EDOM > 0
-+/* Cosmopolitan: EDOM is a runtime symbol, not a preprocessor constant, so
-+ * `#if EDOM > 0` is false and wrongly picks the non-negating UV__ERR (libuv
-+ * would report +errno instead of -errno). Force the negating form. */
-+#if EDOM > 0 || defined(__COSMOPOLITAN__)
++/* Cosmopolitan: errno macros are runtime symbols, not preprocessor constants.
++ * `#if EDOM > 0` is false (so libuv would pick the non-negating UV__ERR), AND
++ * the enum uses FIXED -40xx codes (uv/errno.h) while syscalls set the runtime
++ * errno. Translate runtime errno -> the fixed UV_E* code (src/unix/cosmo.c) so
++ * every error is a proper, named UV code (uv_err_name/strerror + node-shim
++ * e.code all match). #undef first to override uv/errno.h's plain macro. */
++#if defined(__COSMOPOLITAN__)
++int uv__translate_sys_errno(int sys_errno);
++# undef UV__ERR
++# define UV__ERR(x) uv__translate_sys_errno(x)
++#elif EDOM > 0
  # define UV__ERR(x) (-(x))
  #else
  # define UV__ERR(x) (x)
