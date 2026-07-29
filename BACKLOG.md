@@ -313,11 +313,21 @@ NOT missing bundles — `strings tjs | grep internal/bootstrap` = 2, the bundle 
 (src/bundles/c/core/*.c) are compiled in. So it's builtin-module RESOLUTION under cosmo (why the
 registry lookup misses → openat), plus a loader bug (the pread-EBADF fallback should fail loud, not
 loop). Bisect fact: hang correlates with stdout fd-type (pipe stdout → exits; regular file/​/dev/null/
-closed → hang) because the fd table shifts and changes whether the loader lands on fd 2. NEXT:
-(a) why does the `tjs:internal/*` builtin registry miss under cosmo (bytecode registration / module
-resolver path — check builtins.c / the module loader vs how bundles register); (b) make the pread
-fallback fail loudly. Repro: `tjs eval 'tjs.exit(0)' >/tmp/x` hangs; `… | cat` exits. Then Phase C
-(TLS), D (fuse), E (leg). Below is the earlier characterization:
+closed → hang) because the fd table shifts and changes whether the loader lands on fd 2. ROOT CAUSE (2026-07-29, deeper): the hang is `uv_fs_open("tjs:internal/bootstrap")` returning **+2**
+(a bogus fd = ENOENT's runtime value) instead of a NEGATIVE error, so `tjs__load_file` (vm.c:917)
+accepts fd 2 and spins in the `pread(2)->EBADF` loop. (`tjs:internal/bootstrap` legitimately isn't a
+builtin — it's imported by the core bundle and normally load-fails cleanly; the bug is that the
+"missing file" error comes back POSITIVE.) Isolated with a standalone `uv_fs_open` probe: returns 2.
+PARTIAL FIX SHIPPED (6407bae, in patches/libuv-cosmo.patch): libuv's `UV__ERR(x)` is guarded by
+`#if EDOM > 0`, but cosmo's errno macros are runtime symbols so the preprocessor reads EDOM as 0
+(VERIFIED) and picks the non-negating `UV__ERR(x)=(x)` → all libuv errors come back +errno. Forced
+the negating form under `__COSMOPOLITAN__` in uv/errno.h + uv-common.h. **BUT the probe STILL returns
++2 after that fix** (verified: the fixed macro negates correctly AND fs.c recompiled) — so there is a
+SECOND source of the positive result in libuv's fs open path. NEXT: trace libuv `src/unix/fs.c`
+`uv__fs_open` / `uv__fs_work` result assignment under cosmo — where does req->result become +2 instead
+of -2 (a raw `x = open()` returning the errno? a `result < 0` check that fails under cosmo?). Repro
+(fast): the standalone probe `uv_fs_open(NULL,&req,"nope",0,0,NULL)` should be < 0. Then the hang
+clears and tjs.com runs. Then Phase C (TLS), D (fuse), E (leg). Below is the earlier characterization:
 
 PHASE B EARLIER (2026-07-29) — the full txiki tree CONFIGURES under the cosmo toolchain and
 its CORE COMPILES: quickjs, wurl, txiki's C modules, and the patched libuv all build. Landed:
