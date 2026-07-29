@@ -331,14 +331,22 @@ the shipped binary stays a pristine portable APE (runs on every host after any r
 trailer/attest are stable. (Old APEs self-modified their header on first run; cosmocc 4.x makes
 assimilation explicit — `--assimilate` only.)
 
-NEXT — two threads:
-- FIDELITY (catch remaining runtime diffs): the core agentic turn passes, but the debug run surfaced
-  child_process/spawn divergences under cosmo — `spawn rg` error surfaced as `-78` (should be
-  ENOENT/-2 — an errno→UV code/naming gap, the translation still owed), and a spawned hook's stdout
-  was `null` (`cannot read property 'setEncoding' of null` — spawn stream setup). Bash tool / hooks /
-  rg-search all ride child_process, so these matter. Run the test/fidelity/ suite (agentic-tools,
-  agentic-subagent-diff, agentic-workflow-complete) with CLODE_PROVIDER_BIN=naude vs the cosmo quaude
-  to enumerate diffs; likely more libuv-process / node-shim-spawn cosmo gaps to fix.
+SPAWN FIDELITY FIX SHIPPED (2026-07-29, 6bf98e5): the child_process/spawn divergence is FIXED. Root
+cause was the errno→UV translation gap: the UV__ERR sign fix made libuv return -runtime_errno, but
+the enum uses fixed -40xx codes under cosmo, so uv_err_name couldn't name them — a missing-binary
+spawn reported `code='Unknown system error -2'` (was even `-78` pre-sign-fix) not `ENOENT`, breaking
+the node-shim's e.code checks. Added `uv__translate_sys_errno` (src/unix/cosmo.c, 69 #ifdef-guarded
+mappings) routed through UV__ERR under __COSMOPOLITAN__. VERIFIED: tjs.spawn of a missing binary now
+throws code=ENOENT; in a real agentic run `rg` now fails GRACEFULLY ("ripgrep not found on PATH…"
+instead of "spawn rg Unknown system error -78") and the hook `setEncoding of null` cascade is GONE.
+Smoke still passes (PONG + attest). So hooks / rg-search / Bash-tool error handling are correct now.
+
+NEXT — the full FIDELITY RUN (to enumerate remaining diffs): the test/fidelity/ agentic suite
+(agentic-tools, agentic-subagent-diff, agentic-workflow-complete) needs (a) a reference binary
+CLODE_PROVIDER_BIN (naude or a real claude), and (b) the cosmo engine behind a /bin/sh wrapper (the
+APE can't be execve'd directly — same MZ→sh issue clode-fuse already solves) pointed at via the
+engine's bootP path. Set that up, run vs the cosmo quaude, triage diffs — likely a few more
+node-shim/libuv cosmo gaps (the spawn class is now closed, but streams/tty/fs edges are unaudited).
 - PHASE E (wire the leg): build-tjs.mjs cosmo target = apply patches/libuv-cosmo.patch +
   patches/libtjs-cosmo.patch + CLODE_TJS_CROSS_FILE=scripts/cosmo.toolchain.cmake + force lean
   (mimalloc/ffi/wasm/sqlite OFF) + build target `tjs-cli` + chmod +x on cosmoranlib; provision
