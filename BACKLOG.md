@@ -110,6 +110,15 @@ Cosmo's args-driven/`-p` agentic path is SOLID (8/9 offline rows; real-creds `-p
 TLS/spawn/fs/render fine) — these gaps bound cosmo to non-interactive/agentic on macOS. Additive
 soft-fail leg, so NOT a leg blocker. See memory `cosmo-libc-additive-leg`.
 
+**FULL AGENTIC FIDELITY SUITE GREEN ON COSMO (2026-07-30).** With both fixes (tty + ws) on a clean
+rebuilt engine, the entire `node --test` agentic fidelity suite passes on the cosmo APE at parity with
+native tjs: agentic-mcp-ws (connect+handshake+tool-call over ws), agentic-tools 5/5 (Write/Grep/
+multi-turn/--continue/PreToolUse-hook), node-shim-agentic 2/2 (Bash inline stdout, Edit/FileHandle.chmod),
+agentic-workflow-complete 1/1, agentic-subagent-diff 1/1 (Task dispatch identical node-vs-cosmo-quaude).
+The harness is now APE-aware end-to-end (node-shim-helper `engineSpawn`/`isApeFile`), so `CLODE_TJS=<cosmo
+.com> node --test test/fidelity/agentic-*.test.cjs test/node-shim-agentic.test.cjs` is the standing gate.
+No cosmo-specific divergences remain on the agentic surface.
+
 ## TRIAGED — Tiger/PPC double-Ctrl-C "wedge" is FAITHFUL, not a bug (2026-07-29)
 
 Filed here so it is NOT re-chased. On slow-DNS boxes (Tiger/PPC VM), the TUI's double-Ctrl-C
