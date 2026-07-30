@@ -12,7 +12,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn, execFileSync } = require('node:child_process');
-const { REPO, tjsPath, skipUnlessTjs, LOADER } = require('../node-shim-helper.cjs');
+const { REPO, tjsPath, skipUnlessTjs, engineSpawn, LOADER } = require('../node-shim-helper.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('../mock-anthropic-helper.cjs');
 
 function providerBin() { const p = process.env.CLODE_PROVIDER_BIN; return p && fs.existsSync(p) ? p : null; }
@@ -69,7 +69,8 @@ test('Workflow runs to completion under quaude (vm isolation)', async (t) => {
     CLAUDE_CONFIG_DIR: configDir,
     NODE_PATH: path.join(REPO, 'deps', 'claude', 'node_modules'),
   };
-  const r = await run(tjsPath(), ['run', LOADER, cli, '-p', 'run the workflow', '--allowedTools', 'Workflow'], dir, env, 90000);
+  const [wcmd, wargv] = engineSpawn(['run', LOADER, cli, '-p', 'run the workflow', '--allowedTools', 'Workflow']);
+    const r = await run(wcmd, wargv, dir, env, 90000);
   await mock.close();
   await new Promise((res) => setTimeout(res, 3000)); // let the runner flush wf_<id>.json
 
