@@ -48,6 +48,9 @@ function splitLeg(leg) {
 // successor to build-templates' cleanTargetName.
 function targetName(leg) {
   const { os, arch } = splitLeg(leg);
+  // A universal leg (cosmo) has no arch — its target/engine name is the OS token
+  // alone (e.g. engineName -> tjs-cosmo-<pin>), not `cosmo-undefined`.
+  if (!arch) return canonOs(os);
   return `${canonOs(os)}-${canonArch(arch)}`;
 }
 
@@ -56,19 +59,29 @@ function targetName(leg) {
 function tagFor(leg, floor) {
   const { os, arch, libc } = splitLeg(leg);
   const co = canonOs(os), ca = canonArch(arch);
+  // A universal leg (cosmo) is one fat binary for every OS/arch — its tag is
+  // just the OS token, no arch and no compat floor.
+  if (!arch) return co;
   if (floor) return `${co}-${floor}-${ca}`;
   return libc ? `${co}-${ca}-${libc}` : `${co}-${ca}`;
 }
 
+// Runnable-artifact filename extension by canonical OS. Windows clode builders
+// are PE executables (.exe so Windows runs them on download); the Cosmopolitan
+// APE is one fat .com (the convention: hello.com/redbean.com — the DOS/MZ header
+// makes .com a valid Windows exe AND signals "runs everywhere"). Others: none.
+function assetExt(canonicalOs) {
+  return canonicalOs === 'windows' ? '.exe' : canonicalOs === 'cosmo' ? '.com' : '';
+}
+
 // Published builder asset filename.
 function assetName(leg, version, floor) {
-  const base = `clode-${version}-${tagFor(leg, floor)}`;
-  // Windows clode builders are PE executables — the release asset must end in
-  // `.exe` so Windows runs it on download/double-click (and the browser doesn't
-  // mangle it). Windows is the only OS whose runnable artifact needs a suffix;
-  // nothing FETCHES clode by asset name (self-update is notify-only), so this is
-  // purely the downloadable filename and safe to append here at the one source.
-  return canonOs(splitLeg(leg).os) === 'windows' ? `${base}.exe` : base;
+  // clode-<ver>-<tag> plus a per-OS runnable extension (windows .exe / cosmo
+  // .com). Nothing FETCHES clode by asset name (self-update is notify-only), so
+  // the extension is purely the downloadable filename — appended here at the one
+  // source of truth so the fuse --out, upload, and attest all agree.
+  const co = canonOs(splitLeg(leg).os);
+  return `clode-${version}-${tagFor(leg, floor)}${assetExt(co)}`;
 }
 
 // Engine artifact name `<engine>-<os>-<arch>-<pin>` (engine: 'tjs' | 'node'). The pin
@@ -97,7 +110,7 @@ function targetToNode(target) {
 }
 
 module.exports = {
-  OS_MAP, ARCH_MAP, canonOs, canonArch, splitLeg, targetName, tagFor, assetName, engineName,
+  OS_MAP, ARCH_MAP, canonOs, canonArch, splitLeg, targetName, tagFor, assetName, assetExt, engineName,
   targetToNode,
 };
 

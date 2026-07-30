@@ -79,10 +79,10 @@ test('engineName: <engine>-<os>-<arch>-<pin>', () => {
 
 test('the download-name == list-targets-tag invariant: assetName == clode-<v>-<tagFor> (+.exe on windows)', () => {
   for (const [leg, floor] of [['darwin-arm64', '11.0'], ['netbsd-amd64', '10.1'],
-    ['windows-arm64', ''], ['linux-x64-musl', '']]) {
-    // The asset name is clode-<v>-<tag>; windows adds a deterministic .exe
-    // container suffix (a PE executable) — still derivable from the tag + os.
-    const ext = C.canonOs(C.splitLeg(leg).os) === 'windows' ? '.exe' : '';
+    ['windows-arm64', ''], ['linux-x64-musl', ''], ['cosmo', '']]) {
+    // The asset name is clode-<v>-<tag> plus a deterministic per-OS runnable
+    // extension (windows .exe / cosmo .com) — still derivable from tag + os.
+    const ext = C.assetExt(C.canonOs(C.splitLeg(leg).os));
     assert.strictEqual(C.assetName(leg, '9.9.9', floor), `clode-9.9.9-${C.tagFor(leg, floor)}${ext}`);
   }
 });
