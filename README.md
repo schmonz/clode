@@ -37,9 +37,17 @@ This repo contains no Anthropic code, only a tool that, by request:
 
 ## Runtime dependencies
 
+Quaude shells out to these for tool use:
+
 - `bash` for basic tool use
 - `bfs` >= 3.x (built with Oniguruma)
 - `ugrep` >= 7.5.0
+
+`clode fetch` (downloading and verifying the upstream bundle) additionally needs:
+
+- a SHA-256 tool — one of `sha256sum`, `shasum`, `gsha256sum`, `sha256`,
+  `cksum`, `openssl`, or `digest` (or set `CLODE_SHA256`)
+- `tar`, `gzip`, and `unzip` to extract downloads
 
 ## Updating
 
