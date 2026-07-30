@@ -730,11 +730,14 @@ function parseBuildArgs(args) {
 // Resolve the output basename for a quaude/--self build (the naude branch names
 // its own).
 //   - Explicit --out is respected VERBATIM, with ONE exception: a `--target
-//     windows-*` cross-build appends .exe if missing (`--out quaude-windows-x64`
-//     → `quaude-windows-x64.exe`) so the produced binary runs on Windows. A
-//     native build's explicit --out is left ALONE — the CI builder legs pass the
-//     bare asset name `clode-<ver>-windows-x64` (no .exe) and attest/publish it
-//     under exactly that name, so appending .exe there breaks the release.
+//     windows-*` cross-build appends .exe IF MISSING (`--out quaude-windows-x64`
+//     → `quaude-windows-x64.exe`) so the produced binary runs on Windows. The CI
+//     builder legs now pass a windows asset name that ALREADY ends in .exe
+//     (canonical-name.assetName appends it for windows), so: the cross path's
+//     "if missing" guard leaves it alone (no double .exe), and a native windows
+//     build's explicit --out is returned verbatim (preserving that .exe). Either
+//     way the produced file, the upload, and attest/publish all agree on the one
+//     `clode-<ver>-windows-<arch>.exe` name.
 //   - The DEFAULT name (no --out) is quaude/clode-native, with .exe iff the build
 //     is for windows — the TARGET when cross-building, else the host.
 function resolveBuildOut({ out, target, self, hostPlatform }) {

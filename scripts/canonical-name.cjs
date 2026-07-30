@@ -62,7 +62,13 @@ function tagFor(leg, floor) {
 
 // Published builder asset filename.
 function assetName(leg, version, floor) {
-  return `clode-${version}-${tagFor(leg, floor)}`;
+  const base = `clode-${version}-${tagFor(leg, floor)}`;
+  // Windows clode builders are PE executables — the release asset must end in
+  // `.exe` so Windows runs it on download/double-click (and the browser doesn't
+  // mangle it). Windows is the only OS whose runnable artifact needs a suffix;
+  // nothing FETCHES clode by asset name (self-update is notify-only), so this is
+  // purely the downloadable filename and safe to append here at the one source.
+  return canonOs(splitLeg(leg).os) === 'windows' ? `${base}.exe` : base;
 }
 
 // Engine artifact name `<engine>-<os>-<arch>-<pin>` (engine: 'tjs' | 'node'). The pin

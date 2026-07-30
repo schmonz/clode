@@ -42,7 +42,8 @@ test('every release leg: asset name == clode-<v>-<deriveTag> (download == --list
   for (const leg of legsFor('release')) {
     const asset = C.assetName(leg.leg, '9.9.9', leg.floor);
     const tag = deriveTag(leg);            // the --list-targets tag (from the leg TOKEN)
-    if (asset !== `clode-9.9.9-${tag}`) mism.push(`${leg.leg}: asset=${asset} tag=${tag}`);
+    const ext = C.canonOs(C.splitLeg(leg.leg).os) === 'windows' ? '.exe' : ''; // windows PE suffix
+    if (asset !== `clode-9.9.9-${tag}${ext}`) mism.push(`${leg.leg}: asset=${asset} tag=${tag}`);
   }
   assert.deepStrictEqual(mism, [], `asset-name vs --list-targets-tag drift:\n${mism.join('\n')}`);
 });

@@ -58,7 +58,9 @@ test('assetName: floored is dashed <os>-<floor>-<arch>; the arch/os collisions r
 });
 
 test('assetName: bare (no floor) keeps a libc suffix; canonicalizes the mid arch', () => {
-  assert.strictEqual(C.assetName('windows-arm64', '0.1.2', undefined), 'clode-0.1.2-windows-arm64');
+  // windows clode builders are PE executables — the asset name ends in .exe
+  assert.strictEqual(C.assetName('windows-arm64', '0.1.2', undefined), 'clode-0.1.2-windows-arm64.exe');
+  assert.strictEqual(C.assetName('windows-x64', '0.1.2', ''), 'clode-0.1.2-windows-amd64.exe');
   assert.strictEqual(C.assetName('linux-x64-musl', '0.1.2', ''), 'clode-0.1.2-linux-amd64-musl');
   assert.strictEqual(C.assetName('linux-arm64-musl', '0.1.2', undefined), 'clode-0.1.2-linux-arm64-musl');
 });
@@ -75,10 +77,13 @@ test('engineName: <engine>-<os>-<arch>-<pin>', () => {
   assert.strictEqual(C.engineName('node', 'darwin-arm64', '24.18.0'), 'node-macos-arm64-24.18.0');
 });
 
-test('the download-name == list-targets-tag invariant: assetName == clode-<v>-<tagFor>', () => {
+test('the download-name == list-targets-tag invariant: assetName == clode-<v>-<tagFor> (+.exe on windows)', () => {
   for (const [leg, floor] of [['darwin-arm64', '11.0'], ['netbsd-amd64', '10.1'],
     ['windows-arm64', ''], ['linux-x64-musl', '']]) {
-    assert.strictEqual(C.assetName(leg, '9.9.9', floor), `clode-9.9.9-${C.tagFor(leg, floor)}`);
+    // The asset name is clode-<v>-<tag>; windows adds a deterministic .exe
+    // container suffix (a PE executable) — still derivable from the tag + os.
+    const ext = C.canonOs(C.splitLeg(leg).os) === 'windows' ? '.exe' : '';
+    assert.strictEqual(C.assetName(leg, '9.9.9', floor), `clode-9.9.9-${C.tagFor(leg, floor)}${ext}`);
   }
 });
 
