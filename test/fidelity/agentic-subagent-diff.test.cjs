@@ -11,7 +11,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn, execFileSync } = require('node:child_process');
-const { REPO, tjsPath, skipUnlessTjs, LOADER } = require('../node-shim-helper.cjs');
+const { REPO, tjsPath, skipUnlessTjs, isApeFile, LOADER } = require('../node-shim-helper.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('../mock-anthropic-helper.cjs');
 
 function providerBin() { const p = process.env.CLODE_PROVIDER_BIN; return p && fs.existsSync(p) ? p : null; }
@@ -26,6 +26,10 @@ function stage(bin) {
   return { dir, cli };
 }
 function run(cmd, args, dir, env, timeoutMs) {
+  // A cosmo APE engine can't be execve'd on non-Windows — wrap it in the /bin/sh
+  // ENOEXEC trampoline. Node (the naude side of this differential) is not an APE,
+  // so it passes through unchanged.
+  if (isApeFile(cmd)) { args = ['-c', '"$@"', 'sh', cmd, ...args]; cmd = '/bin/sh'; }
   return new Promise((res) => {
     const c = spawn(cmd, args, { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'], env });
     let so = '', se = ''; c.stdout.on('data', (d) => so += d); c.stderr.on('data', (d) => se += d);
