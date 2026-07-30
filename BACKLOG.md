@@ -91,10 +91,20 @@ all fine) — the gaps are input/socket-event-delivery:
    APE. NEXT: use real tooling (lldb on a debug-symbol cosmo build, or a NON-APE mac cosmo-libuv build) —
    blind file-probes don't work here; a Linux cosmo build won't reproduce (mac-host-only bug). Repo is
    UNTOUCHED (all WIP in the ephemeral scratchpad working copy).
-2. **MCP-over-WebSocket client never connects** (`agentic-mcp-ws.test.cjs`: native ✔ 22s, cosmo ✖
-   "MCP server never got initialize — ws transport failed to connect, seen=[]"). SEPARATE from #1 (ws
-   is a socket, not a tty; the API HTTPS socket works → not all sockets). Localhost-ws connect path;
-   investigate separately (lws under cosmo / connect-completion). Not yet root-caused.
+2. **MCP-over-WebSocket client never connects — FIXED (2026-07-30).** ✅ Cosmo `new WebSocket()` now
+   connects (WS-OPEN against a local node ws echo server). ROOT CAUSE: libwebsockets' bundled
+   `lib/misc/sha-1.c` gates byte-swapping on `BYTE_ORDER`/`LITTLE_ENDIAN`/`BIG_ENDIAN`; cosmo defines
+   those as aliases to `__BYTE_ORDER`/`__LITTLE_ENDIAN`/`__BIG_ENDIAN` which it never defines → in `#if`
+   arithmetic all read 0, so BOTH `==LITTLE_ENDIAN` and `==BIG_ENDIAN` are true (0==0) → sha-1.c compiles
+   an inconsistent LE+BE byte mix → every lws SHA-1 is wrong → the ws client's `Sec-WebSocket-Accept`
+   (=`base64(SHA1(key+GUID))`) check fails on every valid 101 (`HS: Accept hash wrong`). HTTPS was fine
+   because TLS uses mbedtls SHA, not lws's builtin. FIX: **patches/libwebsockets-cosmo.patch** (new;
+   applied `git -C deps/libwebsockets apply` in build-tjs.mjs `applyCosmoPatches`) re-derives the macros
+   from the compiler's `__BYTE_ORDER__`/`__ORDER_*_ENDIAN__` builtins, gated on `__COSMOPOLITAN__`
+   (behavior-neutral for other legs). Verified: applies clean to pristine lws; scratch rebuild → accept
+   hashes match → WS-OPEN. FOLLOW-UP: a full clean `build-tjs.mjs --target cosmo` end-to-end + the
+   `agentic-mcp-ws.test.cjs` row green on a fresh cosmo quaude (high-confidence; the productized patch is
+   byte-identical to the verified scratch edit).
 
 Cosmo's args-driven/`-p` agentic path is SOLID (8/9 offline rows; real-creds `-p` returns live PONG;
 TLS/spawn/fs/render fine) — these gaps bound cosmo to non-interactive/agentic on macOS. Additive

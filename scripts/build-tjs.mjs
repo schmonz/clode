@@ -183,13 +183,18 @@ async function provisionCosmocc() {
 // cosmo-only. Both are __COSMOPOLITAN__-guarded (behavior-neutral for other
 // targets) but still edit CMakeLists/source, so they must never touch the
 // default legs. libuv-cosmo.patch is based at deps/libuv (a submodule) — applied
-// THERE; libtjs-cosmo.patch is based at the txiki root (src/*).
+// THERE; libwebsockets-cosmo.patch is based at deps/libwebsockets (a submodule,
+// fixes lws sha-1.c's BYTE_ORDER macros so the WebSocket accept-hash check works
+// under cosmo — see the patch header); libtjs-cosmo.patch is based at the txiki
+// root (src/*).
 function applyCosmoPatches(dir) {
   // The cosmo patches live in the repo-root patches/ dir (NOT spike/quickjs/
   // patches/, which holds the txiki-*/quickjs-ng-* engine patches).
   const cosmoPatches = path.join(repo, 'patches');
   run('git', ['-C', path.join(dir, 'deps/libuv'), 'apply', path.join(cosmoPatches, 'libuv-cosmo.patch')]);
   console.log('patch libuv-cosmo.patch: applied (deps/libuv)');
+  run('git', ['-C', path.join(dir, 'deps/libwebsockets'), 'apply', path.join(cosmoPatches, 'libwebsockets-cosmo.patch')]);
+  console.log('patch libwebsockets-cosmo.patch: applied (deps/libwebsockets)');
   run('git', ['-C', dir, 'apply', path.join(cosmoPatches, 'libtjs-cosmo.patch')]);
   console.log('patch libtjs-cosmo.patch: applied');
 }
