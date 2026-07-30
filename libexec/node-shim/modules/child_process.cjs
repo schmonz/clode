@@ -217,6 +217,36 @@ function _kcSave(db) {
   try { FSS.write(fd, bytes, -1); } finally { FSS.close(fd); }
   FSS.rename(tmp, p);
 }
+// The Linux fallback: the ONE keychain entry Claude Code uses for credentials
+// (service ends in `-credentials`; its keychain "password" is byte-for-byte the
+// `{claudeAiOauth:{…}}` JSON that CC's non-darwin file store keeps in
+// ~/.claude/.credentials.json). In `emulate` mode we back THAT entry with the
+// upstream .credentials.json — NOT the quaude-private .keychain-emulation.json —
+// so creds are shared/portable across platforms (a login here shows up on Linux,
+// and creds dropped in by any Claude Code work here). Non-credential entries
+// stay in the emulation file.
+function _isCredsSvc(svc) { return typeof svc === 'string' && /-credentials$/.test(svc); }
+function _credFilePath() {
+  const home = (tjs.env && (tjs.env.HOME || tjs.env.USERPROFILE)) || '';
+  return path.join(home, '.claude', '.credentials.json');
+}
+function _credRead() {
+  try {
+    const fd = FSS.open(_credFilePath(), 'r');
+    try {
+      const ab = FSS.read(fd, 1 << 20, 0);
+      return new TextDecoder().decode(new Uint8Array(ab));
+    } finally { FSS.close(fd); }
+  } catch { return null; }
+}
+function _credWrite(txt) {
+  const p = _credFilePath(), tmp = p + '.tmp';
+  const bytes = new TextEncoder().encode(txt).buffer;
+  const fd = FSS.open(tmp, 'w');
+  try { FSS.write(fd, bytes, -1); } finally { FSS.close(fd); }
+  FSS.rename(tmp, p);
+}
+function _credDelete() { try { FSS.unlink(_credFilePath()); } catch { /* absent: fine */ } }
 function _kcSplitArgs(s) {
   const out = []; let cur = '', q = null, has = false;
   for (let i = 0; i < s.length; i++) {
@@ -245,7 +275,13 @@ function _kcHandleFile(args) { // 'emulate' backend: no reachable keychain -> fi
   // keychain path — which we then back with the file.
   if (sub === 'show-keychain-info') return { stdout: '', code: 36 };
   const acct = val('-a'), svc = val('-s');
+  const creds = _isCredsSvc(svc); // the CC credentials entry -> the shared .credentials.json store
   if (sub === 'find-generic-password') {
+    if (creds) {
+      const txt = _credRead();
+      if (txt == null || txt.trim() === '') return { stdout: '', code: 44 };
+      return { stdout: txt.trim() + '\n', code: 0 }; // the {claudeAiOauth:…} JSON; CC .trim()s + parses
+    }
     const db = _kcLoad();
     const has = db[svc] && Object.prototype.hasOwnProperty.call(db[svc], acct);
     if (!has) return { stdout: '', code: 44 }; // errSecItemNotFound (CC treats 0/44/36 as "no item")
@@ -254,10 +290,12 @@ function _kcHandleFile(args) { // 'emulate' backend: no reachable keychain -> fi
   if (sub === 'add-generic-password') {
     const hex = val('-X');
     const pw = hex != null ? Buffer.from(hex, 'hex').toString('utf8') : (val('-w') || val('-p') || '');
+    if (creds) { _credWrite(pw); return { stdout: '', code: 0 }; } // persist the token to .credentials.json
     const db = _kcLoad(); (db[svc] = db[svc] || {})[acct] = pw; _kcSave(db);
     return { stdout: '', code: 0 };
   }
   if (sub === 'delete-generic-password') {
+    if (creds) { _credDelete(); return { stdout: '', code: 0 }; }
     const db = _kcLoad(); if (db[svc]) { delete db[svc][acct]; _kcSave(db); }
     return { stdout: '', code: 0 };
   }
