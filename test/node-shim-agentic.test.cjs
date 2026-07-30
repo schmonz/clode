@@ -15,7 +15,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn, execFileSync } = require('node:child_process');
-const { REPO, tjsPath, skipUnlessTjs, LOADER } = require('./node-shim-helper.cjs');
+const { REPO, tjsPath, skipUnlessTjs, engineSpawn, LOADER } = require('./node-shim-helper.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('./mock-anthropic-helper.cjs');
 
 function providerBin() { const p = process.env.CLODE_PROVIDER_BIN; return p && fs.existsSync(p) ? p : null; }
@@ -29,7 +29,8 @@ function stageBundle(bin) {
 // Async spawn (spawnSync would freeze the in-process mock — see node-shim-roundtrip.test.cjs).
 function bootP(cli, dir, args, env, timeoutMs) {
   return new Promise((resolve) => {
-    const child = spawn(tjsPath(), ['run', LOADER, cli, ...args], {
+    const [ecmd, eargv] = engineSpawn(['run', LOADER, cli, ...args]);
+    const child = spawn(ecmd, eargv, {
       cwd: dir, stdio: ['ignore', 'pipe', 'pipe'], env,
     });
     let stdout = '', stderr = '';
