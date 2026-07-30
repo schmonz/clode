@@ -18,10 +18,33 @@ function tjsPath() {
   return fs.existsSync(cand) ? cand : null;
 }
 
-function runLoader(entry, args = [], opts = {}) {
+// A Cosmopolitan APE engine starts with the DOS 'MZ' magic and cannot be
+// execve'd on non-Windows hosts — it must run via the ENOEXEC shell trampoline
+// (`/bin/sh -c '"$@"' sh <ape> …`). Detect it so the agentic harness can drive a
+// cosmo engine the same way e2e-pty.cjs's apeCmd() drives the interactive one.
+function isApeFile(bin) {
+  try {
+    const fd = fs.openSync(bin, 'r');
+    const b = Buffer.alloc(2);
+    fs.readSync(fd, b, 0, 2, 0);
+    fs.closeSync(fd);
+    return b[0] === 0x4d && b[1] === 0x5a; // 'MZ'
+  } catch { return false; }
+}
+
+// Build the [command, argv] to spawn the engine, APE-aware. For a normal Mach-O/
+// ELF binary this is just [tjs, args]; for an APE it wraps in the /bin/sh
+// trampoline. Behavior-neutral for non-APE engines (the common case).
+function engineSpawn(args) {
   const tjs = tjsPath();
   if (!tjs) throw new Error('no tjs binary (gate with skipUnlessTjs first)');
-  const r = spawnSync(tjs, ['run', LOADER, entry, ...args], {
+  if (isApeFile(tjs)) return ['/bin/sh', ['-c', '"$@"', 'sh', tjs, ...args]];
+  return [tjs, args];
+}
+
+function runLoader(entry, args = [], opts = {}) {
+  const [cmd, argv] = engineSpawn(['run', LOADER, entry, ...args]);
+  const r = spawnSync(cmd, argv, {
     encoding: 'utf8',
     env: { ...process.env, ...(opts.env || {}) },
     input: opts.input,
@@ -35,4 +58,4 @@ function skipUnlessTjs(t) {
   return false;
 }
 
-module.exports = { tjsPath, runLoader, skipUnlessTjs, REPO, LOADER };
+module.exports = { tjsPath, runLoader, skipUnlessTjs, isApeFile, engineSpawn, REPO, LOADER };

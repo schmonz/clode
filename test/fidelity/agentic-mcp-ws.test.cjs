@@ -10,7 +10,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn, execFileSync } = require('node:child_process');
-const { REPO, tjsPath, skipUnlessTjs, LOADER } = require('../node-shim-helper.cjs');
+const { REPO, tjsPath, skipUnlessTjs, engineSpawn, LOADER } = require('../node-shim-helper.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('../mock-anthropic-helper.cjs');
 const { startMockMcpWs } = require('./mock-mcp-ws.cjs');
 
@@ -24,7 +24,8 @@ function stageBundle(bin) {
 }
 function bootP(cli, dir, args, env, timeoutMs) {
   return new Promise((resolve) => {
-    const child = spawn(tjsPath(), ['run', LOADER, cli, ...args], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'], env });
+    const [cmd, argv] = engineSpawn(['run', LOADER, cli, ...args]);
+    const child = spawn(cmd, argv, { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'], env });
     let stdout = '', stderr = '';
     child.stdout.on('data', (d) => { stdout += d; });
     child.stderr.on('data', (d) => { stderr += d; });
