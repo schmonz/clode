@@ -330,6 +330,19 @@ well-tested, and reasonably fast** as we can possibly make it."
   embedding arm64+x64 instead of the full fat one trims builder bloat with no capability loss;
   doesn't remove the codesign thin-on-failure fix.)
 
+- **Try `darwin-x86` WITHOUT the poll backend, sometime.** The old-Darwin poll-backend fix
+  (spec `2026-07-31-old-darwin-poll-backend-design`) sets `darwin-poll: true` on BOTH 10.4-floor
+  legs — darwin-ppc (where Tiger's kqueue event-drop is ktrace-confirmed) and darwin-x86 (where
+  it is ASSUMED by the "on old Darwin, route nothing through kqueue unless we've PROVEN kqueue
+  handles it" principle). i386 was never observed failing: there is no Tiger/i386 box, and the
+  leg is `no-exec`. So the x86 knob is an unfalsified precaution, and it costs the leg its
+  `uv_fs_event` (ENOSYS) plus a divergence from the x64 slice. WHEN a 10.4/10.5 i386 target is
+  reachable (a qemu Tiger-x86 guest, or real hardware), build the leg BOTH ways and run the
+  agentic differential: if kqueue delivers correctly on Darwin/i386 under the fused runtime's
+  fd load, drop `darwin-poll` from that leg and keep it ppc-only. Either result is worth
+  knowing — it tells us whether the Darwin 8 defect is kernel-wide or ppc-specific, which is
+  direct evidence for the paleo-POSIX floor walk (`panther-floor-next-rung`).
+
 ### Known quaude runtime bugs
 
 - **quaude does not persist config across invocations — CREDS half open (NetBSD/arm64 at
