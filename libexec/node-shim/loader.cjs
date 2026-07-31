@@ -635,6 +635,37 @@ if (globalThis.process && globalThis.process.env && globalThis.process.env.CLODE
   };
 }
 
+// Opt-in libuv handle dump (CLODE_SHIM_HANDLE_DUMP=1) for stalled-startup
+// diagnosis (e.g. the darwin-ppc -p deadlock): arm a SIGUSR2 handler that
+// prints every live libuv handle via the engine's __tjs_dump_handles(), so a
+// process parked with nothing apparently happening can be asked, from the
+// outside and on demand, whether the event loop actually has active work
+// queued. Signal-triggered rather than timer-triggered on purpose: the thing
+// under diagnosis may be a loop that isn't firing timers either, so a
+// timer-based watchdog could never fire; a HANDLED signal forces the blocked
+// syscall to return EINTR and wakes the loop regardless. SIGUSR2 specifically
+// -- the app doesn't use it, and unlike SIGINT/SIGTERM (which trigger
+// shutdown) or SIGWINCH/SIGCONT (whose default action is ignore/continue and
+// so do not reliably interrupt a blocked syscall), a handled SIGUSR2 is inert
+// to the app but still forces the wakeup. Completely inert (no listener, no
+// output, no cost) unless the env var is set; process.on() below is enough to
+// arm it (see modules/process.cjs __wireSignal) and does NOT pin the event
+// loop, since the underlying uv_signal handle is unref'd inside tjs.
+if (globalThis.process && globalThis.process.env && globalThis.process.env.CLODE_SHIM_HANDLE_DUMP && typeof globalThis.process.on === 'function') {
+  globalThis.process.on('SIGUSR2', () => {
+    try {
+      console.error('[handles]');
+      if (typeof globalThis.__tjs_dump_handles === 'function') {
+        console.error(globalThis.__tjs_dump_handles());
+      } else {
+        console.error('[handles] __tjs_dump_handles unavailable (older engine)');
+      }
+    } catch (e) {
+      try { console.error('[handles] dump failed:', e && e.stack ? e.stack : String(e)); } catch { /* ignore */ }
+    }
+  });
+}
+
 // Async failures on the -p path settle in promise continuations the synchronous
 // try/catch below cannot see. tjs surfaces them via the WHATWG
 // 'unhandledrejection' event; print the reason + stack (Node prints unhandled
