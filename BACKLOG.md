@@ -18,7 +18,21 @@ Driver = the at-desk release-readiness plan (`docs/superpowers/plans/2026-07-28-
    leg `publish:true` in `scripts/tjs-legs.mjs` + ship UNSIGNED with a documented Gatekeeper/quarantine
    note (decided: ships as `clode-<ver>-cosmo.com`). See memory `cosmo-libc-additive-leg`.
 
-2. **Tiger / darwin-ppc agentic-turn deadlock — ROOT-CAUSED, NOT FIXED (big engine effort).** The PPC
+2. **Tiger / darwin-ppc agentic-turn deadlock — FIX IMPLEMENTED, arm64-PROVEN, ppc pending (2026-07-31).**
+   The poll(2) event backend for old Darwin is IN (`fixupLibuvPollBackendOldDarwin`, knob
+   `CLODE_TJS_DARWIN_POLL=1` → cmake `CLODE_DARWIN_POLL`, leg field `darwin-poll:true` on
+   darwin-ppc + darwin-x86). It swaps `kqueue.c`→`posix-poll.c` + `no-fsevents.c` and drops
+   `UV_HAVE_KQUEUE`, which also moves child-exit to SIGCHLD and async wakeups to pipes — so
+   sockets, pipes, child exit, DNS/threadpool wakeups and signals ALL leave kqueue in one
+   change. TTYs keep the proven select()-thread path. Accepted loss: `uv_fs_event`→ENOSYS
+   (the shim's fs.watch is already a non-firing stub, and cosmo ships this way). PHASE 1
+   GREEN on arm64: a poll-backend engine passes the full agentic gate (11/11, no skipped
+   oracles) + the node-shim suite (166 pass/0 fail). Spec:
+   `docs/superpowers/specs/2026-07-31-old-darwin-poll-backend-design.md`. NEXT: cross-build
+   the ppc engine, cross-fuse, and re-run the deadlocking `-p` turn on the Tiger VM.
+   Original diagnosis below (still the WHY):
+
+   **(root cause, unchanged)** The PPC
    quaude boots + authenticates + full startup + (bare) HTTPS/TLS, but an agentic turn deadlocks: **Darwin 8
    kqueue drops socket/pipe/SIGCHLD/async event delivery under the fused runtime's fd load** (ktrace-confirmed).
    Fix = a poll()/select() event-loop backend for old Darwin (NOT per-mechanism `osx_select` patches — see
@@ -329,6 +343,23 @@ well-tested, and reasonably fast** as we can possibly make it."
   builder embeds an all-four-slice fat template but only arm64+x64 are real build hosts —
   embedding arm64+x64 instead of the full fat one trims builder bloat with no capability loss;
   doesn't remove the codesign thin-on-failure fix.)
+
+- **Local builds on the dev mac compile txiki against PKGSRC's `uv.h`, not the vendored one
+  (2026-07-31). Latent, currently harmless, sharp.** txiki's FFI lookup sets
+  `FFI_INCLUDE_DIR=/opt/pkg/include`, which lands `-I/opt/pkg/include` SECOND in the `tjs`
+  target's include path — ahead of every vendored path. pkgsrc also ships libuv, so
+  `vm.c` and friends `#include "uv.h"` from pkgsrc while `uv_a` compiles the vendored
+  sources against `deps/libuv/include`. Two `uv_loop_t` definitions in one binary. It works
+  today ONLY because both are 1.52.x with an identical layout: a pkgsrc libuv bump (or any
+  vendored-side field addition) silently corrupts the loop struct with NO compile error.
+  FOUND THE HARD WAY: the darwin-poll backend adds 4 fields to `UV_PLATFORM_LOOP_FIELDS`, so
+  the local poll build got `uv_loop_t` 1104 (libuv) vs 1072 (txiki) → `poll_fds_used` read a
+  pointer → `poll()` EINVAL → SIGABRT before the first JS line. CI and the cross containers
+  are UNAFFECTED (no `/opt/pkg` there), and the lean profile the floor legs use
+  (`ffi:'off'`) never adds the include. Fix candidates: force the vendored libuv include
+  ahead of `FFI_INCLUDE_DIR`, or narrow the ffi include to the specific header. Until then,
+  local engine builds that must match CI should pass `CLODE_TJS_FFI=off`. Same family as
+  [[dev-box-state-hides-bugs]]: warm/foreign host state hiding — here, *creating* — defects.
 
 - **Try `darwin-x86` WITHOUT the poll backend, sometime.** The old-Darwin poll-backend fix
   (spec `2026-07-31-old-darwin-poll-backend-design`) sets `darwin-poll: true` on BOTH 10.4-floor
