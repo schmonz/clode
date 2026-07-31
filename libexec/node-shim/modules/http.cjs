@@ -6,13 +6,20 @@
 // these agents are DEFINED but never instantiated/used. Characterized by
 // test/node-shim-http.test.cjs.
 //
-// DIVERGENCE (loud, deferred): the CLIENT surface (http.request / http.get) is
-// NOT implemented — the round-trip never falls back to node:http (fetch is the
-// path). Agent is a minimal-but-real connection-pool bookkeeping object (the
-// fields agent-base's subclass reads via super()), not Node's full
-// socket-pooling Agent. A boot that actually issues node:http requests is a
-// genuine later wall — wire request()/ClientRequest over txiki sockets
-// test-first then.
+// The -p round-trip's normal transport is native `fetch`, not node:http — but
+// http.request/http.get themselves ARE implemented below (a minimal,
+// fetch-backed ClientRequest), wired for the CLODE_SHIM_TRACE investigation
+// (see the "client request tracing" block near the bottom of this file): a
+// darwin-ppc/10.4 -p startup hang was isolated to the mere PRESENCE of
+// ~/.claude/.credentials.json, occurs BEFORE any API request, and the fetch
+// tracer saw exactly ONE request for the whole hung run — meaning whatever
+// hangs is NOT going through globalThis.fetch. The bundle's token-refresh
+// path (refresh_token, oauth/token, gated on credentials existing) was the
+// suspect, and Node HTTP clients commonly use node:http/https — a total
+// blind spot while request()/get() didn't exist at all (no code to trace).
+// Agent is a minimal-but-real connection-pool bookkeeping object (the fields
+// agent-base's subclass reads via super()), not Node's full socket-pooling
+// Agent — that divergence stands; only the request-issuing surface changed.
 //
 // The SERVER surface (createServer/Server/IncomingMessage/ServerResponse) IS
 // implemented, minimally, over tjs.listen('tcp', ...): `clode build` running
@@ -242,8 +249,180 @@ function createServer(options, handler) {
   return new Server(handler);
 }
 
+/* ---- client: request()/get(), opt-in tracing ------------------------------
+ * CLODE_SHIM_TRACE=1 diagnostic (see header note): every terminal outcome of
+ * a request — response, error, or an explicit abort — MUST log, because the
+ * entire point is that an UNMATCHED `[http] ->` line names the request that
+ * never settled. Read the flag from tjs.env (not process.env): this module
+ * can load before globalThis.process is fully wired (loadBuiltin('process')
+ * itself may pull in other builtins), and tjs.env is always the raw engine
+ * env; same gate as modules/child_process.cjs's spawn tracing and the
+ * loader's fetch tracer, so one env var controls all of them together.
+ */
+const TRACE = !!(globalThis.process && globalThis.process.env && globalThis.process.env.CLODE_SHIM_TRACE);
+function trace() { if (TRACE) { try { console.error('[http]', ...arguments); } catch { /* best effort */ } } }
+
+function headersToObject(headers) {
+  const out = {};
+  if (headers && typeof headers.forEach === 'function') headers.forEach((v, k) => { out[k] = v; });
+  return out;
+}
+
+// Build the target URL from either `request(url[, options])` or the
+// `request(options)` shape (node accepts both; the bundle's callers and this
+// module's own tests exercise the options-object form). No attempt to merge
+// a URL string WITH an options object's overrides — node's own merge rules
+// are a rat's nest and no known caller here needs both at once (YAGNI).
+function normalizeArgs(urlOrOptions, optionsOrCb, cb) {
+  let urlArg, options, callback;
+  if (typeof urlOrOptions === 'string' || urlOrOptions instanceof URL) {
+    urlArg = urlOrOptions;
+    if (typeof optionsOrCb === 'function') { callback = optionsOrCb; options = {}; }
+    else { options = optionsOrCb || {}; callback = cb; }
+  } else {
+    options = urlOrOptions || {};
+    callback = typeof optionsOrCb === 'function' ? optionsOrCb : cb;
+  }
+  return { urlArg, options, callback };
+}
+
+// A real (fetch-backed), minimal http.ClientRequest. Deliberately an
+// EventEmitter with write/end rather than a full node:stream.Writable —
+// matching this file's existing house style for ServerResponse above, and
+// the bundle's known callers (agent-base et al.) don't need backpressure.
+class ClientRequest extends EventEmitter {
+  constructor(urlArg, options, callback) {
+    super();
+    this._method = (options && options.method) || 'GET';
+    this._headers = Object.assign({}, options && options.headers);
+    this._chunks = [];
+    this._ended = false;
+    this._aborted = false;
+    this.destroyed = false;
+    this.aborted = false;
+    if (callback) this.once('response', callback);
+    try {
+      this._target = urlArg
+        ? new URL(String(urlArg))
+        : new URL(`${options.protocol || 'http:'}//${options.hostname || options.host || 'localhost'}` +
+                  `${options.port ? ':' + options.port : ''}${options.path || '/'}`);
+    } catch (e) {
+      this._target = null;
+      // Node defers a bad-URL failure to the next tick rather than throwing
+      // synchronously out of request() — so a caller's `req.on('error', …)`
+      // (attached right after request() returns, the universal idiom) still
+      // catches it, instead of racing an unhandled synchronous throw.
+      queueMicrotask(() => { if (!this.destroyed) { trace('xx (bad url)', this._method, String(e)); this.emit('error', e); } });
+    }
+  }
+  setHeader(name, value) { this._headers[name] = value; return this; }
+  getHeader(name) { return this._headers[name]; }
+  removeHeader(name) { delete this._headers[name]; }
+  // Cheap defensive stub: some HTTP-adjacent libraries (agent-base et al.)
+  // call req.setTimeout(ms, cb) defensively even when no real per-request
+  // timer is needed here; without it that call throws "not a function" and
+  // takes down an otherwise-working caller. No timer is actually armed
+  // (out of scope for this diagnostic) — this only keeps the call-site safe.
+  setTimeout(ms, cb) { if (cb) this.once('timeout', cb); return this; }
+  write(chunk, encOrCb, cb) {
+    if (typeof encOrCb === 'function') cb = encOrCb;
+    if (chunk != null) this._chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+    if (typeof cb === 'function') queueMicrotask(cb);
+    return true;
+  }
+  end(chunk, encOrCb, cb) {
+    if (typeof chunk === 'function') { cb = chunk; chunk = undefined; }
+    else if (typeof encOrCb === 'function') cb = encOrCb;
+    if (chunk != null) this.write(chunk);
+    if (typeof cb === 'function') queueMicrotask(cb);
+    if (this._ended || !this._target) return this;
+    this._ended = true;
+    this._send();
+    return this;
+  }
+  abort() {
+    if (this._aborted) return;
+    this._aborted = true; this.aborted = true; this.destroyed = true;
+    trace('xx (aborted by caller)', this._method, this._target ? this._target.href : '(no url)');
+    queueMicrotask(() => this.emit('abort'));
+  }
+  destroy(err) {
+    if (this.destroyed) return this;
+    this.destroyed = true;
+    if (err) { trace('xx (destroyed)', this._method, this._target ? this._target.href : '(no url)', String(err)); queueMicrotask(() => this.emit('error', err)); }
+    return this;
+  }
+  async _send() {
+    const method = this._method;
+    const url = this._target.href;
+    // Identity (method + url) is repeated on EVERY line below — creation,
+    // response, error, stream-end — so a hung run's log can be grepped for
+    // an unmatched '->' to name the exact request that never settled.
+    trace('->', method, url);
+    let body;
+    if (this._chunks.length) body = Buffer.concat(this._chunks);
+    let res;
+    try {
+      res = await globalThis.fetch(url, { method, headers: this._headers, body });
+    } catch (e) {
+      // The terminal outcome that matters most for this investigation: a
+      // connection that fails OUTRIGHT (refused/DNS/etc). If instead the
+      // fetch() promise never settles at all, neither this line nor the
+      // '<-' below prints — an unmatched '->' is itself the diagnostic.
+      trace('xx', method, url, String(e));
+      if (!this.destroyed) this.emit('error', e);
+      return;
+    }
+    if (this._aborted || this.destroyed) { trace('<- (aborted, response dropped)', method, url); return; }
+    trace('<-', method, url, 'status=', res.status);
+    const im = new IncomingMessage(method, url, headersToObject(res.headers), '1.1');
+    im.statusCode = res.status;
+    im.statusMessage = STATUS_CODES[res.status] || '';
+    this.emit('response', im);
+    try {
+      if (res.body && typeof res.body.getReader === 'function') {
+        const reader = res.body.getReader();
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          if (value) im.emit('data', Buffer.from(value));
+        }
+      } else if (typeof res.arrayBuffer === 'function') {
+        const ab = await res.arrayBuffer();
+        if (ab && ab.byteLength) im.emit('data', Buffer.from(ab));
+      }
+      im.complete = true;
+      trace('done', method, url);
+      im.emit('end');
+    } catch (e) {
+      trace('xx (body)', method, url, String(e));
+      im.emit('error', e);
+    }
+  }
+}
+
+// Factory so https.cjs can reuse this SAME traced implementation (with a
+// different default protocol/port) instead of duplicating it — per the
+// house instruction to instrument the shared path once.
+function makeClient(defaultProtocol) {
+  function request(urlOrOptions, optionsOrCb, cb) {
+    const { urlArg, options, callback } = normalizeArgs(urlOrOptions, optionsOrCb, cb);
+    const opts = urlArg ? options : Object.assign({ protocol: defaultProtocol }, options);
+    return new ClientRequest(urlArg, opts, callback);
+  }
+  function get(urlOrOptions, optionsOrCb, cb) {
+    const req = request(urlOrOptions, optionsOrCb, cb);
+    req.end();
+    return req;
+  }
+  return { request, get };
+}
+
+const { request, get } = makeClient('http:');
+
 module.exports = {
   Agent, globalAgent, STATUS_CODES, METHODS,
   Server, IncomingMessage, ServerResponse, createServer,
+  ClientRequest, request, get, _makeClient: makeClient,
 };
 module.exports.default = module.exports;
