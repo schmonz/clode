@@ -803,12 +803,47 @@ function _otherWorkPending() {
 // Raw, uncounted scheduler for this poller's OWN timer (see loader.cjs's
 // "escape hatch" comment): using the ordinary wrapped setTimeout here would
 // make _otherWorkPending() see this poller's own recurring re-arm as "other"
-// work, so it would never observe a truly idle loop. Falls back to the
-// ordinary globals only if __shimRawTimer is somehow absent (defensive; not
-// a reachable path under the real loader) — in that fallback this poller's
-// own timer WOULD count itself, biasing toward "never stop" rather than an
-// incorrect early stop, the same safe-direction failure mode as above.
-const _rawTimer = globalThis.__shimRawTimer || { setTimeout, clearTimeout };
+// work, so it would never observe a truly idle loop.
+//
+// Resolved LAZILY, at call time, via globalThis PROPERTY ACCESS rather than a
+// module-scope constant referencing bare `setTimeout`/`clearTimeout`
+// identifiers. Both matter: several tests (win-fs-rename-guard,
+// win-shim-guards, node-shim-vm*, extract-hooks) load this module into a bare
+// vm.Context with NO timer globals at all — not even a real `setTimeout` —
+// purely to exercise unrelated fs surface (renameSync guards, module wiring,
+// etc.), and never call fs.watchFile. A module-scope `{ setTimeout,
+// clearTimeout }` object-literal fallback evaluates those bare identifiers
+// the instant this file is require()'d, and a bare identifier with no
+// binding on the scope chain AND no matching global-object property throws
+// ReferenceError immediately — crashing module evaluation, and therefore
+// every test in the file, over an optional feature (watchFile) those tests
+// never touch. `globalThis.setTimeout` is a plain property read: it safely
+// evaluates to `undefined` in that same context instead of throwing.
+// Deferring the lookup to call time (rather than caching a possibly-absent
+// value at load time) also means a poller that could not initially find a
+// scheduler still degrades to "never arms" rather than needing to throw.
+function _pollerSchedule(fn, delay) {
+  const raw = globalThis.__shimRawTimer;
+  if (raw && typeof raw.setTimeout === 'function') return raw.setTimeout(fn, delay);
+  // __shimRawTimer absent means either an older loader (not the real fused
+  // path today) or — as above — no loader.cjs ran at all in this host
+  // context. Prefer a bare global setTimeout if this context happens to have
+  // one (this poller would then count itself in __shimTimerLiveCount, biasing
+  // toward "never stop early" — the same safe-direction failure mode
+  // documented on _otherWorkPending above, not a hang-causing one); with
+  // NEITHER available, there is no way to poll at all — return null rather
+  // than throw, and let the caller simply not arm a timer. fs.watchFile still
+  // registers and returns its EventEmitter (Node's real contract) in that
+  // case; it just never delivers 'change' — no worse than the pre-task-12
+  // stub, in a context that couldn't run a poll loop to begin with.
+  return typeof globalThis.setTimeout === 'function' ? globalThis.setTimeout(fn, delay) : null;
+}
+function _pollerCancel(id) {
+  if (id == null) return;
+  const raw = globalThis.__shimRawTimer;
+  if (raw && typeof raw.clearTimeout === 'function') { raw.clearTimeout(id); return; }
+  if (typeof globalThis.clearTimeout === 'function') globalThis.clearTimeout(id);
+}
 
 function _pollOnce(key, ent) {
   ent.timer = null;
@@ -821,7 +856,7 @@ function _pollOnce(key, ent) {
   }
   if (ent.handle.listenerCount('change') === 0) { _watchers.delete(key); return; } // unwatched mid-flight
   if (_otherWorkPending()) {
-    ent.timer = _rawTimer.setTimeout(() => _pollOnce(key, ent), ent.interval);
+    ent.timer = _pollerSchedule(() => _pollOnce(key, ent), ent.interval);
   } else {
     trace('idle-stop', key); // see the DIVERGENCE note above _otherWorkPending
   }
@@ -850,7 +885,7 @@ fsMod.watchFile = function watchFile(filename, options, listener) {
   if (typeof listener === 'function') ent.handle.on('change', listener);
   // (Re-)arm if idle: covers both brand-new watchers and one that had self-
   // stopped (see _otherWorkPending) but just gained a fresh registration.
-  if (ent.timer == null) ent.timer = _rawTimer.setTimeout(() => _pollOnce(key, ent), 0);
+  if (ent.timer == null) ent.timer = _pollerSchedule(() => _pollOnce(key, ent), 0);
   return ent.handle;
 };
 fsMod.unwatchFile = function unwatchFile(filename, listener) {
@@ -861,7 +896,7 @@ fsMod.unwatchFile = function unwatchFile(filename, listener) {
   else ent.handle.removeAllListeners('change');
   trace('unwatch', key, 'remaining=' + ent.handle.listenerCount('change'));
   if (ent.handle.listenerCount('change') === 0) {
-    if (ent.timer != null) _rawTimer.clearTimeout(ent.timer); // must actually clear: a leaked interval is its own hang
+    _pollerCancel(ent.timer); // must actually clear: a leaked interval is its own hang
     _watchers.delete(key);
   }
 };
