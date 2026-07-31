@@ -123,3 +123,22 @@ test('build-tjs.mjs: the fixup body carries all six CLODE_DARWIN_POLL edit guard
   // (6) internal.h: uv__fs_event() UNREACHABLE() shim widened (the link-time fix).
   assert.ok(body.includes('!defined(__APPLE__) || defined(CLODE_DARWIN_POLL)'), 'edit 6: uv__fs_event shim widened');
 });
+
+test('the darwin-poll knob refuses a non-darwin target, loudly and early', () => {
+  // posix-poll.c replaces kqueue.c, which only the Apple/BSD cmake branches
+  // compile — asking for it on a Linux/NetBSD target is a build-config bug, not
+  // a silent no-op. The guard runs before any phase, so --source-only trips it.
+  let err = null;
+  try {
+    execFileSync('node', ['scripts/build-tjs.mjs', '--source-only'], {
+      cwd: REPO,
+      stdio: 'pipe',
+      encoding: 'utf8',
+      env: { ...process.env,
+             CLODE_TJS_DARWIN_POLL: '1',
+             CLODE_TJS_CROSS_FILE: 'scripts/netbsd-m68k.toolchain.cmake' },
+    });
+  } catch (e) { err = e; }
+  assert.ok(err, 'expected a non-zero exit');
+  assert.match(String(err.stderr), /CLODE_TJS_DARWIN_POLL=1 is darwin-only/);
+});

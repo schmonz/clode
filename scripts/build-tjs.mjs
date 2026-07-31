@@ -45,6 +45,20 @@ const repo = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const sourceOnly = process.argv.includes('--source-only');
 const buildOnly = process.argv.includes('--build-only');
 if (sourceOnly && buildOnly) throw new Error('pick one of --source-only / --build-only');
+// CLODE_TJS_DARWIN_POLL=1: build libuv's generic poll(2) event backend instead of
+// kqueue (the 10.4-floor darwin legs — Darwin 8's kqueue drops events under the
+// fused runtime's fd load; see fixupLibuvPollBackendOldDarwin). posix-poll.c
+// replaces kqueue.c, which only the Apple/BSD cmake branches compile, so asking
+// for it off-darwin is a build-config bug — fail here, before any phase, rather
+// than emitting an engine whose backend silently did not change.
+const darwinPoll = process.env.CLODE_TJS_DARWIN_POLL === '1';
+if (darwinPoll) {
+  const cf = process.env.CLODE_TJS_CROSS_FILE || '';
+  const targetsDarwin = cf ? /darwin/.test(path.basename(cf)) : process.platform === 'darwin';
+  if (!targetsDarwin) {
+    throw new Error(`CLODE_TJS_DARWIN_POLL=1 is darwin-only (target: ${cf || process.platform})`);
+  }
+}
 const vendor = process.env.CLODE_TJS_VENDOR || path.join(repo, 'spike/quickjs/vendor');
 const patches = path.join(repo, 'spike/quickjs/patches');
 // Default output is platform-unique (build/tjs/<osToken>-<arch>) so a shared
@@ -2613,6 +2627,11 @@ if (winMingw) {
 // 32-bit targets lacking libatomic (ppc/sparc): link the __atomic_*_8 shim.
 if (process.env.CLODE_TJS_ATOMIC_SHIM === '1') {
   cmakeArgs.push('-DCLODE_ATOMIC_SHIM=ON');
+}
+// The old-Darwin poll(2) backend (see the guard at the top + the fixup). OFF by
+// default: kqueue stays the backend for every 10.6+/modern darwin leg.
+if (darwinPoll) {
+  cmakeArgs.push('-DCLODE_DARWIN_POLL=ON');
 }
 const macosMin = process.env.CLODE_TJS_MACOS_MIN || '';
 const macosSdk = process.env.CLODE_TJS_MACOS_SDK || '';
