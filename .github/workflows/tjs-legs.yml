@@ -105,6 +105,7 @@ jobs:
           cross-apt: ${{ matrix.cross-apt || '' }}
           cosmo: ${{ matrix.cosmo && 'true' || 'false' }}
           atomic-shim: ${{ matrix.atomic-shim && 'true' || 'false' }}
+          darwin-poll: ${{ matrix.darwin-poll && 'true' || 'false' }}
           tier2: ${{ matrix.tier2 && 'true' || 'false' }}
           verify: ${{ matrix.verify || 'smoke' }}
           netbsd-src: ${{ matrix.netbsd-src || '' }}

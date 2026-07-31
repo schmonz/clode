@@ -243,6 +243,42 @@ test('build-leg exec=cross step is parameterized, not darwin-ppc-hardcoded', () 
     'the darwin-ppc toolchain path must no longer be hardcoded in the build step');
 });
 
+test('the 10.4-floor darwin legs declare darwin-poll:true (Tiger kqueue event-drop)', () => {
+  // Darwin 8's kqueue drops socket/pipe/SIGCHLD/async delivery under the fused
+  // runtime's fd load (ktrace-confirmed on real Tiger PPC), so both 10.4-floor
+  // legs build libuv's generic poll(2) backend instead. darwin-x64 (10.6) and
+  // darwin-arm64 keep kqueue — they are proven, including on real Mavericks.
+  const legs = legsFor('release');
+  for (const name of ['darwin-ppc', 'darwin-x86']) {
+    const l = legs.find((x) => x.leg === name);
+    assert.ok(l, `${name} leg missing`);
+    assert.strictEqual(l['darwin-poll'], true,
+      `${name} is a 10.4-floor leg and must declare darwin-poll:true`);
+    assert.strictEqual(l.floor, '10.4',
+      `${name}: darwin-poll is only for the 10.4 floor`);
+  }
+  for (const name of ['darwin-x64', 'darwin-arm64']) {
+    const l = legs.find((x) => x.leg === name);
+    assert.ok(l, `${name} leg missing`);
+    assert.notStrictEqual(l['darwin-poll'], true,
+      `${name} must keep kqueue — poll is the old-Darwin fallback, not the default`);
+  }
+});
+
+test('build-leg exec=cross step forwards darwin-poll as CLODE_TJS_DARWIN_POLL', () => {
+  const action = fs.readFileSync(
+    path.join(REPO, '.github/actions/build-leg/action.yml'), 'utf8');
+  assert.ok(/DARWIN_POLL: \$\{\{ inputs\.darwin-poll == 'true' && '1' \|\| '0' \}\}/.test(action),
+    'the cross step must derive DARWIN_POLL from inputs.darwin-poll');
+  assert.ok(/-e DARWIN_POLL/.test(action),
+    'DARWIN_POLL must be passed into the docker run environment');
+  assert.ok(/export CLODE_TJS_DARWIN_POLL=\$DARWIN_POLL/.test(action),
+    'the in-container script must export CLODE_TJS_DARWIN_POLL');
+  const wf = fs.readFileSync(path.join(REPO, '.github/workflows/tjs-legs.yml'), 'utf8');
+  assert.ok(/darwin-poll: \$\{\{ matrix\.darwin-poll && 'true' \|\| 'false' \}\}/.test(wf),
+    'tjs-legs.yml must pass the matrix darwin-poll field to build-leg');
+});
+
 test('release.yml: darwin-universal hard-gates (no continue-on-error) + tripwire requires it', () => {
   const wf = fs.readFileSync(path.join(REPO, '.github/workflows/release.yml'), 'utf8');
   // Isolate the darwin-universal job block (up to the next top-level 2-space job key).

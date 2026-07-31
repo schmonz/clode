@@ -74,6 +74,10 @@ inputs:
     description: "'true': link the __atomic_*_8 pthread shim (CLODE_TJS_ATOMIC_SHIM=1) for 32-bit targets lacking 8-byte libatomic (darwin-ppc, netbsd-m68k). 'false' for native-64-bit-atomic targets (s390x/riscv64)."
     required: false
     default: "false"
+  darwin-poll:
+    description: "'true': build libuv's generic poll(2) event backend instead of kqueue (CLODE_TJS_DARWIN_POLL=1) — the 10.4-floor darwin legs, where Darwin 8's kqueue drops socket/pipe/SIGCHLD/async delivery under load. 'false' everywhere else: kqueue is correct and proven on 10.6+."
+    required: false
+    default: "false"
   tier2:
     description: "'true': after the cross-built target engine lands, cross-fuse a tier-2 clode BUILDER against it via ./.github/actions/cross-fuse and upload it (ELF-only — darwin is excluded, Mach-O needs a pre-signed template)."
     required: false
@@ -403,6 +407,7 @@ runs:
         CROSS_APT: ${{ inputs.cross-apt }}
         CROSS_FILE: ${{ inputs.cross-file }}
         ATOMIC_SHIM: ${{ inputs.atomic-shim == 'true' && '1' || '0' }}
+        DARWIN_POLL: ${{ inputs.darwin-poll == 'true' && '1' || '0' }}
         WASM: ${{ inputs.wasm }}
         MIMALLOC: ${{ inputs.mimalloc }}
         FFI: ${{ inputs.ffi }}
@@ -414,7 +419,7 @@ runs:
         if [ -n "$CROSS_IMAGE" ]; then IMG="$CROSS_IMAGE"; docker pull "$IMG";
         else IMG="clode-cross-toolchain:${{ inputs.leg }}"; fi
         docker run --rm \
-          -e CROSS_APT -e CROSS_FILE -e ATOMIC_SHIM -e WASM -e MIMALLOC -e FFI \
+          -e CROSS_APT -e CROSS_FILE -e ATOMIC_SHIM -e DARWIN_POLL -e WASM -e MIMALLOC -e FFI \
           -v "${{ github.workspace }}:/w" -w /w "$IMG" bash -c '
           set -euxo pipefail
           if [ -n "$CROSS_APT" ]; then apt-get update -q && apt-get install -y -q $CROSS_APT >/dev/null; fi
@@ -424,6 +429,7 @@ runs:
           export CLODE_TJS_OUT=/w/.matrix/tjs-out
           export CLODE_TJS_CROSS_FILE=/w/$CROSS_FILE
           export CLODE_TJS_ATOMIC_SHIM=$ATOMIC_SHIM
+          export CLODE_TJS_DARWIN_POLL=$DARWIN_POLL
           export CLODE_TJS_WASM=$WASM CLODE_TJS_MIMALLOC=$MIMALLOC CLODE_TJS_FFI=$FFI CLODE_TJS_SMOKE=off
           node scripts/build-tjs.mjs --build-only
         '

@@ -149,6 +149,10 @@ const LEGS = [
   { leg: 'darwin-x86', os: 'ubuntu-latest', publish: false, pack: true,
     'cross-dockerfile': 'ci/osxcross-darwin', 'cross-file': 'scripts/darwin-x86.toolchain.cmake',
     'macos-min': '10.4', 'macos-arch': 'i386', floor: '10.4', 'no-exec': true,
+    // Darwin 8 kqueue drops events under load (proven on ppc; ASSUMED here — no
+    // Tiger/i386 box exists, and this leg is no-exec). Costs uv_fs_event (ENOSYS);
+    // revisit per the BACKLOG item once an i386 target is reachable.
+    'darwin-poll': true,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
   // darwin-ppc Tiger walk (spec 2026-07-11-darwin-ppc-walk): the ppc/BE32
   // slice at floor 10.4 — third slice of the fat binary, first BE slice.
@@ -170,6 +174,10 @@ const LEGS = [
     // __atomic_*_8 link wall (formerly hardcoded in the exec=cross step, now a
     // per-leg field so the tier-2 Debian cross legs can turn it off).
     'atomic-shim': true,
+    // Tiger's kqueue drops socket/pipe/SIGCHLD/async delivery under the fused
+    // runtime's fd load (ktrace-confirmed, memory tiger-ppc-agentic-turn-deadlock):
+    // build libuv's generic poll(2) backend instead of kqueue.c.
+    'darwin-poll': true,
     // HARD (not soft-fail): four arches or not release-ready (see darwin-x86).
     // Cross-build via a digest-pinned image — deterministic, no flake to tolerate.
     'no-exec': true, wasm: 'off', mimalloc: 'off', ffi: 'off' },
