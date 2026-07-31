@@ -1126,6 +1126,177 @@ function fixupLibuvTtyKqueueOldDarwin(dir) {
   console.log('fixup libuv-tty-kqueue-old-darwin: applied');
 }
 
+function fixupLibuvPollBackendOldDarwin(dir) {
+  // Darwin 8 (Tiger) kqueue DROPS event delivery under the fused runtime's fd/
+  // filter load: ktrace of a hung ppc quaude shows connect() returning
+  // EINPROGRESS, ~12 fds registered, then kevent(nchanges=0, ...) → 0 forever —
+  // the socket's write-readiness never arrives. It is systemic, not socket-
+  // specific: pipes (tool stdout), child exit, async/threadpool wakeups (DNS,
+  // fs, workers), signals and vnode all funnel through uv__io_poll too. So the
+  // fix is ONE thing — build libuv's generic poll(2) backend (posix-poll.c,
+  // already shipped for AIX/QNX/Cygwin and for our own cosmo leg) instead of
+  // kqueue.c — not a per-mechanism osx_select patch, which would leave every
+  // other mechanism exposed.
+  //
+  // Dropping UV_HAVE_KQUEUE is the load-bearing edit, not cosmetics: process.c
+  // gates on it (`#ifdef UV_HAVE_KQUEUE ... #else #define UV_USE_SIGCHLD`) and
+  // otherwise watches child exit with EVFILT_PROC on loop->backend_fd, which is
+  // -1 under posix-poll — every spawned tool would be reaped never. Without it,
+  // child exit rides SIGCHLD → signal self-pipe → poll, and async.c falls back
+  // to pipe wakeups.
+  //
+  // TTYs are untouched: stream.c's uv__stream_osx_select select()-thread path
+  // (plus fixupLibuvTtyKqueueOldDarwin, which forces it for ttys on Darwin < 10)
+  // already works on Tiger, and the loop only ever watches its socketpair.
+  //
+  // ACCEPTED LOSS: uv_fs_event → UV_ENOSYS (no-fsevents.c). posix-poll has no
+  // fs-event implementation and there is no portable POSIX primitive. Nothing in
+  // the product reaches it — node-shim's fs.watch/watchFile are EventEmitter
+  // stubs that never call tjs.watch (modules/fs.cjs:718-742, characterized by
+  // test/node-shim-fs-watch.test.cjs), no fs.watch call exists in libexec/ or
+  // bin/clode, and the shipping cosmo leg already builds no-fsevents.c. Engine-
+  // level tjs.watch() throws on these two legs; both are no-exec, so no CI job
+  // executes it.
+  //
+  // These edits are UNCONDITIONAL and inert: everything is guarded on
+  // CLODE_DARWIN_POLL, which only the darwin-poll legs define (build-tjs passes
+  // -DCLODE_DARWIN_POLL=ON from CLODE_TJS_DARWIN_POLL=1). Every shipping leg —
+  // darwin-x64 (10.6 floor, proven on real Mavericks), darwin-arm64, and all
+  // non-darwin legs — compiles byte-identically. libuv upstream candidate.
+  const tjsCmakeF = path.join(dir, 'CMakeLists.txt');
+  const tjsCmake = fs.readFileSync(tjsCmakeF, 'utf8');
+  if (tjsCmake.includes('CLODE_DARWIN_POLL')) {
+    console.log('fixup libuv-poll-backend-old-darwin: already applied');
+    return;
+  }
+  // (1) The option + a GLOBAL compile definition. It must be global, not a
+  // uv_defines entry: it changes uv_loop_t's layout via UV_PLATFORM_LOOP_FIELDS,
+  // so libuv and txiki TUs must agree or the ABI silently mismatches. Placed
+  // right after project() so every target here and in deps/libuv (added at
+  // :252) inherits the directory property. Anchored on the POST-fixup project()
+  // line (`fixupTjsCmakeCxxOnlyForAda`, which runs earlier in the list, already
+  // rewrote it from upstream's "C CXX" down to "C") since fixups run in order
+  // against the tree as previously modified, not against pristine upstream.
+  const projAnchor = 'project(tjs LANGUAGES C)\n';
+  if (!tjsCmake.includes(projAnchor)) {
+    throw new Error('fixup libuv-poll-backend-old-darwin: project() anchor not found (txiki changed under the pin — re-derive the fixup)');
+  }
+  const optionBlock = projAnchor
+    + '\n# CLODE: old-Darwin (10.4 floor) builds libuv\'s generic poll(2) backend —\n'
+    + '# Darwin 8 kqueue drops events under load. Global by necessity: it changes\n'
+    + '# uv_loop_t\'s layout, so libuv and txiki TUs must agree.\n'
+    + 'option(CLODE_DARWIN_POLL "Use libuv\'s generic poll(2) event backend instead of kqueue (old Darwin)" OFF)\n'
+    + 'if(CLODE_DARWIN_POLL)\n'
+    + '    add_compile_definitions(CLODE_DARWIN_POLL)\n'
+    + 'endif()\n';
+  fs.writeFileSync(tjsCmakeF, tjsCmake.replace(projAnchor, optionBlock));
+
+  // (2) libuv's source lists: kqueue.c out, posix-poll.c + no-fsevents.c in.
+  // The BSD-family branch is anchored with "MidnightBSD|" already threaded in —
+  // `fixupLibuvMidnightbsd` runs earlier in the list and already widened this
+  // exact MATCHES clause, so the tree this fixup sees is post-that-edit, not
+  // pristine upstream.
+  const uvCmakeF = path.join(dir, 'deps/libuv/CMakeLists.txt');
+  const uvCmake = fs.readFileSync(uvCmakeF, 'utf8');
+  const bsdOld = 'if(APPLE OR CMAKE_SYSTEM_NAME MATCHES "DragonFly|FreeBSD|MidnightBSD|NetBSD|OpenBSD")\n'
+    + '  list(APPEND uv_sources src/unix/bsd-ifaddrs.c src/unix/kqueue.c)\n'
+    + 'endif()\n';
+  const bsdNew = 'if(APPLE OR CMAKE_SYSTEM_NAME MATCHES "DragonFly|FreeBSD|MidnightBSD|NetBSD|OpenBSD")\n'
+    + '  list(APPEND uv_sources src/unix/bsd-ifaddrs.c)\n'
+    + '  if(NOT CLODE_DARWIN_POLL)\n'
+    + '    list(APPEND uv_sources src/unix/kqueue.c)\n'
+    + '  endif()\n'
+    + 'endif()\n';
+  const appleOld = 'if(APPLE)\n'
+    + '  list(APPEND uv_defines _DARWIN_UNLIMITED_SELECT=1 _DARWIN_USE_64_BIT_INODE=1)\n'
+    + '  list(APPEND uv_sources\n'
+    + '       src/unix/darwin-proctitle.c\n'
+    + '       src/unix/darwin.c\n'
+    + '       src/unix/fsevents.c)\n'
+    + 'endif()\n';
+  const appleNew = 'if(APPLE)\n'
+    + '  list(APPEND uv_defines _DARWIN_UNLIMITED_SELECT=1 _DARWIN_USE_64_BIT_INODE=1)\n'
+    + '  list(APPEND uv_sources\n'
+    + '       src/unix/darwin-proctitle.c\n'
+    + '       src/unix/darwin.c)\n'
+    + '  if(CLODE_DARWIN_POLL)\n'
+    + '    list(APPEND uv_sources src/unix/posix-poll.c src/unix/no-fsevents.c)\n'
+    + '  else()\n'
+    + '    list(APPEND uv_sources src/unix/fsevents.c)\n'
+    + '  endif()\n'
+    + 'endif()\n';
+  if (!uvCmake.includes(bsdOld) || !uvCmake.includes(appleOld)) {
+    throw new Error('fixup libuv-poll-backend-old-darwin: source-list anchor not found (libuv changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(uvCmakeF,
+    uvCmake.replace(bsdOld, bsdNew).replace(appleOld, appleNew));
+
+  // (3) darwin.h: no UV_HAVE_KQUEUE, plus posix-poll's loop fields.
+  const darwinHF = path.join(dir, 'deps/libuv/include/uv/darwin.h');
+  const darwinH = fs.readFileSync(darwinHF, 'utf8');
+  const kqOld = '#define UV_HAVE_KQUEUE 1\n';
+  const kqNew = '#if !defined(CLODE_DARWIN_POLL)\n#define UV_HAVE_KQUEUE 1\n#endif\n';
+  const fieldsOld = '  struct uv__queue cf_signals;                                                \\\n';
+  const fieldsNew = fieldsOld + '  UV_CLODE_DARWIN_POLL_FIELDS\n';
+  const fieldsDecl = '#if defined(CLODE_DARWIN_POLL)\n'
+    + '/* posix-poll.c\'s loop state (uv/posix.h\'s fields); the cf_* fsevents fields\n'
+    + '   above stay declared and unused. */\n'
+    + '# include <poll.h>\n'
+    + '# define UV_CLODE_DARWIN_POLL_FIELDS                                          \\\n'
+    + '  struct pollfd* poll_fds;                                                    \\\n'
+    + '  size_t poll_fds_used;                                                       \\\n'
+    + '  size_t poll_fds_size;                                                       \\\n'
+    + '  unsigned char poll_fds_iterating;\n'
+    + '#else\n'
+    + '# define UV_CLODE_DARWIN_POLL_FIELDS\n'
+    + '#endif\n\n';
+  const platAnchor = '#define UV_PLATFORM_LOOP_FIELDS                                               \\\n';
+  if (!darwinH.includes(kqOld) || !darwinH.includes(fieldsOld) || !darwinH.includes(platAnchor)) {
+    throw new Error('fixup libuv-poll-backend-old-darwin: darwin.h anchor not found (libuv changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(darwinHF, darwinH
+    .replace(platAnchor, fieldsDecl + platAnchor)
+    .replace(fieldsOld, fieldsNew)
+    .replace(kqOld, kqNew));
+
+  // (4) darwin.c: posix-poll.c supplies both platform hooks; darwin.c's call
+  // uv__kqueue_init / uv__fsevents_loop_delete, neither of which is compiled.
+  const darwinCF = path.join(dir, 'deps/libuv/src/unix/darwin.c');
+  const darwinC = fs.readFileSync(darwinCF, 'utf8');
+  const hooksOld = 'int uv__platform_loop_init(uv_loop_t* loop) {\n'
+    + '  loop->cf_state = NULL;\n'
+    + '\n'
+    + '  if (uv__kqueue_init(loop))\n'
+    + '    return UV__ERR(errno);\n'
+    + '\n'
+    + '  return 0;\n'
+    + '}\n'
+    + '\n'
+    + '\n'
+    + 'void uv__platform_loop_delete(uv_loop_t* loop) {\n'
+    + '  uv__fsevents_loop_delete(loop);\n'
+    + '}\n';
+  const hooksNew = '#if !defined(CLODE_DARWIN_POLL)\n' + hooksOld + '#endif\n';
+  if (!darwinC.includes(hooksOld)) {
+    throw new Error('fixup libuv-poll-backend-old-darwin: darwin.c platform-hook anchor not found (libuv changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(darwinCF, darwinC.replace(hooksOld, hooksNew));
+
+  // (5) internal.h: EVFILT_USER async wakeups kevent on loop->backend_fd, which
+  // posix-poll leaves at -1. Already 0 under the 10.4 SDK (EVFILT_USER is 10.6+),
+  // but a modern-SDK poll build (the arm64 validation engine) needs it forced.
+  const internalHF = path.join(dir, 'deps/libuv/src/unix/internal.h');
+  const internalH = fs.readFileSync(internalHF, 'utf8');
+  const evOld = '#if defined(EVFILT_USER) && defined(NOTE_TRIGGER)\n';
+  const evNew = '#if defined(EVFILT_USER) && defined(NOTE_TRIGGER) && !defined(CLODE_DARWIN_POLL)\n';
+  if (!internalH.includes(evOld)) {
+    throw new Error('fixup libuv-poll-backend-old-darwin: internal.h EVFILT_USER anchor not found (libuv changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(internalHF, internalH.replace(evOld, evNew));
+
+  console.log('fixup libuv-poll-backend-old-darwin: applied');
+}
+
 function fixupTjsHandleDump(dir) {
   // Diagnostic primitive: __tjs_dump_handles() returns a text list of every
   // live libuv handle (type, fd, active/ref/closing) via uv_walk. For
@@ -2204,6 +2375,7 @@ if (buildOnly) {
   fixupLibuvMsgXOldDarwin(tjsDir);
   fixupLibuvKqueueExceptOldDarwin(tjsDir);
   fixupLibuvTtyKqueueOldDarwin(tjsDir);
+  fixupLibuvPollBackendOldDarwin(tjsDir);
   fixupTjsHandleDump(tjsDir);
   fixupHttpclientAsyncDns(tjsDir);
   fixupLwsScandirOldDarwin(tjsDir);
