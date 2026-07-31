@@ -756,46 +756,59 @@ function _statsChanged(curr, prev) { return curr.mtimeMs !== prev.mtimeMs || cur
 // lets the process exit). The loader's own setTimeout/setInterval wrapper
 // documents `.ref()`/`.unref()` as no-ops for exactly this reason. So a
 // literal "call .unref()" would NOT stop our poller from pinning the loop —
-// we approximate the OBSERVABLE EFFECT of an unref'd handle instead: before
-// re-arming, ask the engine (via __tjs_dump_handles(), the same libuv
-// handle-walk the CLODE_SHIM_HANDLE_DUMP diagnostic uses — see loader.cjs)
-// whether anything is still active+ref'd that we can't account for as one of
-// OUR OWN armed pollers. If nothing is, a real unref'd timer would not keep
-// the loop running either, so we don't re-arm — the process gets to exit
-// instead of hanging on a watcher that nothing else needs.
-// The dump has no per-handle identity, only a flat "type/active/ref/closing"
-// line per handle, so a plain "ignore every timer line" rule (the first
-// version of this function) is too blunt: virtually all future work in this
-// engine — including the bundle's own unrelated setTimeout calls — IS a
-// timer, and ignoring all of them made the poller self-cancel the instant
-// nothing but timers were left, even when one of those timers was real,
-// unrelated, pending work. Instead: count how many timer-type lines the dump
-// reports, and how many pollers WE currently have armed (`ent.timer != null`
-// across `_watchers`; the poller invoking this check has already nulled its
-// own `timer` field, so it correctly excludes itself). Any timer-type lines
-// beyond our own count must belong to someone else — real pending work — so
-// keep polling. Non-timer active+ref'd handles (a socket, a pending fs op,
-// the TTY reader, …) always count as other work outright.
+// we approximate the OBSERVABLE EFFECT of an unref'd handle instead.
+//
+// An earlier version of this function asked the engine directly, via the
+// libuv handle-walk global the CLODE_SHIM_HANDLE_DUMP/SIGUSR2 diagnostic
+// uses (see loader.cjs), and parsed its flat "type/active/ref/closing" text
+// lines to guess whether anything else was pinning the loop. That was the
+// wrong seam: that global is a DEBUG introspection helper added for hang
+// diagnosis, with no stability contract on its text format — production
+// control flow must not depend on parsing it. It's replaced below
+// with a real, shim-owned signal: loader.cjs's global setTimeout/setInterval
+// wrapper is the ONLY place any JS timer is ever created in this process (no
+// bypass — every bundle and shim timer call routes through it), so it can
+// count them authoritatively itself, exposed as __shimTimerLiveCount(). See
+// loader.cjs's "live-timer count" comment for why counting JS timers alone
+// is sound: this engine's only *unfixably* always-ref'd JS-facing construct
+// is a timer — streams/TLS sockets have real ref()/unref(), fetch/http is
+// self-unref'ing via its keepalive, process.on('SIG*') handles are always
+// unref'd, and sync child_process never touches the loop — so a non-timer
+// handle being genuinely active neither needs nor benefits from our tracking
+// it: it keeps the loop alive (or doesn't) correctly on its own regardless of
+// what this poller decides. The only way this poller's decision could ever
+// cause a HANG is by under-counting other timers; over-counting (this
+// poller's own timer bleeding into the total) is the specific failure mode
+// __shimRawTimer exists to avoid — see below.
 // Residual divergence: once every poller stops itself because nothing else
 // was pinning the loop, they stay stopped even if unrelated work starts again
 // later (there's no real "wake me if the loop becomes alive again" primitive
 // to resume from) — accepted per this task's framing: a `-p` run that fails
 // to exit is a worse failure than a watcher that stops working at the point
-// the rest of the process was about to end anyway.
-function _loopHasOtherWork() {
-  const dump = typeof globalThis.__tjs_dump_handles === 'function' ? globalThis.__tjs_dump_handles() : null;
-  if (dump == null) return true; // can't introspect -> fail toward Node's held-open default, not a hang we can't diagnose
-  let liveTimers = 0;
-  for (const line of dump.split('\n')) {
-    const m = /^(\S+) fd=-?\d+ active=(\d) ref=(\d) closing=(\d)$/.exec(line);
-    if (!m || m[2] !== '1' || m[3] !== '1' || m[4] !== '0') continue; // not a live, loop-pinning handle
-    if (m[1] === 'timer') { liveTimers++; continue; }
-    return true; // some non-timer handle is doing real work
-  }
-  let ownArmedPollers = 0;
-  for (const ent of _watchers.values()) if (ent.timer != null) ownArmedPollers++;
-  return liveTimers > ownArmedPollers;
+// the rest of the process was about to end anyway. Also accepted: this only
+// sees OTHER JS TIMERS, not e.g. a bare open socket with nothing scheduling a
+// timer — a strictly narrower "other work" definition than the old dump-based
+// check had, but never an UNSAFE one (see the soundness argument above): the
+// poller can now stop a little earlier than it ideally would in some
+// non-timer-only workloads, never later than it should.
+function _otherWorkPending() {
+  const count = globalThis.__shimTimerLiveCount;
+  // Missing accessor shouldn't be reachable — loader.cjs installs it before
+  // any module (including this one) can load — but if it somehow is, fail
+  // toward Node's held-open default rather than guessing wrong in the hang
+  // direction, matching the old code's same defensive stance.
+  if (typeof count !== 'function') return true;
+  return count() > 0;
 }
+// Raw, uncounted scheduler for this poller's OWN timer (see loader.cjs's
+// "escape hatch" comment): using the ordinary wrapped setTimeout here would
+// make _otherWorkPending() see this poller's own recurring re-arm as "other"
+// work, so it would never observe a truly idle loop. Falls back to the
+// ordinary globals only if __shimRawTimer is somehow absent (defensive; not
+// a reachable path under the real loader) — in that fallback this poller's
+// own timer WOULD count itself, biasing toward "never stop" rather than an
+// incorrect early stop, the same safe-direction failure mode as above.
+const _rawTimer = globalThis.__shimRawTimer || { setTimeout, clearTimeout };
 
 function _pollOnce(key, ent) {
   ent.timer = null;
@@ -807,10 +820,10 @@ function _pollOnce(key, ent) {
     ent.handle.emit('change', curr, prev);
   }
   if (ent.handle.listenerCount('change') === 0) { _watchers.delete(key); return; } // unwatched mid-flight
-  if (_loopHasOtherWork()) {
-    ent.timer = setTimeout(() => _pollOnce(key, ent), ent.interval);
+  if (_otherWorkPending()) {
+    ent.timer = _rawTimer.setTimeout(() => _pollOnce(key, ent), ent.interval);
   } else {
-    trace('idle-stop', key); // see the DIVERGENCE note above _loopHasOtherWork
+    trace('idle-stop', key); // see the DIVERGENCE note above _otherWorkPending
   }
 }
 
@@ -836,8 +849,8 @@ fsMod.watchFile = function watchFile(filename, options, listener) {
   }
   if (typeof listener === 'function') ent.handle.on('change', listener);
   // (Re-)arm if idle: covers both brand-new watchers and one that had self-
-  // stopped (see _loopHasOtherWork) but just gained a fresh registration.
-  if (ent.timer == null) ent.timer = setTimeout(() => _pollOnce(key, ent), 0);
+  // stopped (see _otherWorkPending) but just gained a fresh registration.
+  if (ent.timer == null) ent.timer = _rawTimer.setTimeout(() => _pollOnce(key, ent), 0);
   return ent.handle;
 };
 fsMod.unwatchFile = function unwatchFile(filename, listener) {
@@ -848,7 +861,7 @@ fsMod.unwatchFile = function unwatchFile(filename, listener) {
   else ent.handle.removeAllListeners('change');
   trace('unwatch', key, 'remaining=' + ent.handle.listenerCount('change'));
   if (ent.handle.listenerCount('change') === 0) {
-    if (ent.timer != null) clearTimeout(ent.timer); // must actually clear: a leaked interval is its own hang
+    if (ent.timer != null) _rawTimer.clearTimeout(ent.timer); // must actually clear: a leaked interval is its own hang
     _watchers.delete(key);
   }
 };

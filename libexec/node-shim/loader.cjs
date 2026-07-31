@@ -539,14 +539,79 @@ globalThis.__shimUncaught = __shimUncaught;
   const _si = globalThis.setInterval, _ci = globalThis.clearInterval;
   const TRACE = !!globalThis.process?.env?.CLODE_SHIM_TRACE;
   let n = 0;
+
+  // ---- live-timer count: the __tjs_dump_handles() successor -----------------
+  // WHY THIS EXISTS: fs.cjs's fs.watchFile poller must stop re-arming itself
+  // once nothing else needs the loop alive, or a `-p` run that merely touches
+  // a watched config file would never exit (see modules/fs.cjs's watchFile
+  // comment for the full history). It used to answer "is anything else
+  // pinning the loop?" by calling __tjs_dump_handles() — a DEBUG introspection
+  // global added for hang diagnosis (CLODE_SHIM_HANDLE_DUMP/SIGUSR2) — and
+  // parsing its human-readable text output. That is the wrong seam: production
+  // control flow must not depend on a diagnostic's text format, which carries
+  // no stability contract and could change shape (or be compiled out) in a
+  // future engine build.
+  //
+  // WHY A PLAIN COUNTER OF *TIMERS* IS SOUND (checked against this engine's
+  // actual C sources, spike/quickjs/vendor/txiki.js/src/*.c, not assumed): a
+  // JS timer is the ONE class of loop-pinning handle this engine exposes with
+  // NO real per-instance unref — tjs_setTimeout/tjs_setInterval (timers.c)
+  // never call uv_unref, which is exactly why ref()/unref() below are
+  // documented no-ops. Every OTHER loop-pinning construct this shim exposes
+  // already manages its own real uv ref state correctly, with no help needed:
+  //   - streams (TCP/pipe/TTY — net.cjs/tty.cjs) and TLS sockets (tls.cjs)
+  //     have REAL JS ref()/unref() wired straight to uv_ref/uv_unref
+  //     (mod_streams.c tjs_stream_ref/unref, mod_tls.c tjs_tls_ref/unref) —
+  //     a caller that unrefs one genuinely stops it from pinning the loop.
+  //   - fetch/http/ws (httpclient.c/httpserver.c/ws.c, via libwebsockets) are
+  //     UNCONDITIONALLY unref'd by construction and ref themselves only while
+  //     a request is genuinely in flight (lws-evlib.c: "every handle lws
+  //     needs is unref'd so lws never keeps the loop alive by itself";
+  //     lws-utils.c's keepalive async owns real connection liveness).
+  //   - process.on('SIG*') handles are unconditionally uv_unref'd at creation
+  //     (signals.c) — they never pin the loop no matter how many are armed.
+  //   - child_process's sync path (__tjs_spawn_sync) is a blocking C call,
+  //     not a uv handle at all — nothing to pin the loop with.
+  // So the only way our poller's stop/continue decision could be WRONG in the
+  // "does the process hang" direction is by under-counting OTHER JS timers.
+  // Every other construct either keeps the loop alive on its own regardless
+  // of what we decide (a genuinely ref'd stream/socket/request), or was never
+  // capable of pinning it. Stopping the poller too EARLY is always safe —
+  // worst case the watcher stops delivering slightly before some unrelated
+  // non-timer async op finishes, the same "residual divergence" already
+  // documented in modules/fs.cjs; the only unsafe direction is re-arming
+  // forever, which is exactly what this counter prevents.
+  //
+  // This IIFE is the ONLY place in the whole process JS timers are created —
+  // every setTimeout/setInterval call, bundle or shim, routes through the
+  // globals it installs below, no bypass — so the count is authoritative for
+  // its category by construction, not inferred from a point-in-time engine
+  // snapshot. Consumed by modules/fs.cjs's _otherWorkPending().
+  let liveTimerCount = 0;
   function makeHandle(rawId, kind, rearm) {
     let refed = true;
+    let live = true; // does this handle currently count toward liveTimerCount?
+    liveTimerCount++;
     return {
       _id: rawId, _kind: kind,
+      // Called when this handle stops representing outstanding timer work:
+      // a one-shot timeout firing, or either clear* function below. Guarded
+      // so firing-then-clearing (or clearing twice) can't double-decrement.
+      _uncount() { if (live) { live = false; liveTimerCount--; } },
       ref() { refed = true; return this; },
       unref() { refed = false; return this; },
       hasRef() { return refed; },
-      refresh() { if (rearm) { _ct.call(globalThis, this._id); this._id = rearm(); } return this; },
+      refresh() {
+        if (rearm) {
+          _ct.call(globalThis, this._id);
+          this._id = rearm();
+          // refresh() can re-arm a timeout that already fired (and therefore
+          // already uncounted itself) — recount it, or a resurrected timer
+          // would silently stop contributing to liveTimerCount forever.
+          if (!live) { live = true; liveTimerCount++; }
+        }
+        return this;
+      },
       [Symbol.toPrimitive]() { return this._id; },
     };
   }
@@ -563,19 +628,49 @@ globalThis.__shimUncaught = __shimUncaught;
     catch (e) { __shimUncaught(e); }
   };
   globalThis.setTimeout = function (fn, d, ...a) {
-    let cb = guard(fn);
+    let handle; // closed over by cb below so it can uncount itself on fire
+    const userCb = guard(fn);
+    // One-shot: the instant it fires it stops being a reason the loop is
+    // alive, so uncount before running the (possibly throwing) user callback.
+    let cb = function () { if (handle) handle._uncount(); return userCb.apply(this, arguments); };
     if (TRACE) { const id = ++n; console.error('[timer] setTimeout#' + id + ' delay=' + d); const inner = cb; cb = function () { console.error('[timer] fire setTimeout#' + id); return inner.apply(this, arguments); }; }
     const self = this;
     const rearm = () => _st.call(self, cb, d, ...a);
-    return makeHandle(_st.call(self, cb, d, ...a), 'timeout', rearm);
+    handle = makeHandle(_st.call(self, cb, d, ...a), 'timeout', rearm);
+    return handle;
   };
   globalThis.setInterval = function (fn, d, ...a) {
+    // No auto-uncount on fire: an interval keeps recurring (and keeps
+    // counting) until clearInterval explicitly ends it.
     let cb = guard(fn);
     if (TRACE) { const id = ++n; console.error('[timer] setInterval#' + id + ' delay=' + d); }
     return makeHandle(_si.call(this, cb, d, ...a), 'interval', null);
   };
-  globalThis.clearTimeout = function (h) { return _ct.call(this, h && typeof h === 'object' ? h._id : h); };
-  globalThis.clearInterval = function (h) { return _ci.call(this, h && typeof h === 'object' ? h._id : h); };
+  globalThis.clearTimeout = function (h) {
+    if (h && typeof h === 'object' && typeof h._uncount === 'function') h._uncount();
+    return _ct.call(this, h && typeof h === 'object' ? h._id : h);
+  };
+  globalThis.clearInterval = function (h) {
+    if (h && typeof h === 'object' && typeof h._uncount === 'function') h._uncount();
+    return _ci.call(this, h && typeof h === 'object' ? h._id : h);
+  };
+
+  // Escape hatch for the shim's OWN internal scheduling (today: only
+  // fs.cjs's watchFile poller). If the poller scheduled itself through the
+  // wrapped setTimeout above like everyone else, its own recurring re-arm
+  // would inflate liveTimerCount by exactly the amount needed to make "is
+  // anything ELSE pinning the loop?" always true purely because of ITS OWN
+  // presence — the identical self-counting trap the old __tjs_dump_handles
+  // code had to work around by subtracting its own armed pollers from the
+  // dump's timer tally (it couldn't tell its own line apart from anyone
+  // else's in the flat text). Scheduling through this raw, pre-override
+  // primitive sidesteps that arithmetic entirely: the poller's own timer was
+  // never counted in the first place, so __shimTimerLiveCount() can be read
+  // directly as "timers other than mine." The poller doesn't need
+  // ref()/unref()/hasRef()/refresh() either — it tracks its own handle
+  // (ent.timer) directly — so the bare raw primitive is a complete fit.
+  globalThis.__shimRawTimer = { setTimeout: _st, clearTimeout: _ct };
+  globalThis.__shimTimerLiveCount = () => liveTimerCount;
 }
 // setImmediate/clearImmediate AFTER the overrides so they route through the
 // handle-wrapped setTimeout/clearTimeout (Node's setImmediate also returns an
