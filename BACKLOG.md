@@ -95,6 +95,21 @@ Driver = the at-desk release-readiness plan (`docs/superpowers/plans/2026-07-28-
    rejects correctly under LIGHT load — that needs re-testing under the fused runtime's load);
    (c) diff row C's debug log (passes, no creds) against row E's (hangs, creds) line by line
    from `attribution header` onward — the first divergent bundle step names the code path.
+   **(c) DONE — the divergence is named.** Row C (passes): `attribution header` -> Fast mode x2 ->
+   `Remote settings: Retry 1/5 after 541ms` -> `dispatching to firstParty` -> `API REQUEST`.
+   Row E (hangs): `attribution header` -> Fast mode x2 -> `Remote settings: Loading promise timed
+   out, resolving anyway` -> `Git remote URL: null` -> `No git remote URL found` -> SILENCE. So on
+   the credentialed path the remote-settings load TIMES OUT (its timer fires — "resolving anyway"),
+   then git-remote detection runs, and its CALLER never continues.
+   **HANG RE-VERIFIED ON AN IDLE BOX (2026-07-31):** >420s, apiReq=0, same last line, with `ps`
+   confirming ZERO other quaude processes. This matters because the original matrix ran while
+   ELEVEN stale quaude processes were alive on the 1-CPU VM (see the process-hygiene note below),
+   which could have explained the hangs as starvation. It does not — the hang is real.
+   **PROCESS HYGIENE (cost real credibility today):** `pkill -9 -f` silently does nothing on
+   Darwin 8, AND naive `for p in $(ps|grep|awk); do kill -9 $p; done` loops were ALSO failing
+   silently — 11 orphans from six separate test rounds were still running hours later. ALWAYS
+   re-check the survivor count after killing, and treat any timing measurement taken without that
+   check as suspect.
    Original diagnosis below (still the WHY):
 
    **(root cause, unchanged)** The PPC
