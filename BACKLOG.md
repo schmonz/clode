@@ -80,6 +80,21 @@ Driver = the at-desk release-readiness plan (`docs/superpowers/plans/2026-07-28-
    `oauth/token` x9) that only engages when credentials exist. Add a `[http]` trace to the
    shim's http/https modules, re-fuse, and re-run row E — that names the request that never
    settles.
+   **DONE, NEGATIVE (2026-07-31, cc2ac10):** with the `[http]` trace live on a re-fused ppc
+   quaude, row E still hangs (>450s) and logs **ZERO `[http]` lines** — the bundle never calls
+   `http.request`/`https.request` here. One `[fetch]` for the whole run (`/api/hello` -> 200).
+   So the hang involves NO http request of any kind, and the (separately notable) discovery that
+   `http.request` was never implemented in the shim is NOT this bug. Building that tracer
+   required implementing a minimal fetch-backed `http.request` client (cc2ac10, 193 lines in
+   http.cjs) — UNREVIEWED and UNRELATED to this bug; decide whether to keep, review, or revert.
+   STILL UNEXPLAINED: with a creds file present the process waits, before any API request, with
+   no socket, no child, no busy worker, and no http/fetch in flight; the handle dump shows 3
+   active timers and 3 active io watchers (one pipe, two UDP resolver sockets). Candidate next
+   probes: (a) instrument the fs/crypto surface the credential path touches; (b) check whether
+   the two UDP watchers hold a REAL outstanding query at the hang (the bare engine resolves and
+   rejects correctly under LIGHT load — that needs re-testing under the fused runtime's load);
+   (c) diff row C's debug log (passes, no creds) against row E's (hangs, creds) line by line
+   from `attribution header` onward — the first divergent bundle step names the code path.
    Original diagnosis below (still the WHY):
 
    **(root cause, unchanged)** The PPC
