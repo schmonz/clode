@@ -2859,14 +2859,48 @@ if (darwinPoll) {
 // (darwin-ppc, cosmo, ...) — stacking a host-side ignore-list on top would
 // fight the toolchain file, not help it, and the cross legs cross-provision
 // their own deps rather than reaching into a host package manager anyway.
-const PKG_MANAGER_PREFIXES = ['/opt/pkg', '/opt/homebrew', '/usr/local', '/opt/local', '/sw'];
+//
+// PKG_MANAGER_ROOTS is the ONE shared list for both halves of this
+// protection — the cmake ignore-prefix-path push right below AND the
+// post-build dependency-check denylist further down (checkHermeticDeps).
+// These two used to be separate arrays (PKG_MANAGER_PREFIXES vs
+// PKG_MANAGER_ROOTS) and drifted: PKG_MANAGER_PREFIXES omitted /usr/pkg,
+// so on a NATIVE NetBSD build (netbsd-amd64, publish:true — NetBSD's own
+// cmake platform module puts /usr/pkg in CMAKE_SYSTEM_PREFIX_PATH) cmake
+// was free to link /usr/pkg/lib/libffi.so with nothing stopping it, and
+// the build died on its LAST step with a message asserting
+// CMAKE_IGNORE_PREFIX_PATH "should have kept cmake's find_*() from ever
+// resolving into this prefix" — which was a lie for /usr/pkg specifically,
+// since it was never in the ignore list to begin with. One array, used in
+// both places, makes that drift structurally impossible.
+//
+// /usr/pkg is safe to add here: CMAKE_IGNORE_PREFIX_PATH only affects
+// find_library/find_path/find_package-style searches, NOT find_program
+// (which walks $PATH, unaffected by this variable) — so ignoring /usr/pkg
+// as a find_*() PREFIX cannot break discovery of /usr/pkg/bin/{cmake,gmake,
+// ninja,node} on NetBSD. Confirmed empirically against cmake 4.3.3 and by
+// this repo's own post-fix CMakeCache.txt (task-10-report.md), which shows
+// CMAKE_MAKE_PROGRAM=/opt/pkg/bin/gmake resolved via PATH search
+// coexisting fine with CMAKE_IGNORE_PREFIX_PATH=/opt/pkg. Do not remove
+// /usr/pkg from this list "to be safe" — that reintroduces the exact gap
+// this comment documents.
+const PKG_MANAGER_ROOTS = ['/opt/pkg', '/opt/homebrew', '/usr/local', '/opt/local', '/sw', '/usr/pkg'];
+// CMAKE_IGNORE_PREFIX_PATH shipped in cmake 3.23. Extracted into a named
+// function (not inlined into the `if` below) so the test suite can pull the
+// EXACT comparison through the same brace-balanced extractFunction()
+// machinery it already uses for parseOtoolDeps/parseLddDeps, rather than
+// hand-copying the arithmetic — a hand copy tracks nothing: inverting `>=`
+// to `<` here would leave a hand-copied test green.
+function cmakeVersionSupportsIgnorePrefixPath(major, minor) {
+  return major > 3 || (major === 3 && minor >= 23);
+}
 if (!crossFile) {
   const cmakeVerOut = runOut('cmake', ['--version']);
   const cmakeVerMatch = cmakeVerOut.match(/(\d+)\.(\d+)\.(\d+)/);
   const [cmMajor, cmMinor] = cmakeVerMatch
     ? [Number(cmakeVerMatch[1]), Number(cmakeVerMatch[2])] : [0, 0];
-  if (cmakeVerMatch && (cmMajor > 3 || (cmMajor === 3 && cmMinor >= 23))) {
-    cmakeArgs.push(`-DCMAKE_IGNORE_PREFIX_PATH=${PKG_MANAGER_PREFIXES.join(';')}`);
+  if (cmakeVerMatch && cmakeVersionSupportsIgnorePrefixPath(cmMajor, cmMinor)) {
+    cmakeArgs.push(`-DCMAKE_IGNORE_PREFIX_PATH=${PKG_MANAGER_ROOTS.join(';')}`);
   } else {
     // Loud, not silent: an old-cmake native leg builds WITHOUT this
     // protection. The post-build hermeticity check (below, after the smoke
@@ -2996,7 +3030,10 @@ fs.chmodSync(path.join(outDir, outName), 0o755);
 // positive: it only fires when a dependency resolves inside a package-manager
 // prefix, which is exactly (and only) the hazard CMAKE_IGNORE_PREFIX_PATH
 // exists to prevent. Do not "simplify" this back into an allowlist.
-const PKG_MANAGER_ROOTS = ['/opt/pkg', '/opt/homebrew', '/opt/local', '/sw', '/usr/pkg', '/usr/local'];
+//
+// PKG_MANAGER_ROOTS itself is defined ONCE, above, alongside the
+// CMAKE_IGNORE_PREFIX_PATH push — see the comment there for why this must
+// stay a single shared constant rather than two lists that can drift.
 
 // otool -L output: first line is the inspected binary's own path (`<path>:`);
 // every following line is an indented "<dep path> (compatibility version ...)".
@@ -3038,6 +3075,16 @@ function checkHermeticDeps(enginePath) {
     console.log('hermeticity check: SKIPPED (Windows — no otool/ldd, and no package-manager-prefix hazard on this platform)');
     return;
   }
+  // Static (musl) legs have no dynamic deps to inspect, by construction —
+  // check this BEFORE touching otool/ldd at all. Gating on wantStatic first
+  // (rather than letting a static binary fall into the otool/ldd try/catch
+  // below) matters because the catch's message is "ldd unavailable or
+  // failed to run: <error>", which for a static binary is misleadingly
+  // read as a tooling problem instead of the expected, correct outcome.
+  if (wantStatic) {
+    console.log(`hermeticity check: OK — ${enginePath} is a static link (CLODE_TJS_STATIC=1) — no dynamic dependencies by construction`);
+    return;
+  }
   const tool = process.platform === 'darwin' ? 'otool' : 'ldd';
   const toolArgs = process.platform === 'darwin' ? ['-L', enginePath] : [enginePath];
   let out;
@@ -3048,6 +3095,19 @@ function checkHermeticDeps(enginePath) {
     return;
   }
   const deps = process.platform === 'darwin' ? parseOtoolDeps(out) : parseLddDeps(out, enginePath);
+  if (deps.length === 0) {
+    // A successfully-run ldd/otool on a non-static binary that ALWAYS links
+    // libc etc. must have at least one real dependency. Zero here means the
+    // parser didn't recognize this platform's ldd output shape — e.g.
+    // OpenBSD's ldd prints a "Start End Type Open Ref GrpRef Name" table,
+    // not glibc/BSD's "name => path" or bare "/path" lines, so
+    // parseLddDeps silently returns []. That is NOT the same as "verified
+    // clean" — report it honestly as unparsed/unverified, not OK, so
+    // openbsd-amd64/openbsd-arm64 (both publish:true) don't look checked
+    // when they weren't.
+    console.log(`hermeticity check: SKIPPED (${tool} ran but produced no parseable dependency lines for ${enginePath} — this platform's ${tool} output format is not recognized by parse${tool === 'otool' ? 'Otool' : 'Ldd'}Deps; NOT verified, not a pass)`);
+    return;
+  }
   for (const dep of deps) {
     const hitRoot = PKG_MANAGER_ROOTS.find((root) => dep === root || dep.startsWith(`${root}/`));
     if (hitRoot) {

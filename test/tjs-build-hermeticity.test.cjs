@@ -20,12 +20,51 @@ const buildTjsSrc = fs.readFileSync(path.join(repo, 'scripts/build-tjs.mjs'), 'u
 
 test('build-tjs: pushes CMAKE_IGNORE_PREFIX_PATH with every package-manager prefix', () => {
   assert.match(buildTjsSrc, /CMAKE_IGNORE_PREFIX_PATH/);
-  for (const prefix of ['/opt/pkg', '/opt/homebrew', '/usr/local', '/opt/local', '/sw']) {
-    // Matches either the literal string constant or its escaped form inside the
-    // pushed cmake arg — assert the prefix text appears near the flag definition.
-    assert.match(buildTjsSrc, new RegExp(prefix.replace(/\//g, '\\/')),
-      `expected ${prefix} to appear in build-tjs.mjs near the ignore-prefix-path list`);
+  // Anchored to the actual PKG_MANAGER_ROOTS array literal (same pattern as
+  // the denylist test below), NOT "appears anywhere in the file" — a naive
+  // whole-file search passes even if the array itself is emptied, because
+  // this file's own explanatory comments list all the prefixes in prose.
+  // See PROOF below.
+  const constStart = buildTjsSrc.indexOf('const PKG_MANAGER_ROOTS = [');
+  assert.ok(constStart > -1, 'const PKG_MANAGER_ROOTS = [...] not found');
+  const constEnd = buildTjsSrc.indexOf('\n', constStart);
+  const constLine = buildTjsSrc.slice(constStart, constEnd);
+  for (const prefix of ['/opt/pkg', '/opt/homebrew', '/usr/local', '/opt/local', '/sw', '/usr/pkg']) {
+    assert.ok(constLine.includes(`'${prefix}'`),
+      `expected ${prefix} in the PKG_MANAGER_ROOTS array literal, got: ${constLine}`);
   }
+  // Also confirm the cmake push uses THIS constant (single source of truth
+  // for both the cmake ignore-list and the post-build denylist below) —
+  // not a second, independently-hand-copied list that could silently drift
+  // (this is exactly how /usr/pkg went missing from the cmake half while
+  // staying present in the dependency-check half, breaking native NetBSD).
+  assert.match(buildTjsSrc, /cmakeArgs\.push\(`-DCMAKE_IGNORE_PREFIX_PATH=\$\{PKG_MANAGER_ROOTS\.join/,
+    'the CMAKE_IGNORE_PREFIX_PATH push must read PKG_MANAGER_ROOTS, not a separate hardcoded list');
+});
+
+// PROOF that the test above is not a tautology: run it against a build-tjs.mjs
+// text with PKG_MANAGER_ROOTS emptied to `[]`. If this fails to fail, the
+// test above is worthless (it would also pass with the real protection
+// deleted). See task-14-report.md for the actual node output of this block.
+test('build-tjs: PROOF — the prefix-list test above actually fails against an emptied constant', () => {
+  const emptied = buildTjsSrc.replace(
+    /const PKG_MANAGER_ROOTS = \[[^\]]*\];/,
+    'const PKG_MANAGER_ROOTS = [];',
+  );
+  assert.notStrictEqual(emptied, buildTjsSrc, 'the emptying replace must actually match something');
+  const constStart = emptied.indexOf('const PKG_MANAGER_ROOTS = [');
+  const constEnd = emptied.indexOf('\n', constStart);
+  const constLine = emptied.slice(constStart, constEnd);
+  let caught = null;
+  try {
+    for (const prefix of ['/opt/pkg', '/opt/homebrew', '/usr/local', '/opt/local', '/sw', '/usr/pkg']) {
+      assert.ok(constLine.includes(`'${prefix}'`),
+        `expected ${prefix} in the PKG_MANAGER_ROOTS array literal, got: ${constLine}`);
+    }
+  } catch (e) {
+    caught = e;
+  }
+  assert.ok(caught, 'the tightened assertion must throw when PKG_MANAGER_ROOTS is emptied — if it did not, it is a tautology again');
 });
 
 test('build-tjs: CMAKE_IGNORE_PREFIX_PATH is gated on !crossFile (native only)', () => {
@@ -48,10 +87,19 @@ test('build-tjs: an old cmake (<3.23) does not silently skip the protection — 
   assert.match(buildTjsSrc, /predates|too old|unavailable/i);
 });
 
-// Behavioral: actually run the version-gate arithmetic the same way build-tjs
-// does, so a future refactor of the comparison can't quietly invert it.
+// Behavioral: extract the ACTUAL cmakeVersionSupportsIgnorePrefixPath(major,
+// minor) function out of build-tjs.mjs (brace-balanced, via extractFunction
+// below — the same machinery already used for parseOtoolDeps/parseLddDeps)
+// and run it directly, rather than hand-copying the comparison into the
+// test. A hand copy tracks nothing: flipping `>= 23` to `< 23` (or `>` to
+// `>=` on the major-version branch) in build-tjs.mjs would leave a
+// hand-copied `gate` here green forever. This is defined as its own
+// function declaration (not inline in the `if`) in build-tjs.mjs
+// specifically so it can be extracted and exercised here.
 test('build-tjs: version-gate arithmetic accepts 3.23+, rejects older', () => {
-  const gate = (major, minor) => major > 3 || (major === 3 && minor >= 23);
+  const src = extractFunction(buildTjsSrc, 'cmakeVersionSupportsIgnorePrefixPath');
+  // eslint-disable-next-line no-new-func
+  const gate = new Function(`${src}\nreturn cmakeVersionSupportsIgnorePrefixPath;`)();
   assert.strictEqual(gate(3, 23), true);
   assert.strictEqual(gate(4, 0), true);
   assert.strictEqual(gate(3, 22), false);
@@ -158,6 +206,87 @@ function loadParsers() {
   const factory = new Function(`${src}\nreturn { parseOtoolDeps, parseLddDeps };`);
   return factory();
 }
+
+// Derive PKG_MANAGER_ROOTS from the real array literal (not a hand copy) so
+// the harness below tracks the shipped denylist, same principle as
+// extractFunction/loadParsers above.
+function extractPkgManagerRoots() {
+  const m = buildTjsSrc.match(/const PKG_MANAGER_ROOTS = (\[[^\]]*\]);/);
+  assert.ok(m, 'PKG_MANAGER_ROOTS array literal not found in build-tjs.mjs');
+  // eslint-disable-next-line no-new-func
+  return new Function(`return ${m[1]};`)();
+}
+
+// Load the REAL checkHermeticDeps (brace-balanced extraction, same as the
+// parsers above) with its free variables (crossFile, wantStatic, process,
+// runOut, console) supplied as injectable stubs, so MINOR-4/MINOR-5 style
+// regressions (a wrong SKIPPED-vs-OK verdict) are caught by actually running
+// the shipped function, not by re-describing its logic in prose.
+function loadCheckHermeticDeps({ crossFile, wantStatic, platform, runOut, logs }) {
+  const src = [
+    extractFunction(buildTjsSrc, 'parseOtoolDeps'),
+    extractFunction(buildTjsSrc, 'parseLddDeps'),
+    extractFunction(buildTjsSrc, 'checkHermeticDeps'),
+  ].join('\n');
+  const processStub = { platform };
+  const consoleStub = {
+    log: (...args) => logs.push(args.join(' ')),
+    error: (...args) => logs.push(args.join(' ')),
+  };
+  // eslint-disable-next-line no-new-func
+  const factory = new Function(
+    'crossFile', 'wantStatic', 'process', 'runOut', 'PKG_MANAGER_ROOTS', 'console',
+    `${src}\nreturn checkHermeticDeps;`,
+  );
+  return factory(crossFile, wantStatic, processStub, runOut, extractPkgManagerRoots(), consoleStub);
+}
+
+// ---- MINOR 4: an unparseable-but-successful ldd run must not read as OK ----
+test('checkHermeticDeps: OpenBSD-style ldd table (no name=>path lines) reports SKIPPED, not OK', () => {
+  // Real OpenBSD ldd(1) output shape: a "Start End Type Open Ref GrpRef
+  // Name" table, not glibc/BSD's "name => path" or bare "/path" lines.
+  // parseLddDeps recognizes neither the header nor the data rows (the hex
+  // addresses are the first token, not a path starting with '/'), so it
+  // returns [] — which must NOT be reported as a verified-clean hermeticity
+  // pass for openbsd-amd64/openbsd-arm64 (both publish:true).
+  const openbsdTable = '        Start    End      Type  Open Ref GrpRef Name\n'
+    + '00000000c1e0f000 00000000c1e2f000 exe   1    0   0    /usr/local/bin/tjs\n'
+    + '00000000c1e00000 00000000c1e0e000 rlib  0    1   0    /usr/lib/libc.so.95.0\n';
+  const logs = [];
+  const check = loadCheckHermeticDeps({
+    crossFile: null,
+    wantStatic: false,
+    platform: 'openbsd',
+    runOut: () => openbsdTable,
+    logs,
+  });
+  assert.doesNotThrow(() => check('/usr/local/bin/tjs'));
+  const joined = logs.join('\n');
+  console.log('OpenBSD-table harness log:', joined);
+  assert.match(joined, /SKIPPED/);
+  assert.doesNotMatch(joined, /OK —/);
+});
+
+// ---- MINOR 5: static builds must short-circuit BEFORE otool/ldd, with an --
+// ---- accurate message, not fall into the "tool unavailable" catch --------
+test('checkHermeticDeps: a static build reports "static link" and never invokes ldd/otool', () => {
+  const logs = [];
+  let runOutCalled = false;
+  const check = loadCheckHermeticDeps({
+    crossFile: null,
+    wantStatic: true,
+    platform: 'linux',
+    runOut: () => { runOutCalled = true; return ''; },
+    logs,
+  });
+  assert.doesNotThrow(() => check('/build/tjs-musl/tjs'));
+  assert.strictEqual(runOutCalled, false, 'a static build must not shell out to ldd/otool at all');
+  const joined = logs.join('\n');
+  console.log('static-build harness log:', joined);
+  assert.match(joined, /static link/);
+  assert.doesNotMatch(joined, /unavailable or failed to run/,
+    'static builds must not print the misleading "ldd unavailable or failed to run" catch message');
+});
 
 test('parseLddDeps: glibc-style output (linux-vdso + /lib64 dynamic linker) is not flagged', () => {
   const { parseLddDeps } = loadParsers();
