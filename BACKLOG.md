@@ -51,6 +51,35 @@ Driver = the at-desk release-readiness plan (`docs/superpowers/plans/2026-07-28-
    loader, no re-fuse needed) to find which await never resolves.
    ALSO PENDING: the `darwin-ppc` CI leg has never built with `darwin-poll:true` — the
    engine proven here is a hand cross-build, so nothing shipped carries the fix yet.
+
+   **THE RESIDUAL STALL IS ISOLATED (2026-07-31, REPEATABLE MATRIX, n=2 per row).** It is NOT
+   the event loop, NOT DNS, NOT TLS, NOT the keychain. Harness: `/tmp/matrix.sh` on the Tiger
+   VM — each row a fresh HOME, 420s hard limit, records exit code + elapsed + whether
+   `API REQUEST` appears (so a fast wrong-reason exit can't pass as a round-trip):
+     A mock via IP  (http://10.0.2.2:8790)        PASS x2  40-50s  "Paris"
+     B mock via HOSTNAME (10.0.2.2.nip.io:8790)   PASS x2  40-50s  "Paris"   <- DNS exonerated
+     C real api.anthropic.com + INVALID key       PASS x2  50s     "Invalid API key" <- TLS exonerated
+     F real api + NO key, NO creds file           PASS x2  50s     "Not logged in"
+     D real api + creds file, no key              HANG x2  >420s   apiReq=0
+     E real api + creds file + invalid key        HANG x2  >420s   apiReq=0
+   => **the mere PRESENCE of `~/.claude/.credentials.json` is necessary and sufficient**;
+   both key states pass without it, both hang with it, and the hang is BEFORE any API request.
+   RULED OUT with evidence: DNS (row B; plus NXDOMAIN/bogus hosts reject in ~343ms on the
+   engine); TLS to the real endpoint (row C reaches a real API request); async-DNS UDP sockets
+   (idle resolver sockets, not pending queries); `probeInternalNetworkAccess` (it is literally
+   `async function vzm(){return null}`); the keychain/GUI-modal theory (the shim's `security`
+   probe runs at lines 1-3 of 219, fails over -X to -p, concludes unusable, falls back to its
+   file store — no modal, no SecurityAgent, no hung child, and the run continues past it).
+   ALSO NOTE the `[timer]` trace is NOT trustworthy for "timers stopped": loader.cjs traces
+   setTimeout creation+fire but NOT clearTimeout and NOT interval ticks, so "N scheduled /
+   M fired" says nothing about pending timers. The libuv handle dump (new: CLODE_SHIM_HANDLE_DUMP=1
+   + SIGUSR2, commit ab4f783) shows ACTIVE timers and 3 active io watchers at the hang.
+   NEXT: the shim's `http`/`https` modules have NO tracing, so any request not made through
+   `globalThis.fetch` has been invisible (the `[fetch]` trace saw exactly ONE request all run:
+   `/api/hello` -> 200). The bundle carries a full token-refresh path (`refresh_token` x32,
+   `oauth/token` x9) that only engages when credentials exist. Add a `[http]` trace to the
+   shim's http/https modules, re-fuse, and re-run row E — that names the request that never
+   settles.
    Original diagnosis below (still the WHY):
 
    **(root cause, unchanged)** The PPC
