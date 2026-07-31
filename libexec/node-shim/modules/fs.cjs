@@ -703,34 +703,161 @@ fsMod.close = (fd, cb) => { try { FSS.close(fd); if (cb) cb(null); } catch (e) {
 fsMod.Stats = Stats;
 fsMod.Dirent = Dirent;
 
-// fs.watchFile / unwatchFile / watch (Task 4 wall): the -p bundle installs a
-// config-file watcher via `fs.watchFile(path, opts, listener)` (its `mLt`
-// helper) at startup. A missing method throws `TypeError: not a function` (the
-// call is inside a try that swallows to the telemetry logger, but the throw
-// still abandons that init step). Node returns a StatWatcher (an EventEmitter
-// with ref/unref) from watchFile and an FSWatcher from watch.
-// DIVERGENCE: these register but never FIRE change events — this tjs build's
-// fs-watch surface is not wired to the sync-fs patch, and a one-shot `-p`
-// run does not depend on live config-change notifications (the file is read
-// once at startup). A path that genuinely needs change events is a future wall:
-// wire tjs.watch then. Characterized by test/node-shim-fs-watch.test.cjs.
+// fs.watchFile / unwatchFile / watch (Task 4 wall, now a real wall-crossing):
+// the -p bundle installs a config-file watcher via `fs.watchFile(path, opts,
+// listener)` (its `mLt` helper) at startup. A missing method threw
+// `TypeError: not a function` (swallowed to the telemetry logger, but the
+// throw still abandoned that init step). watchFile used to register listeners
+// but never FIRE 'change' — harmless while every known consumer only read its
+// watched file once at startup. That stopped being true: the bundle's
+// git-state cache calls `watchFile` on `branchRefPath` (repoWatchers /
+// watchedFiles) with a matching `unwatchFile` on teardown, and its accessor is
+// `async get(){ for(;;){ let r=this.generation; await this.ensureStarted();
+// if (r !== this.generation) return this.value; await new
+// Promise(res => watcher.once('change', res)); } }` — the generation counter
+// only advances from a fired watcher callback. A stub that never fires left
+// that await permanently unresolved: the darwin-ppc "hangs right after
+// 'No git remote URL found', no socket/child/threadpool/fetch in flight" wall.
+// Node's fs.watchFile is itself POLLING, not inotify/FSEvents (Node's
+// StatWatcher stats the path on an interval; see lib/internal/fs/watchers.js)
+// — so a genuine implementation here is a straight port of that idea onto the
+// facilities this file already has: reuse statSync/Stats (below), do not
+// invent a second Stats shape.
 const { EventEmitter } = require('node:events');
+const TRACE = !!(globalThis.process && globalThis.process.env && globalThis.process.env.CLODE_SHIM_TRACE);
+function trace() { if (TRACE) { try { console.error('[watchfile]', ...arguments); } catch { /* best effort */ } } }
+
+// key(String(filename)) -> { handle: EventEmitter, path, interval, prev: Stats|null, timer }
+// `prev === null` means "not yet polled" (first sample establishes the
+// baseline and must NOT fire, matching Node: a freshly-watched nonexistent
+// file doesn't report "still gone" as a change on sample #1).
 const _watchers = new Map();
+
+// A watched path that doesn't exist reads back as Node's zeroed Stats
+// (mtimeMs === 0 is the tell consumers key off of) rather than throwing.
+// Built through the real Stats constructor so every accessor (isFile() etc,
+// all false for kind 'other') matches a real stat's shape.
+function _zeroStats() { return new Stats({ size: 0, mode: 0, kind: 'other', mtimeMs: 0 }); }
+// Any stat failure (ENOENT or otherwise — permission trouble, a symlink
+// loop, an unmounted path) is treated as "currently absent", never thrown:
+// this runs on a bare timer callback with no caller try/catch, so a throw
+// here would only be reachable via __shimUncaught (or, off `-p`'s
+// bundle-installed handler, would kill the process) for what Node treats as
+// an ordinary poll sample. Matches libuv's uv_fs_poll, which folds every
+// stat() errno into the same "gone" signal.
+function _statOrZero(p) { try { return statSync(p); } catch { return _zeroStats(); } }
+function _statsChanged(curr, prev) { return curr.mtimeMs !== prev.mtimeMs || curr.size !== prev.size; }
+
+// IMPORTANT DIVERGENCE (deliberate, see fsMod.watchFile below for why): this
+// engine exposes NO real per-timer ref/unref to JS — verified against
+// spike/quickjs/vendor/txiki.js/src/timers.c (tjs_setTimeout never calls
+// uv_unref on the uv_timer_t it creates) and empirically (a bare
+// `setInterval(fn, 50)` with nothing else running has to be killed; it never
+// lets the process exit). The loader's own setTimeout/setInterval wrapper
+// documents `.ref()`/`.unref()` as no-ops for exactly this reason. So a
+// literal "call .unref()" would NOT stop our poller from pinning the loop —
+// we approximate the OBSERVABLE EFFECT of an unref'd handle instead: before
+// re-arming, ask the engine (via __tjs_dump_handles(), the same libuv
+// handle-walk the CLODE_SHIM_HANDLE_DUMP diagnostic uses — see loader.cjs)
+// whether anything is still active+ref'd that we can't account for as one of
+// OUR OWN armed pollers. If nothing is, a real unref'd timer would not keep
+// the loop running either, so we don't re-arm — the process gets to exit
+// instead of hanging on a watcher that nothing else needs.
+// The dump has no per-handle identity, only a flat "type/active/ref/closing"
+// line per handle, so a plain "ignore every timer line" rule (the first
+// version of this function) is too blunt: virtually all future work in this
+// engine — including the bundle's own unrelated setTimeout calls — IS a
+// timer, and ignoring all of them made the poller self-cancel the instant
+// nothing but timers were left, even when one of those timers was real,
+// unrelated, pending work. Instead: count how many timer-type lines the dump
+// reports, and how many pollers WE currently have armed (`ent.timer != null`
+// across `_watchers`; the poller invoking this check has already nulled its
+// own `timer` field, so it correctly excludes itself). Any timer-type lines
+// beyond our own count must belong to someone else — real pending work — so
+// keep polling. Non-timer active+ref'd handles (a socket, a pending fs op,
+// the TTY reader, …) always count as other work outright.
+// Residual divergence: once every poller stops itself because nothing else
+// was pinning the loop, they stay stopped even if unrelated work starts again
+// later (there's no real "wake me if the loop becomes alive again" primitive
+// to resume from) — accepted per this task's framing: a `-p` run that fails
+// to exit is a worse failure than a watcher that stops working at the point
+// the rest of the process was about to end anyway.
+function _loopHasOtherWork() {
+  const dump = typeof globalThis.__tjs_dump_handles === 'function' ? globalThis.__tjs_dump_handles() : null;
+  if (dump == null) return true; // can't introspect -> fail toward Node's held-open default, not a hang we can't diagnose
+  let liveTimers = 0;
+  for (const line of dump.split('\n')) {
+    const m = /^(\S+) fd=-?\d+ active=(\d) ref=(\d) closing=(\d)$/.exec(line);
+    if (!m || m[2] !== '1' || m[3] !== '1' || m[4] !== '0') continue; // not a live, loop-pinning handle
+    if (m[1] === 'timer') { liveTimers++; continue; }
+    return true; // some non-timer handle is doing real work
+  }
+  let ownArmedPollers = 0;
+  for (const ent of _watchers.values()) if (ent.timer != null) ownArmedPollers++;
+  return liveTimers > ownArmedPollers;
+}
+
+function _pollOnce(key, ent) {
+  ent.timer = null;
+  const curr = _statOrZero(ent.path);
+  const prev = ent.prev;
+  ent.prev = curr;
+  if (prev !== null && _statsChanged(curr, prev)) {
+    trace('change', key, 'mtimeMs', prev.mtimeMs + '->' + curr.mtimeMs, 'size', prev.size + '->' + curr.size);
+    ent.handle.emit('change', curr, prev);
+  }
+  if (ent.handle.listenerCount('change') === 0) { _watchers.delete(key); return; } // unwatched mid-flight
+  if (_loopHasOtherWork()) {
+    ent.timer = setTimeout(() => _pollOnce(key, ent), ent.interval);
+  } else {
+    trace('idle-stop', key); // see the DIVERGENCE note above _loopHasOtherWork
+  }
+}
+
+// fs.watchFile(filename[, options], listener): options is { interval
+// (default 5007, Node's own default), persistent }. `persistent` is accepted
+// (never throws on it) but has no held-open effect here — see the DIVERGENCE
+// note above; this poller never pins the loop regardless of the flag, because
+// on this engine "persistent: true done wrong" is a hang, not a nicety.
+// Multiple watchFile calls on the same path share ONE poller (Node's real
+// contract too: keyed by filename, same StatWatcher instance returned).
 fsMod.watchFile = function watchFile(filename, options, listener) {
-  if (typeof options === 'function') { listener = options; }
+  if (typeof options === 'function') { listener = options; options = undefined; }
+  options = options || {};
   const key = String(filename);
-  let w = _watchers.get(key);
-  if (!w) { w = new EventEmitter(); w.ref = () => w; w.unref = () => w; _watchers.set(key, w); }
-  if (typeof listener === 'function') w.on('change', listener);
-  return w;
+  let ent = _watchers.get(key);
+  if (!ent) {
+    const w = new EventEmitter();
+    w.ref = () => w; w.unref = () => w; // Node-shaped StatWatcher surface (chained-call idiom)
+    const interval = (typeof options.interval === 'number' && options.interval > 0) ? options.interval : 5007;
+    ent = { handle: w, path: key, interval, prev: null, timer: null };
+    _watchers.set(key, ent);
+    trace('watch', key, 'interval=' + interval);
+  }
+  if (typeof listener === 'function') ent.handle.on('change', listener);
+  // (Re-)arm if idle: covers both brand-new watchers and one that had self-
+  // stopped (see _loopHasOtherWork) but just gained a fresh registration.
+  if (ent.timer == null) ent.timer = setTimeout(() => _pollOnce(key, ent), 0);
+  return ent.handle;
 };
 fsMod.unwatchFile = function unwatchFile(filename, listener) {
   const key = String(filename);
-  const w = _watchers.get(key);
-  if (!w) return;
-  if (typeof listener === 'function') w.removeListener('change', listener);
-  else { w.removeAllListeners('change'); _watchers.delete(key); }
+  const ent = _watchers.get(key);
+  if (!ent) return;
+  if (typeof listener === 'function') ent.handle.removeListener('change', listener);
+  else ent.handle.removeAllListeners('change');
+  trace('unwatch', key, 'remaining=' + ent.handle.listenerCount('change'));
+  if (ent.handle.listenerCount('change') === 0) {
+    if (ent.timer != null) clearTimeout(ent.timer); // must actually clear: a leaked interval is its own hang
+    _watchers.delete(key);
+  }
 };
+// fs.watch (the inotify/FSEvents-style API): STILL a stub, unlike watchFile
+// above. Left alone deliberately, not from the same lack-of-wiring the old
+// watchFile comment described: the bundle has 0 call sites for fs.watch, and
+// this engine's uv_fs_event backend is ENOSYS on some legs (no portable native
+// primitive to poll-emulate cheaply the way watchFile's plain stat diff does).
+// A path that genuinely needs it is a future wall.
 fsMod.watch = function watch(filename, options, listener) {
   if (typeof options === 'function') { listener = options; }
   const w = new EventEmitter();
