@@ -28,8 +28,29 @@ Driver = the at-desk release-readiness plan (`docs/superpowers/plans/2026-07-28-
    (the shim's fs.watch is already a non-firing stub, and cosmo ships this way). PHASE 1
    GREEN on arm64: a poll-backend engine passes the full agentic gate (11/11, no skipped
    oracles) + the node-shim suite (166 pass/0 fail). Spec:
-   `docs/superpowers/specs/2026-07-31-old-darwin-poll-backend-design.md`. NEXT: cross-build
-   the ppc engine, cross-fuse, and re-run the deadlocking `-p` turn on the Tiger VM.
+   `docs/superpowers/specs/2026-07-31-old-darwin-poll-backend-design.md`.
+   **PHASE 2/3 ON REAL TIGER HARDWARE (2026-07-31): the kqueue deadlock is GONE; a SECOND,
+   DISTINCT live-API stall remains.** With a hand-cross-built ppc poll engine (Mach-O ppc,
+   `uv__kqueue_init` absent) cross-fused into a quaude and run on the Tiger VM against the
+   deterministic mock: `-p` turn **exit 0, "Paris", first byte 337ms** (was: parked in
+   `kevent` forever, mock received NOTHING); **Bash `outcome=ok`**; **Write actually wrote**
+   `NEEDLE-TIGER-WRITE` to disk; Read closed its two-turn loop; the **TUI renders** (welcome
+   box, animated spinner, theme picker, syntax-highlighted diff) **and accepts keystrokes**
+   (advanced theme -> API-key -> OAuth screens). The bare poll engine also does **real
+   HTTPS/TLS**: `fetch(api.anthropic.com/api/hello)` -> 200 in 275ms. So sockets, pipes,
+   child-exit, async wakeups, signals, tty input and TLS all work under `poll(2)` on Darwin 8.
+   **STILL RED — the fused quaude against the REAL api.anthropic.com stalls** during
+   "Starting background startup prefetches", BEFORE any `/api/hello`. Signature: main thread
+   parked in `poll`, all 4 threadpool workers idle in `uv_cond_wait`, **zero external
+   sockets**, no child processes — i.e. awaiting something that never posts, the same CLASS
+   as the original bug at a LATER phase. Reproduced with the real HOME *and* with a clean
+   HOME holding only `.credentials.json`, so it is NOT plugin/session state. NOT a
+   regression (the original bug hung the live path too, and hung the mock path, which is now
+   fixed) — but it is what stands between Tiger and daily-drive fidelity. NEXT: instrument
+   the prefetch path (the shim's `CLODE_SHIM_TRACE=1` fetch wrapper is baked into the fused
+   loader, no re-fuse needed) to find which await never resolves.
+   ALSO PENDING: the `darwin-ppc` CI leg has never built with `darwin-poll:true` — the
+   engine proven here is a hand cross-build, so nothing shipped carries the fix yet.
    Original diagnosis below (still the WHY):
 
    **(root cause, unchanged)** The PPC
