@@ -2835,6 +2835,49 @@ if (process.env.CLODE_TJS_ATOMIC_SHIM === '1') {
 if (darwinPoll) {
   cmakeArgs.push('-DCLODE_DARWIN_POLL=ON');
 }
+// Build hermeticity: keep cmake's find_*() out of third-party package-manager
+// prefixes. Root cause (verified twice on this dev Mac, 2026-07-31): its cmake
+// is pkgsrc's (/opt/pkg/bin/cmake), and a pkgsrc-built cmake bakes ITS OWN
+// prefix into CMAKE_SYSTEM_PREFIX_PATH ahead of /usr and the SDK:
+//   /opt/homebrew;/opt/pkg;/usr/local;/usr;/;...;<SDK>/usr;/sw;/opt/local
+// txiki's CMakeLists.txt does an UNPINNED find_library/find_path for libffi
+// (BUILD_WITH_FFI is on by default), so both resolved into pkgsrc. Two
+// failures came from that, both observed:
+//   (a) the built engine dynamically linked /opt/pkg/lib/libffi.8.dylib
+//       (`otool -L build/tjs/macos-26-arm64/tjs`) — an engine that cannot run
+//       on any machine without pkgsrc installed at that exact path;
+//   (b) -I/opt/pkg/include landed SECOND in the tjs target's include path,
+//       ahead of every vendored path, so txiki's OWN sources compiled
+//       against pkgsrc's uv.h instead of the vendored deps/libuv one. Two
+//       different uv_loop_t layouts linked into one binary, and it SIGABRTed
+//       before its first line of JS.
+// CMAKE_IGNORE_PREFIX_PATH (cmake >= 3.23) strips these roots from EVERY
+// find_*() call project-wide — the general fix (the next unpinned
+// find_library() txiki adds is covered too), not a per-package workaround.
+// NATIVE builds only: a cross toolchain file (CLODE_TJS_CROSS_FILE) already
+// sets CMAKE_FIND_ROOT_PATH_MODE_* to ONLY and owns target config end-to-end
+// (darwin-ppc, cosmo, ...) — stacking a host-side ignore-list on top would
+// fight the toolchain file, not help it, and the cross legs cross-provision
+// their own deps rather than reaching into a host package manager anyway.
+const PKG_MANAGER_PREFIXES = ['/opt/pkg', '/opt/homebrew', '/usr/local', '/opt/local', '/sw'];
+if (!crossFile) {
+  const cmakeVerOut = runOut('cmake', ['--version']);
+  const cmakeVerMatch = cmakeVerOut.match(/(\d+)\.(\d+)\.(\d+)/);
+  const [cmMajor, cmMinor] = cmakeVerMatch
+    ? [Number(cmakeVerMatch[1]), Number(cmakeVerMatch[2])] : [0, 0];
+  if (cmakeVerMatch && (cmMajor > 3 || (cmMajor === 3 && cmMinor >= 23))) {
+    cmakeArgs.push(`-DCMAKE_IGNORE_PREFIX_PATH=${PKG_MANAGER_PREFIXES.join(';')}`);
+  } else {
+    // Loud, not silent: an old-cmake native leg builds WITHOUT this
+    // protection. The post-build hermeticity check (below, after the smoke
+    // test) is the backstop that still catches a package-manager dep landing
+    // in the shipped binary — it just can't be prevented at configure time here.
+    console.error(`build-tjs: cmake ${cmakeVerMatch ? cmakeVerMatch[0] : cmakeVerOut.trim()} predates ` +
+      '3.23 — CMAKE_IGNORE_PREFIX_PATH is unavailable, so this configure is NOT protected ' +
+      'against package-manager prefixes shadowing vendored deps (see the pkgsrc ' +
+      'libffi/uv.h incident above). Relying on the post-build dependency check to fail loud instead.');
+  }
+}
 const macosMin = process.env.CLODE_TJS_MACOS_MIN || '';
 const macosSdk = process.env.CLODE_TJS_MACOS_SDK || '';
 if (macosMin && !crossFile) {
@@ -2929,6 +2972,101 @@ const outName = builtExe ? 'tjs.exe' : 'tjs';
 fs.copyFileSync(path.join(buildDir, builtExe ? 'tjs.exe' : 'tjs'), path.join(outDir, outName));
 fs.chmodSync(path.join(outDir, outName), 0o755);
 
+// ---- build hermeticity, part 2: verify the shipped binary, don't just hope
+// the configure-time flag above worked. Inspect the built engine's dynamic
+// deps and fail LOUDLY if any resolves inside a package-manager prefix — the
+// regression guard for the pkgsrc libffi/uv.h incident (see the
+// CMAKE_IGNORE_PREFIX_PATH comment above) that keeps it from coming back
+// silently the next time someone adds an unpinned find_library() upstream,
+// or builds on a host whose cmake is too old for the configure-time fix.
+//
+// DENYLIST, not an allowlist — deliberately. An earlier attempt at this check
+// allowlisted system prefixes (['/lib/', '/usr/lib/']) and broke two legs that
+// are actually fine:
+//   * glibc's ldd prints `/lib64/ld-linux-x86-64.so.2` for the dynamic linker;
+//     '/lib64/ld-linux-x86-64.so.2'.startsWith('/lib/') is FALSE (it's /lib64,
+//     not /lib), so a perfectly good dependency got flagged — this would have
+//     failed the native linux-x64-glibc leg on every build.
+//   * FreeBSD/NetBSD/DragonFly's ldd prints the INSPECTED BINARY'S OWN PATH as
+//     a header line first (e.g. "/usr/local/bin/tjs:"); a naive per-line
+//     regex captured that header too and flagged it — this would have failed
+//     freebsd-amd64, netbsd-amd64 and dragonflybsd-amd64, all publish:true
+//     legs, any time the binary happened to sit under /usr/local.
+// A denylist of the SPECIFIC roots we forbid cannot produce either false
+// positive: it only fires when a dependency resolves inside a package-manager
+// prefix, which is exactly (and only) the hazard CMAKE_IGNORE_PREFIX_PATH
+// exists to prevent. Do not "simplify" this back into an allowlist.
+const PKG_MANAGER_ROOTS = ['/opt/pkg', '/opt/homebrew', '/opt/local', '/sw', '/usr/pkg', '/usr/local'];
+
+// otool -L output: first line is the inspected binary's own path (`<path>:`);
+// every following line is an indented "<dep path> (compatibility version ...)".
+function parseOtoolDeps(output) {
+  return output.split('\n').slice(1)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => l.match(/^(\S+)/)?.[1])
+    .filter(Boolean);
+}
+
+// ldd output varies by libc, which is exactly why this is a denylist (see
+// above): glibc emits bare "<dep path> (0x...)" or "<name> => <dep path>
+// (0x...)" lines with no header; BSD ldd prefixes a "<binary path>:" header
+// line. selfPath lets us drop that header even where it isn't syntactically
+// distinguishable from a dependency line (a BSD binary living under
+// /usr/local would otherwise look like a hit).
+function parseLddDeps(output, selfPath) {
+  const deps = [];
+  for (const rawLine of output.split('\n')) {
+    const line = rawLine.trim();
+    if (!line || line === `${selfPath}:`) continue;
+    // "name => /resolved/path (0x...)" or bare "/resolved/path (0x...)".
+    // linux-vdso.so.1 has no resolved path (not a real file) and is dropped
+    // by the startsWith('/') filter below, same as an unresolved "=> not found".
+    const arrowMatch = line.match(/=>\s*(\S+)/);
+    const resolved = arrowMatch ? arrowMatch[1] : line.match(/^(\S+)/)?.[1];
+    if (resolved && resolved.startsWith('/')) deps.push(resolved);
+  }
+  return deps;
+}
+
+function checkHermeticDeps(enginePath) {
+  if (crossFile) {
+    console.log(`hermeticity check: SKIPPED (cross-built via ${crossFile} — the host's own otool/ldd cannot meaningfully inspect a foreign-arch/foreign-OS binary)`);
+    return;
+  }
+  if (process.platform === 'win32') {
+    console.log('hermeticity check: SKIPPED (Windows — no otool/ldd, and no package-manager-prefix hazard on this platform)');
+    return;
+  }
+  const tool = process.platform === 'darwin' ? 'otool' : 'ldd';
+  const toolArgs = process.platform === 'darwin' ? ['-L', enginePath] : [enginePath];
+  let out;
+  try {
+    out = runOut(tool, toolArgs);
+  } catch (e) {
+    console.log(`hermeticity check: SKIPPED (${tool} unavailable or failed to run: ${e.message})`);
+    return;
+  }
+  const deps = process.platform === 'darwin' ? parseOtoolDeps(out) : parseLddDeps(out, enginePath);
+  for (const dep of deps) {
+    const hitRoot = PKG_MANAGER_ROOTS.find((root) => dep === root || dep.startsWith(`${root}/`));
+    if (hitRoot) {
+      throw new Error(
+        `hermeticity check FAILED: ${enginePath} dynamically depends on ${dep}, which ` +
+        `resolves inside the package-manager prefix ${hitRoot}. A shipped engine must not ` +
+        'depend on a third-party package manager (pkgsrc/Homebrew/MacPorts/Fink/...): a ' +
+        'machine running it may not have that prefix at all, and when one DID, a mixed-in ' +
+        'pkgsrc uv.h previously got compiled into this same binary alongside the vendored ' +
+        'one and SIGABRTed before the first line of JS ran (2026-07-31 incident, see the ' +
+        'CMAKE_IGNORE_PREFIX_PATH comment above). CMAKE_IGNORE_PREFIX_PATH should have kept ' +
+        "cmake's find_*() from ever resolving into this prefix — if it linked anyway, either " +
+        'this host\'s cmake predates 3.23 (see the loud warning above) or something ' +
+        're-added a package-manager search path.');
+    }
+  }
+  console.log(`hermeticity check: OK — ${enginePath} has ${deps.length} dynamic ${deps.length === 1 ? 'dependency' : 'dependencies'}, none from a package-manager prefix (${PKG_MANAGER_ROOTS.join(', ')})`);
+}
+
 // CLODE_TJS_SMOKE=off: skip the exec smoke — for cross-target engines the
 // build host cannot execute the output (darwin-x86 i386: no runner and no
 // arm64 dev box can exec it; the floor gate + the real-hardware oracle
@@ -2948,3 +3086,4 @@ if ((process.env.CLODE_TJS_SMOKE || 'on').toLowerCase() !== 'off') {
 } else {
   console.log(`built ${path.join(outDir, outName)} (exec smoke SKIPPED: cross-target, CLODE_TJS_SMOKE=off)`);
 }
+checkHermeticDeps(path.join(outDir, outName));
