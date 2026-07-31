@@ -68,6 +68,15 @@ test('the poll-backend fixup lands its six edits in the patched tree', (t) => {
   //    undefined symbol: the ON build fails to LINK, not just to run.
   assert.match(internalH, /#if \(!defined\(__APPLE__\) \|\| defined\(CLODE_DARWIN_POLL\)\) &&/);
   assert.match(internalH, /#define uv__fs_event\(loop, w, events\) UNREACHABLE\(\)/);
+
+  // 7. posix-poll.c: the wait call inside uv__io_poll is the guarded
+  //    select()-based wrapper, not a bare poll() (Apple's poll(2) is broken
+  //    under load on 10.3-10.8 — see the fixup's own comment for the
+  //    measured Tiger symptom and the curl prior-art citation).
+  const posixPollC = read('deps/libuv/src/unix/posix-poll.c');
+  assert.match(posixPollC, /#if defined\(CLODE_DARWIN_POLL\)\n\/\*[\s\S]*?\*\/\nstatic int uv__clode_poll_select\(struct pollfd\* fds, nfds_t nfds, int timeout\) \{/);
+  assert.match(posixPollC,
+    /#if defined\(CLODE_DARWIN_POLL\)\n {4}nfds = uv__clode_poll_select\(loop->poll_fds, \(nfds_t\)loop->poll_fds_used, timeout\);\n#else\n {4}nfds = poll\(loop->poll_fds, \(nfds_t\)loop->poll_fds_used, timeout\);\n#endif/);
 });
 
 test('the edits are inert: the option defaults OFF and kqueue stays the default', (t) => {
@@ -101,7 +110,7 @@ test('build-tjs.mjs: the poll-backend fixup is registered right after the tty-kq
     /fixupLibuvTtyKqueueOldDarwin\(tjsDir\);\s*\n\s*fixupLibuvPollBackendOldDarwin\(tjsDir\);/);
 });
 
-test('build-tjs.mjs: the fixup body carries all six CLODE_DARWIN_POLL edit guards', () => {
+test('build-tjs.mjs: the fixup body carries all seven CLODE_DARWIN_POLL edit guards', () => {
   const fnStart = buildTjsSrc.indexOf('function fixupLibuvPollBackendOldDarwin(dir) {');
   const fnEnd = buildTjsSrc.indexOf('\nfunction fixupTjsHandleDump(dir) {', fnStart);
   assert.ok(fnStart >= 0 && fnEnd > fnStart, 'fixupLibuvPollBackendOldDarwin function body must exist');
@@ -122,6 +131,15 @@ test('build-tjs.mjs: the fixup body carries all six CLODE_DARWIN_POLL edit guard
     'edit 5: EVFILT_USER gated');
   // (6) internal.h: uv__fs_event() UNREACHABLE() shim widened (the link-time fix).
   assert.ok(body.includes('!defined(__APPLE__) || defined(CLODE_DARWIN_POLL)'), 'edit 6: uv__fs_event shim widened');
+  // (7) posix-poll.c: poll(2) itself is broken under load on Apple 10.3-10.8
+  //     (curl prior art), so the wait call goes through a select()-based
+  //     wrapper instead — this is the gate marker too (the new LAST edit).
+  assert.ok(body.includes('static int uv__clode_poll_select(struct pollfd* fds, nfds_t nfds, int timeout)'),
+    'edit 7: select()-based poll() replacement declared');
+  assert.ok(body.includes('nfds = uv__clode_poll_select(loop->poll_fds, (nfds_t)loop->poll_fds_used, timeout);'),
+    'edit 7: uv__io_poll calls the select()-based wrapper under the guard');
+  assert.ok(body.includes('daniel.haxx.se/blog/2016/10/11/poll-on-mac-10-12-is-broken'),
+    'edit 7: curl prior-art citation present');
 });
 
 test('the darwin-poll knob refuses a non-darwin target, loudly and early', () => {

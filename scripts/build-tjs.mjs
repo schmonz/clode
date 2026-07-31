@@ -114,6 +114,102 @@ const run = (cmd, args, opts = {}) =>
 const runOut = (cmd, args, opts = {}) =>
   execFileSync(cmd, args, { encoding: 'utf8', ...opts }).trim();
 
+// ---- hermeticity tripwire (HALF 2 of the pkgsrc-leak fix) ------------------
+// CMAKE_IGNORE_PREFIX_PATH above stops cmake's find_*() from SEARCHING
+// third-party package-manager prefixes on a native build, but it is not the
+// only way a stray dependency can sneak in (an explicit find_library(PATHS
+// ...) somewhere in the dep tree, a cmake < 3.23 host where the flag was
+// skipped, a future change nobody remembers this comment for). So: after the
+// engine is built, actually inspect what it links and fail the BUILD, loudly,
+// if anything resolved outside the OS. A shipped engine that dynamically
+// depends on e.g. /opt/pkg/lib/libffi.8.dylib cannot run on a machine that
+// doesn't happen to have pkgsrc installed at that exact path — this is
+// exactly the bug this whole change exists to prevent from coming back.
+//
+// Only meaningful for a binary this HOST's own inspection tool can read as
+// its native format: a cross-built engine (CLODE_TJS_CROSS_FILE) targets a
+// different OS/arch than the host and a cosmo APE is a DOS/MBR container, not
+// a plain Mach-O/ELF, so both are explicitly skipped (printed, not silent)
+// rather than risking a false failure from mis-parsing the wrong format.
+const HERMETIC_ALLOWED_PREFIXES = {
+  darwin: ['/usr/lib/', '/System/'],
+  elf: ['/lib/', '/usr/lib/'],
+};
+// Same third-party roots CMAKE_IGNORE_PREFIX_PATH excludes above, named here
+// for the error message; the allowlist check below doesn't actually need
+// this list (anything not under an ALLOWED prefix is offending), but calling
+// out the known offenders by name makes the failure message self-explanatory.
+const HERMETIC_PKG_MGR_PREFIXES = ['/opt/pkg', '/opt/homebrew', '/usr/local', '/opt/local', '/sw'];
+function checkDynamicDepsHermetic(enginePath) {
+  const isDarwin = process.platform === 'darwin';
+  const isElfHost = ['linux', 'freebsd', 'openbsd', 'netbsd', 'dragonfly', 'sunos', 'haiku'].includes(process.platform);
+  if (!isDarwin && !isElfHost) {
+    console.log(`build-tjs: hermeticity check SKIPPED (no otool/ldd route for ${process.platform})`);
+    return;
+  }
+  let libs;
+  if (isDarwin) {
+    let out;
+    try {
+      out = runOut('otool', ['-L', enginePath]);
+    } catch (e) {
+      console.log(`build-tjs: hermeticity check SKIPPED (otool unavailable: ${e.message.split('\n')[0]})`);
+      return;
+    }
+    // First line is the binary's own path (otool -L header); the rest are
+    // "\t<path> (compatibility version ..., current version ...)" entries.
+    libs = out.split('\n').slice(1)
+      .map((l) => l.trim().replace(/\s*\(compatibility version.*\)$/, ''))
+      .filter(Boolean);
+  } else {
+    let out;
+    try {
+      out = runOut('ldd', [enginePath]);
+    } catch (e) {
+      // A statically-linked ELF makes ldd exit non-zero with "not a dynamic
+      // executable" on some platforms — that's not a hermeticity problem
+      // (nothing to leak), it's the STATIC case (CLODE_TJS_STATIC=1)
+      // reporting itself the only way ldd knows how. Anything else (ldd
+      // missing entirely) also just skips rather than failing the build.
+      if (/not a dynamic executable/i.test(`${e.stdout || ''}${e.stderr || ''}${e.message}`)) {
+        console.log('build-tjs: hermeticity check: statically linked, nothing to inspect');
+        return;
+      }
+      console.log(`build-tjs: hermeticity check SKIPPED (ldd unavailable: ${e.message.split('\n')[0]})`);
+      return;
+    }
+    // Lines look like "libfoo.so.1 => /path/to/libfoo.so.1 (0x...)" or, for
+    // the vdso / the dynamic linker itself, "linux-vdso.so.1 (0x...)" /
+    // "/lib64/ld-linux-x86-64.so.2 (0x...)" with no "=>".
+    libs = out.split('\n')
+      .map((l) => {
+        const m = l.match(/=>\s*(\S+)/) || l.match(/^\s*(\/\S+)/);
+        return m ? m[1] : null;
+      })
+      .filter(Boolean);
+  }
+  const allowed = HERMETIC_ALLOWED_PREFIXES[isDarwin ? 'darwin' : 'elf'];
+  const offending = libs.filter((lib) => {
+    if (lib.startsWith('@rpath/') || lib.startsWith('@loader_path/') || lib.startsWith('@executable_path/')) return false; // resolved relative to the binary itself, not a filesystem search
+    if (!lib.startsWith('/')) return false; // vdso / bare names with no resolved path — nothing to leak
+    return !allowed.some((p) => lib.startsWith(p));
+  });
+  if (offending.length) {
+    const named = offending.map((lib) => {
+      const pm = HERMETIC_PKG_MGR_PREFIXES.find((p) => lib.startsWith(p));
+      return pm ? `${lib} (${pm})` : lib;
+    });
+    throw new Error(
+      `build-tjs: HERMETICITY VIOLATION — ${enginePath} dynamically depends on ` +
+      `${named.join(', ')}, which resolves outside the OS. A shipped engine must not ` +
+      'depend on a third-party package-manager library: it will not run on a machine ' +
+      "that doesn't have that exact package manager installed at that exact path. " +
+      'This is the CMAKE_IGNORE_PREFIX_PATH protection failing to hold — see the comment ' +
+      'above it in this file.');
+  }
+  console.log(`build-tjs: hermeticity check OK — ${enginePath} links only OS-provided libraries`);
+}
+
 function pinFields(component) {
   const line = fs.readFileSync(path.join(repo, 'spike/quickjs/PINS.md'), 'utf8')
     .split('\n').find((l) => l.split(/\s+/)[0] === component);
@@ -1184,19 +1280,21 @@ function fixupLibuvPollBackendOldDarwin(dir) {
   // darwin-x64 (10.6 floor, proven on real Mavericks), darwin-arm64, and all
   // non-darwin legs — compiles byte-identically. libuv upstream candidate.
   //
-  // The "already applied" gate keys on edit (6)'s marker (the LAST edit this
-  // function makes), not edit (1)'s — edit (1)'s target text (the CMakeLists.txt
-  // option block) starts with the very anchor it matches on, so re-running edit
-  // (1) alone against an already-patched tree would silently double-apply rather
-  // than no-op. Gating on the last edit means a half-applied tree (crashed
+  // The "already applied" gate keys on edit (7)'s marker (the LAST edit this
+  // function makes — see that edit, below, for what it does and why), not
+  // edit (1)'s — edit (1)'s target text (the CMakeLists.txt option block)
+  // starts with the very anchor it matches on, so re-running edit (1) alone
+  // against an already-patched tree would silently double-apply rather than
+  // no-op. Gating on the last edit means a half-applied tree (crashed
   // between edits) is NEVER reported as "already applied": either every edit's
   // anchor is still pristine (full re-apply proceeds) or an earlier edit already
   // landed and its OWN anchor is gone, which throws loudly on retry — both
   // acceptable outcomes; silently reporting success on a half-patched tree is
   // the one outcome the fixup contract forbids.
   const internalHF = path.join(dir, 'deps/libuv/src/unix/internal.h');
-  const fsEvMarker = '!defined(__APPLE__) || defined(CLODE_DARWIN_POLL)';
-  if (fs.readFileSync(internalHF, 'utf8').includes(fsEvMarker)) {
+  const pollCF = path.join(dir, 'deps/libuv/src/unix/posix-poll.c');
+  const pollSelectMarker = 'static int uv__clode_poll_select(struct pollfd* fds, nfds_t nfds, int timeout)';
+  if (fs.readFileSync(pollCF, 'utf8').includes(pollSelectMarker)) {
     console.log('fixup libuv-poll-backend-old-darwin: already applied');
     return;
   }
@@ -1355,6 +1453,190 @@ function fixupLibuvPollBackendOldDarwin(dir) {
     throw new Error('fixup libuv-poll-backend-old-darwin: internal.h uv__fs_event anchor not found (libuv changed under the pin — re-derive the fixup)');
   }
   fs.writeFileSync(internalHF, internalH2.replace(fsEvOld, fsEvNew));
+
+  // (7) posix-poll.c: swap poll(2) for select(2) inside uv__io_poll's wait
+  // call. Edits (1)-(6) get libuv building posix-poll.c on Tiger at all, but
+  // Apple's poll(2) is ITSELF documented broken from Mac OS X 10.3 through
+  // 10.8 (fixed in 10.9, broken again in 10.12) — see
+  // https://daniel.haxx.se/blog/2016/10/11/poll-on-mac-10-12-is-broken/,
+  // which is why curl's configure probes for exactly this and falls back to
+  // select(2). Tiger (10.4, our floor) sits inside that broken range: under
+  // the fused runtime's real fd load (~31 fds — tool pipes, the TLS socket,
+  // threadpool wakeups, the signal self-pipe), 28 timers were scheduled and
+  // only 13 ever fired, with the process parked in poll() — no sockets in
+  // flight, every threadpool worker idle, nothing pending. Sending SIGINT (a
+  // signal the app handles, so it causes EINTR) released the loop and it made
+  // progress; the very same engine fires timers millisecond-exact when
+  // nothing else is registered. This is Apple's poll(2) losing wakeups under
+  // load, not a libuv or clode bug, and select(2) is unimpaired across that
+  // whole range — hence this edit, gated the same as (1)-(6).
+  //
+  // uv__clode_poll_select preserves poll()'s exact return contract (>0 =
+  // number of pollfd entries with revents set, 0 = timed out, -1/errno on
+  // error) so uv__io_poll's surrounding retry loop (its EINTR/abort() handling
+  // right below the call this replaces) needs no other change. See the
+  // function's own doc comment (written into posix-poll.c) for the EBADF and
+  // FD_SETSIZE edge cases.
+  const pollC = fs.readFileSync(pollCF, 'utf8');
+  const pollIncludesOld = '#include <errno.h>\n#include <unistd.h>\n';
+  const pollIncludesNew = pollIncludesOld
+    + '\n#if defined(CLODE_DARWIN_POLL)\n'
+    + '/* select(2) needs <sys/select.h> (fd_set/FD_SET/FD_ISSET/select) and\n'
+    + '   <fcntl.h> (fcntl/F_GETFD, used only for the EBADF -> POLLNVAL\n'
+    + '   translation in uv__clode_poll_select below); neither is pulled in by\n'
+    + '   the includes above. */\n'
+    + '# include <sys/select.h>\n'
+    + '# include <fcntl.h>\n'
+    + '#endif\n';
+  const ioPollFnAnchor = 'void uv__io_poll(uv_loop_t* loop, int timeout) {\n';
+  const pollCallOld = '    nfds = poll(loop->poll_fds, (nfds_t)loop->poll_fds_used, timeout);\n';
+  const pollCallNew = '#if defined(CLODE_DARWIN_POLL)\n'
+    + '    nfds = uv__clode_poll_select(loop->poll_fds, (nfds_t)loop->poll_fds_used, timeout);\n'
+    + '#else\n'
+    + '    nfds = poll(loop->poll_fds, (nfds_t)loop->poll_fds_used, timeout);\n'
+    + '#endif\n';
+  if (!pollC.includes(pollIncludesOld) || !pollC.includes(ioPollFnAnchor) || !pollC.includes(pollCallOld)) {
+    throw new Error('fixup libuv-poll-backend-old-darwin: posix-poll.c anchor not found (libuv changed under the pin — re-derive the fixup)');
+  }
+  const pollSelectHelper = '#if defined(CLODE_DARWIN_POLL)\n'
+    + '/* Apple\'s poll(2) is documented broken on Mac OS X 10.3 through 10.8\n'
+    + ' * (fixed in 10.9, broken again in 10.12) -- see\n'
+    + ' * https://daniel.haxx.se/blog/2016/10/11/poll-on-mac-10-12-is-broken/,\n'
+    + ' * which is why curl\'s configure probes for exactly this and falls back\n'
+    + ' * to select(2). Tiger (10.4, our floor) sits inside that broken range:\n'
+    + ' * under the fused runtime\'s real fd load (~31 fds), 28 timers were\n'
+    + ' * scheduled and only 13 ever fired, with the process parked in poll() --\n'
+    + ' * no sockets in flight, every threadpool worker idle, nothing pending.\n'
+    + ' * Sending SIGINT (a signal the app handles, so it causes EINTR) released\n'
+    + ' * the loop and it made progress; the very same engine fires timers\n'
+    + ' * millisecond-exact when nothing else is registered. This wraps select(2)\n'
+    + ' * -- unimpaired across that whole range -- behind poll()\'s exact return\n'
+    + ' * contract (>0 = number of pollfd entries with revents set, 0 = timed\n'
+    + ' * out, -1/errno on error) so uv__io_poll below needs no other change.\n'
+    + ' */\n'
+    + 'static int uv__clode_poll_select(struct pollfd* fds, nfds_t nfds, int timeout) {\n'
+    + '  fd_set readfds;\n'
+    + '  fd_set writefds;\n'
+    + '  struct timeval tv;\n'
+    + '  struct timeval* tvp;\n'
+    + '  nfds_t i;\n'
+    + '  int fd;\n'
+    + '  int maxfd;\n'
+    + '  int rv;\n'
+    + '  int bad;\n'
+    + '  int count;\n'
+    + '\n'
+    + '  FD_ZERO(&readfds);\n'
+    + '  FD_ZERO(&writefds);\n'
+    + '  maxfd = -1;\n'
+    + '\n'
+    + '  for (i = 0; i < nfds; i++) {\n'
+    + '    fds[i].revents = 0;\n'
+    + '\n'
+    + '    fd = fds[i].fd;\n'
+    + '    if (fd < 0)\n'
+    + '      continue;\n'
+    + '\n'
+    + '    /* select()\'s fd_set is a fixed-size bitmap indexed by fd number; an\n'
+    + '     * fd >= FD_SETSIZE cannot be represented (FD_SET on it is undefined\n'
+    + '     * behavior -- classically an out-of-bounds write on the bitmap). Our\n'
+    + '     * loops run ~31 fds under the fused runtime\'s load (the measured\n'
+    + '     * symptom this helper exists to fix), so this branch is unreachable\n'
+    + '     * in practice; fall back to the real poll() for this one call rather\n'
+    + '     * than corrupting memory or silently dropping the fd.\n'
+    + '     */\n'
+    + '    if (fd >= FD_SETSIZE)\n'
+    + '      return poll(fds, nfds, timeout);\n'
+    + '\n'
+    + '    if (fds[i].events & POLLIN)\n'
+    + '      FD_SET(fd, &readfds);\n'
+    + '    if (fds[i].events & POLLOUT)\n'
+    + '      FD_SET(fd, &writefds);\n'
+    + '    if (fd > maxfd)\n'
+    + '      maxfd = fd;\n'
+    + '  }\n'
+    + '\n'
+    + '  if (timeout < 0) {\n'
+    + '    tvp = NULL;\n'
+    + '  } else {\n'
+    + '    tv.tv_sec = timeout / 1000;\n'
+    + '    tv.tv_usec = (timeout % 1000) * 1000;\n'
+    + '    tvp = &tv;\n'
+    + '  }\n'
+    + '\n'
+    + '  /* No exceptfds: select()\'s "exceptional condition" on a socket means\n'
+    + '   * out-of-band (urgent) data has arrived, not an error -- mapping it to\n'
+    + '   * POLLERR would make libuv treat ordinary OOB data as a connection\n'
+    + '   * failure. A real socket error already surfaces as readable or\n'
+    + '   * writable (the next recv()/send() returns it), so omitting exceptfds\n'
+    + '   * loses nothing poll() would have reported here.\n'
+    + '   */\n'
+    + '  rv = select(maxfd + 1, &readfds, &writefds, NULL, tvp);\n'
+    + '\n'
+    + '  if (rv == -1) {\n'
+    + '    /* Do not retry EINTR here: uv__io_poll\'s caller (below) explicitly\n'
+    + '     * checks for EINTR -- our own SIGCHLD/wakeup self-pipe writes rely\n'
+    + '     * on it to make progress -- and loops itself. Retrying inside this\n'
+    + '     * helper would swallow that signal-driven wakeup.\n'
+    + '     */\n'
+    + '    if (errno == EINTR)\n'
+    + '      return -1;\n'
+    + '\n'
+    + '    /* poll() reports a closed/invalid fd as POLLNVAL on that ONE entry\n'
+    + '     * and still returns a normal count; select() instead fails the\n'
+    + '     * WHOLE call with EBADF. uv__io_poll\'s caller abort()s on any -1\n'
+    + '     * that is not EINTR, so translate: probe every fd with\n'
+    + '     * fcntl(F_GETFD) and mark the bad ones POLLNVAL, matching poll()\'s\n'
+    + '     * per-fd contract. Only report EBADF (poll() essentially never\n'
+    + '     * does) if none actually turn out bad.\n'
+    + '     */\n'
+    + '    if (errno == EBADF) {\n'
+    + '      bad = 0;\n'
+    + '      for (i = 0; i < nfds; i++) {\n'
+    + '        fd = fds[i].fd;\n'
+    + '        if (fd < 0)\n'
+    + '          continue;\n'
+    + '        if (fcntl(fd, F_GETFD) == -1 && errno == EBADF) {\n'
+    + '          fds[i].revents = POLLNVAL;\n'
+    + '          bad++;\n'
+    + '        }\n'
+    + '      }\n'
+    + '      if (bad > 0) {\n'
+    + '        errno = 0;\n'
+    + '        return bad;\n'
+    + '      }\n'
+    + '      errno = EBADF;\n'
+    + '      return -1;\n'
+    + '    }\n'
+    + '\n'
+    + '    return -1;\n'
+    + '  }\n'
+    + '\n'
+    + '  if (rv == 0)\n'
+    + '    return 0;\n'
+    + '\n'
+    + '  /* Translate the two fd_sets select() filled back into per-fd revents,\n'
+    + '   * matching what poll() would have set. */\n'
+    + '  count = 0;\n'
+    + '  for (i = 0; i < nfds; i++) {\n'
+    + '    fd = fds[i].fd;\n'
+    + '    if (fd < 0)\n'
+    + '      continue;\n'
+    + '    if (FD_ISSET(fd, &readfds))\n'
+    + '      fds[i].revents |= POLLIN;\n'
+    + '    if (FD_ISSET(fd, &writefds))\n'
+    + '      fds[i].revents |= POLLOUT;\n'
+    + '    if (fds[i].revents != 0)\n'
+    + '      count++;\n'
+    + '  }\n'
+    + '  return count;\n'
+    + '}\n'
+    + '#endif\n'
+    + '\n';
+  fs.writeFileSync(pollCF, pollC
+    .replace(pollIncludesOld, pollIncludesNew)
+    .replace(ioPollFnAnchor, pollSelectHelper + ioPollFnAnchor)
+    .replace(pollCallOld, pollCallNew));
 
   console.log('fixup libuv-poll-backend-old-darwin: applied');
 }
@@ -2633,6 +2915,43 @@ if (process.env.CLODE_TJS_ATOMIC_SHIM === '1') {
 if (darwinPoll) {
   cmakeArgs.push('-DCLODE_DARWIN_POLL=ON');
 }
+// Hermeticity: keep third-party package-manager prefixes out of cmake's
+// find_library/find_path search entirely — NATIVE builds only. Concretely, on
+// this dev box cmake is pkgsrc's (/opt/pkg/bin/cmake), and its baked-in
+// CMAKE_SYSTEM_PREFIX_PATH puts /opt/pkg (and Homebrew's /opt/homebrew,
+// /usr/local) BEFORE /usr and the macOS SDK. txiki's CMakeLists.txt does
+// `find_library(FFI_LIB NAMES libffi ffi REQUIRED)` /
+// `find_path(FFI_INCLUDE_DIR NAMES ffi.h ...)`, so both resolved into pkgsrc:
+// (a) the built engine dynamically linked /opt/pkg/lib/libffi.8.dylib —
+//     verified with `otool -L` — so it could not run on a machine without
+//     pkgsrc installed at that exact path, and
+// (b) -I/opt/pkg/include landed ahead of every vendored include path, so
+//     txiki's OWN sources compiled against pkgsrc's uv.h instead of the
+//     vendored deps/libuv one — two different uv_loop_t layouts silently
+//     mixed into one binary and crashed a build.
+// CMAKE_IGNORE_PREFIX_PATH (cmake >= 3.23) removes these prefixes from every
+// find_*() search, forcing FFI/libuv/etc. to resolve from the OS (/usr,
+// /System, the SDK) or fail loudly — never silently substitute a third-party
+// copy. Cross builds are EXCLUDED: a toolchain file (CLODE_TJS_CROSS_FILE)
+// already sets CMAKE_FIND_ROOT_PATH_MODE_* to ONLY and owns target config —
+// stacking this on top would fight it, not reinforce it.
+if (!crossFile) {
+  const cmakeVerOut = runOut('cmake', ['--version']);
+  const cmakeVerMatch = cmakeVerOut.match(/(\d+)\.(\d+)\.(\d+)/);
+  const cmakeVerOk = cmakeVerMatch
+    && (Number(cmakeVerMatch[1]) > 3 || (Number(cmakeVerMatch[1]) === 3 && Number(cmakeVerMatch[2]) >= 23));
+  if (cmakeVerOk) {
+    cmakeArgs.push('-DCMAKE_IGNORE_PREFIX_PATH=/opt/pkg;/opt/homebrew;/usr/local;/opt/local;/sw');
+  } else {
+    // Loud, not silent: an old cmake here means the hermeticity protection
+    // below (HALF 2, the post-build dependency tripwire) is the only guard
+    // left for this build — flag that clearly rather than pretending we
+    // applied a flag the installed cmake can't honor.
+    console.error(`build-tjs: cmake ${cmakeVerOut.split('\n')[0]} predates 3.23 — ` +
+      'CMAKE_IGNORE_PREFIX_PATH unavailable, third-party prefixes are NOT excluded ' +
+      'from find_*() search; relying on the post-build dependency check to catch any leak');
+  }
+}
 const macosMin = process.env.CLODE_TJS_MACOS_MIN || '';
 const macosSdk = process.env.CLODE_TJS_MACOS_SDK || '';
 if (macosMin && !crossFile) {
@@ -2745,4 +3064,12 @@ if ((process.env.CLODE_TJS_SMOKE || 'on').toLowerCase() !== 'off') {
   console.log(`built ${engine} (${smoke})`);
 } else {
   console.log(`built ${path.join(outDir, outName)} (exec smoke SKIPPED: cross-target, CLODE_TJS_SMOKE=off)`);
+}
+// Same "can this host actually inspect it" restriction as the exec smoke
+// above, but independent of CLODE_TJS_SMOKE: a cross-built engine's format
+// doesn't match this host's otool/ldd, and neither does a cosmo APE — see
+// checkDynamicDepsHermetic's comment. Every other build IS native to this
+// host, so the check always runs for it (not opt-in — this is the tripwire).
+if (!crossFile && !cosmoTarget) {
+  checkDynamicDepsHermetic(path.join(outDir, outName));
 }
