@@ -25,7 +25,7 @@ function sourcePhase() {
 }
 const read = (rel) => fs.readFileSync(path.join(TJS, rel), 'utf8');
 
-test('the poll-backend fixup lands its six edits in the patched tree', (t) => {
+test('the poll-backend fixup lands its seven edits in the patched tree', (t) => {
   if (!has) { t.skip('no vendor checkout (spike/quickjs/vendor/txiki.js); run scripts/build-tjs.mjs'); return; }
   sourcePhase();
 
@@ -73,8 +73,19 @@ test('the poll-backend fixup lands its six edits in the patched tree', (t) => {
   //    select()-based wrapper, not a bare poll() (Apple's poll(2) is broken
   //    under load on 10.3-10.8 — see the fixup's own comment for the
   //    measured Tiger symptom and the curl prior-art citation).
+  // The guard must wrap the ENTIRE helper — opening immediately before its
+  // doc comment and closing immediately after its closing brace — not just
+  // appear SOMEWHERE earlier in the file. A lazy [\s\S]*? between an earlier,
+  // unrelated `#if defined(CLODE_DARWIN_POLL)` (the includes guard, above)
+  // and this function would happily cross intervening #endif/#if lines to
+  // reach the target text, so this would still pass on an UNGUARDED helper —
+  // exactly the inertness property the cosmo leg and every non-darwin leg
+  // depend on. [^#]* refuses to cross any '#' (no preprocessor directive
+  // appears inside the comment or the function body), which forces the match
+  // to start at the helper's OWN guard.
   const posixPollC = read('deps/libuv/src/unix/posix-poll.c');
-  assert.match(posixPollC, /#if defined\(CLODE_DARWIN_POLL\)\n\/\*[\s\S]*?\*\/\nstatic int uv__clode_poll_select\(struct pollfd\* fds, nfds_t nfds, int timeout\) \{/);
+  assert.match(posixPollC,
+    /#if defined\(CLODE_DARWIN_POLL\)\n\/\*[^#]*?\*\/\nstatic int uv__clode_poll_select\(struct pollfd\* fds, nfds_t nfds, int timeout\) \{[^#]*?\n\}\n#endif\n/);
   assert.match(posixPollC,
     /#if defined\(CLODE_DARWIN_POLL\)\n {4}nfds = uv__clode_poll_select\(loop->poll_fds, \(nfds_t\)loop->poll_fds_used, timeout\);\n#else\n {4}nfds = poll\(loop->poll_fds, \(nfds_t\)loop->poll_fds_used, timeout\);\n#endif/);
 });
@@ -90,10 +101,17 @@ test('the edits are inert: the option defaults OFF and kqueue stays the default'
 
 test('the fixup is idempotent', (t) => {
   if (!has) { t.skip('no vendor checkout (spike/quickjs/vendor/txiki.js)'); return; }
-  const before = read('deps/libuv/include/uv/darwin.h');
+  const beforeDarwinH = read('deps/libuv/include/uv/darwin.h');
+  // The gate marker AND the newest (7th) edit both now live in posix-poll.c —
+  // that is the exact file a double-application (the failure this gate
+  // exists to prevent) would show up in, so diff it too, not just darwin.h
+  // (whose own edit is 6 edits upstream of the gate now).
+  const beforePosixPollC = read('deps/libuv/src/unix/posix-poll.c');
   sourcePhase();
-  assert.strictEqual(read('deps/libuv/include/uv/darwin.h'), before,
+  assert.strictEqual(read('deps/libuv/include/uv/darwin.h'), beforeDarwinH,
     're-running the source phase must not double-apply the fixup');
+  assert.strictEqual(read('deps/libuv/src/unix/posix-poll.c'), beforePosixPollC,
+    're-running the source phase must not double-apply edit (7) in posix-poll.c');
 });
 
 // --- Source-text guards below: assert against scripts/build-tjs.mjs's OWN text,

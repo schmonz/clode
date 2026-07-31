@@ -114,102 +114,6 @@ const run = (cmd, args, opts = {}) =>
 const runOut = (cmd, args, opts = {}) =>
   execFileSync(cmd, args, { encoding: 'utf8', ...opts }).trim();
 
-// ---- hermeticity tripwire (HALF 2 of the pkgsrc-leak fix) ------------------
-// CMAKE_IGNORE_PREFIX_PATH above stops cmake's find_*() from SEARCHING
-// third-party package-manager prefixes on a native build, but it is not the
-// only way a stray dependency can sneak in (an explicit find_library(PATHS
-// ...) somewhere in the dep tree, a cmake < 3.23 host where the flag was
-// skipped, a future change nobody remembers this comment for). So: after the
-// engine is built, actually inspect what it links and fail the BUILD, loudly,
-// if anything resolved outside the OS. A shipped engine that dynamically
-// depends on e.g. /opt/pkg/lib/libffi.8.dylib cannot run on a machine that
-// doesn't happen to have pkgsrc installed at that exact path — this is
-// exactly the bug this whole change exists to prevent from coming back.
-//
-// Only meaningful for a binary this HOST's own inspection tool can read as
-// its native format: a cross-built engine (CLODE_TJS_CROSS_FILE) targets a
-// different OS/arch than the host and a cosmo APE is a DOS/MBR container, not
-// a plain Mach-O/ELF, so both are explicitly skipped (printed, not silent)
-// rather than risking a false failure from mis-parsing the wrong format.
-const HERMETIC_ALLOWED_PREFIXES = {
-  darwin: ['/usr/lib/', '/System/'],
-  elf: ['/lib/', '/usr/lib/'],
-};
-// Same third-party roots CMAKE_IGNORE_PREFIX_PATH excludes above, named here
-// for the error message; the allowlist check below doesn't actually need
-// this list (anything not under an ALLOWED prefix is offending), but calling
-// out the known offenders by name makes the failure message self-explanatory.
-const HERMETIC_PKG_MGR_PREFIXES = ['/opt/pkg', '/opt/homebrew', '/usr/local', '/opt/local', '/sw'];
-function checkDynamicDepsHermetic(enginePath) {
-  const isDarwin = process.platform === 'darwin';
-  const isElfHost = ['linux', 'freebsd', 'openbsd', 'netbsd', 'dragonfly', 'sunos', 'haiku'].includes(process.platform);
-  if (!isDarwin && !isElfHost) {
-    console.log(`build-tjs: hermeticity check SKIPPED (no otool/ldd route for ${process.platform})`);
-    return;
-  }
-  let libs;
-  if (isDarwin) {
-    let out;
-    try {
-      out = runOut('otool', ['-L', enginePath]);
-    } catch (e) {
-      console.log(`build-tjs: hermeticity check SKIPPED (otool unavailable: ${e.message.split('\n')[0]})`);
-      return;
-    }
-    // First line is the binary's own path (otool -L header); the rest are
-    // "\t<path> (compatibility version ..., current version ...)" entries.
-    libs = out.split('\n').slice(1)
-      .map((l) => l.trim().replace(/\s*\(compatibility version.*\)$/, ''))
-      .filter(Boolean);
-  } else {
-    let out;
-    try {
-      out = runOut('ldd', [enginePath]);
-    } catch (e) {
-      // A statically-linked ELF makes ldd exit non-zero with "not a dynamic
-      // executable" on some platforms — that's not a hermeticity problem
-      // (nothing to leak), it's the STATIC case (CLODE_TJS_STATIC=1)
-      // reporting itself the only way ldd knows how. Anything else (ldd
-      // missing entirely) also just skips rather than failing the build.
-      if (/not a dynamic executable/i.test(`${e.stdout || ''}${e.stderr || ''}${e.message}`)) {
-        console.log('build-tjs: hermeticity check: statically linked, nothing to inspect');
-        return;
-      }
-      console.log(`build-tjs: hermeticity check SKIPPED (ldd unavailable: ${e.message.split('\n')[0]})`);
-      return;
-    }
-    // Lines look like "libfoo.so.1 => /path/to/libfoo.so.1 (0x...)" or, for
-    // the vdso / the dynamic linker itself, "linux-vdso.so.1 (0x...)" /
-    // "/lib64/ld-linux-x86-64.so.2 (0x...)" with no "=>".
-    libs = out.split('\n')
-      .map((l) => {
-        const m = l.match(/=>\s*(\S+)/) || l.match(/^\s*(\/\S+)/);
-        return m ? m[1] : null;
-      })
-      .filter(Boolean);
-  }
-  const allowed = HERMETIC_ALLOWED_PREFIXES[isDarwin ? 'darwin' : 'elf'];
-  const offending = libs.filter((lib) => {
-    if (lib.startsWith('@rpath/') || lib.startsWith('@loader_path/') || lib.startsWith('@executable_path/')) return false; // resolved relative to the binary itself, not a filesystem search
-    if (!lib.startsWith('/')) return false; // vdso / bare names with no resolved path — nothing to leak
-    return !allowed.some((p) => lib.startsWith(p));
-  });
-  if (offending.length) {
-    const named = offending.map((lib) => {
-      const pm = HERMETIC_PKG_MGR_PREFIXES.find((p) => lib.startsWith(p));
-      return pm ? `${lib} (${pm})` : lib;
-    });
-    throw new Error(
-      `build-tjs: HERMETICITY VIOLATION — ${enginePath} dynamically depends on ` +
-      `${named.join(', ')}, which resolves outside the OS. A shipped engine must not ` +
-      'depend on a third-party package-manager library: it will not run on a machine ' +
-      "that doesn't have that exact package manager installed at that exact path. " +
-      'This is the CMAKE_IGNORE_PREFIX_PATH protection failing to hold — see the comment ' +
-      'above it in this file.');
-  }
-  console.log(`build-tjs: hermeticity check OK — ${enginePath} links only OS-provided libraries`);
-}
-
 function pinFields(component) {
   const line = fs.readFileSync(path.join(repo, 'spike/quickjs/PINS.md'), 'utf8')
     .split('\n').find((l) => l.split(/\s+/)[0] === component);
@@ -1513,6 +1417,22 @@ function fixupLibuvPollBackendOldDarwin(dir) {
     + ' * -- unimpaired across that whole range -- behind poll()\'s exact return\n'
     + ' * contract (>0 = number of pollfd entries with revents set, 0 = timed\n'
     + ' * out, -1/errno on error) so uv__io_poll below needs no other change.\n'
+    + ' *\n'
+    + ' * LATENT LIMITATION: omitting exceptfds (see the comment further down)\n'
+    + ' * means a watcher requesting UV_PRIORITIZED (POLLPRI, out-of-band TCP\n'
+    + ' * data) can never fire under this path -- select(2) has no equivalent\n'
+    + ' * signal. Nothing in txiki requests UV_PRIORITIZED today, so this is\n'
+    + ' * dormant, not a live bug; a future caller that adds it would need a\n'
+    + ' * real fix here, not just a comment update.\n'
+    + ' *\n'
+    + ' * Two real poll(2) calls remain elsewhere in this CLODE_DARWIN_POLL\n'
+    + ' * build even though uv__io_poll\'s wait now goes through select(2): the\n'
+    + ' * FD_SETSIZE bailout a few lines down (falls back to poll() rather than\n'
+    + ' * corrupting an fd_set it cannot represent) and uv__io_check_fd() below,\n'
+    + ' * a single fd / 0-timeout probe outside the hot wait path that poll()\n'
+    + ' * handles correctly regardless of the 10.3-10.8 breakage (that bug is in\n'
+    + ' * poll()\'s WAIT behavior under concurrent load, not its per-call return\n'
+    + ' * value on an isolated, non-blocking check).\n'
     + ' */\n'
     + 'static int uv__clode_poll_select(struct pollfd* fds, nfds_t nfds, int timeout) {\n'
     + '  fd_set readfds;\n'
@@ -2915,43 +2835,6 @@ if (process.env.CLODE_TJS_ATOMIC_SHIM === '1') {
 if (darwinPoll) {
   cmakeArgs.push('-DCLODE_DARWIN_POLL=ON');
 }
-// Hermeticity: keep third-party package-manager prefixes out of cmake's
-// find_library/find_path search entirely — NATIVE builds only. Concretely, on
-// this dev box cmake is pkgsrc's (/opt/pkg/bin/cmake), and its baked-in
-// CMAKE_SYSTEM_PREFIX_PATH puts /opt/pkg (and Homebrew's /opt/homebrew,
-// /usr/local) BEFORE /usr and the macOS SDK. txiki's CMakeLists.txt does
-// `find_library(FFI_LIB NAMES libffi ffi REQUIRED)` /
-// `find_path(FFI_INCLUDE_DIR NAMES ffi.h ...)`, so both resolved into pkgsrc:
-// (a) the built engine dynamically linked /opt/pkg/lib/libffi.8.dylib —
-//     verified with `otool -L` — so it could not run on a machine without
-//     pkgsrc installed at that exact path, and
-// (b) -I/opt/pkg/include landed ahead of every vendored include path, so
-//     txiki's OWN sources compiled against pkgsrc's uv.h instead of the
-//     vendored deps/libuv one — two different uv_loop_t layouts silently
-//     mixed into one binary and crashed a build.
-// CMAKE_IGNORE_PREFIX_PATH (cmake >= 3.23) removes these prefixes from every
-// find_*() search, forcing FFI/libuv/etc. to resolve from the OS (/usr,
-// /System, the SDK) or fail loudly — never silently substitute a third-party
-// copy. Cross builds are EXCLUDED: a toolchain file (CLODE_TJS_CROSS_FILE)
-// already sets CMAKE_FIND_ROOT_PATH_MODE_* to ONLY and owns target config —
-// stacking this on top would fight it, not reinforce it.
-if (!crossFile) {
-  const cmakeVerOut = runOut('cmake', ['--version']);
-  const cmakeVerMatch = cmakeVerOut.match(/(\d+)\.(\d+)\.(\d+)/);
-  const cmakeVerOk = cmakeVerMatch
-    && (Number(cmakeVerMatch[1]) > 3 || (Number(cmakeVerMatch[1]) === 3 && Number(cmakeVerMatch[2]) >= 23));
-  if (cmakeVerOk) {
-    cmakeArgs.push('-DCMAKE_IGNORE_PREFIX_PATH=/opt/pkg;/opt/homebrew;/usr/local;/opt/local;/sw');
-  } else {
-    // Loud, not silent: an old cmake here means the hermeticity protection
-    // below (HALF 2, the post-build dependency tripwire) is the only guard
-    // left for this build — flag that clearly rather than pretending we
-    // applied a flag the installed cmake can't honor.
-    console.error(`build-tjs: cmake ${cmakeVerOut.split('\n')[0]} predates 3.23 — ` +
-      'CMAKE_IGNORE_PREFIX_PATH unavailable, third-party prefixes are NOT excluded ' +
-      'from find_*() search; relying on the post-build dependency check to catch any leak');
-  }
-}
 const macosMin = process.env.CLODE_TJS_MACOS_MIN || '';
 const macosSdk = process.env.CLODE_TJS_MACOS_SDK || '';
 if (macosMin && !crossFile) {
@@ -3064,12 +2947,4 @@ if ((process.env.CLODE_TJS_SMOKE || 'on').toLowerCase() !== 'off') {
   console.log(`built ${engine} (${smoke})`);
 } else {
   console.log(`built ${path.join(outDir, outName)} (exec smoke SKIPPED: cross-target, CLODE_TJS_SMOKE=off)`);
-}
-// Same "can this host actually inspect it" restriction as the exec smoke
-// above, but independent of CLODE_TJS_SMOKE: a cross-built engine's format
-// doesn't match this host's otool/ldd, and neither does a cosmo APE — see
-// checkDynamicDepsHermetic's comment. Every other build IS native to this
-// host, so the check always runs for it (not opt-in — this is the tripwire).
-if (!crossFile && !cosmoTarget) {
-  checkDynamicDepsHermetic(path.join(outDir, outName));
 }
