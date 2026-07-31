@@ -4,6 +4,43 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 (Strategic feasibility risks live in `LONG-TERM.md`; in-flight designs in
 `docs/superpowers/`. Done items are DELETED from here — git history is the record.)
 
+## IN-FLIGHT HANDOFF (2026-07-31) — what's being juggled
+
+Driver = the at-desk release-readiness plan (`docs/superpowers/plans/2026-07-28-at-desk-release-readiness.md`).
+
+1. **Cosmo APE leg (Task 4b) — CLOSEST TO SHIPPABLE.** ✅ MCP-ws sha-1/endian bug fixed
+   (`patches/libwebsockets-cosmo.patch`, wired into build-tjs.mjs); ✅ FULL agentic fidelity suite
+   GREEN on the cosmo APE at parity with native (mcp-ws, tools 5/5, node-shim-agentic, workflow,
+   subagent-diff) via the now-APE-aware harness; ✅ interactive + tty fixes landed earlier. REMAINING
+   before ship: (a) a clean-from-scratch `build-tjs.mjs --target cosmo` + `agentic-mcp-ws` green in CI
+   (gold-standard; the committed patch is byte-identical to the verified scratch build); (b) the
+   multi-OS CI fan-out (run the SAME `.com` on Linux/mac/Windows/BSD runners); (c) flip the `cosmo`
+   leg `publish:true` in `scripts/tjs-legs.mjs` + ship UNSIGNED with a documented Gatekeeper/quarantine
+   note (decided: ships as `clode-<ver>-cosmo.com`). See memory `cosmo-libc-additive-leg`.
+
+2. **Tiger / darwin-ppc agentic-turn deadlock — ROOT-CAUSED, NOT FIXED (big engine effort).** The PPC
+   quaude boots + authenticates + full startup + (bare) HTTPS/TLS, but an agentic turn deadlocks: **Darwin 8
+   kqueue drops socket/pipe/SIGCHLD/async event delivery under the fused runtime's fd load** (ktrace-confirmed).
+   Fix = a poll()/select() event-loop backend for old Darwin (NOT per-mechanism `osx_select` patches — see
+   the kqueue-usage audit) = the same paleo-POSIX backend roadmapped for cosmo/retro. Needs a PPC engine
+   rebuild to test. The VM's DNS was separately broken and is now FIXED. Full detail + audit in memory
+   `tiger-ppc-agentic-turn-deadlock`. (Task 3's double-Ctrl-C wedge is a SEPARATE, already-TRIAGED
+   node-faithful non-bug.)
+
+3. **Windows fidelity differential (Task 1) — user-gated on an SSH-able Windows box.** Windows `.exe`
+   asset naming already FIXED (`f061843`). Remaining: build both targets on Windows, run the
+   mock-anthropic differential, triage divergences (shim gaps vs deliberate).
+
+4. **Release-atomic naming ship (Task 4) — PARTIAL.** Done: Windows `.exe` + cosmo `.com` asset names
+   (`f061843`, `3898be0`). Pending: CI bash-mirror of `canonical-name.cjs` + tripwire + the no-`v` pin in
+   an atomic release commit. See memory `canonical-artifact-names`.
+
+5. **Release cut (Task 5) — endgame, user-driven.** Bump surface = `VERSION` + `package.json` +
+   `package-lock.json` ×2 ONLY (date versioning, `date-versioning-next-release`); notes from `CHANGELOG.md`
+   via `--notes-file`; watch the full matrix (all tjs legs + win SEA + darwin universal + the cosmo `.com`)
+   green. RESOLVED and off the list: NetBSD/arm64 fullscreen crash (doesn't repro on main); Tiger
+   double-Ctrl-C wedge (node-faithful).
+
 ## Cosmo APE fidelity gaps — posix-poll fd-event delivery (2026-07-29)
 
 Full fidelity run of a FRESH cosmo quaude (fused from the committed Phase-E leg) on the dev host
