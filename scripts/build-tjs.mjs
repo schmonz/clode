@@ -1156,16 +1156,33 @@ function fixupLibuvPollBackendOldDarwin(dir) {
   // test/node-shim-fs-watch.test.cjs), no fs.watch call exists in libexec/ or
   // bin/clode, and the shipping cosmo leg already builds no-fsevents.c. Engine-
   // level tjs.watch() throws on these two legs; both are no-exec, so no CI job
-  // executes it.
+  // executes it. That ENOSYS is a RUNTIME behavior, separate from a LINK-time
+  // hazard fixed by edit (6) below: core.c unconditionally calls the internal
+  // uv__fs_event() io-callback (never invoked in practice, since uv_fs_event_init
+  // always fails first — but still referenced), and internal.h's UNREACHABLE()
+  // stub for it only compiles in when __APPLE__ is undefined. Dropping kqueue.c
+  // (the only real definition) without widening that guard leaves the symbol
+  // undefined at link time on Apple.
   //
   // These edits are UNCONDITIONAL and inert: everything is guarded on
   // CLODE_DARWIN_POLL, which only the darwin-poll legs define (build-tjs passes
   // -DCLODE_DARWIN_POLL=ON from CLODE_TJS_DARWIN_POLL=1). Every shipping leg —
   // darwin-x64 (10.6 floor, proven on real Mavericks), darwin-arm64, and all
   // non-darwin legs — compiles byte-identically. libuv upstream candidate.
-  const tjsCmakeF = path.join(dir, 'CMakeLists.txt');
-  const tjsCmake = fs.readFileSync(tjsCmakeF, 'utf8');
-  if (tjsCmake.includes('CLODE_DARWIN_POLL')) {
+  //
+  // The "already applied" gate keys on edit (6)'s marker (the LAST edit this
+  // function makes), not edit (1)'s — edit (1)'s target text (the CMakeLists.txt
+  // option block) starts with the very anchor it matches on, so re-running edit
+  // (1) alone against an already-patched tree would silently double-apply rather
+  // than no-op. Gating on the last edit means a half-applied tree (crashed
+  // between edits) is NEVER reported as "already applied": either every edit's
+  // anchor is still pristine (full re-apply proceeds) or an earlier edit already
+  // landed and its OWN anchor is gone, which throws loudly on retry — both
+  // acceptable outcomes; silently reporting success on a half-patched tree is
+  // the one outcome the fixup contract forbids.
+  const internalHF = path.join(dir, 'deps/libuv/src/unix/internal.h');
+  const fsEvMarker = '!defined(__APPLE__) || defined(CLODE_DARWIN_POLL)';
+  if (fs.readFileSync(internalHF, 'utf8').includes(fsEvMarker)) {
     console.log('fixup libuv-poll-backend-old-darwin: already applied');
     return;
   }
@@ -1177,6 +1194,8 @@ function fixupLibuvPollBackendOldDarwin(dir) {
   // line (`fixupTjsCmakeCxxOnlyForAda`, which runs earlier in the list, already
   // rewrote it from upstream's "C CXX" down to "C") since fixups run in order
   // against the tree as previously modified, not against pristine upstream.
+  const tjsCmakeF = path.join(dir, 'CMakeLists.txt');
+  const tjsCmake = fs.readFileSync(tjsCmakeF, 'utf8');
   const projAnchor = 'project(tjs LANGUAGES C)\n';
   if (!tjsCmake.includes(projAnchor)) {
     throw new Error('fixup libuv-poll-backend-old-darwin: project() anchor not found (txiki changed under the pin — re-derive the fixup)');
@@ -1285,7 +1304,7 @@ function fixupLibuvPollBackendOldDarwin(dir) {
   // (5) internal.h: EVFILT_USER async wakeups kevent on loop->backend_fd, which
   // posix-poll leaves at -1. Already 0 under the 10.4 SDK (EVFILT_USER is 10.6+),
   // but a modern-SDK poll build (the arm64 validation engine) needs it forced.
-  const internalHF = path.join(dir, 'deps/libuv/src/unix/internal.h');
+  // (internalHF is declared above, by the already-applied gate.)
   const internalH = fs.readFileSync(internalHF, 'utf8');
   const evOld = '#if defined(EVFILT_USER) && defined(NOTE_TRIGGER)\n';
   const evNew = '#if defined(EVFILT_USER) && defined(NOTE_TRIGGER) && !defined(CLODE_DARWIN_POLL)\n';
@@ -1293,6 +1312,35 @@ function fixupLibuvPollBackendOldDarwin(dir) {
     throw new Error('fixup libuv-poll-backend-old-darwin: internal.h EVFILT_USER anchor not found (libuv changed under the pin — re-derive the fixup)');
   }
   fs.writeFileSync(internalHF, internalH.replace(evOld, evNew));
+
+  // (6) internal.h: widen the uv__fs_event() UNREACHABLE() shim's guard so it
+  // also compiles in under CLODE_DARWIN_POLL. Without this, dropping kqueue.c
+  // (edit 2) removes the ONLY definition of uv__fs_event in the tree, but
+  // core.c's UV__FS_EVENT case (core.o is always linked) still calls it — the
+  // ON build fails at LINK time (undefined symbol uv__fs_event), not merely at
+  // runtime. no-fsevents.c supplies uv_fs_event_init/start/stop and
+  // uv__fs_event_close (the public API, already ENOSYS'd — see the ACCEPTED
+  // LOSS note above) but NOT this internal io-callback symbol. Read fresh:
+  // edit (5) just wrote this file.
+  const internalH2 = fs.readFileSync(internalHF, 'utf8');
+  const fsEvOld = '#if !defined(__APPLE__) &&                                                    \\\n'
+    + '    !defined(__DragonFly__) &&                                                \\\n'
+    + '    !defined(__FreeBSD__) &&                                                  \\\n'
+    + '    !defined(__NetBSD__) &&                                                   \\\n'
+    + '    !defined(__OpenBSD__)\n'
+    + '#define uv__fs_event(loop, w, events) UNREACHABLE()\n'
+    + '#endif\n';
+  const fsEvNew = '#if (!defined(__APPLE__) || defined(CLODE_DARWIN_POLL)) &&                    \\\n'
+    + '    !defined(__DragonFly__) &&                                                \\\n'
+    + '    !defined(__FreeBSD__) &&                                                  \\\n'
+    + '    !defined(__NetBSD__) &&                                                   \\\n'
+    + '    !defined(__OpenBSD__)\n'
+    + '#define uv__fs_event(loop, w, events) UNREACHABLE()\n'
+    + '#endif\n';
+  if (!internalH2.includes(fsEvOld)) {
+    throw new Error('fixup libuv-poll-backend-old-darwin: internal.h uv__fs_event anchor not found (libuv changed under the pin — re-derive the fixup)');
+  }
+  fs.writeFileSync(internalHF, internalH2.replace(fsEvOld, fsEvNew));
 
   console.log('fixup libuv-poll-backend-old-darwin: applied');
 }

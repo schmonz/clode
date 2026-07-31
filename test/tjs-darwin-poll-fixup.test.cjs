@@ -25,7 +25,7 @@ function sourcePhase() {
 }
 const read = (rel) => fs.readFileSync(path.join(TJS, rel), 'utf8');
 
-test('the poll-backend fixup lands its five edits in the patched tree', (t) => {
+test('the poll-backend fixup lands its six edits in the patched tree', (t) => {
   if (!has) { t.skip('no vendor checkout (spike/quickjs/vendor/txiki.js); run scripts/build-tjs.mjs'); return; }
   sourcePhase();
 
@@ -42,10 +42,17 @@ test('the poll-backend fixup lands its five edits in the patched tree', (t) => {
 
   // 3. UV_HAVE_KQUEUE goes away (this is what flips process.c off EVFILT_PROC
   //    onto SIGCHLD and async.c onto pipe wakeups), and the loop gains posix
-  //    poll fields.
+  //    poll fields — proven by asserting the WIRING (cf_signals directly
+  //    followed by the new field-list macro inside UV_PLATFORM_LOOP_FIELDS),
+  //    not just that the field-list macro is declared SOMEWHERE in the file:
+  //    a dropped `.replace(fieldsOld, fieldsNew)` call would still leave the
+  //    macro's own declaration text present (it's a separate string literal in
+  //    the fixup), so asserting only `/struct pollfd\* poll_fds;/` can't catch
+  //    that — loop->poll_fds would have no such struct member and the ON build
+  //    fails to compile, while this test kept passing.
   const darwinH = read('deps/libuv/include/uv/darwin.h');
   assert.match(darwinH, /#if !defined\(CLODE_DARWIN_POLL\)\n#define UV_HAVE_KQUEUE 1\n#endif/);
-  assert.match(darwinH, /struct pollfd\* poll_fds;/);
+  assert.match(darwinH, /cf_signals;\s*\\\n\s*UV_CLODE_DARWIN_POLL_FIELDS/);
 
   // 4. darwin.c's kqueue-calling platform hooks yield to posix-poll.c's.
   const darwinC = read('deps/libuv/src/unix/darwin.c');
@@ -54,6 +61,13 @@ test('the poll-backend fixup lands its five edits in the patched tree', (t) => {
   // 5. EVFILT_USER async wakeups are off (they would kevent on backend_fd == -1).
   const internalH = read('deps/libuv/src/unix/internal.h');
   assert.match(internalH, /#if defined\(EVFILT_USER\) && defined\(NOTE_TRIGGER\) && !defined\(CLODE_DARWIN_POLL\)/);
+
+  // 6. uv__fs_event()'s UNREACHABLE() shim widens to cover CLODE_DARWIN_POLL —
+  //    without this, dropping kqueue.c (edit 2, the only real definition)
+  //    leaves core.c's UV__FS_EVENT case (core.o always links) calling an
+  //    undefined symbol: the ON build fails to LINK, not just to run.
+  assert.match(internalH, /#if \(!defined\(__APPLE__\) \|\| defined\(CLODE_DARWIN_POLL\)\) &&/);
+  assert.match(internalH, /#define uv__fs_event\(loop, w, events\) UNREACHABLE\(\)/);
 });
 
 test('the edits are inert: the option defaults OFF and kqueue stays the default', (t) => {
@@ -71,4 +85,41 @@ test('the fixup is idempotent', (t) => {
   sourcePhase();
   assert.strictEqual(read('deps/libuv/include/uv/darwin.h'), before,
     're-running the source phase must not double-apply the fixup');
+});
+
+// --- Source-text guards below: assert against scripts/build-tjs.mjs's OWN text,
+// not the vendor tree, so they run on every CI job (ubuntu/windows have no
+// vendor checkout — every test above SKIPs there, and this codebase's doctrine
+// is explicit that a skipped oracle is not a pass, .github/workflows/ci.yml:341).
+// These don't re-prove exact wiring (the vendor-tree tests above own that); they
+// catch the coarser regression of the fixup being dropped or unregistered
+// entirely, everywhere, unconditionally.
+const buildTjsSrc = fs.readFileSync(path.join(REPO, 'scripts/build-tjs.mjs'), 'utf8');
+
+test('build-tjs.mjs: the poll-backend fixup is registered right after the tty-kqueue fixup', () => {
+  assert.match(buildTjsSrc,
+    /fixupLibuvTtyKqueueOldDarwin\(tjsDir\);\s*\n\s*fixupLibuvPollBackendOldDarwin\(tjsDir\);/);
+});
+
+test('build-tjs.mjs: the fixup body carries all six CLODE_DARWIN_POLL edit guards', () => {
+  const fnStart = buildTjsSrc.indexOf('function fixupLibuvPollBackendOldDarwin(dir) {');
+  const fnEnd = buildTjsSrc.indexOf('\nfunction fixupTjsHandleDump(dir) {', fnStart);
+  assert.ok(fnStart >= 0 && fnEnd > fnStart, 'fixupLibuvPollBackendOldDarwin function body must exist');
+  const body = buildTjsSrc.slice(fnStart, fnEnd);
+
+  // (1) txiki CMakeLists.txt: option + global compile definition.
+  assert.ok(body.includes('add_compile_definitions(CLODE_DARWIN_POLL)'), 'edit 1: global compile definition');
+  // (2) libuv CMakeLists.txt: source-list swap.
+  assert.ok(body.includes('if(NOT CLODE_DARWIN_POLL)'), 'edit 2: kqueue.c gated out');
+  assert.ok(body.includes('src/unix/posix-poll.c src/unix/no-fsevents.c'), 'edit 2: posix-poll.c gated in');
+  // (3) darwin.h: UV_HAVE_KQUEUE gated, loop fields added.
+  assert.ok(body.includes('poll_fds_iterating'), 'edit 3: posix-poll loop fields declared');
+  assert.ok(body.includes('UV_CLODE_DARWIN_POLL_FIELDS'), 'edit 3: loop fields wired into UV_PLATFORM_LOOP_FIELDS');
+  // (4) darwin.c: kqueue-calling platform hooks gated out.
+  assert.ok(body.includes("hooksNew = '#if !defined(CLODE_DARWIN_POLL)"), 'edit 4: platform-hook pair gated');
+  // (5) internal.h: EVFILT_USER async wakeups gated out.
+  assert.ok(body.includes('defined(EVFILT_USER) && defined(NOTE_TRIGGER) && !defined(CLODE_DARWIN_POLL)'),
+    'edit 5: EVFILT_USER gated');
+  // (6) internal.h: uv__fs_event() UNREACHABLE() shim widened (the link-time fix).
+  assert.ok(body.includes('!defined(__APPLE__) || defined(CLODE_DARWIN_POLL)'), 'edit 6: uv__fs_event shim widened');
 });
