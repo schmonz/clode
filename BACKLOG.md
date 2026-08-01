@@ -277,6 +277,43 @@ bash asset name now comes from the canonical-name CLI). What's LEFT is release-c
 - Optional leg-token rename (plan path B) — internal-token uniformity, bigger blast radius;
   follow-up only.
 
+## Spec sweep 2026-08-01 — the threads that had a spec but no backlog entry
+
+Swept `docs/superpowers/` from 145 files to 16 by verifying each cluster against the
+tree (windows/SEA/bats/hermetic/universal-binaries/phases and ~25 single workstreams all
+shipped; deleted). The survivors are genuinely unfinished. These had NO backlog entry at
+all, which is how they went quiet — recorded here so the remaining specs are the only
+place work hides, not the last place anyone looks:
+
+- **Target-matched assembly — PAUSED BY DECISION, not forgotten.** `providerFor` by-OS
+  shipped; template-by-arch fixed (21127a5). Held per the 2026-07-19 call that cross-build
+  waits on trusted daily-drive fidelity plus a durable naude-vs-quaude gate. Un-pause
+  condition is the fidelity tier ledger above, so these two are coupled.
+  Spec: `2026-07-19-target-matched-assembly-design.md`.
+- **Universal cross-build Layer 1 — engine production, deferred half.** Layer 2 (clode
+  cross-fuses from prebuilt engines) shipped and now range-fetches its slice. Layer 1 —
+  one clang/zig + pinned sysroots replacing the per-target toolchain zoo, plus the target
+  descriptor and `build-tjs.mjs --target Y` — is untouched. Depends on build-working-dir
+  isolation (already tracked above).
+  Spec: `2026-07-25-universal-cross-build-compiler-free-quaude-design.md`.
+- **Feature parity #2 image (sharp/libvips) and #3 TypeScript (Bun.Transpiler).** Both
+  DRAFT since 2026-07-15, both unimplemented, both sequenced after the runtime-retirement
+  decision in the user's original order (SQLite ✓ → image → TypeScript → MCP computer-use).
+  Neither is reachable from any current test, so quaude silently lacks them.
+  Plans: `2026-07-15-image-sharp-spec.md`, `2026-07-15-typescript-transpiler-spec.md`.
+- **Retire the user-facing host-Node runtime (tjs-primary).** DRAFT 2026-07-15. Partly
+  overtaken by the "one clode builds both targets" canon and clode-native, but never
+  closed out — worth a read-and-decide pass to either finish or delete.
+  Plan: `2026-07-15-retire-node-runtime-spec.md`.
+- **Comparative performance fixtures.** A hermetic benchmark harness running the SAME
+  bundle under quaude/naude/claude against fixtures, so QuickJS interpreter-tax shows up
+  as wall-clock/RSS ratios instead of guesses. Directly serves the Tiger perf work
+  ([[tiger-ppc-quaude-perf]]: sys-time is the tractable lever, and we are guessing today).
+  Plan: `2026-07-24-comparative-performance-fixtures.md`.
+- **quaude daily-driver hardening.** Four onboarding/session bugs from 2026-07-15. Some
+  may already be fixed incidentally; needs a triage pass before it is either actioned or
+  deleted. Plan: `2026-07-15-quaude-daily-driver-hardening-spec.md`.
+
 ## Fidelity coverage tiers — approved, UNIMPLEMENTED (2026-08-01)
 
 Spec `docs/superpowers/specs/2026-08-01-fidelity-coverage-tiers-design.md`, approved by
