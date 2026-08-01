@@ -1,0 +1,71 @@
+{
+  "_README": [
+    "Goldened two-layer shim gap inventory. See test/shim-surface.test.cjs for what",
+    "this is and why it is a reviewed MAP rather than a must-be-empty gate.",
+    "Regenerate with UPDATE_GOLDEN=1, and add a note below for anything new.",
+    "Measured against the EXTRACTED cli.cjs (~21MB), never the 255MB Bun binary."
+  ],
+  "_measured_against_bundle": "2.1.218",
+  "_measured_on": "2026-08-01",
+
+  "layer1_bun_props_missing": [
+    "Bun.SQL",
+    "Bun.WebView"
+  ],
+  "layer1_bun_modules_missing": [
+    "bun:jsc"
+  ],
+  "layer1_bun_modules_intercepted_but_unused": [
+    "bun:sqlite"
+  ],
+  "layer2_node_apis_missing": [
+    "net.createServer",
+    "http.request",
+    "crypto.X509Certificate",
+    "https.request",
+    "crypto.createPrivateKey",
+    "crypto.createSign",
+    "crypto.createVerify",
+    "crypto.pbkdf2Sync",
+    "crypto.pbkdf2",
+    "crypto.sign",
+    "crypto.createPublicKey",
+    "child_process.fork",
+    "fs.fchmodSync",
+    "fs.fstat",
+    "https.createServer",
+    "perf_hooks.monitorEventLoopDelay",
+    "v8.getHeapSpaceStatistics",
+    "v8.getHeapStatistics",
+    "stream.Duplex",
+    "child_process.ChildProcess",
+    "crypto.KeyObject",
+    "fs.ReadStream"
+  ],
+
+  "unenumerable_allowed": ["intl"],
+
+  "_notes": {
+    "intl": "NOT a node builtin — libexec/node-shim/modules/intl.cjs backs the Intl GLOBAL, not a require()able module, so neither side can enumerate it by name. Allowed, not a gap.",
+
+    "Bun.SQL": "ACTIVE DIVERGENCE, not a benign gap. Upstream guards it with `if (typeof Bun > \"u\") throw Error(\"claude gateway requires the native binary\")`. That string compare is TRUE under real node (\"undefined\" > \"u\") and FALSE under quaude, because bun-shim defines a Bun global (\"object\" > \"u\" is false). So the guard upstream wrote to produce a friendly message instead produces `Bun.SQL is not a constructor`. DEFINING Bun AT ALL is what defeats it. Reachability (the 'claude gateway' path) is UNVERIFIED; if reachable, the fix is to give bun-shim's Bun a SQL that throws upstream's own message, not to remove the global.",
+
+    "Bun.WebView": "BENIGN, and a good example of the shape we want: guarded by `\"WebView\" in Bun`, correctly false under the shim, so the branch is skipped and the function returns false. Feature detection that works.",
+
+    "bun:jsc": "BENIGN. One site: `try { let {heapStats} = await import(\"bun:jsc\") ... } catch {}` for heap diagnostics. The rejection is caught, so a missing module degrades to no heap stats, matching any non-Bun host.",
+
+    "bun:sqlite": "DRIFT, not a gap: bun-shim declares an interceptor for it in PROVIDES but bundle 2.1.218 never imports it. Harmless dead weight; listed so the declaration's drift stays visible instead of silently accumulating.",
+
+    "http.request / https.request / net.createServer / https.createServer": "DECLARED WALLS — the same ones test/node-shim-wall-tripwires.test.cjs alarms on, rediscovered here independently without being told they exist. That rediscovery is the main evidence this map works. They throw branded node-shim errors rather than failing silently.",
+
+    "crypto.*": "The largest cluster (X509Certificate, createPrivateKey/PublicKey, createSign/createVerify, sign, pbkdf2/pbkdf2Sync, KeyObject). Unaudited. Plausibly the enterprise auth paths (Vertex/Bedrock, mTLS) rather than the -p / interactive routes we support, which would make them unreachable in practice — but nobody has checked, and RECIPE.md G4 already flags that auth path as unverified.",
+
+    "fs.fchmodSync / fs.fstat / fs.ReadStream": "fd-flavored variants of things the shim DOES provide by path (chmodSync, statSync, createReadStream). Same class as the FileHandle.chmod gap that broke Edit, which is precisely why this map exists.",
+
+    "child_process.fork / ChildProcess": "fork() has no meaning under tjs (no node child bootstrap). If a reachable path ever forks, that is a design question, not a missing function.",
+
+    "stream.Duplex": "reads only (6), no calls — likely instanceof / prototype checks. Low risk, but a false instanceof silently takes the else-branch.",
+
+    "v8.* / perf_hooks.monitorEventLoopDelay": "diagnostics and telemetry; absent means no stats, not broken behavior."
+  }
+}
