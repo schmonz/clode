@@ -35,7 +35,23 @@
 // dead code on clode's supported (-p / interactive, no-proxy) paths — verified
 // empirically against the real 2.1.218 bundle while building this file (11
 // `.request(` alias hits, 24 `.connect(`/`.createConnection(` alias hits, 4
-// `.watch(` alias hits; see task-15-report.md). Chasing which alias sites are
+// `.watch(` alias hits; see task-15-report.md).
+//
+// CORRECTION (2026-08-01), recorded because the rationale above overstates its
+// case for ONE wall: the 4 `.watch(` alias hits were re-examined and only ONE is
+// the vendored `chokidar` this paragraph assumes. The other three are FIRST-PARTY
+// Claude Code (`jobStateNameSync`, `useBgSessionPr`, and an unref'd watcher in a
+// private-field class with an empty `catch {}`), all resolving through
+// `<alias> = require("fs")`. "Vendored dead code" is therefore NOT why fs.watch
+// stays quiet; the actual reason is REACHABILITY — those paths are believed off
+// clode's -p / interactive routes — and that belief is UNVERIFIED. The narrow
+// pattern below is still the right call for the reasons in the next paragraph
+// (an alias-aware scan is red on day one and would be trusted by nobody), but it
+// buys LESS safety for fs.watch than for http/https/net, and the gap is
+// reachability analysis this file deliberately does not do. Tracked as
+// test/fidelity/RECIPE.md row C7 rather than papered over here.
+//
+// Chasing which alias sites are
 // actually REACHABLE would mean reimplementing a data-flow linter, and a ratchet
 // that's already red before it ever caught anything is a ratchet nobody trusts —
 // which is exactly how `fs.watchFile` sat silent for weeks in the first place.
@@ -97,14 +113,17 @@ const WALLS = [
     api: 'fs.watch',
     pattern: /require\(\s*["'](?:node:)?fs["']\s*\)\s*\.watch\s*\(/,
     why: '"fs.watch (the inotify/FSEvents-style API): STILL a stub, unlike '
-      + 'watchFile above ... the bundle has 0 call sites for fs.watch, and this '
-      + 'engine\'s uv_fs_event backend is ENOSYS on some legs ... A path that '
-      + 'genuinely needs it is a future wall." (libexec/node-shim/modules/fs.cjs, '
-      + '~line 903) — same silent-stub shape as the watchFile incident this file '
-      + 'exists to prevent a repeat of; BACKLOG.md:28 mentions it only in passing '
-      + '("the shim\'s fs.watch is already a non-firing stub")',
+      + 'watchFile above ... this engine\'s uv_fs_event backend is ENOSYS on some '
+      + 'legs, so there is no portable native primitive to poll-emulate cheaply." '
+      + '(libexec/node-shim/modules/fs.cjs) — same silent-stub shape as the '
+      + 'watchFile incident this file exists to prevent a repeat of. NOTE: unlike '
+      + 'the other walls here, the pinned bundle DOES already call fs.watch via '
+      + 'aliases (4 sites, 3 of them first-party — see the CORRECTION in this '
+      + 'file\'s header). This narrow direct-shape pattern therefore does NOT '
+      + 'certify fs.watch is unreached; it only catches a newly-inlined call. '
+      + 'Reachability is tracked as RECIPE.md row C7',
     backlogRef: 'no dedicated BACKLOG.md bullet yet — see '
-      + 'libexec/node-shim/modules/fs.cjs:903-916',
+      + 'libexec/node-shim/modules/fs.cjs (fsMod.watch) and RECIPE.md C7',
   },
 ];
 

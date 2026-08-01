@@ -901,11 +901,24 @@ fsMod.unwatchFile = function unwatchFile(filename, listener) {
   }
 };
 // fs.watch (the inotify/FSEvents-style API): STILL a stub, unlike watchFile
-// above. Left alone deliberately, not from the same lack-of-wiring the old
-// watchFile comment described: the bundle has 0 call sites for fs.watch, and
-// this engine's uv_fs_event backend is ENOSYS on some legs (no portable native
-// primitive to poll-emulate cheaply the way watchFile's plain stat diff does).
-// A path that genuinely needs it is a future wall.
+// above. Left alone deliberately, but NOT because nothing calls it — an earlier
+// version of this comment claimed "the bundle has 0 call sites for fs.watch",
+// which was simply wrong. Verified against the pinned 2.1.218 bundle
+// (2026-08-01): FOUR `<alias>.watch(` call sites where the alias is
+// `require("fs")`, and only ONE of them is the vendored chokidar the wall
+// tripwire's rationale assumes. The other three are FIRST-PARTY Claude Code:
+//   - jobStateNameSync   — watches a state dir, ignores non-`state.json` names
+//   - useBgSessionPr     — same shape, background-session React hook
+//   - an unref'd watcher in a private-field class whose `catch {}` is EMPTY
+// All three swallow errors, so a stub that returns a never-firing EventEmitter
+// is indistinguishable from a working watcher that sees no changes: they degrade
+// SILENTLY, exactly like the fs.watchFile stub did before it cost a day on
+// darwin-ppc. What keeps this a wall rather than a live bug is reachability —
+// those paths are believed off clode's supported (-p / interactive) routes — and
+// that belief is UNVERIFIED. See test/fidelity/RECIPE.md row C7.
+// Why still a stub: this engine's uv_fs_event backend is ENOSYS on some legs, so
+// there is no portable native primitive to poll-emulate cheaply the way
+// watchFile's plain stat diff does. Emulating it means a recursive stat walk.
 fsMod.watch = function watch(filename, options, listener) {
   if (typeof options === 'function') { listener = options; }
   const w = new EventEmitter();
