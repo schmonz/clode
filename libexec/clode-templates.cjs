@@ -17,6 +17,19 @@ function parseManifest(text) {
     throw new TemplatesError('templates manifest: missing "targets" object');
   }
   if (!m.tjsPin) throw new TemplatesError('templates manifest: missing "tjsPin"');
+  // schema 2 = one range-fetchable blob. Validate the invariant HERE, once, so a
+  // malformed manifest fails at parse with a readable message rather than at
+  // fetch time with a confusing range error. A schema-2 manifest whose targets
+  // lack offsets describes engines nobody can obtain.
+  if (m.blob) {
+    if (typeof m.blob !== 'string') throw new TemplatesError('templates manifest: "blob" must be a string');
+    for (const [name, t] of Object.entries(m.targets)) {
+      if (!Number.isInteger(t.offset) || !Number.isInteger(t.length) || t.offset < 0 || t.length <= 0) {
+        throw new TemplatesError(
+          `templates manifest: target '${name}' has no usable offset/length for blob '${m.blob}'`);
+      }
+    }
+  }
   return m;
 }
 
@@ -62,8 +75,39 @@ async function obtainEngine(entry, opts) {
     if (got !== entry.sha256) throw new TemplatesError(`engine ${entry.engine}: sha256 ${got} != manifest ${entry.sha256}`);
   };
   if (fs.existsSync(dest)) { verify(fs.readFileSync(dest)); return dest; }
-  const asset = compression === 'gzip' ? `${entry.engine}.gz` : entry.engine;
-  const raw = await opts.fetch((opts.baseUrl || '') + asset);
+
+  // Where the engine bytes come from, in priority order:
+  //
+  //   1. schema 2 + a LOCAL blob (opts.blobPath, i.e. CLODE_TEMPLATES_BLOB) —
+  //      seek+read. Zero network: you brought `claude`, you brought the blob,
+  //      clode fetches nothing behind your back.
+  //   2. schema 2, no local blob — HTTP Range for just this target's slice
+  //      (~2.4MB of a ~122MB blob).
+  //   3. schema 1 — the pre-2026-08 whole-asset fetch, unchanged. An older
+  //      pin's manifest still works because a clode reads ITS OWN pin's manifest.
+  //
+  // All three converge on the SAME inflate+verify below, so the integrity gate
+  // cannot differ by transport.
+  const hasSlice = opts.blob && Number.isInteger(entry.offset) && Number.isInteger(entry.length);
+  if (opts.blob && !hasSlice) {
+    throw new TemplatesError(
+      `engine ${entry.engine}: manifest declares blob '${opts.blob}' but this target has no `
+      + 'offset/length — the manifest is inconsistent and cannot be used to build this target');
+  }
+
+  let raw;
+  if (hasSlice) {
+    const net = () => require('./clode-net.cjs');
+    if (opts.blobPath) {
+      raw = (opts.readRange || net().readRange)(opts.blobPath, entry.offset, entry.length);
+    } else {
+      const url = (opts.baseUrl || '') + opts.blob;
+      raw = await (opts.fetchRange || net().fetchRange)(url, entry.offset, entry.length);
+    }
+  } else {
+    const asset = compression === 'gzip' ? `${entry.engine}.gz` : entry.engine;
+    raw = await opts.fetch((opts.baseUrl || '') + asset);
+  }
   let buf;
   if (compression === 'gzip') {
     // Injectable for tests; defaults to the native-CLI-then-DecompressionStream path.

@@ -896,6 +896,12 @@ async function clodeBuild(args, opts) {
         thisPin: thisTjsPin(env, opts),
         manifestPin: manifest.tjsPin,
         compression: manifest.compression,
+        // schema 2: one published blob, this target is a byte slice of it.
+        blob: manifest.blob,
+        // CLODE_TEMPLATES_BLOB points at an already-downloaded blob, which turns
+        // every engine into an fs.read() — the "clode dials out for nothing"
+        // mode that pairs with CLODE_TEMPLATES_MANIFEST. Absent = Range-fetch.
+        blobPath: opts.templatesBlob || env.CLODE_TEMPLATES_BLOB || null,
       });
     } catch (e) { return fail(e.message); }
     env.CLODE_TARGET_TEMPLATE = enginePath;

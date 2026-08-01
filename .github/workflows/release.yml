@@ -263,7 +263,14 @@ jobs:
             --engines engines --tier release \
             --out "$RUNNER_TEMP/templates.json" --pack pack
           echo "=== manifest ==="; cat pack/templates-*.json
-          echo "=== pack ==="; ls -1 pack
+          echo "=== pack ==="; ls -lh pack
+          # The pack is EXACTLY two assets now (Follow-up 5): the blob and its
+          # manifest. Before 2026-08 it was the manifest plus ~38 loose
+          # `<engine>.gz` rows, which buried the builder list the release exists
+          # to show. Assert the shape here rather than discovering a regression
+          # by counting rows on the published release page.
+          n=$(ls -1 pack | wc -l | tr -d ' ')
+          [ "$n" = 2 ] || { echo "expected 2 pack assets (blob + manifest), got $n:" >&2; ls -1 pack >&2; exit 1; }
       # v<version>-<sha7> — the same pin clode's thisTjsPin derives from PINS.md
       # (and build-templates-manifest stamps into the manifest). sed, not node, to
       # avoid nesting quotes inside this YAML run scalar.

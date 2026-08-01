@@ -106,6 +106,75 @@ async function downloadFile(url, destPath, opts) {
   return await res.text();
 }
 
+// Fetch exactly [offset, offset+length) of a remote asset, for the templates
+// blob: one published `templates-<pin>` holds every engine's gzip member, and a
+// `--target X` build needs only its own ~2.4MB slice rather than the ~122MB whole.
+//
+// PROVEN BEFORE BUILT (spike 2026-07-27): tjs's libwebsockets `fetch` honors
+// Range THROUGH the GitHub→CDN redirect — `Range: bytes=0-99` against a
+// published `.gz` returned 206 with `content-range: bytes 0-99/2547550`, exactly
+// 100 bytes, gzip magic intact. So this needs no new fetch backend and no
+// redirect workaround on either engine.
+//
+// THE 200 FALLBACK IS NOT PARANOIA: a mirror or proxy that ignores Range answers
+// 200 with the ENTIRE body. Treating that as success would hand the caller the
+// whole blob where a slice was asked for, and the gzip inflate would then
+// succeed (concatenated members are a valid single stream) and produce the WRONG
+// engine — a silent, sha-caught-but-confusing failure. So a 200 is sliced
+// locally and reported, and anything else throws.
+async function fetchRange(url, offset, length, opts = {}) {
+  if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(length) || length <= 0) {
+    throw new Error(`clode: bad range (offset=${offset} length=${length}) for ${url}`);
+  }
+  const end = offset + length - 1;
+
+  if (url.startsWith('file://')) {
+    // Local blob served as a URL: seek+read, the same slice by another name.
+    const fd = fs.openSync(fileURLToPath(url), 'r');
+    try {
+      const buf = Buffer.alloc(length);
+      const got = fs.readSync(fd, buf, 0, length, offset);
+      if (got !== length) throw new Error(`clode: short read (${got} != ${length}) from ${url}`);
+      return buf;
+    } finally { fs.closeSync(fd); }
+  }
+
+  const res = await fetch(url, { redirect: 'follow', headers: { Range: `bytes=${offset}-${end}` } });
+  if (res.status === 206) {
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length !== length) {
+      throw new Error(`clode: range ${offset}-${end} returned ${buf.length} bytes, expected ${length} (${url})`);
+    }
+    return buf;
+  }
+  if (res.status === 200) {
+    if (opts.onFallback) opts.onFallback();
+    const whole = Buffer.from(await res.arrayBuffer());
+    if (whole.length < offset + length) {
+      throw new Error(`clode: server ignored Range and the body is too short `
+        + `(${whole.length} < ${offset + length}) for ${url}`);
+    }
+    return whole.subarray(offset, offset + length);
+  }
+  throw new Error(`clode: range request failed (HTTP ${res.status}) for ${url}`);
+}
+
+// Read a slice out of an already-downloaded blob on disk. The offline half of
+// the same index: `CLODE_TEMPLATES_BLOB=/path/to/templates-<pin>` makes every
+// engine an fs.read() and clode dials out for NOTHING. Deliberately shares the
+// caller and the verify path with fetchRange so the two modes cannot drift.
+function readRange(blobPath, offset, length) {
+  const fd = fs.openSync(blobPath, 'r');
+  try {
+    const buf = Buffer.alloc(length);
+    const got = fs.readSync(fd, buf, 0, length, offset);
+    if (got !== length) {
+      throw new Error(`clode: short read (${got} != ${length}) at ${offset} in ${blobPath}`);
+    }
+    return buf;
+  } finally { fs.closeSync(fd); }
+}
+
 // In-process gzip inflate, present under BOTH host node and the tjs target
 // (DecompressionStream + Response are WHATWG primitives tjs's fetch already
 // carries). The no-tool fallback for gunzipBuffer — a ~5-7MB engine inflates in
@@ -149,4 +218,4 @@ async function gunzipBuffer(gzBytes, opts = {}) {
   return gunzipViaStream(gzBytes);
 }
 
-module.exports = { downloadFile, sha256Of, gunzipBuffer };
+module.exports = { downloadFile, sha256Of, gunzipBuffer, fetchRange, readRange };

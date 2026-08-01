@@ -159,3 +159,70 @@ test('the manifest engine name comes from the canonical vocabulary, not a second
   assert.doesNotMatch(src, /engine:\s*`tjs-\$\{/,
     'the inline tjs-${name}-${pin} spelling must not come back');
 });
+
+// --- Follow-up 5: blob packing (schema 2) ---------------------------------
+// The builder side of test/templates-blob-pack.test.cjs, which covers the
+// consumer side. Kept here because packBlob/buildManifest live in this module.
+test('packBlob concatenates gzip members and records tiling offsets; buildManifest emits schema 2', async () => {
+  const { packBlob, buildManifest } = await import('../scripts/build-templates-manifest.mjs');
+  const zlib = require('node:zlib');
+  const os = require('node:os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-packblob-'));
+  const mk = (n, body) => {
+    const f = path.join(dir, n);
+    fs.writeFileSync(f, body);
+    return { name: n, tag: n, engine: `tjs-${n}-PIN`, file: f, verified: 'smoke' };
+  };
+  // Deliberately NOT in sorted order, to prove packBlob sorts for determinism.
+  const inputs = [
+    mk('zeta', Buffer.from('Z'.repeat(500))),
+    mk('alpha', Buffer.from('A'.repeat(300))),
+  ];
+
+  const { blob, slices } = packBlob(inputs);
+  assert.strictEqual(slices.alpha.offset, 0, 'sorted order => alpha first');
+  assert.strictEqual(slices.zeta.offset, slices.alpha.length);
+  assert.strictEqual(blob.length, slices.alpha.length + slices.zeta.length);
+  for (const it of inputs) {
+    const s = slices[it.name];
+    assert.deepStrictEqual(zlib.gunzipSync(blob.subarray(s.offset, s.offset + s.length)),
+      fs.readFileSync(it.file), `${it.name} slice must inflate to its own engine`);
+  }
+
+  // Byte-identical on a re-run: a churning blob would invalidate every recorded
+  // offset and force a pointless re-upload.
+  assert.deepStrictEqual(packBlob(inputs).blob, blob, 'packBlob must be deterministic');
+
+  const m = buildManifest({ tjsPin: 'PIN', inputs, compression: 'gzip', blob: 'templates-PIN', slices });
+  assert.strictEqual(m.schema, 2);
+  assert.strictEqual(m.blob, 'templates-PIN');
+  assert.strictEqual(m.targets.alpha.offset, 0);
+  assert.strictEqual(m.targets.zeta.length, slices.zeta.length);
+});
+
+test('buildManifest refuses a blob pack with a target missing its slice', async () => {
+  const { buildManifest } = await import('../scripts/build-templates-manifest.mjs');
+  const os = require('node:os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-packblob2-'));
+  const f = path.join(dir, 'e');
+  fs.writeFileSync(f, 'x');
+  const inputs = [{ name: 'solo', tag: 't', engine: 'tjs-solo-PIN', file: f, verified: 'smoke' }];
+  assert.throws(
+    () => buildManifest({ tjsPin: 'PIN', inputs, blob: 'templates-PIN', slices: {} }),
+    /missing a slice for target 'solo'/);
+});
+
+test('buildManifest without a blob still emits schema 1 (no offsets leak in)', async () => {
+  const { buildManifest } = await import('../scripts/build-templates-manifest.mjs');
+  const os = require('node:os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-packblob3-'));
+  const f = path.join(dir, 'e');
+  fs.writeFileSync(f, 'x');
+  const m = buildManifest({
+    tjsPin: 'PIN',
+    inputs: [{ name: 'solo', tag: 't', engine: 'tjs-solo-PIN', file: f, verified: 'smoke' }],
+  });
+  assert.strictEqual(m.schema, 1);
+  assert.ok(!('blob' in m));
+  assert.ok(!('offset' in m.targets.solo));
+});

@@ -13,18 +13,61 @@ import zlib from 'node:zlib';
 // inputs: [{ name, tag, engine, file, verified }] — name = target key (e.g.
 // 'linux-x64'), tag = platform-tag, engine = published asset filename, file =
 // local path to the engine bytes, verified = 'smoke'|'attest-only'|'unverified'.
-export function buildManifest({ tjsPin, inputs, compression }) {
+export function buildManifest({ tjsPin, inputs, compression, blob, slices }) {
   const targets = {};
   for (const it of inputs) {
     // sha256 of the DECOMPRESSED engine (it.file) — the integrity target clode
     // verifies AFTER inflating, independent of how the asset ships on the wire.
     const sha256 = crypto.createHash('sha256').update(fs.readFileSync(it.file)).digest('hex');
     targets[it.name] = { tag: it.tag, engine: it.engine, sha256, verified: it.verified || 'unknown' };
+    // Schema 2 (blob pack): where this engine's gzip member lives inside the one
+    // published blob. Both are REQUIRED when a blob is declared — a target
+    // without a slice is unreachable, so emitting one silently would ship a
+    // manifest that lies about what it can build.
+    if (blob) {
+      const s = slices && slices[it.name];
+      if (!s) throw new Error(`buildManifest: blob pack is missing a slice for target '${it.name}'`);
+      targets[it.name].offset = s.offset;
+      targets[it.name].length = s.length;
+    }
   }
-  const manifest = { schema: 1, tjsPin, targets };
-  // Engines ship gzip'd (asset = <engine>.gz); absent = raw (backward compatible).
+  // schema 2 == "targets carry {offset,length} into `blob`". A clode reads ITS
+  // OWN pin's manifest, so schema-1 (loose per-engine assets) and schema-2 (one
+  // range-fetchable blob) coexist by pin with no flag day — an older clode never
+  // sees a newer manifest. See docs/superpowers/specs/2026-07-27-release-
+  // followups-design.md, "Follow-up 5".
+  const manifest = blob ? { schema: 2, tjsPin, blob, targets } : { schema: 1, tjsPin, targets };
+  // Engines ship gzip'd (asset = <engine>.gz, or a gzip member inside the blob);
+  // absent = raw (backward compatible).
   if (compression) manifest.compression = compression;
   return manifest;
+}
+
+// Concatenate each input's gzip'd engine into ONE blob, recording where each
+// member starts and how long it is.
+//
+// WHY A BYTE SLICE IS ENOUGH: every member is an INDEPENDENT gzip stream (its
+// own header, deflate data, and CRC/ISIZE trailer), so bytes [offset, offset+len)
+// are a complete, self-contained .gz — inflatable by the existing gunzipBuffer
+// path with no framing format of our own to parse, and no change to the
+// integrity story (sha256 is still of the DECOMPRESSED engine, verified after
+// inflation). Concatenated gzip members are also valid as a single stream per
+// RFC 1952, so the whole blob happens to gunzip to every engine end-to-end —
+// which is a useful property for a human debugging it, not something clode relies on.
+export function packBlob(inputs, { level = 9 } = {}) {
+  const parts = [];
+  const slices = {};
+  let offset = 0;
+  // Sort by target name so the blob is DETERMINISTIC: the same engines must
+  // produce byte-identical output, or a re-run churns the asset and every
+  // recorded offset for no reason.
+  for (const it of [...inputs].sort((a, b) => a.name.localeCompare(b.name))) {
+    const gz = zlib.gzipSync(fs.readFileSync(it.file), { level });
+    parts.push(gz);
+    slices[it.name] = { offset, length: gz.length };
+    offset += gz.length;
+  }
+  return { blob: Buffer.concat(parts), slices };
 }
 
 // --- CI aggregator: turn the matrix's per-leg bare-engine artifacts into
@@ -135,35 +178,60 @@ function parseArgs(argv) {
   return a;
 }
 
-// CLI: build-templates-manifest.mjs --engines DIR --out FILE [--pin P] [--pack DIR] [--tier release]
-// Assembles the manifest from downloaded leg engines; with --pack, also stages
-// the engines under their pin-versioned pack names + the manifest into one dir
-// for a single release upload.
+// CLI: build-templates-manifest.mjs --engines DIR --out FILE [--pin P] [--pack DIR]
+//                                   [--loose] [--tier release]
+//
+// With --pack, stages the release upload into DIR. TWO SHAPES:
+//   default  ONE `templates-<pin>` blob (all engines' gzip members concatenated)
+//            + `templates-<pin>.json` carrying {offset,length} per target.
+//            Two assets total, and `clode build --target X` Range-fetches only
+//            its ~2.4MB slice.
+//   --loose  the pre-2026-08 shape: one `<engine>.gz` per target (schema 1).
+//            Kept because it is the only way to regenerate a schema-1 manifest
+//            for comparison, and because a mirror that cannot serve HTTP Range
+//            at all would need it. NOT what the release publishes.
 function main(argv) {
   const a = parseArgs(argv);
   if (!a.engines || !a.out) {
-    process.stderr.write('usage: --engines DIR --out FILE [--pin P] [--pack DIR] [--tier release|ci]\n');
+    process.stderr.write('usage: --engines DIR --out FILE [--pin P] [--pack DIR] [--loose] [--tier release|ci]\n');
     process.exit(2);
   }
   const pin = a.pin || tjsPinFromPins(fs.readFileSync(a.pins || 'spike/quickjs/PINS.md', 'utf8'));
   if (!pin) { process.stderr.write('cannot derive tjs pin (pass --pin or provide PINS.md)\n'); process.exit(1); }
   const targets = manifestTargets(a.tier || 'release');
   const { inputs, skipped } = collectInputs(a.engines, targets, pin);
-  // Packing implies gzip'd engine assets (the shipping format) — declare it in the
-  // manifest so a fetching clode knows to request <engine>.gz and inflate it.
+  // Packing implies gzip'd engines (the shipping format) — declare it in the
+  // manifest so a fetching clode knows to inflate what it pulls.
   const gzipPack = !!a.pack;
-  const manifest = buildManifest({ tjsPin: pin, inputs, compression: gzipPack ? 'gzip' : undefined });
+  const loose = !!a.loose;
+
+  let manifest;
+  let packed = null;
+  if (a.pack && !loose) {
+    packed = packBlob(inputs);
+    manifest = buildManifest({
+      tjsPin: pin, inputs, compression: 'gzip',
+      blob: `templates-${pin}`, slices: packed.slices,
+    });
+  } else {
+    manifest = buildManifest({ tjsPin: pin, inputs, compression: gzipPack ? 'gzip' : undefined });
+  }
   fs.writeFileSync(a.out, JSON.stringify(manifest, null, 2) + '\n');
+
   if (a.pack) {
     fs.mkdirSync(a.pack, { recursive: true });
-    for (const it of inputs) {
-      const gz = zlib.gzipSync(fs.readFileSync(it.file), { level: 9 });
-      fs.writeFileSync(path.join(a.pack, `${it.engine}.gz`), gz);
+    if (packed) {
+      fs.writeFileSync(path.join(a.pack, `templates-${pin}`), packed.blob);
+    } else {
+      for (const it of inputs) {
+        const gz = zlib.gzipSync(fs.readFileSync(it.file), { level: 9 });
+        fs.writeFileSync(path.join(a.pack, `${it.engine}.gz`), gz);
+      }
     }
     fs.writeFileSync(path.join(a.pack, `templates-${pin}.json`), JSON.stringify(manifest, null, 2) + '\n');
   }
   process.stderr.write(`manifest: pin=${pin}, ${inputs.length} target(s)` +
-    (gzipPack ? ', gzip' : '') +
+    (gzipPack ? (packed ? `, blob ${packed.blob.length} bytes` : ', gzip loose') : '') +
     (skipped.length ? `, skipped ${skipped.length}: ${skipped.join(', ')}` : '') + '\n');
 }
 
