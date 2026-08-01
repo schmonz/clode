@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.20260801.1
+
+Add an [Actually Portable Executable](https://github.com/jart/cosmopolitan/blob/master/ape/specification.md) built with [Cosmopolitan Libc](https://github.com/jart/cosmopolitan) to run natively on Linux, macOS, Windows, NetBSD, FreeBSD, and OpenBSD on 64-bit Intel or ARM.
+
+`clode` can now cross-build `naude` just as it does for `quaude`.
+
+`quaude` is still not working on Mac OS X 10.4 Tiger, but it's closer.
+
 ## 0.20260727.1
 
 Ready to be your daily driver! This release was primarily developed with `quaude` on NetBSD/aarch64.

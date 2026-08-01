@@ -137,3 +137,25 @@ test('buildManifest: compression is declared when set, absent otherwise; sha sta
   assert.strictEqual(gz.targets['netbsd-amd64'].sha256,
     crypto.createHash('sha256').update('ENGINE').digest('hex'));
 });
+
+// The engine asset name has ONE producer. build-templates-manifest used to spell
+// `tjs-${name}-${pin}` inline while canonical-name.cjs exported engineName() doing
+// the same thing — two implementations of one fact, byte-identical at the time and
+// free to drift afterwards. This pins them together: if someone changes either the
+// canonical vocabulary or the manifest's engine field, they must move as one.
+// (Same lesson as the version bump surface: derive, never repeat.)
+test('the manifest engine name comes from the canonical vocabulary, not a second spelling', async () => {
+  const canon = require('../scripts/canonical-name.cjs');
+  const pin = '26.6.0-1a230d3';
+  for (const leg of ['darwin-arm64', 'darwin-ppc', 'linux-x64-musl', 'windows-x64', 'cosmo']) {
+    assert.strictEqual(canon.engineName('tjs', leg, pin), `tjs-${cleanTargetName(leg)}-${pin}`,
+      `${leg}: engineName() and the manifest target name disagree`);
+  }
+  // And the manifest source must actually CALL it — a passing equality above would
+  // otherwise be satisfied by two copies that merely happen to agree today.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'scripts/build-templates-manifest.mjs'), 'utf8');
+  assert.match(src, /engine:\s*canon\.engineName\(/,
+    'build-templates-manifest must call canon.engineName for the engine asset name');
+  assert.doesNotMatch(src, /engine:\s*`tjs-\$\{/,
+    'the inline tjs-${name}-${pin} spelling must not come back');
+});

@@ -113,7 +113,12 @@ export function collectInputs(enginesDir, targetsByLeg, pin) {
     inputs.push({
       name,
       tag: deriveTag(spec),
-      engine: `tjs-${name}-${pin}`,
+      // Engine asset name comes from the ONE vocabulary (canonical-name.cjs), not a
+      // second inline spelling of it. These were byte-identical when this was written
+      // (verified across darwin-arm64/darwin-ppc/linux-x64-musl/cosmo) — which is
+      // precisely when a duplicate is cheapest to remove and most likely to drift
+      // later. `canon.engineName` also owns the universal-leg case (cosmo has no arch).
+      engine: canon.engineName('tjs', leg, pin),
       file,
       verified: deriveVerified(spec),
     });
