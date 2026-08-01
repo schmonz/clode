@@ -109,8 +109,58 @@ function discoverTests(dir) {
   return out;
 }
 const files = discoverTests('test').sort();
-const res = spawnSync(process.execPath, ['--test', ...files], { stdio: 'inherit' });
+
+// Discovery floor: zero files means the glob/path logic itself regressed (e.g. a
+// `discoverTests` bug, or test/ moved) — spawning bare `node --test` with no file
+// args would silently fall back to Node's OWN default test-file discovery instead
+// of failing, masking exactly the kind of regression this check exists to catch.
+// Distinct message from "tests failed" on purpose (see the floor check below).
+if (files.length === 0) {
+  console.error('run: test discovery found ZERO files under test/**/*.test.cjs — this is a '
+    + 'DISCOVERY regression (a glob/path bug), not "no tests to run". Fix discoverTests() '
+    + 'or the test/ layout before trusting any exit code from this runner.');
+  process.exit(2);
+}
+
+// EVIDENCE floor (as opposed to every other ratchet in this repo, which checks
+// SHAPE): tonight `npm test` exited 126 having run ZERO tests — an asdf Node pin
+// Renovate had bumped wasn't installed locally, so `node --test ...` itself never
+// executed a single test — and that superficially read as success because nothing
+// downstream checked the COUNT, only glanced at "did it blow up". A suite that
+// never ran must be exactly as loud as a suite that failed, and the message must
+// say WHICH one happened — silently treating "nothing ran" as "nothing failed" is
+// the bug. Ask Node's own test-reporter for a parseable summary (a 2nd `tap`
+// reporter writing to a tmp file) alongside the SAME reporter+destination Node
+// would have picked with plain `stdio:'inherit'` (spec on a TTY, tap otherwise) —
+// so a human sees byte-identical output to before, and we additionally get a
+// `# tests N` line to floor-check without changing what anyone sees on a healthy
+// run.
+const tapCopy = path.join(os.tmpdir(), `clode-test-run-${process.pid}.tap`);
+const res = spawnSync(process.execPath, [
+  '--test',
+  '--test-reporter', process.stdout.isTTY ? 'spec' : 'tap',
+  '--test-reporter-destination', 'stdout',
+  '--test-reporter', 'tap',
+  '--test-reporter-destination', tapCopy,
+  ...files,
+], { stdio: 'inherit' });
 let fails = res.status === 0 ? 0 : 1;
+
+let tapText = null;
+try { tapText = fs.readFileSync(tapCopy, 'utf8'); } catch { /* runner never wrote it — handled below */ }
+finally { try { fs.unlinkSync(tapCopy); } catch { /* best-effort cleanup */ } }
+const testsRan = tapText ? tapText.match(/^# tests (\d+)/m) : null;
+if (!testsRan) {
+  console.error('run: could not read a test-run summary at all (no "# tests N" from node:test) — '
+    + 'the runner may not have executed ANYTHING. Treating this as a hard failure, not a pass.');
+  fails = 1;
+} else if (Number(testsRan[1]) === 0) {
+  console.error(`run: ZERO tests executed (discovered ${files.length} file(s) to run) — this is `
+    + `a "nothing ran" failure, NOT the same thing as "tests failed" and NOT a pass. Check that `
+    + `\`node\` (${process.execPath}) actually runs and that node:test can load these files — `
+    + `e.g. an unbuilt asdf/nvm pin bump can make the whole invocation silently no-op.`);
+  fails = 1;
+}
 
 // Postflight: no watched real dir changed, and the store still has no fake deps.
 const after = guard.snapshot(GUARD_WATCH);
