@@ -556,13 +556,20 @@ const LEGS = [
   // Linux execs the APE, so the builder fuses + PONGs on the runner, and the SAME
   // .com is then exercised on macOS/Windows/BSD runners (PONG + attest each — the
   // multi-OS fan-out; see BACKLOG "Cosmopolitan APE leg" → PHASE E CI note).
-  // ONBOARDING: publish:false + soft-fail — a new CI leg earns hard status by
-  // staying green (house rule). Flip to publish:true once the fan-out is green.
-  // Large timeout: the first build downloads cosmocc (441MB) + compiles the full
-  // lean tree; the tjs-cache keys on recipe so repeat builds are cheap.
+  // SHIPPING (2026-07-31, maintainer call: "release worthy as is, we'll improve it
+  // over time as needed"). Graduated from the publish:false + soft-fail onboarding
+  // after the full agentic fidelity suite came back green on the APE at parity with
+  // native tjs (mcp-ws, tools 5/5, node-shim-agentic, workflow, subagent-diff) plus
+  // interactive render/resize/live-turn. Dropping `soft-fail` is REQUIRED, not
+  // incidental: the ci-tier invariant in test/tjs-legs.test.cjs enforces "if we ship
+  // it, CI gates it", so a published leg may not be soft-fail. Consequence, accepted:
+  // a cosmo regression now turns main RED instead of being tolerated. Ships UNSIGNED
+  // as clode-<ver>-cosmo.com (canonical-name.cjs); the Gatekeeper/quarantine note is
+  // a release-notes item. Large timeout: the first build downloads cosmocc (441MB) +
+  // compiles the full lean tree; the tjs-cache keys on recipe so repeat builds are cheap.
   { leg: 'cosmo', os: 'ubuntu-latest', cosmo: true,
     'cross-file': 'scripts/cosmo.toolchain.cmake',
-    publish: false, ci: true, 'soft-fail': true, timeout: 3600,
+    publish: true, ci: true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off' },
 ];
 

@@ -63,6 +63,9 @@ test('release tier: every published leg is present (golden)', () => {
   const release = legsFor('release');
   const published = release.filter((l) => l.publish).map((l) => l.leg).sort();
   assert.deepStrictEqual(published, [
+    // cosmo graduated from onboarding to a SHIPPING leg 2026-07-31 (maintainer call).
+    // One fat APE for Linux/macOS/Windows/BSD, shipped unsigned as clode-<ver>-cosmo.com.
+    'cosmo',
     'dragonflybsd-amd64',
     'freebsd-amd64', 'freebsd-arm64',
     'haiku-x64',

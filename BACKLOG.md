@@ -454,6 +454,18 @@ well-tested, and reasonably fast** as we can possibly make it."
   knowing — it tells us whether the Darwin 8 defect is kernel-wide or ppc-specific, which is
   direct evidence for the paleo-POSIX floor walk (`panther-floor-next-rung`).
 
+- **`http.request`/`https.request` are a WALL in the node-shim (2026-07-31).** Neither exists:
+  the modules' own header comments call it "a genuine later wall". Anything in the bundle that
+  reaches for Node's classic client API gets `TypeError: not a function`, and because such a
+  throw can escape from a callback where nothing settles the awaiting promise, the symptom can
+  be a silent hang rather than a named error. A minimal fetch-backed client was written to make
+  the surface traceable (cc2ac10) and then REVERTED: the `[http]` trace proved the credentials
+  stall makes no http request at all, so the client was unrelated to that bug, unreviewed, and
+  carried no real socket/backpressure/timeout semantics — not something to ship on a hunch.
+  WHEN IT MATTERS: implement it properly (real semantics + review), or keep it a loud wall.
+  Today's evidence says nothing on the `-p` or interactive paths needs it, so this is a latent
+  gap, not an active bug. See `.superpowers/sdd/2026-07-31-old-darwin-poll-backend/task-11-report.md`.
+
 ### Known quaude runtime bugs
 
 - **quaude does not persist config across invocations — CREDS half open (NetBSD/arm64 at
