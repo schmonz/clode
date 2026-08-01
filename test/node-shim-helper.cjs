@@ -22,6 +22,16 @@ function tjsPath() {
 // execve'd on non-Windows hosts — it must run via the ENOEXEC shell trampoline
 // (`/bin/sh -c '"$@"' sh <ape> …`). Detect it so the agentic harness can drive a
 // cosmo engine the same way e2e-pty.cjs's apeCmd() drives the interactive one.
+//
+// CAVEAT this detector does NOT resolve: 'MZ' is also the first two bytes of
+// every plain Windows PE (a cosmo APE *is* a valid PE — that's the whole trick
+// that lets it boot natively on Windows; a non-cosmo tjs.exe built by MSVC/MinGW
+// is just an ordinary PE with the same two bytes). So `isApeFile` alone cannot
+// tell "cosmo APE" from "plain Windows PE" — it can only tell "MZ-headed" from
+// not. Distinguishing the two for real means walking the PE header to the cosmo
+// shell-script prologue (`MZqFpD`) or checking for the appended zip trailer;
+// not worth it here because `wantsTrampoline` below never needs that finer
+// answer — see the comment there.
 function isApeFile(bin) {
   try {
     const fd = fs.openSync(bin, 'r');
@@ -32,13 +42,47 @@ function isApeFile(bin) {
   } catch { return false; }
 }
 
+// Pure decision function, deliberately separated from tjsPath()/fs access so it
+// can be unit-tested on every platform (see node-shim-helper.test.cjs) without
+// needing a real Windows host or a real APE binary to fake out.
+//
+// WHY the trampoline exists at all (POSIX): a Cosmopolitan APE is an MZ-headed
+// polyglot. The POSIX kernel's execve() looks at the MZ header, doesn't
+// recognize it as ELF/Mach-O, and refuses with ENOEXEC — so on Linux/macOS/BSD
+// the only way to run it is through `/bin/sh`, which has its own ENOEXEC
+// fallback that recognizes the cosmo shell-script prologue and re-execs it
+// correctly.
+//
+// WHY it must NOT be used on win32: on Windows, an MZ-headed file is not a
+// foreign polyglot to route around — it *is* the native executable format.
+// CreateProcess loads it directly as a PE, no trampoline needed, and Windows
+// has no `/bin/sh` to spawn one through anyway. Naively gating only on
+// `isApeFile()` (as the code did before this fix) treats "starts with MZ" as
+// "needs the shell trampoline" — true on POSIX, but every ordinary tjs.exe
+// (cosmo APE or plain PE, doesn't matter) is *also* MZ-headed on Windows. That
+// misdetection is exactly what broke CI run 30675029624: `windows-x64-tests`
+// and `windows-arm64-tests` failed both agentic Bash/Edit round-trip rows with
+// `Error: spawn /bin/sh ENOENT`, because the harness tried to shell out to a
+// path that doesn't exist on Windows. Gating on platform (not refining
+// isApeFile's magic-number check) is the fix: it's a one-line, impossible-to-
+// misread condition, and it's correct regardless of which detector produced
+// `isApe` — even a hypothetical byte-perfect cosmo-vs-PE detector would still
+// need this platform check, since a *genuine* cosmo APE run on Windows still
+// wants direct PE execution, not the shell trampoline.
+function wantsTrampoline(platform, isApe) {
+  return platform !== 'win32' && isApe;
+}
+
 // Build the [command, argv] to spawn the engine, APE-aware. For a normal Mach-O/
-// ELF binary this is just [tjs, args]; for an APE it wraps in the /bin/sh
-// trampoline. Behavior-neutral for non-APE engines (the common case).
+// ELF binary (or any binary on win32) this is just [tjs, args]; for an APE on a
+// POSIX host it wraps in the /bin/sh trampoline. Behavior-neutral for non-APE
+// engines (the common case) and for every Windows binary (see wantsTrampoline).
 function engineSpawn(args) {
   const tjs = tjsPath();
   if (!tjs) throw new Error('no tjs binary (gate with skipUnlessTjs first)');
-  if (isApeFile(tjs)) return ['/bin/sh', ['-c', '"$@"', 'sh', tjs, ...args]];
+  if (wantsTrampoline(process.platform, isApeFile(tjs))) {
+    return ['/bin/sh', ['-c', '"$@"', 'sh', tjs, ...args]];
+  }
   return [tjs, args];
 }
 
@@ -58,4 +102,4 @@ function skipUnlessTjs(t) {
   return false;
 }
 
-module.exports = { tjsPath, runLoader, skipUnlessTjs, isApeFile, engineSpawn, REPO, LOADER };
+module.exports = { tjsPath, runLoader, skipUnlessTjs, isApeFile, wantsTrampoline, engineSpawn, REPO, LOADER };
