@@ -348,10 +348,23 @@ jobs:
           cd dist
           chmod +x clode-*
           # The pack rides in via the clode-templates-<pin> artifact (merge-multiple
-          # flattened its engines + manifest here). Cover them in SHA256SUMS too —
-          # tjs-*/templates-*.json are globbed only if present so a pack-less run
-          # (none built) still succeeds.
-          sha256sum clode-* $(ls tjs-* templates-*.json 2>/dev/null || true) > SHA256SUMS
+          # flattened it here). Cover it in SHA256SUMS too — globbed only if present
+          # so a pack-less run (none built) still succeeds.
+          #
+          # `templates-*` NOT `templates-*.json`: since the blob pack (2026-08-01) the
+          # engines ship as ONE extensionless `templates-<pin>` asset, which the old
+          # `.json` glob did not match — and `tjs-*` no longer matches anything either,
+          # because the per-engine `.gz` rows are gone. Together those would have
+          # shipped every engine byte UNCHECKSUMMED while SHA256SUMS still looked
+          # complete. `tjs-*` is kept for a `--loose` pack.
+          sha256sum clode-* $(ls tjs-* templates-* 2>/dev/null || true) > SHA256SUMS
+          # A blob pack MUST be covered. Silence here would mean the one asset holding
+          # every engine is unverifiable by the checksums file that claims to cover the
+          # release.
+          for f in templates-*; do
+            [ -e "$f" ] || continue
+            grep -q "  $f\$" SHA256SUMS || { echo "SHA256SUMS is missing $f" >&2; exit 1; }
+          done
           cat SHA256SUMS
           cd ..
           if [ "$GITHUB_REF_TYPE" = tag ]; then
