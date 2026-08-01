@@ -1,0 +1,148 @@
+'use strict';
+// Ties release.yml's REQUIRED asset globs to the names scripts/canonical-name.cjs
+// ACTUALLY produces.
+//
+// WHY THIS EXISTS. On 2026-08-01 the v0.20260801.1 release run went 48/48 green
+// and then refused to publish: the gate looked for `clode-*-windows*-arm64`
+// while windows-arm64 had uploaded `clode-0.20260801.1-windows-arm64.exe`. The
+// `.exe` arrived with the canonical-vocabulary refactor (b63233b), which moved
+// the per-OS runnable extension into canonical-name.cjs — correctly — but the
+// gate's hand-written glob list was never updated to match, and nothing tied
+// them together. CI could not catch it: the gate runs ONLY in the release tier,
+// so its first execution is the release itself.
+//
+// That is the expensive shape this repo keeps naming: two hand-maintained lists
+// that must agree, with no assertion that they do. The fix is not "remember to
+// update the globs" — it is this test. Per
+// [[ratchet-noticed-and-fixed-earlier]]: the mechanism that would have made it
+// so easy to notice it would have been noticed before.
+//
+// WHAT IT DOES NOT DO: it does not re-implement globbing or read dist/. It
+// asserts the narrower, load-bearing property — that each REQUIRED glob matches
+// the real asset name for at least one currently-published leg. A glob that
+// matches nothing we ship is exactly the failure that blocked the release.
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const { execFileSync } = require('node:child_process');
+
+const canon = require('../scripts/canonical-name.cjs');
+
+const REPO = path.resolve(__dirname, '..');
+const RELEASE_YML = path.join(REPO, '.github/workflows/release.yml');
+
+// tjs-legs.mjs is ESM with a JSON-emitting CLI; drive it the same way
+// test/tjs-legs.test.cjs does rather than inventing a second access path.
+// 'release' is the correct tier here — it is the tier the gate runs in.
+const legsFor = (tier, only) => JSON.parse(execFileSync(process.execPath,
+  [path.join(REPO, 'scripts', 'tjs-legs.mjs'), tier, ...(only ? [only] : [])],
+  { encoding: 'utf8' }));
+
+// Parse the REQUIRED="..." line out of the workflow rather than duplicating it
+// here — duplicating is the very thing that caused the outage.
+function requiredGlobs() {
+  const text = fs.readFileSync(RELEASE_YML, 'utf8');
+  const m = text.match(/^\s*REQUIRED="([^"]+)"/m);
+  assert.ok(m, 'could not find the REQUIRED="..." asset-glob line in release.yml');
+  return m[1].trim().split(/\s+/).filter(Boolean);
+}
+
+// Minimal shell-glob -> RegExp. Only `*` is used in these globs; anything else
+// is treated literally. Deliberately strict: if a future glob starts using `?`
+// or brackets, this throws rather than silently mismatching.
+function globToRegExp(glob) {
+  assert.ok(!/[?[\]{}]/.test(glob),
+    `glob "${glob}" uses a metacharacter this test does not model; extend globToRegExp`);
+  const body = glob.split('*').map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*');
+  return new RegExp(`^${body}$`);
+}
+
+// The darwin slices are a SEPARATE job (`only:darwin`) so the universal lipo can
+// depend on just them, so they do not appear in the default release listing.
+// Missing that is how a first draft of this test "proved" the macos glob broken.
+function publishedLegs() {
+  const main = legsFor('release');
+  const darwin = legsFor('release', 'darwin');
+  assert.ok(main.length && darwin.length,
+    'could not read the leg lists from scripts/tjs-legs.mjs');
+  const seen = new Set();
+  return [...main, ...darwin].filter((l) => {
+    if (!l.publish || seen.has(l.leg)) return false;
+    seen.add(l.leg);
+    return true;
+  });
+}
+
+// The four-arch macOS Universal binary is NOT any single leg's asset — it is
+// lipo'd from the four darwin slices and named by a hardcoded string in
+// release.yml ("asset=clode-$V-macos"). Parse that line rather than restating
+// it, for the same reason the globs are parsed: a copy is what rots.
+function extraAssetNames(version) {
+  const text = fs.readFileSync(RELEASE_YML, 'utf8');
+  const out = [];
+  for (const m of text.matchAll(/asset=(clode-[^"'\s]+)/g)) {
+    out.push(m[1].replace(/\$\{?V\}?/g, version));
+  }
+  assert.ok(out.length, 'no `asset=clode-...` line found in release.yml');
+  return out;
+}
+
+// Every asset name the release could plausibly produce, at a representative
+// version. Floors matter (netbsd-sparc ships as netbsd<floor>-sparc), so ask
+// canonical-name for both the floored and unfloored spelling when a leg
+// declares a floor.
+function assetNamesFor(leg, version) {
+  const out = new Set([canon.assetName(leg.leg, version)]);
+  if (leg.floor) out.add(canon.assetName(leg.leg, version, leg.floor));
+  return [...out];
+}
+
+test('every REQUIRED release glob matches a real published asset name', () => {
+  const version = '0.20260801.1';
+  const legs = publishedLegs();
+  assert.ok(legs.length > 10, `expected many published legs, got ${legs.length}`);
+
+  const allNames = [
+    ...legs.flatMap((l) => assetNamesFor(l, version)),
+    ...extraAssetNames(version),
+  ];
+
+  for (const glob of requiredGlobs()) {
+    const re = globToRegExp(glob);
+    const hits = allNames.filter((n) => re.test(n));
+    assert.ok(hits.length > 0,
+      `release.yml REQUIRED glob "${glob}" matches NO asset this release produces.\n`
+      + '  This is the exact failure that blocked v0.20260801.1: all jobs green,\n'
+      + '  release refused. Candidate names include:\n'
+      + `    ${allNames.filter((n) => n.includes(glob.replace(/\*/g, '').slice(0, 12))).slice(0, 8).join('\n    ')}\n`
+      + `  (full list length ${allNames.length})`);
+  }
+});
+
+// The specific regression, pinned by name so the reason is unmissable in a diff.
+test('the windows-arm64 asset carries .exe and the gate still matches it', () => {
+  const name = canon.assetName('windows-arm64', '0.20260801.1');
+  assert.match(name, /\.exe$/,
+    'canonical-name no longer appends .exe to windows assets — if that is deliberate,'
+    + ' the release.yml globs and this test both need updating together');
+
+  const globs = requiredGlobs();
+  const winGlob = globs.find((g) => g.includes('windows'));
+  assert.ok(winGlob, 'release.yml no longer requires a windows asset');
+  assert.ok(globToRegExp(winGlob).test(name),
+    `release.yml glob "${winGlob}" does not match the real asset name "${name}"`);
+});
+
+// Cosmo ships `.com` by the same mechanism. It is not in REQUIRED today, but if
+// it is ever added, an extensionless glob would fail exactly as windows did.
+test('a cosmo glob, if ever required, would have to tolerate the .com extension', () => {
+  const name = canon.assetName('cosmo', '0.20260801.1');
+  assert.match(name, /\.com$/, 'cosmo asset no longer ends in .com');
+
+  const cosmoGlob = requiredGlobs().find((g) => g.includes('cosmo'));
+  if (!cosmoGlob) return; // not required today — nothing to assert
+  assert.ok(globToRegExp(cosmoGlob).test(name),
+    `release.yml glob "${cosmoGlob}" does not match the real cosmo asset "${name}"`);
+});

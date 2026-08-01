@@ -311,7 +311,19 @@ jobs:
           # `clode-<ver>-macos`, the four-arch Universal binary — and it carries no
           # arch suffix by design, which is why this is a glob list rather than the
           # former {os arch} pairs.
-          REQUIRED="clode-*-windows*-arm64  clode-*-netbsd*-sparc  clode-*-macos"
+          # TRAILING `*` IS LOAD-BEARING — it matches the per-OS runnable
+          # extension that scripts/canonical-name.cjs appends (windows `.exe`,
+          # cosmo `.com`, everything else none). Without it this gate blocked the
+          # 0.20260801.1 release: windows-arm64 uploaded
+          # `clode-0.20260801.1-windows-arm64.exe` and the extensionless glob
+          # `clode-*-windows*-arm64` did not match, so a release with all 48 jobs
+          # green refused to publish. The extension arrived with the canonical
+          # vocabulary refactor (b63233b); this list was written against the older
+          # extensionless names and nothing tied the two together. CI never saw it
+          # because this gate only runs in the release tier.
+          # test/release-gate-globs.test.cjs now asserts these globs against the
+          # names canonical-name.cjs actually produces.
+          REQUIRED="clode-*-windows*-arm64*  clode-*-netbsd*-sparc*  clode-*-macos*"
           missing=0
           for g in $REQUIRED; do
             if ! ls dist/$g >/dev/null 2>&1; then
