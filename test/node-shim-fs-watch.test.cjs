@@ -114,23 +114,46 @@ test('fs.unwatchFile stops delivery: no callbacks fire after unwatch', (t) => {
 
 test('two listeners on one path both fire; removing one leaves the other working', (t) => {
   if (skipUnlessTjs(t)) return;
+  // EVENT-DRIVEN, NOT DEADLINE-DRIVEN. The original version wrote at 150ms and
+  // 400ms and reported at 700ms with a 60ms poll interval. That measures the
+  // BOX, not the shim: on the emulated big-endian oracle under a full release
+  // matrix (44 concurrent jobs) the second change had not been observed by
+  // 700ms, so bCalls was 1 and the release was blocked by a green product.
+  // Sequencing each step on the PREVIOUS observation makes the assertion true
+  // on any speed of hardware while testing exactly the same semantics.
   const f = prog(`
     const fs = require('node:fs');
     const target = process.argv[2];
-    let aCalls = 0, bCalls = 0;
+    let aCalls = 0, bCalls = 0, reported = false, guard = null;
+    const report = (why) => {
+      if (reported) return;
+      reported = true;
+      if (guard !== null) clearTimeout(guard);
+      fs.unwatchFile(target);
+      console.log(JSON.stringify({ aCalls, bCalls, why }));
+    };
     const a = () => { aCalls++; };
-    const b = () => { bCalls++; fs.unwatchFile(target, a); };
+    const b = () => {
+      bCalls++;
+      if (bCalls === 1) {
+        // a is removed by b's FIRST firing; b must keep watching alone.
+        fs.unwatchFile(target, a);
+        // Only now trigger the second change, so the two detections cannot
+        // collapse into one poll window on a slow box.
+        setTimeout(() => {
+          fs.writeFileSync(target, 'second change, much longer this time');
+        }, 0);
+      } else {
+        report('saw-both');
+      }
+    };
     fs.watchFile(target, { interval: 60 }, a);
     fs.watchFile(target, { interval: 60 }, b);
-    setTimeout(() => { fs.writeFileSync(target, 'first change'); }, 150);
-    setTimeout(() => {
-      // a was removed by b's first firing; b should still be watching alone.
-      fs.writeFileSync(target, 'second change, much longer this time');
-    }, 400);
-    setTimeout(() => {
-      fs.unwatchFile(target);
-      console.log(JSON.stringify({ aCalls, bCalls }));
-    }, 700);
+    setTimeout(() => { fs.writeFileSync(target, 'first change'); }, 50);
+    // Safety net so a pathologically slow box reports the REAL counts and fails
+    // the assertion below with a readable message, instead of tripping
+    // runLoader's spawn timeout and reporting nothing at all.
+    guard = setTimeout(() => report('deadline'), 8000);
   `);
   const dir = path.dirname(f);
   const target = path.join(dir, 'watched.txt');
@@ -138,6 +161,8 @@ test('two listeners on one path both fire; removing one leaves the other working
   const r = runLoader(f, [target], { timeout: 10000 });
   assert.strictEqual(r.status, 0, r.stderr);
   const out = JSON.parse(r.stdout.trim());
+  assert.strictEqual(out.why, 'saw-both',
+    `the second change was never observed before the 8s safety deadline; got ${JSON.stringify(out)}`);
   assert.strictEqual(out.aCalls, 1, `a should fire exactly once (removed after its first call); got ${out.aCalls}`);
   assert.strictEqual(out.bCalls, 2, `b should fire for both changes (never removed); got ${out.bCalls}`);
 });
@@ -191,20 +216,40 @@ test('a watchFile registration that is never unwatched still lets the process ex
 // the no-other-work case, rather than the counter getting stuck non-zero).
 test('a watchFile registration outlives unrelated pending timers, then still lets the process exit', (t) => {
   if (skipUnlessTjs(t)) return;
+  // Same deadline-vs-event fix as the two-listener test above: the original
+  // wrote at 250ms and reported at a FIXED 400ms, which on the emulated
+  // big-endian oracle reported calls=0 simply because the poller had not
+  // ticked yet. The unrelated timers are now a CHAIN that keeps the loop alive
+  // (which is the property under test) and reports as soon as the change has
+  // actually been observed.
   const f = prog(`
     const fs = require('node:fs');
     const target = process.argv[2];
-    let calls = 0;
+    let calls = 0, reported = false, guard = null;
+    const report = (phase) => {
+      if (reported) return;
+      reported = true;
+      if (guard !== null) clearTimeout(guard);
+      console.log(JSON.stringify({ calls, phase }));
+    };
     fs.watchFile(target, { interval: 60 }, () => { calls++; });
     // Neither of these touches the watcher; they exist purely to keep the
     // loop alive via ordinary (counted) timers while the poller ticks
     // underneath them with its own, separately-scheduled raw timer.
     setTimeout(() => {
       fs.writeFileSync(target, 'changed while an unrelated timer was still pending');
-    }, 250);
-    setTimeout(() => {
-      console.log(JSON.stringify({ calls, phase: 'unrelated-timers-done' }));
-    }, 400);
+    }, 100);
+    // A chain of ORDINARY timers — still "unrelated pending work" from the
+    // poller's perspective, exactly as a single setTimeout was, but it waits
+    // for the observation instead of guessing how long it takes.
+    let ticks = 0;
+    const tick = () => {
+      if (calls >= 1) { report('unrelated-timers-done'); return; }
+      if (++ticks > 120) { report('gave-up'); return; }
+      setTimeout(tick, 50);
+    };
+    setTimeout(tick, 150);
+    guard = setTimeout(() => report('deadline'), 8000);
     // Deliberately: no unwatchFile, no process.exit() after that. If
     // __shimTimerLiveCount() ever got stuck above zero (e.g. a fired
     // one-shot failing to uncount itself), this would hang exactly like the
@@ -218,11 +263,15 @@ test('a watchFile registration outlives unrelated pending timers, then still let
   const elapsed = Date.now() - t0;
   assert.strictEqual(r.status, 0, `expected a clean exit, not a hang; stderr=${r.stderr} elapsed=${elapsed}ms`);
   const out = JSON.parse(r.stdout.trim());
-  assert.strictEqual(out.phase, 'unrelated-timers-done');
+  assert.strictEqual(out.phase, 'unrelated-timers-done',
+    `watcher never observed the change while unrelated timers were pending; got ${JSON.stringify(out)}`);
   assert.ok(out.calls >= 1, `watcher should have kept delivering while an unrelated timer was pending; calls=${out.calls}`);
-  // Must not have exited before the unrelated timers' work was done (proves
-  // the poller correctly kept re-arming instead of self-cancelling early).
-  assert.ok(elapsed >= 400, `expected to still be running past the 400ms unrelated timer; elapsed=${elapsed}ms`);
+  // Must not have exited before the unrelated timers' work was done (proves the
+  // poller kept re-arming instead of self-cancelling early). Floored at the
+  // first unrelated timer rather than the old fixed 400ms report deadline,
+  // which no longer exists — reaching phase 'unrelated-timers-done' at all now
+  // proves the sequencing that the wall-clock number used to stand in for.
+  assert.ok(elapsed >= 100, `expected to still be running past the 100ms unrelated timer; elapsed=${elapsed}ms`);
   // ...but must still exit promptly afterward (proves the poller then
   // correctly resumes self-cancelling, same as the no-other-work case).
   assert.ok(elapsed < 9000, `expected a prompt exit once nothing else was pending; elapsed=${elapsed}ms`);
