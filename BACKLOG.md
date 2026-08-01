@@ -277,6 +277,53 @@ bash asset name now comes from the canonical-name CLI). What's LEFT is release-c
 - Optional leg-token rename (plan path B) — internal-token uniformity, bigger blast radius;
   follow-up only.
 
+## Fidelity coverage tiers — approved, UNIMPLEMENTED (2026-08-01)
+
+Spec `docs/superpowers/specs/2026-08-01-fidelity-coverage-tiers-design.md`, approved by
+the maintainer (tiering + enforcement both chosen), zero code written. The gap it closes:
+we publish 37 builders and `test/fidelity/PLATFORMS.md` documents 6 rigs, so ~30 shipped
+platforms have never been driven through the recipe — and nothing in the repo says so.
+`darwin-arm64` (daily-driven) and `netbsd-sh3el` (never executed) are both just
+`publish: true`.
+
+To build, in one commit each:
+1. `fidelity: { tier, date, bundle, how, note }` on every `publish: true` leg in
+   `scripts/tjs-legs.mjs`. tier 0 `built` / 1 `floor` / 2 `daily`.
+2. Invariants in `test/tjs-legs.test.cjs`: every published leg declares a tier; tier>=1
+   requires date+bundle+how; a golden leg→tier ledger so a change is reviewable.
+3. The initial ledger — a pure RECORDING of what is already true. **Needs the
+   maintainer's eye**: assigning ~29 legs to tier 0 is the honest default, but calling
+   something tier 0 that has actually been driven is the error to avoid.
+
+Deferred by decision: date-based reddening (report before gate, for the
+ambient-redness reason). Owed alongside: the FLOOR rows are A1/B1/B4/C1/D1/G-live.
+
+## Release follow-ups 2 + 3 — the unbuilt half of the 2026-07-27 spec
+
+Spec `docs/superpowers/specs/2026-07-27-release-followups-design.md` carries five
+follow-ups. Audited 2026-08-01 against the tree, not against memory:
+
+- **FU1 one canonical version source — DONE** (`test/version-single-source.test.cjs`
+  asserts VERSION == package.json == package-lock ×2 + a matching CHANGELOG section).
+- **FU4 naming consistency — DONE** (`scripts/canonical-name.cjs`, b63233b). Remainder
+  is the release-atomic pin work in the section above.
+- **FU5 one range-fetchable templates blob — DONE** (6bd9088). Two assets
+  (`templates-<pin>` + `.json`), Range-fetch a slice or `CLODE_TEMPLATES_BLOB` for
+  fully-offline cross-build. Verified 206 through the real GitHub→CDN redirect.
+- **FU2 fold the darwin legs into the one matrix — OPEN.** `release.yml` still runs
+  `leg (only: notdarwin)` + `darwin-slices (only: darwin)`. The spec's keep/remove split
+  stands: KEEP the universal `lipo`, Mach-O ad-hoc signing, and osxcross (real Apple
+  constraints); REMOVE the `only:` bifurcation and the bespoke `pack: true` flag. Cousin
+  to the `ciOnly` release-vs-ci discrepancy that already bit us.
+- **FU3 gate BE correctness on the real netbsd-sparc guest — OPEN.** `be-oracle` is
+  still `continue-on-error` against s390x under qemu-**user**, excluding five I/O test
+  files, while `netbsd-sparc` already boots a REAL full-system guest and only runs a
+  PONG smoke. Blocker named in the spec: the oracle diffs tjs against LIVE host node,
+  which qemu-user permits in-process and a full-system guest does not — so it needs a
+  goldenized oracle (record expectations from host node, replay in the guest) before the
+  gate can move. Doing this retires a known-flaky non-gating signal, which is squarely
+  [[ci-job-is-to-tell-the-truth]].
+
 ## tjs must be BUILT + REQUIRED by the suite, not skipped (2026-07-25)
 
 On netbsd11-arm64, 200 of 240 suite skips are "no tjs binary (CLODE_TJS or
