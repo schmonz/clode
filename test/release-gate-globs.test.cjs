@@ -156,15 +156,30 @@ test('a cosmo glob, if ever required, would have to tolerate the .com extension'
 // 6bd9088 (run cancelled by supersession) came within one bot push of shipping.
 // release.yml therefore runs the full suite itself, and `release` needs it.
 // Asserted here so removing that dependency is a deliberate, visible edit.
-test('the release job gates on the full-suite job', () => {
+test('the release job gates on the full suite, and both workflows share ONE definition', () => {
   const text = fs.readFileSync(RELEASE_YML, 'utf8');
+  const ci = fs.readFileSync(path.join(REPO, '.github/workflows/ci.yml'), 'utf8');
+  const suite = fs.readFileSync(path.join(REPO, '.github/workflows/suite.yml'), 'utf8');
 
-  assert.match(text, /^\s{2}suite:$/m,
-    'release.yml no longer defines a `suite` job — the tag would stop running npm test');
-  const suiteBlock = text.slice(text.search(/^\s{2}suite:$/m));
-  assert.match(suiteBlock.slice(0, 2000), /npm test/,
-    'the `suite` job no longer runs `npm test`');
+  // The shared definition is the only place `npm test` is spelled out.
+  assert.match(suite, /run: npm test/,
+    'suite.yml no longer runs `npm test` — the shared definition is empty');
+  assert.match(suite, /workflow_call/,
+    'suite.yml is no longer a reusable workflow, so nothing can call it');
 
+  // Both callers must USE it rather than restating it. A hand-mirrored copy is
+  // the exact shape that produced the release-gate `.exe` bug and the
+  // SHA256SUMS blob omission on 2026-08-01.
+  const REF = /uses:\s*\.\/\.github\/workflows\/suite\.yml/;
+  assert.match(text, REF, 'release.yml no longer calls the shared suite workflow');
+  assert.match(ci, REF, 'ci.yml no longer calls the shared suite workflow');
+  for (const [name, src] of [['release.yml', text], ['ci.yml', ci]]) {
+    assert.ok(!/run: npm test/.test(src),
+      `${name} spells out \`npm test\` itself — that is a second definition of the `
+      + 'suite and will drift from suite.yml; call the reusable workflow instead');
+  }
+
+  // ...and the tag must actually depend on it, or the gate is decorative.
   const needs = text.match(/^\s{2}release:\n\s+needs:\s*\[([^\]]+)\]/m);
   assert.ok(needs, 'could not read the release job\'s needs: list');
   const list = needs[1].split(',').map((s) => s.trim());

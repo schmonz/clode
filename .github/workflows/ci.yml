@@ -204,32 +204,14 @@ jobs:
               test/node-shim-roundtrip.test.cjs \
               test/node-shim-agentic.test.cjs
 
+  # The full node:test suite. DEFINED ONCE in the reusable suite.yml and called
+  # from both here and release.yml, the same way tjs-legs.yml is shared — so a
+  # tag can never run a weaker suite than main, and there is no second copy to
+  # drift. Job stays named `test` so any needs:/branch-protection edges hold.
   test:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest    # linux-x64
-          - os: windows-latest   # windows-x64
-    runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.0.0
-        with:
-          node-version-file: .tool-versions
-      - name: Assert Node matches the .tool-versions pin
-        run: |
-          set -euo pipefail
-          want=$(sed -n 's/^nodejs //p' .tool-versions)
-          have=$(node -v); have=${have#v}
-          [ "$have" = "$want" ] || { echo "node skew: .tool-versions=$want but runtime=$have" >&2; exit 1; }
-      - name: Install runtime deps (the six Bun-backing packages, locked) for the fidelity gate
-        run: npm ci --prefix deps/claude
-      - name: Full node:test suite (includes the shim-fidelity gate)
-        run: npm test
+    uses: ./.github/workflows/suite.yml
+    permissions:
+      contents: read
 
   # node-shim oracle — the node-vs-tjs behavioral diff, run under a REAL tjs.
   # WHY THIS JOB EXISTS: the `test` job above (npm test) never builds a tjs, so

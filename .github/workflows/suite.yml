@@ -1,0 +1,54 @@
+name: suite
+
+# Reusable full-suite job — the ONE place `npm test` is defined for CI.
+#
+# Same doctrine as tjs-legs.yml (user decision 2026-07-11: no duplication
+# between the per-push and release builds). This file exists because the
+# alternative was tried and immediately rotted: on 2026-08-01 the suite was
+# hand-mirrored into release.yml to close a real gap (a tag ran build + smoke +
+# be-oracle and NOTHING else — ci.yml has no tag trigger), and that copy was a
+# second hand-maintained definition of the same job. This repo has already paid
+# for that shape twice in one day: the release gate's asset globs stopped
+# matching canonical-name.cjs's `.exe`, and SHA256SUMS's glob stopped matching
+# the templates blob. Two lists that must agree, with nothing making them agree.
+#
+# Callers: ci.yml (every push to main / PR) and release.yml (every tag, gating
+# `release`). Both get byte-identical steps; there is no tier knob because there
+# is no legitimate reason for a tag to run a weaker suite than main does.
+#
+# Permissions are NOT declared here: a called workflow can only downgrade the
+# caller's grant, so each caller passes what it needs (both need contents: read).
+
+on:
+  workflow_call: {}
+
+jobs:
+  suite:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest    # linux-x64
+          - os: windows-latest   # windows-x64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version-file: .tool-versions
+      # A Renovate bump to the pin that the runner has not actually installed
+      # makes `node --test` no-op; test/run.mjs's evidence floor catches a
+      # zero-test run, but failing HERE names the cause instead.
+      - name: Assert Node matches the .tool-versions pin
+        run: |
+          set -euo pipefail
+          want=$(sed -n 's/^nodejs //p' .tool-versions)
+          have=$(node -v); have=${have#v}
+          [ "$have" = "$want" ] || { echo "node skew: .tool-versions=$want but runtime=$have" >&2; exit 1; }
+      - name: Install runtime deps (the six Bun-backing packages, locked) for the fidelity gate
+        run: npm ci --prefix deps/claude
+      - name: Full node:test suite (includes the shim-fidelity gate)
+        run: npm test
