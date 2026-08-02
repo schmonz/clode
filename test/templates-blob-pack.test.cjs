@@ -30,6 +30,13 @@ const net = require('../libexec/clode-net.cjs');
 
 const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
 
+// INJECTED inflate, exactly as test/clode-templates.test.cjs does. Letting the real
+// gunzipBuffer run would call host-provision, which CACHES a resolved gzip tool into
+// ~/.local/share/clode — a REAL dir test/run.mjs's hermeticity guard watches. That is
+// invisible on a dev box where the store already exists and fails every fresh CI runner
+// with ABSENT -> created. The real gunzipBuffer path is covered by clode-net's own tests.
+const gunzip = async (b) => zlib.gunzipSync(b);
+
 function tmpdir(tag) {
   return fs.mkdtempSync(path.join(os.tmpdir(), `clode-blob-${tag}-`));
 }
@@ -115,7 +122,7 @@ test('obtainEngine offline: reads its slice from a local blob, no network at all
   const target = m.targets['beta-arm64'];
   const p = await obtainEngine(target, {
     cacheDir: path.join(dir, 'cache'),
-    thisPin: 'PIN', manifestPin: 'PIN', compression: 'gzip',
+    thisPin: 'PIN', manifestPin: 'PIN', compression: 'gzip', gunzip,
     blob: m.blob, blobPath,
     // Any network use at all is a test failure, not a fallback.
     fetch: async () => { throw new Error('offline mode must not fetch'); },
@@ -140,7 +147,7 @@ test('obtainEngine remote: Range-fetches ONLY its own slice', async () => {
   const p = await obtainEngine(target, {
     cacheDir: path.join(dir, 'cache'),
     baseUrl: 'https://example.invalid/dl/',
-    thisPin: 'PIN', manifestPin: 'PIN', compression: 'gzip',
+    thisPin: 'PIN', manifestPin: 'PIN', compression: 'gzip', gunzip,
     blob: m.blob, blobPath: null,
     fetchRange,
     fetch: async () => { throw new Error('blob mode must not whole-asset fetch'); },
@@ -164,7 +171,7 @@ test('obtainEngine still handles a schema-1 (loose per-engine) manifest unchange
     { engine: 'tjs-legacy-PIN', sha256: sha(body) },
     {
       cacheDir: path.join(dir, 'cache'), baseUrl: 'base/',
-      thisPin: 'PIN', manifestPin: 'PIN', compression: 'gzip',
+      thisPin: 'PIN', manifestPin: 'PIN', compression: 'gzip', gunzip,
       // no blob => the pre-2026-08 path
       fetch: async (u) => { asked.push(u); return zlib.gzipSync(body); },
     });
@@ -194,7 +201,7 @@ test('a corrupt slice fails the sha gate rather than fusing wrong bytes', async 
   await assert.rejects(
     () => obtainEngine(m.targets['beta-arm64'], {
       cacheDir: path.join(dir, 'cache'), baseUrl: 'u/',
-      thisPin: 'PIN', manifestPin: 'PIN', compression: 'gzip', blob: m.blob,
+      thisPin: 'PIN', manifestPin: 'PIN', compression: 'gzip', gunzip, blob: m.blob,
       fetchRange: async () => blob.subarray(wrong.offset, wrong.offset + wrong.length),
     }),
     (e) => e instanceof TemplatesError && /sha256/.test(e.message),

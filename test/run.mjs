@@ -163,6 +163,23 @@ if (!testsRan) {
 }
 
 // Postflight: no watched real dir changed, and the store still has no fake deps.
+//
+// DEV-BOX BLIND SPOT (cost a CI round-trip 2026-08-01, worth knowing before you
+// trust a green local run): the sharpest violation this catches is
+// `ABSENT -> created` on ~/.local/share/clode — and it can only catch that where
+// the store does NOT already exist. On any machine that has ever run clode the
+// store IS there, so a test that provisions into it (e.g. calling the real
+// gunzipBuffer/sha256Of, which cache a resolved host tool there) changes nothing
+// detectable and passes locally, then fails every fresh CI runner.
+// Reproduce the CI condition before blaming CI:
+//     HOME=$(mktemp -d) npm test
+// then check the store did not appear:
+//     ls -d "$HOME/.local/share/clode"
+// (Unrelated fallout to expect from a fake HOME: the poll-backend fixup tests
+// need the cached txiki tree and will fail; that is the harness, not your change.)
+// The durable fix in a test is to INJECT the tool (see the `gunzip` injections in
+// test/clode-templates.test.cjs and test/templates-blob-pack.test.cjs), never to
+// widen the guard.
 const after = guard.snapshot(GUARD_WATCH);
 const changed = guard.diffSnapshots(before, after);
 if (changed.length) {
