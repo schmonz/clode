@@ -146,3 +146,28 @@ test('a cosmo glob, if ever required, would have to tolerate the .com extension'
   assert.ok(globToRegExp(cosmoGlob).test(name),
     `release.yml glob "${cosmoGlob}" does not match the real cosmo asset "${name}"`);
 });
+
+// The tag must gate on the same evidence main does.
+//
+// ci.yml has no tag trigger, so tagging never runs the unit/fidelity suite; and
+// ci.yml cancels superseded main runs, so a commit can reach a tag with no
+// completed run of its own. Before 2026-08-01 that left a tag gated by build +
+// smoke + be-oracle and nothing else — which is how a hermeticity violation in
+// 6bd9088 (run cancelled by supersession) came within one bot push of shipping.
+// release.yml therefore runs the full suite itself, and `release` needs it.
+// Asserted here so removing that dependency is a deliberate, visible edit.
+test('the release job gates on the full-suite job', () => {
+  const text = fs.readFileSync(RELEASE_YML, 'utf8');
+
+  assert.match(text, /^\s{2}suite:$/m,
+    'release.yml no longer defines a `suite` job — the tag would stop running npm test');
+  const suiteBlock = text.slice(text.search(/^\s{2}suite:$/m));
+  assert.match(suiteBlock.slice(0, 2000), /npm test/,
+    'the `suite` job no longer runs `npm test`');
+
+  const needs = text.match(/^\s{2}release:\n\s+needs:\s*\[([^\]]+)\]/m);
+  assert.ok(needs, 'could not read the release job\'s needs: list');
+  const list = needs[1].split(',').map((s) => s.trim());
+  assert.ok(list.includes('suite'),
+    `release must need the suite job so a tag cannot publish untested; needs = ${JSON.stringify(list)}`);
+});

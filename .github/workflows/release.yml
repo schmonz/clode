@@ -295,8 +295,54 @@ jobs:
   # mint (rerun-failed the flaked legs until green — slow over non-deterministic).
   # Only engine-only legs (darwin-x86/ppc, publish:false) stay soft — they ship
   # no asset. The gate below is a secondary asset-presence guard.
+  # The full node:test suite, at RELEASE time, on the tag itself.
+  #
+  # WHY THIS EXISTS (2026-08-01). A tag was gated by build + smoke + be-oracle and
+  # by nothing else: ci.yml has NO tag trigger, so tagging never ran the unit or
+  # fidelity suite, and release.yml only ran be-oracle's node-shim subset. Pair
+  # that with ci.yml's `cancel-in-progress` on main -- a newer push (Renovate
+  # bumped twice in one hour today) cancels the superseded run -- and a commit can
+  # reach a tag having had NEITHER a completed ci.yml run NOR any suite run here.
+  #
+  # That is not hypothetical: the hermeticity violation that broke this release
+  # candidate lived in 6bd9088, whose ci.yml run was cancelled by supersession. It
+  # surfaced only because the NEXT commit's run happened to complete. One more
+  # bot push at the wrong moment and it ships unnoticed.
+  #
+  # Mirrors ci.yml's `test` job deliberately (same OS pair, same node pin
+  # assertion, same deps install) rather than sharing it, because ci.yml does not
+  # run on tags and giving it one would drag the whole CI matrix into every tag.
+  # ~3 minutes, two jobs, and the tag now gates on the same evidence main does:
+  # IF WE SHIP IT, CI GATES IT.
+  suite:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+          - os: windows-latest
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version-file: .tool-versions
+      - name: Assert Node matches the .tool-versions pin
+        run: |
+          set -euo pipefail
+          want=$(sed -n 's/^nodejs //p' .tool-versions)
+          have=$(node -v); have=${have#v}
+          [ "$have" = "$want" ] || { echo "node skew: .tool-versions=$want but runtime=$have" >&2; exit 1; }
+      - name: Install runtime deps (the six Bun-backing packages, locked)
+        run: npm ci --prefix deps/claude
+      - name: Full node:test suite
+        run: npm test
+
   release:
-    needs: [leg, darwin-slices, darwin-universal, templates-pack]
+    needs: [leg, darwin-slices, darwin-universal, templates-pack, suite]
     if: github.ref_type == 'tag' || inputs.release == 'draft'
     runs-on: ubuntu-latest
     permissions:
