@@ -301,18 +301,28 @@ place work hides, not the last place anyone looks:
   decision in the user's original order (SQLite ✓ → image → TypeScript → MCP computer-use).
   Neither is reachable from any current test, so quaude silently lacks them.
   Plans: `2026-07-15-image-sharp-spec.md`, `2026-07-15-typescript-transpiler-spec.md`.
-- **Retire the user-facing host-Node runtime (tjs-primary).** DRAFT 2026-07-15. Partly
-  overtaken by the "one clode builds both targets" canon and clode-native, but never
-  closed out — worth a read-and-decide pass to either finish or delete.
-  Plan: `2026-07-15-retire-node-runtime-spec.md`.
 - **Comparative performance fixtures.** A hermetic benchmark harness running the SAME
   bundle under quaude/naude/claude against fixtures, so QuickJS interpreter-tax shows up
   as wall-clock/RSS ratios instead of guesses. Directly serves the Tiger perf work
   ([[tiger-ppc-quaude-perf]]: sys-time is the tractable lever, and we are guessing today).
   Plan: `2026-07-24-comparative-performance-fixtures.md`.
-- **quaude daily-driver hardening.** Four onboarding/session bugs from 2026-07-15. Some
-  may already be fixed incidentally; needs a triage pass before it is either actioned or
-  deleted. Plan: `2026-07-15-quaude-daily-driver-hardening-spec.md`.
+
+Three more were closed out on 2026-08-02 by checking the tree rather than the spec, and
+their plans deleted — recorded here so nobody re-derives them:
+
+- **Retire the host-Node runtime (tjs-primary) — ACHIEVED.** clode ships as tjs binaries
+  for 22 OSes and carries no Node ever; the pinned Node is fetched on demand only for a
+  naude. Proven and CI-gated by `test/clode-native.test.cjs` "acceptance 4: the native
+  builder BUILDS A NAUDE (fetch node + assemble + PONG), node absent from PATH". The
+  older "clode-native builds quaude only / `--naude` refuses" note was stale.
+- **quaude daily-driver hardening — ABSORBED into RECIPE.** BUG1 (0-byte `~/.claude.json`)
+  is row A1, a `→` row citing a live test; BUG4 (in-TUI update unhooked) shipped as
+  notify-only; BUG2 and BUG3 are the open probes E4 (`detached` / login opener) and F3
+  (stale frames). Nothing was lost by deleting the plan.
+- **At-desk release readiness — SPENT.** Tasks 4/4b/5 shipped (canonical naming, the cosmo
+  leg, two releases). Task 3 was TRIAGED as node-faithful. Task 2 (NetBSD/arm64 fullscreen)
+  is recorded above as not reproducing on main. Task 1 (Windows fidelity differential) is
+  the only live remainder and already sits in the IN-FLIGHT HANDOFF.
 
 ## Fidelity coverage tiers — approved, UNIMPLEMENTED (2026-08-01)
 
