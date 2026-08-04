@@ -25,7 +25,14 @@
 //    Attaching a second listener (async spawn) / teeing the return value
 //    (sync spawn) does not change what the harness's own listener/return
 //    value sees — it only ALSO relays the same bytes, prefixed, to this
-//    process's stderr.
+//    process's stderr. BOTH stdout and stderr are relayed, not just stderr:
+//    the interactive corpus runs quaude inside a real PTY (node-pty), and a
+//    PTY gives a child ONE fd for stdout+stderr — test/tui-screen.cjs reads
+//    that combined stream and prints the rendered screen to ITS OWN stdout,
+//    which test/e2e-pty.cjs's capture() then captures as `r.stdout` (not
+//    stderr) via this exact spawnSync. Relaying only stderr silently
+//    discarded every [probe] line the PTY path produced (found in review:
+//    interactive contributed hits but zero unique keys vs apicheck/agentic).
 //
 // Every function here is additive: it forwards to the real
 // node:child_process implementation with an env object that has exactly one
@@ -63,6 +70,9 @@ function relay(chunk) {
 const origSpawn = cp.spawn;
 cp.spawn = function patchedSpawn(...args) {
   const child = origSpawn.apply(this, injectFlag(args));
+  if (child && child.stdout && typeof child.stdout.on === 'function') {
+    child.stdout.on('data', relay);
+  }
   if (child && child.stderr && typeof child.stderr.on === 'function') {
     child.stderr.on('data', relay);
   }
@@ -72,6 +82,7 @@ cp.spawn = function patchedSpawn(...args) {
 const origSpawnSync = cp.spawnSync;
 cp.spawnSync = function patchedSpawnSync(...args) {
   const r = origSpawnSync.apply(this, injectFlag(args));
+  if (r && r.stdout) relay(r.stdout);
   if (r && r.stderr) relay(r.stderr);
   return r;
 };

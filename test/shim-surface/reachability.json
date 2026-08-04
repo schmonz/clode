@@ -3,21 +3,104 @@
   "date": "2026-08-04",
   "generated_by": "scripts/probe-run.mjs",
   "golden_measured_on": "2026-08-01",
-  "probe_scope_limitation": "CLODE_SHIM_PROBE (libexec/node-shim/internal/probe.cjs) only wraps node:* builtins loaded through loader.cjs's loadBuiltin() — libexec/bun-shim.cjs (the Bun.* global and bun: modules) is NOT instrumented. layer1_bun_props_missing/layer1_bun_modules_missing entries (Bun.WebView, bun:jsc) can therefore NEVER be armed by ANY corpus under this mechanism, regardless of whether the bundle reaches them — this is a probe-design gap, not a corpus-coverage gap. Only layer2_node_apis_missing entries are structurally observable here.",
+  "probe_scope_limitation": "CLODE_SHIM_PROBE (libexec/node-shim/internal/probe.cjs) only wraps node:* builtins loaded through loader.cjs's loadBuiltin() (the sole installProbe call site is loader.cjs:231, reached only from loadBuiltin()) — libexec/bun-shim.cjs (the Bun.* global and bun: modules) has NO probe instrumentation at all. layer1_bun_props_missing/layer1_bun_modules_missing entries can therefore NEVER be armed by ANY corpus under this mechanism, regardless of whether the bundle reaches them — see `unmeasurable` below, which is why it is kept separate from `unarmed`.",
+  "unarmed_meaning": "`unarmed` means \"no corpus we ran reached this property this measurement\" and NEVER \"the bundle does not call it\". golden.json itself already flags the crypto.* cluster as \"plausibly unreachable — but nobody has checked\" — this artifact must NOT be cited as having been that check. NAMED BLIND SPOT: the crypto.* cluster in `unarmed` (X509Certificate, createPrivateKey/createPublicKey, createSign/createVerify, sign, pbkdf2/pbkdf2Sync, KeyObject) is exactly where credentialed token-refresh / enterprise-auth (mTLS, Vertex/Bedrock) handling would live, and the ONLY corpus that even attempts the credentialed branch (apicheck, seeded with real credentials this run) HUNG before completing a turn — RECIPE G6, see the apicheck corpus entry. So this cluster being unarmed reflects \"we could not get far enough down the credentialed path to find out\", not \"the path doesn't use them\" — see `phase3_recommendation` for the safe way to actually answer that. Other known blind spots per corpus:",
+  "corpus_blind_spots": {
+    "apicheck": "the credentialed -p items (p-plain/p-arith) were seeded with a REAL credentials.json copy this run and reached the credentialed branch, but quaude HUNG there (RECIPE G6, reproduced on darwin-arm64 — see the apicheck corpus entry's `note`) before completing a turn. That means anything reachable only AFTER the point G6 stalls at — most plausibly the crypto.* cluster below, which is exactly where token-refresh/enterprise-auth (mTLS, KeyObject, sign/verify) would live — was not exercised either way: an isolated EMPTY home never takes the credentialed branch at all (auth check fails first), and the credentialed branch we DID take never got past the hang. Neither run shape reaches past G6. Deterministic items (version/help/bad-flag) never touch crypto/net/child_process paths regardless.",
+    "agentic": "mocked Anthropic server — no real TLS/HTTP client paths (net.createServer/http(s).request/https.createServer), no real crypto key material paths; the four scripted flows (Bash, Edit, Workflow, subagent, MCP-ws) do not exercise child_process.fork, v8 heap stats, or perf_hooks.monitorEventLoopDelay",
+    "interactive": "only a 10-second no-keystroke initial paint is captured (welcome screen + prompt) — no typed turn, no tool use, no slash command; live-turn (the one file that types a real prompt) self-skips by design (CLODE_LIVE_ONLINE never set, to stay isolated)",
+    "live-session": "not run at all this measurement — see live_session below"
+  },
+  "phase3_recommendation": "The isolation fix and the credentialed corpus are in structural tension, and no run shape available today resolves it: real credentials exercise the token-refresh/G6 branch but hang before completing (touches the operator's profile via a deleted-after-use copy); an isolated empty HOME stays safe but never leaves the \"not logged in\" branch, exercising nothing past the auth check. The honest third mode — NOT built here, phase-3 work — is an isolated HOME seeded with a FIXTURE credentials file: syntactically valid, unrelated to any real account, just enough to make the bundle take the credentialed branch without borrowing a real token. That would exercise the deep path AND let G6 be reproduced deliberately and safely, in a form CI could run repeatedly. This is the bridge from this measurement to phase-3's G6 task.",
   "corpora": [
     {
       "id": "apicheck",
       "status": "ran",
       "reason": null,
-      "exitCode": 0,
+      "exitCode": 1,
       "itemsRun": 5,
+      "perItem": [
+        {
+          "id": "version",
+          "quaude": {
+            "status": 0,
+            "signal": null,
+            "succeeded": true
+          },
+          "naude": {
+            "status": 0,
+            "signal": null,
+            "succeeded": true
+          },
+          "diverged": false
+        },
+        {
+          "id": "help",
+          "quaude": {
+            "status": 0,
+            "signal": null,
+            "succeeded": true
+          },
+          "naude": {
+            "status": 0,
+            "signal": null,
+            "succeeded": true
+          },
+          "diverged": false
+        },
+        {
+          "id": "bad-flag",
+          "quaude": {
+            "status": 1,
+            "signal": null,
+            "succeeded": false
+          },
+          "naude": {
+            "status": 1,
+            "signal": null,
+            "succeeded": false
+          },
+          "diverged": false
+        },
+        {
+          "id": "p-plain",
+          "quaude": {
+            "status": 143,
+            "signal": null,
+            "succeeded": false
+          },
+          "naude": {
+            "status": 0,
+            "signal": null,
+            "succeeded": true
+          },
+          "diverged": true
+        },
+        {
+          "id": "p-arith",
+          "quaude": {
+            "status": 143,
+            "signal": null,
+            "succeeded": false
+          },
+          "naude": {
+            "status": 0,
+            "signal": null,
+            "succeeded": true
+          },
+          "diverged": true
+        }
+      ],
+      "credentialsSeeded": true,
+      "credentialedPathCompleted": false,
       "isolation": {
-        "home": "/var/folders/y5/k8bh4xsj75g4j1n631f2gqz80000gp/T/probe-home-FLvspx",
+        "home": "/var/folders/y5/k8bh4xsj75g4j1n631f2gqz80000gp/T/probe-home-v5p9b0",
         "realHome": "/Users/schmonz",
-        "homeDiffersFromReal": true
+        "homeDiffersFromReal": true,
+        "note": "runGate() itself runs in-process (real os.homedir()), but every spawned naude/quaude child gets iso.env exclusively (asserted in isolatedEnv()); versionDelta is explicitly disabled so nothing here reads the real ~/.cache/clode; extract-claude-js.cjs staging runs with the parent env but touches no HOME/credentials state (verified by reading that file). The isolated HOME itself is deleted immediately after this corpus finishes because it briefly held a copied real credential."
       },
-      "note": "p-plain/p-arith items in apicheck's corpus make REAL network calls with REAL subscription auth (no ANTHROPIC_BASE_URL override in apicheck.mjs) — by design, per task brief (CLAUDE_CODE_BRIDGE_SESSION_ID stripped specifically so this exercises real auth, not the bridge). HOME/CLODE_DEPS/CLODE_CACHE are isolated; Keychain-backed credential lookup is NOT scoped by HOME and may still succeed against the operator's real account.",
-      "hitCount": 247
+      "note": "p-plain/p-arith DID NOT complete on the quaude side this run (see perItem: quaude status/signal vs naude). This matches RECIPE.md G6 (credentialed startup stalls with ~/.credentials.json present) — previously believed darwin-ppc/Darwin-8-specific, reproducing here on darwin-arm64. CONSEQUENCE: the credentialed -p path — the deepest path in this whole measurement, and the only one that can arm gaps behind real subscription auth — was NOT exercised by quaude in this run. Any golden gap not armed by this corpus should be read with that in mind, not as proof the credentialed path never reaches it.",
+      "hitCount": 284
     },
     {
       "id": "agentic",
@@ -30,15 +113,24 @@
         "test/node-shim-agentic.test.cjs"
       ],
       "exitCode": 1,
-      "testSummary": null,
+      "testSummary": {
+        "tests": 11,
+        "suites": 0,
+        "pass": 8,
+        "fail": 1,
+        "cancelled": 0,
+        "skipped": 2,
+        "todo": 0
+      },
       "isolation": {
-        "home": "/var/folders/y5/k8bh4xsj75g4j1n631f2gqz80000gp/T/probe-home-sTml3k",
+        "home": "/var/folders/y5/k8bh4xsj75g4j1n631f2gqz80000gp/T/probe-home-Mp72eK",
         "realHome": "/Users/schmonz",
         "homeDiffersFromReal": true,
-        "claudeJsonWrittenToIsolatedHome": true
+        "claudeJsonWrittenToIsolatedHome": true,
+        "evidence": "runtime-verified: /var/folders/y5/k8bh4xsj75g4j1n631f2gqz80000gp/T/probe-home-Mp72eK/.claude.json exists post-run"
       },
-      "note": "agentic-*.test.cjs and node-shim-agentic.test.cjs spread {...process.env} directly, so isolated HOME/CLODE_DEPS/CLODE_CACHE set on THIS process propagate straight through; claudeJsonWrittenToIsolatedHome is the positive isolation proof.",
-      "hitCount": 1635
+      "note": "agentic-*.test.cjs and node-shim-agentic.test.cjs spread {...process.env} directly, so isolated HOME/CLODE_DEPS/CLODE_CACHE set on THIS process propagate straight through; claudeJsonWrittenToIsolatedHome is asserted (not just recorded) as the positive isolation proof — a missing .claude.json aborts this corpus rather than silently reporting unproven isolation.",
+      "hitCount": 1624
     },
     {
       "id": "interactive",
@@ -49,95 +141,213 @@
         "test/fidelity/interactive-resize-diff.test.cjs"
       ],
       "exitCode": 0,
-      "testSummary": null,
+      "testSummary": {
+        "tests": 6,
+        "suites": 0,
+        "pass": 4,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 2,
+        "todo": 0
+      },
       "isolation": {
-        "home": "/var/folders/y5/k8bh4xsj75g4j1n631f2gqz80000gp/T/probe-home-3H8OVM",
+        "home": "/var/folders/y5/k8bh4xsj75g4j1n631f2gqz80000gp/T/probe-home-TPebTS",
         "realHome": "/Users/schmonz",
         "homeDiffersFromReal": true,
-        "claudeJsonWrittenToIsolatedHome": null
+        "method": "delegated",
+        "mechanism": "test/e2e.cjs sandbox() + seedClaudeProfile() (fresh mkdtemp HOME, pre-seeded, never inherits process.env)",
+        "codeVerified": true,
+        "runtimeVerified": false,
+        "runtimeVerifiedReason": "sandbox()'s temp dir is deleted by its own t.after() before this outer process exits, so no post-hoc filesystem check is possible without editing the test"
       },
-      "note": "interactive-live-turn.test.cjs self-skips (CLODE_LIVE_ONLINE not set) because it structurally cannot be isolated (runs against the real HOME by design). interactive-render-diff/resize-diff build a fresh quaude via `clode build` from whatever native `claude` is on PATH — on THIS box that is a real installed provider, version may differ from the golden-measured bundle (2.1.218); read armed hits from this corpus with that in mind. Both isolate via test/e2e.cjs sandbox()+seedClaudeProfile(), independent of this runner's outer HOME override.",
-      "hitCount": 18
+      "tui_path": {
+        "probed": true,
+        "mechanism": "probe-run-preload.cjs relays BOTH stdout and stderr of every spawnSync (fixed in review — a PTY gives one fd for both, and the rendered screen text arrives via r.stdout of the spawnSync that runs test/tui-screen.cjs, not r.stderr)"
+      },
+      "observedNativeProviderVersion": "2.1.221 (Claude Code)",
+      "note": "interactive-live-turn.test.cjs self-skips (CLODE_LIVE_ONLINE not set) because it structurally cannot be isolated (runs against the real HOME by design). interactive-render-diff/resize-diff build a fresh quaude via `clode build` from whatever native `claude` is on PATH — on THIS box, observed version: 2.1.221 (Claude Code) (golden-measured bundle is 2.1.218; read this corpus's hits with that version drift in mind, not the hedge \"may differ\").",
+      "hitCount": 46
     }
   ],
   "armed": {
-    "stream.Duplex": [
-      "agentic",
-      "apicheck",
-      "interactive"
-    ],
-    "buffer.isUtf8": [
-      "agentic",
-      "apicheck",
-      "interactive"
-    ],
-    "process.getBuiltinModule": [
-      "agentic",
-      "apicheck",
-      "interactive"
-    ],
-    "process.reallyExit": [
-      "agentic",
-      "apicheck",
-      "interactive"
-    ],
-    "process.type": [
-      "agentic",
-      "apicheck",
-      "interactive"
-    ],
-    "process.__nwjs": [
-      "agentic",
-      "apicheck",
-      "interactive"
-    ],
-    "process.__handlers": [
-      "agentic",
-      "apicheck",
-      "interactive"
-    ],
-    "process.ppid": [
-      "agentic",
-      "apicheck"
-    ],
-    "process.__sigWired": [
-      "agentic",
-      "apicheck"
-    ],
-    "process.chdir": [
-      "agentic",
-      "apicheck"
-    ],
-    "process.constrainedMemory": [
-      "agentic",
-      "apicheck"
-    ],
-    "process.getuid": [
-      "agentic",
-      "apicheck"
-    ]
+    "stream.Duplex": {
+      "corpora": [
+        "agentic",
+        "apicheck",
+        "interactive"
+      ],
+      "tracked_in_golden": true
+    },
+    "buffer.isUtf8": {
+      "corpora": [
+        "agentic",
+        "apicheck",
+        "interactive"
+      ],
+      "tracked_in_golden": false
+    },
+    "process.getBuiltinModule": {
+      "corpora": [
+        "agentic",
+        "apicheck",
+        "interactive"
+      ],
+      "tracked_in_golden": false
+    },
+    "process.reallyExit": {
+      "corpora": [
+        "agentic",
+        "apicheck",
+        "interactive"
+      ],
+      "tracked_in_golden": false
+    },
+    "process.type": {
+      "corpora": [
+        "agentic",
+        "apicheck",
+        "interactive"
+      ],
+      "tracked_in_golden": false
+    },
+    "process.__nwjs": {
+      "corpora": [
+        "agentic",
+        "apicheck",
+        "interactive"
+      ],
+      "tracked_in_golden": false
+    },
+    "process.__handlers": {
+      "corpora": [
+        "agentic",
+        "apicheck",
+        "interactive"
+      ],
+      "tracked_in_golden": false
+    },
+    "process.ppid": {
+      "corpora": [
+        "agentic",
+        "apicheck",
+        "interactive"
+      ],
+      "tracked_in_golden": false
+    },
+    "process.__sigWired": {
+      "corpora": [
+        "agentic",
+        "apicheck",
+        "interactive"
+      ],
+      "tracked_in_golden": false
+    },
+    "process.chdir": {
+      "corpora": [
+        "agentic",
+        "apicheck"
+      ],
+      "tracked_in_golden": false
+    },
+    "process.constrainedMemory": {
+      "corpora": [
+        "agentic",
+        "apicheck"
+      ],
+      "tracked_in_golden": false
+    },
+    "process.getuid": {
+      "corpora": [
+        "agentic",
+        "apicheck",
+        "interactive"
+      ],
+      "tracked_in_golden": false
+    }
   },
   "unarmed": [
-    "Bun.WebView",
-    "bun:jsc",
-    "net.createServer",
-    "http.request",
-    "crypto.X509Certificate",
-    "https.request",
-    "crypto.createPrivateKey",
-    "crypto.createSign",
-    "crypto.createVerify",
-    "crypto.pbkdf2Sync",
-    "crypto.pbkdf2",
-    "crypto.sign",
-    "crypto.createPublicKey",
-    "child_process.fork",
-    "https.createServer",
-    "perf_hooks.monitorEventLoopDelay",
-    "v8.getHeapSpaceStatistics",
-    "v8.getHeapStatistics",
-    "child_process.ChildProcess",
-    "crypto.KeyObject"
+    {
+      "gap": "net.createServer",
+      "reason": "genuinely probed by CLODE_SHIM_PROBE (a node:* builtin, wrapped) but no corpus we ran reached this property this measurement"
+    },
+    {
+      "gap": "http.request",
+      "reason": "genuinely probed by CLODE_SHIM_PROBE (a node:* builtin, wrapped) but no corpus we ran reached this property this measurement"
+    },
+    {
+      "gap": "crypto.X509Certificate",
+      "reason": "genuinely probed by CLODE_SHIM_PROBE (a node:* builtin, wrapped) but no corpus we ran reached this property this measurement"
+    },
+    {
+      "gap": "https.request",
+      "reason": "genuinely probed by CLODE_SHIM_PROBE (a node:* builtin, wrapped) but no corpus we ran reached this property this measurement"
+    },
+    {
+      "gap": "crypto.createPrivateKey",
+      "reason": "genuinely probed by CLODE_SHIM_PROBE (a node:* builtin, wrapped) but no corpus we ran reached this property this measurement"
+    },
+    {
+      "gap": "crypto.createSign",
+      "reason": "genuinely probed by CLODE_SHIM_PROBE (a node:* builtin, wrapped) but no corpus we ran reached this property this measurement"
+    },
+    {
+      "gap": "crypto.createVerify",
+      "reason": "genuinely probed by CLODE_SHIM_PROBE (a node:* builtin, wrapped) but no corpus we ran reached this property this measurement"
+    },
+    {
+      "gap": "crypto.pbkdf2Sync",
+      "reason": "genuinely probed by CLODE_SHIM_PROBE (a node:* builtin, wrapped) but no corpus we ran reached this property this measurement"
+    },
+    {
+      "gap": "crypto.pbkdf2",
+      "reason": "genuinely probed by CLODE_SHIM_PROBE (a node:* builtin, wrapped) but no corpus we ran reached this property this measurement"
+    },
+    {
+      "gap": "crypto.sign",
+      "reason": "genuinely probed by CLODE_SHIM_PROBE (a node:* builtin, wrapped) but no corpus we ran reached this property this measurement"
+    },
+    {
+      "gap": "crypto.createPublicKey",
+      "reason": "genuinely probed by CLODE_SHIM_PROBE (a node:* builtin, wrapped) but no corpus we ran reached this property this measurement"
+    },
+    {
+      "gap": "child_process.fork",
+      "reason": "genuinely probed by CLODE_SHIM_PROBE (a node:* builtin, wrapped) but no corpus we ran reached this property this measurement"
+    },
+    {
+      "gap": "https.createServer",
+      "reason": "genuinely probed by CLODE_SHIM_PROBE (a node:* builtin, wrapped) but no corpus we ran reached this property this measurement"
+    },
+    {
+      "gap": "perf_hooks.monitorEventLoopDelay",
+      "reason": "genuinely probed by CLODE_SHIM_PROBE (a node:* builtin, wrapped) but no corpus we ran reached this property this measurement"
+    },
+    {
+      "gap": "v8.getHeapSpaceStatistics",
+      "reason": "genuinely probed by CLODE_SHIM_PROBE (a node:* builtin, wrapped) but no corpus we ran reached this property this measurement"
+    },
+    {
+      "gap": "v8.getHeapStatistics",
+      "reason": "genuinely probed by CLODE_SHIM_PROBE (a node:* builtin, wrapped) but no corpus we ran reached this property this measurement"
+    },
+    {
+      "gap": "child_process.ChildProcess",
+      "reason": "genuinely probed by CLODE_SHIM_PROBE (a node:* builtin, wrapped) but no corpus we ran reached this property this measurement"
+    },
+    {
+      "gap": "crypto.KeyObject",
+      "reason": "genuinely probed by CLODE_SHIM_PROBE (a node:* builtin, wrapped) but no corpus we ran reached this property this measurement"
+    }
+  ],
+  "unmeasurable": [
+    {
+      "gap": "Bun.WebView",
+      "reason": "libexec/bun-shim.cjs (the Bun.* global / bun: modules) is not wrapped by CLODE_SHIM_PROBE — only node:* builtins loaded via loader.cjs loadBuiltin() are. This gap can never be armed by any corpus under the current probe design, regardless of whether the bundle reaches it."
+    },
+    {
+      "gap": "bun:jsc",
+      "reason": "libexec/bun-shim.cjs (the Bun.* global / bun: modules) is not wrapped by CLODE_SHIM_PROBE — only node:* builtins loaded via loader.cjs loadBuiltin() are. This gap can never be armed by any corpus under the current probe design, regardless of whether the bundle reaches it."
+    }
   ],
   "live_session": {
     "automatable": false,
@@ -148,8 +358,8 @@
       "grep '^\\[probe\\]' /tmp/probe-live.log | sort -u",
       "Merge the resulting lines into this file's \"armed\" map under corpus id \"live-session\" (each unique",
       "\"<ns>.<prop>\" or \"<ns>.<prop> (in)\" line -> append \"live-session\" to its corpus array, creating the key",
-      "if new), then move it out of \"unarmed\" if it was there. This is the only corpus that can reach the",
-      "credentialed interactive path (RECIPE.md G6) end to end."
+      "if new, plus tracked_in_golden), then move it out of \"unarmed\" if it was there. This is the only",
+      "corpus that can reach the credentialed interactive path (RECIPE.md G6) end to end."
     ]
   }
 }
