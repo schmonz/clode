@@ -61,3 +61,81 @@ test('timers: clearTimeout accepts the handle and cancels the timer', (t) => {
   assert.strictEqual(r.status, 0, r.stderr);
   assert.strictEqual(r.stdout.trim(), 'DONE');
 });
+
+// RECIPE G6 root cause: txiki's timer module has NO native per-timer
+// uv_ref/uv_unref (unlike streams/TLS, which do — mod_streams.c/mod_tls.c).
+// unref() used to be a pure JS-side flag flip with no effect on the real
+// underlying timer, so a genuinely `.unref()`'d long-delay timer (the
+// bundle's telemetry-flush pattern: `setTimeout(fn, 600000).unref()`) kept
+// the real event loop alive regardless — the process could not exit until
+// that real delay elapsed, however long it was. Host node, by contrast, lets
+// the process exit immediately once nothing else is pending. This is the
+// direct mechanism behind the RECIPE G6 hang (traced live: the bundle calls
+// unref() on both setTimeout and setInterval handles extensively during a
+// `-p` boot).
+test('timers: a genuinely unref()d long timer does not block process exit (matches node)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const t = setTimeout(() => { console.log('SHOULD NEVER FIRE'); }, 600000);
+    t.unref();
+    console.log('done');
+  `;
+  const f = prog(body);
+  const node = require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8', timeout: 5000 }).trim();
+  assert.strictEqual(node, 'done'); // sanity-anchor: node itself must not hang or fire
+  const r = runLoader(f, [], { timeout: 8000 });
+  assert.strictEqual(r.status, 0, `expected a clean drain, got status=${r.status} stderr=${r.stderr}`);
+  assert.strictEqual(r.stdout.trim(), 'done');
+});
+
+// Same mechanism, setInterval — the bundle also unref()s recurring timers.
+test('timers: a genuinely unref()d interval does not block process exit (matches node)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const iv = setInterval(() => { console.log('SHOULD NEVER FIRE'); }, 600000);
+    iv.unref();
+    console.log('done');
+  `;
+  const f = prog(body);
+  const node = require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8', timeout: 5000 }).trim();
+  assert.strictEqual(node, 'done');
+  const r = runLoader(f, [], { timeout: 8000 });
+  assert.strictEqual(r.status, 0, `expected a clean drain, got status=${r.status} stderr=${r.stderr}`);
+  assert.strictEqual(r.stdout.trim(), 'done');
+});
+
+// ref() must undo unref(): re-arming the timer so it genuinely fires again
+// (and once more pins the process alive until it does) if called again
+// before the original delay would have elapsed. Uses a short delay so the
+// test itself completes quickly.
+test('timers: ref() after unref() re-arms the timer so it still fires and pins exit (matches node)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const t = setTimeout(() => { console.log('fired'); }, 100);
+    t.unref();
+    t.ref();
+  `;
+  const f = prog(body);
+  const node = require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8', timeout: 5000 }).trim();
+  assert.strictEqual(node, 'fired'); // sanity-anchor: ref() must resurrect it in real node too
+  const r = runLoader(f, [], { timeout: 5000 });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.stdout.trim(), 'fired');
+});
+
+// A REF'D (default) long timer must still behave as a real, live handle —
+// this fix must not accidentally make ordinary (non-unref'd) timers stop
+// pinning the process, which would be a correctness regression in the
+// opposite direction.
+test('timers: a ref\'d (non-unref\'d) timer still fires and still pins the process (unchanged)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    setTimeout(() => { console.log('fired'); }, 100);
+  `;
+  const f = prog(body);
+  const node = require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8', timeout: 5000 }).trim();
+  assert.strictEqual(node, 'fired');
+  const r = runLoader(f, [], { timeout: 5000 });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.stdout.trim(), 'fired');
+});

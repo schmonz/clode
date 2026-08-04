@@ -599,6 +599,13 @@ function spawn(file, args = [], opts = {}) {
     if (!ws) return null;
     const w = new EventEmitter();
     let writer = null;
+    // Tracks whether the underlying WHATWG WritableStream (and therefore its
+    // native pipe handle) has already been ended/aborted — by an explicit
+    // caller end()/destroy(), OR by the child-exit cleanup below (RECIPE G6:
+    // see the wait().then handler's endWriter). Guards against a redundant
+    // close()/abort() call racing the explicit one, and lets that cleanup
+    // skip a stdin the caller already properly ended.
+    w.destroyed = false;
     const enc = new TextEncoder();
     const getW = () => { if (!writer) { try { writer = ws.getWriter(); } catch { /* locked/closed */ } } return writer; };
     w.writable = true;
@@ -616,12 +623,21 @@ function spawn(file, args = [], opts = {}) {
       if (typeof chunk === 'function') { cb = chunk; chunk = undefined; }
       else if (typeof encOrCb === 'function') cb = encOrCb;
       if (chunk != null) w.write(chunk);
-      try { const wr = getW(); if (wr) wr.close().catch(() => {}); } catch { /* ignore */ }
+      if (!w.destroyed) {
+        w.destroyed = true;
+        try { const wr = getW(); if (wr) wr.close().catch(() => {}); } catch { /* ignore */ }
+      }
       if (typeof cb === 'function') queueMicrotask(cb);
       queueMicrotask(() => { w.emit('finish'); w.emit('close'); });
       return w;
     };
-    w.destroy = () => { try { const wr = getW(); if (wr) (wr.abort ? wr.abort() : wr.close()).catch(() => {}); } catch { /* ignore */ } queueMicrotask(() => w.emit('close')); return w; };
+    w.destroy = () => {
+      if (w.destroyed) return w;
+      w.destroyed = true;
+      try { const wr = getW(); if (wr) (wr.abort ? wr.abort() : wr.close()).catch(() => {}); } catch { /* ignore */ }
+      queueMicrotask(() => w.emit('close'));
+      return w;
+    };
     w.cork = () => {}; w.uncork = () => {}; w.setDefaultEncoding = () => w;
     return w;
   };
@@ -663,6 +679,23 @@ function spawn(file, args = [], opts = {}) {
       const endReader = (rd) => { try { if (rd && rd._reader) rd._reader.cancel(); } catch { /* already closed */ } };
       endReader(child.stdout);
       endReader(child.stderr);
+      // RECIPE G6: a 'pipe' stdin the caller never wrote to and never
+      // end()/destroy()ed (the common case — most bundle spawns of git/sh
+      // etc. request stdin:'pipe' but have nothing to send) left the
+      // PARENT's end of that pipe's native handle open forever: nothing in
+      // this file ever called the underlying WritableStream's close()/
+      // abort() algorithm (mod .../process.js's ProcessWritableStream,
+      // which is what actually calls the tjs Pipe handle's .close()) unless
+      // the CALLER did. Host node destroys a child's stdio streams once the
+      // child exits regardless of whether the caller ever touched them —
+      // mirror that here now that the child is confirmed gone (wait()
+      // resolved): any further write would be pointless anyway. Traced
+      // live: 14-16 such unclosed stdin pipe handles (one per 'pipe'-stdin
+      // spawn whose stdin the bundle never used) accumulate over the course
+      // of a single `-p` boot. destroy() is idempotent (guarded by
+      // w.destroyed above) so this is a no-op for a stdin the caller
+      // already ended.
+      if (child.stdin && typeof child.stdin.destroy === 'function') child.stdin.destroy();
     },
     (e) => { trace('wait rejected', file, String(e)); child.emit('error', e); },
   );

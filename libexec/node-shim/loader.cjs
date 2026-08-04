@@ -553,12 +553,47 @@ globalThis.__shimUncaught = __shimUncaught;
 // round-trip. Wrap the globals so the handle is Node-shaped, while clearTimeout/
 // clearInterval still accept either the handle or a raw number (txiki's clear*
 // wants the number). Characterized by test/node-shim-timers-handle.test.cjs.
-// DIVERGENCE: ref()/unref() do NOT change event-loop liveness (txiki exposes no
-// per-timer ref control to JS) — they are no-ops returning the handle so the
-// chained idiom works; hasRef() reflects the last ref/unref call. refresh()
-// re-arms by clearing the old timer and re-scheduling the same fn+delay,
-// returning the same handle (identity preserved), matching Node's observable
-// contract for the round-trip's usage.
+// RECIPE G6 root cause (the actual one — two earlier candidates, an env-
+// stringification bug and a failed-spawn stream leak, were each real but each
+// independently verified INSUFFICIENT to explain the hang): unref() used to be
+// a pure no-op. txiki's C timer module (timers.c) exposes NO uv_ref/uv_unref
+// binding at all — confirmed by reading it; unlike streams/TLS sockets
+// (mod_streams.c, mod_tls.c) which DO have real ref()/unref() wired to
+// uv_ref/uv_unref, a JS timer has no such hook. So `unref()` could not
+// previously make the real underlying tjs timer stop pinning the loop, no
+// matter what JS-side bookkeeping it did. The extracted bundle calls
+// `setTimeout(fn, 600000).unref()` (and similar on setInterval) extensively —
+// a background/telemetry timer explicitly marked "don't let this keep the
+// process alive" — traced live during the G6 repro: 19 real unref() calls
+// (mixed timeout/interval) within the first 15 seconds of a `-p` boot. Under
+// the old no-op, EVERY one of those stayed a real, active, ref'd libuv timer;
+// the loop could not drain until the LONGEST of them (up to 600000ms) elapsed
+// — which is exactly why the observed hang outlasted any reasonable test
+// timeout. Minimal, decisive repro (this file's test/node-shim-timers-handle
+// test 'a genuinely unref'd long timer does not block process exit'): host
+// node exits immediately after `setTimeout(fn, 600000).unref()` with nothing
+// else pending; the old shim hung to any timeout.
+//
+// FIX: since there is no native per-timer unref, the only way JS can make an
+// unref'd timer stop blocking the loop is to make it GENUINELY not exist as
+// far as the real loop is concerned — clear the real underlying timer via the
+// same clearTimeout/clearInterval primitive a caller could call directly, and
+// re-arm it (full original delay; elapsed time is not tracked, the same
+// imprecision refresh() below already accepts) if ref() is called again
+// before it would have fired. DIVERGENCE this still leaves, deliberately
+// bounded and one-directional (matches this file's established "stopping
+// early is always safe, pinning forever is the only unsafe direction"
+// philosophy — see the liveTimerCount comment below): a genuinely-unref'd
+// timer whose delay elapses while the process happens to stay alive for OTHER
+// real reasons would, in real Node, still fire; under this shim it will not,
+// because the underlying timer was actually removed rather than merely
+// hidden from a liveness check that does not otherwise exist. That trades a
+// theoretical missed callback in a process that was going to keep running
+// anyway for the actual bug being fixed: an unref'd timer must never be the
+// reason a process that should exit does not.
+// hasRef() reflects the last ref/unref call. refresh() re-arms by clearing
+// the old timer and re-scheduling the same fn+delay, returning the same
+// handle (identity preserved), matching Node's observable contract.
 {
   const _st = globalThis.setTimeout, _ct = globalThis.clearTimeout;
   const _si = globalThis.setInterval, _ci = globalThis.clearInterval;
@@ -614,22 +649,50 @@ globalThis.__shimUncaught = __shimUncaught;
   // snapshot. Consumed by modules/fs.cjs's _otherWorkPending().
   let liveTimerCount = 0;
   function makeHandle(rawId, kind, rearm) {
+    // stopRaw: the correctly-typed raw clear primitive for this handle's kind
+    // — clearInterval for an interval id, clearTimeout for a timeout id.
+    // Calling the wrong one is a real txiki divergence risk (they operate on
+    // the SAME numeric-id namespace in practice, but mixing them was never
+    // characterized); always route through the matching one.
+    const stopRaw = (kind === 'interval') ? _ci : _ct;
     let refed = true;
     let live = true; // does this handle currently count toward liveTimerCount?
+    let armed = true; // is the REAL underlying tjs timer currently scheduled?
+    let id = rawId;
     liveTimerCount++;
     return {
-      _id: rawId, _kind: kind,
+      get _id() { return id; }, _kind: kind,
       // Called when this handle stops representing outstanding timer work:
       // a one-shot timeout firing, or either clear* function below. Guarded
       // so firing-then-clearing (or clearing twice) can't double-decrement.
       _uncount() { if (live) { live = false; liveTimerCount--; } },
-      ref() { refed = true; return this; },
-      unref() { refed = false; return this; },
+      // See the DIVERGENCE note above this IIFE (RECIPE G6): txiki has no
+      // native per-timer uv_ref/uv_unref, so unref() must actually STOP the
+      // real underlying timer (rather than merely flip a JS-side flag) to
+      // genuinely stop pinning the loop; ref() re-arms it if called again
+      // before it would have fired (`rearm`/`live` guard: never resurrects an
+      // already-fired-and-uncounted one-shot timeout — Node's real .ref() on
+      // one of those is a no-op too).
+      ref() {
+        if (!refed) {
+          refed = true;
+          if (!armed && rearm && live) { id = rearm(); armed = true; }
+        }
+        return this;
+      },
+      unref() {
+        if (refed) {
+          refed = false;
+          if (armed && rearm) { stopRaw.call(globalThis, id); armed = false; }
+        }
+        return this;
+      },
       hasRef() { return refed; },
       refresh() {
         if (rearm) {
-          _ct.call(globalThis, this._id);
-          this._id = rearm();
+          if (armed) stopRaw.call(globalThis, id);
+          id = rearm();
+          armed = true;
           // refresh() can re-arm a timeout that already fired (and therefore
           // already uncounted itself) — recount it, or a resurrected timer
           // would silently stop contributing to liveTimerCount forever.
@@ -637,7 +700,7 @@ globalThis.__shimUncaught = __shimUncaught;
         }
         return this;
       },
-      [Symbol.toPrimitive]() { return this._id; },
+      [Symbol.toPrimitive]() { return id; },
     };
   }
   // A throw inside a timer callback runs OUTSIDE any caller try/catch (it fires
@@ -669,7 +732,14 @@ globalThis.__shimUncaught = __shimUncaught;
     // counting) until clearInterval explicitly ends it.
     let cb = guard(fn);
     if (TRACE) { const id = ++n; console.error('[timer] setInterval#' + id + ' delay=' + d); }
-    return makeHandle(_si.call(this, cb, d, ...a), 'interval', null);
+    const self = this;
+    // A real rearm closure (not null, unlike before this fix) so unref()/
+    // ref() can genuinely stop/restart the underlying interval — see the
+    // DIVERGENCE note above the IIFE. This also gives setInterval's handle
+    // working .refresh() for free (Node's real Interval supports it too;
+    // this shim simply never had a reason to wire it before).
+    const rearm = () => _si.call(self, cb, d, ...a);
+    return makeHandle(_si.call(self, cb, d, ...a), 'interval', rearm);
   };
   globalThis.clearTimeout = function (h) {
     if (h && typeof h === 'object' && typeof h._uncount === 'function') h._uncount();

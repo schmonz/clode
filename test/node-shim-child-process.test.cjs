@@ -763,3 +763,74 @@ test('spawn launch failure: process DRAINS without process.exit (no dangling han
   assert.strictEqual(r.status, 0, `expected a clean drain, got status=${r.status} stderr=${r.stderr}`);
   assert.strictEqual(r.stdout.trim(), 'drained');
 });
+
+// RECIPE G6 root cause (a real, separately-verified leak — see
+// child_process.cjs's wait().then handler comment): a child spawned with
+// stdio:'pipe' whose caller never writes to / ends its stdin (the common
+// shape for the bundle's git/sh context-gathering spawns, which have nothing
+// to send) left the PARENT's end of that pipe's native handle open forever
+// after the child exited — nothing in this file ever called the underlying
+// stream's close()/abort() algorithm unless the caller did. Verified via the
+// engine's own __tjs_dump_handles() introspection (not a hang-based test:
+// a handful of such leaked handles do not, by themselves, block the tjs
+// event loop from draining — confirmed empirically with up to 22 concurrent/
+// sequential unclosed-stdin spawns exiting cleanly — but they are a real,
+// unbounded-with-spawn-count resource leak matching what a live-process
+// `lsof`/handle-dump diff on the actual G6 repro showed: ~15+ leaked
+// `pipe ... ref=1 active=0` handles, one per 'pipe'-stdin spawn whose stdin
+// went untouched).
+test('spawn: an untouched pipe stdin does not leak its native handle after the child exits', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const cp = require('node:child_process');
+    function countPipes(dump) { return (dump.match(/^pipe /gm) || []).length; }
+    async function spawnOne(i) {
+      return new Promise((resolve) => {
+        const c = cp.spawn('/bin/echo', ['hi', String(i)], { stdio: ['pipe', 'pipe', 'pipe'] });
+        c.stdout.on('data', () => {});
+        c.stderr.on('data', () => {});
+        c.on('close', () => resolve());
+        // deliberately never touch c.stdin, matching the bundle's git/sh spawns
+      });
+    }
+    (async () => {
+      const before = countPipes(globalThis.__tjs_dump_handles());
+      for (let i = 0; i < 16; i++) { await spawnOne(i); }
+      await new Promise((r) => setTimeout(r, 200));
+      const after = countPipes(globalThis.__tjs_dump_handles());
+      console.log(JSON.stringify({ before, after }));
+    })();`;
+  const f = prog(body);
+  const r = runLoader(f, [], { timeout: 15000 });
+  assert.strictEqual(r.status, 0, r.stderr);
+  const { before, after } = JSON.parse(r.stdout.trim());
+  assert.strictEqual(before, 0, 'unexpected pre-existing pipe handles');
+  assert.strictEqual(after, 0, `expected no leaked pipe handles, found ${after}`);
+});
+
+// A caller that DOES write to and properly end() child.stdin must be
+// completely unaffected by the child-exit cleanup (no double-close error, no
+// missing 'finish'/'close' events) — the cleanup must be a no-op once the
+// caller has already ended stdin itself.
+test('spawn: an explicitly-ended pipe stdin still fires finish/close normally (cleanup is a no-op)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const cp = require('node:child_process');
+    const c = cp.spawn('/bin/cat', [], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const seq = [];
+    c.stdin.on('finish', () => seq.push('finish'));
+    c.stdin.on('close', () => seq.push('close'));
+    c.stdin.write('hello');
+    c.stdin.end();
+    let out = '';
+    c.stdout.on('data', (d) => { out += d; });
+    c.on('close', () => {
+      setTimeout(() => console.log(JSON.stringify({ seq, out })), 200);
+    });`;
+  const f = prog(body);
+  const r = runLoader(f, [], { timeout: 10000 });
+  assert.strictEqual(r.status, 0, r.stderr);
+  const { seq, out } = JSON.parse(r.stdout.trim());
+  assert.deepStrictEqual(seq, ['finish', 'close']);
+  assert.strictEqual(out, 'hello');
+});
