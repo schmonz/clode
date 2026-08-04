@@ -497,6 +497,19 @@ function utimesSync(p, atime, mtime) {
 // (closed, or obtained some other way) fails LOUD — a silent wrong answer here
 // is the exact class of trap (bare unnamed quickjs TypeError / false
 // `instanceof`) this task exists to close, not reproduce.
+//
+// KNOWN LIMITATION (documented, not implemented — no bundle-reachable need
+// shown): only fds from fs.openSync are on record. Real node's fchmodSync
+// accepts ANY valid fd, including a FileHandle's `.fd` from fs.promises.open
+// (deliberately exposed below for the Bash-tool stdio-passthrough pattern) —
+// that fd is opened via a raw FSS.open call, not fs.openSync, so it never
+// enters fdPaths and fchmodSync(handle.fd, mode) throws EBADF here instead of
+// succeeding as it would on host node. Not a regression (the shim had no
+// fchmodSync at all before this task) and not speculative to fix: there is no
+// fd-based chmod primitive in the sync-fs layer regardless of how the fd was
+// obtained, so closing this gap for FileHandle fds would need the same
+// path-capture trick promises.open already does for FileHandle.chmod — add it
+// if/when a real call site needs it, not before.
 const fdPaths = new Map();
 function fchmodSync(fd, mode) {
   const p = fdPaths.get(fd);
@@ -540,7 +553,17 @@ const fsMod = {
   renameSync: (a, b) => renameReplace(a, b),
   accessSync: (p, m) => FSS.access(p, m ?? constants.F_OK),
   openSync: (p, flags) => { const fd = FSS.open(p, flagsToString(flags ?? 'r')); fdPaths.set(fd, p); return fd; },
-  closeSync: (fd) => { FSS.close(fd); fdPaths.delete(fd); },
+  // fdPaths cleanup MUST run even when FSS.close throws (e.g. a double-close —
+  // a caller bug, but one this codebase already anticipates: createWriteStream's
+  // closeFd() below wraps its close in try/catch for exactly "already closed").
+  // Without `finally`, a throwing close leaves the entry stale; every OTHER
+  // fd-producing path (readFileSync/writeFileSync/appendFileSync/
+  // createWriteStream/promises.open/child_process's keychain helpers) opens fds
+  // WITHOUT touching fdPaths, so a later reuse of that fd number by one of THOSE
+  // paths would leave the map pointing at the OLD path — fchmodSync would then
+  // silently chmod the wrong file. That is precisely the class of bug this
+  // fd->path map exists to avoid, so the cleanup is unconditional.
+  closeSync: (fd) => { try { FSS.close(fd); } finally { fdPaths.delete(fd); } },
   copyFileSync: (a, b) => { writeFileSync(b, readFileSync(a)); chmodBestEffort(b, statSync(a).mode & 0o7777); },
   symlinkSync: (target, p) => FSS.symlink(target, p),
   chmodSync: (p, m) => chmodBestEffort(p, m),
@@ -727,7 +750,14 @@ fsMod.read = function read(fd, buffer, offset, length, position, cb) {
 fsMod.futimes = (fd, atime, mtime, cb) => { if (typeof cb === 'function') cb(null); };
 promises.futimes = async () => {};
 fsMod.open = (p, flags, mode, cb) => { const c = typeof cb === 'function' ? cb : (typeof mode === 'function' ? mode : flags); try { c(null, fsMod.openSync(p, typeof flags === 'string' || typeof flags === 'number' ? flags : 'r')); } catch (e) { c(e); } };
-fsMod.close = (fd, cb) => { try { FSS.close(fd); fdPaths.delete(fd); if (cb) cb(null); } catch (e) { if (cb) cb(e); } };
+// fdPaths cleanup runs in `finally` (see closeSync's comment) so a throwing
+// close still drops the stale entry before the error reaches cb.
+fsMod.close = (fd, cb) => {
+  try {
+    try { FSS.close(fd); } finally { fdPaths.delete(fd); }
+    if (cb) cb(null);
+  } catch (e) { if (cb) cb(e); }
+};
 fsMod.Stats = Stats;
 fsMod.Dirent = Dirent;
 fsMod.ReadStream = ReadStream;
