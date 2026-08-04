@@ -386,3 +386,37 @@ test('fs no-encoding reads return a real Buffer vs host node', (t) => {
     syncSliceIsBuffer: true, promIsBuffer: true, promHex: '616263ff00',
   });
 });
+
+// REGRESSION GUARD: fs.Stats.uid/gid must be the REAL owner, not a hardcoded 0.
+// This was fs.cjs's own documented behavior until the __tjs_fs_sync bridge grew
+// uid/gid support (txiki-sync-fs.patch) — it stayed invisible only because
+// process.getuid() ALSO returned 0 at the time, so the bundle's tmpdir-ownership
+// guard (`stat(tmpdir).uid !== process.getuid()`) compared 0===0 and passed by
+// two wrongs cancelling. Once getuid() was fixed to return the real uid, a
+// hardcoded stat().uid=0 made every PRE-EXISTING tmpdir look foreign-owned and
+// the bundle refused to start ("Temp directory ... is owned by uid 0, expected
+// <real>. Refusing to use it."). Assert against host node's own fs.statSync on
+// the SAME path — not a guessed constant — so this can never silently regress.
+test('fs.Stats.uid/gid are the real owner, matching host node on the same path', (t) => {
+  if (skipUnlessTjs(t)) return;
+  if (process.platform === 'win32') { t.skip('uid/gid are POSIX-only'); return; }
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-uidgid-'));
+  const target = path.join(base, 'f.txt');
+  fs.writeFileSync(target, 'x');
+  const nodeStat = fs.statSync(target);
+  const PROG2 = `
+    const fs = require('node:fs');
+    const st = fs.statSync(${JSON.stringify(target)});
+    console.log(JSON.stringify({ uid: st.uid, gid: st.gid }));
+  `;
+  const f = path.join(base, 'prog2.cjs');
+  fs.writeFileSync(f, PROG2);
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const shimStat = JSON.parse(r.stdout.trim());
+  assert.strictEqual(shimStat.uid, nodeStat.uid, `shim stat().uid ${shimStat.uid} !== host node's ${nodeStat.uid}`);
+  assert.strictEqual(shimStat.gid, nodeStat.gid, `shim stat().gid ${shimStat.gid} !== host node's ${nodeStat.gid}`);
+  if (nodeStat.uid !== 0) {
+    assert.notStrictEqual(shimStat.uid, 0, 'uid must be the real owner, not the old hardcoded-0 default');
+  }
+});

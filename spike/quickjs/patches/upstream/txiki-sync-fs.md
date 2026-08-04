@@ -342,9 +342,10 @@ failure, mirroring the shape of Node's `fs` errors):
   `pwrite`/`write`); the second argument must be a real `ArrayBuffer`, not a
   typed-array view
 - `close(fd)`
-- `stat(path)` / `lstat(path)` / `fstat(fd)` → `{size, mode, mtimeMs, kind}`
+- `stat(path)` / `lstat(path)` / `fstat(fd)` → `{size, mode, uid, gid, mtimeMs, kind}`
   (`kind` is `'file'|'dir'|'symlink'|'other'`; `mtimeMs` is
-  `st_mtime * 1000`, whole-second resolution)
+  `st_mtime * 1000`, whole-second resolution; `uid`/`gid` are `st_uid`/
+  `st_gid` verbatim — 0 on Windows, matching Node's own behavior there)
 - `realpath(path)`, `readlink(path)`, `readdir(path)` (returns an array of
   entry-name strings, `.`/`..` excluded)
 - `mkdir(path, mode)`, `rmdir(path)`, `unlink(path)`

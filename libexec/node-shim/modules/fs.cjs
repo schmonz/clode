@@ -166,7 +166,15 @@ class Stats {
     this.ctime = new Date(ms); this.birthtime = new Date(ms);
     // Numeric fields Node always provides; not surfaced by FSS.stat → 0 defaults
     // so property reads (e.g. dev/ino identity checks) don't throw.
-    this.dev = 0; this.ino = 0; this.nlink = 1; this.uid = 0; this.gid = 0;
+    // uid/gid ARE surfaced by FSS.stat (engine >= the uid/gid patch rev) — use the
+    // real value. `raw.uid === undefined` guards only an OLDER engine binary that
+    // predates the patch (never omit-vs-genuinely-0 ambiguity: FSS.stat always sets
+    // the property when present, so `undefined` unambiguously means "not surfaced").
+    // A wrong uid here is exactly what broke the bundle's tmpdir-ownership guard
+    // (getuid() real, stat().uid hardcoded 0) — do not reintroduce a guessed default.
+    this.dev = 0; this.ino = 0; this.nlink = 1;
+    this.uid = raw.uid === undefined ? 0 : raw.uid;
+    this.gid = raw.gid === undefined ? 0 : raw.gid;
     this.rdev = 0; this.blksize = 4096; this.blocks = Math.ceil((raw.size || 0) / 512);
   }
   isFile() { return this.#kind === 'file'; }

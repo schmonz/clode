@@ -15,7 +15,7 @@ new file mode 100644
 index 0000000..99e2d83
 --- /dev/null
 +++ b/src/mod_fs_sync.c
-@@ -0,0 +1,337 @@
+@@ -0,0 +1,344 @@
 +/* Synchronous fs primitives for CommonJS interop (node-shim).
 + * POSIX-direct, main-thread blocking by design. Exposed as the
 + * global `__tjs_fs_sync`. Upstream candidate:
@@ -182,6 +182,13 @@ index 0000000..99e2d83
 +    JSValue o = JS_NewObject(ctx);
 +    JS_DefinePropertyValueStr(ctx, o, "size", JS_NewInt64(ctx, st->st_size), JS_PROP_C_W_E);
 +    JS_DefinePropertyValueStr(ctx, o, "mode", JS_NewInt32(ctx, st->st_mode), JS_PROP_C_W_E);
++    /* uid/gid: st_uid/st_gid exist in POSIX struct stat AND in MSVC's struct
++     * stat/_stat (<sys/stat.h>, always 0 there — matches Windows Node's own
++     * fs.statSync().uid/gid, which report 0). No #ifdef needed: both sides
++     * already have the field, just with a narrower (short) type on MSVC,
++     * which JS_NewInt32's implicit promotion handles for free. */
++    JS_DefinePropertyValueStr(ctx, o, "uid", JS_NewInt32(ctx, st->st_uid), JS_PROP_C_W_E);
++    JS_DefinePropertyValueStr(ctx, o, "gid", JS_NewInt32(ctx, st->st_gid), JS_PROP_C_W_E);
 +    JS_DefinePropertyValueStr(ctx, o, "mtimeMs", JS_NewFloat64(ctx, (double)st->st_mtime * 1000.0), JS_PROP_C_W_E);
 +    const char *kind = S_ISREG(st->st_mode) ? "file" : S_ISDIR(st->st_mode) ? "dir"
 +                     : S_ISLNK(st->st_mode) ? "symlink" : "other";
