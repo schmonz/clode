@@ -574,3 +574,73 @@ test('spawn: numeric fd in stdio redirects child output to a file (Bash-tool pat
   assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
   assert.strictEqual(node.file, 'redirected-to-fd');
 });
+
+// RECIPE G6: node's child_process OMITS an env key whose value is `undefined`
+// entirely (verified against host node v26.3.0 by direct differential — see
+// g6-env-fix-report.md); it does NOT stringify it. Every other primitive is
+// stringified normally, including null ("null"), 0 ("0"), false ("false"),
+// and '' (kept as an empty string, key still present). Before the fix, both
+// spawn() (object handed to tjs.spawn, native env also stringifies blindly)
+// and spawnSync() (`Object.entries(env).map(([k,v]) => \`${k}=${v}\`)`)
+// turned an `undefined`-valued key into the literal string "undefined" — the
+// G6 repro's `GIT_DIR: undefined` became `GIT_DIR=undefined` in the child,
+// and `GIT_DIR=undefined git worktree list --porcelain` fails with
+// `fatal: not a git repository: 'undefined'`.
+const ENV_TYPES_SNIPPET = (spawnCall) => `
+  const cp = require('node:child_process');
+  function parseEnvDump(text) {
+    const out = {};
+    for (const line of text.split('\\n')) {
+      if (!line) continue;
+      const i = line.indexOf('=');
+      if (i < 0) continue;
+      out[line.slice(0, i)] = line.slice(i + 1);
+    }
+    return out;
+  }
+  const KEYS = ['A_UNDEF', 'B_NULL', 'C_ZERO', 'D_FALSE', 'E_EMPTY', 'KEEP'];
+  function summarize(dump) {
+    const o = {};
+    for (const k of KEYS) {
+      o[k + '_present'] = Object.prototype.hasOwnProperty.call(dump, k);
+      o[k + '_value'] = dump[k];
+    }
+    return o;
+  }
+  const childEnv = {
+    PATH: process.env.PATH,
+    A_UNDEF: undefined,
+    B_NULL: null,
+    C_ZERO: 0,
+    D_FALSE: false,
+    E_EMPTY: '',
+    KEEP: 'yes',
+  };
+  ${spawnCall}
+`;
+
+test('spawnSync: env omits undefined-valued keys, stringifies null/0/false/empty (matches node)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = ENV_TYPES_SNIPPET(`
+    const r = cp.spawnSync('/usr/bin/env', [], { env: childEnv, encoding: 'utf8' });
+    console.log(JSON.stringify(summarize(parseEnvDump(r.stdout))));`);
+  const f = prog(body);
+  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
+});
+
+test('spawn: env omits undefined-valued keys, stringifies null/0/false/empty (matches node)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = ENV_TYPES_SNIPPET(`
+    const c = cp.spawn('/usr/bin/env', [], { env: childEnv });
+    let out = '';
+    c.stdout.on('data', (d) => { out += d; });
+    c.on('exit', () => { console.log(JSON.stringify(summarize(parseEnvDump(out)))); });`);
+  const f = prog(body);
+  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
+});

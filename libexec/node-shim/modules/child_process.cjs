@@ -75,6 +75,34 @@ function trace() { if (TRACE) { try { console.error('[cp]', ...arguments); } cat
 
 const CP_IS_WIN = (globalThis.process && process.platform === 'win32');
 
+// Node's child_process OMITS an env key whose value is `undefined` entirely —
+// it does NOT stringify it. Every other primitive IS stringified normally,
+// including null ("null"), 0 ("0"), false ("false"), and '' (kept, empty
+// string). Verified by direct differential against host node v26.3.0 (RECIPE
+// G6): `cp.spawnSync(exe, [], {env:{...,X:undefined,...}})` shows X absent
+// from the child's process.env entirely.
+//
+// Both spawn() and spawnSync() must filter BEFORE handing the env object to
+// tjs: spawn() passes the object straight to tjs.spawn(), whose native env
+// handling (mod_process.c) calls JS_ToCString on every property value with no
+// undefined special-case — an unfiltered `undefined` becomes the *string*
+// "undefined" there too. spawnSync() builds `KEY=VALUE` pairs via
+// Object.entries().map(), which has the same blind-stringify problem. This
+// was the RECIPE G6 root cause: the bundle spawns `git -C <repo> ...` with
+// `GIT_DIR: undefined` meant to mean "unset"; the shim turned it into the
+// literal string "undefined", and `GIT_DIR=undefined git worktree list
+// --porcelain` fails with `fatal: not a git repository: 'undefined'` — a real
+// divergence from naude, which never sees that key at all.
+function filterUndefinedEnv(envObj) {
+  const out = {};
+  for (const k of Object.keys(envObj)) {
+    const v = envObj[k];
+    if (v === undefined) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
 function resolveExe(file, env) {
   // Node resolves a bare command via PATH for spawn; a path with a separator is
   // used as-is. On Windows the separator is \ or / or a drive letter, PATH is
@@ -431,7 +459,7 @@ function spawn(file, args = [], opts = {}) {
   // followed by a default-env spawn dropped X in the child (a silent divergence
   // from node; the runtime does NOT mirror tjs.env back into the real environ on
   // this engine, contrary to the old assumption).
-  const env = opts.env || tjs.env;
+  const env = filterUndefinedEnv(opts.env || tjs.env);
   const stdio = normStdio(opts);
   const shelled = applyShell(file, args, opts);
   file = shelled.file; args = shelled.args;
@@ -620,7 +648,7 @@ function spawnSync(file, args = [], opts = {}) {
   // Default to the CURRENT env (tjs.env), not undefined — see spawn() above:
   // a default-env child must inherit process.env mutations, and this engine
   // does not mirror tjs.env into the real environ, so it must be passed.
-  const env = Object.entries(opts.env || tjs.env).map(([k, v]) => `${k}=${v}`);
+  const env = Object.entries(filterUndefinedEnv(opts.env || tjs.env)).map(([k, v]) => `${k}=${v}`);
   let input;
   if (opts.input != null) {
     const b = Buffer.isBuffer(opts.input) ? opts.input : Buffer.from(String(opts.input));
