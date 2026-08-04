@@ -191,6 +191,15 @@ function sealSurface(ns, exportsVal) {
 const SHIM_DIR = __QVFS
   ? '/quaude/node-shim/modules'                                // fused: shims are archive members
   : P.join(P.dirname(P.resolve(tjs.args[2] ?? '')), 'modules'); // loader.cjs lives beside modules/
+// internal/ sits beside modules/ under node-shim/, fused or not (mirrors
+// SHIM_DIR's own fused/unfused split rather than re-deriving it) — see
+// libexec/quaude-fuse.js's `collect(...'node-shim/internal'...)`.
+const INTERNAL_DIR = P.join(P.dirname(SHIM_DIR), 'internal');
+// Bound below, after evalModule + the machinery it depends on (moduleCache,
+// DYN_IMPORT_RE, ...) are all initialized — loadBuiltin only READS this
+// closure variable when actually CALLED (well after that point), so the
+// binding's textual distance from its use here is fine.
+let installProbe;
 const builtinCache = new Map();
 const KNOWN = ['assert','buffer','child_process','crypto','events','fs','fs/promises','module','net','os','path','path/win32','path/posix','process','stream','stream/consumers','stream/promises','string_decoder','tls','tty','url','util','v8','vm','zlib','sea','readline','http','https','dgram','worker_threads','async_hooks','inspector','constants','querystring','timers','timers/promises','dns','dns/promises','http2','perf_hooks','diagnostics_channel','sqlite'];
 function loadBuiltin(name) {
@@ -202,8 +211,9 @@ function loadBuiltin(name) {
   const base = slash === -1 ? name : name.slice(0, slash);
   const sub = slash === -1 ? null : name.slice(slash + 1);
   const file = P.join(SHIM_DIR, `${base}.cjs`);
+  const hasFile = existsFileSync(file);
   let exportsVal;
-  if (existsFileSync(file)) {
+  if (hasFile) {
     const mod = evalModule(file);
     exportsVal = sub ? mod[sub] : mod;
   } else {
@@ -211,6 +221,14 @@ function loadBuiltin(name) {
   }
   if (SEALED.has(name) && exportsVal && typeof exportsVal === 'object') {
     exportsVal = sealSurface(name, exportsVal);
+  } else if (hasFile) {
+    // Broad (non-sealed) module backed by a real shim file: observe
+    // missing-property gaps without changing behavior (CLODE_SHIM_PROBE).
+    // Two cases are deliberately NOT wrapped here: the wallProxy fallthrough
+    // above already logs equivalent info via [wall]/CLODE_SHIM_TRACE (no
+    // double-wrap), and a SEALED module keeps its sealSurface branded-throw
+    // behavior undisturbed (no double-log ahead of the throw).
+    exportsVal = installProbe(name, exportsVal, SEAL_ALLOW);
   }
   builtinCache.set(name, exportsVal);
   return exportsVal;
@@ -488,6 +506,13 @@ function evalBytecodeEntry(qbcFile) {
   const dir = P.dirname(origName);
   fn.call(module.exports, module.exports, makeRequire(dir), module, origName, dir);
 }
+
+// Load the gap-observability helper now: evalModule (and what it needs —
+// moduleCache, DYN_IMPORT_RE/V_FLAG_REGEX_RE, makeRequire, ...) is fully
+// initialized by this point in the script, but loadBuiltin() has not been
+// called yet (first call is the very next line), so this always runs before
+// any builtin is loaded and installProbe is wrapped around it.
+installProbe = evalModule(P.join(INTERNAL_DIR, 'probe.cjs')).installProbe;
 
 /* ---- globals, then entry */
 globalThis.process = loadBuiltin('process');
