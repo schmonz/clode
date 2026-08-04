@@ -384,31 +384,37 @@ function readdirCore(p, opts) {
   return out;
 }
 
-// fs.createReadStream: a Readable that streams a file's bytes (chunked). The
-// bundle drives readline.createInterface({input: fs.createReadStream(file)}) over
-// this for NDJSON/transcript line-scans (19 sites), plus direct data/end
-// consumers. Read via tjs.readFile then push into the shim's stream.Readable in a
-// microtask, so listeners attach before the first chunk. Honors {encoding,start,end}.
-function createReadStream(p, opts) {
-  const stream = require('node:stream');
-  const o = typeof opts === 'string' ? { encoding: opts } : (opts || {});
-  const start = typeof o.start === 'number' ? o.start : 0;
-  const hasEnd = typeof o.end === 'number';
-  const r = new stream.Readable({ read() {} });
-  r.path = p;
-  r.close = r.destroy;
-  if (o.encoding) r.setEncoding(o.encoding);
-  queueMicrotask(async () => {
-    try {
-      let data = await tjs.readFile(p);
-      if (start || hasEnd) data = data.subarray(start, hasEnd ? o.end + 1 : data.length);
-      const CH = 65536;
-      for (let i = 0; i < data.length; i += CH) r.push(data.subarray(i, Math.min(i + CH, data.length)));
-      r.push(null);
-    } catch (e) { r.emit('error', e); }
-  });
-  return r;
+// fs.ReadStream: the concrete class fs.createReadStream() returns (Task 2,
+// fd-flavored variants). Previously createReadStream built a bare
+// stream.Readable instance with no distinguishing class, so `instanceof
+// fs.ReadStream` was false for every real stream it produced — the same trap
+// as the FileHandle.chmod gap that broke Edit: a silent else-branch instead of
+// a loud error. Extends the shim's real stream.Readable (no lookalike). The
+// bundle drives readline.createInterface({input: fs.createReadStream(file)})
+// over this for NDJSON/transcript line-scans (19 sites), plus direct data/end
+// consumers. Read via tjs.readFile then push in a microtask, so listeners
+// attach before the first chunk. Honors {encoding,start,end}.
+class ReadStream extends require('node:stream').Readable {
+  constructor(p, opts) {
+    super({ read() {} });
+    const o = typeof opts === 'string' ? { encoding: opts } : (opts || {});
+    const start = typeof o.start === 'number' ? o.start : 0;
+    const hasEnd = typeof o.end === 'number';
+    this.path = p;
+    this.close = this.destroy;
+    if (o.encoding) this.setEncoding(o.encoding);
+    queueMicrotask(async () => {
+      try {
+        let data = await tjs.readFile(p);
+        if (start || hasEnd) data = data.subarray(start, hasEnd ? o.end + 1 : data.length);
+        const CH = 65536;
+        for (let i = 0; i < data.length; i += CH) this.push(data.subarray(i, Math.min(i + CH, data.length)));
+        this.push(null);
+      } catch (e) { this.emit('error', e); }
+    });
+  }
 }
+function createReadStream(p, opts) { return new ReadStream(p, opts); }
 
 // fs.createWriteStream: a Writable that overwrites ('w') or appends ('a') a file
 // (17 sites). {mode} sets the file mode, {start} positions writes. Writes route
@@ -482,11 +488,32 @@ function utimesSync(p, atime, mtime) {
   try { const r = tjs.utime(p, timeToMs(atime), timeToMs(mtime)); if (r && r.catch) r.catch(() => {}); } catch (_) { /* best-effort */ }
 }
 
+// fs.fchmodSync(fd, mode): the sync-fs patch (spike/quickjs/patches/txiki-sync-fs.patch)
+// has no FSS.fchmod — same gap FileHandle.chmod hit above ("No fd-based fchmod
+// primitive exists; chmod the captured path (same inode)"). Reuse that exact
+// strategy rather than inventing a second code path: track the path each fd
+// was opened with (fsMod.openSync below) and chmod THAT path through the
+// already-Windows-safe chmodBestEffort. An fd this map doesn't know about
+// (closed, or obtained some other way) fails LOUD — a silent wrong answer here
+// is the exact class of trap (bare unnamed quickjs TypeError / false
+// `instanceof`) this task exists to close, not reproduce.
+const fdPaths = new Map();
+function fchmodSync(fd, mode) {
+  const p = fdPaths.get(fd);
+  if (p === undefined) {
+    const e = new Error(`node-shim: fs.fchmodSync: fd ${fd} was not opened via fs.openSync (no path on record — closed, or opened another way)`);
+    e.code = 'EBADF';
+    throw e;
+  }
+  chmodBestEffort(p, mode);
+}
+
 const fsMod = {
   constants,
   readFileSync, writeFileSync, mkdirSync, readSync,
   statSync, lstatSync,
   fstatSync: (fd) => new Stats(FSS.fstat(fd)),
+  fchmodSync,
   existsSync: (p) => { try { FSS.stat(p); return true; } catch { return false; } },
   realpathSync: (p) => FSS.realpath(p),
   createReadStream,
@@ -512,8 +539,8 @@ const fsMod = {
   unlinkSync: (p) => FSS.unlink(p),
   renameSync: (a, b) => renameReplace(a, b),
   accessSync: (p, m) => FSS.access(p, m ?? constants.F_OK),
-  openSync: (p, flags) => FSS.open(p, flagsToString(flags ?? 'r')),
-  closeSync: (fd) => FSS.close(fd),
+  openSync: (p, flags) => { const fd = FSS.open(p, flagsToString(flags ?? 'r')); fdPaths.set(fd, p); return fd; },
+  closeSync: (fd) => { FSS.close(fd); fdPaths.delete(fd); },
   copyFileSync: (a, b) => { writeFileSync(b, readFileSync(a)); chmodBestEffort(b, statSync(a).mode & 0o7777); },
   symlinkSync: (target, p) => FSS.symlink(target, p),
   chmodSync: (p, m) => chmodBestEffort(p, m),
@@ -614,6 +641,7 @@ const promises = {
   lutimes: async (p, atime, mtime) => { await tjs.lutime(p, timeToMs(atime), timeToMs(mtime)); },
   stat: async (p) => statSync(p),
   lstat: async (p) => lstatSync(p),
+  fstat: async (fd) => fsMod.fstatSync(fd),
   mkdir: async (p, opts) => mkdirSync(p, opts),
   readdir: async (p, opts) => readdirCore(p, opts),
   opendir: async (p) => fsMod.opendirSync(p),
@@ -669,7 +697,7 @@ const cbWrap = (pfn) => (...args) => {
   if (typeof cb !== 'function') throw new TypeError('callback must be a function');
   pfn(...args).then((v) => cb(null, v), (e) => cb(e));
 };
-for (const name of ['readFile', 'writeFile', 'stat', 'lstat', 'access', 'readdir',
+for (const name of ['readFile', 'writeFile', 'stat', 'lstat', 'fstat', 'access', 'readdir',
   'realpath', 'readlink', 'mkdir', 'unlink', 'rename', 'rmdir', 'copyFile', 'rm', 'opendir',
   'utimes', 'lutimes', 'appendFile', 'chmod', 'symlink', 'link', 'mkdtemp', 'fsync', 'fdatasync']) {
   fsMod[name] = cbWrap(promises[name]);
@@ -699,9 +727,10 @@ fsMod.read = function read(fd, buffer, offset, length, position, cb) {
 fsMod.futimes = (fd, atime, mtime, cb) => { if (typeof cb === 'function') cb(null); };
 promises.futimes = async () => {};
 fsMod.open = (p, flags, mode, cb) => { const c = typeof cb === 'function' ? cb : (typeof mode === 'function' ? mode : flags); try { c(null, fsMod.openSync(p, typeof flags === 'string' || typeof flags === 'number' ? flags : 'r')); } catch (e) { c(e); } };
-fsMod.close = (fd, cb) => { try { FSS.close(fd); if (cb) cb(null); } catch (e) { if (cb) cb(e); } };
+fsMod.close = (fd, cb) => { try { FSS.close(fd); fdPaths.delete(fd); if (cb) cb(null); } catch (e) { if (cb) cb(e); } };
 fsMod.Stats = Stats;
 fsMod.Dirent = Dirent;
+fsMod.ReadStream = ReadStream;
 
 // fs.watchFile / unwatchFile / watch (Task 4 wall, now a real wall-crossing):
 // the -p bundle installs a config-file watcher via `fs.watchFile(path, opts,

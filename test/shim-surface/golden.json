@@ -29,16 +29,13 @@
     "crypto.sign",
     "crypto.createPublicKey",
     "child_process.fork",
-    "fs.fchmodSync",
-    "fs.fstat",
     "https.createServer",
     "perf_hooks.monitorEventLoopDelay",
     "v8.getHeapSpaceStatistics",
     "v8.getHeapStatistics",
     "stream.Duplex",
     "child_process.ChildProcess",
-    "crypto.KeyObject",
-    "fs.ReadStream"
+    "crypto.KeyObject"
   ],
   "unenumerable_allowed": [
     "intl"
@@ -51,7 +48,7 @@
     "bun:sqlite": "DRIFT, not a gap: bun-shim declares an interceptor for it in PROVIDES but bundle 2.1.218 never imports it. Harmless dead weight; listed so the declaration's drift stays visible instead of silently accumulating.",
     "http.request / https.request / net.createServer / https.createServer": "DECLARED WALLS — the same ones test/node-shim-wall-tripwires.test.cjs alarms on, rediscovered here independently without being told they exist. That rediscovery is the main evidence this map works. They throw branded node-shim errors rather than failing silently.",
     "crypto.*": "The largest cluster (X509Certificate, createPrivateKey/PublicKey, createSign/createVerify, sign, pbkdf2/pbkdf2Sync, KeyObject). Unaudited. Plausibly the enterprise auth paths (Vertex/Bedrock, mTLS) rather than the -p / interactive routes we support, which would make them unreachable in practice — but nobody has checked, and RECIPE.md G4 already flags that auth path as unverified.",
-    "fs.fchmodSync / fs.fstat / fs.ReadStream": "fd-flavored variants of things the shim DOES provide by path (chmodSync, statSync, createReadStream). Same class as the FileHandle.chmod gap that broke Edit, which is precisely why this map exists.",
+    "fs.fchmodSync / fs.fstat / fs.ReadStream": "FIXED (no longer layer2 gaps, kept as history). Were fd-flavored variants of things the shim DOES provide by path (chmodSync, statSync, createReadStream) — same class as the FileHandle.chmod gap that broke Edit, which is precisely why this map exists. fchmodSync now tracks fd->path at fs.openSync/close and chmods that path (no fd-based fchmod primitive in the sync-fs patch, same strategy FileHandle.chmod already used); fstat routes through the existing fstatSync via cbWrap; ReadStream is now a real class fs.createReadStream() constructs, not a lookalike. See test/node-shim-fs-fd-variants.test.cjs.",
     "child_process.fork / ChildProcess": "fork() has no meaning under tjs (no node child bootstrap). If a reachable path ever forks, that is a design question, not a missing function.",
     "stream.Duplex": "reads only (6), no calls — likely instanceof / prototype checks. Low risk, but a false instanceof silently takes the else-branch.",
     "v8.* / perf_hooks.monitorEventLoopDelay": "diagnostics and telemetry; absent means no stats, not broken behavior."
