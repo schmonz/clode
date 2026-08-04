@@ -25,18 +25,7 @@ const legsFor = (tier, only) => JSON.parse(
   execFileSync(process.execPath,
     [path.join(REPO, 'scripts', 'tjs-legs.mjs'), tier, ...(only ? [only] : [])], { encoding: 'utf8' }));
 
-// Export commands for runTargetsFor, publishedRunTargets, and DARWIN_SLICES
-const runTargetsFor = (leg) => JSON.parse(
-  execFileSync(process.execPath,
-    [path.join(REPO, 'scripts', 'tjs-legs.mjs'), 'runtargets', JSON.stringify(leg)], { encoding: 'utf8' }));
-
-const publishedRunTargets = () => JSON.parse(
-  execFileSync(process.execPath,
-    [path.join(REPO, 'scripts', 'tjs-legs.mjs'), 'published-runtargets'], { encoding: 'utf8' }));
-
-const DARWIN_SLICES = JSON.parse(
-  execFileSync(process.execPath,
-    [path.join(REPO, 'scripts', 'tjs-legs.mjs'), 'darwin-slices'], { encoding: 'utf8' }));
+const { runTargetsFor, publishedRunTargets, DARWIN_SLICES } = require('../scripts/tjs-legs.mjs');
 
 test('release tier splits cleanly into darwin / notdarwin (universal decoupling)', () => {
   const all = legsFor('release').map((l) => l.leg).sort();

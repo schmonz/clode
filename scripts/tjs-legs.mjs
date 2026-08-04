@@ -676,15 +676,5 @@ export function cli(tier, only, versionOverride, macosMinOverride) {
 
 import { pathToFileURL } from 'node:url';
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const cmd = process.argv[2];
-  if (cmd === 'runtargets' && process.argv[3]) {
-    const leg = JSON.parse(process.argv[3]);
-    console.log(JSON.stringify(runTargetsFor(leg)));
-  } else if (cmd === 'published-runtargets') {
-    console.log(JSON.stringify(publishedRunTargets()));
-  } else if (cmd === 'darwin-slices') {
-    console.log(JSON.stringify(DARWIN_SLICES));
-  } else {
-    console.log(JSON.stringify(cli(cmd, process.argv[3], process.argv[4], process.argv[5])));
-  }
+  console.log(JSON.stringify(cli(process.argv[2], process.argv[3], process.argv[4], process.argv[5])));
 }
