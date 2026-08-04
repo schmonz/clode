@@ -7,9 +7,7 @@
   ],
   "_measured_against_bundle": "2.1.218",
   "_measured_on": "2026-08-01",
-
   "layer1_bun_props_missing": [
-    "Bun.SQL",
     "Bun.WebView"
   ],
   "layer1_bun_modules_missing": [
@@ -42,30 +40,20 @@
     "crypto.KeyObject",
     "fs.ReadStream"
   ],
-
-  "unenumerable_allowed": ["intl"],
-
+  "unenumerable_allowed": [
+    "intl"
+  ],
   "_notes": {
     "intl": "NOT a node builtin — libexec/node-shim/modules/intl.cjs backs the Intl GLOBAL, not a require()able module, so neither side can enumerate it by name. Allowed, not a gap.",
-
-    "Bun.SQL": "ACTIVE DIVERGENCE, not a benign gap. Upstream guards it with `if (typeof Bun > \"u\") throw Error(\"claude gateway requires the native binary\")`. That string compare is TRUE under real node (\"undefined\" > \"u\") and FALSE under quaude, because bun-shim defines a Bun global (\"object\" > \"u\" is false). So the guard upstream wrote to produce a friendly message instead produces `Bun.SQL is not a constructor`. DEFINING Bun AT ALL is what defeats it. Reachability (the 'claude gateway' path) is UNVERIFIED; if reachable, the fix is to give bun-shim's Bun a SQL that throws upstream's own message, not to remove the global.",
-
+    "Bun.SQL": "FIXED (no longer a layer1 gap, kept as history). Was an ACTIVE DIVERGENCE: upstream guards it with `if (typeof Bun > \"u\") throw Error(\"claude gateway requires the native binary\")`, TRUE under real node (\"undefined\" > \"u\") but FALSE under quaude because bun-shim defines a Bun global at all — so the guard was defeated and `new Bun.SQL(...)` produced a bare `Bun.SQL is not a constructor` instead. bun-shim.cjs now gives Bun.SQL a throwing constructor that hands back upstream's own message verbatim. Reachability: confirmed NOT on the -p/interactive routes — Bun.SQL is used only inside the `claude gateway --config <path>` subcommand (a separate commander-registered enterprise auth/telemetry server), the sole call site in the bundle. See test/bun-shim-sql-guard.test.cjs.",
     "Bun.WebView": "BENIGN, and a good example of the shape we want: guarded by `\"WebView\" in Bun`, correctly false under the shim, so the branch is skipped and the function returns false. Feature detection that works.",
-
     "bun:jsc": "BENIGN. One site: `try { let {heapStats} = await import(\"bun:jsc\") ... } catch {}` for heap diagnostics. The rejection is caught, so a missing module degrades to no heap stats, matching any non-Bun host.",
-
     "bun:sqlite": "DRIFT, not a gap: bun-shim declares an interceptor for it in PROVIDES but bundle 2.1.218 never imports it. Harmless dead weight; listed so the declaration's drift stays visible instead of silently accumulating.",
-
     "http.request / https.request / net.createServer / https.createServer": "DECLARED WALLS — the same ones test/node-shim-wall-tripwires.test.cjs alarms on, rediscovered here independently without being told they exist. That rediscovery is the main evidence this map works. They throw branded node-shim errors rather than failing silently.",
-
     "crypto.*": "The largest cluster (X509Certificate, createPrivateKey/PublicKey, createSign/createVerify, sign, pbkdf2/pbkdf2Sync, KeyObject). Unaudited. Plausibly the enterprise auth paths (Vertex/Bedrock, mTLS) rather than the -p / interactive routes we support, which would make them unreachable in practice — but nobody has checked, and RECIPE.md G4 already flags that auth path as unverified.",
-
     "fs.fchmodSync / fs.fstat / fs.ReadStream": "fd-flavored variants of things the shim DOES provide by path (chmodSync, statSync, createReadStream). Same class as the FileHandle.chmod gap that broke Edit, which is precisely why this map exists.",
-
     "child_process.fork / ChildProcess": "fork() has no meaning under tjs (no node child bootstrap). If a reachable path ever forks, that is a design question, not a missing function.",
-
     "stream.Duplex": "reads only (6), no calls — likely instanceof / prototype checks. Low risk, but a false instanceof silently takes the else-branch.",
-
     "v8.* / perf_hooks.monitorEventLoopDelay": "diagnostics and telemetry; absent means no stats, not broken behavior."
   }
 }

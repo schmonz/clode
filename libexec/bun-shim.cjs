@@ -656,6 +656,25 @@ const Bun = {
   // app take its on-disk path. TODO: if a feature needs an embedded asset, supply it.
   embeddedFiles: [],
 
+  // Upstream guards its "claude gateway" (enterprise auth/telemetry) path with
+  // `typeof Bun > "u"` immediately before `new Bun.SQL(...)`, throwing its own
+  // friendly "claude gateway requires the native binary" when that's true — as
+  // it is under real Node (`"undefined" > "u"`). Under quaude/naude it's FALSE,
+  // because THIS shim defines a Bun global at all, so the guard silently passes
+  // and control falls through to `new Bun.SQL(...)`, which we never implemented
+  // -> the user saw a bare "Bun.SQL is not a constructor" instead. We keep the
+  // Bun global (removing it breaks far more than this one path) and hand back
+  // upstream's own message instead. Reachable only via the separate `claude
+  // gateway --config <path>` subcommand (commander-registered), not the -p or
+  // interactive routes; see test/bun-shim-sql-guard.test.cjs.
+  // Contrast Bun.WebView below (and elsewhere), which is correctly ABSENT so
+  // upstream's `"WebView" in Bun` feature-detect reads false and that branch is
+  // skipped cleanly -- adding SQL here must not (and does not) disturb that
+  // pattern for WebView or any other `in`/`typeof` feature-detect.
+  SQL: function SQL() {
+    throw new Error('claude gateway requires the native binary');
+  },
+
   // Bun.isStandaloneExecutable: whether running as a Bun `--compile` binary.
   // quaude (tjs) / naude (Node SEA) are NOT Bun standalone executables, so false
   // is the CORRECT answer. Explicit (not a stub) so the value is honest and the
