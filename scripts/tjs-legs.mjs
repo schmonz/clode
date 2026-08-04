@@ -640,6 +640,24 @@ export function legsFor(tier) {
 // universal's four-arch contract.
 export const DARWIN_SLICES = ['darwin-arm64', 'darwin-x64', 'darwin-x86', 'darwin-ppc'];
 
+// A published ARTIFACT's run-targets, not a build leg's name. These differ for
+// exactly two artifacts, and both differences have already misled us:
+//   - darwin-universal lipo's four publish:false slices into ONE shipped binary
+//   - cosmo is one .com, built on ubuntu-latest, that claims many host OSes
+// Keying coverage on `publish: true` omits the darwin slices entirely — including
+// darwin-arm64, the only platform we drive daily.
+export function runTargetsFor(leg) {
+  return leg.runTargets ? [...leg.runTargets] : [leg.leg];
+}
+
+export function publishedRunTargets() {
+  const out = new Set(DARWIN_SLICES); // shipped inside darwin-universal
+  for (const l of legsFor('release')) {
+    if (l.publish) for (const rt of runTargetsFor(l)) out.add(rt);
+  }
+  return [...out].sort();
+}
+
 export function cli(tier, only, versionOverride, macosMinOverride) {
   let legs = legsFor(tier);
   if (only === 'darwin') {
@@ -658,5 +676,15 @@ export function cli(tier, only, versionOverride, macosMinOverride) {
 
 import { pathToFileURL } from 'node:url';
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  console.log(JSON.stringify(cli(process.argv[2], process.argv[3], process.argv[4], process.argv[5])));
+  const cmd = process.argv[2];
+  if (cmd === 'runtargets' && process.argv[3]) {
+    const leg = JSON.parse(process.argv[3]);
+    console.log(JSON.stringify(runTargetsFor(leg)));
+  } else if (cmd === 'published-runtargets') {
+    console.log(JSON.stringify(publishedRunTargets()));
+  } else if (cmd === 'darwin-slices') {
+    console.log(JSON.stringify(DARWIN_SLICES));
+  } else {
+    console.log(JSON.stringify(cli(cmd, process.argv[3], process.argv[4], process.argv[5])));
+  }
 }

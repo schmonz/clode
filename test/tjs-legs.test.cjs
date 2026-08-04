@@ -25,6 +25,19 @@ const legsFor = (tier, only) => JSON.parse(
   execFileSync(process.execPath,
     [path.join(REPO, 'scripts', 'tjs-legs.mjs'), tier, ...(only ? [only] : [])], { encoding: 'utf8' }));
 
+// Export commands for runTargetsFor, publishedRunTargets, and DARWIN_SLICES
+const runTargetsFor = (leg) => JSON.parse(
+  execFileSync(process.execPath,
+    [path.join(REPO, 'scripts', 'tjs-legs.mjs'), 'runtargets', JSON.stringify(leg)], { encoding: 'utf8' }));
+
+const publishedRunTargets = () => JSON.parse(
+  execFileSync(process.execPath,
+    [path.join(REPO, 'scripts', 'tjs-legs.mjs'), 'published-runtargets'], { encoding: 'utf8' }));
+
+const DARWIN_SLICES = JSON.parse(
+  execFileSync(process.execPath,
+    [path.join(REPO, 'scripts', 'tjs-legs.mjs'), 'darwin-slices'], { encoding: 'utf8' }));
+
 test('release tier splits cleanly into darwin / notdarwin (universal decoupling)', () => {
   const all = legsFor('release').map((l) => l.leg).sort();
   const darwin = legsFor('release', 'darwin').map((l) => l.leg).sort();
@@ -533,4 +546,26 @@ test('version policy: ci rides the newest end, release the oldest floor', () => 
   for (const l of [...release, ...ci]) {
     assert.ok(!('ci-os' in l) && !('ci-guest-version' in l), `${l.leg}: ci-* override keys must be stripped`);
   }
+});
+
+test('published run-targets include the darwin slices (publish:false, shipped in the universal)', () => {
+  const rts = publishedRunTargets();
+  for (const slice of DARWIN_SLICES) {
+    assert.ok(rts.includes(slice),
+      `${slice} is publish:false but ships inside darwin-universal — it MUST be a published run-target`);
+  }
+});
+
+test('publishedRunTargets covers every publish:true leg', () => {
+  const rts = new Set(publishedRunTargets());
+  for (const l of legsFor('release').filter((l) => l.publish)) {
+    for (const rt of runTargetsFor(l)) {
+      assert.ok(rts.has(rt), `${l.leg}: run-target ${rt} missing from publishedRunTargets()`);
+    }
+  }
+});
+
+test('runTargetsFor defaults to the leg name and honours an explicit list', () => {
+  assert.deepStrictEqual(runTargetsFor({ leg: 'haiku-x64' }), ['haiku-x64']);
+  assert.deepStrictEqual(runTargetsFor({ leg: 'x', runTargets: ['a', 'b'] }), ['a', 'b']);
 });
