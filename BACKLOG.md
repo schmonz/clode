@@ -324,27 +324,6 @@ their plans deleted — recorded here so nobody re-derives them:
   is recorded above as not reproducing on main. Task 1 (Windows fidelity differential) is
   the only live remainder and already sits in the IN-FLIGHT HANDOFF.
 
-## Fidelity coverage tiers — approved, UNIMPLEMENTED (2026-08-01)
-
-Spec `docs/superpowers/specs/2026-08-01-fidelity-coverage-tiers-design.md`, approved by
-the maintainer (tiering + enforcement both chosen), zero code written. The gap it closes:
-we publish 37 builders and `test/fidelity/PLATFORMS.md` documents 6 rigs, so ~30 shipped
-platforms have never been driven through the recipe — and nothing in the repo says so.
-`darwin-arm64` (daily-driven) and `netbsd-sh3el` (never executed) are both just
-`publish: true`.
-
-To build, in one commit each:
-1. `fidelity: { tier, date, bundle, how, note }` on every `publish: true` leg in
-   `scripts/tjs-legs.mjs`. tier 0 `built` / 1 `floor` / 2 `daily`.
-2. Invariants in `test/tjs-legs.test.cjs`: every published leg declares a tier; tier>=1
-   requires date+bundle+how; a golden leg→tier ledger so a change is reviewable.
-3. The initial ledger — a pure RECORDING of what is already true. **Needs the
-   maintainer's eye**: assigning ~29 legs to tier 0 is the honest default, but calling
-   something tier 0 that has actually been driven is the error to avoid.
-
-Deferred by decision: date-based reddening (report before gate, for the
-ambient-redness reason). Owed alongside: the FLOOR rows are A1/B1/B4/C1/D1/G-live.
-
 ## Release follow-ups 2 + 3 — the unbuilt half of the 2026-07-27 spec
 
 Spec `docs/superpowers/specs/2026-07-27-release-followups-design.md` carries five
@@ -462,21 +441,6 @@ peer-to-peer sync per host, no shared-mount xattr-fallback problem at all (each 
 FS). If Syncthing lands, this whole AppleDouble class evaporates and the reset's `._*` sweep becomes
 vestigial. Meanwhile the build is already robust to the turds (the reset sweeps them), so this is an
 infra-hygiene task, not a correctness one.
-
-## node-pty won't build on NetBSD — make it available, don't silent-skip (2026-07-25)
-
-node-pty 1.1.0's `src/unix/pty.cc` forkpty include block has branches for __linux__/
-__APPLE__/__FreeBSD__/__OpenBSD__ but NO `__NetBSD__`, so NetBSD includes no header →
-forkpty/openpty/B38400/VTIME/cfsetispeed all undeclared, the addon fails to compile, and
-the PTY/TUI test harness can't install. NetBSD has these in `<util.h>` + `<termios.h>`
-(link `-lutil`) — identical to the OpenBSD branch. Fix = a ~2-line patch (pty.cc NetBSD
-branch + binding.gyp adds netbsd to the `-lutil` link condition), applied durably during
-harness install (clode already has a patch-apply discipline for tjs), and upstreamable.
-User's call (2026-07-25): silent-skip on a missing native addon is NOT desirable — make it
-available or make skipping a conscious, tracked choice. STOPGAP shipped: run.mjs no longer
-hard-aborts the whole suite when the harness can't build (it warns + runs the non-PTY suite);
-but that warn is a backstop for genuinely-unsupported platforms, NOT the answer for NetBSD —
-the answer is the pty.cc patch so the PTY tests actually RUN.
 
 ## ★ ACTIVE FRONTIER — the general-purpose cross-build matrix (2026-07-14)
 
