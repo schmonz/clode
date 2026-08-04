@@ -266,6 +266,11 @@ class Duplex extends Readable {
     super(opts);
     this.writable = true;
     this.writableEnded = false;
+    // _ending flips true the instant end() is CALLED (Node's real
+    // .writable/rejection semantics start at the end() call, not at the
+    // later 'finish' — see the write()-after-end() guard below), distinct
+    // from writableEnded (set once _final's callback actually completes).
+    this._ending = false;
     if (typeof opts.write === 'function') this._write = opts.write;
     if (typeof opts.final === 'function') this._final = opts.final;
   }
@@ -273,6 +278,19 @@ class Duplex extends Readable {
   _final(cb) { cb(); }
   write(chunk, enc, cb) {
     if (typeof enc === 'function') { cb = enc; enc = undefined; }
+    // Reject a write that arrives after end() was called — Node throws
+    // ERR_STREAM_WRITE_AFTER_END here (as an emitted 'error', matching
+    // Writable's async-error convention) rather than silently accepting the
+    // chunk. Without this, a stray post-end write (e.g. a racing pipe()
+    // source) would silently fold into whatever _write does (for the
+    // AWS-SDK ChecksumStream shape this was modeled on: silently INTO the
+    // checksum) where host Node would reject it outright.
+    if (this._ending || this.writableEnded) {
+      const err = Object.assign(new Error('write after end'), { code: 'ERR_STREAM_WRITE_AFTER_END' });
+      if (cb) queueMicrotask(() => cb(err));
+      else queueMicrotask(() => this.emit('error', err));
+      return false;
+    }
     const b = Buffer.isBuffer(chunk) ? chunk
       : (chunk instanceof Uint8Array ? Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)
         : Buffer.from(String(chunk)));
@@ -285,7 +303,7 @@ class Duplex extends Readable {
   end(chunk, enc, cb) {
     if (typeof chunk === 'function') { cb = chunk; chunk = enc = undefined; }
     else if (typeof enc === 'function') { cb = enc; enc = undefined; }
-    if (this.writableEnded) {
+    if (this.writableEnded || this._ending) {
       if (typeof cb === 'function') {
         queueMicrotask(() => cb(Object.assign(
           new Error('end() called after stream was finished'),
@@ -293,6 +311,8 @@ class Duplex extends Readable {
       }
       return this;
     }
+    this._ending = true;
+    this.writable = false;
     const finish = () => {
       this._final((err) => {
         if (err) { this.emit('error', err); if (cb) cb(err); return; }
@@ -301,8 +321,20 @@ class Duplex extends Readable {
         queueMicrotask(() => this.emit('finish'));
       });
     };
-    if (chunk != null) this.write(chunk, enc, finish);
-    else finish();
+    // The end-supplied chunk (if any) is written via _write DIRECTLY, not
+    // through the public write() above — that method now rejects anything
+    // arriving once _ending is true (by design: a SEPARATE, later write()
+    // call after end() must be rejected), but this one chunk is part of
+    // end() itself, not a new caller-initiated write.
+    if (chunk != null) {
+      const b = Buffer.isBuffer(chunk) ? chunk
+        : (chunk instanceof Uint8Array ? Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+          : Buffer.from(String(chunk)));
+      this._write(b, enc, (err) => {
+        if (err) { this.emit('error', err); if (cb) cb(err); return; }
+        finish();
+      });
+    } else finish();
     return this;
   }
 }

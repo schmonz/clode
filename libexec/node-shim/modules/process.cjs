@@ -119,36 +119,56 @@ function unixArch() {
 // — two different processes on the SAME machine land in different sandboxes.
 // See test/node-shim-getuid.test.cjs's tmpdir-divergence-closes assertion.
 //
-// tjs's own primitive for this is tjs.userInfo.userId (mod_os.c's
-// tjs_userInfo, over libuv's uv_os_get_passwd -> getpwuid_r(getuid())) — the
-// vendored source (spike/quickjs/vendor/txiki.js) has carried it since before
-// this repo's pinned engine binary was built, but EMPIRICALLY (checked
-// against build/tjs/tjs: Object.keys(tjs) has no 'userInfo') the currently
-// built binary predates it — a real engine/source drift, not a design
-// choice. Falls back to the exact pattern unixArch() above already uses for
-// process.arch: shell out to a real POSIX utility (`id -u`) rather than
-// invent a number — this is a REAL observed value either way, never a guess.
-// Lazy + cached (a process's real uid never changes over its lifetime on any
-// platform we run on — no setuid modeling needed). If BOTH the primitive and
-// the id(1) fallback are unavailable, THROWS rather than returning undefined
-// or 0: several bundle call sites call this unguarded
-// (`process.getuid()===0`), and a silently-wrong value (0 reads as "running
-// as root") is worse than a loud failure on whatever exotic platform lacks
-// both.
+// PRIMARY primitive: tjs.system.userInfo.userId (uv_os_get_passwd over
+// getpwuid_r(getuid()) — the REAL uid, matching Node's process.getuid()
+// exactly; NOT the effective uid). This lives on the `system` namespace, not
+// a top-level `tjs.userInfo` (an earlier draft of this comment claimed
+// `tjs.userInfo` was absent from the pinned engine and blamed engine/source
+// drift — WRONG: `tjs.userInfo` never existed anywhere, on any tjs version;
+// the real primitive was one property away the whole time, and
+// libexec/node-shim/modules/os.cjs already documents and uses
+// `tjs.system.*` for cpus/loadAvg/networkInterfaces/uptime). Verified
+// directly against build/tjs/tjs: `tjs.system.userInfo.userId` returns the
+// real operator uid with no subprocess involved.
+//
+// FALLBACK (only reachable if tjs.system.userInfo itself is ever absent —
+// not expected on any real libuv-backed engine, kept for defense in depth):
+// the exact pattern unixArch() above already uses for process.arch — shell
+// out to a real POSIX utility. `id -u -r` asks for the REAL id explicitly
+// (plain `id -u` is the EFFECTIVE uid, a real-vs-effective mismatch the
+// primary path does not have); if `-r` isn't supported by whatever `id` is
+// on PATH, retry plain `id -u` (effective — a documented approximation, only
+// ever reached in this already-degraded branch).
+//
+// LAST RESORT: if every primitive is unavailable (no libuv userInfo AND no
+// working `id` on PATH — e.g. PATH stripped entirely), DEGRADE to 0 rather
+// than throw, mirroring unixArch()'s degrade-to-'x64'. This function is
+// called unguarded at some bundle call sites (`process.getuid()===0`); a
+// throw there would crash a process real Node starts successfully (Node's
+// getuid(2) cannot fail on any platform that defines it at all) — turning a
+// merely-approximate value into a regression is strictly worse than the
+// approximation itself. Lazy + cached (a process's real uid never changes
+// over its lifetime).
 let _uid;
 function unixGetuid() {
   if (_uid !== undefined) return _uid;
   try {
-    if (typeof tjs !== 'undefined' && tjs.userInfo && typeof tjs.userInfo.userId === 'number') {
-      return (_uid = tjs.userInfo.userId);
-    }
-  } catch { /* tjs.userInfo absent/threw on this engine build; fall through */ }
+    const info = typeof tjs !== 'undefined' ? tjs.system?.userInfo : undefined;
+    if (info && typeof info.userId === 'number') return (_uid = info.userId);
+  } catch { /* tjs.system.userInfo absent/threw; fall through to the subprocess fallback */ }
   try {
-    const r = require('node:child_process').spawnSync('id', ['-u'], { encoding: 'utf8' });
-    const n = r && r.stdout != null ? parseInt(String(r.stdout).trim(), 10) : NaN;
+    const cp = require('node:child_process');
+    let r = cp.spawnSync('id', ['-u', '-r'], { encoding: 'utf8' });
+    let n = r && r.status === 0 && r.stdout != null ? parseInt(String(r.stdout).trim(), 10) : NaN;
+    if (!Number.isFinite(n)) {
+      // `-r` (real id) unsupported by this `id` — retry plain (effective;
+      // an approximation only reachable because the primary path failed).
+      r = cp.spawnSync('id', ['-u'], { encoding: 'utf8' });
+      n = r && r.stdout != null ? parseInt(String(r.stdout).trim(), 10) : NaN;
+    }
     if (Number.isFinite(n)) return (_uid = n);
-  } catch { /* fall through to the loud throw below */ }
-  throw new Error('node-shim: process.getuid has no primitive on this engine (tjs.userInfo absent) and the id(1) fallback failed');
+  } catch { /* fall through to the degrade below */ }
+  return (_uid = 0);
 }
 
 function writeSync(fd, s) { return writeSyncFd(fd, s); }
@@ -334,35 +354,46 @@ module.exports = {
     if (!ns.KNOWN.includes(bare)) return undefined;
     try { return ns.loadBuiltin(bare); } catch { return undefined; }
   },
-  // process.reallyExit(code) (Task 5 wall): signal-exit (an npm dep several
-  // packages use for cleanup-on-exit hooks) feature-detects its host via a
-  // capability check that includes `typeof process.reallyExit==="function"`
-  // before it will attach at all — without this property, that check fails
-  // and EVERY exit-listener consumer silently no-ops (terminal-mode restore,
-  // temp-file cleanup, ...), with no error to signal why. Our process.exit()
-  // already bypasses any 'exit' event machinery (that delivery was never
-  // wired — see the exit() comment above), so reallyExit and exit are already
-  // equivalent low-level primitives here; reuse the same call.
+  // process.reallyExit(code) (Task 5 wall): in REAL Node, process.exit()
+  // ROUTES THROUGH process.reallyExit — that delegation IS the mechanism
+  // signal-exit (an npm dep several packages use for cleanup-on-exit hooks:
+  // terminal-mode restore, temp-file cleanup, ...) depends on. It saves the
+  // original reallyExit, replaces process.reallyExit with its own
+  // interceptor, and expects THAT interceptor to run when process.exit() is
+  // later called — a capability check
+  // (`typeof process.reallyExit==="function"`) is only the gate to get in the
+  // door; the actual benefit requires exit() to genuinely call through
+  // process.reallyExit, not around it. This is the true low-level primitive
+  // (tjs.exit directly); exit() below calls `this.reallyExit(...)`, NOT
+  // tjs.exit directly, so a signal-exit-style monkeypatch of
+  // process.reallyExit is honored exactly as it would be under host Node.
+  // Characterized by test/node-shim-process-gaps.test.cjs (a cleanup hook
+  // registered by replacing process.reallyExit actually fires on exit()).
   reallyExit(c) {
     return tjs.exit(c ?? this.exitCode ?? 0);
   },
-  // process.constrainedMemory() (Task 5 wall): Node's real contract is
-  // "bytes available under an OS/cgroup constraint, or undefined if there is
-  // no such constraint or it's unknown" — undefined is the CORRECT answer on
-  // an unconstrained host (no container/cgroup), not a fallback we're settling
-  // for. tjs has no cgroup/job-object introspection to do better, so we don't
-  // fabricate a number (a made-up byte count would be worse than this). What
-  // this DOES fix: a bundle diagnostics path (`lEg()`) calls this WITHOUT
-  // optional chaining inside a try/catch that swallows the whole function's
-  // return value on any throw — so today, `.constrainedMemory is not a
-  // function` silently blanks uptime/rss/heapTotal/etc. too, not just this one
-  // field.
-  constrainedMemory: () => undefined,
+  // process.constrainedMemory() (Task 5 wall): returns the bytes available
+  // under an OS/cgroup memory constraint, or a value meaning "no such
+  // constraint" otherwise. EMPIRICALLY, host Node (v24.18.1, the version this
+  // shim's process.version claims) returns the NUMBER 0 on an unconstrained
+  // macOS host (`node -e 'console.log(process.constrainedMemory())'` -> `0`,
+  // typeof number) — NOT `undefined` as an earlier draft of this comment
+  // assumed from the docs alone without checking the real binary. tjs has no
+  // cgroup/job-object introspection to report a REAL constrained figure, so
+  // 0 here is Node's own reported value for "unconstrained", not a fabricated
+  // byte count. What this fixes regardless of the exact number: a bundle
+  // diagnostics path (`lEg()`) calls this WITHOUT optional chaining inside a
+  // try/catch that swallows the whole function's return value on any throw —
+  // so before this, `.constrainedMemory is not a function` silently blanked
+  // uptime/rss/heapTotal/etc. too, not just this one field.
+  constrainedMemory: () => 0,
   exit(c) {
     if (tjs.env.CLODE_SHIM_DEBUG) {
       try { writeErr(`[shim] process.exit(${c}) called\n${new Error().stack}\n`); } catch { /* ignore */ }
     }
-    return tjs.exit(c ?? this.exitCode ?? 0);
+    // Delegates to reallyExit (see its comment) rather than calling tjs.exit
+    // directly — this IS the hook signal-exit-shaped cleanup libraries need.
+    return this.reallyExit(c ?? this.exitCode ?? 0);
   },
   // process.kill(pid, signal='SIGTERM') over the __tjs_kill primitive
   // (mod_spawn_sync.c): raw kill(2), so signal 0 (the liveness probe the

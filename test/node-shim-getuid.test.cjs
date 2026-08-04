@@ -1,11 +1,11 @@
 'use strict';
 // process.getuid() (Task 5, Class C — genuine gap, PROVEN behavioral impact).
-// Real uid, over tjs.userInfo.userId when the engine build has it, falling
-// back to the same shell-out pattern process.arch already uses (`id -u`) when
-// it doesn't — see libexec/node-shim/modules/process.cjs's unixGetuid for the
-// empirical finding that the currently pinned build/tjs/tjs lacks
-// tjs.userInfo even though the vendored source has carried it since before
-// this binary's build date.
+// Real uid, over tjs.system.userInfo.userId (the real libuv primitive — see
+// libexec/node-shim/modules/process.cjs's unixGetuid comment), falling back
+// to the same shell-out pattern process.arch already uses (`id -u -r`) only
+// if that primitive is ever unavailable, and DEGRADING to 0 (never throwing)
+// as an absolute last resort — a getuid() call must not be able to crash a
+// process real Node starts successfully.
 //
 // ACCEPTANCE TEST (not just "the function exists"): the bundle computes its
 // tmp-dir prefix as `claude-${process.getuid?.() ?? 0}` (found verbatim in
@@ -67,7 +67,38 @@ test('ACCEPTANCE: the bundle tmpdir prefix (claude-<uid>) matches the real host 
     `quaude computed ${prefix} but naude/real-node (real uid ${realUid}) computes ${naudePrefix} — tmp sandboxes would still diverge`);
 });
 
+// REGRESSION (found by review): an earlier version of this fix used the
+// WRONG primitive (a top-level `tjs.userInfo`, which never existed on any
+// tjs version) as its primary path, so every real run fell through to the
+// `id -u` subprocess fallback. With PATH stripped, that fallback failed too
+// and the (then-unconditional) throw turned an absence into a CRASH — in an
+// environment where both real Node and the correct native primitive
+// (tjs.system.userInfo) succeed. This test is that exact repro: PATH
+// stripped entirely, `process.getuid?.() ?? 0` (the bundle's own guarded
+// call shape) must not throw. With the corrected primary path
+// (tjs.system.userInfo — a native call, no subprocess involved) this
+// actually SUCCEEDS with the real uid, not merely "degrades silently" —
+// stronger than the minimum bar, and proof the fix no longer depends on
+// PATH at all for the common case.
+test('process.getuid() does not throw with PATH stripped (the primary path needs no subprocess)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  if (process.platform === 'win32') { t.skip('process.getuid is POSIX-only'); return; }
+  const f = writeProg(`
+    console.log(JSON.stringify({ uid: process.getuid?.() ?? 0 }));`);
+  const r = runLoader(f, [], { env: { PATH: '/nonexistent-path-xyz' } });
+  assert.strictEqual(r.status, 0, r.stderr);
+  const { uid } = JSON.parse(r.stdout.trim());
+  assert.strictEqual(typeof uid, 'number');
+  assert.strictEqual(uid, process.getuid(), 'the native tjs.system.userInfo path needs no PATH at all, so this must still be the REAL uid, not a degraded 0');
+});
+
 // NOTE: win32 gating (process.getuid absent, not present-but-undefined) is a
 // plain `if (module.exports.platform !== 'win32')` in process.cjs, verified
 // by code inspection — no win32 tjs engine is available in this environment
-// to drive it end-to-end.
+// to drive it end-to-end. The "every primitive AND the id(1) fallback are
+// both unavailable" degrade-to-0 tail is likewise not independently driven
+// here: tjs.system.userInfo is a native, non-configurable property on every
+// real tjs engine (verified: attempting to delete/reassign it throws
+// "could not delete property"/"no setter for property"), so that branch
+// cannot be forced from JS without engine surgery — same as unixArch()'s own
+// degrade-to-'x64' default has no dedicated "uname genuinely absent" test.

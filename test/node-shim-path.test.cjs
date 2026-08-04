@@ -109,6 +109,35 @@ console.log(JSON.stringify({ home: os.homedir().startsWith('/'), tmp: os.tmpdir(
   assert.deepStrictEqual(out, { home: true, tmp: true, plat: process.platform, eol: '\n' });
 });
 
+// os.userInfo() (Task 5 fix, adjacent to process.getuid): was fabricating
+// {username, homedir} from tjs.env.USER and omitting uid/gid/shell entirely.
+// Now backed by the same real primitive as process.getuid (tjs.system.userInfo
+// — see libexec/node-shim/modules/process.cjs's unixGetuid comment for the
+// "it's tjs.system.userInfo, not tjs.userInfo" correction), returning Node's
+// real shape: {username, uid, gid, shell, homedir}.
+test('os.userInfo() returns the real shape (uid/gid/shell present, uid matches process.getuid())', (t) => {
+  if (skipUnlessTjs(t)) return;
+  if (process.platform === 'win32') { t.skip('process.getuid is POSIX-only'); return; }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-osuserinfo-'));
+  const f = path.join(dir, 'osuserinfo.cjs');
+  fs.writeFileSync(f, `const os = require('node:os');
+const info = os.userInfo();
+console.log(JSON.stringify({
+  hasUsername: typeof info.username === 'string' && info.username.length > 0,
+  uid: info.uid,
+  hasGid: typeof info.gid === 'number',
+  hasHomedir: typeof info.homedir === 'string' && info.homedir.length > 0,
+  uidMatchesGetuid: info.uid === process.getuid(),
+}));`);
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout.trim());
+  assert.deepStrictEqual(out, {
+    hasUsername: true, uid: out.uid, hasGid: true, hasHomedir: true, uidMatchesGetuid: true,
+  });
+  assert.strictEqual(typeof out.uid, 'number');
+});
+
 // Wall (Task 4, -p round-trip): the bundle builds the system prompt's
 // environment block with `${os.type()} ${os.release()}` — a missing os.release
 // threw `TypeError: not a function` and crashed the query session before the

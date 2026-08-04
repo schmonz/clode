@@ -122,16 +122,49 @@ test('process.reallyExit(code) terminates the process synchronously with that ex
   assert.strictEqual(r.stdout, 'before\n');
 });
 
-test('process.constrainedMemory is a function returning undefined (honest "no known constraint", never a fabricated number)', (t) => {
+// REGRESSION (found by review): the whole point of process.reallyExit is
+// that real Node's process.exit() ROUTES THROUGH it — that delegation is
+// what signal-exit-shaped cleanup libraries depend on (they replace
+// process.reallyExit with their own interceptor and expect exit() to call
+// THAT, not bypass it). An earlier version of this fix defined reallyExit as
+// a standalone function but left exit() calling tjs.exit() directly — so the
+// capability check passed (typeof process.reallyExit === 'function') but the
+// actual delegation never happened, and a cleanup hook installed exactly
+// this way would silently never fire. This test proves the delegation is
+// real: replacing process.reallyExit and then calling process.exit() must
+// route through the replacement.
+test('process.exit() delegates through process.reallyExit (signal-exit-shaped cleanup hooks actually fire)', (t) => {
   if (skipUnlessTjs(t)) return;
+  const f = writeProg(`
+    const original = process.reallyExit;
+    let cleanupRan = false;
+    process.reallyExit = function (code) {
+      cleanupRan = true;
+      process.stdout.write(JSON.stringify({ cleanupRan, code }) + '\\n');
+      return original.call(process, code);
+    };
+    process.exit(3);
+    process.stdout.write('after\\n');   // must NEVER run`);
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 3, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), { cleanupRan: true, code: 3 });
+});
+
+test('process.constrainedMemory is a function returning the number 0 (matches host Node on an unconstrained host, not a fabricated value)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  // Empirically confirmed against host Node (v24.18.1, the version this
+  // shim's process.version claims): `process.constrainedMemory()` returns
+  // the NUMBER 0 on an unconstrained macOS host, not `undefined`. 0 is
+  // Node's own reported value here, not something invented for this shim.
   const f = writeProg(`
     console.log(JSON.stringify({
       isFunction: typeof process.constrainedMemory === 'function',
-      value: process.constrainedMemory() === undefined ? 'undefined' : process.constrainedMemory(),
+      value: process.constrainedMemory(),
+      isNumber: typeof process.constrainedMemory() === 'number',
     }));`);
   const r = runLoader(f);
   assert.strictEqual(r.status, 0, r.stderr);
-  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), { isFunction: true, value: 'undefined' });
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), { isFunction: true, value: 0, isNumber: true });
 });
 
 test('constrainedMemory unblocks the bundle diagnostics pattern (no optional chaining, wrapped in try/catch)', (t) => {

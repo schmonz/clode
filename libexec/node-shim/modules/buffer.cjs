@@ -48,21 +48,42 @@ if (B && !B.__clodeBase64Url) {
 // this is a property GET from some OTHER Bun-compiled module block bundled into
 // the native binary (an ext-dep loaded at runtime, not entrypoints/cli.js), so
 // which caller can't be pinned by grepping the entry alone. Implemented for real
-// regardless, per Node's contract: input is a Buffer/TypedArray/ArrayBuffer/
-// DataView; returns true iff its bytes are valid UTF-8. Neither feross `buffer`
-// nor internal/buffer-lite.cjs (the two possible `impl`s) define this, so it's
-// added here, once, guarded so re-require never double-wraps (same idiom as the
-// base64url patch above). TextDecoder('utf-8',{fatal:true}) IS the WHATWG UTF-8
-// decode algorithm — it throws iff the input is not valid UTF-8, which is exactly
-// Node's isUtf8 contract (not an approximation).
+// regardless, per Node's contract: input must be a TypedArray (Buffer included —
+// Buffer IS a Uint8Array) or an ArrayBuffer/SharedArrayBuffer — Node's own check
+// is `isTypedArray(input) || isAnyArrayBuffer(input)`, which EXCLUDES DataView
+// (an ArrayBufferView but not a typed array; Node throws ERR_INVALID_ARG_TYPE on
+// it, it does not accept it — an earlier draft of this comment claimed the
+// opposite without checking). Neither feross `buffer` nor internal/buffer-lite.cjs
+// (the two possible `impl`s) define this, so it's added here, once, guarded so
+// re-require never double-wraps (same idiom as the base64url patch above).
+// TextDecoder('utf-8',{fatal:true}) IS the WHATWG UTF-8 decode algorithm — it
+// throws iff the input is not valid UTF-8, which is exactly Node's isUtf8
+// contract (not an approximation).
 if (impl && typeof impl.isUtf8 !== 'function') {
+  const isDataView = (v) => typeof DataView !== 'undefined' && v instanceof DataView;
+  const isSharedArrayBuffer = (v) => typeof SharedArrayBuffer !== 'undefined' && v instanceof SharedArrayBuffer;
   impl.isUtf8 = function isUtf8(input) {
     let view;
-    if (impl.Buffer && impl.Buffer.isBuffer(input)) view = input;
-    else if (input instanceof ArrayBuffer) view = new Uint8Array(input);
-    else if (ArrayBuffer.isView(input)) view = new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
-    else throw new TypeError('The "input" argument must be an instance of ArrayBuffer, Buffer, TypedArray, or DataView');
-    try { new TextDecoder('utf-8', { fatal: true }).decode(view); return true; }
+    if (ArrayBuffer.isView(input) && !isDataView(input)) {
+      view = input instanceof Uint8Array ? input : new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+    } else if (input instanceof ArrayBuffer || isSharedArrayBuffer(input)) {
+      view = new Uint8Array(input);
+    } else {
+      throw Object.assign(
+        new TypeError('The "input" argument must be an instance of Buffer, TypedArray, ArrayBuffer, or SharedArrayBuffer'),
+        { code: 'ERR_INVALID_ARG_TYPE' });
+    }
+    // This tjs build's TextDecoder.decode() validates its argument with
+    // `buf.buffer instanceof ArrayBuffer` (src/js/polyfills/text-encoding.js)
+    // — which is FALSE for a view backed by a SharedArrayBuffer (verified:
+    // SharedArrayBuffer is not `instanceof ArrayBuffer` on this engine), so
+    // decode() would throw "Expected TypedArray or ArrayBuffer or
+    // ArrayBufferView" on valid UTF-8 bytes and get silently swallowed by the
+    // catch below into a wrong `false`. Normalize by copying into a fresh,
+    // plain-ArrayBuffer-backed Uint8Array first — `new Uint8Array(view)`
+    // always allocates a non-shared buffer regardless of the source, so this
+    // sidesteps the engine's validation gap for every input shape uniformly.
+    try { new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(view)); return true; }
     catch { return false; }
   };
 }

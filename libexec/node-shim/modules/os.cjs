@@ -117,5 +117,26 @@ module.exports = {
   loadavg: () => (tjs.system && tjs.system.loadAvg) || [0, 0, 0],
   uptime: () => (tjs.system && tjs.system.uptime) || 0,
   constants: { signals: SIGNALS },
-  userInfo: () => ({ username: tjs.env.USER ?? 'unknown', homedir: module.exports.homedir() }),
+  // os.userInfo() (Task 5 fix, adjacent to process.getuid): was fabricating
+  // from tjs.env.USER and omitting uid/gid/shell entirely — Node's real
+  // shape is {username, uid, gid, shell, homedir}. tjs.system.userInfo (the
+  // SAME real libuv primitive process.cjs's unixGetuid uses — see that
+  // file's comment for the "tjs.userInfo doesn't exist, it's
+  // tjs.system.userInfo" correction) has every one of those fields for real
+  // (uv_os_get_passwd), so use it directly instead of a partial synthesis.
+  // Falls back to the previous env-based synthesis (uid/gid -1, shell null —
+  // Node's own win32 shape) only if tjs.system.userInfo is ever unavailable.
+  userInfo: () => {
+    const info = tjs.system?.userInfo;
+    if (info) {
+      return {
+        username: info.userName,
+        uid: info.userId,
+        gid: info.groupId,
+        shell: info.shell ?? null,
+        homedir: info.homeDir ?? module.exports.homedir(),
+      };
+    }
+    return { username: tjs.env.USER ?? 'unknown', uid: -1, gid: -1, shell: null, homedir: module.exports.homedir() };
+  },
 };

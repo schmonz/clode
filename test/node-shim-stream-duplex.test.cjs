@@ -133,3 +133,57 @@ test('Duplex: end() after end() is idempotent (matches Writable.end)', (t) => {
   assert.strictEqual(r.status, 0, r.stderr);
   assert.deepStrictEqual(JSON.parse(r.stdout.trim()), { code: 'ERR_STREAM_ALREADY_FINISHED' });
 });
+
+// REGRESSION (found by review): write() had no guard against arriving after
+// end() was called — for the AWS-SDK ChecksumStream shape this class was
+// modeled on, a stray post-end write would silently fold into the checksum
+// under this shim while host Node rejects it outright
+// (ERR_STREAM_WRITE_AFTER_END) and reports .writable === false. Also checks
+// .writable flips false the instant end() is CALLED, not only once 'finish'
+// fires later.
+test('Duplex: write() after end() is rejected (ERR_STREAM_WRITE_AFTER_END), .writable flips false immediately', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const f = writeProg(`
+    const stream = require('stream');
+    class X extends stream.Duplex {
+      _read() {}
+      _write(chunk, enc, cb) { (this.seen ??= []).push(chunk.toString()); cb(); }
+    }
+    const x = new X();
+    x.write('a');
+    const writableRightAfterEnd = (x.end(), x.writable);
+    x.write('b', (err) => {
+      console.log(JSON.stringify({
+        writableRightAfterEnd,
+        seen: x.seen,
+        rejectedCode: err && err.code,
+      }));
+      process.exit(0);
+    });`);
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), {
+    writableRightAfterEnd: false,
+    seen: ['a'],                              // only the pre-end write reached _write
+    rejectedCode: 'ERR_STREAM_WRITE_AFTER_END',
+  });
+});
+
+test('Duplex: end(chunk) still writes the end-supplied chunk (the write-after-end guard must not reject it)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const f = writeProg(`
+    const stream = require('stream');
+    class X extends stream.Duplex {
+      _read() {}
+      _write(chunk, enc, cb) { (this.seen ??= []).push(chunk.toString()); cb(); }
+    }
+    const x = new X();
+    x.on('finish', () => {
+      console.log(JSON.stringify({ seen: x.seen }));
+      process.exit(0);
+    });
+    x.end('last-chunk');`);
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), { seen: ['last-chunk'] });
+});
