@@ -131,7 +131,7 @@ This is the canonical reference run. The operator executes the full recipe here 
 
 ## Result recording
 
-Each result record in the matrix includes:
+Results are appended to `test/fidelity/RESULTS.md`. Each record includes:
 - Row id (e.g., A1, C2)
 - Engine (Claude, naude, quaude)
 - Platform tag (darwin-tui, netbsd-arm64, darwin-ppc, haiku-x64, netbsd-sparc)
