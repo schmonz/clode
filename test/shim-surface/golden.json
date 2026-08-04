@@ -33,7 +33,6 @@
     "perf_hooks.monitorEventLoopDelay",
     "v8.getHeapSpaceStatistics",
     "v8.getHeapStatistics",
-    "stream.Duplex",
     "child_process.ChildProcess",
     "crypto.KeyObject"
   ],

@@ -111,6 +111,46 @@ function unixArch() {
   return (_unixArch = machineToNodeArch(m));
 }
 
+// process.getuid() (Task 5 wall, POSIX-only — matches Node, which does not
+// define it on win32). PROVEN behavioral impact: without this, quaude's uid
+// falls back to 0 (the bundle's own `process.getuid?.() ?? 0`-shaped guards),
+// so its tmp-dir helper (Z.CLAUDE_CODE_TMPDIR ?? "/tmp", scoped per-uid
+// elsewhere) diverges from naude/real-node's `/private/tmp/claude-<real-uid>`
+// — two different processes on the SAME machine land in different sandboxes.
+// See test/node-shim-getuid.test.cjs's tmpdir-divergence-closes assertion.
+//
+// tjs's own primitive for this is tjs.userInfo.userId (mod_os.c's
+// tjs_userInfo, over libuv's uv_os_get_passwd -> getpwuid_r(getuid())) — the
+// vendored source (spike/quickjs/vendor/txiki.js) has carried it since before
+// this repo's pinned engine binary was built, but EMPIRICALLY (checked
+// against build/tjs/tjs: Object.keys(tjs) has no 'userInfo') the currently
+// built binary predates it — a real engine/source drift, not a design
+// choice. Falls back to the exact pattern unixArch() above already uses for
+// process.arch: shell out to a real POSIX utility (`id -u`) rather than
+// invent a number — this is a REAL observed value either way, never a guess.
+// Lazy + cached (a process's real uid never changes over its lifetime on any
+// platform we run on — no setuid modeling needed). If BOTH the primitive and
+// the id(1) fallback are unavailable, THROWS rather than returning undefined
+// or 0: several bundle call sites call this unguarded
+// (`process.getuid()===0`), and a silently-wrong value (0 reads as "running
+// as root") is worse than a loud failure on whatever exotic platform lacks
+// both.
+let _uid;
+function unixGetuid() {
+  if (_uid !== undefined) return _uid;
+  try {
+    if (typeof tjs !== 'undefined' && tjs.userInfo && typeof tjs.userInfo.userId === 'number') {
+      return (_uid = tjs.userInfo.userId);
+    }
+  } catch { /* tjs.userInfo absent/threw on this engine build; fall through */ }
+  try {
+    const r = require('node:child_process').spawnSync('id', ['-u'], { encoding: 'utf8' });
+    const n = r && r.stdout != null ? parseInt(String(r.stdout).trim(), 10) : NaN;
+    if (Number.isFinite(n)) return (_uid = n);
+  } catch { /* fall through to the loud throw below */ }
+  throw new Error('node-shim: process.getuid has no primitive on this engine (tjs.userInfo absent) and the id(1) fallback failed');
+}
+
 function writeSync(fd, s) { return writeSyncFd(fd, s); }
 function writeOut(s) {
   if (tjs.env.CLODE_SHIM_DEBUG) { try { writeSync(2, `[shim] stdout.write(${JSON.stringify(String(s)).slice(0, 120)})\n`); } catch { /* ignore */ } }
@@ -206,6 +246,20 @@ function getStdin() {
 module.exports = {
   argv: [],                                  // loader overwrites after load
   argv0: 'tjs',
+  // __handlers / __sigWired: the shim's OWN internal registry fields (on/once/
+  // __wireSignal below lazy-init them with `??=`), NOT a Node API the bundle
+  // wants. Task 4's probe (CLODE_SHIM_PROBE) recorded both as "armed" because
+  // a `??=` read races the probe's `!(prop in target)` check on the FIRST
+  // call: before that first lazy-init, the property genuinely isn't present
+  // on the object, so the probe (correctly, by its own contract) logs the
+  // miss — it has no way to know the reader IS this module's own method
+  // rather than bundle code. Pre-declared here (Task 5) so they're always
+  // already own-properties and the probe never logs them again — this is
+  // CLASS A per the task-5 brief (probe self-noise, not a gap): no bundle
+  // code ever reads `process.__handlers`/`process.__sigWired`, only this
+  // file's own on/once/prependListener/__wireSignal/__unwireSignalIfIdle do.
+  __handlers: [],
+  __sigWired: undefined,
   // process.execArgv (Task 4 wall): Node runtime flags before the script. The
   // -p boot does process.execArgv.some(...) to detect debug/inspect flags; under
   // tjs there are none, so an empty array (matching a plain invocation).
@@ -239,8 +293,71 @@ module.exports = {
   // shim-platform-honesty + the universal-template diagnosis.
   get arch() { return detectPlatform() === 'win32' ? winArch() : unixArch(); },
   pid: tjs.pid,
+  // process.ppid (Task 5 wall): the bundle polls this to detect reparenting
+  // (orphan-check: "has my launcher died?") — a snapshot-then-recompare
+  // pattern that needs a LIVE value, not a cached one. tjs.ppid is itself a
+  // live getter (uv_os_getppid, re-evaluated on every read), so a plain
+  // getter here matches Node's own semantics (ppid can change if the parent
+  // exits and this process is reparented to init/launchd).
+  get ppid() { return tjs.ppid; },
   execPath: tjs.exePath ?? '/tjs',
   cwd: () => tjs.cwd,
+  // process.chdir(directory) (Task 5 wall): a REAL chdir — tjs.chdir wraps
+  // uv_chdir, empirically verified against build/tjs/tjs (changes tjs.cwd,
+  // throws a real ENOENT-shaped error with .code on a bad path). The bundle's
+  // spawn-cwd trick (execa/cross-spawn: chdir to the child's cwd, spawn, chdir
+  // back — checked via `process.chdir!==void 0 && !process.chdir.disabled`)
+  // and its worktree-switch/-restore paths (`process.chdir(originalCwd)`)
+  // both depend on this actually moving the process, not silently no-op'ing —
+  // a silent no-op here would be WORSE than leaving it a wall (callers would
+  // believe the cwd moved and resolve relative paths wrong). We deliberately
+  // do NOT set `.disabled` — this primitive genuinely works.
+  chdir(dir) {
+    if (typeof dir !== 'string') {
+      throw new TypeError(`The "directory" argument must be of type string. Received ${typeof dir}`);
+    }
+    return tjs.chdir(dir);
+  },
+  // process.getBuiltinModule(id) (Task 5 wall, Node >=22.3): returns the
+  // builtin unaffected by any require() interception, or undefined if id
+  // isn't a recognized builtin — Node semantics exactly (no throw). Backed by
+  // the SAME registry require() itself resolves against
+  // (globalThis.__nodeShim.KNOWN/loadBuiltin, installed by loader.cjs), so
+  // this never invents a module require() couldn't also produce.
+  // __nodeShim is assigned by loader.cjs AFTER `loadBuiltin('process')`
+  // constructs this very module — safe here because the property is only
+  // READ (called) later, well after loader.cjs finishes setup.
+  getBuiltinModule(id) {
+    const ns = globalThis.__nodeShim;
+    if (!ns || typeof id !== 'string') return undefined;
+    const bare = id.startsWith('node:') ? id.slice(5) : id;
+    if (!ns.KNOWN.includes(bare)) return undefined;
+    try { return ns.loadBuiltin(bare); } catch { return undefined; }
+  },
+  // process.reallyExit(code) (Task 5 wall): signal-exit (an npm dep several
+  // packages use for cleanup-on-exit hooks) feature-detects its host via a
+  // capability check that includes `typeof process.reallyExit==="function"`
+  // before it will attach at all — without this property, that check fails
+  // and EVERY exit-listener consumer silently no-ops (terminal-mode restore,
+  // temp-file cleanup, ...), with no error to signal why. Our process.exit()
+  // already bypasses any 'exit' event machinery (that delivery was never
+  // wired — see the exit() comment above), so reallyExit and exit are already
+  // equivalent low-level primitives here; reuse the same call.
+  reallyExit(c) {
+    return tjs.exit(c ?? this.exitCode ?? 0);
+  },
+  // process.constrainedMemory() (Task 5 wall): Node's real contract is
+  // "bytes available under an OS/cgroup constraint, or undefined if there is
+  // no such constraint or it's unknown" — undefined is the CORRECT answer on
+  // an unconstrained host (no container/cgroup), not a fallback we're settling
+  // for. tjs has no cgroup/job-object introspection to do better, so we don't
+  // fabricate a number (a made-up byte count would be worse than this). What
+  // this DOES fix: a bundle diagnostics path (`lEg()`) calls this WITHOUT
+  // optional chaining inside a try/catch that swallows the whole function's
+  // return value on any throw — so today, `.constrainedMemory is not a
+  // function` silently blanks uptime/rss/heapTotal/etc. too, not just this one
+  // field.
+  constrainedMemory: () => undefined,
   exit(c) {
     if (tjs.env.CLODE_SHIM_DEBUG) {
       try { writeErr(`[shim] process.exit(${c}) called\n${new Error().stack}\n`); } catch { /* ignore */ }
@@ -383,3 +500,14 @@ module.exports = {
   emitWarning() { return undefined; },
   umask: () => 0o022,
 };
+
+// process.getuid: Node only defines this on POSIX (absent on win32/android).
+// Assigned after the object literal (rather than inline) so it is genuinely
+// ABSENT — not present-but-undefined — on win32: several bundle call sites
+// feature-detect with `typeof process.getuid==="function"` first, and a
+// present-but-wrong-value property here would repeat this repo's Bun.SQL
+// regression (a global merely EXISTING defeated an upstream `typeof x>"u"`
+// guard). unixGetuid is defined above (Task 5).
+if (module.exports.platform !== 'win32') {
+  module.exports.getuid = unixGetuid;
+}

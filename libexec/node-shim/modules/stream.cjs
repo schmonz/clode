@@ -245,6 +245,68 @@ class Transform extends Readable {
   }
 }
 
+// Duplex (Task 5 wall): a real readable+writable stream where the two sides
+// are INDEPENDENT — unlike Transform, writing does not auto-flow to the
+// readable side; a subclass wires that itself via _write's push() call, or
+// leaves the sides unrelated. Modeled after the AWS SDK's ChecksumStream
+// (`class X extends require('stream').Duplex { _read(){} _write(c,e,cb){
+// this.checksum.update(c); this.push(c); cb(); } async _final(cb){ ...;
+// this.push(null); cb(); } }`, found in the extracted bundle: `source.pipe
+// (this)` feeds _write, and pipe()'s upstream 'end' calls dest.end() with no
+// args, which must run _final BEFORE 'finish' — exactly Node's real Writable
+// contract (`_final` runs once, right before 'finish', letting async cleanup
+// — here, checksum verification — run before completion is observable).
+// Modeled over Readable (push/'data'/'end', inherited) + a writable face
+// mirroring Writable.write/end above, plus _final support Writable itself
+// doesn't have (no bundle path needed it there). Behavioral subset, same
+// caveats as Transform (no object-mode/highWaterMark backpressure);
+// characterized by test/node-shim-stream-duplex.test.cjs.
+class Duplex extends Readable {
+  constructor(opts = {}) {
+    super(opts);
+    this.writable = true;
+    this.writableEnded = false;
+    if (typeof opts.write === 'function') this._write = opts.write;
+    if (typeof opts.final === 'function') this._final = opts.final;
+  }
+  _write(chunk, enc, cb) { cb(); }
+  _final(cb) { cb(); }
+  write(chunk, enc, cb) {
+    if (typeof enc === 'function') { cb = enc; enc = undefined; }
+    const b = Buffer.isBuffer(chunk) ? chunk
+      : (chunk instanceof Uint8Array ? Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+        : Buffer.from(String(chunk)));
+    this._write(b, enc, (err) => {
+      if (err) { this.emit('error', err); if (cb) cb(err); return; }
+      if (cb) cb();
+    });
+    return true;
+  }
+  end(chunk, enc, cb) {
+    if (typeof chunk === 'function') { cb = chunk; chunk = enc = undefined; }
+    else if (typeof enc === 'function') { cb = enc; enc = undefined; }
+    if (this.writableEnded) {
+      if (typeof cb === 'function') {
+        queueMicrotask(() => cb(Object.assign(
+          new Error('end() called after stream was finished'),
+          { code: 'ERR_STREAM_ALREADY_FINISHED' })));
+      }
+      return this;
+    }
+    const finish = () => {
+      this._final((err) => {
+        if (err) { this.emit('error', err); if (cb) cb(err); return; }
+        this.writableEnded = true;
+        if (cb) queueMicrotask(cb);
+        queueMicrotask(() => this.emit('finish'));
+      });
+    };
+    if (chunk != null) this.write(chunk, enc, finish);
+    else finish();
+    return this;
+  }
+}
+
 function pipeline(...args) {
   const cb = typeof args[args.length - 1] === 'function' ? args.pop() : null;
   let cur = args[0];
@@ -340,6 +402,7 @@ Stream.Readable = Readable;
 Stream.Writable = Writable;
 Stream.PassThrough = PassThrough;
 Stream.Transform = Transform;
+Stream.Duplex = Duplex;
 Stream.pipeline = pipeline;
 Stream.finished = finished;
 Stream.consumers = consumers;

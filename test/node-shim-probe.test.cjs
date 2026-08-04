@@ -85,3 +85,32 @@ test('probe ON: a SEALED module (vm) still throws its branded wall, undisturbed'
   assert.notStrictEqual(r.status, 0);
   assert.match(r.stderr, /node-shim: vm\.SourceTextModule not implemented/);
 });
+
+// Task 4/5: process.__handlers and process.__sigWired were "armed" in
+// reachability.json, but audited (Task 5) as CLASS A — probe self-noise, not
+// a bundle-desired API. Root cause: on/once/__wireSignal lazy-init those
+// fields with `this.__handlers ??= []` / `this.__sigWired ??= new Map()`; the
+// FIRST such read races the probe's `!(prop in target)` check (the property
+// genuinely isn't present yet), so the probe — correctly, by its own
+// observe-only contract — logged it, with no way to tell "the shim's own
+// method" from "bundle code" apart. Task 5's fix: pre-declare both as
+// present-from-the-start own properties in process.cjs's module.exports
+// object literal, so they're never observed missing. This is NOT a stub/
+// behavior change (an always-empty `[]` / an always-`undefined` field is
+// exactly what existed transiently before the first lazy-init anyway) — it
+// only changes WHEN the property starts existing, which is invisible to
+// every consumer except this probe.
+test('probe ON: process.__handlers / process.__sigWired lazy-init is NOT logged as a gap (Class A self-noise, fixed)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const f = writeProg(`
+    process.on('SIGTERM', () => {});      // exercises __handlers AND __sigWired (on -> __wireSignal)
+    process.once('exit', () => {});       // __handlers again, on a signal-less name
+    process.removeAllListeners('warning'); // exercises the __sigWired?.keys() read too
+    console.log('done');
+  `);
+  const r = runLoader(f, [], { env: { CLODE_SHIM_PROBE: '1' } });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.match(r.stdout, /done/);
+  assert.doesNotMatch(r.stderr, /\[probe\] process\.__handlers/);
+  assert.doesNotMatch(r.stderr, /\[probe\] process\.__sigWired/);
+});

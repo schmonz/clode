@@ -43,4 +43,28 @@ if (B && !B.__clodeBase64Url) {
   };
 }
 
+// buffer.isUtf8(input) (Task 5 gap, Class C): armed by the probe (reachability.json)
+// but the string "isUtf8" does not appear anywhere in the extracted cli.js text —
+// this is a property GET from some OTHER Bun-compiled module block bundled into
+// the native binary (an ext-dep loaded at runtime, not entrypoints/cli.js), so
+// which caller can't be pinned by grepping the entry alone. Implemented for real
+// regardless, per Node's contract: input is a Buffer/TypedArray/ArrayBuffer/
+// DataView; returns true iff its bytes are valid UTF-8. Neither feross `buffer`
+// nor internal/buffer-lite.cjs (the two possible `impl`s) define this, so it's
+// added here, once, guarded so re-require never double-wraps (same idiom as the
+// base64url patch above). TextDecoder('utf-8',{fatal:true}) IS the WHATWG UTF-8
+// decode algorithm — it throws iff the input is not valid UTF-8, which is exactly
+// Node's isUtf8 contract (not an approximation).
+if (impl && typeof impl.isUtf8 !== 'function') {
+  impl.isUtf8 = function isUtf8(input) {
+    let view;
+    if (impl.Buffer && impl.Buffer.isBuffer(input)) view = input;
+    else if (input instanceof ArrayBuffer) view = new Uint8Array(input);
+    else if (ArrayBuffer.isView(input)) view = new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+    else throw new TypeError('The "input" argument must be an instance of ArrayBuffer, Buffer, TypedArray, or DataView');
+    try { new TextDecoder('utf-8', { fatal: true }).decode(view); return true; }
+    catch { return false; }
+  };
+}
+
 module.exports = impl;
