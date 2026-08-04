@@ -60,11 +60,23 @@ const LEGS = [
   // — darwin ships exactly ONE artifact, clode-<ver>-macos (user pref
   // 2026-07-15). i386/ppc were never standalone (no-exec) — universal-only.
   { leg: 'darwin-arm64', os: 'macos-14', 'ci-os': 'macos-26', publish: false, pack: true, ci: true, floor: '11.0',
-    // The primary rig, driven continuously (memory: this is where the daily-drive
-    // fidelity work happens, incl. the interactive TUI/live-render suite gated
-    // behind CLODE_LIVE_RENDER=1). Two rows remain open — recorded, not hidden.
-    fidelity: { tier: 2, date: '2026-08-03', bundle: '2.1.218', how: 'primary-darwin',
-                note: 'open: F3 stale frames, F4 iTerm2 trust-prompt freeze' } },
+    // DEMOTED to tier 0 (2026-08-04 audit): tier 2 was asserted, not measured. A
+    // real run of the agentic fidelity suite here (test/fidelity/RESULTS.md rows
+    // below) found floor row B4 RED — Write/Grep tool round-trips both hung to
+    // their 120s SIGKILL. Per the floor-row rule (A1,B1,B4,C1,D1,G7 must ALL be
+    // green for tier 1), one red floor row means tier 1 is not defensible either.
+    // The run was confounded two ways — worth fixing before re-claiming a tier:
+    // (1) build/tjs/tjs here is dated 2026-07-24, 11 days / 34 shim+engine commits
+    // stale vs 2026-08-04 HEAD, several of them hang fixes (a06b5ea fs.watchFile
+    // poll hang, 865e98f orphaned-grandchild hang, 0d22c6a uncaught-timer routing);
+    // (2) the test env is non-hermetic (`{...process.env}`, no HOME override), so
+    // the child inherited THIS session's real ~/.claude.json (lock contention,
+    // visible in the Edit round-trip's --debug-to-stderr capture) and even
+    // triggered a live git clone of github.com/obra/superpowers.git mid-test.
+    // Both confounds are recorded, not resolved — a clean re-run needs a FRESH
+    // engine build and an isolated $HOME before this can honestly move off tier 0.
+    fidelity: { tier: 0, date: '2026-08-04', bundle: '2.1.218', how: 'primary-darwin',
+                note: 'floor row B4 red (Write/Grep hung 120s); stale engine + non-hermetic test $HOME confound the result — see RESULTS.md' } },
   // glibc Linux: a CI-only CANARY (ciOnly:true → built in CI, filtered OUT of the
   // release tier; NB `smoke` is a different, taken field — the qemu-user smoke
   // MODE on the musl legs). The published Linux artifacts are musl-static
@@ -261,7 +273,15 @@ const LEGS = [
     'ci-guest-version': '10.1',
     'guest-packages': 'cmake gmake nodejs git-base bash', floor: '10.1',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true,  // cpa, KVM
-    fidelity: { tier: 1, date: '2026-07-25', bundle: '2.1.218', how: 'netbsd-ssh-vm' } },
+    // DEMOTED to tier 0 (2026-08-04 audit): the amd64 rung was explicitly
+    // ABANDONED for local fidelity work on 2026-07-06 in favor of aarch64
+    // (spike/quickjs/results/gate3-netbsd-aarch64.md: "This target replaced
+    // the planned NetBSD/amd64 rung ... the abandoned amd64/TCG rung needed
+    // ~25 minutes just to install and never got through pkg_add"). No
+    // RESULTS.md row, no spike scorecard, no dated fidelity-recipe evidence
+    // exists for netbsd-amd64 beyond ordinary green CI build+smoke (the same
+    // evidence every tier-0 publisher has).
+    fidelity: { tier: 0, note: 'amd64 rung abandoned 2026-07-06 in favor of arm64; never driven' } },
   { leg: 'freebsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'freebsd',
     // PROVEN floor (probe run 29157832721, honest in-guest build): 14.0 is
     // the oldest whose pkg repos still exist — 12.x/13.x died with their
@@ -314,7 +334,20 @@ const LEGS = [
   { leg: 'netbsd-arm64', os: 'ubuntu-latest', 'guest-platform': 'netbsd', 'guest-arch': 'arm64',
     'guest-version': '10.1', 'guest-packages': 'cmake gmake nodejs git-base bash', floor: '10.1',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 300, 'soft-fail': true,  // cpa, TCG
-    fidelity: { tier: 1, date: '2026-07-25', bundle: '2.1.218', how: 'netbsd-ssh-vm' } },
+    // CORRECTED 2026-08-04 audit: date/bundle were wrong (2.1.218 did not exist
+    // on 2026-07-25 as originally claimed — first appears 2026-07-27, 91e8310).
+    // Real dated evidence is the phase-3 NetBSD/evbarm-aarch64 qemu+HVF spike,
+    // 2026-07-09, bundle 2.1.204 exactly (commit b625bdb/1b6881c;
+    // spike/quickjs/results/phase3-netbsd-aarch64-scorecard.md): mock PONG -p
+    // round-trip PASS + agentic Bash tool round-trip PASS (tool_result stdout
+    // inline, is_error false, after a real portability wall — Bash tool shell
+    // discovery needs bash/zsh by name, fixed with pkgsrc bash). 'how' is the
+    // closest PLATFORMS.md rig id (netbsd-ssh-vm) though this specific run
+    // predates that persistent-VM runbook (2026-07-23) and used an ephemeral
+    // local qemu HVF guest instead — same target OS/arch, different rig plumbing.
+    // See test/fidelity/RESULTS.md rows G7, B1.
+    fidelity: { tier: 1, date: '2026-07-09', bundle: '2.1.204', how: 'netbsd-ssh-vm',
+                note: 'phase-3 aarch64 spike scorecard, not the later SSH-VM runbook; RESULTS.md G7+B1' } },
   { leg: 'freebsd-arm64', os: 'ubuntu-latest', 'guest-platform': 'freebsd', 'guest-arch': 'arm64',
     'guest-version': '14.4', 'guest-packages': 'cmake gmake node git bash', floor: '14.4',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 300, 'soft-fail': true,  // cpa, TCG
@@ -364,8 +397,17 @@ const LEGS = [
   { leg: 'netbsd-sparc', os: 'ubuntu-latest', 'guest-platform': 'qemu-netbsd-sparc', 'guest-arch': 'sparc',
     floor: '10.1', 'guest-version': '10.1', publish: true, ci: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off',
-    fidelity: { tier: 1, date: '2026-07-09', bundle: '2.1.218', how: 'sparc-vm',
-                note: '32-bit BE; canonical-LE bytecode proof' } },
+    // CORRECTED 2026-08-04 audit: bundle was wrong (2.1.218 did not exist on
+    // 2026-07-09 as originally claimed — first appears 2026-07-27, 91e8310;
+    // also the original note claimed "canonical-LE bytecode proof", but
+    // canonical-LE didn't land until 2026-07-11/12, AFTER this run — this
+    // evidence predates it and used a different bytecode-checksum workaround
+    // (host-esbuild + in-guest native tjsc regen). Real dated evidence: commit
+    // 75bbf1c "S2/S4/S5 ALL GREEN" — bundle 2.1.204 exactly, mock PONG -p
+    // round-trip (real POST /v1/messages + literal PONG on the sun4m guest
+    // console, 66s e2e under TCG). See test/fidelity/RESULTS.md row G7.
+    fidelity: { tier: 1, date: '2026-07-09', bundle: '2.1.204', how: 'sparc-vm',
+                note: '32-bit BE; mock PONG -p round-trip (RESULTS.md G7); predates canonical-LE' } },
   // ---- cross-toolchain tier-2 (2026-07-14): cross-compiled on the x64 runner
   // inside a stock Debian image (cross-apt names the gcc-<triple>), then the
   // shared cross-fuse (tier2:true) emits a clode BUILDER against the foreign
