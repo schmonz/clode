@@ -19,10 +19,43 @@ Verdicts: `pass` | `fail` | `open` (driven, divergence recorded, not yet fixed).
 | 2026-07-09 | netbsd-sparc | G7 | quaude | 2.1.204 | pass | mock PONG -p round-trip: real POST /v1/messages on host mock wire log + literal PONG on 32-bit BE sun4m guest console, 66s e2e under TCG (commit 75bbf1c, backfilled 2026-08-04) |
 | 2026-07-09 | netbsd-arm64 | G7 | quaude | 2.1.204 | pass | mock PONG -p round-trip, port A (spike/quickjs/results/phase3-netbsd-aarch64-scorecard.md probe 5, evbarm-aarch64 qemu+HVF guest; commit b625bdb/1b6881c, backfilled 2026-08-04) |
 | 2026-07-09 | netbsd-arm64 | B1 | quaude | 2.1.204 | pass | agentic Bash tool round-trip: tool_use dispatched, tool_result content carries real stdout inline, is_error false (run 2, after fixing shell-discovery wall — base NetBSD ships no bash/zsh; pkgsrc bash added). Same scorecard, probes 6-7, backfilled 2026-08-04 |
-| 2026-08-04 | darwin-arm64 | H3 | quaude | 2.1.218 | pass | agentic --continue restores session context, 20.3s (test/fidelity/agentic-tools.test.cjs) |
-| 2026-08-04 | darwin-arm64 | H7 | quaude | 2.1.218 | pass | Workflow ran to completion, 15.9s (test/fidelity/agentic-workflow-complete.test.cjs) |
-| 2026-08-04 | darwin-arm64 | B4 | quaude | 2.1.218 | fail | Write + Grep tool round-trips both SIGKILLed at their 120s timeout, empty stderr (test/fidelity/agentic-tools.test.cjs). ARTIFACT: build/tjs/tjs here is dated 2026-07-24 (11 days / 34 shim+engine commits behind HEAD, incl. hang fixes a06b5ea/865e98f/0d22c6a) AND the test env is non-hermetic (no HOME isolation) — product-vs-harness undetermined, needs a clean fresh-build re-run |
-| 2026-08-04 | darwin-arm64 | H1 | quaude | 2.1.218 | fail | multi-turn 2-tool loop SIGKILLed at 120s, empty stderr (test/fidelity/agentic-tools.test.cjs). Same stale-engine + non-hermetic-$HOME artifact as the B4 row above |
-| 2026-08-04 | darwin-arm64 | H4 | quaude | 2.1.218 | fail | PreToolUse-hook-denies-update turn SIGKILLed at 120s, empty stderr (test/fidelity/agentic-tools.test.cjs). Same stale-engine + non-hermetic-$HOME artifact |
-| 2026-08-04 | darwin-arm64 | H6 | quaude | 2.1.218 | fail | naude (real node, same contaminated env) exited 0; quaude did not (105s to its 90s-budget kill) (test/fidelity/agentic-subagent-diff.test.cjs). Engine-specific signal under identical env contamination — not fully explained by the env alone; genuinely undetermined product-vs-harness, warrants a clean re-run before calling it a regression |
-| 2026-08-04 | darwin-arm64 | F2 | quaude | 2.1.218 | fail | Bash round-trip SIGKILLed at 120s (empty stderr); Edit round-trip SIGKILLed at 120s WITH captured --debug-to-stderr evidence of non-hermetic startup: real ~/.claude.json lock contention with this very live authoring session, plus a live git clone of github.com/obra/superpowers.git mid-test (test/node-shim-agentic.test.cjs). HARNESS ARTIFACT: the test's env spread (`{...process.env}`) does not isolate HOME, so it ran against a real, actively-mutating operator profile, not a clean fixture |
+
+## Attempted, not evidence
+
+This section exists so a future reader knows a darwin-arm64 drive was
+attempted and why its results were discarded, rather than re-running it and
+re-discovering the same contamination.
+
+On 2026-08-04 the agentic fidelity suite (`test/fidelity/agentic-tools.test.cjs`,
+`test/fidelity/agentic-subagent-diff.test.cjs`,
+`test/fidelity/agentic-workflow-complete.test.cjs`,
+`test/node-shim-agentic.test.cjs`) was run against darwin-arm64, bundle
+2.1.218, quaude. The run produced 10 tests: 2 pass (H3 `--continue`, H7
+Workflow-completion), 7 fail (B4 Write/Grep, H1 multi-turn, H4 PreToolUse
+hook, H6 subagent/Task dispatch, F2 Bash/Edit round-trip), 1 skip (no
+`CLODE_DARWIN_PROVIDER_BIN`).
+
+**The run was contaminated two ways and is not usable as evidence in either
+direction:**
+
+- **Stale engine.** `build/tjs/tjs` is dated 2026-07-24 — 40 commits behind
+  HEAD on `libexec/node-shim` + `scripts/build-tjs.mjs` at the time of the
+  run, including hang-class fixes (`a06b5ea` fs.watchFile poll hang,
+  `865e98f` orphaned-grandchild-stdio-reader hang, `0d22c6a` uncaught
+  timer/rejection routing).
+- **Non-hermetic `$HOME`.** The tests' env construction spreads
+  `{...process.env}` with no HOME override, so the staged child processes ran
+  against THIS session's real, actively-mutating operator profile rather than
+  a clean fixture. Captured `--debug-to-stderr` output from the Edit
+  round-trip test shows real `~/.claude.json` lock contention
+  (`Failed to save config with lock: Error: Lock file is already being
+  held`, twice) and a live network git-clone of
+  `github.com/obra/superpowers.git` mid-test, triggered by the bundle's
+  plugin-autoupdate feature reading my real installed-plugins config.
+  `~/.claude.json`'s mtime (02:30 that day) confirms the run really did write
+  to the live profile, not a copy.
+
+No tier claim may cite this run, for the passes or the failures. Fixing the
+harness (isolate `$HOME`, rebuild a fresh engine before driving) is phase-3
+work; until then, a clean darwin-arm64 floor drive has simply never been
+done.

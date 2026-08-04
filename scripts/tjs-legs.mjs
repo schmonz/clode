@@ -60,23 +60,18 @@ const LEGS = [
   // — darwin ships exactly ONE artifact, clode-<ver>-macos (user pref
   // 2026-07-15). i386/ppc were never standalone (no-exec) — universal-only.
   { leg: 'darwin-arm64', os: 'macos-14', 'ci-os': 'macos-26', publish: false, pack: true, ci: true, floor: '11.0',
-    // DEMOTED to tier 0 (2026-08-04 audit): tier 2 was asserted, not measured. A
-    // real run of the agentic fidelity suite here (test/fidelity/RESULTS.md rows
-    // below) found floor row B4 RED — Write/Grep tool round-trips both hung to
-    // their 120s SIGKILL. Per the floor-row rule (A1,B1,B4,C1,D1,G7 must ALL be
-    // green for tier 1), one red floor row means tier 1 is not defensible either.
-    // The run was confounded two ways — worth fixing before re-claiming a tier:
-    // (1) build/tjs/tjs here is dated 2026-07-24, 11 days / 34 shim+engine commits
-    // stale vs 2026-08-04 HEAD, several of them hang fixes (a06b5ea fs.watchFile
-    // poll hang, 865e98f orphaned-grandchild hang, 0d22c6a uncaught-timer routing);
-    // (2) the test env is non-hermetic (`{...process.env}`, no HOME override), so
-    // the child inherited THIS session's real ~/.claude.json (lock contention,
-    // visible in the Edit round-trip's --debug-to-stderr capture) and even
-    // triggered a live git clone of github.com/obra/superpowers.git mid-test.
-    // Both confounds are recorded, not resolved — a clean re-run needs a FRESH
-    // engine build and an isolated $HOME before this can honestly move off tier 0.
-    fidelity: { tier: 0, date: '2026-08-04', bundle: '2.1.218', how: 'primary-darwin',
-                note: 'floor row B4 red (Write/Grep hung 120s); stale engine + non-hermetic test $HOME confound the result — see RESULTS.md' } },
+    // DEMOTED to tier 0 (2026-08-04 audit): tier 2 was asserted, not measured.
+    // A 2026-08-04 attempt to drive the agentic fidelity suite here was
+    // CONTAMINATED two ways (stale build/tjs/tjs — 40 commits behind HEAD on
+    // libexec/node-shim + scripts/build-tjs.mjs, several hang-class fixes among
+    // them — and a non-hermetic test $HOME that mutated this live operator
+    // profile mid-run) and was discarded as non-evidence in EITHER direction —
+    // see "Attempted, not evidence" in test/fidelity/RESULTS.md; no row there
+    // is a pass or a fail for darwin-arm64. The honest claim is not "a floor row
+    // is red" — it's that no clean floor drive of darwin-arm64 exists yet, so
+    // tier 0 is correct until one is done with an isolated $HOME and a fresh
+    // engine build.
+    fidelity: { tier: 0, note: 'no clean floor drive exists; the 2026-08-04 attempt was discarded as contaminated (stale engine + non-hermetic $HOME) — see RESULTS.md "Attempted, not evidence"' } },
   // glibc Linux: a CI-only CANARY (ciOnly:true → built in CI, filtered OUT of the
   // release tier; NB `smoke` is a different, taken field — the qemu-user smoke
   // MODE on the musl legs). The published Linux artifacts are musl-static
