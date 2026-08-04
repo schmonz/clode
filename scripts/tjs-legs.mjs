@@ -352,7 +352,7 @@ const LEGS = [
     'guest-version': '10.1', 'guest-packages': 'cmake gmake nodejs git-base bash', floor: '10.1',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 300, 'soft-fail': true,  // cpa, TCG
     // CORRECTED 2026-08-04 audit: date/bundle were wrong (2.1.218 did not exist
-    // on 2026-07-25 as originally claimed — first appears 2026-07-23, 742db01).
+    // on 2026-07-25 as originally claimed — first appears 2026-07-23, 4db0a21).
     // Real dated evidence is the phase-3 NetBSD/evbarm-aarch64 qemu+HVF spike,
     // 2026-07-09, bundle 2.1.204 exactly (commit b625bdb/1b6881c;
     // spike/quickjs/results/phase3-netbsd-aarch64-scorecard.md): mock PONG -p
@@ -418,7 +418,7 @@ const LEGS = [
     floor: '10.1', 'guest-version': '10.1', publish: true, ci: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off',
     // CORRECTED 2026-08-04 audit: bundle was wrong (2.1.218 did not exist on
-    // 2026-07-09 as originally claimed — first appears 2026-07-23, 742db01;
+    // 2026-07-09 as originally claimed — first appears 2026-07-23, 4db0a21;
     // also the original note claimed "canonical-LE bytecode proof", but
     // canonical-LE didn't land until 2026-07-11/12, AFTER this run — this
     // evidence predates it and used a different bytecode-checksum workaround

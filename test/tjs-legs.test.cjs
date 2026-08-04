@@ -612,3 +612,89 @@ test('cosmo declares its run-targets explicitly — one .com, many hosts', () =>
     assert.match(rt, /^cosmo-[a-z0-9]+-[a-z0-9-]+$/, `${rt}: expected cosmo-<os>-<arch>`);
   }
 });
+
+// Mirrors the existing golden published-leg list: a tier change must be a
+// deliberate, reviewable edit and never silent drift. Generated with:
+//   node --input-type=module -e "import {publishedRunTargets, fidelityFor} \
+//     from './scripts/tjs-legs.mjs'; const m={}; for(const rt of \
+//     publishedRunTargets()) m[rt]=fidelityFor(rt).tier; \
+//     console.log(JSON.stringify(m,null,4));"
+// As of 2026-08-04 every one of the 47 published run-targets is tier 0 (Tier
+// 1 is now STRICT -- all six FLOOR_ROWS green -- and no run-target clears
+// that bar yet). That is the true state, not a placeholder.
+test('golden ledger: the full run-target -> tier map', () => {
+  const ledger = Object.fromEntries(publishedRunTargets().map((rt) => [rt, fidelityFor(rt).tier]));
+  assert.deepStrictEqual(ledger, {
+    'cosmo-freebsd-x86-64': 0,
+    'cosmo-linux-aarch64': 0,
+    'cosmo-linux-x86-64': 0,
+    'cosmo-macos-aarch64': 0,
+    'cosmo-macos-x86-64': 0,
+    'cosmo-netbsd-x86-64': 0,
+    'cosmo-openbsd-x86-64': 0,
+    'cosmo-windows-x86-64': 0,
+    'darwin-arm64': 0,
+    'darwin-ppc': 0,
+    'darwin-x64': 0,
+    'darwin-x86': 0,
+    'dragonflybsd-amd64': 0,
+    'freebsd-amd64': 0,
+    'freebsd-arm64': 0,
+    'haiku-x64': 0,
+    'linux-arm64-musl': 0,
+    'linux-armv7-musl': 0,
+    'linux-loongarch64-musl': 0,
+    'linux-ppc64le-musl': 0,
+    'linux-riscv64-musl': 0,
+    'linux-s390x-musl': 0,
+    'linux-x64-musl': 0,
+    'linux-x86-musl': 0,
+    'midnightbsd-amd64': 0,
+    'netbsd-alpha': 0,
+    'netbsd-amd64': 0,
+    'netbsd-arm64': 0,
+    'netbsd-earmv7hf': 0,
+    'netbsd-hppa': 0,
+    'netbsd-i386': 0,
+    'netbsd-m68k': 0,
+    'netbsd-macppc': 0,
+    'netbsd-mips64eb': 0,
+    'netbsd-pmax': 0,
+    'netbsd-riscv64': 0,
+    'netbsd-sgimips': 0,
+    'netbsd-sh3el': 0,
+    'netbsd-sparc': 0,
+    'netbsd-sparc64': 0,
+    'omnios-amd64': 0,
+    'openbsd-amd64': 0,
+    'openbsd-arm64': 0,
+    'openindiana-amd64': 0,
+    'solaris-amd64': 0,
+    'windows-arm64': 0,
+    'windows-x64': 0,
+  });
+});
+
+// The ledger's own completeness. Without this, a new published artifact could
+// ship with no declaration and no test would notice -- which is the silence
+// this whole phase exists to end. DARWIN_SLICES are publish:false legs whose
+// run-targets ship inside darwin-universal, so they are declared but never
+// individually "published" by legsFor('release') -- carve them out rather
+// than requiring published.has(rt) for them.
+test('every declared run-target is actually published, and vice versa', () => {
+  const declared = new Set();
+  for (const l of legsFor('release')) {
+    if (!l.fidelity) continue;
+    for (const rt of runTargetsFor(l)) declared.add(rt);
+  }
+  const published = new Set(publishedRunTargets());
+  for (const rt of published) {
+    assert.ok(declared.has(rt), `${rt} is published but undeclared`);
+  }
+  for (const rt of declared) {
+    if (!published.has(rt)) {
+      assert.ok(DARWIN_SLICES.includes(rt),
+        `${rt} is declared but not published — stale declaration?`);
+    }
+  }
+});
