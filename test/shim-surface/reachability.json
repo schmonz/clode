@@ -1,0 +1,155 @@
+{
+  "bundle": "2.1.218",
+  "date": "2026-08-04",
+  "generated_by": "scripts/probe-run.mjs",
+  "golden_measured_on": "2026-08-01",
+  "probe_scope_limitation": "CLODE_SHIM_PROBE (libexec/node-shim/internal/probe.cjs) only wraps node:* builtins loaded through loader.cjs's loadBuiltin() — libexec/bun-shim.cjs (the Bun.* global and bun: modules) is NOT instrumented. layer1_bun_props_missing/layer1_bun_modules_missing entries (Bun.WebView, bun:jsc) can therefore NEVER be armed by ANY corpus under this mechanism, regardless of whether the bundle reaches them — this is a probe-design gap, not a corpus-coverage gap. Only layer2_node_apis_missing entries are structurally observable here.",
+  "corpora": [
+    {
+      "id": "apicheck",
+      "status": "ran",
+      "reason": null,
+      "exitCode": 0,
+      "itemsRun": 5,
+      "isolation": {
+        "home": "/var/folders/y5/k8bh4xsj75g4j1n631f2gqz80000gp/T/probe-home-FLvspx",
+        "realHome": "/Users/schmonz",
+        "homeDiffersFromReal": true
+      },
+      "note": "p-plain/p-arith items in apicheck's corpus make REAL network calls with REAL subscription auth (no ANTHROPIC_BASE_URL override in apicheck.mjs) — by design, per task brief (CLAUDE_CODE_BRIDGE_SESSION_ID stripped specifically so this exercises real auth, not the bridge). HOME/CLODE_DEPS/CLODE_CACHE are isolated; Keychain-backed credential lookup is NOT scoped by HOME and may still succeed against the operator's real account.",
+      "hitCount": 247
+    },
+    {
+      "id": "agentic",
+      "status": "ran",
+      "files": [
+        "test/fidelity/agentic-mcp-ws.test.cjs",
+        "test/fidelity/agentic-subagent-diff.test.cjs",
+        "test/fidelity/agentic-tools.test.cjs",
+        "test/fidelity/agentic-workflow-complete.test.cjs",
+        "test/node-shim-agentic.test.cjs"
+      ],
+      "exitCode": 1,
+      "testSummary": null,
+      "isolation": {
+        "home": "/var/folders/y5/k8bh4xsj75g4j1n631f2gqz80000gp/T/probe-home-sTml3k",
+        "realHome": "/Users/schmonz",
+        "homeDiffersFromReal": true,
+        "claudeJsonWrittenToIsolatedHome": true
+      },
+      "note": "agentic-*.test.cjs and node-shim-agentic.test.cjs spread {...process.env} directly, so isolated HOME/CLODE_DEPS/CLODE_CACHE set on THIS process propagate straight through; claudeJsonWrittenToIsolatedHome is the positive isolation proof.",
+      "hitCount": 1635
+    },
+    {
+      "id": "interactive",
+      "status": "ran",
+      "files": [
+        "test/fidelity/interactive-live-turn.test.cjs",
+        "test/fidelity/interactive-render-diff.test.cjs",
+        "test/fidelity/interactive-resize-diff.test.cjs"
+      ],
+      "exitCode": 0,
+      "testSummary": null,
+      "isolation": {
+        "home": "/var/folders/y5/k8bh4xsj75g4j1n631f2gqz80000gp/T/probe-home-3H8OVM",
+        "realHome": "/Users/schmonz",
+        "homeDiffersFromReal": true,
+        "claudeJsonWrittenToIsolatedHome": null
+      },
+      "note": "interactive-live-turn.test.cjs self-skips (CLODE_LIVE_ONLINE not set) because it structurally cannot be isolated (runs against the real HOME by design). interactive-render-diff/resize-diff build a fresh quaude via `clode build` from whatever native `claude` is on PATH — on THIS box that is a real installed provider, version may differ from the golden-measured bundle (2.1.218); read armed hits from this corpus with that in mind. Both isolate via test/e2e.cjs sandbox()+seedClaudeProfile(), independent of this runner's outer HOME override.",
+      "hitCount": 18
+    }
+  ],
+  "armed": {
+    "stream.Duplex": [
+      "agentic",
+      "apicheck",
+      "interactive"
+    ],
+    "buffer.isUtf8": [
+      "agentic",
+      "apicheck",
+      "interactive"
+    ],
+    "process.getBuiltinModule": [
+      "agentic",
+      "apicheck",
+      "interactive"
+    ],
+    "process.reallyExit": [
+      "agentic",
+      "apicheck",
+      "interactive"
+    ],
+    "process.type": [
+      "agentic",
+      "apicheck",
+      "interactive"
+    ],
+    "process.__nwjs": [
+      "agentic",
+      "apicheck",
+      "interactive"
+    ],
+    "process.__handlers": [
+      "agentic",
+      "apicheck",
+      "interactive"
+    ],
+    "process.ppid": [
+      "agentic",
+      "apicheck"
+    ],
+    "process.__sigWired": [
+      "agentic",
+      "apicheck"
+    ],
+    "process.chdir": [
+      "agentic",
+      "apicheck"
+    ],
+    "process.constrainedMemory": [
+      "agentic",
+      "apicheck"
+    ],
+    "process.getuid": [
+      "agentic",
+      "apicheck"
+    ]
+  },
+  "unarmed": [
+    "Bun.WebView",
+    "bun:jsc",
+    "net.createServer",
+    "http.request",
+    "crypto.X509Certificate",
+    "https.request",
+    "crypto.createPrivateKey",
+    "crypto.createSign",
+    "crypto.createVerify",
+    "crypto.pbkdf2Sync",
+    "crypto.pbkdf2",
+    "crypto.sign",
+    "crypto.createPublicKey",
+    "child_process.fork",
+    "https.createServer",
+    "perf_hooks.monitorEventLoopDelay",
+    "v8.getHeapSpaceStatistics",
+    "v8.getHeapStatistics",
+    "child_process.ChildProcess",
+    "crypto.KeyObject"
+  ],
+  "live_session": {
+    "automatable": false,
+    "reason": "requires a real logged-in interactive session; cannot be scripted/isolated the way the other corpora are",
+    "human_command": "CLODE_SHIM_PROBE=1 <path-to-a-built-quaude> 2> /tmp/probe-live.log",
+    "human_followup": [
+      "Do a human turn: ask a question, run a Bash tool call, edit a file, use a slash command, then /quit.",
+      "grep '^\\[probe\\]' /tmp/probe-live.log | sort -u",
+      "Merge the resulting lines into this file's \"armed\" map under corpus id \"live-session\" (each unique",
+      "\"<ns>.<prop>\" or \"<ns>.<prop> (in)\" line -> append \"live-session\" to its corpus array, creating the key",
+      "if new), then move it out of \"unarmed\" if it was there. This is the only corpus that can reach the",
+      "credentialed interactive path (RECIPE.md G6) end to end."
+    ]
+  }
+}
