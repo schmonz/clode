@@ -60,18 +60,26 @@ const LEGS = [
   // — darwin ships exactly ONE artifact, clode-<ver>-macos (user pref
   // 2026-07-15). i386/ppc were never standalone (no-exec) — universal-only.
   { leg: 'darwin-arm64', os: 'macos-14', 'ci-os': 'macos-26', publish: false, pack: true, ci: true, floor: '11.0',
-    // DEMOTED to tier 0 (2026-08-04 audit): tier 2 was asserted, not measured.
-    // A 2026-08-04 attempt to drive the agentic fidelity suite here was
-    // CONTAMINATED two ways (stale build/tjs/tjs — 40 commits behind HEAD on
-    // libexec/node-shim + scripts/build-tjs.mjs, several hang-class fixes among
-    // them — and a non-hermetic test $HOME that mutated this live operator
-    // profile mid-run) and was discarded as non-evidence in EITHER direction —
-    // see "Attempted, not evidence" in test/fidelity/RESULTS.md; no row there
-    // is a pass or a fail for darwin-arm64. The honest claim is not "a floor row
-    // is red" — it's that no clean floor drive of darwin-arm64 exists yet, so
-    // tier 0 is correct until one is done with an isolated $HOME and a fresh
-    // engine build.
-    fidelity: { tier: 0, note: 'no clean floor drive exists; the 2026-08-04 attempt was discarded as contaminated (stale engine + non-hermetic $HOME) — see RESULTS.md "Attempted, not evidence"' } },
+    // CORRECTED 2026-08-04 audit (second pass): the prior "no clean floor
+    // drive exists" note over-corrected. Discarding the CONTAMINATED
+    // 2026-08-04 run (stale engine, non-hermetic $HOME — still discarded, see
+    // RESULTS.md "Attempted, not evidence") was right, but clean evidence from
+    // 2026-07-29..31 predates that bad run and is not erased by it:
+    // spike/quickjs/results/cosmo-fidelity-run.md sec.3 (2026-07-29) ran the
+    // native-tjs CONTROL (build/tjs/macos-26-arm64/tjs, bundle 2.1.218) through
+    // 7/7 fidelity scenarios (Write, Grep, Bash-inline, 2-tool loop,
+    // PreToolUse-hook, --continue, Workflow) — ALL PASS. BACKLOG.md's
+    // "FULL AGENTIC FIDELITY SUITE GREEN ON COSMO (2026-07-30)" entry adds
+    // Edit/FileHandle.chmod and Task/subagent-dispatch "at parity with native
+    // tjs" (i.e. native passed too). Floor-row coverage from this evidence:
+    // B1 (Bash-inline) YES, B4 (Write+Grep+Bash+Edit, ALL FOUR) YES, C1
+    // (Write) YES, G7 (any -p mock turn reaching a final response) YES; A1
+    // (relaunch persistence) and D1 (/quit) are NOT covered by any of this —
+    // still open. tier 2 stays unclaimed: F3/F4 remain open per this leg's
+    // long-running daily-drive notes, so the FULL recipe is not backed, only
+    // the floor + a wide non-floor slice. See test/fidelity/RESULTS.md.
+    fidelity: { tier: 1, date: '2026-07-30', bundle: '2.1.218', how: 'primary-darwin',
+                note: 'floor rows B1/B4/C1/G7 green (2026-07-29/30); A1/D1 not exercised; F3/F4 still open so no tier-2 claim; the 2026-08-04 attempt was separately discarded as contaminated' } },
   // glibc Linux: a CI-only CANARY (ciOnly:true → built in CI, filtered OUT of the
   // release tier; NB `smoke` is a different, taken field — the qemu-user smoke
   // MODE on the musl legs). The published Linux artifacts are musl-static
@@ -131,9 +139,21 @@ const LEGS = [
     'cross-dockerfile': 'ci/osxcross-darwin', 'cross-file': 'scripts/darwin-x64.toolchain.cmake',
     'macos-min': '10.6', 'macos-arch': 'x86_64', floor: '10.6', 'no-exec': true,
     wasm: 'off', mimalloc: 'off', ffi: 'off',
-    // No-exec cross-build: engine-only proof (real Mavericks fuse, memory
-    // darwin-x64-floor-walk), never driven as a standalone run-target.
-    fidelity: { tier: 0 } },
+    // CORRECTED 2026-08-04 audit: this used to say "never driven as a
+    // standalone run-target" — factually false. Commit 57fb352 (2026-07-11,
+    // "darwin-x64 floor proven on real Mavericks hardware"): on a real
+    // Mavericks 10.9.5 box (Darwin 13.4.0, x86_64) the builder fetched the
+    // provider over mbedtls TLS and fused a 29MB quaude ON-BOX (bundle
+    // 2.1.179), PONG + attest green, quaude answers --version. `PONG` in
+    // libexec/clode-fuse.cjs is exactly RECIPE G7 (`-p 'say PONG'` against a
+    // mock, exit 0 + response matched + POST verified) — the same evidence
+    // class that earns netbsd-sparc its tier 1 under TCG emulation, here on
+    // REAL hardware. Only G7 was exercised, though: no A1/B1/B4/C1/D1 evidence
+    // exists for this run-target (this leg is no-exec off the darwin-universal
+    // path — the Mavericks box, not the ubuntu cross-builder, is what ran).
+    // See test/fidelity/RESULTS.md.
+    fidelity: { tier: 1, date: '2026-07-11', bundle: '2.1.179', how: 'mavericks-vm',
+                note: 'G7 only (on-box PONG+attest, real Mavericks hardware); A1/B1/B4/C1/D1 not exercised for this run-target' } },
   // darwin-x86 Tiger walk (spec 2026-07-11-darwin-x86-tiger-walk): the
   // i386 slice at floor 10.4 — second slice of the 4-way fat binary.
   // ENGINE-ONLY (no-exec): no GitHub runner can execute i386 (mac
@@ -330,19 +350,19 @@ const LEGS = [
     'guest-version': '10.1', 'guest-packages': 'cmake gmake nodejs git-base bash', floor: '10.1',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 300, 'soft-fail': true,  // cpa, TCG
     // CORRECTED 2026-08-04 audit: date/bundle were wrong (2.1.218 did not exist
-    // on 2026-07-25 as originally claimed — first appears 2026-07-27, 91e8310).
+    // on 2026-07-25 as originally claimed — first appears 2026-07-23, 742db01).
     // Real dated evidence is the phase-3 NetBSD/evbarm-aarch64 qemu+HVF spike,
     // 2026-07-09, bundle 2.1.204 exactly (commit b625bdb/1b6881c;
     // spike/quickjs/results/phase3-netbsd-aarch64-scorecard.md): mock PONG -p
     // round-trip PASS + agentic Bash tool round-trip PASS (tool_result stdout
     // inline, is_error false, after a real portability wall — Bash tool shell
-    // discovery needs bash/zsh by name, fixed with pkgsrc bash). 'how' is the
-    // closest PLATFORMS.md rig id (netbsd-ssh-vm) though this specific run
-    // predates that persistent-VM runbook (2026-07-23) and used an ephemeral
-    // local qemu HVF guest instead — same target OS/arch, different rig plumbing.
+    // discovery needs bash/zsh by name, fixed with pkgsrc bash). 'how' points at
+    // its own PLATFORMS.md rig (netbsd-aarch64-spike-vm, added 2026-08-04) rather
+    // than borrowing the persistent SSH-VM rig's id — this run predates that
+    // runbook and used a different, ephemeral qemu+HVF guest.
     // See test/fidelity/RESULTS.md rows G7, B1.
-    fidelity: { tier: 1, date: '2026-07-09', bundle: '2.1.204', how: 'netbsd-ssh-vm',
-                note: 'phase-3 aarch64 spike scorecard, not the later SSH-VM runbook; RESULTS.md G7+B1' } },
+    fidelity: { tier: 1, date: '2026-07-09', bundle: '2.1.204', how: 'netbsd-aarch64-spike-vm',
+                note: 'phase-3 aarch64 spike scorecard; RESULTS.md G7+B1' } },
   { leg: 'freebsd-arm64', os: 'ubuntu-latest', 'guest-platform': 'freebsd', 'guest-arch': 'arm64',
     'guest-version': '14.4', 'guest-packages': 'cmake gmake node git bash', floor: '14.4',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 300, 'soft-fail': true,  // cpa, TCG
@@ -393,7 +413,7 @@ const LEGS = [
     floor: '10.1', 'guest-version': '10.1', publish: true, ci: true, 'soft-fail': true, timeout: 3600,
     wasm: 'off', mimalloc: 'off', ffi: 'off',
     // CORRECTED 2026-08-04 audit: bundle was wrong (2.1.218 did not exist on
-    // 2026-07-09 as originally claimed — first appears 2026-07-27, 91e8310;
+    // 2026-07-09 as originally claimed — first appears 2026-07-23, 742db01;
     // also the original note claimed "canonical-LE bytecode proof", but
     // canonical-LE didn't land until 2026-07-11/12, AFTER this run — this
     // evidence predates it and used a different bytecode-checksum workaround

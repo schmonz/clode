@@ -129,6 +129,42 @@ This is the canonical reference run. The operator executes the full recipe here 
 
 ---
 
+## Rig: NetBSD/aarch64 spike VM (ephemeral, superseded by the SSH VM above)
+
+**Where:** A local, ephemeral qemu guest (`-accel hvf -cpu host -smp 2`, 4G), driven by
+`spike/quickjs/qemu/run-in-guest.py` + `spike/quickjs/qemu/guest-build.sh` per
+`spike/quickjs/qemu/RUNBOOK.md` — booted per-run and torn down, not a persistent
+SSH-reachable box like the "NetBSD/arm64 SSH VM" rig above.
+**Engines available:** quaude (tjs, built in-guest each run)
+**Reference engine:** None locally — same darwin-baseline model as the other exotic rigs.
+**Test scope:** Whatever the driving spike script exercises for that run (see the dated
+`spike/quickjs/results/*.md` write-up it produced — e.g. `phase3-netbsd-aarch64-scorecard.md`).
+**Result recording:** Append platform tag `netbsd-aarch64-spike-vm`
+**Provenance:** This is the rig behind the 2026-07-09 evidence in `test/fidelity/RESULTS.md`
+for `netbsd-arm64` (predates this runbook's persistent SSH VM, added 2026-07-23) — recorded here
+so `scripts/tjs-legs.mjs`'s `how` field has an accurate id to point at instead of borrowing the
+SSH VM's.
+
+---
+
+## Rig: Mavericks real-hardware floor-walk
+
+**Where:** A real (or hypervisor-backed) Mac running macOS 10.9.5 Mavericks (Darwin 13.4.0,
+x86_64) — the oldest 64-bit-Intel floor `darwin-x64` builds against. Not a persistent
+SSH-reachable box documented elsewhere in this file; reached via the operator's own setup for
+one-off floor-walk proofs (see the `darwin-x64`/`darwin-x86` floor-walk plan docs and commits
+`57fb352`, `6cfdaa6`, `2e4f9c8`).
+**Engines available:** quaude (tjs, cross-fused elsewhere then run natively here), naude does
+not target this floor.
+**Reference engine:** None locally — same darwin-baseline model as the other exotic rigs.
+**Test scope:** Whatever the floor-walk proof exercised for that run (e.g. build+fuse+PONG+attest
+smoke — RECIPE row G7 — for `darwin-x64`; raw spawn-path smoke for `darwin-x86`).
+**Result recording:** Append platform tag `mavericks-vm`
+**Provenance:** This is the rig behind the 2026-07-11 evidence in `test/fidelity/RESULTS.md` for
+`darwin-x64` (on-box fuse, PONG + attest green, bundle 2.1.179).
+
+---
+
 ## Result recording
 
 Results are appended to `test/fidelity/RESULTS.md`. Each record includes:

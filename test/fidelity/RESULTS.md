@@ -19,6 +19,16 @@ Verdicts: `pass` | `fail` | `open` (driven, divergence recorded, not yet fixed).
 | 2026-07-09 | netbsd-sparc | G7 | quaude | 2.1.204 | pass | mock PONG -p round-trip: real POST /v1/messages on host mock wire log + literal PONG on 32-bit BE sun4m guest console, 66s e2e under TCG (commit 75bbf1c, backfilled 2026-08-04) |
 | 2026-07-09 | netbsd-arm64 | G7 | quaude | 2.1.204 | pass | mock PONG -p round-trip, port A (spike/quickjs/results/phase3-netbsd-aarch64-scorecard.md probe 5, evbarm-aarch64 qemu+HVF guest; commit b625bdb/1b6881c, backfilled 2026-08-04) |
 | 2026-07-09 | netbsd-arm64 | B1 | quaude | 2.1.204 | pass | agentic Bash tool round-trip: tool_use dispatched, tool_result content carries real stdout inline, is_error false (run 2, after fixing shell-discovery wall — base NetBSD ships no bash/zsh; pkgsrc bash added). Same scorecard, probes 6-7, backfilled 2026-08-04 |
+| 2026-07-11 | darwin-x64 | G7 | quaude | 2.1.179 | pass | on-box fuse on real Mavericks 10.9.5 (Darwin 13.4.0, x86_64): builder fetches provider over mbedtls TLS, fuses a 29MB quaude, PONG (-p 'say PONG' vs mock, POST verified) + attest green, quaude answers --version (commit 57fb352, backfilled 2026-08-04) |
+| 2026-07-29 | darwin-arm64 | B1 | quaude | 2.1.218 | pass | Bash tool round-trip, tool_result carries stdout inline (spike/quickjs/results/cosmo-fidelity-run.md sec.3 scenario 3, native-tjs CONTROL build/tjs/macos-26-arm64/tjs; backfilled 2026-08-04) |
+| 2026-07-29 | darwin-arm64 | C1 | quaude | 2.1.218 | pass | Write round-trip creates file on disk (same source, scenario 1; backfilled 2026-08-04) |
+| 2026-07-29 | darwin-arm64 | G7 | quaude | 2.1.218 | pass | -p mock-anthropic Bash turn reaches a final response (same source, scenario 3; backfilled 2026-08-04) |
+| 2026-07-29 | darwin-arm64 | H1 | quaude | 2.1.218 | pass | 2-tool Bash loop, both tool_results coherent+ordered (same source, scenario 4; backfilled 2026-08-04) |
+| 2026-07-29 | darwin-arm64 | H3 | quaude | 2.1.218 | pass | --continue restores prior session context (same source, scenario 6; backfilled 2026-08-04) |
+| 2026-07-29 | darwin-arm64 | H4 | quaude | 2.1.218 | pass | PreToolUse hook fires + denies claude update (same source, scenario 5; backfilled 2026-08-04) |
+| 2026-07-29 | darwin-arm64 | H7 | quaude | 2.1.218 | pass | Workflow runs to completed (same source, scenario 7; backfilled 2026-08-04) |
+| 2026-07-30 | darwin-arm64 | B4 | quaude | 2.1.218 | pass | full agentic suite at parity with native tjs, incl. Edit/FileHandle.chmod (BACKLOG.md "FULL AGENTIC FIDELITY SUITE GREEN ON COSMO (2026-07-30)" parity note: Write/Grep/Bash/Edit all pass on native tjs too; backfilled 2026-08-04) |
+| 2026-07-30 | darwin-arm64 | H6 | quaude | 2.1.218 | pass | subagent (Task) dispatch identical node-vs-quaude, at parity with cosmo (BACKLOG.md 2026-07-30 "agentic-subagent-diff 1/1"; backfilled 2026-08-04) |
 
 ## Attempted, not evidence
 
