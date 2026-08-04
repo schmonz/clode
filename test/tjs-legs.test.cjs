@@ -25,7 +25,7 @@ const legsFor = (tier, only) => JSON.parse(
   execFileSync(process.execPath,
     [path.join(REPO, 'scripts', 'tjs-legs.mjs'), tier, ...(only ? [only] : [])], { encoding: 'utf8' }));
 
-const { runTargetsFor, publishedRunTargets, DARWIN_SLICES } = require('../scripts/tjs-legs.mjs');
+const { runTargetsFor, publishedRunTargets, DARWIN_SLICES, fidelityFor } = require('../scripts/tjs-legs.mjs');
 
 test('release tier splits cleanly into darwin / notdarwin (universal decoupling)', () => {
   const all = legsFor('release').map((l) => l.leg).sort();
@@ -557,6 +557,28 @@ test('publishedRunTargets covers every publish:true leg', () => {
 test('runTargetsFor defaults to the leg name and honours an explicit list', () => {
   assert.deepStrictEqual(runTargetsFor({ leg: 'haiku-x64' }), ['haiku-x64']);
   assert.deepStrictEqual(runTargetsFor({ leg: 'x', runTargets: ['a', 'b'] }), ['a', 'b']);
+});
+
+// A run-target's fidelity is a RECORDING of what has actually been driven, not an
+// aspiration — see test/fidelity/RESULTS.md (the evidence) and RECIPE.md (the rows).
+// tier 0 is the honest default and a legitimate answer; silence is not.
+test('every published run-target declares a fidelity tier', () => {
+  for (const rt of publishedRunTargets()) {
+    const f = fidelityFor(rt);
+    assert.ok(f, `${rt}: no fidelity declaration. tier 0 is a fine answer; silence is not.`);
+    assert.ok([0, 1, 2].includes(f.tier), `${rt}: tier must be 0, 1 or 2 (got ${f.tier})`);
+  }
+});
+
+test('a tier>=1 claim carries its provenance', () => {
+  for (const rt of publishedRunTargets()) {
+    const f = fidelityFor(rt);
+    if (f.tier >= 1) {
+      assert.ok(f.date, `${rt}: tier ${f.tier} needs a date`);
+      assert.ok(f.bundle, `${rt}: tier ${f.tier} needs the bundle it was driven against`);
+      assert.ok(f.how, `${rt}: tier ${f.tier} needs a rig id from PLATFORMS.md (or "ci")`);
+    }
+  }
 });
 
 test('cosmo declares its run-targets explicitly — one .com, many hosts', () => {

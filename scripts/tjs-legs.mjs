@@ -59,7 +59,12 @@ const LEGS = [
   // arch builders are redundant with the universal (which contains their slices)
   // — darwin ships exactly ONE artifact, clode-<ver>-macos (user pref
   // 2026-07-15). i386/ppc were never standalone (no-exec) — universal-only.
-  { leg: 'darwin-arm64', os: 'macos-14', 'ci-os': 'macos-26', publish: false, pack: true, ci: true, floor: '11.0' },
+  { leg: 'darwin-arm64', os: 'macos-14', 'ci-os': 'macos-26', publish: false, pack: true, ci: true, floor: '11.0',
+    // The primary rig, driven continuously (memory: this is where the daily-drive
+    // fidelity work happens, incl. the interactive TUI/live-render suite gated
+    // behind CLODE_LIVE_RENDER=1). Two rows remain open — recorded, not hidden.
+    fidelity: { tier: 2, date: '2026-08-03', bundle: '2.1.218', how: 'primary-darwin',
+                note: 'open: F3 stale frames, F4 iTerm2 trust-prompt freeze' } },
   // glibc Linux: a CI-only CANARY (ciOnly:true → built in CI, filtered OUT of the
   // release tier; NB `smoke` is a different, taken field — the qemu-user smoke
   // MODE on the musl legs). The published Linux artifacts are musl-static
@@ -76,13 +81,16 @@ const LEGS = [
   { leg: 'linux-arm64-glibc', os: 'ubuntu-22.04-arm', 'ci-os': 'ubuntu-26.04-arm', publish: false, ci: true, ciOnly: true },
   // ---- T1.5 Alpine musl-static (the published Linux artifacts)
   { leg: 'linux-x64-musl', os: 'ubuntu-latest', 'guest-platform': 'alpine', 'guest-arch': 'x86_64',
-    static: true, publish: true, ci: true },  // ci: per-push twin of THE published Linux artifact
+    static: true, publish: true, ci: true,   // ci: per-push twin of THE published Linux artifact
+    fidelity: { tier: 0 } },
   { leg: 'linux-arm64-musl', os: 'ubuntu-24.04-arm', 'guest-platform': 'alpine', 'guest-arch': 'aarch64',
-    static: true, publish: true },            // alpine container on the arm runner
+    static: true, publish: true,              // alpine container on the arm runner
+    fidelity: { tier: 0 } },
   { leg: 'linux-s390x-musl', os: 'ubuntu-latest', 'guest-platform': 'alpine', 'guest-arch': 's390x',
     static: true, wasm: 'off',                // WAMR's MAP_32BIT is x86/ARM-only; undefined on s390x
     publish: true, smoke: 'version',          // PONG-class smoke lives in the be-oracle job
-    timeout: 300, 'soft-fail': true },        // slow qemu-user BE leg — non-blocking (plan T1.5)
+    timeout: 300, 'soft-fail': true,          // slow qemu-user BE leg — non-blocking (plan T1.5)
+    fidelity: { tier: 0 } },
   // ---- Phase-2 legs (plan Q2 PHASE-2 PICKUP). New legs start soft-fail and
   // EARN hard status by smoking green (house rule) — dispatches #5-#13
   // hardened everything except the slow qemu-user TCG class (non-blocking by
@@ -115,7 +123,10 @@ const LEGS = [
     // (scripts/darwin-x64.toolchain.cmake) carries the actual 10.6 floor.
     'cross-dockerfile': 'ci/osxcross-darwin', 'cross-file': 'scripts/darwin-x64.toolchain.cmake',
     'macos-min': '10.6', 'macos-arch': 'x86_64', floor: '10.6', 'no-exec': true,
-    wasm: 'off', mimalloc: 'off', ffi: 'off' },
+    wasm: 'off', mimalloc: 'off', ffi: 'off',
+    // No-exec cross-build: engine-only proof (real Mavericks fuse, memory
+    // darwin-x64-floor-walk), never driven as a standalone run-target.
+    fidelity: { tier: 0 } },
   // darwin-x86 Tiger walk (spec 2026-07-11-darwin-x86-tiger-walk): the
   // i386 slice at floor 10.4 — second slice of the 4-way fat binary.
   // ENGINE-ONLY (no-exec): no GitHub runner can execute i386 (mac
@@ -153,7 +164,11 @@ const LEGS = [
     // Tiger/i386 box exists, and this leg is no-exec). Costs uv_fs_event (ENOSYS);
     // revisit per the BACKLOG item once an i386 target is reachable.
     'darwin-poll': true,
-    wasm: 'off', mimalloc: 'off', ffi: 'off' },
+    wasm: 'off', mimalloc: 'off', ffi: 'off',
+    // No-exec cross-build: engine-only proof (real Mavericks i386 spawn/shim
+    // smoke, memory darwin-x86-tiger-walk), never driven as a standalone
+    // run-target — the box that proved it ran x64/i386, not the ubuntu builder.
+    fidelity: { tier: 0 } },
   // darwin-ppc Tiger walk (spec 2026-07-11-darwin-ppc-walk): the ppc/BE32
   // slice at floor 10.4 — third slice of the fat binary, first BE slice.
   // CROSS-BUILT on ubuntu inside the digest-pinned VariantXYZ image (gcc
@@ -180,7 +195,11 @@ const LEGS = [
     'darwin-poll': true,
     // HARD (not soft-fail): four arches or not release-ready (see darwin-x86).
     // Cross-build via a digest-pinned image — deterministic, no flake to tolerate.
-    'no-exec': true, wasm: 'off', mimalloc: 'off', ffi: 'off' },
+    'no-exec': true, wasm: 'off', mimalloc: 'off', ffi: 'off',
+    // Driven on real Tiger PPC hardware (RESULTS.md: B1, C1, G7 pass); G6
+    // (credentialed startup stall) is RECIPE-OPEN, not swept under the rug.
+    fidelity: { tier: 1, date: '2026-07-31', bundle: '2.1.218', how: 'tiger-ppc-vm',
+                note: 'floor rows driven; RECIPE G6 credentialed startup stall OPEN' } },
   // windows-x64 (native engine leg): compiles tjs.exe ON windows-latest with
   // MSVC cl.exe (CLODE_TJS_WIN_MSVC — the Activate-MSVC-dev-env step +
   // ilammy/msvc-dev-cmd), so build-leg's exec=host machinery does build +
@@ -193,7 +212,8 @@ const LEGS = [
   // windows-x64-msvc leg, then flipped in as the canonical compiler and that
   // leg deleted — mingw is retired.)
   { leg: 'windows-x64', os: 'windows-latest', msvc: true, publish: true, ci: true,
-    wasm: 'off', mimalloc: 'off', ffi: 'off' },
+    wasm: 'off', mimalloc: 'off', ffi: 'off',
+    fidelity: { tier: 0 } },
   // windows-arm64 (the Windows finale): native MSVC ARM64 on the windows-11-arm
   // runner (msvc-arch:arm64 → the dev-env's cl targets ARM64), exec=host build +
   // fuse + PONG like windows-x64. PUBLISHES clode-<ver>-windows-arm64 — the asset
@@ -201,21 +221,27 @@ const LEGS = [
   // green first try (cl.exe de-risked the build), now a HARD publisher like
   // windows-x64. Finer signals run in ci.yml's windows-arm64-tests job.
   { leg: 'windows-arm64', os: 'windows-11-arm', msvc: true, 'msvc-arch': 'arm64',
-    publish: true, ci: true, wasm: 'off', mimalloc: 'off', ffi: 'off' },
+    publish: true, ci: true, wasm: 'off', mimalloc: 'off', ffi: 'off',
+    fidelity: { tier: 0 } },
   // ---- T1.5 extra musl arches. x86 execs natively on the x64 kernel (full
   // smoke); the rest are qemu-user with version-smoke like s390x. wasm off:
   // MAP_32BIT is x86_64/aarch64-only in musl headers — and 32-bit WAMR is
   // worthless to us anyway.
   { leg: 'linux-x86-musl', os: 'ubuntu-latest', 'guest-platform': 'alpine', 'guest-arch': 'x86',
-    static: true, wasm: 'off', publish: true },  // 32-bit LE
+    static: true, wasm: 'off', publish: true,  // 32-bit LE
+    fidelity: { tier: 0 } },
   { leg: 'linux-armv7-musl', os: 'ubuntu-latest', 'guest-platform': 'alpine', 'guest-arch': 'armv7',
-    static: true, wasm: 'off', publish: true, smoke: 'version', timeout: 300, 'soft-fail': true },  // qemu-user (Cobalt runners lack aarch32 EL0)
+    static: true, wasm: 'off', publish: true, smoke: 'version', timeout: 300, 'soft-fail': true,  // qemu-user (Cobalt runners lack aarch32 EL0)
+    fidelity: { tier: 0 } },
   { leg: 'linux-ppc64le-musl', os: 'ubuntu-latest', 'guest-platform': 'alpine', 'guest-arch': 'ppc64le',
-    static: true, wasm: 'off', publish: true, smoke: 'version', timeout: 300, 'soft-fail': true },  // qemu-user
+    static: true, wasm: 'off', publish: true, smoke: 'version', timeout: 300, 'soft-fail': true,  // qemu-user
+    fidelity: { tier: 0 } },
   { leg: 'linux-riscv64-musl', os: 'ubuntu-latest', 'guest-platform': 'alpine', 'guest-arch': 'riscv64',
-    static: true, wasm: 'off', publish: true, smoke: 'version', timeout: 300, 'soft-fail': true },  // qemu-user
+    static: true, wasm: 'off', publish: true, smoke: 'version', timeout: 300, 'soft-fail': true,  // qemu-user
+    fidelity: { tier: 0 } },
   { leg: 'linux-loongarch64-musl', os: 'ubuntu-latest', 'guest-platform': 'alpine', 'guest-arch': 'loongarch64',
-    static: true, wasm: 'off', publish: true, smoke: 'version', timeout: 300, 'soft-fail': true },  // qemu-user (alpine >= 3.21)
+    static: true, wasm: 'off', publish: true, smoke: 'version', timeout: 300, 'soft-fail': true,  // qemu-user (alpine >= 3.21)
+    fidelity: { tier: 0 } },
   // ---- T2 VM legs: fuse + smoke run INSIDE the guest (exec=guest —
   // BSD/illumos binaries have no binfmt escape on a Linux host). Config:
   // wasm off (WAMR "linux"-platform mremap wall on every non-Linux POSIX),
@@ -234,7 +260,8 @@ const LEGS = [
     // renovate: datasource=custom.cpa-netbsd-x86-64 depName=netbsd-x86-64-guest versioning=loose
     'ci-guest-version': '10.1',
     'guest-packages': 'cmake gmake nodejs git-base bash', floor: '10.1',
-    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true },  // cpa, KVM
+    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true,  // cpa, KVM
+    fidelity: { tier: 1, date: '2026-07-25', bundle: '2.1.218', how: 'netbsd-ssh-vm' } },
   { leg: 'freebsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'freebsd',
     // PROVEN floor (probe run 29157832721, honest in-guest build): 14.0 is
     // the oldest whose pkg repos still exist — 12.x/13.x died with their
@@ -244,7 +271,8 @@ const LEGS = [
     // renovate: datasource=custom.cpa-freebsd-x86-64 depName=freebsd-x86-64-guest versioning=loose
     'ci-guest-version': '15.1',
     'guest-packages': 'cmake gmake node git bash', floor: '14.0',
-    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true },  // cpa, KVM
+    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true,  // cpa, KVM
+    fidelity: { tier: 0 } },
   // OpenBSD is EXEMPT from publish-oldest: ld.so refuses on libc.so major
   // mismatch and majors bump nearly every release, in BOTH directions
   // (probe evidence: the 7.9-built tjs died on 7.6 with "can't load library
@@ -254,17 +282,20 @@ const LEGS = [
   // be useless to 7.9 users.
   { leg: 'openbsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'openbsd', 'guest-version': '7.9',
     'guest-packages': 'cmake gmake node git bash', floor: '7.9',
-    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true },  // cpa, KVM
+    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true,  // cpa, KVM
+    fidelity: { tier: 0 } },
   { leg: 'dragonflybsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'dragonflybsd', 'guest-version': '6.4.2',
     'guest-packages': 'cmake gmake node git bash', floor: '6.4.2',
-    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true },  // cpa, KVM
+    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true,  // cpa, KVM
+    fidelity: { tier: 0 } },
   { leg: 'omnios-amd64', os: 'ubuntu-latest', 'guest-platform': 'omnios',
     'guest-version': 'r151056',        // PROVEN floor (probe run 29154489454, 2026-07-11) — oldest in cpa catalog
     // renovate: datasource=custom.cpa-omnios-x86-64 depName=omnios-x86-64-guest versioning=loose
     'ci-guest-version': 'r151058',
     'guest-packages': 'developer/gcc14 developer/build/gnu-make ooce/developer/cmake ooce/runtime/node-22 developer/versioning/git shell/bash',
     floor: 'r151056',
-    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true },  // cpa, KVM (illumos rung)
+    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true,  // cpa, KVM (illumos rung)
+    fidelity: { tier: 0 } },
   { leg: 'solaris-amd64', os: 'ubuntu-latest', 'guest-platform': 'solaris',
     'guest-version': '11.4-gcc',       // CBE image with gcc/g++ preinstalled
     // renovate: datasource=custom.vmactions-solaris depName=solaris-guest versioning=loose
@@ -272,7 +303,8 @@ const LEGS = [
     'guest-packages': 'developer/build/cmake developer/build/gnu-make developer/versioning/git runtime/nodejs shell/bash',
     floor: '11.4',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true,
-    timeout: 120 },               // vmactions boot is slower than cpa
+    timeout: 120,                 // vmactions boot is slower than cpa
+    fidelity: { tier: 0 } },
   // ---- Sweep 2 (2026-07-10): the remaining easy adds on proven machinery.
   // BSD arm64 = cpa's other architecture (TCG on GitHub runners — no
   // /dev/kvm — hence the long timeouts); MidnightBSD + Haiku = cpa's
@@ -281,26 +313,36 @@ const LEGS = [
   // hard status.
   { leg: 'netbsd-arm64', os: 'ubuntu-latest', 'guest-platform': 'netbsd', 'guest-arch': 'arm64',
     'guest-version': '10.1', 'guest-packages': 'cmake gmake nodejs git-base bash', floor: '10.1',
-    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 300, 'soft-fail': true },  // cpa, TCG
+    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 300, 'soft-fail': true,  // cpa, TCG
+    fidelity: { tier: 1, date: '2026-07-25', bundle: '2.1.218', how: 'netbsd-ssh-vm' } },
   { leg: 'freebsd-arm64', os: 'ubuntu-latest', 'guest-platform': 'freebsd', 'guest-arch': 'arm64',
     'guest-version': '14.4', 'guest-packages': 'cmake gmake node git bash', floor: '14.4',
-    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 300, 'soft-fail': true },  // cpa, TCG
+    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 300, 'soft-fail': true,  // cpa, TCG
+    fidelity: { tier: 0 } },
   { leg: 'openbsd-arm64', os: 'ubuntu-latest', 'guest-platform': 'openbsd', 'guest-arch': 'arm64',
     'guest-version': '7.9', 'guest-packages': 'cmake gmake node git bash', floor: '7.9',
-    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 300, 'soft-fail': true },  // cpa, TCG
+    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 300, 'soft-fail': true,  // cpa, TCG
+    fidelity: { tier: 0 } },
   { leg: 'midnightbsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'midnightbsd', 'guest-version': '4.0.4',
     // no git: the 4.0.4 mport tree's git dep chain is broken (p5-Digest-HMAC
     // wants perl >= 5.40.3, image ships 5.38.5 — dispatch #14); every cmake
     // git usage is if(GIT_EXECUTABLE)-guarded, so the build does not need it.
     'guest-packages': 'cmake gmake node bash', floor: '4.0.4',
-    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, 'soft-fail': true, ci: true },  // cpa, KVM (mport packages)
+    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, 'soft-fail': true, ci: true,  // cpa, KVM (mport packages)
+    fidelity: { tier: 0 } },
   { leg: 'haiku-x64', os: 'ubuntu-latest', 'guest-platform': 'haiku', 'guest-version': 'r1beta5',
     // HaikuPorts ships exactly ONE node: nodejs20 (user-verified, 2026-07-10)
     // — named explicitly; v20 clears the build floor (lowered to 20 for
     // OpenIndiana the same day). cmd:X provides-syntax for the rest
     // ("nodejs" alone: Name not found, #14).
     'guest-packages': 'cmd:cmake cmd:gcc nodejs20 cmd:git cmd:make', floor: 'r1beta5',
-    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, 'soft-fail': true, ci: true },  // cpa, KVM (a genuinely new OS rung)
+    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, 'soft-fail': true, ci: true,  // cpa, KVM (a genuinely new OS rung)
+    // PLATFORMS.md documents a Haiku RIG (how to reach the box, which rows to
+    // run) -- a runbook, not a result. The only Haiku evidence on record is the
+    // leg building green plus a >64KB uv_write deadlock isolated by bare-engine
+    // probes (memory: haiku-tjs-write-deadlock) -- engine debugging, not a floor
+    // drive. No Haiku row exists in test/fidelity/RESULTS.md.
+    fidelity: { tier: 0 } },
   { leg: 'openindiana-amd64', os: 'ubuntu-latest', 'guest-platform': 'openindiana',
     // PROVEN floor (probe run 29154489921, 2026-07-11) — oldest vmactions
     // conf; build-essential image. Release-only leg (illumos distro twin):
@@ -309,7 +351,8 @@ const LEGS = [
     'guest-version': '202510-build',
     'guest-packages': 'developer/build/cmake developer/build/gnu-make developer/versioning/git shell/bash runtime/nodejs',
     floor: '202510',
-    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 120, 'soft-fail': true },  // vmactions (3rd illumos flavor)
+    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 120, 'soft-fail': true,  // vmactions (3rd illumos flavor)
+    fidelity: { tier: 0 } },
   // netbsd-sparc (the first truly-weird platform; cross-fuse A+B1+C): the sparc
   // tjs ENGINE is built once via the source-hash tjs-cache (TCG bake on miss);
   // per-run cross-fuses the clode --self builder on the x64 runner (Layer A,
@@ -320,7 +363,9 @@ const LEGS = [
   // guest backend.
   { leg: 'netbsd-sparc', os: 'ubuntu-latest', 'guest-platform': 'qemu-netbsd-sparc', 'guest-arch': 'sparc',
     floor: '10.1', 'guest-version': '10.1', publish: true, ci: true, 'soft-fail': true, timeout: 3600,
-    wasm: 'off', mimalloc: 'off', ffi: 'off' },
+    wasm: 'off', mimalloc: 'off', ffi: 'off',
+    fidelity: { tier: 1, date: '2026-07-09', bundle: '2.1.218', how: 'sparc-vm',
+                note: '32-bit BE; canonical-LE bytecode proof' } },
   // ---- cross-toolchain tier-2 (2026-07-14): cross-compiled on the x64 runner
   // inside a stock Debian image (cross-apt names the gcc-<triple>), then the
   // shared cross-fuse (tier2:true) emits a clode BUILDER against the foreign
@@ -376,7 +421,8 @@ const LEGS = [
     'atomic-shim': true, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
     publish: true, ci: true, 'soft-fail': true, timeout: 3600,
-    wasm: 'off', mimalloc: 'off', ffi: 'off' },
+    wasm: 'off', mimalloc: 'off', ffi: 'off',
+    fidelity: { tier: 0 } },
   // ---- NetBSD arch fleet (v0.1.4). The build.sh cross path proven generic:
   // scripts/netbsd.toolchain.cmake DISCOVERS the cross triple from the build.sh
   // tooldir, so a fleet arch is just {netbsd-machine (a port), guest-arch,
@@ -396,7 +442,8 @@ const LEGS = [
     // arch-gated in CI, non-blocking) and flip to publish:true only once CI-green
     // — a new build.sh arch must not gate a release before it is proven.
     publish: true, ci: true, 'soft-fail': true, timeout: 3600,
-    wasm: 'off', mimalloc: 'off', ffi: 'off' },
+    wasm: 'off', mimalloc: 'off', ffi: 'off',
+    fidelity: { tier: 0 } },
   // ---- Fleet batch 2 (2026-07-15): the next 5 build.sh cross arches, all
   // ONBOARDING (publish:false + soft-fail — built + arch-gated in CI, non-blocking,
   // no-exec since NetBSD has no qemu-user). Each is just {netbsd-machine (a port),
@@ -410,7 +457,8 @@ const LEGS = [
     'atomic-shim': false, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
     publish: true, ci: true, 'soft-fail': true, timeout: 3600,
-    wasm: 'off', mimalloc: 'off', ffi: 'off' },
+    wasm: 'off', mimalloc: 'off', ffi: 'off',
+    fidelity: { tier: 0 } },
   // netbsd-hppa (32-bit BE PA-RISC): weak atomics (ldcw only) — shim on.
   { leg: 'netbsd-hppa', os: 'ubuntu-latest', 'guest-arch': 'hppa',
     'netbsd-src': 'netbsd-10', 'netbsd-machine': 'hppa',
@@ -418,7 +466,8 @@ const LEGS = [
     'atomic-shim': true, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
     publish: true, ci: true, 'soft-fail': true, timeout: 3600,
-    wasm: 'off', mimalloc: 'off', ffi: 'off' },
+    wasm: 'off', mimalloc: 'off', ffi: 'off',
+    fidelity: { tier: 0 } },
   // netbsd-macppc (32-bit BE PowerPC): 32-bit lwarx/stwcx — 8-byte needs shim.
   { leg: 'netbsd-macppc', os: 'ubuntu-latest', 'guest-arch': 'powerpc',
     'netbsd-src': 'netbsd-10', 'netbsd-machine': 'macppc',
@@ -426,7 +475,8 @@ const LEGS = [
     'atomic-shim': true, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
     publish: true, ci: true, 'soft-fail': true, timeout: 3600,
-    wasm: 'off', mimalloc: 'off', ffi: 'off' },
+    wasm: 'off', mimalloc: 'off', ffi: 'off',
+    fidelity: { tier: 0 } },
   // netbsd-pmax (32-bit LE MIPS, DECstation): MIPS32 ll/sc is 32-bit — shim on.
   { leg: 'netbsd-pmax', os: 'ubuntu-latest', 'guest-arch': 'mipsel',
     'netbsd-src': 'netbsd-10', 'netbsd-machine': 'pmax',
@@ -434,7 +484,8 @@ const LEGS = [
     'atomic-shim': true, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
     publish: true, ci: true, 'soft-fail': true, timeout: 3600,
-    wasm: 'off', mimalloc: 'off', ffi: 'off' },
+    wasm: 'off', mimalloc: 'off', ffi: 'off',
+    fidelity: { tier: 0 } },
   // netbsd-sgimips (32-bit BE MIPS, SGI): the mipseb twin of pmax — shim on.
   { leg: 'netbsd-sgimips', os: 'ubuntu-latest', 'guest-arch': 'mipseb',
     'netbsd-src': 'netbsd-10', 'netbsd-machine': 'sgimips',
@@ -442,7 +493,8 @@ const LEGS = [
     'atomic-shim': true, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
     publish: true, ci: true, 'soft-fail': true, timeout: 3600,
-    wasm: 'off', mimalloc: 'off', ffi: 'off' },
+    wasm: 'off', mimalloc: 'off', ffi: 'off',
+    fidelity: { tier: 0 } },
   // ---- Fleet batch 3 (v0.1.4): 5 more build.sh cross arches, extending the fleet
   // toward the ~20-24 buildable of NetBSD's 43 MACHINE_ARCH. Pattern:
   // {netbsd-machine (a PORT), guest-arch (drives the file(1) gate), atomic-shim}.
@@ -483,7 +535,8 @@ const LEGS = [
     // clode-<ver>-netbsd10.1-i386. soft-fail stripped from publishers on the
     // release tier; stays soft on the CI on-ramp. no-exec: green = it built.
     publish: true, ci: true, 'soft-fail': true, timeout: 3600,
-    wasm: 'off', mimalloc: 'off', ffi: 'off' },
+    wasm: 'off', mimalloc: 'off', ffi: 'off',
+    fidelity: { tier: 0 } },
   // netbsd-earmv7hf (ARM32 LE hardfloat): evbarm's default arch; ARMv7 ldrexd
   // inlines 8-byte atomics → no shim.
   { leg: 'netbsd-earmv7hf', os: 'ubuntu-latest', 'guest-arch': 'earmv7hf',
@@ -492,7 +545,8 @@ const LEGS = [
     'atomic-shim': false, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
     publish: true, ci: true, 'soft-fail': true, timeout: 3600,
-    wasm: 'off', mimalloc: 'off', ffi: 'off' },
+    wasm: 'off', mimalloc: 'off', ffi: 'off',
+    fidelity: { tier: 0 } },
   // netbsd-riscv64 (RV64 LE): the riscv port's 64-bit default; 64-bit inlines atomics.
   { leg: 'netbsd-riscv64', os: 'ubuntu-latest', 'guest-arch': 'riscv64',
     'netbsd-src': 'netbsd-10', 'netbsd-machine': 'riscv',
@@ -508,7 +562,8 @@ const LEGS = [
     // release tier (so the release requires it green); it stays soft on the CI
     // on-ramp. no-exec: a green cross leg means it compiled + linked.
     publish: true, ci: true, 'soft-fail': true, timeout: 3600,
-    wasm: 'off', mimalloc: 'off', ffi: 'off' },
+    wasm: 'off', mimalloc: 'off', ffi: 'off',
+    fidelity: { tier: 0 } },
   // netbsd-mips64eb (MIPS64 BIG-endian): the sbmips port; 64-bit inlines atomics,
   // no shim. canonical-LE bytecode proof on a 3rd 64-bit-BE target.
   { leg: 'netbsd-mips64eb', os: 'ubuntu-latest', 'guest-arch': 'mips64eb',
@@ -531,7 +586,8 @@ const LEGS = [
     // clode-<ver>-netbsd10.1-mips64eb; soft-fail is stripped from publishers on the
     // release tier (release requires it green), stays soft on the CI on-ramp.
     publish: true, ci: true, 'soft-fail': true, timeout: 3600,
-    wasm: 'off', mimalloc: 'off', ffi: 'off' },
+    wasm: 'off', mimalloc: 'off', ffi: 'off',
+    fidelity: { tier: 0 } },
   // NOTE: netbsd-vax was dropped 2026-07-18 — a confirmed ENGINE wall, not just a
   // toolchain risk: build.sh produces a working vax toolchain but quickjs fails to
   // compile (deps/quickjs/dtoa.c, VAX's non-IEEE-754 float format). Not worth a
@@ -543,7 +599,8 @@ const LEGS = [
     'atomic-shim': true, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
     publish: true, ci: true, 'soft-fail': true, timeout: 3600,
-    wasm: 'off', mimalloc: 'off', ffi: 'off' },
+    wasm: 'off', mimalloc: 'off', ffi: 'off',
+    fidelity: { tier: 0 } },
   // ---- Cosmopolitan APE leg (Task 4b, spike/quickjs/results/cosmo-fidelity-run.md):
   // ONE fat (x86-64 + aarch64) Actually Portable Executable that runs native on
   // Linux/macOS/Windows/BSD — ADDED beside the tjs legs, never a replacement.
@@ -581,7 +638,23 @@ const LEGS = [
       'cosmo-macos-x86-64', 'cosmo-macos-aarch64',
       'cosmo-windows-x86-64',
       'cosmo-freebsd-x86-64', 'cosmo-openbsd-x86-64', 'cosmo-netbsd-x86-64',
-    ] },
+    ],
+    // Per-run-target map (fidelityFor reads l.fidelity[runTarget]): the leg
+    // BUILDS on ubuntu-latest, but the only place the .com has actually been
+    // DRIVEN is darwin-arm64 -- tier 0 everywhere else, including
+    // cosmo-linux-x86-64, the build host itself. "Likely works off-mac" is not
+    // evidence.
+    fidelity: {
+      'cosmo-macos-aarch64': { tier: 1, date: '2026-07-30', bundle: '2.1.218', how: 'primary-darwin',
+                               note: 'full agentic suite at parity + F6/D6/G2 interactive' },
+      'cosmo-linux-x86-64':  { tier: 0, note: 'BUILD host. Never driven. "likely works off-mac" is not evidence.' },
+      'cosmo-linux-aarch64':  { tier: 0 },
+      'cosmo-macos-x86-64':   { tier: 0 },
+      'cosmo-windows-x86-64': { tier: 0 },
+      'cosmo-freebsd-x86-64': { tier: 0 },
+      'cosmo-openbsd-x86-64': { tier: 0 },
+      'cosmo-netbsd-x86-64':  { tier: 0 },
+    } },
 ];
 
 export function legsFor(tier) {
@@ -667,6 +740,22 @@ export function publishedRunTargets() {
     if (l.publish) for (const rt of runTargetsFor(l)) out.add(rt);
   }
   return [...out].sort();
+}
+
+// A run-target's fidelity lives on the leg that PRODUCES it. Darwin slices are
+// publish:false legs whose run-targets ship inside darwin-universal, so they
+// declare here like any other. This is a RECORDING of what has actually been
+// driven (test/fidelity/RESULTS.md is the evidence) -- tier 0 is the honest
+// default and a legitimate answer; a leg with no `fidelity` at all is silence,
+// not a claim, and returns null (the tests below treat that as a defect).
+export function fidelityFor(runTarget) {
+  for (const l of legsFor('release')) {
+    if (!l.fidelity) continue;
+    if (runTargetsFor(l).includes(runTarget)) {
+      return l.fidelity[runTarget] || (l.fidelity.tier !== undefined ? l.fidelity : null);
+    }
+  }
+  return null;
 }
 
 export function cli(tier, only, versionOverride, macosMinOverride) {
