@@ -644,3 +644,122 @@ test('spawn: env omits undefined-valued keys, stringifies null/0/false/empty (ma
   assert.strictEqual(r.status, 0, r.stderr);
   assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
 });
+
+// RECIPE G6: a failed spawn with 'pipe' stdio must still hand back REAL,
+// already-ended stdout/stderr/stdin streams — never null — exactly as host
+// node does (verified against node v24.18.1: c.stdout/stderr fire 'end' then
+// 'close', readable=false, destroyed=true; c.stdin fires 'close',
+// writable=false, destroyed=true; exitCode/signalCode land at the same
+// (-2, null) the 'close' event carries). The shim used to hard-null every
+// stdio slot on a launch failure regardless of what stdio was requested, so a
+// caller that unconditionally does `child.stdout.on('end', …)` (execa's
+// stream collectors do exactly this) got nothing back — a dangling
+// listener/promise that never settled and kept the event loop alive after a
+// bare, unresolvable command name failed to spawn (the RECIPE G6 hang).
+test("spawn launch failure with pipe stdio: stdout/stderr fire 'end'+'close', stdin fires 'close', exitCode/signalCode set (matches node)", (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const cp = require('node:child_process');
+    const seq = [];
+    const c = cp.spawn('this-binary-does-not-exist-xyz', ['--version'], { stdio: ['pipe', 'pipe', 'pipe'] });
+    c.on('error', (e) => seq.push(['error', e.code]));
+    c.on('close', (code, sig) => seq.push(['close', code, sig]));
+    c.stdout.on('end', () => seq.push(['stdout-end']));
+    c.stdout.on('close', () => seq.push(['stdout-close']));
+    c.stderr.on('end', () => seq.push(['stderr-end']));
+    c.stderr.on('close', () => seq.push(['stderr-close']));
+    c.stdin.on('close', () => seq.push(['stdin-close']));
+    setTimeout(() => {
+      console.log(JSON.stringify({
+        seq,
+        stdoutReadable: c.stdout.readable, stdoutDestroyed: c.stdout.destroyed,
+        stdinWritable: c.stdin.writable, stdinDestroyed: c.stdin.destroyed,
+        exitCode: c.exitCode, signalCode: c.signalCode,
+      }));
+    }, 250);`;
+  const f = prog(body);
+  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  // Sanity-anchor the oracle: every event node fires must be present, streams
+  // ended/destroyed, exitCode/signalCode carrying the close code.
+  assert.deepStrictEqual(node.exitCode, -2);
+  assert.deepStrictEqual(node.signalCode, null);
+  assert.strictEqual(node.stdoutReadable, false);
+  assert.strictEqual(node.stdoutDestroyed, true);
+  assert.strictEqual(node.stdinWritable, false);
+  assert.strictEqual(node.stdinDestroyed, true);
+  const EXPECTED_EVENTS = ['error', 'close', 'stdout-end', 'stdout-close', 'stderr-end', 'stderr-close', 'stdin-close'];
+  for (const ev of EXPECTED_EVENTS) {
+    assert.ok(node.seq.some((e) => e[0] === ev), `node oracle missing ${ev}`);
+  }
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const shim = JSON.parse(r.stdout.trim());
+  // The flags/exitCode/signalCode must match EXACTLY.
+  assert.strictEqual(shim.stdoutReadable, node.stdoutReadable);
+  assert.strictEqual(shim.stdoutDestroyed, node.stdoutDestroyed);
+  assert.strictEqual(shim.stdinWritable, node.stdinWritable);
+  assert.strictEqual(shim.stdinDestroyed, node.stdinDestroyed);
+  assert.strictEqual(shim.exitCode, node.exitCode);
+  assert.strictEqual(shim.signalCode, node.signalCode);
+  // The EVENT SET must match exactly — every event node fires, the shim must
+  // also fire, and no extras. Exact INTERLEAVING is deliberately not asserted:
+  // it is a microtask-scheduling implementation detail (this file's own
+  // stream.cjs documents an analogous "load-sensitive" ordering flake), not an
+  // observable contract any real caller depends on.
+  const eventNames = (s) => s.seq.map((e) => e[0]).sort();
+  assert.deepStrictEqual(eventNames(shim), eventNames(node));
+  // What IS a real contract: 'error' must precede 'close' on the child, and
+  // each stream's 'end' must precede its own 'close' — callers chain cleanup
+  // off these orderings.
+  const idx = (s, name) => s.seq.findIndex((e) => e[0] === name);
+  for (const s of [shim, node]) {
+    assert.ok(idx(s, 'error') < idx(s, 'close'), 'error must precede close');
+    assert.ok(idx(s, 'stdout-end') < idx(s, 'stdout-close'), 'stdout end must precede stdout close');
+    assert.ok(idx(s, 'stderr-end') < idx(s, 'stderr-close'), 'stderr end must precede stderr close');
+  }
+});
+
+// 'ignore' stdio: node leaves stdout/stderr/stdin null on a launch failure
+// (no pipe was ever requested) — matches the shim's pre-existing behavior,
+// locked here so the pipe-stdio fix above doesn't regress it.
+test('spawn launch failure with ignore stdio: stdout/stderr/stdin stay null (matches node)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const cp = require('node:child_process');
+    const c = cp.spawn('this-binary-does-not-exist-xyz', ['--version'], { stdio: ['ignore', 'ignore', 'ignore'] });
+    c.on('error', () => {});
+    c.on('close', (code, sig) => {
+      console.log(JSON.stringify({
+        stdout: c.stdout, stderr: c.stderr, stdin: c.stdin,
+        exitCode: c.exitCode, signalCode: c.signalCode,
+      }));
+    });`;
+  const f = prog(body);
+  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  assert.deepStrictEqual(node, { stdout: null, stderr: null, stdin: null, exitCode: -2, signalCode: null });
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
+});
+
+// The actual RECIPE G6 regression: a program that spawns a bare,
+// unresolvable command with pipe stdio, listens only for 'close' (the
+// execa-style idiom), and never calls process.exit() must still DRAIN and
+// exit — the dangling stdout/stderr/stdin streams from the failed launch must
+// not keep the event loop alive. Before the fix this hung until runLoader's
+// timeout (spawnSync's status/signal come back null on a timeout kill, never
+// 0); after the fix the process drains promptly with exit code 0.
+test('spawn launch failure: process DRAINS without process.exit (no dangling handle keeps the loop alive)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const cp = require('node:child_process');
+    const c = cp.spawn('this-binary-does-not-exist-xyz', ['--version'], { stdio: ['pipe', 'pipe', 'pipe'] });
+    c.on('error', () => {});
+    c.stdout.on('data', () => {});
+    c.stderr.on('data', () => {});
+    c.on('close', () => { console.log('drained'); });`;
+  const f = prog(body);
+  const r = runLoader(f, [], { timeout: 8000 });
+  assert.strictEqual(r.status, 0, `expected a clean drain, got status=${r.status} stderr=${r.stderr}`);
+  assert.strictEqual(r.stdout.trim(), 'drained');
+});

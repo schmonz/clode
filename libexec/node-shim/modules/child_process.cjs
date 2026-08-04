@@ -480,11 +480,56 @@ function spawn(file, args = [], opts = {}) {
     // ENOENT (node's own value), signal null. We MUST emit 'close' too, else a
     // caller using the (more common) 'close'-listener lifecycle idiom after a
     // failed spawn waits forever — a silent hang the fail-loud standard forbids.
+    //
+    // RECIPE G6 root cause: a stdio slot requesting 'pipe' still gets a REAL
+    // (if immediately-ended) stream on host node — c.stdout/stderr/stdin are
+    // never null when 'pipe' was requested, even on launch failure (verified,
+    // host node v24.18.1): stdout/stderr fire 'end' then 'close'
+    // (readable=false, destroyed=true), stdin fires 'close' (writable=false,
+    // destroyed=true, a post-failure write() is a silent false no-op — no
+    // throw, no 'error'), and exitCode/signalCode are set to the same
+    // (-2, null) the 'close' event carries — never left at their null
+    // defaults. This shim used to hard-null every stdio slot on a failed
+    // spawn regardless of what was requested: any caller that unconditionally
+    // does `child.stdout.on('end', …)` (execa's stream collectors do exactly
+    // this) got nothing back and its wait/exit promise never settled —
+    // dangling handles that kept the tjs event loop alive forever after a
+    // bare, unresolvable command name (e.g. `rg` with no absolute path)
+    // failed to spawn. Build real, already-ended node-shim streams for every
+    // 'pipe' slot so those listeners fire and settle, exactly as node does;
+    // leave non-'pipe' slots null, matching node's 'ignore'/'inherit' shape.
+    const mkEndedReadable = () => {
+      const r = new Readable({ read() {} });
+      r.push(null);   // schedules 'end'
+      r.destroy();    // schedules 'close' (queued after 'end', FIFO)
+      return r;
+    };
+    const mkEndedWritable = () => {
+      const w = new EventEmitter();
+      w.writable = false;
+      w.writableEnded = true;
+      w.destroyed = true;
+      w.write = () => false; // matches node: silent false no-op, no throw/error
+      w.end = (chunk, encOrCb, cb) => {
+        if (typeof chunk === 'function') cb = chunk;
+        else if (typeof encOrCb === 'function') cb = encOrCb;
+        if (typeof cb === 'function') queueMicrotask(cb);
+        return w;
+      };
+      w.destroy = () => w;
+      w.cork = () => {}; w.uncork = () => {}; w.setDefaultEncoding = () => w;
+      queueMicrotask(() => w.emit('close'));
+      return w;
+    };
     child.pid = undefined;
-    child.stdout = null; child.stderr = null; child.stdin = null;
+    child.stdout = stdio.stdout === 'pipe' ? mkEndedReadable() : null;
+    child.stderr = stdio.stderr === 'pipe' ? mkEndedReadable() : null;
+    child.stdin = stdio.stdin === 'pipe' ? mkEndedWritable() : null;
     child.kill = () => false;
     child.ref = () => {}; child.unref = () => {};
     const closeCode = typeof err.errno === 'number' ? err.errno : -2; // -errno (ENOENT -> -2)
+    child.exitCode = closeCode;
+    child.signalCode = null;
     queueMicrotask(() => {
       child.emit('error', launchError(err, 'spawn', file, args));
       child.emit('close', closeCode, null);
