@@ -570,7 +570,18 @@ const LEGS = [
   { leg: 'cosmo', os: 'ubuntu-latest', cosmo: true,
     'cross-file': 'scripts/cosmo.toolchain.cmake',
     publish: true, ci: true, timeout: 3600,
-    wasm: 'off', mimalloc: 'off', ffi: 'off' },
+    wasm: 'off', mimalloc: 'off', ffi: 'off',
+    // ONE .com, many hosts. Built on ubuntu-latest and driven interactively on
+    // darwin-arm64 -- which means the platform we BUILD it on is one we have
+    // never driven it on. Declared explicitly so each host earns its own tier.
+    // Documentation-derived (no build/tjs/cosmo artifact and no local cosmocc
+    // toolchain to inspect as of this commit) — see commit message.
+    runTargets: [
+      'cosmo-linux-x86-64', 'cosmo-linux-aarch64',
+      'cosmo-macos-x86-64', 'cosmo-macos-aarch64',
+      'cosmo-windows-x86-64',
+      'cosmo-freebsd-x86-64', 'cosmo-openbsd-x86-64', 'cosmo-netbsd-x86-64',
+    ] },
 ];
 
 export function legsFor(tier) {

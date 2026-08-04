@@ -558,3 +558,13 @@ test('runTargetsFor defaults to the leg name and honours an explicit list', () =
   assert.deepStrictEqual(runTargetsFor({ leg: 'haiku-x64' }), ['haiku-x64']);
   assert.deepStrictEqual(runTargetsFor({ leg: 'x', runTargets: ['a', 'b'] }), ['a', 'b']);
 });
+
+test('cosmo declares its run-targets explicitly — one .com, many hosts', () => {
+  const cosmo = legsFor('release').find((l) => l.leg === 'cosmo');
+  assert.ok(cosmo.runTargets && cosmo.runTargets.length > 1,
+    'cosmo ships one .com for many hosts; a single run-target would let it inherit ' +
+    'its ubuntu-latest build hosts credibility for platforms nobody has run it on');
+  for (const rt of cosmo.runTargets) {
+    assert.match(rt, /^cosmo-[a-z0-9]+-[a-z0-9-]+$/, `${rt}: expected cosmo-<os>-<arch>`);
+  }
+});
