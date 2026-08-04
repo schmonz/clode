@@ -1,10 +1,70 @@
 # Fidelity Results
 
 Dated rows from `RECIPE.md`, driven on the rigs in `PLATFORMS.md`. A tier claim in
-`scripts/tjs-legs.mjs` must be able to point at rows here. Append, never rewrite:
-a superseded result stays, with a newer row beside it.
+`scripts/tjs-legs.mjs` must be able to point at rows here.
 
 Verdicts: `pass` | `fail` | `open` (driven, divergence recorded, not yet fixed).
+
+## What earns a row
+
+A row records ONE dated run of ONE `RECIPE.md` row against ONE run-target, with a
+citation a reader can follow. The bar below is deliberately mechanical: this
+ledger exists to stop the same evidence being treated two different ways on two
+different platforms, so the rule has to be written down and applied to every
+run-target at once, not decided per row.
+
+**Earns a row**
+
+1. **A driven run of the recipe row on the run-target's own platform** — whoever
+   or whatever drove it. A human on a box, a spike script in a qemu guest, and a
+   CI job inside a VM are the same KIND of evidence; what matters is that the
+   code executed on that run-target's OS+arch. Cite the source (commit, spike
+   write-up, or workflow run id) in the note.
+2. **`clode build`'s own build-pipeline smoke — for row G7, and only G7.**
+   `smokeTarget()` in `libexec/clode-fuse.cjs` starts an in-process canned
+   Messages mock, runs the freshly fused quaude as `<bin> -p 'say PONG'` with
+   `NODE_PATH` stripped, and requires **exit 0** *and* `PONG` in stdout *and* a
+   POST that actually landed on `.../messages`. Compare RECIPE G7: "one agentic
+   `-p` turn completes end to end and returns a non-empty answer — mock-anthropic
+   is acceptable evidence for this floor claim", expected "`-p` turn exits 0 with
+   a non-empty response". That is the same action, the same expectation, the
+   same explicitly-blessed mock — run against the real shipped artifact rather
+   than a loose engine. It is not a weaker cousin of G7; it *is* G7. (The
+   POST-landed assertion is strictly stronger than the recipe asks for: a hung or
+   silently-offline client cannot pass it.) `--quaude-attest` runs beside it and
+   proves the fused members verify; that is payload integrity, not a recipe row.
+
+   The qualifier that does all the work: **the fused quaude must EXECUTE on the
+   run-target's own platform.** A guest-VM leg fuses and smokes inside a guest of
+   the target OS+arch (earns it); a `no-exec` leg cross-builds something the
+   builder host cannot run (earns nothing); a `smoke: version` leg only asks the
+   binary its version (earns nothing); a `.com` smoked on the Linux runner earns
+   the row for `cosmo-linux-x86-64` and for no other cosmo host.
+
+**Does not earn a row**
+
+- A green build, a green cross-build, or a passing arch gate. "It compiled" is
+  not "it ran". Every tier-0 publisher has that already.
+- A `--version` / `--help` smoke, on any platform.
+- A row driven on a *sibling* run-target (another arch of the same OS, another
+  host of the same `.com`). Inheritance is what this ledger exists to prevent.
+- Anything from a run recorded under `## Attempted, not evidence` below.
+- Reasoning, however sound, about what a platform "should" do.
+
+**Provenance of the CI rows.** The build legs install the provider with an
+unpinned `npm i -g @anthropic-ai/claude-code` and fuse against whatever that
+resolved to that day, so those rows record `unpinned` rather than inventing a
+version; the leg's log names it, and the row names the workflow run so it can be
+looked up. `how: ci` in the manifest points at the CI rig in `PLATFORMS.md`.
+
+**Append, never rewrite — and the LATEST row wins.** A superseded result stays;
+the newer row goes beside it, never over it. `floorCoverage()` in
+`scripts/tjs-legs.mjs` resolves each (run-target, recipe row) pair to the row
+with the newest date (file order breaks a tie) and counts it green only on
+`pass`. So a recorded regression genuinely takes coverage away: appending a
+`fail` for a row that once passed drops the run-target's coverage, which is the
+entire reason for writing failures down. Rows in any section AFTER this table
+are invisible to that parser by construction.
 
 | date | run-target | row | engine | bundle | verdict | note |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -29,6 +89,33 @@ Verdicts: `pass` | `fail` | `open` (driven, divergence recorded, not yet fixed).
 | 2026-07-29 | darwin-arm64 | H7 | quaude | 2.1.218 | pass | Workflow runs to completed (same source, scenario 7; backfilled 2026-08-04) |
 | 2026-07-30 | darwin-arm64 | B4 | quaude | 2.1.218 | pass | full agentic suite at parity with native tjs, incl. Edit/FileHandle.chmod (BACKLOG.md "FULL AGENTIC FIDELITY SUITE GREEN ON COSMO (2026-07-30)" parity note: Write/Grep/Bash/Edit all pass on native tjs too; backfilled 2026-08-04) |
 | 2026-07-30 | darwin-arm64 | H6 | quaude | 2.1.218 | pass | subagent (Task) dispatch identical node-vs-quaude, at parity with cosmo (BACKLOG.md 2026-07-30 "agentic-subagent-diff 1/1"; backfilled 2026-08-04) |
+| 2026-07-29 | cosmo-macos-aarch64 | C1 | quaude | 2.1.218 | pass | Write round-trip creates file on disk (spike/quickjs/results/cosmo-fidelity-run.md sec.3 scenario 1, cosmo SUBJECT arm — 7/7, identical to the native CONTROL that backs the darwin-arm64 rows above; backfilled 2026-08-04) |
+| 2026-07-29 | cosmo-macos-aarch64 | B1 | quaude | 2.1.218 | pass | Bash stdout INLINE in tool_result (same source, scenario 3, SUBJECT arm; backfilled 2026-08-04) |
+| 2026-07-29 | cosmo-macos-aarch64 | G7 | quaude | 2.1.218 | pass | -p mock-anthropic Bash turn reaches a final response (same source, scenario 3, SUBJECT arm). The same document's "actual shipped artifact" check drove the FUSED quaude.com via /bin/sh to a final turn with inline tool_result — the shipped-binary form of the same claim (backfilled 2026-08-04) |
+| 2026-07-29 | cosmo-macos-aarch64 | H1 | quaude | 2.1.218 | pass | 2-tool Bash loop, both tool_results coherent+ordered (same source, scenario 4, SUBJECT arm; backfilled 2026-08-04) |
+| 2026-07-29 | cosmo-macos-aarch64 | H3 | quaude | 2.1.218 | pass | --continue restores prior session context (same source, scenario 6, SUBJECT arm; backfilled 2026-08-04) |
+| 2026-07-29 | cosmo-macos-aarch64 | H4 | quaude | 2.1.218 | pass | PreToolUse hook fires + denies claude update (same source, scenario 5, SUBJECT arm; backfilled 2026-08-04) |
+| 2026-07-29 | cosmo-macos-aarch64 | H7 | quaude | 2.1.218 | pass | Workflow runs to completed (same source, scenario 7, SUBJECT arm; backfilled 2026-08-04) |
+| 2026-08-02 | netbsd-amd64 | G7 | quaude | unpinned | pass | build-pipeline PONG smoke ("What earns a row" #2): quaude fused and run INSIDE the NetBSD 10.1/amd64 guest, mock -p round-trip + attest green (release-tier CI run 30730368429, commit 4881ca8) |
+| 2026-08-02 | freebsd-amd64 | G7 | quaude | unpinned | pass | build-pipeline PONG smoke, in-guest on FreeBSD 14.0/amd64 (release-tier CI run 30730368429) |
+| 2026-08-02 | freebsd-arm64 | G7 | quaude | unpinned | pass | build-pipeline PONG smoke, in-guest on FreeBSD 14.4/arm64 under TCG (release-tier CI run 30730368429) |
+| 2026-08-02 | openbsd-amd64 | G7 | quaude | unpinned | pass | build-pipeline PONG smoke, in-guest on OpenBSD 7.9/amd64 (release-tier CI run 30730368429) |
+| 2026-08-02 | openbsd-arm64 | G7 | quaude | unpinned | pass | build-pipeline PONG smoke, in-guest on OpenBSD 7.9/arm64 under TCG (release-tier CI run 30730368429) |
+| 2026-08-02 | dragonflybsd-amd64 | G7 | quaude | unpinned | pass | build-pipeline PONG smoke, in-guest on DragonFly 6.4.2 (release-tier CI run 30730368429) |
+| 2026-08-02 | midnightbsd-amd64 | G7 | quaude | unpinned | pass | build-pipeline PONG smoke, in-guest on MidnightBSD 4.0.4 (release-tier CI run 30730368429) |
+| 2026-08-02 | omnios-amd64 | G7 | quaude | unpinned | pass | build-pipeline PONG smoke, in-guest on OmniOS r151056 (release-tier CI run 30730368429) |
+| 2026-08-02 | openindiana-amd64 | G7 | quaude | unpinned | pass | build-pipeline PONG smoke, in-guest on OpenIndiana 202510 (release-tier CI run 30730368429) |
+| 2026-08-02 | solaris-amd64 | G7 | quaude | unpinned | pass | build-pipeline PONG smoke, in-guest on Solaris 11.4 (release-tier CI run 30730368429) |
+| 2026-08-02 | haiku-x64 | G7 | quaude | unpinned | pass | build-pipeline PONG smoke, in-guest on Haiku r1beta5 — the >64KB uv_write deadlock class does not block a -p turn (release-tier CI run 30730368429) |
+| 2026-08-02 | windows-x64 | G7 | quaude | unpinned | pass | build-pipeline PONG smoke, fused and run natively on the windows-latest runner (release-tier CI run 30730368429) |
+| 2026-08-02 | windows-arm64 | G7 | quaude | unpinned | pass | build-pipeline PONG smoke, fused and run natively on the windows-11-arm runner (release-tier CI run 30730368429) |
+| 2026-08-02 | linux-x64-musl | G7 | quaude | unpinned | pass | build-pipeline PONG smoke: the static-musl x86_64 artifact fused and run on the ubuntu-latest runner (same kernel+arch as its target; static, so the host libc is not in play) (release-tier CI run 30730368429) |
+| 2026-08-02 | linux-arm64-musl | G7 | quaude | unpinned | pass | build-pipeline PONG smoke, static-musl aarch64 artifact run on the ubuntu-24.04-arm runner (release-tier CI run 30730368429) |
+| 2026-08-02 | linux-x86-musl | G7 | quaude | unpinned | pass | build-pipeline PONG smoke, static-musl 32-bit x86 artifact executed natively by the x86_64 runner kernel (release-tier CI run 30730368429) |
+| 2026-08-02 | cosmo-linux-x86-64 | G7 | quaude | unpinned | pass | build-pipeline PONG smoke: the fat APE fused and run ON the ubuntu-latest build host — the ONE cosmo host the .com is actually executed on in CI; the other seven cosmo run-targets get nothing from this row (release-tier CI run 30730368429) |
+| 2026-08-02 | netbsd-arm64 | G7 | quaude | unpinned | pass | build-pipeline PONG smoke, in-guest on NetBSD 10.1/arm64 under TCG — a fresh, independently-dated confirmation of the 2026-07-09 spike row above (release-tier CI run 30730368429) |
+| 2026-08-02 | netbsd-sparc | G7 | quaude | unpinned | pass | build-pipeline PONG smoke via the own-qemu backend: the cross-fused sparc builder fuses a quaude and PONGs on the 32-bit BE sun4m guest — confirms the 2026-07-09 row above (release-tier CI run 30730368429) |
+| 2026-08-02 | darwin-arm64 | G7 | quaude | unpinned | pass | build-pipeline PONG smoke, fused and run natively on the macos-14 (floor) runner — confirms the 2026-07-29 scenario-3 row above (release-tier CI run 30730368429) |
 
 ## Attempted, not evidence
 
@@ -69,3 +156,20 @@ No tier claim may cite this run, for the passes or the failures. Fixing the
 harness (isolate `$HOME`, rebuild a fresh engine before driving) is phase-3
 work; until then, a clean darwin-arm64 floor drive has simply never been
 done.
+
+What that run recorded, written down so nobody re-discovers it — **NOT
+evidence**, in either direction. These rows are below the `##` heading, so
+`floorCoverage()` cannot see them; note that the B4 `fail` postdates the B4
+`pass` in the table above, so a section-blind parser plus latest-wins would let
+a disqualified run silently revoke coverage the ledger legitimately holds. That
+is exactly what the section-aware parse prevents.
+
+| date | run-target | row | engine | bundle | verdict | note |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2026-08-04 | darwin-arm64 | B4 | quaude | 2.1.218 | fail | CONTAMINATED — stale engine + live $HOME (Write/Grep) |
+| 2026-08-04 | darwin-arm64 | H1 | quaude | 2.1.218 | fail | CONTAMINATED — multi-turn |
+| 2026-08-04 | darwin-arm64 | H4 | quaude | 2.1.218 | fail | CONTAMINATED — PreToolUse hook |
+| 2026-08-04 | darwin-arm64 | H6 | quaude | 2.1.218 | fail | CONTAMINATED — subagent/Task dispatch |
+| 2026-08-04 | darwin-arm64 | F2 | quaude | 2.1.218 | fail | CONTAMINATED — Bash/Edit round-trip (real ~/.claude.json lock contention in the captured stderr) |
+| 2026-08-04 | darwin-arm64 | H3 | quaude | 2.1.218 | pass | CONTAMINATED — --continue; a pass from a contaminated run is not evidence either |
+| 2026-08-04 | darwin-arm64 | H7 | quaude | 2.1.218 | pass | CONTAMINATED — Workflow completion; same |

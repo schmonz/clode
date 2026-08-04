@@ -25,7 +25,12 @@ const legsFor = (tier, only) => JSON.parse(
   execFileSync(process.execPath,
     [path.join(REPO, 'scripts', 'tjs-legs.mjs'), tier, ...(only ? [only] : [])], { encoding: 'utf8' }));
 
-const { runTargetsFor, publishedRunTargets, DARWIN_SLICES, fidelityFor, floorCoverage, FLOOR_ROWS } = require('../scripts/tjs-legs.mjs');
+// `legsFor` above is the EMITTED matrix (what tjs-legs.yml feeds
+// strategy.matrix.include) — deliberately stripped of the non-scalar ledger
+// fields. `legsDirect` is the manifest itself; ledger assertions must read it,
+// not the matrix JSON.
+const { runTargetsFor, publishedRunTargets, DARWIN_SLICES, fidelityFor, floorCoverage,
+  FLOOR_ROWS, parseResultsRows, legsFor: legsDirect } = require('../scripts/tjs-legs.mjs');
 
 test('release tier splits cleanly into darwin / notdarwin (universal decoupling)', () => {
   const all = legsFor('release').map((l) => l.leg).sort();
@@ -547,7 +552,9 @@ test('published run-targets include the darwin slices (publish:false, shipped in
 
 test('publishedRunTargets covers every publish:true leg', () => {
   const rts = new Set(publishedRunTargets());
-  for (const l of legsFor('release').filter((l) => l.publish)) {
+  // legsDirect, not the emitted matrix: cli() strips runTargets (it is not a
+  // build input), so the matrix JSON would make cosmo look like one run-target.
+  for (const l of legsDirect('release').filter((l) => l.publish)) {
     for (const rt of runTargetsFor(l)) {
       assert.ok(rts.has(rt), `${l.leg}: run-target ${rt} missing from publishedRunTargets()`);
     }
@@ -604,7 +611,7 @@ test('tier claims are consistent with derived floor coverage (tier>=1 iff all si
 });
 
 test('cosmo declares its run-targets explicitly — one .com, many hosts', () => {
-  const cosmo = legsFor('release').find((l) => l.leg === 'cosmo');
+  const cosmo = legsDirect('release').find((l) => l.leg === 'cosmo');
   assert.ok(cosmo.runTargets && cosmo.runTargets.length > 1,
     'cosmo ships one .com for many hosts; a single run-target would let it inherit ' +
     'its ubuntu-latest build hosts credibility for platforms nobody has run it on');
@@ -683,9 +690,24 @@ test('golden ledger: the full run-target -> tier map', () => {
 // than requiring published.has(rt) for them.
 test('every declared run-target is actually published, and vice versa', () => {
   const declared = new Set();
-  for (const l of legsFor('release')) {
+  for (const l of legsDirect('release')) {
     if (!l.fidelity) continue;
     for (const rt of runTargetsFor(l)) declared.add(rt);
+    // ...and the KEYS of a per-run-target fidelity map, not just the
+    // run-targets the leg claims. Iterating runTargetsFor() alone let a
+    // fidelity entry for a run-target this leg does not produce (a typo, a
+    // renamed target, a copy-paste from another leg) sit in the manifest
+    // forever: fidelityFor() would never return it and no test would look at
+    // it. A flat declaration is `{tier, ...}`; a per-run-target map has
+    // no `tier` of its own and its keys ARE run-target names.
+    if (l.fidelity.tier !== undefined) continue;
+    const claimed = new Set(runTargetsFor(l));
+    for (const rt of Object.keys(l.fidelity)) {
+      assert.ok(claimed.has(rt),
+        `${l.leg}: fidelity declares '${rt}', which is not one of its run-targets `
+        + `(${[...claimed].join(', ')}) — a bogus key is dead metadata nothing reads`);
+      declared.add(rt);
+    }
   }
   const published = new Set(publishedRunTargets());
   for (const rt of published) {
@@ -697,4 +719,88 @@ test('every declared run-target is actually published, and vice versa', () => {
         `${rt} is declared but not published — stale declaration?`);
     }
   }
+});
+
+// The emitted JSON IS strategy.matrix.include, and tjs-legs.yml's `leg` job has
+// no `name:` — GHA builds each job's display name out of the matrix values, and
+// those names are what branch protection matches. A serialized object/array in
+// there would rename required checks on every ledger edit. fidelity/runTargets
+// are ledger metadata; they must never leave cli().
+test('the emitted matrix carries only scalars — no fidelity, no runTargets', () => {
+  for (const tier of ['release', 'ci']) {
+    for (const l of legsFor(tier)) {
+      assert.ok(!('fidelity' in l), `${l.leg} (${tier}): 'fidelity' leaked into the emitted matrix`);
+      assert.ok(!('runTargets' in l), `${l.leg} (${tier}): 'runTargets' leaked into the emitted matrix`);
+      for (const [k, v] of Object.entries(l)) {
+        assert.ok(v === null || typeof v !== 'object',
+          `${l.leg} (${tier}): matrix key '${k}' is non-scalar (${JSON.stringify(v)}) — `
+          + 'GHA composes job display names from matrix values');
+      }
+    }
+  }
+  // The ledger fields are still THERE in the manifest — stripped from the
+  // matrix, not deleted from the source of truth.
+  const cosmo = legsDirect('release').find((l) => l.leg === 'cosmo');
+  assert.ok(cosmo.runTargets && cosmo.fidelity, 'the manifest must still carry the ledger fields');
+});
+
+// A `how` names the rig the run was driven on. If that id does not appear in
+// PLATFORMS.md, the citation is unfollowable — the reader cannot find out what
+// the box was, what it could run, or how to re-drive the row there. `ci` is the
+// one literal allowed without a section id lookup, and PLATFORMS.md documents
+// it as a rig too.
+test('every fidelity `how` names a rig that exists in PLATFORMS.md', () => {
+  const platforms = fs.readFileSync(path.join(REPO, 'test/fidelity/PLATFORMS.md'), 'utf8');
+  const ids = new Set([...platforms.matchAll(/\*\*Rig id:\*\*\s*`([a-z0-9-]+)`/g)].map((m) => m[1]));
+  assert.ok(ids.size >= 5, `PLATFORMS.md must label its rig sections with ids (found ${ids.size})`);
+  for (const rt of publishedRunTargets()) {
+    const f = fidelityFor(rt);
+    if (!f.how) continue;
+    assert.ok(f.how === 'ci' || ids.has(f.how),
+      `${rt}: how='${f.how}' is not a rig id in test/fidelity/PLATFORMS.md `
+      + `(known: ${[...ids].sort().join(', ')})`);
+  }
+});
+
+// RESULTS.md quarantines a contaminated darwin-arm64 run under `## Attempted,
+// not evidence`. Those rows are REAL recorded outcomes and are deliberately
+// written down — but they are not evidence, and one of them (B4 fail, dated
+// AFTER the B4 pass) would, if counted, revoke coverage the ledger legitimately
+// holds. Section-blind parsing plus latest-wins is exactly how a disqualified
+// run would come back to grade the ledger.
+test('the parser reads the results table only — quarantined rows are not evidence', () => {
+  const text = fs.readFileSync(path.join(REPO, 'test/fidelity/RESULTS.md'), 'utf8');
+  const quarantineStart = text.indexOf('## Attempted, not evidence');
+  assert.ok(quarantineStart > 0, 'the quarantine section must exist');
+  const quarantine = text.slice(quarantineStart);
+  assert.match(quarantine, /^\| 2\d{3}-\d{2}-\d{2} \| darwin-arm64 \| B4 \|.*\| fail \|/m,
+    'this test needs a dated table row inside the quarantine section to be meaningful');
+
+  const parsed = parseResultsRows(text);
+  assert.ok(parsed.length > 0, 'the results table must parse');
+  for (const r of parsed) {
+    assert.ok(!(r.rt === 'darwin-arm64' && r.row === 'B4' && r.verdict === 'fail'),
+      'a row from the quarantine section was parsed as evidence');
+  }
+  // ...and end to end: darwin-arm64 keeps B4 despite the later quarantined fail.
+  assert.ok(floorCoverage('darwin-arm64').green.includes('B4'),
+    'the quarantined B4 fail must not revoke the recorded B4 pass');
+
+  // Synthetic proof of the two rules in isolation: a later fail revokes, and a
+  // row after a `##` heading is invisible.
+  const synthetic = [
+    '| date | run-target | row | engine | bundle | verdict | note |',
+    '| --- | --- | --- | --- | --- | --- | --- |',
+    '| 2026-01-01 | fake-target | B1 | quaude | 1.0.0 | pass | first |',
+    '| 2026-02-01 | fake-target | B1 | quaude | 1.0.0 | fail | regressed |',
+    '| 2026-01-01 | other-target | C1 | quaude | 1.0.0 | pass | kept |',
+    '',
+    '## Attempted, not evidence',
+    '',
+    '| 2026-03-01 | other-target | C1 | quaude | 1.0.0 | fail | contaminated |',
+  ].join('\n');
+  const rows = parseResultsRows(synthetic);
+  assert.deepStrictEqual(rows.map((r) => `${r.rt}/${r.row}/${r.verdict}`),
+    ['fake-target/B1/pass', 'fake-target/B1/fail', 'other-target/C1/pass'],
+    'rows after the first ## heading must not be parsed');
 });

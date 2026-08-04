@@ -37,7 +37,10 @@ for (const tier of [2, 1, 0]) {
   const uncovered = list.filter((r) => r.green.length === 0).sort((a, b) => a.rt.localeCompare(b.rt));
 
   for (const r of covered) {
-    const prov = r.date ? `  ${r.date}  bundle ${r.bundle}  via ${r.how}` : '';
+    // bundle is optional: the CI rows install the provider unpinned, so there
+    // is no version to name (RESULTS.md records `unpinned`). Print what exists
+    // rather than "bundle undefined".
+    const prov = r.date ? `  ${r.date}${r.bundle ? `  bundle ${r.bundle}` : ''}  via ${r.how}` : '';
     console.log(
       `  ${r.rt.padEnd(22)}floor ${r.green.length}/${FLOOR_ROWS.length} (${r.green.join(',')})  `
       + `missing ${r.missing.join(',')}${prov}`,

@@ -24,6 +24,8 @@ serve as the on-box reference on an exotic rig such as NetBSD/sparc.)
 
 ## Rig: Primary darwin (local)
 
+**Rig id:** `primary-darwin`
+
 **Engines available:** Claude (upstream), naude (Node SEA), quaude (tjs)
 **Test scope:** Full recipe (all rows A–J)
 **Applets:** Check `command -v rg bfs ugrep` first, then exercise both the present and absent case for the `applets`-tagged rows (see `test/fidelity/applet-config.mjs` for the present/absent config helper).
@@ -34,6 +36,8 @@ This is the canonical reference run. The operator executes the full recipe here 
 ---
 
 ## Rig: iTerm2 autonomous rig (darwin interactive TUI)
+
+**Rig id:** `iterm2-darwin`
 
 **Where:** Local darwin machine, in iTerm2 terminal, autonomous TUI mode
 **Engines available:** Claude (upstream), naude (Node SEA), quaude (tjs) — same as primary, but interactive
@@ -52,6 +56,8 @@ This is the canonical reference run. The operator executes the full recipe here 
 ---
 
 ## Rig: NetBSD/arm64 SSH VM
+
+**Rig id:** `netbsd-arm64-ssh-vm`
 
 **Where:** `ssh <credentials> <host>`
 **Engines available:** quaude (tjs — confirmed via the netbsd-arm64 leg). Node does not publish official NetBSD binaries for any architecture, so naude structurally cannot run here — this is not an arm64-specific gap, it applies to NetBSD regardless of arch (double-checked against the naude-reach design doc, which excludes NetBSD outright, not just some arches).
@@ -72,6 +78,8 @@ This is the canonical reference run. The operator executes the full recipe here 
 
 ## Rig: Tiger PPC VM
 
+**Rig id:** `tiger-ppc-vm`
+
 **Where:** `ssh -p 1215 schmonz@localhost` (or operator's configured credentials)
 **Engines available:** quaude (tjs — proven on real PowerPC via cross-fuse). Node has never published PowerPC macOS binaries and Tiger (10.4) predates any Node build in any case, so naude cannot run here.
 **Reference engine:** None locally. Use the **darwin baseline**: run this row's Claude + naude behavior on the primary darwin rig, then compare quaude-on-Tiger-PPC against that recorded darwin baseline.
@@ -91,6 +99,8 @@ This is the canonical reference run. The operator executes the full recipe here 
 
 ## Rig: Haiku box
 
+**Rig id:** `haiku-box`
+
 **Where:** Direct access to Haiku hardware or VM
 **Engines available:** quaude (tjs — confirmed via haiku-x64 leg). Node does not publish Haiku binaries, so naude cannot run here.
 **Reference engine:** None locally. Use the **darwin baseline**: run this row's Claude + naude behavior on the primary darwin rig, then compare quaude-on-Haiku against that recorded darwin baseline.
@@ -109,6 +119,8 @@ This is the canonical reference run. The operator executes the full recipe here 
 ---
 
 ## Rig: sparc VM
+
+**Rig id:** `sparc-vm`
 
 **Where:** qemu guest (NetBSD/sparc), managed by the fidelity harness or deployed separately
 **Engines available:** quaude (tjs — confirmed via netbsd-sparc leg and canonical-LE bytecode proof)
@@ -131,6 +143,8 @@ This is the canonical reference run. The operator executes the full recipe here 
 
 ## Rig: NetBSD/aarch64 spike VM (ephemeral, superseded by the SSH VM above)
 
+**Rig id:** `netbsd-aarch64-spike-vm`
+
 **Where:** A local, ephemeral qemu guest (`-accel hvf -cpu host -smp 2`, 4G), driven by
 `spike/quickjs/qemu/run-in-guest.py` + `spike/quickjs/qemu/guest-build.sh` per
 `spike/quickjs/qemu/RUNBOOK.md` — booted per-run and torn down, not a persistent
@@ -149,6 +163,8 @@ SSH VM's.
 
 ## Rig: Mavericks real-hardware floor-walk
 
+**Rig id:** `mavericks-vm`
+
 **Where:** A real (or hypervisor-backed) Mac running macOS 10.9.5 Mavericks (Darwin 13.4.0,
 x86_64) — the oldest 64-bit-Intel floor `darwin-x64` builds against. Not a persistent
 SSH-reachable box documented elsewhere in this file; reached via the operator's own setup for
@@ -162,6 +178,39 @@ smoke — RECIPE row G7 — for `darwin-x64`; raw spawn-path smoke for `darwin-x
 **Result recording:** Append platform tag `mavericks-vm`
 **Provenance:** This is the rig behind the 2026-07-11 evidence in `test/fidelity/RESULTS.md` for
 `darwin-x64` (on-box fuse, PONG + attest green, bundle 2.1.179).
+
+---
+
+## Rig: GitHub Actions CI (the build matrix itself)
+
+**Rig id:** `ci`
+
+**Where:** `.github/workflows/tjs-legs.yml` → `.github/actions/build-leg`, one job per leg
+of `scripts/tjs-legs.mjs`. Not a box you SSH to: a rig that re-runs itself on every push
+and every release.
+**Engines available:** quaude only (the leg fuses one and throws it away; naude and
+upstream Claude are not present in a leg job).
+**Reference engine:** None on the leg. Same darwin-baseline model as the other exotic rigs.
+**Test scope:** Exactly ONE recipe row, **G7**, and only on legs that actually EXECUTE the
+fused quaude on the run-target's own platform — see "What earns a row" in
+`test/fidelity/RESULTS.md`, which is the authority. In shape:
+
+- **Earns G7:** guest-VM legs (`exec=guest`: netbsd/freebsd/openbsd/dragonflybsd/
+  midnightbsd/omnios/solaris/openindiana/haiku) fuse and smoke INSIDE a guest of the
+  target OS+arch; native-runner legs (darwin-arm64, windows-x64/arm64) and the
+  static-musl Linux legs fuse and smoke on the runner itself; `netbsd-sparc` fuses and
+  PONGs inside its own-qemu sun4m guest; `cosmo` fuses and PONGs its `.com` on the
+  ubuntu runner — which earns the row for `cosmo-linux-x86-64` **only**.
+- **Earns nothing:** `no-exec` legs (the darwin x64/x86/ppc slices, the tier-2 Debian
+  crosses, the whole NetBSD build.sh fleet) — nothing on the builder can run the output;
+  `smoke: version` legs (the qemu-user musl arches: s390x, armv7, ppc64le, riscv64,
+  loongarch64) — a `--version` answer is not a turn; and the s390x `be-oracle` job, which
+  drives node-shim tests against the BARE engine under qemu-user, not a quaude turn.
+
+**Applets:** None installed; the leg exercises the applet-absent configuration only.
+**Result recording:** `how: ci` in `scripts/tjs-legs.mjs`, and a row in `RESULTS.md`
+citing the workflow run id. The provider is installed unpinned
+(`npm i -g @anthropic-ai/claude-code`), so those rows record `unpinned` as the bundle.
 
 ---
 

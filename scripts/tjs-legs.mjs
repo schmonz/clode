@@ -95,15 +95,18 @@ const LEGS = [
   // ---- T1.5 Alpine musl-static (the published Linux artifacts)
   { leg: 'linux-x64-musl', os: 'ubuntu-latest', 'guest-platform': 'alpine', 'guest-arch': 'x86_64',
     static: true, publish: true, ci: true,   // ci: per-push twin of THE published Linux artifact
-    fidelity: { tier: 0 } },
+    fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
+                note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run on the ubuntu runner (static musl, same kernel+arch)); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
   { leg: 'linux-arm64-musl', os: 'ubuntu-24.04-arm', 'guest-platform': 'alpine', 'guest-arch': 'aarch64',
     static: true, publish: true,              // alpine container on the arm runner
-    fidelity: { tier: 0 } },
+    fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
+                note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run on the ubuntu-24.04-arm runner (static musl)); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
   { leg: 'linux-s390x-musl', os: 'ubuntu-latest', 'guest-platform': 'alpine', 'guest-arch': 's390x',
     static: true, wasm: 'off',                // WAMR's MAP_32BIT is x86/ARM-only; undefined on s390x
     publish: true, smoke: 'version',          // PONG-class smoke lives in the be-oracle job
     timeout: 300, 'soft-fail': true,          // slow qemu-user BE leg — non-blocking (plan T1.5)
-    fidelity: { tier: 0 } },
+    fidelity: { tier: 0,
+                note: 'zero floor coverage: this leg smokes --version only (smoke: \'version\'), so the build-pipeline PONG turn NEVER runs on s390x — see RESULTS.md "What earns a row"' } },
   // ---- Phase-2 legs (plan Q2 PHASE-2 PICKUP). New legs start soft-fail and
   // EARN hard status by smoking green (house rule) — dispatches #5-#13
   // hardened everything except the slow qemu-user TCG class (non-blocking by
@@ -143,7 +146,12 @@ const LEGS = [
     // ON-BOX (bundle 2.1.179), PONG + attest green, quaude answers --version.
     // `PONG` in libexec/clode-fuse.cjs is exactly RECIPE G7 (`-p 'say PONG'`
     // against a mock, exit 0 + response matched + POST verified) — real, not
-    // asserted, evidence. MAINTAINER RULING 2026-08-04: tier 1 requires all
+    // asserted, evidence. That equivalence is now WRITTEN DOWN and applied to
+    // every leg that executes the smoke on its own target (RESULTS.md, "What
+    // earns a row" #2): it was being counted here and silently discounted on
+    // ~19 other legs running the identical smoke. This leg is `no-exec` in CI,
+    // so its G7 comes from the on-box Mavericks run, not from a leg job.
+    // MAINTAINER RULING 2026-08-04: tier 1 requires all
     // six FLOOR_ROWS green (no partial credit); only G7 is covered here (no
     // A1/B1/B4/C1/D1 evidence for this run-target — the leg is no-exec off
     // the darwin-universal path, so the Mavericks box, not the ubuntu
@@ -242,7 +250,8 @@ const LEGS = [
   // leg deleted — mingw is retired.)
   { leg: 'windows-x64', os: 'windows-latest', msvc: true, publish: true, ci: true,
     wasm: 'off', mimalloc: 'off', ffi: 'off',
-    fidelity: { tier: 0 } },
+    fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
+                note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run natively on the windows-latest runner); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
   // windows-arm64 (the Windows finale): native MSVC ARM64 on the windows-11-arm
   // runner (msvc-arch:arm64 → the dev-env's cl targets ARM64), exec=host build +
   // fuse + PONG like windows-x64. PUBLISHES clode-<ver>-windows-arm64 — the asset
@@ -251,26 +260,32 @@ const LEGS = [
   // windows-x64. Finer signals run in ci.yml's windows-arm64-tests job.
   { leg: 'windows-arm64', os: 'windows-11-arm', msvc: true, 'msvc-arch': 'arm64',
     publish: true, ci: true, wasm: 'off', mimalloc: 'off', ffi: 'off',
-    fidelity: { tier: 0 } },
+    fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
+                note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run natively on the windows-11-arm runner); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
   // ---- T1.5 extra musl arches. x86 execs natively on the x64 kernel (full
   // smoke); the rest are qemu-user with version-smoke like s390x. wasm off:
   // MAP_32BIT is x86_64/aarch64-only in musl headers — and 32-bit WAMR is
   // worthless to us anyway.
   { leg: 'linux-x86-musl', os: 'ubuntu-latest', 'guest-platform': 'alpine', 'guest-arch': 'x86',
     static: true, wasm: 'off', publish: true,  // 32-bit LE
-    fidelity: { tier: 0 } },
+    fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
+                note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run natively by the x86_64 runner kernel (static musl)); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
   { leg: 'linux-armv7-musl', os: 'ubuntu-latest', 'guest-platform': 'alpine', 'guest-arch': 'armv7',
     static: true, wasm: 'off', publish: true, smoke: 'version', timeout: 300, 'soft-fail': true,  // qemu-user (Cobalt runners lack aarch32 EL0)
-    fidelity: { tier: 0 } },
+    fidelity: { tier: 0,
+                note: 'zero floor coverage: this leg smokes --version only (smoke: \'version\'), so the build-pipeline PONG turn NEVER runs on armv7 — see RESULTS.md "What earns a row"' } },
   { leg: 'linux-ppc64le-musl', os: 'ubuntu-latest', 'guest-platform': 'alpine', 'guest-arch': 'ppc64le',
     static: true, wasm: 'off', publish: true, smoke: 'version', timeout: 300, 'soft-fail': true,  // qemu-user
-    fidelity: { tier: 0 } },
+    fidelity: { tier: 0,
+                note: 'zero floor coverage: this leg smokes --version only (smoke: \'version\'), so the build-pipeline PONG turn NEVER runs on ppc64le — see RESULTS.md "What earns a row"' } },
   { leg: 'linux-riscv64-musl', os: 'ubuntu-latest', 'guest-platform': 'alpine', 'guest-arch': 'riscv64',
     static: true, wasm: 'off', publish: true, smoke: 'version', timeout: 300, 'soft-fail': true,  // qemu-user
-    fidelity: { tier: 0 } },
+    fidelity: { tier: 0,
+                note: 'zero floor coverage: this leg smokes --version only (smoke: \'version\'), so the build-pipeline PONG turn NEVER runs on riscv64 — see RESULTS.md "What earns a row"' } },
   { leg: 'linux-loongarch64-musl', os: 'ubuntu-latest', 'guest-platform': 'alpine', 'guest-arch': 'loongarch64',
     static: true, wasm: 'off', publish: true, smoke: 'version', timeout: 300, 'soft-fail': true,  // qemu-user (alpine >= 3.21)
-    fidelity: { tier: 0 } },
+    fidelity: { tier: 0,
+                note: 'zero floor coverage: this leg smokes --version only (smoke: \'version\'), so the build-pipeline PONG turn NEVER runs on loongarch64 — see RESULTS.md "What earns a row"' } },
   // ---- T2 VM legs: fuse + smoke run INSIDE the guest (exec=guest —
   // BSD/illumos binaries have no binfmt escape on a Linux host). Config:
   // wasm off (WAMR "linux"-platform mremap wall on every non-Linux POSIX),
@@ -294,11 +309,18 @@ const LEGS = [
     // ABANDONED for local fidelity work on 2026-07-06 in favor of aarch64
     // (spike/quickjs/results/gate3-netbsd-aarch64.md: "This target replaced
     // the planned NetBSD/amd64 rung ... the abandoned amd64/TCG rung needed
-    // ~25 minutes just to install and never got through pkg_add"). No
-    // RESULTS.md row, no spike scorecard, no dated fidelity-recipe evidence
-    // exists for netbsd-amd64 beyond ordinary green CI build+smoke (the same
-    // evidence every tier-0 publisher has).
-    fidelity: { tier: 0, note: 'amd64 rung abandoned 2026-07-06 in favor of arm64; never driven' } },
+    // ~25 minutes just to install and never got through pkg_add"). No hand
+    // drive, no spike scorecard exists for netbsd-amd64.
+    // What it DOES have (2026-08-04, "what earns a row" ruling): G7, from the
+    // build-pipeline PONG smoke that fuses and runs a quaude inside the NetBSD
+    // 10.1/amd64 guest on every build. That earlier "no evidence beyond
+    // ordinary green CI build+smoke" note was the inconsistency the ruling
+    // fixed — the identical smoke was being counted for darwin-x64 and
+    // discounted here. It is one row, not a tier: A1/B1/B4/C1/D1 remain undriven.
+    fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
+                note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run in-guest); '
+                      + 'A1,B1,B4,C1,D1 not driven; the hand-driven amd64 rung was abandoned '
+                      + '2026-07-06 in favor of arm64 — see RESULTS.md' } },
   { leg: 'freebsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'freebsd',
     // PROVEN floor (probe run 29157832721, honest in-guest build): 14.0 is
     // the oldest whose pkg repos still exist — 12.x/13.x died with their
@@ -309,7 +331,8 @@ const LEGS = [
     'ci-guest-version': '15.1',
     'guest-packages': 'cmake gmake node git bash', floor: '14.0',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true,  // cpa, KVM
-    fidelity: { tier: 0 } },
+    fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
+                note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run in-guest); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
   // OpenBSD is EXEMPT from publish-oldest: ld.so refuses on libc.so major
   // mismatch and majors bump nearly every release, in BOTH directions
   // (probe evidence: the 7.9-built tjs died on 7.6 with "can't load library
@@ -320,11 +343,13 @@ const LEGS = [
   { leg: 'openbsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'openbsd', 'guest-version': '7.9',
     'guest-packages': 'cmake gmake node git bash', floor: '7.9',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true,  // cpa, KVM
-    fidelity: { tier: 0 } },
+    fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
+                note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run in-guest); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
   { leg: 'dragonflybsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'dragonflybsd', 'guest-version': '6.4.2',
     'guest-packages': 'cmake gmake node git bash', floor: '6.4.2',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true,  // cpa, KVM
-    fidelity: { tier: 0 } },
+    fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
+                note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run in-guest); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
   { leg: 'omnios-amd64', os: 'ubuntu-latest', 'guest-platform': 'omnios',
     'guest-version': 'r151056',        // PROVEN floor (probe run 29154489454, 2026-07-11) — oldest in cpa catalog
     // renovate: datasource=custom.cpa-omnios-x86-64 depName=omnios-x86-64-guest versioning=loose
@@ -332,7 +357,8 @@ const LEGS = [
     'guest-packages': 'developer/gcc14 developer/build/gnu-make ooce/developer/cmake ooce/runtime/node-22 developer/versioning/git shell/bash',
     floor: 'r151056',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true,  // cpa, KVM (illumos rung)
-    fidelity: { tier: 0 } },
+    fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
+                note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run in-guest); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
   { leg: 'solaris-amd64', os: 'ubuntu-latest', 'guest-platform': 'solaris',
     'guest-version': '11.4-gcc',       // CBE image with gcc/g++ preinstalled
     // renovate: datasource=custom.vmactions-solaris depName=solaris-guest versioning=loose
@@ -341,7 +367,8 @@ const LEGS = [
     floor: '11.4',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true,
     timeout: 120,                 // vmactions boot is slower than cpa
-    fidelity: { tier: 0 } },
+    fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
+                note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run in-guest); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
   // ---- Sweep 2 (2026-07-10): the remaining easy adds on proven machinery.
   // BSD arm64 = cpa's other architecture (TCG on GitHub runners — no
   // /dev/kvm — hence the long timeouts); MidnightBSD + Haiku = cpa's
@@ -371,18 +398,21 @@ const LEGS = [
   { leg: 'freebsd-arm64', os: 'ubuntu-latest', 'guest-platform': 'freebsd', 'guest-arch': 'arm64',
     'guest-version': '14.4', 'guest-packages': 'cmake gmake node git bash', floor: '14.4',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 300, 'soft-fail': true,  // cpa, TCG
-    fidelity: { tier: 0 } },
+    fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
+                note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run in-guest under TCG); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
   { leg: 'openbsd-arm64', os: 'ubuntu-latest', 'guest-platform': 'openbsd', 'guest-arch': 'arm64',
     'guest-version': '7.9', 'guest-packages': 'cmake gmake node git bash', floor: '7.9',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 300, 'soft-fail': true,  // cpa, TCG
-    fidelity: { tier: 0 } },
+    fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
+                note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run in-guest under TCG); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
   { leg: 'midnightbsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'midnightbsd', 'guest-version': '4.0.4',
     // no git: the 4.0.4 mport tree's git dep chain is broken (p5-Digest-HMAC
     // wants perl >= 5.40.3, image ships 5.38.5 — dispatch #14); every cmake
     // git usage is if(GIT_EXECUTABLE)-guarded, so the build does not need it.
     'guest-packages': 'cmake gmake node bash', floor: '4.0.4',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, 'soft-fail': true, ci: true,  // cpa, KVM (mport packages)
-    fidelity: { tier: 0 } },
+    fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
+                note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run in-guest); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
   { leg: 'haiku-x64', os: 'ubuntu-latest', 'guest-platform': 'haiku', 'guest-version': 'r1beta5',
     // HaikuPorts ships exactly ONE node: nodejs20 (user-verified, 2026-07-10)
     // — named explicitly; v20 clears the build floor (lowered to 20 for
@@ -391,11 +421,17 @@ const LEGS = [
     'guest-packages': 'cmd:cmake cmd:gcc nodejs20 cmd:git cmd:make', floor: 'r1beta5',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, 'soft-fail': true, ci: true,  // cpa, KVM (a genuinely new OS rung)
     // PLATFORMS.md documents a Haiku RIG (how to reach the box, which rows to
-    // run) -- a runbook, not a result. The only Haiku evidence on record is the
-    // leg building green plus a >64KB uv_write deadlock isolated by bare-engine
-    // probes (memory: haiku-tjs-write-deadlock) -- engine debugging, not a floor
-    // drive. No Haiku row exists in test/fidelity/RESULTS.md.
-    fidelity: { tier: 0 } },
+    // run) -- a runbook, not a result. Nobody has ever hand-driven the recipe
+    // on Haiku; the other Haiku evidence on record is a >64KB uv_write deadlock
+    // isolated by bare-engine probes (memory: haiku-tjs-write-deadlock) --
+    // engine debugging, not a floor drive. As of the 2026-08-04 "what earns a
+    // row" ruling it does hold G7: the build-pipeline PONG smoke fuses and runs
+    // a quaude inside the Haiku guest on every build (so a -p turn is not
+    // blocked by the uv_write class). C2, the row that deadlock actually
+    // threatens, is NOT a floor row and remains undriven here.
+    fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
+                note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run in-guest); '
+                      + 'A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
   { leg: 'openindiana-amd64', os: 'ubuntu-latest', 'guest-platform': 'openindiana',
     // PROVEN floor (probe run 29154489921, 2026-07-11) — oldest vmactions
     // conf; build-essential image. Release-only leg (illumos distro twin):
@@ -405,7 +441,8 @@ const LEGS = [
     'guest-packages': 'developer/build/cmake developer/build/gnu-make developer/versioning/git shell/bash runtime/nodejs',
     floor: '202510',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 120, 'soft-fail': true,  // vmactions (3rd illumos flavor)
-    fidelity: { tier: 0 } },
+    fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
+                note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run in-guest); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
   // netbsd-sparc (the first truly-weird platform; cross-fuse A+B1+C): the sparc
   // tjs ENGINE is built once via the source-hash tjs-cache (TCG bake on miss);
   // per-run cross-fuses the clode --self builder on the x64 runner (Layer A,
@@ -711,13 +748,26 @@ const LEGS = [
     // evidence.
     fidelity: {
       // MAINTAINER RULING 2026-08-04: tier 1 requires all six FLOOR_ROWS
-      // green (no partial credit); only B4 has a RESULTS.md pass row here
-      // (A1/B1/C1/D1/G7 uncovered), so tier 0 is correct even though the
-      // F6/D6/G2 interactive rows (not floor rows) are also green.
+      // green (no partial credit), so tier 0 is correct at 4/6.
+      // CORRECTED 2026-08-04 (understated): the cited source
+      // (spike/quickjs/results/cosmo-fidelity-run.md sec.3) has TWO arms, and
+      // only the native CONTROL arm had been mined — for darwin-arm64's rows.
+      // The cosmo SUBJECT arm passed the SAME 7/7 scenarios (Write, Grep,
+      // Bash-inline, 2-tool loop, PreToolUse hook, --continue, Workflow), plus
+      // a Bash round-trip against the actual fused quaude.com. Reading a
+      // document's control arm and ignoring its subject arm understated the
+      // very platform the run was ABOUT. B1/C1/G7 backfilled from it (B4 was
+      // already recorded), so the floor now reads 4/6 — identical to
+      // darwin-arm64, from the same run, as it should be.
       // floorCoverage('cosmo-macos-aarch64') derives this from RESULTS.md.
       'cosmo-macos-aarch64': { tier: 0, date: '2026-07-30', bundle: '2.1.218', how: 'primary-darwin',
-                               note: 'floor 1/6 green (B4); A1,B1,C1,D1,G7 not driven; F6/D6/G2 interactive rows also pass (not floor rows) — see RESULTS.md' },
-      'cosmo-linux-x86-64':  { tier: 0, note: 'BUILD host. Never driven. "likely works off-mac" is not evidence.' },
+                               note: 'floor 4/6 green (B1,B4,C1,G7); A1,D1 not driven; H1/H3/H4/H7 + F6/D6/G2 also pass (not floor rows) — see RESULTS.md' },
+      // Was: "BUILD host. Never driven." — false under the 2026-08-04 ruling.
+      // The build host is the ONE place the .com is actually executed: the leg
+      // fuses it and runs the PONG smoke there. That earns G7 here and nowhere
+      // else in this map — the other seven hosts inherit nothing.
+      'cosmo-linux-x86-64':  { tier: 0, date: '2026-08-02', how: 'ci',
+                               note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run on the ubuntu build host); A1,B1,B4,C1,D1 not driven — see RESULTS.md' },
       'cosmo-linux-aarch64':  { tier: 0 },
       'cosmo-macos-x86-64':   { tier: 0 },
       'cosmo-windows-x86-64': { tier: 0 },
@@ -834,25 +884,56 @@ export function fidelityFor(runTarget) {
 // below and the fidelity notes both read from here, not a second declared list.
 export const FLOOR_ROWS = ['A1', 'B1', 'B4', 'C1', 'D1', 'G7'];
 
+// SECTION-AWARE parse of test/fidelity/RESULTS.md. Rows are read ONLY from the
+// results table: collection starts at that table's `| --- |` separator and
+// STOPS at the next `##` heading. RESULTS.md has an `## Attempted, not
+// evidence` section (a quarantined, contaminated run), and a "starts with | 2"
+// test would have silently counted any table row parked there — the ledger
+// would grade itself on evidence it had already disqualified. Exported so a
+// test can feed it synthetic text; floorCoverage() below is its only caller in
+// this file.
+export function parseResultsRows(text) {
+  const rows = [];
+  let started = false;
+  for (const line of text.split('\n')) {
+    if (/^\s*##/.test(line)) {
+      if (started) break;    // the results table ended at this heading
+      continue;
+    }
+    const t = line.trim();
+    if (!t.startsWith('|')) continue;
+    const cells = t.split('|').slice(1, -1).map((c) => c.trim());
+    if (cells.length !== 7) continue;
+    if (cells.every((c) => /^-+$/.test(c))) { started = true; continue; } // the separator opens the table
+    if (!started) continue;                                               // header (or stray prose pipe)
+    const [date, rt, row, engine, bundle, verdict, note] = cells;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    rows.push({ date, rt, row, engine, bundle, verdict, note, idx: rows.length });
+  }
+  return rows;
+}
+
 // Derived, not declared (repo doctrine — memory: "dep closure: derived, not
 // declared"): floor coverage for a run-target is computed by reading
 // test/fidelity/RESULTS.md directly, not by a second hand-maintained list in
-// this file that could drift from the evidence. A row counts as green only on
-// an exact `pass` verdict for that exact run-target + floor row id (RESULTS.md
-// "append, never rewrite" means an earlier `fail`/`open` row for the same pair
-// does not block a later `pass` from counting).
+// this file that could drift from the evidence.
+//
+// LATEST WINS. For a given (run-target, floor row) the row with the newest
+// DATE decides (file order breaks a tie), and it counts as green only on an
+// exact `pass`. The old "any pass anywhere wins" rule made a recorded
+// REGRESSION inert: append a `fail` for a row that once passed and coverage
+// would not budge, so the ledger could only ever look better than reality. A
+// later fail now takes the coverage away, which is the whole point of writing
+// failures down.
 export function floorCoverage(runTarget) {
   const resultsPath = fileURLToPath(new URL('../test/fidelity/RESULTS.md', import.meta.url));
-  const text = readFileSync(resultsPath, 'utf8');
-  const green = new Set();
-  for (const line of text.split('\n')) {
-    if (!line.startsWith('|')) continue;
-    const cells = line.split('|').slice(1, -1).map((c) => c.trim());
-    if (cells.length !== 7) continue;
-    const [date, rt, row, , , verdict] = cells;
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue; // skip header + separator rows
-    if (rt === runTarget && FLOOR_ROWS.includes(row) && verdict === 'pass') green.add(row);
+  const latest = new Map();
+  for (const r of parseResultsRows(readFileSync(resultsPath, 'utf8'))) {
+    if (r.rt !== runTarget || !FLOOR_ROWS.includes(r.row)) continue;
+    const prev = latest.get(r.row);
+    if (!prev || r.date > prev.date || (r.date === prev.date && r.idx > prev.idx)) latest.set(r.row, r);
   }
+  const green = new Set([...latest.values()].filter((r) => r.verdict === 'pass').map((r) => r.row));
   return {
     green: FLOOR_ROWS.filter((r) => green.has(r)),
     missing: FLOOR_ROWS.filter((r) => !green.has(r)),
@@ -872,7 +953,17 @@ export function cli(tier, only, versionOverride, macosMinOverride) {
   }
   if (versionOverride) legs = legs.map((l) => ({ ...l, 'guest-version': versionOverride }));
   if (macosMinOverride) legs = legs.map((l) => ({ ...l, 'macos-min': macosMinOverride }));
-  return legs;
+  // The emitted JSON goes straight to strategy.matrix.include, and every field
+  // name IS a matrix key. `fidelity` (an object) and `runTargets` (an array)
+  // are the first NON-SCALAR values in the manifest, and tjs-legs.yml's `leg`
+  // job has no `name:` — so GHA composes each job's display name from the
+  // matrix values, and those display names are exactly what branch-protection
+  // rules match. A serialized object landing in a required check's name would
+  // rename the check (and break the protection rule) on every ledger edit.
+  // Both fields are LEDGER metadata, not build inputs: strip them here, the
+  // same way legsFor() strips ci-os / ci-guest-version. fidelityFor() and the
+  // tests read them via a direct import, never from this JSON.
+  return legs.map(({ fidelity, runTargets, ...leg }) => leg);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
