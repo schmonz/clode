@@ -46,6 +46,9 @@ const VM = (leg) => leg['guest-platform'] && !['native', 'alpine'].includes(leg[
 // scripts/check-guest-versions.mjs sweep backstops implicit pins, floor
 // existence, and runner labels.
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
 const LEGS = [
   // ---- T1 native runners
   // Naming (user decision 2026-07-10): tjs builders own the CANONICAL name
@@ -60,26 +63,21 @@ const LEGS = [
   // — darwin ships exactly ONE artifact, clode-<ver>-macos (user pref
   // 2026-07-15). i386/ppc were never standalone (no-exec) — universal-only.
   { leg: 'darwin-arm64', os: 'macos-14', 'ci-os': 'macos-26', publish: false, pack: true, ci: true, floor: '11.0',
-    // CORRECTED 2026-08-04 audit (second pass): the prior "no clean floor
-    // drive exists" note over-corrected. Discarding the CONTAMINATED
-    // 2026-08-04 run (stale engine, non-hermetic $HOME — still discarded, see
-    // RESULTS.md "Attempted, not evidence") was right, but clean evidence from
-    // 2026-07-29..31 predates that bad run and is not erased by it:
-    // spike/quickjs/results/cosmo-fidelity-run.md sec.3 (2026-07-29) ran the
-    // native-tjs CONTROL (build/tjs/macos-26-arm64/tjs, bundle 2.1.218) through
-    // 7/7 fidelity scenarios (Write, Grep, Bash-inline, 2-tool loop,
-    // PreToolUse-hook, --continue, Workflow) — ALL PASS. BACKLOG.md's
-    // "FULL AGENTIC FIDELITY SUITE GREEN ON COSMO (2026-07-30)" entry adds
-    // Edit/FileHandle.chmod and Task/subagent-dispatch "at parity with native
-    // tjs" (i.e. native passed too). Floor-row coverage from this evidence:
-    // B1 (Bash-inline) YES, B4 (Write+Grep+Bash+Edit, ALL FOUR) YES, C1
-    // (Write) YES, G7 (any -p mock turn reaching a final response) YES; A1
-    // (relaunch persistence) and D1 (/quit) are NOT covered by any of this —
-    // still open. tier 2 stays unclaimed: F3/F4 remain open per this leg's
-    // long-running daily-drive notes, so the FULL recipe is not backed, only
-    // the floor + a wide non-floor slice. See test/fidelity/RESULTS.md.
-    fidelity: { tier: 1, date: '2026-07-30', bundle: '2.1.218', how: 'primary-darwin',
-                note: 'floor rows B1/B4/C1/G7 green (2026-07-29/30); A1/D1 not exercised; F3/F4 still open so no tier-2 claim; the 2026-08-04 attempt was separately discarded as contaminated' } },
+    // MAINTAINER RULING 2026-08-04: tier 1 keeps its STRICT meaning — all six
+    // FLOOR_ROWS (A1,B1,B4,C1,D1,G7) green, no partial credit. Not one
+    // run-target in the whole ledger clears that bar today, this one
+    // included, so tier 0 is correct even though its coverage is the best in
+    // the ledger. floorCoverage('darwin-arm64') derives this from
+    // test/fidelity/RESULTS.md (do not hand-edit the tier without adding the
+    // missing rows there first — test/tjs-legs.test.cjs enforces the two stay
+    // consistent). Evidence behind the green rows: spike/quickjs/results/
+    // cosmo-fidelity-run.md sec.3 (2026-07-29, native-tjs CONTROL, bundle
+    // 2.1.218, 7/7 scenarios) + BACKLOG.md's 2026-07-30 "at parity with
+    // native tjs" entry (adds Edit). tier 2 stays unclaimed regardless: F3/F4
+    // remain open per this leg's long-running daily-drive notes, so even a
+    // clean floor wouldn't back the full recipe.
+    fidelity: { tier: 0, date: '2026-07-30', bundle: '2.1.218', how: 'primary-darwin',
+                note: 'floor 4/6 green (B1,B4,C1,G7); A1,D1 not driven — see RESULTS.md' } },
   // glibc Linux: a CI-only CANARY (ciOnly:true → built in CI, filtered OUT of the
   // release tier; NB `smoke` is a different, taken field — the qemu-user smoke
   // MODE on the musl legs). The published Linux artifacts are musl-static
@@ -139,21 +137,21 @@ const LEGS = [
     'cross-dockerfile': 'ci/osxcross-darwin', 'cross-file': 'scripts/darwin-x64.toolchain.cmake',
     'macos-min': '10.6', 'macos-arch': 'x86_64', floor: '10.6', 'no-exec': true,
     wasm: 'off', mimalloc: 'off', ffi: 'off',
-    // CORRECTED 2026-08-04 audit: this used to say "never driven as a
-    // standalone run-target" — factually false. Commit 57fb352 (2026-07-11,
-    // "darwin-x64 floor proven on real Mavericks hardware"): on a real
-    // Mavericks 10.9.5 box (Darwin 13.4.0, x86_64) the builder fetched the
-    // provider over mbedtls TLS and fused a 29MB quaude ON-BOX (bundle
-    // 2.1.179), PONG + attest green, quaude answers --version. `PONG` in
-    // libexec/clode-fuse.cjs is exactly RECIPE G7 (`-p 'say PONG'` against a
-    // mock, exit 0 + response matched + POST verified) — the same evidence
-    // class that earns netbsd-sparc its tier 1 under TCG emulation, here on
-    // REAL hardware. Only G7 was exercised, though: no A1/B1/B4/C1/D1 evidence
-    // exists for this run-target (this leg is no-exec off the darwin-universal
-    // path — the Mavericks box, not the ubuntu cross-builder, is what ran).
-    // See test/fidelity/RESULTS.md.
-    fidelity: { tier: 1, date: '2026-07-11', bundle: '2.1.179', how: 'mavericks-vm',
-                note: 'G7 only (on-box PONG+attest, real Mavericks hardware); A1/B1/B4/C1/D1 not exercised for this run-target' } },
+    // Commit 57fb352 (2026-07-11, "darwin-x64 floor proven on real Mavericks
+    // hardware"): on a real Mavericks 10.9.5 box (Darwin 13.4.0, x86_64) the
+    // builder fetched the provider over mbedtls TLS and fused a 29MB quaude
+    // ON-BOX (bundle 2.1.179), PONG + attest green, quaude answers --version.
+    // `PONG` in libexec/clode-fuse.cjs is exactly RECIPE G7 (`-p 'say PONG'`
+    // against a mock, exit 0 + response matched + POST verified) — real, not
+    // asserted, evidence. MAINTAINER RULING 2026-08-04: tier 1 requires all
+    // six FLOOR_ROWS green (no partial credit); only G7 is covered here (no
+    // A1/B1/B4/C1/D1 evidence for this run-target — the leg is no-exec off
+    // the darwin-universal path, so the Mavericks box, not the ubuntu
+    // cross-builder, is what ran). tier 0 is correct; the G7 evidence is real
+    // and recorded, not discarded. floorCoverage('darwin-x64') derives this
+    // from test/fidelity/RESULTS.md.
+    fidelity: { tier: 0, date: '2026-07-11', bundle: '2.1.179', how: 'mavericks-vm',
+                note: 'floor 1/6 green (G7); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
   // darwin-x86 Tiger walk (spec 2026-07-11-darwin-x86-tiger-walk): the
   // i386 slice at floor 10.4 — second slice of the 4-way fat binary.
   // ENGINE-ONLY (no-exec): no GitHub runner can execute i386 (mac
@@ -225,8 +223,12 @@ const LEGS = [
     'no-exec': true, wasm: 'off', mimalloc: 'off', ffi: 'off',
     // Driven on real Tiger PPC hardware (RESULTS.md: B1, C1, G7 pass); G6
     // (credentialed startup stall) is RECIPE-OPEN, not swept under the rug.
-    fidelity: { tier: 1, date: '2026-07-31', bundle: '2.1.218', how: 'tiger-ppc-vm',
-                note: 'floor rows driven; RECIPE G6 credentialed startup stall OPEN' } },
+    // MAINTAINER RULING 2026-08-04: tier 1 requires all six FLOOR_ROWS green
+    // (no partial credit); A1/B4/D1 have no rows here, so tier 0 is correct
+    // even though this is real hardware evidence, not an unmeasured guess.
+    // floorCoverage('darwin-ppc') derives this from test/fidelity/RESULTS.md.
+    fidelity: { tier: 0, date: '2026-07-31', bundle: '2.1.218', how: 'tiger-ppc-vm',
+                note: 'floor 3/6 green (B1,C1,G7); A1,B4,D1 not driven; RECIPE G6 credentialed startup stall also OPEN — see RESULTS.md' } },
   // windows-x64 (native engine leg): compiles tjs.exe ON windows-latest with
   // MSVC cl.exe (CLODE_TJS_WIN_MSVC — the Activate-MSVC-dev-env step +
   // ilammy/msvc-dev-cmd), so build-leg's exec=host machinery does build +
@@ -360,9 +362,12 @@ const LEGS = [
     // its own PLATFORMS.md rig (netbsd-aarch64-spike-vm, added 2026-08-04) rather
     // than borrowing the persistent SSH-VM rig's id — this run predates that
     // runbook and used a different, ephemeral qemu+HVF guest.
-    // See test/fidelity/RESULTS.md rows G7, B1.
-    fidelity: { tier: 1, date: '2026-07-09', bundle: '2.1.204', how: 'netbsd-aarch64-spike-vm',
-                note: 'phase-3 aarch64 spike scorecard; RESULTS.md G7+B1' } },
+    // MAINTAINER RULING 2026-08-04: tier 1 requires all six FLOOR_ROWS green
+    // (no partial credit); A1/B4/C1/D1 have no rows here, so tier 0 is
+    // correct. floorCoverage('netbsd-arm64') derives this from
+    // test/fidelity/RESULTS.md rows G7, B1.
+    fidelity: { tier: 0, date: '2026-07-09', bundle: '2.1.204', how: 'netbsd-aarch64-spike-vm',
+                note: 'floor 2/6 green (B1,G7); A1,B4,C1,D1 not driven — see RESULTS.md' } },
   { leg: 'freebsd-arm64', os: 'ubuntu-latest', 'guest-platform': 'freebsd', 'guest-arch': 'arm64',
     'guest-version': '14.4', 'guest-packages': 'cmake gmake node git bash', floor: '14.4',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 300, 'soft-fail': true,  // cpa, TCG
@@ -421,8 +426,11 @@ const LEGS = [
     // 75bbf1c "S2/S4/S5 ALL GREEN" — bundle 2.1.204 exactly, mock PONG -p
     // round-trip (real POST /v1/messages + literal PONG on the sun4m guest
     // console, 66s e2e under TCG). See test/fidelity/RESULTS.md row G7.
-    fidelity: { tier: 1, date: '2026-07-09', bundle: '2.1.204', how: 'sparc-vm',
-                note: '32-bit BE; mock PONG -p round-trip (RESULTS.md G7); predates canonical-LE' } },
+    // MAINTAINER RULING 2026-08-04: tier 1 requires all six FLOOR_ROWS green
+    // (no partial credit); A1/B1/B4/C1/D1 have no rows here, so tier 0 is
+    // correct. floorCoverage('netbsd-sparc') derives this from RESULTS.md.
+    fidelity: { tier: 0, date: '2026-07-09', bundle: '2.1.204', how: 'sparc-vm',
+                note: 'floor 1/6 green (G7); A1,B1,B4,C1,D1 not driven; predates canonical-LE — see RESULTS.md' } },
   // ---- cross-toolchain tier-2 (2026-07-14): cross-compiled on the x64 runner
   // inside a stock Debian image (cross-apt names the gcc-<triple>), then the
   // shared cross-fuse (tier2:true) emits a clode BUILDER against the foreign
@@ -702,8 +710,13 @@ const LEGS = [
     // cosmo-linux-x86-64, the build host itself. "Likely works off-mac" is not
     // evidence.
     fidelity: {
-      'cosmo-macos-aarch64': { tier: 1, date: '2026-07-30', bundle: '2.1.218', how: 'primary-darwin',
-                               note: 'full agentic suite at parity + F6/D6/G2 interactive' },
+      // MAINTAINER RULING 2026-08-04: tier 1 requires all six FLOOR_ROWS
+      // green (no partial credit); only B4 has a RESULTS.md pass row here
+      // (A1/B1/C1/D1/G7 uncovered), so tier 0 is correct even though the
+      // F6/D6/G2 interactive rows (not floor rows) are also green.
+      // floorCoverage('cosmo-macos-aarch64') derives this from RESULTS.md.
+      'cosmo-macos-aarch64': { tier: 0, date: '2026-07-30', bundle: '2.1.218', how: 'primary-darwin',
+                               note: 'floor 1/6 green (B4); A1,B1,C1,D1,G7 not driven; F6/D6/G2 interactive rows also pass (not floor rows) — see RESULTS.md' },
       'cosmo-linux-x86-64':  { tier: 0, note: 'BUILD host. Never driven. "likely works off-mac" is not evidence.' },
       'cosmo-linux-aarch64':  { tier: 0 },
       'cosmo-macos-x86-64':   { tier: 0 },
@@ -815,6 +828,37 @@ export function fidelityFor(runTarget) {
   return null;
 }
 
+// The floor: the six RECIPE rows a run-target must clear GREEN, ALL SIX, to
+// earn fidelity tier 1 (maintainer ruling 2026-08-04: tier 1 keeps its strict
+// meaning, no partial credit). Defined in exactly one place; floorCoverage
+// below and the fidelity notes both read from here, not a second declared list.
+export const FLOOR_ROWS = ['A1', 'B1', 'B4', 'C1', 'D1', 'G7'];
+
+// Derived, not declared (repo doctrine — memory: "dep closure: derived, not
+// declared"): floor coverage for a run-target is computed by reading
+// test/fidelity/RESULTS.md directly, not by a second hand-maintained list in
+// this file that could drift from the evidence. A row counts as green only on
+// an exact `pass` verdict for that exact run-target + floor row id (RESULTS.md
+// "append, never rewrite" means an earlier `fail`/`open` row for the same pair
+// does not block a later `pass` from counting).
+export function floorCoverage(runTarget) {
+  const resultsPath = fileURLToPath(new URL('../test/fidelity/RESULTS.md', import.meta.url));
+  const text = readFileSync(resultsPath, 'utf8');
+  const green = new Set();
+  for (const line of text.split('\n')) {
+    if (!line.startsWith('|')) continue;
+    const cells = line.split('|').slice(1, -1).map((c) => c.trim());
+    if (cells.length !== 7) continue;
+    const [date, rt, row, , , verdict] = cells;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue; // skip header + separator rows
+    if (rt === runTarget && FLOOR_ROWS.includes(row) && verdict === 'pass') green.add(row);
+  }
+  return {
+    green: FLOOR_ROWS.filter((r) => green.has(r)),
+    missing: FLOOR_ROWS.filter((r) => !green.has(r)),
+  };
+}
+
 export function cli(tier, only, versionOverride, macosMinOverride) {
   let legs = legsFor(tier);
   if (only === 'darwin') {
@@ -831,7 +875,6 @@ export function cli(tier, only, versionOverride, macosMinOverride) {
   return legs;
 }
 
-import { pathToFileURL } from 'node:url';
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   console.log(JSON.stringify(cli(process.argv[2], process.argv[3], process.argv[4], process.argv[5])));
 }

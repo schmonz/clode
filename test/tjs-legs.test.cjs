@@ -25,7 +25,7 @@ const legsFor = (tier, only) => JSON.parse(
   execFileSync(process.execPath,
     [path.join(REPO, 'scripts', 'tjs-legs.mjs'), tier, ...(only ? [only] : [])], { encoding: 'utf8' }));
 
-const { runTargetsFor, publishedRunTargets, DARWIN_SLICES, fidelityFor } = require('../scripts/tjs-legs.mjs');
+const { runTargetsFor, publishedRunTargets, DARWIN_SLICES, fidelityFor, floorCoverage, FLOOR_ROWS } = require('../scripts/tjs-legs.mjs');
 
 test('release tier splits cleanly into darwin / notdarwin (universal decoupling)', () => {
   const all = legsFor('release').map((l) => l.leg).sort();
@@ -577,6 +577,28 @@ test('a tier>=1 claim carries its provenance', () => {
       assert.ok(f.date, `${rt}: tier ${f.tier} needs a date`);
       assert.ok(f.bundle, `${rt}: tier ${f.tier} needs the bundle it was driven against`);
       assert.ok(f.how, `${rt}: tier ${f.tier} needs a rig id from PLATFORMS.md (or "ci")`);
+    }
+  }
+});
+
+// MAINTAINER RULING 2026-08-04: tier 1 keeps its STRICT meaning -- all six
+// FLOOR_ROWS (A1,B1,B4,C1,D1,G7) green, no partial credit for a 4/6 or 1/6
+// platform. floorCoverage() DERIVES this from test/fidelity/RESULTS.md (not a
+// second hand-maintained list -- doctrine: derived, not declared), so this
+// invariant makes tier inflation impossible: a tier can only rise once
+// RESULTS.md actually carries all six pass rows for that run-target. Hand-editing
+// a tier upward without adding the rows fails this test.
+test('tier claims are consistent with derived floor coverage (tier>=1 iff all six floor rows are green)', () => {
+  for (const rt of publishedRunTargets()) {
+    const f = fidelityFor(rt);
+    const { green, missing } = floorCoverage(rt);
+    if (missing.length === 0) {
+      assert.ok(f.tier >= 1,
+        `${rt}: floor fully covered (${FLOOR_ROWS.join(',')}) but declared tier is ${f.tier}`);
+    } else {
+      assert.strictEqual(f.tier, 0,
+        `${rt}: floor coverage incomplete (green: ${green.join(',') || 'none'}; `
+        + `missing: ${missing.join(',')}) so tier must be 0, but declared tier is ${f.tier}`);
     }
   }
 });
