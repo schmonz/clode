@@ -10,6 +10,7 @@
     "test": "node test/run.mjs",
     "test:online": "node test/run.mjs --online",
     "bench": "node bench/run.mjs",
-    "bench:gate": "node bench/run.mjs --gate"
+    "bench:gate": "node bench/run.mjs --gate",
+    "fidelity:ledger": "node scripts/fidelity-ledger.mjs"
   }
 }
