@@ -676,7 +676,8 @@ globalThis.__shimUncaught = __shimUncaught;
       ref() {
         if (!refed) {
           refed = true;
-          if (!armed && rearm && live) { id = rearm(); armed = true; }
+          if (!live) { live = true; liveTimerCount++; }
+          if (!armed && rearm) { id = rearm(); armed = true; }
         }
         return this;
       },
@@ -684,6 +685,11 @@ globalThis.__shimUncaught = __shimUncaught;
         if (refed) {
           refed = false;
           if (armed && rearm) { stopRaw.call(globalThis, id); armed = false; }
+          // An unref'd timer explicitly does NOT keep the process alive, so it
+          // must stop counting as outstanding work — otherwise fs.watchFile's
+          // _otherWorkPending() sees it forever and the pollers re-arm (on REF'd
+          // raw timers) for good. That is RECIPE G6.
+          if (live) { live = false; liveTimerCount--; }
         }
         return this;
       },

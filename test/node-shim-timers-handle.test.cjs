@@ -139,3 +139,57 @@ test('timers: a ref\'d (non-unref\'d) timer still fires and still pins the proce
   assert.strictEqual(r.status, 0, r.stderr);
   assert.strictEqual(r.stdout.trim(), 'fired');
 });
+
+// RECIPE G6, second half of the root cause. The tests above prove unref()
+// stops the real underlying raw timer (fixed in c01e795) — but that alone
+// does not prove unref() stops the handle counting toward
+// __shimTimerLiveCount(). It did not: unref() cleared `armed` (the real timer)
+// but left `live` (the liveTimerCount contribution) true, so an unref'd timer
+// stayed counted as outstanding work forever. Nothing in the tests above can
+// observe that miscounting, because __shimTimerLiveCount() has no consumer
+// in a script with no fs.watchFile poller — the bundle-shaped repro needs
+// BOTH ~19 unref'd background timers AND a live watchFile poller reading the
+// count (see node-shim-fs-watch.test.cjs for that integration shape). This is
+// the tightest possible unit check on the count itself: it must reach exactly
+// zero once every live timer has been unref'd, matching the mental model
+// "unref'd == does not keep the process alive == not outstanding work."
+test('timers: __shimTimerLiveCount() reaches 0 once every timer is unref()d (RECIPE G6)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    // Mirrors the extracted bundle's own shape: ~19 background setTimeout/
+    // setInterval handles created and immediately unref'd during boot.
+    const handles = [];
+    for (let i = 0; i < 19; i++) handles.push(setTimeout(() => {}, 600000));
+    for (let i = 0; i < 19; i++) handles[i].unref();
+    console.log(JSON.stringify({ count: globalThis.__shimTimerLiveCount() }));
+  `;
+  const f = prog(body);
+  const r = runLoader(f, [], { timeout: 5000 });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), { count: 0 },
+    `expected 0 live timers after unref()ing all of them; stdout=${r.stdout}`);
+});
+
+// Symmetric half: ref() after unref() must undo the decrement too, or a
+// resurrected timer would silently stop contributing to the count it's
+// supposed to be pinning again.
+test('timers: ref() after unref() restores __shimTimerLiveCount() (RECIPE G6)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const a = setTimeout(() => {}, 600000);
+    const b = setTimeout(() => {}, 600000);
+    a.unref(); b.unref();
+    const afterUnref = globalThis.__shimTimerLiveCount();
+    a.ref();
+    const afterRef = globalThis.__shimTimerLiveCount();
+    // Cleanup: unref both again so this script itself exits promptly rather
+    // than waiting out the 600s delay it just re-armed on 'a'.
+    a.unref(); b.unref();
+    console.log(JSON.stringify({ afterUnref, afterRef }));
+  `;
+  const f = prog(body);
+  const r = runLoader(f, [], { timeout: 5000 });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), { afterUnref: 0, afterRef: 1 },
+    `expected count 0 after unref()ing both, back to 1 after ref()ing one; stdout=${r.stdout}`);
+});

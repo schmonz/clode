@@ -276,3 +276,46 @@ test('a watchFile registration outlives unrelated pending timers, then still let
   // correctly resumes self-cancelling, same as the no-other-work case).
   assert.ok(elapsed < 9000, `expected a prompt exit once nothing else was pending; elapsed=${elapsed}ms`);
 });
+
+// THE ACTUAL RECIPE G6 SHAPE, end to end. The two tests above prove the
+// poller idle-stops when there is genuinely no other work, and keeps polling
+// while unrelated REF'D timers are pending. Neither reproduces G6: the real
+// hang needed a watchFile poller ALONGSIDE a pile of UNREF'D timers — the
+// extracted bundle's own pattern (~19 `setTimeout(fn, 600000).unref()`-shaped
+// telemetry/housekeeping timers during boot). Before the liveTimerCount fix
+// (loader.cjs ref()/unref()), an unref'd timer stopped its real underlying
+// timer but stayed counted in __shimTimerLiveCount() forever, so
+// _otherWorkPending() (modules/fs.cjs) never went false, the poller's
+// idle-stop branch never ran, and it re-armed itself on a REF'D raw timer
+// every interval — permanently. That pinned the loop even though NOTHING in
+// the script was still doing real work: this is the exact mechanism, not an
+// analogy. CLODE_SHIM_TRACE=1 lets this assert the poller actually took the
+// idle-stop branch, not merely that the process happened to exit before the
+// timeout.
+test('a watchFile poller idle-stops (and the process exits) even with a pile of unref\'d timers pending (RECIPE G6)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const f = prog(`
+    const fs = require('node:fs');
+    const target = process.argv[2];
+    // Bundle-shaped: many long-delay timers, immediately unref'd — exactly
+    // like the extracted bundle's telemetry/housekeeping timers at boot.
+    for (let i = 0; i < 19; i++) setTimeout(() => {}, 600000).unref();
+    fs.watchFile(target, { interval: 50 }, () => {});
+    console.log('registered, falling off the end of the script now');
+    // Deliberately: no unwatchFile, no process.exit(), none of the 19 timers
+    // ever ref()'d or cleared. If liveTimerCount ever miscounts an unref'd
+    // timer as live, the poller can never idle-stop and this hangs exactly
+    // like the "never unwatched" test above, just now with company.
+  `);
+  const dir = path.dirname(f);
+  const target = path.join(dir, 'watched.txt');
+  fs.writeFileSync(target, 'x');
+  const t0 = Date.now();
+  const r = runLoader(f, [target], { timeout: 10000, env: { CLODE_SHIM_TRACE: '1' } });
+  const elapsed = Date.now() - t0;
+  assert.strictEqual(r.status, 0, `expected a clean exit, not a hang; stderr=${r.stderr} elapsed=${elapsed}ms`);
+  assert.match(r.stdout, /registered, falling off the end/);
+  assert.match(r.stderr, /\[watchfile\] idle-stop/,
+    `expected the poller to actually take its idle-stop branch (not merely exit before the timeout); stderr=${r.stderr}`);
+  assert.ok(elapsed < 9000, `expected a prompt exit well under the 10s timeout; took ${elapsed}ms`);
+});
