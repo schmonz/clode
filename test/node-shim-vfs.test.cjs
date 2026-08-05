@@ -105,3 +105,23 @@ test('no VFS: source-entry argv shape is unchanged (legacy contract)', (t) => {
   assert.deepStrictEqual(out.rest, ['a', 'b']);
   assert.strictEqual(out.vfs, 'undefined');
 });
+
+// RECIPE G6 CA-store fix: tls.cjs reads a sibling data file (tls-cacert.pem,
+// NOT a .cjs module) via __dirname + a local VFS-or-FSS check — see that
+// file's readSiblingText(). Every OTHER tls test in this suite runs UNFUSED
+// (runLoader against loader.cjs on the real filesystem), which never
+// exercises the __quaudeVFS branch of that read. This is the one row that
+// actually mounts node-shim/modules as archive members (mirroring
+// libexec/quaude-fuse.js's own collect(), which has no extension filter) and
+// proves the fused path — not just the unfused one — resolves the real CA
+// bundle, not an empty fallback.
+test('VFS mount: tls.cjs resolves its fused sibling tls-cacert.pem (not the empty fallback)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const HARNESS_TLS = path.join(__dirname, 'fixtures/quaude/vfs-tls-harness.js');
+  const r = spawnSync(tjsPath(), ['run', HARNESS_TLS, LOADER, SHIM_ROOT], { encoding: 'utf8', timeout: 30000 });
+  assert.strictEqual(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout.trim());
+  assert.ok(out.count >= 50, `expected >=50 fused root certs, got ${out.count}`);
+  assert.strictEqual(out.firstLooksLikePem, true);
+  assert.strictEqual(out.frozen, true);
+});
