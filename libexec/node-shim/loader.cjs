@@ -919,8 +919,13 @@ if (tjs.env.CLODE_PROBE) { try { evalModule(P.resolve(tjs.env.CLODE_PROBE)); } c
 globalThis.addEventListener('beforeunload', () => {
   const proc = globalThis.process;
   if (!proc) return;
+  const before = proc.exitCode;
+  try { if (typeof proc.emit === 'function') proc.emit('exit', typeof before === 'number' ? before : 0); } catch { /* a throwing exit listener must not block exit */ }
+  // Re-read AFTER the listeners: node exits with whatever process.exitCode is
+  // once 'exit' handlers have run, and the bundle DOES set it from inside one
+  // (observed: an exit listener assigning 0). Reading it before the emit would
+  // silently use a stale code.
   const code = proc.exitCode;
-  try { if (typeof proc.emit === 'function') proc.emit('exit', typeof code === 'number' ? code : 0); } catch { /* a throwing exit listener must not block exit */ }
   if (typeof code === 'number' && code !== 0) { try { tjs.exit(code); } catch { /* fall through to natural exit */ } }
 });
 
