@@ -296,6 +296,25 @@ function _kcSecurityArgs(file, args, opts) {
   }
   return null;
 }
+// The real macOS `security` tool's exact stderr text for errSecItemNotFound
+// (-25300) on a `find-generic-password` lookup — stable across recent macOS
+// versions (it's SecCopyErrorMessageString's fixed string for that OSStatus,
+// not per-service/per-account text). Verified byte-for-byte against host
+// node's real `security find-generic-password -a X -w -s <missing>` (92
+// bytes, exit 44): "security: SecKeychainSearchCopyNext: The specified item
+// could not be found in the keychain.\n". The 'emulate' backend below never
+// touches the real Keychain Services API (it's a JSON-file store), so this
+// is a best-effort match of the SAME error class real `security` reports for
+// "no such item" — not a literal trace of what happened, but the same shape
+// callers see from host node and from a real, reachable keychain. Restoring
+// this (previously: `_kcFakeChild`/`_kcSyncResult` always built an EMPTY
+// stderr regardless of subcommand or outcome) was the RECIPE G6 finding: the
+// bundle's `security -i` write-probe path builds a user-facing diagnostic
+// from `(result.stderr||result.stdout||'').trim()`, and an unconditionally-
+// empty stderr silently turned a diagnosable keychain failure into nothing.
+const KC_NOT_FOUND_STDERR =
+  'security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.\n';
+
 function _kcHandleFile(args) { // 'emulate' backend: no reachable keychain -> file store
   const sub = args[0];
   const val = (f) => { const i = args.indexOf(f); return i >= 0 ? args[i + 1] : null; };
@@ -307,12 +326,14 @@ function _kcHandleFile(args) { // 'emulate' backend: no reachable keychain -> fi
   if (sub === 'find-generic-password') {
     if (creds) {
       const txt = _credRead();
-      if (txt == null || txt.trim() === '') return { stdout: '', code: 44 };
+      if (txt == null || txt.trim() === '') return { stdout: '', code: 44, stderr: KC_NOT_FOUND_STDERR };
       return { stdout: txt.trim() + '\n', code: 0 }; // the {claudeAiOauth:…} JSON; CC .trim()s + parses
     }
     const db = _kcLoad();
     const has = db[svc] && Object.prototype.hasOwnProperty.call(db[svc], acct);
-    if (!has) return { stdout: '', code: 44 }; // errSecItemNotFound (CC treats 0/44/36 as "no item")
+    // errSecItemNotFound (CC treats 0/44/36 as "no item"); stderr mirrors
+    // what a real keychain miss reports (KC_NOT_FOUND_STDERR above).
+    if (!has) return { stdout: '', code: 44, stderr: KC_NOT_FOUND_STDERR };
     return { stdout: db[svc][acct] + '\n', code: 0 }; // -w prints the password; CC .trim()s it
   }
   if (sub === 'add-generic-password') {
@@ -356,15 +377,21 @@ function _kcHandleTranslate(args) {
   if (sub === 'show-keychain-info') return { stdout: '', code: 36 }; // old build returns 0, not CC's expected 36
   const acct = val('-a'), svc = val('-s');
   if (sub === 'find-generic-password') {
+    // 'translate' drives the REAL security binary (just via whichever flags
+    // this old build supports) — unlike 'emulate' below, a failure here has
+    // GENUINE stderr from the real tool already in hand via `_kcRealSec`;
+    // thread it through rather than discarding it (same RECIPE G6 finding:
+    // callers, e.g. the bundle's `security -i` write-probe diagnostic, read
+    // a failed call's stderr).
     if (c.canW) {
       const r = _kcRealSec(['find-generic-password', '-a', acct, '-w', '-s', svc]);
       if (r && r.status === 0 && typeof r.stdout === 'string' && r.stdout.length) return { stdout: r.stdout, code: 0 };
-      return { stdout: '', code: 44 };
+      return { stdout: '', code: 44, stderr: (r && r.stderr) || KC_NOT_FOUND_STDERR };
     }
     const r = _kcRealSec(['find-generic-password', '-a', acct, '-s', svc, '-g']);
-    if (!r || r.status !== 0) return { stdout: '', code: 44 };
+    if (!r || r.status !== 0) return { stdout: '', code: 44, stderr: (r && r.stderr) || KC_NOT_FOUND_STDERR };
     const pw = _kcParseG((r.stderr || '') + (r.stdout || ''));
-    if (pw == null) return { stdout: '', code: 44 };
+    if (pw == null) return { stdout: '', code: 44, stderr: r.stderr || KC_NOT_FOUND_STDERR };
     return { stdout: pw + '\n', code: 0 }; // present on stdout as CC's -w expects
   }
   if (sub === 'add-generic-password') {
@@ -376,7 +403,7 @@ function _kcHandleTranslate(args) {
     if (c.canU) sargs = ['add-generic-password', '-U', '-a', acct, '-s', svc, ...passArg];
     else { if (c.canDelete) _kcRealSec(['delete-generic-password', '-a', acct, '-s', svc]); sargs = ['add-generic-password', '-a', acct, '-s', svc, ...passArg]; }
     const r = _kcRealSec(sargs);
-    return { stdout: '', code: (r && r.status === 0) ? 0 : (r ? r.status : 1) };
+    return { stdout: '', code: (r && r.status === 0) ? 0 : (r ? r.status : 1), stderr: r && r.stderr };
   }
   if (sub === 'delete-generic-password') { if (c.canDelete) _kcRealSec(['delete-generic-password', '-a', acct, '-s', svc]); return { stdout: '', code: 0 }; }
   return null;
@@ -415,13 +442,15 @@ function _kcProbe() {
   if (_kcCaps.canX && _kcCaps.canW && _kcCaps.canU) return 'passthrough'; // modern: leave CC untouched
   return 'translate';                                                // in-between: adapt per-flag
 }
-function _kcFakeChild(stdout, code) {
+function _kcFakeChild(stdout, code, stderr) {
   const child = new EventEmitter();
   child.pid = -1;
   const outR = new Readable({ read() {} });
   if (stdout) outR.push(Buffer.from(stdout));
   outR.push(null);
-  const errR = new Readable({ read() {} }); errR.push(null);
+  const errR = new Readable({ read() {} });
+  if (stderr) errR.push(Buffer.from(stderr));
+  errR.push(null);
   child.stdout = outR; child.stderr = errR;
   child.stdin = { writable: true, write() { return true; }, end() { return this; }, on() { return this; }, once() { return this; }, destroy() { return this; }, emit() {} };
   child.kill = () => true; child.ref = () => {}; child.unref = () => {};
@@ -429,10 +458,11 @@ function _kcFakeChild(stdout, code) {
   queueMicrotask(() => { child.exitCode = code; child.emit('exit', code, null); child.emit('close', code, null); });
   return child;
 }
-function _kcSyncResult(stdout, code, enc) {
+function _kcSyncResult(stdout, code, enc, stderr) {
   const outBuf = Buffer.from(stdout || '');
+  const errBuf = Buffer.from(stderr || '');
   const out = (enc && enc !== 'buffer') ? outBuf.toString(enc) : outBuf;
-  const err = (enc && enc !== 'buffer') ? '' : Buffer.alloc(0);
+  const err = (enc && enc !== 'buffer') ? errBuf.toString(enc) : errBuf;
   return { pid: -1, status: code, signal: null, stdout: out, stderr: err, output: [null, out, err] };
 }
 function _kcMaybe(file, args, opts, sync) {
@@ -444,7 +474,7 @@ function _kcMaybe(file, args, opts, sync) {
   const em = (_kcMode === 'translate') ? _kcHandleTranslate(kcArgs) : _kcHandleFile(kcArgs);
   if (!em) return null;
   trace('keychain', _kcMode, kcArgs[0]);
-  return sync ? _kcSyncResult(em.stdout, em.code, opts.encoding) : _kcFakeChild(em.stdout, em.code);
+  return sync ? _kcSyncResult(em.stdout, em.code, opts.encoding, em.stderr) : _kcFakeChild(em.stdout, em.code, em.stderr);
 }
 // ---- end quaude headless-macOS keychain enhancement --------------------------
 
