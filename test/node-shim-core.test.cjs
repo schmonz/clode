@@ -61,8 +61,19 @@ test('process.exitCode defaults to undefined (matches node), not 0', (t) => {
     process.exitCode = 3;               // still settable as a property
     out.afterSet = process.exitCode;
     console.log(JSON.stringify(out));`);
+  // Node EXITS WITH process.exitCode on a natural exit, so this fixture exits 3.
+  // This assertion used to demand status 0, which codified a real shim bug: the
+  // loader ignored process.exitCode entirely, so a bundle signalling failure that
+  // way reported SUCCESS to its caller (CI included). Compare against node's own
+  // exit code for the identical fixture rather than a hardcoded number, so the
+  // two can never drift apart again.
+  let nodeStatus = 0;
+  try {
+    require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' });
+  } catch (e) { nodeStatus = e.status; }
+  assert.strictEqual(nodeStatus, 3, 'node baseline: a natural exit uses process.exitCode');
   const r = runLoader(f);
-  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.status, nodeStatus, `shim must exit with process.exitCode like node: ${r.stderr}`);
   assert.deepStrictEqual(JSON.parse(r.stdout.trim()), { isUndef: true, notVoid: false, afterSet: 3 });
 });
 

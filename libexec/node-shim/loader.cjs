@@ -906,6 +906,24 @@ if (__QVFS) {
 // identity evalBytecodeEntry establishes; the bundle inspects its own argv[1]).
 process.argv = [tjs.exePath ?? 'tjs', entryAbs.replace(/\.qbc$/, '.cjs'), ...extraArgv];
 if (tjs.env.CLODE_PROBE) { try { evalModule(P.resolve(tjs.env.CLODE_PROBE)); } catch (e) { console.error('probe err', e); } }
+// NATURAL-EXIT SEMANTICS. Node exits with `process.exitCode` when the entry
+// finishes and the loop drains; it also emits 'exit' listeners first. tjs has
+// no process model: TJS_Run returns 0 unless a JS exception escaped, so a
+// bundle that signalled failure via `process.exitCode = 1` and returned
+// normally exited 0 here — a FAILED run reporting success to any caller, CI
+// included. The engine does fire a cancelable `beforeunload` Event on
+// globalThis the moment the loop would drain (vm.c tjs__fire_beforeunload),
+// which is exactly Node's 'exit' moment, so hook that: run any process 'exit'
+// listeners, then hard-exit with the code the bundle asked for. Only a
+// non-zero code needs the explicit exit — 0 is what a natural return gives.
+globalThis.addEventListener('beforeunload', () => {
+  const proc = globalThis.process;
+  if (!proc) return;
+  const code = proc.exitCode;
+  try { if (typeof proc.emit === 'function') proc.emit('exit', typeof code === 'number' ? code : 0); } catch { /* a throwing exit listener must not block exit */ }
+  if (typeof code === 'number' && code !== 0) { try { tjs.exit(code); } catch { /* fall through to natural exit */ } }
+});
+
 try {
   if (entryAbs.endsWith('.qbc')) evalBytecodeEntry(entryAbs);
   else evalModule(entryAbs, true);
