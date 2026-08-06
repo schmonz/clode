@@ -670,6 +670,31 @@ const promises = {
   writeFile: async (p, data) => { writeFileSync(p, data); },
   utimes: async (p, atime, mtime) => { await tjs.utime(p, timeToMs(atime), timeToMs(mtime)); },
   lutimes: async (p, atime, mtime) => { await tjs.lutime(p, timeToMs(atime), timeToMs(mtime)); },
+  // statfs: the bundle CALLS this (not feature-detects it) on its low-disk
+  // diagnostic path — `statfs(dir, {bigint:true})`, then
+  // `bavail*bsize/(1024n*1024n)` to decide whether to tell the user to free
+  // space or set CLAUDE_CODE_TMPDIR. Unimplemented, it was `undefined`, so the
+  // call threw a bare "not a function" (quickjs TypeErrors carry no symbol
+  // name) INSIDE that path's try/catch — swallowed, so the run still succeeded
+  // and the user simply never got the diagnostic. Found by CLODE_SHIM_PROBE
+  // during a real-API hunt, not by anything failing.
+  //
+  // bigint:true is REQUIRED, not optional: the caller does BigInt arithmetic on
+  // the result, and mixing BigInt with Number throws TypeError.
+  //
+  // The engine's tjs.statFs returns node's exact shape MINUS `frsize`; node's
+  // frsize is the fragment size, which equals bsize on every platform we ship,
+  // so it is mapped from bsize rather than invented.
+  statfs: async (p, opts) => {
+    const r = await tjs.statFs(p);
+    const big = !!(opts && opts.bigint);
+    const n = (v) => (big ? BigInt(Math.trunc(v)) : v);
+    return {
+      type: n(r.type), bsize: n(r.bsize), frsize: n(r.bsize),
+      blocks: n(r.blocks), bfree: n(r.bfree), bavail: n(r.bavail),
+      files: n(r.files), ffree: n(r.ffree),
+    };
+  },
   stat: async (p) => statSync(p),
   lstat: async (p) => lstatSync(p),
   fstat: async (fd) => fsMod.fstatSync(fd),
@@ -718,6 +743,12 @@ const promises = {
 };
 // realpathSync.native (4 sites) — same resolution as realpathSync here.
 fsMod.realpathSync.native = fsMod.realpathSync;
+// KNOWN LIMITATION (documented, not implemented): fs.statfsSync. The engine
+// exposes statFs only ASYNC (tjs.statFs) and the sync-fs binding has no statfs
+// entry, so a faithful sync form needs an engine patch (libuv's uv_fs_statfs
+// supports it). Deliberately left absent rather than faked: the reachable
+// caller is the async/promises path above, and a wrong sync answer would be
+// worse than a missing one. Revisit if a probe ever shows statfsSync reached.
 promises.cp = async (src, dest, opts) => cpSync(src, dest, opts);
 fsMod.promises = promises;
 
@@ -730,7 +761,8 @@ const cbWrap = (pfn) => (...args) => {
 };
 for (const name of ['readFile', 'writeFile', 'stat', 'lstat', 'fstat', 'access', 'readdir',
   'realpath', 'readlink', 'mkdir', 'unlink', 'rename', 'rmdir', 'copyFile', 'rm', 'opendir',
-  'utimes', 'lutimes', 'appendFile', 'chmod', 'symlink', 'link', 'mkdtemp', 'fsync', 'fdatasync']) {
+  'utimes', 'lutimes', 'appendFile', 'chmod', 'symlink', 'link', 'mkdtemp', 'fsync', 'fdatasync',
+  'statfs']) {
   fsMod[name] = cbWrap(promises[name]);
 }
 // fs.write / fs.read: callback receives (err, bytes, buffer) — extra trailing
