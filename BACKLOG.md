@@ -943,3 +943,30 @@ but surfaced darwin assumptions the shim bakes in — Linux-portability debt, NO
   Sweep libexec/node-shim/** and libexec/bun-shim.cjs.
 Not matrix-blocking (the BE oracle scopes these out); about node-shim FIDELITY on Linux, which the
 shim-fidelity gate should grow to cover once a Linux tjs is a first-class local build target.
+
+## Shim fires the FIRST timer ~33ms early (2026-08-06)
+
+Found while verifying `patches/txiki-fetch-abort-reason.patch`. Under
+`libexec/node-shim/loader.cjs` the first timer a process schedules fires EARLY
+by roughly the loader's own startup time; every later timer is accurate:
+
+| call | fired at | delta |
+|---|---|---|
+| `setTimeout(200)` (first in process) | 167ms | **-33ms** |
+| `setTimeout(700)` | 703ms | +3ms |
+| `setTimeout(2000)` | 2002ms | +2ms |
+
+**Not the engine** — bare `tjs run` fires its first `setTimeout(200)` at 201/203ms,
+and node is accurate too. It appears only through the shim, which is what makes it
+ours.
+
+Shape strongly suggests libuv's cached `loop->time`: the loop has not ticked since
+before the loader's ~33ms of startup work, so the first timer's deadline is computed
+against a stale clock (node calls `uv_update_time` on this path). Confirm before
+fixing — that is a hypothesis from the timing signature, not a diagnosis.
+
+Real but low-severity: a fixed sub-100ms error on ONE timer, always early, never
+late. It cost real confusion here though — an `AbortSignal.timeout(700)` fetch
+rejected at 667ms and looked like it had aborted *before* its own signal could fire,
+which reads as a correctness bug until you separate the two events. Worth fixing so
+the next person does not lose the same hour; not worth blocking a release on.
