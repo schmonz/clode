@@ -1,0 +1,27 @@
+diff --git a/src/js/polyfills/fetch/fetch.js b/src/js/polyfills/fetch/fetch.js
+index 6cb41c7..25f9aea 100644
+--- a/src/js/polyfills/fetch/fetch.js
++++ b/src/js/polyfills/fetch/fetch.js
+@@ -65,7 +65,21 @@ function fetchDataURI(url) {
+ const activeClients = new Set();
+ 
+ export function fetch(input, init) {
+-    const rawUrl = typeof input === 'string' ? input : input?.url;
++    // CLODE: fetch()'s input may be a string, a URL, or a Request. This read only
++    // `input.url`, which a URL object does NOT have (it has .href) — so a
++    // `fetch(new URL(...))` yielded rawUrl === undefined and died in `new
++    // URL(undefined)` as "TypeError: Invalid URL". node accepts all three.
++    //
++    // It broke MCP over HTTP outright: the SDK's Streamable-HTTP transport builds
++    // a URL object for its endpoint, so every request failed before a socket was
++    // opened — the server saw NOTHING and the client reported the server as
++    // "still connecting" forever. Check .href BEFORE .url: a URL has href only,
++    // a Request has url only, so the order disambiguates them without instanceof
++    // (which cross-realm inputs can defeat).
++    const rawUrl = typeof input === 'string' ? input
++        : typeof input?.href === 'string' ? input.href
++            : typeof input?.url === 'string' ? input.url
++                : input == null ? input : String(input);
+ 
+     if (rawUrl?.startsWith('data:')) {
+         return fetchDataURI(rawUrl);
