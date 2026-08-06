@@ -1,0 +1,49 @@
+diff --git a/src/js/polyfills/fetch/fetch.js b/src/js/polyfills/fetch/fetch.js
+index 098e551..6cb41c7 100644
+--- a/src/js/polyfills/fetch/fetch.js
++++ b/src/js/polyfills/fetch/fetch.js
+@@ -92,8 +92,17 @@ export function fetch(input, init) {
+     return new Promise(function(resolve, reject) {
+         const request = new Request(input, init);
+ 
++        // CLODE: the spec (and node) rejects an aborted fetch with the signal's
++        // OWN reason, not a generic AbortError — that is how AbortSignal.timeout()
++        // surfaces as TimeoutError, and how a custom controller.abort(reason)
++        // reaches the caller at all. ws-stream.js in this same tree already does
++        // `signal.reason ?? ...`; fetch.js hardcoded the fallback in all four
++        // abort paths, flattening every reason to AbortError.
++        const abortReason = () => (request.signal && request.signal.reason)
++            || new DOMException('Aborted', 'AbortError');
++
+         if (request.signal && request.signal.aborted) {
+-            return reject(new DOMException('Aborted', 'AbortError'));
++            return reject(abortReason());
+         }
+ 
+         const client = new HttpClient();
+@@ -188,7 +197,7 @@ export function fetch(input, init) {
+                     if (streamController) {
+                         try {
+                             streamController.error(isAbort
+-                                ? new DOMException('Aborted', 'AbortError')
++                                ? abortReason()
+                                 : new TypeError(msg));
+                         } catch (_e) { /* already errored/closed */ }
+ 
+@@ -197,14 +206,14 @@ export function fetch(input, init) {
+ 
+                     setTimeout(function() {
+                         if (isAbort) {
+-                            reject(new DOMException('Aborted', 'AbortError'));
++                            reject(abortReason());
+                         } else {
+                             reject(new TypeError(msg));
+                         }
+                     }, 0);
+                 } else if (streamController) {
+                     if (isAbort) {
+-                        streamController.error(new DOMException('Aborted', 'AbortError'));
++                        streamController.error(abortReason());
+                     } else {
+                         streamController.error(new TypeError(msg));
+                     }

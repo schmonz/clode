@@ -74,5 +74,50 @@ test('AbortSignal.timeout(ms) still fires: fetch aborts with a timeout-shaped re
   // Must abort near the 1200ms deadline, NOT ride out to some unrelated
   // network-stack timeout (the naive-fix failure mode landed at ~15000ms).
   assert.ok(elapsed >= 1000 && elapsed < 5000, `expected abort near 1200ms, got ${elapsed}ms`);
-  assert.match(r.stdout, /NAME (TimeoutError|AbortError)/);
+  // TimeoutError specifically, not "either shape": AbortError here means fetch
+  // discarded the signal's reason (patches/txiki-fetch-abort-reason.patch).
+  assert.match(r.stdout, /NAME TimeoutError/);
+});
+
+// patches/txiki-fetch-abort-reason.patch. fetch.js hardcoded
+// `new DOMException('Aborted', 'AbortError')` at all FOUR of its abort sites,
+// so every abort reason was flattened to AbortError: AbortSignal.timeout()
+// surfaced as AbortError instead of TimeoutError, and a custom
+// controller.abort(reason) never reached the caller at all. Per spec (and
+// node) an aborted fetch rejects with the signal's OWN reason. ws-stream.js in
+// the same tree already did `signal.reason ?? ...`; fetch.js did not.
+test('an aborted fetch rejects with the signal\'s OWN reason, not a flattened AbortError', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const f = writeProg(`
+    const c = new AbortController();
+    setTimeout(() => c.abort(new Error('custom-boom')), 300);
+    fetch('http://10.255.255.1:9999/', { method: 'HEAD', signal: c.signal })
+      .then(() => { console.log('UNEXPECTED_SUCCESS'); })
+      .catch((e) => { console.log('NAME', e && e.name); console.log('MSG', e && e.message); });
+  `);
+  const r = runBare(f, 15000);
+  assert.strictEqual(r.status, 0, `stderr: ${r.stderr}`);
+  assert.doesNotMatch(r.stdout, /UNEXPECTED_SUCCESS/);
+  // The custom reason must arrive intact. Pre-fix this was `AbortError` with
+  // message 'Aborted' — the caller could not tell WHY it was aborted.
+  assert.match(r.stdout, /NAME Error/);
+  assert.match(r.stdout, /MSG custom-boom/);
+});
+
+test('an abort with no reason still falls back to AbortError (matches node)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  // The fallback half of the same fix: signal.reason is undefined for a bare
+  // abort(), and node reports AbortError there. Guards against "just use
+  // signal.reason" regressing the no-reason case to undefined.
+  const f = writeProg(`
+    const c = new AbortController();
+    c.abort();
+    fetch('http://10.255.255.1:9999/', { method: 'HEAD', signal: c.signal })
+      .then(() => { console.log('UNEXPECTED_SUCCESS'); })
+      .catch((e) => { console.log('NAME', e && e.name); });
+  `);
+  const r = runBare(f, 15000);
+  assert.strictEqual(r.status, 0, `stderr: ${r.stderr}`);
+  assert.doesNotMatch(r.stdout, /UNEXPECTED_SUCCESS/);
+  assert.match(r.stdout, /NAME AbortError/);
 });
