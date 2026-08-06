@@ -597,6 +597,23 @@ function spawn(file, args = [], opts = {}) {
     return child;
   }
   child.pid = proc.pid;
+  // node emits 'spawn' once the child has been successfully spawned, BEFORE any
+  // stdout/stderr data and before 'exit'; on a launch failure it emits 'error'
+  // instead and never 'spawn' (see the failure path above, which correctly does
+  // not emit it). This shim never emitted it at all.
+  //
+  // That broke MCP over stdio COMPLETELY. The MCP SDK's StdioClientTransport
+  // .start() resolves its connect promise on exactly this event, so under quaude
+  // the transport never finished connecting: it wrote no bytes, the server sat
+  // on an empty stdin and exited at EOF, and the client reported the server as
+  // "still connecting" forever and then hung. Every stdio MCP server was
+  // unusable, with no error anywhere — the reference completed the same
+  // handshake and returned its tool result.
+  //
+  // Deferred to a macrotask, not queueMicrotask: node's 'spawn' lands on a
+  // later turn than the synchronous spawn() return, so a caller that attaches
+  // .on('spawn') right after spawn() returns still receives it.
+  setTimeout(() => { try { child.emit('spawn'); } catch { /* listener threw */ } }, 0);
   // Wrap tjs WHATWG streams as a REAL node-shim stream.Readable (Task 4b fix),
   // not a bare EventEmitter. The bundle's credential read goes through execa,
   // and execa/get-stream's collector (`aLt` in the staged cli.cjs) gates on
