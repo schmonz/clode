@@ -970,3 +970,65 @@ late. It cost real confusion here though — an `AbortSignal.timeout(700)` fetch
 rejected at 667ms and looked like it had aborted *before* its own signal could fire,
 which reads as a correctness bug until you separate the two events. Worth fixing so
 the next person does not lose the same hour; not worth blocking a release on.
+
+## ★ OPEN BUG #1 — quaude never dispatches when a credentials file exists (2026-08-06)
+
+**Symptom.** With `~/.claude/.credentials.json` present, `quaude -p 'say PONG'` exits
+**0 with EMPTY stdout and empty stderr** and never POSTs `/v1/messages`. It does the
+`HEAD /api/hello` connectivity check, then quietly winds down.
+
+**This is OUR bug, not upstream behaviour — header-proven.** The upstream Bun binary
+on the identical fixture sends `x-api-key: <our dummy>` and prints PONG: it falls back
+to `ANTHROPIC_API_KEY` when the credentials file holds nothing usable. quaude does not.
+
+**Hermetic repro** (no real secrets — a fresh temp HOME and a `{}` file suffice; NEVER
+copy the operator's real credentials):
+
+| credentials file | upstream | quaude |
+|---|---|---|
+| absent | PONG | PONG (POST /v1/messages) |
+| `""` (empty) | PONG | silent, exit 0, no POST |
+| `{}` | PONG | silent, exit 0, no POST |
+| well-formed fake OAuth token | PONG | silent, exit 0, no POST |
+
+quaude prints `Not logged in · Please run /login` (exit 1) when there is NO file and NO
+API key — so that path works; only the file-present path goes silent.
+
+**Nature of the failure: a promise that never settles.** A `CLODE_PROBE` hook installed
+on `unhandledRejection`, `uncaughtException`, `process.exit` and the `exit` event caught
+NOTHING — no throw, no rejection, no explicit exit. The loop simply drains and the
+process exits 0. So some `await` never completes.
+
+**RULED OUT with evidence (do not re-chase):**
+- Keychain response *values*: return code `0` / `44` / `36`, and the exact real-headless
+  stderr text ("User interaction is not allowed") — all four still fail.
+- `show-keychain-info` returning 36 (the "keychain available" claim) — overriding it
+  changes nothing.
+- Credential *contents*: empty, `{}`, and a well-formed fake OAuth token all fail
+  identically, so it is not token parsing or expiry.
+- The fake-child shape: adding the missing `stdio` array, `killed`/`connected`, and the
+  never-emitted **`'spawn'`** event did not fix it (`_kcSyncResult` already carries
+  `pid`/`status`/`signal`/`output`).
+- Token refresh: no OAuth/refresh request is ever attempted.
+- Keychain emulation reads correctly — it returns the credentials (code 0, right byte
+  count) on every lookup.
+
+**The unexplained core, and where to start next.** With `emulate`, *no file* returns
+code 44 and WORKS, while an *empty file* returns the byte-identical code 44 and FAILS.
+Identical keychain answers, opposite outcomes ⇒ **the bundle checks the file's existence
+directly, independently of the keychain.** Forcing `passthrough` (real `security`, which
+fails rc=36 headless) makes quaude work — with the same rc and stderr the emulation
+returns. So the discriminator is NOT any value the emulation reports; it is something
+about the emulated *mechanism* vs a real child process. That contradiction is the thread
+to pull, and it is why no fix was attempted (5 hypotheses refuted; stopped rather than
+guess a 6th).
+
+**Severity: HIGH for headless.** `_kcDetect()` correctly picks `emulate` whenever the
+keychain is unusable — which is EVERY non-GUI session (a plain SSH shell fails
+`security` with rc=36 "User interaction is not allowed"). That is the primary quaude
+use case: Tiger/PPC over SSH, NetBSD guests, CI. A GUI desktop session probes to
+`passthrough` and is unaffected, which is exactly why this hid for so long.
+
+**Blast radius:** `test/node-shim-roundtrip{,-oracle}.test.cjs` fail on this. They are
+also NON-HERMETIC (no HOME override), so they pick up the operator's real credentials
+file — which is what makes them fail on this box at all. Fix the hermeticity with it.
