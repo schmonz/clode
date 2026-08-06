@@ -430,6 +430,23 @@ cosmo APEs, and Tiger PPC; `scripts/tjs-legs.mjs` stays the single source of tru
 definitions ([[tjs-legs-manifest]]); the build hermeticity check on the shipped binary; and
 the out-of-tree/local-disk build requirement below (this tree is NFS).
 
+### ccache rides along with this (deferred 2026-08-06, user's call)
+
+ccache was measured and the case is good, but it belongs HERE, not before: the
+compiler-launcher wiring is a cmake concern, so doing it now would mean wiring it
+twice. Numbers from a quiet box, so they do not have to be re-derived:
+
+* cold build 308s; incremental on unchanged sources 56s; with regen skipped 50s —
+  so regeneration itself costs only ~7s.
+* The recurring cost is NOT regen: the source phase resets the vendor checkout
+  every build, which forces recompiles even when nothing changed.
+* `tjsc` is DETERMINISTIC — two runs produced byte-identical output
+  (`e5b091ea...`), so those recompiles are of identical bytes. That is exactly
+  what ccache converts into hits, and it is why the case is good.
+
+Not installed on this box; installing it there and in CI is part of the cmake
+work, not a prerequisite for it.
+
 ## ★ Build-working-dir isolation — no shared-tree tromping (2026-07-25)
 
 Principle (user, 2026-07-25): "cross-build a zillion clodes and quaudes and they
@@ -943,30 +960,3 @@ but surfaced darwin assumptions the shim bakes in — Linux-portability debt, NO
   Sweep libexec/node-shim/** and libexec/bun-shim.cjs.
 Not matrix-blocking (the BE oracle scopes these out); about node-shim FIDELITY on Linux, which the
 shim-fidelity gate should grow to cover once a Linux tjs is a first-class local build target.
-
-## Shim fires the FIRST timer ~33ms early (2026-08-06)
-
-Found while verifying `patches/txiki-fetch-abort-reason.patch`. Under
-`libexec/node-shim/loader.cjs` the first timer a process schedules fires EARLY
-by roughly the loader's own startup time; every later timer is accurate:
-
-| call | fired at | delta |
-|---|---|---|
-| `setTimeout(200)` (first in process) | 167ms | **-33ms** |
-| `setTimeout(700)` | 703ms | +3ms |
-| `setTimeout(2000)` | 2002ms | +2ms |
-
-**Not the engine** — bare `tjs run` fires its first `setTimeout(200)` at 201/203ms,
-and node is accurate too. It appears only through the shim, which is what makes it
-ours.
-
-Shape strongly suggests libuv's cached `loop->time`: the loop has not ticked since
-before the loader's ~33ms of startup work, so the first timer's deadline is computed
-against a stale clock (node calls `uv_update_time` on this path). Confirm before
-fixing — that is a hypothesis from the timing signature, not a diagnosis.
-
-Real but low-severity: a fixed sub-100ms error on ONE timer, always early, never
-late. It cost real confusion here though — an `AbortSignal.timeout(700)` fetch
-rejected at 667ms and looked like it had aborted *before* its own signal could fire,
-which reads as a correctness bug until you separate the two events. Worth fixing so
-the next person does not lose the same hour; not worth blocking a release on.

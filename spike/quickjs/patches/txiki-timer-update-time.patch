@@ -1,0 +1,21 @@
+diff --git a/src/timers.c b/src/timers.c
+index 19fbe45..58a0284 100644
+--- a/src/timers.c
++++ b/src/timers.c
+@@ -139,6 +139,16 @@ static JSValue tjs_setTimeout(JSContext *ctx, JSValue this_val, int argc, JSValu
+         th->argv[i] = JS_DupValue(ctx, argv[i + 2]);
+     }
+ 
++    /* CLODE: refresh the loop's cached clock before arming. libuv schedules a
++     * timer at `loop->time + delay`, and only refreshes `loop->time` at the top
++     * of each uv_run iteration. Every timer armed during the INITIAL synchronous
++     * script execution therefore uses the clock as of loop init — so it fires
++     * EARLY by exactly however long the script had already been running.
++     * Measured on BARE tjs (no shim): burn 120ms, then setTimeout(200) fired
++     * after 81ms; node fires at 205ms. It bit the node-shim hardest, whose
++     * ~33ms of startup made the bundle's first timer fire ~33ms early, but the
++     * defect is the engine's and scales with whatever ran before the call. */
++    uv_update_time(tjs_get_loop(ctx));
+     CHECK_EQ(uv_timer_start(&th->handle, uv__timer_cb, delay, magic ? delay : 0 /* repeat */), 0);
+ 
+     HASH_ADD_INT64(qrt->timers.timers, id, th);
