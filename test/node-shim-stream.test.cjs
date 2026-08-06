@@ -328,3 +328,63 @@ test('stream/consumers + stream/promises consume a Readable like node', (t) => {
   assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
   assert.strictEqual(node.text, 'PONG');
 });
+
+// PAUSED-MODE BUFFERING — the true root cause of open bug #1 (fixed 2026-08-06).
+// The shim's Readable had NO buffer: push() emitted 'data' on a microtask
+// unconditionally and 'end' immediately after. Chunks pushed before a consumer
+// attached were DROPPED, and the single 'end' fired into the void, so a late
+// consumer saw an empty stream that never finished. Node buffers instead.
+//
+// Real-world bite: the emulated-keychain child pushed payload+EOF in its
+// constructor; the bundle reads that credential via execa, whose get-stream
+// collector attaches on a LATER tick. It collected nothing, its promise never
+// settled, and `quaude -p` exited 0 with EMPTY stdout AND stderr on every
+// headless box — no throw, no error, just a drained loop.
+const LATE_ATTACH = `
+  const { Readable } = require('node:stream');
+  const r = new Readable({ read() {} });
+  r.push(Buffer.from('hello-world'));   // buffered BEFORE any consumer exists
+  r.push(null);                          // ...and EOF too
+  setTimeout(() => {
+    let buf = '';
+    let ended = false;
+    r.on('data', (d) => { buf += d; });
+    r.on('end', () => { ended = true; });
+    setTimeout(() => console.log(JSON.stringify({ bytes: buf.length, text: buf, ended })), 60);
+  }, 50);
+`;
+
+test('stream: a consumer attaching AFTER push+EOF still gets the buffered data and end (matches node)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const f = prog(LATE_ATTACH);
+  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const shim = JSON.parse(r.stdout.trim());
+  // Pre-fix the shim reported {bytes:0, ended:false} against node's {bytes:11, ended:true}.
+  assert.deepStrictEqual(shim, node);
+  assert.strictEqual(node.bytes, 11);
+  assert.strictEqual(node.ended, true);
+});
+
+// The ordering half: a late consumer must not see 'end' BEFORE the backlog.
+const LATE_ORDER = `
+  const { Readable } = require('node:stream');
+  const r = new Readable({ read() {} });
+  r.push(Buffer.from('a')); r.push(Buffer.from('b')); r.push(null);
+  const seq = [];
+  setTimeout(() => {
+    r.on('data', (d) => seq.push('data:' + d));
+    r.on('end', () => { seq.push('end'); console.log(JSON.stringify(seq)); });
+  }, 40);
+`;
+
+test('stream: a late consumer receives every chunk BEFORE end (matches node)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const f = prog(LATE_ORDER);
+  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
+  assert.deepStrictEqual(node, ['data:a', 'data:b', 'end']);
+});

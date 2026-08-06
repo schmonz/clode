@@ -21,9 +21,27 @@ const { stageProviderCli, runNaudeModelAsync, runQuaudeModelAsync } = require('.
 
 const TIMEOUT = 90000;
 
-function mockEnv(mock) {
+// HERMETICITY (2026-08-06): this used to inherit the operator's real HOME, so
+// both models read the real ~/.claude — including ~/.claude/.credentials.json.
+// The mere PRESENCE of that file was open bug #1, so this "hermetic mock" oracle
+// failed on any box where the operator was logged in, for a reason unrelated to
+// the mock. Worse for a DIFFERENTIAL: naude and quaude read the same real HOME
+// and can disagree about it, so the diff under test stops being just the engine.
+// One fresh HOME per model run.
+const fsx = require('node:fs');
+const osx = require('node:os');
+const pathx = require('node:path');
+function freshHome() {
+  const home = fsx.mkdtempSync(pathx.join(osx.tmpdir(), 'oracle-home-'));
+  fsx.mkdirSync(pathx.join(home, '.claude'), { recursive: true });
+  return home;
+}
+function mockEnv(mock, home = freshHome()) {
   return {
     ...process.env,
+    HOME: home,                              // never the operator's real ~/.claude
+    CLODE_DEPS: pathx.join(home, 'deps'),
+    CLODE_CACHE: pathx.join(home, 'cache'),
     ANTHROPIC_BASE_URL: mock.url,
     ANTHROPIC_API_KEY: 'sk-ant-mock',        // dummy; the mock ignores it. NOT a secret.
   };

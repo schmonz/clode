@@ -223,6 +223,14 @@ function applyShell(file, args, opts) {
 // 'translate' (old keychain reachable, adapt flags to real keychain) | 'emulate'
 // (no keychain — headless/locked — back with a file). Probed once, lazily.
 // _kcCaps holds the detected per-flag capabilities of the local `security`.
+//
+// CLODE_KC_MODE forces one of those three, skipping the probe. It exists because
+// the probe is correct but ENVIRONMENT-DEPENDENT — the same box answers
+// 'passthrough' from a GUI session and 'emulate' from an SSH shell (a plain
+// `security add-generic-password` there fails 36, "User interaction is not
+// allowed"). A test that just lets the probe decide therefore exercises a
+// DIFFERENT code path on a dev desktop than in CI, which is exactly how the
+// async-child defect below stayed invisible. Tests pin the mode with this.
 let _kcMode, _kcCaps;
 function _kcFilePath() {
   const home = (tjs.env && (tjs.env.HOME || tjs.env.USERPROFILE)) || '';
@@ -446,16 +454,38 @@ function _kcFakeChild(stdout, code, stderr) {
   const child = new EventEmitter();
   child.pid = -1;
   const outR = new Readable({ read() {} });
-  if (stdout) outR.push(Buffer.from(stdout));
-  outR.push(null);
   const errR = new Readable({ read() {} });
-  if (stderr) errR.push(Buffer.from(stderr));
-  errR.push(null);
   child.stdout = outR; child.stderr = errR;
   child.stdin = { writable: true, write() { return true; }, end() { return this; }, on() { return this; }, once() { return this; }, destroy() { return this; }, emit() {} };
   child.kill = () => true; child.ref = () => {}; child.unref = () => {};
   child.exitCode = null; child.signalCode = null;
-  queueMicrotask(() => { child.exitCode = code; child.emit('exit', code, null); child.emit('close', code, null); });
+  // Deliver the bytes ASYNCHRONOUSLY, and only then exit. A real child CANNOT
+  // produce output before its consumer attaches — the process has to be spawned
+  // and scheduled first — and `wrapReadable` (the REAL child path above) pushes
+  // from an async drain loop for exactly that reason. This fake used to push the
+  // payload AND EOF synchronously inside the constructor, so by the time the
+  // caller attached a collector the stream had already ended.
+  //
+  // That is fatal specifically for execa, which is how the bundle reads the
+  // credential (`Zr`/`Qn` -> execa in the staged cli.cjs). execa's get-stream
+  // collector attaches on a LATER tick; handed an already-ended stream it
+  // collects nothing and its promise never settles, so the bundle's `await`
+  // never returned. Nothing threw and nothing exited — the loop simply drained
+  // and the process ended 0 with no output and no error. Same failure class the
+  // wrapReadable comment above documents for real children (execa's
+  // asyncIterator gate); this is its synthetic-child twin.
+  setTimeout(() => {
+    if (stdout) outR.push(Buffer.from(stdout));
+    outR.push(null);
+    if (stderr) errR.push(Buffer.from(stderr));
+    errR.push(null);
+    // 'exit' AFTER the stream data, matching a real child's observed order.
+    setTimeout(() => {
+      child.exitCode = code;
+      child.emit('exit', code, null);
+      child.emit('close', code, null);
+    }, 0);
+  }, 0);
   return child;
 }
 function _kcSyncResult(stdout, code, enc, stderr) {
@@ -469,7 +499,7 @@ function _kcMaybe(file, args, opts, sync) {
   if (opts && opts.__kcBypass) return null;
   const kcArgs = _kcSecurityArgs(file, args, opts);
   if (!kcArgs) return null;
-  if (_kcMode === undefined) _kcMode = _kcProbe();
+  if (_kcMode === undefined) _kcMode = (tjs.env && tjs.env.CLODE_KC_MODE) || _kcProbe();
   if (_kcMode === 'passthrough') return null;
   const em = (_kcMode === 'translate') ? _kcHandleTranslate(kcArgs) : _kcHandleFile(kcArgs);
   if (!em) return null;

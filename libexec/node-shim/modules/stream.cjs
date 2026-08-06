@@ -19,6 +19,11 @@ class Readable extends EventEmitter {
     this._ended = false;
     this.destroyed = false;
     this.readableEnded = false;
+    // Paused-mode buffer. Node holds pushed chunks until a consumer arrives;
+    // see _emitData/_maybeEnd below for why this shim needs it too.
+    this._buf = [];
+    this._endEmitted = false;
+    this._flushing = false;
     this.readable = true; // Task 4b: child_process wraps a real child stdout/stderr in this
     if (typeof opts.read === 'function') this._read = opts.read;
   }
@@ -34,7 +39,29 @@ class Readable extends EventEmitter {
   destroy(err) {
     if (this.destroyed) return this;
     this.destroyed = true;
-    queueMicrotask(() => { if (err) this.emit('error', err); this.emit('close'); });
+    const fire = () => queueMicrotask(() => { if (err) this.emit('error', err); this.emit('close'); });
+    // Node's autoDestroy fires 'close' AFTER 'end'. Callers relied on plain FIFO
+    // microtask order for that (child_process's mkEndedReadable: "push(null)
+    // schedules 'end'; destroy() schedules 'close', queued after it"). Now that
+    // 'end' can be WITHHELD until a consumer attaches (_maybeEnd), that FIFO no
+    // longer holds on its own — so hold 'close' behind the pending 'end' rather
+    // than let a late consumer observe close-then-end.
+    if (this._ended && !this._endEmitted) {
+      this._closeAfterEnd = fire;
+      // ...but do not strand it. Two shapes exist and they want opposite things:
+      // a consumer may attach AFTER destroy() (child_process's mkEndedReadable —
+      // wants end-then-close), or a 'close'-only listener may already be attached
+      // and no 'end' is ever coming (nobody reads the stream). Releasing on a
+      // later macrotask serves both: by then a real consumer has attached and
+      // 'end' has gone first, or none has and 'close' fires on its own.
+      setTimeout(() => {
+        if (this._closeAfterEnd && this.listenerCount('data') === 0 && this.listenerCount('end') === 0) {
+          const f = this._closeAfterEnd; this._closeAfterEnd = null; f();
+        }
+      }, 0);
+      return this;
+    }
+    fire();
     return this;
   }
   pause() { return this; }
@@ -53,13 +80,71 @@ class Readable extends EventEmitter {
     this.readableEncoding = enc;
     return this;
   }
+  // PAUSED-MODE BUFFERING (fixed 2026-08-06, open bug #1's true root cause).
+  // This used to emit 'data' on a microtask unconditionally and 'end' right
+  // after — with NO buffer. Anything pushed before a consumer attached was
+  // therefore DROPPED, and 'end' fired into the void and never fired again, so
+  // a late consumer saw an empty stream that never finished. Node instead
+  // buffers until a consumer arrives, then delivers the backlog and only then
+  // 'end'.
+  //
+  // How it surfaced: the emulated-keychain child pushed its payload and EOF in
+  // its constructor, and the bundle reads that credential through execa, whose
+  // get-stream collector attaches on a LATER tick. It collected nothing and its
+  // promise never settled, so `quaude -p` exited 0 with EMPTY stdout AND stderr
+  // on every headless box. Nothing threw; the loop just drained. Any late
+  // reader of any stream hit this — the keychain was only the first victim.
+  _emitData(chunk) {
+    if (this.listenerCount('data') > 0) queueMicrotask(() => this.emit('data', chunk));
+    else this._buf.push(chunk);   // no consumer yet: hold it, do not drop it
+  }
+  _flushBuffered() {
+    if (!this._buf.length || this._flushing) return;
+    const items = this._buf;
+    this._buf = [];
+    this._flushing = true;
+    queueMicrotask(() => {
+      for (const c of items) this.emit('data', c);
+      this._flushing = false;
+      this._maybeEnd();           // 'end' only AFTER the backlog is delivered
+    });
+  }
+  // 'end' is withheld until (a) EOF was pushed, (b) the backlog is drained, and
+  // (c) somebody is actually listening. (c) is what makes a late attach work:
+  // emitting to nobody would burn the one 'end' this stream ever sends.
+  _maybeEnd() {
+    if (!this._ended || this._endEmitted || this._flushing || this._buf.length) return;
+    if (this.listenerCount('end') === 0 && this.listenerCount('data') === 0) return;
+    this._endEmitted = true;
+    queueMicrotask(() => {
+      this.emit('end');
+      // A destroy() that arrived while 'end' was still withheld parked its
+      // 'close' here, preserving node's end-then-close order.
+      if (this._closeAfterEnd) { const f = this._closeAfterEnd; this._closeAfterEnd = null; f(); }
+    });
+  }
+  _afterListener(name) {
+    if (name === 'data') {
+      if (!this._reading) { this._reading = true; queueMicrotask(() => this._read()); }
+      this._flushBuffered();
+    }
+    if (name === 'data' || name === 'end') this._maybeEnd();
+    // A destroy() parked its 'close' behind a still-withheld 'end'. If the only
+    // thing anyone ever attaches is a 'close' listener, no 'end' is coming (node
+    // does not emit 'end' to a stream nobody reads) — release 'close' rather
+    // than strand it. A later data/end listener still gets end-then-close order.
+    if (name === 'close' && this._closeAfterEnd
+        && this.listenerCount('data') === 0 && this.listenerCount('end') === 0) {
+      const f = this._closeAfterEnd; this._closeAfterEnd = null; f();
+    }
+  }
   push(chunk) {
     if (chunk === null) {
-      if (this._decoder) { const rem = this._decoder.end(); if (rem) queueMicrotask(() => this.emit('data', rem)); }
+      if (this._decoder) { const rem = this._decoder.end(); if (rem) this._emitData(rem); }
       this._ended = true;
       this.readableEnded = true;
       this.readable = false;
-      queueMicrotask(() => this.emit('end'));
+      this._maybeEnd();
       return false;
     }
     // Node's push accepts Buffer/Uint8Array/string. A raw Uint8Array (e.g.
@@ -70,7 +155,7 @@ class Readable extends EventEmitter {
         : Buffer.from(String(chunk)));
     const out = this._decoder ? this._decoder.write(b) : b;
     if (out === '') return true; // decoder buffered a partial multibyte sequence
-    queueMicrotask(() => this.emit('data', out));
+    this._emitData(out);
     return true;
   }
   pipe(dest) {
@@ -78,7 +163,10 @@ class Readable extends EventEmitter {
     this.on('end', () => dest.end && dest.end());
     return dest;
   }
-  on(name, fn) { super.on(name, fn); if (name === 'data' && !this._reading) { this._reading = true; queueMicrotask(() => this._read()); } return this; }
+  on(name, fn) { super.on(name, fn); this._afterListener(name); return this; }
+  // once() does NOT route through on() in this shim's EventEmitter, so a late
+  // `once('end')`/`once('data')` must trigger the same flush/end bookkeeping.
+  once(name, fn) { super.once(name, fn); this._afterListener(name); return this; }
   // Async iteration (`for await (const chunk of readable)`) — the SSE reader
   // consumes the response body this way, and stream/consumers' collect() does
   // too, both while the producing side (Readable.from / a fetch pump) is ALSO

@@ -21,16 +21,35 @@ function stage(t) {
   return staged;
 }
 
+// HERMETICITY (2026-08-06): these tests used to inherit the operator's real HOME,
+// so they read the real ~/.claude — including ~/.claude/.credentials.json. That
+// is not a detail: the mere PRESENCE of that file was open bug #1, so on any box
+// where the operator was logged in these "hermetic mock" tests failed for a
+// reason that had nothing to do with the mock. A run's result must not depend on
+// whether the person running it happens to be logged in.
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+function freshHome() {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'roundtrip-home-'));
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  return home;
+}
+
 test('mock round-trip under tjs: -p prints PONG, exit 0', async (t) => {
   if (skipUnlessTjs(t)) return;
   const staged = stage(t);
   if (!staged) return;
   const mock = await startMockAnthropic();
+  const home = freshHome();
   try {
     const r = await runQuaudeModelAsync(staged.cli, ['-p', 'say PONG'], {
       cwd: staged.dir,
       env: {
         ...process.env,
+        HOME: home,                                    // never the operator's real ~/.claude
+        CLODE_DEPS: path.join(home, 'deps'),
+        CLODE_CACHE: path.join(home, 'cache'),
         ANTHROPIC_BASE_URL: mock.url,
         ANTHROPIC_API_KEY: 'sk-ant-mock',              // dummy; NOT a secret
       },
@@ -39,7 +58,7 @@ test('mock round-trip under tjs: -p prints PONG, exit 0', async (t) => {
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
     assert.match(r.stdout, /PONG/, `stdout:\n${r.stdout}`);
     assert.ok(mock.requests.some((q) => q.method === 'POST' && /\/messages$/.test(q.url.split('?')[0])), 'no messages POST recorded');
-  } finally { await mock.close(); }
+  } finally { await mock.close(); fs.rmSync(home, { recursive: true, force: true }); }
 });
 
 // The LIVE finale. SKIPs unless explicitly opted in AND a key is present. The
