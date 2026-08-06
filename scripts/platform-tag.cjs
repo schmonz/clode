@@ -120,6 +120,21 @@ function tjsBin(repo, opts = {}) {
   return path.join(tjsDir(repo, opts), process.platform === 'win32' ? 'tjs.exe' : 'tjs');
 }
 
+// The vendor SOURCE checkout's default PARENT dir — build-tjs.mjs's
+// CLODE_TJS_VENDOR default (see its header comment). Local scratch (TMPDIR
+// first, never the repo tree, which is commonly NFS-mounted on a dev box)
+// unless CLODE_TJS_LOCAL_ROOT/CLODE_TJS_VENDOR override it. Exported so
+// tests that drive or read that SAME checkout directly — test/tjs-darwin-
+// poll-fixup.test.cjs, test/tls-cacert-pem.test.cjs — resolve the identical
+// default instead of hand-copying it, which is exactly the drift class this
+// file's header comment (three differently-keyed build/ dirs) warns about:
+// a hardcoded 'spike/quickjs/vendor' in a test silently stops matching the
+// real default the moment that default changes, and the test just skips
+// forever instead of failing loud.
+function tjsVendorParentDir(env = process.env) {
+  return env.CLODE_TJS_VENDOR || path.join(env.CLODE_TJS_LOCAL_ROOT || env.TMPDIR || os.tmpdir(), 'clode-tjs-vendor');
+}
+
 // The VERSION file at the repo root — the same source scripts/build-clode-main.mjs's
 // own repoVersion() reads (for the embedded __CLODE_BUNDLE_VERSION__ define).
 // Duplicated on purpose, not shared: this is a 3-line leaf read and platform-tag.cjs
@@ -206,5 +221,5 @@ function seaBin(repo, base, opts = {}) {
 module.exports = {
   macosVersion, linuxGlibc, osToken, platformTag, harnessDir, toolchainDir,
   repoVersion, hostOsVersionToken, artifactName, artifactDir, seaBin, seaOut,
-  tjsDir, tjsBin,
+  tjsDir, tjsBin, tjsVendorParentDir,
 };

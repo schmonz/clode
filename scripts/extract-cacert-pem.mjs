@@ -28,9 +28,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
+const require = createRequire(import.meta.url);
+const { tjsVendorParentDir } = require('./platform-tag.cjs');
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const CACERT_C = path.join(REPO, 'spike/quickjs/vendor/txiki.js/src/cacert.c');
+// Same default build-tjs.mjs's CLODE_TJS_VENDOR resolves to (platform-tag.cjs's
+// tjsVendorParentDir — local scratch, not the repo tree) so this still finds a
+// checkout a plain `node scripts/build-tjs.mjs` just produced. Override with
+// CLODE_TJS_VENDOR if your checkout lives somewhere else.
+const CACERT_C = path.join(tjsVendorParentDir(), 'txiki.js/src/cacert.c');
 const OUT_PEM = path.join(REPO, 'libexec/node-shim/modules/tls-cacert.pem');
 
 // Decode the C source's `const char tjs_cacert_pem[] = "line1\n" "line2\n" ...;`

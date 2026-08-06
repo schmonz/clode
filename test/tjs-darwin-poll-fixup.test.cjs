@@ -14,9 +14,15 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { tjsVendorParentDir } = require('../scripts/platform-tag.cjs');
 
 const REPO = path.resolve(__dirname, '..');
-const TJS = path.join(REPO, 'spike/quickjs/vendor/txiki.js');
+// Resolved the SAME way build-tjs.mjs resolves its own CLODE_TJS_VENDOR
+// default (local scratch, not the repo tree — see platform-tag.cjs's
+// tjsVendorParentDir) — NOT hardcoded to the old spike/quickjs/vendor path,
+// which would silently stop matching (and silently start permaskipping this
+// test) the moment that default moves.
+const TJS = path.join(tjsVendorParentDir(), 'txiki.js');
 const has = fs.existsSync(path.join(TJS, 'deps/libuv/src/unix/darwin.c'));
 
 function sourcePhase() {
@@ -26,7 +32,7 @@ function sourcePhase() {
 const read = (rel) => fs.readFileSync(path.join(TJS, rel), 'utf8');
 
 test('the poll-backend fixup lands its seven edits in the patched tree', (t) => {
-  if (!has) { t.skip('no vendor checkout (spike/quickjs/vendor/txiki.js); run scripts/build-tjs.mjs'); return; }
+  if (!has) { t.skip(`no vendor checkout (${TJS}); run scripts/build-tjs.mjs`); return; }
   sourcePhase();
 
   // 1. txiki declares the option and makes the macro GLOBAL — it changes
@@ -91,7 +97,7 @@ test('the poll-backend fixup lands its seven edits in the patched tree', (t) => 
 });
 
 test('the edits are inert: the option defaults OFF and kqueue stays the default', (t) => {
-  if (!has) { t.skip('no vendor checkout (spike/quickjs/vendor/txiki.js)'); return; }
+  if (!has) { t.skip(`no vendor checkout (${TJS})`); return; }
   // No second source phase needed — assert on the tree the first test produced.
   assert.match(read('CMakeLists.txt'), /option\(CLODE_DARWIN_POLL "[^"]+" OFF\)/);
   // Without the macro, darwin.h still defines UV_HAVE_KQUEUE and libuv still
@@ -100,7 +106,7 @@ test('the edits are inert: the option defaults OFF and kqueue stays the default'
 });
 
 test('the fixup is idempotent', (t) => {
-  if (!has) { t.skip('no vendor checkout (spike/quickjs/vendor/txiki.js)'); return; }
+  if (!has) { t.skip(`no vendor checkout (${TJS})`); return; }
   const beforeDarwinH = read('deps/libuv/include/uv/darwin.h');
   // The gate marker AND the newest (7th) edit both now live in posix-poll.c —
   // that is the exact file a double-application (the failure this gate

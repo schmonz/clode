@@ -14,6 +14,20 @@
 //                     BUILD_WITH_FFI=OFF (libffi is the ONLY external dep and
 //                     tjs:ffi's dlopen is useless in a static binary; nothing
 //                     shipped imports it — bun:ffi is a throw-on-use stub)
+//   CLODE_TJS_REGEN   =0: SKIP regenerating src/bundles/c/** from src/js/**
+//                     (default is to always regenerate — see the "bytecode
+//                     regen" section below). Opt out only for a fast dev loop
+//                     when src/js/** is provably untouched; never for a
+//                     release or CI build, since it ships whatever bytecode
+//                     happened to already be sitting in the checkout.
+//   CLODE_TJS_LOCAL_ROOT  overrides the local-scratch base dir the vendor
+//                     checkout and cmake build dir default under (see
+//                     localScratchRoot() below) — otherwise TMPDIR, then the
+//                     platform default. Avoids building over NFS.
+//   CLODE_TJS_BUILD   overrides the cmake BUILD dir root directly (default:
+//                     <local-scratch>/clode-tjs-build/<target-token>/build).
+//                     Independent of CLODE_TJS_OUT, which is still where the
+//                     FINAL built exe lands.
 //
 // Phases (CI splits them so a qemu-user guest only pays for the C build):
 //   --source-only  stop after checkout + sha-verify + patches
@@ -37,10 +51,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import crypto from 'node:crypto';
 import { resetCheckoutToPristine } from './tjs-source-reset.mjs';
 
 const require = createRequire(import.meta.url);
-const { tjsDir: platformTjsDir } = require('./platform-tag.cjs'); // aliased: this file has its own `tjsDir` (the source build dir)
+const { tjsDir: platformTjsDir, tjsVendorParentDir } = require('./platform-tag.cjs'); // tjsDir aliased: this file has its own `tjsDir` (the source build dir)
 const repo = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const sourceOnly = process.argv.includes('--source-only');
 const buildOnly = process.argv.includes('--build-only');
@@ -59,7 +74,42 @@ if (darwinPoll) {
     throw new Error(`CLODE_TJS_DARWIN_POLL=1 is darwin-only (target: ${cf || process.platform})`);
   }
 }
-const vendor = process.env.CLODE_TJS_VENDOR || path.join(repo, 'spike/quickjs/vendor');
+// ---- NFS avoidance: build intermediates default to LOCAL disk -------------
+// This repo commonly lives on an NFS-mounted tree (a shared dev-box mount —
+// ap-juicer:/export/code/trees on this box). Compiling and linking thousands
+// of small object files over NFS is dramatically slower than local disk, and
+// NFS mounts here carry AppleDouble ._* sidecars (resetCheckoutToPristine
+// actively strips them from the vendor checkout on every build — the
+// "Removing lib/tls/mbedtls/._mbedtls-x509.c" noise). CI already points
+// CLODE_TJS_VENDOR/CLODE_TJS_OUT at the runner's own (local) scratch dir
+// explicitly (.github/actions/build-leg/action.yml) — every default changed
+// here therefore only affects local dev on a box like this one, never CI.
+// CLODE_TJS_LOCAL_ROOT overrides the local-scratch base directory (e.g. to
+// force a specific volume); otherwise TMPDIR (respected, not just os.tmpdir()
+// — TMPDIR is the standard "fast local scratch" seam on macOS/BSD, usually
+// /var/folders/... on the boot volume, never the NFS mount) or the platform
+// default. Stable, not a fresh mktemp per run, so incremental rebuilds still
+// hit the same object files/cmake cache.
+function localScratchRoot() {
+  return process.env.CLODE_TJS_LOCAL_ROOT || process.env.TMPDIR || os.tmpdir();
+}
+// Vendor source: reconstructed scratch (a pinned clone + patches/*.patch, not
+// precious — see ensureCheckout below), and the SHARED single checkout every
+// target build patches/resets/re-patches from (deliberately, not per-target —
+// same comment as the buildDir one below). Moving its default off NFS is
+// exactly what stops the AppleDouble stripping from being needed on THIS
+// box's normal path (it stays as a belt-and-braces guard for anyone who still
+// points CLODE_TJS_VENDOR at an NFS/SMB/exotic filesystem). A stale local
+// checkout cannot silently diverge from the committed patches: ensureCheckout
+// re-verifies the pinned HEAD sha and applyPatches unconditionally re-applies
+// every patches/*.patch onto a freshly pristine tree on every single build —
+// nothing about a persistent local path changes that contract. Computed by
+// tjsVendorParentDir() (scripts/platform-tag.cjs), NOT inlined here, so
+// test/tjs-darwin-poll-fixup.test.cjs and test/tls-cacert-pem.test.cjs — which
+// read that SAME checkout directly — resolve the identical default instead of
+// a hand-copy that silently stops matching (and silently starts skipping)
+// the moment this default changes.
+const vendor = tjsVendorParentDir(process.env);
 const patches = path.join(repo, 'spike/quickjs/patches');
 // Default output is platform-unique (build/tjs/<osToken>-<arch>) so a shared
 // (NFS) tree can't have one platform's build clobber another's. CI overrides the
@@ -254,6 +304,7 @@ const TXIKI_PATCH_ORDER = [
   'txiki-vm-context.patch',                   // registers after sync-fs + sync-spawn: new mod_vm.c + shared-file wiring
   'txiki-signals-expose.patch',               // expose the OS-derived signal name->number map as globalThis.__tjs_signals (signals.c only; order-independent)
   'txiki-readdir-dtype-fallback.patch',       // lstat-resolve UV_DIRENT_UNKNOWN in readDir (NFS/no-d_type filesystems), match node (mod_fs.c only; order-independent)
+  'txiki-timer-unref.patch',                  // core.unrefTimer/refTimer (timers.c) + AbortSignal.timeout unrefs its internal timer (abort-controller.js), matching node's Timeout#unref — order-independent
 ];
 
 function orderedPatches(prefix) {
@@ -2946,53 +2997,182 @@ if (process.platform !== 'darwin' && !crossFile && !winMsvc) {
 }
 // Build OUT OF the shared txiki source: `<tjsDir>/build` was nested inside the
 // SHARED checkout (spike/quickjs/vendor/txiki.js), so every platform's build tromped
-// the same path on a shared NFS tree. `outDir` is already TARGET-unique
-// (platformTjsDir=build/tjs/<osToken>-<arch>, or CLODE_TJS_OUT per cross target), so a
-// build dir INSIDE it inherits that uniqueness — no contention even for two targets
-// cross-built from one host. Only the one-time source PATCH stays a shared mutation
-// (guarded by applyPatches' idempotence); the compile no longer touches the source tree.
-const buildDir = path.join(outDir, 'build');
+// the same path on a shared NFS tree. It was then moved inside `outDir`, which is
+// already TARGET-unique (platformTjsDir=build/tjs/<osToken>-<arch>, or CLODE_TJS_OUT
+// per cross target) — no contention even for two targets cross-built from one host.
+// It now moves ONE MORE TIME, off of `outDir` (which defaults inside the repo tree —
+// possibly NFS, see localScratchRoot() above) onto local scratch, for the same reason
+// the vendor checkout did: compiling thousands of small object files over NFS is the
+// dominant cost of a from-scratch build. targetToken() reconstructs the SAME
+// per-target uniqueness outDir already provided (a stable hash of outDir's own
+// resolved path — not a fresh mktemp, so incremental rebuilds of the SAME target still
+// hit the same object files/cmake cache) without requiring the intermediates to live
+// inside outDir at all. CLODE_TJS_BUILD overrides the local build root explicitly. The
+// FINAL exe still gets copied into outDir at the end, unchanged — that path is what
+// test/node-shim-helper.cjs's tjsPath() and CI both depend on. Only the one-time
+// source PATCH stays a shared mutation (guarded by applyPatches' idempotence); the
+// compile has never touched the source tree.
+function targetToken(forOutDir) {
+  const abs = path.resolve(forOutDir);
+  const h = crypto.createHash('sha256').update(abs).digest('hex').slice(0, 12);
+  return `${path.basename(abs)}-${h}`;
+}
+const buildRoot = process.env.CLODE_TJS_BUILD || path.join(localScratchRoot(), 'clode-tjs-build');
+const buildDir = path.join(buildRoot, targetToken(outDir), 'build');
 fs.mkdirSync(buildDir, { recursive: true });
 run('cmake', ['-S', tjsDir, '-B', buildDir, ...cmakeArgs]);
 
-// ---- bundle regen: RETIRED as a BE requirement (canonical-LE, 2026-07-11) ----
-// quickjs-ng-canonical-le-bytecode.patch makes the serialized format
-// little-endian everywhere: BE readers swap on load, so the shipped LE
-// bytecode arrays boot on every endianness and the old
-// regen-on-BE-target rule (sparc wall #4; formerly keyed on
-// os.endianness()) is gone. CLODE_TJS_REGEN=1 keeps the machinery as a
-// validation lever — a regenerated bundle must behave identically to the
-// shipped one on the same host, which is exactly the check the sparc
-// campaign used on its darwin control.
-const forceRegen = process.env.CLODE_TJS_REGEN === '1';
-if (forceRegen) {
-  console.log(`BE bundle regen: target endianness=${os.endianness()} force=${forceRegen} -> regenerating quickjs bytecode arrays natively`);
-  const tjsc = path.join(buildDir, 'tjsc');
-  run('cmake', ['--build', buildDir, '--target', 'tjsc', '-j', jobs]);
-  if (!fs.existsSync(tjsc)) throw new Error(`BE regen: tjsc did not build at ${tjsc}`);
+// ---- bytecode regen: pure helpers -----------------------------------------
+// Extracted as standalone pure functions (no fs/process access beyond their
+// arguments) so test/tjs-bytecode-regen.test.cjs can pull them out of this
+// file (the extractFunction pattern test/tjs-build-hermeticity.test.cjs
+// already uses) and unit-test the staleness logic without needing a real
+// cmake/tjsc build.
+//
+// The full list of {outC, name, prefix, inJs} pairs tjsc regenerates. A pure
+// function of the stdlib directory listing, so a test can drive it with a
+// fake list instead of a real checkout.
+function bytecodeBundlePairs(stdlibFiles) {
+  return [
+    { outC: 'src/bundles/c/core/polyfills.c', name: 'tjs:internal/polyfills', prefix: 'tjs__', inJs: 'src/bundles/js/core/polyfills.js' },
+    { outC: 'src/bundles/c/core/core.c', name: 'tjs:internal/bootstrap', prefix: 'tjs__', inJs: 'src/bundles/js/core/core.js' },
+    { outC: 'src/bundles/c/core/run-main.c', name: 'tjs:internal/run-main', prefix: 'tjs__', inJs: 'src/bundles/js/core/run-main.js' },
+    { outC: 'src/bundles/c/core/run-repl.c', name: 'tjs:internal/run-repl', prefix: 'tjs__', inJs: 'src/bundles/js/core/run-repl.js' },
+    { outC: 'src/bundles/c/core/worker-bootstrap.c', name: 'tjs:internal/worker-bootstrap', prefix: 'tjs__', inJs: 'src/js/worker/worker-bootstrap.js' },
+    { outC: 'src/bundles/c/internal/path.c', name: 'tjs:internal/path', prefix: 'tjs__internal_', inJs: 'src/js/internal/path.js' },
+    ...stdlibFiles.map((f) => {
+      const n = f.replace(/\.js$/, '');
+      return { outC: `src/bundles/c/stdlib/${n}.c`, name: `tjs:${n}`, prefix: 'tjs__', inJs: `src/bundles/js/stdlib/${f}` };
+    }),
+  ];
+}
+// sha256 of the exact JS bundle bytes a .c bytecode array should have been
+// compiled from, and the C-comment trailer that records it inside the
+// generated .c file (invisible to the compiler; appended after tjsc's own
+// output). bytecodeIsFresh() reads it back to answer "does this .c still
+// match this .js?" without re-running tjsc — the tripwire (below) needs that
+// to be cheap, since re-running tjsc needs a full cmake configure+build.
+function bundleFingerprint(jsBytes) {
+  return crypto.createHash('sha256').update(jsBytes).digest('hex');
+}
+function fingerprintTrailer(inJs, fp) {
+  return `\n/* clode:bytecode-regen src=${inJs} sha256=${fp} */\n`;
+}
+const FINGERPRINT_RE = /clode:bytecode-regen src=(\S+) sha256=([0-9a-f]{64})/;
+function bytecodeIsFresh(cText, jsBytes) {
+  const m = cText.match(FINGERPRINT_RE);
+  return !!m && m[2] === bundleFingerprint(jsBytes);
+}
+
+// ---- host-native tjsc: makes regen correct for CROSS builds too ----------
+// tjsc's only dependency is the qjs library (CMakeLists.txt: add_executable
+// (tjsc EXCLUDE_FROM_ALL src/qjsc.c); target_link_libraries(tjsc qjs)) — none
+// of the network/tls/sqlite/mimalloc/ffi graph a full tjs-cli needs. Building
+// it with the HOST's OWN native compiler (never a cross toolchain file)
+// always yields a binary this process can exec, whatever target is actually
+// being built. Its OUTPUT is valid for every target regardless of host vs.
+// target arch: quickjs-ng-canonical-le-bytecode.patch made the serialized
+// bytecode format canonically little-endian, and per spike/quickjs/
+// bc-le-oracle.mjs (byte-identical serialization across hosts) plus the
+// s390x/sparc-BE32/m68k-BE32 legs booting the shipped LE arrays unmodified,
+// that canonical form is independent of the writing host's endianness AND
+// word size — every multi-byte field is a fixed-width u16/u32/u64 scalar,
+// never a raw pointer-sized dump. So ONE host build of tjsc regenerates
+// correctly for every target, native or cross, and the old "must regenerate
+// at the target's own endianness" requirement — the reason this was ever
+// gated behind an opt-in flag — no longer applies. cosmo benefits too: it no
+// longer matters that cosmocc itself cannot build tjsc (see the tjs-cli-only
+// comment below) — this build never asks it to.
+function buildHostTjsc(dir, hostBuildDir) {
+  fs.mkdirSync(hostBuildDir, { recursive: true });
+  console.log(`bytecode regen: target build is cross — configuring a host-native tjsc at ${hostBuildDir} (its output is valid for every target; canonical-LE)`);
+  run('cmake', ['-S', dir, '-B', hostBuildDir, '-DCMAKE_BUILD_TYPE=Release', '-DTJS_USE_ADA=OFF',
+    '-DBUILD_WITH_WASM=OFF', '-DBUILD_WITH_MIMALLOC=OFF', '-DBUILD_WITH_FFI=OFF',
+    '-DBUILD_WITH_SQLITE=OFF', '-DBUILD_WITH_LTO=OFF',
+    // Same -Wno-error demotions the non-Apple native path applies (:~2946) —
+    // this is an independent host-native configure, so it needs its own copy
+    // rather than inheriting cmakeArgs (which may carry cross-only settings).
+    '-DCMAKE_C_FLAGS=-Wno-error=unused-variable -Wno-error=unknown-pragmas -Wno-error=sign-conversion']);
+  run('cmake', ['--build', hostBuildDir, '--target', 'tjsc', '-j', jobs]);
+  const tjsc = path.join(hostBuildDir, process.platform === 'win32' ? 'tjsc.exe' : 'tjsc');
+  // Loud, not silent: if the HOST cannot build its own native tjsc, NO
+  // target can be regenerated correctly — a real build failure, not a
+  // condition to skip past quietly (a silent skip is the defect this whole
+  // mechanism exists to fix).
+  if (!fs.existsSync(tjsc)) throw new Error(`bytecode regen: host-native tjsc did not build at ${tjsc} — cannot regenerate bytecode for ANY target without it`);
+  return tjsc;
+}
+
+// ---- bytecode regen: the DEFAULT, not opt-in (2026-08-06) -----------------
+// cmake compiles src/bundles/c/** — quickjs bytecode arrays txiki git-tracks
+// pre-compiled from ITS OWN src/js/**. esbuild's src/bundles/js/** (built
+// above, from OUR patched src/js/**, endian-neutral text) never reached the
+// binary unless tjsc re-ran on it. Behind a CLODE_TJS_REGEN=1 opt-in that no
+// caller ever set, that meant NO build — including every shipped release, on
+// every target — EVER picked up a src/js/** patch; discovered when a correct
+// AbortSignal.timeout unref fix (patches/txiki-timer-unref.patch) built
+// clean and changed nothing (test/node-shim-timer-unref.test.cjs). A build
+// that silently drops a patch, with no failure signal, is the bug — so
+// regeneration is now unconditional. CLODE_TJS_REGEN=0 is the explicit,
+// LOUD opt-out for a fast dev loop when src/js/** is provably untouched; it
+// must never be set for a release or CI build.
+const regenOptOut = process.env.CLODE_TJS_REGEN === '0';
+const stdlibFiles = fs.readdirSync(path.join(tjsDir, 'src/js/stdlib')).filter((f) => f.endsWith('.js'));
+const bundlePairs = bytecodeBundlePairs(stdlibFiles);
+if (regenOptOut) {
+  console.error('build-tjs: CLODE_TJS_REGEN=0 — bytecode regen SKIPPED. The shipped src/bundles/c/** ' +
+    'will NOT reflect any patch to src/js/** (this is the silent-drop defect, opted into on purpose ' +
+    'here). Use only for a fast dev loop when src/js/** is provably untouched — never for a release ' +
+    'or CI build.');
+} else {
+  // A cross build's own buildDir/tjsc would be a TARGET binary this host
+  // cannot exec — build tjsc natively instead (buildHostTjsc). A native
+  // build's buildDir/tjsc already runs here directly; no second build dir.
+  let tjsc;
+  if (crossFile) {
+    tjsc = buildHostTjsc(tjsDir, path.join(buildRoot, targetToken(outDir), 'build-host-tjsc'));
+  } else {
+    run('cmake', ['--build', buildDir, '--target', 'tjsc', '-j', jobs]);
+    tjsc = path.join(buildDir, 'tjsc');
+    if (!fs.existsSync(tjsc)) throw new Error(`bytecode regen: tjsc did not build at ${tjsc}`);
+  }
   // Exactly the txiki Makefile's tjsc rules (module mode -m, strip -s, module
   // name -n, C symbol prefix -p). core+stdlib come from the esbuilt bundles;
   // worker-bootstrap + internal/path are tjsc'd straight from src/js sources.
-  const regen = (outC, name, prefix, inJs) => {
+  for (const { outC, name, prefix, inJs } of bundlePairs) {
+    const outAbs = path.join(tjsDir, outC);
+    const inAbs = path.join(tjsDir, inJs);
     fs.mkdirSync(path.join(tjsDir, path.dirname(outC)), { recursive: true });
-    run(tjsc, ['-m', '-s', '-o', path.join(tjsDir, outC), '-n', name, '-p', prefix, path.join(tjsDir, inJs)], { cwd: tjsDir });
-  };
-  regen('src/bundles/c/core/polyfills.c', 'tjs:internal/polyfills', 'tjs__', 'src/bundles/js/core/polyfills.js');
-  regen('src/bundles/c/core/core.c', 'tjs:internal/bootstrap', 'tjs__', 'src/bundles/js/core/core.js');
-  regen('src/bundles/c/core/run-main.c', 'tjs:internal/run-main', 'tjs__', 'src/bundles/js/core/run-main.js');
-  regen('src/bundles/c/core/run-repl.c', 'tjs:internal/run-repl', 'tjs__', 'src/bundles/js/core/run-repl.js');
-  regen('src/bundles/c/core/worker-bootstrap.c', 'tjs:internal/worker-bootstrap', 'tjs__', 'src/js/worker/worker-bootstrap.js');
-  regen('src/bundles/c/internal/path.c', 'tjs:internal/path', 'tjs__internal_', 'src/js/internal/path.js');
-  for (const f of fs.readdirSync(path.join(tjsDir, 'src/js/stdlib')).filter((x) => x.endsWith('.js'))) {
-    const n = f.replace(/\.js$/, '');
-    regen(`src/bundles/c/stdlib/${n}.c`, `tjs:${n}`, 'tjs__', `src/bundles/js/stdlib/${f}`);
+    run(tjsc, ['-m', '-s', '-o', outAbs, '-n', name, '-p', prefix, inAbs], { cwd: tjsDir });
+    fs.appendFileSync(outAbs, fingerprintTrailer(inJs, bundleFingerprint(fs.readFileSync(inAbs))));
   }
-  console.log('BE bundle regen: 18 bytecode arrays regenerated at target endianness');
+  console.log(`bytecode regen: ${bundlePairs.length} bytecode arrays regenerated from the current (patched) src/js/**`);
+}
+
+// ---- bytecode regen: the tripwire (requirement 4) --------------------------
+// Right before src/bundles/c/** is compiled into the engine, verify every
+// array's fingerprint trailer still matches the JS bundle it claims to come
+// from. This should be unreachable right after a successful regen above —
+// it exists as defense-in-depth against a future refactor that reintroduces
+// the silent-drop this whole mechanism was built to fix. It must never again
+// be possible to ship a stale array quietly: if this ever fires, that is a
+// real build-system bug, not a target quirk to route around.
+if (!regenOptOut) {
+  const stale = bundlePairs.filter(({ outC, inJs }) => {
+    const cAbs = path.join(tjsDir, outC);
+    const jsAbs = path.join(tjsDir, inJs);
+    return !bytecodeIsFresh(fs.readFileSync(cAbs, 'utf8'), fs.readFileSync(jsAbs));
+  });
+  if (stale.length) {
+    throw new Error(`bytecode regen: STALE — ${stale.length} array(s) do not match their esbuilt ` +
+      `src/bundles/js/** source right after regeneration: ${stale.map((s) => s.outC).join(', ')}`);
+  }
 }
 
 // cosmo builds ONLY the tjs-cli executable target (OUTPUT_NAME tjs): the default
 // (all-targets) build drags in tjsc/qjs tools and demos that cosmocc can't build,
 // and cosmo's engine IS the tjs-cli APE, not the `tjs` static lib (libtjs_core.a).
+// (Unrelated to bytecode regen above, which never asks cosmocc to build tjsc.)
 const buildArgs = ['--build', buildDir, '-j', jobs];
 if (cosmoTarget) buildArgs.push('--target', 'tjs-cli');
 run('cmake', buildArgs);

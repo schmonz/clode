@@ -22,9 +22,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { X509Certificate } = require('node:crypto');
 const { extractPemFromCacertC } = require('../scripts/extract-cacert-pem.mjs');
+const { tjsVendorParentDir } = require('../scripts/platform-tag.cjs');
 
 const REPO = path.resolve(__dirname, '..');
-const CACERT_C = path.join(REPO, 'spike/quickjs/vendor/txiki.js/src/cacert.c');
+// Resolved the SAME way build-tjs.mjs resolves its own CLODE_TJS_VENDOR
+// default (see platform-tag.cjs's tjsVendorParentDir) — not hardcoded to the
+// old spike/quickjs/vendor path, which would silently stop matching (and
+// start hard-FAILING the existence assertion below) the moment that default
+// moves off the NFS-mounted repo tree onto local scratch.
+const CACERT_C = path.join(tjsVendorParentDir(), 'txiki.js/src/cacert.c');
 const OUT_PEM = path.join(REPO, 'libexec/node-shim/modules/tls-cacert.pem');
 
 test('extractPemFromCacertC: decodes a small synthetic C string literal', () => {
