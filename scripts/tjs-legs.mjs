@@ -76,8 +76,8 @@ const LEGS = [
     // native tjs" entry (adds Edit). tier 2 stays unclaimed regardless: F3/F4
     // remain open per this leg's long-running daily-drive notes, so even a
     // clean floor wouldn't back the full recipe.
-    fidelity: { tier: 0, date: '2026-07-30', bundle: '2.1.218', how: 'primary-darwin',
-                note: 'floor 4/6 green (B1,B4,C1,G7); A1,D1 not driven — see RESULTS.md' } },
+    fidelity: { tier: 0, date: '2026-08-06', bundle: '2.1.218', how: 'primary-darwin',
+                note: 'floor 5/6 green (A1,B1,B4,C1,G7); only D1 missing — see RESULTS.md. A1 came from scripts/floor-probe.mjs driving a fresh build; D1 (/quit exits cleanly) is interactive and needs a pty on the target, so the probe deliberately does not claim it' } },
   // glibc Linux: a CI-only CANARY (ciOnly:true → built in CI, filtered OUT of the
   // release tier; NB `smoke` is a different, taken field — the qemu-user smoke
   // MODE on the musl legs). The published Linux artifacts are musl-static
