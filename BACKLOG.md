@@ -390,6 +390,46 @@ posix_memmap.c with a non-Linux mremap fallback (munmap+mmap or guard the MREMAP
 upstream it. For now WASM-off is the shipping posture on platforms where WAMR won't build —
 record it in the per-target build config, not as an ad-hoc env flag a human must remember.
 
+## ★ Move the engine build to cmake — the last hard Node dependency (2026-08-05)
+
+Direction (user, 2026-08-05): "we need to move toward cmake when we move away from node."
+Sequenced AFTER the Node-retirement work, but it is the piece that actually completes it.
+
+**The asymmetry.** clode RUNS without Node — that shipped. clode cannot BUILD ITS OWN ENGINE
+without Node, because `scripts/build-tjs.mjs` (3,270 lines) is the orchestration. So
+"move away from node" is not done while the engine build needs it.
+
+**The motivating evidence — a build that silently discarded a patch.** Patching any txiki JS
+source under `src/js/**` had NO EFFECT: cmake compiles `src/bundles/c/**` (pre-compiled
+quickjs bytecode arrays txiki git-tracks), and build-tjs.mjs regenerated those only behind an
+opt-in `CLODE_TJS_REGEN=1`. A correct `AbortSignal.timeout` patch (+ its C binding) built
+clean and changed nothing; the esbuilt `.js` HAD the change while the `.c` that compiled was
+pristine upstream, three minutes older. No failure signal anywhere. Full detail in memory
+`polyfill-patches-dropped-on-le`.
+
+**Why that argues for cmake specifically.** txiki's own Makefile already declares the rule we
+needed — `src/bundles/c/core/polyfills.c: $(TJSC) src/bundles/js/core/polyfills.js`. We bypass
+it by driving cmake directly and shipping pre-built `.c`, then re-derive the ordering by hand
+in imperative JS, and got it wrong. A declarative OUTPUT/DEPENDS rule regenerates when its
+input changes, full stop: no flag, no fingerprint trailer, no staleness tripwire — because
+staleness stops being expressible. We are currently building a tripwire to catch a class of
+bug a real build graph makes unrepresentable.
+
+**Split the work by what actually fits.**
+- NATURAL for cmake: bytecode regen as custom commands with real deps; host-vs-target `tjsc`;
+  the source fixups; per-target compile config; the cross-files we already hand it.
+- AWKWARD for cmake: cosmocc toolchain provisioning (fetch + sha-pin a 441MB zip); vendor
+  reconstruction (pinned clone + 16 patch applications); post-build hermeticity verification
+  of the shipped binary; artifact naming/placement. cmake can shell out for these, but that
+  just relocates the imperative code.
+- So the likely shape is: **cmake owns the build graph; something small owns provisioning and
+  verification** — and that something must run WITHOUT Node, i.e. quaude itself or shell.
+
+**Constraints any replacement must keep.** 36 published run-targets including cross-builds,
+cosmo APEs, and Tiger PPC; `scripts/tjs-legs.mjs` stays the single source of truth for leg
+definitions ([[tjs-legs-manifest]]); the build hermeticity check on the shipped binary; and
+the out-of-tree/local-disk build requirement below (this tree is NFS).
+
 ## ★ Build-working-dir isolation — no shared-tree tromping (2026-07-25)
 
 Principle (user, 2026-07-25): "cross-build a zillion clodes and quaudes and they
