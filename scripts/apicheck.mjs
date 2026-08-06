@@ -17,7 +17,8 @@
 //
 // Exit non-zero on any wall miss or (applicable) divergence — this is a CI gate.
 // Needs a Bun-packaged CC provider to stage cli.cjs; without one it SKIPS (exit 0).
-import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, mkdtempSync, rmSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -36,6 +37,13 @@ const CORPUS = [
   { id: 'bad-flag', args: ['--no-such-flag-xyz-123'],                 deterministic: true  },
   { id: 'p-plain',  args: ['-p', 'reply with only the word: OK'],     deterministic: false },
   { id: 'p-arith',  args: ['-p', 'what is 6 times 7? reply with only the number'], deterministic: false },
+  // Tool-bearing rows. The 2026-08-06 hunt showed the interesting gaps are NOT
+  // on the plain -p path: fs/promises.statfs surfaced only on an error path, and
+  // the missing 'spawn' event only when a child was driven as a transport. A
+  // corpus that never spawns a tool cannot see either.
+  { id: 'p-json',   args: ['-p', '--output-format', 'json', 'say PONG'],   deterministic: false },
+  { id: 'p-stream', args: ['-p', '--output-format', 'stream-json', '--verbose', 'say PONG'], deterministic: false },
+  { id: 'p-tools',  args: ['-p', '--permission-mode', 'bypassPermissions', 'run a command'], deterministic: false },
 ];
 
 function wallsOf(stderr) {
@@ -75,6 +83,58 @@ function versionDelta(log) {
 // The gate. Everything it touches the world through is injectable, so the wiring
 // and the axes are unit-testable without a provider (test/apicheck-decoupled).
 // Returns the process exit status.
+
+// ---- Axis 3: runtime PROBE hits ---------------------------------------------
+// libexec/node-shim/internal/probe.cjs logs every missing-property READ on a
+// broad shim builtin under CLODE_SHIM_PROBE=1, without changing behavior. That
+// is the only axis that sees the defect class the other two structurally miss:
+// a property the bundle READS and then CALLS. Axis 1 (walls) never fires for it
+// — broad modules keep node's "missing prop = undefined" idiom on purpose — and
+// the STATIC map (test/shim-surface/golden.json) missed both 2026-08-06 defects
+// (fs/promises.statfs, reached via a minified alias; and the ChildProcess
+// 'spawn' EVENT, which is not a property at all).
+const PROBE_GOLDEN = path.join(REPO, 'test', 'shim-surface', 'probe-golden.json');
+function probesOf(stderr) {
+  const out = new Set();
+  for (const line of String(stderr || '').split('\n')) {
+    const m = /^\[probe\] (\S+?)(?: \(in\))?$/.exec(line.trim());
+    if (m) out.add(m[1]);
+  }
+  return [...out];
+}
+function benignProbes() {
+  if (!existsSync(PROBE_GOLDEN)) return new Set();
+  try {
+    const g = JSON.parse(readFileSync(PROBE_GOLDEN, 'utf8'));
+    return new Set((g.benign || []).map((e) => e.prop));
+  } catch { return new Set(); }
+}
+
+// A mock Anthropic endpoint, so the gate is HERMETIC and safe to run in CI.
+// Without it the corpus's -p items hit the real API with whoever's credentials
+// are lying around — billable, and dependent on the runner being logged in.
+function startMock() {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'apicheck-mock-'));
+  const urlFile = path.join(dir, 'url');
+  const child = spawn(process.execPath, [path.join(REPO, 'test', 'mock-anthropic-child.cjs'),
+    '--url-file', urlFile], { stdio: 'ignore', detached: false });
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    if (existsSync(urlFile)) {
+      const url = readFileSync(urlFile, 'utf8').trim();
+      if (url) return { url, stop: () => { try { child.kill('SIGTERM'); } catch {} rmSync(dir, { recursive: true, force: true }); } };
+    }
+    // Synchronous sleep: this driver is sync by design (spawnSync dispatch), so
+    // it cannot await. Atomics.wait on a throwaway buffer blocks without burning
+    // CPU and needs no child process. (Node's main thread permits this; tjs's
+    // does not — but the GATE always runs under node, never under the shim.)
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+  }
+  try { child.kill('SIGTERM'); } catch {}
+  rmSync(dir, { recursive: true, force: true });
+  return null;
+}
+
 export function runGate(opts = {}) {
   const log = opts.log || ((s) => console.log(s));
   const corpus = opts.corpus || CORPUS;
@@ -92,14 +152,35 @@ export function runGate(opts = {}) {
     return 0;
   }
 
-  const baseEnv = { ...(opts.env || process.env) };
+  // HERMETIC by construction. Previously this inherited the caller's HOME and had
+  // no mock, so it read whoever's ~/.claude was present and sent the -p corpus to
+  // the REAL API — billable, and dependent on the runner being logged in. Neither
+  // is acceptable for something meant to gate CI.
+  const home = opts.home || mkdtempSync(path.join(os.tmpdir(), 'apicheck-home-'));
+  const ownHome = !opts.home;
+  mkdirSync(path.join(home, '.claude'), { recursive: true });
+  const mock = opts.mockUrl ? { url: opts.mockUrl, stop: () => {} } : startMock();
+  if (!mock) {
+    log('SKIP: could not start the mock Anthropic endpoint.');
+    if (ownHome) rmSync(home, { recursive: true, force: true });
+    return 0;
+  }
+  const baseEnv = {
+    ...(opts.env || process.env),
+    HOME: home,
+    ANTHROPIC_BASE_URL: mock.url,
+    ANTHROPIC_API_KEY: 'sk-ant-mock',   // dummy; the mock ignores it. NOT a secret.
+    CLODE_DEPS: path.join(home, 'deps'),
+    CLODE_CACHE: path.join(home, 'cache'),
+  };
   const allWalls = new Set();
+  const allProbes = new Set();
   const divergences = [];
 
   for (const item of corpus) {
     const q = runQuaude(staged.cli, item.args, {
       cwd: staged.dir, timeout: TIMEOUT,
-      env: { ...baseEnv, CLODE_SHIM_TRACE: '1' },
+      env: { ...baseEnv, CLODE_SHIM_TRACE: '1', CLODE_SHIM_PROBE: '1' },
     });
     const nEnv = { ...baseEnv };
     delete nEnv.CLODE_SHIM_TRACE;
@@ -107,6 +188,7 @@ export function runGate(opts = {}) {
 
     const walls = wallsOf(q.stderr);
     walls.forEach((w) => allWalls.add(w));
+    probesOf(q.stderr).forEach((pr) => allProbes.add(pr));
     const exitDiverge = q.status !== n.status || q.signal !== n.signal;
     const stdoutDiverge = item.deterministic && (q.stdout || '').trim() !== (n.stdout || '').trim();
     if (exitDiverge) divergences.push(`${item.id}: exit quaude=${q.status}/${q.signal} naude=${n.status}/${n.signal}`);
@@ -121,10 +203,26 @@ export function runGate(opts = {}) {
   log('\n## Axis 2 — naude-vs-quaude divergences');
   log(divergences.length ? divergences.map((d) => '  - ' + d).join('\n') : '  (none)');
 
-  if (opts.versionDelta !== false) versionDelta(log);
+  const benign = benignProbes();
+  const newProbes = [...allProbes].filter((pr) => !benign.has(pr)).sort();
+  log('\n## Axis 3 — runtime probe hits (missing-property READS on broad shim modules)');
+  if (!allProbes.size) {
+    log('  (none)');
+  } else {
+    log(`  ${allProbes.size} seen, ${allProbes.size - newProbes.length} known-benign (test/shim-surface/probe-golden.json)`);
+    if (newProbes.length) {
+      log('  NEW — each needs one human look: is it SNIFFED (benign, add to the golden)');
+      log('  or CALLED (a real gap — an undefined call throws a bare "not a function")?');
+      newProbes.forEach((pr) => log('    - ' + pr));
+    }
+  }
 
-  const failed = allWalls.size > 0 || divergences.length > 0;
-  log(`\n${failed ? 'GATE: FAIL' : 'GATE: PASS'} (walls=${allWalls.size}, divergences=${divergences.length})`);
+  if (opts.versionDelta !== false) versionDelta(log);
+  mock.stop();
+  if (ownHome) rmSync(home, { recursive: true, force: true });
+
+  const failed = allWalls.size > 0 || divergences.length > 0 || newProbes.length > 0;
+  log(`\n${failed ? 'GATE: FAIL' : 'GATE: PASS'} (walls=${allWalls.size}, divergences=${divergences.length}, newProbes=${newProbes.length})`);
   return failed ? 1 : 0;
 }
 

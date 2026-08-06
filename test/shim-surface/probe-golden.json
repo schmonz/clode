@@ -1,0 +1,43 @@
+{
+  "_README": [
+    "RUNTIME counterpart to golden.json. That file is a STATIC map (walk the",
+    "extracted cli.cjs for API references); this one records what the bundle",
+    "actually READ at run time, as reported by libexec/node-shim/internal/probe.cjs",
+    "under CLODE_SHIM_PROBE=1, while scripts/apicheck.mjs drives its corpus.",
+    "",
+    "The two are complementary, and 2026-08-06 proved it: NEITHER of the session's",
+    "real defects appeared in the static map.",
+    "  * fs/promises.statfs — reached through a minified alias (`cno.statfs`), which",
+    "    defeated the static walker. The bundle CALLS it on its low-disk path, so",
+    "    'undefined' became a bare 'not a function' (quickjs TypeErrors carry no",
+    "    symbol name) swallowed by that path's own try/catch: the diagnostic simply",
+    "    never appeared, and nothing failed.",
+    "  * ChildProcess 'spawn' — an EVENT, not a property. Static API-surface",
+    "    analysis cannot see events at all. Its absence made every stdio MCP server",
+    "    unusable, silently.",
+    "",
+    "A probe hit is BENIGN when the bundle only sniffs the property (typeof /",
+    "truthiness) and node also returns undefined. It is a BUG when the bundle goes",
+    "on to CALL it. Every entry must say which, and why.",
+    "",
+    "Anything NOT listed here fails the gate. The point is that a new hit gets one",
+    "human look, not that this list is exhaustive. Add an entry only after checking",
+    "node's own answer for the same property."
+  ],
+  "_measured_against_bundle": "2.1.218",
+  "_measured_on": "2026-08-06",
+  "benign": [
+    {
+      "prop": "process.type",
+      "why": "Electron detection. Electron sets process.type ('browser'/'renderer'); plain node leaves it undefined, which is what we return. Sniff only, never called."
+    },
+    {
+      "prop": "process.__nwjs",
+      "why": "NW.js detection. Defined only inside NW.js; undefined under node. Sniff only, never called."
+    },
+    {
+      "prop": "process.__signal_exit_emitter__",
+      "why": "The npm 'signal-exit' package's private singleton slot: it reads the key, finds it absent, and installs its own. Absence is the expected first-load state under node too."
+    }
+  ]
+}
