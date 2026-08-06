@@ -1,0 +1,78 @@
+diff --git a/src/js/polyfills/abort-controller.js b/src/js/polyfills/abort-controller.js
+index e89ca32..0f41c28 100644
+--- a/src/js/polyfills/abort-controller.js
++++ b/src/js/polyfills/abort-controller.js
+@@ -1,4 +1,5 @@
+ import { defineEventAttribute, EventTarget, Event } from './event-target.js';
++import core from 'tjs:internal/core';
+ 
+ function defaultAbortReason() {
+     return new DOMException('This operation was aborted', 'AbortError');
+@@ -58,9 +59,17 @@ class AbortSignal extends EventTarget {
+     static timeout(ms) {
+         const signal = new AbortSignal();
+ 
+-        setTimeout(() => {
++        // CLODE: node unrefs this internal timer (a bare `AbortSignal.timeout(ms)`
++        // must not keep the process alive), but this engine's setTimeout returns a
++        // plain int64 id with no handle object to call `.unref()` on. Go through
++        // core.unrefTimer (src/timers.c) instead - it looks the id up in the
++        // engine's timer hash and uv_unref()s the underlying uv_timer_t. This does
++        // NOT change when the timeout fires: it only stops the timer, by itself,
++        // from pinning the event loop open (matches node's Timeout#unref semantics).
++        const id = setTimeout(() => {
+             signal.#signalAbort(new DOMException('The operation was aborted due to timeout', 'TimeoutError'));
+         }, ms);
++        core.unrefTimer(id);
+ 
+         return signal;
+     }
+diff --git a/src/timers.c b/src/timers.c
+index 19fbe45..94acae1 100644
+--- a/src/timers.c
++++ b/src/timers.c
+@@ -166,10 +166,43 @@ static JSValue tjs_clearTimeout(JSContext *ctx, JSValue this_val, int argc, JSVa
+     return JS_UNDEFINED;
+ }
+ 
++/* CLODE: setTimeout/setInterval return a plain int64 id (spec/node-shaped), not a
++ * handle object, so there is nowhere for a `.unref()` method to live. Node's
++ * timer ids ARE unref-able (via the hidden Timeout object); callers that need
++ * that here (AbortSignal.timeout's internal timer, see abort-controller.js) go
++ * through these two id-keyed functions instead. magic: 0 = unref, 1 = ref -
++ * mirrors the tjs_setTimeout(magic: 0 = timeout, 1 = interval) convention above
++ * and the Stream ref/unref pair in mod_streams.c. Unknown/already-fired ids are
++ * silently ignored (same tolerance as clearTimeout on a stale id). */
++static JSValue tjs_timer_setref(JSContext *ctx, JSValue this_val, int argc, JSValue *argv, int magic) {
++    TJSRuntime *qrt = JS_GetContextOpaque(ctx);
++    CHECK_NOT_NULL(qrt);
++    int64_t timer_id;
++    TJSTimer *th = NULL;
++
++    if (JS_ToInt64(ctx, &timer_id, argv[0])) {
++        return JS_EXCEPTION;
++    }
++
++    HASH_FIND_INT64(qrt->timers.timers, &timer_id, th);
++
++    if (th != NULL) {
++        if (magic) {
++            uv_ref((uv_handle_t *) &th->handle);
++        } else {
++            uv_unref((uv_handle_t *) &th->handle);
++        }
++    }
++
++    return JS_UNDEFINED;
++}
++
+ static const JSCFunctionListEntry tjs_timer_funcs[] = { JS_CFUNC_MAGIC_DEF("setTimeout", 2, tjs_setTimeout, 0),
+                                                         TJS_CFUNC_DEF("clearTimeout", 1, tjs_clearTimeout),
+                                                         JS_CFUNC_MAGIC_DEF("setInterval", 2, tjs_setTimeout, 1),
+-                                                        TJS_CFUNC_DEF("clearInterval", 1, tjs_clearTimeout) };
++                                                        TJS_CFUNC_DEF("clearInterval", 1, tjs_clearTimeout),
++                                                        JS_CFUNC_MAGIC_DEF("unrefTimer", 1, tjs_timer_setref, 0),
++                                                        JS_CFUNC_MAGIC_DEF("refTimer", 1, tjs_timer_setref, 1) };
+ 
+ void tjs__mod_timers_init(JSContext *ctx, JSValue ns) {
+     JS_SetPropertyFunctionList(ctx, ns, tjs_timer_funcs, countof(tjs_timer_funcs));
