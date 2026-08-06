@@ -960,3 +960,44 @@ but surfaced darwin assumptions the shim bakes in — Linux-portability debt, NO
   Sweep libexec/node-shim/** and libexec/bun-shim.cjs.
 Not matrix-blocking (the BE oracle scopes these out); about node-shim FIDELITY on Linux, which the
 shim-fidelity gate should grow to cover once a Linux tjs is a first-class local build target.
+
+## ★ OPEN — MCP over SSE POSTs to `/[object Object]` under quaude (2026-08-06)
+
+**Symptom.** With an `{"type":"sse"}` MCP server, quaude opens the stream fine and
+receives the `endpoint` event, then POSTs its JSON-RPC to a path that is a
+STRINGIFIED OBJECT. Straight off the server's wire log:
+
+```
+<< GET  /sse?_=1786022754527
+<< POST /[object%20Object]   {"method":"initialize",...}
+```
+
+The upstream binary against the SAME server completes `initialize` -> `tools/list`
+-> `tools/call` and returns the needle. So the transport works; ours mis-builds the
+POST URL.
+
+`new URL('[object Object]', 'http://h/sse')` resolves to exactly `http://h/[object
+Object]`, so the value handed to the URL constructor was already an object — i.e.
+the `endpoint` event's `data` is not the string the parser expects.
+
+**ELIMINATED with evidence — do not re-chase:**
+- `new URL(rel, base)` with a STRING base and with a URL-OBJECT base: identical to
+  node.
+- `URL.parse(rel, base)` (the static form): present and identical to node.
+- `fetch()` response-body chunks for the SSE stream: byte-identical to node
+  (`Uint8Array`, decodes to `event: endpoint\ndata: /messages?sessionId=probe`).
+- `TextDecoderStream` / `TransformStream` via `pipeThrough`: yields the same
+  STRING chunk as node.
+- `EventSource` is undefined in node, engine, and shim alike, so the bundle parses
+  the stream itself — this is not a missing-global problem.
+
+**Where to look next:** whatever turns a parsed SSE event into the endpoint value.
+Everything BELOW that (stream bytes, decode, URL resolution) is proven equivalent,
+so the divergence is in the event-object shape the bundle's own parser builds —
+likely a `MessageEvent`/event-record field that is a string under node and an
+object under the shim. Instrument the value passed to the URL constructor rather
+than re-testing the layers above.
+
+**Severity.** MCP/SSE is unusable under quaude; MCP over stdio (fixed 2383de2) and
+over HTTP (fixed fc54ae9) both work now. Bundle references: http 314, stdio 136,
+sse 94, ws 24 — so SSE is the last common transport still broken. ws is untested.
