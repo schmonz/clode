@@ -68,10 +68,14 @@ are invisible to that parser by construction.
 
 | date | run-target | row | engine | bundle | verdict | note |
 | --- | --- | --- | --- | --- | --- | --- |
-| 2026-08-06 | darwin-arm64 | A1 | quaude | 2.1.218 | pass | floor-probe: config non-zero, parses, onboarding + project trust survive a second launch (scripts/floor-probe.mjs, fresh `clode build` after the 2026-08-06 shim fixes) |
-| 2026-08-06 | darwin-arm64 | C1 | quaude | 2.1.218 | pass | floor-probe: Write tool wrote FLOOR-WRITE-OK, 15 bytes non-zero on disk |
-| 2026-08-06 | darwin-arm64 | B1 | quaude | 2.1.218 | pass | floor-probe: Bash tool_result carried FLOOR-BASH-OK back to the model |
-| 2026-08-06 | darwin-arm64 | G7 | quaude | 2.1.218 | pass | floor-probe: -p exit 0, PONG, POST landed on /messages |
+| 2026-08-09 | netbsd-arm64 | A1 | quaude | 2.1.218 | pass | floor-probe over ssh (guest has no node; mock served from the host at 10.0.2.2): config non-zero, parses, onboarding + project trust survive a second launch |
+| 2026-08-09 | netbsd-arm64 | C1 | quaude | 2.1.218 | pass | floor-probe over ssh: Write tool wrote FLOOR-WRITE-OK, 15 bytes non-zero on disk |
+| 2026-08-09 | netbsd-arm64 | B1 | quaude | 2.1.218 | pass | floor-probe over ssh: Bash tool_result carried FLOOR-BASH-OK back to the model |
+| 2026-08-09 | netbsd-arm64 | G7 | quaude | 2.1.218 | pass | floor-probe over ssh: -p exit 0, PONG, POST landed on /messages |
+| 2026-08-09 | darwin-arm64 | A1 | quaude | 2.1.218 | pass | floor-probe: config non-zero, parses, onboarding + project trust survive a second launch (scripts/floor-probe.mjs, fresh `clode build` after the 2026-08-06 shim fixes) |
+| 2026-08-09 | darwin-arm64 | C1 | quaude | 2.1.218 | pass | floor-probe: Write tool wrote FLOOR-WRITE-OK, 15 bytes non-zero on disk |
+| 2026-08-09 | darwin-arm64 | B1 | quaude | 2.1.218 | pass | floor-probe: Bash tool_result carried FLOOR-BASH-OK back to the model |
+| 2026-08-09 | darwin-arm64 | G7 | quaude | 2.1.218 | pass | floor-probe: -p exit 0, PONG, POST landed on /messages |
 | 2026-07-31 | darwin-ppc | G7 | quaude | 2.1.218 | pass | mock-anthropic: -p exit 0, "Paris", first byte 337ms |
 | 2026-07-31 | darwin-ppc | G6 | quaude | 2.1.218 | open | REAL api.anthropic.com stalls before any API request when ~/.claude/.credentials.json exists |
 | 2026-07-31 | darwin-ppc | B1 | quaude | 2.1.218 | pass | Bash outcome=ok on Tiger VM |

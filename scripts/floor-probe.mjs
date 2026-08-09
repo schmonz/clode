@@ -10,6 +10,15 @@
 // that can execute the artifact.
 //
 //   node scripts/floor-probe.mjs <binary> <run-target> [--json]
+//   node scripts/floor-probe.mjs <remote-binary> <run-target> \\
+//        --ssh 'ssh -p 2230 user@localhost' [--mock-host 10.0.2.2]
+//
+// --ssh drives a binary on ANOTHER box; the probe itself still runs here. That
+// is what makes node-less targets reachable — Tiger/PPC, NetBSD and Ubuntu VMs
+// all have no node, so a probe that had to execute THERE could never run. The
+// canned mock then binds 0.0.0.0 and the guest reaches it at --mock-host (for
+// qemu user-mode networking the host is 10.0.2.2, verified reachable from all
+// three guests).
 //
 // It prints rows in test/fidelity/RESULTS.md's table shape. It does NOT edit the
 // ledger: floorCoverage() reads committed rows, and a probe that could write its
@@ -29,9 +38,19 @@ if (!BIN || !RUN_TARGET) {
   console.error('usage: floor-probe.mjs <binary> <run-target> [--json]');
   process.exit(2);
 }
-if (!fs.existsSync(BIN)) { console.error(`floor-probe: no such binary: ${BIN}`); process.exit(2); }
+// In --ssh mode BIN names a path on the TARGET box, so a local stat would be
+// wrong (and would reject every remote run). It is checked over the wire below.
+if (!process.argv.includes('--ssh') && !fs.existsSync(BIN)) {
+  console.error(`floor-probe: no such binary: ${BIN}`); process.exit(2);
+}
 
+const flagOf = (name, dflt) => { const i = rest.indexOf(name); return i >= 0 ? rest[i + 1] : dflt; };
+const SSH = flagOf('--ssh', null);              // e.g. "ssh -p 2230 user@localhost"
+const MOCK_HOST = flagOf('--mock-host', SSH ? '10.0.2.2' : '127.0.0.1');
 const SCALE = Number(process.env.CLODE_TIMEOUT_SCALE || 1);
+// Single-quote for /bin/sh: the guests include Darwin 8 (2005), so nothing
+// bash-only and nothing that assumes GNU coreutils flags.
+const sq = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`;
 const TIMEOUT = 180000 * SCALE;
 
 const ev = (type, data) => `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -72,14 +91,56 @@ function startMock(rules) {
       res.end('{}');
     });
   });
-  return new Promise((ok) => server.listen(0, '127.0.0.1', () => ok({
-    url: `http://127.0.0.1:${server.address().port}`,
+  const bindAddr = SSH ? '0.0.0.0' : '127.0.0.1';
+  return new Promise((ok) => server.listen(0, bindAddr, () => ok({
+    url: `http://${MOCK_HOST}:${server.address().port}`,
     requests,
     close: () => new Promise((r) => server.close(r)),
   })));
 }
 
+// ---- remote execution -------------------------------------------------------
+// Everything the checks need from the target box, expressed as /bin/sh so it
+// works on Darwin 8 as well as NetBSD and Linux. The probe stays here; only
+// these primitives cross the wire.
+function sshRun(script) {
+  return new Promise((resolve) => {
+    const parts = SSH.split(/\s+/);
+    let out = '', err = '';
+    const c = spawn(parts[0], [...parts.slice(1), script], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const timer = setTimeout(() => { try { c.kill('SIGKILL'); } catch { /* */ } }, TIMEOUT);
+    c.stdout.on('data', (d) => { out += d; });
+    c.stderr.on('data', (d) => { err += d; });
+    c.on('exit', (code, sig) => { clearTimeout(timer); resolve({ code, sig, out, err }); });
+    c.on('error', (e) => { clearTimeout(timer); resolve({ code: null, sig: null, out, err: String(e) }); });
+  });
+}
+const R = {
+  async mkdirp(d) { await sshRun(`mkdir -p ${sq(d)}`); },
+  async writeFile(f, body) {
+    // base64 avoids every quoting hazard for JSON payloads. -d on GNU/NetBSD,
+    // -D on Darwin 8's older base64; try both.
+    const b64 = Buffer.from(body, 'utf8').toString('base64');
+    await sshRun(`printf %s ${sq(b64)} | { base64 -d 2>/dev/null || base64 -D; } > ${sq(f)}`);
+  },
+  async readFile(f) { const r = await sshRun(`cat ${sq(f)} 2>/dev/null`); return r.out; },
+  async size(f) { const r = await sshRun(`wc -c < ${sq(f)} 2>/dev/null || echo 0`); return Number(String(r.out).trim()) || 0; },
+  async exists(f) { const r = await sshRun(`test -e ${sq(f)} && echo y || echo n`); return String(r.out).trim() === 'y'; },
+  async rm(d) { await sshRun(`rm -rf ${sq(d)}`); },
+};
+
 function run(bin, args, { home, cwd, extraEnv }) {
+  if (SSH) {
+    const envStr = Object.entries({ HOME: home, ANTHROPIC_API_KEY: 'sk-ant-floor-probe', ...extraEnv })
+      .map(([k, v]) => `${k}=${sq(v)}`).join(' ');
+    const argStr = args.map(sq).join(' ');
+    // NODE_PATH is never exported here, so a pass still proves self-containment.
+    return sshRun(`cd ${sq(cwd)} && ${envStr} ${sq(bin)} ${argStr} < /dev/null`);
+  }
+  return runLocal(bin, args, { home, cwd, extraEnv });
+}
+
+function runLocal(bin, args, { home, cwd, extraEnv }) {
   return new Promise((resolve) => {
     const env = { ...process.env, HOME: home, ANTHROPIC_API_KEY: 'sk-ant-floor-probe', ...extraEnv };
     // Stripped so a pass PROVES the artifact is self-contained — the same reason
@@ -95,20 +156,41 @@ function run(bin, args, { home, cwd, extraEnv }) {
   });
 }
 
-function sandbox() {
+async function sandbox() {
+  if (SSH) {
+    // A deterministic path under $HOME, not mktemp -d: Darwin 8's mktemp
+    // predates the flags the modern one takes, and this has to work there too.
+    const base = `floor-probe-${process.pid}-${Math.abs(Date.now() % 100000)}`;
+    const r = await sshRun(`printf %s "$HOME"`);
+    const guestHome = String(r.out).trim() || '/tmp';
+    const dir = `${guestHome}/${base}`;
+    const home = `${dir}/home`;
+    const cwd0 = `${dir}/work`;
+    await R.mkdirp(home); await R.mkdirp(cwd0);
+    // Resolve the cwd the way the target itself will see it — the trust key must
+    // match exactly (on darwin /var vs /private/var differ).
+    const rp = await sshRun(`cd ${sq(cwd0)} && pwd -P`);
+    const cwd = String(rp.out).trim() || cwd0;
+    await R.writeFile(`${home}/.claude.json`, JSON.stringify({
+      hasCompletedOnboarding: true,
+      projects: { [cwd]: { hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true } },
+    }));
+    return { dir, home, cwd, remote: true,
+      exists: (f) => R.exists(f), size: (f) => R.size(f), read: (f) => R.readFile(f),
+      drop: () => R.rm(dir) };
+  }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'floor-probe-'));
   const home = path.join(dir, 'home');
-  const work = fs.realpathSync.native ? undefined : undefined;
   fs.mkdirSync(home, { recursive: true });
   const cwd = fs.realpathSync(fs.mkdtempSync(path.join(dir, 'work-')));
-  // Pre-trust the workspace and mark onboarding done, or an interactive-ish path
-  // stalls on a dialog. Key on the RESOLVED path: /var vs /private/var differ.
   fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({
     hasCompletedOnboarding: true,
-    theme: 'dark',
     projects: { [cwd]: { hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true } },
   }));
-  return { dir, home, cwd, drop: () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* */ } } };
+  return { dir, home, cwd, remote: false,
+    exists: async (f) => fs.existsSync(f), size: async (f) => (fs.existsSync(f) ? fs.statSync(f).size : 0),
+    read: async (f) => fs.readFileSync(f, 'utf8'),
+    drop: async () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* */ } } };
 }
 
 const posted = (mock) => mock.requests.some((q) => q.method === 'POST' && /\/messages/.test(q.url));
@@ -153,7 +235,7 @@ const CHECKS = [
     what: 'write a small file (the 0-byte config class) — non-zero on disk',
     async fn(sbx) {
       const ID = 'toolu_floor_write';
-      const target = path.join(sbx.cwd, 'floor-write.txt');
+      const target = `${sbx.cwd}/floor-write.txt`;
       const mock = await startMock([
         { match: ID, text: 'written' },
         { tool: { name: 'Write', input: { file_path: target, content: 'FLOOR-WRITE-OK\n' }, id: ID } },
@@ -161,9 +243,9 @@ const CHECKS = [
       try {
         const r = await run(BIN, ['-p', 'write it', '--permission-mode', 'bypassPermissions'],
           { home: sbx.home, cwd: sbx.cwd, extraEnv: { ANTHROPIC_BASE_URL: mock.url } });
-        const exists = fs.existsSync(target);
-        const size = exists ? fs.statSync(target).size : 0;
-        const ok = r.code === 0 && exists && size > 0 && /FLOOR-WRITE-OK/.test(fs.readFileSync(target, 'utf8'));
+        const exists = await sbx.exists(target);
+        const size = exists ? await sbx.size(target) : 0;
+        const ok = r.code === 0 && exists && size > 0 && /FLOOR-WRITE-OK/.test(await sbx.read(target));
         return { ok, how: ok ? `file written, ${size} bytes, content exact` : `exit=${r.code ?? r.sig} exists=${exists} size=${size}` };
       } finally { await mock.close(); }
     },
@@ -172,16 +254,16 @@ const CHECKS = [
     row: 'A1',
     what: 'config survives relaunch (the 0-byte ~/.claude.json class)',
     async fn(sbx) {
-      const cfg = path.join(sbx.home, '.claude.json');
+      const cfg = `${sbx.home}/.claude.json`;
       const mock = await startMock([{ text: 'PONG' }]);
       try {
         for (const pass of [1, 2]) {
           const r = await run(BIN, ['-p', 'say PONG'], { home: sbx.home, cwd: sbx.cwd, extraEnv: { ANTHROPIC_BASE_URL: mock.url } });
           if (r.code !== 0) return { ok: false, how: `pass ${pass} exit=${r.code ?? r.sig}` };
-          const size = fs.existsSync(cfg) ? fs.statSync(cfg).size : 0;
+          const size = await sbx.size(cfg);
           if (size === 0) return { ok: false, how: `after pass ${pass} the config is ${size} bytes (0-byte class)` };
           let parsed;
-          try { parsed = JSON.parse(fs.readFileSync(cfg, 'utf8')); }
+          try { parsed = JSON.parse(await sbx.read(cfg)); }
           catch (e) { return { ok: false, how: `after pass ${pass} the config does not parse: ${e.message}` }; }
           // NOT `theme`: a -p run legitimately rewrites this file and drops it —
           // the UPSTREAM binary does exactly the same (203 -> 30520 bytes, theme
@@ -216,11 +298,11 @@ const BUNDLE = flag('--bundle', (() => {
 (async () => {
   const results = [];
   for (const c of CHECKS) {
-    const sbx = sandbox();
+    const sbx = await sandbox();
     let r;
     try { r = await c.fn(sbx); }
     catch (e) { r = { ok: false, how: `probe threw: ${e && e.message}` }; }
-    finally { sbx.drop(); }
+    finally { await sbx.drop(); }
     results.push({ row: c.row, verdict: r.ok ? 'pass' : 'fail', how: r.how, what: c.what });
     if (!AS_JSON) console.error(`  ${c.row} ${r.ok ? 'pass' : 'FAIL'} — ${r.how}`);
   }
