@@ -1001,3 +1001,53 @@ than re-testing the layers above.
 **Severity.** MCP/SSE is unusable under quaude; MCP over stdio (fixed 2383de2) and
 over HTTP (fixed fc54ae9) both work now. Bundle references: http 314, stdio 136,
 sse 94, ws 24 — so SSE is the last common transport still broken. ws is untested.
+
+## ★★ SHIPPED ENGINE TEMPLATES PREDATE THE uid/gid FIX — cross-fused Linux quaude is DOA (2026-08-09)
+
+**Every `clode build --target linux-*` produces a binary that cannot run on Linux
+at all.** It dies before doing any work:
+
+```
+Temp directory /tmp/claude-1000 is owned by uid 0, expected 1000.
+Refusing to use it — another user may have pre-created it.
+```
+
+The directory is genuinely owned by 1000 (`stat(1)` agrees). The bundle is told
+0, so its tmpdir-ownership guard refuses and exits.
+
+**Root cause: a STALE published engine, not a code defect.** The shim is already
+correct — `libexec/node-shim/modules/fs.cjs` reads `raw.uid` and only falls back
+to 0 when the ENGINE omits it, with a comment naming this exact failure. The fix
+landed 2026-08-04 in 906af8b ("surface real uid/gid from FSS.stat"). But the
+downloaded engine templates are all pinned `26.6.0-1a230d3`, built 2026-07-27 —
+BEFORE that commit:
+
+| engine | `__tjs_fs_sync.stat()` keys |
+|---|---|
+| template `tjs-linux-arm64-26.6.0-1a230d3` | `size, mode, mtimeMs, kind` — **no uid/gid** |
+| built from current source on the VM | `size, mode, **uid, gid**, mtimeMs, kind` |
+
+So the shim's fallback fires and reports uid 0. Proven from inside the fused
+binary with `CLODE_PROBE`: `statSync uid=0`, `getuid=1000`, `raw engine
+uid=undefined`.
+
+**This hits the product's headline feature.** One-host-builds-all-quaudes goes
+through `clode build --target`, which DOWNLOADS a template and OVERWRITES
+`CLODE_TARGET_TEMPLATE` (clode-fuse.cjs:907) — so even an operator who builds a
+correct engine locally and exports that variable is silently ignored. CI-built
+release artifacts compile from source and are NOT affected; this is the
+user-side cross-fuse path only.
+
+**Every template is from the same stale build** (all `1a230d3`, dated 2026-07-27),
+so assume every cross-fuse target is affected, not just linux-arm64. The guard is
+what makes it VISIBLE on Linux; other targets may be silently degraded wherever
+stat().uid matters.
+
+**Fix:** republish the engine templates from current sources. Then re-drive the
+cross-fuse targets. Worth adding a tripwire: a template whose tjs pin predates a
+known-required patch should fail the build loudly rather than fuse a binary that
+cannot boot.
+
+**Blocked on this:** `linux-arm64-glibc` floor rows. The VM-built engine works, but
+`clode build --target` will not use it, so a good Linux quaude cannot currently be
+produced from this host without bypassing the template path.
