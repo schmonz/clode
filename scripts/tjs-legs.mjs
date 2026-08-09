@@ -251,7 +251,7 @@ const LEGS = [
   { leg: 'windows-x64', os: 'windows-latest', msvc: true, publish: true, ci: true,
     wasm: 'off', mimalloc: 'off', ffi: 'off',
     fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
-                note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run natively on the windows-latest runner); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
+                note: 'floor 4/6 green (A1,B1,C1,G7); B4,D1 missing — see RESULTS.md. A1/B1/C1 driven 2026-08-09 on REAL Windows (cmbx-windows) by scripts/floor-probe.mjs over ssh, against a quaude cross-fused here from the cached PE32+ engine; B4 needs all four tools and D1 needs a pty on the target' } },
   // windows-arm64 (the Windows finale): native MSVC ARM64 on the windows-11-arm
   // runner (msvc-arch:arm64 → the dev-env's cl targets ARM64), exec=host build +
   // fuse + PONG like windows-x64. PUBLISHES clode-<ver>-windows-arm64 — the asset

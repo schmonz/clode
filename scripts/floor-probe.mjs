@@ -107,7 +107,13 @@ function sshRun(script) {
   return new Promise((resolve) => {
     const parts = SSH.split(/\s+/);
     let out = '', err = '';
-    const c = spawn(parts[0], [...parts.slice(1), script], { stdio: ['ignore', 'pipe', 'pipe'] });
+    // The script goes over STDIN, never as an argv tail: on Windows the login
+    // shell is cmd.exe, which re-parses quoting and mangled every script that
+    // contained quotes or spaces. Piping means --ssh must name a shell that
+    // READS stdin — `... host sh` on unix, `... host C:\PROGRA~1\Git\bin\bash.exe -s`
+    // for Git Bash (the 8.3 path dodges the space in "Program Files").
+    const c = spawn(parts[0], parts.slice(1), { stdio: ['pipe', 'pipe', 'pipe'] });
+    try { c.stdin.write(script); c.stdin.end(); } catch { /* closed early */ }
     const timer = setTimeout(() => { try { c.kill('SIGKILL'); } catch { /* */ } }, TIMEOUT);
     c.stdout.on('data', (d) => { out += d; });
     c.stderr.on('data', (d) => { err += d; });
@@ -171,11 +177,22 @@ async function sandbox() {
     // match exactly (on darwin /var vs /private/var differ).
     const rp = await sshRun(`cd ${sq(cwd0)} && pwd -P`);
     const cwd = String(rp.out).trim() || cwd0;
+    // On a Git-Bash/MSYS guest the SHELL path (/c/Users/...) is not what the
+    // NATIVE target process sees: quaude.exe reads it as drive-relative and
+    // writes to C:\c\Users\... instead. Tool inputs and the trust key must use
+    // the Windows form; only our own shell checks use the /c form. (Found the
+    // hard way: C1 "failed" while the file sat, correct, at the mangled path.)
+    const un = String((await sshRun('uname -s')).out).trim();
+    let cwdNative = cwd;
+    if (/^(MINGW|MSYS|CYGWIN)/i.test(un)) {
+      const cp = await sshRun(`cygpath -w ${sq(cwd)} 2>/dev/null || echo ${sq(cwd)}`);
+      cwdNative = String(cp.out).trim() || cwd;
+    }
     await R.writeFile(`${home}/.claude.json`, JSON.stringify({
       hasCompletedOnboarding: true,
-      projects: { [cwd]: { hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true } },
+      projects: { [cwdNative]: { hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true } },
     }));
-    return { dir, home, cwd, remote: true,
+    return { dir, home, cwd, cwdNative, remote: true,
       exists: (f) => R.exists(f), size: (f) => R.size(f), read: (f) => R.readFile(f),
       drop: () => R.rm(dir) };
   }
@@ -187,7 +204,7 @@ async function sandbox() {
     hasCompletedOnboarding: true,
     projects: { [cwd]: { hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true } },
   }));
-  return { dir, home, cwd, remote: false,
+  return { dir, home, cwd, cwdNative: cwd, remote: false,
     exists: async (f) => fs.existsSync(f), size: async (f) => (fs.existsSync(f) ? fs.statSync(f).size : 0),
     read: async (f) => fs.readFileSync(f, 'utf8'),
     drop: async () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* */ } } };
@@ -235,10 +252,11 @@ const CHECKS = [
     what: 'write a small file (the 0-byte config class) — non-zero on disk',
     async fn(sbx) {
       const ID = 'toolu_floor_write';
-      const target = `${sbx.cwd}/floor-write.txt`;
+      const target = `${sbx.cwd}/floor-write.txt`;                       // for OUR checks
+      const targetNative = `${sbx.cwdNative}${sbx.cwdNative.includes('\\') ? '\\' : '/'}floor-write.txt`;  // for the TOOL
       const mock = await startMock([
         { match: ID, text: 'written' },
-        { tool: { name: 'Write', input: { file_path: target, content: 'FLOOR-WRITE-OK\n' }, id: ID } },
+        { tool: { name: 'Write', input: { file_path: targetNative, content: 'FLOOR-WRITE-OK\n' }, id: ID } },
       ]);
       try {
         const r = await run(BIN, ['-p', 'write it', '--permission-mode', 'bypassPermissions'],
@@ -271,7 +289,9 @@ const CHECKS = [
           // survive is the settings the user established: onboarding state and
           // the per-project trust entry.
           if (parsed.hasCompletedOnboarding !== true) return { ok: false, how: `after pass ${pass} hasCompletedOnboarding is ${JSON.stringify(parsed.hasCompletedOnboarding)}` };
-          if (!parsed.projects || !parsed.projects[sbx.cwd]) return { ok: false, how: `after pass ${pass} the project entry for the cwd is gone` };
+          // Key on the NATIVE form — the same one seeded into the config, which is
+          // what the target process sees (they differ on a Git-Bash guest).
+          if (!parsed.projects || !parsed.projects[sbx.cwdNative]) return { ok: false, how: `after pass ${pass} the project entry for ${sbx.cwdNative} is gone` };
         }
         return { ok: true, how: 'config non-zero, parses, onboarding + project trust survive a second launch' };
       } finally { await mock.close(); }
