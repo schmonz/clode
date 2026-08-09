@@ -640,7 +640,8 @@ test('golden ledger: the full run-target -> tier map', () => {
     'cosmo-netbsd-x86-64': 0,
     'cosmo-openbsd-x86-64': 0,
     'cosmo-windows-x86-64': 0,
-    'darwin-arm64': 0,
+    // The first run-target ever to clear all six FLOOR_ROWS (2026-08-09).
+    'darwin-arm64': 1,
     'darwin-ppc': 0,
     'darwin-x64': 0,
     'darwin-x86': 0,

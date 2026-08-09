@@ -68,6 +68,8 @@ are invisible to that parser by construction.
 
 | date | run-target | row | engine | bundle | verdict | note |
 | --- | --- | --- | --- | --- | --- | --- |
+| 2026-08-09 | darwin-arm64 | D1 | quaude | 2.1.218 | pass | interactive pty (node-pty, canned mock): TUI booted, live turn answered TUIPONG, then /quit exited CLEANLY code 0 in 1411ms — no wedge |
+| 2026-08-09 | netbsd-arm64 | D1 | quaude | 2.1.218 | pass | interactive pty over ssh -tt (guest has no node; mock served from the host): TUI booted, turn answered TUIPONG, /quit exited CLEANLY code 0 in 3490ms |
 | 2026-08-09 | windows-amd64 | A1 | quaude | 2.1.218 | pass | floor-probe over ssh to real Windows (Git Bash shell, quaude cross-fused here from the cached PE32+ engine, mock served over tailnet): config non-zero, parses, onboarding + project trust survive a second launch |
 | 2026-08-09 | windows-amd64 | C1 | quaude | 2.1.218 | pass | floor-probe over ssh: Write tool wrote FLOOR-WRITE-OK, 15 bytes non-zero on disk (file_path in NATIVE C:\ form via cygpath) |
 | 2026-08-09 | windows-amd64 | B1 | quaude | 2.1.218 | pass | floor-probe over ssh: Bash tool_result carried FLOOR-BASH-OK back to the model |
