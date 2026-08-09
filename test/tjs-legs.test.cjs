@@ -87,7 +87,7 @@ test('release tier: every published leg is present (golden)', () => {
     'omnios-amd64', 'openbsd-amd64', 'openbsd-arm64',
     'openindiana-amd64',
     'solaris-amd64',
-    'windows-arm64', 'windows-x64',
+    'windows-amd64', 'windows-arm64',
   ]);
 });
 
@@ -104,8 +104,8 @@ test('ci tier: every release OS is exercised, exactly one leg per VM OS', () => 
     if (os === 'linux' || os === 'darwin') continue; // native tier keeps its historical multi-leg set
     const legs = ci.filter((l) => osOf(l) === os);
     if (os === 'windows') {
-      // windows-x64 (MSVC publisher) + windows-arm64 (the finale leg). Both permanent.
-      assert.deepStrictEqual(legs.map((l) => l.leg).sort(), ['windows-arm64', 'windows-x64'],
+      // windows-amd64 (MSVC publisher) + windows-arm64 (the finale leg). Both permanent.
+      assert.deepStrictEqual(legs.map((l) => l.leg).sort(), ['windows-amd64', 'windows-arm64'],
         `windows: expected the x64+arm64 pair, got ${legs.map((l) => l.leg)}`);
       continue;
     }
@@ -678,7 +678,7 @@ test('golden ledger: the full run-target -> tier map', () => {
     'openindiana-amd64': 0,
     'solaris-amd64': 0,
     'windows-arm64': 0,
-    'windows-x64': 0,
+    'windows-amd64': 0,
   });
 });
 

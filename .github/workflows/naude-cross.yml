@@ -175,7 +175,7 @@ jobs:
           if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
           echo "provider: $PROV"
           CLODE_CLAUDE_BIN="$PROV" CLODE_PROVIDER_BIN="$PROV" \
-            node bin/clode build --naude --target windows-x64 --out "$RUNNER_TEMP/naude-win-x64"
+            node bin/clode build --naude --target windows-amd64 --out "$RUNNER_TEMP/naude-win-x64"
       - name: Upload the cross-built win32-x64 naude
         uses: actions/upload-artifact@v7.0.1
         with:

@@ -32,13 +32,13 @@ jobs:
   # (CRLF, cmd.exe/PATHEXT, drive paths, O_BINARY, the Win32 C sync primitives
   # mod_fs_sync/mod_spawn_sync) — POSIX legs get this coverage free from the
   # host node:test suite on the dev box, but it can only be exercised on a
-  # real Windows kernel against a real tjs.exe. Consumes the windows-x64 leg's
-  # tjs-windows-x64 engine; the leg's own exec=host job does build+fuse+PONG+
+  # real Windows kernel against a real tjs.exe. Consumes the windows-amd64 leg's
+  # tjs-windows-amd64 engine; the leg's own exec=host job does build+fuse+PONG+
   # publish (subsuming the old fuse-build/fuse-run/builder-smoke jobs). Because
   # this installs the latest @anthropic-ai/claude-code it is also the Windows
   # bundle-bump gate. These finer signals isolate a C-primitive regression from
   # a shim/Bash-tool regression — what the leg's end-to-end PONG cannot.
-  windows-x64-tests:
+  windows-amd64-tests:
     needs: tjs
     # Run once `tjs` FINISHES, whatever its conclusion — do NOT skip because some
     # OTHER leg failed. This job consumes ONE named artifact; a leg it does not use
@@ -63,7 +63,7 @@ jobs:
           node-version-file: .tool-versions
       - uses: actions/download-artifact@v8.0.1
         with:
-          name: tjs-windows-x64
+          name: tjs-windows-amd64
           path: .
       - name: Install the Claude provider (npm, latest — the bundle-bump gate)
         run: npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
@@ -94,10 +94,10 @@ jobs:
   # end, and assert the welcome box painted. Runs the SAME
   # test/e2e-tui-tjs.test.cjs as POSIX, un-gated here via CLODE_LIVE_RENDER=1 —
   # true on Windows because there is no Keychain GUI modal to hang on (the reason
-  # POSIX CI can't run it). Consumes the windows-x64 leg's tjs-windows-x64 engine.
+  # POSIX CI can't run it). Consumes the windows-amd64 leg's tjs-windows-amd64 engine.
   # Because it installs the latest provider it is also a Windows render bump gate.
   # Render-only; the ConPTY INPUT round-trip is the tracked follow-on (D2).
-  windows-x64-tui:
+  windows-amd64-tui:
     needs: tjs
     # Run once `tjs` FINISHES, whatever its conclusion — do NOT skip because some
     # OTHER leg failed. This job consumes ONE named artifact; a leg it does not use
@@ -122,7 +122,7 @@ jobs:
           node-version-file: .tool-versions
       - uses: actions/download-artifact@v8.0.1
         with:
-          name: tjs-windows-x64
+          name: tjs-windows-amd64
           path: .
       - name: Install the Claude provider (npm, latest — the render bump gate)
         run: npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
@@ -154,7 +154,7 @@ jobs:
             node --test --test-concurrency=1 test/node-shim-tty.test.cjs
 
   # Windows shim + sync-primitive coverage on the ARM64 kernel — the same
-  # rationale as windows-x64-tests, exercised against the windows-arm64 leg's
+  # rationale as windows-amd64-tests, exercised against the windows-arm64 leg's
   # native MSVC ARM64 engine. No tui counterpart yet (out of scope).
   windows-arm64-tests:
     needs: tjs
@@ -253,7 +253,7 @@ jobs:
         run: npm ci --prefix deps/claude
       # The naude-vs-quaude parity gate stages cli.cjs from a real Bun-packaged
       # provider; with none present it SKIPS, which is exactly the silent-green
-      # this job exists to prevent. Same provisioning the windows-x64 job uses.
+      # this job exists to prevent. Same provisioning the windows-amd64 job uses.
       - name: Install the Claude provider (npm, latest — the parity gate's input)
         run: npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
       # Live-network gate (regression guard): nothing else in CI makes a real
@@ -469,7 +469,7 @@ jobs:
           chmod +x "$CLODE_TJS"
           "$CLODE_TJS" eval 'console.log("darwin-arm64 tjs alive:", tjs.version)'
           # EXCLUDE only node-shim-tty (needs a controlling terminal, covered by
-          # windows-x64-tui + the POSIX e2e). Everything else runs here — including
+          # windows-amd64-tui + the POSIX e2e). Everything else runs here — including
           # child-process/core/bunshim (which the linux oracle excludes for portability)
           # AND the new node-shim-api-surface-gate (hard-gates upstream Bun.*/require
           # drift against the latest provider this job installs). (Ctrl-Z moved to the

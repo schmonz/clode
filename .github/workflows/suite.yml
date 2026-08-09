@@ -29,7 +29,7 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest    # linux-x64
-          - os: windows-latest   # windows-x64
+          - os: windows-latest   # windows-amd64
     runs-on: ${{ matrix.os }}
     defaults:
       run:

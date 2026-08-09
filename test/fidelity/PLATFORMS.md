@@ -197,7 +197,7 @@ fused quaude on the run-target's own platform — see "What earns a row" in
 
 - **Earns G7:** guest-VM legs (`exec=guest`: netbsd/freebsd/openbsd/dragonflybsd/
   midnightbsd/omnios/solaris/openindiana/haiku) fuse and smoke INSIDE a guest of the
-  target OS+arch; native-runner legs (darwin-arm64, windows-x64/arm64) and the
+  target OS+arch; native-runner legs (darwin-arm64, windows-amd64/arm64) and the
   static-musl Linux legs fuse and smoke on the runner itself; `netbsd-sparc` fuses and
   PONGs inside its own-qemu sun4m guest; `cosmo` fuses and PONGs its `.com` on the
   ubuntu runner — which earns the row for `cosmo-linux-x86-64` **only**.

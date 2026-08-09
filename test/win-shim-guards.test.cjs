@@ -107,9 +107,9 @@ const { resolveBuildOut } = require(path.join(__dirname, '..', 'libexec/clode-fu
 test('clode-fuse: a windows target output ends in .exe (default and explicit --out)', () => {
   // Behavioral (was a source-grep for the old inline `win32 ? '.exe'`): the .exe
   // now follows the TARGET, and an explicit --out gains it too.
-  assert.strictEqual(resolveBuildOut({ out: null, target: 'windows-x64', self: false, hostPlatform: 'linux' }), 'quaude.exe');
+  assert.strictEqual(resolveBuildOut({ out: null, target: 'windows-amd64', self: false, hostPlatform: 'linux' }), 'quaude.exe');
   assert.strictEqual(resolveBuildOut({ out: null, target: null, self: false, hostPlatform: 'win32' }), 'quaude.exe'); // native windows host
-  assert.strictEqual(resolveBuildOut({ out: 'quaude-windows-x64', target: 'windows-x64', self: false, hostPlatform: 'linux' }), 'quaude-windows-x64.exe');
+  assert.strictEqual(resolveBuildOut({ out: 'quaude-windows-amd64', target: 'windows-amd64', self: false, hostPlatform: 'linux' }), 'quaude-windows-amd64.exe');
   assert.strictEqual(resolveBuildOut({ out: null, target: 'linux-x64', self: false, hostPlatform: 'win32' }), 'quaude'); // non-windows target: no .exe
 });
 test('clode-fuse: the materialized template is named .exe on win32', () => {

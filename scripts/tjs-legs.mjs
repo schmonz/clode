@@ -237,27 +237,27 @@ const LEGS = [
     // floorCoverage('darwin-ppc') derives this from test/fidelity/RESULTS.md.
     fidelity: { tier: 0, date: '2026-07-31', bundle: '2.1.218', how: 'tiger-ppc-vm',
                 note: 'floor 3/6 green (B1,C1,G7); A1,B4,D1 not driven; RECIPE G6 credentialed startup stall also OPEN — see RESULTS.md' } },
-  // windows-x64 (native engine leg): compiles tjs.exe ON windows-latest with
+  // windows-amd64 (native engine leg): compiles tjs.exe ON windows-latest with
   // MSVC cl.exe (CLODE_TJS_WIN_MSVC — the Activate-MSVC-dev-env step +
   // ilammy/msvc-dev-cmd), so build-leg's exec=host machinery does build +
   // fuse + PONG in ONE windows job (like darwin) and PUBLISHES
-  // clode-<ver>-windows-x64 the normal exec=host way. The canonical Windows
+  // clode-<ver>-windows-amd64 the normal exec=host way. The canonical Windows
   // leg — a hard gate (a broken publisher must fail red). Same
   // wasm/mimalloc/ffi-off config as the other floor legs. The finer shim +
-  // sync-primitive signals run in ci.yml's windows-x64-tests job against this
-  // leg's tjs-windows-x64 artifact. (Phase B: cl.exe proven on the transient
-  // windows-x64-msvc leg, then flipped in as the canonical compiler and that
+  // sync-primitive signals run in ci.yml's windows-amd64-tests job against this
+  // leg's tjs-windows-amd64 artifact. (Phase B: cl.exe proven on the transient
+  // windows-amd64-msvc leg, then flipped in as the canonical compiler and that
   // leg deleted — mingw is retired.)
-  { leg: 'windows-x64', os: 'windows-latest', msvc: true, publish: true, ci: true,
+  { leg: 'windows-amd64', os: 'windows-latest', msvc: true, publish: true, ci: true,
     wasm: 'off', mimalloc: 'off', ffi: 'off',
     fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
                 note: 'floor 4/6 green (A1,B1,C1,G7); B4,D1 missing — see RESULTS.md. A1/B1/C1 driven 2026-08-09 on REAL Windows (cmbx-windows) by scripts/floor-probe.mjs over ssh, against a quaude cross-fused here from the cached PE32+ engine; B4 needs all four tools and D1 needs a pty on the target' } },
   // windows-arm64 (the Windows finale): native MSVC ARM64 on the windows-11-arm
   // runner (msvc-arch:arm64 → the dev-env's cl targets ARM64), exec=host build +
-  // fuse + PONG like windows-x64. PUBLISHES clode-<ver>-windows-arm64 — the asset
+  // fuse + PONG like windows-amd64. PUBLISHES clode-<ver>-windows-arm64 — the asset
   // the release.yml tripwire requires (Phase 4 dropped the SEA arm64 leg). Proven
   // green first try (cl.exe de-risked the build), now a HARD publisher like
-  // windows-x64. Finer signals run in ci.yml's windows-arm64-tests job.
+  // windows-amd64. Finer signals run in ci.yml's windows-arm64-tests job.
   { leg: 'windows-arm64', os: 'windows-11-arm', msvc: true, 'msvc-arch': 'arm64',
     publish: true, ci: true, wasm: 'off', mimalloc: 'off', ffi: 'off',
     fidelity: { tier: 0, date: '2026-08-02', how: 'ci',

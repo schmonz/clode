@@ -730,8 +730,8 @@ function parseBuildArgs(args) {
 // Resolve the output basename for a quaude/--self build (the naude branch names
 // its own).
 //   - Explicit --out is respected VERBATIM, with ONE exception: a `--target
-//     windows-*` cross-build appends .exe IF MISSING (`--out quaude-windows-x64`
-//     → `quaude-windows-x64.exe`) so the produced binary runs on Windows. The CI
+//     windows-*` cross-build appends .exe IF MISSING (`--out quaude-windows-amd64`
+//     → `quaude-windows-amd64.exe`) so the produced binary runs on Windows. The CI
 //     builder legs now pass a windows asset name that ALREADY ends in .exe
 //     (canonical-name.assetName appends it for windows), so: the cross path's
 //     "if missing" guard leaves it alone (no double .exe), and a native windows

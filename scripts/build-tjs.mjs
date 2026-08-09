@@ -35,7 +35,7 @@
 //   (default: both — the local flow, unchanged)
 //
 // Windows toolchain: the native build uses MSVC (cl.exe) by DEFAULT — the canonical
-// compiler for the shipping windows-x64 / windows-arm64 legs (scripts/tjs-legs.mjs
+// compiler for the shipping windows-amd64 / windows-arm64 legs (scripts/tjs-legs.mjs
 // msvc:true); mingw is retired. Prerequisites: Visual Studio 2022 Build Tools with
 // the "Desktop development with C++" workload, which bundles cl.exe, the Windows SDK,
 // cmake, AND ninja:
@@ -2854,7 +2854,7 @@ if (crossFile) {
   cmakeArgs.push(`-DCMAKE_TOOLCHAIN_FILE=${path.resolve(crossFile)}`);
 }
 // Native Windows compiler selection. MSVC cl.exe is the canonical compiler — the
-// shipping windows-x64 / windows-arm64 publisher legs build with it (scripts/
+// shipping windows-amd64 / windows-arm64 publisher legs build with it (scripts/
 // tjs-legs.mjs msvc:true; the VS dev env is activated in build-leg so cl + the
 // Windows SDK + ninja are on PATH) — so on a native win32 build it is the DEFAULT
 // and needs NO env flag. mingw is retired, kept only as an explicit opt-in:

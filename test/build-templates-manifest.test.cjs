@@ -57,6 +57,10 @@ test('deriveTag == the published asset name tag (canonical os/arch, dashed floor
   assert.strictEqual(deriveTag({ leg: 'linux-x64-musl', 'guest-arch': 'x86_64' }), 'linux-amd64-musl');
   assert.strictEqual(deriveTag({ leg: 'netbsd-amd64', floor: '10.1' }), 'netbsd-10.1-amd64');
   assert.strictEqual(deriveTag({ leg: 'netbsd-m68k', floor: '10.1' }), 'netbsd-10.1-m68k');
+  assert.strictEqual(deriveTag({ leg: 'windows-amd64' }), 'windows-amd64');
+  // Our leg ids are canonical now, but deriveTag must still normalize a RAW
+  // vendor token — that is canonical-name's whole job, and dropping it would
+  // break any external string that still says x64.
   assert.strictEqual(deriveTag({ leg: 'windows-x64' }), 'windows-amd64');
   assert.strictEqual(deriveTag({ leg: 'netbsd-sparc', floor: '10.1' }), 'netbsd-10.1-sparc');
   assert.strictEqual(deriveTag({ leg: 'netbsd-macppc', floor: '10.1' }), 'netbsd-10.1-ppc'); // port name -> arch
@@ -147,7 +151,7 @@ test('buildManifest: compression is declared when set, absent otherwise; sha sta
 test('the manifest engine name comes from the canonical vocabulary, not a second spelling', async () => {
   const canon = require('../scripts/canonical-name.cjs');
   const pin = '26.6.0-1a230d3';
-  for (const leg of ['darwin-arm64', 'darwin-ppc', 'linux-x64-musl', 'windows-x64', 'cosmo']) {
+  for (const leg of ['darwin-arm64', 'darwin-ppc', 'linux-x64-musl', 'windows-amd64', 'cosmo']) {
     assert.strictEqual(canon.engineName('tjs', leg, pin), `tjs-${cleanTargetName(leg)}-${pin}`,
       `${leg}: engineName() and the manifest target name disagree`);
   }
