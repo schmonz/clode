@@ -877,7 +877,21 @@ async function clodeBuild(args, opts) {
     for (const t of tpl.listTargets(manifest)) stdout.write(`${t.name}\t${t.tag}\n`);
     return 0;
   }
-  if (parsed.target && !naude) {
+  if (parsed.target && !naude && env.CLODE_TARGET_TEMPLATE) {
+    // An operator-supplied engine WINS over the published template. This branch
+    // used to be unconditional and ended in `env.CLODE_TARGET_TEMPLATE = <the
+    // downloaded one>`, silently discarding an explicitly-exported value — so
+    // someone who built a correct engine for the target and pointed us at it got
+    // the stale published one anyway, with no indication.
+    //
+    // That is not hypothetical: the shipped templates are all pinned
+    // 26.6.0-1a230d3 (built 2026-07-27) and predate 906af8b, which made
+    // FSS.stat surface uid/gid. Fusing with one yields a Linux quaude that
+    // cannot boot at all — the bundle's tmpdir-ownership guard is told uid 0 for
+    // a directory owned by the user and refuses. With no way to override, there
+    // was no way to build a working one from this host either.
+    clodeLog(`clode: build --target ${parsed.target}: using operator engine ${path.basename(env.CLODE_TARGET_TEMPLATE)} (CLODE_TARGET_TEMPLATE set — not fetching the published template)`);
+  } else if (parsed.target && !naude) {
     // Resolve the target's prebuilt engine (pin-checked, sha-verified, cached),
     // then hand it to the EXISTING compile-free cross-fuse path as the foreign
     // base (CLODE_TARGET_TEMPLATE). No compiler on this host — the engine is data.

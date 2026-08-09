@@ -137,7 +137,16 @@ const R = {
 
 function run(bin, args, { home, cwd, extraEnv }) {
   if (SSH) {
-    const envStr = Object.entries({ HOME: home, ANTHROPIC_API_KEY: 'sk-ant-floor-probe', ...extraEnv })
+    // On Windows the bundle resolves its profile from USERPROFILE, NOT HOME. With
+    // only HOME set, every "sandboxed" run silently used the operator's REAL
+    // C:/Users/<them>/.claude — which also makes A1 pass for the wrong reason (the
+    // bundle writes to the real profile while we check the untouched sandbox file).
+    const winHome = _winNative || home;
+    const baseEnv = _isWinGuest
+      ? { HOME: home, USERPROFILE: winHome, HOMEDRIVE: winHome.slice(0, 2), HOMEPATH: winHome.slice(2),
+          ANTHROPIC_API_KEY: 'sk-ant-floor-probe' }
+      : { HOME: home, ANTHROPIC_API_KEY: 'sk-ant-floor-probe' };
+    const envStr = Object.entries({ ...baseEnv, ...extraEnv })
       .map(([k, v]) => `${k}=${sq(v)}`).join(' ');
     const argStr = args.map(sq).join(' ');
     // NODE_PATH is never exported here, so a pass still proves self-containment.
@@ -183,16 +192,21 @@ async function sandbox() {
     // the Windows form; only our own shell checks use the /c form. (Found the
     // hard way: C1 "failed" while the file sat, correct, at the mangled path.)
     const un = String((await sshRun('uname -s')).out).trim();
+    _isWinGuest = /^(MINGW|MSYS|CYGWIN)/i.test(un);
     let cwdNative = cwd;
     if (/^(MINGW|MSYS|CYGWIN)/i.test(un)) {
       const cp = await sshRun(`cygpath -w ${sq(cwd)} 2>/dev/null || echo ${sq(cwd)}`);
       cwdNative = String(cp.out).trim() || cwd;
+      const hp = await sshRun(`cygpath -w ${sq(home)} 2>/dev/null || echo ${sq(home)}`);
+      _winNative = String(hp.out).trim() || home;
     }
+    const sentinel = `floor-probe-sentinel-${process.pid}`;
     await R.writeFile(`${home}/.claude.json`, JSON.stringify({
+      _floorProbeSentinel: sentinel,
       hasCompletedOnboarding: true,
       projects: { [cwdNative]: { hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true } },
     }));
-    return { dir, home, cwd, cwdNative, remote: true,
+    return { dir, home, cwd, cwdNative, sentinel, remote: true,
       exists: (f) => R.exists(f), size: (f) => R.size(f), read: (f) => R.readFile(f),
       drop: () => R.rm(dir) };
   }
@@ -200,19 +214,57 @@ async function sandbox() {
   const home = path.join(dir, 'home');
   fs.mkdirSync(home, { recursive: true });
   const cwd = fs.realpathSync(fs.mkdtempSync(path.join(dir, 'work-')));
+  const sentinel = `floor-probe-sentinel-${process.pid}`;
   fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({
+    _floorProbeSentinel: sentinel,
     hasCompletedOnboarding: true,
     projects: { [cwd]: { hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true } },
   }));
-  return { dir, home, cwd, cwdNative: cwd, remote: false,
+  return { dir, home, cwd, cwdNative: cwd, sentinel, remote: false,
     exists: async (f) => fs.existsSync(f), size: async (f) => (fs.existsSync(f) ? fs.statSync(f).size : 0),
     read: async (f) => fs.readFileSync(f, 'utf8'),
     drop: async () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* */ } } };
 }
 
+// Set by sandbox() once the guest kind is known; run() needs them.
+let _isWinGuest = false, _winNative = null;
+
+// ---- GUARD 1: prove the sandbox was actually USED ---------------------------
+// Every row here is only meaningful if the target read OUR profile. On Windows it
+// did not: the bundle resolves USERPROFILE, we set only HOME, and the runs
+// silently used the operator's real ~/.claude — A1 then "passed" because the
+// bundle wrote to the REAL profile while we checked our untouched sandbox copy.
+// A green that survives its own sandbox being ignored is not evidence. So: stamp
+// a unique sentinel into the sandbox config, and after a run REQUIRE that the
+// target rewrote that file (the bundle always rewrites .claude.json on startup).
+// If it did not, the run is VOID and reported as such — never as a pass.
+async function sandboxWasUsed(sbx) {
+  const cfg = `${sbx.home}/.claude.json`;
+  const size = await sbx.size(cfg);
+  if (!size) return { used: false, why: 'sandbox .claude.json is missing or empty after the run' };
+  let txt = '';
+  try { txt = await sbx.read(cfg); } catch { /* */ }
+  if (txt.includes(sbx.sentinel) && txt.length < 400) {
+    return { used: false, why: `the target never rewrote the sandbox profile (still the ${txt.length}-byte seed) — it almost certainly used a DIFFERENT profile dir` };
+  }
+  return { used: true };
+}
+
 const posted = (mock) => mock.requests.some((q) => q.method === 'POST' && /\/messages/.test(q.url));
 
 // ---- the checks. Each maps to ONE RECIPE floor row. ------------------------
+// GUARD 2: exercise the tmpdir-ownership guard every time. The bundle only
+// checks /tmp/claude-<uid> when it EXISTS, so on a fresh box the check silently
+// does not run — which is exactly how netbsd-arm64 scored 6/6 this morning on an
+// engine that cannot satisfy it (no uid/gid from FSS.stat). Pre-creating the
+// directory, owned by us, removes the luck: either the target reads ownership
+// correctly or every row fails, consistently, on every run.
+async function armTmpdirGuard(sbx) {
+  if (_isWinGuest) return;                       // POSIX-only guard
+  if (sbx.remote) { await sshRun('mkdir -p "/tmp/claude-$(id -u)" 2>/dev/null || true'); return; }
+  try { fs.mkdirSync(path.join(os.tmpdir(), `claude-${process.getuid()}`), { recursive: true }); } catch { /* */ }
+}
+
 const CHECKS = [
   {
     row: 'G7',
@@ -297,13 +349,48 @@ const CHECKS = [
       } finally { await mock.close(); }
     },
   },
+  {
+    row: 'B4',
+    what: 'agentic tool round-trips (Bash, Edit, Write, Grep) produce the correct client-observable',
+    async fn(sbx) {
+      // One chained conversation exercising all FOUR tools the row names. Each
+      // rule fires on the tool_result id of the PREVIOUS step, so the mock walks
+      // the agentic loop the way a real turn does. Read sits between Write and
+      // Edit because the bundle requires a read before it will edit.
+      const sep = sbx.cwdNative.includes('\\') ? '\\' : '/';
+      const f = `${sbx.cwdNative}${sep}b4.txt`;
+      const shell = `${sbx.cwd}/b4.txt`;                 // OUR view, for checks
+      const ids = { w: 'toolu_b4_w', r: 'toolu_b4_r', e: 'toolu_b4_e', g: 'toolu_b4_g', b: 'toolu_b4_b' };
+      const mock = await startMock([
+        { match: ids.b, text: 'all four done' },
+        { match: ids.g, tool: { name: 'Bash', input: { command: 'echo B4-BASH-OK' }, id: ids.b } },
+        { match: ids.e, tool: { name: 'Grep', input: { pattern: 'B4-EDITED', path: sbx.cwdNative }, id: ids.g } },
+        { match: ids.r, tool: { name: 'Edit', input: { file_path: f, old_string: 'B4-ORIGINAL', new_string: 'B4-EDITED' }, id: ids.e } },
+        { match: ids.w, tool: { name: 'Read', input: { file_path: f }, id: ids.r } },
+        { tool: { name: 'Write', input: { file_path: f, content: 'B4-ORIGINAL\n' }, id: ids.w } },
+      ]);
+      try {
+        const r = await run(BIN, ['-p', 'do the tool chain', '--permission-mode', 'bypassPermissions'],
+          { home: sbx.home, cwd: sbx.cwd, extraEnv: { ANTHROPIC_BASE_URL: mock.url } });
+        const body = mock.requests.map((q) => q.body || '').join('\n');
+        const content = (await sbx.exists(shell)) ? await sbx.read(shell) : '';
+        const wrote = /B4-/.test(content);                        // Write landed
+        const edited = /B4-EDITED/.test(content);                 // Edit applied on disk
+        const grepped = body.includes(ids.g) && /b4\.txt|B4-EDITED/.test(body);
+        const bashed = body.includes('B4-BASH-OK');               // Bash output came back
+        const ok = r.code === 0 && wrote && edited && grepped && bashed;
+        return { ok, how: ok
+          ? 'Write+Read+Edit+Grep+Bash all round-tripped; file reads B4-EDITED on disk'
+          : `exit=${r.code ?? r.sig} wrote=${wrote} edited=${edited} grepped=${grepped} bashed=${bashed}` };
+      } finally { await mock.close(); }
+    },
+  },
 ];
 
-// B4 (Bash, Edit, Write, Grep round-trips) and D1 (/quit exits cleanly) are NOT
-// probed here, deliberately. B4 needs all four tools driven, not a subset — a
-// partial pass would be a false claim on the row as written. D1 is interactive
-// and needs a pty on the target, which is the `--quaude-floor` self-probe idea.
-// Silence is the honest answer for both; the ledger keeps showing them missing.
+// D1 (/quit exits cleanly) is NOT probed here: it is interactive and needs a pty
+// on the target. scripts/../remote-tui.cjs (ssh -tt) and a local node-pty driver
+// cover it instead; this probe stays silent rather than claim a row it cannot
+// actually demonstrate.
 
 const today = new Date().toISOString().slice(0, 10);
 // The ledger records WHICH artifact was driven; a row that cannot say is not
@@ -319,12 +406,18 @@ const BUNDLE = flag('--bundle', (() => {
   const results = [];
   for (const c of CHECKS) {
     const sbx = await sandbox();
+    await armTmpdirGuard(sbx);
     let r;
-    try { r = await c.fn(sbx); }
-    catch (e) { r = { ok: false, how: `probe threw: ${e && e.message}` }; }
+    try {
+      r = await c.fn(sbx);
+      // GUARD 1 applied: a row is only evidence if the target used OUR profile.
+      const u = await sandboxWasUsed(sbx);
+      if (!u.used) r = { ok: false, void: true, how: `VOID — ${u.why}` };
+    } catch (e) { r = { ok: false, how: `probe threw: ${e && e.message}` }; }
     finally { await sbx.drop(); }
-    results.push({ row: c.row, verdict: r.ok ? 'pass' : 'fail', how: r.how, what: c.what });
-    if (!AS_JSON) console.error(`  ${c.row} ${r.ok ? 'pass' : 'FAIL'} — ${r.how}`);
+    const verdict = r.ok ? 'pass' : (r.void ? 'void' : 'fail');
+    results.push({ row: c.row, verdict, how: r.how, what: c.what });
+    if (!AS_JSON) console.error(`  ${c.row} ${verdict.toUpperCase()} — ${r.how}`);
   }
 
   if (AS_JSON) { console.log(JSON.stringify({ runTarget: RUN_TARGET, date: today, results }, null, 2)); return; }
@@ -334,7 +427,13 @@ const BUNDLE = flag('--bundle', (() => {
   for (const r of results) {
     console.log(`| ${today} | ${RUN_TARGET} | ${r.row} | ${ENGINE} | ${BUNDLE} | ${r.verdict} | floor-probe: ${r.how} |`);
   }
-  const failed = results.filter((r) => r.verdict === 'fail');
+  // A VOID row is not a failure of the TARGET — it is a failure of this probe to
+  // measure. It must never be pasted into the ledger, so exit nonzero and say so.
+  const voided = results.filter((r) => r.verdict === 'void');
+  if (voided.length) {
+    console.error(`\nfloor-probe: ${voided.length} row(s) VOID — the harness could not measure. Do NOT file these rows.`);
+  }
+  const failed = results.filter((r) => r.verdict === 'fail' || r.verdict === 'void');
   console.error(`\nfloor-probe: ${results.length - failed.length}/${results.length} pass on ${RUN_TARGET}`);
   process.exit(failed.length ? 1 : 0);
 })();

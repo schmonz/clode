@@ -391,7 +391,14 @@ const LEGS = [
     // runbook and used a different, ephemeral qemu+HVF guest.
     // MAINTAINER RULING 2026-08-04: tier 1 requires all six FLOOR_ROWS green
     // (no partial credit); A1/B4/C1/D1 have no rows here, so tier 0 is
-    // correct. floorCoverage('netbsd-arm64') derives this from
+    // NOTE 2026-08-09: earlier-today rows briefly showed 6/6 here. They were driven
+  // against a PRE-EXISTING binary whose engine predates 906af8b (no uid/gid from
+  // FSS.stat), and they only passed because /tmp/claude-1000 did not exist yet on
+  // that VM — once earlier runs created it, the bundle's tmpdir-ownership guard
+  // fires and a FRESHLY built quaude scores 0/5. Those later failing rows are
+  // filed below and win on date, so coverage reflects reality. Re-drive after the
+  // NetBSD engine is rebuilt from current sources.
+  // correct. floorCoverage('netbsd-arm64') derives this from
     // test/fidelity/RESULTS.md rows G7, B1.
     fidelity: { tier: 0, date: '2026-07-09', bundle: '2.1.204', how: 'netbsd-aarch64-spike-vm',
                 note: 'floor 2/6 green (B1,G7); A1,B4,C1,D1 not driven — see RESULTS.md' } },
