@@ -679,7 +679,8 @@ test('golden ledger: the full run-target -> tier map', () => {
     'openindiana-amd64': 0,
     'solaris-amd64': 0,
     'windows-arm64': 0,
-    'windows-amd64': 0,
+    // Cleared all six FLOOR_ROWS on REAL Windows, 2026-08-09.
+    'windows-amd64': 1,
   });
 });
 

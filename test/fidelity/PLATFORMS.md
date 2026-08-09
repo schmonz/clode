@@ -57,6 +57,24 @@ This is the canonical reference run. The operator executes the full recipe here 
 
 ## Rig: NetBSD/arm64 SSH VM
 
+### Real Windows over the tailnet (cmbx-windows)
+
+**Rig id:** `cmbx-windows`
+
+**Engines available:** quaude (tjs, cross-fused on the mac from the cached PE32+ engine)
+**Test scope:** Floor rows A1,B1,B4,C1,G7 via `scripts/floor-probe.mjs --ssh`; D1 via `scripts/../remote-tui.cjs` (ssh -tt pty)
+**Access:** `ssh cmbx-windows`. The login shell is cmd.exe; use Git Bash for a POSIX shell —
+`C:\PROGRA~1\Git\bin\bash.exe -s` (8.3 path dodges the space, `-s` reads the script from stdin
+because cmd.exe re-parses an argv tail and mangles quoting). No node on the box.
+**Isolation (LOAD-BEARING):** the bundle resolves its profile from `USERPROFILE`, NOT `HOME`.
+Setting only HOME silently runs against the operator's real `C:\Users\<them>\.claude` — which
+also makes A1 pass for the wrong reason. Set USERPROFILE/HOMEDRIVE/HOMEPATH too.
+**Paths:** a MINGW path (`/c/Users/...`) handed to a NATIVE process is read as drive-relative and
+lands at `C:\c\Users\...`. Translate tool inputs with `cygpath -w`; keep the `/c` form for shell checks.
+**Mock reachability:** the guest reaches this mac at its tailnet address (100.95.16.24), NOT the
+qemu gateway 10.0.2.2 — passing the wrong `--mock-host` looks exactly like a hang.
+**Result recording:** paste the probe's emitted rows into `test/fidelity/RESULTS.md`.
+
 **Rig id:** `netbsd-arm64-ssh-vm`
 
 **Where:** `ssh <credentials> <host>`

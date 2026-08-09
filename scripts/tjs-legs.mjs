@@ -250,8 +250,8 @@ const LEGS = [
   // leg deleted — mingw is retired.)
   { leg: 'windows-amd64', os: 'windows-latest', msvc: true, publish: true, ci: true,
     wasm: 'off', mimalloc: 'off', ffi: 'off',
-    fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
-                note: 'floor 4/6 green (A1,B1,C1,G7); B4,D1 missing — see RESULTS.md. A1/B1/C1 driven 2026-08-09 on REAL Windows (cmbx-windows) by scripts/floor-probe.mjs over ssh, against a quaude cross-fused here from the cached PE32+ engine; B4 needs all four tools and D1 needs a pty on the target' } },
+    fidelity: { tier: 1, date: '2026-08-09', bundle: '2.1.218', how: 'cmbx-windows',
+                note: 'floor 6/6 GREEN (A1,B1,B4,C1,D1,G7) — driven 2026-08-09 on REAL Windows (cmbx-windows) against a quaude cross-fused here from the cached PE32+ engine. A1/B1/B4/C1/G7 by scripts/floor-probe.mjs over ssh under real profile isolation (USERPROFILE, not just HOME) with the sandbox-sentinel and tmpdir guards armed; D1 by an ssh -tt pty session (/quit exited code 0 in 2398ms). Supersedes earlier same-day rows that ran against the operator profile' } },
   // windows-arm64 (the Windows finale): native MSVC ARM64 on the windows-11-arm
   // runner (msvc-arch:arm64 → the dev-env's cl targets ARM64), exec=host build +
   // fuse + PONG like windows-amd64. PUBLISHES clode-<ver>-windows-arm64 — the asset
