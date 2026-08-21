@@ -52,3 +52,50 @@ for (const c of THROWS) {
     assert.match(sh.stderr, /rg→ugrep shim doesn't translate/);
   });
 }
+
+// ---------------------------------------------------------------------------
+// BOTH spawn routes must agree, because the bundle uses both.
+//
+// Bun.spawn has routed rg->ugrep since the routing spec, but node's
+// child_process did not: rg arrives there as the FILE argument, and the wrapper
+// only rewrote the args ARRAY. So one binary had two spawn routes disagreeing
+// about the same command — `Bun.spawn(['rg',...])` translated while
+// `spawn('rg',[...])` failed ENOENT. The bundle's startup rg calls take the
+// child_process route, which is why they were the ones that broke.
+//
+// The fix lives in bun-shim precisely because bun-shim is baked into BOTH quaude
+// and naude. node-shim is quaude-only, so fixing it there would have made quaude
+// translate while naude did not — inventing a divergence rather than closing one.
+test('both spawn routes translate rg identically (child_process and Bun.spawn)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-routes-'));
+  // A stand-in ugrep that just reports the argv it was handed.
+  const ugrep = path.join(dir, 'ugrep');
+  fs.writeFileSync(ugrep, '#!/bin/sh\nprintf "%s\\n" "$@"\n');
+  fs.chmodSync(ugrep, 0o755);
+
+  const probe = path.join(dir, 'probe.cjs');
+  fs.writeFileSync(probe, `
+    const shim = require(${JSON.stringify(path.join(__dirname, '..', 'libexec/bun-shim.cjs'))});
+    const cp = require('node:child_process');
+    // Route A: node child_process, the route the bundle's startup rg calls take.
+    const viaCp = cp.spawnSync('rg', ['-n', 'needle', 'src'], { encoding: 'utf8' });
+    // Route B: the Bun.spawn approximation.
+    const viaBun = shim.spawnSync(['rg', '-n', 'needle', 'src']);
+    const bunOut = (viaBun.stdout || Buffer.alloc(0)).toString('utf8');
+    console.log(JSON.stringify({
+      cp: (viaCp.stdout || '').trim().split('\\n').filter(Boolean),
+      bun: bunOut.trim().split('\\n').filter(Boolean),
+      cpErr: viaCp.error ? String(viaCp.error.code || viaCp.error.message) : null,
+    }));
+  `);
+  const r = require('node:child_process').execFileSync(process.execPath, [probe],
+    { encoding: 'utf8', env: { ...process.env, CLODE_UGREP: ugrep } });
+  const got = JSON.parse(r.trim());
+
+  assert.strictEqual(got.cpErr, null,
+    'child_process spawn of rg must not fail — before the fix this was ENOENT');
+  assert.ok(got.cp.length > 0, `child_process route produced no argv: ${JSON.stringify(got)}`);
+  assert.deepStrictEqual(got.cp, got.bun,
+    'the two spawn routes must hand ugrep the SAME argv');
+  fs.rmSync(dir, { recursive: true, force: true });
+});

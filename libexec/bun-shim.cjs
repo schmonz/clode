@@ -121,10 +121,33 @@ const _rewriteArgsArray = (a) => Array.isArray(a) ? a.map(_rewriteSnapshotArg) :
 // recurse back through the snapshot-rewrite wrapper installed just below.
 const _rawSpawnSync = cp.spawnSync;
 
+// rg lands here as the FILE, not inside the args array, so the snapshot rewrite
+// above never saw it. Bun.spawn HAS routed rg->ugrep since the routing spec, but
+// the bundle reaches ripgrep both ways — and the startup calls go through node's
+// child_process. The result was one binary with two spawn routes disagreeing about
+// the same command: `Bun.spawn(['rg',...])` translated, `spawn('rg',[...])` did not
+// and simply failed ENOENT. Route both through the same function.
+//
+// Applies to quaude AND naude, which is the point: bun-shim is baked into both,
+// whereas node-shim is quaude-only. Wiring this into node-shim would have made
+// quaude translate while naude did not — inventing the divergence this project
+// exists to remove.
+const _rewriteRgFileArgs = (file, args) => {
+  if (file !== 'rg' || !Array.isArray(args)) return null;
+  const rewritten = _rewriteRgSpawn([file, ...args]);
+  // Untranslatable (e.g. --files) or no ugrep: _rewriteRgSpawn returns the argv
+  // unchanged, and we leave the call alone so the app's own not-found fallback
+  // still engages, exactly as before.
+  if (!Array.isArray(rewritten) || rewritten[0] === file) return null;
+  return { file: rewritten[0], args: rewritten.slice(1) };
+};
+
 for (const m of ['execFile', 'execFileSync', 'spawn', 'spawnSync']) {
   const orig = cp[m];
   if (typeof orig !== 'function') continue;
   cp[m] = function (file, args, ...rest) {
+    const rg = _rewriteRgFileArgs(file, args);
+    if (rg) return orig.call(this, rg.file, _rewriteArgsArray(rg.args), ...rest);
     return orig.call(this, file, _rewriteArgsArray(args), ...rest);
   };
 }
