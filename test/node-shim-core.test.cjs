@@ -476,6 +476,41 @@ test('CustomEvent.detail returns the value, like node (not its truthiness)', (t)
   assert.strictEqual(JSON.parse(r.stdout.trim()).zero, 0);
 });
 
+// node does `module.exports = EventEmitter`: the events module IS the class, with
+// helpers hung off it. Exporting a namespace object instead broke the very common
+//     const EventEmitter = require('events');
+//     class Foo extends EventEmitter {}
+// with "parent class must be constructor" — which is why npm `ws` could not load
+// at all (websocket.js and websocket-server.js both write exactly that), and so
+// why quaude falls back to the engine's native WebSocket while naude and Claude
+// use ws. The destructuring form kept working throughout, which is how it hid.
+test('events: the module IS the EventEmitter class, extendable like node', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-events-shape-'));
+  const f = path.join(dir, 'ev.cjs');
+  fs.writeFileSync(f, `const EventEmitter = require('events');
+class Sub extends EventEmitter {}            // the form that used to throw
+const s = new Sub();
+let got = null;
+s.on('ping', (v) => { got = v; });
+s.emit('ping', 42);
+const { EventEmitter: Destructured } = require('events');
+console.log(JSON.stringify({
+  typeofModule: typeof EventEmitter,
+  name: EventEmitter.name,
+  selfRef: Destructured === EventEmitter,   // node: true
+  subclassWorks: got,
+  isInstance: s instanceof EventEmitter,
+  hasOnce: typeof require('events').once,
+}));`);
+  const nodeOut = require('node:child_process')
+    .execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim();
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), JSON.parse(nodeOut));
+  assert.strictEqual(JSON.parse(nodeOut).typeofModule, 'function');
+});
+
 // Wall (Task 4): several -p transport modules require('zlib') and read
 // `zlib.constants` at init (destructuring Z_*/BROTLI_* values). The constants
 // table must deep-equal host node's; the compression API is present (function)

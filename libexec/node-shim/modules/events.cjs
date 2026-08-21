@@ -38,7 +38,22 @@ class EventEmitter {
 }
 EventEmitter.defaultMaxListeners = 10;
 EventEmitter.EventEmitter = EventEmitter;
-module.exports = { EventEmitter, default: EventEmitter };
+// node does `module.exports = EventEmitter` — the module IS the class, with the
+// helpers hung off it (and EventEmitter.EventEmitter === EventEmitter for the
+// destructuring form). Exporting a plain namespace object instead broke the very
+// common
+//     const EventEmitter = require('events');
+//     class Foo extends EventEmitter {}
+// with "parent class must be constructor". npm `ws` writes exactly that in both
+// websocket.js and websocket-server.js, so ws could not load at all — which is why
+// quaude falls back to the engine's native WebSocket while naude and Claude use
+// ws, the divergence that fallback exists to paper over.
+//
+// The destructuring form `const { EventEmitter } = require('events')` kept working
+// throughout, which is why this survived: half the ecosystem writes it that way.
+module.exports = EventEmitter;
+module.exports.EventEmitter = EventEmitter;
+module.exports.default = EventEmitter;
 module.exports.once = (emitter, name) => new Promise((res) => emitter.once(name, (...a) => res(a)));
 
 // Module-level events.setMaxListeners(n, ...targets) (Node 15+) — DISTINCT from
