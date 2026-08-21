@@ -965,11 +965,93 @@ function _wsArgs(url, opts){
   }
   return [url, opts, undefined];                 // WHATWG form: 2nd arg is protocols
 }
+// Give the engine's native WHATWG WebSocket the surface npm `ws` has, because the
+// bundle consumes it BOTH ways and we hand out the same object for both.
+//
+// Measured against the 2.1.238 bundle:
+//   - one consumer is WHATWG: `new WebSocket(url,{headers})` + addEventListener
+//     ("open"/"message"/"error"/"close"). The native WS already serves this.
+//   - the other is ws-shaped: it wraps an instance and calls removeAllListeners(),
+//     send(), readyState, and `readyState === OPEN ? close(code,reason)
+//     : terminate()`. The native WS has NONE of on/once/removeAllListeners/
+//     terminate, so that path died with "not a function".
+//
+// And it died while we were ADVERTISING the transport: __clodeWsUnavailable is
+// false under tjs whenever a native WS exists, which is the honest answer to "is
+// there a transport" and the wrong answer to "does it satisfy the contract". A
+// capability flag that says yes must mean the surface is there.
+//
+// This is the cheap half of closing the quaude-vs-naude WebSocket divergence.
+// The expensive half — running npm ws itself — additionally needs http.request
+// (an HTTP/1.1 client with 'upgrade'), which is worth doing on its own merits but
+// is not needed for parity on the surface the bundle actually uses.
+function _wsShape(ws) {
+  if (!ws || typeof ws.addEventListener !== 'function' || typeof ws.on === 'function') return ws;
+  const B = (() => { try { return require('buffer').Buffer; } catch (_) { return null; } })();
+  const toBuf = (d) => {
+    if (!B) return d;
+    if (typeof d === 'string') return B.from(d);
+    if (d instanceof ArrayBuffer) return B.from(new Uint8Array(d));
+    if (ArrayBuffer.isView(d)) return B.from(d.buffer, d.byteOffset, d.byteLength);
+    return d;
+  };
+  // ws hands its listeners unwrapped values, not Event objects. Translate per
+  // event so a ws-shaped consumer sees what it does on Node.
+  const adapt = (type, fn) => {
+    if (type === 'message') return (e) => fn(toBuf(e && e.data), typeof (e && e.data) !== 'string');
+    if (type === 'close') return (e) => fn((e && e.code) ?? 1006, toBuf((e && e.reason) || ''));
+    if (type === 'error') return (e) => fn((e && (e.error || e.message)) instanceof Error
+      ? e.error : new Error(String((e && (e.message || e.error)) || 'WebSocket error')));
+    return () => fn();
+  };
+  const bound = new Map();   // fn -> [{type, wrapped}] so removeListener can detach
+  const add = (type, fn, once) => {
+    const wrapped = adapt(type, once ? (...a) => { remove(type, fn); fn(...a); } : fn);
+    ws.addEventListener(type, wrapped);
+    if (!bound.has(fn)) bound.set(fn, []);
+    bound.get(fn).push({ type, wrapped });
+    return ws;
+  };
+  const remove = (type, fn) => {
+    const entries = bound.get(fn) || [];
+    for (let i = entries.length - 1; i >= 0; i--) {
+      if (entries[i].type !== type) continue;
+      ws.removeEventListener(type, entries[i].wrapped);
+      entries.splice(i, 1);
+    }
+    if (!entries.length) bound.delete(fn);
+    return ws;
+  };
+  ws.on = (type, fn) => add(type, fn, false);
+  ws.addListener = ws.on;
+  ws.once = (type, fn) => add(type, fn, true);
+  ws.off = remove;
+  ws.removeListener = remove;
+  ws.removeAllListeners = (type) => {
+    for (const [fn, entries] of [...bound]) {
+      for (let i = entries.length - 1; i >= 0; i--) {
+        if (type && entries[i].type !== type) continue;
+        ws.removeEventListener(entries[i].type, entries[i].wrapped);
+        entries.splice(i, 1);
+      }
+      if (!entries.length) bound.delete(fn);
+    }
+    return ws;
+  };
+  // ws.terminate() destroys the connection without a closing handshake. The
+  // native WS exposes no such abrupt path, so this closes instead — the peer sees
+  // a clean close where ws would have dropped it. Recorded as a divergence rather
+  // than pretended away; it matters only to a peer distinguishing the two, and no
+  // observed caller does.
+  ws.terminate = () => { try { ws.close(); } catch (_) { /* already closing */ } };
+  return ws;
+}
+
 function BunWebSocket(url, opts){
   const WS = _realWS();
   if (WS) { const [u, p, o] = _wsArgs(url, opts); return new WS(u, p, o); }   // npm ws (Node hosts)
   if (UNDER_TJS && typeof _nativeWS === 'function') {                          // native tjs WS (header-capable)
-    return new _nativeWS(url, _nativeWsOptions(opts));
+    return _wsShape(new _nativeWS(url, _nativeWsOptions(opts)));               // + the ws surface the bundle uses
   }
   _wsFatal();                                                                  // Node without ws, or no native WS
 }

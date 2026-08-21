@@ -134,6 +134,56 @@ test('WebSocket connects to a real RFC6455 server and sends a well-formed reques
 });
 
 // ---------------------------------------------------------------------------
+// WebSocket PARITY on the surface the bundle actually uses.
+//
+// quaude and naude do not share a WebSocket: naude and Claude get npm `ws`, while
+// under tjs require('ws') fails and bun-shim falls back to the engine's native
+// WHATWG WebSocket. So divergence is the default, and the bundle consumes the
+// object BOTH ways — WHATWG (`new WebSocket(url,{headers})` + addEventListener)
+// and ws-shaped (`removeAllListeners()`, `readyState === OPEN ? close() :
+// terminate()`). The native WS had none of on/once/removeAllListeners/terminate,
+// so the second path died with "not a function" — while __clodeWsUnavailable
+// reported the transport as AVAILABLE.
+//
+// bun-shim now dresses the native socket in that surface. This row drives the
+// exact ws-shaped sequence and pins the result. The expected value was not
+// invented: it was established differentially on 2026-08-21 against npm ws on
+// real node, which produced the identical array.
+test('WebSocket: a ws-shaped consumer sees the same sequence as npm ws', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const mock = startMock('ws-server.cjs');
+  if (!mock) { t.skip('could not start the ws mock'); return; }
+  try {
+    const r = runLoader(path.join(FIXTURES, 'ws-style-client.cjs'), [], {
+      timeout: 20000,
+      env: {
+        CLODE_BUN_SHIM: path.join(REPO, 'libexec/bun-shim.cjs'),
+        WS_URL: `ws://127.0.0.1:${mock.port}/`,
+      },
+    });
+    assert.strictEqual(r.status, 0, r.stderr);
+    const got = JSON.parse((r.stdout || '').trim().split('\n')[0] || '[]');
+    assert.deepStrictEqual(got, [
+      'open',
+      'message:{"jsonrpc":"2.0","id":1,:isBinary=false',
+      'close:1000',
+    ], 'ws-shaped surface diverged from npm ws');
+    // The client-visible sequence matches. The WIRE does not, and only asserting
+    // on the wire showed it: npm ws sends a close frame (opcode 0x8) and the
+    // engine's native WebSocket sends none — it drops the TCP connection and
+    // synthesizes the close event locally, so the peer sees an abrupt disconnect
+    // where node's peer sees a clean close. Verified at frame level: the server
+    // decodes only 0x1 from the native client, never 0x8.
+    //
+    // Asserted as the CURRENT truth so the day the engine learns the closing
+    // handshake this row fails and tells you to tighten it to /CLOSE/. That is a
+    // real gap to close in the engine, not a divergence to live with.
+    assert.doesNotMatch(mock.wire(), /CLOSE/,
+      'the engine now sends a close frame — tighten this to assert /CLOSE/ instead');
+  } finally { mock.stop(); }
+});
+
+// ---------------------------------------------------------------------------
 // The mocks themselves must be trustworthy, or every row above is decoration.
 // A mock that silently fails to record would make the SSE assertion vacuous.
 test('the MCP mocks record what arrived (the instrument is not decoration)', () => {

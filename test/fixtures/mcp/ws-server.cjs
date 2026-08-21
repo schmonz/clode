@@ -22,7 +22,7 @@ const fs = require('node:fs');
 // test/mcp-transport.test.cjs asserts the mock records what it received.
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 
-function decodeFrames(buf, onText) {
+function decodeFrames(buf, onText, onClose, onPing) {
   let off = 0;
   while (off + 2 <= buf.length) {
     const b1 = buf[off], b2 = buf[off + 1];
@@ -36,9 +36,17 @@ function decodeFrames(buf, onText) {
     const payload = Buffer.from(buf.subarray(p, p + len));
     if (mask) for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i % 4];
     if (opcode === 0x1) onText(payload.toString('utf8'));
+    else if (opcode === 0x8) onClose(payload);   // closing handshake
+    else if (opcode === 0x9) onPing(payload);    // ping -> pong
     off = p + len;
   }
   return off;
+}
+// A control frame: close (0x8) or pong (0xA). Control payloads are always short,
+// so the 7-bit length form is always correct here.
+function encodeControl(opcode, payload) {
+  const p = payload || Buffer.alloc(0);
+  return Buffer.concat([Buffer.from([0x80 | opcode, p.length]), p]);
 }
 function encodeText(s) {
   const p = Buffer.from(s, 'utf8');
@@ -70,6 +78,16 @@ srv.on('upgrade', (req, sock) => {
           { name: 'needle', description: 'probe tool', inputSchema: { type: 'object', properties: {} } } ] } })));
         process.stderr.write('<< SERVED tools/list — MCP OVER WS REACHED TOOL DISCOVERY\n');
       }
+    }, (payload) => {
+      // Echo the close frame back and end the socket. Without this the peer never
+      // sees the closing handshake: npm ws waits for it and never emits 'close',
+      // which made a comparison look like a quaude-vs-node divergence when it was
+      // only this server refusing to finish the conversation.
+      process.stderr.write('<< CLOSE\n');
+      if (process.env.MCP_MOCK_WIRE) fs.appendFileSync(process.env.MCP_MOCK_WIRE, 'CLOSE\n');
+      try { sock.write(encodeControl(0x8, payload)); sock.end(); } catch { /* already gone */ }
+    }, (payload) => {
+      try { sock.write(encodeControl(0xA, payload)); } catch { /* already gone */ }
     });
     acc = acc.subarray(used);
   });
