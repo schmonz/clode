@@ -135,7 +135,7 @@ function autoupdaterHookAnchorPresent(data) {
 // lie in one direction or the other. `(?<![A-Za-z0-9_$])` requires VERSION:" to be
 // a standalone field, not the suffix of a longer name like ENGINE_VERSION:" — see
 // the extractor's comment for the full decoy rationale.
-const _NATIVE_AUTOUPDATER_ANCHOR = /tengu_native_auto_updater_start",(?:\{\}|[A-Za-z0-9_$]{1,6})\);try\{let [A-Za-z0-9_$]{1,6}=await [A-Za-z0-9_$]{1,6}\([A-Za-z0-9_$]{1,6}\),(?=[A-Za-z0-9_$]{1,6}=\{.{0,300}?(?<![A-Za-z0-9_$])VERSION:")/g;
+const _NATIVE_AUTOUPDATER_ANCHOR = /tengu_native_auto_updater_start",(?:\{\}|[A-Za-z0-9_$]{1,6})\);try\{let [A-Za-z0-9_$]{1,6}=await [A-Za-z0-9_$]{1,6}\((?:[A-Za-z0-9_$]{1,6}|![01])(?:,(?:[A-Za-z0-9_$]{1,6}|![01])){0,4}\),(?=[A-Za-z0-9_$]{1,6}=\{.{0,300}?(?<![A-Za-z0-9_$])VERSION:")/g;
 // Notify-only marker: the native patch replaces the installer call with
 // `await globalThis.__clodeCheckUpdate("<version>")` (extract-claude-js
 // patchNativeAutoupdater). The `("` distinguishes it from the pkg patch's call

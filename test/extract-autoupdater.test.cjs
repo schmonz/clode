@@ -45,6 +45,35 @@ test('native autoupdater is redirected to the notify check, not CLODE_SELF', () 
   assert.match(out, /,w=\{FOO:"bar",VERSION:"2\.1\.218",BAZ:"q"\};/);
 });
 
+// UPSTREAM DRIFT, 2026-08-21 (2.1.238). The installer call grew arguments:
+// 2.1.218 emitted `let S=await zmt(d)` (one identifier), 2.1.238 emits
+// `let v=await E3t(p,!1,o)` — three args, one of them the minified boolean `!1`.
+// The old single-identifier anchor stopped matching, so the redirect silently
+// stopped applying: everything still builds and PONGs while a built target
+// would try to install upstream over itself. Exactly the 2.1.207 -> 2.1.210
+// class at the pkg-manager site, which went unnoticed for weeks.
+test('native autoupdater matches a MULTI-ARGUMENT installer call (2.1.238 shape)', () => {
+  const body = 'M("tengu_native_auto_updater_start",{});try{'
+    + 'let v=await E3t(p,!1,o),w={ISSUES_EXPLAINER:"x",PACKAGE_URL:"y",VERSION:"2.1.238",FEEDBACK_CHANNEL:"z"};A=1;';
+  const [out, applied] = patchNativeAutoupdater(body);
+  assert.strictEqual(applied, true);
+  assert.match(out, /__clodeCheckUpdate\("2\.1\.238"\)/);
+  // the whole call, arguments included, is what gets replaced
+  assert.doesNotMatch(out, /E3t\(/);
+  // and the metadata binding is still left verbatim
+  assert.match(out, /,w=\{ISSUES_EXPLAINER:"x"/);
+});
+
+// The single-argument form must KEEP working — widening the anchor must not
+// re-pin us onto only the newest shape.
+test('native autoupdater still matches the SINGLE-argument call (2.1.218 shape)', () => {
+  const body = 'M("tengu_native_auto_updater_start",{});try{'
+    + 'let S=await zmt(d),w={VERSION:"2.1.218"};A=1;';
+  const [out, applied] = patchNativeAutoupdater(body);
+  assert.strictEqual(applied, true);
+  assert.match(out, /__clodeCheckUpdate\("2\.1\.218"\)/);
+});
+
 test('native autoupdater patch is left-bounded: an ENGINE_VERSION decoy before the real VERSION field does not capture the decoy', () => {
   // Without a left boundary on `VERSION:"`, the non-greedy `.{0,300}?` lookahead
   // locks onto the FIRST `VERSION:"` substring it finds — including the tail of

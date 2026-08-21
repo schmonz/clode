@@ -359,8 +359,18 @@ function patchAutoupdater(body) {
 // same contract as every other anchor here. Mirrored into
 // inspect-claude-bundle.cjs's _NATIVE_AUTOUPDATER_ANCHOR so the strict gate can't
 // diverge from what this patch actually accepts.
+// ARGUMENT LIST, not a single argument (re-pinned 2026-08-21 for 2.1.238).
+// 2.1.218 called the updater with one identifier; 2.1.238 calls
+// `E3t(p,!1,o)` — three args including a `!1` boolean literal — so the
+// old single-identifier form stopped matching and the redirect silently
+// stopped applying (upstream-drift went red 2026-08-21; 2.1.207->2.1.210
+// was the same class at the pkg-manager site). Accepts 1-5 args, each an
+// identifier or !0/!1, which is what a minifier emits here; anything more
+// exotic still fails the exactly-once match and skips FAIL-LOUD rather
+// than mis-injecting. The `pre` anchor (telemetry marker + try{let X=await)
+// keeps this from matching anywhere else.
 const NATIVE_AUTOUPDATER =
-  /(?<pre>tengu_native_auto_updater_start",(?:\{\}|[A-Za-z0-9_$]{1,6})\);try\{let [A-Za-z0-9_$]{1,6}=await )(?<call>[A-Za-z0-9_$]{1,6}\([A-Za-z0-9_$]{1,6}\)),(?=[A-Za-z0-9_$]{1,6}=\{.{0,300}?(?<![A-Za-z0-9_$])VERSION:"(?<ver>[0-9][^"]{0,20})")/gs;
+  /(?<pre>tengu_native_auto_updater_start",(?:\{\}|[A-Za-z0-9_$]{1,6})\);try\{let [A-Za-z0-9_$]{1,6}=await )(?<call>[A-Za-z0-9_$]{1,6}\((?:[A-Za-z0-9_$]{1,6}|![01])(?:,(?:[A-Za-z0-9_$]{1,6}|![01])){0,4}\)),(?=[A-Za-z0-9_$]{1,6}=\{.{0,300}?(?<![A-Za-z0-9_$])VERSION:"(?<ver>[0-9][^"]{0,20})")/gs;
 
 // Redirect the in-TUI NATIVE autoupdater to the notify-only check with the real
 // running version. Replaces `await <fn>(<arg>)` with
