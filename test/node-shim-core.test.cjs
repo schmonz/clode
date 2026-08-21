@@ -450,6 +450,32 @@ console.log(JSON.stringify({ size: m.size > 0, enoent: m.get('ENOENT') }));`);
   assert.deepStrictEqual(JSON.parse(r.stdout.trim()), JSON.parse(nodeOut));
 });
 
+// The DOM event polyfills hand back wrong SHAPES rather than throwing, which is
+// how both bugs in this family survived: a consumer gets a plausible-looking wrong
+// answer instead of an error. MessageEvent stored the whole init dict in .data
+// (killing MCP over SSE); CustomEvent.detail returned Boolean(detail), so every
+// payload became true/false. The neighbouring getters (bubbles, cancelable,
+// composed) really are booleans, so that coercion was copy-pasted one line too far.
+test('CustomEvent.detail returns the value, like node (not its truthiness)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-custevt-'));
+  const f = path.join(dir, 'ce.cjs');
+  fs.writeFileSync(f, `console.log(JSON.stringify({
+    obj: new CustomEvent('x', { detail: { a: 1 } }).detail,
+    str: new CustomEvent('y', { detail: 'str' }).detail,
+    zero: new CustomEvent('n', { detail: 0 }).detail,
+    none: new CustomEvent('z').detail,
+  }));`);
+  const nodeOut = require('node:child_process')
+    .execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim();
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), JSON.parse(nodeOut));
+  // Pre-fix this was {obj:true,str:true,zero:false,none:false}. `zero` is the
+  // sharpest of the four: a falsy but meaningful payload.
+  assert.strictEqual(JSON.parse(r.stdout.trim()).zero, 0);
+});
+
 // Wall (Task 4): several -p transport modules require('zlib') and read
 // `zlib.constants` at init (destructuring Z_*/BROTLI_* values). The constants
 // table must deep-equal host node's; the compression API is present (function)

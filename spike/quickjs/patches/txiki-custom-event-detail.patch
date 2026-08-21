@@ -1,0 +1,26 @@
+diff --git a/src/js/polyfills/event-target.js b/src/js/polyfills/event-target.js
+index 4bbc1df..e14f337 100644
+--- a/src/js/polyfills/event-target.js
++++ b/src/js/polyfills/event-target.js
+@@ -241,7 +241,20 @@ class CustomEvent extends Event {
+      * @type {any}
+      */
+     get detail() {
+-        return Boolean(pd(this).eventInit.detail);
++        /* CLODE: return the VALUE, not a truthiness of it.
++         *
++         * This was `Boolean(pd(this).eventInit.detail)`, so every payload became
++         * true/false: `new CustomEvent('x', {detail: {a: 1}}).detail` was `true`.
++         * The neighbouring getters (bubbles, cancelable, composed) really are
++         * booleans, so the coercion was almost certainly copy-pasted one line too
++         * far. node returns the value, and null when the field is absent.
++         *
++         * Same failure family as the MessageEvent init-dict bug: an event property
++         * that yields the wrong SHAPE rather than throwing, so any consumer gets a
++         * plausible-looking wrong answer instead of an error. */
++        const d = pd(this).eventInit.detail;
++
++        return d !== undefined ? d : null;
+     }
+ }
+ 
