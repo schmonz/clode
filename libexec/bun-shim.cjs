@@ -546,6 +546,31 @@ function hash(input, seed){
 }
 hash.wyhash = hash; hash.crc32 = (b)=>{ const z=require('zlib'); return z.crc32 ? z.crc32(b) : 0; };
 
+// The applet we translate to is missing. Do NOT fall through to whatever `rg` the
+// host happens to have.
+//
+// Falling through looks helpful and is not: it makes quaude's behaviour depend on
+// what is installed, so the same binary searches with ugrep on one machine and
+// ripgrep on another, with different ignore rules and different output — a
+// difference nothing measures and no one asked for. It also contradicts the
+// reason we translate at all: ugrep and bfs are portable to every target quaude
+// supports and rg is not, so rg is precisely the thing we cannot build on.
+//
+// The shell path already decided this. The rg shadow refuses with 127 and
+// "clode: rg needs 'ugrep'" rather than calling a host rg; this makes the spawn
+// path agree, which is the same two-routes-disagreeing bug fixed in e356a20,
+// one level up.
+//
+// Returning an argv that cannot resolve keeps the app's own not-found fallback
+// working exactly as it does when rg is genuinely absent — deterministically,
+// whether or not this host has rg.
+function _rgAppletMissing(cmd, applet) {
+  process.stderr.write(
+    `clode: rg needs '${applet}' (set CLODE_${applet.toUpperCase()} or install it); `
+    + 'not falling back to a host rg — quaude translates rg to portable applets on purpose\n');
+  return ['clode-rg-unavailable', ...cmd.slice(1)];
+}
+
 // `rg --files` is a file LISTING, not a search, so it does not translate to a
 // grep at all. It is handled here rather than in rgToUgrep (which yields ugrep
 // argv by construction) because the right tool depends on the flags.
@@ -637,7 +662,7 @@ function _rewriteRgSpawn(cmd) {
   if (cmd.includes('--files')) {
     try {
       const listing = rgFilesToListing(cmd.slice(1));
-      if (!listing) return cmd;          // applet absent: leave the app's fallback intact
+      if (!listing) return _rgAppletMissing(cmd, cmd.includes('--no-ignore') ? 'bfs' : 'ugrep');
       if (process.env.CLODE_RG_DEBUG) {
         process.stderr.write(`clode rg-debug: ${cmd.join(' ')} => ${listing.join(' ')}\n`);
       }
@@ -648,7 +673,7 @@ function _rewriteRgSpawn(cmd) {
     }
   }
   const ugrep = process.env.CLODE_UGREP || which('ugrep');
-  if (!ugrep) return cmd;
+  if (!ugrep) return _rgAppletMissing(cmd, 'ugrep');
   try {
     const rewritten = [ugrep, ...rgToUgrep(cmd.slice(1))];
     if (process.env.CLODE_RG_DEBUG) {

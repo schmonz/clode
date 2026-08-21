@@ -188,3 +188,45 @@ test('rg --files: the bfs branch finds a zero-length marker file', () => {
   assert.strictEqual(r.stdout.trim(), path.join(dir, '.orphaned_at'));
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+// ---------------------------------------------------------------------------
+// A host rg must never be used, even when one is installed.
+//
+// Falling through to whatever rg the host has looks helpful and is not: it makes
+// quaude's behaviour depend on what is installed, so the same binary searches with
+// ugrep on one machine and ripgrep on another — different ignore rules, different
+// output, measured by nothing. It also contradicts why we translate at all: ugrep
+// and bfs reach every target quaude supports and rg cannot, so rg is exactly the
+// thing we cannot build on.
+//
+// The shell path already refuses (127, "clode: rg needs 'ugrep'"). This pins the
+// spawn path to the same answer.
+test('a host rg is never called, even when present, if the applet is missing', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-hostrg-'));
+  fs.writeFileSync(path.join(dir, 'rg'), '#!/bin/sh\necho REAL-RG-CALLED\n');
+  fs.chmodSync(path.join(dir, 'rg'), 0o755);
+
+  const probe = path.join(dir, 'p.cjs');
+  fs.writeFileSync(probe, `
+    const s = require(${JSON.stringify(path.join(__dirname, '..', 'libexec/bun-shim.cjs'))});
+    console.log(JSON.stringify({
+      search: s._rewriteRgSpawn(['rg', '-n', 'x', '.']),
+      files: s._rewriteRgSpawn(['rg', '--files', '/r']),
+    }));
+  `);
+  const r = require('node:child_process').spawnSync(process.execPath, [probe], {
+    encoding: 'utf8',
+    // A real rg on PATH, and deliberately no ugrep/bfs.
+    env: { ...process.env, PATH: dir, CLODE_UGREP: '', CLODE_BFS: '' },
+  });
+  const got = JSON.parse(r.stdout.trim());
+  assert.strictEqual(got.search[0], 'clode-rg-unavailable',
+    'a present host rg must NOT be used for searches');
+  assert.strictEqual(got.files[0], 'clode-rg-unavailable',
+    'a present host rg must NOT be used for --files');
+  // The refusal has to say so, and name the remedy — silence here would read as
+  // "rg is missing" when rg is in fact right there and deliberately declined.
+  assert.match(r.stderr, /not falling back to a host rg/);
+  assert.match(r.stderr, /rg needs 'ugrep'/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

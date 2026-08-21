@@ -29,11 +29,27 @@ test('_rewriteRgSpawn: leaves non-rg commands untouched', () => {
   });
 });
 
-test('_rewriteRgSpawn: ugrep absent → cmd untouched (app keeps its fallback)', () => {
+// CHANGED 2026-08-21. This used to assert the argv was left UNTOUCHED when ugrep
+// was missing, so the app's not-found fallback would engage. That was right about
+// the fallback and wrong about the mechanism: leaving `rg` in place means a host
+// that happens to HAVE ripgrep runs it, so quaude searched with ugrep on one
+// machine and rg on another — different ignore rules, different output, measured
+// by nothing.
+//
+// Now it rewrites to an argv that cannot resolve. The app's fallback still
+// engages, identically and on every host, but a present rg is never reached. The
+// shell path had always refused this way ("clode: rg needs 'ugrep'", exit 127);
+// this makes the spawn path agree.
+test('_rewriteRgSpawn: applet absent → unresolvable argv, never a host rg', () => {
   const prev = process.env.CLODE_UGREP; delete process.env.CLODE_UGREP;
   const prevPath = process.env.PATH; process.env.PATH = '/nonexistent';
   try {
-    assert.deepStrictEqual(_rewriteRgSpawn(['rg', 'foo']), ['rg', 'foo']);
+    const out = _rewriteRgSpawn(['rg', 'foo']);
+    assert.strictEqual(out[0], 'clode-rg-unavailable',
+      'must not leave bare `rg`, which a host ripgrep would satisfy');
+    // The operands survive, so the failure the app sees is a missing BINARY —
+    // exactly what it would see if rg were genuinely absent.
+    assert.deepStrictEqual(out.slice(1), ['foo']);
   } finally {
     if (prev !== undefined) process.env.CLODE_UGREP = prev; process.env.PATH = prevPath;
   }
