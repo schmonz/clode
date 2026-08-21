@@ -607,11 +607,23 @@ function rgFilesToListing(args) {
 
   const ugrep = process.env.CLODE_UGREP || which('ugrep');
   if (!ugrep) return null;
-  const out = [ugrep, '-r', '-l', '--ignore-files'];
+  // -L (files WITHOUT a match) plus a pattern that cannot match lists every file
+  // ugrep would have searched — including ZERO-LENGTH ones, which `-l ''` drops
+  // because -l needs a matching line and an empty file has none. That mattered:
+  // marker files (.orphaned_at) are empty, and silently omitting them is the kind
+  // of wrong answer nothing downstream can detect.
+  //
+  // `$^` demands end-of-line immediately followed by start-of-line, which no
+  // position satisfies. That it never matches is ENGINE BEHAVIOUR, not a law, and
+  // if some ugrep build ever did match it this would list NOTHING — a silent empty
+  // result, worse than the bug it replaces. So it is pinned by a fixture test
+  // (rg --files: ugrep branch lists empty/ignored/hidden exactly) that fails on a
+  // ugrep whose semantics differ, rather than trusted.
+  const out = [ugrep, '-r', '-L', '--ignore-files'];
   if (hidden) out.push('--hidden');
   if (maxDepth) out.push(`--depth=${maxDepth}`);
   for (const g of globs) out.push(`--include=${g}`);
-  out.push('', ...paths);   // '' matches every line, so every non-empty file lists
+  out.push('$^', ...paths);
   return out;
 }
 

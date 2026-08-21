@@ -133,11 +133,39 @@ test('rg --files: ignore-respecting form routes to ugrep --ignore-files', () => 
   const out = rgFilesToListing(['--files', '--hidden', '/repo']);
   assert.ok(out[0].endsWith('ugrep'));
   assert.ok(out.includes('--ignore-files'), 'must honor .gitignore');
-  assert.ok(out.includes('-l') && out.includes('--hidden'));
-  // The empty pattern must be present as its own argv element, before the paths:
-  // it is what makes every (non-empty) file "match" and therefore list.
-  assert.strictEqual(out[out.length - 2], '');
+  assert.ok(out.includes('-L') && out.includes('--hidden'));
+  assert.strictEqual(out[out.length - 2], '$^');
   assert.strictEqual(out[out.length - 1], '/repo');
+});
+
+// THE INSTRUMENT for the -L trick. Listing via "files WITHOUT a match" depends on
+// `$^` never matching — end-of-line immediately followed by start-of-line. That is
+// engine BEHAVIOUR, not a guarantee: on a ugrep that matched it, -L would list
+// NOTHING and every file-discovery call would silently return empty, which is
+// worse than the zero-length omission this replaced. So drive the real host ugrep
+// against a fixture with one of each kind of file and assert the exact set.
+//
+// If this fails on some platform's ugrep, the translation is wrong THERE and the
+// fix is a different never-matching construct — not relaxing this assertion.
+test('rg --files: ugrep branch lists empty/binary/ignored/hidden exactly', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-ugrep-sem-'));
+  fs.mkdirSync(path.join(dir, 'sub'));
+  fs.writeFileSync(path.join(dir, 'empty.txt'), '');                 // MUST be listed
+  fs.writeFileSync(path.join(dir, 'normal.txt'), 'hello\n');         // MUST be listed
+  fs.writeFileSync(path.join(dir, 'sub', 'deep.txt'), 'y\n');        // MUST be listed
+  fs.writeFileSync(path.join(dir, 'bin.dat'), Buffer.from([0, 1, 65, 0]));  // MUST be listed
+  fs.writeFileSync(path.join(dir, '.gitignore'), 'ignored.txt\n');   // hidden -> omitted
+  fs.writeFileSync(path.join(dir, 'ignored.txt'), 'z\n');            // gitignored -> omitted
+  fs.writeFileSync(path.join(dir, 'sub', '.hidden'), 'x\n');         // hidden -> omitted
+
+  const argv = rgFilesToListing(['--files', dir]);   // no --hidden: dotfiles excluded
+  if (!argv || !argv[0].endsWith('ugrep')) { fs.rmSync(dir, { recursive: true, force: true }); return; }
+  const r = require('node:child_process').spawnSync(argv[0], argv.slice(1), { encoding: 'utf8' });
+  const got = r.stdout.split('\n').filter(Boolean)
+    .map((f) => path.relative(dir, f)).sort();
+  assert.deepStrictEqual(got, ['bin.dat', 'empty.txt', 'normal.txt', 'sub/deep.txt'],
+    'ugrep listing semantics differ on this host — see the $^ note in bun-shim');
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('rg --files: an untranslatable flag is refused, not silently mistranslated', () => {

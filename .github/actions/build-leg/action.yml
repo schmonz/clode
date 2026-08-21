@@ -962,6 +962,14 @@ runs:
         # Hermetic: a local mock server, no network and no credentials. Asserts on
         # what ARRIVED, because the SSE failure was invisible from the client side.
         node scripts/mcp-transport-probe.mjs "$RUNNER_TEMP/quaude-smoke" --transport=sse
+        # rg usage, on the same binary. We translate rg to portable applets ON
+        # PURPOSE (rg is Rust and cannot exist everywhere quaude does; ugrep and
+        # bfs can), and that bargain holds only while we can translate what
+        # upstream actually invokes — which upstream can change in any release,
+        # with no change on our side. A call we cannot translate fails here; a
+        # call that merely CHANGED fails against the recorded inventory, because
+        # that one still "works" while quietly meaning something else.
+        node scripts/rg-inventory.mjs "$RUNNER_TEMP/quaude-smoke"
         rm -f "$RUNNER_TEMP/quaude-smoke"   # quaude is derived work: ephemeral, never leaves the runner
 
     - name: Attest build provenance

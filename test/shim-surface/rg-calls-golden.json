@@ -1,0 +1,5 @@
+[
+  "rg --files --hidden --no-ignore --max-depth 4 --glob .orphaned_at <PATH>",
+  "rg --files --hidden <PATH>",
+  "rg --version"
+]
