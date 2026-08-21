@@ -458,8 +458,17 @@ test('zlib.constants: table matches host node; compression API present', (t) => 
   if (skipUnlessTjs(t)) return;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-zlib-'));
   const f = path.join(dir, 'zlib.cjs');
+  // Stringify non-finite numbers explicitly. Comparing both sides through plain
+  // JSON made this assertion BLIND to the one value that was actually wrong:
+  // node's Z_MAX_CHUNK is Infinity, JSON turns that into null, and the shim's
+  // table — itself snapshotted through JSON — had literally stored null. Both
+  // sides serialized to null and the row passed while the surfaces differed
+  // (number vs object). A fidelity check routed through a lossy encoding cannot
+  // see what the encoding loses.
   fs.writeFileSync(f, `const z = require('zlib');
-console.log(JSON.stringify({
+const enc = (o) => JSON.stringify(o, (k, v) =>
+  typeof v === 'number' && !Number.isFinite(v) ? '#nonfinite:' + String(v) : v);
+console.log(enc({
   constants: z.constants,
   createGunzip: typeof z.createGunzip,
   gunzipSync: typeof z.gunzipSync,
