@@ -30,6 +30,14 @@ function runEntry(args, extraEnv) {
   });
 }
 
+// A stand-in engine must look like an engine. clode's build refuses a template
+// that cannot report its own fs/os constants, because fusing one yields a quaude
+// that dies on first require('fs') on the target — so these fixtures carry the
+// same ABI marker a real engine does. Each test below is about a DIFFERENT
+// failure; without this they would all just trip the engine gate first, which
+// would say nothing about the thing each one is checking.
+const FAKE_TJS = '#!/bin/sh\n# clode-constants-abi:1\nexit 0\n';
+
 test('clode build: unknown argument fails loudly before any work', () => {
   const r = runEntry(['build', '--frobnicate']);
   assert.strictEqual(r.status, 1);
@@ -57,11 +65,37 @@ test('clode build <bad arg>: does not fire the watch trigger (a rejected build m
 // place it matters). This build fails further downstream (no resolvable
 // provider), but argv itself is valid, so the watch trigger must have already
 // fired by the time it gets there.
+// The gate that turns a silent target-side death into a build-time refusal.
+//
+// Published engine templates built before 2026-08-21 cannot report their own
+// fs/os constants, and the shim refuses to guess them (it used to, and the
+// guesses were wrong on every BSD leg). Fusing such an engine yields a quaude
+// that dies on first require('fs') — on the TARGET, long after the build host
+// declared success. That is exactly how a DOA Linux binary shipped.
+test('clode build: an engine predating the constants ABI is refused, with the remedy', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-abi-'));
+  const oldTjs = path.join(home, 'tjs');
+  // Byte-identical to FAKE_TJS except for the marker — so this pins the GATE,
+  // not some incidental difference between the two fixtures.
+  fs.writeFileSync(oldTjs, '#!/bin/sh\nexit 0\n');
+  const out = path.join(home, 'quaude-out');
+  const r = runEntry(['build', '--out', out], {
+    HOME: home,
+    CLODE_STATE_ROOT: home,
+    CLODE_TJS: oldTjs,
+  });
+  assert.notStrictEqual(r.status, 0, 'a stale engine must not build');
+  assert.match(r.stderr, /predates the constants ABI/);
+  assert.match(r.stderr, /scripts\/build-tjs\.mjs|CLODE_TARGET_TEMPLATE/,
+    'the refusal must name the remedy, not just the problem');
+  assert.ok(!fs.existsSync(out), 'no binary may be produced from a refused engine');
+});
+
 test('clode build: a valid build still fires the watch trigger', () => {
   const watchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-watch-'));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-validwatch-'));
   const fakeTjs = path.join(home, 'tjs');
-  fs.writeFileSync(fakeTjs, '#!/bin/sh\nexit 0\n');
+  fs.writeFileSync(fakeTjs, FAKE_TJS);
   const r = runEntry(['build'], {
     HOME: home,
     CLODE_STATE_ROOT: home,
@@ -102,7 +136,7 @@ test('clode build --naude: no binary fails loudly, prefixed for the naude target
 test('clode build --self: missing esbuilt bundle fails loudly and names the fix', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-self-'));
   const fakeTjs = path.join(home, 'tjs');
-  fs.writeFileSync(fakeTjs, '#!/bin/sh\nexit 0\n');
+  fs.writeFileSync(fakeTjs, FAKE_TJS);
   const r = runEntry(['build', '--self'], {
     CLODE_TJS: fakeTjs,
     CLODE_MAIN_BUNDLE: '/nonexistent/clode-main.bundle.cjs',
@@ -120,7 +154,7 @@ test('clode build --self: missing esbuilt bundle fails loudly and names the fix'
 test('clode build --self: stale esbuilt bundle fails loud and names the fix', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-stale-'));
   const fakeTjs = path.join(home, 'tjs');
-  fs.writeFileSync(fakeTjs, '#!/bin/sh\nexit 0\n');
+  fs.writeFileSync(fakeTjs, FAKE_TJS);
   const bundle = path.join(home, 'clode-main.bundle.cjs');
   fs.writeFileSync(bundle, '// stale stand-in\n');
   // Pin the bundle's mtime to well before any real libexec source, so the
@@ -139,7 +173,7 @@ test('clode build --self: stale esbuilt bundle fails loud and names the fix', ()
 test('clode build --self: fresh esbuilt bundle passes the staleness gate', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-fresh-'));
   const fakeTjs = path.join(home, 'tjs');
-  fs.writeFileSync(fakeTjs, '#!/bin/sh\nexit 0\n');
+  fs.writeFileSync(fakeTjs, FAKE_TJS);
   const bundle = path.join(home, 'clode-main.bundle.cjs');
   fs.writeFileSync(bundle, '// fresh stand-in\n');
   // Pin the bundle's mtime into the future so it postdates every real libexec
@@ -172,7 +206,7 @@ test('clode build: no resolvable provider fails loudly (after the template gate)
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-nohome-'));
   // A real file suffices for the template existence gate; resolution then fails.
   const fakeTjs = path.join(home, 'tjs');
-  fs.writeFileSync(fakeTjs, '#!/bin/sh\nexit 0\n');
+  fs.writeFileSync(fakeTjs, FAKE_TJS);
   const r = runEntry(['build'], {
     HOME: home,
     CLODE_TJS: fakeTjs,

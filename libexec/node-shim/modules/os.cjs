@@ -13,100 +13,14 @@
 // length > 1 so a value of exactly "/" is left as "/" (host node's
 // os.tmpdir() does the same length check — an unconditional strip would
 // turn "/" into ""). Pinned by test/node-shim-path.test.cjs (TMPDIR=/ row).
-// os.constants.signals (Task 4 wall): the -p boot's `human-signals` dependency
-// destructures `os.constants.signals[NAME]` for every signal it enumerates —
-// os.constants and its .signals map must be real objects. Characterized by
-// test/node-shim-core.test.cjs (os.constants.signals row).
+// os.constants comes from the ENGINE, read from the headers it was compiled
+// against — see internal/engine-constants.cjs for why there is no fallback table.
 //
-// DIVERGENCE: this is the DARWIN signal-number table (byte-identical to host
-// node's os.constants.signals on darwin — the row asserts that). The numbers
-// are platform-specific: Linux assigns several signals different numbers
-// (e.g. SIGCHLD/SIGSTOP/SIGUSR1). We build/target darwin-arm64 and run on this
-// darwin host, so the darwin table is correct here; wire a per-platform table
-// (or read tjs signal constants, if a future tjs exposes them) when a Linux
-// boot is actually driven. Only .signals is populated — the other host-node
-// os.constants groups (errno/priority/dlopen/UV_*) are not read on the -p path;
-// add them test-first if a later boot destructures them.
-const SIGNALS_DARWIN = {
-  SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGILL: 4, SIGTRAP: 5, SIGABRT: 6,
-  SIGIOT: 6, SIGBUS: 10, SIGFPE: 8, SIGKILL: 9, SIGUSR1: 30, SIGSEGV: 11,
-  SIGUSR2: 31, SIGPIPE: 13, SIGALRM: 14, SIGTERM: 15, SIGCHLD: 20, SIGCONT: 19,
-  SIGSTOP: 17, SIGTSTP: 18, SIGTTIN: 21, SIGTTOU: 22, SIGURG: 16, SIGXCPU: 24,
-  SIGXFSZ: 25, SIGVTALRM: 26, SIGPROF: 27, SIGWINCH: 28, SIGIO: 23, SIGINFO: 29,
-  SIGSYS: 12,
-};
-
-// os.constants.signals must deep-equal host node's ON THIS PLATFORM (node-shim-core).
-// The signals patch (txiki-signals-expose.patch) now builds globalThis.__tjs_signals
-// EXACTLY like node's node_constants.cc — a fixed signal-name list #ifdef-guarded
-// against this engine's own <signal.h> — so it is byte-identical to node's table on
-// every platform (aliases like SIGIOT≡SIGABRT included, no foreign-platform signals,
-// correct per-OS numbers). Use it directly; SIGNALS_DARWIN is only a fallback for an
-// OLD engine built before that patch (its number-loop map dropped aliases and was
-// darwin-shaped — the latent per-platform bugbear this replaces).
-const _tjsSig = globalThis.__tjs_signals && Object.keys(globalThis.__tjs_signals).length
-  ? globalThis.__tjs_signals : null;
-const SIGNALS = _tjsSig || SIGNALS_DARWIN;
-
-// os.constants.errno (wall, 2.1.238): the bundle evaluates
-//     new Map(Object.entries(require("os").constants.errno))
-// at module init. errno was absent here, so Object.entries(undefined) threw and
-// the boot died — every quaude built against 2.1.238 was DOA. (The comment above
-// predicted this exactly: "add them test-first if a later boot destructures them".)
-//
-// Like signals, the NAME set is fixed but the VALUES are platform-specific: measured
-// against real node, 47 of 79 differ between darwin and Linux, 14 between darwin and
-// NetBSD. So the ENGINE exposes its own <errno.h> as globalThis.__tjs_errno
-// (txiki-errno-expose.patch) and that is authoritative — exact on every target,
-// including ones nobody has hand-tabulated.
-//
-// The tables below are ONLY the fallback for an engine built before that patch —
-// which today means every PUBLISHED template, so this fallback is what actually
-// keeps  working until templates are rebuilt. Stored as a darwin base
-// plus explicit per-platform deltas, each value dumped from real node ON that
-// platform (darwin arm64 host; linux via node:24-alpine; netbsd evbarm guest) on
-// 2026-08-21. An UNLISTED platform falls back to the darwin base and will be wrong
-// where it differs — test/node-shim-core.test.cjs asserts deep-equality with host
-// node, so that shows up as a failure on the platform in question rather than as a
-// silent mistranslation. The engine patch is what removes the guesswork; adding a
-// delta here is the stopgap.
-const ERRNO_DARWIN = {
-  E2BIG: 7, EACCES: 13, EADDRINUSE: 48, EADDRNOTAVAIL: 49, EAFNOSUPPORT: 47, EAGAIN: 35,
-  EALREADY: 37, EBADF: 9, EBADMSG: 94, EBUSY: 16, ECANCELED: 89, ECHILD: 10, ECONNABORTED: 53,
-  ECONNREFUSED: 61, ECONNRESET: 54, EDEADLK: 11, EDESTADDRREQ: 39, EDOM: 33, EDQUOT: 69, EEXIST:
-  17, EFAULT: 14, EFBIG: 27, EHOSTUNREACH: 65, EIDRM: 90, EILSEQ: 92, EINPROGRESS: 36, EINTR: 4,
-  EINVAL: 22, EIO: 5, EISCONN: 56, EISDIR: 21, ELOOP: 62, EMFILE: 24, EMLINK: 31, EMSGSIZE: 40,
-  EMULTIHOP: 95, ENAMETOOLONG: 63, ENETDOWN: 50, ENETRESET: 52, ENETUNREACH: 51, ENFILE: 23,
-  ENOBUFS: 55, ENODATA: 96, ENODEV: 19, ENOENT: 2, ENOEXEC: 8, ENOLCK: 77, ENOLINK: 97, ENOMEM:
-  12, ENOMSG: 91, ENOPROTOOPT: 42, ENOSPC: 28, ENOSR: 98, ENOSTR: 99, ENOSYS: 78, ENOTCONN: 57,
-  ENOTDIR: 20, ENOTEMPTY: 66, ENOTSOCK: 38, ENOTSUP: 45, ENOTTY: 25, ENXIO: 6, EOPNOTSUPP: 102,
-  EOVERFLOW: 84, EPERM: 1, EPIPE: 32, EPROTO: 100, EPROTONOSUPPORT: 43, EPROTOTYPE: 41, ERANGE:
-  34, EROFS: 30, ESPIPE: 29, ESRCH: 3, ESTALE: 70, ETIME: 101, ETIMEDOUT: 60, ETXTBSY: 26,
-  EWOULDBLOCK: 35, EXDEV: 18
-};
-const ERRNO_DELTA = {
-  linux: {
-  EADDRINUSE: 98, EADDRNOTAVAIL: 99, EAFNOSUPPORT: 97, EAGAIN: 11, EALREADY: 114, EBADMSG: 74,
-    ECANCELED: 125, ECONNABORTED: 103, ECONNREFUSED: 111, ECONNRESET: 104, EDEADLK: 35,
-    EDESTADDRREQ: 89, EDQUOT: 122, EHOSTUNREACH: 113, EIDRM: 43, EILSEQ: 84, EINPROGRESS: 115,
-    EISCONN: 106, ELOOP: 40, EMSGSIZE: 90, EMULTIHOP: 72, ENAMETOOLONG: 36, ENETDOWN: 100,
-    ENETRESET: 102, ENETUNREACH: 101, ENOBUFS: 105, ENODATA: 61, ENOLCK: 37, ENOLINK: 67, ENOMSG:
-    42, ENOPROTOOPT: 92, ENOSR: 63, ENOSTR: 60, ENOSYS: 38, ENOTCONN: 107, ENOTEMPTY: 39,
-    ENOTSOCK: 88, ENOTSUP: 95, EOPNOTSUPP: 95, EOVERFLOW: 75, EPROTO: 71, EPROTONOSUPPORT: 93,
-    EPROTOTYPE: 91, ESTALE: 116, ETIME: 62, ETIMEDOUT: 110, EWOULDBLOCK: 11
-  },
-  netbsd: {
-  EBADMSG: 88, ECANCELED: 87, EIDRM: 82, EILSEQ: 85, EMULTIHOP: 94, ENODATA: 89, ENOLINK: 95,
-    ENOMSG: 83, ENOSR: 90, ENOSTR: 91, ENOTSUP: 86, EOPNOTSUPP: 45, EPROTO: 96, ETIME: 92
-  },
-};
-function buildErrno() {
-  const fromEngine = globalThis.__tjs_errno;
-  if (fromEngine && Object.keys(fromEngine).length) return fromEngine;
-  const delta = ERRNO_DELTA[process.platform];
-  return delta ? { ...ERRNO_DARWIN, ...delta } : { ...ERRNO_DARWIN };
-}
-const ERRNO = buildErrno();
+// What used to be here: SIGNALS_DARWIN, a hand-written darwin signal table with a
+// comment conceding it was wrong on Linux, and (added the same day this was
+// replaced) a hand-written errno base plus per-platform deltas. Both were guesses
+// about platforms nobody was standing on. The engine knows; ask it.
+const EC = require('./../internal/engine-constants.cjs');
 
 // process.platform -> node's os.type() spelling (uname -s). One case per
 // release-matrix identity; unknown values pass through untouched.
@@ -176,7 +90,13 @@ module.exports = {
   availableParallelism: () => ((tjs.system && tjs.system.cpus && tjs.system.cpus.length) || 1),
   loadavg: () => (tjs.system && tjs.system.loadAvg) || [0, 0, 0],
   uptime: () => (tjs.system && tjs.system.uptime) || 0,
-  constants: { signals: SIGNALS, errno: ERRNO },
+  constants: {
+    signals: EC.signals,
+    errno: EC.errno,
+    dlopen: EC.dlopen,
+    priority: EC.priority,
+    UV_UDP_REUSEADDR: EC.UV_UDP_REUSEADDR,
+  },
   // os.userInfo() (Task 5 fix, adjacent to process.getuid): was fabricating
   // from tjs.env.USER and omitting uid/gid/shell entirely — Node's real
   // shape is {username, uid, gid, shell, homedir}. tjs.system.userInfo (the

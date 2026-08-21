@@ -49,9 +49,27 @@ function makeFSS({ winSemantics }) {
 
 // Load the real fs.cjs in an isolated context with mocked platform + FSS.
 function loadShim({ win, fss }) {
+  // fs.cjs takes its constants from the ENGINE (internal/engine-constants.cjs),
+  // which refuses to guess and therefore refuses to load outside one. This sandbox
+  // already stands in for the engine for __tjs_fs_sync; it stands in here too,
+  // handing over host node's real tables. These tests exercise rename semantics,
+  // not flag translation, so the host's values are both sufficient and honest —
+  // and fabricating a table here rather than in the shim is the point: the guess
+  // lives in the test, where being wrong fails a test instead of shipping.
+  const engineConstants = {
+    REQUIRED_ABI: 1,
+    fs: require('node:fs').constants,
+    signals: require('node:os').constants.signals,
+    errno: require('node:os').constants.errno,
+    dlopen: require('node:os').constants.dlopen,
+    priority: require('node:os').constants.priority,
+    UV_UDP_REUSEADDR: require('node:os').constants.UV_UDP_REUSEADDR,
+  };
+  const sandboxRequire = (id) =>
+    (String(id).includes('internal/engine-constants.cjs') ? engineConstants : require(id));
   const sandbox = {
     module: { exports: {} }, exports: {},
-    require, console,
+    require: sandboxRequire, console,
     TextDecoder, TextEncoder, Buffer,
     __tjs_fs_sync: fss,
     // _isWin reads navigator.platform first, then falls back to process.platform.

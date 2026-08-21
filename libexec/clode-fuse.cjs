@@ -1211,6 +1211,50 @@ async function clodeBuild(args, opts) {
     }
     const baseTemplate = crossTarget || template;
 
+    // ENGINE ABI GATE. The shim reads fs/os constants from the engine and refuses
+    // to guess (libexec/node-shim/internal/engine-constants.cjs). An engine that
+    // predates that patch cannot supply them, so fusing one produces a quaude that
+    // dies on first require('fs') — on the TARGET, long after this host called the
+    // build a success. Check here instead, at the one point every fuse passes
+    // through, host and cross alike.
+    //
+    // This is also the tripwire the stale-template problem always needed: the
+    // published templates shipped a Linux quaude that was DOA, and nothing objected
+    // at build time. Sniffing the binary was rejected before because probing for
+    // "uid"/"gid" gave false confidence (libc contains those strings anyway) — so
+    // the engine now carries a token that CANNOT appear by accident, which is what
+    // makes reading it honest for a foreign binary this host cannot execute.
+    {
+      const required = (() => {
+        // One source of truth: the number the shim itself enforces.
+        const shimSrc = fs.readFileSync(
+          path.join(__dirname, 'node-shim/internal/engine-constants.cjs'), 'utf8');
+        const m = shimSrc.match(/const REQUIRED_ABI = (\d+);/);
+        if (!m) throw new Error('cannot read REQUIRED_ABI from node-shim/internal/engine-constants.cjs');
+        return Number(m[1]);
+      })();
+      const buf = fs.readFileSync(baseTemplate);
+      const found = [];
+      const needle = Buffer.from('clode-constants-abi:');
+      for (let i = buf.indexOf(needle); i !== -1; i = buf.indexOf(needle, i + 1)) {
+        const n = parseInt(buf.subarray(i + needle.length, i + needle.length + 8).toString('latin1'), 10);
+        if (Number.isFinite(n)) found.push(n);
+      }
+      const abi = found.length ? Math.max(...found) : null;
+      if (abi === null) {
+        return fail(
+          `build: engine '${path.basename(baseTemplate)}' predates the constants ABI and cannot report its own `
+          + `fs/os constants. A quaude fused from it dies on first require('fs') ON THE TARGET. `
+          + `Rebuild it (node scripts/build-tjs.mjs) or point CLODE_TARGET_TEMPLATE at a current engine. `
+          + `Published templates built before 2026-08-21 are all in this state.`);
+      }
+      if (abi < required) {
+        return fail(
+          `build: engine '${path.basename(baseTemplate)}' reports constants ABI ${abi}, but this clode requires `
+          + `${required}. Rebuild the engine from current sources.`);
+      }
+    }
+
     // -- payload staging: the upstream Claude Code bundle (default), or the
     // esbuilt clode-main bundle (--self).
     spin.phase('Extracting bundle');

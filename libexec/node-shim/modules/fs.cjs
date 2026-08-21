@@ -35,6 +35,7 @@ const te = new TextEncoder();
 // existed) the call threw "not a function". The values must be self-consistent
 // with promises.open's bit interpretation below; darwin/linux match the real
 // kernel values so a consumer inspecting a specific bit reads node's answer.
+const EC_FS = require('./../internal/engine-constants.cjs').fs;
 const _isDarwin = (() => {
   const np = (typeof navigator !== 'undefined' && navigator.platform) || '';
   return /^Mac/.test(np);
@@ -78,14 +79,16 @@ function renameReplace(a, b) {
     }
   }
 }
-const O = _isDarwin
-  ? { O_RDONLY: 0x0000, O_WRONLY: 0x0001, O_RDWR: 0x0002, O_CREAT: 0x0200,
-      O_EXCL: 0x0800, O_TRUNC: 0x0400, O_APPEND: 0x0008, O_NOFOLLOW: 0x0100,
-      O_NONBLOCK: 0x0004, O_SYNC: 0x0080, O_DIRECTORY: 0x100000, O_CLOEXEC: 0x1000000 }
-  : { O_RDONLY: 0, O_WRONLY: 1, O_RDWR: 2, O_CREAT: 0o100, O_EXCL: 0o200,
-      O_TRUNC: 0o1000, O_APPEND: 0o2000, O_NOFOLLOW: 0o400000, O_NONBLOCK: 0o4000,
-      O_SYNC: 0o4010000, O_DIRECTORY: 0o200000, O_CLOEXEC: 0o2000000 };
-const constants = { F_OK: 0, X_OK: 1, W_OK: 2, R_OK: 4, ...O };
+// fs.constants comes from the ENGINE (internal/engine-constants.cjs).
+//
+// What used to be here: `const O = _isDarwin ? {darwin values} : {linux values}`,
+// which handed Linux's numbers to every target that was neither. Measured against
+// real node on the NetBSD guest, 8 of 11 were wrong — O_APPEND 1024 vs 8,
+// O_NONBLOCK 2048 vs 4, O_CREAT 64 vs 512 — and these feed flagsToMode() below,
+// so opens were being translated with another platform's bits. Nothing caught it
+// because a wrong constant does not throw.
+const constants = EC_FS;
+const O = constants;
 
 // Translate an open() flags argument (numeric O_* bitmask OR a node string like
 // 'r'/'w'/'a'/'r+'/'w+') into the string flag FSS.open understands. FSS.open
