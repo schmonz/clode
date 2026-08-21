@@ -408,6 +408,48 @@ console.log(JSON.stringify(os.constants.signals));`);
   assert.deepStrictEqual(JSON.parse(r.stdout.trim()), JSON.parse(nodeOut));
 });
 
+// Wall (2.1.238): the bundle now does `new Map(Object.entries(os.constants.errno))`
+// at module init. os.constants carried ONLY .signals, so errno was undefined and
+// Object.entries(undefined) threw "Cannot convert undefined or null to object" —
+// an unhandledRejection that killed the boot outright. Every build against 2.1.238
+// produced a quaude that could not start; the build smoke caught it as
+// "did not complete the mock round-trip".
+//
+// Like signals, this table is PER-PLATFORM: the name set is fixed (node builds it
+// from a static list) but 47 of the 79 VALUES differ across darwin/linux/netbsd
+// (EAGAIN is 35 on darwin/netbsd and 11 on linux). So a single hardcoded table is
+// wrong on most targets — hence the engine exposes __tjs_errno from its own
+// <errno.h>, exactly as __tjs_signals does. Asserting deep-equality against host
+// node keeps that honest on whatever platform this suite runs.
+test('os.constants.errno: table matches host node', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-oserrno-'));
+  const f = path.join(dir, 'oserrno.cjs');
+  fs.writeFileSync(f, `const os = require('node:os');
+console.log(JSON.stringify(os.constants.errno));`);
+  const nodeOut = require('node:child_process')
+    .execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim();
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), JSON.parse(nodeOut));
+});
+
+// The exact expression the 2.1.238 bundle evaluates at module init. Guards the
+// crash shape itself, not just the table: this threw before the fix.
+test('os.constants.errno: Object.entries() round-trips (the 2.1.238 crash)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-oserrno2-'));
+  const f = path.join(dir, 'oserrno2.cjs');
+  fs.writeFileSync(f, `const os = require('os');
+const m = new Map(Object.entries(os.constants.errno));
+console.log(JSON.stringify({ size: m.size > 0, enoent: m.get('ENOENT') }));`);
+  const nodeOut = require('node:child_process')
+    .execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim();
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), JSON.parse(nodeOut));
+});
+
 // Wall (Task 4): several -p transport modules require('zlib') and read
 // `zlib.constants` at init (destructuring Z_*/BROTLI_* values). The constants
 // table must deep-equal host node's; the compression API is present (function)

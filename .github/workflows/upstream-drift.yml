@@ -56,3 +56,33 @@ jobs:
           if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found under @anthropic-ai/claude-code" >&2; exit 1; fi
           echo "provider: $PROV"
           node scripts/upstream-drift-check.mjs "$PROV"
+
+  # THE SECOND DAILY QUESTION: does a quaude built from the newest bundle still BOOT?
+  #
+  # The anchors job above asks whether our hook sites still match. It cannot see the
+  # other way upstream breaks us: the bundle starts READING a node API the shim does
+  # not implement. 2.1.238 began evaluating
+  #     new Map(Object.entries(require("os").constants.errno))
+  # at module init; os.constants carried only .signals, so Object.entries(undefined)
+  # threw and EVERY quaude built against 2.1.238 was dead on arrival. The anchors
+  # check was green throughout — nothing was mis-anchored, the shim was just missing
+  # a table.
+  #
+  # Nothing ran the build smoke on a schedule, so the only way to find this was for a
+  # human to dispatch a build; it surfaced by accident during unrelated pack work,
+  # and presented as CI infrastructure noise. One cheap leg daily converts that into
+  # a dated, attributed red light within a day of an upstream release.
+  #
+  # linux-x64-musl deliberately: an alpine container, no qemu, and the engine comes
+  # from the same PINS+patches cache the push legs use, so the marginal cost is the
+  # fuse and the smoke — not an engine build.
+  #
+  # Red HERE means the newest bundle no longer boots under the shim. Same attribution
+  # doctrine as the anchors job: it is upstream that moved, not the last commit.
+  boots:
+    uses: ./.github/workflows/tjs-legs.yml
+    permissions:
+      contents: read
+    with:
+      tier: release
+      only: linux-x64-musl

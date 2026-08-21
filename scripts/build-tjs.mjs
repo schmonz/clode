@@ -303,6 +303,7 @@ const TXIKI_PATCH_ORDER = [
   'txiki-unhandledrejection-no-abort.patch',
   'txiki-vm-context.patch',                   // registers after sync-fs + sync-spawn: new mod_vm.c + shared-file wiring
   'txiki-signals-expose.patch',               // expose the OS-derived signal name->number map as globalThis.__tjs_signals (signals.c only; order-independent)
+  'txiki-errno-expose.patch',                 // expose the OS-derived errno name->number map as globalThis.__tjs_errno (signals.c; MUST follow txiki-signals-expose — it anchors on that patch's clode_global)
   'txiki-readdir-dtype-fallback.patch',       // lstat-resolve UV_DIRENT_UNKNOWN in readDir (NFS/no-d_type filesystems), match node (mod_fs.c only; order-independent)
   'txiki-timer-unref.patch',                  // core.unrefTimer/refTimer (timers.c) + AbortSignal.timeout unrefs its internal timer (abort-controller.js), matching node's Timeout#unref — order-independent
   'txiki-fetch-abort-reason.patch',           // an aborted fetch rejects with the signal's OWN reason (TimeoutError, custom abort reasons) instead of flattening every one to AbortError (fetch.js only; order-independent)

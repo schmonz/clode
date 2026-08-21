@@ -1,0 +1,277 @@
+diff --git a/src/signals.c b/src/signals.c
+index f8077ee..5132eca 100644
+--- a/src/signals.c
++++ b/src/signals.c
+@@ -303,6 +303,272 @@ void tjs__mod_signals_init(JSContext *ctx, JSValue ns) {
+         JS_SetPropertyStr(ctx, clode_sigs, clode_sig_list[clode_k].name, JS_NewInt32(ctx, clode_sig_list[clode_k].num));
+     JSValue clode_global = JS_GetGlobalObject(ctx);
+     JS_DefinePropertyValueStr(ctx, clode_global, "__tjs_signals", clode_sigs, JS_PROP_C_W_E);
++    /* CLODE: expose this engine's OWN errno name->number map as
++     * globalThis.__tjs_errno, the same way __tjs_signals is built above.
++     *
++     * WHY: claude-code 2.1.238 evaluates
++     *     new Map(Object.entries(require("os").constants.errno))
++     * at module init. The node-shim's os.constants carried only .signals, so errno
++     * was undefined, Object.entries(undefined) threw, and the boot died — every
++     * quaude built against 2.1.238 was DOA, caught by the build smoke as "did not
++     * complete the mock round-trip".
++     *
++     * WHY IN C: the errno NAME set is fixed (node builds it from a static list in
++     * node_constants.cc) but the VALUES are platform-specific — measured against
++     * real node, 47 of the 79 differ across darwin/linux/netbsd (EAGAIN is 35 on
++     * darwin and NetBSD, 11 on Linux). A hand-maintained JS table would be wrong on
++     * most targets and would need editing for every new platform. Reading THIS
++     * engine's <errno.h> through #ifdef makes it exact everywhere and
++     * maintenance-free — the same argument that put the signal table here.
++     *
++     * It lives in signals.c because that file is already patched, its init runs
++     * once at startup, and clode_global is already in hand.
++     */
++    static const struct { const char *name; int num; } clode_errno_list[] = {
++#define CLODE_ERR(n) { #n, n }
++#ifdef E2BIG
++        CLODE_ERR(E2BIG),
++#endif
++#ifdef EACCES
++        CLODE_ERR(EACCES),
++#endif
++#ifdef EADDRINUSE
++        CLODE_ERR(EADDRINUSE),
++#endif
++#ifdef EADDRNOTAVAIL
++        CLODE_ERR(EADDRNOTAVAIL),
++#endif
++#ifdef EAFNOSUPPORT
++        CLODE_ERR(EAFNOSUPPORT),
++#endif
++#ifdef EAGAIN
++        CLODE_ERR(EAGAIN),
++#endif
++#ifdef EALREADY
++        CLODE_ERR(EALREADY),
++#endif
++#ifdef EBADF
++        CLODE_ERR(EBADF),
++#endif
++#ifdef EBADMSG
++        CLODE_ERR(EBADMSG),
++#endif
++#ifdef EBUSY
++        CLODE_ERR(EBUSY),
++#endif
++#ifdef ECANCELED
++        CLODE_ERR(ECANCELED),
++#endif
++#ifdef ECHILD
++        CLODE_ERR(ECHILD),
++#endif
++#ifdef ECONNABORTED
++        CLODE_ERR(ECONNABORTED),
++#endif
++#ifdef ECONNREFUSED
++        CLODE_ERR(ECONNREFUSED),
++#endif
++#ifdef ECONNRESET
++        CLODE_ERR(ECONNRESET),
++#endif
++#ifdef EDEADLK
++        CLODE_ERR(EDEADLK),
++#endif
++#ifdef EDESTADDRREQ
++        CLODE_ERR(EDESTADDRREQ),
++#endif
++#ifdef EDOM
++        CLODE_ERR(EDOM),
++#endif
++#ifdef EDQUOT
++        CLODE_ERR(EDQUOT),
++#endif
++#ifdef EEXIST
++        CLODE_ERR(EEXIST),
++#endif
++#ifdef EFAULT
++        CLODE_ERR(EFAULT),
++#endif
++#ifdef EFBIG
++        CLODE_ERR(EFBIG),
++#endif
++#ifdef EHOSTUNREACH
++        CLODE_ERR(EHOSTUNREACH),
++#endif
++#ifdef EIDRM
++        CLODE_ERR(EIDRM),
++#endif
++#ifdef EILSEQ
++        CLODE_ERR(EILSEQ),
++#endif
++#ifdef EINPROGRESS
++        CLODE_ERR(EINPROGRESS),
++#endif
++#ifdef EINTR
++        CLODE_ERR(EINTR),
++#endif
++#ifdef EINVAL
++        CLODE_ERR(EINVAL),
++#endif
++#ifdef EIO
++        CLODE_ERR(EIO),
++#endif
++#ifdef EISCONN
++        CLODE_ERR(EISCONN),
++#endif
++#ifdef EISDIR
++        CLODE_ERR(EISDIR),
++#endif
++#ifdef ELOOP
++        CLODE_ERR(ELOOP),
++#endif
++#ifdef EMFILE
++        CLODE_ERR(EMFILE),
++#endif
++#ifdef EMLINK
++        CLODE_ERR(EMLINK),
++#endif
++#ifdef EMSGSIZE
++        CLODE_ERR(EMSGSIZE),
++#endif
++#ifdef EMULTIHOP
++        CLODE_ERR(EMULTIHOP),
++#endif
++#ifdef ENAMETOOLONG
++        CLODE_ERR(ENAMETOOLONG),
++#endif
++#ifdef ENETDOWN
++        CLODE_ERR(ENETDOWN),
++#endif
++#ifdef ENETRESET
++        CLODE_ERR(ENETRESET),
++#endif
++#ifdef ENETUNREACH
++        CLODE_ERR(ENETUNREACH),
++#endif
++#ifdef ENFILE
++        CLODE_ERR(ENFILE),
++#endif
++#ifdef ENOBUFS
++        CLODE_ERR(ENOBUFS),
++#endif
++#ifdef ENODATA
++        CLODE_ERR(ENODATA),
++#endif
++#ifdef ENODEV
++        CLODE_ERR(ENODEV),
++#endif
++#ifdef ENOENT
++        CLODE_ERR(ENOENT),
++#endif
++#ifdef ENOEXEC
++        CLODE_ERR(ENOEXEC),
++#endif
++#ifdef ENOLCK
++        CLODE_ERR(ENOLCK),
++#endif
++#ifdef ENOLINK
++        CLODE_ERR(ENOLINK),
++#endif
++#ifdef ENOMEM
++        CLODE_ERR(ENOMEM),
++#endif
++#ifdef ENOMSG
++        CLODE_ERR(ENOMSG),
++#endif
++#ifdef ENOPROTOOPT
++        CLODE_ERR(ENOPROTOOPT),
++#endif
++#ifdef ENOSPC
++        CLODE_ERR(ENOSPC),
++#endif
++#ifdef ENOSR
++        CLODE_ERR(ENOSR),
++#endif
++#ifdef ENOSTR
++        CLODE_ERR(ENOSTR),
++#endif
++#ifdef ENOSYS
++        CLODE_ERR(ENOSYS),
++#endif
++#ifdef ENOTCONN
++        CLODE_ERR(ENOTCONN),
++#endif
++#ifdef ENOTDIR
++        CLODE_ERR(ENOTDIR),
++#endif
++#ifdef ENOTEMPTY
++        CLODE_ERR(ENOTEMPTY),
++#endif
++#ifdef ENOTSOCK
++        CLODE_ERR(ENOTSOCK),
++#endif
++#ifdef ENOTSUP
++        CLODE_ERR(ENOTSUP),
++#endif
++#ifdef ENOTTY
++        CLODE_ERR(ENOTTY),
++#endif
++#ifdef ENXIO
++        CLODE_ERR(ENXIO),
++#endif
++#ifdef EOPNOTSUPP
++        CLODE_ERR(EOPNOTSUPP),
++#endif
++#ifdef EOVERFLOW
++        CLODE_ERR(EOVERFLOW),
++#endif
++#ifdef EPERM
++        CLODE_ERR(EPERM),
++#endif
++#ifdef EPIPE
++        CLODE_ERR(EPIPE),
++#endif
++#ifdef EPROTO
++        CLODE_ERR(EPROTO),
++#endif
++#ifdef EPROTONOSUPPORT
++        CLODE_ERR(EPROTONOSUPPORT),
++#endif
++#ifdef EPROTOTYPE
++        CLODE_ERR(EPROTOTYPE),
++#endif
++#ifdef ERANGE
++        CLODE_ERR(ERANGE),
++#endif
++#ifdef EROFS
++        CLODE_ERR(EROFS),
++#endif
++#ifdef ESPIPE
++        CLODE_ERR(ESPIPE),
++#endif
++#ifdef ESRCH
++        CLODE_ERR(ESRCH),
++#endif
++#ifdef ESTALE
++        CLODE_ERR(ESTALE),
++#endif
++#ifdef ETIME
++        CLODE_ERR(ETIME),
++#endif
++#ifdef ETIMEDOUT
++        CLODE_ERR(ETIMEDOUT),
++#endif
++#ifdef ETXTBSY
++        CLODE_ERR(ETXTBSY),
++#endif
++#ifdef EWOULDBLOCK
++        CLODE_ERR(EWOULDBLOCK),
++#endif
++#ifdef EXDEV
++        CLODE_ERR(EXDEV),
++#endif
++#undef CLODE_ERR
++    };
++    JSValue clode_errs = JS_NewObject(ctx);
++    for (size_t clode_e = 0; clode_e < countof(clode_errno_list); clode_e++)
++        JS_SetPropertyStr(ctx, clode_errs, clode_errno_list[clode_e].name, JS_NewInt32(ctx, clode_errno_list[clode_e].num));
++    JS_DefinePropertyValueStr(ctx, clode_global, "__tjs_errno", clode_errs, JS_PROP_C_W_E);
+     JS_FreeValue(ctx, clode_global);
+     JS_SetPropertyStr(ctx, ns, "signals", signals);
+ 
