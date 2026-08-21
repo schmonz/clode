@@ -453,7 +453,36 @@ function evalModule(file, isEntry = false) {
   moduleCache.set(file, module);
   const dir = P.dirname(file);
   const fn = new Function('exports', 'require', 'module', '__filename', '__dirname', src);
-  fn.call(module.exports, module.exports, makeRequire(dir), module, file, dir);
+  try {
+    fn.call(module.exports, module.exports, makeRequire(dir), module, file, dir);
+  } catch (e) {
+    // A module whose evaluation THROWS must not stay cached. node removes it, so a
+    // later require re-executes and throws again; leaving it meant the second
+    // require handed back the half-initialized exports and REPORTED SUCCESS.
+    //
+    // That is worse than the original failure. Code with a try/catch around a
+    // require — which the bundle has in several places — takes the failure path
+    // once and then, on a later require, gets a broken object it believes is good.
+    // It also misleads anything that probes modules in sequence: a probe reported
+    // ws/lib/websocket.js as loading fine immediately after it had thrown, because
+    // ws/lib/stream.js had already required it and left the corpse behind.
+    //
+    // The insert-BEFORE-evaluating above is deliberate and stays: node does the
+    // same so a circular require sees a partial module instead of looping. Only
+    // the throwing path removes the entry.
+    moduleCache.delete(file);
+    // Make the failure observable. A require that fails inside somebody's
+    // try/catch is invisible by construction, so record it: this is the only
+    // signal that a module did not load.
+    (globalThis.__tjs_failed_requires || (globalThis.__tjs_failed_requires = []))
+      .push({ file, message: String(e && e.message || e) });
+    // Same convention as the [wall] lines above: console.error under
+    // CLODE_SHIM_TRACE, best-effort so a broken console cannot mask the throw.
+    if (tjs?.env?.CLODE_SHIM_TRACE) {
+      try { console.error('[require-fail]', file + ': ' + (e && e.message)); } catch { /* */ }
+    }
+    throw e;
+  }
   return module.exports;
 }
 

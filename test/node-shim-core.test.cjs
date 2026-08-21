@@ -511,6 +511,68 @@ console.log(JSON.stringify({
   assert.strictEqual(JSON.parse(nodeOut).typeofModule, 'function');
 });
 
+// JOB ZERO: we have to be able to tell when a module does not load.
+//
+// A module whose evaluation throws was left in the shim's cache, so the SECOND
+// require handed back the exports assigned before the throw and reported success.
+// node removes it, so the retry re-executes and throws again.
+//
+// That is worse than the original failure. Code with a try/catch around a require
+// — which the bundle has in several places — takes the failure path once and then
+// gets a broken object it believes is good. It also misled the investigation that
+// found it: a probe reported ws/lib/websocket.js as loading fine immediately after
+// it had thrown, because ws/lib/stream.js had already required it and left the
+// corpse in the cache.
+//
+// The fixture assigns exports BEFORE throwing on purpose — a cache bug is only
+// visible if there is something plausible to hand back.
+test('a module that throws stays uncached: the second require throws too', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-throwmod-'));
+  const f = path.join(dir, 'probe.cjs');
+  fs.writeFileSync(f, `const p = ${JSON.stringify(path.join(__dirname, 'fixtures/throwing-module.cjs'))};
+const out = [];
+for (const attempt of [1, 2]) {
+  try { const m = require(p); out.push('attempt' + attempt + '=OK(keys:' + Object.keys(m).join(',') + ')'); }
+  catch (e) { out.push('attempt' + attempt + '=THREW(' + e.message + ')'); }
+}
+console.log(JSON.stringify(out));`);
+  const nodeOut = require('node:child_process')
+    .execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim();
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), JSON.parse(nodeOut));
+  // Pre-fix the shim gave ["...THREW...","attempt2=OK(keys:partial)"] — the
+  // partial exports, presented as a successful load.
+  assert.deepStrictEqual(JSON.parse(nodeOut), [
+    'attempt1=THREW(boom during evaluation)',
+    'attempt2=THREW(boom during evaluation)',
+  ]);
+});
+
+// The failure has to be OBSERVABLE, not merely correct: a require that fails
+// inside somebody's try/catch is invisible by construction, so the loader records
+// every one. This is the signal that a module did not load.
+test('a failed require is recorded where something can see it', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-failrec-'));
+  const f = path.join(dir, 'probe.cjs');
+  fs.writeFileSync(f, `const p = ${JSON.stringify(path.join(__dirname, 'fixtures/throwing-module.cjs'))};
+try { require(p); } catch { /* swallowed, exactly like the bundle does */ }
+const failed = globalThis.__tjs_failed_requires || [];
+console.log(JSON.stringify({
+  count: failed.length,
+  endsWith: failed.length ? failed[0].file.endsWith('throwing-module.cjs') : false,
+  message: failed.length ? failed[0].message : null,
+}));`);
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const got = JSON.parse(r.stdout.trim());
+  assert.strictEqual(got.count, 1, 'a swallowed require failure must still be recorded');
+  assert.strictEqual(got.endsWith, true);
+  assert.strictEqual(got.message, 'boom during evaluation');
+});
+
 // Wall (Task 4): several -p transport modules require('zlib') and read
 // `zlib.constants` at init (destructuring Z_*/BROTLI_* values). The constants
 // table must deep-equal host node's; the compression API is present (function)
