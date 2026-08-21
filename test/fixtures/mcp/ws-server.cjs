@@ -1,0 +1,71 @@
+// Minimal RFC6455 server speaking MCP, for measuring the WebSocket transport.
+//
+// Dependency-free ON PURPOSE: `ws` is not installed here, and adding it would
+// make the measurement depend on the very thing being measured. Handshake plus
+// text-frame encode/decode is about sixty lines, which is cheaper than that
+// coupling.
+//
+// Set MCP_MOCK_WIRE to a path to record what actually arrived, so a test can
+// assert on the wire rather than on what a client claims it sent.
+const http = require('node:http');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const GUID = '258EAFA5-E914-47DA-95CA-5AB0DC85B11C';
+
+function decodeFrames(buf, onText) {
+  let off = 0;
+  while (off + 2 <= buf.length) {
+    const b1 = buf[off], b2 = buf[off + 1];
+    const opcode = b1 & 0x0f, masked = (b2 & 0x80) !== 0;
+    let len = b2 & 0x7f, p = off + 2;
+    if (len === 126) { len = buf.readUInt16BE(p); p += 2; }
+    else if (len === 127) { len = Number(buf.readBigUInt64BE(p)); p += 8; }
+    let mask = null;
+    if (masked) { mask = buf.subarray(p, p + 4); p += 4; }
+    if (p + len > buf.length) return off;
+    const payload = Buffer.from(buf.subarray(p, p + len));
+    if (mask) for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i % 4];
+    if (opcode === 0x1) onText(payload.toString('utf8'));
+    off = p + len;
+  }
+  return off;
+}
+function encodeText(s) {
+  const p = Buffer.from(s, 'utf8');
+  if (p.length < 126) return Buffer.concat([Buffer.from([0x81, p.length]), p]);
+  const h = Buffer.alloc(4); h[0] = 0x81; h[1] = 126; h.writeUInt16BE(p.length, 2);
+  return Buffer.concat([h, p]);
+}
+
+const srv = http.createServer((_, res) => { res.writeHead(426); res.end(); });
+srv.on('upgrade', (req, sock) => {
+  process.stderr.write(`<< UPGRADE ${req.url}\n`);
+  if (process.env.MCP_MOCK_WIRE) fs.appendFileSync(process.env.MCP_MOCK_WIRE, `UPGRADE ${req.url}\n`);
+  const key = req.headers['sec-websocket-key'];
+  const accept = crypto.createHash('sha1').update(key + GUID).digest('base64');
+  sock.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n'
+    + 'Connection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n');
+  let acc = Buffer.alloc(0);
+  sock.on('data', (chunk) => {
+    acc = Buffer.concat([acc, chunk]);
+    const used = decodeFrames(acc, (text) => {
+      let msg = {}; try { msg = JSON.parse(text); } catch { /* */ }
+      process.stderr.write(`<< WS method=${msg.method} id=${msg.id}\n`);
+      if (msg.method === 'initialize') {
+        sock.write(encodeText(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: {
+          protocolVersion: '2024-11-05', capabilities: { tools: {} },
+          serverInfo: { name: 'wsprobe', version: '1.0.0' } } })));
+      } else if (msg.method === 'tools/list') {
+        sock.write(encodeText(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { tools: [
+          { name: 'needle', description: 'probe tool', inputSchema: { type: 'object', properties: {} } } ] } })));
+        process.stderr.write('<< SERVED tools/list — MCP OVER WS REACHED TOOL DISCOVERY\n');
+      }
+    });
+    acc = acc.subarray(used);
+  });
+  sock.on('error', () => {});
+});
+srv.listen(0, '127.0.0.1', () => {
+  fs.writeFileSync(process.argv[2], String(srv.address().port));
+  process.stderr.write(`listening ${srv.address().port}\n`);
+});

@@ -1,0 +1,157 @@
+'use strict';
+// The MCP transports, measured — because every one of them was broken silently.
+//
+// Three of the four were found broken this week, each by a different route, and
+// each ONLY because a human happened to drive it:
+//
+//   stdio  the shim never emitted ChildProcess 'spawn'        (fixed 2383de2)
+//   http   fetch(URL object) died before opening a socket     (fixed fc54ae9)
+//   sse    MessageEvent put the whole init dict in .data, so
+//          every JSON-RPC POST went to /[object Object]       (fixed 97f12ea)
+//   ws     never driven at all
+//
+// None of them threw anything a test would have noticed; the failures were wrong
+// SHAPES, not missing functions. So this file exists to make "does transport X
+// work?" a thing CI answers rather than a thing someone remembers to ask.
+//
+// The mock servers live in test/fixtures/mcp/ and are dependency-free on purpose:
+// `ws` is not installed here, and depending on it would make the measurement
+// depend on the thing being measured. They record what actually ARRIVED
+// (MCP_MOCK_WIRE), so assertions are about the wire, not about what a client
+// claims it sent — the SSE bug was invisible from the client side.
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { execFileSync, spawn } = require('node:child_process');
+const { runLoader, skipUnlessTjs, REPO } = require('./node-shim-helper.cjs');
+
+const FIXTURES = path.join(REPO, 'test/fixtures/mcp');
+
+// Start a mock, wait for it to publish its port. Synchronous polling, matching
+// the rest of this suite (an in-process async server has deadlocked node:test
+// here before).
+function startMock(script) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-mock-'));
+  const portFile = path.join(dir, 'port');
+  const wire = path.join(dir, 'wire');
+  fs.writeFileSync(wire, '');
+  const child = spawn(process.execPath, [path.join(FIXTURES, script), portFile], {
+    stdio: 'ignore',
+    env: { ...process.env, MCP_MOCK_WIRE: wire },
+  });
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    try {
+      const p = fs.readFileSync(portFile, 'utf8').trim();
+      if (p) {
+        return {
+          port: Number(p),
+          wire: () => fs.readFileSync(wire, 'utf8'),
+          stop() {
+            try { child.kill('SIGKILL'); } catch { /* */ }
+            fs.rmSync(dir, { recursive: true, force: true });
+          },
+        };
+      }
+    } catch { /* not yet */ }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+  }
+  try { child.kill('SIGKILL'); } catch { /* */ }
+  fs.rmSync(dir, { recursive: true, force: true });
+  return null;
+}
+
+function waitForWire(mock, re, ms = 8000) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (re.test(mock.wire())) return true;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// SSE: the root cause, pinned at the layer it actually broke.
+//
+// The bug was NOT in SSE parsing or URL resolution — both were proven identical
+// to node before it was found. It was MessageEvent: `new MessageEvent(type, init)`
+// takes an init DICTIONARY and .data is init.data, but the polyfill stored the
+// whole dictionary, so the bundle's `new URL(event.data, base)` stringified an
+// object. Pinning the constructor's semantics catches it at the source, and does
+// so in milliseconds without needing a built quaude.
+test('MessageEvent takes an init dict, like node (the MCP-over-SSE root cause)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-msgevt-'));
+  const f = path.join(dir, 'me.cjs');
+  fs.writeFileSync(f, `
+    const full = new MessageEvent('m', { data: '/messages?sessionId=probe', origin: 'http://h', lastEventId: '7' });
+    const bare = new MessageEvent('m');
+    const out = (e) => ({ data: e.data, origin: e.origin, lastEventId: e.lastEventId, ports: e.ports, source: e.source });
+    console.log(JSON.stringify({ full: out(full), bare: out(bare) }));
+  `);
+  const nodeOut = execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim();
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), JSON.parse(nodeOut));
+  // Regression guard in the bug's own terms: .data must be the STRING, never the
+  // dictionary. Pre-fix this was {data,origin,lastEventId} and resolved to
+  // http://h/[object Object].
+  const got = JSON.parse(r.stdout.trim());
+  assert.strictEqual(typeof got.full.data, 'string');
+  assert.strictEqual(new URL(got.full.data, 'http://h').pathname, '/messages');
+});
+
+// ---------------------------------------------------------------------------
+// WebSocket: drive a real connection against a real RFC6455 server and assert on
+// what ARRIVED. The existing ws oracle proves an echo round-trips; this asserts
+// the request line, which an echo test cannot see because servers tolerate it.
+test('WebSocket connects to a real RFC6455 server and sends a well-formed request line', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const mock = startMock('ws-server.cjs');
+  if (!mock) { t.skip('could not start the ws mock'); return; }
+  try {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-ws-'));
+    const f = path.join(dir, 'ws.cjs');
+    fs.writeFileSync(f, `
+      const ws = new WebSocket('ws://127.0.0.1:${mock.port}/');
+      ws.onopen = () => { try { ws.close(); } catch {} };
+      setTimeout(() => {}, 1500);
+    `);
+    runLoader(f, [], { timeout: 15000 });
+    assert.ok(waitForWire(mock, /UPGRADE /), `no upgrade reached the server. wire:\n${mock.wire()}`);
+
+    const observed = (mock.wire().match(/UPGRADE (\S+)/) || [])[1];
+    // KNOWN GAP (2026-08-21): node sends "/" for this URL; the ENGINE's native
+    // WebSocket sends "//". Attributed to the engine by driving `new WebSocket`
+    // under tjs directly — not the bundle, not the shim. Most servers tolerate
+    // the doubled separator, which is exactly why it survived unnoticed.
+    //
+    // Recorded rather than faked: this asserts the CURRENT behaviour so the day
+    // it is fixed, this row fails and tells you to tighten it to '/'. Delete the
+    // gap branch then.
+    assert.ok(observed === '/' || observed === '//', `unexpected request path ${observed}`);
+    if (observed === '/') {
+      assert.fail('the "//" request-path gap is CLOSED — tighten this row to expect "/" exactly');
+    }
+  } finally { mock.stop(); }
+});
+
+// ---------------------------------------------------------------------------
+// The mocks themselves must be trustworthy, or every row above is decoration.
+// A mock that silently fails to record would make the SSE assertion vacuous.
+test('the MCP mocks record what arrived (the instrument is not decoration)', () => {
+  const mock = startMock('sse-server.cjs');
+  assert.ok(mock, 'sse mock did not start');
+  try {
+    execFileSync(process.execPath, ['-e', `
+      const http = require('node:http');
+      const req = http.request({ host: '127.0.0.1', port: ${mock.port}, path: '/messages?sessionId=probe', method: 'POST' },
+        (res) => res.resume());
+      req.end('{}');
+    `], { encoding: 'utf8' });
+    assert.ok(waitForWire(mock, /POST \/messages\?sessionId=probe/),
+      `the mock did not record a request it certainly received. wire:\n${mock.wire()}`);
+  } finally { mock.stop(); }
+});

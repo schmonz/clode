@@ -953,6 +953,15 @@ runs:
         set -e
         CLODE_CLAUDE_BIN="$PROV" CLODE_CACHE="$RUNNER_TEMP/clode-cache" \
           ./"${{ steps.name.outputs.asset }}" build --out "$RUNNER_TEMP/quaude-smoke"
+        # MCP transports, on the one binary CI actually builds. The PONG smoke
+        # above proves the quaude boots and answers; it says nothing about whether
+        # an MCP server can be reached, and all three transports we have driven
+        # were broken at some point WITHOUT the boot smoke noticing:
+        #   stdio  no ChildProcess 'spawn'   http  fetch(URL) died pre-socket
+        #   sse    every POST went to /[object Object]
+        # Hermetic: a local mock server, no network and no credentials. Asserts on
+        # what ARRIVED, because the SSE failure was invisible from the client side.
+        node scripts/mcp-transport-probe.mjs "$RUNNER_TEMP/quaude-smoke" --transport=sse
         rm -f "$RUNNER_TEMP/quaude-smoke"   # quaude is derived work: ephemeral, never leaves the runner
 
     - name: Attest build provenance
