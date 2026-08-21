@@ -123,18 +123,13 @@ test('WebSocket connects to a real RFC6455 server and sends a well-formed reques
     assert.ok(waitForWire(mock, /UPGRADE /), `no upgrade reached the server. wire:\n${mock.wire()}`);
 
     const observed = (mock.wire().match(/UPGRADE (\S+)/) || [])[1];
-    // KNOWN GAP (2026-08-21): node sends "/" for this URL; the ENGINE's native
-    // WebSocket sends "//". Attributed to the engine by driving `new WebSocket`
-    // under tjs directly — not the bundle, not the shim. Most servers tolerate
-    // the doubled separator, which is exactly why it survived unnoticed.
-    //
-    // Recorded rather than faked: this asserts the CURRENT behaviour so the day
-    // it is fixed, this row fails and tells you to tighten it to '/'. Delete the
-    // gap branch then.
-    assert.ok(observed === '/' || observed === '//', `unexpected request path ${observed}`);
-    if (observed === '/') {
-      assert.fail('the "//" request-path gap is CLOSED — tighten this row to expect "/" exactly');
-    }
+    // The request line must be what node sends, not merely something servers
+    // tolerate. This began life as a recorded gap — the engine asked for "//" on
+    // a root URL, because lws_parse_uri strips the slash for "mcp" but yields "/"
+    // for ws://host/, and ws.c prepended unconditionally. Most servers route "//"
+    // happily, which is why the echo oracle never saw it. Fixed in
+    // txiki-ws-root-path.patch, so this now asserts equality instead of tolerance.
+    assert.strictEqual(observed, '/', 'root-URL WebSocket must request "/" exactly, as node does');
   } finally { mock.stop(); }
 });
 

@@ -1,0 +1,40 @@
+diff --git a/src/ws.c b/src/ws.c
+index d4b9816..c253fff 100644
+--- a/src/ws.c
++++ b/src/ws.c
+@@ -398,9 +398,18 @@ static JSValue tjs_ws_constructor(JSContext *ctx, JSValue new_target, int argc,
+ 
+     bool use_ssl = !strcmp(uri->scheme, "wss") || !strcmp(uri->scheme, "https");
+ 
+-    /* Build the path with leading slash (the parsed path has it stripped). */
++    /* Build the request path with exactly one leading slash.
++     *
++     * CLODE: lws_parse_uri strips the slash for an ordinary path ("mcp"), but for
++     * a ROOT url (ws://host/) it yields "/" — already slashed. Prepending
++     * unconditionally therefore asked for "//", so `new WebSocket('ws://h:1/')`
++     * sent `GET //` where node sends `GET /`. Measured against a real RFC6455
++     * server: "/" -> "//" (wrong), "/mcp" -> "/mcp" and "/a/b" -> "/a/b" (right),
++     * which is why only root-path URLs were affected and why an echo oracle never
++     * caught it — most servers route "//" happily. */
+     size_t path_len = strlen(uri->path);
+-    char *full_path = js_malloc(ctx, path_len + 2);
++    bool path_has_slash = uri->path[0] == '/';
++    char *full_path = js_malloc(ctx, path_len + (path_has_slash ? 1 : 2));
+     if (!full_path) {
+         JS_FreeCString(ctx, protocols);
+         lws_parse_uri_destroy(&uri);
+@@ -408,8 +417,12 @@ static JSValue tjs_ws_constructor(JSContext *ctx, JSValue new_target, int argc,
+         JS_FreeValue(ctx, obj);
+         return JS_EXCEPTION;
+     }
+-    full_path[0] = '/';
+-    memcpy(full_path + 1, uri->path, path_len + 1);
++    if (path_has_slash) {
++        memcpy(full_path, uri->path, path_len + 1);
++    } else {
++        full_path[0] = '/';
++        memcpy(full_path + 1, uri->path, path_len + 1);
++    }
+ 
+     struct lws_context *lws_ctx = tjs__lws_get_context(ctx);
+     if (!lws_ctx) {
