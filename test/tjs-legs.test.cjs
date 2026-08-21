@@ -660,7 +660,9 @@ test('golden ledger: the full run-target -> tier map', () => {
     'midnightbsd-amd64': 0,
     'netbsd-alpha': 0,
     'netbsd-amd64': 0,
-    'netbsd-arm64': 0,
+    // Cleared all six FLOOR_ROWS 2026-08-21, after its engine was rebuilt from
+    // current sources (the 2026-08-09 0/5 was a stale-engine artifact).
+    'netbsd-arm64': 1,
     'netbsd-earmv7hf': 0,
     'netbsd-hppa': 0,
     'netbsd-i386': 0,

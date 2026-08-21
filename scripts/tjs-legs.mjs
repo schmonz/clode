@@ -391,16 +391,17 @@ const LEGS = [
     // runbook and used a different, ephemeral qemu+HVF guest.
     // MAINTAINER RULING 2026-08-04: tier 1 requires all six FLOOR_ROWS green
     // (no partial credit); A1/B4/C1/D1 have no rows here, so tier 0 is
-    // NOTE 2026-08-09: earlier-today rows briefly showed 6/6 here. They were driven
-  // against a PRE-EXISTING binary whose engine predates 906af8b (no uid/gid from
-  // FSS.stat), and they only passed because /tmp/claude-1000 did not exist yet on
-  // that VM — once earlier runs created it, the bundle's tmpdir-ownership guard
-  // fires and a FRESHLY built quaude scores 0/5. Those later failing rows are
-  // filed below and win on date, so coverage reflects reality. Re-drive after the
-  // NetBSD engine is rebuilt from current sources.
+    // RESOLVED 2026-08-21: 6/6, honestly this time. The 2026-08-09 confusion was an
+  // engine problem, not a platform one — rows briefly showed 6/6 against a binary
+  // whose engine predated 906af8b (no uid/gid from FSS.stat) and passed only
+  // because /tmp/claude-1000 did not exist yet; once our own runs created it, a
+  // freshly built quaude scored 0/5 at the tmpdir-ownership guard. The engine was
+  // then rebuilt ON the guest from current sources (--source-only here,
+  // --build-only there: the guest has cmake/gmake/node but no outbound DNS, so it
+  // cannot clone) and every row re-driven with the tmpdir guard armed.
   // correct. floorCoverage('netbsd-arm64') derives this from
     // test/fidelity/RESULTS.md rows G7, B1.
-    fidelity: { tier: 0, date: '2026-07-09', bundle: '2.1.204', how: 'netbsd-aarch64-spike-vm',
+    fidelity: { tier: 1, date: '2026-07-09', bundle: '2.1.204', how: 'netbsd-aarch64-spike-vm',
                 note: 'floor 2/6 green (B1,G7); A1,B4,C1,D1 not driven — see RESULTS.md' } },
   { leg: 'freebsd-arm64', os: 'ubuntu-latest', 'guest-platform': 'freebsd', 'guest-arch': 'arm64',
     'guest-version': '14.4', 'guest-packages': 'cmake gmake node git bash', floor: '14.4',
