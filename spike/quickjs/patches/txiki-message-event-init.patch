@@ -1,0 +1,114 @@
+diff --git a/src/js/polyfills/event-target-polyfill.js b/src/js/polyfills/event-target-polyfill.js
+index acade7e..dbbb259 100644
+--- a/src/js/polyfills/event-target-polyfill.js
++++ b/src/js/polyfills/event-target-polyfill.js
+@@ -60,16 +60,55 @@ class ErrorEvent extends Event {
+ 
+ class MessageEvent extends Event {
+     #data;
+-
+-    constructor(eventTye, data) {
+-        super(eventTye);
+-
+-        this.#data = data;
++    #origin;
++    #lastEventId;
++    #source;
++    #ports;
++
++    /*
++     * CLODE: takes an INIT DICTIONARY, per spec and per node — NOT the payload.
++     *
++     * This used to be `constructor(eventTye, data) { this.#data = data; }`, so the
++     * whole dictionary landed in .data. That broke MCP over SSE outright: the
++     * bundle builds `new MessageEvent(type, { data, origin, lastEventId })` from
++     * the wire, then resolves `new URL(event.data, base)` — and with .data holding
++     * the dictionary, every JSON-RPC POST went to /[object Object]. The server saw
++     * requests arrive at a stringified object and the client hung forever.
++     *
++     * Nothing detected it because the shape was wrong, not missing: .data existed,
++     * it was simply the wrong object, and URL resolution dutifully stringified it.
++     */
++    constructor(type, eventInitDict = {}) {
++        super(type, eventInitDict);
++
++        const init = (eventInitDict && typeof eventInitDict === 'object') ? eventInitDict : {};
++
++        this.#data = init.data !== undefined ? init.data : null;
++        this.#origin = init.origin !== undefined ? String(init.origin) : '';
++        this.#lastEventId = init.lastEventId !== undefined ? String(init.lastEventId) : '';
++        this.#source = init.source !== undefined ? init.source : null;
++        this.#ports = init.ports !== undefined ? [ ...init.ports ] : [];
+     }
+ 
+     get data() {
+         return this.#data;
+     }
++
++    get origin() {
++        return this.#origin;
++    }
++
++    get lastEventId() {
++        return this.#lastEventId;
++    }
++
++    get source() {
++        return this.#source;
++    }
++
++    get ports() {
++        return this.#ports;
++    }
+ }
+ 
+ class PromiseRejectionEvent extends Event {
+diff --git a/src/js/polyfills/worker.js b/src/js/polyfills/worker.js
+index 43d2617..b4816b8 100644
+--- a/src/js/polyfills/worker.js
++++ b/src/js/polyfills/worker.js
+@@ -52,11 +52,11 @@ class Worker extends EventTarget {
+         const messagePipe = worker.messagePipe;
+ 
+         messagePipe.onmessage = msg => {
+-            this.dispatchEvent(new MessageEvent('message', msg));
++            this.dispatchEvent(new MessageEvent('message', { data: msg }));
+         };
+ 
+         messagePipe.onmessageerror = msgerror => {
+-            this.dispatchEvent(new MessageEvent('messageerror', msgerror));
++            this.dispatchEvent(new MessageEvent('messageerror', { data: msgerror }));
+         };
+ 
+         this.#worker = worker;
+diff --git a/src/js/polyfills/ws.js b/src/js/polyfills/ws.js
+index f488bd3..328043f 100644
+--- a/src/js/polyfills/ws.js
++++ b/src/js/polyfills/ws.js
+@@ -147,7 +147,7 @@ class WebSocket extends EventTarget {
+                 msg = new Blob([ data ]);
+             }
+ 
+-            this.dispatchEvent(new MessageEvent('message', msg));
++            this.dispatchEvent(new MessageEvent('message', { data: msg }));
+         };
+ 
+         ws.onerror = reason => {
+diff --git a/src/js/worker/worker-bootstrap.js b/src/js/worker/worker-bootstrap.js
+index e95faa4..76c45b2 100644
+--- a/src/js/worker/worker-bootstrap.js
++++ b/src/js/worker/worker-bootstrap.js
+@@ -2,11 +2,11 @@ import core from 'tjs:internal/core';
+ import messagePipe from 'tjs:internal/worker';
+ 
+ messagePipe.onmessage = msg => {
+-    self.dispatchEvent(new MessageEvent('message', msg));
++    self.dispatchEvent(new MessageEvent('message', { data: msg }));
+ };
+ 
+ messagePipe.onmessageerror = msgerror => {
+-    self.dispatchEvent(new MessageEvent('messageerror', msgerror));
++    self.dispatchEvent(new MessageEvent('messageerror', { data: msgerror }));
+ };
+ 
+ self.postMessage = message => messagePipe.postMessage(message);
