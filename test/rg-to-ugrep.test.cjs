@@ -99,3 +99,64 @@ test('both spawn routes translate rg identically (child_process and Bun.spawn)',
     'the two spawn routes must hand ugrep the SAME argv');
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+// ---------------------------------------------------------------------------
+// `rg --files` — a LISTING, not a search.
+//
+// INTENTIONAL DIVERGENCE (user, 2026-08-21): we do not look for ripgrep and do
+// not want it. rg is Rust and cannot exist everywhere quaude does (NetBSD/sparc,
+// Tiger PPC, Haiku); ugrep and bfs are as portable as quaude, so we rely on them
+// on purpose. "Install rg" is not the remedy here.
+//
+// Neither substitute is faithful alone, so the translation dispatches to whichever
+// is EXACT for the flags given — measured, not assumed:
+//                  .gitignore   hidden     empty files   binary
+//   ugrep -l ''    honors       skips      DROPS         keeps (no -I)
+//   bfs -type f    none         lists all  keeps         keeps
+const { rgFilesToListing } = require('../libexec/bun-shim.cjs');
+
+test('rg --files: --no-ignore routes to bfs (which has no ignore logic — that IS the ask)', () => {
+  const out = rgFilesToListing(['--files', '--hidden', '--no-ignore', '--max-depth', '4',
+    '--glob', '.orphaned_at', '/tmp/x']);
+  assert.ok(out, 'no applet resolved');
+  assert.match(out[0], /bfs$/);
+  assert.deepStrictEqual(out.slice(1), ['/tmp/x', '-maxdepth', '4', '-type', 'f', '-name', '.orphaned_at']);
+});
+
+test('rg --files: without --hidden, bfs must exclude dotfiles (rg skips them by default)', () => {
+  const out = rgFilesToListing(['--files', '--no-ignore', '/tmp/x']);
+  assert.ok(out[0].endsWith('bfs'));
+  assert.ok(out.join(' ').includes("! -path */.*"), `dotfiles not excluded: ${out.join(' ')}`);
+});
+
+test('rg --files: ignore-respecting form routes to ugrep --ignore-files', () => {
+  const out = rgFilesToListing(['--files', '--hidden', '/repo']);
+  assert.ok(out[0].endsWith('ugrep'));
+  assert.ok(out.includes('--ignore-files'), 'must honor .gitignore');
+  assert.ok(out.includes('-l') && out.includes('--hidden'));
+  // The empty pattern must be present as its own argv element, before the paths:
+  // it is what makes every (non-empty) file "match" and therefore list.
+  assert.strictEqual(out[out.length - 2], '');
+  assert.strictEqual(out[out.length - 1], '/repo');
+});
+
+test('rg --files: an untranslatable flag is refused, not silently mistranslated', () => {
+  assert.throws(() => rgFilesToListing(['--files', '--sort', 'path', '/repo']), RgTranslateError);
+});
+
+// Behaviour, not just argv shape: the bfs branch must find an EMPTY marker file.
+// This is the concrete reason the dispatch exists — the bundle's startup call
+// looks for `.orphaned_at`, marker files are usually zero-length, and ugrep's -l
+// lists files with a MATCH, so an empty file would silently never appear.
+test('rg --files: the bfs branch finds a zero-length marker file', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-files-'));
+  fs.mkdirSync(path.join(dir, 'sub'));
+  fs.writeFileSync(path.join(dir, '.orphaned_at'), '');       // empty, on purpose
+  fs.writeFileSync(path.join(dir, 'sub', 'other.txt'), 'x\n');
+  const argv = rgFilesToListing(['--files', '--hidden', '--no-ignore', '--max-depth', '4',
+    '--glob', '.orphaned_at', dir]);
+  const r = require('node:child_process').spawnSync(argv[0], argv.slice(1), { encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.stdout.trim(), path.join(dir, '.orphaned_at'));
+  fs.rmSync(dir, { recursive: true, force: true });
+});

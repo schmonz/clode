@@ -546,12 +546,95 @@ function hash(input, seed){
 }
 hash.wyhash = hash; hash.crc32 = (b)=>{ const z=require('zlib'); return z.crc32 ? z.crc32(b) : 0; };
 
+// `rg --files` is a file LISTING, not a search, so it does not translate to a
+// grep at all. It is handled here rather than in rgToUgrep (which yields ugrep
+// argv by construction) because the right tool depends on the flags.
+//
+// INTENTIONAL DIVERGENCE (user, 2026-08-21): we do not look for ripgrep and we do
+// not want it. rg is Rust and cannot exist everywhere quaude does — NetBSD/sparc,
+// Tiger PPC, Haiku. ugrep and bfs are as portable as quaude is, so we rely on
+// them ON PURPOSE. Diverging from Claude here is the design, not a shortfall, and
+// "install rg" is not the remedy.
+//
+// Neither tool alone is faithful, but each is EXACT in one regime — measured:
+//                     .gitignore   hidden      empty files   binary
+//   ugrep -l ''       honors       skips       DROPS         needs no -I
+//   bfs -type f       no support   lists all   keeps         keeps
+// So dispatch on whether ignore semantics are wanted:
+//   --no-ignore  -> bfs, which HAS no ignore logic; that is precisely the ask, and
+//                   it keeps empty files (a marker file like .orphaned_at is
+//                   usually empty, and ugrep's -l would silently miss it).
+//   otherwise    -> ugrep --ignore-files, the only one of the two that reads
+//                   .gitignore. Known divergence: zero-length files are omitted,
+//                   because -l lists files with a MATCH and an empty file has no
+//                   lines to match.
+function rgFilesToListing(args) {
+  let hidden = false, noIgnore = false, maxDepth = null;
+  const globs = [], paths = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--files') continue;
+    else if (a === '--hidden' || a === '.') hidden = true;
+    else if (a === '--no-ignore') noIgnore = true;
+    else if (a === '--max-depth' || a === '--maxdepth') maxDepth = args[++i];
+    else if (a.startsWith('--max-depth=')) maxDepth = a.slice(12);
+    else if (a === '--glob' || a === '-g') globs.push(args[++i]);
+    else if (a.startsWith('--glob=')) globs.push(a.slice(7));
+    else if (a.startsWith('-')) throw new RgTranslateError(a);
+    else paths.push(a);
+  }
+  if (!paths.length) paths.push('.');
+
+  if (noIgnore) {
+    const bfs = process.env.CLODE_BFS || which('bfs');
+    if (!bfs) return null;
+    const out = [bfs, ...paths];
+    if (maxDepth) out.push('-maxdepth', String(maxDepth));
+    out.push('-type', 'f');
+    // rg skips dotfiles unless --hidden; bfs lists everything, so exclude them.
+    if (!hidden) out.push('!', '-path', '*/.*');
+    if (globs.length === 1) out.push(globs[0].includes('/') ? '-path' : '-name', globs[0]);
+    else if (globs.length > 1) {
+      out.push('(');
+      globs.forEach((g, i) => {
+        if (i) out.push('-o');
+        out.push(g.includes('/') ? '-path' : '-name', g);
+      });
+      out.push(')');
+    }
+    return out;
+  }
+
+  const ugrep = process.env.CLODE_UGREP || which('ugrep');
+  if (!ugrep) return null;
+  const out = [ugrep, '-r', '-l', '--ignore-files'];
+  if (hidden) out.push('--hidden');
+  if (maxDepth) out.push(`--depth=${maxDepth}`);
+  for (const g of globs) out.push(`--include=${g}`);
+  out.push('', ...paths);   // '' matches every line, so every non-empty file lists
+  return out;
+}
+
 // If cmd[0] is bare `rg`, rewrite to ugrep with translated argv (spec: rg-to-ugrep).
 // ugrep-absent → cmd untouched, so the app's not-found fallback path is preserved.
 function _rewriteRgSpawn(cmd) {
   if (!Array.isArray(cmd) || cmd.length === 0) return cmd;
   const exe = cmd[0];
   if (exe !== 'rg') return cmd;
+  // --files is a listing, not a search: different tool, handled before rgToUgrep.
+  if (cmd.includes('--files')) {
+    try {
+      const listing = rgFilesToListing(cmd.slice(1));
+      if (!listing) return cmd;          // applet absent: leave the app's fallback intact
+      if (process.env.CLODE_RG_DEBUG) {
+        process.stderr.write(`clode rg-debug: ${cmd.join(' ')} => ${listing.join(' ')}\n`);
+      }
+      return listing;
+    } catch (e) {
+      if (e instanceof RgTranslateError) process.stderr.write(e.message + '\n');
+      return cmd;
+    }
+  }
   const ugrep = process.env.CLODE_UGREP || which('ugrep');
   if (!ugrep) return cmd;
   try {
@@ -945,4 +1028,5 @@ module.exports.rgToUgrep = rgToUgrep;
 module.exports.RgTranslateError = RgTranslateError;
 module.exports.rgShadowBody = rgShadowBody;
 module.exports._rewriteRgSpawn = _rewriteRgSpawn;
+module.exports.rgFilesToListing = rgFilesToListing;
 globalThis.Bun = globalThis.Bun || module.exports;   // ensure global even if required directly
