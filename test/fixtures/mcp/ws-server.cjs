@@ -10,7 +10,17 @@
 const http = require('node:http');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
-const GUID = '258EAFA5-E914-47DA-95CA-5AB0DC85B11C';
+// RFC 6455 handshake GUID. Taken from ws/lib/constants.js, NOT from memory: it was
+// first written here with the final group transposed, which made every handshake
+// invalid. Both the engine's native WebSocket and node's `ws` correctly rejected
+// it ("Invalid Sec-WebSocket-Accept header") — so the mock was broken, not either
+// client, and any conclusion drawn from it about ws was worthless.
+//
+// The lesson is about instruments, not WebSockets: this file is the reference
+// against which client behaviour is judged, so a bug HERE reads as a bug THERE.
+// The handshake is checked against ws's own constant rather than trusted, and
+// test/mcp-transport.test.cjs asserts the mock records what it received.
+const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 
 function decodeFrames(buf, onText) {
   let off = 0;
