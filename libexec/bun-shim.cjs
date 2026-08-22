@@ -568,7 +568,27 @@ function _rgAppletMissing(cmd, applet) {
   process.stderr.write(
     `clode: rg needs '${applet}' (set CLODE_${applet.toUpperCase()} or install it); `
     + 'not falling back to a host rg — quaude translates rg to portable applets on purpose\n');
+  _rgDebug(cmd, `!! needs ${applet}`);
   return ['clode-rg-unavailable', ...cmd.slice(1)];
+}
+
+// ONE parseable line per rg call the shim sees, whatever the outcome:
+//
+//   clode rg-debug: <rg argv> => <applet argv>        translated
+//   clode rg-debug: <rg argv> !! needs <applet>       this host has no ugrep/bfs
+//   clode rg-debug: <rg argv> !! untranslatable <flag>  rg-only flag, we refuse
+//
+// The verdict used to be printed ONLY on the success path, which made the
+// observer (scripts/rg-inventory.mjs) blind on exactly the hosts where
+// something was wrong: no ugrep/bfs meant zero lines matched, so the gate saw
+// zero calls and blamed upstream for "changing its rg usage" when in truth it
+// had observed nothing at all. Every CI runner is such a host. Which rg calls
+// upstream MAKES and whether THIS host can translate them are two different
+// questions; emitting the argv on all three paths is what lets the gate answer
+// them separately instead of conflating them.
+function _rgDebug(cmd, verdict) {
+  if (!process.env.CLODE_RG_DEBUG) return;
+  process.stderr.write(`clode rg-debug: ${cmd.join(' ')} ${verdict}\n`);
 }
 
 // `rg --files` is a file LISTING, not a search, so it does not translate to a
@@ -663,12 +683,13 @@ function _rewriteRgSpawn(cmd) {
     try {
       const listing = rgFilesToListing(cmd.slice(1));
       if (!listing) return _rgAppletMissing(cmd, cmd.includes('--no-ignore') ? 'bfs' : 'ugrep');
-      if (process.env.CLODE_RG_DEBUG) {
-        process.stderr.write(`clode rg-debug: ${cmd.join(' ')} => ${listing.join(' ')}\n`);
-      }
+      _rgDebug(cmd, `=> ${listing.join(' ')}`);
       return listing;
     } catch (e) {
-      if (e instanceof RgTranslateError) process.stderr.write(e.message + '\n');
+      if (e instanceof RgTranslateError) {
+        process.stderr.write(e.message + '\n');
+        _rgDebug(cmd, `!! untranslatable ${e.flag}`);
+      }
       return cmd;
     }
   }
@@ -676,11 +697,15 @@ function _rewriteRgSpawn(cmd) {
   if (!ugrep) return _rgAppletMissing(cmd, 'ugrep');
   try {
     const rewritten = [ugrep, ...rgToUgrep(cmd.slice(1))];
-    if (process.env.CLODE_RG_DEBUG) {
-      process.stderr.write(`clode rg-debug: ${cmd.join(' ')} => ${rewritten.join(' ')}\n`);
-    }
+    _rgDebug(cmd, `=> ${rewritten.join(' ')}`);
     return rewritten;
-  } catch (e) { if (e instanceof RgTranslateError) { process.stderr.write(e.message + '\n'); } return cmd; }
+  } catch (e) {
+    if (e instanceof RgTranslateError) {
+      process.stderr.write(e.message + '\n');
+      _rgDebug(cmd, `!! untranslatable ${e.flag}`);
+    }
+    return cmd;
+  }
 }
 
 // --- spawn: approximate Bun.spawn -> Node child_process ---

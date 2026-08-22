@@ -48,6 +48,33 @@ jobs:
           want=$(sed -n 's/^nodejs //p' .tool-versions)
           have=$(node -v); have=${have#v}
           [ "$have" = "$want" ] || { echo "node skew: .tool-versions=$want but runtime=$have" >&2; exit 1; }
+      # Five rows in test/rg-to-ugrep.test.cjs drive the REAL ugrep/bfs and have
+      # logged "# SKIP needs bfs (not installed)" on every CI run this repo has
+      # ever done, because no runner ships them. They pin MEASURED behaviour —
+      # bfs keeps zero-length files, ugrep's -l drops them, `-L '$^'` lists
+      # everything — which is exactly the kind of claim that must not be taken on
+      # faith, and skipping is how it has been. quaude requires these applets
+      # anyway (we translate rg to them on purpose); a runner without them is not
+      # the supported configuration.
+      #
+      # apt's ugrep/bfs are OLDER than a dev box's (noble: ugrep 5.0.0, bfs
+      # 3.1.2). If their semantics differ from what those rows pin, the rows will
+      # say so — which is the point of pinning them to a real binary. Windows is
+      # excluded: bfs has never been ported there. Keyed to Linux specifically, so
+      # adding a macOS row to the matrix fails here (wrong package manager)
+      # instead of silently going back to skipping.
+      - name: Install the rg applets (ugrep + bfs) so the fixture rows stop skipping
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends ugrep bfs
+          for a in ugrep bfs; do
+            command -v "$a" >/dev/null 2>&1 \
+              || { echo "ERROR: $a is not on PATH after install" >&2; exit 1; }
+          done
+          ugrep --version | head -1
+          bfs --version | head -1
       - name: Install runtime deps (the six Bun-backing packages, locked) for the fidelity gate
         run: npm ci --prefix deps/claude
       - name: Full node:test suite (includes the shim-fidelity gate)
