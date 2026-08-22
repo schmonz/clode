@@ -1,8 +1,8 @@
 diff --git a/src/signals.c b/src/signals.c
-index 5db61d5..73fa7cd 100644
+index 5db61d5..61c1765 100644
 --- a/src/signals.c
 +++ b/src/signals.c
-@@ -166,7 +166,343 @@ static const JSCFunctionListEntry tjs_signal_funcs[] = {
+@@ -166,7 +166,590 @@ static const JSCFunctionListEntry tjs_signal_funcs[] = {
      TJS_CFUNC_DEF("signal", 2, tjs_signal),
  };
  
@@ -110,6 +110,9 @@ index 5db61d5..73fa7cd 100644
 +#ifdef O_DIRECTORY
 +        CLODE_K(O_DIRECTORY, O_DIRECTORY),
 +#endif
++#ifdef O_NOATIME
++        CLODE_K(O_NOATIME, O_NOATIME),
++#endif
 +#ifdef O_NOFOLLOW
 +        CLODE_K(O_NOFOLLOW, O_NOFOLLOW),
 +#endif
@@ -121,6 +124,9 @@ index 5db61d5..73fa7cd 100644
 +#endif
 +#ifdef O_SYMLINK
 +        CLODE_K(O_SYMLINK, O_SYMLINK),
++#endif
++#ifdef O_DIRECT
++        CLODE_K(O_DIRECT, O_DIRECT),
 +#endif
 +#ifdef O_NONBLOCK
 +        CLODE_K(O_NONBLOCK, O_NONBLOCK),
@@ -181,118 +187,356 @@ index 5db61d5..73fa7cd 100644
 +        CLODE_K(COPYFILE_FICLONE_FORCE, UV_FS_COPYFILE_FICLONE_FORCE),
 +    };
 +    static const clode_kv clode_sig_kv[] = {
++#ifdef SIGHUP
 +        CLODE_K(SIGHUP, SIGHUP),
++#endif
++#ifdef SIGINT
 +        CLODE_K(SIGINT, SIGINT),
++#endif
++#ifdef SIGQUIT
 +        CLODE_K(SIGQUIT, SIGQUIT),
++#endif
++#ifdef SIGILL
 +        CLODE_K(SIGILL, SIGILL),
++#endif
++#ifdef SIGTRAP
 +        CLODE_K(SIGTRAP, SIGTRAP),
++#endif
++#ifdef SIGABRT
 +        CLODE_K(SIGABRT, SIGABRT),
++#endif
++#ifdef SIGIOT
 +        CLODE_K(SIGIOT, SIGIOT),
++#endif
++#ifdef SIGBUS
 +        CLODE_K(SIGBUS, SIGBUS),
++#endif
++#ifdef SIGFPE
 +        CLODE_K(SIGFPE, SIGFPE),
++#endif
++#ifdef SIGKILL
 +        CLODE_K(SIGKILL, SIGKILL),
++#endif
++#ifdef SIGUSR1
 +        CLODE_K(SIGUSR1, SIGUSR1),
++#endif
++#ifdef SIGSEGV
 +        CLODE_K(SIGSEGV, SIGSEGV),
++#endif
++#ifdef SIGUSR2
 +        CLODE_K(SIGUSR2, SIGUSR2),
++#endif
++#ifdef SIGPIPE
 +        CLODE_K(SIGPIPE, SIGPIPE),
++#endif
++#ifdef SIGALRM
 +        CLODE_K(SIGALRM, SIGALRM),
++#endif
++#ifdef SIGTERM
 +        CLODE_K(SIGTERM, SIGTERM),
++#endif
++#ifdef SIGCHLD
 +        CLODE_K(SIGCHLD, SIGCHLD),
++#endif
++#ifdef SIGSTKFLT
++        CLODE_K(SIGSTKFLT, SIGSTKFLT),
++#endif
++#ifdef SIGCONT
 +        CLODE_K(SIGCONT, SIGCONT),
++#endif
++#ifdef SIGSTOP
 +        CLODE_K(SIGSTOP, SIGSTOP),
++#endif
++#ifdef SIGTSTP
 +        CLODE_K(SIGTSTP, SIGTSTP),
++#endif
++#ifdef SIGBREAK
++        CLODE_K(SIGBREAK, SIGBREAK),
++#endif
++#ifdef SIGTTIN
 +        CLODE_K(SIGTTIN, SIGTTIN),
++#endif
++#ifdef SIGTTOU
 +        CLODE_K(SIGTTOU, SIGTTOU),
++#endif
++#ifdef SIGURG
 +        CLODE_K(SIGURG, SIGURG),
++#endif
++#ifdef SIGXCPU
 +        CLODE_K(SIGXCPU, SIGXCPU),
++#endif
++#ifdef SIGXFSZ
 +        CLODE_K(SIGXFSZ, SIGXFSZ),
++#endif
++#ifdef SIGVTALRM
 +        CLODE_K(SIGVTALRM, SIGVTALRM),
++#endif
++#ifdef SIGPROF
 +        CLODE_K(SIGPROF, SIGPROF),
++#endif
++#ifdef SIGWINCH
 +        CLODE_K(SIGWINCH, SIGWINCH),
++#endif
++#ifdef SIGIO
 +        CLODE_K(SIGIO, SIGIO),
++#endif
++#ifdef SIGPOLL
++        CLODE_K(SIGPOLL, SIGPOLL),
++#endif
++#ifdef SIGLOST
++        CLODE_K(SIGLOST, SIGLOST),
++#endif
++#ifdef SIGPWR
++        CLODE_K(SIGPWR, SIGPWR),
++#endif
++#ifdef SIGINFO
 +        CLODE_K(SIGINFO, SIGINFO),
++#endif
++#ifdef SIGSYS
 +        CLODE_K(SIGSYS, SIGSYS),
++#endif
++#ifdef SIGUNUSED
++        CLODE_K(SIGUNUSED, SIGUNUSED),
++#endif
 +    };
 +    static const clode_kv clode_errno_kv[] = {
++#ifdef E2BIG
 +        CLODE_K(E2BIG, E2BIG),
++#endif
++#ifdef EACCES
 +        CLODE_K(EACCES, EACCES),
++#endif
++#ifdef EADDRINUSE
 +        CLODE_K(EADDRINUSE, EADDRINUSE),
++#endif
++#ifdef EADDRNOTAVAIL
 +        CLODE_K(EADDRNOTAVAIL, EADDRNOTAVAIL),
++#endif
++#ifdef EAFNOSUPPORT
 +        CLODE_K(EAFNOSUPPORT, EAFNOSUPPORT),
++#endif
++#ifdef EAGAIN
 +        CLODE_K(EAGAIN, EAGAIN),
++#endif
++#ifdef EALREADY
 +        CLODE_K(EALREADY, EALREADY),
++#endif
++#ifdef EBADF
 +        CLODE_K(EBADF, EBADF),
++#endif
++#ifdef EBADMSG
 +        CLODE_K(EBADMSG, EBADMSG),
++#endif
++#ifdef EBUSY
 +        CLODE_K(EBUSY, EBUSY),
++#endif
++#ifdef ECANCELED
 +        CLODE_K(ECANCELED, ECANCELED),
++#endif
++#ifdef ECHILD
 +        CLODE_K(ECHILD, ECHILD),
++#endif
++#ifdef ECONNABORTED
 +        CLODE_K(ECONNABORTED, ECONNABORTED),
++#endif
++#ifdef ECONNREFUSED
 +        CLODE_K(ECONNREFUSED, ECONNREFUSED),
++#endif
++#ifdef ECONNRESET
 +        CLODE_K(ECONNRESET, ECONNRESET),
++#endif
++#ifdef EDEADLK
 +        CLODE_K(EDEADLK, EDEADLK),
++#endif
++#ifdef EDESTADDRREQ
 +        CLODE_K(EDESTADDRREQ, EDESTADDRREQ),
++#endif
++#ifdef EDOM
 +        CLODE_K(EDOM, EDOM),
++#endif
++#ifdef EDQUOT
 +        CLODE_K(EDQUOT, EDQUOT),
++#endif
++#ifdef EEXIST
 +        CLODE_K(EEXIST, EEXIST),
++#endif
++#ifdef EFAULT
 +        CLODE_K(EFAULT, EFAULT),
++#endif
++#ifdef EFBIG
 +        CLODE_K(EFBIG, EFBIG),
++#endif
++#ifdef EHOSTUNREACH
 +        CLODE_K(EHOSTUNREACH, EHOSTUNREACH),
++#endif
++#ifdef EIDRM
 +        CLODE_K(EIDRM, EIDRM),
++#endif
++#ifdef EILSEQ
 +        CLODE_K(EILSEQ, EILSEQ),
++#endif
++#ifdef EINPROGRESS
 +        CLODE_K(EINPROGRESS, EINPROGRESS),
++#endif
++#ifdef EINTR
 +        CLODE_K(EINTR, EINTR),
++#endif
++#ifdef EINVAL
 +        CLODE_K(EINVAL, EINVAL),
++#endif
++#ifdef EIO
 +        CLODE_K(EIO, EIO),
++#endif
++#ifdef EISCONN
 +        CLODE_K(EISCONN, EISCONN),
++#endif
++#ifdef EISDIR
 +        CLODE_K(EISDIR, EISDIR),
++#endif
++#ifdef ELOOP
 +        CLODE_K(ELOOP, ELOOP),
++#endif
++#ifdef EMFILE
 +        CLODE_K(EMFILE, EMFILE),
++#endif
++#ifdef EMLINK
 +        CLODE_K(EMLINK, EMLINK),
++#endif
++#ifdef EMSGSIZE
 +        CLODE_K(EMSGSIZE, EMSGSIZE),
++#endif
++#ifdef EMULTIHOP
 +        CLODE_K(EMULTIHOP, EMULTIHOP),
++#endif
++#ifdef ENAMETOOLONG
 +        CLODE_K(ENAMETOOLONG, ENAMETOOLONG),
++#endif
++#ifdef ENETDOWN
 +        CLODE_K(ENETDOWN, ENETDOWN),
++#endif
++#ifdef ENETRESET
 +        CLODE_K(ENETRESET, ENETRESET),
++#endif
++#ifdef ENETUNREACH
 +        CLODE_K(ENETUNREACH, ENETUNREACH),
++#endif
++#ifdef ENFILE
 +        CLODE_K(ENFILE, ENFILE),
++#endif
++#ifdef ENOBUFS
 +        CLODE_K(ENOBUFS, ENOBUFS),
++#endif
++#ifdef ENODATA
 +        CLODE_K(ENODATA, ENODATA),
++#endif
++#ifdef ENODEV
 +        CLODE_K(ENODEV, ENODEV),
++#endif
++#ifdef ENOENT
 +        CLODE_K(ENOENT, ENOENT),
++#endif
++#ifdef ENOEXEC
 +        CLODE_K(ENOEXEC, ENOEXEC),
++#endif
++#ifdef ENOLCK
 +        CLODE_K(ENOLCK, ENOLCK),
++#endif
++#ifdef ENOLINK
 +        CLODE_K(ENOLINK, ENOLINK),
++#endif
++#ifdef ENOMEM
 +        CLODE_K(ENOMEM, ENOMEM),
++#endif
++#ifdef ENOMSG
 +        CLODE_K(ENOMSG, ENOMSG),
++#endif
++#ifdef ENOPROTOOPT
 +        CLODE_K(ENOPROTOOPT, ENOPROTOOPT),
++#endif
++#ifdef ENOSPC
 +        CLODE_K(ENOSPC, ENOSPC),
++#endif
++#ifdef ENOSR
 +        CLODE_K(ENOSR, ENOSR),
++#endif
++#ifdef ENOSTR
 +        CLODE_K(ENOSTR, ENOSTR),
++#endif
++#ifdef ENOSYS
 +        CLODE_K(ENOSYS, ENOSYS),
++#endif
++#ifdef ENOTCONN
 +        CLODE_K(ENOTCONN, ENOTCONN),
++#endif
++#ifdef ENOTDIR
 +        CLODE_K(ENOTDIR, ENOTDIR),
++#endif
++#ifdef ENOTEMPTY
 +        CLODE_K(ENOTEMPTY, ENOTEMPTY),
++#endif
++#ifdef ENOTSOCK
 +        CLODE_K(ENOTSOCK, ENOTSOCK),
++#endif
++#ifdef ENOTSUP
 +        CLODE_K(ENOTSUP, ENOTSUP),
++#endif
++#ifdef ENOTTY
 +        CLODE_K(ENOTTY, ENOTTY),
++#endif
++#ifdef ENXIO
 +        CLODE_K(ENXIO, ENXIO),
++#endif
++#ifdef EOPNOTSUPP
 +        CLODE_K(EOPNOTSUPP, EOPNOTSUPP),
++#endif
++#ifdef EOVERFLOW
 +        CLODE_K(EOVERFLOW, EOVERFLOW),
++#endif
++#ifdef EPERM
 +        CLODE_K(EPERM, EPERM),
++#endif
++#ifdef EPIPE
 +        CLODE_K(EPIPE, EPIPE),
++#endif
++#ifdef EPROTO
 +        CLODE_K(EPROTO, EPROTO),
++#endif
++#ifdef EPROTONOSUPPORT
 +        CLODE_K(EPROTONOSUPPORT, EPROTONOSUPPORT),
++#endif
++#ifdef EPROTOTYPE
 +        CLODE_K(EPROTOTYPE, EPROTOTYPE),
++#endif
++#ifdef ERANGE
 +        CLODE_K(ERANGE, ERANGE),
++#endif
++#ifdef EROFS
 +        CLODE_K(EROFS, EROFS),
++#endif
++#ifdef ESPIPE
 +        CLODE_K(ESPIPE, ESPIPE),
++#endif
++#ifdef ESRCH
 +        CLODE_K(ESRCH, ESRCH),
++#endif
++#ifdef ESTALE
 +        CLODE_K(ESTALE, ESTALE),
++#endif
++#ifdef ETIME
 +        CLODE_K(ETIME, ETIME),
++#endif
++#ifdef ETIMEDOUT
 +        CLODE_K(ETIMEDOUT, ETIMEDOUT),
++#endif
++#ifdef ETXTBSY
 +        CLODE_K(ETXTBSY, ETXTBSY),
++#endif
++#ifdef EWOULDBLOCK
 +        CLODE_K(EWOULDBLOCK, EWOULDBLOCK),
++#endif
++#ifdef EXDEV
 +        CLODE_K(EXDEV, EXDEV),
++#endif
 +    };
 +    static const clode_kv clode_dlopen_kv[] = {
 +#ifdef RTLD_LAZY
@@ -306,6 +550,9 @@ index 5db61d5..73fa7cd 100644
 +#endif
 +#ifdef RTLD_LOCAL
 +        CLODE_K(RTLD_LOCAL, RTLD_LOCAL),
++#endif
++#ifdef RTLD_DEEPBIND
++        CLODE_K(RTLD_DEEPBIND, RTLD_DEEPBIND),
 +#endif
 +    };
 +    static const clode_kv clode_priority_kv[] = {

@@ -1,0 +1,9 @@
+{
+  "_": "Written by scripts/extract-cacert-pem.mjs — do not hand-edit. Checked by test/tls-cacert-pem.test.cjs.",
+  "txiki_tag": "v26.6.0",
+  "txiki_sha": "1a230d31183f062fae7a6c4fd2cff466cecc1787",
+  "cacert_c_sha256": "7440f3ba0aa68e7be24cfff1e951166d0df1740a5d9ddfbd020777fe3ff101a1",
+  "pem_sha256": "86a1f3366afac7c6f8ae9f3c779ac221129328c43f0ab2b8817eb2f362a5025c",
+  "pem_bytes": 189462,
+  "certificates": 121
+}

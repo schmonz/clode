@@ -14,9 +14,11 @@
 // the platform because it IS the platform. The shim reads what the engine reports
 // and never guesses.
 //
-// The NAME list comes from host node, so `node scripts/gen-node-constants.mjs`
-// re-derives the patch whenever node grows a constant. Values never come from
-// here — only names.
+// Values never come from here — only names. And the names are STATIC (node's own
+// cross-platform list, see NODE_CONSTANTS below); they are deliberately NOT read
+// from the node running this script, because that node's keys are already filtered
+// down to ITS platform, and baking one host's absences into the patch is how every
+// other target silently loses constants.
 //
 // Run with the txiki vendor tree present (a build creates it); it diffs against
 // that tree so the hunk header is real rather than hand-counted.
@@ -28,13 +30,27 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { tjsVendorParentDir } = require('./platform-tag.cjs');
 
-// Preprocessor-visible OS macros: guard each, because the whole point is to emit
-// exactly what THIS platform defines.
 // Bump when the shim starts REQUIRING something new from the engine.
 const ABI = 1;
 
+// GUARD EVERYTHING THE OS DEFINES; leave unguarded ONLY what libuv defines.
+//
+// This was an allow-list (O_*, S_I*, *_OK, RTLD_*), which silently left all 31
+// signal names and all 79 errno names UNGUARDED — 177 entries behind just 45
+// #ifdefs. Every one of them exists on darwin, so it compiled here and broke
+// every other leg:
+//     src/signals.c:373:26: error: 'SIGINFO' undeclared
+// SIGINFO is BSD/darwin-only. That is exactly the failure the #ifdef design
+// exists to prevent, so the default is inverted: guard unless the name is known
+// to come from libuv. A new OS constant in node's list is then correct by
+// default on every target, and the only way to get it wrong is to add it to the
+// libuv list by mistake.
+//
+// libuv names MUST stay unguarded: #ifdef cannot see an enum (UV_DIRENT_* are
+// enum constants), so guarding them would silently drop the keys. If one is
+// genuinely absent the build fails loudly in C instead.
 const isGuardedOsMacro = (k) =>
-  /^O_/.test(k) || /^S_I/.test(k) || /^(F|R|W|X)_OK$/.test(k) || /^RTLD_/.test(k);
+  !(/^UV_/.test(k) || Object.prototype.hasOwnProperty.call(UV_EXPR, k));
 
 // libuv values. UV_DIRENT_* are an ENUM in uv.h, so #ifdef would silently drop
 // them — the exact failure mode this file exists to end. Emit unguarded: libuv is
@@ -73,12 +89,139 @@ function group(name, keys) {
   ].join('\n');
 }
 
-const fsKeys = Object.keys(fs.constants);
-const osc = os.constants;
-const signalKeys = Object.keys(osc.signals);
-const errnoKeys = Object.keys(osc.errno);
-const dlopenKeys = Object.keys(osc.dlopen);
-const priorityKeys = Object.keys(osc.priority);
+// THE NAME LISTS ARE STATIC ON PURPOSE. DO NOT RE-DERIVE THEM FROM THE RUNNING HOST.
+//
+// These were `Object.keys(os.constants.signals)` etc., read from whatever node was
+// running the generator. That is wrong in a way darwin cannot show you: the host's
+// keys are already the #ifdef-filtered result for the HOST, so generating on darwin
+// bakes darwin's absences into the patch and every other target inherits them.
+// Measured 2026-08-22, same node 24 major, three hosts:
+//
+//     signals   darwin 31 | linux-glibc 33 | linux-musl 34
+//     fs        darwin 55 | linux         55   (but NOT the same 55)
+//     dlopen    darwin  4 | linux-glibc  5 | linux-musl  4
+//
+// Generating on darwin lost SIGPOLL/SIGPWR/SIGSTKFLT (real on Linux), O_NOATIME and
+// O_DIRECT (real on Linux), and RTLD_DEEPBIND (real on glibc). None of that throws:
+// quaude on Linux would just be silently missing constants node has — the exact
+// class of drift this whole file exists to end, reintroduced by the fix for it.
+// Generating on Linux would lose darwin's SIGINFO and O_SYMLINK instead. There is no
+// host that is a safe place to derive from.
+//
+// So the list is node's OWN static list, transcribed from the NODE_DEFINE_CONSTANT
+// entries in node's src/node_constants.cc (v24.19.0: DefineErrnoConstants,
+// DefineSignalConstants, DefineFsConstants, DefineDLOpenConstants,
+// DefinePriorityConstants). That list is a UNION across platforms — node emits it
+// under #ifdef exactly as we do — so it is the only correct input. With
+// guard-by-default above, a name absent on a target compiles out and the key is
+// simply not reported, which is precisely what node does there. Extra names are
+// therefore free; missing names are unfixable at runtime. Union in, #ifdef out.
+//
+// Two entries are worth knowing about: SIGBREAK is Windows-only and SIGUNUSED is
+// musl-only in practice (glibc dropped it) — both are in node's list, both compile
+// out where absent, and both are keys node really does expose where present. The
+// hand-written patch this generator replaced (txiki-signals-expose.patch) carried 34
+// signals and its comment asserted node "deliberately OMITS SIGUNUSED"; the musl
+// measurement above disproves that. Hand-maintained platform knowledge rots.
+//
+// KNOWN REMAINING GAP, measured 2026-08-22, deliberately NOT fixed here. A name in
+// the union is only reported if the target's headers make it VISIBLE, and on glibc
+// two of them hide behind a feature-test macro. Probed on gcc:13 with the four flag
+// combinations the tjs target could plausibly use:
+//
+//     -std=gnu11                 O_DIRECT NO   O_NOATIME NO   RTLD_DEEPBIND yes
+//     -std=c11                   O_DIRECT NO   O_NOATIME NO   RTLD_DEEPBIND yes
+//     -std=gnu11 -D_GNU_SOURCE   O_DIRECT yes  O_NOATIME yes  RTLD_DEEPBIND yes
+//     -std=c11   -D_GNU_SOURCE   O_DIRECT yes  O_NOATIME yes  RTLD_DEEPBIND yes
+//
+// txiki.js compiles deps/libuv and deps/quickjs with _GNU_SOURCE but does NOT set it
+// on the `tjs` target, so src/signals.c gets the plain view and glibc legs will
+// report 55 fs keys without O_DIRECT/O_NOATIME where node reports 57. That is still
+// strictly better than before (the darwin-derived list did not contain those names
+// at ALL, on any platform), so it is a smaller gap, not a new one. Closing it means
+// `#define _GNU_SOURCE` ahead of signals.c's FIRST include — a feature-test macro is
+// inert if set after the first system header, so it cannot go in the block this
+// generator splices in mid-file. That is a change to how a vendor translation unit
+// is compiled on every leg, it cannot be verified from darwin, and it does not
+// belong in the same commit as an unbreak-the-build fix.
+//
+// TO UPDATE (when node grows a constant): re-read those five functions in node's
+// src/node_constants.cc for the node version we track and transcribe the additions.
+// The staleness check below will tell you when that is due.
+const NODE_CONSTANTS = {
+  fs: [
+    'UV_FS_SYMLINK_DIR', 'UV_FS_SYMLINK_JUNCTION', 'O_RDONLY', 'O_WRONLY', 'O_RDWR',
+    'UV_DIRENT_UNKNOWN', 'UV_DIRENT_FILE', 'UV_DIRENT_DIR', 'UV_DIRENT_LINK',
+    'UV_DIRENT_FIFO', 'UV_DIRENT_SOCKET', 'UV_DIRENT_CHAR', 'UV_DIRENT_BLOCK',
+    'S_IFMT', 'S_IFREG', 'S_IFDIR', 'S_IFCHR', 'S_IFBLK', 'S_IFIFO', 'S_IFLNK',
+    'S_IFSOCK', 'O_CREAT', 'O_EXCL', 'UV_FS_O_FILEMAP', 'O_NOCTTY', 'O_TRUNC',
+    'O_APPEND', 'O_DIRECTORY', 'O_NOATIME', 'O_NOFOLLOW', 'O_SYNC', 'O_DSYNC',
+    'O_SYMLINK', 'O_DIRECT', 'O_NONBLOCK', 'S_IRWXU', 'S_IRUSR', 'S_IWUSR',
+    'S_IXUSR', 'S_IRWXG', 'S_IRGRP', 'S_IWGRP', 'S_IXGRP', 'S_IRWXO', 'S_IROTH',
+    'S_IWOTH', 'S_IXOTH', 'F_OK', 'R_OK', 'W_OK', 'X_OK', 'UV_FS_COPYFILE_EXCL',
+    'COPYFILE_EXCL', 'UV_FS_COPYFILE_FICLONE', 'COPYFILE_FICLONE',
+    'UV_FS_COPYFILE_FICLONE_FORCE', 'COPYFILE_FICLONE_FORCE',
+  ],
+  signals: [
+    'SIGHUP', 'SIGINT', 'SIGQUIT', 'SIGILL', 'SIGTRAP', 'SIGABRT', 'SIGIOT',
+    'SIGBUS', 'SIGFPE', 'SIGKILL', 'SIGUSR1', 'SIGSEGV', 'SIGUSR2', 'SIGPIPE',
+    'SIGALRM', 'SIGTERM', 'SIGCHLD', 'SIGSTKFLT', 'SIGCONT', 'SIGSTOP', 'SIGTSTP',
+    'SIGBREAK', 'SIGTTIN', 'SIGTTOU', 'SIGURG', 'SIGXCPU', 'SIGXFSZ', 'SIGVTALRM',
+    'SIGPROF', 'SIGWINCH', 'SIGIO', 'SIGPOLL', 'SIGLOST', 'SIGPWR', 'SIGINFO',
+    'SIGSYS', 'SIGUNUSED',
+  ],
+  errno: [
+    'E2BIG', 'EACCES', 'EADDRINUSE', 'EADDRNOTAVAIL', 'EAFNOSUPPORT', 'EAGAIN',
+    'EALREADY', 'EBADF', 'EBADMSG', 'EBUSY', 'ECANCELED', 'ECHILD', 'ECONNABORTED',
+    'ECONNREFUSED', 'ECONNRESET', 'EDEADLK', 'EDESTADDRREQ', 'EDOM', 'EDQUOT',
+    'EEXIST', 'EFAULT', 'EFBIG', 'EHOSTUNREACH', 'EIDRM', 'EILSEQ', 'EINPROGRESS',
+    'EINTR', 'EINVAL', 'EIO', 'EISCONN', 'EISDIR', 'ELOOP', 'EMFILE', 'EMLINK',
+    'EMSGSIZE', 'EMULTIHOP', 'ENAMETOOLONG', 'ENETDOWN', 'ENETRESET', 'ENETUNREACH',
+    'ENFILE', 'ENOBUFS', 'ENODATA', 'ENODEV', 'ENOENT', 'ENOEXEC', 'ENOLCK',
+    'ENOLINK', 'ENOMEM', 'ENOMSG', 'ENOPROTOOPT', 'ENOSPC', 'ENOSR', 'ENOSTR',
+    'ENOSYS', 'ENOTCONN', 'ENOTDIR', 'ENOTEMPTY', 'ENOTSOCK', 'ENOTSUP', 'ENOTTY',
+    'ENXIO', 'EOPNOTSUPP', 'EOVERFLOW', 'EPERM', 'EPIPE', 'EPROTO',
+    'EPROTONOSUPPORT', 'EPROTOTYPE', 'ERANGE', 'EROFS', 'ESPIPE', 'ESRCH', 'ESTALE',
+    'ETIME', 'ETIMEDOUT', 'ETXTBSY', 'EWOULDBLOCK', 'EXDEV',
+  ],
+  dlopen: ['RTLD_LAZY', 'RTLD_NOW', 'RTLD_GLOBAL', 'RTLD_LOCAL', 'RTLD_DEEPBIND'],
+  priority: [
+    'PRIORITY_LOW', 'PRIORITY_BELOW_NORMAL', 'PRIORITY_NORMAL',
+    'PRIORITY_ABOVE_NORMAL', 'PRIORITY_HIGH', 'PRIORITY_HIGHEST',
+  ],
+};
+
+// STALENESS RATCHET. The static list can only rot in one direction that hurts: node
+// grows a name and we never hear about it. The host cannot tell us what the union
+// is, but it CAN tell us about any name it has that we lack — and that is exactly
+// the "node grew a constant" signal. The reverse (we have names the host lacks) is
+// the design working, so it is never an error. Fail loudly rather than write a patch
+// that is quietly behind node.
+const hostKeys = {
+  fs: Object.keys(fs.constants),
+  signals: Object.keys(os.constants.signals),
+  errno: Object.keys(os.constants.errno),
+  dlopen: Object.keys(os.constants.dlopen),
+  priority: Object.keys(os.constants.priority),
+};
+const stale = [];
+for (const [g, names] of Object.entries(NODE_CONSTANTS)) {
+  const have = new Set(names);
+  for (const k of hostKeys[g]) if (!have.has(k)) stale.push(`${g}.${k}`);
+}
+if (stale.length) {
+  console.error(`host node ${process.version} exposes ${stale.length} name(s) missing from`);
+  console.error('NODE_CONSTANTS in this file — node grew a constant. Re-transcribe the');
+  console.error('NODE_DEFINE_CONSTANT lists from node\'s src/node_constants.cc, then rerun:');
+  for (const s of stale) console.error(`    ${s}`);
+  process.exit(1);
+}
+
+const fsKeys = NODE_CONSTANTS.fs;
+const signalKeys = NODE_CONSTANTS.signals;
+const errnoKeys = NODE_CONSTANTS.errno;
+const dlopenKeys = NODE_CONSTANTS.dlopen;
+const priorityKeys = NODE_CONSTANTS.priority;
 
 const body = `
     /* CLODE (generated by scripts/gen-node-constants.mjs — do not hand-edit).

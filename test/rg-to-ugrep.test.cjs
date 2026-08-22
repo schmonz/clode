@@ -115,7 +115,27 @@ test('both spawn routes translate rg identically (child_process and Bun.spawn)',
 //   bfs -type f    none         lists all  keeps         keeps
 const { rgFilesToListing } = require('../libexec/bun-shim.cjs');
 
-test('rg --files: --no-ignore routes to bfs (which has no ignore logic — that IS the ask)', () => {
+// These rows drive the REAL host ugrep/bfs, so they need the applet installed.
+// CI runners do not have them; this box does (/opt/pkg/bin), which is why they
+// passed here and failed on ubuntu-latest.
+//
+// They must SKIP, never soften. What each one pins is measured behaviour of a real
+// binary — bfs keeps zero-length files, ugrep's -l drops them, `-L '$^'` lists
+// everything — and an assertion that quietly holds because the applet is absent is
+// worse than no assertion at all: it reports green for a claim it never tested.
+// So: skip with a reason when the applet is missing, and assert in full when it is
+// present. Nothing below is conditional on anything except presence.
+//
+// Presence is probed through rgFilesToListing itself rather than a second copy of
+// the lookup, so the test can only disagree with the shim about "is bfs here?" if
+// the shim disagrees with itself: it returns null from exactly the branch that
+// failed to resolve the applet (CLODE_BFS/CLODE_UGREP, else PATH).
+const NO_BFS = rgFilesToListing(['--files', '--no-ignore', '/nonexistent'])
+  ? false : 'needs bfs (not installed)';
+const NO_UGREP = rgFilesToListing(['--files', '/nonexistent'])
+  ? false : 'needs ugrep (not installed)';
+
+test('rg --files: --no-ignore routes to bfs (which has no ignore logic — that IS the ask)', { skip: NO_BFS }, () => {
   const out = rgFilesToListing(['--files', '--hidden', '--no-ignore', '--max-depth', '4',
     '--glob', '.orphaned_at', '/tmp/x']);
   assert.ok(out, 'no applet resolved');
@@ -123,13 +143,13 @@ test('rg --files: --no-ignore routes to bfs (which has no ignore logic — that 
   assert.deepStrictEqual(out.slice(1), ['/tmp/x', '-maxdepth', '4', '-type', 'f', '-name', '.orphaned_at']);
 });
 
-test('rg --files: without --hidden, bfs must exclude dotfiles (rg skips them by default)', () => {
+test('rg --files: without --hidden, bfs must exclude dotfiles (rg skips them by default)', { skip: NO_BFS }, () => {
   const out = rgFilesToListing(['--files', '--no-ignore', '/tmp/x']);
   assert.ok(out[0].endsWith('bfs'));
   assert.ok(out.join(' ').includes("! -path */.*"), `dotfiles not excluded: ${out.join(' ')}`);
 });
 
-test('rg --files: ignore-respecting form routes to ugrep --ignore-files', () => {
+test('rg --files: ignore-respecting form routes to ugrep --ignore-files', { skip: NO_UGREP }, () => {
   const out = rgFilesToListing(['--files', '--hidden', '/repo']);
   assert.ok(out[0].endsWith('ugrep'));
   assert.ok(out.includes('--ignore-files'), 'must honor .gitignore');
@@ -147,7 +167,7 @@ test('rg --files: ignore-respecting form routes to ugrep --ignore-files', () => 
 //
 // If this fails on some platform's ugrep, the translation is wrong THERE and the
 // fix is a different never-matching construct — not relaxing this assertion.
-test('rg --files: ugrep branch lists empty/binary/ignored/hidden exactly', () => {
+test('rg --files: ugrep branch lists empty/binary/ignored/hidden exactly', { skip: NO_UGREP }, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-ugrep-sem-'));
   fs.mkdirSync(path.join(dir, 'sub'));
   fs.writeFileSync(path.join(dir, 'empty.txt'), '');                 // MUST be listed
@@ -159,7 +179,10 @@ test('rg --files: ugrep branch lists empty/binary/ignored/hidden exactly', () =>
   fs.writeFileSync(path.join(dir, 'sub', '.hidden'), 'x\n');         // hidden -> omitted
 
   const argv = rgFilesToListing(['--files', dir]);   // no --hidden: dotfiles excluded
-  if (!argv || !argv[0].endsWith('ugrep')) { fs.rmSync(dir, { recursive: true, force: true }); return; }
+  // Previously this bailed out with a bare `return` when no applet resolved, which
+  // is a PASS for a row that tested nothing. Entry is gated on NO_UGREP now, so
+  // reaching here with no ugrep argv is a real failure, not a reason to skip.
+  assert.ok(argv && argv[0].endsWith('ugrep'), 'expected the ugrep branch');
   const r = require('node:child_process').spawnSync(argv[0], argv.slice(1), { encoding: 'utf8' });
   const got = r.stdout.split('\n').filter(Boolean)
     .map((f) => path.relative(dir, f)).sort();
@@ -176,7 +199,7 @@ test('rg --files: an untranslatable flag is refused, not silently mistranslated'
 // This is the concrete reason the dispatch exists — the bundle's startup call
 // looks for `.orphaned_at`, marker files are usually zero-length, and ugrep's -l
 // lists files with a MATCH, so an empty file would silently never appear.
-test('rg --files: the bfs branch finds a zero-length marker file', () => {
+test('rg --files: the bfs branch finds a zero-length marker file', { skip: NO_BFS }, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-files-'));
   fs.mkdirSync(path.join(dir, 'sub'));
   fs.writeFileSync(path.join(dir, '.orphaned_at'), '');       // empty, on purpose

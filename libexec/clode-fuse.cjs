@@ -1227,8 +1227,18 @@ async function clodeBuild(args, opts) {
     {
       const required = (() => {
         // One source of truth: the number the shim itself enforces.
+        //
+        // Read it through `libexec`, NOT __dirname. Under a fused NATIVE clode this
+        // file is esbuilt into the clode-main bundle, so __dirname is the archive
+        // root and the join lands on '/quaude/node-shim/internal/engine-constants.cjs'
+        // — which is a member NAME, not a path the bundle's fs can open, so the very
+        // first `clode build` under a fused builder died with ENOENT on it. `libexec`
+        // already points at the materialized payload in that case (set above, from
+        // materializeFusedPayload, which lands node-shim/ under <mat>/libexec/), and
+        // at the repo's libexec/ otherwise — the same two-case path every other fuse
+        // input here is read through.
         const shimSrc = fs.readFileSync(
-          path.join(__dirname, 'node-shim/internal/engine-constants.cjs'), 'utf8');
+          path.join(libexec, 'node-shim/internal/engine-constants.cjs'), 'utf8');
         const m = shimSrc.match(/const REQUIRED_ABI = (\d+);/);
         if (!m) throw new Error('cannot read REQUIRED_ABI from node-shim/internal/engine-constants.cjs');
         return Number(m[1]);

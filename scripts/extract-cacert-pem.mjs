@@ -20,13 +20,33 @@
 // real HTTPS against in this engine today, not a separately-sourced or
 // invented set.
 //
-// STALENESS: re-run this script whenever cacert.c is refreshed by
-// update-ca-bundle.sh (spike/quickjs/vendor/txiki.js/scripts/) — there is no
-// automatic link between the two files; test/tls-cacert-pem.test.cjs checks
-// the shipped .pem stays in sync with cacert.c's CURRENT content so a stale
-// extraction is a loud test failure, not a silent drift.
+// STALENESS: re-run this script whenever the txiki.js pin moves or cacert.c is
+// refreshed by update-ca-bundle.sh. There is no automatic link between the two
+// files, so this script also writes a PROVENANCE record (see PROVENANCE below)
+// that test/tls-cacert-pem.test.cjs can check WITHOUT a vendor checkout.
+//
+// PROVENANCE — why a committed record, and not just "read cacert.c and compare".
+// cacert.c is not in this repo. It lives in the txiki.js checkout, which is
+// gitignored scratch that only exists after a build. So the obvious test —
+// re-extract from cacert.c and diff — can only run where someone has already
+// built the engine, and on a plain CI runner it has nothing to read. That test
+// existed and it had never once passed on CI: it hard-asserted a path no
+// `npm test` job creates, so it went red the first time the suite reached it.
+// Making it skip instead would have been worse; it would then verify nothing,
+// anywhere, in CI, forever.
+//
+// The way out is that cacert.c's IDENTITY is committed even though its bytes are
+// not: spike/quickjs/PINS.md pins txiki.js to an exact tag and sha, and cacert.c
+// is whatever that commit says it is. So record the chain
+//     txiki.js pin  ->  sha256(cacert.c)  ->  sha256(tls-cacert.pem)
+// at extraction time. A runner with no checkout can still verify the ends of that
+// chain (does the recorded pin still match PINS.md? does the committed .pem still
+// hash to the recorded digest?), which is exactly the drift worth catching — a pin
+// bump, or a hand-edited .pem, without a re-extraction. A box that DOES have the
+// checkout additionally re-derives the middle. Nothing is vacuous in either case.
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 
@@ -39,6 +59,27 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // CLODE_TJS_VENDOR if your checkout lives somewhere else.
 const CACERT_C = path.join(tjsVendorParentDir(), 'txiki.js/src/cacert.c');
 const OUT_PEM = path.join(REPO, 'libexec/node-shim/modules/tls-cacert.pem');
+// Deliberately NOT beside the .pem: libexec/quaude-fuse.js sweeps every file under
+// node-shim/modules/ and node-shim/internal/ into a fused quaude verbatim, with no
+// extension filter, so a record dropped there would ship inside every quaude for no
+// runtime reason. It belongs next to PINS.md, which is the fact it is anchored to.
+const PROVENANCE = path.join(REPO, 'spike/quickjs/tls-cacert-provenance.json');
+const PINS = path.join(REPO, 'spike/quickjs/PINS.md');
+
+export const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+
+// The txiki.js line of PINS.md: "txiki.js <tag> <sha> <date>". One reader, used by
+// both this script and the test, so they cannot disagree about what is pinned.
+export function txikiPin(pinsFile = PINS) {
+  const line = fs.readFileSync(pinsFile, 'utf8').split('\n')
+    .find((l) => l.split(/\s+/)[0] === 'txiki.js');
+  if (!line) throw new Error(`no "txiki.js" pin line in ${pinsFile}`);
+  const [, tag, sha] = line.split(/\s+/);
+  return { tag, sha };
+}
+
+export const provenancePath = () => PROVENANCE;
+export const readProvenance = () => JSON.parse(fs.readFileSync(PROVENANCE, 'utf8'));
 
 // Decode the C source's `const char tjs_cacert_pem[] = "line1\n" "line2\n" ...;`
 // into the plain text it represents. The generator (update-ca-bundle.sh) only
@@ -63,12 +104,28 @@ export function extractPemFromCacertC(src) {
 }
 
 export function main() {
-  const src = fs.readFileSync(CACERT_C, 'utf8');
-  const pem = extractPemFromCacertC(src);
+  const raw = fs.readFileSync(CACERT_C);
+  const pem = extractPemFromCacertC(raw.toString('utf8'));
   const certCount = (pem.match(/-----BEGIN CERTIFICATE-----/g) || []).length;
   if (certCount < 50) throw new Error(`extract-cacert-pem: only found ${certCount} certificates — suspiciously low, refusing to write`);
   fs.writeFileSync(OUT_PEM, pem);
   console.log(`extract-cacert-pem: wrote ${OUT_PEM} (${pem.length} bytes, ${certCount} certificates)`);
+
+  // Write the chain in the same breath as the .pem. Two files that must agree are
+  // only safe if one command produces both; a "remember to also update" note is the
+  // drift, not the guard against it.
+  const pin = txikiPin();
+  const record = {
+    _: 'Written by scripts/extract-cacert-pem.mjs — do not hand-edit. Checked by test/tls-cacert-pem.test.cjs.',
+    txiki_tag: pin.tag,
+    txiki_sha: pin.sha,
+    cacert_c_sha256: sha256(raw),
+    pem_sha256: sha256(Buffer.from(pem)),
+    pem_bytes: Buffer.byteLength(pem),
+    certificates: certCount,
+  };
+  fs.writeFileSync(PROVENANCE, JSON.stringify(record, null, 2) + '\n');
+  console.log(`extract-cacert-pem: wrote ${PROVENANCE} (txiki.js ${pin.tag} ${pin.sha.slice(0, 12)})`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) main();
