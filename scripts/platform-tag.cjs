@@ -132,7 +132,30 @@ function tjsBin(repo, opts = {}) {
 // real default the moment that default changes, and the test just skips
 // forever instead of failing loud.
 function tjsVendorParentDir(env = process.env) {
-  return env.CLODE_TJS_VENDOR || path.join(env.CLODE_TJS_LOCAL_ROOT || env.TMPDIR || os.tmpdir(), 'clode-tjs-vendor');
+  if (env.CLODE_TJS_VENDOR) return env.CLODE_TJS_VENDOR;
+  if (env.CLODE_TJS_LOCAL_ROOT) return path.join(env.CLODE_TJS_LOCAL_ROOT, 'clode-tjs-vendor');
+  // DURABLE local scratch, deliberately NOT TMPDIR.
+  //
+  // The vendor checkout has two requirements that pull in opposite directions: it
+  // must stay off NFS (the repo is commonly NFS-mounted, and a ~700MB checkout
+  // there is the pathology localScratchRoot exists to avoid), and it must not be
+  // REAPED. TMPDIR satisfied the first and failed the second: on macOS it resolves
+  // under /var/folders, which the OS periodically cleans, and it was reaped twice
+  // in one session — once silently breaking a build chain mid-flight.
+  //
+  // ~/.cache/clode is local, survives reboots, and is where clode already keeps
+  // durable state. The XDG lookup is duplicated from libexec/clode-paths.cjs on
+  // purpose rather than imported: this file is a dependency-free leaf (see
+  // repoVersion below for the same call), and clode-paths pulls in more than a
+  // path helper should.
+  //
+  // Anyone whose HOME is on NFS should set CLODE_TJS_VENDOR (or
+  // CLODE_TJS_LOCAL_ROOT) — the overrides above are unchanged, and CI already
+  // sets one.
+  const home = env.HOME || env.USERPROFILE;
+  const xdg = env.XDG_CACHE_HOME || (home ? path.join(home, '.cache') : null);
+  if (xdg) return path.join(xdg, 'clode', 'tjs-vendor');
+  return path.join(env.TMPDIR || os.tmpdir(), 'clode-tjs-vendor');
 }
 
 // The VERSION file at the repo root — the same source scripts/build-clode-main.mjs's

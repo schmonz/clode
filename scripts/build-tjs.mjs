@@ -90,6 +90,32 @@ if (darwinPoll) {
 // /var/folders/... on the boot volume, never the NFS mount) or the platform
 // default. Stable, not a fresh mktemp per run, so incremental rebuilds still
 // hit the same object files/cmake cache.
+//
+// NOTE the deliberate asymmetry with the VENDOR tree, which no longer lives here.
+// TMPDIR is reaped on macOS, and the two cases fail differently when it happens:
+// losing intermediates costs a rebuild, while losing the vendor checkout broke a
+// build chain mid-flight and left a husk that passed an existsSync. Correctness
+// beats speed there, so the vendor moved to ~/.cache/clode/tjs-vendor
+// (tjsVendorParentDir); intermediates stay on the fast local scratch.
+// A cmake build dir remembers the SOURCE dir it was configured against, and
+// refuses to be reused for another one — with a message about sources not
+// matching that says nothing about what to do. That happens on any legitimate
+// move of the vendor tree (the ~/.cache relocation did exactly this), so drop a
+// build dir whose cached source no longer points at ours instead of failing.
+// Losing it costs a rebuild; keeping it costs a confusing error and a manual rm.
+function dropStaleCmakeCache(buildDir, srcDir) {
+  const cache = path.join(buildDir, 'CMakeCache.txt');
+  if (!fs.existsSync(cache)) return;
+  let home = null;
+  try {
+    const m = fs.readFileSync(cache, 'utf8').match(/^CMAKE_HOME_DIRECTORY:INTERNAL=(.*)$/m);
+    home = m && m[1].trim();
+  } catch { /* unreadable cache: treat as stale */ }
+  if (home && path.resolve(home) === path.resolve(srcDir)) return;
+  console.log(`cmake cache in ${buildDir} was configured for ${home || '(unreadable)'} — dropping it for ${srcDir}`);
+  fs.rmSync(buildDir, { recursive: true, force: true });
+}
+
 function localScratchRoot() {
   return process.env.CLODE_TJS_LOCAL_ROOT || process.env.TMPDIR || os.tmpdir();
 }
@@ -263,8 +289,24 @@ function applyCosmoPatches(dir) {
   console.log('patch libtjs-cosmo.patch: applied');
 }
 
+// Is this a real checkout, or the husk of a reaped one? A directory can survive
+// while its contents do not — measured on macOS, where a /var/folders vendor tree
+// came back with directories intact but CMakeLists.txt and .git GONE. An
+// existsSync on the DIRECTORY passes on that husk, and the failure then surfaces
+// somewhere confusing and much later (a `git rev-parse` in a non-repo, or a patch
+// that will not apply). Test for load-bearing CONTENT instead.
+function checkoutIsIntact(dir) {
+  return fs.existsSync(path.join(dir, '.git')) && fs.existsSync(path.join(dir, 'CMakeLists.txt'));
+}
+
 function ensureCheckout(name, url) {
   const dir = path.join(vendor, name);
+  if (fs.existsSync(dir) && !checkoutIsIntact(dir)) {
+    // Remove the husk rather than cloning over it: git refuses a non-empty target,
+    // and a partial tree is worth nothing anyway.
+    console.log(`${name}: checkout at ${dir} is missing .git/CMakeLists.txt (reaped?) — re-cloning`);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(vendor, { recursive: true });
     run('git', ['clone', '--recurse-submodules', '--depth', '1', '--branch', pin(name), url, dir]);
@@ -3026,6 +3068,7 @@ function targetToken(forOutDir) {
 const buildRoot = process.env.CLODE_TJS_BUILD || path.join(localScratchRoot(), 'clode-tjs-build');
 const buildDir = path.join(buildRoot, targetToken(outDir), 'build');
 fs.mkdirSync(buildDir, { recursive: true });
+dropStaleCmakeCache(buildDir, tjsDir);
 run('cmake', ['-S', tjsDir, '-B', buildDir, ...cmakeArgs]);
 
 // ---- bytecode regen: pure helpers -----------------------------------------
@@ -3092,6 +3135,7 @@ function bytecodeIsFresh(cText, jsBytes) {
 function buildHostTjsc(dir, hostBuildDir) {
   fs.mkdirSync(hostBuildDir, { recursive: true });
   console.log(`bytecode regen: target build is cross — configuring a host-native tjsc at ${hostBuildDir} (its output is valid for every target; canonical-LE)`);
+  dropStaleCmakeCache(hostBuildDir, dir);
   run('cmake', ['-S', dir, '-B', hostBuildDir, '-DCMAKE_BUILD_TYPE=Release', '-DTJS_USE_ADA=OFF',
     '-DBUILD_WITH_WASM=OFF', '-DBUILD_WITH_MIMALLOC=OFF', '-DBUILD_WITH_FFI=OFF',
     '-DBUILD_WITH_SQLITE=OFF', '-DBUILD_WITH_LTO=OFF',
