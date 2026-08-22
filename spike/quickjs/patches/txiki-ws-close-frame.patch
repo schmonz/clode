@@ -1,0 +1,111 @@
+diff --git a/src/ws.c b/src/ws.c
+index c253fff..b0d9c5e 100644
+--- a/src/ws.c
++++ b/src/ws.c
+@@ -54,6 +54,12 @@ typedef struct {
+     /* Close info (lws two-phase: stored in PEER_INITIATED_CLOSE, used in CLIENT_CLOSED) */
+     uint16_t close_code;
+     char close_reason[124]; /* RFC 6455: max 123 bytes + NUL */
++    /* close() was called: drain pending writes, then start the RFC6455
++     * closing handshake from the writable callback (see tjs_ws_close). */
++    bool close_requested;
++    /* the HTTP upgrade completed, so the wsi carries the ws role (wsi->ws is
++     * live and CLIENT_WRITEABLE will fire). Gates the handshake in close(). */
++    bool established;
+ } TJSWs;
+ 
+ static JSClassID tjs_ws_class_id;
+@@ -181,6 +187,9 @@ static int tjs_lws_callback(struct lws *wsi, enum lws_callback_reasons reason, v
+         }
+ 
+         case LWS_CALLBACK_CLIENT_ESTABLISHED: {
++            /* Before the callback, so a close() issued from inside onopen still
++             * takes the closing-handshake path. */
++            w->established = true;
+             JSValue v = JS_NewString(w->ctx, w->protocol);
+             maybe_call_callback(w, WS_CALLBACK_OPEN, 1, &v);
+             break;
+@@ -215,6 +224,13 @@ static int tjs_lws_callback(struct lws *wsi, enum lws_callback_reasons reason, v
+ 
+         case LWS_CALLBACK_CLIENT_WRITEABLE: {
+             if (list_empty(&w->pending_writes)) {
++                /* CLODE: nothing left to send. If close() was called, THIS is where the
++                 * closing handshake starts: returning -1 with a close reason already
++                 * armed by lws_close_reason() is the only lws idiom that emits a CLOSE
++                 * frame (see tjs_ws_close). */
++                if (w->close_requested) {
++                    return -1;
++                }
+                 break;
+             }
+ 
+@@ -241,8 +257,9 @@ static int tjs_lws_callback(struct lws *wsi, enum lws_callback_reasons reason, v
+             js_free(w->ctx, pw->data);
+             js_free(w->ctx, pw);
+ 
+-            /* If there are more pending writes, request another writable callback. */
+-            if (!list_empty(&w->pending_writes)) {
++            /* If there are more pending writes — or a close() waiting for the queue to
++             * drain — request another writable callback. */
++            if (!list_empty(&w->pending_writes) || w->close_requested) {
+                 lws_callback_on_writable(wsi);
+             }
+             break;
+@@ -536,19 +553,49 @@ static JSValue tjs_ws_close(JSContext *ctx, JSValue this_val, int argc, JSValue
+         w->close_reason[len] = '\0';
+     }
+ 
+-    if (w->wsi) {
++    /* CLODE: start the RFC6455 CLOSING HANDSHAKE — do not just hang up.
++     *
++     * This used to arm `lws_set_timeout(wsi, PENDING_TIMEOUT_USER_OK, 1)` and wait
++     * for it to fire. That never sends a close frame, and the reason is one line in
++     * lws: the timeout handler (lws_sul_wsitimeout_cb) sets
++     * `socket_is_permanently_unusable = 1` before closing, and
++     * __lws_close_free_wsi() short-circuits straight to just_kill_connection for a
++     * permanently-unusable socket — skipping close_via_role_protocol(), which is the
++     * ONLY thing that arms LRS_WAITING_TO_SEND_CLOSE and therefore the only thing
++     * that ever writes LWS_WRITE_CLOSE. So `ws.close(1000,'done')` dropped the TCP
++     * connection with opcode 0x8 never on the wire, while the local close event was
++     * synthesized from w->close_code — which is exactly why no client-side assertion
++     * could see it. Measured against a real RFC6455 server: npm ws produced
++     * "UPGRADE /" then "CLOSE"; this engine produced "UPGRADE /" and nothing else.
++     *
++     * The documented lws idiom is instead: set the reason with lws_close_reason(),
++     * then return -1 from a protocol callback. That routes through
++     * __lws_close_free_wsi() with the socket still usable, close_via_role_protocol()
++     * takes over, the close frame goes out, and lws waits for the peer's ack
++     * (PENDING_TIMEOUT_CLOSE_ACK, 5s) before finishing — so a peer that distinguishes
++     * a clean close from a dropped connection now sees what node's peer sees.
++     *
++     * We cannot return -1 from here (close() is a JS call, not an lws callback), so
++     * flag it and let CLIENT_WRITEABLE do it once the write queue has drained — which
++     * also stops close() from truncating messages that send() already queued.
++     *
++     * Only once the upgrade has completed, though. Before that the wsi is still in
++     * the h1 role: wsi->ws is NULL (lws_close_reason() dereferences it) and the
++     * writeable callback is CLIENT_HTTP_WRITEABLE, so the flag would never be read
++     * and the socket would sit until lws's connect timeout. A half-open connection
++     * has no ws framing to put a close frame in, so hanging up is the honest answer
++     * — that is the old teardown, kept for exactly this case. */
++    if (w->wsi && w->established) {
+         lws_close_reason(w->wsi, (enum lws_close_status) code, (unsigned char *) reason, len);
+-    }
+-
+-    JS_FreeCString(ctx, reason);
+-
+-    /* Schedule the wsi for closure. lws will send the close frame
+-     * and close the connection in the next service loop. */
+-    if (w->wsi) {
++        w->close_requested = true;
++        lws_callback_on_writable(w->wsi);
++    } else if (w->wsi) {
+         lws_set_timeout(w->wsi, PENDING_TIMEOUT_USER_OK, 1);
+         lws_callback_on_writable(w->wsi);
+     }
+ 
++    JS_FreeCString(ctx, reason);
++
+     return JS_UNDEFINED;
+ }
+ 

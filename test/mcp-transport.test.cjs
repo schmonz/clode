@@ -168,18 +168,21 @@ test('WebSocket: a ws-shaped consumer sees the same sequence as npm ws', (t) => 
       'message:{"jsonrpc":"2.0","id":1,:isBinary=false',
       'close:1000',
     ], 'ws-shaped surface diverged from npm ws');
-    // The client-visible sequence matches. The WIRE does not, and only asserting
-    // on the wire showed it: npm ws sends a close frame (opcode 0x8) and the
-    // engine's native WebSocket sends none — it drops the TCP connection and
-    // synthesizes the close event locally, so the peer sees an abrupt disconnect
-    // where node's peer sees a clean close. Verified at frame level: the server
-    // decodes only 0x1 from the native client, never 0x8.
+    // The client-visible sequence matching was never enough, and this row is the
+    // reason to keep saying so: for a while the engine passed the assertion above
+    // while sending NO close frame at all. It dropped the TCP connection and
+    // synthesized the close event locally from the code close() was handed, so
+    // ["open","message:…","close:1000"] came out identical either way — the
+    // divergence was only ever visible on the WIRE, where npm ws logged
+    // "UPGRADE /" then "CLOSE" and the engine logged "UPGRADE /" and nothing else.
     //
-    // Asserted as the CURRENT truth so the day the engine learns the closing
-    // handshake this row fails and tells you to tighten it to /CLOSE/. That is a
-    // real gap to close in the engine, not a divergence to live with.
-    assert.doesNotMatch(mock.wire(), /CLOSE/,
-      'the engine now sends a close frame — tighten this to assert /CLOSE/ instead');
+    // Fixed in the engine (spike/quickjs/patches/txiki-ws-close-frame.patch): close()
+    // now runs the RFC6455 closing handshake, so opcode 0x8 reaches the peer with
+    // code 1000 and reason "done" and lws waits for the peer's ack. Both halves are
+    // asserted together on purpose — the wire proves the frame went out, the sequence
+    // proves the handshake did not change what the consumer sees.
+    assert.match(mock.wire(), /CLOSE/,
+      `close() sent no RFC6455 close frame — the peer saw a dropped connection. wire:\n${mock.wire()}`);
   } finally { mock.stop(); }
 });
 
