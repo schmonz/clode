@@ -130,8 +130,16 @@ test('shim getopt matches the platform getopt on qjsc\'s option string', { skip:
   // compiles the same bytes cl.exe will.
   fs.writeFileSync(path.join(dir, 'shim.c'),
     `#define _MSC_VER 1\n#include <string.h>\n#include <stdlib.h>\n${shimSource()}${MAIN}`);
+  // NOT <unistd.h>: glibc hides the POSIX getopt declarations under a strict
+  // -std=c11 (no _POSIX_C_SOURCE), so ref.c compiled on darwin and failed on
+  // ubuntu with "'optarg' undeclared" — the REFERENCE half of a differential
+  // failing to build, which says nothing about the shim. Declaring the three
+  // symbols directly takes the header's feature-test-macro rules out of it
+  // entirely; they are ordinary libc globals on every POSIX host.
   fs.writeFileSync(path.join(dir, 'ref.c'),
-    `#include <unistd.h>\n#include <string.h>\n#include <stdlib.h>\n${MAIN}`);
+    `#include <string.h>\n#include <stdlib.h>\n`
+    + `extern char *optarg;\nextern int optind;\n`
+    + `int getopt(int argc, char *const argv[], const char *optstring);\n${MAIN}`);
   for (const which of ['shim', 'ref']) {
     const r = spawnSync(CC, ['-std=c11', '-o', path.join(dir, which), path.join(dir, `${which}.c`)],
       { encoding: 'utf8' });

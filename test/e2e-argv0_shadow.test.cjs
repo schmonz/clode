@@ -81,12 +81,29 @@ test('rewritten grep shadow fails loud when ugrep is absent', { skip: BASH_SKIP 
   const sbx = sandbox(t);
   const snap = rewriteSnap(sbx);
 
-  // Use a minimal PATH that has sh (/bin/sh) but no ugrep, and clear CLODE_UGREP.
-  // The intended exit is 127 (the fail-loud path) — bats declared it via `run -127`.
-  const binDir = path.join(sbx.dir, 'bin');   // never created — matches the bats
+  // The absence has to be REAL, not incidental. This used to run with
+  // PATH=`${binDir}:/bin:/usr/bin`, which only means "no ugrep" on a host where
+  // ugrep happens to live somewhere else — /opt/pkg/bin on the dev box. The
+  // moment CI started installing ugrep (apt puts it in /usr/bin) "absent"
+  // quietly became "present", and this asserted 127 against a run that had
+  // found ugrep and exited 1. A test whose premise depends on the host's
+  // package layout is not testing what it says it is.
+  //
+  // So: an EMPTY PATH containing nothing but a symlink to sh. Now no host can
+  // accidentally satisfy `command -v ugrep`.
+  const binDir = path.join(sbx.dir, 'bin');
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.symlinkSync(BASH, path.join(binDir, 'sh'));
+  // Self-checking premise: if ugrep IS resolvable here, this test is measuring
+  // something else and must say so rather than pass or fail by luck.
+  const probe = spawnSync(BASH, ['-c', 'command -v ugrep'],
+    { encoding: 'utf8', env: { ...sbx.env, PATH: binDir, CLODE_UGREP: '' } });
+  assert.notStrictEqual(probe.status, 0,
+    `ugrep is resolvable under the test PATH (${probe.stdout.trim()}) — the premise of this test is false`);
+
   const r = spawnSync(BASH, ['-c', `. '${snap}'; grep needle`], {
     encoding: 'utf8',
-    env: { ...sbx.env, PATH: `${binDir}:/bin:/usr/bin`, CLODE_UGREP: '' },
+    env: { ...sbx.env, PATH: binDir, CLODE_UGREP: '' },
     cwd: REPO,
   });
   const output = (r.stdout || '') + (r.stderr || '');
