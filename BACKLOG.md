@@ -1150,3 +1150,66 @@ cannot boot.
 **Blocked on this:** `linux-arm64-glibc` floor rows. The VM-built engine works, but
 `clode build --target` will not use it, so a good Linux quaude cannot currently be
 produced from this host without bypassing the template path.
+
+## ★ HANDOFF — operational state at 2026-08-22 (read this first)
+
+Written at the end of a long session, for whoever picks this up. The durable
+record is: this file, the commit messages (deliberately long), the memory notes,
+and the tests. Anything below is the perishable part that lives nowhere else.
+
+**Unpushed:** `195af60` (proxy fix). `origin/main` is at `0decc98`.
+
+**THE OPEN QUESTION.** CI run **32573776213** (`ci` on `0decc98`) had 20 of 32 jobs
+failing while still in progress — legs on linux, windows AND darwin. That is
+AFTER the regression fix, so the first thing to establish is which of these it is:
+
+- Is the leg failure the SAME `SIGINFO`-shaped compile error as before
+  (`src/signals.c: 'X' undeclared`)? Then the guard fix is incomplete — look for
+  another unguarded name, or a group whose names still come from the host.
+- Is it a DIFFERENT error? Then the constants fix worked and this is new.
+- Is it just slow/cold? `ed0d8ff` made the tjs cache key consume
+  `scripts/engine-recipe.mjs`, so the key CHANGED ONCE and every leg rebuilds its
+  engine from scratch on the first run after. Expected, and it is not a failure.
+
+Do not guess between those three. Read the logs; `gh api
+repos/schmonz/clode/actions/jobs/<id>/logs` and grep for `error:` — `gh run view
+--log-failed` is drowned by git-config teardown noise in this repo.
+
+**TWO ATTRIBUTION TRAPS, both live right now:**
+
+1. `upstream-drift` run 32555253017 is RED, and that does NOT mean upstream broke
+   us. It ran on `d4f831c7`, which had my constants regression; its `boots` job
+   builds the musl leg and died on the same compile error. Re-run it against a
+   green commit before believing anything it says. (This is exactly the misread
+   that job's own header warns about, and I nearly made it.)
+2. `tjs-legs` run 32555844772 (netbsd-arm64) is RED for the same reason — it was
+   dispatched to prove the errno fix made that leg green, and it proved nothing.
+   Re-dispatch: `gh workflow run tjs-legs.yml --field tier=release --field
+   only=netbsd-arm64`.
+
+**`templates-drift` is RED BY DESIGN** until a release is cut (published engines
+are 3 weeks stale). Do not "fix" the check. Cutting a release is the remedy, and
+the check will then go green as evidence rather than assumption. See the
+templates section above — republishing WITHOUT the recipe stamp silently resets
+the clock, so land the manifest `recipe` field with or before the republish.
+
+**Renovate:** 8 open PRs are not stuck on Renovate. `automerge: true` with no
+`ignoreTests` means they wait for a green base — a red main blocks all of them.
+They should drain by themselves once main is green. Note that pushing to main
+re-triggers all 8 (their merge commits are invalidated), which looks like CI
+noise from a push and is not.
+
+**Still open, with full diagnoses in the commit messages / sections above:**
+`close()` while CONNECTING is ignored (pre-existing, may be reachable via the
+bundle's connect-timeout path); the template cache dead-ends on a stale entry
+with no re-fetch; `net.Socket` over `tjs.connect` is what real npm `ws` needs
+(NOT `http.request`, which was already tried); glibc legs will report 55 fs
+constants where node reports 57 until `_GNU_SOURCE` reaches the `tjs` target.
+
+**The lesson worth carrying:** four separate times this session the INSTRUMENT was
+wrong, not the thing measured — a mock's handshake GUID, a mock that never
+answered a close frame, a fidelity test comparing both sides through JSON, and a
+proxy mock that could not accept connections because it shared a process with a
+`spawnSync`. Assert on what ARRIVED at the far end, always run the reference
+implementation against the same mock, and prove a test fails before believing it
+passes.
