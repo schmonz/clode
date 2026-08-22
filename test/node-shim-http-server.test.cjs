@@ -105,3 +105,60 @@ server.listen(0, '127.0.0.1', async () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// Chunked REQUEST bodies used to be a loud wall here ("node-shim: http.Server
+// chunked request bodies not implemented"). They work now, not because the
+// server grew a special case but because the server and the new client share
+// ONE message parser (libexec/node-shim/modules/http.cjs, "shared message
+// parsing") — the client had to decode chunked anyway, and a second copy is how
+// the two faces would have drifted. Differential, like every row above: the
+// same probe runs under host node and under tjs.
+test('http server: chunked request bodies decode identically tjs vs host node', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-httpchunk-'));
+  const probe = path.join(dir, 'chunk.cjs');
+  fs.writeFileSync(probe, `
+'use strict';
+const http = require('node:http');
+const server = http.createServer((req, res) => {
+  const chunks = [];
+  req.on('data', (c) => chunks.push(c));
+  req.on('end', () => {
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    res.end(JSON.stringify({
+      te: req.headers['transfer-encoding'] || null,
+      cl: req.headers['content-length'] || null,
+      body: Buffer.concat(chunks).toString('utf8'),
+      complete: req.complete,
+    }));
+  });
+});
+server.listen(0, '127.0.0.1', () => {
+  // write()+write()+end() with no Content-Length => the client frames it as
+  // Transfer-Encoding: chunked, which the server then has to decode.
+  const req = http.request({ host: '127.0.0.1', port: server.address().port, path: '/chunked-in', method: 'POST', agent: false }, (res) => {
+    const out = [];
+    res.on('data', (c) => out.push(c));
+    res.on('end', () => {
+      console.log(Buffer.concat(out).toString());
+      server.close(() => process.exit(0));
+    });
+  });
+  req.on('error', (e) => { console.error(e.stack || e); process.exit(1); });
+  req.write('alpha-');
+  req.write('beta-');
+  req.end('gamma');
+});
+`);
+  try {
+    const n = spawnSync(process.execPath, [probe], { encoding: 'utf8', timeout: 30000 });
+    assert.strictEqual(n.status, 0, `host node oracle failed:\n${n.stderr}`);
+    const r = runLoader(probe, [], { timeout: 30000 });
+    assert.strictEqual(r.status, 0, `tjs probe failed:\n${r.stderr}`);
+    assert.deepStrictEqual(JSON.parse(r.stdout.trim()), JSON.parse(n.stdout.trim()),
+      'chunked request-body handling diverged tjs vs node');
+    assert.strictEqual(JSON.parse(n.stdout.trim()).te, 'chunked', 'the probe must actually exercise chunked framing');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

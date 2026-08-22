@@ -24,6 +24,16 @@ class Readable extends EventEmitter {
     this._buf = [];
     this._endEmitted = false;
     this._flushing = false;
+    // FLOWING MODE (added with the node:http CLIENT, 2026-08-22). resume() used
+    // to be a no-op `return this`, which is a LIE with real consequences:
+    // `res.resume()` is the standard way to drain a response body you don't
+    // want (the AWS SDK, and anything that just needs the socket released, do
+    // exactly that), and under the old no-op the stream neither drained nor
+    // ever emitted 'end' — the caller hung forever with nothing thrown. Node's
+    // contract: resume() switches to flowing mode, chunks with no 'data'
+    // listener are DISCARDED (not buffered), and 'end' fires regardless.
+    // Characterized against host node in test/node-shim-stream.test.cjs.
+    this._flowing = false;
     this.readable = true; // Task 4b: child_process wraps a real child stdout/stderr in this
     if (typeof opts.read === 'function') this._read = opts.read;
   }
@@ -64,8 +74,13 @@ class Readable extends EventEmitter {
     fire();
     return this;
   }
-  pause() { return this; }
-  resume() { return this; }
+  pause() { this._flowing = false; return this; }
+  resume() {
+    this._flowing = true;
+    if (this._buf.length) this._flushBuffered();   // drains, to listeners or to nowhere
+    else this._maybeEnd();
+    return this;
+  }
   // setEncoding (Task: interactive TUI wall): the bundle's hook runner and other
   // subprocess readers construct a stream reader that does
   // `stream.setEncoding("utf-8"); stream.on("data", …)` — without this method
@@ -95,8 +110,9 @@ class Readable extends EventEmitter {
   // on every headless box. Nothing threw; the loop just drained. Any late
   // reader of any stream hit this — the keychain was only the first victim.
   _emitData(chunk) {
-    if (this.listenerCount('data') > 0) queueMicrotask(() => this.emit('data', chunk));
-    else this._buf.push(chunk);   // no consumer yet: hold it, do not drop it
+    if (this.listenerCount('data') > 0) { queueMicrotask(() => this.emit('data', chunk)); return; }
+    if (this._flowing) return;    // flowing with no consumer: node discards, so do we
+    this._buf.push(chunk);        // not flowing and no consumer yet: hold it, do not drop it
   }
   _flushBuffered() {
     if (!this._buf.length || this._flushing) return;
@@ -110,11 +126,13 @@ class Readable extends EventEmitter {
     });
   }
   // 'end' is withheld until (a) EOF was pushed, (b) the backlog is drained, and
-  // (c) somebody is actually listening. (c) is what makes a late attach work:
-  // emitting to nobody would burn the one 'end' this stream ever sends.
+  // (c) somebody is actually listening OR the stream was explicitly resume()d.
+  // (c) is what makes a late attach work: emitting to nobody would burn the one
+  // 'end' this stream ever sends — except after resume(), where node emits 'end'
+  // whether or not anyone reads the data.
   _maybeEnd() {
     if (!this._ended || this._endEmitted || this._flushing || this._buf.length) return;
-    if (this.listenerCount('end') === 0 && this.listenerCount('data') === 0) return;
+    if (!this._flowing && this.listenerCount('end') === 0 && this.listenerCount('data') === 0) return;
     this._endEmitted = true;
     queueMicrotask(() => {
       this.emit('end');

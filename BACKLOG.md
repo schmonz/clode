@@ -569,17 +569,54 @@ well-tested, and reasonably fast** as we can possibly make it."
   knowing — it tells us whether the Darwin 8 defect is kernel-wide or ppc-specific, which is
   direct evidence for the paleo-POSIX floor walk (`panther-floor-next-rung`).
 
-- **`http.request`/`https.request` are a WALL in the node-shim (2026-07-31).** Neither exists:
-  the modules' own header comments call it "a genuine later wall". Anything in the bundle that
-  reaches for Node's classic client API gets `TypeError: not a function`, and because such a
-  throw can escape from a callback where nothing settles the awaiting promise, the symptom can
-  be a silent hang rather than a named error. A minimal fetch-backed client was written to make
-  the surface traceable (cc2ac10) and then REVERTED: the `[http]` trace proved the credentials
-  stall makes no http request at all, so the client was unrelated to that bug, unreviewed, and
-  carried no real socket/backpressure/timeout semantics — not something to ship on a hunch.
-  WHEN IT MATTERS: implement it properly (real semantics + review), or keep it a loud wall.
-  Today's evidence says nothing on the `-p` or interactive paths needs it, so this is a latent
-  gap, not an active bug. See `.superpowers/sdd/2026-07-31-old-darwin-poll-backend/task-11-report.md`.
+- **~~`http.request`/`https.request` are a WALL in the node-shim (2026-07-31)~~ — CLOSED
+  2026-08-22.** Implemented for real over `tjs.connect('tcp'|'tls', ...)`: request/get/
+  ClientRequest for both modules, sharing ONE message parser with the server half, and
+  characterized differentially against host node (`test/node-shim-http-client.test.cjs`, 22
+  plaintext rows + 5 TLS rows, both engines driving the same origin). The 2026-07-31 entry's
+  "today's evidence says nothing needs it" was RE-MEASURED before implementing, and was only
+  half right:
+    - **default Anthropic backend: genuinely latent, confirmed.** A `-p` turn, an interactive
+      TUI boot, MCP over HTTP *and* SSE, and a run with `HTTP(S)_PROXY` set reach the client
+      ZERO times. axios — the bundle's only heavy `node:http` user under real Node (bootstrap,
+      event_logging, mcp-registry, metrics_enabled, datadog) — picks its **XHR** adapter under
+      tjs, because txiki defines a global `XMLHttpRequest` and axios prefers
+      `['xhr','http','fetch']`. Those requests all complete today (200/202/401 observed).
+    - **Bedrock: NOT latent.** `CLAUDE_CODE_USE_BEDROCK=1` with no static credentials drove 10
+      `http.request` calls at the EC2 instance metadata service (169.254.169.254) from the AWS
+      SDK credential chain; with static credentials it drove an `https.request` at
+      `bedrock.<region>.amazonaws.com/inference-profiles` from `@smithy/node-http-handler`.
+      Host node, same bundle/env, degrades cleanly to "Could not load credentials from any
+      providers"; quaude printed `API Error: <nameless> is not a function` (QuickJS TypeErrors
+      carry no symbol name), and on a real EC2 instance role Bedrock could not work at all.
+  Deliberately NOT covered, each throwing a named error rather than approximating: `socketPath`,
+  `createConnection`, `lookup`, `localAddress`, `family`
+  (`ERR_SHIM_HTTP_UNSUPPORTED_OPTION`); TLS options with no `tjs.connect` equivalent — pfx,
+  passphrase, secureContext, ciphers, minVersion, maxVersion, checkServerIdentity,
+  secureProtocol (`ERR_SHIM_HTTPS_UNSUPPORTED_TLS_OPTION`); non-`chunked` Transfer-Encoding.
+  Documented divergences: no connection pooling (always `Connection: close`), `setKeepAlive`/
+  `cork`/`uncork` no-ops, `socket.end()` full-closes rather than half-closes.
+
+- **npm `ws` still cannot connect under the shim, and now says so by name (2026-08-22).**
+  Implementing `http.request` did NOT unblock `ws`, as had been hoped. Reason, measured:
+  `ws/lib/websocket.js` unconditionally sets `opts.createConnection = opts.createConnection ||
+  (isSecure ? tlsConnect : netConnect)` before calling `request(opts)` — so `ws` never uses the
+  client's own socket; it demands `net.connect`/`tls.connect`, which remain walls. The shim's
+  client refuses `createConnection` by name (`ERR_SHIM_HTTP_UNSUPPORTED_OPTION`) instead of
+  ignoring it and connecting somewhere the caller did not ask for. Unblocking `ws` therefore
+  means implementing a real `net.Socket` (it also reads `socket._writableState.length` for
+  `bufferedAmount`), not more HTTP. Not needed today: quaude's WebSocket transport is the
+  engine's own header-capable native `WebSocket` (see `libexec/bun-shim.cjs`), and that wiring
+  was deliberately left untouched.
+
+- **HTTP(S)_PROXY is silently ignored under quaude (2026-08-22, measured).** With
+  `HTTPS_PROXY`/`HTTP_PROXY` set, a `-p` turn made every request DIRECT: the Messages call goes
+  through the engine's `fetch` and the axios calls through the engine's `XMLHttpRequest`, and
+  neither consults the proxy environment. Implementing `http.request` does not change this —
+  the bundle's proxy-agent stack only ever engages on axios's *http* adapter, which is not the
+  adapter axios selects under tjs. A user behind a mandatory proxy would see connections fail
+  or leak past the proxy with no notice. Fixing it means proxy support in the engine's fetch/XHR
+  (or forcing axios onto the http adapter), not in the shim's client.
 
 ### Known quaude runtime bugs
 

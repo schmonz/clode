@@ -982,9 +982,16 @@ function _wsArgs(url, opts){
 // capability flag that says yes must mean the surface is there.
 //
 // This is the cheap half of closing the quaude-vs-naude WebSocket divergence.
-// The expensive half — running npm ws itself — additionally needs http.request
-// (an HTTP/1.1 client with 'upgrade'), which is worth doing on its own merits but
-// is not needed for parity on the surface the bundle actually uses.
+// The expensive half is running npm ws itself. That was assumed to be blocked on
+// http.request (an HTTP/1.1 client with 'upgrade'); http.request now EXISTS
+// (libexec/node-shim/modules/http.cjs, 2026-08-22) and ws is still blocked, for
+// a different reason found by reading ws: `initAsClient` unconditionally sets
+// `opts.createConnection = opts.createConnection || (isSecure ? tlsConnect :
+// netConnect)`, so ws never uses the client's own socket — it demands
+// net.connect/tls.connect, which are still walls (and it reads
+// `socket._writableState.length` for bufferedAmount besides). Unblocking ws
+// means a real net.Socket, not more HTTP. Nothing on the surface the bundle
+// actually uses needs it.
 function _wsShape(ws) {
   if (!ws || typeof ws.addEventListener !== 'function' || typeof ws.on === 'function') return ws;
   const B = (() => { try { return require('buffer').Buffer; } catch (_) { return null; } })();
@@ -1071,10 +1078,15 @@ globalThis.WebSocket = BunWebSocket;
 globalThis.__clodeWsUnavailable = !_wsTransportAvailable();
 
 // A ws-shaped module for the TJS BRING-UP PATH ONLY, when the real `ws` isn't
-// loadable: under the node-shim loader `ws` can't load at all yet (it needs a
-// fuller tls/net than the shim provides), but the -p path merely CAPTURES it at
-// module-load time (`P(require("ws"))`) and never opens a socket — so there the
-// capture defers, and only CONSTRUCTING a WebSocket/Server fails loud.
+// loadable. (CORRECTION 2026-08-22, measured: `require('ws')` under the node-shim
+// loader SUCCEEDS today — this comment used to claim it "can't load at all yet".
+// What fails is CONNECTING: `new WebSocket(url)` throws
+// ERR_SHIM_HTTP_UNSUPPORTED_OPTION from http.request because ws always passes
+// `createConnection`, i.e. it wants net.connect/tls.connect, which are still
+// walls. Before the client existed the same call threw a nameless
+// "not a function".) Either way the -p path merely CAPTURES ws at module-load
+// time (`P(require("ws"))`) and never opens a socket — so the capture defers,
+// and only CONSTRUCTING a WebSocket/Server fails loud.
 // Under real Node hosting, `ws` is a REQUIRED dep (bundled-deps decision,
 // BACKLOG.md "ws / bundled-deps": missing required dep = broken build): a failed
 // require('ws') is fatal AT REQUIRE — a plain throw would be swallowed by the

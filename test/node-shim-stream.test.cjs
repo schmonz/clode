@@ -388,3 +388,53 @@ test('stream: a late consumer receives every chunk BEFORE end (matches node)', (
   assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
   assert.deepStrictEqual(node, ['data:a', 'data:b', 'end']);
 });
+
+// FLOWING MODE (2026-08-22). `resume()` was a no-op `return this` — which meant
+// `res.resume()`, the standard way to drain a body you don't want (and what the
+// AWS SDK does), neither drained nor ever emitted 'end': the caller hung with
+// nothing thrown. Found while wiring the node:http CLIENT, whose responses ARE
+// these Readables. Node's contract, all four parts, differentially:
+//   - resume() emits 'end' even with no 'data' listener
+//   - chunks pushed while flowing with no 'data' listener are DISCARDED
+//   - a 'data' listener attached before resume() still gets everything
+//   - pause() then resume() delivers the backlog, in order, before 'end'
+const RESUME_DRAIN = `
+  const { Readable } = require('node:stream');
+  const seq = [];
+  // (1) drain-and-end with no data listener at all
+  const a = new Readable({ read() {} });
+  a.push(Buffer.from('x')); a.push(Buffer.from('y')); a.push(null);
+  a.on('end', () => {
+    seq.push('a:end');
+    // (2) data listener + resume: nothing is lost
+    const b = new Readable({ read() {} });
+    b.on('data', (d) => seq.push('b:' + d));
+    b.on('end', () => {
+      seq.push('b:end');
+      // (3) pause() then resume() releases the backlog in order, then 'end'
+      const c = new Readable({ read() {} });
+      c.pause();
+      c.push(Buffer.from('1')); c.push(Buffer.from('2')); c.push(null);
+      setTimeout(() => {
+        c.on('data', (d) => seq.push('c:' + d));
+        c.on('end', () => { seq.push('c:end'); console.log(JSON.stringify(seq)); });
+        c.resume();
+      }, 20);
+    });
+    b.push(Buffer.from('p')); b.push(null);
+    b.resume();
+  });
+  a.resume();
+`;
+
+test('stream: resume() drains and ends like node (it used to do neither)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const f = prog(RESUME_DRAIN);
+  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
+  // Pin node's own answer too, so a future node that changed it would be visible
+  // rather than silently redefining what "matches node" means.
+  assert.deepStrictEqual(node, ['a:end', 'b:p', 'b:end', 'c:1', 'c:2', 'c:end']);
+});

@@ -15,9 +15,10 @@
 // and the stub's silent non-firing produced the darwin-ppc "hangs right after
 // 'No git remote URL found'" incident — a full day to root-cause, because
 // nothing failed loudly; it just never resolved a promise. `http.request` /
-// `https.request` are declared to be in the exact same latent state today
-// (BACKLOG.md, "`http.request`/`https.request` are a WALL in the node-shim
-// (2026-07-31)"). A wall that stays silent until it bites is invisible to every
+// `https.request` were declared to be in the exact same latent state — and then
+// turned out NOT to be (see the RETIRED note on the WALLS table below), which is
+// the sharpest available illustration of this file's own limits.
+// A wall that stays silent until it bites is invisible to every
 // existing ratchet in this repo, because none of them look at what upstream's
 // CODE actually calls — they check shapes (pins, name parity, gate presence).
 // This file is the missing EVIDENCE check: for each declared wall, grep the
@@ -76,27 +77,19 @@ const models = require('./oracle-models.cjs');
 // header/throw text (quoted verbatim so the failure message is self-explaining);
 // `backlogRef` points at the dated BACKLOG.md entry when one exists, else the
 // module comment that is the closest thing to one.
+// RETIRED 2026-08-22 — http.request and https.request were the first two
+// entries here. They are no longer walls: the client half is implemented over
+// tjs.connect and characterized differentially against host node in
+// test/node-shim-http-client.test.cjs. Removing them was not a judgement call —
+// the wall they guarded was MEASURED to be reached (CLAUDE_CODE_USE_BEDROCK=1
+// drives http.request at the EC2 instance metadata service and https.request at
+// bedrock.<region>.amazonaws.com), i.e. this tripwire's whole premise ("still
+// latent") had already expired for that backend. Note what that says about the
+// pattern below: the reaches were through ALIASES, the shape this file
+// deliberately does not match, so the tripwire never fired. It is a low-noise
+// alarm for freshly-inlined call sites, not a reachability proof — the same
+// caveat the CORRECTION above records for fs.watch.
 const WALLS = [
-  {
-    api: 'http.request',
-    pattern: /require\(\s*["'](?:node:)?http["']\s*\)\s*\.request\s*\(/,
-    why: '"the CLIENT surface (http.request / http.get) is NOT implemented — the '
-      + 'round-trip never falls back to node:http (fetch is the path) ... A boot '
-      + 'that actually issues node:http requests is a genuine later wall — wire '
-      + 'request()/ClientRequest over txiki sockets test-first then." '
-      + '(libexec/node-shim/modules/http.cjs, module header)',
-    backlogRef: 'BACKLOG.md: "`http.request`/`https.request` are a WALL in the '
-      + 'node-shim (2026-07-31)"',
-  },
-  {
-    api: 'https.request',
-    pattern: /require\(\s*["'](?:node:)?https["']\s*\)\s*\.request\s*\(/,
-    why: '"the -p path the transport is native fetch; https.request/get are NOT '
-      + 'implemented (DIVERGENCE, deferred — wire test-first if a boot issues '
-      + 'node:https requests)." (libexec/node-shim/modules/https.cjs, module header)',
-    backlogRef: 'BACKLOG.md: "`http.request`/`https.request` are a WALL in the '
-      + 'node-shim (2026-07-31)"',
-  },
   {
     api: 'net.connect / net.createConnection',
     pattern: /require\(\s*["'](?:node:)?net["']\s*\)\s*\.(?:connect|createConnection)\s*\(/,
@@ -175,18 +168,19 @@ for (const wall of WALLS) {
 // actually fires on the shape it claims to catch, and stays quiet on the
 // alias-bound shape that already exists throughout the real bundle (the false-
 // positive class this file's header explains rejecting).
-test('shim wall tripwire mechanism: fires on a direct require(...).request( call', () => {
-  const fixture = 'function boot(o){var r=require("http").request(o);return r}';
-  const wall = WALLS.find((w) => w.api === 'http.request');
+test('shim wall tripwire mechanism: fires on a direct require(...).connect( call', () => {
+  const fixture = 'function boot(o){var s=require("net").connect(o);return s}';
+  const wall = WALLS.find((w) => w.api === 'net.connect / net.createConnection');
   assert.ok(wall.pattern.test(fixture),
-    'the http.request wall pattern must match a direct require("http").request( call');
+    'the net.connect wall pattern must match a direct require("net").connect( call');
 });
 
 test('shim wall tripwire mechanism: does not fire on the aliased shape already present today', () => {
   // The exact shape found in the real bundle: require() result assigned to a
   // variable first, THEN .request()/.connect() called on the alias elsewhere.
-  const fixture = 'var dGm=require("http"),pGm=require("https");'
-    + 'function go(n){return n.protocol==="https:"?pGm.request(n):dGm.request(n)}';
+  const fixture = 'var zCh=require("net"),Jfu=require("tls");'
+    + 'function go(n){return n.secure?Jfu.connect(n):zCh.connect(n)}'
+    + 'var w=require("fs");function go2(p){return w.watch(p)}';
   for (const wall of WALLS) {
     assert.ok(!wall.pattern.test(fixture),
       `${wall.api} pattern must not match the pre-existing aliased-call shape`);
