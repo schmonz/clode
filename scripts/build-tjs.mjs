@@ -3234,6 +3234,16 @@ function buildHostTjsc(dir, hostBuildDir) {
   return tjsc;
 }
 
+// tjsc derives the generated C identifier from the INPUT FILE PATH, and it
+// splits on '/' only (get_c_name, src/qjsc.c:191). Mirror of that, so we can
+// assert the symbol we asked for is the symbol we got.
+function bytecodeSymbolBase(inJs) {
+  const slash = inJs.lastIndexOf('/');
+  const base = slash === -1 ? inJs : inJs.slice(slash + 1);
+  const dot = base.lastIndexOf('.');
+  return (dot === -1 ? base : base.slice(0, dot)).replace(/-/g, '_');
+}
+
 // ---- bytecode regen: the DEFAULT, not opt-in (2026-08-06) -----------------
 // cmake compiles src/bundles/c/** — quickjs bytecode arrays txiki git-tracks
 // pre-compiled from ITS OWN src/js/**. esbuild's src/bundles/js/** (built
@@ -3276,7 +3286,31 @@ if (regenOptOut) {
     const outAbs = path.join(tjsDir, outC);
     const inAbs = path.join(tjsDir, inJs);
     fs.mkdirSync(path.join(tjsDir, path.dirname(outC)), { recursive: true });
-    run(tjsc, ['-m', '-s', '-o', outAbs, '-n', name, '-p', prefix, inAbs], { cwd: tjsDir });
+    // inJs (repo-relative, forward slashes), NOT inAbs. tjsc builds the C
+    // identifier from this argument by taking everything after the last '/'
+    // (get_c_name, src/qjsc.c:191) -- so an absolute WINDOWS path, which
+    // contains no '/', leaks whole into the symbol name and emits
+    //     const uint32_t tjs__internal_D:\a\_temp\...\path_size = 89;
+    // which is one C2143 for the drive colon plus one C2017 per backslash.
+    // Every one of the 18 bundles was affected; MSVC just stops at 100 errors.
+    // The cwd is already tjsDir and run() is execFileSync with no shell, so a
+    // relative argument resolves. This also makes the generated C
+    // build-directory-independent on EVERY platform -- POSIX was only
+    // accidentally fine, because get_c_name discards everything before the '/'.
+    run(tjsc, ['-m', '-s', '-o', outAbs, '-n', name, '-p', prefix, inJs], { cwd: tjsDir });
+    // Assert the symbol, at regen time. Getting this wrong surfaced 250 build
+    // steps later as 100 confusing MSVC errors in a file nobody wrote; the
+    // check that names the actual bad line belongs where the file is produced.
+    const want = `${prefix}${bytecodeSymbolBase(inJs)}`;
+    const got = fs.readFileSync(outAbs, 'utf8');
+    if (!got.includes(`const uint32_t ${want}_size`) || !got.includes(`const uint8_t ${want}[`)) {
+      const decl = got.split('\n').find((l) => l.startsWith('const uint32_t')) || '(no declaration found)';
+      throw new Error(`bytecode regen: ${outC} declares the wrong symbol.\n`
+        + `  expected: const uint32_t ${want}_size = ...\n`
+        + `  got:      ${decl}\n`
+        + '  tjsc derives the identifier from the INPUT PATH argument; a path it cannot '
+        + 'reduce to a basename (a Windows path has no "/") leaks into the symbol.');
+    }
     fs.appendFileSync(outAbs, fingerprintTrailer(inJs, bundleFingerprint(fs.readFileSync(inAbs))));
   }
   console.log(`bytecode regen: ${bundlePairs.length} bytecode arrays regenerated from the current (patched) src/js/**`);

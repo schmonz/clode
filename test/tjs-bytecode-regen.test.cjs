@@ -169,3 +169,92 @@ test('build-tjs: the freshness tripwire throws (fails the build) on stale byteco
   assert.match(window, /bytecodeIsFresh\(/);
   assert.match(window, /throw new Error\(`bytecode regen: STALE/);
 });
+
+// ---- the generated C identifier comes from the INPUT PATH argument ----------
+//
+// tjsc names the emitted symbol after the file it compiled: get_c_name
+// (src/qjsc.c:191) takes everything after the last '/', trims one extension,
+// and maps '-' to '_'. It knows nothing about '\'. So an ABSOLUTE WINDOWS path
+// has no '/' at all, the whole thing becomes the identifier, and the generated
+// C is:
+//
+//   const uint32_t tjs__internal_D:\a\_temp\tjs_vendor\...\path_size = 89;
+//
+// which MSVC reports as one C2143 for the drive colon plus one C2017 per
+// backslash — 100 errors across all 18 bundles, in files nobody wrote, 250
+// build steps after the mistake. Windows never hit it before 0c72693 made
+// bytecode regen unconditional, because tjsc is EXCLUDE_FROM_ALL upstream and
+// nothing built it; every Windows engine until now compiled the COMMITTED
+// arrays, which is precisely the silent patch-drop 0c72693 exists to end. So
+// "skip regen on Windows" is not a fix — passing a repo-relative path is.
+//
+// This is reproducible off Windows: '\' is a legal POSIX filename character.
+
+const BYTECODE_SYMBOL_CASES = [
+  ['src/js/internal/path.js', 'path'],
+  ['src/bundles/js/core.js', 'core'],
+  ['src/bundles/js/stdlib/getopts.js', 'getopts'],
+  ['src/js/worker-bootstrap.js', 'worker_bootstrap'],       // '-' becomes '_'
+  ['/abs/posix/src/js/internal/path.js', 'path'],           // POSIX abs is fine
+  // The Windows shapes, which is why the argument must be relative:
+  ['D:\\a\\_temp\\tjs-vendor\\txiki.js\\src\\js\\internal\\path.js',
+    'D:\\a\\_temp\\tjs_vendor\\txiki.js\\src\\js\\internal\\path'],
+];
+
+test('build-tjs: bytecodeSymbolBase mirrors tjsc get_c_name, including the Windows failure', () => {
+  const fn = new Function(`${extractFunction(buildTjsSrc, 'bytecodeSymbolBase')}; return bytecodeSymbolBase;`)();
+  for (const [input, want] of BYTECODE_SYMBOL_CASES) {
+    assert.strictEqual(fn(input), want, `bytecodeSymbolBase(${JSON.stringify(input)})`);
+  }
+});
+
+test('build-tjs: tjsc is handed the repo-relative inJs, never the absolute inAbs', () => {
+  const idx = buildTjsSrc.indexOf('for (const { outC, name, prefix, inJs } of bundlePairs)');
+  assert.ok(idx > -1, 'the bytecode regen loop was not found');
+  const loop = buildTjsSrc.slice(idx, idx + 2600);
+  const call = loop.split('\n').find((l) => l.includes("run(tjsc, ['-m'"));
+  assert.ok(call, 'the tjsc invocation was not found');
+  assert.match(call, /prefix, inJs\]/,
+    'tjsc must receive inJs (repo-relative, forward slashes) — inAbs is an absolute path, '
+    + 'and on Windows that leaks into the generated C identifier');
+  assert.match(loop, /cwd: tjsDir/, 'a relative input only resolves because cwd is tjsDir');
+  assert.match(loop, /declares the wrong symbol/,
+    'the regen loop must assert the emitted symbol, so this fails where the file is produced');
+});
+
+// The REAL reference, when one is reachable: run tjsc itself and confirm the
+// identifier derivation above is not merely our model of it. Set CLODE_TJSC to
+// a built tjsc to enable. Asserting against a model of the tool is how the
+// model drifts from the tool.
+const TJSC = process.env.CLODE_TJSC && fs.existsSync(process.env.CLODE_TJSC)
+  ? process.env.CLODE_TJSC : null;
+
+test('build-tjs: real tjsc agrees — a backslash path breaks the symbol, a relative one does not',
+  { skip: TJSC ? false : 'set CLODE_TJSC=<path to a built tjsc> to run the reference' }, () => {
+    const os = require('node:os');
+    const { spawnSync } = require('node:child_process');
+    const fn = new Function(`${extractFunction(buildTjsSrc, 'bytecodeSymbolBase')}; return bytecodeSymbolBase;`)();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tjsc-sym-'));
+    fs.mkdirSync(path.join(dir, 'src/js/internal'), { recursive: true });
+    const rel = 'src/js/internal/path.js';
+    fs.writeFileSync(path.join(dir, rel), 'export const x = 1;\n');
+    const winName = 'D:\\a\\_temp\\tjs-vendor\\txiki.js\\src\\js\\internal\\path.js';
+    fs.writeFileSync(path.join(dir, winName), 'export const x = 1;\n');
+
+    const gen = (inArg, out) => {
+      const r = spawnSync(TJSC, ['-m', '-s', '-o', out, '-n', 'tjs:internal/path', '-p', 'tjs__internal_', inArg],
+        { cwd: dir, encoding: 'utf8' });
+      assert.strictEqual(r.status, 0, `tjsc failed: ${r.stderr}`);
+      // The declaration only — the byte count is the bytecode payload's size and
+      // is not what this is about.
+      const decl = fs.readFileSync(path.join(dir, out), 'utf8').split('\n')[4];
+      return decl.replace(/ = \d+;$/, '');
+    };
+
+    assert.strictEqual(gen(rel, 'good.c'), 'const uint32_t tjs__internal_path_size',
+      'a repo-relative input must yield the plain symbol');
+    // And the model predicts the broken one exactly, which is what lets the
+    // regen-time assertion name the real problem instead of guessing.
+    assert.strictEqual(gen(winName, 'bad.c'), `const uint32_t tjs__internal_${fn(winName)}_size`);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
