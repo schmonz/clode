@@ -2557,6 +2557,85 @@ function fixupLwsTxpacerPthreadWin(dir) {
   console.log('fixup lws-txpacer-pthread-win: applied');
 }
 
+// MSVC has no <unistd.h> and no getopt: src/qjsc.c calls getopt/optarg/optind
+// unconditionally (upstream txiki v26.6.0, unchanged since the pin was written).
+// It compiled for 16 days anyway because `tjsc` is EXCLUDE_FROM_ALL upstream and
+// nothing asked for it — until 0c72693 (2026-08-06) made bytecode regen the
+// default and added `cmake --build --target tjsc`. The next Windows cache miss
+// (d4f831c) surfaced it as `qjsc.c(315): error C2065: 'optarg': undeclared`.
+// A fixup rather than a txiki-*.patch, matching every other upstream-file
+// platform guard here (fixupModFsSyncMsvc and the *OldDarwin family); both
+// locations are covered by the engine recipe, so either invalidates the cache.
+// Short options only, which is all qjsc uses ("ho:p:n:ms"); differential-tested
+// against the platform getopt by test/msvc-getopt-shim.test.cjs.
+function fixupQjscMsvcGetopt(dir) {
+  const f = path.join(dir, 'src/qjsc.c');
+  const src = fs.readFileSync(f, 'utf8');
+  if (src.includes('MSVC ships no getopt')) {
+    console.log('fixup qjsc-msvc-getopt: already applied');
+    return;
+  }
+  const anchor = '#include <stdarg.h>\n'
+    + '#include <stdio.h>\n'
+    + '#include <stdlib.h>\n'
+    + '#include <string.h>\n';
+  if (!src.includes(anchor)) {
+    throw new Error('fixup qjsc-msvc-getopt: include anchor not found in src/qjsc.c — '
+      + 'the pin moved and this shim must be re-derived, not silently skipped');
+  }
+  const shim = anchor + `
+/* ---- MSVC ships no getopt (Windows tjs port; see build-tjs.mjs) ---- */
+#if defined(_MSC_VER)
+static char *optarg;
+static int optind = 1;
+static int tjs_optpos = 1;
+static int getopt(int argc, char *const argv[], const char *optstring) {
+    const char *spec;
+    char c;
+    if (tjs_optpos == 1) {
+        if (optind >= argc || argv[optind][0] != '-' || argv[optind][1] == '\\0')
+            return -1;
+        if (argv[optind][1] == '-' && argv[optind][2] == '\\0') {
+            optind++;
+            return -1;
+        }
+    }
+    c = argv[optind][tjs_optpos];
+    spec = strchr(optstring, c);
+    if (c == ':' || spec == NULL) {
+        if (argv[optind][++tjs_optpos] == '\\0') {
+            optind++;
+            tjs_optpos = 1;
+        }
+        return '?';
+    }
+    if (spec[1] == ':') {
+        if (argv[optind][tjs_optpos + 1] != '\\0') {
+            optarg = &argv[optind][tjs_optpos + 1];
+            optind++;
+        } else if (optind + 1 < argc) {
+            optarg = argv[optind + 1];
+            optind += 2;
+        } else {
+            optind++;
+            tjs_optpos = 1;
+            return '?';
+        }
+        tjs_optpos = 1;
+        return c;
+    }
+    if (argv[optind][++tjs_optpos] == '\\0') {
+        optind++;
+        tjs_optpos = 1;
+    }
+    return c;
+}
+#endif
+`;
+  fs.writeFileSync(f, src.replace(anchor, shim));
+  console.log('fixup qjsc-msvc-getopt: applied (src/qjsc.c)');
+}
+
 function fixupModFsSyncMsvc(dir) {
   // cl.exe (MSVC-native Windows leg, Phase A CI proving run 2026-07-13) has
   // neither <dirent.h> nor <unistd.h> — mingw ships both as Win32 wrappers,
@@ -2764,6 +2843,7 @@ if (buildOnly) {
   fixupTjsCmakeWinStack(tjsDir);
   fixupLwsTxpacerPthreadWin(tjsDir);
   fixupModFsSyncMsvc(tjsDir);
+  fixupQjscMsvcGetopt(tjsDir);
   // cosmo patches apply LAST: they were generated against the fully-fixed-up
   // tree (their libuv udp.c context includes the SSM guard fixupLibuvUdpSsmOld-
   // Darwin adds), so they must go on top of every source fixup, not before them.
@@ -3184,7 +3264,9 @@ if (regenOptOut) {
     tjsc = buildHostTjsc(tjsDir, path.join(buildRoot, targetToken(outDir), 'build-host-tjsc'));
   } else {
     run('cmake', ['--build', buildDir, '--target', 'tjsc', '-j', jobs]);
-    tjsc = path.join(buildDir, 'tjsc');
+    // .exe, same as the host-native path above (:~3149). Without it this throws
+    // "tjsc did not build" on Windows the moment the compile is fixed.
+    tjsc = path.join(buildDir, process.platform === 'win32' ? 'tjsc.exe' : 'tjsc');
     if (!fs.existsSync(tjsc)) throw new Error(`bytecode regen: tjsc did not build at ${tjsc}`);
   }
   // Exactly the txiki Makefile's tjsc rules (module mode -m, strip -s, module
