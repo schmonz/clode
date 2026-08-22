@@ -145,15 +145,22 @@ test('shim getopt matches the platform getopt on qjsc\'s option string', { skip:
       { encoding: 'utf8' });
     assert.strictEqual(r.status, 0, `${which}.c failed to compile:\n${r.stderr}`);
   }
+  // Windows' CRT writes "\n" as "\r\n". The strict comparisons below are immune
+  // (both sides get the same treatment), which is exactly why the line endings
+  // went unnoticed until the REGEX assertions ran on windows-latest and the
+  // literal \n stopped matching. Normalise once, here.
+  const stdout = (bin, argv) =>
+    (spawnSync(path.join(dir, bin), argv, { encoding: 'utf8', timeout: 5000 }).stdout || '')
+      .replace(/\r\n/g, '\n');
   for (const argv of VECTORS) {
-    const run = (bin) => spawnSync(path.join(dir, bin), argv, { encoding: 'utf8' }).stdout;
-    assert.strictEqual(run('shim'), run('ref'), `argv: ${JSON.stringify(argv)}`);
+    assert.strictEqual(stdout('shim', argv), stdout('ref', argv), `argv: ${JSON.stringify(argv)}`);
   }
   for (const argv of DEGENERATE) {
     const r = spawnSync(path.join(dir, 'shim'), argv, { encoding: 'utf8', timeout: 5000 });
+    const out = (r.stdout || '').replace(/\r\n/g, '\n');
     assert.strictEqual(r.status, 0, `argv ${JSON.stringify(argv)}: did not terminate cleanly`);
-    assert.match(r.stdout, /^opt \?\n/, `argv ${JSON.stringify(argv)}: expected a '?' report`);
-    const optind = Number(r.stdout.match(/optind=(\d+)/)[1]);
+    assert.match(out, /^opt \?\n/, `argv ${JSON.stringify(argv)}: expected a '?' report`);
+    const optind = Number(out.match(/optind=(\d+)/)[1]);
     assert.ok(optind >= argv.length + 1,
       `argv ${JSON.stringify(argv)}: optind ${optind} < argc ${argv.length + 1} — qjsc would read past the options`);
   }
