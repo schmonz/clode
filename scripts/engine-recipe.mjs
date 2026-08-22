@@ -50,6 +50,14 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 export const FILES = [
   'spike/quickjs/PINS.md',
   'spike/quickjs/patches/*.patch',
+  // The cosmo leg's patches are engine sources too, and they were NOT in the
+  // historical cache-key list -- an omission that cost 13 commits of red. When
+  // f8546da regenerated the constants patch it renamed the very identifiers
+  // patches/libtjs-cosmo.patch used as context, so the cosmo patch stopped
+  // applying; the recipe hash did not move, so nothing said the engine sources
+  // had changed. Widening the set is safe (it can only invalidate more), and
+  // narrowing is what test/engine-recipe.test.cjs exists to catch.
+  'patches/*.patch',
   'scripts/build-tjs.mjs',
   'scripts/*.toolchain.cmake',
   'spike/quickjs/atomic-shim.c',

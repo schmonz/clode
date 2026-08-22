@@ -24,9 +24,13 @@ const ACTION = path.join(REPO, '.github/actions/build-leg/action.yml');
 const SCRIPT = path.join(REPO, 'scripts/engine-recipe.mjs');
 
 // The set the tjs cache key covered before it was moved into engine-recipe.mjs.
-const HISTORICAL_HASHFILES_SET = [
+const EXPECTED_SET = [
   'spike/quickjs/PINS.md',
   'spike/quickjs/patches/*.patch',
+  // ADDED 2026-08-22, deliberately WIDER than the historical cache-key list:
+  // the cosmo leg's patches live here and were never covered, so editing one
+  // did not move the engine identity. See scripts/engine-recipe.mjs.
+  'patches/*.patch',
   'scripts/build-tjs.mjs',
   'scripts/*.toolchain.cmake',
   'spike/quickjs/atomic-shim.c',
@@ -37,9 +41,9 @@ const load = () => import(require('node:url').pathToFileURL(SCRIPT).href);
 const run = (args, opts = {}) =>
   execFileSync(process.execPath, [SCRIPT, ...args], { encoding: 'utf8', cwd: REPO, ...opts }).trim();
 
-test('FILES is exactly the set the tjs cache key covered', async () => {
+test('FILES covers the tjs cache key set, plus the cosmo patches', async () => {
   const { FILES } = await load();
-  assert.deepStrictEqual([...FILES], HISTORICAL_HASHFILES_SET);
+  assert.deepStrictEqual([...FILES], EXPECTED_SET);
 });
 
 test('the build-leg cache key reads the recipe instead of re-inlining the list', () => {
@@ -96,6 +100,7 @@ const BASE = {
   'spike/quickjs/PINS.md': 'txiki.js v26.6.0 1a230d3',
   'spike/quickjs/patches/a.patch': 'AAA',
   'spike/quickjs/patches/b.patch': 'BBB',
+  'patches/libtjs-cosmo.patch': 'COSMO',
   'scripts/build-tjs.mjs': 'build',
   'scripts/x.toolchain.cmake': 'tc',
   'spike/quickjs/atomic-shim.c': 'shim',
@@ -118,6 +123,19 @@ test('adding or removing a patch moves the recipe even with the other bytes unto
   const removed = { ...BASE };
   delete removed['spike/quickjs/patches/b.patch'];
   assert.notStrictEqual(recipe(fakeSource(removed)), before);
+});
+
+// The cosmo leg's patches were engine sources that the recipe did not cover.
+// f8546da regenerated spike/quickjs/patches/txiki-node-constants.patch, renaming
+// the identifiers patches/libtjs-cosmo.patch used as diff context; the cosmo
+// patch stopped applying and the leg was red for 13 commits. The recipe hash did
+// not move, so no cache invalidated and nothing said the engine sources had
+// changed. This is the check that would have said so.
+test('a changed byte in a repo-root cosmo patch moves the recipe', async () => {
+  const { recipe } = await load();
+  const before = recipe(fakeSource(BASE));
+  const after = recipe(fakeSource({ ...BASE, 'patches/libtjs-cosmo.patch': 'COSMOS' }));
+  assert.notStrictEqual(after, before, 'editing patches/libtjs-cosmo.patch did not move the engine identity');
 });
 
 test('a glob that matches nothing is fatal, never an empty set', async () => {

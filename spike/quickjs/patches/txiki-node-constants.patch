@@ -1,8 +1,8 @@
 diff --git a/src/signals.c b/src/signals.c
-index 5db61d5..61c1765 100644
+index 5db61d5..de36f6b 100644
 --- a/src/signals.c
 +++ b/src/signals.c
-@@ -166,7 +166,590 @@ static const JSCFunctionListEntry tjs_signal_funcs[] = {
+@@ -166,7 +166,606 @@ static const JSCFunctionListEntry tjs_signal_funcs[] = {
      TJS_CFUNC_DEF("signal", 2, tjs_signal),
  };
  
@@ -43,7 +43,22 @@ index 5db61d5..61c1765 100644
 +     */
 +    typedef struct { const char *name; int64_t val; } clode_kv;
 +#define CLODE_K(n, v) { #n, (int64_t)(v) }
-+    static const clode_kv clode_fs_kv[] = {
++/* Storage class for the tables below. Cosmopolitan libc resolves SIG*, E*, O_*
++ * and RTLD_* at RUNTIME -- one APE binary runs on Linux, macOS, Windows and the
++ * BSDs, where the numbers differ -- so those initializers are not constant
++ * expressions and a 'static const' table cannot be emitted into .rodata.
++ * Dropping const lets cosmocc runtime-initialize it. This USED to live in
++ * patches/libtjs-cosmo.patch as a hand-written hunk whose context was the text
++ * THIS generator emits; regenerating broke it (f8546da renamed clode_sig_list
++ * to clode_sig_kv and the cosmo leg went red for 13 commits, unnoticed because
++ * no CI ran in between). Generated code owns its own storage class now, so all
++ * five tables are covered and there is no context to rot. */
++#ifdef __COSMOPOLITAN__
++#define CLODE_KV_TABLE static clode_kv
++#else
++#define CLODE_KV_TABLE static const clode_kv
++#endif
++    CLODE_KV_TABLE clode_fs_kv[] = {
 +        CLODE_K(UV_FS_SYMLINK_DIR, UV_FS_SYMLINK_DIR),
 +        CLODE_K(UV_FS_SYMLINK_JUNCTION, UV_FS_SYMLINK_JUNCTION),
 +#ifdef O_RDONLY
@@ -186,7 +201,7 @@ index 5db61d5..61c1765 100644
 +        CLODE_K(UV_FS_COPYFILE_FICLONE_FORCE, UV_FS_COPYFILE_FICLONE_FORCE),
 +        CLODE_K(COPYFILE_FICLONE_FORCE, UV_FS_COPYFILE_FICLONE_FORCE),
 +    };
-+    static const clode_kv clode_sig_kv[] = {
++    CLODE_KV_TABLE clode_sig_kv[] = {
 +#ifdef SIGHUP
 +        CLODE_K(SIGHUP, SIGHUP),
 +#endif
@@ -299,7 +314,7 @@ index 5db61d5..61c1765 100644
 +        CLODE_K(SIGUNUSED, SIGUNUSED),
 +#endif
 +    };
-+    static const clode_kv clode_errno_kv[] = {
++    CLODE_KV_TABLE clode_errno_kv[] = {
 +#ifdef E2BIG
 +        CLODE_K(E2BIG, E2BIG),
 +#endif
@@ -538,7 +553,7 @@ index 5db61d5..61c1765 100644
 +        CLODE_K(EXDEV, EXDEV),
 +#endif
 +    };
-+    static const clode_kv clode_dlopen_kv[] = {
++    CLODE_KV_TABLE clode_dlopen_kv[] = {
 +#ifdef RTLD_LAZY
 +        CLODE_K(RTLD_LAZY, RTLD_LAZY),
 +#endif
@@ -555,7 +570,7 @@ index 5db61d5..61c1765 100644
 +        CLODE_K(RTLD_DEEPBIND, RTLD_DEEPBIND),
 +#endif
 +    };
-+    static const clode_kv clode_priority_kv[] = {
++    CLODE_KV_TABLE clode_priority_kv[] = {
 +        CLODE_K(PRIORITY_LOW, UV_PRIORITY_LOW),
 +        CLODE_K(PRIORITY_BELOW_NORMAL, UV_PRIORITY_BELOW_NORMAL),
 +        CLODE_K(PRIORITY_NORMAL, UV_PRIORITY_NORMAL),
@@ -564,6 +579,7 @@ index 5db61d5..61c1765 100644
 +        CLODE_K(PRIORITY_HIGHEST, UV_PRIORITY_HIGHEST),
 +    };
 +#undef CLODE_K
++#undef CLODE_KV_TABLE
 +    JSValue clode_c = JS_NewObject(ctx);
 +    JS_SetPropertyStr(ctx, clode_c, "abi", JS_NewInt32(ctx, CLODE_CONSTANTS_ABI));
 +    /* A DISTINCTIVE literal, so clode's build can verify an engine it cannot run

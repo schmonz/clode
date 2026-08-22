@@ -83,7 +83,7 @@ function emitEntry(key) {
 
 function group(name, keys) {
   return [
-    `    static const clode_kv clode_${name}[] = {`,
+    `    CLODE_KV_TABLE clode_${name}[] = {`,
     ...keys.map(emitEntry),
     '    };',
   ].join('\n');
@@ -248,12 +248,28 @@ const body = `
      */
     typedef struct { const char *name; int64_t val; } clode_kv;
 #define CLODE_K(n, v) { #n, (int64_t)(v) }
+/* Storage class for the tables below. Cosmopolitan libc resolves SIG*, E*, O_*
+ * and RTLD_* at RUNTIME -- one APE binary runs on Linux, macOS, Windows and the
+ * BSDs, where the numbers differ -- so those initializers are not constant
+ * expressions and a 'static const' table cannot be emitted into .rodata.
+ * Dropping const lets cosmocc runtime-initialize it. This USED to live in
+ * patches/libtjs-cosmo.patch as a hand-written hunk whose context was the text
+ * THIS generator emits; regenerating broke it (f8546da renamed clode_sig_list
+ * to clode_sig_kv and the cosmo leg went red for 13 commits, unnoticed because
+ * no CI ran in between). Generated code owns its own storage class now, so all
+ * five tables are covered and there is no context to rot. */
+#ifdef __COSMOPOLITAN__
+#define CLODE_KV_TABLE static clode_kv
+#else
+#define CLODE_KV_TABLE static const clode_kv
+#endif
 ${group('fs_kv', fsKeys)}
 ${group('sig_kv', signalKeys)}
 ${group('errno_kv', errnoKeys)}
 ${group('dlopen_kv', dlopenKeys)}
 ${group('priority_kv', priorityKeys)}
 #undef CLODE_K
+#undef CLODE_KV_TABLE
     JSValue clode_c = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, clode_c, "abi", JS_NewInt32(ctx, CLODE_CONSTANTS_ABI));
     /* A DISTINCTIVE literal, so clode's build can verify an engine it cannot run

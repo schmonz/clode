@@ -33,23 +33,6 @@ index f8575a9..0aa0eae 100644
      JS_PROT_INT_DEF(AF_INET),
      JS_PROT_INT_DEF(AF_INET6),
  
-diff --git a/src/signals.c b/src/signals.c
-index f8077ee..50f3046 100644
---- a/src/signals.c
-+++ b/src/signals.c
-@@ -192,7 +192,12 @@ void tjs__mod_signals_init(JSContext *ctx, JSValue ns) {
-      * number, so aliases are lost); this map is the node-faithful one, so the
-      * node-shim's os.constants.signals matches host node on every platform — no
-      * hand-maintained per-platform table. */
-+    /* Cosmopolitan: SIG* are runtime values → cosmocc runtime-inits a non-const table. */
-+#ifdef __COSMOPOLITAN__
-+    static struct { const char *name; int num; } clode_sig_list[] = {
-+#else
-     static const struct { const char *name; int num; } clode_sig_list[] = {
-+#endif
- #define CLODE_SIG(n) { #n, n }
- #ifdef SIGHUP
-         CLODE_SIG(SIGHUP),
 diff --git a/src/utils.c b/src/utils.c
 index 6553d6b..f6ee168 100644
 --- a/src/utils.c
