@@ -324,6 +324,38 @@ their plans deleted — recorded here so nobody re-derives them:
   is recorded above as not reproducing on main. Task 1 (Windows fidelity differential) is
   the only live remainder and already sits in the IN-FLIGHT HANDOFF.
 
+## Engine-recipe identity — the two deferred halves (2026-08-22)
+
+`scripts/engine-recipe.mjs` (the sha256 of the engine-source set) and
+`scripts/templates-drift.mjs` (published-templates-vs-this-tree, its own ci.yml job)
+shipped. Two deliberate follow-ups, in this order:
+
+- **Stamp `recipe` into the published manifest — OPEN, and the cheap one.** Today
+  `templates-drift.mjs` derives the PUBLISHED recipe by computing it at the release
+  TAG (`git show <tag>:<path>`). That is sound — the engines in a release were built
+  from that tag's tree by definition — but it is inference, and it needs full history
+  in the checkout. Have `scripts/build-templates-manifest.mjs` write
+  `recipe: <sha256>` into the manifest; `templates-drift.mjs` ALREADY prefers that
+  field when present (`derivedFrom: manifest.recipe`), so this is one line plus a
+  test, and it turns an inference into an assertion. It also makes the answer
+  available to a `clode` that has no git checkout at all.
+- **A recipe marker inside the engine binary — OPEN, and it needs care.** The
+  strongest version of this check is a `tjs` that can state the recipe it was built
+  from, so `obtainEngine` could refuse a stale engine at fetch time instead of CI
+  catching it a push later. The marker must be injected as a build-time `-D`
+  (build-tjs.mjs → cmake), NOT written into a patch: the recipe hashes
+  `spike/quickjs/patches/*.patch`, so a patch containing the recipe is a fixed-point
+  problem. Note also that this would make the pin gate meaningfully strict for the
+  first time — an old clode meeting a new pack must still fail *readably*, not
+  cryptically.
+
+Also unresolved: the ci.yml job is RED on main until the next release cut, by
+design (14 engine-source commits sit between v0.20260801.2 and main, none of which
+the tjsPin gate can see). It is actionable red with exactly one remedy — republish
+the pack — but it IS ambient red while it lasts, which is the thing
+[[silently-gated-tests-hide-p0s]] warns about. If it is still red weeks from now,
+that is the signal to cut the release, not to soften the job.
+
 ## Release follow-ups 2 + 3 — the unbuilt half of the 2026-07-27 spec
 
 Spec `docs/superpowers/specs/2026-07-27-release-followups-design.md` carries five

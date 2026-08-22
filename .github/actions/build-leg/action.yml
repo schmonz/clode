@@ -213,12 +213,32 @@ runs:
       id: axes
       shell: bash
       run: echo "image=${ImageOS:-unknown}" >> "$GITHUB_OUTPUT"
+    # The engine-source half of the key is now COMPUTED, not inlined. It used to
+    # be a literal hashFiles('spike/quickjs/PINS.md', 'spike/quickjs/patches/
+    # *.patch', 'scripts/build-tjs.mjs', 'scripts/*.toolchain.cmake', 'spike/
+    # quickjs/atomic-shim.c', 'ci/osxcross-darwin/Dockerfile') — a good list, and
+    # the ONLY place in the repo that said what an engine is made of. Anything
+    # ELSE that needs that answer (scripts/templates-drift.mjs, which asks
+    # whether the PUBLISHED engine templates were built from these same sources)
+    # would have had to copy it, and a copied list is a list that drifts —
+    # see test/release-gate-globs.test.cjs for what that costs. So the list moved
+    # into scripts/engine-recipe.mjs and this reads it from there. Node is
+    # already required on the host before this point (the asset-name step runs
+    # canonical-name.cjs), and git is present from actions/checkout.
+    #
+    # This DOES change the key's value once, so every leg rebuilds its engine on
+    # the first run after this lands. That is a one-time cost on a cache that
+    # already invalidates whenever any patch moves (14 times since v0.20260801.2).
+    - name: Engine recipe (the identity of the engine sources)
+      id: recipe
+      shell: bash
+      run: echo "hash=$(node scripts/engine-recipe.mjs)" >> "$GITHUB_OUTPUT"
     - name: Restore the built tjs (PINS+patches+recipe+build-env keyed)
       id: tjs-cache
       uses: actions/cache@v6.1.0
       with:
         path: ${{ steps.mode.outputs.out }}
-        key: tjs-${{ inputs.leg }}-${{ steps.axes.outputs.image }}-${{ inputs.guest-version }}-${{ inputs.macos-min }}-${{ inputs.macos-sdk }}-${{ inputs.cross-image }}-${{ inputs.cross-dockerfile }}-${{ hashFiles('spike/quickjs/PINS.md', 'spike/quickjs/patches/*.patch', 'scripts/build-tjs.mjs', 'scripts/*.toolchain.cmake', 'spike/quickjs/atomic-shim.c', 'ci/osxcross-darwin/Dockerfile') }}
+        key: tjs-${{ inputs.leg }}-${{ steps.axes.outputs.image }}-${{ inputs.guest-version }}-${{ inputs.macos-min }}-${{ inputs.macos-sdk }}-${{ inputs.cross-image }}-${{ inputs.cross-dockerfile }}-${{ steps.recipe.outputs.hash }}
 
     - name: Force LF line endings for the tjs checkout (native Windows)
       if: runner.os == 'Windows'
