@@ -641,14 +641,44 @@ well-tested, and reasonably fast** as we can possibly make it."
   engine's own header-capable native `WebSocket` (see `libexec/bun-shim.cjs`), and that wiring
   was deliberately left untouched.
 
-- **HTTP(S)_PROXY is silently ignored under quaude (2026-08-22, measured).** With
-  `HTTPS_PROXY`/`HTTP_PROXY` set, a `-p` turn made every request DIRECT: the Messages call goes
-  through the engine's `fetch` and the axios calls through the engine's `XMLHttpRequest`, and
-  neither consults the proxy environment. Implementing `http.request` does not change this —
-  the bundle's proxy-agent stack only ever engages on axios's *http* adapter, which is not the
-  adapter axios selects under tjs. A user behind a mandatory proxy would see connections fail
-  or leak past the proxy with no notice. Fixing it means proxy support in the engine's fetch/XHR
-  (or forcing axios onto the http adapter), not in the shim's client.
+- **~~HTTP(S)_PROXY is silently ignored under quaude~~ — HALF WRONG, and the true half is
+  FIXED (2026-08-22).** The earlier entry claimed "the engine's `fetch` and `XMLHttpRequest` do
+  not consult the proxy environment at all". RE-MEASURED against a local recording proxy, that
+  is FALSE: the engine honours `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` for both (txiki's lws
+  client vhost — `tjs__parse_proxy_url`/`no_proxy` matching in `src/lws-utils.c`), it tunnels
+  even plain http through `CONNECT`, and a *dead* proxy makes the request FAIL rather than fall
+  back to direct. A real `-p` turn through a local proxy shows every request arriving there,
+  Messages POST included. **The lesson is about the instrument, not the engine:** the original
+  measurement was taken with a harness whose mock server lived in the same process as a
+  `spawnSync`, so the mock could never accept a connection — everything "went direct" because
+  nothing could arrive anywhere. A client-side observation cannot tell "proxied" from "direct";
+  only the proxy's own log can.
+  The true half: the node-shim's own http/https CLIENT (ours, over `tjs.connect`) ignored the
+  proxy environment completely, and ignored a proxy AGENT the caller passed. That is a
+  naude-vs-quaude divergence — clode sets `NODE_USE_ENV_PROXY=1` for every target it builds
+  (`libexec/target-env.cjs`) and node >= 24 honours the proxy env in its http/https clients
+  under that flag — and it was REACHABLE: `CLAUDE_CODE_USE_BEDROCK=1` with a proxy set sent the
+  AWS credential chain's IMDS requests (169.254.169.254) straight past the proxy, nothing
+  arriving there at all. Now fixed: node's semantics ported (absolute-form request line,
+  `proxy-authorization`, `proxy-connection`, global-agent-only, `NODE_USE_ENV_PROXY` strictly
+  `"1"`, node's exact `no_proxy` matcher), proved by
+  `test/node-shim-http-proxy.test.cjs` against a recording proxy and end-to-end on a fused
+  quaude (the IMDS requests now arrive AT the proxy, in absolute form).
+  **STILL OPEN, and now loud instead of silent: an https ORIGIN through a proxy.** The CONNECT
+  tunnel is trivial; starting TLS on the socket it returns is not — `tjs.connect('tls', ...)`
+  always makes its own connection and the engine exposes no adopt-fd/startTls entry point
+  (`src/js/core/sockets.js`). So that case throws `ERR_SHIM_HTTPS_PROXY_UNSUPPORTED` rather
+  than connecting directly (a direct connection *is* the silent bypass). Closing it means an
+  engine patch: either TLS-over-an-existing-socket, or a `proxy:` option on the TLS connect that
+  does the CONNECT preamble in C. Same for a socks proxy: node ignores non-http(s) proxy URLs
+  and so do we, but we now say so once on stderr instead of bypassing quietly.
+  Two smaller residues, both named where they bite: (1) `ALL_PROXY` is honoured here even though
+  node ignores it — a DELIBERATE divergence, because the engine honours it for fetch/XHR and a
+  client that did not would be the same bypass one env var over; (2) an `https://` PROXY URL
+  works, but its certificate can only be trusted via a caller-supplied `ca` — measured, neither
+  `SSL_CERT_FILE` nor `TJS_CA_BUNDLE` reaches `tjs.connect('tls', ...)`, so there is no
+  environment knob for a private CA on a client socket (node has `NODE_EXTRA_CA_CERTS`). An
+  untrusted proxy cert fails visibly; it never falls back to a direct connection.
 
 ### Known quaude runtime bugs
 

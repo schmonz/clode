@@ -2,8 +2,9 @@
 // node:http — the -p bundle's proxy-agent stack (`agent-base`,
 // `http-proxy-agent`) defines `class X extends require('http').Agent` at load,
 // so http.Agent must be a REAL constructor (subclassable + instantiable). On the
-// -p path the transport is txiki's native `fetch` and no proxy is configured, so
-// these agents are DEFINED but never instantiated/used. Characterized by
+// -p path the transport is txiki's native `fetch`, so those agents are usually
+// DEFINED but never instantiated — usually, because with a proxy configured the
+// bundle really does build one for the Bedrock backend. Characterized by
 // test/node-shim-http.test.cjs.
 //
 // The CLIENT surface (request/get/ClientRequest) IS implemented, over
@@ -12,6 +13,13 @@
 // BOOKKEEPING object (the fields agent-base's subclass reads via super()), not
 // Node's socket-pooling Agent: nothing here pools or reuses sockets, so an
 // Agent's keepAlive/maxSockets are read for connect-time hints only.
+//
+// The client honours the PROXY environment on node's own terms (see the "proxy"
+// section): before that it connected straight past HTTP(S)_PROXY without a word,
+// which behind a monitoring or filtering proxy is a silent bypass, not just a
+// missing feature. A proxy AGENT — the one shape where "Agent is bookkeeping
+// only" would have quietly sent bytes somewhere the caller did not ask for — is
+// honoured too, or refused by name.
 //
 // WHY the client exists now (measured 2026-08-22, not assumed). The client half
 // was a documented wall on the premise that "the -p transport is fetch". That
@@ -72,6 +80,12 @@ class Agent extends EventEmitter {
 }
 
 const globalAgent = new Agent();
+// Node applies the proxy environment to the GLOBAL agent only (measured below,
+// in the proxy section): `agent: new http.Agent()` goes direct, `agent:
+// http.globalAgent` proxies. A caller can hand us the global agent explicitly,
+// so "is this the global one?" has to be a property of the object rather than
+// `agent == null`. node:https marks its own globalAgent the same way.
+Object.defineProperty(globalAgent, '_shimGlobalAgent', { value: true, enumerable: false });
 
 // The tiny status/method tables the bundle occasionally reads; real values.
 const STATUS_CODES = {
@@ -510,6 +524,13 @@ function createServer(options, handler) {
  *     maxVersion, checkServerIdentity, secureProtocol):
  *     ERR_SHIM_HTTPS_UNSUPPORTED_TLS_OPTION.
  *   - a Transfer-Encoding other than `chunked`: ERR_SHIM_HTTP_UNSUPPORTED_TE.
+ *   - an https ORIGIN through a proxy: ERR_SHIM_HTTPS_PROXY_UNSUPPORTED. The
+ *     CONNECT tunnel is easy; starting TLS on the socket it returns is what
+ *     this engine cannot do. We refuse instead of connecting directly, because
+ *     a direct connection is exactly the silent proxy bypass (see "proxy").
+ *   - a proxy agent this client cannot read, or one naming a non-http(s) proxy
+ *     (socks): ERR_SHIM_HTTP_UNSUPPORTED_AGENT_PROXY — again a refusal rather
+ *     than a connection the caller did not ask for.
  *   - http2 / h2c: absent here, as it always was.
  *
  * KNOWN, DOCUMENTED DIVERGENCES (behaviour differs from node but nothing is
@@ -546,6 +567,225 @@ function mapConnectError(e, host, port) {
   err.address = host;
   err.port = port;
   return err;
+}
+
+/* ---- proxy (HTTP(S)_PROXY / NO_PROXY) --------------------------------------
+ * WHAT WAS SILENT. quaude's ENGINE already honours the proxy environment for
+ * everything it carries itself — `fetch`, the global `XMLHttpRequest`, and
+ * WebSocket all go through the proxy (txiki's lws client vhost, src/lws-utils.c
+ * `tjs__parse_proxy_url`/`no_proxy` matching), which is where essentially all of
+ * the bundle's traffic goes. This client was the one transport in the process
+ * that did not: with HTTP(S)_PROXY set it connected STRAIGHT to the origin and
+ * said nothing. Two ways to get bitten by that, and the second is the bad one:
+ * behind a MANDATORY proxy the connection just fails oddly, but behind a
+ * MONITORING or FILTERING proxy the traffic leaves by a route the environment
+ * believes is closed — and "it worked" and "it went around your proxy" look
+ * identical from outside.
+ *
+ * It was also a naude-vs-quaude divergence, not merely a gap: clode's launcher
+ * sets NODE_USE_ENV_PROXY=1 for every target it builds (libexec/target-env.cjs
+ * — quaude gets it too), and node >= 24 honours the proxy environment in
+ * http/https clients under that flag. MEASURED on the host oracle (node
+ * v24.18.1), not assumed:
+ *   - NODE_USE_ENV_PROXY=1 + HTTP_PROXY -> `GET http://host:port/path HTTP/1.1`
+ *     to the proxy, `Host:` still the origin, plus `proxy-connection:` mirroring
+ *     Connection and `proxy-authorization: Basic <b64>` when the proxy URL
+ *     carries credentials (the port is omitted from the absolute URI when it is
+ *     the scheme default, and an IPv6 literal is bracketed — exactly the Host
+ *     header's own spelling).
+ *   - https origin -> `CONNECT host:443 HTTP/1.1` tunnel.
+ *   - the flag is a boolean env option: ONLY the exact string "1" enables it
+ *     ("true"/"yes"/"2"/""/unset all went direct).
+ *   - the env applies to the GLOBAL agent: `agent: new http.Agent()` and
+ *     `agent: false` go DIRECT, `agent: http.globalAgent` (or an agent built
+ *     with `{ proxyEnv: process.env }`) proxies.
+ *   - a non-http(s) proxy URL (socks5://...) is IGNORED — node goes direct.
+ * Everything below is a port of node's own semantics (lib/internal/http.js,
+ * `ProxyConfig`/`shouldUseProxy`, read out of the host node via
+ * `--expose-internals`), so the two agree case for case; the shared no_proxy
+ * matcher is unit-tested against node's real implementation in
+ * test/node-shim-http-proxy.test.cjs.
+ *
+ * An https:// PROXY URL (TLS to the proxy itself) IS supported for an http
+ * origin — but its certificate can only be trusted through a caller-supplied
+ * `ca`: measured, neither SSL_CERT_FILE nor TJS_CA_BUNDLE reaches
+ * tjs.connect('tls', ...), so there is no environment knob for a private CA on
+ * a client socket here (node has NODE_EXTRA_CA_CERTS). Untrusted means a
+ * VISIBLE failure — never a direct connection.
+ *
+ * WHAT IS NOT COVERED, loudly: an HTTPS origin through a proxy needs TLS
+ * started over the socket the CONNECT tunnel returns, and this engine cannot do
+ * that — tjs.connect('tls', host, port) always makes its OWN connection, and
+ * there is no adopt-this-fd/startTls entry point (src/js/core/sockets.js). So a
+ * proxied https request THROWS ERR_SHIM_HTTPS_PROXY_UNSUPPORTED instead of
+ * connecting directly. Refusing is the point: a direct connection is precisely
+ * the silent bypass this section exists to end.
+ */
+
+// Node reads NODE_USE_ENV_PROXY once at startup, as a boolean CLI option; its
+// boolean env parser accepts the exact string "1" and nothing else (measured).
+// We read it per request instead of once at construction — a documented
+// divergence, and the direction that costs nothing: it cannot turn a proxied
+// request into a direct one behind the caller's back.
+function envProxyEnabled(env) { return env && env.NODE_USE_ENV_PROXY === '1'; }
+
+function currentEnv() {
+  const p = globalThis.process;
+  return (p && p.env) || {};
+}
+
+// Lower case wins over upper case, per the de-facto convention node follows.
+//
+// ALL_PROXY is a DELIBERATE ADDITION to node's list (node reads only the
+// http_proxy/https_proxy pairs), and the one place this section knowingly
+// diverges. The reason is the process it lives in: this engine's own fetch/XHR
+// DO honour all_proxy (src/lws-utils.c), so a user who sets only ALL_PROXY gets
+// every other transport proxied — and, without this fallback, exactly this
+// client going direct. That is the silent bypass again, arrived at through the
+// env list. Erring towards "use the proxy the user configured" cannot send
+// bytes anywhere they did not name.
+function proxyUrlFromEnv(env, protocol) {
+  const raw = (protocol === 'https:'
+    ? (env.https_proxy || env.HTTPS_PROXY)
+    : (env.http_proxy || env.HTTP_PROXY)) || env.all_proxy || env.ALL_PROXY;
+  if (!raw) return null;
+  if (raw.includes('\r') || raw.includes('\n')) {
+    throw shimError(`Invalid proxy URL: ${raw}`, 'ERR_PROXY_INVALID_CONFIG');
+  }
+  return raw;
+}
+
+function isIPv4(s) {
+  const parts = String(s).split('.');
+  if (parts.length !== 4) return false;
+  return parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) <= 255);
+}
+function ipToInt(s) {
+  const p = String(s).split('.').map(Number);
+  return ((p[0] << 24) >>> 0) + (p[1] << 16) + (p[2] << 8) + p[3];
+}
+
+// node's ProxyConfig, minus the socket-pooling bits we have no use for.
+function makeProxyConfig(rawUrl, noProxyList) {
+  let u;
+  try { u = new URL(rawUrl); } catch {
+    throw shimError(`Invalid proxy URL: ${rawUrl}`, 'ERR_PROXY_INVALID_CONFIG');
+  }
+  const cfg = {
+    href: rawUrl,
+    protocol: u.protocol,
+    host: u.hostname.startsWith('[') ? u.hostname.slice(1, -1) : u.hostname,
+    port: u.port ? Number(u.port) : (u.protocol === 'https:' ? 443 : 80),
+    auth: undefined,
+    bypassList: noProxyList ? String(noProxyList).split(',').map((e) => e.trim().toLowerCase()) : [],
+  };
+  if (u.username || u.password) {
+    const auth = `${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`;
+    cfg.auth = `Basic ${Buffer.from(auth).toString('base64')}`;
+    u.username = ''; u.password = '';
+    cfg.href = u.href;                 // never log or re-send the credentials
+  }
+  return cfg;
+}
+
+// node's ProxyConfig#shouldUseProxy, ported behaviour-for-behaviour: exact host
+// and host:port, `*`, curl-style leading-dot suffixes, `*.suffix` wildcards, and
+// simple IPv4 ranges (`10.0.0.1-10.0.0.9`). CIDR is not supported THERE either.
+function shouldUseProxy(cfg, hostname, port) {
+  const bypassList = (cfg && cfg.bypassList) || [];
+  if (!bypassList.length) return true;
+  const host = String(hostname).toLowerCase();
+  const hostWithPort = port ? `${host}:${port}` : host;
+  for (const entry of bypassList) {
+    if (entry === '*') return false;
+    if (entry === host || entry === hostWithPort) return false;
+    if (entry[0] === '.') {
+      const suffix = entry.substring(1);
+      if (host === suffix
+          || (host.endsWith(suffix) && host[host.length - suffix.length - 1] === '.')) return false;
+    }
+    if (entry.startsWith('*.') && host.endsWith(entry.substring(1))) return false;
+    if (entry.includes('-') && isIPv4(host)) {
+      const [rawStart, rawEnd] = entry.split('-');
+      const startIP = (rawStart || '').trim();
+      const endIP = (rawEnd || '').trim();
+      if (startIP && endIP && isIPv4(startIP) && isIPv4(endIP)) {
+        const h = ipToInt(host);
+        if (h >= ipToInt(startIP) && h <= ipToInt(endIP)) return false;
+      }
+    }
+  }
+  return true;
+}
+
+// Say a thing once per process, on stderr. Used only where we are about to do
+// something a proxy-configured user would want to know about.
+const _warned = new Set();
+function warnOnce(key, message) {
+  if (_warned.has(key)) return;
+  _warned.add(key);
+  const p = globalThis.process;
+  if (p && p.stderr && typeof p.stderr.write === 'function') p.stderr.write(`${message}\n`);
+}
+
+// An explicit proxy AGENT (http-proxy-agent/https-proxy-agent keep the proxy URL
+// on `agent.proxy`) is the caller SAYING "send this through here". This client
+// does not run agents at all, so before this it was ignored — the same silent
+// bypass, arrived at from the other direction. It is reachable: with a proxy
+// configured, the bundle builds an HttpsProxyAgent for the Bedrock backend and
+// hands it to @smithy/node-http-handler.
+function proxyFromAgent(agent) {
+  // A FALSY `proxy` is the "no proxy" idiom (axios spells it `proxy: false`),
+  // not an unreadable one — refusing there would break a caller who explicitly
+  // asked for no proxy at all.
+  if (!agent || typeof agent !== 'object' || !agent.proxy) return null;
+  const p = agent.proxy;
+  const href = typeof p === 'string' ? p : (typeof p.href === 'string' ? p.href : null);
+  if (!href) {
+    throw shimError(
+      'node-shim: this request carries a proxy agent whose proxy this client cannot read '
+      + `(${(agent.constructor && agent.constructor.name) || 'agent'}.proxy is not a URL). Refusing to `
+      + 'connect directly, because that would silently bypass the proxy the caller asked for.',
+      'ERR_SHIM_HTTP_UNSUPPORTED_AGENT_PROXY');
+  }
+  const proto = href.slice(0, href.indexOf(':') + 1);
+  if (proto !== 'http:' && proto !== 'https:') {
+    throw shimError(
+      `node-shim: proxy agent names a '${proto}' proxy; this client can only speak to http:// and `
+      + 'https:// proxies. Refusing to connect directly, because that would silently bypass it.',
+      'ERR_SHIM_HTTP_UNSUPPORTED_AGENT_PROXY');
+  }
+  return href;
+}
+
+// The proxy (if any) this request must go through. Explicit agent first — that
+// is the caller's own instruction — then the environment, on node's terms.
+function resolveProxy(opts, protocol, host, port) {
+  const env = currentEnv();
+  const fromAgent = proxyFromAgent(opts.agent);
+  if (fromAgent) {
+    const cfg = makeProxyConfig(fromAgent, env.no_proxy || env.NO_PROXY);
+    return shouldUseProxy(cfg, host, port) ? cfg : null;
+  }
+  const agent = opts.agent;
+  // node: the env applies to the global agent, or to one built with proxyEnv.
+  const agentEnv = (agent && typeof agent === 'object' && agent.options && agent.options.proxyEnv) || null;
+  const isGlobal = agent == null || (typeof agent === 'object' && agent._shimGlobalAgent === true);
+  if (!agentEnv && !isGlobal) return null;
+  const useEnv = agentEnv || env;
+  if (!agentEnv && !envProxyEnabled(env)) return null;
+  const raw = proxyUrlFromEnv(useEnv, protocol);
+  if (!raw) return null;
+  if (!raw.startsWith('http://') && !raw.startsWith('https://')) {
+    // node ignores these and goes direct. We do the same — matching node's
+    // routing matters more than our opinion — but we do not do it quietly.
+    warnOnce(`unsupported-proxy:${raw}`,
+      `node-shim: the configured proxy ${raw} is not an http:// or https:// proxy, so it is `
+      + 'IGNORED (node does the same) — this request is going DIRECT, not through your proxy.');
+    return null;
+  }
+  const cfg = makeProxyConfig(raw, useEnv.no_proxy || useEnv.NO_PROXY);
+  return shouldUseProxy(cfg, host, port) ? cfg : null;
 }
 
 function toBytes(chunk, enc) {
@@ -775,13 +1015,46 @@ class ClientRequest extends EventEmitter {
     if (options.auth && !this._headers.has('authorization')) {
       this._headers.set('authorization', ['Authorization', `Basic ${Buffer.from(String(options.auth)).toString('base64')}`]);
     }
+    // The origin's authority, spelled the way node spells it in BOTH the Host
+    // header and the absolute-form request target it sends to a proxy: the port
+    // is dropped when it is the scheme default, an IPv6 literal is bracketed.
+    const dfltPort = this._tls ? 443 : 80;
+    const hostHdr = this.host.includes(':') ? `[${this.host}]` : this.host;
+    this._authority = this.port === dfltPort ? hostHdr : `${hostHdr}:${this.port}`;
     if (options.setHost !== false && !this._headers.has('host')) {
-      const dflt = this._tls ? 443 : 80;
-      const hostHdr = this.host.includes(':') ? `[${this.host}]` : this.host;
-      this._headers.set('host', ['Host', this.port === dflt ? hostHdr : `${hostHdr}:${this.port}`]);
+      this._headers.set('host', ['Host', this._authority]);
+    }
+
+    // Proxy decision BEFORE the socket exists: it changes where we connect and
+    // what the request line says. A proxied https origin cannot be tunnelled by
+    // this engine, and we refuse rather than leak a direct connection past it.
+    this._proxy = resolveProxy(options, this.protocol, this.host, this.port);
+    if (this._proxy && this._tls) {
+      throw shimError(
+        `node-shim: https://${this._authority} is configured to go through the proxy ${this._proxy.href}, `
+        + 'but this client cannot tunnel TLS through a proxy: a CONNECT tunnel needs TLS started over an '
+        + "existing socket, and this engine's tjs.connect('tls', ...) always makes its own connection. "
+        + 'REFUSING to connect directly, because that would silently bypass your proxy. Use NO_PROXY for '
+        + 'this host if a direct connection is what you want.',
+        'ERR_SHIM_HTTPS_PROXY_UNSUPPORTED');
+    }
+    // (A synchronous throw, like this file's other refusals — and the shape the
+    // reachable caller wants: smithy builds its request inside a promise
+    // executor, so this surfaces as a rejection, not an uncaught crash.)
+    // Credentials from the proxy URL, as node sends them (it sets this after
+    // the caller's headers, so the connection-level credential wins).
+    if (this._proxy && this._proxy.auth) {
+      this._headers.set('proxy-authorization', ['proxy-authorization', this._proxy.auth]);
     }
     // DIVERGENCE (documented above): no pooling, so always close.
     if (!this._headers.has('connection')) this._headers.set('connection', ['Connection', 'close']);
+    // node mirrors Connection into proxy-connection on a proxied request (it
+    // sends `proxy-connection: keep-alive` from a pooling agent and
+    // `proxy-connection: close` from a non-pooling one; we are always the
+    // latter). Lower-case name, as node spells it.
+    if (this._proxy && !this._headers.has('proxy-connection')) {
+      this._headers.set('proxy-connection', ['proxy-connection', this.getHeader('connection')]);
+    }
 
     this._queue = [];                   // bytes waiting for the socket
     this._headSent = false;
@@ -825,12 +1098,28 @@ class ClientRequest extends EventEmitter {
         sock.on('timeout', () => this.emit('timeout'));
         sock.on('error', (e) => this._fail(e));
         this.emit('socket', sock);
-        await sock._open(this._tls ? 'tls' : 'tcp', this.host, this.port, this._connectOptions());
+        // With a proxy, the socket goes to the PROXY (TLS when the proxy URL is
+        // https://); the origin is named in the request line instead. A proxied
+        // https ORIGIN never gets here — the constructor already refused it.
+        const target = this._proxy
+          ? { transport: this._proxy.protocol === 'https:' ? 'tls' : 'tcp', host: this._proxy.host, port: this._proxy.port }
+          : { transport: this._tls ? 'tls' : 'tcp', host: this.host, port: this.port };
+        await sock._open(target.transport, target.host, target.port, this._connectOptions());
         if (this.destroyed) { sock.destroy(); return; }
         this._readResponse(sock);
         this._drain();
       } catch (e) {
-        this._fail(mapConnectError(e, this.host, this.port));
+        // Name the PROXY when the proxy is what failed: a dead proxy must not
+        // read as a dead origin (and must not fall back to a direct connection
+        // — there is no such fallback here, on purpose).
+        const err = this._proxy
+          ? mapConnectError(e, this._proxy.host, this._proxy.port)
+          : mapConnectError(e, this.host, this.port);
+        if (this._proxy) {
+          err.message += ` — connecting to the proxy ${this._proxy.href} for ${this.protocol}//${this._authority}`;
+          err.proxy = this._proxy.href;
+        }
+        this._fail(err);
       }
     })();
   }
@@ -840,7 +1129,11 @@ class ClientRequest extends EventEmitter {
     const ag = (agent && typeof agent === 'object' && agent.options) || {};
     const keepAlive = (agent && typeof agent === 'object' && agent.keepAlive) || ag.keepAlive;
     if (keepAlive) o.keepAliveDelay = Math.max(1, Math.round(((agent && agent.keepAliveMsecs) || ag.keepAliveMsecs || 1000) / 1000));
-    if (!this._tls) return o;
+    // The TLS leg is the ORIGIN's when we connect to it directly, and the
+    // PROXY's when the proxy URL is https:// (an http origin behind a TLS
+    // proxy still needs a certificate checked — the caller's `ca` is the only
+    // way to trust a private one here; see the proxy section's CA note).
+    if (!this._tls && !(this._proxy && this._proxy.protocol === 'https:')) return o;
     const pick = (k) => (this._opts[k] !== undefined ? this._opts[k] : ag[k]);
     const ca = pick('ca');
     if (ca !== undefined) o.ca = Array.isArray(ca) ? ca.map(String).join('\n') : String(ca);
@@ -876,7 +1169,10 @@ class ClientRequest extends EventEmitter {
       }
     }
     this._chunkedBody = /chunked/i.test(String(this.getHeader('transfer-encoding') || ''));
-    let head = `${this.method} ${this.path} HTTP/1.1\r\n`;
+    // Through a proxy the request target is absolute-form (origin-form only
+    // says "/path", which a proxy cannot route). Byte-identical to node's.
+    const target = this._proxy ? `${this.protocol}//${this._authority}${this.path}` : this.path;
+    let head = `${this.method} ${target} HTTP/1.1\r\n`;
     for (const [, [name, value]] of this._headers) {
       for (const v of Array.isArray(value) ? value : [value]) head += `${name}: ${v}\r\n`;
     }
@@ -1071,7 +1367,12 @@ module.exports = {
 // the SAME ClientRequest with TLS defaults through this, rather than duplicating
 // the client.
 Object.defineProperty(module.exports, '_internals', {
-  value: { headEndIndex, parseHeaderLines, splitHead, bodyFraming, BodyDecoder, ClientRequest, normalizeArgs },
+  value: {
+    headEndIndex, parseHeaderLines, splitHead, bodyFraming, BodyDecoder, ClientRequest, normalizeArgs,
+    // proxy decision helpers, exposed so they can be tested as pure functions
+    // against node's own ProxyConfig (test/node-shim-http-proxy.test.cjs).
+    proxy: { envProxyEnabled, proxyUrlFromEnv, makeProxyConfig, shouldUseProxy, resolveProxy },
+  },
   enumerable: false,
 });
 module.exports.default = module.exports;

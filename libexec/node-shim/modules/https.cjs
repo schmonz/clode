@@ -25,6 +25,10 @@ class Agent extends http.Agent {
 }
 
 const globalAgent = new Agent();
+// Marked as global for the same reason http's is: node applies the proxy
+// environment to the global agent, and a caller may name it explicitly
+// (`agent: https.globalAgent` proxies; `agent: new https.Agent()` does not).
+Object.defineProperty(globalAgent, '_shimGlobalAgent', { value: true, enumerable: false });
 
 const { ClientRequest, normalizeArgs } = http._internals;
 
