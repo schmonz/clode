@@ -78,8 +78,9 @@ jobs:
       - name: node-shim oracles (roundtrip + agentic) on the real Windows kernel
         run: |
           set -euo pipefail
-          PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f \( -name claude -o -name claude.exe \) -size +20M 2>/dev/null | head -1)"
-          if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
+          # One home, and it DIAGNOSES itself: the old find(1) could exit the step
+          # silently under set -euo pipefail (see scripts/find-provider.mjs).
+          PROV="$(node scripts/find-provider.mjs)"
           echo "provider: $PROV"
           CLODE_TJS="$PWD/tjs.exe" CLODE_PROVIDER_BIN="$PROV" \
             node --test --test-concurrency=1 \
@@ -135,8 +136,9 @@ jobs:
       - name: Render the real TUI under ConPTY and assert the welcome box
         run: |
           set -euo pipefail
-          PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f \( -name claude -o -name claude.exe \) -size +20M 2>/dev/null | head -1)"
-          if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
+          # One home, and it DIAGNOSES itself: the old find(1) could exit the step
+          # silently under set -euo pipefail (see scripts/find-provider.mjs).
+          PROV="$(node scripts/find-provider.mjs)"
           echo "provider: $PROV"
           chmod +x ./tjs.exe || true
           CLODE_TJS="$PWD/tjs.exe" CLODE_CLAUDE_BIN="$PROV" CLODE_LIVE_RENDER=1 \
@@ -196,8 +198,9 @@ jobs:
       - name: node-shim oracles (roundtrip + agentic) on the real Windows kernel
         run: |
           set -euo pipefail
-          PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f \( -name claude -o -name claude.exe \) -size +20M 2>/dev/null | head -1)"
-          if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
+          # One home, and it DIAGNOSES itself: the old find(1) could exit the step
+          # silently under set -euo pipefail (see scripts/find-provider.mjs).
+          PROV="$(node scripts/find-provider.mjs)"
           echo "provider: $PROV"
           CLODE_TJS="$PWD/tjs.exe" CLODE_PROVIDER_BIN="$PROV" \
             node --test --test-concurrency=1 \
@@ -453,8 +456,9 @@ jobs:
           # The parity gate's input: cli.cjs is staged from this provider and run
           # under BOTH targets' runtimes (naude = node, quaude = tjs+shim), then
           # diffed. Fail loud if it is missing — a skipped oracle is not a pass.
-          PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f -name claude -size +20M 2>/dev/null | head -1)"
-          if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
+          # One home, and it DIAGNOSES itself: the old find(1) could exit the step
+          # silently under set -euo pipefail (see scripts/find-provider.mjs).
+          PROV="$(node scripts/find-provider.mjs)"
           echo "provider: $PROV"
           export CLODE_PROVIDER_BIN="$PROV"
           node --test --test-concurrency=1 $FILES
@@ -546,8 +550,9 @@ jobs:
           # build needs it on disk. Without this the fused clode-native ships no
           # postject and the naude assembly dies "Cannot find module .../postject".
           npm ci --prefix deps/clode 2>&1 | tail -3
-          PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f -name claude -size +20M 2>/dev/null | head -1)"
-          if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
+          # One home, and it DIAGNOSES itself: the old find(1) could exit the step
+          # silently under set -euo pipefail (see scripts/find-provider.mjs).
+          PROV="$(node scripts/find-provider.mjs)"
           echo "provider: $PROV"
           # The acceptances prove node-freeness by running the fused builder with
           # PATH=/usr/bin:/bin, and they SKIP if a node lives there ("cannot prove
@@ -591,8 +596,9 @@ jobs:
           CLODE_ORACLE_BINARIES: '1'
         run: |
           set -euo pipefail
-          PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f -name claude -size +20M 2>/dev/null | head -1)"
-          if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
+          # One home, and it DIAGNOSES itself: the old find(1) could exit the step
+          # silently under set -euo pipefail (see scripts/find-provider.mjs).
+          PROV="$(node scripts/find-provider.mjs)"
           CLODE_PROVIDER_BIN="$PROV" CLODE_CLAUDE_BIN="$PROV" \
             node --test --test-timeout=1200000 test/oracle-binaries.test.cjs
 
@@ -666,8 +672,9 @@ jobs:
           # opt-in test/e2e-ctrlz-tui.test.cjs; the wiring stays in node-shim-signals.)
           EXCLUDE='node-shim-tty'
           FILES=$(ls test/node-shim-*.test.cjs | grep -vE "$EXCLUDE")
-          PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f -name claude -size +20M 2>/dev/null | head -1)"
-          if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
+          # One home, and it DIAGNOSES itself: the old find(1) could exit the step
+          # silently under set -euo pipefail (see scripts/find-provider.mjs).
+          PROV="$(node scripts/find-provider.mjs)"
           echo "provider: $PROV"
           export CLODE_PROVIDER_BIN="$PROV"
           node --test --test-concurrency=1 $FILES
