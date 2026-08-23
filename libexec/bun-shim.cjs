@@ -939,7 +939,25 @@ const Bun = {
   hash, which, spawn, semver, JSONL, YAML,
   deepEquals: (a,b)=> require('util').isDeepStrictEqual(a,b),
   gc: ()=> { if (global.gc) global.gc(); },
-  generateHeapSnapshot: ()=> { try { return v8.getHeapSnapshot(); } catch(_){ return {}; } },
+  // The bundle calls this as generateHeapSnapshot("v8","arraybuffer") and hands the
+  // result STRAIGHT to writeFileSync, so it must be bytes. v8.getHeapSnapshot() is a
+  // Readable, which made /heapdump fail on node with "The \"data\" argument must be of
+  // type string or an instance of Buffer... Received an instance of HeapSnapshotStream".
+  // v8.writeHeapSnapshot() is the synchronous route; read it back and hand over the
+  // buffer. Under quaude this still throws (quickjs has no V8 heap accounting) -- but
+  // now by NAME, from the v8 wall, instead of a nameless TypeError.
+  generateHeapSnapshot: (_fmt, shape)=> {
+    const os = require('os'), fsx = require('fs'), pathx = require('path');
+    const f = pathx.join(os.tmpdir(), `clode-heap-${process.pid}-${Date.now()}.heapsnapshot`);
+    try {
+      v8.writeHeapSnapshot(f);
+      const buf = fsx.readFileSync(f);
+      if (shape === 'arraybuffer') return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+      return buf;
+    } finally {
+      try { fsx.unlinkSync(f); } catch(_) {}
+    }
+  },
 
   // assets embedded in __BUN — none when running as loose JS. Returning [] makes the
   // app take its on-disk path. TODO: if a feature needs an embedded asset, supply it.

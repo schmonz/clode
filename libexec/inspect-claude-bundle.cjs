@@ -374,8 +374,20 @@ for (const s of specs) {
 process.stdout.write(JSON.stringify({ keys, stubs, modules }));
 `;
   try {
+    // NODE_PATH at the ext-dep closure, because that is what a quaude actually IS.
+    // Without it this probe reports the world as if deps/claude were not installed:
+    // Bun.semver, stringWidth, stripANSI, wrapAnsi and YAML come back "stubbed —
+    // throws when used" (all five are reached and working on every driven flow), and
+    // ws / node-fetch come back "MISSING -> SILENT TUI HANG risk" though both are in
+    // deps/claude/package.json. A gate that overstates risk on exactly the surfaces
+    // that matter teaches people to discount it.
+    const depsMods = path.resolve(__dirname, '..', 'deps', 'claude', 'node_modules');
+    const env = { ...process.env };
+    if (fs.existsSync(depsMods)) {
+      env.NODE_PATH = env.NODE_PATH ? `${depsMods}${path.delimiter}${env.NODE_PATH}` : depsMods;
+    }
     const out = spawnSync(node, ['-e', code, path.resolve(shimPath), JSON.stringify(specifiers)],
-      { encoding: 'utf8', timeout: 30000, maxBuffer: 64 * 1024 * 1024 });
+      { encoding: 'utf8', timeout: 30000, maxBuffer: 64 * 1024 * 1024, env });
     if (out.error) return null;
     if (out.status !== 0) return null;
     return JSON.parse(out.stdout);
