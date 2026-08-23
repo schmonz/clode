@@ -290,14 +290,102 @@ jobs:
     # missing, download-artifact fails it LOUDLY, which is the honest answer.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    # LIKE-FOR-LIKE LIBC, ON PURPOSE — the reference node runs under musl because
+    # the engine does.
+    #
+    # This job diffs a MUSL-built engine against "host node". On a stock
+    # ubuntu-latest, host node is a GLIBC build, so the premise "our engine vs the
+    # node on this host" is false and the ratchet was really measuring libc. It
+    # caught itself doing that on 2026-08-23 (run 32606247462), three rows red with
+    # BOTH SIDES CORRECT:
+    #   os.constants.signals   ours had SIGUNUSED: 31, node's did not
+    #   os.constants.dlopen    ours 4 members, node's 5 (RTLD_DEEPBIND)
+    # musl's arch/*/bits/signal.h literally says `#define SIGUNUSED SIGSYS`, and
+    # musl's dlfcn.h has no RTLD_DEEPBIND; glibc 2.39 says the opposite on both
+    # (verified directly: `echo '#include <signal.h>' | gcc -E -dM -` on Ubuntu
+    # 24.04 prints SIGSYS 31 and no SIGUNUSED). Since f8546da/0decc98 the engine
+    # reports what ITS OWN headers say — that is the entire point of the generated
+    # constants work, it is what abolished the hand-maintained platform tables — so
+    # a glibc reference makes an exact gate fail for something that is not a defect.
+    #
+    # The fix is the INSTRUMENT, not the ratchet. There is deliberately NO exception
+    # list, NO skip list, NO "allowed libc differences" file: every entry in such a
+    # file is a hole in a gate whose whole value is being exact, and a curated table
+    # of blessed divergences is the hand-maintained platform table walking back in
+    # through the side door. Make the comparison honest instead.
+    #
+    # WHY A CONTAINER AND NOT setup-node: actions/setup-node serves the official
+    # nodejs.org builds, which are glibc-only — there is no musl node it can give
+    # us. The image IS the reference node. Its tag is pinned to the SAME version as
+    # .tool-versions and asserted below, so a bump to one and not the other is a
+    # named failure rather than a silent skew.
+    container:
+      image: node:24.18.1-alpine
     defaults:
       run:
         shell: bash
     steps:
+      # BEFORE checkout on purpose: a `run:` step in a container job needs no repo,
+      # and actions/checkout with no git on PATH silently degrades to a REST tarball
+      # download. Each package is load-bearing; alpine ships none of them:
+      #   bash        `defaults.run.shell: bash`, and the steps below are bash
+      #   git         so checkout is a real clone, not the degraded fallback
+      #   openssl     two rows (node-shim-http-client, node-shim-http-proxy) MINT A
+      #               CERTIFICATE and t.skip() without it. A skipped oracle row is
+      #               not a pass — that silent-green is the disease this whole job
+      #               exists to prevent, so the container must not reintroduce it.
+      #   procps      node-shim-signals reads `ps -o state= -p PID` to prove SIGSTOP
+      #               actually stopped the child. busybox's ps has no `state`
+      #               column, so the probe would return 'GONE' and the row would
+      #               fail for the tool, not the shim.
+      #   libstdc++   the Bun-packaged provider binary links it. node:alpine
+      #               already pulls it in for node itself; named explicitly so the
+      #               dependency is stated rather than inherited by luck.
+      # The other externals these tests reach for — /bin/echo, /bin/cat, /bin/sh,
+      # /bin/sleep, /bin/pwd, mkfifo, kill, uname, true — are busybox applets that
+      # alpine already symlinks into place, and every row that uses one runs the
+      # SAME binary on both sides of the diff, so busybox-vs-coreutils cannot skew
+      # a comparison here.
+      - name: musl prerequisites (bash, git, openssl, procps — see above)
+        shell: sh
+        run: |
+          set -e
+          # `procps` is the provides-name; the real package is procps-ng on
+          # alpine >= 3.19. Asking for the provides-name works on both sides of
+          # that rename.
+          apk add --no-cache bash git openssl procps libstdc++
+          # Name the tool failure HERE rather than letting it surface as a red
+          # SIGSTOP row two steps later. procps-ng installs /usr/bin/ps, which
+          # precedes busybox's /bin/ps on alpine's PATH.
+          ps -o state= -p $$ >/dev/null \
+            || { echo "ps has no 'state' column — node-shim-signals' SIGSTOP probe cannot work" >&2; exit 1; }
       - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.0.0
-        with:
-          node-version-file: .tool-versions
+      # The same .tool-versions skew guard suite.yml runs, PLUS the assertion that
+      # makes this job's premise checkable instead of assumed. If someone ever drops
+      # the container: key, or the image starts shipping a glibc node, this fails by
+      # name here rather than reappearing as a mystery constants diff.
+      - name: Assert the reference node matches the .tool-versions pin AND is musl
+        run: |
+          set -euo pipefail
+          want=$(sed -n 's/^nodejs //p' .tool-versions)
+          have=$(node -v); have=${have#v}
+          [ "$have" = "$want" ] || {
+            echo "node skew: .tool-versions=$want but this container's node=$have." >&2
+            echo "           Bump the container: image: tag in this job to node:$want-alpine." >&2
+            exit 1; }
+          # process.report is node's own answer about its own linkage: a glibc build
+          # reports header.glibcVersionRuntime, a musl build has no such field. That
+          # is arch-independent and does not depend on ldd's output format.
+          node -e '
+            const h = process.report.getReport().header;
+            if (h.glibcVersionRuntime) {
+              console.error("reference node is GLIBC-linked (" + h.glibcVersionRuntime + "),");
+              console.error("but this job diffs a musl engine against it. The comparison would");
+              console.error("be measuring libc, not shim fidelity. Restore the alpine container.");
+              process.exit(1);
+            }
+            console.log("reference node: " + process.version + ", musl-linked (no glibcVersionRuntime)");
+          '
       - uses: actions/download-artifact@v8.0.1
         with:
           name: tjs-linux-x64-musl   # bare static engine from the CI-tier leg
@@ -307,6 +395,10 @@ jobs:
       # The naude-vs-quaude parity gate stages cli.cjs from a real Bun-packaged
       # provider; with none present it SKIPS, which is exactly the silent-green
       # this job exists to prevent. Same provisioning the windows-amd64 job uses.
+      # Under the musl container npm resolves the optional dep
+      # @anthropic-ai/claude-code-linux-x64-musl (upstream publishes it beside the
+      # glibc one), so the provider is musl too — the same like-for-like the
+      # reference node is here for.
       - name: Install the Claude provider (npm, latest — the parity gate's input)
         run: npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
       # Live-network gate (regression guard): nothing else in CI makes a real
@@ -366,6 +458,47 @@ jobs:
           echo "provider: $PROV"
           export CLODE_PROVIDER_BIN="$PROV"
           node --test --test-concurrency=1 $FILES
+
+  # The BUILDER and the PACKAGED TARGETS — on glibc, on purpose.
+  #
+  # Two standing guards that were the tail of node-shim-oracle until that job had
+  # to move into a musl container to make its comparison honest (see its header).
+  # They could not follow it: both build and RUN a naude, and a naude embeds the
+  # pinned official Node from nodejs.org — a glibc binary that does not exec on
+  # alpine. Splitting them off costs a second artifact download, a second
+  # deps/claude install and a second provider install; the alternative was one job
+  # whose libc had to be wrong for one half of it or the other.
+  #
+  # Consumes the SAME tjs-linux-x64-musl artifact — the engine is static, so it
+  # runs on either libc; it is only the REFERENCE side of a comparison that has to
+  # match, and nothing here compares against host node.
+  native-builder-oracle:
+    needs: tjs
+    # Same rationale as node-shim-oracle's: run once `tjs` FINISHES whatever its
+    # conclusion. This job consumes ONE named artifact; a leg it does not use has
+    # no bearing on whether it can run, and a job that skips is a gate that is not
+    # there. If the artifact is genuinely missing, download-artifact fails LOUDLY.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version-file: .tool-versions
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          name: tjs-linux-x64-musl   # bare static engine from the CI-tier leg
+          path: ${{ runner.temp }}/tjs
+      - name: Install the runtime dep closure (the fuse's ext-dep closure)
+        run: npm ci --prefix deps/claude
+      # Fail loud if absent, below — a skipped acceptance is not a pass.
+      - name: Install the Claude provider (npm, latest — the acceptances' input)
+        run: npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
+      - name: mark the engine executable
+        run: chmod +x "${{ runner.temp }}/tjs/tjs"
       # The BUILDER, driven the way a user drives it: fuse a native clode, then
       # make THAT binary build a quaude with node absent from PATH.
       #
@@ -381,9 +514,13 @@ jobs:
       # binary that is the entire point of the Q1 split was 100% broken and
       # nothing said a word. This step is the standing guard.
       #
-      # It runs HERE because this job already has the three things the
-      # acceptances need — a real tjs, deps/claude, and a real Bun provider — so
-      # the guard costs one step, not one job.
+      # It used to run as the last steps of node-shim-oracle, sharing that job's
+      # tjs + deps/claude + provider. It moved here when that job went into a musl
+      # container (see its header): this step and the one after it BUILD AND RUN a
+      # naude, and a naude embeds the pinned OFFICIAL Node from nodejs.org, which
+      # is a glibc build that will not exec on alpine. So the split is along the
+      # libc line, which is the honest place for it: the shim oracle needs a musl
+      # reference, the naude guards need glibc, and one job cannot be both.
       # Cache the pinned Node naude embeds so acceptance 4 (below) downloads it
       # from nodejs.org at most once per pin, not every run — and a transient
       # nodejs.org outage reuses the cache instead of turning this step red. Keyed
