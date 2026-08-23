@@ -422,6 +422,131 @@ posix_memmap.c with a non-Linux mremap fallback (munmap+mmap or guard the MREMAP
 upstream it. For now WASM-off is the shipping posture on platforms where WAMR won't build —
 record it in the per-target build config, not as an ad-hoc env flag a human must remember.
 
+## ★ canonical-LE bytecode is INCOMPLETE — measured LE vs BE, same commit (2026-08-23)
+
+**The question ("can we compare bytecode from LE and BE being identical or not?") is
+answerable, the tool already exists, it is wired into NOTHING, and when run it FAILS.**
+
+`spike/quickjs/bc-le-oracle.mjs` serializes a fixed corpus under a given tjs and prints
+one sha256 per item. Its own header states the contract: *"On BE hosts the hashes are
+EXPECTED to equal the LE baseline after the patch — that is the point."* Nothing in
+`.github/` or `scripts/` ever invokes it.
+
+### Measurement
+
+Both engines from the SAME release run (30730368429, v0.20260801.2) so build date and
+patch stack are identical. BE run under `qemu-s390x-static` 7.2.22 in a
+`node:24-bookworm` container on ultimate-hat's docker.
+
+| corpus item | length | LE x86-64 | LE darwin-arm64 | BE s390x |
+|---|---|---|---|---|
+| `libexec/node-shim/loader.cjs` | 26467 | `d6a7026f…` | `d6a7026f…` | **`2295d1a0…`** |
+| `build/bundle/clode-main.bundle.cjs` | 119816 | `3c538d33…` | `3c538d33…` | **`ae428b69…`** |
+| `stress(inline)` | 524 | `a37cca5a…` | `a37cca5a…` | `a37cca5a…` ✓ |
+
+Controls, all clean: source bytes byte-identical on both sides; LE deterministic across
+runs; BE deterministic across runs; two different LE architectures and two different
+build dates agree EXACTLY, which rules out an engine-version confound.
+
+Byte-level: `stress` has zero differing bytes. The two real files first differ at
+**offset 1** — a 4-byte value (`b3da1d09` vs `2d7abcfc`; NOT a byte-swap of each other,
+so a value computed differently rather than merely stored differently) — then re-sync,
+with 2826/26467 (10.7%) and 2034/119816 (1.7%) bytes differing overall.
+
+So canonical-LE holds for the synthetic stress corpus (wide strings, doubles, bigints,
+atoms, branchy labels) and FAILS on real CommonJS files. Whatever differs is present in
+those and absent from the stress source.
+
+### What this does and does not mean
+
+**It is the WRITE side.** Our pipeline serializes bytecode on the BUILD host (LE in
+practice) and the target engine READS it. A BE engine reading LE bytecode is the
+property quaude actually depends on today, and this measurement does not test it — the
+s390x leg's level-2 self-load does, and passes.
+
+It matters for: a quaude BUILT ON a BE host (the level-2.5 path, currently
+"NOT achieved" under qemu-user), reproducibility of artifacts across build hosts, and
+the plain truth of the canonical-LE claim — which is load-bearing in
+[[canonical-le-bytecode]] and was the justification for the sparc/s390x work.
+
+### Why this is the BE gate we should have
+
+`be-oracle` replays shim tests on a BE engine, has never caught a big-endian bug in 30
+runs, and its one endianness assertion is `assert.ok(x === 'LE' || x === 'BE')`. THIS
+compares the actual artifact for the actual property, in ~10 seconds, with no provider,
+no exclude list, and no libc mismatch. Wiring `bc-le-oracle.mjs` into the s390x leg —
+LE baseline committed, BE run in-leg, diff — would be a real gate. It is currently red,
+which is the strongest argument for having it.
+
+### Reproduce
+
+    gh run download 30730368429 -n tjs-linux-s390x-musl -D be
+    gh run download 30730368429 -n tjs-linux-x64-musl   -D le
+    # ship repo skeleton (spike/quickjs/bc-le-oracle.mjs + corpus files) + both engines
+    ssh ultimate-hat 'zsh -lc "docker ..."'   # see [[ultimate-hat-build-host]]
+    apt-get install -y qemu-user-static
+    node spike/quickjs/bc-le-oracle.mjs ./tjs-le     # baseline
+    node spike/quickjs/bc-le-oracle.mjs ./tjs-be     # wrapper: qemu-s390x-static ./tjs-s390x "$@"
+
+Next step is to narrow WHICH field diverges — dump hex both sides (a `BC_DUMP` variant
+of the oracle) and walk the quickjs writer from offset 1.
+
+## /heapdump is broken on BOTH targets — and the API-surface gate cannot see it (2026-08-23)
+
+Found by INSTRUMENTING and driving real flows, not by reading the bundle — the
+method this repo's doctrine demands, and it earned its keep: ten flows driven
+(`--version`, `-p`, an agentic Bash turn, a six-tool Bash→Grep→Glob→Read→Edit→Write
+chain, TUI boot under a real PTY, a slash command with YAML frontmatter,
+`--output-format stream-json`, `/heapdump`), under both the naude and quaude models.
+
+`/heapdump` is a shipped, non-hidden slash command (`supportsNonInteractive:!0`).
+It fails on both targets, and WORSE on ours:
+
+- **naude (node):** `Failed to create heap dump: The "data" argument must be of type
+  string or an instance of Buffer... Received an instance of HeapSnapshotStream`.
+  The bundle does `writeFileSync(e, Bun.generateHeapSnapshot("v8","arraybuffer"), …)`;
+  `libexec/bun-shim.cjs:942` returns `v8.getHeapSnapshot()`, a Readable, not an
+  ArrayBuffer.
+- **quaude (tjs):** fails EARLIER and NAMELESSLY — `Failed to create heap dump: not a
+  function` — never reaching `Bun.generateHeapSnapshot` at all. Probed directly: under
+  the shim, `v8` exports only `getHeapSnapshot`; `v8.getHeapStatistics` and
+  `getHeapSpaceStatistics` are undefined, as are `process.resourceUsage`,
+  `process._getActiveHandles` and `_getActiveRequests`. `captureMemoryDiagnostics`
+  calls `getHeapStatistics()` on its second line. (Nameless quickjs TypeErrors are a
+  known trap — see [[shim-filehandle-chmod-gap]].)
+
+**Why no gate caught it.** `test/node-shim-api-surface-gate.test.cjs` asks whether the
+Bun surface is PRESENT. `Bun.generateHeapSnapshot` is present, so the gate calls it
+implemented and always will. The defect is in the node APIs underneath, which is the
+BEHAVIOURAL axis — `scripts/apicheck.mjs` territory ([[clode-api-surface-gate]]), not
+this gate's. Presence gates cannot see wrong answers; that is the whole reason the
+behavioural axis exists, and this is a concrete row for it.
+
+**Adjacent findings from the same investigation, not yet acted on:**
+
+1. **`bun:*` interception is require-only.** `libexec/bun-shim.cjs` hooks `Module._load`,
+   so nothing it declares in `PROVIDES` survives an `import()`. Measured:
+   `require('bun:ffi')` OK / `import('bun:ffi')` REJECTED
+   (`ERR_UNSUPPORTED_ESM_URL_SCHEME`), same for `bun:sqlite`. Costs nothing today; one
+   upstream `require("bun:ffi")` → `await import("bun:ffi")` and interception silently
+   stops working.
+2. **`bun:sqlite` is stale in `PROVIDES`** — it no longer appears in 2.1.241 at all.
+3. **The gate measures the shim in the WRONG ENVIRONMENT.** `probeShim`
+   (`inspect-claude-bundle.cjs:350ff`) spawns `node -e` and calls `require.resolve`
+   with no `NODE_PATH` at `deps/claude/node_modules`, so it reports the world as if the
+   ext-dep closure did not exist. Consequence: it lists `Bun.semver`, `stringWidth`,
+   `stripANSI`, `wrapAnsi` and `YAML` as "stubbed — throws when used" when driving
+   proves all five are REACHED AND WORKING on every flow, and lists `ws`/`node-fetch`
+   under "MISSING → SILENT TUI HANG risk" when both are in `deps/claude/package.json`.
+   A gate that overstates risk on exactly the surfaces that matter trains people to
+   discount it.
+
+**Worth banking from the same run:** `Bun.isStandaloneExecutable: false` is
+load-bearing, not a cosmetic honesty fix. The bundle gates its `argv0`-based
+`Bun.spawn` ripgrep probe on it; because our shim answers false, quaude and naude take
+the `child_process` path instead. Anyone "fixing" it to `true` would silently reroute
+rg through a Bun API we do not implement.
+
 ## haiku-x64 has been red since the CI gap — external repo drift, and a false fidelity claim (2026-08-23)
 
 **Measured, not impressionistic.** I had been reporting this as intermittent infra

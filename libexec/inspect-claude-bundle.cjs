@@ -395,6 +395,16 @@ const ACCEPTED_MISSING_EXTERNALS = new Set([
   'ajv-formats/dist/formats',
   'ajv/dist/runtime/equal', 'ajv/dist/runtime/ucs2length',
   'ajv/dist/runtime/uri', 'ajv/dist/runtime/validation_error',
+  // ts-morph (new in 2.1.241). NOT a dependency of the bundle: the one
+  // `await import('ts-morph')` lives at offset ~307891241 INSIDE a template
+  // literal — the source text of package-validate.mjs, a helper the
+  // cc-design-sync skill writes to disk for the USER's node to run in a
+  // directory it creates (`cd .ds-sync && npm i esbuild ts-morph`). Verified
+  // by reading the bytes: the surrounding text is escaped template syntax
+  // (\` and \${previews}), which only occurs when it is nested string data
+  // rather than code. The bundle can never require it. Same shape as esbuild,
+  // playwright and react above.
+  'ts-morph',
 ]);
 
 const ACCEPTED_STUBBED_BUN = new Set(['serve', 'listen', 'file', 'write', 'Terminal', 'Transpiler',
