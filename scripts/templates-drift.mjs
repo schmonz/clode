@@ -161,8 +161,19 @@ export async function check({ repo, tag, manifestFile } = {}) {
   const slug = repo || repoSlug();
   let found;
   if (manifestFile) {
-    if (!tag) throw new DriftError('--manifest needs --tag: the published recipe is derived from the tag it shipped at');
-    found = { tag, publishedAt: null, asset: manifestFile, manifest: JSON.parse(fs.readFileSync(manifestFile, 'utf8')) };
+    // --tag is needed only when the recipe must be DERIVED from the tag's tree.
+    // A manifest that states its own recipe needs no tag at all, and demanding
+    // one anyway made the stamped path unreachable on its own terms — the guard
+    // predated the field it was written to anticipate.
+    let m;
+    try { m = JSON.parse(fs.readFileSync(manifestFile, 'utf8')); }
+    catch (e) { throw new DriftError(`cannot read the manifest ${manifestFile}: ${e.message}`); }
+    const stamped = typeof m.recipe === 'string' && /^[0-9a-f]{64}$/.test(m.recipe);
+    if (!tag && !stamped) {
+      throw new DriftError('--manifest needs --tag: this manifest carries no recipe, so the published '
+        + 'recipe must be derived from the tag it shipped at');
+    }
+    found = { tag, publishedAt: null, asset: manifestFile, manifest: m };
   } else {
     found = await fetchManifest(slug, tag);
   }

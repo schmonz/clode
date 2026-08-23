@@ -9,11 +9,12 @@
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
+import { recipe as engineRecipe, worktreeSource } from './engine-recipe.mjs';
 
 // inputs: [{ name, tag, engine, file, verified }] — name = target key (e.g.
 // 'linux-x64'), tag = platform-tag, engine = published asset filename, file =
 // local path to the engine bytes, verified = 'smoke'|'attest-only'|'unverified'.
-export function buildManifest({ tjsPin, inputs, compression, blob, slices }) {
+export function buildManifest({ tjsPin, inputs, compression, blob, slices, recipe }) {
   const targets = {};
   for (const it of inputs) {
     // sha256 of the DECOMPRESSED engine (it.file) — the integrity target clode
@@ -37,6 +38,17 @@ export function buildManifest({ tjsPin, inputs, compression, blob, slices }) {
   // sees a newer manifest. See docs/superpowers/specs/2026-07-27-release-
   // followups-design.md, "Follow-up 5".
   const manifest = blob ? { schema: 2, tjsPin, blob, targets } : { schema: 1, tjsPin, targets };
+  // THE ENGINE RECIPE THESE TEMPLATES WERE BUILT FROM. Without it,
+  // scripts/templates-drift.mjs cannot know what the published engines are made
+  // of and must DERIVE the recipe from the release tag's tree instead --
+  // assuming the engines were built from the sources at that tag. That is a
+  // proxy, not a fact, and it is the weaker half of the check: cutting a
+  // release turns the drift gate green by assumption, and a republish from a
+  // different commit resets the clock silently. Stamping the recipe makes the
+  // green EVIDENCE. templates-drift already prefers this field the moment it
+  // appears (scripts/templates-drift.mjs:142-144), so this needs no flag day:
+  // an older manifest keeps the derivation path, a newer one states its own.
+  if (recipe) manifest.recipe = recipe;
   // Engines ship gzip'd (asset = <engine>.gz, or a gzip member inside the blob);
   // absent = raw (backward compatible).
   if (compression) manifest.compression = compression;
@@ -121,6 +133,34 @@ export function deriveTag(leg) {
 // `<ver>-<sha7>` — the leading `v` from PINS.md is dropped (matches the engine name
 // scheme <engine>-<os>-<arch>-<ver>[-<sha7>]); the txiki source sha is kept because
 // tjs is source-built (it nails the tree incl. the quickjs-ng submodule).
+// The recipe stamped into the manifest. Computed from the working tree, which in
+// the templates-pack job IS the commit the engines were just built from (same
+// run, same checkout, same legs).
+//
+// FAILS LOUDLY rather than omitting the field. A missing recipe is not an error
+// templates-drift can see -- it just quietly falls back to deriving one from the
+// release tag, which is exactly the weaker check this stamp exists to replace.
+// So a tree we cannot compute a recipe for stops the release instead of shipping
+// a manifest that cannot prove what it is made of. --recipe overrides (tests);
+// --no-recipe is the explicit, loud opt-out.
+export function stampRecipe(a, src) {
+  if (a['no-recipe']) {
+    process.stderr.write('build-templates-manifest: --no-recipe — the manifest will NOT state the engine '
+      + 'recipe, so templates-drift must derive one from the release tag. That is an assumption, not '
+      + 'evidence. Use only when the recipe genuinely cannot be computed.\n');
+    return undefined;
+  }
+  if (typeof a.recipe === 'string') return a.recipe;
+  try {
+    return engineRecipe(src || worktreeSource());
+  } catch (e) {
+    throw new Error('build-templates-manifest: cannot compute the engine recipe for this tree '
+      + `(${e.message}). The manifest must state what the published engines were built from; without `
+      + 'it the drift gate goes green by assumption. Pass --recipe <sha256> if you know it, or '
+      + '--no-recipe to ship an unprovable manifest on purpose.');
+  }
+}
+
 export function tjsPinFromPins(text) {
   const m = text.match(/txiki\.js\s+v?([0-9.]+)\s+([0-9a-f]{7,})/i);
   return m ? `${m[1]}-${m[2].slice(0, 7)}` : null;
@@ -193,7 +233,7 @@ function parseArgs(argv) {
 function main(argv) {
   const a = parseArgs(argv);
   if (!a.engines || !a.out) {
-    process.stderr.write('usage: --engines DIR --out FILE [--pin P] [--pack DIR] [--loose] [--tier release|ci]\n');
+    process.stderr.write('usage: --engines DIR --out FILE [--pin P] [--pack DIR] [--loose] [--tier release|ci] [--recipe SHA|--no-recipe]\n');
     process.exit(2);
   }
   const pin = a.pin || tjsPinFromPins(fs.readFileSync(a.pins || 'spike/quickjs/PINS.md', 'utf8'));
@@ -211,10 +251,12 @@ function main(argv) {
     packed = packBlob(inputs);
     manifest = buildManifest({
       tjsPin: pin, inputs, compression: 'gzip',
-      blob: `templates-${pin}`, slices: packed.slices,
+      blob: `templates-${pin}`, slices: packed.slices, recipe: stampRecipe(a),
     });
   } else {
-    manifest = buildManifest({ tjsPin: pin, inputs, compression: gzipPack ? 'gzip' : undefined });
+    manifest = buildManifest({
+      tjsPin: pin, inputs, compression: gzipPack ? 'gzip' : undefined, recipe: stampRecipe(a),
+    });
   }
   fs.writeFileSync(a.out, JSON.stringify(manifest, null, 2) + '\n');
 

@@ -11,6 +11,8 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
 const { pathToFileURL } = require('node:url');
 
 const SCRIPT = path.resolve(__dirname, '../scripts/templates-drift.mjs');
@@ -98,5 +100,31 @@ test('a manifest carrying its own recipe field is preferred over the tag derivat
 
 test('--manifest without --tag refuses rather than guessing a baseline', async () => {
   const { check } = await load();
-  await assert.rejects(() => check({ repo: 'schmonz/clode', manifestFile: '/nonexistent' }), /needs --tag/);
+  // A manifest with NO recipe: the baseline can only come from the tag's tree,
+  // so refusing is right. (A manifest that states its own recipe needs no tag —
+  // the row below. This used to pass a nonexistent path, which worked only
+  // because the tag check ran before the file was ever read.)
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drift-notag-'));
+  const file = path.join(dir, 'templates.json');
+  fs.writeFileSync(file, JSON.stringify({ schema: 2, tjsPin: 'x', targets: {} }));
+  await assert.rejects(() => check({ repo: 'schmonz/clode', manifestFile: file }), /needs --tag/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('--manifest with a stamped recipe needs no --tag', async () => {
+  const { check } = await load();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drift-stamped-'));
+  const file = path.join(dir, 'templates.json');
+  fs.writeFileSync(file, JSON.stringify({ schema: 2, tjsPin: 'x', recipe: 'f'.repeat(64), targets: {} }));
+  // Reaches the comparison (and reports drift, since f*64 is not this tree) —
+  // the point is that it does NOT refuse for want of a tag.
+  const res = await check({ repo: 'schmonz/clode', manifestFile: file }).catch((e) => e);
+  assert.doesNotMatch(String(res && res.message || res.report || ''), /needs --tag/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('an unreadable manifest says so, instead of surfacing a raw ENOENT', async () => {
+  const { check } = await load();
+  await assert.rejects(() => check({ repo: 'schmonz/clode', manifestFile: '/nonexistent' }),
+    /cannot read the manifest/);
 });

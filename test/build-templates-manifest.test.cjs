@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const {
-  buildManifest, cleanTargetName, deriveVerified, deriveTag,
+  buildManifest, cleanTargetName, deriveVerified, deriveTag, stampRecipe,
   tjsPinFromPins, manifestTargets, collectInputs,
 } = require('../scripts/build-templates-manifest.mjs');
 
@@ -229,4 +229,114 @@ test('buildManifest without a blob still emits schema 1 (no offsets leak in)', a
   assert.strictEqual(m.schema, 1);
   assert.ok(!('blob' in m));
   assert.ok(!('offset' in m.targets.solo));
+});
+
+// ---- the manifest states the engine recipe it was built from ---------------
+//
+// WHY THIS MATTERS. scripts/templates-drift.mjs asks "were the published engines
+// built from these sources?". Without a stamped recipe it cannot know, so it
+// DERIVES one from the release tag's tree — assuming the engines were built from
+// the sources at that tag. That assumption is the weak half of the check: cutting
+// a release turns the gate green whether or not it should, and a republish from a
+// different commit resets the clock with nothing to show for it. The stamp turns
+// that green into evidence. templates-drift already prefers the field when
+// present (test above: 'a manifest carrying its own recipe field is preferred'),
+// so the two halves meet here.
+
+const { spawnSync } = require('node:child_process');
+const repo = path.resolve(__dirname, '..');
+const { recipe: engineRecipe, worktreeSource } = require('../scripts/engine-recipe.mjs');
+
+function fakeInput(dir, name) {
+  const f = path.join(dir, `${name}.bin`);
+  fs.writeFileSync(f, `engine-${name}`);
+  return { name, tag: `${name}-tag`, engine: `${name}.gz`, file: f, verified: 'smoke' };
+}
+
+test('buildManifest stamps the recipe when given one', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tm-recipe-'));
+  const sha = 'a'.repeat(64);
+  const m = buildManifest({ tjsPin: '26.6.0-abc1234', inputs: [fakeInput(dir, 'linux-x64')], recipe: sha });
+  assert.strictEqual(m.recipe, sha);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('buildManifest omits recipe when there is none — an older manifest stays valid', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tm-norecipe-'));
+  const m = buildManifest({ tjsPin: '26.6.0-abc1234', inputs: [fakeInput(dir, 'linux-x64')] });
+  assert.ok(!('recipe' in m), 'recipe must be absent, not undefined-valued, so JSON round-trips clean');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('stampRecipe computes THIS tree\'s recipe, agreeing with engine-recipe.mjs', () => {
+  assert.strictEqual(stampRecipe({}), engineRecipe(worktreeSource()));
+  assert.match(stampRecipe({}), /^[0-9a-f]{64}$/);
+});
+
+test('stampRecipe honours an explicit --recipe', () => {
+  assert.strictEqual(stampRecipe({ recipe: 'b'.repeat(64) }), 'b'.repeat(64));
+});
+
+// The opt-out must be LOUD. A silently unstamped manifest is indistinguishable
+// from the old behaviour, which is the whole thing this replaces.
+test('stampRecipe --no-recipe returns nothing and says so on stderr', () => {
+  const r = spawnSync(process.execPath, ['-e',
+    `const {stampRecipe}=require(${JSON.stringify(path.join(repo, 'scripts/build-templates-manifest.mjs'))});`
+    + `console.log(JSON.stringify(stampRecipe({'no-recipe': true}) ?? null));`],
+    { encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.stdout.trim(), 'null');
+  assert.match(r.stderr, /--no-recipe/);
+  assert.match(r.stderr, /assumption, not evidence/);
+});
+
+// A tree whose recipe cannot be computed must STOP the release, not ship a
+// manifest that cannot prove what it is made of.
+//
+// Reaching this needed the source to be injectable: engine-recipe resolves the
+// repo from the SCRIPT's own location, not cwd (deliberately — see
+// test/engine-recipe.test.cjs's cwd-independence row), so running from an empty
+// directory computes the real recipe rather than failing. My first version of
+// this test asserted a throw that could never happen; it went red and said so.
+test('stampRecipe throws loudly when the recipe cannot be computed', () => {
+  const brokenSource = {
+    label: 'broken', list() { return []; },
+    has() { return false; }, read() { throw new Error('nope'); },
+  };
+  assert.throws(() => stampRecipe({}, brokenSource), (e) => {
+    assert.match(e.message, /cannot compute the engine recipe/);
+    assert.match(e.message, /--no-recipe to ship an unprovable manifest on purpose/);
+    return true;
+  });
+});
+
+// The corollary of the above, worth pinning because it is what makes the stamp
+// trustworthy in CI: the recipe describes the REPO, not wherever the job happens
+// to be standing when it runs.
+test('stampRecipe is cwd-independent', () => {
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'tm-cwd-'));
+  const r = spawnSync(process.execPath, ['-e',
+    `const {stampRecipe}=require(${JSON.stringify(path.join(repo, 'scripts/build-templates-manifest.mjs'))});`
+    + `console.log(stampRecipe({}));`], { cwd: elsewhere, encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.stdout.trim(), engineRecipe(worktreeSource()));
+  fs.rmSync(elsewhere, { recursive: true, force: true });
+});
+
+// The round trip: what the stamper writes is what the drift gate reads.
+test('round trip: a stamped manifest satisfies templates-drift without deriving from a tag', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tm-roundtrip-'));
+  const m = buildManifest({
+    tjsPin: '26.6.0-abc1234', inputs: [fakeInput(dir, 'linux-x64')], recipe: stampRecipe({}),
+  });
+  const file = path.join(dir, 'templates.json');
+  fs.writeFileSync(file, JSON.stringify(m));
+  // No --tag: deriving would be impossible, so a pass here proves the field was used.
+  const r = spawnSync(process.execPath,
+    [path.join(repo, 'scripts/templates-drift.mjs'), '--manifest', file], { encoding: 'utf8' });
+  const out = r.stdout + r.stderr;
+  assert.match(out, /manifest\.recipe/, `expected the manifest recipe path to be taken:\n${out}`);
+  assert.strictEqual(r.status, 0,
+    `this tree's recipe was stamped, so drift must be clean:\n${out}`);
+  fs.rmSync(dir, { recursive: true, force: true });
 });
