@@ -85,6 +85,15 @@ function group(name, keys) {
   return [
     `    CLODE_KV_TABLE clode_${name}[] = {`,
     ...keys.map(emitEntry),
+    // A terminator, so a table whose every entry is #ifdef'd out is still a legal
+    // initializer. On MSVC the entire dlopen group vanishes -- RTLD_* come from
+    // <dlfcn.h>, which is #ifndef _WIN32 -- and `clode_dlopen_kv[] = { }` is
+    // C7757, "an array of unknown size cannot be initialized by an empty
+    // initializer". Emitted for EVERY group rather than only the ones that can
+    // empty out today, because which groups those are is a per-target fact and
+    // hard-coding this target's answer is how it comes back on the next one.
+    // CLODE_GROUP skips it, so it never becomes a key.
+    '        { NULL, 0 },   /* terminator: keeps an all-guarded-out table legal */',
     '    };',
   ].join('\n');
 }
@@ -283,7 +292,8 @@ ${group('priority_kv', priorityKeys)}
     do {                                                                              \\
         JSValue o_ = JS_NewObject(ctx);                                               \\
         for (size_t i_ = 0; i_ < countof(arr); i_++)                                  \\
-            JS_SetPropertyStr(ctx, o_, arr[i_].name, JS_NewInt64(ctx, arr[i_].val));  \\
+            if (arr[i_].name)   /* skip the terminator */                                     \\
+                JS_SetPropertyStr(ctx, o_, arr[i_].name, JS_NewInt64(ctx, arr[i_].val));      \\
         JS_SetPropertyStr(ctx, clode_c, field, o_);                                   \\
     } while (0)
     CLODE_GROUP("fs", clode_fs_kv);

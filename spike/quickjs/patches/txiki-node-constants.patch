@@ -1,8 +1,8 @@
 diff --git a/src/signals.c b/src/signals.c
-index 5db61d5..b62df1c 100644
+index 5db61d5..565048a 100644
 --- a/src/signals.c
 +++ b/src/signals.c
-@@ -166,7 +166,620 @@ static const JSCFunctionListEntry tjs_signal_funcs[] = {
+@@ -166,7 +166,626 @@ static const JSCFunctionListEntry tjs_signal_funcs[] = {
      TJS_CFUNC_DEF("signal", 2, tjs_signal),
  };
  
@@ -214,6 +214,7 @@ index 5db61d5..b62df1c 100644
 +        CLODE_K(COPYFILE_FICLONE, UV_FS_COPYFILE_FICLONE),
 +        CLODE_K(UV_FS_COPYFILE_FICLONE_FORCE, UV_FS_COPYFILE_FICLONE_FORCE),
 +        CLODE_K(COPYFILE_FICLONE_FORCE, UV_FS_COPYFILE_FICLONE_FORCE),
++        { NULL, 0 },   /* terminator: keeps an all-guarded-out table legal */
 +    };
 +    CLODE_KV_TABLE clode_sig_kv[] = {
 +#ifdef SIGHUP
@@ -327,6 +328,7 @@ index 5db61d5..b62df1c 100644
 +#ifdef SIGUNUSED
 +        CLODE_K(SIGUNUSED, SIGUNUSED),
 +#endif
++        { NULL, 0 },   /* terminator: keeps an all-guarded-out table legal */
 +    };
 +    CLODE_KV_TABLE clode_errno_kv[] = {
 +#ifdef E2BIG
@@ -566,6 +568,7 @@ index 5db61d5..b62df1c 100644
 +#ifdef EXDEV
 +        CLODE_K(EXDEV, EXDEV),
 +#endif
++        { NULL, 0 },   /* terminator: keeps an all-guarded-out table legal */
 +    };
 +    CLODE_KV_TABLE clode_dlopen_kv[] = {
 +#ifdef RTLD_LAZY
@@ -583,6 +586,7 @@ index 5db61d5..b62df1c 100644
 +#ifdef RTLD_DEEPBIND
 +        CLODE_K(RTLD_DEEPBIND, RTLD_DEEPBIND),
 +#endif
++        { NULL, 0 },   /* terminator: keeps an all-guarded-out table legal */
 +    };
 +    CLODE_KV_TABLE clode_priority_kv[] = {
 +        CLODE_K(PRIORITY_LOW, UV_PRIORITY_LOW),
@@ -591,6 +595,7 @@ index 5db61d5..b62df1c 100644
 +        CLODE_K(PRIORITY_ABOVE_NORMAL, UV_PRIORITY_ABOVE_NORMAL),
 +        CLODE_K(PRIORITY_HIGH, UV_PRIORITY_HIGH),
 +        CLODE_K(PRIORITY_HIGHEST, UV_PRIORITY_HIGHEST),
++        { NULL, 0 },   /* terminator: keeps an all-guarded-out table legal */
 +    };
 +#undef CLODE_K
 +#undef CLODE_KV_TABLE
@@ -607,7 +612,8 @@ index 5db61d5..b62df1c 100644
 +    do {                                                                              \
 +        JSValue o_ = JS_NewObject(ctx);                                               \
 +        for (size_t i_ = 0; i_ < countof(arr); i_++)                                  \
-+            JS_SetPropertyStr(ctx, o_, arr[i_].name, JS_NewInt64(ctx, arr[i_].val));  \
++            if (arr[i_].name)   /* skip the terminator */                                     \
++                JS_SetPropertyStr(ctx, o_, arr[i_].name, JS_NewInt64(ctx, arr[i_].val));      \
 +        JS_SetPropertyStr(ctx, clode_c, field, o_);                                   \
 +    } while (0)
 +    CLODE_GROUP("fs", clode_fs_kv);
