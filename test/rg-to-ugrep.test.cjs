@@ -66,37 +66,103 @@ for (const c of THROWS) {
 // The fix lives in bun-shim precisely because bun-shim is baked into BOTH quaude
 // and naude. node-shim is quaude-only, so fixing it there would have made quaude
 // translate while naude did not — inventing a divergence rather than closing one.
+//
+// Run BOTH routes in one child process, so the shim is loaded once and each route
+// really launches a process; the parent then compares what the two children were
+// handed. `runRoutes` returns { cp, bun, cpErr } exactly as the probe printed it.
+function runRoutes(dir, rgArgs, env) {
+  const probe = path.join(dir, 'probe.cjs');
+  fs.writeFileSync(probe, `
+    const shim = require(${JSON.stringify(path.join(__dirname, '..', 'libexec/bun-shim.cjs'))});
+    const cp = require('node:child_process');
+    const RG = ${JSON.stringify(rgArgs)};
+    // Route A: node child_process, the route the bundle's startup rg calls take.
+    const viaCp = cp.spawnSync('rg', RG, { encoding: 'utf8' });
+    // Route B: the Bun.spawn approximation.
+    const viaBun = shim.spawnSync(['rg', ...RG]);
+    const bunOut = (viaBun.stdout || Buffer.alloc(0)).toString('utf8');
+    const lines = (s) => s.replace(/\\r/g, '').trim().split('\\n').filter(Boolean);
+    console.log(JSON.stringify({
+      cp: lines(viaCp.stdout || ''),
+      bun: lines(bunOut),
+      cpErr: viaCp.error ? String(viaCp.error.code || viaCp.error.message) : null,
+    }));
+  `);
+  const r = cp.execFileSync(process.execPath, [probe], { encoding: 'utf8', env });
+  return JSON.parse(r.trim());
+}
+
+// THE FIXTURE, and why it is shaped this way.
+//
+// The stand-in applet has to be something the OS will really run, and Windows
+// runs exactly one kind of thing: a real PE image. libuv's search_path() ->
+// path_search_walk_ext() tries only `<name>.com` and `<name>.exe` when the path
+// carries no extension (deps/libuv/src/win/process.c), so an extensionless
+// `#!/bin/sh` stand-in is never even handed to CreateProcess — uv_spawn reports
+// ENOENT. That is how the earlier version of this row failed on windows-latest
+// from the day it was written: the FIXTURE was unrunnable there, while the claim
+// it defends is as true on Windows as anywhere.
+//
+// The one PE guaranteed to be present is the node running this test. It is also
+// a perfectly good stand-in applet, because `rg --files` translates to
+// `<applet> <path> -type f ...` — the search PATH comes FIRST, which is exactly
+// where node expects a script. So point CLODE_BFS at process.execPath and hand rg
+// a search path that IS a print-my-argv script: one fixture, no platform branch,
+// a real child process on all three OSes, reporting the argv it was handed.
+//
+// (The ugrep/search branch cannot use this trick — its translation starts with
+// `-r --ignore-files -I`, and node rejects `-I` as a bad option before it ever
+// reaches a script. That branch gets its own row below.)
 test('both spawn routes translate rg identically (child_process and Bun.spawn)', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-routes-'));
+  const printer = path.join(dir, 'print-argv.cjs');
+  fs.writeFileSync(printer, 'for (const a of process.argv.slice(2)) console.log(a);\n');
+
+  const got = runRoutes(dir, ['--files', '--no-ignore', '--hidden', '--max-depth', '4',
+    '--glob', '.orphaned_at', printer],
+  { ...process.env, CLODE_BFS: process.execPath, CLODE_UGREP: '' });
+
+  assert.strictEqual(got.cpErr, null,
+    'child_process spawn of rg must not fail — before the fix this was ENOENT');
+  assert.ok(got.cp.length > 0, `child_process route produced no argv: ${JSON.stringify(got)}`);
+  assert.deepStrictEqual(got.cp, got.bun,
+    'the two spawn routes must hand the applet the SAME argv');
+  // Pin the argv itself, not just that the two routes agree: two routes that both
+  // stopped translating would agree on the wrong thing.
+  assert.deepStrictEqual(got.cp, ['-maxdepth', '4', '-type', 'f', '-name', '.orphaned_at'],
+    'the applet was handed something other than the translated rg --files argv');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// The same claim for the ugrep/search branch — the one the original ENOENT was
+// found in (`rg --version` at startup). Its translation puts FLAGS first, so the
+// node-as-applet fixture above cannot carry it and a shell-script stand-in is the
+// only stand-in available. Windows cannot execute one: it has no shebang and no
+// executable bit, and libuv never even hands an extensionless path to
+// CreateProcess (see the note above). So this row skips there — and ONLY there,
+// on that one named ground. The ROUTE-IDENTITY claim itself is still
+// asserted on Windows by the row above; what is untestable there is only this
+// second branch's stand-in, not the claim.
+test('both spawn routes translate an rg SEARCH identically', {
+  skip: process.platform === 'win32'
+    ? 'needs an executable shebang ugrep stand-in; libuv only execs .com/.exe'
+    : false,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-routes-search-'));
   // A stand-in ugrep that just reports the argv it was handed.
   const ugrep = path.join(dir, 'ugrep');
   fs.writeFileSync(ugrep, '#!/bin/sh\nprintf "%s\\n" "$@"\n');
   fs.chmodSync(ugrep, 0o755);
 
-  const probe = path.join(dir, 'probe.cjs');
-  fs.writeFileSync(probe, `
-    const shim = require(${JSON.stringify(path.join(__dirname, '..', 'libexec/bun-shim.cjs'))});
-    const cp = require('node:child_process');
-    // Route A: node child_process, the route the bundle's startup rg calls take.
-    const viaCp = cp.spawnSync('rg', ['-n', 'needle', 'src'], { encoding: 'utf8' });
-    // Route B: the Bun.spawn approximation.
-    const viaBun = shim.spawnSync(['rg', '-n', 'needle', 'src']);
-    const bunOut = (viaBun.stdout || Buffer.alloc(0)).toString('utf8');
-    console.log(JSON.stringify({
-      cp: (viaCp.stdout || '').trim().split('\\n').filter(Boolean),
-      bun: bunOut.trim().split('\\n').filter(Boolean),
-      cpErr: viaCp.error ? String(viaCp.error.code || viaCp.error.message) : null,
-    }));
-  `);
-  const r = require('node:child_process').execFileSync(process.execPath, [probe],
-    { encoding: 'utf8', env: { ...process.env, CLODE_UGREP: ugrep } });
-  const got = JSON.parse(r.trim());
+  const got = runRoutes(dir, ['-n', 'needle', 'src'], { ...process.env, CLODE_UGREP: ugrep });
 
   assert.strictEqual(got.cpErr, null,
     'child_process spawn of rg must not fail — before the fix this was ENOENT');
   assert.ok(got.cp.length > 0, `child_process route produced no argv: ${JSON.stringify(got)}`);
   assert.deepStrictEqual(got.cp, got.bun,
     'the two spawn routes must hand ugrep the SAME argv');
+  assert.deepStrictEqual(got.cp, ['-r', '--ignore-files', '-I', '-n', 'needle', 'src'],
+    'the stand-in was handed something other than the translated rg argv');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
