@@ -58,6 +58,11 @@ function fixture(files) {
 const run = (prefix) => spawnSync(process.execPath, [SCRIPT], {
   encoding: 'utf8', env: { ...process.env, npm_config_prefix: prefix },
 });
+// The script returns a NATIVE path, so on Windows it is backslash-separated.
+// Comparing it against a literal containing '/' made these rows fail there —
+// the same separator assumption the shipped code was fixed for, made again in
+// the assertion. Normalise before matching.
+const slash = (p) => p.replace(/\\/g, '/');
 
 const arch = process.arch;
 const plat = process.platform;
@@ -73,8 +78,8 @@ test('prefers the platform package over a bigger wrong-platform binary', () => {
   });
   const r = run(dir);
   assert.strictEqual(r.status, 0, r.stderr);
-  assert.match(r.stdout.trim(), new RegExp(`${pkg.replace('/', '\\/')}`),
-    'must choose the package for THIS platform, not the biggest file');
+  assert.ok(slash(r.stdout.trim()).includes(pkg),
+    `must choose the package for THIS platform, not the biggest file (got ${r.stdout.trim()})`);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -82,7 +87,7 @@ test('finds a sibling install, not only a nested one', () => {
   const dir = fixture({ [`${pkg}/${exe}`]: BIG });
   const r = run(dir);
   assert.strictEqual(r.status, 0, r.stderr);
-  assert.match(r.stdout.trim(), new RegExp(pkg.replace('/', '\\/')));
+  assert.ok(slash(r.stdout.trim()).includes(pkg), `got ${r.stdout.trim()}`);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
