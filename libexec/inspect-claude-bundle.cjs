@@ -12,6 +12,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { nearestName } = require('./bundle-carve.cjs');
+const { findTool } = require('./clode-hosttools.cjs');
 
 // __doc__ equivalent: reproduced verbatim from the Python module docstring so the
 // usage/error path prints identical text. (Python sys.exit(__doc__) prints this
@@ -192,18 +193,14 @@ function embeddedAppletVersions(data) {
   return out;
 }
 
-function which(name) {
-  const pathenv = process.env.PATH != null ? process.env.PATH : '';
-  for (const dir of pathenv.split(path.delimiter)) {
-    if (!dir) continue;
-    const cand = path.join(dir, name);
-    try {
-      const st = fs.statSync(cand);
-      if (st.isFile()) { fs.accessSync(cand, fs.constants.X_OK); return cand; }
-    } catch (_) { /* not here */ }
-  }
-  return null;
-}
+// PATH lookup lives in ONE place: clode-hosttools.findTool, which already
+// probes PATHEXT on Windows. This file carried a third hand-rolled copy that did
+// not -- a bare-name join plus accessSync(X_OK) -- so on a Windows runner it
+// reported "no ugrep/bfs" for applets that were installed, and could not find
+// node.exe either. Two other copies had the same bug; the shipped one is fixed
+// in libexec/bun-shim.cjs, and this one is deleted rather than fixed again.
+const which = (name) => findTool(name);
+
 
 function hostAppletVersion(applet, env, spawn = spawnSync) {
   const e = env != null ? env : process.env;
