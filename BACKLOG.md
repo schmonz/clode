@@ -422,6 +422,52 @@ posix_memmap.c with a non-Linux mremap fallback (munmap+mmap or guard the MREMAP
 upstream it. For now WASM-off is the shipping posture on platforms where WAMR won't build —
 record it in the per-target build config, not as an ad-hoc env flag a human must remember.
 
+## haiku-x64 has been red since the CI gap — external repo drift, and a false fidelity claim (2026-08-23)
+
+**Measured, not impressionistic.** I had been reporting this as intermittent infra
+flake for a whole session. It is not.
+
+- **13 of 13** `ci` runs on 2026-08-22/23 failed, every one at the same place:
+  `Refreshing repository "HaikuPorts" failed *** Failed to download package c_ares:
+  Resource not found` / `Validating checksum for HaikuPorts...: I/O error`.
+- **Every `release` run through 2026-08-02 was GREEN** (2026-07-24, 07-26, 07-27 ×2,
+  08-01 ×3, 08-02). So the leg was reliable and then stopped being so.
+- There were **no `ci` runs on main between 2026-08-02 and 2026-08-22**, so the break
+  happened inside that window and surfaced all at once — the same shape as the Windows
+  `getopt` wall (`c4be23c`) and for the same reason.
+
+**Cause is almost certainly outside this repo.** `guest-packages` names
+`cmd:cmake cmd:gcc nodejs20 cmd:git cmd:make` against HaikuPorts at `r1beta5`;
+`c_ares` is a transitive dependency the mirror no longer serves under that repo state.
+Nothing in the leg pins a package-set snapshot, so HaikuPorts rebuilding or repointing
+its index breaks us with no change on our side — the same class as
+[[bundle-bumps-add-node-api-reads]].
+
+**The part that IS ours, and the reason this is worth an entry.** `scripts/tjs-legs.mjs`
+records for this leg: *"it does hold G7: the build-pipeline PONG smoke fuses and runs a
+quaude inside the Haiku guest on every build"*. That is **no longer true** — the smoke
+has not run on any build for at least a day and probably three weeks. `fidelity: { tier:
+0, date: '2026-08-02', how: 'ci' }` is dated to the last day it was actually true.
+
+That is exactly the failure the s390x audit turned up (`tjs-legs.mjs:106` claiming
+"PONG-class smoke lives in the be-oracle job" when it does not): **a fidelity record that
+asserts coverage a red leg is not delivering.** A soft-fail leg whose evidence claim
+does not degrade when it fails is a claim that quietly becomes fiction. Under
+[[any-ci-red-is-our-red]] and [[ci-job-is-to-tell-the-truth]], the leg being non-blocking
+is not the problem; the record still saying "on every build" is.
+
+**Candidate work, unplanned:**
+1. Make the fidelity claim self-invalidating — a `how: 'ci'` row should be derivable
+   from whether that leg is actually passing, not a hand-written sentence. This is the
+   general fix and it covers s390x too.
+2. Decide whether the leg is recoverable: bump `guest-version`, name `c_ares`
+   explicitly, or pin/cache a package snapshot so a mirror rebuild cannot break us.
+3. If it is not recoverable soon, say so out loud in the leg entry rather than leaving a
+   permanently red job whose comment claims coverage.
+
+**Do not just add a retry.** Thirteen consecutive identical failures is not a transient
+that retrying fixes; it would only convert a fast red into a slow one.
+
 ## ★ `spike/quickjs/` is not a spike — separate the components (2026-08-23)
 
 **Noted, not planned.** User: *"spike/quickjs/ smells funny and suggests that QuickJS
