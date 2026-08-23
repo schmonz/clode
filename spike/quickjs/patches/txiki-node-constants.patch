@@ -1,8 +1,8 @@
 diff --git a/src/signals.c b/src/signals.c
-index 5db61d5..de36f6b 100644
+index 5db61d5..b62df1c 100644
 --- a/src/signals.c
 +++ b/src/signals.c
-@@ -166,7 +166,606 @@ static const JSCFunctionListEntry tjs_signal_funcs[] = {
+@@ -166,7 +166,620 @@ static const JSCFunctionListEntry tjs_signal_funcs[] = {
      TJS_CFUNC_DEF("signal", 2, tjs_signal),
  };
  
@@ -10,9 +10,23 @@ index 5db61d5..de36f6b 100644
 +#include <fcntl.h>
 +#include <signal.h>
 +#include <sys/stat.h>
++#if !defined(_MSC_VER)
 +#include <unistd.h>
++#endif
 +#ifndef _WIN32
 +#include <dlfcn.h>
++#endif
++#if defined(_WIN32)
++#include <io.h>  /* _S_IREAD _S_IWRITE */
++#ifndef S_IRUSR
++#define S_IRUSR _S_IREAD
++#endif
++#ifndef S_IWUSR
++#define S_IWUSR _S_IWRITE
++#endif
++#endif
++#if defined(_MSC_VER) && (!defined(F_OK) || !defined(R_OK) || !defined(W_OK) || !defined(X_OK))
++#error "clode: MSVC lacks <unistd.h>, so F_OK/R_OK/W_OK/X_OK must come from libuv (uv/win.h, via private.h -> uv.h). They did not. node reports all four on Windows (node_constants.cc guards each with #ifdef, having pulled uv.h in through node_internals.h), so this engine must too -- failing loudly beats shipping a Windows fs.constants four keys short of node's."
 +#endif
 +#define CLODE_CONSTANTS_ABI 1
 +#define CLODE_ABI_MARKER "clode-constants-abi:1"
