@@ -545,7 +545,7 @@ index 0000000..11b723b
 +import fs from 'node:fs';
 +import path from 'node:path';
 +
-+const repo = '/Users/schmonz/Documents/shared-trees/clode';
++const repo = process.env.CLODE_REPO ?? (() => { throw new Error('set CLODE_REPO to the clode checkout'); })();
 +const tjs = process.argv[2];
 +if (!tjs) { console.error('usage: node grade.mjs <tjs>'); process.exit(2); }
 +
