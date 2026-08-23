@@ -33,8 +33,9 @@ const BIG = 21 * 1024 * 1024;
 // FIXTURE was wrong, which is the same "the test encoded an assumption about the
 // host it was written on" mistake as the CRLF and PATH ones.
 function globalRootFor(prefix) {
-  const r = spawnSync('npm', ['root', '-g'], {
-    encoding: 'utf8', env: { ...process.env, npm_config_prefix: prefix }, shell: process.platform === 'win32',
+  const { npmCliPath } = require('../scripts/lib/npm-cli.cjs');
+  const r = spawnSync(process.execPath, [npmCliPath({ prefix: 'find-provider-test' }), 'root', '-g'], {
+    encoding: 'utf8', env: { ...process.env, npm_config_prefix: prefix },
   });
   if (r.status === 0 && r.stdout.trim()) return r.stdout.trim();
   // Fall back to npm's documented layout rather than guessing one shape.

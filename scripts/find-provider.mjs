@@ -28,15 +28,25 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 
 const MIN_BYTES = 20 * 1024 * 1024;   // the carved JS bundle is tens of MB; scripts are not
 const NAMES = new Set(['claude', 'claude.exe']);
 
+// Launch npm's OWN JS CLI under THIS node rather than the `npm` launcher.
+// execFileSync('npm', ...) is ENOENT on Windows, where npm is npm.cmd: libuv's
+// path_search_walk_ext only tries .com and .exe, and node's child_process has no
+// .bat/.cmd handling. That is precisely how this failed on windows-latest —
+// "could not run `npm root -g`: spawnSync npm ENOENT" — and scripts/lib/npm-cli.cjs
+// already exists to solve it, with a header saying so.
 function globalRoot() {
+  const require = createRequire(import.meta.url);
+  const { npmCliPath } = require('./lib/npm-cli.cjs');
   try {
-    return execFileSync('npm', ['root', '-g'], { encoding: 'utf8' }).trim();
+    const cli = npmCliPath({ prefix: 'find-provider' });
+    return execFileSync(process.execPath, [cli, 'root', '-g'], { encoding: 'utf8' }).trim();
   } catch (e) {
-    fail(`could not run \`npm root -g\`: ${e.message}`);
+    fail(`could not ask npm for its global root: ${e.message}`);
   }
 }
 

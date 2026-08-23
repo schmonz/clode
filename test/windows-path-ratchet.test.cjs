@@ -51,6 +51,18 @@ const RULES = {
     why: 'on win32 a path may be C:\\x or a\\b, so "/" alone decides neither pathedness nor basename. '
        + 'Mirror child_process.cjs resolveExe: slash, plus backslash and drive-letter when isWin.',
   },
+  'bare-npm-spawn': {
+    // THE mechanism that actually bit. On Windows npm is npm.cmd, and
+    // execFileSync('npm', ...) is ENOENT there: libuv's path_search_walk_ext tries
+    // only .com and .exe, and node's child_process has no .bat/.cmd handling. Same
+    // family as the shebang stand-in that made the rg spawn-parity row unrunnable.
+    // scripts/lib/npm-cli.cjs exists precisely for this -- run npm's own JS CLI
+    // under THIS node -- and its header says so.
+    roots: ['libexec', 'scripts', 'test'],
+    re: /(?:execFileSync|spawnSync|spawn|exec)\(\s*['"]npm['"]/,
+    why: 'spawning `npm` by bare name is ENOENT on Windows (npm is npm.cmd, and node '
+       + 'cannot exec a .cmd). Use npmCliPath() from scripts/lib/npm-cli.cjs.',
+  },
   'npm-global-layout': {
     // Wider than the others ON PURPOSE: this bug lives in test FIXTURES, which is
     // exactly where it bit. The other rules stay off test/ because tests there
