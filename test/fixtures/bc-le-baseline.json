@@ -1,0 +1,8 @@
+{
+  "note": "LE-vs-BE serialized-bytecode verdict per corpus item, measured with both engines from ONE release build (s390x under qemu-user). `identical` must never regress. `differs` is the known regexp wall -- libregexp stores its compiled program in host order -- and is BENIGN: a regexp serialized on LE deserializes and RUNS correctly on BE (measured, LE control). If a `differs` entry becomes identical that is progress; lower it here. See BACKLOG, 'canonical-LE: the regexp wall is REAL, MEASURED, and BENIGN'.",
+  "verdicts": {
+    "build/bundle/clode-main.bundle.cjs": "differs",
+    "libexec/node-shim/loader.cjs": "differs",
+    "stress(inline)": "identical"
+  }
+}

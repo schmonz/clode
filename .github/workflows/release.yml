@@ -41,7 +41,7 @@ jobs:
   # Job stays named 'leg' so the needs: edges below hold.
   # Everything EXCEPT the 4 darwin slices. Split out so the darwin-universal lipo
   # (and the daily-driver darwin artifact) doesn't wait on the whole matrix — the
-  # slow NetBSD fleet legs in particular. Job stays named 'leg' so be-oracle's and
+  # slow NetBSD fleet legs in particular. Job stays named 'leg' so be-bytecode-oracle's and
   # the release gate's needs: edges hold. (Revert = drop only:notdarwin here +
   # only:darwin on darwin-slices, fold darwin-universal's needs back to [leg].)
   leg:
@@ -67,75 +67,68 @@ jobs:
       only: darwin
 
   # 64-bit big-endian oracle (plan T1.5): the node-shim suite against the
-  # s390x-musl tjs under qemu-user binfmt. Provider-gated suites self-skip
-  # (no provider here); the engine/url grading and shim behavior rows run.
-  # Non-blocking by design — a BE regression is a finding, not a release gate,
-  # until the leg earns its way in (house rule: note it, don't grind).
-  be-oracle:
+  # THE big-endian gate: is serialized bytecode identical on LE and BE?
+  #
+  # Replaces the old `be-oracle`, which replayed ~140 node-shim rows on a BE engine
+  # under qemu. In 30 runs it never caught a big-endian bug; its green was bought
+  # with a five-file exclude list added in answer to reds that were NOT endianness
+  # (945bc5f says so outright); its one endianness assertion was
+  # `assert.ok(x === 'LE' || x === 'BE')`; 13 rows self-skipped for want of a
+  # provider, while ci.yml treats that same skip as exit 1; and it carried the
+  # musl-engine-vs-glibc-node defect fixed in c7db1c7, so it was a red waiting on a
+  # tag. It also cost coverage elsewhere -- tjs-legs.mjs claimed "PONG-class smoke
+  # lives in the be-oracle job", which was never true.
+  #
+  # This asks the actual canonical-LE question instead: serialize one corpus under
+  # the LE and BE engines FROM THIS RUN and diff. Seconds, no provider, no exclude
+  # list, no libc mismatch.
+  #
+  # RATCHETED rather than pass/fail. Regexp literals genuinely differ -- libregexp
+  # stores its compiled program in host order -- and that is BENIGN: a regexp
+  # serialized on LE deserializes and RUNS correctly on BE (measured, with an LE
+  # control). Failing releases on that helps nobody; tolerating a silent change to
+  # it is how the next divergence hides. The baseline records the verdict per item
+  # and this fails when it moves in EITHER direction.
+  be-bytecode-oracle:
     needs: leg
-    if: ${{ !cancelled() }}    # run even when an unrelated leg failed; missing artifact fails loudly
+    if: ${{ !cancelled() }}    # run even when an unrelated leg failed; a missing artifact fails loudly
     runs-on: ubuntu-latest
-    continue-on-error: true
-    timeout-minutes: 180
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7.0.0
         with:
           node-version-file: .tool-versions
-      - uses: docker/setup-qemu-action@v4.2.0   # fix-binary binfmt: host node spawns s390x tjs
+      - uses: docker/setup-qemu-action@v4.2.0   # fix-binary binfmt: host node spawns the s390x tjs
       - uses: actions/download-artifact@v8.0.1
         with:
           name: tjs-linux-s390x-musl
-          path: ${{ runner.temp }}/tjs-s390x
-      - name: Install the runtime dep closure
-        run: npm ci --prefix deps/claude
-      - name: BE oracle — engine + endianness subset (node-shim + url golden)
-        env:
-          CLODE_TJS: ${{ runner.temp }}/tjs-s390x/tjs
+          path: ${{ runner.temp }}/tjs-be
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          name: tjs-linux-x64-musl
+          path: ${{ runner.temp }}/tjs-le
+      - name: LE/BE serialized-bytecode equivalence
         run: |
           set -euo pipefail
-          chmod +x "$CLODE_TJS"
-          "$CLODE_TJS" eval 'console.log("s390x tjs alive:", tjs.version)'
-          # THE PRIZE: prove the ENGINE is big-endian-correct. First BE matrix
-          # run (dispatch #4, run 29065977866) was 124/140 — every
-          # endianness-sensitive test GREEN (url characterization = the crown
-          # BE test, sha256/hmac KAT, Buffer view semantics, zlib consts). The
-          # oracle runs the pure engine/language + BE-sensitive node-shim tests
-          # and the url golden, and must be GREEN when the engine is BE-clean.
-          #
-          # EXCLUDED — not engine, not endianness (all 12 dispatch-#4 reds fell
-          # in exactly these four files; each is an environmental or Linux-
-          # portability matter, filed as its own workstream in BACKLOG.md, NOT
-          # a BE bug):
-          #   node-shim-tty         PTY/TTY: no controlling terminal under
-          #                         qemu-user headless emulation (harness).
-          #   node-shim-child-process  nested child spawn under qemu-user
-          #                         binfmt (cwd -> status:null). NB: the musl
-          #                         addchdir limit that ALSO broke cwd here is now
-          #                         FIXED (txiki-sync-spawn.patch parent-chdir
-          #                         dance); native musl runs this file in ci.yml's
-          #                         node-shim-oracle. Only the qemu-user emulation
-          #                         issue keeps it excluded on the BE legs.
-          #   node-shim-cloexec     CLOEXEC-on-exec fd inheritance into a sync
-          #                         child: qemu-user's fd/exec syscall translation,
-          #                         same emulation class as child-process. Un-
-          #                         skipped 2026-07-24 (160e53e); native arm64 has
-          #                         NO leak, so this is the emulator, not the shim.
-          #   node-shim-large-output  >64KB child stdout through a pipe: qemu-user
-          #                         pipe-buffer/poll emulation short-reads, same
-          #                         class as child-process; not endianness.
-          # node-shim-core and node-shim-bunshim are NO LONGER excluded: the
-          # Linux-portability bugs are fixed (os.constants.signals is OS-derived per
-          # platform; bun:ffi suffix is platform-aware) and both are endianness-clean,
-          # so they belong in the BE signal now.
-          # Non-blocking (continue-on-error): a NEW data-correctness red stands
-          # out against this green baseline. House rule: note it, don't grind. The
-          # excluded files are ALL process/pipe/TTY I/O under qemu-user — NONE is an
-          # endianness test, so the BE signal (engine + url golden) stays clean.
-          # A red here again means a REAL data-correctness regression.
-          EXCLUDE='node-shim-tty|node-shim-ctrlz-pty|node-shim-child-process|node-shim-cloexec|node-shim-large-output'
-          FILES=$(ls test/node-shim-*.test.cjs | grep -vE "$EXCLUDE")
-          node --test --test-concurrency=1 $FILES test/url-characterization.test.cjs
+          chmod +x "${{ runner.temp }}/tjs-be/tjs" "${{ runner.temp }}/tjs-le/tjs"
+          node scripts/bc-le-gate.mjs \
+            --le "${{ runner.temp }}/tjs-le/tjs" \
+            --be "${{ runner.temp }}/tjs-be/tjs"
+      # The rows be-oracle ran that WERE endianness-sensitive, kept: the sha256/HMAC
+      # known-answer test and the 891-case URL golden corpus, against the BE engine.
+      # Everything else it ran was shim behaviour the LE legs already cover, and
+      # needs no provider -- so nothing self-skips into a false pass.
+      - name: Install the runtime dep closure
+        run: npm ci --prefix deps/claude
+      - name: BE-sensitive rows (crypto KAT + URL golden) on the big-endian engine
+        env:
+          CLODE_TJS: ${{ runner.temp }}/tjs-be/tjs
+        run: |
+          set -euo pipefail
+          node --test --test-concurrency=1 \
+            test/node-shim-crypto.test.cjs test/url-characterization.test.cjs
+
 
   # The four-arch macOS universal binary: lipo the four darwin ENGINE slices
   # (ppc/i386/x86_64/arm64) into one fat Mach-O, then fuse ONE canonical-LE
@@ -320,7 +313,7 @@ jobs:
       contents: read
 
   release:
-    needs: [leg, darwin-slices, darwin-universal, templates-pack, suite]
+    needs: [leg, darwin-slices, darwin-universal, templates-pack, suite, be-bytecode-oracle]
     if: github.ref_type == 'tag' || inputs.release == 'draft'
     runs-on: ubuntu-latest
     permissions:

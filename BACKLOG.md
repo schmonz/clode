@@ -422,7 +422,7 @@ posix_memmap.c with a non-Linux mremap fallback (munmap+mmap or guard the MREMAP
 upstream it. For now WASM-off is the shipping posture on platforms where WAMR won't build —
 record it in the per-target build config, not as an ad-hoc env flag a human must remember.
 
-## ★ canonical-LE bytecode is INCOMPLETE — measured LE vs BE, same commit (2026-08-23)
+## canonical-LE: the regexp wall is REAL, MEASURED, and BENIGN — now gated (2026-08-23)
 
 **The question ("can we compare bytecode from LE and BE being identical or not?") is
 answerable, the tool already exists, it is wired into NOTHING, and when run it FAILS.**
@@ -456,6 +456,26 @@ with 2826/26467 (10.7%) and 2034/119816 (1.7%) bytes differing overall.
 So canonical-LE holds for the synthetic stress corpus (wide strings, doubles, bigints,
 atoms, branchy labels) and FAILS on real CommonJS files. Whatever differs is present in
 those and absent from the stress source.
+
+### RESOLVED: it is regexp literals, and the read path is fine
+
+Probed construct by construct on both engines. Ints, doubles, wide strings, typed
+arrays and functions-with-control-flow are all BYTE-IDENTICAL LE vs BE. Only a regexp
+literal diverges. That is the wall already recorded in [[canonical-le-bytecode]] as
+"regexp-literal wall (OP_regexp recompile)" — libregexp's compiled program is stored in
+host order.
+
+And the direction that matters is FINE, measured end to end: a regexp compiled and
+serialized on LE, then deserialized and EXECUTED on the BE engine, matches correctly
+(`REGEX-OK`, with the LE run as control). The header divergence at offset 1 is just
+`bc_put_u32(s, 0) // checksum` (quickjs.c:38521) reflecting the differing payload — an
+effect, not a cause.
+
+**So my first framing of this entry was too strong.** "canonical-LE is INCOMPLETE" reads
+as a defect; the accurate statement is that regexp bytecode is emitted in host order and
+re-derived on load, which is a known and benign asymmetry. The 2826 differing bytes in
+loader.cjs are regexp programs (note the 35 runs of exactly 42 bytes, and that 709 of 770
+runs are non-ASCII).
 
 ### What this does and does not mean
 
