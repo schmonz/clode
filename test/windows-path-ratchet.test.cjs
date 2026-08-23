@@ -51,6 +51,19 @@ const RULES = {
     why: 'on win32 a path may be C:\\x or a\\b, so "/" alone decides neither pathedness nor basename. '
        + 'Mirror child_process.cjs resolveExe: slash, plus backslash and drive-letter when isWin.',
   },
+  'npm-global-layout': {
+    // Wider than the others ON PURPOSE: this bug lives in test FIXTURES, which is
+    // exactly where it bit. The other rules stay off test/ because tests there
+    // legitimately walk PATH and test pathedness (bun-shim-which.test.cjs IS the
+    // PATH-walking test), and baselining that noise would dull the whole file.
+    roots: ['libexec', 'scripts', 'test'],
+    re: /lib\/node_modules|'lib',\s*'node_modules'/,
+    skip: /win32/,
+    why: "npm's global root is <prefix>/lib/node_modules on POSIX but <prefix>/node_modules on "
+       + 'Windows. Ask `npm root -g` rather than assuming a layout: a hardcoded POSIX shape made '
+       + 'test/find-provider.test.cjs pass on darwin and linux and fail on windows-latest, while '
+       + 'the shipped script -- which does ask npm -- was fine.',
+  },
   'exe-join-no-win32': {
     re: /path\.join\([^)]*['"](tjsc|tjs|node|clode|claude|ugrep|bfs|naude|quaude)['"]\s*\)/,
     skip: /win32|\.exe/,
@@ -77,13 +90,19 @@ function walk(dir, out = []) {
   return out;
 }
 
-function scan(repo = REPO, roots = ['libexec', 'scripts']) {
+const DEFAULT_ROOTS = ['libexec', 'scripts'];
+
+function scan(repo = REPO, roots = null) {
   const hits = {};
-  for (const root of roots) {
+  const all = roots || [...new Set(Object.values(RULES).flatMap((r) => r.roots || DEFAULT_ROOTS))];
+  for (const root of all) {
     for (const file of walk(path.join(repo, root))) {
       const rel = path.relative(repo, file).split(path.sep).join('/');
+      // This file quotes the very patterns it hunts for, in its rule text.
+      if (rel === 'test/' + path.basename(__filename)) continue;
       stripComments(fs.readFileSync(file, 'utf8')).split('\n').forEach((line, i) => {
         for (const [rule, spec] of Object.entries(RULES)) {
+          if (!(spec.roots || DEFAULT_ROOTS).includes(root)) continue;
           if (!spec.re.test(line)) continue;
           if (spec.skip && spec.skip.test(line)) continue;
           const byFile = hits[rule] || (hits[rule] = {});
@@ -132,6 +151,14 @@ const ALLOWED = {
     // Repo-relative paths are POSIX-canonical on purpose: the recipe hash must be
     // identical on every host.
     'scripts/engine-recipe.mjs': 2,
+  },
+  'npm-global-layout': {
+    // Each of these is the POSIX HALF of a correctly-branched pair; the Windows
+    // layout is on the adjacent line (npm-cli.cjs even tries Windows FIRST), so the
+    // line-scoped `skip: /win32/` cannot see it. Reviewed, all three.
+    'scripts/lib/npm-cli.cjs': 1,
+    'test/npm-cli-helper.test.cjs': 1,
+    'test/find-provider.test.cjs': 1,
   },
   'exe-join-no-win32': {
     // Directory names ('share'/'clode', 'cache'/'clode'), not executables.

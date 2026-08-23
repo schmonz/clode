@@ -26,10 +26,28 @@ const { spawnSync } = require('node:child_process');
 const SCRIPT = path.resolve(__dirname, '../scripts/find-provider.mjs');
 const BIG = 21 * 1024 * 1024;
 
+// ASK npm where the global root is, do not assume it. On POSIX a prefix means
+// <prefix>/lib/node_modules; on Windows it is <prefix>/node_modules. Hardcoding
+// the POSIX shape made these rows pass on darwin/linux and fail on
+// windows-latest — the shipped script was fine (it runs `npm root -g`), the
+// FIXTURE was wrong, which is the same "the test encoded an assumption about the
+// host it was written on" mistake as the CRLF and PATH ones.
+function globalRootFor(prefix) {
+  const r = spawnSync('npm', ['root', '-g'], {
+    encoding: 'utf8', env: { ...process.env, npm_config_prefix: prefix }, shell: process.platform === 'win32',
+  });
+  if (r.status === 0 && r.stdout.trim()) return r.stdout.trim();
+  // Fall back to npm's documented layout rather than guessing one shape.
+  return process.platform === 'win32'
+    ? path.join(prefix, 'node_modules')
+    : path.join(prefix, 'lib', 'node_modules');
+}
+
 function fixture(files) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'findprov-'));
+  const root = globalRootFor(dir);
   for (const [rel, size] of Object.entries(files)) {
-    const p = path.join(dir, 'lib/node_modules', rel);
+    const p = path.join(root, rel);
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, Buffer.alloc(size));
   }
