@@ -422,6 +422,53 @@ posix_memmap.c with a non-Linux mremap fallback (munmap+mmap or guard the MREMAP
 upstream it. For now WASM-off is the shipping posture on platforms where WAMR won't build —
 record it in the per-target build config, not as an ad-hoc env flag a human must remember.
 
+## ★ `spike/quickjs/` is not a spike — separate the components (2026-08-23)
+
+**Noted, not planned.** User: *"spike/quickjs/ smells funny and suggests that QuickJS
+should be in our build graph some other way than 'source code in this tree directly'.
+And I bet there are several more separable components that should be separated."*
+
+**The smell, concretely.** A directory named `spike/` — the universal signal for
+throwaway exploration — is load-bearing production infrastructure. `PINS.md` is the pin
+of record, read by `scripts/build-clode-main.mjs`, `scripts/build-templates-manifest.mjs`
+and `release.yml`. `patches/` holds 23 engine patches. `atomic-shim.c` is compiled into
+every engine. `qemu/` is consumed by two CI actions. Four of the six engine-recipe inputs
+(`scripts/engine-recipe.mjs`) live under `spike/`. Nothing about that is exploratory.
+
+**QuickJS itself is already NOT in the tree** — `spike/quickjs/vendor/` is 753M and
+gitignored, so what we actually keep is a *pin plus a patch stack*. That is a coherent
+thing; it is just not named or shaped like one, and it is the shape the user is asking
+about: whether the engine should enter the build graph as a declared, versioned
+dependency rather than as directory-shaped convention.
+
+**Candidate seams, in the order the evidence supports them:**
+
+1. **Engine recipe** — `PINS.md` + patch stack + `atomic-shim.c` + `scripts/*.toolchain.cmake`.
+   The patch stack is ALREADY SPLIT ACROSS TWO DIRECTORIES: `spike/quickjs/patches/`
+   (txiki/quickjs-ng) and repo-root `patches/` (the three cosmo ones). That split has
+   already cost real money — the cosmo patches were not in the engine recipe at all, so
+   `libtjs-cosmo.patch` rotted for 13 commits with no cache invalidation and no drift
+   signal (fixed in a6fc3e8 by widening `FILES`, which is a patch over the smell, not a
+   fix for it). One patch directory, or one manifest naming both.
+2. **VM / emulation rigs** — `spike/quickjs/qemu/` is test infrastructure used by
+   `build-leg` and `guest` actions. Unrelated to engine source.
+3. **Genuine spike residue** — `results/`, `boot/`, `syntax/`, `probe.js`,
+   `inventory.cjs`, `measure-mem.sh`, `bc-le-oracle.mjs`. Some is live documentation
+   (design memos are cited by comments in `libexec/clode-fuse.cjs` and
+   `libexec/bun-shim.cjs`) and some is dead. Worth separating "notes we still cite" from
+   "notes about a decision already made".
+4. **Provenance data** — `tls-cacert-provenance.json` is neither engine source nor spike.
+
+**Why it is worth doing rather than tolerating.** The recipe is the identity of an
+engine, and it is now load-bearing in three places (tjs cache key, `templates-drift`, the
+manifest `recipe` stamp added in 4f86738). An identity assembled from globs over
+directories that mean different things is one rename away from silently covering the
+wrong set — the exact failure `test/engine-recipe.test.cjs` exists to catch, and the
+exact one that already happened with the cosmo patches.
+
+**Do not start this without a plan.** It touches the engine recipe, so a careless move
+changes every engine hash and rebuilds every leg. See [[clode-backlog-plan-first]].
+
 ## ★ Move the engine build to cmake — the last hard Node dependency (2026-08-05)
 
 Direction (user, 2026-08-05): "we need to move toward cmake when we move away from node."
