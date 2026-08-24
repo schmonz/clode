@@ -1451,6 +1451,32 @@ correct engine locally and exports that variable is silently ignored. CI-built
 release artifacts compile from source and are NOT affected; this is the
 user-side cross-fuse path only.
 
+**CORRECTED 2026-08-24 — that last sentence is WRONG.** The released artifacts ARE
+affected, by a second and independent route:
+
+    git show v0.20260801.2:libexec/node-shim/modules/fs.cjs
+      this.dev = 0; this.ino = 0; this.nlink = 1; this.uid = 0; this.gid = 0;
+
+The SHIM in the shipped release HARDCODES uid 0 and never consults the engine at all.
+906af8b (2026-08-04) is what made it read `raw.uid`, and the release tag (4881ca8,
+2026-08-01) predates it — `git merge-base --is-ancestor 906af8b v0.20260801.2` says the
+fix is not in the release. So the released clode carries TWO uid-0 sources:
+
+| source | affects |
+|---|---|
+| shim, pre-906af8b: hardcoded `uid = 0` | EVERY quaude it builds, native or cross |
+| template engine omits uid, shim falls back to 0 | cross-builds |
+
+So **any non-root user building ANY quaude with the released clode gets uid 0**, and the
+bundle's tmpdir-ownership guard refuses. Not a cross-fuse niche. Consistent with nobody
+screaming, because work here builds from main, which has had the shim fix since
+2026-08-04.
+
+**And it is not a regression — it never worked.** The shim hardcoded 0 from the start
+and the engine never supplied one. What changed is UPSTREAM: the bundle grew a
+tmpdir-ownership guard, turning a latent wrong answer fatal with no change on our side
+([[bundle-bumps-add-node-api-reads]]).
+
 **Every template is from the same stale build** (all `1a230d3`, dated 2026-07-27),
 so assume every cross-fuse target is affected, not just linux-arm64. The guard is
 what makes it VISIBLE on Linux; other targets may be silently degraded wherever
