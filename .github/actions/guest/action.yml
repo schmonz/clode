@@ -218,7 +218,7 @@ runs:
             # rather than failing with a checksum error nobody can read.
             if [ -n "$PKGS" ]; then
               echo "guest(haiku): beta5 HaikuPorts is gone upstream; adding the master ports repo"
-              pkgman add-repo -y https://eu.hpkg.haiku-os.org/haikuports/master/x86_64/current 2>&1 || \
+              pkgman add-repo https://eu.hpkg.haiku-os.org/haikuports/master/x86_64/current 2>&1 || \
                 echo "guest(haiku): add-repo failed — install will likely fail below, and that is the finding"
               pkgman install -y $PKGS
             fi ;;
