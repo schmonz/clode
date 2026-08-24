@@ -66,6 +66,43 @@ with the newest date (file order breaks a tie) and counts it green only on
 entire reason for writing failures down. Rows in any section AFTER this table
 are invisible to that parser by construction.
 
+**A `how: ci` row is a claim about the PRESENT, and decays.** This is the one
+asymmetry in the ledger, and it is worth stating plainly because it has already
+produced a false record. Every hand-driven row is a *fact about the past* — "on
+2026-08-09 a human drove D1 on real Windows and it passed" — and stays true
+forever no matter what happens later; append-only latest-wins is built for
+exactly that shape. A `how: ci` row is not that. Its claim is that the smoke
+"fuses and runs a quaude ... **on every build**" — present tense, a recurring
+process. When the leg stops passing, the historical run it cites is still real,
+but the claim it is being used to make has silently become false, and an
+append-only ledger has no way to notice. haiku-x64 kept a green G7 row through
+14 consecutive red builds exactly this way.
+
+So a CI row carries an obligation the hand-driven ones do not: **it must cite
+the workflow run that produced it** (`run <id>`), so the claim is checkable
+against the leg's real current state rather than taken on trust. Two mechanisms
+enforce this, and they catch different things:
+
+- `test/fidelity/fidelity-notes.test.cjs` — offline, deterministic, part of
+  `npm test`. Every `fidelity` note in `scripts/tjs-legs.mjs` must state exactly
+  the coverage `floorCoverage()` derives from this file. A hand-written sentence
+  can no longer drift from the ledger it summarizes. (This is what caught
+  netbsd-arm64 still claiming "2/6" after it had been re-driven to 6/6.)
+- `test/fidelity/ci-claim-check.mjs` — needs the network and `gh`, so it is NOT
+  in `npm test`. It asks GitHub for each CI-claiming leg's *current* conclusion
+  on main and fails on any leg that is red while this file still records a
+  passing CI row for it. That is the only check that can catch haiku's class,
+  because the fact it needs — "is this leg passing right now?" — is simply not
+  in the repo.
+
+Note what is deliberately NOT done: no calendar-based expiry. A timer measures
+elapsed days and claims to measure leg health, which is the wrong instrument in
+both directions — it would expire `linux-x64-musl` (green all along) while
+happily blessing a leg that went red the day after someone re-dated it. It
+would also make `npm test` fail on unrelated changes for no reason, which this
+repo has ruled against (`scripts/fidelity-ledger.mjs`: staleness is surfaced,
+never gated).
+
 | date | run-target | row | engine | bundle | verdict | note |
 | --- | --- | --- | --- | --- | --- | --- |
 | 2026-08-09 | netbsd-arm64 | B4 | quaude | 2.1.218 | pass | floor-probe over ssh: Write+Read+Edit+Grep+Bash chained in ONE agentic loop; file reads B4-EDITED on disk, grep hit and bash output both returned to the model — driven on NetBSD 11.0_RC2 (ABOVE the leg floor of 10.1, not at it) against the pre-existing ~/quaude dated 2026-07-24, provenance not re-verified |
@@ -154,6 +191,7 @@ are invisible to that parser by construction.
 | 2026-08-21 | netbsd-arm64 | A1 | quaude | 2.1.218 | pass | floor-probe over ssh, driven against a quaude built from an engine compiled ON that guest from CURRENT sources (67 patches, incl. 906af8b's uid/gid) — SUPERSEDES the 2026-08-09 failing rows, which used a cached pre-906af8b engine whose FSS.stat omitted uid/gid and tripped the tmpdir-ownership guard: config non-zero, parses, onboarding + project trust survive a relaunch |
 | 2026-08-21 | netbsd-arm64 | B4 | quaude | 2.1.218 | pass | floor-probe over ssh, driven against a quaude built from an engine compiled ON that guest from CURRENT sources (67 patches, incl. 906af8b's uid/gid) — SUPERSEDES the 2026-08-09 failing rows, which used a cached pre-906af8b engine whose FSS.stat omitted uid/gid and tripped the tmpdir-ownership guard: Write+Read+Edit+Grep+Bash chained in one agentic loop, file reads B4-EDITED on disk |
 | 2026-08-21 | netbsd-arm64 | D1 | quaude | 2.1.218 | pass | tui-probe over ssh -tt (scripts/tui-probe.mjs), driven against a quaude built from an engine compiled ON that guest from CURRENT sources (67 patches, incl. 906af8b's uid/gid) — SUPERSEDES the 2026-08-09 failing rows, which used a cached pre-906af8b engine whose FSS.stat omitted uid/gid and tripped the tmpdir-ownership guard: TUI booted, turn answered TUIPONG, /quit exited CLEANLY code 0 in 1096ms |
+| 2026-08-24 | haiku-x64 | G7 | quaude | unpinned | fail | WITHDRAWAL of the 2026-08-02 row above. The build-pipeline smoke that earns G7 under "What earns a row" #2 has not reached a PONG on any build since ~2026-08-02: the leg dies in guest package install, BEFORE any build/fuse/smoke, on 14+ consecutive identical `ci` runs (30730368429 was the last green; 32606247462, 32622574608, 32664058079 are three of the reds). `Refreshing repository "HaikuPorts" failed *** Failed to download package c_ares: Resource not found`. Cause is upstream and verified by direct HTTP probe, not inferred: Haiku deleted the r1beta5 HaikuPorts repo — https://eu.hpkg.haiku-os.org/haikuports/ lists only ["master"], the r1beta5 `repo` index serves a 2-byte `[]` (matching the log's "repochecksum-1 [2 bytes]") vs ~540KB for beta6/master, and the c_ares .hpkg 404s. NOTE the verdict: `fail` here means THE PIPELINE THAT EARNS THE ROW FAILS, not that a PONG ran and came back wrong — no turn executed at all. Recorded as `fail` because that is the verdict floorCoverage() understands, and revoking the claim is the honest outcome |
 
 ## Attempted, not evidence
 

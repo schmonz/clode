@@ -103,7 +103,14 @@ const LEGS = [
                 note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run on the ubuntu-24.04-arm runner (static musl)); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
   { leg: 'linux-s390x-musl', os: 'ubuntu-latest', 'guest-platform': 'alpine', 'guest-arch': 's390x',
     static: true, wasm: 'off',                // WAMR's MAP_32BIT is x86/ARM-only; undefined on s390x
-    publish: true, smoke: 'version',          // PONG-class smoke lives in the be-oracle job
+    // CORRECTED 2026-08-24: this said "PONG-class smoke lives in the be-oracle
+    // job", which was never true — the PONG row SELF-SKIPPED there, and
+    // be-oracle has since been deleted outright (release.yml now says so in as
+    // many words). The comment also contradicted this leg's own fidelity block
+    // three lines down, which has always correctly read `tier: 0, zero floor
+    // coverage`. No PONG-class smoke runs on s390x anywhere: `smoke: 'version'`
+    // is the whole story, and a --version answer is not a turn.
+    publish: true, smoke: 'version',
     timeout: 300, 'soft-fail': true,          // slow qemu-user BE leg — non-blocking (plan T1.5)
     fidelity: { tier: 0,
                 note: 'zero floor coverage: this leg smokes --version only (smoke: \'version\'), so the build-pipeline PONG turn NEVER runs on s390x — see RESULTS.md "What earns a row"' } },
@@ -389,20 +396,24 @@ const LEGS = [
     // its own PLATFORMS.md rig (netbsd-aarch64-spike-vm, added 2026-08-04) rather
     // than borrowing the persistent SSH-VM rig's id — this run predates that
     // runbook and used a different, ephemeral qemu+HVF guest.
-    // MAINTAINER RULING 2026-08-04: tier 1 requires all six FLOOR_ROWS green
-    // (no partial credit); A1/B4/C1/D1 have no rows here, so tier 0 is
-    // RESOLVED 2026-08-21: 6/6, honestly this time. The 2026-08-09 confusion was an
-  // engine problem, not a platform one — rows briefly showed 6/6 against a binary
-  // whose engine predated 906af8b (no uid/gid from FSS.stat) and passed only
-  // because /tmp/claude-1000 did not exist yet; once our own runs created it, a
-  // freshly built quaude scored 0/5 at the tmpdir-ownership guard. The engine was
-  // then rebuilt ON the guest from current sources (--source-only here,
-  // --build-only there: the guest has cmake/gmake/node but no outbound DNS, so it
-  // cannot clone) and every row re-driven with the tmpdir guard armed.
-  // correct. floorCoverage('netbsd-arm64') derives this from
-    // test/fidelity/RESULTS.md rows G7, B1.
-    fidelity: { tier: 1, date: '2026-07-09', bundle: '2.1.204', how: 'netbsd-aarch64-spike-vm',
-                note: 'floor 2/6 green (B1,G7); A1,B4,C1,D1 not driven — see RESULTS.md' } },
+    // RESOLVED 2026-08-21: 6/6, honestly this time. The 2026-08-09 confusion was
+    // an engine problem, not a platform one — rows briefly showed 6/6 against a
+    // binary whose engine predated 906af8b (no uid/gid from FSS.stat) and passed
+    // only because /tmp/claude-1000 did not exist yet; once our own runs created
+    // it, a freshly built quaude scored 0/5 at the tmpdir-ownership guard. The
+    // engine was then rebuilt ON the guest from current sources (--source-only
+    // here, --build-only there: the guest has cmake/gmake/node but no outbound
+    // DNS, so it cannot clone) and every row re-driven with the tmpdir guard
+    // armed. floorCoverage('netbsd-arm64') derives the 6/6 from
+    // test/fidelity/RESULTS.md; the superseded MAINTAINER-RULING-2026-08-04
+    // paragraph that used to sit here (and the "floor 2/6 green (B1,G7)" note
+    // below it) had been spliced together mid-sentence and contradicted both the
+    // tier-1 claim on this line and the ledger. Corrected 2026-08-24; the new
+    // note is now GATED against the ledger by test/fidelity/fidelity-notes.test.cjs.
+    fidelity: { tier: 1, date: '2026-08-21', bundle: '2.1.218', how: 'netbsd-aarch64-spike-vm',
+                note: 'floor 6/6 GREEN (A1,B1,B4,C1,D1,G7) — re-driven 2026-08-21 against an '
+                      + 'engine rebuilt ON the guest from current sources, with the tmpdir-ownership '
+                      + 'guard armed. Tier 2 stays unclaimed — see RESULTS.md' } },
   { leg: 'freebsd-arm64', os: 'ubuntu-latest', 'guest-platform': 'freebsd', 'guest-arch': 'arm64',
     'guest-version': '14.4', 'guest-packages': 'cmake gmake node git bash', floor: '14.4',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 300, 'soft-fail': true,  // cpa, TCG
@@ -432,14 +443,57 @@ const LEGS = [
     // run) -- a runbook, not a result. Nobody has ever hand-driven the recipe
     // on Haiku; the other Haiku evidence on record is a >64KB uv_write deadlock
     // isolated by bare-engine probes (memory: haiku-tjs-write-deadlock) --
-    // engine debugging, not a floor drive. As of the 2026-08-04 "what earns a
-    // row" ruling it does hold G7: the build-pipeline PONG smoke fuses and runs
-    // a quaude inside the Haiku guest on every build (so a -p turn is not
-    // blocked by the uv_write class). C2, the row that deadlock actually
-    // threatens, is NOT a floor row and remains undriven here.
-    fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
-                note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run in-guest); '
-                      + 'A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
+    // engine debugging, not a floor drive.
+    //
+    // BROKEN UPSTREAM, NOT BY US (2026-08-24). This leg has failed 14+ straight
+    // `ci` runs, identically, at guest package install — before any build, fuse
+    // or smoke:
+    //     Refreshing repository "HaikuPorts" failed
+    //     *** Failed to download package c_ares: Resource not found
+    // Root cause, verified by direct HTTP probe: Haiku DELETED the r1beta5
+    // HaikuPorts repository. https://eu.hpkg.haiku-os.org/haikuports/ now lists
+    // exactly ["master"]; the r1beta5 `repo` index serves a 2-byte `[]` (the CI
+    // log's "100% repochecksum-1 [2 bytes]" is precisely that), while r1beta6/
+    // master serves ~540KB. The c_ares .hpkg 404s at the r1beta5 URL. The BASE
+    // `haiku` r1beta5 repo is still healthy, which is why only "HaikuPorts"
+    // fails. Upstream says this was deliberate: they cannot staff two releases'
+    // ports repos at once (discuss.haiku-os.org/t/19674).
+    // `nodejs20` is what pulls c_ares (its recipe REQUIRES lib:libcares).
+    //
+    // Why the obvious fixes do not apply — each checked, none speculative:
+    //   - bump guest-version: there is NO newer image. cross-platform-actions
+    //     offers exactly one Haiku (r1beta5) at our pinned v1.3.0 AND at its
+    //     HEAD, and Haiku has not released beta6 (haiku-builder#3 tracks it).
+    //   - name c_ares in guest-packages: the .hpkg itself 404s; naming it
+    //     changes nothing about where pkgman fetches from.
+    //   - pin/cache a package snapshot: Haiku publishes no dated or archived
+    //     repo snapshots (only `current`), so there is nothing to pin and the
+    //     beta5 packages are not retrievable from anywhere to self-host.
+    //   - a retry: 14 identical failures is not a transient. It would only turn
+    //     a fast red into a slow one.
+    // Nothing in THIS repo can make this leg green. It is a wait on
+    // haiku-builder#3, or an explicit decision to stop shipping Haiku.
+    //
+    // NOTE THE GATE: `soft-fail: true` above is INERT — both tiers delete it
+    // from publishers ("if we publish it, CI gates it"), so this leg is a HARD
+    // gate that reddens main and blocks a release. Demoting it is the
+    // doctrine-sanctioned move (see legsFor: "demote a chronically-flaky
+    // publisher by dropping `publish`, never by quietly softening its gate"),
+    // and we genuinely cannot produce the artifact at all. That edit is left to
+    // the maintainer ON PURPOSE: dropping `publish` removes haiku-x64 from
+    // publishedRunTargets(), which requires matching edits to the golden lists
+    // in test/tjs-legs.test.cjs and test/asset-name-parity.test.cjs.
+    //
+    // The fidelity row below WAS 'floor 1/6 green (G7 ... on every build)'. That
+    // sentence had been false for ~3 weeks: G7 cannot be running in-guest on a
+    // leg that dies at package install. RESULTS.md now carries the dated
+    // withdrawal row, so floorCoverage() derives 0/6 here on its own.
+    fidelity: { tier: 0, date: '2026-08-24', how: 'ci',
+                note: 'zero floor coverage: the build-pipeline PONG smoke has not run since '
+                      + '~2026-08-02 — the leg dies at guest package install (HaikuPorts r1beta5 '
+                      + 'deleted upstream), so the G7 it used to earn is WITHDRAWN rather than '
+                      + 'merely stale. The other five floor rows have never been driven on Haiku '
+                      + 'at all — see RESULTS.md' } },
   { leg: 'openindiana-amd64', os: 'ubuntu-latest', 'guest-platform': 'openindiana',
     // PROVEN floor (probe run 29154489921, 2026-07-11) — oldest vmactions
     // conf; build-essential image. Release-only leg (illumos distro twin):
@@ -946,6 +1000,101 @@ export function floorCoverage(runTarget) {
     green: FLOOR_ROWS.filter((r) => green.has(r)),
     missing: FLOOR_ROWS.filter((r) => !green.has(r)),
   };
+}
+
+// ---------------------------------------------------------------------------
+// KEEPING THE HAND-WRITTEN NOTES HONEST
+//
+// floorCoverage() above is derived. The `note` strings in the LEGS entries are
+// not — they are prose a human types, summarizing the very thing the derivation
+// already knows. That is a standing invitation to drift, and it has drifted
+// twice that we know of: netbsd-arm64 still said "floor 2/6 green (B1,G7)"
+// after it had been re-driven to a clean 6/6, and haiku-x64 asserted a G7 the
+// leg had stopped delivering three weeks earlier.
+//
+// The fix is not "write better notes", it is to make a drifted note FAIL A
+// TEST. Every note must state exactly the coverage floorCoverage() derives;
+// test/fidelity/fidelity-notes.test.cjs enforces it, and coverageSentence()
+// below emits the canonical prefix so a maintainer can paste the right answer
+// instead of guessing at it. The prose after the coverage prefix stays free —
+// that is where the evidence actually gets described — but the CLAIM part is
+// now checked against the ledger on every `npm test`.
+export function coverageSentence(runTarget) {
+  const { green } = floorCoverage(runTarget);
+  if (!green.length) return 'zero floor coverage';
+  const all = green.length === FLOOR_ROWS.length;
+  return `floor ${green.length}/${FLOOR_ROWS.length} ${all ? 'GREEN' : 'green'} (${green.join(',')})`;
+}
+
+// The inverse: pull the machine-checkable assertions back out of a note.
+// Returns null for a note that makes no coverage claim at all (silence is
+// allowed — a bare `{ tier: 0 }` says nothing and is not a lie).
+//   { rows }    — the rows the note claims are green ([] for "zero floor coverage")
+//   { count }   — the N in "N/6", so a miscounted note is caught too
+//   { missing } — the "A1,B1 not driven" list, when the note bothers to give one
+export function coverageClaim(note) {
+  if (typeof note !== 'string' || !note) return null;
+  const ROWS = '[A-Z][0-9]';
+  if (/zero floor coverage/i.test(note)) {
+    return { rows: [], count: 0, missing: parseRowList(note, /\b((?:[A-Z][0-9])(?:\s*,\s*[A-Z][0-9])*)\s+(?:never|not)\s+driven/) };
+  }
+  const m = note.match(new RegExp(`floor\\s+(\\d+)\\/(\\d+)\\s+(?:green|GREEN)\\s*\\((${ROWS}(?:\\s*,\\s*${ROWS})*)`));
+  if (!m) return null;
+  return {
+    count: Number(m[1]),
+    rows: m[3].split(',').map((s) => s.trim()),
+    missing: parseRowList(note, /\b((?:[A-Z][0-9])(?:\s*,\s*[A-Z][0-9])*)\s+(?:never|not)\s+driven/),
+  };
+}
+
+function parseRowList(note, re) {
+  const m = note.match(re);
+  return m ? m[1].split(',').map((s) => s.trim()) : null;
+}
+
+// ---------------------------------------------------------------------------
+// CI-RECURRENCE CLAIMS
+//
+// A `how: 'ci'` fidelity block is the only kind whose truth can change with no
+// commit: it asserts a RECURRING process ("the smoke runs on every build"), not
+// a dated historical fact. See test/fidelity/RESULTS.md, "A `how: ci` row is a
+// claim about the PRESENT, and decays". Such a row must cite the workflow run
+// that produced it, so the claim can be re-checked against the leg's real
+// current state instead of being taken on trust.
+export const CI_RUN_CITATION = /\brun\s+(\d{6,})\b/;
+
+export function ciClaimingRunTargets() {
+  return publishedRunTargets().filter((rt) => (fidelityFor(rt) || {}).how === 'ci');
+}
+
+// run-target -> the build leg whose CI job would produce it. Only differs from
+// the identity for the multi-run-target artifacts (cosmo, the darwin slices).
+export function legNameForRunTarget(runTarget) {
+  for (const l of legsFor('release')) {
+    if (runTargetsFor(l).includes(runTarget)) return l.leg;
+  }
+  return null;
+}
+
+// The CI-run ids this run-target's floor coverage actually rests on, newest
+// first — i.e. the runs a checker should look up to see whether the recurring
+// claim still holds. Only rows that are BOTH currently-green-and-decisive
+// (latest wins, per floorCoverage) and CI-cited are returned.
+export function ciEvidenceRuns(runTarget) {
+  const resultsPath = fileURLToPath(new URL('../test/fidelity/RESULTS.md', import.meta.url));
+  const latest = new Map();
+  for (const r of parseResultsRows(readFileSync(resultsPath, 'utf8'))) {
+    if (r.rt !== runTarget || !FLOOR_ROWS.includes(r.row)) continue;
+    const prev = latest.get(r.row);
+    if (!prev || r.date > prev.date || (r.date === prev.date && r.idx > prev.idx)) latest.set(r.row, r);
+  }
+  const out = [];
+  for (const r of latest.values()) {
+    if (r.verdict !== 'pass') continue;
+    const m = r.note.match(CI_RUN_CITATION);
+    if (m) out.push({ row: r.row, date: r.date, runId: m[1] });
+  }
+  return out.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
 }
 
 export function cli(tier, only, versionOverride, macosMinOverride) {

@@ -222,13 +222,29 @@ fused quaude on the run-target's own platform — see "What earns a row" in
 - **Earns nothing:** `no-exec` legs (the darwin x64/x86/ppc slices, the tier-2 Debian
   crosses, the whole NetBSD build.sh fleet) — nothing on the builder can run the output;
   `smoke: version` legs (the qemu-user musl arches: s390x, armv7, ppc64le, riscv64,
-  loongarch64) — a `--version` answer is not a turn; and the s390x `be-oracle` job, which
-  drives node-shim tests against the BARE engine under qemu-user, not a quaude turn.
+  loongarch64) — a `--version` answer is not a turn. (This used to add "and the s390x
+  `be-oracle` job, which drives node-shim tests against the BARE engine". That job no
+  longer exists — release.yml deleted it — and the PONG row had self-skipped there
+  anyway, so it never earned anything. Corrected 2026-08-24; `scripts/tjs-legs.mjs`
+  carried the same dead claim in a comment on the s390x leg.)
 
 **Applets:** None installed; the leg exercises the applet-absent configuration only.
 **Result recording:** `how: ci` in `scripts/tjs-legs.mjs`, and a row in `RESULTS.md`
 citing the workflow run id. The provider is installed unpinned
 (`npm i -g @anthropic-ai/claude-code`), so those rows record `unpinned` as the bundle.
+
+The run id is not decoration. A `how: ci` row claims a RECURRING process ("on every
+build"), so unlike a hand-driven row it can go false with no commit — and did, for
+three weeks, on haiku-x64. Two checks keep it honest, and they catch different things:
+
+- `test/fidelity/fidelity-notes.test.cjs` (offline, in `npm test`) — every fidelity
+  note must state exactly the coverage `floorCoverage()` derives from `RESULTS.md`.
+- `test/fidelity/ci-claim-check.mjs` (needs `gh`, NOT in `npm test`) — asks GitHub
+  whether each CI-claiming leg's smoke still reaches its PONG, and fails on any leg
+  still recorded green that has stopped delivering. Note it keys on the smoke's
+  success line, **not** the job's conclusion: windows-arm64 has been red for 11 runs
+  while its PONG passes fine (it dies later, in an SSE probe), and treating "leg red"
+  as "G7 dead" would have libelled a working row.
 
 ---
 
