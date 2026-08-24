@@ -134,6 +134,7 @@ never gated).
 | 2026-07-30 | cosmo-macos-aarch64 | B4 | quaude | 2.1.218 | pass | full agentic suite at parity with native tjs: mcp-ws, tools 5/5, workflow, subagent-diff |
 | 2026-07-29 | cosmo-macos-aarch64 | F6 | quaude | 2.1.218 | pass | PTY differential 2/2 after the libuv tty reopen-skip fix |
 | 2026-07-29 | cosmo-macos-aarch64 | D6 | quaude | 2.1.218 | pass | resize reflow 2/2 |
+| 2026-08-24 | darwin-arm64 | G2 | quaude | 2.1.227 | pass | REAL CREDENTIALS, real tokens: test/fidelity/interactive-live-turn.test.cjs with CLODE_LIVE_RENDER=1 CLODE_LIVE_ONLINE=1. Built a quaude from the native claude on PATH (2.1.227), drove BOTH under a pty, typed a prompt whose answer is not in the prompt text ("6 times 7"), and quaude rendered the streamed 42 like native did — no "Not logged in", no shim-error marker. 2/2, 95s. First G2 on a mainstream platform (the only prior one was cosmo, 2026-07-29, bundle 2.1.218) |
 | 2026-07-29 | cosmo-macos-aarch64 | G2 | quaude | 2.1.218 | pass | real creds, streamed "Paris" in the interactive TUI, 2/2 |
 | 2026-07-09 | netbsd-sparc | G7 | quaude | 2.1.204 | pass | mock PONG -p round-trip: real POST /v1/messages on host mock wire log + literal PONG on 32-bit BE sun4m guest console, 66s e2e under TCG (commit 75bbf1c, backfilled 2026-08-04) |
 | 2026-07-09 | netbsd-arm64 | G7 | quaude | 2.1.204 | pass | mock PONG -p round-trip, port A (spike/quickjs/results/phase3-netbsd-aarch64-scorecard.md probe 5, evbarm-aarch64 qemu+HVF guest; commit b625bdb/1b6881c, backfilled 2026-08-04) |

@@ -1415,6 +1415,49 @@ than re-testing the layers above.
 over HTTP (fixed fc54ae9) both work now. Bundle references: http 314, stdio 136,
 sse 94, ws 24 — so SSE is the last common transport still broken. ws is untested.
 
+## ★★★ NEXT: a clear, clean, well-factored, fully cross build (2026-08-24)
+
+**User directive, and it gates further feature work:** *"I'm tired of the build being so
+baroque as to become opaque. We have to have a clear clean well factored fully cross
+build before we go any further"* — **including extracting dependencies to standalone
+repos where that makes sense.**
+
+**The evidence that provoked it, from one day:**
+- `be-oracle` ran 30 times, never caught the big-endian bug it existed for, and its one
+  endianness assertion was `assert.ok(x === 'LE' || x === 'BE')`.
+- `templates-drift` was red on every push about a STATE (engine sources moved past the
+  last release), so main was never green and "is main green?" stopped being answerable.
+- I then moved that check into release.yml, where it would have blocked the very release
+  that fixes the staleness — it compares against `releases/latest`.
+- `haiku-x64`'s `soft-fail: true` was INERT because it publishes, so a dead upstream
+  package repo hard-gated every release.
+- The provider lookup could kill its own step silently: `find` under `set -euo pipefail`
+  exits before the error message that explains it.
+- Five separate Windows walls in one chain, each invisible until the previous fell.
+- The MCP probe could not distinguish "transport broken" from "the binary never
+  launched", and blamed SSE for a spawn failure.
+- `spike/quickjs/` — a directory named for throwaway work — holds PINS.md, 23 engine
+  patches, atomic-shim.c and the qemu rigs, and four of six engine-recipe inputs.
+
+The pattern is not that any one of these was indefensible. It is that **gates
+multiplied faster than the doctrine for what a green means**, and the headline fidelity
+number (`floor 6/6`) excludes G2, the only row that involves a real logged-in user.
+
+**Work this implies** (not a plan — the plan comes first, see [[clode-backlog-plan-first]]):
+1. Name what a green MEANS, and delete or fix every gate that cannot deliver it.
+2. Separate the engine recipe from spike residue; one patches directory, not two (the
+   split already cost 13 commits of undetected cosmo rot).
+3. Extract what is genuinely a separate artifact into its own repo — the engine
+   (pin + patch stack, since the vendor tree is already not in-tree), the qemu/VM rigs,
+   possibly the node-shim. Each has its own release cadence and its own tests.
+4. Make the cross-build story ONE mechanism, understandable end to end, rather than
+   tiers × legs × fixups × templates × recipes discovered one failure at a time.
+5. Fold in the already-tracked: [[spike/quickjs is not a spike]] entry, the wall-aware
+   gap inventory, and derived `how: 'ci'` fidelity rows.
+
+**Do this before further feature work.** The 2026-08-24 release ships first because it
+fixes a confirmed 40-target cross-build DOA; the overhaul starts after.
+
 ## ★★ SHIPPED ENGINE TEMPLATES PREDATE THE uid/gid FIX — cross-fused Linux quaude is DOA (2026-08-09)
 
 **Every `clode build --target linux-*` produces a binary that cannot run on Linux
