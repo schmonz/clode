@@ -652,6 +652,26 @@ to date — `haiku-r1beta5-x86-64.qcow2` (v0.0.1 2025-05-19, v0.0.2 2025-12-12, 
 - **haiku-builder#3** (open, updated 2026-08-16) — "Add support for Haiku R1/beta6",
   proposing a beta6 image built from the official test build `hrev59866_53`.
 
+**DEMOTED 2026-08-24 (temporary) so the release can go out.** `publish: false` — the
+doctrine-sanctioned demotion, not a softened gate. It was a HARD gate blocking the
+release that fixes the ★★ cross-fuse DOA. The leg still BUILDS, so we keep the signal;
+it just ships no artifact. `test/tjs-legs.test.cjs` now derives the demoted set from the
+legs themselves, so re-promoting needs no test edit.
+
+**RESTORE IT when either becomes true** — this is the follow-up work, not a closed item:
+- cross-platform-actions publishes a beta6 guest image (**haiku-builder#3**, open), or
+- master/beta6 ports install on the beta5 guest.
+
+**Exactly where the last attempt got to**, so nobody restarts from zero. Three walls,
+each found by one CI run:
+1. `pkgman add-repo -y …` → `Usage: pkgman add-repo <repo-URL>` — there is no `-y`.
+2. Without `-y`, add-repo is **INTERACTIVE**: it printed `overwrite? [yes/no] (no) :`
+   twenty-one times and defaulted to no, because there is no TTY.
+3. So the next attempt must remove the stale entry first (`pkgman drop-repo HaikuPorts`)
+   or feed it confirmation, and only then `add-repo` the master URL. Whether the
+   packages then RESOLVE against a beta5 system is still the open question —
+   haiku-builder#2 suggests yes, but that user also upgraded their OS to beta6.
+
 **Where we are.** `.github/actions/guest/action.yml` now points pkgman at the master
 ports repo before installing (81dd641; the `-y` typo that made the first attempt a
 no-op is fixed). Whether master/beta6 packages RESOLVE against a beta5 system is the

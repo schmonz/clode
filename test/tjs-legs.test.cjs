@@ -75,7 +75,9 @@ test('release tier: every published leg is present (golden)', () => {
     'cosmo',
     'dragonflybsd-amd64',
     'freebsd-amd64', 'freebsd-arm64',
-    'haiku-x64',
+    // haiku-x64 REMOVED 2026-08-24: demoted to publish:false while upstream has no
+    // beta6 guest image (haiku-builder#3). Not softened — dropped, per the rule in
+    // tjs-legs.mjs. Put it back the moment the leg can install packages again.
     'linux-arm64-musl', 'linux-armv7-musl', 'linux-loongarch64-musl',
     'linux-ppc64le-musl', 'linux-riscv64-musl', 'linux-s390x-musl',
     'linux-x64-musl', 'linux-x86-musl',
@@ -648,7 +650,10 @@ test('golden ledger: the full run-target -> tier map', () => {
     'dragonflybsd-amd64': 0,
     'freebsd-amd64': 0,
     'freebsd-arm64': 0,
-    'haiku-x64': 0,
+    // haiku-x64 left this map 2026-08-24 with its demotion to publish:false: the
+    // ledger is of PUBLISHED run-targets, and a demoted leg publishes nothing.
+    // Its fidelity history stays in RESULTS.md (0/6, withdrawn) and comes back
+    // here when the leg does.
     'linux-arm64-musl': 0,
     'linux-armv7-musl': 0,
     'linux-loongarch64-musl': 0,
@@ -719,7 +724,15 @@ test('every declared run-target is actually published, and vice versa', () => {
   }
   for (const rt of declared) {
     if (!published.has(rt)) {
-      assert.ok(DARWIN_SLICES.includes(rt),
+      // A DEMOTED leg also declares without publishing: it still builds (and so
+      // still has fidelity history worth keeping) but ships no artifact. That is
+      // the deliberate escape hatch from tjs-legs.mjs — "demote a chronically-flaky
+      // publisher explicitly (drop publish), never silently" — and it must not read
+      // as a stale declaration. Derived from the legs themselves, so a leg that is
+      // re-promoted needs no edit here.
+      const demoted = new Set(
+        legsFor('release').filter((l) => l.publish === false).flatMap((l) => runTargetsFor(l)));
+      assert.ok(DARWIN_SLICES.includes(rt) || demoted.has(rt),
         `${rt} is declared but not published — stale declaration?`);
     }
   }

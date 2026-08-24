@@ -438,7 +438,19 @@ const LEGS = [
     // OpenIndiana the same day). cmd:X provides-syntax for the rest
     // ("nodejs" alone: Name not found, #14).
     'guest-packages': 'cmd:cmake cmd:gcc nodejs20 cmd:git cmd:make', floor: 'r1beta5',
-    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, 'soft-fail': true, ci: true,  // cpa, KVM (a genuinely new OS rung)
+    // publish:false TEMPORARILY (2026-08-24) — demoted, NOT softened. Haiku moved
+    // ports to the current release when beta6 shipped, and cross-platform-actions
+    // still ships only a beta5 image (haiku-builder#3 tracks the beta6 image;
+    // #2 is another user hitting our exact failure), so the guest cannot install
+    // packages at all. `soft-fail` alone would NOT have helped: both tiers strip it
+    // from publishers (:860, :889), so this leg was a HARD gate blocking releases —
+    // and a release is what fixes the ★★ cross-fuse DOA. Dropping publish is the
+    // doctrine-sanctioned demotion ("demote a chronically-flaky publisher
+    // explicitly (drop publish), never silently"); the leg still builds for signal.
+    // RESTORE THIS once a beta6 guest image exists or master ports install — see
+    // the haiku-x64 BACKLOG entry, which records exactly where the last attempt got
+    // to (pkgman add-repo is INTERACTIVE and defaults to no).
+    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: false, 'soft-fail': true, ci: true,  // cpa, KVM (a genuinely new OS rung)
     // PLATFORMS.md documents a Haiku RIG (how to reach the box, which rows to
     // run) -- a runbook, not a result. Nobody has ever hand-driven the recipe
     // on Haiku; the other Haiku evidence on record is a >64KB uv_write deadlock

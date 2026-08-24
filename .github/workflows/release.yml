@@ -232,32 +232,24 @@ jobs:
   # flattens the manifest + engines into dist/ — a clode then fetches
   # templates-<pin>.json + each tjs-<target>-<pin>.gz by URL on demand (engines ship
   # gzip'd; clode inflates + sha-verifies the decompressed engine — manifest.compression).
-  # The drift check, at the only moment it is a FAULT rather than a state: we are
-  # about to publish. In ci.yml it was red on every push once engine sources moved
-  # past the last release — normal development — which cost a green main and taught
-  # people to ignore CI. Here, a mismatch means the pack we are publishing was not
-  # built from these sources, which is exactly what nobody should ship.
+  # templates-drift IS NOT A JOB ANY MORE, in either workflow.
   #
-  # The user-facing defence is separate and lives at fetch time
-  # (libexec/clode-templates.cjs refuses a pack whose recipe differs from the
-  # running clode's); this is the publisher-side half.
-  templates-drift:
-    needs: leg
-    if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v7.0.1
-        with:
-          fetch-depth: 0        # the published side may still need deriving from the tag
-          submodules: false
-      - uses: actions/setup-node@v7.0.0
-        with:
-          node-version-file: .tool-versions
-      - name: The published engine templates match this tree's engine sources
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node scripts/templates-drift.mjs
+  # I moved it here from ci.yml on 2026-08-24 reasoning that "we are about to
+  # publish a mismatched pack" is a fault rather than a state. It is — but the
+  # script compares against `releases/LATEST` (templates-drift.mjs:128), which on a
+  # release run is the PREVIOUS release. So it would have failed on exactly the
+  # staleness the release exists to fix, blocking the fix. A gate that cannot pass
+  # when you do the right thing is worse than no gate.
+  #
+  # Verifying the pack we are about to publish is pointless in the other direction:
+  # templates-pack builds it from THIS run's leg artifacts, so it matches this tree
+  # by construction.
+  #
+  # The real defence lives at fetch time now: obtainEngine compares the pack's
+  # recipe against the recipe baked into the running clode and REFUSES a mismatch
+  # (libexec/clode-templates.cjs, test/clode-templates.test.cjs). That is the moment
+  # a mismatch costs a user something, and it is exact where the old tjsPin check
+  # was coarse. scripts/templates-drift.mjs is kept for running by hand.
 
   templates-pack:
     needs: [leg, darwin-slices]
