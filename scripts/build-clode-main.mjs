@@ -89,6 +89,19 @@ function bakedTjsPin() {
   } catch { return ''; }
 }
 
+// The ENGINE RECIPE this clode was built from — the same hash
+// scripts/engine-recipe.mjs computes and 4f86738 stamps into the published
+// templates manifest. Baking it here is the other half: it lets a fused clode
+// compare what it IS against what a template pack was BUILT FROM, at fetch time,
+// which is the only moment the answer matters to a user. Empty in a tree where
+// the recipe cannot be computed — the check then declines rather than guessing.
+function bakedEngineRecipe() {
+  try {
+    return execFileSync(process.execPath, [path.join(REPO, 'scripts/engine-recipe.mjs')],
+      { encoding: 'utf8' }).trim();
+  } catch { return ''; }
+}
+
 function esbuildBundle() {
   const bundle = path.join(OUT, 'clode-main.bundle.cjs');
   // define values are strings that must be valid JSON — JSON.stringify(version) yields the
@@ -100,6 +113,7 @@ function esbuildBundle() {
     define: {
       __CLODE_BUNDLE_VERSION__: JSON.stringify(repoVersion()),
       __CLODE_BAKED_TJS_PIN__: JSON.stringify(bakedTjsPin()),
+      __CLODE_BAKED_ENGINE_RECIPE__: JSON.stringify(bakedEngineRecipe()),
     },
     outfile: bundle,
   });

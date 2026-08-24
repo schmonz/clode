@@ -207,63 +207,30 @@ jobs:
               test/node-shim-roundtrip.test.cjs \
               test/node-shim-agentic.test.cjs
 
-  # THE THIRD QUESTION A PUSH CANNOT ASK ITSELF: are the engine templates users
-  # actually download still built from the engine sources in this tree?
+  # templates-drift MOVED OUT OF ci.yml (2026-08-24).
   #
-  # An engine template is not made by a separate pipeline — it is the un-fused half
-  # of a release artifact (release.yml collects `tjs-*` from the CURRENT run;
-  # build-leg uploads exactly the engine it fused against). So a template is frozen
-  # at the last RELEASE, while `clode build --target X` fetches it from a URL keyed
-  # on VERSION, which also only moves at a release cut. Build clode from HEAD and it
-  # downloads the TAG's engines under HEAD's node-shim, and the only gate on that
-  # reuse (obtainEngine's tjsPin check) compares an UPSTREAM txiki sha that our
-  # patches never touch — so it passes vacuously on a three-week-old engine.
+  # It compared the published pack's engine recipe against this tree's, on every
+  # push — so it went red the moment engine sources moved past the last release,
+  # which is the NORMAL state of a repo doing engine work. That is a STATE, not a
+  # fault, and "cut a release" was never a fix: it reset the baseline until the
+  # next engine commit. The cost was real — main was permanently red, so "is main
+  # green?" stopped being a usable question, which is precisely how an ambient red
+  # hid a P0 across 13 jobs before (see BACKLOG).
   #
-  # The failure mode is therefore an engine fix that is committed, tested, green,
-  # and simply absent from every cross-built quaude, found weeks later on a user's
-  # Linux box. scripts/templates-drift.mjs makes that a dated, attributed red light
-  # naming the commits responsible.
+  # Worse, the hazard it warned about was defended NOWHERE. libexec/clode-templates
+  # .cjs checked only the coarse tjsPin (txiki version + short sha), so two clodes
+  # with the same pin and different patch stacks both accepted the same pack.
   #
-  # WHY ITS OWN JOB, the upstream-drift.yml doctrine: this asks a DIFFERENT question
-  # than a push does. A push asks "did my diff break clode?"; this asks "is what we
-  # publish still made of what we have?" Red HERE is never an accusation against the
-  # commit that triggered it — the job name says what moved.
+  # The defence now lives where a wrong answer costs someone something: obtainEngine
+  # compares the manifest's recipe (stamped by 4f86738) against the recipe baked
+  # into the running clode (__CLODE_BAKED_ENGINE_RECIPE__) and REFUSES a mismatched
+  # pack at fetch. Missing on either side is reported as "cannot check", never
+  # treated as a match. See test/clode-templates.test.cjs.
   #
-  # EXPECT RED UNTIL THE NEXT RELEASE CUT. As of this commit it IS red, correctly:
-  # 14 engine-source commits sit between v0.20260801.2 and main. That is the point —
-  # the condition has been true for three weeks with nothing able to say so. It goes
-  # green the moment a release republishes the pack. The tension with
-  # [[silently-gated-tests-hide-p0s]] (ambient red hides P0s) is real and deliberate:
-  # this is ACTIONABLE red with one named remedy, not a tolerated failure, and it is
-  # a standalone job precisely so it cannot mask anything else. Exit 1 = drifted;
-  # exit 2 = could not check (which never reports success).
-  templates-drift:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    defaults:
-      run:
-        shell: bash
-    steps:
-      # fetch-depth 0 + tags: the published manifest carries no recipe field yet, so
-      # the published side is computed at the release TAG (`git show <tag>:<path>`,
-      # nothing checked out) and the responsible commits come from `<tag>..HEAD`.
-      # Both need real history; without it the script fails loudly rather than passing.
-      - uses: actions/checkout@v7.0.1
-        with:
-          fetch-depth: 0
-          submodules: false
-      - uses: actions/setup-node@v7.0.0
-        with:
-          node-version-file: .tool-versions
-      - name: The published engine templates match this tree's engine sources
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node scripts/templates-drift.mjs
+  # And the drift check itself moved to release.yml, where "we are about to publish
+  # templates that do not match this tree" IS a fault.
 
-  # The full node:test suite. DEFINED ONCE in the reusable suite.yml and called
-  # from both here and release.yml, the same way tjs-legs.yml is shared — so a
-  # tag can never run a weaker suite than main, and there is no second copy to
-  # drift. Job stays named `test` so any needs:/branch-protection edges hold.
+
   test:
     uses: ./.github/workflows/suite.yml
     permissions:

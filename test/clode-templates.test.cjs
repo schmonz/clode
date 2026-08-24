@@ -104,3 +104,57 @@ test('obtainEngine: unsupported compression is refused', async () => {
       { cacheDir: os.tmpdir(), fetch: async () => Buffer.alloc(0), thisPin: 'P', manifestPin: 'P', compression: 'brotli' }),
     (e) => e instanceof TemplatesError && /compression/i.test(e.message));
 });
+
+// ---- the engine-recipe check, at the moment it matters -------------------
+//
+// templates-drift has been reddening main on every push since the last release,
+// because "engine sources moved ahead of the published pack" is the NORMAL state
+// of a repo doing engine work — a state, not a fault. Cutting a release did not
+// fix it; it reset the baseline until the next engine commit. Meanwhile the risk
+// it warned about was defended NOWHERE: the pin check below is coarse (txiki
+// version + short sha), so two clodes with the same pin and different patch
+// stacks both accept the same pack, and a cross-built engine is then made of
+// different sources than a native build.
+//
+// This asks the same question where it can be answered exactly and where a wrong
+// answer costs someone something: at fetch, by the clode that is about to use it.
+// The manifest half was stamped in 4f86738; the clode half is baked by
+// scripts/build-clode-main.mjs (__CLODE_BAKED_ENGINE_RECIPE__).
+const RECIPE_A = 'a'.repeat(64);
+const RECIPE_B = 'b'.repeat(64);
+const recipeOpts = (extra) => ({
+  manifestPin: 'p', thisPin: 'p', cacheDir: path.join(os.tmpdir(), 'tmpl-recipe-' + process.pid),
+  fetch: async () => Buffer.alloc(0), ...extra,
+});
+const recipeEntry = { engine: 'e', sha256: 'deadbeef' };
+const refusedForRecipe = async (opts) => {
+  try { await obtainEngine(recipeEntry, opts); return false; }
+  catch (e) { return /engine recipe/.test(e.message); }
+};
+
+test('obtainEngine REFUSES a pack built from a different engine recipe', async () => {
+  assert.strictEqual(await refusedForRecipe(recipeOpts({ manifestRecipe: RECIPE_A, thisRecipe: RECIPE_B })), true);
+});
+
+test('obtainEngine accepts a pack whose recipe matches', async () => {
+  assert.strictEqual(await refusedForRecipe(recipeOpts({ manifestRecipe: RECIPE_A, thisRecipe: RECIPE_A })), false);
+});
+
+// Missing on EITHER side means "cannot check". It must not block (an older pack
+// carries no recipe, and a dev checkout may not compute one) and equally must not
+// be mistaken for a match — which is why the mismatch row above has to keep
+// passing for this pair to mean anything.
+test('a missing recipe on either side is "cannot check", not a silent pass', async () => {
+  assert.strictEqual(await refusedForRecipe(recipeOpts({ thisRecipe: RECIPE_A })), false);
+  assert.strictEqual(await refusedForRecipe(recipeOpts({ manifestRecipe: RECIPE_A })), false);
+  assert.strictEqual(await refusedForRecipe(recipeOpts({})), false);
+});
+
+test('the built clode bakes its engine recipe, as it bakes its tjs pin', () => {
+  const src = fs.readFileSync(path.resolve(__dirname, '../scripts/build-clode-main.mjs'), 'utf8');
+  assert.match(src, /__CLODE_BAKED_ENGINE_RECIPE__/,
+    'a fused clode with no repo cannot compute its own recipe — it must be baked at build time');
+  const fuse = fs.readFileSync(path.resolve(__dirname, '../libexec/clode-fuse.cjs'), 'utf8');
+  assert.match(fuse, /manifestRecipe: manifest\.recipe/, 'the manifest recipe must reach obtainEngine');
+  assert.match(fuse, /thisRecipe: thisEngineRecipe\(/, 'this clode\'s recipe must reach obtainEngine');
+});

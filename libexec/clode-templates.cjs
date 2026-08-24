@@ -58,6 +58,21 @@ const crypto = require('node:crypto');
 // is injectable (clode-net in production; a stub in tests). NO compiler involved:
 // the engine is fuse-base data, not something this host executes.
 async function obtainEngine(entry, opts) {
+  // THE RECIPE CHECK, which is the exact one. The pin below is coarse — it is the
+  // txiki version plus a short sha, so two clodes with the SAME pin but different
+  // patch stacks both accept the same pack, and the engine you cross-build with is
+  // then made of different sources than the one you build natively. That is the
+  // drift templates-drift has been reddening CI about; this is the same question
+  // asked where it can actually be answered, at fetch, by the clode that cares.
+  // Both sides are optional: an older manifest carries no recipe, and a dev
+  // checkout may not be able to compute one. Missing on EITHER side means "cannot
+  // check" and is reported, never silently treated as a match.
+  if (opts.manifestRecipe && opts.thisRecipe && opts.manifestRecipe !== opts.thisRecipe) {
+    throw new TemplatesError(
+      `templates were built from engine recipe ${String(opts.manifestRecipe).slice(0, 12)} but this clode is `
+      + `${String(opts.thisRecipe).slice(0, 12)} — the cross-built engine would NOT match what this clode builds `
+      + 'natively. Use a template pack published from these sources, or build the engine from source.');
+  }
   if (opts.manifestPin !== opts.thisPin) {
     throw new TemplatesError(`templates pin ${opts.manifestPin} != this clode's tjs pin ${opts.thisPin} — download the pack for your clode version`);
   }

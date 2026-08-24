@@ -815,6 +815,25 @@ async function defaultEngineFetch(url) {
 // This clode's own tjs pin, to gate an engine/manifest against a version mismatch.
 // A fused clode bakes CLODE_TJS_PIN at build time; a dev checkout derives it from
 // PINS.md (same "<ver>-<sha7>" shape the manifest uses, no leading v).
+// The engine recipe THIS clode was built from, baked by scripts/build-clode-main.mjs
+// exactly as the tjs pin is. Mirrors thisTjsPin's shape deliberately: env override
+// first (for tests and for a dev checkout), then the baked constant, then compute
+// it from the tree if one is present. Null when it genuinely cannot be known —
+// callers must treat null as "cannot check", never as "matches".
+function thisEngineRecipe(env, opts) {
+  if (env.CLODE_ENGINE_RECIPE) return env.CLODE_ENGINE_RECIPE;
+  if (typeof __CLODE_BAKED_ENGINE_RECIPE__ !== 'undefined' && __CLODE_BAKED_ENGINE_RECIPE__) {
+    return __CLODE_BAKED_ENGINE_RECIPE__;
+  }
+  try {
+    const root = path.resolve(opts.libexec || '.', '..');
+    const script = path.join(root, 'scripts/engine-recipe.mjs');
+    if (!require('node:fs').existsSync(script)) return null;
+    return require('node:child_process')
+      .execFileSync(process.execPath, [script], { encoding: 'utf8' }).trim() || null;
+  } catch { return null; }
+}
+
 function thisTjsPin(env, opts) {
   if (env.CLODE_TJS_PIN) return env.CLODE_TJS_PIN;
   // Baked into the bundle from PINS.md at build time (esbuild define), so a fused
@@ -908,7 +927,9 @@ async function clodeBuild(args, opts) {
         baseUrl,
         fetch: opts.fetchEngine || defaultEngineFetch,
         thisPin: thisTjsPin(env, opts),
+        thisRecipe: thisEngineRecipe(env, opts),
         manifestPin: manifest.tjsPin,
+        manifestRecipe: manifest.recipe,
         compression: manifest.compression,
         // schema 2: one published blob, this target is a byte slice of it.
         blob: manifest.blob,

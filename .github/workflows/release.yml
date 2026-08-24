@@ -232,6 +232,33 @@ jobs:
   # flattens the manifest + engines into dist/ — a clode then fetches
   # templates-<pin>.json + each tjs-<target>-<pin>.gz by URL on demand (engines ship
   # gzip'd; clode inflates + sha-verifies the decompressed engine — manifest.compression).
+  # The drift check, at the only moment it is a FAULT rather than a state: we are
+  # about to publish. In ci.yml it was red on every push once engine sources moved
+  # past the last release — normal development — which cost a green main and taught
+  # people to ignore CI. Here, a mismatch means the pack we are publishing was not
+  # built from these sources, which is exactly what nobody should ship.
+  #
+  # The user-facing defence is separate and lives at fetch time
+  # (libexec/clode-templates.cjs refuses a pack whose recipe differs from the
+  # running clode's); this is the publisher-side half.
+  templates-drift:
+    needs: leg
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0        # the published side may still need deriving from the tag
+          submodules: false
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version-file: .tool-versions
+      - name: The published engine templates match this tree's engine sources
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/templates-drift.mjs
+
   templates-pack:
     needs: [leg, darwin-slices]
     if: ${{ !cancelled() }}
