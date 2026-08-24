@@ -567,51 +567,107 @@ load-bearing, not a cosmetic honesty fix. The bundle gates its `argv0`-based
 the `child_process` path instead. Anyone "fixing" it to `true` would silently reroute
 rg through a Bun API we do not implement.
 
-## haiku-x64 has been red since the CI gap — external repo drift, and a false fidelity claim (2026-08-23)
+## Untracked-until-now findings from 2026-08-23/24 (three of them)
 
-**Measured, not impressionistic.** I had been reporting this as intermittent infra
-flake for a whole session. It is not.
+These lived only in commit messages. Git preserves that; nobody browses it when
+deciding what to do next, which is how they went missing from planning. Recorded
+here so the next session can see them.
 
-- **13 of 13** `ci` runs on 2026-08-22/23 failed, every one at the same place:
-  `Refreshing repository "HaikuPorts" failed *** Failed to download package c_ares:
-  Resource not found` / `Validating checksum for HaikuPorts...: I/O error`.
-- **Every `release` run through 2026-08-02 was GREEN** (2026-07-24, 07-26, 07-27 ×2,
-  08-01 ×3, 08-02). So the leg was reliable and then stopped being so.
-- There were **no `ci` runs on main between 2026-08-02 and 2026-08-22**, so the break
-  happened inside that window and surfaced all at once — the same shape as the Windows
-  `getopt` wall (`c4be23c`) and for the same reason.
+### 1. `net.createServer` is ABSENT — UDS peer messaging is silently off under quaude
 
-**Cause is almost certainly outside this repo.** `guest-packages` names
-`cmd:cmake cmd:gcc nodejs20 cmd:git cmd:make` against HaikuPorts at `r1beta5`;
-`c_ares` is a transitive dependency the mirror no longer serves under that repo state.
-Nothing in the leg pins a package-set snapshot, so HaikuPorts rebuilding or repointing
-its index breaks us with no change on our side — the same class as
-[[bundle-bumps-add-node-api-reads]].
+Every quaude startup logs `[ERROR] [uds-messaging] Failed to create server: TypeError:
+not a function`. That is `net.createServer`: `libexec/node-shim/modules/net.cjs` exports
+`isIP, isIPv4, isIPv6, BlockList, Socket, Server, Stream, connect, createConnection` —
+no `createServer`. Reproduced under the local engine; byte-identical message. Nameless
+TypeError = an ABSENT function, the signature this repo keeps paying for
+([[shim-filehandle-chmod-gap]]).
 
-**The part that IS ours, and the reason this is worth an entry.** `scripts/tjs-legs.mjs`
-records for this leg: *"it does hold G7: the build-pipeline PONG smoke fuses and runs a
-quaude inside the Haiku guest on every build"*. That is **no longer true** — the smoke
-has not run on any build for at least a day and probably three weeks. `fidelity: { tier:
-0, date: '2026-08-02', how: 'ci' }` is dated to the last day it was actually true.
+Bundle side (2.1.241): `o = Aos.createServer({allowHalfOpen:!0}, a => {…})`, caught and
+logged, then it bails. Full chain a real implementation needs, in order:
+`createServer({allowHalfOpen}, listener)` → `server.on('error')` →
+`server.listen(<unix socket path>, cb)` → `server.unref()` → per-connection `Socket`
+with `.on('close')` → `fs.promises.chmod(sockPath, 0o600)`.
 
-That is exactly the failure the s390x audit turned up (`tjs-legs.mjs:106` claiming
-"PONG-class smoke lives in the be-oracle job" when it does not): **a fidelity record that
-asserts coverage a red leg is not delivering.** A soft-fail leg whose evidence claim
-does not degrade when it fails is a claim that quietly becomes fiction. Under
-[[any-ci-red-is-our-red]] and [[ci-job-is-to-tell-the-truth]], the leg being non-blocking
-is not the problem; the record still saying "on every build" is.
+**Do NOT "fix" it with a walled stub.** `net.createServer` is already tracked in
+`test/shim-surface/golden.json`, and `layer2Gaps` decides by `prop in shim.surface`
+(collect.cjs:88) — so a wall would silently DELETE a tracked gap. That is exactly what
+the v8 walls did on 2026-08-23 before being reverted. Either implement it, or land the
+wall-aware inventory first (see the /heapdump entry).
 
-**Candidate work, unplanned:**
-1. Make the fidelity claim self-invalidating — a `how: 'ci'` row should be derivable
-   from whether that leg is actually passing, not a hand-written sentence. This is the
-   general fix and it covers s390x too.
-2. Decide whether the leg is recoverable: bump `guest-version`, name `c_ares`
-   explicitly, or pin/cache a package snapshot so a mirror rebuild cannot break us.
-3. If it is not recoverable soon, say so out loud in the leg entry rather than leaving a
-   permanently red job whose comment claims coverage.
+### 2. Does MCP-over-SSE actually work on Windows? STILL UNKNOWN
 
-**Do not just add a retry.** Thirteen consecutive identical failures is not a transient
-that retrying fixes; it would only convert a fast red into a slow one.
+Not to be confused with the 2026-08-06 `/[object Object]` SSE entry, which is fixed. The
+Windows legs failed at the SSE probe, and d8a4f75 established that was NOT SSE: the
+quaude never launched (0.2s elapsed vs the 45s timeout on legs that really run it;
+extensionless `--out` + host node, which lacks
+`UV_PROCESS_WINDOWS_FILE_PATH_EXACT_NAME`). So that run produced ZERO information about
+the transport. With the launch fixed, expect the probe to take ~45s on Windows and say
+something genuinely new — possibly another failure. **Nobody has ever seen MCP work or
+fail on Windows.**
+
+### 3. One unexplained test flake
+
+`spawn: numeric fd in stdio redirects child output to a file (Bash-tool pattern)` failed
+once in a full suite run, then passed in 2 further full runs and 6 isolated runs of that
+file; a clean tree gave 0 in 2 full runs. Two clean runs is too small a sample to call it
+pre-existing, and the changes in flight touched templates/fuse/build — nothing
+child_process uses. Recorded as SEEN AND UNATTRIBUTED rather than dismissed. If it
+recurs, it is load-sensitive (full suite only), which points at the harness rather than
+the assertion.
+
+## haiku-x64 — the GUEST IMAGE is a superseded release; upstream is tracking it (2026-08-24)
+
+**CORRECTED 2026-08-24.** An earlier version of this entry said "HaikuPorts deleted
+the r1beta5 repo… deliberate, they cannot staff two releases' ports". That framing was
+wrong and was passed along without checking. What is actually observable:
+
+| probed URL | result |
+|---|---|
+| `haikuports/r1beta5/` | `[]` — an EMPTY directory, not a missing one |
+| `haikuports/r1beta6/…/repo` | 200, 2,441,965 bytes |
+| `haikuports/master/…/repo` | 200, 2,441,965 bytes |
+| `haiku/r1beta5/…/repo` (base OS) | 200, alive |
+
+`r1beta6` and `master` both redirect to the SAME CDN object
+(`haikuports-repository.cdn.haiku-os.org/master/…`). So this is the ordinary
+lifecycle of a live project: **ports follow the current release**. beta6 shipped, its
+ports are master's, and the superseded beta5 ports directory was emptied. The base OS
+repo for beta5 is still healthy — which is exactly why only "HaikuPorts" fails in our
+logs and the `haiku` repo does not.
+
+METHOD NOTE, because it is the reusable part: my first probe returned 0 bytes for BOTH
+beta5 and master, which should have said "my URL is wrong", not "beta5 is empty". Follow
+redirects (`curl -sL`) — the real content is on a CDN.
+
+**The problem is OURS, not upstream's: our guest image is a superseded release.**
+`cross-platform-actions/haiku-builder` has published exactly one asset in every release
+to date — `haiku-r1beta5-x86-64.qcow2` (v0.0.1 2025-05-19, v0.0.2 2025-12-12, v0.1.0
+2026-04-29).
+
+**Upstream IS tracking the need. Do not file a duplicate:**
+- **haiku-builder#2** (open) — "Haiku seems releasing the R1 Beta 6, package manager is
+  nuked on R1 Beta 5". Another user hit exactly our failure. Their workaround:
+  *"I manually updated repos with the `r1beta6` tag, and I successfully updated my local
+  OS to the R1 Beta 6 hrev59866+60."*
+- **haiku-builder#3** (open, updated 2026-08-16) — "Add support for Haiku R1/beta6",
+  proposing a beta6 image built from the official test build `hrev59866_53`.
+
+**Where we are.** `.github/actions/guest/action.yml` now points pkgman at the master
+ports repo before installing (81dd641; the `-y` typo that made the first attempt a
+no-op is fixed). Whether master/beta6 packages RESOLVE against a beta5 system is the
+open question — #2 suggests they do, but that user also upgraded the OS. If they do not,
+the honest options are (a) `pkgman full-sync` the guest to beta6 in-leg, which is what #2
+effectively did, or (b) demote the leg.
+
+**If it must be demoted: drop `publish`, never soften the gate.** `'soft-fail': true` on
+this leg is INERT — both tiers delete soft-fail from publishers ("if we publish it, CI
+gates it": scripts/tjs-legs.mjs:860 and :889) — so haiku-x64 is a HARD gate that reddens
+main AND blocks releases. Dropping `publish` restores soft-fail and needs matching edits
+to the golden lists in `test/tjs-legs.test.cjs` and `test/asset-name-parity.test.cjs`.
+Explicitly NOT a retry: 14 consecutive identical failures is not a transient.
+
+**The fidelity half is FIXED** (c5f6143): a dated withdrawal row makes floorCoverage()
+derive haiku-x64 0/6 automatically, and two new checks keep a `how: 'ci'` claim honest.
 
 ## ★ `spike/quickjs/` is not a spike — separate the components (2026-08-23)
 
