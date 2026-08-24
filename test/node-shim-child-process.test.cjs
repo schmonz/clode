@@ -12,7 +12,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { runLoader, skipUnlessTjs } = require('./node-shim-helper.cjs');
+const { runLoader, resolveBin, skipUnlessTjs } = require('./node-shim-helper.cjs');
 
 function prog(body) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-cp-'));
@@ -179,9 +179,17 @@ test('spawnSync: stdin input echoes like node (cat)', (t) => {
 
 test('spawnSync: env passthrough matches node (printenv)', (t) => {
   if (skipUnlessTjs(t)) return;
+  // Resolved, not hardcoded: this row said '/usr/bin/printenv', which does not
+  // exist on the musl reference container (busybox puts printenv in /bin). It
+  // did not fail there — spawnSync reports ENOENT in the RESULT rather than
+  // throwing, so both the reference and the shim returned {status:null,out:''}
+  // and the differential matched on two identical non-answers. The row was
+  // green and vacuous on every alpine run. See resolveBin's comment.
+  const printenv = resolveBin('printenv');
+  assert.ok(printenv, `no 'printenv' on PATH (${process.env.PATH}) — cannot run the env-passthrough differential`);
   const body = `
     const cp = require('node:child_process');
-    const r = cp.spawnSync('/usr/bin/printenv', ['CLODE_X'], { env: { CLODE_X: 'yes' }, encoding: 'utf8' });
+    const r = cp.spawnSync(${JSON.stringify(printenv)}, ['CLODE_X'], { env: { CLODE_X: 'yes' }, encoding: 'utf8' });
     console.log(JSON.stringify({ status: r.status, out: (r.stdout||'').trim() }));`;
   const f = prog(body);
   const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
@@ -333,9 +341,17 @@ test('spawn: exit event + piped stdout resolve like node', (t) => {
 
 test('spawn: nonzero exit code matches node', (t) => {
   if (skipUnlessTjs(t)) return;
+  // Resolved, not hardcoded: this row said '/usr/bin/false', which exists on
+  // macOS and does NOT exist on the musl reference container (busybox puts
+  // false in /bin). There the REFERENCE side died first — cp.spawn's ENOENT
+  // arrives as an unhandled 'error' event, so host node exited 1 and
+  // execFileSync threw before the shim was ever consulted. Nothing about musl
+  // or the shim was involved. See resolveBin's comment.
+  const falseBin = resolveBin('false');
+  assert.ok(falseBin, `no 'false' on PATH (${process.env.PATH}) — cannot run the nonzero-exit differential`);
   const body = `
     const cp = require('node:child_process');
-    const c = cp.spawn('/usr/bin/false', []);
+    const c = cp.spawn(${JSON.stringify(falseBin)}, []);
     c.on('exit', (code) => { console.log(JSON.stringify({ code })); });`;
   const f = prog(body);
   const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());

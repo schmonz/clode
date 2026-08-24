@@ -47,6 +47,30 @@ test('process.getuid() is a function on POSIX and returns a real number', (t) =>
   assert.ok(Number.isInteger(out.uid) && out.uid >= 0, `uid must be a non-negative integer, got ${out.uid}`);
 });
 
+// A uid to drop to when the test runner is itself root. Any number works —
+// we compare against the number we PASSED, never a name lookup — so this does
+// not depend on the container having a 'nobody' entry (alpine does: 65534).
+const DROP_UID = 65534;
+
+// WHY THIS ROW HAS TWO MODES. The oracle below is "the prefix quaude computes
+// is not the ?? 0 default". That assertion is VALUE-BLIND when the test runner
+// is uid 0: `claude-0` is simultaneously the right answer and the fallback's
+// answer, and no amount of reading the output can tell them apart. This is not
+// hypothetical — the musl reference leg runs in a node:24.18.1-alpine
+// container as root, and this row failed there with
+// `actual: 'claude-0', expected: 'claude-0'` on a notStrictEqual: a test
+// asserting a thing its environment had made unobservable.
+//
+// So: when the runner is NOT root (every dev box, the darwin leg), assert
+// exactly as before. When the runner IS root, don't weaken the oracle — move
+// it. Run the same fixture with the privileges DROPPED to a non-zero uid,
+// where `claude-<DROP_UID>` and the `?? 0` fallback are once again distinct
+// strings. That is strictly STRONGER than the non-root form: it proves the
+// shim read a uid it could not have guessed. If the drop itself is not
+// possible in this environment (spawn uid EPERM, or the engine/repo not
+// readable by the dropped uid), we say so out loud and fall back to the one
+// discrimination that survives at uid 0 — process.getuid being PRESENT rather
+// than absent-and-defaulted — while naming what went untested.
 test('ACCEPTANCE: the bundle tmpdir prefix (claude-<uid>) matches the real host uid — the quaude/naude divergence closes', (t) => {
   if (skipUnlessTjs(t)) return;
   if (process.platform === 'win32') { t.skip('process.getuid is POSIX-only'); return; }
@@ -55,16 +79,60 @@ test('ACCEPTANCE: the bundle tmpdir prefix (claude-<uid>) matches the real host 
   // wC()): `claude-${process.getuid?.()??0}`.
   const f = writeProg(`
     const prefix = \`claude-\${process.getuid?.()??0}\`;
-    console.log(JSON.stringify({ prefix }));`);
+    console.log(JSON.stringify({ prefix, isFunction: typeof process.getuid === 'function' }));`);
+  const realUid = process.getuid();
+
+  if (realUid !== 0) {
+    const r = runLoader(f);
+    assert.strictEqual(r.status, 0, r.stderr);
+    const { prefix } = JSON.parse(r.stdout.trim());
+    const naudePrefix = `claude-${realUid}`;
+    assert.notStrictEqual(prefix, 'claude-0',
+      `quaude fell back to the uid-0 default (${prefix}) — the divergence this test exists to close did NOT close`);
+    assert.strictEqual(prefix, naudePrefix,
+      `quaude computed ${prefix} but naude/real-node (real uid ${realUid}) computes ${naudePrefix} — tmp sandboxes would still diverge`);
+    return;
+  }
+
+  // --- runner is root: relocate the oracle to a dropped uid ---
+  // mkdtemp is 0700 and owned by root; the dropped child must be able to
+  // traverse and read the fixture it is asked to run.
+  const dir = path.dirname(f);
+  try { fs.chmodSync(dir, 0o755); fs.chmodSync(f, 0o644); } catch { /* reported below */ }
+  const dropped = runLoader(f, [], { uid: DROP_UID, gid: DROP_UID });
+  let droppedPrefix = null;
+  if (dropped.status === 0) {
+    try { droppedPrefix = JSON.parse(dropped.stdout.trim()).prefix; } catch { /* fall through */ }
+  }
+
+  if (droppedPrefix !== null) {
+    assert.strictEqual(droppedPrefix, `claude-${DROP_UID}`,
+      `running as uid ${DROP_UID}, quaude computed ${droppedPrefix} — `
+      + (droppedPrefix === 'claude-0'
+        ? 'that is the ?? 0 default, i.e. process.getuid did not report the real uid'
+        : 'which is neither the real uid nor the default'));
+    return;
+  }
+
+  // The drop did not run. Say exactly what is now untested rather than
+  // pretending a green row means the divergence closed.
+  t.diagnostic('UID-0 RUNNER: could not re-run the fixture with privileges dropped to uid '
+    + `${DROP_UID} (status=${dropped.status}, error=${dropped.error && dropped.error.code}, `
+    + `stderr=${JSON.stringify((dropped.stderr || '').slice(-400))}). `
+    + 'NOT TESTED HERE: whether quaude READ the real uid or silently fell back to the '
+    + '`?? 0` default — at uid 0 those two produce the identical string "claude-0", so no '
+    + 'assertion on the output can separate them. What IS still tested below: that '
+    + 'process.getuid EXISTS (an absent getuid makes `process.getuid?.()` undefined and '
+    + 'takes the ?? 0 branch, which IS observable), and that the prefix equals the one '
+    + 'naude/real node computes.');
   const r = runLoader(f);
   assert.strictEqual(r.status, 0, r.stderr);
-  const { prefix } = JSON.parse(r.stdout.trim());
-  const realUid = process.getuid();
-  const naudePrefix = `claude-${realUid}`;
-  assert.notStrictEqual(prefix, 'claude-0',
-    `quaude fell back to the uid-0 default (${prefix}) — the divergence this test exists to close did NOT close`);
-  assert.strictEqual(prefix, naudePrefix,
-    `quaude computed ${prefix} but naude/real-node (real uid ${realUid}) computes ${naudePrefix} — tmp sandboxes would still diverge`);
+  const { prefix, isFunction } = JSON.parse(r.stdout.trim());
+  assert.strictEqual(isFunction, true,
+    'process.getuid is absent under the shim — `process.getuid?.() ?? 0` therefore takes the '
+    + 'default branch, and the prefix below only LOOKS right because this runner happens to be uid 0');
+  assert.strictEqual(prefix, `claude-${realUid}`,
+    `quaude computed ${prefix} but naude/real-node (real uid ${realUid}) computes claude-${realUid}`);
 });
 
 // REGRESSION (found by review): an earlier version of this fix used the

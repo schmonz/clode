@@ -119,8 +119,22 @@ test('agentic Edit round-trip under tjs: overwriting an existing file works (Fil
   try {
     // --debug-to-stderr surfaces the bundle's atomic-write breadcrumbs (and any
     // exception it caught) so a failure on disk has a named cause, not silence.
+    //
+    // Tool permission comes from --allowedTools, exactly like the Bash row
+    // above, and NOT from --dangerously-skip-permissions. That flag was an
+    // incidental convenience here and it makes this row unrunnable as root:
+    // the bundle refuses it outright — `if (typeof process.getuid === 'function'
+    // && process.getuid() === 0 && process.env.IS_SANDBOX !== '1' &&
+    // !CLAUDE_CODE_BUBBLEWRAP) { console.error('--dangerously-skip-permissions
+    // cannot be used with root/sudo privileges for security reasons');
+    // process.exit(1) }` (verbatim from the extracted 2.1.241 cli.js). The musl
+    // reference leg runs in a node:24.18.1-alpine container as root, so this
+    // row exited 1 before it ever reached an Edit — a startup refusal wearing
+    // the costume of a FileHandle.chmod regression. --allowedTools grants the
+    // same permission with no uid opinion, so the row now runs identically as
+    // root and as a normal user.
     const r = await bootP(cli, dir,
-      ['-p', 'edit the file', '--dangerously-skip-permissions', '--debug', '--debug-to-stderr'],
+      ['-p', 'edit the file', '--allowedTools', 'Read,Edit', '--debug', '--debug-to-stderr'],
       {
         ...process.env,
         ANTHROPIC_BASE_URL: mock.url,

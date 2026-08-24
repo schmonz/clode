@@ -93,8 +93,45 @@ function runLoader(entry, args = [], opts = {}) {
     env: { ...process.env, ...(opts.env || {}) },
     input: opts.input,
     timeout: opts.timeout || 30000,
+    // Optional privilege drop (root-only; EPERM otherwise). Used by the
+    // getuid ACCEPTANCE row, which is value-blind when the test runner is
+    // itself uid 0 — see node-shim-getuid.test.cjs.
+    ...(opts.uid !== undefined ? { uid: opts.uid } : {}),
+    ...(opts.gid !== undefined ? { gid: opts.gid } : {}),
   });
-  return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
+  return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '', error: r.error };
+}
+
+// Locate a program on PATH, because an absolute path to a system utility is
+// NOT portable across the hosts this oracle runs on — and a wrong one fails in
+// two different ways, only one of them loud.
+//
+// The musl reference leg runs in node:24.18.1-alpine, where every "coreutil"
+// is a busybox applet symlinked at ITS canonical directory: `false` and
+// `printenv` are BB_DIR_BIN (/bin/false, /bin/printenv) and there is no
+// /usr/bin/false or /usr/bin/printenv at all. macOS is the exact mirror image:
+// /usr/bin/false and /usr/bin/printenv exist, /bin/false and /bin/printenv do
+// not. (VERIFIED, not assumed: the file list of the exact CI image
+// node:24.18.1-alpine linux/amd64, manifest digest sha256:9b6d6e32fdbed527…,
+// contains bin/false, bin/printenv and usr/bin/env — and no usr/bin/false or
+// usr/bin/printenv at all; its PATH includes /bin. Cross-checked against
+// alpine-minirootfs 3.20/3.21/3.22 and against this Mac, where it is the
+// reverse.) A hardcoded /usr/bin/false therefore ENOENTs on alpine —
+// loudly, because cp.spawn's ENOENT is an unhandled 'error' event that kills
+// the reference-node fixture. A hardcoded /usr/bin/printenv ENOENTs SILENTLY,
+// because cp.spawnSync returns {status:null,stdout:null} instead of throwing,
+// so BOTH sides of the differential produce the same empty result and the row
+// passes while testing nothing. Resolve at test time instead of guessing.
+function resolveBin(name) {
+  const dirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  for (const d of dirs) {
+    const p = path.join(d, name);
+    try {
+      const st = fs.statSync(p);
+      if (st.isFile() && (st.mode & 0o111)) return p;
+    } catch { /* not here; keep looking */ }
+  }
+  return null;
 }
 
 function skipUnlessTjs(t) {
@@ -102,4 +139,4 @@ function skipUnlessTjs(t) {
   return false;
 }
 
-module.exports = { tjsPath, runLoader, skipUnlessTjs, isApeFile, wantsTrampoline, engineSpawn, REPO, LOADER };
+module.exports = { tjsPath, runLoader, resolveBin, skipUnlessTjs, isApeFile, wantsTrampoline, engineSpawn, REPO, LOADER };
