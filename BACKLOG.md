@@ -1436,6 +1436,30 @@ so assume every cross-fuse target is affected, not just linux-arm64. The guard i
 what makes it VISIBLE on Linux; other targets may be silently degraded wherever
 stat().uid matters.
 
+**RE-VERIFIED 2026-08-24, from the published artifact itself — this is not a stale
+note.** Pulled the `linux-arm64` slice out of the v0.20260801.2 templates blob by its
+manifest offset/length (sha256 matches the manifest exactly: 416cf3f7b933…), ran it on
+a real Linux/arm64 box:
+
+    published template engine:  keys = size, mode, mtimeMs, kind        <- no uid/gid
+    engine from current source: keys = size, mode, uid, gid, mtimeMs, kind
+
+So the defect is live and republishing genuinely fixes it. Timeline confirms the
+mechanism: latest release v0.20260801.2 published 2026-08-02; the fix 906af8b landed
+2026-08-04, two days later.
+
+**The 2026-08-24 fetch-time recipe check does NOT cover this pack.** obtainEngine
+refuses a pack whose recipe differs from the running clode's — but this manifest carries
+NO recipe field (it predates the 4f86738 stamp), so the check reads "cannot check" and
+declines rather than blocking. That is the correct behaviour for an unknown pack and it
+means users on the CURRENT pack still get a silently-DOA binary. The protection begins
+with the next published pack.
+
+**Blocked on: haiku-x64.** It is `publish: true`, and both tiers strip `soft-fail` from
+publishers, so it is a HARD gate — a release cannot succeed while it fails. See the
+haiku-x64 entry: either master/beta6 ports resolve on the beta5 guest, or the leg is
+demoted by dropping `publish`.
+
 **Fix:** republish the engine templates from current sources. Then re-drive the
 cross-fuse targets. Worth adding a tripwire: a template whose tjs pin predates a
 known-required patch should fail the build loudly rather than fuse a binary that
