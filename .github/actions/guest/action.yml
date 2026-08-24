@@ -197,7 +197,31 @@ runs:
               || echo "guest: mport exit tolerated (already-installed reports nonzero)" ;;
           haiku)
             # Single-user system: the runner IS the (only) user; no sudo.
-            [ -z "$PKGS" ] || pkgman install -y $PKGS ;;
+            #
+            # HaikuPorts DELETED the r1beta5 ports repo. Probed 2026-08-24:
+            # https://eu.hpkg.haiku-os.org/haikuports/ lists exactly ["master"],
+            # and the beta5 index serves an empty package set — which is the
+            # `100% repochecksum-1 [2 bytes]` in the failing logs, followed by
+            # "Failed to download package c_ares". Upstream says it was
+            # deliberate; they cannot staff ports for two releases.
+            #
+            # We cannot move the GUEST: cross-platform-actions/haiku-builder
+            # publishes exactly one image, haiku-r1beta5-x86-64.qcow2 (checked
+            # every release). The base haiku repo does carry r1beta6, but an OS
+            # repo without a runner image is no use.
+            #
+            # So: point pkgman at the master ports repo, which is the only one
+            # that still exists. Whether master packages RESOLVE against a beta5
+            # system is an open question — Haiku packages carry
+            # `requires: haiku >= hrevNNNNN` and master is built against a much
+            # newer hrev — so this is an experiment, and it says so out loud
+            # rather than failing with a checksum error nobody can read.
+            if [ -n "$PKGS" ]; then
+              echo "guest(haiku): beta5 HaikuPorts is gone upstream; adding the master ports repo"
+              pkgman add-repo -y https://eu.hpkg.haiku-os.org/haikuports/master/x86_64/current 2>&1 || \
+                echo "guest(haiku): add-repo failed — install will likely fail below, and that is the finding"
+              pkgman install -y $PKGS
+            fi ;;
           omnios)
             # IPS: per-package so one run reports EVERY missing name (exit 4 =
             # already installed / nothing to do — fine). The script then fails
