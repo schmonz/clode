@@ -96,6 +96,21 @@ try {
   });
   if (verbose && r.stderr) process.stderr.write(r.stderr.slice(0, 2000));
 
+  // A PROBE THAT CANNOT SAY "the client never ran" is not a transport probe.
+  // On the Windows legs this reported `(nothing arrived)` and blamed SSE, when
+  // in fact spawnSync had failed outright and the quaude never started: the
+  // giveaway was elapsed time -- 0.2s against 45s (the timeout) on the legs that
+  // really do run the binary. The whole point of this file is to distinguish what
+  // a client CLAIMS from what ARRIVED; it must equally distinguish "no client".
+  if (r.error) {
+    console.error(`FAIL: ${transport}: the binary never launched — ${r.error.message}`);
+    console.error(`  binary: ${binary}`);
+    console.error('  On Windows an EXTENSIONLESS path is the usual cause: node\'s libuv only tries\n'
+      + '  <name>.com and <name>.exe unless UV_PROCESS_WINDOWS_FILE_PATH_EXACT_NAME is set,\n'
+      + '  and node does not set it (txiki does, which is why clode\'s own smoke spawns it fine).');
+    process.exit(1);
+  }
+
   const wire = mock.wire();
   console.log(`--- ${transport} wire ---\n${wire.trim() || '(nothing arrived)'}`);
 

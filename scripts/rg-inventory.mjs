@@ -85,6 +85,17 @@ try {
       CLODE_RG_DEBUG: '1',
     },
   });
+  // Same blindness the SSE probe had: if the binary never LAUNCHED there is no
+  // stderr, zero rg calls get observed, and the inventory diff blames upstream for
+  // a change that did not happen. On Windows an extensionless path is the usual
+  // cause — node's libuv only tries <name>.com/<name>.exe unless
+  // UV_PROCESS_WINDOWS_FILE_PATH_EXACT_NAME is set, and node does not set it.
+  if (r.error) {
+    console.error(`FAIL: the binary never launched — ${r.error.message}`);
+    console.error(`  binary: ${binary}`);
+    console.error('  This says nothing about upstream\'s rg usage; nothing ran.');
+    process.exit(1);
+  }
   const err = r.stderr || '';
   childErr = err;
   if (verbose) process.stderr.write(err.slice(0, 4000));

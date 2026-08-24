@@ -1047,8 +1047,20 @@ runs:
         if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found under @anthropic-ai/claude-code" >&2; exit 1; fi
         echo "provider: $PROV"
         set -e
+        # .exe ON WINDOWS, and it has to be here rather than in clode. The probes
+        # below run on the RUNNER'S NODE, and node does not set libuv's
+        # UV_PROCESS_WINDOWS_FILE_PATH_EXACT_NAME, so an extensionless path is
+        # simply not spawnable: libuv tries <name>.com and <name>.exe and gives up.
+        # txiki DOES set it (src/mod_process.c), which is why clode's own smoke
+        # spawned this exact file seconds earlier and reported "PONG round-trip ok"
+        # while the very next step got "(nothing arrived)" and blamed SSE.
+        # NOT fixable in resolveBuildOut: a native windows `--out` is returned
+        # verbatim ON PURPOSE — the builder leg publishes an extensionless
+        # clode-<ver>-windows-amd64 and attest looks for that exact name
+        # (test/clode-fuse-args.test.cjs records the release it broke).
+        SMOKE="$RUNNER_TEMP/quaude-smoke"; [ "$RUNNER_OS" = "Windows" ] && SMOKE="$SMOKE.exe"
         CLODE_CLAUDE_BIN="$PROV" CLODE_CACHE="$RUNNER_TEMP/clode-cache" \
-          ./"${{ steps.name.outputs.asset }}" build --out "$RUNNER_TEMP/quaude-smoke"
+          ./"${{ steps.name.outputs.asset }}" build --out "$SMOKE"
         # MCP transports, on the one binary CI actually builds. The PONG smoke
         # above proves the quaude boots and answers; it says nothing about whether
         # an MCP server can be reached, and all three transports we have driven
@@ -1057,7 +1069,7 @@ runs:
         #   sse    every POST went to /[object Object]
         # Hermetic: a local mock server, no network and no credentials. Asserts on
         # what ARRIVED, because the SSE failure was invisible from the client side.
-        node scripts/mcp-transport-probe.mjs "$RUNNER_TEMP/quaude-smoke" --transport=sse
+        node scripts/mcp-transport-probe.mjs "$SMOKE" --transport=sse
         # rg usage, on the same binary. We translate rg to portable applets ON
         # PURPOSE (rg is Rust and cannot exist everywhere quaude does; ugrep and
         # bfs can), and that bargain holds only while we can translate what
@@ -1069,8 +1081,8 @@ runs:
         # the HOST, not about upstream — the gate now says which, and refuses to
         # call an unobserved run an upstream change. --allow-untranslated is set
         # only where an applet genuinely cannot exist (see the applets step).
-        node scripts/rg-inventory.mjs "$RUNNER_TEMP/quaude-smoke" ${{ steps.applets.outputs.allow }}
-        rm -f "$RUNNER_TEMP/quaude-smoke"   # quaude is derived work: ephemeral, never leaves the runner
+        node scripts/rg-inventory.mjs "$SMOKE" ${{ steps.applets.outputs.allow }}
+        rm -f "$SMOKE"   # quaude is derived work: ephemeral, never leaves the runner
 
     - name: Attest build provenance
       if: inputs.attest == 'true' && inputs.no-exec != 'true'
