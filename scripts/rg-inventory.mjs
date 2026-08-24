@@ -215,7 +215,19 @@ if (calls.length === 0 && golden.length > 0) {
 }
 
 const added = calls.filter((c) => !golden.includes(c));
-const gone = golden.filter((c) => !calls.includes(c));
+// A golden call MISSING is only evidence of drift when every call was reachable.
+// Under --allow-untranslated (Windows: bfs has never been ported) the shim refuses
+// before it probes, so `rg --version` — its own applet-version probe — cannot happen
+// at all, and the run legitimately observes a SUBSET. Measured: Windows sees 2 of 3.
+// What still holds there, and is the point of running this gate on every platform, is
+// that a NEW call means upstream changed its rg usage. So: added is always fatal;
+// gone is fatal only where the applets exist to make it observable.
+const gone = allowUntranslated ? [] : golden.filter((c) => !calls.includes(c));
+const goneUnobservable = allowUntranslated ? golden.filter((c) => !calls.includes(c)) : [];
+if (goneUnobservable.length) {
+  console.log(`\nnot observable without applets (--allow-untranslated): ${goneUnobservable.length}`);
+  for (const g of goneUnobservable) console.log(`  ~ ${g}`);
+}
 
 if (added.length || gone.length) {
   console.error('\nFAIL: the bundle\'s rg usage changed.');
