@@ -102,7 +102,12 @@ try {
   // giveaway was elapsed time -- 0.2s against 45s (the timeout) on the legs that
   // really do run the binary. The whole point of this file is to distinguish what
   // a client CLAIMS from what ARRIVED; it must equally distinguish "no client".
-  if (r.error) {
+  // ETIMEDOUT is the NORMAL path, not a launch failure: the quaude keeps running
+  // and OUR OWN timeout kills it, which makes spawnSync set r.error. Treating every
+  // r.error as "never launched" made this fail on every leg that behaves correctly —
+  // caught by the release dry run, on legs that had been green all week. Only a real
+  // spawn failure (ENOENT/EACCES/…) means no child ever existed.
+  if (r.error && r.error.code !== 'ETIMEDOUT') {
     console.error(`FAIL: ${transport}: the binary never launched — ${r.error.message}`);
     console.error(`  binary: ${binary}`);
     console.error('  On Windows an EXTENSIONLESS path is the usual cause: node\'s libuv only tries\n'

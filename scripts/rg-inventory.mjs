@@ -90,7 +90,12 @@ try {
   // a change that did not happen. On Windows an extensionless path is the usual
   // cause — node's libuv only tries <name>.com/<name>.exe unless
   // UV_PROCESS_WINDOWS_FILE_PATH_EXACT_NAME is set, and node does not set it.
-  if (r.error) {
+  // ETIMEDOUT is the NORMAL path, not a launch failure: the quaude keeps running
+  // and OUR OWN timeout kills it, which makes spawnSync set r.error. Treating every
+  // r.error as "never launched" made this fail on every leg that behaves correctly —
+  // caught by the release dry run, on legs that had been green all week. Only a real
+  // spawn failure (ENOENT/EACCES/…) means no child ever existed.
+  if (r.error && r.error.code !== 'ETIMEDOUT') {
     console.error(`FAIL: the binary never launched — ${r.error.message}`);
     console.error(`  binary: ${binary}`);
     console.error('  This says nothing about upstream\'s rg usage; nothing ran.');
