@@ -94,6 +94,49 @@ fs.readSync = function (fd, bufferOrOpts, ...rest) {
 // and require('child_process') in the bundle resolve to this very object.
 const _looksLikeSnapshotCmd = (s) =>
   typeof s === 'string' && s.indexOf('SNAPSHOT_FILE=') !== -1 && /(ARGV0=|exec -a )/.test(s);
+
+// --- "the skew probe has run" signal -----------------------------------------
+// extract-claude-js's diagnostics splice awaits globalThis.__clodeEnsureSnapshot
+// so the applet-skew findings exist before a warnings surface reads them. That
+// await is NOT enough by itself, and measuring it is the only way anyone would
+// know: upstream's shell-provider builder KICKS OFF snapshot generation and
+// returns the provider descriptor without awaiting it (the snapshot promise is a
+// closed-over local — same shape on 2.1.241's builder and 2.1.245's). Measured on
+// a real quaude built from 2.1.245: the splice's `await bridge()` resolved 7ms in
+// with ZERO findings, and the probe's stderr warning landed afterwards. The unit
+// test did not catch it because its stand-in bridge recorded findings
+// synchronously — a fixture that could not fail.
+//
+// The probe, unlike the generation, is entirely ours: _rewriteSnapshotArg below
+// runs synchronously the instant the snapshot command reaches child_process, and
+// warnAppletSkew inside it is spawnSync. So the shim can say precisely when the
+// findings are final, and the splice can wait for THAT instead of for a promise
+// that never covered it.
+let _snapshotProbed = false;
+const _snapshotProbeWaiters = [];
+function _markSnapshotProbed() {
+  if (_snapshotProbed) return;
+  _snapshotProbed = true;
+  while (_snapshotProbeWaiters.length) { try { _snapshotProbeWaiters.shift()(); } catch (_) {} }
+}
+// Resolve true once a snapshot command has been intercepted (findings final), or
+// false after `ms`. BOUNDED on purpose, and the bound is the whole design: a
+// session that never generates a snapshot — skipSnapshot, an unsupported shell, a
+// generation that throws — must degrade to today's lazy behaviour, not hang the
+// surface that called us. The caller (the splice) only reaches this after the
+// bridge itself resolved, so the normal case is a handful of async hops, not a
+// wait; the deadline exists solely so the abnormal case is finite.
+const _SKEW_PROBE_WAIT_MS = 2000;
+function awaitSkewProbe(ms) {
+  if (_snapshotProbed) return Promise.resolve(true);
+  const wait = typeof ms === 'number' && ms >= 0 ? ms : _SKEW_PROBE_WAIT_MS;
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), wait);
+    if (timer && typeof timer.unref === 'function') timer.unref();
+    _snapshotProbeWaiters.push(() => { clearTimeout(timer); resolve(true); });
+  });
+}
+
 const _rewriteSnapshotArg = (s) => {
   if (!_looksLikeSnapshotCmd(s)) return s;
   let rewritten;
@@ -101,6 +144,9 @@ const _rewriteSnapshotArg = (s) => {
     rewritten = rewriteSnapshot(s);
   } catch (e) {
     process.stderr.write(`clode: snapshot shadow rewrite skipped: ${e && e.message}\n`);
+    // Still a snapshot, still no more findings coming from it: release the waiters
+    // rather than make them serve out the deadline for nothing.
+    _markSnapshotProbed();
     return s;
   }
   // Rewrite succeeded: probe the host applets for flag skew (best-effort, never
@@ -110,6 +156,7 @@ const _rewriteSnapshotArg = (s) => {
     const findings = warnAppletSkew(collectShadows(s));
     if (findings && findings.length) rewritten = rewriteSnapshot(s, findings);
   } catch (_) {}
+  _markSnapshotProbed();
   return rewritten;
 };
 // Rewrite any snapshot-generator command found in a child_process invocation.
@@ -1241,6 +1288,14 @@ globalThis.WebSocket = BunWebSocket;
 // swallowed async crash.
 globalThis.__clodeWsUnavailable = !_wsTransportAvailable();
 
+// The second half of the eager-skew bridge (see _markSnapshotProbed above, and
+// _skewContribution in extract-claude-js.cjs). __clodeEnsureSnapshot — patched
+// into the bundle — starts snapshot generation; this says when the resulting skew
+// probe has actually run, which is when __clodeDoctor.appletSkew is final.
+// Guarded and bounded on the far side, so a bundle without the splice, or a run
+// that never generates a snapshot, is unaffected.
+globalThis.__clodeAwaitSkewProbe = awaitSkewProbe;
+
 // A ws-shaped module for the TJS BRING-UP PATH ONLY, when the real `ws` isn't
 // loadable. (CORRECTION 2026-08-22, measured: `require('ws')` under the node-shim
 // loader SUCCEEDS today — this comment used to claim it "can't load at all yet".
@@ -1318,6 +1373,8 @@ module.exports.rewriteSnapshot = rewriteSnapshot;
 module.exports.collectShadows = collectShadows;
 module.exports._wsArgs = _wsArgs;
 module.exports.warnAppletSkew = warnAppletSkew;
+module.exports.awaitSkewProbe = awaitSkewProbe;
+module.exports._markSnapshotProbed = _markSnapshotProbed;   // for test/extract-hooks.test.cjs
 module.exports.CLODE_SHADOWS = CLODE_SHADOWS;
 module.exports.rgToUgrep = rgToUgrep;
 module.exports.RgTranslateError = RgTranslateError;

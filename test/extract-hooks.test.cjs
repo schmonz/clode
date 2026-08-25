@@ -96,11 +96,58 @@ test('spliced builder awaits the snapshot bridge BEFORE reading findings (eager)
   assert.ok(diag.warnings[0].issue.includes('eager'));
 });
 
+// THE SHAPE UPSTREAM ACTUALLY HAS. The test above hands the splice a bridge that
+// records findings synchronously — a fixture that cannot fail, and it did not fail
+// for the three releases this hook was dead. Upstream's shell-provider builder
+// KICKS OFF snapshot generation and returns the descriptor without awaiting it (the
+// snapshot promise is a closed-over local; same shape on 2.1.241 and 2.1.245). So
+// the honest fixture is a bridge that resolves BEFORE the probe runs. Measured on a
+// real quaude built from 2.1.245: with only the ensure-step, the splice read zero
+// findings 7ms in and `claude doctor` reported 1 warning instead of 2.
+test('spliced builder waits for the skew PROBE, not merely for generation to start', async () => {
+  const g = {};
+  let releaseProbe;
+  g.__clodeEnsureSnapshot = async () => {
+    // "generation started": the findings land on a LATER turn, as in the product.
+    setTimeout(() => {
+      g.__clodeDoctor = { appletSkew: [{ name: 'find', applet: 'bfs', why: 'late', fix: 'f' }] };
+      releaseProbe();
+    }, 5);
+    return { provider: 'zsh' };
+  };
+  g.__clodeAwaitSkewProbe = () => new Promise((resolve) => { releaseProbe = () => resolve(true); });
+  const diag = await runBuilder(g);
+  assert.strictEqual(diag.warnings.length, 1, 'findings that arrive late must still be read');
+  assert.ok(diag.warnings[0].issue.includes('late'));
+});
+
+test('spliced builder does not wait on the probe when there is no bridge', async () => {
+  // No bridge means nothing started generation, so waiting for a probe could only
+  // burn the shim's deadline on every warnings surface for no possible finding.
+  let waited = false;
+  const diag = await runBuilder({ __clodeAwaitSkewProbe: async () => { waited = true; } });
+  assert.strictEqual(waited, false);
+  assert.strictEqual(diag.warnings.length, 0);
+});
+
 test('spliced builder survives a rejecting or throwing bridge', async () => {
   const rejected = await runBuilder({ __clodeEnsureSnapshot: async () => { throw new Error('boom'); } });
   assert.strictEqual(rejected.warnings.length, 0);
   const threw = await runBuilder({ __clodeEnsureSnapshot: () => { throw new Error('sync boom'); } });
   assert.strictEqual(threw.warnings.length, 0);
+  // …and a probe signal that rejects or throws must not take the surface down either
+  const finding = { name: 'find', applet: 'bfs', why: 'w', fix: 'f' };
+  const probeRejected = await runBuilder({
+    __clodeDoctor: { appletSkew: [finding] },
+    __clodeEnsureSnapshot: async () => ({ provider: 'zsh' }),
+    __clodeAwaitSkewProbe: async () => { throw new Error('probe boom'); },
+  });
+  assert.strictEqual(probeRejected.warnings.length, 1, 'already-recorded findings still land');
+  const probeThrew = await runBuilder({
+    __clodeEnsureSnapshot: async () => ({ provider: 'zsh' }),
+    __clodeAwaitSkewProbe: () => { throw new Error('sync probe boom'); },
+  });
+  assert.strictEqual(probeThrew.warnings.length, 0);
 });
 
 test('spliced builder is a no-op without bridge or findings', async () => {
@@ -117,13 +164,45 @@ test('patchSnapshotBridge exposes the real 2.1.205 generator as the bridge', () 
   assert.ok(out.includes('return{provider:await efu(e)}}globalThis.__clodeEnsureSnapshot=Bag;'));
 });
 
+// 2.1.243 gave the generator a `storageV5` parameter, which stopped the old
+// `\(\)` anchor dead. Each fixture below is a byte slice cut out of that version's
+// REAL darwin-arm64 bundle around `return{provider:await ` — not a hand-written
+// approximation. All three carry the memoizing wrapper right after the generator,
+// which is what makes the "never the wrapper" assertion below meaningful.
+for (const [version, gen, wrapper] of [
+  ['2.1.241', 'X5v', 'XUf'],   // no-arg generator, memo `Afe.shellConfig??=X5v()`
+  ['2.1.243', 'iqo', 'ozn'],   // storageV5 arrives; memo `jC.shellConfig??=iqo(e)`
+  ['2.1.245', 'iqo', 'ozn'],   // byte-identical shape to 2.1.243 in this window
+]) {
+  test(`patchSnapshotBridge applies to the REAL ${version} bundle shape`, () => {
+    const src = read(`snapshot-gen-${version}.js`);
+    const [out, applied] = ex.patchSnapshotBridge(src);
+    assert.strictEqual(applied, true, `${version}: anchor did not apply`);
+    assert.ok(out.includes(`globalThis.__clodeEnsureSnapshot=${gen};`),
+      `${version}: bridge must expose the generator ${gen}`);
+    // NEVER the memoizing wrapper: pre-warming through it would plant a
+    // storageV5-less shellConfig in the memo that the app then uses all session.
+    assert.ok(!out.includes(`globalThis.__clodeEnsureSnapshot=${wrapper};`),
+      `${version}: bridge must not expose the memoizing wrapper ${wrapper}`);
+    // The memo statement itself must come through untouched.
+    assert.ok(out.includes(`shellConfig??=${gen}(`), `${version}: memo site was disturbed`);
+  });
+}
+
 test('patchSnapshotBridge is fail-loud on absent/ambiguous generator', () => {
-  const gen = read('snapshot-gen-2.1.205.js');
+  for (const v of ['2.1.205', '2.1.241', '2.1.245']) {
+    const gen = read(`snapshot-gen-${v}.js`);
+    assert.strictEqual(ex.patchSnapshotBridge(gen + gen)[1], false, `${v}: doubled must not apply`);
+  }
   assert.strictEqual(ex.patchSnapshotBridge('no generator here')[1], false);
-  assert.strictEqual(ex.patchSnapshotBridge(gen + gen)[1], false);
+  // The storageV5 tail is back-referenced to the generator's own parameter, so a
+  // near-miss that threads someone ELSE's binding is not the generator we mean.
+  assert.strictEqual(
+    ex.patchSnapshotBridge('async function G9(e){let h9=await S9();return{provider:await I9(h9,{storageV5:zz})}}')[1],
+    false);
 });
 
-test('exposed bridge is callable and runs the generator', async () => {
+test('exposed bridge is callable and runs the generator (no-arg shape)', async () => {
   const synth = 'async function G9(){let h9=await S9();return{provider:await I9(h9)}}';
   const [patched, applied] = ex.patchSnapshotBridge(synth);
   assert.strictEqual(applied, true);
@@ -137,6 +216,34 @@ test('exposed bridge is callable and runs the generator', async () => {
   // Field-wise: `got` was constructed in the vm realm, so its prototype differs.
   assert.strictEqual(got.provider, 'snap');
   assert.deepStrictEqual(calls, ['S9', 'I9:zsh']);
+});
+
+// The decision this hook rests on, executed rather than argued: pre-warming must
+// NOT populate the wrapper's memo, so the app still builds its own shellConfig from
+// its own storageV5. Shaped exactly like 2.1.245's generator+wrapper pair.
+test('pre-warming through the bridge leaves the memo for the app (storageV5 fidelity)', async () => {
+  const synth =
+    'async function G9(e){let h9=await S9();return{provider:await I9(h9,{storageV5:e})}}'
+    + 'function W9(e){return M9.shellConfig??=G9(e),M9.shellConfig}';
+  const [patched, applied] = ex.patchSnapshotBridge(synth);
+  assert.strictEqual(applied, true);
+  const seen = [];
+  const ctx = vm.createContext({
+    M9: { shellConfig: null },
+    S9: async () => 'zsh',
+    I9: async (h, o) => { seen.push(o.storageV5); return 'snap'; },
+  });
+  vm.runInContext(patched, ctx);
+
+  await vm.runInContext('globalThis.__clodeEnsureSnapshot()', ctx);
+  assert.deepStrictEqual(seen, [undefined], 'the bridge generates with storageV5 undefined');
+  assert.strictEqual(vm.runInContext('M9.shellConfig', ctx), null,
+    'the pre-warm must NOT occupy the memo the app later fills');
+
+  await vm.runInContext('W9("REAL_STORAGE")', ctx);
+  assert.deepStrictEqual(seen, [undefined, 'REAL_STORAGE'],
+    "the app's own call still runs with the app's own storageV5");
+  assert.notStrictEqual(vm.runInContext('M9.shellConfig', ctx), null);
 });
 
 // --- the DOCTOR_LOAD hook is retired ------------------------------------------

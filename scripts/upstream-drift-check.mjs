@@ -54,6 +54,7 @@
 // content. Prefer checks that would fail if the product stopped working, over
 // checks that confirm a string is still present somewhere in 340MB.
 import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import url from 'node:url';
 
@@ -122,7 +123,11 @@ const EXPECTED = {
   },
   snapshot_generator_present: {
     expect: 'present',
-    why: 'the eager-snapshot bridge would not apply — shell snapshot generation loses its shadow rewrite',
+    why: 'the eager-snapshot bridge would not apply — applet-skew findings go back to appearing only '
+      + 'AFTER the first shell command, so /status and `claude doctor` are empty on a fresh session. '
+      + 'Degraded, not broken: the shadow rewrite and its loud stderr warning live in bun-shim and do '
+      + 'not depend on this anchor. It drifted at 2.1.243 (the generator gained a storageV5 parameter) '
+      + 'and nothing said so, because this row was gated by a substring instead of the real anchor.',
   },
   ripgrep_lever_present: {
     expect: 'present',
@@ -184,39 +189,54 @@ if (undeclared.length) {
   process.exit(1);
 }
 
-// THE CARVE ITSELF. Anchors are necessary but NOT sufficient: they are matched
-// against the WHOLE binary, so they stay green as long as the JS is present as
-// text — even when clode can no longer get at it. That is not hypothetical.
-// 2.1.243 switched Bun to CODE SPLITTING: the CLI became ~1383 `chunk-<hash>.js`
-// ESM modules with no CommonJS entry, `clode build` died at extraction, and THIS
-// JOB REPORTED "OK — all 5 anchors present". Green while the product was dead.
+// CAN CLODE STILL GET AT THE CLI? Anchors are necessary but NOT sufficient: they
+// are matched against the WHOLE binary, so they stay green as long as the JS is
+// present as text — even when clode can no longer reach it. That is not
+// hypothetical. 2.1.243 switched Bun to CODE SPLITTING: the CLI became ~1383
+// `chunk-<hash>.js` ESM modules with no CommonJS entry, `clode build` died at
+// extraction, and THIS JOB REPORTED "OK — all 5 anchors present". Green while the
+// product was dead.
 //
-// So assert the one fact every hook depends on: there is a single CJS block named
-// entrypoints/cli.js to carve. If that is gone, no anchor matters.
+// clode now handles BOTH shapes — a single CJS `entrypoints/cli.js` block to carve
+// (<=2.1.241) or an ESM module graph to relink (2.1.243+, since 92058a3). So the
+// fact to assert is not "carveable" but "extractable by one of the two paths clode
+// actually has", asked of the extractor itself rather than restated here. Restating
+// it is how this check came to describe a world that had moved on: it went on
+// reporting "CANNOT EXTRACT ... users cannot build a target" for releases clode
+// could already build.
 const CLI_BLOCK = /entrypoints\/cli\.js$/;
 const blocks = Array.isArray(cov.bun_cjs_blocks) ? cov.bun_cjs_blocks : null;
 const cliBlock = blocks && blocks.find((b) => CLI_BLOCK.test(String((b && b.name) || '')));
+let split = false;
 if (!cliBlock) {
-  process.stderr.write('upstream-drift: UPSTREAM MOVED — the CLI is no longer carveable\n\n');
+  try {
+    const req = createRequire(import.meta.url);
+    split = req(path.join(REPO, 'libexec', 'extract-claude-js.cjs')).isSplitBundle(bin);
+  } catch (e) {
+    split = false;
+  }
+}
+if (!cliBlock && !split) {
+  process.stderr.write('upstream-drift: UPSTREAM MOVED — clode cannot reach the CLI in this bundle\n\n');
   process.stderr.write(
     blocks
       ? `  bun_cjs_blocks = ${blocks.length} block(s), none named entrypoints/cli.js\n` +
         blocks.slice(0, 6).map((b) => `      name=${JSON.stringify(String((b && b.name) || '(unnamed)'))} size=${(b && b.size) || 0}\n`).join('')
       : '  inspect no longer reports bun_cjs_blocks at all\n');
+  process.stderr.write('  and it is not an ESM module graph either (extract-claude-js isSplitBundle said no)\n');
   process.stderr.write(
     '\n  -> `clode build` CANNOT EXTRACT the CLI from this bundle. Every hook above is\n' +
     '     moot: there is nothing to patch them into. Users cannot build a target.\n');
   process.stderr.write('\nThis is upstream drift, NOT a regression in the commit that ran this job.\n');
   process.stderr.write('Run `node libexec/extract-claude-js.cjs <binary> /tmp/cli.cjs` — it diagnoses\n');
-  process.stderr.write('the new shape and refuses rather than guessing. Fixing it is a real piece of\n');
-  process.stderr.write('work (a code-split bundle needs an ESM relinker, not a carve), not a re-pin.\n');
+  process.stderr.write('the new shape and refuses rather than guessing.\n');
   process.exit(1);
 }
 
 if (!broken.length) {
   process.stdout.write(
     `upstream-drift: OK — all ${Object.keys(EXPECTED).length} anchors as expected, ` +
-    `CLI carveable (${cliBlock.size} bytes)\n`);
+    (cliBlock ? `CLI carveable (${cliBlock.size} bytes)\n` : 'CLI reachable as an ESM module graph\n'));
   process.exit(0);
 }
 

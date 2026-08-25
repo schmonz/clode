@@ -1746,7 +1746,35 @@ uses — should its use be announced rather than silent.
 Related: [[isolate-clode-runs-from-user-deps]] (the existing convention of pointing
 CLODE_DEPS/CLODE_CACHE at temp dirs) and [[dev-box-state-hides-bugs]].
 
-### Hooks under the code-split bundle: 7 of 9 survive untouched; 1 needs a decision
+### Hooks under the code-split bundle: 9 of 9 apply (RESOLVED 2026-08-25)
+
+**snapshot_bridge is fixed, and the investigation found a worse problem underneath.**
+Re-pinned to the GENERATOR, not the memoizing wrapper, on measured evidence: `storageV5`
+reaches the snapshot down exactly one path (plugin bin dirs appended to `export PATH=`),
+the shadow snippets clode's probe reads come from no-argument helpers, upstream's own
+first call passes `undefined`, and `iqo` does not touch the memo that `ozn` sets. So
+pre-warming via the generator stays a throwaway — the semantics the hook shipped with
+through 2.1.241 — while wrapper-pinning would have planted a storageV5-less shellConfig
+in the memo the app uses all session.
+
+**The re-pin alone would not have worked.** Awaiting the bridge does not await the
+snapshot: upstream's shell-provider builder starts generation and returns without
+awaiting the promise, and has done for as long as that shape has existed. Measured:
+`await bridge()` resolved 7ms in having read ZERO findings. So the "eager" step was
+DECORATIVE even on versions where the anchor matched. The splice now also awaits a
+probe signal (`__clodeAwaitSkewProbe`), bounded so a session that never generates a
+snapshot degrades rather than stalls.
+
+**And the gate was lying, again.** `snapshotGeneratorPresent` in inspect gated on the
+substring `return{provider:await ` instead of the real anchor, so it reported the site
+healthy for three releases while the hook was dead. Same shape as patchUpdateHint. Now
+mirrors SNAPSHOT_GEN verbatim.
+
+Verified after integration: the hook applies on 2.1.241 (CJS) and on 2.1.243 and 2.1.245
+(split), all 9 hooks apply on both split bundles, and the drift check is green on all
+three.
+
+### Original entry, kept for the reasoning: 7 of 9 survive untouched; 1 needed a decision
 
 Ran the REAL patch functions from `libexec/extract-claude-js.cjs` against every module of
 the 2.1.245 graph (not coarse signatures — the actual anchors):

@@ -110,9 +110,20 @@ function doctorHookAnchorPresent(data) {
 // RETIRED: upstream 2.1.205 reworked /doctor into a prompt-driven agent command
 // with no load site; the eager work now rides the installation-warnings splice
 // (see _DOCTOR_WARNINGS_ANCHOR above), so no doctor-command-shaped anchor exists.
-const SNAPSHOT_GEN_ANCHOR = 'return{provider:await ';
+//
+// This is a VERBATIM mirror of extract-claude-js.cjs's SNAPSHOT_GEN, and it used
+// to be the loose substring `return{provider:await ` instead. That looseness made
+// this gate LIE: 2.1.243 gave the generator a storageV5 parameter, the real anchor
+// stopped applying, and this check went on reporting the site present on every
+// build for three releases. A gate that says "the patch WOULD apply" has to test
+// the thing that decides whether it applies.
+const _SNAPSHOT_GEN_ANCHOR =
+  /async function (?<gen>[A-Za-z0-9_$]{1,6})\((?<arg>[A-Za-z0-9_$]{0,6})\)\{let (?<h>[A-Za-z0-9_$]{1,6})=await [A-Za-z0-9_$]{1,6}\(\);return\{provider:await [A-Za-z0-9_$]{1,6}\(\k<h>(?:,\{storageV5:\k<arg>\})?\)\}\}/g;
+// No already-patched alternative is needed (unlike _AUTOUPDATER_PATCHED below):
+// patchSnapshotBridge only APPENDS the exposure statement after the generator, so
+// the anchor survives its own patch verbatim.
 function snapshotGeneratorPresent(data) {
-  return countSubstr(data, SNAPSHOT_GEN_ANCHOR) === 1;
+  return [...data.matchAll(_SNAPSHOT_GEN_ANCHOR)].length === 1;
 }
 
 // Mirrors extract-claude-js.cjs AUTOUPDATER_SPAWN (sans the capture groups it

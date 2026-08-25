@@ -192,10 +192,18 @@ const INSTALL_WARNINGS =
   /return\{installationType:.{0,400}?,warnings:(?<arr>[A-Za-z0-9_$]{1,6}),packageManager:/gs;
 
 // JS spliced before the diagnostics return, two steps in order:
-//   1. EAGER ensure: await the snapshot bridge (globalThis.__clodeEnsureSnapshot,
-//      exposed by patchSnapshotBridge below) so snapshot generation — which fires
-//      bun-shim's skew probe — completes BEFORE the findings are read. This is what
-//      makes the skew visible on the FIRST open of every warnings-rendering
+//   1. EAGER ensure, in TWO steps, because one is provably not enough. First await
+//      the snapshot bridge (globalThis.__clodeEnsureSnapshot, exposed by
+//      patchSnapshotBridge below) to START snapshot generation. Then await
+//      globalThis.__clodeAwaitSkewProbe (bun-shim), which resolves when the skew
+//      probe has actually RUN — because upstream's shell-provider builder kicks the
+//      snapshot off and returns the descriptor without awaiting it. MEASURED on a
+//      real quaude built from 2.1.245: with only step one, `await bridge()` resolved
+//      7ms in and read ZERO findings, and the probe's stderr line landed after. Both
+//      steps are guarded and try/caught, and the second is bounded inside the shim,
+//      so a missing bridge, a missing shim signal, or a session that never generates
+//      a snapshot degrades to today's lazy behaviour rather than stalling. This is
+//      what makes the skew visible on the FIRST open of every warnings-rendering
 //      surface (the /doctor screen on <=2.1.204; `claude doctor` terminal and the
 //      /status warnings list on 2.1.205+), not only after the first shell command.
 //      Guarded + try/caught: a missing bridge or a failed generation degrades to
@@ -214,6 +222,8 @@ const INSTALL_WARNINGS =
 function _skewContribution(arr) {
   return (
     'if(globalThis.__clodeEnsureSnapshot)try{await globalThis.__clodeEnsureSnapshot()}catch(__clodeErr){};'
+    + 'if(globalThis.__clodeEnsureSnapshot&&globalThis.__clodeAwaitSkewProbe)'
+    + 'try{await globalThis.__clodeAwaitSkewProbe()}catch(__clodeProbeErr){};'
     + 'globalThis.__clodeDoctor&&globalThis.__clodeDoctor.appletSkew&&'
     + 'globalThis.__clodeDoctor.appletSkew.forEach(function(__clodeSkw){' + arr + '.push({'
     + 'issue:"host "+__clodeSkw.applet+" rejects flags clode\\u2019s bundled /"+__clodeSkw.name+" uses \\u2014 "+__clodeSkw.why,'
@@ -242,12 +252,39 @@ function patchDoctorWarnings(body) {
 // (ARGV0=${...} "$_cc_bin" -S dfs ...), so they only exist once the snapshot script
 // is generated.
 //
-// One anchor, best-effort + fail-loud: SNAPSHOT_GEN — the no-arg generator
-// `async function G(){let h=await S();return{provider:await I(h)}}`. Expose it as
-// globalThis.__clodeEnsureSnapshot, set when its (eagerly-initialized) module body
-// runs. The CONSUMER of the bridge is the _skewContribution splice above: the
-// diagnostics builder awaits the bridge before reading findings, so generation
-// (and the probe) completes before any surface renders warnings.
+// One anchor, best-effort + fail-loud: SNAPSHOT_GEN — the GENERATOR
+// `async function G(){let h=await S();return{provider:await I(h)}}` (<=2.1.241) or
+// `async function G(v){let h=await S();return{provider:await I(h,{storageV5:v})}}`
+// (2.1.243+). Expose it as globalThis.__clodeEnsureSnapshot, set when its
+// (eagerly-initialized) module body runs. The CONSUMER of the bridge is the
+// _skewContribution splice above: the diagnostics builder awaits the bridge before
+// reading findings, so generation (and the probe) completes before any surface
+// renders warnings.
+//
+// WHY THE GENERATOR AND NOT ITS MEMOIZING WRAPPER. Right beside the generator sits
+// `function W(v){return S.shellConfig??=G(v),S.shellConfig}` — the wrapper every
+// upstream caller actually uses, memoized on a module-level slot. Pinning THAT
+// would look tidier (one snapshot instead of two) and would be wrong: the bridge
+// has no storageV5 to pass, so a pre-warm through the wrapper would plant a
+// storageV5-less shellConfig in the memo and the app would then use OUR snapshot
+// for the rest of the session. MEASURED on 2.1.245 (chunk-ctcq7phx.js): storageV5
+// reaches the snapshot script through exactly one path — `P(shell, storageV5)`
+// feeds it to the plugin-bin-path lookup and appends the result to the snapshot's
+// `export PATH=`. Nothing else reads it; the rg/find/grep/pkill shadow snippets
+// (the ONLY thing clode's skew probe looks at) are built from no-argument helpers.
+// So wrapper-pinning trades "the probe fires early" for "plugin bin dirs may go
+// missing from the PATH of every Bash command in the session" — a silent fidelity
+// divergence, which is the one thing this repo will not buy convenience with.
+// Pinning the generator keeps the pre-warm a THROWAWAY: `??=` still sees an unset
+// slot, the app builds its own shellConfig from its own storageV5, and clode's
+// snapshot is generated, probed, and unlinked at exit. That is also exactly the
+// semantics this hook shipped with through 2.1.241, where the generator took no
+// argument and the wrapper memoized just the same — so this is a diff-REDUCING
+// re-pin, not a new design.
+//
+// Cost of the throwaway: one extra `$SHELL -c -l` at the moment a warnings surface
+// first renders (not at every startup — the diagnostics builder is only reached by
+// /status, `claude doctor`, and the <=2.1.204 /doctor screen).
 //
 // HISTORY: through 2.1.204 a second anchor (DOCTOR_LOAD) chained the ensure-step
 // onto the /doctor command's `load:()=>Promise.resolve().then(...)`. Upstream
@@ -267,13 +304,20 @@ function patchDoctorWarnings(body) {
 // to lazy behavior — no regression.
 //
 // Short minified-id bounds ({1,6}) keep the anchor a tight linear scan over
-// minified names without matching across unrelated code.
+// minified names without matching across unrelated code. `arg` is {0,6} so the
+// SAME anchor covers the pre-2.1.243 no-argument generator and the 2.1.243+
+// one-argument one; the storageV5 tail is optional AND back-referenced to `arg`,
+// so it can only match the generator that threads its own parameter through — an
+// arbitrary `{storageV5:x}` in some other function will not do.
 const SNAPSHOT_GEN =
-  /async function (?<gen>[A-Za-z0-9_$]{1,6})\(\)\{let (?<h>[A-Za-z0-9_$]{1,6})=await [A-Za-z0-9_$]{1,6}\(\);return\{provider:await [A-Za-z0-9_$]{1,6}\(\k<h>\)\}\}/g;
+  /async function (?<gen>[A-Za-z0-9_$]{1,6})\((?<arg>[A-Za-z0-9_$]{0,6})\)\{let (?<h>[A-Za-z0-9_$]{1,6})=await [A-Za-z0-9_$]{1,6}\(\);return\{provider:await [A-Za-z0-9_$]{1,6}\(\k<h>(?:,\{storageV5:\k<arg>\})?\)\}\}/g;
 
 // Expose the snapshot generator as globalThis.__clodeEnsureSnapshot (the bridge
-// the _skewContribution splice awaits). Returns [body, applied]; applied is false
-// (body unchanged) unless the anchor matches exactly once.
+// the _skewContribution splice awaits). The bridge is called with no arguments, so
+// on 2.1.243+ the generator sees storageV5 === undefined; see the comment above for
+// why that is the correct trade (and MEASURED on a real 2.1.245 quaude: upstream's
+// own first call on a plain session passes undefined too). Returns [body, applied];
+// applied is false (body unchanged) unless the anchor matches exactly once.
 function patchSnapshotBridge(body) {
   const gens = [...body.matchAll(SNAPSHOT_GEN)];
   if (gens.length !== 1) return [body, false];

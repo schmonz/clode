@@ -190,7 +190,7 @@ test('transformGraph reports every hook by name, so a silent skip is impossible'
   ]);
 });
 
-test('a real split bundle patches all hooks but the known snapshot-bridge gap', provOpts, () => {
+test('a real split bundle patches every hook', provOpts, () => {
   let checked = 0;
   for (const bin of PROVIDERS) {
     const mods = loadGraph(bin);
@@ -199,8 +199,10 @@ test('a real split bundle patches all hooks but the known snapshot-bridge gap', 
     if (full.rows.filter((r) => r.loader === 1)[0].moduleFormat !== 2) {
       const plan = planGraph(mods, full.entryName);
       const { report } = transformGraph(plan.sources);
+      // No hook is exempt. snapshot_bridge used to be skipped here while its
+      // anchor was stale for 2.1.243+; re-pinning it (storageV5 parameter) closed
+      // that gap, and a skip is exactly how a dead hook stays dead unnoticed.
       for (const r of report) {
-        if (r.key === 'snapshot_bridge') continue;   // drifted upstream; see BACKLOG
         assert.strictEqual(r.applied, true, `${bin}: hook ${r.key} did not apply: ${r.why}`);
       }
       checked++;

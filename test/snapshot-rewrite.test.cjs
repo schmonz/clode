@@ -469,3 +469,26 @@ test('generated find explains a known skew at the point of use', { skip: SH_SKIP
   assert.match(r.stderr, /known applet skew/);
   assert.match(r.stderr, /Oniguruma/);
 });
+
+// --- awaitSkewProbe: "the probe has run", the signal the doctor splice waits on ---
+// Why this exists at all: the splice's `await globalThis.__clodeEnsureSnapshot()`
+// only STARTS snapshot generation. Upstream's shell-provider builder kicks the
+// snapshot off and returns the descriptor without awaiting it (same shape on
+// 2.1.241 and 2.1.245), so on a real quaude built from 2.1.245 that await resolved
+// 7ms in having read ZERO findings, and the probe's warning landed afterwards. The
+// shim owns the probe, so the shim is what can say when the findings are final.
+// The bounded-deadline half lives in test/skew-probe-signal.test.cjs, which needs a
+// process where nothing has been intercepted yet — by the time the tests above have
+// run, this one HAS intercepted a real snapshot, which is exactly what it asserts.
+const { awaitSkewProbe } = require('../libexec/bun-shim.cjs');
+
+test('a REAL intercepted snapshot latches the skew-probe signal', { skip: SH_SKIP }, async () => {
+  // Not a hand-set flag: the tests above ran a genuine snapshot command through the
+  // patched child_process, which is the only thing that sets this. If interception
+  // ever stops calling _markSnapshotProbed, the doctor splice silently goes back to
+  // serving out its deadline and reading zero findings — so assert the wiring, from
+  // the outside, on the real path.
+  const t0 = Date.now();
+  assert.strictEqual(await awaitSkewProbe(5000), true);
+  assert.ok(Date.now() - t0 < 1000, 'an already-probed process must resolve immediately');
+});
