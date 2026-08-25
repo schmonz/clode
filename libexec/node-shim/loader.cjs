@@ -201,7 +201,7 @@ const INTERNAL_DIR = P.join(P.dirname(SHIM_DIR), 'internal');
 // binding's textual distance from its use here is fine.
 let installProbe;
 const builtinCache = new Map();
-const KNOWN = ['assert','buffer','child_process','crypto','events','fs','fs/promises','module','net','os','path','path/win32','path/posix','process','stream','stream/consumers','stream/promises','string_decoder','tls','tty','url','util','v8','vm','zlib','sea','readline','http','https','dgram','worker_threads','async_hooks','inspector','constants','querystring','timers','timers/promises','dns','dns/promises','http2','perf_hooks','diagnostics_channel','sqlite'];
+const KNOWN = ['assert','buffer','child_process','crypto','events','fs','fs/promises','module','net','os','path','path/win32','path/posix','process','stream','stream/consumers','stream/promises','string_decoder','tls','tty','url','util','util/types','v8','vm','zlib','sea','readline','http','https','dgram','worker_threads','async_hooks','inspector','constants','querystring','timers','timers/promises','dns','dns/promises','http2','perf_hooks','diagnostics_channel','sqlite'];
 function loadBuiltin(name) {
   if (builtinCache.has(name)) return builtinCache.get(name);
   // Builtin subpaths (`<mod>/<sub>`: fs/promises, timers/promises, path/win32,

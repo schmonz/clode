@@ -45,6 +45,36 @@ var IMPORT_RES = [
   /\bimport\s+[A-Za-z0-9_$]+\s*from\s*"((?:[^"\\]|\\.)*)"/g,
 ];
 
+// IS THIS A MODULE SPECIFIER, OR PROSE THAT CONTAINS THE WORD `import`?
+//
+// The regexes below scan MINIFIED TEXT with no way to tell code from string contents,
+// and this bundle is full of strings that look like code: skill documentation with
+// ``| `import` | Call ...``, a vendored JavaScript parser whose own source discusses
+// `parseDynamicImport`, CSS specifiers inside template literals. Without this filter,
+// externalsOf() produced 75 "externals" of which about 40 were fragments like
+// `,relevance:2},e.C_LINE_COMMENT_MODE,...`. They generated harmless unused shims, so
+// the build still passed — which is exactly why it went unnoticed until the shim's
+// KNOWN list was compared against them.
+//
+// The filter is deliberately CONSERVATIVE, and it is safe in one direction only, by
+// design: a real specifier wrongly excluded fails LOUDLY at compile time ("could not
+// load 'X'", naming it), because the engine resolves imports as it compiles. A junk
+// specifier wrongly included costs one unused shim. So the engine is the backstop and
+// this only has to be good enough to keep the noise out.
+//
+// Real specifiers are bare names, scoped packages, subpaths, or relative paths — never
+// containing whitespace, braces, quotes, backticks or `$`.
+var SPECIFIER_OK = /^(?:@[A-Za-z0-9._-]+\/)?[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
+var SPECIFIER_MAX = 128;
+function isPlausibleSpecifier(spec) {
+  if (typeof spec !== 'string' || !spec.length || spec.length > SPECIFIER_MAX) return false;
+  if (spec.charAt(0) === '/' || spec.slice(0, 2) === './' || spec.slice(0, 3) === '../') {
+    // Relative and absolute paths: same charset rule, applied to the whole thing.
+    return /^[A-Za-z0-9._\/-]+$/.test(spec);
+  }
+  return SPECIFIER_OK.test(spec);
+}
+
 // Static dependencies of `src` that are themselves modules in the graph.
 function depsOf(src, inGraph) {
   var out = [], seen = {}, i, re, m;
@@ -68,7 +98,7 @@ function externalsOf(mods) {
     src = mods.get(name);
     re = /\bimport\s*\{([^}]*)\}\s*from\s*"((?:[^"\\]|\\.)*)"/g;
     while ((m = re.exec(src))) {
-      if (mods.has(m[2])) continue;
+      if (mods.has(m[2]) || !isPlausibleSpecifier(m[2])) continue;
       var set = want(m[2]);
       parts = m[1].split(',');
       for (i = 0; i < parts.length; i++) {
@@ -78,7 +108,10 @@ function externalsOf(mods) {
     }
     for (i = 0; i < IMPORT_RES.length; i++) {
       re = new RegExp(IMPORT_RES[i].source, 'g');
-      while ((m = re.exec(src))) { spec = m[1]; if (!mods.has(spec)) want(spec); }
+      while ((m = re.exec(src))) {
+        spec = m[1];
+        if (!mods.has(spec) && isPlausibleSpecifier(spec)) want(spec);
+      }
     }
   }
   return ext;
@@ -153,5 +186,5 @@ function planGraph(mods, entry) {
 }
 
 if (typeof module === 'object' && module.exports) {
-  module.exports = { planGraph, planOrder, externalsOf, shimSource, depsOf };
+  module.exports = { planGraph, planOrder, externalsOf, shimSource, depsOf, isPlausibleSpecifier };
 }

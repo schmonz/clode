@@ -135,6 +135,13 @@ function stripVTControlCharacters(str) {
 module.exports = {
   format, formatWithOptions, promisify, callbackify, inherits, inspect: inspect1, isDeepStrictEqual,
   debuglog, debug: debuglog, deprecate, stripVTControlCharacters,
-  types: { isDate: (v) => v instanceof Date },
+  // util.types. The code-split bundle (2.1.243+) imports `isProxy` from `util/types`.
+  // quickjs exposes no way to detect a Proxy from JS — node's own isProxy reads a V8
+  // internal — so this reports false. That is the SAFE direction: every caller we can
+  // see uses it to decide whether to avoid touching a value during inspection, and
+  // "not a proxy" makes them take the ordinary path. A throwing stub would break
+  // rendering for merely asking. If a caller ever needs a true answer this becomes a
+  // real wall, and it should fail loudly then rather than lie more elaborately.
+  types: { isDate: (v) => v instanceof Date, isProxy: () => false },
   TextEncoder: globalThis.TextEncoder, TextDecoder: globalThis.TextDecoder,
 };
