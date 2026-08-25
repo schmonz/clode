@@ -1707,6 +1707,24 @@ path. In a declared build (CMake or otherwise) the extractor's OUTPUTS and build
 INPUTS are both named, and a producer that stops producing is an error at generate time,
 before a single byte is compiled.
 
+**THE BLAST RADIUS IS BIGGER THAN naude, and CI spelled it out.** Five jobs fail on
+`62df154`, all from the one missing capability — nothing can produce a single linkable
+`cli.cjs` from a code-split graph:
+
+    native-builder-oracle      build-naude: --cli path does not exist
+    node-shim-oracle           agentic Bash + Edit round-trips, API-surface gate,
+    node-shim-oracle-darwin      "extractor byte-identical tjs vs node"
+    windows-amd64-tests        same agentic round-trips
+    windows-arm64-tests
+
+So it is not "the reference build is down", it is **the entire oracle apparatus is down**
+— the agentic round-trips, the shim parity gate, and the tjs-vs-node extractor
+differential all stage a single `cli.cjs` and all now hit the code-split refusal. The
+thing we would use to check whether the new build path is FAITHFUL is the thing the new
+build path broke, and we shipped the build path anyway because its own smoke was green.
+That is worth stating as a property: **a change that disables the oracle must be treated
+as unverified, not as verified-by-the-remaining-tests.**
+
 **And there is no local target that builds BOTH products.** clode makes exactly two things
 — quaude and naude — and the dev loop builds one of them. I found this only because I
 happened to build a naude to check something unrelated. That is not a process.

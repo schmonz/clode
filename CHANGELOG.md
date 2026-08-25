@@ -38,7 +38,7 @@ Data written to a stream before anything was listening was dropped.
 
 Editing an existing file could fail with a bare "not a function". Plugin hooks were installed without the execute bit, which surfaced as "SessionStart hook error". `/heapdump` produced a stream where bytes were required. Search now translates every `ripgrep` call the bundle makes, including `--files`, and never quietly hands your query to a `ripgrep` that happens to be installed on your machine.
 
-Three bugs in path handling, one in deep equality, and one in value formatting that could throw while printing an error — all found by running Node's own test suite against the compatibility layer, which is now how we measure it.
+Three bugs in path handling, one in deep equality, and one in value formatting that could throw while printing an error.
 
 ### Building and updating
 
@@ -47,8 +47,6 @@ Fixed a regression where `quaude` binaries cross-built with `clode build --targe
 Every release before this one silently dropped engine source patches, because regenerating bytecode was opt-in. It is now the default, with a checksum that fails the build if it is skipped.
 
 `clode` actually intercepts update attempts, which we had believed it already did. A `quaude` could try to install Claude Code over itself — both on its own, and when you ran `quaude update`, which said it would not and then did.
-
-Daily-drive fidelity against Claude Code on Node is now measured rather than assumed, and three targets clear the bar: macOS on Apple silicon, Windows on x86-64, and NetBSD on ARM64.
 
 ### Known issue
 
