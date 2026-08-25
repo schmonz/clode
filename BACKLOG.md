@@ -1705,6 +1705,62 @@ measuring device first. [[instruments-lie-check-them-first]]. The tell was avail
 before any investigation — the extractor reports every hook it fails to apply, and it had
 reported nothing.
 
+## ★★ Our own package pins — stop betting a release on 13 third-party repos (2026-08-25)
+
+**The user, on the dragonfly hang:** "I wonder if it's a package-repo communication
+problem. In which case like with Haiku I wonder if we should start having our own tiny
+package mirrors with the handful of things we need."
+
+**Confirmed for the earlier failure the same day**, which was not a hang but this:
+
+    Updating Avalon repository catalogue...
+    pkg: An error occurred while fetching package: No error
+    repository Avalon has no meta file, using default settings
+    Unable to update repository Avalon
+    Error updating repositories!                          -> exit 3
+
+Same step as the 68-minute hang later that day, so the hang is plausibly the same fetch
+failing to RETURN rather than failing to work.
+
+**THE EXPOSURE IS 13 LEGS, and the thing they need is tiny.** 13 of the legs in
+scripts/tjs-legs.mjs install guest packages, and the distinct set across all of them is
+essentially five things wearing different names per platform:
+
+    cmake (8)  gmake (8)  bash (8)  node (6)  git (5)
+    ... plus omnios/IPS spellings: developer/build/cmake, developer/versioning/git,
+        developer/build/gnu-make, runtime/nodejs, shell/bash
+
+So every release is 13 independent bets that someone else's repo is up, answering, and
+still carrying the version we asked for. The code already knows the last part is false —
+`(2026Q1 will eventually be pruned from the mirror)` is a comment in build-leg today.
+This is the same class as the Haiku blocker: our build depends on hosting we do not own
+and cannot fix. See [[haiku-image-guest-is-superseded]].
+
+**RECOMMENDATION: pin, don't mirror.** Mirroring whole repos means per-platform catalogue
+formats, signing, and pruning — a lot of surface for five packages. Instead:
+
+1. **A package PIN store**, one per leg: the exact package files that leg installs, with
+   sha256, fetched once and kept in durable storage we control. The templates blob is
+   already exactly this shape (one blob + manifest + range fetch, `CLODE_TEMPLATES_BLOB`
+   for offline), so it is a pattern this repo has already proven rather than a new idea.
+2. **Populate deliberately, never during a release.** A separate job refreshes pins and
+   is ALLOWED to fail loudly; a release build installs from pins only. Today the fetch
+   and the build are the same step, which is why a repo outage is a release outage.
+3. **Fail loudly on a miss**, naming the package and how to repopulate — never a silent
+   fall back to the network mid-release, which would restore exactly the flakiness this
+   removes.
+4. **One mechanism for all 13**, per [[solve-it-portably-not-per-platform]]. The per-leg
+   package NAMES already live in tjs-legs.mjs, so the input is a single source already.
+
+**Second prize, if the above is too much for now:** cache the fetched packages by
+leg+package-set. Cheaper, and it makes a repeat build immune — but GitHub cache eviction
+means a cold release still rides on upstream, so it fixes the common case and not the one
+that matters. Worth stating so the choice is deliberate rather than accidental.
+
+**A pin store also buys reproducibility**, not just uptime: today two builds of the same
+commit can install different package versions and we would not know. That is a fidelity
+question hiding inside an availability question.
+
 ## dragonflybsd-amd64 hangs, and its 90-minute default timeout hides it (2026-08-25)
 
 MEASURED across 25 recent runs: a healthy dragonfly leg finishes in **2.8-5.9 minutes**
