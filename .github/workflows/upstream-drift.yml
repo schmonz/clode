@@ -98,18 +98,25 @@ jobs:
   #
   # THE THIRD DAILY QUESTION: what is COMING?
   #
-  # The two jobs around this one both test `latest`, so the earliest they can tell us
-  # anything is the day every user is already broken. That is what happened with 2.1.243:
-  # it landed as `latest`, killed `clode build`, and we found out because a release dry
-  # run failed. Upstream has since pulled .243 back off `latest` but did NOT revert the
-  # change — 2.1.245 sits on `next` with the same code-split shape. `next` is the only
-  # advance warning we get, so we watch it.
+  # The two jobs around this one test `latest`, so the earliest either can speak is the
+  # day every user is already broken. That is exactly how 2.1.243 went: it landed as
+  # `latest`, killed `clode build`, turned 19 legs red, and we found out because a release
+  # dry run failed. Upstream has since pulled .243 back off `latest` but did NOT revert
+  # the change — 2.1.245 sits on `next` with the same code-split shape. `next` is the only
+  # advance warning we get.
   #
-  # This job is GREEN today even though `next` is broken for us, and that is deliberate:
-  # see the long note in scripts/upstream-next-watch.mjs. It asserts the KNOWN state and
-  # fires when the state CHANGES — `next` becoming carveable again, or failing in a NEW
-  # way. A permanently-red job is not a warning, it is furniture, and ambient red is how
-  # a P0 hid in this repo for days.
+  # IT IS THE SAME CHECK, POINTED AT `next`. Carveable is green; not carveable is red.
+  #
+  # An earlier version of this job asserted the KNOWN state instead — "uncarveable, as
+  # recorded" counted as GREEN, on the theory that a permanently-red job is furniture.
+  # That was wrong, and worth recording so nobody rebuilds it. Green means the product
+  # works. We cannot carve `next`, so `clode build` is broken for anyone on that channel
+  # RIGHT NOW; calling that green makes the check a map that disagrees with the territory,
+  # and "it buys time" buys nothing at all. The user's words: "If we can carve, we can
+  # carve. That's green."
+  #
+  # So THIS JOB IS RED TODAY, on purpose, and it stays red until the relinker lands. The
+  # remedy is to fix the product, never to soften the check.
   next-channel:
     runs-on: ubuntu-latest
     permissions:
@@ -121,7 +128,7 @@ jobs:
           node-version-file: .tool-versions
       - name: Install the `next` Claude Code
         run: npm i -g @anthropic-ai/claude-code@next 2>&1 | tail -3
-      - name: Has the shape of what is coming changed?
+      - name: Can clode still build from what is coming?
         run: |
           set -euo pipefail
           VER="$(npm view @anthropic-ai/claude-code@next version)"
@@ -129,7 +136,7 @@ jobs:
           PROV="$(node scripts/find-provider.mjs)"
           # Same rule as the anchors job: "we could not check" is not "nothing changed".
           if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found for @next" >&2; exit 1; fi
-          node scripts/upstream-next-watch.mjs "$PROV"
+          node scripts/upstream-drift-check.mjs "$PROV"
 
   # linux-x64-musl deliberately: an alpine container, no qemu, and the engine comes
   # from the same PINS+patches cache the push legs use, so the marginal cost is the
