@@ -1684,8 +1684,46 @@ touch it.
 | part | verdict |
 |---|---|
 | trailer scan, module-table decode, topo sort, archive assembly, sha256 | yes, comfortably — C's home turf, and `bun-graph.cjs` is already written in that idiom (Uint8Array, integer math) so it could move |
-| the 68 anchors and splices | the crux against. Regex over 28MB of someone else's minified JS, and the component where EVERY fidelity failure this year originated. Moving the most error-prone third into the slowest edit loop, duplicated against inspect-claude-bundle's mirrored anchors |
+| the 68 anchors and splices | see the CORRECTION below — my "slow edit loop" objection was measured and is false, and dropping it turns this row from the crux AGAINST into an argument FOR |
 | bytecode compilation | neither — it is the engine's API wherever it lives (but see below) |
+
+**CORRECTION (user, same day): the "slow edit loop" objection is false — measured.**
+
+I claimed moving the anchors to C meant "the slowest edit loop". The user's counter was
+that anchors and splices can be their own `anchors-and-splices.so`, relinked incrementally.
+Measured on this box, a realistic stand-in for that component (2000 lines, 68 pattern
+sites plus splice helpers):
+
+    cc -O2 -fPIC -shared   full build   0.15s
+                           relink after a one-line edit   0.10s
+
+That is faster than Node's own startup. The objection was an assertion I had never
+tested — the exact failure mode this session kept finding elsewhere. Withdrawn.
+
+**AND DROPPING IT SURFACES A BETTER ARGUMENT FOR C, which I had not made.** The anchors
+exist TWICE today, by hand:
+
+    libexec/extract-claude-js.cjs      17 anchor definitions
+    libexec/inspect-claude-bundle.cjs  18 hand-written MIRRORS
+
+The mirroring is documented in that file's own comments ("a VERBATIM mirror of
+extract-claude-js.cjs's SNAPSHOT_GEN", "in lockstep with extract-claude-js.cjs"). It is
+not hypothetical drift: `snapshotGeneratorPresent` gated on a SUBSTRING NEAR the anchor
+instead of the anchor, so it reported the site healthy for three releases while the hook
+was dead — one of the four instrument failures of 2026-08-25.
+
+A shared `anchors-and-splices` library, linked by both the extractor and the inspector,
+makes that duplication structurally impossible. That is a LINEARITY win of the kind the
+★★★ overhaul is actually for — one place answers the question — and it is available
+whether the library is C or JS, but C is what makes it natural to link from a CMake
+build.
+
+**What genuinely remains as a cost:** the one-time port of 68 anchors across a regex
+dialect boundary (JS named groups and backreferences to PCRE), on the most
+fidelity-critical strings in the project. Mitigable, and the mitigation is obvious
+because we have the bundles: run both implementations over real 2.1.210/.215/.218/.241/
+.243/.245 binaries and require identical match sets before switching. That is a
+differential test, not a leap.
 
 **ARGUMENTS FOR C THAT SURVIVED SCRUTINY (user's, and stronger than my first answer):**
 
