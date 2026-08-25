@@ -1705,6 +1705,42 @@ measuring device first. [[instruments-lie-check-them-first]]. The tell was avail
 before any investigation — the extractor reports every hook it fails to apply, and it had
 reported nothing.
 
+## dragonflybsd-amd64 hangs, and its 90-minute default timeout hides it (2026-08-25)
+
+MEASURED across 25 recent runs: a healthy dragonfly leg finishes in **2.8-5.9 minutes**
+(n=9 successes) and a genuine failure lands in ~1.4. The leg declares no `timeout` in
+scripts/tjs-legs.mjs, so it inherits the 90-minute default in tjs-legs.yml — and one
+observed job ran 160 minutes.
+
+It hung THREE TIMES today. On the 2026-08-25 release-gate run it sat at step 4
+(`build-leg`) for 68+ minutes with every other leg green, and because the oracle and
+Windows jobs are `needs: tjs`, they had not even been CREATED. One flaky VM leg was
+holding the whole verdict, and the only way to learn that was to compare elapsed time
+against history by hand.
+
+**Two separate to-dos, and the second is the durable one.**
+
+1. Find out WHY it hangs. It hangs before producing log output we can read (GitHub does
+   not serve logs for an in-progress job), so the first move is making it say something:
+   a heartbeat, or `set -x` in the guest bootstrap, so a hang has a last known position.
+   Suspect the same mirror flakiness that failed it earlier today, but that is a guess
+   and should be labelled one until measured.
+2. Give it a timeout matched to its measured behaviour — 20 minutes is >3x the slowest
+   success. A 90-minute ceiling on a 6-minute job does not report a hang, it just delays
+   the report by 84 minutes, and everything downstream waits. Check first whether any
+   success in the sample was a COLD cache build; if cold builds are legitimately longer,
+   the number should cover those, not just the warm case.
+
+Generalises past this leg: **no leg should inherit a default timeout an order of magnitude
+larger than its measured runtime.** That is a silent-until-late failure mode across the
+matrix, and it is the kind of thing a per-leg `timeout` field derived from observed
+duration would fix everywhere at once. Related doctrine:
+[[ci-job-is-to-tell-the-truth]] — a check that takes 90 minutes to tell you what it knew
+at minute 7 is not telling the truth promptly.
+
+NOT LANDED YET, deliberately: changing CI config now would cancel the in-flight
+release-gate run, which is 29/30 green.
+
 ## ENGINE BUG — evalBytecode on a COMPILED module aborts; only a deserialized one is safe (2026-08-25)
 
 Found while building the graph runner. Compile a large ES-module graph in-process and hand
