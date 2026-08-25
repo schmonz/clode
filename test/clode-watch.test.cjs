@@ -31,8 +31,26 @@ const NODE = process.env.CLODE_NODE || process.execPath;
 const REAL_STORE = path.join(
   process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'),
   'clode');
-const HAVE_SEMVER = fs.existsSync(path.join(REAL_STORE, 'node_modules', 'semver'));
-const semverOpts = { skip: HAVE_SEMVER ? false : 'semver ext-dep not installed' };
+// WHERE semver ACTUALLY LIVES. clode-watch resolves it from EITHER the shared store
+// (CLODE_DEPS / XDG_DATA_HOME) or a sibling deps/claude/node_modules — see
+// libexec/clode-watch.cjs:54-56. This gate used to check ONLY the store, and that made
+// the suite's coverage depend on mutable machine state OUTSIDE the repo:
+//
+//   * CI populates deps/claude/node_modules (`npm ci --prefix deps/claude`) and NEVER
+//     the shared store, so all 16 of these tests SKIPPED IN CI — silently, forever.
+//   * On a dev box they run only if something happened to have primed the store. Two of
+//     them were asserting pre-1af2027 wording and passing for months by not running; they
+//     failed the instant an unrelated `clode build` created ~/.local/share/clode at
+//     01:13 on 2026-08-25.
+//
+// So the gate now mirrors the resolution order of the code under test. A test whose
+// coverage turns on and off with machine state is not a test, it is a coin flip.
+const SEMVER_SRC = [
+  path.join(REAL_STORE, 'node_modules', 'semver'),
+  path.join(__dirname, '..', 'deps', 'claude', 'node_modules', 'semver'),
+].find((p) => fs.existsSync(p)) || null;
+const HAVE_SEMVER = SEMVER_SRC !== null;
+const semverOpts = { skip: HAVE_SEMVER ? false : 'semver ext-dep not installed (store or deps/claude)' };
 
 function tmpdir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'clode-watch-'));
@@ -76,7 +94,7 @@ function watchFixture(latest, current, tier) {
     CLODE_CHANGELOG_URL: 'file://' + path.join(repo, 'CHANGELOG.md'),
     CLODE_PROVIDERS: providers,
     // Pin the real store so semver resolves.
-    CLODE_DEPS: REAL_STORE,
+    CLODE_DEPS: path.dirname(path.dirname(SEMVER_SRC)),
   };
   const notice = path.join(watchDirPath, 'watch-notice');
   return { tmp, env, notice, watchDirPath, providers };
@@ -94,7 +112,7 @@ function readNotice(p) {
 // --- versionGt (real semver) ------------------------------------------------
 
 test('versionGt uses real semver: greater, equal, lesser, prerelease', semverOpts, () => {
-  const env = { CLODE_DEPS: REAL_STORE };
+  const env = { CLODE_DEPS: path.dirname(path.dirname(SEMVER_SRC)) };
   const o = { env };
   assert.strictEqual(versionGt('2.0.0', '1.9.9', o), true);
   assert.strictEqual(versionGt('2.1.10', '2.1.9', o), true);
@@ -134,7 +152,7 @@ test('versionGt resolves semver via a sibling deps/claude/node_modules (source c
   const appNm = path.join(tmp, 'app', 'deps', 'claude', 'node_modules');
   fs.mkdirSync(appBin, { recursive: true });
   fs.mkdirSync(appNm, { recursive: true });
-  fs.cpSync(path.join(REAL_STORE, 'node_modules', 'semver'),
+  fs.cpSync(SEMVER_SRC,
     path.join(appNm, 'semver'), { recursive: true });
   const env = { CLODE_DEPS: path.join(tmp, 'empty'), XDG_DATA_HOME: path.join(tmp, 'empty') };
   assert.strictEqual(versionGt('2.0.0', '1.0.0', { env, here: appBin }), true);

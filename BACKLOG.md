@@ -1615,6 +1615,52 @@ was the first, `os.constants.errno` in 2.1.238), and both times we found out by 
 
 ## ★★★ NEXT: a clear, clean, well-factored, fully cross build (2026-08-24)
 
+### Coverage that turns on and off with machine state (root-caused 2026-08-25)
+
+**Concrete instance, fixed:** `test/clode-watch.test.cjs` gated 16 tests on
+`existsSync(~/.local/share/clode/node_modules/semver)` — the SHARED USER STORE, outside
+the repo. CI populates `deps/claude/node_modules` (`npm ci --prefix deps/claude`) and
+never that store, so **all 16 skipped in CI, silently, forever**. On a dev box they ran
+only if something had happened to prime the store.
+
+Two of them asserted pre-`1af2027` wording ("Node-impacting" vs "repackaging-impacting")
+and had been passing for months BY NOT RUNNING. They failed the instant an unrelated
+`clode build` created the store at 01:13 on 2026-08-25 — i.e. the suite's answer changed
+because of something no one did to the repo.
+
+Fixed by making the gate mirror the resolution order of the code under test
+(`libexec/clode-watch.cjs:54-56` checks the store OR the sibling `deps/claude`), so the
+tests now RUN in CI. Verified both ways: 25/25 with the store present, 25/25 with
+`XDG_DATA_HOME` pointed at an empty dir.
+
+**The general problem, which is NOT fixed and belongs to this overhaul.** At least eight
+test files gate on state outside the repo (`REAL_STORE`, `XDG_DATA_HOME`, `homedir()`):
+
+    clode-deps  clode-paths  clode-watch  e2e-self_update
+    guard-subcommands-gate  e2e-ctrlz-tui  inspect  clode-resolve
+
+Nobody knows which of them run in CI, which run on a given dev box, or which have been
+quietly passing by not running. `npm test` reporting `60 skipped` is not information —
+it is a number that changes with the weather.
+
+What this wants, in rough order of value:
+
+1. **A skip census.** Print WHY each skip fired and WHERE the gate looked, so a skip is
+   attributable instead of anonymous. Today a skipped test and a passing test are
+   indistinguishable in the summary.
+2. **Gates that mirror the code under test**, as the clode-watch fix does — never a
+   single hard-coded location when the product checks several.
+3. **A CI assertion on the skip COUNT** (or better, the skip SET), so coverage silently
+   shrinking is a failure. Same shape as the exact-count rule that keeps
+   `test/windows-path-ratchet.test.cjs` honest.
+4. Longer term, and the real fix: make the suite hermetic enough that these gates are
+   unnecessary — which is the same direction as [[node-only-as-oracle]] and the existing
+   hermeticity roadmap.
+
+Related doctrine already in the repo: "a skipped oracle is not a pass"
+(.github/workflows/ci.yml), and the ambient-red P0 below. This is the third time in two
+days that the SUITE, not the product, was the thing lying.
+
 **User directive, and it gates further feature work:** *"I'm tired of the build being so
 baroque as to become opaque. We have to have a clear clean well factored fully cross
 build before we go any further"* — **including extracting dependencies to standalone
