@@ -906,6 +906,62 @@ function extractToFile(binpath, out) {
   return { name: entry.name, bytes: text.length };
 }
 
+// --- staging a CODE-SPLIT bundle ----------------------------------------------
+// The CJS path above produces one cli.cjs. A split bundle (2.1.243+) produces a GRAPH:
+// every module's patched source, the compile order, and the entry name. The fuse worker
+// compiles that under the target engine; nothing here evaluates anything.
+//
+// The output is JSON rather than a directory of files on purpose: the staging cache, the
+// member archive and the naude builder all move ONE artifact, and 1400 small files would
+// be 1400 chances for a partial write to look like a complete stage.
+//
+// isSplitBundle() reads the CONTAINER, not the source text: module_format is a field in
+// Bun's own table (1 = ESM, 2 = CJS), so the carve-vs-graph decision is a fact rather
+// than a guess about what "@bun-cjs" appearing somewhere means.
+function isSplitBundle(binpath) {
+  let g;
+  try { g = require('./bun-graph.cjs').loadGraphFull(binpath); } catch (e) { return false; }
+  const js = g.rows.filter((r) => r.loader === 1);
+  if (!js.length) return false;
+  return js[0].moduleFormat === 1;
+}
+
+function extractGraphToFile(binpath, out) {
+  const { loadGraph, loadGraphFull } = require('./bun-graph.cjs');
+  const { planGraph } = require('./bun-graph-plan.cjs');
+  const mods = loadGraph(binpath);
+  const full = loadGraphFull(binpath);
+  const plan = planGraph(mods, full.entryName);
+  const { sources, report } = transformGraph(plan.sources);
+
+  // Same fail-loud contract as transform(): a hook that did not apply is REPORTED, on
+  // stderr, every build. It is not fatal here for the same reason it is not fatal there
+  // — the caller decides — but it is never silent. That distinction is the entire
+  // reason patchUpdateHint went unnoticed for months.
+  for (const r of report) {
+    if (r.applied) continue;
+    process.stderr.write(`clode: hook ${r.key} NOT applied to the module graph — ${r.why}. `
+      + 'The built target loses that behaviour; run inspect-claude-bundle --strict.\n');
+  }
+
+  const doc = {
+    format: 'clode-bun-graph-v1',
+    entry: plan.entry,
+    order: plan.order,
+    externals: plan.externals,
+    moduleCount: plan.moduleCount,
+    sources,
+  };
+  fs.writeFileSync(out, JSON.stringify(doc));
+  return {
+    name: plan.entry,
+    units: plan.order.length,
+    modules: plan.moduleCount,
+    externals: plan.externals.length,
+    hooks: report,
+  };
+}
+
 function main(argv) {
   const pos = argv.filter((a) => !a.startsWith('-'));
   if (pos.length !== 2) {
@@ -944,6 +1000,8 @@ module.exports = {
   verify,
   contentChecks,
   extractToFile,
+  extractGraphToFile,
+  isSplitBundle,
   main,
   PRELUDE,
 };
