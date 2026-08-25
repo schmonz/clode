@@ -65,19 +65,34 @@ test('every import form contributes an external, and named imports are collected
 test('a shim re-exports the requested names and routes through one runtime seam', () => {
   const src = shimSource('fs', ['readFileSync', 'promises']);
   assert.match(src, /globalThis\.__quaudeRequire\("fs"\)/);
-  assert.match(src, /export const readFileSync = __m\["readFileSync"\]/);
-  assert.match(src, /export const promises = __m\["promises"\]/);
+  assert.match(src, /export \{ readFileSync, promises \}/);
   assert.match(src, /export default __m/);
+});
+
+test('a shim reads each name under guard, so a WALL fires on use and not on import', () => {
+  // The shim marks unimplemented APIs with a throwing getter. Reading every name while
+  // the shim module evaluates would trip every wall on that specifier whether the bundle
+  // touches it or not — measured: a 2.1.245 build died on vm.SyntheticModule it never
+  // uses. The error must be preserved and re-thrown from the binding instead.
+  const src = shimSource('vm', ['SyntheticModule']);
+  assert.match(src, /try \{ SyntheticModule = __m\["SyntheticModule"\]; \}/);
+  assert.match(src, /catch \(__e\) \{ const __w = __e; SyntheticModule = function \(\) \{ throw __w; \}; \}/);
+  // and it must actually behave that way, not merely look like it
+  const mod = { get SyntheticModule() { throw new Error('vm.SyntheticModule not implemented'); } };
+  let bound;
+  const run = new Function('__m', src.replace(/^const __m[^\n]*\n/, '').replace(/export \{[^}]*\};?/, '').replace(/export default __m;?/, '') + '\nreturn SyntheticModule;');
+  assert.doesNotThrow(() => { bound = run(mod); }, 'importing must not trip the wall');
+  assert.throws(() => bound(), /not implemented/, 'using it must trip the wall');
 });
 
 test('a shim never emits a non-identifier as a named export', () => {
   // Anything unbindable stays reachable via the default export rather than producing
   // a module that cannot compile at all.
   const src = shimSource('weird', ['ok', 'has-dash', '2bad', 'default']);
-  assert.match(src, /export const ok =/);
+  assert.match(src, /export \{ ok \}/);
   assert.doesNotMatch(src, /has-dash/);
-  assert.doesNotMatch(src, /export const 2bad/);
-  assert.doesNotMatch(src, /export const default/);
+  assert.doesNotMatch(src, /\b2bad\b/);
+  assert.doesNotMatch(src, /\bdefault =/);
 });
 
 // ---- the whole plan ------------------------------------------------------------

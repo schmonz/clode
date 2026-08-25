@@ -106,6 +106,21 @@ function externalsOf(mods) {
         if (t) set[t.split(/\s+as\s+/)[0].trim()] = 1;
       }
     }
+    // NAMESPACE imports need the whole surface they actually USE. An ES module
+    // namespace object exposes only DECLARED exports, so `import * as Mo from "vm"`
+    // followed by `Mo.runInContext(...)` fails with "not a function" unless the shim
+    // declares runInContext. We cannot enumerate a runtime object's properties at
+    // compile time, so collect the property names the module actually reads off the
+    // namespace binding — precise, and derived from the same source.
+    re = /\bimport\s*\*\s*as\s+([A-Za-z0-9_$]+)\s*from\s*"((?:[^"\\]|\\.)*)"/g;
+    while ((m = re.exec(src))) {
+      if (mods.has(m[2]) || !isPlausibleSpecifier(m[2])) continue;
+      var nsSet = want(m[2]);
+      var nsRe = new RegExp('\\b' + m[1] + '\\.([A-Za-z_$][A-Za-z0-9_$]*)', 'g');
+      var nm;
+      while ((nm = nsRe.exec(src))) nsSet[nm[1]] = 1;
+    }
+
     for (i = 0; i < IMPORT_RES.length; i++) {
       re = new RegExp(IMPORT_RES[i].source, 'g');
       while ((m = re.exec(src))) {
@@ -121,15 +136,30 @@ function externalsOf(mods) {
 // lookup goes through a single global the bootstrap installs, so there is exactly one
 // seam between generated code and the shim.
 function shimSource(spec, names) {
-  var src = 'const __m = globalThis.__quaudeRequire(' + JSON.stringify(spec) + ');\n', i, n;
+  // WALLS MUST FIRE ON USE, NOT ON IMPORT. The shim marks unimplemented APIs with a
+  // throwing getter (`vm.SyntheticModule not implemented`) so a target fails loudly at
+  // the moment it needs something we do not have. A naive `export const X = __m["X"]`
+  // READS every name while the shim module is evaluating, which trips every wall on the
+  // specifier whether the bundle touches it or not — measured: a 2.1.245 build died on
+  // vm.SyntheticModule that it never actually uses.
+  //
+  // So each read is guarded, and a wall is re-thrown FROM THE BINDING: the error is
+  // preserved and raised when the bundle calls or constructs it, which is what the wall
+  // was for. A non-callable use gets "undefined is not ..." instead, which is less
+  // pointed but still a failure rather than silence.
+  var src = 'const __m = globalThis.__quaudeRequire(' + JSON.stringify(spec) + ');\n', i, n, out = [];
   for (i = 0; i < names.length; i++) {
     n = names[i];
     // Only bindable identifiers can be named exports; anything else stays reachable
     // through the default export rather than being silently dropped.
     if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(n)) continue;
     if (n === 'default') continue;
-    src += 'export const ' + n + ' = __m[' + JSON.stringify(n) + '];\n';
+    src += 'let ' + n + ';\n'
+      + 'try { ' + n + ' = __m[' + JSON.stringify(n) + ']; }\n'
+      + 'catch (__e) { const __w = __e; ' + n + ' = function () { throw __w; }; }\n';
+    out.push(n);
   }
+  if (out.length) src += 'export { ' + out.join(', ') + ' };\n';
   return src + 'export default __m;\n';
 }
 

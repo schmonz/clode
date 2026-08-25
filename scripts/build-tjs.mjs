@@ -2584,10 +2584,15 @@ function fixupLwsTxpacerPthreadWin(dir) {
 // deserializing anything. When it is absent (any non-quaude use of the engine) the
 // property is simply not defined, leaving stock behaviour untouched.
 //
-// VERIFIED: a directly-compiled module now reports
-// `import.meta.url|typeof import.meta.require` as `/$bunfs/root/direct.js|function`.
-// A DESERIALIZED module still reports `undefined|undefined` — js_module_set_import_meta
-// gives up early on that path, which is under investigation; see BACKLOG.
+// This fixup is only the property. Getting it to a DESERIALIZED module took two more,
+// both immediately below: fixupImportMetaDeserialize (set the meta at all) and
+// fixupQjsImportMetaByIdentity (make the module that reads import.meta be the one we
+// set it on). Change any one of the three and re-run all of
+// test/import-meta-graph.test.cjs, which asserts the end state on the wire.
+//
+// VERIFIED: a directly-compiled module reports
+// `import.meta.url|typeof import.meta.require` as `/$bunfs/root/direct.js|function`,
+// and a serialize/deserialize round-trip of the same module reports the same.
 function fixupImportMetaRequire(dir) {
   const mf = path.join(dir, 'src/modules.c');
   const msrc = fs.readFileSync(mf, 'utf8');
@@ -2601,6 +2606,19 @@ function fixupImportMetaRequire(dir) {
       + 'the pin moved and this patch must be re-derived, not silently skipped');
   }
   const add = anchor + `
+    /* clode: an ABSOLUTE module name must be reported as a file:// URL, because that is
+       what import.meta.url means. With use_realpath=false stock txiki puts the bare path
+       in import.meta.url, and the bundle does fileURLToPath(import.meta.url) -> "Invalid
+       URL". Bun reports file:///$bunfs/root/... for these, so this matches the runtime
+       the bundle was built for. Names that are not absolute paths (tjs:internal/...,
+       http(s) URLs already in URL form) are untouched. */
+    if (!use_realpath && buf[0] == '/') {
+        char tjs__u[TJS_PATH_MAX + 16] = { 0 };
+        tjs__pstrcpy(tjs__u, sizeof(tjs__u), "file://");
+        tjs__pstrcat(tjs__u, sizeof(tjs__u), buf);
+        JS_DefinePropertyValueStr(ctx, meta_obj, "url", JS_NewString(ctx, tjs__u), JS_PROP_C_W_E);
+    }
+
     /* clode: expose globalThis.__quaudeRequire as import.meta.require. Absent global =>
        property not defined => stock behaviour. */
     {
@@ -2616,6 +2634,135 @@ function fixupImportMetaRequire(dir) {
 `;
   fs.writeFileSync(mf, msrc.replace(anchor, add));
   console.log('fixup import-meta-require: applied to src/modules.c');
+}
+
+// Stock txiki sets import.meta in exactly one place: tjs_evalBytecode, on the single
+// module handed to it. That is fine when you eval every module you load. It is wrong for
+// a code-split graph, where the loader deserializes ~1382 modules to populate quickjs's
+// loaded-module list and then evaluates ONLY the entry — every other module in the graph,
+// including upstream's runtime helper chunk that does `C = import.meta.require`, would
+// never have its meta populated at all.
+//
+// So: populate it at deserialize time, for any module that comes back from JS_ReadObject.
+// Deliberately NO JS_ResolveModule here — resolution calls the module loader, and the
+// entire point of preregistering the graph is that the loader is never reached. Stock
+// callers (compile -> serialize -> deserialize -> evalBytecode of the same module) just
+// get the meta set a little earlier than before, and evalBytecode then sets it again;
+// JS_DefinePropertyValueStr on a C_W_E property is idempotent, so nothing observable
+// changes for them.
+function fixupImportMetaDeserialize(dir) {
+  const f = path.join(dir, 'src/mod_engine.c');
+  const src = fs.readFileSync(f, 'utf8');
+  if (src.includes('tjs__deserialized_obj')) {
+    console.log('fixup import-meta-deserialize: already applied');
+    return;
+  }
+  const anchor = '    return JS_ReadObject(ctx, buf, len, flags);\n';
+  if (!src.includes(anchor)) {
+    throw new Error('fixup import-meta-deserialize: JS_ReadObject anchor not found in src/mod_engine.c — '
+      + 'the pin moved and this fixup must be re-derived, not silently skipped');
+  }
+  const add = `    {
+        /* clode: populate import.meta for a DESERIALIZED module. Stock txiki only does
+           this for the module passed to evalBytecode, so every preregistered module in a
+           code-split graph would see an empty import.meta (and no import.meta.require).
+           No JS_ResolveModule here on purpose: resolution would call the module loader,
+           and the whole point of preregistering is that the loader is never needed. */
+        JSValue tjs__deserialized_obj = JS_ReadObject(ctx, buf, len, flags);
+        if (!JS_IsException(tjs__deserialized_obj) &&
+            JS_VALUE_GET_TAG(tjs__deserialized_obj) == JS_TAG_MODULE) {
+            js_module_set_import_meta(ctx, tjs__deserialized_obj, false, false);
+        }
+        return tjs__deserialized_obj;
+    }
+`;
+  fs.writeFileSync(f, src.replace(anchor, add));
+  console.log('fixup import-meta-deserialize: applied to src/mod_engine.c');
+}
+
+// quickjs resolves `import.meta` by NAME: js_import_meta takes the current frame's
+// filename atom and hands it to js_find_loaded_module, which returns the FIRST entry in
+// ctx->loaded_modules with that atom. js_module_set_import_meta, meanwhile, sets the
+// properties on the JSModuleDef it was handed. Those are the same object only when the
+// name is unique. Register two JSModuleDefs under one name — js_new_module_def
+// list_add_tail's unconditionally, it never dedupes — and the two diverge silently: the
+// meta is set on the second def, and the running module reads the first def's (empty) one.
+//
+// That is exactly what `compile(src, "x.js")` followed by `deserialize(serialize(...))`
+// of the same module does in one context, and it cost most of a day: the symptom (a
+// round-tripped module sees an empty import.meta) looks exactly like "the meta object got
+// baked into the bytecode", and it is not. Bytecode is innocent. Proof, at JS level,
+// against the engine with only the two fixups above:
+//   deserialize a name never compiled in this process -> url + require present
+//   compile a DECOY under that name first, then deserialize -> undefined|undefined
+//   compile the decoy under a DIFFERENT name         -> url + require present
+//
+// Fix it where upstream's own comment says it should be fixed ("XXX: inefficient, need to
+// add a module or script pointer in JSFunctionBytecode"): try IDENTITY before name. If
+// the frame's cur_func is some module's func_obj, that module is definitionally the one
+// executing, no atom comparison required. Falls back to the stock name lookup otherwise
+// (import.meta inside a nested function, where cur_func is not the module's top-level
+// function), so this can only ever turn a wrong answer into a right one.
+//
+// Touches js_import_meta only — nothing in JS_WriteObject/JS_ReadObject, so
+// quickjs-ng-canonical-le-bytecode.patch (lines ~37745-39674 of quickjs.c) is untouched
+// and serialized bytecode stays little-endian by construction.
+function fixupQjsImportMetaByIdentity(dir) {
+  const f = path.join(dir, 'deps/quickjs/quickjs.c');
+  const src = fs.readFileSync(f, 'utf8');
+  if (src.includes('js_find_loaded_module_by_func_obj')) {
+    console.log('fixup qjs-import-meta-by-identity: already applied');
+    return;
+  }
+  const anchor = 'static JSValue js_import_meta(JSContext *ctx)\n'
+    + '{\n'
+    + '    JSAtom filename;\n'
+    + '    JSModuleDef *m;\n'
+    + '\n'
+    + '    filename = JS_GetScriptOrModuleName(ctx, 0);\n';
+  if (!src.includes(anchor)) {
+    throw new Error('fixup qjs-import-meta-by-identity: js_import_meta anchor not found in deps/quickjs/quickjs.c — '
+      + 'the pin moved and this fixup must be re-derived, not silently skipped');
+  }
+  const repl = `/* clode: find the module CURRENTLY EXECUTING by object identity rather than by
+   filename atom. Two JSModuleDefs can share a name (js_new_module_def never dedupes),
+   in which case js_find_loaded_module returns whichever was registered first and
+   import.meta reads the wrong object. See build-tjs.mjs. */
+static JSModuleDef *js_find_loaded_module_by_func_obj(JSContext *ctx, JSValue func_obj)
+{
+    struct list_head *el;
+    JSModuleDef *m;
+
+    if (JS_VALUE_GET_TAG(func_obj) != JS_TAG_OBJECT)
+        return NULL;
+    list_for_each(el, &ctx->loaded_modules) {
+        m = list_entry(el, JSModuleDef, link);
+        if (JS_VALUE_GET_TAG(m->func_obj) == JS_TAG_OBJECT &&
+            JS_VALUE_GET_OBJ(m->func_obj) == JS_VALUE_GET_OBJ(func_obj))
+            return m;
+    }
+    return NULL;
+}
+
+static JSValue js_import_meta(JSContext *ctx)
+{
+    JSAtom filename;
+    JSModuleDef *m;
+    JSStackFrame *sf;
+
+    /* clode: identity first; the name lookup below is the fallback (import.meta inside
+       a nested function, whose cur_func is not the module's top-level function). */
+    sf = ctx->rt->current_stack_frame;
+    if (sf) {
+        m = js_find_loaded_module_by_func_obj(ctx, sf->cur_func);
+        if (m)
+            return JS_GetImportMeta(ctx, m);
+    }
+
+    filename = JS_GetScriptOrModuleName(ctx, 0);
+`;
+  fs.writeFileSync(f, src.replace(anchor, repl));
+  console.log('fixup qjs-import-meta-by-identity: applied to deps/quickjs/quickjs.c');
 }
 
 function fixupQjscMsvcGetopt(dir) {
@@ -2894,6 +3041,8 @@ if (buildOnly) {
   fixupLwsTxpacerPthreadWin(tjsDir);
   fixupModFsSyncMsvc(tjsDir);
   fixupImportMetaRequire(tjsDir);
+  fixupImportMetaDeserialize(tjsDir);
+  fixupQjsImportMetaByIdentity(tjsDir);
   fixupQjscMsvcGetopt(tjsDir);
   // cosmo patches apply LAST: they were generated against the fully-fixed-up
   // tree (their libuv udp.c context includes the SSM guard fixupLibuvUdpSsmOld-
