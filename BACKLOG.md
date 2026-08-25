@@ -1676,6 +1676,58 @@ was the first, `os.constants.errno` in 2.1.238), and both times we found out by 
 
 ## ★★★ NEXT: a clear, clean, well-factored, fully cross build (2026-08-24)
 
+### Domain language: stop saying "fuse" (user, 2026-08-25)
+
+**The user:** "You keep saying 'fused' like it means something to me because the code
+apparently says 'fuse'. I've learned what you mean by it but I want to change the code
+language and your language when talking about it."
+
+**This was already half-decided and I drifted from it.** The standing preference is
+"quaude is BUILT/REBUILT by `clode build` in specs, docs and messages; internal code keeps
+the fuse symbols until a deliberate rename". I kept the code convention AND leaked it into
+conversation all day. The conversational half needs no ticket — just stop — and the code
+half is this item.
+
+**Scope, measured 2026-08-25:**
+
+    145  files mention "fuse"
+      8  files whose NAME says fuse (clode-fuse.cjs, quaude-fuse.js,
+         cross-fuse/action.yml, four tests, one Dockerfile)
+     ~11  user-visible strings printed to stdout/stderr
+
+    heaviest: libexec/clode-fuse.cjs 86 · build-leg/action.yml 45 · quaude-fuse.js 35
+
+**THE TRAP: "fuse" names TWO different operations, and a find-replace would flatten them.**
+
+1. the WHOLE act of producing a quaude — extract, transform, compile, assemble, smoke.
+   That is what `clode build` already calls itself, and what a user means.
+2. the SPECIFIC step of appending the member archive to an engine binary. Today that is
+   also "fuse" (`quaude-fuse.js` does exactly this and nothing else).
+
+Renaming (1) to "build" while leaving (2) unnamed would lose a distinction the code
+genuinely needs. So the rename has to introduce a word, not just remove one.
+
+**Proposed vocabulary — the user picks, this is a starting point:**
+
+| today | proposed | why |
+|---|---|---|
+| fuse (whole) | **build** | matches the command and the user's mental model |
+| fused (adj.) | **built** | "a built quaude", not "a fused quaude" |
+| cross-fuse | **cross-build** | same, and `--target` already says it |
+| fuse (append step) | **assemble** or **pack** | needs its own word; it is a real, distinct operation |
+| `libexec/clode-fuse.cjs` | `clode-build.cjs` | |
+| `libexec/quaude-fuse.js` | `quaude-assemble.js` | it appends the archive; that is all it does |
+
+**Why this belongs to ★★★ and not a tidy-up pile:** the overhaul's goal is that one place
+answers a question and the answer is legible. A word that has to be LEARNED before the
+build makes sense is the same tax as a fact stored in two places — it just gets paid by
+the reader instead of the maintainer. And the giveaway that it is genuinely confusing is
+that it names two operations at once.
+
+**Sequencing:** after the release, and probably alongside whatever moves
+`clode-fuse.cjs`/`quaude-fuse.js` anyway (the second-half language question). Renaming
+files twice would be worse than renaming them once, later.
+
 **THE MAP:** <https://claude.ai/code/artifact/d5ecba30-da4f-4f61-a83e-f310bac959af>
 — "clode build system — a map before moving", the zeroth deliverable. Measured from the
 tree on 2026-08-21: the two-pipeline diagram, which stages are compilation concerns
