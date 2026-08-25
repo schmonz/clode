@@ -55,7 +55,30 @@ jobs:
           # "nothing changed", and this job's only product is a trustworthy answer.
           if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found under @anthropic-ai/claude-code" >&2; exit 1; fi
           echo "provider: $PROV"
+          echo "$VER" > "$RUNNER_TEMP/upstream-version"
           node scripts/upstream-drift-check.mjs "$PROV"
+
+      # WHEN IT BREAKS, SAY WHAT UPSTREAM SAID. Twice now upstream has broken
+      # `clode build` with no change in this repo, and both times a public changelog
+      # already named the area while we byte-diffed binaries for hours (2.1.238's
+      # os.constants.errno read, and 2.1.243's switch to Bun code splitting). The
+      # information was never hard to get; nothing connected "the daily check went
+      # red" to "go read the release notes".
+      #
+      # Runs only on failure, and cannot turn a red into a green: the step above has
+      # already failed by the time this runs, and the tool exits 0 even when it cannot
+      # reach the network, so it never becomes a second thing to debug.
+      #
+      # LIMITATION, stated rather than hidden: we do not persist the last version this
+      # job was green on, so there is no true "since we last passed" range. Passing a
+      # version that is not in the changelog makes the tool print the newest few
+      # sections, which is the useful 90% with no state to keep in sync. If we ever
+      # persist a last-green version, pass it as --from and delete this comment.
+      - name: What did upstream say? (context only — a LEAD, never a cause)
+        if: failure()
+        run: |
+          VER="$(cat "$RUNNER_TEMP/upstream-version" 2>/dev/null || true)"
+          node scripts/upstream-release-notes.mjs --from "0.0.0-no-last-green-recorded" ${VER:+--to "$VER"}
 
   # THE SECOND DAILY QUESTION: does a quaude built from the newest bundle still BOOT?
   #
@@ -73,6 +96,41 @@ jobs:
   # and presented as CI infrastructure noise. One cheap leg daily converts that into
   # a dated, attributed red light within a day of an upstream release.
   #
+  # THE THIRD DAILY QUESTION: what is COMING?
+  #
+  # The two jobs around this one both test `latest`, so the earliest they can tell us
+  # anything is the day every user is already broken. That is what happened with 2.1.243:
+  # it landed as `latest`, killed `clode build`, and we found out because a release dry
+  # run failed. Upstream has since pulled .243 back off `latest` but did NOT revert the
+  # change — 2.1.245 sits on `next` with the same code-split shape. `next` is the only
+  # advance warning we get, so we watch it.
+  #
+  # This job is GREEN today even though `next` is broken for us, and that is deliberate:
+  # see the long note in scripts/upstream-next-watch.mjs. It asserts the KNOWN state and
+  # fires when the state CHANGES — `next` becoming carveable again, or failing in a NEW
+  # way. A permanently-red job is not a warning, it is furniture, and ambient red is how
+  # a P0 hid in this repo for days.
+  next-channel:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version-file: .tool-versions
+      - name: Install the `next` Claude Code
+        run: npm i -g @anthropic-ai/claude-code@next 2>&1 | tail -3
+      - name: Has the shape of what is coming changed?
+        run: |
+          set -euo pipefail
+          VER="$(npm view @anthropic-ai/claude-code@next version)"
+          echo "upstream next: $VER"
+          PROV="$(node scripts/find-provider.mjs)"
+          # Same rule as the anchors job: "we could not check" is not "nothing changed".
+          if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found for @next" >&2; exit 1; fi
+          node scripts/upstream-next-watch.mjs "$PROV"
+
   # linux-x64-musl deliberately: an alpine container, no qemu, and the engine comes
   # from the same PINS+patches cache the push legs use, so the marginal cost is the
   # fuse and the smoke — not an engine build.
