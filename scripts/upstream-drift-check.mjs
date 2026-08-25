@@ -65,17 +65,67 @@ const SHIM = path.join(REPO, 'libexec', 'bun-shim.cjs');
 // ~20MB of minified JS; each fails SILENTLY (hook not applied, build still green)
 // when upstream reshapes that site. The value is the reason, so a failure tells
 // the next person what actually breaks for users.
-const ANCHORS = {
-  autoupdater_hook_anchor_present:
-    'the in-TUI pkg-manager autoupdater redirect (notify-only __clodeCheckUpdate) would not apply',
-  native_autoupdater_hook_anchor_present:
-    'the in-TUI NATIVE autoupdater redirect would not apply — a built target would try to install over itself',
-  doctor_hook_anchor_present:
-    '/doctor installation-warnings would lose the applet-skew hook',
-  snapshot_generator_present:
-    'the eager-snapshot bridge would not apply — shell snapshot generation loses its shadow rewrite',
-  ripgrep_lever_present:
-    'the USE_BUILTIN_RIPGREP lever is gone — ripgrep env shaping would silently no-op',
+// EXPECTED STATE, NOT JUST PRESENCE — and checked in BOTH directions.
+//
+// This used to be a flat list of anchors that had to be `true`, and it covered 5 of
+// the 8 things inspect reports. That gap cost us: `patchUpdateHint` had NO anchor at
+// all, so when its site vanished from upstream around 2.1.210 the build printed one
+// line of stderr, exited 0, and NOBODY NOTICED FOR MONTHS. A hook we ship was dead
+// and every check we had said fine.
+//
+// So every anchor inspect reports must appear here with a declared expectation:
+//
+//   'present' — clode patches this site; if it goes, the hook silently stops applying
+//   'absent'  — known gone upstream, with a REASON and the DATE/VERSION last checked
+//
+// An 'absent' entry that comes BACK is also a failure. Acceptances must not rot: if
+// upstream restores a site we gave up on, that is news, and the alternative is a
+// permanent excuse nobody revisits. This is the same both-directions rule that keeps
+// test/windows-path-ratchet.test.cjs honest.
+//
+// Adding a new hook to extract-claude-js.cjs without adding it here fails the
+// completeness check below. That is deliberate: the decision is cheap to make now and
+// expensive to discover later.
+const EXPECTED = {
+  autoupdater_hook_anchor_present: {
+    expect: 'present',
+    why: 'the in-TUI pkg-manager autoupdater redirect (notify-only __clodeCheckUpdate) would not apply',
+  },
+  native_autoupdater_hook_anchor_present: {
+    expect: 'present',
+    why: 'the in-TUI NATIVE autoupdater redirect would not apply — a built target would try to install over itself',
+  },
+  doctor_hook_anchor_present: {
+    expect: 'present',
+    why: '/doctor installation-warnings would lose the applet-skew hook',
+  },
+  update_notice_hook_anchor_present: {
+    expect: 'present',
+    why: 'the three-state update notice would stop surfacing on /status and `claude doctor`',
+  },
+  remote_control_hook_anchor_present: {
+    expect: 'present',
+    why: 'the Remote Control gate-off would not apply — Remote Control may silently no-op under quaude',
+  },
+  snapshot_generator_present: {
+    expect: 'present',
+    why: 'the eager-snapshot bridge would not apply — shell snapshot generation loses its shadow rewrite',
+  },
+  ripgrep_lever_present: {
+    expect: 'present',
+    why: 'the USE_BUILTIN_RIPGREP lever is gone — ripgrep env shaping would silently no-op',
+  },
+  update_hint_anchor_present: {
+    expect: 'absent',
+    // Confirmed absent on 2.1.210, 2.1.218, 2.1.238, 2.1.241 and 2.1.243 (2026-08-24):
+    // `grep -c 'npm i -g @anthropic-ai/claude-code'` is 0 on all of them. patchUpdateHint
+    // has therefore been a no-op for months while printing one ignorable stderr line.
+    // This is an HONEST RECORD OF A KNOWN GAP, not a decision that it does not matter:
+    // whether to re-pin the anchor at upstream's current remediation text or delete the
+    // hook is an open question in BACKLOG.md. Listed here so the state is asserted rather
+    // than assumed — if upstream brings the string back, this turns red and we find out.
+    why: 'patchUpdateHint is dead upstream; see BACKLOG.md. If this flips to present, RE-PIN THE HOOK',
+  },
 };
 
 const bin = process.argv[2];
@@ -96,11 +146,36 @@ try {
 }
 
 const broken = [];
-for (const [key, why] of Object.entries(ANCHORS)) {
-  // Absent key = an inspect that no longer reports this anchor. Treat as broken,
+for (const [key, { expect, why }] of Object.entries(EXPECTED)) {
+  const got = cov[key];
+  // Missing key = an inspect that no longer reports this anchor. Treat as broken,
   // never as "fine": a check that quietly stops checking is the failure mode this
-  // whole job exists to prevent.
-  if (cov[key] !== true) broken.push({ key, why, value: cov[key] });
+  // whole job exists to prevent. Note this catches a DROPPED report even for an
+  // anchor we expect to be absent — `undefined` is not `false`.
+  if (typeof got !== 'boolean') {
+    broken.push({ key, why: `inspect no longer reports this anchor at all — ${why}`, value: got });
+  } else if (expect === 'present' && got !== true) {
+    broken.push({ key, why, value: got });
+  } else if (expect === 'absent' && got !== false) {
+    broken.push({
+      key,
+      why: `EXPECTED ABSENT BUT PRESENT — upstream restored a site we had written off. ${why}`,
+      value: got,
+    });
+  }
+}
+
+// COMPLETENESS: every anchor inspect reports must have a declared expectation. A new
+// hook added to extract-claude-js.cjs and mirrored into inspect, but never given a row
+// above, would otherwise be gated by nothing — which is exactly how patchUpdateHint
+// died unnoticed. Fail rather than let the coverage quietly shrink.
+const undeclared = Object.keys(cov).filter(
+  (k) => /_present$/.test(k) && !Object.prototype.hasOwnProperty.call(EXPECTED, k));
+if (undeclared.length) {
+  process.stderr.write('upstream-drift: UNDECLARED ANCHORS — inspect reports these, this check does not gate them:\n');
+  for (const k of undeclared) process.stderr.write(`  ${k} = ${cov[k]}\n`);
+  process.stderr.write('\nAdd each to EXPECTED in this file with `present` or `absent` + a reason.\n');
+  process.exit(1);
 }
 
 // THE CARVE ITSELF. Anchors are necessary but NOT sufficient: they are matched
@@ -134,12 +209,12 @@ if (!cliBlock) {
 
 if (!broken.length) {
   process.stdout.write(
-    `upstream-drift: OK — all ${Object.keys(ANCHORS).length} anchors present, ` +
+    `upstream-drift: OK — all ${Object.keys(EXPECTED).length} anchors as expected, ` +
     `CLI carveable (${cliBlock.size} bytes)\n`);
   process.exit(0);
 }
 
-process.stderr.write('upstream-drift: UPSTREAM MOVED — clode hooks would not apply\n\n');
+process.stderr.write('upstream-drift: UPSTREAM MOVED — clode hooks are not in their expected state\n\n');
 for (const b of broken) {
   process.stderr.write(`  ${b.key} = ${b.value}\n      -> ${b.why}\n`);
 }

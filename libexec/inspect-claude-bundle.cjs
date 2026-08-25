@@ -156,6 +156,20 @@ function nativeAutoupdaterHookAnchorPresent(data) {
 const _UPDATE_NOTICE_ANCHOR =
   /return\{installationType:[A-Za-z0-9_$]{1,6},version:[A-Za-z0-9_$]{1,6},.{0,400}?,warnings:[A-Za-z0-9_$]{1,6},packageManager:/gs;
 const _UPDATE_NOTICE_PATCHED = 'var __clodeUpd=await globalThis.__clodeCheckUpdate(';
+// Update-hint rewrite (extract-claude-js patchUpdateHint) rewrites upstream's
+// "npm i -g @anthropic-ai/claude-code" remediation so a clode-managed binary never
+// tells the user to install a stock claude over it. Unlike the others this one is a
+// plain global replace, so ANY occurrence is enough — but reporting it matters more
+// than the regex does: this hook stopped applying somewhere around 2.1.210 and NOTHING
+// NOTICED FOR MONTHS, because it was the one patch inspect did not report and the
+// drift check therefore could not gate. Already-rewritten bundles carry the
+// replacement text, so accept that marker too (mirrors the autoupdater checks).
+const _UPDATE_HINT_ANCHOR = /npm i -g @anthropic-ai\/claude-code/;
+const _UPDATE_HINT_PATCHED = 'clode build (this binary is managed by clode)';
+function updateHintAnchorPresent(data) {
+  return _UPDATE_HINT_ANCHOR.test(data) || data.includes(_UPDATE_HINT_PATCHED);
+}
+
 function updateNoticeHookAnchorPresent(data) {
   return [...data.matchAll(_UPDATE_NOTICE_ANCHOR)].length === 1 || data.includes(_UPDATE_NOTICE_PATCHED);
 }
@@ -341,6 +355,7 @@ function inspect(p) {
     autoupdater_hook_anchor_present: autoupdaterHookAnchorPresent(data),
     native_autoupdater_hook_anchor_present: nativeAutoupdaterHookAnchorPresent(data),
     update_notice_hook_anchor_present: updateNoticeHookAnchorPresent(data),
+    update_hint_anchor_present: updateHintAnchorPresent(data),
     remote_control_hook_anchor_present: remoteControlHookAnchorPresent(data),
     snapshot_generator_present: snapshotGeneratorPresent(data),
     ripgrep_lever_present: ripgrepLeverPresent(data),
@@ -502,6 +517,7 @@ function coverage(r, shim) {
     autoupdater_hook_anchor_present: getDefault(r, 'autoupdater_hook_anchor_present', true),
     native_autoupdater_hook_anchor_present: getDefault(r, 'native_autoupdater_hook_anchor_present', true),
     update_notice_hook_anchor_present: getDefault(r, 'update_notice_hook_anchor_present', true),
+    update_hint_anchor_present: getDefault(r, 'update_hint_anchor_present', true),
     remote_control_hook_anchor_present: getDefault(r, 'remote_control_hook_anchor_present', true),
   };
 }
