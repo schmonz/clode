@@ -1084,7 +1084,7 @@ runs:
 
     - name: Attest build provenance
       if: inputs.attest == 'true' && inputs.no-exec != 'true'
-      uses: actions/attest-build-provenance@v4.1.1
+      uses: actions/attest-build-provenance@v4.2.2
       with:
         subject-path: ${{ steps.name.outputs.asset }}
 
