@@ -1722,10 +1722,20 @@ happened to build a naude to check something unrelated. That is not a process.
    configure/generate, not at minute two of an emulated leg. This is the same shape as
    the provider-staging defect above: how a step fails is part of what the step IS.
 
-**Immediate follow-up, tracked separately:** teach the naude path the split shape. The
-relinker already exists (`libexec/bun-graph-plan.cjs` emits a single ordered CJS from the
-module graph; measured at 0.10s), so this is wiring, not research — but it is a P0, since
-`clode build --naude` is broken for anyone on current upstream.
+**Immediate follow-up, tracked separately, and it is a P0** — `clode build --naude` is
+broken for anyone on current upstream. CORRECTION to my first read of this: it is NOT
+just wiring. `bun-graph-plan.cjs` plans a graph for the ENGINE (compile each ES module,
+preregister, evaluate the entry); it does not emit a single CJS, and nothing else does.
+naude's SEA main must be CJS, so the shapes genuinely do not meet.
+
+The aligned fix is `module.registerHooks()` (synchronous resolve/load, present in the
+v24+ node naude already requires — build-naude.mjs:478 enforces >= v24): embed graph.json
+as a SEA asset, serve upstream's modules from it, `import()` the entry. That preserves
+the property the quaude path already holds — UPSTREAM'S BYTES ARE NEVER REWRITTEN
+(bun-graph-plan.cjs header) — and keeps both targets running the same text, which is the
+only thing that makes the oracle an oracle. The alternative, rewriting ESM into a CJS
+registry, is explicitly argued against there: it can mangle a prompt string and fail
+silently, and a fidelity oracle that quietly differs from its subject is worse than none.
 
 
 ### Write down the doctrine — propose a CLAUDE.md from this project's own history (user, 2026-08-25)
