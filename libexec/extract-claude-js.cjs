@@ -457,19 +457,52 @@ function patchNativeAutoupdater(body) {
 }
 
 // --- update remediation hint: clode wording, not npm --------------------------
-// The pkg-manager remediation string tells a normal user to `npm i -g
-// @anthropic-ai/claude-code` (in both the "Update available! Run:" hint and the
-// "Auto-update failed …" banner). For a clode-managed target that advice is wrong
-// — there is no npm-managed install here to update; see the update-guard doc for
-// the manual `claude update` deny wording this matches. Rewrite the command to the
-// clode story instead. Same fail-loud contract as the other patches: unchanged +
-// applied=false unless the literal is found (Claude version drift, or the string
-// is split/templated on this version — see inspect-claude-bundle --strict).
-const UPDATE_HINT = /npm i -g @anthropic-ai\/claude-code/g;
+// Tells a clode-managed target's user to `npm i -g @anthropic-ai/claude-code`, which
+// is wrong: there is no npm-managed install here to update, and following it drops a
+// stock claude over a binary clode owns. See the update-guard doc for the manual
+// `claude update` deny wording this matches.
+//
+// THIS ANCHOR NEVER MATCHED — not "broke at 2.1.210", NEVER, in any released version
+// (verified 2026-08-24 across 1.0.100, 2.0.0, 2.1.0, 2.1.50, 2.1.100 pure-JS and
+// 2.1.110 through 2.1.243 native; `npm i -g @anthropic-ai/claude-code` appears zero
+// times in all of them). It was written from what the TUI RENDERS rather than from a
+// bundle, and its only test fed patchUpdateHint a string the test itself invented, so
+// it passed for months against fiction. The old comment even guessed the reason
+// ("the string is split/templated on this version") and nobody checked.
+//
+// Upstream never emits the package name as a literal. It inlines a build-metadata
+// object and reads one property off it, in two shapes:
+//
+//   template:  npm i -g ${{ISSUES_EXPLAINER:"…",PACKAGE_URL:"@anthropic-ai/claude-code",…}.PACKAGE_URL}
+//   JSX child: jsxs(S,{bold:!0,children:["npm i -g ",{…,PACKAGE_URL:"…",…}.PACKAGE_URL]})
+//
+// plus the same construction for the ~/.claude/local remediation. The bounded
+// [^{}]{0,900} keeps each match inside its own metadata object — that object contains
+// no nested braces, so it cannot run away across the bundle.
+//
+// NO exactly-once contract here, unlike the other hooks: the real count is
+// version-dependent (1 on 1.0.100, 3 on 2.1.177–2.1.210, 7 on 2.1.218+). The contract
+// is instead: at least one match, and ZERO residual `npm i -g ` afterwards — which is
+// the property that actually matters and is what the tests assert. On every bundle
+// tested TPL+JSX exactly equals the raw `npm i -g ` count, so there is no over-match
+// and nothing left behind.
+//
+// Match the CARVED BODY, never the raw binary: 2.1.243 ships strings in a separate
+// table and the raw binary carries extra hits that are not JS source.
+const UPDATE_HINT_TPL = /npm i -g \$\{\{[^{}]{0,900}\}\.PACKAGE_URL\}/g;
+const UPDATE_HINT_JSX = /"npm i -g ",\{[^{}]{0,900}\}\.PACKAGE_URL/g;
+const UPDATE_HINT_LOCAL = /cd ~\/\.claude\/local && npm update \$\{\{[^{}]{0,900}\}\.PACKAGE_URL\}/g;
+const CLODE_HINT = 'clode build (this binary is managed by clode)';
 
 function patchUpdateHint(body) {
-  if (!UPDATE_HINT.test(body)) return [body, false];
-  return [body.replace(UPDATE_HINT, 'clode build (this binary is managed by clode)'), true];
+  let n = 0;
+  const bump = () => { n += 1; };
+  // TPL and LOCAL sit inside a template literal, so the replacement is bare text.
+  // JSX is an array element, so it must stay a quoted string.
+  body = body.replace(UPDATE_HINT_TPL, () => (bump(), CLODE_HINT));
+  body = body.replace(UPDATE_HINT_LOCAL, () => (bump(), CLODE_HINT));
+  body = body.replace(UPDATE_HINT_JSX, () => (bump(), JSON.stringify(CLODE_HINT)));
+  return [body, n > 0, n];
 }
 
 // --- update NOTICE on the installation-warnings surface -----------------------
@@ -577,13 +610,24 @@ function transform(body) {
       + 'not found exactly once (Claude version drift?). `clode fetch` still '
       + 'works; run inspect-claude-bundle --strict.\n');
   }
-  let uh;
-  [body, uh] = patchUpdateHint(body);
+  let uh, uhCount;
+  [body, uh, uhCount] = patchUpdateHint(body);
   if (!uh) {
     process.stderr.write(
-      'clode: update-hint rewrite NOT applied — "npm i -g @anthropic-ai/claude-code" '
-      + 'remediation string not found (Claude version drift?). The notify path still '
-      + 'works; run inspect-claude-bundle --strict.\n');
+      'clode: update-hint rewrite NOT applied — no `npm i -g ${{…}.PACKAGE_URL}` or '
+      + 'JSX-child remediation site found (Claude version drift?). A built target may '
+      + 'tell its user to npm-install a stock claude over itself; run '
+      + 'inspect-claude-bundle --strict.\n');
+  } else {
+    // Residual hits mean upstream grew a THIRD shape. Say so: this hook shipped
+    // broken for months precisely because nobody checked the outcome.
+    const left = (body.match(/npm i -g /g) || []).length;
+    if (left) {
+      process.stderr.write(
+        `clode: update-hint rewrite applied to ${uhCount} site(s) but ${left} \`npm i -g \` `
+        + 'occurrence(s) REMAIN — upstream has a shape this patch does not know. '
+        + 'The remaining sites still advise npm over a clode-managed binary.\n');
+    }
   }
   let un;
   [body, un] = patchUpdateNotice(body);

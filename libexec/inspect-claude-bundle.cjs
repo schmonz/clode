@@ -157,17 +157,24 @@ const _UPDATE_NOTICE_ANCHOR =
   /return\{installationType:[A-Za-z0-9_$]{1,6},version:[A-Za-z0-9_$]{1,6},.{0,400}?,warnings:[A-Za-z0-9_$]{1,6},packageManager:/gs;
 const _UPDATE_NOTICE_PATCHED = 'var __clodeUpd=await globalThis.__clodeCheckUpdate(';
 // Update-hint rewrite (extract-claude-js patchUpdateHint) rewrites upstream's
-// "npm i -g @anthropic-ai/claude-code" remediation so a clode-managed binary never
-// tells the user to install a stock claude over it. Unlike the others this one is a
-// plain global replace, so ANY occurrence is enough — but reporting it matters more
-// than the regex does: this hook stopped applying somewhere around 2.1.210 and NOTHING
-// NOTICED FOR MONTHS, because it was the one patch inspect did not report and the
-// drift check therefore could not gate. Already-rewritten bundles carry the
-// replacement text, so accept that marker too (mirrors the autoupdater checks).
-const _UPDATE_HINT_ANCHOR = /npm i -g @anthropic-ai\/claude-code/;
+// "npm i -g <package>" remediation so a clode-managed binary never tells the user to
+// install a stock claude over it. Mirrors extract-claude-js.cjs's two shapes — see
+// the long note there. Upstream never emits the package name as a literal; it inlines
+// a build-metadata object and reads .PACKAGE_URL off it.
+//
+// Why this anchor exists at all: patchUpdateHint was pinned to a literal upstream has
+// NEVER emitted, and inspect did not report it, so the drift check could not gate it.
+// The hook was a no-op on every build for months and every check said fine.
+//
+// NOT an exactly-once check: the real count is version-dependent (1 on 1.0.100, 3 on
+// 2.1.177-2.1.210, 7 on 2.1.218+). Presence is the contract. Already-rewritten bundles
+// carry the replacement text, so accept that marker too (mirrors the autoupdater checks).
+const _UPDATE_HINT_TPL = /npm i -g \$\{\{[^{}]{0,900}\}\.PACKAGE_URL\}/;
+const _UPDATE_HINT_JSX = /"npm i -g ",\{[^{}]{0,900}\}\.PACKAGE_URL/;
 const _UPDATE_HINT_PATCHED = 'clode build (this binary is managed by clode)';
 function updateHintAnchorPresent(data) {
-  return _UPDATE_HINT_ANCHOR.test(data) || data.includes(_UPDATE_HINT_PATCHED);
+  return _UPDATE_HINT_TPL.test(data) || _UPDATE_HINT_JSX.test(data)
+    || data.includes(_UPDATE_HINT_PATCHED);
 }
 
 function updateNoticeHookAnchorPresent(data) {

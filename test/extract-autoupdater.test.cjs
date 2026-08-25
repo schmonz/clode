@@ -152,12 +152,62 @@ test('pkg-manager autoupdater patch is fail-loud: no match -> unchanged, applied
 
 // --- update remediation hint -------------------------------------------------
 
-test('update remediation hint is clode wording, not npm', () => {
-  const body = 'let m="Update available! Run: npm i -g @anthropic-ai/claude-code";';
-  const [out, applied] = patchUpdateHint(body);
+// THESE FIXTURES ARE COPIED FROM A REAL BUNDLE, and that is the whole point.
+//
+// The test that used to live here invented its own input —
+//   'let m="Update available! Run: npm i -g @anthropic-ai/claude-code";'
+// — a string upstream has NEVER emitted in any released version. So it passed
+// happily for months while the hook it tested did nothing at all, on every build,
+// for every user. A fixture you wrote yourself only proves your regex matches your
+// regex. Bytes below are from the carved 2.1.241 CLI; the shapes go back to 1.0.100.
+const METADATA = '{ISSUES_EXPLAINER:"report the issue at https://github.com/anthropics/claude-code/issues",'
+  + 'PACKAGE_URL:"@anthropic-ai/claude-code",README_URL:"https://code.claude.com/docs/en/overview",'
+  + 'VERSION:"2.1.241",FEEDBACK_CHANNEL:"https://github.com/anthropics/claude-code/issues",'
+  + 'BUILD_TIME:"2026-08-22T22:46:48Z",GIT_SHA:"c87e2742fc9ad269ec8920460d00a091b1e410f0",'
+  + 'DD_SOURCEMAP_GROUP:"darwin"}';
+const REAL_TPL = 'npm i -g ${' + METADATA + '.PACKAGE_URL}';
+const REAL_JSX = 'Og.jsxs(S,{bold:!0,children:["npm i -g ",' + METADATA + '.PACKAGE_URL]})';
+const REAL_LOCAL = 'cd ~/.claude/local && npm update ${' + METADATA + '.PACKAGE_URL}';
+
+test('update remediation hint: the template-substitution shape', () => {
+  const [out, applied, n] = patchUpdateHint(REAL_TPL);
   assert.strictEqual(applied, true);
-  assert.match(out, /managed by clode/i);
-  assert.doesNotMatch(out, /npm i -g @anthropic-ai\/claude-code/);
+  assert.strictEqual(n, 1);
+  assert.strictEqual(out, 'clode build (this binary is managed by clode)');
+});
+
+test('update remediation hint: the JSX-child shape stays a quoted string', () => {
+  const [out, applied, n] = patchUpdateHint(REAL_JSX);
+  assert.strictEqual(applied, true);
+  assert.strictEqual(n, 1);
+  // Must remain a valid array element, not bare text spliced into JSX children.
+  assert.strictEqual(out, 'Og.jsxs(S,{bold:!0,children:["clode build (this binary is managed by clode)"]})');
+});
+
+test('update remediation hint: the ~/.claude/local shape', () => {
+  const [out, applied, n] = patchUpdateHint(REAL_LOCAL);
+  assert.strictEqual(applied, true);
+  assert.strictEqual(n, 1);
+  assert.strictEqual(out, 'clode build (this binary is managed by clode)');
+});
+
+test('update remediation hint: all shapes together leave NO npm advice behind', () => {
+  const body = `x=${REAL_TPL};y=${REAL_JSX};z="${REAL_LOCAL}";`;
+  const [out, applied, n] = patchUpdateHint(body);
+  assert.strictEqual(applied, true);
+  assert.strictEqual(n, 3);
+  // The property that actually matters, and the one nobody ever checked.
+  assert.doesNotMatch(out, /npm i -g /);
+  assert.doesNotMatch(out, /npm update /);
+});
+
+test('update remediation hint: the OLD invented literal is NOT what upstream ships', () => {
+  // Guards against someone "restoring" the old anchor. If this ever starts matching,
+  // upstream changed shape and the re-pin above needs revisiting on purpose.
+  const invented = 'let m="Update available! Run: npm i -g @anthropic-ai/claude-code";';
+  const [out, applied] = patchUpdateHint(invented);
+  assert.strictEqual(applied, false, 'upstream does not emit a folded literal');
+  assert.strictEqual(out, invented);
 });
 
 test('update remediation hint patch is fail-loud: no match -> unchanged, applied false', () => {

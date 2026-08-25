@@ -116,15 +116,8 @@ const EXPECTED = {
     why: 'the USE_BUILTIN_RIPGREP lever is gone — ripgrep env shaping would silently no-op',
   },
   update_hint_anchor_present: {
-    expect: 'absent',
-    // Confirmed absent on 2.1.210, 2.1.218, 2.1.238, 2.1.241 and 2.1.243 (2026-08-24):
-    // `grep -c 'npm i -g @anthropic-ai/claude-code'` is 0 on all of them. patchUpdateHint
-    // has therefore been a no-op for months while printing one ignorable stderr line.
-    // This is an HONEST RECORD OF A KNOWN GAP, not a decision that it does not matter:
-    // whether to re-pin the anchor at upstream's current remediation text or delete the
-    // hook is an open question in BACKLOG.md. Listed here so the state is asserted rather
-    // than assumed — if upstream brings the string back, this turns red and we find out.
-    why: 'patchUpdateHint is dead upstream; see BACKLOG.md. If this flips to present, RE-PIN THE HOOK',
+    expect: 'present',
+    why: 'the npm remediation rewrite would not apply — a built target tells its user to `npm i -g` a stock claude over itself',
   },
 };
 
