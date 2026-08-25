@@ -1435,9 +1435,35 @@ the user has. Anyone on 2.1.243 fails immediately, on every platform, native AND
 The DOA affects `--target` users only. This is the [[bundle-bumps-add-node-api-reads]]
 pattern again, in its most severe form: upstream can kill quaude with no repo change.
 
-**DO NOT TAG A RELEASE UNTIL THIS IS UNDERSTOOD.** A release built against 2.1.241
-would ship a clode that cannot build from current upstream; users would hit it at once
-and it would look like the release caused it.
+**DO NOT TAG A RELEASE UNTIL WE HANDLE THE FORMAT.** (User, reaffirmed 2026-08-25.)
+
+The ORIGINAL reason written here was "a release built against 2.1.241 would ship a clode
+that cannot build from current upstream". **That reason is now factually wrong** and is
+corrected rather than deleted, because the decision it supported still stands on better
+grounds.
+
+What is actually true (verified 2026-08-25 by `npm view ... dist-tags`):
+
+    stable: 2.1.231     latest: 2.1.241     next: 2.1.245
+
+`latest` is 2.1.241, which carves fine — so stable users are NOT broken today, and
+2.1.243 has been withdrawn from both `latest` and the public changelog. I read that as
+"the release is unblocked". The user disagreed, and was right:
+
+> "I do not agree. The release is blocked. We know we do not handle this format and it's
+> already been out there as latest"
+
+**The reasoning that matters:** 2.1.243 WAS `latest` — that is how it turned 19 CI legs
+red in the first place. A dist-tag can flip back the day after we ship, with no warning
+and nothing we control. "Not currently latest" is a snapshot, not a property. Shipping a
+clode we KNOW cannot build the format upstream has already released once means the next
+flip breaks every user who took our release, and it looks like we caused it.
+
+And the change is not reverted, only staged: **2.1.245 on `next` has the same shape**
+(1385 bare-ESM modules, 12420 static chunk imports — verified by running the extractor
+against it). Users who set `autoUpdatesChannel: next` are broken RIGHT NOW.
+
+So the gate is not "is it latest today" but "can clode build the format upstream ships".
 
 **Reproduce:**
 
