@@ -81,7 +81,25 @@ function basename(p, ext) {
   let b = p.replace(/\/+$/, '');
   b = b.slice(b.lastIndexOf('/') + 1);
   if (b === '' && isAbsolute(p)) b = '';
-  if (ext && b.endsWith(ext) && b !== ext) b = b.slice(0, -ext.length);
+  // THE EXT RULE IS SUBTLER THAN IT LOOKS, and node's own test corpus is what taught it.
+  // node returns '' only when ext equals the ENTIRE PATH — not when it equals the
+  // basename:
+  //     basename('.js',      '.js')  === ''      (ext === path)
+  //     basename('.',        '.')    === ''      (ext === path)
+  //     basename('aaa/bbb',  'bbb')  === 'bbb'   (ext === basename, but NOT the path)
+  //     basename('aaa/bbb//','bbb')  === 'bbb'
+  // In node's implementation this falls out of `if (ext === path) return ''` plus
+  // `if (start === end) end = firstNonSlashEnd` — when the extension consumes the whole
+  // basename, the slice is reset to the full basename rather than emptied.
+  //
+  // Found 2026-08-25 by running node's OWN test/parallel/test-path-basename.js against
+  // this shim: the first file of node's corpus we tried, and it failed twice — first on
+  // the ext===path case, then, after a WRONG first fix of mine that stripped whenever the
+  // basename matched, on the ext===basename case.
+  if (ext) {
+    if (ext === p) return '';
+    if (b.endsWith(ext) && b !== ext) b = b.slice(0, -ext.length);
+  }
   return b;
 }
 
@@ -187,7 +205,15 @@ function win32Basename(p, ext) {
   let s = p.slice(rootLen).replace(/[\\/]+$/, '');
   const i = Math.max(s.lastIndexOf('\\'), s.lastIndexOf('/'));
   let b = i === -1 ? s : s.slice(i + 1);
-  if (ext && b.endsWith(ext) && b !== ext) b = b.slice(0, -ext.length);
+  // Same ext rule as posix basename above — node returns '' only when ext equals the
+  // ENTIRE PATH. This branch had the `b !== ext` half but not the `ext === p` half, so
+  // win32.basename('a','a') gave 'a' where node gives ''. The posix fix did not reach
+  // here because win32 is a separate implementation (deliberately — different separators,
+  // drive/UNC roots); a divergence fixed on one side must be checked on the other.
+  if (ext) {
+    if (ext === p) return '';
+    if (b.endsWith(ext) && b !== ext) b = b.slice(0, -ext.length);
+  }
   return b;
 }
 

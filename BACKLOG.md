@@ -1676,6 +1676,61 @@ was the first, `os.constants.errno` in 2.1.238), and both times we found out by 
 
 ## ★★★ NEXT: a clear, clean, well-factored, fully cross build (2026-08-24)
 
+### ★★★ Borrow someone else's test corpus for both shims (user, 2026-08-25)
+
+**The user:** "'Bun-on-Node shim with node's own test corpus behind it' sounds awesome."
+
+**The insight is that the valuable asset is the CORPUS, not the shim code.** We implement
+each shim member when something notices we need it; correctness per member is then
+whatever we happened to think of. Node ships thousands of tests for exactly these APIs,
+written by people who cared about the edges.
+
+**PROVEN IN TEN MINUTES, and the result is the argument.** Fetched ONE file —
+`nodejs/node test/parallel/test-path-basename.js`, 76 lines — wrote a ~15-line stub for
+`require('../common')`, and ran it against our shim on the engine. It found **three
+separate bugs in `path.basename`**:
+
+    basename('.js', '.js')         gave '.js'   node: ''      (ext === whole path)
+    basename('aaa/bbb', 'bbb')     gave ''      node: 'bbb'   (ext === basename only)
+    win32.basename('a', 'a')       gave 'a'     node: ''      (posix fix missed win32)
+
+The middle one is there because MY FIRST FIX WAS WRONG — I stripped whenever the basename
+matched, and node's own test caught that too, immediately. All three are now fixed.
+
+**Our own `test/node-shim-path.test.cjs` was GREEN the entire time**, all 10 tests, before
+and after. That is the whole case in one sentence: our tests encode what we thought of;
+node's encode what is true.
+
+**Why this is different from the "18 members missing" measurement** (see the shim-surface
+golden inventory): that counts PRESENCE. Every bug found on 2026-08-25 — deepStrictEqual
+approving unequal values, fs discarding a mode it accepted, Buffer.indexOf returning -1,
+these three basename cases — was in an API that was PRESENT AND WRONG. A shim judged
+complete by member count would ship all of them. **The metric we want is corpus pass rate
+per module, not member coverage.**
+
+**The two layers are NOT symmetric, and the plan should say so:**
+
+- **Layer 2 (node-on-txiki): node's own corpus, and it is enormous.** `test/parallel/` is
+  MIT-licensed, self-contained per file, and mostly needs only `assert` plus the module
+  under test. The single real dependency is `test/common`, and a stub covering
+  `mustCall`/`mustNotCall`/`isWindows`/`skip` unlocked the first file outright. Highest
+  value, lowest effort, start here.
+- **Layer 1 (bun-on-node): the analog is Bun's own tests, and it is a worse fit.** They
+  use `bun:test` and assume the Bun runtime, and we implement ~25 Bun members of which
+  most of Bun's suite never touches. Likely worth hand-porting the tests for the members
+  we DO implement rather than adopting the suite wholesale.
+
+**Constraints:** vendoring test FIXTURES is compatible with zero-dependency and
+Node-absent — tests are not shipped, and the corpus is MIT. Pin the corpus to a node
+version and record which, so "we pass node 24's path tests" is a dated, checkable claim
+rather than a vibe. Expect to find bugs faster than we can fix them; that is a reason to
+land it, and a reason to gate on a per-module ratchet (pass count must not fall) rather
+than requiring 100% on day one.
+
+**Sequencing:** it needs the engine-test harness from the feasibility spike, so it lands
+after that. Same doctrine applies — the `common` stub must supply plumbing ONLY; anything
+it supplies that the shim should have is a finding, not a hole to fill.
+
 ### Revisit the shims: named, organized, parallel, maintainable (user, 2026-08-25)
 
 **The user:** "We shim Bun onto Node and Node onto QuickJS-NG/Txiki and both of those are
