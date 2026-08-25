@@ -1615,6 +1615,48 @@ was the first, `os.constants.errno` in 2.1.238), and both times we found out by 
 
 ## ★★★ NEXT: a clear, clean, well-factored, fully cross build (2026-08-24)
 
+### Rebuilding the code-split bundle: EMBED THE GRAPH (decided 2026-08-25, spike green)
+
+**Decision (user):** "Sounds like time to try embedding the graph as is and see how that
+shakes out." Chosen over rewriting ESM into a CJS registry.
+
+**Why, in one line:** the rewrite path can corrupt PROMPTS, and it would do it silently.
+The bundle ships skill documentation containing the literal text ``| `import` | Call ...``
+and a template literal `defaults import com.apple.Terminal`. A regex that mangles those
+does not crash — it quietly changes what Claude is told. Three separate hand-rolled
+scanners tripped on exactly those strings while I was building the rewriter; the fourth
+would have been the one that stopped tripping and started corrupting.
+
+**Spike result — the reassembled graph RUNS.** Feeding the decoded modules to node's own
+ESM machinery (link + evaluate + a dynamic-import callback resolving through the same
+registry), with node builtins as real externals:
+
+    linked OK        1382/1382 modules, no missing chunks
+    evaluated        entry ran, reached main(), resolved dynamic import()s
+    ran on into      vendored execa code, 3 modules deep past the entry
+
+Failures now are ENVIRONMENT, not structure — first `globalThis.process` (my sandbox
+passed `globalThis: undefined`), then `S("stream")`, Bun's injected CJS-require helper.
+Both are what quaude's shim exists to provide. **Not one byte of upstream source was
+modified to get there.**
+
+**What is still unbuilt:**
+
+1. An emitter: one artifact holding every module VERBATIM plus the entry name.
+2. A resolver for `/$bunfs/root/*` reading from that table. txiki already has
+   `tjs_module_loader` wired via `JS_SetModuleLoaderFunc2` (src/vm.c:497), so the engine
+   can load modules — the question is exposing an in-memory registry to it, which likely
+   means an engine patch. We already patch the engine, so this is known territory.
+3. Where clode's hooks apply. They currently patch one big text; with the graph embedded
+   they apply per-module. The anchors are regexes pinned to specific sites, so this
+   should be mechanical — but `transform()` and every EXPECTED anchor need re-pointing,
+   and the fidelity of that is exactly what the drift check gates.
+4. naude (the Node SEA variant) needs node's loader hooks rather than txiki's.
+
+**Retired:** `libexec/esm-relink.cjs` (uncommitted) — the ESM->CJS text rewriter. Kept
+nothing but the lesson: do not lex minified JS by hand. If a future change ever needs
+this again, use the engine's own parser, never a regex.
+
 ### Coverage that turns on and off with machine state (root-caused 2026-08-25)
 
 **Concrete instance, fixed:** `test/clode-watch.test.cjs` gated 16 tests on
