@@ -48,6 +48,11 @@
 // Other known candidates: the bundle's required Node floor creeping up; new search
 // applets; new bare specifiers (the dep-closure seed scan already catches those at
 // BUILD time, loudly — see clode-fuse's assertNoUnknownBareSpecifiers).
+//
+// THE LESSON FROM 2.1.243 (2026-08-24): every check here asserted something about
+// the CONTENT of the bundle, and none asserted that clode could still GET the
+// content. Prefer checks that would fail if the product stopped working, over
+// checks that confirm a string is still present somewhere in 340MB.
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import url from 'node:url';
@@ -98,8 +103,39 @@ for (const [key, why] of Object.entries(ANCHORS)) {
   if (cov[key] !== true) broken.push({ key, why, value: cov[key] });
 }
 
+// THE CARVE ITSELF. Anchors are necessary but NOT sufficient: they are matched
+// against the WHOLE binary, so they stay green as long as the JS is present as
+// text — even when clode can no longer get at it. That is not hypothetical.
+// 2.1.243 switched Bun to CODE SPLITTING: the CLI became ~1383 `chunk-<hash>.js`
+// ESM modules with no CommonJS entry, `clode build` died at extraction, and THIS
+// JOB REPORTED "OK — all 5 anchors present". Green while the product was dead.
+//
+// So assert the one fact every hook depends on: there is a single CJS block named
+// entrypoints/cli.js to carve. If that is gone, no anchor matters.
+const CLI_BLOCK = /entrypoints\/cli\.js$/;
+const blocks = Array.isArray(cov.bun_cjs_blocks) ? cov.bun_cjs_blocks : null;
+const cliBlock = blocks && blocks.find((b) => CLI_BLOCK.test(String((b && b.name) || '')));
+if (!cliBlock) {
+  process.stderr.write('upstream-drift: UPSTREAM MOVED — the CLI is no longer carveable\n\n');
+  process.stderr.write(
+    blocks
+      ? `  bun_cjs_blocks = ${blocks.length} block(s), none named entrypoints/cli.js\n` +
+        blocks.slice(0, 6).map((b) => `      name=${JSON.stringify(String((b && b.name) || '(unnamed)'))} size=${(b && b.size) || 0}\n`).join('')
+      : '  inspect no longer reports bun_cjs_blocks at all\n');
+  process.stderr.write(
+    '\n  -> `clode build` CANNOT EXTRACT the CLI from this bundle. Every hook above is\n' +
+    '     moot: there is nothing to patch them into. Users cannot build a target.\n');
+  process.stderr.write('\nThis is upstream drift, NOT a regression in the commit that ran this job.\n');
+  process.stderr.write('Run `node libexec/extract-claude-js.cjs <binary> /tmp/cli.cjs` — it diagnoses\n');
+  process.stderr.write('the new shape and refuses rather than guessing. Fixing it is a real piece of\n');
+  process.stderr.write('work (a code-split bundle needs an ESM relinker, not a carve), not a re-pin.\n');
+  process.exit(1);
+}
+
 if (!broken.length) {
-  process.stdout.write(`upstream-drift: OK — all ${Object.keys(ANCHORS).length} anchors present\n`);
+  process.stdout.write(
+    `upstream-drift: OK — all ${Object.keys(ANCHORS).length} anchors present, ` +
+    `CLI carveable (${cliBlock.size} bytes)\n`);
   process.exit(0);
 }
 

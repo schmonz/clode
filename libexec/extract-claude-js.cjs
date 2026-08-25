@@ -65,6 +65,76 @@ function pickEntry(blocks) {
   return named;
 }
 
+// --- bundle-format diagnosis: name the change, still refuse to guess ----------
+// clode carves ONE CommonJS module out of the Bun standalone module graph — the
+// block introduced by `// @bun [@bytecode] @bun-cjs\n(function(exports, require,
+// module, __filename, __dirname) {`, named `.../src/entrypoints/cli.js`. Through
+// Claude Code 2.1.241 that module WAS the whole CLI (28,252,477 bytes on
+// darwin-arm64 2.1.241; the graph held 15 modules and the entry was index 0).
+//
+// 2.1.243 changed the graph, not the anchors. Upstream turned on Bun code
+// splitting + on-demand loading (2.1.243 changelog: "code is now loaded on demand
+// instead of keeping the whole bundle resident"). The graph is now 1391 modules;
+// 1383 of them are BARE ESM — `// @bun @bytecode\n` with NO CJS wrapper — wired
+// together by `import{X as y}from"/$bunfs/root/chunk-<hash>.js"` and
+// `await import("/$bunfs/root/chunk-<hash>.js")`. The entry
+// (`/$bunfs/root/src/entrypoints/cli.js`, graph index 801) shrank to 19,931 bytes
+// and is now almost nothing but imports; the ~35 MB of CLI lives in the chunks.
+//
+// carveBlocks's marker requires the CJS wrapper, so it finds nothing and pickEntry
+// says "largest candidate was 665 bytes" — literally true, and misleading: it reads
+// like a truncated carve when the real cause is a shape clode cannot represent as a
+// single require()-able file AT ALL. Diagnose it explicitly and say so. This does
+// NOT extract it: relinking ~1391 ESM modules into one CJS file needs a real linker
+// (scope analysis, live bindings, dynamic import), and a textual approximation is
+// exactly the wrong carve this file exists to refuse.
+//
+// Signals, measured on the real darwin-arm64 providers (2.1.241 -> 2.1.243):
+//   `// @bun @bytecode\n` bare-ESM modules          1 -> 1383
+//   quoted "/$bunfs/root/chunk-*.js" specifiers     0 -> 110101
+//   from"/$bunfs/root/chunk-*.js" static imports    0 -> 12416
+//   import("/$bunfs/root/chunk-*.js") dynamic       0 -> 1039
+// The chunk specifier is the discriminator: 2.1.241 has ZERO of them, so this can
+// only fire on a genuinely code-split graph. Both counts are required (>=2 modules
+// AND >=1 specifier) so a lone stray marker can never trip it.
+const ESM_MODULE_MARKER = /\/\/ @bun @bytecode\n/g;
+const ESM_CHUNK_SPEC = /"\/\$bunfs\/root\/chunk-[A-Za-z0-9]+\.js"/g;
+const ESM_STATIC_IMPORT = /from"\/\$bunfs\/root\/chunk-[A-Za-z0-9]+\.js"/g;
+const ESM_DYNAMIC_IMPORT = /import\("\/\$bunfs\/root\/chunk-[A-Za-z0-9]+\.js"\)/g;
+// The entry chunk carries an unminified `// Version: x.y.z` line; naming the
+// version in the error is what turns "format changed" into a reportable fact.
+const BUNDLE_VERSION = /\/\/ Version: ([0-9][0-9A-Za-z.+-]{0,30})\n/;
+
+function countMatches(re, data) {
+  let n = 0;
+  // Fresh lastIndex per call: these are module-level `g` regexes.
+  re.lastIndex = 0;
+  while (re.exec(data) !== null) n += 1;
+  re.lastIndex = 0;
+  return n;
+}
+
+// Describe a Bun module graph clode cannot carve, or null when the shape is not
+// recognized (caller then reports the generic format-change error unchanged).
+// Only called on the failure path, so its extra passes over the binary cost
+// nothing in the normal case.
+function describeBundleFormat(data) {
+  const modules = countMatches(ESM_MODULE_MARKER, data);
+  const specs = countMatches(ESM_CHUNK_SPEC, data);
+  if (modules < 2 || specs < 1) return null;
+  const ver = data.match(BUNDLE_VERSION);
+  return 'what changed: this is a Bun CODE-SPLIT ESM bundle'
+    + (ver ? ` (Claude Code ${ver[1]})` : '')
+    + ` — ${modules} bare \`// @bun @bytecode\` modules wired by `
+    + `${countMatches(ESM_STATIC_IMPORT, data)} static \`from"/$bunfs/root/chunk-*.js"\` `
+    + `imports and ${countMatches(ESM_DYNAMIC_IMPORT, data)} dynamic \`import(...)\` calls, `
+    + 'with NO CommonJS entry module. Up to 2.1.241 the whole CLI was ONE @bun-cjs '
+    + 'module clode could carve into a single require()-able cli.cjs; here the entry '
+    + 'is ~20 KB of imports and the CLI lives in the chunks. Carving any one block '
+    + 'would produce a bundle that boots and then dies at the first missing chunk, so '
+    + 'clode does not. This shape needs an ESM relinker, not a carve.';
+}
+
 const PRELUDE =
 `// ---- mavericks node-host prelude (auto-generated) ----
 globalThis.Bun = globalThis.Bun || require(__dirname + '/bun-shim.cjs');
@@ -566,7 +636,17 @@ function contentChecks(outText) {
 // the caller's progress line. Byte-for-byte identical to what the CLI wrote before.
 function extractToFile(binpath, out) {
   const data = fs.readFileSync(binpath, 'latin1');
-  const entry = pickEntry(carveBlocks(data));
+  let entry;
+  try {
+    entry = pickEntry(carveBlocks(data));
+  } catch (e) {
+    // Same refusal, better reason: when the graph is a shape we recognize but
+    // cannot carve (see describeBundleFormat), append what it actually is. Never
+    // downgrade the failure — the throw still happens, with more truth in it.
+    const shape = describeBundleFormat(data);
+    if (!shape) throw e;
+    throw new Error(e.message + '\n  ' + shape);
+  }
   const text = transform(entry.body);
   fs.writeFileSync(out, Buffer.from(text, 'latin1'));
   const problems = verify(text).concat(contentChecks(text));
@@ -600,6 +680,7 @@ if (require.main === module) {
 
 module.exports = {
   pickEntry,
+  describeBundleFormat,
   patchDoctorWarnings,
   patchSnapshotBridge,
   patchAutoupdater,
