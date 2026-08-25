@@ -2,17 +2,9 @@
 
 ## 0.20260824.1
 
-Fix `clode build --target`, which in the previous release produced non-working `quaude`
-binaries. Only cross-builds were affected.
+Fix regression: `quaude` binaries cross-built with `clode build --target` would not start up.
 
-`clode` now refuses a template pack that was not built from the same engine sources it
-was built from. It previously compared only a coarse version pin, which two different
-builds can share — so the mismatch above could not be detected at all.
-
-Haiku is temporarily not published. Haiku moved its package repository to the current
-release when R1/beta6 shipped, and the build image we use is still beta5, so the guest
-can no longer install what it needs to build. The leg still builds; it returns as soon
-as a beta6 image exists.
+Temporarily stop releasing for Haiku until its builder image can be updated.
 
 ## 0.20260801.2
 
