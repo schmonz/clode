@@ -1647,6 +1647,69 @@ was the first, `os.constants.errno` in 2.1.238), and both times we found out by 
 
 ## ★★★ NEXT: a clear, clean, well-factored, fully cross build (2026-08-24)
 
+### ★★ Rationalize the push-CI and tag-release matrices (user, 2026-08-25)
+
+**The user's reaction on learning `linux-s390x-musl` is released but not in CI:** "I keep
+being surprised at the ways our push-to-build and tag-to-release matrices are different.
+That needs to get rationalized so it's hard to diverge by mistake."
+
+Measured the same day:
+
+    ci-tier legs        28
+    release-tier legs   42
+    PUBLISHED legs      35
+    PUBLISHED but NOT in the ci tier   11
+
+The eleven we ship without per-push gating:
+
+    linux-s390x-musl        <- BIG-ENDIAN
+    linux-x86-musl          <- 32-bit
+    linux-armv7-musl        <- 32-bit
+    linux-arm64-musl        linux-ppc64le-musl      linux-riscv64-musl
+    linux-loongarch64-musl  netbsd-arm64            freebsd-arm64
+    openbsd-arm64           openindiana-amd64
+
+**This is why we have no big-endian or 32-bit signal.** Every leg that would exercise
+those properties is either unpublished-and-untested or published-and-untested. On
+2026-08-25 the entire BE/32-bit answer for the code-split release sat behind the SLOWEST
+emulated NetBSD legs, while a 5-minute qemu-user s390x leg existed and simply did not run.
+
+**The invariant already exists — as prose, enforced by example.** `test/tjs-legs.test.cjs`
+asserts "if we ship it, CI gates it", but only inside a loop over TWO HARDCODED NAMES:
+
+    for (const name of ['netbsd-m68k', 'netbsd-sparc64']) {
+      ...
+      assert.strictEqual(l['soft-fail'], undefined,
+        `${name} publishes, so CI must gate it (if we ship it, CI gates it)`);
+
+So the rule is stated, believed, and checked for 2 of 35 published legs. That is the same
+shape as every instrument failure of 2026-08-25: a check that looks ADJACENT to the
+property instead of AT it.
+
+**The cheap fix, and it is a property not a list:** every leg with `publish` must be in
+the ci tier and must not be `soft-fail`. Any exception carries a written, dated reason in
+the manifest — the same shape as EXPECTED in upstream-drift-check.mjs, where an
+undeclared entry is an error rather than a silence.
+
+**The real decision behind it, which is the user's to make:** adding 11 legs to per-push
+CI costs runner time (they are qemu-user and VM legs). The honest options are
+
+1. gate them — pay the runner time;
+2. stop publishing the ones we will not gate — ship less, honestly;
+3. keep publishing with a recorded, dated reason per leg — but then the reason must live
+   in the manifest and be asserted, not be an accident of two tiers drifting.
+
+Any of the three is defensible. What is not defensible is the current state, where the
+difference between "what we build on push" and "what we ship on tag" is discoverable only
+by diffing two tiers by hand.
+
+**Related and already actionable:** s390x's leg does a "level-2.5 full fuse
+attempted+logged" — it ATTEMPTS the exact cross-fuse-onto-BE that canonical-LE exists to
+make safe, and throws the result away. Making that assertion real, and promoting the leg
+to ci, would turn the project's largest untested property into a 5-minute signal. See
+also the canonical-LE baseline, which records `differs` for real files (the regexp wall)
+while synthetic corpora match.
+
 ### The tests under a CMake/CTest build (design discussion, 2026-08-25 — not decided)
 
 Companion to the "what language is the SECOND half" note below: same decision seen from
