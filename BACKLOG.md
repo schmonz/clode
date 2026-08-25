@@ -1615,6 +1615,59 @@ was the first, `os.constants.errno` in 2.1.238), and both times we found out by 
 
 ## ★★★ NEXT: a clear, clean, well-factored, fully cross build (2026-08-24)
 
+### Hooks under the code-split bundle: 7 of 9 survive untouched; 1 needs a decision
+
+Ran the REAL patch functions from `libexec/extract-claude-js.cjs` against every module of
+the 2.1.245 graph (not coarse signatures — the actual anchors):
+
+    patchDoctorWarnings            exactly once   chunk-svasnyw2.js
+    patchAutoupdater               exactly once   chunk-b8dwartr.js
+    patchNativeAutoupdater         exactly once   chunk-b8dwartr.js
+    patchUpdateNotice              exactly once   chunk-svasnyw2.js
+    patchRemoteControlUnavailable  exactly once   chunk-tq5wjes2.js
+    patchLegacyAutoupdater         exactly once   chunk-b8dwartr.js
+    patchManualUpdate              exactly once   chunk-vwrzap7y.js
+    patchUpdateHint                2 modules      (correct — global replace, no
+                                                   exactly-once contract by design)
+    patchSnapshotBridge            NO MATCH       <-- the one real casualty
+
+**Structurally this is good news:** no anchor spans a module boundary, so per-module
+patching works and `transform()` keeps its exactly-once contract by applying each patch
+across the graph and requiring one hit total. That was the risk I expected to bite.
+
+**The casualty is ordinary upstream drift, not the split.** The snapshot generator gained
+a parameter. 2.1.241 (matches the anchor):
+
+    async function G(){let h=await S();return{provider:await I(h)}}
+
+2.1.245, in `chunk-ctcq7phx.js`:
+
+    async function iqo(e){let t=await sqo();return{provider:await NUn(t,{storageV5:e})}}
+
+`SNAPSHOT_GEN` requires `\(\)` and a single-argument inner call, so it matches neither
+2.1.243 nor 2.1.245. Confirmed it still applies on 2.1.241, so this arrived with the
+.243 line.
+
+**DO NOT re-pin this blind, which is why it is filed instead of fixed.** Two things make
+it a semantics decision, not a regex edit:
+
+1. The generator now takes `storageV5`. `patchSnapshotBridge` exposes the function so
+   clode's splice can pre-warm it; calling `iqo()` with no argument passes
+   `storageV5: undefined`, which may not be what upstream passes.
+2. The caller MEMOIZES: `ozn(e){return jC.shellConfig ??= iqo(e), ...}`. Invoking `iqo`
+   ourselves creates a promise upstream never sees, so the pre-warm could populate a
+   different snapshot than the one the app then uses — a silent fidelity divergence of
+   exactly the kind [[fixes-scoped-to-reduce-fidelity-diffs]] warns about.
+
+Candidate targets are the generator itself or the memoizing wrapper `ozn`. Deciding needs
+evidence about what upstream passes for `storageV5` and whether the memo is shared —
+observable by instrumenting a real run, not by reading minified code.
+
+**Consequence if left:** the eager-snapshot bridge does not apply on 2.1.243+, so
+applet-skew findings appear only after the first shell command instead of at startup.
+Degraded, not broken. The drift check already gates this anchor
+(`snapshot_generator_present`), so it will go red the day .243+ becomes `latest`.
+
 ### Rebuilding the code-split bundle: EMBED THE GRAPH (decided 2026-08-25, spike green)
 
 **Decision (user):** "Sounds like time to try embedding the graph as is and see how that
