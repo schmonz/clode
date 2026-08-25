@@ -146,6 +146,41 @@ function nativeAutoupdaterHookAnchorPresent(data) {
   return [...data.matchAll(_NATIVE_AUTOUPDATER_ANCHOR)].length === 1 || data.includes(_NATIVE_AUTOUPDATER_PATCHED);
 }
 
+// The LEGACY npm autoupdater (extract-claude-js patchLegacyAutoupdater) is the
+// updater a BUILT TARGET actually mounts: installation type `unknown` is neither
+// `native` nor `package-manager`, so AutoUpdaterWrapper falls through to it, and
+// every branch of its install dispatch but `development`/`native` calls an
+// installer. Mirrors extract-claude-js.cjs LEGACY_AUTOUPDATER exactly (backrefs
+// included) — this one is the gate that says the neutralization WOULD apply, so a
+// shape the extractor accepts and this rejects (or vice versa) is a lie in one
+// direction or the other. Already-patched bundles carry the injected log line
+// (the splice sits between the development guard and the dispatch, so the base
+// anchor's lookahead no longer matches), so accept that marker too — same
+// convention as the two autoupdater checks above.
+const _LEGACY_AUTOUPDATER_ANCHOR =
+  /if\((?<log>[A-Za-z0-9_$]{1,6})\(`AutoUpdater: Detected installation type: \$\{(?<x>[A-Za-z0-9_$]{1,6})\}`\),\k<x>==="development"\)\{\k<log>\("AutoUpdater: Cannot auto-update development build"\),[A-Za-z0-9_$]{1,6}\(!1\);return\}(?=let [A-Za-z0-9_$]{1,6}(?:,[A-Za-z0-9_$]{1,6}){1,3};if\(\k<x>==="npm-local"\))/g;
+const _LEGACY_AUTOUPDATER_PATCHED =
+  'AutoUpdater: install skipped: this binary is managed by clode (notify-only)';
+function legacyAutoupdaterHookAnchorPresent(data) {
+  return [...data.matchAll(_LEGACY_AUTOUPDATER_ANCHOR)].length === 1
+    || data.includes(_LEGACY_AUTOUPDATER_PATCHED);
+}
+
+// The MANUAL `update` command (extract-claude-js patchManualUpdate) is the second
+// caller of the same global installer the legacy autoupdater uses — `<target>
+// update`, typed by a human, which update-guard.cjs does not cover (that hook only
+// denies the MODEL a `claude update` through Bash). Mirrors extract-claude-js.cjs
+// MANUAL_UPDATE_DISPATCH, backrefs included. Already-patched bundles carry the
+// sentinel discriminant (the original `<id>.installationType` is gone, so the base
+// anchor cannot match), so accept that marker too — same convention as above.
+const _MANUAL_UPDATE_ANCHOR =
+  /switch\([A-Za-z0-9_$]{1,6}\.installationType\)\{case"npm-local":(?<local>[A-Za-z0-9_$]{1,6})=!0,(?<method>[A-Za-z0-9_$]{1,6})="local";break;case"npm-global":\k<local>=!1,\k<method>="global";break;case"unknown":/g;
+const _MANUAL_UPDATE_PATCHED = 'switch("clode-managed-target"){case"npm-local":';
+function manualUpdateHookAnchorPresent(data) {
+  return [...data.matchAll(_MANUAL_UPDATE_ANCHOR)].length === 1
+    || data.includes(_MANUAL_UPDATE_PATCHED);
+}
+
 // The update NOTICE (extract-claude-js patchUpdateNotice) rides the installation-
 // warnings surface — where the three-state notify actually reaches the user, since
 // the native autoupdater widget only renders install outcomes (Task 6). It needs the
@@ -361,6 +396,8 @@ function inspect(p) {
     doctor_hook_anchor_present: doctorHookAnchorPresent(data),
     autoupdater_hook_anchor_present: autoupdaterHookAnchorPresent(data),
     native_autoupdater_hook_anchor_present: nativeAutoupdaterHookAnchorPresent(data),
+    legacy_autoupdater_hook_anchor_present: legacyAutoupdaterHookAnchorPresent(data),
+    manual_update_hook_anchor_present: manualUpdateHookAnchorPresent(data),
     update_notice_hook_anchor_present: updateNoticeHookAnchorPresent(data),
     update_hint_anchor_present: updateHintAnchorPresent(data),
     remote_control_hook_anchor_present: remoteControlHookAnchorPresent(data),
@@ -472,6 +509,12 @@ function gateProblems(cov) {
   if (!getDefault(cov, 'native_autoupdater_hook_anchor_present', true)) {
     p.push('in-TUI native autoupdater anchor missing/ambiguous (notify-only __clodeCheckUpdate redirect would not apply)');
   }
+  if (!getDefault(cov, 'legacy_autoupdater_hook_anchor_present', true)) {
+    p.push('LEGACY autoupdater install-dispatch anchor missing/ambiguous (a built target, installation type `unknown`, would `bun/npm install -g @anthropic-ai/claude-code` over itself)');
+  }
+  if (!getDefault(cov, 'manual_update_hook_anchor_present', true)) {
+    p.push('manual `update` command installation-type switch missing/ambiguous (`<target> update` would install upstream over this binary instead of refusing)');
+  }
   if (!getDefault(cov, 'update_notice_hook_anchor_present', true)) {
     p.push('installation-warnings version+warnings anchor missing/ambiguous (three-state update notice would not surface on /status or `claude doctor`)');
   }
@@ -523,6 +566,8 @@ function coverage(r, shim) {
     doctor_hook_anchor_present: getDefault(r, 'doctor_hook_anchor_present', true),
     autoupdater_hook_anchor_present: getDefault(r, 'autoupdater_hook_anchor_present', true),
     native_autoupdater_hook_anchor_present: getDefault(r, 'native_autoupdater_hook_anchor_present', true),
+    legacy_autoupdater_hook_anchor_present: getDefault(r, 'legacy_autoupdater_hook_anchor_present', true),
+    manual_update_hook_anchor_present: getDefault(r, 'manual_update_hook_anchor_present', true),
     update_notice_hook_anchor_present: getDefault(r, 'update_notice_hook_anchor_present', true),
     update_hint_anchor_present: getDefault(r, 'update_hint_anchor_present', true),
     remote_control_hook_anchor_present: getDefault(r, 'remote_control_hook_anchor_present', true),
@@ -645,6 +690,12 @@ function humanCoverage(r, cov) {
   if (!getDefault(cov, 'native_autoupdater_hook_anchor_present', true)) {
     L.push('MISSING/AMBIGUOUS in-TUI native autoupdater anchor (extract-claude-js native autoupdater redirect would not apply)');
   }
+  if (!getDefault(cov, 'legacy_autoupdater_hook_anchor_present', true)) {
+    L.push('MISSING/AMBIGUOUS LEGACY autoupdater install-dispatch anchor (extract-claude-js patchLegacyAutoupdater would not apply -> a built target would install upstream over itself)');
+  }
+  if (!getDefault(cov, 'manual_update_hook_anchor_present', true)) {
+    L.push('MISSING/AMBIGUOUS manual `update` installation-type switch (extract-claude-js patchManualUpdate would not apply -> `<target> update` would install upstream over this binary)');
+  }
   if (!getDefault(cov, 'update_notice_hook_anchor_present', true)) {
     L.push('MISSING/AMBIGUOUS installation-warnings version+warnings anchor (extract-claude-js update-notice would not surface)');
   }
@@ -725,7 +776,8 @@ module.exports = {
   ACCEPTED_MISSING_EXTERNALS, ACCEPTED_STUBBED_BUN, ACCEPTED_MISSING_BUN, ACCEPTED_BUN_MODULES,
   count, countSubstr, searchApplets, unknownSearchApplets, ripgrepLeverPresent,
   doctorHookAnchorPresent, snapshotGeneratorPresent, autoupdaterHookAnchorPresent,
-  nativeAutoupdaterHookAnchorPresent, updateNoticeHookAnchorPresent, remoteControlHookAnchorPresent,
+  nativeAutoupdaterHookAnchorPresent, legacyAutoupdaterHookAnchorPresent, manualUpdateHookAnchorPresent,
+  updateNoticeHookAnchorPresent, remoteControlHookAnchorPresent,
   embeddedAppletVersions, hostAppletVersion, which, featureForAsset,
   inspect, probeShim, gateProblems, coverage,
   humanSurface, humanApplets, humanCoverage,

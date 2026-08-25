@@ -164,6 +164,67 @@ test('native autoupdater anchor: VERSION lookahead is left-bounded against an EN
   assert.strictEqual(ins.nativeAutoupdaterHookAnchorPresent(decoyOnly), false);
 });
 
+test('legacy autoupdater anchor present (raw + already-patched) and absent', () => {
+  // Real 2.1.241 bytes (trimmed to the guard + the head of the install dispatch).
+  const present = 'if(w(`AutoUpdater: Detected installation type: ${x}`),x==="development")'
+    + '{w("AutoUpdater: Cannot auto-update development build"),t(!1);return}'
+    + 'let I,M,L;if(x==="npm-local")w("AutoUpdater: Using local update method");';
+  assert.strictEqual(ins.legacyAutoupdaterHookAnchorPresent(present), true);
+
+  // PROVE THE CHECK IS NOT VACUOUS. A bundle with no legacy dispatch must report
+  // false, and so must a body carrying the development guard alone — the whole
+  // point of the lookahead is that the guard by itself is not the site we patch.
+  assert.strictEqual(ins.legacyAutoupdaterHookAnchorPresent('no legacy autoupdater'), false);
+  const guardOnly = 'if(w(`AutoUpdater: Detected installation type: ${x}`),x==="development")'
+    + '{w("AutoUpdater: Cannot auto-update development build"),t(!1);return}let I,M,L;if(x==="other")q();';
+  assert.strictEqual(ins.legacyAutoupdaterHookAnchorPresent(guardOnly), false);
+  // ambiguous (two sites) is also not "present"
+  assert.strictEqual(ins.legacyAutoupdaterHookAnchorPresent(present + present), false);
+
+  // already-patched bundles still count as present: the splice breaks the base
+  // anchor's lookahead, so only the injected marker can vouch for them.
+  assert.strictEqual(ins.legacyAutoupdaterHookAnchorPresent(
+    'w("AutoUpdater: install skipped: this binary is managed by clode (notify-only)"),t(!1);return;'),
+  true);
+});
+
+test('gate_problems flags missing legacy autoupdater anchor', () => {
+  const cov = {
+    stubbed: [], missing: [], bun_modules_unhandled: [], modules_missing: [],
+    search_applets_unknown: [], ripgrep_lever_present: true,
+    legacy_autoupdater_hook_anchor_present: false,
+  };
+  assert.ok(ins.gateProblems(cov).some((p) => p.includes('LEGACY autoupdater')));
+});
+
+test('manual update anchor present (raw + already-patched) and absent', () => {
+  // Real 2.1.241 bytes, trimmed to the two case arms the anchor pins.
+  const present = 'switch(i.installationType){case"npm-local":h=!0,g="local";break;'
+    + 'case"npm-global":h=!1,g="global";break;case"unknown":{let b=await Pqt();';
+  assert.strictEqual(ins.manualUpdateHookAnchorPresent(present), true);
+
+  // NOT VACUOUS: a bundle with no such switch, and one whose case arms assign
+  // DIFFERENT locals than the switch's own pair, both report false.
+  assert.strictEqual(ins.manualUpdateHookAnchorPresent('no update dispatch'), false);
+  const mismatched = 'switch(i.installationType){case"npm-local":h=!0,g="local";break;'
+    + 'case"npm-global":q=!1,z="global";break;case"unknown":{';
+  assert.strictEqual(ins.manualUpdateHookAnchorPresent(mismatched), false);
+  assert.strictEqual(ins.manualUpdateHookAnchorPresent(present + present), false);
+
+  // already-patched bundles still count as present
+  assert.strictEqual(ins.manualUpdateHookAnchorPresent(
+    'switch("clode-managed-target"){case"npm-local":h=!0,g="local";break;'), true);
+});
+
+test('gate_problems flags missing manual update anchor', () => {
+  const cov = {
+    stubbed: [], missing: [], bun_modules_unhandled: [], modules_missing: [],
+    search_applets_unknown: [], ripgrep_lever_present: true,
+    manual_update_hook_anchor_present: false,
+  };
+  assert.ok(ins.gateProblems(cov).some((p) => p.includes('manual `update`')));
+});
+
 test('update notice anchor present (raw + already-patched) and absent', () => {
   const raw = 'return{installationType:t,version:r,installationPath:n,'
     + 'warnings:s,packageManager:f}';

@@ -1,10 +1,14 @@
 'use strict';
-// Unit tests for the two autoupdater patches in extract-claude-js.cjs. Both must
-// drive the notify-only check (globalThis.__clodeCheckUpdate, installed by the
-// PRELUDE) and NEVER spawn/redirect to $CLODE_SELF. Synthetic bundle strings in
-// the style of the other extractor-anchor tests, plus the real 2.1.179 native
-// fixture. End-to-end correctness (right version compared, notice renders) is
-// verified in Task 6 against a real bundle.
+// Unit tests for extract-claude-js.cjs's update-path patches. The two in-TUI
+// autoupdater redirects (pkg-manager, native) must drive the notify-only check
+// (globalThis.__clodeCheckUpdate, installed by the PRELUDE) and NEVER
+// spawn/redirect to $CLODE_SELF. The two INSTALLER-NEUTRALIZATIONS below them
+// (legacy autoupdater, manual `update` command) must leave no reachable installer
+// call at all — those are the paths a BUILT TARGET actually takes, since a target
+// reports installation type `unknown` and so mounts neither widget above.
+// Fixtures are real bundle bytes with the version noted; synthetic bodies are
+// trimmed copies of real shapes. End-to-end correctness (right version compared,
+// notice renders) is verified in Task 6 against a real bundle.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -12,6 +16,8 @@ const path = require('node:path');
 const {
   patchAutoupdater,
   patchNativeAutoupdater,
+  patchLegacyAutoupdater,
+  patchManualUpdate,
   patchUpdateHint,
   patchUpdateNotice,
 } = require('../libexec/extract-claude-js.cjs');
@@ -148,6 +154,131 @@ test('pkg-manager autoupdater patch is fail-loud: no match -> unchanged, applied
   const [out, applied] = patchAutoupdater(body);
   assert.strictEqual(applied, false);
   assert.strictEqual(out, body);
+});
+
+// --- LEGACY npm path — the one a built target actually mounts ----------------
+//
+// THE FIXTURE BELOW IS A VERBATIM BYTE SLICE OF THE CARVED 2.1.241 CLI, and the
+// synthetic bodies in these tests are trimmed copies of real bundle shapes, never
+// invented ones (see the update-hint note further down for why that rule exists).
+//
+// Why this patch exists at all: upstream picks ONE of three updater widgets by
+// installation type. clode patched the `package-manager` and `native` widgets —
+// and a built target reports `unknown`, so it mounts NEITHER. It mounts this one,
+// whose dispatch installs on npm-local, npm-global, AND the `unknown` fallback.
+// Proven live before the fix: a quaude built from main, with a fake npm/bun first
+// on PATH and DISABLE_AUTOUPDATER deliberately unset, spawned
+// `bun install -g @anthropic-ai/claude-code@99.0.0`.
+
+const LEGACY_2_1_241 = fs.readFileSync(
+  path.join(__dirname, 'fixtures/autoupdater/legacy-2.1.241.js'), 'latin1');
+
+test('legacy autoupdater: the real 2.1.241 install dispatch is neutralized', () => {
+  const [out, applied] = patchLegacyAutoupdater(LEGACY_2_1_241);
+  assert.strictEqual(applied, true);
+  // The return lands BETWEEN the development guard and the install dispatch...
+  assert.match(out, /development build"\),t\(!1\);return\}w\("AutoUpdater: install skipped: this binary is managed by clode \(notify-only\)"\),t\(!1\);return;let I,M,L;/);
+  // ...so no installer call is reachable, though the calls themselves are left
+  // verbatim (this patch removes reachability, it does not rewrite upstream code).
+  assert.match(out, /I=await ITr\(_,C,o\)/);
+  assert.doesNotMatch(out, /CLODE_SELF/);
+});
+
+test('legacy autoupdater: the detected installation type is still logged honestly', () => {
+  // We do NOT rewrite `x` to "development" — `claude --debug` must still report
+  // what was really detected, or the next person debugging this is lied to.
+  const [out] = patchLegacyAutoupdater(LEGACY_2_1_241);
+  assert.match(out, /AutoUpdater: Detected installation type: \$\{x\}/);
+});
+
+test('legacy autoupdater matches the TWO-temporary dispatch (1.0.100 .. 2.1.110 shape)', () => {
+  // Real 1.0.100 bytes: the dispatch declared `let C,w;`, not `let I,M,L;`.
+  const body = 'if(x1(`AutoUpdater: Detected installation type: ${D}`),D==="development")'
+    + '{x1("AutoUpdater: Cannot auto-update development build"),B(!1);return}'
+    + 'let C,w;if(D==="npm-local")x1("AutoUpdater: Using local update method"),w="local",C=await Yu();';
+  const [out, applied] = patchLegacyAutoupdater(body);
+  assert.strictEqual(applied, true);
+  assert.match(out, /B\(!1\);return\}x1\("AutoUpdater: install skipped/);
+});
+
+test('legacy autoupdater is fail-loud when the dispatch is not the one we mean', () => {
+  // Same development guard, but what follows is NOT the installation-type
+  // dispatch. Must skip rather than splice a `return` into unrelated code.
+  const body = 'if(w(`AutoUpdater: Detected installation type: ${x}`),x==="development")'
+    + '{w("AutoUpdater: Cannot auto-update development build"),t(!1);return}'
+    + 'let I,M,L;if(x==="something-else")I=1;';
+  const [out, applied] = patchLegacyAutoupdater(body);
+  assert.strictEqual(applied, false);
+  assert.strictEqual(out, body);
+});
+
+test('legacy autoupdater is fail-loud: no match -> unchanged, applied false', () => {
+  const body = 'no legacy autoupdater dispatch here';
+  const [out, applied] = patchLegacyAutoupdater(body);
+  assert.strictEqual(applied, false);
+  assert.strictEqual(out, body);
+});
+
+test('legacy autoupdater is fail-loud: two matches -> unchanged, applied false', () => {
+  const two = LEGACY_2_1_241 + ';' + LEGACY_2_1_241;
+  const [out, applied] = patchLegacyAutoupdater(two);
+  assert.strictEqual(applied, false);
+  assert.strictEqual(out, two);
+});
+
+test('legacy autoupdater: the patched body is idempotent-safe (second pass is a no-op)', () => {
+  // The splice breaks the anchor's own lookahead, so re-running must skip rather
+  // than stack a second return. (inspect accepts the injected marker instead.)
+  const [once, a1] = patchLegacyAutoupdater(LEGACY_2_1_241);
+  assert.strictEqual(a1, true);
+  const [twice, a2] = patchLegacyAutoupdater(once);
+  assert.strictEqual(a2, false);
+  assert.strictEqual(twice, once);
+});
+
+// --- MANUAL `update` command — the second caller of the same installer -------
+//
+// Fixture is a verbatim byte slice of the carved 2.1.241 CLI. Proven live before
+// the fix: `quaude update` printed clode's own "rebuild with clode build" notice
+// and THEN spawned `bun install -g @anthropic-ai/claude-code@99.0.0`.
+
+const MANUAL_2_1_241 = fs.readFileSync(
+  path.join(__dirname, 'fixtures/autoupdater/manual-update-2.1.241.js'), 'latin1');
+
+test('manual update: the real 2.1.241 dispatch falls to upstream\'s own refusal', () => {
+  const [out, applied] = patchManualUpdate(MANUAL_2_1_241);
+  assert.strictEqual(applied, true);
+  // Discriminant is a sentinel no case arm matches -> `default:` runs.
+  assert.match(out, /switch\("clode-managed-target"\)\{case"npm-local":/);
+  // Every case arm is left verbatim; only the discriminant changed.
+  assert.match(out, /case"unknown":\{let b=await Pqt\(\)/);
+  // The refusal still names the REAL detected type (it reads the property, not
+  // the discriminant), so the user is not lied to about what was detected.
+  assert.match(out, /Error: Cannot update \$\{i\.installationType\} installation/);
+  assert.strictEqual(out.length, MANUAL_2_1_241.length
+    - 'i.installationType'.length + '"clode-managed-target"'.length);
+});
+
+test('manual update is fail-loud: no match -> unchanged, applied false', () => {
+  const body = 'switch(o.somethingElse){case"npm-local":a=!0;break;}';
+  const [out, applied] = patchManualUpdate(body);
+  assert.strictEqual(applied, false);
+  assert.strictEqual(out, body);
+});
+
+test('manual update is fail-loud: two matches -> unchanged, applied false', () => {
+  const two = MANUAL_2_1_241 + ';' + MANUAL_2_1_241;
+  const [out, applied] = patchManualUpdate(two);
+  assert.strictEqual(applied, false);
+  assert.strictEqual(out, two);
+});
+
+test('manual update: the patched body is idempotent-safe (second pass is a no-op)', () => {
+  const [once, a1] = patchManualUpdate(MANUAL_2_1_241);
+  assert.strictEqual(a1, true);
+  const [twice, a2] = patchManualUpdate(once);
+  assert.strictEqual(a2, false);
+  assert.strictEqual(twice, once);
 });
 
 // --- update remediation hint -------------------------------------------------

@@ -95,6 +95,19 @@ const EXPECTED = {
     expect: 'present',
     why: 'the in-TUI NATIVE autoupdater redirect would not apply — a built target would try to install over itself',
   },
+  legacy_autoupdater_hook_anchor_present: {
+    expect: 'present',
+    why: 'the LEGACY npm autoupdater install-dispatch neutralization would not apply — and this is '
+      + 'the ONE updater a built target actually mounts (installation type `unknown` is neither '
+      + '`native` nor `package-manager`), so a target would run `bun/npm install -g '
+      + '@anthropic-ai/claude-code` over itself. Observed live on a real quaude before the hook existed.',
+  },
+  manual_update_hook_anchor_present: {
+    expect: 'present',
+    why: 'the manual `update` command would not be neutralized — `<target> update`, typed by a human, '
+      + 'would `bun/npm install -g @anthropic-ai/claude-code` over this binary (update-guard.cjs only '
+      + 'denies the MODEL a `claude update` through Bash). Observed live on a real quaude.',
+  },
   doctor_hook_anchor_present: {
     expect: 'present',
     why: '/doctor installation-warnings would lose the applet-skew hook',

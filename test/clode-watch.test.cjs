@@ -208,12 +208,12 @@ test('clodeWatch: no provider store is a silent no-op (no notice written)', semv
   assert.strictEqual(fs.existsSync(fx.notice), false);
 });
 
-test('clodeWatch manual mode: HIGH prints a Node-impact summary to stderr', semverOpts, async () => {
+test('clodeWatch manual mode: HIGH prints a repackaging-impact summary to stderr', semverOpts, async () => {
   const fx = watchFixture('2.0.0', '1.0.0', 'high');
   const err = sink();
   const rc = await clodeWatch('manual', { env: fx.env, libexec: LIBEXEC, here: HERE, node: NODE, stderr: err });
   assert.strictEqual(rc, 0);
-  assert.match(err.text(), /may affect running under Node/);
+  assert.match(err.text(), /may affect how clode repackages it/);
 });
 
 test('clodeWatch manual mode: low prints an available/no-signals summary', semverOpts, async () => {
@@ -221,7 +221,7 @@ test('clodeWatch manual mode: low prints an available/no-signals summary', semve
   const err = sink();
   const rc = await clodeWatch('manual', { env: fx.env, libexec: LIBEXEC, here: HERE, node: NODE, stderr: err });
   assert.strictEqual(rc, 0);
-  assert.match(err.text(), /is available \(no Node-impacting signals\)/);
+  assert.match(err.text(), /is available \(no repackaging-impacting signals\)/);
 });
 
 test('clodeWatch manual mode: up-to-date prints an up-to-date summary', semverOpts, async () => {
