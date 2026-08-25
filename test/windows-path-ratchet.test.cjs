@@ -51,6 +51,24 @@ const RULES = {
     why: 'on win32 a path may be C:\\x or a\\b, so "/" alone decides neither pathedness nor basename. '
        + 'Mirror child_process.cjs resolveExe: slash, plus backslash and drive-letter when isWin.',
   },
+  'c-file-url-sep': {
+    // NEW KIND, 2026-08-25. clode injects C into the engine (scripts/build-tjs.mjs
+    // fixups). One fixup builds `import.meta.url` as a file:// URL from a module name.
+    // On Windows tjs__normalize_pathsep has ALREADY rewritten '/' to '\\' in that name,
+    // so a POSIX-shaped guard (`buf[0] == '/'`) never fires and the URL body carries
+    // backslashes. Both legs failed with "fileURLToPath: not a file URL" while every
+    // POSIX leg passed — invisible here, obvious there, which is this file's whole
+    // subject.
+    //
+    // A count, not a proof: it cannot check that a given site normalizes. Its job is to
+    // make a NEW file:// construction impossible to add without reading this note. The
+    // proof for the existing site is the assertion below.
+    roots: ['scripts'],
+    re: /"file:\/\/"/,
+    why: 'building a file:// URL from a path in injected C must treat BOTH separators as '
+       + "absolute and emit forward slashes in the body — on Windows the module name "
+       + 'already contains backslashes. See fixupImportMetaRequire.',
+  },
   'bare-npm-spawn': {
     // THE mechanism that actually bit. On Windows npm is npm.cmd, and
     // execFileSync('npm', ...) is ENOENT there: libuv's path_search_walk_ext tries
@@ -129,6 +147,11 @@ function scan(repo = REPO, roots = null) {
 // EXACT counts, each with the reason it is not a bug. Every entry here was read
 // and judged; none is "probably fine".
 const ALLOWED = {
+  'c-file-url-sep': {
+    // The one injected file:// construction: fixupImportMetaRequire's import.meta.url.
+    // Verified to handle both separators by the assertion at the end of this file.
+    'scripts/build-tjs.mjs': 1,
+  },
   'path-walk': {
     // Bun.which's own implementation and spawn's Bun-parity existence check.
     // These ARE the lookup — they now go through the PATHEXT-aware walk (0dd9553).
@@ -240,3 +263,19 @@ test('generated patches carry no host absolute paths', () => {
 });
 
 module.exports = { RULES, ALLOWED, scan, stripComments };
+
+// The PROOF for the counted `c-file-url-sep` rule above. A count cannot tell whether a
+// given file:// construction normalizes separators; this reads the injected C and checks
+// the two things that were actually wrong on Windows.
+test('injected C that builds a file:// URL handles Windows separators', () => {
+  const src = fs.readFileSync(path.join(REPO, 'scripts', 'build-tjs.mjs'), 'utf8');
+  const start = src.indexOf('"file://"');
+  assert.ok(start > 0, 'expected exactly one injected file:// construction to verify');
+  // Window around the construction: guard above it, body conversion below.
+  const chunk = src.slice(Math.max(0, start - 900), start + 900);
+  assert.match(chunk, /buf\[0\] == '\/' \|\| buf\[0\] == '\\\\\\\\'/,
+    'the absolute-path guard must accept a BACKSLASH too: on Windows the module name '
+    + 'has already been separator-normalized, so a "/"-only guard never fires');
+  assert.match(chunk, /\*tjs__p == '\\\\\\\\'/,
+    'the URL body must convert backslashes to forward slashes');
+});

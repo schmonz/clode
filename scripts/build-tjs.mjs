@@ -2612,10 +2612,22 @@ function fixupImportMetaRequire(dir) {
        URL". Bun reports file:///$bunfs/root/... for these, so this matches the runtime
        the bundle was built for. Names that are not absolute paths (tjs:internal/...,
        http(s) URLs already in URL form) are untouched. */
-    if (!use_realpath && buf[0] == '/') {
+    if (!use_realpath && (buf[0] == '/' || buf[0] == '\\\\')) {
+        /* Windows: tjs__normalize_pathsep has already rewritten '/' to '\\' in the
+           module name, so BOTH separators mean "absolute" here, and the URL body must
+           carry forward slashes whatever the platform uses. Getting this wrong is not
+           subtle at runtime but is invisible on POSIX: the leg reports
+           "fileURLToPath: not a file URL" only on Windows, which is exactly how this
+           bug shipped once already. */
         char tjs__u[TJS_PATH_MAX + 16] = { 0 };
+        char *tjs__p;
         tjs__pstrcpy(tjs__u, sizeof(tjs__u), "file://");
         tjs__pstrcat(tjs__u, sizeof(tjs__u), buf);
+        for (tjs__p = tjs__u + 7; *tjs__p; tjs__p++) {
+            if (*tjs__p == '\\\\') {
+                *tjs__p = '/';
+            }
+        }
         JS_DefinePropertyValueStr(ctx, meta_obj, "url", JS_NewString(ctx, tjs__u), JS_PROP_C_W_E);
     }
 
