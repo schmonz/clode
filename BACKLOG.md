@@ -1702,6 +1702,25 @@ pins the contract for each — same shape in and out, byte-identical entry/graph
 idempotent, and a loud refusal on a non-provider. It can no longer rot unnoticed
 regardless of which legs call it.
 
+**MECHANISM BUILT (2026-08-25): `scripts/stage-provider.mjs`.** One choke point that
+resolves the platform-correct provider and minimises it, so every leg that BUILDS gets the
+same treatment on every platform. Verified end to end: resolve -> 36MB -> `clode build` ->
+PONG + attest. It distinguishes the two failure modes the old code conflated ("no provider
+resolved" vs "resolved one and could not minimise it"), and neither is silent.
+
+**The ONE declared exception is about PURPOSE, not platform.** Anything that INSPECTS a
+bundle must use the real binary, because the minimiser drops exactly what inspection
+reports on — measured: real provider `embedded_assets=16, napi=8`; minimised `0, 0`. So
+`upstream-drift-check` and `inspect-claude-bundle` keep calling `find-provider.mjs`
+directly. Building from a bundle and asking questions about it are different jobs.
+
+**NOT YET WIRED, deliberately, and this is a sequencing call not a scoping one.** There
+are 21 build-path call sites of `find-provider.mjs` across `build-leg`, `ci.yml` and
+`naude-cross.yml`. Replacing them is mechanical but touches EVERY leg's provider staging,
+and it should land as one change rather than a partial one — a half-applied uniformity
+rule is just a new set of special cases. It is queued behind the release, which at time of
+writing is one job from a verdict.
+
 **Still open, and it is the user's point:**
 
 1. **Unify the two call sites.** Pick one policy deliberately — either minimising is
