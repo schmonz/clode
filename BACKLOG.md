@@ -1647,6 +1647,66 @@ was the first, `os.constants.errno` in 2.1.238), and both times we found out by 
 
 ## ★★★ NEXT: a clear, clean, well-factored, fully cross build (2026-08-24)
 
+### ★★ Critically review the environment variables (user, 2026-08-25)
+
+**The user's framing:** "I worry that we have a lot of unneeded env vars left over from
+before we discovered the architecture that clode is only a builder, never a runner. And I
+worry that the remaining ones are also susceptible to mistaken usage."
+
+Inventory taken 2026-08-25, so the review starts from facts rather than impressions:
+
+    116  distinct CLODE_* variables across libexec, bin, scripts, test, .github
+     28  referenced ONLY in tests or CI — no shipped consumer in libexec/, bin/ or scripts/
+
+The 28 with no shipped consumer:
+
+    CLODE_BAKE_EOF CLODE_BUN_SHIM CLODE_CROSS_BUILD CLODE_CROSS_BUILD_TIMEOUT_MS
+    CLODE_DARWIN_PROVIDER_BIN CLODE_ENGINE CLODE_ENV_TEST_NUM CLODE_ENV_TEST_X
+    CLODE_GUEST_PACKAGES CLODE_GUEST_SCRIPT CLODE_LEAK_CANARY CLODE_NAUDE_SMOKE
+    CLODE_OFFLINE CLODE_ORACLE_BINARIES CLODE_QUAUDE CLODE_QUAUDE_EXE
+    CLODE_REGEN_URL_GOLDEN CLODE_REGEN_URL_REJECTS CLODE_SCREEN CLODE_SELF
+    CLODE_SHIM_WALL_BUNDLE CLODE_SMOKE_EOF CLODE_TARGET CLODE_TARGET_KIND
+    CLODE_TJS_STUB_SYNC CLODE_TJSC CLODE_UPDATE_CONSTANTS_GOLDEN CLODE_X
+
+Not all are dead — some are deliberate test fixtures (`CLODE_ENV_TEST_X`, `CLODE_X`), and
+`CLODE_SELF` appears only in tests because `test/no-clode-self.test.cjs` is a RATCHET
+asserting it stays retired. Each needs judging, not sweeping. But others in that list
+(`CLODE_ENGINE`, `CLODE_OFFLINE`, `CLODE_TARGET`, `CLODE_QUAUDE`) read like they once had
+shipped consumers, which is exactly the leftover the user suspects.
+
+**Mistaken usage is PROVEN, not hypothetical.** On 2026-08-25 I exported
+`CLODE_CLAUDE_BIN` for a build; twenty minutes later it silently redirected `npm test`,
+failing `the installed provider still carves to a single entrypoints/cli.js module`
+because the override pointed at a code-split 2.1.245. I nearly edited that test before
+noticing the contamination was mine. The var wins over the clode-managed provider store
+(`libexec/clode-resolve.cjs:101`, first check in `resolveClaudeBin`), is unscoped, is
+never echoed, and nothing warns that a test run is using an overridden provider.
+
+**Overlapping names for one concept — at least four ways to say "which provider":**
+
+    CLODE_CLAUDE_BIN  CLODE_PROVIDER_BIN  CLODE_PROVIDERS  CLODE_DARWIN_PROVIDER_BIN
+
+and engine selection is spread across `CLODE_TJS`, `CLODE_TJS_OUT`, `CLODE_TARGET_TEMPLATE`.
+Whatever survives the cull should have ONE name per concept.
+
+**Questions the review should answer, per variable:** who reads it; is it a user-facing
+knob, a test seam, or build-tool plumbing; does it still make sense now that clode is
+only a builder and never a runner; and — for anything that changes WHICH INPUTS a run
+uses — should its use be announced rather than silent.
+
+**Candidate mechanisms** (decide during the review, do not presume):
+
+1. A single declared registry, so an undeclared `CLODE_*` read is a failure. Same shape
+   as the EXPECTED table in `scripts/upstream-drift-check.mjs`, and it makes the count
+   ratchet instead of drift.
+2. Anything that redirects an INPUT (provider, engine, deps, cache) announces itself on
+   stderr when set. My contaminated test run would have said so in its first line.
+3. Tests that must not inherit ambient overrides clear them explicitly, rather than
+   trusting the shell they happen to run in.
+
+Related: [[isolate-clode-runs-from-user-deps]] (the existing convention of pointing
+CLODE_DEPS/CLODE_CACHE at temp dirs) and [[dev-box-state-hides-bugs]].
+
 ### Hooks under the code-split bundle: 7 of 9 survive untouched; 1 needs a decision
 
 Ran the REAL patch functions from `libexec/extract-claude-js.cjs` against every module of
