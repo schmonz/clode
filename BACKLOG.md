@@ -1676,6 +1676,58 @@ was the first, `os.constants.errno` in 2.1.238), and both times we found out by 
 
 ## ★★★ NEXT: a clear, clean, well-factored, fully cross build (2026-08-24)
 
+### The case for explicit dependencies: naude broke and only CI could tell us (2026-08-25)
+
+**The user, on being shown that three oracle jobs went red for a reason found locally
+twenty minutes earlier by accident:** "Feels like another reason to need CMake and have
+explicit dependencies and build steps that I can understand. No reason this needed to wait
+till CI to get discovered."
+
+**What happened.** When upstream went code-split at 2.1.243 the extractor learned the new
+shape and now stages `graph.json` (+ `graph.qbc`) instead of a single `cli.cjs`. quaude was
+fixed, proven, and green. **naude was not, and nothing noticed** — `clode build --naude`
+dies with:
+
+    build-naude: --cli path does not exist: <cache>/claude-391948592-.../cli.cjs
+
+That is the REFERENCE ENGINE of the three-way fidelity recipe. It is also the thing that
+makes the two shim layers worth keeping distinct at all.
+
+**Why nothing caught it, which is the actual lesson.** The dependency "naude consumes an
+extracted `cli.cjs`" is not stated anywhere. It is:
+
+- an argument assembled at `libexec/clode-fuse.cjs:1080` (`'--cli', cliPath`), and
+- validated by a path-existence check inside `scripts/build-naude.mjs` at RUNTIME,
+  about two minutes into a build.
+
+So when a producer stopped emitting a file, the consumer could only find out by running.
+There is no edge to break, because there is no graph — `grep -l 'graph.json'` returns
+`quaude-fuse.js`, `node-shim/loader.cjs`, `clode-extract.cjs` and nothing on the naude
+path. In a declared build (CMake or otherwise) the extractor's OUTPUTS and build-naude's
+INPUTS are both named, and a producer that stops producing is an error at generate time,
+before a single byte is compiled.
+
+**And there is no local target that builds BOTH products.** clode makes exactly two things
+— quaude and naude — and the dev loop builds one of them. I found this only because I
+happened to build a naude to check something unrelated. That is not a process.
+
+**Three concrete asks for the overhaul, in order of value:**
+
+1. **Name the artifacts and their edges.** stage(provider) -> {graph.json, graph.qbc,
+   bun-shim.cjs, cli.cjs?} -> {quaude, naude}. A consumer's input must be a declared
+   output, so a format change breaks the graph instead of a job.
+2. **One target that builds every product.** If `clode` ships it, the default local build
+   makes it. The oracle is a PRODUCT, not a test fixture.
+3. **Failure at the earliest possible stage.** A missing staged input should fail at
+   configure/generate, not at minute two of an emulated leg. This is the same shape as
+   the provider-staging defect above: how a step fails is part of what the step IS.
+
+**Immediate follow-up, tracked separately:** teach the naude path the split shape. The
+relinker already exists (`libexec/bun-graph-plan.cjs` emits a single ordered CJS from the
+module graph; measured at 0.10s), so this is wiring, not research — but it is a P0, since
+`clode build --naude` is broken for anyone on current upstream.
+
+
 ### Write down the doctrine — propose a CLAUDE.md from this project's own history (user, 2026-08-25)
 
 **The user, immediately after being told that "solve it portably" existed in the repo only

@@ -678,27 +678,22 @@ runs:
         # 19MB cli.cjs under the emulated engine — slow/heavy; if qemu-user cannot
         # carry it, record the bound and keep the leg green on level-2. The
         # minimal provider is carved on the x64 host (fast), then read in-rootfs.
-        npm i -g @anthropic-ai/claude-code 2>&1 | tail -3 || true
-        # ONE HOME for this, same as ci.yml. The old `find … | head -1` took whatever
-        # the directory walk yielded first: with 2.1.243 that is bin/claude.exe, a
-        # WINDOWS binary >20M shipped inside the wrapper — so every Linux and macOS leg
-        # picked it and died in extraction ("no block named entrypoints/cli.js …
-        # largest candidate was 1191 bytes"). find-provider ranks by THIS platform's
-        # package first and never returns a wrong-platform binary at all.
-        PROV="$(node scripts/find-provider.mjs)"
-        if [ -n "$PROV" ] && node scripts/make-min-provider.cjs "$PROV" .matrix/qu-provider-min 2>/dev/null; then
-          if docker run --rm --platform "linux/$ARCH" -v "$PWD:/w" -w /w \
-               -e CLODE_CLAUDE_BIN=/w/.matrix/qu-provider-min -e CLODE_CACHE=/w/.matrix/qu-cache \
-               "$ROOTFS" ./"$ASSET" build --out /w/.matrix/quaude-qu \
-               2>&1 | tee "$RUNNER_TEMP/qu-fuse.txt" | grep -q 'PONG round-trip ok'; then
-            echo "level-2.5 (full fuse+PONG under qemu-user) OK on $ARCH"
-          else
-            echo "level-2.5 NOT achieved on $ARCH (qemu-user could not carry the full fuse) — tier-2 self-load stands; see the log above."
-          fi
-          rm -f .matrix/quaude-qu
+        npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
+        PROV="$(node scripts/stage-provider.mjs --out .matrix/qu-provider)" || exit 1
+        echo "provider: $PROV"
+        # The level-2.5 RESULT is still soft (qemu-user may not carry a full build, and
+        # that is a recorded bound, not a fault). STAGING a provider is not soft: it is
+        # the same step on every leg and it fails the same way. Conflating the two is
+        # what let "our minimiser is broken" print as "no provider available to carve".
+        if docker run --rm --platform "linux/$ARCH" -v "$PWD:/w" -w /w \
+             -e CLODE_CLAUDE_BIN=/w/.matrix/qu-provider/provider-min -e CLODE_CACHE=/w/.matrix/qu-cache \
+             "$ROOTFS" ./"$ASSET" build --out /w/.matrix/quaude-qu \
+             2>&1 | tee "$RUNNER_TEMP/qu-fuse.txt" | grep -q 'PONG round-trip ok'; then
+          echo "level-2.5 (full fuse+PONG under qemu-user) OK on $ARCH"
         else
-          echo "level-2.5 SKIPPED on $ARCH (no provider available to carve) — tier-2 self-load stands."
+          echo "level-2.5 NOT achieved on $ARCH (qemu-user could not carry the full fuse) — tier-2 self-load stands; see the log above."
         fi
+        rm -f .matrix/quaude-qu
 
     # (C) The runtime smoke: hand the own-qemu backend a recipe that stages
     # the cross-fused sparc clode builder + an x64 provider binary on :8180
@@ -711,21 +706,14 @@ runs:
       run: |
         set -uo pipefail
         npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
-        # ONE HOME for this, same as ci.yml. The old `find … | head -1` took whatever
-        # the directory walk yielded first: with 2.1.243 that is bin/claude.exe, a
-        # WINDOWS binary >20M shipped inside the wrapper — so every Linux and macOS leg
-        # picked it and died in extraction ("no block named entrypoints/cli.js …
-        # largest candidate was 1191 bytes"). find-provider ranks by THIS platform's
-        # package first and never returns a wrong-platform binary at all.
-        PROV="$(node scripts/find-provider.mjs)"
-        if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found under @anthropic-ai/claude-code" >&2; exit 1; fi
+        PROV="$(node scripts/stage-provider.mjs)" || exit 1
         echo "provider: $PROV"
         mkdir -p .matrix/qemu-smoke
         # Pre-carve the 240MB Bun provider to a ~17.5MB synthetic provider: the
         # in-guest carve of the full binary OOMs the 512MB sun4m + is TCG-glacial
         # (>35min); the minimal one fits and is fast. Arch-independent — the
         # extracted cli.cjs is identical. (proven: docker-loop wall-walk 2026-07-14)
-        node scripts/make-min-provider.cjs "$PROV" .matrix/qemu-smoke/provider-min
+        cp "$PROV" .matrix/qemu-smoke/provider-min
         cp "${{ steps.name.outputs.asset }}" .matrix/qemu-smoke/clode-builder
 
     - name: Load the sparc smoke recipe (single committed source)
@@ -764,14 +752,7 @@ runs:
       run: |
         set -uo pipefail
         npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
-        # ONE HOME for this, same as ci.yml. The old `find … | head -1` took whatever
-        # the directory walk yielded first: with 2.1.243 that is bin/claude.exe, a
-        # WINDOWS binary >20M shipped inside the wrapper — so every Linux and macOS leg
-        # picked it and died in extraction ("no block named entrypoints/cli.js …
-        # largest candidate was 1191 bytes"). find-provider ranks by THIS platform's
-        # package first and never returns a wrong-platform binary at all.
-        PROV="$(node scripts/find-provider.mjs)"
-        if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found under @anthropic-ai/claude-code" >&2; exit 1; fi
+        PROV="$(node scripts/stage-provider.mjs)" || exit 1
         echo "provider: $PROV"
         mkdir -p .matrix
         cp "$PROV" .matrix/provider-claude   # bytes only — clode EXTRACTS from it, never execs it
@@ -1061,14 +1042,7 @@ runs:
       run: |
         set -uo pipefail
         npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
-        # ONE HOME for this, same as ci.yml. The old `find … | head -1` took whatever
-        # the directory walk yielded first: with 2.1.243 that is bin/claude.exe, a
-        # WINDOWS binary >20M shipped inside the wrapper — so every Linux and macOS leg
-        # picked it and died in extraction ("no block named entrypoints/cli.js …
-        # largest candidate was 1191 bytes"). find-provider ranks by THIS platform's
-        # package first and never returns a wrong-platform binary at all.
-        PROV="$(node scripts/find-provider.mjs)"
-        if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found under @anthropic-ai/claude-code" >&2; exit 1; fi
+        PROV="$(node scripts/stage-provider.mjs)" || exit 1
         echo "provider: $PROV"
         set -e
         # .exe ON WINDOWS, and it has to be here rather than in clode. The probes

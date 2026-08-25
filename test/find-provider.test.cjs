@@ -124,7 +124,22 @@ test('an empty scope reports the root, the scope contents, and what it wanted', 
 // `find … | head -1` lookups — and when 2.1.243 shipped bin/claude.exe inside the
 // wrapper, the walk yielded that Windows binary first and EVERY Linux and macOS leg
 // died in extraction. A ratchet that covers one file is a ratchet with a hole.
-test('every provider lookup in .github goes through this script', () => {
+//
+// IT NOW PINS THE POLICY, NOT JUST THE SCRIPT (2026-08-25). Counting uses of
+// find-provider could not see the defect that actually shipped: minimising ran on
+// three legs through two call sites with OPPOSITE failure policies, so the same
+// breakage was swallowed on riscv64/s390x and fatal on netbsd-sparc — three hours into
+// the slowest job in the matrix. The user: "I would like it to apply equally to all
+// platforms unless there's a specific good reason not to."
+//
+// So: BUILDING stages through scripts/stage-provider.mjs (resolve + minimise, one
+// failure policy). INSPECTING uses find-provider.mjs directly, because the minimiser
+// deliberately drops what inspection reports on (measured: real provider
+// embedded_assets=16 napi=8; minimised 0/0). The exception is about PURPOSE, and the
+// allow-list below is the only place it is allowed to be about a FILE.
+const INSPECTION_ONLY = new Set(['workflows/upstream-drift.yml']);
+
+test('every provider lookup in .github goes through the right one of the two', () => {
   const root = path.resolve(__dirname, '..', '.github');
   const files = [];
   (function walk(d) {
@@ -134,15 +149,48 @@ test('every provider lookup in .github goes through this script', () => {
       else if (/\.ya?ml$/.test(e.name)) files.push(p);
     }
   })(root);
-  const offenders = [];
-  let uses = 0;
+
+  const handRolled = [], unstaged = [], direct = [];
+  let staged = 0;
   for (const f of files) {
+    const rel = path.relative(root, f).split(path.sep).join('/');
     const y = fs.readFileSync(f, 'utf8');
-    uses += (y.match(/scripts\/find-provider\.mjs/g) || []).length;
-    if (/find "\$\(npm root -g\)/.test(y)) offenders.push(path.relative(root, f));
+    if (/find "\$\(npm root -g\)/.test(y)) handRolled.push(rel);
+    const finds = (y.match(/scripts\/find-provider\.mjs/g) || []).length;
+    staged += (y.match(/scripts\/stage-provider\.mjs/g) || []).length;
+    if (finds && !INSPECTION_ONLY.has(rel)) unstaged.push(`${rel} (${finds})`);
+    // A build path must never reach the minimiser itself: that is how two call sites
+    // acquired two different opinions about whether its failure mattered.
+    if (/scripts\/make-min-provider\.cjs/.test(y)) direct.push(rel);
   }
-  assert.deepStrictEqual(offenders, [],
+
+  assert.deepStrictEqual(handRolled, [],
     'hand-rolled find(1) provider lookups are back — they pick whatever the directory '
     + 'walk yields first, which upstream can change without telling us');
-  assert.ok(uses >= 9, `expected the shared finder at every provider site, found ${uses}`);
+  assert.deepStrictEqual(unstaged, [],
+    'a BUILD path calls find-provider.mjs directly, so it skips minimising and this '
+    + 'platform is now a special case. Use scripts/stage-provider.mjs, or add the file '
+    + 'to INSPECTION_ONLY with a written reason about PURPOSE, not about the platform');
+  assert.deepStrictEqual(direct, [],
+    'a workflow calls make-min-provider.cjs directly. Go through stage-provider.mjs so '
+    + 'there is ONE failure policy — two call sites disagreeing about whether an error '
+    + 'matters is the same defect as two implementations');
+  assert.ok(staged >= 15,
+    `expected staged provider lookups at every build site, found ${staged}`);
+});
+
+// The declared exception must stay REAL. If the minimiser ever stopped dropping
+// embedded assets, INSPECTION_ONLY would be cargo — an exemption nobody re-checked,
+// which is the same shape as the openindiana-by-name exemption and the two hardcoded
+// leg names. This asserts the exception still has a reason, from the file itself.
+test('the inspection exception names a reason, and the reason is about purpose', () => {
+  const src = fs.readFileSync(path.resolve(__dirname, '..', 'scripts', 'stage-provider.mjs'), 'utf8');
+  assert.match(src, /INSPECTS/, 'stage-provider must say what the exception is FOR');
+  assert.match(src, /embedded_assets/, 'and cite the measurement that makes it real');
+  for (const rel of INSPECTION_ONLY) {
+    const y = fs.readFileSync(path.resolve(__dirname, '..', '.github', rel), 'utf8');
+    assert.match(y, /scripts\/find-provider\.mjs/,
+      `${rel} is exempted from staging but no longer looks up a provider at all — `
+      + 'drop it from INSPECTION_ONLY rather than leaving a stale exemption');
+  }
 });

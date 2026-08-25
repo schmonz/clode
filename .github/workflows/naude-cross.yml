@@ -50,8 +50,13 @@ jobs:
       - name: Cross-build a signed darwin-arm64 naude (fetches pinned Node + rcodesign)
         run: |
           set -euo pipefail
-          PROV="$(node scripts/find-provider.mjs)"
-          if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
+          # ONE staging path for every leg that BUILDS: resolve the platform-correct
+          # provider and MINIMISE it (scripts/stage-provider.mjs), so every platform is
+          # treated identically. It diagnoses its own failures, and it distinguishes the
+          # two that used to print the same sentence: "no provider resolved" and "resolved
+          # one, could not minimise it" have different remedies. Anything that INSPECTS a
+          # bundle uses find-provider.mjs directly instead — see the script header.
+          PROV="$(node scripts/stage-provider.mjs)" || exit 1
           echo "provider: $PROV"
           CLODE_CLAUDE_BIN="$PROV" CLODE_PROVIDER_BIN="$PROV" \
             node bin/clode build --naude --target macos-arm64 --out "$RUNNER_TEMP/naude-darwin"
@@ -110,8 +115,13 @@ jobs:
       - name: Cross-build a signed darwin-X64 naude from arm64 Linux (fetches pinned Node + rcodesign)
         run: |
           set -euo pipefail
-          PROV="$(node scripts/find-provider.mjs)"
-          if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
+          # ONE staging path for every leg that BUILDS: resolve the platform-correct
+          # provider and MINIMISE it (scripts/stage-provider.mjs), so every platform is
+          # treated identically. It diagnoses its own failures, and it distinguishes the
+          # two that used to print the same sentence: "no provider resolved" and "resolved
+          # one, could not minimise it" have different remedies. Anything that INSPECTS a
+          # bundle uses find-provider.mjs directly instead — see the script header.
+          PROV="$(node scripts/stage-provider.mjs)" || exit 1
           echo "provider: $PROV"
           CLODE_CLAUDE_BIN="$PROV" CLODE_PROVIDER_BIN="$PROV" \
             node bin/clode build --naude --target macos-amd64 --out "$RUNNER_TEMP/naude-darwin-x64"
@@ -171,8 +181,13 @@ jobs:
       - name: Cross-build an unsigned win32-x64 naude (fetches the pinned win32 Node)
         run: |
           set -euo pipefail
-          PROV="$(node scripts/find-provider.mjs)"
-          if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
+          # ONE staging path for every leg that BUILDS: resolve the platform-correct
+          # provider and MINIMISE it (scripts/stage-provider.mjs), so every platform is
+          # treated identically. It diagnoses its own failures, and it distinguishes the
+          # two that used to print the same sentence: "no provider resolved" and "resolved
+          # one, could not minimise it" have different remedies. Anything that INSPECTS a
+          # bundle uses find-provider.mjs directly instead — see the script header.
+          PROV="$(node scripts/stage-provider.mjs)" || exit 1
           echo "provider: $PROV"
           CLODE_CLAUDE_BIN="$PROV" CLODE_PROVIDER_BIN="$PROV" \
             node bin/clode build --naude --target windows-amd64 --out "$RUNNER_TEMP/naude-win-x64"
@@ -232,8 +247,13 @@ jobs:
       - name: Cross-build an unsigned win32-arm64 naude (fetches the pinned win32 Node)
         run: |
           set -euo pipefail
-          PROV="$(node scripts/find-provider.mjs)"
-          if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
+          # ONE staging path for every leg that BUILDS: resolve the platform-correct
+          # provider and MINIMISE it (scripts/stage-provider.mjs), so every platform is
+          # treated identically. It diagnoses its own failures, and it distinguishes the
+          # two that used to print the same sentence: "no provider resolved" and "resolved
+          # one, could not minimise it" have different remedies. Anything that INSPECTS a
+          # bundle uses find-provider.mjs directly instead — see the script header.
+          PROV="$(node scripts/stage-provider.mjs)" || exit 1
           echo "provider: $PROV"
           CLODE_CLAUDE_BIN="$PROV" CLODE_PROVIDER_BIN="$PROV" \
             node bin/clode build --naude --target windows-arm64 --out "$RUNNER_TEMP/naude-win-arm64"
