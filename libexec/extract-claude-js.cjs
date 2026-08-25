@@ -98,9 +98,15 @@ function pickEntry(blocks) {
 // only fire on a genuinely code-split graph. Both counts are required (>=2 modules
 // AND >=1 specifier) so a lone stray marker can never trip it.
 const ESM_MODULE_MARKER = /\/\/ @bun @bytecode\n/g;
-const ESM_CHUNK_SPEC = /"\/\$bunfs\/root\/chunk-[A-Za-z0-9]+\.js"/g;
-const ESM_STATIC_IMPORT = /from"\/\$bunfs\/root\/chunk-[A-Za-z0-9]+\.js"/g;
-const ESM_DYNAMIC_IMPORT = /import\("\/\$bunfs\/root\/chunk-[A-Za-z0-9]+\.js"\)/g;
+// THE VIRTUAL-FS PREFIX DIFFERS BY PLATFORM. A POSIX-built Claude Code names its modules
+// /$bunfs/root/chunk-*.js; a WINDOWS-built one uses B:/~BUN/root/chunk-*.js — a
+// drive-letter path. Measured from a real windows-amd64 leg. Anything that hardcodes
+// /$bunfs/ is POSIX-only by construction, and here that would mean telling a Windows user
+// their bundle contains zero modules — the least useful moment to be wrong.
+const BUNFS = '(?:\\/\\$bunfs|[A-Za-z]:\\/~BUN)\\/root';
+const ESM_CHUNK_SPEC = new RegExp('"' + BUNFS + '\\/chunk-[A-Za-z0-9]+\\.js"', 'g');
+const ESM_STATIC_IMPORT = new RegExp('from"' + BUNFS + '\\/chunk-[A-Za-z0-9]+\\.js"', 'g');
+const ESM_DYNAMIC_IMPORT = new RegExp('import\\("' + BUNFS + '\\/chunk-[A-Za-z0-9]+\\.js"\\)', 'g');
 // The entry chunk carries an unminified `// Version: x.y.z` line; naming the
 // version in the error is what turns "format changed" into a reportable fact.
 const BUNDLE_VERSION = /\/\/ Version: ([0-9][0-9A-Za-z.+-]{0,30})\n/;

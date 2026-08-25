@@ -267,15 +267,29 @@ module.exports = { RULES, ALLOWED, scan, stripComments };
 // The PROOF for the counted `c-file-url-sep` rule above. A count cannot tell whether a
 // given file:// construction normalizes separators; this reads the injected C and checks
 // the two things that were actually wrong on Windows.
-test('injected C that builds a file:// URL handles Windows separators', () => {
+test('injected C that builds a file:// URL handles every absolute form', () => {
   const src = fs.readFileSync(path.join(REPO, 'scripts', 'build-tjs.mjs'), 'utf8');
-  const start = src.indexOf('"file://"');
-  assert.ok(start > 0, 'expected exactly one injected file:// construction to verify');
-  // Window around the construction: guard above it, body conversion below.
-  const chunk = src.slice(Math.max(0, start - 900), start + 900);
-  assert.match(chunk, /buf\[0\] == '\/' \|\| buf\[0\] == '\\\\\\\\'/,
-    'the absolute-path guard must accept a BACKSLASH too: on Windows the module name '
-    + 'has already been separator-normalized, so a "/"-only guard never fires');
-  assert.match(chunk, /\*tjs__p == '\\\\\\\\'/,
+  const at = src.indexOf('"file://"');
+  assert.ok(at > 0, 'expected exactly one injected file:// construction to verify');
+  // Wide enough to hold the guard above and the body conversion below; the guard grew
+  // when drive-letter paths were added and silently fell outside a tighter window.
+  const chunk = src.slice(Math.max(0, at - 2000), at + 2000);
+
+  // Built by character rather than written as a nested escape: this text passes through
+  // a JS template literal into C, so a literal backslash is FOUR characters here, and
+  // hand-counting them in a regex is how the previous version of this test broke.
+  const BS = String.fromCharCode(92);
+  const FOUR = BS + BS + BS + BS;
+
+  assert.ok(chunk.includes("buf[0] == '/'"), 'must accept a POSIX absolute path');
+  assert.ok(chunk.includes("buf[0] == '" + FOUR + "'"),
+    'must accept a BACKSLASH: the module name is separator-normalized before this runs');
+  // Drive letter: a WINDOWS-built Claude Code names its modules B:/~BUN/root/..., not
+  // /$bunfs/root/..., so buf[0] is a letter and neither separator test fires. This
+  // shipped TWICE: both Windows legs failed with "not a file URL" while 12 POSIX legs
+  // passed, and the first fix only added the backslash.
+  assert.ok(chunk.includes("buf[1] == ':'"),
+    'must accept a DRIVE-LETTER path — Windows Bun uses B:/~BUN/root/, not /$bunfs/root/');
+  assert.ok(chunk.includes("*tjs__p == '" + FOUR + "'"),
     'the URL body must convert backslashes to forward slashes');
 });

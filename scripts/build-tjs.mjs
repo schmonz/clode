@@ -2612,16 +2612,30 @@ function fixupImportMetaRequire(dir) {
        URL". Bun reports file:///$bunfs/root/... for these, so this matches the runtime
        the bundle was built for. Names that are not absolute paths (tjs:internal/...,
        http(s) URLs already in URL form) are untouched. */
-    if (!use_realpath && (buf[0] == '/' || buf[0] == '\\\\')) {
+    if (!use_realpath && (buf[0] == '/' || buf[0] == '\\\\'
+                          || (buf[0] && buf[1] == ':'
+                              && ((buf[0] >= 'A' && buf[0] <= 'Z') || (buf[0] >= 'a' && buf[0] <= 'z'))))) {
         /* Windows: tjs__normalize_pathsep has already rewritten '/' to '\\' in the
            module name, so BOTH separators mean "absolute" here, and the URL body must
            carry forward slashes whatever the platform uses. Getting this wrong is not
            subtle at runtime but is invisible on POSIX: the leg reports
            "fileURLToPath: not a file URL" only on Windows, which is exactly how this
-           bug shipped once already. */
+           bug shipped once already.
+
+           AND THE PREFIX DIFFERS BY PLATFORM. A Windows-built Claude Code names its
+           modules B:/~BUN/root/chunk-*.js -- a DRIVE-LETTER path -- where POSIX builds
+           use /$bunfs/root/. So "absolute" here means POSIX-absolute, backslash, or
+           <letter>:, and anything that pattern-matches /$bunfs/ is POSIX-only by
+           construction. Measured from a real windows-amd64 CI leg. */
         char tjs__u[TJS_PATH_MAX + 16] = { 0 };
         char *tjs__p;
         tjs__pstrcpy(tjs__u, sizeof(tjs__u), "file://");
+        if (buf[0] != '/' && buf[0] != '\\\\') {
+            /* Drive-letter path (Windows Bun names its modules B:/~BUN/root/...):
+               node's pathToFileURL yields file:///B:/... , so the leading slash is
+               ours to add. A POSIX name already starts with one. */
+            tjs__pstrcat(tjs__u, sizeof(tjs__u), "/");
+        }
         tjs__pstrcat(tjs__u, sizeof(tjs__u), buf);
         for (tjs__p = tjs__u + 7; *tjs__p; tjs__p++) {
             if (*tjs__p == '\\\\') {
