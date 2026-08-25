@@ -167,3 +167,56 @@ test('extract-claude-js produces a RUNNABLE file for either bundle shape', () =>
     'a staged SPLIT bundle must write cli.cjs beside graph.json. Writing only the graph '
     + 'is what left naude and the oracle apparatus dead while clode build was green');
 });
+
+// --- 5. the runner is an ENVELOPE, and analysis tools must not read the envelope -----
+// inspect-claude-bundle scans for literal code fragments. A runner carries upstream as
+// ONE JSON string, where every `"` is `\"`, so scanning it directly compares against
+// escaped text. That is not hypothetical: on a correctly patched 2.1.245 it reported
+// three hooks MISSING/AMBIGUOUS — the native autoupdater, the manual `update` switch and
+// the Remote Control gate — and said `<target> update` would install upstream over the
+// binary. All nine hooks had applied. The three that "failed" are exactly the three
+// whose markers contain a double quote.
+//
+// A partial failure is what made it convincing. Six anchors passed, so it read as "some
+// hooks did not apply" rather than "the tool is reading JSON".
+test('inspect decodes a graph runner rather than scanning its JSON envelope', () => {
+  const INSPECT = path.join(REPO, 'libexec/inspect-claude-bundle.cjs');
+  const { decodeGraphRunner } = require(INSPECT);
+  assert.strictEqual(typeof decodeGraphRunner, 'function',
+    'inspect-claude-bundle must export decodeGraphRunner so this property is testable');
+
+  // A module body carrying a marker WITH a double quote — the shape that broke.
+  const marker = 'await globalThis.__clodeCheckUpdate("x")';
+  // AS CODE, not inside a string literal — a marker written into a JS string is escaped
+  // in the module source too, so the test would pass for the wrong reason.
+  const { dir, f } = writeRunner(docOf('export const ok = 1;\n',
+    `export async function check() { ${marker}; }\n`));
+
+  const raw = fs.readFileSync(f, 'utf8');
+  assert.ok(!raw.includes(marker),
+    'precondition: the raw runner should NOT contain the unescaped marker — if it does, '
+    + 'the payload is no longer JSON-escaped and this test is checking nothing');
+
+  const decoded = decodeGraphRunner(f);
+  assert.ok(decoded.includes(marker),
+    'decodeGraphRunner must yield real JavaScript, with the payload unescaped');
+  // The prelude belongs to the analysed text too: it is where __clodeCheckUpdate is
+  // defined, and an anchor check that cannot see it draws the wrong conclusion.
+  assert.ok(decoded.includes('globalThis.Bun'), 'the prelude must be part of the decoded text');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('decodeGraphRunner leaves a non-runner file alone, and refuses a malformed one', () => {
+  const { decodeGraphRunner } = require(path.join(REPO, 'libexec/inspect-claude-bundle.cjs'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'graph-runner-neg-'));
+  const plain = path.join(dir, 'cli.cjs');
+  fs.writeFileSync(plain, '"use strict";\nmodule.exports = 1;\n');
+  assert.strictEqual(decodeGraphRunner(plain), null,
+    'a pre-2.1.243 single-CJS bundle must be read as-is');
+  // Claiming to be a runner and not being one is a bug, not something to shrug at: it
+  // would otherwise fall through to scanning the envelope, which is the whole defect.
+  const lying = path.join(dir, 'lying.cjs');
+  fs.writeFileSync(lying, '//clode:graph-runner:1\nmodule.exports = 1;\n');
+  assert.throws(() => decodeGraphRunner(lying), /carries no graph/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

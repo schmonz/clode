@@ -1674,19 +1674,36 @@ was the first, `os.constants.errno` in 2.1.238), and both times we found out by 
    now walks all of `.github` — and that widening is what found the two files I missed.
    A ratchet that covers one file is a ratchet with a hole.
 
-## API-surface gate now sees the WHOLE graph — 25 Bun.* items to triage (2026-08-25)
+## RESOLVED — the API-surface gate's "25 items to triage" was the instrument (2026-08-25)
 
-With the graph runner in place, `test/node-shim-api-surface-gate.test.cjs` runs again for
-the first time since 2.1.243 — and it has more to say, because a runner carries all ~1,384
-modules where the old carve produced one entry. It reports 25 real `Bun.*` uses, including
-`Bun.hash` (11), `Bun.semver` (5), `Bun.spawn` (5), `Bun.Terminal`, `Bun.Transpiler`,
-`Bun.YAML`, and a `Bun.ant` that looks like a substring artefact and should be confirmed
-as one before anything is built for it.
+Filed earlier today as real work: with the graph runner in place the gate ran again and
+reported 25 `Bun.*` uses with 9 unaccounted, 4 missing external modules, and — the part
+that mattered — THREE hooks MISSING/AMBIGUOUS, including a claim that `<target> update`
+would install upstream Claude Code over the binary. That is the behaviour this release's
+changelog says we fixed.
 
-This is the gate doing its job — it was silent while the extractor could not produce its
-input, which is the same failure mode as a skipped test reading as a pass. Each item needs
-the usual verdict from that file's header: implement, stub, or accept with a reason. Not
-started; the runner work stopped at making the gate RUNNABLE again.
+**None of it was true. All nine hooks had applied.** inspect-claude-bundle scans for
+literal code fragments, and a graph runner carries upstream as ONE JSON string where every
+`"` is `\"`. It was reading JSON and comparing against JavaScript. The three hooks that
+"failed" are exactly the three whose patched markers contain a double quote:
+
+    await globalThis.__clodeCheckUpdate("
+    switch("clode-managed-target"){case"npm-local":
+    globalThis.__clodeWsUnavailable)return"
+
+The other six passed, and that is what made it convincing: a PARTIAL failure reads as
+"some hooks did not apply" rather than "this tool cannot read this file". I nearly went
+looking for the product bug it described.
+
+Fixed by decoding the envelope before analysing (`decodeGraphRunner`), so every existing
+check sees real code. `inspect --strict` is clean on 2.1.245 and the gate passes. Two
+tests pin it, including a refusal for a file that claims the marker and carries no graph —
+falling through to scan the envelope is the whole defect.
+
+**The lesson is the one already written down and still not automatic:** check the
+measuring device first. [[instruments-lie-check-them-first]]. The tell was available
+before any investigation — the extractor reports every hook it fails to apply, and it had
+reported nothing.
 
 ## ENGINE BUG — evalBytecode on a COMPILED module aborts; only a deserialized one is safe (2026-08-25)
 

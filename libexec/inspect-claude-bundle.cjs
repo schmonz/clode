@@ -345,8 +345,49 @@ function sortByKey(obj) {
   return o;
 }
 
+// A GRAPH RUNNER IS AN ENVELOPE, AND EVERY CHECK BELOW READS CODE.
+//
+// From 2.1.243 an extracted bundle can be a graph runner: upstream's ~1,384 modules
+// carried as ONE JSON string plus the few lines that run them. Scanning that text
+// directly reads JSON, not JavaScript — every `"` in the payload is `\"` — so the
+// anchor checks, which look for literal fragments, silently disagree with reality.
+//
+// It was not subtle when it happened. Three hooks reported MISSING/AMBIGUOUS on a
+// correctly patched 2.1.245 — the native autoupdater, the manual `update` switch, and
+// the Remote Control gate — because ALL THREE of their patched markers end in or contain
+// a double quote:
+//
+//     await globalThis.__clodeCheckUpdate("
+//     switch("clode-managed-target"){case"npm-local":
+//     globalThis.__clodeWsUnavailable)return"
+//
+// The other six anchors passed, which is what made it look like a product bug: a partial
+// failure reads as "some hooks did not apply", and the report said in so many words that
+// `<target> update` would install upstream over this binary. It would not. The extractor
+// had applied all nine hooks and said so.
+//
+// So decode first and analyse the real thing. Modules are joined in the runner's own
+// order, with the prelude, so counts and exactly-once anchor checks mean what they did
+// before this format existed.
+const GRAPH_RUNNER_MARKER = '//clode:graph-runner:1';
+
+function decodeGraphRunner(p) {
+  const head = fs.readFileSync(p, 'utf8', { flag: 'r' });
+  if (!head.startsWith(GRAPH_RUNNER_MARKER)) return null;
+  const key = 'const __CLODE_GRAPH = JSON.parse(';
+  const i = head.indexOf(key);
+  if (i < 0) throw new Error(`${p} declares ${GRAPH_RUNNER_MARKER} but carries no graph`);
+  const end = head.indexOf(');\n', i);
+  if (end < 0) throw new Error(`${p} graph literal is not terminated`);
+  const doc = JSON.parse(JSON.parse(head.slice(i + key.length, end)));
+  const parts = [doc.prelude || ''];
+  for (const name of doc.order) if (doc.sources[name] != null) parts.push(doc.sources[name]);
+  return parts.join('\n');
+}
+
 function inspect(p) {
-  const data = fs.readFileSync(p, 'latin1');
+  const decoded = decodeGraphRunner(p);
+  const data = decoded !== null ? decoded : fs.readFileSync(p, 'latin1');
 
   const bunApi = count(BUN_API, data);
   const bunMods = count(BUN_MOD, data);
@@ -782,6 +823,7 @@ function main() {
 }
 
 module.exports = {
+  decodeGraphRunner,
   MARKER, BUN_API, BUN_MOD, REQ_ANY, ASSET, JSON_TXT, SEARCH_APPLET,
   KNOWN_BUN, KNOWN_SEARCH_APPLETS, NATIVE_FEATURES, HANDLED_BUN_MODULES,
   ACCEPTED_MISSING_EXTERNALS, ACCEPTED_STUBBED_BUN, ACCEPTED_MISSING_BUN, ACCEPTED_BUN_MODULES,
