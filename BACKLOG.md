@@ -1451,6 +1451,44 @@ and it would look like the release caused it.
 `strings` finds no `entrypoints/*.js` names in EITHER binary, so the names live in a
 structure the carver parses; the question is what that structure now looks like.
 
+### The upstream release notes explained it, and nothing pointed us at them
+
+**2.1.243's own changelog says exactly what broke us**, and I found it only because the
+user asked whether we look:
+
+> "Improved native install and auto-update download size: the binary is now
+> **zstd-compressed** (about 75 MB instead of 340 MB on Linux x64)"
+> "Improved memory usage of native builds: **code is now loaded on demand** instead of
+> keeping the whole bundle resident"
+> "about 2 MB smaller by **storing the bundled skill and prompt text more compactly**"
+
+When 19 legs went red I went straight to byte-diffing two binaries. The answer was in a
+public changelog the whole time.
+
+**We are not without machinery — it is aimed at the wrong moment.**
+`libexec/clode-update.cjs:159` already "surfaces Anthropic's direction-of-travel signals
+(release-note lines + bundle markers)" and, in a source checkout, writes a reviewable
+`signals/<ver>.json`. Three problems:
+
+1. **It fires on `clode update`** — a user-facing action — not when a bundle bump breaks
+   CI, which is when the question actually gets asked.
+2. **Its output is not kept.** There are 9 `signals/*.json` on disk and exactly ONE is
+   tracked in git. The evidence is captured and then thrown away, so nobody can look
+   back at what upstream said around a break.
+3. **Nothing connects "CI broke after a bundle bump" to "read the release notes".** The
+   upstream-drift job boot-smokes a leg daily, which detects breakage but says nothing
+   about WHY.
+
+**What would have caught it:** the daily upstream-drift job already knows the bundle
+version it tested. Having it fetch and diff the upstream changelog between the last-known
+and current version — and print the delta on failure — turns "19 legs are red" into "19
+legs are red, and upstream says the binary is now zstd-compressed". That is a small
+change to a job that already runs.
+
+This belongs to the ★★★ overhaul under "what we can DETECT", not just what we can build:
+upstream has now broken us twice with no repo change ([[bundle-bumps-add-node-api-reads]]
+was the first, `os.constants.errno` in 2.1.238), and both times we found out by accident.
+
 ### Fixed while finding it (both real, both mine)
 
 1. **Three files still had hand-rolled provider lookups** — `.github/actions/build-leg`
