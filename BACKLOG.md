@@ -4,6 +4,35 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 (Strategic feasibility risks live in `LONG-TERM.md`; in-flight designs in
 `docs/superpowers/`. Done items are DELETED from here — git history is the record.)
 
+## RELEASE GATE for 0.20260825.1 (user, 2026-08-25) — BOTH must hold
+
+    1. CI is GREEN
+    2. ALL Renovate PRs are MERGED
+
+Neither is "mostly". Nine PRs are open as of 2026-08-25:
+
+    #38 wrap-ansi 10.0.1        #37 docker/setup-buildx-action   #36 esbuild 0.28.2
+    #35 ws 8.21.3               #34 cross-platform-actions       #33 attest-build-provenance
+    #32 debian:bookworm-slim    #31 node.js 26.7.0               #30 node.js 24.19.0
+
+**THE ORDERING MATTERS, and it is not the obvious one.** These interact:
+
+1. Get main green. Renovate PRs cannot merge while the base is red — `automerge: true`
+   with no `ignoreTests` means they wait for a green base.
+2. **STOP CANCELLING THE PR RUNS.** The user gave standing permission to cancel them
+   "until we get to the green end of this problem", and they have been cancelled
+   repeatedly today to free runners. That permission EXPIRES at green: the PRs need their
+   own green runs to auto-merge, so cancelling past that point actively prevents gate (2).
+3. Let them merge. Each merge moves main.
+4. **Re-verify green AFTER the merges** — node 24.19.0 / 26.7.0 and esbuild 0.28.2 are
+   not cosmetic; they touch the toolchain that builds the engine and the JS bundles. A
+   green run from BEFORE the merges does not satisfy gate (1) for the commit being tagged.
+5. Only then tag.
+
+So the honest reading is that gate (1) must hold TWICE: once to unblock the merges, and
+again on the merged result that actually ships. Tagging a commit whose CI predates the
+dependency bumps would satisfy the letter of both gates and the spirit of neither.
+
 ## IN-FLIGHT HANDOFF (2026-07-31) — what's being juggled
 
 Driver = the at-desk release-readiness plan (`docs/superpowers/plans/2026-07-28-at-desk-release-readiness.md`).
@@ -2417,35 +2446,6 @@ cannot boot.
 **Blocked on this:** `linux-arm64-glibc` floor rows. The VM-built engine works, but
 `clode build --target` will not use it, so a good Linux quaude cannot currently be
 produced from this host without bypassing the template path.
-
-## RELEASE GATE for 0.20260825.1 (user, 2026-08-25) — BOTH must hold
-
-    1. CI is GREEN
-    2. ALL Renovate PRs are MERGED
-
-Neither is "mostly". Nine PRs are open as of 2026-08-25:
-
-    #38 wrap-ansi 10.0.1        #37 docker/setup-buildx-action   #36 esbuild 0.28.2
-    #35 ws 8.21.3               #34 cross-platform-actions       #33 attest-build-provenance
-    #32 debian:bookworm-slim    #31 node.js 26.7.0               #30 node.js 24.19.0
-
-**THE ORDERING MATTERS, and it is not the obvious one.** These interact:
-
-1. Get main green. Renovate PRs cannot merge while the base is red — `automerge: true`
-   with no `ignoreTests` means they wait for a green base.
-2. **STOP CANCELLING THE PR RUNS.** The user gave standing permission to cancel them
-   "until we get to the green end of this problem", and they have been cancelled
-   repeatedly today to free runners. That permission EXPIRES at green: the PRs need their
-   own green runs to auto-merge, so cancelling past that point actively prevents gate (2).
-3. Let them merge. Each merge moves main.
-4. **Re-verify green AFTER the merges** — node 24.19.0 / 26.7.0 and esbuild 0.28.2 are
-   not cosmetic; they touch the toolchain that builds the engine and the JS bundles. A
-   green run from BEFORE the merges does not satisfy gate (1) for the commit being tagged.
-5. Only then tag.
-
-So the honest reading is that gate (1) must hold TWICE: once to unblock the merges, and
-again on the merged result that actually ships. Tagging a commit whose CI predates the
-dependency bumps would satisfy the letter of both gates and the spirit of neither.
 
 ## ★ HANDOFF — operational state at 2026-08-22 (read this first)
 
