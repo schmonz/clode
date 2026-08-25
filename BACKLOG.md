@@ -1676,6 +1676,69 @@ was the first, `os.constants.errno` in 2.1.238), and both times we found out by 
 
 ## ★★★ NEXT: a clear, clean, well-factored, fully cross build (2026-08-24)
 
+### Revisit the shims: named, organized, parallel, maintainable (user, 2026-08-25)
+
+**The user:** "We shim Bun onto Node and Node onto QuickJS-NG/Txiki and both of those are
+valuable layers to keep distinct for as long as we want to be able to do oracle testing
+against Claude-on-Node ('naude'), which is probably for as long as this project exists."
+
+**The layering, and why the split is load-bearing:**
+
+    quaude   Claude (Bun-built)  ->  bun-shim  ->  node API  ->  node-shim  ->  txiki/quickjs
+    naude    Claude (Bun-built)  ->  bun-shim  ->  REAL NODE
+
+`bun-shim` is shared by both products; `node-shim` exists only under quaude. THAT is what
+makes naude an oracle: a divergence seen in quaude but not naude is isolated to the
+node-on-quickjs layer. Collapsing the two shims would destroy the differential.
+
+**Confirmed, not assumed:** `scripts/build-naude.mjs:227` bakes the bun-shim from the SAME
+staged location quaude reads, deliberately ("never one reached back for from the repo").
+So the invariant holds today — by construction, but not by assertion.
+
+**The asymmetry, measured 2026-08-25:**
+
+    bun-shim     1 file    1,386 lines     3 test files
+    node-shim   39 files   8,636 lines    ~70 test files, wall tripwires,
+                                          API-surface gate, fidelity goldens,
+                                          test/shim-surface/ with committed goldens
+
+Same KIND of job, organized completely differently. node-shim is one module per node
+builtin plus a loader; bun-shim is a single file. node-shim has machinery for declaring
+and gating its surface; bun-shim has almost none.
+
+**Their declared surfaces are different shapes, too:**
+
+    bun-shim    const PROVIDES = { bunBuiltins: [...], hostModules: [...] }   structured
+                literal, read as TEXT by the dep-closure gate
+    node-shim   const KNOWN = ['assert','buffer',...]                          a bare array
+                inside loader.cjs
+
+**Why this matters, with today's evidence.** `util/types` was missing from `KNOWN` and we
+found out because a 2.1.245 build DIED — not because anything declared a gap. And
+`util.types` turned out to be `{ isDate }` alone, so `isProxy` was silently absent. Two
+gaps in one builtin, both discovered by a failing build rather than by a surface that
+knows what it claims to provide.
+
+**What "parallel" should probably mean (to decide, not presumed):**
+
+1. **One organizing shape.** If per-module files are right for node-shim at 8.6k lines,
+   they are right for bun-shim as it grows — and bun-shim is where the least machinery
+   is pointed today.
+2. **One way to declare a surface**, machine-readable for both, so "what do we claim to
+   provide" and "what does the bundle actually use" can be diffed for either layer. The
+   node-shim API-surface gate already does this for one side.
+3. **One wall convention.** node-shim has named-throwing walls and tripwires; bun-shim's
+   equivalents are ad hoc. A wall should look the same in both layers and fire on USE.
+4. **The naming is already right and should be preserved deliberately:** both are named
+   for what they PROVIDE (bun-shim provides Bun; node-shim provides Node), not for what
+   they run on. A future rename could easily flip one and make the pair incoherent.
+5. **Assert the oracle invariant** rather than relying on build-naude reading the right
+   path: naude must contain bun-shim and must NOT contain node-shim. If that ever stops
+   being true, every naude-vs-quaude differential silently stops meaning what we think.
+
+**Related:** the shim tests do not run on the engine (filed separately) — which bites
+node-shim hardest, since it is the layer that only exists there.
+
 ### Revisit the CLI and subcommands (user, 2026-08-25)
 
 **The user:** "let's revisit the clode CLI and subcommands, given how we build quaude by
