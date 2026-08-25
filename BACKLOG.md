@@ -1799,11 +1799,20 @@ happen once, with the vocabulary and the surviving knobs already decided.
 apparently says 'fuse'. I've learned what you mean by it but I want to change the code
 language and your language when talking about it."
 
-**This was already half-decided and I drifted from it.** The standing preference is
-"quaude is BUILT/REBUILT by `clode build` in specs, docs and messages; internal code keeps
-the fuse symbols until a deliberate rename". I kept the code convention AND leaked it into
-conversation all day. The conversational half needs no ticket — just stop — and the code
-half is this item.
+**The earlier half-measure was wrong, and the user said so plainly.** A prior note had it
+as: use build language in specs/docs/messages, leave the fuse symbols in code "until a
+deliberate rename", and map between them. When I apologised for letting the code word leak
+into conversation, the user rejected the whole framing:
+
+> "No, the code convention absolutely should leak into the conversation. It's the code
+> convention that I want to change, not specific rules for how you talk about this
+> particular code."
+
+That is right, and it is the same principle as the rest of this overhaul: a translation
+layer between the code's vocabulary and the humans' is a fact stored in two places, and
+somebody has to maintain the mapping. **There is no conversational half to fix — there is
+only the rename.** Until it lands, speaking the code's word when discussing the code is
+correct; the mismatch is the bug and should stay visible.
 
 **Scope, measured 2026-08-25:**
 
