@@ -2568,6 +2568,56 @@ function fixupLwsTxpacerPthreadWin(dir) {
 // locations are covered by the engine recipe, so either invalidates the cache.
 // Short options only, which is all qjsc uses ("ho:p:n:ms"); differential-tested
 // against the platform getopt by test/msvc-getopt-shim.test.cjs.
+// ---- import.meta for preregistered modules -----------------------------------
+// From Claude Code 2.1.243 the CLI is a code-split ESM graph. clode compiles every
+// module, deserializes them all so quickjs resolves imports from its loaded-module list,
+// then evaluates only the entry (libexec/node-shim/loader.cjs, evalBytecodeGraph).
+//
+// Upstream's own runtime helper chunk ends with `C = import.meta.require` and exports it;
+// callers then do `S("stream")`. txiki has no import.meta.require, so S is undefined and
+// the bundle dies with "not a function" deep inside vendored code. The alternative —
+// rewriting import.meta.require in upstream's source — is the text-mangling road this
+// project deliberately closed: a regex that mangles a prompt string does not crash, it
+// quietly changes what Claude is told.
+//
+// require comes from globalThis.__quaudeRequire, which the loader installs BEFORE
+// deserializing anything. When it is absent (any non-quaude use of the engine) the
+// property is simply not defined, leaving stock behaviour untouched.
+//
+// VERIFIED: a directly-compiled module now reports
+// `import.meta.url|typeof import.meta.require` as `/$bunfs/root/direct.js|function`.
+// A DESERIALIZED module still reports `undefined|undefined` — js_module_set_import_meta
+// gives up early on that path, which is under investigation; see BACKLOG.
+function fixupImportMetaRequire(dir) {
+  const mf = path.join(dir, 'src/modules.c');
+  const msrc = fs.readFileSync(mf, 'utf8');
+  if (msrc.includes('__quaudeRequire')) {
+    console.log('fixup import-meta-require: already applied');
+    return;
+  }
+  const anchor = '    JS_DefinePropertyValueStr(ctx, meta_obj, "main", JS_NewBool(ctx, is_main), JS_PROP_C_W_E);\n';
+  if (!msrc.includes(anchor)) {
+    throw new Error('fixup import-meta-require: meta "main" anchor not found in src/modules.c — '
+      + 'the pin moved and this patch must be re-derived, not silently skipped');
+  }
+  const add = anchor + `
+    /* clode: expose globalThis.__quaudeRequire as import.meta.require. Absent global =>
+       property not defined => stock behaviour. */
+    {
+        JSValue tjs__global = JS_GetGlobalObject(ctx);
+        JSValue tjs__req = JS_GetPropertyStr(ctx, tjs__global, "__quaudeRequire");
+        if (JS_IsFunction(ctx, tjs__req)) {
+            JS_DefinePropertyValueStr(ctx, meta_obj, "require", tjs__req, JS_PROP_C_W_E);
+        } else {
+            JS_FreeValue(ctx, tjs__req);
+        }
+        JS_FreeValue(ctx, tjs__global);
+    }
+`;
+  fs.writeFileSync(mf, msrc.replace(anchor, add));
+  console.log('fixup import-meta-require: applied to src/modules.c');
+}
+
 function fixupQjscMsvcGetopt(dir) {
   const f = path.join(dir, 'src/qjsc.c');
   const src = fs.readFileSync(f, 'utf8');
@@ -2843,6 +2893,7 @@ if (buildOnly) {
   fixupTjsCmakeWinStack(tjsDir);
   fixupLwsTxpacerPthreadWin(tjsDir);
   fixupModFsSyncMsvc(tjsDir);
+  fixupImportMetaRequire(tjsDir);
   fixupQjscMsvcGetopt(tjsDir);
   // cosmo patches apply LAST: they were generated against the fully-fixed-up
   // tree (their libuv udp.c context includes the SSM guard fixupLibuvUdpSsmOld-
