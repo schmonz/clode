@@ -119,10 +119,30 @@ test('an empty scope reports the root, the scope contents, and what it wanted', 
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('every ci.yml provider lookup goes through this script', () => {
-  const yml = fs.readFileSync(path.resolve(__dirname, '../.github/workflows/ci.yml'), 'utf8');
-  assert.doesNotMatch(yml, /find "\$\(npm root -g\)/,
-    'a hand-rolled find(1) provider lookup is back in ci.yml — it can kill its step silently');
-  const uses = (yml.match(/scripts\/find-provider\.mjs/g) || []).length;
-  assert.ok(uses >= 5, `expected the shared finder at every provider site, found ${uses}`);
+// EVERY provider lookup, not just ci.yml's. The first version of this test checked
+// ci.yml alone, so .github/actions/build-leg/action.yml kept four hand-rolled
+// `find … | head -1` lookups — and when 2.1.243 shipped bin/claude.exe inside the
+// wrapper, the walk yielded that Windows binary first and EVERY Linux and macOS leg
+// died in extraction. A ratchet that covers one file is a ratchet with a hole.
+test('every provider lookup in .github goes through this script', () => {
+  const root = path.resolve(__dirname, '..', '.github');
+  const files = [];
+  (function walk(d) {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (/\.ya?ml$/.test(e.name)) files.push(p);
+    }
+  })(root);
+  const offenders = [];
+  let uses = 0;
+  for (const f of files) {
+    const y = fs.readFileSync(f, 'utf8');
+    uses += (y.match(/scripts\/find-provider\.mjs/g) || []).length;
+    if (/find "\$\(npm root -g\)/.test(y)) offenders.push(path.relative(root, f));
+  }
+  assert.deepStrictEqual(offenders, [],
+    'hand-rolled find(1) provider lookups are back — they pick whatever the directory '
+    + 'walk yields first, which upstream can change without telling us');
+  assert.ok(uses >= 9, `expected the shared finder at every provider site, found ${uses}`);
 });

@@ -50,7 +50,7 @@ jobs:
       - name: Cross-build a signed darwin-arm64 naude (fetches pinned Node + rcodesign)
         run: |
           set -euo pipefail
-          PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f -name claude -size +20M 2>/dev/null | head -1)"
+          PROV="$(node scripts/find-provider.mjs)"
           if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
           echo "provider: $PROV"
           CLODE_CLAUDE_BIN="$PROV" CLODE_PROVIDER_BIN="$PROV" \
@@ -110,7 +110,7 @@ jobs:
       - name: Cross-build a signed darwin-X64 naude from arm64 Linux (fetches pinned Node + rcodesign)
         run: |
           set -euo pipefail
-          PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f -name claude -size +20M 2>/dev/null | head -1)"
+          PROV="$(node scripts/find-provider.mjs)"
           if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
           echo "provider: $PROV"
           CLODE_CLAUDE_BIN="$PROV" CLODE_PROVIDER_BIN="$PROV" \
@@ -171,7 +171,7 @@ jobs:
       - name: Cross-build an unsigned win32-x64 naude (fetches the pinned win32 Node)
         run: |
           set -euo pipefail
-          PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f -name claude -size +20M 2>/dev/null | head -1)"
+          PROV="$(node scripts/find-provider.mjs)"
           if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
           echo "provider: $PROV"
           CLODE_CLAUDE_BIN="$PROV" CLODE_PROVIDER_BIN="$PROV" \
@@ -232,7 +232,7 @@ jobs:
       - name: Cross-build an unsigned win32-arm64 naude (fetches the pinned win32 Node)
         run: |
           set -euo pipefail
-          PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f -name claude -size +20M 2>/dev/null | head -1)"
+          PROV="$(node scripts/find-provider.mjs)"
           if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found" >&2; exit 1; fi
           echo "provider: $PROV"
           CLODE_CLAUDE_BIN="$PROV" CLODE_PROVIDER_BIN="$PROV" \

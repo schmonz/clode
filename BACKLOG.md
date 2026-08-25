@@ -1415,6 +1415,53 @@ than re-testing the layers above.
 over HTTP (fixed fc54ae9) both work now. Bundle references: http 314, stdio 136,
 sse 94, ws 24 — so SSE is the last common transport still broken. ws is untested.
 
+## ★★ P0 — bundle 2.1.243 BROKE THE EXTRACTOR; `clode build` fails for anyone on it (2026-08-24)
+
+**Found mid-release, by a release dry run.** Upstream published 2.1.243 while dry run 3
+and 4 were minutes apart, and 19 legs failed at once.
+
+    2.1.241: extracts OK (28,255,317 bytes)
+    2.1.243: EXTRACTION FAILS
+      clode: build: extraction failed: no block named entrypoints/cli.js;
+             bundle format may have changed (largest candidate was 665 bytes).
+             Refusing to guess.
+
+Both are valid Mach-O arm64 binaries that report their own `--version`. Tested with the
+CORRECT platform binary each time, so this is NOT the provider-selection bug below —
+the packaging changed. Size went 325,055,632 → 361,529,696 bytes.
+
+**Why this outranks the cross-build DOA.** `clode build` extracts from whatever `claude`
+the user has. Anyone on 2.1.243 fails immediately, on every platform, native AND cross.
+The DOA affects `--target` users only. This is the [[bundle-bumps-add-node-api-reads]]
+pattern again, in its most severe form: upstream can kill quaude with no repo change.
+
+**DO NOT TAG A RELEASE UNTIL THIS IS UNDERSTOOD.** A release built against 2.1.241
+would ship a clode that cannot build from current upstream; users would hit it at once
+and it would look like the release caused it.
+
+**Reproduce:**
+
+    npm i -g --prefix /tmp/npm243 @anthropic-ai/claude-code@2.1.243
+    P=$(npm_config_prefix=/tmp/npm243 node scripts/find-provider.mjs)
+    node libexec/extract-claude-js.cjs "$P" /tmp/out.cjs      # fails
+    # same with @2.1.241 -> succeeds
+
+**Where to start:** `libexec/extract-claude-js.cjs:59` selects the block whose name ends
+`entrypoints/cli.js` and refuses to guess otherwise (deliberately — see its header).
+`strings` finds no `entrypoints/*.js` names in EITHER binary, so the names live in a
+structure the carver parses; the question is what that structure now looks like.
+
+### Fixed while finding it (both real, both mine)
+
+1. **Three files still had hand-rolled provider lookups** — `.github/actions/build-leg`
+   (x4), `naude-cross.yml` (x4), `upstream-drift.yml` (x1) — despite my claiming "one
+   home" when I converted ci.yml. 2.1.243 ships `bin/claude.exe` INSIDE the wrapper, so
+   `find … | head -1` yields a WINDOWS binary first and every Linux/macOS leg picked it.
+   All nine sites now use `scripts/find-provider.mjs`, which ranks by platform.
+2. **The ratchet had a hole**: `test/find-provider.test.cjs` checked only `ci.yml`. It
+   now walks all of `.github` — and that widening is what found the two files I missed.
+   A ratchet that covers one file is a ratchet with a hole.
+
 ## ★★★ NEXT: a clear, clean, well-factored, fully cross build (2026-08-24)
 
 **User directive, and it gates further feature work:** *"I'm tired of the build being so

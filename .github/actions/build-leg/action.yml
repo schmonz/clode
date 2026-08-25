@@ -679,7 +679,13 @@ runs:
         # carry it, record the bound and keep the leg green on level-2. The
         # minimal provider is carved on the x64 host (fast), then read in-rootfs.
         npm i -g @anthropic-ai/claude-code 2>&1 | tail -3 || true
-        PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f \( -name claude -o -name claude.exe \) -size +20M 2>/dev/null | head -1)"
+        # ONE HOME for this, same as ci.yml. The old `find … | head -1` took whatever
+        # the directory walk yielded first: with 2.1.243 that is bin/claude.exe, a
+        # WINDOWS binary >20M shipped inside the wrapper — so every Linux and macOS leg
+        # picked it and died in extraction ("no block named entrypoints/cli.js …
+        # largest candidate was 1191 bytes"). find-provider ranks by THIS platform's
+        # package first and never returns a wrong-platform binary at all.
+        PROV="$(node scripts/find-provider.mjs)"
         if [ -n "$PROV" ] && node scripts/make-min-provider.cjs "$PROV" .matrix/qu-provider-min 2>/dev/null; then
           if docker run --rm --platform "linux/$ARCH" -v "$PWD:/w" -w /w \
                -e CLODE_CLAUDE_BIN=/w/.matrix/qu-provider-min -e CLODE_CACHE=/w/.matrix/qu-cache \
@@ -705,7 +711,13 @@ runs:
       run: |
         set -uo pipefail
         npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
-        PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f \( -name claude -o -name claude.exe \) -size +20M 2>/dev/null | head -1)"
+        # ONE HOME for this, same as ci.yml. The old `find … | head -1` took whatever
+        # the directory walk yielded first: with 2.1.243 that is bin/claude.exe, a
+        # WINDOWS binary >20M shipped inside the wrapper — so every Linux and macOS leg
+        # picked it and died in extraction ("no block named entrypoints/cli.js …
+        # largest candidate was 1191 bytes"). find-provider ranks by THIS platform's
+        # package first and never returns a wrong-platform binary at all.
+        PROV="$(node scripts/find-provider.mjs)"
         if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found under @anthropic-ai/claude-code" >&2; exit 1; fi
         echo "provider: $PROV"
         mkdir -p .matrix/qemu-smoke
@@ -752,7 +764,13 @@ runs:
       run: |
         set -uo pipefail
         npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
-        PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f \( -name claude -o -name claude.exe \) -size +20M 2>/dev/null | head -1)"
+        # ONE HOME for this, same as ci.yml. The old `find … | head -1` took whatever
+        # the directory walk yielded first: with 2.1.243 that is bin/claude.exe, a
+        # WINDOWS binary >20M shipped inside the wrapper — so every Linux and macOS leg
+        # picked it and died in extraction ("no block named entrypoints/cli.js …
+        # largest candidate was 1191 bytes"). find-provider ranks by THIS platform's
+        # package first and never returns a wrong-platform binary at all.
+        PROV="$(node scripts/find-provider.mjs)"
         if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found under @anthropic-ai/claude-code" >&2; exit 1; fi
         echo "provider: $PROV"
         mkdir -p .matrix
@@ -1043,7 +1061,13 @@ runs:
       run: |
         set -uo pipefail
         npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
-        PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f \( -name claude -o -name claude.exe \) -size +20M 2>/dev/null | head -1)"
+        # ONE HOME for this, same as ci.yml. The old `find … | head -1` took whatever
+        # the directory walk yielded first: with 2.1.243 that is bin/claude.exe, a
+        # WINDOWS binary >20M shipped inside the wrapper — so every Linux and macOS leg
+        # picked it and died in extraction ("no block named entrypoints/cli.js …
+        # largest candidate was 1191 bytes"). find-provider ranks by THIS platform's
+        # package first and never returns a wrong-platform binary at all.
+        PROV="$(node scripts/find-provider.mjs)"
         if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found under @anthropic-ai/claude-code" >&2; exit 1; fi
         echo "provider: $PROV"
         set -e

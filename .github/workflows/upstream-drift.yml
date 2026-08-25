@@ -50,7 +50,7 @@ jobs:
           set -euo pipefail
           VER="$(npm view @anthropic-ai/claude-code version)"
           echo "upstream Claude Code: $VER"
-          PROV="$(find "$(npm root -g)/@anthropic-ai/claude-code" -type f -name claude -size +20M 2>/dev/null | head -1)"
+          PROV="$(node scripts/find-provider.mjs)"
           # A missing provider must fail, not skip: "we could not check" is not
           # "nothing changed", and this job's only product is a trustworthy answer.
           if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found under @anthropic-ai/claude-code" >&2; exit 1; fi
