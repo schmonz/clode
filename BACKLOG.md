@@ -1647,6 +1647,24 @@ was the first, `os.constants.errno` in 2.1.238), and both times we found out by 
 
 ## ★★★ NEXT: a clear, clean, well-factored, fully cross build (2026-08-24)
 
+**THE MAP:** <https://claude.ai/code/artifact/d5ecba30-da4f-4f61-a83e-f310bac959af>
+— "clode build system — a map before moving", the zeroth deliverable. Measured from the
+tree on 2026-08-21: the two-pipeline diagram, which stages are compilation concerns
+versus orchestration, the four original arguments for migrating and which of them have
+since been closed INSIDE the existing script, and the constraints any plan must respect
+(canonical-LE is load-bearing; patch order is enforced; `clode build` must work with Node
+absent; vendor off NFS but not reapable; ccache belongs to this work, not before it).
+Read it before touching this item — everything below is a delta on it.
+
+**One thing to reconcile, and it is on-topic for this overhaul.** The map says
+`CLODE_* knobs: 25 (7 documented)`. Counting on 2026-08-25 gave 116 distinct CLODE_*
+names, 51 read by SHIPPED code (libexec + bin), and 0 documented in clode's usage text.
+Both numbers are probably honest under different definitions — "knobs a user might set"
+versus "environment names the code reads" — but nobody can tell which from either
+artifact, and that is the disease: two measurements of the same thing, no single place
+that answers it. Whatever the env-var review decides, it should leave ONE count that is
+derived rather than asserted.
+
 ### ★★ Anchors exist TWICE, by hand (2026-08-25)
 
     libexec/extract-claude-js.cjs      17 anchor definitions
