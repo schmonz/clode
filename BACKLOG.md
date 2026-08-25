@@ -1676,6 +1676,52 @@ was the first, `os.constants.errno` in 2.1.238), and both times we found out by 
 
 ## ★★★ NEXT: a clear, clean, well-factored, fully cross build (2026-08-24)
 
+### No special cases: one path, applied equally (user, 2026-08-25)
+
+**The user, on learning netbsd-sparc had its own provider-minimising step:** "I didn't
+realize sparc was a special case. Whatever we do for sparc should then be applied equally
+everywhere else."
+
+**What the special case cost.** `scripts/make-min-provider.cjs` shrinks a provider so the
+sun4m guest (512MB, TCG) can build at all. When upstream went code-split it was not
+updated with the extractor, and the failure surfaced as a red netbsd-sparc — a PUBLISHING,
+hard-gated leg — roughly three hours into the slowest job in the matrix, after twelve
+other legs had already gone green. A break in shared code would have shown up in minutes.
+
+**And it is worse than "only sparc uses it": the two call sites disagree.**
+
+    build-leg:689   `... make-min-provider ... 2>/dev/null; then`   failure SWALLOWED
+    build-leg:728   bare call                                       failure FATAL
+
+So the identical breakage is invisible at one site and fatal at the other. That is not a
+special case, it is two different policies for one script, and nothing said which was
+intended.
+
+**Fixed now:** the script handles both bundle shapes, and `test/make-min-provider.test.cjs`
+pins the contract for each — same shape in and out, byte-identical entry/graph content,
+idempotent, and a loud refusal on a non-provider. It can no longer rot unnoticed
+regardless of which legs call it.
+
+**Still open, and it is the user's point:**
+
+1. **Unify the two call sites.** Pick one policy deliberately — either minimising is
+   required and its failure is fatal everywhere, or it is an optimisation whose failure
+   falls back to the full provider everywhere. Today it is both, by accident.
+2. **Decide whether ALL legs should minimise.** The obvious argument is uniformity: one
+   path, exercised everywhere, so a break appears on a fast leg in minutes rather than on
+   the slowest leg in hours. There is a real counter-argument to weigh, not dismiss — if
+   every leg builds from a MINIMISED provider, nothing in CI ever builds from a real
+   upstream binary, and that is a fidelity axis we would be dropping. A defensible answer
+   might be "minimise everywhere except one named leg that deliberately uses the real
+   thing", which is still one policy with one declared exception rather than an accident.
+3. **Audit for other single-leg paths.** This one was found by tripping over it. Whatever
+   else only one leg does is equally able to rot for three hours before anyone hears.
+
+**The general rule this belongs to:** a code path exercised by exactly one leg is tested
+at that leg's cadence, which for the emulated legs means hours per attempt and days per
+fix. Sharing the path is not just tidiness; it is the difference between a minutes-long
+feedback loop and an hours-long one.
+
 ### ★★★ Borrow someone else's test corpus for both shims (user, 2026-08-25)
 
 **The user:** "'Bun-on-Node shim with node's own test corpus behind it' sounds awesome."
