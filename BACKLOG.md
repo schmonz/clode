@@ -1647,6 +1647,82 @@ was the first, `os.constants.errno` in 2.1.238), and both times we found out by 
 
 ## ★★★ NEXT: a clear, clean, well-factored, fully cross build (2026-08-24)
 
+### ★★ Anchors exist TWICE, by hand (2026-08-25)
+
+    libexec/extract-claude-js.cjs      17 anchor definitions
+    libexec/inspect-claude-bundle.cjs  18 hand-written MIRRORS
+
+The mirroring is documented in inspect's own comments — "a VERBATIM mirror of
+extract-claude-js.cjs's SNAPSHOT_GEN", "in lockstep with extract-claude-js.cjs". Lockstep
+maintained by discipline is lockstep that breaks: `snapshotGeneratorPresent` gated on a
+SUBSTRING NEAR the anchor rather than the anchor, and reported the site healthy for three
+releases while the hook was dead.
+
+One definition, two consumers. Whether that is a shared module or a shared library is the
+same question as the second-half language note; the duplication is a defect either way,
+and it is the cleanest single example of the duplicated-truth problem ★★★ exists to fix.
+
+### ★★ The shim tests do not run on the engine (2026-08-25)
+
+`npm test` is node:test, so the shim is `require`d into NODE. That exercises its LOGIC and
+says nothing about its behaviour on quickjs — which is where it ships. 87 of 199 test
+files are pure unit tests in this position.
+
+The evidence that it matters is historical, not theoretical: the shim reporting a
+**SIGKILLed child as exit 0** (cost a day on Haiku), `cpSync` **dropping file mode**, and
+the **Haiku write deadlock** were all found by clode RUNNING ON THE ENGINE during a real
+build — never by these tests.
+
+**Highest-value step in the whole testing story, and independent of every language
+decision.** Running the existing suite under the engine makes correctness observable in
+the environment that ships. See the CTest note for how it fits a CMake build.
+
+### ★★ s390x ATTEMPTS the cross-fuse onto big-endian and throws the result away
+
+The `linux-s390x-musl` leg's `verify: qemu-user` does a "level-2.5 full fuse
+attempted+logged". That is exactly the operation canonical-LE exists to make safe — an
+LE host producing bytecode a BE target must load — and its outcome is LOGGED, NOT
+ASSERTED. The leg is also `soft-fail: true` and release-tier only, so it never runs on
+push.
+
+Making that assertion real would turn the project's largest untested property into a
+five-minute signal. Related: the matrix note above (published-but-ungated legs) and the
+canonical-LE risk below.
+
+### ★★ canonical-LE is knowingly incomplete, and the code-split path multiplies the risk
+
+`test/fixtures/bc-le-baseline.json`, measured with both engines from one release build
+(s390x under qemu-user):
+
+    stress(inline)                        identical
+    build/bundle/clode-main.bundle.cjs    differs
+    libexec/node-shim/loader.cjs          differs      <- "the known regexp wall"
+
+Synthetic corpora match byte-for-byte; REAL files diverge from offset 1, because
+libregexp stores compiled regexps in host byte order. Tracked as a ratchet rather than
+failing the release, deliberately.
+
+**Why this got sharper on 2026-08-25:** the sparc leg is CROSS-FUSED from x64, so an LE
+host's bytecode must load on a BE target. Until now that meant one CJS blob. It now means
+**1,459 ESM modules and 41MB of bytecode**, and those modules are dense with regex
+literals — the exact construct behind the known wall, multiplied by three orders of
+magnitude. Whether it bites is unknown: the modules may carry regexps that recompile
+cleanly on read, which is what canonical-LE was for. Nothing green today can see it.
+
+### ★ tjs_evalBytecode over-consumes its argument (SIGABRT at teardown)
+
+`src/mod_engine.c:148` does `JSValue obj = argv[0]` and hands it to `JS_EvalFunction`,
+which CONSUMES it, while the caller still owns `argv[0]`. Refcount underflow, symbolicated:
+
+    abort <- js_free_value_rt <- free_var_ref <- js_bytecode_function_finalizer
+          <- free_gc_object <- JS_RunGC <- JS_FreeRuntime <- TJS_FreeRuntime <- main
+
+Pre-existing, not from the import.meta work — `compile()` + `evalBytecode()` of
+`globalThis.__D = 42;` aborts identically on both engines. **quaude is unaffected** (the
+deserialize path exits 0), so this is not urgent; but any stock user of
+`tjs.engine.compile` + `evalBytecode` crashes at exit, and a test harness that checks exit
+codes would see 134 for a run that succeeded.
+
 ### ★★ Rationalize the push-CI and tag-release matrices (user, 2026-08-25)
 
 **The user's reaction on learning `linux-s390x-musl` is released but not in CI:** "I keep
