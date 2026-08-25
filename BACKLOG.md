@@ -1720,6 +1720,24 @@ Synthetic corpora match byte-for-byte; REAL files diverge from offset 1, because
 libregexp stores compiled regexps in host byte order. Tracked as a ratchet rather than
 failing the release, deliberately.
 
+**AND THE COST FALLS ON THE WRONG PLATFORMS (user, 2026-08-25): "I would hope that we
+wouldn't punish platforms that are already slow."** The mitigation is a runtime
+RECOMPILE at every `OP_regexp` — i.e. every time a regex LITERAL is evaluated — and it
+fires only when `is_be()`. So little-endian hosts pay nothing and the entire cost lands on
+m68k, sgimips, macppc, hppa and sparc: the oldest and/or emulated targets. That is a
+performance regression aimed precisely at the machines with the least headroom, and the
+code-split bundle multiplies the number of literals involved.
+
+Correctness is not the worry here; the pattern string is endian-neutral, so recompiling
+from it is right by construction. **The worry is that BE targets get slow rather than
+wrong**, and slowly enough that nobody notices it as a regression.
+
+**The fix is local and cheap if it bites:** cache the recompiled blob keyed by the
+pattern (a literal's pattern never changes), or hoist to compile-once-per-module, both
+inside the same opcode. Neither touches serialization or canonical-LE. Measure before
+building: a BE leg that reports startup and a PONG turn's wall-clock would say whether
+this is a real cost or a rounding error.
+
 **Why this got sharper on 2026-08-25:** the sparc leg is CROSS-FUSED from x64, so an LE
 host's bytecode must load on a BE target. Until now that meant one CJS blob. It now means
 **1,459 ESM modules and 41MB of bytecode**, and those modules are dense with regex
