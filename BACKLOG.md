@@ -1676,6 +1676,63 @@ was the first, `os.constants.errno` in 2.1.238), and both times we found out by 
 
 ## ★★★ NEXT: a clear, clean, well-factored, fully cross build (2026-08-24)
 
+### Write down the doctrine — propose a CLAUDE.md from this project's own history (user, 2026-08-25)
+
+**The user, immediately after being told that "solve it portably" existed in the repo only
+as instances:** "Maybe part of *** is to review the history of this project and propose a
+CLAUDE.md with doctrine like I assumed we had here."
+
+**The premise is exactly right, and today produced three independent proofs of it.** This
+repo HAS doctrine. It is real, it is load-bearing, and it is enforced BY EXAMPLE rather
+than stated as a property — so it does not fire when it should:
+
+1. **Solve it portably.** Written twice as instances (`bun-shim.cjs:617` "translates rg to
+   portable applets ON PURPOSE"; `gen-node-constants.mjs:101` "THE NAME LISTS ARE STATIC ON
+   PURPOSE. DO NOT RE-DERIVE THEM FROM THE RUNNING HOST"), generalised never. Cost: a
+   provider-minimising step that ran on three legs through two call sites with opposite
+   failure policies, discovered three hours into the slowest job in the matrix.
+2. **If we ship it, CI gates it.** Enforced by a test that checked two hardcoded leg names.
+   Cost: `linux-s390x-musl` published but never CI-built, and eleven others like it.
+3. **Every release OS is exercised.** Enforced by a test that exempts openindiana BY NAME.
+
+Each was found the same way: something broke, and the rule that would have prevented it
+turned out to be present in the codebase as a comment on one line of one file.
+
+**What the task actually is.** Not "write a style guide" — mine the history and state the
+properties that are already true, with the evidence that made them true. The material is
+sitting in ~1,150 commits, in BACKLOG.md, and in the session memory files. Candidates
+already evidenced, each with a real incident behind it:
+
+- CI's job is to tell the truth, not to be green. Red is a to-do trigger; ask of every
+  check "does GREEN hide an outstanding action?"
+- Any CI red is our red. "Pre-existing" and "not mine" are not dispositions.
+- One implementation, every platform. A per-platform branch needs a written reason, and
+  the reason must be about the platform, not about who noticed the bug there.
+- Failure policy is part of the implementation. Two call sites disagreeing about whether
+  an error matters is the same defect as two implementations.
+- Instruments lie — check the measuring device before the product.
+- Every fix lands with the mechanism that would have made it cheap to notice.
+- Derive, never declare: dependency lists, constants, module lists come from a source of
+  truth, not from a hand-maintained copy.
+- Build fresh for fidelity; warm dev-box state hides defects.
+- A rule enforced by example WILL rot. State the property, then gate the property.
+
+**Two hazards, both worth stating in the file itself.**
+
+*It must not become a second place where facts live.* The value is in properties that
+CANNOT be expressed as a test (judgement, sequencing, what to do when red). Anything that
+CAN be gated should be gated, with CLAUDE.md pointing at the gate rather than restating
+it — otherwise it drifts, and a drifted CLAUDE.md is worse than none.
+
+*The evidence is the payload.* "Solve it portably" alone reads as a platitude and gets
+skipped; "solve it portably — here is the three-hour sparc red that came from not doing
+it" is a rule that changes behaviour. Every entry carries its incident.
+
+**Sequenced with the rest of ★★★ deliberately**, because the overhaul is where several of
+these rules get their first real gate — writing the doctrine and building the mechanisms
+that enforce it should be the same pass, or the file is aspirational on the day it lands.
+
+
 ### No special cases: one path, applied equally (user, 2026-08-25)
 
 **The user, on learning netbsd-sparc had its own provider-minimising step:** "I didn't
