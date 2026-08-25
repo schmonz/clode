@@ -141,3 +141,56 @@ test('a real bundle plans with no order violations and no missing sources', prov
     assert.ok(plan.order.includes(plan.entry), `${bin}: entry missing from the order`);
   }
 });
+
+// ---- hooks across the graph ----------------------------------------------------
+
+const { transformGraph } = require('../libexec/extract-claude-js.cjs');
+
+test('transformGraph keeps the exactly-once contract ACROSS modules, not per module', () => {
+  // The same anchor in two modules must NOT be patched twice — that is the whole
+  // difference between "applies once per module" and "applies once in the bundle".
+  // Shaped to the REAL anchor (INSTALL_WARNINGS in extract-claude-js.cjs), not invented
+  // — a fixture that does not match would make this test prove nothing at all.
+  const anchor = 'return{installationType:t,version:v,warnings:w,packageManager:p};';
+  const { report } = transformGraph({ '/a.js': anchor, '/b.js': anchor });
+  const doctor = report.find((r) => r.key === 'doctor');
+  assert.strictEqual(doctor.applied, false, 'two matches must not be treated as applied');
+  assert.match(doctor.why, /expected exactly one/);
+});
+
+test('transformGraph leaves sources untouched for a hook that did not apply', () => {
+  const src = { '/a.js': 'nothing to patch here' };
+  const { sources, report } = transformGraph(src);
+  assert.strictEqual(sources['/a.js'], 'nothing to patch here');
+  assert.ok(report.every((r) => r.applied === false), 'nothing should have applied');
+  assert.ok(report.length > 0, 'every hook must be reported, applied or not');
+});
+
+test('transformGraph reports every hook by name, so a silent skip is impossible', () => {
+  const { report } = transformGraph({ '/a.js': '' });
+  const keys = report.map((r) => r.key).sort();
+  assert.deepStrictEqual(keys, [
+    'autoupdater', 'doctor', 'legacy_autoupdater', 'manual_update', 'native_autoupdater',
+    'remote_control', 'snapshot_bridge', 'update_hint', 'update_notice',
+  ]);
+});
+
+test('a real split bundle patches all hooks but the known snapshot-bridge gap', provOpts, () => {
+  let checked = 0;
+  for (const bin of PROVIDERS) {
+    const mods = loadGraph(bin);
+    const full = loadGraphFull(bin);
+    // CJS bundles go through transform(), not transformGraph().
+    if (full.rows.filter((r) => r.loader === 1)[0].moduleFormat !== 2) {
+      const plan = planGraph(mods, full.entryName);
+      const { report } = transformGraph(plan.sources);
+      for (const r of report) {
+        if (r.key === 'snapshot_bridge') continue;   // drifted upstream; see BACKLOG
+        assert.strictEqual(r.applied, true, `${bin}: hook ${r.key} did not apply: ${r.why}`);
+      }
+      checked++;
+    }
+  }
+  if (!checked) return;   // no split-format provider present
+  assert.ok(checked > 0);
+});

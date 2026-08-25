@@ -795,6 +795,65 @@ function transform(body) {
   return PRELUDE + body + '\n';
 }
 
+// --- the same hooks, applied across a CODE-SPLIT graph ------------------------
+// From 2.1.243 the CLI is not one body but ~1382 ES modules, so transform() has nothing
+// to be handed. This applies the SAME patches across the graph and keeps the SAME
+// contract: a hook that must apply exactly once must still apply exactly once — across
+// all modules, not per module. Anything else would let a hook land twice, or land in a
+// module and be reported as fine while another copy went unpatched.
+//
+// MEASURED on real 2.1.245 before this was written: no anchor spans a module boundary,
+// so per-module matching is sufficient. Seven of the nine hooks hit exactly one module;
+// patchUpdateHint legitimately hits several (it is a global replace with no exactly-once
+// contract); patchSnapshotBridge hits none because its site drifted upstream — that is a
+// real gap, recorded in BACKLOG, and it shows up here as a NOT-APPLIED report rather
+// than being silently tolerated.
+//
+// Returns { sources, report } — never throws for a non-applying hook, because the
+// caller decides what is fatal, exactly as transform() does today.
+const GRAPH_HOOKS = [
+  ['doctor', patchDoctorWarnings, 'once'],
+  ['snapshot_bridge', patchSnapshotBridge, 'once'],
+  ['autoupdater', patchAutoupdater, 'once'],
+  ['native_autoupdater', patchNativeAutoupdater, 'once'],
+  ['legacy_autoupdater', patchLegacyAutoupdater, 'once'],
+  ['manual_update', patchManualUpdate, 'once'],
+  ['update_notice', patchUpdateNotice, 'once'],
+  ['remote_control', patchRemoteControlUnavailable, 'once'],
+  // No exactly-once contract by design: the npm remediation appears a
+  // version-dependent number of times. The contract is at-least-one and zero residual.
+  ['update_hint', patchUpdateHint, 'many'],
+];
+
+function transformGraph(sources) {
+  const out = Object.create(null);
+  const report = [];
+  for (const name of Object.keys(sources)) out[name] = sources[name];
+
+  for (const [key, fn, arity] of GRAPH_HOOKS) {
+    const hits = [];
+    for (const name of Object.keys(out)) {
+      let res;
+      try { res = fn(out[name]); } catch (e) { continue; }
+      if (res && res[1]) hits.push([name, res[0]]);
+    }
+    if (arity === 'once' && hits.length !== 1) {
+      // Same fail-loud shape as transform(): unchanged, and say so.
+      report.push({ key, applied: false, modules: hits.map((h) => h[0]),
+        why: hits.length === 0 ? 'anchor not found in any module'
+          : `anchor matched ${hits.length} modules; expected exactly one` });
+      continue;
+    }
+    if (arity === 'many' && hits.length === 0) {
+      report.push({ key, applied: false, modules: [], why: 'anchor not found in any module' });
+      continue;
+    }
+    for (const [name, patched] of hits) out[name] = patched;
+    report.push({ key, applied: true, modules: hits.map((h) => h[0]) });
+  }
+  return { sources: out, report };
+}
+
 function verify(outText) {
   const problems = [];
   if (outText.includes('\x00')) {
@@ -881,6 +940,7 @@ module.exports = {
   patchUpdateNotice,
   patchRemoteControlUnavailable,
   transform,
+  transformGraph,
   verify,
   contentChecks,
   extractToFile,
