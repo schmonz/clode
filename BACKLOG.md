@@ -1647,6 +1647,87 @@ was the first, `os.constants.errno` in 2.1.238), and both times we found out by 
 
 ## ★★★ NEXT: a clear, clean, well-factored, fully cross build (2026-08-24)
 
+### What language is the SECOND half? (design discussion, 2026-08-25 — not decided)
+
+The build has two halves that get conflated because one command runs both. Building the
+ENGINE is a C compile: patch a pinned txiki checkout, fix up portability bugs, regenerate
+bytecode, CMake, verify. Building a QUAUDE is not a compile at all — it extracts the
+Claude Code bundle, appends it to an engine as a trailer, and smoke-tests the result.
+Only the first half is a natural CMake candidate. The second is data handling that
+happens to be written in JavaScript.
+
+**The question (user):** greenfield, with CMake in mind, what else might the second half
+be? Could it be C? Would that serve cross-quaude and the no-Node-in-dev goal? What are
+the payoffs, and how would we move incrementally?
+
+**Measured composition (2026-08-25):**
+
+    extract-claude-js.cjs   1062 lines   68 anchor/regex sites
+    clode-fuse.cjs          1587
+    bun-graph-plan.cjs       220
+    bun-graph.cjs            189
+    bundle-carve.cjs          38
+
+    node builtins across the graph/extract path:  node:fs x2, url x2
+
+**FIRST CORRECTION TO THE PREMISE: the second half is already Node-free.** It runs under
+our own engine — that is what `clode build --self` producing a builder that works with
+Node absent from PATH proves. So a C port would NOT advance "no Node in dev": Node lives
+in `scripts/build-tjs.mjs` (the ENGINE half — the CMake candidate) and in the test suite.
+
+**Cross-quaude: neutral.** The cross constraint is that bytecode must be readable by the
+target engine, solved by canonical-LE inside the engine. The driver's language does not
+touch it.
+
+**Could it be C, by part:**
+
+| part | verdict |
+|---|---|
+| trailer scan, module-table decode, topo sort, archive assembly, sha256 | yes, comfortably — C's home turf, and `bun-graph.cjs` is already written in that idiom (Uint8Array, integer math) so it could move |
+| the 68 anchors and splices | the crux against. Regex over 28MB of someone else's minified JS, and the component where EVERY fidelity failure this year originated. Moving the most error-prone third into the slowest edit loop, duplicated against inspect-claude-bundle's mirrored anchors |
+| bytecode compilation | neither — it is the engine's API wherever it lives (but see below) |
+
+**ARGUMENTS FOR C THAT SURVIVED SCRUTINY (user's, and stronger than my first answer):**
+
+1. **Legibility/linearity.** A CMake build that compiles almost entirely C is one build
+   system, one language, one mental model — no "which half am I in". Plus a payoff I
+   missed: a C clode could LINK libquickjs and compile bytecode IN-PROCESS (`qjsc.c` is
+   already that program), deleting today's oddest step — spawning the freshly built
+   template to act as its own bytecode compiler. BC_VERSION lockstep would then hold BY
+   CONSTRUCTION rather than by the writer==runtime convention we maintain by hand, and it
+   might simplify the CLODE_TARGET_TEMPLATE dance.
+2. **Slow weird machines.** The one hard number is **~30s clode startup on Mavericks**
+   (fast hosts are not compile-bound; the floor box is). Essentially all of that is
+   parsing/compiling clode's own JS, and a C binary makes it ~0. The work itself — regex
+   over 28MB, sha256 over 60MB — would also speed up in an interpreter-vs-native
+   comparison.
+
+**THE COUNTERARGUMENT (user's, and the heaviest):** we would stop exercising QuickJS in
+clode itself. Verified: `.github/actions/build-leg/action.yml` fuses `clode build --self`
+on EVERY leg and then uses that binary to build a quaude. So on ~15 platforms per push,
+clode-as-JS-on-the-engine does real work — 360MB read, 68 anchors over 28MB, 1459 module
+compiles, archive assembly. That is the shim's fs/spawn/path surface under load, per
+platform, and it has caught things a quaude session would not: the shim reporting a
+**SIGKILLed child as exit 0** (cost a day on Haiku), `cpSync` **dropping file mode**, the
+**Haiku write deadlock**. A C clode loses exactly those.
+
+**Where this lands, not decided:**
+
+- **Split by VOLATILITY rather than wholesale.** C for the hot, stable spine (binary
+  read, decode, sha256, archive, bytecode via linked libquickjs); engine JS for the
+  anchors and splices, which change every few upstream releases and want a 10-second edit
+  loop. Costs some linearity — two languages — but keeps clode running the engine on
+  every leg, so the coverage counterargument answers itself.
+- **Or full C, paying explicitly** for the lost coverage with a per-leg engine-exercise
+  suite. Defensible, but a deliberate replacement for ACCIDENTAL coverage tests what
+  someone thought of, and nobody would have thought of the Haiku exit-code bug.
+
+**NEXT STEP, and it is small: profile a Mavericks build.** This repo's own doctrine is to
+profile on the slow box before choosing a lever ([[profile-on-slow-box-first]]). We have
+the 30s startup number and no breakdown of the rest. If the time is mostly startup, the C
+spine buys nearly all of it while the anchors stay cheap to change — and the decision
+makes itself.
+
 ### ★★ Critically review the environment variables (user, 2026-08-25)
 
 **THE QUESTION TO ANSWER (user, sharper than the original framing):**
