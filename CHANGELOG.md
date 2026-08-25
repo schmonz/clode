@@ -1,8 +1,12 @@
 # Changelog
 
-## 0.20260824.1
+## 0.20260825.1
 
 Build from Claude Code 2.1.243 and newer, which changed how the CLI is packaged. Earlier `clode` releases stop with "bundle format may have changed" and cannot build a target at all. This affects everyone: 2.1.245 is the current `latest`.
+
+Upstream now ships the CLI as about 1,400 separate modules instead of one file. `clode` compiles and packages the whole set rather than carving a single file out of the binary, and the engine learned what those modules expect of it — `import.meta.require`, and an `import.meta` on every module a built target loads from its own archive. Upstream's code is compiled exactly as shipped; `clode` does not rewrite it.
+
+`clode` now watches Claude Code's `next` channel rather than `latest`, so a packaging change like this one is visible before it reaches everybody.
 
 Fix regression: `quaude` binaries cross-built with `clode build --target` would not start up.
 
