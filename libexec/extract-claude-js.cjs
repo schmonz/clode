@@ -946,6 +946,11 @@ function extractGraphToFile(binpath, out) {
 
   const doc = {
     format: 'clode-bun-graph-v1',
+    // The SAME prelude the CJS path prepends to cli.cjs. It installs globalThis.Bun and
+    // __clodeCheckUpdate — the latter is what the autoupdater hooks call, so without it a
+    // built target's update path is broken in a way that only shows up when a user
+    // updates. Carried as data rather than re-derived, so the two paths cannot drift.
+    prelude: PRELUDE,
     entry: plan.entry,
     order: plan.order,
     externals: plan.externals,

@@ -565,6 +565,13 @@ function evalBytecodeGraph(idxFile, blobFile) {
   const graphRequire = makeRequire('/quaude');
   globalThis.__quaudeRequire = graphRequire;
 
+  // Run the prelude FIRST. Upstream's modules reference `Bun` as a bare global, and the
+  // autoupdater hooks call __clodeCheckUpdate; both come from here. The CJS path gets
+  // this by prepending to cli.cjs — a graph has no single text to prepend to.
+  const preludePath = P.join(P.dirname(blobFile), 'graph-prelude.cjs');
+  if (existsFileSync(preludePath)) evalModule(preludePath);
+  else throw new Error(`node-shim: ${preludePath} missing — the target would have no globalThis.Bun`);
+
   let entryMod = null;
   for (const m of idx.modules) {
     const bytes = blob.subarray(m.off, m.off + m.len);

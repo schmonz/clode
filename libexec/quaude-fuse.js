@@ -246,6 +246,16 @@ if (role === 'builder') {
     // ONE blob plus an index, not 1459 archive members: the archive index is read and
     // verified eagerly at boot, and 1459 entries would put that cost on every start.
     members.push({ name: 'graph.qbc', data: all });
+    // The prelude runs BEFORE the graph: it installs globalThis.Bun (which upstream's
+    // modules reference directly) and __clodeCheckUpdate (which the autoupdater hooks
+    // call). The CJS path gets it by prepending to cli.cjs; a graph has no single text
+    // to prepend to, so it rides as its own member.
+    if (typeof doc.prelude === 'string' && doc.prelude.length) {
+      members.push({ name: 'graph-prelude.cjs', data: enc.encode(doc.prelude) });
+    } else {
+      throw new Error('quaude-fuse: staged graph has no prelude — a built target would '
+        + 'have no globalThis.Bun and a broken update path');
+    }
     entryName = 'graph.qbc';
     members.push({ name: 'graph.idx', data: enc.encode(JSON.stringify({ entry: doc.entry, modules: index })) });
     console.log(`quaude-fuse: compiled ${index.length} modules -> graph.qbc `
