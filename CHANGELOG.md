@@ -2,25 +2,17 @@
 
 ## 0.20260824.1
 
-Cross-building works again. Every `clode build --target X` since the last release
-produced a `quaude` that refused to start — it reported the wrong owner for its own
-temp directory and bailed before doing any work. The published engine templates were
-built before the fix for that landed, so the fault shipped with them; this release
-rebuilds and republishes all forty.
+Fix `clode build --target`, which in the previous release produced non-working `quaude`
+binaries. Only cross-builds were affected.
 
-`clode` now checks that a downloaded template pack was built from the same engine
-sources it was built from, and refuses the pack if not. Previously it compared only a
-coarse version pin, which two different builds can share — so a mismatch like the one
-above could not be detected at all, and you found out when the binary would not run.
-
-Windows builds the engine again, after five separate breakages: the bytecode compiler
-would not compile, its output embedded a build-machine path, and the constants table
-hit three walls in a row. A Windows `quaude` now builds and answers a round trip.
+`clode` now refuses a template pack that was not built from the same engine sources it
+was built from. It previously compared only a coarse version pin, which two different
+builds can share — so the mismatch above could not be detected at all.
 
 Haiku is temporarily not published. Haiku moved its package repository to the current
 release when R1/beta6 shipped, and the build image we use is still beta5, so the guest
-can no longer install what it needs to build. Nothing about Haiku support has been
-removed — the leg still builds — and it returns as soon as a beta6 image exists.
+can no longer install what it needs to build. The leg still builds; it returns as soon
+as a beta6 image exists.
 
 ## 0.20260801.2
 

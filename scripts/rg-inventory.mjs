@@ -60,7 +60,12 @@ if (!binary || !fs.existsSync(binary)) {
 const normalize = (argvStr) => argvStr
   .trim()
   .split(/\s+/)
-  .map((tok) => (tok.startsWith('/') || tok.startsWith('~') ? '<PATH>' : tok))
+  // A Windows operand is C:\Users\... or D:\a\clode — neither starts with '/' or
+  // '~', so the POSIX-only test left the raw path in the recorded call. The gate then
+  // read the SAME call as both new (with the path) and missing (the <PATH> form) and
+  // failed on a host where nothing had changed. Drive-letter and UNC forms count too.
+  .map((tok) => (tok.startsWith('/') || tok.startsWith('~')
+    || /^[A-Za-z]:[\\/]/.test(tok) || tok.startsWith('\\\\') ? '<PATH>' : tok))
   .join(' ');
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-inv-home-'));
