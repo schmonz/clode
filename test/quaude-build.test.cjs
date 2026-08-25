@@ -98,7 +98,13 @@ test('attest golden: stable manifest fields + full member verification', async (
   ]);
   assert.strictEqual(manifest.quaude, '1');
   assert.strictEqual(manifest.role, 'quaude');
-  assert.strictEqual(manifest.entry, 'cli.qbc');
+  // THE ENTRY MEMBER IS NAMED FOR THE BUNDLE SHAPE, and both shapes are ours:
+  // 'cli.qbc' for a single-CJS provider, 'graph.qbc' for a code-split one (2.1.243+,
+  // libexec/quaude-fuse.js). Pinning only the first made this golden fail against a
+  // CORRECTLY built quaude from the day upstream went code-split — a red that named the
+  // test, not the product, and sat there while it was the product we were changing.
+  assert.ok(['cli.qbc', 'graph.qbc'].includes(manifest.entry),
+    `unexpected entry member: ${manifest.entry}`);
   assert.strictEqual(manifest.bundleVersion, cacheKey(providerBin()));
   assert.strictEqual(manifest.clodeVersion, VERSION);
   // The `builder` field is RETIRED: auto-update is notify-only (a version
@@ -114,7 +120,10 @@ test('attest golden: stable manifest fields + full member verification', async (
   // see quaude-fuse.js's comment on why): pre-existing test bug fixed
   // in-passing here (this exact assertion block is what Task a's BOM checks
   // extend below) — 'libexec/target-env.cjs' never was a real member name.
-  for (const m of ['cli.qbc', 'bun-shim.cjs', 'node-shim/loader.cjs', 'node-shim/modules/process.cjs', 'target-env.cjs', 'target-update-check.cjs']) {
+  // manifest.entry names whichever bytecode member this shape produced (cli.qbc or
+  // graph.qbc, asserted above); require THAT one rather than a hardcoded name, so the
+  // check keeps meaning the same thing as upstream's packaging changes under us.
+  for (const m of [manifest.entry, 'bun-shim.cjs', 'node-shim/loader.cjs', 'node-shim/modules/process.cjs', 'target-env.cjs', 'target-update-check.cjs']) {
     assert.ok(manifest.members[m], `manifest missing member ${m}`);
   }
   // The shipped loader member must be byte-identical to the committed loader.

@@ -1674,6 +1674,43 @@ was the first, `os.constants.errno` in 2.1.238), and both times we found out by 
    now walks all of `.github` — and that widening is what found the two files I missed.
    A ratchet that covers one file is a ratchet with a hole.
 
+## API-surface gate now sees the WHOLE graph — 25 Bun.* items to triage (2026-08-25)
+
+With the graph runner in place, `test/node-shim-api-surface-gate.test.cjs` runs again for
+the first time since 2.1.243 — and it has more to say, because a runner carries all ~1,384
+modules where the old carve produced one entry. It reports 25 real `Bun.*` uses, including
+`Bun.hash` (11), `Bun.semver` (5), `Bun.spawn` (5), `Bun.Terminal`, `Bun.Transpiler`,
+`Bun.YAML`, and a `Bun.ant` that looks like a substring artefact and should be confirmed
+as one before anything is built for it.
+
+This is the gate doing its job — it was silent while the extractor could not produce its
+input, which is the same failure mode as a skipped test reading as a pass. Each item needs
+the usual verdict from that file's header: implement, stub, or accept with a reason. Not
+started; the runner work stopped at making the gate RUNNABLE again.
+
+## ENGINE BUG — evalBytecode on a COMPILED module aborts; only a deserialized one is safe (2026-08-25)
+
+Found while building the graph runner. Compile a large ES-module graph in-process and hand
+`tjs.engine.evalBytecode()` the freshly COMPILED entry, and the engine dies with SIGABRT
+and no diagnostic. Round-trip the same object through `serialize` -> `deserialize` first
+and it runs. Reproduced repeatedly on darwin-arm64 with the real 2.1.245 graph (1432
+modules); `--version` survives it and `-p` does not, so it is size- or depth-dependent
+rather than categorical.
+
+The runner therefore does what the fuse worker does — compile, serialize, deserialize —
+and says why at the call site. THAT IS A WORKAROUND, NOT A FIX, and it costs a
+serialize/deserialize pass over the whole graph on every start (measured: about 4s for
+2.1.245 on this box, versus a quaude's near-instant bytecode load).
+
+Worth chasing because it is an ENGINE defect we are papering over, and because the fact
+that a compiled module and a deserialized one are not interchangeable is exactly the kind
+of asymmetry that will bite somewhere else. Minimal repro to build first: N trivial ES
+modules compiled in dependency order, evaluate the entry, bisect on N.
+
+Related and probably the same asymmetry: a directly-compiled, never-evaluated module gets
+NO import.meta at all (not even `url`), while a deserialized one does — see
+test/graph-runner.test.cjs, which pins the runner's own workaround for that.
+
 ## ★★★ NEXT: a clear, clean, well-factored, fully cross build (2026-08-24)
 
 ### The case for explicit dependencies: naude broke and only CI could tell us (2026-08-25)

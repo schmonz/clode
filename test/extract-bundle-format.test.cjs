@@ -42,7 +42,7 @@ const { execFileSync } = require('node:child_process');
 
 const REPO = path.resolve(__dirname, '..');
 const { carveBlocks } = require(path.join(REPO, 'libexec', 'bundle-carve.cjs'));
-const { describeBundleFormat, pickEntry, extractToFile } =
+const { describeBundleFormat, pickEntry, extractToFile, isSplitBundle } =
   require(path.join(REPO, 'libexec', 'extract-claude-js.cjs'));
 
 const NUL = '\x00';
@@ -199,28 +199,64 @@ function realProvider() {
   } catch (e) { return null; }
 }
 
-test('the installed provider still carves to a single entrypoints/cli.js module', (t) => {
+test('the installed provider is a shape clode HANDLES, and extraction yields a runnable file', (t) => {
   const bin = realProvider();
   if (!bin) {
     t.skip('no provider (set CLODE_PROVIDER_BIN, or npm i -g @anthropic-ai/claude-code)');
     return;
   }
+  // THIS TEST USED TO ASSERT THE OLD WORLD. It demanded a single carvable
+  // entrypoints/cli.js, which was right until 2.1.243 and then reported a WORKING
+  // product as broken — the shape it was warning about had arrived and been handled.
+  // A tripwire whose alarm has already been answered is not a tripwire, it is noise,
+  // and noise is what let an ambient red hide a P0 before.
+  //
+  // So it now asserts the PROPERTY that still matters: the provider is one of the two
+  // shapes clode knows, and whichever it is, `extract-claude-js <bin> <out>` produces
+  // ONE RUNNABLE FILE. A third shape — or a known shape we stopped being able to
+  // extract — is still red, which is the alarm worth keeping.
   const data = fs.readFileSync(bin, 'latin1');
-  const blocks = carveBlocks(data);
-  let entry;
-  try {
-    entry = pickEntry(blocks);
-  } catch (e) {
+  const split = isSplitBundle(bin);
+
+  if (!split) {
+    const blocks = carveBlocks(data);
+    let entry;
+    try {
+      entry = pickEntry(blocks);
+    } catch (e) {
+      const shape = describeBundleFormat(data);
+      // Fail with the diagnosis inline: this test's product is a usable answer to
+      // "what did upstream do to us", not just a red mark.
+      assert.fail(`${bin}\n  ${e.message}` + (shape ? `\n  ${shape}` : ''));
+    }
+    assert.ok(entry.body.length > MIN_OUTPUT_BYTES,
+      `entry module is only ${entry.body.length} bytes — the CLI is no longer in one module`);
+    assert.ok(entry.body.includes('commander') || entry.body.includes('@anthropic-ai/claude-code'),
+      'carved entry carries a Claude Code sentinel token');
+    assert.strictEqual(describeBundleFormat(data), null,
+      'a carvable provider must not also look like a split-ESM graph');
+  } else {
+    // A split provider must SAY it is one. describeBundleFormat is what turns "no block
+    // named entrypoints/cli.js" into an answer, and it is the first thing anyone reads
+    // when upstream moves again.
     const shape = describeBundleFormat(data);
-    // Fail with the diagnosis inline: this test's product is a usable answer to
-    // "what did upstream do to us", not just a red mark.
-    assert.fail(`${bin}\n  ${e.message}` + (shape ? `\n  ${shape}` : ''));
+    assert.ok(shape && /CODE-SPLIT/.test(shape),
+      'a split provider must be diagnosed as split, not merely fail to carve');
   }
-  assert.ok(entry.body.length > MIN_OUTPUT_BYTES,
-    `entry module is only ${entry.body.length} bytes — the CLI is no longer in one module`);
-  // Prove it is the CLI, not merely the biggest thing present.
-  assert.ok(entry.body.includes('commander') || entry.body.includes('@anthropic-ai/claude-code'),
-    'carved entry carries a Claude Code sentinel token');
-  assert.strictEqual(describeBundleFormat(data), null,
-    'a carvable provider must not also look like a split-ESM graph');
+
+  // The contract every caller depends on, for either shape: one path in, one runnable
+  // file out. About twenty test files and scripts/build-naude.mjs rely on it, and when
+  // it silently stopped holding for split bundles, naude and five CI jobs went dead.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'extract-shape-'));
+  const out = path.join(dir, 'cli.cjs');
+  try {
+    execFileSync(process.execPath, [path.join(REPO, 'libexec/extract-claude-js.cjs'), bin, out],
+      { stdio: 'pipe' });
+    assert.ok(fs.statSync(out).size > MIN_OUTPUT_BYTES, 'extracted file is implausibly small');
+    // Parses as CJS. Not run — just proven to be a program.
+    new (require('node:vm').Script)(require('node:module').wrap(fs.readFileSync(out, 'utf8')),
+      { filename: out });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

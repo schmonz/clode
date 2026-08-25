@@ -1017,6 +1017,197 @@ function extractGraphToFile(binpath, out) {
   };
 }
 
+// --- a code-split graph as ONE RUNNABLE FILE -----------------------------------
+// extractGraphToFile() above stages a graph for the FUSE path, which compiles each
+// module to bytecode and preregisters it — that is how quaude gets its load-time win.
+// Everything else that consumes an extracted bundle wants what the CJS path always
+// gave it: `extract-claude-js <bin> <out>` produces ONE file you can run. About twenty
+// test files and scripts/build-naude.mjs depend on exactly that contract.
+//
+// WHY THIS EXISTS AT ALL. When 2.1.243 went code-split, the fuse path learned the new
+// shape and nothing else did, so `clode build` went green while naude AND the entire
+// oracle apparatus went dead — the agentic round-trips, the shim parity gate, and the
+// tjs-vs-node extractor differential all stage a single file. The build path was
+// verified by the thing it had broken.
+//
+// UPSTREAM'S MODULES ARE NOT REWRITTEN — that is the whole point, and the reason this
+// is a loader rather than a bundler. A bundler would have to turn ESM into a CJS
+// registry, which means editing minified text that is full of strings that look like
+// code (see bun-graph-plan.cjs: prose containing `import`, a vendored JS parser, CSS in
+// template literals). Get that wrong and a prompt string is silently mangled — in the
+// binary whose JOB is to be the trusted reference. So the graph is carried verbatim and
+// each host is told how to resolve it:
+//
+//   node  module.registerHooks() — synchronous resolve/load, v22.15+/v24+. naude
+//         already requires >= v24 (scripts/build-naude.mjs:478).
+//   tjs   compile in topological order (which registers each module), then evaluate
+//         the entry. Identical to what the fuse worker does, minus serialization.
+//
+// The graph is EMBEDDED rather than written beside the file, so the output is still
+// exactly one path in and one runnable path out. That is what lets naude's SEA embed it
+// unchanged and every existing caller keep working without being touched.
+// EVERY GRAPH MODULE NEEDS AN import.meta THAT CARRIES `require`, and neither host
+// supplies one to a module it did not evaluate:
+//
+//   tjs   attaches meta at DESERIALIZE (src/modules.c, fixupImportMetaRequire). quaude
+//         only ever deserializes, so quaude is fine — but a runner that compiles the
+//         graph in-process registers module defs that never went through that path, and
+//         the entry's imports bind to THOSE. Measured: a non-entry module sees
+//         import.meta.url === undefined and import.meta.require === undefined, while the
+//         entry sees both.
+//   node  has no import.meta.require at all. Nothing to attach it.
+//
+// Upstream's runtime chunk does `C = import.meta.require` at module scope and calls it as
+// `S("stream")`, so on both hosts that failed with the engine's nameless "not a function"
+// — the same shape as the FileHandle.chmod gap, and just as unhelpful.
+//
+// So we supply it, identically on both hosts: ONE generated line per module, using `??=`
+// so a host that already did the right thing (tjs, for the entry and for anything
+// deserialized) keeps its own value. This is a PREPEND of code we wrote, not an edit of
+// upstream's text — the distinction bun-graph-plan.cjs's header draws, and the reason
+// this is safe where a regex over minified source would not be. test/graph-runner.test.cjs
+// asserts every module's body is byte-identical from line 2 on.
+//
+// COST, stated because it is real: upstream line N is line N+1 in a stack trace from a
+// runner-hosted module. quaude's bytecode path is unaffected, so the two targets' traces
+// differ by that one line.
+function moduleWithMeta(name, src) {
+  // The URL a Bun-built module would report. modules.c derives the same string from the
+  // module name; deriving it here from the SAME name keeps the two in agreement.
+  const abs = /^[/\\]/.test(name) || /^[A-Za-z]:/.test(name);
+  const url = abs ? 'file://' + (name[0] === '/' ? '' : '/') + name.replace(/\\/g, '/') : null;
+  // ASSIGNED, NOT DEFAULTED, and that is the whole point of doing it here. `??=` left
+  // each host to win where it already had an opinion, and their opinions differ: tjs
+  // reports file:///$bunfs/root/chunk-x.js (what Bun reports, which is what upstream
+  // parses) while node reported the runner's own clode-graph: URL — and upstream calls
+  // fileURLToPath(import.meta.url) on it. One derived value, same on every host, is the
+  // only version of this that cannot drift. It is also EXACTLY what the engine derives
+  // from the same module name (src/modules.c), so tjs sees no change.
+  return 'import.meta.require = globalThis.__quaudeRequire;'
+    + (url ? ' import.meta.url = ' + JSON.stringify(url) + ';' : '')
+    + '\n' + src;
+}
+
+function graphRunnerSource(doc) {
+  // JSON.stringify twice = a valid JS string literal. U+2028/2029 are legal in JS
+  // strings since ES2019 but not in every engine this output may meet, so escape them.
+  const withMeta = Object.assign({}, doc, { sources: {} });
+  for (const name of Object.keys(doc.sources)) withMeta.sources[name] = moduleWithMeta(name, doc.sources[name]);
+  doc = withMeta;
+  const lit = JSON.stringify(JSON.stringify(doc))
+    .replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+  // FIRST LINE IS A CONTRACT, not decoration: node-shim's loader applies CJS text
+  // transforms (`import(` rewriting, regex-flag fixups) to every CJS it evaluates, and
+  // those would edit the 34MB of UPSTREAM SOURCE carried below. This marker turns them
+  // off. Keep it byte-identical to GRAPH_RUNNER_MARKER in libexec/node-shim/loader.cjs;
+  // test/graph-runner.test.cjs asserts they match.
+  return `//clode:graph-runner:1
+'use strict';
+// GENERATED BY clode — a Claude Code code-split module graph, carried verbatim, plus
+// the ~40 lines that make it runnable. Do not edit: rebuild with extract-claude-js.
+const __CLODE_GRAPH = JSON.parse(${lit});
+(function () {
+  const doc = __CLODE_GRAPH;
+  const has = (n) => Object.prototype.hasOwnProperty.call(doc.sources, n);
+
+  // The generated per-specifier shims call this to reach node builtins. It must NOT go
+  // back through the graph: on node the resolve hook below intercepts require() too, so
+  // a shim named "path" asking for "path" resolves to itself ("Cannot require() ES
+  // Module ... in a cycle"). Asking for "node:path" is the escape hatch, and it is the
+  // same module either way.
+  let isBuiltin = null;
+  try { isBuiltin = require('node:module').isBuiltin; } catch (e) { /* not node */ }
+  globalThis.__quaudeRequire = function (n) {
+    if (isBuiltin && isBuiltin(n)) return require('node:' + String(n).replace(/^node:/, ''));
+    return require(n);
+  };
+
+  // Upstream's modules reference \`Bun\` as a bare global and the autoupdater hooks call
+  // __clodeCheckUpdate; both come from the prelude, which the CJS path got by being
+  // prepended to cli.cjs. A graph has no single text to prepend to, so run it here —
+  // from the SAME PRELUDE constant, carried as data, so the two paths cannot drift.
+  (new Function('require', 'module', 'exports', '__filename', '__dirname', doc.prelude))(
+    require, module, module.exports, __filename, __dirname);
+
+  const tjs = globalThis.tjs;
+  if (tjs && tjs.engine && typeof tjs.engine.compile === 'function') {
+    // compile() resolves imports as it compiles and registers what it compiled, so a
+    // topological order makes every import resolve with no filesystem access. Same
+    // property the fuse worker relies on (libexec/quaude-fuse.js).
+    const enc = new TextEncoder();
+    let entry = null;
+    for (const name of doc.order) {
+      if (!has(name)) throw new Error('clode graph: no source for ' + name);
+      let obj;
+      try {
+        obj = tjs.engine.compile(enc.encode(doc.sources[name]), name);
+      } catch (e) {
+        throw new Error('clode graph: compiling ' + name + ' failed: ' + e.message
+          + ' (a "could not load" here means the staged order is not topological)');
+      }
+      // SERIALIZE THEN DESERIALIZE, exactly as the fuse worker does. Handing
+      // evalBytecode() a freshly COMPILED module aborts the engine (SIGABRT, no
+      // diagnostic) once the graph is big enough to matter: \`--version\` survived it
+      // and \`-p\` did not. The round-trip is the proven path (libexec/quaude-fuse.js
+      // compiles, serializes, and the loader deserializes), so the runner takes it too
+      // rather than relying on a path nothing else exercises. Tracked in BACKLOG as an
+      // engine bug in its own right — this is the workaround, not the fix.
+      obj = tjs.engine.deserialize(tjs.engine.serialize(obj));
+      if (name === doc.entry) entry = obj;
+    }
+    if (!entry) throw new Error('clode graph: entry ' + doc.entry + ' is not in the order');
+    tjs.engine.evalBytecode(entry);
+    return;
+  }
+
+  const SCHEME = 'clode-graph:';
+  const url = (n) => SCHEME + encodeURIComponent(n);
+  require('node:module').registerHooks({
+    resolve(spec, ctx, next) {
+      if (has(spec)) return { url: url(spec), shortCircuit: true };
+      return next(spec, ctx);
+    },
+    load(u, ctx, next) {
+      if (typeof u === 'string' && u.startsWith(SCHEME)) {
+        return { format: 'module', source: doc.sources[decodeURIComponent(u.slice(SCHEME.length))], shortCircuit: true };
+      }
+      return next(u, ctx);
+    },
+  });
+  // Evaluating the entry pulls in the whole graph in correct ESM order. A rejection
+  // here must not become an unhandled rejection with exit 0 — a failed run reporting
+  // success is a bug we have already shipped once.
+  // BUILT BY INTERPOLATION RATHER THAN WRITTEN OUT, and this is not a style choice.
+  // node-shim's loader rewrites the dynamic-import keyword to __tjsDynImport in every CJS
+  // it evaluates — including THIS FILE, when clode itself runs under tjs. Spelled out
+  // here, a clode-on-tjs emitted a runner whose node branch called __tjsDynImport, which
+  // does not exist on node: a naude built by a tjs-hosted clode would have been dead on
+  // arrival. Caught by test/node-shim-bundle-extract.test.cjs, which requires the
+  // extractor to produce byte-identical output on both hosts — 8 bytes in 39MB. The same
+  // trap applies to any prose here that spells the keyword followed by a parenthesis.
+  ${'import'}(url(doc.entry)).catch((e) => {
+    console.error(e && e.stack ? e.stack : e);
+    process.exit(1);
+  });
+})();
+`;
+}
+
+// Same inputs as extractGraphToFile, same hooks, same fail-loud reporting — one file out.
+function extractGraphRunnerToFile(binpath, out) {
+  const tmp = out + '.graph-tmp.json';
+  const res = extractGraphToFile(binpath, tmp);
+  let doc;
+  try {
+    doc = JSON.parse(fs.readFileSync(tmp, 'utf8'));
+  } finally {
+    try { fs.rmSync(tmp); } catch (e) { /* best effort */ }
+  }
+  const src = graphRunnerSource(doc);
+  fs.writeFileSync(out, src);
+  return Object.assign({}, res, { bytes: src.length });
+}
+
 function main(argv) {
   const pos = argv.filter((a) => !a.startsWith('-'));
   if (pos.length !== 2) {
@@ -1025,7 +1216,9 @@ function main(argv) {
   const [binpath, out] = pos;
   let res;
   try {
-    res = extractToFile(binpath, out);
+    // ONE CONTRACT, BOTH SHAPES: callers ask for a runnable file and get one. Which
+    // shape the provider is, is our problem, not theirs.
+    res = isSplitBundle(binpath) ? extractGraphRunnerToFile(binpath, out) : extractToFile(binpath, out);
   } catch (e) {
     // Preserve the CLI's exact stderr + exit-1 contract (die's 'error: ' prefix +
     // the verification detail extractToFile carries in its message).
@@ -1039,6 +1232,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  moduleWithMeta,
   pickEntry,
   describeBundleFormat,
   patchDoctorWarnings,
@@ -1056,6 +1250,8 @@ module.exports = {
   contentChecks,
   extractToFile,
   extractGraphToFile,
+  extractGraphRunnerToFile,
+  graphRunnerSource,
   isSplitBundle,
   main,
   PRELUDE,

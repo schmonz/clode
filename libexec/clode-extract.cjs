@@ -18,7 +18,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const Module = require('node:module');
 const { sigOf } = require('./clode-resolve.cjs');
-const { extractToFile, extractGraphToFile, isSplitBundle } = require('./extract-claude-js.cjs');
+const { extractToFile, extractGraphToFile, graphRunnerSource, isSplitBundle } = require('./extract-claude-js.cjs');
 
 // `[ -f "$p" ]`: exists AND is a regular file (any stat error -> false).
 function isFile(p) {
@@ -126,7 +126,22 @@ function extractIfNeeded(opts) {
   fs.mkdirSync(cacheDir, { recursive: true });
 
   try {
-    runQuiet(verbose, () => (split ? extractGraphToFile(bin, cliPath) : extractToFile(bin, cliPath)));
+    runQuiet(verbose, () => {
+      if (!split) return extractToFile(bin, cliPath);
+      const res = extractGraphToFile(bin, cliPath);
+      // A SPLIT STAGE CARRIES BOTH SHAPES, from ONE extraction. graph.json feeds the
+      // fuse worker, which compiles each module to bytecode — that is where quaude's
+      // load-time win comes from and it must stay. cli.cjs is the same graph as ONE
+      // RUNNABLE FILE, which is what naude embeds and what every oracle stages.
+      //
+      // They are derived from the same doc rather than extracted twice, so they cannot
+      // disagree about what the bundle says. Writing only the first is what left naude
+      // and the whole oracle apparatus dead on 2.1.243+ while `clode build` was green:
+      // the consumer's input silently stopped existing and nothing declared the edge.
+      const doc = JSON.parse(fs.readFileSync(cliPath, 'utf8'));
+      fs.writeFileSync(path.join(cacheDir, 'cli.cjs'), graphRunnerSource(doc));
+      return res;
+    });
   } catch (e) {
     try { fs.rmSync(cliPath); } catch { /* ignore */ }
     process.stderr.write('clode: extraction failed (see error above); not caching.\n');

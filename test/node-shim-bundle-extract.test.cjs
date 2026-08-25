@@ -48,6 +48,10 @@ test('real bundle: extractor byte-identical tjs vs node + anchors match', (t) =>
   // meaningful suffix, not the exact synthetic-fixture string.
   for (const stderr of [n.stderr, r.stderr]) {
     assert.doesNotMatch(stderr, /hook NOT applied/, `unexpected anchor miss:\n${stderr}`);
-    assert.match(stderr, /entry=\S*entrypoints\/cli\.js/);
+    // THE ENTRY NAME DEPENDS ON THE BUNDLE SHAPE, and both are ours to handle. A
+    // single-CJS provider reports .../entrypoints/cli.js; a code-split one (2.1.243+)
+    // reports the graph entry, /$bunfs/root/cli. Pinning only the first is how this
+    // assertion started failing for a product that was working correctly.
+    assert.match(stderr, /entry=\S*(entrypoints\/cli\.js|\/cli)\b/);
   }
 });

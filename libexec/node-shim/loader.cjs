@@ -393,6 +393,8 @@ function esmToCjs(src) {
 // for the bare-builtin/package specifiers the bundle uses; a relative `import()`
 // (`./x`) would be a future wall.
 const DYN_IMPORT_RE = /(^|[^\w$.])import(\s*\()/g;
+// The opt-out a generated graph runner declares on its first line. See evalModule.
+const GRAPH_RUNNER_MARKER = '//clode:graph-runner:1';
 globalThis.__tjsDynImport ??= (spec) => {
   try {
     const m = makeRequire(tjs.cwd)(spec);
@@ -445,9 +447,23 @@ function evalModule(file, isEntry = false) {
   if (cached) return cached.exports;
   let src = readTextSync(file);
   if (src.startsWith('#!')) src = src.slice(src.indexOf('\n') + 1);
-  if (!isEntry && esmDetect(src)) src = esmToCjs(src);
-  src = src.replace(DYN_IMPORT_RE, '$1__tjsDynImport$2');
-  src = fixVFlagPropertyEscapes(src);
+  // A GRAPH RUNNER CARRIES UPSTREAM'S SOURCES AS DATA, so the CJS text transforms below
+  // must not touch it. They rewrite `import(` and certain regex flags — appropriate for a
+  // single CJS bundle we are hosting, corrupting for a file whose payload is 34MB of
+  // OTHER modules' source text. Applying them here rewrote `import(` INSIDE the embedded
+  // sources, so upstream's dynamic imports came back through this CJS resolver and died
+  // with "cannot resolve /$bunfs/root/chunk-....js" — a preregistered ES module the
+  // engine would have resolved by itself. The graph's modules are real ES modules and
+  // the engine handles their imports natively; they need nothing from us.
+  //
+  // Declared by the file rather than sniffed, and emitted by graphRunnerSource() in
+  // libexec/extract-claude-js.cjs. Both sides are ours; test/graph-runner.test.cjs pins
+  // the marker so the two cannot drift apart silently.
+  if (!src.startsWith(GRAPH_RUNNER_MARKER)) {
+    if (!isEntry && esmDetect(src)) src = esmToCjs(src);
+    src = src.replace(DYN_IMPORT_RE, '$1__tjsDynImport$2');
+    src = fixVFlagPropertyEscapes(src);
+  }
   const module = { exports: {}, filename: file };
   if (isEntry) mainModule = module;
   moduleCache.set(file, module);
