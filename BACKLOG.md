@@ -1446,15 +1446,98 @@ and it would look like the release caused it.
     node libexec/extract-claude-js.cjs "$P" /tmp/out.cjs      # fails
     # same with @2.1.241 -> succeeds
 
-**Where to start:** `libexec/extract-claude-js.cjs:59` selects the block whose name ends
-`entrypoints/cli.js` and refuses to guess otherwise (deliberately — see its header).
-`strings` finds no `entrypoints/*.js` names in EITHER binary, so the names live in a
-structure the carver parses; the question is what that structure now looks like.
+### DIAGNOSED 2026-08-24 (22f197f) — it is Bun CODE SPLITTING, not compression
+
+**The zstd hypothesis below was WRONG, and I put it there.** Both binaries contain
+exactly 25 zstd magic frames (`28 b5 2f fd`), all in the same 62–65MB region, identical
+in both — they are Bun's own zstd library constants. The npm platform package ships the
+raw uncompressed binary in both versions. The changelog's "75MB instead of 340MB" is the
+NATIVE INSTALLER's download channel, not this artifact, which is exactly why the npm
+binary GREW (325,055,632 → 361,529,696) instead of shrinking. That size discrepancy was
+visible from the start and should have killed the hypothesis before an agent had to.
+
+**What actually changed.** Decoding the Bun standalone module graph in both (trailer
+`\n---- Bun! ----\n`; the 32 bytes before it are
+`{u64 byte_count, u32 modules_off, u32 modules_len, u32 entry_point_id, …}`; 52-byte
+module-table entries — `780/52 = 15` and `72332/52 = 1391`, both exact):
+
+| | 2.1.241 | 2.1.243 |
+|---|---|---|
+| modules in graph | 15 | **1391** |
+| entry_point_id | 0 | **801** |
+| entry contents | **28,252,504 B** | **19,949 B** |
+| entry first bytes | `// @bun @bytecode @bun-cjs\n(function(exports, require, modul…` | `// @bun @bytecode\n// Claude Code is a Beta product…` |
+| bare `// @bun @bytecode` modules | 1 | **1383** |
+| `"/$bunfs/root/chunk-*.js"` specifiers | 0 | **110,101** |
+| static `from"…"` / dynamic `import("…")` | 0 / 0 | **12,416 / 1,039** |
+
+The entry is now bare ESM with no CJS wrapper — ~20KB of imports that ends
+`let{main:gt}=await import("/$bunfs/root/chunk-sypcjjyb.js");…await gt()`. The 28MB CLI
+lives in 1383 `chunk-<hash>.js` ESM modules.
+
+**Why `strings` found nothing:** at offset 62,911,598 in 2.1.243 sits Bun's own
+format-template string table, which literally contains
+`// @bun @bytecode @bun-cjs\n(function(exports, require, module, __filename, __dirname) {`.
+Those two stray unnamed ~600-byte blocks are the ENTIRE result of `carveBlocks` on
+2.1.243 — they are the "largest candidate was 665 bytes". Real payload names live in a
+packed, NUL-free name table
+(`…/chunk-1r8fj9eb.js/$bunfs/root/src/entrypoints/cli.js\0`).
+
+**This is not fixable by a carve, and we did not fake one.** There is no single CommonJS
+module to extract. Relinking 1391 ESM modules into one `require()`-able file needs scope
+analysis, live bindings and dynamic-import handling — a textual approximation is exactly
+the wrong answer that `pickEntry`'s refusal exists to prevent. Carving any one block
+would boot and then die at the first missing chunk.
+
+**Measured groundwork for the real fix** (measured, not assumed):
+
+- all 1381 carved chunks pass `node --check` as ESM — **0 syntax errors**, so the
+  next-NUL boundary is still correct for the new shape
+- the static import graph is a **DAG (0 back-edges)**
+- **20,070 distinct export names, only 51 collisions** (esbuild renames globally)
+- **0 confirmed top-level-await** modules of 1055 conclusively checked (326 inconclusive)
+
+So both "emit the graph as linked ESM files on disk" and "write a real relinker" are
+live options. Choosing between them is an architecture decision and belongs to the ★★★
+overhaul, not to a hotfix.
+
+**Landed with the diagnosis (22f197f):** `extract-claude-js.cjs` still refuses, but now
+names the shape (fires only when BOTH signals are present, so 2.1.241 with zero
+specifiers cannot false-positive); output on supported bundles is byte-identical
+(2.1.241 → `e87057b7…d123a`, 28,255,317 bytes). Plus
+`test/extract-bundle-format.test.cjs` — synthetic fixtures in both shapes and a
+real-provider gate, verified passing on 2.1.241 and failing on 2.1.243. NOTE: `npm test`
+installs no provider, so that gate SKIPS there; it bites only in CI jobs that set
+`CLODE_PROVIDER_BIN`. The durable tripwire is the drift check below.
+
+### ★ THE WORSE BUG: the daily ratchet was GREEN through all of this (FIXED 22f197f)
+
+`scripts/upstream-drift-check.mjs` reported `OK — all 5 anchors present` against
+2.1.243 — a bundle `clode build` cannot touch. Verified by running it. The cause is
+structural, not a typo: `inspect-claude-bundle.cjs` scans the WHOLE binary for anchors,
+and 2.1.243 still contains all that JS as plain text, just in 1383 uncarvable chunks.
+**Every check we had asserted something about the CONTENT of the bundle; none asserted
+that clode could still GET the content.** A ratchet that stays green through a P0 is
+worse than no ratchet — it certifies the break.
+
+Fixed by asserting the one fact every hook depends on: a CJS block named
+`entrypoints/cli.js` exists (`inspect --json` already emitted `bun_cjs_blocks`). Proven
+green on 2.1.238 and 2.1.241 (darwin AND musl), red on 2.1.243. The general rule, now
+written into that file's header: **prefer checks that fail when the product stops
+working over checks that confirm a string is still present somewhere in 340MB.**
+
+### Also found: `patchUpdateHint` has been silently skipping since at least 2.1.210
+
+`grep -c 'npm i -g @anthropic-ai/claude-code'` = **0** on 2.1.210, 2.1.218, 2.1.241 AND
+2.1.243. That anchor is not in the drift-check `ANCHORS` list, so nothing ever noticed.
+Unquantified how long it has been dead or what users lose. Add it to `ANCHORS` — after
+determining what the current upstream text is, so the re-pin is real and not a deletion.
 
 ### The upstream release notes explained it, and nothing pointed us at them
 
-**2.1.243's own changelog says exactly what broke us**, and I found it only because the
-user asked whether we look:
+**2.1.243's own changelog pointed at the area**, and I found it only because the user
+asked whether we look. Read it as a POINTER, not an explanation — taken literally it
+sent me to compression, which was wrong (see the diagnosis above):
 
 > "Improved native install and auto-update download size: the binary is now
 > **zstd-compressed** (about 75 MB instead of 340 MB on Linux x64)"
@@ -1484,6 +1567,10 @@ version it tested. Having it fetch and diff the upstream changelog between the l
 and current version — and print the delta on failure — turns "19 legs are red" into "19
 legs are red, and upstream says the binary is now zstd-compressed". That is a small
 change to a job that already runs.
+
+**Caveat learned the hard way:** the delta is a LEAD, not a diagnosis. The zstd line
+above is a true statement about a different artifact that would have sent the next
+person down the same wrong path. Print it as context to investigate, never as a cause.
 
 This belongs to the ★★★ overhaul under "what we can DETECT", not just what we can build:
 upstream has now broken us twice with no repo change ([[bundle-bumps-add-node-api-reads]]
