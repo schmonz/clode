@@ -355,6 +355,17 @@ const LEGS = [
   { leg: 'dragonflybsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'dragonflybsd', 'guest-version': '6.4.2',
     'guest-packages': 'cmake gmake node git bash', floor: '6.4.2',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true,  // cpa, KVM
+    // MEASURED, not guessed: 9 successes over 25 runs span 2.8-5.9 minutes, and a real
+    // failure lands in ~1.4. One of those successes ran mostly cold (2 cache restores, 4
+    // misses) and still finished inside the band, so this covers a cold build too.
+    //
+    // It had no timeout and inherited the 90-minute default, which on 2026-08-25 meant a
+    // hung `pkg` fetch held the whole release-gate run for 68+ minutes with every other
+    // leg green — and because the oracle and Windows jobs are `needs: tjs`, they had not
+    // even been created. A 90-minute ceiling on a 6-minute job does not report a hang, it
+    // postpones the report by 84 minutes. See BACKLOG: this leg hangs talking to the
+    // Avalon package repo, and the durable fix is pinning what we install.
+    timeout: 20,
     fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
                 note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run in-guest); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
   { leg: 'omnios-amd64', os: 'ubuntu-latest', 'guest-platform': 'omnios',

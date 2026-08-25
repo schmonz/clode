@@ -69,7 +69,12 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.plan.outputs.legs) }}
     runs-on: ${{ matrix.os }}
-    # 90 = the release default; native legs finish far under it either way.
+    # 90 = the release default. "Native legs finish far under it either way" was the
+    # reasoning, and it holds right up until one HANGS: a leg that normally takes 6
+    # minutes then holds the run for 90, and every job that `needs:` it waits — on
+    # 2026-08-25 the oracle and Windows jobs had not even been CREATED after 68 minutes.
+    # Give a leg an explicit `timeout` sized to its measured runtime rather than relying
+    # on this ceiling to notice trouble.
     timeout-minutes: ${{ matrix.timeout || 90 }}
     continue-on-error: ${{ matrix.soft-fail || false }}
     defaults:
