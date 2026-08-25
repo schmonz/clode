@@ -56,6 +56,26 @@ function chmodBestEffort(p, mode) {
   try { FSS.chmod(p, mode); }
   catch (e) { if (!_isWin) throw e; }
 }
+// THE CREATE MODE. node's writeFileSync/appendFileSync/openSync take a mode and apply it
+// AT CREATION; the engine's FSS.open takes only (path, flags) and always creates 0644
+// (mod_fs_sync.c js_fss_open — no mode parameter at all). So a caller asking for 0755 got
+// a file it could not execute, silently.
+//
+// Not hypothetical, and not new: this is the SIBLING of the cpSync-drops-mode bug found
+// in the field, whose fix landed on copyFileSync and never covered the CREATE path. It
+// reproduces inside our own suite — test/rg-to-ugrep.test.cjs:30 writes a `#!/bin/sh`
+// fixture with {mode:0o755} and the engine then reports "Permission denied". mkdirSync
+// has honoured its mode all along, so the parameter was known, just not threaded here.
+//
+// chmod-AFTER-create, matching what createWriteStream already does for o.mode below and
+// what the copyFileSync fix does. It is not atomic the way node's open(mode) is: there is
+// a window where the file exists at 0644. For writing scripts and fixtures that is fine,
+// and the alternative is an engine change — worth doing if FSS.open ever grows a mode,
+// but not worth blocking this on.
+function applyCreateMode(p, opts) {
+  const mode = typeof opts === 'object' && opts !== null ? opts.mode : undefined;
+  if (typeof mode === 'number') chmodBestEffort(p, mode);
+}
 // tjs's rename (__tjs_fs_sync.rename, mod_fs_sync.c) is the C library rename(a,b)
 // with no _WIN32 special-casing. POSIX rename(2) atomically REPLACES an existing
 // target; the Windows CRT rename() instead FAILS (errno EEXIST, sometimes EACCES/
@@ -261,6 +281,7 @@ function writeFileSync(p, data, opts) {
   if (typeof p === 'number') { writeAll(p, bytes, null); return; }
   const fd = FSS.open(p, 'w');
   try { writeAll(fd, bytes, null); } finally { FSS.close(fd); }
+  applyCreateMode(p, opts);
 }
 
 function mkdirSync(p, opts) {
@@ -322,6 +343,7 @@ function appendFileSync(p, data, opts) {
   if (typeof p === 'number') { writeAll(p, bytes, null); return; }
   const fd = FSS.open(p, 'a');
   try { writeAll(fd, bytes, null); } finally { FSS.close(fd); }
+  applyCreateMode(p, opts);
 }
 
 // fs.writeSync(fd, buffer[, offset[, length[, position]]]) OR
@@ -563,7 +585,14 @@ const fsMod = {
   unlinkSync: (p) => FSS.unlink(p),
   renameSync: (a, b) => renameReplace(a, b),
   accessSync: (p, m) => FSS.access(p, m ?? constants.F_OK),
-  openSync: (p, flags) => { const fd = FSS.open(p, flagsToString(flags ?? 'r')); fdPaths.set(fd, p); return fd; },
+  // node: openSync(path, flags[, mode]) — mode applies only when the flags CREATE.
+  openSync: (p, flags, mode) => {
+    const f = flagsToString(flags ?? 'r');
+    const fd = FSS.open(p, f);
+    fdPaths.set(fd, p);
+    if (typeof mode === 'number' && (f[0] === 'w' || f[0] === 'a')) chmodBestEffort(p, mode);
+    return fd;
+  },
   // fdPaths cleanup MUST run even when FSS.close throws (e.g. a double-close —
   // a caller bug, but one this codebase already anticipates: createWriteStream's
   // closeFd() below wraps its close in try/catch for exactly "already closed").
@@ -670,7 +699,9 @@ const promises = {
     if (isLatin1(enc)) return latin1Decode(data);
     return asBuffer(data);
   },
-  writeFile: async (p, data) => { writeFileSync(p, data); },
+  // opts was dropped here entirely, so the promises form ignored BOTH encoding and
+  // mode while the sync form honoured encoding. Thread it.
+  writeFile: async (p, data, opts) => { writeFileSync(p, data, opts); },
   utimes: async (p, atime, mtime) => { await tjs.utime(p, timeToMs(atime), timeToMs(mtime)); },
   lutimes: async (p, atime, mtime) => { await tjs.lutime(p, timeToMs(atime), timeToMs(mtime)); },
   // statfs: the bundle CALLS this (not feature-detects it) on its low-disk

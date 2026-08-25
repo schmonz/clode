@@ -45,11 +45,18 @@ class Buffer extends Uint8Array {
   static alloc(n) { return new Buffer(n); }
   static isBuffer(v) { return v instanceof Buffer; }
   static byteLength(s) { return te.encode(String(s)).length; }
-  static concat(list) {
-    const total = list.reduce((n, b) => n + b.length, 0);
+  // node: concat(list[, totalLength]) — totalLength TRUNCATES or zero-pads. Ignoring it
+  // returned a differently-sized buffer than the caller asked for.
+  static concat(list, totalLength) {
+    const total = totalLength === undefined ? list.reduce((n, b) => n + b.length, 0) : totalLength;
     const out = new Buffer(total);
     let o = 0;
-    for (const b of list) { out.set(b, o); o += b.length; }
+    for (const b of list) {
+      if (o >= total) break;
+      const take = Math.min(b.length, total - o);
+      out.set(take === b.length ? b : b.subarray(0, take), o);
+      o += take;
+    }
     return out;
   }
   toString(enc) {
@@ -64,5 +71,48 @@ class Buffer extends Uint8Array {
   }
   slice(a, b) { return new Buffer(super.slice(a, b)); }
   equals(other) { return this.length === other.length && this.every((v, i) => v === other[i]); }
+
+  // SEARCH METHODS MUST BE OVERRIDDEN, NOT INHERITED. Uint8Array.prototype.indexOf
+  // coerces its argument to a NUMBER, so a string needle became NaN and the answer was
+  // always -1: `Buffer.from('abcabc').indexOf('cab')` returned -1 where node returns 2,
+  // and `.includes('cab')` returned false. SILENTLY WRONG, which is worse than absent —
+  // an absent method throws and gets noticed. Found 2026-08-25 by running the suite on
+  // the engine.
+  //
+  // This class is the DEPS-FREE fallback (clode-native / `clode build`); quaude ships
+  // feross/buffer, so the two configurations answer differently. See BACKLOG.
+  _needle(value, encoding) {
+    if (typeof value === 'number') return Uint8Array.of(value & 0xff);
+    if (typeof value === 'string') return Buffer.from(value, encoding);
+    return value instanceof Uint8Array ? value : Uint8Array.from(value);
+  }
+  indexOf(value, byteOffset, encoding) {
+    if (typeof byteOffset === 'string') { encoding = byteOffset; byteOffset = 0; }
+    const n = this._needle(value, encoding);
+    let start = byteOffset | 0;
+    if (start < 0) start = Math.max(0, this.length + start);
+    if (n.length === 0) return Math.min(start, this.length);
+    outer: for (let i = start; i + n.length <= this.length; i++) {
+      for (let j = 0; j < n.length; j++) if (this[i + j] !== n[j]) continue outer;
+      return i;
+    }
+    return -1;
+  }
+  lastIndexOf(value, byteOffset, encoding) {
+    if (typeof byteOffset === 'string') { encoding = byteOffset; byteOffset = undefined; }
+    const n = this._needle(value, encoding);
+    if (n.length === 0) return this.length;
+    let start = byteOffset === undefined ? this.length - n.length : (byteOffset | 0);
+    if (start < 0) start = this.length + start;
+    start = Math.min(start, this.length - n.length);
+    outer: for (let i = start; i >= 0; i--) {
+      for (let j = 0; j < n.length; j++) if (this[i + j] !== n[j]) continue outer;
+      return i;
+    }
+    return -1;
+  }
+  includes(value, byteOffset, encoding) { return this.indexOf(value, byteOffset, encoding) !== -1; }
+  // JSON.stringify(buf) must yield {type:'Buffer',data:[...]}, not an index map.
+  toJSON() { return { type: 'Buffer', data: Array.from(this) }; }
 }
 module.exports = { Buffer };

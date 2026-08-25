@@ -1889,18 +1889,75 @@ and it is the cleanest single example of the duplicated-truth problem ★★★ 
 
 ### ★★ The shim tests do not run on the engine (2026-08-25)
 
-`npm test` is node:test, so the shim is `require`d into NODE. That exercises its LOGIC and
-says nothing about its behaviour on quickjs — which is where it ships. 87 of 199 test
-files are pure unit tests in this position.
+**PROVEN, and it paid immediately.** A feasibility spike ran the suite on the engine and
+found SIX genuine shim bugs plus two product bugs that node-hosted testing had been
+hiding. All eight are now FIXED (see git log for 2026-08-25); the spike's harness is NOT
+yet integrated.
 
-The evidence that it matters is historical, not theoretical: the shim reporting a
-**SIGKILLed child as exit 0** (cost a day on Haiku), `cpSync` **dropping file mode**, and
-the **Haiku write deadlock** were all found by clode RUNNING ON THE ENGINE during a real
-build — never by these tests.
+    C1  fs dropped the CREATE MODE            writeFileSync/openSync/appendFileSync gave
+                                              0644 for {mode:0o755}. The SIBLING of the
+                                              cpSync bug found in the field — that fix
+                                              covered copyFileSync and never the create
+                                              path. promises.writeFile also dropped opts
+                                              ENTIRELY (encoding as well as mode).
+    C2  deepStrictEqual APPROVED UNEQUAL      Map/Set/Date/RegExp/boxed/typed arrays keep
+        VALUES                                contents in internal slots; it walked
+                                              ownKeys only, so both sides looked like {}.
+                                              assert.deepStrictEqual delegates to it.
+    C3  crypto.randomBytes threw above 64KB   WebCrypto caps getRandomValues at 65536;
+                                              node has no cap. Now chunked.
+    C4  os.networkInterfaces returned an       node keys by interface name. The existing
+        ARRAY                                 test asserted `typeof === 'object'`, which
+                                              an array satisfies — green, wrong shape.
+    C5  util.inspect was JSON.stringify       Errors printed as '{}', and it THREW on
+                                              circular objects and BigInt. Since it backs
+                                              console.log, an error logged during a
+                                              failure vanished exactly when needed.
+    C6  buffer-lite搜索 silently wrong         Uint8Array.indexOf coerces a string needle
+                                              to NaN, so indexOf('cab') was -1 and
+                                              includes() false. concat ignored
+                                              totalLength; no toJSON.
+    C7  clode-watch spawned process.execPath  Under a fused clode that is the clode
+        (PRODUCT bug)                         binary; the spawn failed, was swallowed, and
+                                              HIGH update signals became high=0. The
+                                              identical trap is documented at
+                                              clode-fuse.cjs:294.
+    C8  platform-tag emitted an EMPTY FLOOR   os.release() is '' under a node-free clode,
+        (PRODUCT bug)                         so non-darwin/linux/win32 produced `netbsd-`
+                                              silently. Now walls.
 
-**Highest-value step in the whole testing story, and independent of every language
-decision.** Running the existing suite under the engine makes correctness observable in
-the environment that ships. See the CTest note for how it fits a CMake build.
+**C5 is a partial fix, deliberately.** util.inspect is not node-exact: no colours, no
+depth/breadth options, no getter evaluation, spacing differs. What it now guarantees is
+that it NEVER THROWS and never returns '{}' for a value with content. Widen it when a
+caller needs more, not speculatively.
+
+### ★★ Finish the engine-test migration (2026-08-25)
+
+The spike above proves the approach; the harness is uncommitted in an agent worktree. What
+it established, measured:
+
+- **A node:test-shaped harness is enough.** The suite uses `test(name[,opts],fn)`,
+  `t.skip()`, `t.diagnostic()` and nothing else — ZERO files use `describe`, `it`,
+  `t.plan`, subtests, `mock` or reporters.
+- **Full sweep, 199 files unmodified on the engine: 90 pass / 106 fail / 3 hang.** That is
+  a FLOOR — the spike's worktree had no `build/` and no `deps/claude/node_modules`.
+- Rough shape: ~45-55% run as-is; ~20% need one mechanical change, almost always
+  replacing `process.execPath` with an injected node (`CLODE_NODE`) — and many files
+  already have that seam; ~10% need loader work (`.mjs` requires,
+  `createRequire(import.meta.url)`); ~15-20% should STAY on node as the oracle (PTY,
+  SEA/naude legs, fidelity differentials that already drive the engine as a subject).
+
+**THE DESIGN CONSTRAINT TO DECIDE FIRST: it must run in TWO LABELLED CONFIGURATIONS.**
+With `NODE_PATH` unset you are testing the clode-native toolchain (`buffer-lite`); pointed
+at the ext-dep closure you are testing what quaude ships (feross/buffer). C6 exists ONLY
+in the first, and the spike nearly reported it as a general Buffer catastrophe before
+checking. A migration that runs one leg will confidently mislead about the other.
+
+**Anti-flattery requirement, non-negotiable:** the harness must supply `test`/`assert`
+plumbing and NOTHING else. The spike validated this by sabotaging `path.join` and watching
+the shim test go red while a pure-JS control stayed green. Any future harness change
+should be checked the same way — a harness that stubs enough to pass reproduces the exact
+defect this work removes.
 
 ### ★★ s390x ATTEMPTS the cross-fuse onto big-endian and throws the result away
 

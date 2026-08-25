@@ -3,18 +3,102 @@
 function format(fmt, ...args) {
   if (typeof fmt !== 'string') return [fmt, ...args].map(inspect1).join(' ');
   let i = 0;
-  let out = fmt.replace(/%[sdj%]/g, (m) => {
+  let out = fmt.replace(/%[sdjifoOc%]/g, (m) => {
     if (m === '%%') return '%';
     if (i >= args.length) return m;
     const a = args[i++];
-    if (m === '%s') return String(a);
+    if (m === '%s') return typeof a === 'string' ? a : inspect1(a, undefined, 1);
     if (m === '%d') return String(Number(a));
-    return JSON.stringify(a);
+    if (m === '%i') return String(parseInt(a, 10));
+    if (m === '%f') return String(parseFloat(a));
+    if (m === '%o' || m === '%O') return inspect1(a, undefined, 1);
+    if (m === '%c') return '';                       // node consumes CSS and emits nothing
+    if (m === '%j') { try { return JSON.stringify(a); } catch { return '[Circular]'; } }
+    return inspect1(a, undefined, 1);
   });
   for (; i < args.length; i++) out += ' ' + inspect1(args[i]);
   return out;
 }
-function inspect1(v) { return typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v); }
+// util.inspect WAS JSON.stringify, which is wrong in three ways that matter and one that
+// is fatal. Measured 2026-08-25 on the engine:
+//   inspect(new Error('boom'))  -> '{}'          (the message and stack, gone)
+//   inspect(/re/)               -> '{}'
+//   inspect(new Map([['a',1]])) -> '{}'
+//   inspect(circularObject)     -> THREW         <-- node NEVER throws here
+//   inspect(1n)                 -> THREW
+// Since this backs console.log's object formatting, an error logged during a failure
+// printed as `{}` — the moment you most need the message is the moment it vanished.
+//
+// NOT a full node inspect: no colours, no depth/breadth options, no getter evaluation, no
+// %c handling, and the exact spacing of nested output is not byte-identical to node's.
+// What it DOES guarantee: it never throws, it never returns '{}' for a value that has
+// content, and Errors/Map/Set/Date/RegExp/BigInt/Symbol/functions/circular refs all print
+// something a human can act on. Widen it when a caller needs more, not speculatively.
+const _quote = (s) => "'" + String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n') + "'";
+
+function inspect1(v, seen, depth) {
+  seen = seen || new Set();
+  depth = depth || 0;
+  const t = typeof v;
+  if (v === null) return 'null';
+  if (t === 'undefined') return 'undefined';
+  if (t === 'string') return depth === 0 ? v : _quote(v);
+  if (t === 'number') return Object.is(v, -0) ? '-0' : String(v);
+  if (t === 'bigint') return String(v) + 'n';
+  if (t === 'boolean') return String(v);
+  if (t === 'symbol') return v.toString();
+  if (t === 'function') return '[Function: ' + (v.name || 'anonymous') + ']';
+
+  if (v instanceof Error) {
+    // QuickJS's Error#stack is the call-frame trace ONLY — unlike V8 it does NOT prepend
+    // "Name: message" (the same divergence libexec/node-shim/loader.cjs handles when it
+    // prints an uncaught error). Returning the raw stack therefore LOSES THE MESSAGE,
+    // which is the one thing a logged error must carry.
+    const head = (v.name || 'Error') + (v.message ? ': ' + v.message : '');
+    const stack = typeof v.stack === 'string' ? v.stack : '';
+    if (!stack) return head;
+    return stack.startsWith(v.name || 'Error') ? stack : head + '\n' + stack;
+  }
+  const tag = Object.prototype.toString.call(v);
+  if (tag === '[object RegExp]') return String(v);
+  if (tag === '[object Date]') {
+    const ms = v.getTime();
+    return Number.isNaN(ms) ? 'Invalid Date' : v.toISOString();
+  }
+
+  if (seen.has(v)) return '[Circular *1]';
+  if (depth > 4) return Array.isArray(v) ? '[Array]' : '[Object]';
+  seen.add(v);
+  try {
+    const rec = (x) => inspect1(x, seen, depth + 1);
+    if (Array.isArray(v)) return '[ ' + v.map(rec).join(', ') + ' ]';
+    if (tag === '[object Map]') {
+      return 'Map(' + v.size + ') {' + (v.size ? ' ' + [...v].map(([k, val]) => rec(k) + ' => ' + rec(val)).join(', ') + ' ' : '') + '}';
+    }
+    if (tag === '[object Set]') {
+      return 'Set(' + v.size + ') {' + (v.size ? ' ' + [...v].map(rec).join(', ') + ' ' : '') + '}';
+    }
+    if (ArrayBuffer.isView(v) && !(v instanceof DataView)) {
+      const name = v.constructor && v.constructor.name ? v.constructor.name : 'TypedArray';
+      return name + '(' + v.length + ') [ ' + Array.from(v).join(', ') + ' ]';
+    }
+    const ctor = v.constructor && v.constructor.name;
+    const prefix = ctor && ctor !== 'Object' ? ctor + ' ' : '';
+    const parts = [];
+    for (const k of Reflect.ownKeys(v)) {
+      let val;
+      try { val = v[k]; } catch (e) { val = '[getter threw]'; }
+      const key = typeof k === 'symbol' ? '[' + k.toString() + ']'
+        : (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k) ? k : _quote(k));
+      parts.push(key + ': ' + rec(val));
+    }
+    return prefix + '{' + (parts.length ? ' ' + parts.join(', ') + ' ' : '') + '}';
+  } catch (e) {
+    return '[uninspectable: ' + ((e && e.message) || e) + ']';
+  } finally {
+    seen.delete(v);
+  }
+}
 function promisify(fn) {
   return (...args) => new Promise((res, rej) =>
     fn(...args, (err, val) => (err ? rej(err) : res(val))));
@@ -23,9 +107,87 @@ function inherits(ctor, superCtor) {
   Object.setPrototypeOf(ctor.prototype, superCtor.prototype);
   ctor.super_ = superCtor;
 }
+// DEEP EQUALITY MUST SEE INTERNAL SLOTS, or it silently approves anything it cannot read.
+//
+// This walked Reflect.ownKeys only. Map, Set, Date, RegExp, boxed primitives and typed
+// arrays keep their contents in INTERNAL SLOTS, not own properties, so both sides looked
+// like {} and compared EQUAL. Measured on the engine before this fix:
+//
+//     assert.deepStrictEqual(new Map([['a',1]]), new Map([['a',2]]))   PASSED
+//     assert.deepStrictEqual(new Set([1]), new Set([2]))               PASSED
+//     assert.deepStrictEqual(new Date(2000), new Date(2020))           PASSED
+//     assert.deepStrictEqual(/a/, /b/)                                 PASSED
+//
+// assert.deepStrictEqual delegates straight here (assert.cjs), so this was not a reporting
+// quirk — it is an ASSERTION THAT APPROVED UNEQUAL VALUES. Any test comparing those types
+// went green while measuring nothing, which is the worst failure this project has: a check
+// that still runs and no longer checks. It stayed invisible because
+// test/node-shim-util.test.cjs pins plain objects, NaN and +/-0 — all of which were right.
+//
+// Tag-first, then contents. Prototype identity is compared too: node treats
+// Object.create(null) and {} as unequal even with identical keys.
+const _tagOf = (v) => Object.prototype.toString.call(v);
+
 function isDeepStrictEqual(a, b) {
   if (a === b) return a !== 0 || 1 / a === 1 / b;
   if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return Object.is(a, b);
+
+  const tag = _tagOf(a);
+  if (tag !== _tagOf(b)) return false;
+  if (Object.getPrototypeOf(a) !== Object.getPrototypeOf(b)) return false;
+
+  switch (tag) {
+    case '[object Date]':
+      return Object.is(a.getTime(), b.getTime());
+    case '[object RegExp]':
+      return a.source === b.source && a.flags === b.flags;
+    case '[object Number]': case '[object String]':
+    case '[object Boolean]': case '[object Symbol]': case '[object BigInt]':
+      return Object.is(a.valueOf(), b.valueOf());   // boxed primitives
+    case '[object Map]': {
+      if (a.size !== b.size) return false;
+      for (const [k, v] of a) {
+        // Non-primitive keys need a structural search: node matches them by deep equality,
+        // not by reference, so a plain `b.get(k)` would wrongly report a miss.
+        if (k !== null && (typeof k === 'object' || typeof k === 'function')) {
+          let hit = false;
+          for (const [k2, v2] of b) { if (isDeepStrictEqual(k, k2) && isDeepStrictEqual(v, v2)) { hit = true; break; } }
+          if (!hit) return false;
+        } else {
+          if (!b.has(k) || !isDeepStrictEqual(v, b.get(k))) return false;
+        }
+      }
+      return true;
+    }
+    case '[object Set]': {
+      if (a.size !== b.size) return false;
+      for (const v of a) {
+        if (v !== null && (typeof v === 'object' || typeof v === 'function')) {
+          let hit = false;
+          for (const v2 of b) { if (isDeepStrictEqual(v, v2)) { hit = true; break; } }
+          if (!hit) return false;
+        } else if (!b.has(v)) return false;
+      }
+      return true;
+    }
+    default: break;
+  }
+
+  // Typed arrays and DataView: compare bytes, not indices-as-own-keys.
+  if (ArrayBuffer.isView(a)) {
+    if (a.byteLength !== b.byteLength) return false;
+    const ua = new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
+    const ub = new Uint8Array(b.buffer, b.byteOffset, b.byteLength);
+    for (let i = 0; i < ua.length; i++) if (ua[i] !== ub[i]) return false;
+    return true;
+  }
+  if (tag === '[object ArrayBuffer]') {
+    if (a.byteLength !== b.byteLength) return false;
+    const ua = new Uint8Array(a), ub = new Uint8Array(b);
+    for (let i = 0; i < ua.length; i++) if (ua[i] !== ub[i]) return false;
+    return true;
+  }
+
   if (Array.isArray(a) !== Array.isArray(b)) return false;
   const ka = Reflect.ownKeys(a), kb = Reflect.ownKeys(b);
   if (ka.length !== kb.length) return false;

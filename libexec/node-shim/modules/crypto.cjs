@@ -75,10 +75,21 @@ function timingSafeEqual(a, b) {
   return diff === 0;
 }
 
+// WEBCRYPTO CAPS getRandomValues AT 65536 BYTES PER CALL; node's randomBytes has no cap.
+// Asking for more threw QuotaExceededError — found 2026-08-25 by a test requesting 200000
+// bytes. Fill in chunks so the shim matches node's contract instead of the web platform's.
+const RNG_CHUNK = 65536;
+function fillRandom(view) {
+  for (let off = 0; off < view.length; off += RNG_CHUNK) {
+    crypto.getRandomValues(view.subarray(off, Math.min(off + RNG_CHUNK, view.length)));
+  }
+  return view;
+}
+
 function randomFillSync(buf, offset = 0, size) {
   const view = new Uint8Array(buf.buffer ?? buf, buf.byteOffset ?? 0, buf.byteLength ?? buf.length);
   const end = size === undefined ? view.length : offset + size;
-  crypto.getRandomValues(view.subarray(offset, end));
+  fillRandom(view.subarray(offset, end));
   return buf;
 }
 
@@ -95,8 +106,10 @@ module.exports = {
   getHashes,
   constants,
   randomUUID: () => crypto.randomUUID(),
-  randomBytes: (n) => { const b = globalThis.Buffer.alloc(n); crypto.getRandomValues(b); return b; },
+  randomBytes: (n) => { const b = globalThis.Buffer.alloc(n); fillRandom(new Uint8Array(b.buffer, b.byteOffset, b.byteLength)); return b; },
   randomFillSync,
+  // getRandomValues keeps the WEB contract (it IS the web API): callers of the web
+  // name get the web cap. Only node's own randomBytes/randomFillSync are uncapped.
   getRandomValues: (a) => crypto.getRandomValues(a),
   webcrypto: crypto,
 };

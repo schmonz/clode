@@ -111,15 +111,47 @@ function currentProvider(env) {
 
 // Spawn clode-signals.cjs exactly as the sh does. Returns stdout (utf8), or ''
 // on any failure — warn-only, never throws.
+// PROCESS.EXECPATH IS NOT ALWAYS A NODE, and this file learned that the expensive way.
+// Under a fused native clode it is the clode binary itself — there is no node on the box,
+// that being the entire point of that artifact. Spawning it fails, the catch below
+// swallowed the failure, runSignals returned '' and HIGH update signals silently became
+// high=0. The identical trap is documented at libexec/clode-fuse.cjs:294, where it "broke
+// EVERY `clode build` under clode-native while CI stayed green".
+//
+// Measured 2026-08-25: test/clode-watch.test.cjs is 23/25 on the engine and 25/25 with
+// CLODE_NODE set — the tests could not see it because they run on node, where
+// process.execPath IS a node.
+function resolveNodeFor(opts) {
+  if (opts && opts.node) return opts.node;
+  if (process.env.CLODE_NODE) return process.env.CLODE_NODE;
+  // `tjs` is defined only when we are running ON the engine, i.e. inside a fused clode.
+  // There, execPath is emphatically not an interpreter that can run a .cjs script.
+  if (typeof globalThis.tjs !== 'undefined') return null;
+  return process.execPath;
+}
+
 function runSignals(opts, extraArgs) {
-  const node = (opts && opts.node) || process.execPath;
+  const node = resolveNodeFor(opts);
   const libexec = (opts && opts.libexec) || LIBEXEC_DEFAULT;
   const script = path.join(libexec, 'clode-signals.cjs');
+  const warn = (why) => {
+    // WARN-ONLY stays — this is a background update check and must never break a build.
+    // But it must not be SILENT: returning '' with no word is what turned a broken signal
+    // path into "no signals", which reads exactly like good news.
+    try {
+      ((opts && opts.stderr) || process.stderr).write(
+        `clode: update signals unavailable (${why}); reporting none. `
+        + 'Set CLODE_NODE to a node binary to restore them.\n');
+    } catch { /* stderr itself is best-effort here */ }
+  };
+  if (!node) { warn('no node interpreter available under a fused clode'); return ''; }
   try {
     return execFileSync(node, [script, ...extraArgs],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   } catch (e) {
-    return (e && e.stdout) || '';
+    const out = (e && e.stdout) || '';
+    if (!out) warn(`${node} could not run clode-signals.cjs`);
+    return out;
   }
 }
 

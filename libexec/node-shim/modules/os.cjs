@@ -69,7 +69,21 @@ module.exports = {
   // os.version() — same unavailability; empty string DIVERGENCE (see release()).
   version: () => '',
   hostname: () => tjs.hostName ?? tjs.env.HOSTNAME ?? 'localhost',
-  networkInterfaces: () => (tjs.system && tjs.system.networkInterfaces) || {},
+  // node returns an OBJECT KEYED BY INTERFACE NAME; tjs returns an ARRAY. Passing it
+  // through unchanged handed callers the wrong shape, and the existing characterization
+  // (`typeof x === 'object'`) could not see it because an array satisfies that. Found
+  // 2026-08-25 by running the tests on the engine. Group by name, as node does.
+  networkInterfaces: () => {
+    const raw = (tjs.system && tjs.system.networkInterfaces) || {};
+    if (!Array.isArray(raw)) return raw;          // already keyed (or empty) — leave it
+    const out = {};
+    for (const i of raw) {
+      const name = i && (i.name ?? i.interface);
+      if (!name) continue;
+      (out[name] ||= []).push(i);
+    }
+    return out;
+  },
   // arm64/x64 are little-endian; process.arch is now leg-scoped (arm64 on
   // most legs, x64 on win32 — see process.cjs), and both are LE.
   endianness: () => 'LE',
