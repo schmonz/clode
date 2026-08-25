@@ -2,6 +2,8 @@
 
 ## 0.20260824.1
 
+Build from Claude Code 2.1.243 and newer, which changed how the CLI is packaged. Earlier `clode` releases stop with "bundle format may have changed" and cannot build a target at all. This affects everyone: 2.1.245 is the current `latest`.
+
 Fix regression: `quaude` binaries cross-built with `clode build --target` would not start up.
 
 Actually intercept update attempts, which we had believed we already did. A `quaude` could try to install Claude Code over itself — both on its own, and when you ran `quaude update`, which said it would not and then did.

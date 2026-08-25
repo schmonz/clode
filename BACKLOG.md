@@ -1435,6 +1435,38 @@ the user has. Anyone on 2.1.243 fails immediately, on every platform, native AND
 The DOA affects `--target` users only. This is the [[bundle-bumps-add-node-api-reads]]
 pattern again, in its most severe form: upstream can kill quaude with no repo change.
 
+### RESOLVED 2026-08-25 (92058a3) — clode builds from the code-split bundle
+
+    clode: fused /tmp/b245/quaude (60149146 bytes)
+    clode: smoke: PONG round-trip ok, attest ok
+
+Verified beyond the smoke on darwin-arm64: `--version` reports 2.1.245, `--help`
+renders, a real `-p` turn reaches the login prompt (so settings, workspace trust and
+auth all work), and `--quaude-attest` verifies every member.
+
+How, in one line each — none of it rewrites upstream's bytes:
+
+- `libexec/bun-graph.cjs` decodes Bun's module table (`base = trailer - 32 - byteCount`).
+- `libexec/bun-graph-plan.cjs` orders the graph topologically and generates one shim per
+  bare specifier.
+- `transformGraph` applies clode's hooks across the graph, exactly-once ACROSS modules.
+- The engine compiles each module AS IT IS (`tjs.engine.compile` already passes
+  JS_EVAL_TYPE_MODULE); the loader deserializes all and evaluates only the entry.
+- Four engine/shim walls, each found by BUILDING rather than reasoning: import.meta
+  resolved by name instead of identity, `import.meta.url` not a `file://` URL, namespace
+  imports needing declared exports, and eager shim reads tripping walls on import.
+- The PRELUDE (globalThis.Bun + __clodeCheckUpdate) rides as its own member, since a
+  graph has no single text to prepend to.
+
+**Still to verify: every platform other than darwin-arm64.** The engine patch has only
+been compiled here, and the graph path — 41MB of bytecode, 1459 modules deserialized at
+boot — has never run on NetBSD, Windows, Solaris or Haiku. Watch startup cost and memory
+on the small legs, and the interaction with canonical-LE on big-endian.
+
+---
+
+**ORIGINAL STOP-SHIP, kept for the reasoning:**
+
 **DO NOT TAG A RELEASE UNTIL WE HANDLE THE FORMAT.** (User, reaffirmed 2026-08-25.)
 
 The ORIGINAL reason written here was "a release built against 2.1.241 would ship a clode
