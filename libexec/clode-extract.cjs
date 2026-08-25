@@ -18,7 +18,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const Module = require('node:module');
 const { sigOf } = require('./clode-resolve.cjs');
-const { extractToFile } = require('./extract-claude-js.cjs');
+const { extractToFile, extractGraphToFile, isSplitBundle } = require('./extract-claude-js.cjs');
 
 // `[ -f "$p" ]`: exists AND is a regular file (any stat error -> false).
 function isFile(p) {
@@ -95,7 +95,13 @@ function extractIfNeeded(opts) {
   const clodeLog = (m) => { if (verbose) emit(m); };
 
   const extractorSig = sigOf(path.join(libexec, 'extract-claude-js.cjs'));
-  const cliPath = path.join(cacheDir, 'cli.cjs');
+  // TWO SHAPES. Through 2.1.241 a bundle carves to one cli.cjs; from 2.1.243 it is a
+  // code-split ESM graph and stages as graph.json instead. Decided from Bun's own
+  // module_format field in the container, never from a version string — see
+  // isSplitBundle. The staged artifact then tells every later step which shape it is,
+  // so there is exactly one place that decides.
+  const split = isSplitBundle(bin);
+  const cliPath = path.join(cacheDir, split ? 'graph.json' : 'cli.cjs');
   const cacheShim = path.join(cacheDir, 'bun-shim.cjs');
   const srcShim = path.join(libexec, 'bun-shim.cjs');
   const sigPath = path.join(cacheDir, '.extractor-sig');
@@ -120,7 +126,7 @@ function extractIfNeeded(opts) {
   fs.mkdirSync(cacheDir, { recursive: true });
 
   try {
-    runQuiet(verbose, () => extractToFile(bin, cliPath));
+    runQuiet(verbose, () => (split ? extractGraphToFile(bin, cliPath) : extractToFile(bin, cliPath)));
   } catch (e) {
     try { fs.rmSync(cliPath); } catch { /* ignore */ }
     process.stderr.write('clode: extraction failed (see error above); not caching.\n');
@@ -132,12 +138,27 @@ function extractIfNeeded(opts) {
   // `node --check`. Done in-process so it works whether the launcher is a plain node or
   // a SEA binary (which has no `--check` mode) and needs no external node at all.
   try {
-    const src = fs.readFileSync(cliPath, 'utf8');
-    new vm.Script(Module.wrap(src), { filename: cliPath });
+    if (split) {
+      // A staged GRAPH is JSON, not JS, so Module.wrap would be meaningless. Check what
+      // can actually be wrong here: that it parses, that every unit the order names has
+      // a source, and that the entry is among them. The authoritative SYNTAX check is
+      // the fuse step, which compiles every module under the TARGET engine — the only
+      // parser whose opinion matters — and fails loudly naming the module.
+      const doc = JSON.parse(fs.readFileSync(cliPath, 'utf8'));
+      if (doc.format !== 'clode-bun-graph-v1') throw new Error(`staged graph format ${doc.format}`);
+      if (!Array.isArray(doc.order) || !doc.order.length) throw new Error('staged graph has no order');
+      for (const name of doc.order) {
+        if (typeof doc.sources[name] !== 'string') throw new Error(`staged graph has no source for ${name}`);
+      }
+      if (typeof doc.sources[doc.entry] !== 'string') throw new Error(`staged graph entry ${doc.entry} has no source`);
+    } else {
+      const src = fs.readFileSync(cliPath, 'utf8');
+      new vm.Script(Module.wrap(src), { filename: cliPath });
+    }
   } catch (e) {
     try { fs.rmSync(cliPath); } catch { /* ignore */ }
     if (e && e.stack) process.stderr.write(e.stack + '\n');
-    process.stderr.write('clode: extracted JS failed the syntax check; not caching.\n');
+    process.stderr.write(`clode: extracted ${split ? 'module graph' : 'JS'} failed the check; not caching.\n`);
     throw new Error('extracted JS failed the syntax check');
   }
 

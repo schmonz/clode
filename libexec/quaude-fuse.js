@@ -89,7 +89,10 @@ function deriveIdnaLevel() {
 // member INPUTS for the quaude it fuses.
 const extras = JSON.parse(dec.decode(await mustRead(extrasPath, 'manifest extras')));
 const role = extras.role ?? 'quaude';
-const entryName = role === 'builder' ? 'clode-main.bundle.cjs' : 'cli.qbc';
+// `let`, not `const`: the quaude role has TWO shapes and only the staging artifact
+// knows which. A code-split bundle (2.1.243+) compiles to graph.qbc + graph.idx and the
+// manifest must name graph.qbc, or the loader would look for a cli.qbc that is not there.
+let entryName = role === 'builder' ? 'clode-main.bundle.cjs' : 'cli.qbc';
 const members = [];
 
 // The ext-dep closure: package.json's `dependencies` plus their transitive
@@ -200,6 +203,54 @@ if (role === 'builder') {
   // pre-signing bytes, so it matches the manifest's template identity exactly.
   members.push({ name: 'template/tjs', data: await mustRead(templatePath, 'pristine tjs template') });
 } else {
+  // TWO SHAPES OF BUNDLE. Through 2.1.241 the CLI is ONE @bun-cjs module and the
+  // staging step wrote cli.cjs. From 2.1.243 it is a code-split ESM GRAPH and the
+  // staging step wrote graph.json instead. Branch on which artifact is present rather
+  // than on a version number: the stage already decided, using Bun's own module_format
+  // field, and re-deciding here from a version string would be a second source of truth.
+  const graphPath = path.join(stageDir, 'graph.json');
+  let stagedGraph = null;
+  try { stagedGraph = await tjs.readFile(graphPath); } catch (e) { stagedGraph = null; }
+
+  if (stagedGraph) {
+    const doc = JSON.parse(dec.decode(stagedGraph));
+    if (doc.format !== 'clode-bun-graph-v1') {
+      throw new Error(`quaude-fuse: staged graph has format ${doc.format}, expected clode-bun-graph-v1`);
+    }
+    // Compile every unit IN THE STAGED ORDER. Order is not cosmetic: compile()
+    // resolves imports as it compiles, so a module whose dependency has not been
+    // compiled yet fails with "could not load" naming a module that is perfectly
+    // fine. The stage produced a topological order; trust it and fail loudly if it
+    // is wrong rather than half-building.
+    const t0 = performance.now();
+    const index = [];
+    const parts = [];
+    let off = 0;
+    for (const name of doc.order) {
+      const src = doc.sources[name];
+      if (typeof src !== 'string') throw new Error(`quaude-fuse: staged graph has no source for ${name}`);
+      let bc;
+      try {
+        bc = tjs.engine.serialize(tjs.engine.compile(enc.encode(src), name));
+      } catch (e) {
+        throw new Error(`quaude-fuse: compiling ${name} failed: ${e.message}\n`
+          + '  A "could not load" here usually means the staged order is not topological.');
+      }
+      index.push({ name, off, len: bc.length });
+      parts.push(bc);
+      off += bc.length;
+    }
+    const all = new Uint8Array(off);
+    let p = 0;
+    for (const b of parts) { all.set(b, p); p += b.length; }
+    // ONE blob plus an index, not 1459 archive members: the archive index is read and
+    // verified eagerly at boot, and 1459 entries would put that cost on every start.
+    members.push({ name: 'graph.qbc', data: all });
+    entryName = 'graph.qbc';
+    members.push({ name: 'graph.idx', data: enc.encode(JSON.stringify({ entry: doc.entry, modules: index })) });
+    console.log(`quaude-fuse: compiled ${index.length} modules -> graph.qbc `
+      + `(${(all.length / 1048576).toFixed(1)}MB, ${(performance.now() - t0).toFixed(0)}ms)`);
+  } else {
   // cli.cjs -> cli.qbc: replicate the loader's ENTRY transforms (shebang strip +
   // dynamic-import rewrite; fixVFlagPropertyEscapes self-gates off for >1MB
   // entries), wrap in the CJS wrapper as a module (=> strict), compile+serialize
@@ -213,6 +264,7 @@ if (role === 'builder') {
   const bc = tjs.engine.serialize(tjs.engine.compile(enc.encode(wrapped), '/quaude/cli.cjs'));
   console.log(`quaude-fuse: compiled cli.cjs -> cli.qbc (${bc.length} bytes, ${(performance.now() - t0).toFixed(0)}ms)`);
   members.push({ name: 'cli.qbc', data: bc });
+  }
 
   // bun-shim from the extracted stage (version-locked to the bundle by the
   // cache). scripts/build-naude.mjs reads it from this same staged location

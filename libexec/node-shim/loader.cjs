@@ -536,6 +536,56 @@ function evalBytecodeEntry(qbcFile) {
   fn.call(module.exports, module.exports, makeRequire(dir), module, origName, dir);
 }
 
+/* ---- code-split graph entry ----------------------------------------------------
+ * From Claude Code 2.1.243 the CLI is not one module but ~1382 ES modules, so there is
+ * no CJS wrapper to call and no `__quaude_entry`. The fuse step stored them as ONE blob
+ * (graph.qbc) plus an index (graph.idx: {entry, modules:[{name,off,len}]}).
+ *
+ * The whole load is: deserialize every module, then evaluate ONLY the entry. That works
+ * because quickjs checks its already-loaded module list BEFORE calling the module
+ * loader, so preregistering makes every import resolve with no filesystem access — and
+ * evaluating the entry pulls in the graph in correct ESM order. Verified against the
+ * engine directly, including that a module which was never registered fails loudly
+ * rather than resolving to something empty.
+ *
+ * UPSTREAM'S BYTES ARE NEVER REWRITTEN. The modules were compiled exactly as shipped
+ * (plus clode's ordinary hook patches); the only generated code is the small shim module
+ * per bare specifier, which routes through __quaudeRequire below. That seam is the one
+ * place generated code meets the shim, and it is deliberately a single global rather
+ * than 75 separate injections. */
+function evalBytecodeGraph(idxFile, blobFile) {
+  const idx = JSON.parse(new TextDecoder().decode(readBinSync(idxFile)));
+  const blob = readBinSync(blobFile);
+  if (!idx || !Array.isArray(idx.modules) || !idx.entry) {
+    throw new Error(`node-shim: ${idxFile} is not a quaude graph index`);
+  }
+  // The generated per-specifier shims call this to reach node builtins through the
+  // shim's own require, so `import {readFileSync} from "fs"` lands on the same
+  // implementation `require("fs")` would.
+  const graphRequire = makeRequire('/quaude');
+  globalThis.__quaudeRequire = graphRequire;
+
+  let entryMod = null;
+  for (const m of idx.modules) {
+    const bytes = blob.subarray(m.off, m.off + m.len);
+    let obj;
+    try {
+      obj = tjs.engine.deserialize(bytes);
+    } catch (e) {
+      throw new Error(`node-shim: deserializing ${m.name} from ${blobFile} failed: ${e.message}`);
+    }
+    if (m.name === idx.entry) entryMod = obj;
+  }
+  if (!entryMod) throw new Error(`node-shim: graph index names entry ${idx.entry}, which is not in the blob`);
+
+  const origName = '/quaude/cli.cjs';
+  const module = { exports: {}, filename: origName };
+  mainModule = module;
+  moduleCache.set(origName, module);
+  // Evaluating the entry runs the whole graph; there is no wrapper to call afterwards.
+  tjs.engine.evalBytecode(entryMod);
+}
+
 // Load the gap-observability helper now: evalModule (and what it needs —
 // moduleCache, DYN_IMPORT_RE/V_FLAG_REGEX_RE, makeRequire, ...) is fully
 // initialized by this point in the script, but loadBuiltin() has not been
@@ -959,7 +1009,11 @@ globalThis.addEventListener('beforeunload', () => {
 });
 
 try {
-  if (entryAbs.endsWith('.qbc')) evalBytecodeEntry(entryAbs);
+  // graph.qbc is the code-split shape (2.1.243+) and needs its index; any other .qbc
+  // is the single-module CJS entry. Dispatch on the member NAME, not a version, so the
+  // artifact itself says which shape it is.
+  if (entryAbs.endsWith('/graph.qbc')) evalBytecodeGraph(entryAbs.replace(/\.qbc$/, '.idx'), entryAbs);
+  else if (entryAbs.endsWith('.qbc')) evalBytecodeEntry(entryAbs);
   else evalModule(entryAbs, true);
 } catch (e) {
   // QuickJS's Error#stack is the call-frame trace ONLY — it does not, unlike
