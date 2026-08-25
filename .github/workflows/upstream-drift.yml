@@ -105,6 +105,31 @@ jobs:
   # and presented as CI infrastructure noise. One cheap leg daily converts that into
   # a dated, attributed red light within a day of an upstream release.
   #
+  # A FOURTH DAILY QUESTION, and the cheapest: has the Haiku blocker lifted?
+  #
+  # haiku-x64 fails because cross-platform-actions ships only an r1beta5 guest image and
+  # HaikuPorts moved to the current release, so the guest cannot install packages at all.
+  # Not our bug, and not something a build can fix. Running that leg on every push spent a
+  # runner slot to re-derive an answer we had already written down, while the question we
+  # actually care about — has a beta6 image appeared? — went unasked.
+  #
+  # This asks it in about a second. Green means "nothing we could do about Haiku today",
+  # NOT "Haiku is fine": the leg is deliberately out of the push matrix and publishes
+  # nothing (see BACKLOG). Red means an action just became possible.
+  haiku-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version-file: .tool-versions
+      - name: Has a newer Haiku guest image appeared?
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/haiku-image-watch.mjs
+
   # linux-x64-musl deliberately: an alpine container, no qemu, and the engine comes
   # from the same PINS+patches cache the push legs use, so the marginal cost is the
   # fuse and the smoke — not an engine build.

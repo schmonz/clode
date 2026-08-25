@@ -98,9 +98,25 @@ test('ci tier: every release OS is exercised, exactly one leg per VM OS', () => 
   const ci = legsFor('ci');
   const releaseOSes = new Set(release.map(osOf));
   const ciOSes = new Set(ci.map(osOf));
-  // openindiana is the deliberate exception: the illumos distro twin of
-  // omnios (same kernel family) stays release-only, like the arch twins.
-  const wanted = [...releaseOSes].filter((o) => o !== 'openindiana').sort();
+  // TWO DECLARED EXCEPTIONS, and the second one shows the rule is the wrong shape.
+  //
+  // openindiana: the illumos distro twin of omnios (same kernel family), release-only
+  // like the arch twins. NOTE it PUBLISHES, so under the rule this file states
+  // elsewhere — "if we ship it, CI gates it" — it should not be exempt at all.
+  //
+  // haiku: dropped from ci 2026-08-25 (user). It publishes NOTHING (publish:false,
+  // demoted while cross-platform-actions has no beta6 guest image), so while the
+  // blocker stands the leg can only re-derive an answer already written down, at the
+  // cost of a runner slot per push. The question we actually want answered — has a
+  // beta6 image appeared? — is asked daily by scripts/haiku-image-watch.mjs instead.
+  //
+  // THE RULE SHOULD BE A PROPERTY, NOT A LIST: every OS with a PUBLISHING leg must be
+  // exercised in CI. Under that rule haiku is correctly exempt (it ships nothing) and
+  // openindiana is NOT (it ships). Adopting it today would turn this red for
+  // openindiana — which is a real finding, filed under the push-CI/tag-release matrix
+  // item in BACKLOG, not something to fix in passing before a release.
+  const CI_EXEMPT = new Set(['openindiana', 'haiku']);
+  const wanted = [...releaseOSes].filter((o) => !CI_EXEMPT.has(o)).sort();
   assert.deepStrictEqual([...ciOSes].sort(), wanted);
   for (const os of ciOSes) {
     if (os === 'linux' || os === 'darwin') continue; // native tier keeps its historical multi-leg set

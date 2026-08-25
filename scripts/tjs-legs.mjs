@@ -450,7 +450,14 @@ const LEGS = [
     // RESTORE THIS once a beta6 guest image exists or master ports install — see
     // the haiku-x64 BACKLOG entry, which records exactly where the last attempt got
     // to (pkgman add-repo is INTERACTIVE and defaults to no).
-    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: false, 'soft-fail': true, ci: true,  // cpa, KVM (a genuinely new OS rung)
+    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: false, 'soft-fail': true, ci: false,  // cpa, KVM (a genuinely new OS rung)
+    // ci:false (2026-08-25, user). While the blocker stands this leg can only
+    // re-derive an answer already written down, at the cost of a runner slot per
+    // push and a red job that reads as alarming. The QUESTION WE ACTUALLY WANT
+    // ANSWERED is different -- has a beta6 guest image appeared? -- and
+    // scripts/haiku-image-watch.mjs asks exactly that, daily, in about a second
+    // (wired into upstream-drift.yml). Restore ci:true together with publish:true
+    // when that watcher goes red.
     // PLATFORMS.md documents a Haiku RIG (how to reach the box, which rows to
     // run) -- a runbook, not a result. Nobody has ever hand-driven the recipe
     // on Haiku; the other Haiku evidence on record is a >64KB uv_write deadlock
