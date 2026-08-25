@@ -1649,6 +1649,45 @@ was the first, `os.constants.errno` in 2.1.238), and both times we found out by 
 
 ### ★★ Critically review the environment variables (user, 2026-08-25)
 
+**THE QUESTION TO ANSWER (user, sharper than the original framing):**
+
+> "if we had zero CLODE_* env vars, what would break?"
+
+That inverts the default. "Which can we remove?" assumes keeping and asks for a reason to
+delete; this asks each one to justify existing.
+
+**A first pass at answering it, 2026-08-25:**
+
+     51  CLODE_* vars read by SHIPPED code (libexec + bin)
+      0  documented in clode's usage/help text
+      4  command-line flags in total: --help --naude --verbose --version
+
+The literal answer is **nothing a user could know they were relying on** — all 51 are
+undocumented back doors. `--verbose` already exists as BOTH a flag and `CLODE_VERBOSE`,
+which is the shape survivors should have: clode is a command that builds, and a command's
+inputs are arguments.
+
+**The builder/runner leftover is visible in the list, not merely suspected.** These are
+read by the shim INSIDE A BUILT QUAUDE, not by clode:
+
+    CLODE_TTY_FOCUS  CLODE_TTY_MOUSE  CLODE_SHADOWS  CLODE_KC_MODE
+    CLODE_RG_UNTRANSLATABLE  CLODE_NO_WATCH  CLODE_WATCH_INTERVAL
+
+Target runtime knobs wearing the builder's prefix. Setting `CLODE_*` to affect a running
+quaude is reasonable given the name and wrong given the architecture; whatever survives
+probably should not say `CLODE_` at all.
+
+**Groups, so the review is a few decisions rather than 51 arguments:**
+
+| group | examples | plausible answer |
+|---|---|---|
+| host-tool overrides | `CLODE_BFS` `CLODE_UGREP` `CLODE_RG` `CLODE_TAR` `CLODE_GZIP` `CLODE_UNZIP` `CLODE_SHA256` `CLODE_NPM` `CLODE_NODE` | nine vars for "use this binary" is nine chances to disagree; one flag or a config file |
+| paths / state | `CLODE_CACHE` `CLODE_DEPS` `CLODE_STATE_ROOT` `CLODE_PROVIDERS` `CLODE_LIBEXEC` `CLODE_VERSION_DIR` | genuinely useful for isolation; needs ONE story, not six |
+| input selection | `CLODE_CLAUDE_BIN` `CLODE_TJS` `CLODE_TARGET_TEMPLATE` `CLODE_MAIN_BUNDLE` `CLODE_TEMPLATES*` | these change WHAT IS BUILT — the dangerous group. Flags, and announced |
+| network | `CLODE_RELEASES_URL` `CLODE_CHANGELOG_URL` `CLODE_TEMPLATES_BASEURL` `CLODE_UPDATE_CHANNEL` | mostly test seams pointing at local servers |
+| debug | `CLODE_SHIM_DEBUG` `CLODE_SHIM_TRACE` `CLODE_PROBE` `CLODE_RG_DEBUG` `CLODE_HINT` | most defensible; still one name per idea |
+| target runtime | the TTY/shadow/watch set above | wrong prefix entirely |
+
 **The user's framing:** "I worry that we have a lot of unneeded env vars left over from
 before we discovered the architecture that clode is only a builder, never a runner. And I
 worry that the remaining ones are also susceptible to mistaken usage."
