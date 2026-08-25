@@ -1647,6 +1647,69 @@ was the first, `os.constants.errno` in 2.1.238), and both times we found out by 
 
 ## ★★★ NEXT: a clear, clean, well-factored, fully cross build (2026-08-24)
 
+### The tests under a CMake/CTest build (design discussion, 2026-08-25 — not decided)
+
+Companion to the "what language is the SECOND half" note below: same decision seen from
+the test side. Measured composition:
+
+    199  test files
+    112  spawn a real binary (integration)
+     87  pure unit tests, no spawn
+     14  use node as an ORACLE (compare against node's own behaviour)
+     38  `shell: bash` steps across ci.yml + build-leg   <- the Windows problem
+
+**Which MUST stay JavaScript — only two categories, both smaller than they look:**
+
+1. The 14 oracle tests. Node IS the subject; that is the sanctioned Node use under
+   [[node-only-as-oracle]].
+2. Anything asserting shim behaviour under the engine.
+
+**And (2) exposes something worth fixing regardless of any language decision:** those
+tests mostly do NOT run under the engine today. `npm test` is node:test, so the shim is
+`require`d into NODE. That exercises the shim's logic and says nothing about its behaviour
+on quickjs — which is where it ships. The Haiku "SIGKILLed child reported as exit 0" bug
+and the Haiku write deadlock were both found by clode RUNNING ON THE ENGINE, not by these
+tests. **Running the existing suite under the engine is worth more than rewriting any of
+it in C**, and it is the step that makes correctness observable in the environment that
+ships.
+
+**Which could be C:** the byte-level ones — bun-graph decode, archive format and attest,
+sha256, tar KAT, canonical-LE bytecode equivalence — plus the anchors-and-splices tests
+if the anchors move. The principle that scales: **a test follows its subject.**
+
+**The 112 integration tests are language-agnostic.** They spawn a binary and assert on
+output and exit code, which is already the CTest model.
+
+**Shell that must also run on Windows.** This is where CMake earns its place, and it is
+not CTest specifically — it is `cmake -E` (portable copy, compare_files, rm, tar, env)
+and `cmake -P` script mode. The 38 bash steps become CMake scripts that run identically
+on Windows, instead of today's dependence on bash being present on the runner.
+
+**Would CTest run them well? Yes — and four of its properties map onto bugs from
+2026-08-25:**
+
+| CTest property | the bug it would have prevented |
+|---|---|
+| `ENVIRONMENT` per test | an exported `CLODE_CLAUDE_BIN` leaking into a later test run |
+| `SKIP_RETURN_CODE` | "60 skipped" being uninformative; skips become reported WITH REASONS |
+| `RESOURCE_LOCK` | tests sharing the vendor tree / provider store contaminating each other |
+| `FIXTURES_SETUP` / `FIXTURES_REQUIRED` | build one quaude, run N assertions against it, instead of depending on ambient state |
+
+**Honest weakness:** CTest's assertion model is coarse — exit code plus output regex — so
+rich per-assertion reporting must come from the test binary. For 87 unit tests with many
+assertions each, node:test reports better. The answer is NOT to atomize: register a
+node:test file as ONE ctest entry, not one per assertion.
+
+**Incremental path:**
+
+1. **CTest becomes the front door now**, wrapping suites as they are. Zero rewriting, and
+   it immediately buys per-test environment, labels, timeouts, resource locks and real
+   skip reporting — several of which are direct answers to the coverage-that-turns-on-
+   and-off problem recorded above.
+2. Run the suite under the ENGINE, not node. Highest-value step, independent of language.
+3. Tests migrate by subject as their code does.
+4. Replace the 38 bash steps with `cmake -P` at whatever pace suits.
+
 ### What language is the SECOND half? (design discussion, 2026-08-25 — not decided)
 
 The build has two halves that get conflated because one command runs both. Building the
