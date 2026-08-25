@@ -4,6 +4,8 @@
 
 Fix regression: `quaude` binaries cross-built with `clode build --target` would not start up.
 
+Actually intercept update attempts, which we had believed we already did. A `quaude` could try to install Claude Code over itself — both on its own, and when you ran `quaude update`, which said it would not and then did.
+
 Temporarily stop releasing for Haiku until its builder image can be updated.
 
 ## 0.20260801.2
