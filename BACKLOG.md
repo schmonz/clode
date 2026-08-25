@@ -1676,6 +1676,60 @@ was the first, `os.constants.errno` in 2.1.238), and both times we found out by 
 
 ## ★★★ NEXT: a clear, clean, well-factored, fully cross build (2026-08-24)
 
+### Revisit the CLI and subcommands (user, 2026-08-25)
+
+**The user:** "let's revisit the clode CLI and subcommands, given how we build quaude by
+default and also naude, and how building is mostly all that clode does".
+
+**The surface today, measured:**
+
+    subcommands   build   fetch   watch        (+ --help, --version)
+    flags         --out  --naude  --target  --self  --verbose
+
+**The tell is in clode's own help text:**
+
+    clode build --naude --target Y   cross-build a naude for macos/linux/windows ...
+                                     anything else: plain --target builds a quaude instead
+
+`--target` means something different depending on whether `--naude` is present, and the
+help has to explain the fallthrough. That is what conflated axes look like from outside.
+
+**What is actually being expressed is a small matrix on an ad-hoc flag surface.** There
+are THREE products —
+
+    quaude          the default: engine + compiled Claude Code
+    naude           --naude: a Node SEA, Node hosts only
+    clode itself    --self: the standalone native builder
+
+— crossed with ONE platform axis (`--target`), and the two are not orthogonal today.
+
+**And "building is mostly all clode does" is literally true of the verb list.** `fetch`
+obtains the upstream provider (a prerequisite), `watch` runs one update-signal check (a
+notification). Neither is a peer of `build`; both exist in service of it.
+
+**Options to weigh, none decided:**
+
+1. `clode build <product> [--target P]` — product as a positional, platform orthogonal.
+   Says what it builds, and `--target` finally means one thing.
+2. `clode` with no arguments builds a quaude for this machine, since that is the common
+   case; everything else is explicit.
+3. Keep `build` but make the product a real flag family and orthogonalise `--target`.
+4. Fold `fetch` and `watch` into a shape that says they are about the PROVIDER, not the
+   build — e.g. `clode provider fetch` / `clode provider check`.
+
+**Two constraints the redesign inherits:**
+
+- **The env-var review is the same conversation.** 51 CLODE_* names are read by shipped
+  code and 0 are documented, against 4 flags. If building is what clode does, its inputs
+  belong on the command line — so whatever the CLI becomes should absorb the knobs that
+  survive that review rather than leaving two parallel input systems.
+- **The domain-language item lands here too.** "fuse" appears in user-visible strings;
+  whatever the CLI says should already speak the new vocabulary rather than being renamed
+  twice.
+
+**Sequencing:** after the release. This is a breaking surface change, and it wants to
+happen once, with the vocabulary and the surviving knobs already decided.
+
 ### Domain language: stop saying "fuse" (user, 2026-08-25)
 
 **The user:** "You keep saying 'fused' like it means something to me because the code
