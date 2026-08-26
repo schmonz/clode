@@ -1,0 +1,16 @@
+{
+  "bundle_phrases": {
+    "install.sh instead of npm": 2,
+    "not supported under npm": 0,
+    "requires the native binary": 4,
+    "typeof Bun": 8
+  },
+  "changelog_flags": [
+    {
+      "line": "Fixed `curl -fsSL https://claude.ai/install.sh | bash` failing with \"Raw mode is not supported\" for some Team/Enterprise users with server-managed settings",
+      "tier": "high",
+      "version": "2.1.246"
+    }
+  ],
+  "version": "2.1.246"
+}

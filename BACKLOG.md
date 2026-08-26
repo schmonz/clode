@@ -2496,9 +2496,67 @@ Synthetic corpora match byte-for-byte; REAL files diverge from offset 1, because
 libregexp stores compiled regexps in host byte order. Tracked as a ratchet rather than
 failing the release, deliberately.
 
-### MEASURE: does the BE regexp mitigation cost real time on the slow BE targets?
+### MEASURED 2026-08-26 — ROUNDING ERROR, leave it. (was: does the BE regexp mitigation cost real time?)
 
-**Status: OPEN, unmeasured. This is a MEASUREMENT task, not a design question** — the fix
+**ANSWERED. ~0.2% of CPU in every workload measured, and it does not grow with session
+length.** The mitigation stays as it is; the optimisation below is recorded as available,
+not needed.
+
+**Mechanism, from the patch:** `OP_regexp` calls `js_re_recompile_le()` under `is_be()`,
+which does `JS_ToCStringLen2(pattern)` + `lre_compile()` + an alloc, and never writes back
+to the cpool — so a literal inside a function recompiles on EVERY evaluation. Its
+structural discriminator makes freshly-parsed literals free, which is irrelevant to
+quaude: the loader runs `cli.qbc`/`graph.qbc` through `evalBytecode`, so on a BE target
+every literal in the bundle is LE-deserialized and recompiles.
+
+**Method.** Instrumented the off-repo vendor quickjs with an `OP_regexp` counter, a
+distinct-pattern set, a `CLOCK_MONOTONIC` accumulator, and `CLODE_RE_FORCE=1` to perform
+the identical recompile work on this LE box. Instrument validated against the wall clock
+before use ([[instruments-lie-check-them-first]]): 100,007 evaluations — instrument
+824.5 ms, wall-clock delta 820 ms, agreeing to 0.6%.
+
+**Measured (darwin-arm64, recompile forced):**
+
+    workload                          OP_regexp   distinct   recompile
+    --version boot (2.1.218)              2,805         72      2.00 ms
+    1 mock agentic Bash turn             12,505        957   15.0-21.1 ms
+    15 mock agentic Bash turns           38,588        957   54.5-56.5 ms
+    --version boot (2.1.246, 53MB)        3,270         72      2.18 ms
+    1 / 15 turns (2.1.246)         18,852/49,601  1,278/1,278  37.6/71.8 ms
+    TUI boot + trust (real PTY)          18,432      1,022     22.1 ms
+    + 400 keystrokes (~46s)             182,272      1,025    104.3 ms  (~0.21 ms/key)
+    TUI idle, 120s                     +216 evals   1,022 (flat)  +0.50 ms
+
+Per-recompile: 0.7-2.0 µs for real bundle patterns. A/B wall-clock on a whole boot is
+BELOW THE RESOLUTION OF `time` (2.1.218 off 3.43s / on 3.43s).
+
+**Two findings that matter more than the percentage:**
+
+1. **The cost does not grow with session length.** Distinct patterns are FLAT — 957 at
+   turn 1 and 957 at turn 15, 1,278 and 1,278 on 2.1.246, 1,022 -> 1,025 across 400
+   keystrokes. Every marginal cost is recompiling a pattern already seen.
+2. **The code-split fear did not materialise.** 2.1.218 -> 2.1.246 is 2.5x the bundle
+   (20MB -> 53MB) but only 1.17x the boot evaluations and the SAME 72 distinct boot
+   patterns. 20,000 lines of tool output added 80 evaluations — there is no
+   per-line/per-token literal in the hot path. That was the specific worry when this was
+   filed, and it is retired.
+
+**Derived for Tiger PPC** (40x from [[tiger-ppc-quaude-perf]]; percentages carry because
+numerator and denominator are the same slow CPU): ~90 ms added to a ~40,000 ms boot,
+~95 ms per tool turn, ~8 ms per keystroke, ~0.17 ms per idle second.
+
+**NOT MEASURED, stated plainly:** no BE run — the Tiger guest was down (ssh refused) and
+ultimate-hat's docker context timed out, killing the qemu-s390x route. And the corpus was
+an extracted 53MB CJS rather than a real `graph.qbc`; the same JS executes, but that was
+not confirmed on a built quaude. Cheapest confirmation when a rig returns: `gh run
+download` the s390x tjs artifact, run the same instrumented count under
+`qemu-s390x-static`, compare `recompile_ns` against an LE control.
+
+**If ever optimised**, the headroom is real and the prize is small: caching by pattern
+cuts boot from 3,270 to 72 compiles (-98%) and a 15-turn session from 49,601 to 1,278
+(-97%) — about 88 ms at boot and 2.8 s per long session on Tiger.
+
+**Superseded framing kept for the record:** — the fix
 is known and cheap if the numbers justify it, and unnecessary if they do not. It sat
 un-headed inside this section for a day, which is why it is being given its own heading:
 a to-do that `grep '^## '` cannot find is not tracked, it is stored.
