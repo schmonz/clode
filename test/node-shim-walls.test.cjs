@@ -4,6 +4,7 @@
 // intercepts (the mechanism bun-shim needs for bun:ffi/ws/undici).
 const test = require('node:test');
 const assert = require('node:assert');
+const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -23,6 +24,46 @@ test('sealed builtin: unimplemented prop throws the branded wall', (t) => {
   const r = runLoader(f);
   assert.notStrictEqual(r.status, 0);
   assert.match(r.stderr, /node-shim: vm\.SourceTextModule not implemented/);
+});
+
+// module.isBuiltin — NOT a wall, and it should never have been one.
+//
+// clode's own graph runner calls it to route node builtins around its resolve hook, so
+// when 2.1.246 first exercised a full round-trip the oracle reported OUR gap alongside
+// upstream's: "the shim hit walls this round-trip exercised: module.isBuiltin,
+// vm.SyntheticModule, vm.SourceTextModule". The vm entries are a real design question;
+// this one was just missing.
+//
+// Asserted as a DIFFERENTIAL against host node rather than against a hand-written
+// expectation, because the interesting property is agreement, and a hand-written table
+// would be a third copy of the builtin list to drift.
+test('module.isBuiltin agrees with host node, and with our own builtinModules', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const prog = `
+    const M = require('node:module');
+    const names = ['fs', 'node:fs', 'path', 'node:path', 'util', 'events',
+                   'definitely-not-a-builtin', 'node:definitely-not', ''];
+    const out = {};
+    for (const n of names) out[n] = M.isBuiltin(n);
+    out.__type = typeof M.isBuiltin;
+    // Every module we claim to provide must answer true — three lists (KNOWN,
+    // builtinModules, isBuiltin) disagreeing is the bug this guards.
+    out.__selfConsistent = M.builtinModules.every((x) => M.isBuiltin(x));
+    console.log(JSON.stringify(out));`;
+  const f = writeProg(prog);
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const got = JSON.parse(r.stdout.trim());
+  assert.strictEqual(got.__type, 'function', 'module.isBuiltin must exist, not throw a wall');
+  assert.strictEqual(got.__selfConsistent, true,
+    'a module in builtinModules that isBuiltin denies — the lists have drifted apart');
+
+  // The reference: the same program under the node running this test.
+  const ref = JSON.parse(execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  for (const k of Object.keys(ref)) {
+    if (k === '__selfConsistent') continue;   // node's builtin set is legitimately larger
+    assert.strictEqual(got[k], ref[k], `isBuiltin(${JSON.stringify(k)}) disagrees with host node`);
+  }
 });
 
 test('Module.wrap + module builtinModules present', (t) => {
