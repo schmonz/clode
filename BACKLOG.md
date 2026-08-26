@@ -2496,6 +2496,13 @@ Synthetic corpora match byte-for-byte; REAL files diverge from offset 1, because
 libregexp stores compiled regexps in host byte order. Tracked as a ratchet rather than
 failing the release, deliberately.
 
+### MEASURE: does the BE regexp mitigation cost real time on the slow BE targets?
+
+**Status: OPEN, unmeasured. This is a MEASUREMENT task, not a design question** — the fix
+is known and cheap if the numbers justify it, and unnecessary if they do not. It sat
+un-headed inside this section for a day, which is why it is being given its own heading:
+a to-do that `grep '^## '` cannot find is not tracked, it is stored.
+
 **AND THE COST FALLS ON THE WRONG PLATFORMS (user, 2026-08-25): "I would hope that we
 wouldn't punish platforms that are already slow."** The mitigation is a runtime
 RECOMPILE at every `OP_regexp` — i.e. every time a regex LITERAL is evaluated — and it
