@@ -311,6 +311,14 @@ const LEGS = [
     // renovate: datasource=custom.cpa-netbsd-x86-64 depName=netbsd-x86-64-guest versioning=loose
     'ci-guest-version': '10.1',
     'guest-packages': 'cmake gmake nodejs git-base bash', floor: '10.1',
+    // MEASURED, not guessed: successful runs span 2.3-5.6 minutes (last ~14 runs).
+    // It carried the 90-minute default, and on 2026-08-26 netbsd-amd64 HUNG for 54+
+    // minutes with every other job green — the second such hang that day, after
+    // dragonfly. A ceiling an order of magnitude above the measured runtime does not
+    // report a hang, it postpones the report, and everything `needs:`-ing the matrix
+    // waits. All of these legs install guest packages from third-party repos, which
+    // is the suspected common cause — see the package-pinning item in BACKLOG.
+    timeout: 20,
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true,  // cpa, KVM
     // DEMOTED to tier 0 (2026-08-04 audit): the amd64 rung was explicitly
     // ABANDONED for local fidelity work on 2026-07-06 in favor of aarch64
@@ -337,6 +345,14 @@ const LEGS = [
     // renovate: datasource=custom.cpa-freebsd-x86-64 depName=freebsd-x86-64-guest versioning=loose
     'ci-guest-version': '15.1',
     'guest-packages': 'cmake gmake node git bash', floor: '14.0',
+    // MEASURED, not guessed: successful runs span 2.2-2.8 minutes (last ~14 runs).
+    // It carried the 90-minute default, and on 2026-08-26 netbsd-amd64 HUNG for 54+
+    // minutes with every other job green — the second such hang that day, after
+    // dragonfly. A ceiling an order of magnitude above the measured runtime does not
+    // report a hang, it postpones the report, and everything `needs:`-ing the matrix
+    // waits. All of these legs install guest packages from third-party repos, which
+    // is the suspected common cause — see the package-pinning item in BACKLOG.
+    timeout: 20,
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true,  // cpa, KVM
     fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
                 note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run in-guest); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
@@ -349,6 +365,14 @@ const LEGS = [
   // be useless to 7.9 users.
   { leg: 'openbsd-amd64', os: 'ubuntu-latest', 'guest-platform': 'openbsd', 'guest-version': '7.9',
     'guest-packages': 'cmake gmake node git bash', floor: '7.9',
+    // MEASURED, not guessed: successful runs span 3.1-4.6 minutes (last ~14 runs).
+    // It carried the 90-minute default, and on 2026-08-26 netbsd-amd64 HUNG for 54+
+    // minutes with every other job green — the second such hang that day, after
+    // dragonfly. A ceiling an order of magnitude above the measured runtime does not
+    // report a hang, it postpones the report, and everything `needs:`-ing the matrix
+    // waits. All of these legs install guest packages from third-party repos, which
+    // is the suspected common cause — see the package-pinning item in BACKLOG.
+    timeout: 20,
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true,  // cpa, KVM
     fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
                 note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run in-guest); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
@@ -373,6 +397,14 @@ const LEGS = [
     // renovate: datasource=custom.cpa-omnios-x86-64 depName=omnios-x86-64-guest versioning=loose
     'ci-guest-version': 'r151058',
     'guest-packages': 'developer/gcc14 developer/build/gnu-make ooce/developer/cmake ooce/runtime/node-22 developer/versioning/git shell/bash',
+    // MEASURED, not guessed: successful runs span 3.7-4.7 minutes (last ~14 runs).
+    // It carried the 90-minute default, and on 2026-08-26 netbsd-amd64 HUNG for 54+
+    // minutes with every other job green — the second such hang that day, after
+    // dragonfly. A ceiling an order of magnitude above the measured runtime does not
+    // report a hang, it postpones the report, and everything `needs:`-ing the matrix
+    // waits. All of these legs install guest packages from third-party repos, which
+    // is the suspected common cause — see the package-pinning item in BACKLOG.
+    timeout: 20,
     floor: 'r151056',
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true,  // cpa, KVM (illumos rung)
     fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
@@ -440,6 +472,14 @@ const LEGS = [
     // wants perl >= 5.40.3, image ships 5.38.5 — dispatch #14); every cmake
     // git usage is if(GIT_EXECUTABLE)-guarded, so the build does not need it.
     'guest-packages': 'cmake gmake node bash', floor: '4.0.4',
+    // MEASURED, not guessed: successful runs span 1.8-4.4 minutes (last ~14 runs).
+    // It carried the 90-minute default, and on 2026-08-26 netbsd-amd64 HUNG for 54+
+    // minutes with every other job green — the second such hang that day, after
+    // dragonfly. A ceiling an order of magnitude above the measured runtime does not
+    // report a hang, it postpones the report, and everything `needs:`-ing the matrix
+    // waits. All of these legs install guest packages from third-party repos, which
+    // is the suspected common cause — see the package-pinning item in BACKLOG.
+    timeout: 20,
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, 'soft-fail': true, ci: true,  // cpa, KVM (mport packages)
     fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
                 note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run in-guest); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },

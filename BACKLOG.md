@@ -1710,6 +1710,16 @@ measuring device first. [[instruments-lie-check-them-first]]. The tell was avail
 before any investigation — the extractor reports every hook it fails to apply, and it had
 reported nothing.
 
+**SECOND DATA POINT, 2026-08-26: netbsd-amd64 hung the same way.** 54+ minutes with every
+other job green, against 19 successes spanning 2.3-5.6 minutes. Same shape as dragonfly
+that morning: a leg that installs guest packages from a third-party repo, stalling rather
+than failing. Two hangs in one day, both in package-installing legs, is no longer a
+coincidence worth waiting on — it is the recurring outage this item exists to remove.
+
+**Timeouts are now measured, not defaulted**, on every fast package-installing leg
+(netbsd/freebsd/openbsd/omnios/midnightbsd/dragonfly amd64 = 20 minutes against maxima of
+2.8-5.6). That BOUNDS the damage; it does not fix the cause. Pinning is the fix.
+
 ## ★★ Our own package pins — stop betting a release on 13 third-party repos (2026-08-25)
 
 **The user, on the dragonfly hang:** "I wonder if it's a package-repo communication
