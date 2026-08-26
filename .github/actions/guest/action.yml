@@ -150,7 +150,7 @@ runs:
     # step executes inside the VM with the workspace rsynced both ways.
     - name: Start the guest VM (cross-platform-actions)
       if: contains('netbsd freebsd openbsd dragonflybsd omnios midnightbsd haiku', inputs.platform)
-      uses: cross-platform-actions/action@v1.3.0
+      uses: cross-platform-actions/action@v1.4.0
       with:
         operating_system: ${{ inputs.platform }}
         version: ${{ inputs.version }}
