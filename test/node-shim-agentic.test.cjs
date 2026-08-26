@@ -20,7 +20,19 @@ const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('./mock-anth
 
 function providerBin() { const p = process.env.CLODE_PROVIDER_BIN; return p && fs.existsSync(p) ? p : null; }
 function stageBundle(bin) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p3-agentic-'));
+  // CANONICAL PATH, because Windows hands us an 8.3 SHORT one. os.tmpdir() on a GitHub
+  // runner is C:\Users\RUNNER~1\AppData\Local\Temp, and the bundle's
+  // is-this-file-inside-the-workspace check then compares a resolved file path against an
+  // unresolved cwd. They do not match, so Edit is refused with "Claude requested
+  // permissions to write to ..." — and with no interactive approver under -p, the row
+  // failed as if FileHandle.chmod had regressed. It had not; the Read in the same flow
+  // succeeded and --allowedTools already granted Edit.
+  //
+  // A real user's cwd is a long path, so resolving here makes the fixture match reality
+  // instead of testing 8.3 containment by accident. Whether the short/long mismatch is a
+  // genuine divergence from node is a SEPARATE question, filed in BACKLOG — it is not
+  // this row's subject, and leaving it here made the failure name the wrong cause.
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'p3-agentic-')));
   const cli = path.join(dir, 'cli.cjs');
   execFileSync(process.execPath, [path.join(REPO, 'libexec/extract-claude-js.cjs'), bin, cli], { stdio: 'pipe' });
   fs.copyFileSync(path.join(REPO, 'libexec/bun-shim.cjs'), path.join(dir, 'bun-shim.cjs'));

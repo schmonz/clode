@@ -1877,6 +1877,32 @@ Until it lands the wall is honest: a real use throws `node:vm SourceTextModule n
 implemented`. It is no longer reported as an exercised wall on ordinary turns — see the
 probe/wall split in libexec/node-shim/loader.cjs.
 
+## Windows 8.3 short paths vs the workspace-containment check (2026-08-26)
+
+**Observed, not yet attributed.** On both Windows legs, the agentic Edit row failed with
+the bundle asking permission to write
+`C:\Users\RUNNER~1\AppData\Local\Temp\p3-agentic-*\edit-target.txt` — an 8.3 SHORT
+path — even though `--allowedTools Read,Edit` was granted and the Read in the same flow
+had already succeeded. `[DEBUG] Edit tool permission denied`.
+
+The mechanism is almost certainly that one side of the containment check is resolved and
+the other is not: `os.tmpdir()` on a GitHub runner is the short form, and a canonicalised
+file path (`runneradmin`) cannot match a short cwd (`RUNNER~1`) by string comparison.
+
+**The test fixture now resolves its temp dir**, because a real user's cwd is a long path
+and the row's subject is FileHandle.chmod, not path containment. That removes the
+artefact; it does NOT answer the question.
+
+**THE OPEN QUESTION, and it needs a Windows box or a Windows-hosted naude to settle:** does
+real Claude Code on node behave the same way given a short-path cwd? If yes, we match
+upstream and there is nothing to do beyond this note. If no, our shim's realpath /
+path-resolution diverges from node's on 8.3 names, and that is a real bug that would bite
+any Windows user whose TEMP or working directory is a short path — which is not exotic on
+Windows.
+
+Do not close this by observing that CI went green: the fixture change is what made it
+green, and it deliberately steps around the question rather than answering it.
+
 ## ENGINE BUG — evalBytecode on a COMPILED module aborts; only a deserialized one is safe (2026-08-25)
 
 Found while building the graph runner. Compile a large ES-module graph in-process and hand
