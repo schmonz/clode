@@ -29,6 +29,11 @@ Neither is "mostly". Nine PRs are open as of 2026-08-25:
    green run from BEFORE the merges does not satisfy gate (1) for the commit being tagged.
 5. Only then tag.
 
+**EXPLICITLY NOT IN THIS RELEASE (2026-08-26):** vm.SourceTextModule /
+vm.SyntheticModule, and therefore plugins that register tools by running JavaScript. It
+needs an engine change (see its own section), it would invalidate the matrix green this
+gate is about, and it regresses nothing — 2.1.245 has the same gap. First item next cycle.
+
 So the honest reading is that gate (1) must hold TWICE: once to unblock the merges, and
 again on the merged result that actually ships. Tagging a commit whose CI predates the
 dependency bumps would satisfy the letter of both gates and the spirit of neither.
@@ -1828,6 +1833,31 @@ isolation, via the `__tjs_vm` primitive in txiki's `src/mod_vm.c`: each context 
 JSContext with its own global on the shared heap. The isolation primitive — the part that
 would have been genuinely hard, and the part that MUST be real because this is a security
 boundary — exists and ships.
+
+**DECIDED 2026-08-26: NOT in 0.20260825.1; first item of the next cycle.** Not a scope
+retreat — it is an ENGINE change, and that is the whole sequencing argument. `mod_vm.c` is
+ours (added by `txiki-vm-context.patch`), so touching it rebuilds tjs on every leg, cuts
+new templates, and moves the engine-RECIPE identity — invalidating a full day of matrix
+green. Shipping without it regresses nothing: 2.1.245 has the identical usage, so this gap
+predates the release. Writing a new security boundary in C and shipping it the same night
+is the one sequencing worth refusing.
+
+**THE CRUX, traced rather than guessed.** `__tjs_vm` exposes create / setGlobal /
+getGlobal / run, and `run` evals a SCRIPT (`JS_EVAL_TYPE_GLOBAL`) in the child context.
+`tjs.engine.compile` compiles a MODULE but only in the main context. So there is no way to
+get a module record into an isolated context today, and that — not the sandbox — is the
+missing primitive.
+
+**The design that avoids the hard part.** Node's linker is async; quickjs's module loader
+is synchronous, and mapping one onto the other looks like the blocker. It is not, because
+WE own `.link()`: run the async linker to completion in JS first, collect every resolved
+source, then compile them into the child context in dependency order. quickjs checks its
+loaded-module list before calling the loader, so the imports resolve with no loader
+callback at all — exactly the trick libexec/bun-graph-plan.cjs already relies on for the
+main graph. New C needed: `compileModule(wrapper, source, identifier)` and
+`evaluateModule(wrapper, mod)` on the child context, plus reaching the existing
+import.meta-by-identity patch into that context for `initializeImportMeta`. Roughly 150
+lines, plus the JS layer.
 
 **What is actually missing** is the ESM module-record layer over it:
 
