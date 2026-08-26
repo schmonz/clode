@@ -199,6 +199,46 @@ function realProvider() {
   } catch (e) { return null; }
 }
 
+// isSplitBundle: A DECODE FAILURE IS NOT AN ANSWER.
+//
+// It used to wrap the decode in try/catch and return false on ANY exception, which is
+// only true when the file is not a Bun container at all. For a file that IS one, it
+// turned "we cannot read this" into "this is the old CommonJS shape" — so clode went on
+// to attempt the carve and failed with "bundle format may have changed", naming the wrong
+// cause. That is exactly what 2.1.246 did to us: the graph was readable, our own layout
+// assertions were not, and the resulting message sent the investigation at upstream.
+test('isSplitBundle: a file with no Bun trailer is simply not split', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'issplit-'));
+  const f = path.join(dir, 'plain.cjs');
+  fs.writeFileSync(f, 'module.exports = 1;\n');
+  assert.strictEqual(isSplitBundle(f), false);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('isSplitBundle: a Bun container it cannot decode THROWS, and says whose bug it is', () => {
+  // A real trailer, a table length that cannot be right. Returning false here is what
+  // sent us hunting upstream for a break that was ours.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'issplit-bad-'));
+  const f = path.join(dir, 'broken');
+  const TRAILER = '\n---- Bun! ----\n';
+  const total = 256;
+  const u = Buffer.alloc(total + TRAILER.length);
+  const h = total - 32;
+  u.writeUInt32LE(total - 32, h);        // byteCount -> base 0
+  u.writeUInt32LE(0, h + 8);             // modulesOffset
+  u.writeUInt32LE(53, h + 12);           // modulesLength: not a multiple of 52
+  u.write(TRAILER, total, 'latin1');
+  fs.writeFileSync(f, u);
+  assert.throws(() => isSplitBundle(f), (e) => {
+    assert.match(e.message, /could not decode/, 'must name it as a decode failure');
+    assert.match(e.message, /NOT a pre-2\.1\.243 bundle/,
+      'must say explicitly that this is not the old shape, or the next reader repeats the '
+      + 'same wrong-cause investigation');
+    return true;
+  });
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('the installed provider is a shape clode HANDLES, and extraction yields a runnable file', (t) => {
   const bin = realProvider();
   if (!bin) {

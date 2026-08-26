@@ -88,6 +88,24 @@ const SHIM = path.join(REPO, 'libexec', 'bun-shim.cjs');
 // completeness check below. That is deliberate: the decision is cheap to make now and
 // expensive to discover later.
 const EXPECTED = {
+  // ---- WHAT UPSTREAM'S PACKAGING IS ------------------------------------------------
+  // Not hook anchors — facts about the SHAPE of what we build from. Both arrived as a
+  // broken build rather than as a warning, which is precisely what this file exists to
+  // stop, so they are declared here now and checked in both directions daily.
+  bundle_is_code_split: {
+    expect: 'present',
+    why: 'Claude Code has been a code-split ESM graph since 2.1.243, and clode builds it '
+      + 'that way. If this goes false upstream reverted to a single CJS module — the carve '
+      + 'path still exists and would take over, but we want to KNOW, not to discover it '
+      + 'from a changed artifact',
+  },
+  bundle_text_assets_present: {
+    expect: 'present',
+    why: 'since 2.1.246 the bundle require()s embedded text rows by name (164 of them, 118 '
+      + '.md — prompt preambles and quickrefs). A target built without them boots and dies '
+      + 'on its FIRST TURN with "cannot resolve /$bunfs/root/...md", so a change here is a '
+      + 'day-one outage we should hear about from this check rather than from a user',
+  },
   autoupdater_hook_anchor_present: {
     expect: 'present',
     why: 'the in-TUI pkg-manager autoupdater redirect (notify-only __clodeCheckUpdate) would not apply',

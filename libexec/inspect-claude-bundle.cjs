@@ -386,6 +386,18 @@ function decodeGraphRunner(p) {
 }
 
 function inspect(p) {
+  // Packaging facts, best-effort: a synthetic fixture or an already-extracted file is not
+  // a Bun container and simply has neither. Never let this throw — inspect's job is to
+  // describe whatever it was handed.
+  let codeSplitBundle = false;
+  let textAssetCount = 0;
+  try {
+    const bg = require('./bun-graph.cjs');
+    const full = bg.loadGraphFull(p);
+    const js = full.rows.filter((r) => r.loader === 1);
+    codeSplitBundle = js.length > 0 && js[0].moduleFormat === 1;
+    textAssetCount = full.rows.filter((r) => r.loader === 13).length;
+  } catch (e) { /* not a container we can decode; both stay at their defaults */ }
   const decoded = decodeGraphRunner(p);
   const data = decoded !== null ? decoded : fs.readFileSync(p, 'latin1');
 
@@ -455,6 +467,21 @@ function inspect(p) {
     remote_control_hook_anchor_present: remoteControlHookAnchorPresent(data),
     snapshot_generator_present: snapshotGeneratorPresent(data),
     ripgrep_lever_present: ripgrepLeverPresent(data),
+    // WHAT UPSTREAM'S PACKAGING IS, reported so the daily drift check can hold an
+    // EXPECTATION about it in both directions. Each of these arrived as a broken build
+    // rather than as a warning:
+    //   2.1.243 went code-split (1,400 modules, no CJS entry) — `clode build` died for
+    //   everyone until the graph path existed.
+    //   2.1.246 added text rows the bundle require()s by name — a target built without
+    //   them boots and dies on its first turn.
+    // Registering them means a change in EITHER direction is a daily red with a name,
+    // instead of a P0 discovered by a user.
+    bundle_is_code_split: codeSplitBundle,
+    // BOOLEAN as well as the count, because the drift check gates booleans and the
+    // count is the diagnostic. 164 -> 0 and 164 -> 300 are both fine; 164 -> none is a
+    // packaging change we must hear about.
+    bundle_text_assets_present: textAssetCount > 0,
+    bundle_text_assets: textAssetCount,
   };
 }
 

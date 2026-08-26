@@ -74,6 +74,106 @@ test('the ESM/CJS discriminator is a stable, documented pair', () => {
   assert.strictEqual(LOADER[10], 'napi');
 });
 
+// ---- what 2.1.246 taught us about the CONTAINER, pinned hermetically ----------
+//
+// These exist because the lesson arrived as a RED MATRIX rather than as a test. Claude
+// Code 2.1.246 repacked its module rows, and this decoder asserted the whole per-row
+// LAYOUT — field@+16 empty, contents at exactly name+len+1, blobA/blobB/sourcePath
+// forming one contiguous backwards run. All five fired. That was an accurate description
+// of 2.1.243-2.1.245 and was never a property of the format, and because isSplitBundle()
+// swallowed the exception, clode reported "bundle format may have changed" on a bundle
+// whose graph was fine.
+//
+// The fix narrowed the invariants to what the format actually guarantees. Without these
+// tests that fix is only "true because a 2.1.246 provider happened to be installed when
+// someone ran the suite" — so they build the awkward shapes directly and need no provider.
+//
+// Row: u32 nameOff, u32 nameLen, u32 bodyOff, u32 bodyLen, 2 u32 unused, blobA, blobB,
+// sourcePath, loader@+49, moduleFormat@+50. base = 0 here, so offsets are file offsets.
+function container(rows, opts = {}) {
+  const enc = new TextEncoder();
+  const parts = [];
+  const meta = [];
+  let off = 0;
+  for (const r of rows) {
+    const name = enc.encode(r.name);
+    const body = enc.encode(r.body);
+    const gap = opts.gap || 0;                       // bytes wedged between name\0 and body
+    parts.push(name, Uint8Array.of(0));
+    if (gap) parts.push(new Uint8Array(gap));
+    parts.push(body, Uint8Array.of(0));
+    meta.push({
+      nameOff: off, nameLen: name.length,
+      bodyOff: off + name.length + 1 + gap, bodyLen: body.length,
+      loader: r.loader === undefined ? 1 : r.loader,
+      moduleFormat: r.moduleFormat === undefined ? 1 : r.moduleFormat,
+    });
+    off += name.length + 1 + gap + body.length + 1;
+  }
+  const dataLen = off;
+  const table = new Uint8Array(rows.length * 52);
+  const tdv = new DataView(table.buffer);
+  meta.forEach((m, i) => {
+    const b = i * 52;
+    tdv.setUint32(b + 0, m.nameOff, true); tdv.setUint32(b + 4, m.nameLen, true);
+    tdv.setUint32(b + 8, m.bodyOff, true); tdv.setUint32(b + 12, m.bodyLen, true);
+    if (opts.dirtyUnusedField) { tdv.setUint32(b + 16, 7, true); tdv.setUint32(b + 20, 3, true); }
+    table[b + 49] = m.loader;
+    table[b + 50] = m.moduleFormat;
+  });
+  const h = dataLen + table.length + 1;
+  const total = h + 32;
+  const u = new Uint8Array(total + TRAILER.length);
+  let p = 0;
+  for (const c of parts) { u.set(c, p); p += c.length; }
+  u.set(table, dataLen);
+  const dv = new DataView(u.buffer);
+  dv.setUint32(h, h, true);                    // byteCount lo (base = 0)
+  dv.setUint32(h + 8, dataLen, true);          // modulesOffset
+  dv.setUint32(h + 12, table.length, true);    // modulesLength
+  dv.setUint32(h + 16, opts.entry || 0, true); // entryPointId
+  u.set(bytes(TRAILER), total);
+  return u;
+}
+
+test('decodes a container whose contents do NOT immediately follow name+NUL', () => {
+  // The 2.1.246 shape. Packing is upstream's business; what we require is that the
+  // offsets are in range and the strings end where the row says they do.
+  const u = container([
+    { name: '/$bunfs/root/cli', body: 'export const a = 1;' },
+    { name: '/$bunfs/root/dep.js', body: 'export const b = 2;' },
+  ], { gap: 7 });
+  const mods = loadGraphFromBytes(u);
+  assert.strictEqual(mods.size, 2);
+  assert.strictEqual(mods.get('/$bunfs/root/cli'), 'export const a = 1;');
+  assert.strictEqual(mods.get('/$bunfs/root/dep.js'), 'export const b = 2;');
+});
+
+test('a non-empty field at +16 is not a reason to refuse', () => {
+  // Also asserted the layout once. Upstream may use those bytes; we do not read them.
+  const u = container([{ name: '/$bunfs/root/cli', body: 'export const a = 1;' }],
+    { dirtyUnusedField: true });
+  assert.strictEqual(loadGraphFromBytes(u).get('/$bunfs/root/cli'), 'export const a = 1;');
+});
+
+test('but a mis-stated length still fails LOUDLY — the invariant we KEPT', () => {
+  // The check that earns its place: it catches a misread offset, which is the failure
+  // that yields a plausible WRONG answer rather than an error. Corrupt the name length so
+  // the byte at name+len is not the NUL the row promises.
+  const u = container([{ name: '/$bunfs/root/cli', body: 'export const a = 1;' }]);
+  const h = u.length - TRAILER.length - 32;
+  const dv = new DataView(u.buffer);
+  const tableOff = dv.getUint32(h + 8, true);
+  dv.setUint32(tableOff + 4, 3, true);          // nameLen 16 -> 3
+  assert.throws(() => loadGraphFromBytes(u), /not NUL-terminated/);
+});
+
+test('loader 13 is text — the row class 2.1.246 introduced', () => {
+  // 164 rows in 2.1.246 (118 .md), zero before it. Dropping them builds a target that
+  // boots and dies on its first turn, so the decoder has to name this class.
+  assert.strictEqual(LOADER[13], 'text');
+});
+
 // ---- layer 2: real providers -------------------------------------------------
 
 // Resolve a provider the way the product does, then fall back to anything the test

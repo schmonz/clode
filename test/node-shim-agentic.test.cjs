@@ -38,6 +38,14 @@ function stageBundle(bin) {
   // this makes the fixture match reality rather than smuggling in a test of upstream's
   // refusal heuristic under a row named for something else.
   const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'p3-agentic-')));
+  // RATCHET, not decoration. If a `~` ever gets back into this path, upstream refuses the
+  // write and the row fails with a message about FileHandle.chmod — which is how this
+  // cost two CI cycles. Fail here instead, naming the real reason, on every platform.
+  if (dir.includes('~')) {
+    throw new Error(`agentic fixture path contains "~" (${dir}). Claude Code refuses such `
+      + 'Windows paths without manual approval ("suspicious Windows path pattern"), so the '
+      + 'row would fail as a phantom FileHandle.chmod regression. Resolve the path first.');
+  }
   const cli = path.join(dir, 'cli.cjs');
   execFileSync(process.execPath, [path.join(REPO, 'libexec/extract-claude-js.cjs'), bin, cli], { stdio: 'pipe' });
   fs.copyFileSync(path.join(REPO, 'libexec/bun-shim.cjs'), path.join(dir, 'bun-shim.cjs'));
