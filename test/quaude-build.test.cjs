@@ -223,20 +223,44 @@ test('strict-mode sweep: agentic Bash mock oracle against the fused quaude', asy
 // the known fidelity risks between the native tjs WS and what the Bun/ws
 // bundle expects: `binaryType` (nodebuffer vs arraybuffer), close/`onerror`
 // event shapes, and permessage-deflate.
-test('quaude remote-control: no swallowed crash, Phase-1 unavailable notice gone', async (t) => {
+test('quaude remote-control: the headless subcommand runs, and runs clean', async (t) => {
   if (SKIP) { t.skip(SKIP); return; }
-  const r = await runQuaude(['remote-control'], cleanEnv(), 30000);
+  // TRUST THE WORKSPACE FIRST. The subcommand legitimately refuses to run in an
+  // unreviewed directory ("Workspace not trusted"), and DIR is a fresh temp dir — so
+  // without this the test measures the trust gate, not remote control. Same seeding the
+  // PTY tests use; it is product behaviour we are stepping around, not a shim gap.
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'qb-rc-home-'));
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({
+    hasCompletedOnboarding: true,
+    projects: { [DIR]: { hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true } },
+  }));
+  const r = await runQuaude(['remote-control'],
+    { ...cleanEnv(), HOME: home, CLODE_SHIM_TRACE: '1' }, 30000);
   const out = (r.stdout || '') + (r.stderr || '');
   assert.doesNotMatch(out, /Unknown argument: --settings/, 'update-guard must no longer break the subcommand parser');
   assert.doesNotMatch(out, /not an object/, 'must not hit the util.inherits TypeError (stream fix holds)');
   assert.doesNotMatch(out, /available in quaude yet|no WebSocket transport/, 'Phase-1 unavailable notice must be gone (transport present)');
-  // Durable invariants above hold. NOTE (remote-control hunt, next wall): with
-  // the --settings guard fix, the headless subcommand now gets PAST arg-parsing
-  // and reaches deeper into its own setup, where it currently hits a shim gap —
-  // `node-shim: readline.createInterface not implemented` (an unhandledRejection)
-  // — so we deliberately do NOT assert absence of `unhandledRejection` here. That
-  // readline gap is the next item in the hunt, not a regression of this work.
-  assert.notStrictEqual(r.status, 0, 'headless remote-control still exits non-zero (readline wall — next hunt item)');
+
+  // THIS TEST USED TO ASSERT THE FAILURE. It ended with
+  //   assert.notStrictEqual(r.status, 0, 'still exits non-zero (readline wall)')
+  // recording a known gap — readline.createInterface — as the expected outcome. The gap
+  // was then closed, and the test kept demanding the old brokenness: a green suite that
+  // would have gone RED the moment the product got better. Recording a wall in an
+  // assertion, rather than in the backlog, inverts what the test is for.
+  assert.doesNotMatch(out, /Workspace not trusted/, 'trust seeding failed — the test is measuring the wrong thing');
+
+  // WHAT SUCCESS MEANS HERE. With a seeded but UNAUTHENTICATED home, the correct
+  // outcome is the product's own login gate — "You must be logged in to use Remote
+  // Control" — and a non-zero exit. Demanding exit 0 would only pass on a machine where
+  // the developer happens to be signed in, which is how a test starts measuring the
+  // tester instead of the product. What we assert is that the subcommand reached ITS OWN
+  // logic: it printed one of its two real answers and hit no shim wall getting there.
+  assert.match(out, /Remote Control is launching|logged in to use Remote Control/,
+    `remote-control never reached its own UI or login gate:\n${out.slice(-1500)}`);
+  const walls = [...new Set(out.split('\n').filter((l) => l.includes('[wall]'))
+    .map((l) => l.replace(/^.*\[wall\]\s*/, '').trim()).filter(Boolean))];
+  assert.deepStrictEqual(walls, [], `headless remote-control hit shim walls: ${walls.join(', ')}`);
+  assert.doesNotMatch(out, /unhandledRejection/, 'no swallowed crash on the way to the prompt');
 });
 
 test('TUI paint smoke under the fused quaude (CLODE_LIVE_RENDER-gated)', (t) => {
