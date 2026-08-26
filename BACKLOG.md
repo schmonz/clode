@@ -1877,31 +1877,34 @@ Until it lands the wall is honest: a real use throws `node:vm SourceTextModule n
 implemented`. It is no longer reported as an exercised wall on ordinary turns — see the
 probe/wall split in libexec/node-shim/loader.cjs.
 
-## Windows 8.3 short paths vs the workspace-containment check (2026-08-26)
+## ANSWERED — Windows 8.3 paths: upstream refuses them, and so do we (2026-08-26)
 
-**Observed, not yet attributed.** On both Windows legs, the agentic Edit row failed with
-the bundle asking permission to write
-`C:\Users\RUNNER~1\AppData\Local\Temp\p3-agentic-*\edit-target.txt` — an 8.3 SHORT
-path — even though `--allowedTools Read,Edit` was granted and the Read in the same flow
-had already succeeded. `[DEBUG] Edit tool permission denied`.
+**Filed hours earlier as an open question — "does real Claude Code refuse a short-path cwd
+too, or is our path resolution diverging?" — with a note not to close it on the strength
+of a green CI run. It is now answered, by reading the refusal instead of theorising about
+it.** The tool_result says, verbatim:
 
-The mechanism is almost certainly that one side of the containment check is resolved and
-the other is not: `os.tmpdir()` on a GitHub runner is the short form, and a canonicalised
-file path (`runneradmin`) cannot match a short cwd (`RUNNER~1`) by string comparison.
+    "Claude requested permissions to write to
+     C:\Users\RUNNER~1\AppData\Local\Temp\p3-agentic-*\edit-target.txt, which contains
+     a suspicious Windows path pattern that requires manual approval."
 
-**The test fixture now resolves its temp dir**, because a real user's cwd is a long path
-and the row's subject is FileHandle.chmod, not path containment. That removes the
-artefact; it does NOT answer the question.
+**It is upstream's own security heuristic**: Claude Code refuses a Windows path containing
+`~` without manual approval, and `RUNNER~1` is an 8.3 short name. quaude reproduced that
+refusal faithfully. There is no divergence, nothing to implement, and the containment
+theory in the original entry was wrong.
 
-**THE OPEN QUESTION, and it needs a Windows box or a Windows-hosted naude to settle:** does
-real Claude Code on node behave the same way given a short-path cwd? If yes, we match
-upstream and there is nothing to do beyond this note. If no, our shim's realpath /
-path-resolution diverges from node's on 8.3 names, and that is a real bug that would bite
-any Windows user whose TEMP or working directory is a short path — which is not exotic on
-Windows.
+**Two corrections worth keeping**, because both were mine and both cost a CI cycle:
 
-Do not close this by observing that CI went green: the fixture change is what made it
-green, and it deliberately steps around the question rather than answering it.
+1. I diagnosed "resolved file path vs unresolved cwd" from the shape of the failure
+   without reading the whole message — the sentence naming the real cause was there,
+   truncated in my own grep.
+2. My first fix used `fs.realpathSync`, which does NOT expand 8.3 short names. It failed
+   on Windows identically, still reporting `RUNNER~1`. `fs.realpathSync.native` asks the
+   OS for the canonical path and returns the long form.
+
+**Kept as a note, not a to-do:** anyone running quaude on Windows from a directory with
+`~` in it will hit the same manual-approval prompt — exactly as they would with upstream
+Claude Code. That is fidelity, and it is the answer this entry was opened to get.
 
 ## ENGINE BUG — evalBytecode on a COMPILED module aborts; only a deserialized one is safe (2026-08-25)
 
