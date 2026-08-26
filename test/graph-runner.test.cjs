@@ -220,3 +220,69 @@ test('decodeGraphRunner leaves a non-runner file alone, and refuses a malformed 
   assert.throws(() => decodeGraphRunner(lying), /carries no graph/);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+// --- 6. TEXT ASSETS: the class of break that passes every check and dies at runtime ----
+// Claude Code 2.1.246 moved 164 files (118 .md — prompt preambles, quickrefs) out of JS
+// and into embedded text rows the bundle require()s BY NAME. Nothing about that is
+// visible to a decoder, a minimiser self-check, or a build: clode staged the graph, the
+// minimiser shrank it, the fuse compiled it, and the target booted — then died on its
+// first turn with "cannot resolve /$bunfs/root/loopAutonomousPreamble-07qcyhv4.md",
+// naming a file that exists ONLY inside the provider and so cannot be found on any host.
+//
+// These names never appear on disk, so every layer has to carry them deliberately:
+// bun-graph reads them, the staged doc holds them, the minimiser keeps them, the runner
+// answers require() from them, and the fuse stores them as a member for the loader.
+// A break anywhere in that chain is silent until an agent turn.
+const { loadAssets } = require(path.join(REPO, 'libexec/bun-graph.cjs'));
+
+test('a text asset reaches require() through the runner, on both hosts', (t) => {
+  const NAME = '/$bunfs/root/preamble-test.md';
+  const BODY = '# preamble\nline two\n';
+  const doc = docOf(
+    `const t = globalThis.__quaudeRequire(${JSON.stringify(NAME)});\n`
+    + 'console.log(JSON.stringify({ got: t }));\n', 'export const unused = 1;\n');
+  doc.assets = { [NAME]: BODY };
+  const { dir, f } = writeRunner(doc);
+  assert.strictEqual(JSON.parse(runNode(f, dir).trim()).got, BODY,
+    'the runner must answer require() for an embedded text asset — no host path can');
+  if (!tjsAvailable(t)) return;
+  assert.strictEqual(JSON.parse(runTjs(f, dir).trim()).got, BODY);
+});
+
+test('an asset name never shadows a real module or builtin', () => {
+  // The asset lookup runs FIRST, so it must be exact: a bundle that requires "fs" must
+  // still get fs, not a file that happens to be called that.
+  const doc = docOf('console.log(typeof globalThis.__quaudeRequire("fs").readFileSync);\n',
+    'export const unused = 1;\n');
+  doc.assets = { '/$bunfs/root/fs': 'NOT THE MODULE' };
+  const { dir, f } = writeRunner(doc);
+  assert.strictEqual(runNode(f, dir).trim(), 'function');
+});
+
+test('the whole chain carries assets: extract -> minimise -> fuse member', () => {
+  const ex = fs.readFileSync(path.join(REPO, 'libexec/extract-claude-js.cjs'), 'utf8');
+  assert.match(ex, /assets: assets/, 'the staged graph doc must carry text assets');
+  const mm = fs.readFileSync(path.join(REPO, 'scripts/make-min-provider.cjs'), 'utf8');
+  assert.match(mm, /KEEP = new Set\(\[1, 13\]\)/,
+    'the minimiser must keep text rows (13) as well as JS (1); dropping them yields a '
+    + 'provider that passes every check and builds a target that dies on its first turn');
+  const qf = fs.readFileSync(path.join(REPO, 'libexec/quaude-fuse.js'), 'utf8');
+  assert.match(qf, /graph-assets\.json/, 'the fuse must store assets as a member');
+  const ld = fs.readFileSync(path.join(REPO, 'libexec/node-shim/loader.cjs'), 'utf8');
+  assert.match(ld, /graph-assets\.json/, 'the loader must answer require() from that member');
+});
+
+test('a REAL provider with text rows round-trips through the minimiser', (t) => {
+  const bin = process.env.CLODE_PROVIDER_BIN;
+  if (!bin || !fs.existsSync(bin)) { t.skip('no CLODE_PROVIDER_BIN'); return; }
+  const before = loadAssets(bin);
+  if (!before.size) { t.skip('this provider predates text assets (pre-2.1.246)'); return; }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'assets-min-'));
+  const out = path.join(dir, 'provider-min');
+  execFileSync(process.execPath, [path.join(REPO, 'scripts/make-min-provider.cjs'), bin, out],
+    { stdio: 'pipe' });
+  const after = loadAssets(out);
+  assert.strictEqual(after.size, before.size, 'minimising dropped text assets');
+  for (const [n, body] of before) assert.strictEqual(after.get(n), body, `asset ${n} changed`);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

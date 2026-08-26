@@ -124,18 +124,27 @@ function decodeBunGraph(u8) {
         throw new Error('bun-graph: row ' + i + ' field ' + k + ' {' + f[k].off + ',' + f[k].len + '} runs past the module table');
       }
     }
-    if (f[2].off !== 0 || f[2].len !== 0) throw new Error('bun-graph: row ' + i + ' field@+16 expected empty, got {' + f[2].off + ',' + f[2].len + '}');
     var name = latin1(u8, base + f[0].off, f[0].len);
     if (u8[base + f[0].off + f[0].len] !== 0) throw new Error('bun-graph: row ' + i + ' name not NUL-terminated: ' + name);
     if (u8[base + f[1].off + f[1].len] !== 0) throw new Error('bun-graph: row ' + i + ' contents not NUL-terminated: ' + name);
-    if (f[1].off !== f[0].off + f[0].len + 1) throw new Error('bun-graph: row ' + i + ' contents do not follow name+NUL: ' + name);
-    // The per-row bytes form one contiguous run:
-    //   [blobA][blobB][sourcePath]\0[name]\0[contents]\0   (empty fields elided)
-    // Walk it backwards from `name`; any gap means the layout is not what we think.
-    var cursor = f[0].off;                       // start of name
-    if (f[5].len) { if (f[5].off + f[5].len + 1 !== cursor) throw new Error('bun-graph: row ' + i + ' sourcePath/name not adjacent: ' + name); cursor = f[5].off; }
-    if (f[4].len) { if (f[4].off + f[4].len !== cursor) throw new Error('bun-graph: row ' + i + ' blobB not adjacent: ' + name); cursor = f[4].off; }
-    if (f[3].len) { if (f[3].off + f[3].len !== cursor) throw new Error('bun-graph: row ' + i + ' blobA not adjacent: ' + name); }
+    // WE CHECK WHAT THE FORMAT GUARANTEES, NOT HOW BUN HAPPENED TO PACK IT.
+    //
+    // This used to assert the whole per-row LAYOUT: field@+16 empty, contents starting at
+    // exactly name+len+1, and blobA/blobB/sourcePath forming one contiguous backwards run
+    // ending at `name`. That was an accurate description of 2.1.243-2.1.245 and it is not
+    // a property of the container. Claude Code 2.1.246 repacked the rows, every one of
+    // those five assertions fired, and because isSplitBundle() treated ANY decode failure
+    // as "not a split bundle", clode fell through to the CommonJS carve and reported
+    // "bundle format may have changed" — pointing at the wrong thing entirely. The graph
+    // was fine: relaxing these, 2.1.246 decodes to 1,409 modules and 31.9MB of source.
+    //
+    // What we still verify is what actually protects the caller: every field lies inside
+    // the module table (checked above), and name and contents are NUL-terminated where
+    // the row says they end. Those catch a misread offset — which is the failure that
+    // silently produces a plausible wrong answer. Adjacency only ever caught upstream
+    // rearranging its own bytes, which upstream is entitled to do.
+    //
+    // Anything genuinely impossible is still loud. There is no "best effort" here.
     rows.push({
       index: i,
       name: name,
@@ -160,6 +169,21 @@ function decodeBunGraph(u8) {
 }
 
 // Map<moduleName, sourceText> over the JS-loader rows only, as the task asks.
+// TEXT ASSETS the bundle require()s by name. Separate from loadGraphFromBytes because
+// they are NOT modules: nothing compiles them, nothing imports them with ESM syntax, and
+// giving them to the compiler would be a syntax error 118 times over. They are strings the
+// bundle asks for at runtime, and the target must be able to hand them back.
+function loadAssetsFromBytes(u8) {
+  var g = decodeBunGraph(u8);
+  var out = new Map();
+  for (var i = 0; i < g.count; i++) {
+    var r = g.rows[i];
+    if (r.loader !== 13) continue;              // 13 = text (see LOADER)
+    out.set(r.name, utf8(u8, r.contentsStart, r.contentsLength));
+  }
+  return out;
+}
+
 function loadGraphFromBytes(u8) {
   var g = decodeBunGraph(u8);
   var mods = new Map();
@@ -178,12 +202,20 @@ function utf8(u8, p, len) {
 }
 
 // ---- Node-only conveniences (oracle / CLI) ---------------------------------
-var loadGraph, loadGraphFull;
+var loadGraph, loadGraphFull, loadAssets;
 if (typeof require === 'function' && typeof module === 'object') {
   var fs = require('node:fs');
   loadGraph = function (binPath) { return loadGraphFromBytes(new Uint8Array(fs.readFileSync(binPath))); };
   loadGraphFull = function (binPath) { return decodeBunGraph(new Uint8Array(fs.readFileSync(binPath))); };
-  module.exports = { decodeBunGraph, loadGraphFromBytes, loadGraph, loadGraphFull, TRAILER,
+  loadAssets = function (binPath) { return loadAssetsFromBytes(new Uint8Array(fs.readFileSync(binPath))); };
+  module.exports = { decodeBunGraph, loadGraphFromBytes, loadGraph, loadGraphFull,
+                     loadAssets, loadAssetsFromBytes, TRAILER,
                      MODULE_FORMAT: { ESM: 1, CJS: 2 },
-                     LOADER: { 0: 'jsx', 1: 'js', 2: 'ts', 3: 'tsx', 4: 'css', 5: 'file', 6: 'json', 10: 'napi' } };
+                     LOADER: { 0: 'jsx', 1: 'js', 2: 'ts', 3: 'tsx', 4: 'css', 5: 'file', 6: 'json', 10: 'napi',
+                               // 13 = text. NEW IN CLAUDE CODE 2.1.246: 164 rows, 118 of them .md —
+                               // prompt preambles and quickrefs that used to be inlined in JS and are
+                               // now embedded files the bundle require()s by name. A graph that carries
+                               // only JS drops them, and the target dies at its first turn with
+                               // "cannot resolve /$bunfs/root/loopAutonomousPreamble-*.md".
+                               13: 'text' } };
 }

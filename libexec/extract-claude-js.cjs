@@ -969,18 +969,42 @@ function extractToFile(binpath, out) {
 // Bun's own table (1 = ESM, 2 = CJS), so the carve-vs-graph decision is a fact rather
 // than a guess about what "@bun-cjs" appearing somewhere means.
 function isSplitBundle(binpath) {
+  const { loadGraphFull, TRAILER } = require('./bun-graph.cjs');
   let g;
-  try { g = require('./bun-graph.cjs').loadGraphFull(binpath); } catch (e) { return false; }
+  try {
+    g = loadGraphFull(binpath);
+  } catch (e) {
+    // A DECODE FAILURE IS NOT AN ANSWER. This used to swallow every exception and report
+    // "not a split bundle", which is only true when the file is not a Bun container at
+    // all. For a file that IS one, it turned "we cannot read this" into "this is the old
+    // CommonJS shape" — so clode went on to attempt the carve and failed with "bundle
+    // format may have changed", naming the wrong cause. That is exactly what 2.1.246 did
+    // to us: the graph was readable, our layout assertions were not.
+    //
+    // So: no trailer means genuinely not a Bun container (synthetic fixtures, the mock
+    // bundle, anything else we are handed) and false is the truth. A trailer that we then
+    // fail to decode is OUR problem and says so, with the decoder's own message.
+    let hasTrailer = false;
+    try {
+      hasTrailer = fs.readFileSync(binpath, 'latin1').lastIndexOf(TRAILER) >= 0;
+    } catch (e2) { /* unreadable file: fall through to the throw below */ }
+    if (!hasTrailer) return false;
+    throw new Error(`${binpath} is a Bun container clode could not decode: ${e.message}\n`
+      + '  This is a clode bug or an upstream format change, NOT a pre-2.1.243 bundle. '
+      + 'Do not fall back to the CommonJS carve — its diagnosis would name the wrong cause.');
+  }
   const js = g.rows.filter((r) => r.loader === 1);
   if (!js.length) return false;
   return js[0].moduleFormat === 1;
 }
 
 function extractGraphToFile(binpath, out) {
-  const { loadGraph, loadGraphFull } = require('./bun-graph.cjs');
+  const { loadGraph, loadGraphFull, loadAssets } = require('./bun-graph.cjs');
   const { planGraph } = require('./bun-graph-plan.cjs');
   const mods = loadGraph(binpath);
   const full = loadGraphFull(binpath);
+  const assets = {};
+  for (const [name, text] of loadAssets(binpath)) assets[name] = text;
   const plan = planGraph(mods, full.entryName);
   const { sources, report } = transformGraph(plan.sources);
 
@@ -1002,6 +1026,13 @@ function extractGraphToFile(binpath, out) {
     // updates. Carried as data rather than re-derived, so the two paths cannot drift.
     prelude: PRELUDE,
     entry: plan.entry,
+    // TEXT ASSETS the bundle require()s by name — 164 of them in 2.1.246 (118 .md), zero
+    // before it. Upstream moved prompt preambles and quickrefs out of JS into embedded
+    // files, so a graph carrying only modules produces a target that boots and then dies
+    // on its first turn: "cannot resolve /$bunfs/root/loopAutonomousPreamble-*.md".
+    // They are NOT modules — nothing compiles or imports them — so they ride beside the
+    // sources rather than in the compile order.
+    assets: assets,
     order: plan.order,
     externals: plan.externals,
     moduleCount: plan.moduleCount,
@@ -1117,7 +1148,11 @@ const __CLODE_GRAPH = JSON.parse(${lit});
   // same module either way.
   let isBuiltin = null;
   try { isBuiltin = require('node:module').isBuiltin; } catch (e) { /* not node */ }
+  const assets = doc.assets || {};
   globalThis.__quaudeRequire = function (n) {
+    // Embedded text assets first: the bundle require()s these by their container name and
+    // no host can resolve them from disk — they only exist inside the provider.
+    if (Object.prototype.hasOwnProperty.call(assets, n)) return assets[n];
     if (isBuiltin && isBuiltin(n)) return require('node:' + String(n).replace(/^node:/, ''));
     return require(n);
   };

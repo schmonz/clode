@@ -256,6 +256,18 @@ if (role === 'builder') {
       throw new Error('quaude-fuse: staged graph has no prelude — a built target would '
         + 'have no globalThis.Bun and a broken update path');
     }
+    // TEXT ASSETS the bundle require()s by name (2.1.246+: 164 of them, 118 .md — prompt
+    // preambles and quickrefs upstream moved out of JS). They are not modules and must not
+    // be compiled; they ride as one member and the loader answers require() from it.
+    // Without them the target boots and dies on its first turn with "cannot resolve
+    // /$bunfs/root/loopAutonomousPreamble-*.md" — a file that exists only inside the
+    // provider, so no host path can satisfy it.
+    if (doc.assets && Object.keys(doc.assets).length) {
+      const a = enc.encode(JSON.stringify(doc.assets));
+      members.push({ name: 'graph-assets.json', data: a });
+      console.log(`quaude-fuse: ${Object.keys(doc.assets).length} text assets -> `
+        + `graph-assets.json (${(a.length / 1048576).toFixed(1)}MB)`);
+    }
     entryName = 'graph.qbc';
     members.push({ name: 'graph.idx', data: enc.encode(JSON.stringify({ entry: doc.entry, modules: index })) });
     console.log(`quaude-fuse: compiled ${index.length} modules -> graph.qbc `

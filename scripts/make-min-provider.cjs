@@ -43,8 +43,21 @@ function writeMinSplitProvider(inPath, outPath) {
   const { loadGraphFull } = require(path.join(__dirname, '..', 'libexec', 'bun-graph.cjs'));
   const g = loadGraphFull(inPath);
   const src = fs.readFileSync(inPath);
-  const rows = g.rows.filter((r) => r.loader === 1);
-  if (!rows.length) throw new Error('no js-loader rows in the module table');
+  // JS MODULES **AND TEXT ASSETS**. Keeping only loader 1 was right until Claude Code
+  // 2.1.246, which moved 164 files (118 .md — prompt preambles, quickrefs) out of JS and
+  // into embedded text rows the bundle require()s by name. Dropping them still MINIMISES
+  // fine and still self-checks fine, and the target it produces boots and then dies on its
+  // first turn: "cannot resolve /$bunfs/root/loopAutonomousPreamble-*.md". A provider that
+  // passes every check here and fails at runtime is the worst shape this script can take,
+  // so the filter names what it keeps and why.
+  //
+  // Still dropped, deliberately: loader 5 (file) and 10 (napi) — the chart/hljs/mermaid
+  // blobs and native .node modules, which are the bulk of the size win and which a built
+  // target does not load. That is measured, not assumed: inspect reports them as disabled
+  // features under loose JS, and the tjs targets have never had them.
+  const KEEP = new Set([1, 13]);
+  const rows = g.rows.filter((r) => KEEP.has(r.loader));
+  if (!rows.some((r) => r.loader === 1)) throw new Error('no js-loader rows in the module table');
 
   const enc = new TextEncoder();
   const chunks = [];
@@ -89,7 +102,9 @@ function writeMinSplitProvider(inPath, outPath) {
     Buffer.from(table), Buffer.alloc(1), Buffer.from(offs), Buffer.from(TRAILER),
   ]);
   fs.writeFileSync(outPath, out);
-  return { modules: rows.length, bytes: out.length, entry: g.entryName, from: src.length };
+  return { modules: rows.filter((r) => r.loader === 1).length,
+           assets: rows.filter((r) => r.loader === 13).length,
+           bytes: out.length, entry: g.entryName, from: src.length };
 }
 
 const { isSplitBundle } = require(path.join(__dirname, '..', 'libexec', 'extract-claude-js.cjs'));
@@ -100,11 +115,19 @@ if (isSplitBundle(inPath)) {
     console.error(`make-min-provider: could not minimise the code-split provider ${inPath}: ${e.message}`);
     process.exit(1);
   }
-  console.error(`make-min-provider: ${r.modules} modules -> ${outPath}: ${r.bytes} bytes (from ${r.from})`);
+  console.error(`make-min-provider: ${r.modules} modules + ${r.assets} text assets -> ${outPath}: `
+    + `${r.bytes} bytes (from ${r.from})`);
   // SELF-CHECK, same contract as the CJS path: the product must decode to the same graph.
-  const check = require(path.join(__dirname, '..', 'libexec', 'bun-graph.cjs')).loadGraph(outPath);
-  if (check.size !== r.modules) {
-    console.error(`make-min-provider: SELF-CHECK FAILED — re-decode got ${check.size} modules, wanted ${r.modules}`);
+  // COUNT BOTH CLASSES SEPARATELY. Comparing a written ROW count against a re-decoded
+  // MODULE count worked only while every row was a module; the moment text assets were
+  // kept, the check failed on a provider that was in fact perfect — and a self-check that
+  // cries wolf is one people learn to pass by deleting.
+  const bg = require(path.join(__dirname, '..', 'libexec', 'bun-graph.cjs'));
+  const check = bg.loadGraph(outPath);
+  const checkAssets = bg.loadAssets(outPath);
+  if (check.size !== r.modules || checkAssets.size !== r.assets) {
+    console.error(`make-min-provider: SELF-CHECK FAILED — re-decode got ${check.size} modules `
+      + `+ ${checkAssets.size} assets, wanted ${r.modules} + ${r.assets}`);
     process.exit(1);
   }
   if (!isSplitBundle(outPath)) {

@@ -579,7 +579,22 @@ function evalBytecodeGraph(idxFile, blobFile) {
   // shim's own require, so `import {readFileSync} from "fs"` lands on the same
   // implementation `require("fs")` would.
   const graphRequire = makeRequire('/quaude');
-  globalThis.__quaudeRequire = graphRequire;
+  // TEXT ASSETS: the bundle require()s embedded files by their container name
+  // (/$bunfs/root/*.md and friends — 164 in 2.1.246, none before). They exist only inside
+  // the provider, so no host path can satisfy them; the fuse step stored them as a member
+  // and this answers from it BEFORE the normal resolver runs. Absent member = absent map
+  // = stock behaviour, which is what a pre-2.1.246 bundle wants.
+  const assetsPath = P.join(P.dirname(blobFile), 'graph-assets.json');
+  let graphAssets = null;
+  if (existsFileSync(assetsPath)) {
+    graphAssets = JSON.parse(new TextDecoder().decode(readBinSync(assetsPath)));
+  }
+  globalThis.__quaudeRequire = graphAssets
+    ? function (n) {
+      if (Object.prototype.hasOwnProperty.call(graphAssets, n)) return graphAssets[n];
+      return graphRequire(n);
+    }
+    : graphRequire;
 
   // Run the prelude FIRST. Upstream's modules reference `Bun` as a bare global, and the
   // autoupdater hooks call __clodeCheckUpdate; both come from here. The CJS path gets
