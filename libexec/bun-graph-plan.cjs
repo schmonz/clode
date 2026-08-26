@@ -147,7 +147,21 @@ function shimSource(spec, names) {
   // preserved and raised when the bundle calls or constructs it, which is what the wall
   // was for. A non-callable use gets "undefined is not ..." instead, which is less
   // pointed but still a failure rather than silence.
-  var src = 'const __m = globalThis.__quaudeRequire(' + JSON.stringify(spec) + ');\n', i, n, out = [];
+  // THE READS BELOW ARE PROBES, and the shim is told so. Each asks a module for a name
+  // the bundle imports; where the host does not implement it the read throws, and we
+  // substitute a function that rethrows on CALL — the failure belongs at use, not at
+  // import. But the read still reaches node-shim's wall traps, which otherwise cannot
+  // tell "clode is enumerating bindings" from "the bundle needs this now". Without this
+  // flag, a session that never opened a plugin sandbox reported vm.SourceTextModule as a
+  // wall it exercised, and the oracle failed a target that had just completed a full
+  // agentic turn.
+  //
+  // Restored rather than cleared, and NOT wrapped in try/finally: a block would put these
+  // `let` declarations out of module scope and break the exports below. No finally is
+  // needed because every read already has its own catch, so nothing can throw past them.
+  var src = 'const __m = globalThis.__quaudeRequire(' + JSON.stringify(spec) + ');\n'
+    + 'const __wasProbing = globalThis.__quaudeShimProbe;\n'
+    + 'globalThis.__quaudeShimProbe = true;\n', i, n, out = [];
   for (i = 0; i < names.length; i++) {
     n = names[i];
     // Only bindable identifiers can be named exports; anything else stays reachable
@@ -159,6 +173,7 @@ function shimSource(spec, names) {
       + 'catch (__e) { const __w = __e; ' + n + ' = function () { throw __w; }; }\n';
     out.push(n);
   }
+  src += 'globalThis.__quaudeShimProbe = __wasProbing;\n';
   if (out.length) src += 'export { ' + out.join(', ') + ' };\n';
   return src + 'export default __m;\n';
 }

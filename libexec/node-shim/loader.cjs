@@ -156,7 +156,7 @@ function wallProxy(ns) {
       // (e.g. process itself) failed to load, globalThis.process IS a wallProxy, and
       // reading its `.env` re-enters THIS get trap → unbounded self-recursion
       // (RangeError: Maximum call stack size exceeded). tjs.env is the raw engine env.
-      if (tjs?.env?.CLODE_SHIM_TRACE) { try { console.error('[wall]', ns + '.' + String(prop)); } catch { /* best effort */ } }
+      traceGap(ns, prop);
       throw new Error(`node-shim: ${ns}.${String(prop)} not implemented`);
     },
   });
@@ -169,6 +169,24 @@ function wallProxy(ns) {
  * Promise-unwrapping, ESM interop, and console.log don't trip the wall. Only
  * curated tiny shims opt in (SEALED) — broad modules keep Node's missing-prop
  * = undefined idiom, which the bundle's feature-detection depends on. */
+// A PROBE IS NOT A USE, and the trace has to say which.
+//
+// clode's own generated per-specifier shims (libexec/bun-graph-plan.cjs) read every name
+// the bundle imports at module-init time and, for anything that throws, substitute a
+// function that rethrows on CALL. That puts the wall exactly where it belongs — at use —
+// but the READ still lands in these traps, so a session that never opened a plugin
+// sandbox reported vm.SourceTextModule as a wall it "exercised", and the oracle failed a
+// target that had just completed a full agentic turn.
+//
+// Probes trace as [probe], uses as [wall]. Both stay visible; only one is a failure. The
+// exception thrown afterwards is IDENTICAL either way — this decides what we call it,
+// never what happens.
+function traceGap(ns, prop) {
+  if (!tjs?.env?.CLODE_SHIM_TRACE) return;
+  const kind = globalThis.__quaudeShimProbe === true ? '[probe]' : '[wall]';
+  try { console.error(kind, ns + '.' + String(prop)); } catch { /* best effort */ }
+}
+
 const SEALED = new Set(['module', 'vm']);
 const SEAL_ALLOW = new Set(['then', 'default', '__esModule', 'constructor', 'prototype',
   'toJSON', 'toString', 'valueOf', 'inspect', Symbol.toPrimitive, Symbol.iterator,
@@ -181,7 +199,7 @@ function sealSurface(ns, exportsVal) {
       // (e.g. process itself) failed to load, globalThis.process IS a wallProxy, and
       // reading its `.env` re-enters THIS get trap → unbounded self-recursion
       // (RangeError: Maximum call stack size exceeded). tjs.env is the raw engine env.
-      if (tjs?.env?.CLODE_SHIM_TRACE) { try { console.error('[wall]', ns + '.' + String(prop)); } catch { /* best effort */ } }
+      traceGap(ns, prop);
       throw new Error(`node-shim: ${ns}.${String(prop)} not implemented`);
     },
   });

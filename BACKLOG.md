@@ -1797,6 +1797,56 @@ at minute 7 is not telling the truth promptly.
 NOT LANDED YET, deliberately: changing CI config now would cancel the in-flight
 release-gate run, which is 29/30 green.
 
+## vm.SourceTextModule / vm.SyntheticModule — JS tool-plugins on quaude (2026-08-26)
+
+**Decision: BUILD IT.** The user, asked whether this should work on quaude or be left to
+naude: *"Beats me how to decide that, beyond 'yes I always want to match upstream
+behavior'."* Matching upstream is the default; see [[match-upstream-by-default]]. My
+question was the mistake — cost is an argument about sequencing, not about scope.
+
+**What upstream does with it.** Exactly one module (`_831.js`) uses these, and it is the
+JAVASCRIPT TOOL-PLUGIN SANDBOX: `createContext({__proto__:null}, {codeGeneration:
+{strings:false, wasm:false}})`, then `SourceTextModule` / `SyntheticModule` with
+`initializeImportMeta`, `importModuleDynamically`, and an explicit `importRefusal` for
+anything outside the plugin's own folder. Its strings are `tool.register`,
+`tool.describe`, `PermissionRequest`, `permissionMode`, `"resolves outside the plugin's
+folder"`.
+
+**Scope, measured, because I first got this wrong out loud:** 81 modules mention plugins;
+**2** import `vm`. Commands, agents, hooks, skills and marketplace manifests never touch
+it. What is unavailable today is specifically a plugin that REGISTERS TOOLS BY RUNNING
+JAVASCRIPT — not plugins.
+
+**Also not new.** 2.1.245 has the identical single use of each. We only saw it when the
+oracles came back to life after the code-split extraction was fixed — a standing gap
+surfacing the moment its instrument worked again, which is the argument for the oracle.
+
+**MOST OF THE WORK IS ALREADY DONE, which I also got wrong out loud.**
+`libexec/node-shim/modules/vm.cjs` provides Script, createContext, isContext,
+runInThisContext, runInContext, runInNewContext and compileFunction with REAL per-context
+isolation, via the `__tjs_vm` primitive in txiki's `src/mod_vm.c`: each context is a child
+JSContext with its own global on the shared heap. The isolation primitive — the part that
+would have been genuinely hard, and the part that MUST be real because this is a security
+boundary — exists and ships.
+
+**What is actually missing** is the ESM module-record layer over it:
+
+- `SourceTextModule(source, {context, identifier, initializeImportMeta,
+  importModuleDynamically})` — compile in a CHILD context, expose the link/evaluate
+  lifecycle and `status`.
+- `SyntheticModule(exportNames, evaluateCallback, {context, identifier})`.
+- The linking protocol: upstream resolves imports itself and returns module objects, so
+  `link(linker)` must call back and accept our records.
+
+**The one thing NOT to do**, stated because it is the tempting shortcut: implement these
+over our ordinary module machinery in the MAIN context. It would pass a smoke test and
+run plugin code with full host access, no codeGeneration restriction, and no import
+refusal — a sandbox that is not one, failing silently. A wall is better than that.
+
+Until it lands the wall is honest: a real use throws `node:vm SourceTextModule not
+implemented`. It is no longer reported as an exercised wall on ordinary turns — see the
+probe/wall split in libexec/node-shim/loader.cjs.
+
 ## ENGINE BUG — evalBytecode on a COMPILED module aborts; only a deserialized one is safe (2026-08-25)
 
 Found while building the graph runner. Compile a large ES-module graph in-process and hand

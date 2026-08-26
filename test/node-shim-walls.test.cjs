@@ -9,6 +9,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { runLoader, skipUnlessTjs } = require('./node-shim-helper.cjs');
+const REPO_ROOT = path.resolve(__dirname, '..');
 
 function writeProg(body) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-walls-'));
@@ -64,6 +65,55 @@ test('module.isBuiltin agrees with host node, and with our own builtinModules', 
     if (k === '__selfConsistent') continue;   // node's builtin set is legitimately larger
     assert.strictEqual(got[k], ref[k], `isBuiltin(${JSON.stringify(k)}) disagrees with host node`);
   }
+});
+
+// PROBE vs WALL. clode's generated per-specifier shims read every name the bundle
+// imports at module-init and defer any failure to the CALL. Correct — but the read still
+// reaches these traps, so a quaude that never opened a plugin sandbox was reporting
+// vm.SourceTextModule as a wall it "exercised", and test/oracle-binaries.test.cjs failed
+// a target that had just completed a full agentic turn. Third instrument fault of the
+// day; the product was right every time.
+//
+// The exception is IDENTICAL in both modes. Only the label changes, and only the label
+// is what the oracle counts.
+test('a sealed miss traces as [probe] while flagged, and [wall] otherwise', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const f = writeProg(`
+    const vm = require('node:vm');
+    globalThis.__quaudeShimProbe = true;
+    let probeThrew = false;
+    try { vm.SourceTextModule; } catch (e) { probeThrew = true; }
+    globalThis.__quaudeShimProbe = false;
+    let useThrew = false;
+    try { vm.SourceTextModule; } catch (e) { useThrew = true; }
+    console.log(JSON.stringify({ probeThrew, useThrew }));`);
+  const r = runLoader(f, [], { env: { CLODE_SHIM_TRACE: '1' } });
+  assert.strictEqual(r.status, 0, r.stderr);
+  // Behaviour is unchanged by the flag: a miss throws either way. If this ever goes
+  // false, the flag has started SUPPRESSING walls rather than labelling them.
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), { probeThrew: true, useThrew: true },
+    'the flag must change the LABEL, never whether the wall throws');
+  const lines = r.stderr.split('\n');
+  assert.strictEqual(lines.filter((l) => /\[probe\] vm\.SourceTextModule/.test(l)).length, 1,
+    `flagged read must trace as [probe]:\n${r.stderr}`);
+  assert.strictEqual(lines.filter((l) => /\[wall\] vm\.SourceTextModule/.test(l)).length, 1,
+    `unflagged read must still trace as [wall]:\n${r.stderr}`);
+});
+
+// And the generator must actually set the flag — the loader half is useless alone.
+test('the generated per-specifier shim flags its reads as probes, and restores', () => {
+  const { shimSource } = require(path.join(REPO_ROOT, 'libexec/bun-graph-plan.cjs'));
+  const src = shimSource('vm', ['createContext', 'SourceTextModule']);
+  assert.match(src, /globalThis\.__quaudeShimProbe = true;/, 'reads are not flagged as probes');
+  assert.match(src, /globalThis\.__quaudeShimProbe = __wasProbing;/,
+    'the flag must be RESTORED, not cleared — nested shims would otherwise unflag an '
+    + 'outer probe and a later real wall could be mislabelled');
+  // The restore must come after the last read and before the exports, or the exported
+  // bindings would be out of scope / still flagged.
+  assert.ok(src.indexOf('__quaudeShimProbe = __wasProbing') > src.lastIndexOf('__m["SourceTextModule"]'),
+    'the flag is restored before the last read');
+  assert.ok(src.indexOf('__quaudeShimProbe = __wasProbing') < src.indexOf('export {'),
+    'the flag is restored after the exports');
 });
 
 test('Module.wrap + module builtinModules present', (t) => {
