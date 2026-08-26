@@ -557,6 +557,20 @@ jobs:
           CLODE_PROVIDER_BIN="$PROV" CLODE_CLAUDE_BIN="$PROV" \
             node --test --test-timeout=1200000 test/oracle-binaries.test.cjs
 
+      # THE ORACLE PROPERTY the step above spends: naude is only a control for quaude
+      # because it carries the bun-shim and NOT the node-shim. The gate for that reads a
+      # BUILT naude's SEA asset table, so it belongs HERE, in the one job that has one —
+      # under `npm test` it would skip forever, which is the 2026-08-25 disease (sixteen
+      # tests skipping in CI since forever, invisibly). `skipped 0` is asserted for the
+      # same reason clode-native's acceptances assert it: a gate that skipped is a gate
+      # that is not there.
+      - name: naude shim boundary — the bytes that make the oracle an oracle
+        run: |
+          set -euo pipefail
+          node --test test/naude-shim-boundary.test.cjs 2>&1 | tee boundary.out
+          grep -qE '^(ℹ|#) skipped 0$' boundary.out \
+            || { echo "ERROR: the naude shim-boundary gate SKIPPED — it found no built naude to inspect (see its skip message above)" >&2; exit 1; }
+
   # node-shim oracle on DARWIN — the same node-vs-tjs behavioral diff as
   # node-shim-oracle above, but on macOS against a real darwin tjs.
   # WHY A SEPARATE JOB: the node-shim is darwin-oriented (signal table, dylib
