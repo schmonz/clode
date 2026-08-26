@@ -211,7 +211,7 @@ jobs:
       - name: Self-smoke the arm64 slice
         run: ./"${{ steps.name.outputs.asset }}" --version
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v4.1.1
+        uses: actions/attest-build-provenance@v4.2.2
         with:
           subject-path: ${{ steps.name.outputs.asset }}
       - name: Upload the universal builder (published)
