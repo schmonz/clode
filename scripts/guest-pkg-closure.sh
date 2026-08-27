@@ -24,9 +24,27 @@ if [ "$#" -eq 0 ]; then
 fi
 
 case "$platform" in
-  freebsd|dragonflybsd) : ;;
-  netbsd|openbsd|midnightbsd|haiku|omnios|solaris|openindiana) : ;;
+  freebsd|dragonflybsd)
+    # -n dry run; lines look like "  cmake: 3.28.1 [repo]" plus a size summary.
+    env ASSUME_ALWAYS_YES=NO pkg install -n "$@" 2>&1 \
+      | awk '/^\t/ { name=$1; sub(/:$/,"",name); print "PKGCLOSURE", name, $2, 0 }'
+    ;;
+  netbsd)
+    # pkgin -n install prints the full transaction, one package per line.
+    pkgin -n install "$@" 2>&1 \
+      | awk '/to be installed|to install/ { next } /^[a-zA-Z0-9]/ { print "PKGCLOSURE", $1, "-", 0 }'
+    ;;
+  openbsd)
+    pkg_add -n "$@" 2>&1 \
+      | awk '/^pkg_add:/ { next } { print "PKGCLOSURE", $NF, "-", 0 }'
+    ;;
+  omnios|solaris|openindiana)
+    pkg install -n -v "$@" 2>&1 \
+      | awk '/^ +[a-z]/ { print "PKGCLOSURE", $1, "-", 0 }'
+    ;;
+  midnightbsd|haiku)
+    echo "guest-pkg-closure: $platform dry-run flag not yet confirmed — see Task 2 step 3" >&2
+    exit 3
+    ;;
   *) echo "guest-pkg-closure: unsupported platform '$platform'" >&2; exit 2 ;;
 esac
-
-echo "PKGCLOSURE-TOTAL 0 0"
