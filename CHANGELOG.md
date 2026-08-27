@@ -1,58 +1,24 @@
 # Changelog
 
-## 0.20260825.1
+## 0.20260827.1
 
-Build from Claude Code 2.1.243 and newer, which changed how the CLI is packaged. Earlier `clode` releases stop with "bundle format may have changed" and cannot build a target at all. This affects everyone: 2.1.245 is the current `latest`.
+Tested with Claude Code 2.1.247.
 
-Upstream now ships the CLI as about 1,400 separate modules instead of one file. `clode` compiles and packages the whole set rather than carving a single file out of the binary, and the engine learned what those modules expect of it — `import.meta.require`, and an `import.meta` on every module a built target loads from its own archive. Upstream's code is compiled exactly as shipped; `clode` does not rewrite it.
-
-`clode` now watches Claude Code's `next` channel rather than `latest`, so a packaging change like this one is visible before it reaches everybody.
-
-### Talking to the outside world
-
-`node:http` and `node:https` are now a real HTTP/1.1 client instead of a stub. Amazon Bedrock did not work at all in a built target before this; neither did anything else reaching the network through those modules rather than `fetch`.
-
-`HTTP_PROXY` and `HTTPS_PROXY` are honoured.
-
-All three MCP transports were broken, each in its own way, and each is fixed: stdio servers never started because the target never announced a spawned child; SSE posted every message to `/[object Object]`; HTTP died before opening a socket because `fetch` would not take a URL object. Closing a WebSocket now sends a real close frame instead of hanging up.
-
-Certificate verification uses the real bundled CA store.
-
-### Targets that could not work
-
-A `quaude` built against Claude Code 2.1.238 or newer would not start, because the bundle began reading a table of error numbers the engine did not publish. The engine now reports its own constants and the build refuses an engine too old to have them — so this class of failure is caught while building rather than on first run.
-
-Eight of eleven file-open flags were wrong on the BSDs, taken from whatever machine did the build instead of from the target.
-
-### Long-standing wrongness
-
-A conversation could hang forever after the first credentialed turn — a timer that had been told not to keep the program alive still did.
-
-A failed run reported success. Exit codes now survive.
-
-Timers armed while the target was starting up fired early, by however long startup took.
-
-Data written to a stream before anything was listening was dropped.
-
-### Everyday things
-
-Editing an existing file could fail with a bare "not a function". Plugin hooks were installed without the execute bit, which surfaced as "SessionStart hook error". `/heapdump` produced a stream where bytes were required. Search now translates every `ripgrep` call the bundle makes, including `--files`, and never quietly hands your query to a `ripgrep` that happens to be installed on your machine.
-
-Three bugs in path handling, one in deep equality, and one in value formatting that could throw while printing an error.
-
-### Building and updating
-
-Fixed a regression where `quaude` binaries cross-built with `clode build --target` would not start.
-
-Every release before this one silently dropped engine source patches, because regenerating bytecode was opt-in. It is now the default, with a checksum that fails the build if it is skipped.
-
-`clode` actually intercepts update attempts, which we had believed it already did. A `quaude` could try to install Claude Code over itself — both on its own, and when you ran `quaude update`, which said it would not and then did.
-
-### Known issue
-
-`clode build --naude` — the Node-hosted build, used mainly to compare a target against the reference — does not work with Claude Code 2.1.243 and newer. `clode build` (the default) is unaffected.
-
-Temporarily stop releasing for Haiku until its builder image can be updated.
+- Adjust code extraction for 2.1.243 and newer
+- Fix startup when built from 2.1.238 or newer, or when cross-built
+- Implement `node:http` and `node:https`
+- Honor `HTTP_PROXY` and `HTTPS_PROXY`
+- Fix all three MCP transports, each of which had been broken in its own way
+- Fix portably assigning error codes and file-open flags
+- Fix timer bug causing conversation hang after the first credentialed turn
+- Fix stream writes dropping data when nothing was listening yet
+- Fix `not a function` when editing an existing file
+- Fix `SessionStart hook error` caused by missing execute bit on plugin hooks
+- Fix `/heapdump`
+- Map remaining `rg` calls to `bfs` or `ugrep` as previously intended
+- Fix path handling, deep equality, and value formatting
+- Reliably patch QuickJS-NG as previously intended
+- Intercept `update` as previously intended
 
 ## 0.20260801.2
 

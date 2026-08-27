@@ -4,7 +4,11 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 (Strategic feasibility risks live in `LONG-TERM.md`; in-flight designs in
 `docs/superpowers/`. Done items are DELETED from here — git history is the record.)
 
-## RELEASE GATE for 0.20260825.1 (user, 2026-08-25) — BOTH must hold
+## RELEASE GATE for 0.20260827.1 (user, 2026-08-25) — BOTH must hold
+
+**Re-dated 2026-08-27**: the cut was staged on the 25th and took two more days of
+upstream absorption (2.1.246, 2.1.247) plus the Renovate merges. Date versioning
+means the tag names the day it ships, not the day it was drafted.
 
     1. CI is GREEN
     2. ALL Renovate PRs are MERGED
