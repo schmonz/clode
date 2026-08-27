@@ -84,12 +84,33 @@ async function obtainEngine(entry, opts) {
   if (compression && compression !== 'gzip') {
     throw new TemplatesError(`engine ${entry.engine}: unsupported compression '${compression}'`);
   }
-  const dest = path.join(opts.cacheDir, entry.engine);
+  // The cache path carries the manifest RECIPE, not just the pin. The pin is
+  // coarse — txiki version plus a short sha — so two packs can share it and still
+  // be built from different sources, which puts DIFFERENT bytes under the SAME
+  // cache name. That is exactly how a user hit
+  //   engine tjs-windows-amd64-26.6.0-1a230d3: sha256 277d0a47… != manifest 9dd94841…
+  // on v0.20260827.1, from an engine cached 18 days earlier. Manifests predating
+  // the recipe field keep the flat path.
+  const cacheDir = opts.manifestRecipe
+    ? path.join(opts.cacheDir, String(opts.manifestRecipe).slice(0, 12))
+    : opts.cacheDir;
+  const dest = path.join(cacheDir, entry.engine);
+  const digest = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
   const verify = (buf) => {
-    const got = crypto.createHash('sha256').update(buf).digest('hex');
+    const got = digest(buf);
     if (got !== entry.sha256) throw new TemplatesError(`engine ${entry.engine}: sha256 ${got} != manifest ${entry.sha256}`);
   };
-  if (fs.existsSync(dest)) { verify(fs.readFileSync(dest)); return dest; }
+  // A cache must never be able to FAIL a build — it can only make one faster.
+  // Stale or corrupt cached bytes are a MISS: drop them and re-fetch. Only bytes
+  // that fail verification after a FRESH download are a real error (corruption in
+  // transit, or a bad publish), and those still fail closed below. Before this,
+  // a cache hit was verified against the current manifest and THREW, so a stale
+  // cache was indistinguishable from a compromised release.
+  if (fs.existsSync(dest)) {
+    const cached = fs.readFileSync(dest);
+    if (digest(cached) === entry.sha256) return dest;
+    try { fs.unlinkSync(dest); } catch { /* best effort; the re-fetch overwrites */ }
+  }
 
   // Where the engine bytes come from, in priority order:
   //
@@ -132,7 +153,7 @@ async function obtainEngine(entry, opts) {
     buf = raw;
   }
   verify(buf);
-  fs.mkdirSync(opts.cacheDir, { recursive: true });
+  fs.mkdirSync(cacheDir, { recursive: true });
   fs.writeFileSync(dest, buf);
   fs.chmodSync(dest, 0o755);
   return dest;

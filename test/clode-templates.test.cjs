@@ -158,3 +158,55 @@ test('the built clode bakes its engine recipe, as it bakes its tjs pin', () => {
   assert.match(fuse, /manifestRecipe: manifest\.recipe/, 'the manifest recipe must reach obtainEngine');
   assert.match(fuse, /thisRecipe: thisEngineRecipe\(/, 'this clode\'s recipe must reach obtainEngine');
 });
+
+// THE BUG A USER ACTUALLY HIT (2026-08-27, v0.20260827.1): `clode build --target
+// windows-amd64` died with "sha256 277d0a47… != manifest 9dd94841…" because the
+// cache held an engine from 18 days earlier under the SAME name — the cache path
+// carries the tjsPin but not the manifest's `recipe`, so a recipe bump collides.
+// A cache must never be able to fail a build. A stale or corrupt cached engine is
+// a MISS: discard it and re-fetch. Only bytes that fail verification AFTER a fresh
+// download are a real error.
+test('obtainEngine: a stale cached engine is discarded and re-fetched, not fatal', async () => {
+  const bytes = Buffer.from('FRESH-ENGINE-BYTES');
+  const sha = crypto.createHash('sha256').update(bytes).digest('hex');
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engstale-'));
+  // Exactly the user's situation: right name, wrong (older) bytes.
+  fs.writeFileSync(path.join(cacheDir, 'tjs-windows-amd64-26.6.0-1a230d3'), 'STALE-FROM-A-PREVIOUS-RECIPE');
+  let calls = 0;
+  const fetch = async () => { calls++; return bytes; };
+  const p = await obtainEngine(
+    { engine: 'tjs-windows-amd64-26.6.0-1a230d3', sha256: sha },
+    { cacheDir, baseUrl: 'base/', fetch, thisPin: 'P', manifestPin: 'P' });
+  assert.strictEqual(fs.readFileSync(p).toString(), 'FRESH-ENGINE-BYTES', 'serves the fresh engine');
+  assert.strictEqual(calls, 1, 're-fetched instead of throwing');
+});
+
+// The gate itself must not be weakened by the above: bytes that fail verification
+// after a FRESH download are a genuine error (corruption or a bad publish), and
+// must still fail closed rather than being cached or fused.
+test('obtainEngine: a FRESH download that fails verification is still fatal', async () => {
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engfresh-'));
+  await assert.rejects(
+    () => obtainEngine({ engine: 'tjs-x-abc', sha256: 'a'.repeat(64) },
+      { cacheDir, baseUrl: 'b/', fetch: async () => Buffer.from('WRONG'), thisPin: 'P', manifestPin: 'P' }),
+    (e) => e instanceof TemplatesError && /sha256/.test(e.message));
+  assert.ok(!fs.existsSync(path.join(cacheDir, 'tjs-x-abc')), 'unverified bytes are never cached');
+});
+
+// Prevention, not just recovery: two manifests with the same tjsPin but different
+// recipes must not share a cache slot in the first place.
+test('obtainEngine: the cache path separates engines by manifest recipe', async () => {
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engrec-'));
+  const mk = async (body, recipe) => {
+    const b = Buffer.from(body);
+    const sha = crypto.createHash('sha256').update(b).digest('hex');
+    return obtainEngine({ engine: 'tjs-t-26.6.0-pin', sha256: sha },
+      { cacheDir, baseUrl: 'b/', fetch: async () => b, thisPin: 'P', manifestPin: 'P',
+        manifestRecipe: recipe, thisRecipe: recipe });
+  };
+  const a = await mk('RECIPE-A-BYTES', 'aaaaaaaaaaaa1111');
+  const b = await mk('RECIPE-B-BYTES', 'bbbbbbbbbbbb2222');
+  assert.notStrictEqual(a, b, 'different recipes get different cache paths');
+  assert.strictEqual(fs.readFileSync(a).toString(), 'RECIPE-A-BYTES', 'recipe A still intact');
+  assert.strictEqual(fs.readFileSync(b).toString(), 'RECIPE-B-BYTES');
+});
