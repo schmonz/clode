@@ -9,9 +9,17 @@ name: pkg-closure-probe
 # workflow_dispatch only: this never runs on push or pull_request, and adding
 # it changes no existing CI behaviour.
 #
-# The leg list is DERIVED, never hand-listed: legsFor('ci') from
-# scripts/tjs-legs.mjs — the same single source of truth the per-push build
+# The leg list is DERIVED, never hand-listed: legsFor('release') from
+# scripts/tjs-legs.mjs — the same single source of truth the release build
 # matrix uses (tjs-legs.yml) — filtered to legs that declare guest-packages.
+# 'release' (not 'ci') is deliberate: this probe sizes a pin store, and pins
+# must cover every leg that installs packages in ANY tier, or the closure
+# measurement under-counts and the next phase could pick the wrong shape.
+# release is a strict superset of ci for guest-packages legs (12 vs 7), so
+# this costs five extra guest boots and loses nothing. haiku-x64 stays in
+# deliberately even though it is demoted (publish:false) and known-broken
+# upstream (HaikuPorts deleted its r1beta5 repo) — its exit-3/failure is
+# itself information worth recording, not a leg to special-case out.
 # A hand-written leg list here would be exactly the drift this project keeps
 # getting bitten by.
 
@@ -34,7 +42,7 @@ jobs:
         run: |
           node --input-type=module -e "
             import { legsFor } from './scripts/tjs-legs.mjs';
-            const legs = legsFor('ci').filter((l) => l['guest-packages']);
+            const legs = legsFor('release').filter((l) => l['guest-packages']);
             console.log('legs=' + JSON.stringify(legs));
           " >> "$GITHUB_OUTPUT"
 
