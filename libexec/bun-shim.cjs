@@ -1025,6 +1025,23 @@ const Bun = {
   // upstream's `"WebView" in Bun` feature-detect reads false and that branch is
   // skipped cleanly -- adding SQL here must not (and does not) disturb that
   // pattern for WebView or any other `in`/`typeof` feature-detect.
+  // Bun.build — NEW IN 2.1.247, and it bundles a PLUGIN'S HOOKS MODULE:
+  //   Bun.build({ entrypoints: [join(repoRoot, r, ...)], target: 'bun', format: 'esm',
+  //               minify: false, external: [TYPES_MODULE] })
+  // wrapped in a try/catch that becomes `HooksError: cannot bundle the hooks module of
+  // <plugin>`. So upstream already has a product-level failure path for this, and a
+  // throwing stub lands there with a message that names the real reason.
+  //
+  // NOT IMPLEMENTED, deliberately: this is a JavaScript bundler. quaude ships no
+  // esbuild and no Node, so there is nothing to delegate to on a target, and writing
+  // one is wildly out of proportion to the feature it serves. It belongs to the same
+  // capability as vm.SourceTextModule — plugins that run JavaScript — which is tracked
+  // in BACKLOG as the next cycle's first item. Whoever builds that will need this too.
+  build: function build() {
+    throw new Error('Bun.build is not available in this build of Claude Code: '
+      + 'bundling a plugin hooks module needs a JavaScript bundler, which quaude does '
+      + 'not ship. Plugins that do not register JS tools are unaffected.');
+  },
   SQL: function SQL() {
     throw new Error('claude gateway requires the native binary');
   },

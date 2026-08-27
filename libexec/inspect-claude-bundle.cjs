@@ -561,7 +561,13 @@ const ACCEPTED_STUBBED_BUN = new Set(['serve', 'listen', 'file', 'write', 'Termi
   'YAML', 'stringWidth', 'stripANSI', 'wrapAnsi', 'semver',
   // connect (TCP direct-dial), TOML (config parse): niche/feature-gated; stubbed
   // in bun-shim with clear errors rather than left raw-undefined (API-gate pass).
-  'connect', 'TOML']);
+  'connect', 'TOML',
+  // build (NEW 2.1.247): bundles a plugin's hooks module. Upstream wraps it in a
+  // try/catch that yields `HooksError: cannot bundle the hooks module of <plugin>`, so a
+  // throwing stub degrades into upstream's own error path. Implementing it means
+  // shipping a JS bundler in a target that has neither esbuild nor Node — the same
+  // JS-plugin capability as vm.SourceTextModule, tracked together in BACKLOG.
+  'build']);
 // SQL: accepted-missing (no SQL feature on the core path). ant: Bun.ant.getPeerUid
 // guarded (try/catch, null fallback). WebView: feature-detected via `"WebView" in
 // Bun` — must stay ABSENT so the guard skips it (adding it would flip the detect
