@@ -1,0 +1,61 @@
+name: pkg-closure-probe
+
+# Measures the dependency closure of the packages each guest-VM leg installs,
+# BEFORE anything is installed, via scripts/guest-pkg-closure.sh (Task 1 of
+# .superpowers/sdd/2026-08-27-package-pinning/). The numbers this produces are
+# what decide Phase 2 of the package-pinning plan: a pin store (closures small)
+# or a download cache (closures large) — see BACKLOG's ★★ pinning item.
+#
+# workflow_dispatch only: this never runs on push or pull_request, and adding
+# it changes no existing CI behaviour.
+#
+# The leg list is DERIVED, never hand-listed: legsFor('ci') from
+# scripts/tjs-legs.mjs — the same single source of truth the per-push build
+# matrix uses (tjs-legs.yml) — filtered to legs that declare guest-packages.
+# A hand-written leg list here would be exactly the drift this project keeps
+# getting bitten by.
+
+on: workflow_dispatch
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      legs: ${{ steps.legs.outputs.legs }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version-file: .tool-versions
+      - id: legs
+        # tjs-legs.mjs is an ES module (`export function legsFor`) — a plain
+        # require() throws ERR_REQUIRE_ESM, so this evaluates it as a module.
+        run: |
+          node --input-type=module -e "
+            import { legsFor } from './scripts/tjs-legs.mjs';
+            const legs = legsFor('ci').filter((l) => l['guest-packages']);
+            console.log('legs=' + JSON.stringify(legs));
+          " >> "$GITHUB_OUTPUT"
+
+  probe:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.legs) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.timeout || 90 }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: ./.github/actions/guest
+        with:
+          platform: ${{ matrix['guest-platform'] }}
+          arch: ${{ matrix['guest-arch'] || 'x86_64' }}
+          version: ${{ matrix['guest-version'] }}
+          # Empty on purpose: the probe must run BEFORE the leg's packages are
+          # installed, or it measures an already-satisfied closure and reports
+          # near-zero — a wrong answer that looks like a real measurement.
+          packages: ''
+          script: |
+            sh scripts/guest-pkg-closure.sh '${{ matrix['guest-platform'] }}' ${{ matrix['guest-packages'] }}
