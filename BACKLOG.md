@@ -987,6 +987,30 @@ well-tested, and reasonably fast** as we can possibly make it."
   headroom. The instrument (my assumed unit) was wrong, not the legs — check how a field is
   CONSUMED before reasoning about its value.
 
+- **The templates cache key omits the RECIPE, so a recipe bump hard-errors instead of missing
+  (found 2026-08-27, from a real user cross-build).** `libexec/clode-templates.cjs:87` files the
+  engine at `path.join(cacheDir, entry.engine)` — i.e. `tjs-<target>-<tjsPin>` — and line 92 does
+  `if (fs.existsSync(dest)) { verify(fs.readFileSync(dest)); return dest; }`. But the manifest
+  carries TWO identities: `tjsPin: 26.6.0-1a230d3` AND `recipe: 8048ccbe7039`. Only the pin is in
+  the filename. So when the recipe changes and the pin does not, freshly published bytes collide
+  with a cached file of the same name and the cache hit fails `verify()`.
+  OBSERVED: `clode build --target windows-amd64 / netbsd-arm64` against v0.20260827.1 died with
+  `engine tjs-windows-amd64-26.6.0-1a230d3: sha256 277d0a47… != manifest 9dd94841…`. The cached
+  files were from Aug 9 and hashed to exactly the reported `got`; macos-arm64/macos-ppc in the
+  same sweep were cached the same day as the release, matched, and built fine. The release was
+  self-consistent — this is purely the cache.
+  SEVERITY: low for correctness (it fails CLOSED — no wrong engine is ever fused, which is the
+  gate working), high for confusion. The user cannot tell a stale cache from a broken release,
+  and the message does not say "stale cache, delete it". This is a cache MISS wearing a hard
+  error's clothes.
+  FIX: put the recipe in the cache path — `cacheDir/<recipe>/<engine>` or
+  `tjs-<target>-<tjsPin>-<recipe12>` — so a recipe bump simply misses and re-downloads. Then the
+  `verify()` failure means what it should: genuine corruption or a bad publish. Keep the verify.
+  WHILE IN THERE: the cache also accumulates dead entries under the pre-rationalization vocabulary
+  (`tjs-windows-x64-v26.6.0-…`, `tjs-darwin-arm64-v…`) that nothing will ever read again — see the
+  canonical-name work. A prune or a cache-version directory would collect both problems.
+  SAME SPECIES as the two entries above it: a name that does not capture what it identifies.
+
 ### Known shipped-artifact bugs
 
 - **`dragonflybsd-amd64` leg red — UPSTREAM VM-IMAGE infra, NOT our code (2026-07-18,
