@@ -1011,6 +1011,42 @@ well-tested, and reasonably fast** as we can possibly make it."
   canonical-name work. A prune or a cache-version directory would collect both problems.
   SAME SPECIES as the two entries above it: a name that does not capture what it identifies.
 
+- **PACKAGE-CLOSURE MEASUREMENT — first real numbers (run 33125646280, 2026-08-27).** Run 1
+  (33121243887) measured nothing: see the probe-rewrite commit. These are from the fixed probe,
+  and every figure below is parsed from the manager's own summary — no leg reports a total it
+  did not compute.
+
+  | leg | packages | download | note |
+  |---|---|---|---|
+  | freebsd-amd64 | 44 | 115 MiB | measured |
+  | freebsd-arm64 | 44 | 113 MiB | measured |
+  | dragonflybsd-amd64 | 43 | 169 MiB | measured |
+  | netbsd-amd64 | 15 | unknown | count only |
+  | netbsd-arm64 | 6 | unknown | count only |
+  | solaris-amd64 | 3 | unknown | count only |
+  | openindiana-amd64 | 1 | unknown | count only |
+  | openbsd-amd64/arm64 | - | - | VM never booted (`Permission denied (publickey…)`) — INFRA, not the probe |
+  | omnios-amd64 | - | - | manager produced NO output, exit 1 (suspect `sudo -n` refused) |
+  | midnightbsd-amd64 | - | - | `mport: illegal option -- n` — mport has no dry-run flag |
+  | haiku-x64 | - | - | `Usage: pkgman install <package>` — our `-n -y` flags are wrong |
+
+  **READING IT, CAREFULLY.** The pkg-family BSDs are HEAVY: 43-44 packages and 113-169 MiB of
+  download each. If that generalised, a pin store means hosting >100 MiB per leg per bump, which
+  argues for a cache or pre-baked images. But it does NOT yet generalise: byte data exists for
+  only 3 of 12 legs, all in the SAME package-manager family, so the sample is one manager wide.
+  The count-only legs are small in COUNT (1-15) but 15 packages could still be 100 MiB — count
+  is not a proxy for size, and treating it as one is how you would talk yourself into the wrong
+  architecture. DO NOT decide pin-vs-bake on this table yet.
+
+  **TO FINISH THE MEASUREMENT** (each now has a precise, log-backed cause rather than a guess):
+  1. netbsd + IPS byte extraction — the counts parse, the sizes do not. Needs the real summary
+     line shape from a guest, not another guess at a regex.
+  2. `mport` has no dry-run: measuring midnightbsd needs a different mechanism (index query, or
+     a throwaway guest where a real install is acceptable).
+  3. haiku: find pkgman's actual dry-run flag — its own usage message is in the log.
+  4. omnios: why the manager printed nothing at all; check whether `sudo -n` is permitted there.
+  5. openbsd: nothing to fix in the probe — its VM failed to boot. Re-run and see.
+
 ### Known shipped-artifact bugs
 
 - **`dragonflybsd-amd64` leg red — UPSTREAM VM-IMAGE infra, NOT our code (2026-07-18,
