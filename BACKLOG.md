@@ -961,6 +961,32 @@ well-tested, and reasonably fast** as we can possibly make it."
   invariant fail where the mistake is made, not where it surfaces.
 
 
+- **16 legs declare a `timeout` in SECONDS into a minutes field, defeating the guard it was added
+  to be (found 2026-08-27).** `.github/workflows/tjs-legs.yml:78` is
+  `timeout-minutes: ${{ matrix.timeout || 90 }}`, and the comment right above it states the
+  intent: size each leg to its MEASURED runtime "rather than relying on this ceiling to notice
+  trouble", citing the 2026-08-25 incident where a stuck leg held the run and the oracle/Windows
+  jobs had not been created after 68 minutes.
+  The declared values do not all speak minutes. 20 (6 VM legs), 120 (solaris, openindiana) and
+  300 (8 musl-cross + arm64 VM legs) are plausible minutes. `1800` (linux-riscv64, linux-s390x)
+  and `3600` (the 14-leg NetBSD cross fleet) are plainly SECONDS — 30 and 60 minutes, which match
+  those legs' real runtimes — authored into a field that reads minutes. As written they mean 30
+  and 60 HOURS, i.e. 16 of 44 legs carry a "timeout" LOOSER than the 90-minute default it was
+  supposed to tighten. GitHub's 6-hour hosted-runner ceiling catches them first, so the practical
+  effect is a hung NetBSD leg burning ~6h and holding every `needs:` job behind it, instead of
+  failing at the intended 60m.
+  FIX: 3600 -> 60, 1800 -> 30, then a test asserting every declared timeout is within a sane band
+  (say 5..360) so a seconds value can never be authored again — the band is the ratchet, the
+  renumbering alone would just wait to be redone.
+  MEASURE FIRST: 60m may be too tight for the NetBSD cross legs. Observed on run 33106606966
+  (2026-08-27) they ran 67-71 min; the release run 33094982145 an hour earlier had them at ~50-55
+  min. Take the max over a few runs and add headroom rather than pinning to the seconds-value
+  someone happened to write.
+  MY ERROR, recorded so the next reader does not repeat it: I read `3600` as seconds and told the
+  user three legs were "5 minutes from timing out" during the release build. They had ~59 hours of
+  headroom. The instrument (my assumed unit) was wrong, not the legs — check how a field is
+  CONSUMED before reasoning about its value.
+
 ### Known shipped-artifact bugs
 
 - **`dragonflybsd-amd64` leg red — UPSTREAM VM-IMAGE infra, NOT our code (2026-07-18,
