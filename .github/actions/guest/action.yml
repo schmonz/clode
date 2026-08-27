@@ -193,8 +193,30 @@ runs:
             # recent version of bash is already installed" -> exit 1, tag run
             # 2026-07-10) — tolerate it; a genuinely missing tool fails
             # loudly at its first use in the script.
-            [ -z "$PKGS" ] || sudo mport install $PKGS \
-              || echo "guest: mport exit tolerated (already-installed reports nonzero)" ;;
+              # TOLERATE ONLY WHAT WE MEANT TO TOLERATE. mport exits nonzero for an
+              # already-installed package, so this used to swallow EVERY nonzero exit —
+              # including a failed download. On 2026-08-26 the mirror was unreachable
+              # ("Fetch error: https://www.midnightbsd.org/ftp/..." x7), the swallow hid
+              # it, and the leg died two commands later with `/bin/sh: node: not found`
+              # and exit 127 — naming the consequence instead of the cause.
+              #
+              # The netbsd branch above had already written this exact prediction down:
+              # "that would mask the missing interpreter and fail later as node: not
+              # found (exactly how the midnightbsd leg failed)". A diagnosis we made and
+              # did not act on.
+              if [ -n "$PKGS" ]; then
+                if out=$(sudo mport install $PKGS 2>&1); then
+                  printf '%s\n' "$out"
+                else
+                  printf '%s\n' "$out"
+                  if printf '%s' "$out" | grep -qiE 'already installed'; then
+                    echo "guest(midnightbsd): nonzero is the already-installed report — tolerated"
+                  else
+                    echo "guest(midnightbsd): mport FAILED, and not for the already-installed reason" >&2
+                    exit 1
+                  fi
+                fi
+              fi ;;
           haiku)
             # Single-user system: the runner IS the (only) user; no sudo.
             #
@@ -226,12 +248,54 @@ runs:
             # IPS: per-package so one run reports EVERY missing name (exit 4 =
             # already installed / nothing to do — fine). The script then fails
             # loudly at the first missing tool.
+            # It used to only ECHO a miss and carry on, trusting "the script then fails
+            # loudly at the first missing tool" — the same deferral that made midnightbsd
+            # report `node: not found` instead of a fetch error. Collect, then fail HERE,
+            # where the cause is.
+            omnios_missed=''
             for p in $PKGS; do
-              sudo pkg install -q "$p" || [ $? -eq 4 ] || echo "guest: OMNIOS-PKG-MISS: $p" >&2
+              sudo pkg install -q "$p" || [ $? -eq 4 ] || omnios_missed="$omnios_missed $p"
             done
+            if [ -n "$omnios_missed" ]; then
+              echo "guest(omnios): pkg install FAILED for:$omnios_missed" >&2
+              exit 1
+            fi
             # ooce packages land outside the default PATH
             PATH="/opt/ooce/bin:$PATH"; export PATH ;;
         esac
+        # VERIFY WHAT WE ASKED FOR IS ACTUALLY THERE, on every platform, right here where
+        # the cause is knowable. Three legs failed today because a package step reported
+        # success (or was told to ignore failure) and the absence surfaced later as a bare
+        # `command: not found` — dragonfly, midnightbsd and netbsd-amd64, three different
+        # package managers, same shape. The install branches above now fail honestly; this
+        # catches the remaining case where a manager exits 0 and installs nothing.
+        #
+        # THE NAME MAP IS ABOUT PACKAGING SPELLINGS, NOT PLATFORMS. The same tool is
+        # `gmake` on the BSDs and `developer/build/gnu-make` under IPS; node is `nodejs20`
+        # on Haiku and `runtime/nodejs` on omnios. Anything unmapped is checked under its
+        # own last path component, which is right for cmake/git/bash everywhere.
+        if [ -n "$PKGS" ]; then
+          guest_missing=''
+          for p in $PKGS; do
+            case "$p" in
+              *cmake*)                cmd=cmake ;;
+              *gnu-make*|gmake)       cmd=gmake ;;
+              make)                   cmd=make ;;
+              *bash*)                 cmd=bash ;;
+              *git*)                  cmd=git ;;
+              *node*)                 cmd=node ;;
+              *)                      cmd=$(basename "$p") ;;
+            esac
+            command -v "$cmd" >/dev/null 2>&1 || guest_missing="$guest_missing $cmd($p)"
+          done
+          if [ -n "$guest_missing" ]; then
+            echo "guest: package step reported success but these are NOT on PATH:$guest_missing" >&2
+            echo "guest: that is a package-repo or naming problem, not a build failure — do not" >&2
+            echo "guest: read the next error as the cause." >&2
+            exit 1
+          fi
+          echo "guest: verified on PATH -> $PKGS"
+        fi
         ${{ inputs.script }}
 
     # ---- vmactions backend: the platforms cross-platform-actions lacks
