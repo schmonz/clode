@@ -1,0 +1,39 @@
+#!/bin/sh
+# Keep the local toolchain in step with .tool-versions, without anyone remembering to.
+#
+# WHY: every time Renovate bumps nodejs in .tool-versions, `node` stops resolving in this
+# checkout until someone runs `asdf install` by hand. That happened twice on 2026-08-27
+# alone (24.19.0, then 24.20.0), each time as a confusing "No version is set for command
+# node" in the middle of unrelated work.
+#
+# Runs after merge/pull and after checkout (see post-checkout, which execs this). It only
+# acts when .tool-versions actually changed, only installs versions that are missing, and
+# NEVER fails the git operation — a git hook that can block a pull is worse than the
+# problem it solves.
+set -u
+
+# The "from" ref: git sets ORIG_HEAD on merge/pull. post-checkout has no ORIG_HEAD,
+# so it passes the previous HEAD as $1 — taking it as an argument is what makes one
+# copy of this logic serve both hooks.
+from_ref="${1:-ORIG_HEAD}"
+git rev-parse --verify --quiet "$from_ref" >/dev/null 2>&1 || exit 0
+changed=$(git diff-tree -r --name-only --no-commit-id "$from_ref" HEAD 2>/dev/null || true)
+case "$changed" in
+  *.tool-versions*) ;;
+  *) exit 0 ;;
+esac
+
+command -v asdf >/dev/null 2>&1 || exit 0
+
+while read -r plugin version _rest; do
+  [ -n "${plugin:-}" ] || continue
+  case "$plugin" in \#*) continue ;; esac
+  if asdf list "$plugin" 2>/dev/null | tr -d ' *' | grep -qx "$version"; then
+    continue
+  fi
+  echo "tool-versions: installing $plugin $version (new in .tool-versions)"
+  asdf install "$plugin" "$version" || \
+    echo "tool-versions: 'asdf install $plugin $version' failed — run it by hand" >&2
+done < .tool-versions
+
+exit 0

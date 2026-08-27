@@ -3,32 +3,54 @@
   "extends": [
     "config:recommended"
   ],
-  "description": "Dependency doctrine (2026-07-14): pin versions (rangeStrategy pin), pin the behaviors we rely on with tests, then bump as eagerly as possible — behind GREEN CI, so we are always first to know when something breaks. automerge waits for tests by DEFAULT: there is deliberately NO global ignoreTests (it previously merged BEFORE CI, inverting the doctrine — breakage landed on main instead of being caught in the PR). The one exception to eagerness is npm supply chain (see the npm rule): tests cannot catch a malicious publish, so time is the guard.",
+  "description": "Dependency doctrine (2026-07-14): pin versions (rangeStrategy pin), pin the behaviors we rely on with tests, then bump as eagerly as possible \u2014 behind GREEN CI, so we are always first to know when something breaks. automerge waits for tests by DEFAULT: there is deliberately NO global ignoreTests (it previously merged BEFORE CI, inverting the doctrine \u2014 breakage landed on main instead of being caught in the PR). The one exception to eagerness is npm supply chain (see the npm rule): tests cannot catch a malicious publish, so time is the guard.",
   "automerge": true,
   "rangeStrategy": "pin",
   "dependencyDashboard": true,
   "packageRules": [
     {
-      "description": "npm supply chain is a DIFFERENT threat model: tests catch breakage, not a malicious/compromised publish (it passes every test and still backdoors). Time is the only defense — a bad release is typically yanked within days. Hold every npm update 7 days before it is eligible to automerge. The deliberate exception to eager bumping.",
-      "matchDatasources": ["npm"],
+      "description": "npm supply chain is a DIFFERENT threat model: tests catch breakage, not a malicious/compromised publish (it passes every test and still backdoors). Time is the only defense \u2014 a bad release is typically yanked within days. Hold every npm update 7 days before it is eligible to automerge. The deliberate exception to eager bumping.",
+      "matchDatasources": [
+        "npm"
+      ],
       "minimumReleaseAge": "7 days"
     },
     {
-      "description": "The age hold is npm-ONLY (see the npm rule). GitHub-Actions/Docker pins are supply-chain HARDENING — pinning a floating @v6 to an exact version/digest is the safe direction, not a freshness-chasing bump — so an age gate does them no good and actively harms: PR #20 bundled ~20 actions into one rolling `pin dependencies` batch whose age window reset every time ANY of the 20 released, so it never aged and sat open 10 days. Zero the hold explicitly for these datasources so a green-CI action/docker pin or bump automerges immediately.",
-      "matchDatasources": ["github-tags", "github-releases", "docker"],
+      "description": "The age hold is npm-ONLY (see the npm rule). GitHub-Actions/Docker pins are supply-chain HARDENING \u2014 pinning a floating @v6 to an exact version/digest is the safe direction, not a freshness-chasing bump \u2014 so an age gate does them no good and actively harms: PR #20 bundled ~20 actions into one rolling `pin dependencies` batch whose age window reset every time ANY of the 20 released, so it never aged and sat open 10 days. Zero the hold explicitly for these datasources so a green-CI action/docker pin or bump automerges immediately.",
+      "matchDatasources": [
+        "github-tags",
+        "github-releases",
+        "docker"
+      ],
       "minimumReleaseAge": "0 days"
     },
     {
       "description": "solaris vmactions confs mix toolchain variants (gcc/clang) into one namespace; track only the gcc line the leg is built around.",
-      "matchDepNames": ["solaris-guest"],
+      "matchDepNames": [
+        "solaris-guest"
+      ],
       "allowedVersions": "/gcc/"
+    },
+    {
+      "description": "THE TOOLCHAIN NODE IS ONE DEPENDENCY PINNED IN THREE PLACES, and Renovate sees three. .tool-versions (asdf), ci.yml's `container: image: node:<v>-alpine` (docker), and docker-loop/Dockerfile.xfuse's `FROM node:<v>-bookworm-slim` (docker) must always name the same version. On 2026-08-27 a .tool-versions bump to 24.20.0 landed alone: both node-shim-oracle jobs then refused to run, correctly, because that job diffs a MUSL engine against a reference node and a drifted reference measures libc rather than shim fidelity. Dockerfile.xfuse turned out to have been silently skewed as well. Group them so one PR moves all three. test/node-pins-agree.test.cjs gates the same invariant, because a hand-edit or a partially-merged PR can still split what this groups. package.json engines.node is EXCLUDED deliberately: that is the node a built naude EMBEDS, on its own major, and folding it in here would force two unrelated things to move together.",
+      "matchDepNames": [
+        "node",
+        "nodejs"
+      ],
+      "matchDatasources": [
+        "node-version",
+        "docker"
+      ],
+      "groupName": "node toolchain (asdf + oracle container + xfuse image)"
     }
   ],
   "customManagers": [
     {
       "description": "ci-guest-version pins in the tjs leg manifest, annotated in place with `// renovate: datasource=... depName=...` on the preceding line. JSONata transforms proven against the live APIs 2026-07-11.",
       "customType": "regex",
-      "fileMatch": ["^scripts/tjs-legs\\.mjs$"],
+      "fileMatch": [
+        "^scripts/tjs-legs\\.mjs$"
+      ],
       "matchStrings": [
         "// renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: versioning=(?<versioning>\\S+))?\\s*\\n\\s*'ci-guest-version': '(?<currentValue>[^']+)'"
       ]

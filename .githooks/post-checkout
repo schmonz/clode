@@ -1,0 +1,7 @@
+#!/bin/sh
+# Branch switches change .tool-versions too. Same logic as post-merge, invoked with the
+# previous HEAD as an argument — post-checkout has no ORIG_HEAD to read.
+# Args: <prev-HEAD> <new-HEAD> <branch-flag>
+set -u
+[ "${3:-0}" = "1" ] || exit 0          # file checkouts are not branch switches
+exec "$(dirname "$0")/post-merge" "${1:-}"
