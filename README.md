@@ -6,18 +6,13 @@ When your OS isn't popular or your computer isn't recent, how do you run Claude 
 
 ```sh
 mv clode-* clode && chmod +x clode
-for i in darwin-arm64 darwin-ppc netbsd-sparc linux-s390x windows-x64; do
+./clode build --list-targets
+for i in macos-arm64 macos-ppc netbsd-sparc linux-s390x windows-amd64; do
   ./clode build --target $i --out quaude-$i
 done
 ```
 
-`quaude-darwin-arm64` and `quaude-windows-x64` might not be that interesting. Claude Code already ships for those platforms. But `quaude-darwin-ppc`, `quaude-netbsd-sparc`, `quaude-linux-s390x`?
-
-For the complete list of targets:
-
-```sh
-clode build --list-targets
-```
+`quaude-macos-arm64` and `quaude-windows-amd64` might not be that interesting. Claude Code already ships for those platforms. But `quaude-macos-ppc`, `quaude-netbsd-sparc`, `quaude-linux-s390x`?
 
 Have fun.
 
