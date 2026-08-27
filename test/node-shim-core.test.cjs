@@ -601,7 +601,29 @@ console.log(enc({
   const r = runLoader(f);
   assert.strictEqual(r.status, 0, r.stderr);
   const tjs = JSON.parse(r.stdout.trim());
-  assert.deepStrictEqual(tjs.constants, nodeRaw.constants);
+  // ZLIB_VERNUM IDENTIFIES A BUILD, NOT A BEHAVIOUR, and comparing it couples this row
+  // to whichever zlib the host node happens to bundle. Node 24.18.1 -> 24.19.0 moved it
+  // 0x1310 -> 0x1321 and reddened both oracle jobs on a commit whose only change was
+  // dependency bumps. Nothing about the shim got worse.
+  //
+  // Checked before excluding it, rather than assumed: the 2.1.246 bundle references
+  // ZLIB_VERNUM in ZERO of its 1,409 modules, so no upstream behaviour depends on the
+  // value. Reporting node's number instead of our own would be claiming a zlib we do not
+  // link — a lie that would also break again at the next bump.
+  //
+  // Everything else in the table is still compared exactly, including the Z_MAX_CHUNK
+  // non-finite case this row was originally written to catch.
+  const VERSION_IDENTIFIERS = ['ZLIB_VERNUM'];
+  const strip = (o) => { const c = { ...o }; for (const k of VERSION_IDENTIFIERS) delete c[k]; return c; };
+  assert.deepStrictEqual(strip(tjs.constants), strip(nodeRaw.constants));
+  // Both sides must still HAVE it, and ours must be a plausible zlib version word —
+  // dropping the key entirely, or reporting nonsense, is a different bug than drifting.
+  for (const k of VERSION_IDENTIFIERS) {
+    assert.strictEqual(typeof tjs.constants[k], 'number', `shim lost ${k}`);
+    assert.strictEqual(typeof nodeRaw.constants[k], 'number', `host node lost ${k}`);
+    assert.ok(tjs.constants[k] >= 0x1200 && tjs.constants[k] <= 0x2000,
+      `${k}=${tjs.constants[k]} is not a plausible zlib version word`);
+  }
   assert.strictEqual(tjs.createGunzip, 'function');
   assert.strictEqual(tjs.gunzipSync, 'function');
 });
