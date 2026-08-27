@@ -940,6 +940,26 @@ well-tested, and reasonably fast** as we can possibly make it."
   Not a variation, by design: `netbsd-sparc` is not a cross leg at all but the own-qemu TCG
   guest (`guest-platform: qemu-netbsd-sparc`, timeout 3600, no guest-packages) — a third family
   beside the cpa VM legs (amd64, arm64).
+- **`cross-file` is a required input wearing an optional's clothes — drop the darwin-ppc default
+  (queued 2026-08-27, user: "sounds pretty nutty from over here").** `.github/actions/build-leg/
+  action.yml:62` declares `cross-file` with `default: "scripts/darwin-ppc.toolchain.cmake"`, so
+  an `exec=cross` leg that forgets the field silently inherits a PowerPC-Darwin toolchain.
+  Surfaced while repointing netbsd-m68k: dropping the field there — the obvious way to "use the
+  default" — would have cross-built m68k against darwin-ppc's toolchain.
+  CORRECTION to that commit message (3d0f53f/710c7c9), which called it "a silent wrong answer,
+  not an error": it is NOT silent. The file hardcodes `CMAKE_C_COMPILER powerpc-apple-darwin8-gcc`,
+  which is absent on a NetBSD cross leg, so cmake fails its compiler check. The failure is LOUD
+  but baffling — a NetBSD leg reporting a missing PowerPC Darwin compiler, three layers from the
+  cause. Confusing, not dangerous. The entry is worth doing on clarity grounds, not safety.
+  MEASURED blast radius: 17 legs set `cross-file` explicitly, 27 omit it — but the value is only
+  read on the `exec=cross` path, and every omitting leg is native/guest/qemu EXCEPT `darwin-ppc`
+  itself. So the default serves exactly ONE leg, at the cost of making the input look optional to
+  every cross leg written from here on.
+  FIX: `default: ""`; `darwin-ppc` names `scripts/darwin-ppc.toolchain.cmake` explicitly like the
+  other 17; the `exec=cross` step fails early with a real message ("leg <x> is exec=cross and
+  declares no cross-file") when it is empty. Same ratchet shape as the m68k gate above: make the
+  invariant fail where the mistake is made, not where it surfaces.
+
 
 ### Known shipped-artifact bugs
 
