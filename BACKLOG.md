@@ -1756,6 +1756,40 @@ coincidence worth waiting on — it is the recurring outage this item exists to 
 (netbsd/freebsd/openbsd/omnios/midnightbsd/dragonfly amd64 = 20 minutes against maxima of
 2.8-5.6). That BOUNDS the damage; it does not fix the cause. Pinning is the fix.
 
+**REFRAMED 2026-08-27 — the choice is THREE-WAY, and pre-baking is probably the winner.**
+The user: "instead of pinning, maybe there's a facility for pre-baking for images with
+packages already installed? If that's better." There is, and it likely is.
+
+`VM_PRE_INSTALL_PKGS` in the vmactions builder confs (e.g.
+`vmactions/freebsd-builder/conf/freebsd-16.0.conf`) bakes packages into the image at build
+time — today it carries `tree`, `rsync`, `fusefs-sshfs`. Our five tools could sit beside
+them.
+
+**Why that beats pinning on the merits:** pinning makes the install RELIABLE; pre-baking
+REMOVES it. No dependency closure to size, no per-manager offline-install path across six
+package managers, no miss to handle, nothing fetched at build time at all. Every mechanism
+the pin store needs exists only because an install still happens.
+
+**Three shapes, with their costs:**
+
+1. **Upstream it** — PR the tools into each builder's conf. Cheapest if accepted, and
+   almost certainly declined: those images are general-purpose and `cmake`/`node` are our
+   build deps, not theirs.
+2. **Fork the builders, publish our own images** — full control, pin by digest, zero
+   runtime fetch. But it is eleven image pipelines, hundreds of MB each, and we would own
+   the base-OS refresh cadence. NOTE THE TRAP: Haiku moved to vmactions precisely BECAUSE
+   cross-platform-actions had no beta6 image. Fork, and we become the party who owes an
+   image when Haiku ships beta7.
+3. **Bake once into a layer we own** — boot the stock image, install the five packages,
+   snapshot, reuse. Pre-baking without forking the builder, and the same artifact shape as
+   the templates blob we already ship. Probably the target.
+
+**PHASE 1'S MEASUREMENT STILL DECIDES, and its question is now bigger.** It was "how big a
+pin store?"; it is now "is the content small enough that pinning is simpler than baking?".
+Small closures favour pinning; large ones favour baking decisively, because image size
+stops mattering once the alternative is fetching that same content on every run. Do not
+pick before the numbers.
+
 ## ★★ Our own package pins — stop betting a release on 13 third-party repos (2026-08-25)
 
 **The user, on the dragonfly hang:** "I wonder if it's a package-repo communication
