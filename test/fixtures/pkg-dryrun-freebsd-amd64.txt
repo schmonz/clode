@@ -1,0 +1,50 @@
+New packages to be INSTALLED:
+	c-ares: 1.34.6
+	cmake: 3.31.12
+	cmake-core: 3.31.12_3
+	cmake-doc: 3.31.12
+	cmake-man: 3.31.12
+	corepack: 0.35.0
+	expat: 2.8.2
+	git: 2.54.0
+	gmake: 4.4.1
+	googletest: 1.16.0
+	hdr_histogram: 0.11.10
+	icu: 76.1,1
+	jsoncpp: 1.9.6_1
+	libada: 3.4.4
+	libedit: 3.1.20260512,1
+	libffi: 3.6.0
+	libnghttp3: 1.17.0
+	libngtcp2: 1.24.0
+	libuv: 1.52.1
+	llhttp: 9.4.2
+	merve: 1.2.2_1
+	mpdecimal: 4.0.1
+	nbytes: 0.1.4
+	node: 24.18.0_3
+	node24: 24.18.0
+	p5-Authen-SASL: 2.1900
+	p5-Crypt-URandom: 0.54
+	p5-Digest-HMAC: 1.05
+	p5-Error: 0.17030
+	p5-IO-Socket-SSL: 2.099
+	p5-MIME-Base32: 1.303
+	p5-MIME-Base64: 3.16
+	p5-Mozilla-CA: 20250602
+	p5-Net-SSLeay: 1.94
+	p5-URI: 5.34
+	pcre2: 10.47_1
+	perl5: 5.42.2
+	python312: 3.12.13_3
+	readline: 8.3.3
+	rhash: 1.4.6
+	simdjson: 4.6.4
+	simdutf: 9.0.0
+	sqlite3: 3.53.3,1
+	uvwasi: 0.0.23
+
+Number of packages to be installed: 44
+
+The process will require 577 MiB more space.
+115 MiB to be downloaded.
