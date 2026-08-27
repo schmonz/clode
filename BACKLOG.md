@@ -918,31 +918,28 @@ well-tested, and reasonably fast** as we can possibly make it."
   - *reasonably fast* — cross-build over in-guest TCG where possible (cross = minutes vs TCG
     = ~hour); cache toolchains (machine+src-rev) + tjs (source-hash); tmpfs for disk-bound loops.
 
-- **netbsd-m68k is the last leg with a bespoke cross-file — repoint it and delete the file.**
-  Found by a 2026-08-27 uniformity audit of all 15 NetBSD legs, prompted by the user asking
-  whether any variation besides the recently-squelched one survived. Result: the 12 cross legs
-  are uniform on EVERY field (`guest-version` 10.1, `netbsd-src` netbsd-10, `no-exec` true,
-  `verify` none, wasm/ffi/mimalloc off, `timeout` 3600, `floor` 10.1, `tier2` true, no
-  soft-fail) except two. `atomic-shim` varies legitimately and is documented at
-  `scripts/tjs-legs.mjs:228` (the `__atomic_*_8` link wall; off where the arch has native
-  64-bit atomics). `cross-file` is the leftover: 11 legs share `scripts/netbsd.toolchain.cmake`
-  while `netbsd-m68k` alone still names `scripts/netbsd-m68k.toolchain.cmake`.
-  The generic file's own header states it "serves every NetBSD MACHINE_ARCH — the fleet adds an
-  arch by naming a port, not by writing a toolchain file". Stripped of comments the two differ
-  in exactly ONE substantive way: m68k hardcodes `set(_triple m68k--netbsdelf)` and
-  `CMAKE_SYSTEM_PROCESSOR m68k`, where the generic file discovers both by globbing
-  `${_tooldir}/bin/*--netbsd*-gcc` — and that regex's worked example in the comment is literally
-  `m68k--netbsdelf`. The generic file was written to subsume this one; the deletion never landed.
-  FIX: set `'cross-file'` on the m68k leg to the generic path (or just drop the field if it
-  defaults), delete `scripts/netbsd-m68k.toolchain.cmake`, let the leg prove it. The ONE risk
-  that only a real run settles: the generic file `FATAL_ERROR`s unless it finds exactly one
-  `*--netbsd*-gcc` in the tooldir, so a m68k tooldir shipping a second gcc would trip it.
-  Deliberately NOT done during the 0.20260827.1 release — a toolchain swap must be proven by
-  running the leg, not reasoned about.
-  Note for whoever picks this up: sparc is NOT part of this. `netbsd-sparc` is not a cross leg
-  at all — it is the own-qemu TCG guest (`guest-platform: qemu-netbsd-sparc`, timeout 3600, no
-  guest-packages), a third family alongside the cpa VM legs (amd64, arm64). That difference is
-  by design and is not a variation to squelch.
+- **RESOLVED 2026-08-27 — netbsd-m68k was the last leg with a bespoke cross-file; now gated.**
+  Found by a uniformity audit of all 15 NetBSD legs, prompted by the user asking whether any
+  variation besides the recently-squelched one survived. The 12 cross legs agreed on EVERY
+  field except two: `atomic-shim` (legitimate, documented at `scripts/tjs-legs.mjs:228` — the
+  `__atomic_*_8` link wall, off where the arch has native 64-bit atomics) and `cross-file`,
+  where m68k alone still named `scripts/netbsd-m68k.toolchain.cmake`. Comments stripped, that
+  file differed from the generic one in exactly one substantive way: it hardcoded
+  `set(_triple m68k--netbsdelf)` where the generic file discovers the triple by globbing
+  `${_tooldir}/bin/*--netbsd*-gcc` — and that regex's own worked example is `m68k--netbsdelf`.
+  It was written to be subsumed and the deletion never landed.
+  FIXED: the leg now names `scripts/netbsd.toolchain.cmake` (it could NOT simply drop the
+  field — `.github/actions/build-leg/action.yml:62` defaults `cross-file` to the darwin-ppc
+  file for back-compat, so an omitted field would have silently cross-built m68k with a darwin
+  toolchain). `scripts/netbsd-m68k.toolchain.cmake` deleted; `test/tjs-darwin-poll-fixup.test.cjs`
+  repointed at the generic file (it only needs SOME non-darwin cross-file to prove the
+  darwin-poll guard trips).
+  RATCHET: `test/tjs-legs.test.cjs` now asserts every NetBSD cross leg shares the one generic
+  file, so the next bespoke file fails a test instead of surviving until someone hand-audits.
+  Proven to fail when violated (it names the offending leg), not merely observed to pass.
+  Not a variation, by design: `netbsd-sparc` is not a cross leg at all but the own-qemu TCG
+  guest (`guest-platform: qemu-netbsd-sparc`, timeout 3600, no guest-packages) — a third family
+  beside the cpa VM legs (amd64, arm64).
 
 ### Known shipped-artifact bugs
 

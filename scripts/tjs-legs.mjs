@@ -673,7 +673,7 @@ const LEGS = [
   // out of scope). atomic-shim on (m68k lacks 8-byte libatomic, like sparc/ppc).
   { leg: 'netbsd-m68k', os: 'ubuntu-latest', 'guest-arch': 'm68k',
     'netbsd-src': 'netbsd-10', 'netbsd-machine': 'atari',
-    'cross-file': 'scripts/netbsd-m68k.toolchain.cmake',
+    'cross-file': 'scripts/netbsd.toolchain.cmake',
     'atomic-shim': true, tier2: true, verify: 'none', 'no-exec': true,
     floor: '10.1', 'guest-version': '10.1',
     publish: true, ci: true, 'soft-fail': true, timeout: 3600,

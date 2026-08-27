@@ -178,7 +178,7 @@ test('the darwin-poll knob refuses a non-darwin target, loudly and early', () =>
       encoding: 'utf8',
       env: { ...process.env,
              CLODE_TJS_DARWIN_POLL: '1',
-             CLODE_TJS_CROSS_FILE: 'scripts/netbsd-m68k.toolchain.cmake' },
+             CLODE_TJS_CROSS_FILE: 'scripts/netbsd.toolchain.cmake' },
     });
   } catch (e) { err = e; }
   assert.ok(err, 'expected a non-zero exit');

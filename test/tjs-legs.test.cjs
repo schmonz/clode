@@ -472,7 +472,8 @@ test('netbsd-m68k leg: NetBSD build.sh cross, tier-2 built-not-run', () => {
   assert.strictEqual(l['atomic-shim'], true, 'm68k lacks 8-byte libatomic');
   assert.notStrictEqual(l['netbsd-src'], undefined, 'must pin a NetBSD src rev for build.sh');
   assert.ok(l['netbsd-machine'], 'must name an m68k NetBSD port for build.sh -m');
-  assert.ok(/m68k/.test(l['cross-file'] || ''), 'must point at the m68k toolchain file');
+  assert.strictEqual(l['cross-file'], 'scripts/netbsd.toolchain.cmake',
+    'fleet legs use the GENERIC toolchain (triple discovered from the tooldir)');
   assert.strictEqual(l.floor, '10.1');
   // No cross-image: this cross leg builds its toolchain via build.sh, not a
   // docker image.
@@ -490,6 +491,23 @@ test('netbsd-sparc64 fleet leg: generic toolchain, 64-bit BE, tier-2 built-not-r
   assert.strictEqual(l.verify, 'none');
   assert.strictEqual(l.tier2, true);
   assert.notStrictEqual(l['netbsd-src'], undefined);
+
+// RATCHET (2026-08-27): netbsd-m68k was the last leg still naming a bespoke
+// toolchain file, months after scripts/netbsd.toolchain.cmake was written to
+// subsume every per-arch one ("the fleet adds an arch by naming a port, not by
+// writing a toolchain file"). Nothing failed — the two files were equivalent
+// bar a hardcoded triple — so the leftover was invisible until a hand audit
+// went looking. This asserts the invariant directly, so the NEXT bespoke file
+// fails here instead of surviving until someone thinks to check.
+test('every NetBSD cross leg shares the ONE generic toolchain file', () => {
+  const cross = legsFor('release').filter(
+    (l) => /^netbsd-/.test(l.leg) && l['cross-file'] !== undefined);
+  assert.ok(cross.length >= 12, `expected the NetBSD fleet, found ${cross.length}`);
+  const odd = cross.filter((l) => l['cross-file'] !== 'scripts/netbsd.toolchain.cmake');
+  assert.deepStrictEqual(odd.map((l) => `${l.leg}=${l['cross-file']}`), [],
+    'the generic file discovers the triple from the tooldir and serves every '
+    + 'MACHINE_ARCH — a per-arch toolchain file needs a written reason here first');
+});
 });
 
 // Both run per-push for early warning on the build.sh cross path; they differ on
