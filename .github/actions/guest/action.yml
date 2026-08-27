@@ -312,7 +312,7 @@ runs:
     # are copied into the VM. One step per OS — `uses:` cannot be dynamic.
     - name: Run the guest script (vmactions solaris VM)
       if: inputs.platform == 'solaris'
-      uses: vmactions/solaris-vm@v1.3.8
+      uses: vmactions/solaris-vm@v1.3.9
       with:
         release: ${{ inputs.version }}
         usesh: true
