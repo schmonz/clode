@@ -1051,6 +1051,32 @@ well-tested, and reasonably fast** as we can possibly make it."
   environment knob for a private CA on a client socket (node has `NODE_EXTRA_CA_CERTS`). An
   untrusted proxy cert fails visibly; it never falls back to a direct connection.
 
+  **Shape of the fix, and two rejected alternatives (2026-08-27).** The knob to build is
+  `NODE_EXTRA_CA_CERTS`, which **appends** to the bundled store rather than replacing it —
+  that is exactly what node does (it bundles Mozilla's store AND honours the env var), so
+  it is the match-upstream answer, and it needs no platform branches. The wall is unchanged:
+  it has to reach `tjs.connect('tls', ...)`, so it is the same engine-patch surface as the
+  https-through-proxy case above.
+  REJECTED — *shell out to `openssl` instead of bundling certs.* The host-applet pattern
+  (rg → ugrep/bfs) transfers to work that is batch, stateless, text-in/text-out and one-shot.
+  TLS is stateful, binary-framed, and inseparable from the socket the HTTP client owns;
+  `s_client` is a debugging tool, not a proxy. The disqualifier is the failure mode, not the
+  effort: a wrong `grep` on `PATH` yields visibly wrong search results, while a wrong
+  `openssl` on `PATH` yields a SILENT false "verified". Shelling out would move PATH
+  resolution inside the trust boundary. Functionality we can honestly translate; trust
+  anchors we cannot.
+  REJECTED — *read the system trust store instead of bundling.* Correct advice on a normal
+  distro (revocations arrive without a rebuild, corporate MITM roots are picked up for free),
+  and it inverts on our matrix. Tiger PPC's Keychain roots are from 2005 and cannot validate
+  today's TLS; NetBSD needs `mozilla-rootcerts` from pkgsrc and often has none; macOS and
+  Windows expose no file at all (Keychain / `CertOpenSystemStore`); FreeBSD, Debian and Alpine
+  each put the PEM somewhere different. That is a six-way per-platform branch whose failures
+  land precisely on the legs that justify this project — so here **bundling IS the portable
+  solution** and system-store is the special-casing the doctrine warns about. The real cost of
+  bundling is staleness on revocation, which our rebuild cadence and the `tls-cacert.pem`
+  drift test bound. Upstream's `--use-system-ca` is the eventual fidelity endgame; treat it as
+  a separate, expensive, per-platform project, well after the append knob exists.
+
 ### Known quaude runtime bugs
 
 - **quaude does not persist config across invocations — CREDS half open (NetBSD/arm64 at
