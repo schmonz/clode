@@ -2,6 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
@@ -31,3 +32,32 @@ test('no packages totals zero', () => {
   const out = execFileSync('sh', [SCRIPT, 'freebsd'], { encoding: 'utf8' });
   assert.match(out, /^PKGCLOSURE-TOTAL 0 0$/m);
 });
+
+// A real leg produces PKGCLOSURE lines from a manager query; each such run must end
+// with exactly one PKGCLOSURE-TOTAL line whose count matches the packages resolved.
+// A guest VM is not available here, so the manager binary (pkg_add, for the openbsd
+// branch) is faked on PATH with known dry-run-shaped output.
+test('a real query ends with exactly one accurate total line', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'guest-pkg-closure-'));
+  const fakePkgAdd = path.join(tmp, 'pkg_add');
+  fs.writeFileSync(
+    fakePkgAdd,
+    '#!/bin/sh\necho "installing cmake-3.28.1"\necho "installing ninja-1.11.1"\n'
+  );
+  fs.chmodSync(fakePkgAdd, 0o755);
+
+  const out = execFileSync('sh', [SCRIPT, 'openbsd', 'cmake', 'ninja'], {
+    encoding: 'utf8',
+    env: Object.assign({}, process.env, { PATH: tmp + path.delimiter + process.env.PATH }),
+  });
+
+  const lines = out.trim().split('\n');
+  const totalLines = lines.filter((l) => l.startsWith('PKGCLOSURE-TOTAL'));
+  const pkgLines = lines.filter((l) => l.startsWith('PKGCLOSURE ') && !l.startsWith('PKGCLOSURE-TOTAL'));
+
+  assert.strictEqual(totalLines.length, 1, 'exactly one total line');
+  assert.strictEqual(lines[lines.length - 1], totalLines[0], 'total line is last');
+  assert.strictEqual(pkgLines.length, 2, 'two package lines from the fake query');
+  assert.strictEqual(totalLines[0], 'PKGCLOSURE-TOTAL 2 0');
+});
+
