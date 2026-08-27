@@ -1076,6 +1076,42 @@ well-tested, and reasonably fast** as we can possibly make it."
 
 ### Platform wishlist (reachable-frontier tracker)
 
+- **vmactions platforms we do NOT run (surveyed 2026-08-27).** vmactions publishes 27 VM
+  actions; we already use eleven of them (alpine, dragonflybsd, freebsd, haiku, midnightbsd,
+  netbsd, omnios, openbsd, openindiana, solaris, plus debian/ubuntu via runners). Of the
+  fourteen we do not run, these are the ones worth wanting, in order. The rest —
+  `almalinux`, `rockylinux`, `openeuler` (same glibc and arch as legs we already have),
+  `ghostbsd`, `nextbsd`, `opnsense` (FreeBSD userlands over a kernel we already test) — are
+  recorded here as DELIBERATELY DECLINED: distro branding is not an axis, and every leg is a
+  standing tax. On 2026-08-27 the legs we already run cost three package-repo outages and
+  five dragonfly failures in a day.
+
+  - **hardenedbsd — the one that would teach us something.** FreeBSD with aggressive
+    exploit mitigations (W^X, PaX-style). quaude JITs nothing, but it DOES materialise and
+    exec a template from a mkdtemp, and build-leg already carries a note that cpa's OpenBSD
+    image mounts `/tmp` noexec. So this asks a real question — does a target survive a
+    genuinely hostile memory/exec policy? — rather than adding a logo. Highest value of the
+    fourteen.
+  - **reactos — Win32 without Windows.** Our windows-amd64 binary either runs on a
+    reimplemented kernel or names exactly which Win32 surface we depend on. Cheap to try, and
+    squarely on the "runs where Claude Code does not ship" thesis.
+  - **tribblix — a second illumos distro.** Mostly redundant with omnios/openindiana, but we
+    have already been bitten by illumos package NAMING (IPS paths, `developer/gcc14` vs
+    `gcc`), and a different distro of the same kernel is where that bites again.
+  - **hurd — glibc, plausibly buildable.** The only one of the fourteen with an existing
+    toehold in this repo: cosmocc's `hurd.c`-class misc funcs are already discussed at the
+    Cosmo APE leg. Unknown whether libuv has a usable backend there; that is the first
+    question, not the port.
+
+  **Probably unreachable, wanted only as knowledge:** `plan9` (not POSIX — no libc our
+  engine could target), `redox` (Rust OS, no C libc surface), `riscos`, `blissos` (Android
+  x86). Recorded so nobody re-derives why they are absent.
+
+  **SEQUENCING, which is the point of putting this here rather than acting on it:** none of
+  these before the package-pinning work lands. The existing matrix already fails on other
+  people's mirrors several times a day; adding legs before fixing that multiplies a known
+  tax. `hardenedbsd` first when the time comes.
+
 - **NetBSD hard-arch remainder:**
   - **vax** (32-bit LE) — dropped from the fleet: toolchain builds, but quickjs assumes IEEE
     floats and VAX has **non-IEEE** F/D/G format. Real fix = a soft-float IEEE mode for GCC's
