@@ -277,14 +277,22 @@ runs:
         if [ -n "$PKGS" ]; then
           guest_missing=''
           for p in $PKGS; do
-            case "$p" in
+            # Normalise the SPELLING first: IPS names are paths (developer/gcc14,
+            # ooce/runtime/node-22) and Haiku's are provides (cmd:gcc, cmd:make). Doing
+            # the match on the raw string got cmd:gcc, cmd:make and developer/gcc14
+            # wrong — checked against the REAL strings from scripts/tjs-legs.mjs, which
+            # is what I should have used the first time instead of a plausible-looking
+            # list I made up.
+            base=${p##*/}; base=${base#cmd:}
+            case "$base" in
               *cmake*)                cmd=cmake ;;
               *gnu-make*|gmake)       cmd=gmake ;;
               make)                   cmd=make ;;
               *bash*)                 cmd=bash ;;
               *git*)                  cmd=git ;;
               *node*)                 cmd=node ;;
-              *)                      cmd=$(basename "$p") ;;
+              gcc*)                   cmd=gcc ;;
+              *)                      cmd=$base ;;
             esac
             command -v "$cmd" >/dev/null 2>&1 || guest_missing="$guest_missing $cmd($p)"
           done
