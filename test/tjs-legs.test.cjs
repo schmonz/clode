@@ -75,9 +75,10 @@ test('release tier: every published leg is present (golden)', () => {
     'cosmo',
     'dragonflybsd-amd64',
     'freebsd-amd64', 'freebsd-arm64',
-    // haiku-x64 REMOVED 2026-08-24: demoted to publish:false while upstream has no
-    // beta6 guest image (haiku-builder#3). Not softened — dropped, per the rule in
-    // tjs-legs.mjs. Put it back the moment the leg can install packages again.
+    // haiku-x64 RESTORED 2026-08-27, exactly as the removal note said to: "put it back
+    // the moment the leg can install packages again". vmactions/haiku-vm v1.1.5 added
+    // r1beta6 and dropped r1beta5, so an image and a live package repo finally coexist.
+    'haiku-x64',
     'linux-arm64-musl', 'linux-armv7-musl', 'linux-loongarch64-musl',
     'linux-ppc64le-musl', 'linux-riscv64-musl', 'linux-s390x-musl',
     'linux-x64-musl', 'linux-x86-musl',
@@ -115,7 +116,12 @@ test('ci tier: every release OS is exercised, exactly one leg per VM OS', () => 
   // openindiana is NOT (it ships). Adopting it today would turn this red for
   // openindiana — which is a real finding, filed under the push-CI/tag-release matrix
   // item in BACKLOG, not something to fix in passing before a release.
-  const CI_EXEMPT = new Set(['openindiana', 'haiku']);
+  // haiku LEFT this set on 2026-08-27 when it went back to publish:true. Under the
+  // property this comment argues for — every OS with a PUBLISHING leg is exercised in CI
+  // — a shipping haiku must not be exempt, so it is not. openindiana remains the one leg
+  // that ships without CI coverage, which is still the real finding filed under the
+  // push-CI/tag-release matrix item in BACKLOG.
+  const CI_EXEMPT = new Set(['openindiana']);
   const wanted = [...releaseOSes].filter((o) => !CI_EXEMPT.has(o)).sort();
   assert.deepStrictEqual([...ciOSes].sort(), wanted);
   for (const os of ciOSes) {
@@ -666,10 +672,12 @@ test('golden ledger: the full run-target -> tier map', () => {
     'dragonflybsd-amd64': 0,
     'freebsd-amd64': 0,
     'freebsd-arm64': 0,
-    // haiku-x64 left this map 2026-08-24 with its demotion to publish:false: the
-    // ledger is of PUBLISHED run-targets, and a demoted leg publishes nothing.
-    // Its fidelity history stays in RESULTS.md (0/6, withdrawn) and comes back
-    // here when the leg does.
+    // haiku-x64 came back 2026-08-27 with the leg, exactly as the removal note said:
+    // "comes back here when the leg does". 0 is its honest floor coverage — the
+    // demotion withdrew its fidelity rows in RESULTS.md and nothing has re-driven them
+    // on the vmactions/beta6 backend yet. A number here would be a claim we have not
+    // earned; 0 says "shipping, not yet measured", which is true.
+    'haiku-x64': 0,
     'linux-arm64-musl': 0,
     'linux-armv7-musl': 0,
     'linux-loongarch64-musl': 0,

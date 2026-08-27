@@ -649,7 +649,26 @@ child_process uses. Recorded as SEEN AND UNATTRIBUTED rather than dismissed. If 
 recurs, it is load-sensitive (full suite only), which points at the harness rather than
 the assertion.
 
-## haiku-x64 — the GUEST IMAGE is a superseded release; upstream is tracking it (2026-08-24)
+## RESOLVED 2026-08-27 — haiku-x64 ships again, via a different provider
+
+**The blocker is gone, and it was never about this leg being flaky.** HaikuPorts deleted
+the r1beta5 ports tree while cross-platform-actions shipped only a beta5 image, so no
+image-plus-repo combination could work. vmactions/haiku-vm v1.1.5 (2026-08-27) added
+r1beta6 and dropped r1beta5 — the first moment both exist. The leg moved backends, kept
+its package list unchanged (`cmd:` is pkgman provides-syntax; beta6 has all of them:
+gcc 13.3, make 4.4, cmake 4.1, git 2.54, bash 5.3, nodejs20 20.15), and went back to
+`publish: true` with `ci: true` and NO soft-fail.
+
+**The watcher had a blind spot worth fixing:** scripts/haiku-image-watch.mjs checks only
+cross-platform-actions/haiku-builder, so it kept reporting "still blocked" while the
+blocker was being cleared at another provider. It answers a narrower question than its name
+suggests. Teach it both providers.
+
+**Fidelity is 0/6, honestly.** The demotion withdrew haiku's RESULTS.md rows and nothing has
+re-driven them on the new backend. The golden ledger says 0, which means "shipping, not yet
+measured" rather than a claim we have not earned.
+
+## (historical) haiku-x64 — the GUEST IMAGE is a superseded release; upstream is tracking it (2026-08-24)
 
 **CORRECTED 2026-08-24.** An earlier version of this entry said "HaikuPorts deleted
 the r1beta5 repo… deliberate, they cannot staff two releases' ports". That framing was

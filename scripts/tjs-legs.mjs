@@ -501,7 +501,19 @@ const LEGS = [
     // RESTORE THIS once a beta6 guest image exists or master ports install — see
     // the haiku-x64 BACKLOG entry, which records exactly where the last attempt got
     // to (pkgman add-repo is INTERACTIVE and defaults to no).
-    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: false, 'soft-fail': true, ci: false,  // cpa, KVM (a genuinely new OS rung)
+    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true,  // vmactions, r1beta6
+    // RESTORED 2026-08-27. The 2026-08-24 demotion was never about this leg being
+    // flaky — it was that HaikuPorts deleted the r1beta5 ports tree while
+    // cross-platform-actions shipped only a beta5 image, so there was no
+    // image-plus-repo combination that could work. vmactions/haiku-vm v1.1.5
+    // (2026-08-27) added r1beta6 and dropped r1beta5, which removes the blocker
+    // entirely. Haiku has shipped in every release for a while; it should ship in
+    // this one unless something forces otherwise, and nothing does now.
+    //
+    // soft-fail DROPPED with the restoration, deliberately: both tiers strip it from
+    // publishers anyway, and carrying it on a publishing leg is the silent-softening
+    // this repo's doctrine forbids. If Haiku turns out to be genuinely flaky on the
+    // new backend, the answer is another explicit demotion, not a softened gate.
     // ci:false (2026-08-25, user). While the blocker stands this leg can only
     // re-derive an answer already written down, at the cost of a runner slot per
     // push and a red job that reads as alarming. The QUESTION WE ACTUALLY WANT
