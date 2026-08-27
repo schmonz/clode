@@ -149,7 +149,7 @@ runs:
     # x64 Linux runners) and installs cpa.sh on the runner's PATH; the next
     # step executes inside the VM with the workspace rsynced both ways.
     - name: Start the guest VM (cross-platform-actions)
-      if: contains('netbsd freebsd openbsd dragonflybsd omnios midnightbsd haiku', inputs.platform)
+      if: contains('netbsd freebsd openbsd dragonflybsd omnios midnightbsd', inputs.platform)
       uses: cross-platform-actions/action@v1.4.0
       with:
         operating_system: ${{ inputs.platform }}
@@ -158,7 +158,7 @@ runs:
         cpu_count: 4
 
     - name: Run the guest script (in the VM via cpa.sh)
-      if: contains('netbsd freebsd openbsd dragonflybsd omnios midnightbsd haiku', inputs.platform)
+      if: contains('netbsd freebsd openbsd dragonflybsd omnios midnightbsd', inputs.platform)
       shell: cpa.sh {0}
       run: |
         set -e
@@ -334,6 +334,38 @@ runs:
           for p in ${{ inputs.packages }}; do
             pkg install -q "$p" || [ $? -eq 4 ] || echo "guest: OI-PKG-MISS: $p" >&2
           done
+        run: |
+          set -e
+          ${{ inputs.script }}
+
+    # Haiku moved PROVIDERS, not just versions. cross-platform-actions ships only
+    # haiku-r1beta5-x86-64.qcow2 (haiku-builder#3 still open) and HaikuPorts DELETED the
+    # r1beta5 ports tree — so the one image we could boot had no packages left to
+    # install. vmactions/haiku-vm v1.1.5 (2026-08-27) added r1beta6 and removed r1beta5,
+    # which is the first moment an image and a live package repo have existed at the same
+    # time. That is why this is a BACKEND change and not a version bump.
+    #
+    # The package list is UNCHANGED and was already correct: `cmd:` is pkgman's
+    # provides-syntax (bare `nodejs` reports "Name not found"), and beta6 carries every
+    # one — checked against HaikuDepot: gcc 13.3, make 4.4, cmake 4.1, git 2.54,
+    # bash 5.3, nodejs20 20.15.
+    #
+    # Failure policy matches the rest of the matrix after the phase-0 work: a failed
+    # install fails HERE, naming itself, instead of deferring to a later
+    # `command: not found`.
+    - name: Run the guest script (vmactions haiku VM)
+      if: inputs.platform == 'haiku'
+      uses: vmactions/haiku-vm@v1.1.5
+      with:
+        release: ${{ inputs.version }}
+        usesh: true
+        prepare: |
+          if [ -n "${{ inputs.packages }}" ]; then
+            pkgman install -y ${{ inputs.packages }} || {
+              echo "guest(haiku): pkgman install FAILED for: ${{ inputs.packages }}" >&2
+              exit 1
+            }
+          fi
         run: |
           set -e
           ${{ inputs.script }}

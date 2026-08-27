@@ -483,12 +483,12 @@ const LEGS = [
     wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, 'soft-fail': true, ci: true,  // cpa, KVM (mport packages)
     fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
                 note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run in-guest); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
-  { leg: 'haiku-x64', os: 'ubuntu-latest', 'guest-platform': 'haiku', 'guest-version': 'r1beta5',
+  { leg: 'haiku-x64', os: 'ubuntu-latest', 'guest-platform': 'haiku', 'guest-version': 'r1beta6',
     // HaikuPorts ships exactly ONE node: nodejs20 (user-verified, 2026-07-10)
     // — named explicitly; v20 clears the build floor (lowered to 20 for
     // OpenIndiana the same day). cmd:X provides-syntax for the rest
     // ("nodejs" alone: Name not found, #14).
-    'guest-packages': 'cmd:cmake cmd:gcc nodejs20 cmd:git cmd:make', floor: 'r1beta5',
+    'guest-packages': 'cmd:cmake cmd:gcc nodejs20 cmd:git cmd:make', floor: 'r1beta6',
     // publish:false TEMPORARILY (2026-08-24) — demoted, NOT softened. Haiku moved
     // ports to the current release when beta6 shipped, and cross-platform-actions
     // still ships only a beta5 image (haiku-builder#3 tracks the beta6 image;
