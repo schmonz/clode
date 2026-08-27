@@ -47,15 +47,46 @@ function toolchainPins() {
   return pins;
 }
 
-test('every toolchain node pin names the same version', () => {
+// THE INVARIANT IS NOT "ALL PINS ARE IDENTICAL", and assuming it was is what turned a
+// one-line fix into a broken main. Node 24.20.0 exists on nodejs.org — asdf installs it —
+// while Docker Hub's newest is node:24.19.0-alpine. Pointing the container at 24.20.0 to
+// "match" produced `manifest unknown: manifest unknown` and took both oracle jobs down.
+// Publishing is not simultaneous, so the container CANNOT always equal .tool-versions.
+//
+// What actually matters for the musl oracle is that its reference node is not AHEAD of the
+// toolchain and not far behind it: that job diffs a musl engine against a reference node,
+// so a reference from a different minor risks measuring libc or a runtime change rather
+// than shim fidelity. Same-minor is the honest requirement.
+function cmp(a, b) {
+  const pa = a.split('.').map(Number), pb = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) { if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0); }
+  return 0;
+}
+
+// EXACT EQUALITY, because ci.yml's oracle guard demands it:
+//     want=$(sed -n 's/^nodejs //p' .tool-versions); have=$(node -v)
+//     [ "$have" = "$want" ] || exit 1
+// so any difference at all takes both oracle jobs down.
+//
+// AND THE CONSTRAINT RUNS THE OTHER WAY from what I first assumed. Node 24.20.0 exists on
+// nodejs.org and asdf installs it, but Docker Hub's newest is node:24.19.0-alpine.
+// "Matching" by bumping the container to 24.20.0 produced `manifest unknown` and broke
+// main. Publishing is not simultaneous, so the pin that can move is the TOOLCHAIN one:
+// .tool-versions may not name a node that no container image exists for, because CI has
+// to run that exact node inside a container.
+//
+// That is why .github/renovate.json sources the .tool-versions nodejs pin from the DOCKER
+// datasource — image availability is the binding constraint, so it should drive the bump
+// rather than be dragged behind it.
+test('every toolchain node pin names exactly the same version', () => {
   const pins = toolchainPins();
   const versions = [...new Set(Object.values(pins))];
   assert.strictEqual(versions.length, 1,
-    'toolchain node pins disagree — a bump landed in some places and not others:\n'
+    "toolchain node pins disagree, and ci.yml's oracle guard requires exact equality:\n"
     + Object.entries(pins).map(([k, v]) => `    ${v}  ${k}`).join('\n')
-    + '\n  Bump them together. Renovate groups them (see .github/renovate.json), but a\n'
-    + '  hand-edit or a partially-merged PR can still split them, which is why this gate\n'
-    + '  exists rather than trusting the grouping alone.');
+    + '\n  If a bump is stuck because Docker Hub has not published the tag yet, the answer is\n'
+    + '  to wait rather than to move .tool-versions ahead — an image that does not exist\n'
+    + '  fails as "manifest unknown" before the job runs any of our code.');
 });
 
 test("naude's embedded node is deliberately NOT part of that set", () => {
