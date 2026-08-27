@@ -584,7 +584,17 @@ const LEGS = [
     'guest-version': '202510-build',
     'guest-packages': 'developer/build/cmake developer/build/gnu-make developer/versioning/git shell/bash runtime/nodejs',
     floor: '202510',
-    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, timeout: 120, 'soft-fail': true,  // vmactions (3rd illumos flavor)
+    wasm: 'off', mimalloc: 'off', ffi: 'off', publish: true, ci: true, timeout: 120,  // vmactions (3rd illumos flavor)
+    // ci:true ADDED 2026-08-27, and soft-fail DROPPED with it. This leg PUBLISHES, so
+    // under this repo's own rule — if we ship it, CI gates it — it must be exercised on
+    // push. It was not: release-only meant nothing touched it between tags, so an image
+    // or package-repo drift would surface DURING a release. On 2026-08-27 three
+    // third-party package repos misbehaved in one day, which is exactly how that goes
+    // wrong. test/tjs-legs.test.cjs had already written the finding down and exempted
+    // openindiana BY NAME; the rule is now a property with no exemptions.
+    //
+    // soft-fail was inert (both tiers strip it from publishers) but would have become
+    // real the moment `publish` came off — the same latent softening removed from haiku.
     fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
                 note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run in-guest); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
   // netbsd-sparc (the first truly-weird platform; cross-fuse A+B1+C): the sparc

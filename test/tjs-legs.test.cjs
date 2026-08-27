@@ -121,7 +121,18 @@ test('ci tier: every release OS is exercised, exactly one leg per VM OS', () => 
   // — a shipping haiku must not be exempt, so it is not. openindiana remains the one leg
   // that ships without CI coverage, which is still the real finding filed under the
   // push-CI/tag-release matrix item in BACKLOG.
-  const CI_EXEMPT = new Set(['openindiana']);
+  // THE RULE IS NOW A PROPERTY, WITH NO EXEMPTIONS: every OS with a PUBLISHING leg is
+  // exercised in CI. This set held openindiana and haiku, and the comment above argued
+  // at length that openindiana "should not be exempt at all" — while exempting it by
+  // name. That is a rule enforced by a list rather than by the rule.
+  //
+  // Both left on 2026-08-27: haiku when it returned to publish:true, openindiana when it
+  // gained ci:true, which it had never had. Release-only meant nothing touched
+  // openindiana between tags, so an image or package-repo drift would have surfaced
+  // DURING a release — and three third-party package repos misbehaved that same day.
+  //
+  // KEEP THIS EMPTY. An entry here means something ships without CI gating it.
+  const CI_EXEMPT = new Set([]);
   const wanted = [...releaseOSes].filter((o) => !CI_EXEMPT.has(o)).sort();
   assert.deepStrictEqual([...ciOSes].sort(), wanted);
   for (const os of ciOSes) {

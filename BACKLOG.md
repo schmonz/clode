@@ -2029,6 +2029,32 @@ NO import.meta at all (not even `url`), while a deserialized one does — see
 test/graph-runner.test.cjs, which pins the runner's own workaround for that.
 
 ## ★★★ NEXT: a clear, clean, well-factored, fully cross build (2026-08-24)
+### RESOLVED 2026-08-27 — "if we ship it, CI gates it" is now a property, not a list
+
+The push-CI/tag-release divergence item asked for this and it is done for the CI-coverage
+half. `CI_EXEMPT` in test/tjs-legs.test.cjs is EMPTY: every OS with a publishing leg is
+exercised on push, with no name allowed through.
+
+Both former entries were removed the same day. **haiku** returned to publish:true on the
+vmactions/beta6 backend. **openindiana** gained `ci: true`, which it had never had — it was
+release-only, so nothing touched it between tags and an image or package-repo drift would
+have surfaced DURING a release. On the day this changed, three third-party package repos
+misbehaved, which is exactly how that goes wrong.
+
+Both also had an inert `'soft-fail': true` that both tiers stripped from publishers. Inert
+until `publish` came off, at which point it would have silently softened a gate. Removed
+from both.
+
+**The lesson is the recurring one:** the test's own comment argued at length that
+openindiana "should not be exempt at all" and then exempted it by name. A rule that
+argues against its own exemption is a rule enforced by a list. Verified: a publishing leg
+with `ci: false` now turns the gate red.
+
+**Still open in the parent item:** the release tier publishes assets the push tier never
+builds in other respects (the 11 published-but-not-CI-gated legs counted on 2026-08-25 are
+now fewer, but the two matrices are still derived separately). This entry closes the
+CI-coverage hole, not the whole divergence.
+
 
 ### The case for explicit dependencies: naude broke and only CI could tell us (2026-08-25)
 
