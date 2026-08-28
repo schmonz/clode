@@ -1000,11 +1000,13 @@ function isSplitBundle(binpath) {
 
 // Turn each SAFE CJS require of a graph module into a static import plus a namespace binding.
 //
-// WHY. Upstream 2.1.248+ require()s graph modules from CJS wrappers. Under tjs that call lands
-// in the node-shim, which cannot resolve a path that exists only inside the provider — every
-// leg died on it. 253 of 278 such edges (2.1.250) point at a module with no static path back,
-// so an ordinary import closes no cycle and the engine resolves it natively. One import per
-// (module, target) pair; the call sites become references to its namespace.
+// WHY. Upstream 2.1.248+ require()s graph modules from CJS wrappers (in practice always as
+// import.meta.require(...), Bun's CJS-interop-from-ESM form — see the prefix handling below).
+// Under tjs that call lands in the node-shim, which cannot resolve a path that exists only
+// inside the provider — every leg died on it. 245 of 278 such edges (2.1.250, classified
+// incrementally so accepted edges can't compose into a new cycle) point at a module with no
+// static path back, so an ordinary import closes no cycle and the engine resolves it natively.
+// One import per (module, target) pair; the call sites become references to its namespace.
 function rewriteSafeRequires(sources, safeEdges) {
   if (!safeEdges.length) return sources;
   const byModule = new Map();
@@ -1019,7 +1021,13 @@ function rewriteSafeRequires(sources, safeEdges) {
     targets.forEach((target, i) => {
       const local = '__clodeReq' + i;
       head += 'import * as ' + local + ' from ' + JSON.stringify(target) + ';\n';
+      // Upstream 2.1.248+ emits Bun's CJS-interop-from-ESM form, import.meta.require(...), not
+      // bare require(...) — measured 358/358 occurrences on 2.1.250 carry the prefix. Consume it
+      // when present, LONGEST MATCH FIRST: replacing the bare form first would leave
+      // "import.meta." stranded in front of the new local binding (import.meta.__clodeReq0,
+      // which is undefined — the exact crash this fix addresses, `--help` died on it).
       for (const q of ['"', "'"]) {
+        t = t.split('import.meta.require(' + q + target + q + ')').join(local);
         t = t.split('require(' + q + target + q + ')').join(local);
       }
     });
