@@ -102,6 +102,36 @@ upstream depends on that.
    synchronously. Evaluating the dependency CLOSURE instead is not a smaller hammer: measured
    mean 375 and max 908 modules of 1814, i.e. design 1 wearing a different hat.
 
+**ENGINE EXPERIMENT RUN 2026-08-28 — `engine.namespaceOf` is NOT the cheap fix.** The reasoning
+that motivated it was: `JS_GetModuleNamespace` is a public QuickJS API (`quickjs.h:1191`) that
+`qjs.c` itself calls, so exposing it should be a binding onto an existing function — tens of
+lines of C — rather than new module semantics. That reasoning was sound and the conclusion was
+still wrong. Measured, so nobody re-runs it:
+
+- Added `tjs_namespaceOf` to `src/mod_engine.c` (`JS_ResolveModule` then `JS_GetModuleNamespace`)
+  plus the `src/js/core/engine.js` wrapper, as a real patch in `spike/quickjs/patches/`. NB the
+  build RESETS the vendor tree and replays the patch list, so editing
+  `~/.cache/clode/tjs-vendor/txiki.js` directly is silently discarded — it must be a patch file
+  registered in `scripts/build-tjs.mjs`, and `git diff` there needs `a/`+`b/` prefixes or
+  `git apply` rejects it.
+- Engine rebuilt; `namespaceOf` appears in `Object.keys(tjs.engine)`.
+- **After evaluation it works**: `ns after eval: object x=42`.
+- **Before evaluation it kills the engine** — no exception, no output, process gone. And even
+  the success path exits **134 (SIGABRT)**, so the binding also mismanages a reference.
+
+**Why that matters for the decision.** The whole point was to answer a require for a module that
+has NOT run (cyclic, mid-evaluation). A namespace that only exists post-evaluation answers the
+easy case we did not have. `JS_ResolveModule` links but does not put the module in a state where
+a namespace can be built, so the engine route is NOT a small binding: it needs the instantiate
+phase handled properly, cycle semantics thought through, and the refcounting right — in the
+module linker, which every leg depends on.
+
+Revised lean: the two options are closer than they looked, and the engine's advantage (small,
+general) was mostly imaginary. Before committing to either, the cheap next probe is whether
+QuickJS can build a namespace after an explicit INSTANTIATE without evaluate; if it cannot, the
+extraction route (emit each cyclic group as one module) becomes the pragmatic answer despite
+losing the verbatim property.
+
 **Where that leaves it — the fork is real and needs a decision:**
 - **Engine.** Teach the engine to answer a synchronous require of a mid-cycle module (a
   namespace with TDZ bindings rather than a hard error). Matches Bun's semantics; a txiki/
