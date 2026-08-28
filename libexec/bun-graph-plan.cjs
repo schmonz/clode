@@ -308,6 +308,62 @@ function classifyRequires(mods) {
   return { safe: safe, cyclic: cyclic };
 }
 
+// Strongly connected components of the POST-CONVERSION graph — static imports plus every edge
+// classifyRequires returns, safe and cyclic alike. The safe ones become static imports, so they
+// are real edges by the time anything runs; leaving them out would under-report the groups.
+// Tarjan, iterative: ~1800 nodes overflows a recursive walk.
+function cyclicGroups(mods) {
+  var names = [], name, i;
+  for (name of mods.keys()) names.push(name);
+  var idx = new Map();
+  for (i = 0; i < names.length; i++) idx.set(names[i], i);
+  var inGraph = function (s) { return idx.has(s); };
+
+  var adj = names.map(function (n) {
+    return depsOf(mods.get(n), inGraph).map(function (s) { return idx.get(s); });
+  });
+  var cls = classifyRequires(mods), e;
+  for (i = 0; i < cls.safe.length; i++) {
+    e = cls.safe[i];
+    adj[idx.get(e[0])].push(idx.get(e[1]));
+  }
+  for (i = 0; i < cls.cyclic.length; i++) {
+    e = cls.cyclic[i];
+    adj[idx.get(e[0])].push(idx.get(e[1]));
+  }
+
+  var N = names.length, num = new Int32Array(N).fill(-1), low = new Int32Array(N);
+  var on = new Uint8Array(N), st = [], comps = [], counter = 0, s;
+  for (s = 0; s < N; s++) {
+    if (num[s] !== -1) continue;
+    var work = [[s, 0]];
+    while (work.length) {
+      var fr = work[work.length - 1], v = fr[0], recursed = false;
+      if (fr[1] === 0) { num[v] = low[v] = counter++; st.push(v); on[v] = 1; }
+      while (fr[1] < adj[v].length) {
+        var w = adj[v][fr[1]++];
+        if (num[w] === -1) { work.push([w, 0]); recursed = true; break; }
+        if (on[w]) low[v] = Math.min(low[v], num[w]);
+      }
+      if (recursed) continue;
+      if (low[v] === num[v]) {
+        var comp = [], x;
+        do { x = st.pop(); on[x] = 0; comp.push(x); } while (x !== v);
+        if (comp.length > 1) comps.push(comp.sort(function (a, b) { return a - b; }));
+      }
+      work.pop();
+      if (work.length) {
+        var parent = work[work.length - 1][0];
+        low[parent] = Math.min(low[parent], low[v]);
+      }
+    }
+  }
+  comps.sort(function (a, b) { return a[0] - b[0]; });
+  return comps.map(function (c) {
+    return c.map(function (j) { return names[j]; });
+  });
+}
+
 if (typeof module === 'object' && module.exports) {
-  module.exports = { planGraph, planOrder, externalsOf, shimSource, depsOf, isPlausibleSpecifier, requiresOf, classifyRequires };
+  module.exports = { planGraph, planOrder, externalsOf, shimSource, depsOf, isPlausibleSpecifier, requiresOf, classifyRequires, cyclicGroups };
 }
