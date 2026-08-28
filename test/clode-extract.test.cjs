@@ -99,9 +99,17 @@ test('changed extractor-sig re-extracts even with an unchanged binary', () => {
     fs.appendFileSync(path.join(s.libexec, 'extract-claude-js.cjs'), '\n// clode-test touch\n');
     logs = run(s);
     assert.ok(logs.some((l) => l.includes('re-extracting JS')), 're-extract logged');
-    // .extractor-sig now reflects the changed extractor.
+    // .extractor-sig now reflects the changed extractor — AND the provider's platform,
+    // which joined the key so a linux carve of a version can never be served to a darwin
+    // build of the same version (test/extract-cache-key.test.cjs). This fixture's "binary"
+    // is not a real container, so it lands in the 'unknown' bucket.
     const { sigOf } = require('../libexec/clode-resolve.cjs');
-    const newSig = sigOf(path.join(s.libexec, 'extract-claude-js.cjs'));
+    const { cacheSignature } = require('../libexec/clode-extract.cjs');
+    const { providerPlatformOf } = require('../libexec/extract-claude-js.cjs');
+    const newSig = cacheSignature({
+      extractorSig: sigOf(path.join(s.libexec, 'extract-claude-js.cjs')),
+      providerPlatform: providerPlatformOf(s.bin),
+    });
     const stored = fs.readFileSync(path.join(s.cacheDir, '.extractor-sig'), 'utf8').trim();
     assert.strictEqual(stored, newSig);
   } finally { cleanup(s); }

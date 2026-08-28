@@ -18,7 +18,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const Module = require('node:module');
 const { sigOf } = require('./clode-resolve.cjs');
-const { extractToFile, extractGraphToFile, graphRunnerSource, isSplitBundle } = require('./extract-claude-js.cjs');
+const { extractToFile, extractGraphToFile, graphRunnerSource, isSplitBundle, providerPlatformOf } = require('./extract-claude-js.cjs');
 
 // `[ -f "$p" ]`: exists AND is a regular file (any stat error -> false).
 function isFile(p) {
@@ -94,7 +94,16 @@ function extractIfNeeded(opts) {
   const emit = opts.log || ((m) => process.stderr.write(m + '\n'));
   const clodeLog = (m) => { if (verbose) emit(m); };
 
-  const extractorSig = sigOf(path.join(libexec, 'extract-claude-js.cjs'));
+  // THE KEY CARRIES THE PROVIDER'S PLATFORM, not just the extractor's signature. The cache
+  // directory is named for the VERSION, and a version does not determine the carve: Bun folds
+  // process.platform at carve time, so a linux provider and a darwin provider for the same
+  // version produce different graphs. Without this, extracting one poisoned every later build
+  // of the other — which is exactly how a darwin quaude shipped with no macOS credential
+  // store. See test/extract-cache-key.test.cjs.
+  const extractorSig = cacheSignature({
+    extractorSig: sigOf(path.join(libexec, 'extract-claude-js.cjs')),
+    providerPlatform: providerPlatformOf(bin),
+  });
   // TWO SHAPES. Through 2.1.241 a bundle carves to one cli.cjs; from 2.1.243 it is a
   // code-split ESM graph and stages as graph.json instead. Decided from Bun's own
   // module_format field in the container, never from a version string — see
@@ -181,4 +190,12 @@ function extractIfNeeded(opts) {
   fs.writeFileSync(sigPath, extractorSig + '\n');
 }
 
-module.exports = { extractIfNeeded };
+// The cache entry's identity: the extractor that produced it AND the platform the provider
+// binary carves for. Kept as a pure function so the separation it guarantees is testable
+// without a 200MB provider on disk. A null platform (a container we cannot name) gets its own
+// bucket rather than borrowing the host's.
+function cacheSignature({ extractorSig, providerPlatform }) {
+  return `${extractorSig}:${providerPlatform || 'unknown'}`;
+}
+
+module.exports = { extractIfNeeded, cacheSignature };
