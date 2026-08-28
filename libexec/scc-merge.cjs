@@ -26,6 +26,15 @@
 // compile error, since renaming a shorthand key is syntactically valid either way — this is the
 // first thing to suspect.
 
+// THE MERGER'S OWN VERSION. libexec/quaude-fuse.js caches a merged graph beside the staged
+// cli.cjs (merging the real 95-module group costs ~345s under tjs), and stamps this string into
+// the cache entry. A cache entry whose recorded version differs is IGNORED and recomputed.
+//
+// BUMP THIS whenever an edit to this file could change the bytes mergeGroup emits. Forgetting to
+// is not a cosmetic slip: every machine that has already built once keeps serving the OLD merge
+// from its cache, so the edit appears to do literally nothing, on that machine only, forever.
+var MERGER_VERSION = '7';
+
 // `meta.locals` is the union of two engine tables (vardefs + closure_var) and can repeat a name
 // across them, and it reports compiler-internal synthetic names in angle brackets (e.g.
 // `<class_fields_init>`) that are not real user bindings and can never collide with one.
@@ -496,6 +505,230 @@ function hasExportDefault(src) {
   return false;
 }
 
+// WHICH POSITIONS RUN AT MODULE-EVALUATION TIME. A cross-member reference only constrains the
+// order of the merged bodies if it is READ while the module evaluates; a reference inside a
+// function body is read whenever that function is later called, by which point every body has
+// run. `mask` is codeMask(src), so strings, comments and regex literals are already out.
+//
+// The shapes that matter are the ones a bundler emits: `function f(){}`, `(a)=>{}`, a method
+// `x(){}`, `class X{}`, and the eager blocks after if/for/while/switch/catch/with. A `{` that
+// closes a `)` is a function body UNLESS one of those keywords opened the `(`.
+var EAGER_BLOCK_KW = /(?:^|[^A-Za-z0-9_$])(?:if|for|while|switch|catch|with)$/;
+function topLevelMask(src, mask) {
+  var out = new Uint8Array(src.length);
+  var depth = 0, deferred = 0, braces = [], arrows = [];
+  var i, j, k, d, c, ch, isFn;
+  // A concise arrow body (`x => expr`, no braces) is deferred code with no closing token of its
+  // own: it ends at the first `,` or `;` at the depth it started, or when a bracket closes past
+  // that depth. Without this the merger read `()=>import.meta.require("...").SendFileTool` as an
+  // evaluation-time read and invented an unsatisfiable ordering cycle on the real 95-module group.
+  function popPastDepth() {
+    while (arrows.length && arrows[arrows.length - 1] > depth) { arrows.pop(); deferred--; }
+  }
+  function popAtDepth() {
+    while (arrows.length && arrows[arrows.length - 1] >= depth) { arrows.pop(); deferred--; }
+  }
+  for (i = 0; i < src.length; i++) {
+    c = src.charAt(i);
+    if (!mask[i]) { out[i] = deferred === 0 ? 1 : 0; continue; }
+    if (c === '=' && src.charAt(i + 1) === '>' && mask[i + 1]) {
+      j = i + 2;
+      while (j < src.length) {
+        ch = src.charAt(j);
+        if (ch !== ' ' && ch !== '\t' && ch !== '\r' && ch !== '\n') break;
+        j++;
+      }
+      if (src.charAt(j) !== '{') { arrows.push(depth); deferred++; }
+      out[i] = 0;
+      continue;
+    }
+    if (c === '(' || c === '[') { depth++; out[i] = 0; continue; }
+    if (c === '{') {
+      j = i - 1;
+      while (j >= 0) {
+        ch = src.charAt(j);
+        if (ch !== ' ' && ch !== '\t' && ch !== '\r' && ch !== '\n') break;
+        j--;
+      }
+      isFn = false;
+      if (j >= 0 && src.charAt(j) === ')') {
+        d = 0;
+        for (k = j; k >= 0; k--) {
+          if (!mask[k]) continue;
+          if (src.charAt(k) === ')') d++;
+          else if (src.charAt(k) === '(') { d--; if (!d) break; }
+        }
+        isFn = !EAGER_BLOCK_KW.test(src.slice(k - 12 < 0 ? 0 : k - 12, k));
+      } else if (j >= 1 && src.charAt(j) === '>' && src.charAt(j - 1) === '=') {
+        isFn = true;
+      }
+      braces.push(isFn);
+      if (isFn) deferred++;
+      depth++;
+      out[i] = 0;
+      continue;
+    }
+    if (c === ')' || c === ']') { depth--; popPastDepth(); out[i] = 0; continue; }
+    if (c === '}') { depth--; if (braces.pop()) deferred--; popPastDepth(); out[i] = 0; continue; }
+    if (c === ',' || c === ';') { popAtDepth(); out[i] = 0; continue; }
+    out[i] = deferred === 0 ? 1 : 0;
+  }
+  return out;
+}
+
+// Names listed in an `import { ... }` or `export { ... }` CLAUSE are not value reads — they name
+// bindings, and the merger strips or rewrites every one of those statements anyway. Leaving them
+// in makes a member look as though it reads its own re-exported imports at evaluation time, which
+// invented a mutual-eager-read cycle out of an ordinary re-export barrel on the real 95-module
+// group. Blank those spans out of the top-level mask once, for every pair.
+function clearClauseSpans(src, mask, top) {
+  var res = [/import\s*\{[^}]*\}/g, /export\s*\{[^}]*\}/g], r, m, i, k;
+  for (r = 0; r < res.length; r++) {
+    res[r].lastIndex = 0;
+    while ((m = res[r].exec(src))) {
+      if (!mask[m.index]) continue;
+      for (k = m.index; k < m.index + m[0].length; k++) top[k] = 0;
+    }
+  }
+  return top;
+}
+
+function eagerlyReads(src, top, other) {
+  var i, m, re, locals = [], spans = [];
+  var impRes = IMPORT_STMT_RES(other), expRes = EXPORT_FROM_RES(other);
+
+  function collectNamed(regex) {
+    var mm;
+    regex.lastIndex = 0;
+    while ((mm = regex.exec(src))) {
+      spans.push([mm.index, mm.index + mm[0].length]);
+      if (mm[1]) locals.push(mm[1]);
+      if (mm[2]) {
+        var cl = parseNamedClause(mm[2]);
+        for (var c = 0; c < cl.length; c++) locals.push(cl[c].local);
+      }
+    }
+  }
+  function collectLocal(regex) {
+    var mm;
+    regex.lastIndex = 0;
+    while ((mm = regex.exec(src))) {
+      spans.push([mm.index, mm.index + mm[0].length]);
+      if (mm[1]) locals.push(mm[1]);
+    }
+  }
+  collectNamed(impRes[0]);
+  collectLocal(impRes[1]);
+  collectLocal(impRes[2]);
+  collectLocal(expRes[2]);
+
+  function inSpan(pos) {
+    for (var q = 0; q < spans.length; q++) if (pos >= spans[q][0] && pos < spans[q][1]) return true;
+    return false;
+  }
+
+  for (i = 0; i < locals.length; i++) {
+    re = new RegExp('(?<!(?<!\\.\\.)\\.)(?<![' + IDENT_CHAR + '])' + escapeRe(locals[i])
+      + '(?![' + IDENT_CHAR + '])', 'g');
+    while ((m = re.exec(src))) {
+      if (!top[m.index] || inSpan(m.index)) continue;
+      return true;
+    }
+  }
+
+  var reqRes = requireCallRegexes(other);
+  for (i = 0; i < reqRes.length; i++) {
+    reqRes[i].lastIndex = 0;
+    while ((m = reqRes[i].exec(src))) {
+      if (!top[m.index]) continue;
+      if (src.charAt(m.index + m[0].length) === '.') return true;
+    }
+  }
+  return false;
+}
+
+// THE ORDER THE MERGED BODIES ARE EMITTED IN, and it is not the graph's topological order.
+//
+// A residual cyclic require A -> B is cyclic precisely BECAUSE B statically imports its way back
+// to A, so in any import-topological order A comes first — and if A reads B's exports while it
+// evaluates, that read lands in B's dead zone (`ReferenceError: __m56_mgr is not initialized`,
+// measured on the real 95-module group). Upstream does not have this problem because require()
+// FORCES evaluation: Bun suspends A mid-body, runs B to completion, and resumes A. One merged
+// module runs its bodies atomically and cannot do that, so the only lever left is which body
+// goes first.
+//
+// The constraint is therefore NOT "imports first" and NOT "requires first" — it is that every
+// EAGERLY read member must precede its reader, whichever kind of edge carried the reference.
+// Lazy references — anything inside a function, which is the overwhelming majority — constrain
+// nothing, and treating them as constraints is what makes the problem look unsolvable. Measured
+// on 2.1.250's 95-module group: ordering imports-first left 10 eager forward reads, requires-first
+// left 45, and ordering on eager reads alone leaves none.
+//
+// Every other cross-member reference is then honoured as a PREFERENCE, committed incrementally,
+// so the result stays as close to the graph's own order as the real constraints allow. A cycle
+// among the eager edges would mean the group genuinely cannot be merged by reordering, and says
+// so by name rather than emitting an order that fails at runtime.
+function mergeBodyOrder(group, sources) {
+  var N = group.length, i, j;
+  var srcs = [], tops = [];
+  for (i = 0; i < N; i++) {
+    var t = String(sources[group[i]]);
+    var cm = codeMask(t);
+    srcs.push(t);
+    tops.push(clearClauseSpans(t, cm, topLevelMask(t, cm)));
+  }
+  var adj = [];
+  for (i = 0; i < N; i++) adj.push([]);
+
+  function reaches(from, to) {
+    var seen = new Uint8Array(N), stack = [from], v, k;
+    while (stack.length) {
+      v = stack.pop();
+      if (seen[v]) continue;
+      seen[v] = 1;
+      if (v === to) return true;
+      for (k = 0; k < adj[v].length; k++) if (!seen[adj[v][k]]) stack.push(adj[v][k]);
+    }
+    return false;
+  }
+
+  for (i = 0; i < N; i++) {
+    for (j = 0; j < N; j++) {
+      if (i === j || srcs[i].indexOf(group[j]) === -1) continue;
+      if (!eagerlyReads(srcs[i], tops[i], group[j])) continue;
+      if (reaches(i, j)) {
+        throw new Error('scc-merge: ' + group[i] + ' needs ' + group[j] + " evaluated first, "
+          + 'but ' + group[j] + ' already (transitively) needs ' + group[i] + '. No order of the '
+          + 'merged bodies satisfies both, so this group cannot be merged by reordering alone.');
+      }
+      adj[j].push(i);
+    }
+  }
+
+  for (i = 0; i < N; i++) {
+    for (j = 0; j < N; j++) {
+      if (i === j || srcs[i].indexOf(group[j]) === -1) continue;
+      if (reaches(i, j)) continue;
+      adj[j].push(i);
+    }
+  }
+
+  var indeg = new Int32Array(N), out = [], ready = [], v;
+  for (i = 0; i < N; i++) for (j = 0; j < adj[i].length; j++) indeg[adj[i][j]]++;
+  for (i = 0; i < N; i++) if (indeg[i] === 0) ready.push(i);
+  while (ready.length) {
+    ready.sort(function (a, b) { return a - b; });
+    v = ready.shift();
+    out.push(group[v]);
+    for (j = 0; j < adj[v].length; j++) if (--indeg[adj[v][j]] === 0) ready.push(adj[v][j]);
+  }
+  if (out.length !== N) {
+    throw new Error('scc-merge: mergeBodyOrder ordered only ' + out.length + ' of ' + N
+      + ' members — the eager-read constraints contain a cycle.');
+  }
+  return out;
+}
+
 function mergeGroup(group, sources, moduleMeta, groupIndex) {
   var mergedName = '/$bunfs/root/__clode-scc-' + groupIndex + '.js';
   var i, name;
@@ -541,6 +774,22 @@ function mergeGroup(group, sources, moduleMeta, groupIndex) {
   // counted too — moduleMeta already counted them (imported bindings occupy the top-level
   // scope), so this rewrite must produce exactly the same set of local names moduleMeta
   // reported, or a collision moduleMeta already accounted for goes undetected.
+  // CROSS-MEMBER NAMED IMPORTS BECOME LIVE BINDINGS, NOT EAGER COPIES, and this is the
+  // difference between a merge that boots and one that does not. Rewriting
+  // `import { Fg } from "<member j>"` to `const __mk_Fg = nsJ.Fg;` READS j's binding at the top
+  // of k's body — so j's body must already have run. Every such rewrite is therefore an
+  // evaluation-order constraint, and a cyclic group has no order that satisfies all of them
+  // (measured on real 2.1.250: 566 forward reads remained no matter how the bodies were sorted).
+  // An ES module import is a LIVE BINDING: it does not read anything at import time, only at
+  // USE time. Inside one merged scope the faithful equivalent is for k to refer to j's binding
+  // DIRECTLY, by name. Then a cross-member import imposes no order at all, exactly like upstream,
+  // and a use-before-init fails the same way ESM itself would.
+  //
+  // `crossRaw[k]` collects, per member, the local token that must become such a reference and the
+  // (member, export name) it points at. It is resolved AFTER phase 1, because a chain
+  // (k imports from j, j re-exports from q) can only be followed once every member's entry exists.
+  var crossRaw = members.map(function () { return {}; });
+
   var bodies = members.map(function (m) {
     // Any OTHER named import — this member's own external dependencies included, not just
     // cross-group ones — whose LOCAL name collides gets an explicit alias FIRST, so phase 2 has
@@ -561,12 +810,22 @@ function mergeGroup(group, sources, moduleMeta, groupIndex) {
 
       var importRes = IMPORT_STMT_RES(other);
       // Named + optional default: import def, { a, b as c } from "other";
-      src = maskedReplace(src, importRes[0], function (whole, defName, inner) {
-        var clause = parseNamedClause(inner);
-        var decls = clause.map(function (c) { return c.local + ' = ' + ns + '.' + c.imported; });
-        if (defName) decls.unshift(defName + ' = ' + ns + '.default');
-        return decls.length ? ('const ' + decls.join(', ') + ';') : '';
-      });
+      src = maskedReplace(src, importRes[0], (function (jj) {
+        return function (whole, defName, inner) {
+          var clause = parseNamedClause(inner), ci, decls = [];
+          for (ci = 0; ci < clause.length; ci++) {
+            // The local token here is already the FINAL one: aliasCollidingNamedImports gave a
+            // colliding import local its `__mK_` alias before this loop, and phase 2 renames the
+            // body's uses to exactly that same token. So phase 3 can key on it directly.
+            crossRaw[m.k][clause[ci].local] = { member: jj, imported: clause[ci].imported };
+          }
+          // A DEFAULT import stays a plain read: mergeGroup refuses a member that uses
+          // `export default`, so no member of a group ever has one, and `nsJ.default` is a read of
+          // a missing property — undefined, never a dead-zone throw.
+          if (defName) decls.push(defName + ' = ' + ns + '.default');
+          return decls.length ? ('const ' + decls.join(', ') + ';') : '';
+        };
+      })(j));
       // import * as ns from "other";
       src = maskedReplace(src, importRes[1], function (whole, local) {
         return 'const ' + local + ' = ' + ns + ';';
@@ -626,12 +885,18 @@ function mergeGroup(group, sources, moduleMeta, groupIndex) {
   // already matches against the untouched original in one pass, so a single alternation is
   // both faster and no less correct than looping.
   //
-  // `(?<!\.)` is load-bearing, not decoration: `.` is not an IDENT_CHAR, so the boundary
-  // lookarounds alone happily match a colliding name used as a PROPERTY — `obj.shared` — which
-  // is never a lexical binding reference. A name immediately after `.` (plain member access OR
-  // optional chaining, `?.foo` — both end in the same `.` right before the name) must never be
-  // touched; this excludes it categorically. See the KNOWN LIMITATION note in the file header
-  // for the one case this file does not and cannot reliably guard: object-literal shorthand.
+  // THE `.` GUARD IS `(?<!(?<!\.\.)\.)`, NOT `(?<!\.)`, AND THE NESTING IS THE WHOLE POINT.
+  // `.` is not an IDENT_CHAR, so the boundary lookarounds alone happily match a colliding name
+  // used as a PROPERTY — `obj.shared`, or optional-chained `obj?.shared` — which is never a
+  // lexical binding reference and must never be renamed. But a flat `(?<!\.)` ALSO refuses to
+  // rename a SPREAD or REST reference — `{...shared}`, `[...shared]`, `f(...shared)` — where the
+  // preceding `.` is the tail of `...` and the name IS a binding reference. That cost a whole
+  // build: `var __m0_FO=Je(), N=new lp({testGlobalConfig:{...FO, autoUpdates:!1}})` — declaration
+  // renamed, spread left behind — and the real 2.1.250 target died with `ReferenceError: FO is
+  // not defined`. 5621 such references across the three groups, so this was never going to be a
+  // rare corner. The inner lookbehind excludes exactly the `...` case: reject a `.` only when it
+  // is NOT itself preceded by `..`. See the KNOWN LIMITATION note in the file header for the one
+  // case this file does not and cannot reliably guard: object-literal shorthand.
   bodies = bodies.map(function (src, idx) {
     var m = members[idx];
     var names = [];
@@ -639,25 +904,82 @@ function mergeGroup(group, sources, moduleMeta, groupIndex) {
     if (!names.length) return src;
     names.sort(function (a, b) { return b.length - a.length; });
     var alt = names.map(escapeRe).join('|');
-    var re = new RegExp('(?<!\\.)(?<![' + IDENT_CHAR + '])(?:' + alt + ')(?![' + IDENT_CHAR + '])', 'g');
+    var re = new RegExp('(?<!(?<!\\.\\.)\\.)(?<![' + IDENT_CHAR + '])(?:' + alt + ')(?![' + IDENT_CHAR + '])', 'g');
     return maskedReplace(src, re, function (whole) { return '__m' + m.k + '_' + whole; });
+  });
+
+  // Rewrite phase 3: every cross-member named import becomes a direct reference to the OTHER
+  // member's binding. Runs after phase 2 so it sees the tokens phase 2 produced, and uses the
+  // same masked, spread-aware, property-safe boundary as phase 2 — it is the same kind of edit.
+  bodies = bodies.map(function (src, idx) {
+    var cr = crossRaw[idx], toks = [], t;
+    for (t in cr) {
+      if (!Object.prototype.hasOwnProperty.call(cr, t)) continue;
+      var target = resolveTok(cr[t].member, baseTok(members[cr[t].member], cr[t].imported));
+      if (target !== t) toks.push([t, target]);
+    }
+    if (!toks.length) return src;
+    toks.sort(function (a, b) { return b[0].length - a[0].length; });
+    var map = {};
+    toks.forEach(function (e) { map[e[0]] = e[1]; });
+    var alt = toks.map(function (e) { return escapeRe(e[0]); }).join('|');
+    var re = new RegExp('(?<!(?<!\\.\\.)\\.)(?<![' + IDENT_CHAR + '])(?:' + alt + ')(?![' + IDENT_CHAR + '])', 'g');
+    return maskedReplace(src, re, function (whole) { return map[whole]; });
   });
 
   // The identifier that actually holds an export's value in the rewritten body: the member's
   // TRUE local binding for it (from its own `export { local as exported }` clause — NOT the
   // export name itself, which is very often a different, more readable string), renamed if
   // that local name collided.
-  function localFor(m, exportedName) {
+  function baseTok(m, exportedName) {
     var trueLocal = Object.prototype.hasOwnProperty.call(m.exportMap, exportedName)
       ? m.exportMap[exportedName] : exportedName;
     return colliding.has(trueLocal) ? '__m' + m.k + '_' + trueLocal : trueLocal;
   }
 
+  // Follow a cross-member import to the binding it actually names. A chain is possible — k
+  // imports a name j itself imported from q — and a CYCLE is possible too (that is what a
+  // strongly connected group is), so the walk stops rather than recursing forever and keeps the
+  // token it has; that token is still a real binding, just one more hop away than ideal.
+  var resolvingTok = {};
+  function resolveTok(k, tok) {
+    var cr = crossRaw[k];
+    if (!cr || !Object.prototype.hasOwnProperty.call(cr, tok)) return tok;
+    var key = k + '|' + tok;
+    if (resolvingTok[key]) return tok;
+    resolvingTok[key] = 1;
+    var t = cr[tok];
+    var r = resolveTok(t.member, baseTok(members[t.member], t.imported));
+    delete resolvingTok[key];
+    return r;
+  }
+
+  function localFor(m, exportedName) {
+    return resolveTok(m.k, baseTok(m, exportedName));
+  }
+
   // Namespace objects: one per member, mapping each export name to that member's (possibly
   // renamed) local identifier for it.
+  //
+  // GETTERS, NOT VALUES, AND DECLARED AHEAD OF EVERY BODY. Both halves of that are load-bearing,
+  // and the first real build proved it: a residual cyclic require rewritten to a bare `nsJ`
+  // reference (`var R9 = __clode_scc_ns5`) sat in member 0's body while the declarations sat at
+  // the BOTTOM of the merged module, so the target booted and died on
+  // `ReferenceError: __clode_scc_ns5 is not initialized` — the const's own temporal dead zone.
+  // Moving the declarations to the front fixes that, but only if the property values are lazy:
+  // a plain `{ name: __m5_pht }` object literal evaluated before the bodies would read every
+  // member's locals while they are ALL still in their dead zone. A getter reads at USE time,
+  // which is also what an ES module namespace object does — the merged form is more faithful
+  // than the snapshot it replaces, not less.
+  //
+  // The eager cross-member reads phase 1 emits (`const __mK_x = nsJ.x;`, 1723 of them on 2.1.250)
+  // stay correct because `group` is in the graph's own topological IMPORT order: a static import
+  // always names an EARLIER member, so member J's body has already run. Measured on all three
+  // real groups: 1723 such reads, 0 of them forward. A FORWARD one would fail loudly, naming the
+  // uninitialized local, rather than silently reading undefined.
   var nsDecls = members.map(function (m) {
     var props = m.exportNames.map(function (en) {
-      return JSON.stringify(en) + ': ' + localFor(m, en);
+      return 'get ' + JSON.stringify(en) + '() { return ' + localFor(m, en) + '; }';
     });
     return 'const ' + nsVar(m.k) + ' = { ' + props.join(', ') + ' };';
   });
@@ -672,27 +994,41 @@ function mergeGroup(group, sources, moduleMeta, groupIndex) {
     });
   });
 
-  var mergedSource = bodies.join('\n')
-    + '\n' + nsDecls.join('\n')
+  var mergedSource = nsDecls.join('\n')
+    + '\n' + bodies.join('\n')
     + (exportPairs.length ? ('\nexport { ' + exportPairs.join(', ') + ' };\n') : '\n');
 
   // Shims: each member keeps its own name and re-exports exactly what it used to, from the
   // merged module, under its own alias (`__m<k>_export_<name>` -> `<name>`).
+  // WHY `import ... from` + a separate `export`, and not the one-line `export { ... } from`
+  // that says exactly the same thing: bun-graph-plan.cjs's depsOf() — the ONLY thing that knows
+  // what a module depends on, and therefore what order the fuse worker compiles in — matches
+  // `import` forms only. A re-export-from shim reads as dependency-free, so planOrder is free to
+  // put it BEFORE the merged module it re-exports, and compile() dies with
+  // "could not load '/$bunfs/root/__clode-scc-0.js'" on a graph that is perfectly well-formed.
+  // Measured, on the first real build. These shims are OUR generated code, so they stay inside
+  // the vocabulary the planner already understands rather than widening it; test/scc-merge.test.cjs
+  // asserts the coupling directly, against the real depsOf, so it can never drift silently again.
+  //
+  // A member with NO exports still `import`s the merged module rather than being an inert
+  // `export {}`: the member's BODY now lives inside the merged module, so a module that imported
+  // this one purely for its side effects must still force that evaluation.
   var shims = {};
   members.forEach(function (m) {
     if (!m.exportNames.length) {
-      shims[m.name] = 'export {};\n';
+      shims[m.name] = 'import "' + mergedName + '";\nexport {};\n';
       return;
     }
     var clause = m.exportNames.map(function (en) {
       return '__m' + m.k + '_export_' + en + ' as ' + en;
     });
-    shims[m.name] = 'export { ' + clause.join(', ') + ' } from "' + mergedName + '";\n';
+    shims[m.name] = 'import { ' + clause.join(', ') + ' } from "' + mergedName + '";\n'
+      + 'export { ' + m.exportNames.join(', ') + ' };\n';
   });
 
   return { mergedName: mergedName, mergedSource: mergedSource, shims: shims };
 }
 
 if (typeof module === 'object' && module.exports) {
-  module.exports = { declaredNames, mergeGroup };
+  module.exports = { declaredNames, mergeGroup, mergeBodyOrder, MERGER_VERSION };
 }

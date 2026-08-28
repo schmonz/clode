@@ -210,8 +210,15 @@ test('mergeGroup converts a zero-whitespace cross-group `import{...}from"spec"` 
   const r = mergeGroup(['/g/a.js', '/g/b.js'], SRC_NOSPACE, metaNoSpace, 0);
   assert.doesNotMatch(r.mergedSource, /import\s*\{[^}]*\}\s*from\s*"\/g\/b\.js"/,
     'the cross-group import statement must not survive — it would resolve to the wrong module');
-  assert.match(r.mergedSource, /FO\s*=\s*__clode_scc_ns1\.FO/);
-  assert.match(r.mergedSource, /oe\s*=\s*__clode_scc_ns1\.oe/);
+  // A cross-member NAMED import becomes a direct reference to the other member's binding — a
+  // live binding, as ESM specifies — not `const FO = ns1.FO`. An eager copy would read ns1 at
+  // the top of this member's body and so demand that member 1 run first, which in a CYCLE cannot
+  // always be arranged: 566 such forward reads survived every possible body order on real
+  // 2.1.250, and the target died with `__m42_yD is not initialized`.
+  assert.match(r.mergedSource, /const ax = __m1_FO\(\) \+ __m1_oe;/,
+    "member a's uses must point straight at member b's bindings");
+  assert.doesNotMatch(r.mergedSource, /=\s*__clode_scc_ns1\.(FO|oe)/,
+    'no eager cross-member read may remain');
 });
 
 // Discovered on the real 95-module group: `class C { #e = 1 }` reports its private field as
@@ -389,4 +396,72 @@ test('a colliding named import keeps its real export name when loaded through th
     'the imported half must stay `wt` — renaming it requests an export that does not exist');
   assert.doesNotMatch(r.mergedSource, /import\{__m0_wt\}/,
     'this is the silent, error-free corruption the shim transform caused on the real group');
+});
+
+// THE ORDERING COUPLING, and it is load-bearing. bun-graph-plan.cjs's depsOf() is the only
+// thing that knows what a module depends on, so it is what planOrder — and therefore the fuse
+// worker's compile order — is computed from. It matches `import` forms ONLY: a shim written as
+// `export { ... } from "<merged>"` reads as dependency-free, planOrder is free to place it
+// BEFORE the merged module, and the build dies with
+// `could not load '/$bunfs/root/__clode-scc-0.js'`. Measured on the first real 2.1.248 build.
+// Asserted here against the REAL depsOf so the two files cannot drift apart silently.
+const { depsOf } = require('../libexec/bun-graph-plan.cjs');
+
+test("depsOf sees each shim's dependency on the merged module", () => {
+  const r = mergeGroup(['/g/a.js', '/g/b.js'], SRC, meta, 0);
+  const inGraph = (s) => s === r.mergedName;
+  for (const name of Object.keys(r.shims)) {
+    assert.deepStrictEqual(depsOf(r.shims[name], inGraph), [r.mergedName],
+      `the shim for ${name} must read as depending on ${r.mergedName}`);
+  }
+});
+
+// A member with no exports of its own still has to force the merged module's evaluation: its
+// BODY moved in there, and whoever imported this module for its side effects alone would
+// otherwise get an inert shim and none of the effects.
+test('a shim for an export-less member still imports the merged module', () => {
+  const SRC2 = { '/g/a.js': 'globalThis.hit = 1;\n' };
+  const META2 = { '/g/a.js': { requires: [], exports: [], locals: [] } };
+  const r = mergeGroup(['/g/a.js'], SRC2, (n) => META2[n], 3);
+  assert.match(r.shims['/g/a.js'], /import "\/\$bunfs\/root\/__clode-scc-3\.js"/);
+  assert.deepStrictEqual(depsOf(r.shims['/g/a.js'], (s) => s === r.mergedName), [r.mergedName]);
+});
+
+// The namespace objects must be declared BEFORE any member body and read their values LAZILY.
+// A residual cyclic require becomes a bare `nsJ` reference inside a body, and J can be any
+// member — including one whose body has not run yet. Declaring the objects at the bottom made
+// the real 2.1.250 target die on `ReferenceError: __clode_scc_ns5 is not initialized`; declaring
+// them at the top with plain values would instead read every member's locals inside their own
+// dead zone. Only hoisted + lazy is correct.
+test('namespace objects are declared before every body, with getters', () => {
+  const r = mergeGroup(['/g/a.js', '/g/b.js'], SRC, meta, 0);
+  const firstNs = r.mergedSource.indexOf('const __clode_scc_ns0 = {');
+  const lastNs = r.mergedSource.indexOf('const __clode_scc_ns1 = {');
+  assert.ok(firstNs >= 0 && lastNs >= 0, 'both namespace objects are declared');
+  // Every member body comes after the last namespace declaration.
+  assert.ok(r.mergedSource.indexOf('const __m0_shared') > lastNs,
+    'member bodies must follow the namespace declarations');
+  assert.match(r.mergedSource, /const __clode_scc_ns0 = \{ get "ay"\(\) \{ return ay; \} \};/,
+    'namespace properties must be getters, so they read the local at USE time');
+});
+
+// A SPREAD/REST reference is a binding reference whose preceding character happens to be `.`.
+// The flat `(?<!\.)` property guard silently refused to rename it, so the declaration became
+// `__m0_shared` while `{...shared}` kept pointing at a name that no longer existed — the real
+// 2.1.250 target died with `ReferenceError: FO is not defined`, 5621 such references across the
+// three groups. Property access and optional chaining must STILL be excluded.
+test('mergeGroup renames a colliding name used in a spread, but not as a property', () => {
+  const SRC3 = {
+    '/g/a.js': 'const shared = { x: 1 };\nexport const ay = { ...shared, y: obj.shared, z: obj?.shared };\n',
+    '/g/b.js': 'const shared = 2;\nexport const bx = shared;\n',
+  };
+  const META3 = {
+    '/g/a.js': { requires: [], exports: ['ay'], locals: ['shared', 'ay'] },
+    '/g/b.js': { requires: [], exports: ['bx'], locals: ['shared', 'bx'] },
+  };
+  const r = mergeGroup(['/g/a.js', '/g/b.js'], SRC3, (n) => META3[n], 0);
+  assert.match(r.mergedSource, /\.\.\.__m0_shared/, 'a spread reference must be renamed');
+  assert.doesNotMatch(r.mergedSource, /\.\.\.shared\b/, 'no un-renamed spread may survive');
+  assert.match(r.mergedSource, /obj\.shared/, 'a property access must NOT be renamed');
+  assert.match(r.mergedSource, /obj\?\.shared/, 'optional chaining must NOT be renamed');
 });

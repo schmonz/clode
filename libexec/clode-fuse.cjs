@@ -1496,7 +1496,14 @@ async function clodeBuild(args, opts) {
       // template it cannot exec on the target. Native --self: baseTemplate ===
       // template, so this is unchanged there. The quaude role embeds nothing
       // (its base IS the signed copy).
-      ...(self ? [baseTemplate] : [])], { env, timeout: 300000 * SCALE });
+      // 30 minutes, not 5. A COLD fuse of a bundle with cyclic requires (upstream 2.1.248+)
+      // merges the graph's strongly connected groups inside the worker, and the real 95-module
+      // group costs ~380s under tjs on a fast arm64 Mac (measured in situ: 398s of a 6:52 build)
+      // — the old 300s budget killed the build mid-merge, before the worker could cache the
+      // result, so every retry died exactly the same way.
+      // The merge is cached once per provider (quaude-fuse.js's graph-merged.json), so only the
+      // first build of a given upstream version on a given machine gets anywhere near this.
+      ...(self ? [baseTemplate] : [])], { env, timeout: 1800000 * SCALE });
     if (w.status !== 0) {
       let extra = '';
       if (!w.stdout && !w.stderr) {
