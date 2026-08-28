@@ -2595,39 +2595,41 @@ registry, is explicitly argued against there: it can mangle a prompt string and 
 silently, and a fidelity oracle that quietly differs from its subject is worse than none.
 
 
-### ★★★ P0: a darwin quaude was assembled from a non-darwin carve (2026-08-28)
+### ★★ Extraction cache key lacked the provider's platform (FIXED 2026-08-28)
 
-**Symptom.** The 2026-08-27 quaude fails every turn with `401 OAuth access token has been
-revoked` / `OAuth session expired and could not be refreshed`, on a box where the credential
-is valid and official clients work.
+**What is PROVEN.** `~/.cache/clode/<version>/` was keyed on the version alone, and reuse
+was guarded by the EXTRACTOR's signature. Bun constant-folds `process.platform` at carve
+time, so the same version carved from a linux provider and from a darwin provider are
+different graphs. Nothing in the key could tell them apart, so extracting one silently
+served every later build of the other. Fixed: the key now composes the extractor signature
+with the provider's platform, read from the container bytes, and the graph records
+`providerPlatform`. Same missing-dimension bug class as the templates cache that served a
+sha256 mismatch before the last release.
 
-**Root cause.** The binary contains NO macOS keychain store. Bun constant-folds
-`process.platform` at carve time, so upstream's darwin credential store is dead-coded out of
-a non-darwin carve. Markers, counted in the graphs and in the shipped binary:
+Graph-level evidence for the mixing, measured in the JSON (valid — graphs are plain text):
+`find-generic-password` appears 7× in 2.1.246, 2.1.250 and a fresh extraction of the
+installed official DARWIN 2.1.248, but only 2× in the cached 2.1.243 and 2.1.251. 2.1.250
+and 2.1.251 are adjacent versions, so a 7→2 swing between them is not plausibly upstream.
 
-| marker | fresh darwin 2.1.248 | cache 2.1.250 | cache 2.1.243 | SHIPPED quaude |
-|---|---|---|---|---|
-| `[keychain] read failed` | 1 | 1 | 0 | **0** |
-| `[keychain] readAsync failed` | 1 | 1 | 0 | **0** |
-| `exceeds security -i stdin limit` | 1 | 1 | 0 | **0** |
-| `find-generic-password` | 7 | 7 | 2 | — |
+**CORRECTION — what I claimed and could not support.** I first wrote that the shipped
+2026-08-27 quaude "contains no macOS keychain store", from `strings` finding 0 of three
+darwin markers in the binary. **That instrument is invalid.** A fused quaude compiles
+modules to BYTECODE, so JS string literals are not present as ASCII. A quaude built from a
+known-good darwin graph (7 markers in its graph.json) also scores 0 in the binary — and
+authenticates fine. `strings` can measure a graph; it cannot measure a fused target.
+Fourth instrument failure in one session: [[instruments-lie-check-them-first]].
 
-7 is the darwin signature (proven by extracting the installed official darwin 2.1.248 with
-the current extractor). The shipped binary scores 0/0/0. This is
-[[target-matched-assembly]] violated in the field, and auth is only the symptom that
-happened to be loud — every platform-folded branch is equally wrong in that binary.
+**So the Aug-27 failure is NOT root-caused.** What is established: a quaude built
+2026-08-28 from the official darwin 2.1.248 on the current tree logs in and completes a
+real authenticated turn (`PONG`, real Keychain credential), while the 2026-08-27 2.1.243
+binary fails every turn with a 401. The cause of the OLD binary's failure is still open —
+a non-darwin carve, a genuine 2.1.243 difference, or something else fixed since. Do not
+re-tell the carve story as settled without a darwin 2.1.243 graph to compare against.
 
-**The mechanism to fix, not just the instance.** `clode-extract.cjs` keys its cache on
-`path.basename(cacheDir)` — the VERSION alone (`~/.cache/clode/2.1.243/`) — and guards reuse
-with `sigOf(extract-claude-js.cjs)`, the EXTRACTOR's signature. Neither encodes the
-provider's platform, so extracting a linux provider for version X silently poisons every
-later darwin build of version X. Same bug class as the templates sha256 mismatch before the
-last release: a cache key missing a dimension that changes the content. That one got
-recipe-scoped; this one never got platform-scoped.
+**Still worth doing:** a fused target needs a way to answer "which platform was this carved
+for?" that does not depend on `strings`. `providerPlatform` now rides in the graph; carry
+it into the binary's attest/metadata so the question is answerable after fusing.
 
-**Ratchet:** the key must carry the provider identity (its sha256, or target triple), and a
-darwin build must REFUSE a graph with no darwin keychain markers rather than fuse it. Cheap
-tripwire, since a darwin carve always has them.
 
 ### Delete the keychain emulation — upstream already falls back (2026-08-28)
 
