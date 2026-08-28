@@ -42,6 +42,46 @@ So the honest reading is that gate (1) must hold TWICE: once to unblock the merg
 again on the merged result that actually ships. Tagging a commit whose CI predates the
 dependency bumps would satisfy the letter of both gates and the spirit of neither.
 
+## ★★ CONTINGENCY — what we do if upstream ships `bun build --bytecode` (2026-08-28)
+
+**The risk.** Everything clode does rests on the Bun container holding real JavaScript that
+`libexec/extract-claude-js.cjs` can lift out. Bun can instead embed **JSC bytecode**
+(`bun build --bytecode`), which skips parse at startup. Cold start and install size are
+demonstrably what upstream is tuning right now — the binary went 345 → 197 MB over five
+releases while the chunking strategy flip-flopped (docs/bundle-shapes.tsv) — so this knob is
+plausibly one release away, and nobody upstream would think of it as a breaking change.
+
+If it is flipped, extraction does not get harder. **It stops being possible.** There is no JS
+to carry, and JSC bytecode is a JavaScriptCore artifact: QuickJS cannot load it, and it is
+neither documented nor stable across Bun versions. `test/bundle-shape.test.cjs` is the
+tripwire; this entry is what to read when it goes red.
+
+**Options, roughly best to worst.**
+
+1. **Get the JS from npm instead of the binary.** The `@anthropic-ai/claude-code` package is a
+   thin wrapper today, but the per-platform payload is still built from JS upstream must
+   produce. If any published artifact (a sourcemap, an unminified build, a `--no-bytecode`
+   variant for some platform) still carries JS, the extractor's input changes and nothing else
+   does. CHECK THIS FIRST — it is the difference between a bad week and a new project.
+2. **Ask upstream for a JS-bearing artifact.** Not a technical fix, and not to be dismissed on
+   that account: a documented "sources" tarball would make this whole class of breakage go
+   away permanently. Worth asking BEFORE the emergency, not during.
+3. **Run JSC.** Bytecode is only loadable by the JavaScriptCore version that produced it, so
+   this means shipping JSC — which does not build for Tiger PPC, sparc, m68k, or most of the
+   fleet. It would save the mainstream legs and kill the interesting ones, which inverts the
+   point of the project.
+4. **Decompile the bytecode.** JSC bytecode is undocumented, unstable release to release, and
+   optimised. A decompiler is a research project with no upper bound, and it would need
+   redoing on Bun bumps. Not credible as a plan.
+5. **Freeze on the last JS-bearing release.** Directly against
+   [[keeping-up-is-the-job]]: a quaude that lags is the failure mode, not the safe option. Only
+   defensible as an explicit, dated, written-down stopgap while 1 or 2 is pursued.
+
+**The honest summary: option 1 is the plan and options 3-5 are what "no plan" looks like.**
+That is worth knowing NOW, because it means the useful preparation is not engineering — it is
+(a) the tripwire, so we learn on day zero, and (b) finding out whether any JS-bearing artifact
+exists, which can be answered today, cheaply, while nothing is on fire.
+
 ## ★★ P0 — upstream 2.1.248+ CYCLICALLY require()s graph modules; every tjs leg is red (2026-08-28)
 
 **Status: quaude (tjs) BLOCKED. naude (node) is FINE — verified, unpatched.** We released
