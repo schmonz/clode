@@ -11,16 +11,48 @@
 // reports (the engine's own parser told us these are real top-level bindings), so the only
 // "parsing" this file does is finding the KNOWN specifier strings and KNOWN identifier tokens
 // inside minified text — never inferring structure from scratch.
+//
+// KNOWN LIMITATION, not guarded against: object-literal SHORTHAND properties. `{shared}` means
+// `{shared: shared}` — the same token is simultaneously a fixed property KEY (must never rename)
+// and a binding reference (must rename when `shared` collides), and nothing distinguishes them
+// by token shape alone. Detecting this reliably would mean knowing whether a given `{...}` span
+// is an OBJECT EXPRESSION — as opposed to a block statement, a destructuring pattern, or a class
+// body — which is not decidable from the token stream without an AST. Cheap pattern-matching
+// (name immediately preceded by `{`/`,` and followed by `,`/`}`) was considered and rejected: an
+// array element or a call argument (`[a, shared, b]`, `f(a, shared, b)`) has the EXACT same
+// shape and is extremely common in real code, so that pattern would refuse constantly on
+// ordinary, unrelated text rather than on the case it's meant to catch. If a merge ever produces
+// a runtime value that looks like a colliding name landed in the wrong object property — no
+// compile error, since renaming a shorthand key is syntactically valid either way — this is the
+// first thing to suspect.
 
 // `meta.locals` is the union of two engine tables (vardefs + closure_var) and can repeat a name
 // across them, and it reports compiler-internal synthetic names in angle brackets (e.g.
 // `<class_fields_init>`) that are not real user bindings and can never collide with one.
+//
+// "as"/"from" are deliberately NOT excluded here, even though both are also the JS keyword in
+// import/export clause syntax our own code preserves everywhere — an earlier version of this
+// file did exclude them (blanket-protecting the keyword by never renaming EITHER meaning), and
+// the real 95-module group broke that too: one member has a genuine top-level `function as(){}`
+// that collides with another member's own `as`, and leaving both un-renamed re-declares "as"
+// twice in the merged scope (`Identifier 'as' has already been declared`). The keyword is
+// instead protected POSITIONALLY, by `protectImportedExportNames` (below) masking exactly the
+// syntax positions "as"/"from" can appear in — so a genuine `as`/`from` binding still renames
+// correctly everywhere else.
 function declaredNames(meta) {
   var out = new Set();
   if (!meta || !Array.isArray(meta.locals)) return out;
   for (var i = 0; i < meta.locals.length; i++) {
     var n = meta.locals[i];
     if (typeof n !== 'string' || n.indexOf('<') !== -1) continue;
+    // A PRIVATE class field/method — `#e` in `class C { #e = 1 }` — reports with the `#`
+    // included. It is not a module-scope binding at all: two classes' `#e` are unrelated
+    // fields even with the identical name, private-per-class by JS semantics, so counting it
+    // toward cross-member collisions is wrong on top of being unsafe. It's unsafe on its own
+    // terms too — `#` is not an identifier character, so prefixing `#e` the way an ordinary
+    // collision is renamed produces `__mK_#e`, a SyntaxError (`Unexpected identifier '#e'`) —
+    // measured on the real 95-module group.
+    if (n.charAt(0) === '#') continue;
     out.add(n);
   }
   return out;
@@ -62,7 +94,26 @@ function regexAllowed(prevTok) {
   return true;
 }
 
-function codeMask(src) {
+// Character-code tests, not `RegExp.test()` on a one-char string. `codeMask` runs this
+// character by character over every byte of every member, potentially several times per
+// member as `src` is rewritten in place (import/export/require rewriting, then renaming) —
+// measured necessary: the real 95-module group (6.5MB total) took over two minutes with
+// per-character `.test()` calls under the tjs interpreter (no JIT) and single-digit seconds
+// with charCode comparisons; behaviour is unchanged, this is pure hot-path arithmetic.
+function isIdentStartCode(c) {
+  return (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95 || c === 36; // A-Z a-z _ $
+}
+function isIdentCode(c) {
+  return isIdentStartCode(c) || (c >= 48 && c <= 57); // + 0-9
+}
+function isAsciiWsCode(c) {
+  return c === 32 || c === 9 || c === 10 || c === 13 || c === 11 || c === 12;
+}
+function isAsciiLetterCode(c) {
+  return (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
+}
+
+function lexicalCodeMask(src) {
   var n = src.length;
   var mask = new Uint8Array(n);
   var i = 0;
@@ -74,68 +125,178 @@ function codeMask(src) {
   while (i < n) {
     var top = stack.length ? stack[stack.length - 1] : null;
     if (top && top.kind === 'template') {
-      var c = src[i];
-      if (c === '\\') { i += 2; continue; }
-      if (c === '`') { stack.pop(); i++; continue; }
-      if (c === '$' && src[i + 1] === '{') { stack.push({ kind: 'interp', depth: 0 }); i += 2; continue; }
+      var cc = src.charCodeAt(i);
+      if (cc === 92) { i += 2; continue; } // backslash
+      if (cc === 96) { stack.pop(); i++; continue; } // `
+      // Entering `${ ... }` starts a fresh expression — reset `prevTok` rather than leaving it
+      // at the `)` set when the backtick itself opened. Without this, EVERY interpolation began
+      // with `regexAllowed(')') === false`, so a regex literal that is the interpolation's first
+      // token (`` `${/foo/.test(x)}` ``) was read as division, its body scanned as ordinary
+      // code, and a colliding name inside it renamed with no compile error at all.
+      if (cc === 36 && src.charCodeAt(i + 1) === 123) { stack.push({ kind: 'interp', depth: 0 }); i += 2; prevTok = ''; continue; } // ${
       i++; continue;
     }
     // Code state: top-level, or inside a `${ ... }` interpolation.
-    var ch = src[i];
-    if (ch === '/' && src[i + 1] === '/') {
-      while (i < n && src[i] !== '\n') i++;
+    var c = src.charCodeAt(i);
+    if (c === 47 && src.charCodeAt(i + 1) === 47) { // //
+      while (i < n && src.charCodeAt(i) !== 10) i++;
       continue;
     }
-    if (ch === '/' && src[i + 1] === '*') {
+    if (c === 47 && src.charCodeAt(i + 1) === 42) { // /*
       i += 2;
-      while (i < n && !(src[i] === '*' && src[i + 1] === '/')) i++;
+      while (i < n && !(src.charCodeAt(i) === 42 && src.charCodeAt(i + 1) === 47)) i++;
       i = Math.min(i + 2, n);
       prevTok = ')';
       continue;
     }
-    if (ch === '"' || ch === "'") {
-      var q = ch; i++;
+    if (c === 34 || c === 39) { // " '
+      var q = c; i++;
       while (i < n) {
-        if (src[i] === '\\') { i += 2; continue; }
-        if (src[i] === q) { i++; break; }
+        var qc = src.charCodeAt(i);
+        if (qc === 92) { i += 2; continue; }
+        if (qc === q) { i++; break; }
         i++;
       }
       prevTok = ')';
       continue;
     }
-    if (ch === '`') { stack.push({ kind: 'template' }); i++; prevTok = ')'; continue; }
-    if (top && top.kind === 'interp' && ch === '{') { top.depth++; mask[i] = 1; i++; prevTok = '{'; continue; }
-    if (top && top.kind === 'interp' && ch === '}') {
+    if (c === 96) { stack.push({ kind: 'template' }); i++; prevTok = ')'; continue; } // `
+    if (top && top.kind === 'interp' && c === 123) { top.depth++; mask[i] = 1; i++; prevTok = '{'; continue; } // {
+    if (top && top.kind === 'interp' && c === 125) { // }
       if (top.depth === 0) { stack.pop(); i++; prevTok = ')'; continue; }
       top.depth--; mask[i] = 1; i++; prevTok = '}'; continue;
     }
-    if (ch === '/' && regexAllowed(prevTok)) {
+    if (c === 47 && regexAllowed(prevTok)) { // /
       var j = i + 1, inClass = false, malformed = false;
       while (j < n) {
-        if (src[j] === '\\') { j += 2; continue; }
-        if (src[j] === '\n') { malformed = true; break; }
-        if (src[j] === '[') { inClass = true; j++; continue; }
-        if (src[j] === ']') { inClass = false; j++; continue; }
-        if (src[j] === '/' && !inClass) { j++; break; }
+        var rc = src.charCodeAt(j);
+        if (rc === 92) { j += 2; continue; } // backslash
+        if (rc === 10) { malformed = true; break; } // \n
+        if (rc === 91) { inClass = true; j++; continue; } // [
+        if (rc === 93) { inClass = false; j++; continue; } // ]
+        if (rc === 47 && !inClass) { j++; break; } // /
         j++;
       }
       if (!malformed) {
-        while (j < n && /[A-Za-z]/.test(src[j])) j++;
+        while (j < n && isAsciiLetterCode(src.charCodeAt(j))) j++;
         i = j; prevTok = ')'; continue;
       }
       // Fell through: not a well-formed regex literal on this line. Treat `/` as division
       // (the safe default — worst case a byte that could have been masked stays protected).
     }
-    if (/[A-Za-z_$]/.test(ch)) {
+    if (isIdentStartCode(c)) {
       var start = i;
-      while (i < n && /[A-Za-z0-9_$]/.test(src[i])) { mask[i] = 1; i++; }
+      while (i < n && isIdentCode(src.charCodeAt(i))) { mask[i] = 1; i++; }
       prevTok = src.slice(start, i);
       continue;
     }
     mask[i] = 1;
-    if (!/\s/.test(ch)) prevTok = ch;
+    if (!isAsciiWsCode(c)) prevTok = src[i];
     i++;
   }
+  return mask;
+}
+
+function maskSpan(mask, start, len) {
+  for (var i = 0; i < len; i++) mask[start + i] = 0;
+}
+
+// `\bas\b`/`\bfrom\b` inside `text` (found at absolute offset `absStart` in the real source)
+// are ALWAYS the JS keyword when `text` is drawn from import/export clause syntax — the grammar
+// has no other place a bare "as"/"from" token can appear there — so masking every occurrence is
+// unconditionally safe, never a false protection of a real reference.
+function maskKeywordTokens(mask, absStart, text) {
+  var re = /\b(?:as|from)\b/g, m;
+  while ((m = re.exec(text))) maskSpan(mask, absStart + m.index, m[0].length);
+}
+
+// FIXED SYNTAX inside import/export clauses — never a local binding, even though it is
+// lexically ordinary code — must never be caught by the identifier-rename pass. Two real
+// failures on the 95-module group forced this to cover as much as it does:
+//  - a colliding LOCAL name in one member ("Yo") is ALSO, verbatim, the export name some OTHER
+//    member imports from an unrelated, non-group chunk (`import{Yo}from"chunk"`) — renaming it
+//    silently requested a nonexistent export, no compile error;
+//  - a colliding name ("as") is ALSO literally the "as" KEYWORD inside completely unrelated
+//    aliased imports (`import{types as UIe}from"util"`) — renaming it broke the syntax outright
+//    (`Unexpected identifier '__m7_as'`) — and the opposite fix, excluding "as"/"from" from
+//    rename ENTIRELY, broke just as fast the other way: the real bundle also has a genuine
+//    top-level `function as(e){...}` in one member, colliding for real with another member's
+//    own `as`, and leaving BOTH unrenamed re-declares "as" twice in the merged scope
+//    (`Identifier 'as' has already been declared`). Only per-position protection — rename "as"
+//    the identifier, never "as" the keyword — satisfies both real cases at once.
+//
+// `mergeGroup` separately rewrites any COLLIDING imported name into an explicit
+// `imported as __mK_local` alias before this runs (`aliasCollidingNamedImports`), so a named
+// import's LOCAL half (after `as`) stays independently renameable; everything masked below
+// never corresponds to a binding in THIS module at all — an export-FROM re-export is indirect,
+// no local variable is ever created for either side of it, regardless of what
+// `aliasCollidingNamedImports` did (it only ever touches IMPORT clauses).
+var ANY_SPEC = '"(?:[^"\\\\]|\\\\.)*"';
+function protectImportedExportNames(src, mask) {
+  var m;
+
+  // import { a, b as c } from "spec";  /  import def, { a } from "spec";  — the "imported"
+  // half of every entry (before `as`, or the bare name) plus "as"/"from" are protected; the
+  // LOCAL half (after `as`) is left alone, still renameable if it collides.
+  var namedRe = new RegExp('import(?:\\s+[A-Za-z0-9_$]+\\s*,)?\\s*\\{([^}]*)\\}\\s*from\\s*' + ANY_SPEC, 'g');
+  while ((m = namedRe.exec(src))) {
+    if (!mask[m.index]) continue;
+    var closeIdx = m[0].indexOf('}', m[0].indexOf('{'));
+    var innerStart = m.index + m[0].indexOf('{') + 1;
+    // Group 1 = imported name (always masked). Groups 2-4, only present when this entry is
+    // aliased, split the `\s+as\s+` gap so the KEYWORD's own offset can be computed exactly —
+    // masking the keyword by scanning the whole entry blob for `\bas\b` instead would ALSO mask
+    // a local alias name that happens to literally BE "as" (`x as as`), which must stay
+    // renameable like any other colliding local name.
+    var entryRe = /([A-Za-z0-9_$]+)(?:(\s+)(as)\s+[A-Za-z0-9_$]+)?/g, em;
+    while ((em = entryRe.exec(m[1]))) {
+      maskSpan(mask, innerStart + em.index, em[1].length);
+      if (em[3]) maskSpan(mask, innerStart + em.index + em[1].length + em[2].length, em[3].length);
+    }
+    maskKeywordTokens(mask, m.index + closeIdx, m[0].slice(closeIdx)); // "from" after them
+  }
+
+  // import * as X from "spec";  /  export * as X from "spec";  — "as"/"from" protected; X is a
+  // genuine local binding (import form) or a public re-export name with no binding at all
+  // (export form) — either way, never a fixed reference this file needs to protect BESIDES the
+  // keywords. Captured as separate groups (rather than scanning the whole match for `\bas\b`)
+  // so the KEYWORD's exact offset is known even in the vanishingly unlikely case X is itself
+  // named "as" or "from" — that identifier must stay renameable, only the keywords must not.
+  var starAsRe = new RegExp('((?:import|export)\\s*\\*\\s*)(as)(\\s+[A-Za-z0-9_$]+\\s*)(from)(\\s*' + ANY_SPEC + ')', 'g');
+  while ((m = starAsRe.exec(src))) {
+    if (!mask[m.index]) continue;
+    var asStart = m.index + m[1].length;
+    maskSpan(mask, asStart, m[2].length);
+    maskSpan(mask, asStart + m[2].length + m[3].length, m[4].length);
+  }
+
+  // import def from "spec";  — "from" protected; `def` is a genuine local binding, captured
+  // separately for the same reason (`def` could itself be named "from").
+  var defaultRe = new RegExp('(import\\s+[A-Za-z0-9_$]+\\s*)(from)\\s*' + ANY_SPEC, 'g');
+  while ((m = defaultRe.exec(src))) {
+    if (!mask[m.index]) continue;
+    maskSpan(mask, m.index + m[1].length, m[2].length);
+  }
+
+  // export * from "spec";  — "from" protected (no names at all in this form).
+  var starRe = new RegExp('export\\s*\\*\\s*from\\s*' + ANY_SPEC, 'g');
+  while ((m = starRe.exec(src))) { if (mask[m.index]) maskKeywordTokens(mask, m.index, m[0]); }
+
+  // export { a, b as c } from "spec";  — an INDIRECT re-export: neither side of any entry is a
+  // local binding in THIS module, so the WHOLE clause (both names, "as", "from") is protected.
+  var exportFromRe = new RegExp('export\\s*\\{([^}]*)\\}\\s*from\\s*' + ANY_SPEC, 'g');
+  while ((m = exportFromRe.exec(src))) {
+    if (!mask[m.index]) continue;
+    var closeIdx2 = m[0].indexOf('}', m[0].indexOf('{'));
+    var braceStart = m.index + m[0].indexOf('{') + 1;
+    maskSpan(mask, braceStart, m[1].length); // both names in every entry — neither is a binding
+    maskKeywordTokens(mask, m.index + closeIdx2, m[0].slice(closeIdx2)); // "from" after them
+  }
+}
+
+function codeMask(src) {
+  var mask = lexicalCodeMask(src);
+  protectImportedExportNames(src, mask);
   return mask;
 }
 
@@ -168,11 +329,21 @@ function specRegex(spec) {
   return escapeRe(spec).replace(/"/g, '\\\\?"');
 }
 
+// `\s*` before `{`, NOT `\s+`: minified code overwhelmingly writes `import{a,b}from"spec"` with
+// zero whitespace after the keyword — `{` needs no separation from "import" the way an
+// identifier would. `\s+` there is a real bug, not a stylistic choice: it silently never
+// matches real minified text, so the statement it was meant to rewrite survives untouched.
+// Measured live: it left cross-group `import{...}from"<member>"` statements in place across the
+// 95-module group, referencing that member's ORIGINALLY-COMPILED (pre-merge) module object
+// instead of the merged scope — no compile error, a wrong build. A default-import prefix
+// (`import def, {...} from`) is the one place a space truly is mandatory — "importdef" would
+// lex as one identifier — so that part keeps `\s+`, captured separately so callers that need
+// the default local name (only the cross-group replacement does) can still get it.
 var IMPORT_STMT_RES = function (spec) {
   var s = specRegex(spec);
   return [
     // import { a, b as c } from "spec";  /  import def, { a } from "spec";
-    new RegExp('import\\s+(?:[A-Za-z0-9_$]+\\s*,\\s*)?\\{([^}]*)\\}\\s*from\\s*"' + s + '";?', 'g'),
+    new RegExp('import(?:\\s+([A-Za-z0-9_$]+)\\s*,)?\\s*\\{([^}]*)\\}\\s*from\\s*"' + s + '";?', 'g'),
     // import * as ns from "spec";
     new RegExp('import\\s*\\*\\s*as\\s+([A-Za-z0-9_$]+)\\s*from\\s*"' + s + '";?', 'g'),
     // import def from "spec";
@@ -223,6 +394,34 @@ function parseNamedClause(inner) {
   return out;
 }
 
+// For EVERY named-import clause in `src` — any specifier, this member's own external
+// dependencies included, not just cross-group ones — rewrite any entry whose LOCAL name
+// collides into an explicit `imported as __mK_local` alias. Must run BEFORE the general
+// collision-rename pass: an unaliased entry (`import{Yo}from"spec"`) uses the SAME token as
+// both the fixed export name and the local binding, and the rename pass (which correctly never
+// touches the export-name half — see `protectImportedExportNames`) has no other way to reach
+// the local half if it stays fused to the export-name text. Splitting it into an explicit alias
+// here gives the local half its own token to rename, while `protectImportedExportNames` makes
+// sure the newly-explicit imported half is never itself mistaken for a reference needing rename
+// (it can quite easily BE a colliding name too — see that function's comment).
+function aliasCollidingNamedImports(src, colliding, k) {
+  var re = /import(?:\s+[A-Za-z0-9_$]+\s*,)?\s*\{([^}]*)\}\s*from\s*"(?:[^"\\]|\\.)*"/g;
+  return maskedReplace(src, re, function (whole, inner) {
+    var entries = parseNamedClause(inner);
+    var changed = false;
+    var rebuilt = entries.map(function (e) {
+      if (colliding.has(e.local)) {
+        changed = true;
+        return e.imported + ' as __m' + k + '_' + e.local;
+      }
+      return e.imported === e.local ? e.imported : (e.imported + ' as ' + e.local);
+    });
+    if (!changed) return whole; // nothing here collides — leave byte-for-byte untouched
+    var braceStart = whole.indexOf('{'), braceEnd = whole.indexOf('}', braceStart);
+    return whole.slice(0, braceStart + 1) + rebuilt.join(', ') + whole.slice(braceEnd);
+  });
+}
+
 // Same clause grammar, export-statement roles: the name before `as` is the LOCAL binding, the
 // name after it is the EXPORTED name (the reverse of an import clause's roles).
 function parseExportClause(inner) {
@@ -257,6 +456,20 @@ function localExportMap(src) {
   return map;
 }
 
+// `export default` has no name of its own to key a local binding by — an anonymous default
+// (`export default 42;`, `export default {...};`) would need a synthesized local name this file
+// has no principled way to pick, and a NAMED default (`export default function foo(){}`) would
+// need `moduleMeta`'s "default" entry mapped to "foo", which `localExportMap` does not attempt
+// (it only parses the bare `export { ... }` clause). Measured absent from all three real groups
+// (7/95/5 members) on 2.1.250, so refusing rather than guessing costs nothing today and fails
+// loudly, by name, if a future bundle ever uses it inside a cyclic group.
+function hasExportDefault(src) {
+  var mask = codeMask(src);
+  var re = /export\s+default\b/g, m;
+  while ((m = re.exec(src))) { if (mask[m.index]) return true; }
+  return false;
+}
+
 function mergeGroup(group, sources, moduleMeta, groupIndex) {
   var mergedName = '/$bunfs/root/__clode-scc-' + groupIndex + '.js';
   var i, name;
@@ -268,6 +481,9 @@ function mergeGroup(group, sources, moduleMeta, groupIndex) {
     if (!meta) throw new Error('scc-merge: no metadata for ' + name);
     var src = sources[name];
     if (typeof src !== 'string') throw new Error('scc-merge: no source for ' + name);
+    if (hasExportDefault(src)) {
+      throw new Error('scc-merge: ' + name + ' uses `export default`, which this merger does not support');
+    }
     members.push({
       name: name,
       k: i,
@@ -279,25 +495,50 @@ function mergeGroup(group, sources, moduleMeta, groupIndex) {
     });
   }
 
+  // Collision detection over moduleMeta's declared names — computed BEFORE any rewriting,
+  // straight from what the engine's own parser reported, since `aliasCollidingNamedImports`
+  // (right below) needs to know the full collision set before it can decide which imported
+  // names need an explicit alias.
+  var countOf = new Map();
+  members.forEach(function (m) {
+    m.declared.forEach(function (n) {
+      countOf.set(n, (countOf.get(n) || 0) + 1);
+    });
+  });
+  var colliding = new Set();
+  countOf.forEach(function (c, n) { if (c > 1) colliding.add(n); });
+
   // Rewrite phase 1: replace cross-group `import ... from "<member>"` and
   // `export ... from "<member>"` statements with plain `const` bindings pulled off that
-  // member's namespace object. This is done BEFORE collision detection because it can
-  // introduce new top-level names (the import's LOCAL names) that have to be counted too —
-  // moduleMeta already counted them (imported bindings occupy the top-level scope), so this
-  // rewrite must produce exactly the same set of local names moduleMeta reported, or a
-  // collision moduleMeta already accounted for goes undetected.
+  // member's namespace object. This is done before collision-based RENAMING (phase 2, below)
+  // because it can introduce new top-level names (the import's LOCAL names) that have to be
+  // counted too — moduleMeta already counted them (imported bindings occupy the top-level
+  // scope), so this rewrite must produce exactly the same set of local names moduleMeta
+  // reported, or a collision moduleMeta already accounted for goes undetected.
   var bodies = members.map(function (m) {
-    var src = m.src;
+    // Any OTHER named import — this member's own external dependencies included, not just
+    // cross-group ones — whose LOCAL name collides gets an explicit alias FIRST, so phase 2 has
+    // a local-only token to rename without ever touching the fixed export-name half beside it.
+    var src = aliasCollidingNamedImports(m.src, colliding, m.k);
     for (var j = 0; j < group.length; j++) {
       var other = group[j];
       if (other === m.name) continue;
+      // Cheap fast-path: none of the regexes below can possibly match unless `other`'s exact
+      // specifier text appears somewhere in `src` (they all require it verbatim). Skipping the
+      // ~9 maskedReplace calls per candidate — each an O(size) codeMask scan — turns a group's
+      // cost from O(members^2) full-body scans into one substring check per non-reference pair.
+      // Measured necessary: the real 95-module group (8930 candidate pairs, most with no real
+      // edge at all — the whole graph has only 33 residual cyclic edges in total) took over two
+      // minutes without this and is fast with it.
+      if (src.indexOf(other) === -1) continue;
       var ns = nsVar(j);
 
       var importRes = IMPORT_STMT_RES(other);
       // Named + optional default: import def, { a, b as c } from "other";
-      src = maskedReplace(src, importRes[0], function (whole, inner) {
+      src = maskedReplace(src, importRes[0], function (whole, defName, inner) {
         var clause = parseNamedClause(inner);
         var decls = clause.map(function (c) { return c.local + ' = ' + ns + '.' + c.imported; });
+        if (defName) decls.unshift(defName + ' = ' + ns + '.default');
         return decls.length ? ('const ' + decls.join(', ') + ';') : '';
       });
       // import * as ns from "other";
@@ -330,19 +571,27 @@ function mergeGroup(group, sources, moduleMeta, groupIndex) {
       src = maskedReplace(src, reqRes[0], function () { return ns; });
       src = maskedReplace(src, reqRes[1], function () { return ns; });
     }
+
+    // Strip THIS member's own export syntax — every one of its exports is already re-exposed
+    // by the merger's own consolidated `export { ... }` at the end of the merged module, under
+    // a name mangled per member (`__m<k>_export_<name>`), so leaving the member's own export
+    // survive verbatim is redundant at best. It is worse than redundant whenever two members of
+    // the group export the SAME public name: their un-mangled exports collide in the merged
+    // module's top-level scope, a SyntaxError. Measured live on the real bundle — 145 duplicate
+    // export names in the 95-module group, 5 in the 5-module group — not a hypothetical the
+    // 7-module group (Step 6's target) happened not to exercise.
+    //
+    // The bare grouped clause (`export { a as B, ... }`, never one with a trailing `from`,
+    // which is a cross-member re-export already handled above) is dropped outright — nothing
+    // else needs it; `exportMap` was built from `m.src` before any rewriting. A single-name
+    // inline export (`export function foo(){}`, `export class Foo{}`, `export const/let/var
+    // NAME = ...`) keeps its declaration — the local binding NAME is still needed — only the
+    // `export` keyword itself goes, so it can't also compete with the merger's own list.
+    src = maskedReplace(src, /export\s*\{([^}]*)\}(?!\s*from\b)/g, function () { return ''; });
+    src = maskedReplace(src, /export\s+(?=(?:function|class|const|let|var)\b)/g, function () { return ''; });
+
     return src;
   });
-
-  // Collision detection over moduleMeta's declared names — unaffected by the rewrite above,
-  // because the rewrite preserves exactly the local names moduleMeta already reported.
-  var countOf = new Map();
-  members.forEach(function (m) {
-    m.declared.forEach(function (n) {
-      countOf.set(n, (countOf.get(n) || 0) + 1);
-    });
-  });
-  var colliding = new Set();
-  countOf.forEach(function (c, n) { if (c > 1) colliding.add(n); });
 
   // Rewrite phase 2: rename every colliding top-level name, per member, to `__m<k>_<name>`.
   // One combined alternation per member (mask computed once, single pass) rather than one
@@ -350,6 +599,13 @@ function mergeGroup(group, sources, moduleMeta, groupIndex) {
   // member per name adds up for no benefit: `String.prototype.replace` with a global regex
   // already matches against the untouched original in one pass, so a single alternation is
   // both faster and no less correct than looping.
+  //
+  // `(?<!\.)` is load-bearing, not decoration: `.` is not an IDENT_CHAR, so the boundary
+  // lookarounds alone happily match a colliding name used as a PROPERTY — `obj.shared` — which
+  // is never a lexical binding reference. A name immediately after `.` (plain member access OR
+  // optional chaining, `?.foo` — both end in the same `.` right before the name) must never be
+  // touched; this excludes it categorically. See the KNOWN LIMITATION note in the file header
+  // for the one case this file does not and cannot reliably guard: object-literal shorthand.
   bodies = bodies.map(function (src, idx) {
     var m = members[idx];
     var names = [];
@@ -357,7 +613,7 @@ function mergeGroup(group, sources, moduleMeta, groupIndex) {
     if (!names.length) return src;
     names.sort(function (a, b) { return b.length - a.length; });
     var alt = names.map(escapeRe).join('|');
-    var re = new RegExp('(?<![' + IDENT_CHAR + '])(?:' + alt + ')(?![' + IDENT_CHAR + '])', 'g');
+    var re = new RegExp('(?<!\\.)(?<![' + IDENT_CHAR + '])(?:' + alt + ')(?![' + IDENT_CHAR + '])', 'g');
     return maskedReplace(src, re, function (whole) { return '__m' + m.k + '_' + whole; });
   });
 
