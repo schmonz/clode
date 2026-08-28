@@ -188,6 +188,46 @@ upstream depends on that.
    synchronously. Evaluating the dependency CLOSURE instead is not a smaller hammer: measured
    mean 375 and max 908 modules of 1814, i.e. design 1 wearing a different hat.
 
+**EXPERIMENT 3 (2026-08-28): pre-evaluate the closure. FAILED, and it settles the fork.** The
+idea was to evaluate the require()d modules UP FRONT so nothing is evaluated re-entrantly, since
+re-entrant evaluation is what SIGSEGVs. Three variants, each measured:
+
+- *Each required module publishes its own namespace* (prepend `import * as self from "<self>"`).
+  **93 of 193 modules then failed to evaluate at all**, every one with `circular reference when
+  looking for export ...`. A self-import makes export resolution circular. This is the same
+  wall probe 1 hit, now quantified: the trick corrupts half the set.
+- *Publish from separate one-line modules instead* (`import * as ns from "<spec>"; __CLODE_NS[spec] = ns`),
+  which keeps upstream's sources VERBATIM and the export graph acyclic. All 193 publishers
+  reported success — **and only 29 namespaces appeared.** `evalBytecode` returned without the
+  body having run for 164 of them.
+- *Await what evalBytecode returns.* It does return promises (`pending=193 thenable=193`), so
+  the deferral is real and visible. **They never settle**: evaluating a publisher triggers
+  upstream's own `require()` of another chunk, that require fails, and the failure rejects the
+  evaluation. The dependency must be evaluated to answer a require that is needed to evaluate
+  the dependency.
+
+**THE ENGINE PROPERTY, stated once so it is not rediscovered a fourth time: module evaluation
+here is DEFERRED, and cannot be driven to completion synchronously from inside a require.**
+`tjs.engine` exposes compile/serialize/deserialize/evalBytecode/gc/features/versions — nothing
+that drains pending module jobs. Every JS-side design founders on this, not on cleverness:
+- on-demand evaluation — SIGSEGV (re-entrant `js_evaluate_module`)
+- self-published namespaces — circular export resolution, 93/193 dead
+- externally-published namespaces — bodies do not run, 29/193 land
+- awaiting the evaluation promises — deadlock against upstream's own requires
+
+**VERDICT: the extraction route wins, by elimination and on evidence rather than taste.** Emit
+each cyclic require group as ONE module so the cycle never crosses a module boundary; the
+engine then never has to answer a require for a module it is mid-way through evaluating. It
+costs the verbatim property and a mini-bundler's worth of care (top-level name collisions,
+export rewriting, per-module `import.meta`), and those costs are real — but they are ordinary
+engineering in our own JS, against an engine change that three experiments say is not small and
+lives in the module evaluator every leg depends on.
+
+**Do it narrowly.** Per the shape record, 2.1.250's cyclic shape may not outlive the week —
+2.1.243's did not. Merge only the modules that are actually in a cycle WITH a CJS require,
+leave the other ~1600 untouched, and keep the merge behind a check so a bundle without cyclic
+requires takes exactly the path it takes today.
+
 **PROBE 2 (2026-08-28): can a namespace be built after INSTANTIATE without EVALUATE? YES — and
 the engine route still does not close.** This is the probe the previous entry asked for, run.
 
