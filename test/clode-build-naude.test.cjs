@@ -26,6 +26,8 @@ const REPO = path.resolve(__dirname, '..');
 const LIBEXEC = path.join(REPO, 'libexec');
 const { clodeBuild } = require('../libexec/clode-fuse.cjs');
 const { cacheKey, sigOf } = require('../libexec/clode-resolve.cjs');
+const { cacheSignature } = require('../libexec/clode-extract.cjs');
+const { providerPlatformOf } = require('../libexec/extract-claude-js.cjs');
 
 // Stand up a fake provider bin + a pre-seeded extract cache so the real
 // resolve/extract path is a cache HIT (no extraction). Returns { env, cliPath }.
@@ -42,7 +44,14 @@ function seedProvider(dir) {
   // The sig is sigOf() (size+mtime), NOT a sha256 — mirror extractIfNeeded.
   fs.copyFileSync(path.join(LIBEXEC, 'bun-shim.cjs'), path.join(stageDir, 'bun-shim.cjs'));
   fs.writeFileSync(path.join(stageDir, '.extractor-sig'),
-    sigOf(path.join(LIBEXEC, 'extract-claude-js.cjs')));
+    // The stored sig is the extractor's signature COMPOSED WITH the provider's platform:
+    // a version alone never determined the carve (see test/extract-cache-key.test.cjs).
+    // Seeding the bare sigOf() here made this a cache MISS, and the fixture then tried to
+    // really extract its bogus provider bytes.
+    cacheSignature({
+      extractorSig: sigOf(path.join(LIBEXEC, 'extract-claude-js.cjs')),
+      providerPlatform: providerPlatformOf(provider),
+    }));
   const env = {
     ...process.env,
     CLODE_CLAUDE_BIN: provider,
