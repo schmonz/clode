@@ -102,6 +102,45 @@ upstream depends on that.
    synchronously. Evaluating the dependency CLOSURE instead is not a smaller hammer: measured
    mean 375 and max 908 modules of 1814, i.e. design 1 wearing a different hat.
 
+**PROBE 2 (2026-08-28): can a namespace be built after INSTANTIATE without EVALUATE? YES — and
+the engine route still does not close.** This is the probe the previous entry asked for, run.
+
+`JS_EvalFunction`'s module branch does three things at once and consumes its argument:
+`js_create_module_function` → `js_link_module` → `js_evaluate_module`. Both linking functions
+are static, so separating the ESM phases needs a quickjs.c patch, not just a txiki binding.
+Added `JS_InstantiateModule` (create+link, no evaluate, no free) and `JS_EvaluateModuleOnly`
+(evaluate an already-linked module, no re-link, no free), exposed as
+`tjs.engine.instantiate/evaluateOnly/namespaceOf`.
+
+MEASURED, in order:
+- `instantiate()` on a compiled module: **works**.
+- `namespaceOf()` after instantiate, module NOT evaluated: **works, returns a real namespace
+  object, clean exit 0.** Reading an uninitialised binding throws `x is not initialized` —
+  TDZ, which is CORRECT ESM semantics for a cycle. This directly refutes probe 1's reading:
+  the earlier crash was calling `namespaceOf` on a NON-instantiated module, not a limit on
+  namespaces for unevaluated ones.
+- Wired into the graph runner + shim, `require("/$bunfs/root/chunk-*.js")` **stops failing to
+  resolve** — the "cannot resolve" error is gone. Upstream then hits
+  `TypeError: Cannot convert undefined or null to object` in `Object.entries`, because a
+  linked-but-unevaluated namespace hands back uninitialised bindings as undefined.
+- So the module must also be EVALUATED on demand. `evalBytecode` there **SIGSEGVs** (its
+  module branch re-creates, re-links and FREES a module we still hold — the "refcount should
+  be >= 2" comment in quickjs.c is about exactly this). `evaluateOnly`, which avoids all three,
+  **also SIGSEGVs**: `js_evaluate_module` is being re-entered while another module is
+  mid-evaluation, which is the cyclic case by definition.
+
+**Conclusion. The wall is re-entrant module evaluation, not namespace construction.** Making
+that safe is real QuickJS work in the module evaluator — the riskiest part of the engine, and
+the part every leg depends on. Two probes have now each shown the engine route to be larger
+than it looks from the outside, so treat "it is only a small binding" as a claim already
+refuted twice.
+
+**Still-open engine idea, cheaper than fixing re-entrancy:** evaluate the required module's
+dependency closure BEFORE the entry runs, so nothing needs evaluating mid-cycle and
+`instantiate` + `namespaceOf` alone suffice. Measured closure sizes are mean 375 / max 908 of
+1814, so this is eager-ish and has the ws-exit hazard of design 1 — but it is bounded, it is
+JS-side, and it needs no evaluator change.
+
 **ENGINE EXPERIMENT RUN 2026-08-28 — `engine.namespaceOf` is NOT the cheap fix.** The reasoning
 that motivated it was: `JS_GetModuleNamespace` is a public QuickJS API (`quickjs.h:1191`) that
 `qjs.c` itself calls, so exposing it should be a binding onto an existing function — tens of
