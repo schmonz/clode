@@ -312,6 +312,36 @@ losing the verbatim property.
 `--version` passes on a broken graph — it never reaches these modules. `--help` is the cheap
 trigger. NB `build/tjs/tjs` is stale and the shim rightly refuses it; use the per-platform one.
 
+### THE GRAPH IS PER-PLATFORM, AND A DARWIN REPRO IS NOT A LINUX REPRO (2026-08-28)
+
+The merger's first shipped build passed its own smoke against the darwin-arm64 provider and
+failed 16 CI legs against the linux-x64 one, **same upstream version**. Bun constant-folds
+`process.platform` at build time (see `carve-platform-constant-folding`), so each platform's
+binary carves to a DIFFERENT module graph: 2.1.250 is 1777 modules on darwin-arm64 and 1773 on
+linux-x64 (2.1.251: 1799 / 1795). Same three SCCs, 7/95/5 — but different collision sets, so a
+name that is only a property key on one platform is a colliding top-level binding on the other.
+
+**When a CI leg fails and the local build passes, match the PLATFORM of the provider, not just
+the version.** The carve never executes the binary, so a linux provider carves and fuses fine on
+a Mac and reproduces the leg exactly. `make-min-provider`'s own "N modules + M text assets" line
+is the fingerprint to match against the CI log:
+
+    node -e 'fetch("https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64")...'  # tarball
+    node scripts/make-min-provider.cjs <that>/claude /tmp/provider-min-lx
+    CLODE_CLAUDE_BIN=/tmp/provider-min-lx CLODE_CACHE=... ./bin/clode build --out /tmp/q
+
+Left open: nothing in CI or the local suite builds against more than one platform's graph, so
+this class of divergence is still found by a red leg rather than by us.
+
+### The merge is ~45% slower than the number Task 3 measured (2026-08-28)
+
+`propertyNames` adds a second full scan to `codeMask`, which every `maskedReplace` calls: the
+95-module group went 14.0s -> 19.5s under node, so expect ~380s -> ~550s under tjs, per leg,
+cold. Still inside the 1800s fuse budget on the boxes measured, and unmeasured on the emulated
+ones. The three levers are unchanged and are all better than shaving this scan: cache the merge
+under `~/.cache/clode` keyed on the provider, do the string work where it is 31x faster, or stop
+recomputing `codeMask` from scratch inside every `maskedReplace`.
+
 ## IN-FLIGHT HANDOFF (2026-07-31) — what's being juggled
 
 Driver = the at-desk release-readiness plan (`docs/superpowers/plans/2026-07-28-at-desk-release-readiness.md`).
@@ -2563,6 +2593,67 @@ the property the quaude path already holds — UPSTREAM'S BYTES ARE NEVER REWRIT
 only thing that makes the oracle an oracle. The alternative, rewriting ESM into a CJS
 registry, is explicitly argued against there: it can mangle a prompt string and fail
 silently, and a fidelity oracle that quietly differs from its subject is worse than none.
+
+
+### ★★★ Make it structurally hard to ship a release without working authentication (user, 2026-08-28)
+
+**The user, on being shown that a shipped quaude cannot authenticate at all:** "it should
+be structurally difficult to attempt to ship a release without authentication working."
+
+**What happened.** A quaude built 2026-08-27 fails EVERY turn on macOS with
+`401 OAuth access token has been revoked`, because it never reads the platform credential
+store — zero `security` calls, silent fallback to a `~/.claude/.credentials.json` that had
+been dead for 20 days. Full diagnosis in the session notes; the point HERE is what the
+gates did:
+
+- `--version` — green.
+- `--help` — green.
+- the build's own mock PONG smoke — green.
+- 38 CI legs — green on the legs that were green.
+
+**Every one of them passed on a binary that cannot log in.** The product's single most
+important capability was completely broken and nothing in the pipeline had an opinion.
+
+**Why the mock PONG can never catch this.** It answers from a canned in-process Messages
+mock. It reads no credential, opens no connection, and consults no keychain. It proves the
+graph evaluates and the turn loop runs — real value, keep it — but it is structurally
+incapable of noticing that auth is broken, because auth is precisely the part it replaces.
+This is the [[a change that disables the oracle must be treated as unverified]] shape again:
+we substituted the hard part and then read the green as coverage of the whole.
+
+**Two gates, and the cheap one is the important one.**
+
+1. **A real authenticated turn, on the host leg, before a tag.** Standing user
+   requirement as of 2026-08-28: prove it by logging in and driving an interactive-TUI turn
+   or two with real tokens. This cannot run on every emulated leg — no credentials, no
+   network, and we must never put credentials on a runner — so it gates the RELEASE on
+   darwin-arm64, not the matrix.
+
+2. **Assert the credential store is ATTEMPTED — needs no credentials at all, so it runs
+   everywhere.** The bug was not "the token was wrong"; it was "we never asked". That is
+   observable without ever holding a secret: put a logging shim earlier on PATH and assert
+   that on darwin the client invokes `security find-generic-password`. It fails closed on a
+   binary that silently downgrades to the file store, costs no secret, needs no network, and
+   would have caught this exact defect on day one. Same trick generalises per platform as we
+   learn each one's store.
+
+   **Validate the harness with a control.** An empty log is equally consistent with "never
+   called" and "my wrapper never ran". Wrapping `git` alongside `security` is what made the
+   negative trustworthy today (6 git calls, 0 security). A negative assertion with no
+   positive control is not evidence — [[instruments-lie-check-them-first]].
+
+**The structural part, which is the actual ask.** Not "add two tests" — tests get skipped,
+exempted by name, and quietly stop running (see the openindiana-by-name exemption and the
+coverage that turned on and off with machine state). Shipping must be IMPOSSIBLE, not
+merely inadvisable, without a recorded authenticated turn against the exact artifact being
+tagged. The release job should refuse to publish absent that evidence, the same way it
+already refuses on a stale engine. Make the missing proof fail at the earliest stage, not
+after the matrix — "how a step fails is part of what the step IS".
+
+**Also worth fixing while here:** the read swallows every failure
+(`try{ execFile("security",…) }catch{ i(null) }`), so a shim gap is indistinguishable from
+"no credential stored". We cannot patch upstream's swallow, but our own smoke can refuse to
+treat a silent fallback as success.
 
 
 ### Write down the doctrine — propose a CLAUDE.md from this project's own history (user, 2026-08-25)
