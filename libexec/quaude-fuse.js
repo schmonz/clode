@@ -217,6 +217,31 @@ if (role === 'builder') {
     if (doc.format !== 'clode-bun-graph-v1') {
       throw new Error(`quaude-fuse: staged graph has format ${doc.format}, expected clode-bun-graph-v1`);
     }
+    // RESIDUAL CYCLIC REQUIRES (upstream 2.1.248+). Task 2 converted every require of a graph
+    // module that could become a static import; these 25-odd could not, because the target
+    // statically imports its way back and an import would close a cycle the planner rejects.
+    //
+    // They are NOT known to be reachable at runtime. Rather than build a module merger on
+    // speculation, the build says so by name and continues — so if one is ever hit, the error
+    // on the leg is preceded by a build-time warning that names the exact edge.
+    const cyclicRequires = doc.cyclicRequires || [];
+    if (cyclicRequires.length) {
+      const listed = cyclicRequires.slice(0, 5)
+        .map(([from, to]) => '    ' + from + ' -> ' + to).join('\n');
+      const msg = 'quaude-fuse: ' + cyclicRequires.length + ' CJS require(s) of a graph module'
+        + ' could not be converted to imports (converting would close an import cycle):\n'
+        + listed + (cyclicRequires.length > 5 ? '\n    … and ' + (cyclicRequires.length - 5) + ' more' : '')
+        + '\n  If a build reaches one of these it fails with "cannot resolve" naming that module.';
+      // console.log, NOT console.error: clode-fuse.cjs only surfaces the fuse
+      // worker's stdout on a SUCCESSFUL build (clodeLog(w.stdout)) — stderr is
+      // shown only on failure. A non-fatal warning on stderr here would reach
+      // no one on the green path, which is exactly the silent fallback this
+      // guard exists to prevent (see the postject-not-provisioned warning
+      // above, same reasoning, same choice).
+      if (tjs.env.CLODE_ALLOW_CYCLIC_REQUIRES === '0') throw new Error(msg);
+      console.log(msg);
+    }
+
     // Compile every unit IN THE STAGED ORDER. Order is not cosmetic: compile()
     // resolves imports as it compiles, so a module whose dependency has not been
     // compiled yet fails with "could not load" naming a module that is perfectly
