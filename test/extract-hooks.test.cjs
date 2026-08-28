@@ -298,3 +298,71 @@ test('patchRemoteControlUnavailable still supports the old inline shape (<=2.1.2
   // Gate-off spliced immediately before the inline api.anthropic.com reason guard.
   assert.match(out, /if\(globalThis\.__clodeWsUnavailable\)return"[^"]*";if\(!K8e\(\)\)return"Remote Control is only available/);
 });
+
+// FROM 2.1.251 THE BUNDLE READS EMBEDDED ASSETS WITH fs, NOT require(), and a target has no
+// filesystem holding /$bunfs/root/... . 101 assets are read that way in 2.1.251 (72 still the old
+// way), and the build smokes green right up to the first turn, where upstream throws its own
+// "embedded text asset is missing or corrupt". The patch wraps the IMPORT BINDINGS rather than
+// the readers, because the reader bodies are minified and rename every release while the import
+// statements name what they bind.
+const { patchEmbeddedAssetReader } = require('../libexec/extract-claude-js.cjs');
+
+// The real 2.1.251 helper, verbatim (chunk-t0k3nmf2.js).
+const ASSET_CHUNK = 'import{readFileSync as o}from"fs";import{readFile as i}from"fs/promises";'
+  + 'import{isAbsolute as d,join as c}from"path";var u=[40,181,47,253];'
+  + 'function s(t){return t.length>=4&&u.every((e,r)=>t[r]===e)}'
+  + 'function Z2t(t,e){return d(t)?t:c(e,t)}'
+  + 'async function RX(t,e){let r=await i(Z2t(t,e));return(s(r)?await Bun.zstdDecompress(r):r).toString("utf8")}'
+  + 'function nt(t,e){let r=Z2t(t,e);try{let n=o(r);return(s(n)?Bun.zstdDecompressSync(n):n).toString("utf8")}'
+  + 'catch(n){throw Object.assign(Error("embedded text asset is missing or corrupt",{cause:n}),{path:r})}}\n'
+  + 'export{Z2t,RX,nt};\n';
+
+test('embedded_asset_reader: an fs-read asset resolves through the embedded map', () => {
+  const [patched, applied] = patchEmbeddedAssetReader(ASSET_CHUNK);
+  assert.strictEqual(applied, true, 'the 2.1.251 helper must be recognised');
+
+  // Evaluate the patched module the way the target does: __quaudeRequire answers embedded
+  // names and fs is never reached.
+  const calls = [];
+  const mod = evalPatched(patched, {
+    __quaudeRequire: (n) => {
+      calls.push(n);
+      if (n === '/$bunfs/root/SKILL.md.zst') return '# skill\n';
+      throw new Error('Cannot find module ' + n);
+    },
+  }, { readFileSync: () => { throw new Error('fs must not be reached for an embedded asset'); } });
+
+  assert.strictEqual(mod.nt('/$bunfs/root/SKILL.md.zst', '/base'), '# skill\n');
+  assert.deepStrictEqual(calls, ['/$bunfs/root/SKILL.md.zst']);
+});
+
+test('embedded_asset_reader: a real path still falls through to fs', () => {
+  const [patched] = patchEmbeddedAssetReader(ASSET_CHUNK);
+  const mod = evalPatched(patched,
+    { __quaudeRequire: (n) => { throw new Error('Cannot find module ' + n); } },
+    { readFileSync: (p) => { assert.strictEqual(p, '/real/file.txt'); return 'from disk'; } });
+  assert.strictEqual(mod.nt('/real/file.txt', '/base'), 'from disk');
+});
+
+test('embedded_asset_reader: a provider without the fs reader is left alone', () => {
+  const [body, applied] = patchEmbeddedAssetReader('var x=1;export{x};\n');
+  assert.strictEqual(applied, false);
+  assert.strictEqual(body, 'var x=1;export{x};\n');
+});
+
+// Evaluate the patched ESM helper as CJS: rewrite its imports to the injected stubs and its
+// export clause to module.exports. Small and local on purpose — the point is to RUN the patched
+// code, not to re-test an ESM loader.
+function evalPatched(src, globals, fsStub) {
+  const body = src
+    .replace(/import\{readFileSync as ([A-Za-z0-9_$]+)\}from"fs";/, 'const $1=__fs.readFileSync;')
+    .replace(/import\{readFile as ([A-Za-z0-9_$]+)\}from"fs\/promises";/, 'const $1=__fsp.readFile;')
+    .replace(/import\{isAbsolute as ([A-Za-z0-9_$]+),join as ([A-Za-z0-9_$]+)\}from"path";/,
+      'const $1=__path.isAbsolute, $2=__path.join;')
+    .replace(/export\{([^}]*)\};/, (m0, names) => 'module.exports={' + names + '};');
+  const module = { exports: {} };
+  const g = Object.assign(Object.create(globalThis), globals);
+  new Function('module', '__fs', '__fsp', '__path', 'globalThis', body)(
+    module, fsStub, { readFile: async () => { throw new Error('unused'); } }, path, g);
+  return module.exports;
+}

@@ -169,17 +169,68 @@ function decodeBunGraph(u8) {
 }
 
 // Map<moduleName, sourceText> over the JS-loader rows only, as the task asks.
-// TEXT ASSETS the bundle require()s by name. Separate from loadGraphFromBytes because
-// they are NOT modules: nothing compiles them, nothing imports them with ESM syntax, and
-// giving them to the compiler would be a syntax error 118 times over. They are strings the
-// bundle asks for at runtime, and the target must be able to hand them back.
+// ZSTD FRAME MAGIC, and it is the only reliable discriminator here. From 2.1.251 upstream
+// compresses the assets it embeds, and it does NOT do so by extension: `mermaid.min.js`,
+// `payload.template.html.asset` and 97 `*.zst` rows all begin with these four bytes. Measured
+// on the real darwin-arm64 2.1.251 provider — all 101 loader-5 rows are zstd frames, and 0 of
+// them are anything else.
+var ZSTD_MAGIC = [0x28, 0xb5, 0x2f, 0xfd];
+function isZstdFrame(u8, p, len) {
+  if (len < 4) return false;
+  for (var i = 0; i < 4; i++) if (u8[p + i] !== ZSTD_MAGIC[i]) return false;
+  return true;
+}
+
+// DECOMPRESSED AT CARVE TIME, ON PURPOSE, and the bundle's own code is why it works. Upstream
+// reads an embedded asset like this (2.1.251, chunk-t0k3nmf2.js):
+//
+//     var u=[40,181,47,253];
+//     function s(t){return t.length>=4&&u.every((e,r)=>t[r]===e)}          // is it a zstd frame?
+//     function nt(t,e){ ... let n=o(r); return (s(n)?Bun.zstdDecompressSync(n):n).toString("utf8") }
+//
+// The decompression is CONDITIONAL on the magic. Hand it plain text and `s()` is false and the
+// text is used verbatim — so decoding here means the target never needs a zstd implementation at
+// all. That matters: tjs has none, `node-shim/modules/zlib.cjs` deliberately has none, and
+// writing one is several hundred lines of entropy coding we have no business vendoring.
+function zstdToText(u8, p, len) {
+  var zlib = null;
+  try { zlib = require('node:zlib'); } catch (e) { /* not node, or no zlib */ }
+  if (!zlib || typeof zlib.zstdDecompressSync !== 'function') {
+    throw new Error('bun-graph: this provider embeds zstd-compressed assets and this runtime '
+      + 'cannot decode them. node:zlib.zstdDecompressSync arrived in Node 22.15 / 24; tjs has no '
+      + 'zstd at all. Carve with a newer Node — the alternative is a target that builds green '
+      + 'and dies on its first turn with "embedded text asset is missing or corrupt".');
+  }
+  var out = zlib.zstdDecompressSync(Buffer.from(u8.buffer, u8.byteOffset + p, len));
+  return out.toString('utf8');
+}
+
+// TEXT ASSETS the bundle reads by their container name. Separate from loadGraphFromBytes because
+// they are NOT modules: nothing compiles them, nothing imports them with ESM syntax, and giving
+// them to the compiler would be a syntax error 118 times over. They are strings the bundle asks
+// for at runtime, and the target must be able to hand them back.
+//
+// TWO LOADERS, and taking only one of them shipped a broken 2.1.251. Rows by loader:
+//
+//     2.1.250   {"1":1777, "5":4,   "10":5, "13":166}
+//     2.1.251   {"1":1799, "5":101, "10":5, "13":72}
+//
+// 94 rows moved from 13 (text) to 5 (file) because upstream started compressing them. Loader 5
+// is NOT a mixed bag to be filtered: every one of the 101 rows is a zstd frame and every one is
+// referenced by a module (measured, both versions). The native `.node` modules that must stay
+// out of a target are loader 10 (napi), a different bucket entirely, and they are still excluded
+// here exactly as before. The 2.1.250 loader-5 rows — mermaid, hljs, chart.umd — were already
+// referenced and already unserved, so this closes a latent gap in the older bundle too; they are
+// read lazily (only when a chart or diagram renders), which is why no smoke ever caught it.
 function loadAssetsFromBytes(u8) {
   var g = decodeBunGraph(u8);
   var out = new Map();
   for (var i = 0; i < g.count; i++) {
     var r = g.rows[i];
-    if (r.loader !== 13) continue;              // 13 = text (see LOADER)
-    out.set(r.name, utf8(u8, r.contentsStart, r.contentsLength));
+    if (r.loader !== 13 && r.loader !== 5) continue;   // 13 = text, 5 = file (see LOADER)
+    out.set(r.name, isZstdFrame(u8, r.contentsStart, r.contentsLength)
+      ? zstdToText(u8, r.contentsStart, r.contentsLength)
+      : utf8(u8, r.contentsStart, r.contentsLength));
   }
   return out;
 }

@@ -861,6 +861,54 @@ function transform(body) {
 //
 // Returns { sources, report } — never throws for a non-applying hook, because the
 // caller decides what is fatal, exactly as transform() does today.
+
+// --- Embedded assets are read with fs, not require(), from 2.1.251 -----------
+// Through 2.1.250 the bundle reached an embedded asset with `import.meta.require(name)`, which
+// both targets answer from `globalThis.__quaudeRequire` (loader.cjs for quaude, the graph runner
+// below for naude). 2.1.251 added a second reader that goes through the FILESYSTEM instead —
+// and a target has no filesystem holding `/$bunfs/root/...`, so every one of those reads throws:
+//
+//     import{readFileSync as o}from"fs";import{readFile as i}from"fs/promises";
+//     var u=[40,181,47,253];
+//     function s(t){return t.length>=4&&u.every((e,r)=>t[r]===e)}
+//     function nt(t,e){let r=Z2t(t,e);try{let n=o(r);
+//       return(s(n)?Bun.zstdDecompressSync(n):n).toString("utf8")}
+//       catch(n){throw Object.assign(Error("embedded text asset is missing or corrupt",...))}}
+//
+// Measured on darwin-arm64 2.1.251: 101 assets are read this way and 72 the old way, and the
+// build smoked green right up to the first turn, which is where the throw lands.
+//
+// THE PATCH IS ON THE IMPORT BINDINGS, not on the readers. Rewriting `nt` and `RX` themselves
+// would mean matching minified bodies whose local names change every release; the import
+// statements name the thing they bind and are stable syntax. Wrapping the bound name means every
+// existing use inside the module — both readers, and any the next version adds — goes through
+// the embedded lookup first and falls back to the real fs, so a caller reading an actual file
+// still works.
+//
+// Nothing here decompresses: bun-graph.cjs already decoded the zstd frames at carve time, which
+// is deliberate (`s()` above only decompresses when the magic is PRESENT, so plain text flows
+// through untouched and neither target needs a zstd implementation it does not have).
+const ASSET_READER_ERR = 'embedded text asset is missing or corrupt';
+const ASSET_FS_SYNC = /import\{readFileSync as ([A-Za-z0-9_$]+)\}from"fs";/;
+const ASSET_FS_ASYNC = /import\{readFile as ([A-Za-z0-9_$]+)\}from"fs\/promises";/;
+const ASSET_LOOKUP = 'const __clodeAsset=(p)=>{try{'
+  + 'const v=typeof globalThis.__quaudeRequire==="function"?globalThis.__quaudeRequire(p):undefined;'
+  + 'return typeof v==="string"?v:undefined;}catch(e){return undefined;}};';
+
+function patchEmbeddedAssetReader(body) {
+  if (body.indexOf(ASSET_READER_ERR) === -1) return [body, false];
+  const sync = ASSET_FS_SYNC.exec(body);
+  const asyncRead = ASSET_FS_ASYNC.exec(body);
+  if (!sync || !asyncRead) return [body, false];
+  let out = body.replace(ASSET_FS_SYNC,
+    'import{readFileSync as __clode_rfs}from"fs";' + ASSET_LOOKUP
+    + 'const ' + sync[1] + '=(p)=>{const a=__clodeAsset(p);return a!==undefined?a:__clode_rfs(p);};');
+  out = out.replace(ASSET_FS_ASYNC,
+    'import{readFile as __clode_rf}from"fs/promises";'
+    + 'const ' + asyncRead[1] + '=async(p)=>{const a=__clodeAsset(p);return a!==undefined?a:__clode_rf(p);};');
+  return [out, true];
+}
+
 const GRAPH_HOOKS = [
   ['doctor', patchDoctorWarnings, 'once'],
   ['snapshot_bridge', patchSnapshotBridge, 'once'],
@@ -873,6 +921,9 @@ const GRAPH_HOOKS = [
   // No exactly-once contract by design: the npm remediation appears a
   // version-dependent number of times. The contract is at-least-one and zero residual.
   ['update_hint', patchUpdateHint, 'many'],
+  // 'if-present': zero hits is CORRECT for any provider that does not read assets through the
+  // filesystem (everything up to 2.1.250), so it must not warn; two or more still fails loud.
+  ['embedded_asset_reader', patchEmbeddedAssetReader, 'if-present'],
 ];
 
 function transformGraph(sources) {
@@ -892,6 +943,16 @@ function transformGraph(sources) {
       report.push({ key, applied: false, modules: hits.map((h) => h[0]),
         why: hits.length === 0 ? 'anchor not found in any module'
           : `anchor matched ${hits.length} modules; expected exactly one` });
+      continue;
+    }
+    if (arity === 'if-present' && hits.length === 0) {
+      report.push({ key, applied: false, benign: true, modules: [],
+        why: 'this provider has no filesystem-backed embedded assets (pre-2.1.251)' });
+      continue;
+    }
+    if (arity === 'if-present' && hits.length > 1) {
+      report.push({ key, applied: false, modules: hits.map((h) => h[0]),
+        why: `anchor matched ${hits.length} modules; expected at most one` });
       continue;
     }
     if (arity === 'many' && hits.length === 0) {
@@ -1060,7 +1121,7 @@ function extractGraphToFile(binpath, out) {
   // — the caller decides — but it is never silent. That distinction is the entire
   // reason patchUpdateHint went unnoticed for months.
   for (const r of report) {
-    if (r.applied) continue;
+    if (r.applied || r.benign) continue;
     process.stderr.write(`clode: hook ${r.key} NOT applied to the module graph — ${r.why}. `
       + 'The built target loses that behaviour; run inspect-claude-bundle --strict.\n');
   }
@@ -1385,6 +1446,7 @@ module.exports = {
   rewriteSafeRequires,
   verify,
   contentChecks,
+  patchEmbeddedAssetReader,
   providerPlatformOf,
   extractToFile,
   extractGraphToFile,

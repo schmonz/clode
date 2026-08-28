@@ -25,7 +25,7 @@ const { execFileSync } = require('node:child_process');
 
 const REPO = path.join(__dirname, '..');
 const {
-  decodeBunGraph, loadGraphFromBytes, loadGraphFull, TRAILER, MODULE_FORMAT, LOADER,
+  decodeBunGraph, loadGraphFromBytes, loadGraphFull, loadAssetsFromBytes, TRAILER, MODULE_FORMAT, LOADER,
 } = require('../libexec/bun-graph.cjs');
 
 // ---- layer 1: hermetic refusals ---------------------------------------------
@@ -97,7 +97,7 @@ function container(rows, opts = {}) {
   let off = 0;
   for (const r of rows) {
     const name = enc.encode(r.name);
-    const body = enc.encode(r.body);
+    const body = r.body instanceof Uint8Array ? r.body : enc.encode(r.body);
     const gap = opts.gap || 0;                       // bytes wedged between name\0 and body
     parts.push(name, Uint8Array.of(0));
     if (gap) parts.push(new Uint8Array(gap));
@@ -166,6 +166,40 @@ test('but a mis-stated length still fails LOUDLY — the invariant we KEPT', () 
   const tableOff = dv.getUint32(h + 8, true);
   dv.setUint32(tableOff + 4, 3, true);          // nameLen 16 -> 3
   assert.throws(() => loadGraphFromBytes(u), /not NUL-terminated/);
+});
+
+// 2.1.251 MOVED 94 EMBEDDED ASSETS from loader 13 to loader 5 by COMPRESSING them, and taking
+// only loader 13 shipped a target that built green and died on its first turn with upstream's
+// own "embedded text asset is missing or corrupt". Rows by loader, measured on the real
+// providers: 2.1.250 {"1":1777,"5":4,"10":5,"13":166} -> 2.1.251 {"1":1799,"5":101,"10":5,"13":72}.
+// Loader 10 (napi) stays out; it is native .node code no target loads.
+test('loadAssets takes loader 5 as well as 13, and decodes the zstd frames', () => {
+  const zlib = require('node:zlib');
+  const plain = '# SKILL\nbody text\n';
+  const frame = new Uint8Array(zlib.zstdCompressSync(Buffer.from(plain, 'utf8')));
+  assert.deepStrictEqual([...frame.slice(0, 4)], [0x28, 0xb5, 0x2f, 0xfd], 'fixture must be a zstd frame');
+  const u = container([
+    { name: '/$bunfs/root/cli', body: 'export{};', loader: 1 },
+    { name: '/$bunfs/root/plain.md', body: plain, loader: 13 },
+    { name: '/$bunfs/root/squeezed.md.zst', body: frame, loader: 5 },
+    { name: '/$bunfs/root/native.node', body: 'BINARY', loader: 10 },
+  ]);
+  const assets = loadAssetsFromBytes(u);
+  assert.strictEqual(assets.get('/$bunfs/root/plain.md'), plain, 'loader 13 is unchanged');
+  assert.strictEqual(assets.get('/$bunfs/root/squeezed.md.zst'), plain,
+    'a loader-5 zstd frame must arrive DECOMPRESSED — the target has no zstd to do it later');
+  assert.ok(!assets.has('/$bunfs/root/native.node'), 'loader 10 (napi) stays out');
+  assert.strictEqual(assets.size, 2);
+});
+
+// An uncompressed loader-5 row is not hypothetical: it is what a future bundle would produce if
+// upstream stopped compressing, and the magic check is what tells the two apart.
+test('loadAssets passes an UNCOMPRESSED loader-5 row through as text', () => {
+  const u = container([
+    { name: '/$bunfs/root/cli', body: 'export{};', loader: 1 },
+    { name: '/$bunfs/root/raw.txt', body: 'not compressed', loader: 5 },
+  ]);
+  assert.strictEqual(loadAssetsFromBytes(u).get('/$bunfs/root/raw.txt'), 'not compressed');
 });
 
 test('loader 13 is text — the row class 2.1.246 introduced', () => {

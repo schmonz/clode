@@ -263,9 +263,15 @@ test('the whole chain carries assets: extract -> minimise -> fuse member', () =>
   const ex = fs.readFileSync(path.join(REPO, 'libexec/extract-claude-js.cjs'), 'utf8');
   assert.match(ex, /assets: assets/, 'the staged graph doc must carry text assets');
   const mm = fs.readFileSync(path.join(REPO, 'scripts/make-min-provider.cjs'), 'utf8');
-  assert.match(mm, /KEEP = new Set\(\[1, 13\]\)/,
-    'the minimiser must keep text rows (13) as well as JS (1); dropping them yields a '
-    + 'provider that passes every check and builds a target that dies on its first turn');
+  // 13 = text, 5 = file. 2.1.251 moved 94 embedded assets from 13 into 5 by compressing
+  // them, and keeping only 13 built a target that smoked green and died on its first turn with
+  // upstream's own "embedded text asset is missing or corrupt". The DERIVED version of this
+  // check — KEEP read against the loaders bun-graph actually stages, so neither file can drift —
+  // is in test/make-min-provider.test.cjs; this one stays as the named tripwire for the chain.
+  assert.match(mm, /KEEP = new Set\(\[1, 13, 5\]\)/,
+    'the minimiser must keep BOTH asset row classes (13 text, 5 file) as well as JS (1); '
+    + 'dropping either yields a provider that passes every check and builds a target that '
+    + 'dies on its first turn');
   const qf = fs.readFileSync(path.join(REPO, 'libexec/quaude-fuse.js'), 'utf8');
   assert.match(qf, /graph-assets\.json/, 'the fuse must store assets as a member');
   const ld = fs.readFileSync(path.join(REPO, 'libexec/node-shim/loader.cjs'), 'utf8');

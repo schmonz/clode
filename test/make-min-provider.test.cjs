@@ -140,3 +140,60 @@ test('minimising REFUSES loudly on a non-provider rather than writing junk', () 
   assert.match(stderr, /make-min-provider/, 'the refusal must name itself');
   assert.strictEqual(fs.existsSync(out), false, 'must not leave a partial output behind');
 });
+
+// THE TWO PLACES THAT DECIDE WHAT AN ASSET IS, PINNED TO EACH OTHER. bun-graph.cjs decides what
+// a FULL carve stages; this script's KEEP decides what a MINIMISED provider still contains. If
+// they disagree, a minimised build and a real one carve different graphs and the difference is
+// invisible until a leg dies — which is exactly how loader 5 shipped broken in 2.1.251. Read as
+// TEXT out of both files, the way test/scc-merge.test.cjs pins the node-shim transform, so the
+// two cannot drift silently.
+test('make-min-provider KEEPs exactly the loaders bun-graph stages', () => {
+  const min = fs.readFileSync(SCRIPT, 'utf8');
+  const bg = fs.readFileSync(path.join(REPO, 'libexec', 'bun-graph.cjs'), 'utf8');
+
+  const keep = /const KEEP = new Set\(\[([0-9, ]+)\]\)/.exec(min);
+  assert.ok(keep, 'make-min-provider must declare its kept loaders in one KEEP literal');
+  const kept = new Set(keep[1].split(',').map((n) => Number(n.trim())));
+
+  const asset = /if \(r\.loader !== ([0-9]+) && r\.loader !== ([0-9]+)\) continue;/.exec(bg);
+  assert.ok(asset, 'bun-graph loadAssetsFromBytes must name the asset loaders it takes');
+  const staged = new Set([Number(asset[1]), Number(asset[2])]);
+
+  assert.ok(kept.has(1), 'the js loader is always kept');
+  for (const l of staged) {
+    assert.ok(kept.has(l),
+      `bun-graph stages loader ${l} but make-min-provider drops it — a minimised provider `
+      + 'would carve to a graph missing assets the real one has');
+  }
+  assert.deepStrictEqual([...kept].sort(), [1, ...staged].sort(),
+    'KEEP must be exactly the js loader plus the asset loaders bun-graph stages');
+  assert.ok(!kept.has(10), 'loader 10 (napi) is native code no target loads');
+});
+
+// THE PLATFORM MUST SURVIVE MINIMISATION. `providerPlatformOf` reads the first 16 bytes for a
+// Mach-O/PE/ELF header, and the minimised provider used to be a purely synthetic container with
+// none — so it answered "unknown". Every leg that builds goes through stage-provider.mjs, which
+// minimises unconditionally, so the platform half of the extract cache key was "unknown" for
+// exactly the providers CI builds from, and a linux carve and a darwin carve of the same version
+// still shared a key. That is the bug that shipped a darwin quaude unable to read the login
+// Keychain (see test/provider-platform.test.cjs); the cache key was fixed, this half was not.
+test('a minimised provider still reports the platform it was carved from', opts, () => {
+  const { providerPlatformOf } = require('../libexec/extract-claude-js.cjs');
+  for (const bin of PROVIDERS) {
+    const before = providerPlatformOf(bin);
+    if (!before) continue;               // already-minimised or synthetic input: nothing to carry
+    const { out } = minimise(bin);
+    assert.strictEqual(providerPlatformOf(out), before,
+      `${bin}: minimising lost the platform (${before} -> ${providerPlatformOf(out)}); the `
+      + 'extract cache key cannot tell two platforms apart');
+    // ... and the result must still decode, i.e. the header prefix did not disturb the layout.
+    // A split provider decodes as a graph; a CJS one has no Bun trailer and carves instead.
+    if (isSplitBundle(out)) {
+      assert.ok(loadGraph(out).size > 0, `${bin}: minimised provider no longer decodes`);
+    } else {
+      const blocks = carveBlocks(fs.readFileSync(out, 'latin1'));
+      assert.ok(blocks.some((bl) => (bl.name || '').endsWith('entrypoints/cli.js')),
+        `${bin}: minimised CJS provider no longer carves`);
+    }
+  }
+});

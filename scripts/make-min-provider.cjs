@@ -51,11 +51,26 @@ function writeMinSplitProvider(inPath, outPath) {
   // passes every check here and fails at runtime is the worst shape this script can take,
   // so the filter names what it keeps and why.
   //
-  // Still dropped, deliberately: loader 5 (file) and 10 (napi) — the chart/hljs/mermaid
-  // blobs and native .node modules, which are the bulk of the size win and which a built
+  // LOADER 5 IS KEPT TOO, since 2.1.251. It used to hold only the chart/hljs/mermaid blobs, so
+  // dropping it was free; that release moved 94 embedded assets from loader 13 into it by
+  // COMPRESSING them, and dropping those ships a provider whose target dies on its first turn
+  // with "embedded text asset is missing or corrupt". Rows by loader, measured:
+  //
+  //     2.1.250   {"1":1777, "5":4,   "10":5, "13":166}
+  //     2.1.251   {"1":1799, "5":101, "10":5, "13":72}
+  //
+  // Every loader-5 row in both versions is a zstd frame and every one is referenced by a module,
+  // so there is nothing here to filter — and the three blobs that motivated dropping it were
+  // themselves already referenced, i.e. already missing from every target ever built.
+  //
+  // Still dropped, deliberately: loader 10 (napi) — the native .node modules, which a built
   // target does not load. That is measured, not assumed: inspect reports them as disabled
   // features under loose JS, and the tjs targets have never had them.
-  const KEEP = new Set([1, 13]);
+  //
+  // THIS SET MUST AGREE WITH loadAssetsFromBytes IN libexec/bun-graph.cjs. If it does not, a
+  // minimised provider and a real one carve to different graphs and the difference is invisible
+  // until a leg dies — which is why the self-check below re-decodes with that very function.
+  const KEEP = new Set([1, 13, 5]);
   const rows = g.rows.filter((r) => KEEP.has(r.loader));
   if (!rows.some((r) => r.loader === 1)) throw new Error('no js-loader rows in the module table');
 
@@ -97,13 +112,29 @@ function writeMinSplitProvider(inPath, outPath) {
   odv.setUint32(16, entryIdx, true);
 
   const TRAILER = enc.encode('\n---- Bun! ----\n');
+  // CARRY THE SOURCE PROVIDER'S CONTAINER MAGIC, so the minimised file still says which
+  // PLATFORM it was carved from. `providerPlatformOf` reads the first 16 bytes for a
+  // Mach-O/PE/ELF header, and a purely synthetic container has none — so every minimised
+  // provider answered "unknown", and since every leg that builds goes through
+  // stage-provider.mjs (which minimises unconditionally), the platform half of the extract
+  // cache key was `unknown` for exactly the providers CI builds from. A linux carve and a
+  // darwin carve of the same version still shared a key, which is the bug that shipped a
+  // darwin quaude unable to read the login Keychain.
+  //
+  // A PREFIX IS FREE HERE, and that is not luck: `decodeBunGraph` locates everything from the
+  // END (`base = trailerStart - 32 - byteCount`), exactly as it must for a real provider,
+  // where the container is appended to a complete executable. Copying the real header bytes
+  // in front is therefore the same shape the real thing has, not a hack around the layout —
+  // and the self-check below re-decodes the result to prove it.
+  const MAGIC_BYTES = 64;
   const out = Buffer.concat([
+    Buffer.from(src.subarray(0, Math.min(MAGIC_BYTES, src.length))),
     ...chunks.map((c) => Buffer.from(c)),
     Buffer.from(table), Buffer.alloc(1), Buffer.from(offs), Buffer.from(TRAILER),
   ]);
   fs.writeFileSync(outPath, out);
   return { modules: rows.filter((r) => r.loader === 1).length,
-           assets: rows.filter((r) => r.loader === 13).length,
+           assets: rows.filter((r) => r.loader === 13 || r.loader === 5).length,
            bytes: out.length, entry: g.entryName, from: src.length };
 }
 
@@ -134,7 +165,19 @@ if (isSplitBundle(inPath)) {
     console.error('make-min-provider: SELF-CHECK FAILED — the minimised provider is not recognised as split');
     process.exit(1);
   }
-  console.error(`make-min-provider: self-check ok (${check.size} modules, entry ${r.entry})`);
+  // The platform must survive minimisation, or the extract cache key cannot tell a linux carve
+  // from a darwin one — see the prefix note in writeMinSplitProvider.
+  const { providerPlatformOf } = require(path.join(__dirname, '..', 'libexec', 'extract-claude-js.cjs'));
+  const srcPlatform = providerPlatformOf(inPath);
+  const outPlatform = providerPlatformOf(outPath);
+  if (srcPlatform !== outPlatform) {
+    console.error(`make-min-provider: SELF-CHECK FAILED — the source provider reads as `
+      + `${srcPlatform} but the minimised one reads as ${outPlatform}; the extract cache key `
+      + 'could not tell two platforms apart');
+    process.exit(1);
+  }
+  console.error(`make-min-provider: self-check ok (${check.size} modules, entry ${r.entry}, `
+    + `platform ${srcPlatform})`);
   process.exit(0);
 }
 
@@ -154,8 +197,14 @@ console.error(`make-min-provider: carved entrypoints/cli.js: ${cli.body.length} 
 const NUL = '\x00';
 const marker = '// @bun @bun-cjs\n(function(exports, require, module, __filename, __dirname) {';
 const synth = 'entrypoints/cli.js' + NUL + marker + cli.body + '})' + NUL;
-fs.writeFileSync(outPath, Buffer.from(synth, 'latin1'));
-console.error(`make-min-provider: wrote ${outPath}: ${synth.length} bytes`);
+// The same platform-carrying header prefix the split path writes, and for the same reason: a
+// synthetic provider has no Mach-O/ELF magic, so `providerPlatformOf` answers "unknown" and the
+// extract cache key stops distinguishing a linux carve from a darwin one. Safe here because
+// carveBlocks finds the block by its MARKER and then scans BACK at most 4KB for a `...js\0`
+// name — and the trailing NUL below means that scan can never wander into the header bytes.
+const hdr = Buffer.concat([Buffer.from(data.slice(0, 64), 'latin1'), Buffer.from([0])]);
+fs.writeFileSync(outPath, Buffer.concat([hdr, Buffer.from(synth, 'latin1')]));
+console.error(`make-min-provider: wrote ${outPath}: ${synth.length + hdr.length} bytes`);
 
 // Self-check: re-carve the synthetic file; the cli.js body must round-trip.
 const rt = carveBlocks(fs.readFileSync(outPath, 'latin1'));
