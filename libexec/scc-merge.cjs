@@ -232,13 +232,38 @@ function maskKeywordTokens(mask, absStart, text) {
 // no local variable is ever created for either side of it, regardless of what
 // `aliasCollidingNamedImports` did (it only ever touches IMPORT clauses).
 var ANY_SPEC = '"(?:[^"\\\\]|\\\\.)*"';
+
+// LOAD-BEARING, AND THE REASON THIS FILE DISAGREED WITH ITSELF ACROSS ENGINES. node-shim's
+// loader rewrites its dynamic-import operator — the keyword immediately followed by an open
+// paren — to `__tjsDynImport(` in EVERY CJS file it evaluates, this one included
+// (`DYN_IMPORT_RE` in libexec/node-shim/loader.cjs). That rewrite is a blind text
+// substitution: it cannot tell code from a string or regex literal, and every pattern in this
+// file that matches an import STATEMENT is that exact shape (keyword, then `(?:` for the
+// optional default-import prefix). Written inline, those patterns loaded as
+// `__tjsDynImport(?:...` under tjs and then silently never matched, while remaining perfect
+// under node — so this file's unit tests and its behaviour on the real engine disagreed.
+//
+// Measured on the real 2.1.250 graph: the 95-module group died at compile with
+// `Unexpected identifier '__m7_as'` (three patterns dead at once — the import-clause
+// protection below, `aliasCollidingNamedImports`, and the cross-group import rewrite — so an
+// `as` KEYWORD went unmasked and got renamed like a binding), and the 5- and 7-module groups
+// merged to different, WRONG bytes than node produced with no error at all: every colliding
+// named import lost its alias, `import{wt,ac}from"…"` becoming `import{__m0_wt,__m0_ac}` — a
+// request for export names that do not exist.
+//
+// Keeping the keyword in this constant means the two characters never sit adjacent in this
+// file's text, so the loader's transform is a no-op on it. test/scc-merge.test.cjs applies
+// the loader's OWN transform (read out of loader.cjs, so the two cannot drift) to this file
+// and re-runs the merger through it, which is what makes that stay true.
+var IMPORT_KW = 'import';
+
 function protectImportedExportNames(src, mask) {
   var m;
 
   // import { a, b as c } from "spec";  /  import def, { a } from "spec";  — the "imported"
   // half of every entry (before `as`, or the bare name) plus "as"/"from" are protected; the
   // LOCAL half (after `as`) is left alone, still renameable if it collides.
-  var namedRe = new RegExp('import(?:\\s+[A-Za-z0-9_$]+\\s*,)?\\s*\\{([^}]*)\\}\\s*from\\s*' + ANY_SPEC, 'g');
+  var namedRe = new RegExp(IMPORT_KW + '(?:\\s+[A-Za-z0-9_$]+\\s*,)?\\s*\\{([^}]*)\\}\\s*from\\s*' + ANY_SPEC, 'g');
   while ((m = namedRe.exec(src))) {
     if (!mask[m.index]) continue;
     var closeIdx = m[0].indexOf('}', m[0].indexOf('{'));
@@ -343,7 +368,7 @@ var IMPORT_STMT_RES = function (spec) {
   var s = specRegex(spec);
   return [
     // import { a, b as c } from "spec";  /  import def, { a } from "spec";
-    new RegExp('import(?:\\s+([A-Za-z0-9_$]+)\\s*,)?\\s*\\{([^}]*)\\}\\s*from\\s*"' + s + '";?', 'g'),
+    new RegExp(IMPORT_KW + '(?:\\s+([A-Za-z0-9_$]+)\\s*,)?\\s*\\{([^}]*)\\}\\s*from\\s*"' + s + '";?', 'g'),
     // import * as ns from "spec";
     new RegExp('import\\s*\\*\\s*as\\s+([A-Za-z0-9_$]+)\\s*from\\s*"' + s + '";?', 'g'),
     // import def from "spec";
@@ -405,7 +430,8 @@ function parseNamedClause(inner) {
 // sure the newly-explicit imported half is never itself mistaken for a reference needing rename
 // (it can quite easily BE a colliding name too — see that function's comment).
 function aliasCollidingNamedImports(src, colliding, k) {
-  var re = /import(?:\s+[A-Za-z0-9_$]+\s*,)?\s*\{([^}]*)\}\s*from\s*"(?:[^"\\]|\\.)*"/g;
+  // Built from `IMPORT_KW`, never written as a literal — see that constant's comment.
+  var re = new RegExp(IMPORT_KW + '(?:\\s+[A-Za-z0-9_$]+\\s*,)?\\s*\\{([^}]*)\\}\\s*from\\s*' + ANY_SPEC, 'g');
   return maskedReplace(src, re, function (whole, inner) {
     var entries = parseNamedClause(inner);
     var changed = false;

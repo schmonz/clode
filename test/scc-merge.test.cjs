@@ -273,3 +273,120 @@ test('mergeGroup renames a genuinely colliding "as" declaration while leaving th
   assert.doesNotMatch(r.mergedSource, /\bfunction as\(|(?<![A-Za-z0-9_$])const as = /,
     'the genuinely colliding declarations must not survive under the un-renamed name');
 });
+
+// ---------------------------------------------------------------------------------------
+// Review fix round 2. This merger is loaded BY node-shim under tjs, and node-shim rewrites
+// its dynamic-import operator — the keyword immediately followed by an open paren — to
+// `__tjsDynImport(` in every CJS file it evaluates, blind to string and regex literals
+// (`DYN_IMPORT_RE` in libexec/node-shim/loader.cjs). Every pattern here that matches an
+// import STATEMENT had exactly that shape, so under tjs three of them loaded mangled and
+// silently never matched, while every test in this file kept passing under node.
+//
+// What that cost on the real 2.1.250 graph: the 95-module group failed to compile with
+// `Unexpected identifier '__m7_as'` (an `as` KEYWORD renamed as if it were a binding,
+// because the import-clause protection was one of the dead patterns), and the 5- and
+// 7-module groups merged to different, WRONG bytes than node produced with NO error at all
+// (`import{wt,ac}from"…"` became `import{__m0_wt,__m0_ac}` — export names that do not
+// exist). Unit tests that only ever run under node cannot see any of this, so these tests
+// load the merger through the loader's OWN transform, read out of loader.cjs so the two
+// files cannot drift apart silently.
+const fs = require('node:fs');
+const path = require('node:path');
+const LOADER_PATH = path.join(__dirname, '..', 'libexec', 'node-shim', 'loader.cjs');
+const MERGER_PATH = path.join(__dirname, '..', 'libexec', 'scc-merge.cjs');
+
+function shimDynImportTransform() {
+  const loaderSrc = fs.readFileSync(LOADER_PATH, 'utf8');
+  const reSrc = /^const DYN_IMPORT_RE = (\/.*\/[a-z]*);$/m.exec(loaderSrc);
+  const replSrc = /\.replace\(DYN_IMPORT_RE, '([^']*)'\)/.exec(loaderSrc);
+  assert.ok(reSrc, 'loader.cjs no longer declares DYN_IMPORT_RE where this test reads it');
+  assert.ok(replSrc, 'loader.cjs no longer applies DYN_IMPORT_RE where this test reads it');
+  const re = new Function('return ' + reSrc[1])();
+  return (src) => src.replace(re, replSrc[1]);
+}
+
+// The cheap ratchet: the transform must be a NO-OP on this file. If anyone writes the
+// import keyword next to an open paren again — in code, a string, a regex, or even a
+// comment — this fails immediately and by name, instead of the merger going quietly wrong
+// on one engine only.
+test("node-shim's CJS text transforms are all no-ops on libexec/scc-merge.cjs", () => {
+  const src = fs.readFileSync(MERGER_PATH, 'utf8');
+  assert.strictEqual(shimDynImportTransform()(src), src,
+    'scc-merge.cjs must never contain the import keyword adjacent to `(` — node-shim rewrites '
+    + 'that text everywhere, including inside this file\'s own import-matching regexes');
+
+  // The loader's other two transforms would be just as destructive to a file whose whole job
+  // is carrying import/export syntax as data, so pin them here too rather than waiting for a
+  // second engine-only failure. `esmToCjs` fires on `esmDetect` — a line that STARTS with
+  // `import`/`export` — which a future pattern written across lines could trip.
+  const loaderSrc = fs.readFileSync(LOADER_PATH, 'utf8');
+  const detectSrc = /function esmDetect\(src\) \{[\s\S]*?\n\}/.exec(loaderSrc);
+  assert.ok(detectSrc, 'loader.cjs no longer declares esmDetect where this test reads it');
+  const esmDetect = new Function('return (' + detectSrc[0] + ')')();
+  assert.strictEqual(esmDetect(src), false,
+    'scc-merge.cjs must not look like an ES module to node-shim, or the loader rewrites it '
+    + 'through esmToCjs before evaluating it');
+
+  // `fixVFlagPropertyEscapes` rewrites regex literals, and gates entirely on the source
+  // containing a Unicode property escape. Keeping this file free of them keeps that
+  // transform from ever looking at its patterns at all.
+  assert.ok(src.indexOf('\\p{') === -1 && src.indexOf('\\P{') === -1,
+    'a Unicode property escape here would expose this file\'s regex literals to the loader\'s '
+    + 'v-flag rewrite');
+});
+
+// Load the merger the way tjs actually loads it, and re-run the two cases whose guards live
+// inside the affected patterns.
+function loadMergerAsShimDoes() {
+  const src = shimDynImportTransform()(fs.readFileSync(MERGER_PATH, 'utf8'));
+  const mod = { exports: {} };
+  new Function('module', 'exports', 'require', src)(mod, mod.exports, require);
+  assert.strictEqual(typeof mod.exports.mergeGroup, 'function',
+    'the shim-transformed merger must still export mergeGroup');
+  return mod.exports;
+}
+
+test('the "as" KEYWORD survives when the merger is loaded through the shim transform', () => {
+  const shimMerge = loadMergerAsShimDoes().mergeGroup;
+  const r = shimMerge(['/g/a.js', '/g/b.js'], SRC_AS_COLLISION, metaAsCollision, 0);
+  assert.match(r.mergedSource, /import\{types as UIe\}from"util"/,
+    'the `as` keyword of an unrelated aliased import must survive the shim transform — '
+    + 'this is the exact `Unexpected identifier \'__m7_as\'` the 95-module group hit');
+  assert.doesNotMatch(r.mergedSource, /types\s+__m\d+_as\s/,
+    'the `as` keyword must never be renamed as if it were a binding');
+  // The genuine bindings must still rename, or the two members redeclare `as` in one scope.
+  assert.match(r.mergedSource, /function __m0_as\(e\)/);
+  assert.match(r.mergedSource, /const __m1_as = 2/);
+});
+
+test('a property access is still not renamed when the merger is loaded through the shim transform', () => {
+  const shimMerge = loadMergerAsShimDoes().mergeGroup;
+  const r = shimMerge(['/g/a.js', '/g/b.js'], SRC_PROP, metaProp, 0);
+  assert.match(r.mergedSource, /obj\.shared\s*=\s*__m1_shared/);
+  assert.doesNotMatch(r.mergedSource, /obj\.__m1_shared/,
+    'a name after `.` is a property access, never a lexical binding');
+});
+
+// The other half of what the mangled patterns broke, and the half that produced NO error at
+// all: a colliding named import must be split into an explicit `imported as __mK_local`
+// alias. Un-aliased, the rename pass rewrites the whole token — turning the fixed EXPORT
+// name into one the exporting module does not have. Measured verbatim on the real 5-module
+// group under tjs: `import{wt,ac}from"…"` -> `import{__m0_wt,__m0_ac}from"…"`.
+const META_ALIAS_SHIM = {
+  '/g/a.js': { requires: [], exports: ['ax'], locals: ['wt', 'ax'] },
+  '/g/b.js': { requires: [], exports: ['bx'], locals: ['wt', 'bx'] },
+};
+const SRC_ALIAS_SHIM = {
+  '/g/a.js': 'import{wt}from"/outside/dep.js";\nexport const ax = wt;\n',
+  '/g/b.js': 'const wt = 2;\nexport const bx = wt;\n',
+};
+const metaAliasShim = (n) => META_ALIAS_SHIM[n];
+
+test('a colliding named import keeps its real export name when loaded through the shim transform', () => {
+  const shimMerge = loadMergerAsShimDoes().mergeGroup;
+  const r = shimMerge(['/g/a.js', '/g/b.js'], SRC_ALIAS_SHIM, metaAliasShim, 0);
+  assert.match(r.mergedSource, /import\{wt as __m0_wt\}from"\/outside\/dep\.js"/,
+    'the imported half must stay `wt` — renaming it requests an export that does not exist');
+  assert.doesNotMatch(r.mergedSource, /import\{__m0_wt\}/,
+    'this is the silent, error-free corruption the shim transform caused on the real group');
+});
