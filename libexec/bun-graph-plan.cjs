@@ -252,7 +252,7 @@ function requiresOf(src, inGraph) {
 
 // Split every require edge by whether turning it into a STATIC IMPORT would close a cycle.
 //
-// This distinction is the whole fix. Measured on 2.1.250: 253 of 278 edges are safe, and the
+// This distinction is the whole fix. Measured on 2.1.250: 245 of 278 edges are safe, and the
 // edge that actually breaks CI is one of them — its target has no static path back, so it is
 // not part of a cycle at all, it is simply a module nothing ever evaluates. A safe edge can
 // become an ordinary import, which the engine resolves natively with no runtime machinery.
@@ -281,13 +281,28 @@ function classifyRequires(mods) {
     return false;
   }
 
-  var safe = [], cyclic = [], targets, t;
+  // INCREMENTAL, AND THIS IS THE WHOLE CORRECTNESS ARGUMENT. Testing every edge against the
+  // ORIGINAL graph is wrong: two edges can each be individually safe and still COMPOSE into a
+  // cycle once both are converted. Measured — that mistake produced a 29-module cycle on
+  // 2.1.250, made of 2 converted requires and 2 pre-existing static imports, and planGraph
+  // rejected the graph. So each safe edge is COMMITTED into the working graph before the next
+  // edge is tested, and a later edge sees the earlier ones.
+  //
+  // Greedy and order-dependent, so not necessarily the largest possible safe set. It does not
+  // need to be: under-converting merely leaves an edge for Task 3 to name, while
+  // over-converting breaks the build.
+  var safe = [], cyclic = [], targets, t, v;
   for (i = 0; i < names.length; i++) {
     targets = requiresOf(mods.get(names[i]), inGraph);
     targets.sort();
     for (t = 0; t < targets.length; t++) {
-      if (reaches(idx.get(targets[t]), i)) cyclic.push([names[i], targets[t]]);
-      else safe.push([names[i], targets[t]]);
+      v = idx.get(targets[t]);
+      if (reaches(v, i)) {
+        cyclic.push([names[i], targets[t]]);
+      } else {
+        safe.push([names[i], targets[t]]);
+        deps[i].push(v);
+      }
     }
   }
   return { safe: safe, cyclic: cyclic };
