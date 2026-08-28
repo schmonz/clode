@@ -2595,6 +2595,77 @@ registry, is explicitly argued against there: it can mangle a prompt string and 
 silently, and a fidelity oracle that quietly differs from its subject is worse than none.
 
 
+### ★★★ P0: a darwin quaude was assembled from a non-darwin carve (2026-08-28)
+
+**Symptom.** The 2026-08-27 quaude fails every turn with `401 OAuth access token has been
+revoked` / `OAuth session expired and could not be refreshed`, on a box where the credential
+is valid and official clients work.
+
+**Root cause.** The binary contains NO macOS keychain store. Bun constant-folds
+`process.platform` at carve time, so upstream's darwin credential store is dead-coded out of
+a non-darwin carve. Markers, counted in the graphs and in the shipped binary:
+
+| marker | fresh darwin 2.1.248 | cache 2.1.250 | cache 2.1.243 | SHIPPED quaude |
+|---|---|---|---|---|
+| `[keychain] read failed` | 1 | 1 | 0 | **0** |
+| `[keychain] readAsync failed` | 1 | 1 | 0 | **0** |
+| `exceeds security -i stdin limit` | 1 | 1 | 0 | **0** |
+| `find-generic-password` | 7 | 7 | 2 | — |
+
+7 is the darwin signature (proven by extracting the installed official darwin 2.1.248 with
+the current extractor). The shipped binary scores 0/0/0. This is
+[[target-matched-assembly]] violated in the field, and auth is only the symptom that
+happened to be loud — every platform-folded branch is equally wrong in that binary.
+
+**The mechanism to fix, not just the instance.** `clode-extract.cjs` keys its cache on
+`path.basename(cacheDir)` — the VERSION alone (`~/.cache/clode/2.1.243/`) — and guards reuse
+with `sigOf(extract-claude-js.cjs)`, the EXTRACTOR's signature. Neither encodes the
+provider's platform, so extracting a linux provider for version X silently poisons every
+later darwin build of version X. Same bug class as the templates sha256 mismatch before the
+last release: a cache key missing a dimension that changes the content. That one got
+recipe-scoped; this one never got platform-scoped.
+
+**Ratchet:** the key must carry the provider identity (its sha256, or target triple), and a
+darwin build must REFUSE a graph with no darwin keychain markers rather than fuse it. Cheap
+tripwire, since a darwin carve always has them.
+
+### Delete the keychain emulation — upstream already falls back (2026-08-28)
+
+**The user:** "Ugh, we still have Keychain emulation? That's caused like five different
+problems now." The tally is accurate. Commits touching that block
+(`child_process.cjs:206-509`, ~300 lines):
+
+1. `ded7b24` introduced it
+2. `714e607` Readable dropped data pushed before a consumer attached — **bug #1**
+3. `e928e26` fake `security` calls dropped stderr
+4. `1b530eb` emulate mode wrote to its own store, not the shared `.credentials.json`
+5. 2026-08-28: `_kcRealSec` bypasses PATH, so a PATH-wrapper instrument reports "zero
+   security calls" for a client that is merely being intercepted — hours lost to a
+   confident wrong diagnosis
+
+**Its premise is false as of 2.1.248.** `ded7b24`'s written reason was that upstream
+"dead-ends" on a headless mac and never persists the token. Tested directly: with a
+`security` that always exits 44, official 2.1.248 falls back to
+`~/.claude/.credentials.json` and reports the file token's own error. Upstream implements the
+store as a named registry — `{name:"keychain", read, readAsync, update, delete}` where
+`update()` returns `{success:false, transient}` — i.e. a pluggable store with explicit
+failure, and the file store is what it falls back to. We are re-implementing a fallback
+upstream ships.
+
+**Sixth latent gap, found while checking:** upstream WRITES via `security -i` on stdin (to
+keep the secret out of argv). `_kcSecurityArgs` returns `['-i']`, no subcommand matches, and
+the write falls through to the real binary — so in emulate mode reads are faked while writes
+are real. Split-brain by construction.
+
+**Recommendation: delete the whole block.** `passthrough` is a no-op by definition;
+`emulate` is redundant with upstream's own fallback; `translate` was justified by old-macOS
+`security` lacking `-X`/`-U`, but if those flags fail upstream falls back to the file anyway
+— and `ded7b24` itself records translate as UNTESTED on real old hardware, so it is an
+unverified divergence. Removing it deletes ~300 lines, one divergence, and a whole bug class,
+per [[match-upstream-by-default]] and [[solve-it-portably-not-per-platform]]. Confirm the
+Tiger persistence story once, then delete.
+
+
 ### ★★★ Make it structurally hard to ship a release without working authentication (user, 2026-08-28)
 
 **The user, on being shown that a shipped quaude cannot authenticate at all:** "it should
