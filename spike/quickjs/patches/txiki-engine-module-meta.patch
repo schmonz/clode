@@ -1,0 +1,41 @@
+diff --git a/src/js/core/engine.js b/src/js/core/engine.js
+index e1481dc..6f4dbf4 100644
+--- a/src/js/core/engine.js
++++ b/src/js/core/engine.js
+@@ -36,6 +36,10 @@ const gcState = {
+     threshold: core.gc.getThreshold()
+ };
+ 
++Object.defineProperty(engine, 'moduleMeta', {
++    enumerable: true, configurable: false, writable: false, value: core.moduleMeta
++});
++
+ Object.defineProperty(engine, 'gc', {
+     enumerable: true,
+     configurable: false,
+diff --git a/src/mod_engine.c b/src/mod_engine.c
+index c317d71..ccd31b6 100644
+--- a/src/mod_engine.c
++++ b/src/mod_engine.c
+@@ -152,6 +152,13 @@ static JSValue tjs_evalBytecode(JSContext *ctx, JSValue this_val, int argc, JSVa
+     return JS_EvalFunction(ctx, obj);
+ }
+ 
++static JSValue tjs_moduleMeta(JSContext *ctx, JSValue this_val, int argc, JSValue *argv) {
++    if (JS_IsException(argv[0])) {
++        return JS_EXCEPTION;
++    }
++    return JS_GetModuleMeta(ctx, argv[0]);
++}
++
+ static const JSCFunctionListEntry tjs_engine_funcs[] = {
+     TJS_CFUNC_DEF("setMemoryLimit", 1, tjs_setMemoryLimit),
+     TJS_CFUNC_DEF("setMaxStackSize", 1, tjs_setMaxStackSize),
+@@ -162,6 +169,7 @@ static const JSCFunctionListEntry tjs_engine_funcs[] = {
+     TJS_CFUNC_DEF("serialize", 1, tjs_serialize),
+     TJS_CFUNC_DEF("deserialize", 1, tjs_deserialize),
+     TJS_CFUNC_DEF("evalBytecode", 1, tjs_evalBytecode),
++    TJS_CFUNC_DEF("moduleMeta", 1, tjs_moduleMeta),
+ };
+ 
+ /* clang-format off */

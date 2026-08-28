@@ -1,0 +1,77 @@
+diff --git a/quickjs.c b/quickjs.c
+index 5feb54e..9ae1e5e 100644
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -37327,6 +37327,60 @@ JSValue JS_EvalFunction(JSContext *ctx, JSValue fun_obj)
+     return JS_EvalFunctionInternal(ctx, fun_obj, ctx->global_obj, NULL, NULL);
+ }
+ 
++/* READ-ONLY module metadata: what the parser already worked out. Reports the module's required
++   specifiers, its export names, and its TOP-LEVEL DECLARED NAMES. Needed to merge a cyclic
++   group of modules into one without shipping a JS parser: requires and exports say how to
++   rewire the group's boundary, and the declared names say what must be renamed to avoid
++   collisions. No evaluation, no linking, no state change.
++
++   Both name tables are read. A module's top-level bindings are mostly CLOSURE variables — an
++   export has to be a live binding, so the compiler hoists it into the closure — and vardefs
++   holds only the few that stay local (a class binding, the class-fields initialiser). Reading
++   vardefs alone reported 2 of 8 names on a probe module. */
++JSValue JS_GetModuleMeta(JSContext *ctx, JSValue fun_obj)
++{
++    JSModuleDef *m;
++    JSValue res, arr;
++    int i;
++
++    if (JS_VALUE_GET_TAG(fun_obj) != JS_TAG_MODULE)
++        return JS_ThrowTypeError(ctx, "not a module");
++    m = JS_VALUE_GET_PTR(fun_obj);
++
++    res = JS_NewObject(ctx);
++
++    arr = JS_NewArray(ctx);
++    for (i = 0; i < m->req_module_entries_count; i++)
++        JS_SetPropertyUint32(ctx, arr, i,
++                             JS_AtomToString(ctx, m->req_module_entries[i].module_name));
++    JS_SetPropertyStr(ctx, res, "requires", arr);
++
++    arr = JS_NewArray(ctx);
++    for (i = 0; i < m->export_entries_count; i++)
++        JS_SetPropertyUint32(ctx, arr, i,
++                             JS_AtomToString(ctx, m->export_entries[i].export_name));
++    JS_SetPropertyStr(ctx, res, "exports", arr);
++
++    arr = JS_NewArray(ctx);
++    if (JS_VALUE_GET_TAG(m->func_obj) == JS_TAG_FUNCTION_BYTECODE) {
++        JSFunctionBytecode *b = JS_VALUE_GET_PTR(m->func_obj);
++        int n = 0;
++        for (i = 0; i < b->var_count; i++) {
++            JSAtom a = b->vardefs[b->arg_count + i].var_name;
++            if (a != JS_ATOM_NULL)
++                JS_SetPropertyUint32(ctx, arr, n++, JS_AtomToString(ctx, a));
++        }
++        for (i = 0; i < b->closure_var_count; i++) {
++            JSAtom a = b->closure_var[i].var_name;
++            if (a != JS_ATOM_NULL)
++                JS_SetPropertyUint32(ctx, arr, n++, JS_AtomToString(ctx, a));
++        }
++    }
++    JS_SetPropertyStr(ctx, res, "locals", arr);
++
++    return res;
++}
++
+ #ifndef QJS_DISABLE_PARSER
+ 
+ /* 'input' must be zero terminated i.e. input[input_len] = '\0'. */
+diff --git a/quickjs.h b/quickjs.h
+index 5ebaf59..2678c29 100644
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -1189,6 +1189,7 @@ JS_EXTERN void JS_SetModuleNormalizeFunc2(JSRuntime *rt,
+ JS_EXTERN JSValue JS_GetImportMeta(JSContext *ctx, JSModuleDef *m);
+ JS_EXTERN JSAtom JS_GetModuleName(JSContext *ctx, JSModuleDef *m);
+ JS_EXTERN JSValue JS_GetModuleNamespace(JSContext *ctx, JSModuleDef *m);
++JS_EXTERN JSValue JS_GetModuleMeta(JSContext *ctx, JSValue fun_obj);
+ 
+ /* associate a JSValue to a C module */
+ JS_EXTERN int JS_SetModulePrivateValue(JSContext *ctx, JSModuleDef *m, JSValue val);
