@@ -39,3 +39,23 @@ test('classifyRequires: requires pointing outside the graph are ignored entirely
   const mods = new Map([['/g/a.js', 'const fs = require("node:fs"); export const y = 1;']]);
   assert.deepStrictEqual(classifyRequires(mods), { safe: [], cyclic: [] });
 });
+
+// Minimal witness of the composition bug that blocked Task 2: a mutual pair of requires,
+// a.js -> b.js and b.js -> a.js. Neither edge is cyclic against the ORIGINAL static-import
+// graph (there are no static imports here at all, so `reaches` finds nothing either way),
+// which is exactly the trap — a non-incremental classifier judges both edges independently
+// against that same starting graph and calls BOTH of them safe. Converting both to static
+// imports then closes a real 2-cycle that was never checked for, because by the time the
+// second edge is tested the first one's conversion should already be part of the graph the
+// second edge is judged against. The fix commits each safe edge into the working graph
+// before testing the next, so whichever edge is classified second sees the first one's
+// conversion and is correctly caught as cyclic.
+test('classifyRequires: two requires that are each individually safe compose into a cycle — the second must be caught', () => {
+  const mods = new Map([
+    ['/g/a.js', 'require("/g/b.js");'],
+    ['/g/b.js', 'require("/g/a.js");'],
+  ]);
+  const c = classifyRequires(mods);
+  assert.deepStrictEqual(c.safe, [['/g/a.js', '/g/b.js']]);
+  assert.deepStrictEqual(c.cyclic, [['/g/b.js', '/g/a.js']]);
+});
