@@ -1,0 +1,6 @@
+version	binMB	jsExtractable	modules	chunks	assets	srcMB	cjsRequireOfChunk	staticImportOfChunk	dynamicImportOfChunk
+2.1.238	306	true	6	0	0	26.8	0	0	0
+2.1.243	345	true	1382	1375	0	34.2	0	12414	1039
+2.1.246	220	true	1409	562	164	30.4	0	0	1064
+2.1.247	222	true	1427	566	166	30.9	0	0	1075
+2.1.250	197	true	1777	1770	166	32.1	358	14798	1095

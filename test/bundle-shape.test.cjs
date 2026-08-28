@@ -11,7 +11,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const REPO = path.join(__dirname, '..');
-const TSV = path.join(REPO, 'docs', 'bundle-shapes.tsv');
+// NOT docs/ — that directory is gitignored, so a record kept there is invisible to
+// everyone but its author and the gate would fail on a fresh clone.
+const TSV = path.join(__dirname, 'fixtures', 'bundle-shapes.tsv');
 
 function rows() {
   const lines = fs.readFileSync(TSV, 'utf8').trim().split('\n');
@@ -22,7 +24,7 @@ function rows() {
 test('the shape record header matches the tool that writes it', async () => {
   const { FIELDS } = await import('../scripts/bundle-shape.mjs');
   assert.deepStrictEqual(rows().header, FIELDS,
-    'docs/bundle-shapes.tsv header drifted from bundle-shape.mjs FIELDS — a record whose '
+    'test/fixtures/bundle-shapes.tsv header drifted from bundle-shape.mjs FIELDS — a record whose '
     + 'columns do not mean what the writer thinks is worse than no record');
 });
 

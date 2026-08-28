@@ -48,7 +48,7 @@ dependency bumps would satisfy the letter of both gates and the spirit of neithe
 `libexec/extract-claude-js.cjs` can lift out. Bun can instead embed **JSC bytecode**
 (`bun build --bytecode`), which skips parse at startup. Cold start and install size are
 demonstrably what upstream is tuning right now — the binary went 345 → 197 MB over five
-releases while the chunking strategy flip-flopped (docs/bundle-shapes.tsv) — so this knob is
+releases while the chunking strategy flip-flopped (test/fixtures/bundle-shapes.tsv) — so this knob is
 plausibly one release away, and nobody upstream would think of it as a breaking change.
 
 If it is flipped, extraction does not get harder. **It stops being possible.** There is no JS

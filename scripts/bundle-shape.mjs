@@ -2,7 +2,7 @@
 // changes show up as a trend instead of as 22 red legs.
 //
 // WHY THIS EXISTS. Upstream repacks constantly, and the changes are not a march in one
-// direction — measured across five releases (docs/bundle-shapes.tsv):
+// direction — measured across five releases (test/fixtures/bundle-shapes.tsv):
 //
 //   2.1.238      6 modules,     0 chunks   — one file
 //   2.1.243   1382 modules,  1375 chunks   — split hard, 12414 static imports
