@@ -114,7 +114,14 @@ test('node-shim constants: the gap inventory matches the reviewed golden', (t) =
 test('crypto.constants: every value we share with host node is identical', () => {
   const shim = require('../libexec/node-shim/modules/crypto.cjs').constants;
   const host = require('node:crypto').constants;
-  const shared = Object.keys(shim).filter((k) => k in host);
+  // OPENSSL_VERSION_NUMBER encodes the OpenSSL release the HOST's node was linked against, so
+  // it legitimately differs per machine — measured: 811597872 here, 810549360 on CI's runner.
+  // It is not a portable constant like a padding mode or an SSL_OP_* bitmask, and under quaude
+  // there is no OpenSSL at all (the engine uses mbedtls), so any value the shim reports is a
+  // plausible fiction rather than a fact about the process. Comparing it asserts something
+  // that cannot be true on two different machines.
+  const HOST_DEPENDENT = new Set(['OPENSSL_VERSION_NUMBER']);
+  const shared = Object.keys(shim).filter((k) => k in host && !HOST_DEPENDENT.has(k));
   assert.ok(shared.length > 40, `expected the bulk of the table to be comparable, got ${shared.length}`);
   const wrong = shared.filter((k) => host[k] !== shim[k])
     .map((k) => `${k}: shim ${shim[k]} != host ${host[k]}`);
