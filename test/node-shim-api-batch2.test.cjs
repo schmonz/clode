@@ -34,9 +34,32 @@ o.push(url.format({protocol:'http:',host:'x:9',pathname:'/y',query:{a:1,b:2}}));
 o.push(url.format(new URL('https://x.com/a?b=1#z')));
 o.push(url.resolve('https://a.com/b/c', '../d'));
 o.push(url.domainToASCII('b\\u00fccher.de'));
-o.push(url.domainToASCII('xn--'));
 console.log(JSON.stringify(o));
 `);
+});
+
+// domainToASCII('xn--') is asserted against the SPEC, not differentially against host
+// node, because host node is the unreliable side here. An invalid A-label must yield ''
+// — that is the WHATWG URL algorithm, and it is what node's own documentation promises
+// ("If domain is an invalid domain, the empty string is returned"). Measured 2026-08-27:
+//   node 24.19.0  ''      (this test was green against it differentially)
+//   node 24.20.0  'xn--'  <- the outlier, and the only reason this moved
+//   node 26.3.0   ''
+// Our wurl is exact against the 1,317-case WPT golden and returns ''. Matching 24.20.0
+// would mean breaking WPT conformance to copy a single patch release that both its
+// predecessor and its successor disagree with. Keep the coverage, keep the spec answer,
+// and do not chase it. If a LATER node settles on 'xn--', that is a real upstream change
+// and this assertion is where we will notice.
+test('url legacy: domainToASCII of an invalid A-label is the empty string (spec, not differential)', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-b2-idna-'));
+  const f = path.join(dir, 'prog.cjs');
+  fs.writeFileSync(f, "const url = require('node:url');\n"
+    + "console.log(JSON.stringify(url.domainToASCII('xn--')));\n");
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.stdout.trim(), '""',
+    "an invalid A-label must yield '' per the WHATWG URL algorithm and node's own docs");
 });
 
 test('crypto: sha256/hmac-sha256 KAT + timingSafeEqual + constants (vs host)', (t) => {
