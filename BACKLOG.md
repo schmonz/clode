@@ -110,12 +110,18 @@ reproducible from a tree they hold.
 1. **`manifest.json` is an official integrity source, and it is correct.** It carries
    `version`, `commit`, `buildDate`, and per-platform `{binary, checksum, size}`. VERIFIED: its
    `darwin-arm64` checksum `506d7362a9c625306044879a9d91d8f33bd2eef963681b56be3295db5fe3e34b`
-   matches the binary we downloaded, byte for byte. `clode fetch` currently trusts hashes we
-   record ourselves; it could verify against UPSTREAM's published checksum for the exact
-   version, which is strictly better provenance and costs one small download.
+   matches the binary we downloaded, byte for byte.
+   **CORRECTION (same day): `clode fetch` ALREADY does this.** `libexec/clode-update.cjs`
+   downloads `<releases>/<ver>/manifest.json`, pulls the platform checksum, and calls verifying
+   against it mandatory — "upstream's integrity gate", in its own header — provisioning the
+   digest tool BEFORE the ~200MB transfer so a toolless host fails instantly. I claimed
+   otherwise here by inferring from the survey instead of reading the code. Nothing to build.
 2. **`manifest.zst.json` describes a zstd channel: 63.7MB instead of 206MB**, a 3.2x smaller
-   download for the same content. Relevant to `clode fetch` on slow links and to every CI leg
-   that pulls a provider.
+   download for the same content — and THIS one is a real, unexploited gap: `clode-update.cjs`
+   mentions zst exactly zero times. It would pay on slow links and on every CI leg that pulls a
+   provider. The cost is a zstd decompressor on the host, which is the host-applet pattern
+   again (see `provision('sha256')` in the same file for the shape) plus a fallback to the
+   plain binary when none is available — so it is additive, not a rewrite.
 
 **Also worth reading properly: `extractFromBunfs.js`.** It is upstream's own supported way to
 lift a file out of `$bunfs`, shipped unbundled and Node-importable on purpose. It documents
