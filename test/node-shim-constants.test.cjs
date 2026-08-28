@@ -98,3 +98,28 @@ test('node-shim constants: the gap inventory matches the reviewed golden', (t) =
     + 'is good news: ratchet the golden down. Refresh with '
     + 'CLODE_UPDATE_CONSTANTS_GOLDEN=1 node --test test/node-shim-constants.test.cjs');
 });
+
+// VALUES, not just keys (2026-08-27). The gap inventory above compares the KEY SETS of
+// host node and the shim; it never looks at what a constant is worth. crypto.constants is
+// a 55-entry hand-written literal in libexec/node-shim/modules/crypto.cjs, and exactly
+// three of those values were checked anywhere (RSA_PKCS1_PADDING, SSL_OP_NO_TLSv1_3 and
+// POINT_CONVERSION_UNCOMPRESSED, in node-shim-api-batch2). A mistyped
+// RSA_PKCS1_OAEP_PADDING would have been invisible — which is the same shape as the BSD
+// legs shipping 8 of 11 fs.O_* wrong, and the reason platform constants are generated
+// from the engine rather than typed by hand.
+//
+// A shim SUPERSET is allowed and is not a failure: node moves constants in and out across
+// releases (24.20.0 has RSA_SSLV23_PADDING, 24.19.0 and 26.3.0 do not), and carrying an
+// extra number costs nothing. What must never differ is a value we both claim to have.
+test('crypto.constants: every value we share with host node is identical', () => {
+  const shim = require('../libexec/node-shim/modules/crypto.cjs').constants;
+  const host = require('node:crypto').constants;
+  const shared = Object.keys(shim).filter((k) => k in host);
+  assert.ok(shared.length > 40, `expected the bulk of the table to be comparable, got ${shared.length}`);
+  const wrong = shared.filter((k) => host[k] !== shim[k])
+    .map((k) => `${k}: shim ${shim[k]} != host ${host[k]}`);
+  assert.deepStrictEqual(wrong, [],
+    'a hand-written crypto constant disagrees with host node. Regenerate the table with '
+    + '`node scripts/gen-crypto-constants.mjs --write` under the PINNED reference node, '
+    + 'not by editing the literal.');
+});
