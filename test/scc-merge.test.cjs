@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { mergeGroup, declaredNames } = require('../libexec/scc-merge.cjs');
+const { mergeGroup, declaredNames, assertNoRenamedFixedNames } = require('../libexec/scc-merge.cjs');
 
 const META = {
   '/g/a.js': { requires: ['/g/b.js'], exports: ['ay'], locals: ['shared', 'ay', '<class_fields_init>'] },
@@ -464,4 +464,137 @@ test('mergeGroup renames a colliding name used in a spread, but not as a propert
   assert.doesNotMatch(r.mergedSource, /\.\.\.shared\b/, 'no un-renamed spread may survive');
   assert.match(r.mergedSource, /obj\.shared/, 'a property access must NOT be renamed');
   assert.match(r.mergedSource, /obj\?\.shared/, 'optional chaining must NOT be renamed');
+});
+
+// PROPERTY KEYS ARE NOT BINDING REFERENCES, and the real 2.1.250 linux-x64 graph proved it the
+// expensive way. `set` is a top-level binding in one member of the 95-module group and a
+// property KEY in another — `function i6t(){let e;return{set:(t)=>{e=t},get:()=>e}}` — so the
+// collision rename rewrote the KEY: `{__m29_set:(t)=>{e=t},get:()=>e}`. It compiles, it boots,
+// and then the first caller of that slot dies with `TypeError: not a function` at
+// `t.installed.set(r)`, five frames from anything that names the merger. 367 property keys were
+// renamed in that one group (336 in the darwin-arm64 graph, which happened not to call any of
+// them during the build's own smoke — a passing build is not evidence here).
+//
+// The `.` guard only ever covered `obj.shared`. Every OTHER position where an identifier is a
+// fixed NAME rather than a value read was unguarded: object-literal keys and methods, accessor
+// names, class member names, and object-literal SHORTHAND (which is both at once).
+const KEY_SRC = {
+  '/g/a.js': [
+    'const set = 1;',
+    'const inner = 2;',
+    'function slot(){ let v; return { set: (x) => { v = x; }, get: () => v }; }',
+    'class Bag { m(){} set(k, x){ return k; } inner = 3; }',
+    'const lit = { set(k, x){ return k; }, get inner(){ return 1; }, plain: set };',
+    'const short = { set, inner };',
+    'const tern = cond ? set : inner;',
+    'export const ay = [slot, Bag, lit, short, tern];',
+  ].join('\n'),
+  '/g/b.js': 'const set = 3;\nconst inner = 4;\nexport const bx = set + inner;\n',
+};
+const KEY_META = {
+  '/g/a.js': { requires: [], exports: ['ay'], locals: ['set', 'inner', 'slot', 'Bag', 'lit', 'short', 'tern', 'ay'] },
+  '/g/b.js': { requires: [], exports: ['bx'], locals: ['set', 'inner', 'bx'] },
+};
+const keyMerge = () => mergeGroup(['/g/a.js', '/g/b.js'], KEY_SRC, (n) => KEY_META[n], 0).mergedSource;
+
+test('mergeGroup does not rename a colliding name used as an object-literal property key', () => {
+  const s = keyMerge();
+  assert.match(s, /return \{ set: \(x\) => \{ v = x; \}, get: \(\) => v \};/,
+    'the KEY `set:` names a property, not the binding — renaming it silently moves the property');
+  assert.doesNotMatch(s, /\{ __m0_set:/);
+});
+
+test('mergeGroup does not rename a colliding name used as an object-literal method name', () => {
+  const s = keyMerge();
+  assert.match(s, /\{ set\(k, x\)\{ return k; \}/, 'a method name is a property key too');
+  assert.doesNotMatch(s, /__m0_set\(k, x\)/);
+});
+
+test('mergeGroup does not rename a colliding name used as an accessor name', () => {
+  const s = keyMerge();
+  assert.match(s, /get inner\(\)\{ return 1; \}/, '`get inner(){}` names the property `inner`');
+  assert.doesNotMatch(s, /get __m0_inner\(\)/);
+});
+
+test('mergeGroup does not rename a colliding name used as a class member name', () => {
+  const s = keyMerge();
+  assert.match(s, /class Bag \{ m\(\)\{\} set\(k, x\)\{ return k; \} inner = 3; \}/,
+    'class methods and fields are property names, not module bindings');
+});
+
+// Both at once: `{ set }` means `{ set: set }`. The KEY must not move and the VALUE must follow
+// its renamed binding, so the only correct rewrite is to make the pair explicit.
+test('mergeGroup expands a colliding object-literal shorthand rather than renaming the key', () => {
+  const s = keyMerge();
+  assert.match(s, /const short = \{ set: __m0_set, inner: __m0_inner \};/);
+  assert.doesNotMatch(s, /\{ __m0_set, __m0_inner \}/);
+});
+
+// The guard must not overreach: a `:` also ends a ternary's consequent and a `case` clause, and
+// those ARE value reads.
+test('mergeGroup still renames a colliding name read as a ternary consequent', () => {
+  const s = keyMerge();
+  assert.match(s, /const tern = cond \? __m0_set : __m0_inner;/);
+});
+
+test('mergeGroup renames the VALUE half of an explicit property, only the key is fixed', () => {
+  const s = keyMerge();
+  assert.match(s, /plain: __m0_set \}/, 'the value half of `plain: set` is a real binding read');
+});
+
+// A statement LABEL lives in its own namespace — it is never a binding, so renaming one is never
+// needed, and renaming only HALF of one (the definition but not `break`/`continue`, or the
+// reverse) is a syntax error. Protecting both halves is also what lets the property-key rule be
+// stated without any bracket classification at all: `{ e: for(;;){} }` in a BLOCK is otherwise
+// indistinguishable from a mis-classified object literal.
+test('mergeGroup renames neither a statement label nor its break/continue references', () => {
+  const SRCL = {
+    '/g/a.js': 'const set = 1;\nfunction f(){ set: for (const x of [set]) { if (x) break set; else continue set; } }\nexport const ay = f;\n',
+    '/g/b.js': 'const set = 2;\nexport const bx = set;\n',
+  };
+  const METAL = {
+    '/g/a.js': { requires: [], exports: ['ay'], locals: ['set', 'f', 'ay'] },
+    '/g/b.js': { requires: [], exports: ['bx'], locals: ['set', 'bx'] },
+  };
+  const s = mergeGroup(['/g/a.js', '/g/b.js'], SRCL, (n) => METAL[n], 0).mergedSource;
+  assert.match(s, /set: for \(const x of \[__m0_set\]\)/, 'the label stays, the array element is a read');
+  assert.match(s, /break set;/);
+  assert.match(s, /continue set;/);
+  assert.doesNotMatch(s, /break __m0_set|continue __m0_set|__m0_set: for/);
+});
+
+// THE RATCHET. `--help` passed, and so did the build's own PONG smoke on the darwin-arm64 graph,
+// while 336 property keys sat renamed in the merged module. Nothing looked at the output.
+test('the merge is re-checked for renamed fixed names, and says so by name', () => {
+  assert.throws(
+    () => assertNoRenamedFixedNames('const o = { __m3_set: 1 };\n', 7),
+    /scc-merge: group 7 renamed __m3_set into a property-key\/label position/);
+  // Not a property key: a ternary and a `case` clause both put a real reference before a `:`.
+  assert.doesNotThrow(() => assertNoRenamedFixedNames('const v = c ? __m0_set : __m1_set;\n', 0));
+  assert.doesNotThrow(() => assertNoRenamedFixedNames('switch (x) { case __m0_set: break; }\n', 0));
+  // Nor is text inside a string literal.
+  assert.doesNotThrow(() => assertNoRenamedFixedNames('const s = "{ __m0_set: 1 }";\n', 0));
+});
+
+// A `{` right after a `:` is normally a nested object literal — but it is a BLOCK when the `:`
+// ends a `case`/`default` clause or a label. Reading `case "u": { let t = s, l = ... }` as an
+// object makes `l =` look like a shorthand entry with a default, and expanding that emits
+// `let t = s, l: l = ...` — a SyntaxError. The real linux-x64 95-module group has this exact
+// shape (`case"uds":{let t=s.session,l=n&&...}`).
+test('mergeGroup reads a case-clause body as a block, not an object literal', () => {
+  const SRCC = {
+    '/g/a.js': [
+      'const l = 1;',
+      'function f(s){ switch (s) { case "u": { let t = s, l = t && 2; return [t, l]; } } }',
+      'export const ay = [l, f];',
+    ].join('\n'),
+    '/g/b.js': 'const l = 2;\nexport const bx = l;\n',
+  };
+  const METAC = {
+    '/g/a.js': { requires: [], exports: ['ay'], locals: ['l', 'f', 'ay'] },
+    '/g/b.js': { requires: [], exports: ['bx'], locals: ['l', 'bx'] },
+  };
+  const s = mergeGroup(['/g/a.js', '/g/b.js'], SRCC, (n) => METAC[n], 0).mergedSource;
+  assert.match(s, /let t = s, __m0_l = t && 2; return \[t, __m0_l\];/);
+  assert.doesNotMatch(s, /l: /, 'a declaration list is not an object literal');
 });

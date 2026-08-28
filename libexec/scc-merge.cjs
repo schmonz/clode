@@ -33,7 +33,7 @@
 // BUMP THIS whenever an edit to this file could change the bytes mergeGroup emits. Forgetting to
 // is not a cosmetic slip: every machine that has already built once keeps serving the OLD merge
 // from its cache, so the edit appears to do literally nothing, on that machine only, forever.
-var MERGER_VERSION = '7';
+var MERGER_VERSION = '11';
 
 // `meta.locals` is the union of two engine tables (vardefs + closure_var) and can repeat a name
 // across them, and it reports compiler-internal synthetic names in angle brackets (e.g.
@@ -210,6 +210,12 @@ function maskSpan(mask, start, len) {
   for (var i = 0; i < len; i++) mask[start + i] = 0;
 }
 
+// The complement of `maskSpan`: `propertyNames` builds a POSITIVE map of the bytes it found,
+// which `codeMask` then subtracts from the code mask.
+function markSpan(map, start, len) {
+  for (var i = 0; i < len; i++) map[start + i] = 1;
+}
+
 // `\bas\b`/`\bfrom\b` inside `text` (found at absolute offset `absStart` in the real source)
 // are ALWAYS the JS keyword when `text` is drawn from import/export clause syntax — the grammar
 // has no other place a bare "as"/"from" token can appear there — so masking every occurrence is
@@ -328,9 +334,260 @@ function protectImportedExportNames(src, mask) {
   }
 }
 
+// A `{` in EXPRESSION position opens an OBJECT (or a binding PATTERN, whose shorthand and
+// `key: local` entries have the identical grammar); a `{` in statement position opens a BLOCK.
+// These are the tokens after which an expression may start. `do`/`else`/`try`/`finally` are
+// deliberately absent — they too are followed by a `{`, and it is always a block.
+var OBJ_OPEN_WORD = new Set([
+  'return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'throw', 'yield',
+  'case', 'await', 'let', 'var', 'const',
+]);
+// `{ get x(){}, set x(v){}, async f(){} }` and `class C { static m(){} }` — the member NAME
+// follows the modifier, and it is a property name just the same.
+var MEMBER_MODIFIER = new Set(['get', 'set', 'async', 'static']);
+// `break lbl;` / `continue lbl;` — a LABEL reference, in the label namespace, not a binding.
+var LABEL_JUMP = new Set(['break', 'continue']);
+
+// FIXED PROPERTY NAMES, AND THE ONE SHAPE THAT IS A NAME AND A REFERENCE AT ONCE.
+//
+// The `.` guard on the rename pass only ever covered `obj.shared`. Every OTHER position where an
+// identifier is a fixed NAME rather than a value read was unguarded, and the real 2.1.250
+// linux-x64 graph collected on that: `set` is a top-level binding in one member of the 95-module
+// group and a property KEY in another — `function i6t(){let e;return{set:(t)=>{e=t},get:()=>e}}`
+// — so the collision rename moved the property, `{__m29_set:(t)=>{e=t},get:()=>e}`. That
+// compiles, boots, prints `--help`, and dies on the first real turn with `TypeError: not a
+// function` at `t.installed.set(r)`, three frames from anything that names the merger. 367
+// property keys were renamed in that one group; 336 in the darwin-arm64 graph, which merely
+// never called one during the build's own smoke — a passing build was not evidence.
+//
+// This is still not a JS parser: it tracks bracket nesting and classifies each `{` as opening an
+// OBJECT/PATTERN, a CLASS body, or a BLOCK, which is all that is needed to tell a property name
+// from a reference. Misclassifying an object as a block only restores the old behaviour (the
+// safe direction); the reverse would refuse to rename a real reference, so the object side is
+// deliberately the narrow one — an explicit operator, `(`, `,`, `[`, `:`, or one of the words
+// above, never "anything that is not a block".
+//
+// Returns BOTH halves of the problem:
+//   `keys`      — bytes that are fixed property names. Masked, so nothing renames them.
+//   `shorthand` — `{ set }` positions, which mean `{ set: set }`: simultaneously a fixed KEY and
+//                 a real binding reference, so neither masking nor renaming is right on its own.
+//                 `expandCollidingShorthand` splits them into the explicit pair first.
+function propertyNames(src, mask) {
+  var n = src.length;
+  var keys = new Uint8Array(n);
+  var shorthand = [];
+  var stack = [];
+  var classPending = false;
+  var blockPending = false;   // the next `{` closes a `case`/`default`/label clause, so it is a BLOCK
+  var pendingClause = -1;     // bracket depth at which such a clause is waiting for its `:`
+  var i, c, end, pi, ni, pc, nc, enc, wStart, mod;
+
+  // Previous / next non-whitespace CODE index. A literal, template or comment boundary reads as
+  // "no token we can name", which classifies as a block — the safe direction.
+  function prevIdx(p) {
+    while (p >= 0 && mask[p] && isAsciiWsCode(src.charCodeAt(p))) p--;
+    return (p >= 0 && mask[p]) ? p : -1;
+  }
+  function nextIdx(p) {
+    while (p < n && mask[p] && isAsciiWsCode(src.charCodeAt(p))) p++;
+    return (p < n && mask[p]) ? p : -1;
+  }
+  function wordStart(p) { // start of the identifier ending AT p (inclusive), or -1
+    if (p < 0 || !isIdentCode(src.charCodeAt(p))) return -1;
+    while (p > 0 && mask[p - 1] && isIdentCode(src.charCodeAt(p - 1))) p--;
+    return isIdentStartCode(src.charCodeAt(p)) ? p : -1;
+  }
+  function braceKind(p) { // p = prevIdx of the `{`
+    if (p < 0) return 'block';
+    var ch = src.charAt(p);
+    if (ch === '>' && p > 0 && src.charAt(p - 1) === '=') return 'block'; // arrow function body
+    if (ch === ')' || ch === '}' || ch === ';') return 'block';
+    if ('=(,[:?!&|+-*/%<>~^'.indexOf(ch) !== -1) return 'obj';
+    var ws = wordStart(p);
+    if (ws >= 0) return OBJ_OPEN_WORD.has(src.slice(ws, p + 1)) ? 'obj' : 'block';
+    return 'block';
+  }
+  // An object-literal method name: `{ set(k, v){ ... } }`. The matched `)` must be followed by
+  // `{` — otherwise `{ f(x) }` is a block containing a call, not an object containing a method.
+  function methodTail(p) { // p = index of the `(`
+    var d = 0, q;
+    for (q = p; q < n; q++) {
+      if (!mask[q]) continue;
+      if (src.charAt(q) === '(') d++;
+      else if (src.charAt(q) === ')') { d--; if (!d) break; }
+    }
+    var r = nextIdx(q + 1);
+    return r >= 0 && src.charAt(r) === '{';
+  }
+
+  for (i = 0; i < n; i++) {
+    if (!mask[i]) continue;
+    c = src.charCodeAt(i);
+    if (isAsciiWsCode(c)) continue;
+    if (c === 123) {                                                   // {
+      // A `{` after a `:` is `{ a: { b: 1 } }` — an object — OR the body of a `case`/`default`
+      // clause or a labelled statement, which is a BLOCK. Only the colon itself can tell them
+      // apart, so the two clause forms flag it as they go by. Getting this wrong is not
+      // cosmetic: `case "uds": { let t = s.session, l = ... }` read as an object literal makes
+      // `l =` look like a shorthand entry with a default, and expanding it produces
+      // `let t = s.session, l: l = ...` — a SyntaxError. Measured on the real linux-x64 group.
+      if (classPending) { stack.push('class'); classPending = false; blockPending = false; continue; }
+      if (blockPending) { stack.push('block'); blockPending = false; continue; }
+      stack.push(braceKind(prevIdx(i - 1)));
+      continue;
+    }
+    blockPending = false; // only the token IMMEDIATELY after the clause's `:` can be its body
+    if (c === 40 || c === 91) { stack.push('('); continue; }           // ( [
+    if (c === 41 || c === 93 || c === 125) { stack.pop(); continue; }  // ) ] }
+    if (c === 58) {                                                    // :
+      if (pendingClause === stack.length) { pendingClause = -1; blockPending = true; }
+      continue;
+    }
+    if (!isIdentStartCode(c)) continue;
+    end = i + 1;
+    while (end < n && mask[end] && isIdentCode(src.charCodeAt(end))) end++;
+    // `src.slice` ONLY when the token could be the word we are looking for. This loop visits
+    // every identifier of a 7MB merged body, and slicing each one to compare it against a
+    // 5-character string is millions of throwaway substrings for a handful of hits.
+    if (end - i === 5 && c === 99 /* c */ && src.slice(i, end) === 'class') classPending = true;
+    // `case <expr>:` / `default:` — the `:` handler turns this into "the next `{` is a block".
+    else if ((end - i === 4 && c === 99 && src.slice(i, end) === 'case')
+      || (end - i === 7 && c === 100 /* d */ && src.slice(i, end) === 'default')) {
+      pendingClause = stack.length;
+    }
+
+    enc = stack.length ? stack[stack.length - 1] : 'block';
+    pi = prevIdx(i - 1);
+    ni = nextIdx(end);
+    pc = pi >= 0 ? src.charCodeAt(pi) : -1;
+    nc = ni >= 0 ? src.charCodeAt(ni) : -1;
+
+    // THE RULE THAT NEEDS NO BRACKET CLASSIFICATION, and the one `assertNoRenamedFixedNames`
+    // re-checks the finished merge against. An identifier between `{`/`,`/`;`/`}`/`)` and a `:`
+    // is a property KEY or a statement LABEL — a fixed name either way, never a value read. The
+    // two shapes where a `:` really does follow a reference are both excluded by what precedes
+    // it: a ternary's consequent follows `?`, a `case` clause's follows the `case` keyword.
+    //
+    // Labels are protected for the same reason property keys are — a label lives in its own
+    // namespace, so renaming one is never NEEDED — and protecting them here is what lets the
+    // check above be unconditional: `{ e: for(;;){} }` inside a BLOCK would otherwise be
+    // indistinguishable from a mis-classified object literal. `break e` / `continue e` are
+    // protected with it, because renaming only one half is a syntax error.
+    if (nc === 58 && (pc === 123 || pc === 44 || pc === 59 || pc === 125 || pc === 41)) {
+      markSpan(keys, i, end - i);
+      // After `;`, `}` or `)` a property key is impossible, so this is unambiguously a LABEL and
+      // its `{`, if it has one, is a block. After `{` or `,` it could be either, and the ONE
+      // shape that would go wrong (a labelled block as the first statement of a block) is left
+      // reading as an object — see `braceKind`'s safe direction.
+      if (pc === 59 || pc === 125 || pc === 41) pendingClause = stack.length;
+      i = end - 1;
+      continue;
+    }
+    if (isIdentCode(pc)) {
+      wStart = wordStart(pi);
+      // `break`/`continue` are the only two 5- and 8-character words this needs, so the length
+      // test comes before the slice: minified code puts an identifier after a KEYWORD constantly
+      // (`return x`, `typeof x`, `new X`), and slicing every one of them is pure waste.
+      if (wStart >= 0 && (pi - wStart === 4 || pi - wStart === 7)
+          && LABEL_JUMP.has(src.slice(wStart, pi + 1))) {
+        markSpan(keys, i, end - i);
+        i = end - 1;
+        continue;
+      }
+    }
+
+    if (enc === 'obj' || enc === 'class') {
+      // Does a member START here — right after the opening brace or the previous member's
+      // separator? (Object: `{` or `,`. Class body: `{`, `;`, or the `}` of a method.)
+      var starts = enc === 'obj'
+        ? (pc === 123 || pc === 44)
+        : (pc === 123 || pc === 59 || pc === 125);
+      // ... or right after a member modifier that itself starts one?
+      mod = false;
+      if (!starts) {
+        wStart = wordStart(pi);
+        if (wStart >= 0 && pi - wStart < 6 && MEMBER_MODIFIER.has(src.slice(wStart, pi + 1))) {
+          var bp = prevIdx(wStart - 1), bc = bp >= 0 ? src.charCodeAt(bp) : -1;
+          mod = enc === 'obj'
+            ? (bc === 123 || bc === 44)
+            : (bc === 123 || bc === 59 || bc === 125 || bp < 0);
+        }
+      }
+      if (starts || mod) {
+        // `{ set: v }` needs no case here — the bracket-kind-independent rule above already
+        // protected every `key:` in the file, whatever brace it sat in.
+        if (nc === 40 /* ( */ && (enc === 'class' || mod || methodTail(ni))) markSpan(keys, i, end - i);
+        else if (enc === 'class' && (nc === 61 || nc === 59 || nc === 125)) markSpan(keys, i, end - i);
+        else if (enc === 'obj' && !mod && (nc === 44 || nc === 125
+          || (nc === 61 && src.charCodeAt(ni + 1) !== 61 && src.charCodeAt(ni + 1) !== 62))) {
+          shorthand.push([i, end - i]);                                     // { set } / { set = 1 }
+        }
+      }
+    }
+    i = end - 1;
+  }
+  return { keys: keys, shorthand: shorthand };
+}
+
+// `{ set }` is `{ set: set }` written once. Renaming it moves the property; not renaming it
+// strands the reference. Splitting it into the explicit pair BEFORE the rename pass makes both
+// halves reachable by the rules that already exist — the key is then masked by `propertyNames`,
+// the value is an ordinary reference. Only colliding names are expanded, so a group with no
+// collision in shorthand position is emitted byte for byte as before.
+//
+// `renamed` is the set phase 2 will actually rewrite in THIS member — its own declared names
+// that collide, not the whole group's collision set. A name another member declares is left
+// alone here for the same reason phase 2 leaves it alone: nothing is going to move.
+function expandCollidingShorthand(src, renamed) {
+  // Deliberately NOT `codeMask(src)` — that would run `propertyNames` to build the key mask and
+  // then this would run it a second time for the shorthand half of the same answer. One pass.
+  var mask = lexicalCodeMask(src);
+  protectImportedExportNames(src, mask);
+  var spans = propertyNames(src, mask).shorthand;
+  var out = '', last = 0, i, name;
+  for (i = 0; i < spans.length; i++) {
+    name = src.substr(spans[i][0], spans[i][1]);
+    if (!renamed.has(name)) continue;
+    out += src.slice(last, spans[i][0]) + name + ': ' + name;
+    last = spans[i][0] + spans[i][1];
+  }
+  return last ? out + src.slice(last) : src;
+}
+
+// THE RATCHET. The merge that shipped this bug compiled, booted, printed 257 lines of `--help`
+// and passed the build's own PONG smoke on one platform's graph while 336 property keys sat
+// renamed in it; the linux-x64 graph of the SAME upstream version had 367 and died on the first
+// turn. Nothing between the merger and a user's session looked at the one thing that was wrong.
+//
+// So the finished merge is re-checked against the rule that needs no bracket classification: a
+// `__m<k>_` token the merger itself minted can never sit between `{`/`,`/`;`/`}`/`)` and a `:`,
+// because that position is a property key or a label and the rename pass is supposed to have
+// left it alone. It is a different reading of the text from the one that produced it — no brace
+// kinds, no member modifiers, no shorthand — so a regression in `propertyNames`'s classifier
+// fails the BUILD, by name, in one scan, instead of a session somewhere.
+function assertNoRenamedFixedNames(mergedSource, groupIndex) {
+  var mask = lexicalCodeMask(mergedSource);
+  var re = /(?<![A-Za-z0-9_$.])(__m\d+_[A-Za-z0-9_$]+)\s*:/g, m;
+  while ((m = re.exec(mergedSource))) {
+    if (!mask[m.index]) continue;
+    var p = m.index - 1;
+    while (p >= 0 && mask[p] && isAsciiWsCode(mergedSource.charCodeAt(p))) p--;
+    if (p < 0 || !mask[p]) continue;
+    var pc = mergedSource.charCodeAt(p);
+    if (pc !== 123 && pc !== 44 && pc !== 59 && pc !== 125 && pc !== 41) continue; // { , ; } )
+    throw new Error('scc-merge: group ' + groupIndex + ' renamed ' + m[1]
+      + ' into a property-key/label position — `'
+      + mergedSource.slice(Math.max(0, m.index - 40), m.index + m[0].length + 20)
+      + '`. That is a fixed NAME, not a binding reference: the merged module would silently read '
+      + 'and write the wrong property. propertyNames() failed to protect it.');
+  }
+}
+
 function codeMask(src) {
   var mask = lexicalCodeMask(src);
   protectImportedExportNames(src, mask);
+  var keys = propertyNames(src, mask).keys;
+  for (var i = 0; i < mask.length; i++) if (keys[i]) mask[i] = 0;
   return mask;
 }
 
@@ -795,6 +1052,12 @@ function mergeGroup(group, sources, moduleMeta, groupIndex) {
     // cross-group ones — whose LOCAL name collides gets an explicit alias FIRST, so phase 2 has
     // a local-only token to rename without ever touching the fixed export-name half beside it.
     var src = aliasCollidingNamedImports(m.src, colliding, m.k);
+    // `{ set }` -> `{ set: set }` before anything renames, so the fixed KEY and the binding
+    // REFERENCE it packs together stop being the same token. Only for the names phase 2 will
+    // actually rename in THIS member — exactly `m.declared` ∩ `colliding`, computed once here.
+    var willRename = new Set();
+    m.declared.forEach(function (nm) { if (colliding.has(nm)) willRename.add(nm); });
+    src = expandCollidingShorthand(src, willRename);
     for (var j = 0; j < group.length; j++) {
       var other = group[j];
       if (other === m.name) continue;
@@ -998,6 +1261,8 @@ function mergeGroup(group, sources, moduleMeta, groupIndex) {
     + '\n' + bodies.join('\n')
     + (exportPairs.length ? ('\nexport { ' + exportPairs.join(', ') + ' };\n') : '\n');
 
+  assertNoRenamedFixedNames(mergedSource, groupIndex);
+
   // Shims: each member keeps its own name and re-exports exactly what it used to, from the
   // merged module, under its own alias (`__m<k>_export_<name>` -> `<name>`).
   // WHY `import ... from` + a separate `export`, and not the one-line `export { ... } from`
@@ -1030,5 +1295,5 @@ function mergeGroup(group, sources, moduleMeta, groupIndex) {
 }
 
 if (typeof module === 'object' && module.exports) {
-  module.exports = { declaredNames, mergeGroup, mergeBodyOrder, MERGER_VERSION };
+  module.exports = { declaredNames, mergeGroup, mergeBodyOrder, assertNoRenamedFixedNames, MERGER_VERSION };
 }
