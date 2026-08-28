@@ -574,6 +574,23 @@ test('the merge is re-checked for renamed fixed names, and says so by name', () 
   assert.doesNotThrow(() => assertNoRenamedFixedNames('switch (x) { case __m0_set: break; }\n', 0));
   // Nor is text inside a string literal.
   assert.doesNotThrow(() => assertNoRenamedFixedNames('const s = "{ __m0_set: 1 }";\n', 0));
+
+  // The same gate, one position over: fixed syntax that only looks like an identifier. Two
+  // identifiers never sit side by side in JS, so the reading needs no header parsing at all.
+  assert.throws(
+    () => assertNoRenamedFixedNames('for (let o __m26_of xs) f(o);\n', 1),
+    /scc-merge: group 1 renamed __m26_of into a contextual-keyword position/);
+  assert.throws(
+    () => assertNoRenamedFixedNames('const o = { __m0_get x(){ return 1; } };\n', 2),
+    /scc-merge: group 2 renamed __m0_get into a contextual-keyword position/);
+  assert.throws(
+    () => assertNoRenamedFixedNames('__m0_async function f(){ return 1; }\n', 3),
+    /scc-merge: group 3 renamed __m0_async into a contextual-keyword position/);
+  // The five words that legitimately follow a renamed binding must not trip it.
+  assert.doesNotThrow(() => assertNoRenamedFixedNames(
+    'for (const x of __m0_ys) if (__m0_a instanceof B && __m0_k in o) g(x);\n', 0));
+  assert.doesNotThrow(() => assertNoRenamedFixedNames(
+    'class __m1_C extends Error {}\nexport { __m0_shared as __m0_export_ay };\n', 0));
 });
 
 // A `{` right after a `:` is normally a nested object literal — but it is a BLOCK when the `:`
@@ -597,4 +614,80 @@ test('mergeGroup reads a case-clause body as a block, not an object literal', ()
   const s = mergeGroup(['/g/a.js', '/g/b.js'], SRCC, (n) => METAC[n], 0).mergedSource;
   assert.match(s, /let t = s, __m0_l = t && 2; return \[t, __m0_l\];/);
   assert.doesNotMatch(s, /l: /, 'a declaration list is not an object literal');
+});
+
+// `of` IS NOT A RESERVED WORD. A member may legitimately declare a top-level binding named `of`
+// — the real darwin-arm64 2.1.251 graph has one member doing `import{of}from"<chunk>"` — and
+// another member of the same cyclic group declares `of` too, so it lands in the collision set.
+// The rename then rewrites the CONTEXTUAL KEYWORD in every `for (x of y)` header in the whole
+// merged module: `for(let o __m26_of t)`, 2137 of them, and the group stops parsing —
+// `expected 'of' or 'in' in for control expression`. Same class as a property key: a fixed
+// syntactic position that happens to be spelled like an identifier.
+//
+// The guard must be positional, not a blanket exclusion of the word: `of` the BINDING still has
+// to rename, or two members' `of` collide in the merged scope.
+const OF_SRC = {
+  '/g/a.js': [
+    'const of = 1;',
+    'function f(xs){',
+    '  let r = [];',
+    '  for (let o of xs) r.push(o);',
+    '  for (const [, k] of xs) r.push(k);',
+    '  for (const { a } of xs) r.push(a);',
+    '  for (let i = of.length; i > 0; i--) r.push(i);',
+    '  for (const k in xs) r.push(k);',
+    '  return [r, of];',
+    '}',
+    'export const ay = f;',
+  ].join('\n'),
+  '/g/b.js': 'const of = 2;\nexport const bx = of;\n',
+};
+const OF_META = {
+  '/g/a.js': { requires: [], exports: ['ay'], locals: ['of', 'f', 'ay'] },
+  '/g/b.js': { requires: [], exports: ['bx'], locals: ['of', 'bx'] },
+};
+const ofMerge = () => mergeGroup(['/g/a.js', '/g/b.js'], OF_SRC, (n) => OF_META[n], 0).mergedSource;
+
+test('mergeGroup does not rename the `of` keyword of a for-of header', () => {
+  const s = ofMerge();
+  assert.match(s, /for \(let o of xs\)/, 'a plain for-of header');
+  assert.match(s, /for \(const \[, k\] of xs\)/, 'an array-pattern binding');
+  assert.match(s, /for \(const \{ a \} of xs\)/, 'an object-pattern binding');
+  assert.doesNotMatch(s, /(?:o|\]|\}) __m0_of\b/, 'no for-of header may carry a renamed keyword');
+});
+
+// The guard must not overreach: a classic `for (;;)` header whose initializer READS a binding
+// called `of` is a value read like any other, and the binding itself still renames.
+test('mergeGroup still renames a binding named `of` everywhere it is a reference', () => {
+  const s = ofMerge();
+  assert.match(s, /const __m0_of = 1;/, 'the declaration renames');
+  assert.match(s, /for \(let i = __m0_of\.length; i > 0; i--\)/, 'a classic for header is a read');
+  assert.match(s, /return \[r, __m0_of\];/);
+  assert.match(s, /const __m1_of = 2;/);
+});
+
+// `get`/`set`/`async`/`static` are contextual keywords in exactly the same way, one position
+// over: they modify a member NAME. `{ __m0_get x(){} }` and `class C { __m0_static m(){} }` do
+// not parse either. Not yet seen in a real graph — `set` collides in the linux-x64 2.1.250
+// group but never appears as a modifier there — but it is the identical failure, and the
+// machinery to place it is already here.
+test('mergeGroup does not rename a member modifier or the `async` of `async function`', () => {
+  const MOD_SRC = {
+    '/g/a.js': [
+      'const get = 1, set = 2, async = 3, staticc = 4;',
+      'const lit = { get x(){ return get; }, set x(v){ set; }, async y(){ return async; } };',
+      'class C { static m(){} get z(){ return 1; } async w(){ return 2; } }',
+      'async function tail(){ return [get, set, async]; }',
+      'export const ay = [lit, C, tail, staticc];',
+    ].join('\n'),
+    '/g/b.js': 'const get = 5, set = 6, async = 7;\nexport const bx = get + set + async;\n',
+  };
+  const MOD_META = {
+    '/g/a.js': { requires: [], exports: ['ay'], locals: ['get', 'set', 'async', 'staticc', 'lit', 'C', 'tail', 'ay'] },
+    '/g/b.js': { requires: [], exports: ['bx'], locals: ['get', 'set', 'async', 'bx'] },
+  };
+  const s = mergeGroup(['/g/a.js', '/g/b.js'], MOD_SRC, (n) => MOD_META[n], 0).mergedSource;
+  assert.match(s, /\{ get x\(\)\{ return __m0_get; \}, set x\(v\)\{ __m0_set; \}, async y\(\)\{ return __m0_async; \} \}/);
+  assert.match(s, /class C \{ static m\(\)\{\} get z\(\)\{ return 1; \} async w\(\)\{ return 2; \} \}/);
+  assert.match(s, /async function tail\(\)\{ return \[__m0_get, __m0_set, __m0_async\]; \}/);
 });

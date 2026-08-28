@@ -33,7 +33,7 @@
 // BUMP THIS whenever an edit to this file could change the bytes mergeGroup emits. Forgetting to
 // is not a cosmetic slip: every machine that has already built once keeps serving the OLD merge
 // from its cache, so the edit appears to do literally nothing, on that machine only, forever.
-var MERGER_VERSION = '11';
+var MERGER_VERSION = '12';
 
 // `meta.locals` is the union of two engine tables (vardefs + closure_var) and can repeat a name
 // across them, and it reports compiler-internal synthetic names in angle brackets (e.g.
@@ -348,6 +348,65 @@ var MEMBER_MODIFIER = new Set(['get', 'set', 'async', 'static']);
 // `break lbl;` / `continue lbl;` — a LABEL reference, in the label namespace, not a binding.
 var LABEL_JUMP = new Set(['break', 'continue']);
 
+// CONTEXTUAL KEYWORDS ARE FIXED SYNTAX SPELLED LIKE IDENTIFIERS, and `of` is the one that cost a
+// second CI round. It is NOT a reserved word, so a member may legitimately declare a top-level
+// binding named `of` — the real darwin-arm64 2.1.251 graph has one doing
+// `import{of}from"<chunk>"` — and when another member of the same cyclic group declares `of`
+// too, it lands in the collision set. The rename then rewrote the KEYWORD in every for-of header
+// in the merged module: `for(let o __m26_of t)`, 2137 of them, and the group stopped parsing
+// (`expected 'of' or 'in' in for control expression`). `in` cannot do this — it IS reserved, so
+// no member can declare it — which is why only `of` needs finding.
+//
+// Blanket-excluding the WORD is the wrong fix, the same way it was wrong for `as` (see
+// `protectImportedExportNames`): a real binding named `of` still has to rename, or two members'
+// `of` re-declare in the merged scope. So this locates the KEYWORD POSITION instead.
+//
+// Returns [start, end) of the token occupying the `of` slot of a for-of header — the first
+// depth-1 identifier preceded by the end of a binding target (identifier, `]` or `}`), reached
+// before any depth-1 `;` or `=`. A classic `for (let i = 0; ...)` returns null at the `=` (and
+// would at the `;`), so `for (let i = of.length; ...)` correctly keeps `of` renameable. Returns
+// whatever token is THERE, not necessarily the word `of`, so the output gate can use the same
+// reading to check that nothing renamed it.
+var DECL_KW = new Set(['let', 'const', 'var']);
+function forHeadKeywordSlot(src, mask, fEnd) {
+  var n = src.length, p = fEnd, q, ch, e, d = 0, pv, lastWord = '';
+  while (p < n && mask[p] && isAsciiWsCode(src.charCodeAt(p))) p++;
+  if (p >= n || !mask[p]) return null;
+  if (isIdentStartCode(src.charCodeAt(p))) {                    // `for await (`
+    e = p + 1;
+    while (e < n && mask[e] && isIdentCode(src.charCodeAt(e))) e++;
+    if (src.slice(p, e) !== 'await') return null;
+    p = e;
+    while (p < n && mask[p] && isAsciiWsCode(src.charCodeAt(p))) p++;
+    if (p >= n || !mask[p]) return null;
+  }
+  if (src.charAt(p) !== '(') return null;
+  for (q = p; q < n; q++) {
+    if (!mask[q]) continue;
+    ch = src.charAt(q);
+    if (ch === '(' || ch === '[' || ch === '{') { d++; continue; }
+    if (ch === ')' || ch === ']' || ch === '}') { d--; if (d <= 0) return null; continue; }
+    if (d !== 1) continue;
+    if (ch === ';' || ch === '=') return null;  // classic for, or a binding with an initializer
+    if (!isIdentStartCode(src.charCodeAt(q))) continue;
+    e = q + 1;
+    while (e < n && mask[e] && isIdentCode(src.charCodeAt(e))) e++;
+    pv = q - 1;
+    while (pv >= 0 && mask[pv] && isAsciiWsCode(src.charCodeAt(pv))) pv--;
+    if (pv >= 0 && mask[pv]) {
+      var pc = src.charCodeAt(pv);
+      // The keyword follows the binding TARGET. `for (const x of y)`: `x`. `for ([a] of y)`: `]`.
+      // `for ({a} of y)`: `}`. The one identifier that is NOT a target is the declaration
+      // keyword itself — without that exclusion `for (let o of xs)` reports `o` as the slot,
+      // because `o` is an identifier preceded by the `t` of `let`.
+      if ((isIdentCode(pc) && !DECL_KW.has(lastWord)) || pc === 93 || pc === 125) return [q, e];
+    }
+    lastWord = src.slice(q, e);
+    q = e - 1;
+  }
+  return null;
+}
+
 // FIXED PROPERTY NAMES, AND THE ONE SHAPE THAT IS A NAME AND A REFERENCE AT ONCE.
 //
 // The `.` guard on the rename pass only ever covered `obj.shared`. Every OTHER position where an
@@ -450,6 +509,19 @@ function propertyNames(src, mask) {
     // every identifier of a 7MB merged body, and slicing each one to compare it against a
     // 5-character string is millions of throwaway substrings for a handful of hits.
     if (end - i === 5 && c === 99 /* c */ && src.slice(i, end) === 'class') classPending = true;
+    // `for (x of y)` — the keyword sits in a fixed slot that only the header can locate.
+    else if (end - i === 3 && c === 102 /* f */ && src.slice(i, end) === 'for') {
+      var slot = forHeadKeywordSlot(src, mask, end);
+      if (slot && src.slice(slot[0], slot[1]) === 'of') markSpan(keys, slot[0], slot[1] - slot[0]);
+    }
+    // `async function f(){}` — an identifier can never be followed by the `function` KEYWORD, so
+    // this one is unambiguous without any surrounding context. (The other `async` positions —
+    // `async x => y`, `async (x) => y` — are not, and are left alone.)
+    else if (end - i === 5 && c === 97 /* a */ && src.slice(i, end) === 'async') {
+      var af = end;
+      while (af < n && mask[af] && isAsciiWsCode(src.charCodeAt(af))) af++;
+      if (src.substr(af, 8) === 'function' && !isIdentCode(src.charCodeAt(af + 8))) markSpan(keys, i, end - i);
+    }
     // `case <expr>:` / `default:` — the `:` handler turns this into "the next `{` is a block".
     else if ((end - i === 4 && c === 99 && src.slice(i, end) === 'case')
       || (end - i === 7 && c === 100 /* d */ && src.slice(i, end) === 'default')) {
@@ -504,6 +576,7 @@ function propertyNames(src, mask) {
         : (pc === 123 || pc === 59 || pc === 125);
       // ... or right after a member modifier that itself starts one?
       mod = false;
+      var modStart = -1;
       if (!starts) {
         wStart = wordStart(pi);
         if (wStart >= 0 && pi - wStart < 6 && MEMBER_MODIFIER.has(src.slice(wStart, pi + 1))) {
@@ -511,12 +584,18 @@ function propertyNames(src, mask) {
           mod = enc === 'obj'
             ? (bc === 123 || bc === 44)
             : (bc === 123 || bc === 59 || bc === 125 || bp < 0);
+          if (mod) modStart = wStart;
         }
       }
       if (starts || mod) {
         // `{ set: v }` needs no case here — the bracket-kind-independent rule above already
         // protected every `key:` in the file, whatever brace it sat in.
-        if (nc === 40 /* ( */ && (enc === 'class' || mod || methodTail(ni))) markSpan(keys, i, end - i);
+        if (nc === 40 /* ( */ && (enc === 'class' || mod || methodTail(ni))) {
+          markSpan(keys, i, end - i);
+          // `{ get x(){} }` — `get` is contextual keyword here, not a reference.
+          // `{ __m0_get x(){} }` does not parse any more than `for (o __m0_of xs)` does.
+          if (modStart >= 0) markSpan(keys, modStart, pi - modStart + 1);
+        }
         else if (enc === 'class' && (nc === 61 || nc === 59 || nc === 125)) markSpan(keys, i, end - i);
         else if (enc === 'obj' && !mod && (nc === 44 || nc === 125
           || (nc === 61 && src.charCodeAt(ni + 1) !== 61 && src.charCodeAt(ni + 1) !== 62))) {
@@ -565,9 +644,37 @@ function expandCollidingShorthand(src, renamed) {
 // left it alone. It is a different reading of the text from the one that produced it — no brace
 // kinds, no member modifiers, no shorthand — so a regression in `propertyNames`'s classifier
 // fails the BUILD, by name, in one scan, instead of a session somewhere.
+// The only words that may legitimately follow a renamed binding with nothing but space
+// between them. Three are real word-shaped OPERATORS (`__m0_a instanceof B`, `__m0_k in o`,
+// `for (__m0_x of ys)`); the other two are module-clause syntax, and the merged module's own
+// consolidated export list is full of the first one (`export { __m0_shared as __m0_export_ay }`).
+// (\`extends\` follows the renamed CLASS NAME: \`class __m11_a9e extends Error {}\`.)
+var WORD_AFTER_BINDING = new Set(['in', 'instanceof', 'of', 'as', 'from', 'extends']);
+
 function assertNoRenamedFixedNames(mergedSource, groupIndex) {
   var mask = lexicalCodeMask(mergedSource);
-  var re = /(?<![A-Za-z0-9_$.])(__m\d+_[A-Za-z0-9_$]+)\s*:/g, m;
+  var m, n = mergedSource.length;
+
+  // (b) A CONTEXTUAL KEYWORD position. `for (o __m26_of xs)` is the shape that broke the
+  // darwin-arm64 2.1.251 graph; `{ __m0_get x(){} }` and `__m0_async function f(){}` are the
+  // same mistake one position over. Both reduce to the same reading, which needs no header
+  // parsing at all: a token the merger minted may never be IMMEDIATELY FOLLOWED by another
+  // identifier token, because no JS grammar puts two identifiers side by side — except the three
+  // word-shaped operators above.
+  var idre = /(?<![A-Za-z0-9_$.])(__m\d+_[A-Za-z0-9_$]+)([ \t]+)([A-Za-z_$][A-Za-z0-9_$]*)/g;
+  while ((m = idre.exec(mergedSource))) {
+    if (!mask[m.index]) continue;
+    if (WORD_AFTER_BINDING.has(m[3])) continue;
+    throw new Error('scc-merge: group ' + groupIndex + ' renamed ' + m[1]
+      + ' into a contextual-keyword position — `'
+      + mergedSource.slice(Math.max(0, m.index - 40), m.index + m[0].length + 20)
+      + '`. Two identifiers cannot sit side by side: the merger renamed fixed syntax '
+      + '(the `of` of a for-of header, a get/set/async/static member modifier, or the `async` '
+      + 'of an async function) that only looks like an identifier.');
+  }
+
+  // (a) A PROPERTY KEY or LABEL position.
+  var re = /(?<![A-Za-z0-9_$.])(__m\d+_[A-Za-z0-9_$]+)\s*:/g;
   while ((m = re.exec(mergedSource))) {
     if (!mask[m.index]) continue;
     var p = m.index - 1;
@@ -581,13 +688,35 @@ function assertNoRenamedFixedNames(mergedSource, groupIndex) {
       + '`. That is a fixed NAME, not a binding reference: the merged module would silently read '
       + 'and write the wrong property. propertyNames() failed to protect it.');
   }
+  return n;
 }
 
+// ONE-ENTRY MEMO, worth roughly three quarters of all the masking work. mergeGroup routes ~20
+// passes per member through maskedReplace, and a pass whose regex does not match hands the SAME
+// string object to the next one. Measured on the real 99-module group: 3955 of 5124 codeMask
+// calls — 1115MB of scanning — repeat the previous call's string by identity.
+//
+// Returning the same array is safe because the mask is a pure function of the text and NO caller
+// writes to it: maskedReplace, localExportMap and hasExportDefault read it, and topLevelMask and
+// clearClauseSpans build their own arrays from it. If a caller ever starts mutating a mask it
+// did not build, this memo is the first thing to delete. It changes no output whatsoever, which
+// is why it needs no MERGER_VERSION bump — asserted by re-merging the real graphs and comparing
+// bytes.
+//
+// `===` on strings is VALUE equality, not reference identity, so this is correct on any engine
+// (both node and tjs return an equal string from a replace that matched nothing — probed, not
+// assumed). Both engines also compare identical references in constant time, and even a full
+// memcmp of two 7MB strings is far less work than the two char-by-char scans it replaces.
+// Measured on the real 99-module group: 28.0s -> 5.9s.
+var codeMaskLastSrc = null, codeMaskLast = null;
 function codeMask(src) {
+  if (src === codeMaskLastSrc) return codeMaskLast;
   var mask = lexicalCodeMask(src);
   protectImportedExportNames(src, mask);
   var keys = propertyNames(src, mask).keys;
   for (var i = 0; i < mask.length; i++) if (keys[i]) mask[i] = 0;
+  codeMaskLastSrc = src;
+  codeMaskLast = mask;
   return mask;
 }
 

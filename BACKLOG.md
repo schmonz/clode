@@ -333,7 +333,7 @@ is the fingerprint to match against the CI log:
 Left open: nothing in CI or the local suite builds against more than one platform's graph, so
 this class of divergence is still found by a red leg rather than by us.
 
-### The merge is ~45% slower than the number Task 3 measured (2026-08-28)
+### (SUPERSEDED by the codeMask memo below) The merge is ~45% slower than Task 3 measured
 
 `propertyNames` adds a second full scan to `codeMask`, which every `maskedReplace` calls: the
 95-module group went 14.0s -> 19.5s under node, so expect ~380s -> ~550s under tjs, per leg,
@@ -341,6 +341,55 @@ cold. Still inside the 1800s fuse budget on the boxes measured, and unmeasured o
 ones. The three levers are unchanged and are all better than shaving this scan: cache the merge
 under `~/.cache/clode` keyed on the provider, do the string work where it is 31x faster, or stop
 recomputing `codeMask` from scratch inside every `maskedReplace`.
+
+### CONTEXTUAL KEYWORDS: `of` is not reserved, and neither are the member modifiers (2026-08-28)
+
+Round two of the same class as the property-key bug, one position over. `of` is a CONTEXTUAL
+keyword, so a member may legitimately declare a top-level binding named `of` — darwin-arm64
+2.1.251 has one doing `import{of}from"<chunk>"` — and when another member of its cyclic group
+declares `of` too, the collision rename rewrites the KEYWORD in every for-of header in the merged
+module. 2137 of them, and the group stops parsing:
+
+    Error: quaude-fuse: compiling /$bunfs/root/__clode-scc-1.js failed:
+      expected 'of' or 'in' in for control expression
+
+`in` cannot do this — it IS reserved — so `of` is the only for-header case. The same hazard sits
+one position over in `{ get x(){} }`, `{ async y(){} }`, `class C { static m(){} }` and
+`async function f(){}`: all four modify a member/declaration and all four are ordinary
+identifiers a member may declare. Fixed positionally (never by excluding the word — a real
+binding named `of` still has to rename), and `assertNoRenamedFixedNames` now covers it with a
+rule that needs no header parsing: **two identifiers never sit side by side in JS**, except after
+`in`/`instanceof`/`of`/`as`/`from`/`extends`.
+
+**Still unguarded, same class, not yet seen in a real graph:** `async x => y` and `async (x) => y`
+(genuinely ambiguous with a call to a function named `async`), and `let`/`static` in the handful
+of positions where they are not reserved.
+
+### THE PLATFORM CACHE KEY DOES NOT SURVIVE MINIMISATION — d5da54c is a no-op on every CI leg
+
+`providerPlatformOf` reads the container magic, and `scripts/make-min-provider.cjs` emits a
+SYNTHETIC container that has none. Measured:
+
+    darwin   REAL darwin-arm64 2.1.250          null   MIN darwin-arm64 2.1.250
+    linux    REAL linux-x64 2.1.250             null   MIN linux-x64 2.1.250
+
+Every leg that builds goes through `stage-provider.mjs`, which minimises unconditionally — so the
+platform half of the new cache key is `null` for exactly the providers CI builds from, and a
+linux carve and a darwin carve of the same version still share a key there. The keychain P0 is
+fixed only for un-minimised providers. The fix belongs in `make-min-provider.cjs` (carry the
+source container's platform forward, or record it beside the output and have
+`providerPlatformOf` read it) — not in the cache key, which is right.
+
+### THE MERGE IS NOW FASTER THAN BEFORE ANY OF THIS — the lever was memoising codeMask
+
+`maskedReplace` recomputed `codeMask(src)` from scratch on every call, and `mergeGroup` routes
+~20 passes per member through it. Measured on the real 99-module group: **5124 codeMask calls,
+1115MB scanned, 3955 of them (77%) handed the same text as the previous call** — a pass whose
+regex matches nothing returns an equal string. A one-entry memo took the group from 28.0s to
+5.9s under node. For scale, the same group took 14.0s before the property-key work and 19.5s
+after it, so the merge is now ~2.5x faster than the code that shipped before any of this.
+The remaining levers are unchanged: cache the merge under `~/.cache/clode` keyed on the provider,
+and do the string work where it is 31x faster than tjs.
 
 ## IN-FLIGHT HANDOFF (2026-07-31) — what's being juggled
 
