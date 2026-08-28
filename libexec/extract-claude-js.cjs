@@ -1087,6 +1087,11 @@ function extractGraphToFile(binpath, out) {
     cyclicRequires: requireClasses.cyclic,
     externals: plan.externals,
     moduleCount: plan.moduleCount,
+    // The platform this graph was CARVED FOR, from the provider binary's container bytes.
+    // Bun folds process.platform at carve time, so a graph is per-platform; recording it is
+    // what lets a build refuse a darwin target fused from a linux carve rather than ship one
+    // with the macOS credential store dead-coded away.
+    providerPlatform: providerPlatformOf(binpath),
     sources,
   };
   fs.writeFileSync(out, JSON.stringify(doc));
@@ -1317,6 +1322,51 @@ if (require.main === module) {
   main(process.argv.slice(2));
 }
 
+// WHICH PLATFORM'S BRANCHES SURVIVE IN A CARVE — read from the CONTAINER, never from the
+// host, the filename, or a version string. Bun constant-folds `process.platform` at carve
+// time, so a provider binary does not yield a portable graph: it yields a graph for ITS
+// platform, with every other platform's branches dead-coded away. A darwin target fused
+// from a linux carve is missing upstream's whole macOS credential store, which is how the
+// 2026-08-27 quaude shipped unable to read the login Keychain — see
+// test/provider-platform.test.cjs for the full account.
+//
+// Returns null on anything unrecognized rather than falling back to the host. Defaulting to
+// the host is precisely how a linux carve passes for darwin: the caller has to be able to
+// tell "not a container I know" apart from "a container for this platform".
+function providerPlatformOf(binpath) {
+  const buf = Buffer.alloc(16);
+  let fd;
+  try {
+    fd = fs.openSync(binpath, 'r');
+    if (fs.readSync(fd, buf, 0, 16, 0) < 8) return null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* already failing */ } }
+  }
+  // Mach-O thin (both endiannesses) and universal/fat. 0xcafebabe is also Java's class-file
+  // magic, but a provider is an executable and on macOS that word is a fat binary.
+  const magic = buf.readUInt32BE(0);
+  if (magic === 0xfeedface || magic === 0xfeedfacf || magic === 0xcefaedfe || magic === 0xcffaedfe
+    || magic === 0xcafebabe || magic === 0xcafebabf || magic === 0xbebafeca || magic === 0xbfbafeca) {
+    return 'darwin';
+  }
+  if (buf[0] === 0x4d && buf[1] === 0x5a) return 'win32'; // PE/COFF 'MZ'
+  if (buf[0] === 0x7f && buf[1] === 0x45 && buf[2] === 0x4c && buf[3] === 0x46) {
+    // ELF: e_ident[EI_OSABI]. Linux overwhelmingly ships SysV(0) rather than LINUX(3), so 0
+    // reads as linux. That default is pragmatic WITHIN elf and can never produce 'darwin',
+    // which is the distinction this gate exists to protect.
+    switch (buf[7]) {
+      case 2: return 'netbsd';
+      case 6: return 'sunos';
+      case 9: return 'freebsd';
+      case 12: return 'openbsd';
+      default: return 'linux';
+    }
+  }
+  return null;
+}
+
 module.exports = {
   moduleWithMeta,
   pickEntry,
@@ -1335,6 +1385,7 @@ module.exports = {
   rewriteSafeRequires,
   verify,
   contentChecks,
+  providerPlatformOf,
   extractToFile,
   extractGraphToFile,
   extractGraphRunnerToFile,
