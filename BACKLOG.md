@@ -82,6 +82,46 @@ That is worth knowing NOW, because it means the useful preparation is not engine
 (a) the tripwire, so we learn on day zero, and (b) finding out whether any JS-bearing artifact
 exists, which can be answered today, cheaply, while nothing is on fire.
 
+**ARTIFACT SURVEY 2026-08-28 — is there a JS-bearing artifact besides the binary? NO. But the
+survey paid for itself twice.** Run because the JSC-bytecode contingency's only credible option
+is "get the JS from somewhere else", and that is worth answering while nothing is on fire.
+
+**What upstream publishes.** `@anthropic-ai/claude-code` is a wrapper (`cli-wrapper.cjs`,
+`install.cjs`, `bin/claude.exe`, type declarations) whose real payload is a per-platform package
+(`@anthropic-ai/claude-code-darwin-arm64` etc.) containing exactly one thing: the binary. No
+`cli.js`, no sources. NB this packaging is NOT new — it predates 2.1.238, so it is not one of
+the recent structural changes.
+
+**`@anthropic-ai/claude-agent-sdk` (0.3.250 — its trailing number tracks Claude Code's 2.1.250)
+ships real unbundled JS**: `sdk.mjs` 1.4MB, `bridge.mjs` 1.4MB, `browser-sdk.js` 1.3MB, and
+`extractFromBunfs.js` shipped deliberately verbatim as the `./extract` export. **It is a CLIENT,
+not the core**: 55 `spawn` references, and it drives the binary rather than implementing the
+agent loop. 1.4MB against the binary's ~32MB of module sources settles it by size alone. So it
+does NOT rescue us from bytecode.
+
+**CONCLUSION FOR THE CONTINGENCY: option 1 currently has no answer.** No published artifact
+carries the core as JavaScript. That does not make the contingency worse, it makes option 2
+(ask upstream for a JS-bearing artifact, BEFORE we need it) the live one, and it is now backed
+by a concrete observation: `manifest.json` publishes a source `commit` hash, so the build is
+reproducible from a tree they hold.
+
+**Two things worth having ANYWAY, independent of bytecode:**
+
+1. **`manifest.json` is an official integrity source, and it is correct.** It carries
+   `version`, `commit`, `buildDate`, and per-platform `{binary, checksum, size}`. VERIFIED: its
+   `darwin-arm64` checksum `506d7362a9c625306044879a9d91d8f33bd2eef963681b56be3295db5fe3e34b`
+   matches the binary we downloaded, byte for byte. `clode fetch` currently trusts hashes we
+   record ourselves; it could verify against UPSTREAM's published checksum for the exact
+   version, which is strictly better provenance and costs one small download.
+2. **`manifest.zst.json` describes a zstd channel: 63.7MB instead of 206MB**, a 3.2x smaller
+   download for the same content. Relevant to `clode fetch` on slow links and to every CI leg
+   that pulls a provider.
+
+**Also worth reading properly: `extractFromBunfs.js`.** It is upstream's own supported way to
+lift a file out of `$bunfs`, shipped unbundled and Node-importable on purpose. It documents
+container behaviour we reverse-engineered, and its existence says upstream treats extracting
+from `$bunfs` as a legitimate thing to do — useful context if we ever do ask them for sources.
+
 ## ★★ P0 — upstream 2.1.248+ CYCLICALLY require()s graph modules; every tjs leg is red (2026-08-28)
 
 **Status: quaude (tjs) BLOCKED. naude (node) is FINE — verified, unpatched.** We released
