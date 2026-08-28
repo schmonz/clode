@@ -230,6 +230,69 @@ function planGraph(mods, entry) {
   };
 }
 
+// CJS require() targets that are modules of this graph. Upstream 2.1.248+ emits these — 278
+// distinct edges in 2.1.250, zero in 2.1.247. indexOf rather than a regex ON PURPOSE: these
+// sources reach tens of megabytes and a global regex over them blows the stack (measured).
+function requiresOf(src, inGraph) {
+  var out = [], seen = {}, t = String(src), quotes = ['"', "'"], qi, q, k, end, spec;
+  if (t.indexOf('require(') === -1) return out;
+  for (qi = 0; qi < quotes.length; qi++) {
+    q = quotes[qi];
+    k = 0;
+    while ((k = t.indexOf('require(' + q, k)) !== -1) {
+      end = t.indexOf(q, k + 9);
+      if (end === -1) break;
+      spec = t.slice(k + 9, end);
+      if (inGraph(spec) && !seen['#' + spec]) { seen['#' + spec] = 1; out.push(spec); }
+      k = end + 1;
+    }
+  }
+  return out;
+}
+
+// Split every require edge by whether turning it into a STATIC IMPORT would close a cycle.
+//
+// This distinction is the whole fix. Measured on 2.1.250: 253 of 278 edges are safe, and the
+// edge that actually breaks CI is one of them — its target has no static path back, so it is
+// not part of a cycle at all, it is simply a module nothing ever evaluates. A safe edge can
+// become an ordinary import, which the engine resolves natively with no runtime machinery.
+function classifyRequires(mods) {
+  var names = [], name, i;
+  for (name of mods.keys()) names.push(name);
+  var idx = new Map();
+  for (i = 0; i < names.length; i++) idx.set(names[i], i);
+  var inGraph = function (s) { return idx.has(s); };
+
+  var deps = names.map(function (n) {
+    return depsOf(mods.get(n), inGraph).map(function (s) { return idx.get(s); });
+  });
+
+  // Does a STATIC-import path run from `from` to `to`? Iterative: ~1800 nodes overflows a
+  // recursive walk.
+  function reaches(from, to) {
+    var seen = new Uint8Array(names.length), stack = [from], v, j;
+    while (stack.length) {
+      v = stack.pop();
+      if (seen[v]) continue;
+      seen[v] = 1;
+      if (v === to) return true;
+      for (j = 0; j < deps[v].length; j++) if (!seen[deps[v][j]]) stack.push(deps[v][j]);
+    }
+    return false;
+  }
+
+  var safe = [], cyclic = [], targets, t;
+  for (i = 0; i < names.length; i++) {
+    targets = requiresOf(mods.get(names[i]), inGraph);
+    targets.sort();
+    for (t = 0; t < targets.length; t++) {
+      if (reaches(idx.get(targets[t]), i)) cyclic.push([names[i], targets[t]]);
+      else safe.push([names[i], targets[t]]);
+    }
+  }
+  return { safe: safe, cyclic: cyclic };
+}
+
 if (typeof module === 'object' && module.exports) {
-  module.exports = { planGraph, planOrder, externalsOf, shimSource, depsOf, isPlausibleSpecifier };
+  module.exports = { planGraph, planOrder, externalsOf, shimSource, depsOf, isPlausibleSpecifier, requiresOf, classifyRequires };
 }
