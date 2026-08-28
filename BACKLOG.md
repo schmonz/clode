@@ -42,6 +42,81 @@ So the honest reading is that gate (1) must hold TWICE: once to unblock the merg
 again on the merged result that actually ships. Tagging a commit whose CI predates the
 dependency bumps would satisfy the letter of both gates and the spirit of neither.
 
+## ★★ P0 — upstream 2.1.248+ CYCLICALLY require()s graph modules; every tjs leg is red (2026-08-28)
+
+**Status: quaude (tjs) BLOCKED. naude (node) is FINE — verified, unpatched.** We released
+0.20260827.1 against 2.1.247. CI installs the provider at `latest`, so when 2.1.248 landed
+every tjs leg started failing at once, 22 of 38 jobs. npm `latest` is 2.1.250 as of writing.
+
+**The symptom.**
+    node-shim: cannot resolve '/$bunfs/root/chunk-wvte6g1r.js' from /quaude
+
+**What actually changed.** 2.1.248 began emitting CJS `require()` of graph modules INSIDE the
+graph. Measured on the extracted graphs, same extractor, two versions:
+
+| | 2.1.247 | 2.1.250 |
+|---|---|---|
+| `require()` of a chunk | **0** | **358** (across 65 modules) |
+| dynamic `import()` of a chunk | 1075 | 1095 |
+| modules in graph | 1464 | 1814 |
+| `@bun-cjs` blocks | 95 / 18 | 665 / 588 |
+
+e.g. `require("/$bunfs/root/chunk-8ry2mchg.js").udsInboxShape`
+
+**Why node survives and tjs does not.** The graph runner's node path installs
+`module.registerHooks()`, which intercepts `require` as well as `import`, so a graph
+specifier resolves there for free — 2.1.250 runs under node with NO patch (`--version` and
+`--help` both fine). The tjs path has no hook: the call sits inside a `@bun-cjs` wrapper whose
+`require` is the SHIM's, so it reaches `moduleLoad`, takes the absolute-path branch, and
+throws for a module the graph is holding in memory.
+
+**THE CONSTRAINT THAT KILLS THE OBVIOUS FIXES: these requires are CYCLIC.** That is *why*
+upstream uses `require` and not `import` — CJS require returns partial exports mid-cycle, and
+upstream depends on that.
+
+**Four designs tried and measured, all rejected. Do not re-try these blind:**
+
+1. *One bridge module static-importing every require()d chunk, imported by the entry.*
+   Resolves the specifiers and also EAGERLY evaluates 193 chunks upstream loads lazily.
+   Measured: node went from `2.1.250 (Claude Code)` exit 0 to **exit 1**, because one of them
+   reaches the ws path and exits when `ws` is absent. Eager evaluation is not a neutral way to
+   obtain a namespace.
+2. *Rewrite the call sites to `__quaudeRequire` / `globalThis.__quaudeRequire` /
+   `import.meta.require`.* All three throw inside these chunks under tjs — "not a function",
+   "cannot read property '__quaudeRequire' of undefined", "cannot read property 'meta' of
+   undefined". The call site is in a CJS wrapper: no `import.meta`, and the bundle's own
+   scopes shadow those globals. The `require` in scope is a function PARAMETER from the shim.
+3. *Rewrite the call sites to ordinary static imports* (the path the other ~14,800 edges take).
+   `planGraph` rejects the graph outright: `import cycle chunk-2yxpncxe -> chunk-ghnc2x4f`.
+   This is the experiment that proved the cyclic premise.
+4. *Runtime resolver: each require()d module publishes its namespace, shim asks the runner to
+   evaluate on demand.* Gets furthest and is where the real wall is. Publishing at the END of
+   the body is too late for a cycle; publishing at the TOP (live namespace object, partial
+   bindings — the ESM analogue of what CJS gives) gets past resolution and then hits the
+   engine itself:
+       SyntaxError: circular reference when looking for export
+         'AGENT_VIEW_RELAUNCH_ENV_KEY' in module '/$bunfs/root/chunk-rjzfxnpd.js'
+   QuickJS will not build a namespace for a module mid-cycle. `tjs.engine` exposes only
+   compile/serialize/deserialize/evalBytecode/gc/features/versions — no way to drain pending
+   module jobs, and `evalBytecode` on a module whose deps have not run does not run its body
+   synchronously. Evaluating the dependency CLOSURE instead is not a smaller hammer: measured
+   mean 375 and max 908 modules of 1814, i.e. design 1 wearing a different hat.
+
+**Where that leaves it — the fork is real and needs a decision:**
+- **Engine.** Teach the engine to answer a synchronous require of a mid-cycle module (a
+  namespace with TDZ bindings rather than a hard error). Matches Bun's semantics; a txiki/
+  quickjs patch, and the kind of thing canonical-LE and the atomic shim already precedent.
+- **Extraction.** Detect each cyclic require group and emit it as ONE module, so the cycle
+  never crosses a module boundary. No engine change; a real change to planning.
+
+**Reproduce (local, ~2 min/iteration, no CI needed):**
+    npm i --ignore-scripts @anthropic-ai/claude-code-darwin-arm64@2.1.250   # binary is per-platform now
+    node libexec/extract-claude-js.cjs <that>/claude /tmp/run/x.js
+    cp -R libexec/bun-shim.cjs libexec/node-shim /tmp/run/
+    ./build/tjs/macos-26-arm64/tjs run libexec/node-shim/loader.cjs /tmp/run/x.js --help
+`--version` passes on a broken graph — it never reaches these modules. `--help` is the cheap
+trigger. NB `build/tjs/tjs` is stale and the shim rightly refuses it; use the per-platform one.
+
 ## IN-FLIGHT HANDOFF (2026-07-31) — what's being juggled
 
 Driver = the at-desk release-readiness plan (`docs/superpowers/plans/2026-07-28-at-desk-release-readiness.md`).
