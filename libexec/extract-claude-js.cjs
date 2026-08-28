@@ -998,13 +998,52 @@ function isSplitBundle(binpath) {
   return js[0].moduleFormat === 1;
 }
 
+// Turn each SAFE CJS require of a graph module into a static import plus a namespace binding.
+//
+// WHY. Upstream 2.1.248+ require()s graph modules from CJS wrappers. Under tjs that call lands
+// in the node-shim, which cannot resolve a path that exists only inside the provider — every
+// leg died on it. 253 of 278 such edges (2.1.250) point at a module with no static path back,
+// so an ordinary import closes no cycle and the engine resolves it natively. One import per
+// (module, target) pair; the call sites become references to its namespace.
+function rewriteSafeRequires(sources, safeEdges) {
+  if (!safeEdges.length) return sources;
+  const byModule = new Map();
+  for (const [from, to] of safeEdges) {
+    if (!byModule.has(from)) byModule.set(from, []);
+    if (!byModule.get(from).includes(to)) byModule.get(from).push(to);
+  }
+  const out = Object.assign({}, sources);
+  for (const [from, targets] of byModule) {
+    let t = String(out[from]);
+    let head = '';
+    targets.forEach((target, i) => {
+      const local = '__clodeReq' + i;
+      head += 'import * as ' + local + ' from ' + JSON.stringify(target) + ';\n';
+      for (const q of ['"', "'"]) {
+        t = t.split('require(' + q + target + q + ')').join(local);
+      }
+    });
+    out[from] = head + t;
+  }
+  return out;
+}
+
 function extractGraphToFile(binpath, out) {
   const { loadGraph, loadGraphFull, loadAssets } = require('./bun-graph.cjs');
-  const { planGraph } = require('./bun-graph-plan.cjs');
+  const { planGraph, classifyRequires } = require('./bun-graph-plan.cjs');
   const mods = loadGraph(binpath);
   const full = loadGraphFull(binpath);
   const assets = {};
   for (const [name, text] of loadAssets(binpath)) assets[name] = text;
+  // Rewrite the safe CJS requires BEFORE planning, so planOrder sees the new import edges and
+  // orders the targets ahead of their requirers. Doing it after planning would leave the order
+  // stale and the compile would fail with "could not load" naming a module that is fine.
+  const requireClasses = classifyRequires(mods);
+  if (requireClasses.safe.length) {
+    const rewritten = rewriteSafeRequires(
+      Object.fromEntries([...mods.entries()]), requireClasses.safe);
+    for (const [name, src] of Object.entries(rewritten)) mods.set(name, src);
+  }
   const plan = planGraph(mods, full.entryName);
   const { sources, report } = transformGraph(plan.sources);
 
@@ -1034,6 +1073,10 @@ function extractGraphToFile(binpath, out) {
     // sources rather than in the compile order.
     assets: assets,
     order: plan.order,
+    // Require edges that could NOT be converted: turning them into imports would close a
+    // cycle. Recorded so the build can refuse on them by name rather than failing at runtime
+    // on a leg. Always present; [] means there are none.
+    cyclicRequires: requireClasses.cyclic,
     externals: plan.externals,
     moduleCount: plan.moduleCount,
     sources,
@@ -1281,6 +1324,7 @@ module.exports = {
   patchRemoteControlUnavailable,
   transform,
   transformGraph,
+  rewriteSafeRequires,
   verify,
   contentChecks,
   extractToFile,
