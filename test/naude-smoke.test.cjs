@@ -62,12 +62,14 @@ function skipReason() {
 // to the bundle by the extract cache — a bare cli.cjs is rejected, which is what
 // `clode build --naude` stages from its cache dir). Mirror that here: copy the
 // checkout's libexec/bun-shim.cjs next to the extracted cli.cjs.
+// ONE STAGING PATH, shared with every other oracle: test/oracle-models.cjs stageCli runs
+// clode's own cached extraction, which merges upstream's residual cyclic requires away.
+// Spawning libexec/extract-claude-js.cjs directly (what this did until 2026-08-29) bakes a
+// cli.cjs no built target ever runs — and from 2.1.243 that difference is fatal at the
+// first turn, which is exactly the row below.
 function stageCli(bin) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-smoke-stage-'));
-  const cli = path.join(dir, 'cli.cjs');
-  execFileSync(process.execPath, [path.join(REPO, 'libexec/extract-claude-js.cjs'), bin, cli], { stdio: 'pipe' });
-  fs.copyFileSync(path.join(REPO, 'libexec/bun-shim.cjs'), path.join(dir, 'bun-shim.cjs'));
-  return { dir, cli };
+  return require('./oracle-models.cjs').stageCli(bin, { dir });
 }
 
 // Run the naude binary asynchronously (NOT spawnSync): the mock Anthropic server lives

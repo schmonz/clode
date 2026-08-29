@@ -301,6 +301,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const LOADER_PATH = path.join(__dirname, '..', 'libexec', 'node-shim', 'loader.cjs');
 const MERGER_PATH = path.join(__dirname, '..', 'libexec', 'scc-merge.cjs');
+// The DRIVER is under the same constraint for the same reason: libexec/clode-extract.cjs
+// require()s it, and a clode-native runs clode-extract UNDER the node-shim loader — so the
+// loader's CJS text transforms see this file too.
+const DRIVER_PATH = path.join(__dirname, '..', 'libexec', 'graph-scc-merge.cjs');
 
 function shimDynImportTransform() {
   const loaderSrc = fs.readFileSync(LOADER_PATH, 'utf8');
@@ -316,11 +320,12 @@ function shimDynImportTransform() {
 // import keyword next to an open paren again — in code, a string, a regex, or even a
 // comment — this fails immediately and by name, instead of the merger going quietly wrong
 // on one engine only.
-test("node-shim's CJS text transforms are all no-ops on libexec/scc-merge.cjs", () => {
-  const src = fs.readFileSync(MERGER_PATH, 'utf8');
+for (const merger of [MERGER_PATH, DRIVER_PATH]) {
+  test(`node-shim's CJS text transforms are all no-ops on libexec/${path.basename(merger)}`, () => {
+  const src = fs.readFileSync(merger, 'utf8');
   assert.strictEqual(shimDynImportTransform()(src), src,
-    'scc-merge.cjs must never contain the import keyword adjacent to `(` — node-shim rewrites '
-    + 'that text everywhere, including inside this file\'s own import-matching regexes');
+    `${path.basename(merger)} must never contain the import keyword adjacent to \`(\` — node-shim `
+    + 'rewrites that text everywhere, including inside this file\'s own import-matching regexes');
 
   // The loader's other two transforms would be just as destructive to a file whose whole job
   // is carrying import/export syntax as data, so pin them here too rather than waiting for a
@@ -331,7 +336,8 @@ test("node-shim's CJS text transforms are all no-ops on libexec/scc-merge.cjs", 
   assert.ok(detectSrc, 'loader.cjs no longer declares esmDetect where this test reads it');
   const esmDetect = new Function('return (' + detectSrc[0] + ')')();
   assert.strictEqual(esmDetect(src), false,
-    'scc-merge.cjs must not look like an ES module to node-shim, or the loader rewrites it '
+    `${path.basename(merger)} must not look like an ES module to node-shim, or the loader `
+    + 'rewrites it '
     + 'through esmToCjs before evaluating it');
 
   // `fixVFlagPropertyEscapes` rewrites regex literals, and gates entirely on the source
@@ -340,7 +346,8 @@ test("node-shim's CJS text transforms are all no-ops on libexec/scc-merge.cjs", 
   assert.ok(src.indexOf('\\p{') === -1 && src.indexOf('\\P{') === -1,
     'a Unicode property escape here would expose this file\'s regex literals to the loader\'s '
     + 'v-flag rewrite');
-});
+  });
+}
 
 // Load the merger the way tjs actually loads it, and re-run the two cases whose guards live
 // inside the affected patterns.

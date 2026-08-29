@@ -103,11 +103,13 @@ test('changed extractor-sig re-extracts even with an unchanged binary', () => {
     // which joined the key so a linux carve of a version can never be served to a darwin
     // build of the same version (test/extract-cache-key.test.cjs). This fixture's "binary"
     // is not a real container, so it lands in the 'unknown' bucket.
-    const { sigOf } = require('../libexec/clode-resolve.cjs');
-    const { cacheSignature } = require('../libexec/clode-extract.cjs');
+    const { cacheSignature, extractorSigOf } = require('../libexec/clode-extract.cjs');
     const { providerPlatformOf } = require('../libexec/extract-claude-js.cjs');
     const newSig = cacheSignature({
-      extractorSig: sigOf(path.join(s.libexec, 'extract-claude-js.cjs')),
+      // extractorSigOf, so this asserts against the REAL composition rather than a copy of
+      // it: the staged artifact is shaped by the merger (libexec/scc-merge.cjs) as well as
+      // the extractor, and a copy here would keep passing while the two drifted apart.
+      extractorSig: extractorSigOf(s.libexec),
       providerPlatform: providerPlatformOf(s.bin),
     });
     const stored = fs.readFileSync(path.join(s.cacheDir, '.extractor-sig'), 'utf8').trim();

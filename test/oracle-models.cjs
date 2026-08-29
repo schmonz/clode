@@ -117,13 +117,39 @@ function resolveProviderBin(env = process.env) {
 // Carve cli.cjs out of a provider and stage it beside bun-shim.cjs — the layout
 // both models require (the extractor injects a __dirname-relative bun-shim
 // require into cli.cjs). This is a naude's payload, unpackaged.
+//
+// THROUGH CLODE'S OWN STAGING, deliberately, and not by spawning
+// libexec/extract-claude-js.cjs the way this did until 2026-08-29. The raw extractor
+// emits a graph runner from the graph EXACTLY as upstream shipped it, residual cyclic
+// `import.meta.require("/$bunfs/root/chunk-….js")` edges and all; only clode's staging
+// (libexec/clode-extract.cjs) merges those away. So the oracle was running a cli.cjs
+// that no built target ever runs — and from Claude Code 2.1.243, when the CLI became a
+// code-split graph, that difference stopped being cosmetic: the mock round-trip, both
+// agentic rows, the credentialed-dispatch rows and the naude reference all died on the
+// first residual require, in five CI jobs at once, while `clode build` stayed green.
+//
+// The cache dir is clode's real layout under a TEMP root (never ~/.cache/clode: a test
+// must not seed the operator's store, and a fresh runner would trip the hermeticity
+// gate). It is keyed like clode's own — one merge per provider per job, not one per
+// test file — and the per-test dir gets copies, because callers use it as a cwd and
+// write into it.
 function stageCli(bin, opts = {}) {
   const dir = opts.dir || fs.mkdtempSync(path.join(os.tmpdir(), 'oracle-stage-'));
   const cli = path.join(dir, 'cli.cjs');
-  const exec = opts.execFileSync || require('node:child_process').execFileSync;
-  exec(process.execPath, [path.join(REPO, 'libexec/extract-claude-js.cjs'), bin, cli], { stdio: 'pipe' });
-  fs.copyFileSync(path.join(REPO, 'libexec/bun-shim.cjs'), path.join(dir, 'bun-shim.cjs'));
-  return { dir, cli };
+  const { cacheKey } = require(path.join(REPO, 'libexec/clode-resolve.cjs'));
+  const { extractIfNeeded } = require(path.join(REPO, 'libexec/clode-extract.cjs'));
+  const root = process.env.CLODE_ORACLE_STAGE_ROOT
+    || path.join(os.tmpdir(), 'clode-oracle-stage');
+  const cacheDir = path.join(root, cacheKey(bin));
+  extractIfNeeded({
+    bin,
+    cacheDir,
+    libexec: path.join(REPO, 'libexec'),
+    verbose: !!process.env.CLODE_VERBOSE,
+  });
+  fs.copyFileSync(path.join(cacheDir, 'cli.cjs'), cli);
+  fs.copyFileSync(path.join(cacheDir, 'bun-shim.cjs'), path.join(dir, 'bun-shim.cjs'));
+  return { dir, cli, cacheDir };
 }
 
 // Resolve + stage in one step; null when no usable provider exists (the local

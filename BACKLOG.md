@@ -4,6 +4,36 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 (Strategic feasibility risks live in `LONG-TERM.md`; in-flight designs in
 `docs/superpowers/`. Done items are DELETED from here — git history is the record.)
 
+## Staging a code-split provider now REQUIRES a tjs engine (2026-08-29)
+
+The residual-cyclic-require merge moved out of `libexec/quaude-fuse.js` into staging
+(`libexec/clode-extract.cjs`), so the staged graph both targets consume is merged once. That
+is the fix for the graph runner — what naude embeds and every node-shim oracle stages — which
+was emitted from the UNMERGED doc and died on the first residual require under both of its
+hosts (`node-shim: cannot resolve '/$bunfs/root/chunk-….js'` under tjs,
+`ERR_REQUIRE_CYCLE_MODULE` under node). Five CI jobs, one cause.
+
+The merge needs the engine's own report of each module's top-level bindings
+(`tjs.engine.moduleMeta`; guessing them from minified text stays refused). Staging therefore
+resolves an engine — in-process when clode IS tjs, else `CLODE_TJS`, else the checkout's
+`build/tjs/<tag>/tjs` — and REFUSES by name when it finds none. What that leaves:
+
+1. **`naude-cross.yml` has no engine.** It cross-builds a naude on a bare ubuntu runner with
+   `node bin/clode build --naude`, so it will now fail with the refusal above instead of
+   silently producing a naude that dies on its first turn (which is what it has been shipping
+   since 2.1.243 — its only assertion is `--version`, which passed throughout). It is
+   `workflow_dispatch`-only, so no push matrix is affected. The fix is to give those jobs a
+   tjs artifact, or to teach the naude branch to fetch a host engine the way `clode build`
+   fetches a template. Until then a hand-dispatched run is red for a stated reason.
+2. **The refusal is the only thing standing between a tjs-less host and a broken target.**
+   A user with `bin/clode` under plain node and no engine cannot stage a 2.1.248+ provider at
+   all now. That is honest but it is a capability regression, and whether the answer is a
+   fetched host engine, a bundled one, or leaving the message as it is has not been decided.
+3. **Cold staging costs ~1 minute more.** Measured on darwin-arm64 2.1.251 (1836 modules,
+   groups of 99/7/5): ~5s of engine CPU for the metadata pass, ~11s for the merge under node.
+   Cached with the rest of the stage and keyed on the merger's file signature, so it is once
+   per provider per machine — but every CI job that stages a provider pays it once.
+
 ## netbsd-sparc's in-guest bake silently drops every `src/js/**` patch (2026-08-29)
 
 **This is the leg's SECOND cause, and it was invisible until the first was cleared.** With the

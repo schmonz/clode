@@ -19,6 +19,9 @@ const vm = require('node:vm');
 const Module = require('node:module');
 const { sigOf } = require('./clode-resolve.cjs');
 const { extractToFile, extractGraphToFile, graphRunnerSource, isSplitBundle, providerPlatformOf } = require('./extract-claude-js.cjs');
+const plan = require('./bun-graph-plan.cjs');
+const merger = require('./scc-merge.cjs');
+const scc = require('./graph-scc-merge.cjs');
 
 // `[ -f "$p" ]`: exists AND is a regular file (any stat error -> false).
 function isFile(p) {
@@ -27,6 +30,33 @@ function isFile(p) {
   } catch {
     return false;
   }
+}
+
+// sigOf, but tolerant: a libexec that does not carry one of the staging sources (an older
+// fused clode, a materialized dir assembled for a different role) must not crash staging —
+// it just means that file cannot contribute to the cache signature.
+function sigOrAbsent(p) {
+  try {
+    return sigOf(p);
+  } catch {
+    return 'absent';
+  }
+}
+
+// EVERY SOURCE THAT SHAPES A STAGED ARTIFACT, in one place. The staged graph is no longer
+// just what extract-claude-js.cjs emitted: mergeStagedGraph rewrites whole modules with
+// libexec/scc-merge.cjs. Without those in the signature, editing the merger would have no
+// effect on any machine that had already staged this provider once — silently, on that
+// machine only, forever. (That failure mode is why the merger carries its own
+// MERGER_VERSION; here a file signature says the same thing for free.)
+//
+// EXPORTED so the tests that assert on .extractor-sig compose it the same way this does.
+// They used to spell `sigOf(libexec/extract-claude-js.cjs)` out inline, which is a copy
+// that goes stale the moment the real composition changes — and it did.
+function extractorSigOf(libexec) {
+  return ['extract-claude-js.cjs', 'scc-merge.cjs', 'graph-scc-merge.cjs']
+    .map((f) => sigOrAbsent(path.join(libexec, f)))
+    .join('+');
 }
 
 // `[ "$(cat "$p" 2>/dev/null)" = ... ]`: command substitution strips trailing
@@ -73,6 +103,116 @@ function runQuiet(verbose, fn) {
   }
 }
 
+// ---- the cyclic-group merge, done ONCE per staged graph ----------------------------
+//
+// A staged graph is the input to BOTH targets: the fuse worker compiles it into quaude,
+// and graphRunnerSource() below turns the same doc into the cli.cjs naude embeds and every
+// oracle stages. Upstream's residual `import.meta.require("<chunk>")` edges (2.1.248+) are
+// answerable by NEITHER, so the merge that removes them belongs here — before the doc is
+// written and before either consumer sees it. It used to live in libexec/quaude-fuse.js,
+// which is why a quaude worked and a naude (and every node-shim oracle) did not.
+//
+// COST, measured on darwin-arm64 2.1.251 (1836 modules, 33 residual edges, groups of
+// 99/7/5): ~5s of engine CPU for the metadata pass and ~11s for the merge under node. It
+// runs once per (provider, extractor) and is cached with the rest of the stage.
+
+// The engine to ask for module metadata. In order: this process, if it IS tjs (a fused
+// clode — no spawn needed and none possible); CLODE_TJS; the checkout's built engine.
+function resolveEngine(libexec, env) {
+  if (globalThis.tjs && globalThis.tjs.engine && typeof globalThis.tjs.engine.moduleMeta === 'function') {
+    return { inProcess: true };
+  }
+  const explicit = env.CLODE_TJS;
+  if (explicit && isFile(explicit)) return { bin: explicit, why: 'CLODE_TJS' };
+  try {
+    // A dev checkout: libexec/../build/tjs/<platform-tag>/tjs. Absent in a fused clode,
+    // which never reaches here because the in-process branch above already answered.
+    const { tjsBin } = require('../scripts/platform-tag.cjs');
+    const cand = tjsBin(path.dirname(libexec));
+    if (isFile(cand)) return { bin: cand, why: 'the checkout engine' };
+  } catch { /* no scripts/ next to libexec: fall through to the refusal */ }
+  return null;
+}
+
+// metaOf for every name in `want`, via the engine. Refuses rather than guessing: see
+// libexec/graph-meta.js.
+function moduleMetas(docPath, want, { libexec, cacheDir, env, log }) {
+  const engine = resolveEngine(libexec, env);
+  if (!engine) {
+    throw new Error('clode: this provider\'s module graph has residual cyclic require(s), which '
+      + 'need the engine\'s own report of each module\'s top-level bindings to merge away.\n'
+      + '  No tjs engine is reachable: set CLODE_TJS to one, or build it with '
+      + '`node scripts/build-tjs.mjs`.\n'
+      + '  Staging without the merge is REFUSED on purpose — the target would boot and then '
+      + 'die on the first residual require ("cannot resolve /$bunfs/root/chunk-….js" under '
+      + 'tjs, ERR_REQUIRE_CYCLE_MODULE under node).');
+  }
+  if (engine.inProcess) {
+    const enc = new TextEncoder();
+    const doc = JSON.parse(fs.readFileSync(docPath, 'utf8'));
+    const wanted = new Set(want);
+    const out = {};
+    for (const name of doc.order) {
+      const mod = globalThis.tjs.engine.compile(enc.encode(doc.sources[name]), name);
+      if (wanted.has(name)) out[name] = globalThis.tjs.engine.moduleMeta(mod);
+    }
+    return out;
+  }
+  log(`clode: asking ${engine.bin} for module metadata (${engine.why})`);
+  const namesPath = path.join(cacheDir, '.graph-meta-names.json');
+  const outPath = path.join(cacheDir, '.graph-meta.json');
+  fs.writeFileSync(namesPath, JSON.stringify(want));
+  try {
+    const r = require('node:child_process').spawnSync(
+      engine.bin, ['run', path.join(libexec, 'graph-meta.js'), docPath, namesPath, outPath],
+      { encoding: 'utf8', maxBuffer: 1 << 24 });
+    if (r.status !== 0) {
+      throw new Error(`clode: graph-meta failed under ${engine.bin} (exit ${r.status})\n`
+        + `${(r.stderr || '').trim()}`);
+    }
+    return JSON.parse(fs.readFileSync(outPath, 'utf8'));
+  } finally {
+    for (const p of [namesPath, outPath]) { try { fs.rmSync(p); } catch { /* best effort */ } }
+  }
+}
+
+// Merge `doc` in place when it still carries residual cyclic requires, then PROVE none
+// survive. The proof is the ratchet: a residual require is invisible until a target runs
+// far enough to touch it, which is how the graph runner shipped broken through a whole
+// release. Here it is a staging-time failure that names the edge.
+function mergeStagedGraph(doc, docPath, opts) {
+  // DERIVED FROM THE SOURCES, not read off doc.cyclicRequires. The list the planner wrote
+  // is a claim about what it left behind; this is the thing itself, so a shape the planner
+  // does not classify the way we expect still gets caught instead of sailing through.
+  const residual = scc.residualCyclicRequires(doc, plan);
+  if (!residual.length) return;
+  const groups = scc.cyclicGroupsOf(doc, plan);
+  const want = [];
+  for (const g of groups) for (const n of g) want.push(n);
+  const metas = moduleMetas(docPath, want, opts);
+  scc.mergeCyclicGroups(doc, {
+    plan,
+    merger,
+    groups,
+    metaOf: (n) => {
+      const m = metas[n];
+      if (!m) throw new Error(`clode: the engine reported no metadata for ${n}`);
+      return m;
+    },
+    log: (m) => opts.log(`clode: ${m}`),
+  });
+  const left = scc.residualCyclicRequires(doc, plan);
+  if (left.length) {
+    throw new Error(`clode: ${left.length} require(s) of a graph module survived the `
+      + `cyclic-group merge (e.g. ${left[0][0]} -> ${left[0][1]}).\n`
+      + '  Nothing can answer them at runtime, so staging refuses rather than shipping a '
+      + 'target that dies on the first one.');
+  }
+  opts.log(`clode: merged ${doc.sccMerge.groups.length} cyclic group(s) `
+    + `(${doc.sccMerge.groups.join(', ')} modules) — ${residual.length} residual `
+    + 'require(s) removed');
+}
+
 // Extract-on-first-use, cached per key. Mirrors extract_if_needed exactly:
 //  - CACHE HIT when cli.cjs AND bun-shim.cjs exist AND .extractor-sig matches the
 //    current extractor sig: still refresh the cached shim if the installed source
@@ -100,8 +240,9 @@ function extractIfNeeded(opts) {
   // version produce different graphs. Without this, extracting one poisoned every later build
   // of the other — which is exactly how a darwin quaude shipped with no macOS credential
   // store. See test/extract-cache-key.test.cjs.
+  // The extractor half is extractorSigOf() — the merger is in it too; see there.
   const extractorSig = cacheSignature({
-    extractorSig: sigOf(path.join(libexec, 'extract-claude-js.cjs')),
+    extractorSig: extractorSigOf(libexec),
     providerPlatform: providerPlatformOf(bin),
   });
   // TWO SHAPES. Through 2.1.241 a bundle carves to one cli.cjs; from 2.1.243 it is a
@@ -148,6 +289,11 @@ function extractIfNeeded(opts) {
       // and the whole oracle apparatus dead on 2.1.243+ while `clode build` was green:
       // the consumer's input silently stopped existing and nothing declared the edge.
       const doc = JSON.parse(fs.readFileSync(cliPath, 'utf8'));
+      // BEFORE either consumer sees it: the residual cyclic requires upstream 2.1.248+
+      // leaves behind are unanswerable by both of them, so they are merged away once,
+      // here, and graph.json is rewritten with the result.
+      mergeStagedGraph(doc, cliPath, { libexec, cacheDir, env: process.env, log: clodeLog });
+      if (doc.sccMerge) fs.writeFileSync(cliPath, JSON.stringify(doc));
       fs.writeFileSync(path.join(cacheDir, 'cli.cjs'), graphRunnerSource(doc));
       return res;
     });
@@ -198,4 +344,4 @@ function cacheSignature({ extractorSig, providerPlatform }) {
   return `${extractorSig}:${providerPlatform || 'unknown'}`;
 }
 
-module.exports = { extractIfNeeded, cacheSignature };
+module.exports = { extractIfNeeded, cacheSignature, extractorSigOf };

@@ -150,53 +150,24 @@ async function mergeCyclicGroups(doc, cyclicRequires, libexecDir) {
   const plan = loadLibexecCjs(
     dec.decode(await mustRead(path.join(libexecDir, 'bun-graph-plan.cjs'), 'the graph planner')),
     'bun-graph-plan.cjs');
-  const mods = new Map();
-  for (const name of doc.order) mods.set(name, doc.sources[name]);
-  const groups = plan.cyclicGroups(mods);
-  if (!groups.length) {
-    throw new Error(`quaude-fuse: the staged graph reports ${cyclicRequires.length} cyclic `
-      + 'require(s) but no strongly connected group contains them — the graph and its '
-      + 'cyclicRequires list disagree, so there is nothing to merge and the build would fail at '
-      + 'runtime with "cannot resolve".');
-  }
-
-  const rewritten = {};
-  for (let i = 0; i < groups.length; i++) {
-    const g0 = performance.now();
-    // Body order inside a merged group is NOT the graph's topological order — a residual
-    // require has to be able to read its target, and the target statically imports its way back.
-    // See mergeBodyOrder in scc-merge.cjs.
-    const ordered = merger.mergeBodyOrder(groups[i], doc.sources);
-    const r = merger.mergeGroup(ordered, doc.sources, (n) => {
+  // ONE DRIVER, TWO HOSTS. The grouping, the merge loop and the re-sort all live in
+  // libexec/graph-scc-merge.cjs, which staging (libexec/clode-extract.cjs, under node) calls
+  // with exactly the same arguments. Everything host-specific stays here: the engine that
+  // answers moduleMeta, and the cache below.
+  const scc = loadLibexecCjs(
+    dec.decode(await mustRead(path.join(libexecDir, 'graph-scc-merge.cjs'), 'the cyclic-group merge driver')),
+    'graph-scc-merge.cjs');
+  const { groups, rewritten } = scc.mergeCyclicGroups(doc, {
+    plan,
+    merger,
+    metaOf: (n) => {
       const m = compiled.get(n);
       if (!m) throw new Error(`quaude-fuse: no compiled module for group member ${n}`);
       return tjs.engine.moduleMeta(m);
-    }, i);
-    rewritten[r.mergedName] = r.mergedSource;
-    for (const m of ordered) {
-      if (typeof r.shims[m] !== 'string') throw new Error(`quaude-fuse: merger emitted no shim for ${m}`);
-      rewritten[m] = r.shims[m];
-    }
-    console.log(`quaude-fuse: merged group ${i} (${groups[i].length} modules) -> ${r.mergedName} `
-      + `(${r.mergedSource.length} bytes, ${(performance.now() - g0).toFixed(0)}ms)`);
-  }
+    },
+    log: (m) => console.log(`quaude-fuse: ${m}`),
+  });
   compiled.clear();
-
-  for (const n of Object.keys(rewritten)) {
-    doc.sources[n] = rewritten[n];
-    mods.set(n, rewritten[n]);
-  }
-
-  // RE-SORT, rather than splicing each merged module in beside its first member. A merged module
-  // imports the UNION of its members' external dependencies, and measured on 2.1.250 all three
-  // groups have an external dependency that sits LATER in the staged order than the group's own
-  // first member (e.g. the 5-module group: first member at 1344, external dep at 1361). Splicing
-  // before the first member would put the merged module ahead of something it imports, and
-  // compile() would fail with "could not load" on a module that is perfectly fine. The
-  // condensation of the graph by its strongly connected components is a DAG by construction, so
-  // a topological order of the post-merge graph always exists; planOrder throws by name if it
-  // ever does not.
-  doc.order = plan.planOrder(mods);
 
   const ms = performance.now() - t0;
   console.log(`quaude-fuse: COMPUTED the cyclic-group merge for ${key} — `
@@ -318,7 +289,7 @@ if (role === 'builder') {
   // above — never require()'d from this materialized dir, only carried so a
   // self-fused clode-native can re-fuse targets. The quaude-product role below
   // deliberately omits it: no runtime provision() consumer on that side.
-  for (const f of ['bun-shim.cjs', 'extract-claude-js.cjs', 'quaude-fuse.js', 'quaude-bootstrap.mjs', 'host-provision.cjs', 'target-update-check.cjs', 'bun-graph-plan.cjs', 'scc-merge.cjs']) {
+  for (const f of ['bun-shim.cjs', 'extract-claude-js.cjs', 'quaude-fuse.js', 'quaude-bootstrap.mjs', 'host-provision.cjs', 'target-update-check.cjs', 'bun-graph-plan.cjs', 'scc-merge.cjs', 'graph-scc-merge.cjs', 'graph-meta.js']) {
     members.push({ name: `libexec/${f}`, data: await mustRead(path.join(libexecDir, f), `libexec member ${f}`) });
   }
   // target-env.cjs member name is BARE (no libexec/ prefix), matching how
@@ -409,7 +380,17 @@ if (role === 'builder') {
     // 2.1.247 and earlier have no cyclic requires at all and must take precisely today's path —
     // no merge, no cache read, no cache write, no diagnostics.
     const cyclicRequires = doc.cyclicRequires || [];
-    if (cyclicRequires.length) {
+    if (cyclicRequires.length && doc.sccMerge) {
+      // ALREADY MERGED, AT STAGING (libexec/clode-extract.cjs). That is where the merge
+      // belongs: the staged graph is the input to BOTH targets, and doing it here meant
+      // only a fused quaude ever got it while the graph runner naude embeds — and every
+      // node-shim oracle stages — was emitted from the unmerged doc and died on the first
+      // residual require. Everything below is the fallback for a doc staged before that
+      // moved, and both paths run the SAME libexec/graph-scc-merge.cjs.
+      console.log(`quaude-fuse: the staged graph is already merged (${doc.sccMerge.format}, `
+        + `merger ${doc.sccMerge.mergerVersion}, groups ${doc.sccMerge.groups.join(', ')}) `
+        + '— nothing to do');
+    } else if (cyclicRequires.length) {
       // The named escape hatch: refuse to build rather than merge. Kept from the warn-only
       // version of this block so a bisect can separate "the merge is wrong" from "the graph is
       // wrong" without editing the worker.

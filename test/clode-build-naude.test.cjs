@@ -25,8 +25,8 @@ const path = require('node:path');
 const REPO = path.resolve(__dirname, '..');
 const LIBEXEC = path.join(REPO, 'libexec');
 const { clodeBuild } = require('../libexec/clode-fuse.cjs');
-const { cacheKey, sigOf } = require('../libexec/clode-resolve.cjs');
-const { cacheSignature } = require('../libexec/clode-extract.cjs');
+const { cacheKey } = require('../libexec/clode-resolve.cjs');
+const { cacheSignature, extractorSigOf } = require('../libexec/clode-extract.cjs');
 const { providerPlatformOf } = require('../libexec/extract-claude-js.cjs');
 
 // Stand up a fake provider bin + a pre-seeded extract cache so the real
@@ -48,8 +48,11 @@ function seedProvider(dir) {
     // a version alone never determined the carve (see test/extract-cache-key.test.cjs).
     // Seeding the bare sigOf() here made this a cache MISS, and the fixture then tried to
     // really extract its bogus provider bytes.
+    // extractorSigOf, not a hand-rolled sigOf of one file: the staged artifact is shaped
+    // by the merger too (libexec/scc-merge.cjs), and a copy of that composition here goes
+    // stale the moment the real one changes — which it did.
     cacheSignature({
-      extractorSig: sigOf(path.join(LIBEXEC, 'extract-claude-js.cjs')),
+      extractorSig: extractorSigOf(LIBEXEC),
       providerPlatform: providerPlatformOf(provider),
     }));
   const env = {

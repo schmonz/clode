@@ -14,9 +14,10 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawn, execFileSync } = require('node:child_process');
+const { spawn } = require('node:child_process');
 const { REPO, tjsPath, skipUnlessTjs, engineSpawn, LOADER } = require('./node-shim-helper.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('./mock-anthropic-helper.cjs');
+const { stageCli } = require('./oracle-models.cjs');
 
 function providerBin() { const p = process.env.CLODE_PROVIDER_BIN; return p && fs.existsSync(p) ? p : null; }
 function stageBundle(bin) {
@@ -46,9 +47,11 @@ function stageBundle(bin) {
       + 'Windows paths without manual approval ("suspicious Windows path pattern"), so the '
       + 'row would fail as a phantom FileHandle.chmod regression. Resolve the path first.');
   }
-  const cli = path.join(dir, 'cli.cjs');
-  execFileSync(process.execPath, [path.join(REPO, 'libexec/extract-claude-js.cjs'), bin, cli], { stdio: 'pipe' });
-  fs.copyFileSync(path.join(REPO, 'libexec/bun-shim.cjs'), path.join(dir, 'bun-shim.cjs'));
+  // ONE STAGING PATH for every oracle (test/oracle-models.cjs stageCli): clode's own
+  // cached extraction, which merges upstream's residual cyclic requires. Spawning the raw
+  // extractor here instead is what left both rows below dead on 2.1.243+ — the runner it
+  // emits is not the runner any built target runs.
+  const { cli } = stageCli(bin, { dir });
   return { dir, cli };
 }
 // Async spawn (spawnSync would freeze the in-process mock — see node-shim-roundtrip.test.cjs).
