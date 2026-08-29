@@ -32,6 +32,10 @@ const EXPECTED_SET = [
   // did not move the engine identity. See scripts/engine-recipe.mjs.
   'patches/*.patch',
   'scripts/build-tjs.mjs',
+  // ADDED 2026-08-29: the netbsd-sparc in-guest bake recipe IS that leg's
+  // compile, and editing it used to move nothing — so the cache could restore an
+  // engine built by a different recipe. See scripts/engine-recipe.mjs.
+  'spike/quickjs/qemu/ci-guest-bake.sh',
   'scripts/*.toolchain.cmake',
   'spike/quickjs/atomic-shim.c',
   'ci/osxcross-darwin/Dockerfile',
@@ -102,6 +106,7 @@ const BASE = {
   'spike/quickjs/patches/b.patch': 'BBB',
   'patches/libtjs-cosmo.patch': 'COSMO',
   'scripts/build-tjs.mjs': 'build',
+  'spike/quickjs/qemu/ci-guest-bake.sh': 'bake',
   'scripts/x.toolchain.cmake': 'tc',
   'spike/quickjs/atomic-shim.c': 'shim',
   'ci/osxcross-darwin/Dockerfile': 'FROM x',

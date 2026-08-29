@@ -59,6 +59,14 @@ export const FILES = [
   // narrowing is what test/engine-recipe.test.cjs exists to catch.
   'patches/*.patch',
   'scripts/build-tjs.mjs',
+  // The netbsd-sparc in-guest ENGINE bake recipe. It is engine source for that
+  // leg in the most literal sense — it IS the compile — yet an edit to it moved
+  // nothing, so the tjs cache happily restored an engine built by a DIFFERENT
+  // recipe. That blindness is how the bake went a whole leg-lifetime compiling
+  // the upstream pin's committed bytecode with no regen (the moduleMeta bug,
+  // 2026-08-29). Widening costs a matrix-wide rebuild whenever this rarely-touched
+  // file changes; being wrong here costs a stale engine nobody can see.
+  'spike/quickjs/qemu/ci-guest-bake.sh',
   'scripts/*.toolchain.cmake',
   'spike/quickjs/atomic-shim.c',
   'ci/osxcross-darwin/Dockerfile',

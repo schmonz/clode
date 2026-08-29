@@ -515,9 +515,27 @@ runs:
         # from pins" step above (same --source-only, same vendor). Do NOT re-run it
         # here: patches now apply unconditionally onto a PRISTINE clone (no
         # already-applied fallback), so a second --source-only over the patched
-        # tree fails at the first patch. Just package the tree that step produced.
+        # tree fails at the first patch.
+        #
+        # REGENERATE THE BYTECODE HERE, on the runner, before tarring. txiki
+        # git-tracks src/bundles/c/** as pre-compiled bytecode of its OWN
+        # src/js/**, so our src/js/** patches (the JS half of
+        # txiki-engine-module-meta.patch, and everything after it) reach a binary
+        # only through a tjsc regen. Every other leg gets that from build-tjs.mjs's
+        # own build phase; the guest bake compiles by hand and cannot run node at
+        # all, so it used to get NO regen — and shipped an engine whose fuse died
+        # with "this engine does not report moduleMeta" after a 927-second carve.
+        # --regen-only runs the SAME generation code, using a host-native tjsc
+        # whose canonical-LE output is valid for the sparc target by construction
+        # (scripts/build-tjs.mjs, buildHostTjsc). ci-guest-bake.sh refuses a tree
+        # that arrives without the regen trailer, so this cannot be dropped again.
+        node scripts/build-tjs.mjs --regen-only
         mkdir -p .matrix/qemu-bake
         tar czf .matrix/qemu-bake/txiki-canonical-le.tar.gz -C "$CLODE_TJS_VENDOR" txiki.js
+        # The shared engine-API floor check the bake runs against the engine it
+        # just built (ONE list, scripts/engine-api-floor.mjs — not a fourth
+        # hand-written `typeof __tjs_fs_sync` copy).
+        node scripts/engine-api-floor.mjs --emit-check > .matrix/qemu-bake/engine-api-floor.js
         # simde (txiki v26.6.0 pins v0.8.2 — the guest build is offline, so stage
         # it; repackage so it extracts to simde-src/ as the bake recipe expects).
         curl -fsSL https://github.com/simd-everywhere/simde/archive/refs/tags/v0.8.2.tar.gz -o "$RUNNER_TEMP/simde.tgz"
@@ -865,7 +883,11 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        out=$("${{ steps.tjsbin.outputs.path }}" eval 'console.log(typeof __tjs_fs_sync === "object" ? "tjs-shim-ok" : "MISSING-SYNC-FS")')
+        # The shared engine-API floor (scripts/engine-api-floor.mjs), not a second
+        # hand-written copy of one typeof check. It prints MISSING-ENGINE-API: with
+        # the binding name and the patch that provides it, then exits nonzero.
+        node scripts/engine-api-floor.mjs --emit-check > "$RUNNER_TEMP/engine-api-floor.js"
+        out=$("${{ steps.tjsbin.outputs.path }}" run "$RUNNER_TEMP/engine-api-floor.js")
         echo "tjs host-exec: $out"
         [ "$out" = tjs-shim-ok ]
 

@@ -156,6 +156,19 @@ const ALLOWED = {
     // Bun.which's own implementation and spawn's Bun-parity existence check.
     // These ARE the lookup — they now go through the PATHEXT-aware walk (0dd9553).
     'libexec/bun-shim.cjs': 2,
+    // provisionCosmocc PREPENDS cosmocc's bin dir to PATH so cmake's child
+    // processes can exec cosmoar/cosmoranlib's per-arch backends by bare name.
+    // It resolves nothing itself — no walk, no executable lookup — so PATHEXT
+    // does not enter into it, and the cosmo leg is Linux-only besides.
+    //
+    // NOT A NEW SITE: it has been there since the cosmo leg landed. It became
+    // VISIBLE to this scan on 2026-08-29, when reordering declarations in
+    // build-tjs.mjs happened to change how stripComments() pairs `/*` with `*/`
+    // across the C that file injects in template literals. That stripper blanks
+    // ~1335 lines of real code across 14 scanned files, all of which this ratchet
+    // is currently blind to — see BACKLOG.md. This entry is the honest count for
+    // the two lines it can presently see, not an endorsement of the blindness.
+    'scripts/build-tjs.mjs': 2,
     // node's documented resolveExe semantics for child_process; already handles
     // backslash and drive-letter, and must stay independent of the shim's applets.
     'libexec/node-shim/modules/child_process.cjs': 2,

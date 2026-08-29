@@ -6,17 +6,33 @@
 # can cross-fuse the builder against it. Proven in the docker-loop wall-walk
 # (2026-07-14). The caller stages, under the served workspace at
 # .matrix/qemu-bake/ (http://10.0.2.2:8180/.matrix/qemu-bake/):
-#   txiki-canonical-le.tar.gz  — a tar of the patched txiki.js tree
-#                                (scripts/build-tjs.mjs --source-only output)
+#   txiki-canonical-le.tar.gz  — a tar of the patched, BYTECODE-REGENERATED
+#                                txiki.js tree (scripts/build-tjs.mjs
+#                                --source-only then --regen-only)
 #   simde-v0.8.2.tar.gz        — the simde source (FetchContent offline)
+#   engine-api-floor.js        — the shared engine-API floor check, generated
+#                                from scripts/engine-api-floor.mjs
 # canonical-LE matters: it makes the engine READ little-endian bytecode on this
 # big-endian host, so (a) NO in-guest tjsc BE-regen is needed, and (b) the LE
 # bytecode the linux cross-fuse worker writes is readable here (a non-canonical
 # engine gives "SyntaxError: checksum error" on the cross-fused builder).
 # Keeps the sparc32 atomic-shim (base has no libatomic). Flags match the leg:
 # ADA=OFF/wurl, FFI/MIMALLOC/WASM off.
-# Markers: cle-fetch-*, cle-canon-present, cle-configure-exit, cle-build-exit,
-# cle-engine-exit, bake-tjs-cksum=, bake-exit, === GUEST-DONE ===.
+#
+# THIS SCRIPT DOES NOT GENERATE ANYTHING. It compiles a tree that arrived
+# complete. That is deliberate and it is the fix for a real bug: this used to be
+# the ONE build path in the matrix that did not run scripts/build-tjs.mjs, and it
+# hand-rolled a cmake invocation with no bytecode regen — so the JS half of
+# patches/txiki-engine-module-meta.patch (src/js/core/engine.js, which reaches a
+# binary only through a regen of txiki's git-tracked pre-compiled
+# src/bundles/c/**) never landed, and the leg died 927 seconds into the fuse with
+# "quaude-fuse: this engine does not report moduleMeta". Canonical-LE removed the
+# need to regen for ENDIANNESS; it said nothing about CONTENT. The runner now
+# regenerates with --regen-only, using the same functions every other leg uses,
+# and the two checks below (cle-regen-present, cle-floor-exit) make it impossible
+# for a non-regenerated tree to get this far again in silence.
+# Markers: cle-fetch-*, cle-canon-present, cle-regen-present, cle-configure-exit,
+# cle-build-exit, cle-floor-exit, bake-tjs-cksum=, bake-exit, === GUEST-DONE ===.
 set -ux
 S=http://10.0.2.2:8180/.matrix/qemu-bake
 W=/root/bakework
@@ -37,7 +53,8 @@ echo "=== FETCH ==="
 f1() { n=0; while [ "$n" -lt 3 ]; do ftp -o "$1" "$2" && return 0; n=$((n+1)); sleep 10; done; echo "FETCH-FAILED $2"; return 1; }
 f1 tjs.tgz   "$S/txiki-canonical-le.tar.gz"; echo "cle-fetch-tjs-exit=$?"
 f1 simde.tgz "$S/simde-v0.8.2.tar.gz";        echo "cle-fetch-simde-exit=$?"
-wc -c tjs.tgz simde.tgz
+f1 engine-api-floor.js "$S/engine-api-floor.js"; echo "cle-fetch-floor-exit=$?"
+wc -c tjs.tgz simde.tgz engine-api-floor.js
 tar xzf tjs.tgz
 tar xzf simde.tgz
 for d in txiki.js simde-src; do
@@ -49,6 +66,16 @@ CANON=$(grep -c 'bc_bswap_op_operands' txiki.js/deps/quickjs/quickjs.c 2>/dev/nu
 echo "cle-canon-present=$CANON"
 [ "$CANON" -ge 1 ] || { echo "FATAL: canonical-LE patch absent from served source"; echo "bake-exit=1"; echo "=== GUEST-DONE ==="; exit 1; }
 grep -c 'function_size + 7' txiki.js/deps/quickjs/quickjs.c   # cpool-align, expect 2
+
+# The bytecode arrays MUST have been regenerated on the runner (build-tjs.mjs
+# --regen-only), or this build compiles the upstream pin's committed bytecode and
+# silently drops every src/js/** patch — the moduleMeta bug, and before it the
+# whole class 0c72693 was written to close. build-tjs.mjs stamps each regenerated
+# .c with a `clode:bytecode-regen src=... sha256=...` trailer; demand it HERE, in
+# the first minute, rather than discovering the omission 927 seconds into a fuse.
+REGEN=$(cat txiki.js/src/bundles/c/core/core.c txiki.js/src/bundles/c/core/polyfills.c 2>/dev/null | grep -c 'clode:bytecode-regen') || REGEN=0
+echo "cle-regen-present=$REGEN"
+[ "$REGEN" -ge 2 ] || { echo "FATAL: served tree was NOT bytecode-regenerated (no clode:bytecode-regen trailer in src/bundles/c/core/) — the runner must run 'node scripts/build-tjs.mjs --regen-only' over this tree before tarring it, or the engine ships without the JS half of every src/js/** patch"; echo "bake-exit=1"; echo "=== GUEST-DONE ==="; exit 1; }
 
 # Strip -Werror (clang/MSVC pragmas trip gcc -Wunknown-pragmas)
 sed -i.bak '/list(APPEND tjs_cflags -Werror)/d' txiki.js/CMakeLists.txt
@@ -93,7 +120,9 @@ GMAKE=/usr/local/bin/gmake
 echo "cle-configure-exit=$?"
 date
 
-echo "=== BUILD TJS (canonical-LE: no regen needed) ==="
+# No regen step here: the served tree arrived already regenerated (asserted
+# above). Compiling is all this guest does — see the header.
+echo "=== BUILD TJS (tree pre-regenerated on the runner) ==="
 (cd txiki.js && $CMAKE --build build -j1)
 echo "cle-build-exit=$?"
 date
@@ -101,9 +130,15 @@ date
 TJS=./txiki.js/build/tjs
 ls -l "$TJS"; file "$TJS" 2>/dev/null || true
 
-echo "=== ENGINE SANITY (also proves canonical-LE reads upstream LE bundle bytecode on BE) ==="
-(ulimit -t 900; $TJS eval 'const a=typeof __tjs_spawn_sync, b=typeof __tjs_fs_sync; console.log("spawn_sync:",a,"fs_sync:",b); if(a!=="function"||b!=="object") throw new Error("engine sanity failed")' < /dev/null)
-echo "cle-engine-exit=$?"
+# ENGINE SANITY is now the SHARED engine-API floor (scripts/engine-api-floor.mjs),
+# fetched above — not a fourth hand-written `typeof __tjs_fs_sync` copy. Running
+# it also proves canonical-LE reads upstream LE bundle bytecode on this BE host.
+# A missing binding prints MISSING-ENGINE-API: <name> and exits nonzero, so the
+# driver's cle-floor-exit=0 rule turns it red here, minutes in, instead of at the
+# fuse at the end of the longest job in the matrix.
+echo "=== ENGINE API FLOOR (shared list; also proves canonical-LE reads LE bytecode on BE) ==="
+(ulimit -t 900; $TJS run "$W/engine-api-floor.js" < /dev/null)
+echo "cle-floor-exit=$?"
 
 echo "=== SYNC-OUT (gzip|base64 over serial, framed) ==="
 cksum "$TJS" | awk '{print "bake-tjs-cksum="$1" bake-tjs-len="$2}'
