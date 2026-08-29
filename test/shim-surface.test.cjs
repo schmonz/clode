@@ -61,7 +61,11 @@ function inputs() {
     _inputs = { skip: 'no staged provider bundle (CLODE_PROVIDER_BIN)' };
     return _inputs;
   }
-  _inputs = { tjs, cli: staged.cli };
+  // Point at the CACHE dir's cli.cjs, not the per-test copy: the cache dir also
+  // holds graph.json, and refs.loadBundle() prefers that (real source strings)
+  // over the escape-laden graph runner. Read-only here, so sharing is safe.
+  const cached = path.join(staged.cacheDir, 'cli.cjs');
+  _inputs = { tjs, cli: fs.existsSync(cached) ? cached : staged.cli };
   return _inputs;
 }
 
@@ -82,10 +86,13 @@ function measureUncached(cli) {
   const nodeSurface = collect.enumerateUnderNode(names);
   const shimSurface = collect.enumerateUnderTjs(names, null, helper.engineSpawn);
 
-  const text = refs.loadBundle(cli);
+  // layer 1 wants the flat text (Bun.* and "bun:*" need no module scope);
+  // layer 2 wants the per-module scope (see refs.buildScope).
+  const modules = refs.loadModules(cli);
+  const text = modules.map((m) => m.src).join('\n');
   const index = refs.buildIndex(text);
 
-  const l2 = collect.layer2Gaps({ nodeSurface, shimSurface, text, index });
+  const l2 = collect.layer2Gaps({ nodeSurface, shimSurface, scope: refs.buildScope(modules, names) });
 
   // bun-shim installs a Module._load hook and sets globalThis.Bun as a side
   // effect of require(). That is why this runs in the test process and not the
@@ -158,26 +165,65 @@ test('shim surface: every shim module was enumerable on both sides', (t) => {
     + `  Full detail: ${JSON.stringify(m.l2.unenumerable, null, 2)}`);
 });
 
-// Guards the scanner itself against silent breakage. If aliasesFor/buildIndex
-// ever stop resolving minified aliases, every gap list above would collapse to
-// empty and the golden test would report "all clear" — the most dangerous
-// possible failure for a map. fs.watch is the anchor because its four call sites
-// were established by hand on 2026-08-01 (Zlm/w3f/DTp = first-party,
-// MDt = vendored chokidar; all four resolve to require("fs")).
-test('shim surface: the alias scanner still finds the known fs.watch call sites', (t) => {
+// Guards the scanner itself against silent breakage. If binding resolution ever
+// stops working, every gap list above collapses to empty and the golden test
+// reports "all clear" — the most dangerous possible failure for a map. fs.watch
+// is the anchor because its call sites were established by hand on 2026-08-01
+// (Zlm/w3f/DTp = first-party, MDt = vendored chokidar).
+//
+// IT DID ITS JOB, on 2026-08-29. It went red with "found 0 aliases" and stayed
+// red for weeks as part of a tolerated "baseline". It was not describing
+// upstream; it was describing itself — and behind it, THE WHOLE OF LAYER 2 WAS
+// BLIND. At 2.1.243 upstream went code-split ESM and stopped emitting
+// `require()` for builtins entirely (measured: 0 for fs, os, path, crypto, net,
+// http, child_process, stream, util, tty, v8 — every module but
+// worker_threads), so `aliasesFor` returned an empty set for each one and
+// layer2Gaps `continue`d past all of them. The golden's 16 layer-2 entries only
+// escaped being reported as GONE because the golden test asserts layer 1 first
+// and died on Bun.ant before reaching them.
+//
+// So the fix is not "teach the anchor a new regex". Upstream's builtin imports
+// now arrive in three shapes, and the scanner has to know all three:
+//   import*as X from"fs"     namespace  -> X.watch(...)   (11 sites)
+//   import X from"fs"        default    -> X.watch(...)   ( 8 sites)
+//   import{watch as z}from"fs"  named   -> z(...)         (185 sites)
+// The named form has no `<alias>.<prop>` site to find at all, which is why
+// alias-only resolution could not be widened into working — see
+// namedImportsFor() in shim-surface/bundle-refs.cjs.
+test('shim surface: the scanner still finds the known fs.watch call sites', (t) => {
   const inp = inputs();
   if (inp.skip) { t.skip(inp.skip); return; }
 
-  const text = refs.loadBundle(inp.cli);
-  const index = refs.buildIndex(text);
-  const aliases = refs.aliasesFor(text, 'fs');
+  const modules = refs.loadModules(inp.cli);
+  const scope = refs.buildScope(modules, ['fs']);
+  const text = modules.map((m) => m.src).join('\n');
 
-  assert.ok(aliases.size > 10,
-    `expected many minified require("fs") aliases, found ${aliases.size} — alias resolution is broken`);
+  // Both mechanisms, counted separately over the SCOPED path the map itself
+  // uses: a bundle can legitimately shift its mix between them, but ZERO on
+  // either side means that resolution path is dead and every module using only
+  // that shape is being reported as gap-free.
+  let objects = 0;
+  let namedSites = 0;
+  for (const mod of scope) {
+    for (const spec of ['fs', 'node:fs']) {
+      const b = mod.bindings.get(spec);
+      if (!b) continue;
+      objects += b.objects.size;
+      for (const n of b.named.values()) namedSites += n;
+    }
+  }
+  assert.ok(objects >= 5,
+    'expected many object-binding fs imports (import*as / import X / require),'
+    + ` found ${objects} — object-binding resolution is broken`);
+  assert.ok(namedSites >= 50,
+    `expected many named fs imports (import{watch as z}from"fs"), found ${namedSites}`
+    + ' — named-import resolution is broken');
 
-  const watch = refs.referencesTo(index, aliases, 'watch');
-  assert.ok(watch.calls >= 4,
-    `expected >=4 fs.watch call sites (4 established by hand against 2.1.218), got ${watch.calls}.`
+  const watch = refs.referencesIn(scope, 'fs', 'watch');
+  const found = watch.calls + watch.imports;
+  assert.ok(found >= 4,
+    `expected >=4 fs.watch references (4 established by hand against 2.1.218), got ${found}`
+    + ` (${watch.calls} via object binding, ${watch.imports} via named import).`
     + ' A DROP here means the scanner regressed, not that upstream removed them —'
     + ' verify by hand before trusting it.');
 

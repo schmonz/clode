@@ -4,33 +4,48 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 (Strategic feasibility risks live in `LONG-TERM.md`; in-flight designs in
 `docs/superpowers/`. Done items are DELETED from here — git history is the record.)
 
-## Three bundle scanners read a graph runner as if it were code (2026-08-29)
+## Bundle scanners: FIXED, with three things still open (2026-08-29)
 
-`npm test` on a dev box with a provider and a warm `~/.cache/clode` fails three rows, and has
-since 2.1.243. All three scan the staged bundle as TEXT, and a code-split provider stages a
-graph runner whose module sources sit inside a doubly-escaped JSON string literal — so
-a call written `require("fs")` appears in the file with its quotes backslash-escaped
-twice over, and every pattern that looks for the plain spelling misses:
+Two of the three failing rows this entry used to describe are retired. That entry, as
+written on 2026-08-29, got the mechanism partly wrong and the prescribed fix wholly wrong,
+so the corrections are recorded here rather than deleted:
 
-- `test/shim-surface.test.cjs` — *the alias scanner still finds the known fs.watch call sites*:
-  `expected many minified require("fs") aliases, found 0`. That row exists precisely to catch
-  the scanner going blind, and it is doing its job.
-- `test/shim-surface.test.cjs` — *the two-layer gap inventory matches the golden map*: reports
-  a new `Bun.ant` gap. Same scanner, same escaped text; the gap lists are not trustworthy
-  while the row above is red.
-- `test/guard-subcommands-gate.test.cjs` — greps `.command("…")` out of the NEWEST
-  `~/.cache/clode/*/cli.cjs` by mtime, finds zero, and reports every entry of `SUBCOMMANDS` as
-  drift.
+- The escaping is not "doubly-escaped" and is not the same on both artifacts. Measured
+  bytes for one registration: `d.command(\\\"add-from-claude-desktop\\\")` in `cli.cjs`
+  (three backslashes) and `d.command(\"…\")` in `graph.json` (one).
+- `require("fs")` was not escaped-and-missed, it was ABSENT. Zero occurrences in every
+  escape form in BOTH artifacts: at 2.1.243 upstream went code-split ESM and stopped
+  emitting CJS requires for builtins entirely (`import{constants as d}from"fs"` now).
+- So "decode a graph runner, then pattern-match it" would have fixed neither row. Both
+  scanners now read `graph.json`'s `sources` — real strings, no escape level to track,
+  and (for the shim map) the module boundaries that scoped binding resolution needs.
 
-**Verified pre-existing, not fallout from the staging-side merge**: a runner emitted by the
-raw extractor at `bed73d5` scans to `fs aliases 0` exactly like a merged one.
+**Fixed**: `test/guard-subcommands-gate.test.cjs` (also: selects the highest cached VERSION
+instead of the newest mtime, learns the 2.1.243 `usage:`/`aliases:` declaration table, and
+fails as a BROKEN SCANNER when it finds nothing). It immediately found real drift —
+`sandbox` and `kill` are now in `SUBCOMMANDS`.
 
-**They are invisible in CI**, which is the worse half. `shim-surface` skips without
-`CLODE_PROVIDER_BIN` and `guard-subcommands-gate` skips with an empty `~/.cache/clode` — and
-the `test` job has neither, so these three gates have not actually run in CI since 2.1.243.
-The fix is for the scanners to decode a graph runner (`libexec/inspect-claude-bundle.cjs`
-already has `decodeGraphRunner` — see test/graph-runner.test.cjs) instead of pattern-matching
-its envelope, and then to give the jobs the inputs that make them run.
+**Fixed**: `test/shim-surface.test.cjs`'s alias-scanner canary — and behind it, THE WHOLE OF
+LAYER 2 WAS BLIND since 2.1.243 (zero bindings resolved for every builtin but
+`worker_threads`, so the gap loop `continue`d past all of them and the stale 2.1.218 list
+survived only because the golden test asserts layer 1 first and died on `Bun.ant`).
+
+Still open:
+
+1. **These gates still do not run in CI.** `shim-surface` skips without a provider and
+   `guard-subcommands-gate` skips with an empty `~/.cache/clode`; the `test` job has
+   neither, so neither has actually run in CI since 2.1.243. This is the worse half of the
+   original entry and it is untouched. Give the jobs the inputs that make them run.
+2. **Eight newly-visible layer-2 gaps are recorded but unreviewed**: `os.devNull`,
+   `fs.fchmod`, `fs.ftruncateSync`, `fs.writev`, `util.getSystemErrorName`,
+   `zlib.createZstdDecompress`, `crypto.generateKeyPairSync`, `crypto.verify`. Each is a
+   single import site. They are in `golden.json` with a note saying they are unreviewed;
+   they need the reachability question the `crypto.*` cluster got.
+3. **`test/node-shim-wall-tripwires.test.cjs` is the third instrument of this family and
+   was NOT audited here.** It matches the direct `require("fs").watch(` shape, which
+   upstream no longer emits anywhere — so it is green by construction, which is exactly
+   the failure mode the other two just had. It is green, so nothing forced the question;
+   ask it anyway.
 
 ## Staging a code-split provider now REQUIRES a tjs engine (2026-08-29)
 

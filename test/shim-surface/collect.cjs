@@ -61,8 +61,11 @@ function enumerateUnderTjs(names, tjsBin, spawnArgv) {
 }
 
 // layer 2: node API present in real node, absent from the shim, and referenced
-// by the bundle through a resolved require() alias.
-function layer2Gaps({ nodeSurface, shimSurface, text, index }) {
+// by the bundle through a resolved import/require binding. `scope` is the
+// per-module binding+index map from refs.buildScope(); resolution is scoped
+// because minified bindings are one character long and a bundle-wide lookup
+// turns any `n.abort()` into evidence for `process.abort`.
+function layer2Gaps({ nodeSurface, shimSurface, scope }) {
   const gaps = [];
   const unenumerable = [];
   for (const name of Object.keys(nodeSurface)) {
@@ -79,14 +82,16 @@ function layer2Gaps({ nodeSurface, shimSurface, text, index }) {
       });
       continue;
     }
-    const aliases = refs.aliasesFor(text, name);
-    if (!aliases.size) continue; // bundle never requires this module at all
+    if (!refs.scopeBinds(scope, name)) continue; // bundle never imports this module at all
     for (const prop of Object.keys(ref.surface)) {
       if (prop in shim.surface) continue;
       const leaf = prop.split('.').pop();
-      const r = refs.referencesTo(index, aliases, leaf);
-      if (r.calls || r.reads) {
-        gaps.push({ api: `${name}.${prop}`, calls: r.calls, reads: r.reads });
+      const r = refs.referencesIn(scope, name, leaf);
+      // A named import (`import{watch as z}from"fs"`) is counted as a read, not
+      // a call: it proves upstream reaches for the property, and says nothing
+      // about how often the bound identifier is invoked.
+      if (r.calls || r.reads || r.imports) {
+        gaps.push({ api: `${name}.${prop}`, calls: r.calls, reads: r.reads + r.imports });
       }
     }
   }

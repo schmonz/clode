@@ -5,8 +5,8 @@
     "Regenerate with UPDATE_GOLDEN=1, and add a note below for anything new.",
     "Measured against the EXTRACTED cli.cjs (~21MB), never the 255MB Bun binary."
   ],
-  "_measured_against_bundle": "2.1.218",
-  "_measured_on": "2026-08-01",
+  "_measured_against_bundle": "2.1.243",
+  "_measured_on": "2026-08-29",
   "layer1_bun_props_missing": [
     "Bun.WebView"
   ],
@@ -17,22 +17,29 @@
     "bun:sqlite"
   ],
   "layer2_node_apis_missing": [
-    "net.createServer",
     "crypto.X509Certificate",
-    "crypto.createPrivateKey",
     "crypto.createSign",
     "crypto.createVerify",
+    "net.createServer",
     "crypto.pbkdf2Sync",
     "crypto.pbkdf2",
-    "crypto.sign",
+    "crypto.createPrivateKey",
     "crypto.createPublicKey",
-    "child_process.fork",
+    "child_process.ChildProcess",
+    "crypto.sign",
+    "os.devNull",
+    "crypto.generateKeyPairSync",
+    "crypto.KeyObject",
+    "crypto.verify",
+    "fs.fchmod",
+    "fs.ftruncateSync",
+    "fs.writev",
     "https.createServer",
     "perf_hooks.monitorEventLoopDelay",
+    "util.getSystemErrorName",
     "v8.getHeapSpaceStatistics",
     "v8.getHeapStatistics",
-    "child_process.ChildProcess",
-    "crypto.KeyObject"
+    "zlib.createZstdDecompress"
   ],
   "unenumerable_allowed": [
     "intl"
@@ -51,6 +58,9 @@
     "stream.Duplex": "FIXED (no longer a layer2 gap, kept as history). Was reads-only (6), no calls — likely instanceof / prototype checks. Implemented as a real ES class in libexec/node-shim/modules/stream.cjs (phase 2 Task 5), modeled on the AWS SDK's ChecksumStream shape found verbatim in the extracted bundle. MEASURED armed: all three corpora that ran (apicheck, agentic, interactive) per reachability.json's `armed` map, `tracked_in_golden: true`.",
     "v8.* / perf_hooks.monitorEventLoopDelay": "diagnostics and telemetry; absent means no stats, not broken behavior. MEASURED (phase 2 Task 4, reachability.json dated 2026-08-04 against bundle 2.1.218): unarmed across apicheck/agentic/interactive. Per reachability.json's `corpus_blind_spots`, the agentic corpus's four scripted flows don't exercise v8 heap stats or perf_hooks.monitorEventLoopDelay by construction. Not probed on the credentialed apicheck path either (hung at G6, see crypto.* note above).",
     "http.request / https.request": "REMOVED from layer2 on 2026-08-22 because they are now IMPLEMENTED (libexec/node-shim/modules/http.cjs, client section; characterized in test/node-shim-http-client.test.cjs). Kept as history because WHY matters: this map listed them as gaps, and the companion wall-tripwire declared them latent, but neither could say whether upstream REACHED them. Measurement (instrumented shim + fused quaude + driven flows) said: not on the default Anthropic backend (axios picks its XHR adapter under tjs, because txiki defines a global XMLHttpRequest), but YES on Bedrock — 10 http.request calls at the EC2 instance metadata service from the AWS SDK credential chain, and an https.request at bedrock.<region>.amazonaws.com from @smithy/node-http-handler. That is the shape of evidence this map is meant to prompt, and it is why the entry is gone rather than annotated.",
-    "net.createServer / net.connect": "STILL A GAP, and the reason npm `ws` cannot connect under quaude: ws's initAsClient unconditionally passes `createConnection` to http.request, so it never uses the shim client's own socket. The shim client refuses that option by name (ERR_SHIM_HTTP_UNSUPPORTED_OPTION) rather than ignoring it. Closing this means a real net.Socket, which is a bigger job than the HTTP client was."
+    "net.createServer / net.connect": "STILL A GAP, and the reason npm `ws` cannot connect under quaude: ws's initAsClient unconditionally passes `createConnection` to http.request, so it never uses the shim client's own socket. The shim client refuses that option by name (ERR_SHIM_HTTP_UNSUPPORTED_OPTION) rather than ignoring it. Closing this means a real net.Socket, which is a bigger job than the HTTP client was.",
+    "SCANNER REBUILD 2026-08-29": "The layer-2 list moved because the SCANNER was repaired, not because upstream suddenly reached for new APIs. From 2.1.243 upstream ships a code-split ESM graph and emits ZERO require() for builtins (measured: 0 aliases for fs, os, path, crypto, net, http, child_process, stream, util, tty, v8 - every module but worker_threads), so layer2Gaps `continue`d past every module and reported NO GAPS AT ALL. The 16 entries below were stale 2.1.218 measurements that survived only because the golden test asserts layer 1 first and died on Bun.ant before reaching layer 2. The companion canary (\"the scanner still finds the known fs.watch call sites\") went red and stayed red for weeks as a tolerated baseline; it was right, and it was the only thing standing between this map and silent uselessness. Repaired in three steps, all in shim-surface/bundle-refs.cjs: read graph.json sources (real strings) instead of the escape-laden graph runner; learn ESM's three binding shapes (import*as X / import X / import{prop as x}); and resolve bindings MODULE-SCOPED, because minified names are one character and a bundle-wide lookup made every `n.abort()` evidence for `process.abort` (10 such phantoms, now gone).",
+    "NEWLY VISIBLE 2026-08-29 (os.devNull, fs.fchmod, fs.ftruncateSync, fs.writev, util.getSystemErrorName, zlib.createZstdDecompress, crypto.generateKeyPairSync, crypto.verify)": "NOT new upstream behaviour and NOT yet reviewed - these are what the repaired scanner can see that the broken one could not. Each is a SINGLE import site (counts: os.devNull 2, the rest 1 apiece; fs.writev is one bare read), which is why the old require()-only scan missed them even before 2.1.243 went ESM. Recorded here so they are visible and diffable rather than absent; each still needs the same reachability question the crypto.* cluster got. Queued in BACKLOG.md.",
+    "child_process.fork": "undefined REMOVED from the list 2026-08-29: with scoped resolution, 50 modules bind child_process and NONE reference .fork (0 named imports, 0 `<binding>.fork` sites). The 72 raw `fork(` substrings in the bundle are other objects' methods. Kept as history because the entry was true against 2.1.218."
   }
 }
