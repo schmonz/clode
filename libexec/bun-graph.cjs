@@ -192,17 +192,94 @@ function isZstdFrame(u8, p, len) {
 // text is used verbatim — so decoding here means the target never needs a zstd implementation at
 // all. That matters: tjs has none, `node-shim/modules/zlib.cjs` deliberately has none, and
 // writing one is several hundred lines of entropy coding we have no business vendoring.
-function zstdToText(u8, p, len) {
-  var zlib = null;
-  try { zlib = require('node:zlib'); } catch (e) { /* not node, or no zlib */ }
-  if (!zlib || typeof zlib.zstdDecompressSync !== 'function') {
-    throw new Error('bun-graph: this provider embeds zstd-compressed assets and this runtime '
-      + 'cannot decode them. node:zlib.zstdDecompressSync arrived in Node 22.15 / 24; tjs has no '
-      + 'zstd at all. Carve with a newer Node — the alternative is a target that builds green '
-      + 'and dies on its first turn with "embedded text asset is missing or corrupt".');
+// THE EXTERNAL DECODER — and on every PUBLISHED clode it is the only one there is.
+// `node:zlib.zstdDecompressSync` arrived in Node 22.15/24, so raising the Node floor fixes the
+// DEV path and nothing else: tjs has no zstd, `node-shim/modules/zlib.cjs` deliberately has none,
+// and all 40 shipped assets are fused tjs binaries. Without this, the shipped builder cannot carve
+// upstream 2.1.251+ at all. Same doctrine as translating rg to ugrep/bfs: one portable
+// implementation, reached by spawning a tool the host already has, named by CLODE_ZSTD if the
+// host keeps it somewhere unusual (the CLODE_RG / CLODE_BFS convention).
+//
+// THE FRAME GOES THROUGH A FILE, NOT THROUGH STDIN, and that is not fastidiousness. tjs's
+// spawnSync is `__tjs_spawn_sync` (mod_spawn_sync.c), which writes the WHOLE of `input` to the
+// child before it starts its poll-drain of stdout. A pipe holds 65536 bytes here (measured), so
+// once the frame plus the child's unread output exceed that, the parent blocks writing stdin while
+// the child blocks writing stdout and neither ever moves. Measured on this box 2026-08-29: the
+// real 2.1.251 rows survive it (mermaid.min.js, 786 KB -> 3.5 MB, decodes in 7 ms), but a 16 MB
+// frame hangs forever, and upstream's assets only get bigger. A temp file leaves stdout as the
+// only pipe, and stdout IS drained by the poll loop. Node's own spawnSync has no such hazard —
+// this is the portable shape that is correct under both, not a tjs special case.
+// Returns a Buffer, or null with the reason in ZSTD_WHY. The reason is not decoration: this
+// fails on a machine we are not sitting at, and "cannot decode them" without "zstd: command not
+// found" or the decoder's own stderr sends the next person hunting the wrong thing.
+var ZSTD_WHY = '';
+function zstdViaCli(buf) {
+  ZSTD_WHY = '';
+  var cp = null, fs = null, os = null, path = null;
+  try {
+    cp = require('node:child_process');
+    fs = require('node:fs'); os = require('node:os'); path = require('node:path');
+  } catch (e) { ZSTD_WHY = 'no child_process/fs in this runtime: ' + (e && e.message); return null; }
+  var bin = 'zstd';
+  try { if (process && process.env && process.env.CLODE_ZSTD) bin = process.env.CLODE_ZSTD; } catch (e) { /* no env */ }
+  var file;
+  try {
+    file = path.join(zstdScratchDir(fs, os, path), 'frame.zst');
+    fs.writeFileSync(file, buf);
+  } catch (e) { ZSTD_WHY = 'could not stage the frame in tmpdir: ' + (e && e.message); return null; }
+  var r;
+  try {
+    r = cp.spawnSync(bin, ['-d', '-c', file], { maxBuffer: 1 << 28 });
+  } catch (e) {
+    ZSTD_WHY = 'spawning ' + bin + ' threw: ' + (e && e.message); return null;
+  } finally {
+    try { fs.unlinkSync(file); } catch (e) { /* best effort; the dir is a mkdtemp */ }
   }
-  var out = zlib.zstdDecompressSync(Buffer.from(u8.buffer, u8.byteOffset + p, len));
-  return out.toString('utf8');
+  if (!r) { ZSTD_WHY = 'spawnSync ' + bin + ' returned nothing'; return null; }
+  if (r.status !== 0) {
+    // Node reports a failed LAUNCH as r.error with status null; tjs's shim reshapes its C-side
+    // throw into the same contract (child_process.cjs, launchError), so one branch reads both.
+    ZSTD_WHY = r.error ? ('could not run ' + bin + ': ' + r.error.message)
+      : (bin + ' exited ' + r.status + (r.signal ? ' on ' + r.signal : '') + ': '
+         + String(r.stderr || '').trim());
+    return null;
+  }
+  // status 0 with EMPTY stdout is a SUCCESSFUL decode of an empty asset, not a failure. The
+  // magic-byte gate upstream of here admits a 13-byte zstd frame whose payload is zero bytes,
+  // and treating that as "the decoder is broken" would refuse a provider for being correct.
+  if (!r.stdout) return Buffer.alloc(0);
+  return Buffer.isBuffer(r.stdout) ? r.stdout : Buffer.from(r.stdout);
+}
+
+// ONE mkdtemp for the whole carve, not one per asset: 2.1.251 has 101 zstd rows, and a temp dir
+// each would be 101 create+remove round trips for no gain. mkdtemp rather than a predictable name
+// because tmpdir is shared and a planted symlink would otherwise steer the write. The (empty)
+// directory outlives the process; that is the OS's to reap, and it is one per carve.
+var ZSTD_SCRATCH = null;
+function zstdScratchDir(fs, os, path) {
+  if (ZSTD_SCRATCH) return ZSTD_SCRATCH;
+  ZSTD_SCRATCH = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-zstd-'));
+  return ZSTD_SCRATCH;
+}
+
+// `opts.forceCli` exists ONLY for the test that pins the two paths to byte-identical output. A
+// green `node --test` run otherwise never touches the CLI branch, which is the branch that ships.
+function zstdToText(u8, p, len, opts) {
+  var buf = Buffer.from(u8.buffer, u8.byteOffset + p, len);
+  if (!(opts && opts.forceCli)) {
+    var zlib = null;
+    try { zlib = require('node:zlib'); } catch (e) { /* not node, or no zlib */ }
+    if (zlib && typeof zlib.zstdDecompressSync === 'function') {
+      return zlib.zstdDecompressSync(buf).toString('utf8');
+    }
+  }
+  var out = zstdViaCli(buf);
+  if (out) return out.toString('utf8');
+  throw new Error('bun-graph: this provider embeds zstd-compressed assets and this runtime '
+    + 'cannot decode them (' + (ZSTD_WHY || 'no reason recorded') + '). Install `zstd` (or point '
+    + 'CLODE_ZSTD at it); node:zlib.zstdDecompressSync also works on Node 22.15/24+. The '
+    + 'alternative is a target that builds green and dies on its first turn with "embedded text '
+    + 'asset is missing or corrupt".');
 }
 
 // TEXT ASSETS the bundle reads by their container name. Separate from loadGraphFromBytes because
@@ -261,6 +338,7 @@ if (typeof require === 'function' && typeof module === 'object') {
   loadAssets = function (binPath) { return loadAssetsFromBytes(new Uint8Array(fs.readFileSync(binPath))); };
   module.exports = { decodeBunGraph, loadGraphFromBytes, loadGraph, loadGraphFull,
                      loadAssets, loadAssetsFromBytes, TRAILER,
+                     __zstdToTextForTest: zstdToText,
                      MODULE_FORMAT: { ESM: 1, CJS: 2 },
                      LOADER: { 0: 'jsx', 1: 'js', 2: 'ts', 3: 'tsx', 4: 'css', 5: 'file', 6: 'json', 10: 'napi',
                                // 13 = text. NEW IN CLAUDE CODE 2.1.246: 164 rows, 118 of them .md —

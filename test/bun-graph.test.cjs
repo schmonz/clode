@@ -24,9 +24,10 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 const REPO = path.join(__dirname, '..');
+const bunGraph = require('../libexec/bun-graph.cjs');
 const {
   decodeBunGraph, loadGraphFromBytes, loadGraphFull, loadAssetsFromBytes, TRAILER, MODULE_FORMAT, LOADER,
-} = require('../libexec/bun-graph.cjs');
+} = bunGraph;
 
 // ---- layer 1: hermetic refusals ---------------------------------------------
 
@@ -168,15 +169,39 @@ test('but a mis-stated length still fails LOUDLY — the invariant we KEPT', () 
   assert.throws(() => loadGraphFromBytes(u), /not NUL-terminated/);
 });
 
+// BUILD THE FIXTURE THE WAY THE ENGINE CAN. `zlib.zstdCompressSync` is Node-only — the shim has
+// no zstd whatsoever — so a fixture built with it made this test, the one that pins the loader-5
+// decode, fail on the ENGINE for a reason that had nothing to do with the decode. The host CLI
+// builds the same frame under both runtimes.
+const ZSTD_BIN = process.env.CLODE_ZSTD || 'zstd';
+function hostZstd() {
+  try {
+    const r = require('node:child_process').spawnSync(ZSTD_BIN, ['--version'], { encoding: 'utf8' });
+    return !!r && r.status === 0;
+  } catch (e) { return false; }
+}
+const HAVE_ZSTD_CLI = hostZstd();
+function haveZlibZstd() {
+  try { return typeof require('node:zlib').zstdCompressSync === 'function'; } catch (e) { return false; }
+}
+const HAVE_ZLIB_ZSTD = haveZlibZstd();
+function makeZstdFrame(text) {
+  if (HAVE_ZLIB_ZSTD) return require('node:zlib').zstdCompressSync(Buffer.from(text, 'utf8'));
+  return execFileSync(ZSTD_BIN, ['-q', '-c'], { input: Buffer.from(text, 'utf8'), maxBuffer: 1 << 26 });
+}
+const compressOpts = (HAVE_ZLIB_ZSTD || HAVE_ZSTD_CLI) ? {}
+  : { skip: `no zstd compressor: neither node:zlib.zstdCompressSync nor \`${ZSTD_BIN}\` on PATH` };
+const zstdOpts = HAVE_ZSTD_CLI ? {}
+  : { skip: `no \`${ZSTD_BIN}\` on PATH (set CLODE_ZSTD); cannot build a real frame to decode` };
+
 // 2.1.251 MOVED 94 EMBEDDED ASSETS from loader 13 to loader 5 by COMPRESSING them, and taking
 // only loader 13 shipped a target that built green and died on its first turn with upstream's
 // own "embedded text asset is missing or corrupt". Rows by loader, measured on the real
 // providers: 2.1.250 {"1":1777,"5":4,"10":5,"13":166} -> 2.1.251 {"1":1799,"5":101,"10":5,"13":72}.
 // Loader 10 (napi) stays out; it is native .node code no target loads.
-test('loadAssets takes loader 5 as well as 13, and decodes the zstd frames', () => {
-  const zlib = require('node:zlib');
+test('loadAssets takes loader 5 as well as 13, and decodes the zstd frames', compressOpts, () => {
   const plain = '# SKILL\nbody text\n';
-  const frame = new Uint8Array(zlib.zstdCompressSync(Buffer.from(plain, 'utf8')));
+  const frame = new Uint8Array(makeZstdFrame(plain));
   assert.deepStrictEqual([...frame.slice(0, 4)], [0x28, 0xb5, 0x2f, 0xfd], 'fixture must be a zstd frame');
   const u = container([
     { name: '/$bunfs/root/cli', body: 'export{};', loader: 1 },
@@ -206,6 +231,83 @@ test('loader 13 is text — the row class 2.1.246 introduced', () => {
   // 164 rows in 2.1.246 (118 .md), zero before it. Dropping them builds a target that
   // boots and dies on its first turn, so the decoder has to name this class.
   assert.strictEqual(LOADER[13], 'text');
+});
+
+// ---- the external zstd decoder: the ONLY path the SHIPPED builder has --------
+//
+// `node:zlib.zstdDecompressSync` is a Node 22.15/24+ thing. Every PUBLISHED clode is a fused
+// tjs binary, and tjs has no zstd anywhere — so on the shipped artifact these two tests are the
+// whole of zstd support. They are written to run identically under `node --test` and under
+// scripts/engine-test.mjs, because a green run on Node proves nothing about the thing we ship.
+test('zstdToText decodes a real CLI-made frame, by CLI and by zlib alike', zstdOpts, () => {
+  const zstdText = 'clode zstd round-trip ' + 'x'.repeat(4096);
+  const frame = execFileSync(ZSTD_BIN, ['-q', '-c'], { input: Buffer.from(zstdText), maxBuffer: 1 << 26 });
+  assert.deepStrictEqual(Array.from(frame.subarray(0, 4)), [0x28, 0xb5, 0x2f, 0xfd], 'is a zstd frame');
+  // The CLI path must produce byte-identical text to the zlib path.
+  assert.strictEqual(bunGraph.__zstdToTextForTest(frame, 0, frame.length, { forceCli: true }), zstdText);
+  assert.strictEqual(bunGraph.__zstdToTextForTest(frame, 0, frame.length, { forceCli: false }), zstdText);
+});
+
+// THE ROW THAT ACTUALLY SHIPS. The 4 KB case above passes even through a decoder that writes the
+// frame to the child's stdin and only then starts reading its stdout — a pipe holds 64 KB, so
+// nothing blocks. The real 2.1.251 provider is not like that: of its 101 loader-5 rows, three
+// exceed the pipe buffer COMPRESSED (mermaid.min.js 786 KB -> 3.5 MB, payload.template.html.asset
+// 742 KB -> 2.5 MB, hljsBundle 167 KB -> 591 KB). Write-all-then-drain deadlocks on exactly those:
+// the parent blocks writing stdin while the child blocks writing a full stdout. This fixture is
+// sized past the same wall in both directions, so the deadlock cannot pass unnoticed.
+test('zstdToText decodes a frame larger than a pipe buffer, both ways', zstdOpts, () => {
+  const parts = [];
+  let total = 0, x = 123456789;
+  while (total < (2 << 20)) {
+    // xorshift32 via Math.imul — a plain LCG loses precision past 2^53 in JS, degenerates, and
+    // compresses 90:1, which would quietly shrink the fixture back under the pipe buffer.
+    x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0;
+    const t = x.toString(36) + ' ';
+    parts.push(t); total += t.length;
+  }
+  const s = parts.join('');
+  const frame = execFileSync(ZSTD_BIN, ['-q', '-c'], { input: Buffer.from(s), maxBuffer: 1 << 26 });
+  assert.ok(frame.length > (1 << 16), `frame must exceed a pipe buffer, got ${frame.length}`);
+  assert.strictEqual(bunGraph.__zstdToTextForTest(frame, 0, frame.length, { forceCli: true }), s);
+  assert.strictEqual(bunGraph.__zstdToTextForTest(frame, 0, frame.length, { forceCli: false }), s);
+});
+
+// The env override, same convention as CLODE_RG / CLODE_BFS: name the binary, do not guess at it.
+test('CLODE_ZSTD names the decoder', zstdOpts, () => {
+  const frame = execFileSync(ZSTD_BIN, ['-q', '-c'], { input: Buffer.from('hello zstd'), maxBuffer: 1 << 26 });
+  const saved = process.env.CLODE_ZSTD;
+  try {
+    process.env.CLODE_ZSTD = '/nonexistent/definitely-not-zstd';
+    assert.throws(() => bunGraph.__zstdToTextForTest(frame, 0, frame.length, { forceCli: true }),
+      /cannot decode them/, 'a bad CLODE_ZSTD must refuse loudly, not silently fall back');
+  } finally {
+    if (saved === undefined) delete process.env.CLODE_ZSTD; else process.env.CLODE_ZSTD = saved;
+  }
+});
+
+
+// AN EMPTY ASSET IS NOT A BROKEN DECODER. The magic-byte gate admits a 13-byte frame whose
+// payload is zero bytes, and a CLI wrapper that reads "status 0, no stdout" as failure would
+// refuse an entire provider for containing one empty file.
+test('an empty zstd frame decodes to an empty string, it does not refuse', zstdOpts, () => {
+  const frame = execFileSync(ZSTD_BIN, ['-q', '-c'], { input: Buffer.alloc(0), maxBuffer: 1 << 26 });
+  assert.deepStrictEqual(Array.from(frame.subarray(0, 4)), [0x28, 0xb5, 0x2f, 0xfd], 'is a zstd frame');
+  assert.strictEqual(bunGraph.__zstdToTextForTest(frame, 0, frame.length, { forceCli: true }), '');
+  assert.strictEqual(bunGraph.__zstdToTextForTest(frame, 0, frame.length, { forceCli: false }), '');
+});
+
+// The refusal has to say WHY. This fails on machines we are not sitting at; "cannot decode them"
+// with no cause sends the next person hunting the provider instead of their PATH.
+test('the refusal names the cause, not just the symptom', zstdOpts, () => {
+  const frame = execFileSync(ZSTD_BIN, ['-q', '-c'], { input: Buffer.from('hello'), maxBuffer: 1 << 26 });
+  const saved = process.env.CLODE_ZSTD;
+  try {
+    process.env.CLODE_ZSTD = '/nonexistent/definitely-not-zstd';
+    assert.throws(() => bunGraph.__zstdToTextForTest(frame, 0, frame.length, { forceCli: true }),
+      /definitely-not-zstd/, 'the error must name the binary it could not run');
+  } finally {
+    if (saved === undefined) delete process.env.CLODE_ZSTD; else process.env.CLODE_ZSTD = saved;
+  }
 });
 
 // ---- layer 2: real providers -------------------------------------------------
