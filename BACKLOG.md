@@ -2778,6 +2778,60 @@ after the matrix — "how a step fails is part of what the step IS".
 treat a silent fallback as success.
 
 
+### ★★★ clode is a BINARY WE BUILD, and only that — retire bin/clode as a way to run clode (user, 2026-08-28)
+
+**The user:** "I think we confuse ourselves having bin/clode in tree and using it for some
+things. Clode needs to be a binary we build and only that."
+
+**Two entry points, and only one of them ships.** `bin/clode` is a `#!/usr/bin/env node`
+script in the checkout. Every one of the 40 published assets is a fused tjs binary —
+`clode-<ver>-freebsd-14.0-amd64`, `…-linux-riscv64-musl`, `…-cosmo.com`. Users never run
+`bin/clode`. But `bin/clode` is what we develop against, what most tests drive, and what the
+local build loop exercises. So the artifact we reason about is not the artifact we ship.
+
+**This is not a tidiness complaint — the two paths have DIFFERENT CAPABILITIES, so the dev
+path answers capability questions wrong.** Today's proof, start to finish inside one hour:
+
+- 2.1.251 embeds its assets as zstd frames, so carving now needs a zstd decoder.
+- Under Node, `zlib.zstdDecompressSync` exists (22.15/24+). The fix looked like a version
+  floor, and on the dev path it IS one — a checkout with a new-enough Node carves fine.
+- Under tjs there is no zstd AT ALL. So as of 2.1.251 every shipped binary cannot carve a
+  current provider — while CI, the local suite, and my own builds stay green.
+- I then told the user twice, confidently and wrongly, first that the floor bump was
+  user-facing and then that it was dev-only, because "clode" names two different programs
+  and I was answering about whichever one I had last run.
+
+A floor bump on the dev path is invisible to users. A missing capability in the shipped
+binary is invisible to the dev path. Having both entry points is what let one hour produce
+two opposite wrong answers about the same change.
+
+**What this means concretely** (the shape, not the plan):
+
+1. `bin/clode` demoted to what it actually is: a STAGE-0 bootstrap whose only job is to
+   build the first binary. Not a way to run a feature, not a test subject, not a build path.
+2. Tests and the local loop drive the FUSED binary. Anything that cannot is named as an
+   exception with a written reason, the way divergences are.
+3. `native-builder-oracle` ("the native builder BUILDS THE PRODUCT (node-free, real
+   provider)") stops being one red among twenty-two and becomes the gate that decides
+   whether we shipped something that works. It is the job that would have caught the zstd
+   break; it was failing, and it read as ambient noise.
+
+**This is already the recorded direction, and it has not happened.** [[node-only-as-oracle]]
+(2026-08-25) says no Node in DEV either, only for oracular comparison. The gap between that
+direction and today is exactly the confusion above, so this entry is evidence for a
+direction already chosen rather than a new proposal.
+
+**The tension to design against, honestly.** A fused `--self` costs real wall-clock, and a
+dev loop that fuses before every check is a slower loop than the one we have — that is WHY
+`bin/clode` keeps getting used. So the ask is not "delete it": it is a fast path to a fused
+builder plus a hard rule about what may run the Node entry. Without the fast path, the rule
+will be broken the first time someone is in a hurry, which is how we got here.
+
+**Related, and blocked by the same confusion:** a fused clode-native cannot carve a split
+provider at all today (`bun-graph.cjs` is not in the builder role's member list), which has
+been true since 2.1.243 and was found only by an agent building the real thing.
+
+
 ### Write down the doctrine — propose a CLAUDE.md from this project's own history (user, 2026-08-25)
 
 **The user, immediately after being told that "solve it portably" existed in the repo only
