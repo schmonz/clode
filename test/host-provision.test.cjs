@@ -300,3 +300,86 @@ test('the refusal reports each candidate it tried and the reason it rejected it'
   assert.match(msg, /unsupported frame parameter/, 'the failing tool\'s own stderr must reach the refusal');
   assert.match(msg, /grumpy/, 'the refusal must name what it ran');
 });
+
+// --- the KAT has to prove DECODING, not header-walking -----------------------
+//
+// A known-answer test is only as strong as the answer it demands. The first zstd KAT frame here
+// was `zstd -q -c` of the 5-byte string "clode", and zstd stores an input that small as a RAW
+// block — the plaintext sits in the frame verbatim. So a "decoder" that merely parses the frame
+// header and copies out raw-block payloads passed it, while decompressing nothing at all. On a
+// real compressed row that same fake exits 0 and returns the WRONG BYTES, which is precisely the
+// class of failure this registry exists to make impossible. `zstdContentSize` in bun-graph would
+// catch it on every row of 2.1.251 — but only because all 101 happen to carry a Frame_Content_Size,
+// and "caught by accident on today's input" is not a defence we accept anywhere else here.
+//
+// The KAT frame is therefore built from repetitive input, so zstd emits a COMPRESSED block
+// (Block_Type 2) with a Frame_Content_Size and a content checksum. Producing its plaintext now
+// requires actually running the entropy decoder.
+function firstBlockHeader(bytes) {
+  const b = Buffer.from(bytes);
+  const d = b[4];
+  const fcsFlag = (d >> 6) & 3, single = (d >> 5) & 1, did = d & 3;
+  const fcsSize = fcsFlag === 0 ? (single ? 1 : 0) : (fcsFlag === 1 ? 2 : (fcsFlag === 2 ? 4 : 8));
+  const at = 5 + (single ? 0 : 1) + (did === 3 ? 4 : did) + fcsSize;
+  const h = b[at] | (b[at + 1] << 8) | (b[at + 2] << 16);
+  return { at, last: h & 1, type: (h >> 1) & 3, size: h >>> 3 };
+}
+
+test('the zstd KAT frame demands decompression — its block is not RAW', () => {
+  const { zst, expected } = REGISTRY.zstd.KAT;
+  const blk = firstBlockHeader(zst);
+  assert.notStrictEqual(blk.type, 0,
+    'a RAW block carries the plaintext verbatim, so copying it out passes without decoding anything');
+  assert.ok(expected.length > zst.length,
+    `the KAT plaintext (${expected.length}B) must be LARGER than the frame (${zst.length}B), `
+    + 'so no passthrough or payload-copier can produce it');
+});
+
+// The fake above, as an injected spawn: pure JS, so it runs identically under node and the engine,
+// and no subprocess is involved. It is a *correct* raw-block frame walker — it just cannot inflate.
+function rawBlockWalkerSpawn(bin, args) {
+  const file = args[args.length - 1];
+  const b = fs.readFileSync(file);
+  const d = b[4];
+  const fcsFlag = (d >> 6) & 3, single = (d >> 5) & 1, did = d & 3;
+  const fcsSize = fcsFlag === 0 ? (single ? 1 : 0) : (fcsFlag === 1 ? 2 : (fcsFlag === 2 ? 4 : 8));
+  let at = 5 + (single ? 0 : 1) + (did === 3 ? 4 : did) + fcsSize;
+  const out = [];
+  for (;;) {
+    if (at + 3 > b.length) break;
+    const h = b[at] | (b[at + 1] << 8) | (b[at + 2] << 16);
+    const last = h & 1, type = (h >> 1) & 3, size = h >>> 3;
+    at += 3;
+    if (type === 0) { out.push(b.subarray(at, at + size)); at += size; }
+    else if (type === 1) { at += 1; }
+    else { at += size; }
+    if (last) break;
+  }
+  return { status: 0, stdout: Buffer.concat(out).toString('utf8'), stderr: '' };
+}
+
+test('provision(zstd) REFUSES a frame walker that copies raw blocks without decoding', () => {
+  assert.throws(
+    () => provision('zstd', {
+      env: { PATH: '/nowhere' }, findTool: () => '/fake/zstd',
+      spawn: rawBlockWalkerSpawn, fs, dataDir: tmpDataDir(),
+    }),
+    /CLODE_ZSTD/,
+    'exits 0 and returns bytes, but decompresses nothing — the KAT must not accept it');
+});
+
+// A decoder that appends a newline is not this decoder. bun-graph embeds the decoded bytes as the
+// asset's text, and on a row with no Frame_Content_Size nothing downstream would notice the extra
+// byte — so the KAT compares EXACTLY, unlike the gzip family's trailing-whitespace strip (whose
+// consumer unpacks an archive rather than embedding a string).
+test('provision(zstd) REFUSES a decoder that appends a newline to correct output', () => {
+  const { expected } = REGISTRY.zstd.KAT;
+  assert.throws(
+    () => provision('zstd', {
+      env: { PATH: '/nowhere' }, findTool: () => '/fake/zstd',
+      spawn: () => ({ status: 0, stdout: expected + '\n', stderr: '' }),
+      fs, dataDir: tmpDataDir(),
+    }),
+    /CLODE_ZSTD/,
+    'the decoded bytes are embedded verbatim; a stray newline corrupts the asset');
+});

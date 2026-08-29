@@ -62,14 +62,29 @@ const ZIP_KAT = {
   expected: 'clode',
 };
 
-// A fixed zstd frame of exactly "clode", produced by `zstd -q -c` (1.5.7). Its
-// Frame_Header_Descriptor is 0x24: single-segment, a 1-byte Frame_Content_Size of 5,
-// and a 4-byte XXH64 CONTENT CHECKSUM — so a "decoder" that echoes its input, truncates,
-// or emits the right length of the wrong bytes cannot produce "clode" by accident. Any
-// conforming zstd decompressor turns these 18 bytes into exactly that string.
+// A fixed zstd frame of "clode" repeated 20 times, produced by `zstd -q -c` (1.5.7) from
+// `printf 'clode%.0s' $(seq 1 20)`. 25 bytes in, 100 bytes out.
+//
+// THE INPUT IS REPETITIVE ON PURPOSE, and this is the whole strength of the test. The first
+// version of this KAT was `zstd -q -c` of the bare 5-byte string "clode", which zstd stores as
+// a RAW block — the plaintext sits in the frame verbatim. A "decoder" that only parses the frame
+// header and copies out raw-block payloads therefore PASSED it while decompressing nothing, and
+// on a real compressed row that same program exits 0 and returns the wrong bytes. (bun-graph's
+// Frame_Content_Size check happens to catch that on all 101 rows of 2.1.251, but only because
+// all 101 carry an FCS — "caught by accident on today's input" is not a defence we accept.)
+//
+// Repetitive input makes zstd emit a COMPRESSED block (Block_Type 2), so producing this
+// plaintext requires actually running the entropy decoder. The frame also carries a
+// Frame_Content_Size of 100 (Frame_Header_Descriptor 0x24: single-segment, 1-byte FCS) and a
+// 4-byte XXH64 content checksum, and the plaintext is FOUR TIMES the frame's length — so
+// echoing the input, truncating, or emitting a payload verbatim cannot produce it either.
+// Any conforming zstd decompressor turns these 25 bytes into exactly that 100-byte string.
+// test/host-provision.test.cjs asserts the not-RAW and larger-than-the-frame properties, so
+// a future edit cannot quietly weaken it back.
 const ZSTD_KAT = {
-  zst: [40, 181, 47, 253, 36, 5, 41, 0, 0, 99, 108, 111, 100, 101, 5, 25, 237, 74],
-  expected: 'clode',
+  zst: [40, 181, 47, 253, 36, 100, 101, 0, 0, 40, 99, 108, 111, 100, 101,
+        1, 0, 140, 169, 104, 1, 254, 7, 238, 136],
+  expected: 'clode'.repeat(20),
 };
 
 const REGISTRY = {
@@ -219,13 +234,19 @@ const REGISTRY = {
       { name: 'unzstd', args: (f) => ['-c', f] },
       { name: 'zstdcat', args: (f) => [f] },
     ],
-    // Decompress the embedded known frame; verify the exact bytes.
+    // Exposed so the tests can assert on the constant itself rather than re-deriving it.
+    KAT: ZSTD_KAT,
+    // Decompress the embedded known frame; verify the exact bytes. EXACT, with no trailing-
+    // whitespace strip — unlike the gzip family above, whose consumer unpacks an archive.
+    // bun-graph embeds what comes back as the asset's TEXT, so a decoder that appends a newline
+    // is not this decoder: on a row with no Frame_Content_Size nothing downstream would notice
+    // the extra byte, and the target would carry a corrupted asset.
     verify({ candidate, path: bin, run, fs }) {
       const tmp = path.join(os.tmpdir(), `clode-kat-zstd-${process.pid}.zst`);
       fs.writeFileSync(tmp, Buffer.from(ZSTD_KAT.zst));
       try {
         const r = run(bin, candidate.args(tmp));
-        return !!r && r.status === 0 && String(r.stdout).replace(/\s+$/, '') === ZSTD_KAT.expected;
+        return !!r && r.status === 0 && String(r.stdout) === ZSTD_KAT.expected;
       } finally {
         try { fs.unlinkSync(tmp); } catch { /* absent */ }
       }

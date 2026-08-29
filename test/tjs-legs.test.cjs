@@ -914,30 +914,56 @@ const ZSTD_SOURCE = {
   // guest console log, which holds the actual error, is not uploaded on failure. See BACKLOG.
   'netbsd-sparc': 'image',
 };
-// Mirrors the case list in .github/actions/build-leg/action.yml's `mode` step: these
-// guest-platforms set exec=guest, i.e. the whole build+fuse+carve happens in the VM.
-// ...plus the qemu-* legs, which carve in-guest too (their own backend, own baked image).
-const IN_GUEST = new Set(['netbsd', 'freebsd', 'openbsd', 'dragonflybsd', 'omnios', 'solaris',
-  'midnightbsd', 'haiku', 'openindiana']);
-const carvesInGuest = (gp) => !!gp && (IN_GUEST.has(gp) || gp.startsWith('qemu-'));
+// DERIVED from .github/actions/build-leg/action.yml, not hand-copied. Its `mode` step decides
+// where a leg builds with one shell `case`, and the exec=guest arm is the definitive list of
+// platforms whose build+fuse+carve happen inside the VM. A mirror of it here would match today
+// and drift silently the moment a platform is added — and the gate's whole claim is "an unlisted
+// leg fails", which a stale mirror quietly converts into "an unlisted PLATFORM is skipped". In a
+// repo whose rule is one source per fact, reading the source is cheaper than syncing a copy.
+function inGuestPlatforms() {
+  const yml = fs.readFileSync(path.join(REPO, '.github/actions/build-leg/action.yml'), 'utf8');
+  const m = yml.match(/^\s*([a-z0-9|-]+)\)\s*exec=guest\s*;;/m);
+  assert.ok(m, 'could not find the `exec=guest` case arm in build-leg/action.yml — if that step '
+    + 'was restructured, this gate must be re-pointed at wherever it now decides in-guest builds');
+  return new Set(m[1].split('|'));
+}
+// ...plus the qemu-* legs, which carve in-guest too, via their own backend and baked image.
+const carvesInGuest = (gp, set) => !!gp && (set.has(gp) || gp.startsWith('qemu-'));
+
+// The decoder names provision() will actually look for, read from the registry rather than
+// restated — so adding a candidate there cannot leave this gate rejecting a legitimate package.
+const ZSTD_CMDS = require('../libexec/host-provision.cjs').REGISTRY.zstd.candidates.map((c) => c.name);
 
 test('every leg that carves inside a guest VM accounts for its zstd', () => {
-  let checked = 0;
+  const inGuest = inGuestPlatforms();
+  const seen = new Set();
   for (const l of legsFor('release').concat(legsFor('ci'))) {
     const gp = l['guest-platform'];
-    if (!carvesInGuest(gp)) continue;
+    if (!carvesInGuest(gp, inGuest)) continue;
     if (l['cross-image'] || l['cross-dockerfile'] || l['netbsd-src']) continue; // cross legs carve on the runner
-    checked++;
+    seen.add(l.leg);   // a leg in BOTH tiers is one leg, not two — the floor below must mean legs
     const how = ZSTD_SOURCE[l.leg];
     assert.ok(how, `${l.leg}: builds in a guest VM but ZSTD_SOURCE says nothing about its zstd. `
       + 'Carving 2.1.251+ needs one. Either prove the base system has it (a green in-guest carve) '
       + 'and add it as \'base\', name the command in guest-packages and add it as \'package\', '
       + 'or say it comes from a baked guest image and add it as \'image\'.');
     if (how === 'package') {
-      const pkgs = String(l['guest-packages'] || '').split(/\s+/);
-      assert.ok(pkgs.some((p) => /(^|:)(zstd)$/.test(p)),
-        `${l.leg}: ZSTD_SOURCE says 'package' but guest-packages (${l['guest-packages']}) names no zstd`);
+      const pkgs = String(l['guest-packages'] || '').split(/\s+/).filter(Boolean);
+      // THE PACKAGE MUST NAME THE COMMAND, not the library — the exact regression
+      // scripts/tjs-legs.mjs spends nine lines warning about on the haiku leg. Haiku's `zstd`
+      // package is libzstd; the executables are in `zstd_bin`, reached by the `cmd:` provides
+      // name. A bare `zstd` there installs the library, resolves green, and leaves the carve
+      // exactly as broken — so on a provides-syntax guest the prefix is REQUIRED, not optional.
+      const provides = gp === 'haiku';
+      const accepted = ZSTD_CMDS.flatMap((c) => (provides ? [`cmd:${c}`] : [c, `cmd:${c}`]));
+      assert.ok(pkgs.some((pkg) => accepted.includes(pkg)),
+        `${l.leg}: ZSTD_SOURCE says 'package' but guest-packages (${l['guest-packages']}) names `
+        + `no zstd COMMAND. Expected one of ${accepted.join(', ')}`
+        + (provides ? ' — a bare `zstd` on Haiku is the LIBRARY, not the CLI.' : '.'));
     }
   }
-  assert.ok(checked >= 13, `expected the in-guest legs to be found, saw ${checked}`);
+  // Every leg named in the table must actually still exist, or the table is documenting ghosts.
+  for (const leg of Object.keys(ZSTD_SOURCE)) {
+    assert.ok(seen.has(leg), `ZSTD_SOURCE names ${leg}, which is no longer an in-guest leg`);
+  }
 });
