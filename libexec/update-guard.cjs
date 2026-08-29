@@ -42,11 +42,11 @@ const SUBCOMMANDS = new Set([
   'add', 'add-from-claude-desktop', 'add-json', 'agents', 'auth', 'auto-mode',
   'autoremove', 'clear', 'config', 'critique', 'defaults', 'details', 'disable',
   'doctor', 'enable', 'eval', 'gateway', 'get', 'i', 'import',
-  'import-conversations', 'init', 'install', 'list', 'login', 'logout',
+  'import-conversations', 'init', 'install', 'kill', 'list', 'login', 'logout',
   'marketplace', 'mcp', 'new', 'plugin', 'plugins', 'project', 'prune', 'purge',
   'rc', 'remote-control', 'remove', 'reset', 'reset-project-choices', 'rm',
-  'serve', 'setup', 'setup-token', 'show', 'status', 'tag', 'ultrareview',
-  'uninstall', 'update', 'upgrade', 'validate', 'xaa',
+  'sandbox', 'serve', 'setup', 'setup-token', 'show', 'status', 'tag',
+  'ultrareview', 'uninstall', 'update', 'upgrade', 'validate', 'xaa',
 ]);
 // Inject the guard --settings only for the default/model command: any -p/--print
 // invocation, or one whose first non-flag token is not a subcommand keyword.
