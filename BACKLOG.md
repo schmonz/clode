@@ -105,6 +105,24 @@ smoke and predate BOTH `62cb4e4` (the cyclic-group merge) and `712a0f1` (the mod
 probe), so they were neither of the two causes above. Their console was never captured and
 never will be. If sparc goes red again with a shape neither explains, that is where to look.
 
+## The Windows-path ratchet is blind on ~1335 lines of real code (2026-08-29)
+
+`test/windows-path-ratchet.test.cjs`'s `stripComments()` blanks `/* ... */` with a
+non-greedy regex over the whole file. build-tjs.mjs, clode-fuse.cjs, the node-shim loader and
+others embed C and JS *in string and template literals* that contain `/*` and `*/`, so the
+pairing runs away and blanks real code: 1335 lines across 14 of the scanned files, measured
+2026-08-29. Every rule in that file — path-walk, x-ok-exec, slash-only-pathedness,
+bare-npm-spawn — is silently unenforced on those lines.
+
+It surfaced by accident: reordering two `const` declarations in build-tjs.mjs changed the
+pairing and revealed two pre-existing `process.env.PATH` sites (the cosmocc bin-dir prepend)
+that the scan had never seen. They are allowlisted with a reason; the blindness is not fixed.
+
+A real fix needs string/template-aware stripping (a tokenizer, or at minimum tracking quote
+state), and will surface an unknown number of previously-hidden hits that each need reading
+and judging — which is the work, and why it is here rather than in that commit. Until then
+this ratchet's green means less than it looks like it means.
+
 ## No CI leg carves a zstd row in a guest any more (2026-08-29)
 
 RESOLVED, and this is the residue. `netbsd-sparc` was red because its guest — our own pinned
