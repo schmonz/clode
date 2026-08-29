@@ -361,6 +361,33 @@ const deadlockOpts = !HAVE_ZSTD_CLI ? zstdOpts
   : (IS_TJS && !process.env.CLODE_TJS)
     ? { skip: 'running on tjs but CLODE_TJS is unset, so the child engine cannot be located' }
     : {};
+// The guard below can fail three ways and only ONE of them is the regression it was built for.
+// Told apart from the child's own result rather than assumed — see the hermetic row at the
+// bottom of this file for the incident that made naming them separately necessary.
+function describeDecodeFailure(frameLen, r) {
+  const stderr = String(r.stderr || '').trim();
+  const head = `decoding a ${frameLen}-byte frame did not complete`;
+  // node's spawnSync reports a timeout as status null + a signal + error.code ETIMEDOUT; any
+  // other kill also arrives as status null with a signal. Either way the child never chose to
+  // exit, which is what "hung" means here.
+  const hung = (r.error && r.error.code === 'ETIMEDOUT') || (r.status === null && !!r.signal);
+  if (hung) {
+    return `${head}: the child HUNG and had to be killed (signal=${r.signal}, `
+      + `err=${r.error && r.error.code}). That is this guard's regression: the decoder is `
+      + "streaming the frame through the child's stdin, so the parent blocks writing it while "
+      + 'the child blocks on a stdout nobody is draining.'
+      + (stderr ? `\nwhat the child said before it hung:\n${stderr.slice(0, 800)}` : '');
+  }
+  if (stderr) {
+    return `${head}: the decoder FAILED on its own terms — it exited ${r.status} rather than `
+      + 'hanging, so the hazard this guard watches for is NOT what happened. What it said IS '
+      + `the diagnosis:\n${stderr.slice(0, 1200)}`;
+  }
+  return `${head}: the child exited ${r.status} and said nothing — no output at all, so neither `
+    + '"it hung" nor "it failed for reason X" can be concluded from this result. Re-run it with '
+    + "the child's stderr inherited.";
+}
+
 test('the decoder must not stream the frame through the child stdin (deadlock guard)', deadlockOpts, () => {
   const plain = Buffer.from(pseudoText(6 << 20));
   const frame = makeZstdFrameViaCli(plain);
@@ -377,10 +404,7 @@ test('the decoder must not stream the frame through the child stdin (deadlock gu
   `);
   const [cmd, argv] = childRuntime(script);
   const r = require('node:child_process').spawnSync(cmd, argv, { encoding: 'utf8', timeout: 60000 });
-  assert.strictEqual(r.status, 0,
-    `decoding a ${frame.length}-byte frame did not complete: the decoder is streaming the frame `
-    + `through the child's stdin, which deadlocks under tjs. status=${r.status} `
-    + `signal=${r.signal} err=${r.error && r.error.code} stderr=${(r.stderr || '').slice(0, 400)}`);
+  assert.strictEqual(r.status, 0, describeDecodeFailure(frame.length, r));
   assert.strictEqual((r.stdout || '').trim(), 'LEN ' + plain.length);
 });
 
@@ -594,4 +618,43 @@ test('loadGraphFromBytes returns only js rows, keyed by module name', provOpts, 
       assert.strictEqual(typeof src, 'string', bin);
     }
   }
+});
+
+// THE GUARD ABOVE MUST NOT NAME THE WRONG CAUSE. It asserts only that the child exited 0, and
+// its message used to blame the stdin deadlock for every way that can fail. On 2026-08-29 a
+// windows-latest runner ran out of disk; `C:\tools\zstd\zstd.EXE` exited 70 with
+// `zstd: error 70 : Write error : cannot write block : No space left on device`; bun-graph
+// reported that verbatim on the child's stderr — and the row still said "the decoder is
+// streaming the frame through the child's stdin, which deadlocks under tjs". The real cause was
+// sitting in `r.stderr` the whole time, and the wrong one cost a reviewer a diagnosis.
+//
+// A diagnostic that confidently names the wrong cause is worse than no diagnostic, so the three
+// outcomes are told apart from the child's own result and asserted here — hermetically, with no
+// zstd, no engine and no 6 MB fixture, so this row runs on every leg including the ones where
+// the guard itself skips.
+test('the deadlock guard tells a hung decode apart from a failed one', () => {
+  const HUNG = describeDecodeFailure(3980022, {
+    status: null, signal: 'SIGTERM', error: Object.assign(new Error('spawnSync ETIMEDOUT'), { code: 'ETIMEDOUT' }), stdout: '', stderr: '',
+  });
+  assert.match(HUNG, /HUNG/, 'a timed-out child is the deadlock this guard exists for');
+  assert.match(HUNG, /streaming the frame/,
+    'and for THAT outcome the stdin claim is the right one to make');
+
+  // The real CI failure, verbatim. It must NOT be reported as the deadlock.
+  const FAILED = describeDecodeFailure(3980022, {
+    status: 1, signal: null, error: undefined, stdout: '',
+    stderr: 'Error: bun-graph: this provider embeds zstd-compressed assets and this runtime cannot '
+      + 'decode them (C:\\tools\\zstd\\zstd.EXE exited 70: zstd: error 70 : Write error : cannot '
+      + 'write block : No space left on device)',
+  });
+  assert.doesNotMatch(FAILED, /HUNG|streaming the frame/,
+    'a decoder that FAILED and said why must not be reported as the stdin deadlock');
+  assert.match(FAILED, /No space left on device/,
+    "the decoder's own stderr is the diagnosis and must be quoted, not summarised away");
+  assert.match(FAILED, /exited 1\b/);
+
+  // Nonzero, silent: neither conclusion is available, and it must say so rather than pick one.
+  const MUTE = describeDecodeFailure(3980022, { status: 3, signal: null, error: undefined, stdout: '', stderr: '   ' });
+  assert.doesNotMatch(MUTE, /HUNG|streaming the frame/);
+  assert.match(MUTE, /no output at all|said nothing/i);
 });
