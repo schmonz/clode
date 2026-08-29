@@ -2778,6 +2778,54 @@ after the matrix — "how a step fails is part of what the step IS".
 treat a silent fallback as success.
 
 
+### ★★★ Out-of-tree builds must be easy AND the default (user, 2026-08-28)
+
+**The user:** "Out of tree builds are to be easy and default."
+
+**Measured, on this box, 2026-08-28.** The checkout lives on NFS
+(`ap-juicer:/export/code/trees` -> `/Users/schmonz/Documents/shared-trees`). Same operations,
+same machine, NFS vs local disk:
+
+| operation | NFS (repo) | local | penalty |
+|---|---|---|---|
+| 8 MB write | 441 ms | 4 ms | 110x |
+| 8 MB read | 364 ms | 2 ms | 182x |
+| **300 file creates** | **39,838 ms** | 40 ms | **~1000x** |
+| 300 stats | 1,368 ms | 1 ms | ~1400x |
+| 300 reads | 3,071 ms | 7 ms | ~440x |
+
+**133 ms per file create.** Bulk throughput is merely bad; METADATA operations are
+catastrophic — and a build is almost entirely metadata operations. Node stats hundreds of
+files per `require`, the fuse worker materializes a member tree, tests create fixtures.
+
+**It also poisons the tree itself.** 2,913 AppleDouble `._*` files, and 513 loose git objects
+because `git gc` cannot repack on this mount ([[git-gc-fails-appledouble]]) — so git gets
+slower over time and never recovers.
+
+**The part that should worry us most: it silently corrupts our PERFORMANCE WORK.** We spent
+today's effort on merger timings — 398s baseline, 643s after a fix, 223s after a memo — and
+treated them as CPU. Those runs read `libexec/` from NFS. Any number measured here conflates
+CPU with a filesystem that is 1000x slower at the operation builds do most. We do not
+currently know how much of any of those figures was I/O, which means a "regression" or a
+"win" measured on this box can be neither. Same shape as
+[[instruments-lie-check-them-first]], one layer lower: the instrument is the FILESYSTEM.
+
+**The ask, and "default" is the load-bearing word.** Not a documented `CLODE_CACHE=/tmp/...`
+incantation — the incantation already exists and I used it today for one build, which is
+exactly why it is not enough: it protects whoever remembers it, on the runs they remember it
+for. A build should place every byte it writes on local disk without being asked, and should
+never write into the checkout at all. Then a shared/NFS tree stays a perfectly good place to
+KEEP source (which is why it is on NFS — the user shares it across machines), and stops being
+the place we BUILD.
+
+Design notes worth carrying:
+- The source tree is still READ over NFS even with scratch elsewhere; if that read cost
+  matters, the build wants a local materialized copy of its inputs, not just its outputs.
+- `git gc` should be made to work (or the `._*` files swept) or the repo degrades on its own.
+- Once builds are out of tree by default, `bin/` holding a built binary stops being a
+  contradiction — see the stage0 entry above.
+
+
 ### ★★★ clode is a BINARY WE BUILD, and only that — retire bin/clode as a way to run clode (user, 2026-08-28)
 
 **The user:** "I think we confuse ourselves having bin/clode in tree and using it for some
