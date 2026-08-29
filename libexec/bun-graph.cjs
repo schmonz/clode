@@ -237,11 +237,17 @@ function zstdViaCli(buf) {
   }
   if (!r) { ZSTD_WHY = 'spawnSync ' + bin + ' returned nothing'; return null; }
   if (r.status !== 0) {
-    // Node reports a failed LAUNCH as r.error with status null; tjs's shim reshapes its C-side
-    // throw into the same contract (child_process.cjs, launchError), so one branch reads both.
-    ZSTD_WHY = r.error ? ('could not run ' + bin + ': ' + r.error.message)
-      : (bin + ' exited ' + r.status + (r.signal ? ' on ' + r.signal : '') + ': '
-         + String(r.stderr || '').trim());
+    // r.error does NOT mean the same thing on both runtimes, and saying "could not run" would be
+    // a lie on the one that ships. Node sets it for a failed LAUNCH (status null). The shim sets
+    // it only on the ETIMEDOUT path (child_process.cjs), and since no `timeout` is passed here,
+    // the sole way to reach it under tjs is a maxBuffer overrun — mod_spawn_sync.c reports an
+    // overrun and a real timeout through the same `timedOut` flag and cannot tell them apart.
+    // So on the engine this branch means "started fine, produced more than we allowed", and the
+    // child's stderr is the only thing that can say which. Append it in both cases.
+    var tail = String(r.stderr || '').trim();
+    ZSTD_WHY = (r.error ? ('could not run or complete ' + bin + ': ' + r.error.message)
+      : (bin + ' exited ' + r.status + (r.signal ? ' on ' + r.signal : '')))
+      + (tail ? ': ' + tail : '');
     return null;
   }
   // status 0 with EMPTY stdout is a SUCCESSFUL decode of an empty asset, not a failure. The
@@ -262,24 +268,109 @@ function zstdScratchDir(fs, os, path) {
   return ZSTD_SCRATCH;
 }
 
+// THE ONE INPUT ON WHICH THE TWO PATHS DISAGREE: concatenated frames. `zstd -d -c` decodes a
+// frame SEQUENCE and returns all of it; `zlib.zstdDecompressSync` returns only the FIRST frame.
+// Measured: two 23-byte-content frames back to back give 46 bytes from the CLI and 23 from zlib,
+// both with no error. At most one of those matches upstream's `Bun.zstdDecompressSync`, so on
+// such a row the dev path and the shipped path would embed DIFFERENT bytes and neither would say
+// so — the exact "builds green, dies on the first turn" shape. No 2.1.251 row is like this (all
+// 101 verified single-frame), and this makes sure we hear about it if one ever is.
+//
+// Frame_Content_Size (RFC 8878 3.1.1.1) is the cheap check: the header states the decoded size of
+// THIS frame, so a decode that overruns it decoded something else as well. Measured on the real
+// 2.1.251 provider: present and exact on 101 of 101 rows. Returns null when the field is absent
+// (legal, and then we simply cannot check).
+function zstdContentSize(u8, p, len) {
+  if (len < 6) return null;
+  var d = u8[p + 4];                                    // Frame_Header_Descriptor
+  var fcsFlag = (d >> 6) & 3, single = (d >> 5) & 1, didFlag = d & 3;
+  var fcsSize = fcsFlag === 0 ? (single ? 1 : 0) : (fcsFlag === 1 ? 2 : (fcsFlag === 2 ? 4 : 8));
+  if (!fcsSize) return null;
+  var didSize = didFlag === 3 ? 4 : didFlag;            // 0/1/2/4, never 3
+  var at = p + 5 + (single ? 0 : 1) + didSize;          // +1 Window_Descriptor unless single-segment
+  if (at + fcsSize > p + len) return null;
+  var lo = 0, hi = 0, i;
+  for (i = 0; i < (fcsSize < 4 ? fcsSize : 4); i++) lo += u8[at + i] * Math.pow(2, 8 * i);
+  for (i = 4; i < fcsSize; i++) hi += u8[at + i] * Math.pow(2, 8 * (i - 4));
+  var v = lo + hi * 4294967296;
+  if (fcsSize === 2) v += 256;                          // the 2-byte encoding is biased by 256
+  return v;
+}
+
+// WHERE THE FIRST FRAME ENDS. The Frame_Content_Size check below pins the CLI path, but NOT the
+// zlib one: given a concatenated sequence, zlib returns exactly the first frame, whose length
+// matches its own header, so a length check sees nothing wrong while the second frame is silently
+// dropped. Only the BYTES can answer this. Walking the block chain is ~15 lines and refuses any
+// trailing content — a second frame, a skippable frame, junk — before either decoder runs, so
+// both paths refuse the same input for the same reason.
+//
+// Block_Header is 3 bytes LE: bit 0 Last_Block, bits 1-2 Block_Type, bits 3+ Block_Size.
+// Types: 0 Raw (Block_Size bytes follow), 1 RLE (exactly 1 byte follows), 2 Compressed
+// (Block_Size bytes), 3 Reserved (invalid). Returns the offset just past the frame, or null if
+// the frame cannot be walked — in which case we do not second-guess the decoders.
+function zstdFrameEnd(u8, p, len) {
+  var end = p + len;
+  if (len < 6) return null;
+  var d = u8[p + 4];
+  var fcsFlag = (d >> 6) & 3, single = (d >> 5) & 1, checksum = (d >> 2) & 1, didFlag = d & 3;
+  if ((d >> 3) & 1) return null;                        // reserved bit must be zero
+  var fcsSize = fcsFlag === 0 ? (single ? 1 : 0) : (fcsFlag === 1 ? 2 : (fcsFlag === 2 ? 4 : 8));
+  var at = p + 5 + (single ? 0 : 1) + (didFlag === 3 ? 4 : didFlag) + fcsSize;
+  for (;;) {
+    if (at + 3 > end) return null;
+    var h = u8[at] | (u8[at + 1] << 8) | (u8[at + 2] << 16);
+    var last = h & 1, type = (h >> 1) & 3, size = h >>> 3;
+    if (type === 3) return null;                        // Reserved: not a frame we can walk
+    at += 3 + (type === 1 ? 1 : size);
+    if (at > end) return null;
+    if (last) break;
+  }
+  if (checksum) at += 4;
+  return at > end ? null : at;
+}
+
 // `opts.forceCli` exists ONLY for the test that pins the two paths to byte-identical output. A
 // green `node --test` run otherwise never touches the CLI branch, which is the branch that ships.
 function zstdToText(u8, p, len, opts) {
   var buf = Buffer.from(u8.buffer, u8.byteOffset + p, len);
+  // Refuse a frame SEQUENCE before decoding, so both paths refuse it identically. Done on the
+  // bytes because a decoded-length check cannot see it on the zlib path (see zstdFrameEnd).
+  var frameEnd = zstdFrameEnd(u8, p, len);
+  if (frameEnd !== null && frameEnd !== p + len) {
+    throw new Error('bun-graph: this zstd row has ' + (p + len - frameEnd) + ' bytes after the '
+      + 'end of its first frame. `zstd` decodes a frame SEQUENCE in full and node:zlib decodes '
+      + 'only the first, so the dev path and the shipped path would embed different bytes. '
+      + 'Refusing rather than picking one.');
+  }
+  var out = null;
   if (!(opts && opts.forceCli)) {
     var zlib = null;
     try { zlib = require('node:zlib'); } catch (e) { /* not node, or no zlib */ }
-    if (zlib && typeof zlib.zstdDecompressSync === 'function') {
-      return zlib.zstdDecompressSync(buf).toString('utf8');
+    // A THROW FROM zlib IS NOT A REASON TO TRY THE CLI, deliberately. If zstdDecompressSync
+    // exists and rejects the frame (a window-size limit, a future frame feature), that is a fact
+    // about the FRAME, and quietly succeeding via a different decoder would mean the dev path and
+    // the shipped path disagree about the same bytes — which is the failure this whole section is
+    // built to prevent. Let it escape and be loud. Chosen, not overlooked: do not "fix" it.
+    if (zlib && typeof zlib.zstdDecompressSync === 'function') out = zlib.zstdDecompressSync(buf);
+  }
+  if (!out) {
+    out = zstdViaCli(buf);
+    if (!out) {
+      throw new Error('bun-graph: this provider embeds zstd-compressed assets and this runtime '
+        + 'cannot decode them (' + (ZSTD_WHY || 'no reason recorded') + '). Install `zstd` (or point '
+        + 'CLODE_ZSTD at it); node:zlib.zstdDecompressSync also works on Node 22.15/24+. The '
+        + 'alternative is a target that builds green and dies on its first turn with "embedded text '
+        + 'asset is missing or corrupt".');
     }
   }
-  var out = zstdViaCli(buf);
-  if (out) return out.toString('utf8');
-  throw new Error('bun-graph: this provider embeds zstd-compressed assets and this runtime '
-    + 'cannot decode them (' + (ZSTD_WHY || 'no reason recorded') + '). Install `zstd` (or point '
-    + 'CLODE_ZSTD at it); node:zlib.zstdDecompressSync also works on Node 22.15/24+. The '
-    + 'alternative is a target that builds green and dies on its first turn with "embedded text '
-    + 'asset is missing or corrupt".');
+  var want = zstdContentSize(u8, p, len);
+  if (want !== null && out.length !== want) {
+    throw new Error('bun-graph: zstd frame declares ' + want + ' bytes of content but decoded to '
+      + out.length + '. The usual cause is a CONCATENATED frame sequence, which `zstd` decodes in '
+      + 'full and node:zlib decodes only the first of — so the two would embed different bytes. '
+      + 'Refusing rather than picking one.');
+  }
+  return out.toString('utf8');
 }
 
 // TEXT ASSETS the bundle reads by their container name. Separate from loadGraphFromBytes because

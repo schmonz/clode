@@ -185,14 +185,68 @@ function haveZlibZstd() {
   try { return typeof require('node:zlib').zstdCompressSync === 'function'; } catch (e) { return false; }
 }
 const HAVE_ZLIB_ZSTD = haveZlibZstd();
+// EVERY FIXTURE FRAME IS BUILT FROM A FILE, never through the child's stdin. The stdin shape is
+// the write-all-then-drain hazard the product itself now avoids (see bun-graph.cjs); a fixture
+// builder that used it would, on a leg whose wall sits lower than this one's, turn into a silent
+// 120-second engine-test timeout instead of a comprehensible failure. The `timeout` is a second
+// belt: if it ever does hang, it fails in 60 s naming the cause.
+let SCRATCH = null;
+function scratch() {
+  if (!SCRATCH) SCRATCH = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'clode-zstd-test-'));
+  return SCRATCH;
+}
 function makeZstdFrame(text) {
   if (HAVE_ZLIB_ZSTD) return require('node:zlib').zstdCompressSync(Buffer.from(text, 'utf8'));
-  return execFileSync(ZSTD_BIN, ['-q', '-c'], { input: Buffer.from(text, 'utf8'), maxBuffer: 1 << 26 });
+  const src = path.join(scratch(), 'plain.txt');
+  fs.writeFileSync(src, Buffer.from(text, 'utf8'));
+  try {
+    return execFileSync(ZSTD_BIN, ['-q', '-c', src], { maxBuffer: 1 << 28, timeout: 60000 });
+  } finally { try { fs.unlinkSync(src); } catch (e) { /* best effort */ } }
+}
+// The CLI specifically, even where zlib could compress — the deadlock guard below needs a frame
+// whose SIZE it controls, and zlib and the CLI do not produce identical sizes.
+function makeZstdFrameViaCli(buf) {
+  const src = path.join(scratch(), 'plain.bin');
+  fs.writeFileSync(src, buf);
+  try {
+    return execFileSync(ZSTD_BIN, ['-q', '-c', src], { maxBuffer: 1 << 28, timeout: 60000 });
+  } finally { try { fs.unlinkSync(src); } catch (e) { /* best effort */ } }
 }
 const compressOpts = (HAVE_ZLIB_ZSTD || HAVE_ZSTD_CLI) ? {}
   : { skip: `no zstd compressor: neither node:zlib.zstdCompressSync nor \`${ZSTD_BIN}\` on PATH` };
 const zstdOpts = HAVE_ZSTD_CLI ? {}
   : { skip: `no \`${ZSTD_BIN}\` on PATH (set CLODE_ZSTD); cannot build a real frame to decode` };
+
+// POORLY COMPRESSIBLE ON PURPOSE. The stdin deadlock is driven by FRAME size, so a fixture has to
+// resist compression to reach it — and a first draft of this used a plain LCG
+// (`x*1103515245+12345`), which loses precision past 2^53 in JS, degenerates, and compressed 90:1.
+// 4 MB of "random" text became a 44 KB frame, well under the wall the test was supposed to clear.
+// xorshift32 stays in 32-bit range and holds a ~1.58:1 ratio.
+function pseudoText(nbytes) {
+  const parts = [];
+  let total = 0, x = 123456789;
+  while (total < nbytes) {
+    x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0;
+    const t = x.toString(36) + ' ';
+    parts.push(t); total += t.length;
+  }
+  return parts.join('');
+}
+
+// Re-invoke WHICHEVER RUNTIME is executing this file, so the deadlock guard tests the engine when
+// run under the engine and node when run under node. engine-test.mjs scrubs CLODE_* but sets
+// CLODE_TJS explicitly, which is how the child engine is located.
+const IS_TJS = typeof globalThis.tjs !== 'undefined';
+function childRuntime(script) {
+  if (IS_TJS) {
+    return [process.env.CLODE_TJS, ['run', path.join(REPO, 'libexec/node-shim/loader.cjs'), script]];
+  }
+  return [process.execPath, [script]];
+}
+
+// The stderr row needs a POSIX shell script as a fake decoder; win32 has no /bin/sh to run one.
+const stderrOpts = !HAVE_ZSTD_CLI ? zstdOpts
+  : (process.platform === 'win32' ? { skip: 'needs a /bin/sh fake decoder; not on win32' } : {});
 
 // 2.1.251 MOVED 94 EMBEDDED ASSETS from loader 13 to loader 5 by COMPRESSING them, and taking
 // only loader 13 shipped a target that built green and died on its first turn with upstream's
@@ -236,75 +290,138 @@ test('loader 13 is text — the row class 2.1.246 introduced', () => {
 // ---- the external zstd decoder: the ONLY path the SHIPPED builder has --------
 //
 // `node:zlib.zstdDecompressSync` is a Node 22.15/24+ thing. Every PUBLISHED clode is a fused
-// tjs binary, and tjs has no zstd anywhere — so on the shipped artifact these two tests are the
+// tjs binary, and tjs has no zstd anywhere — so on the shipped artifact these tests are the
 // whole of zstd support. They are written to run identically under `node --test` and under
 // scripts/engine-test.mjs, because a green run on Node proves nothing about the thing we ship.
+
 test('zstdToText decodes a real CLI-made frame, by CLI and by zlib alike', zstdOpts, () => {
   const zstdText = 'clode zstd round-trip ' + 'x'.repeat(4096);
-  const frame = execFileSync(ZSTD_BIN, ['-q', '-c'], { input: Buffer.from(zstdText), maxBuffer: 1 << 26 });
+  const frame = makeZstdFrameViaCli(Buffer.from(zstdText));
   assert.deepStrictEqual(Array.from(frame.subarray(0, 4)), [0x28, 0xb5, 0x2f, 0xfd], 'is a zstd frame');
   // The CLI path must produce byte-identical text to the zlib path.
   assert.strictEqual(bunGraph.__zstdToTextForTest(frame, 0, frame.length, { forceCli: true }), zstdText);
   assert.strictEqual(bunGraph.__zstdToTextForTest(frame, 0, frame.length, { forceCli: false }), zstdText);
 });
 
-// THE ROW THAT ACTUALLY SHIPS. The 4 KB case above passes even through a decoder that writes the
-// frame to the child's stdin and only then starts reading its stdout — a pipe holds 64 KB, so
-// nothing blocks. The real 2.1.251 provider is not like that: of its 101 loader-5 rows, three
-// exceed the pipe buffer COMPRESSED (mermaid.min.js 786 KB -> 3.5 MB, payload.template.html.asset
-// 742 KB -> 2.5 MB, hljsBundle 167 KB -> 591 KB). Write-all-then-drain deadlocks on exactly those:
-// the parent blocks writing stdin while the child blocks writing a full stdout. This fixture is
-// sized past the same wall in both directions, so the deadlock cannot pass unnoticed.
-test('zstdToText decodes a frame larger than a pipe buffer, both ways', zstdOpts, () => {
-  const parts = [];
-  let total = 0, x = 123456789;
-  while (total < (2 << 20)) {
-    // xorshift32 via Math.imul — a plain LCG loses precision past 2^53 in JS, degenerates, and
-    // compresses 90:1, which would quietly shrink the fixture back under the pipe buffer.
-    x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0;
-    const t = x.toString(36) + ' ';
-    parts.push(t); total += t.length;
-  }
-  const s = parts.join('');
-  const frame = execFileSync(ZSTD_BIN, ['-q', '-c'], { input: Buffer.from(s), maxBuffer: 1 << 26 });
-  assert.ok(frame.length > (1 << 16), `frame must exceed a pipe buffer, got ${frame.length}`);
+// A MULTI-BLOCK frame, so the round-trip covers more than one zstd block in each direction. This
+// is a CORRECTNESS row and nothing more — it does NOT guard the stdin deadlock. Its earlier
+// comment claimed it did, which was false: 2 MB of this text compresses to ~1.33 MB, and a
+// stdin-shaped decoder handles that size perfectly well on the engine (measured). The guard is
+// the next test, and it is sized against the measured wall.
+test('zstdToText decodes a multi-block frame identically both ways', zstdOpts, () => {
+  const s = pseudoText(2 << 20);
+  const frame = makeZstdFrameViaCli(Buffer.from(s));
+  assert.ok(frame.length > (1 << 20), `frame should be multi-block, got ${frame.length}`);
   assert.strictEqual(bunGraph.__zstdToTextForTest(frame, 0, frame.length, { forceCli: true }), s);
   assert.strictEqual(bunGraph.__zstdToTextForTest(frame, 0, frame.length, { forceCli: false }), s);
 });
 
-// The env override, same convention as CLODE_RG / CLODE_BFS: name the binary, do not guess at it.
-test('CLODE_ZSTD names the decoder', zstdOpts, () => {
-  const frame = execFileSync(ZSTD_BIN, ['-q', '-c'], { input: Buffer.from('hello zstd'), maxBuffer: 1 << 26 });
-  const saved = process.env.CLODE_ZSTD;
-  try {
-    process.env.CLODE_ZSTD = '/nonexistent/definitely-not-zstd';
-    assert.throws(() => bunGraph.__zstdToTextForTest(frame, 0, frame.length, { forceCli: true }),
-      /cannot decode them/, 'a bad CLODE_ZSTD must refuse loudly, not silently fall back');
-  } finally {
-    if (saved === undefined) delete process.env.CLODE_ZSTD; else process.env.CLODE_ZSTD = saved;
-  }
+// THE REGRESSION GUARD FOR THE STDIN DEADLOCK, and it is sized from a measurement rather than a
+// guess. tjs's spawnSync writes the whole of `input` to the child before it starts draining
+// stdout, so a large enough frame deadlocks: parent blocked writing stdin, child blocked writing
+// a full stdout. Where the wall sits is NOT obvious and is not the pipe capacity (65536 here) —
+// measured on darwin/arm64 under the engine, decoding through stdin:
+//
+//     plaintext 2 MB -> frame 1,326,257  OK        plaintext 4 MB -> frame 2,653,148  HANGS
+//     plaintext 3 MB -> frame 1,989,824  OK        plaintext 6 MB -> frame 3,980,022  HANGS
+//
+// So the fixture is 6 MB of plaintext (~3.98 MB frame), half again past the smallest size proven
+// to hang, on the most permissive platform available here. Linux and Windows pipes are smaller,
+// so a fixture sized for darwin is conservative everywhere.
+//
+// It runs in a CHILD of whichever runtime is executing this file, with a timeout, so a decoder
+// that regresses to `{ input: buf }` FAILS IN 60 SECONDS SAYING SO instead of hanging the harness
+// until engine-test's own timeout kills it with no explanation. Proved red by actually reverting
+// zstdViaCli to the stdin shape and running it under engine-test — not by the seam being absent.
+const deadlockOpts = !HAVE_ZSTD_CLI ? zstdOpts
+  : (IS_TJS && !process.env.CLODE_TJS)
+    ? { skip: 'running on tjs but CLODE_TJS is unset, so the child engine cannot be located' }
+    : {};
+test('the decoder must not stream the frame through the child stdin (deadlock guard)', deadlockOpts, () => {
+  const plain = Buffer.from(pseudoText(6 << 20));
+  const frame = makeZstdFrameViaCli(plain);
+  assert.ok(frame.length > 2653148,
+    `fixture must exceed the smallest frame PROVEN to deadlock, got ${frame.length}`);
+  const framePath = path.join(scratch(), 'deadlock.zst');
+  fs.writeFileSync(framePath, frame);
+  const script = path.join(scratch(), 'decode.cjs');
+  fs.writeFileSync(script, `
+    const fs = require('node:fs');
+    const bg = require(${JSON.stringify(path.join(REPO, 'libexec/bun-graph.cjs'))});
+    const f = fs.readFileSync(${JSON.stringify(framePath)});
+    console.log('LEN ' + bg.__zstdToTextForTest(f, 0, f.length, { forceCli: true }).length);
+  `);
+  const [cmd, argv] = childRuntime(script);
+  const r = require('node:child_process').spawnSync(cmd, argv, { encoding: 'utf8', timeout: 60000 });
+  assert.strictEqual(r.status, 0,
+    `decoding a ${frame.length}-byte frame did not complete: the decoder is streaming the frame `
+    + `through the child's stdin, which deadlocks under tjs. status=${r.status} `
+    + `signal=${r.signal} err=${r.error && r.error.code} stderr=${(r.stderr || '').slice(0, 400)}`);
+  assert.strictEqual((r.stdout || '').trim(), 'LEN ' + plain.length);
 });
 
+// CONCATENATED FRAMES ARE THE ONE INPUT ON WHICH THE TWO PATHS DISAGREE: `zstd -d -c` returns
+// every frame in the sequence, node:zlib returns only the first, and neither errors. Whichever
+// one upstream's Bun.zstdDecompressSync matches, the other embeds different bytes into the
+// target — silently. No 2.1.251 row is like this; the point is to hear about it if one ever is.
+//
+// BOTH paths must refuse, which is why the check is structural. A decoded-LENGTH check against
+// Frame_Content_Size catches the CLI (it returns both frames) but is blind on the zlib path,
+// where the returned first frame matches its own header exactly while the second is dropped.
+// This test failed on precisely that asymmetry before the byte-level frame walk was added.
+test('a concatenated frame sequence is REFUSED, not silently half-decoded', zstdOpts, () => {
+  const one = makeZstdFrameViaCli(Buffer.from('first frame contents\n'));
+  const two = makeZstdFrameViaCli(Buffer.from('second frame contents\n'));
+  const pair = Buffer.concat([one, two]);
+  for (const forceCli of [true, false]) {
+    assert.throws(() => bunGraph.__zstdToTextForTest(pair, 0, pair.length, { forceCli }),
+      /bytes after the end of its first frame|declares \d+ bytes of content but decoded to \d+/,
+      `forceCli=${forceCli}: a frame sequence must be refused, not half-decoded`);
+  }
+  // and the single frame it was built from still decodes fine, so the check is not just "throw"
+  assert.strictEqual(bunGraph.__zstdToTextForTest(one, 0, one.length, { forceCli: true }),
+    'first frame contents\n');
+});
 
 // AN EMPTY ASSET IS NOT A BROKEN DECODER. The magic-byte gate admits a 13-byte frame whose
 // payload is zero bytes, and a CLI wrapper that reads "status 0, no stdout" as failure would
 // refuse an entire provider for containing one empty file.
 test('an empty zstd frame decodes to an empty string, it does not refuse', zstdOpts, () => {
-  const frame = execFileSync(ZSTD_BIN, ['-q', '-c'], { input: Buffer.alloc(0), maxBuffer: 1 << 26 });
+  const frame = makeZstdFrameViaCli(Buffer.alloc(0));
   assert.deepStrictEqual(Array.from(frame.subarray(0, 4)), [0x28, 0xb5, 0x2f, 0xfd], 'is a zstd frame');
   assert.strictEqual(bunGraph.__zstdToTextForTest(frame, 0, frame.length, { forceCli: true }), '');
   assert.strictEqual(bunGraph.__zstdToTextForTest(frame, 0, frame.length, { forceCli: false }), '');
 });
 
+// The env override, same convention as CLODE_RG / CLODE_BFS: name the binary, do not guess at it.
 // The refusal has to say WHY. This fails on machines we are not sitting at; "cannot decode them"
 // with no cause sends the next person hunting the provider instead of their PATH.
-test('the refusal names the cause, not just the symptom', zstdOpts, () => {
-  const frame = execFileSync(ZSTD_BIN, ['-q', '-c'], { input: Buffer.from('hello'), maxBuffer: 1 << 26 });
+test('CLODE_ZSTD names the decoder, and the refusal names the cause', zstdOpts, () => {
+  const frame = makeZstdFrameViaCli(Buffer.from('hello'));
   const saved = process.env.CLODE_ZSTD;
   try {
     process.env.CLODE_ZSTD = '/nonexistent/definitely-not-zstd';
     assert.throws(() => bunGraph.__zstdToTextForTest(frame, 0, frame.length, { forceCli: true }),
+      /cannot decode them/, 'a bad CLODE_ZSTD must refuse loudly, not silently fall back');
+    assert.throws(() => bunGraph.__zstdToTextForTest(frame, 0, frame.length, { forceCli: true }),
       /definitely-not-zstd/, 'the error must name the binary it could not run');
+  } finally {
+    if (saved === undefined) delete process.env.CLODE_ZSTD; else process.env.CLODE_ZSTD = saved;
+  }
+});
+
+// CHARACTERIZATION (not proved red — it pins behaviour the fix already had): when the decoder
+// RUNS but fails, its own stderr is the only thing that can say why, so it must reach the caller.
+test('a decoder that runs and fails surfaces its stderr', stderrOpts, () => {
+  const frame = makeZstdFrameViaCli(Buffer.from('hello'));
+  const fake = path.join(scratch(), 'fake-zstd');
+  fs.writeFileSync(fake, '#!/bin/sh\necho "zstd: unsupported frame parameter" 1>&2\nexit 3\n');
+  fs.chmodSync(fake, 0o755);
+  const saved = process.env.CLODE_ZSTD;
+  try {
+    process.env.CLODE_ZSTD = fake;
+    assert.throws(() => bunGraph.__zstdToTextForTest(frame, 0, frame.length, { forceCli: true }),
+      /unsupported frame parameter/, 'the decoder stderr must reach the refusal');
   } finally {
     if (saved === undefined) delete process.env.CLODE_ZSTD; else process.env.CLODE_ZSTD = saved;
   }
