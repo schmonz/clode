@@ -2919,6 +2919,68 @@ after the matrix — "how a step fails is part of what the step IS".
 treat a silent fallback as success.
 
 
+### ★★★ Nothing gates the gates — make "a guard that cannot fail" structurally impossible (user, 2026-08-29)
+
+**The user:** "How are you finding these gaps? Is it automated into the build? Or is that another
+one for ***?"
+
+**It is not automated. It is people poking at instruments, and that is why it is not repeatable.**
+Here is how each defect found on 2026-08-28/29 was ACTUALLY discovered:
+
+| defect | how it was found | automated? |
+|---|---|---|
+| shipped builder cannot decode zstd (all 21 legs) | CI failed loudly | **yes** |
+| a test seeded the real `~/.local/share/clode` | the hermeticity gate | **yes** |
+| Windows `accessSync(X_OK)` = EINVAL for every path | CI, but only after an unrelated change routed through `findTool` | partly |
+| oracle harness cannot resolve chunks (since 2.1.243) | CI — but invisible for WEEKS because pushes kept cancelling those slow jobs | the signal existed and was being destroyed |
+| the pipe-deadlock guard could not fail | a reviewer REVERTED the fix by hand and watched 21/22 rows stay green | no |
+| the KAT a header-walking fake could pass | a reviewer BUILT the fake and ran it | no |
+| the leg regex matched the library (`zstd`) not the command (`cmd:zstd`) | a reviewer MUTATED the value and watched 41/41 stay green | no |
+| layer-2 shim map reported zero gaps for two years | the assert died on `Bun.ant` first; someone checked instead of re-baselining | no |
+| SUBCOMMANDS regex matched nothing since 2.1.243 | counting occurrences by hand | no |
+| scanner counts OUR generated wrappers and `export{}` facades as upstream references | manual classification of every hit | no |
+| `windows-path-ratchet`'s `stripComments()` blanks 1,335 lines across 14 files | unmasked by accident when an agent reordered declarations | no |
+| the suite's verdict depends on which `node` runs it (SEA layout changed in node 26) | two agents reported different baselines on identical commits; testing the variable | no |
+
+**Eight of twelve were found by hand, by someone being suspicious.** That is not a process, it is
+a mood. It worked because this session happened to have adversarial reviewers with budget; it
+will not survive a tired afternoon.
+
+**The unifying defect: we have many gates, and NOTHING GATES THE GATES.** Every hand-found item
+above is one shape — a guard that could not fail. It passed for a reason unrelated to the
+property it claimed to check: a regex that matched nothing, a fixture below the threshold, a KAT
+whose only block was RAW, a scanner counting our own emitted code, a comment stripper that ate
+the file.
+
+**The mechanism that makes this structural is MUTATION TESTING, and we already do it by hand.**
+Every one of those was caught the same way: BREAK THE THING THE GUARD CLAIMS TO DETECT, ASSERT THE
+GUARD GOES RED. Reviewers did it manually and it worked every time it was tried. The ask is to
+stop doing that as a favour and make it a property of the build:
+
+1. **A guard must ship with its own red proof.** Not "the test passed" — a recorded mutation that
+   makes it fail. If a change cannot make it red, it is not a guard, and CI should say so.
+2. **Zero is a failure, not a pass.** Any scanner that can return "found nothing" must treat a
+   zero result as broken unless a floor is asserted. Note the one place this ALREADY existed —
+   `expected many minified require("fs") aliases, found 0` — is the reason we caught the
+   two-year-blind map at all. Generalise that reflex.
+3. **A scanner must not count our own emitted code.** Three classes of false positive
+   (`__m["X"]` interop wrappers, generated `export{}` facades, recycled minified names) inflated
+   an 8-item gap list to roughly 2 real items.
+4. **Record the environment with the verdict.** "The suite is green" is a property of the tree
+   PLUS the interpreter, and nothing printed which interpreter. Two agents disagreed on identical
+   commits for a whole afternoon.
+5. **Never let a slow gate's signal be destroyed by a fast one.** `if: ${{ !cancelled() }}` on
+   `node-shim-oracle` exists because a haiku failure once skipped it and three windows jobs in one
+   stroke. The same lesson applies to the CONTROLLER: pushing for fast leg feedback cancelled the
+   slow oracle jobs for many commits, which is exactly how a weeks-old red stayed invisible.
+
+**Why this belongs in *** and not in a test file:** items 1-5 are properties of how the build
+reports, not features of any one gate. Bolting them onto individual tests reproduces the problem
+one level up — a hand-maintained list of which guards were mutation-checked, which will itself go
+stale silently. See also [[instruments-lie-check-them-first]], which states the principle; this
+entry is the argument that the principle needs a mechanism.
+
+
 ### ★★★ Out-of-tree builds must be easy AND the default (user, 2026-08-28)
 
 **The user:** "Out of tree builds are to be easy and default."
