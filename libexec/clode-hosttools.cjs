@@ -18,10 +18,34 @@ const path = require('node:path');
 // Is `p` an executable regular file? (sh `command -v`/`[ -x ]` accept a path only
 // when it resolves to something runnable.) Any error (missing, EACCES, a dir) is
 // a plain "not executable".
-function isExecutableFile(p) {
+//
+// WIN32 DOES NOT ASK X_OK, and that is not a tidy-up — it is the difference between
+// finding the host's tools and reporting that Windows ships none. Under quaude/tjs
+// `fs.accessSync` is __tjs_fs_sync.access -> the CRT's `_access`, which validates its
+// mode as `(mode & ~6) == 0` and therefore rejects X_OK (1) with EINVAL for EVERY
+// path, existing or not. Under Node/libuv the identical call is a no-op that succeeds
+// (fs__access only consults FILE_ATTRIBUTE_READONLY, and only for W_OK). So this
+// predicate answered "no" for every candidate on the SHIPPED Windows binary while
+// answering "yes" under Node — invisible to every Node-side test.
+//
+// libexec/bun-shim.cjs:825-843 had already worked this out for its own `which` and
+// marked it "UNVERIFIED ON WINDOWS". CI run 33245690046 verified it: windows-amd64 and
+// windows-arm64 both reported `[tried: zstd: not found; unzstd: not found; zstdcat: not
+// found]` from the fused builder, in a job where actions/cache had just run
+// `tar --use-compress-program "zstd -d"` — the tool was there; this function could not
+// see it. (It surfaced only when the zstd decoder started resolving through findTool;
+// the same blindness was already costing provision('sha256'|'tar') on Windows.)
+//
+// There is no execute bit on Windows to ask about, and PATHEXT probing in findTool is
+// what makes the NAME mean "executable", so a regular-file check is the honest question.
+// POSIX is unchanged, byte for byte. `fs`/`isWin` are injectable so this is testable
+// from any host — the same seam findTool already offers.
+function isExecutableFile(p, opts = {}) {
+  const { fs: fsm = fs, isWin = process.platform === 'win32' } = opts;
   try {
-    if (!fs.statSync(p).isFile()) return false;
-    fs.accessSync(p, fs.constants.X_OK);
+    if (!fsm.statSync(p).isFile()) return false;
+    if (isWin) return true;
+    fsm.accessSync(p, fsm.constants.X_OK);
     return true;
   } catch {
     return false;
@@ -37,8 +61,12 @@ function isExecutableFile(p) {
 // child_process.cjs's resolveExe. isWin is injectable for host-independent tests.
 function findTool(name, opts = {}) {
   const {
-    override, env = process.env, isExec = isExecutableFile,
+    override, env = process.env, fs: fsm = fs,
     isWin = process.platform === 'win32',
+    // The default predicate inherits THIS call's isWin/fs, so injecting either one
+    // steers the whole lookup — otherwise a test could set isWin:true and still be
+    // answered by the host's own platform.
+    isExec = (p) => isExecutableFile(p, { fs: fsm, isWin }),
   } = opts;
   if (override && isExec(override)) return override;
   const delim = isWin ? ';' : ':';

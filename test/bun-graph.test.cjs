@@ -173,6 +173,30 @@ test('but a mis-stated length still fails LOUDLY — the invariant we KEPT', () 
 // no zstd whatsoever — so a fixture built with it made this test, the one that pins the loader-5
 // decode, fail on the ENGINE for a reason that had nothing to do with the decode. The host CLI
 // builds the same frame under both runtimes.
+// THE CLI DECODE PATH CACHES ITS RESOLVED TOOL IN THE REAL STORE, so this file has to move the
+// store before it runs. `zstdToText` -> `zstdViaCli` -> `provision('zstd')` with no `dataDir`,
+// which defaults to `clodeDataDir(env)` = ~/.local/share/clode, and a successful resolve WRITES
+// hosttools.json there. That caching is right for the product and stays; it is only a test that
+// must not do it to a real directory.
+//
+// IT HAS TO BE THE ENVIRONMENT, not an options bag: bun-graph reads `process.env` itself
+// (deliberately — it is the CLODE_RG / CLODE_BFS convention), so there is no opts seam to inject
+// through, and the same env must reach the CHILD runtimes the deadlock guard spawns. Same
+// CLODE_STATE_ROOT idiom as test/naude-sea.test.cjs and test/node-shim-toolchain.test.cjs.
+//
+// AND IT IS INVISIBLE ON A DEVELOPER BOX, which is the whole reason it shipped: test/run.mjs's
+// hermetic guard catches `ABSENT -> created`, and on any machine that has ever run clode the
+// store already exists, so the transition never happens. It failed on every fresh CI runner and
+// on no local run. Reproduce the CI condition with `HOME=$(mktemp -d)` before believing a green
+// run here. (node:test gives each FILE its own process, so this cannot leak sideways; the exit
+// hook restores it anyway for anyone who loads this file some other way.)
+const REAL_STATE_ROOT = process.env.CLODE_STATE_ROOT;
+process.env.CLODE_STATE_ROOT = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'clode-bg-state-'));
+process.on('exit', () => {
+  if (REAL_STATE_ROOT === undefined) delete process.env.CLODE_STATE_ROOT;
+  else process.env.CLODE_STATE_ROOT = REAL_STATE_ROOT;
+});
+
 const ZSTD_BIN = process.env.CLODE_ZSTD || 'zstd';
 function hostZstd() {
   try {

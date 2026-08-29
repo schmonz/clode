@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { findTool } = require('../libexec/clode-hosttools.cjs');
+const { findTool, isExecutableFile } = require('../libexec/clode-hosttools.cjs');
 
 // --- helpers ---------------------------------------------------------------
 function tmpdir() {
@@ -118,3 +118,59 @@ test('findTool on non-win32 does NOT append extensions (POSIX bare name)', () =>
   assert.match(found || '', /[\\/]rg$/);
 });
 
+// --- win32: X_OK is not a question Windows can answer ----------------------
+//
+// MEASURED, on the windows-amd64 and windows-arm64 legs of CI run 33245690046: the fused builder
+// reported `[tried: zstd: not found; unzstd: not found; zstdcat: not found]` while a `zstd` was
+// demonstrably on PATH in that same job (actions/cache ran `tar --use-compress-program "zstd -d"`
+// seconds earlier). Nothing was missing; the PREDICATE was answering no.
+//
+// `isExecutableFile` asked `accessSync(p, X_OK)`. Under quaude/tjs that is __tjs_fs_sync.access ->
+// the CRT's `_access`, which validates its mode as `(mode & ~6) == 0` and so rejects X_OK (1) with
+// EINVAL for EVERY path, existing or not. Under Node/libuv the identical call is a no-op that
+// succeeds — which is why every Node-side test passed and only the shipped tjs binary failed.
+// libexec/bun-shim.cjs:825-843 had already reasoned this out and answers with a stat on win32; it
+// noted the claim was "UNVERIFIED ON WINDOWS". These two legs verified it.
+//
+// So on win32 the honest question is "is it a regular file" — there is no execute bit to ask
+// about, and the PATHEXT probing above is what makes the name mean an executable. POSIX is
+// unchanged, byte for byte.
+// Host-independent, like the PATHEXT rows above: `path.join` uses THIS host's separator, so the
+// fake keys on the leaf name rather than the full path (a posix host builds `C:\tools/zstd.EXE`).
+function winAccessFs(leafRe) {
+  return {
+    statSync: (p) => { if (!leafRe.test(p)) { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; }
+                       return { isFile: () => true }; },
+    // The CRT's _access, faithfully: any mode with a bit outside 0o6 is EINVAL.
+    accessSync: (p, m) => { if ((m & ~6) !== 0) { const e = new Error('EINVAL'); e.code = 'EINVAL'; throw e; } },
+    constants: { X_OK: 1, F_OK: 0 },
+  };
+}
+
+test('isExecutableFile on win32 asks for a regular file, not X_OK (which _access rejects)', () => {
+  const fsm = winAccessFs(/zstd\.EXE$/);
+  assert.strictEqual(isExecutableFile('C:\\tools\\zstd.EXE', { fs: fsm, isWin: true }), true,
+    'a real .EXE must resolve even though _access(X_OK) is EINVAL for every path');
+  assert.strictEqual(isExecutableFile('C:\\tools\\absent.EXE', { fs: fsm, isWin: true }), false,
+    'and a missing file must still answer no');
+});
+
+test('isExecutableFile on POSIX still requires the execute bit', () => {
+  const fsm = {
+    statSync: () => ({ isFile: () => true }),
+    accessSync: () => { const e = new Error('EACCES'); e.code = 'EACCES'; throw e; },
+    constants: { X_OK: 1, F_OK: 0 },
+  };
+  assert.strictEqual(isExecutableFile('/usr/bin/rg', { fs: fsm, isWin: false }), false,
+    'POSIX behaviour is unchanged: no +x, no.');
+});
+
+// The end-to-end shape of the CI failure: a tool that IS on PATH, on a host whose access()
+// rejects X_OK. Before the fix findTool returns null here and provision reports "not found".
+test('findTool resolves a real .EXE on a win32 host whose access() rejects X_OK', () => {
+  const found = findTool('zstd', {
+    isWin: true, fs: winAccessFs(/zstd\.EXE$/),
+    env: { PATH: 'C:\\tools', PATHEXT: '.COM;.EXE;.BAT;.CMD' },
+  });
+  assert.match(found || '', /zstd\.EXE$/);
+});
