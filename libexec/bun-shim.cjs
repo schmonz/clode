@@ -1074,6 +1074,53 @@ const Bun = {
   TOML: Object.assign(
     { parse(){ throw new Error('Bun.TOML.parse not yet implemented in the Node host shim'); } },
     { __bunShimStub: true }),
+  // Bun.ant — DELIBERATELY ABSENT, and it must STAY absent. New in 2.1.243,
+  // Anthropic's own private Bun namespace; four methods, all needing a syscall:
+  //
+  //   getPeerUid(fd) / getPeerPid(fd)  SO_PEERCRED / LOCAL_PEERCRED on a UDS
+  //   setDumpable(bool)                Linux prctl(PR_SET_DUMPABLE, 0)
+  //   memoryPressureLevel()            macOS memory-pressure level
+  //
+  // DO NOT STUB IT. Upstream gates a whole capability on
+  // `typeof Bun.ant?.getPeerPid === "function"`, so a stub — even a throwing
+  // one — flips that probe TRUE and makes upstream advertise a peer-credential
+  // capability we cannot honor. That is the Bun.SQL trap above running in
+  // reverse: there, defining a Bun global defeated a guard that wanted Bun
+  // absent; here, defining Bun.ant would defeat a probe that is currently
+  // getting the RIGHT answer. Absent is the faithful answer, the same shape
+  // that makes Bun.WebView benign.
+  //
+  // WHY NOT IMPLEMENT IT (checked, not assumed):
+  //   - Peer credentials are technically within reach: the vendored txiki.js
+  //     exposes `socket_from_fd(fd)` and `sock.getopt(level, opt, len)` in
+  //     mod_posix-socket.c. But nothing can ever call them here, because BOTH
+  //     call sites sit behind declared node-shim walls that throw first —
+  //     `net.connect` (libexec/node-shim/modules/net.cjs `connectUnimpl`) for
+  //     the UDS client, and the missing `net.Server` for the daemon that would
+  //     accept the connection. Implementing peer creds means implementing
+  //     behind a closed door. test/bun-shim-ant-gap.test.cjs pins that
+  //     reasoning: it goes RED the day either wall comes down, which is
+  //     exactly when this decision needs re-taking.
+  //   - setDumpable: txiki.js has no prctl binding at all (grepped: zero hits).
+  //   - memoryPressureLevel: no macOS memory-pressure primitive either.
+  //
+  // WHAT A USER OBSERVES, per call site, all four with upstream's own fallback:
+  //   - capability probe -> false, so upstream drops that capability from its
+  //     advertised list. Clean feature detection; nothing is broken.
+  //   - daemon peer-uid check (`aXn`) -> catch, warn, returns null, which
+  //     upstream reads as "no objection", i.e. FAIL-OPEN. Harmless only because
+  //     no daemon can listen under the shim; it is the first thing to fix if
+  //     net.Server ever lands.
+  //   - UDS client peer-pid check -> catch, warn, then upstream REFUSES to send
+  //     ("endpoint-unverifiable"). This one is a hard refusal, not a
+  //     degradation — again unreachable only because net.connect throws first.
+  //   - macOS background low-memory probe -> catch, warn, level undefined, so
+  //     `lowMem` reads false and background sessions never retire early for
+  //     memory pressure. Non-macOS uses os.freemem() and is unaffected.
+  //   - Linux setDumpable -> reports "prctl unavailable"; the process stays
+  //     dumpable, i.e. one hardening step short of upstream.
+  //
+  // Recorded as an intentional divergence in test/shim-surface/golden.json.
   spawnSync: spawn.sync,
 };
 
