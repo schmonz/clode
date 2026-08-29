@@ -4,6 +4,49 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 (Strategic feasibility risks live in `LONG-TERM.md`; in-flight designs in
 `docs/superpowers/`. Done items are DELETED from here — git history is the record.)
 
+## netbsd-sparc's in-guest bake silently drops every `src/js/**` patch (2026-08-29)
+
+**This is the leg's SECOND cause, and it was invisible until the first was cleared.** With the
+zstd wall gone (0219aa3) the sparc smoke now carves fine — 927s of extraction and compile, RSS
+peaking at 375MB against 512MB of swap — and dies later, at the fuse. Run 33249872544, job
+99093656885, streamed console:
+
+    guest| clode: build: fusing /root/smoke/quaude ...
+    guest| clode: build: fuse worker failed (exit 1):
+    guest| quaude-fuse: 33 cyclic CJS require(s) of graph modules — merging their strongly connected groups
+    guest| Error: quaude-fuse: this engine does not report moduleMeta, which the cyclic-group
+    guest|   merge needs to know each module's real top-level bindings.
+    guest|     at mergeCyclicGroups (.../libexec/quaude-fuse.js:98:9)
+
+**Mechanism, verified from the bake's own console.** `patches/txiki-engine-module-meta.patch`
+(712a0f1) has two halves: `src/mod_engine.c` registers `core.moduleMeta` in C, and
+`src/js/core/engine.js` exposes it as `tjs.engine.moduleMeta`. txiki git-tracks `src/bundles/c/**`
+as PRE-COMPILED bytecode of `src/js/**`, so the JS half only lands if something regenerates it.
+`spike/quickjs/qemu/ci-guest-bake.sh` deliberately does not — `=== BUILD TJS (canonical-LE: no
+regen needed) ===` — and the streamed bake shows it compiling the pin's committed
+`src/bundles/c/core/core.c` straight through. Canonical-LE removed the need to regen for
+ENDIANNESS; it did nothing about regenerating for CONTENT, and nothing noticed the difference.
+So the sparc engine has the C function and not the JS binding that reaches it.
+
+This is the same class as 0c72693 ("src/js patches were silently dropped"), which made regen the
+default for `scripts/build-tjs.mjs` — the in-guest sparc bake was never brought along, and it is
+the one build path in the matrix that does not run that script.
+
+**What a fix has to decide.** Either regen in the guest (build tjs, then run the just-built
+native `tjsc` over the six bundles and relink — the shape `guest-sparc-s2.sh` used, and an
+incremental relink, not a second 40-minute build), or regen on the RUNNER and ship the result in
+`txiki-canonical-le.tar.gz` (canonical-LE bytecode is portable by construction, which is the
+whole point of it — but the host `tjs` that could produce it is built after the bake today, so
+the ordering has to change). Whichever: the ratchet is that a patch touching `src/js/**` must not
+be able to reach a build path that skips regen without something going red. `ci-guest-bake.sh`'s
+ENGINE SANITY step currently proves only `__tjs_spawn_sync` and `__tjs_fs_sync`; it is the
+natural place to prove the API surface the fuse actually needs.
+
+**Not yet accounted for:** the leg's 2026-08-28 reds (upstream 2.1.250) had a 16m33s smoke, and
+predate BOTH `62cb4e4` (the cyclic-group merge) and `712a0f1` (the moduleMeta probe), so they were
+neither of the two causes above. Their console was never captured and never will be. If sparc goes
+red again with a shape neither of these explains, that is where to look.
+
 ## No CI leg carves a zstd row in a guest any more (2026-08-29)
 
 RESOLVED, and this is the residue. `netbsd-sparc` was red because its guest — our own pinned
