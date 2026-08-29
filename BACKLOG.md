@@ -4,30 +4,27 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 (Strategic feasibility risks live in `LONG-TERM.md`; in-flight designs in
 `docs/superpowers/`. Done items are DELETED from here — git history is the record.)
 
-## netbsd-sparc fails at the in-guest carve, and CI cannot say why (2026-08-29)
+## No CI leg carves a zstd row in a guest any more (2026-08-29)
 
-`netbsd-sparc` has reported `smoke-exit=1` from `ci-guest-smoke.sh` on every ci run since at
-least 2026-08-28 (runs 33165053243, 33193832825, 33215990355, 33220521405, 33229761471,
-33241941716). The in-guest step itself is short — ~4.5 minutes each time, the long job
-durations are the image bake — so it fails EARLY in `clode-builder build`, not deep in the
-fuse.
+RESOLVED, and this is the residue. `netbsd-sparc` was red because its guest — our own pinned
+`wd0` image — has NO zstd, unzstd or zstdcat anywhere (verified by booting that exact image
+under `qemu-system-sparc`: `which zstd` -> not found, sets base/comp/etc/gpufw/misc/modules/
+rescue/tests), and no `guest-packages` to add one. From 2.1.251 upstream embeds its assets as
+zstd frames, so the in-guest carve threw. `scripts/make-min-provider.cjs` now decompresses
+those rows on the runner, and `stage-provider.mjs` minimises for EVERY leg — so as of this
+change **no CI leg carves a compressed row inside a guest at all**. What that leaves:
 
-**The cause is not readable from CI, and that is the first thing to fix.** The driver prints
-only its verdict (`GUEST-DONE seen, but 1 marker(s) failed: {'smoke-exit': 1}`); the guest's
-own console — `$CI_SPARC_WORKDIR/ci-sparc-console.log`, which contains the actual error — is
-written on the runner and never uploaded. A leg that can only report THAT it failed is not
-telling the truth about WHY. Upload that log (at least on failure) before guessing again.
-
-**A live hypothesis, unproven:** from 2.1.251 the carve needs a host `zstd`
-(libexec/host-provision.cjs), and `scripts/make-min-provider.cjs` copies the zstd rows into the
-minimal provider VERBATIM — so the sparc guest carves compressed rows too. The guest has no
-`guest-packages` at all; whatever it has comes from the baked wd0 image. If NetBSD/sparc 10.1's
-installed sets there carry no zstd CLI, this leg fails exactly where it does. Its amd64 sibling
-carves in-guest with no zstd package and passes, which is evidence for NetBSD base having one —
-but it is not evidence about THIS image's set list. Confirm from the console log, not from here.
-
-`test/tjs-legs.test.cjs` now accounts for this leg explicitly (`ZSTD_SOURCE['netbsd-sparc'] =
-'image'`) rather than excluding it, so the question stays visible.
+1. **The shipped `zstd`-spawn path (libexec/host-provision.cjs + bun-graph's `zstdViaCli`) has
+   no end-to-end coverage.** It is exercised by unit tests (`opts.forceCli` exists precisely to
+   pin the two decoders to byte-identical output) but nothing now runs it inside a real guest
+   against a real provider. `ZSTD_SOURCE` in `test/tjs-legs.test.cjs` still records where each
+   guest's decoder comes from, which keeps the question visible, but those rows are no longer
+   load-bearing for any green run. A leg that carves a REAL provider in-guest would restore it.
+2. **A real user on a host without zstd still cannot `clode build` from a real provider.** The
+   failure is honest and actionable ("Install `zstd` (or point CLODE_ZSTD at it)"), and pkgsrc
+   has zstd — but NetBSD base does not, so this is the shape a NetBSD user meets. Whether the
+   answer is a bundled decoder, a fetched host applet, or leaving the message as it is has not
+   been decided.
 
 ## RELEASE GATE for 0.20260827.1 (user, 2026-08-25) — BOTH must hold
 

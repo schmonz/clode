@@ -426,7 +426,7 @@ runs:
       env:
         CLODE_GUEST_SCRIPT: ${{ inputs.script }}
       run: |
-        set -uo pipefail
+        set -euo pipefail
         # Bridge inputs.script into ci-sparc-driver.py's recipe-file model:
         # the guest fetches this file over :8180 and runs it with sh. For
         # the driver's GUEST-DONE/*-exit verdict to mean anything, the
@@ -458,13 +458,17 @@ runs:
             /TJS-GZB64-BEGIN/ { s=1; print "guest| <TJS-GZB64 engine-sync block elided>"; fflush(); next }
             /TJS-GZB64-END/   { s=0; next }
             !s                { print "guest| " $0; fflush() }' &
-        rc=0
+        # -e OFF across the driver ONLY: a nonzero driver must still reach the drain
+        # and the artifact upload below, and must still fail the step afterwards.
+        set +e
         python3 spike/quickjs/qemu/ci-sparc-driver.py \
           --workdir "$CI_SPARC_WORKDIR" \
           --workspace "$GITHUB_WORKSPACE" \
           --recipe "$RECIPE_REL" \
           --machine SS-20 \
-          --memory 512M || rc=$?
+          --memory 512M
+        rc=$?
+        set -e
         sleep 3   # let the follower drain the driver's last writes
         exit "$rc"
 

@@ -22,6 +22,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { carveBlocks } = require(path.join(__dirname, '..', 'libexec', 'bundle-carve.cjs'));
 
+// ZSTD FRAME MAGIC. Named here rather than imported because bun-graph keeps its copy
+// private; four bytes duplicated is cheaper than a new export, and the self-check below
+// re-decodes with bun-graph's own reader, so a disagreement cannot go unnoticed.
+const ZSTD_MAGIC = [0x28, 0xb5, 0x2f, 0xfd];
+const isZstdFrame = (b) => b.length >= 4 && ZSTD_MAGIC.every((m, i) => b[i] === m);
+
 const [, , inPath, outPath] = process.argv;
 if (!inPath || !outPath) {
   console.error('usage: node scripts/make-min-provider.cjs <in-provider> <out-min-provider>');
@@ -40,7 +46,8 @@ if (!inPath || !outPath) {
 //     [name]\0[contents]\0   with contents at name.off + name.len + 1
 // and the whole file is laid out base=0, so every offset is a file offset.
 function writeMinSplitProvider(inPath, outPath) {
-  const { loadGraphFull } = require(path.join(__dirname, '..', 'libexec', 'bun-graph.cjs'));
+  const bg = require(path.join(__dirname, '..', 'libexec', 'bun-graph.cjs'));
+  const { loadGraphFull } = bg;
   const g = loadGraphFull(inPath);
   const src = fs.readFileSync(inPath);
   // JS MODULES **AND TEXT ASSETS**. Keeping only loader 1 was right until Claude Code
@@ -74,13 +81,43 @@ function writeMinSplitProvider(inPath, outPath) {
   const rows = g.rows.filter((r) => KEEP.has(r.loader));
   if (!rows.some((r) => r.loader === 1)) throw new Error('no js-loader rows in the module table');
 
+  // DECOMPRESSED HERE, ON THE RUNNER, and that is the point of minimising at all.
+  // 2.1.251 embeds 101 of its assets as zstd frames, and copying those frames through
+  // verbatim made the minimised provider need a zstd decoder in the guest that receives
+  // it — which is precisely the runtime that has none. tjs has no zstd, node-shim's zlib
+  // deliberately has none, so a shipped clode can only SPAWN a host `zstd`; and the
+  // netbsd-sparc guest is our own pinned wd0 image with no zstd/unzstd/zstdcat anywhere
+  // and no guest-packages to add one (verified 2026-08-29 by booting that exact image
+  // under qemu-system-sparc). The leg died with `smoke-exit=1` four minutes in, every run.
+  //
+  // Decoding here is not a workaround for upstream's format — it is the other half of it.
+  // The bundle reads an embedded asset as `s(t) ? Bun.zstdDecompressSync(t) : t`, i.e.
+  // CONDITIONAL on the magic, so a plain row is something upstream already handles. And
+  // the work moves from a 512MB sun4m under TCG to a fat x64 runner, which is the whole
+  // reason this script exists.
+  //
+  // Decoded with bun-graph's own reader rather than a second call to zlib: that reader
+  // refuses a concatenated frame sequence and checks Frame_Content_Size, and using it
+  // means the bytes written here are BY CONSTRUCTION the bytes a real carve would have
+  // produced from the real provider.
+  const decoded = bg.loadAssetsFromBytes(new Uint8Array(src.buffer, src.byteOffset, src.length));
+
   const enc = new TextEncoder();
   const chunks = [];
   const meta = [];
+  let inflated = 0;
   let off = 0;
   for (const r of rows) {
     const name = enc.encode(r.name);
-    const body = src.subarray(r.contentsStart, r.contentsEnd);
+    let body = src.subarray(r.contentsStart, r.contentsEnd);
+    if (isZstdFrame(body)) {
+      const text = decoded.get(r.name);
+      if (text === undefined) {
+        throw new Error(`row ${r.name} is a zstd frame but bun-graph did not stage it as an asset`);
+      }
+      body = Buffer.from(text, 'utf8');
+      inflated++;
+    }
     meta.push({ nameOff: off, nameLen: name.length,
                 bodyOff: off + name.length + 1, bodyLen: body.length,
                 loader: r.loader, moduleFormat: r.moduleFormat, name: r.name });
@@ -135,7 +172,7 @@ function writeMinSplitProvider(inPath, outPath) {
   fs.writeFileSync(outPath, out);
   return { modules: rows.filter((r) => r.loader === 1).length,
            assets: rows.filter((r) => r.loader === 13 || r.loader === 5).length,
-           bytes: out.length, entry: g.entryName, from: src.length };
+           inflated, bytes: out.length, entry: g.entryName, from: src.length };
 }
 
 const { isSplitBundle } = require(path.join(__dirname, '..', 'libexec', 'extract-claude-js.cjs'));
@@ -146,8 +183,8 @@ if (isSplitBundle(inPath)) {
     console.error(`make-min-provider: could not minimise the code-split provider ${inPath}: ${e.message}`);
     process.exit(1);
   }
-  console.error(`make-min-provider: ${r.modules} modules + ${r.assets} text assets -> ${outPath}: `
-    + `${r.bytes} bytes (from ${r.from})`);
+  console.error(`make-min-provider: ${r.modules} modules + ${r.assets} text assets `
+    + `(${r.inflated} zstd rows decompressed) -> ${outPath}: ${r.bytes} bytes (from ${r.from})`);
   // SELF-CHECK, same contract as the CJS path: the product must decode to the same graph.
   // COUNT BOTH CLASSES SEPARATELY. Comparing a written ROW count against a re-decoded
   // MODULE count worked only while every row was a module; the moment text assets were
@@ -174,6 +211,18 @@ if (isSplitBundle(inPath)) {
     console.error(`make-min-provider: SELF-CHECK FAILED — the source provider reads as `
       + `${srcPlatform} but the minimised one reads as ${outPlatform}; the extract cache key `
       + 'could not tell two platforms apart');
+    process.exit(1);
+  }
+  // NO ZSTD FRAME MAY SURVIVE. The self-checks above all run HERE, on a Node that has a
+  // decoder, so every one of them passes on a provider the target cannot read — which is
+  // exactly how this shipped. Read the written bytes back and refuse a frame outright.
+  const outFull = bg.loadGraphFull(outPath);
+  const stillCompressed = outFull.rows.filter((row) =>
+    isZstdFrame(outFull.bytes.subarray(row.contentsStart, row.contentsEnd))).map((row) => row.name);
+  if (stillCompressed.length) {
+    console.error(`make-min-provider: SELF-CHECK FAILED — ${stillCompressed.length} row(s) are `
+      + `still zstd frames (${stillCompressed.slice(0, 3).join(', ')}...). A guest with no zstd `
+      + 'cannot carve this provider, and every other check here runs on a Node that can.');
     process.exit(1);
   }
   console.error(`make-min-provider: self-check ok (${check.size} modules, entry ${r.entry}, `

@@ -197,3 +197,67 @@ test('a minimised provider still reports the platform it was carved from', opts,
     }
   }
 });
+
+// THE MINIMISED PROVIDER MUST NOT NEED A ZSTD DECODER, and this is the whole reason it is
+// minimised on the RUNNER and carried into a guest. From Claude Code 2.1.251 upstream embeds
+// its text assets as zstd frames (101 loader-5 rows), and this script copied those frames
+// through verbatim. Carving them back out needs a decoder, and the runtimes that receive a
+// minimised provider are exactly the ones that have none:
+//
+//   * tjs has no zstd, and `node-shim/modules/zlib.cjs` deliberately has none, so a shipped
+//     clode can only reach one by SPAWNING a host `zstd` (libexec/host-provision.cjs);
+//   * the netbsd-sparc guest is our own pinned wd0 image, and it has NO zstd, unzstd or
+//     zstdcat anywhere — verified 2026-08-29 by booting that exact image under
+//     qemu-system-sparc: `which zstd` -> not found, /usr/bin/{zstd,unzstd,zstdcat} absent,
+//     sets base/comp/etc/gpufw/misc/modules/rescue/tests. It has no guest-packages either,
+//     so there is nowhere for one to come from.
+//
+// So the sparc leg died on every run with `smoke-exit=1` about four minutes in, and the
+// minimiser is the right place to fix it: it already rewrites the container, it runs on a fat
+// x64 runner where a decoder is free, and decompressing there means the 512MB TCG guest does
+// less work rather than more. Upstream's own reader is magic-conditional
+// (`s(t)?Bun.zstdDecompressSync(t):t`), so a plain row is not a workaround — it is the other
+// half of the shape upstream already supports.
+//
+// The check is BEHAVIOURAL, not a byte scan: re-carve the minimised provider in a child with
+// `zlib.zstdDecompressSync` removed, PATH emptied and an isolated data dir (so host-provision
+// can neither find a tool nor reuse a cached winner), and require the assets to come back
+// IDENTICAL to what the real provider carves with a decoder present. Absence of frames alone
+// would pass on a provider that lost its assets entirely.
+const NO_ZSTD_PROBE = `
+  const zlib = require('node:zlib');
+  delete zlib.zstdDecompressSync;                 // tjs and node-shim both lack it
+  const bg = require(process.argv[1]);          // libexec/bun-graph.cjs
+  const a = bg.loadAssets(process.argv[2]);     // the minimised provider
+  const o = {};
+  for (const [k, v] of a) o[k] = require('node:crypto').createHash('sha256').update(v).digest('hex');
+  process.stdout.write(JSON.stringify(o));
+`;
+test('a minimised provider carves with NO zstd anywhere, to the SAME assets', opts, () => {
+  const BG = path.join(REPO, 'libexec', 'bun-graph.cjs');
+  const { loadAssets: loadAssetsHere } = require('../libexec/bun-graph.cjs');
+  for (const bin of PROVIDERS) {
+    if (!isSplitBundle(bin)) continue;            // pre-split providers embed no zstd rows
+    const { out } = minimise(bin);
+    const isolated = fs.mkdtempSync(path.join(os.tmpdir(), 'no-zstd-'));
+    const env = { ...process.env, PATH: '', HOME: isolated, XDG_DATA_HOME: isolated,
+                  CLODE_DEPS: path.join(isolated, 'deps'), CLODE_CACHE: path.join(isolated, 'cache') };
+    delete env.CLODE_ZSTD;
+    let got;
+    try {
+      got = JSON.parse(execFileSync(process.execPath, ['-e', NO_ZSTD_PROBE, BG, out],
+        { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] }));
+    } catch (e) {
+      const lines = String(e.stderr || e.message || '').split('\n');
+      const err = lines.find((l) => /^\s*\w*Error: /.test(l)) || lines[0] || '';
+      assert.fail(`${bin}: a runtime with no zstd cannot carve the MINIMISED provider — which is `
+        + `the only runtime the netbsd-sparc guest has. ${err.trim()}`);
+    }
+    // Equivalence, not just decodability: the real provider's assets, decoded here where a
+    // decoder exists, must be exactly what the zstd-less carve produced.
+    const want = {};
+    for (const [k, v] of loadAssetsHere(bin)) want[k] = require('node:crypto').createHash('sha256').update(v).digest('hex');
+    assert.deepStrictEqual(got, want,
+      `${bin}: the minimised provider's assets differ from the real one's once decompressed`);
+  }
+});

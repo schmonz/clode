@@ -436,9 +436,14 @@ test('guest action: a failing sparc leg can always say WHY (streamed + uploaded 
   assert.ok(driver.includes('TJS-GZB64-BEGIN') && driver.includes('TJS-GZB64-END'),
     'the console stream must elide the TJS-GZB64 engine-sync block, or the log it '
     + 'is meant to make readable is flooded by ~8MB of base64');
-  assert.ok(!/^\s*set -euo pipefail$/m.test(driver),
-    'the driver step must not `set -e`: the tail has to be reaped and the log flushed '
-    + 'even when the driver exits nonzero, which is the whole point');
+  // -e must not abort the step ON the driver: a nonzero driver still has to reach the
+  // drain and the upload below, and still has to fail the step afterwards.
+  assert.match(driver, /set \+e/,
+    'the driver step must turn -e off across the driver call, or a nonzero driver aborts '
+    + 'the step before the console is drained — which is the whole point');
+  assert.match(driver, /exit "\$rc"/,
+    'the driver step must propagate the driver\'s exit status explicitly once -e is off, '
+    + 'or a failing guest reports success');
 
   // (b) always()-guarded artifact upload of the whole workdir's logs.
   const uploads = steps(yml)
@@ -994,13 +999,16 @@ const ZSTD_SOURCE = {
   'midnightbsd-amd64': 'base',
   'openindiana-amd64': 'base',
   'haiku-x64': 'package',
-  // netbsd-sparc is the odd one out: its guest is our own baked wd0 image (CI-IMAGES.md)
-  // and it has NO guest-packages at all, so whatever zstd it has comes from the image.
-  // It is listed here rather than excluded because an exclusion is a silent cap — and it
-  // is NOT known to be fine: the leg has failed at its in-guest `clode build` (smoke-exit=1)
-  // on every run since at least 2026-08-28, and the cause cannot be read off CI because the
-  // guest console log, which holds the actual error, is not uploaded on failure. See BACKLOG.
-  'netbsd-sparc': 'image',
+  // netbsd-sparc has NO zstd, and no longer needs one. ANSWERED 2026-08-29 by booting the
+  // exact pinned wd0 image under qemu-system-sparc: `which zstd` -> not found,
+  // /usr/bin/{zstd,unzstd,zstdcat} all absent, sets base/comp/etc/gpufw/misc/modules/
+  // rescue/tests. NetBSD base ships no zstd(1), and this leg has no guest-packages, so
+  // there was nowhere for one to come from — which is why its in-guest `clode build`
+  // failed (smoke-exit=1) about four minutes in on every run once 2.1.251 started
+  // embedding assets as zstd frames. The fix is upstream of the guest:
+  // scripts/make-min-provider.cjs now DECOMPRESSES those rows on the runner, so the
+  // provider this guest receives carries none.
+  'netbsd-sparc': 'minimised',
 };
 // DERIVED from .github/actions/build-leg/action.yml, not hand-copied. Its `mode` step decides
 // where a leg builds with one shell `case`, and the exec=guest arm is the definitive list of
@@ -1034,7 +1042,17 @@ test('every leg that carves inside a guest VM accounts for its zstd', () => {
     assert.ok(how, `${l.leg}: builds in a guest VM but ZSTD_SOURCE says nothing about its zstd. `
       + 'Carving 2.1.251+ needs one. Either prove the base system has it (a green in-guest carve) '
       + 'and add it as \'base\', name the command in guest-packages and add it as \'package\', '
-      + 'or say it comes from a baked guest image and add it as \'image\'.');
+      + 'say it comes from a baked guest image and add it as \'image\', or rely on the minimiser '
+      + 'having decompressed the frames away and add it as \'minimised\'.');
+    if (how === 'minimised') {
+      // 'minimised' is only true while make-min-provider actually inflates the frames it
+      // copies. If that is ever reverted, this leg is back to needing a decoder it cannot
+      // have, and the gate must say so rather than keep documenting a stale answer.
+      const min = fs.readFileSync(path.join(REPO, 'scripts', 'make-min-provider.cjs'), 'utf8');
+      assert.match(min, /isZstdFrame\(body\)/,
+        `${l.leg}: ZSTD_SOURCE says 'minimised', but make-min-provider no longer decompresses the `
+        + 'zstd rows it copies — this guest has no zstd and cannot carve compressed rows.');
+    }
     if (how === 'package') {
       const pkgs = String(l['guest-packages'] || '').split(/\s+/).filter(Boolean);
       // THE PACKAGE MUST NAME THE COMMAND, not the library — the exact regression
