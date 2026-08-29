@@ -196,3 +196,107 @@ test('provision(unzip) fails loud when no extractor is found', () => {
     /CLODE_UNZIP/
   );
 });
+
+// --- zstd: the requirement that decides whether the SHIPPED builder can carve ---
+//
+// Claude Code 2.1.251+ embeds its assets as zstd frames, and every published clode is a
+// fused tjs binary with no zstd of its own — so libexec/bun-graph.cjs spawns one. It used
+// to look for a single hard-coded name with a bare env override and NO known-answer test,
+// which is the shape this registry exists to replace: a `CLODE_ZSTD` pointed at anything
+// that exits 0 and echoes its input made the carve take the COMPRESSED FRAME as asset text
+// and ship a target that builds green and dies on its first turn.
+const hosttools = require('../libexec/clode-hosttools.cjs');
+const REAL_ZSTD = hosttools.findTool('zstd', { env: process.env });
+// The alias rows need a real zstd to point a differently-named link at; the pass-through
+// row needs a POSIX shell to write a fake decoder in.
+const zstdHostOpts = REAL_ZSTD ? {} : { skip: 'no real `zstd` on PATH to probe with' };
+const shOpts = process.platform === 'win32' ? { skip: 'needs /bin/sh for the fake decoder' } : {};
+
+test('provision resolves a real zstd decompressor on this host (integration)', zstdHostOpts, () => {
+  const got = provision('zstd', { dataDir: tmpDataDir() });
+  assert.ok(got.path, 'a real zstd tool resolved');
+  assert.ok(['zstd', 'unzstd', 'zstdcat'].includes(got.candidate.name), `unexpected candidate ${got.candidate.name}`);
+});
+
+// DECODE ARGV DIFFERS PER CANDIDATE — `zstd -d -c f`, `unzstd -c f`, `zstdcat f` — so one
+// shared argv would resolve a host that has only an alias and then run it wrong. zstd
+// switches mode on argv[0], so a link named `unzstd` IS unzstd; these rows run the real
+// tool through the real argv, not a mock of it.
+for (const alias of ['unzstd', 'zstdcat']) {
+  test(`provision(zstd) resolves and correctly drives a host that has only ${alias}`,
+    REAL_ZSTD ? shOpts : zstdHostOpts, () => {
+      const bindir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-zstdalias-'));
+      fs.symlinkSync(REAL_ZSTD, path.join(bindir, alias));
+      const got = provision('zstd', { env: { PATH: bindir }, dataDir: tmpDataDir() });
+      assert.strictEqual(got.candidate.name, alias);
+      assert.strictEqual(got.path, path.join(bindir, alias));
+    });
+}
+
+// THE KAT IS THE POINT. A "decoder" that exits 0 and hands back exactly what it was given
+// is the dangerous case, because every cheap check it could face — status 0, non-empty
+// output, no stderr — passes. Only running it on a known frame and comparing the exact
+// bytes catches it.
+test('provision(zstd) REFUSES an override that merely echoes its input', shOpts, () => {
+  const bindir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-zstdfake-'));
+  const fake = path.join(bindir, 'passthru');
+  fs.writeFileSync(fake, '#!/bin/sh\n# ignore every flag; echo the last argument\'s bytes back\neval "f=\\${$#}"\nexec cat "$f"\n');
+  fs.chmodSync(fake, 0o755);
+  // PATH deliberately still holds the REAL zstd (when this host has one). An override that
+  // fails must fail the requirement, not quietly hand back whatever else was lying around:
+  // a silent fallback would use a decoder nobody asked for AND make this row unfailable.
+  const realDir = REAL_ZSTD ? path.dirname(REAL_ZSTD) : '';
+  assert.throws(
+    () => provision('zstd', {
+      env: { PATH: realDir ? `${bindir}${path.delimiter}${realDir}` : bindir, CLODE_ZSTD: fake },
+      dataDir: tmpDataDir(),
+    }),
+    /CLODE_ZSTD/,
+    'a pass-through must fail the known-answer test, not resolve');
+});
+
+test('provision(zstd) fails loud when no decompressor is found', () => {
+  assert.throws(
+    () => provision('zstd', {
+      env: { PATH: '' }, findTool: () => null,
+      spawn: () => { throw new Error('must not spawn'); }, fs, dataDir: tmpDataDir(),
+    }),
+    /CLODE_ZSTD/
+  );
+});
+
+// --- an explicit override outranks a cached winner -------------------------
+// The cache short-circuit used to run BEFORE the override was consulted, so once any
+// winner was cached, setting CLODE_<TOOL> did nothing at all. That is wrong on its face
+// (an override that is silently ignored is worse than none) and it is load-bearing here:
+// bun-graph's whole CLODE_ZSTD contract is "point me at the decoder", and a carve that
+// keeps using a stale cached path cannot be steered off it.
+test('an override outranks an already-cached winner', () => {
+  const dataDir = tmpDataDir();
+  fs.writeFileSync(path.join(dataDir, 'hosttools.json'),
+    JSON.stringify({ sha256: { candidate: 'shasum', path: '/bin/shasum' } }));
+  const bindir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-ov2-'));
+  const ovPath = path.join(bindir, 'mysha');
+  fs.writeFileSync(ovPath, '#!/bin/sh\n', { mode: 0o755 });
+  const got = provision('sha256', {
+    env: { CLODE_SHA256: ovPath, PATH: '/usr/bin:/bin' },
+    spawn: realSha256Spawn(), fs, dataDir, isExec: () => true,
+  });
+  assert.strictEqual(got.path, ovPath, 'the override must win over the cached path');
+});
+
+// --- the refusal has to say what it tried and why each thing failed --------
+// This fails on a machine nobody is sitting at. "no zstd tool found" with no further
+// detail sends the next person hunting PATH when the real answer was "your CLODE_ZSTD
+// ran and printed `unsupported frame parameter`".
+test('the refusal reports each candidate it tried and the reason it rejected it', shOpts, () => {
+  const bindir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-zstdwhy-'));
+  const fake = path.join(bindir, 'grumpy');
+  fs.writeFileSync(fake, '#!/bin/sh\necho "zstd: unsupported frame parameter" 1>&2\nexit 3\n');
+  fs.chmodSync(fake, 0o755);
+  let msg = '';
+  try { provision('zstd', { env: { PATH: bindir, CLODE_ZSTD: fake }, dataDir: tmpDataDir() }); }
+  catch (e) { msg = e.message; }
+  assert.match(msg, /unsupported frame parameter/, 'the failing tool\'s own stderr must reach the refusal');
+  assert.match(msg, /grumpy/, 'the refusal must name what it ran');
+});

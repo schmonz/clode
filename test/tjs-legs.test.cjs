@@ -874,3 +874,70 @@ test('the parser reads the results table only — quarantined rows are not evide
     ['fake-target/B1/pass', 'fake-target/B1/fail', 'other-target/C1/pass'],
     'rows after the first ## heading must not be parsed');
 });
+
+// EVERY IN-GUEST LEG HAS TO HAVE A ZSTD, and has to have said WHY it has one.
+//
+// Claude Code 2.1.251+ embeds its text assets as zstd frames, so from that release the carve
+// spawns a host `zstd` (libexec/bun-graph.cjs -> libexec/host-provision.cjs). A leg whose build
+// runs INSIDE a guest VM carves in that guest, so the guest is what needs the tool — and this is
+// not theory: on cf45a8c (run 33241941716) 19 legs passed and haiku-x64 failed at exactly that
+// line, because Haiku's guest had no zstd CLI.
+//
+// The gate is deliberately an ACCOUNTING one rather than a golden list of names: a new BSD or
+// illumos leg added next month gets the question asked at review time instead of at its first
+// red build. Two honest answers per leg —
+//   'base'    the OS ships a zstd CLI in its base system, EVIDENCED by a green in-guest carve
+//   'package' the guest-packages list must name it (and must actually name the COMMAND: on
+//             Haiku `zstd` is the library and `cmd:zstd` is the CLI)
+// — and nothing else. An unlisted leg fails.
+//
+// EVIDENCE for every 'base' row: CI run 33241941716 on cf45a8c, the first push after the carve
+// started needing zstd. Each of these legs completed its in-guest `clode build` there with no
+// zstd in its package list, which is exactly the proof that its base system carries one. The
+// three arm64 twins are release-only, so they were not in that run; they are the SAME cpa guest
+// images and package lists as their green amd64 siblings, and they stay 'base' on that basis.
+const ZSTD_SOURCE = {
+  'netbsd-amd64': 'base', 'netbsd-arm64': 'base',
+  'freebsd-amd64': 'base', 'freebsd-arm64': 'base',
+  'openbsd-amd64': 'base', 'openbsd-arm64': 'base',
+  'dragonflybsd-amd64': 'base',
+  'omnios-amd64': 'base',
+  'solaris-amd64': 'base',
+  'midnightbsd-amd64': 'base',
+  'openindiana-amd64': 'base',
+  'haiku-x64': 'package',
+  // netbsd-sparc is the odd one out: its guest is our own baked wd0 image (CI-IMAGES.md)
+  // and it has NO guest-packages at all, so whatever zstd it has comes from the image.
+  // It is listed here rather than excluded because an exclusion is a silent cap — and it
+  // is NOT known to be fine: the leg has failed at its in-guest `clode build` (smoke-exit=1)
+  // on every run since at least 2026-08-28, and the cause cannot be read off CI because the
+  // guest console log, which holds the actual error, is not uploaded on failure. See BACKLOG.
+  'netbsd-sparc': 'image',
+};
+// Mirrors the case list in .github/actions/build-leg/action.yml's `mode` step: these
+// guest-platforms set exec=guest, i.e. the whole build+fuse+carve happens in the VM.
+// ...plus the qemu-* legs, which carve in-guest too (their own backend, own baked image).
+const IN_GUEST = new Set(['netbsd', 'freebsd', 'openbsd', 'dragonflybsd', 'omnios', 'solaris',
+  'midnightbsd', 'haiku', 'openindiana']);
+const carvesInGuest = (gp) => !!gp && (IN_GUEST.has(gp) || gp.startsWith('qemu-'));
+
+test('every leg that carves inside a guest VM accounts for its zstd', () => {
+  let checked = 0;
+  for (const l of legsFor('release').concat(legsFor('ci'))) {
+    const gp = l['guest-platform'];
+    if (!carvesInGuest(gp)) continue;
+    if (l['cross-image'] || l['cross-dockerfile'] || l['netbsd-src']) continue; // cross legs carve on the runner
+    checked++;
+    const how = ZSTD_SOURCE[l.leg];
+    assert.ok(how, `${l.leg}: builds in a guest VM but ZSTD_SOURCE says nothing about its zstd. `
+      + 'Carving 2.1.251+ needs one. Either prove the base system has it (a green in-guest carve) '
+      + 'and add it as \'base\', name the command in guest-packages and add it as \'package\', '
+      + 'or say it comes from a baked guest image and add it as \'image\'.');
+    if (how === 'package') {
+      const pkgs = String(l['guest-packages'] || '').split(/\s+/);
+      assert.ok(pkgs.some((p) => /(^|:)(zstd)$/.test(p)),
+        `${l.leg}: ZSTD_SOURCE says 'package' but guest-packages (${l['guest-packages']}) names no zstd`);
+    }
+  }
+  assert.ok(checked >= 13, `expected the in-guest legs to be found, saw ${checked}`);
+});

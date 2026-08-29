@@ -488,7 +488,17 @@ const LEGS = [
     // — named explicitly; v20 clears the build floor (lowered to 20 for
     // OpenIndiana the same day). cmd:X provides-syntax for the rest
     // ("nodejs" alone: Name not found, #14).
-    'guest-packages': 'cmd:cmake cmd:gcc nodejs20 cmd:git cmd:make', floor: 'r1beta6',
+    // cmd:zstd, NOT `zstd` — and the difference is the whole leg. Claude Code 2.1.251+
+    // embeds its text assets as zstd frames, so libexec/bun-graph.cjs must spawn a zstd to
+    // carve at all; on cf45a8c this leg was the ONE of 20 that failed, at exactly that line
+    // ("could not run zstd"), while 19 hosts that already ship the tool passed. Haiku's
+    // `zstd` package is the LIBRARY only — its recipe (haikuports app-arch/zstd) puts the
+    // executables in the `zstd_bin` SUBPACKAGE, whose PROVIDES_bin lists cmd:zstd,
+    // cmd:unzstd, cmd:zstdcat. Asking for `zstd` would install libzstd, resolve green, and
+    // leave the carve exactly as broken. The provides-syntax this list already uses for
+    // cmake/gcc/git/make is the portable way to name a COMMAND, and it is what the
+    // host-provision candidate list looks for on PATH.
+    'guest-packages': 'cmd:cmake cmd:gcc nodejs20 cmd:git cmd:make cmd:zstd', floor: 'r1beta6',
     // publish:false TEMPORARILY (2026-08-24) — demoted, NOT softened. Haiku moved
     // ports to the current release when beta6 shipped, and cross-platform-actions
     // still ships only a beta5 image (haiku-builder#3 tracks the beta6 image;

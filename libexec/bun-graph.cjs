@@ -209,6 +209,32 @@ function isZstdFrame(u8, p, len) {
 // frame hangs forever, and upstream's assets only get bigger. A temp file leaves stdout as the
 // only pipe, and stdout IS drained by the poll loop. Node's own spawnSync has no such hazard —
 // this is the portable shape that is correct under both, not a tjs special case.
+// RESOLVED THROUGH host-provision.cjs, not by a name lookup here. That module already owns the
+// shape this needs — an override env, an ORDERED CANDIDATE LIST with per-candidate argv, a
+// known-answer test, an install hint, a cached winner — and the KAT is the part that is
+// load-bearing rather than tidy. A "zstd" that exits 0 and echoes its input (a wrapper script,
+// a mis-set CLODE_ZSTD, a same-named tool that is something else) satisfies every cheap check
+// available at this call site: status 0, output present, nothing on stderr, and on a frame with
+// no Frame_Content_Size even the length check below is blind. The carve then embeds the
+// COMPRESSED FRAME as the asset's text and the target dies on its first real turn. Running the
+// candidate on a frame whose plaintext we already know is the only thing that catches it, and
+// doing it here rather than in a second hand-rolled resolver keeps ONE answer to "which host
+// tools does clode need, and how does it prove they work".
+//
+// Memoized per override value: a 2.1.251 carve decodes 101 rows, and re-reading the tool cache
+// (plus, when CLODE_ZSTD is set, re-running the KAT — an override deliberately bypasses that
+// cache) 101 times buys nothing. Keyed on the override so a test, or a user, that changes
+// CLODE_ZSTD mid-process gets the decoder they asked for. Only successes are memoized; a
+// failure re-resolves, so installing zstd and retrying works without restarting.
+var ZSTD_TOOL = null, ZSTD_TOOL_KEY = null;
+function zstdTool(env) {
+  var key = (env && env.CLODE_ZSTD) || '';
+  if (ZSTD_TOOL && ZSTD_TOOL_KEY === key) return ZSTD_TOOL;
+  var got = require('./host-provision.cjs').provision('zstd', { env: env });
+  ZSTD_TOOL = got; ZSTD_TOOL_KEY = key;
+  return got;
+}
+
 // Returns a Buffer, or null with the reason in ZSTD_WHY. The reason is not decoration: this
 // fails on a machine we are not sitting at, and "cannot decode them" without "zstd: command not
 // found" or the decoder's own stderr sends the next person hunting the wrong thing.
@@ -220,8 +246,18 @@ function zstdViaCli(buf) {
     cp = require('node:child_process');
     fs = require('node:fs'); os = require('node:os'); path = require('node:path');
   } catch (e) { ZSTD_WHY = 'no child_process/fs in this runtime: ' + (e && e.message); return null; }
-  var bin = 'zstd';
-  try { if (process && process.env && process.env.CLODE_ZSTD) bin = process.env.CLODE_ZSTD; } catch (e) { /* no env */ }
+  var bin, argv;
+  try {
+    var env = {};
+    try { env = (process && process.env) || {}; } catch (e2) { /* no env */ }
+    var tool = zstdTool(env);
+    bin = tool.path; argv = tool.candidate.args;
+  } catch (e) {
+    // provision's refusal already names every candidate it tried, why each was rejected
+    // (including the tool's own stderr), and how to install one. Pass it through verbatim.
+    ZSTD_WHY = (e && e.message) || 'no zstd decoder resolved';
+    return null;
+  }
   var file;
   try {
     file = path.join(zstdScratchDir(fs, os, path), 'frame.zst');
@@ -229,7 +265,7 @@ function zstdViaCli(buf) {
   } catch (e) { ZSTD_WHY = 'could not stage the frame in tmpdir: ' + (e && e.message); return null; }
   var r;
   try {
-    r = cp.spawnSync(bin, ['-d', '-c', file], { maxBuffer: 1 << 28 });
+    r = cp.spawnSync(bin, argv(file), { maxBuffer: 1 << 28 });
   } catch (e) {
     ZSTD_WHY = 'spawning ' + bin + ' threw: ' + (e && e.message); return null;
   } finally {

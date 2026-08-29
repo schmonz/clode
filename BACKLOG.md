@@ -4,6 +4,31 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 (Strategic feasibility risks live in `LONG-TERM.md`; in-flight designs in
 `docs/superpowers/`. Done items are DELETED from here — git history is the record.)
 
+## netbsd-sparc fails at the in-guest carve, and CI cannot say why (2026-08-29)
+
+`netbsd-sparc` has reported `smoke-exit=1` from `ci-guest-smoke.sh` on every ci run since at
+least 2026-08-28 (runs 33165053243, 33193832825, 33215990355, 33220521405, 33229761471,
+33241941716). The in-guest step itself is short — ~4.5 minutes each time, the long job
+durations are the image bake — so it fails EARLY in `clode-builder build`, not deep in the
+fuse.
+
+**The cause is not readable from CI, and that is the first thing to fix.** The driver prints
+only its verdict (`GUEST-DONE seen, but 1 marker(s) failed: {'smoke-exit': 1}`); the guest's
+own console — `$CI_SPARC_WORKDIR/ci-sparc-console.log`, which contains the actual error — is
+written on the runner and never uploaded. A leg that can only report THAT it failed is not
+telling the truth about WHY. Upload that log (at least on failure) before guessing again.
+
+**A live hypothesis, unproven:** from 2.1.251 the carve needs a host `zstd`
+(libexec/host-provision.cjs), and `scripts/make-min-provider.cjs` copies the zstd rows into the
+minimal provider VERBATIM — so the sparc guest carves compressed rows too. The guest has no
+`guest-packages` at all; whatever it has comes from the baked wd0 image. If NetBSD/sparc 10.1's
+installed sets there carry no zstd CLI, this leg fails exactly where it does. Its amd64 sibling
+carves in-guest with no zstd package and passes, which is evidence for NetBSD base having one —
+but it is not evidence about THIS image's set list. Confirm from the console log, not from here.
+
+`test/tjs-legs.test.cjs` now accounts for this leg explicitly (`ZSTD_SOURCE['netbsd-sparc'] =
+'image'`) rather than excluding it, so the question stays visible.
+
 ## RELEASE GATE for 0.20260827.1 (user, 2026-08-25) — BOTH must hold
 
 **Re-dated 2026-08-27**: the cut was staged on the 25th and took two more days of
@@ -3760,7 +3785,7 @@ probably should not say `CLODE_` at all.
 
 | group | examples | plausible answer |
 |---|---|---|
-| host-tool overrides | `CLODE_BFS` `CLODE_UGREP` `CLODE_RG` `CLODE_TAR` `CLODE_GZIP` `CLODE_UNZIP` `CLODE_SHA256` `CLODE_NPM` `CLODE_NODE` | nine vars for "use this binary" is nine chances to disagree; one flag or a config file |
+| host-tool overrides | `CLODE_BFS` `CLODE_UGREP` `CLODE_RG` `CLODE_TAR` `CLODE_GZIP` `CLODE_UNZIP` `CLODE_SHA256` `CLODE_ZSTD` `CLODE_NPM` `CLODE_NODE` | ten vars for "use this binary" is ten chances to disagree; one flag or a config file |
 | paths / state | `CLODE_CACHE` `CLODE_DEPS` `CLODE_STATE_ROOT` `CLODE_PROVIDERS` `CLODE_LIBEXEC` `CLODE_VERSION_DIR` | genuinely useful for isolation; needs ONE story, not six |
 | input selection | `CLODE_CLAUDE_BIN` `CLODE_TJS` `CLODE_TARGET_TEMPLATE` `CLODE_MAIN_BUNDLE` `CLODE_TEMPLATES*` | these change WHAT IS BUILT — the dangerous group. Flags, and announced |
 | network | `CLODE_RELEASES_URL` `CLODE_CHANGELOG_URL` `CLODE_TEMPLATES_BASEURL` `CLODE_UPDATE_CHANNEL` | mostly test seams pointing at local servers |

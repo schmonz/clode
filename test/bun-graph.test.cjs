@@ -427,6 +427,56 @@ test('a decoder that runs and fails surfaces its stderr', stderrOpts, () => {
   }
 });
 
+// A zstd frame WITH NO Frame_Content_Size, hand-built from RFC 8878's simplest legal shape:
+// magic, a Frame_Header_Descriptor of 0 (no content size, not single-segment, no checksum, no
+// dictionary), a 1-byte Window_Descriptor, then one LAST/RAW block. Deterministic, tiny, and
+// buildable under either runtime with no tool at all — and NO decoder is needed to predict what
+// it must decode to.
+//
+// It is the input that matters here because it is the one the frame-shape checks CANNOT judge:
+// with the content size absent, `zstdContentSize` returns null and the length comparison is
+// skipped, so nothing downstream can tell a real decode from a passthrough. Whether the resolved
+// binary actually decodes zstd has to be established BEFORE it is trusted, which is what the
+// host-provision known-answer test does.
+function rawZstdFrame(text) {
+  const body = Buffer.from(text, 'utf8');
+  const h = 1 | (0 << 1) | (body.length << 3);   // Last_Block=1, Block_Type=0 (Raw), Block_Size
+  return Buffer.concat([
+    Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x00, 0x00]),
+    Buffer.from([h & 255, (h >> 8) & 255, (h >> 16) & 255]),
+    body,
+  ]);
+}
+
+// THE FAILURE THIS PREVENTS IS NOT HYPOTHETICAL, it is the shape that ships: a CLODE_ZSTD (or a
+// PATH `zstd`) that exits 0 and hands back exactly what it was given passes every cheap check —
+// status 0, output present, nothing on stderr — and the carve then embeds the COMPRESSED FRAME as
+// the asset's text. The build is green, `--version` is green, the mock PONG is green, and the
+// target dies on its first real turn with upstream's own "embedded text asset is missing or
+// corrupt". Only running the candidate on a KNOWN frame and comparing exact bytes catches it.
+test('a decoder that only echoes its input is REFUSED, not taken as asset text', stderrOpts, () => {
+  const plain = 'hand-built raw block, no Frame_Content_Size';
+  const frame = new Uint8Array(rawZstdFrame(plain));
+  // Control: the frame is real, and a real decoder round-trips it on BOTH paths. Without this
+  // the row below could pass because the fixture is malformed rather than because the fake was
+  // caught — the green-control lesson, applied here.
+  assert.strictEqual(bunGraph.__zstdToTextForTest(frame, 0, frame.length, { forceCli: true }), plain);
+  assert.strictEqual(bunGraph.__zstdToTextForTest(frame, 0, frame.length, { forceCli: false }), plain);
+
+  const fake = path.join(scratch(), 'passthru-zstd');
+  fs.writeFileSync(fake, '#!/bin/sh\n# ignore every flag; echo the last argument\'s bytes straight back\neval "f=\\${$#}"\nexec cat "$f"\n');
+  fs.chmodSync(fake, 0o755);
+  const saved = process.env.CLODE_ZSTD;
+  try {
+    process.env.CLODE_ZSTD = fake;
+    assert.throws(() => bunGraph.__zstdToTextForTest(frame, 0, frame.length, { forceCli: true }),
+      /cannot decode them/,
+      'a passthrough must be refused, never returned as the asset text');
+  } finally {
+    if (saved === undefined) delete process.env.CLODE_ZSTD; else process.env.CLODE_ZSTD = saved;
+  }
+});
+
 // ---- layer 2: real providers -------------------------------------------------
 
 // Resolve a provider the way the product does, then fall back to anything the test

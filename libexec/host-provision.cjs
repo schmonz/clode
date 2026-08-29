@@ -62,6 +62,16 @@ const ZIP_KAT = {
   expected: 'clode',
 };
 
+// A fixed zstd frame of exactly "clode", produced by `zstd -q -c` (1.5.7). Its
+// Frame_Header_Descriptor is 0x24: single-segment, a 1-byte Frame_Content_Size of 5,
+// and a 4-byte XXH64 CONTENT CHECKSUM — so a "decoder" that echoes its input, truncates,
+// or emits the right length of the wrong bytes cannot produce "clode" by accident. Any
+// conforming zstd decompressor turns these 18 bytes into exactly that string.
+const ZSTD_KAT = {
+  zst: [40, 181, 47, 253, 36, 5, 41, 0, 0, 99, 108, 111, 100, 101, 5, 25, 237, 74],
+  expected: 'clode',
+};
+
 const REGISTRY = {
   sha256: {
     id: 'sha256',
@@ -187,6 +197,41 @@ const REGISTRY = {
     },
     installHint: 'install unzip, or set CLODE_UNZIP to an unzip-compatible extractor. Needed to unpack Windows Node downloads.',
   },
+  // REQUIRED TO CARVE UPSTREAM 2.1.251+, on every artifact we publish. Claude Code embeds
+  // its text assets as zstd frames; `node:zlib.zstdDecompressSync` arrived in Node 22.15/24
+  // and covers the DEV path only — every shipped clode is a fused tjs binary, tjs has no
+  // zstd, and node-shim/modules/zlib.cjs deliberately has none. So libexec/bun-graph.cjs
+  // spawns a host zstd, and it resolves it through here rather than hand-rolling a lookup:
+  // without the KAT, a CLODE_ZSTD (or a PATH `zstd`) that exits 0 and echoes its input makes
+  // the carve embed the COMPRESSED FRAME as the asset's text, and the target builds green
+  // and dies on its first turn with "embedded text asset is missing or corrupt".
+  zstd: {
+    id: 'zstd',
+    overrideEnv: 'CLODE_ZSTD',
+    // Decompressors, most-universal first. ARGV DIFFERS PER CANDIDATE and that is the whole
+    // reason `args` lives on the candidate rather than on the requirement: zstd switches mode
+    // on argv[0], so `unzstd` and `zstdcat` are the same binary already in decompress mode and
+    // do not take (or need) `-d`. One shared argv would resolve an alias-only host and then
+    // drive it wrong. `zstd -d -c f` / `unzstd -c f` / `zstdcat f` are each that tool's own
+    // documented decompress-to-stdout form.
+    candidates: [
+      { name: 'zstd', args: (f) => ['-d', '-c', f] },
+      { name: 'unzstd', args: (f) => ['-c', f] },
+      { name: 'zstdcat', args: (f) => [f] },
+    ],
+    // Decompress the embedded known frame; verify the exact bytes.
+    verify({ candidate, path: bin, run, fs }) {
+      const tmp = path.join(os.tmpdir(), `clode-kat-zstd-${process.pid}.zst`);
+      fs.writeFileSync(tmp, Buffer.from(ZSTD_KAT.zst));
+      try {
+        const r = run(bin, candidate.args(tmp));
+        return !!r && r.status === 0 && String(r.stdout).replace(/\s+$/, '') === ZSTD_KAT.expected;
+      } finally {
+        try { fs.unlinkSync(tmp); } catch { /* absent */ }
+      }
+    },
+    installHint: 'install zstd (or unzstd/zstdcat), or set CLODE_ZSTD to a `zstd -d -c`-compatible decompressor. Needed to carve Claude Code 2.1.251+, which embeds its text assets as zstd frames.',
+  },
 };
 
 function cachePath(dataDir) {
@@ -202,11 +247,37 @@ function writeCache(fs, file, cache) {
   } catch { /* cache is an optimization; a write failure must not break provisioning */ }
 }
 
+// AN OVERRIDE IS EXCLUSIVE, not merely first. If the operator said CLODE_ZSTD=/x/y, then
+// /x/y is the answer; falling through to a PATH `zstd` when /x/y fails its KAT would quietly
+// use a tool nobody asked for and report success — the silent-softening shape this repo's
+// doctrine forbids, and it makes "point CLODE_ZSTD at a broken decoder" untestable because
+// the fallback always rescues it. Failing the override fails the requirement, loudly.
+//
+// Its argv is that of the candidate whose BASENAME it matches (CLODE_ZSTD=/usr/bin/zstdcat
+// gets `zstdcat f`, not `zstd -d -c f`), falling back to the first candidate's form for a
+// name the registry does not know — a wrapper script, a differently-named build.
 function candidateList(req, env) {
-  const list = req.candidates.slice();
   const ov = req.overrideEnv && env[req.overrideEnv];
-  if (ov) list.unshift({ name: ov, args: req.candidates[0].args, override: ov });
-  return list;
+  if (!ov) return req.candidates.slice();
+  const base = String(ov).replace(/\.[^.\\/]+$/, '').split(/[\\/]/).pop();
+  const like = req.candidates.find((c) => c.name === base) || req.candidates[0];
+  return [{ name: ov, args: like.args, override: ov }];
+}
+
+// Why a candidate was rejected, in the words of the thing that rejected it. `verify`
+// answers a boolean, which is the right shape for deciding but useless for REPORTING —
+// and these failures happen on a machine nobody is sitting at. Capturing the last spawn
+// result per candidate lets the refusal say "your CLODE_ZSTD ran and printed
+// `unsupported frame parameter`" instead of "no zstd tool found", which is the difference
+// between a fix and an afternoon spent hunting PATH.
+function whyRejected(last, threw) {
+  if (threw) return threw.message;
+  if (!last) return 'its known-answer test ran nothing';
+  if (last.error) return last.error.message;
+  const tail = String(last.stderr || '').trim().split(/\r?\n/)[0];
+  if (tail) return tail;
+  if (last.status !== 0) return `exited ${last.status}${last.signal ? ` on ${last.signal}` : ''}`;
+  return 'ran fine but produced the wrong bytes';
 }
 
 function provision(id, opts = {}) {
@@ -223,9 +294,17 @@ function provision(id, opts = {}) {
 
   const file = cachePath(dataDir);
   const cache = readCache(fs, file);
+  // AN EXPLICIT OVERRIDE OUTRANKS THE CACHE, in both directions: it is not consulted and
+  // it is not written. The cache short-circuit used to run first, so once ANY winner was
+  // cached, setting CLODE_<TOOL> silently did nothing — an override that is ignored is
+  // worse than no override at all, because the operator believes they steered the build.
+  // Not writing matters too: an override is a one-run instruction ("use this zstd for
+  // this carve"), and persisting it under the plain id would leak that choice into every
+  // later run that did not ask for it.
+  const overridden = !!(req.overrideEnv && env[req.overrideEnv]);
 
   // 1. Cache hit: revalidate cheaply (the tool still executes) and return.
-  const hit = cache[id];
+  const hit = overridden ? null : cache[id];
   if (hit && hit.path && isExec(hit.path)) {
     const cand = req.candidates.find((c) => c.name === hit.candidate)
       || { name: hit.candidate, args: req.candidates[0].args };
@@ -233,20 +312,26 @@ function provision(id, opts = {}) {
   }
 
   // 2. Probe: first candidate whose KAT passes wins.
-  const run = (bin, args, extra) => spawn(bin, args, { encoding: 'utf8', maxBuffer: 1 << 20, ...extra });
+  const tried = [];
   for (const cand of candidateList(req, env)) {
+    const label = cand.override ? `${req.overrideEnv}='${cand.override}'` : cand.name;
     const bin = findTool(cand.name, { env, override: cand.override });
-    if (!bin) continue;
-    let ok = false;
-    try { ok = req.verify({ candidate: cand, path: bin, run, fs, env }); } catch { ok = false; }
-    if (!ok) continue;
+    if (!bin) { tried.push(`${label}: not found`); continue; }
+    let last = null;
+    const run = (b, args, extra) => (last = spawn(b, args, { encoding: 'utf8', maxBuffer: 1 << 20, ...extra }));
+    let ok = false, threw = null;
+    try { ok = req.verify({ candidate: cand, path: bin, run, fs, env }); } catch (e) { threw = e; ok = false; }
+    if (!ok) { tried.push(`${label} (${bin}): ${whyRejected(last, threw)}`); continue; }
     // 3. Persist and return.
-    cache[id] = { candidate: cand.name, path: bin };
-    writeCache(fs, file, cache);
+    if (!overridden) {
+      cache[id] = { candidate: cand.name, path: bin };
+      writeCache(fs, file, cache);
+    }
     return { candidate: cand, path: bin };
   }
 
-  throw new Error(`clode: no ${id} tool found on PATH — ${req.installHint}`);
+  throw new Error(`clode: no ${id} tool found on PATH — ${req.installHint}`
+    + (tried.length ? ` [tried: ${tried.join('; ')}]` : ''));
 }
 
 module.exports = { provision, parseSha256, REGISTRY };
