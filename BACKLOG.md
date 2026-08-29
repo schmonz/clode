@@ -2807,8 +2807,20 @@ two opposite wrong answers about the same change.
 
 **What this means concretely** (the shape, not the plan):
 
-1. `bin/clode` demoted to what it actually is: a STAGE-0 bootstrap whose only job is to
-   build the first binary. Not a way to run a feature, not a test subject, not a build path.
+1. **`bin/clode` RENAMED and MOVED — the name is the bug (user, 2026-08-28).** Demoted to a
+   stage-0 whose only job is producing the first binary. Leaving it called `clode` in `bin/`
+   guarantees the confusion returns: `bin/` is what says "this is the program you run", and
+   the name is what let one hour produce two opposite answers about one change.
+
+   Two names are already spoken for, so do not reach for them: **bootstrap** means quaude's
+   RUNTIME bootstrap (`libexec/quaude-bootstrap.mjs`), and `scripts/build-clode-main.mjs`
+   already builds a different artifact, so `build-clode` reads as its sibling.
+
+   Suggested: **`scripts/stage0.mjs`** — it cannot be mistaken for the product, collides with
+   nothing, and names the property that actually matters: it exists only until a real clode
+   binary does. Whatever the final name, it belongs beside the other `build-*`/`make-*` dev
+   scripts, and `bin/` should hold the BUILT binary or nothing at all.
+
 2. Tests and the local loop drive the FUSED binary. Anything that cannot is named as an
    exception with a written reason, the way divergences are.
 3. `native-builder-oracle` ("the native builder BUILDS THE PRODUCT (node-free, real
