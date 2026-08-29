@@ -544,6 +544,10 @@ runs:
         version: ${{ inputs.guest-version }}
         # BAKED image (gmake+cmake preinstalled) for the cache-miss bake — see CI-IMAGES.md.
         cache-key: wd0-baked-${{ inputs.guest-version }}-gmake-cmake.img.zst
+        # Distinct from the smoke's below: both invocations share one workdir
+        # and the smoke's driver truncates this console log, so this artifact
+        # has to be taken here, under its own name.
+        log-name: ${{ inputs.leg }}-bake
         script: ${{ steps.bake-recipe.outputs.script }}
 
     - name: Decode + verify the synced-out sparc engine (qemu-* cache miss)
@@ -737,6 +741,7 @@ runs:
         # The proven fuse+PONG recipe (spike/quickjs/qemu/ci-guest-smoke.sh): fetch
         # clode-builder + provider-min over :8180, clode-on-sparc fuses a quaude +
         # internal PONG/attest smoke. smoke-exit=0 == fused + PONG + attest.
+        log-name: ${{ inputs.leg }}-smoke
         script: ${{ steps.smoke-recipe.outputs.script }}
 
     # A cache HIT skips the guest setup, so foreign-arch legs still need

@@ -388,6 +388,94 @@ test('netbsd-sparc leg: own-qemu cross-fuse, floored at 10.1, VM leg', () => {
     'netbsd-sparc publishes, so CI must gate it — a VM leg we ship has earned hard status');
 });
 
+// DOCTRINE (ci-job-is-to-tell-the-truth): a job that cannot say WHY it failed
+// is itself the defect. The own-qemu sparc backend is the worst offender in
+// this repo — ci-sparc-driver.py dup2s its own stdout/stderr AND the mirrored
+// serial console into a log file under $CI_SPARC_WORKDIR and prints exactly one
+// verdict line to the job log. Run 33241941716 / job 99072711216 died in 4m25s
+// with `ci-sparc-driver: GUEST-DONE seen, but 1 marker(s) failed:
+// {'smoke-exit': 1}` and NOTHING else: the guest's actual error existed, on the
+// runner, and was thrown away when the job ended. Two mechanisms keep it
+// honest, and the pair is deliberate — neither alone covers every ending:
+//   (a) STREAM the console into the job log while the driver runs. This is the
+//       only half that survives a cancelled step or a job timeout, where no
+//       post-mortem step is guaranteed to run at all.
+//   (b) UPLOAD every log the driver leaves behind, from an `always()` step
+//       placed right after each guest invocation — the sparc leg calls the
+//       guest action twice (bake, then smoke) against the SAME workdir, and the
+//       smoke's driver O_TRUNCs the bake's console log, so the bake's copy has
+//       to be taken before that happens.
+test('guest action: a failing sparc leg can always say WHY (streamed + uploaded console)', () => {
+  // Split a composite action's YAML into its `- name:` step blocks. A line
+  // scan, deliberately: the obvious block regex here (`- name:` then lines of
+  // `[ \t]+[^\n]*` up to a marker) backtracks catastrophically on a 1000-line
+  // action and hangs the suite instead of failing it.
+  const steps = (yml) => {
+    const out = [];
+    for (const line of yml.split('\n')) {
+      if (/^\s*- name: /.test(line) || /^\s*- uses: /.test(line)) out.push([]);
+      if (out.length) out[out.length - 1].push(line);
+    }
+    return out.map((b) => b.join('\n'));
+  };
+
+  const ymlPath = path.join(REPO, '.github/actions/guest/action.yml');
+  const yml = fs.readFileSync(ymlPath, 'utf8');
+
+  // (a) live stream — `tail -F` against the driver's console log, started
+  // before the driver and running concurrently with it.
+  assert.match(yml, /tail -n \+1 -F/,
+    'guest action must STREAM the sparc console log into the job log while the driver runs — '
+    + 'a post-mortem dump does not survive a cancelled step or a job timeout');
+
+  // The bake syncs the ~6.4MB sparc tjs out over this same serial console as a
+  // base64 block. Streaming it verbatim would bury the diagnostics it exists to
+  // surface, so the stream must elide that block (and only that block).
+  const driver = steps(yml).find((b) => b.includes('python3 spike/quickjs/qemu/ci-sparc-driver.py'));
+  assert.ok(driver, 'no step invokes ci-sparc-driver.py');
+  assert.ok(driver.includes('TJS-GZB64-BEGIN') && driver.includes('TJS-GZB64-END'),
+    'the console stream must elide the TJS-GZB64 engine-sync block, or the log it '
+    + 'is meant to make readable is flooded by ~8MB of base64');
+  assert.ok(!/^\s*set -euo pipefail$/m.test(driver),
+    'the driver step must not `set -e`: the tail has to be reaped and the log flushed '
+    + 'even when the driver exits nonzero, which is the whole point');
+
+  // (b) always()-guarded artifact upload of the whole workdir's logs.
+  const uploads = steps(yml)
+    .filter((b) => b.includes('upload-artifact@') && b.includes('qemu-netbsd-sparc'));
+  assert.strictEqual(uploads.length, 1,
+    'guest action must upload the sparc guest logs exactly once per invocation');
+  const block = uploads[0];
+  assert.match(block, /if: always\(\) &&/,
+    'the sparc log upload must be `if: always() && ...` — `failure()` misses cancellations '
+    + 'and job timeouts, which is exactly when the log is most needed');
+  // runner.temp, NOT env.CI_SPARC_WORKDIR: that env var is set by the fetch
+  // step, which is skipped on a tjs-cache hit, and an unset expression would
+  // silently make the path `/*.log`.
+  assert.match(block, /path: \$\{\{ runner\.temp \}\}\/qemu-sparc\/\*\.log/,
+    'the sparc log upload must take its path from runner.temp (a constant), not from '
+    + '$CI_SPARC_WORKDIR, which is unset when the fetch step is skipped');
+  assert.match(block, /if-no-files-found: warn/,
+    'a missing log must warn, not fail the leg for a second reason');
+  // Two invocations, one workdir: without a per-invocation name the second
+  // upload collides with the first (upload-artifact v4+ rejects duplicates).
+  assert.match(block, /name: [^\n]*inputs\.log-name/,
+    'the artifact name must include the per-invocation `log-name` input — the sparc leg '
+    + 'calls the guest action twice and duplicate artifact names are rejected');
+  assert.match(yml, /^ {2}log-name:$/m, 'guest action must declare a `log-name` input');
+
+  // Both sparc call sites must pass a distinct log-name.
+  const leg = fs.readFileSync(path.join(REPO, '.github/actions/build-leg/action.yml'), 'utf8');
+  const calls = steps(leg).filter((b) => b.includes('uses: ./.github/actions/guest')
+    && b.includes('startsWith(inputs.guest-platform, \'qemu-\')'));
+  assert.strictEqual(calls.length, 2,
+    'expected exactly two qemu-* guest invocations in build-leg (bake + smoke)');
+  const names = calls.map((b) => (b.match(/log-name: ([^\n]+)/) || [])[1]);
+  assert.ok(names.every(Boolean), 'both qemu-* guest invocations must pass log-name');
+  assert.notStrictEqual(names[0], names[1],
+    'the bake and smoke invocations must pass DIFFERENT log-names, or their uploads collide');
+});
+
 test('release tier: publishing legs are NOT soft-fail (deterministic contents)', () => {
   // User doctrine 2026-07-14: slow releases over non-deterministic contents. A
   // release ships a FIXED manifest — every publisher must be green, so a

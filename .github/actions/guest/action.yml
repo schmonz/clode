@@ -53,6 +53,15 @@ inputs:
       empty defaults to the pristine per-run image at `version`.
     required: false
     default: ""
+  log-name:
+    description: >
+      Per-invocation label for the diagnostic artifact this action uploads for
+      the own-qemu backends (artifact name: guest-console-<log-name>). The sparc
+      leg invokes this action TWICE against one workdir (bake, then smoke) and
+      the second driver truncates the first's console log, so each invocation
+      needs its own name — upload-artifact rejects duplicates outright.
+    required: false
+    default: guest
   packages:
     description: >
       Packages to install in the guest before the script runs, named in the
@@ -417,7 +426,7 @@ runs:
       env:
         CLODE_GUEST_SCRIPT: ${{ inputs.script }}
       run: |
-        set -euo pipefail
+        set -uo pipefail
         # Bridge inputs.script into ci-sparc-driver.py's recipe-file model:
         # the guest fetches this file over :8180 and runs it with sh. For
         # the driver's GUEST-DONE/*-exit verdict to mean anything, the
@@ -426,12 +435,53 @@ runs:
         # are expected to emit it; exact wiring refined in Task 3/4.
         RECIPE_REL=".ci-sparc-guest-script.sh"
         printf '%s\n' "$CLODE_GUEST_SCRIPT" > "$GITHUB_WORKSPACE/$RECIPE_REL"
+        # ---- make this leg able to say WHY it failed ----------------------
+        # ci-sparc-driver.py dup2s its OWN stdout/stderr and the mirrored
+        # serial console into $LOG, printing one verdict line here. Until
+        # 2026-08-29 that log was never read by a human: run 33241941716 /
+        # job 99072711216 reported `smoke-exit=1` after 4m25s and the guest's
+        # actual error died with the runner. Doctrine says a job that cannot
+        # say why it failed IS the defect, so stream the console into this
+        # job's log AS IT HAPPENS. Streaming, not a post-mortem `tail`, is
+        # the half that survives a cancelled step or a job timeout — the
+        # endings where no later step is guaranteed to run at all.
+        # The bake syncs the ~6.4MB sparc tjs over this same console as a
+        # base64 block (TJS-GZB64-BEGIN..END); elide THAT and nothing else,
+        # or ~8MB of base64 buries the diagnostics this exists to surface.
+        LOG="$CI_SPARC_WORKDIR/ci-sparc-console.log"
+        : > "$LOG"
+        # --pid=$$ (GNU tail) is what makes this safe to leave running: the
+        # follower dies with THIS shell. Killing it by hand instead would
+        # orphan `tail` holding the step's stdout open, and the runner would
+        # wait forever for an EOF that never comes.
+        tail -n +1 -F --pid=$$ "$LOG" 2>/dev/null | awk '
+            /TJS-GZB64-BEGIN/ { s=1; print "guest| <TJS-GZB64 engine-sync block elided>"; fflush(); next }
+            /TJS-GZB64-END/   { s=0; next }
+            !s                { print "guest| " $0; fflush() }' &
+        rc=0
         python3 spike/quickjs/qemu/ci-sparc-driver.py \
           --workdir "$CI_SPARC_WORKDIR" \
           --workspace "$GITHUB_WORKSPACE" \
           --recipe "$RECIPE_REL" \
           --machine SS-20 \
-          --memory 512M
+          --memory 512M || rc=$?
+        sleep 3   # let the follower drain the driver's last writes
+        exit "$rc"
+
+    # Belt to the stream's braces: the raw, unelided logs as a downloadable
+    # artifact. `always()` (never `failure()`) — a cancellation or a job
+    # timeout is exactly when the console matters most, and `failure()` skips
+    # both. Path comes from runner.temp, a constant, NOT $CI_SPARC_WORKDIR:
+    # that env var is set by the fetch step, which a tjs-cache hit skips, and
+    # an empty expression would silently make the path "/*.log".
+    - name: Upload the sparc guest console log (qemu-netbsd-sparc)
+      if: always() && inputs.platform == 'qemu-netbsd-sparc'
+      uses: actions/upload-artifact@v7.0.1
+      with:
+        name: guest-console-${{ inputs.log-name }}-attempt${{ github.run_attempt }}
+        path: ${{ runner.temp }}/qemu-sparc/*.log
+        if-no-files-found: warn
+        retention-days: 14
 
     # ---- native backend: host passthrough (exists so every leg can share one
     # YAML shape; native legs may also just run steps directly).
