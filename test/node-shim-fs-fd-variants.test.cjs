@@ -210,3 +210,47 @@ test('fs.close(fd, cb) cleans up fdPaths even when the underlying close throws',
   assert.strictEqual(out.fchmodThrew, true, 'fdPaths entry survived a throwing close — stale-path chmod risk');
   assert.strictEqual(out.fchmodCode, 'EBADF');
 });
+
+// FileHandle.readFile — the SAME gap as FileHandle.chmod, found the same way and
+// hidden behind another bug until 2026-08-29. Claude Code 2.1.251's file reader does
+//
+//     async function jar(e,t,r){ E(await e.stat(),t,r);
+//       let i=Buffer.alloc(4096),{bytesRead:d}=await e.read(i,0,i.length,0),
+//       c=l(i.subarray(0,d)), o=r===void 0? await e.readFile() : … }
+//
+// — probe the head for an encoding, then read the whole thing off the SAME handle.
+// makeFileHandle had no readFile, so under quickjs that threw a bare, symbol-less
+// `not a function` and every Edit of an existing file reported "not a function" as
+// its tool_result while the file on disk was untouched. Differential against host
+// node, including the encoding argument and the no-encoding Buffer return.
+test('FileHandle.readFile reads the whole file off an open handle, like host node', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const f = writeProg(`
+    const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+    (async () => {
+      const target = path.join(os.tmpdir(), 'fh-readfile-' + process.pid);
+      fs.writeFileSync(target, 'hello world\\nsecond line\\n');
+      const fh = await fs.promises.open(target, 'r');
+      // Exactly upstream's shape: a positioned probe read first, then readFile.
+      const buf = Buffer.alloc(5);
+      const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+      const text = await fh.readFile('utf8');
+      const raw = await (await fs.promises.open(target, 'r')).readFile();
+      await fh.close();
+      fs.unlinkSync(target);
+      console.log(JSON.stringify({
+        bytesRead, probe: buf.toString('utf8'), text,
+        rawIsBuffer: Buffer.isBuffer(raw), rawHex: raw.toString('hex'),
+      }));
+    })().catch((e) => { console.log(JSON.stringify({ error: String(e && e.message || e) })); });
+  `);
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const got = JSON.parse(r.stdout.trim());
+  // The host-node oracle, run on the SAME program: the shim has to match it, not a
+  // hand-written expectation that could be wrong in the same way the shim is.
+  const ref = require('node:child_process').spawnSync(process.execPath, [f], { encoding: 'utf8' });
+  assert.strictEqual(ref.status, 0, ref.stderr);
+  assert.deepStrictEqual(got, JSON.parse(ref.stdout.trim()));
+  assert.strictEqual(got.text, 'hello world\nsecond line\n', `shim and node agreed but on the wrong thing: ${r.stdout}`);
+});

@@ -669,6 +669,33 @@ function makeFileHandle(fd, p) {
     async writeFile(data, opts) { writeAll(fd, typeof data === 'string' ? encodeStr(data, typeof opts === 'string' ? opts : opts?.encoding) : new Uint8Array(data.buffer ?? data, data.byteOffset ?? 0, data.byteLength ?? data.length), null); },
     async appendFile(data, opts) { writeAll(fd, typeof data === 'string' ? encodeStr(data, typeof opts === 'string' ? opts : opts?.encoding) : new Uint8Array(data.buffer ?? data, data.byteOffset ?? 0, data.byteLength ?? data.length), null); },
     async stat() { return new Stats(FSS.fstat(fd)); },
+    // FileHandle.readFile: upstream 2.1.251's file reader probes the head of a file for
+    // its encoding with a positioned read and then reads the WHOLE thing off the same
+    // handle (`o = r === void 0 ? await e.readFile() : …`). Missing this method made every
+    // Edit of an existing file report a bare, symbol-less `not a function` as its
+    // tool_result while the file on disk stayed untouched — the same shape, and the same
+    // class of gap, as FileHandle.chmod below.
+    //
+    // FROM THE CURRENT POSITION, like node, not from 0: position -1 is what this fd's own
+    // read() passes for "wherever the handle is", so a caller that has already consumed
+    // part of the handle gets the remainder rather than a second copy of the head. The
+    // probe read above passes an explicit position, which (again like node) leaves the
+    // handle where it was, so the common shape reads the whole file.
+    async readFile(opts) {
+      const enc = typeof opts === 'string' ? opts : opts?.encoding;
+      const chunks = []; let total = 0;
+      for (;;) {
+        const ab = FSS.read(fd, 1 << 20, -1);
+        if (!ab || ab.byteLength === 0) break;
+        chunks.push(new Uint8Array(ab)); total += ab.byteLength;
+      }
+      const data = new Uint8Array(total);
+      let o = 0;
+      for (const c of chunks) { data.set(c, o); o += c.length; }
+      if (enc === 'utf8' || enc === 'utf-8') return td.decode(data);
+      if (isLatin1(enc)) return latin1Decode(data);
+      return asBuffer(data);
+    },
     // FileHandle.chmod: the bundle's atomic write (Write-overwrite + Edit) writes
     // a temp file then RESTORES the original file's mode via `await handle.chmod`
     // ("Applied original permissions to temp file"). Missing this method made
