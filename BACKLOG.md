@@ -4,6 +4,34 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 (Strategic feasibility risks live in `LONG-TERM.md`; in-flight designs in
 `docs/superpowers/`. Done items are DELETED from here — git history is the record.)
 
+## Three bundle scanners read a graph runner as if it were code (2026-08-29)
+
+`npm test` on a dev box with a provider and a warm `~/.cache/clode` fails three rows, and has
+since 2.1.243. All three scan the staged bundle as TEXT, and a code-split provider stages a
+graph runner whose module sources sit inside a doubly-escaped JSON string literal — so
+a call written `require("fs")` appears in the file with its quotes backslash-escaped
+twice over, and every pattern that looks for the plain spelling misses:
+
+- `test/shim-surface.test.cjs` — *the alias scanner still finds the known fs.watch call sites*:
+  `expected many minified require("fs") aliases, found 0`. That row exists precisely to catch
+  the scanner going blind, and it is doing its job.
+- `test/shim-surface.test.cjs` — *the two-layer gap inventory matches the golden map*: reports
+  a new `Bun.ant` gap. Same scanner, same escaped text; the gap lists are not trustworthy
+  while the row above is red.
+- `test/guard-subcommands-gate.test.cjs` — greps `.command("…")` out of the NEWEST
+  `~/.cache/clode/*/cli.cjs` by mtime, finds zero, and reports every entry of `SUBCOMMANDS` as
+  drift.
+
+**Verified pre-existing, not fallout from the staging-side merge**: a runner emitted by the
+raw extractor at `bed73d5` scans to `fs aliases 0` exactly like a merged one.
+
+**They are invisible in CI**, which is the worse half. `shim-surface` skips without
+`CLODE_PROVIDER_BIN` and `guard-subcommands-gate` skips with an empty `~/.cache/clode` — and
+the `test` job has neither, so these three gates have not actually run in CI since 2.1.243.
+The fix is for the scanners to decode a graph runner (`libexec/inspect-claude-bundle.cjs`
+already has `decodeGraphRunner` — see test/graph-runner.test.cjs) instead of pattern-matching
+its envelope, and then to give the jobs the inputs that make them run.
+
 ## Staging a code-split provider now REQUIRES a tjs engine (2026-08-29)
 
 The residual-cyclic-require merge moved out of `libexec/quaude-fuse.js` into staging
