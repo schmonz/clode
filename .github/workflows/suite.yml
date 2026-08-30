@@ -31,6 +31,19 @@ jobs:
           - os: ubuntu-latest    # linux-x64
           - os: windows-latest   # windows-amd64
     runs-on: ${{ matrix.os }}
+    # SCRATCH GOES ON THE ROOMY VOLUME. On Windows runners `os.tmpdir()` resolves to
+    # C:\Users\RUNNER~1\AppData\Local\Temp, on the small C: volume, while RUNNER_TEMP is
+    # on the much larger D:. The suite decompresses a ~4 MB zstd frame to 6 MB in the
+    # deadlock guard, and twice (2026-08-29, 2026-08-30) that job died with
+    # `zstd: error 70 : Write error : cannot write block : No space left on device`,
+    # which the guard then reported as its own deadlock. Measured on the first
+    # occurrence: the repo change under suspicion wrote ZERO bytes on this job, so the
+    # volume was already tight. POSIX runners are unaffected (their TMPDIR is already
+    # roomy); setting these on every row keeps one definition rather than a per-OS branch.
+    env:
+      TMP: ${{ runner.temp }}
+      TEMP: ${{ runner.temp }}
+      TMPDIR: ${{ runner.temp }}
     defaults:
       run:
         shell: bash
