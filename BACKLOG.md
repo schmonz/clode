@@ -3020,6 +3020,17 @@ in isolation is what produced a codebase full of guards nobody re-checked:
    macOS and CRASHES on NetBSD/arm64. A control-free variant (assert the target renders an answer
    absent from the prompt) would run anywhere credentials reach.
 
+8. **Any gate that greps the STAGED CARVE for a quote-bearing string is silently blind.**
+   Found 2026-08-29 by insisting a new pin prove itself red: it reported two walls DOWN against
+   a bundle whose walls were intact, because since 2.1.243 the staged `cli.cjs` is the GRAPH
+   RUNNER — module sources ride as JSON inside a JS string, so a literal like
+   `switch("clode-managed-target")` is present only in escaped form. Two gates had already died
+   of exactly this (`guard-subcommands-gate`'s `.command("…")` and the fs.watch alias scanner),
+   so this is a CLASS, not an incident. Sweep every gate that pattern-matches a staged artifact:
+   read `graph.json`, whose `sources` are real strings, or make the pattern escape-blind with a
+   self-check pinning BOTH encodings. The pin in `a42bf7e` does the latter and is the worked
+   example.
+
 **Why this belongs in *** and not in a test file:** items 1-5 are properties of how the build
 reports, not features of any one gate. Bolting them onto individual tests reproduces the problem
 one level up — a hand-maintained list of which guards were mutation-checked, which will itself go
