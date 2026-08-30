@@ -4,10 +4,12 @@
 // through the acceptance battery:
 //   - the build itself smokes PONG + attest internally (exit 0 required);
 //   - attest golden: STABLE manifest fields only (schema, versions, shas the
-//     test recomputes independently) — never fusedAt;
+//     test recomputes independently) — never builtAt;
 //   - reserved-namespace mechanics against the real bootstrap (unknown
-//     --quaude-foo errors from quaude, exit 64, bundle never runs;
-//     --quaude-attest short-circuits even with bundle args present);
+//     --clode-foo errors from quaude, exit 64, bundle never runs;
+//     --clode-attest short-circuits even with bundle args present);
+//   - THE GATE ITSELF: a tampered copy of the same binary must FAIL attest —
+//     a verification that cannot fail is not a verification;
 //   - the STRICT-MODE sweep the design memo requires (§6.3): the agentic Bash
 //     mock oracle from test/node-shim-agentic.test.cjs, pointed at the fused
 //     binary — the bundle runs as compiled-module bytecode (strict), so this
@@ -85,7 +87,7 @@ test('clode build fuses a quaude and its internal PONG + attest smokes pass', (t
 
 test('attest golden: stable manifest fields + full member verification', async (t) => {
   if (SKIP) { t.skip(SKIP); return; }
-  const r = await runQuaude(['--quaude-attest'], cleanEnv());
+  const r = await runQuaude(['--clode-attest'], cleanEnv());
   assert.strictEqual(r.status, 0, r.stderr);
   // Output = manifest JSON verbatim, then one ok/FAIL line per member, then the summary.
   const lines = r.stdout.split('\n');
@@ -93,12 +95,12 @@ test('attest golden: stable manifest fields + full member verification', async (
   assert.ok(firstMemberLine > 0, 'no member verification lines');
   const manifest = JSON.parse(lines.slice(0, firstMemberLine).join('\n'));
 
-  // GOLDEN (stable fields only — fusedAt deliberately unchecked beyond shape):
+  // GOLDEN (stable fields only — builtAt deliberately unchecked beyond shape):
   assert.deepStrictEqual(Object.keys(manifest).sort(), [
-    'bom', 'bundleVersion', 'clodeVersion', 'engine', 'entry', 'fusedAt', 'hooks',
-    'idna', 'members', 'providerPlatform', 'quaude', 'role', 'template',
+    'bom', 'builtAt', 'bundleVersion', 'clode', 'clodeVersion', 'engine', 'entry',
+    'hooks', 'idna', 'members', 'providerPlatform', 'role', 'template',
   ]);
-  assert.strictEqual(manifest.quaude, '1');
+  assert.strictEqual(manifest.clode, '1');
   assert.strictEqual(manifest.role, 'quaude');
   // THE ENTRY MEMBER IS NAMED FOR THE BUNDLE SHAPE, and both shapes are ours:
   // 'cli.qbc' for a single-CJS provider, 'graph.qbc' for a code-split one (2.1.243+,
@@ -125,7 +127,7 @@ test('attest golden: stable manifest fields + full member verification', async (
   assert.strictEqual(manifest.template.sha256, sha256File(tjsPath()));
   assert.strictEqual(manifest.hooks['extract-claude-js.cjs'],
     sha256File(path.join(REPO, 'libexec/extract-claude-js.cjs')));
-  assert.ok(!Number.isNaN(Date.parse(manifest.fusedAt)), 'fusedAt not ISO-parseable');
+  assert.ok(!Number.isNaN(Date.parse(manifest.builtAt)), 'builtAt not ISO-parseable');
   // target-env.cjs is a BARE member name (archive root, no libexec/ prefix —
   // see quaude-fuse.js's comment on why): pre-existing test bug fixed
   // in-passing here (this exact assertion block is what Task a's BOM checks
@@ -162,12 +164,55 @@ test('attest golden: stable manifest fields + full member verification', async (
   const bomLines = memberLines.filter((l) => l.includes(' bom: '));
   assert.strictEqual(bomLines.length, manifest.bom.length);
   assert.ok(bomLines.every((l) => l.startsWith('ok  ')), bomLines.join('\n'));
-  assert.strictEqual(lines.filter(Boolean).pop(), 'quaude-attest: all members verified');
+  assert.strictEqual(lines.filter(Boolean).pop(), require('../libexec/clode-attest.cjs').ATTEST_VERIFIED);
+});
+
+// THE GATE MUST BE ABLE TO FAIL. `clode build` refuses to ship a target whose attest does
+// not print the verdict line; that refusal is worth nothing unless a corrupted artifact
+// actually produces a different answer. Flip ONE byte inside a real member's byte range
+// (located via the archive index, so the flip is guaranteed to land in hashed payload and
+// not in slack) and require the binary to say so.
+test('the attest gate can fail: one flipped byte in a member -> VERIFICATION FAILED, exit 1', async (t) => {
+  if (SKIP) { t.skip(SKIP); return; }
+  const { readTrailerIndex } = require('./quaude-archive.cjs');
+  const { index } = readTrailerIndex(QUAUDE);
+  // bun-shim.cjs: a member every quaude has, small, and not the manifest (so the failure
+  // is a MEMBER failure, not a manifest-parse crash that would exit for another reason).
+  const victim = index.members.find((m) => m.name === 'bun-shim.cjs');
+  assert.ok(victim && victim.len > 0, 'no bun-shim.cjs member to tamper with');
+  const tampered = path.join(DIR, 'quaude-tampered');
+  const bytes = fs.readFileSync(QUAUDE);
+  bytes[victim.offset] = bytes[victim.offset] ^ 0xff;
+  fs.writeFileSync(tampered, bytes);
+  fs.chmodSync(tampered, 0o755);
+
+  const { ATTEST_VERIFIED, ATTEST_FAILED } = require('../libexec/clode-attest.cjs');
+  const r = await new Promise((resolve) => {
+    const child = spawn(tampered, ['--clode-attest'], { cwd: DIR, stdio: ['ignore', 'pipe', 'pipe'], env: cleanEnv() });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', (d) => { stdout += d; });
+    child.stderr.on('data', (d) => { stderr += d; });
+    const to = setTimeout(() => child.kill('SIGKILL'), 120000);
+    child.on('exit', (status) => { clearTimeout(to); resolve({ status, stdout, stderr }); });
+    child.on('error', (e) => { clearTimeout(to); resolve({ status: null, stdout, stderr: String(e) }); });
+  });
+  assert.notStrictEqual(r.status, 0, `a tampered quaude exited 0:\n${r.stdout}\n${r.stderr}`);
+  assert.doesNotMatch(r.stdout, new RegExp(ATTEST_VERIFIED.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    'the tampered binary still printed the verdict the build gate greps');
+  assert.ok(r.stdout.includes('FAIL bun-shim.cjs') || r.stdout.includes(ATTEST_FAILED),
+    `no failure reported:\n${r.stdout}\n${r.stderr}`);
+
+  // ... and the SHARED gate helper the build uses must reject exactly this output.
+  const { attestTarget } = require('../libexec/clode-fuse.cjs');
+  const verdict = await attestTarget(tampered, {
+    spawnRun: () => Promise.resolve(r), env: cleanEnv(), cwd: DIR, timeout: 1000,
+  });
+  assert.strictEqual(verdict.ok, false, 'attestTarget accepted a tampered artifact');
 });
 
 test('the BINARY says which platform it was carved for, without being run', (t) => {
   if (SKIP) { t.skip(SKIP); return; }
-  // --quaude-attest can only answer on a target THIS host can execute, which excludes every
+  // --clode-attest can only answer on a target THIS host can execute, which excludes every
   // cross-build — and a cross-build is exactly where a linux carve gets fused into a darwin
   // target. `strings` cannot answer either: a quaude stores the bundle as bytecode, and an hour
   // was spent in 2026-08-29 concluding the wrong thing from precisely that. manifest.json is a
@@ -179,23 +224,33 @@ test('the BINARY says which platform it was carved for, without being run', (t) 
   assert.strictEqual(manifest.role, 'quaude');
 });
 
-test('reserved namespace: unknown --quaude-foo errors from quaude, bundle never runs', async (t) => {
+test('reserved namespace: unknown --clode-foo errors from quaude, bundle never runs', async (t) => {
   if (SKIP) { t.skip(SKIP); return; }
-  const r = await runQuaude(['--quaude-frobnicate', '-p', 'say PONG'], cleanEnv());
+  const r = await runQuaude(['--clode-frobnicate', '-p', 'say PONG'], cleanEnv());
   assert.strictEqual(r.status, 64);
-  assert.match(r.stderr, /quaude: unknown option '--quaude-frobnicate'/);
+  assert.match(r.stderr, /quaude: unknown option '--clode-frobnicate'/);
   assert.match(r.stderr, /reserved/);
   assert.strictEqual(r.stdout, '');   // nothing from the bundle
 });
 
-test('reserved namespace: --quaude-attest short-circuits before the bundle sees argv', async (t) => {
+test('reserved namespace: --clode-attest short-circuits before the bundle sees argv', async (t) => {
   if (SKIP) { t.skip(SKIP); return; }
   // With bundle args alongside, attest still wins and no session starts (no
   // mock is listening — a bundle boot would fail loudly or hang, not attest).
-  const r = await runQuaude(['-p', 'say PONG', '--quaude-attest'], cleanEnv(), 60000);
+  const r = await runQuaude(['-p', 'say PONG', '--clode-attest'], cleanEnv(), 60000);
   assert.strictEqual(r.status, 0, r.stderr);
-  assert.match(r.stdout, /quaude-attest: all members verified/);
+  assert.ok(r.stdout.includes(require('../libexec/clode-attest.cjs').ATTEST_VERIFIED), r.stdout);
   assert.doesNotMatch(r.stdout, /PONG/);
+});
+
+// The retired spelling is GONE, not aliased: it is now an ordinary argument, so it reaches
+// Claude Code and Claude Code rejects it. What must never happen is a silent success —
+// a quaude that prints an attest report for a flag we no longer implement.
+test('the retired --quaude-attest is no longer a quaude flag', async (t) => {
+  if (SKIP) { t.skip(SKIP); return; }
+  const r = await runQuaude(['--quaude-attest'], cleanEnv(), 60000);
+  assert.notStrictEqual(r.status, 0, `--quaude-attest still succeeded:\n${r.stdout}`);
+  assert.doesNotMatch(r.stdout, /all members verified/, 'the retired flag still attests');
 });
 
 test('strict-mode sweep: agentic Bash mock oracle against the fused quaude', async (t) => {

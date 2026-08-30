@@ -403,3 +403,114 @@ test('first pass: the guard settings file is best-effort removed when the child 
   assert.strictEqual(fs.existsSync(writtenFile), false, 'the ephemeral settings file must be removed on exit');
 });
 
+
+// --- `--clode-attest`: the SAME flag, and the SAME verdict line, quaude prints -
+// naude used to have NO attest of any kind: "is this artifact intact?" was a
+// question only one of the two products could answer, in a spelling that named
+// that product. These tests pin naude's half — that it answers the canonical
+// flag, hashes what it claims to hash, and never boots the bundle while doing
+// it (an attest that spawns Claude Code is not an attest, it's a launch).
+const crypto = require('node:crypto');
+const { ATTEST_VERIFIED, ATTEST_FAILED } = require('../libexec/clode-attest.cjs');
+
+function sha256(buf) { return crypto.createHash('sha256').update(buf).digest('hex'); }
+
+// A fake SEA carrying the same asset set a real naude bakes, with a manifest
+// whose member shas actually match — so a test that tampers with one asset is
+// the ONLY reason a FAIL can appear.
+function attestableSea(tamper = {}) {
+  const payload = {
+    'deps.tar': Buffer.from('TARBALL'),
+    'deps.sig': Buffer.from('sig0'),
+    'bun-shim.cjs': Buffer.from('SHIM'),
+    'cli.cjs': Buffer.from('CLI'),
+    'target-update-check.cjs': Buffer.from('TUC'),
+  };
+  const members = {};
+  for (const [n, b] of Object.entries(payload)) members[n] = { len: b.length, sha256: sha256(b) };
+  const manifest = Buffer.from(JSON.stringify({
+    clode: '1', role: 'naude', entry: 'cli.cjs',
+    bundleVersion: 'claude-abc', providerPlatform: 'darwin', clodeVersion: '0.0.0-test',
+    members,
+  }, null, 2) + '\n');
+  const assets = { ...payload, 'manifest.json': manifest, 'manifest.sig': Buffer.from(sha256(manifest)) };
+  for (const [n, v] of Object.entries(tamper)) assets[n] = Buffer.from(v);
+  return {
+    isSea: () => true,
+    getRawAsset: (n) => {
+      const b = assets[n];
+      if (!b) throw new Error(`no such asset: ${n}`);
+      return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
+    },
+  };
+}
+
+function runAttest(argv, sea) {
+  const stdout = fakeStdout();
+  const stderr = fakeStdout();
+  let exited = 'unset';
+  runNaude({
+    argv, execPath: '/naude', env: {}, cacheDir: os.tmpdir(), workDir: '/work',
+    sea,
+    stdout, stderr,
+    materializeDeps: () => { throw new Error('attest must not materialize deps'); },
+    materializeAssets: () => { throw new Error('attest must not materialize assets'); },
+    spawn: () => { throw new Error('attest must never spawn the bundle'); },
+    procOn: () => {}, procOff: () => {}, exit: (c) => { exited = c; },
+  });
+  return { exited, out: stdout.chunks.join(''), err: stderr.chunks.join('') };
+}
+
+test('--clode-attest: prints the manifest, one line per member, then the SHARED verdict; exit 0', () => {
+  const r = runAttest(['--clode-attest'], attestableSea());
+  assert.strictEqual(r.exited, 0, r.err);
+  const lines = r.out.split('\n').filter(Boolean);
+  assert.strictEqual(lines[lines.length - 1], ATTEST_VERIFIED,
+    'the verdict line must be byte-identical to the one quaude prints — one gate greps both');
+  for (const n of ['deps.tar', 'deps.sig', 'bun-shim.cjs', 'cli.cjs', 'target-update-check.cjs', 'manifest.json']) {
+    assert.ok(lines.some((l) => l === `ok  ${n} (${l.match(/\((\d+) bytes\)/)[1]} bytes)`),
+      `no verification line for ${n} in:\n${r.out}`);
+  }
+  // The manifest itself is printed verbatim first, so the same three facts quaude
+  // reports are answerable about a naude.
+  const m = JSON.parse(r.out.slice(0, r.out.indexOf('\nok  ')));
+  assert.strictEqual(m.providerPlatform, 'darwin');
+  assert.strictEqual(m.bundleVersion, 'claude-abc');
+  assert.strictEqual(m.clodeVersion, '0.0.0-test');
+});
+
+test('--clode-attest: a tampered asset FAILS loudly and exits 1', () => {
+  const r = runAttest(['--clode-attest'], attestableSea({ 'cli.cjs': 'EVIL' }));
+  assert.strictEqual(r.exited, 1, 'a tampered naude must not exit 0');
+  assert.ok(r.out.includes('FAIL cli.cjs'), r.out);
+  assert.ok(r.out.trim().endsWith(ATTEST_FAILED), r.out);
+});
+
+// The manifest is what the ok-lines are checked AGAINST, so it needs its own root of
+// trust or "verified" means "verified against whatever the attacker wrote". manifest.sig
+// plays exactly the role quaude's archive index plays.
+test('--clode-attest: a tampered manifest FAILS (it is checked against manifest.sig)', () => {
+  const r = runAttest(['--clode-attest'], attestableSea({ 'manifest.json': '{"members":{}}' }));
+  assert.strictEqual(r.exited, 1);
+  assert.ok(r.out.includes('FAIL manifest.json'), r.out);
+});
+
+// The retired spelling gets no special handling at all: it is an ordinary argument, so it
+// flows through to Claude Code (which rejects it) rather than quietly attesting.
+test('--quaude-attest is not a naude flag: it is passed through, and nothing attests', () => {
+  const cap = firstPass({ argv: ['--quaude-attest'], onExit: (cb) => cb(0, null) });
+  assert.ok(cap.call, 'the child must still be spawned — the flag is not ours to handle');
+  assert.ok(cap.call.args.includes('--quaude-attest'));
+});
+
+test('an unknown reserved flag is refused by naude, never handed to Claude Code', () => {
+  const r = runAttest(['--clode-frobnicate', '-p', 'x'], attestableSea());
+  assert.strictEqual(r.exited, 64);
+  assert.match(r.err, /--clode-frobnicate/);
+});
+
+test('a bare run carves nothing: ordinary args reach the child untouched', () => {
+  const cap = firstPass({ argv: ['-p', 'say PONG', '--allowedTools', 'Bash'], onExit: (cb) => cb(0, null) });
+  assert.deepStrictEqual(cap.call.args.filter((a) => a !== '--settings' && !/clode-guard-/.test(a)),
+    ['-p', 'say PONG', '--allowedTools', 'Bash']);
+});

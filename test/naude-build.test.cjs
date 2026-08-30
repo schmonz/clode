@@ -381,3 +381,86 @@ test('buildBinary forwards signerBin into both sign phases', async () => {
   assert.deepStrictEqual(seen.map((s) => s.signerBin), ['/t/rcodesign', '/t/rcodesign']);
   assert.deepStrictEqual(seen.map((s) => s.phase), ['unsign', 'sign']);
 });
+
+// --- the naude manifest: what a naude knows about itself -----------------------
+// Until now a naude recorded NOTHING — not which clode built it, not which upstream
+// bundle it baked, and above all not which platform's Claude Code was carved into it.
+// That last one is not a nicety: Bun constant-folds process.platform at carve time, so a
+// darwin naude built from a linux carve has upstream's whole macOS credential store
+// dead-coded away (the failure that shipped on 2026-08-27). quaude records it in its
+// archive manifest; there was never a structural reason naude could not.
+const { createHash } = require('node:crypto');
+
+test('naudeManifest records the three facts quaude records, in quaude\'s own key order', async () => {
+  const { naudeManifest } = await import('../scripts/build-naude.mjs');
+  const m = naudeManifest({
+    clodeVersion: '0.20260830.1', bundleVersion: 'claude-2.1.248-abc', providerPlatform: 'darwin',
+    engineNode: '24.20.0', template: { sha256: 'aa', len: 3 }, hooks: { 'extract-claude-js.cjs': 'bb' },
+    bom: ['undici@6.21.0'], members: { 'cli.cjs': { len: 1, sha256: 'cc' } },
+  });
+  assert.strictEqual(m.clode, '1');
+  assert.strictEqual(m.role, 'naude');
+  assert.strictEqual(m.providerPlatform, 'darwin');
+  assert.strictEqual(m.bundleVersion, 'claude-2.1.248-abc');
+  assert.strictEqual(m.clodeVersion, '0.20260830.1');
+  assert.deepStrictEqual(m.engine, { node: '24.20.0' });
+  assert.ok(typeof m.builtAt === 'string' && m.builtAt.includes('T'));
+  // The printed manifest is the top of --clode-attest's output on BOTH products, so the
+  // two must not read as different documents: same keys, same order, minus only what a
+  // Node SEA genuinely has no answer for.
+  assert.deepStrictEqual(Object.keys(m), [
+    'clode', 'role', 'entry', 'bundleVersion', 'providerPlatform', 'clodeVersion',
+    'engine', 'template', 'hooks', 'bom', 'builtAt', 'members',
+  ]);
+});
+
+test('naudeManifest says "unknown", never nothing, when the platform could not be named', async () => {
+  const { naudeManifest } = await import('../scripts/build-naude.mjs');
+  const m = naudeManifest({ clodeVersion: 'v', members: {} });
+  assert.strictEqual(m.providerPlatform, 'unknown',
+    "'we could not tell' must stay distinguishable from 'nobody recorded it' — same word the extract cache key uses");
+});
+
+test('naude sea-config embeds manifest.json + manifest.sig (the attest root of trust)', async () => {
+  const { naudeSeaConfig } = await import('../scripts/build-naude.mjs');
+  const cfg = naudeSeaConfig({ mainBundle: '/b/entry.js', cliCjs: '/cache/cli.cjs',
+    bunShim: '/lx/bun-shim.cjs', tar: '/o/deps.tar', sig: '/o/deps.sig', out: '/o',
+    targetUpdateCheck: '/lx/target-update-check.cjs',
+    manifest: '/o/manifest.json', manifestSig: '/o/manifest.sig' });
+  assert.strictEqual(cfg.assets['manifest.json'], '/o/manifest.json');
+  assert.strictEqual(cfg.assets['manifest.sig'], '/o/manifest.sig',
+    'without its own sig the manifest is unverifiable, and "all members verified" would mean '
+    + '"verified against whatever the manifest says", which is not a claim worth printing');
+});
+
+test('writeSeaConfig writes a manifest whose member shas are the real asset shas', async () => {
+  const { writeSeaConfig } = await import('../scripts/build-naude.mjs');
+  const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-manifest-'));
+  try {
+    const cliCjs = path.join(stage, 'cli.cjs');
+    fs.writeFileSync(cliCjs, '// staged cli.cjs\n');
+    fs.writeFileSync(path.join(stage, 'bun-shim.cjs'), '// staged bun-shim\n');
+    const tar = path.join(stage, 'deps.tar'); fs.writeFileSync(tar, 'TARBALL');
+    const sigFile = path.join(stage, 'deps.sig'); fs.writeFileSync(sigFile, 'sig0');
+    const { cfgPath } = writeSeaConfig({
+      bundle: '/b/naude-entry.bundle.cjs', cliCjs, tar, sigFile, outDir: stage,
+      extras: { clodeVersion: '9.9.9', bundleVersion: 'k', providerPlatform: 'linux', bom: [] },
+      template: { sha256: 'deadbeef', len: 1 },
+    });
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    const manifest = JSON.parse(fs.readFileSync(cfg.assets['manifest.json'], 'utf8'));
+    assert.strictEqual(manifest.providerPlatform, 'linux');
+    for (const [name, rec] of Object.entries(manifest.members)) {
+      const onDisk = fs.readFileSync(cfg.assets[name]);
+      assert.strictEqual(rec.sha256, createHash('sha256').update(onDisk).digest('hex'),
+        `manifest sha for ${name} does not match the file that will actually be embedded`);
+      assert.strictEqual(rec.len, onDisk.length);
+    }
+    assert.ok(!('manifest.json' in manifest.members) && !('manifest.sig' in manifest.members),
+      'the manifest cannot hash itself; manifest.sig is its root of trust, not a member');
+    const sig = fs.readFileSync(cfg.assets['manifest.sig'], 'utf8').trim();
+    assert.strictEqual(sig, createHash('sha256').update(fs.readFileSync(cfg.assets['manifest.json'])).digest('hex'));
+  } finally {
+    fs.rmSync(stage, { recursive: true, force: true });
+  }
+});
