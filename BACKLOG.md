@@ -3064,6 +3064,40 @@ Two divergences remain, both stated in the output rather than papered over:
 
 The general ask above (parity as the DEFAULT, audit the whole surface) is still open.
 
+### ★★ One version, one place to edit it (user, 2026-08-30)
+
+**The user:** "The four-file bump sounds like another one for ***. One place ought to suffice."
+
+**Today it is one fact in four places, bumped by hand every release:** `VERSION`,
+`package.json`, and `package-lock.json` TWICE (`.version` and `packages[""].version`).
+`test/version-single-source.test.cjs` asserts they agree — and its own header concedes the
+point: *"Every release bumps all four BY HAND. Nothing asserted they agree, so three of them
+could silently drift."* It chose to ASSERT agreement rather than achieve it, citing that
+date-versioning is a human choice rather than something computable from a pin.
+
+That reasoning is sound for why `VERSION` stays committed. It is not a reason for the other
+three to be hand-edited.
+
+**The fact that makes this easy: `package.json` is `private: true`.** We never publish to npm —
+the release is 40 platform binaries on GitHub. So the npm-side version is metadata no external
+consumer reads. It exists to keep npm's own tooling coherent, not to tell anyone anything.
+
+**Two shapes worth weighing, and the choice is not obvious:**
+1. **Derive at bump time.** One script takes the new version and writes all four; the human
+   edits one thing, the repo stays internally consistent, and the existing test becomes the
+   check that the script ran. Cheapest, and it survives npm regenerating the lockfile.
+2. **Stop mirroring.** Let `VERSION` be the only truth and leave the npm files inert. Cleaner in
+   principle, but npm rewrites `package-lock.json`'s version from `package.json` whenever it
+   regenerates, so this trades a manual bump for lockfile churn that will confuse someone later.
+
+I lean to (1) — it is the one that does not fight the tooling — but the decision belongs with
+whoever does the work, on evidence about how often the lockfile actually gets regenerated here.
+
+**Related, same shape:** the release also has a "cut under the day it ships" rule, because
+date-versioning names the day of the tag rather than the day of the draft. A bump script is the
+natural place for that too: it can refuse to write a date that is not today, which is a rule
+currently kept by a human remembering it.
+
 ### ★★★ Nothing gates the gates — make "a guard that cannot fail" structurally impossible (user, 2026-08-29)
 
 **The user:** "How are you finding these gaps? Is it automated into the build? Or is that another
