@@ -40,15 +40,16 @@ jobs:
     # occurrence: the repo change under suspicion wrote ZERO bytes on this job, so the
     # volume was already tight. POSIX runners are unaffected (their TMPDIR is already
     # roomy); setting these on every row keeps one definition rather than a per-OS branch.
-    env:
-      TMP: ${{ runner.temp }}
-      TEMP: ${{ runner.temp }}
-      TMPDIR: ${{ runner.temp }}
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@v7.0.1
+      - name: Put scratch on the roomy volume
+        run: |
+          set -euo pipefail
+          for v in TMP TEMP TMPDIR; do echo "$v=$RUNNER_TEMP" >> "$GITHUB_ENV"; done
+          echo "scratch -> $RUNNER_TEMP"
       - uses: actions/setup-node@v7.0.0
         with:
           node-version-file: .tool-versions
