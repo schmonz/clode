@@ -2957,6 +2957,50 @@ that asks for a mermaid diagram or a syntax-highlighted block, asserting the ren
 would close the loop the ratchet only half closes. Note this is also the honest answer to
 "have our fidelity tests grown to cover diagrams?": no, they have not.
 
+### ★★★ Cross-build everything TWICE, from two very different hosts, and diff (user, 2026-08-30)
+
+**The user:** "Sounds like for *** a good test of the build system would be to cross build
+everything twice, from two very different host systems, and look for variations."
+
+**Why this is different from every other gate we have.** Every guard in this repo encodes a
+HYPOTHESIS about what might break — an asset that might go unserved, a loader that might move, a
+name that might get renamed. They only catch what someone thought of. A two-host differential
+encodes no hypothesis at all: it asks whether the output depends on something we claim it does
+not. That is the one question our gates structurally cannot ask, and it is the question behind
+most of what went wrong on 2026-08-28/29.
+
+**What it would have caught, from this week alone:**
+- A darwin target fused from a linux carve. Bun constant-folds `process.platform` at carve time,
+  so the graph is per-platform — a fact we learned by shipping a quaude with no macOS credential
+  store in it. Two hosts producing different bytes for the SAME target names that instantly.
+- The staging merge now runs on the HOST engine while compilation runs on the TARGET's. Its
+  output is source text so it SHOULD be host-neutral — flagged as a concern precisely because
+  nothing exercises that seam. This is the test that would.
+- Host tools leaking into output: we now resolve `zstd`, `tar`, `gzip`, `sha256` from the host,
+  each with its own version and quirks. Two hosts means two toolsets; if any of them changes a
+  byte of the product, that is a finding.
+
+**Design, and the layering is the whole value.** Do NOT diff only the final binaries. Compare at
+each stage — provider carve -> `graph.json` -> merged graph -> bytecode -> fused artifact — and
+report the FIRST layer that differs. A binary diff says "something is wrong"; a layered diff says
+which step introduced it, which is the difference between a finding and a mystery.
+
+**Expect the first run to fail, and expect that to be the point.** Byte-identical output across
+hosts is a strong property we have never claimed, let alone measured. The likely first result is
+an inventory of nondeterminism — embedded timestamps, temp-directory names, hash-map iteration
+order, absolute paths, tool version strings. That inventory IS the deliverable of round one; the
+differential only becomes a gate once the noise is either eliminated or explicitly normalised.
+
+**"Very different" should be chosen for maximum contrast**, not convenience: different OS,
+different libc, and ideally different endianness (we have big-endian legs, and canonical-LE
+bytecode exists exactly because endianness once bit us). macOS/arm64 versus linux-x64-musl is the
+cheap pair; adding a big-endian host is what makes it interesting.
+
+**Relationship to what exists:** this is [[target-matched-assembly]] turned from a rule into a
+measurement, and it is the natural gate for the cross-fuse work. It also belongs with
+"nothing gates the gates" above — a differential is the one form of gate that cannot be green by
+construction, because nothing about it is asserted in advance.
+
 ### ★★★ Nothing gates the gates — make "a guard that cannot fail" structurally impossible (user, 2026-08-29)
 
 **The user:** "How are you finding these gaps? Is it automated into the build? Or is that another
