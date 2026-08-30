@@ -2974,6 +2974,42 @@ stop doing that as a favour and make it a property of the build:
    stroke. The same lesson applies to the CONTROLLER: pushing for fast leg feedback cancelled the
    slow oracle jobs for many commits, which is exactly how a weeks-old red stayed invisible.
 
+
+**The concrete population this entry owns.** These are the individual gates found broken or
+absent on 2026-08-28/29. They are filed HERE rather than fixed one by one, because fixing each
+in isolation is what produced a codebase full of guards nobody re-checked:
+
+1. **`shim-surface` and `guard-subcommands-gate` do not run in CI at all.** `shim-surface` skips
+   without BOTH a tjs binary and `CLODE_PROVIDER_BIN`; `guard-subcommands-gate` skips on an empty
+   `~/.cache/clode`. The `test` job has neither, so neither has run in CI since 2.1.243 — they
+   were locally red and remotely absent for months. Note this is a PLACEMENT problem, not a
+   plumbing one: `node-shim-oracle` already stages a provider and sets `CLODE_TJS`.
+   `shim-surface.test.cjs` even anticipates the hazard in its own comment — a skipped run "would
+   contribute zero gaps and read exactly like a clean one."
+2. **`test/node-shim-wall-tripwires.test.cjs` is unaudited and green by construction.** It matches
+   the direct `require("fs").watch(` shape, which upstream has not emitted anywhere since the
+   2.1.243 code-split. It is the fourth instrument of the family whose other three were all found
+   blind. Nothing forces the question because it is green; ask it anyway.
+3. **`windows-path-ratchet.test.cjs` is blind on ~1,335 lines across 14 files.** Its
+   `stripComments()` mis-pairs `/*`…`*/` across template literals and blanks real code. Found by
+   ACCIDENT when an agent reordered declarations and unmasked two pre-existing
+   `process.env.PATH` sites it had never seen. Needs a tokenizer, not a regex.
+4. **`native-builder-oracle` should be a REQUIRED gate whose failure says the SHIPPED ARTIFACT is
+   broken.** It is the job that would have caught the zstd carve break on day one — "the native
+   builder BUILDS THE PRODUCT (node-free, real provider)" — and it sat as one red among
+   twenty-two. It is the closest thing we have to a gate on the thing users actually get.
+5. **No CI leg builds against more than one platform's graph.** That is why a merger corruption
+   that broke linux shipped green on darwin. One extra `clode build` against a second platform's
+   graph on the macOS leg closes it.
+6. **No CI leg carves a zstd row inside a guest any more**, since `stage-provider.mjs` minimises
+   for every leg — so the shipped `zstd`-spawn path has unit coverage only, days after that path
+   was the single point of failure for the entire matrix.
+7. **The live-TUI acceptance cannot run where it matters most.** It requires native Claude Code as
+   a control, so it structurally cannot run on NetBSD, Mavericks, Haiku, illumos or sparc — the
+   platforms whose mechanisms differ most. Evidence it matters: the fullscreen renderer works on
+   macOS and CRASHES on NetBSD/arm64. A control-free variant (assert the target renders an answer
+   absent from the prompt) would run anywhere credentials reach.
+
 **Why this belongs in *** and not in a test file:** items 1-5 are properties of how the build
 reports, not features of any one gate. Bolting them onto individual tests reproduces the problem
 one level up — a hand-maintained list of which guards were mutation-checked, which will itself go
