@@ -488,17 +488,31 @@ export async function buildBinary({
 // materializes the deps + assets, re-invokes as node, and runs the baked cli.cjs, which
 // prints Claude Code's version and exits 0. A stripped-node SIGSEGV or a corrupt deps
 // asset both surface here.
+// The self-check's budget. A naude's FIRST boot untars ~12MB of deps and writes a ~50MB
+// cli.cjs before it can print anything, so on a loaded machine this is minutes, not
+// seconds. CLODE_TIMEOUT_SCALE is the same knob clode-fuse.cjs's SCALE reads.
+const SELFCHECK_TIMEOUT_MS = 120000 * (Number(process.env.CLODE_TIMEOUT_SCALE) || 1);
+
 function smokeCheck(bin) {
   const cache = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-selfcheck-'));
   try {
     const r = spawnSync(bin, ['--version'], {
-      encoding: 'utf8', timeout: 120000,
+      encoding: 'utf8', timeout: SELFCHECK_TIMEOUT_MS,
       env: { ...process.env, NAUDE_CACHE: cache },
     });
     if (r.status !== 0 || /Cannot find module|MODULE_NOT_FOUND/.test(r.stderr || '')) {
-      console.error(`naude self-check FAILED${r.signal ? ` (crashed with ${r.signal})` : ''}: ` +
-        `'${bin} --version' did not boot the baked bundle.`);
-      if (r.signal === 'SIGSEGV') {
+      // TIMED OUT AND CRASHED ARE DIFFERENT BUGS, and spawnSync reports both as a signal:
+      // a timeout kill arrives as SIGTERM with no `error`, which the old wording called
+      // "crashed with SIGTERM" — sending a reader hunting for a startup crash that never
+      // happened (this cost real time on 2026-08-30, on a box merely busy with another
+      // build). Say which one it was.
+      const timedOut = r.error && r.error.code === 'ETIMEDOUT';
+      const how = timedOut
+        ? ` (TIMED OUT after ${SELFCHECK_TIMEOUT_MS}ms — a slow/loaded box, not necessarily a broken binary; raise CLODE_TIMEOUT_SCALE)`
+        : (r.signal ? ` (crashed with ${r.signal})` : '');
+      console.error(`naude self-check FAILED${how}: `
+        + `'${bin} --version' did not boot the baked bundle.`);
+      if (!timedOut && r.signal === 'SIGSEGV') {
         console.error('A SIGSEGV at startup almost always means the embedded node was a STRIPPED');
         console.error('binary — postject corrupts stripped nodes and the loader crashes. Build with');
         console.error('an official, non-stripped Node (an asdf/nvm nodejs.org build), not a distro-');
