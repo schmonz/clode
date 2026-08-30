@@ -735,7 +735,7 @@ function fixupLibuvHaikuStdioPipe(dir) {
   // ("Broken pipe") instead of blocking, and the peer read gets nothing. So a
   // spawned child that writes > 64KB to its stdout before exiting deadlocks — its
   // write EPIPEs and drops the rest, the parent hangs reading nothing. This first
-  // bit when the quaude ext-dep closure grew (9e968b4) and pushed --quaude-attest's
+  // bit when the quaude ext-dep closure grew (9e968b4) and pushed --clode-attest's
   // manifest print past 64KB (64,040 -> 85,696): every Haiku `clode build` then hung
   // in attest and clode's own timeout SIGKILLed it. Root-caused on a local Haiku box
   // (spike/quickjs/qemu/HAIKU-BOX.md): instrumented the child's fwrite (=65536,

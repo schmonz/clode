@@ -20,7 +20,7 @@
 //      manifest + bootstrap, and appends;
 //   5. smoke the result LOUDLY: `quaude -p 'say PONG'` against an in-process
 //      canned Messages mock (no network, no key), then `quaude
-//      --quaude-attest` — any failure exits nonzero and says why.
+//      --clode-attest` — any failure exits nonzero and says why.
 //
 // Usage: clode build [--out PATH]        (default ./quaude)
 //        clode build --self [--out PATH] (default ./clode-native)
@@ -50,6 +50,7 @@ const extract = require('./clode-extract.cjs');
 const deps = require('./clode-deps.cjs');
 const { clodeCacheDir, depsStore } = require('./clode-paths.cjs');
 const { ensurePinnedNode } = require('./clode-node.cjs');
+const { ATTEST_VERIFIED } = require('./clode-attest.cjs');
 const { seaBin, tjsBin } = require('../scripts/platform-tag.cjs');
 
 // Materialize the builder-role VFS members to `mat` on disk. A fused NATIVE
@@ -523,9 +524,27 @@ function startPongMock() {
 // out, only quaude ran this proof; `clode build --naude` checked nothing
 // beyond the child's exit status, so a naude that booted but couldn't reach
 // the API — or only "worked" because the build host's NODE_PATH leaked in —
-// still printed success. Per-target bits (quaude's --quaude-attest; naude's
-// build-time stripped-node/SIGSEGV diagnostic) stay OUT of this function and
-// live with their own target.
+// still printed success. Per-target bits (naude's build-time stripped-node/
+// SIGSEGV diagnostic) stay OUT of this function and live with their own target.
+// Attestation is NOT one of them any more — see attestTarget, below.
+// The attest gate, shared by BOTH build targets. `clode build` refuses to report success
+// unless the binary it just produced re-hashes its own payload and says so.
+//
+// It greps ONE string, ATTEST_VERIFIED, imported from libexec/clode-attest.cjs — the same
+// constant the products print. Spelling it here as a literal is how a gate silently stops
+// gating: rename the verdict in the product and the regex here can never match again,
+// while every build still reports success. That is this repo's most expensive recurring
+// bug, and renaming the flag created a fresh opportunity for it.
+//
+// Exit status ALONE is not enough (a target that never implemented the flag can exit 0
+// having printed nothing), and the string alone is not enough (a target can print the
+// verdict and then die). Both are required. test/clode-attest.test.cjs mutation-tests
+// exactly those three ways of being wrong.
+async function attestTarget(bin, { spawnRun, env, cwd, timeout }) {
+  const r = await spawnRun(bin, ['--clode-attest'], { env, cwd, timeout });
+  return { ok: r.status === 0 && String(r.stdout).includes(ATTEST_VERIFIED), ...r };
+}
+
 async function smokeTarget(bin, { spawnRun, env, cwd, timeout }) {
   const mock = await startPongMock();
   let result;
@@ -1063,14 +1082,43 @@ async function clodeBuild(args, opts) {
       // block's own closure computation. Sources of truth follow assembleRoot/
       // effLibexec (the materialized payload under a fused builder, the checkout
       // otherwise).
+      // `closureVersions` is filled as a side effect of the walk — it is what turns the
+      // bare names into the name@version BOM the naude manifest carries, exactly as the
+      // quaude path does. Without it a naude's manifest could say WHICH bundle it baked
+      // but not WHAT was embedded alongside it.
+      let naudeBom = [];
       try {
         const pkgJsonPath = path.join(assembleRoot, 'deps', 'claude', 'package.json');
-        const extDeps = computeDepClosure(nmDir, readDirectDeps(pkgJsonPath));
+        const closureVersions = new Map();
+        const extDeps = computeDepClosure(nmDir, readDirectDeps(pkgJsonPath), { versions: closureVersions });
         assertNoUnknownBareSpecifiers(
           [cliPath, path.join(stageDir, 'bun-shim.cjs')], extDeps, effLibexec, { env });
+        naudeBom = extDeps.map((name) => `${name}@${closureVersions.get(name)}`);
       } catch (e) {
         return fail(`build --naude: ${(e && e.message) || e}`);
       }
+
+      // -- what a naude must be able to say about ITSELF (--clode-attest). These are the
+      // same facts the quaude manifest records, and every one of them is already resolved
+      // here: which clode built it, which upstream bundle it bakes, and — the one with no
+      // structural excuse for being absent — WHICH PLATFORM'S Claude Code is inside it.
+      // Bun constant-folds process.platform at carve time, so a darwin target built from a
+      // linux carve has upstream's whole macOS credential store dead-coded away; that is
+      // the artifact that shipped on 2026-08-27 unable to read the login Keychain, and
+      // until now a naude could not be asked at all. 'unknown' (never absent) when the
+      // container cannot be named — the same word the extract cache key uses, so "we could
+      // not tell" stays distinguishable from "nobody recorded it".
+      // Passed as a FILE, not argv: the BOM is unbounded in length, and a temp JSON is the
+      // same shape quaude's fuse worker already takes its node-side fields in.
+      const naudeExtras = {
+        clodeVersion: version,
+        bundleVersion: staged.key,
+        providerPlatform: staged.providerPlatform || 'unknown',
+        bom: naudeBom,
+        engineVersion: require('./clode-node.cjs').PINNED_VERSION,
+      };
+      const extrasPath = path.join(os.tmpdir(), `clode-naude-extras-${process.pid}.json`);
+      fs.writeFileSync(extrasPath, JSON.stringify(naudeExtras));
 
       clodeLog(`clode: build --naude: building the Node SEA from ${cliPath} under ${blobgenNode} (embed: ${embedNode}) ...`);
       // build-naude.mjs runs as a SEPARATE process UNDER the blob-gen node (the
@@ -1094,9 +1142,11 @@ async function clodeBuild(args, opts) {
         '--bundle', bundlePath,
         '--nmdir', nmDir,
         '--postject', postjectDir,
+        '--extras', extrasPath,
         ...(signerBin ? ['--darwin-signer', signerBin] : []),
         ...outArgs,
       ], { env, timeout: 600000 * SCALE });
+      try { fs.rmSync(extrasPath, { force: true }); } catch { /* best effort */ }
       if (r.status !== 0) {
         return fail(`build --naude: build-naude failed (${describeExit(r)}):\n${r.stdout}${r.stderr}`);
       }
@@ -1141,12 +1191,27 @@ async function clodeBuild(args, opts) {
         stderr.write(`clode: build --naude: ${smoke.how} posted=${smoke.posted} stdout:\n${smoke.stdout}\nstderr:\n${smoke.stderr}\n`);
         return 1;
       }
+      // -- attest: the SAME gate, the SAME flag, the SAME verdict string the quaude path
+      // greps (attestTarget). A naude used to ship with no self-verification of any kind:
+      // its only per-target check was build-naude.mjs's stripped-node/SIGSEGV diagnostic,
+      // which proves the binary BOOTS and nothing about whether its payload is intact.
+      const attestFn = opts.attestTarget || attestTarget;
+      const naudeAttest = await attestFn(naudeOut, {
+        spawnRun,
+        env: { ...env, NAUDE_CACHE: path.join(naudeWork, 'cache') },
+        cwd: naudeWork,
+        timeout: 120000 * SCALE,
+      });
+      if (!naudeAttest.ok) {
+        stderr.write(`clode: build --naude: ATTEST FAILED (${describeExit(naudeAttest)}):\n${naudeAttest.stdout}\n${naudeAttest.stderr}\n`);
+        return 1;
+      }
     } finally {
       try { fs.rmSync(naudeWork, { recursive: true, force: true }); } catch { /* best effort */ }
     }
 
     stdout.write('clode: built naude (Node SEA with Claude Code baked in)\n');
-    stdout.write(`clode: smoke: PONG round-trip ok — run '${naudeOut}' to use it\n`);
+    stdout.write(`clode: smoke: PONG round-trip ok, attest ok — run '${naudeOut}' to use it\n`);
     return 0;
   }
 
@@ -1438,9 +1503,9 @@ async function clodeBuild(args, opts) {
     // the same as extDeps (deterministic, diffable across builds).
     const depsBom = extDeps.map((name) => `${name}@${closureVersions.get(name)}`);
 
-    // -- node-side manifest fields (the worker adds engine/idna/members/fusedAt).
+    // -- node-side manifest fields (the worker adds engine/idna/members/builtAt).
     const extras = {
-      quaude: '1', // archive/manifest schema version (shared by both roles)
+      clode: '1', // archive/manifest schema version (shared by both roles)
       role: self ? 'builder' : 'quaude',
       bundleVersion: key, // undefined for --self (no upstream bundle) — dropped by JSON
       // The platform the upstream provider was CARVED FOR (never the host, never the target).
@@ -1586,10 +1651,11 @@ async function clodeBuild(args, opts) {
       return 1;
     }
 
-    // -- smoke 2: attest must verify every member from the trailer just written
-    // (quaude-only — naude has no manifest/trailer to attest).
-    const attest = await spawnRun(out, ['--quaude-attest'], { env, cwd: work, timeout: 120000 * SCALE });
-    if (attest.status !== 0 || !/quaude-attest: all members verified/.test(attest.stdout)) {
+    // -- smoke 2: attest must verify every member from the trailer just written. The
+    // naude branch runs this SAME helper against its own product (attestTarget) — one
+    // flag, one verdict string, one gate.
+    const attest = await attestTarget(out, { spawnRun, env, cwd: work, timeout: 120000 * SCALE });
+    if (!attest.ok) {
       stderr.write(`clode: build: ATTEST FAILED (${describeExit(attest)}):\n${attest.stdout}\n${attest.stderr}\n`);
       return 1;
     }
@@ -1604,7 +1670,7 @@ async function clodeBuild(args, opts) {
 }
 
 module.exports = {
-  clodeBuild, parseBuildArgs, resolveBuildOut, makePhaseSpinner, startPongMock, cannedSSE, smokeTarget, timeoutScale, codesignAdHoc, thinToHostSlice, describeExit,
+  clodeBuild, parseBuildArgs, resolveBuildOut, makePhaseSpinner, startPongMock, cannedSSE, smokeTarget, attestTarget, timeoutScale, codesignAdHoc, thinToHostSlice, describeExit,
   readDirectDeps, computeDepClosure, assertClosureMatchesLockfile,
   scanBareSpecifiers, specifierPackageName, isBuiltinSpecifier, shimProvidedModules,
   assertNoUnknownBareSpecifiers, KNOWN_UNREACHABLE, resolveClaudeNmDir,

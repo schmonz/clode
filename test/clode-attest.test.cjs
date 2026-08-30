@@ -97,13 +97,14 @@ test('report: the verdict line is ONE string, shared by both products', () => {
 test('report: manifest verbatim, one line per member, verdict last', () => {
   const r = attest.attestReport({ manifestText: '{\n  "role": "quaude"\n}\n', members: OK_MEMBERS });
   assert.strictEqual(r.ok, true);
-  // 'ok' is padded to FAIL's width so the name column lines up in both outcomes.
+  // 'ok' is padded to FAIL's width so the name column lines up in both outcomes
+  // ('ok  ' and 'FAIL' are both 4 wide, then one separating space).
   assert.deepStrictEqual(r.lines, [
     '{',
     '  "role": "quaude"',
     '}',
-    'ok  cli.cjs (10 bytes)',
-    'ok  manifest.json (4 bytes)',
+    'ok   cli.cjs (10 bytes)',
+    'ok   manifest.json (4 bytes)',
     'clode-attest: all members verified',
   ]);
   assert.strictEqual(r.text, r.lines.join('\n') + '\n');
@@ -178,13 +179,15 @@ test('attestTarget asks for the CANONICAL flag spelling', async () => {
 test('nothing in the tree still mentions --quaude-attest or the quaude-attest: prefix', () => {
   const REPO = path.resolve(__dirname, '..');
   const offenders = [];
-  const SKIP_DIRS = new Set(['.git', 'node_modules', 'build', 'deps', '.harness', 'tjs-src', 'toolchain', '.matrix']);
+  // .superpowers is untracked scratch (agent reports + saved review diffs) — a record of
+  // past sessions, not shipped text.
+  const SKIP_DIRS = new Set(['.git', '.superpowers', 'node_modules', 'build', 'deps',
+    '.harness', 'tjs-src', 'toolchain', '.matrix']);
   // The ONLY places the retired name may still appear, each for a stated reason. An
   // allowlist rather than a blanket test/ exemption: a gate that greps a dead string is
   // exactly the failure this sweep exists to catch, and gates live in test/ too.
   const ALLOWED = new Map([
     ['BACKLOG.md', 'history: records what the flag used to be called'],
-    ['CHANGELOG.md', 'history: released notes are not rewritten'],
     ['test/clode-attest.test.cjs', 'this sweep names the retired string on purpose'],
     ['test/quaude-build.test.cjs', 'proves a real quaude no longer answers the retired flag'],
     ['test/naude-entry.test.cjs', 'proves a naude passes the retired flag through instead of attesting'],
@@ -200,7 +203,10 @@ test('nothing in the tree still mentions --quaude-attest or the quaude-attest: p
       try { src = fs.readFileSync(p, 'utf8'); } catch { continue; }
       if (src.includes('\0')) continue; // binary
       for (const line of src.split('\n')) {
-        if (/--quaude-attest|quaude-attest:/.test(line)) offenders.push(`${rel}: ${line.trim()}`);
+        // BARE 'quaude-attest', not just '--quaude-attest': the man page spells its flags
+        // with a single leading dash (.Fl -quaude-attest) and the old output prefix had no
+        // dashes at all. A narrower pattern here missed both on the first run.
+        if (line.includes('quaude-attest')) offenders.push(`${rel}: ${line.trim()}`);
       }
     }
   };

@@ -14,8 +14,8 @@
 //
 // Responsibilities: locate + parse the archive; boot-verify the manifest +
 // loader members (cheap; FULL verification of every member is
-// --quaude-attest's job — policy per the Q1a design memo §5); for the quaude
-// role, carve --quaude-* out of argv BEFORE any bundle-visible code runs (the
+// --clode-attest's job — policy per the Q1a design memo §5); for the quaude
+// role, carve --clode-* out of argv BEFORE any bundle-visible code runs (the
 // reserved namespace — everything else belongs to Claude Code) and apply the
 // target-env contract (target-env.cjs — DISABLE_INSTALLATION_CHECKS, the rg
 // PATH shaping), while the BUILDER role (a fused native clode) owns its whole
@@ -25,29 +25,59 @@
 // node-shim loader, which boots the manifest's entry member (cli.qbc for
 // quaude, the esbuilt clode-main bundle for the builder).
 
-// The reserved argv namespace. quaude owns every `--quaude-*` flag; an unknown
-// one is an ERROR here (it must never reach the bundle). Pure + exported so the
-// carve is unit-testable under host node (test/quaude-argv.test.cjs).
-export const QUAUDE_FLAGS = ['--quaude-attest'];
-export function carveQuaudeArgs(args, known = QUAUDE_FLAGS) {
-  const quaude = [], rest = [], unknown = [];
+// The reserved argv namespace + the attest report format, INLINED from the canonical
+// libexec/clode-attest.cjs. This file is compiled raw to tjs bytecode with no runtime
+// imports, so it cannot require() the shared module the way naude-entry.cjs and
+// clode-fuse.cjs do; test/update-guard-drift.test.cjs holds the two copies byte-identical.
+// Same mechanism, and the same reason, as the guardVerdict copy below.
+// >>> clodeAttest (canonical; drift-tested against libexec/quaude-bootstrap.mjs) >>>
+// The reserved argv namespace. A built target owns every `--clode-*` flag; an unknown one
+// is an ERROR (it must never reach Claude Code, which would report it as its own). Every
+// other argument belongs to the bundle, verbatim and in order.
+const CLODE_FLAGS = ['--clode-attest'];
+function carveClodeArgs(args, known = CLODE_FLAGS) {
+  const clode = [], rest = [], unknown = [];
   for (const a of args) {
-    if (typeof a === 'string' && a.startsWith('--quaude-')) {
-      (known.includes(a) ? quaude : unknown).push(a);
+    if (typeof a === 'string' && a.startsWith('--clode-')) {
+      (known.includes(a) ? clode : unknown).push(a);
     } else rest.push(a);
   }
-  return { quaude, rest, unknown };
+  return { clode, rest, unknown };
 }
 
-// manifest.bom entries are "name@version" (Task a); scoped packages
-// (@scope/name@version) have a leading '@' that is NOT the version
-// separator, so this splits on the LAST '@', not the first. Pure + exported
-// for the same reason carveQuaudeArgs is: host-node unit tests
-// (test/quaude-argv.test.cjs) can exercise it without a fused binary.
-export function depNameFromSpec(spec) {
+// manifest.bom entries are "name@version"; a scoped package (@scope/name@version) has a
+// leading '@' that is NOT the version separator, so split on the LAST '@'.
+function depNameFromSpec(spec) {
   const i = spec.lastIndexOf('@');
   return i > 0 ? spec.slice(0, i) : spec;
 }
+
+// The verdict. ONE string per outcome, naming neither product — `clode build` greps the
+// success line for whichever target it just produced.
+const ATTEST_VERIFIED = 'clode-attest: all members verified';
+const ATTEST_FAILED = 'clode-attest: VERIFICATION FAILED';
+
+// members: [{ name, len, ok }]  — one per hashed unit the product actually re-hashed.
+// bom:     [{ spec, marker, present }] — SET verification: a whole declared package can be
+//          silently ABSENT without any present member failing, which per-member hashing
+//          alone would never notice.
+// notes:   plain strings, printed as `note: ...` — what this product did NOT verify.
+function attestReport({ manifestText, members, bom, notes }) {
+  const lines = String(manifestText).replace(/\n+$/, '').split('\n');
+  let ok = true;
+  for (const m of members) {
+    if (!m.ok) ok = false;
+    lines.push(`${m.ok ? 'ok  ' : 'FAIL'} ${m.name} (${m.len} bytes)`);
+  }
+  for (const b of bom || []) {
+    if (!b.present) ok = false;
+    lines.push(`${b.present ? 'ok  ' : 'FAIL'} bom: ${b.spec} -> ${b.marker}`);
+  }
+  for (const n of notes || []) lines.push(`note: ${n}`);
+  lines.push(ok ? ATTEST_VERIFIED : ATTEST_FAILED);
+  return { ok, lines, text: lines.join('\n') + '\n' };
+}
+// <<< clodeAttest <<<
 
 async function sha256hex(bytes) {
   const d = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
@@ -88,7 +118,7 @@ const S_IXALL = 0o111;
 // stat each one ONCE, then answer shapeTargetEnv's two DIFFERENT questions
 // ("does it exist?" vs "can I run it?" — see target-env.cjs's findOnPath)
 // synchronously from that single pass. Exported + primitive-injected so it
-// unit-tests under host node — the file's existing carveQuaudeArgs pattern.
+// unit-tests under host node — the same pattern as the inlined pure helpers above.
 export async function bootstrapTargetEnv(tjs, opts = {}) {
   const {
     shape = globalThis.__clodeShapeTargetEnv,
@@ -263,7 +293,7 @@ async function main() {
 
   // 5) boot-verify (fast integrity gate): the manifest we are about to trust
   // and the loader we are about to evaluate must hash to what the index
-  // promises. Full per-member verification runs on --quaude-attest only
+  // promises. Full per-member verification runs on --clode-attest only
   // (design memo §5 policy).
   for (const name of ['manifest.json', 'node-shim/loader.cjs']) {
     const m = index.members.find((x) => x.name === name);
@@ -271,47 +301,43 @@ async function main() {
     if ((await sha256hex(files.get(name))) !== m.sha256) die(`${name} failed integrity check (corrupt fuse?)`, 70);
   }
 
-  // 6) role (manifest, just verified): quaude reserves the --quaude-* argv
+  // 6) role (manifest, just verified): quaude reserves the --clode-* argv
   // namespace; the BUILDER role (a fused native clode, Q1c) owns its whole
   // argv — clode's own flags are all --clode-*/subcommands, so nothing is
-  // carved and there is no --quaude-attest short-circuit for it.
+  // carved and there is no --clode-attest short-circuit for it.
   const manifest = JSON.parse(dec.decode(files.get('manifest.json')));
   const isBuilder = (manifest.role ?? 'quaude') === 'builder';
   let rest = tjs.args.slice(1);
   if (!isBuilder) {
-    // argv carve-out: strip --quaude-* BEFORE any bundle code can observe argv.
-    const { quaude, rest: carved, unknown } = carveQuaudeArgs(rest);
+    // argv carve-out: strip --clode-* BEFORE any bundle code can observe argv.
+    const { clode, rest: carved, unknown } = carveClodeArgs(rest);
     if (unknown.length) {
-      die(`unknown option '${unknown[0]}' (the --quaude-* namespace is reserved; known: ${QUAUDE_FLAGS.join(', ')})`, 64);
+      die(`unknown option '${unknown[0]}' (the --clode-* namespace is reserved; known: ${CLODE_FLAGS.join(', ')})`, 64);
     }
     rest = carved;
 
-    // 7) --quaude-attest: manifest verbatim, then recompute EVERY member hash
-    // from the trailer being executed and compare against the index.
-    if (quaude.includes('--quaude-attest')) {
-      console.log(dec.decode(files.get('manifest.json')).replace(/\n$/, ''));
-      let ok = true;
+    // 7) --clode-attest: manifest verbatim, then recompute EVERY member hash from the
+    // trailer being executed and compare against the index. Same flag, same format, and
+    // the same verdict line a naude prints (libexec/clode-attest.cjs) — `clode build`
+    // greps ONE string for either target.
+    if (clode.includes('--clode-attest')) {
+      const members = [];
       for (const m of index.members) {
-        const got = await sha256hex(files.get(m.name));
-        if (got !== m.sha256) ok = false;
-        console.log(`${got === m.sha256 ? 'ok  ' : 'FAIL'} ${m.name} (${m.len} bytes)`);
+        members.push({ name: m.name, len: m.len, ok: (await sha256hex(files.get(m.name))) === m.sha256 });
       }
-      // SET verification (Task a, stretch goal): the per-member loop above
-      // only proves that whatever IS in the archive is intact — it says
-      // nothing about a whole declared package being silently ABSENT.
-      // manifest.bom (name@version) is the declared closure; check that every
-      // one of them actually landed a member in this same archive. `files`
-      // already holds every member this trailer carries (step 4, above), so
-      // this is a presence check, not a new read.
-      for (const spec of manifest.bom || []) {
-        const name = depNameFromSpec(spec);
-        const marker = `node_modules/${name}/package.json`;
-        const present = files.has(marker);
-        if (!present) ok = false;
-        console.log(`${present ? 'ok  ' : 'FAIL'} bom: ${spec} -> ${marker}`);
-      }
-      console.log(ok ? 'quaude-attest: all members verified' : 'quaude-attest: VERIFICATION FAILED');
-      tjs.exit(ok ? 0 : 1);
+      // SET verification (Task a, stretch goal): the per-member loop above only proves
+      // that whatever IS in the archive is intact — it says nothing about a whole
+      // declared package being silently ABSENT. manifest.bom (name@version) is the
+      // declared closure; check that every one of them actually landed a member in this
+      // same archive. `files` already holds every member this trailer carries (step 4,
+      // above), so this is a presence check, not a new read.
+      const bom = (manifest.bom || []).map((spec) => {
+        const marker = `node_modules/${depNameFromSpec(spec)}/package.json`;
+        return { spec, marker, present: files.has(marker) };
+      });
+      const report = attestReport({ manifestText: dec.decode(files.get('manifest.json')), members, bom });
+      for (const line of report.lines) console.log(line);
+      tjs.exit(report.ok ? 0 : 1);
     }
 
     // 7.5) Apply the target env contract before ANY bundle code runs. target-env.cjs

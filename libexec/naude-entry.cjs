@@ -35,6 +35,11 @@
 // installs, so the notify path works even against a cli.cjs whose own PRELUDE
 // patch didn't apply (version drift).
 //
+// Before either branch, the FIRST pass carves the reserved `--clode-*` argv namespace
+// (libexec/clode-attest.cjs) so those flags never reach the baked cli.cjs — the same
+// carve, from the same module, that quaude's bootstrap does. `--clode-attest` is answered
+// here, from the SEA assets, without materializing or spawning anything.
+//
 // Everything the two branches touch (sea, spawn, env, exit, materializeDeps,
 // materializeAssets, requireMain, the exit hook) is injectable, so both branches
 // unit-test WITHOUT building a real SEA.
@@ -47,6 +52,7 @@ const { shapeTargetEnv } = require('./target-env.cjs');
 const { isExecutableFile } = require('./clode-hosttools.cjs');
 const { guardVerdict, shouldInjectGuard } = require('./update-guard.cjs');
 const { checkUpdate } = require('./target-update-check.cjs');
+const { carveClodeArgs, CLODE_FLAGS, attestReport } = require('./clode-attest.cjs');
 require('./host-provision.cjs'); // ensure esbuild bundles it into the SEA for runtime provision('tar')
 
 // Install globalThis.__clodeCheckUpdate exactly as the quaude PRELUDE does
@@ -78,6 +84,49 @@ function installCheckUpdateGlobal() {
   };
 }
 
+// --clode-attest, naude's half. A naude's hashed units are its SEA assets; manifest.json
+// names each one's length + sha256, and manifest.sig carries the manifest's own sha256 so
+// the document the check is made AGAINST is itself checked (the role a quaude's archive
+// index plays). Every asset is read straight out of the executable and re-hashed here.
+//
+// WHAT IT DOES NOT COVER, stated in the report rather than left to be assumed:
+//   * the packages inside deps.tar. The tarball is verified whole, as one member, but
+//     naude does not open it — so a declared BOM package being silently ABSENT is a hole
+//     quaude's per-package presence check closes and this one does not. Extracting a
+//     tarball to answer a read-only question would make attest a side-effecting operation.
+//   * the embedded node and the SEA main bundle. Neither is an asset; they are the image
+//     this code is executing out of. A quaude has exactly the same gap (its tjs template
+//     and its bootstrap bytecode are not archive members), and both products record the
+//     engine's build-time sha as `template` instead.
+function attestSelf(sea, { hash = (b) => require('node:crypto').createHash('sha256').update(b).digest('hex') } = {}) {
+  const asset = (name) => Buffer.from(sea.getRawAsset(name));
+  const manifestBytes = asset('manifest.json');
+  const manifestSig = asset('manifest.sig').toString('utf8').trim();
+  const manifestText = manifestBytes.toString('utf8');
+  let manifest;
+  try { manifest = JSON.parse(manifestText); } catch { manifest = { members: {} }; }
+
+  const members = [];
+  for (const [name, rec] of Object.entries(manifest.members || {})) {
+    let bytes = null;
+    try { bytes = asset(name); } catch { bytes = null; }   // asset missing entirely
+    members.push({
+      name,
+      len: bytes ? bytes.length : 0,
+      ok: !!bytes && bytes.length === rec.len && hash(bytes) === rec.sha256,
+    });
+  }
+  // The manifest itself, LAST — mirroring where a quaude's manifest.json lands in its own
+  // index order — checked against manifest.sig rather than against itself.
+  members.push({ name: 'manifest.json', len: manifestBytes.length, ok: hash(manifestBytes) === manifestSig });
+
+  return attestReport({
+    manifestText,
+    members,
+    notes: ['node_modules rides inside the verified deps.tar member; individual packages are not checked'],
+  });
+}
+
 // Reshape argv to plain-node form and run the target as the main module. Defaults
 // to the real behavior: set process.argv = [execPath, script, ...userArgs], then
 // require(script). In a SEA the global require resolves only built-ins; a
@@ -98,6 +147,7 @@ function runNaude(opts = {}) {
     requireMain = defaultRequireMain,
     stdin = process.stdin,
     stdout = process.stdout,
+    stderr = process.stderr,
     exit = (c) => process.exit(c),
   } = opts;
 
@@ -138,6 +188,18 @@ function runNaude(opts = {}) {
     return;
   }
 
+  // Reserved argv namespace: strip `--clode-*` BEFORE anything bundle-visible sees argv,
+  // exactly as quaude's bootstrap does and with the same carve function. An unknown flag
+  // in the namespace is OUR error to report (exit 64), not one to hand to Claude Code,
+  // which would blame it on itself. Everything else passes through in order.
+  const carved = carveClodeArgs(argv);
+  if (carved.unknown.length) {
+    stderr.write(`naude: unknown option '${carved.unknown[0]}' `
+      + `(the --clode-* namespace is reserved; known: ${CLODE_FLAGS.join(', ')})\n`);
+    exit(64);
+    return;
+  }
+
   // First pass: materialize the embedded assets and re-invoke ourselves as node.
   const {
     // The node:sea MODULE — what the materializers read assets from
@@ -153,6 +215,17 @@ function runNaude(opts = {}) {
     procOff = (s, cb) => process.removeListener(s, cb),
     onExit,
   } = opts;
+
+  // --clode-attest: the same flag, format and verdict line a quaude prints. Answered from
+  // the SEA assets alone — nothing is materialized to disk, nothing is spawned, no deps
+  // are unpacked. An attest that boots the product is a launch, not an attest.
+  if (carved.clode.includes('--clode-attest')) {
+    const report = attestSelf(sea);
+    stdout.write(report.text);
+    exit(report.ok ? 0 : 1);
+    return;
+  }
+  const argvForChild = carved.rest;
 
   // Unpack the deps tarball to a sig-keyed cache dir (holds node_modules/), and the
   // baked cli.cjs + bun-shim + target-update-check.cjs into a work dir. workDir is
@@ -197,7 +270,7 @@ function runNaude(opts = {}) {
   // binary. execPath falsy -> skip entirely (e.g. a bare `require()` in a test,
   // or a context with no known own binary to call back into).
   let guardSettingsFile = null;
-  const childArgv = [...argv];
+  const childArgv = [...argvForChild];
   if (execPath && shouldInjectGuard(childArgv)) {
     guardSettingsFile = path.join(cacheDir || os.tmpdir(), 'clode-guard-' + process.pid + '.json');
     const guardSettings = {

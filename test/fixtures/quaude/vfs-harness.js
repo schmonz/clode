@@ -85,7 +85,7 @@ console.log(JSON.stringify({
   isMain: require.main === module,
 }));
 `));
-  manifest = { quaude: '1', role: 'builder', entry: 'main.cjs' };
+  manifest = { clode: '1', role: 'builder', entry: 'main.cjs' };
 }
 
 globalThis.__quaudeVFS = { files, index: { version: 0, members: [] }, manifest };

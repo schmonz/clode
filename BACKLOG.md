@@ -3039,6 +3039,31 @@ other needs a written reason IN THE CODE, next to the divergence — the shared 
 why. Start by auditing the two surfaces against each other; provenance and attestation are the
 two known gaps, and an audit is what says whether they are the only ones.
 
+#### RESOLVED 2026-08-30 — the first instance (attestation + provenance) is closed
+
+`--clode-attest` is now the SAME flag on both products, and the product-named flag it
+replaces is DELETED, not aliased (user: "I didn't know it was there and nobody else does
+either"). `libexec/clode-attest.cjs` is the one implementation of the argv carve and the
+report format; `quaude-bootstrap.mjs` carries the byte-identical inline copy the drift test
+enforces, because it is compiled raw to bytecode and cannot require. A naude now bakes a
+`manifest.json` + `manifest.sig` SEA asset with the same key set and ORDER as the quaude
+archive manifest, `providerPlatform` included, and re-hashes every asset against it.
+
+Both builds run the SAME gate (`attestTarget`) on the binary they just produced, greping ONE
+constant imported from the module that prints it. Proved able to fail, on real artifacts, by
+flipping one byte: a quaude reports `FAIL bun-shim.cjs` and exits 1; a naude (re-signed
+ad-hoc, or macOS kills it before attest can speak) reports `FAIL target-update-check.cjs`
+and exits 1.
+
+Two divergences remain, both stated in the output rather than papered over:
+- naude prints `note: node_modules rides inside the verified deps.tar member; individual
+  packages are not checked`. quaude does per-package SET verification because its node_modules
+  ARE members; naude's are one tarball, and opening it would make attest side-effecting.
+- naude's manifest has no `idna` — that records which Unicode level the quickjs/wurl URL
+  parser was built with, and a Node SEA has no equivalent build-time knob to report.
+
+The general ask above (parity as the DEFAULT, audit the whole surface) is still open.
+
 ### ★★★ Nothing gates the gates — make "a guard that cannot fail" structurally impossible (user, 2026-08-29)
 
 **The user:** "How are you finding these gaps? Is it automated into the build? Or is that another

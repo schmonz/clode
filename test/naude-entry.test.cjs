@@ -468,12 +468,12 @@ test('--clode-attest: prints the manifest, one line per member, then the SHARED 
   assert.strictEqual(lines[lines.length - 1], ATTEST_VERIFIED,
     'the verdict line must be byte-identical to the one quaude prints — one gate greps both');
   for (const n of ['deps.tar', 'deps.sig', 'bun-shim.cjs', 'cli.cjs', 'target-update-check.cjs', 'manifest.json']) {
-    assert.ok(lines.some((l) => l === `ok  ${n} (${l.match(/\((\d+) bytes\)/)[1]} bytes)`),
+    assert.ok(lines.some((l) => new RegExp(`^ok {3}${n.replace(/\./g, '\\.')} \\(\\d+ bytes\\)$`).test(l)),
       `no verification line for ${n} in:\n${r.out}`);
   }
   // The manifest itself is printed verbatim first, so the same three facts quaude
   // reports are answerable about a naude.
-  const m = JSON.parse(r.out.slice(0, r.out.indexOf('\nok  ')));
+  const m = JSON.parse(r.out.slice(0, r.out.indexOf('\nok   ')));
   assert.strictEqual(m.providerPlatform, 'darwin');
   assert.strictEqual(m.bundleVersion, 'claude-abc');
   assert.strictEqual(m.clodeVersion, '0.0.0-test');

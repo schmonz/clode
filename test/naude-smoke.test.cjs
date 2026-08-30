@@ -136,3 +136,53 @@ test('naude: real SEA build boots the baked CC and answers PONG offline', async 
     fs.rmSync(cache, { recursive: true, force: true });
   }
 });
+
+// THE NAUDE ATTEST GATE, ON A REAL NAUDE. The unit tests drive attestSelf against a fake
+// SEA; `clode build --naude` refuses to report success unless the real binary attests. That
+// refusal is worth nothing unless a corrupted naude actually answers differently, so: build
+// one, flip a byte inside a real asset, and require the verdict to change.
+//
+// Re-signing after the flip is NOT weakening the test — it is the only way to reach attest
+// at all on macOS. An ad-hoc-signed Mach-O with one byte changed is SIGKILLed by the kernel
+// before any of our code runs (observed: exit 137), which proves the OS noticed and proves
+// nothing about our gate. Ad-hoc re-signing hands the corrupted payload to a binary the OS
+// is willing to start, which is exactly the case attest exists for.
+test('naude: a tampered asset fails --clode-attest (the build gate can fail)', async (t) => {
+  const reason = skipReason();
+  if (reason) { t.skip(reason); return; }
+  const { seaBin } = require('../scripts/platform-tag.cjs');
+  const { ATTEST_VERIFIED, ATTEST_FAILED } = require('../libexec/clode-attest.cjs');
+  const naude = seaBin(REPO, 'naude');
+  assert.ok(fs.existsSync(naude), `no naude at ${naude} — the build test above must run first`);
+
+  const cache = fs.mkdtempSync(path.join(os.tmpdir(), 'naude-attest-cache-'));
+  const tampered = path.join(cache, path.basename(naude) + '.tampered');
+  try {
+    // Sanity: the pristine binary attests clean, so a FAIL below is the tampering.
+    const clean = await run(naude, ['--clode-attest'], { env: { ...process.env, NAUDE_CACHE: cache }, timeout: 180000 });
+    assert.strictEqual(clean.status, 0, `pristine naude did not attest:\n${clean.stdout}\n${clean.stderr}`);
+    assert.ok(clean.stdout.includes(ATTEST_VERIFIED), clean.stdout);
+
+    // Flip one byte inside a REAL asset's bytes (located by searching for the asset's own
+    // file content), so the flip is guaranteed to land in hashed payload, not in slack.
+    const assetBytes = fs.readFileSync(path.join(REPO, 'libexec', 'target-update-check.cjs'));
+    const bytes = fs.readFileSync(naude);
+    const at = bytes.indexOf(assetBytes);
+    assert.ok(at >= 0, 'could not find the target-update-check.cjs asset inside the SEA image');
+    bytes[at + 10] ^= 0xff;
+    fs.writeFileSync(tampered, bytes);
+    fs.chmodSync(tampered, 0o755);
+    if (process.platform === 'darwin') {
+      execFileSync('codesign', ['-f', '-s', '-', tampered], { stdio: 'ignore' });
+    }
+
+    const r = await run(tampered, ['--clode-attest'], { env: { ...process.env, NAUDE_CACHE: cache }, timeout: 180000 });
+    assert.notStrictEqual(r.status, 0, `a tampered naude exited 0:\n${r.stdout}\n${r.stderr}`);
+    assert.ok(!r.stdout.includes(ATTEST_VERIFIED),
+      `the tampered binary still printed the verdict the build gate greps:\n${r.stdout}`);
+    assert.ok(r.stdout.includes('FAIL target-update-check.cjs') && r.stdout.includes(ATTEST_FAILED),
+      `no failure reported:\n${r.stdout}\n${r.stderr}`);
+  } finally {
+    fs.rmSync(cache, { recursive: true, force: true });
+  }
+});

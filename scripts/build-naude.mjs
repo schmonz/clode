@@ -208,7 +208,7 @@ export function stageDeps(nmdir) {
 // The old `builder` asset (the path of the clode building this naude, once fed to
 // the retired spawn-a-rebuild callback) is GONE: auto-update is notify-only now,
 // so nothing reads a builder path and nothing writes one.
-export function naudeSeaConfig({ mainBundle, cliCjs, bunShim, tar, sig, out, targetUpdateCheck }) {
+export function naudeSeaConfig({ mainBundle, cliCjs, bunShim, tar, sig, out, targetUpdateCheck, manifest, manifestSig }) {
   const assets = {
     'deps.tar': tar,
     'deps.sig': sig,
@@ -216,6 +216,19 @@ export function naudeSeaConfig({ mainBundle, cliCjs, bunShim, tar, sig, out, tar
     'cli.cjs': cliCjs,
     'target-update-check.cjs': targetUpdateCheck,
   };
+  // manifest.json: what this naude knows about itself — which clode built it, which
+  // upstream bundle it bakes, which platform that bundle was CARVED for, and the sha256
+  // of every other asset. `--clode-attest` prints it verbatim and then re-hashes what it
+  // describes, exactly as a quaude prints its archive manifest.
+  //
+  // manifest.sig: the manifest's own sha256, as a separate asset. Without it "all members
+  // verified" would only mean "verified against whatever the manifest says", which is not
+  // a claim worth printing. It plays the role a quaude's archive INDEX plays: an
+  // unverified root that makes everything under it verifiable. (Both products stop there;
+  // neither re-hashes the engine image it is appended to / injected into — a quaude's tjs
+  // template and a naude's embedded node are recorded as `template`, not as members.)
+  if (manifest) assets['manifest.json'] = manifest;
+  if (manifestSig) assets['manifest.sig'] = manifestSig;
   return {
     main: mainBundle,
     output: path.join(out, 'sea-prep.blob'),
@@ -233,6 +246,57 @@ export function stagedBunShim(cliCjs) {
   return path.join(path.dirname(cliCjs), 'bun-shim.cjs');
 }
 
+// --extras <path>: a JSON file of the node-side facts only the CALLER knows — which clode
+// is building (clodeVersion), which upstream bundle this cli.cjs came from (bundleVersion),
+// which platform that bundle was carved for (providerPlatform), the resolved name@version
+// closure (bom), and the pinned Node's version (engineVersion). OPTIONAL: a plain
+// `node scripts/build-naude.mjs --cli <cli.cjs>` still builds, with the honest defaults
+// below. A FILE rather than flags because the BOM is unbounded in length — the same shape
+// quaude's fuse worker takes its own node-side fields in (extras.json).
+export function parseExtrasArg(argv) {
+  const i = argv.indexOf('--extras');
+  if (i < 0 || !argv[i + 1]) return {};
+  try {
+    return JSON.parse(fs.readFileSync(path.resolve(argv[i + 1]), 'utf8'));
+  } catch (e) {
+    console.error(`build-naude: could not read --extras ${argv[i + 1]}: ${(e && e.message) || e}`);
+    process.exit(1);
+  }
+}
+
+// The naude's own account of itself, printed verbatim as the head of `--clode-attest`.
+//
+// The key set and ORDER deliberately mirror the quaude manifest (libexec/quaude-fuse.js):
+// the two products answer one question, so their answers must not read as two different
+// documents. The one quaude key absent here is `idna` — that records which Unicode level
+// the quickjs/wurl URL parser was built with, and a Node SEA has no such build-time knob
+// to report. Inventing a value for it would be the dishonest kind of symmetry.
+//
+// providerPlatform defaults to 'unknown' rather than being omitted: 'we could not tell'
+// must stay distinguishable from 'nobody recorded it' (same word the extract cache key
+// uses for a container it cannot name).
+export function naudeManifest({
+  clodeVersion, bundleVersion, providerPlatform, engineNode, template, hooks, bom, members,
+}) {
+  return {
+    clode: '1',                // archive/manifest schema version (shared with quaude)
+    role: 'naude',
+    entry: 'cli.cjs',          // the baked Claude Code this SEA boots
+    bundleVersion,
+    providerPlatform: providerPlatform || 'unknown',
+    clodeVersion,
+    engine: { node: engineNode || 'unknown' },
+    // The engine image this product is built ON, recorded but not re-hashed at run time —
+    // a quaude records its tjs template the same way, for the same reason (neither product
+    // can hash the bytes it is currently executing out of).
+    template: template || null,
+    hooks: hooks || {},
+    bom: bom || [],
+    builtAt: new Date().toISOString(),
+    members: members || {},
+  };
+}
+
 // Writes sea-config.json from naudeSeaConfig, resolving the bun-shim from the
 // staged location beside --cli. `targetUpdateCheck` (auto-update notify-only,
 // naude parity — Task 5) defaults to the checkout's OWN
@@ -246,6 +310,7 @@ export function stagedBunShim(cliCjs) {
 export function writeSeaConfig({
   bundle, cliCjs, tar, sigFile, outDir = OUT,
   targetUpdateCheck = path.join(REPO, 'libexec', 'target-update-check.cjs'),
+  extras = {}, template = null,
 }) {
   // Ensure the artifact dir exists before writing into it (sea-config.json here).
   // A full build's main() already made OUT and a dev box has build/<tag>/ from a
@@ -271,6 +336,43 @@ export function writeSeaConfig({
     console.error(`build-naude: target-update-check.cjs not found at: ${targetUpdateCheck}`);
     process.exit(1);
   }
+  // -- the manifest + its sig, written HERE (not by main) so the shas recorded are the
+  // shas of the very files the SEA config is about to name as assets: no window in which
+  // an asset could be re-staged between being hashed and being embedded.
+  const assetFiles = {
+    'deps.tar': tar,
+    'deps.sig': sigFile,
+    'bun-shim.cjs': bunShim,
+    'cli.cjs': cliCjs,
+    'target-update-check.cjs': targetUpdateCheck,
+  };
+  const members = {};
+  for (const [name, file] of Object.entries(assetFiles)) {
+    const bytes = fs.readFileSync(file);
+    members[name] = { len: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex') };
+  }
+  // The extractor whose PRELUDE transforms are baked into the staged cli.cjs — the same
+  // field, computed the same way, as the quaude manifest's `hooks`. Omitted rather than
+  // faked if this build ran from somewhere that has no libexec (nothing does today).
+  const extractor = path.join(REPO, 'libexec', 'extract-claude-js.cjs');
+  const hooks = fs.existsSync(extractor)
+    ? { 'extract-claude-js.cjs': crypto.createHash('sha256').update(fs.readFileSync(extractor)).digest('hex') }
+    : {};
+  const manifestPath = path.join(outDir, 'manifest.json');
+  const manifestSigPath = path.join(outDir, 'manifest.sig');
+  const manifestBytes = Buffer.from(JSON.stringify(naudeManifest({
+    clodeVersion: extras.clodeVersion || readVersion(),
+    bundleVersion: extras.bundleVersion,
+    providerPlatform: extras.providerPlatform,
+    engineNode: extras.engineVersion,
+    template,
+    hooks,
+    bom: extras.bom,
+    members,
+  }), null, 2) + '\n');
+  fs.writeFileSync(manifestPath, manifestBytes);
+  fs.writeFileSync(manifestSigPath, crypto.createHash('sha256').update(manifestBytes).digest('hex') + '\n');
+
   const cfg = naudeSeaConfig({
     mainBundle: bundle,
     cliCjs,
@@ -279,10 +381,21 @@ export function writeSeaConfig({
     sig: sigFile,
     out: outDir,
     targetUpdateCheck,
+    manifest: manifestPath,
+    manifestSig: manifestSigPath,
   });
   const p = path.join(outDir, 'sea-config.json');
   fs.writeFileSync(p, JSON.stringify(cfg, null, 2));
   return { cfgPath: p, blob: cfg.output };
+}
+
+// The clode version this checkout is, for a standalone run with no --extras. Tolerant:
+// a fused builder materializes libexec/scripts/deps but no VERSION file, and in that case
+// the caller ALWAYS passes --extras — so 'unknown' here is a real answer, not a papered
+// over failure.
+function readVersion() {
+  try { return fs.readFileSync(path.join(REPO, 'VERSION'), 'utf8').trim() || 'unknown'; }
+  catch { return 'unknown'; }
 }
 
 // Delegate the SEA binary's signing to scripts/sea-sign.cjs so THIS build issues one uniform
@@ -480,7 +593,16 @@ async function main() {
   }
 
   const { tar, sigFile } = stageDeps(nmdir);
-  const { cfgPath, blob } = writeSeaConfig({ bundle, cliCjs, tar, sigFile });
+  // `template` is the EMBED node — the engine image postject injects the blob into. Hashed
+  // before the injection, so it names the pristine input, exactly as a quaude's manifest
+  // records the sha of the pristine tjs template it was appended to.
+  const embedBytes = fs.readFileSync(embed);
+  const template = { sha256: crypto.createHash('sha256').update(embedBytes).digest('hex'), len: embedBytes.length };
+  const { cfgPath, blob } = writeSeaConfig({
+    bundle, cliCjs, tar, sigFile,
+    extras: parseExtrasArg(argv),
+    template,
+  });
   generateBlob(blobgen, cfgPath);                                                 // host node RUNS
   const bin = await buildBinary({ nodePath: embed, postjectDir, blob, outOverride, targetOs, signerBin }); // target node EMBEDDED
   if (blobgen === embed) {

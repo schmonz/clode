@@ -86,6 +86,16 @@ function fakeSmokeTarget(opts) {
   });
 }
 
+// A stand-in for the ATTEST spawn (`<bin> --clode-attest`, clode-fuse's attestTarget).
+// `clode build --naude` now runs the same attest gate the quaude path runs, so a stub that
+// merely returns status 0 no longer satisfies the build — and rightly so: a naude used to
+// ship with no self-verification of any kind. This stub behaves like a WORKING target
+// (exit 0 + the real verdict line); the gate's ability to REJECT is proved separately, by
+// the mutation tests in test/clode-attest.test.cjs, by the tampered-binary test in
+// test/quaude-build.test.cjs, and by the wiring test just below.
+const { ATTEST_VERIFIED } = require('../libexec/clode-attest.cjs');
+const fakeAttestTarget = () => Promise.resolve({ ok: true, status: 0, stdout: `${ATTEST_VERIFIED}\n`, stderr: '' });
+
 // The pinned Node the naude branch now ALWAYS ensures (clode carries no Node;
 // naude embeds a sha-verified pinned Node fetched into a versioned store). The
 // wiring tests inject this via opts.ensureNode so they never touch the network:
@@ -114,6 +124,7 @@ async function runBuild(args, env, runResult = { status: 0, stdout: '', stderr: 
     env,
     run,
     ensureNode,
+    attestTarget: fakeAttestTarget,
     stderr: { write: (s) => stderrBuf.push(s) },
     stdout: { write: (s) => stdoutBuf.push(s) },
     ...extraOpts,
@@ -501,3 +512,20 @@ test('clode build --naude --target macos-*: rcodesign fetch failure fails loud, 
 // (runs under the pinned node, passes --node/--bundle/--nmdir/--postject/
 // --builder, no old refusal) are covered by the non-fused cases above; the
 // fused materialization is covered by the acceptance.
+
+// THE NAUDE ATTEST GATE MUST BE ABLE TO FAIL THE BUILD. Everything above injects a
+// working attest so it can test other wiring; this one injects a FAILING one and requires
+// `clode build --naude` to refuse. Without it, every naude test in this file would pass
+// just as happily against a build that never ran the gate at all.
+test('clode build --naude: a failing attest fails the build, loudly', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-attestfail-'));
+  try {
+    const { env } = seedProvider(dir);
+    const r = await runBuild(['--naude'], env, { status: 0, stdout: '', stderr: '' },
+      async () => FAKE_NODE,
+      { attestTarget: () => Promise.resolve({ ok: false, status: 1, stdout: 'clode-attest: VERIFICATION FAILED\n', stderr: '' }) });
+    assert.strictEqual(r.status, 1, `the build reported success despite a failed attest:\n${r.stdout}`);
+    assert.match(r.stderr, /ATTEST FAILED/);
+    assert.doesNotMatch(r.stdout, /attest ok/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

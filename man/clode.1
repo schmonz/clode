@@ -108,16 +108,25 @@ the pinned txiki.js runtime plus the extracted Claude Code bundle compiled to
 quickjs bytecode, self-contained (no Node, no npm, no network at run time).
 The build verifies itself before reporting success \(em a canned offline
 Messages round-trip and a
-.Fl -quaude-attest
+.Fl -clode-attest
 manifest verification \(em and fails loudly otherwise.
 The built binary reserves only the
-.Fl -quaude-*
+.Fl -clode-*
 option namespace
-.Pq currently Fl -quaude-attest
+.Pq currently Fl -clode-attest
 for itself and passes everything else to Claude Code \(en quaude is the one
 that executes Claude Code and needs a passthrough namespace;
 .Nm
 itself no longer does.
+Running a built binary with
+.Fl -clode-attest
+re-hashes everything it carries, prints its build manifest \(em which
+.Nm
+built it, which Claude Code bundle it embeds, and which platform that bundle
+was carved for \(em and exits nonzero if anything fails to verify.
+The same flag, output format and verdict line apply to a
+.Dq naude
+.Pq below .
 The template runtime comes from
 .Ev CLODE_TJS
 (default

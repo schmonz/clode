@@ -25,12 +25,12 @@ function bootQuaude(exe, args, env, timeoutMs) {
   });
 }
 
-test('fused quaude.exe --quaude-attest self-loads and verifies all members', (t) => {
+test('fused quaude.exe --clode-attest self-loads and verifies all members', (t) => {
   const exe = quaudeExe();
   if (!exe) { t.skip('no CLODE_QUAUDE_EXE'); return; }
-  const r = spawnSync(exe, ['--quaude-attest'], { encoding: 'utf8', timeout: 60000 });
+  const r = spawnSync(exe, ['--clode-attest'], { encoding: 'utf8', timeout: 60000 });
   assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
-  assert.match(r.stdout, /quaude-attest: all members verified/, `stdout:\n${r.stdout}`);
+  assert.ok(r.stdout.includes(require('../libexec/clode-attest.cjs').ATTEST_VERIFIED), `stdout:\n${r.stdout}`);
 });
 
 test('fused quaude.exe -p prints PONG through the VFS module path', async (t) => {

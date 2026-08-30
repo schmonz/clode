@@ -16,7 +16,7 @@
 //   stage-dir:   quaude role — the extracted+hooked cache entry (cli.cjs +
 //     bun-shim.cjs); builder role — a staging dir with clode-main.bundle.cjs.
 //   extras.json: node-side fields (role, bundleVersion, clodeVersion, hooks,
-//     template sha, quaude schema) PLUS `deps` — the ext-dep closure to embed.
+//     template sha, manifest schema) PLUS `deps` — the ext-dep closure to embed.
 //     The closure travels as DATA precisely because this worker runs under tjs
 //     and cannot require() the node-side module that derives it.
 //
@@ -536,7 +536,7 @@ for (const m of members) {
   memberShas[m.name] = { len: m.data.length, sha256: m.sha256 };
 }
 const manifest = {
-  quaude: extras.quaude,
+  clode: extras.clode,
   role,
   entry: entryName,
   bundleVersion: extras.bundleVersion,
@@ -547,7 +547,7 @@ const manifest = {
   // ASKED: the bundle is stored as bytecode, so `strings` on a quaude answers nothing (an hour
   // was spent on precisely that mistake, and it produced a false conclusion), and a
   // cross-built target cannot be run to ask it. Recording it here makes the question
-  // answerable about the BINARY — printed verbatim by --quaude-attest on a target you can run,
+  // answerable about the BINARY — printed verbatim by --clode-attest on a target you can run,
   // and readable straight out of the archive (manifest.json is a plain JSON member) on one you
   // cannot. Absent on the builder role, which carves no upstream bundle.
   providerPlatform: extras.providerPlatform,
@@ -562,7 +562,7 @@ const manifest = {
   // package.json + node_modules. Distinct from DEPS (bare names, above,
   // consumed only to collect members) — never itself re-emitted.
   bom: extras.bom,
-  fusedAt: new Date().toISOString(),
+  builtAt: new Date().toISOString(),
   members: memberShas,
 };
 const manifestData = enc.encode(JSON.stringify(manifest, null, 2) + '\n');

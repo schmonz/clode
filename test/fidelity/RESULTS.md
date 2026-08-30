@@ -31,7 +31,7 @@ run-target at once, not decided per row.
    same explicitly-blessed mock — run against the real shipped artifact rather
    than a loose engine. It is not a weaker cousin of G7; it *is* G7. (The
    POST-landed assertion is strictly stronger than the recipe asks for: a hung or
-   silently-offline client cannot pass it.) `--quaude-attest` runs beside it and
+   silently-offline client cannot pass it.) `--clode-attest` runs beside it and
    proves the fused members verify; that is payload integrity, not a recipe row.
 
    The qualifier that does all the work: **the fused quaude must EXECUTE on the

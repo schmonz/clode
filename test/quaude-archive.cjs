@@ -9,7 +9,7 @@
 //
 // THAT MATTERS BECAUSE THE OBVIOUS TOOL LIES. A quaude stores the bundle as BYTECODE, so
 // `strings` on one finds nothing to answer "which platform was this carved for?" — an hour was
-// spent on exactly that in 2026-08-29 and it produced a confident wrong answer. --quaude-attest
+// spent on exactly that in 2026-08-29 and it produced a confident wrong answer. --clode-attest
 // prints the manifest, but only on a target this host can execute, which excludes every
 // cross-build. This reader has neither limitation.
 //

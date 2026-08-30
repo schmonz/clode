@@ -43,8 +43,13 @@ test('writeSeaConfig: defaults targetUpdateCheck to the checkout libexec/target-
     const cliCjs = path.join(stage, 'cli.cjs');
     fs.writeFileSync(cliCjs, '// staged cli.cjs\n');
     fs.writeFileSync(path.join(stage, 'bun-shim.cjs'), '// staged bun-shim\n');
+    // Real files, not placeholder paths: writeSeaConfig now hashes every asset it is
+    // about to name, so that the manifest's shas are the shas of the exact bytes that
+    // get embedded (no window between hashing and embedding).
+    const tar = path.join(stage, 'deps.tar'); fs.writeFileSync(tar, 'TARBALL');
+    const sigFile = path.join(stage, 'deps.sig'); fs.writeFileSync(sigFile, 'sig0');
     const { cfgPath } = writeSeaConfig({
-      bundle: '/b/naude-entry.bundle.cjs', cliCjs, tar: '/o/deps.tar', sigFile: '/o/deps.sig',
+      bundle: '/b/naude-entry.bundle.cjs', cliCjs, tar, sigFile,
       outDir: stage,
     });
     const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
@@ -344,8 +349,13 @@ test('writeSeaConfig: produces no `builder` asset (rebuild callback retired)', a
     const cliCjs = path.join(stage, 'cli.cjs');
     fs.writeFileSync(cliCjs, '// staged cli.cjs\n');
     fs.writeFileSync(path.join(stage, 'bun-shim.cjs'), '// staged bun-shim\n');
+    // Real files, not placeholder paths: writeSeaConfig now hashes every asset it is
+    // about to name, so that the manifest's shas are the shas of the exact bytes that
+    // get embedded (no window between hashing and embedding).
+    const tar = path.join(stage, 'deps.tar'); fs.writeFileSync(tar, 'TARBALL');
+    const sigFile = path.join(stage, 'deps.sig'); fs.writeFileSync(sigFile, 'sig0');
     const { cfgPath } = writeSeaConfig({
-      bundle: '/b/naude-entry.bundle.cjs', cliCjs, tar: '/o/deps.tar', sigFile: '/o/deps.sig',
+      bundle: '/b/naude-entry.bundle.cjs', cliCjs, tar, sigFile,
       outDir: stage,
     });
     const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
