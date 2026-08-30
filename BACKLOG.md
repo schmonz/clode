@@ -3001,6 +3001,44 @@ measurement, and it is the natural gate for the cross-fuse work. It also belongs
 "nothing gates the gates" above — a differential is the one form of gate that cannot be green by
 construction, because nothing about it is asserted in advance.
 
+### ★★★ naude and quaude should behave identically, unless there is a written reason (user, 2026-08-30)
+
+**The user:** "I would much prefer, as always, that `naude` and `quaude` behave identically or
+nearly so. Unless there's a reason not to."
+
+**First instance, found 2026-08-30: provenance and attestation exist only on quaude.**
+
+| capability | quaude | naude |
+|---|---|---|
+| `--quaude-attest` — recompute EVERY member hash at runtime, print `all members verified` | yes (`quaude-bootstrap.mjs`, `QUAUDE_FLAGS`), and the build gates on the string (`clode-fuse.cjs:1591`) | **nothing** |
+| `providerPlatform` in the artifact — which platform's Claude Code is inside it | yes, `manifest.json` (`clode-fuse.cjs:1452`), readable off the FILE without executing it | **nothing** |
+| shared `-p 'say PONG'` smoke against a local mock, `NODE_PATH` deleted | yes | yes (factored out deliberately) |
+
+**Is there a reason?** Partly, and it is worth stating so the fix does not overreach. A quaude is
+a tjs engine plus an ARCHIVE OF MEMBERS with a manifest, so "are my members intact?" is a
+question it can ask itself. A naude is a Node SEA — one blob — so there is no member archive to
+walk. That justifies a DIFFERENT MECHANISM; it does not justify the absence of the capability.
+Node SEA supports assets (we already embed `naude-entry.bundle.cjs` via postject), so a naude can
+carry a manifest and verify against it.
+
+And for `providerPlatform` there is no structural excuse at all: it is metadata about which
+upstream carve went in. Recording it is a one-line-shaped change on a path that already knows the
+answer.
+
+**Why this matters more than symmetry for its own sake.** naude's JOB is to be the ORACLE that
+quaude is judged against ([[node-only-as-oracle]], [[three-engine-fidelity-recipe]]). Every
+divergence between them is a place where the reference and the subject are not comparable — so a
+fidelity differential either cannot run, or runs and means less than it appears to. The 2026-08-29
+platform-carve bug is the cautionary case: we could not ask a fused binary which platform's bundle
+was inside it, drew a confident wrong conclusion from `strings`, and only fixed it for quaude.
+
+**The ask:** treat behavioural parity as the default for the two products, the way
+[[match-upstream-by-default]] treats upstream. Any capability present on one and absent on the
+other needs a written reason IN THE CODE, next to the divergence — the shared smoke in
+`clode-fuse.cjs:526` already models this well, naming what stays out of the shared function and
+why. Start by auditing the two surfaces against each other; provenance and attestation are the
+two known gaps, and an audit is what says whether they are the only ones.
+
 ### ★★★ Nothing gates the gates — make "a guard that cannot fail" structurally impossible (user, 2026-08-29)
 
 **The user:** "How are you finding these gaps? Is it automated into the build? Or is that another
