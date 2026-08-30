@@ -216,7 +216,17 @@ const HAVE_ZLIB_ZSTD = haveZlibZstd();
 // belt: if it ever does hang, it fails in 60 s naming the cause.
 let SCRATCH = null;
 function scratch() {
-  if (!SCRATCH) SCRATCH = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'clode-zstd-test-'));
+  // ROOM FOR THE BIG FIXTURE, WITHOUT MOVING EVERY TOOL'S SCRATCH. The deadlock guard below
+  // decompresses a ~4MB frame to 6MB, and on Windows runners os.tmpdir() is
+  // C:\\Users\\RUNNER~1\\AppData\\Local\\Temp on the small C: volume — that job died twice with
+  // `zstd: error 70 : Write error : ... No space left on device`. RUNNER_TEMP is on the roomy
+  // D:, so ask for it HERE rather than redirecting TMP/TEMP/TMPDIR for the whole job: Git for
+  // Windows ships GNU tar, which reads `D:\\a\\_temp\\x` as the remote host `D` and fails with
+  // `/usr/bin/tar: D` (MSYS mounts C: but not D:). Job-wide redirection was tried and reverted.
+  if (!SCRATCH) {
+    const roomy = process.env.RUNNER_TEMP || require('node:os').tmpdir();
+    SCRATCH = fs.mkdtempSync(path.join(roomy, 'clode-zstd-test-'));
+  }
   return SCRATCH;
 }
 function makeZstdFrame(text) {
