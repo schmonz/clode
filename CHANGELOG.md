@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.20260830.1
+
+Tested with Claude Code 2.1.251.
+
+Claude Code 2.1.251 compresses the files it embeds. `clode` now unpacks them, which means it can build from current Claude Code again — every target was broken by this, on every platform. Unpacking happens while building, so the binary you get needs nothing new at runtime; `clode build` itself now needs `zstd` (or `unzstd`/`zstdcat`, or `CLODE_ZSTD` pointing at one). Not every system ships one, and `clode` names each candidate it tried if it cannot find any.
+
+- Fix building from Claude Code 2.1.251 and newer
+- Include the chart, diagram, and syntax-highlighting files that were missing from every build ever made — they are read only when something renders, so nothing noticed
+- Fix `clode build --naude`, which could not build from 2.1.243 or newer
+- Fix `not a function` when editing an existing file, in the Node SEA build
+- Fix finding host tools on Windows, where every lookup silently answered "no"
+- Fix building on NetBSD/sparc, which shipped an engine missing part of itself
+- Fix building on Haiku, which had no unpacker installed
+- Implement `util.getSystemErrorName`
+- Record which platform's Claude Code a binary was built from, and print it in `--quaude-attest`
+- Refuse to build a target that would be missing embedded files, instead of discovering it on the first turn
+
 ## 0.20260827.1
 
 Tested with Claude Code 2.1.247.
