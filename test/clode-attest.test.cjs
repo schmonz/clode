@@ -197,7 +197,10 @@ test('nothing in the tree still mentions --quaude-attest or the quaude-attest: p
       if (SKIP_DIRS.has(e.name)) continue;
       const p = path.join(d, e.name);
       if (e.isDirectory()) { walk(p); continue; }
-      const rel = path.relative(REPO, p);
+      // POSIX separators, ALWAYS: path.relative gives backslashes on Windows, so the
+      // forward-slash ALLOWED keys matched nothing there and this sweep flagged its OWN
+      // file. Failed on windows-latest only, at 32e88de, with the allowlist intact.
+      const rel = path.relative(REPO, p).split(path.sep).join("/");
       if (ALLOWED.has(rel)) continue;
       let src;
       try { src = fs.readFileSync(p, 'utf8'); } catch { continue; }
