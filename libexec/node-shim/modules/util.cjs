@@ -294,9 +294,63 @@ function stripVTControlCharacters(str) {
   return str.replace(ANSI_RE, '');
 }
 
+// util.getSystemErrorName(err): the NAME of a system error number (-2 -> 'ENOENT').
+//
+// Upstream imports it — `import{getSystemErrorName as vn,promisify as gt}from"util"`
+// (2.1.251) — in the dirSync anchor module, whose ONLY call site reads darwin's
+// __error() through bun:ffi and renders `code: vn(-b)` on a failed *at() syscall.
+// That call site is currently behind libexec/bun-shim.cjs's bun:ffi wall (dlopen
+// throws, upstream catches it and sets the anchor to null), so nothing reaches this
+// today; it is implemented anyway because, unlike Bun.ant, nothing FEATURE-DETECTS it
+// — providing it advertises no capability — and the alternative was the interop
+// facade's lazy thrower, which fails at the exact moment an errno is being named.
+//
+// NO TABLE, AND DELIBERATELY NOT os.constants.errno. node's answer is LIBUV's error
+// map, not the platform's errno list, and the two disagree badly: measured on
+// darwin/arm64 against node 24.19.0, 18 of the 79 names in os.constants.errno get a
+// DIFFERENT answer from util.getSystemErrorName. EWOULDBLOCK (35) must answer "EAGAIN"
+// (libuv's UV_ERRNO_MAP has no EWOULDBLOCK); EOPNOTSUPP, ECHILD, EDEADLK, EDOM, EDQUOT,
+// EIDRM, EINPROGRESS, ESTALE, ETIME and eight more must answer "Unknown system error
+// -N" because libuv maps neither. Inverting os.constants.errno is therefore the same
+// class of confident, silent wrongness as the hand-written fs O_* table that was wrong
+// on 8 of 11 values on every BSD leg (see internal/engine-constants.cjs).
+//
+// So ask the engine's own libuv. txiki's tjs.Error constructor (src/error.c) sets
+// `.code` from uv_err_name(err) — the same UV_ERRNO_MAP node reads, compiled against
+// the same headers the engine was built with, including uv_err_name's own
+// "Unknown system error %d" fallback, which is byte-identical to node's. Nothing here
+// is transcribed, so nothing here can rot on a leg nobody is standing on.
+// Differential-locked by test/node-shim-system-error-name.test.cjs.
+function getSystemErrorName(err) {
+  // node: validateNumber -> ERR_INVALID_ARG_TYPE (TypeError), then
+  // `err >= 0 || !NumberIsSafeInteger(err)` -> ERR_OUT_OF_RANGE (RangeError).
+  // Verified against node 24.19.0 for 0, 2, 1.5, -1.5, NaN, '-2', null, undefined.
+  if (typeof err !== 'number') {
+    const e = new TypeError('The "err" argument must be of type number. Received '
+      + (err === null ? 'null' : typeof err));
+    e.code = 'ERR_INVALID_ARG_TYPE';
+    throw e;
+  }
+  if (err >= 0 || !Number.isSafeInteger(err)) {
+    const e = new RangeError('The value of "err" is out of range. It must be a negative '
+      + `integer. Received ${err}`);
+    e.code = 'ERR_OUT_OF_RANGE';
+    throw e;
+  }
+  const UvError = globalThis.tjs && globalThis.tjs.Error;
+  if (typeof UvError !== 'function') {
+    // Same policy as internal/engine-constants.cjs: a fallback table is a guess with a
+    // longer shelf life. Fail with the remedy instead.
+    throw new Error('node-shim: util.getSystemErrorName needs the engine\'s own '
+      + 'uv_err_name (exposed as tjs.Error), and this engine does not provide it. '
+      + 'Rebuild the engine from current sources; refusing to guess an errno table.');
+  }
+  return new UvError(err).code;
+}
+
 module.exports = {
   format, formatWithOptions, promisify, callbackify, inherits, inspect: inspect1, isDeepStrictEqual,
-  debuglog, debug: debuglog, deprecate, stripVTControlCharacters,
+  debuglog, debug: debuglog, deprecate, stripVTControlCharacters, getSystemErrorName,
   // util.types. The code-split bundle (2.1.243+) imports `isProxy` from `util/types`.
   // quickjs exposes no way to detect a Proxy from JS — node's own isProxy reads a V8
   // internal — so this reports false. That is the SAFE direction: every caller we can
