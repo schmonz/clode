@@ -44,6 +44,11 @@ Quaude shells out to these for tool use:
   `cksum`, `openssl`, or `digest` (or set `CLODE_SHA256`)
 - `tar`, `gzip`, and `unzip` to extract downloads
 
+`clode build` (carving the upstream bundle) additionally needs:
+
+- `zstd` — or `unzstd`/`zstdcat` (or set `CLODE_ZSTD`). Claude Code 2.1.251 and
+  later store their embedded assets as zstd frames; earlier versions carve without it
+
 ## Updating
 
 Run `clode fetch` and `clode build` again.
