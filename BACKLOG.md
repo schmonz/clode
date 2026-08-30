@@ -36,11 +36,21 @@ Still open:
    `guard-subcommands-gate` skips with an empty `~/.cache/clode`; the `test` job has
    neither, so neither has actually run in CI since 2.1.243. This is the worse half of the
    original entry and it is untouched. Give the jobs the inputs that make them run.
-2. **Eight newly-visible layer-2 gaps are recorded but unreviewed**: `os.devNull`,
-   `fs.fchmod`, `fs.ftruncateSync`, `fs.writev`, `util.getSystemErrorName`,
-   `zlib.createZstdDecompress`, `crypto.generateKeyPairSync`, `crypto.verify`. Each is a
-   single import site. They are in `golden.json` with a note saying they are unreviewed;
-   they need the reachability question the `crypto.*` cluster got.
+2. **Six of the eight newly-visible layer-2 gaps are still unreviewed**: `os.devNull`,
+   `fs.fchmod`, `fs.ftruncateSync`, `fs.writev`, `crypto.generateKeyPairSync`,
+   `crypto.verify`. Each is a single import site. They are in `golden.json` with a note
+   saying they are unreviewed; they need the reachability question the `crypto.*` cluster
+   got. **Two are now closed** (2026-08-29): `util.getSystemErrorName` is IMPLEMENTED from
+   the engine's own libuv (`uv_err_name` via `tjs.Error`; inverting `os.constants.errno`
+   would have been wrong on 18 of 79 names) and differential-locked against host node by
+   `test/node-shim-system-error-name.test.cjs`; `zlib.createZstdDecompress` is an
+   INTENTIONAL gap — upstream's native `.zst` release downloader — pinned by
+   `test/zlib-zstd-stream-gap.test.cjs`, which goes red if the installer neutralizations
+   stop applying or if `Bun.isStandaloneExecutable` ever reads true.
+   Reachability correction worth keeping: the `getSystemErrorName` call site is the
+   dirSync `bun:ffi` anchor (behind bun-shim's throwing `dlopen`), NOT the credentials
+   store — it was implemented because nothing feature-detects it, not because it is
+   reachable.
 3. **`test/node-shim-wall-tripwires.test.cjs` is the third instrument of this family and
    was NOT audited here.** It matches the direct `require("fs").watch(` shape, which
    upstream no longer emits anywhere — so it is green by construction, which is exactly
