@@ -344,4 +344,8 @@ function cacheSignature({ extractorSig, providerPlatform }) {
   return `${extractorSig}:${providerPlatform || 'unknown'}`;
 }
 
-module.exports = { extractIfNeeded, cacheSignature, extractorSigOf };
+// providerPlatformOf is RE-EXPORTED, not re-implemented: this module is the extraction seam,
+// it already composes that answer into the cache key, and the fuse path needs the same answer
+// to record in the built artifact's manifest. Two callers, one function, no chance of a
+// manifest that disagrees with the cache key it was carved under.
+module.exports = { extractIfNeeded, cacheSignature, extractorSigOf, providerPlatformOf };

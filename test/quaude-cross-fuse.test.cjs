@@ -12,6 +12,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { tjsPath } = require('./node-shim-helper.cjs');
+const { readTrailerIndex } = require('./quaude-archive.cjs');
 
 const REPO = path.join(__dirname, '..');
 const ENTRY = path.join(REPO, 'bin', 'clode');
@@ -29,19 +30,6 @@ function stageMainBundle() {
     try { const m = fs.statSync(c).mtimeMs; if (!newest || m > newest.m) newest = { c, m }; } catch { /* */ }
   }
   return newest && newest.c;
-}
-
-function readTrailerIndex(file) {
-  const buf = fs.readFileSync(file);
-  const tx = buf.subarray(buf.length - 12);
-  assert.strictEqual(tx.subarray(0, 8).toString('latin1'), 'tx1k1.js', 'missing tx1k1.js trailer');
-  const bcOffset = tx.readUInt32LE(8);
-  const footer = buf.subarray(bcOffset - 32, bcOffset);
-  assert.strictEqual(footer.subarray(0, 8).toString('latin1'), 'QAUDEv0\0', 'bad archive footer magic');
-  const indexOff = Number(footer.readBigUInt64LE(8));
-  const indexLen = Number(footer.readBigUInt64LE(16));
-  const index = JSON.parse(buf.subarray(indexOff, indexOff + indexLen).toString('utf8'));
-  return { buf, index, names: index.members.map((m) => m.name) };
 }
 
 let SKIP = null, DIR = null, OUT = null, BUILD = null;

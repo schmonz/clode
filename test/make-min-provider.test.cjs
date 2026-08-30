@@ -38,6 +38,10 @@ function providers() {
   const add = (p) => { if (p && fs.existsSync(p) && !seen.has(p)) { seen.add(p); found.push(p); } };
   add(process.env.CLODE_PROVIDER_BIN);
   add(process.env.CLODE_CLAUDE_BIN);
+  // The product's OWN resolver, so a box that can build can prove this — without it the local
+  // run saw only the pre-split fixture store and the code-split branch (the one every current
+  // leg minimises) was never exercised here.
+  try { add(require('../libexec/clode-resolve.cjs').resolveClaudeBin()); } catch { /* none */ }
   try {
     add(execFileSync(process.execPath, [path.join(REPO, 'scripts', 'find-provider.mjs')],
       { encoding: 'utf8' }).trim());

@@ -134,24 +134,8 @@ test('clode build --self fuses a native builder and its internal smokes pass', (
   assert.ok(fs.statSync(NATIVE).mode & 0o111, 'fused builder not executable');
 });
 
-// Host-node parse of the fused-file trailer (layout per quaude-bootstrap.mjs):
-// [exe][members][index JSON][QAUDEv0 footer 32B][bootstrap bc][tx1k1.js 12B].
-function readTrailerIndex(file) {
-  const buf = fs.readFileSync(file);
-  const tx = buf.subarray(buf.length - 12);
-  assert.strictEqual(tx.subarray(0, 8).toString('latin1'), 'tx1k1.js', 'missing tx1k1.js trailer');
-  const bcOffset = tx.readUInt32LE(8);
-  const footer = buf.subarray(bcOffset - 32, bcOffset);
-  assert.strictEqual(footer.subarray(0, 8).toString('latin1'), 'QAUDEv0\0', 'bad archive footer magic');
-  const indexOff = Number(footer.readBigUInt64LE(8));
-  const indexLen = Number(footer.readBigUInt64LE(16));
-  const index = JSON.parse(buf.subarray(indexOff, indexOff + indexLen).toString('utf8'));
-  const member = (name) => {
-    const m = index.members.find((x) => x.name === name);
-    return m && { ...m, data: buf.subarray(m.offset, m.offset + m.len) };
-  };
-  return { index, member };
-}
+// Host-node parse of the fused-file trailer — see test/quaude-archive.cjs.
+const { readTrailerIndex } = require('./quaude-archive.cjs');
 
 test('the fused builder embeds the PRISTINE tjs template as a trailer member (Decision 2)', (t) => {
   if (SKIP) { t.skip(SKIP); return; }

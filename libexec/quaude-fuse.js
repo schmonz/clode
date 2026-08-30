@@ -540,6 +540,17 @@ const manifest = {
   role,
   entry: entryName,
   bundleVersion: extras.bundleVersion,
+  // WHICH PLATFORM'S UPSTREAM BUNDLE IS IN HERE. Bun constant-folds process.platform at carve
+  // time, so a graph is per-platform: a darwin target fused from a linux carve has upstream's
+  // whole macOS credential store dead-coded away, and that is exactly the quaude that shipped
+  // on 2026-08-27 unable to read the login Keychain. Until now a FUSED TARGET COULD NOT BE
+  // ASKED: the bundle is stored as bytecode, so `strings` on a quaude answers nothing (an hour
+  // was spent on precisely that mistake, and it produced a false conclusion), and a
+  // cross-built target cannot be run to ask it. Recording it here makes the question
+  // answerable about the BINARY — printed verbatim by --quaude-attest on a target you can run,
+  // and readable straight out of the archive (manifest.json is a plain JSON member) on one you
+  // cannot. Absent on the builder role, which carves no upstream bundle.
+  providerPlatform: extras.providerPlatform,
   clodeVersion: extras.clodeVersion,
   engine: { ...tjs.engine.versions },
   idna: deriveIdnaLevel(),

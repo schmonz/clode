@@ -26,6 +26,8 @@ const { spawn, spawnSync } = require('node:child_process');
 const { tjsPath, skipUnlessTjs, REPO } = require('./node-shim-helper.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('./mock-anthropic-helper.cjs');
 const { cacheKey } = require('../libexec/clode-resolve.cjs');
+const { providerPlatformOf } = require('../libexec/extract-claude-js.cjs');
+const { readManifest } = require('./quaude-archive.cjs');
 
 const ENTRY = path.join(REPO, 'bin', 'clode');
 const VERSION = fs.readFileSync(path.join(REPO, 'VERSION'), 'utf8').replace(/\n+$/, '');
@@ -94,7 +96,7 @@ test('attest golden: stable manifest fields + full member verification', async (
   // GOLDEN (stable fields only — fusedAt deliberately unchecked beyond shape):
   assert.deepStrictEqual(Object.keys(manifest).sort(), [
     'bom', 'bundleVersion', 'clodeVersion', 'engine', 'entry', 'fusedAt', 'hooks',
-    'idna', 'members', 'quaude', 'role', 'template',
+    'idna', 'members', 'providerPlatform', 'quaude', 'role', 'template',
   ]);
   assert.strictEqual(manifest.quaude, '1');
   assert.strictEqual(manifest.role, 'quaude');
@@ -106,6 +108,14 @@ test('attest golden: stable manifest fields + full member verification', async (
   assert.ok(['cli.qbc', 'graph.qbc'].includes(manifest.entry),
     `unexpected entry member: ${manifest.entry}`);
   assert.strictEqual(manifest.bundleVersion, cacheKey(providerBin()));
+  // WHICH PLATFORM'S BUNDLE IS IN HERE — read from the provider's container bytes, never from
+  // the host. Bun folds process.platform at carve time, so a darwin target fused from a linux
+  // carve has upstream's whole macOS credential store dead-coded away; that is the quaude that
+  // shipped on 2026-08-27 unable to read the login Keychain. The version alone cannot say it,
+  // and until this field existed a fused target could not be asked at all.
+  assert.strictEqual(manifest.providerPlatform, providerPlatformOf(providerBin()) || 'unknown');
+  assert.ok(manifest.providerPlatform !== 'unknown',
+    `the provider ${providerBin()} is a real container, so its platform must be NAMED, not 'unknown'`);
   assert.strictEqual(manifest.clodeVersion, VERSION);
   // The `builder` field is RETIRED: auto-update is notify-only (a version
   // check, no rebuild), so a quaude no longer records who built it.
@@ -153,6 +163,20 @@ test('attest golden: stable manifest fields + full member verification', async (
   assert.strictEqual(bomLines.length, manifest.bom.length);
   assert.ok(bomLines.every((l) => l.startsWith('ok  ')), bomLines.join('\n'));
   assert.strictEqual(lines.filter(Boolean).pop(), 'quaude-attest: all members verified');
+});
+
+test('the BINARY says which platform it was carved for, without being run', (t) => {
+  if (SKIP) { t.skip(SKIP); return; }
+  // --quaude-attest can only answer on a target THIS host can execute, which excludes every
+  // cross-build — and a cross-build is exactly where a linux carve gets fused into a darwin
+  // target. `strings` cannot answer either: a quaude stores the bundle as bytecode, and an hour
+  // was spent in 2026-08-29 concluding the wrong thing from precisely that. manifest.json is a
+  // plain member of the archive, so the answer is readable off the FILE.
+  const manifest = readManifest(QUAUDE);
+  assert.strictEqual(manifest.providerPlatform, providerPlatformOf(providerBin()) || 'unknown',
+    'the fused archive must record the carve platform where a host can read it without exec');
+  // ... and it must agree with what the running target reports, or one of the two is lying.
+  assert.strictEqual(manifest.role, 'quaude');
 });
 
 test('reserved namespace: unknown --quaude-foo errors from quaude, bundle never runs', async (t) => {

@@ -461,7 +461,17 @@ function stageUpstreamCli({ env, libexec, verbose, prefix, log }) {
   } catch (e) {
     return { error: `${prefix}: extraction failed: ${(e && e.message) || e}` };
   }
-  return { stageDir, key, cliPath: path.join(stageDir, 'cli.cjs') };
+  // WHICH PLATFORM THIS CARVE IS FOR, read from the provider's container bytes. Bun folds
+  // process.platform at carve time, so a graph is per-platform: a darwin target fused from a
+  // linux carve is missing upstream's whole macOS credential store, which is how the
+  // 2026-08-27 quaude shipped unable to read the login Keychain. It already keys the extract
+  // cache (extract.cacheSignature), so a cache HIT here is by construction a carve for this
+  // same platform — the two cannot disagree. Carried out so it can reach the built artifact's
+  // manifest, where it is the only way to ask a BINARY what it was carved from: a quaude
+  // stores its bundle as bytecode, so `strings` answers nothing, and a cross-built target
+  // cannot be run to ask it.
+  return { stageDir, key, providerPlatform: extract.providerPlatformOf(bin),
+           cliPath: path.join(stageDir, 'cli.cjs') };
 }
 
 // A minimal in-process stand-in for the Anthropic Messages API, answering every
@@ -1289,7 +1299,7 @@ async function clodeBuild(args, opts) {
     // -- payload staging: the upstream Claude Code bundle (default), or the
     // esbuilt clode-main bundle (--self).
     spin.phase('Extracting bundle');
-    let stageDir, key;
+    let stageDir, key, providerPlatform;
     if (self) {
       let bundle = env.CLODE_MAIN_BUNDLE;
       if (bundle) {
@@ -1361,6 +1371,7 @@ async function clodeBuild(args, opts) {
       if (staged.error) return fail(staged.error);
       key = staged.key;
       stageDir = staged.stageDir;
+      providerPlatform = staged.providerPlatform;
     }
 
     // -- ext-dep closure (both roles: quaude requires them at runtime; the
@@ -1432,6 +1443,13 @@ async function clodeBuild(args, opts) {
       quaude: '1', // archive/manifest schema version (shared by both roles)
       role: self ? 'builder' : 'quaude',
       bundleVersion: key, // undefined for --self (no upstream bundle) — dropped by JSON
+      // The platform the upstream provider was CARVED FOR (never the host, never the target).
+      // ALWAYS PRESENT on a quaude, 'unknown' included — the same word cacheSignature uses for
+      // a container it cannot name, so the manifest and the cache key speak one vocabulary and
+      // "we could not tell" stays distinguishable from "nobody recorded it". Absent for --self,
+      // like bundleVersion (dropped by JSON): a builder carves no upstream bundle, so it has no
+      // answer to give rather than a wrong one.
+      providerPlatform: self ? undefined : (providerPlatform || 'unknown'),
       clodeVersion: version,
       template: { sha256: sha256File(baseTemplate), len: fs.statSync(baseTemplate).size },
       // The transforms baked into the fused artifact beyond the members
