@@ -2929,6 +2929,34 @@ after the matrix — "how a step fails is part of what the step IS".
 treat a silent fallback as success.
 
 
+### Which supported platforms actually ship a zstd? (open, 2026-08-30)
+
+We now REQUIRE a host zstd to carve 2.1.251+, and we do not know which of our ~13 supported
+platforms provide one out of the box. Verified so far: macOS 26.6.2 ships NONE (absent from
+`/usr/bin`, `/usr/local/bin`, and Homebrew's prefix); Haiku needed `cmd:zstd` added to its leg;
+the pinned NetBSD/sparc `wd0` image has none at all. Everything else is inference: 19 CI legs
+passed with a usable decoder, but GitHub runners and cross-platform-actions guest images are not
+stock installs, so that says little about a user's machine. FreeBSD is believed to carry zstd in
+base since 12.0 — believed, not checked.
+
+This matters for the README line and the release note, both of which currently imply macOS is
+the exception. It may be the rule. Answer it per platform against a BASE install, not a CI
+runner, and say so in the docs.
+
+### Nothing renders a diagram (open, 2026-08-30)
+
+2.1.250's chart/mermaid/highlight assets were REFERENCED AND UNSERVED in every target ever
+built, and no smoke caught it because those files are read only when something renders. We fixed
+the serving and added `test/graph-unserved-refs.test.cjs`, which asserts the rows are SERVED —
+but grep says nothing in `test/fidelity/` or elsewhere renders one. So the property that was
+actually broken is still unverified: a row can be present and wrong (truncated, mis-decompressed,
+wrong encoding) and every current gate stays green.
+
+The fidelity harness is the right home — it already drives real turns against a real API. A turn
+that asks for a mermaid diagram or a syntax-highlighted block, asserting the rendered output,
+would close the loop the ratchet only half closes. Note this is also the honest answer to
+"have our fidelity tests grown to cover diagrams?": no, they have not.
+
 ### ★★★ Nothing gates the gates — make "a guard that cannot fail" structurally impossible (user, 2026-08-29)
 
 **The user:** "How are you finding these gaps? Is it automated into the build? Or is that another
