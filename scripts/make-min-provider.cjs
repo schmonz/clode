@@ -77,7 +77,15 @@ function writeMinSplitProvider(inPath, outPath) {
   // THIS SET MUST AGREE WITH loadAssetsFromBytes IN libexec/bun-graph.cjs. If it does not, a
   // minimised provider and a real one carve to different graphs and the difference is invisible
   // until a leg dies — which is why the self-check below re-decodes with that very function.
-  const KEEP = new Set([1, 13, 5]);
+  //
+  // DERIVED, NOT RESTATED, from the same LOADER_POLICY the carve's referenced-but-unserved gate
+  // reads (libexec/extract-claude-js.cjs). A hand-written `new Set([1, 13, 5])` here was a third
+  // copy of a decision that has already been wrong twice, and the one copy CI actually builds
+  // from — every leg minimises. Declaring a new loader as served now reaches the minimiser for
+  // free; declaring one excluded keeps it dropped here, deliberately, exactly as loader 10 is.
+  const { LOADER_POLICY } = require(path.join(__dirname, '..', 'libexec', 'extract-claude-js.cjs'));
+  const KEEP = new Set(Object.keys(LOADER_POLICY)
+    .filter((n) => LOADER_POLICY[n] !== 'excluded').map(Number));
   const rows = g.rows.filter((r) => KEEP.has(r.loader));
   if (!rows.some((r) => r.loader === 1)) throw new Error('no js-loader rows in the module table');
 

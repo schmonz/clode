@@ -141,33 +141,41 @@ test('minimising REFUSES loudly on a non-provider rather than writing junk', () 
   assert.strictEqual(fs.existsSync(out), false, 'must not leave a partial output behind');
 });
 
-// THE TWO PLACES THAT DECIDE WHAT AN ASSET IS, PINNED TO EACH OTHER. bun-graph.cjs decides what
-// a FULL carve stages; this script's KEEP decides what a MINIMISED provider still contains. If
-// they disagree, a minimised build and a real one carve different graphs and the difference is
-// invisible until a leg dies — which is exactly how loader 5 shipped broken in 2.1.251. Read as
-// TEXT out of both files, the way test/scc-merge.test.cjs pins the node-shim transform, so the
-// two cannot drift silently.
-test('make-min-provider KEEPs exactly the loaders bun-graph stages', () => {
+// WHAT AN ASSET IS, DECIDED ONCE AND HELD THERE. bun-graph.cjs decides what a FULL carve
+// stages; this script decides what a MINIMISED provider still contains; the carve's
+// referenced-but-unserved gate decides what a dropped row means. If those disagree, a minimised
+// build and a real one carve different graphs and the difference is invisible until a leg dies —
+// which is exactly how loader 5 shipped broken in 2.1.251. The script now DERIVES its set from
+// the gate's LOADER_POLICY; this test pins bun-graph, the last un-derived copy, to it — read as
+// TEXT, the way test/scc-merge.test.cjs pins the node-shim transform.
+test('ONE loader policy: what the minimiser keeps is what the carve serves', () => {
+  // THREE FILES USED TO RESTATE THE SAME DECISION — bun-graph's loadAssetsFromBytes, this
+  // script's KEEP literal, and (now) the carve's referenced-but-unserved gate. That decision
+  // has been wrong twice (2.1.246 loader 13, 2.1.251 loader 5) and each time only one or two
+  // of the copies got fixed. LOADER_POLICY in libexec/extract-claude-js.cjs is the source;
+  // KEEP is DERIVED from it. This test holds the last un-derived copy (bun-graph's) to it.
   const min = fs.readFileSync(SCRIPT, 'utf8');
   const bg = fs.readFileSync(path.join(REPO, 'libexec', 'bun-graph.cjs'), 'utf8');
+  const { LOADER_POLICY } = require(path.join(REPO, 'libexec', 'extract-claude-js.cjs'));
 
-  const keep = /const KEEP = new Set\(\[([0-9, ]+)\]\)/.exec(min);
-  assert.ok(keep, 'make-min-provider must declare its kept loaders in one KEEP literal');
-  const kept = new Set(keep[1].split(',').map((n) => Number(n.trim())));
+  assert.ok(!/const KEEP = new Set\(\[[0-9, ]+\]\)/.test(min),
+    'KEEP must be DERIVED from LOADER_POLICY, not restated as a literal here');
+  assert.match(min, /const KEEP = new Set\(Object\.keys\(LOADER_POLICY\)/,
+    'make-min-provider must derive its kept loaders from LOADER_POLICY');
+
+  const served = new Set(Object.keys(LOADER_POLICY)
+    .filter((n) => LOADER_POLICY[n] !== 'excluded').map(Number));
+  assert.ok(served.has(1), 'the js loader is always served');
+  assert.strictEqual(LOADER_POLICY[10], 'excluded',
+    'loader 10 (napi) is native code no target loads — it must stay an explicit, measured exclusion');
 
   const asset = /if \(r\.loader !== ([0-9]+) && r\.loader !== ([0-9]+)\) continue;/.exec(bg);
   assert.ok(asset, 'bun-graph loadAssetsFromBytes must name the asset loaders it takes');
   const staged = new Set([Number(asset[1]), Number(asset[2])]);
 
-  assert.ok(kept.has(1), 'the js loader is always kept');
-  for (const l of staged) {
-    assert.ok(kept.has(l),
-      `bun-graph stages loader ${l} but make-min-provider drops it — a minimised provider `
-      + 'would carve to a graph missing assets the real one has');
-  }
-  assert.deepStrictEqual([...kept].sort(), [1, ...staged].sort(),
-    'KEEP must be exactly the js loader plus the asset loaders bun-graph stages');
-  assert.ok(!kept.has(10), 'loader 10 (napi) is native code no target loads');
+  assert.deepStrictEqual([...served].sort(), [1, ...staged].sort(),
+    'LOADER_POLICY must serve exactly the js loader plus the asset loaders bun-graph stages — '
+    + 'otherwise the gate passes a graph whose assets the minimiser dropped, or vice versa');
 });
 
 // THE PLATFORM MUST SURVIVE MINIMISATION. `providerPlatformOf` reads the first 16 bytes for a

@@ -1097,6 +1097,133 @@ function rewriteSafeRequires(sources, safeEdges) {
   return out;
 }
 
+// ---- what the graph REFERENCES vs what it SERVES -----------------------------
+// TWICE NOW, UPSTREAM HAS MOVED CONTENT BETWEEN BUN LOADERS AND SILENTLY BROKEN A TARGET:
+//
+//   2.1.246  moved 164 files (118 .md — prompt preambles, quickrefs) out of JS into
+//            loader 13 (text). A graph carrying only JS produced a target that booted and
+//            died on its first turn: "cannot resolve /$bunfs/root/loopAutonomousPreamble-*.md".
+//   2.1.251  moved 94 of those rows again, into loader 5 (file), zstd-compressed. Same
+//            shape, worse: the shipped node-free builder could not carve upstream at all.
+//   2.1.250  had four loader-5 rows — mermaid/hljs/chart/payload — that were REFERENCED AND
+//            UNSERVED IN EVERY TARGET EVER BUILT. They are read only when a chart or diagram
+//            renders, which is why no smoke, no PONG and no --version ever caught them.
+//
+// Every one of those was invisible to the build and visible only to a user. The cross-check
+// below is the thing that would have made all three loud at carve time: the names the staged
+// graph REFERENCES, against the names it SERVES.
+//
+// SCOPE — this is load-bearing, and it is a POLICY PER LOADER, not a filter. Each loader the
+// carve meets is in exactly one of three states, and a row is a finding only in the third:
+//
+//   'module'   staged into doc.sources                       (1 = js)
+//   'asset'    staged into doc.assets                        (13 = text, 5 = file)
+//   'excluded' deliberately dropped, a measured decision      (10 = napi)
+//   undefined  A LOADER NOBODY HAS DECIDED ABOUT — the finding
+//
+// Loader 10 is the reason 'excluded' exists rather than a bare "is it in the graph" check.
+// scripts/make-min-provider.cjs drops napi rows on purpose — native .node modules the tjs
+// targets have never had and cannot load — and every CI leg builds from a minimised provider.
+// A gate that refused on those would turn a correct, measured exclusion into a hard failure on
+// every leg. So an excluded loader is SERVED BY DECISION and stays silent.
+//
+// The undefined case is the half that earns the ratchet its keep. Scoping to only the loaders
+// we already serve would have been silent on 2.1.246 AND on 2.1.251 — both were moves INTO a
+// loader we did not yet handle. A new loader number is precisely the event this must refuse.
+const LOADER_POLICY = {
+  1: 'module',    // js   -> doc.sources
+  5: 'asset',     // file -> doc.assets (zstd frames, decoded at carve time)
+  13: 'asset',    // text -> doc.assets
+  10: 'excluded', // napi -> dropped on purpose; see above
+};
+
+// A reference is a container name appearing verbatim in a module's source. That is how
+// upstream names them — `import ... from"/$bunfs/root/chunk-*.js"` for modules,
+// `readFileSync("/$bunfs/root/SKILL-*.md")` for assets — and measured on the real
+// 2.1.246/248/251 providers every single non-JS row is referenced exactly once by literal
+// name. One regex pass over the staged sources: 33 MB in ~35 ms, so this is free.
+const BUNFS_REF = new RegExp(BUNFS + '\\/[^"\'`\\s\\\\)]+', 'g');
+
+function graphReferences(sources) {
+  const refs = new Set();
+  for (const name of Object.keys(sources)) {
+    const src = sources[name];
+    if (typeof src !== 'string') continue;
+    for (const m of src.matchAll(BUNFS_REF)) refs.add(m[0]);
+  }
+  return refs;
+}
+
+// Pure, so the policy it encodes is testable without a 200MB provider on disk.
+// rows: the container's module table (loadGraphFull().rows — name + loader).
+// sources/assets: what the staged graph will actually hand the target.
+//
+// A referenced name with NO row is not a finding: the carve cannot serve something the
+// container does not contain, and upstream reading a path that isn't there is upstream's
+// business. Only rows we HAD and dropped count.
+function unservedReferences({ rows, sources, assets }) {
+  const refs = graphReferences(sources);
+  const served = new Set(Object.keys(sources));
+  const assetNames = Object.keys(assets || {});
+  for (const n of assetNames) served.add(n);
+  const findings = [];
+  let excludedByDecision = 0;
+  for (const r of rows) {
+    if (!refs.has(r.name) || served.has(r.name)) continue;
+    if (LOADER_POLICY[r.loader] === 'excluded') { excludedByDecision += 1; continue; }
+    findings.push({ name: r.name, loader: r.loader, policy: LOADER_POLICY[r.loader] || null });
+  }
+  return {
+    references: refs.size,
+    servedAssets: assetNames.length,
+    referencedAssets: assetNames.filter((n) => refs.has(n)).length,
+    excludedByDecision,
+    findings,
+  };
+}
+
+// ZERO FINDINGS MUST NOT BE A FREE PASS. This whole gate rests on one regex, and a regex that
+// matches nothing reports a clean bill of health forever — the exact defect it exists to catch,
+// wearing the gate's own uniform. So the scan has to prove it can still see before its silence
+// means anything: a code-split graph wires its modules together with thousands of
+// "/$bunfs/root/chunk-*.js" specifiers, and a provider that staged assets at all must be seen
+// referencing at least one of them (measured: 166/166 on 2.1.250, 164/164 on 2.1.246).
+function assertGraphServesWhatItReferences(res) {
+  if (res.references === 0) {
+    throw new Error('clode: the reference scan found no /$bunfs/root/... specifier anywhere in '
+      + 'the staged graph. A code-split bundle is wired together by thousands of them, so this '
+      + 'is the scanner going blind, not a clean bundle — refusing rather than reporting a pass '
+      + 'it cannot back up.');
+  }
+  if (res.servedAssets > 0 && res.referencedAssets === 0) {
+    throw new Error(`clode: the staged graph serves ${res.servedAssets} embedded asset(s) and the `
+      + 'reference scan saw NONE of them referenced. Upstream has changed how it names assets (or '
+      + 'the scan has gone blind); either way this gate can no longer tell a served row from a '
+      + 'dropped one, so it refuses instead of passing.');
+  }
+  if (!res.findings.length) return;
+  const { LOADER } = require('./bun-graph.cjs');
+  const byLoader = new Map();
+  for (const f of res.findings) {
+    if (!byLoader.has(f.loader)) byLoader.set(f.loader, []);
+    byLoader.get(f.loader).push(f.name);
+  }
+  const lines = [];
+  for (const [loader, names] of byLoader) {
+    lines.push(`  loader ${loader} (${LOADER[loader] || 'unknown to clode'}): ${names.length} row(s)`);
+    for (const n of names.slice(0, 5)) lines.push(`    ${n}`);
+    if (names.length > 5) lines.push(`    ... and ${names.length - 5} more`);
+  }
+  throw new Error(`clode: ${res.findings.length} row(s) are REFERENCED by the module graph but `
+    + 'NOT SERVED by it:\n' + lines.join('\n')
+    + '\n  A target built from this graph boots and then dies the first time one of these is read'
+    + ' — which is what 2.1.246 (loader 13) and 2.1.251 (loader 5) each did to us.\n'
+    + '  Declare the loader in LOADER_POLICY above — as served, or as an excluded-by-decision'
+    + ' loader with the measurement that justifies it — and teach libexec/bun-graph.cjs'
+    + ' (loadAssetsFromBytes) to stage it. scripts/make-min-provider.cjs derives its kept set'
+    + ' from LOADER_POLICY and needs no edit.');
+}
+
 function extractGraphToFile(binpath, out) {
   const { loadGraph, loadGraphFull, loadAssets } = require('./bun-graph.cjs');
   const { planGraph, classifyRequires } = require('./bun-graph-plan.cjs');
@@ -1155,6 +1282,10 @@ function extractGraphToFile(binpath, out) {
     providerPlatform: providerPlatformOf(binpath),
     sources,
   };
+  // AFTER STAGING, BEFORE ANYTHING CONSUMES IT: every row this graph still points at must be
+  // one this graph can hand over. See unservedReferences() above for the three releases that
+  // shipped past this check because it did not exist.
+  assertGraphServesWhatItReferences(unservedReferences({ rows: full.rows, sources, assets }));
   fs.writeFileSync(out, JSON.stringify(doc));
   return {
     name: plan.entry,
@@ -1447,6 +1578,10 @@ module.exports = {
   verify,
   contentChecks,
   patchEmbeddedAssetReader,
+  graphReferences,
+  unservedReferences,
+  assertGraphServesWhatItReferences,
+  LOADER_POLICY,
   providerPlatformOf,
   extractToFile,
   extractGraphToFile,

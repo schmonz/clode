@@ -263,15 +263,21 @@ test('the whole chain carries assets: extract -> minimise -> fuse member', () =>
   const ex = fs.readFileSync(path.join(REPO, 'libexec/extract-claude-js.cjs'), 'utf8');
   assert.match(ex, /assets: assets/, 'the staged graph doc must carry text assets');
   const mm = fs.readFileSync(path.join(REPO, 'scripts/make-min-provider.cjs'), 'utf8');
-  // 13 = text, 5 = file. 2.1.251 moved 94 embedded assets from 13 into 5 by compressing
+  // 1 = js, 13 = text, 5 = file. 2.1.251 moved 94 embedded assets from 13 into 5 by compressing
   // them, and keeping only 13 built a target that smoked green and died on its first turn with
-  // upstream's own "embedded text asset is missing or corrupt". The DERIVED version of this
-  // check — KEEP read against the loaders bun-graph actually stages, so neither file can drift —
-  // is in test/make-min-provider.test.cjs; this one stays as the named tripwire for the chain.
-  assert.match(mm, /KEEP = new Set\(\[1, 13, 5\]\)/,
-    'the minimiser must keep BOTH asset row classes (13 text, 5 file) as well as JS (1); '
-    + 'dropping either yields a provider that passes every check and builds a target that '
-    + 'dies on its first turn');
+  // upstream's own "embedded text asset is missing or corrupt". The minimiser no longer names
+  // those numbers: it DERIVES its kept set from LOADER_POLICY, the same declaration the carve's
+  // referenced-but-unserved gate reads. So this link in the chain is now "the minimiser asks the
+  // policy", and the policy's agreement with bun-graph is pinned in test/make-min-provider.test.cjs.
+  assert.match(mm, /const KEEP = new Set\(Object\.keys\(LOADER_POLICY\)/,
+    'the minimiser must derive its kept loaders from LOADER_POLICY, so a newly-served loader '
+    + 'reaches it without a second edit — a provider that passes every check and builds a target '
+    + 'that dies on its first turn is what the un-derived copy produced twice');
+  const { LOADER_POLICY } = require(path.join(REPO, 'libexec/extract-claude-js.cjs'));
+  for (const l of [1, 13, 5]) {
+    assert.ok(LOADER_POLICY[l] && LOADER_POLICY[l] !== 'excluded',
+      `loader ${l} must be served: 1 = js, 13 = text, 5 = file (compressed since 2.1.251)`);
+  }
   const qf = fs.readFileSync(path.join(REPO, 'libexec/quaude-fuse.js'), 'utf8');
   assert.match(qf, /graph-assets\.json/, 'the fuse must store assets as a member');
   const ld = fs.readFileSync(path.join(REPO, 'libexec/node-shim/loader.cjs'), 'utf8');
