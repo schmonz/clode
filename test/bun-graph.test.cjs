@@ -190,6 +190,17 @@ test('but a mis-stated length still fails LOUDLY — the invariant we KEPT', () 
 // on no local run. Reproduce the CI condition with `HOME=$(mktemp -d)` before believing a green
 // run here. (node:test gives each FILE its own process, so this cannot leak sideways; the exit
 // hook restores it anyway for anyone who loads this file some other way.)
+// AND THE PRODUCT'S SCRATCH TOO, not just this file's fixture. zstdViaCli stages the frame
+// through os.tmpdir(); on Windows runners that is the SMALL C: volume, and the earlier fix
+// moved only the fixture, so `zstd: error 70 ... No space left on device` came back at
+// 482e9ec after passing at 460ea61 — same code, different free space. Redirect os.tmpdir()
+// itself, and do it HERE rather than job-wide: a job-wide TMP/TEMP pointed GNU tar at D:,
+// which it read as the remote host `D` (4c8d94c, reverted). node:test gives each FILE its
+// own process, so this cannot reach the tar rows in other files.
+if (process.env.RUNNER_TEMP) {
+  for (const v of ['TMPDIR', 'TMP', 'TEMP']) process.env[v] = process.env.RUNNER_TEMP;
+}
+
 const REAL_STATE_ROOT = process.env.CLODE_STATE_ROOT;
 process.env.CLODE_STATE_ROOT = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'clode-bg-state-'));
 process.on('exit', () => {
