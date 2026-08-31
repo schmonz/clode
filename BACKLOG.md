@@ -3459,7 +3459,7 @@ things. Clode needs to be a binary we build and only that."
 
 **Two entry points, and only one of them ships.** `bin/clode` is a `#!/usr/bin/env node`
 script in the checkout. Every one of the 40 published assets is a fused tjs binary —
-`clode-<ver>-freebsd-14.0-amd64`, `…-linux-riscv64-musl`, `…-cosmo.com`. Users never run
+`clode-<ver>-freebsd-14.0-amd64`, `…-linux-riscv64`, `…-cosmo.com`. Users never run
 `bin/clode`. But `bin/clode` is what we develop against, what most tests drive, and what the
 local build loop exercises. So the artifact we reason about is not the artifact we ship.
 

@@ -54,7 +54,8 @@ test('deriveVerified maps leg exec-fidelity to a trust level', () => {
 test('deriveTag == the published asset name tag (canonical os/arch, dashed floor, from the LEG TOKEN)', () => {
   // Derived from leg.leg + leg.floor ONLY; guest-arch/guest-platform (native spellings
   // like x86_64) are deliberately ignored so the tag stays canonical and == the download.
-  assert.strictEqual(deriveTag({ leg: 'linux-x64-musl', 'guest-arch': 'x86_64' }), 'linux-amd64-musl');
+  assert.strictEqual(deriveTag({ leg: 'linux-x64-musl', 'guest-arch': 'x86_64' }), 'linux-amd64');
+  assert.strictEqual(deriveTag({ leg: 'linux-x64-glibc', 'guest-arch': 'x86_64' }), 'linux-amd64-glibc');
   assert.strictEqual(deriveTag({ leg: 'netbsd-amd64', floor: '10.1' }), 'netbsd-10.1-amd64');
   assert.strictEqual(deriveTag({ leg: 'netbsd-m68k', floor: '10.1' }), 'netbsd-10.1-m68k');
   assert.strictEqual(deriveTag({ leg: 'windows-amd64' }), 'windows-amd64');

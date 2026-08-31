@@ -57,12 +57,21 @@ test('assetName: floored is dashed <os>-<floor>-<arch>; the arch/os collisions r
   assert.strictEqual(C.assetName('omnios-amd64', '0.1.2', 'r151056'), 'clode-0.1.2-omnios-r151056-amd64');
 });
 
-test('assetName: bare (no floor) keeps a libc suffix; canonicalizes the mid arch', () => {
+test('assetName: bare (no floor) canonicalizes the mid arch; musl is NOT in the name', () => {
   // windows clode builders are PE executables — the asset name ends in .exe
   assert.strictEqual(C.assetName('windows-arm64', '0.1.2', undefined), 'clode-0.1.2-windows-arm64.exe');
   assert.strictEqual(C.assetName('windows-x64', '0.1.2', ''), 'clode-0.1.2-windows-amd64.exe');
-  assert.strictEqual(C.assetName('linux-x64-musl', '0.1.2', ''), 'clode-0.1.2-linux-amd64-musl');
-  assert.strictEqual(C.assetName('linux-arm64-musl', '0.1.2', undefined), 'clode-0.1.2-linux-arm64-musl');
+  // The SHIPPED Linux artifacts are static-musl and depend on no host libc, so the
+  // build's libc is provenance, not a compatibility claim — and every published Linux
+  // asset is one of these, so the suffix distinguished nothing while reading to a user
+  // as "needs Alpine". Dropped from the name (user, 2026-08-31).
+  assert.strictEqual(C.assetName('linux-x64-musl', '0.1.2', ''), 'clode-0.1.2-linux-amd64');
+  assert.strictEqual(C.assetName('linux-arm64-musl', '0.1.2', undefined), 'clode-0.1.2-linux-arm64');
+  // The glibc legs are ciOnly twins that never publish. They KEEP the qualifier: it is
+  // what stops the two Linux legs colliding on one tag, and the plain name belongs to
+  // the artifact users actually download.
+  assert.strictEqual(C.assetName('linux-x64-glibc', '0.1.2', ''), 'clode-0.1.2-linux-amd64-glibc');
+  assert.strictEqual(C.assetName('linux-arm64-glibc', '0.1.2', undefined), 'clode-0.1.2-linux-arm64-glibc');
 });
 
 test('targetName: canonical <os>-<arch>, libc dropped', () => {

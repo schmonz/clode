@@ -121,7 +121,8 @@ export function deriveVerified(leg) {
 
 // Human-readable platform identity for `clode build --list-targets`. This is the
 // SAME builder as the published asset name's tag (canonical os/arch, DASHED floor,
-// libc suffix), so `--list-targets` shows exactly the download name minus `clode-<v>-`.
+// libc qualifier only for a non-default libc — see tagFor), so `--list-targets`
+// shows exactly the download name minus `clode-<v>-`.
 // Derived from the leg TOKEN (not guest-arch/macos-arch, which are native spellings
 // like x86_64/aarch64) so the tag stays canonical (amd64/arm64/…).
 export function deriveTag(leg) {

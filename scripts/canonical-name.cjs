@@ -55,7 +55,41 @@ function targetName(leg) {
 }
 
 // The canonical tag shared by the published asset filename and the `--list-targets`
-// tag. Floored: `<os>-<floor>-<arch>` (dashed). Bare: `<os>-<arch>[-<libc>]`.
+// tag. Floored: `<os>-<floor>-<arch>` (dashed). Bare: `<os>-<arch>`, plus a libc
+// qualifier ONLY for a non-default libc (see below).
+//
+// WHY musl DOES NOT APPEAR (user, 2026-08-31). A qualifier in a downloadable name is
+// a promise that the user must choose, so it has to distinguish something they can act
+// on. `-musl` distinguished nothing and misled twice over:
+//   * EVERY published Linux artifact is a musl leg (36 publishers, 8 of them Linux, all
+//     musl). No glibc Linux artifact is published at all — Decision 3, restated at
+//     tjs-legs.mjs:653 and :669: "glibc Linux artifacts are smoke-only". A suffix with
+//     no sibling on the release page is not a choice, it is decoration.
+//   * The musl legs are `static: true`, so the binary depends on no host libc. The libc
+//     is BUILD PROVENANCE, not a runtime requirement. Read by someone scanning a release
+//     page, though, `-musl` says "this one is for Alpine", which inverts the truth: it is
+//     the one that runs anywhere.
+// EVIDENCE, stated no wider than it goes: RESULTS.md carries rows of three of these
+// artifacts (linux-x64-musl, linux-arm64-musl, linux-x86-musl) executing on glibc Ubuntu
+// runners. The other five published Linux legs are qemu-user `smoke: 'version'` inside an
+// Alpine rootfs and have NEVER run on a glibc host — the static-linking claim for those
+// rests on the `file`/`ldd` check, which runs on the ENGINE before fusing
+// (.github/actions/build-leg/action.yml:840), not on the shipped artifact.
+//
+// A NON-DEFAULT libc KEEPS its qualifier — but do not mistake that for collision safety,
+// because the Linux glibc legs come in two shapes and only one of them carries a token:
+//   * `linux-x64-glibc` / `linux-arm64-glibc` — ciOnly per-push twins. splitLeg sees
+//     `-glibc`, so they keep it and stay distinct from their musl twins.
+//   * `linux-riscv64` / `linux-s390x` — RELEASE-tier, publish:false, glibc-dynamic
+//     (tjs-legs.mjs:647, :663), whose tokens name no libc at all. Since 2026-08-31 these
+//     share a TAG with their published musl twins (`linux-riscv64`, `linux-s390x`).
+// That collision is real and accepted, not overlooked: it is publisher-vs-smoke-leg, and
+// the two never meet in one namespace — build-leg names a non-publisher's upload
+// `smoke-<asset>` and the release job downloads `pattern: clode-*`, so only the musl twin
+// reaches the release page. test/tjs-legs.test.cjs pins exactly that invariant (a tag
+// collision may pair a publisher with a non-publisher, NEVER two publishers), so the day
+// someone flips `publish: true` on one of those legs, it turns red instead of quietly
+// overwriting a download.
 function tagFor(leg, floor) {
   const { os, arch, libc } = splitLeg(leg);
   const co = canonOs(os), ca = canonArch(arch);
@@ -63,7 +97,7 @@ function tagFor(leg, floor) {
   // just the OS token, no arch and no compat floor.
   if (!arch) return co;
   if (floor) return `${co}-${floor}-${ca}`;
-  return libc ? `${co}-${ca}-${libc}` : `${co}-${ca}`;
+  return libc && libc !== 'musl' ? `${co}-${ca}-${libc}` : `${co}-${ca}`;
 }
 
 // Runnable-artifact filename extension by canonical OS. Windows clode builders

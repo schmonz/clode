@@ -31,6 +31,83 @@ const legsFor = (tier, only) => JSON.parse(
 // not the matrix JSON.
 const { runTargetsFor, publishedRunTargets, DARWIN_SLICES, fidelityFor, floorCoverage,
   FLOOR_ROWS, parseResultsRows, legsFor: legsDirect } = require('../scripts/tjs-legs.mjs');
+const { assetName } = require('../scripts/canonical-name.cjs');
+
+// The published asset name is the ONLY name a downloader ever sees, and nothing fetches
+// clode by it (self-update is notify-only), so it is a pure UX surface — which is why the
+// musl qualifier came off the shipped Linux artifacts (user, 2026-08-31). Three guards,
+// because dropping a name segment can go wrong in three ways.
+//
+// 1. Two PUBLISHED legs could land on one filename and overwrite each other on the
+//    release page. That is the only collision that can actually hurt a user.
+// 2. A collision between a publisher and a non-publisher is FINE TODAY and must stay
+//    merely-fine: build-leg uploads a non-publisher as `smoke-<asset>` and the release job
+//    downloads `pattern: clode-*`, so the smoke leg never reaches the page. Dropping the
+//    musl qualifier created exactly two such pairs — linux-riscv64-musl(PUB)/linux-riscv64
+//    and linux-s390x-musl(PUB)/linux-s390x, both release-tier, the bare ones glibc-dynamic
+//    smoke legs (tjs-legs.mjs:647, :663). Asserting the SHAPE of the collision, rather than
+//    asserting it away, is what turns "flip publish:true on one of those" into a red build.
+// 3. The qualifier could fail to come off. Keyed on the CANONICAL OS, not on a leg-token
+//    prefix, so a Linux leg with an unexpected token cannot slip past the rule.
+//
+// The rule is anti-MUSL, deliberately not anti-libc: a genuinely dynamic glibc artifact
+// SHOULD name its libc, and tjs-legs.mjs:959 documents promoting a glibc leg to publisher
+// as the supported path the day a musl-less Linux arch appears. A blanket "no libc in a
+// published Linux name" would forbid the very promotion the manifest promises.
+test('published asset names are unique; a tag collision never pairs two publishers', () => {
+  const rel = legsDirect('release');
+  const pub = rel.filter((l) => l.publish);
+  // The SUBSTANTIVE invariants run first, on purpose. A bookkeeping assert on the leg
+  // COUNT placed above them would fire on any matrix change and mask the finding — which
+  // is precisely what happened the first time this guard was mutation-tested: flipping
+  // publish:true on linux-riscv64 tripped the count, so the collision assertion below
+  // never executed and the guard could not be shown to catch what it exists to catch.
+  const seen = new Map();
+  for (const l of pub) {
+    const name = assetName(l.leg, '0.0.0', l.floor);
+    assert.ok(!seen.has(name),
+      `two PUBLISHED legs produce the same asset name ${name}: ${seen.get(name)} and ${l.leg} `
+      + '— one would overwrite the other on the release page');
+    seen.set(name, l.leg);
+  }
+
+  // Every release-tier tag collision must be publisher-vs-non-publisher. Two publishers
+  // is caught above; two non-publishers would still collide their `smoke-` uploads.
+  const byTag = new Map();
+  for (const l of rel) {
+    const tag = assetName(l.leg, '0.0.0', l.floor);
+    if (!byTag.has(tag)) byTag.set(tag, []);
+    byTag.get(tag).push(l);
+  }
+  for (const [tag, legs] of byTag) {
+    if (legs.length === 1) continue;
+    const publishers = legs.filter((l) => l.publish);
+    assert.strictEqual(publishers.length, 1,
+      `release-tier name ${tag} is produced by ${legs.length} legs `
+      + `(${legs.map((l) => l.leg).join(', ')}) of which ${publishers.length} publish — `
+      + 'exactly one publisher may own a name; the others must stay smoke-only');
+  }
+
+  // Trailing bookkeeping: the counts this guard was written against. Last, so it reports
+  // "the matrix moved, re-read this test" only after the real invariants have had their say.
+  assert.strictEqual(rel.length, 42, 'release tier size changed — re-check this guard');
+  assert.strictEqual(pub.length, 36, 'publisher count changed — re-check this guard');
+});
+
+test('no published Linux artifact names musl', () => {
+  const { splitLeg, canonOs } = require('../scripts/canonical-name.cjs');
+  const pub = legsDirect('release').filter((l) => l.publish);
+  // Canonical OS, not a `linux-` token prefix: the rule must follow the produced name.
+  const linux = pub.filter((l) => canonOs(splitLeg(l.leg).os) === 'linux');
+  for (const l of linux) {
+    const name = assetName(l.leg, '0.0.0', l.floor);
+    assert.doesNotMatch(name, /-musl$/,
+      `published Linux asset ${name} (leg ${l.leg}) must not name musl: these are static `
+      + 'binaries that depend on no host libc, and the suffix reads as "does not run on '
+      + 'your distro" to someone scanning the release page');
+  }
+  assert.strictEqual(linux.length, 8, 'published Linux leg count changed — re-check this guard');
+});
 
 test('release tier splits cleanly into darwin / notdarwin (universal decoupling)', () => {
   const all = legsFor('release').map((l) => l.leg).sort();
