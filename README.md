@@ -7,8 +7,8 @@ When your OS isn't popular or your computer isn't recent, how do you run Claude 
 ```sh
 mv clode-* clode && chmod +x clode
 ./clode build --list-targets
-for i in macos-arm64 macos-ppc netbsd-sparc linux-s390x windows-amd64; do
-  ./clode build --target $i --out quaude-$i
+for i in macos-arm64 windows-amd64 macos-ppc netbsd-sparc linux-s390x; do
+  ./clode --verbose build --target $i --out quaude-$i
 done
 ```
 
@@ -32,26 +32,30 @@ This repo contains no Anthropic code, only a tool that, by request:
 
 ## Runtime dependencies
 
-Quaude shells out to these for tool use:
+For day-to-day `quaude` tool use:
 
-- `bash` for basic tool use
+- `bash`
 - `bfs` >= 3.x (built with Oniguruma)
 - `ugrep` >= 7.5.0
 
-`clode fetch` (downloading and verifying the upstream bundle) additionally needs:
+For `clode fetch` to verify and extract `claude`:
 
-- a SHA-256 tool — one of `sha256sum`, `shasum`, `gsha256sum`, `sha256`,
-  `cksum`, `openssl`, or `digest` (or set `CLODE_SHA256`)
-- `tar`, `gzip`, and `unzip` to extract downloads
+- `sha256` (or `sha256sum`, `shasum`, `gsha256sum`, `cksum`, `openssl`, or `digest`)
+- `tar`
+- `gzip`
+- `unzip`
 
-`clode build` (carving the upstream bundle) additionally needs:
+For `clode build` to extract embedded assets that are compressed in `claude` 2.1.251 and up:
 
-- `zstd` — or `unzstd`/`zstdcat` (or set `CLODE_ZSTD`). Claude Code 2.1.251 and
-  later store their embedded assets as zstd frames; earlier versions carve without it
+- `zstd` (or `unzstd` or `zstdcat`)
 
-## Updating
+## Updating `quaude`
 
 Run `clode fetch` and `clode build` again.
+
+## Updating `clode`
+
+Manually [download latest clode](https://github.com/schmonz/clode/releases/latest/).
 
 ## Beware
 
