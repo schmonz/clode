@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.20260830.1
+## 0.20260831.1
 
 Tested with Claude Code 2.1.251, including an interactive turn on `macos-arm64`.
 
