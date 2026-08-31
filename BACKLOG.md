@@ -2002,6 +2002,76 @@ Design forks for productization: (a) FUSING — APE already uses its tail as a Z
 (b) TLS scope for v1 (defer mbedtls, ship lean no-TLS first?); (c) mac Gatekeeper on APE (assimilate
 or rcodesign ad-hoc); Windows APE runs unsigned. Spike artifacts live in scratchpad (untracked).
 
+### OPEN — cosmo fidelity has run on 2 of 8 declared run-targets (user, 2026-08-31)
+
+**The user:** "We need to run our cosmo quaude through fidelity on every platform where cosmo can
+run. We've only done some of them."
+
+**This is Phase E's unfinished half.** Phase E above already says the goal out loud —
+"multi-OS CI (Linux+Mac+Windows+BSD run the SAME .com)". The build half landed; the RUN half did
+not, and the gap is exactly measurable because the leg declares its own run-targets.
+
+**The inventory, from `scripts/tjs-legs.mjs:902-940` and `test/fidelity/RESULTS.md`:**
+
+    cosmo-macos-aarch64    tier 0   floor 4/6   B1,B4,C1,G7 (+H1,H3,H4,H7,F6,D6,G2 non-floor)
+    cosmo-linux-x86-64     tier 0   floor 1/6   G7 only — the build-pipeline PONG on the ubuntu host
+    cosmo-linux-aarch64    tier 0   { tier: 0 } — no date, no note, no row
+    cosmo-macos-x86-64     tier 0   { tier: 0 } — "
+    cosmo-windows-x86-64   tier 0   { tier: 0 } — "
+    cosmo-freebsd-x86-64   tier 0   { tier: 0 } — "
+    cosmo-openbsd-x86-64   tier 0   { tier: 0 } — "
+    cosmo-netbsd-x86-64    tier 0   { tier: 0 } — "
+
+So the whole "one `.com` everywhere" claim rests on ONE deeply-driven host (an arm64 Mac) plus a
+single PONG smoke on the machine that built it. Six run-targets have never executed the binary at
+all. The map is HONEST about this — the ledger says it in as many words ("the other seven cosmo
+run-targets get nothing from this row", RESULTS.md:175) — but honest-and-empty is still empty,
+and cosmo is the one leg whose entire value proposition is the platforms it has not been run on.
+
+**The good news: five of the six already have a rig.** These are not new platforms; they are
+platforms this repo already boots for other legs (`scripts/tjs-legs.mjs`):
+
+    cosmo-linux-aarch64    <- linux-arm64-glibc   native arm64 runner (ubuntu-*-arm)
+    cosmo-windows-x86-64   <- windows-amd64       windows-latest
+    cosmo-freebsd-x86-64   <- freebsd-amd64       vmactions guest
+    cosmo-openbsd-x86-64   <- openbsd-amd64       vmactions guest, 7.9
+    cosmo-netbsd-x86-64    <- netbsd-amd64        vmactions guest
+    cosmo-macos-x86-64     <- NOTHING             no leg in this repo uses an x86-64 macOS runner
+
+So for five of them the marginal ask is "carry the one already-built `.com` into a rig that
+already boots, and run the floor rows there" — not "stand up a platform". That is the cheapest
+fidelity coverage available anywhere in this repo right now, measured in new infrastructure: zero
+for five of six.
+
+**What a run has to actually do, per the ledger's own rule.** The six FLOOR_ROWS, executed on the
+run-target's own OS+arch. A build-host PONG earns G7 for the build host and nothing else — that
+rule is already written down ("a `.com` smoked on the Linux runner earns the row for
+`cosmo-linux-x86-64` and for no other cosmo host", RESULTS.md:42), so the work is per-host by
+construction and cannot be short-cut by one green.
+
+**Expect failures, and treat that as the point.** Each of these is a QUESTION this has not
+measured, deliberately stated as a question rather than a prediction — no claim about how any of
+these platforms behaves belongs here until a run on this machine or a rig says so:
+
+- Does the APE self-extract and exec under each BSD's `/bin/sh` and exec path, in a vmactions
+  guest, without an installed APE loader?
+- OpenBSD enforces W^X by mount option — does the `.com` run at all in that guest, and does the
+  answer depend on where it is written?
+- On Windows, does the interactive/TTY path work? The one cosmo TTY bug we HAVE found needed a
+  libuv patch (`patches/libuv-cosmo.patch`, the reopen-skip); that fix was found on macOS and has
+  never been exercised on the Windows console.
+- On macOS x86-64, does Gatekeeper/quarantine block an unsigned `.com` differently than on arm64?
+  The leg ships unsigned by design and the release-notes item for that is still open.
+
+A red row from any of these is worth more than the six blanks are now: cosmo's whole claim is
+portability, and six unrun targets means the claim is untested precisely where it is boldest.
+
+**Filing note (user asked where this goes):** here, under the Cosmo APE leg, because it is Phase
+E's remainder rather than a new initiative. The actual todo list is machine-readable and already
+in the tree — every bare `{ tier: 0 }` in that leg's `fidelity` map is one unrun platform, and
+`floorCoverage()` derives the tier from RESULTS.md, so a row landing is the only thing that
+changes a tier. Nothing else needs to be invented to track this.
+
 ## Phase 3 — still open (render parity + apicheck v1 + upstream-txiki batch)
 
 M1/M2/agentic Bash under tjs SHIPPED; these remain:
