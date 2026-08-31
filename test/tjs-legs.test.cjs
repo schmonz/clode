@@ -182,11 +182,13 @@ test('ci tier: every release OS is exercised, exactly one leg per VM OS', () => 
   // like the arch twins. NOTE it PUBLISHES, so under the rule this file states
   // elsewhere — "if we ship it, CI gates it" — it should not be exempt at all.
   //
-  // haiku: dropped from ci 2026-08-25 (user). It publishes NOTHING (publish:false,
-  // demoted while cross-platform-actions has no beta6 guest image), so while the
-  // blocker stands the leg can only re-derive an answer already written down, at the
-  // cost of a runner slot per push. The question we actually want answered — has a
-  // beta6 image appeared? — is asked daily by scripts/haiku-image-watch.mjs instead.
+  // haiku: was dropped from ci 2026-08-25 (user) while cross-platform-actions had no
+  // beta6 guest image. SUPERSEDED 2026-08-27 — haiku-x64 is pinned to r1beta6 and
+  // publishes again, so it is back in ci on its own merits. The "has a newer image
+  // appeared?" question is answered for EVERY VM leg by scripts/check-guest-versions.mjs,
+  // weekly, against the pin; the bespoke scripts/haiku-image-watch.mjs that used to ask it
+  // for haiku alone was retired 2026-08-31 (it compared against a hardcoded r1beta5 and so
+  // reported our OWN adopted image as news, failing upstream-drift daily for four days).
   //
   // THE RULE SHOULD BE A PROPERTY, NOT A LIST: every OS with a PUBLISHING leg must be
   // exercised in CI. Under that rule haiku is correctly exempt (it ships nothing) and

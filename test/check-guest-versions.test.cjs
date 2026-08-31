@@ -33,3 +33,27 @@ test('drift: newer catalog version than the pin is reported; equal/older is not'
     drift('netbsd-amd64', '10.2', ['9.2', '10.0', '10.1']) ?? '',
     /not in catalog/, 'pin missing from catalog (image pulled or typo): loud');
 });
+
+// The general watcher must cover every VM leg — this is what makes a bespoke
+// per-platform watcher unnecessary, and it is why scripts/haiku-image-watch.mjs was
+// retired on 2026-08-31 rather than re-pointed. That script hardcoded an image literal
+// (`/r1beta5/i`), so when the haiku-x64 leg was pinned to r1beta6 on 2026-08-27 the
+// watcher kept reporting "a newer image appeared" — about the very image we had already
+// adopted — and failed upstream-drift daily for four days. This checker asks the same
+// question of the same catalog, but against the PIN, so it cannot go stale that way.
+test('every VM leg in the ci tier is covered by the checker (no leg needs a bespoke watcher)', async () => {
+  const { isVmLeg } = mod;
+  const { legsFor } = require('../scripts/tjs-legs.mjs');
+  const ci = legsFor('ci');
+  // A guest-platform that is not the host and not the static-output alpine builder is a
+  // real guest image with a catalog behind it.
+  const guests = ci.filter((l) => l['guest-platform'] && !['native', 'alpine'].includes(l['guest-platform']));
+  assert.ok(guests.length > 3, `expected several VM legs in ci, found ${guests.length}`);
+  for (const l of guests) {
+    assert.ok(isVmLeg(l), `${l.leg} has guest-platform '${l['guest-platform']}' but the checker skips it`);
+  }
+  // haiku by name: the leg that used to carry its own watcher.
+  const haiku = ci.find((l) => l.leg === 'haiku-x64');
+  assert.ok(haiku, 'haiku-x64 must be in the ci tier for the general checker to see it');
+  assert.ok(isVmLeg(haiku), 'haiku-x64 must be covered by the general checker');
+});

@@ -1163,10 +1163,19 @@ its package list unchanged (`cmd:` is pkgman provides-syntax; beta6 has all of t
 gcc 13.3, make 4.4, cmake 4.1, git 2.54, bash 5.3, nodejs20 20.15), and went back to
 `publish: true` with `ci: true` and NO soft-fail.
 
-**The watcher had a blind spot worth fixing:** scripts/haiku-image-watch.mjs checks only
-cross-platform-actions/haiku-builder, so it kept reporting "still blocked" while the
-blocker was being cleared at another provider. It answers a narrower question than its name
-suggests. Teach it both providers.
+**The watcher is RETIRED (2026-08-31), which is the better answer than the "teach it both
+providers" this entry used to propose.** scripts/haiku-image-watch.mjs compared the cpa
+catalog against a hardcoded `/r1beta5/i`, so once the leg was pinned to r1beta6 it reported
+our OWN adopted image as news and failed upstream-drift every day from 08-28 to 08-31 — a
+to-do trigger whose to-do was done, telling us in its failure text to "restore publish:true"
+on a leg that already published. Measured on 2026-08-31: cpa haiku-builder v0.2.0 now ships
+BOTH `haiku-r1beta5-x86-64.qcow2` and `haiku-r1beta6-x86-64.qcow2`, and vmactions/haiku-vm
+lists r1beta5.conf + r1beta6.conf — so both providers agree, and the narrow-provider blind
+spot this entry described is moot. scripts/check-guest-versions.mjs already asks the same
+question of the same catalog for EVERY VM leg (haiku included — `isVmLeg`, now exported and
+asserted in test/check-guest-versions.test.cjs), comparing against the PIN rather than a
+literal, which is why it was green on the day the bespoke one was red. One watcher, derived,
+not two, one of them hand-maintained.
 
 **Fidelity is 0/6, honestly.** The demotion withdrew haiku's RESULTS.md rows and nothing has
 re-driven them on the new backend. The golden ledger says 0, which means "shipping, not yet

@@ -76,6 +76,13 @@ async function runnerLabels() {
 
 const VMACTIONS = new Set(['solaris', 'openindiana']);
 
+// Which legs this checker is responsible for: anything running in a real guest image.
+// alpine is exempt (its output is static, and the rootfs is not a versioned OS image);
+// native runs on the host. EXPORTED so a test can assert the checker's coverage is a
+// PROPERTY of the leg manifest rather than a list — the property that makes a bespoke
+// per-platform image watcher unnecessary (see test/check-guest-versions.test.cjs).
+export const isVmLeg = (l) => !!l['guest-platform'] && !['native', 'alpine'].includes(l['guest-platform']);
+
 async function main() {
   // ci pins are the NEWEST end — held to catalog max. Release pins are
   // FLOORS (oldest proven, older than max by design) — only required to
@@ -93,7 +100,6 @@ async function main() {
     }
     return catalogs.get(key);
   };
-  const isVmLeg = (l) => l['guest-platform'] && !['native', 'alpine'].includes(l['guest-platform']);  // alpine exempt: static output
   for (const l of ci.filter(isVmLeg)) {
     const d = drift(l.leg, l['guest-version'], await catalogFor(l));
     if (d) problems.push(`ci ${d}`);

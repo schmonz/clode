@@ -116,20 +116,6 @@ jobs:
   # This asks it in about a second. Green means "nothing we could do about Haiku today",
   # NOT "Haiku is fine": the leg is deliberately out of the push matrix and publishes
   # nothing (see BACKLOG). Red means an action just became possible.
-  haiku-image:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.0.0
-        with:
-          node-version-file: .tool-versions
-      - name: Has a newer Haiku guest image appeared?
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: node scripts/haiku-image-watch.mjs
-
   # linux-x64-musl deliberately: an alpine container, no qemu, and the engine comes
   # from the same PINS+patches cache the push legs use, so the marginal cost is the
   # fuse and the smoke — not an engine build.
