@@ -1002,9 +1002,39 @@ async function clodeBuild(args, opts) {
     const effLibexec = fusedBuilder ? path.join(payloadDir, 'libexec') : opts.libexec;
 
     try {
-      // The same resolve+extract the quaude path runs (stageUpstreamCli). Done
-      // FIRST: the provider (the cli.cjs to embed) is the cheap, local, primary
-      // input — a missing one must fail before we reach out for a node.
+      // -- CAN THIS BUILD HAPPEN AT ALL? Asked FIRST, because it is a pure lookup in
+      // deps/clode/node-pin.json and the next step is not: staging a code-split bundle
+      // means extracting and SCC-merging it, which is minutes of work (observed on a
+      // cosmo .com, 2026-08-31 — a full re-extract of 2.1.251 followed by
+      // "naude on cosmopolitan-x64 is not supported"). Nothing about "is there a pinned
+      // Node for this platform" needs the bundle.
+      //
+      // This mirrors the quaude path, which refuses an unknown --target at resolveTarget
+      // before any staging. naude already refused a non-Node --target, but only AFTER
+      // staging, and never checked the HOST at all — because nobody types their host as a
+      // target, so the one platform that can surprise you is your own. Both now happen here.
+      const { targetToNode } = require('../scripts/canonical-name.cjs');
+      const { pinnedNodeRefusal } = require('./clode-node.cjs');
+      let nt = null, targetOs = opts.hostPlatform || process.platform;
+      if (parsed.target) {
+        nt = targetToNode(parsed.target);
+        if (!nt) return fail(`build --naude: '${parsed.target}' is not a Node platform — naude cannot target it; cross-build a quaude instead (clode build --target ${parsed.target})`);
+        targetOs = nt.platform;
+      }
+      // blob-gen runs on THIS host whatever the target is, so an unservable host is fatal
+      // even for a cross-build; the target's own pin is checked right after.
+      for (const [platform, arch] of [
+        [opts.hostPlatform || process.platform, opts.hostArch || process.arch],
+        ...(nt ? [[nt.platform, nt.arch]] : []),
+      ]) {
+        const refusal = pinnedNodeRefusal(platform, arch);
+        if (refusal) return fail(`build --naude: ${refusal}`);
+      }
+
+      // The same resolve+extract the quaude path runs (stageUpstreamCli). Done before
+      // reaching OUT for a node (the provider is the cheap, local, primary input — a
+      // missing one must fail before any network), but AFTER the pin-table check above,
+      // which is cheaper still and can rule the whole build out.
       const staged = stageUpstreamCli({
         env, libexec: effLibexec, verbose, prefix: 'build --naude', log: clodeLog,
       });
@@ -1019,17 +1049,10 @@ async function clodeBuild(args, opts) {
       // (opts.ensureNode) so the wiring is testable without network — see below
       // for the native-vs-cross role split.
       const ensureNode = opts.ensureNode || ensurePinnedNode;
-      const { targetToNode } = require('../scripts/canonical-name.cjs');
-      // A non-Node --target (netbsd-sparc, ...) is a loud refusal naming quaude
-      // — checked and failed BEFORE any node is fetched (host or target): there
-      // is no reason to reach for a node, even the host's own, on a request
-      // that can never succeed.
-      let nt = null, targetOs = process.platform;
-      if (parsed.target) {
-        nt = targetToNode(parsed.target);
-        if (!nt) return fail(`build --naude: '${parsed.target}' is not a Node platform — naude cannot target it; cross-build a quaude instead (clode build --target ${parsed.target})`);
-        targetOs = nt.platform;
-      }
+      // nt / targetOs were resolved above, before staging — see the CAN THIS BUILD HAPPEN
+      // AT ALL block. Both platforms are known-servable by the time we get here, so a
+      // throw from ensureNode below is a FETCH failure (network, checksum), never an
+      // unsupported platform.
       let blobgenNode, embedNode;
       try {
         // blob-gen always runs on THIS host's arch (it executes

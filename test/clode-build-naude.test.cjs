@@ -529,3 +529,43 @@ test('clode build --naude: a failing attest fails the build, loudly', async () =
     assert.doesNotMatch(r.stdout, /attest ok/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// ORDER, not just outcome: a host with no pinned Node must be refused BEFORE the bundle is
+// staged. Observed on a cosmo .com (2026-08-31, user): `clode build --naude` re-extracted
+// 2.1.251 — minutes of SCC merging on a code-split bundle — and only then said
+// "naude on cosmopolitan-x64 is not supported (no pinned Node for this platform)". The
+// refusal is a pure lookup in deps/clode/node-pin.json; nothing about it needs the bundle.
+//
+// The quaude path already works this way: an unknown --target is refused at
+// clode-fuse.cjs's resolveTarget, before any staging. naude does the same for --target
+// (targetToNode, "not a Node platform") but did NOT for the HOST, because nobody types
+// their host as a target. This restores the parity.
+//
+// The test asserts ORDER by removing the provider: with nothing to stage, the OLD code
+// fails first with a staging/provider error, and only the hoisted check makes the platform
+// refusal win. `ensureNode` must never be reached either — the pin table answers this.
+test('clode build --naude: an unsupported HOST is refused before the bundle is staged', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-nohost-'));
+  try {
+    // Deliberately NO seedProvider: staging cannot succeed here.
+    const env = { ...process.env, CLODE_CLAUDE_BIN: path.join(dir, 'nonexistent-claude'),
+      CLODE_CACHE: path.join(dir, 'cache'), DYLD_INSERT_LIBRARIES: '' };
+    let ensureNodeCalled = false;
+    const ensureNode = async () => { ensureNodeCalled = true; return FAKE_NODE; };
+    const r = await runBuild(['--naude'], env, { status: 0, stdout: '', stderr: '' }, ensureNode,
+      { hostPlatform: 'cosmopolitan', hostArch: 'x64' });
+
+    assert.notStrictEqual(r.status, 0, 'an unsupported host must fail the build');
+    assert.match(r.stderr, /cosmopolitan-x64/,
+      'the refusal must name the platform it could not serve');
+    assert.match(r.stderr, /no pinned Node/,
+      'and say why — there is no pinned Node for it');
+    assert.doesNotMatch(r.stderr, /does not exist|could not resolve|no provider/i,
+      'the PLATFORM refusal must win over the staging error: it is knowable without the bundle, '
+      + 'and staging a code-split bundle costs minutes');
+    assert.strictEqual(ensureNodeCalled, false,
+      'ensureNode must not be reached — the pin table already answered');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -49,11 +49,25 @@ const PINNED_VERSION = PIN.version;
 // actual asset filename/URL spells the OS segment `win-<arch>` (not
 // `win32-<arch>`) and ships a `.zip`, not a `.tar.gz` — everyone else keeps
 // `<platform>-<arch>.tar.gz`.
+// Is there a pinned Node for this platform/arch, and if not, WHY — as one sentence, in
+// one place. Returns null when the platform is servable, else the refusal message.
+//
+// Exported because the answer is a pure table lookup that costs nothing, while the work it
+// gates (staging + extracting the upstream bundle) costs MINUTES on a code-split bundle.
+// `clode build --naude` therefore asks this BEFORE it stages anything — see clode-fuse's
+// naude branch, and the ordering test in test/clode-build-naude.test.cjs. nodeAsset throws
+// exactly this message, so the early refusal and the late one can never drift apart.
+function pinnedNodeRefusal(platform, arch) {
+  return PIN.sha256[`${platform}-${arch}`]
+    ? null
+    : `naude on ${platform}-${arch} is not supported (no pinned Node for this platform)`;
+}
+
 function nodeAsset(platform, arch) {
   const key = `${platform}-${arch}`;
   const sha256 = PIN.sha256[key];
   if (!sha256) {
-    throw new Error(`clode-node: naude on ${platform}-${arch} is not supported (no pinned Node for this platform)`);
+    throw new Error(`clode-node: ${pinnedNodeRefusal(platform, arch)}`);
   }
   const isWin = platform === 'win32';
   const ext = isWin ? 'zip' : 'tar.gz';
@@ -196,4 +210,4 @@ async function ensurePinnedNode(opts = {}) {
   }
 }
 
-module.exports = { PINNED_VERSION, nodeAsset, ensurePinnedNode, nodeBinPath, tarExtract, targetToNodeAsset };
+module.exports = { PINNED_VERSION, nodeAsset, pinnedNodeRefusal, ensurePinnedNode, nodeBinPath, tarExtract, targetToNodeAsset };
