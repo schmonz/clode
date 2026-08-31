@@ -3125,6 +3125,106 @@ attempts could from here: which volume has room, how much, and where `spawnSync`
 puts its bytes on win32. Until then this guard is dark on Windows — and a skipped oracle reads
 like a clean one, which is the whole reason it says so out loud.
 
+### ★★★ The quaude build is slow and opaque — name the steps, show how done we are (user, 2026-08-31)
+
+**The user:** "Building quaude has gotten very slow. We need explicit steps and a way to know
+how done we are so that we can show the user progress."
+
+**What a build shows today.** `clode build` drives a TTY-only phase SPINNER
+(`libexec/clode-fuse.cjs:708`, `makePhaseSpinner`) with exactly three labels, set at
+`clode-fuse.cjs:1366`, `:1569` and `:1619`/`:1645`:
+
+    ⠹ Extracting bundle… (14.2s)
+    ⠹ Fusing… (211.7s)
+    ⠹ Smoking… (8.9s)
+
+Its own comment says why it is a label and not a bar: "discrete phases with no known total".
+That was true when it was written. It is not true any more — see below. Everything under
+`Fusing` is one word for a minutes-long stretch that internally compiles ~1800 modules, merges
+cyclic groups, packs assets, and links a template. The spinner is a liveness indicator, not a
+progress indicator: it tells you the process has not died, and nothing else.
+
+**The denominator already exists on disk, before the slow part starts.** Measured here on the
+staged 2.1.251 graph:
+
+    $ node -e "...JSON.parse(graph.json)..."
+    read 43ms parse 144ms moduleCount 1795
+    order array 1835   sources obj 1835   assets obj 173   cyclicRequires array 33
+
+So `graph.json` names the work: 1795 modules to compile, 173 assets to pack, 33 cyclic requires
+to merge. `quaude-fuse.js` already prints these AFTER the fact — "compiled N modules -> graph.qbc"
+(`libexec/quaude-fuse.js:467`), "pre-compiled N modules" (`:147`), "N text assets ->" (`:462`).
+The numbers are known up front and reported only in the past tense. A counter is not a research
+project; it is moving an existing number earlier.
+
+**And "very slow" is, right now, an unfalsifiable claim — which is the deeper half of the ask.**
+No build records per-step time anywhere durable. The spinner's seconds are drawn to a TTY and
+erased by `done()`; a piped or CI build renders nothing at all. So "has gotten very slow" cannot
+be checked against "was fast on <commit>", and we cannot say WHICH step grew. One cheap
+measurement already narrows it: reading and parsing the 46MB `graph.json` costs 187ms total, so
+the minutes are not I/O or JSON — they are in bytecode compilation, the merge, and the engine
+build. That is a hypothesis, and it stays a hypothesis until each step is timed.
+
+**What this item asks for, then, is three things and they are ordered:**
+
+1. **Explicit steps.** A named, enumerated step list the build declares before it runs — not
+   three ad-hoc `spin.phase()` calls scattered across a 1678-line file. Whatever form the
+   out-of-tree/CMake work takes, the step list should come from the same place the build graph
+   does, so a step cannot be added without appearing in the display.
+2. **A denominator per step.** Compile is `n/1795`. Assets are `n/173`. Merge is `n/33` groups.
+   Steps with no natural count (fetch a template, sign, smoke) stay labels, and that is fine —
+   an honest mixed display beats a fake percentage.
+3. **A durable timing record.** Every step's elapsed time written where a piped/CI build keeps
+   it, so a regression is a diff and not a feeling. This is what turns the user's report into
+   something we can act on, and it is also what makes any future "we made it faster" claim
+   checkable.
+
+**Why it belongs to ★★★ and not to a display tweak.** Steps you can show are steps you have
+named, and steps you have named are a build graph. We do not have one — that is exactly what the
+naude entry above ("The case for explicit dependencies") found the hard way, when a producer
+stopped emitting `cli.cjs` and only a two-minute runtime path check noticed. A progress bar
+bolted onto today's imperative script would be a fourth hand-maintained list of what the build
+does, going stale the same silent way. Sequence this WITH the out-of-tree/CMake item, not before
+it: get the steps declared, and the progress display falls out of the declaration.
+
+### Default artifact names should carry the Claude bundle version (user, 2026-08-31)
+
+**The user:** "Maybe the default built quaude/naude should have the Claude bundle version in
+their filename by default."
+
+**Where the two defaults land today** (no `--out`):
+
+    quaude   ./quaude[.exe]                                   resolveBuildOut, clode-fuse.cjs:772
+    naude    build/clode-<CLODE ver>-<osToken>-<arch>/naude   seaBin -> artifactDir, platform-tag.cjs:231
+
+So quaude's default carries NO version of anything, and naude's carries **clode's** version, not
+the bundle's. Neither answers the question you actually ask of a built binary sitting in a
+directory: which Claude Code is inside it? Build twice across an upstream bump and the second
+`./quaude` silently overwrites the first; keep both by hand and you are the one remembering which
+is which. The binary itself knows (`--clode-attest` reports `bundleVersion`), but the filename —
+the only part visible in `ls`, in a bug report, in a scrollback — does not.
+
+**The one real obstacle, and it is a sequencing one.** The output path is resolved at
+`clode-fuse.cjs:1221` (`resolveBuildOut`), and the bundle version only becomes known ~200 lines
+later at `:1437`, as `staged.key` from `stageUpstreamCli` — which is also where the manifest gets
+its `bundleVersion` (`:1510`) and `--self` gets none at all. So this is not a string edit in the
+name formatter: either the default name is decided AFTER staging, or the bundle version is
+resolved before it (`resolve.cacheKey`, `:457`, is what computes the key). Whichever way, the
+`--self` branch has no upstream bundle and must keep a version-free default.
+
+**Open questions this needs answered before it is built, not while:**
+- Does an explicit `--out` still win verbatim? (It must — CI passes the canonical published asset
+  name, and `resolveBuildOut`'s contract at `:759` is load-bearing for attest/publish agreement.)
+- Does naude's name become `clode-<ver>-<token>-<arch>/naude-<bundle>`, or does the bundle version
+  join the DIRECTORY key? The directory is the "if it's in build/clode-*, it's shippable" contract
+  (`platform-tag.cjs` file header) — changing its shape is a bigger blast radius than changing a
+  basename.
+- Should quaude's default also move under `build/` rather than cwd? Adjacent to the ★★★
+  out-of-tree item; answer them together rather than twice.
+
+Related: [[Arch / artifact-name rationalization — release-atomic remainder (2026-07-27)]] above,
+which is the same "one name, agreed by every consumer" problem on the publish side.
+
 ### ★★★ Nothing gates the gates — make "a guard that cannot fail" structurally impossible (user, 2026-08-29)
 
 **The user:** "How are you finding these gaps? Is it automated into the build? Or is that another
@@ -4490,6 +4590,128 @@ number (`floor 6/6`) excludes G2, the only row that involves a real logged-in us
 
 **Do this before further feature work.** The 2026-08-24 release ships first because it
 fixes a confirmed 40-target cross-build DOA; the overhaul starts after.
+
+### POSTSCRIPT (user, 2026-08-31) — what if clode were an orchestrator of small Unix programs?
+
+**The user:** "What if clode were not one big program, but an orchestrator of several small Unix
+programs, each of which does one job that composes into 'building quaude' (or naude)?"
+
+**WHERE THIS STANDS: NOT DECIDED, and recorded as a question, not a plan (user, 2026-08-31):**
+*"Not 100% sure I want this design. It'll probably be really annoying on Windows, like everything
+always is. But also it makes clear for me (and agents) what the steps in a build are, and whether
+JavaScript is advantageous for these steps."*
+
+So there are two payoffs and one tax, and they should be weighed as such rather than argued into
+a foregone conclusion:
+
+- **Payoff 1 — legibility, for humans AND for agents.** This is the stated ★★★ goal ("tired of
+  the build being so baroque as to become opaque") applied to the one place it has not been: an
+  agent reading this repo today cannot enumerate the build's steps, because they are control flow
+  inside a 1678-line function, not things with names. Neither can a person.
+- **Payoff 2 — it forces the per-step language question to be asked per step.** Right now "what
+  language is this written in" is answered once, for a monolith. Programs with argv contracts let
+  the answer differ by step, and make a rewrite of ONE step a contained experiment. This is
+  exactly the open question in [[What language is the SECOND half?]] above — that entry could not
+  reach a verdict partly because "the second half" is not divided into parts you could decide
+  about separately. Decomposition is the precondition for answering it.
+- **Tax — Windows, and the worry is well-founded** (see the Windows section below).
+
+**Half of this already exists, which is the strongest argument for the other half.** Two build
+steps are ALREADY separate programs, spawned through a declared, injectable seam
+(`clode-fuse.cjs:889`, "the one spawn seam every build step goes through"; the naude call takes
+its own `opts.spawnRun` override at `:1135` so it is stubbable without stubbing every other
+spawn — a seam per program, which is what a program boundary looks like when it is real):
+
+    fuse    spawnRun(template, ['run', libexec/quaude-fuse.js, <7 positional args>])   clode-fuse.cjs:1571
+    naude   spawnRun(blobgenNode, [build-naude.mjs, --cli … --bundle … --out …])       clode-fuse.cjs:1136-1148
+
+`quaude-fuse.js` even documents its own argv contract as a usage block (`:7-21`) — signed base,
+stage dir, node-shim dir, node_modules dir, bootstrap, extras.json, out. That is a Unix program
+with a man page, already. So the proposal is not "restructure clode into a shape it has never
+had"; it is "finish a shape it half has, and stop growing the parts that resisted."
+
+**What did not get decomposed, by line count:**
+
+    scripts/build-tjs.mjs        3796
+    libexec/clode-fuse.cjs       1678   resolve+stage+extract+close deps+sign+thin+fuse+smoke+attest
+    libexec/extract-claude-js.cjs 1593
+    libexec/scc-merge.cjs        1428
+
+**Why this is the same answer as the two items above, not a third project.** A step that is a
+program has a name, a start, an end, and declared inputs and outputs. That is *precisely* what
+the progress item needs (a step list you cannot add to without it appearing) and *precisely* what
+the out-of-tree/CMake item needs (a dependency graph where a producer that stops producing is an
+error at generate time, not two minutes into a build — the naude/`cli.cjs` lesson above). Three
+asks, one mechanism.
+
+**The obvious first extraction is also the slow one.** The cyclic-group merge is already a pure
+function of the staged graph, already keyed, already cached to `graph-merged.json` — and it costs
+**~380s of a 6:52 build** on a fast arm64 Mac (measured in situ; see the 1800000ms timeout
+comment at `clode-fuse.cjs:1585`). A pure keyed transform from one file to another IS a Unix
+program; today it is a stretch of `Fusing…` inside a worker nobody can run by hand.
+
+**Three questions this has to answer BEFORE it is built, because each one can invert the design:**
+
+1. **How does a fleet of programs ship as one binary?** clode's entire point is a single artifact
+   you can carry to a machine with no Node — see [[clode is a BINARY WE BUILD, and only that]].
+   Twelve programs must not mean twelve downloads. The busybox answer (ONE image, dispatch on
+   subcommand/argv[0]) keeps single-artifact shipping AND gets separable programs, and quaude's
+   member/index layout is already a container for exactly that. Likely right — but decide it, do
+   not drift into it.
+2. **What is the interchange, given the payloads are huge?** Unix composition suggests pipes;
+   ours are a 46MB `graph.json`, a 49MB `cli.cjs`, and a template binary. Those are FILES in a
+   work dir, not a shell pipeline — the make/CMake shape, not the `|` shape. Say so explicitly,
+   or someone builds a pipeline that spends its life serializing. (Measured, for scale: reading +
+   parsing that `graph.json` is 187ms — cheap enough that a file boundary between steps costs
+   nothing next to a 380s merge.)
+3. **Which engine runs each program?** Not a stylistic choice: anything that emits quickjs
+   bytecode MUST run under the same tjs binary that becomes the template — the
+   runtime-compiles-for-itself rule (`quaude-fuse.js:1-5`); bytecode from any other build is
+   undefined behavior. So the programs are inherently NOT uniform — some node-side, some
+   tjs-side — and the boundary falls exactly where the worker boundary already falls. That the
+   existing split lands on a real constraint rather than on tidiness is evidence the
+   decomposition wants to follow constraints too.
+
+**The failure mode to design against.** Splitting into programs without DECLARING inputs and
+outputs just distributes the naude bug: a producer stopped emitting `cli.cjs` and only a runtime
+path check, two minutes in, noticed. More programs = more places for that. The value is in the
+declaration; the program boundary is what makes the declaration checkable. Do not take the
+boundary and skip the declaration.
+
+**THE WINDOWS TAX — what is evidence, what is assumption.** Measured here, today:
+
+    win32/.exe/windows mentions, build path:   build-tjs.mjs 26, clode-fuse.cjs 22,
+                                               build-naude.mjs 15, platform-tag.cjs 11
+    files carrying a #! shebang:               26   (inert on Windows — every call site must
+                                                     name its interpreter, or the multi-call
+                                                     binary makes the question moot)
+
+Two live Windows entries above say the worry is not superstition: the deadlock guard cannot get
+scratch space on Windows runners (deferred 2026-08-31, still dark), and the Windows-path ratchet
+is blind on ~1335 lines of real code. Anything that multiplies process boundaries multiplies the
+surface those two already fail on.
+
+**But one measurement cuts the other way, and it is the most interesting number here:**
+
+    libexec/quaude-fuse.js — the step that IS already a separate program:   0 win32 branches
+
+The step with a real argv contract is the step with no Windows special-casing at all, because its
+interface is "arguments in, file out" and it delegates path handling to the engine it runs under.
+That is one data point, not a proof — it also happens to be the step that runs under tjs on every
+platform. But it is the opposite of what "programs are annoying on Windows" predicts, and it is
+worth knowing which way the effect actually runs before deciding.
+
+**So the deciding measurement is nameable, and we should take it before committing** (this is a
+claim about how Windows behaves, so per doctrine it gets measured, not assumed): on a Windows
+runner, time N sequential spawns of a multi-call binary against the same N steps called
+in-process. If per-spawn cost is trivial next to a 380s merge, the tax is imaginary and the
+legibility is free. If it is not, the answer is probably "programs as the DECLARED unit, some of
+them dispatched in-process" — which keeps both payoffs and pays the tax only where it is cheap.
+
+**Cheap way in, no rewrite:** the spawn seam exists and is already injectable for tests. Lift one
+step behind it (the merge), give it an argv contract like `quaude-fuse.js`'s, and see whether the
+step list, the timing record, and the CMake edge all fall out of that one change. If they do, the
+rest is the same move applied N times. If they don't, we learned it for the price of one refactor.
 
 ## ★★ SHIPPED ENGINE TEMPLATES PREDATE THE uid/gid FIX — cross-fused Linux quaude is DOA (2026-08-09)
 
