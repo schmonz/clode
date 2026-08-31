@@ -3098,6 +3098,33 @@ date-versioning names the day of the tag rather than the day of the draft. A bum
 natural place for that too: it can refuse to write a date that is not today, which is a rule
 currently kept by a human remembering it.
 
+### The deadlock guard cannot get scratch space on Windows runners (deferred 2026-08-31)
+
+The `bun-graph` deadlock guard decodes a ~4MB frame to ~6MB, and `test / suite (windows-latest)`
+has run out of disk mid-decode twice — at `482e9ec`, and again at `9ee9b1a` WITH a `RUNNER_TEMP`
+redirect in place, which means the roomy volume is not where I assumed it was. Two blind fixes
+from off-box, both wrong:
+
+- job-wide `TMP/TEMP/TMPDIR -> RUNNER_TEMP` (`4c8d94c`): fixed the space, broke `tar` — Git for
+  Windows ships GNU tar, which reads `D:\a\_temp\x` as the REMOTE HOST `D`. Reverted.
+- redirect scoped to the test file (`460ea61`, `9ee9b1a`): moved the fixture, then the product's
+  `os.tmpdir()` staging too — and it STILL ran out.
+
+**Shipped as a loud skip**, not a red: an ENOSPC-shaped child result now skips naming both sizes,
+because "the host had no room to run this check" is not "the decoder streams through stdin", and
+reporting the second when the first happened is a lie about the product. The skip is deliberately
+narrow — a real decoder failure, a hang, and a success all still take the assertion path
+(verified by table).
+
+**Why it cannot simply use a smaller fixture:** the hazard only appears past ~2.65MB through the
+pipe, so the frame has to be genuinely large. A highly-compressible payload would shrink the
+frame and defeat the guard.
+
+**To fix properly**, someone needs to look at an actual Windows runner and answer what none of my
+attempts could from here: which volume has room, how much, and where `spawnSync` stdio capture
+puts its bytes on win32. Until then this guard is dark on Windows — and a skipped oracle reads
+like a clean one, which is the whole reason it says so out loud.
+
 ### ★★★ Nothing gates the gates — make "a guard that cannot fail" structurally impossible (user, 2026-08-29)
 
 **The user:** "How are you finding these gaps? Is it automated into the build? Or is that another
