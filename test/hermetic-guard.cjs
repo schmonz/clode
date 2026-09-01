@@ -6,22 +6,28 @@
 // test-fake deps. Pure Node stdlib; fs injectable for tests.
 const fs = require('fs');
 const path = require('path');
+const tree = require('./tree-guard.cjs');
 
+// A snapshot line is "<watched-root>::<relpath>|<size>|<mtime>|<mode>". The watched
+// root is kept in the line so a diff can name WHICH watched dir moved, and so the
+// string[] shape the callers already expect is unchanged.
 function snapshot(paths, fsm = fs) {
-  return paths.map((p) => {
-    try { return `${p}|${fsm.statSync(p).mtimeMs}`; }
-    catch { return `${p}|ABSENT`; }
-  });
+  const out = [];
+  for (const p of paths) {
+    let missing = true;
+    for (const [rel, v] of tree.walk(p, { fsm })) { missing = false; out.push(`${p}::${rel}|${v}`); }
+    if (missing) out.push(`${p}|ABSENT-OR-EMPTY`);
+  }
+  return out;
 }
 
 function diffSnapshots(before, after) {
-  const b = new Map(before.map((l) => [l.split('|')[0], l]));
+  const b = new Set(before);
+  const a = new Set(after);
   const changed = [];
-  for (const line of after) {
-    const p = line.split('|')[0];
-    if (b.get(p) !== line) changed.push(`${b.get(p) || `${p}|<new>`} -> ${line}`);
-  }
-  return changed;
+  for (const line of after) if (!b.has(line)) changed.push(`+ ${line}`);
+  for (const line of before) if (!a.has(line)) changed.push(`- ${line}`);
+  return changed.sort();
 }
 
 function preflight(dataStore, fsm = fs) {
