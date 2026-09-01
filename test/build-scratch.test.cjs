@@ -48,3 +48,37 @@ test('isInsideCheckout is true inside, false outside', () => {
   assert.strictEqual(S.isInsideCheckout(path.join(root, 'build', 'x')), true);
   assert.strictEqual(S.isInsideCheckout(os.tmpdir()), false);
 });
+
+const cp = require('node:child_process');
+
+test('probeExec succeeds in an ordinary temp dir', () => {
+  const r = S.probeExec(fs.mkdtempSync(path.join(os.tmpdir(), 'exec-ok-')));
+  assert.strictEqual(r.ok, true, `expected exec-able, got: ${r.reason}`);
+});
+
+test('probeExec fails when the script cannot run', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'exec-no-'));
+  const r = S.probeExec(dir, {
+    spawnSync: () => ({ status: 126, error: null, stderr: Buffer.from('Permission denied') }),
+  });
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /exit 126|Permission denied/);
+});
+
+test('probeExec fails when the dir is not writable', () => {
+  const r = S.probeExec('/definitely/not/a/real/dir/anywhere');
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /cannot write/i);
+});
+
+test('probeExec is skipped on win32, with the reason stated', () => {
+  const r = S.probeExec(os.tmpdir(), { platform: 'win32' });
+  assert.strictEqual(r.ok, true);
+  assert.match(r.reason, /win32/);
+});
+
+test('probeExec leaves nothing behind', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'exec-clean-'));
+  S.probeExec(dir);
+  assert.deepStrictEqual(fs.readdirSync(dir), []);
+});
