@@ -1,9 +1,12 @@
 'use strict';
-// hermetic-guard — the enforcement backstop for the test suite. run-all.sh snapshots
-// the real dirs a test must never touch (real store/cache/bin + repo build/) before
-// the suite and asserts them unchanged after; any creation/mtime change fails the run.
-// Also a preflight that refuses to run against a store already contaminated with
-// test-fake deps. Pure Node stdlib; fs injectable for tests.
+// hermetic-guard — the enforcement backstop for the test suite. test/run.mjs snapshots
+// the real EXTERNAL dirs a test must never touch (GUARD_WATCH: the real data store,
+// ~/.cache/clode, ~/.local/bin) before the suite and asserts them unchanged after; any
+// creation/mtime change fails the run. The repo's OWN build/ dir is NOT watched here —
+// it is covered by a separate whole-checkout tree-immutability gate (test/tree-guard.cjs,
+// driven from test/run.mjs), which this module has no involvement in. Also a preflight
+// that refuses to run against a store already contaminated with test-fake deps. Pure
+// Node stdlib; fs injectable for tests.
 const fs = require('fs');
 const path = require('path');
 const tree = require('./tree-guard.cjs');

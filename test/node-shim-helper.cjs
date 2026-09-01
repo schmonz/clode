@@ -1,6 +1,8 @@
 'use strict';
 // Locates the patched tjs binary and runs entries through the node-shim
-// loader. Tests SKIP when no binary is present (CLODE_TJS or build/tjs/tjs).
+// loader. Tests SKIP when no binary is present (CLODE_TJS, or the scratch dir
+// tjsBin() resolves through build-scratch.cjs's buildPath() — see below; run
+// scripts/build-tjs.mjs to produce one).
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -11,9 +13,11 @@ const REPO = path.resolve(__dirname, '..');
 const LOADER = path.join(REPO, 'libexec/node-shim/loader.cjs');
 
 function tjsPath() {
-  // Default is the platform-unique path (build/tjs/<osToken>-<arch>) — never the
-  // bare build/tjs/tjs, whose shared location let a foreign-platform binary linger
-  // and defeat this gate (a macOS Mach-O on a NetBSD tree → exec format error).
+  // Default is the platform-unique scratch path (tjsBin() -> tjsDir() ->
+  // buildPath('tjs', <osToken>-<arch>), off-tree via build-scratch.cjs — formerly
+  // build/tjs/<osToken>-<arch>) — never a single shared bare path, whose shared
+  // location let a foreign-platform binary linger and defeat this gate (a macOS
+  // Mach-O on a NetBSD tree → exec format error).
   const cand = process.env.CLODE_TJS || tjsBin(REPO);
   return fs.existsSync(cand) ? cand : null;
 }
@@ -135,7 +139,10 @@ function resolveBin(name) {
 }
 
 function skipUnlessTjs(t) {
-  if (!tjsPath()) { t.skip('no tjs binary (CLODE_TJS or build/tjs/tjs); run scripts/build-tjs.mjs'); return true; }
+  if (!tjsPath()) {
+    t.skip(`no tjs binary (CLODE_TJS or ${tjsBin(REPO)}); run scripts/build-tjs.mjs`);
+    return true;
+  }
   return false;
 }
 

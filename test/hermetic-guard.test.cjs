@@ -106,6 +106,38 @@ test('{path, ignore} entry: a write inside the ignored tjs-vendor corner is sile
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('{path, ignore} entry: a write inside the ignored scratch corner is silent, a write elsewhere under the cache root is not (Finding 4)', () => {
+  // Fixture shaped like the REAL watched root as of Finding 4: ~/.cache/clode with
+  // BOTH a tjs-vendor corner and a scratch corner ignored — build-scratch.cjs's
+  // last-resort allocator candidate. Proves the new 'scratch' exclusion works AND
+  // that adding it did not blind the guard to anything else under the same root
+  // (including the pre-existing tjs-vendor corner, still exercised alongside it).
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hg-scratch-'));
+  const scratch = path.join(dir, 'scratch');
+  fs.mkdirSync(path.join(scratch, 'toolchain', 'macos-14-arm64-node24'), { recursive: true });
+  fs.writeFileSync(path.join(scratch, 'toolchain', 'macos-14-arm64-node24', 'esbuild.bin'), 'x');
+  fs.writeFileSync(path.join(dir, 'other-tool.bin'), 'x');
+  const watched = { path: dir, ignore: ['tjs-vendor', 'scratch'] };
+  const before = G.snapshot([watched]);
+
+  // Stands in for a real build running through build-scratch.cjs's allocator, which
+  // falls through to <cacheBase>/clode/scratch only on a hardened guest / noexec
+  // /tmp / no-TMPDIR host — this write is that allocator doing its job, not a
+  // violation of it.
+  fs.writeFileSync(path.join(scratch, 'toolchain', 'macos-14-arm64-node24', 'esbuild.bin'), 'yy');
+  assert.deepStrictEqual(G.diffSnapshots(before, G.snapshot([watched])), [],
+    'a write inside the ignored scratch prefix must not be reported');
+
+  // Anything else under the same watched cache root is still a real violation — the
+  // new exclusion must not blind the guard beyond exactly what it names.
+  fs.writeFileSync(path.join(dir, 'other-tool.bin'), 'yy');
+  const changed = G.diffSnapshots(before, G.snapshot([watched]));
+  assert.ok(changed.length > 0, 'a write elsewhere under the watched cache root must still be reported');
+  assert.ok(changed.join('\n').includes('other-tool.bin'), `expected other-tool.bin in: ${changed.join(', ')}`);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('{path, ignore} entry: a write inside the ignored bundle corner is silent, a write elsewhere under build/ is not', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hg-build-'));
   const bundle = path.join(dir, 'bundle');

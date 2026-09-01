@@ -9,7 +9,10 @@
 //   CLODE_TJS_VENDOR  checkout parent dir (CI uses a scratch dir so the tree is
 //                     constructed from committed material alone: pinned clone +
 //                     patches — vendor/ is uncommitted scratch locally)
-//   CLODE_TJS_OUT     output dir for the tjs binary (default build/tjs)
+//   CLODE_TJS_OUT     output dir for the tjs binary (default: platform-tag.cjs's
+//                     tjsDir() — build-scratch.cjs's buildPath('tjs', <osToken>-<arch>),
+//                     OUTSIDE the checkout entirely; no longer build/tjs, which was
+//                     retired when scratch dirs moved off-tree — see build-scratch.cjs)
 //   CLODE_TJS_STATIC  =1: fully-static link (musl legs) — -static plus
 //                     BUILD_WITH_FFI=OFF (libffi is the ONLY external dep and
 //                     tjs:ffi's dlopen is useless in a static binary; nothing

@@ -111,11 +111,19 @@ test('probeExec returns {ok:false} for undefined dir, never throws', () => {
   assert.strictEqual(typeof r.reason, 'string');
 });
 
-test('probeExec returns {ok:false} for null opts, never throws', () => {
-  // Use an invalid directory with null opts to trigger write error (not a throw)
-  const r = S.probeExec('/definitely/not/writable/with/null-opts', null);
-  assert.strictEqual(r.ok, false);
-  assert.strictEqual(typeof r.reason, 'string');
+test('probeExec never throws on null opts, and normalizes null the same as omitted', () => {
+  // '/definitely/not/writable/...' is the SAME unportable premise 71667bf already
+  // fixed in the sibling "not writable" test above (real Windows CI caught it
+  // there: mkdirSync at a drive root SUCCEEDS, the .cmd probe returns 42, ok is
+  // true, and the old assertion — expecting ok:false — failed, leaving
+  // C:\definitely\... behind). This test's actual job, per its own name, is only
+  // "null opts doesn't throw" (opts={} only guards `undefined`, not `null` — see
+  // the file header comment on probeExec) — that never-throws contract is
+  // orthogonal to whether the probe SUCCEEDS, so exercise it with a real,
+  // portable, writable temp dir and assert the true never-throws behavior: ok===true.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'null-opts-'));
+  const r = S.probeExec(dir, null);
+  assert.strictEqual(r.ok, true, `expected exec-able, got: ${r.reason}`);
 });
 
 test('probeExec fails with error branch coverage (real EACCES)', (t) => {
@@ -215,6 +223,34 @@ test('buildPath refuses to hand back a path inside the checkout', () => {
     () => S.buildPath(escape, 'build', { env: { CLODE_BUILD_SCRATCH: scratch, HOME: os.homedir() } }),
     /CLODE_BUILD_SCRATCH|checkout/,
   );
+});
+
+test('buildPath memoizes scratchRoot: two calls with the same env+probe probe only ONCE', () => {
+  // Finding 2: scratchRoot's only real cost is probeExec's spawnSync. Count
+  // invocations via an injected probe (a fresh closure, so it never collides with
+  // another test's cache slot) to pin that a second buildPath() call with the SAME
+  // env+probe reuses the first resolution instead of re-probing.
+  const good = fs.mkdtempSync(path.join(os.tmpdir(), 'memo-'));
+  let calls = 0;
+  const probe = () => { calls++; return { ok: true, reason: 'stub' }; };
+  const env = { CLODE_BUILD_SCRATCH: good, HOME: os.homedir() };
+  const p1 = S.buildPath('x', { env, probe });
+  const p2 = S.buildPath('y', { env, probe });
+  assert.strictEqual(calls, 1, `probe should be invoked once, got ${calls}`);
+  assert.strictEqual(path.dirname(p1), good);
+  assert.strictEqual(path.dirname(p2), good);
+});
+
+test('buildPath memoization: a CHANGED env re-probes (does not serve a stale root)', () => {
+  const goodA = fs.mkdtempSync(path.join(os.tmpdir(), 'memo-a-'));
+  const goodB = fs.mkdtempSync(path.join(os.tmpdir(), 'memo-b-'));
+  let calls = 0;
+  const probe = () => { calls++; return { ok: true, reason: 'stub' }; };
+  const p1 = S.buildPath('x', { env: { CLODE_BUILD_SCRATCH: goodA, HOME: os.homedir() }, probe });
+  const p2 = S.buildPath('x', { env: { CLODE_BUILD_SCRATCH: goodB, HOME: os.homedir() }, probe });
+  assert.strictEqual(calls, 2, `changed env must re-probe, got ${calls} calls`);
+  assert.strictEqual(path.dirname(p1), goodA);
+  assert.strictEqual(path.dirname(p2), goodB);
 });
 
 const PT = require('../scripts/platform-tag.cjs');

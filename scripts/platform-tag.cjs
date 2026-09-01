@@ -175,9 +175,12 @@ function tjsVendorParentDir(env = process.env) {
   //
   // ~/.cache/clode is local, survives reboots, and is where clode already keeps
   // durable state. The XDG lookup is duplicated from libexec/clode-paths.cjs on
-  // purpose rather than imported: this file is a dependency-free leaf (see
-  // repoVersion below for the same call), and clode-paths pulls in more than a
-  // path helper should.
+  // purpose rather than imported: this file already requires ./build-scratch.cjs
+  // (a real dependency — node:child_process, a subprocess spawn — see that
+  // module's own header, and this is no longer the "dependency-free leaf" it once
+  // was; see repoVersion below for the matching note), but clode-paths.cjs is a
+  // dependency of a DIFFERENT kind — it pulls in far more than a path helper
+  // should just to duplicate a 3-line XDG lookup.
   //
   // Anyone whose HOME is on NFS should set CLODE_TJS_VENDOR (or
   // CLODE_TJS_LOCAL_ROOT) — the overrides above are unchanged, and CI already
@@ -190,9 +193,18 @@ function tjsVendorParentDir(env = process.env) {
 
 // The VERSION file at the repo root — the same source scripts/build-clode-main.mjs's
 // own repoVersion() reads (for the embedded __CLODE_BUNDLE_VERSION__ define).
-// Duplicated on purpose, not shared: this is a 3-line leaf read and platform-tag.cjs
-// must stay a dependency-free leaf module (build-clode-main.mjs already requires THIS
-// file; the reverse would be backwards).
+// Duplicated on purpose, not shared: build-clode-main.mjs already requires THIS
+// file, so the reverse (platform-tag.cjs requiring build-clode-main.mjs for a
+// 3-line VERSION read) would be backwards. This file is NOT a dependency-free leaf
+// any more — it requires ./build-scratch.cjs (toolchainDir/tjsDir/harnessDir all
+// resolve through its buildPath(), which pulls in node:child_process to spawn a
+// probe — see build-scratch.cjs's own header). The obligation that survives is
+// narrower: platform-tag.cjs must still not require anything HEAVIER than that —
+// no clode-paths.cjs, no build-clode-main.mjs — and every module it DOES require
+// (build-scratch.cjs, canonical-name.cjs) must be carried explicitly in
+// libexec/quaude-fuse.js's naude-assembler member list (test/naude-assembler-
+// closure.test.cjs enforces this by walking the require closure; it is what
+// caught build-scratch.cjs's addition needing a member-list entry).
 function repoVersion(repo) {
   try { return fs.readFileSync(path.join(repo, 'VERSION'), 'utf8').replace(/\n+$/, '') || 'dev'; }
   catch { return 'dev'; }

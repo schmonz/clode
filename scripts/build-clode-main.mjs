@@ -14,7 +14,7 @@ import url from 'node:url';
 
 const require = createRequire(import.meta.url);
 const { toolchainDir } = require('./platform-tag.cjs');
-const { npmCliPath } = require('./lib/npm-cli.cjs');
+const { npmCliPath, envWithRealNodeOnPath } = require('./lib/npm-cli.cjs');
 
 const REPO = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '..');
 // The native tool cache (esbuild) — keyed by platform+node-major (toolchainDir;
@@ -37,7 +37,15 @@ fs.mkdirSync(OUT, { recursive: true });
 // (not lazily inside runNpm) so a missing npm fails loud immediately, before any
 // other work — preserved from the pre-extraction behavior of this file.
 const NPM_CLI = npmCliPath({ prefix: 'build-clode-main' });
-function runNpm(args, opts) { execFileSync(process.execPath, [NPM_CLI, ...args], opts); }
+// TOOLCHAIN now resolves off-tree (buildPath(), above) — a version-manager shim
+// (asdf/mise/volta) resolving `node` by walking up from cwd finds nothing there and
+// exits 126 partway through npm's own lifecycle scripts (esbuild's postinstall).
+// envWithRealNodeOnPath sidesteps every manager's shim by putting the ALREADY-RUNNING
+// real node's dir first on PATH — see scripts/lib/npm-cli.cjs for the full rationale
+// and the proof this reproduces on this box.
+function runNpm(args, opts) {
+  execFileSync(process.execPath, [NPM_CLI, ...args], { ...opts, env: envWithRealNodeOnPath(opts && opts.env) });
+}
 
 // Load a build-only toolchain package's JS API (esbuild) from the per-tag dir. We use
 // the API, not the CLI: esbuild's published bin/esbuild is a NATIVE binary on POSIX but

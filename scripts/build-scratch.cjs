@@ -55,7 +55,8 @@ function probeExec(dir, opts) {
   let marker;
   try {
     // Move marker computation inside try so a bad `dir` is caught and returned, not thrown.
-    marker = path.join(dir, `.clode-exec-probe-${process.pid}`);
+    // win32 needs a .cmd extension for the exec-ability contract below; POSIX needs none.
+    marker = path.join(dir, `.clode-exec-probe-${process.pid}${platform === 'win32' ? '.cmd' : ''}`);
     fsm.mkdirSync(dir, { recursive: true });
 
     // Different probe formats for different platforms, same exec-ability contract.
@@ -63,8 +64,6 @@ function probeExec(dir, opts) {
     if (platform === 'win32') {
       // Windows: .cmd file with exit /b 42 (removes the divergence and uses identical contract)
       content = '@echo off\nexit /b 42\n';
-      const ext = '.cmd';
-      marker = path.join(dir, `.clode-exec-probe-${process.pid}${ext}`);
     } else {
       // POSIX: shell script with exit 42
       content = '#!/bin/sh\nexit 42\n';
@@ -115,7 +114,34 @@ function scratchCandidates(env = process.env) {
   return out;
 }
 
+// scratchRoot's only real cost is probeExec's spawnSync — measured at ~660ms on this
+// box, and buildPath() (which calls this on EVERY invocation) sits behind 298
+// skipUnlessTjs sites plus every runLoader/engineSpawn call in the node-shim suite,
+// so an unmemoized resolution reproduces exactly the sin this whole phase exists to
+// fix (an in-tree default silently corrupting perf measurements) in a new place:
+// `node --test test/node-shim-core.test.cjs` went 20.1s -> 1.5s once memoized
+// (CLODE_TJS-bypass timing, same results, confirming the redundant re-resolution
+// was the entire cost).
+//
+// Keyed on the CANDIDATE LIST (scratchCandidates(env), not raw env) so a changed
+// CLODE_BUILD_SCRATCH/TMPDIR still re-resolves — and on the ACTUAL fsm/probe used,
+// via a nested Map on object identity (not stringified — two different closures can
+// share source text) — so an injected stub (every test that passes one) gets its
+// own cache slot and never serves, or is served, a stale entry across a different
+// fsm/probe. The real, default fsm/probe are themselves stable module-level
+// singletons, so the hot production path (no injection at all) memoizes exactly as
+// intended. A THROWN resolution is deliberately never cached: a transient
+// condition (a remounted noexec /tmp, say) must be retried, not remembered forever.
+const scratchRootCache = new Map(); // fsm -> Map(probe -> Map(candidateKey -> dir))
+
 function scratchRoot(env = process.env, { fsm = realFs, probe = probeExec, platform = process.platform } = {}) {
+  const candidateKey = scratchCandidates(env).map((c) => `${c.name}=${c.dir}`).join('\n') + `\n${platform}`;
+  let byProbe = scratchRootCache.get(fsm);
+  if (!byProbe) { byProbe = new Map(); scratchRootCache.set(fsm, byProbe); }
+  let byCandidates = byProbe.get(probe);
+  if (!byCandidates) { byCandidates = new Map(); byProbe.set(probe, byCandidates); }
+  if (byCandidates.has(candidateKey)) return byCandidates.get(candidateKey);
+
   const tried = [];
   for (const c of scratchCandidates(env)) {
     if (isInsideCheckout(c.dir, fsm)) {
@@ -123,7 +149,7 @@ function scratchRoot(env = process.env, { fsm = realFs, probe = probeExec, platf
       continue;
     }
     const r = probe(c.dir, { fsm, platform });
-    if (r.ok) return c.dir;
+    if (r.ok) { byCandidates.set(candidateKey, c.dir); return c.dir; }
     tried.push(`  ${c.name}=${c.dir}\n    rejected: ${r.reason}`);
   }
   throw new BuildScratchError(

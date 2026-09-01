@@ -49,8 +49,7 @@ process.env.CLODE_KC_MODE = require('../scripts/kc-mode.cjs').defaultKcMode(proc
 // test/node-shim-tty-helper.cjs, scripts/tui-probe.mjs) already resolves node-pty through
 // harnessDir(REPO), so installing anywhere else here would silently orphan the install
 // this script performs from the location those callers actually look in.
-const { platformTag, harnessDir } = require('../scripts/platform-tag.cjs');
-const TAG = platformTag();
+const { harnessDir } = require('../scripts/platform-tag.cjs');
 const HARNESS = harnessDir(ROOT);
 process.env.NODE_PATH = [path.join(HARNESS, 'node_modules'), process.env.NODE_PATH]
   .filter(Boolean).join(path.delimiter);
@@ -85,10 +84,23 @@ if (!harnessOk()) {
   const lock = path.join('test', 'package-lock.json');
   if (fs.existsSync(lock)) fs.copyFileSync(lock, path.join(HARNESS, 'package-lock.json'));
   const { patchNodePty } = require('./harness-patch.cjs');
+  // HARNESS resolves off-tree (harnessDir() -> buildPath(), same as the toolchain
+  // dir below) — a version-manager shim (asdf/mise/volta) resolving `node` by
+  // walking up from cwd finds nothing there and exits 126 partway through npm's own
+  // lifecycle/rebuild scripts. envWithRealNodeOnPath sidesteps every manager's shim
+  // by putting the ALREADY-RUNNING real node's dir first on PATH — see
+  // scripts/lib/npm-cli.cjs for the full rationale and the proof this reproduces on
+  // this box (`cd <scratch> && sh -c "node -v"` exits 126; from inside the checkout
+  // it does not). node-pty ships prebuilds, so a broken rebuild here degrades
+  // silently on most hosts, but NOT everywhere: test/harness-patch.cjs exists
+  // precisely because NetBSD has none, where this would be fatal instead.
+  const { envWithRealNodeOnPath } = require('../scripts/lib/npm-cli.cjs');
+  const harnessEnv = envWithRealNodeOnPath(process.env);
   try {
-    execFileSync(process.execPath, [npmCliPath(), 'install', '--ignore-scripts'], { cwd: HARNESS, stdio: 'inherit' });
+    execFileSync(process.execPath, [npmCliPath(), 'install', '--ignore-scripts'],
+      { cwd: HARNESS, stdio: 'inherit', env: harnessEnv });
     patchNodePty(HARNESS);   // idempotent; adds the __NetBSD__ branch before the build
-    execFileSync(process.execPath, [npmCliPath(), 'rebuild'], { cwd: HARNESS, stdio: 'inherit' });
+    execFileSync(process.execPath, [npmCliPath(), 'rebuild'], { cwd: HARNESS, stdio: 'inherit', env: harnessEnv });
   } catch (e) {
     console.error(`run: PTY test harness install/build failed: ${e && e.message}`);
   }
@@ -108,17 +120,27 @@ const cacheBase = process.env.XDG_CACHE_HOME || path.join(home, '.cache');
 const REAL_STORE = path.join(dataBase, 'clode');
 // The repo's OWN build/ dir used to be watched here too (ignoring only the `bundle`
 // sub-corner) — it is now covered instead by the whole-checkout tree-immutability gate
-// below, which allows all of build/ (the sanctioned copy-back target) rather than just
-// bundle/. Keeping both would just watch the same directory twice under two different
-// exclusion shapes. What remains here is EXTERNAL real state a test must never touch,
-// which the whole-checkout gate (rooted at ROOT) cannot see at all.
+// below, which allows only build/bundle and build/clode-* (the sanctioned copy-back
+// targets — narrowed off a bare 'build' in Finding 3, so build/toolchain or build/tjs
+// REAPPEARING there is caught, not waved through). Keeping both would just watch the
+// same directory twice under two different exclusion shapes. What remains here is
+// EXTERNAL real state a test must never touch, which the whole-checkout gate (rooted
+// at ROOT) cannot see at all.
 const GUARD_WATCH = [
   REAL_STORE,
   // test/tjs-darwin-poll-fixup.test.cjs:29 runs `node scripts/build-tjs.mjs --source-only`
   // on purpose — its own header says it "resets the shared vendor checkout to pristine
   // and re-applies every patch + fixup". Rewriting tjs-vendor/txiki.js IS that test, not
   // a violation of it.
-  { path: path.join(cacheBase, 'clode'), ignore: ['tjs-vendor'] },
+  //
+  // 'scratch' is ALSO ignored here: build-scratch.cjs's scratchCandidates() names
+  // <cacheBase>/clode/scratch as the last-resort allocator candidate — the one that
+  // gets used on exactly the machines that need it (a hardened guest, a noexec
+  // /tmp, or no TMPDIR at all). Without this, a suite run on such a machine would
+  // report a HERMETICITY VIOLATION for the allocator doing precisely what this
+  // phase told it to do — silent today only because TMPDIR wins the candidate race
+  // on every box that has run this suite so far.
+  { path: path.join(cacheBase, 'clode'), ignore: ['tjs-vendor', 'scratch'] },
   path.join(home, '.local', 'bin'),
 ];
 if (guard.preflight(REAL_STORE).length) {
@@ -150,7 +172,20 @@ const TREE_ALLOW = [
   // as of this task — build/ now holds only artifact dirs (and build/bundle, the
   // platform-independent esbuilt bundle scripts/build-clode-main.mjs declares as
   // its own documented output dir).
-  'build',
+  //
+  // Named ONLY the two shapes that are actually real outputs on disk (Finding 3):
+  // build/clode-* (one dir per host/version — artifactName()'s local shape, or
+  // CI's CLODE_ASSET_NAME override, both always prefixed 'clode-', see
+  // canonical-name.cjs's assetName()) and build/bundle (the unkeyed esbuilt
+  // bundle). A bare 'build' here was blind to build/toolchain/ or build/tjs/
+  // REAPPEARING — a regression of THIS PHASE'S OWN migration off of them, which is
+  // the single thing this gate most ought to catch. naude/quaude are NOT separate
+  // top-level build/ dirs (grep confirms no build/naude, build/quaude path exists
+  // anywhere in the tree) — they are files INSIDE a build/clode-*/ artifact dir
+  // (seaOut()), already covered by the clode-* entry, so they get no entry of
+  // their own.
+  'build/bundle',
+  'build/clode-*',
   // A developer/editor-tooling install target (this project ships zero runtime
   // dependencies — see the repo's "Zero dependencies" doctrine — so clode itself
   // never populates a root node_modules/, but the directory is gitignored and

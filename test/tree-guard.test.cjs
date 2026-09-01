@@ -135,6 +135,31 @@ test('ignore with trailing slash works the same as without', () => {
     'trailing slash should be normalized away');
 });
 
+test('a trailing "*" ignore entry matches any name with that prefix (Finding 3: build/clode-*)', () => {
+  const root = tmp();
+  fs.mkdirSync(path.join(root, 'build', 'clode-0.1-macos-14-arm64'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'build', 'clode-0.1-macos-14-arm64', 'clode'), 'bin');
+  fs.mkdirSync(path.join(root, 'build', 'toolchain'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'build', 'toolchain', 'sneaky'), 'x');
+  const m = G.walk(root, { ignore: ['build/clode-*'] });
+  // The artifact dir (whatever its exact suffix) is ignored...
+  assert.ok(![...m.keys()].some((k) => k.startsWith(path.join('build', 'clode-'))),
+    `expected no build/clode-* entries, got ${[...m.keys()].join(', ')}`);
+  // ...but a DIFFERENT build/ subtree is NOT — the wildcard must not blind the guard
+  // to anything outside the exact family it names.
+  assert.ok(m.has(path.join('build', 'toolchain', 'sneaky')),
+    'build/toolchain must still be reported — a wildcard on clode-* must not swallow it');
+});
+
+test('a trailing "*" ignore entry does not match an unrelated sibling with a similar prefix', () => {
+  const root = tmp();
+  fs.mkdirSync(path.join(root, 'build', 'clode-native-something-else'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'build', 'clode-native-something-else', 'f'), 'x');
+  const m = G.walk(root, { ignore: ['build/clode-x-only-*'] });
+  assert.ok(m.has(path.join('build', 'clode-native-something-else', 'f')),
+    'a wildcard entry must only match its own literal prefix, not "clode-" generally');
+});
+
 test('unreadable walk root is recorded, not indistinguishable from missing/empty', (t) => {
   if (typeof process.getuid === 'function' && process.getuid() === 0) {
     t.skip('running as root: permission bits are bypassed, so this test cannot deny access');

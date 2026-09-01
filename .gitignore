@@ -1,10 +1,12 @@
 # build/ is GENERATED OUTPUT ONLY — no manifests live here anymore (see
-# deps/clode, deps/claude). Three differently-keyed subtrees (see
+# deps/clode, deps/claude). Two subtrees now live here (see
 # scripts/platform-tag.cjs's file header for the why): build/<artifact-name>/
-# (shippable per-host output — naude, clode --self, deps.tar/sig, sea-*),
-# build/toolchain/<platform>-node<major>/ (the esbuild/postject tool cache),
-# build/bundle/ (the platform-independent esbuilt bundles), plus build/tjs/
-# (see below).
+# (shippable per-host output — naude, clode --self, deps.tar/sig, sea-*) and
+# build/bundle/ (the platform-independent esbuilt bundles). The toolchain
+# cache (esbuild/postject) and the patched-tjs engine template moved OFF this
+# tree entirely — they now resolve through build-scratch.cjs's buildPath(),
+# outside any clode source checkout — so build/toolchain/ and build/tjs/ are
+# no longer subtrees that appear here at all.
 build/*
 node_modules/
 test/.harness/
@@ -23,6 +25,4 @@ docs/
 # QuickJS-phase-1 vendor checkouts/builds/tarballs (artifacts; PINS.md records versions)
 spike/quickjs/vendor/
 
-# patched-tjs build output (scripts/build-tjs.mjs)
-build/tjs/
 bench/results/
