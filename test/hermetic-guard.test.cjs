@@ -9,10 +9,9 @@ test('snapshot marks absent vs present and diff detects a new/changed entry', ()
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hg-'));
   const target = path.join(dir, 'store');
   const before = G.snapshot([target]);
-  // An absent path and a present-but-empty directory both walk to nothing, so the
-  // walking snapshot deliberately can't tell them apart (hence ABSENT-OR-EMPTY);
-  // a file inside is what makes "present" observably different from "absent".
-  assert.match(before[0], /\|ABSENT-OR-EMPTY$/);
+  // target does not exist yet, so this pins the ABSENT sentinel specifically
+  // (distinct from EMPTY, which a since-created-but-empty directory gets instead).
+  assert.match(before[0], /\|ABSENT$/);
   fs.mkdirSync(target);
   fs.writeFileSync(path.join(target, 'f'), 'x');
   const after = G.snapshot([target]);
@@ -43,4 +42,35 @@ test('snapshot sees a modification three levels down (was blind)', () => {
   const changed = G.diffSnapshots(before, G.snapshot([root]));
   assert.ok(changed.length > 0, 'deep modification must be reported, got none');
   assert.ok(changed.join('\n').includes('f.txt'), `expected f.txt in: ${changed.join(', ')}`);
+});
+
+test('a watched root going from absent to an existing empty directory produces a non-empty diff', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hg-empty-'));
+  const target = path.join(dir, 'store');
+  const before = G.snapshot([target]);
+  fs.mkdirSync(target);
+  const after = G.snapshot([target]);
+  const changed = G.diffSnapshots(before, after);
+  assert.ok(changed.length > 0, 'absent -> existing empty directory must be reported, got none');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a watched root that is a plain file reports a content change', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hg-file-'));
+  const target = path.join(dir, 'watched.txt');
+  fs.writeFileSync(target, 'one');
+  const before = G.snapshot([target]);
+  fs.writeFileSync(target, 'two-is-longer');
+  const after = G.snapshot([target]);
+  const changed = G.diffSnapshots(before, after);
+  assert.ok(changed.length > 0, "a watched file's content change must be reported, got none");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a genuinely absent watched root reports the ABSENT sentinel, distinct from EMPTY', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hg-absent-'));
+  const missing = path.join(dir, 'does-not-exist');
+  const snap = G.snapshot([missing]);
+  assert.match(snap[0], /\|ABSENT$/);
+  fs.rmSync(dir, { recursive: true, force: true });
 });

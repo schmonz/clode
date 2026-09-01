@@ -8,15 +8,23 @@ const fs = require('fs');
 const path = require('path');
 const tree = require('./tree-guard.cjs');
 
-// A snapshot line is "<watched-root>::<relpath>|<size>|<mtime>|<mode>". The watched
-// root is kept in the line so a diff can name WHICH watched dir moved, and so the
-// string[] shape the callers already expect is unchanged.
+// A snapshot line is either a per-entry "<watched-root>::<relpath>|<size>|<mtime>|<mode>"
+// (the watched root is kept in the line so a diff can name WHICH watched dir moved), or
+// one of three root-level sentinels. tree.walk() alone can't tell "root doesn't exist"
+// apart from "root is an existing empty directory" — both walk to zero entries — so the
+// root's existence/type is checked explicitly here rather than inferred from the walk,
+// and a root that is a plain file (not a directory) gets its own stat recorded instead
+// of silently reading as absent.
 function snapshot(paths, fsm = fs) {
   const out = [];
   for (const p of paths) {
-    let missing = true;
-    for (const [rel, v] of tree.walk(p, { fsm })) { missing = false; out.push(`${p}::${rel}|${v}`); }
-    if (missing) out.push(`${p}|ABSENT-OR-EMPTY`);
+    let st;
+    try { st = fsm.statSync(p); }
+    catch { out.push(`${p}|ABSENT`); continue; }
+    if (!st.isDirectory()) { out.push(`${p}|FILE|${st.size}|${st.mtimeMs}|${st.mode}`); continue; }
+    let empty = true;
+    for (const [rel, v] of tree.walk(p, { fsm })) { empty = false; out.push(`${p}::${rel}|${v}`); }
+    if (empty) out.push(`${p}|EMPTY`);
   }
   return out;
 }
