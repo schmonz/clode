@@ -10,18 +10,31 @@ const path = require('node:path');
 
 function walk(root, { ignore = [], fsm = realFs } = {}) {
   const out = new Map();
-  const skip = ignore.map((p) => path.normalize(p));
+  const skip = ignore.map((p) => {
+    let normalized = path.normalize(p);
+    while (normalized.endsWith(path.sep)) {
+      normalized = normalized.slice(0, -path.sep.length);
+    }
+    return normalized;
+  });
   const visit = (abs, rel) => {
     let entries;
     try { entries = fsm.readdirSync(abs, { withFileTypes: true }); }
-    catch { return; }
+    catch (e) {
+      // Record the directory itself as unreadable, don't recurse
+      if (rel) out.set(rel, `UNREADABLE|${e && e.code}`);
+      return;
+    }
     for (const e of entries) {
       const childRel = rel ? path.join(rel, e.name) : e.name;
       if (skip.some((s) => childRel === s || childRel.startsWith(s + path.sep))) continue;
       const childAbs = path.join(abs, e.name);
       if (e.isDirectory()) { visit(childAbs, childRel); continue; }
       let st;
-      try { st = fsm.lstatSync(childAbs); } catch { continue; }
+      try { st = fsm.lstatSync(childAbs); } catch (err) {
+        out.set(childRel, `UNREADABLE|${err && err.code}`);
+        continue;
+      }
       out.set(childRel, `${st.size}|${st.mtimeMs}|${st.mode}`);
     }
   };

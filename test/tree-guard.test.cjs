@@ -52,3 +52,77 @@ test('ignore prefixes are skipped', () => {
 test('walk of a missing root is empty, not a throw', () => {
   assert.strictEqual(G.walk(path.join(tmp(), 'nope')).size, 0);
 });
+
+test('unreadable file is recorded, not silently omitted', () => {
+  const root = tmp();
+  fs.writeFileSync(path.join(root, 'readable.txt'), 'x');
+  fs.writeFileSync(path.join(root, 'denied.txt'), 'y');
+  const mockFs = {
+    readdirSync: fs.readdirSync.bind(fs),
+    statSync: fs.statSync.bind(fs),
+    lstatSync: (p) => {
+      if (p.endsWith('denied.txt')) {
+        const err = new Error('Permission denied');
+        err.code = 'EACCES';
+        throw err;
+      }
+      return fs.lstatSync(p);
+    },
+  };
+  const m = G.walk(root, { fsm: mockFs });
+  assert.ok(m.has('denied.txt'), 'unreadable file should be in the map');
+  const entry = m.get('denied.txt');
+  assert.ok(entry.startsWith('UNREADABLE|'), `expected UNREADABLE marker, got ${entry}`);
+  assert.ok(entry.includes('EACCES'), `expected EACCES in error, got ${entry}`);
+});
+
+test('unreadable directory is recorded, not silently omitted', () => {
+  const root = tmp();
+  const unreadableDir = path.join(root, 'denied-dir');
+  fs.mkdirSync(unreadableDir);
+  fs.mkdirSync(path.join(unreadableDir, 'nested'), { recursive: true });
+  fs.writeFileSync(path.join(unreadableDir, 'nested', 'deep.txt'), 'x');
+  fs.chmodSync(unreadableDir, 0o000);
+  const before = G.walk(root);
+  // The unreadable directory itself should be recorded
+  const entry = before.get('denied-dir');
+  assert.ok(entry, 'unreadable directory should be in the map');
+  assert.ok(entry.startsWith('UNREADABLE|'), `expected UNREADABLE marker, got ${entry}`);
+  // Nested files should not be in the map (can't descend)
+  assert.ok(!before.has(path.join('denied-dir', 'nested', 'deep.txt')),
+    'nested file should not be visible through unreadable directory');
+  // Restore perms so cleanup works
+  fs.chmodSync(unreadableDir, 0o755);
+});
+
+test('lstatSync records symlink properties, not target properties', () => {
+  const root = tmp();
+  const targetFile = path.join(root, 'target.txt');
+  const linkFile = path.join(root, 'link');
+  fs.writeFileSync(targetFile, 'x');
+  fs.symlinkSync(targetFile, linkFile);
+  const m = G.walk(root);
+  assert.ok(m.has('link'), 'symlink should be recorded');
+  const linkEntry = m.get('link');
+  const targetEntry = m.get('target.txt');
+  assert.notStrictEqual(linkEntry, targetEntry,
+    'symlink and target should have different metadata');
+  // Symlink mode should have S_IFLNK bit set; target should not
+  const linkMode = parseInt(linkEntry.split('|')[2]);
+  const targetMode = parseInt(targetEntry.split('|')[2]);
+  // S_IFLNK is 0o120000; check that link has a different mode type
+  assert.notStrictEqual(linkMode & 0o170000, targetMode & 0o170000,
+    `link mode type (${linkMode.toString(8)}) should differ from target (${targetMode.toString(8)})`);
+});
+
+test('ignore with trailing slash works the same as without', () => {
+  const root = tmp();
+  fs.mkdirSync(path.join(root, 'build', 'x'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'build', 'x', 'art'), 'x');
+  fs.writeFileSync(path.join(root, 'kept'), 'x');
+  const mWithoutSlash = G.walk(root, { ignore: ['build'] });
+  const mWithSlash = G.walk(root, { ignore: ['build/'] });
+  assert.deepStrictEqual([...mWithoutSlash.keys()], ['kept']);
+  assert.deepStrictEqual([...mWithSlash.keys()], ['kept'],
+    'trailing slash should be normalized away');
+});
