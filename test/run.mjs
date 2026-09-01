@@ -45,9 +45,13 @@ process.env.CLODE_NODE = process.execPath;
 process.env.CLODE_KC_MODE = require('../scripts/kc-mode.cjs').defaultKcMode(process.env);
 
 // Platform-tagged harness dir + NODE_PATH (path.delimiter, NOT a hardcoded ':').
-const { platformTag } = require('../scripts/platform-tag.cjs');
+// Resolved through harnessDir(), not hand-joined: every OTHER caller (test/tui-screen.cjs,
+// test/node-shim-tty-helper.cjs, scripts/tui-probe.mjs) already resolves node-pty through
+// harnessDir(REPO), so installing anywhere else here would silently orphan the install
+// this script performs from the location those callers actually look in.
+const { platformTag, harnessDir } = require('../scripts/platform-tag.cjs');
 const TAG = platformTag();
-const HARNESS = path.join(ROOT, 'test', '.harness', TAG);
+const HARNESS = harnessDir(ROOT);
 process.env.NODE_PATH = [path.join(HARNESS, 'node_modules'), process.env.NODE_PATH]
   .filter(Boolean).join(path.delimiter);
 
@@ -75,7 +79,7 @@ function harnessOk() {
 // THEN build the addons. If it still can't build, that's a LOUD hard failure to fix,
 // not a skip.
 if (!harnessOk()) {
-  console.error(`run: installing PTY test harness deps into test/.harness/${TAG} ...`);
+  console.error(`run: installing PTY test harness deps into ${HARNESS} ...`);
   fs.mkdirSync(HARNESS, { recursive: true });
   fs.copyFileSync(path.join('test', 'package.json'), path.join(HARNESS, 'package.json'));
   const lock = path.join('test', 'package-lock.json');
@@ -102,11 +106,12 @@ const home = os.homedir();
 const dataBase = process.env.XDG_DATA_HOME || path.join(home, '.local', 'share');
 const cacheBase = process.env.XDG_CACHE_HOME || path.join(home, '.cache');
 const REAL_STORE = path.join(dataBase, 'clode');
-// Two of these watched roots have a build-owned scratch corner INSIDE them that a test
-// legitimately (and on purpose) writes to; excluding just that corner, not the whole
-// root, is what makes the walking guard (which can see three levels down, unlike the
-// old mtimeMs-on-the-named-path version) usable at all. Everything else under each root
-// is still watched in full.
+// The repo's OWN build/ dir used to be watched here too (ignoring only the `bundle`
+// sub-corner) — it is now covered instead by the whole-checkout tree-immutability gate
+// below, which allows all of build/ (the sanctioned copy-back target) rather than just
+// bundle/. Keeping both would just watch the same directory twice under two different
+// exclusion shapes. What remains here is EXTERNAL real state a test must never touch,
+// which the whole-checkout gate (rooted at ROOT) cannot see at all.
 const GUARD_WATCH = [
   REAL_STORE,
   // test/tjs-darwin-poll-fixup.test.cjs:29 runs `node scripts/build-tjs.mjs --source-only`
@@ -115,16 +120,59 @@ const GUARD_WATCH = [
   // a violation of it.
   { path: path.join(cacheBase, 'clode'), ignore: ['tjs-vendor'] },
   path.join(home, '.local', 'bin'),
-  // scripts/build-clode-main.mjs:30 sets `build/bundle` as its declared, documented
-  // output directory (unkeyed on purpose — see that file's own comment). Writing the
-  // bundle there is the build doing its job, not a test touching state it shouldn't.
-  { path: path.join(ROOT, 'build'), ignore: ['bundle'] },
 ];
 if (guard.preflight(REAL_STORE).length) {
   console.error(`run: REAL store contaminated with *-clode-test deps under ${REAL_STORE}`);
   process.exit(2);
 }
 const before = guard.snapshot(GUARD_WATCH);
+
+// Whole-checkout tree-immutability gate (Task 8): the property under test is "a
+// build/test writes nothing into the source tree", and watching only the directory
+// we happen to expect writes in (as GUARD_WATCH's old build/ entry did) is how a
+// guard ends up structurally unable to fail anywhere else. This walks the ENTIRE
+// checkout — libexec/, scripts/, deps/, spike/, everything — not just build/.
+//
+// Every TREE_ALLOW entry is an intentional, individually-justified exception; an
+// unexplained entry here is exactly the exempt-by-name pattern this phase exists to
+// remove, so a reviewer must be able to tell an intentional exclusion from a
+// swept-under-the-rug one without archaeology:
+const tree = require('./tree-guard.cjs');
+const TREE_ALLOW = [
+  // git refreshes its own index on plain read-only commands (status, diff, log);
+  // that is git doing its job, not a test/build writing into the checkout.
+  '.git',
+  // The sanctioned copy-back target for a FINISHED, shippable artifact — see
+  // scripts/platform-tag.cjs's file header and artifactDir(): "if it's in
+  // build/clode-*, it's shippable" is the whole contract that dir exists to serve.
+  // Everything else that used to live under build/ (the toolchain cache, the tjs
+  // engine template, the harness) is SCRATCH and has moved off through buildPath()
+  // as of this task — build/ now holds only artifact dirs (and build/bundle, the
+  // platform-independent esbuilt bundle scripts/build-clode-main.mjs declares as
+  // its own documented output dir).
+  'build',
+  // A developer/editor-tooling install target (this project ships zero runtime
+  // dependencies — see the repo's "Zero dependencies" doctrine — so clode itself
+  // never populates a root node_modules/, but the directory is gitignored and
+  // excluded here defensively so an incidental local `npm install` for tooling
+  // never trips the gate).
+  'node_modules',
+  // Ephemeral tooling scratch for the plan-execution machinery running THIS very
+  // phase: reports and ledger entries under .superpowers/sdd/. Deliberately
+  // excluded from git and deleted when the plan finishes — genuinely ironic given
+  // what this phase is about, but moving it would desync the tooling's own scripts
+  // from where they read/write it, so it is named here on purpose, not swept in
+  // silently.
+  '.superpowers',
+  // The PTY/TUI native-addon test-harness cache. As of this task harnessDir()
+  // itself resolves through buildPath() (out of the checkout), so a fresh install
+  // no longer lands here — but this directory predates that move and may still
+  // exist on disk (gitignored) from before it, on any box that ran the suite
+  // pre-migration. Excluded so the gate's verdict never depends on whether that
+  // leftover directory happens to be present.
+  'test/.harness',
+];
+const treeBefore = tree.walk(ROOT, { ignore: TREE_ALLOW });
 
 // Run the node tests: discover test/**/*.test.cjs (no shell glob) and run under THIS
 // node. Recurses into subdirectories so test/fidelity/ is GATED like everything else —
@@ -227,4 +275,17 @@ if (guard.preflight(REAL_STORE).length) {
   fails = 1;
 }
 
-process.exit(fails ? 1 : 0);
+// Whole-checkout tree-immutability gate, after: anything created/modified/deleted
+// under ROOT outside TREE_ALLOW is a build/test writing where the phase-1 property
+// says it must not. Distinct exit code (2) from a plain test failure (1) so CI and a
+// human glancing at `echo $?` can tell "the checkout got dirty" apart from "a test
+// assertion failed" without re-reading the log.
+const treeChanged = tree.diff(treeBefore, tree.walk(ROOT, { ignore: TREE_ALLOW }));
+if (treeChanged.length) {
+  console.error('run: the suite WROTE INTO THE CHECKOUT — a build/test must not:');
+  for (const c of treeChanged.slice(0, 40)) console.error(`  ${c.kind} ${c.path}`);
+  if (treeChanged.length > 40) console.error(`  … and ${treeChanged.length - 40} more`);
+  process.exitCode = 2;
+}
+
+process.exit(process.exitCode === 2 ? 2 : (fails ? 1 : 0));

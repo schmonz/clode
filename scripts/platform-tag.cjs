@@ -1,8 +1,7 @@
 'use strict';
-// Three DIFFERENT things live under build/, keyed by three different things
-// because they are determined by three different things (and have three
-// different lifetimes) — this file is the single source of truth for all
-// three keys. A future reader must not re-merge them:
+// Several DIFFERENT things are keyed here, because they are determined by
+// different things (and have different lifetimes) — this file is the single
+// source of truth for all their keys. A future reader must not re-merge them:
 //
 //   * ARTIFACT dirs (build/<artifact-name>/, see artifactName/artifactDir) —
 //     what we would SHIP for this host: naude, clode (--self), deps.tar,
@@ -12,24 +11,29 @@
 //     "build/clode-*" always means "shippable". CI overrides the whole name
 //     via CLODE_ASSET_NAME so a release leg's dir carries its deliberate
 //     compat FLOOR (e.g. macos-11.0) instead of the build host's real
-//     version — a floor is a chosen target, not a fact about the box.
-//   * the TOOLCHAIN dir (build/toolchain/<platform>-node<major>/, see
-//     toolchainDir) — the native tool cache (esbuild/postject node_modules)
-//     the build scripts install. This is a build TOOL, not a thing we'd
-//     ship, and it is invalidated by a DIFFERENT axis than an artifact is:
-//     the node major running the toolchain, not the OS/arch being targeted.
-//     Keeps platformTag()'s existing `${osToken}-${arch}-node${nodeMajor}`
-//     shape — that shape is correct HERE, and only here.
+//     version — a floor is a chosen target, not a fact about the box. This
+//     is the ONE of these that legitimately lives inside the checkout, under
+//     build/ — see build-scratch.cjs's file header for why: it is the
+//     sanctioned copy-back target for a finished, shippable artifact.
+//   * the TOOLCHAIN dir (see toolchainDir) — the native tool cache
+//     (esbuild/postject node_modules) the build scripts install. This is a
+//     build TOOL, not a thing we'd ship, and it is invalidated by a
+//     DIFFERENT axis than an artifact is: the node major running the
+//     toolchain, not the OS/arch being targeted. Keeps platformTag()'s
+//     `${osToken}-${arch}-node${nodeMajor}` shape — that shape is correct
+//     HERE, and only here — but is SCRATCH, not product, so it now resolves
+//     through build-scratch.cjs's buildPath() instead of living under
+//     build/ in the checkout (formerly build/toolchain/<tag>/).
 //   * platform-INDEPENDENT bundles (clode-main.bundle.cjs,
 //     naude-entry.bundle.cjs — see scripts/build-clode-main.mjs and
 //     scripts/build-naude.mjs) are pure JS with no native/platform coupling
 //     at all, so they are keyed by NEITHER of the above: they live at
 //     build/bundle/, unkeyed (one copy, whichever host esbuilt it last).
 //
-// The PTY test harness's native node-pty cache (harnessDir, test/.harness/)
-// is a fourth thing but stays OUTSIDE build/ entirely (test-only, not a
-// build output) — it is a tool cache like the toolchain dir, so it keeps
-// platformTag()'s shape too; see harnessDir's comment.
+// The PTY test harness's native node-pty cache (harnessDir) and the per-platform
+// tjs engine template (tjsDir, a fourth keyed thing — see its own comment) are
+// both build/test TOOLS, never shipped, so both resolve through buildPath() too
+// — outside the checkout entirely, not merely outside build/.
 //
 // platformTag()'s own OS-version token is chosen to be HUMAN-MEANINGFUL and
 // to name the portability floor, not just to be unique:
@@ -48,6 +52,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { canonArch } = require('./canonical-name.cjs');
+const { buildPath } = require('./build-scratch.cjs');
 
 function readProductVersion() {
   return execFileSync('sw_vers', ['-productVersion'], { encoding: 'utf8' });
@@ -102,16 +107,25 @@ function platformTag({
 // A tool cache, like the toolchain dir — deliberately keyed by platformTag(), NOT
 // artifactName(): nothing here is ever shipped, so it must never gain an artifact
 // name (see the file header).
-function harnessDir(repo) {
-  return path.join(repo, 'test', '.harness', platformTag());
+//
+// SCRATCH, not product: a build/test tool cache belongs outside the checkout, same
+// as toolchainDir/tjsDir below (see build-scratch.cjs for why a default was not
+// enough). `repo` is retained only for call-site compatibility — every existing
+// caller passes it — and is deliberately unused.
+function harnessDir(_repo) {
+  return buildPath('harness', platformTag());
 }
 
 // The native TOOL CACHE (esbuild/postject node_modules) the build scripts install
 // into — see the file header for why this key (platform tuple + node-major) is
-// right here and wrong for an artifact dir. Nested under build/toolchain/ so
-// `build/clode-*` stays "only what we'd ship" (the artifact dir's whole point).
-function toolchainDir(repo) {
-  return path.join(repo, 'build', 'toolchain', platformTag());
+// right here and wrong for an artifact dir. Formerly nested under build/toolchain/
+// so `build/clode-*` stayed "only what we'd ship" (the artifact dir's whole
+// point); now it is SCRATCH — a tool cache, never shipped — so it resolves
+// through the allocator instead, off in the checkout entirely (see
+// build-scratch.cjs). `repo` is retained only for call-site compatibility and is
+// deliberately unused.
+function toolchainDir(_repo) {
+  return buildPath('toolchain', platformTag());
 }
 
 // The per-platform tjs template binary. A FOURTH keyed thing (see the file
@@ -122,9 +136,12 @@ function toolchainDir(repo) {
 // Its axis is OS+arch ONLY: unlike toolchainDir it carries NO node major (tjs is a
 // C binary with no node coupling), and unlike an artifact dir it carries no clode
 // VERSION (tjs is versioned by its own source PIN, not clode's release). token/arch
-// are injectable so a cross-build can name the TARGET's dir, not the host's.
-function tjsDir(repo, { token = osToken(), arch = process.arch } = {}) {
-  return path.join(repo, 'build', 'tjs', `${token}-${arch}`);
+// are injectable so a cross-build can name the TARGET's dir, not the host's. Like
+// toolchainDir, this is a build TOOL/template — never shipped — so it resolves
+// through the allocator rather than living under build/ in the checkout; `repo`
+// is retained only for call-site compatibility and is deliberately unused.
+function tjsDir(_repo, { token = osToken(), arch = process.arch } = {}) {
+  return buildPath('tjs', `${token}-${arch}`);
 }
 // The tjs binary inside tjsDir. Host exe suffix (.exe on win32) — consumers resolve
 // the host's own binary; CI cross-builds name the output path explicitly via

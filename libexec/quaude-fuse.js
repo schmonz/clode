@@ -273,16 +273,18 @@ if (role === 'builder') {
   const libexecDir = path.dirname(shimDir);
   // The naude ASSEMBLER: scripts/build-naude.mjs (spawned under the fetched
   // pinned node), its repo-local requires scripts/platform-tag.cjs AND that
-  // module's own sibling require scripts/canonical-name.cjs (the artifact-name
-  // source of truth), and scripts/sea-sign.cjs (which build-naude execs to
-  // unsign/re-sign the SEA — on macOS the ad-hoc re-sign after postject is
-  // MANDATORY or the binary won't run). A fused builder ships no scripts/ dir, so
-  // `clode build --naude` under clode-native materializes these (clode-fuse.cjs's
+  // module's own sibling requires scripts/canonical-name.cjs (the artifact-name
+  // source of truth) and scripts/build-scratch.cjs (the out-of-checkout scratch
+  // allocator every build-dir helper in platform-tag.cjs now resolves through —
+  // Task 8), and scripts/sea-sign.cjs (which build-naude execs to unsign/re-sign
+  // the SEA — on macOS the ad-hoc re-sign after postject is MANDATORY or the
+  // binary won't run). A fused builder ships no scripts/ dir, so `clode build
+  // --naude` under clode-native materializes these (clode-fuse.cjs's
   // materializeFusedPayload) and spawns the copy. Member names keep their scripts/
   // path (re-joined onto the payload dir verbatim). Committed files that always
   // exist → mustRead. (Miss one require in this list → "Cannot find module" only
   // under clode-native, invisible to a dev-checkout build — the acceptance-4 gate.)
-  for (const f of ['build-naude.mjs', 'platform-tag.cjs', 'canonical-name.cjs', 'sea-sign.cjs']) {
+  for (const f of ['build-naude.mjs', 'platform-tag.cjs', 'canonical-name.cjs', 'build-scratch.cjs', 'sea-sign.cjs']) {
     members.push({ name: `scripts/${f}`, data: await mustRead(path.join(path.dirname(libexecDir), 'scripts', f), `naude assembler member scripts/${f}`) });
   }
   // host-provision.cjs rides here as forwarded bytes, same as its loop-siblings

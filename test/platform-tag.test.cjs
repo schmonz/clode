@@ -6,6 +6,7 @@ const {
   hostOsVersionToken, artifactName, artifactDir, seaOut, seaBin,
   tjsDir, tjsBin,
 } = require('../scripts/platform-tag.cjs');
+const { isInsideCheckout } = require('../scripts/build-scratch.cjs');
 
 test('macosVersion keeps two components only for the 10.x era', () => {
   assert.strictEqual(macosVersion('10.9.5'), '10.9');
@@ -47,29 +48,37 @@ test('osToken maps win32 to the stable "windows" token (no OS-version split)', (
   assert.strictEqual(osToken('win32'), 'windows');
 });
 
-test('toolchainDir is <repo>/build/toolchain/<platformTag>', () => {
-  assert.strictEqual(toolchainDir('/r'), path.join('/r', 'build', 'toolchain', platformTag()));
+// toolchainDir/tjsDir/tjsBin now resolve through build-scratch.cjs's buildPath()
+// (Task 8: scratch, not product, belongs outside the checkout) — the `repo` arg
+// is kept only for call-site compatibility and is deliberately unused, so a fake
+// '/r' can no longer appear in the result. Assert the SHAPE (suffix, keying) and
+// the checkout-escape property instead of the old exact in-repo path.
+test('toolchainDir is scratch, keyed by <platformTag>, never inside the checkout', () => {
+  const d = toolchainDir('/r');
+  assert.strictEqual(d.endsWith(path.join('toolchain', platformTag())), true, d);
+  assert.strictEqual(isInsideCheckout(d), false, d);
 });
 
-test('tjsDir is <repo>/build/tjs/<osToken>-<arch> — keyed by OS+arch only, NOT node major', () => {
+test('tjsDir is scratch, keyed by <osToken>-<arch> — OS+arch only, NOT node major', () => {
   // Pure formatter over injected token/arch (like platformTag/artifactName).
   assert.strictEqual(
-    tjsDir('/r', { token: 'netbsd-11', arch: 'arm64' }),
-    path.join('/r', 'build', 'tjs', 'netbsd-11-arm64'));
+    tjsDir('/r', { token: 'netbsd-11', arch: 'arm64' }).endsWith(path.join('tjs', 'netbsd-11-arm64')),
+    true);
   assert.strictEqual(
-    tjsDir('/r', { token: 'linux-glibc2.28', arch: 'x64' }),
-    path.join('/r', 'build', 'tjs', 'linux-glibc2.28-x64'));
+    tjsDir('/r', { token: 'linux-glibc2.28', arch: 'x64' }).endsWith(path.join('tjs', 'linux-glibc2.28-x64')),
+    true);
   // host default = osToken()-arch; tjs is a native C binary, node-independent,
   // so its key must NOT carry a node major (that would wrongly split the cache).
-  assert.strictEqual(tjsDir('/r'), path.join('/r', 'build', 'tjs', `${osToken()}-${process.arch}`));
+  assert.strictEqual(tjsDir('/r').endsWith(path.join('tjs', `${osToken()}-${process.arch}`)), true);
   assert.doesNotMatch(tjsDir('/r'), /node\d+/);
+  assert.strictEqual(isInsideCheckout(tjsDir('/r')), false);
 });
 
 test('tjsBin is <tjsDir>/tjs (host exe suffix)', () => {
   const exe = process.platform === 'win32' ? 'tjs.exe' : 'tjs';
   assert.strictEqual(
     tjsBin('/r', { token: 'netbsd-11', arch: 'arm64' }),
-    path.join('/r', 'build', 'tjs', 'netbsd-11-arm64', exe));
+    path.join(tjsDir('/r', { token: 'netbsd-11', arch: 'arm64' }), exe));
 });
 
 test('hostOsVersionToken: darwin is the canonical dashed "macos-<ver>", padded to major.minor', () => {
