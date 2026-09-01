@@ -713,7 +713,7 @@ runs:
     # LOGGED — never a silent downgrade; tier-2 stands on level-2 either way.
     - name: Register qemu-user binfmt (verify=qemu-user)
       if: inputs.verify == 'qemu-user'
-      uses: docker/setup-qemu-action@v4.2.0
+      uses: docker/setup-qemu-action@v4.3.0
     - name: Validate the tier-2 builder under qemu-user (verify=qemu-user)
       if: inputs.verify == 'qemu-user'
       shell: bash
@@ -808,7 +808,7 @@ runs:
     # smokes). Cheap and idempotent.
     - name: Ensure qemu binfmt for foreign-arch host execution
       if: inputs.guest-platform == 'alpine' && inputs.guest-arch != 'x86_64' && runner.arch == 'X64'
-      uses: docker/setup-qemu-action@v4.2.0
+      uses: docker/setup-qemu-action@v4.3.0
 
     - name: Stage the provider for the in-VM full smoke
       if: steps.mode.outputs.exec == 'guest' && inputs.smoke == 'full'

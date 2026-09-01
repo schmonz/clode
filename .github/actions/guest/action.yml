@@ -114,7 +114,7 @@ runs:
     # harmless when the guest arch is native.
     - name: Register qemu binfmt
       if: inputs.platform == 'alpine'
-      uses: docker/setup-qemu-action@v4.2.0
+      uses: docker/setup-qemu-action@v4.3.0
 
     # Docker Hub's official alpine publishes NO loong64 manifest on any tag
     # (matrix dispatch #5, 2026-07-10). Alpine itself ships loongarch64 since
