@@ -247,6 +247,14 @@ runs:
         git config --global core.autocrlf false
         git config --global core.eol lf
 
+    # Windows legs are exec=host, not exec=guest, so the probe folded into the
+    # guest script block never runs for them — this is the equivalent
+    # reports-only invocation. Non-gating: task 6 is measurement only.
+    - name: Probe scratch exec-ability (native Windows)
+      if: runner.os == 'Windows'
+      shell: bash
+      run: node scripts/exec-probe.mjs || true
+
     - name: Construct the patched tjs tree from pins (host, native speed)
       if: steps.tjs-cache.outputs.cache-hit != 'true'
       shell: bash
@@ -804,6 +812,7 @@ runs:
           # pipeline's hang guards accordingly (harmless on KVM legs — these
           # are guards, not pacing; dispatch #14 freebsd-arm64 finding).
           CLODE_TIMEOUT_SCALE=10; export CLODE_TIMEOUT_SCALE
+          node scripts/exec-probe.mjs || true
           CLODE_TJS_VENDOR="$PWD/.matrix/tjs-vendor"; export CLODE_TJS_VENDOR
           CLODE_TJS_OUT="$PWD/.matrix/tjs-out"; export CLODE_TJS_OUT
           CLODE_TJS_WASM="${{ inputs.wasm }}"; export CLODE_TJS_WASM
