@@ -74,3 +74,58 @@ test('a genuinely absent watched root reports the ABSENT sentinel, distinct from
   assert.match(snap[0], /\|ABSENT$/);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+// Counterweight for run.mjs's GUARD_WATCH exclusions (test/run.mjs, around GUARD_WATCH):
+// an exclusion list is only as trustworthy as proof the guard STILL catches everything
+// it didn't name. These two tests use fixture dirs shaped like the two real watched
+// roots (~/.cache/clode with a tjs-vendor corner; <repo>/build with a bundle corner) —
+// never the user's actual dirs — and each pins BOTH directions: a write inside the
+// named exclusion must vanish, a write anywhere else under the same root must not.
+
+test('{path, ignore} entry: a write inside the ignored tjs-vendor corner is silent, a write elsewhere under the cache root is not', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hg-cache-'));
+  const vendor = path.join(dir, 'tjs-vendor');
+  fs.mkdirSync(path.join(vendor, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(vendor, 'src', 'main.c'), 'int main(){}');
+  fs.writeFileSync(path.join(dir, 'other-tool.bin'), 'x');
+  const watched = { path: dir, ignore: ['tjs-vendor'] };
+  const before = G.snapshot([watched]);
+
+  // Stands in for test/tjs-darwin-poll-fixup.test.cjs:29 running
+  // `build-tjs.mjs --source-only`, which rewrites files under tjs-vendor on purpose.
+  fs.writeFileSync(path.join(vendor, 'src', 'main.c'), 'int main(){return 1;}');
+  assert.deepStrictEqual(G.diffSnapshots(before, G.snapshot([watched])), [],
+    'a write inside the ignored tjs-vendor prefix must not be reported');
+
+  // Anything else under the same watched cache root is still a real violation.
+  fs.writeFileSync(path.join(dir, 'other-tool.bin'), 'yy');
+  const changed = G.diffSnapshots(before, G.snapshot([watched]));
+  assert.ok(changed.length > 0, 'a write elsewhere under the watched cache root must still be reported');
+  assert.ok(changed.join('\n').includes('other-tool.bin'), `expected other-tool.bin in: ${changed.join(', ')}`);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('{path, ignore} entry: a write inside the ignored bundle corner is silent, a write elsewhere under build/ is not', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hg-build-'));
+  const bundle = path.join(dir, 'bundle');
+  fs.mkdirSync(bundle);
+  fs.writeFileSync(path.join(bundle, 'clode-main.bundle.cjs'), 'x');
+  fs.writeFileSync(path.join(dir, 'other-artifact.txt'), 'x');
+  const watched = { path: dir, ignore: ['bundle'] };
+  const before = G.snapshot([watched]);
+
+  // Stands in for scripts/build-clode-main.mjs:30, whose declared output dir is
+  // build/bundle.
+  fs.writeFileSync(path.join(bundle, 'clode-main.bundle.cjs'), 'yy');
+  assert.deepStrictEqual(G.diffSnapshots(before, G.snapshot([watched])), [],
+    'a write inside the ignored bundle prefix must not be reported');
+
+  // Anything else under the same watched build root is still a real violation.
+  fs.writeFileSync(path.join(dir, 'other-artifact.txt'), 'yy');
+  const changed = G.diffSnapshots(before, G.snapshot([watched]));
+  assert.ok(changed.length > 0, 'a write elsewhere under the watched build root must still be reported');
+  assert.ok(changed.join('\n').includes('other-artifact.txt'), `expected other-artifact.txt in: ${changed.join(', ')}`);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});

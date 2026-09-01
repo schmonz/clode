@@ -15,15 +15,25 @@ const tree = require('./tree-guard.cjs');
 // root's existence/type is checked explicitly here rather than inferred from the walk,
 // and a root that is a plain file (not a directory) gets its own stat recorded instead
 // of silently reading as absent.
+//
+// Each entry in `paths` is either a plain string (watch it entirely — every existing
+// caller, and the CLI below), or `{ path, ignore }` (watch it but pass `ignore` prefixes
+// through to tree.walk, for a root that legitimately owns some scratch a build writes
+// to). Accepting both shapes in the same array — rather than a parallel ignores map, or
+// a breaking signature change — keeps every plain-string caller (including this file's
+// own tests) untouched while giving run.mjs's GUARD_WATCH a place to name an exclusion
+// right next to the path it applies to.
 function snapshot(paths, fsm = fs) {
   const out = [];
-  for (const p of paths) {
+  for (const entry of paths) {
+    const p = typeof entry === 'string' ? entry : entry.path;
+    const ignore = typeof entry === 'string' ? [] : (entry.ignore || []);
     let st;
     try { st = fsm.statSync(p); }
     catch { out.push(`${p}|ABSENT`); continue; }
     if (!st.isDirectory()) { out.push(`${p}|FILE|${st.size}|${st.mtimeMs}|${st.mode}`); continue; }
     let empty = true;
-    for (const [rel, v] of tree.walk(p, { fsm })) { empty = false; out.push(`${p}::${rel}|${v}`); }
+    for (const [rel, v] of tree.walk(p, { ignore, fsm })) { empty = false; out.push(`${p}::${rel}|${v}`); }
     if (empty) out.push(`${p}|EMPTY`);
   }
   return out;

@@ -84,7 +84,24 @@ const home = os.homedir();
 const dataBase = process.env.XDG_DATA_HOME || path.join(home, '.local', 'share');
 const cacheBase = process.env.XDG_CACHE_HOME || path.join(home, '.cache');
 const REAL_STORE = path.join(dataBase, 'clode');
-const GUARD_WATCH = [REAL_STORE, path.join(cacheBase, 'clode'), path.join(home, '.local', 'bin'), path.join(ROOT, 'build')];
+// Two of these watched roots have a build-owned scratch corner INSIDE them that a test
+// legitimately (and on purpose) writes to; excluding just that corner, not the whole
+// root, is what makes the walking guard (which can see three levels down, unlike the
+// old mtimeMs-on-the-named-path version) usable at all. Everything else under each root
+// is still watched in full.
+const GUARD_WATCH = [
+  REAL_STORE,
+  // test/tjs-darwin-poll-fixup.test.cjs:29 runs `node scripts/build-tjs.mjs --source-only`
+  // on purpose — its own header says it "resets the shared vendor checkout to pristine
+  // and re-applies every patch + fixup". Rewriting tjs-vendor/txiki.js IS that test, not
+  // a violation of it.
+  { path: path.join(cacheBase, 'clode'), ignore: ['tjs-vendor'] },
+  path.join(home, '.local', 'bin'),
+  // scripts/build-clode-main.mjs:30 sets `build/bundle` as its declared, documented
+  // output directory (unkeyed on purpose — see that file's own comment). Writing the
+  // bundle there is the build doing its job, not a test touching state it shouldn't.
+  { path: path.join(ROOT, 'build'), ignore: ['bundle'] },
+];
 if (guard.preflight(REAL_STORE).length) {
   console.error(`run: REAL store contaminated with *-clode-test deps under ${REAL_STORE}`);
   process.exit(2);
