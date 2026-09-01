@@ -5,6 +5,8 @@
 // top-level creation but is blind to a modification three levels down — the exact
 // "a guard that cannot fail" shape the phase-5 backlog entry is about.
 // Pure node stdlib; fs injected for testability.
+// The sentinel key '.' records the root's state when the root itself is unreadable,
+// so an unreadable root is distinguishable from a missing root or empty directory.
 const realFs = require('node:fs');
 const path = require('node:path');
 
@@ -22,7 +24,7 @@ function walk(root, { ignore = [], fsm = realFs } = {}) {
     try { entries = fsm.readdirSync(abs, { withFileTypes: true }); }
     catch (e) {
       // Record the directory itself as unreadable, don't recurse
-      if (rel) out.set(rel, `UNREADABLE|${e && e.code}`);
+      out.set(rel || '.', `UNREADABLE|${e && e.code}`);
       return;
     }
     for (const e of entries) {

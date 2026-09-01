@@ -76,7 +76,15 @@ test('unreadable file is recorded, not silently omitted', () => {
   assert.ok(entry.includes('EACCES'), `expected EACCES in error, got ${entry}`);
 });
 
-test('unreadable directory is recorded, not silently omitted', () => {
+test('unreadable directory is recorded, not silently omitted', (t) => {
+  if (typeof process.getuid === 'function' && process.getuid() === 0) {
+    t.skip('running as root: permission bits are bypassed, so this test cannot deny access');
+    return;
+  }
+  if (process.platform === 'win32') {
+    t.skip('win32: permission semantics differ, chmod may not block directory access');
+    return;
+  }
   const root = tmp();
   const unreadableDir = path.join(root, 'denied-dir');
   fs.mkdirSync(unreadableDir);
@@ -125,4 +133,23 @@ test('ignore with trailing slash works the same as without', () => {
   assert.deepStrictEqual([...mWithoutSlash.keys()], ['kept']);
   assert.deepStrictEqual([...mWithSlash.keys()], ['kept'],
     'trailing slash should be normalized away');
+});
+
+test('unreadable walk root is recorded, not indistinguishable from missing/empty', (t) => {
+  if (typeof process.getuid === 'function' && process.getuid() === 0) {
+    t.skip('running as root: permission bits are bypassed, so this test cannot deny access');
+    return;
+  }
+  if (process.platform === 'win32') {
+    t.skip('win32: permission semantics differ, chmod may not block directory access');
+    return;
+  }
+  const root = tmp();
+  fs.chmodSync(root, 0o000);
+  const m = G.walk(root);
+  // Restore perms so cleanup works
+  fs.chmodSync(root, 0o755);
+  assert.ok(m.has('.'), 'unreadable root should be recorded under sentinel key "."');
+  const entry = m.get('.');
+  assert.ok(entry.startsWith('UNREADABLE|'), `expected UNREADABLE marker, got ${entry}`);
 });
