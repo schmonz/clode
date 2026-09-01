@@ -316,7 +316,7 @@ runs:
         ${{ inputs.script }}
 
     # ---- vmactions backend: the platforms cross-platform-actions lacks
-    # (Solaris; OpenIndiana). Boots, rsyncs the workspace in, runs prepare +
+    # (Solaris; OpenIndiana; Haiku — added v1.1.5, see below). Boots, rsyncs the workspace in, runs prepare +
     # run as root in the VM, rsyncs back (copyback defaults true). Env vars
     # are copied into the VM. One step per OS — `uses:` cannot be dynamic.
     - name: Run the guest script (vmactions solaris VM)

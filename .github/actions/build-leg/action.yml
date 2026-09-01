@@ -176,9 +176,10 @@ runs:
         echo "exec=$exec" >> "$GITHUB_OUTPUT"
         if [ "$exec" = guest ]; then
           # The VM backends (cpa.sh AND vmactions — netbsd/freebsd/openbsd/
-          # dragonflybsd/omnios/midnightbsd/haiku via cpa.sh; solaris/
-          # openindiana via vmactions, see .github/actions/guest/action.yml's
-          # own "rsyncs the workspace in ... rsyncs back") are what move bytes
+          # dragonflybsd/omnios/midnightbsd via cpa.sh; solaris/openindiana/
+          # haiku via vmactions, see .github/actions/guest/action.yml:161's
+          # dispatch gate and the vmactions steps — NOT that block's own
+          # header comment, which is stale and omits haiku) are what move bytes
           # to/from a genuinely SEPARATE machine, and their only channel is an
           # rsync of the WORKSPACE — nothing else. So for exec=guest, vendor/
           # out must live inside it: the guest needs the host-constructed
