@@ -104,22 +104,36 @@ test('probeExec returns {ok:false} for null opts, never throws', () => {
   assert.strictEqual(typeof r.reason, 'string');
 });
 
-test('probeExec fails with error branch coverage (mocked EACCES)', () => {
-  // Skip if running as root (root bypasses permission bits) or on win32.
-  if (process.getuid?.() === 0 || process.platform === 'win32') {
+test('probeExec fails with error branch coverage (real EACCES)', (t) => {
+  // Loud skip: root bypasses permission bits, so exec cannot be denied by them.
+  if (typeof process.getuid === 'function' && process.getuid() === 0) {
+    t.skip('running as root: permission bits are bypassed, so exec cannot be denied');
     return;
   }
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'eacces-probe-'));
-  const r = S.probeExec(dir, {
-    spawnSync: (file) => {
-      // Simulate the real-world scenario: spawn fails with EACCES on a non-executable probe file.
-      // This is the error branch at scripts/build-scratch.cjs:73, normally uncovered by mocked tests.
-      return { status: null, error: new Error('EACCES: permission denied'), signal: null };
-    },
-  });
+  // Loud skip: win32 does not use POSIX permission bits.
+  if (process.platform === 'win32') {
+    t.skip('win32: exec-ability is not a POSIX permission bit');
+    return;
+  }
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'eacces-real-'));
+  // Stub fsm.chmodSync to be a no-op so the probe file stays non-executable.
+  // This lets probeExec create a real probe file and run the REAL spawnSync against
+  // a non-executable file, triggering the actual OS error (not a mock). The error
+  // branch (scripts/build-scratch.cjs line 92-93) is only exercised when spawn fails
+  // with an error object, which only happens with real, non-executable files.
+  const stubFsm = Object.create(fs);
+  stubFsm.chmodSync = () => { /* no-op: leave file non-executable */ };
+
+  // Call probeExec with stubbed fsm but REAL spawnSync, so the OS denies exec.
+  // This tests the error branch with actual Node error shape ("spawnSync <path> EACCES").
+  const r = S.probeExec(dir, { fsm: stubFsm });
   assert.strictEqual(r.ok, false);
-  assert.match(r.reason, /EACCES|permission denied|exec probe did not run/i);
-  // Verify cleanup happened even on failure.
+  // Match the real error signal (EACCES), not a made-up message. The error object
+  // produced by spawn will have "EACCES" in its message when the file is not executable.
+  assert.match(r.reason, /EACCES/);
+  // Verify cleanup happened even on failure (the critical case, since the probe runs in
+  // directories about to be used).
   assert.deepStrictEqual(fs.readdirSync(dir), []);
 });
 

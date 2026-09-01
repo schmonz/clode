@@ -59,16 +59,14 @@ function probeExec(dir, opts) {
 
     // Different probe formats for different platforms, same exec-ability contract.
     let content;
-    let ext;
     if (platform === 'win32') {
       // Windows: .cmd file with exit /b 42 (removes the divergence and uses identical contract)
       content = '@echo off\nexit /b 42\n';
-      ext = '.cmd';
+      const ext = '.cmd';
       marker = path.join(dir, `.clode-exec-probe-${process.pid}${ext}`);
     } else {
       // POSIX: shell script with exit 42
       content = '#!/bin/sh\nexit 42\n';
-      ext = '';
     }
 
     fsm.writeFileSync(marker, content);
