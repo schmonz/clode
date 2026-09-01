@@ -41,8 +41,11 @@ jobs:
           node-version-file: .tool-versions
       - name: Install runtime deps (the ext-dep closure) for the naude build
         run: npm ci --prefix deps/claude
-      - name: Install the Claude provider (npm, latest — the naude build's input)
-        run: npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
+      - name: Install the Claude provider (npm, pinned — the naude build's input)
+        run: |
+          V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
+          echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
+          npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
       - name: Provision postject into deps/clode (the naude assembler needs it on disk)
         run: npm ci --prefix deps/clode 2>&1 | tail -3
       - name: Build the clode-main + naude-entry bundles
@@ -106,8 +109,11 @@ jobs:
           node-version-file: .tool-versions
       - name: Install runtime deps (the ext-dep closure) for the naude build
         run: npm ci --prefix deps/claude
-      - name: Install the Claude provider (npm, latest — the naude build's input)
-        run: npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
+      - name: Install the Claude provider (npm, pinned — the naude build's input)
+        run: |
+          V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
+          echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
+          npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
       - name: Provision postject into deps/clode (the naude assembler needs it on disk)
         run: npm ci --prefix deps/clode 2>&1 | tail -3
       - name: Build the clode-main + naude-entry bundles
@@ -172,8 +178,11 @@ jobs:
           node-version-file: .tool-versions
       - name: Install runtime deps (the ext-dep closure) for the naude build
         run: npm ci --prefix deps/claude
-      - name: Install the Claude provider (npm, latest — the naude build's input)
-        run: npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
+      - name: Install the Claude provider (npm, pinned — the naude build's input)
+        run: |
+          V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
+          echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
+          npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
       - name: Provision postject into deps/clode (the naude assembler needs it on disk)
         run: npm ci --prefix deps/clode 2>&1 | tail -3
       - name: Build the clode-main + naude-entry bundles
@@ -238,8 +247,11 @@ jobs:
           node-version-file: .tool-versions
       - name: Install runtime deps (the ext-dep closure) for the naude build
         run: npm ci --prefix deps/claude
-      - name: Install the Claude provider (npm, latest — the naude build's input)
-        run: npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
+      - name: Install the Claude provider (npm, pinned — the naude build's input)
+        run: |
+          V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
+          echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
+          npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
       - name: Provision postject into deps/clode (the naude assembler needs it on disk)
         run: npm ci --prefix deps/clode 2>&1 | tail -3
       - name: Build the clode-main + naude-entry bundles

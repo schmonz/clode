@@ -708,7 +708,9 @@ runs:
         # 19MB cli.cjs under the emulated engine — slow/heavy; if qemu-user cannot
         # carry it, record the bound and keep the leg green on level-2. The
         # minimal provider is carved on the x64 host (fast), then read in-rootfs.
-        npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
+        V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
+        echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
+        npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
         PROV="$(node scripts/stage-provider.mjs --out .matrix/qu-provider)" || exit 1
         echo "provider: $PROV"
         # The level-2.5 RESULT is still soft (qemu-user may not carry a full build, and
@@ -735,7 +737,9 @@ runs:
       shell: bash
       run: |
         set -uo pipefail
-        npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
+        V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
+        echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
+        npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
         PROV="$(node scripts/stage-provider.mjs)" || exit 1
         echo "provider: $PROV"
         mkdir -p .matrix/qemu-smoke
@@ -782,7 +786,9 @@ runs:
       shell: bash
       run: |
         set -uo pipefail
-        npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
+        V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
+        echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
+        npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
         PROV="$(node scripts/stage-provider.mjs)" || exit 1
         echo "provider: $PROV"
         mkdir -p .matrix
@@ -1077,7 +1083,9 @@ runs:
       shell: bash
       run: |
         set -uo pipefail
-        npm i -g @anthropic-ai/claude-code 2>&1 | tail -3
+        V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
+        echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
+        npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
         PROV="$(node scripts/stage-provider.mjs)" || exit 1
         echo "provider: $PROV"
         set -e

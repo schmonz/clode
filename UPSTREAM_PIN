@@ -1,0 +1,16 @@
+# Deliberately pinned @anthropic-ai/claude-code version for CI's provider
+# installs. This is NOT "pin to hold green" — this project's doctrine is to
+# never pin to an older upstream just to keep CI quiet. 2.1.257 broke
+# `clode build`'s SCC merger (QuickJS's parser rejects a merged file with
+# "invalid property name") on every leg that stages a provider; only
+# engine-only cross-build legs still pass. This pin is the OTHER half of the
+# doctrine — "absorb the change AND make the next absorption cheaper" — paid
+# first: 2.1.257 gets absorbed deliberately, later, as the first test of the
+# rejiggered build system, not silently avoided by holding still forever.
+#
+# upstream-drift.yml does NOT read this file: its whole job is noticing that
+# upstream moved, so it stays on `next`/unpinned on purpose. See its own
+# comment before "fixing" that for consistency with everything else here.
+#
+# Bump or drop the pin by editing the version below — one line, one file.
+claude-code 2.1.251

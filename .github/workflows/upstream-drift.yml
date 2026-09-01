@@ -52,6 +52,12 @@ jobs:
       #
       # One channel is enough (user, 2026-08-25). When the two are the same version this
       # costs nothing; when they differ, `next` is the one worth knowing about.
+      #
+      # This job does NOT read UPSTREAM_PIN (the 2.1.251 pin ci.yml/naude-cross.yml/
+      # build-leg install to dodge the 2.1.257 SCC-merge break — see that file). Pinning
+      # here would blind the early-warning system at exactly the moment we are choosing
+      # to lag on purpose: this job's only reason to exist is to notice upstream moving
+      # WHILE everything else holds still. Leave it unpinned.
       - name: Install the `next` Claude Code
         run: npm i -g @anthropic-ai/claude-code@next 2>&1 | tail -3
       - name: Every clode hook anchor still matches the newest bundle
