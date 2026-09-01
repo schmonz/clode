@@ -26,6 +26,24 @@ else { console.error('usage: node test/run.mjs [--online|--offline]'); process.e
 // CLODE_NODE = the concrete node running this runner (already the real binary; no shim canonicalization).
 process.env.CLODE_NODE = process.execPath;
 
+// Keychain gate: default CLODE_KC_MODE so the suite never touches the operator's
+// REAL macOS login Keychain. libexec/node-shim/modules/child_process.cjs's
+// `_kcDetect()` probes the REAL `security` binary (write/read/update/delete a
+// throwaway item named `__clode_kc_probe__`) unless CLODE_KC_MODE is already set —
+// node-shim-roundtrip.test.cjs and node-shim-roundtrip-oracle.test.cjs spawn tjs
+// with an inherited env and no pinned mode, so an un-pinned run popped "Could not
+// find a keychain to store '__clode_kc_probe__'" modal dialogs on every invocation
+// (see task-10-report.md; the SEPARATE "naming the operator's real account" dialogs
+// came from the naude-model side of node-shim-roundtrip-oracle.test.cjs, which runs
+// under real node with no shim at all — CLODE_KC_MODE has no effect there, so that
+// half is fixed in that file directly, via a PATH-shadowed `security` stub). Set
+// here (not per-test) so it flows to every test file's `env: {...process.env, ...}`
+// spawn automatically; an operator can still override by exporting CLODE_KC_MODE
+// before invoking this runner — same opt-out shape as CLODE_LIVE_RENDER for the
+// live-render TUI tests. Pure decision lives in scripts/kc-mode.cjs so it is
+// unit-testable (see test/kc-mode-suite-default.test.cjs).
+process.env.CLODE_KC_MODE = require('../scripts/kc-mode.cjs').defaultKcMode(process.env);
+
 // Platform-tagged harness dir + NODE_PATH (path.delimiter, NOT a hardcoded ':').
 const { platformTag } = require('../scripts/platform-tag.cjs');
 const TAG = platformTag();
