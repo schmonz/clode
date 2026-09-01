@@ -71,13 +71,23 @@ test('the generated check reports OK, and on a miss names the binding AND exits 
   assert.strictEqual(runNode(ok).code, 0);
 });
 
-test('the real floor passes on a locally built engine (skipped if none)', async () => {
+test('the real floor passes on a locally built engine (skipped if none)', async (t) => {
   const { engineFloorCheckFile, OK_TOKEN } = await load();
-  const candidates = fs.existsSync(path.join(repo, 'build/tjs'))
-    ? fs.readdirSync(path.join(repo, 'build/tjs')).map((d) => path.join(repo, 'build/tjs', d, 'tjs'))
-    : [];
-  const engine = candidates.find((p) => fs.existsSync(p) && !fs.statSync(p).isDirectory());
-  if (!engine) return; // no locally built engine on this box — CI's host-exec smoke covers it
+  // Resolved through the SAME allocator every other consumer uses (Task 8: tjsDir()/
+  // tjsBin() moved off-tree; test/node-shim-helper.cjs's tjsPath() is the one place
+  // that already does CLODE_TJS-override-or-tjsBin(REPO) correctly — hand-joining
+  // 'build/tjs' here was exactly the stale-path bug the migration was fixing
+  // elsewhere and missed here: on a clean checkout (no local build) that directory
+  // is simply absent, so a bare `return` reported an evergreen ✔ that never ran the
+  // real check it claims to run.
+  const { tjsPath } = require('./node-shim-helper.cjs');
+  const engine = tjsPath();
+  if (!engine) {
+    // LOUD skip, not a silent `return` — a bare return under node:test reports as a
+    // passing ✔, indistinguishable from having actually verified the real floor.
+    t.skip('no locally built engine (CLODE_TJS or tjsBin(REPO)) — CI\'s host-exec smoke covers it');
+    return;
+  }
   const f = path.join(require('node:os').tmpdir(), `floor-engine-${process.pid}.js`);
   fs.writeFileSync(f, engineFloorCheckFile());
   try {

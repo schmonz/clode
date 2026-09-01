@@ -81,8 +81,8 @@ test('tjsBin is <tjsDir>/tjs (host exe suffix)', () => {
     path.join(tjsDir('/r', { token: 'netbsd-11', arch: 'arm64' }), exe));
 });
 
-test('hostOsVersionToken: darwin is the canonical dashed "macos-<ver>", padded to major.minor', () => {
-  if (process.platform !== 'darwin') return;
+test('hostOsVersionToken: darwin is the canonical dashed "macos-<ver>", padded to major.minor', (t) => {
+  if (process.platform !== 'darwin') { t.skip('darwin-only: hostOsVersionToken(\'darwin\') shells out to sw_vers'); return; }
   assert.match(hostOsVersionToken('darwin'), /^macos-(10\.\d+|\d+\.\d+)$/);
   assert.doesNotMatch(hostOsVersionToken('darwin'), /^darwin/);
 });
