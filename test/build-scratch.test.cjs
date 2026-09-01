@@ -146,3 +146,59 @@ test('probeExec cleans up after a failed probe', () => {
   // Verify the probe file was cleaned up despite failure.
   assert.deepStrictEqual(fs.readdirSync(dir), []);
 });
+
+test('candidate order is CLODE_BUILD_SCRATCH, TMPDIR, tmpdir, cache', () => {
+  const names = S.scratchCandidates({
+    CLODE_BUILD_SCRATCH: '/a', TMPDIR: '/b', HOME: '/h',
+  }).map((c) => c.name);
+  assert.deepStrictEqual(names, ['CLODE_BUILD_SCRATCH', 'TMPDIR', 'os.tmpdir()', 'cacheBase']);
+});
+
+test('scratchRoot picks the first exec-able candidate outside a checkout', () => {
+  const good = fs.mkdtempSync(path.join(os.tmpdir(), 'good-'));
+  const root = S.scratchRoot({ CLODE_BUILD_SCRATCH: good, HOME: os.homedir() });
+  assert.strictEqual(root, good);
+});
+
+test('scratchRoot SKIPS a candidate inside a checkout and falls through', () => {
+  const inTree = path.join(fakeCheckout(), '.matrix', 'tjs-vendor');
+  const good = fs.mkdtempSync(path.join(os.tmpdir(), 'fallthrough-'));
+  const root = S.scratchRoot({ CLODE_BUILD_SCRATCH: inTree, TMPDIR: good, HOME: os.homedir() });
+  assert.strictEqual(root, good);
+});
+
+test('scratchRoot throws naming EVERY candidate and its rejection reason', () => {
+  const inTree = path.join(fakeCheckout(), '.matrix');
+  assert.throws(
+    () => S.scratchRoot(
+      { CLODE_BUILD_SCRATCH: inTree, TMPDIR: '/no/such/dir', HOME: '/no/such/home' },
+      { probe: () => ({ ok: false, reason: 'stubbed noexec' }) },
+    ),
+    (e) => {
+      assert.strictEqual(e.code, 'CLODE_BUILD_SCRATCH');
+      assert.match(e.message, /CLODE_BUILD_SCRATCH/);
+      assert.match(e.message, /inside a clode source checkout/);
+      assert.match(e.message, /TMPDIR/);
+      assert.match(e.message, /stubbed noexec/);
+      return true;
+    },
+  );
+});
+
+test('buildPath refuses to hand back a path inside the checkout', () => {
+  // Belt-and-braces scenario per the design notes: scratchRoot legitimately picks a
+  // GOOD root (a sibling of the checkout, not inside it), but the caller's own
+  // segments walk back in via '..'. A prior version of this test instead pointed
+  // CLODE_BUILD_SCRATCH itself in-checkout with an always-ok probe stub and no
+  // TMPDIR: that can never throw, because os.tmpdir() is an unconditional 4th
+  // candidate scratchRoot falls through to (proven by direct execution), so the
+  // stub accepts it and a legitimate out-of-checkout root is returned. Testing the
+  // actual escape path this comment describes is what the design note asked for.
+  const checkout = fakeCheckout();
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'buildpath-root-'));
+  const escape = path.relative(scratch, checkout);
+  assert.throws(
+    () => S.buildPath(escape, 'build', { env: { CLODE_BUILD_SCRATCH: scratch, HOME: os.homedir() } }),
+    /CLODE_BUILD_SCRATCH|checkout/,
+  );
+});

@@ -12,6 +12,7 @@
 const realFs = require('node:fs');
 const realCp = require('node:child_process');
 const path = require('node:path');
+const os = require('node:os');
 
 class BuildScratchError extends Error {
   constructor(msg) { super(msg); this.name = 'BuildScratchError'; this.code = 'CLODE_BUILD_SCRATCH'; }
@@ -92,4 +93,54 @@ function probeExec(dir, opts) {
   return { ok: false, reason: `exec probe did not run (${detail})` };
 }
 
-module.exports = { BuildScratchError, isCheckoutRoot, findCheckoutRoot, isInsideCheckout, probeExec };
+// Ordered exactly as the phase-1 spec states. cacheBase last and HOME-derived is
+// the hardened-guest fallback: it is the candidate that has to work when /tmp is
+// noexec, now that the checkout is not an option.
+function scratchCandidates(env = process.env) {
+  const home = env.HOME || os.homedir();
+  const cacheBase = env.XDG_CACHE_HOME || path.join(home, '.cache');
+  const out = [];
+  if (env.CLODE_BUILD_SCRATCH) out.push({ name: 'CLODE_BUILD_SCRATCH', dir: env.CLODE_BUILD_SCRATCH });
+  if (env.TMPDIR) out.push({ name: 'TMPDIR', dir: env.TMPDIR });
+  out.push({ name: 'os.tmpdir()', dir: os.tmpdir() });
+  out.push({ name: 'cacheBase', dir: path.join(cacheBase, 'clode', 'scratch') });
+  return out;
+}
+
+function scratchRoot(env = process.env, { fsm = realFs, probe = probeExec, platform = process.platform } = {}) {
+  const tried = [];
+  for (const c of scratchCandidates(env)) {
+    if (isInsideCheckout(c.dir, fsm)) {
+      tried.push(`  ${c.name}=${c.dir}\n    rejected: inside a clode source checkout`);
+      continue;
+    }
+    const r = probe(c.dir, { fsm, platform });
+    if (r.ok) return c.dir;
+    tried.push(`  ${c.name}=${c.dir}\n    rejected: ${r.reason}`);
+  }
+  throw new BuildScratchError(
+    'no usable build scratch directory. A build must not write inside the checkout,\n'
+    + 'so every candidate below was required to be outside it AND exec-able:\n'
+    + tried.join('\n')
+    + '\nSet CLODE_BUILD_SCRATCH to a writable, exec-able directory outside the checkout.');
+}
+
+function buildPath(...segments) {
+  let opts = {};
+  if (segments.length && typeof segments[segments.length - 1] === 'object' && segments[segments.length - 1] !== null) {
+    opts = segments.pop();
+  }
+  const root = scratchRoot(opts.env || process.env, opts);
+  const p = path.join(root, ...segments);
+  // Belt and braces: scratchRoot already refused in-checkout roots, but a caller
+  // can pass '..' segments, and this is the function everything else goes through.
+  if (isInsideCheckout(p, opts.fsm || realFs)) {
+    throw new BuildScratchError(`refusing a build path inside a clode source checkout: ${p}`);
+  }
+  return p;
+}
+
+module.exports = {
+  BuildScratchError, isCheckoutRoot, findCheckoutRoot, isInsideCheckout, probeExec,
+  scratchCandidates, scratchRoot, buildPath,
+};
