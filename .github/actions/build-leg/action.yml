@@ -162,8 +162,10 @@ runs:
           exec=cross   # cross-built on ubuntu: inside a docker toolchain image —
                        # pinned+pulled (darwin-ppc) OR built-in-CI from a Dockerfile
                        # (darwin-x64/x86 osxcross) — OR against a NetBSD build.sh
-                       # toolchain (netbsd-m68k). Either way vendor/out live under
-                       # .matrix for the shared cross-fuse; no host exec/fuse runs.
+                       # toolchain (netbsd-m68k). vendor/out live under runner.temp
+                       # (bind-mounted into the container where one is used); no
+                       # host exec/fuse runs, and nothing here syncs to a separate
+                       # machine, so the checkout is never touched.
         else
           case "${{ inputs.guest-platform }}" in
             qemu-*) exec=qemu ;;  # own-qemu leg (netbsd-sparc): engine bakes in-guest, builder cross-fuses on the x64 runner, smoke runs via a backend recipe — see the qemu-* steps below
@@ -172,9 +174,22 @@ runs:
           esac
         fi
         echo "exec=$exec" >> "$GITHUB_OUTPUT"
-        if [ "$exec" = guest ] || [ "$exec" = cross ] || [ "$exec" = qemu ]; then
-          # The VM backends sync the WORKSPACE (rsync); the container build
-          # bind-mounts it. Either way the tjs tree + output must live inside.
+        if [ "$exec" = guest ]; then
+          # cpa.sh (cross-platform-actions) is the only backend here that moves
+          # bytes to/from a genuinely SEPARATE machine, and its only channel is
+          # an rsync of the WORKSPACE — nothing else. So for exec=guest alone,
+          # vendor/out must live inside it: the guest needs the host-constructed
+          # vendor tree to arrive via that sync, and the built engine has to
+          # leave the same way (the host-side tjs-cache save and the
+          # unconditional "Upload the bare tjs binary" step both read it back
+          # from the synced workspace afterward). See the guest script below for
+          # exactly what stays in-checkout for this reason and what does not.
+          #
+          # exec=cross bind-mounts the workspace into a docker container on
+          # THIS SAME machine (no remote sync), and exec=qemu's own driver
+          # reads/writes host paths directly — neither needs the checkout for
+          # that, so both now take the plain runner-scratch branch below, same
+          # as exec=host always has.
           echo "vendor=$GITHUB_WORKSPACE/.matrix/tjs-vendor" >> "$GITHUB_OUTPUT"
           echo "out=$GITHUB_WORKSPACE/.matrix/tjs-out" >> "$GITHUB_OUTPUT"
         else
@@ -350,7 +365,7 @@ runs:
 
     # netbsd-src legs are exec=cross but keep guest-platform 'native' (they run
     # on the ubuntu runner), so they must be excluded here too — else this host
-    # build pre-populates .matrix/tjs-out with an x86-64 CMakeCache that the
+    # build pre-populates tjs-out (runner.temp, not the checkout) with an x86-64 CMakeCache that the
     # later NetBSD cross-build (--build-only) reuses (CMake caches the compiler
     # per build dir), silently shipping a HOST binary. Caught the m68k leg
     # 2026-07-14 (run 29354107445 uploaded an x86-64 ELF labeled netbsd-m68k).
@@ -448,13 +463,20 @@ runs:
         else IMG="clode-cross-toolchain:${{ inputs.leg }}"; fi
         docker run --rm \
           -e CROSS_APT -e CROSS_FILE -e ATOMIC_SHIM -e DARWIN_POLL -e WASM -e MIMALLOC -e FFI \
-          -v "${{ github.workspace }}:/w" -w /w "$IMG" bash -c '
+          -v "${{ github.workspace }}:/w" -v "${{ runner.temp }}:/scratch" -w /w "$IMG" bash -c '
           set -euxo pipefail
           if [ -n "$CROSS_APT" ]; then apt-get update -q && apt-get install -y -q $CROSS_APT >/dev/null; fi
           if ! command -v node >/dev/null; then apt-get update -q && apt-get install -y -q nodejs >/dev/null 2>&1; fi
           node --version
-          export CLODE_TJS_VENDOR=/w/.matrix/tjs-vendor
-          export CLODE_TJS_OUT=/w/.matrix/tjs-out
+          # /scratch is runner.temp bind-mounted alongside /w: vendor (already
+          # constructed on the host by the earlier native "Construct the
+          # patched tjs tree" step, at the same runner.temp path) and the
+          # engine this build produces both live there, not in the checkout.
+          # /w stays mounted only for the repo sources build-tjs.mjs reads and
+          # for CROSS_FILE.
+          mkdir -p /scratch/tjs-vendor /scratch/tjs-out
+          export CLODE_TJS_VENDOR=/scratch/tjs-vendor
+          export CLODE_TJS_OUT=/scratch/tjs-out
           export CLODE_TJS_CROSS_FILE=/w/$CROSS_FILE
           export CLODE_TJS_ATOMIC_SHIM=$ATOMIC_SHIM
           export CLODE_TJS_DARWIN_POLL=$DARWIN_POLL
@@ -809,11 +831,35 @@ runs:
         packages: ${{ inputs.guest-packages }}
         cache-key: tjs-${{ inputs.leg }}
         script: |
-          # Hardened guests (cpa's OpenBSD image) mount /tmp noexec; the fuse
-          # materializes and EXECS the template from a mkdtemp under TMPDIR
-          # (exit 127, dispatch #7). The workspace is exec-able everywhere.
-          mkdir -p "$PWD/.matrix/tmp"
-          TMPDIR="$PWD/.matrix/tmp"; export TMPDIR
+          # Scratch lives OUTSIDE the checkout wherever it CAN. $HOME is
+          # guest-local and measured exec-able on every hardened image
+          # (phase-1 Task 6, run 33552485691) — including the OpenBSD one
+          # that forced this in the first place: /tmp is noexec there, which
+          # is what made the fuse's mkdtemp-and-exec of its own template die
+          # with exit 127 (dispatch #7) before .matrix existed as the
+          # workaround. TMPDIR (the fuse's own scratch, and — via
+          # build-tjs.mjs's localScratchRoot() — the CMake build dir, the
+          # actual bulk of the reported ~23k files) and the full-smoke's own
+          # CLODE_CACHE/CLODE_DEPS never need to leave this guest, so they
+          # move to $CLODE_BUILD_SCRATCH under $HOME.
+          #
+          # tjs-vendor, tjs-out and provider-claude stay under $PWD/.matrix
+          # (inside the checkout) because cpa.sh's ONLY channel to/from this
+          # VM is an rsync of the WORKSPACE, nothing else: the vendor tree
+          # has to arrive here that way (the host constructs it before this
+          # step runs — see "Construct the patched tjs tree from pins"
+          # above), the built engine has to leave the same way (the
+          # host-side tjs-cache save and the unconditional "Upload the bare
+          # tjs binary" step both read it back from the synced workspace
+          # after this script returns), and provider-claude is bytes the
+          # host staged for exactly this sync ("Stage the provider for the
+          # in-VM full smoke" above). These three are load-bearing, not
+          # vestigial — moving them to $HOME would silently strand the vendor
+          # source / built engine on the VM and fail the job.
+          CLODE_BUILD_SCRATCH="$HOME/clode-scratch"; export CLODE_BUILD_SCRATCH
+          mkdir -p "$CLODE_BUILD_SCRATCH"
+          TMPDIR="$CLODE_BUILD_SCRATCH/tmp"; export TMPDIR
+          mkdir -p "$TMPDIR"
           # TCG-emulated guests run 10-20x slower than metal; scale the build
           # pipeline's hang guards accordingly (harmless on KVM legs — these
           # are guards, not pacing; dispatch #14 freebsd-arm64 finding).
@@ -824,7 +870,7 @@ runs:
           CLODE_TJS_WASM="${{ inputs.wasm }}"; export CLODE_TJS_WASM
           CLODE_TJS_MIMALLOC="${{ inputs.mimalloc }}"; export CLODE_TJS_MIMALLOC
           CLODE_TJS_FFI="${{ inputs.ffi }}"; export CLODE_TJS_FFI
-          if [ ! -x .matrix/tjs-out/tjs ]; then
+          if [ ! -x "$CLODE_TJS_OUT/tjs" ]; then
             node scripts/build-tjs.mjs --build-only
           else
             echo "tjs cache hit: skipping the in-guest build"
@@ -832,24 +878,24 @@ runs:
           # The fuse needs only tjs-out + the repo tree; dropping the vendor
           # checkout (+ its object files) here spares the vm-to-runner sync —
           # it is reconstructable from pins and never cached.
-          rm -rf .matrix/tjs-vendor
+          rm -rf "$CLODE_TJS_VENDOR"
           # Bare-engine spawn probe: separates "tjs spawn is broken on this
           # OS" from "something about the builder's specific spawn is" (the
           # openbsd exit-127 hunt, dispatch #9 — template bytes verified
           # perfect, exec still fails under the builder only).
-          .matrix/tjs-out/tjs eval 'tjs.spawn(["/bin/sh","-c","echo tjs-spawn-probe-ok"]).wait().then(function(r){console.log("tjs-spawn-exit:",JSON.stringify(r))})'
+          "$CLODE_TJS_OUT/tjs" eval 'tjs.spawn(["/bin/sh","-c","echo tjs-spawn-probe-ok"]).wait().then(function(r){console.log("tjs-spawn-exit:",JSON.stringify(r))})'
           # So any build/<artifact-name>/ this invocation touches matches the
           # SHIPPED name (floor included), not the guest's own honest,
           # floor-less OS version — see scripts/platform-tag.cjs's artifactDir.
           CLODE_ASSET_NAME="${{ steps.name.outputs.asset }}"; export CLODE_ASSET_NAME
-          CLODE_TJS="$PWD/.matrix/tjs-out/tjs" node bin/clode build --self --out "./${{ steps.name.outputs.asset }}"
+          CLODE_TJS="$CLODE_TJS_OUT/tjs" node bin/clode build --self --out "./${{ steps.name.outputs.asset }}"
           ./"${{ steps.name.outputs.asset }}" --version
           if [ "${{ inputs.smoke }}" = full ]; then
             CLODE_CLAUDE_BIN="$PWD/.matrix/provider-claude" \
-            CLODE_CACHE="$PWD/.matrix/clode-cache" \
-            CLODE_DEPS="$PWD/.matrix/clode-deps" \
+            CLODE_CACHE="$CLODE_BUILD_SCRATCH/clode-cache" \
+            CLODE_DEPS="$CLODE_BUILD_SCRATCH/clode-deps" \
               ./"${{ steps.name.outputs.asset }}" build --out ./quaude-smoke
-            rm -rf ./quaude-smoke .matrix/clode-cache .matrix/clode-deps .matrix/tmp
+            rm -rf ./quaude-smoke
           fi
 
     - name: Verify the binary is truly static (musl legs)
@@ -953,8 +999,8 @@ runs:
         TJS="${{ steps.mode.outputs.out }}/tjs"
         f=$(file -b "$TJS"); echo "file: $f"
         case "$f" in *Mach-O*"${{ inputs.macos-arch }}"*) echo "arch marker ok" ;; *) echo "ERROR: not a ${{ inputs.macos-arch }} Mach-O" >&2; exit 1 ;; esac
-        LC=$(docker run --rm -v "${{ github.workspace }}:/w" -w /w "${{ inputs.cross-image }}" \
-          bash -c 'powerpc-apple-darwin8-otool -l .matrix/tjs-out/tjs')
+        LC=$(docker run --rm -v "${{ runner.temp }}:/scratch" "${{ inputs.cross-image }}" \
+          bash -c 'powerpc-apple-darwin8-otool -l /scratch/tjs-out/tjs')
         echo "$LC" | grep -q LC_BUILD_VERSION && { echo "ERROR: LC_BUILD_VERSION present — pre-10.14 dyld needs LC_VERSION_MIN_MACOSX" >&2; exit 1; } || true
         got=$(echo "$LC" | awk '/cmd LC_VERSION_MIN_MACOSX/{f=1} f && /version /{print $2; exit}')
         [ "$got" = "${{ inputs.macos-min }}" ] || { echo "ERROR: LC_VERSION_MIN_MACOSX=$got, want ${{ inputs.macos-min }}" >&2; exit 1; }
