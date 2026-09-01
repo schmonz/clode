@@ -894,10 +894,23 @@ const KC_FORCE_EMULATE_ENV = { PATH: KC_DECOY_DIR, HOME: KC_HOME_DIR };
 // The ground-truth message: what THIS host's real `security` binary actually
 // says for an item-not-found lookup — captured live (not hardcoded), so a
 // version-to-version wording change on the real tool is loud, not silently
-// stale. Every keychain-emulation-stderr test below skips (rather than
-// fails) if this host has no real `security` to establish that oracle from
-// (e.g. non-darwin CI legs, where this shim feature is unreachable in
-// practice since no caller can even name a binary called "security").
+// stale.
+//
+// EXPLICIT OPT-IN (task-10 fix round 1): this calls the REAL `security` binary
+// through the test host's OWN unshimmed child_process — unconditionally on any
+// darwin run, previously gated only on platform + "did the call answer". That
+// is read-only against a nonexistent account (`nobody-xyz`) and macOS's
+// "could not find a keychain to store" alert is specific to the WRITE path
+// (`_kcDetect()`'s add-generic-password probe, gated by CLODE_KC_MODE
+// elsewhere), so this call itself was never expected to produce a dialog — but
+// "probably silent" is a prediction about someone else's machine, which is
+// exactly the kind of claim this task exists to stop making and start gating
+// instead. Same explicit-opt-in shape as CLODE_LIVE_RENDER (test/quaude-build
+// .test.cjs, test/e2e-doctor-parity.test.cjs, etc.) for the live-render TUI
+// tests that also touch the real Keychain: unset by default, LOUD skip naming
+// the variable when absent, never a silent pass. The oracle itself is
+// untouched — still available to anyone who opts in.
+const CLODE_LIVE_KC_ORACLE = process.env.CLODE_LIVE_KC_ORACLE === '1';
 function realSecurityNotFoundStderr() {
   try {
     require('node:child_process').execFileSync(
@@ -911,6 +924,7 @@ function realSecurityNotFoundStderr() {
 
 function skipUnlessRealSecurity(t) {
   if (skipUnlessTjs(t)) return true;
+  if (!CLODE_LIVE_KC_ORACLE) { t.skip('live real-security(1) oracle opt-in only (set CLODE_LIVE_KC_ORACLE=1)'); return true; }
   if (process.platform !== 'darwin') { t.skip('security(1) is darwin-only'); return true; }
   if (!realSecurityNotFoundStderr()) { t.skip('no real security(1) oracle on this host'); return true; }
   return false;

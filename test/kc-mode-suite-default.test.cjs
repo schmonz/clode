@@ -32,12 +32,30 @@ test('defaultKcMode: no ambient CLODE_KC_MODE -> pins "emulate" (never the real 
 test('defaultKcMode: an operator override is preserved untouched', () => {
   assert.strictEqual(defaultKcMode({ CLODE_KC_MODE: 'passthrough' }), 'passthrough');
   assert.strictEqual(defaultKcMode({ CLODE_KC_MODE: 'translate' }), 'translate');
-  assert.strictEqual(defaultKcMode({ CLODE_KC_MODE: '' }), ''); // explicit empty string is still "set"
 });
 
-test('suite wiring: this test\'s own env carries a pinned CLODE_KC_MODE (set by test/run.mjs)', () => {
-  assert.notStrictEqual(process.env.CLODE_KC_MODE, undefined,
-    'CLODE_KC_MODE is unset — either this file was run standalone outside test/run.mjs ' +
-    '(export CLODE_KC_MODE=emulate first), or test/run.mjs stopped defaulting it, which ' +
-    'means the suite can pop real macOS Keychain dialogs again');
+// Deliberately NOT "preserved": defaultKcMode uses `||`, mirroring
+// child_process.cjs:502's own `(tjs.env && tjs.env.CLODE_KC_MODE) || _kcProbe()` —
+// an empty string is falsy there too, so it is NOT "already pinned" in production
+// either, and defaultKcMode must agree or an operator who (mis)sets
+// CLODE_KC_MODE='' would believe the mode is pinned while _kcMaybe silently
+// probes for real.
+test('defaultKcMode: an empty-string override is NOT preserved (matches child_process.cjs\'s `||` gate)', () => {
+  assert.strictEqual(defaultKcMode({ CLODE_KC_MODE: '' }), 'emulate');
+});
+
+// Exact equality, not just "is set": a wiring bug where run.mjs calls
+// defaultKcMode() but then stores the wrong value (e.g. an accidental
+// `String(defaultKcMode(...))` typo, or clobbering it below with something
+// else) would slip past a merely-"is it set" check. This assumes the normal
+// invocation (no manual CLODE_KC_MODE override before running the suite) —
+// an operator who deliberately overrides it while running the FULL suite
+// would need to update this expectation too, same as they would for any
+// other test/run.mjs-provided guarantee.
+test('suite wiring: this test\'s own env carries CLODE_KC_MODE=\'emulate\' (set by test/run.mjs)', () => {
+  assert.strictEqual(process.env.CLODE_KC_MODE, 'emulate',
+    'CLODE_KC_MODE is not "emulate" — either this file was run standalone outside ' +
+    'test/run.mjs (export CLODE_KC_MODE=emulate first), or test/run.mjs stopped ' +
+    'defaulting it correctly, which means the suite can pop real macOS Keychain ' +
+    'dialogs again');
 });
