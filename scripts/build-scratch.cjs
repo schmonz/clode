@@ -81,8 +81,16 @@ function probeExec(dir, opts) {
   }
 
   let res;
-  try { res = spawnSync(marker, [], { stdio: 'pipe' }); }
-  catch (e) { res = { status: null, error: e }; }
+  try {
+    // Windows (.cmd) requires explicit shell invocation since CVE-2024-27980 (Node 18.20.2+).
+    // Spawn the interpreter directly with the script as an argument to avoid shell parsing
+    // of the marker path (which may contain spaces or shell metacharacters).
+    if (platform === 'win32') {
+      res = spawnSync(process.env.COMSPEC || 'cmd.exe', ['/c', marker], { stdio: 'pipe' });
+    } else {
+      res = spawnSync(marker, [], { stdio: 'pipe' });
+    }
+  } catch (e) { res = { status: null, error: e }; }
   finally { try { fsm.rmSync(marker, { force: true }); } catch { /* best effort */ } }
 
   // 42 is arbitrary but SPECIFIC: a plain 0 would also be returned by a shell/cmd that

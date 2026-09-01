@@ -64,24 +64,38 @@ test('probeExec fails when the script cannot run', () => {
 });
 
 test('probeExec fails when the dir is not writable', () => {
-  const r = S.probeExec('/definitely/not/a/real/dir/anywhere');
+  // Portable fixture: create a real file, then try to create a directory under it.
+  // mkdirSync fails on both Windows and POSIX when the parent is a regular file,
+  // so this exercises the "cannot write" path portably without per-platform skips.
+  const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'not-writable-'));
+  const fileNotDir = path.join(baseDir, 'blockfile');
+  fs.writeFileSync(fileNotDir, 'not a directory');
+  const dirUnderFile = path.join(fileNotDir, 'subdir');
+
+  const r = S.probeExec(dirUnderFile);
   assert.strictEqual(r.ok, false);
   assert.match(r.reason, /cannot write/i);
 });
 
-test('probeExec probes win32 with a .cmd file', () => {
+test('probeExec probes win32 with correct interpreter invocation', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'win32-probe-'));
+  // Verify the win32 branch calls spawnSync with the interpreter (cmd.exe) and
+  // arguments ['/c', marker], not a bare marker. This is required since CVE-2024-27980.
+  let invokedCorrectly = false;
   const r = S.probeExec(dir, {
     platform: 'win32',
-    spawnSync: (file) => {
-      // Simulate successful .cmd execution on Windows
-      if (file.endsWith('.cmd')) {
+    spawnSync: (interpreter, args, opts) => {
+      // Verify this is cmd.exe-style invocation, not bare marker.
+      if ((interpreter === 'cmd.exe' || interpreter.endsWith('\\cmd.exe')) &&
+          Array.isArray(args) && args[0] === '/c' && args[1].endsWith('.cmd')) {
+        invokedCorrectly = true;
         return { status: 42, error: null };
       }
-      throw new Error('unexpected file type on win32');
+      throw new Error(`unexpected invocation: ${interpreter} ${JSON.stringify(args)}`);
     },
   });
   assert.strictEqual(r.ok, true);
+  assert.strictEqual(invokedCorrectly, true, 'spawnSync must be called with interpreter + [/c, marker]');
   assert.match(r.reason, /exec probe ran and returned 42/);
 });
 
@@ -201,4 +215,20 @@ test('buildPath refuses to hand back a path inside the checkout', () => {
     () => S.buildPath(escape, 'build', { env: { CLODE_BUILD_SCRATCH: scratch, HOME: os.homedir() } }),
     /CLODE_BUILD_SCRATCH|checkout/,
   );
+});
+
+const PT = require('../scripts/platform-tag.cjs');
+
+test('toolchainDir/tjsDir/harnessDir no longer live in the checkout', () => {
+  const repo = path.resolve(__dirname, '..');
+  for (const fn of ['toolchainDir', 'tjsDir', 'harnessDir']) {
+    const d = PT[fn](repo);
+    assert.strictEqual(S.isInsideCheckout(d), false, `${fn} returned an in-checkout path: ${d}`);
+  }
+});
+
+test('artifactDir DOES stay in the checkout — it is the copy-back target', () => {
+  const repo = path.resolve(__dirname, '..');
+  const d = PT.artifactDir(repo, { version: '0.0.0' });
+  assert.strictEqual(d.startsWith(path.join(repo, 'build')), true, `artifactDir moved: ${d}`);
 });
