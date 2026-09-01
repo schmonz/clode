@@ -175,10 +175,13 @@ runs:
         fi
         echo "exec=$exec" >> "$GITHUB_OUTPUT"
         if [ "$exec" = guest ]; then
-          # cpa.sh (cross-platform-actions) is the only backend here that moves
-          # bytes to/from a genuinely SEPARATE machine, and its only channel is
-          # an rsync of the WORKSPACE — nothing else. So for exec=guest alone,
-          # vendor/out must live inside it: the guest needs the host-constructed
+          # The VM backends (cpa.sh AND vmactions — netbsd/freebsd/openbsd/
+          # dragonflybsd/omnios/midnightbsd/haiku via cpa.sh; solaris/
+          # openindiana via vmactions, see .github/actions/guest/action.yml's
+          # own "rsyncs the workspace in ... rsyncs back") are what move bytes
+          # to/from a genuinely SEPARATE machine, and their only channel is an
+          # rsync of the WORKSPACE — nothing else. So for exec=guest, vendor/
+          # out must live inside it: the guest needs the host-constructed
           # vendor tree to arrive via that sync, and the built engine has to
           # leave the same way (the host-side tjs-cache save and the
           # unconditional "Upload the bare tjs binary" step both read it back
@@ -733,21 +736,24 @@ runs:
         V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
         echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
         npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
-        PROV="$(node scripts/stage-provider.mjs --out .matrix/qu-provider)" || exit 1
+        PROV="$(node scripts/stage-provider.mjs --out "$RUNNER_TEMP/qu-provider")" || exit 1
         echo "provider: $PROV"
         # The level-2.5 RESULT is still soft (qemu-user may not carry a full build, and
         # that is a recorded bound, not a fault). STAGING a provider is not soft: it is
         # the same step on every leg and it fails the same way. Conflating the two is
         # what let "our minimiser is broken" print as "no provider available to carve".
-        if docker run --rm --platform "linux/$ARCH" -v "$PWD:/w" -w /w \
-             -e CLODE_CLAUDE_BIN=/w/.matrix/qu-provider/provider-min -e CLODE_CACHE=/w/.matrix/qu-cache \
-             "$ROOTFS" ./"$ASSET" build --out /w/.matrix/quaude-qu \
+        #
+        # /scratch is runner.temp bind-mounted alongside /w: /w is mounted only
+        # for the $ASSET binary this container execs; the provider, cache and
+        # quaude output all live outside the checkout.
+        if docker run --rm --platform "linux/$ARCH" -v "$PWD:/w" -v "$RUNNER_TEMP:/scratch" -w /w \
+             -e CLODE_CLAUDE_BIN=/scratch/qu-provider/provider-min -e CLODE_CACHE=/scratch/qu-cache \
+             "$ROOTFS" ./"$ASSET" build --out /scratch/quaude-qu \
              2>&1 | tee "$RUNNER_TEMP/qu-fuse.txt" | grep -q 'PONG round-trip ok'; then
           echo "level-2.5 (full fuse+PONG under qemu-user) OK on $ARCH"
         else
           echo "level-2.5 NOT achieved on $ARCH (qemu-user could not carry the full fuse) — tier-2 self-load stands; see the log above."
         fi
-        rm -f .matrix/quaude-qu
 
     # (C) The runtime smoke: hand the own-qemu backend a recipe that stages
     # the cross-fused sparc clode builder + an x64 provider binary on :8180
@@ -832,20 +838,29 @@ runs:
         cache-key: tjs-${{ inputs.leg }}
         script: |
           # Scratch lives OUTSIDE the checkout wherever it CAN. $HOME is
-          # guest-local and measured exec-able on every hardened image
-          # (phase-1 Task 6, run 33552485691) — including the OpenBSD one
-          # that forced this in the first place: /tmp is noexec there, which
-          # is what made the fuse's mkdtemp-and-exec of its own template die
-          # with exit 127 (dispatch #7) before .matrix existed as the
-          # workaround. TMPDIR (the fuse's own scratch, and — via
-          # build-tjs.mjs's localScratchRoot() — the CMake build dir, the
-          # actual bulk of the reported ~23k files) and the full-smoke's own
-          # CLODE_CACHE/CLODE_DEPS never need to leave this guest, so they
-          # move to $CLODE_BUILD_SCRATCH under $HOME.
+          # guest-local. Phase-1 Task 6 (run 33552485691) MEASURED it
+          # exec-able on 5 of the 12 guest legs: openbsd, netbsd-amd64,
+          # haiku, solaris, freebsd-amd64 — including the OpenBSD one that
+          # forced this in the first place (/tmp is noexec there, which is
+          # what made the fuse's mkdtemp-and-exec of its own template die
+          # with exit 127, dispatch #7, before .matrix existed as the
+          # workaround). The other 7 (dragonflybsd-amd64, midnightbsd-amd64,
+          # omnios-amd64, openindiana-amd64, netbsd-arm64, freebsd-arm64,
+          # openbsd-arm64) are INFERRED, not measured: exec-ability is a
+          # mount property, and they share a filesystem with $HOME the same
+          # way. The measured path was cacheBase, $HOME/.cache/clode/scratch
+          # (scripts/build-scratch.cjs) — this uses $HOME/clode-scratch, a
+          # sibling under the same $HOME mount, so the inference carries.
+          #
+          # TMPDIR (the fuse's own scratch, and — via build-tjs.mjs's
+          # localScratchRoot() — the CMake build dir, the actual bulk of the
+          # reported ~23k files) and the full-smoke's own CLODE_CACHE/
+          # CLODE_DEPS never need to leave this guest, so they move to
+          # $CLODE_BUILD_SCRATCH under $HOME.
           #
           # tjs-vendor, tjs-out and provider-claude stay under $PWD/.matrix
-          # (inside the checkout) because cpa.sh's ONLY channel to/from this
-          # VM is an rsync of the WORKSPACE, nothing else: the vendor tree
+          # (inside the checkout) because the VM backend's ONLY channel to/from
+          # this machine is an rsync of the WORKSPACE, nothing else: the vendor tree
           # has to arrive here that way (the host constructs it before this
           # step runs — see "Construct the patched tjs tree from pins"
           # above), the built engine has to leave the same way (the
