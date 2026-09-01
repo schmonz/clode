@@ -49,8 +49,6 @@ test('isInsideCheckout is true inside, false outside', () => {
   assert.strictEqual(S.isInsideCheckout(os.tmpdir()), false);
 });
 
-const cp = require('node:child_process');
-
 test('probeExec succeeds in an ordinary temp dir', () => {
   const r = S.probeExec(fs.mkdtempSync(path.join(os.tmpdir(), 'exec-ok-')));
   assert.strictEqual(r.ok, true, `expected exec-able, got: ${r.reason}`);
@@ -71,14 +69,66 @@ test('probeExec fails when the dir is not writable', () => {
   assert.match(r.reason, /cannot write/i);
 });
 
-test('probeExec is skipped on win32, with the reason stated', () => {
-  const r = S.probeExec(os.tmpdir(), { platform: 'win32' });
+test('probeExec probes win32 with a .cmd file', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'win32-probe-'));
+  const r = S.probeExec(dir, {
+    platform: 'win32',
+    spawnSync: (file) => {
+      // Simulate successful .cmd execution on Windows
+      if (file.endsWith('.cmd')) {
+        return { status: 42, error: null };
+      }
+      throw new Error('unexpected file type on win32');
+    },
+  });
   assert.strictEqual(r.ok, true);
-  assert.match(r.reason, /win32/);
+  assert.match(r.reason, /exec probe ran and returned 42/);
 });
 
 test('probeExec leaves nothing behind', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'exec-clean-'));
   S.probeExec(dir);
+  assert.deepStrictEqual(fs.readdirSync(dir), []);
+});
+
+test('probeExec returns {ok:false} for undefined dir, never throws', () => {
+  const r = S.probeExec(undefined);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(typeof r.reason, 'string');
+});
+
+test('probeExec returns {ok:false} for null opts, never throws', () => {
+  // Use an invalid directory with null opts to trigger write error (not a throw)
+  const r = S.probeExec('/definitely/not/writable/with/null-opts', null);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(typeof r.reason, 'string');
+});
+
+test('probeExec fails with error branch coverage (mocked EACCES)', () => {
+  // Skip if running as root (root bypasses permission bits) or on win32.
+  if (process.getuid?.() === 0 || process.platform === 'win32') {
+    return;
+  }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'eacces-probe-'));
+  const r = S.probeExec(dir, {
+    spawnSync: (file) => {
+      // Simulate the real-world scenario: spawn fails with EACCES on a non-executable probe file.
+      // This is the error branch at scripts/build-scratch.cjs:73, normally uncovered by mocked tests.
+      return { status: null, error: new Error('EACCES: permission denied'), signal: null };
+    },
+  });
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /EACCES|permission denied|exec probe did not run/i);
+  // Verify cleanup happened even on failure.
+  assert.deepStrictEqual(fs.readdirSync(dir), []);
+});
+
+test('probeExec cleans up after a failed probe', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fail-clean-'));
+  const r = S.probeExec(dir, {
+    spawnSync: () => ({ status: 126, error: null, stderr: Buffer.from('Permission denied') }),
+  });
+  assert.strictEqual(r.ok, false);
+  // Verify the probe file was cleaned up despite failure.
   assert.deepStrictEqual(fs.readdirSync(dir), []);
 });
