@@ -26,23 +26,63 @@ else { console.error('usage: node test/run.mjs [--online|--offline]'); process.e
 // CLODE_NODE = the concrete node running this runner (already the real binary; no shim canonicalization).
 process.env.CLODE_NODE = process.execPath;
 
-// Keychain gate: default CLODE_KC_MODE so the suite never touches the operator's
-// REAL macOS login Keychain. libexec/node-shim/modules/child_process.cjs's
-// `_kcDetect()` probes the REAL `security` binary (write/read/update/delete a
-// throwaway item named `__clode_kc_probe__`) unless CLODE_KC_MODE is already set —
-// node-shim-roundtrip.test.cjs and node-shim-roundtrip-oracle.test.cjs spawn tjs
-// with an inherited env and no pinned mode, so an un-pinned run popped "Could not
-// find a keychain to store '__clode_kc_probe__'" modal dialogs on every invocation
-// (see task-10-report.md; the SEPARATE "naming the operator's real account" dialogs
-// came from the naude-model side of node-shim-roundtrip-oracle.test.cjs, which runs
-// under real node with no shim at all — CLODE_KC_MODE has no effect there, so that
-// half is fixed in that file directly, via a PATH-shadowed `security` stub). Set
-// here (not per-test) so it flows to every test file's `env: {...process.env, ...}`
-// spawn automatically; an operator can still override by exporting CLODE_KC_MODE
-// before invoking this runner — same opt-out shape as CLODE_LIVE_RENDER for the
-// live-render TUI tests. Pure decision lives in scripts/kc-mode.cjs so it is
-// unit-testable (see test/kc-mode-suite-default.test.cjs).
-process.env.CLODE_KC_MODE = require('../scripts/kc-mode.cjs').defaultKcMode(process.env);
+// Keychain gate: the macOS-keychain EMULATION is gone (BACKLOG.md, 2026-08-28 —
+// upstream 2.1.251 already falls back to ~/.claude/.credentials.json on its own,
+// so re-implementing that fallback was a redundant divergence that had caused
+// six separate bugs). Deleting the emulation does NOT stop the bundle's own
+// `security` calls from reaching the REAL binary: reads via
+// `execFile("security",["find-generic-password",...])` and writes via
+// `security -i` (command on stdin). Under a test-redirected HOME neither call
+// has a real login keychain to answer from, and the OS pops a modal on the
+// operator's screen reading "Could not find a keychain to store <account>" —
+// exactly the failure this gate exists to prevent. So the SUITE must never let
+// a spawned child reach the real `security` binary at all.
+//
+// Shadow it with a stub: a directory holding a `security` script, PREPENDED to
+// PATH (not substituted for it) so every other PATH-resolved tool the bundle
+// wants (rg/bfs/ugrep/git/sh) still resolves exactly as before. An EMPTY decoy
+// dir does NOT work — it shadows nothing, since PATH search just skips past an
+// empty directory to the real `security` further down the chain (this sank an
+// earlier attempt; see the git history of node-shim-roundtrip-oracle.test.cjs).
+// Set here (not per-test) so it flows to every test file's spawns automatically
+// via `env: {...process.env, ...}` — this used to be each file's own private
+// copy (node-shim-roundtrip-oracle.test.cjs); centralizing it here means a new
+// test file gets the shadow for free instead of having to remember it.
+//
+// Both upstream call shapes are handled: `find-generic-password` (a read) exits
+// 44 with the exact stderr real `security` prints for errSecItemNotFound — a
+// version-stable, byte-verified string (see KC_NOT_FOUND_STDERR's old home in
+// child_process.cjs before the emulation's deletion) — and `-i` (a write, with
+// the actual add/update command on stdin) drains stdin and exits 0 quietly,
+// touching nothing. `security` is darwin-only; the stub is a no-op elsewhere.
+const KC_STUB_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-security-stub-'));
+if (process.platform === 'darwin') {
+  // Every branch below terminates WITHOUT touching the real `security`, so
+  // an unmatched subcommand falling to `*)` is still dialog-safe — this is a
+  // plain shell script, not the real binary, regardless of which case fires.
+  // add-generic-password/delete-generic-password are covered anyway (not just
+  // for safety, already covered by `*)`, but for TEST-BEHAVIOR correctness):
+  // upstream's argv-based write fallback (used when the -i stdin payload
+  // exceeds its size cap) and the doctor keychain-writability probe's own
+  // cleanup both use them directly, and quietly succeeding here — instead of
+  // falling to the generic `*) exit 1` — keeps that fallback path and that
+  // probe from reporting a spurious keychain failure in a test run.
+  const stubBody = '#!/bin/sh\n'
+    + 'case "$1" in\n'
+    + '  find-generic-password) echo "security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain." 1>&2; exit 44 ;;\n'
+    + '  -i) cat >/dev/null; exit 0 ;;\n'
+    + '  add-generic-password) exit 0 ;;\n'
+    + '  delete-generic-password) exit 0 ;;\n'
+    + '  *) exit 1 ;;\n'
+    + 'esac\n';
+  const stubPath = path.join(KC_STUB_DIR, 'security');
+  fs.writeFileSync(stubPath, stubBody);
+  fs.chmodSync(stubPath, 0o755);
+}
+process.env.PATH = [KC_STUB_DIR, process.env.PATH || ''].join(path.delimiter);
+// Exposed so a test can assert the shadow is actually reachable from a spawned
+// child (test/central-security-stub.test.cjs), not merely that PATH changed.
+process.env.CLODE_TEST_SECURITY_STUB_DIR = KC_STUB_DIR;
 
 // Platform-tagged harness dir + NODE_PATH (path.delimiter, NOT a hardcoded ':').
 // Resolved through harnessDir(), not hand-joined: every OTHER caller (test/tui-screen.cjs,

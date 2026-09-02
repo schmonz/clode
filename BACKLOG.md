@@ -2912,6 +2912,29 @@ it into the binary's attest/metadata so the question is answerable after fusing.
 
 ### Delete the keychain emulation — upstream already falls back (2026-08-28)
 
+**DONE 2026-09-02.** The premise was re-verified at the version we now actually ship
+against, 2.1.251 (not the 2.1.248 this entry originally checked) — a source-level
+trace of the staged `~/.cache/clode/2.1.251/graph.json`, not a live driven turn.
+Result: the premise holds even more strongly than at 2.1.248. `kn()` (the store
+selector) is hardcoded to return the `"plaintext"` store unless a test-only override
+throws in production; the OAuth save path (`nOe`/`yqt`) never calls `security` at
+all; the API-key keychain-write branch in `unr()` is dead code behind a hardcoded
+`let o=!1`; the API-key keychain-remove function `AN()` is an empty stub; and the
+doctor's keychain probe is `async function de(){return null}`. The ONLY live
+`security` call left anywhere in the 2.1.251 graph is a best-effort, try/catch-wrapped
+`find-generic-password` legacy prefetch that never throws on failure. Upstream 2.1.251
+does not attempt the real keychain for credential persistence at all in the normal
+flow — it goes straight to `~/.claude/.credentials.json`. Deleted the ~300-line block
+(`_kcMode` through `_kcMaybe`, all ~55 `_kc*` references) from
+`libexec/node-shim/modules/child_process.cjs`, `scripts/kc-mode.cjs`,
+`test/kc-mode-suite-default.test.cjs`, `test/node-shim-keychain-async-child.test.cjs`,
+`test/node-shim-credentialed-dispatch.test.cjs`, and the emulation-only ~180 lines of
+`test/node-shim-child-process.test.cjs`. Centralized the `security`-shadowing PATH
+stub (previously duplicated in node-shim-roundtrip-oracle.test.cjs) into
+`test/run.mjs`, with a positive-control test
+(`test/central-security-stub.test.cjs`) proving a spawned child actually reaches it.
+Full report: `.superpowers/sdd/2026-09-02-phase2-name-the-steps/kill-keychain-emulation-report.md`.
+
 **The user:** "Ugh, we still have Keychain emulation? That's caused like five different
 problems now." The tally is accurate. Commits touching that block
 (`child_process.cjs:206-509`, ~300 lines):

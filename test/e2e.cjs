@@ -45,8 +45,18 @@ function sandbox(t) {
   const depsDir = path.join(stateRoot, 'share', 'clode');   // == depsStore(CLODE_STATE_ROOT)
   fs.mkdirSync(home, { recursive: true });
   seedRenderDeps(path.join(depsDir, 'node_modules'));
+  // The central `security`-shadow stub (test/run.mjs, CLODE_TEST_SECURITY_STUB_DIR)
+  // MUST win PATH search here too, ahead of /usr/bin — this sandbox is deliberately
+  // "NOTHING from process.env leaks in", so the ordinary `...process.env` inheritance
+  // every OTHER test file gets for free does not apply; the stub dir is threaded
+  // through by name instead, one specific value, not the whole environment. Without
+  // this a sandboxed spawn of the real provider bundle (any e2e-*.test.cjs using this
+  // helper) reaches the REAL /usr/bin/security and can pop a Keychain modal on the
+  // operator's screen — the exact harm the emulation's deletion (BACKLOG.md,
+  // 2026-09-02) exists to end, not reintroduce through a second, uncentralized PATH.
+  const securityStubDir = process.env.CLODE_TEST_SECURITY_STUB_DIR;
   const env = {
-    PATH: '/usr/bin:/bin',
+    PATH: securityStubDir ? `${securityStubDir}${path.delimiter}/usr/bin:/bin` : '/usr/bin:/bin',
     HOME: home,
     CLODE_STATE_ROOT: stateRoot,
     // Point CLODE_DEPS at the seeded (no .deps-sig) store so ensureDeps takes its
