@@ -59,6 +59,16 @@ function seedProvider(dir) {
     ...process.env,
     CLODE_CLAUDE_BIN: provider,
     CLODE_CACHE: cache,
+    // Most tests below stay on the --naude branch, which returns before
+    // clodeBuild's shared try/finally ever runs — but the one test at
+    // 'clode build (no --naude): never invokes build-naude.mjs' deliberately
+    // drives the QUAUDE/self path with THIS env, and that finally now appends
+    // one build-trace.jsonl line (Task 5) to a path resolved off HOME/XDG when
+    // nothing overrides it. Without this, that test silently wrote into the
+    // real, shared ~/.local/share/clode on whatever machine ran it — this
+    // dir already spreads `...process.env` for the SAME reason CLODE_CACHE is
+    // pinned to `dir` two lines up; state-root gets the identical treatment.
+    CLODE_STATE_ROOT: dir,
     DYLD_INSERT_LIBRARIES: '',
   };
   return { env, cliPath, stageDir };

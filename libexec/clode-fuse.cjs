@@ -48,10 +48,17 @@ const { spawn, spawnSync } = require('node:child_process');
 const resolve = require('./clode-resolve.cjs');
 const extract = require('./clode-extract.cjs');
 const deps = require('./clode-deps.cjs');
-const { clodeCacheDir, depsStore } = require('./clode-paths.cjs');
+const { clodeCacheDir, depsStore, traceLog } = require('./clode-paths.cjs');
 const { ensurePinnedNode } = require('./clode-node.cjs');
 const { ATTEST_VERIFIED } = require('./clode-attest.cjs');
 const { seaBin, tjsBin } = require('../scripts/platform-tag.cjs');
+// The step-reporting protocol (phase-2 design): the builder gets its OWN
+// Reporter, feeding the SAME Composer the worker's lines land in over the
+// spawn seam below — in-process and spawned components speak one wire
+// format, which is the entire point (see build-compose.cjs's header).
+const { Composer } = require('./build-compose.cjs');
+const { Reporter } = require('./build-report.cjs');
+const { appendRun } = require('./build-trace.cjs');
 
 // Materialize the builder-role VFS members to `mat` on disk. A fused NATIVE
 // clode runs under tjs and ships NO checkout — so any subprocess it must spawn
@@ -705,12 +712,22 @@ function describeExit(r) {
 // the verbose firehose (which prints its own phase lines) render nothing. The
 // interval is unref'd so it can never keep the process alive on an unexpected
 // throw; every normal exit path calls done().
-function makePhaseSpinner(stderr, active) {
+//
+// `getTotals` (optional) is a live `() => composer.totals()` getter — the
+// composed build's cumulative done/total across every step ANY component has
+// declared a total for, so far. Most builder/worker steps have no natural
+// denominator (fetch a template, sign, smoke) and never contribute one; when
+// nothing has, `total` stays 0 and the spinner renders the bare label exactly
+// as before. Once something has, the prefix is real work counted, not a fake
+// percentage invented for the phase currently on screen.
+function makePhaseSpinner(stderr, active, getTotals) {
   const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
   let iv = null, label = '', start = 0, frame = 0;
   const draw = () => {
     const s = ((Date.now() - start) / 1000).toFixed(1);
-    stderr.write(`\r${FRAMES[frame]} ${label}… (${s}s)\x1b[K`);
+    const t = getTotals && getTotals();
+    const prefix = t && t.total > 0 ? `${t.done}/${t.total} ` : '';
+    stderr.write(`\r${FRAMES[frame]} ${prefix}${label}… (${s}s)\x1b[K`);
     frame = (frame + 1) % FRAMES.length;
   };
   return {
@@ -893,10 +910,22 @@ async function clodeBuild(args, opts) {
   const spawnRun = opts.run || run;
   const verbose = !!env.CLODE_VERBOSE;
   const clodeLog = (m) => { if (verbose) stderr.write(m + '\n'); };
+  // ONE Composer for this build. The worker's lines land in it over the spawn
+  // seam (composer.ingest('worker', line), below); the builder's OWN steps land
+  // in it through `report`, its own Reporter — in-process and spawned
+  // components go through the identical wire format, which is the whole point
+  // (phase-2 design principle: a build system that composes needs components
+  // that know their own steps). `report` is deliberately named steps only at
+  // the point their total (if any) is actually known — see each call site.
+  const composer = new Composer();
+  const report = new Reporter({ emit: (line) => { composer.ingest('builder', line); } });
   // Progress spinner: TTY-only, and off under CLODE_VERBOSE (which prints its own
   // phase lines). phase()/done() are no-ops otherwise, so piped/CI builds are
-  // byte-for-byte unchanged. done() is called before every terminal write.
-  const spin = makePhaseSpinner(stderr, !!stderr.isTTY && !verbose);
+  // byte-for-byte unchanged. done() is called before every terminal write. Its
+  // data source is composer.totals(): once ANY step (builder or worker) has
+  // declared a real total, the spinner shows real counts, not a fake percentage
+  // for whatever label happens to be on screen.
+  const spin = makePhaseSpinner(stderr, !!stderr.isTTY && !verbose, () => composer.totals());
   const fail = (m) => { spin.done(); stderr.write('clode: ' + m + '\n'); return 1; };
   const SCALE = timeoutScale(env);
 
@@ -945,6 +974,13 @@ async function clodeBuild(args, opts) {
     // base (CLODE_TARGET_TEMPLATE). No compiler on this host — the engine is data.
     // (naude + --target skips this entirely: a naude cross-build resolves pinned
     // NODEs, not a tjs engine template — see the naude branch below.)
+    //
+    // A REAL step this label was hiding entirely: today's build shows nothing
+    // while this fetch runs. No natural denominator (a manifest lookup + one
+    // Range-fetch, not N items), so it stays a label like sign/smoke below.
+    spin.phase('Fetching template');
+    report.plan([{ name: 'fetch-template' }]);
+    report.start('fetch-template');
     let manifest, baseUrl;
     try { ({ manifest, baseUrl } = await resolveManifest(opts)); } catch (e) { return fail(e.message); }
     const entry = tpl.resolveTarget(manifest, parsed.target);
@@ -968,6 +1004,7 @@ async function clodeBuild(args, opts) {
         blobPath: opts.templatesBlob || env.CLODE_TEMPLATES_BLOB || null,
       });
     } catch (e) { return fail(e.message); }
+    report.finish('fetch-template');
     env.CLODE_TARGET_TEMPLATE = enginePath;
     clodeLog(`clode: build --target ${parsed.target}: engine ${path.basename(enginePath)} -> cross-fuse`);
     // fall through to the normal build+fuse flow, which honors CLODE_TARGET_TEMPLATE.
@@ -1245,6 +1282,11 @@ async function clodeBuild(args, opts) {
 
   const ROOT = path.resolve(opts.libexec, '..');
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-'));
+  // Hoisted out of the try block below (not `let`-declared inside it) so the
+  // trace-log append in `finally` can read the bundle version this build
+  // actually staged — undefined for --self, exactly like the manifest's own
+  // bundleVersion field.
+  let bundleVersion;
   try {
     // -- fused-builder payload: when `build` runs under a fused NATIVE clode
     // (the bootstrap mounted the builder-role VFS), the fuse inputs are archive
@@ -1385,8 +1427,11 @@ async function clodeBuild(args, opts) {
     }
 
     // -- payload staging: the upstream Claude Code bundle (default), or the
-    // esbuilt clode-main bundle (--self).
+    // esbuilt clode-main bundle (--self). No natural denominator (one bundle
+    // staged, not N items) — a label, like fetch-template/sign/smoke.
     spin.phase('Extracting bundle');
+    report.plan([{ name: 'extract' }]);
+    report.start('extract');
     let stageDir, key, providerPlatform;
     if (self) {
       let bundle = env.CLODE_MAIN_BUNDLE;
@@ -1458,9 +1503,11 @@ async function clodeBuild(args, opts) {
       const staged = stageUpstreamCli({ env, libexec, verbose, prefix: 'build', log: clodeLog });
       if (staged.error) return fail(staged.error);
       key = staged.key;
+      bundleVersion = key;
       stageDir = staged.stageDir;
       providerPlatform = staged.providerPlatform;
     }
+    report.finish('extract');
 
     // -- ext-dep closure (both roles: quaude requires them at runtime; the
     // builder ships them as the member INPUTS for the quaude it will fuse).
@@ -1468,6 +1515,15 @@ async function clodeBuild(args, opts) {
     // ensureDeps installs into the deps store unless the deps ship beside
     // this checkout (deps/claude/node_modules — Claude Code's deps, not
     // clode's own; repo/npm layout).
+    //
+    // A REAL step 'Extracting bundle' was hiding: resolving + walking the
+    // ext-dep closure is separate work from staging the bundle above, and
+    // unlike that step it DOES have a natural denominator — the package
+    // count — known only once the walk (computeDepClosure) actually
+    // finishes, same "declare once truly known" rule quaude-fuse.js's own
+    // 'compile'/'assets' steps follow (see its comment on why 'merge' alone
+    // is planned up front and the rest waits).
+    spin.phase('Resolving dependencies');
     if (!nmDir) {
       try {
         nmDir = resolveClaudeNmDir({ libexec, here, verbose, env, ROOT });
@@ -1494,7 +1550,20 @@ async function clodeBuild(args, opts) {
     } catch (e) {
       return fail(`build: ${(e && e.message) || e}`);
     }
+    // Declared+finished together, immediately after the count is known: the
+    // walk itself is one synchronous call, not an iterative loop this file
+    // could report progress() through — same shape as quaude-fuse.js's
+    // 'assets' step (a count with no live increments in between).
+    report.plan([{ name: 'resolve-deps', total: extDeps.length }]);
+    report.start('resolve-deps');
+    report.finish('resolve-deps', extDeps.length);
 
+    // Another REAL step 'Extracting bundle' was hiding: two closure-trust gates
+    // that run AFTER resolve-deps, BEFORE anything gets signed. No natural
+    // denominator (pass/fail checks, not N items) — a label.
+    spin.phase('Verifying dependencies');
+    report.plan([{ name: 'verify' }]);
+    report.start('verify');
     // -- dep-closure DRIFT gate (see assertNoUnknownBareSpecifiers's comment,
     // above, for the full rationale): quaude only — --self ships clode's OWN
     // esbuilt bundle, not Claude Code's, so there is nothing to scan for that
@@ -1519,6 +1588,14 @@ async function clodeBuild(args, opts) {
     } catch (e) {
       return fail(`build: ${(e && e.message) || e}`);
     }
+    report.finish('verify');
+
+    // The sign step, below: assembling the manifest fields + re-signing the
+    // template copy. No natural denominator (one manifest, one signature) —
+    // a label, same as fetch-template/smoke.
+    spin.phase('Signing');
+    report.plan([{ name: 'sign' }]);
+    report.start('sign');
 
     // -- manifest BOM (Task a): the resolved closure as name@version, so "what
     // is in this quaude?" is answerable at a glance from manifest.json alone,
@@ -1587,9 +1664,12 @@ async function clodeBuild(args, opts) {
       clodeLog('clode: build: template copy re-signed (ad-hoc)');
     }
     fs.writeFileSync(extrasPath, JSON.stringify(extras));
+    report.finish('sign');
 
     // -- fuse, under the template itself.
     spin.phase('Fusing');
+    report.plan([{ name: 'fuse' }]);
+    report.start('fuse');
     clodeLog(`clode: build: fusing ${out} ...`);
     const w = await spawnRun(template, ['run', path.join(libexec, 'quaude-fuse.js'),
       signedBase, stageDir, path.join(libexec, 'node-shim'), nmDir,
@@ -1610,6 +1690,25 @@ async function clodeBuild(args, opts) {
       // The merge is cached once per provider (quaude-fuse.js's graph-merged.json), so only the
       // first build of a given upstream version on a given machine gets anywhere near this.
       ...(self ? [baseTemplate] : [])], { env, timeout: 1800000 * SCALE });
+    report.finish('fuse');
+    // Route the worker's protocol lines into the SAME composer, over the spawn
+    // seam — the one every build step goes through — BEFORE the status check:
+    // a failed fuse may still have reported real partial progress (compile got
+    // partway through before the worker died) worth keeping. `run` buffers the
+    // whole child stdout rather than streaming it, so this happens once the
+    // worker has already exited, not live — the trace log and the totals a
+    // LATER phase's spinner reads are still real, they just update in one
+    // jump rather than incrementally during 'Fusing' itself.
+    //
+    // ingest() returns false for a line that is not one of its `@clode-step `
+    // sentinels — anything else the worker printed (its own console.log
+    // narration) is real content and must reach the human-facing log
+    // untouched; only the sentinel lines themselves are filtered out, so a
+    // `clode build` log stops showing raw JSON (see clodeLog below).
+    let workerPassthrough = '';
+    for (const line of w.stdout.split('\n')) {
+      if (!composer.ingest('worker', line)) workerPassthrough += line + '\n';
+    }
     if (w.status !== 0) {
       let extra = '';
       if (!w.stdout && !w.stderr) {
@@ -1624,7 +1723,7 @@ async function clodeBuild(args, opts) {
       }
       return fail(`build: fuse worker failed (${describeExit(w)}):\n${w.stdout}${w.stderr}${extra}`);
     }
-    clodeLog(w.stdout.trimEnd());
+    clodeLog(workerPassthrough.trimEnd());
 
     // Cross-fuse: the trailer is written to a foreign-platform base the host
     // cannot exec, so stop here — no PONG/attest/version smoke. The output is
@@ -1639,18 +1738,30 @@ async function clodeBuild(args, opts) {
     if (self) {
       // -- builder smoke: its own flags must answer, with NODE_PATH stripped
       // (self-containment proof at the same strength as the quaude smoke).
-      spin.phase('Smoking');
+      // TWO real checks, not one: --version and --help are separate spawnRuns
+      // against separate assertions — the OLD single 'Smoking' phase cleared
+      // its spinner (spin.done()) right after --version, so --help actually
+      // ran with no indicator at all. Naming both keeps that from recurring.
       clodeLog('clode: build: smoke --version/--help ...');
       const smokeEnv = { ...env };
       delete smokeEnv.NODE_PATH;
+      spin.phase('Smoke --version');
+      report.plan([{ name: 'smoke-version' }]);
+      report.start('smoke-version');
       const v = await spawnRun(out, ['--version'], { env: smokeEnv, cwd: work, timeout: 120000 * SCALE });
+      report.finish('smoke-version');
       spin.done();
       if (v.status !== 0 || !/^clode /.test(v.stdout)) {
         stderr.write(`clode: build --self: SMOKE FAILED — the fused builder did not answer --version\n`);
         stderr.write(`clode: build --self: ${describeExit(v)} stdout:\n${v.stdout}\nstderr:\n${v.stderr}\n`);
         return 1;
       }
+      spin.phase('Smoke --help');
+      report.plan([{ name: 'smoke-help' }]);
+      report.start('smoke-help');
       const h = await spawnRun(out, ['--help'], { env: smokeEnv, cwd: work, timeout: 120000 * SCALE });
+      report.finish('smoke-help');
+      spin.done();
       if (h.status !== 0 || !/clode build/.test(h.stdout)) {
         stderr.write(`clode: build --self: SMOKE FAILED — the fused builder did not answer --help\n`);
         stderr.write(`clode: build --self: ${describeExit(h)} stdout:\n${h.stdout}\nstderr:\n${h.stderr}\n`);
@@ -1666,7 +1777,10 @@ async function clodeBuild(args, opts) {
     // stripped so a pass PROVES the binary is self-contained.
     clodeLog('clode: build: smoke -p against the canned Messages mock ...');
     spin.phase('Smoking');
+    report.plan([{ name: 'smoke' }]);
+    report.start('smoke');
     const smoke = await smokeTarget(out, { spawnRun, env, cwd: work, timeout: 120000 * SCALE });
+    report.finish('smoke');
     spin.done();
     if (!smoke.ok) {
       stderr.write(`clode: build: SMOKE FAILED — the fused quaude did not complete the mock round-trip\n`);
@@ -1676,8 +1790,14 @@ async function clodeBuild(args, opts) {
 
     // -- smoke 2: attest must verify every member from the trailer just written. The
     // naude branch runs this SAME helper against its own product (attestTarget) — one
-    // flag, one verdict string, one gate.
+    // flag, one verdict string, one gate. A REAL step 'Smoking' was hiding: this ran
+    // with NO spinner at all before (spin.done() above cleared it right after smoke 1).
+    spin.phase('Attesting');
+    report.plan([{ name: 'attest' }]);
+    report.start('attest');
     const attest = await attestTarget(out, { spawnRun, env, cwd: work, timeout: 120000 * SCALE });
+    report.finish('attest');
+    spin.done();
     if (!attest.ok) {
       stderr.write(`clode: build: ATTEST FAILED (${describeExit(attest)}):\n${attest.stdout}\n${attest.stderr}\n`);
       return 1;
@@ -1688,6 +1808,28 @@ async function clodeBuild(args, opts) {
     return 0;
   } finally {
     spin.done(); // safety net: stop the animation on any exit path (throws, early returns)
+    // One durable trace-log line per build (Task 3's build-trace.cjs), win or
+    // lose — a failed build's partial step timings are real data too, and this
+    // `finally` is the one place every exit path from the try above (success,
+    // a `fail()` early return, or a thrown error) runs. `composer.steps()` may
+    // be `[]` if the build died before the try's first plan() call (the
+    // fetch-template branch runs before it) — that is still a run worth a
+    // line: an empty-steps entry says "a build was attempted here" as
+    // honestly as a full one says how long each part took. Best-effort: a
+    // trace-log write failure (disk full, permissions) must never turn a
+    // build's own outcome into a lie.
+    try {
+      appendRun(traceLog(env), {
+        steps: composer.steps(),
+        meta: {
+          clodeVersion: version,
+          bundleVersion,
+          target: parsed.target,
+          host: `${process.platform}-${process.arch}`,
+          interpreter: `${(process.release && process.release.name) || 'node'} ${process.version}`,
+        },
+      });
+    } catch (e) { clodeLog(`clode: build: could not append to the trace log: ${(e && e.message) || e}`); }
     try { fs.rmSync(work, { recursive: true, force: true }); } catch { /* best effort */ }
   }
 }

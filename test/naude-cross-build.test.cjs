@@ -101,6 +101,11 @@ test('clode build --naude --target macos-amd64: cross-built naude boots under Ro
     CLODE_CLAUDE_BIN: providerBin(),
     CLODE_CACHE: process.env.CLODE_CACHE || path.join(DIR, 'cache'),
     CLODE_NODES: process.env.CLODE_NODES || path.join(DIR, 'nodes'),
+    // No CLODE_STATE_ROOT needed here (unlike the quaude-path tests
+    // elsewhere): this is a `--naude` build, and clodeBuild's --naude branch
+    // always returns from inside its own `if (naude) {...}` block before
+    // the shared try/finally that appends a build-trace.jsonl line
+    // (Task 5) is ever reached.
     DYLD_INSERT_LIBRARIES: '',
   };
 

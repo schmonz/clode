@@ -75,7 +75,11 @@ test('clode build --target: auto-fetches manifest + engine from the release (no 
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'af-'));
   let manifestUrl = null, engineUrl = null;
   await fuse.clodeBuild(['--target', 'linux-x64', '--out', path.join(d, 'q')], {
-    env: { CLODE_TJS_PIN: pin },   // no CLODE_TEMPLATES_MANIFEST — must auto-fetch
+    // CLODE_STATE_ROOT: this build fails downstream (no provider) but still
+    // reaches clodeBuild's finally, which appends one build-trace.jsonl line
+    // per build (Task 5) to a path resolved off HOME/XDG when nothing
+    // overrides it — without this, the real ~/.local/share/clode.
+    env: { CLODE_TJS_PIN: pin, CLODE_STATE_ROOT: d },   // no CLODE_TEMPLATES_MANIFEST — must auto-fetch
     here: REPO, libexec: LIBEXEC, version: '3.1.4', stdout: sink(), stderr: sink(),
     templateCacheDir: path.join(d, 'cache'),
     fetchManifest: async (u) => { manifestUrl = u; return manifestJson; },

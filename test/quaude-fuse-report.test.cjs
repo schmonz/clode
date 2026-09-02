@@ -27,6 +27,38 @@ test('build-report.cjs is CARRIED into a fused builder, or it works from a check
     'add it to the carried-member list beside scc-merge.cjs (:294)');
 });
 
+// Carried forward from Task 4's review: the arithmetic tests above (feed()/
+// 'never mismatches'/'regression proof') construct their call sequence BY HAND
+// as JS literals and never load quaude-fuse.js at all — reverting the file's
+// actual step ordering (the fix this round made: 'compile'/'assets' planned
+// AFTER 'merge' finishes, from the POST-merge doc.order) would not fail any of
+// them. This is the cheap guard that actually reads the source and would.
+//
+// `report.plan(` (with the receiver, not bare 'plan(') anchors on the two REAL
+// calls only — the prose comments above them say "plan() call", never
+// "report.plan(", so lastIndexOf/indexOf both land on code. The trap the brief
+// warns about is a DIFFERENT anchor: 'scc-merge.cjs' (used by the test above)
+// appears three times earlier in the file (inside mergeCyclicGroups and its
+// own commentary) before the merge step's own name ever does, so indexOf on
+// THAT literal would anchor on the wrong occurrence. `report.finish('merge'`
+// is not reused that way — it names the merge step's own completion, and
+// nothing else in the file happens to contain that exact substring — so a
+// plain lastIndexOf on it is safe here.
+test('quaude-fuse plans compile/assets AFTER merge finishes, in the SOURCE ITSELF (not just in a hand-written test double)', () => {
+  const src = fs.readFileSync(require.resolve('../libexec/quaude-fuse.js'), 'utf8');
+  const planIdxs = [];
+  for (let i = src.indexOf('report.plan('); i !== -1; i = src.indexOf('report.plan(', i + 1)) planIdxs.push(i);
+  assert.strictEqual(planIdxs.length, 2,
+    'expected exactly two report.plan( call sites: merge alone, then compile+assets together');
+  const mergeFinishIdx = src.lastIndexOf("report.finish('merge'");
+  assert.notStrictEqual(mergeFinishIdx, -1, "report.finish('merge' must appear literally");
+  assert.ok(planIdxs[1] > mergeFinishIdx,
+    "the SECOND report.plan( (compile/assets) must appear AFTER report.finish('merge') in the source — "
+    + 'planning them from the pre-merge doc.order.length would silently under-declare a total that the '
+    + 'in-worker merge fallback then grows past, tripping the over-report mismatch (see the regression-proof '
+    + 'test above for what that looked like)');
+});
+
 test('the worker declares compile, assets and merge as named steps', () => {
   const src = fs.readFileSync(require.resolve('../libexec/quaude-fuse.js'), 'utf8');
   for (const name of ['compile', 'assets', 'merge']) {

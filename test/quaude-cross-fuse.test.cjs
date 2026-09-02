@@ -43,7 +43,14 @@ before(() => {
   OUT = path.join(DIR, 'quaude.exe');
   BUILD = spawnSync(process.execPath, [ENTRY, 'build', '--self', '--out', OUT], {
     encoding: 'utf8', timeout: 300000,
-    env: { ...process.env, CLODE_TJS: tjsPath(), CLODE_TARGET_TEMPLATE: foreign, CLODE_MAIN_BUNDLE: bundle, DYLD_INSERT_LIBRARIES: '' },
+    env: {
+      ...process.env, CLODE_TJS: tjsPath(), CLODE_TARGET_TEMPLATE: foreign, CLODE_MAIN_BUNDLE: bundle,
+      // clodeBuild's finally now appends one build-trace.jsonl line per build
+      // (Task 5), resolved off HOME/XDG when nothing overrides it — without
+      // this, a real build here writes into the real ~/.local/share/clode.
+      CLODE_STATE_ROOT: DIR,
+      DYLD_INSERT_LIBRARIES: '',
+    },
   });
 });
 after(() => { if (DIR) { try { fs.rmSync(DIR, { recursive: true, force: true }); } catch { /* */ } } });

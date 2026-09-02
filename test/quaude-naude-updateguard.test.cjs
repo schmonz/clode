@@ -62,6 +62,10 @@ before(() => {
       ...process.env,
       CLODE_CLAUDE_BIN: providerBin(),
       CLODE_CACHE: path.join(DIR, 'quaude-cache'),
+      // clodeBuild's finally now appends one build-trace.jsonl line per build
+      // (Task 5), resolved off HOME/XDG when nothing overrides it — without
+      // this, a real build here writes into the real ~/.local/share/clode.
+      CLODE_STATE_ROOT: DIR,
       CLODE_TJS: tjsPath(),
       DYLD_INSERT_LIBRARIES: '',
     },
@@ -89,6 +93,11 @@ before(() => {
         CLODE_CACHE: path.join(DIR, 'naude-cache'),
         CLODE_TJS: tjsPath(),
         CLODE_NODES: NODES,
+        // NOT CLODE_STATE_ROOT here (unlike the quaude build above): the
+        // --naude branch of clodeBuild always returns from inside its own
+        // `if (naude) {...}` block before the shared try/finally that
+        // appends a build-trace.jsonl line (Task 5) is ever reached, so
+        // there is nothing for it to isolate on this path.
         DYLD_INSERT_LIBRARIES: '',
       },
     });

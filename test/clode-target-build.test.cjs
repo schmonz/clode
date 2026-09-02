@@ -68,7 +68,13 @@ test('clode build --target: resolves + obtains the engine, sets CLODE_TARGET_TEM
     targets: { 'linux-x64': { tag: 'linux-glibc2.28-x64', engine: 'tjs-linux-x64-abc', sha256: sha, verified: 'smoke' } },
   }));
   const cacheDir = path.join(d, 'cache');
-  const env = { CLODE_TEMPLATES_MANIFEST: mf };
+  // CLODE_STATE_ROOT: without it, clodeBuild's finally (Task 5's one
+  // build-trace.jsonl line per build) resolves clodeDataDir off HOME/XDG —
+  // and since this `env` has no HOME either, that falls all the way to
+  // os.homedir(), the REAL one. This build fails downstream, but it still
+  // reaches that finally, so without this override the test would silently
+  // write into the real, shared ~/.local/share/clode.
+  const env = { CLODE_TEMPLATES_MANIFEST: mf, CLODE_STATE_ROOT: d };
   // Injected fetch returns the fake engine; no payload/provider in this env, so the
   // build fails downstream — but the engine must be OBTAINED and the template SET first.
   await fuse.clodeBuild(['--target', 'linux-x64', '--out', path.join(d, 'q')], {
