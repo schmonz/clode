@@ -1747,6 +1747,14 @@ async function clodeBuild(args, opts) {
     // no-total single unit and finish unconditionally on every return path, so
     // there is nothing for mismatches() to catch there; if that ever changes,
     // this comment is the marker for where a second check would need to go.
+    //
+    // `clode build --naude` does NOT pass through here, and more to the point
+    // declares no steps at all — neither scripts/build-naude.mjs nor the --naude
+    // branch above calls report.plan/start/finish. So naude is not merely
+    // unchecked, it is structurally unmeasurable: nothing is declared, so nothing
+    // can mismatch. Harmless today, and deliberately left alone rather than
+    // half-wired; whoever brings naude into the step protocol must add its
+    // enforcement point too, or it will look covered from here and not be.
     const mismatches = composer.mismatches();
     if (mismatches.length) {
       for (const m of mismatches) stderr.write(`clode: build: MISMATCH: ${m.reason}\n`);
