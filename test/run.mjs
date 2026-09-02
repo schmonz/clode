@@ -127,7 +127,14 @@ const REAL_STORE = path.join(dataBase, 'clode');
 // EXTERNAL real state a test must never touch, which the whole-checkout gate (rooted
 // at ROOT) cannot see at all.
 const GUARD_WATCH = [
-  REAL_STORE,
+  // 'build-trace.jsonl' is ignored here: clode-paths.cjs's traceLog() names
+  // <dataBase>/clode/build-trace.jsonl as the durable per-build timing log (Task 3,
+  // 2026-09-02-phase2-name-the-steps) — it MUST survive across builds, so it lives in
+  // the real HOME/XDG state dir on purpose, not in build scratch or the checkout.
+  // Without this, a build appending a timing line to it (once Task 5 wires the writer
+  // in) would report a HERMETICITY VIOLATION for doing precisely what this log exists
+  // to do.
+  { path: REAL_STORE, ignore: ['build-trace.jsonl'] },
   // test/tjs-darwin-poll-fixup.test.cjs:29 runs `node scripts/build-tjs.mjs --source-only`
   // on purpose — its own header says it "resets the shared vendor checkout to pristine
   // and re-applies every patch + fixup". Rewriting tjs-vendor/txiki.js IS that test, not

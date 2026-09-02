@@ -55,4 +55,12 @@ function watchDir(env = process.env) {
   return env.CLODE_WATCH_DIR || cacheBase(env);
 }
 
-module.exports = { homeDir, clodeDataDir, clodeCacheDir, depsStore, providersDir, nodeStore, watchDir, cacheBase };
+// The durable build-timing log. It must survive ACROSS builds, so it cannot live in
+// build scratch (phase 1 made that off-tree and ephemeral on purpose) and it must not
+// live in the checkout (phase 1 exists to keep writes out of it). So it joins the
+// existing HOME/XDG state mechanism rather than inventing a location.
+function traceLog(env = process.env) {
+  return env.CLODE_TRACE_LOG || path.join(clodeDataDir(env), 'build-trace.jsonl');
+}
+
+module.exports = { homeDir, clodeDataDir, clodeCacheDir, depsStore, providersDir, nodeStore, watchDir, cacheBase, traceLog };
