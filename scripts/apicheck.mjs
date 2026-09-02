@@ -145,8 +145,14 @@ export function runGate(opts = {}) {
   log('# clode API-surface gate (v1: naude reference vs quaude subject)\n');
 
   const staged = stage();
-  if (!staged) {
-    log('SKIP: no Bun-packaged Claude Code provider resolved.');
+  // stageProviderCli distinguishes "no provider at all" (null) from "a provider
+  // was FOUND and staging it threw" ({ error }) — a `if (!staged)` check alone is
+  // false on the latter, because that object is truthy, and the gate would run on
+  // with staged.cli === undefined instead of saying what went wrong. Ask
+  // providerSkipReason which case this is; it returns null only on real success.
+  const stageSkip = models.providerSkipReason(staged, 'no Bun-packaged Claude Code provider resolved.');
+  if (stageSkip) {
+    log(`SKIP: ${stageSkip}`);
     log('  The gate stages cli.cjs from a real provider binary; point CLODE_PROVIDER_BIN');
     log("  or CLODE_CLAUDE_BIN at one, or run 'clode fetch'.");
     return 0;

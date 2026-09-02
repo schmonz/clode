@@ -29,6 +29,28 @@ test('no provider: prints a clear skip and passes (exit 0)', async () => {
   assert.match(out.text(), /provider/i);
 });
 
+test('a provider that was FOUND but failed to stage skips NAMING the failure, and never dispatches', async () => {
+  // The bug this pins: stageProviderCli returns null for "no provider" but a
+  // TRUTHY { error } for "found it, staging threw". A bare `if (!staged)` is
+  // false on that object, so the gate used to fall through its skip block and
+  // dispatch with staged.cli === undefined — an engine-internals crash instead
+  // of the one sentence that says what is actually wrong.
+  const runGate = await gate();
+  const out = sink();
+  const calls = [];
+  const status = runGate({
+    stage: () => ({ error: 'scc-merge: group 1 renamed __m28_get into a contextual-keyword position' }),
+    runNaude: (cli) => { calls.push(cli); return ok(); },
+    runQuaude: (cli) => { calls.push(cli); return ok(); },
+    log: out.log,
+    corpus: CORPUS,
+  });
+  assert.strictEqual(status, 0);
+  assert.deepStrictEqual(calls, [], 'a broken provider must not dispatch either model');
+  assert.match(out.text(), /scc-merge: group 1 renamed __m28_get/,
+    'the skip must quote the real staging error, not a generic "no provider" line');
+});
+
 test('dispatches BOTH models against the same staged cli — no bin/clode, no CLODE_ENGINE', async () => {
   const runGate = await gate();
   const calls = [];
