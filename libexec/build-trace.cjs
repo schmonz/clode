@@ -40,28 +40,40 @@ function traceEvents(steps, meta) {
   });
 }
 
+// A run is anything shaped like what appendRun writes: an object carrying a `steps`
+// array and a `meta` object. SHARED by both directions on purpose (round-2 fix): the
+// review found appendRun validating only meta.interpreter while readRuns enforced the
+// full shape, so a caller could write a run (e.g. missing `steps`, or `steps` of the
+// wrong type) that landed durably and then came back invisible from every read —
+// indistinguishable from hand-corruption, with no error at either end to say so. One
+// predicate used on both sides is what keeps the write and read contracts from
+// drifting apart again; `readRuns` also uses it to recognize valid-but-foreign JSON on
+// a line (a hand-edit, a different tool's line, `null`, a bare number), which is real
+// content that parsed fine and must not be mistaken for storage damage.
+function isRunShaped(x) {
+  return !!x && typeof x === 'object' && !Array.isArray(x)
+    && Array.isArray(x.steps) && !!x.meta && typeof x.meta === 'object' && !Array.isArray(x.meta);
+}
+
 // A run without its interpreter recorded is not a promise anyone can trust later —
 // Phase 1 lost an afternoon to two agents disagreeing about a verdict because neither
 // had asked which `node` produced it. Refusing here (rather than merely documenting
 // the field as required) is what keeps that guarantee real: nothing durable gets
-// written that cannot later be explained.
+// written that cannot later be explained. And refusing on shape (isRunShaped) BEFORE
+// that, mirroring exactly what readRuns will demand back, closes the round-2 gap: a
+// run appendRun accepts must never come back unreadable.
 function appendRun(logPath, run, fsm = realFs) {
-  const interpreter = run && run.meta && run.meta.interpreter;
+  if (!isRunShaped(run)) {
+    throw new Error('build-trace: refusing to record a run — it must be an object with '
+      + 'a `steps` array and a `meta` object (readRuns will refuse anything less)');
+  }
+  const interpreter = run.meta.interpreter;
   if (typeof interpreter !== 'string' || interpreter.trim() === '') {
     throw new Error('build-trace: refusing to record a run without meta.interpreter — '
       + 'a timing without its interpreter is not comparable across machines');
   }
   fsm.mkdirSync(path.dirname(logPath), { recursive: true });
   fsm.appendFileSync(logPath, JSON.stringify({ at: new Date().toISOString(), ...run }) + '\n');
-}
-
-// A run is anything shaped like what appendRun writes: an object carrying a `steps`
-// array and a `meta` object. Valid-but-foreign JSON on a line (a hand-edit, a
-// different tool's line, `null`, a bare number) is real content that parsed fine —
-// it must not be mistaken for storage damage.
-function isRunShaped(x) {
-  return !!x && typeof x === 'object' && !Array.isArray(x)
-    && Array.isArray(x.steps) && !!x.meta && typeof x.meta === 'object' && !Array.isArray(x.meta);
 }
 
 // onSkip(reason, line) lets a caller (and this file's own tests) tell a torn write

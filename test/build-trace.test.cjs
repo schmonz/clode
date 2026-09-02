@@ -65,8 +65,12 @@ test('appendRun refuses a run whose meta.interpreter is missing or empty — enf
     /interpreter/, 'missing interpreter must throw');
   assert.throws(() => T.appendRun(log, { steps: STEPS, meta: { ...META, interpreter: '' } }),
     /interpreter/, 'empty interpreter must throw');
+  // A wholly-missing `meta` is now caught by the shared shape check (round-2 fix,
+  // isRunShaped) before the interpreter-specific check ever runs — that's a stricter,
+  // earlier gate, so the message names `meta`/`steps` shape rather than `interpreter`
+  // specifically. See the round-2 tests below for that check's own coverage.
   assert.throws(() => T.appendRun(log, { steps: STEPS }),
-    /interpreter/, 'missing meta entirely must throw');
+    /meta/, 'missing meta entirely must throw');
   assert.strictEqual(fs.existsSync(log), false, 'a refused run must not partially write the log');
 });
 
@@ -112,4 +116,38 @@ test('traceEvents keeps a PER-COMPONENT ts track rather than one accumulator sha
   // Same-track events still accumulate serially against each other.
   assert.strictEqual(ev[2].ts, 1000 * 1000, 'same-track events remain serial against each other');
   assert.strictEqual(ev[0].args.tsSynthetic, true, 'ts is synthesized (no real start timestamp exists on a step yet) — a viewer must be told, not left to assume real wall-clock time');
+});
+
+// --- Task 3 fix round 2 -----------------------------------------------------------
+
+test('appendRun refuses a run with no steps array — write and read contracts must match (Finding, round 2)', () => {
+  const log = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'trace-')), 'builds.jsonl');
+  assert.throws(() => T.appendRun(log, { meta: META }),
+    /steps/, 'a run missing steps entirely must throw, not write a line readRuns will silently drop');
+  assert.strictEqual(fs.existsSync(log), false, 'a refused run must not partially write the log');
+});
+
+test('appendRun refuses a run whose steps is not an array (Finding, round 2)', () => {
+  const log = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'trace-')), 'builds.jsonl');
+  assert.throws(() => T.appendRun(log, { steps: 'not-an-array', meta: META }),
+    /steps/, 'a wrongly-typed steps must throw, not write a line readRuns will silently drop');
+  assert.strictEqual(fs.existsSync(log), false, 'a refused run must not partially write the log');
+});
+
+test('appendRun refuses a run whose meta is missing or not an object (Finding, round 2)', () => {
+  const log = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'trace-')), 'builds.jsonl');
+  assert.throws(() => T.appendRun(log, { steps: STEPS }), /interpreter|meta/,
+    'a run with no meta at all must throw');
+  assert.throws(() => T.appendRun(log, { steps: STEPS, meta: 'nope' }), /interpreter|meta/,
+    'a non-object meta must throw');
+  assert.strictEqual(fs.existsSync(log), false);
+});
+
+test('anything appendRun accepts, readRuns returns — the write and read contracts cannot drift apart (Finding, round 2)', () => {
+  const log = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'trace-')), 'builds.jsonl');
+  T.appendRun(log, { steps: STEPS, meta: META });
+  const skips = [];
+  const runs = T.readRuns(log, fs, (reason) => skips.push(reason));
+  assert.strictEqual(runs.length, 1, 'a run appendRun accepted must never come back unreadable');
+  assert.deepStrictEqual(skips, []);
 });
