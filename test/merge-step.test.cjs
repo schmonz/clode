@@ -9,6 +9,11 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+const { tjsPath, isApeFile, wantsTrampoline } = require('./node-shim-helper.cjs');
+const { parse } = require('../libexec/build-report.cjs');
 
 const SRC = fs.readFileSync(require.resolve('../scripts/merge-step.mjs'), 'utf8');
 
@@ -17,15 +22,56 @@ test('merge-step documents an argv contract at the top of the file', () => {
   assert.match(src.slice(0, 1200), /Usage/i, 'a program with a contract says so, like quaude-fuse.js:7-21');
 });
 
-test('merge-step declares its own steps through the protocol', () => {
-  const src = fs.readFileSync(require.resolve('../scripts/merge-step.mjs'), 'utf8');
-  assert.match(src, /build-report\.cjs/);
-  assert.match(src, /['"`]merge['"`]/);
+// BEHAVIORAL, not textual: a source-text match here was satisfied by merge-step.mjs's
+// OWN header comment ("Emits the `merge` step (plan/start/finish) through
+// libexec/build-report.cjs on stdout", line 27) — stripping the three real
+// report.plan/start/finish calls left the comment behind and the old version of this
+// test 11/11 green. Run the real file under the real engine and read its actual
+// stdout instead. cyclicRequires is deliberately empty (the exact no-op path: no
+// staged graph, no scc-merge.cjs, no moduleMeta needed) — the plan/start/finish
+// triple fires unconditionally around that branch (merge-step.mjs:90-91,251), so this
+// is a real, minimal, fast proof of the protocol claim, not a proof of the merge
+// compute itself (which stays the real-data proof in task-7-report.md per the file
+// header above).
+test('merge-step declares its own steps through the protocol (behavioral)', (t) => {
+  const tjs = tjsPath();
+  if (!tjs) { t.skip('no tjs binary (CLODE_TJS or build/tjs/tjs)'); return; }
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'merge-step-test-'));
+  const graphPath = path.join(tmp, 'graph.json');
+  fs.writeFileSync(graphPath, JSON.stringify({})); // no cyclicRequires -> the no-op path
+  const stageDir = path.join(tmp, 'stage');
+  fs.mkdirSync(stageDir);
+  const libexecDir = path.resolve(__dirname, '..', 'libexec'); // only build-report.cjs is
+  // read on this path — see merge-step.mjs's argv-contract header for why the merger
+  // (scc-merge.cjs etc.) is loaded only when cyclicRequires is non-empty.
+  const mergeStepPath = require.resolve('../scripts/merge-step.mjs');
+  const argv = ['run', mergeStepPath, graphPath, libexecDir, stageDir];
+  const [cmd, finalArgv] = wantsTrampoline(process.platform, isApeFile(tjs))
+    ? ['/bin/sh', ['-c', '"$@"', 'sh', tjs, ...argv]]
+    : [tjs, argv];
+  const r = spawnSync(cmd, finalArgv, { encoding: 'utf8', timeout: 30000 });
+  assert.strictEqual(r.status, 0,
+    `merge-step.mjs exited nonzero:\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
+  const records = r.stdout.split('\n').map(parse).filter(Boolean);
+  const plan = records.find((rec) => rec.type === 'plan');
+  assert.ok(plan, `no @clode-step plan record in stdout:\n${r.stdout}`);
+  assert.ok(plan.steps.some((s) => s.name === 'merge'),
+    `plan did not declare a 'merge' step: ${JSON.stringify(plan)}`);
+  assert.ok(records.some((rec) => rec.type === 'started' && rec.name === 'merge'),
+    `no started(merge) record in stdout:\n${r.stdout}`);
+  assert.ok(records.some((rec) => rec.type === 'finished' && rec.name === 'merge'),
+    `no finished(merge) record in stdout:\n${r.stdout}`);
 });
 
+// Points at merge-step.mjs itself (SRC, loaded once above) — NOT libexec/quaude-fuse.js,
+// which was the wrong file: Task 7 moved the merge (and its cache-key derivation) out of
+// quaude-fuse.js entirely, leaving only an unrelated carried-member-list mention of
+// 'scc-merge.cjs' there. The precise mustRead(...) call, not a bare substring, so a
+// comment mentioning scc-merge.cjs elsewhere in this file cannot satisfy it either.
 test('the cache key still derives from the merger source, not a literal', () => {
-  const src = fs.readFileSync(require.resolve('../libexec/quaude-fuse.js'), 'utf8');
-  assert.match(src, /scc-merge\.cjs/, 'the derived key must survive the extraction');
+  assert.match(SRC, /mustRead\(path\.join\(libexecDir, 'scc-merge\.cjs'\)/,
+    'merge-step.mjs must load the actual merger module (libexec/scc-merge.cjs) to derive '
+    + 'the cache key, not read it from the wrong file or inline a literal');
 });
 
 // The following carry forward the source assertions that used to live in
@@ -58,10 +104,20 @@ test('merge-step still honours CLODE_ALLOW_CYCLIC_REQUIRES=0', () => {
 
 // The cache must be invalidated when OUR merger changes, or editing scc-merge.cjs would have no
 // effect on any machine that had already built once — a debugging nightmare that looks like the
-// edit did nothing.
+// edit did nothing. /mergerVersion|MERGER_VERSION/ alone is satisfied by the JSON field name
+// `mergerVersion` (merge-step.mjs:147-148,232) EVEN AFTER its right-hand side is replaced with
+// the literal '12' — proven: doing exactly that (merger.MERGER_VERSION -> '12' at both sites)
+// left this test 11/11 green. A bare /merger\.MERGER_VERSION/ is not enough either: the string
+// also appears in two log lines (:154,:160) that survive the same mutation untouched, so it
+// would still match. Pin the two STRUCTURAL sites by name: the cache-read validity check and
+// the cache-write payload.
 test('the merge cache is keyed on the merger version, not only the provider', () => {
-  assert.match(SRC, /mergerVersion|MERGER_VERSION/,
-    'the cached merge must record which merger produced it');
+  assert.match(SRC, /raw\.mergerVersion === merger\.MERGER_VERSION/,
+    'the cache-read validity check must compare against the merger module\'s own '
+    + 'MERGER_VERSION, not a copied/inlined literal');
+  assert.match(SRC, /mergerVersion:\s*merger\.MERGER_VERSION,/,
+    'the cache-write payload must record the merger module\'s own MERGER_VERSION, not a '
+    + 'copied/inlined literal');
 });
 
 // A bundle with no cyclic requires must take exactly today's no-op path — merge-step.mjs is now
