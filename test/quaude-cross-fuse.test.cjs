@@ -13,6 +13,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { tjsPath } = require('./node-shim-helper.cjs');
 const { readTrailerIndex } = require('./quaude-archive.cjs');
+const { stateRoot } = require('./state-root-helper.cjs');
 
 const REPO = path.join(__dirname, '..');
 const ENTRY = path.join(REPO, 'bin', 'clode');
@@ -45,9 +46,10 @@ before(() => {
     encoding: 'utf8', timeout: 300000,
     env: {
       ...process.env, CLODE_TJS: tjsPath(), CLODE_TARGET_TEMPLATE: foreign, CLODE_MAIN_BUNDLE: bundle,
-      // No per-file CLODE_STATE_ROOT: this env spreads `...process.env`, so
-      // test/run.mjs's single, central CLODE_STATE_ROOT already covers the
-      // build-trace.jsonl append clodeBuild's finally makes (Task 5).
+      // stateRoot(DIR): respects test/run.mjs's central CLODE_STATE_ROOT when
+      // present, else falls back to this file's own private DIR -- needed
+      // for a standalone `node --test` run (run.mjs never executes).
+      CLODE_STATE_ROOT: stateRoot(DIR),
       DYLD_INSERT_LIBRARIES: '',
     },
   });

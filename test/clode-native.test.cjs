@@ -32,6 +32,7 @@ const { createRequire } = require('node:module');
 const { tjsPath, skipUnlessTjs, REPO } = require('./node-shim-helper.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('./mock-anthropic-helper.cjs');
 const { toolchainDir } = require('../scripts/platform-tag.cjs');
+const { stateRoot } = require('./state-root-helper.cjs');
 
 const ENTRY = path.join(REPO, 'bin', 'clode');
 const VERSION = fs.readFileSync(path.join(REPO, 'VERSION'), 'utf8').replace(/\n+$/, '');
@@ -97,14 +98,15 @@ before(() => {
       ...process.env,
       CLODE_TJS: tjsPath(),
       CLODE_MAIN_BUNDLE: bundle,
-      // No per-file CLODE_STATE_ROOT: this env spreads `...process.env`, so
-      // test/run.mjs's single, central CLODE_STATE_ROOT already covers the
-      // build-trace.jsonl append clodeBuild's finally makes (Task 5) -- see
-      // its comment there for how round 1's per-file default here specifically
-      // (this test gates on tjsPath() alone, no CLODE_LIVE_RENDER/
-      // CLODE_PROVIDER_BIN, so it ran on EVERY suite pass) was the one that
-      // was actually firing, live-proven 84 -> 85 lines, before this moved
-      // to the central mechanism.
+      // stateRoot(): respects test/run.mjs's central CLODE_STATE_ROOT when
+      // present, else falls back to this file's own private DIR -- needed
+      // for a standalone `node --test` run (run.mjs never executes) and for
+      // CI, which invokes this file directly (.github/workflows/ci.yml).
+      // This test gates on tjsPath() alone (no CLODE_LIVE_RENDER/
+      // CLODE_PROVIDER_BIN), so it runs on EVERY suite pass -- the exact
+      // call site proven live-firing into the real ~/.local/share/clode
+      // (84 -> 85 lines) before a per-file root existed at all.
+      CLODE_STATE_ROOT: stateRoot(DIR),
       DYLD_INSERT_LIBRARIES: '',
     },
   });

@@ -30,6 +30,7 @@ const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('./mock-anth
 const { cacheKey } = require('../libexec/clode-resolve.cjs');
 const { providerPlatformOf } = require('../libexec/extract-claude-js.cjs');
 const { readManifest } = require('./quaude-archive.cjs');
+const { stateRoot } = require('./state-root-helper.cjs');
 
 const ENTRY = path.join(REPO, 'bin', 'clode');
 const VERSION = fs.readFileSync(path.join(REPO, 'VERSION'), 'utf8').replace(/\n+$/, '');
@@ -49,10 +50,11 @@ before(() => {
       ...process.env,
       CLODE_CLAUDE_BIN: providerBin(),
       CLODE_CACHE: path.join(DIR, 'cache'),   // hermetic: never the real cache
-      // No per-file CLODE_STATE_ROOT: this env spreads `...process.env`, so
-      // test/run.mjs's single, central CLODE_STATE_ROOT (set once, for the
-      // whole suite, for the same build-trace.jsonl reason CLODE_CACHE above
-      // is pinned) already covers it.
+      // stateRoot(DIR): respects test/run.mjs's central CLODE_STATE_ROOT when
+      // present, else falls back to this file's own private DIR -- needed for
+      // a standalone `node --test` run (run.mjs never executes), same reason
+      // CLODE_CACHE above is pinned.
+      CLODE_STATE_ROOT: stateRoot(DIR),
       CLODE_TJS: tjsPath(),
       DYLD_INSERT_LIBRARIES: '',
     },

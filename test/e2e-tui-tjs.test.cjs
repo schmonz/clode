@@ -14,6 +14,7 @@ const { sandbox, REPO } = require('./e2e.cjs');
 const { seedClaudeProfile, capture } = require('./e2e-pty.cjs');
 const { resolveClaudeBin } = require('../libexec/clode-resolve.cjs');
 const { tjsPath } = require('./node-shim-helper.cjs');
+const { stateRoot } = require('./state-root-helper.cjs');
 
 const ENTRY = path.join(REPO, 'bin', 'clode');
 function realProvider() {
@@ -39,9 +40,11 @@ before(() => {
       ...process.env,
       CLODE_CLAUDE_BIN: provider,
       CLODE_CACHE: path.join(DIR, 'cache'),   // hermetic: never the real cache
-      // No per-file CLODE_STATE_ROOT: this env spreads `...process.env`, so
-      // test/run.mjs's single, central CLODE_STATE_ROOT already covers the
-      // build-trace.jsonl append clodeBuild's finally makes (Task 5).
+      // stateRoot(DIR): respects test/run.mjs's central CLODE_STATE_ROOT when
+      // present, else falls back to this file's own private DIR -- needed
+      // for a standalone `node --test` run and for CI, which invokes this
+      // file directly (.github/workflows/ci.yml runs e2e-tui-tjs.test.cjs).
+      CLODE_STATE_ROOT: stateRoot(DIR),
       CLODE_TJS: tjsPath(),
       DYLD_INSERT_LIBRARIES: '',
     },

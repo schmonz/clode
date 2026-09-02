@@ -40,6 +40,7 @@ const { spawn, spawnSync } = require('node:child_process');
 const { tjsPath, REPO } = require('./node-shim-helper.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('./mock-anthropic-helper.cjs');
 const cpaths = require('../libexec/clode-paths.cjs');
+const { stateRoot } = require('./state-root-helper.cjs');
 
 const ENTRY = path.join(REPO, 'bin', 'clode');
 function providerBin() { const p = process.env.CLODE_PROVIDER_BIN; return p && fs.existsSync(p) ? p : null; }
@@ -62,9 +63,10 @@ before(() => {
       ...process.env,
       CLODE_CLAUDE_BIN: providerBin(),
       CLODE_CACHE: path.join(DIR, 'quaude-cache'),
-      // No per-file CLODE_STATE_ROOT: this env spreads `...process.env`, so
-      // test/run.mjs's single, central CLODE_STATE_ROOT already covers the
-      // build-trace.jsonl append clodeBuild's finally makes (Task 5).
+      // stateRoot(DIR): respects test/run.mjs's central CLODE_STATE_ROOT when
+      // present, else falls back to this file's own private DIR -- needed
+      // for a standalone `node --test` run (run.mjs never executes).
+      CLODE_STATE_ROOT: stateRoot(DIR),
       CLODE_TJS: tjsPath(),
       DYLD_INSERT_LIBRARIES: '',
     },

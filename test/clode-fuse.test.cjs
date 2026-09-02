@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { stateRoot } = require('./state-root-helper.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const ENTRY = path.join(ROOT, 'bin', 'clode');
@@ -23,20 +24,21 @@ const NODE = process.execPath;
 // CI runner). Tests that need to inspect the watch dir pass their own
 // CLODE_WATCH_DIR via extraEnv, which wins (Object.assign, later key wins).
 //
-// CLODE_STATE_ROOT is NOT separately defaulted here: `clodeBuild`'s `finally`
-// appends one trace-log line per build (Task 5) to a path that resolves off
-// HOME/XDG when nothing overrides it, and this file's tests inherit
-// process.env (below), so test/run.mjs's OWN CLODE_STATE_ROOT (set once, for
-// the whole suite, for exactly this reason — see its comment) already flows
-// through every spawn here. A per-file default used to live here too; it was
-// removed once the central one existed, so there is one mechanism instead of
-// two silently agreeing (or, on the day one of the ten drifted, disagreeing).
+// CLODE_STATE_ROOT: `clodeBuild`'s `finally` appends one trace-log line per
+// build (Task 5) to a path that resolves off HOME/XDG when nothing overrides
+// it. stateRoot() respects test/run.mjs's central root when this file runs
+// under the whole suite, and otherwise mints a private one per call -- needed
+// for a standalone `node --test test/clode-fuse.test.cjs` run (proven live:
+// 21/21 pass while still writing 4 lines into the real
+// ~/.local/share/clode/build-trace.jsonl without this). A test that wants its
+// OWN state root passes CLODE_STATE_ROOT via extraEnv, which still wins
+// (Object.assign, later key wins).
 function runEntry(args, extraEnv) {
   const watchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-fuse-test-watch-'));
   return spawnSync(NODE, [ENTRY, ...args], {
     encoding: 'utf8',
     env: Object.assign({}, process.env,
-      { DYLD_INSERT_LIBRARIES: '', CLODE_WATCH_DIR: watchDir },
+      { DYLD_INSERT_LIBRARIES: '', CLODE_WATCH_DIR: watchDir, CLODE_STATE_ROOT: stateRoot() },
       extraEnv || {}),
   });
 }

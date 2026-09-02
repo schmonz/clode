@@ -7,6 +7,7 @@ const { spawnSync } = require('node:child_process');
 const { sandbox, REPO, NODE } = require('./e2e.cjs');
 const { capture, seedClaudeProfile } = require('./e2e-pty.cjs');
 const { tjsPath } = require('./node-shim-helper.cjs');
+const { stateRoot } = require('./state-root-helper.cjs');
 
 const ENTRY = path.join(REPO, 'bin', 'clode');
 const DOCTOR_PARITY = path.join(REPO, 'test', 'doctor-parity.cjs');
@@ -62,9 +63,10 @@ before(() => {
       ...process.env,
       CLODE_CLAUDE_BIN: native,
       CLODE_CACHE: path.join(DIR, 'cache'),   // hermetic: never the real cache
-      // No per-file CLODE_STATE_ROOT: this env spreads `...process.env`, so
-      // test/run.mjs's single, central CLODE_STATE_ROOT already covers the
-      // build-trace.jsonl append clodeBuild's finally makes (Task 5).
+      // stateRoot(DIR): respects test/run.mjs's central CLODE_STATE_ROOT when
+      // present, else falls back to this file's own private DIR -- needed
+      // for a standalone `node --test` run (run.mjs never executes).
+      CLODE_STATE_ROOT: stateRoot(DIR),
       CLODE_TJS: tjsPath(),
       DYLD_INSERT_LIBRARIES: '',
     },

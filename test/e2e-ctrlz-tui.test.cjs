@@ -26,6 +26,7 @@ const { sandbox, REPO } = require('./e2e.cjs');
 const { seedClaudeProfile, capture } = require('./e2e-pty.cjs');
 const { resolveClaudeBin } = require('../libexec/clode-resolve.cjs');
 const { tjsPath } = require('./node-shim-helper.cjs');
+const { stateRoot } = require('./state-root-helper.cjs');
 
 const ENTRY = path.join(REPO, 'bin', 'clode');
 const MARKER = 'ctrlz-survivor-73';
@@ -51,10 +52,10 @@ before(() => {
     quaude = path.join(DIR, 'quaude');
     const build = spawnSync(process.execPath, [ENTRY, 'build', '--out', quaude], {
       encoding: 'utf8', timeout: 300000,
-      // No per-file CLODE_STATE_ROOT: this env spreads `...process.env`, so
-      // test/run.mjs's single, central CLODE_STATE_ROOT already covers the
-      // build-trace.jsonl append clodeBuild's finally makes (Task 5).
-      env: { ...process.env, CLODE_CLAUDE_BIN: provider, CLODE_CACHE: path.join(DIR, 'cache'), CLODE_TJS: tjsPath(), DYLD_INSERT_LIBRARIES: '' },
+      // stateRoot(DIR): respects test/run.mjs's central CLODE_STATE_ROOT when
+      // present, else falls back to this file's own private DIR -- needed
+      // for a standalone `node --test` run (run.mjs never executes).
+      env: { ...process.env, CLODE_CLAUDE_BIN: provider, CLODE_CACHE: path.join(DIR, 'cache'), CLODE_STATE_ROOT: stateRoot(DIR), CLODE_TJS: tjsPath(), DYLD_INSERT_LIBRARIES: '' },
     });
     if (build.status !== 0) { SKIP = `clode build failed:\n${build.stdout}\n${build.stderr}`; return; }
   }

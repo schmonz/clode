@@ -28,6 +28,7 @@ const { clodeBuild } = require('../libexec/clode-fuse.cjs');
 const { cacheKey } = require('../libexec/clode-resolve.cjs');
 const { cacheSignature, extractorSigOf } = require('../libexec/clode-extract.cjs');
 const { providerPlatformOf } = require('../libexec/extract-claude-js.cjs');
+const { stateRoot } = require('./state-root-helper.cjs');
 
 // Stand up a fake provider bin + a pre-seeded extract cache so the real
 // resolve/extract path is a cache HIT (no extraction). Returns { env, cliPath }.
@@ -59,14 +60,13 @@ function seedProvider(dir) {
     ...process.env,
     CLODE_CLAUDE_BIN: provider,
     CLODE_CACHE: cache,
-    // No per-file CLODE_STATE_ROOT default here (there used to be one, for the
-    // one test at 'clode build (no --naude): never invokes build-naude.mjs',
-    // the only one below that drives the QUAUDE/self path and so reaches
-    // clodeBuild's finally / its build-trace.jsonl append — Task 5). This env
-    // spreads `...process.env`, so test/run.mjs's single, central
-    // CLODE_STATE_ROOT (see its comment) already covers it; a second default
-    // here would just be the same value set twice, in two places that could
-    // drift.
+    // stateRoot(dir): respects test/run.mjs's central CLODE_STATE_ROOT when
+    // present, else falls back to this fixture's own private `dir` -- needed
+    // standalone (run.mjs never executes) and matters for the one test at
+    // 'clode build (no --naude): never invokes build-naude.mjs', the only one
+    // below that drives the QUAUDE/self path and so reaches clodeBuild's
+    // finally / its build-trace.jsonl append (Task 5); harmless for the rest.
+    CLODE_STATE_ROOT: stateRoot(dir),
     DYLD_INSERT_LIBRARIES: '',
   };
   return { env, cliPath, stageDir };
