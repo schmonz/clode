@@ -23,27 +23,20 @@ const NODE = process.execPath;
 // CI runner). Tests that need to inspect the watch dir pass their own
 // CLODE_WATCH_DIR via extraEnv, which wins (Object.assign, later key wins).
 //
-// CLODE_STATE_ROOT gets the SAME default-then-overridable treatment, for the
-// SAME reason, one layer deeper: `clodeBuild`'s `finally` now appends one
-// trace-log line per build (Task 5) to <clodeDataDir>/build-trace.jsonl, which
-// resolves off HOME/XDG when nothing overrides it — so a build that reaches
-// that `finally` (every test below that gets past argv validation, pass or
-// fail) would otherwise append into the REAL ~/.local/share/clode on this
-// machine's actual HOME. This bit a real dev box (2026-09-02): the tests here
-// that never bothered to set HOME/CLODE_STATE_ROOT — because until this task
-// nothing under `clodeBuild` ever wrote anywhere keyed on it — silently wrote
-// dozens of trace lines into a real, shared, non-test directory across every
-// suite run, undetected by the run.mjs hermeticity guard because that guard
-// can only catch ABSENT -> created (its own documented blind spot) and the
-// store already existed. A private root here is that fix, at the one call
-// site every test in this file goes through.
+// CLODE_STATE_ROOT is NOT separately defaulted here: `clodeBuild`'s `finally`
+// appends one trace-log line per build (Task 5) to a path that resolves off
+// HOME/XDG when nothing overrides it, and this file's tests inherit
+// process.env (below), so test/run.mjs's OWN CLODE_STATE_ROOT (set once, for
+// the whole suite, for exactly this reason — see its comment) already flows
+// through every spawn here. A per-file default used to live here too; it was
+// removed once the central one existed, so there is one mechanism instead of
+// two silently agreeing (or, on the day one of the ten drifted, disagreeing).
 function runEntry(args, extraEnv) {
   const watchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-fuse-test-watch-'));
-  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-fuse-test-state-'));
   return spawnSync(NODE, [ENTRY, ...args], {
     encoding: 'utf8',
     env: Object.assign({}, process.env,
-      { DYLD_INSERT_LIBRARIES: '', CLODE_WATCH_DIR: watchDir, CLODE_STATE_ROOT: stateRoot },
+      { DYLD_INSERT_LIBRARIES: '', CLODE_WATCH_DIR: watchDir },
       extraEnv || {}),
   });
 }

@@ -62,9 +62,9 @@ before(() => {
       ...process.env,
       CLODE_CLAUDE_BIN: native,
       CLODE_CACHE: path.join(DIR, 'cache'),   // hermetic: never the real cache
-      // clodeBuild's finally now appends one build-trace.jsonl line per build
-      // (Task 5), resolved off HOME/XDG when nothing overrides it.
-      CLODE_STATE_ROOT: DIR,
+      // No per-file CLODE_STATE_ROOT: this env spreads `...process.env`, so
+      // test/run.mjs's single, central CLODE_STATE_ROOT already covers the
+      // build-trace.jsonl append clodeBuild's finally makes (Task 5).
       CLODE_TJS: tjsPath(),
       DYLD_INSERT_LIBRARIES: '',
     },

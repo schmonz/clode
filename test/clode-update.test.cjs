@@ -104,6 +104,20 @@ function fixture() {
     ...process.env,
     HOME: home,
     XDG_DATA_HOME: path.join(tmp, 'data'),
+    // CLODE_STATE_ROOT explicitly UNSET (not merely "not overridden" — an
+    // ambient one from `...process.env` must not survive into this fixture):
+    // clode-paths.cjs's own documented precedence is CLODE_STATE_ROOT >
+    // XDG_* > HOME, so if the SUITE has one set (test/run.mjs sets one
+    // centrally, once, for the whole run — Task 5), it would silently
+    // outrank the fresh, per-fixture XDG_DATA_HOME two lines up, and every
+    // call to fixture() across the whole file would then share ONE
+    // sha256-tool-discovery cache (host-provision.cjs's hosttools.json,
+    // reached via clodeDataDir) instead of getting its own. That is exactly
+    // how 'fails LOUD before downloading when no sha256 digest tool exists'
+    // broke: an EARLIER test's successful discovery, cached under the
+    // suite-wide root, answered THIS test's deliberately-tool-less PATH
+    // instead of a real (correctly negative) lookup.
+    CLODE_STATE_ROOT: undefined,
     CLODE_RELEASES_URL: 'file://' + repo,
     CLODE_FETCH_PLATFORM: PLAT,
     CLODE_PROVIDERS: providers,

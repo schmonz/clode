@@ -252,7 +252,16 @@ test('a minimised provider carves with NO zstd anywhere, to the SAME assets', op
     if (!isSplitBundle(bin)) continue;            // pre-split providers embed no zstd rows
     const { out } = minimise(bin);
     const isolated = fs.mkdtempSync(path.join(os.tmpdir(), 'no-zstd-'));
-    const env = { ...process.env, PATH: '', HOME: isolated, XDG_DATA_HOME: isolated,
+    // CLODE_STATE_ROOT: without it, an ambient one (test/run.mjs sets one
+    // centrally for the whole suite, once, per Task 5) would OUTRANK
+    // XDG_DATA_HOME two lines down (clode-paths.cjs's own documented
+    // precedence: CLODE_STATE_ROOT > XDG_* > HOME) -- silently defeating this
+    // test's whole point, "so host-provision can neither find a tool nor
+    // reuse a cached winner" (see the comment above): a DIFFERENT test's
+    // earlier, successful tool discovery, cached under that shared central
+    // root, would answer this probe's deliberately tool-less PATH instead of
+    // the real (correctly negative) lookup the assertion below depends on.
+    const env = { ...process.env, PATH: '', HOME: isolated, XDG_DATA_HOME: isolated, CLODE_STATE_ROOT: isolated,
                   CLODE_DEPS: path.join(isolated, 'deps'), CLODE_CACHE: path.join(isolated, 'cache') };
     delete env.CLODE_ZSTD;
     let got;

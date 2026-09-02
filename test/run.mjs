@@ -84,6 +84,43 @@ process.env.PATH = [KC_STUB_DIR, process.env.PATH || ''].join(path.delimiter);
 // child (test/central-security-stub.test.cjs), not merely that PATH changed.
 process.env.CLODE_TEST_SECURITY_STUB_DIR = KC_STUB_DIR;
 
+// State-root gate: a `clode build` (this suite drives MANY, real and fake) appends
+// one trace-log line per build (Task 5, build-trace.cjs) to <clodeDataDir>/
+// build-trace.jsonl, which resolves off HOME/XDG when nothing overrides it. Set
+// centrally, ONCE, for the same reason the `security` stub above moved from a
+// per-file convention to one place here: it started as nine individual tests each
+// remembering to pass CLODE_STATE_ROOT, one of them (test/clode-native.test.cjs)
+// did not, and it silently appended real build timings into the OPERATOR'S OWN
+// ~/.local/share/clode/build-trace.jsonl on every suite run — proven live, 84 -> 85
+// lines, before this fix existed. Product code (clodeBuild) must not know it is
+// running under test (the user's own correction to an earlier, rejected shape of
+// this fix: teaching appendRun to detect a test harness and refuse to write). The
+// test RUNNER configuring its own environment, once, for every child it spawns —
+// exactly what this file already does for CLODE_NODE and the security stub above
+// — is where that knowledge belongs instead. This SUPERSEDES remembering
+// CLODE_STATE_ROOT per test: every spawned `clode build` (subprocess) inherits it
+// through `env: {...process.env, ...}`, and every IN-PROCESS `clodeBuild()` call
+// whose test constructs its own env by spreading `...process.env` inherits it the
+// same way — see test/clode-target-build.test.cjs and test/clode-manifest-fetch.
+// test.cjs for the two tests that build a bare env object with NO such spread, and
+// therefore still carry their own explicit override; this central default cannot
+// reach a test that never reads process.env at all.
+//
+// THE OTHER EDGE, discovered verifying this fix: clode-paths.cjs's OWN documented
+// precedence is CLODE_STATE_ROOT > XDG_* > HOME — so this ONE root, shared for the
+// WHOLE suite, now outranks any individual test's own XDG_DATA_HOME/XDG_CACHE_HOME
+// override, where before it did (because nothing ever set CLODE_STATE_ROOT
+// ambiently). A test that relies on a FRESH, per-instance XDG_DATA_HOME to isolate
+// something reached via clodeDataDir (host-provision.cjs's tool-discovery cache is
+// the concrete case that broke: test/clode-update.test.cjs's "fails LOUD... no
+// sha256 digest tool exists" started passing when it should not, because an
+// EARLIER test's real tool discovery — now cached under this shared root instead
+// of that test's own fixture dir — answered its deliberately-tool-less probe) must
+// set its OWN CLODE_STATE_ROOT too (see test/clode-update.test.cjs and
+// test/make-min-provider.test.cjs), not rely on XDG_* alone, once this file sets
+// one centrally.
+process.env.CLODE_STATE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-test-state-'));
+
 // Platform-tagged harness dir + NODE_PATH (path.delimiter, NOT a hardcoded ':').
 // Resolved through harnessDir(), not hand-joined: every OTHER caller (test/tui-screen.cjs,
 // test/node-shim-tty-helper.cjs, scripts/tui-probe.mjs) already resolves node-pty through
