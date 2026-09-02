@@ -192,12 +192,17 @@ const TREE_ALLOW = [
   // excluded here defensively so an incidental local `npm install` for tooling
   // never trips the gate).
   'node_modules',
-  // Ephemeral tooling scratch for the plan-execution machinery running THIS very
-  // phase: reports and ledger entries under .superpowers/sdd/. Deliberately
-  // excluded from git and deleted when the plan finishes — genuinely ironic given
-  // what this phase is about, but moving it would desync the tooling's own scripts
-  // from where they read/write it, so it is named here on purpose, not swept in
-  // silently.
+  // Scratch for the plan-execution machinery: reports and ledger entries under
+  // .superpowers/sdd/. It hides from git via a self-planted .superpowers/sdd/
+  // .gitignore containing `*` — worth knowing, because `git check-ignore` on the
+  // top directory reports NOT ignored and the mechanism is otherwise unguessable.
+  // This gate walks the FILESYSTEM, not git, so the entry is required whenever a
+  // plan is being executed, and a plan can be executed at any time — it is a
+  // standing exception, not a temporary one. (An earlier version of this comment
+  // promised the directory was "deleted when the plan finishes"; that made the
+  // entry look stale the moment a plan ended, which is how a named exception
+  // decays into an unexplained one.) Moving the workspace out of the checkout
+  // would desync the tooling's own scripts from where they read and write it.
   '.superpowers',
   // The PTY/TUI native-addon test-harness cache. As of this task harnessDir()
   // itself resolves through buildPath() (out of the checkout), so a fresh install

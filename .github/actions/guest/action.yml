@@ -9,8 +9,11 @@ description: >
   later host steps exec the guest-built static binaries directly); "vm" via
   cross-platform-actions (netbsd/freebsd/openbsd/dragonflybsd/omnios — QEMU,
   KVM-accelerated on x64 Linux runners; the action starts a persistent VM and
-  cpa.sh runs the script inside it with rsync both ways); "solaris" via
-  vmactions/solaris-vm (the one v1 platform cross-platform-actions lacks).
+  cpa.sh runs the script inside it with rsync both ways); solaris, openindiana
+  and haiku via vmactions/*-vm (the platforms cross-platform-actions lacks, or
+  lacks a current image for — haiku moved here in 82ce856 for a beta6 image).
+  The authoritative split is the `contains(...)` dispatch gate below, not this
+  prose: three copies of this mapping have already gone stale independently.
   jirutka/setup-alpine was tried first for the musl legs but its post-run
   chroot teardown breaks when invoked from a nested composite action
   (dispatch 29063991061). Remaining dispatcher stubs reserve the phase-3
