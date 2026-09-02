@@ -275,13 +275,17 @@ if (!Array.isArray(DEPS) || DEPS.length === 0) {
 }
 
 if (role === 'builder') {
+  // No `report` calls in this branch, deliberately: assembling a BUILDER copies
+  // pre-esbuilt bundle files and libexec/scripts members verbatim — there is no
+  // merge/compile/assets work here to name a step for. Not an oversight.
   members.push({ name: entryName, data: await mustRead(path.join(stageDir, 'clode-main.bundle.cjs'), 'esbuilt clode-main bundle') });
   // The naude entry point: pre-esbuilt off the user path (Task 4), staged
   // alongside clode-main.bundle.cjs by clode-fuse.cjs's --self staging step.
   // Carried here (not built at naude-assembly time) so a later task can build
   // a naude without esbuild present on the user side.
   members.push({ name: 'naude-entry.bundle.cjs', data: await mustRead(path.join(stageDir, 'naude-entry.bundle.cjs'), 'esbuilt naude-entry bundle') });
-  const libexecDir = path.dirname(shimDir);
+  // libexecDir is declared once, at module scope (:236) — this block used to shadow it
+  // with an identical `path.dirname(shimDir)`; collapsed to the single declaration.
   // The naude ASSEMBLER: scripts/build-naude.mjs (spawned under the fetched
   // pinned node), its repo-local requires scripts/platform-tag.cjs AND that
   // module's own sibling requires scripts/canonical-name.cjs (the artifact-name
@@ -387,17 +391,21 @@ if (role === 'builder') {
     // 2.1.247 and earlier have no cyclic requires at all and must take precisely today's path —
     // no merge, no cache read, no cache write, no diagnostics.
     //
-    // The plan is declared HERE, the moment the graph is parsed: every denominator below
-    // (1795 modules, 173 assets, 33 cyclic requires on 2.1.250) is already a field on `doc`,
-    // so there is nothing to guess and no reason to wait — the "attach a total once honestly
-    // known" rule from the phase-2 design (§6) is satisfied at the earliest possible instant,
-    // not by declaring these steps totalless and hoping a caller notices they never grow one.
+    // ONLY 'merge' is declared here, at graph-parse time. mergeCyclicGroups (below, the
+    // fallback path for a doc staged before the merge moved to staging — doc.sccMerge
+    // absent) MUTATES doc.order IN PLACE: it mints one new synthetic module name per
+    // merged cyclic group (scc-merge.cjs's mergeGroup / graph-scc-merge.cjs's re-sort), so
+    // doc.order is LONGER after merge than before it on that path. Declaring 'compile's
+    // total from the pre-merge doc.order.length here would make the worker report MORE
+    // modules compiled than it declared — build-compose.cjs's mismatch check treats any
+    // over-report as a hard failure, unconditionally, even for a step that would have been
+    // allowed to under-report. 'merge's own total (cyclicRequires.length) is unaffected by
+    // its own work and safe to declare now; 'compile' and 'assets' are declared below,
+    // once merge has finished and doc.order has reached its final shape — the plan-timing
+    // rule (design §6) applied literally: a denominator attaches once truly known, not at
+    // the first moment it is convenient to write down.
     const cyclicRequires = doc.cyclicRequires || [];
-    report.plan([
-      { name: 'merge', total: cyclicRequires.length },
-      { name: 'compile', total: doc.order.length },
-      { name: 'assets', total: doc.assets ? Object.keys(doc.assets).length : 0 },
-    ]);
+    report.plan([{ name: 'merge', total: cyclicRequires.length }]);
 
     // RESIDUAL CYCLIC REQUIRES (upstream 2.1.248+). The extractor converted every require() of a
     // graph module it could turn into a static import; these could not, because the target
@@ -437,6 +445,16 @@ if (role === 'builder') {
       await mergeCyclicGroups(doc, cyclicRequires, path.dirname(shimDir));
     }
     report.finish('merge', cyclicRequires.length);
+
+    // 'compile' and 'assets' declared HERE, not at parse time: doc.order has reached its
+    // FINAL shape now (merge, if it ran in-worker, already grew it) — see the comment
+    // above the 'merge'-only plan() call for why. doc.assets is never touched by the
+    // merge, so its total was always safe, but declaring both together keeps one plan()
+    // call per "what's now known" instant rather than splitting for no reason.
+    report.plan([
+      { name: 'compile', total: doc.order.length },
+      { name: 'assets', total: doc.assets ? Object.keys(doc.assets).length : 0 },
+    ]);
 
     // Compile every unit IN THE STAGED ORDER. Order is not cosmetic: compile()
     // resolves imports as it compiles, so a module whose dependency has not been
@@ -499,6 +517,10 @@ if (role === 'builder') {
     console.log(`quaude-fuse: compiled ${index.length} modules -> graph.qbc `
       + `(${(all.length / 1048576).toFixed(1)}MB, ${(performance.now() - t0).toFixed(0)}ms)`);
   } else {
+  // LEGACY SINGLE-BUNDLE PATH (pre-2.1.243, no code-split graph). No `report` calls in
+  // this branch, deliberately: it has no 'merge'/'compile'/'assets' equivalent — one
+  // module, compiled once, no cyclic-group merge, no asset pack — so there is nothing
+  // honest to declare a denominator for. Not an oversight.
   // cli.cjs -> cli.qbc: replicate the loader's ENTRY transforms (shebang strip +
   // dynamic-import rewrite; fixVFlagPropertyEscapes self-gates off for >1MB
   // entries), wrap in the CJS wrapper as a module (=> strict), compile+serialize
