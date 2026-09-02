@@ -52,8 +52,17 @@ test('readRuns tolerates a truncated final line instead of throwing', () => {
 });
 
 test('traceLog resolves off-tree, under the HOME/XDG state dir', () => {
-  const p = P.traceLog({ HOME: '/h' });
-  assert.strictEqual(p.startsWith('/h'), true, `expected a HOME-derived path, got ${p}`);
+  // The HOME we pass must be an ABSOLUTE path in the platform's own shape, and the
+  // assertion must compare in that shape too. This read `HOME: '/h'` and
+  // `p.startsWith('/h')` until 2026-09-02, which is a POSIX assumption twice over:
+  // clode-paths.cjs composes with path.join, so on Windows the result came back
+  // `\h\.local\share\clode\build-trace.jsonl` and startsWith('/h') was false.
+  // Green on every POSIX leg, red only on windows-latest — the shape of bug this
+  // project's `solve-it-portably-not-per-platform` doctrine exists to catch, so it is
+  // fixed by making the test platform-neutral, NOT by branching on process.platform.
+  const home = path.join(os.tmpdir(), 'clode-tracelog-home');
+  const p = P.traceLog({ HOME: home });
+  assert.strictEqual(p.startsWith(home), true, `expected a HOME-derived path, got ${p}`);
   assert.match(p, /clode/);
 });
 
