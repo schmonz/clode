@@ -161,3 +161,37 @@ test('{path, ignore} entry: a write inside the ignored bundle corner is silent, 
 
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('{path, ignore} entry: a write to the ignored build-trace.jsonl is silent, a write elsewhere under the data root is not (Task 3 fix round 1, Finding 4)', () => {
+  // Fixture shaped like REAL_STORE (~/.local/share/clode) after Task 3: traceLog()
+  // (libexec/clode-paths.cjs) names build-trace.jsonl AT THE ROOT, not a
+  // subdirectory — the durable per-build timing log. Also proves the exclusion is
+  // path-anchored rather than a loose name match: a same-named file one level down
+  // (sub/build-trace.jsonl) is NOT the ignored path and must still be reported.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hg-trace-'));
+  fs.writeFileSync(path.join(dir, 'build-trace.jsonl'), 'one\n');
+  fs.mkdirSync(path.join(dir, 'sub'));
+  fs.writeFileSync(path.join(dir, 'sub', 'build-trace.jsonl'), 'one\n');
+  fs.writeFileSync(path.join(dir, 'other.txt'), 'x');
+  const watched = { path: dir, ignore: ['build-trace.jsonl'] };
+  const before = G.snapshot([watched]);
+
+  // Stands in for Task 5's writer appending a timing line — allowed.
+  fs.appendFileSync(path.join(dir, 'build-trace.jsonl'), 'two\n');
+  assert.deepStrictEqual(G.diffSnapshots(before, G.snapshot([watched])), [],
+    'a write to the ignored top-level build-trace.jsonl must not be reported');
+
+  // A same-named file NOT at the ignored top-level path is still a real violation.
+  fs.appendFileSync(path.join(dir, 'sub', 'build-trace.jsonl'), 'two\n');
+  let changed = G.diffSnapshots(before, G.snapshot([watched]));
+  assert.ok(changed.some((l) => l.includes(path.join('sub', 'build-trace.jsonl'))),
+    `expected sub/build-trace.jsonl among violations, got: ${changed.join(', ')}`);
+
+  // Anything else at the watched root is still a real violation too.
+  fs.writeFileSync(path.join(dir, 'other.txt'), 'yy');
+  changed = G.diffSnapshots(before, G.snapshot([watched]));
+  assert.ok(changed.some((l) => l.includes('other.txt')),
+    `expected other.txt among violations, got: ${changed.join(', ')}`);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
