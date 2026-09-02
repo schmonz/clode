@@ -213,9 +213,18 @@ if (!cyclicRequires.length) {
       + `${groups.length} groups (${groups.map((g) => g.length).join(', ')} modules), `
       + `${Object.keys(rewritten).length} modules rewritten, ${(ms / 1000).toFixed(1)}s`);
 
-    // -- cache write. Best effort: a read-only cache dir costs the next build the same
-    // ~6 minutes, which is not a reason to fail a build that has already succeeded at
-    // the hard part.
+    // -- cache write. USED TO BE best-effort (a read-only cache dir cost only the NEXT
+    // build the same ~6 minutes, because the pre-extraction code had already applied the
+    // computed result onto the in-memory `doc` the CALLER went on to use). Extraction
+    // changed that: this process's `doc` is private, and this file is now the ONLY
+    // channel the computed result travels back to the parent on — quaude-fuse.js's
+    // read-back (`mustRead` on this exact path) is unconditional whenever this branch
+    // ran. A failed write here is no longer "the next build pays" — it is "THIS build,
+    // which just paid the full ~380s compute, dies on a read failure that names the wrong
+    // cause." So: fatal, and named honestly, here, where the real cause is known — not
+    // surfaced as a generic read failure one process up. Do not add a second handoff
+    // channel (stdout is the protocol stream; a fallback path does not help the
+    // disk-full case either) — just fail loud and name the path and errno.
     try {
       const payload = enc.encode(JSON.stringify({
         format: MERGED_CACHE_FORMAT,
@@ -230,8 +239,11 @@ if (!cyclicRequires.length) {
       console.log(`merge-step: wrote ${cacheFile} (${(payload.length / 1048576).toFixed(1)}MB) — `
         + 'later builds of this provider reuse it');
     } catch (e) {
-      console.log(`merge-step: could not cache the merged graph at ${cacheFile} `
-        + `(${e.message ?? e}) — every build of this provider will recompute it`);
+      console.error(`merge-step: could not write the merged graph to ${cacheFile} `
+        + `(${e.code ?? e.errno ?? ''} ${e.message ?? e}) — this is the ONLY channel the `
+        + 'computed merge travels back to the caller on, so this build cannot continue. '
+        + 'Fix the cache dir (permissions, free space) and retry.');
+      tjs.exit(1);
     }
   }
 }
