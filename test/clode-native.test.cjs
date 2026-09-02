@@ -97,6 +97,13 @@ before(() => {
       ...process.env,
       CLODE_TJS: tjsPath(),
       CLODE_MAIN_BUNDLE: bundle,
+      // clodeBuild's finally now appends one build-trace.jsonl line per build
+      // (Task 5), resolved off HOME/XDG when nothing overrides it. This test
+      // gates ONLY on tjsPath() (no CLODE_LIVE_RENDER, no CLODE_PROVIDER_BIN
+      // gate on the build itself), so it runs on every suite pass on any box
+      // with a tjs binary -- the leak the round-1 review caught firing live,
+      // 84 -> 85 lines in the operator's REAL ~/.local/share/clode.
+      CLODE_STATE_ROOT: DIR,
       DYLD_INSERT_LIBRARIES: '',
     },
   });

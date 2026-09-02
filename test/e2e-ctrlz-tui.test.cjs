@@ -51,7 +51,9 @@ before(() => {
     quaude = path.join(DIR, 'quaude');
     const build = spawnSync(process.execPath, [ENTRY, 'build', '--out', quaude], {
       encoding: 'utf8', timeout: 300000,
-      env: { ...process.env, CLODE_CLAUDE_BIN: provider, CLODE_CACHE: path.join(DIR, 'cache'), CLODE_TJS: tjsPath(), DYLD_INSERT_LIBRARIES: '' },
+      // CLODE_STATE_ROOT: clodeBuild's finally now appends one build-trace.jsonl
+      // line per build (Task 5), resolved off HOME/XDG when nothing overrides it.
+      env: { ...process.env, CLODE_CLAUDE_BIN: provider, CLODE_CACHE: path.join(DIR, 'cache'), CLODE_STATE_ROOT: DIR, CLODE_TJS: tjsPath(), DYLD_INSERT_LIBRARIES: '' },
     });
     if (build.status !== 0) { SKIP = `clode build failed:\n${build.stdout}\n${build.stderr}`; return; }
   }

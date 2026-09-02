@@ -39,6 +39,9 @@ before(() => {
       ...process.env,
       CLODE_CLAUDE_BIN: provider,
       CLODE_CACHE: path.join(DIR, 'cache'),   // hermetic: never the real cache
+      // clodeBuild's finally now appends one build-trace.jsonl line per build
+      // (Task 5), resolved off HOME/XDG when nothing overrides it.
+      CLODE_STATE_ROOT: DIR,
       CLODE_TJS: tjsPath(),
       DYLD_INSERT_LIBRARIES: '',
     },

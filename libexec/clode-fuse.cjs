@@ -1714,14 +1714,21 @@ async function clodeBuild(args, opts) {
       if (!w.stdout && !w.stderr) {
         // A bare status with no output = the child never ran (exec failed
         // inside the spawn; 127 is libuv's could-not-exec convention). Say
-        // what we tried to exec so a remote CI log is diagnosable.
+        // what we tried to exec so a remote CI log is diagnosable. Checked
+        // against the RAW w.stdout on purpose (not workerPassthrough): a
+        // worker whose only output was sentinel lines still ran, and must
+        // not be misreported as an exec failure.
         try {
           extra = `\n(no worker output — exec failure? template=${template} size=${fs.statSync(template).size})`;
         } catch {
           extra = `\n(no worker output — exec failure? template=${template} MISSING)`;
         }
       }
-      return fail(`build: fuse worker failed (${describeExit(w)}):\n${w.stdout}${w.stderr}${extra}`);
+      // workerPassthrough, not raw w.stdout: a worker that reported real
+      // progress (compile got partway through) before dying must not dump
+      // raw @clode-step {...} JSON into the build's own error message — the
+      // exact place a clean, human-readable failure matters most.
+      return fail(`build: fuse worker failed (${describeExit(w)}):\n${workerPassthrough}${w.stderr}${extra}`);
     }
     clodeLog(workerPassthrough.trimEnd());
 
