@@ -228,6 +228,17 @@ function deriveIdnaLevel() {
   return 'unknown';
 }
 
+// The worker knows its own steps. It declares them here rather than having the
+// builder declare them on its behalf: a component whose steps are named by its
+// parent is only usable inside that parent (phase-2 design §2). Loaded the SAME
+// way scc-merge.cjs is (mergeCyclicGroups, above) — NOT require(), which in this
+// worker is a loud stub that throws. There is no module resolver here.
+const libexecDir = path.dirname(shimDir);
+const { Reporter } = loadLibexecCjs(
+  dec.decode(await mustRead(path.join(libexecDir, 'build-report.cjs'), 'the step reporter')),
+  'build-report.cjs');
+const report = new Reporter({ emit: (line) => { console.log(line); } });
+
 // ---- 1) members ------------------------------------------------------------
 // The extras file (written by clode-fuse.cjs) names the payload ROLE:
 //   quaude (default): the product — compiled Claude Code bundle + its runtime.
@@ -291,7 +302,7 @@ if (role === 'builder') {
   // above — never require()'d from this materialized dir, only carried so a
   // self-fused clode-native can re-fuse targets. The quaude-product role below
   // deliberately omits it: no runtime provision() consumer on that side.
-  for (const f of ['bun-shim.cjs', 'extract-claude-js.cjs', 'quaude-fuse.js', 'quaude-bootstrap.mjs', 'host-provision.cjs', 'target-update-check.cjs', 'bun-graph-plan.cjs', 'scc-merge.cjs', 'graph-scc-merge.cjs', 'graph-meta.js']) {
+  for (const f of ['bun-shim.cjs', 'extract-claude-js.cjs', 'quaude-fuse.js', 'quaude-bootstrap.mjs', 'host-provision.cjs', 'target-update-check.cjs', 'bun-graph-plan.cjs', 'scc-merge.cjs', 'build-report.cjs', 'graph-scc-merge.cjs', 'graph-meta.js']) {
     members.push({ name: `libexec/${f}`, data: await mustRead(path.join(libexecDir, f), `libexec member ${f}`) });
   }
   // target-env.cjs member name is BARE (no libexec/ prefix), matching how
@@ -371,17 +382,30 @@ if (role === 'builder') {
     if (doc.format !== 'clode-bun-graph-v1') {
       throw new Error(`quaude-fuse: staged graph has format ${doc.format}, expected clode-bun-graph-v1`);
     }
+
+    // `|| []` on purpose: absent and empty are the same thing, and both must be an exact no-op.
+    // 2.1.247 and earlier have no cyclic requires at all and must take precisely today's path —
+    // no merge, no cache read, no cache write, no diagnostics.
+    //
+    // The plan is declared HERE, the moment the graph is parsed: every denominator below
+    // (1795 modules, 173 assets, 33 cyclic requires on 2.1.250) is already a field on `doc`,
+    // so there is nothing to guess and no reason to wait — the "attach a total once honestly
+    // known" rule from the phase-2 design (§6) is satisfied at the earliest possible instant,
+    // not by declaring these steps totalless and hoping a caller notices they never grow one.
+    const cyclicRequires = doc.cyclicRequires || [];
+    report.plan([
+      { name: 'merge', total: cyclicRequires.length },
+      { name: 'compile', total: doc.order.length },
+      { name: 'assets', total: doc.assets ? Object.keys(doc.assets).length : 0 },
+    ]);
+
     // RESIDUAL CYCLIC REQUIRES (upstream 2.1.248+). The extractor converted every require() of a
     // graph module it could turn into a static import; these could not, because the target
     // statically imports its way back. They are real: leave them and the target dies at runtime
     // with `cannot resolve '/$bunfs/root/chunk-….js'`. Merge each strongly connected group into a
     // single module instead — see mergeCyclicGroups above for the whole story, including why the
     // result is cached beside the staged cli.cjs.
-    //
-    // `|| []` on purpose: absent and empty are the same thing, and both must be an exact no-op.
-    // 2.1.247 and earlier have no cyclic requires at all and must take precisely today's path —
-    // no merge, no cache read, no cache write, no diagnostics.
-    const cyclicRequires = doc.cyclicRequires || [];
+    report.start('merge');
     if (cyclicRequires.length && doc.sccMerge) {
       // ALREADY MERGED, AT STAGING (libexec/clode-extract.cjs). That is where the merge
       // belongs: the staged graph is the input to BOTH targets, and doing it here meant
@@ -412,12 +436,14 @@ if (role === 'builder') {
       // green path (see the postject-not-provisioned warning above, same reasoning).
       await mergeCyclicGroups(doc, cyclicRequires, path.dirname(shimDir));
     }
+    report.finish('merge', cyclicRequires.length);
 
     // Compile every unit IN THE STAGED ORDER. Order is not cosmetic: compile()
     // resolves imports as it compiles, so a module whose dependency has not been
     // compiled yet fails with "could not load" naming a module that is perfectly
     // fine. The stage produced a topological order; trust it and fail loudly if it
     // is wrong rather than half-building.
+    report.start('compile');
     const t0 = performance.now();
     const index = [];
     const parts = [];
@@ -435,7 +461,9 @@ if (role === 'builder') {
       index.push({ name, off, len: bc.length });
       parts.push(bc);
       off += bc.length;
+      report.progress('compile', index.length);
     }
+    report.finish('compile', index.length);
     const all = new Uint8Array(off);
     let p = 0;
     for (const b of parts) { all.set(b, p); p += b.length; }
@@ -458,12 +486,14 @@ if (role === 'builder') {
     // Without them the target boots and dies on its first turn with "cannot resolve
     // /$bunfs/root/loopAutonomousPreamble-*.md" — a file that exists only inside the
     // provider, so no host path can satisfy it.
+    report.start('assets');
     if (doc.assets && Object.keys(doc.assets).length) {
       const a = enc.encode(JSON.stringify(doc.assets));
       members.push({ name: 'graph-assets.json', data: a });
       console.log(`quaude-fuse: ${Object.keys(doc.assets).length} text assets -> `
         + `graph-assets.json (${(a.length / 1048576).toFixed(1)}MB)`);
     }
+    report.finish('assets', doc.assets ? Object.keys(doc.assets).length : 0);
     entryName = 'graph.qbc';
     members.push({ name: 'graph.idx', data: enc.encode(JSON.stringify({ entry: doc.entry, modules: index })) });
     console.log(`quaude-fuse: compiled ${index.length} modules -> graph.qbc `
