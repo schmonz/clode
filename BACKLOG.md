@@ -57,6 +57,184 @@ Still open:
    the failure mode the other two just had. It is green, so nothing forced the question;
    ask it anyway.
 
+## `Bun.zstdDecompress` / `Bun.zstdDecompressSync` are new golden-map drift, unreviewed (2026-09-02)
+
+`test/shim-surface.test.cjs`'s golden map went red the day it could run against a real
+2.1.251 provider again (observed under a central UPSTREAM_PIN provider pin that was tried and then REVERTED in Task 5 round 3 — see the next section; nothing in the tree sets it today):
+`layer1_bun_props_missing` grew two entries this repo has never triaged, `Bun.zstdDecompress`
+and `Bun.zstdDecompressSync`, absent from `golden.json` and not implemented anywhere in
+`libexec/bun-shim.cjs` (grepped: zero hits).
+
+**Not the same gap as `zlib.createZstdDecompress`** (golden.json's own note, right above this
+one in the same `_notes` object) even though both are zstd-shaped and both are new since
+upstream started embedding zstd-compressed assets at 2.1.251. That one is the NATIVE release
+downloader — a single, doubly-walled, build-time-only import site, INTENTIONALLY absent and
+pinned by `test/zlib-zstd-stream-gap.test.cjs`. This one is a RUNTIME function pair for
+reading upstream's own embedded text assets, found (2.1.251, `~/.cache/clode/2.1.251/graph.json`
+module `/$bunfs/root/chunk-t0k3nmf2.js`, carved via clode's own extractor — the same layout
+`clode build` produces):
+
+```js
+var u=[40,181,47,253];function s(t){return t.length>=4&&u.every((e,r)=>t[r]===e)}
+function Z2t(t,e){return d(t)?t:c(e,t)}
+async function RX(t,e){let r=await i(Z2t(t,e));return(s(r)?await Bun.zstdDecompress(r):r).toString("utf8")}
+function nt(t,e){let r=Z2t(t,e);try{let n=o(r);return(s(n)?Bun.zstdDecompressSync(n):n).toString("utf8")}
+  catch(n){throw Object.assign(Error("embedded text asset is missing or corrupt",{cause:n}),{path:r})}}
+export{Z2t,RX,nt};
+```
+
+`u` is the zstd magic number (`28 b5 2f fd`); `RX`/`nt` read a file (asset-aware via
+`__clodeAsset`/`__quaudeRequire`, clode's own patch layer, falling back to a real
+`fs.readFileSync`/`readFile`), sniff the magic, and only call `Bun.zstdDecompress[Sync]`
+when the bytes are actually zstd-framed — else pass the buffer through untouched. **Not a
+single unreachable import**: 43 OTHER modules in the same bundle reference this chunk
+(`chunk-t0k3nmf2` appears in 43 module sources besides its own), so this is upstream's
+general-purpose embedded-text-asset reader, not a narrow one-off — the reachability
+question here is closer to the `crypto.*` cluster's ("the largest cluster... unarmed across
+every corpus that ran" — i.e. genuinely open, not yet answered) than to `Bun.ant`'s (answered
+and closed).
+
+**MUST NOT be stubbed or added to golden.json without doing that reachability work first**:
+same reasoning as `zlib.createZstdDecompress`'s note — a wrong stub here (return the raw
+compressed bytes, or throw) would silently corrupt or crash on any embedded asset that
+actually IS zstd-compressed, on whatever code path calls `nt`/`RX`. Whether any code path
+clode's tested routes (mock `-p` round-trip, agentic corpus, interactive) actually reaches
+a zstd-compressed asset through this reader is unmeasured — the two-layer gap inventory
+(`test/shim-surface.test.cjs`'s own header) answers "does upstream reach for this API" here,
+not "does OUR tested traffic reach it", the same limit its `_notes` already document for the
+`crypto.*`/`v8.*`/`net.createServer` gaps.
+
+**Reproduce**: `~/.local/share/clode/providers/2.1.251/claude` (this box's pinned provider,
+`UPSTREAM_PIN`) reproduces it —
+
+```
+CLODE_PROVIDER_BIN=~/.local/share/clode/providers/2.1.251/claude \
+  node --test test/shim-surface.test.cjs
+```
+
+stages that provider, measures the two-layer surface, and diffs against `golden.json`; the
+diff names exactly these two new `layer1_bun_props_missing` entries. `CLODE_PROVIDER_BIN`
+must be set explicitly by hand — see the next section for why `node test/run.mjs` alone will
+not find it, on this box or on CI.
+
+### This gate — and every `stageProviderCli`-dependent test — is DARK in CI, not just locally (2026-09-02)
+
+Restates and sharpens item 1 of this file's "Bundle scanners: FIXED, with three things still
+open" entry above ("These gates still do not run in CI... Give the jobs the inputs that make
+them run") with the specific mechanism, verified while deciding whether to pin
+`CLODE_PROVIDER_BIN` centrally in `test/run.mjs` (Task 5 round 3 — the central pin was tried,
+found to wake far more than intended, per the failure map below, and was reverted; this
+finding is what carries forward instead).
+
+`.github/workflows/suite.yml` is, by its own header comment, "the ONE place `npm test` is
+defined for CI" (called by both `ci.yml` on every push/PR and `release.yml` on every tag).
+It installs no Claude provider and sets no `CLODE_PROVIDER_BIN` anywhere in the file (grepped:
+zero hits for either string). So `node test/run.mjs` — the actual command `npm test` runs, the
+same one a `git push` triggers — never has a provider, on ANY CI leg, ever. Every test gated
+on `stageProviderCli`/`resolveProviderBin` (test/oracle-models.cjs) silently skips there,
+`shim-surface.test.cjs` included: it is not even matched by `ci.yml`'s own separate
+`node-shim-oracle` job's `ls test/node-shim-*.test.cjs` glob (line ~428/661) — the file is
+named `shim-surface.test.cjs`, not `node-shim-*`, so it is invisible to that job too. Grepped
+`shim-surface` across every workflow file: zero hits, anywhere. This golden map has not run in
+CI since the scanner was rebuilt on 2026-08-29 (per this file's "Bundle scanners" entry above),
+and structurally cannot, in its current shape, in either workflow.
+
+**Same disease, already paid for once**: `ci.yml:483-487`'s own comment records the identical
+failure mode costing a 100%-broken `clode-native` binary under fully-green CI ("clode-native's
+acceptances 2+3... skip silently without CLODE_PROVIDER_BIN. No workflow named the file, so
+they ran ONLY under `npm test`... The binary that is the entire point of the Q1 split was 100%
+broken and nothing said a word."). That specific case got a standing guard (a dedicated step in
+`ci.yml` that installs the pinned provider and exports `CLODE_PROVIDER_BIN` before driving
+`clode-native.test.cjs` directly). `shim-surface.test.cjs` has never gotten the equivalent — it
+has no `ci.yml` step naming it at all, named or globbed.
+
+**Not fixed here** (per the coordinator's instruction: map it, do not fix it) — the fix is
+either giving `shim-surface.test.cjs` the same kind of dedicated `ci.yml` step
+`clode-native.test.cjs` got, or widening `node-shim-oracle`'s glob/`EXCLUDE` handling to also
+catch it, or (the `suite.yml`-level fix that would close the gap for EVERY `stageProviderCli`
+test, not just this one) installing a provider and exporting `CLODE_PROVIDER_BIN` in
+`suite.yml` itself — which is exactly what a centrally-set `CLODE_PROVIDER_BIN` in
+`test/run.mjs` would have done locally too, and is why that approach was tried; see the next
+section for why it was reverted rather than merely narrowed.
+
+### The three-cause failure map from actually pinning it (2026-09-02, reverted — read before re-attempting)
+
+Task 5 round 3 tried centrally setting `process.env.CLODE_PROVIDER_BIN` in `test/run.mjs` to
+the `UPSTREAM_PIN`-pinned provider (mirroring the file's existing central `CLODE_STATE_ROOT`
+and `security`-stub pattern) specifically so this gate would stop being dark. It worked — full
+suite went from `1667 pass / 5 fail / 87 skip` to `1697 pass / 19 fail / 43 skip` on this box,
+a swing of exactly 13 tests (5 known-baseline `naude-shim-boundary.test.cjs` failures, unchanged,
+plus 14 new: this file's own gate, correctly, and 13 more). **Only one of the 14 new failures is
+the signal this entry is about** — `not ok 1460`, `shim-surface.test.cjs`, red on exactly
+`["Bun.zstdDecompress","Bun.zstdDecompressSync"]`, as documented above. The other 13 are three
+unrelated, genuine environment/prerequisite gaps this box has, previously invisible only
+because the tests that would reveal them have never run for real locally (they all gate on
+`CLODE_PROVIDER_BIN`, which nothing ever set before this attempt). Recorded here as the map for
+whoever next tries to close the CI-dark gap above, so the same three surprises don't have to be
+re-discovered:
+
+1. **zstd unreachable on a deliberately minimal PATH** — `test/clode-native.test.cjs`
+   acceptance 2 (`not ok 357`, "the native builder BUILDS THE PRODUCT... node-free AND
+   template-free") and acceptance 4 (`not ok 359`, "BUILDS A NAUDE... node absent from PATH").
+   Both construct `env.PATH = '/usr/bin:/bin'` on purpose, to prove the fused builder needs no
+   node — but on this box `zstd` lives at neither location (homebrew/pkgsrc prefix instead), and
+   2.1.251's embedded assets are zstd-compressed, so extraction fails loud and correctly:
+   `clode: no zstd tool found on PATH — install zstd...`. Not a bug in clode or in the test's
+   intent; whether it also fails this way on a CI runner depends on where THAT runner's package
+   manager puts `zstd` (Debian/Ubuntu `apt` typically lands it in `/usr/bin`, which would make
+   this pass in CI while failing here — unverified, not run there).
+2. **`build/bundle/naude-entry.bundle.cjs` was never pre-built on this box** —
+   `test/quaude-naude-updateguard.test.cjs`'s naude precondition (`not ok 1351`, "naude: `clode
+   build --naude` builds it") and its dependent deny-turn acceptance (`not ok 1352`). Fails with
+   `build-naude: --bundle not found:.../build/bundle/naude-entry.bundle.cjs — Pre-build it with
+   'node scripts/build-clode-main.mjs'` — a real, one-time local prerequisite this box's checkout
+   has simply never had run against it, unrelated to the provider pin itself.
+
+   **A separate observation from the same run, corrected after a first wrong read**: this
+   test's naude build, running for real for the first time, populates
+   `build/clode-<version>-<platform>/` in the checkout before failing — traced (NODE_OPTIONS=
+   --require against a small stack-logging `fs` shim) to `scripts/build-naude.mjs:590`'s
+   `fs.mkdirSync(OUT, {recursive:true})`, where `OUT = artifactDir(REPO)` — REPO-anchored via
+   `import.meta.url`, with no cwd or env override, staged UNCONDITIONALLY before the script even
+   checks `--bundle` exists. First read this as the tree-immutability violation and "fixed" it
+   by having the test `rmSync` that directory in `after()` — **wrong, and reverted**: `build/
+   clode-*` is itself a `TREE_ALLOW` entry in `test/run.mjs` ("the sanctioned copy-back target
+   for a FINISHED, shippable artifact" — `scripts/platform-tag.cjs`'s header), so it was never
+   the thing tripping the guard, and deleting a directory a developer's OWN prior real build may
+   have populated is destructive: a test must not delete a shippable artifact just to make a
+   guard quiet, and this one would have on any box with a real `build/clode-*` already present.
+   The actual violation in that run was `created ._build` and `created build/._clode-…` —
+   macOS AppleDouble xattr sidecar files this repo already knows this NFS-mounted checkout
+   generates on its own (see the `git gc`/AppleDouble note elsewhere in this project's working
+   notes); nothing under this task's control creates or removes those, and no code change here
+   attempts to. The `scripts/build-naude.mjs` staging behavior itself (real, and worth knowing:
+   it writes into the checkout regardless of `--out`, by design) is recorded here as prose only —
+   no test code was kept to act on it.
+3. **Residual `/$bunfs/root/chunk-…` edges reaching the quaude-model under tjs** — 9 tests in
+   `test/fidelity/*.test.cjs`: `agentic-mcp-ws.test.cjs` (`not ok 685`),
+   `agentic-subagent-diff.test.cjs` (`686`), `agentic-tools.test.cjs` ×5 (`687`-`691`),
+   `agentic-workflow-complete.test.cjs` (`692`), `slash-command-diff.test.cjs` (`710`). Directly
+   confirmed for `685` only — its stderr names the exact residual edge: `im: cannot resolve
+   '/$bunfs/root/chunk-1jh2yzqz.js'` from `libexec/node-shim/loader.cjs:269`, the same class of
+   break `libexec/clode-extract.cjs`'s own header describes staging as existing to merge away
+   (`test/oracle-models.cjs`'s header: "residual cyclic `import.meta.require(...)` edges"). The
+   other 8 were NOT individually re-traced to the same root cause — they share the same file
+   family, the same quaude-model-under-tjs mechanism, and the same staged 2.1.251 bundle as
+   `685`, which is why they are grouped here, but each fails with a different downstream
+   symptom (a tool_result POST never arriving, `--continue` not replaying context, a bare
+   non-zero exit) consistent with — but not independently proven to be — the same unresolved
+   chunk. Whoever picks this up should re-verify each one's actual stderr before assuming they
+   are all one bug.
+
+**Not fixed, per instruction.** Do not stub, patch, or pre-build any of the above to make these
+numbers go away — each is either a genuine local-box prerequisite gap (1, 2) or an unresolved,
+only-partially-traced upstream-bundle-staging question (3), and none of the three is what
+`shim-surface.test.cjs`'s own gate (the one signal this whole entry is actually about) needs
+fixed. The central-pin approach itself was reverted (`test/run.mjs` is back to byte-identical
+with its pre-Task-5-round-3 state on this point) specifically so touching it again doesn't
+silently re-wake all 13 at once; the CI-dark gap above should be closed narrowly (per-file or
+per-job), not by flipping this switch back on suite-wide.
+
 ## Staging a code-split provider now REQUIRES a tjs engine (2026-08-29)
 
 The residual-cyclic-require merge moved out of `libexec/quaude-fuse.js` into staging
