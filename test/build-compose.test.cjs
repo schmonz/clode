@@ -57,3 +57,29 @@ test('a step that never finished is a mismatch, not a silent omission', () => {
   feed(c, 'worker', (r) => { r.plan([{ name: 'compile', total: 3 }]); r.start('compile'); });
   assert.strictEqual(c.mismatches().length, 1);
 });
+
+test('finish() called twice with an EARLIER larger value is a mismatch — the composer keeps the first report and does not silently drop to the smaller duplicate', () => {
+  const c = new C.Composer();
+  feed(c, 'worker', (r) => {
+    r.plan([{ name: 'compile' }]); // no total: isolate the duplicate-finish check from the total mismatch checks
+    r.start('compile');
+    r.finish('compile', 5);
+    r.finish('compile', 3); // stale or duplicate finish
+  });
+  assert.strictEqual(c.mismatches().length, 1, 'a duplicate finish must be flagged');
+  const step = c.steps().find((s) => s.name === 'compile');
+  assert.strictEqual(step.done, 5, 'the first report is the truth; a duplicate must not clobber it');
+});
+
+test('finish() called twice with a LATER larger value is equally a protocol violation, not a self-correction', () => {
+  const c = new C.Composer();
+  feed(c, 'worker', (r) => {
+    r.plan([{ name: 'compile' }]);
+    r.start('compile');
+    r.finish('compile', 3);
+    r.finish('compile', 5); // looks like a correction, but is still a second finish for the same step
+  });
+  assert.strictEqual(c.mismatches().length, 1, 'a duplicate finish must be flagged regardless of direction');
+  const step = c.steps().find((s) => s.name === 'compile');
+  assert.strictEqual(step.done, 3, 'the first report is kept; the duplicate does not overwrite even when it looks like a correction');
+});

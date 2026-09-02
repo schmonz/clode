@@ -11,7 +11,7 @@
 const { parse, PLAN, STARTED, PROGRESSED, FINISHED } = require('./build-report.cjs');
 
 class Composer {
-  constructor() { this._steps = []; this._index = new Map(); }
+  constructor() { this._steps = []; this._index = new Map(); this._duplicateFinishes = []; }
 
   // Component and step name are each caller-supplied strings, so no single join
   // char (however exotic) is safe against a collision across the two — a step
@@ -30,6 +30,10 @@ class Composer {
       const byName = this._byName(component);
       for (const s of rec.steps) {
         if (byName.has(s.name)) continue;              // a re-declared plan is not a new step
+        // totalIsUpperBound rides on the step object itself (beyond the brief's declared
+        // {component, name, total, done, elapsedMs, state} shape) so a caller building its
+        // own display can render "at least N" instead of "N of M" without re-deriving the
+        // distinction mismatches() already knows.
         const step = {
           component, name: s.name, total: s.total, done: 0,
           totalIsUpperBound: !!s.totalIsUpperBound, elapsedMs: undefined, state: 'declared',
@@ -43,6 +47,19 @@ class Composer {
     if (rec.type === STARTED) step.state = 'running';
     else if (rec.type === PROGRESSED) step.done = rec.done;
     else if (rec.type === FINISHED) {
+      // A second FINISHED for an already-finished step is a protocol violation, not a
+      // correction: nothing in Reporter.finish() prevents a component (or a retry path)
+      // calling it twice, and last-write-wins would let a stray duplicate silently
+      // relabel correctly-reported work as a shortfall (or mask a real one). Keep the
+      // first report as the truth and surface the duplicate itself as a loud mismatch —
+      // which value is "right" is not this orchestrator's call to make silently.
+      if (step.state === 'finished') {
+        this._duplicateFinishes.push({
+          step,
+          reason: `${step.component}:${step.name} received a duplicate finish (first reported ${step.done}, duplicate reported ${rec.done}); ignoring the duplicate and keeping the first report`,
+        });
+        return true;
+      }
       if (rec.done !== undefined) step.done = rec.done;
       step.elapsedMs = rec.elapsedMs; step.state = 'finished';
     }
@@ -73,6 +90,7 @@ class Composer {
         out.push({ step: s, reason: `${s.component}:${s.name} reported ${s.done} but declared ${s.total}; declare totalIsUpperBound if the count is legitimately dynamic` });
       }
     }
+    out.push(...this._duplicateFinishes);
     return out;
   }
 }
