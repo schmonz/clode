@@ -83,3 +83,45 @@ test('finish() called twice with a LATER larger value is equally a protocol viol
   const step = c.steps().find((s) => s.name === 'compile');
   assert.strictEqual(step.done, 3, 'the first report is kept; the duplicate does not overwrite even when it looks like a correction');
 });
+
+test('a stale PROGRESSED after FINISHED, with NO total declared, is a mismatch and must not change done (the silent-corruption case)', () => {
+  const c = new C.Composer();
+  feed(c, 'worker', (r) => {
+    r.plan([{ name: 'compile' }]); // no total: this is exactly the shape a total-based check cannot catch
+    r.start('compile');
+    r.finish('compile', 5);
+    r.progress('compile', 999); // stale/late progress arriving after finish
+  });
+  assert.strictEqual(c.mismatches().length, 1, 'a post-finish PROGRESSED must be flagged even with no total to compare against');
+  const step = c.steps().find((s) => s.name === 'compile');
+  assert.strictEqual(step.done, 5, 'the finished report is the truth; a later PROGRESSED must not clobber it');
+});
+
+test('a stale PROGRESSED after FINISHED, WITH a total declared, is a mismatch whose reason names the real cause (not merely the incidental over-report)', () => {
+  const c = new C.Composer();
+  feed(c, 'worker', (r) => {
+    r.plan([{ name: 'compile', total: 5 }]);
+    r.start('compile');
+    r.finish('compile', 5); // matches total exactly: no total-mismatch on its own
+    r.progress('compile', 999); // would look like "exceeding a total" if it clobbered done
+  });
+  const m = c.mismatches();
+  assert.strictEqual(m.length, 1, 'exactly one mismatch: the post-finish anomaly, not a total-exceeded one');
+  assert.match(m[0].reason, /PROGRESSED|already finished/i, 'the reason must name the real cause: an event after finish');
+  assert.doesNotMatch(m[0].reason, /exceeding a total/, 'must not be mislabeled as a total-exceeded mismatch');
+  const step = c.steps().find((s) => s.name === 'compile');
+  assert.strictEqual(step.done, 5, 'the finished report is the truth; the stale PROGRESSED must not clobber it');
+});
+
+test('a STARTED after FINISHED is also a mismatch, not a silent reversion to running', () => {
+  const c = new C.Composer();
+  feed(c, 'worker', (r) => {
+    r.plan([{ name: 'compile' }]);
+    r.start('compile');
+    r.finish('compile', 5);
+    r.start('compile'); // a late/duplicate start arriving after finish
+  });
+  assert.strictEqual(c.mismatches().length, 1, 'a post-finish STARTED must be flagged');
+  const step = c.steps().find((s) => s.name === 'compile');
+  assert.strictEqual(step.state, 'finished', 'the step must not revert to running');
+});

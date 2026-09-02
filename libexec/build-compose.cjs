@@ -11,7 +11,7 @@
 const { parse, PLAN, STARTED, PROGRESSED, FINISHED } = require('./build-report.cjs');
 
 class Composer {
-  constructor() { this._steps = []; this._index = new Map(); this._duplicateFinishes = []; }
+  constructor() { this._steps = []; this._index = new Map(); this._postFinishAnomalies = []; }
 
   // Component and step name are each caller-supplied strings, so no single join
   // char (however exotic) is safe against a collision across the two — a step
@@ -44,22 +44,28 @@ class Composer {
     }
     const step = this._byName(component).get(rec.name);
     if (!step) return true;                            // an event for an undeclared step: ignore
+
+    // ONE guard, not three: once a step is finished, ANY further event for it —
+    // STARTED, PROGRESSED, or a second FINISHED — is an anomaly, not new information.
+    // A per-event-type guard would have to independently reinvent this same rule three
+    // times (and did, the first time: only duplicate FINISHED was caught, so a stale
+    // PROGRESSED after finish silently clobbered `done` right back to a wrong value —
+    // silently when the step had no total to compare against, and mislabeled as an
+    // "exceeding a total" mismatch when it did). Finished is a terminal state; nothing
+    // legitimately un-finishes a step, so collapsing the check to state-based rather
+    // than event-based is what actually closes the door instead of the specific gap.
+    if (step.state === 'finished') {
+      const reportedDone = rec.done === undefined ? '(no done value)' : rec.done;
+      this._postFinishAnomalies.push({
+        step,
+        reason: `${step.component}:${step.name} received a ${rec.type} after it already finished (finished done ${step.done}, ${rec.type} reported ${reportedDone}); ignoring it and keeping the first finished report`,
+      });
+      return true;
+    }
+
     if (rec.type === STARTED) step.state = 'running';
     else if (rec.type === PROGRESSED) step.done = rec.done;
     else if (rec.type === FINISHED) {
-      // A second FINISHED for an already-finished step is a protocol violation, not a
-      // correction: nothing in Reporter.finish() prevents a component (or a retry path)
-      // calling it twice, and last-write-wins would let a stray duplicate silently
-      // relabel correctly-reported work as a shortfall (or mask a real one). Keep the
-      // first report as the truth and surface the duplicate itself as a loud mismatch —
-      // which value is "right" is not this orchestrator's call to make silently.
-      if (step.state === 'finished') {
-        this._duplicateFinishes.push({
-          step,
-          reason: `${step.component}:${step.name} received a duplicate finish (first reported ${step.done}, duplicate reported ${rec.done}); ignoring the duplicate and keeping the first report`,
-        });
-        return true;
-      }
       if (rec.done !== undefined) step.done = rec.done;
       step.elapsedMs = rec.elapsedMs; step.state = 'finished';
     }
@@ -90,7 +96,7 @@ class Composer {
         out.push({ step: s, reason: `${s.component}:${s.name} reported ${s.done} but declared ${s.total}; declare totalIsUpperBound if the count is legitimately dynamic` });
       }
     }
-    out.push(...this._duplicateFinishes);
+    out.push(...this._postFinishAnomalies);
     return out;
   }
 }
