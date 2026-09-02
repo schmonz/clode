@@ -5160,3 +5160,80 @@ proxy mock that could not accept connections because it shared a process with a
 `spawnSync`. Assert on what ARRIVED at the far end, always run the reference
 implementation against the same mock, and prove a test fails before believing it
 passes.
+
+## Four small truths phase 2 found and did not fix (2026-09-02)
+
+Filed here because they were found in phase 2's whole-branch review and recorded only
+in that phase's working notes, which are gitignored. A deferral nobody else can read
+is a silent loss, so they get a tracked home. Each is small; none blocks anything.
+
+### 1. `MERGER_VERSION` is a hand-written literal, not a derived key
+
+`libexec/scc-merge.cjs:36` — `var MERGER_VERSION = '12'`. The cyclic-merge cache is
+keyed on it, so bumping it by hand is what invalidates the cache when the merger
+changes. Two documents describe it as something it is not: the cross-build umbrella's
+"keys are DERIVED by the runner from the content of the step's declared inputs. Keys
+are never hand-written", and the phase-2 design's "a hash of the merger's own source".
+
+The failure mode is the ordinary one for hand-maintained versions: change the merger,
+forget the bump, and every machine with a warm cache silently serves output from the
+OLD merger. That is the same shape as the two cache defects the umbrella already
+catalogues (a linux carve served to a darwin build; a templates cache serving a sha256
+mismatch), which is the argument for deriving it.
+
+Not changed on the spot because it is a real design change: whatever the key becomes,
+every existing cache entry is invalidated the day it lands, and the sequencing of that
+belongs with the declared-inputs work, not with a test fix. See the umbrella's phase-4
+scope correction.
+
+### 2. `test/naude-assembler-closure.test.cjs` does not guard the carried-member list
+
+`libexec/quaude-fuse.js` carries a list of libexec/scripts members that must be
+materialized into a fused builder. Nothing tests that list. Proven twice by mutation
+during phase 2: remove an entry and the closure test still reports **1 pass / 0 fail**.
+
+Why it matters here specifically: phase 2 added `scripts/merge-step.mjs` to that list,
+and a missing entry does not fail a test — it fails a `--self`-fused build at
+`tjs.spawn`, at which point the only signal is a build that dies in the field. This is
+the same shape as the `clode-native` P0 recorded at `.github/workflows/ci.yml:487`,
+where the tests proving the node-free builder worked were silently skipping and 13 CI
+jobs broke at once while CI stayed green.
+
+The fix is a test that mutates the list and asserts the closure check goes red — the
+list is derivable from what the worker actually loads, so the stronger fix is to derive
+it rather than declare it.
+
+### 3. The trace log's `interpreter` field is a constant on the fused path
+
+`libexec/clode-fuse.cjs` records `interpreter` on every build-trace line. Under a fused
+clode that value comes from the node-shim's `process.version`, which is the hardcoded
+string `'v24.0.0'` (`libexec/node-shim/modules/process.cjs:425`, with `process.release`
+undefined) — a compatibility facade for a boot-time version gate, not a fact about the
+running interpreter.
+
+Live evidence, `~/.local/share/clode/build-trace.jsonl` at 117 runs:
+
+```
+ 107 "interpreter":"node v26.3.0"
+   9 "interpreter":"node v24.20.0"
+   1 "interpreter":"node v24.0.0"     <- the fabricated one
+```
+
+The fabricated row is indistinguishable in shape from the nine genuine v24.x rows, so a
+reader cannot tell which runs came from a fused builder. The phase-2 design singles this
+field out as load-bearing rather than padding, precisely because comparing timings across
+interpreters is the point of keeping the log. Fix: record the real interpreter identity
+on the fused path, or record honestly that it is unknown — never a plausible-looking
+constant.
+
+### 4. `quaude-fuse.js`'s merge read-back parses unguarded
+
+`libexec/quaude-fuse.js:339` does `JSON.parse(dec.decode(mergedRaw))` on the merged graph
+with no try/catch, so a corrupt file surfaces as an unhandled rejection (exit 1 under tjs)
+rather than a named error pointing at the file.
+
+Low severity on purpose: `scripts/merge-step.mjs` writes that file atomically
+(`.tmp-<pid>` then rename), so a truncated or out-of-space write leaves the temp behind
+and never promotes it — the parent then fails on a MISSING file, which `mustRead` already
+reports by name. The unguarded parse is only reachable if something else corrupts a
+fully-renamed file. Worth a named error the next time that code is touched.
