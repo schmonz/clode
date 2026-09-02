@@ -5,7 +5,7 @@ const { parseBuildArgs, resolveBuildOut } = require('../libexec/clode-fuse.cjs')
 
 test('parseBuildArgs: --list-targets', () => {
   assert.deepStrictEqual(parseBuildArgs(['--list-targets']),
-    { naude: false, self: false, out: null, target: null, listTargets: true });
+    { naude: false, self: false, out: null, target: null, listTargets: true, keepGoing: false });
 });
 
 test('parseBuildArgs: --target Y [--out P]', () => {
@@ -24,7 +24,13 @@ test('parseBuildArgs: --target and --self/--naude are exclusive', () => {
 
 test('parseBuildArgs: plain build unchanged', () => {
   assert.deepStrictEqual(parseBuildArgs([]),
-    { naude: false, self: false, out: null, target: null, listTargets: false });
+    { naude: false, self: false, out: null, target: null, listTargets: false, keepGoing: false });
+});
+
+test('parseBuildArgs: --keep-going / -k', () => {
+  assert.strictEqual(parseBuildArgs(['--keep-going']).keepGoing, true);
+  assert.strictEqual(parseBuildArgs(['-k']).keepGoing, true);
+  assert.strictEqual(parseBuildArgs([]).keepGoing, false);
 });
 
 // resolveBuildOut: the .exe suffix follows the TARGET platform, not the host —

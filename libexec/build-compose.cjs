@@ -101,4 +101,14 @@ class Composer {
   }
 }
 
-module.exports = { Composer };
+// Whether a mismatch should fail the build. Default yes: a progress display that can
+// silently under-count cannot tell you when work went missing. `keepGoing` is the
+// -k escape — occasionally useful for seeing everything broken in one pass, wrong as
+// a default.
+function failOnMismatch(composer, opts) {
+  const m = composer.mismatches();
+  if (!m.length) return false;
+  return !(opts && opts.keepGoing);
+}
+
+module.exports = { Composer, failOnMismatch };

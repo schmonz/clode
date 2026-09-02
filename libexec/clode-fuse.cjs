@@ -56,7 +56,7 @@ const { seaBin, tjsBin } = require('../scripts/platform-tag.cjs');
 // Reporter, feeding the SAME Composer the worker's lines land in over the
 // spawn seam below — in-process and spawned components speak one wire
 // format, which is the entire point (see build-compose.cjs's header).
-const { Composer } = require('./build-compose.cjs');
+const { Composer, failOnMismatch } = require('./build-compose.cjs');
 const { Reporter } = require('./build-report.cjs');
 const { appendRun } = require('./build-trace.cjs');
 
@@ -751,16 +751,18 @@ function parseBuildArgs(args) {
   let out = null;
   let target = null;
   let listTargets = false;
+  let keepGoing = false;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--naude') { naude = true; }
     else if (args[i] === '--self') { self = true; }
     else if (args[i] === '--list-targets') { listTargets = true; }
+    else if (args[i] === '--keep-going' || args[i] === '-k') { keepGoing = true; }
     else if (args[i] === '--out' && args[i + 1]) { out = args[++i]; }
     else if (args[i] === '--target') {
       if (!args[i + 1]) return { error: 'build: --target needs a platform (see: clode build --list-targets)' };
       target = args[++i];
     }
-    else return { error: `build: unknown argument '${args[i]}' (usage: clode build [--self|--naude|--target Y|--list-targets] [--out PATH])` };
+    else return { error: `build: unknown argument '${args[i]}' (usage: clode build [--self|--naude|--target Y|--list-targets|--keep-going] [--out PATH])` };
   }
   // --self is the odd one out: it builds the native clode BUILDER, never a
   // product, so it composes with nothing. --naude and --target DO compose:
@@ -770,7 +772,7 @@ function parseBuildArgs(args) {
     const other = naude ? '--naude' : '--target';
     return { error: `build: --self and ${other} are different build targets — pick one` };
   }
-  return { naude, self, out, target, listTargets };
+  return { naude, self, out, target, listTargets, keepGoing };
 }
 
 // Resolve the output basename for a quaude/--self build (the naude branch names
@@ -1731,6 +1733,29 @@ async function clodeBuild(args, opts) {
       return fail(`build: fuse worker failed (${describeExit(w)}):\n${workerPassthrough}${w.stderr}${extra}`);
     }
     clodeLog(workerPassthrough.trimEnd());
+
+    // Enforce the mismatch (phase-2 Task 6): both real components — this
+    // process (the builder's OWN Reporter, above) and the worker just ingested
+    // — have now reported everything they will before any of the three success
+    // branches below (crossTarget/self/quaude) can return 0. Checked HERE,
+    // not once at the very end of each branch, so a build that already went
+    // wrong (the worker under-counted `compile`) fails before spending minutes
+    // on smoke/attest against a binary already known to be suspect — and so
+    // there is exactly one enforcement point for all three branches, not three.
+    // A step declared by a LATER builder-only phase (smoke/attest/smoke-version/
+    // smoke-help) is not covered by this check — those always report a fixed,
+    // no-total single unit and finish unconditionally on every return path, so
+    // there is nothing for mismatches() to catch there; if that ever changes,
+    // this comment is the marker for where a second check would need to go.
+    const mismatches = composer.mismatches();
+    if (mismatches.length) {
+      for (const m of mismatches) stderr.write(`clode: build: MISMATCH: ${m.reason}\n`);
+      if (failOnMismatch(composer, { keepGoing: parsed.keepGoing })) {
+        spin.done();
+        return 1;
+      }
+      stderr.write(`clode: build: --keep-going set — continuing despite ${mismatches.length} mismatch(es)\n`);
+    }
 
     // Cross-fuse: the trailer is written to a foreign-platform base the host
     // cannot exec, so stop here — no PONG/attest/version smoke. The output is

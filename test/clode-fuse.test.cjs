@@ -53,7 +53,7 @@ test('clode build: unknown argument fails loudly before any work', () => {
   const r = runEntry(['build', '--frobnicate']);
   assert.strictEqual(r.status, 1);
   assert.match(r.stderr, /build: unknown argument '--frobnicate'/);
-  assert.match(r.stderr, /usage: clode build \[--self\|--naude\|--target Y\|--list-targets\] \[--out PATH\]/);
+  assert.match(r.stderr, /usage: clode build \[--self\|--naude\|--target Y\|--list-targets\|--keep-going\] \[--out PATH\]/);
 });
 
 // Regression: an invalid `clode build` used to fire the watch trigger — spawning

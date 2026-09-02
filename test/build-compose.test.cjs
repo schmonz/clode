@@ -125,3 +125,13 @@ test('a STARTED after FINISHED is also a mismatch, not a silent reversion to run
   const step = c.steps().find((s) => s.name === 'compile');
   assert.strictEqual(step.state, 'finished', 'the step must not revert to running');
 });
+
+test('the build fails on a mismatch by default', () => {
+  const c = new C.Composer();
+  const lines = [];
+  const r = new R.Reporter({ emit: (l) => lines.push(l), now: () => 0 });
+  r.plan([{ name: 'compile', total: 1795 }]); r.start('compile'); r.finish('compile', 1600);
+  for (const l of lines) c.ingest('worker', l);
+  assert.strictEqual(C.failOnMismatch(c, { keepGoing: false }), true);
+  assert.strictEqual(C.failOnMismatch(c, { keepGoing: true }), false, '-k reports but does not fail');
+});
