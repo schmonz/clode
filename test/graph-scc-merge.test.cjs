@@ -1,7 +1,8 @@
 'use strict';
 // The cyclic-group merge DRIVER (libexec/graph-scc-merge.cjs) — the one implementation
 // both consumers of a staged graph run: libexec/clode-extract.cjs under node, and
-// libexec/quaude-fuse.js under tjs.
+// scripts/merge-step.mjs under tjs (spawned by libexec/quaude-fuse.js — Task 7 pulled the
+// tjs-side call out of quaude-fuse.js itself and into that protocol-only component).
 //
 // Hermetic: a two-module graph with the exact shape upstream Claude Code 2.1.248+ emits —
 // A statically imports B, and B reaches back with `import.meta.require("A")`. Converting

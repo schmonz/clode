@@ -34,36 +34,42 @@ test('build-report.cjs is CARRIED into a fused builder, or it works from a check
 // AFTER 'merge' finishes, from the POST-merge doc.order) would not fail any of
 // them. This is the cheap guard that actually reads the source and would.
 //
-// `report.plan(` (with the receiver, not bare 'plan(') anchors on the two REAL
-// calls only — the prose comments above them say "plan() call", never
-// "report.plan(", so lastIndexOf/indexOf both land on code. The trap the brief
-// warns about is a DIFFERENT anchor: 'scc-merge.cjs' (used by the test above)
-// appears three times earlier in the file (inside mergeCyclicGroups and its
-// own commentary) before the merge step's own name ever does, so indexOf on
-// THAT literal would anchor on the wrong occurrence. `report.finish('merge'`
-// is not reused that way — it names the merge step's own completion, and
-// nothing else in the file happens to contain that exact substring — so a
-// plain lastIndexOf on it is safe here.
-test('quaude-fuse plans compile/assets AFTER merge finishes, in the SOURCE ITSELF (not just in a hand-written test double)', () => {
+// TASK 7 changed WHO owns 'merge': it moved out of this worker's `report`
+// entirely, into scripts/merge-step.mjs (a protocol-only component — see
+// test/merge-step.test.cjs for its own plan/start/finish assertions). This
+// worker now has exactly ONE report.plan( call site (compile+assets); the
+// ordering property that mattered before — "compile/assets must be planned
+// from the POST-merge doc.order, not the pre-merge one" — still has to hold,
+// it just anchors on the merge SUBPROCESS having been waited on and applied,
+// not on a report.finish('merge' this file no longer writes.
+test('quaude-fuse plans compile/assets AFTER the merge subprocess is applied, in the SOURCE ITSELF (not just in a hand-written test double)', () => {
   const src = fs.readFileSync(require.resolve('../libexec/quaude-fuse.js'), 'utf8');
   const planIdxs = [];
   for (let i = src.indexOf('report.plan('); i !== -1; i = src.indexOf('report.plan(', i + 1)) planIdxs.push(i);
-  assert.strictEqual(planIdxs.length, 2,
-    'expected exactly two report.plan( call sites: merge alone, then compile+assets together');
-  const mergeFinishIdx = src.lastIndexOf("report.finish('merge'");
-  assert.notStrictEqual(mergeFinishIdx, -1, "report.finish('merge' must appear literally");
-  assert.ok(planIdxs[1] > mergeFinishIdx,
-    "the SECOND report.plan( (compile/assets) must appear AFTER report.finish('merge') in the source — "
-    + 'planning them from the pre-merge doc.order.length would silently under-declare a total that the '
-    + 'in-worker merge fallback then grows past, tripping the over-report mismatch (see the regression-proof '
-    + 'test above for what that looked like)');
+  assert.strictEqual(planIdxs.length, 1,
+    'expected exactly one report.plan( call site left in this file: compile+assets — '
+    + "'merge' is now planned by scripts/merge-step.mjs, not here");
+  const mergeAppliedIdx = src.lastIndexOf('doc.order = merged.order');
+  assert.notStrictEqual(mergeAppliedIdx, -1,
+    'the merge subprocess result must be applied onto doc.order somewhere before compile/assets are planned');
+  assert.ok(planIdxs[0] > mergeAppliedIdx,
+    'the (sole) report.plan( (compile/assets) must appear AFTER the merge result is applied to doc.order — '
+    + 'planning from doc.order before that would silently under-declare a total the compile loop (which '
+    + 'iterates the ACTUAL, longer doc.order) then exceeds, tripping the over-report mismatch (see the '
+    + 'regression-proof test above for what that looked like)');
 });
 
-test('the worker declares compile, assets and merge as named steps', () => {
+test('the worker declares compile and assets as named steps; merge is declared by scripts/merge-step.mjs, not here', () => {
   const src = fs.readFileSync(require.resolve('../libexec/quaude-fuse.js'), 'utf8');
-  for (const name of ['compile', 'assets', 'merge']) {
+  for (const name of ['compile', 'assets']) {
     assert.match(src, new RegExp(`['"\`]${name}['"\`]`), `step '${name}' must be declared by name`);
   }
+  // This worker still NAMES 'merge' (log lines, the subprocess result file) but must not
+  // declare it as ITS OWN report step — that would double-declare alongside merge-step.mjs's
+  // own plan(), which build-compose.cjs has no defined behaviour for.
+  assert.doesNotMatch(src, /report\.plan\(\[\{\s*name:\s*['"`]merge['"`]/,
+    "quaude-fuse.js must not itself plan a 'merge' report step — that step belongs to "
+    + 'scripts/merge-step.mjs alone');
 });
 
 test('build-report stays tjs-safe, or the worker dies at runtime', () => {

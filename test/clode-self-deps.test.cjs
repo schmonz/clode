@@ -173,6 +173,14 @@ test('clode itself requires only node builtins + sibling files — no npm depend
         continue;
       }
       if (spec.startsWith('node:')) continue;   // explicit node: builtin
+      // txiki.js's OWN builtin-module scheme — structurally the same thing as node:, a
+      // runtime-supplied namespace, never an npm package. scripts/*.mjs is where a tjs-run
+      // program (Task 7's scripts/merge-step.mjs, spawned under tjs — never require()'d or
+      // import()'d by any NODE-side clode code) lives; libexec/quaude-fuse.js and
+      // libexec/graph-meta.js use the same `tjs:` imports but are invisible to this walk's
+      // `.cjs`-only libexec filter (they are `.js`), which is why this gap went unnoticed
+      // until scripts/ grew its first tjs-run member.
+      if (spec.startsWith('tjs:')) continue;
       if (BUILTINS.has(spec)) continue;         // bare builtin name (e.g. legacy 'fs')
       violations.push(`${path.relative(REPO, file)}: requires npm package '${spec}'`);
     }
