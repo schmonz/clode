@@ -274,6 +274,15 @@ runs:
       shell: bash
       run: node scripts/exec-probe.mjs || true
 
+    # Task 8 (phase-2 spec §3.7): the Windows spawn measurement that decides
+    # step PLACEMENT (in-process vs. spawned program), not the step protocol's
+    # shape — see scripts/spawn-cost-probe.mjs's header. Reports only, same
+    # posture as the exec-probe step above: it can never fail this job.
+    - name: Probe spawn cost vs in-process (native Windows)
+      if: runner.os == 'Windows'
+      shell: bash
+      run: node scripts/spawn-cost-probe.mjs || true
+
     - name: Construct the patched tjs tree from pins (host, native speed)
       if: steps.tjs-cache.outputs.cache-hit != 'true'
       shell: bash
