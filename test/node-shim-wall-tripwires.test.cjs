@@ -124,30 +124,39 @@ const WALLS = [
 // real provider. Used to verify the mechanism itself against a synthetic
 // fixture (task-15-report.md, VERIFY step 2) without needing a Bun-packaged
 // Claude Code provider on the box. The normal/CI path never sets this.
+// Returns { path, error }: path is set on success, error is set (and path
+// null) when a provider WAS found but staging it threw — a real reason (not
+// "no provider") that the module-scope SKIP_REASON below must surface rather
+// than swallow, same distinction test/oracle-models.cjs's stageProviderCli
+// itself now makes.
 function resolveBundlePath(env = process.env) {
   if (env.CLODE_SHIM_WALL_BUNDLE) {
     const p = env.CLODE_SHIM_WALL_BUNDLE;
-    return fs.existsSync(p) ? p : null;
+    return { path: fs.existsSync(p) ? p : null, error: null };
   }
   try {
     // Honors CLODE_PROVIDER_BIN first (same as the API-surface gate), else
     // clode's own local provider resolution (test/oracle-models.cjs header) —
     // both are purely local/offline; no network fetch happens here.
     const staged = models.stageProviderCli({ env });
-    return staged ? staged.cli : null;
-  } catch {
-    return null;
+    if (staged && staged.error) return { path: null, error: staged.error };
+    return { path: staged ? staged.cli : null, error: null };
+  } catch (e) {
+    return { path: null, error: e.message };
   }
 }
 
 // Resolved once at module scope: staging spawns a child process to carve a
 // ~20MB bundle, and every wall below diffs the SAME snapshot — no reason to
 // redo it per-wall.
-const BUNDLE = resolveBundlePath();
+const RESOLVED = resolveBundlePath();
+const BUNDLE = RESOLVED.path;
 const BUNDLE_SRC = BUNDLE ? fs.readFileSync(BUNDLE, 'utf8') : null;
-const SKIP_REASON = 'no upstream bundle available locally — set CLODE_PROVIDER_BIN '
-  + 'to a real claude binary (or run somewhere clode has already resolved a local '
-  + 'provider) to exercise this gate; see test/oracle-models.cjs';
+const SKIP_REASON = RESOLVED.error
+  ? `provider found but staging it failed: ${RESOLVED.error}`
+  : 'no upstream bundle available locally — set CLODE_PROVIDER_BIN '
+    + 'to a real claude binary (or run somewhere clode has already resolved a local '
+    + 'provider) to exercise this gate; see test/oracle-models.cjs';
 
 function fireMessage(wall) {
   return `shim wall tripwire FIRED — upstream's pinned bundle now calls ${wall.api}, `

@@ -13,11 +13,12 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { skipUnlessTjs } = require('./node-shim-helper.cjs');
 const { startMockAnthropic } = require('./mock-anthropic-helper.cjs');
-const { stageProviderCli, runQuaudeModelAsync } = require('./oracle-models.cjs');
+const { stageProviderCli, providerSkipReason, runQuaudeModelAsync } = require('./oracle-models.cjs');
 
 function stage(t) {
   const staged = stageProviderCli();
-  if (!staged) { t.skip('no Bun-packaged CC provider (CLODE_PROVIDER_BIN / CLODE_CLAUDE_BIN)'); return null; }
+  const skip = providerSkipReason(staged, 'no Bun-packaged CC provider (CLODE_PROVIDER_BIN / CLODE_CLAUDE_BIN)');
+  if (skip) { t.skip(skip); return null; }
   return staged;
 }
 

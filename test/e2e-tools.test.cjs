@@ -1,7 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { sandbox } = require('./e2e.cjs');
-const { stageProviderCli, runNaudeModelAsync } = require('./oracle-models.cjs');
+const { stageProviderCli, providerSkipReason, runNaudeModelAsync } = require('./oracle-models.cjs');
 
 // Faithful 1:1 port of test_tools.bats. Online-gated: the bash test skips when
 // CLODE_OFFLINE is set. The e2e sandbox is constructed-clean with CLODE_OFFLINE=1,
@@ -14,7 +14,8 @@ test('Bash tool works end-to-end via -p', async (t) => {
   const sbx = sandbox(t);
   if (sbx.env.CLODE_OFFLINE) { t.skip('offline'); return; }
   const staged = stageProviderCli({ env: sbx.env });
-  if (!staged) { t.skip('no Bun-packaged CC provider'); return; }
+  const skip = providerSkipReason(staged, 'no Bun-packaged CC provider');
+  if (skip) { t.skip(skip); return; }
   const r = await runNaudeModelAsync(staged.cli, [
     '-p', 'run the bash command: echo HELLO123 and report its output',
     '--allowedTools', 'Bash',

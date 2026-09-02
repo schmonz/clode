@@ -1,7 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { sandbox } = require('./e2e.cjs');
-const { stageProviderCli, runNaudeModelAsync } = require('./oracle-models.cjs');
+const { stageProviderCli, providerSkipReason, runNaudeModelAsync } = require('./oracle-models.cjs');
 
 // test_print.bats: the `-p` (print/non-interactive) path must reach a REAL model and
 // come back with the model's reply. This is a live-network case — the bats test
@@ -16,7 +16,8 @@ test('clode -p reaches the model', async (t) => {
   const sbx = sandbox(t);
   if (sbx.env.CLODE_OFFLINE) { t.skip('offline'); return; }
   const staged = stageProviderCli({ env: sbx.env });
-  if (!staged) { t.skip('no Bun-packaged CC provider'); return; }
+  const skip = providerSkipReason(staged, 'no Bun-packaged CC provider');
+  if (skip) { t.skip(skip); return; }
   const r = await runNaudeModelAsync(staged.cli, ['-p', 'reply with exactly: PONG'],
     { cwd: staged.dir, env: sbx.env, timeout: 60000 });
   const output = r.stdout + r.stderr;

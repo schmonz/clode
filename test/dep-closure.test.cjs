@@ -479,9 +479,10 @@ test('GATE (integration): the REAL extracted cli.cjs + bun-shim.cjs, scanned aga
   // thing the brief calls the acceptance test. Skips (does not fail) when no
   // Bun-packaged provider is available, matching every other provider-gated
   // test in this suite (test/e2e-assets.test.cjs, scripts/apicheck.mjs).
-  const { stageProviderCli } = require('./oracle-models.cjs');
+  const { stageProviderCli, providerSkipReason } = require('./oracle-models.cjs');
   const staged = stageProviderCli({ env: process.env });
-  if (!staged) { t.skip('no Bun-packaged CC provider'); return; }
+  const skip = providerSkipReason(staged, 'no Bun-packaged CC provider');
+  if (skip) { t.skip(skip); return; }
   const direct = readDirectDeps(path.join(REPO, 'deps', 'claude', 'package.json'));
   const closure = computeDepClosure(NM, direct);
   assert.doesNotThrow(() => assertNoUnknownBareSpecifiers(

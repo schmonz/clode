@@ -91,12 +91,13 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { skipUnlessTjs } = require('./node-shim-helper.cjs');
 const { startMockAnthropic } = require('./mock-anthropic-helper.cjs');
-const { stageProviderCli, runNaudeModelAsync, runQuaudeModelAsync } = require('./oracle-models.cjs');
+const { stageProviderCli, providerSkipReason, runNaudeModelAsync, runQuaudeModelAsync } = require('./oracle-models.cjs');
 
 test('<row action> matches the naude reference byte for byte', async (t) => {
   if (skipUnlessTjs(t)) return;
   const staged = stageProviderCli();
-  if (!staged) { t.skip('no Bun-packaged CC provider (CLODE_PROVIDER_BIN / CLODE_CLAUDE_BIN)'); return; }
+  const skip = providerSkipReason(staged, 'no Bun-packaged CC provider (CLODE_PROVIDER_BIN / CLODE_CLAUDE_BIN)');
+  if (skip) { t.skip(skip); return; }
 
   const mock = await startMockAnthropic();
   let naude;
@@ -235,14 +236,15 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { skipUnlessTjs } = require('./node-shim-helper.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('./mock-anthropic-helper.cjs');
-const { stageProviderCli, runQuaudeModelAsync } = require('./oracle-models.cjs');
+const { stageProviderCli, providerSkipReason, runQuaudeModelAsync } = require('./oracle-models.cjs');
 
 const TOOL_ID = 'toolu_row_1';
 
 test('<row: a full turn produces the expected side effect>', async (t) => {
   if (skipUnlessTjs(t)) return;
   const staged = stageProviderCli();
-  if (!staged) { t.skip('no Bun-packaged CC provider'); return; }
+  const skip = providerSkipReason(staged, 'no Bun-packaged CC provider');
+  if (skip) { t.skip(skip); return; }
 
   // startMockAnthropic({ respond }) -- `respond(requestBody)` picks the canned
   // SSE for THIS POST by inspecting the running conversation (e.g. whether

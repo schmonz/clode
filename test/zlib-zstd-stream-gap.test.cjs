@@ -105,15 +105,21 @@ test('WALL 1: bun-shim reports isStandaloneExecutable false, so upstream cannot 
 // PATCHED cli.cjs a target actually runs. Skips without a provider; CI's node-shim
 // oracle step exports CLODE_PROVIDER_BIN.
 
+// Returns { src, error }: error is set (src null) when a provider WAS found
+// but staging it threw — a real reason distinct from genuine absence, same
+// distinction test/oracle-models.cjs's stageProviderCli itself now makes (and
+// test/node-shim-wall-tripwires.test.cjs's resolveBundlePath mirrors).
 function resolveBundleSrc(env = process.env) {
   if (env.CLODE_ZSTD_GAP_BUNDLE) {
-    return fs.existsSync(env.CLODE_ZSTD_GAP_BUNDLE)
+    const src = fs.existsSync(env.CLODE_ZSTD_GAP_BUNDLE)
       ? fs.readFileSync(env.CLODE_ZSTD_GAP_BUNDLE, 'utf8') : null;
+    return { src, error: null };
   }
   try {
     const staged = models.stageProviderCli({ env });
-    return staged && staged.cli ? fs.readFileSync(staged.cli, 'utf8') : null;
-  } catch { return null; }
+    if (staged && staged.error) return { src: null, error: staged.error };
+    return { src: staged && staged.cli ? fs.readFileSync(staged.cli, 'utf8') : null, error: null };
+  } catch (e) { return { src: null, error: e.message }; }
 }
 
 // QUOTES MUST BE MATCHED ESCAPE-BLIND, and this is not a style choice — it is the trap
@@ -160,10 +166,13 @@ const CARVED_CHECKS = [
   },
 ];
 
-const BUNDLE_SRC = resolveBundleSrc();
-const SKIP_REASON = 'no upstream bundle available locally — set CLODE_PROVIDER_BIN to a '
-  + 'real claude binary (or run where clode has already resolved a provider); see '
-  + 'test/oracle-models.cjs';
+const RESOLVED = resolveBundleSrc();
+const BUNDLE_SRC = RESOLVED.src;
+const SKIP_REASON = RESOLVED.error
+  ? `provider found but staging it failed: ${RESOLVED.error}`
+  : 'no upstream bundle available locally — set CLODE_PROVIDER_BIN to a '
+    + 'real claude binary (or run where clode has already resolved a provider); see '
+    + 'test/oracle-models.cjs';
 
 for (const check of CARVED_CHECKS) {
   test(`zstd gap: ${check.name}`, (t) => {

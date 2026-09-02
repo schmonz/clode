@@ -1,7 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { sandbox } = require('./e2e.cjs');
-const { stageProviderCli, runNaudeModelAsync } = require('./oracle-models.cjs');
+const { stageProviderCli, providerSkipReason, runNaudeModelAsync } = require('./oracle-models.cjs');
 
 // Faithful 1:1 port of test_assets.bats. Both cases are online-gated: the bash tests
 // `skip "offline"` when CLODE_OFFLINE is set. The e2e sandbox is constructed-clean with
@@ -18,7 +18,8 @@ test('embedded-asset shim raises no consumer errors on --help', async (t) => {
   const sbx = sandbox(t);
   if (sbx.env.CLODE_OFFLINE) { t.skip('offline'); return; }
   const staged = stageProviderCli({ env: sbx.env });
-  if (!staged) { t.skip('no Bun-packaged CC provider'); return; }
+  const skip = providerSkipReason(staged, 'no Bun-packaged CC provider');
+  if (skip) { t.skip(skip); return; }
   const r = await runNaudeModelAsync(staged.cli, ['--help'], { cwd: staged.dir, env: sbx.env, timeout: 60000 });
   assert.doesNotMatch(r.stderr, /embeddedFiles|yoga|ENOENT.*\.(wasm|node)/i);
 });
@@ -27,7 +28,8 @@ test('embedded-asset shim raises no consumer errors on -p', async (t) => {
   const sbx = sandbox(t);
   if (sbx.env.CLODE_OFFLINE) { t.skip('offline'); return; }
   const staged = stageProviderCli({ env: sbx.env });
-  if (!staged) { t.skip('no Bun-packaged CC provider'); return; }
+  const skip = providerSkipReason(staged, 'no Bun-packaged CC provider');
+  if (skip) { t.skip(skip); return; }
   const r = await runNaudeModelAsync(staged.cli, ['-p', 'reply with exactly: PONG'],
     { cwd: staged.dir, env: sbx.env, timeout: 60000 });
   assert.doesNotMatch(r.stderr, /embeddedFiles|ENOENT.*\.(wasm|node)/i);

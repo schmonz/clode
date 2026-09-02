@@ -152,22 +152,44 @@ function stageCli(bin, opts = {}) {
   return { dir, cli, cacheDir };
 }
 
-// Resolve + stage in one step; null when no usable provider exists (the local
-// /usr/local/bin/claude is not necessarily Bun-packaged — the extractor rejects
-// what it cannot carve). Callers SKIP rather than fail on null.
+// Resolve + stage in one step; null when no usable provider exists AT ALL (the
+// !bin case — genuine absence). When a provider WAS found but staging THREW —
+// the local /usr/local/bin/claude case (not Bun-packaged — the extractor
+// rightly rejects what it cannot carve) as much as a genuine break (e.g.
+// upstream's 2.1.257 SCC-merge incompatibility, UPSTREAM_PIN) — that is not
+// absence, and must not collapse into the same value as absence: return
+// { error } instead, naming the real thrown message. A bare `catch { return
+// null; }` here once made "no provider" and "provider found, and staging it
+// blew up" indistinguishable — 13 tests silently went from running to skipping
+// with a generic message, one of them (shim-surface.test.cjs) a red gate
+// reporting real golden-map drift (BACKLOG.md).
+//
+// Callers SKIP on both null and .error — see providerSkipReason below — never
+// fail on either, but a .error skip message must name the real error, not the
+// generic "no provider" text.
 function stageProviderCli(opts = {}) {
   const bin = opts.bin || resolveProviderBin(opts.env || process.env);
   if (!bin) return null;
   try {
     return stageCli(bin, opts);
-  } catch {
-    return null;
+  } catch (e) {
+    return { error: e && e.message || String(e) };
   }
+}
+
+// Turns a stageProviderCli() result into the t.skip() reason a caller should
+// use, or null when staging actually succeeded (the caller should proceed).
+// Keeps every call site's skip message honest without each one re-deriving the
+// null-vs-.error distinction by hand.
+function providerSkipReason(staged, genericReason) {
+  if (staged && staged.error) return `provider found but staging it failed: ${staged.error}`;
+  if (!staged) return genericReason;
+  return null;
 }
 
 module.exports = {
   REPO, LOADER, DEPS,
   runNaudeModel, runQuaudeModel,
   runNaudeModelAsync, runQuaudeModelAsync, runBinaryAsync,
-  resolveProviderBin, stageCli, stageProviderCli,
+  resolveProviderBin, stageCli, stageProviderCli, providerSkipReason,
 };

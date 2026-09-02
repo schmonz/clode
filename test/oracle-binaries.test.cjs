@@ -21,7 +21,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { tjsPath } = require('./node-shim-helper.cjs');
 const { startMockAnthropic } = require('./mock-anthropic-helper.cjs');
-const { REPO, stageProviderCli, runBinaryAsync } = require('./oracle-models.cjs');
+const { REPO, stageProviderCli, providerSkipReason, runBinaryAsync } = require('./oracle-models.cjs');
 const { seaBin } = require('../scripts/platform-tag.cjs');
 
 const BUILD_TIMEOUT = 15 * 60 * 1000;
@@ -51,7 +51,8 @@ test('naude and quaude binaries agree on the same baked Claude Code', async (t) 
   const skip = why();
   if (skip) { t.skip(skip); return; }
   const staged = stageProviderCli();
-  if (!staged) { t.skip('no Bun-packaged CC provider (CLODE_PROVIDER_BIN / CLODE_CLAUDE_BIN)'); return; }
+  const stageSkip = providerSkipReason(staged, 'no Bun-packaged CC provider (CLODE_PROVIDER_BIN / CLODE_CLAUDE_BIN)');
+  if (stageSkip) { t.skip(stageSkip); return; }
 
   // Both targets bake the SAME cli.cjs: naude from the staged copy, quaude via
   // clode's own extract of the same resolved provider. Engine is the only variable.

@@ -17,7 +17,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { skipUnlessTjs } = require('./node-shim-helper.cjs');
 const { startMockAnthropic } = require('./mock-anthropic-helper.cjs');
-const { stageProviderCli, runNaudeModelAsync, runQuaudeModelAsync } = require('./oracle-models.cjs');
+const { stageProviderCli, providerSkipReason, runNaudeModelAsync, runQuaudeModelAsync } = require('./oracle-models.cjs');
 
 const TIMEOUT = 90000;
 
@@ -65,7 +65,8 @@ function postedMessages(mock) {
 
 test('naude-model (node reference): -p prints the mock response, exit 0', async (t) => {
   const staged = stageProviderCli();
-  if (!staged) { t.skip('no Bun-packaged CC provider (CLODE_PROVIDER_BIN / CLODE_CLAUDE_BIN)'); return; }
+  const skip = providerSkipReason(staged, 'no Bun-packaged CC provider (CLODE_PROVIDER_BIN / CLODE_CLAUDE_BIN)');
+  if (skip) { t.skip(skip); return; }
   const mock = await startMockAnthropic();
   try {
     const r = await runNaudeModelAsync(staged.cli, ['-p', 'say PONG'], {
@@ -85,7 +86,8 @@ test('naude-model (node reference): -p prints the mock response, exit 0', async 
 test('quaude-model (tjs + node-shim) matches the naude reference byte for byte', async (t) => {
   if (skipUnlessTjs(t)) return;
   const staged = stageProviderCli();
-  if (!staged) { t.skip('no Bun-packaged CC provider (CLODE_PROVIDER_BIN / CLODE_CLAUDE_BIN)'); return; }
+  const skip = providerSkipReason(staged, 'no Bun-packaged CC provider (CLODE_PROVIDER_BIN / CLODE_CLAUDE_BIN)');
+  if (skip) { t.skip(skip); return; }
 
   const naudeMock = await startMockAnthropic();
   let naude;

@@ -56,9 +56,13 @@ function inputs() {
   const tjs = helper.tjsPath();
   if (!tjs) { _inputs = { skip: 'no tjs binary (CLODE_TJS or build/tjs/<tag>)' }; return _inputs; }
   let staged = null;
-  try { staged = models.stageProviderCli({ env: process.env }); } catch { /* fall through */ }
-  if (!staged || !staged.cli || !fs.existsSync(staged.cli)) {
-    _inputs = { skip: 'no staged provider bundle (CLODE_PROVIDER_BIN)' };
+  let stageErr = null;
+  try { staged = models.stageProviderCli({ env: process.env }); } catch (e) { stageErr = e.message; }
+  const skip = stageErr
+    ? `provider found but staging it failed: ${stageErr}`
+    : models.providerSkipReason(staged, 'no staged provider bundle (CLODE_PROVIDER_BIN)');
+  if (skip || !staged.cli || !fs.existsSync(staged.cli)) {
+    _inputs = { skip: skip || 'no staged provider bundle (CLODE_PROVIDER_BIN)' };
     return _inputs;
   }
   // Point at the CACHE dir's cli.cjs, not the per-test copy: the cache dir also
