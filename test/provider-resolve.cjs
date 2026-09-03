@@ -41,6 +41,25 @@ function _providers(env) {
   add(env.CLODE_PROVIDER_BIN);
   add(env.CLODE_CLAUDE_BIN);
 
+  // UPSTREAM_PIN's version, BEFORE the product's ambient resolver. This ordering is
+  // load-bearing and was wrong on the first cut: resolveClaudeBin() returns whatever
+  // this box last happened to cache (2.1.252 here), while UPSTREAM_PIN names the
+  // version this project actually supports and CI installs (2.1.251). Preferring the
+  // ambient one silently tested a version nobody declared — 25 failures, all from
+  // running against an unsupported provider. `dev-box-state-hides-bugs`: the declared
+  // pin beats whatever is lying around.
+  //
+  // Read from the file, never written here — a second hardcoded version string is how
+  // the 2.1.183 problem in test/inspect.test.cjs happened.
+  try {
+    const pin = fs.readFileSync(path.join(REPO, 'UPSTREAM_PIN'), 'utf8')
+      .split('\n').map((l) => l.match(/^claude-code (.+)$/)).find(Boolean);
+    if (pin) {
+      const home = env.HOME || require('node:os').homedir();
+      add(path.join(home, '.local', 'share', 'clode', 'providers', pin[1].trim(), 'claude'));
+    }
+  } catch { /* no pin file, or unreadable */ }
+
   // The product's OWN resolver. Without this a local run sees only fixture stores and
   // never exercises what `clode build` would actually pick.
   try { add(require('../libexec/clode-resolve.cjs').resolveClaudeBin(env)); } catch { /* none */ }
@@ -52,17 +71,6 @@ function _providers(env) {
     add(execFileSync(process.execPath, [path.join(REPO, 'scripts', 'find-provider.mjs')],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim());
   } catch { /* absence is reported by skipReason, not thrown */ }
-
-  // The pinned version, read from UPSTREAM_PIN rather than written here — a second
-  // hardcoded version string is how the 2.1.183 problem happened the first time.
-  try {
-    const pin = fs.readFileSync(path.join(REPO, 'UPSTREAM_PIN'), 'utf8')
-      .split('\n').map((l) => l.match(/^claude-code (.+)$/)).find(Boolean);
-    if (pin) {
-      const home = env.HOME || require('node:os').homedir();
-      add(path.join(home, '.local', 'share', 'clode', 'providers', pin[1].trim(), 'claude'));
-    }
-  } catch { /* no pin file, or unreadable */ }
 
   try {
     const { VERSIONS, providerBin } = require('./golden-shas-lib.cjs');

@@ -121,6 +121,43 @@ process.env.CLODE_TEST_SECURITY_STUB_DIR = KC_STUB_DIR;
 // one centrally.
 process.env.CLODE_STATE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-test-state-'));
 
+// A provider and an engine, resolved ONCE for the whole suite, the same way the
+// central CLODE_STATE_ROOT and `security` stub above are set once here rather than
+// remembered per test.
+//
+// WHY THIS IS HERE. Provider- and engine-gated tests were the suite's largest dark
+// surface: 43 of 84 skips. They were not skipping because the artifacts were absent —
+// this box has both — but because each test read an environment variable that nothing
+// exports. A gate keyed to an undocumented env var is dark BY DEFAULT, and it reports
+// that darkness in language ("no CLODE_PROVIDER_BIN", "no engine") that reads like an
+// honest unavailability. Two other tests had the identical defect and were fixed the
+// same day (test/graph-runner.test.cjs, test/tjs-bytecode-regen.test.cjs); this is the
+// same fix, applied where it covers everything at once.
+//
+// An operator's own value always wins — if you exported one, you meant it. When
+// nothing resolves we say so ONCE, here, instead of every gated test repeating a
+// paragraph about where it looked.
+//
+// SEQUENCING, deliberately: setting this was tried once before (phase-2 Task 5) and
+// WITHDRAWN, because waking 44 tests surfaced 14 failures from three causes that had
+// nothing to do with the provider — zstd unreachable under a deliberately minimal
+// PATH, an unbuilt naude bundle, and residual /$bunfs chunk edges. Those are fixed
+// now, which is what makes this safe to set. Waking tests before their failures are
+// understood buys a red suite and no information.
+if (!process.env.CLODE_PROVIDER_BIN) {
+  const { providerBin, skipReason } = require('./provider-resolve.cjs');
+  const p = providerBin();
+  if (p) process.env.CLODE_PROVIDER_BIN = p;
+  else console.error(`run: no Claude provider resolved — ${skipReason()}`);
+}
+if (!process.env.CLODE_TJS) {
+  const { tjsPath } = require('./node-shim-helper.cjs');
+  const t = tjsPath();
+  if (t) process.env.CLODE_TJS = t;
+  else console.error('run: no tjs engine resolved (CLODE_TJS unset and no platform-tagged '
+    + 'scratch engine) — engine-gated tests will skip. Build one: node scripts/build-tjs.mjs');
+}
+
 // Platform-tagged harness dir + NODE_PATH (path.delimiter, NOT a hardcoded ':').
 // Resolved through harnessDir(), not hand-joined: every OTHER caller (test/tui-screen.cjs,
 // test/node-shim-tty-helper.cjs, scripts/tui-probe.mjs) already resolves node-pty through
