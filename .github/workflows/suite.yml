@@ -86,5 +86,23 @@ jobs:
           bfs --version | head -1
       - name: Install runtime deps (the six Bun-backing packages, locked) for the fidelity gate
         run: npm ci --prefix deps/claude
+      # Provider-gated tests (test/provider-resolve.cjs) were this suite's largest dark
+      # surface — 43 of 84 skips at last count, none of them ever running here because
+      # this job installed no provider and set no CLODE_PROVIDER_BIN. Same provisioning
+      # every other CI site uses (scripts/stage-provider.mjs, same as the
+      # windows-amd64-tests and node-shim-oracle jobs in ci.yml): install the version
+      # UPSTREAM_PIN names — never hardcoded, see that file's own header for why this
+      # pin exists — then resolve+minimise it once and export CLODE_PROVIDER_BIN via
+      # GITHUB_ENV so the `npm test` step below inherits it like any other env var a
+      # prior step sets.
+      - name: Install the Claude provider (npm, pinned — wakes the provider-gated tests)
+        run: |
+          set -euo pipefail
+          V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
+          echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
+          npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
+          PROV="$(node scripts/stage-provider.mjs)"
+          echo "provider: $PROV"
+          echo "CLODE_PROVIDER_BIN=$PROV" >> "$GITHUB_ENV"
       - name: Full node:test suite (includes the shim-fidelity gate)
         run: npm test
