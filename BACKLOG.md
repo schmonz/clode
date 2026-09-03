@@ -5438,3 +5438,47 @@ this task's scope (undarking provider-gated tests, not engine C debugging).
 loudly, naming this entry — not silently reverted to failing, and not weakened to assert
 less. Re-run the exact repro above (naude vs quaude, same mcp.json/mock/argv) once a
 current-`main` tjs engine or `--strace` access is available.
+
+## The last 5 skips: what it would take, and why they are not free (2026-09-02)
+
+After 84 -> 33, five skips remain that are neither opt-in-by-nature nor impossible
+here. Per the umbrella's closure condition they get an entry rather than a shrug.
+
+**All five need a built artifact**, and that is the whole cost — a `clode build` is
+~7 minutes.
+
+| test(s) | needs | notes |
+|---|---|---|
+| `test/fidelity/update-notify.pty.test.cjs` ×3 | `CLODE_QUAUDE` — a real fused quaude | drives it through a PTY, types `/status`, reads the rendered notice |
+| `test/naude-shim-boundary.test.cjs` ×1 | `CLODE_NAUDE_BIN` | the SHIPPED-BYTES half; the other half (markers, assembly contract, five red proofs) DOES run |
+| a darwin-carve check ×1 | `CLODE_DARWIN_PROVIDER_BIN` | asserts a darwin-carved quaude takes the macOS `/Library` branch |
+
+**Why not just build one in `npm test`.** That job now installs a provider, so adding
+`clode build` is mechanically easy — and it would add ~7 minutes to every CI run, for
+five tests. That is a real budget decision, not a detail to slip in; it needs an owner
+who cares about CI wall-clock to say yes.
+
+**The non-obvious complication, worth knowing before anyone tries.** Three of the five
+are PTY tests, and PTY tests that spawn the real bundle CANNOT run on POSIX CI at all:
+they hang on the macOS Keychain GUI modal. That is exactly why
+`.github/workflows/ci.yml`'s `windows-amd64-tui` job exists and why it can pass
+`CLODE_LIVE_RENDER=1` — its own comment says Windows works "because there is no
+Keychain GUI modal to hang on (the reason POSIX CI can't run it)".
+
+So the natural home for the three update-notify tests is **the Windows TUI job**, not
+the Linux `npm test` job: it already has the pinned provider, the engine artifact, and
+the PTY harness installed. What it does not yet do is `clode build` a quaude — its
+header comment claims it does, but it drives tjs directly. Adding one build there buys
+three tests in the only environment where they can run, without touching the main test
+job's wall-clock.
+
+**Recommended order** for whoever picks this up:
+1. Build a quaude in `windows-amd64-tui` and set `CLODE_QUAUDE` — three tests, in the
+   one place a PTY test can spawn a real bundle.
+2. The naude one is cheapest of all: `build --naude` already happens elsewhere in CI;
+   point `CLODE_NAUDE_BIN` at it.
+3. The darwin-carve one needs a darwin-carved provider on a macOS runner — smallest
+   payoff, do it last.
+
+Until then all five state their reason, and the naude one is the model the others
+should copy: it probes three locations, names each, and prints the exact build command.
