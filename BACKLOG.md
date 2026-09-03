@@ -5340,16 +5340,39 @@ node-free builder worked were silently skipping (`.github/workflows/ci.yml:487`)
 4. The count and classification are recorded, so a later rise is visible rather than
    absorbed.
 
-**Inventory, 2026-09-02, 84 skips:**
+**Inventory: 84 skips -> 33, same day, suite still green.**
 
-| count | category | status |
+Plain `node test/run.mjs`, nothing exported: 1776 tests, 1742 pass, 0 fail, 33
+skipped, exit 0. Was 1691 pass / 84 skipped.
+
+What moved, and why it is worth reading rather than just counting:
+
+| was | fix |
+|---|---|
+| 43 provider-gated | three unrelated causes fixed (zstd unreachable under a deliberately minimal PATH; an unbuilt naude bundle; residual `/$bunfs` chunk edges), then the provider wired into `test/run.mjs` AND `.github/workflows/suite.yml` |
+| 4 `no engine: set CLODE_TJS` | `graph-runner.test.cjs` read one env var instead of asking `tjsPath()` like the rest of the suite. The engine was on the box. |
+| 1 `set CLODE_TJSC` | same defect in `tjs-bytecode-regen.test.cjs` — the test that checks our MODEL of tjsc against the real tool |
+| 3 in `inspect.test.cjs` | pinned to provider 2.1.183, which no box has: absent, not skipping |
+| 5 with no reason at all | `{ skip: <boolean> }` renders as a bare `# SKIP`; they say why now |
+
+**One defect, three places.** A gate keyed to an undocumented environment variable is
+dark BY DEFAULT, and it reports that darkness in language ("no CLODE_PROVIDER_BIN",
+"no engine", "set CLODE_TJSC") that reads like an honest unavailability. Worth
+recognising on sight.
+
+**The 33 that remain, all classified, all stating a reason:**
+
+| count | category | verdict |
 |---|---|---|
-| 43 | provider-gated | DARK — being fixed |
-| ~20 | opt-in (12 are CLODE_LIVE_RENDER: real bundle + Keychain) | legitimate |
-| ~10 | missing build artifacts (no engine, no built quaude/naude) | mostly legitimate |
-| 4 | offline | legitimate |
-| 5 | no reason given | FIXED, they now say why |
-| 1 | the 31 Bun APIs | deferred, entry above |
+| 18 | opt-in (13 `CLODE_LIVE_RENDER` — spawns a real bundle, touches the Keychain; plus naude-smoke, oracle-binaries, live-roundtrip, cross-build) | legitimate: expensive or intrusive by nature |
+| 8 | unavailable here (4 offline, 2 win32-only PATHEXT, 2 need a Windows PE on a real Windows kernel) | legitimate: cannot run on this host |
+| 5 | need a built artifact (3 quaude, 1 naude, 1 darwin provider) | **the remaining candidates** — each needs a ~7min build, none is impossible |
+| 2 | deferred with BACKLOG entries (the 31 Bun APIs; MCP-over-WebSocket under tjs) | tracked, named in the skip text itself |
+
+**Still to do before the umbrella can close:** the 5 artifact-gated ones. Either build
+the artifact in CI (other jobs already build a quaude, so the pieces exist) or write
+the entry saying why not. Note the naude one already has the best skip message in the
+repo — it probes three locations, names each, and prints the exact build command.
 
 Read skip reasons with the TAP reporter — the default reporter hides them:
 
