@@ -79,7 +79,27 @@ function stageMainBundle(dir) {
   return newest && newest.c;
 }
 
-let SKIP = null, SKIP_PRODUCT = null;
+// Claude Code 2.1.251+ embeds its text assets as zstd frames (host-provision.cjs's
+// `zstd` requirement, [[upstream-deps-become-our-deps]]); a carve now genuinely
+// needs zstd reachable. Acceptance 2/4 deliberately strip PATH down to
+// '/usr/bin:/bin' to PROVE NODE-FREENESS — that PATH is not meant to prove
+// zstd-freeness too, and stripping it away just breaks the carve with
+// "this provider embeds zstd-compressed assets and this runtime cannot decode
+// them". Resolve zstd once, via `CLODE_ZSTD`: an ABSOLUTE-PATH override that
+// clode-hosttools.cjs's findTool() honors before ever consulting PATH (line 71:
+// `if (override && isExec(override)) return override;`), so passing it keeps the
+// minimal PATH intact — node stays excluded, only this one tool becomes reachable
+// by name, not by widening PATH. Resolved via the REAL ambient PATH, once, never
+// hardcoded to a host location.
+function hostZstd() {
+  for (const name of ['zstd', 'unzstd', 'zstdcat']) {
+    const r = spawnSync('sh', ['-c', `command -v ${name}`], { encoding: 'utf8' });
+    if (r.status === 0 && (r.stdout || '').trim()) return r.stdout.trim();
+  }
+  return null;
+}
+
+let SKIP = null, SKIP_PRODUCT = null, HOST_ZSTD = null;
 let DIR = null, NATIVE = null, QUAUDE = null, EMPTY_PATH = null, BUILD = null;
 before(() => {
   if (!tjsPath()) { SKIP = 'no tjs binary (CLODE_TJS or build/tjs/tjs)'; return; }
@@ -119,6 +139,11 @@ before(() => {
       encoding: 'utf8', env: { PATH: '/usr/bin:/bin' },
     });
     if (probe.status === 0) SKIP_PRODUCT = `node exists on the minimal PATH (${(probe.stdout || '').trim()}); cannot prove node-freeness here`;
+  }
+  if (!SKIP_PRODUCT) {
+    HOST_ZSTD = hostZstd();
+    if (!HOST_ZSTD) SKIP_PRODUCT = 'no zstd/unzstd/zstdcat on this host’s PATH — required to carve '
+      + 'Claude Code 2.1.251+ (embeds zstd-compressed text assets); set CLODE_ZSTD or install zstd';
   }
 });
 after(() => { if (DIR) { try { fs.rmSync(DIR, { recursive: true, force: true }); } catch { /* */ } } });
@@ -209,6 +234,7 @@ test('acceptance 2: the native builder BUILDS THE PRODUCT (quaude fuse + PONG + 
     HOME: DIR,                                // hermetic: nothing real is consulted
     CLODE_CLAUDE_BIN: providerBin(),
     CLODE_CACHE: path.join(DIR, 'cache'),     // extraction cache stays in the sandbox
+    CLODE_ZSTD: HOST_ZSTD,                    // reachable by name, not by widening PATH
   };
   const r = await runNative(NATIVE, ['build', '--out', QUAUDE], env);
   assert.strictEqual(r.status, 0, `native build failed:\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
@@ -272,6 +298,7 @@ test('acceptance 4: the native builder BUILDS A NAUDE (fetch node + assemble + P
     HOME: DIR,
     CLODE_CLAUDE_BIN: providerBin(),
     CLODE_CACHE: path.join(DIR, 'cache'),
+    CLODE_ZSTD: HOST_ZSTD,                    // reachable by name, not by widening PATH
     CLODE_NODES: NODES,
   };
   const r = await runNative(NATIVE, ['build', '--naude', '--out', NAUDE], env);
