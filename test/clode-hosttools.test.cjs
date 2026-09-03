@@ -45,7 +45,7 @@ test('findTool ignores a non-executable override and walks PATH',
 });
 
 test('findTool on win32 ignores a non-executable override and walks PATH (PATHEXT)',
-  { skip: process.platform !== 'win32' }, () => {
+  { skip: process.platform !== 'win32' && 'win32-only: exercises PATHEXT resolution, which only exists on Windows' }, () => {
   const dir = tmpdir();
   const bad = path.join(dir, 'notexec'); // never created -> not executable
   const bindir = path.join(dir, 'bin');
@@ -66,7 +66,7 @@ test('findTool walks PATH in order and finds the first match',
 });
 
 test('findTool on win32 walks PATH in order and finds the first match (PATHEXT)',
-  { skip: process.platform !== 'win32' }, () => {
+  { skip: process.platform !== 'win32' && 'win32-only: exercises PATHEXT resolution, which only exists on Windows' }, () => {
   const dir = tmpdir();
   const d1 = path.join(dir, 'a');
   const d2 = path.join(dir, 'b');

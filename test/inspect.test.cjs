@@ -352,8 +352,19 @@ function newestBuildBundle() {
 }
 const STRICT_BIN = newestBuildBundle() || BIN;
 
+// node:test renders `{ skip: <boolean> }` as a bare "# SKIP" with no reason — a skip
+// that cannot tell you what it wanted is indistinguishable from one that is hiding
+// something, which is the pattern this repo keeps digging out. Returning a STRING
+// makes the skip self-explaining; returning false runs the test.
+function missingReason(required) {
+  const absent = Object.entries(required).filter(([, p]) => !fs.existsSync(p));
+  if (!absent.length) return false;
+  return 'missing ' + absent.map(([what, p]) => `${what} at ${p}`).join('; ');
+}
+
+
 test('coverage report runs and is machine-readable',
-  { skip: !(fs.existsSync(BIN) && fs.existsSync(SHIM)) }, () => {
+  { skip: missingReason({ 'a pinned 2.1.183 provider bundle (BIN)': BIN, 'libexec/bun-shim.cjs (SHIM)': SHIM }) }, () => {
     const r = spawnSync(NODE, [SCRIPT, BIN, '--shim', SHIM, '--node', NODE, '--json'],
       { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
     assert.strictEqual(r.status, 0, r.stderr);
@@ -362,7 +373,7 @@ test('coverage report runs and is machine-readable',
   });
 
 test('strict gate clean on known-good bundle',
-  { skip: !(fs.existsSync(STRICT_BIN) && fs.existsSync(SHIM)) }, () => {
+  { skip: missingReason({ 'a bundle to inspect (newest build/ bundle, else BIN)': STRICT_BIN, 'libexec/bun-shim.cjs (SHIM)': SHIM }) }, () => {
     const rJson = spawnSync(NODE, [SCRIPT, STRICT_BIN, '--shim', SHIM, '--node', NODE, '--json'],
       { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
     assert.strictEqual(rJson.status, 0, rJson.stderr);
@@ -377,7 +388,7 @@ test('strict gate clean on known-good bundle',
   });
 
 test('strict without shim is an error, not a silent pass',
-  { skip: !fs.existsSync(STRICT_BIN) }, () => {
+  { skip: missingReason({ 'a bundle to inspect (newest build/ bundle, else BIN)': STRICT_BIN }) }, () => {
     const r = spawnSync(NODE, [SCRIPT, STRICT_BIN, '--node', NODE, '--strict'],
       { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
     assert.notStrictEqual(r.status, 0, '--strict without --shim must not exit 0');
