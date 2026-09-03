@@ -103,6 +103,12 @@ const ESM_MODULE_MARKER = /\/\/ @bun @bytecode\n/g;
 // drive-letter path. Measured from a real windows-amd64 leg. Anything that hardcodes
 // /$bunfs/ is POSIX-only by construction, and here that would mean telling a Windows user
 // their bundle contains zero modules — the least useful moment to be wrong.
+// The Bun virtual-filesystem root, BOTH shapes. A POSIX-built provider names its
+// modules `/$bunfs/root/...`; a WINDOWS-built one names them `B:/~BUN/root/...`.
+// Exported because tests kept re-deriving the POSIX half alone and then passing on
+// every platform that has no Windows provider to check them against — see
+// test/bun-graph.test.cjs, whose real-provider assertions were `/$bunfs`-only until
+// 2026-09-03 and only failed once CI's Windows job finally had a provider installed.
 const BUNFS = '(?:\\/\\$bunfs|[A-Za-z]:\\/~BUN)\\/root';
 const ESM_CHUNK_SPEC = new RegExp('"' + BUNFS + '\\/chunk-[A-Za-z0-9]+\\.js"', 'g');
 const ESM_STATIC_IMPORT = new RegExp('from"' + BUNFS + '\\/chunk-[A-Za-z0-9]+\\.js"', 'g');
@@ -1560,6 +1566,7 @@ function providerPlatformOf(binpath) {
 }
 
 module.exports = {
+  BUNFS,
   moduleWithMeta,
   pickEntry,
   describeBundleFormat,

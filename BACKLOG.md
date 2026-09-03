@@ -5546,3 +5546,61 @@ PTY job and light up the moment a logged-in profile is available.
 `test/fidelity/stale-frames.pty.test.cjs` needs the same profile but already skips
 correctly on its own precondition; it is excluded from the job only for lack of the
 profile, not for bad behaviour.
+
+## make-min-provider cannot carve a Windows-built provider (2026-09-03)
+
+`scripts/make-min-provider.cjs` looks for an `entrypoints/cli.js @bun-cjs` block. A
+windows-built provider does not present one, so it exits:
+
+```
+make-min-provider: no entrypoints/cli.js @bun-cjs block in C:\npm\prefix\claude (format changed?)
+```
+
+Real product gap, not a test artefact. `test/make-min-provider.test.cjs` now skips
+win32 providers BY PLATFORM (per provider, not per test) with that reason, so it keeps
+asserting everywhere the script does work and lights up the moment this is closed. The
+loop also carries a `ran > 0` guard, mutation-proved, so the skip can never empty the
+test into a vacuous green.
+
+**How it hid.** Nothing had ever handed this script a win32 provider. CI's Windows
+`npm test` job installed no provider at all until 2026-09-03; the moment it did, three
+tests failed on their first exposure — this one and two POSIX-only assertions in
+`test/bun-graph.test.cjs` (fixed in the same change, see below). The gap is presumably
+as old as the script.
+
+**Related, and the more general lesson.** The other two failures were assertions
+hardcoding `/$bunfs/root/`, the POSIX Bun VFS root. A windows-built provider uses
+`B:/~BUN/root/`. `libexec/extract-claude-js.cjs` already knew both shapes — its `BUNFS`
+regex has covered them since the Windows port — but it was module-private, so tests
+re-derived the POSIX half by hand and passed on every platform that had no Windows
+provider to contradict them. `BUNFS` is now exported and those assertions use it.
+
+That is the same shape twice in two days: a fact the product knows correctly, restated
+by hand somewhere that could not check it. The first was `traceLog`'s `startsWith('/h')`;
+this is the second. Worth looking for a third — a grep for hardcoded `/$bunfs` outside
+`extract-claude-js.cjs` is a cheap start.
+
+## Intermittent: node-shim-child-process spawn-fd test flakes (2026-09-03)
+
+`test/node-shim-child-process.test.cjs:569` — "spawn: numeric fd in stdio redirects
+child output to a file (Bash-tool pattern)" — fails intermittently under a FULL suite
+run with `Unexpected end of JSON input`, and passes 34/34 in isolation (verified three
+consecutive runs). Observed twice on 2026-09-03 by two independent runs.
+
+`Unexpected end of JSON input` means the child's output file was read before the child
+finished writing it, or was truncated — a race between the child's exit and the
+parent's read, which only loses under the load of a concurrent full-suite run. That it
+passes in isolation is consistent with a race, not with a logic error.
+
+**Why this is worth fixing rather than tolerating.** A flake is the same disease as
+ambient red, one step subtler: it teaches everyone that a red run might mean nothing,
+so the next real failure gets a rerun instead of a look. This repo has already paid for
+tolerated red once — `silently-gated-tests-hide-p0s` — and the whole point of the
+2026-09-02/03 work was to make a red run mean something again. One flaky test is enough
+to undo that.
+
+Fix direction: make the assertion wait for the child's completion rather than assuming
+the file is complete at read time (await the exit event / poll for a well-formed JSON
+document with a bounded timeout), and prove the fix by running the FULL suite
+repeatedly, not the file in isolation — isolation is exactly the condition under which
+it already passes.

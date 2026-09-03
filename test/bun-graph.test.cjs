@@ -21,6 +21,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
+const { BUNFS } = require('../libexec/extract-claude-js.cjs');
 const { execFileSync } = require('node:child_process');
 
 const REPO = path.join(__dirname, '..');
@@ -591,11 +592,14 @@ test('every real provider decodes, and every JS row is NUL-framed and named', pr
   for (const bin of PROVIDERS) {
     const g = loadGraphFull(bin);
     assert.ok(g.count > 0, `${bin}: no rows`);
-    assert.ok(g.entryName.startsWith('/$bunfs/'), `${bin}: entry ${g.entryName}`);
+    // BOTH vfs shapes: a POSIX-built provider says /$bunfs/root/..., a Windows-built
+    // one says B:/~BUN/root/... . This asserted the POSIX half alone and passed
+    // everywhere until CI's Windows suite finally had a provider to check it against.
+    assert.match(g.entryName, new RegExp('^' + BUNFS + '/'), `${bin}: entry ${g.entryName}`);
     const js = g.rows.filter((r) => r.loader === 1);
     assert.ok(js.length > 0, `${bin}: no js rows`);
     for (const r of js) {
-      assert.match(r.name, /^\/\$bunfs\/root\//, `${bin}: row ${r.index} name ${JSON.stringify(r.name)}`);
+      assert.match(r.name, new RegExp('^' + BUNFS + '/'), `${bin}: row ${r.index} name ${JSON.stringify(r.name)}`);
       assert.ok(r.contentsLength > 0, `${bin}: row ${r.index} empty contents`);
     }
   }
@@ -648,7 +652,7 @@ test('loadGraphFromBytes returns only js rows, keyed by module name', provOpts, 
     const mods = loadGraphFromBytes(new Uint8Array(fs.readFileSync(bin)));
     assert.strictEqual(mods.size, g.rows.filter((r) => r.loader === 1).length, bin);
     for (const [name, src] of mods) {
-      assert.match(name, /^\/\$bunfs\/root\//, bin);
+      assert.match(name, new RegExp('^' + BUNFS + '/'), bin);
       assert.strictEqual(typeof src, 'string', bin);
     }
   }
