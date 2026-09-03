@@ -5356,3 +5356,62 @@ Read skip reasons with the TAP reporter — the default reporter hides them:
 ```
 node --test --test-reporter=tap test/... 2>&1 | grep '# SKIP'
 ```
+
+## MCP-over-WebSocket: quaude never connects on native (non-cosmo) darwin-arm64 tjs (2026-09-02)
+
+Undarking the 43 provider-gated skips (above) required routing
+`test/fidelity/agentic-{mcp-ws,tools,subagent-diff,workflow-complete}.test.cjs` and
+`slash-command-diff.test.cjs` through clode's own staging (`libexec/clode-extract.cjs`,
+which merges away the residual `/$bunfs/root/chunk-….js` cyclic edges) instead of the raw
+extractor. That fix worked cleanly for four of the five: agentic-tools (5/5), 
+agentic-workflow-complete (1/1), agentic-subagent-diff (1/1), slash-command-diff (1/1) all
+went green. **agentic-mcp-ws.test.cjs did not** — it fails on a DIFFERENT, unrelated
+defect this staging fix exposed rather than caused (it was previously unreachable: every
+run before 2026-08-29 died on the chunk-resolve error before ever making an API call).
+
+**Symptom.** `mcp.seen` (what the mock MCP-over-ws server observed) is `[]` — the ws
+server never receives so much as a TCP connection. The bundle's own agentic loop still
+completes: it synthesizes `<tool_use_error>Error: No such tool available:
+mcp__mymock__echo_needle</tool_use_error>` and answers the turn, so the CLI exits 0 and
+the ONLY visible signal is the assertion on `mcp.seen`.
+
+**Eliminated, with evidence, not assumed:**
+  - Not a race with the mock's instant reply: inserted an artificial 3000ms delay before
+    the mock ever responds (real Anthropic-latency stand-in) — `mcp.seen` still `[]`.
+  - Not a permission/approval gate: added `--dangerously-skip-permissions` — no change.
+  - Not the config shape: `{mcpServers:{mymock:{type:"ws",url:...}}}` matches the
+    extracted bundle's own transport-selection code verbatim
+    (`t.type==="ws"` → `new globalThis.WebSocket(t.url,{protocols:["mcp"],...})`, found by
+    grepping the staged `cli.cjs`) — this is the shape upstream 2.1.251 itself expects.
+  - Not upstream/config-loading in general: **the identical mcp.json, identical argv,
+    identical mock, run under naude (plain node cli.cjs, no shim/engine) instead of
+    quaude (tjs+node-shim) gets all four expected MCP events — `initialize`,
+    `notifications/initialized`, `tools/list`, `tools/call`** — and the mock tool result
+    propagates end-to-end. Upstream's MCP-over-WS client works; node is a clean
+    reference.
+  - Not a dev-box config leak (this box's own `~/.claude` SessionStart hook, which
+    otherwise pollutes the request stream with superpowers-skill text): reproduces
+    identically with a fresh `HOME` + `CLAUDE_CONFIG_DIR`.
+
+**Isolates to: quaude's own native-WS delegation** (the shim path this test's header
+names: `new WebSocket(url,{protocols:["mcp"]})` → the engine's native WebSocket, per
+`libexec/bun-shim.cjs`) on THIS box's tjs engine
+(`tjs-macos-arm64-26.6.0-1a230d3`, Mach-O arm64, not cosmo). `--debug mcp` produced zero
+MCP-related log lines even though the staged bundle plainly logs `Initializing WebSocket
+transport to ${t.url}` on that path — consistent with a SILENT failure at the native
+layer, the same shape as the cosmo bug this file already tracks two sections up
+("MCP-over-WebSocket client never connects — FIXED (2026-07-30)"): libwebsockets' bundled
+SHA-1 miscompiling under cosmo's undefined `BYTE_ORDER`/`LITTLE_ENDIAN`/`BIG_ENDIAN`
+macros, breaking `Sec-WebSocket-Accept` and failing the handshake with no JS-visible
+error. That fix was `__COSMOPOLITAN__`-gated; RESULTS.md's 2026-07-30 entry describes
+NATIVE tjs (not cosmo) passing mcp-ws at parity at provider 2.1.218, so this is either a
+regression since then (provider bump 2.1.218→2.1.251, or an engine/shim change) or a
+second, non-cosmo instance of the same class of native-layer bug. Not chased further
+here — it needs the cosmo fix's own tooling (`--strace`/`--ftrace` against a debug-symbol
+tjs, or an engine rebuilt from current `main`) to find the native fault, which is beyond
+this task's scope (undarking provider-gated tests, not engine C debugging).
+
+**Disposition:** `test/fidelity/agentic-mcp-ws.test.cjs`'s one test is left skipping,
+loudly, naming this entry — not silently reverted to failing, and not weakened to assert
+less. Re-run the exact repro above (naude vs quaude, same mcp.json/mock/argv) once a
+current-`main` tjs engine or `--strace` access is available.
