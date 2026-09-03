@@ -5506,3 +5506,43 @@ The cheap win is unchanged and unaffected: `CLODE_NAUDE_BIN` for the naude test,
 
 Until then all five state their reason, and the naude one is the model the others
 should copy: it probes three locations, names each, and prints the exact build command.
+
+## Two defects found while wiring the Linux PTY CI job (2026-09-03)
+
+Both surfaced by making dark tests run. Neither is caused by that work.
+
+### 1. `clode build --out DIR/name` fails when DIR does not exist (product bug)
+
+Hit for real in a Linux container while reproducing the new CI job's literal command
+sequence: `clode build --out /some/new/dir/quaude` fails rather than creating the
+parent. The workaround is an explicit `mkdir -p` before the build, which the CI job now
+does — but that is a workaround in a caller, not a fix.
+
+**It is an asymmetry, which is the tell.** `scripts/build-naude.mjs:450` does
+`fs.mkdirSync(path.dirname(bin), { recursive: true })`, so `clode build --naude --out
+DIR/naude` creates its parent happily. The quaude path does not. Same flag, same user
+expectation, two behaviours — and the one that works is the less-travelled one.
+
+Fix: create the `--out` parent on the quaude path too, matching build-naude. Small, and
+worth a test that runs `--out` into a non-existent directory on BOTH paths, since the
+asymmetry is exactly what nobody noticed.
+
+### 2. `test/e2e-doctor-parity.test.cjs` HARD-FAILS when its precondition is missing
+
+Confirmed by running it: without a logged-in provider profile it does not skip, it
+fails. That is why the new `linux-x64-pty` CI job deliberately excludes it — including
+it would make the job permanently, meaninglessly red, which is how a job stops being
+read.
+
+This is the INVERSE of the silent-skip problem this repo has spent the day removing,
+and it is just as damaging: a test that cannot distinguish "the thing I test is broken"
+from "I was not given what I need" produces a red that carries no information. The
+project's own rule (`any-ci-red-is-our-red`) only works if red means something.
+
+Fix: give it a precondition guard that SKIPS with a reason naming what is missing — the
+same shape everything else in the suite now uses — so it can be included in the Linux
+PTY job and light up the moment a logged-in profile is available.
+
+`test/fidelity/stale-frames.pty.test.cjs` needs the same profile but already skips
+correctly on its own precondition; it is excluded from the job only for lack of the
+profile, not for bad behaviour.
