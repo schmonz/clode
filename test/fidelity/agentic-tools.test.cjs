@@ -10,16 +10,21 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawn, execFileSync } = require('node:child_process');
+const { spawn } = require('node:child_process');
 const { REPO, tjsPath, skipUnlessTjs, engineSpawn, LOADER } = require('../node-shim-helper.cjs');
 const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('../mock-anthropic-helper.cjs');
 
 function providerBin() { const p = process.env.CLODE_PROVIDER_BIN; return p && fs.existsSync(p) ? p : null; }
+// THROUGH CLODE'S OWN STAGING (../oracle-models.cjs's stageCli), not the raw
+// extractor directly. The raw libexec/extract-claude-js.cjs emits the graph
+// EXACTLY as upstream shipped it, residual cyclic
+// `import.meta.require("/$bunfs/root/chunk-….js")` edges and all; only clode's
+// staging (libexec/clode-extract.cjs) merges those away. This file used to call
+// the raw extractor directly and died on the first residual require — see
+// oracle-models.cjs's own header for the full incident (five CI jobs at once).
 function stageBundle(bin) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agtool-'));
-  const cli = path.join(dir, 'cli.cjs');
-  execFileSync(process.execPath, [path.join(REPO, 'libexec/extract-claude-js.cjs'), bin, cli], { stdio: 'pipe' });
-  fs.copyFileSync(path.join(REPO, 'libexec/bun-shim.cjs'), path.join(dir, 'bun-shim.cjs'));
+  const { cli } = require('../oracle-models.cjs').stageCli(bin, { dir });
   return { dir, cli };
 }
 function bootP(cli, dir, args, env, timeoutMs) {
