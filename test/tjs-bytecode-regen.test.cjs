@@ -265,11 +265,34 @@ test('build-tjs: tjsc is handed the repo-relative inJs, never the absolute inAbs
 // identifier derivation above is not merely our model of it. Set CLODE_TJSC to
 // a built tjsc to enable. Asserting against a model of the tool is how the
 // model drifts from the tool.
-const TJSC = process.env.CLODE_TJSC && fs.existsSync(process.env.CLODE_TJSC)
-  ? process.env.CLODE_TJSC : null;
+// Resolved, not merely read from the environment. CLODE_TJSC wins if set; otherwise
+// look where scripts/build-tjs.mjs actually puts tjsc — CLODE_TJS_BUILD, else
+// <local scratch>/clode-tjs-build/<target-token>/build/tjsc (build-tjs.mjs:3220 and
+// its header). Reading the env var alone meant this reference test skipped on every
+// box that had built an engine but had not exported a variable nobody documents
+// outside this file: dark, while saying "set CLODE_TJSC" as though the tool were
+// absent. Same defect as test/graph-runner.test.cjs's engine gate, fixed the same day.
+function findTjsc() {
+  const explicit = process.env.CLODE_TJSC;
+  if (explicit) return fs.existsSync(explicit) ? explicit : null;
+  let root;
+  try {
+    root = process.env.CLODE_TJS_BUILD
+      || path.join(require('../scripts/build-scratch.cjs').scratchRoot(), 'clode-tjs-build');
+  } catch { return null; }
+  if (!fs.existsSync(root)) return null;
+  for (const d of fs.readdirSync(root)) {
+    const cand = path.join(root, d, 'build', 'tjsc');
+    if (fs.existsSync(cand)) return cand;
+  }
+  return null;
+}
+const TJSC = findTjsc();
 
 test('build-tjs: real tjsc agrees — a backslash path breaks the symbol, a relative one does not',
-  { skip: TJSC ? false : 'set CLODE_TJSC=<path to a built tjsc> to run the reference' }, () => {
+  { skip: TJSC ? false : 'no tjsc: neither CLODE_TJSC nor a built tjsc under '
+    + "build-tjs.mjs's build root (CLODE_TJS_BUILD, else <scratch>/clode-tjs-build/*/build/tjsc). "
+    + 'Build an engine with `node scripts/build-tjs.mjs`, or set CLODE_TJSC=<path>.' }, () => {
     const os = require('node:os');
     const { spawnSync } = require('node:child_process');
     const fn = new Function(`${extractFunction(buildTjsSrc, 'bytecodeSymbolBase')}; return bytecodeSymbolBase;`)();
