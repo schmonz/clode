@@ -5458,19 +5458,43 @@ here. Per the umbrella's closure condition they get an entry rather than a shrug
 five tests. That is a real budget decision, not a detail to slip in; it needs an owner
 who cares about CI wall-clock to say yes.
 
-**The non-obvious complication, worth knowing before anyone tries.** Three of the five
-are PTY tests, and PTY tests that spawn the real bundle CANNOT run on POSIX CI at all:
-they hang on the macOS Keychain GUI modal. That is exactly why
-`.github/workflows/ci.yml`'s `windows-amd64-tui` job exists and why it can pass
-`CLODE_LIVE_RENDER=1` — its own comment says Windows works "because there is no
-Keychain GUI modal to hang on (the reason POSIX CI can't run it)".
+**CORRECTED 2026-09-03.** This entry first said PTY tests "CANNOT run on POSIX CI at
+all" because of the Keychain modal. That is wrong, and the user caught it: **Linux has
+no Keychain.** The claim was lifted from `.github/workflows/ci.yml`'s
+`windows-amd64-tui` comment ("the reason POSIX CI can't run it") and repeated without
+checking, which is how an imprecise comment becomes a false plan.
 
-So the natural home for the three update-notify tests is **the Windows TUI job**, not
-the Linux `npm test` job: it already has the pinned provider, the engine artifact, and
-the PTY harness installed. What it does not yet do is `clode build` a quaude — its
-header comment claims it does, but it drives tjs directly. Adding one build there buys
-three tests in the only environment where they can run, without touching the main test
-job's wall-clock.
+What the gate ACTUALLY says (`test/fidelity/interactive-live-turn.test.cjs` and
+siblings) is a blanket opt-in with no platform condition at all:
+
+```js
+if (process.env.CLODE_LIVE_RENDER !== '1') { SKIP = 'live-render opt-in only …'; }
+```
+
+Its stated rationale is "touches the Keychain, may touch the network". Those are TWO
+justifications with different scopes:
+- **Keychain** — macOS only. On Linux the bundle takes the on-disk credentials path
+  (that is the whole point of deleting the Keychain emulation, 2026-09-02), so there
+  is no GUI modal to hang on.
+- **network** — platform-independent, and the real remaining reason. Several of these
+  tests already drive a mock Anthropic server, so it may not bind for all of them.
+
+**So the opportunity is bigger than this entry first claimed.** It is not just the
+three update-notify tests on Windows — it is potentially all 13 `CLODE_LIVE_RENDER`
+skips plus these three, on a LINUX runner, which is where CI already runs `npm test`.
+Nobody has tested that, so it is a hypothesis with a clear experiment, not a plan:
+
+1. On Linux, build a quaude, set `CLODE_LIVE_RENDER=1`, and run one PTY test with a
+   mock provider. `ultimate-hat` has Docker if a local Linux box is wanted.
+2. If it renders, the gate should become platform-aware rather than blanket — macOS
+   keeps the opt-in for the Keychain, Linux does not need it — and the network-touching
+   subset stays opt-in on its own merits.
+3. The Windows TUI job remains the right home for anything that genuinely needs a
+   non-POSIX kernel, and it still does not `clode build` a quaude despite its header
+   comment saying it does.
+
+The cheap win is unchanged and unaffected: `CLODE_NAUDE_BIN` for the naude test, since
+`build --naude` already happens elsewhere in CI.
 
 **Recommended order** for whoever picks this up:
 1. Build a quaude in `windows-amd64-tui` and set `CLODE_QUAUDE` — three tests, in the
