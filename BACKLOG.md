@@ -5306,3 +5306,53 @@ missing one: it turns a loud failure into a silent wrong answer.
 **Deferred deliberately** (user, 2026-09-02), NOT dropped: the test skips with this
 entry named in its skip reason, and the cross-build umbrella now cannot close until
 every skip in the suite is understood and un-skipped where possible.
+
+## Every skip is understood, and as many as possible are not skips (2026-09-02)
+
+**A closure condition on the cross-build umbrella** (user, 2026-09-02), recorded here
+because the umbrella spec lives under `docs/`, which is gitignored — a condition only
+this session can read is not a condition.
+
+The umbrella cannot be closed while the suite contains skips nobody has accounted for.
+
+**Why this is not fussiness.** The suite went green on 2026-09-02 — 1691 pass, 0 fail —
+and 84 skips that nobody had inventoried. The first pass over them found five that gave
+NO reason at all, because node:test renders `{ skip: <boolean> }` as a bare `# SKIP`.
+Fixing only those immediately exposed that `test/inspect.test.cjs` was pinned to
+provider `2.1.183`, a version on no current box: three tests had not been skipping, they
+had been ABSENT. Un-pinning them surfaced 31 unreviewed Bun APIs the shim does not
+provide (filed above).
+
+A green suite with an uninventoried skip list is the same lie as a green suite with
+tolerated failures. This project has already paid for that once — a `clode-native` P0
+broke 13 CI jobs at once while CI stayed green, because the only tests proving the
+node-free builder worked were silently skipping (`.github/workflows/ci.yml:487`).
+
+**The bar, concretely:**
+
+1. Every skip states a reason, as a STRING, naming what it wanted and where it looked.
+   Never `{ skip: true }`.
+2. Each is classified: **opt-in** (expensive, or spawns a real bundle and touches the
+   Keychain), **unavailable** (win32-only on a Mac, offline), or **DARK** — it could
+   run here and does not.
+3. Every DARK skip is either made to run, or deferred with a written entry someone with
+   no context can act on.
+4. The count and classification are recorded, so a later rise is visible rather than
+   absorbed.
+
+**Inventory, 2026-09-02, 84 skips:**
+
+| count | category | status |
+|---|---|---|
+| 43 | provider-gated | DARK — being fixed |
+| ~20 | opt-in (12 are CLODE_LIVE_RENDER: real bundle + Keychain) | legitimate |
+| ~10 | missing build artifacts (no engine, no built quaude/naude) | mostly legitimate |
+| 4 | offline | legitimate |
+| 5 | no reason given | FIXED, they now say why |
+| 1 | the 31 Bun APIs | deferred, entry above |
+
+Read skip reasons with the TAP reporter — the default reporter hides them:
+
+```
+node --test --test-reporter=tap test/... 2>&1 | grep '# SKIP'
+```
