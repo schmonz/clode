@@ -189,6 +189,25 @@ if (!harnessOk()) {
   }
 }
 
+// Pre-build the esbuilt bundles (build/bundle/{clode-main,naude-entry}.bundle.cjs) that
+// test/quaude-naude-updateguard.test.cjs's naude tests require, BEFORE `node --test`
+// starts. test/build-clode-main.test.cjs also exercises scripts/build-clode-main.mjs for
+// real, as one of the suite's own tests, and used to be this file's only source — but
+// node's test runner runs test FILES concurrently with no ordering guarantee, so
+// relying on that test having already finished by the time a naude test needs the
+// bundle is a race, not a guarantee. It lost that race here: naude tests failed with
+// `build-naude: --bundle not found: ... Pre-build it with 'node scripts/build-clode-
+// main.mjs'` — a missing prerequisite, not a product defect. Building it up front (fast:
+// ~2s once the esbuild toolchain is installed) removes the race instead of hoping to
+// win it; build-clode-main.test.cjs still re-derives it for real and is unaffected by
+// finding it already fresh.
+const NAUDE_BUNDLE = path.join('build', 'bundle', 'naude-entry.bundle.cjs');
+const MAIN_BUNDLE = path.join('build', 'bundle', 'clode-main.bundle.cjs');
+if (!fs.existsSync(NAUDE_BUNDLE) || !fs.existsSync(MAIN_BUNDLE)) {
+  console.error('run: pre-building build/bundle/*.bundle.cjs (node scripts/build-clode-main.mjs) ...');
+  execFileSync(process.execPath, [path.join('scripts', 'build-clode-main.mjs')], { stdio: 'inherit' });
+}
+
 // Hermetic guard (pure node; required in-process). Watch the real dirs a test must never touch.
 const guard = require('./hermetic-guard.cjs');
 const home = os.homedir();
