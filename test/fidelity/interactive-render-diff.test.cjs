@@ -3,9 +3,11 @@
 // Claude Code and quaude. Captures both under a real pseudo-terminal (node-pty +
 // @xterm/headless) and compares the ANSI-stripped meaningful text lines. This
 // exercises the welcome-box + wide/unicode-char paint (the banner uses wide box-
-// drawing glyphs) and the prompt, and asserts quaude shows no corruption. Gated
-// behind CLODE_LIVE_RENDER (builds a real quaude, spawns the bundle, touches
-// Keychain), matching the existing e2e-doctor-parity boundary.
+// drawing glyphs) and the prompt, and asserts quaude shows no corruption.
+// Builds a real quaude and spawns the bundle. On darwin that is opt-in
+// (CLODE_LIVE_RENDER, matching the existing e2e-doctor-parity boundary)
+// because it probes the macOS Keychain; elsewhere it runs by default — see
+// live-render-helper.cjs.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -15,6 +17,7 @@ const { spawnSync } = require('node:child_process');
 const { sandbox, REPO } = require('../e2e.cjs');
 const { capture, seedClaudeProfile, apeCmd } = require('../e2e-pty.cjs');
 const { tjsPath } = require('../node-shim-helper.cjs');
+const { liveRenderSkipReason } = require('../live-render-helper.cjs');
 
 const ENTRY = path.join(REPO, 'bin', 'clode');
 function nativeClaude() {
@@ -41,7 +44,8 @@ function textLines(screen) {
 
 let SKIP = null, NATIVE = '', QUAUDE = '', SBX = null, DIR = null;
 before(() => {
-  if (process.env.CLODE_LIVE_RENDER !== '1') { SKIP = 'live-render opt-in only (set CLODE_LIVE_RENDER=1; spawns the bundle, touches Keychain)'; return; }
+  const liveRenderSkip = liveRenderSkipReason();
+  if (liveRenderSkip) { SKIP = liveRenderSkip; return; }
   if (!tjsPath()) { SKIP = 'no tjs binary'; return; }
   const native = nativeClaude();
   if (!native) { SKIP = 'native claude not on PATH'; return; }

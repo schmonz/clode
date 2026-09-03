@@ -31,11 +31,12 @@
 // genuine two-engine (naude vs quaude, or native vs quaude) PTY diff for F3
 // is noted in CONVERTING.md as a harness extension, not implemented here.
 //
-// GATED behind CLODE_LIVE_RENDER=1 (spawns a real `clode build` against a
-// real provider bundle, then drives the built quaude under a real PTY;
-// touches the Keychain / may touch the network -- same boundary as
-// e2e-tui-tjs.test.cjs and e2e-doctor-parity.test.cjs). Without the flag
-// this file must SKIP cleanly (exit 0, no error) -- verified by running
+// Spawns a real `clode build` against a real provider bundle, then drives the
+// built quaude under a real PTY. On darwin this is GATED behind
+// CLODE_LIVE_RENDER=1 (touches the Keychain -- same boundary as
+// e2e-tui-tjs.test.cjs and e2e-doctor-parity.test.cjs); elsewhere it runs by
+// default -- see live-render-helper.cjs. Without the flag, on darwin, this
+// file must SKIP cleanly (exit 0, no error) -- verified by running
 // `node --test test/fidelity/stale-frames.pty.test.cjs` with no env set.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
@@ -47,6 +48,7 @@ const { sandbox, REPO } = require('../e2e.cjs');
 const { seedClaudeProfile, capture } = require('../e2e-pty.cjs');
 const { resolveClaudeBin } = require('../../libexec/clode-resolve.cjs');
 const { tjsPath } = require('../node-shim-helper.cjs');
+const { liveRenderSkipReason } = require('../live-render-helper.cjs');
 
 const ENTRY = path.join(REPO, 'bin', 'clode');
 
@@ -74,10 +76,8 @@ const FOOTER = /Enter to close/;
 let SKIP = null, REPORT_OK = false, OPEN_SCREEN = '', CLOSE_SCREEN = '', SBX = null, DIR = null;
 
 before(() => {
-  if (process.env.CLODE_LIVE_RENDER !== '1') {
-    SKIP = 'live-render opt-in only (set CLODE_LIVE_RENDER=1; spawns a real bundle, touches Keychain)';
-    return;
-  }
+  const liveRenderSkip = liveRenderSkipReason();
+  if (liveRenderSkip) { SKIP = liveRenderSkip; return; }
   if (!tjsPath()) { SKIP = 'no tjs binary (CLODE_TJS or build/tjs/tjs)'; return; }
   const provider = realProvider();
   if (!provider) { SKIP = 'no resolvable Claude Code provider'; return; }

@@ -14,7 +14,9 @@
 // kernel-stop nor cooked mode, so it is deterministic across platforms.
 //
 // The SIGTSTP/SIGCONT wiring itself stays covered by node-shim-signals.test.cjs.
-// Opt-in (build + real TUI + Keychain): CLODE_LIVE_RENDER=1 + tjs + a provider.
+// Build + real TUI: tjs + a provider, always. On darwin ALSO opt-in
+// (CLODE_LIVE_RENDER=1) because spawning the real bundle probes the macOS
+// Keychain; elsewhere it runs by default — see live-render-helper.cjs.
 // POSIX only (Ctrl-Z/SIGTSTP is a POSIX terminal concept).
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
@@ -27,6 +29,7 @@ const { seedClaudeProfile, capture } = require('./e2e-pty.cjs');
 const { resolveClaudeBin } = require('../libexec/clode-resolve.cjs');
 const { tjsPath } = require('./node-shim-helper.cjs');
 const { stateRoot } = require('./state-root-helper.cjs');
+const { liveRenderSkipReason } = require('./live-render-helper.cjs');
 
 const ENTRY = path.join(REPO, 'bin', 'clode');
 const MARKER = 'ctrlz-survivor-73';
@@ -41,7 +44,8 @@ let SKIP = null, SCREEN = '', SBX = null, DIR = null;
 before(() => {
   if (process.platform === 'win32') { SKIP = 'POSIX only (Ctrl-Z/SIGTSTP is a POSIX terminal concept)'; return; }
   if (!tjsPath()) { SKIP = 'no tjs binary (CLODE_TJS or build/tjs/tjs)'; return; }
-  if (process.env.CLODE_LIVE_RENDER !== '1') { SKIP = 'live-render opt-in only (set CLODE_LIVE_RENDER=1)'; return; }
+  const liveRenderSkip = liveRenderSkipReason();
+  if (liveRenderSkip) { SKIP = liveRenderSkip; return; }
 
   // Use a prebuilt quaude if pointed at one (fast), else build one hermetically.
   let quaude = process.env.CLODE_QUAUDE;

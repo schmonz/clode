@@ -1,9 +1,11 @@
 'use strict';
 // M1 (phase 3): the real Ink TUI renders under a built quaude (tjs + node-shim).
-// Opt-in — builds a real quaude (`clode build`) and spawns IT directly (touches the
-// Keychain, may touch the network; no launcher/CLODE_ENGINE involved — a fused
-// quaude carries its own engine and deps as members). Gates: CLODE_TJS (or
-// build/tjs/tjs) + CLODE_LIVE_RENDER=1 + a resolvable provider.
+// Builds a real quaude (`clode build`) and spawns IT directly (no
+// launcher/CLODE_ENGINE involved — a fused quaude carries its own engine and
+// deps as members). On darwin this is opt-in (spawning the real bundle probes
+// the macOS Keychain); elsewhere it runs by default — see
+// live-render-helper.cjs. Gates: CLODE_TJS (or build/tjs/tjs) + a resolvable
+// provider + (darwin only) CLODE_LIVE_RENDER=1.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -15,6 +17,7 @@ const { seedClaudeProfile, capture } = require('./e2e-pty.cjs');
 const { resolveClaudeBin } = require('../libexec/clode-resolve.cjs');
 const { tjsPath } = require('./node-shim-helper.cjs');
 const { stateRoot } = require('./state-root-helper.cjs');
+const { liveRenderSkipReason } = require('./live-render-helper.cjs');
 
 const ENTRY = path.join(REPO, 'bin', 'clode');
 function realProvider() {
@@ -26,7 +29,8 @@ function realProvider() {
 let SKIP = null, SCREEN = '', SBX = null, DIR = null;
 before(() => {
   if (!tjsPath()) { SKIP = 'no tjs binary (CLODE_TJS or build/tjs/tjs)'; return; }
-  if (process.env.CLODE_LIVE_RENDER !== '1') { SKIP = 'live-render opt-in only (set CLODE_LIVE_RENDER=1)'; return; }
+  const liveRenderSkip = liveRenderSkipReason();
+  if (liveRenderSkip) { SKIP = liveRenderSkip; return; }
   const provider = realProvider();
   if (!provider) { SKIP = 'no resolvable Claude Code provider'; return; }
   SBX = sandbox();

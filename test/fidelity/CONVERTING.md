@@ -153,6 +153,7 @@ const { sandbox, REPO } = require('../e2e.cjs');           // or './e2e.cjs' out
 const { seedClaudeProfile, capture } = require('../e2e-pty.cjs');
 const { resolveClaudeBin } = require('../../libexec/clode-resolve.cjs');
 const { tjsPath } = require('../node-shim-helper.cjs');
+const { liveRenderSkipReason } = require('../live-render-helper.cjs');   // or './live-render-helper.cjs' outside fidelity/
 
 const ENTRY = path.join(REPO, 'bin', 'clode');
 function realProvider() {
@@ -162,7 +163,10 @@ function realProvider() {
 
 let SKIP = null, SCREEN = '', SBX = null, DIR = null;
 before(() => {
-  if (process.env.CLODE_LIVE_RENDER !== '1') { SKIP = 'live-render opt-in only (set CLODE_LIVE_RENDER=1)'; return; }
+  // Spawning the real bundle probes the macOS Keychain, so this stays opt-in
+  // on darwin only (CLODE_LIVE_RENDER=1); it runs by default elsewhere.
+  const liveRenderSkip = liveRenderSkipReason();
+  if (liveRenderSkip) { SKIP = liveRenderSkip; return; }
   if (!tjsPath()) { SKIP = 'no tjs binary (CLODE_TJS or build/tjs/tjs)'; return; }
   const provider = realProvider();
   if (!provider) { SKIP = 'no resolvable Claude Code provider'; return; }

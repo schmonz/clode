@@ -11,8 +11,11 @@
 // native does.
 //
 // Because it uses real credentials and spends real tokens (one trivial turn per
-// engine), it is opt-in twice over: CLODE_LIVE_RENDER=1 (the existing
-// spawns-the-bundle/Keychain gate) AND CLODE_LIVE_ONLINE=1. It runs against the
+// engine), it always needs CLODE_LIVE_ONLINE=1 — that opt-in is about the
+// network, not the platform, so it stays required everywhere on its own
+// merits. It ALSO needs the render gate (CLODE_LIVE_RENDER, darwin-only —
+// see live-render-helper.cjs) since spawning the real bundle probes the
+// macOS Keychain there. It runs against the
 // REAL HOME on purpose — a sandbox HOME makes the bundle decide "Not logged in"
 // before it ever consults the Keychain — so it appends to the normal session
 // history like any other turn. If native cannot complete the turn (logged out,
@@ -27,6 +30,7 @@ const { spawnSync } = require('node:child_process');
 const { REPO } = require('../e2e.cjs');
 const { capture, apeCmd } = require('../e2e-pty.cjs');
 const { tjsPath } = require('../node-shim-helper.cjs');
+const { liveRenderSkipReason } = require('../live-render-helper.cjs');
 
 const ENTRY = path.join(REPO, 'bin', 'clode');
 // The answer must not appear in the prompt, so a rendered match cannot be the
@@ -71,8 +75,9 @@ function liveTurn(cmd) {
 // native-independent, so no comparison reference is needed.
 let SKIP = null, NATIVE_SKIP = null, NATIVE = '', QUAUDE = '', DIR = null;
 before(() => {
-  if (process.env.CLODE_LIVE_RENDER !== '1') { SKIP = 'live-render opt-in only (set CLODE_LIVE_RENDER=1)'; return; }
   if (process.env.CLODE_LIVE_ONLINE !== '1') { SKIP = 'live ONLINE opt-in only (set CLODE_LIVE_ONLINE=1; uses your real credentials and spends real tokens)'; return; }
+  const liveRenderSkip = liveRenderSkipReason();
+  if (liveRenderSkip) { SKIP = liveRenderSkip; return; }
   if (!tjsPath()) { SKIP = 'no tjs binary'; return; }
   const native = nativeClaude();
   // Build from a runnable native claude if present, else the configured provider

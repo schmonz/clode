@@ -94,9 +94,15 @@ jobs:
   # launcher involved — a fused quaude carries its own engine and deps as
   # members) inside a real ConPTY (node-pty) with an xterm emulator on the far
   # end, and assert the welcome box painted. Runs the SAME
-  # test/e2e-tui-tjs.test.cjs as POSIX, un-gated here via CLODE_LIVE_RENDER=1 —
-  # true on Windows because there is no Keychain GUI modal to hang on (the reason
-  # POSIX CI can't run it). Consumes the windows-amd64 leg's tjs-windows-amd64 engine.
+  # test/e2e-tui-tjs.test.cjs as POSIX, forcing CLODE_LIVE_RENDER=1 here — a
+  # no-op now that the test's own gate (test/live-render-helper.cjs) already
+  # defaults to "run" off darwin. There is no Keychain GUI modal on Windows to
+  # hang on. CORRECTED: this comment used to claim that was also "the reason
+  # POSIX CI can't run it" — false; POSIX here means Linux, which likewise has
+  # no Keychain (there is no `security` binary on PATH at all), so Linux CI can
+  # run this file too (see .superpowers/sdd/2026-09-02-phase2-name-the-steps/
+  # linux-pty-experiment.md) — it simply never had a tjs binary available to
+  # do so. Consumes the windows-amd64 leg's tjs-windows-amd64 engine.
   # Because it installs the latest provider it is also a Windows render bump gate.
   # Render-only; the ConPTY INPUT round-trip is the tracked follow-on (D2).
   windows-amd64-tui:

@@ -14,7 +14,8 @@
 //     mock oracle from test/node-shim-agentic.test.cjs, pointed at the fused
 //     binary — the bundle runs as compiled-module bytecode (strict), so this
 //     is the tool-use path's strictness gate;
-//   - TUI paint smoke, additionally gated on CLODE_LIVE_RENDER=1 (Keychain).
+//   - TUI paint smoke, additionally gated (darwin only) on CLODE_LIVE_RENDER=1
+//     (Keychain) — see live-render-helper.cjs; runs by default off darwin.
 // Gates: tjs template + CLODE_PROVIDER_BIN (like the other bundle-spawning
 // suites). Hermetic: CLODE_CACHE points into the fixture tmp dir; the repo's
 // own node_modules feeds the dep members (ensureDeps early-returns).
@@ -31,6 +32,7 @@ const { cacheKey } = require('../libexec/clode-resolve.cjs');
 const { providerPlatformOf } = require('../libexec/extract-claude-js.cjs');
 const { readManifest } = require('./quaude-archive.cjs');
 const { stateRoot } = require('./state-root-helper.cjs');
+const { liveRenderSkipReason } = require('./live-render-helper.cjs');
 
 const ENTRY = path.join(REPO, 'bin', 'clode');
 const VERSION = fs.readFileSync(path.join(REPO, 'VERSION'), 'utf8').replace(/\n+$/, '');
@@ -350,7 +352,8 @@ test('quaude remote-control: the headless subcommand runs, and runs clean', asyn
 
 test('TUI paint smoke under the fused quaude (CLODE_LIVE_RENDER-gated)', (t) => {
   if (SKIP) { t.skip(SKIP); return; }
-  if (process.env.CLODE_LIVE_RENDER !== '1') { t.skip('live-render opt-in only (set CLODE_LIVE_RENDER=1)'); return; }
+  const liveRenderSkip = liveRenderSkipReason();
+  if (liveRenderSkip) { t.skip(liveRenderSkip); return; }
   const { sandbox } = require('./e2e.cjs');
   const { seedClaudeProfile, capture } = require('./e2e-pty.cjs');
   const sbx = sandbox(t);

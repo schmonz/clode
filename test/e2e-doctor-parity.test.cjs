@@ -8,6 +8,7 @@ const { sandbox, REPO, NODE } = require('./e2e.cjs');
 const { capture, seedClaudeProfile } = require('./e2e-pty.cjs');
 const { tjsPath } = require('./node-shim-helper.cjs');
 const { stateRoot } = require('./state-root-helper.cjs');
+const { liveRenderSkipReason } = require('./live-render-helper.cjs');
 
 const ENTRY = path.join(REPO, 'bin', 'clode');
 const DOCTOR_PARITY = path.join(REPO, 'test', 'doctor-parity.cjs');
@@ -35,13 +36,13 @@ function cleanEnv(extra) {
 let SKIP = null, NATIVE = '', CLODE = '', SBX = null, DIR = null;
 
 before(() => {
-  // OPT-IN ONLY. This spawns the REAL Claude Code bundle, which probes the macOS login
-  // Keychain (auth/Remote-Control status) and pops system dialogs, and may touch the
-  // network. Keep it OUT of the default offline `npm test`; a dev opts in explicitly.
-  if (process.env.CLODE_LIVE_RENDER !== '1') {
-    SKIP = 'live-render opt-in only (set CLODE_LIVE_RENDER=1; spawns the real bundle, touches Keychain)';
-    return;
-  }
+  // This spawns the REAL Claude Code bundle. On darwin that probes the macOS
+  // login Keychain (auth/Remote-Control status) and can pop system dialogs, so
+  // it stays OPT-IN there (a dev sets CLODE_LIVE_RENDER=1 explicitly). Off
+  // darwin there is no Keychain to probe, so it runs by default — see
+  // live-render-helper.cjs.
+  const liveRenderSkip = liveRenderSkipReason();
+  if (liveRenderSkip) { SKIP = liveRenderSkip; return; }
   if (!tjsPath()) { SKIP = 'no tjs binary (CLODE_TJS or build/tjs/tjs)'; return; }
   const native = nativeClaude();
   if (!native) { SKIP = 'native claude not on PATH (environmental)'; return; }
