@@ -5237,3 +5237,72 @@ Low severity on purpose: `scripts/merge-step.mjs` writes that file atomically
 and never promotes it — the parent then fails on a MISSING file, which `mustRead` already
 reports by name. The unguarded parse is only reachable if something else corrupts a
 fully-renamed file. Worth a named error the next time that code is touched.
+
+## 31 unreviewed Bun APIs the shim does not provide (2026-09-02)
+
+`libexec/inspect-claude-bundle.cjs --strict` exits 1 against any current provider
+bundle with 31 unreviewed upstream needs. Reproduce:
+
+```
+node libexec/inspect-claude-bundle.cjs \
+  "$(node -e 'console.log(require("./test/provider-resolve.cjs").providerBin())')" \
+  --shim libexec/bun-shim.cjs --node "$(command -v node)" --strict
+```
+
+The list, as of provider 2.1.252:
+
+  Bun.$ (missing)
+  Bun.Database (missing)
+  Bun.FFI (missing)
+  Bun.Glob (missing)
+  Bun.Security (missing)
+  Bun.cron (missing)
+  Bun.dns (missing)
+  Bun.enableANSIColors (missing)
+  Bun.fetch (missing)
+  Bun.fileURLToPath (missing)
+  Bun.indexOfLine (missing)
+  Bun.inspect (missing)
+  Bun.isMainThread (missing)
+  Bun.jest (missing)
+  Bun.nanoseconds (missing)
+  Bun.peek (missing)
+  Bun.plugin (missing)
+  Bun.readableStreamToArrayBuffer (missing)
+  Bun.readableStreamToBlob (missing)
+  Bun.readableStreamToBytes (missing)
+  Bun.readableStreamToJSON (missing)
+  Bun.readableStreamToText (missing)
+  Bun.redis (missing)
+  Bun.registerMacro (missing)
+  Bun.resolve (missing)
+  Bun.resolveSync (missing)
+  Bun.s3 (missing)
+  Bun.sleepSync (missing)
+  Bun.sql (missing)
+  Bun.udpSocket (missing)
+  bun:sqlite (bun: module unhandled)
+
+**Why nobody had seen this.** `test/inspect.test.cjs` hardcoded provider
+`2.1.183` — a version that is on no current box and is not what `UPSTREAM_PIN`
+names — and gated all three of its e2e tests on it with `{ skip: <boolean> }`, which
+node:test renders as a bare `# SKIP` with no reason. So the gate was not skipping; it
+was ABSENT, and silently. Fixed 2026-09-02: the file now resolves through
+`test/provider-resolve.cjs` (which reads `UPSTREAM_PIN` rather than carrying a second
+version string), and every skip states its reason.
+
+**What each of the 31 needs** is the same judgement the `Bun.zstdDecompress` entry
+above got, and it is a judgement, not a mechanical fix: does our tested traffic
+actually REACH this API? The two-layer inventory answers "does upstream reach for it",
+not "do we". Then either stub it in `libexec/bun-shim.cjs`, or add it to the
+`ACCEPTED_*` lists with the reasoning written down.
+
+Most look unreachable on our paths at a glance — `Bun.jest`, `Bun.FFI`, `Bun.s3`,
+`Bun.sql`, `Bun.redis`, `Bun.Database`, `bun:sqlite` are not things an agentic CLI turn
+touches — but "looks unreachable" is exactly the assumption this project keeps getting
+burned by, so each gets checked rather than waved through. A wrong stub is worse than a
+missing one: it turns a loud failure into a silent wrong answer.
+
+**Deferred deliberately** (user, 2026-09-02), NOT dropped: the test skips with this
+entry named in its skip reason, and the cross-build umbrella now cannot close until
+every skip in the suite is understood and un-skipped where possible.

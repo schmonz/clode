@@ -10,7 +10,14 @@ const path = require('node:path');
 const ROOT = path.resolve(__dirname, '..');
 const SCRIPT = path.join(ROOT, 'libexec', 'inspect-claude-bundle.cjs');
 const SHIM = path.join(ROOT, 'libexec', 'bun-shim.cjs');
-const BIN = path.join(os.homedir(), '.local', 'share', 'claude', 'versions', '2.1.183');
+// Resolved, never hardcoded. This read
+//   path.join(os.homedir(), '.local/share/claude/versions/2.1.183')
+// until 2026-09-02 — a version pinned into a test file, which is not on any current
+// box and is not what UPSTREAM_PIN names. All three e2e tests below were therefore
+// gated on an artifact nobody has, and (because they used `{ skip: <boolean> }`)
+// they said nothing about it. They had not been skipping; they had been absent.
+const { providerBin, skipReason } = require('./provider-resolve.cjs');
+const BIN = providerBin();
 const NODE = process.env.CLODE_NODE || process.execPath;
 
 const ins = require(SCRIPT);
@@ -364,7 +371,7 @@ function missingReason(required) {
 
 
 test('coverage report runs and is machine-readable',
-  { skip: missingReason({ 'a pinned 2.1.183 provider bundle (BIN)': BIN, 'libexec/bun-shim.cjs (SHIM)': SHIM }) }, () => {
+  { skip: skipReason() || missingReason({ 'libexec/bun-shim.cjs (SHIM)': SHIM }) }, () => {
     const r = spawnSync(NODE, [SCRIPT, BIN, '--shim', SHIM, '--node', NODE, '--json'],
       { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
     assert.strictEqual(r.status, 0, r.stderr);
@@ -372,14 +379,46 @@ test('coverage report runs and is machine-readable',
     assert.ok('coverage' in doc && 'missing' in doc.coverage);
   });
 
+// DEFERRED, not silently: --strict currently exits 1 against any current bundle with
+// 31 unreviewed upstream needs (30 Bun.* APIs + bun:sqlite). That is REAL drift, not a
+// harness fault -- it went unseen because this file was pinned to provider 2.1.183,
+// which no box has, so the whole test was absent rather than skipping. Each of the 31
+// needs the same reachability judgement the zstd gap got: does our tested traffic
+// actually reach it? Then a stub, or an entry in the ACCEPTED_* lists.
+//
+// Skipping with the reason spelled out, per the user's call (2026-09-02), rather than
+// landing red -- and the umbrella now cannot close until this and every other skip is
+// understood and un-skipped where possible. See BACKLOG.md.
+const STRICT_DEFERRED = 'DEFERRED (BACKLOG.md, "31 unreviewed Bun APIs"): --strict exits 1 '
+  + 'with 31 unreviewed upstream needs against current bundles. Reproduce: '
+  + 'node libexec/inspect-claude-bundle.cjs "$(node -e \'console.log(require("./test/provider-resolve.cjs").providerBin())\')" '
+  + '--shim libexec/bun-shim.cjs --node "$(command -v node)" --strict';
+
 test('strict gate clean on known-good bundle',
-  { skip: missingReason({ 'a bundle to inspect (newest build/ bundle, else BIN)': STRICT_BIN, 'libexec/bun-shim.cjs (SHIM)': SHIM }) }, () => {
+  { skip: STRICT_DEFERRED }, () => {
     const rJson = spawnSync(NODE, [SCRIPT, STRICT_BIN, '--shim', SHIM, '--node', NODE, '--json'],
       { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
     assert.strictEqual(rJson.status, 0, rJson.stderr);
     const cov = JSON.parse(rJson.stdout).coverage || {};
-    assert.ok(!(cov.modules_missing || []).includes('undici'), 'undici still MISSING — host stub not active');
-    assert.ok((cov.modules_host_stub || []).includes('undici'), 'undici not classified as host-stub');
+    // Assert the INVARIANT, not a module name. This used to hardcode `undici` --
+    // true of the 2.1.183 bundle it was pinned to, false of 2.1.252, which does not
+    // require undici at all. A test that names one module tracks that module's
+    // fashion; what actually has to hold is: every module the shim DECLARES as a
+    // host module must, if this bundle requires it, come back classified host-stub
+    // and never `missing`. If the bundle needs none of them, there is nothing to
+    // classify and that is not a failure.
+    const declared = JSON.parse(
+      fs.readFileSync(SHIM, 'utf8').match(/"hostModules"\s*:\s*(\[[^\]]*\])/)[1]);
+    const stubbed = new Set(cov.modules_host_stub || []);
+    const missing = new Set(cov.modules_missing || []);
+    for (const m of declared) {
+      assert.ok(!missing.has(m),
+        `${m} is declared a hostModule in bun-shim.cjs but came back MISSING — the stub is not active`);
+    }
+    const required = declared.filter((m) => stubbed.has(m) || missing.has(m));
+    for (const m of required) {
+      assert.ok(stubbed.has(m), `${m} is required by this bundle but not classified host-stub`);
+    }
 
     const rStrict = spawnSync(NODE, [SCRIPT, STRICT_BIN, '--shim', SHIM, '--node', NODE, '--strict'],
       { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
@@ -388,7 +427,7 @@ test('strict gate clean on known-good bundle',
   });
 
 test('strict without shim is an error, not a silent pass',
-  { skip: missingReason({ 'a bundle to inspect (newest build/ bundle, else BIN)': STRICT_BIN }) }, () => {
+  { skip: (STRICT_BIN ? false : skipReason()) }, () => {
     const r = spawnSync(NODE, [SCRIPT, STRICT_BIN, '--node', NODE, '--strict'],
       { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
     assert.notStrictEqual(r.status, 0, '--strict without --shim must not exit 0');
