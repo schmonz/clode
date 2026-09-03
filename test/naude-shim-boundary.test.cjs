@@ -161,7 +161,17 @@ function walkFiles(dir, out = []) {
 // every width fail, and the artifact test then goes RED with 'no readable blob',
 // which is the honest answer.
 const MAGIC = Buffer.from([0x20, 0xda, 0x43, 0x01]);
-const HEADER_WIDTHS = [9, 8, 12, 16];   // 9 = observed; the rest are cheap insurance
+// 9 and 10 are both OBSERVED, from different node majors — node 24 emits a 9-byte
+// header, node 26 a 10-byte one (magic u32 + flags u32, then 1 or 2 bytes before the
+// u64-prefixed code path). The rest are cheap insurance. Order does not matter for
+// correctness: parseSeaBlob's printable-ASCII check on the code path rejects every
+// wrong width, and it was verified that a node-26 blob read at width 9 yields a
+// length of 33536, past the 8192 bound, so it cannot false-positive.
+//
+// This list existing at all is why the node-26 bump cost one line instead of a
+// rewrite: the file says the layout is "DISCOVERED here instead of hardcoded", and
+// the widths are tried in turn precisely so a node bump lands as a new entry.
+const HEADER_WIDTHS = [9, 10, 8, 12, 16];
 const F_CODE_CACHE = 4;
 const F_ASSETS = 8;
 
