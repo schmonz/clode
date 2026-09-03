@@ -97,4 +97,23 @@ function skipReason(env = process.env) {
     + 'golden-shas fixture store. Set CLODE_PROVIDER_BIN=<path to a claude binary> to run this.';
 }
 
-module.exports = { providers, providerBin, skipReason, REPO };
+
+// Is this path an actual Bun container, or just something named like one?
+//
+// On Windows `npm i -g @anthropic-ai/claude-code` leaves an EXTENSIONLESS shell wrapper
+// at <prefix>/claude next to the real executable. Handing that to a tool that expects a
+// Bun binary produces a confident, wrong diagnosis about the BINARY's format -- on
+// 2026-09-03 it briefly convinced us that scripts/make-min-provider.cjs could not carve
+// win32 providers, which the same CI run disproved by minimising a real 217MB win32
+// provider to 43MB in an earlier step.
+//
+// The check is the trailer, which is what actually makes a file a Bun container --
+// never the filename, the extension, or the platform.
+function isBunContainer(binpath) {
+  try {
+    const { TRAILER } = require('../libexec/bun-graph.cjs');
+    return fs.readFileSync(binpath, 'latin1').lastIndexOf(TRAILER) >= 0;
+  } catch { return false; }
+}
+
+module.exports = { providers, providerBin, skipReason, isBunContainer, REPO };

@@ -5547,38 +5547,46 @@ PTY job and light up the moment a logged-in profile is available.
 correctly on its own precondition; it is excluded from the job only for lack of the
 profile, not for bad behaviour.
 
-## make-min-provider cannot carve a Windows-built provider (2026-09-03)
+## RETRACTED: "make-min-provider cannot carve a Windows-built provider" (2026-09-03)
 
-`scripts/make-min-provider.cjs` looks for an `entrypoints/cli.js @bun-cjs` block. A
-windows-built provider does not present one, so it exits:
+**This entry was wrong and is retracted the same day. Kept, rather than deleted, because
+the way it was wrong is the useful part.**
+
+The claim: `scripts/make-min-provider.cjs` cannot carve a windows-built provider, because
+it failed with `no entrypoints/cli.js @bun-cjs block in C:\npm\prefix\claude (format
+changed?)`. It was filed as a product gap and `test/make-min-provider.test.cjs` was
+changed to skip win32 providers.
+
+**The same CI run disproves it, in an earlier step of the same job:**
 
 ```
-make-min-provider: no entrypoints/cli.js @bun-cjs block in C:\npm\prefix\claude (format changed?)
+make-min-provider: 1793 modules + 173 text assets (104 zstd rows decompressed)
+  -> ...\provider-min: 43859667 bytes (from 217360032)
+make-min-provider: self-check ok (1793 modules, entry B:/~BUN/root/cli, platform win32)
 ```
 
-Real product gap, not a test artefact. `test/make-min-provider.test.cjs` now skips
-win32 providers BY PLATFORM (per provider, not per test) with that reason, so it keeps
-asserting everywhere the script does work and lights up the moment this is closed. The
-loop also carries a `ran > 0` guard, mutation-proved, so the skip can never empty the
-test into a vacuous green.
+It minimised a real 217MB win32 provider to 43MB and self-checked it. The script is
+fine. What failed was minimising `C:\npm\prefix\claude` — on Windows, `npm i -g`
+leaves an EXTENSIONLESS SHELL WRAPPER at `<prefix>/claude` beside the real executable.
+The test was feeding the minimiser a shim.
 
-**How it hid.** Nothing had ever handed this script a win32 provider. CI's Windows
-`npm test` job installed no provider at all until 2026-09-03; the moment it did, three
-tests failed on their first exposure — this one and two POSIX-only assertions in
-`test/bun-graph.test.cjs` (fixed in the same change, see below). The gap is presumably
-as old as the script.
+**Two lessons, both cheap to state and both already paid for.**
 
-**Related, and the more general lesson.** The other two failures were assertions
-hardcoding `/$bunfs/root/`, the POSIX Bun VFS root. A windows-built provider uses
-`B:/~BUN/root/`. `libexec/extract-claude-js.cjs` already knew both shapes — its `BUNFS`
-regex has covered them since the Windows port — but it was module-private, so tests
-re-derived the POSIX half by hand and passed on every platform that had no Windows
-provider to contradict them. `BUNFS` is now exported and those assertions use it.
+1. *An error message about a FORMAT invites a conclusion about the FORMAT.* "no
+   `entrypoints/cli.js @bun-cjs` block ... (format changed?)" reads as "this binary's
+   format is unsupported". The actual condition was "this is not a binary". The script
+   could say so: checking for the Bun trailer first and reporting "not a Bun container"
+   would have made the real cause unmissable.
+2. *The skip I added would have hidden a working path.* Gating on `platform === 'win32'`
+   would have stopped exercising win32 minimisation everywhere — including where it
+   demonstrably works — to avoid one bad input. **Skip on the actual precondition, never
+   on a proxy for it.** The test now gates on `isBunContainer()` (a trailer check, in
+   `test/provider-resolve.cjs`), which is the true condition and is platform-neutral.
 
-That is the same shape twice in two days: a fact the product knows correctly, restated
-by hand somewhere that could not check it. The first was `traceLog`'s `startsWith('/h')`;
-this is the second. Worth looking for a third — a grep for hardcoded `/$bunfs` outside
-`extract-claude-js.cjs` is a cheap start.
+**Still worth doing**, and the only real to-do left from this: make
+`make-min-provider.cjs` check for the Bun trailer up front and fail with "not a Bun
+container" rather than a format complaint. Same for any other tool that assumes its
+input is a provider because of where it was found.
 
 ## Intermittent: node-shim-child-process spawn-fd test flakes (2026-09-03)
 
