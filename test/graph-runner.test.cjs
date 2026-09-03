@@ -60,10 +60,20 @@ function runNode(f, dir) {
   return execFileSync(process.execPath, [f], { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 }
 
-const TJS = process.env.CLODE_TJS;
+// Resolve the engine the way every OTHER tjs-gated test in this suite does, via
+// node-shim-helper's tjsPath(): CLODE_TJS if set, else the platform-tagged scratch
+// engine build-scratch.cjs allocates. This read `process.env.CLODE_TJS` ALONE until
+// 2026-09-02, so four tests skipped "no engine" on a box that had a perfectly good
+// one — dark for no reason, and saying so in a way that read like an honest
+// unavailability. Any test that gates on the engine should ask the same question the
+// rest of the suite asks, or it is gating on something else.
+const { tjsPath } = require('./node-shim-helper.cjs');
+const TJS = tjsPath();
 function tjsAvailable(t) {
   if (TJS && fs.existsSync(TJS)) return true;
-  t.skip('no engine: set CLODE_TJS to a tjs binary');
+  t.skip('no engine: neither CLODE_TJS nor the platform-tagged scratch engine '
+    + '(node-shim-helper tjsPath()) resolves to an existing binary. Build one with '
+    + '`node scripts/build-tjs.mjs`, or set CLODE_TJS=<path to a tjs binary>.');
   return false;
 }
 function runTjs(f, dir) {
