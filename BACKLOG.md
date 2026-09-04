@@ -5612,3 +5612,69 @@ the file is complete at read time (await the exit event / poll for a well-formed
 document with a bounded timeout), and prove the fix by running the FULL suite
 repeatedly, not the file in isolation — isolation is exactly the condition under which
 it already passes.
+
+## Release acceptance: the checks only a human with credentials can run (2026-09-04)
+
+**Decision (user, 2026-09-04):** the login-gated tests are not CI tests. They are aimed
+at a human, locally, before cutting a release. That resolves them — they were being
+counted as "dark" when they were really "unscheduled", and it avoids putting real
+credentials in CI to satisfy a bookkeeping number.
+
+This is written down because the ritual it describes previously existed only in the
+maintainer's head and in one assistant's memory. A release gate nobody can read is not
+a gate.
+
+**Run all of these on a logged-in machine before tagging.** Each states what it proves,
+because the point is to be able to tell which one failed and what that means.
+
+### 1. Doctor parity vs native — `test/e2e-doctor-parity.test.cjs` (2 tests)
+
+    CLODE_LIVE_RENDER=1 node --test test/e2e-doctor-parity.test.cjs
+
+Drives a real quaude under a PTY, types `/doctor`, and diffs the rendered report against
+NATIVE Claude Code. Needs a native `claude` on PATH AND a logged-in profile, since
+`/doctor` reports auth state. Proves: our TUI renders what upstream's does, on the one
+screen that summarises everything.
+
+**Known defect, fix before relying on this:** it HARD-FAILS rather than skipping when
+its preconditions are absent (see "Two defects found while wiring the Linux PTY CI job").
+Until that is fixed, a red here may mean "no login", not "parity broken".
+
+### 2. Stale frames — `test/fidelity/stale-frames.pty.test.cjs` (2 tests)
+
+    CLODE_LIVE_RENDER=1 node --test test/fidelity/stale-frames.pty.test.cjs
+
+RECIPE row F3, a captured rendering bug: open `/doctor`, close it, assert the finished
+frame was actually ERASED rather than lingering under the live prompt. Proves: repaint
+does not leave ghosts — the kind of thing only a human eye or a PTY capture catches.
+
+### 3. Live streamed render — `test/fidelity/interactive-live-turn.test.cjs` (2 tests)
+
+    CLODE_LIVE_ONLINE=1 node --test test/fidelity/interactive-live-turn.test.cjs
+
+Real credentials, real tokens, real streaming, both native and quaude. Proves: a live
+model response renders in the TUI. This is the standing "live TUI turn is the
+acceptance" gate — `--version`, `--help`, and a mock PONG have each certified a broken
+build before.
+
+### 4. Live print round-trip — `test/e2e-print.test.cjs`, `e2e-tools.test.cjs`, `e2e-assets.test.cjs`
+
+    CLODE_LIVE_ONLINE=1 node --test test/e2e-print.test.cjs test/e2e-tools.test.cjs test/e2e-assets.test.cjs
+
+`-p` reaches a real model; the Bash tool round-trips end to end; the embedded-asset shim
+raises no consumer errors on a real turn. Proves the non-interactive path, which the
+mock cannot fully stand in for.
+
+### 5. Real naude build+boot — `test/naude-smoke.test.cjs` (2 tests)
+
+    CLODE_NAUDE_SMOKE=1 node --test test/naude-smoke.test.cjs
+
+Builds a REAL Node SEA and boots it. Costs minutes, needs no credentials — so this one
+could equally be a nightly CI job; it is here because it is a build-acceptance property
+and a release is when you most want it. Measured 2026-09-04 on macOS 26 / node 26.3.0:
+2 pass, 0 fail.
+
+**Why not just put credentials in CI.** Tokens in CI spend money on every push, leak
+into logs, and turn a rendering regression into an auth outage at 3am. These checks are
+cheap for a human at release time and expensive as a robot on every commit. The trade is
+deliberate: CI proves the build, a human proves the product.
