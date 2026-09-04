@@ -173,7 +173,49 @@ const REGEX_OK_AFTER_WORD = new Set([
   'throw', 'case', 'do', 'else', 'yield', 'await',
 ]);
 
-function stripComments(src) {
+// Scans a candidate regex-literal BODY starting right after an opening `/` at `start`
+// (i.e. src[start - 1] === '/'). Handles backslash escapes and `[...]` char classes the
+// same way a real regex literal would; a regex literal can never contain a literal
+// newline, so the scan always stops there. Returns `{ end, closed }` — `end` is the
+// index right after the last character examined (either just past a found closing `/`
+// plus trailing flags, or at the newline/EOF if none was found); `closed` says which.
+// PURE. Shared by stripComments() (real recognition, when `!prevIsValue` says to try it
+// for real) and by findAmbiguousRegexDivisionSites() below (speculative: "what WOULD
+// this scan find here, even at a position the heuristic decided not to try") — one
+// implementation, so the two can never quietly drift apart.
+function scanRegexBody(src, start) {
+  const n = src.length;
+  let j = start;
+  let inClass = false;
+  let closed = false;
+  while (j < n) {
+    const cj = src[j];
+    if (cj === '\\') { j += 2; continue; }
+    if (cj === '\n') break;
+    if (cj === '[') { inClass = true; j++; continue; }
+    if (cj === ']') { inClass = false; j++; continue; }
+    if (cj === '/' && !inClass) { j++; closed = true; break; }
+    j++;
+  }
+  if (closed) {
+    while (j < n && /[a-z]/i.test(src[j])) j++; // trailing flags
+  }
+  return { end: j, closed };
+}
+
+// `opts.onAmbiguousSlash(info)`, when supplied, fires once for every bare `/` the
+// `prevIsValue` heuristic reads as division (skipping the real regex-literal scan)
+// whose SPECULATIVE regex body — what scanRegexBody() would have found had it been
+// tried here — contains a raw `/*`. That is FIX ROUND 1's residual, made continuously
+// enforceable instead of a one-time manual check: it is exactly the shape that runs
+// away, because the real tokenizer below, having decided this `/` is division, goes on
+// to read that embedded `/*` as an ordinary (unconditional) comment opener — and if a
+// REAL, unrelated `*/` exists later in the file (not just at EOF, which the branch below
+// already guards), it silently deletes everything in between. Purely an observer: it
+// never changes what stripComments() outputs, so callers that don't pass it see
+// identical behaviour to before this hook existed.
+function stripComments(src, opts) {
+  const onAmbiguousSlash = opts && opts.onAmbiguousSlash;
   let out = '';
   let i = 0;
   const n = src.length;
@@ -237,8 +279,13 @@ function stripComments(src) {
       // requires resolving the regex-vs-division ambiguity itself, which needs a real
       // parser; both are the same as the pre-existing "/`*` might be regex-code, might be
       // division" limitation the comment on the regex branch below already documents.
-      // Measured empirically against every file this guard actually scans (421 files):
-      // this residual case does not occur today — see task-9-report.md, Fix Round 1.
+      // FIX ROUND 2 (2026-09-04, coordinator finding): a one-time manual measurement that
+      // this residual does not occur today is not enough — the next file to acquire the
+      // shape would be swallowed silently, with no record this analysis ever happened.
+      // findAmbiguousRegexDivisionSites() below (wired into the
+      // `windows-path-ratchet-regex-division-ambiguity` guard) makes the SAME check the
+      // one below performs (via onAmbiguousSlash — see that hook) run on every scan, not
+      // once by hand.
       prevIsValue = false;
       out += c; i++;
       continue;
@@ -274,28 +321,30 @@ function stripComments(src) {
       // test, same as a real JS lexer; no closing slash on this line means it was
       // not a regex after all (division by something on the next line is not
       // valid JS either way, so this cannot misfire on real code).
-      let j = i + 1;
-      let inClass = false;
-      let closed = false;
-      while (j < n) {
-        const cj = src[j];
-        if (cj === '\\') { j += 2; continue; }
-        if (cj === '\n') break;
-        if (cj === '[') { inClass = true; j++; continue; }
-        if (cj === ']') { inClass = false; j++; continue; }
-        if (cj === '/' && !inClass) { j++; closed = true; break; }
-        j++;
-      }
+      const { end, closed } = scanRegexBody(src, i + 1);
       if (closed) {
-        while (j < n && /[a-z]/i.test(src[j])) j++; // trailing flags
-        out += src.slice(i, j);
-        i = j;
+        out += src.slice(i, end);
+        i = end;
         prevIsValue = true;
         continue;
       }
       prevIsValue = false;
       out += c; i++;
       continue;
+    }
+    // FIX ROUND 2 (2026-09-04, coordinator finding): `c === '/' && prevIsValue` falls
+    // through to the default punctuation branch below UNCHANGED — this block only
+    // REPORTS, via onAmbiguousSlash(), when doing so is dangerous. See the function
+    // header for what this detects and why.
+    if (c === '/' && prevIsValue && onAmbiguousSlash) {
+      const { end } = scanRegexBody(src, i + 1);
+      const body = src.slice(i + 1, end);
+      if (body.includes('/*')) {
+        onAmbiguousSlash({
+          line: src.slice(0, i).split('\n').length,
+          snippet: src.slice(i, Math.min(end, i + 60)),
+        });
+      }
     }
     if (frame.interp) {
       if (c === '{') { frame.depth++; out += c; i++; prevIsValue = false; continue; }
@@ -320,6 +369,25 @@ function stripComments(src) {
   }
   return out;
 }
+
+// PURE. Runs stripComments() purely for its onAmbiguousSlash side channel and returns
+// every site it reported: a `/` the heuristic reads as division whose candidate regex
+// body contains a raw `/*` — the exact shape FIX ROUND 1's EOF-only guard cannot fully
+// close (if a REAL, unrelated `*/` exists later in the same file, the runaway pairs with
+// THAT instead of reaching EOF). This converts "verified absent across the corpus on one
+// occasion" into something a future run checks again on every file, every time.
+function findAmbiguousRegexDivisionSites(src) {
+  const findings = [];
+  stripComments(src, { onAmbiguousSlash: (info) => findings.push(info) });
+  return findings;
+}
+
+// EXACT counts, same shape as ALLOWED above, both directions. Empty today (see
+// task-9-report.md, Fix Round 2: measured zero occurrences across all 421 files this
+// guard scans) — a genuine future false positive (a real, deliberately-written regex
+// whose char class or escape happens to contain `/*`, at a position the heuristic reads
+// as division) costs one entry here with the reason it is safe, same as the main table.
+const AMBIGUITY_ALLOWED = {};
 
 function walk(dir, out = []) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -595,6 +663,64 @@ const guard = defineGuard({
 });
 guardTests(guard);
 
+// PURE. FIX ROUND 2's detector (coordinator finding): scans every file for the ambiguous
+// `/` shape findAmbiguousRegexDivisionSites() defines, filters out reviewed
+// AMBIGUITY_ALLOWED sites (both directions — a stale allowance is reported too, same as
+// the main ALLOWED table), and returns {findings, examined}.
+function scanAmbiguousSites({ files, allowed = AMBIGUITY_ALLOWED }) {
+  const findings = [];
+  const seenAllowed = new Set();
+  let examined = 0;
+  for (const { rel, src } of files) {
+    examined += src.split('\n').length;
+    const allowedLines = allowed[rel] || [];
+    for (const site of findAmbiguousRegexDivisionSites(src)) {
+      if (allowedLines.includes(site.line)) { seenAllowed.add(`${rel}:${site.line}`); continue; }
+      findings.push(`${rel}:${site.line}: a \`/\` the division heuristic accepts has a `
+        + `candidate regex body containing \`/*\` — the shape that can run away into a `
+        + `real, unrelated \`*/\` elsewhere in the file (BACKLOG.md, Fix Round 1/2): `
+        + `${JSON.stringify(site.snippet)}. Rewrite the regex so this is unambiguous, or `
+        + `add ${rel}:${site.line} to AMBIGUITY_ALLOWED with the reason it is safe.`);
+    }
+  }
+  for (const [file, lines] of Object.entries(allowed)) {
+    for (const line of lines) {
+      if (!seenAllowed.has(`${file}:${line}`)) {
+        findings.push(`AMBIGUITY_ALLOWED names ${file}:${line} but it no longer produces `
+          + `this shape — good news, lower the entry so the ratchet holds the gain.`);
+      }
+    }
+  }
+  return { findings, examined };
+}
+
+// Migrated 2026-09-04 (phase 5, task 9, Fix Round 2): converts the coordinator's finding
+// — "verified absent across the corpus on one occasion" decays; enforce it continuously
+// — into a standing guard. Measured (task-9-report.md): zero occurrences across all 421
+// files this guard scans today, examined 79,286 total lines (the SAME 421-file corpus as
+// the main guard above, counted differently — every line, not just non-blank ones, since
+// this detector's job is "did we look at every file", not "how much comment-stripping
+// survived").
+const ambiguityGuard = defineGuard({
+  name: 'windows-path-ratchet-regex-division-ambiguity',
+  floor: 70000,
+  read: () => {
+    const files = readFiles();
+    if (files.length === 0) {
+      return { skip: 'no files found under any scanned root (libexec/scripts/test) — '
+        + 'repo layout changed; nothing to scan' };
+    }
+    return { files };
+  },
+  scan: scanAmbiguousSites,
+  // The coordinator's exact repro: `)` closing `fn()` sets prevIsValue, so the regex
+  // scan is skipped for the next `/`, and its candidate body `[/*]` contains a raw `/*`.
+  control: () => ({
+    files: [{ rel: 'synthetic/ambiguous-control.cjs', src: 'fn() /[/*]/.test(x);\n' }],
+  }),
+});
+guardTests(ambiguityGuard);
+
 // ---- artifact scan: a host path must never reach a committed artifact --------
 //
 // 9c599b6 generalised: tjsc named a generated C symbol after the path it was
@@ -620,7 +746,8 @@ test('generated patches carry no host absolute paths', () => {
     + 'Regenerate with a repo-relative path.\n');
 });
 
-module.exports = { RULES, ALLOWED, scan, scanFiles, readFiles, stripComments };
+module.exports = { RULES, ALLOWED, scan, scanFiles, readFiles, stripComments,
+  scanRegexBody, findAmbiguousRegexDivisionSites, AMBIGUITY_ALLOWED, scanAmbiguousSites };
 
 // The PROOF for the counted `c-file-url-sep` rule above. A count cannot tell whether a
 // given file:// construction normalizes separators; this reads the injected C and checks
