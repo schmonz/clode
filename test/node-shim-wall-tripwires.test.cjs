@@ -230,13 +230,58 @@
 //     parameter, not the imported module. Pre-existing regex-is-not-AST limitation
 //     (true of the CJS half too, and of every wall this file has ever had), called out
 //     explicitly here so nobody mistakes it for something FIX ROUND 3 introduced.
+//
+// FIX ROUND 4 (2026-09-04) — THE GATE DID NOT RUN IN THE SUITE. Rounds 1-3 each verified
+// the fix with `node --test test/node-shim-wall-tripwires.test.cjs` directly — the fast
+// loop everyone, coordinator and reviewers included, was told to use. Every one of those
+// direct runs sees the real `~/.cache/clode/2.1.251/graph.json`, because plain
+// `process.env` in an interactive shell has no `CLODE_STATE_ROOT`. `test/run.mjs:122`
+// sets `CLODE_STATE_ROOT` to a fresh `mkdtemp` for hermeticity, and
+// `libexec/clode-paths.cjs`'s `clodeCacheDir(env)` — what `read()` used through rounds
+// 1-3 — ranks `CLODE_STATE_ROOT` above `XDG_*`/`HOME`. So under the suite (and therefore
+// in CI), `read()` resolved to `<fresh empty tmpdir>/cache/clode/2.1.251/graph.json`,
+// which never exists, and the gate SKIPPED — silently, every run, never observed by any
+// of the three "fast loop" verifications, because the fast loop and the suite run in
+// different environments and nobody checked the second one. That is precisely the error
+// class this phase exists to remove: an instrument verified in a context other than the
+// one it actually runs in. Confirmed by a full-suite run: skip count 34 -> 35 after round
+// 3's commit, the new skip being this gate; the pre-Task-3 file's suite log for the same
+// commit range shows it PASSING (not skipping) at that point, so this was a genuine
+// regression Task 3 introduced, not a pre-existing gap.
+//
+// FIXED by routing `read()` through `test/oracle-models.cjs`'s `stageProviderCli()` —
+// exactly what the pre-Task-3 file did (see its old `resolveBundlePath`) — instead of a
+// direct `clodeCacheDir(env)/<pin>/graph.json` read. `stageProviderCli()` resolves the
+// provider BINARY via `CLODE_PROVIDER_BIN` (which `test/run.mjs` and CI's node-shim
+// oracle step both export directly, bypassing the redirected provider STORE entirely —
+// `test/provider-resolve.cjs`'s `storeDir()` never consults `CLODE_STATE_ROOT` on
+// purpose) and stages/extracts it under `os.tmpdir()` (via
+// `CLODE_ORACLE_STAGE_ROOT || path.join(os.tmpdir(), 'clode-oracle-stage')`), a location
+// `CLODE_STATE_ROOT` never touches. So this now works in the fast loop AND in the
+// isolated suite AND in CI, by the same code path — no more "verified in one context, ran
+// in another." DO NOT change this back to a direct cache-path read without re-reading
+// this note; that is the exact regression being fixed.
+//
+// VERIFIED THE WAY THAT WOULD HAVE CAUGHT THIS: ran the file twice — once plain (the fast
+// loop), once with BOTH `CLODE_STATE_ROOT` pointed at a fresh empty `mkdtemp` AND
+// `CLODE_PROVIDER_BIN` exported to the pin-capped provider, faithfully reproducing what
+// `test/run.mjs:122-163` actually does (sets the former, THEN resolves+exports the
+// latter — omitting the second env var is not a faithful simulation: it was tried first,
+// fell through `resolveProviderBin`'s `CLODE_PROVIDER_BIN`-absent branch to clode's own
+// UNCAPPED resolver, and picked up whatever provider that finds — examined 1684 instead
+// of 1839, baselines mismatched, a VIOLATION that was really "wrong provider version,"
+// not a real reach). With both env vars set, matching the suite exactly: OK, examined
+// 1839, baselines 10/5, not SKIP, same as plain. Both runs, including the misleading
+// intermediate one: task-3-report.md. This also means the ratchet baselines are only
+// meaningful when `CLODE_PROVIDER_BIN` names the pinned version — true under
+// `test/run.mjs` and CI (both cap it at `UPSTREAM_PIN`), and the same assumption the
+// pre-Task-3 file always made; not a new dependency this round introduced.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { defineGuard, guardTests } = require('./guard.cjs');
-const { clodeCacheDir } = require('../libexec/clode-paths.cjs');
-const { pinnedVersion } = require('./provider-resolve.cjs');
+const models = require('./oracle-models.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 
@@ -375,32 +420,56 @@ function deriveOwnModulePrefix() {
   return m[2];
 }
 
-// Test-only override, same convention the old CLODE_SHIM_WALL_BUNDLE var used:
-// point the gate straight at a graph.json instead of resolving the pinned
-// staged carve under ~/.cache/clode. The normal/CI path never sets this.
-function resolveGraphPath(env = process.env) {
-  if (env.CLODE_SHIM_WALL_GRAPH) return env.CLODE_SHIM_WALL_GRAPH;
-  const pin = pinnedVersion();
-  if (!pin) return null;
-  return path.join(clodeCacheDir(env), pin, 'graph.json');
-}
-
+// Test-only override, same convention the old CLODE_SHIM_WALL_BUNDLE var used — renamed
+// to _GRAPH and repointed at graph.json directly, since that is what this file reads now
+// (the old var pointed at a cli.cjs-shaped bundle; keeping the override MECHANISM, not
+// the old variable's shape). Point the gate straight at a graph.json file instead of
+// staging a provider. The normal/CI path never sets this.
+//
 // read()'s real half: graph.json's `sources` map for the pinned upstream carve.
 // Reads graph.json, NOT cli.cjs (the 49MB graph RUNNER) — see the MIGRATED note
 // above for why that distinction is load-bearing, not cosmetic.
+//
+// FIX ROUND 4 (2026-09-04): resolution goes through test/oracle-models.cjs's
+// `stageProviderCli()` — exactly what the pre-Task-3 file did — and NOT a direct
+// `<clodeCacheDir>/<UPSTREAM_PIN>/graph.json` read, which is what rounds 1-3 used. See
+// the FIX ROUND 4 header note for the full story (a full-suite run proved the direct
+// path is invisible under `test/run.mjs`'s isolated `CLODE_STATE_ROOT`, and would be in
+// CI too); DO NOT "simplify" this back to a direct cache path without re-reading that
+// note.
 //
 // Never returns an empty sources map to mean "not found" — that would scan zero
 // modules and read exactly like a clean 1,839-module scan, the ambiguity
 // test/guard.cjs exists to make impossible. An absent precondition is always a
 // named skip.
 function readGraphJson(env = process.env) {
-  const graphPath = resolveGraphPath(env);
-  if (!graphPath) {
-    return { skip: 'UPSTREAM_PIN does not name a pinned version — cannot locate a staged carve' };
+  if (env.CLODE_SHIM_WALL_GRAPH) return readGraphFile(env.CLODE_SHIM_WALL_GRAPH);
+
+  let staged;
+  try {
+    staged = models.stageProviderCli({ env });
+  } catch (e) {
+    return { skip: `provider found but staging it failed: ${(e && e.message) || String(e)}` };
   }
+  const reason = models.providerSkipReason(staged, 'no upstream provider available '
+    + 'locally — set CLODE_PROVIDER_BIN to a real claude binary (or run somewhere clode '
+    + 'has already resolved a local provider) to exercise this gate; see '
+    + 'test/oracle-models.cjs');
+  if (reason) return { skip: reason };
+
+  // graph.json rides in staged.cacheDir (the extraction target that extractIfNeeded
+  // writes cli.cjs/bun-shim.cjs/graph.json into together) — NOT
+  // path.dirname(staged.cli). That is a separate, per-call copy directory that
+  // stageCli() only ever copies cli.cjs and bun-shim.cjs into; confirmed empirically
+  // (task-3-report.md) that graph.json is never there. Using it would silently skip
+  // again, the exact regression this round exists to fix.
+  return readGraphFile(path.join(staged.cacheDir, 'graph.json'));
+}
+
+function readGraphFile(graphPath) {
   if (!fs.existsSync(graphPath)) {
-    return { skip: `no staged carve at ${graphPath} — build or extract the pinned provider `
-      + '(see libexec/clode-extract.cjs) to exercise this gate' };
+    return { skip: `no graph.json at ${graphPath} — a pre-2.1.243 provider carves to `
+      + 'cli.cjs directly and has no graph at all' };
   }
   let doc;
   try {
@@ -619,4 +688,4 @@ test('shim wall tripwire mechanism: does not fire on the pre-existing aliased CJ
   }
 });
 
-module.exports = { WALLS, scanWalls, readGraphJson, resolveGraphPath, deriveOwnModulePrefix };
+module.exports = { WALLS, scanWalls, readGraphJson, deriveOwnModulePrefix };
