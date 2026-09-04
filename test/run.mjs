@@ -596,4 +596,39 @@ if (treeChanged.length) {
   process.exitCode = 2;
 }
 
+// Print the environment stamp WITH the verdict, on both the pass and fail paths — a
+// stamp printed only at startup scrolls off before a multi-minute run's verdict prints,
+// so the two are never quoted together. This is the exact defect that let two agents
+// disagree about a baseline on identical commits for an afternoon (see
+// test/environment-stamp.cjs's header). Best-effort fields: a value this process cannot
+// determine reads as `unknown`, never omitted (environmentStamp's own contract).
+{
+  const { environmentStamp } = require('./environment-stamp.cjs');
+  const { pinnedVersion } = require('./provider-resolve.cjs');
+  let providerCarve = null;
+  if (process.env.CLODE_PROVIDER_BIN) {
+    try {
+      providerCarve = require('../libexec/extract-claude-js.cjs')
+        .providerPlatformOf(process.env.CLODE_PROVIDER_BIN);
+    } catch { /* unreadable binary: stays unknown */ }
+  }
+  console.error(environmentStamp({
+    execPath: process.execPath,
+    nodeVersion: process.version,
+    platform: process.platform,
+    arch: process.arch,
+    osRelease: os.release(),
+    pin: pinnedVersion(),
+    providerCarve,
+    engine: process.env.CLODE_TJS || null,
+    gates: {
+      ...(process.env.CLODE_OFFLINE ? { CLODE_OFFLINE: process.env.CLODE_OFFLINE } : {}),
+      ...(process.env.CLODE_LIVE_RENDER ? { CLODE_LIVE_RENDER: process.env.CLODE_LIVE_RENDER } : {}),
+      ...(process.env.CLODE_PROVIDER_BIN ? { CLODE_PROVIDER_BIN: process.env.CLODE_PROVIDER_BIN } : {}),
+      ...(process.env.CLODE_DARWIN_PROVIDER_BIN
+        ? { CLODE_DARWIN_PROVIDER_BIN: process.env.CLODE_DARWIN_PROVIDER_BIN } : {}),
+      ...(process.env.CLODE_TJS ? { CLODE_TJS: process.env.CLODE_TJS } : {}),
+    },
+  }));
+}
 process.exit(process.exitCode === 2 ? 2 : (fails ? 1 : 0));
