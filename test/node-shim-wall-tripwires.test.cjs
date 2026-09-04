@@ -147,6 +147,49 @@
 // just because the population is nonzero. Full measurement, the control proving the
 // ratchet actually fires, and confirmation this reports OK on the real pinned carve:
 // task-3-report.md.
+//
+// FIX ROUND 2 (2026-09-04), from a coordinator-directed review of round 1's commit —
+// two findings, one fixed here, one deliberately NOT fixed here:
+//
+// (1) FIXED — the ESM half was blind to NAMESPACE imports. `import*as ng from"net"` then
+// `ng.connect(...)` elsewhere in the module matched neither wall: the named-import half
+// requires the API name to appear literally inside `{...}`, which a namespace import
+// never has. Verified against the real pinned carve: 11 namespace imports of net/fs
+// exist today (`import*as ng from"net"` once, `import*as <x> from"fs"` ten times, across
+// three chunks), and NONE of the eleven is currently called with `.connect(`/`.watch(` —
+// which is why neither baseline moved. But that "not called today" is exactly why this
+// was a live blind spot and not a moot one: the day a bundler emits namespace form for a
+// call that IS reached, the old pattern would report zero findings AND an unchanged
+// `examined` — a real reach landing completely invisibly, the same green-by-construction
+// failure this task exists to close, one encoding down. Each wall's pattern now also
+// matches `import*as <name>from"<module>"` followed later in the same module by
+// `<name>.<api>(`, via a capture + backreference (`\1`) rather than two separate passes,
+// so the "followed later" half only ever means "later in this specific match's own
+// namespace binding," not any name anywhere. The same edit also covers the mixed
+// `import net,{connect}from"net"` form (default + named in one statement) — 0
+// occurrences today, so it moves nothing, but the named-import half no longer requires
+// `{` to be the very first token after `import`.
+//
+// (2) DOCUMENTED, NOT FIXED — the ratchet in FIX ROUND 1 is a COUNT ratchet, and a count
+// cannot see a same-pin SWAP. If one reach vanishes while a different one appears in the
+// same scan, the count is unchanged (10 -> 10, or 5 -> 5), `findings` stays empty, and
+// the per-module list — the thing this file's own ROSE/FELL language implies is a safety
+// net — never prints, because it only prints on a count mismatch. This is real and
+// proven by construction (swap module A's reach for module B's in a synthetic corpus:
+// same count, zero findings), not a hypothetical. It is NOT fixed in this round. The
+// obvious fix — a content-fingerprint SET per wall (not just a count) so a swap changes
+// the set even when the count is stable — was considered and deliberately rejected FOR
+// THIS PHASE: a fingerprint is carve-sensitive. Bun constant-folds `process.platform` /
+// `process.arch` at carve time (measured for the signals scanner, commit 47d2e60 — two
+// carves of the SAME upstream version are different bytes depending on which
+// platform/arch carved them), and whether the wall-bearing regions of THIS file's
+// sources differ between, say, a darwin-carved and a linux-carved 2.1.251 is unmeasured.
+// A fingerprint ratchet that is green on the box that recorded the baseline and red in
+// CI purely because CI carved on a different platform would be worse than the count
+// ratchet it replaced — a new false-positive class in exchange for closing a real but
+// narrower gap. Phase 4 owns keying the provider store by platform+arch; a fingerprint
+// ratchet here only becomes meaningful once that exists, so this is filed as future
+// work gated on that, not re-litigated as an omission in this file.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -195,14 +238,33 @@ const REPO = path.resolve(__dirname, '..');
 // resulting noise increase as the honest cost of upstream's move to ESM, not as
 // something to regex away — see the MEASURED note above for what it actually
 // found.
+//
+// NAMESPACE + MIXED FORMS (added FIX ROUND 2, 2026-09-04): a third alternative covers
+// `import*as <name>from"<module>"` followed later in the SAME module by
+// `<name>.<api>(` — captured via a backreference (`\1`), not a second pass, so it only
+// ever matches a namespace binding calling its own captured name, not any name anywhere
+// in the file. This closed a real blind spot: the named-import half above requires the
+// API name to appear literally inside `{...}`, which a namespace import never has, so
+// `import*as ng from"net";ng.connect(...)` matched neither wall before this round —
+// verified against the real pinned carve (11 namespace imports of net/fs exist, all
+// currently un-called with the relevant method — see the FIX ROUND 2 header note for
+// why "un-called today" does not make this moot). The named-import half was widened at
+// the same time to allow an optional leading default specifier (`import net,{connect}
+// from"net"`) — 0 occurrences today, included for the same reason described in the FIX
+// ROUND 2 note: fix it while in the same regex, not after it is found reached.
 const WALLS = [
   {
     api: 'net.connect / net.createConnection',
-    pattern: /require\(\s*["'](?:node:)?net["']\s*\)\s*\.(?:connect|createConnection)\s*\(|import\s*\{[^}]*\b(?:connect|createConnection)\b[^}]*\}\s*from\s*["'](?:node:)?net["']/,
+    pattern: /require\(\s*["'](?:node:)?net["']\s*\)\s*\.(?:connect|createConnection)\s*\(|import\s*(?:[\w$]+\s*,\s*)?\{[^}]*\b(?:connect|createConnection)\b[^}]*\}\s*from\s*["'](?:node:)?net["']|import\s*\*\s*as\s+([\w$]+)\s*from\s*["'](?:node:)?net["'][\s\S]*?\b\1\.(?:connect|createConnection)\s*\(/,
     // MEASURED 2026-09-04 against ~/.cache/clode/2.1.251/graph.json, EXCLUDING clode's
     // own scc-merge output (see deriveOwnModulePrefix() below) — 10 modules import
     // `connect`/`createConnection` from "net" by name via ESM (11 before exclusion; one
-    // was an scc-merge artifact). Re-measure this on every pin bump: task-3-report.md.
+    // was an scc-merge artifact). RE-MEASURED after FIX ROUND 2 added namespace-form
+    // matching: still 10 — none of the 11 real namespace imports of "net"/"fs" is
+    // currently called with `.connect(`/`.createConnection(`/`.watch(`, so widening the
+    // pattern to see that shape did not change what it currently finds; it only closes
+    // the gap for the day one of them IS called that way. Re-measure this on every pin
+    // bump: task-3-report.md.
     baseline: 10,
     why: '"the actual socket surface (net.connect / createConnection / real '
       + 'Socket I/O / net.Server) is NOT implemented — the -p transport is '
@@ -215,9 +277,12 @@ const WALLS = [
   },
   {
     api: 'fs.watch',
-    pattern: /require\(\s*["'](?:node:)?fs["']\s*\)\s*\.watch\s*\(|import\s*\{[^}]*\bwatch\b[^}]*\}\s*from\s*["'](?:node:)?fs["']/,
+    pattern: /require\(\s*["'](?:node:)?fs["']\s*\)\s*\.watch\s*\(|import\s*(?:[\w$]+\s*,\s*)?\{[^}]*\bwatch\b[^}]*\}\s*from\s*["'](?:node:)?fs["']|import\s*\*\s*as\s+([\w$]+)\s*from\s*["'](?:node:)?fs["'][\s\S]*?\b\1\.watch\s*\(/,
     // MEASURED 2026-09-04, same run as net's: 5 modules import `watch` from "fs" by name
     // via ESM; none were scc-merge artifacts, so exclusion did not change this count.
+    // RE-MEASURED after FIX ROUND 2's namespace-form widening: still 5, for the same
+    // reason as net's — real namespace imports of "fs" exist but none is currently
+    // called with `.watch(`.
     baseline: 5,
     why: '"fs.watch (the inotify/FSEvents-style API): STILL a stub, unlike '
       + 'watchFile above ... this engine\'s uv_fs_event backend is ENOSYS on some '
@@ -390,6 +455,35 @@ test('the fs.watch wall pattern still matches the legacy require form', () => {
   const cjs = 'function boot(p){return require("fs").watch(p,()=>{})}';
   const wall = WALLS.find((w) => w.api === 'fs.watch');
   assert.ok(wall.pattern.test(cjs), 'both encodings must be pinned for fs.watch too');
+});
+
+test('the wall patterns match the NAMESPACE import shape upstream ALSO emits', () => {
+  // FIX ROUND 2 (2026-09-04): `import*as ng from"net"` then `ng.connect(...)` elsewhere
+  // in the same module matched NEITHER wall until this round — verified against the real
+  // pinned carve: 11 such namespace imports exist today (none currently called with
+  // .connect/.watch, which is why the baselines below did not move), but a pattern that
+  // cannot see this shape at all would report zero findings AND an unchanged `examined`
+  // the day a bundler picks namespace form for a reached call — the exact
+  // green-by-construction failure this task exists to close, one encoding down.
+  const netEsm = 'import*as ng from"net";function go(o){return ng.connect(o)}';
+  const netWall = WALLS.find((w) => w.api.startsWith('net.'));
+  assert.ok(netWall.pattern.test(netEsm),
+    'the net wall must match import*as X from"net" followed by X.connect(');
+
+  const fsEsm = 'import*as f from"fs";function go(p){return f.watch(p,()=>{})}';
+  const fsWall = WALLS.find((w) => w.api === 'fs.watch');
+  assert.ok(fsWall.pattern.test(fsEsm),
+    'the fs.watch wall must match import*as X from"fs" followed by X.watch(');
+});
+
+test('the net wall pattern also matches the mixed default+named import form', () => {
+  // `import net,{connect}from"net"` — 0 occurrences in the pinned 2.1.251 carve
+  // (verified), so this does not move any baseline, but the widened named-import half
+  // must not require the braces to be the very first token after `import`.
+  const esm = 'import net,{connect as q}from"net";function go(o){return q(o)}';
+  const wall = WALLS.find((w) => w.api.startsWith('net.'));
+  assert.ok(wall.pattern.test(esm),
+    'the net wall must match the mixed default+named import form too');
 });
 
 test('regression: our own scc-merge output is excluded, not counted as an upstream reach', () => {
