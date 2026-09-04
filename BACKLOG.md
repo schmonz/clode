@@ -293,23 +293,33 @@ smoke and predate BOTH `62cb4e4` (the cyclic-group merge) and `712a0f1` (the mod
 probe), so they were neither of the two causes above. Their console was never captured and
 never will be. If sparc goes red again with a shape neither explains, that is where to look.
 
-## The Windows-path ratchet is blind on ~1335 lines of real code (2026-08-29)
+## The Windows-path ratchet is blind on ~1335 lines of real code (2026-08-29) — RESOLVED 2026-09-04
 
-`test/windows-path-ratchet.test.cjs`'s `stripComments()` blanks `/* ... */` with a
+`test/windows-path-ratchet.test.cjs`'s `stripComments()` blanked `/* ... */` with a
 non-greedy regex over the whole file. build-tjs.mjs, clode-fuse.cjs, the node-shim loader and
 others embed C and JS *in string and template literals* that contain `/*` and `*/`, so the
-pairing runs away and blanks real code: 1335 lines across 14 of the scanned files, measured
-2026-08-29. Every rule in that file — path-walk, x-ok-exec, slash-only-pathedness,
-bare-npm-spawn — is silently unenforced on those lines.
+pairing ran away and blanked real code, an unknown number of lines across an unknown number
+of files (estimated ~1335 across 14, 2026-08-29 — that estimate was never actually measured).
 
 It surfaced by accident: reordering two `const` declarations in build-tjs.mjs changed the
 pairing and revealed two pre-existing `process.env.PATH` sites (the cosmocc bin-dir prepend)
-that the scan had never seen. They are allowlisted with a reason; the blindness is not fixed.
+that the scan had never seen. They were allowlisted with a reason at the time; the blindness
+itself was not fixed until now.
 
-A real fix needs string/template-aware stripping (a tokenizer, or at minimum tracking quote
-state), and will surface an unknown number of previously-hidden hits that each need reading
-and judging — which is the work, and why it is here rather than in that commit. Until then
-this ratchet's green means less than it looks like it means.
+RESOLVED (phase 5, task 9): `stripComments()` is now a real tokenizer that tracks
+string/template-literal/regex-literal state (`libexec/scc-merge.cjs`'s `lexicalCodeMask`
+already carries the same regex-vs-division heuristic, reviewed and shipped, for a related
+purpose). MEASURED, not estimated: the old regex blanked 24,937 lines across 421 scanned
+files in total (almost all of that correct — real comments); comparing every one of those
+files against the tokenizer isolates the actual bug at 1,950 lines across 45 files that were
+real code, not comment. Re-scanning every RULE against the newly-visible text surfaced exactly
+ONE previously-invisible match: `test/run.mjs`'s own `npmCliPath()`, the fourth instance of
+the same already-known "POSIX half of a correctly-branched pair" shape as the three existing
+`npm-global-layout` ALLOWED entries — reviewed, not a bug, allowlisted the same way. The gate
+is migrated onto `test/guard.cjs`'s `defineGuard`, with `floor` set to the measured
+lines-examined count (50,892 non-blank lines) so a future regression back to the old regex
+reports BROKEN rather than quietly passing. Full commands and output: see
+`.superpowers/sdd/2026-09-04-phase5-gates-that-can-fail/task-9-report.md`.
 
 ## No CI leg carves a zstd row in a guest any more (2026-08-29)
 
@@ -3576,10 +3586,12 @@ in isolation is what produced a codebase full of guards nobody re-checked:
    the direct `require("fs").watch(` shape, which upstream has not emitted anywhere since the
    2.1.243 code-split. It is the fourth instrument of the family whose other three were all found
    blind. Nothing forces the question because it is green; ask it anyway.
-3. **`windows-path-ratchet.test.cjs` is blind on ~1,335 lines across 14 files.** Its
-   `stripComments()` mis-pairs `/*`…`*/` across template literals and blanks real code. Found by
-   ACCIDENT when an agent reordered declarations and unmasked two pre-existing
-   `process.env.PATH` sites it had never seen. Needs a tokenizer, not a regex.
+3. **RESOLVED 2026-09-04 (phase 5, task 9).** `windows-path-ratchet.test.cjs` was blind on an
+   estimated ~1,335 lines across 14 files — its `stripComments()` mis-paired `/*`…`*/` across
+   template literals and blanked real code. Found by ACCIDENT when an agent reordered
+   declarations and unmasked two pre-existing `process.env.PATH` sites it had never seen. Fixed
+   with a real tokenizer; the measured (not estimated) size was 1,950 lines across 45 files. See
+   the "RESOLVED 2026-09-04" entry above and task-9-report.md.
 4. **`native-builder-oracle` should be a REQUIRED gate whose failure says the SHIPPED ARTIFACT is
    broken.** It is the job that would have caught the zstd carve break on day one — "the native
    builder BUILDS THE PRODUCT (node-free, real provider)" — and it sat as one red among
@@ -4966,10 +4978,11 @@ boundary and skip the declaration.
                                                      name its interpreter, or the multi-call
                                                      binary makes the question moot)
 
-Two live Windows entries above say the worry is not superstition: the deadlock guard cannot get
-scratch space on Windows runners (deferred 2026-08-31, still dark), and the Windows-path ratchet
-is blind on ~1335 lines of real code. Anything that multiplies process boundaries multiplies the
-surface those two already fail on.
+A live Windows entry above says the worry is not superstition: the deadlock guard cannot get
+scratch space on Windows runners (deferred 2026-08-31, still dark). A second one, the
+Windows-path ratchet being blind on ~1335 lines of real code, was RESOLVED 2026-09-04 (phase 5,
+task 9) — see the entry above. Anything that multiplies process boundaries multiplies the
+surface the remaining one already fails on.
 
 **But one measurement cuts the other way, and it is the most interesting number here:**
 

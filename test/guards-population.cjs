@@ -241,13 +241,15 @@ const MIGRATED = deriveMigrated();
 // see the fix-round-2 and fix-round-3 sections of task-4-report.md for the exact measured
 // before/after each time this happened.
 //
-// MEANT TO GO DOWN from here as files migrate: Task 9 (windows-path-ratchet.test.cjs) and
-// Task 14 (the rest). Never raise it to make a run "look clean" — raising it papers over
-// exactly the regression this ratchet exists to catch. Lower it (with a comment recording
-// the new measured count and when) whenever a migration makes the real count drop, OR
-// whenever a future classifier fix surfaces more true positives or trims a false positive —
-// the ratchet test below tells you to when that happens.
-const UNMIGRATED_BASELINE = 103;
+// RE-CUT AGAIN, 103 -> 102, after Task 9 migrated test/windows-path-ratchet.test.cjs to
+// defineGuard/guardTests (its stripComments() tokenizer fix, phase 5). Task 14 owns the rest.
+//
+// MEANT TO GO DOWN from here as files migrate. Never raise it to make a run "look clean" —
+// raising it papers over exactly the regression this ratchet exists to catch. Lower it (with
+// a comment recording the new measured count and when) whenever a migration makes the real
+// count drop, OR whenever a future classifier fix surfaces more true positives or trims a
+// false positive — the ratchet test below tells you to when that happens.
+const UNMIGRATED_BASELINE = 102;
 
 // Pure ratchet decision — unit-tested directly with synthetic counts (see
 // guards-population.test.cjs) as well as through the real file list, so the mechanism is
