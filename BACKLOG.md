@@ -5723,3 +5723,42 @@ and a release is when you most want it. Measured 2026-09-04 on macOS 26 / node 2
 into logs, and turn a rendering regression into an auth outage at 3am. These checks are
 cheap for a human at release time and expensive as a robot on every commit. The trade is
 deliberate: CI proves the build, a human proves the product.
+
+## P1: a quaude built from a foreign-carved provider LIES about its platform (2026-09-04)
+
+    $ quaude doctor
+    Platform: linux-x64          <- on a darwin-arm64 Mac
+
+Found by the new `test/doctor-cli-parity.test.cjs` on its first run, comparing
+`claude doctor` against `quaude doctor`. The structure matched; exactly one value did
+not, and it was this one.
+
+**Why.** Bun constant-folds `process.platform`/`process.arch` at CARVE time
+([[carve-platform-constant-folding]]), so the platform a quaude reports is the platform
+of the PROVIDER IT WAS BUILT FROM, not the machine it runs on. This box's pinned
+`2.1.251` provider is a **linux** carve — because the store is
+`providers/<version>/claude`, keyed by version alone, so a foreign carve sits happily at
+the pinned path (see the phase-4 note in the umbrella).
+
+**The part that makes it a P1 rather than a curiosity:** `clode build` assembled a
+darwin quaude from a linux-carved provider WITHOUT COMPLAINT. That directly contradicts
+[[target-matched-assembly]] — "clode must assemble quaude from TARGET-matching inputs".
+The build had everything it needed to refuse: `providerPlatformOf()` exists, and a darwin
+carve of 2.1.250 was sitting in the same store.
+
+So anyone building a quaude on this box right now gets one that believes it is on Linux.
+What else that mis-belief reaches is unmeasured — `process.platform` gates path handling,
+spawn behaviour, and the managed-settings location, so "it prints the wrong OS in doctor"
+is the symptom we happened to look at, not the extent.
+
+**Fix, in order:**
+1. `clode build` REFUSES a provider whose carve does not match the build target, naming
+   both. Cheap, and turns a silent wrong answer into a loud one.
+2. Key the provider store by platform (and arch), so a foreign carve cannot occupy the
+   pinned path. That is the phase-4 derived-key work.
+3. Then re-run `test/doctor-cli-parity.test.cjs` — it asserts the invariant directly.
+
+**How it stayed invisible:** `--version` matches, PONG round-trips, attest passes, the
+smoke test is green. Every existing acceptance check is satisfied by a quaude that thinks
+it is running on the wrong operating system. The one surface that says otherwise is a
+diagnostic nobody was diffing.
