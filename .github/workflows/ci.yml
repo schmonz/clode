@@ -727,6 +727,27 @@ jobs:
           grep -qE '^(ℹ|#) skipped 0$' boundary.out \
             || { echo "ERROR: the naude shim-boundary gate SKIPPED — it found no built naude to inspect (see its skip message above)" >&2; exit 1; }
 
+      # REQUIRED-GATE MARKER (BACKLOG item 4 / phase 5 task 10). This job "sat as one red
+      # among twenty-two" — it BUILDS THE PRODUCT (node-free, real provider) and is the
+      # closest thing we have to a gate on the thing users actually get; it would have
+      # caught the zstd carve break on day one. Measured 2026-09-04, before writing this:
+      # `gh api repos/schmonz/clode/branches/main/protection` -> 404 "Branch not
+      # protected" — this repo has NO branch-protection required-status-checks at all, for
+      # ANY job, so "required" in GitHub's own sense is a repo-settings action (or a
+      # mutating `gh api`/ruleset call) outside this file's reach; a human with admin on
+      # the repo has to flip that switch separately. What THIS file can do is make a red
+      # here unmistakable the moment it happens, instead of blending into the matrix: an
+      # `::error::` annotation (shows as a banner on the run page) plus a step-summary
+      # entry, firing on ANY failure above in this job — checkout, artifact download,
+      # provider install, or either build/oracle step alike, because every one of those
+      # failing means this job could not prove the shipped artifact works.
+      - name: if this job is red, say what red MEANS (the shipped artifact is broken)
+        if: failure()
+        run: |
+          MSG='native-builder-oracle failed: this job builds THE PRODUCT node-free with a real provider (clode-native builds a quaude+naude and diffs the two packaged targets). A red here means the ARTIFACT USERS GET is broken -- the same class of break as the 2.1.251-era zstd carve regression this job exists to catch on day one -- not an ordinary test failure to triage whenever there is time.'
+          echo "::error title=SHIPPED ARTIFACT BROKEN::$MSG"
+          { echo '### :rotating_light: SHIPPED ARTIFACT BROKEN'; echo "$MSG"; } >> "$GITHUB_STEP_SUMMARY"
+
   # Linux PTY / live-render coverage — the FIRST CI run of these files on any
   # POSIX platform. test/live-render-helper.cjs's CLODE_LIVE_RENDER gate used to
   # bundle two justifications of different scope ("touches the Keychain, may
@@ -947,3 +968,63 @@ jobs:
           echo "provider: $PROV"
           export CLODE_PROVIDER_BIN="$PROV"
           node --test --test-concurrency=1 $FILES
+
+      # ITEM 5 (BACKLOG / phase 5 task 10): "No CI leg builds against more than one
+      # platform's graph. That is why a merger corruption that broke linux shipped green
+      # on darwin." Measured 2026-09-04, before writing this: this job (the only macOS job
+      # in ci.yml) never ran `clode build` at all — the node-shim oracle above diffs
+      # SHIM BEHAVIOR against host node, it never stages+merges a provider. So there was
+      # no existing build here to add a second one next to; this step IS the first.
+      #
+      # Bun constant-folds process.platform into a provider binary at CARVE time
+      # (libexec/extract-claude-js.cjs's providerPlatformOf, libexec/clode-fuse.cjs's
+      # TARGET-MATCHED ASSEMBLY gate) — so a linux-carved provider is a DIFFERENT module
+      # graph than the darwin one every other build in this repo's CI merges, with
+      # different dead-coded branches and different cyclic-require shapes for
+      # libexec/graph-scc-merge.cjs to fold. The merge itself always runs under the HOST's
+      # own tjs (CLODE_TJS), never the target's — see clode-extract.cjs's resolveEngine and
+      # clode-fuse.cjs's own CROSS-FUSE comment ("the worker still runs under the host
+      # template... the host cannot exec the foreign output"). So a linux graph has never
+      # been merged by anything other than a linux host. This step forces exactly that
+      # combination: this darwin host's tjs merging a LINUX-carved graph, cross-fusing into
+      # a linux-x64 engine template this host only ever touches as bytes, never executes.
+      #
+      # The linux-x64 provider is fetched by `npm pack` (not `npm i`), because
+      # @anthropic-ai/claude-code-linux-x64 declares os:["linux"] and a plain install
+      # refuses on darwin — `npm pack` has no such gate, and clode only ever CARVES the
+      # provider's bytes, never runs it (same "read the bytes, never execute" doctrine
+      # the rest of the provider-lookup machinery relies on).
+      #
+      # NOTE FOR PHASE 3: `--target linux-x64` is today's invocation string (matches
+      # test/clode-target-build.test.cjs, test/clode-manifest-fetch.test.cjs et al.) — if
+      # phase 3's target-naming work renames it (e.g. to a fully-dashed canonical
+      # `linux-amd64`), that is ONE LINE of churn here, not a rewrite.
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          name: tjs-linux-x64-musl   # a SECOND platform's engine — bytes only, never executed here
+          path: ${{ runner.temp }}/tjs-linux
+      - name: Stage a second platform's provider (linux-x64, via npm pack — carved, never run)
+        run: |
+          set -euo pipefail
+          chmod +x "${{ runner.temp }}/tjs-linux/tjs"
+          V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
+          DIR="${{ runner.temp }}/linux-provider"
+          mkdir -p "$DIR"
+          npm pack "@anthropic-ai/claude-code-linux-x64@$V" --pack-destination "$DIR" 2>&1 | tail -3
+          tar xzf "$DIR"/anthropic-ai-claude-code-linux-x64-*.tgz -C "$DIR"
+          test -s "$DIR/package/claude"
+          echo "LINUX_PROVIDER=$DIR/package/claude" >> "$GITHUB_ENV"
+      - name: SECOND-PLATFORM graph oracle — cross-build a linux-x64 quaude from this darwin host
+        env:
+          CLODE_TJS: ${{ runner.temp }}/tjs/tjs
+          CLODE_TARGET_TEMPLATE: ${{ runner.temp }}/tjs-linux/tjs
+        run: |
+          set -euo pipefail
+          # LINUX_PROVIDER: exported via GITHUB_ENV by the step above, inherited here like
+          # any other env var a prior step sets (same idiom as suite.yml's CLODE_PROVIDER_BIN).
+          # `clode build --out` does not mkdir -p its own parent (see linux-x64-pty's
+          # same note) — a bare path under a fresh runner.temp dies ENOENT.
+          mkdir -p "${{ runner.temp }}/quaude-linux-graph-check"
+          CLODE_CLAUDE_BIN="$LINUX_PROVIDER" \
+            node bin/clode build --target linux-x64 --out "${{ runner.temp }}/quaude-linux-graph-check/quaude"
+          test -s "${{ runner.temp }}/quaude-linux-graph-check/quaude"
