@@ -5,7 +5,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const TEST_DIR = __dirname;
-const { classifyTestFile, discoverTestFiles, isRecordedExclusion, MIGRATED } = require('./guards-population.cjs');
+const { classifyTestFile, discoverTestFiles, isRecordedExclusion, MIGRATED,
+  UNMIGRATED_BASELINE, ratchetUnmigrated } = require('./guards-population.cjs');
 
 test('the classifier recognises a scanner-shaped test', () => {
   const src = `const src = fs.readFileSync(path.join(REPO, 'libexec', 'x.js'), 'utf8');
@@ -42,7 +43,18 @@ test('FLOOR: finding zero scanner-shaped tests is BROKEN, never a pass', () => {
     + 'or classifier regression), NOT "there are no guards"');
 });
 
-test('every scanner-shaped test is registered through defineGuard', () => {
+// RATCHET (fix round 1, 2026-09-04), not a fixed "must be empty" assertion — a coordinator
+// ruling overriding the original design. Leaving this test permanently FAILING as an
+// intentional to-do marker turns `main` red for the rest of the phase, and a red that is
+// EXPECTED stops being read: this project has already paid for exactly that failure mode
+// once (a clode-native P0 broke 13 CI jobs at once and went unnoticed because main was
+// already red with three tolerated failures — see BACKLOG.md). So this test passes as long
+// as the unmigrated count is AT OR BELOW the recorded UNMIGRATED_BASELINE (currently 57;
+// see the comment on that constant in guards-population.cjs) and only goes red when a NEW
+// scanner-shaped file skips defineGuard and pushes the count past that baseline — a real,
+// actionable regression. The full unmigrated list still prints every run (via
+// t.diagnostic), so the backlog stays visible without the suite itself staying red.
+test('every scanner-shaped test is registered through defineGuard (ratchet)', (t) => {
   const files = discoverTestFiles(TEST_DIR);
   const unmigrated = [];
   for (const f of files) {
@@ -52,8 +64,26 @@ test('every scanner-shaped test is registered through defineGuard', () => {
     if (isRecordedExclusion(f)) continue;
     unmigrated.push(path.basename(f));
   }
-  assert.deepStrictEqual(unmigrated, [],
-    'these tests scan an artifact they did not create but ship no positive control, so '
-    + 'nothing proves they can fail. Migrate them to defineGuard (test/guard.cjs) or add a '
-    + 'recorded exclusion naming why the file is not a guard.');
+  const r = ratchetUnmigrated(unmigrated.length, UNMIGRATED_BASELINE, unmigrated);
+  t.diagnostic(r.message);
+  assert.ok(r.ok, r.message);
+});
+
+// Proof the ratchet mechanism itself can fail, independent of what the real tree currently
+// contains — synthetic counts, not a real sweep run.
+test('ratchet: a count ABOVE baseline is a finding (a regression)', () => {
+  const r = ratchetUnmigrated(58, 57, ['newly-added.test.cjs']);
+  assert.strictEqual(r.ok, false);
+  assert.match(r.message, /ABOVE the recorded baseline/);
+});
+
+test('ratchet: a count AT baseline is not a finding', () => {
+  const r = ratchetUnmigrated(57, 57, []);
+  assert.strictEqual(r.ok, true);
+});
+
+test('ratchet: a count BELOW baseline is not a finding, and says to lower the baseline', () => {
+  const r = ratchetUnmigrated(50, 57, []);
+  assert.strictEqual(r.ok, true);
+  assert.match(r.message, /lower UNMIGRATED_BASELINE/);
 });

@@ -5,15 +5,28 @@
 //
 // THE DESIGN POINT THAT MAKES THIS SWEEP DIFFERENT FROM EVERY OTHER SCANNER IN THIS REPO:
 // its own floor is the migrated population itself (MIGRATED below). It re-discovers every
-// guard already registered through defineGuard by REQUIRING those files and reading
-// registered() — not by hand-listing their names. If classifyTestFile() ever stops
+// guard already registered through defineGuard by reading each candidate file's SOURCE for
+// the two textual facts that make it a guard — `require('./guard.cjs')` and a
+// `defineGuard(` call — not by hand-listing their names. If classifyTestFile() ever stops
 // recognising guard shape, MIGRATED still lists the same files (they are derived from the
-// registry, not from the classifier), so the FLOOR test in guards-population.test.cjs goes
-// red: the classifier failed to recognise a file we KNOW is a guard. A hand-written
+// source text, not from the classifier), so the FLOOR test in guards-population.test.cjs
+// goes red: the classifier failed to recognise a file we KNOW is a guard. A hand-written
 // fixture could not do this — it would stay green forever, describing an encoding that may
 // have already drifted, which is the exact "control describes a violation that no longer
 // matches the artifact" failure phase 5 exists to close (see the MIGRATED note in
 // node-shim-wall-tripwires.test.cjs for the concrete incident this generalises).
+//
+// STATIC, NOT EXECUTED (fix round 1, 2026-09-04): an earlier version of deriveMigrated()
+// required() every candidate file and read test/guard.cjs's registered() before/after to
+// confirm it actually registered a guard — provably correct, but it meant merely LOADING
+// this module re-ran every migrated guard's entire test file (guardTests() plus every
+// other test() in the file) as a side effect, every time. That cost is O(migrated files)
+// and was already ~7 extra tests with only two guards migrated; it would have scaled
+// linearly with every file Task 14 moves onto this list, making the sweep's own cost grow
+// with the very thing it measures. A guard whose defineGuard() call is broken already fails
+// LOUDLY on its own — guardTests() asserts the control produces findings and the gate is
+// clean — so nothing is lost by not executing it here too; a static source check (both
+// facts present in the text) gets the same MIGRATED membership with zero executions.
 //
 // TUNING RULE (from the spec, verbatim): false positives are the SAFE side. A false
 // positive costs one migration or one recorded exclusion with a reason; a false negative
@@ -101,31 +114,74 @@ function isRecordedExclusion(file) {
   return true;
 }
 
-// MIGRATED — derived, not declared. Requires every already-migrated guard file and reads
-// back registered() from test/guard.cjs, so this list is exactly "every guard file that
-// actually registered a guard" and cannot drift from the registry the way a hand-typed
-// list could. Discovered the same way discoverTestFiles() finds every other test file
-// (recursive *.test.cjs walk), filtered to files that `require('./guard.cjs')` — i.e. that
-// even ATTEMPT to register a guard — then required for real so any that fail to register
-// (a broken defineGuard call) throw loudly instead of being silently absent from MIGRATED.
-const guardModule = require('./guard.cjs');
+// MIGRATED — derived, not declared, and derived STATICALLY (see the fix-round-1 note
+// above): a file counts as migrated when its source (a) DESTRUCTURES `defineGuard` out of
+// `require('./guard.cjs')` and (b) calls that bare, un-namespaced `defineGuard(` somewhere.
+// Both halves matter, and measuring this against the real tree is what found the gap:
+// test/guard.test.cjs — the guard MECHANISM's own unit tests — does `const G =
+// require('./guard.cjs')` and calls `G.defineGuard(...)` dozens of times to unit-test
+// defineGuard() itself against disposable synthetic specs. A loose "requires guard.cjs and
+// contains the substring defineGuard(" check (tried first) counted it as migrated, and the
+// FLOOR test correctly went red over it — guard.test.cjs is not scanner-shaped (it never
+// reads a real artifact) and was never a false negative to begin with, so calling it
+// "migrated" was the actual bug, not the classifier. The destructure requirement excludes
+// it (no bare `defineGuard` is ever imported), and the negative lookbehind on the call site
+// excludes any other `<namespace>.defineGuard(` usage the same way.
+const DESTRUCTURES_DEFINEGUARD = /\{[^}]*\bdefineGuard\b[^}]*\}\s*=\s*require\(['"]\.\/guard\.cjs['"]\)/;
+const CALLS_BARE_DEFINEGUARD = /(?<![.\w])defineGuard\s*\(/;
 function deriveMigrated() {
-  const before = new Set(guardModule.registered().map((g) => g.name));
   const files = discoverTestFiles(__dirname)
     .filter((f) => f !== path.join(__dirname, 'guards-population.test.cjs'))
     .sort();
   const migrated = [];
   for (const f of files) {
     const src = fs.readFileSync(f, 'utf8');
-    if (!/require\(['"]\.\/guard\.cjs['"]\)/.test(src)) continue;
-    const before2 = guardModule.registered().length;
-    require(f);
-    const after2 = guardModule.registered().length;
-    if (after2 > before2) migrated.push(path.relative(__dirname, f));
+    if (!DESTRUCTURES_DEFINEGUARD.test(src)) continue;
+    if (!CALLS_BARE_DEFINEGUARD.test(src)) continue;
+    migrated.push(path.relative(__dirname, f));
   }
   return migrated;
 }
 const MIGRATED = deriveMigrated();
+
+// UNMIGRATED_BASELINE — the count of scanner-shaped tests NOT registered through
+// defineGuard, as last measured against a real run of this sweep (fix round 1, 2026-09-04:
+// 57, after excluding guards-population.test.cjs itself — see GUARD_EXCLUSIONS above).
+// MEANT TO GO DOWN: Task 9 (windows-path-ratchet.test.cjs) and Task 14 (the rest) migrate
+// files off this list. Never raise it to make a run "look clean" — raising it papers over
+// exactly the regression this ratchet exists to catch. Lower it (with a comment recording
+// the new measured count and when) whenever a migration makes the real count drop; the
+// ratchet test below tells you to when that happens.
+const UNMIGRATED_BASELINE = 57;
+
+// Pure ratchet decision — unit-tested directly with synthetic counts (see
+// guards-population.test.cjs) as well as through the real file list, so the mechanism is
+// provably correct independent of what the tree currently contains. A RATCHET, not a
+// fixed-target assertion: `findings` is non-empty only when count RISES past the recorded
+// baseline (a NEW scanner-shaped file skipped defineGuard — a real regression). A count at
+// or below baseline is `ok`, but a FALL is called out in `message` too, so progress doesn't
+// go unnoticed and the baseline gets a deliberate re-cut instead of silently drifting stale
+// (the same asymmetry test/node-shim-wall-tripwires.test.cjs's WALLS ratchet uses, and for
+// the same reason: leaving improvement undetected is how a ratchet starts lying by omission).
+function ratchetUnmigrated(count, baseline, unmigrated) {
+  const list = unmigrated.length
+    ? ':\n' + unmigrated.map((f) => `    ${f}`).join('\n')
+    : ' (none)';
+  if (count > baseline) {
+    return { ok: false, message: `${count} scanner-shaped test(s) are not registered `
+      + `through defineGuard — ABOVE the recorded baseline of ${baseline}. A NEW file `
+      + `skipped defineGuard: migrate it (test/guard.cjs) or add a recorded `
+      + `GUARD_EXCLUSIONS entry naming why it is not a guard. Unmigrated${list}` };
+  }
+  if (count < baseline) {
+    return { ok: true, message: `${count} scanner-shaped test(s) remain unmigrated — `
+      + `BELOW the recorded baseline of ${baseline}. Progress: lower UNMIGRATED_BASELINE `
+      + `in test/guards-population.cjs to ${count} so a future regression is caught at the `
+      + `new, lower count. Unmigrated${list}` };
+  }
+  return { ok: true, message: `${count} scanner-shaped test(s) remain unmigrated, matching `
+    + `the recorded baseline of ${baseline}. Unmigrated${list}` };
+}
 
 module.exports = {
   classifyTestFile,
@@ -133,6 +189,8 @@ module.exports = {
   isRecordedExclusion,
   GUARD_EXCLUSIONS,
   MIGRATED,
+  UNMIGRATED_BASELINE,
+  ratchetUnmigrated,
   READS_ARTIFACT,
   PATTERN_MATCHES,
 };
