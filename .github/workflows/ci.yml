@@ -525,7 +525,49 @@ jobs:
           PROV="$(node scripts/stage-provider.mjs)" || exit 1
           echo "provider: $PROV"
           export CLODE_PROVIDER_BIN="$PROV"
-          node --test --test-concurrency=1 $FILES
+          # test/shim-surface.test.cjs (task-8, phase 5) needs exactly this job's
+          # two inputs — CLODE_TJS above, CLODE_PROVIDER_BIN just set — and nothing
+          # else. It had been skipping in `test` (suite.yml, npm test) since
+          # upstream 2.1.243, silently: that job has neither input, and the file's
+          # own header warns a skipped run there "would contribute zero gaps and
+          # read exactly like a clean one." This job already carries both.
+          FILES="$FILES test/shim-surface.test.cjs"
+          # test/guard-subcommands-gate.test.cjs (task-8, phase 5) reads the REAL
+          # ~/.cache/clode/<version>/ carve — deliberately os.homedir(), ignoring
+          # CLODE_CACHE/CLODE_STATE_ROOT (see the file's own header) — so it was
+          # ALSO skipping in `test` (an empty cache there), and this job's EXISTING
+          # provider staging cannot satisfy it either: stage-provider.mjs's
+          # minimised copy lives in a temp dir with no /versions/ or /providers/
+          # marker in its path, so clode-resolve.cjs's cacheKey() falls back to a
+          # content hash instead of the pin, and nothing here has ever populated a
+          # PIN-VERSIONED cache entry. Seed one directly, with the SAME
+          # extractIfNeeded() that `clode build` itself calls
+          # (libexec/clode-fuse.cjs's stageUpstreamCli) — without paying for a
+          # whole quaude fuse just to get one cache entry on disk.
+          PIN=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
+          node -e '
+            const path = require("node:path");
+            const { extractIfNeeded } = require("./libexec/clode-extract.cjs");
+            const { clodeCacheDir } = require("./libexec/clode-paths.cjs");
+            const pin = process.argv[1];
+            const cacheDir = path.join(clodeCacheDir(process.env), pin);
+            extractIfNeeded({ bin: process.env.CLODE_PROVIDER_BIN, cacheDir, libexec: "libexec", key: pin });
+            console.log("seeded real cache:", cacheDir);
+          ' "$PIN"
+          FILES="$FILES test/guard-subcommands-gate.test.cjs"
+          node --test --test-concurrency=1 $FILES 2>&1 | tee shim-oracle.out
+          # A SKIPPED run of either newly-added file must be distinguishable from a
+          # clean one — never a silent pass (phase-5 doctrine: a red that cannot
+          # tell "broken" from "not given what I need" carries no information, and
+          # so does a green). Both files' own t.skip() already names a reason when
+          # their precondition is absent; this asserts the job as a whole REFUSES
+          # to stay green if either one goes back to skipping — e.g. if the seed
+          # step above silently landed nowhere, or a future change drops CLODE_TJS
+          # here. `2` is this job's PRE-EXISTING, environment-appropriate skip
+          # count (a darwin-only oracle row, and the CLODE_LIVE_ROUNDTRIP opt-in
+          # finale) — neither newly-added file may add to it.
+          grep -qE '^(ℹ|#) skipped 2$' shim-oracle.out \
+            || { echo "ERROR: expected exactly 2 skips (pre-existing darwin-only + live-roundtrip-opt-in rows). A different count means shim-surface or guard-subcommands-gate skipped again (task-8 regressed), or an unrelated new skip appeared — see above." >&2; grep -E 'skipped' shim-oracle.out >&2; exit 1; }
 
   # The BUILDER and the PACKAGED TARGETS — on glibc, on purpose.
   #
