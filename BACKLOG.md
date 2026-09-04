@@ -5915,3 +5915,48 @@ it claims to measure, which was the one failure mode that would have made the ex
 worthless.
 
 **Phase 2 is now COMPLETE on all five acceptance criteria.**
+
+## scc-merge.cjs's lexicalCodeMask has the same check-ordering defect just fixed next door, unproven in the wild (2026-09-04)
+
+Task 9 fixed a CRITICAL in `test/windows-path-ratchet.test.cjs`'s tokenizer (see the
+"RESOLVED 2026-09-04" entry above): its `/*` branch checked unconditionally, before the
+regex-literal branch, so a genuine regex literal misjudged as division (the inherent
+ambiguity after `)`, `]`, or an identifier — ONE example: `fn() /[/*]/.test(x)`, where `)`
+makes the heuristic read the next `/` as division, so the SECOND `/` of the char class
+`[/*]` reads as a bare `/*` and runs away, deleting every real line after it) destroyed
+real code. Verified by execution: `fn() /[/*]/.test(x);\nprocess.env.PATH = 'real site';\n`
+stripped to nothing after the first line — the `process.env.PATH` site did not survive.
+
+`libexec/scc-merge.cjs`'s `lexicalCodeMask` (the real SCC-group merger's own lexer, used
+to protect string/template/regex/comment bytes from identifier renaming) has the IDENTICAL
+ordering: its `//` check is at line 150, its `/*` check at line 154 — both unconditional,
+both checked BEFORE the regex-literal branch at line 173 (`if (c === 47 &&
+regexAllowed(prevTok))`), and its `/*` scan (line 156: `while (i < n && !(charCodeAt(i)
+=== 42 && charCodeAt(i+1) === 47)) i++;`) has no EOF guard either — reaching end-of-source
+without a closing `*/` still just clamps `i` to `n` and continues, exactly like
+`stripComments()` did before this task's fix. `lexicalCodeMask` is called from inside the
+real merger at lines 623, 655, and 714 (`mergeGroup()`'s renaming passes) — this is BUILD
+PATH product code, not a test.
+
+If a source module folded into an SCC merge group contains a genuine regex literal shaped
+like the one above (a char class or escaped slash immediately after `)`/`]`/an identifier,
+with a `*` right after the misjudged `/`), a stray "comment" region gets masked as
+non-code. Masked bytes are `mask[i] = 0` ("leave verbatim, do not touch") — so the
+practical effect would be a real code span skipping identifier renaming it needed, which
+`assertNoRenamedFixedNames()` (scc-merge.cjs) might or might not catch depending on
+whether the skipped span happened to contain a colliding name; worst case is a corrupt
+merged bundle that is NOT caught until (or unless) something downstream breaks.
+
+**Not fixed here, deliberately.** This review was scoped to `windows-path-ratchet.test.cjs`'s
+tokenizer; the merger is real build-path product code, and a change to it needs its own
+task, its own regression tests against `test/scc-merge.test.cjs`'s corpus, and its own
+review — not a drive-by inside a review of an unrelated test file.
+
+**Unproven in the wild.** `lexicalCodeMask` is not exported from `scc-merge.cjs` (no
+`module.exports` entry names it), so it cannot be probed directly the way
+`stripComments()` was — proving this fires for real would mean either extracting the
+function into a throwaway harness or finding/constructing an actual upstream module whose
+minified source happens to contain the trigger shape. Neither was attempted here. This is
+structurally IDENTICAL to a defect just confirmed by execution next door, not a fixed
+finding — treat it as a live risk in the merger until someone either proves it fires on a
+real SCC group or fixes the ordering preemptively.

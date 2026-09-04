@@ -207,10 +207,40 @@ function stripComments(src) {
     if (c === '/' && src[i + 1] === '*') {
       let j = i + 2;
       while (j < n && !(src[j] === '*' && src[j + 1] === '/')) j++;
-      const end = Math.min(j + 2, n);
-      out += src.slice(i, end).replace(/[^\n]/g, '');
-      i = end;
+      if (j + 1 < n) {
+        // A real closing "*/" was found: commit to the comment.
+        const end = j + 2;
+        out += src.slice(i, end).replace(/[^\n]/g, '');
+        i = end;
+        prevIsValue = false;
+        continue;
+      }
+      // FIX ROUND 1 (2026-09-04, coordinator finding): no closing "*/" anywhere before
+      // EOF. Every file this guard scans is syntactically valid JS, and valid JS never
+      // contains a real, unterminated block comment — so reaching EOF unclosed is proof
+      // this "/*" was NOT a real comment opener. It was inside a regex literal the
+      // `!prevIsValue` heuristic below failed to recognize (the same "inherent ambiguity
+      // after ), ], or an identifier" scc-merge.cjs's own regexAllowed() comment already
+      // names): e.g. `fn() /[/*]/.test(x)` — `)` sets prevIsValue, so the regex-literal
+      // scan below is never attempted, and the SECOND `/` of the char class `[/*]` reads
+      // as an ordinary `/*` right here, which (before this fix) then ran away to the next
+      // `*/` anywhere in the file — or to EOF, silently deleting every real line after it,
+      // including a genuine `process.env.PATH` site (see the regression test below).
+      // Back off: treat this ONE character as ordinary punctuation and let the normal
+      // dispatch re-examine everything from here, one character at a time, rather than
+      // committing to a "comment" this file's own validity already disproves.
+      //
+      // NOT A FULL FIX for the family: if a REAL, unrelated block comment happens to sit
+      // later in the SAME file, this same misjudged `/*` still runs away and pairs with
+      // THAT comment's `*/` instead of reaching EOF, and this fallback cannot tell the
+      // difference (a real closing marker exists, just the wrong one). Solving that
+      // requires resolving the regex-vs-division ambiguity itself, which needs a real
+      // parser; both are the same as the pre-existing "/`*` might be regex-code, might be
+      // division" limitation the comment on the regex branch below already documents.
+      // Measured empirically against every file this guard actually scans (421 files):
+      // this residual case does not occur today — see task-9-report.md, Fix Round 1.
       prevIsValue = false;
+      out += c; i++;
       continue;
     }
     if (c === '/' && src[i + 1] === '/') {
@@ -483,6 +513,54 @@ test('a process.env.PATH site after a template literal containing `/*` is FOUND'
   const stripped = stripComments(fixture);
   const found = stripped.split('\n').some((l) => RULES['path-walk'].re.test(l));
   assert.ok(found, `expected the process.env.PATH site to survive stripping; got:\n${stripped}`);
+});
+
+// FIX ROUND 1 regression (2026-09-04, coordinator finding): the regex-literal char class
+// `[/*]` (matches either '/' or '*') after `fn()` — an ambiguous position the
+// `!prevIsValue` heuristic reads as division, since `)` always sets it — put the second
+// `/` of that class immediately before a `*`, which the (pre-fix) `/*` branch read as a
+// real comment opener with no closing "*/" anywhere in this fixture, so it ran away to
+// EOF and deleted the real `process.env.PATH` line after it. Verified BEFORE the EOF
+// fallback above: this exact fixture returned `found === false`.
+test('a process.env.PATH site after fn() /[/*]/ (a misjudged regex literal) is FOUND', () => {
+  const fixture = [
+    'fn() /[/*]/.test(x);',
+    "process.env.PATH = 'real site';",
+    '',
+  ].join('\n');
+  const stripped = stripComments(fixture);
+  const found = stripped.split('\n').some((l) => RULES['path-walk'].re.test(l));
+  assert.ok(found, `expected the process.env.PATH site to survive stripping; got:\n${stripped}`);
+});
+
+// FIX ROUND 1 regression, escaped-slash variant: `\/*` (an escaped literal slash followed
+// by the `*` quantifier — "zero or more literal slashes") is the same shape without a
+// character class, so this is a distinct code path through the regex-literal scan, not a
+// duplicate of the test above.
+test('a process.env.PATH site after a() /\\/*/ (escaped-slash regex) is FOUND', () => {
+  const fixture = [
+    'const re = a() /\\/*/;',
+    "process.env.PATH = 'real site';",
+    '',
+  ].join('\n');
+  const stripped = stripComments(fixture);
+  const found = stripped.split('\n').some((l) => RULES['path-walk'].re.test(l));
+  assert.ok(found, `expected the process.env.PATH site to survive stripping; got:\n${stripped}`);
+});
+
+// A GENUINE block comment must still be stripped — the other half of the ratchet this
+// fix round must not trade away. Deliberately contains text that WOULD match a RULE if
+// left visible, so a regression here would show up as a wrong verdict, not just a
+// leftover comment.
+test('a genuine /* process.env.PATH */ comment is still stripped', () => {
+  const fixture = [
+    '/* documentation mentions process.env.PATH here, in a real comment */',
+    'const x = 1;',
+    '',
+  ].join('\n');
+  const stripped = stripComments(fixture);
+  const found = stripped.split('\n').some((l) => RULES['path-walk'].re.test(l));
+  assert.ok(!found, `expected the comment to be stripped, not matched; got:\n${stripped}`);
 });
 
 // Migrated to test/guard.cjs's defineGuard/guardTests (Task 1) — see the MIGRATED header
