@@ -16,11 +16,26 @@
 //
 // A field whose value is unknown reads as the literal string `unknown`, never omitted.
 // An omitted field looks like a field that did not matter; see the second test below.
+//
+// `gates` is meant to be DERIVED by the caller (every `CLODE_*` variable actually set —
+// see test/run.mjs), never a hand-maintained list: a fixed list of "the gates we know
+// about today" is stale the moment a new one is added, and a stamp built from a stale
+// list prints identically for two runs that actually exercised different code (an
+// offline run and a `CLODE_LIVE_ONLINE=1` run looked the same before this). Because
+// deriving means enumerating the real environment, this formatter is also where a
+// secret would leak into a CI log — this repo's root `clode_gh_token` file makes that a
+// live possibility, not a hypothetical — so any gate NAME matching SECRET_NAME_RE has
+// its VALUE redacted here, unconditionally, regardless of how the caller built the
+// object. The name still prints (that a gate was set is the informative part); only the
+// value is hidden.
+const SECRET_NAME_RE = /TOKEN|SECRET|KEY|PASSWORD/i;
 function environmentStamp(env) {
   const known = (v) => (v === null || v === undefined || v === '' ? 'unknown' : String(v));
   const gates = env.gates || {};
   const gateKeys = Object.keys(gates);
-  const gatesStr = gateKeys.length ? gateKeys.map((k) => `${k}=${gates[k]}`).join(',') : 'none';
+  const gatesStr = gateKeys.length
+    ? gateKeys.map((k) => `${k}=${SECRET_NAME_RE.test(k) ? '<redacted>' : gates[k]}`).join(',')
+    : 'none';
   return `env: node=${known(env.execPath)} ${known(env.nodeVersion)} `
     + `platform=${known(env.platform)}-${known(env.arch)} osRelease=${known(env.osRelease)} `
     + `pin=${known(env.pin)} providerCarve=${known(env.providerCarve)} `

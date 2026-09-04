@@ -65,14 +65,20 @@ function resolveAllowList(entries, { fsm = realFs } = {}) {
 // specific path shape" (e.g. run.mjs's `claude` GUARD_WATCH entry: "clode never writes
 // ~/.local/bin/claude"). It greps SOURCE TEXT — no AST, no dataflow — for a file that
 // contains BOTH a known write-syscall name (from `writeFns`) AND every literal in
-// `pathLiterals` as a quoted substring. That means it WILL miss: a leaf/segment built
+// `pathLiterals` as an EXACT, BYTE-FOR-BYTE substring — quote characters included, e.g.
+// callers pass `"'.local'"` (single quotes AS PART OF the literal), so the check is
+// text.includes("'.local'"), not text.includes(".local"). That means it WILL miss: the
+// identical path spelled with double quotes (`".local"`) or built from a template
+// literal (`` `${home}/.local` ``) — proven by execution, not merely asserted: neither
+// form matches a `pathLiterals` entry written in single quotes — a leaf/segment built
 // from a variable or constant instead of an inline string literal, a write reached only
 // via a spawned external command (`cp`, `ln -s`) rather than an `fs.*` call, a literal
 // split across a template expression, or a match whose write call and path literals
 // live in different files. It exists to make an exemption FALSIFIABLE for the obvious,
-// naive case — add a writer that spells the path out in a `fs.*` call and this flips —
-// not to prove the absence of every possible writer. A caller using this MUST say so in
-// its own `because`/comment, not rely on this module's confidence.
+// naive case — add a writer that spells the path out in a `fs.*` call USING THE SAME
+// QUOTE STYLE the `pathLiterals` were written in, and this flips — not to prove the
+// absence of every possible writer. A caller using this MUST say so in its own
+// `because`/comment, not rely on this module's confidence.
 function sourceContainsWrite(files, { writeFns, pathLiterals, fsm = realFs }) {
   const writeRe = new RegExp(`\\b(${writeFns.join('|')})\\s*\\(`);
   for (const file of files) {
