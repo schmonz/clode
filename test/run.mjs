@@ -309,7 +309,8 @@ if (!fs.existsSync(NAUDE_BUNDLE) || !fs.existsSync(MAIN_BUNDLE)) {
 
 // Hermetic guard (pure node; required in-process). Watch the real dirs a test must never touch.
 const guard = require('./hermetic-guard.cjs');
-const { resolveAllowList } = require('./allow-list.cjs');
+const tree = require('./tree-guard.cjs');
+const { resolveAllowList, sourceContainsWrite } = require('./allow-list.cjs');
 const home = os.homedir();
 const dataBase = process.env.XDG_DATA_HOME || path.join(home, '.local', 'share');
 const cacheBase = process.env.XDG_CACHE_HOME || path.join(home, '.cache');
@@ -341,6 +342,22 @@ function resolveOrDie(entries, label) {
   }
   return patterns;
 }
+
+// Every *.cjs/*.mjs file under the given top-level dirs (recursively — libexec/ and
+// scripts/ both nest subdirs, e.g. libexec/node-shim/, scripts/lib/), relative to ROOT.
+// Reuses tree.walk (already required above) instead of a second hand-rolled recursive
+// walker, and its `fsm` param so a provenBy can inject a fake tree for testing.
+function listSourceFiles(dirs, fsm) {
+  const out = [];
+  for (const d of dirs) {
+    const abs = path.join(ROOT, d);
+    for (const rel of tree.walk(abs, { fsm }).keys()) {
+      if (/\.(cjs|mjs)$/.test(rel)) out.push(path.join(abs, rel));
+    }
+  }
+  return out;
+}
+const WRITE_FNS = ['writeFileSync', 'symlinkSync', 'copyFileSync', 'cpSync', 'renameSync', 'appendFileSync'];
 
 const CACHE_CLODE_ALLOW = [
   {
@@ -374,10 +391,46 @@ const CACHE_CLODE_ALLOW = [
 // clode-paths.cjs's traceLog(), which resolves through clodeDataDir() and therefore
 // honors CLODE_STATE_ROOT like every other state path. A leak here is real and must
 // fail loud, not be waved through by an exemption written before its writer existed.
+const LOCAL_BIN_ALLOW = [
+  {
+    pattern: 'claude',
+    because: 'clode never creates or modifies ~/.local/bin/claude — this project\'s '
+      + 'standing rule is that our command is `clode`; we never install, name, or '
+      + 'replace anything called `claude` (see BACKLOG.md/"always clode, never '
+      + 'claude"). That path is owned by the OPERATOR\'S OWN native Claude Code '
+      + 'launcher, which auto-updates on its own schedule, independent of anything '
+      + 'this repo does — observed directly: this box\'s native install went '
+      + '2.1.260 (2026-09-03 19:58) -> 2.1.261 (2026-09-04 16:08:18) DURING a full '
+      + 'suite run, re-pointing the symlink mid-run (mtime 16:27) and tripping a '
+      + 'HERMETICITY VIOLATION that named no leak in this repo\'s code — a red '
+      + 'carrying no information about us, from watching a file we do not own.',
+    provenBy: (fsm) => {
+      // Scans libexec/ and scripts/ (recursively — see listSourceFiles) for a file
+      // that BOTH calls one of WRITE_FNS AND spells out '.local', 'bin', and
+      // 'claude' as literal strings — the shape an obvious future writer of this
+      // exact path would take. This is sourceContainsWrite's heuristic (see its own
+      // header in allow-list.cjs for what it does and does NOT cover: it misses a
+      // leaf built from a variable/constant, a write done via a spawned external
+      // command instead of an fs.* call, and anything outside libexec/+scripts/).
+      // It cannot prove clode will never gain such a writer; it CAN and WILL flip
+      // this entry's provenBy to false — dropping the exemption — the moment one is
+      // added in the naive, literal-path shape, which is the realistic case: no
+      // code in this repo has ever had a reason to hardcode the string 'claude'
+      // next to a write call, because our command is 'clode'.
+      const files = listSourceFiles(['libexec', 'scripts'], fsm);
+      const hit = sourceContainsWrite(files, {
+        writeFns: WRITE_FNS,
+        pathLiterals: ["'.local'", "'bin'", "'claude'"],
+        fsm,
+      });
+      return !hit.found;
+    },
+  },
+];
 const GUARD_WATCH = [
   REAL_STORE,
   { path: path.join(cacheBase, 'clode'), ignore: resolveOrDie(CACHE_CLODE_ALLOW, 'GUARD_WATCH cache/clode') },
-  path.join(home, '.local', 'bin'),
+  { path: path.join(home, '.local', 'bin'), ignore: resolveOrDie(LOCAL_BIN_ALLOW, 'GUARD_WATCH .local/bin') },
 ];
 if (guard.preflight(REAL_STORE).length) {
   console.error(`run: REAL store contaminated with *-clode-test deps under ${REAL_STORE}`);
@@ -394,8 +447,8 @@ const before = guard.snapshot(GUARD_WATCH);
 // Every TREE_ALLOW entry is an intentional, individually-justified exception; an
 // unexplained entry here is exactly the exempt-by-name pattern this phase exists to
 // remove, so a reviewer must be able to tell an intentional exclusion from a
-// swept-under-the-rug one without archaeology:
-const tree = require('./tree-guard.cjs');
+// swept-under-the-rug one without archaeology (`tree` itself is required once, above,
+// alongside the other guard modules):
 // Every TREE_ALLOW entry is a RECORD ({ pattern, because, provenBy }) resolved through
 // allow-list.cjs, not a bare string — an unexplained or unprovable entry here is exactly
 // the exempt-by-name pattern this phase exists to remove, so a reviewer must be able to

@@ -60,4 +60,28 @@ function resolveAllowList(entries, { fsm = realFs } = {}) {
   return { patterns, findings };
 }
 
-module.exports = { resolveAllowList };
+// sourceContainsWrite — a small, reusable, DELIBERATELY LIMITED heuristic a `provenBy`
+// can build on when its claim is "this repo's own source contains no write targeting a
+// specific path shape" (e.g. run.mjs's `claude` GUARD_WATCH entry: "clode never writes
+// ~/.local/bin/claude"). It greps SOURCE TEXT — no AST, no dataflow — for a file that
+// contains BOTH a known write-syscall name (from `writeFns`) AND every literal in
+// `pathLiterals` as a quoted substring. That means it WILL miss: a leaf/segment built
+// from a variable or constant instead of an inline string literal, a write reached only
+// via a spawned external command (`cp`, `ln -s`) rather than an `fs.*` call, a literal
+// split across a template expression, or a match whose write call and path literals
+// live in different files. It exists to make an exemption FALSIFIABLE for the obvious,
+// naive case — add a writer that spells the path out in a `fs.*` call and this flips —
+// not to prove the absence of every possible writer. A caller using this MUST say so in
+// its own `because`/comment, not rely on this module's confidence.
+function sourceContainsWrite(files, { writeFns, pathLiterals, fsm = realFs }) {
+  const writeRe = new RegExp(`\\b(${writeFns.join('|')})\\s*\\(`);
+  for (const file of files) {
+    let text;
+    try { text = fsm.readFileSync(file, 'utf8'); } catch { continue; }
+    if (!writeRe.test(text)) continue;
+    if (pathLiterals.every((lit) => text.includes(lit))) return { found: true, file };
+  }
+  return { found: false };
+}
+
+module.exports = { resolveAllowList, sourceContainsWrite };

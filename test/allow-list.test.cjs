@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { resolveAllowList } = require('./allow-list.cjs');
+const { resolveAllowList, sourceContainsWrite } = require('./allow-list.cjs');
 
 test('an entry with no `because` is a finding', () => {
   const r = resolveAllowList([{ pattern: 'build/bundle', provenBy: () => true }]);
@@ -40,4 +40,60 @@ test('a provenBy that throws is a finding, not a silent pass', () => {
 
 test('plain strings are refused outright', () => {
   assert.throws(() => resolveAllowList(['build/bundle']), /record/i);
+});
+
+test('sourceContainsWrite: a clean tree finds nothing', () => {
+  const fsm = { readFileSync: () => 'const x = readlinkSync(p); // no write here' };
+  const hit = sourceContainsWrite(['/repo/libexec/clode-resolve.cjs'], {
+    writeFns: ['writeFileSync', 'symlinkSync'],
+    pathLiterals: ["'.local'", "'bin'", "'claude'"],
+    fsm,
+  });
+  assert.deepStrictEqual(hit, { found: false });
+});
+
+test('sourceContainsWrite: a writer spelling out the exact path shape is DETECTED', () => {
+  const fsm = {
+    readFileSync: () => "fs.symlinkSync(target, path.join(home, '.local', 'bin', 'claude'));",
+  };
+  const hit = sourceContainsWrite(['/repo/libexec/fake-installer.cjs'], {
+    writeFns: ['writeFileSync', 'symlinkSync', 'copyFileSync', 'cpSync', 'renameSync', 'appendFileSync'],
+    pathLiterals: ["'.local'", "'bin'", "'claude'"],
+    fsm,
+  });
+  assert.strictEqual(hit.found, true);
+  assert.strictEqual(hit.file, '/repo/libexec/fake-installer.cjs');
+});
+
+test('the claude-bin exemption shape DROPS once its claim is falsified (round-2 fix)', () => {
+  // This is run.mjs's LOCAL_BIN_ALLOW 'claude' entry, reproduced here against a fake
+  // tree instead of the real repo: it exists to prove clode never writes
+  // ~/.local/bin/claude. Add a writer that spells the path out literally (the exact
+  // shape a naive future "install ourselves as `claude` too" patch would take) and the
+  // entry must drop out of `patterns` — the whole point of making the proof
+  // falsifiable, per the coordinator's round-2 finding (base e08e85f).
+  const files = ['/repo/libexec/some-future-installer.cjs'];
+  const cleanFsm = { readFileSync: () => 'module.exports = {};' };
+  const dirtyFsm = {
+    readFileSync: () => "fs.symlinkSync(v, path.join(home, '.local', 'bin', 'claude'));",
+  };
+  const provenBy = (fsm) => !sourceContainsWrite(files, {
+    writeFns: ['writeFileSync', 'symlinkSync', 'copyFileSync', 'cpSync', 'renameSync', 'appendFileSync'],
+    pathLiterals: ["'.local'", "'bin'", "'claude'"],
+    fsm,
+  }).found;
+
+  const clean = resolveAllowList(
+    [{ pattern: 'claude', because: 'clode never writes ~/.local/bin/claude', provenBy }],
+    { fsm: cleanFsm },
+  );
+  assert.deepStrictEqual(clean.patterns, ['claude']);
+  assert.deepStrictEqual(clean.findings, []);
+
+  const dirty = resolveAllowList(
+    [{ pattern: 'claude', because: 'clode never writes ~/.local/bin/claude', provenBy }],
+    { fsm: dirtyFsm },
+  );
+  assert.deepStrictEqual(dirty.patterns, [], 'a real writer must drop the exemption, not silence the guard');
+  assert.match(dirty.findings.join('\n'), /not reachable/i);
 });
