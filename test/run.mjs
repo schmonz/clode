@@ -467,21 +467,17 @@ const TREE_ALLOW_ENTRIES = [
       + 'Always true — it is a pre-migration leftover, not something a current run creates.',
     provenBy: () => true,
   },
-  {
-    pattern: 'docs',
-    because: 'docs/ is entirely gitignored (.gitignore: "Superpowers working docs (plans, '
-      + 'approaches, skill scratch) — not part of the project") — the same posture the '
-      + '.superpowers entry above already states for its own sibling scratch tree. Writing a '
-      + 'plan or spec mid-run (e.g. docs/superpowers/plans/2026-09-04-*.md, written by the '
-      + 'very plan-execution machinery running this suite) is exactly as legitimate as '
-      + '.superpowers/sdd/ scratch, for the same stated reason — a plan can be executed at '
-      + 'any time.',
-    provenBy: () => {
-      let st;
-      try { st = fs.statSync(path.join(ROOT, 'docs')); } catch { return false; }
-      return st.isDirectory();
-    },
-  },
+  // 'docs' was considered and DELIBERATELY NOT added here (round 1 of this task added
+  // it, then reverted it — see BACKLOG.md/task-5-report.md, 2026-09-04). It has the
+  // exact build-trace.jsonl shape this task exists to eliminate: no writer under
+  // docs/ ever runs during a suite (grep across test/, libexec/, scripts/ turns up
+  // only prose mentioning the path in comments, never a write), its `because` argued
+  // from a hypothetical ("a plan might be written mid-run"), and its `provenBy` could
+  // only prove the directory exists — which it always will, so it could never drop.
+  // An exemption for a writer that doesn't exist, with a proof that can't fail, is an
+  // exemption that's already lying before the first suite run. If a plan is ever
+  // authored into docs/ while this suite is running, the resulting tree-immutability
+  // violation is CORRECT — the fix is to not write there mid-run, not to re-add this.
 ];
 const TREE_ALLOW = resolveOrDie(TREE_ALLOW_ENTRIES, 'TREE_ALLOW');
 const treeBefore = tree.walk(ROOT, { ignore: TREE_ALLOW });
