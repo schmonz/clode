@@ -105,6 +105,12 @@ function readScriptsDir() {
 // The blind half was closure-only: a LEAF member (merge-step.mjs, sea-sign.cjs) could be
 // dropped from the list with the guard silent, and a dropped member does not fail a test —
 // it fails a --self-fused build at tjs.spawn, in the field, with no signal.
+//
+// `examined` counts each carried member TWICE — once in the membership loop below, once
+// again as a BFS node in the closure loop — because those are two genuinely distinct
+// checks over the same member (does it exist / does its require graph stay closed), not
+// one check counted twice. Not dishonest, but not 1:1 with "how many files" either: mind
+// this if a floor tighter than 1 is ever set against this guard's `examined` count.
 function scanAssembler({ fuseSrc, scriptSources }) {
   const members = parseCarriedMembers(fuseSrc);
   const findings = [];
@@ -221,7 +227,12 @@ test('a member that IS carried and IS reached produces no finding', () => {
     scriptSources: { 'build-naude.mjs': '', 'merge-step.mjs': '' },
   });
   assert.deepStrictEqual(r.findings, []);
-  assert.ok(r.examined >= 3, 'must examine the use site and both members');
+  // Exact, not a loose lower bound: 1 use site (quaude-fuse.js -> merge-step.mjs) + 2
+  // members counted in the membership loop + 2 members counted again in the closure BFS
+  // (see the double-count note on scanAssembler) = 5. A strict count catches a change in
+  // what the scan examines; a >= threshold would let one slide under unnoticed.
+  assert.strictEqual(r.examined, 5, 'must examine the use site, both members (membership), '
+    + 'and both members again (closure BFS)');
 });
 
 test('regression: a carried member that does not exist is reported', () => {
