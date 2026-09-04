@@ -73,8 +73,8 @@ test('FLOOR: finding zero scanner-shaped tests is BROKEN, never a pass', () => {
 // EXPECTED stops being read: this project has already paid for exactly that failure mode
 // once (a clode-native P0 broke 13 CI jobs at once and went unnoticed because main was
 // already red with three tolerated failures — see BACKLOG.md). So this test passes as long
-// as the unmigrated count is AT OR BELOW the recorded UNMIGRATED_BASELINE (111 as of fix
-// round 2, 2026-09-04 — see the comment on that constant in guards-population.cjs) and only
+// as the unmigrated count is AT OR BELOW the recorded UNMIGRATED_BASELINE (103 as of fix
+// round 3, 2026-09-04 — see the comment on that constant in guards-population.cjs) and only
 // goes red when a NEW
 // scanner-shaped file skips defineGuard and pushes the count past that baseline — a real,
 // actionable regression. The full unmigrated list still prints every run (via

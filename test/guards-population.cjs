@@ -54,20 +54,45 @@ const REPO = path.resolve(__dirname, '..');
 // (READ_CALLS anywhere, REPO_ROOTED anywhere — not necessarily the same statement), per the
 // spec's tuning rule: false positives are the safe side, so loose is correct here.
 const READ_CALLS = /readFileSync\s*\(|readdirSync\s*\(|require\.resolve\s*\(/;
-// `require.resolve('../x')` (or `require('../x')`) is its OWN repo-rooting idiom: it
-// climbs out of test/'s own directory relative to __dirname IMPLICITLY, with no `__dirname`
-// token anywhere in the source — the exact shape quaude-fuse-report.test.cjs uses (5
+// `require.resolve('../x')` is its OWN repo-rooting idiom: it climbs out of test/'s own
+// directory relative to __dirname IMPLICITLY, with no `__dirname` token anywhere in the
+// source — the exact shape quaude-fuse-report.test.cjs uses (5
 // `fs.readFileSync(require.resolve('../libexec/...'), 'utf8')` call sites, zero `__dirname`/
 // `REPO`/`ROOT` tokens, missed by the first fix-round-2 attempt and caught measuring the
 // seven named files against it).
-const REPO_ROOTED = /__dirname\s*,\s*['"]\.\.|path\.resolve\(\s*__dirname|\bREPO\b|\brepo\b|\bROOT\b|require(?:\.resolve)?\(\s*['"]\.\./;
+//
+// FIX ROUND 3 (coordinator, 2026-09-04) — deliberately NOT plain `require('../x')`, only
+// `require.resolve('../x')`. A scoped re-review measured the round-2 widening's cost: 54
+// newly-flagged files, ~6 confirmed false positives in a 20-file sample
+// (build-trace.test.cjs, clode-net.test.cjs, clode-node.test.cjs,
+// clode-rcodesign.test.cjs, templates-blob-pack.test.cjs) — all round-trip unit tests that
+// build their own fixture and read back their own output, swept in only because
+// `require('../lib-under-test.cjs')` (importing the very module the file is testing) is a
+// near-universal idiom in this suite and satisfied the old, looser pattern. IMPORTING a
+// module is not READING an artifact — the same principle BACKLOG.md's "Nothing gates the
+// gates" principle 3 already states one layer over ("a scanner must not count our own
+// emitted code"): a classifier that counts a test's own subject import as an "artifact
+// read" is that defect applied to imports instead of build output. `require.resolve(...)`
+// survives because it genuinely NAMES an artifact PATH (a string used for fs access), which
+// a bare `require(...)` call — used to load and execute a module, not to name a path for
+// later reading — does not.
+const REPO_ROOTED = /__dirname\s*,\s*['"]\.\.|path\.resolve\(\s*__dirname|\bREPO\b|\brepo\b|\bROOT\b|require\.resolve\(\s*['"]\.\./;
 // These stand on their own — no co-located or even whole-file READ_CALLS match required —
 // because they already NAME a real external artifact or the mechanism that stages one (a
 // library helper elsewhere, e.g. oracle-models.cjs's stageProviderCli(), does the actual
 // readFileSync on the caller's behalf).
+// FIX ROUND 3 (coordinator, 2026-09-04) — `cli\.cjs` anchored with a negative lookbehind so
+// a filename merely ENDING in `cli.cjs` does not match: the unanchored pattern matched the
+// substring inside `npm-cli.cjs` (scripts/lib/npm-cli.cjs, the npm-CLI resolver/runner —
+// nothing to do with the staged single-file provider artifact this signal exists to name),
+// flagging npm-cli-helper.test.cjs — a fully-injected pure unit test with zero real reads.
+// `(?<![\w-])` excludes anything immediately preceded by a word character or a hyphen (so
+// `npm-cli.cjs` is excluded) while still matching every real reference to the staged
+// artifact, which is always quoted, path-joined, or slash-preceded (`'cli.cjs'`,
+// `/cli.cjs`, `path.join(dir, 'cli.cjs')`) — never glued onto a longer identifier.
 const STANDALONE_ARTIFACT_SIGNALS = [
   /stageProviderCli|CLODE_PROVIDER_BIN|CLODE_TJS\b/,
-  /graph\.json|cli\.cjs/,
+  /graph\.json|(?<![\w-])cli\.cjs/,
 ];
 // Kept as a flat array for export/inspection convenience — NOT what classifyTestFile()
 // evaluates with .some(): the first two entries are a whole-file AND (see readsArtifact()
@@ -197,22 +222,32 @@ function deriveMigrated() {
 const MIGRATED = deriveMigrated();
 
 // UNMIGRATED_BASELINE — the count of scanner-shaped tests NOT registered through
-// defineGuard, as last measured against a real run of this sweep. RE-CUT in fix round 2
-// (coordinator, 2026-09-04): 57 -> 111, after readsArtifact() stopped requiring same-call
-// co-location (see the CRITICAL fix-round-2 note above readsArtifact()) — six previously
-// UNFLAGGED files, including scc-merge.test.cjs's 71 assert.match calls against an artifact
-// it did not create, are real guards the old classifier could not see. 111 is the TRUER
-// inventory, not a regression: the classifier got MORE correct, not the tree got worse. Do
-// not read a rising baseline as bad news in a future fix round either — always re-verify
-// against classifyTestFile()/readsArtifact() before assuming a rise means anything other
-// than "the classifier improved."
-// MEANT TO GO DOWN from here: Task 9 (windows-path-ratchet.test.cjs) and Task 14 (the rest)
-// migrate files off this list. Never raise it to make a run "look clean" — raising it papers
-// over exactly the regression this ratchet exists to catch. Lower it (with a comment
-// recording the new measured count and when) whenever a migration makes the real count
-// drop, OR whenever a future classifier fix (like this one) surfaces more true positives —
+// defineGuard, as last measured against a real run of this sweep.
+//
+// RE-CUT in fix round 2 (coordinator, 2026-09-04): 57 -> 111, after readsArtifact() stopped
+// requiring same-call co-location (see the CRITICAL fix-round-2 note above readsArtifact())
+// — six previously UNFLAGGED files, including scc-merge.test.cjs's 71 assert.match calls
+// against an artifact it did not create, are real guards the old classifier could not see.
+//
+// RE-CUT AGAIN in fix round 3 (coordinator, 2026-09-04): 111 -> 103, trimming the round-2
+// widening's own overshoot. A scoped review found the widening also swept in round-trip
+// unit tests that only import their own subject module (`require('../lib.cjs')` satisfied
+// the old REPO_ROOTED, and that idiom is near-universal here — the same "must not count our
+// own emitted code" defect from BACKLOG.md's "Nothing gates the gates" principle 3, applied
+// to imports instead of build output) and a substring match inside `npm-cli.cjs` (see the
+// fix-round-3 notes above `require.resolve` and `cli\.cjs`'s anchor for both fixes). Every
+// rise or fall here is the classifier changing, never the tree — always re-verify against
+// classifyTestFile()/readsArtifact() before reading a future change as good or bad news;
+// see the fix-round-2 and fix-round-3 sections of task-4-report.md for the exact measured
+// before/after each time this happened.
+//
+// MEANT TO GO DOWN from here as files migrate: Task 9 (windows-path-ratchet.test.cjs) and
+// Task 14 (the rest). Never raise it to make a run "look clean" — raising it papers over
+// exactly the regression this ratchet exists to catch. Lower it (with a comment recording
+// the new measured count and when) whenever a migration makes the real count drop, OR
+// whenever a future classifier fix surfaces more true positives or trims a false positive —
 // the ratchet test below tells you to when that happens.
-const UNMIGRATED_BASELINE = 111;
+const UNMIGRATED_BASELINE = 103;
 
 // Pure ratchet decision — unit-tested directly with synthetic counts (see
 // guards-population.test.cjs) as well as through the real file list, so the mechanism is
