@@ -679,9 +679,10 @@ if (treeChanged.length) {
     // moment a new gate (CLODE_LIVE_ONLINE, CLODE_LIVE_ROUNDTRIP, CLODE_NAUDE_SMOKE, the
     // next one nobody has added yet) is introduced, and a stamp built from a stale list
     // prints IDENTICALLY for two runs that exercised different code — an offline run
-    // and a real-network CLODE_LIVE_ONLINE=1 run looked the same before this. Secret
-    // redaction (any name matching TOKEN|SECRET|KEY|PASSWORD) happens inside
-    // environmentStamp itself, not here, so every caller of it gets it for free.
+    // and a real-network CLODE_LIVE_ONLINE=1 run looked the same before this. Which
+    // VALUES actually print (an ALLOW-list of known-safe names, everything else as
+    // NAME=<set>) is decided inside environmentStamp itself, not here, so every caller
+    // of it gets the same safety default for free.
     gates: Object.fromEntries(
       Object.keys(process.env).filter((k) => k.startsWith('CLODE_') && process.env[k])
         .map((k) => [k, process.env[k]])),

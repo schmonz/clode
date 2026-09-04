@@ -38,10 +38,32 @@ test('a gate this list never named still shows up, because it is derived', () =>
   assert.ok(s.includes('CLODE_LIVE_ONLINE=1'), `got: ${s}`);
 });
 
-test('a *_TOKEN-shaped gate name prints with its value redacted', () => {
-  const s = environmentStamp({ ...BASE, gates: { CLODE_FAKE_TOKEN: 'abc123' } });
-  assert.ok(s.includes('CLODE_FAKE_TOKEN=<redacted>'), `got: ${s}`);
-  assert.ok(!s.includes('abc123'), `secret value leaked into the stamp: ${s}`);
+// The value side is an ALLOW-list (SAFE_GATE_NAMES), not a deny-list — round 1's deny
+// list (/TOKEN|SECRET|KEY|PASSWORD/i) was measured, in review, to let CLODE_CREDENTIALS,
+// CLODE_PASS, CLODE_AUTH and CLODE_SESSION straight through with their values printed in
+// full. Those four are the regression test for this fix.
+test('a known-safe toggle prints its value', () => {
+  const s = environmentStamp({ ...BASE, gates: { CLODE_OFFLINE: '1' } });
+  assert.ok(s.includes('CLODE_OFFLINE=1'), `got: ${s}`);
+});
+
+test('an unrecognised CLODE_* variable withholds its value, name still visible', () => {
+  const s = environmentStamp({ ...BASE, gates: { CLODE_SOME_NEW_THING: 'zzz-secretish' } });
+  assert.ok(s.includes('CLODE_SOME_NEW_THING=<set>'), `got: ${s}`);
+  assert.ok(!s.includes('zzz-secretish'), `value leaked into the stamp: ${s}`);
+});
+
+test('the four measured deny-list leaks each withhold their value', () => {
+  for (const [name, value] of [
+    ['CLODE_CREDENTIALS', 'cred-value'],
+    ['CLODE_PASS', 'pw-value'],
+    ['CLODE_AUTH', 'auth-value'],
+    ['CLODE_SESSION', 'session-value'],
+  ]) {
+    const s = environmentStamp({ ...BASE, gates: { [name]: value } });
+    assert.ok(s.includes(`${name}=<set>`), `${name}: expected <set>, got: ${s}`);
+    assert.ok(!s.includes(value), `${name}: its value leaked into the stamp: ${s}`);
+  }
 });
 
 test('gates=none still prints when no CLODE_* variable is set', () => {
