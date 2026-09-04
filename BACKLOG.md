@@ -5846,3 +5846,42 @@ argument is that those keys ARE the layered differential.
 - **The suite tests the PINNED provider** (`UPSTREAM_PIN`), exactly, or says why it cannot.
 - Upstream is pinned at 2.1.251 on purpose; absorbing 2.1.257 is the first test of the
   rejiggered build system, not a fix to rush.
+
+### The Windows spawn number — MEASURED 2026-09-04, phase 2's last open acceptance
+
+`scripts/spawn-cost-probe.mjs` runs on every Windows build leg (reports only, `|| true`,
+gates nothing). It spawns ITSELF via `--worker <units>`, so it measures the multi-call-binary
+shape a real extracted step would use, not a `cmd /c echo` microbenchmark.
+
+| host | in-process | spawned | ratio | overhead/call |
+|---|---|---|---|---|
+| windows-amd64 (10.0.26100, 4 cpu, node 24.20) | 339.2 ms/op | 446.2 ms/op | 1.32x | **~107 ms** |
+| windows-arm64 (10.0.26200, 4 cpu, node 24.20) | 312.0 ms/op | 431.2 ms/op | 1.38x | **~119 ms** |
+| darwin-arm64 (local, 8 cpu, node 26.3) | — | — | — | ~36 ms |
+
+**Windows costs ~3x what the cheap platform costs per spawn**, and the phase-2 spec measured
+one compile step at ~118 ms/module. So a process boundary drawn per MODULE would roughly
+DOUBLE the Windows build; drawn per PHASE (what `scripts/merge-step.mjs` actually does — one
+spawn for the whole merge, seconds of work behind it) it is noise.
+
+**What it decides, and what it does not.** Per the phase-2 design's §2, this decides
+PLACEMENT only, never description: a component reports its own steps, so the same protocol
+serves in-process and spawned alike, and the boundary is a deployment choice. The ruling it
+supports: **extract a step into its own program when the work behind it is measured in
+seconds; keep fine-grained steps in-process.** No existing extraction violates that.
+
+Two reasons the figure is a FLOOR, not a ceiling — both push the true cost up, so they cannot
+weaken a "spawning is expensive" reading, only a "spawning is cheap" one:
+
+1. The spawned arm pays NODE's startup per call (`process.execPath`). A real dispatch would
+   pay the fused clode's boot instead, which is a different number and has NOT been measured
+   here.
+2. `stdio: 'ignore'`. Real steps carry protocol lines on stdout, so a real spawn also pays
+   pipe setup plus the parent's parse. Not modelled.
+
+The harness's positive control was run before any number was trusted: trivial work → 3409.96x
+ratio (overhead dominates), heavy work → 1.03x (overhead vanishes). It responds to the thing
+it claims to measure, which was the one failure mode that would have made the exercise
+worthless.
+
+**Phase 2 is now COMPLETE on all five acceptance criteria.**
