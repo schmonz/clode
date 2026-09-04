@@ -5791,3 +5791,58 @@ is the symptom we happened to look at, not the extent.
 smoke test is green. Every existing acceptance check is satisfied by a quaude that thinks
 it is running on the wrong operating system. The one surface that says otherwise is a
 diagnostic nobody was diffing.
+
+## WHERE THE CROSS-BUILD UMBRELLA STANDS (2026-09-04) — read this first
+
+The umbrella spec itself lives at `docs/superpowers/specs/2026-09-01-clean-cross-build-umbrella.md`,
+which is **gitignored by project convention** (superpowers working docs are not part of the
+project). So this section carries the DECISIONS, which are project decisions rather than
+planning scratch. Anyone picking this up on a fresh clone starts here.
+
+### Phase order (changed from the original, deliberately)
+
+    1 → 2 → 2.5 → 5 → 3 → 4 → 6
+
+**Phases 1 and 2 are DONE and shipped.** Out-of-tree builds with a tree-immutability gate;
+the step-reporting protocol (`libexec/build-report.cjs`, `build-compose.cjs`,
+`build-trace.cjs`), mismatch enforcement, and the first real extraction
+(`scripts/merge-step.mjs`, the cyclic merge as its own process with an argv contract).
+
+**Phase 2.5 (finish the skips) is DONE.** Skips 84 → 33, every one classified as opt-in,
+host-unavailable, or deferred-with-an-entry; both full-suite flakes root-caused and fixed
+(8 consecutive cold-cache green runs); a new Linux PTY CI job runs 16 tests that had never
+run in CI.
+
+**Phase 5 (gates that can fail) is NEXT, moved ahead of 3.** The argument, from what phase
+2 cost: nearly every defect found while finishing it was hidden by a guard that could not
+fail — an allow-list entry added before the writer it exempted existed; a test whose regex
+matched its own header comment; `naude-assembler-closure` not walking the list it exists to
+check; five skips that could not say why; `apicheck.mjs` falling past `if (!staged)` on a
+truthy error object. Phases 3, 4 and 6 all add machinery those same guards would verify, and
+phase 6 is a differential whose entire output is a comparison — a wrong instrument there is
+worse than no answer.
+
+Phase 5 also owns two things measured this session: `cancel-in-progress` destroyed SIX CI
+runs in one night (the jobs behind a long matrix are the most likely to be cancelled and the
+least likely to be re-run deliberately), and the `_doctor`-era discovery that a red which
+cannot distinguish "broken" from "not given what I need" carries no information.
+
+**Phase 3** additionally owns the CLI/subcommand rationalisation (folded in 2026-09-03: once
+products are first-class in the build target, `--naude` as a flag stops making sense) and, at
+its tail, expressing the release ritual as declared steps rather than prose.
+
+**Phase 4** additionally owns: the provider store's key missing platform and arch (one binary
+per version, first fetch wins — see the P1 above), the stale/incapable engine check, and
+`extractIfNeeded`'s non-atomic write. All three are the same defect — the build does not
+check its inputs — and the carve guard shipped 2026-09-04 is the first of them.
+
+**Phase 6** cannot start until phase 4 delivers derived content keys; the umbrella's own
+argument is that those keys ARE the layered differential.
+
+### Standing conditions
+
+- **Every skip is understood** (invariant 7, user 2026-09-03): the umbrella cannot close
+  while the suite holds skips nobody has accounted for. See the inventory entry above.
+- **The suite tests the PINNED provider** (`UPSTREAM_PIN`), exactly, or says why it cannot.
+- Upstream is pinned at 2.1.251 on purpose; absorbing 2.1.257 is the first test of the
+  rejiggered build system, not a fix to rush.
