@@ -11,8 +11,49 @@ permissions:
 # get their own group so they never cancel each other.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # A push to main NEVER cancels a run in flight. Measured 2026-09-04: 194e237, a
+  # BACKLOG.md-only commit, cancelled the run carrying 06c6c96 (a real test fix), and the
+  # phase-2 Windows spawn number went unread for two days because its run was cancelled
+  # and nobody re-ran it. A slow job behind a long matrix is the MOST likely to be
+  # cancelled and the LEAST likely to be re-run deliberately, so the jobs with the most to
+  # say are the ones that systematically never speak. PR branches keep cancelling.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 jobs:
+  # Derives whether this push touched anything but docs, so the heavy `tjs`
+  # matrix (and everything that consumes its artifacts) can skip on a
+  # docs-only push without losing signal on a real one. concurrency.group
+  # above is evaluated before any job runs and cannot see the diff — this is
+  # the job that CAN, per scripts/changed-paths.mjs's own header.
+  #
+  # MUST FAIL OPEN: `code=true` on any failure to compute the diff, wired
+  # explicitly (not left to a default), because a classifier that emits
+  # nothing here would silently skip the whole matrix — worse than the
+  # cancellation problem this file exists to fix. Two independent layers:
+  # scripts/changed-paths.mjs itself catches every internal failure and
+  # still prints `code=true`; the `||` below is a second layer for the case
+  # the process cannot even start (missing node, a syntax error — the sort
+  # of failure that fires before any try/catch in that file could run).
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+    steps:
+      # Full history: the classifier diffs against the push's "before" SHA
+      # (or the PR's base SHA), neither of which the default shallow
+      # (fetch-depth: 1) checkout would have on disk.
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: false
+          fetch-depth: 0
+      - name: Classify the push's changed paths (fails open — code=true on any error)
+        id: classify
+        env:
+          GH_BEFORE_SHA: ${{ github.event.before }}
+          GH_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GH_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/changed-paths.mjs >> "$GITHUB_OUTPUT" || echo "code=true" >> "$GITHUB_OUTPUT"
   # tjs legs, CI tier (user decision 2026-07-11): every OS in the release
   # matrix on every push, ONE arch each — the manifest (scripts/tjs-legs.mjs)
   # owns the list, the reusable workflow owns the job; nothing is duplicated
@@ -22,6 +63,12 @@ jobs:
   # pays only bundle+fuse+smoke there; VM legs pay the guest boot + in-guest
   # build.
   tjs:
+    needs: changes
+    # THE heavy matrix this whole `changes` job exists to gate: a full OS
+    # sweep. Skips outright on a docs-only push (task-7); on a real code
+    # push it is unaffected. See `changes`'s own header for why this must
+    # fail open rather than fail silent.
+    if: needs.changes.outputs.code == 'true'
     uses: ./.github/workflows/tjs-legs.yml
     permissions:
       contents: read
@@ -39,7 +86,7 @@ jobs:
   # the Windows bundle-bump gate. These finer signals isolate a C-primitive regression from
   # a shim/Bash-tool regression — what the leg's end-to-end PONG cannot.
   windows-amd64-tests:
-    needs: tjs
+    needs: [changes, tjs]
     # Run once `tjs` FINISHES, whatever its conclusion — do NOT skip because some
     # OTHER leg failed. This job consumes ONE named artifact; a leg it does not use
     # has no bearing on whether it can run. Plain `needs: tjs` skips the moment any
@@ -49,7 +96,11 @@ jobs:
     # exact disease that let the dep-closure P0 through (node-shim-oracle skipped at
     # 9e968b4 for the same reason). If the artifact this job needs is genuinely
     # missing, download-artifact fails it LOUDLY, which is the honest answer.
-    if: ${{ !cancelled() }}
+    #
+    # ALSO gated on `changes`: this job downloads a `tjs` artifact, so it must
+    # skip in lockstep with `tjs` on a docs-only push (task-7) rather than
+    # run and fail loudly on a missing artifact.
+    if: needs.changes.outputs.code == 'true' && !cancelled()
     runs-on: windows-latest
     defaults:
       run:
@@ -106,7 +157,7 @@ jobs:
   # Because it installs the latest provider it is also a Windows render bump gate.
   # Render-only; the ConPTY INPUT round-trip is the tracked follow-on (D2).
   windows-amd64-tui:
-    needs: tjs
+    needs: [changes, tjs]
     # Run once `tjs` FINISHES, whatever its conclusion — do NOT skip because some
     # OTHER leg failed. This job consumes ONE named artifact; a leg it does not use
     # has no bearing on whether it can run. Plain `needs: tjs` skips the moment any
@@ -116,7 +167,11 @@ jobs:
     # exact disease that let the dep-closure P0 through (node-shim-oracle skipped at
     # 9e968b4 for the same reason). If the artifact this job needs is genuinely
     # missing, download-artifact fails it LOUDLY, which is the honest answer.
-    if: ${{ !cancelled() }}
+    #
+    # ALSO gated on `changes`: this job downloads a `tjs` artifact, so it must
+    # skip in lockstep with `tjs` on a docs-only push (task-7) rather than
+    # run and fail loudly on a missing artifact.
+    if: needs.changes.outputs.code == 'true' && !cancelled()
     runs-on: windows-latest
     defaults:
       run:
@@ -167,7 +222,7 @@ jobs:
   # rationale as windows-amd64-tests, exercised against the windows-arm64 leg's
   # native MSVC ARM64 engine. No tui counterpart yet (out of scope).
   windows-arm64-tests:
-    needs: tjs
+    needs: [changes, tjs]
     # Run once `tjs` FINISHES, whatever its conclusion — do NOT skip because some
     # OTHER leg failed. This job consumes ONE named artifact; a leg it does not use
     # has no bearing on whether it can run. Plain `needs: tjs` skips the moment any
@@ -177,7 +232,11 @@ jobs:
     # exact disease that let the dep-closure P0 through (node-shim-oracle skipped at
     # 9e968b4 for the same reason). If the artifact this job needs is genuinely
     # missing, download-artifact fails it LOUDLY, which is the honest answer.
-    if: ${{ !cancelled() }}
+    #
+    # ALSO gated on `changes`: this job downloads a `tjs` artifact, so it must
+    # skip in lockstep with `tjs` on a docs-only push (task-7) rather than
+    # run and fail loudly on a missing artifact.
+    if: needs.changes.outputs.code == 'true' && !cancelled()
     runs-on: windows-11-arm
     defaults:
       run:
@@ -257,7 +316,7 @@ jobs:
   # (tjs-<leg>, uploaded expressly "for oracle jobs") — no rebuild. Same run
   # pattern release.yml's be-oracle proved green on s390x-musl.
   node-shim-oracle:
-    needs: tjs
+    needs: [changes, tjs]
     # Run once `tjs` FINISHES, whatever its conclusion — do NOT skip because some
     # OTHER leg failed. This job consumes ONE named artifact; a leg it does not use
     # has no bearing on whether it can run. Plain `needs: tjs` skips the moment any
@@ -267,7 +326,11 @@ jobs:
     # exact disease that let the dep-closure P0 through (node-shim-oracle skipped at
     # 9e968b4 for the same reason). If the artifact this job needs is genuinely
     # missing, download-artifact fails it LOUDLY, which is the honest answer.
-    if: ${{ !cancelled() }}
+    #
+    # ALSO gated on `changes`: this job downloads a `tjs` artifact, so it must
+    # skip in lockstep with `tjs` on a docs-only push (task-7) rather than
+    # run and fail loudly on a missing artifact.
+    if: needs.changes.outputs.code == 'true' && !cancelled()
     runs-on: ubuntu-latest
     # LIKE-FOR-LIKE LIBC, ON PURPOSE — the reference node runs under musl because
     # the engine does.
@@ -454,12 +517,16 @@ jobs:
   # runs on either libc; it is only the REFERENCE side of a comparison that has to
   # match, and nothing here compares against host node.
   native-builder-oracle:
-    needs: tjs
+    needs: [changes, tjs]
     # Same rationale as node-shim-oracle's: run once `tjs` FINISHES whatever its
     # conclusion. This job consumes ONE named artifact; a leg it does not use has
     # no bearing on whether it can run, and a job that skips is a gate that is not
     # there. If the artifact is genuinely missing, download-artifact fails LOUDLY.
-    if: ${{ !cancelled() }}
+    #
+    # ALSO gated on `changes`: this job downloads a `tjs` artifact, so it must
+    # skip in lockstep with `tjs` on a docs-only push (task-7) rather than
+    # run and fail loudly on a missing artifact.
+    if: needs.changes.outputs.code == 'true' && !cancelled()
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -645,7 +712,7 @@ jobs:
   # surface (see the file's own header), and the cost is paid once and shared
   # by its 3 tests.
   linux-x64-pty:
-    needs: tjs
+    needs: [changes, tjs]
     # Run once `tjs` FINISHES, whatever its conclusion — do NOT skip because some
     # OTHER leg failed. This job consumes ONE named artifact; a leg it does not use
     # has no bearing on whether it can run. Plain `needs: tjs` skips the moment any
@@ -655,7 +722,11 @@ jobs:
     # exact disease that let the dep-closure P0 through (node-shim-oracle skipped at
     # 9e968b4 for the same reason). If the artifact this job needs is genuinely
     # missing, download-artifact fails it LOUDLY, which is the honest answer.
-    if: ${{ !cancelled() }}
+    #
+    # ALSO gated on `changes`: this job downloads a `tjs` artifact, so it must
+    # skip in lockstep with `tjs` on a docs-only push (task-7) rather than
+    # run and fail loudly on a missing artifact.
+    if: needs.changes.outputs.code == 'true' && !cancelled()
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -736,11 +807,15 @@ jobs:
   # oracle must EXCLUDE for musl/signal/dylib portability — on darwin they are
   # native behavior and pass. Consumes the darwin-arm64 leg's bare engine.
   node-shim-oracle-darwin:
-    needs: tjs
+    needs: [changes, tjs]
     # Run once `tjs` FINISHES, whatever its conclusion (same rationale as the
     # windows/node-shim-oracle jobs): this consumes ONE named artifact; a leg it
     # does not use has no bearing on whether it can run.
-    if: ${{ !cancelled() }}
+    #
+    # ALSO gated on `changes`: this job downloads a `tjs` artifact, so it must
+    # skip in lockstep with `tjs` on a docs-only push (task-7) rather than
+    # run and fail loudly on a missing artifact.
+    if: needs.changes.outputs.code == 'true' && !cancelled()
     runs-on: macos-latest
     defaults:
       run:
