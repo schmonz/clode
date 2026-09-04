@@ -1509,6 +1509,38 @@ async function clodeBuild(args, opts) {
       stageDir = staged.stageDir;
       providerPlatform = staged.providerPlatform;
     }
+
+    // TARGET-MATCHED ASSEMBLY, ENFORCED. Bun constant-folds process.platform/arch into
+    // the bundle at CARVE time, so a quaude assembled from a foreign-carved provider
+    // believes it runs on that other OS -- and tells the user so. Found 2026-09-04 on
+    // darwin-arm64: `quaude doctor` reported `Platform: linux-x64`, because this box's
+    // pinned provider is a LINUX carve (the store is keyed by version alone, so a foreign
+    // carve sits happily at the pinned path -- see the umbrella's phase 4) and the build
+    // accepted it without a word.
+    //
+    // Every other acceptance check passes on such a binary: --version matches, the PONG
+    // round-trip works, attest is ok, the smoke is green. Nothing else can see it, which
+    // is exactly why this belongs at the input rather than in a later gate.
+    //
+    // Compared in ONE vocabulary. providerPlatformOf answers in node's ('darwin'), targets
+    // speak canonical ('macos'), and comparing those raw is a guaranteed false negative --
+    // the failure mode this check exists to prevent, reintroduced in the check itself.
+    const CARVE_TO_CANON = { darwin: 'macos', linux: 'linux', win32: 'windows' };
+    if (!naude && !self && providerPlatform && providerPlatform !== 'unknown'
+        && env.CLODE_ALLOW_FOREIGN_CARVE !== '1') {
+      const wantOs = parsed.target
+        ? (require('../scripts/canonical-name.cjs').splitLeg(parsed.target) || {}).os
+        : CARVE_TO_CANON[process.platform];
+      const gotOs = CARVE_TO_CANON[providerPlatform] || providerPlatform;
+      if (wantOs && gotOs && wantOs !== gotOs) {
+        return fail(`build: the provider is carved for ${gotOs}, but this build targets `
+          + `${wantOs}${parsed.target ? ` (--target ${parsed.target})` : ' (this host)'}. `
+          + 'Bun folds the platform into the bundle at carve time, so the result would '
+          + 'report the wrong OS and take the wrong platform branches at runtime. Fetch a '
+          + `${wantOs} provider (clode fetch), point CLODE_CLAUDE_BIN at one, or set `
+          + 'CLODE_ALLOW_FOREIGN_CARVE=1 if you are deliberately testing this.');
+      }
+    }
     report.finish('extract');
 
     // -- ext-dep closure (both roles: quaude requires them at runtime; the
