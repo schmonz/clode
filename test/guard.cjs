@@ -50,7 +50,10 @@ function defineGuard(spec) {
     throw new Error(`defineGuard(${name}): \`floor\` must be a positive integer (default 1)`);
   }
   if (REGISTRY.has(name)) throw new Error(`defineGuard: duplicate guard name '${name}'`);
-  const g = { name, read, scan, control, floor };
+  // Frozen before storage: registered() hands out these exact objects (they are handles,
+  // not copies), and a guard whose whole claim is "cannot be constructed without a working
+  // control" must not let a caller reassign that control away after the fact.
+  const g = Object.freeze({ name, read, scan, control, floor });
   REGISTRY.set(name, g);
   return g;
 }
@@ -89,7 +92,19 @@ function checkControl(g) {
 
 function checkGate(g) {
   const inputs = g.read();
-  if (inputs && inputs.skip) {
+  if (inputs === null || inputs === undefined) {
+    throw new Error(`guard ${g.name}: read() must return an object — either the real inputs, `
+      + `or { skip: reason }`);
+  }
+  // KEY PRESENCE, not truthiness: an empty-string skip is exactly what a careless
+  // \`reason || ''\` produces, and a truthiness test lets it fall through into scan()
+  // instead of naming the problem — the same "five skips that could not say what they
+  // wanted" defect this module exists to close, reappearing in its own machinery.
+  if ('skip' in inputs) {
+    if (typeof inputs.skip !== 'string' || inputs.skip.length === 0) {
+      throw new Error(`guard ${g.name}: read() returned { skip } but \`skip\` must be a `
+        + `non-empty string naming why the precondition is absent — a skip must state why`);
+    }
     return { verdict: SKIP, examined: 0, findings: [],
       message: `${g.name}: skipped — ${inputs.skip}` };
   }
