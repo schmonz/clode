@@ -66,11 +66,55 @@
 // matches for every wall below (see task-15-report.md, VERIFY step 2); a
 // synthetic fixture below proves the pattern actually fires when the shape
 // appears.
+//
+// MIGRATED 2026-09-04 (phase 5, task 3), because the paragraphs above stopped
+// describing the artifact. Re-measured against the pinned staged carve at
+// ~/.cache/clode/2.1.251/graph.json: `require("<builtin>")` — raw OR escaped
+// inside cli.cjs's 49MB graph-runner string — has ZERO hits, anywhere. Upstream
+// went code-split ESM at 2.1.243 and stopped emitting CJS builtin requires
+// entirely; `import … from "<builtin>"` has 270 hits across graph.json's 1,839
+// module sources. Both WALLS patterns were therefore green by construction, and
+// this file's own "mechanism self-check" passed anyway, because it modeled the
+// OLD syntax in a hand-written fixture — a control describing an encoding the
+// artifact no longer has, passing for the wrong reason. That is the exact
+// weak-control failure this phase's design predicted, found in the wild.
+//
+// Fixed by: (1) reading graph.json's `sources` map directly — real strings, no
+// escape level to track — instead of grepping cli.cjs, the graph RUNNER, where
+// module text rides as an escaped JSON string inside a JS string (the
+// escape-blind class that has already killed three other gates in this repo,
+// per BACKLOG.md); (2) widening each WALLS[].pattern to match BOTH the legacy
+// require(...) chain and the ESM named-import form; (3) wiring the result
+// through test/guard.cjs's defineGuard/guardTests so this gate carries a real
+// positive control instead of a fixture that can silently drift from the
+// artifact's actual encoding again, unnoticed, the way this one just did.
+//
+// MEASURED, re-running the corrected gate against the SAME pin: it is NOT
+// clean. examined 1839, 16 findings — net.connect/createConnection reached via
+// ESM `import{connect as <alias>}from"net"` in 11 distinct module chunks (one
+// is first-party: a Unix-domain-socket client, `pe({path:e})`, logged as
+// "[uds-client] Sent to ..."), and fs.watch reached the same way in another 5
+// chunks. A literal "matches ANY import from net/fs regardless of which name"
+// pattern — the shape this task's own brief sketched as an example — is even
+// noisier: 22 and 100 hits respectively, most with nothing to do with
+// connect/watch at all (isIP, createServer, readFile, ...). The pattern below
+// instead filters the
+// ESM half by the SAME specific method names the CJS half already does — the
+// direct generalisation of this file's existing narrow, low-noise design, not a
+// weakening of it. Even narrowed, the finding stands. This is the same category
+// as the http.request/https.request RETIREMENT below — a wall the pinned bundle
+// already reaches — except unlike that story this file does not resolve it here
+// (implement the API, or prove non-reachability); it is reported as a live
+// VIOLATION, on purpose, because silencing the pattern until it goes quiet again
+// is the exact "gate that cannot fail" this phase exists to close off. Full
+// commands + output: task-3-report.md.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const models = require('./oracle-models.cjs');
+const { defineGuard, guardTests } = require('./guard.cjs');
+const { clodeCacheDir } = require('../libexec/clode-paths.cjs');
+const { pinnedVersion } = require('./provider-resolve.cjs');
 
 // Declared walls, as DATA — adding one later is a one-line addition here, not a
 // new test. `pattern` matches source text; `why` is the shim module's own
@@ -89,10 +133,31 @@ const models = require('./oracle-models.cjs');
 // deliberately does not match, so the tripwire never fired. It is a low-noise
 // alarm for freshly-inlined call sites, not a reachability proof — the same
 // caveat the CORRECTION above records for fs.watch.
+//
+// ESM HALF (added 2026-09-04): every WALLS[].pattern is now an alternation of
+// the legacy CJS chain (`require("net").connect(`, no intermediate alias) and
+// the ESM named-import shape upstream actually emits since 2.1.243
+// (`import{connect as <alias>}from"net"`). The two halves are NOT equally
+// narrow, and that asymmetry is a known, accepted gap rather than an oversight:
+// CJS lets a one-off call skip an intermediate variable entirely, so "no alias"
+// is a real signal that separates a fresh inline call from the giant
+// pre-existing SDK bundles that always destructure first. ESM syntax has no
+// analogue — every `import{x}from"m"` binds a local name, and Bun's bundler
+// renames that binding for EVERY import it emits (`isIP as b`, `connect as pe`,
+// ...) whether or not the original source aliased it, so "was this written
+// with `as`" carries no information once bundled. There is no narrow-equivalent
+// ESM shape to fall back to. The ESM half therefore matches on IMPORTED NAME
+// alone (does this module import `connect`/`createConnection` from "net", by
+// name, at all) — narrower than "any import from the module" (which the CJS
+// half's `.request(`/`.connect(` filtering never allowed either), but broader
+// than the CJS half's "and calls it with no alias in between". Accept the
+// resulting noise increase as the honest cost of upstream's move to ESM, not as
+// something to regex away — see the MEASURED note above for what it actually
+// found.
 const WALLS = [
   {
     api: 'net.connect / net.createConnection',
-    pattern: /require\(\s*["'](?:node:)?net["']\s*\)\s*\.(?:connect|createConnection)\s*\(/,
+    pattern: /require\(\s*["'](?:node:)?net["']\s*\)\s*\.(?:connect|createConnection)\s*\(|import\s*\{[^}]*\b(?:connect|createConnection)\b[^}]*\}\s*from\s*["'](?:node:)?net["']/,
     why: '"the actual socket surface (net.connect / createConnection / real '
       + 'Socket I/O / net.Server) is NOT implemented — the -p transport is '
       + 'txiki\'s native fetch, which never routes through node:net ... '
@@ -104,7 +169,7 @@ const WALLS = [
   },
   {
     api: 'fs.watch',
-    pattern: /require\(\s*["'](?:node:)?fs["']\s*\)\s*\.watch\s*\(/,
+    pattern: /require\(\s*["'](?:node:)?fs["']\s*\)\s*\.watch\s*\(|import\s*\{[^}]*\bwatch\b[^}]*\}\s*from\s*["'](?:node:)?fs["']/,
     why: '"fs.watch (the inotify/FSEvents-style API): STILL a stub, unlike '
       + 'watchFile above ... this engine\'s uv_fs_event backend is ENOSYS on some '
       + 'legs, so there is no portable native primitive to poll-emulate cheaply." '
@@ -120,73 +185,122 @@ const WALLS = [
   },
 ];
 
-// Test-only override: point the gate at a specific file instead of staging a
-// real provider. Used to verify the mechanism itself against a synthetic
-// fixture (task-15-report.md, VERIFY step 2) without needing a Bun-packaged
-// Claude Code provider on the box. The normal/CI path never sets this.
-// Returns { path, error }: path is set on success, error is set (and path
-// null) when a provider WAS found but staging it threw — a real reason (not
-// "no provider") that the module-scope SKIP_REASON below must surface rather
-// than swallow, same distinction test/oracle-models.cjs's stageProviderCli
-// itself now makes.
-function resolveBundlePath(env = process.env) {
-  if (env.CLODE_SHIM_WALL_BUNDLE) {
-    const p = env.CLODE_SHIM_WALL_BUNDLE;
-    return { path: fs.existsSync(p) ? p : null, error: null };
+// Test-only override, same convention the old CLODE_SHIM_WALL_BUNDLE var used:
+// point the gate straight at a graph.json instead of resolving the pinned
+// staged carve under ~/.cache/clode. The normal/CI path never sets this.
+function resolveGraphPath(env = process.env) {
+  if (env.CLODE_SHIM_WALL_GRAPH) return env.CLODE_SHIM_WALL_GRAPH;
+  const pin = pinnedVersion();
+  if (!pin) return null;
+  return path.join(clodeCacheDir(env), pin, 'graph.json');
+}
+
+// read()'s real half: graph.json's `sources` map for the pinned upstream carve.
+// Reads graph.json, NOT cli.cjs (the 49MB graph RUNNER) — see the MIGRATED note
+// above for why that distinction is load-bearing, not cosmetic.
+//
+// Never returns an empty sources map to mean "not found" — that would scan zero
+// modules and read exactly like a clean 1,839-module scan, the ambiguity
+// test/guard.cjs exists to make impossible. An absent precondition is always a
+// named skip.
+function readGraphJson(env = process.env) {
+  const graphPath = resolveGraphPath(env);
+  if (!graphPath) {
+    return { skip: 'UPSTREAM_PIN does not name a pinned version — cannot locate a staged carve' };
   }
+  if (!fs.existsSync(graphPath)) {
+    return { skip: `no staged carve at ${graphPath} — build or extract the pinned provider `
+      + '(see libexec/clode-extract.cjs) to exercise this gate' };
+  }
+  let doc;
   try {
-    // Honors CLODE_PROVIDER_BIN first (same as the API-surface gate), else
-    // clode's own local provider resolution (test/oracle-models.cjs header) —
-    // both are purely local/offline; no network fetch happens here.
-    const staged = models.stageProviderCli({ env });
-    if (staged && staged.error) return { path: null, error: staged.error };
-    return { path: staged ? staged.cli : null, error: null };
+    doc = JSON.parse(fs.readFileSync(graphPath, 'utf8'));
   } catch (e) {
-    return { path: null, error: e.message };
+    return { skip: `${graphPath} could not be parsed as JSON: ${e.message}` };
   }
+  const sources = doc && doc.sources;
+  if (!sources || typeof sources !== 'object') {
+    return { skip: `${graphPath} has no \`sources\` map — not a code-split graph doc `
+      + '(a pre-2.1.243 provider carves to cli.cjs directly and has no graph at all)' };
+  }
+  return { sources };
 }
 
-// Resolved once at module scope: staging spawns a child process to carve a
-// ~20MB bundle, and every wall below diffs the SAME snapshot — no reason to
-// redo it per-wall.
-const RESOLVED = resolveBundlePath();
-const BUNDLE = RESOLVED.path;
-const BUNDLE_SRC = BUNDLE ? fs.readFileSync(BUNDLE, 'utf8') : null;
-const SKIP_REASON = RESOLVED.error
-  ? `provider found but staging it failed: ${RESOLVED.error}`
-  : 'no upstream bundle available locally — set CLODE_PROVIDER_BIN '
-    + 'to a real claude binary (or run somewhere clode has already resolved a local '
-    + 'provider) to exercise this gate; see test/oracle-models.cjs';
-
-function fireMessage(wall) {
-  return `shim wall tripwire FIRED — upstream's pinned bundle now calls ${wall.api}, `
-    + `which the node-shim does not implement.\n`
-    + `  why this is a wall: ${wall.why}\n`
-    + `  see: ${wall.backlogRef}\n`
-    + `  (bundle: ${BUNDLE})`;
+// PURE. Input is the module-source MAP from graph.json's `sources`, not the 49MB
+// cli.cjs graph runner (see the MIGRATED note above for why that distinction
+// matters — reading the runner is the escape-blind class, spec 3.7 item 8).
+function scanWalls({ sources, walls }) {
+  const findings = [];
+  let examined = 0;
+  for (const [module, body] of Object.entries(sources)) {
+    if (typeof body !== 'string') continue;
+    examined++;
+    for (const wall of walls) {
+      if (wall.pattern.test(body)) findings.push(`${wall.api} reached in ${module}`);
+    }
+  }
+  return { findings, examined };
 }
 
-for (const wall of WALLS) {
-  test(`shim wall tripwire: pinned bundle does not yet call ${wall.api}`, (t) => {
-    if (!BUNDLE_SRC) { t.skip(SKIP_REASON); return; }
-    assert.ok(!wall.pattern.test(BUNDLE_SRC), fireMessage(wall));
-  });
-}
+const guard = defineGuard({
+  name: 'node-shim-wall-tripwires',
+  floor: 100,   // 1839 modules today; 100 is a floor against an empty/moved sources map,
+                // not a target. Under it, the scan read something that is not the graph.
+  read: () => {
+    const g = readGraphJson();          // returns { skip } when no provider is staged
+    return g.skip ? g : { sources: g.sources, walls: WALLS };
+  },
+  scan: scanWalls,
+  // The control is built from the encoding the REAL artifact uses today. If upstream
+  // changes encoding again, this control keeps passing while the gate goes blind — so
+  // step 1 of any pin bump is to re-measure the shapes, not to re-run this file.
+  control: () => ({
+    walls: WALLS,
+    sources: { 'synthetic/control.js': 'import{connect as q}from"net";q({})' },
+  }),
+});
+guardTests(guard);
 
-// Mechanism self-check — always runs, needs no bundle: proves the pattern
-// actually fires on the shape it claims to catch, and stays quiet on the
-// alias-bound shape that already exists throughout the real bundle (the false-
-// positive class this file's header explains rejecting).
-test('shim wall tripwire mechanism: fires on a direct require(...).connect( call', () => {
-  const fixture = 'function boot(o){var s=require("net").connect(o);return s}';
-  const wall = WALLS.find((w) => w.api === 'net.connect / net.createConnection');
-  assert.ok(wall.pattern.test(fixture),
-    'the net.connect wall pattern must match a direct require("net").connect( call');
+// Mechanism self-checks — always run, need no staged carve: prove the pattern
+// actually fires on the ESM shape upstream emits today, still fires on the
+// legacy CJS shape (so a pin regression back to CJS would still be caught), and
+// stays quiet on the pre-existing aliased CJS shape this file has always
+// deliberately ignored (the false-positive class the header explains rejecting).
+test('the wall patterns match the ESM shape upstream ACTUALLY emits', () => {
+  // Upstream emits `import{connect as x}from"net"` / `import*as n from"node:net"`,
+  // never `require("net").connect(`. A pattern that only matches the require form
+  // is green by construction, which is what this file was from 2.1.243 until
+  // 2026-09-04.
+  const esm = 'import{connect as q}from"net";function go(o){return q(o)}';
+  const wall = WALLS.find((w) => w.api.startsWith('net.'));
+  assert.ok(wall.pattern.test(esm),
+    'the net wall must match the ESM import form — the only form upstream emits today');
 });
 
-test('shim wall tripwire mechanism: does not fire on the aliased shape already present today', () => {
-  // The exact shape found in the real bundle: require() result assigned to a
-  // variable first, THEN .request()/.connect() called on the alias elsewhere.
+test('the wall patterns still match the legacy require form', () => {
+  const cjs = 'function boot(o){var s=require("net").connect(o);return s}';
+  const wall = WALLS.find((w) => w.api.startsWith('net.'));
+  assert.ok(wall.pattern.test(cjs), 'both encodings must be pinned, not one');
+});
+
+test('the fs.watch wall pattern matches the ESM shape upstream ACTUALLY emits', () => {
+  const esm = 'import{watch as w}from"fs";function go(p){return w(p,()=>{})}';
+  const wall = WALLS.find((w) => w.api === 'fs.watch');
+  assert.ok(wall.pattern.test(esm),
+    'the fs.watch wall must match the ESM import form too, not only net\'s');
+});
+
+test('the fs.watch wall pattern still matches the legacy require form', () => {
+  const cjs = 'function boot(p){return require("fs").watch(p,()=>{})}';
+  const wall = WALLS.find((w) => w.api === 'fs.watch');
+  assert.ok(wall.pattern.test(cjs), 'both encodings must be pinned for fs.watch too');
+});
+
+test('shim wall tripwire mechanism: does not fire on the pre-existing aliased CJS shape', () => {
+  // The exact CJS shape found in the real 2.1.218-era bundle: require() result
+  // assigned to a variable first, THEN .request()/.connect() called on the alias
+  // elsewhere. This has no ESM `import{...}from` syntax in it, so it must not trip
+  // the ESM half either.
   const fixture = 'var zCh=require("net"),Jfu=require("tls");'
     + 'function go(n){return n.secure?Jfu.connect(n):zCh.connect(n)}'
     + 'var w=require("fs");function go2(p){return w.watch(p)}';
@@ -196,4 +310,4 @@ test('shim wall tripwire mechanism: does not fire on the aliased shape already p
   }
 });
 
-module.exports = { WALLS, resolveBundlePath };
+module.exports = { WALLS, scanWalls, readGraphJson, resolveGraphPath };
