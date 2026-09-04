@@ -5588,30 +5588,43 @@ The test was feeding the minimiser a shim.
 container" rather than a format complaint. Same for any other tool that assumes its
 input is a provider because of where it was found.
 
-## Intermittent: node-shim-child-process spawn-fd test flakes (2026-09-03)
+## Intermittent: TWO tests flake under full-suite load, and they may share a cause (2026-09-03/04)
 
-`test/node-shim-child-process.test.cjs:569` — "spawn: numeric fd in stdio redirects
-child output to a file (Bash-tool pattern)" — fails intermittently under a FULL suite
-run with `Unexpected end of JSON input`, and passes 34/34 in isolation (verified three
-consecutive runs). Observed twice on 2026-09-03 by two independent runs.
+Both pass in isolation and fail only under a concurrent full-suite run:
 
-`Unexpected end of JSON input` means the child's output file was read before the child
-finished writing it, or was truncated — a race between the child's exit and the
-parent's read, which only loses under the load of a concurrent full-suite run. That it
-passes in isolation is consistent with a race, not with a logic error.
+- `test/node-shim-child-process.test.cjs:569` — "spawn: numeric fd in stdio redirects
+  child output to a file" — fails with `Unexpected end of JSON input`; 34/34 in
+  isolation, three consecutive runs.
+- `test/fidelity/agentic-subagent-diff.test.cjs:70` — "subagent (Task) dispatch is
+  identical under naude and quaude" — fails with
+  `clode: graph-meta failed under <scratch>/tjs (exit 1)`; passes in isolation with the
+  SAME provider and engine, and did not recur on the next full run.
 
-**Why this is worth fixing rather than tolerating.** A flake is the same disease as
-ambient red, one step subtler: it teaches everyone that a red run might mean nothing,
-so the next real failure gets a rerun instead of a look. This repo has already paid for
-tolerated red once — `silently-gated-tests-hide-p0s` — and the whole point of the
-2026-09-02/03 work was to make a red run mean something again. One flaky test is enough
-to undo that.
+Ruled out for the second one: a stale engine. Both the scratch engine and the
+hash-subdir template carry the `moduleMeta` symbol, so this is not
+[[stale-engine-template-breaks-builds]].
 
-Fix direction: make the assertion wait for the child's completion rather than assuming
-the file is complete at read time (await the exit event / poll for a well-formed JSON
-document with a bounded timeout), and prove the fix by running the FULL suite
-repeatedly, not the file in isolation — isolation is exactly the condition under which
-it already passes.
+**Hypothesis worth testing first, because it would explain both.**
+`test/oracle-models.cjs`'s `stageCli` writes to a cache dir under
+`CLODE_ORACLE_STAGE_ROOT`, defaulting to a SHARED path keyed by provider
+(`<tmp>/clode-oracle-stage/<cacheKey>`), and the suite runs files concurrently. Two
+tests staging the same provider at once would read a half-written cli.cjs — which is
+exactly what "unexpected end of JSON input" and "graph-meta exited 1" both look like.
+The first is a read racing a write on a file; the second is a spawn over a tree being
+written. Neither is a logic error, and both are invisible when the file runs alone,
+which is the signature.
+
+Test it by giving each test file its own stage root and seeing whether both stop; if
+they do, the fix is per-file (or lock-guarded) staging rather than chasing each symptom.
+
+**Why fix rather than tolerate.** A flake is ambient red one step subtler: it teaches
+everyone that a red run might mean nothing, so the next real failure gets a rerun instead
+of a look. This repo has already paid for tolerated red once
+([[silently-gated-tests-hide-p0s]]), and the whole point of the 2026-09-02/04 work was to
+make a red run mean something again. Two flaky tests are enough to undo it.
+
+Prove any fix by running the FULL suite repeatedly — isolation is the condition under
+which both already pass.
 
 ## Release acceptance: the checks only a human with credentials can run (2026-09-04)
 
