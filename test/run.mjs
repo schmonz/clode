@@ -145,11 +145,38 @@ process.env.CLODE_STATE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-test
 // now, which is what makes this safe to set. Waking tests before their failures are
 // understood buys a red suite and no information.
 if (!process.env.CLODE_PROVIDER_BIN) {
-  const { providerBin, skipReason } = require('./provider-resolve.cjs');
-  const p = providerBin();
-  if (p) process.env.CLODE_PROVIDER_BIN = p;
-  else console.error(`run: no Claude provider resolved — ${skipReason()}`);
+  const { providerBin, skipReason, pinnedVersion } = require('./provider-resolve.cjs');
+  let p = providerBin();
+  // FETCH IF NEEDED. Selection is the pinned version exactly (see provider-resolve.cjs),
+  // so a box without it tests nothing rather than testing whatever it happens to have.
+  // Fetching once, here, is what makes "exactly the pin" a usable rule instead of a
+  // chore — and it is loud, because a test run that reaches the network should say so.
+  if (!p && pinnedVersion()) {
+    const v = pinnedVersion();
+    console.error(`run: pinned provider ${v} not in the store — fetching it once (clode fetch ${v})`);
+    const r = spawnSync(process.execPath, [path.join(ROOT, 'bin', 'clode'), 'fetch', v],
+      { stdio: 'inherit' });
+    if (r.status !== 0) console.error(`run: fetch failed (status ${r.status}); provider-gated tests will skip`);
+    p = providerBin({ ...process.env });   // fresh env object: providers() memoises per env
+  }
+  if (p) {
+    process.env.CLODE_PROVIDER_BIN = p;
+    console.error(`run: provider ${p}`);
+  } else {
+    console.error(`run: no Claude provider resolved — ${skipReason()}`);
+  }
 }
+// A DARWIN-carved provider, for the one test that needs a specific carve rather than
+// any provider (the macOS managed-settings branch check). Same reasoning as the two
+// above: the artifact is on this box, and the test read an env var nothing sets. Note
+// this is about the PROVIDER's carve, not this host's platform — the pinned provider in
+// this store is a linux carve on a Mac, so asking process.platform would be wrong.
+if (!process.env.CLODE_DARWIN_PROVIDER_BIN) {
+  const { providerBinFor } = require('./provider-resolve.cjs');
+  const d = providerBinFor('darwin');
+  if (d) process.env.CLODE_DARWIN_PROVIDER_BIN = d;
+}
+
 if (!process.env.CLODE_TJS) {
   const { tjsPath } = require('./node-shim-helper.cjs');
   const t = tjsPath();

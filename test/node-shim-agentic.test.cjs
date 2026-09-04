@@ -205,7 +205,14 @@ test('agentic Edit round-trip under tjs: overwriting an existing file works (Fil
 test('a darwin-carved quaude takes the macOS branch (managed-settings under /Library)', async (t) => {
   if (skipUnlessTjs(t)) return;
   const bin = process.env.CLODE_DARWIN_PROVIDER_BIN;
-  if (!bin || !fs.existsSync(bin)) { t.skip('no CLODE_DARWIN_PROVIDER_BIN'); return; }
+  if (!bin || !fs.existsSync(bin)) {
+    // Say WHICH carve we have and why it will not do, rather than naming an env var.
+    // Substituting a nearer version to satisfy the platform is what made this test
+    // silently run against 2.1.252 and fail on the SCC break the pin exists to avoid.
+    const { platformSkipReason } = require('./provider-resolve.cjs');
+    t.skip(platformSkipReason('darwin') || 'no CLODE_DARWIN_PROVIDER_BIN');
+    return;
+  }
   const { cli, dir } = stageBundle(bin);
   const mock = await startMockAnthropic({ respond: () => cannedSSE('hi') });
   try {

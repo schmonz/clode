@@ -18,11 +18,28 @@ const { execFileSync } = require('node:child_process');
 
 const REPO = path.resolve(__dirname, '..');
 
-// Memoised per env object: resolution shells out, and a test file that asks twice
-// should not pay twice (nor print twice).
+// DETERMINISTIC SELECTION. Everything below answers one question: which provider does
+// THIS suite run use? The answer must not depend on what is on PATH, what a previous
+// build happened to cache, or which env var was set moments earlier.
+//
+// It used to. Measured 2026-09-03: with CLODE_STATE_ROOT pointed at a fresh tmpdir --
+// which test/run.mjs does, on purpose, for isolation -- the product resolver fell
+// through to PATH and selected ~/.local/share/claude/versions/2.1.260, NINE versions
+// past the pin, on a box whose store also held 2.1.210/215/218/251/252. Two machines
+// would have tested two different products and neither would have said so.
+//
+// So: the clode-managed store only, capped at UPSTREAM_PIN, ordered by version. No
+// PATH, no `current` pointer, no most-recently-cached. An explicit env var still wins,
+// because an operator who names a provider means it.
+function storeDir(env) {
+  const home = env.HOME || require('node:os').homedir();
+  return path.join(home, '.local', 'share', 'clode', 'providers');
+}
+
+// Memoised per env object: selection reads the filesystem, and a test file that asks
+// twice should not pay twice.
 const _cache = new WeakMap();
 
-// Every provider this box can see, best first, deduped, existence-checked.
 function providers(env = process.env) {
   const hit = _cache.get(env);
   if (hit) return hit;
@@ -31,6 +48,7 @@ function providers(env = process.env) {
   return list;
 }
 
+// Every provider this box can see, best first, deduped, existence-checked.
 function _providers(env) {
   const found = [];
   const seen = new Set();
@@ -38,46 +56,19 @@ function _providers(env) {
     if (p && !seen.has(p) && fs.existsSync(p)) { seen.add(p); found.push(p); }
   };
 
+  // An operator's explicit choice, first and unconditional -- not pin-capped, because
+  // naming a provider is how you deliberately test an unpinned one.
   add(env.CLODE_PROVIDER_BIN);
   add(env.CLODE_CLAUDE_BIN);
 
-  // UPSTREAM_PIN's version, BEFORE the product's ambient resolver. This ordering is
-  // load-bearing and was wrong on the first cut: resolveClaudeBin() returns whatever
-  // this box last happened to cache (2.1.252 here), while UPSTREAM_PIN names the
-  // version this project actually supports and CI installs (2.1.251). Preferring the
-  // ambient one silently tested a version nobody declared — 25 failures, all from
-  // running against an unsupported provider. `dev-box-state-hides-bugs`: the declared
-  // pin beats whatever is lying around.
-  //
-  // Read from the file, never written here — a second hardcoded version string is how
-  // the 2.1.183 problem in test/inspect.test.cjs happened.
-  try {
-    const pin = fs.readFileSync(path.join(REPO, 'UPSTREAM_PIN'), 'utf8')
-      .split('\n').map((l) => l.match(/^claude-code (.+)$/)).find(Boolean);
-    if (pin) {
-      const home = env.HOME || require('node:os').homedir();
-      add(path.join(home, '.local', 'share', 'clode', 'providers', pin[1].trim(), 'claude'));
-    }
-  } catch { /* no pin file, or unreadable */ }
+  // THE PINNED VERSION, EXACTLY. Not "the newest at or below the pin" -- that still
+  // varies with whatever a given box happens to have in its store, which is the wobble
+  // this is here to remove. UPSTREAM_PIN names one version; every machine tests that
+  // one, or says why it cannot.
+  const pin = pinnedVersion();
+  if (pin) add(path.join(storeDir(env), pin, 'claude'));
 
-  // The product's OWN resolver. Without this a local run sees only fixture stores and
-  // never exercises what `clode build` would actually pick.
-  try { add(require('../libexec/clode-resolve.cjs').resolveClaudeBin(env)); } catch { /* none */ }
-
-  try {
-    // stderr ignored on purpose: find-provider prints a multi-line diagnostic when it
-    // finds nothing, and that is NOT this helper's news to deliver — skipReason() says
-    // where we looked, once, instead of every caller dumping the same paragraph.
-    add(execFileSync(process.execPath, [path.join(REPO, 'scripts', 'find-provider.mjs')],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim());
-  } catch { /* absence is reported by skipReason, not thrown */ }
-
-  try {
-    const { VERSIONS, providerBin } = require('./golden-shas-lib.cjs');
-    for (const v of VERSIONS) add(providerBin(v));
-  } catch { /* fixture lib unavailable */ }
-
-  return found;
+  return found.filter(isBunContainer);
 }
 
 // The first usable provider, or null.
@@ -116,4 +107,84 @@ function isBunContainer(binpath) {
   } catch { return false; }
 }
 
-module.exports = { providers, providerBin, skipReason, isBunContainer, REPO };
+
+// The first provider carved for a given platform, or null.
+//
+// Some tests need a provider from a SPECIFIC platform rather than any provider: the
+// darwin-carve check (test/node-shim-agentic.test.cjs) asserts a darwin-carved bundle
+// takes the macOS managed-settings branch, which only means anything against a darwin
+// carve. Note the platform of a PROVIDER is not the platform of this HOST -- the pinned
+// 2.1.251 in this box's store is a linux-x64 carve sitting on a Mac -- so this asks the
+// bytes (providerPlatformOf) rather than assuming process.platform.
+// A provider carved FOR a given platform, or null. Never substitutes a different
+// version to satisfy the platform: the store is keyed by version alone
+// (providers/<version>/claude, one binary per version) while `clode fetch` is
+// OS-matched, so the same path holds different bytes on different machines -- this
+// box's pinned 2.1.251 is a LINUX carve on a Mac. Reaching for a nearer-matching
+// version instead would trade a loud, honest "no darwin carve at the pin" for a quiet
+// "tested something else", which is how the darwin check silently ran against 2.1.252
+// and failed on the SCC break the pin exists to avoid. See the umbrella's phase 4.
+function providerBinFor(platform, env = process.env) {
+  const { providerPlatformOf } = require('../libexec/extract-claude-js.cjs');
+  for (const p of providers(env)) {
+    try { if (providerPlatformOf(p) === platform) return p; } catch { /* unreadable: not a candidate */ }
+  }
+  return null;
+}
+
+// Why no provider carved for `platform` is available -- names the pin, what the pinned
+// carve actually IS, and how to get the right one.
+function platformSkipReason(platform, env = process.env) {
+  if (providerBinFor(platform, env)) return false;
+  const { providerPlatformOf } = require('../libexec/extract-claude-js.cjs');
+  const pin = pinnedVersion();
+  const have = providers(env).map((p) => {
+    let plat = 'unreadable';
+    try { plat = String(providerPlatformOf(p)); } catch { /* keep 'unreadable' */ }
+    return `${path.basename(path.dirname(p))}=${plat}`;
+  });
+  return `no ${platform}-carved provider. UPSTREAM_PIN names ${pin || '(unset)'}; `
+    + `available: ${have.join(', ') || '(none)'}. The store is keyed by VERSION only, so a `
+    + `pinned entry carved for another OS cannot be told apart by path — fetch a ${platform} `
+    + `carve at ${pin || 'the pin'} (clode fetch ${pin || '<version>'}) or set `
+    + `CLODE_${platform.toUpperCase()}_PROVIDER_BIN explicitly.`;
+}
+
+// UPSTREAM_PIN names the newest version this project supports. A provider NEWER than it
+// is not "a slightly different provider" -- it is one we have deliberately not absorbed
+// yet, and handing one to a test produces a failure that looks like the test's subject
+// and is not.
+//
+// Measured: wiring the darwin-carve check to "the first darwin provider" picked 2.1.252,
+// which fails with `compiling __clode-scc-2.js failed: invalid property name` -- the very
+// SCC-merge break the pin exists to sequence away. The test looked broken; the input was.
+// 2.1.218 is also darwin, predates the break, and is what this now selects.
+//
+// Version compare is numeric-by-segment, not lexicographic: '2.1.9' must not sort above
+// '2.1.10'.
+function newerThanPin(binPath) {
+  const pin = pinnedVersion();
+  if (!pin) return false;
+  const m = /providers[\\/](\d+(?:\.\d+)*)[\\/]/.exec(binPath);
+  if (!m) return false;              // not from the versioned store: cannot tell, do not exclude
+  return cmpVersion(m[1], pin) > 0;
+}
+
+function pinnedVersion() {
+  try {
+    const line = fs.readFileSync(path.join(REPO, 'UPSTREAM_PIN'), 'utf8')
+      .split('\n').map((l) => l.match(/^claude-code (.+)$/)).find(Boolean);
+    return line ? line[1].trim() : null;
+  } catch { return null; }
+}
+
+function cmpVersion(a, b) {
+  const A = a.split('.').map(Number), B = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(A.length, B.length); i++) {
+    const d = (A[i] || 0) - (B[i] || 0);
+    if (d) return d < 0 ? -1 : 1;
+  }
+  return 0;
+}
+
+module.exports = { providers, providerBin, providerBinFor, platformSkipReason, skipReason, isBunContainer, pinnedVersion, cmpVersion, REPO };
