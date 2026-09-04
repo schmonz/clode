@@ -168,3 +168,72 @@ test('clode-signals: --bundle phrase counts (digest, --json, snapshot)', () => {
     assert.strictEqual(snap, EXPECT.case4_json, 'snapshot bytes');
   });
 });
+
+// ---------------------------------------------------------------------------------
+// CARVE INVARIANCE. signals/<version>.json is keyed by VERSION ALONE, but it is derived
+// by scanning a PROVIDER BINARY -- and Bun constant-folds process.platform/arch at carve
+// time, so two carves of one version are different bytes. That is the same missing
+// dimension that let a linux-carved provider sit at this box's pinned path and produce a
+// quaude reporting `Platform: linux-x64` on a Mac (BACKLOG.md, 2026-09-04).
+//
+// Measured 2026-09-04 on both carves of 2.1.251: the counts are IDENTICAL. The folded
+// values are platform COMPARISONS; the tracked phrases are install-method and runtime
+// messaging, which upstream does not vary by OS, and the changelog half is
+// platform-independent by definition. So signals do NOT need the platform key the
+// provider store needs -- today.
+//
+// This test is the guard on that "today". If a tracked phrase ever becomes
+// platform-conditional, the version-only key starts silently recording whichever carve
+// was scanned first, exactly like the provider store does -- and this goes red instead.
+// Skips unless two carves of ONE version are actually available, and says so.
+function twoCarvesOfOneVersion() {
+  let providerPlatformOf;
+  try { ({ providerPlatformOf } = require('../libexec/extract-claude-js.cjs')); } catch { return null; }
+  const roots = [
+    path.join(os.homedir(), '.local', 'share', 'clode', 'providers'),
+    process.env.CLODE_SIGNALS_ALT_CARVE_DIR,
+  ].filter(Boolean);
+  const byVersion = new Map();
+  for (const root of roots) {
+    let entries = [];
+    try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      const bin = e.isDirectory() ? path.join(root, e.name, 'claude') : path.join(root, e.name);
+      if (!fs.existsSync(bin) || fs.statSync(bin).isDirectory()) continue;
+      const m = /(\d+\.\d+\.\d+)/.exec(e.name);
+      if (!m) continue;
+      let plat; try { plat = providerPlatformOf(bin); } catch { continue; }
+      if (!plat || plat === 'unknown') continue;
+      const seen = byVersion.get(m[1]) || new Map();
+      if (!seen.has(plat)) seen.set(plat, bin);
+      byVersion.set(m[1], seen);
+    }
+  }
+  for (const [version, carves] of byVersion) {
+    if (carves.size >= 2) return { version, carves: [...carves.entries()] };
+  }
+  return null;
+}
+
+test('clode-signals: the same version scans identically whatever carve it came from', (t) => {
+  const found = twoCarvesOfOneVersion();
+  if (!found) {
+    t.skip('need two carves of ONE version to compare (point CLODE_SIGNALS_ALT_CARVE_DIR '
+      + 'at a dir holding a foreign-carved provider, e.g. ~/.cache/clode/attic/...)');
+    return;
+  }
+  const scans = found.carves.map(([plat, bin]) => {
+    const r = spawnSync(process.execPath, [JS_TOOL, '--version', found.version, '--bundle', bin, '--json'],
+      { encoding: 'utf8' });
+    assert.strictEqual(r.status, 0, `scan of the ${plat} carve failed: ${r.stderr}`);
+    return [plat, JSON.parse(r.stdout)];
+  });
+  const [[firstPlat, first], ...rest] = scans;
+  for (const [plat, snap] of rest) {
+    assert.deepStrictEqual(snap, first,
+      `signals for ${found.version} differ between the ${firstPlat} and ${plat} carves. `
+      + 'signals/<version>.json is keyed by version ALONE, so it now silently records '
+      + 'whichever carve was scanned first — the provider store\'s defect, one layer over. '
+      + 'Key the snapshot by platform too (see the umbrella, phase 4).');
+  }
+});

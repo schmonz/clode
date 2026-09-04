@@ -1,0 +1,16 @@
+{
+  "bundle_phrases": {
+    "install.sh instead of npm": 2,
+    "not supported under npm": 0,
+    "requires the native binary": 4,
+    "typeof Bun": 10
+  },
+  "changelog_flags": [
+    {
+      "line": "Improved install size: the native binary is about 5 MB smaller",
+      "tier": "high",
+      "version": "2.1.251"
+    }
+  ],
+  "version": "2.1.251"
+}
