@@ -5186,11 +5186,27 @@ every existing cache entry is invalidated the day it lands, and the sequencing o
 belongs with the declared-inputs work, not with a test fix. See the umbrella's phase-4
 scope correction.
 
-### 2. `test/naude-assembler-closure.test.cjs` does not guard the carried-member list
+### 2. `test/naude-assembler-closure.test.cjs` guards CLOSURE, not MEMBERSHIP (CORRECTED 2026-09-04)
 
 `libexec/quaude-fuse.js` carries a list of libexec/scripts members that must be
-materialized into a fused builder. Nothing tests that list. Proven twice by mutation
-during phase 2: remove an entry and the closure test still reports **1 pass / 0 fail**.
+materialized into a fused builder.
+
+**The description this entry carried was wrong in both directions, and it had already been
+copied into the umbrella spec before anyone re-ran it.** It said the test "does not guard
+the carried-member list" and that removing any entry leaves it at 1 pass / 0 fail. Measured
+2026-09-04 on current main, restoring the tree between runs and verifying it clean after:
+
+| mutation to the `quaude-fuse.js:211` member list | verdict |
+|---|---|
+| remove `canonical-name.cjs` (required by `platform-tag.cjs`) | **RED** |
+| remove `build-scratch.cjs` | **RED** |
+| remove `build-naude.mjs` | **RED** |
+| remove `merge-step.mjs` (leaf — nothing relatively requires it) | **GREEN — blind** |
+| remove `sea-sign.cjs` (leaf) | **GREEN — blind** |
+
+So it walks the list and catches an un-carried SIBLING REQUIRE. What it cannot see is a
+dropped LEAF member — and that is the dangerous half, because phase 2 added
+`scripts/merge-step.mjs` to exactly that list.
 
 Why it matters here specifically: phase 2 added `scripts/merge-step.mjs` to that list,
 and a missing entry does not fail a test — it fails a `--self`-fused build at
@@ -5816,9 +5832,10 @@ run in CI.
 **Phase 5 (gates that can fail) is NEXT, moved ahead of 3.** The argument, from what phase
 2 cost: nearly every defect found while finishing it was hidden by a guard that could not
 fail — an allow-list entry added before the writer it exempted existed; a test whose regex
-matched its own header comment; `naude-assembler-closure` not walking the list it exists to
-check; five skips that could not say why; `apicheck.mjs` falling past `if (!staged)` on a
-truthy error object. Phases 3, 4 and 6 all add machinery those same guards would verify, and
+matched its own header comment; `naude-assembler-closure` blind to a dropped LEAF member (and
+its own entry above was wrong in both directions until it was re-measured 2026-09-04, having
+already been copied into the umbrella); five skips that could not say why; `apicheck.mjs`
+falling past `if (!staged)` on a truthy error object. Phases 3, 4 and 6 all add machinery those same guards would verify, and
 phase 6 is a differential whose entire output is a comparison — a wrong instrument there is
 worse than no answer.
 
