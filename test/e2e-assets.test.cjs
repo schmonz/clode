@@ -16,8 +16,16 @@ const { stageProviderCli, providerSkipReason, runNaudeModelAsync } = require('./
 
 test('embedded-asset shim raises no consumer errors on --help', async (t) => {
   const sbx = sandbox(t);
-  if (sbx.env.CLODE_OFFLINE) { t.skip('offline'); return; }
-  const staged = stageProviderCli({ env: sbx.env });
+  // NO network gate: this runs `--help` and asserts the embedded-asset shim raises no
+  // consumer errors. It never reaches a model. It was offline-gated only because the
+  // whole BATS file it was ported from was, so it never ran anywhere at all — the
+  // sandbox hardcodes CLODE_OFFLINE=1 (test/e2e.cjs:73) and nothing unsets it.
+  // Stage from the HOST env, run in the SANDBOX env. Staging carves a provider into a
+  // cli.cjs on this machine — a build step, not part of what is under test — and the
+  // sandbox env is deliberately constructed-clean (test/e2e.cjs), so passing it here
+  // meant stageProviderCli could NEVER find a provider. Together with the offline gate
+  // above, that gave these tests two independent reasons to be dark; both are removed.
+  const staged = stageProviderCli();
   const skip = providerSkipReason(staged, 'no Bun-packaged CC provider');
   if (skip) { t.skip(skip); return; }
   const r = await runNaudeModelAsync(staged.cli, ['--help'], { cwd: staged.dir, env: sbx.env, timeout: 60000 });
@@ -26,8 +34,13 @@ test('embedded-asset shim raises no consumer errors on --help', async (t) => {
 
 test('embedded-asset shim raises no consumer errors on -p', async (t) => {
   const sbx = sandbox(t);
-  if (sbx.env.CLODE_OFFLINE) { t.skip('offline'); return; }
-  const staged = stageProviderCli({ env: sbx.env });
+  if (process.env.CLODE_LIVE_ONLINE !== '1') {
+    t.skip('live ONLINE opt-in only (set CLODE_LIVE_ONLINE=1; uses your real credentials '
+      + 'and spends real tokens). This asserts the -p path reaches a REAL model, so a mock '
+      + 'cannot stand in for it.');
+    return;
+  }
+  const staged = stageProviderCli();
   const skip = providerSkipReason(staged, 'no Bun-packaged CC provider');
   if (skip) { t.skip(skip); return; }
   const r = await runNaudeModelAsync(staged.cli, ['-p', 'reply with exactly: PONG'],
