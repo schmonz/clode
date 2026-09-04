@@ -40,26 +40,64 @@ const REPO = path.resolve(__dirname, '..');
 // upstream carve. Deliberately NOT "uses readFileSync" — half the suite reads fixtures it
 // wrote itself, and flagging those would train people to add exclusions, which is how an
 // allow-list becomes noise nobody reads.
-const READS_ARTIFACT = [
-  /readFileSync\s*\([^)]*\b(REPO|ROOT|__dirname\s*,\s*['"]\.\.)/,
+//
+// FIX ROUND 2 (coordinator, 2026-09-04) — CRITICAL, the dangerous direction the spec calls
+// out: the original rule required a READ call and a repo-rooting expression to appear
+// inside the SAME readFileSync(...) call. A reviewer sample of files the sweep did NOT
+// flag found real guards missed for exactly that reason — msvc-getopt-shim.test.cjs,
+// tjs-build-hermeticity.test.cjs, update-guard-drift.test.cjs, quaude-fuse-report.test.cjs,
+// scc-merge.test.cjs (71 assert.match calls against artifacts it did not create — the
+// starkest miss), win-sync-guards.test.cjs — six of seven sampled misses traced to
+// indirection defeating the same-call co-location: a lowercase `repo` variable,
+// `require.resolve()`, a path built on an earlier line into a named constant, a
+// helper-function parameter. Decoupled below into two WHOLE-FILE facts ANDed together
+// (READ_CALLS anywhere, REPO_ROOTED anywhere — not necessarily the same statement), per the
+// spec's tuning rule: false positives are the safe side, so loose is correct here.
+const READ_CALLS = /readFileSync\s*\(|readdirSync\s*\(|require\.resolve\s*\(/;
+// `require.resolve('../x')` (or `require('../x')`) is its OWN repo-rooting idiom: it
+// climbs out of test/'s own directory relative to __dirname IMPLICITLY, with no `__dirname`
+// token anywhere in the source — the exact shape quaude-fuse-report.test.cjs uses (5
+// `fs.readFileSync(require.resolve('../libexec/...'), 'utf8')` call sites, zero `__dirname`/
+// `REPO`/`ROOT` tokens, missed by the first fix-round-2 attempt and caught measuring the
+// seven named files against it).
+const REPO_ROOTED = /__dirname\s*,\s*['"]\.\.|path\.resolve\(\s*__dirname|\bREPO\b|\brepo\b|\bROOT\b|require(?:\.resolve)?\(\s*['"]\.\./;
+// These stand on their own — no co-located or even whole-file READ_CALLS match required —
+// because they already NAME a real external artifact or the mechanism that stages one (a
+// library helper elsewhere, e.g. oracle-models.cjs's stageProviderCli(), does the actual
+// readFileSync on the caller's behalf).
+const STANDALONE_ARTIFACT_SIGNALS = [
   /stageProviderCli|CLODE_PROVIDER_BIN|CLODE_TJS\b/,
   /graph\.json|cli\.cjs/,
 ];
-// Derives a verdict from the bytes rather than from a value it computed.
+// Kept as a flat array for export/inspection convenience — NOT what classifyTestFile()
+// evaluates with .some(): the first two entries are a whole-file AND (see readsArtifact()
+// below), not one more OR branch.
+const READS_ARTIFACT = [READ_CALLS, REPO_ROOTED, ...STANDALONE_ARTIFACT_SIGNALS];
+
+function readsArtifact(src) {
+  return (READ_CALLS.test(src) && REPO_ROOTED.test(src))
+    || STANDALONE_ARTIFACT_SIGNALS.some((re) => re.test(src));
+}
+
+// Derives a verdict from the bytes rather than from a value it computed. FIX ROUND 2:
+// added assert.match/assert.doesNotMatch — this repo's most idiomatic way to derive a
+// finding from bytes, and the shape scc-merge.test.cjs's 71 misses and
+// win-sync-guards.test.cjs's classic "assert a dangerous pattern is ABSENT" guard both use.
 const PATTERN_MATCHES = [
   /\/[^\n/]+\/[gimsuy]*\.test\s*\(/,
   /\.match\s*\(\s*\//,
   /\.exec\s*\(/,
   /\.includes\s*\(\s*['"]/,
+  /assert\.(?:match|doesNotMatch)\s*\(/,
 ];
 
 function classifyTestFile(src) {
-  const readsArtifact = READS_ARTIFACT.some((re) => re.test(src));
+  const artifact = readsArtifact(src);
   const derivesFinding = PATTERN_MATCHES.some((re) => re.test(src));
-  const scannerShaped = readsArtifact && derivesFinding;
+  const scannerShaped = artifact && derivesFinding;
   const why = scannerShaped
     ? 'reads an artifact it did not create AND derives a finding from the bytes'
-    : !readsArtifact
+    : !artifact
       ? 'does not read a repo-rooted/staged/upstream artifact'
       : 'reads an artifact but derives no finding from its bytes (no pattern-match shape)';
   return { scannerShaped, why };
@@ -127,6 +165,20 @@ function isRecordedExclusion(file) {
 // "migrated" was the actual bug, not the classifier. The destructure requirement excludes
 // it (no bare `defineGuard` is ever imported), and the negative lookbehind on the call site
 // excludes any other `<namespace>.defineGuard(` usage the same way.
+//
+// REQUIRED MIGRATION FORM (documented, not enforced further — coordinator fix-round-2
+// finding, Important, 2026-09-04): both the destructure AND the bare call must appear IN
+// THE SAME FILE. A future guard built through a shared setup helper — e.g. a
+// `registerFooGuard()` in some other module that itself does `const { defineGuard } =
+// require('./guard.cjs')` and calls `defineGuard(...)` on the migrating file's behalf —
+// would NOT be seen here: this file's own source would have neither the destructure nor
+// the bare call, so it would read as unmigrated even though it truly registers a guard. No
+// such helper exists today (checked: every current call site destructures and calls
+// in-file), so this is not a live bug, but it IS a constraint on how Task 14 must write its
+// 56 migrations: each migrated file needs its OWN `const { defineGuard, guardTests } =
+// require('./guard.cjs');` and its OWN direct `defineGuard({...})` call, matching
+// naude-assembler-closure.test.cjs / node-shim-wall-tripwires.test.cjs's shape — not a
+// shared factory function migrated files merely call into.
 const DESTRUCTURES_DEFINEGUARD = /\{[^}]*\bdefineGuard\b[^}]*\}\s*=\s*require\(['"]\.\/guard\.cjs['"]\)/;
 const CALLS_BARE_DEFINEGUARD = /(?<![.\w])defineGuard\s*\(/;
 function deriveMigrated() {
@@ -145,14 +197,22 @@ function deriveMigrated() {
 const MIGRATED = deriveMigrated();
 
 // UNMIGRATED_BASELINE — the count of scanner-shaped tests NOT registered through
-// defineGuard, as last measured against a real run of this sweep (fix round 1, 2026-09-04:
-// 57, after excluding guards-population.test.cjs itself — see GUARD_EXCLUSIONS above).
-// MEANT TO GO DOWN: Task 9 (windows-path-ratchet.test.cjs) and Task 14 (the rest) migrate
-// files off this list. Never raise it to make a run "look clean" — raising it papers over
-// exactly the regression this ratchet exists to catch. Lower it (with a comment recording
-// the new measured count and when) whenever a migration makes the real count drop; the
-// ratchet test below tells you to when that happens.
-const UNMIGRATED_BASELINE = 57;
+// defineGuard, as last measured against a real run of this sweep. RE-CUT in fix round 2
+// (coordinator, 2026-09-04): 57 -> 111, after readsArtifact() stopped requiring same-call
+// co-location (see the CRITICAL fix-round-2 note above readsArtifact()) — six previously
+// UNFLAGGED files, including scc-merge.test.cjs's 71 assert.match calls against an artifact
+// it did not create, are real guards the old classifier could not see. 111 is the TRUER
+// inventory, not a regression: the classifier got MORE correct, not the tree got worse. Do
+// not read a rising baseline as bad news in a future fix round either — always re-verify
+// against classifyTestFile()/readsArtifact() before assuming a rise means anything other
+// than "the classifier improved."
+// MEANT TO GO DOWN from here: Task 9 (windows-path-ratchet.test.cjs) and Task 14 (the rest)
+// migrate files off this list. Never raise it to make a run "look clean" — raising it papers
+// over exactly the regression this ratchet exists to catch. Lower it (with a comment
+// recording the new measured count and when) whenever a migration makes the real count
+// drop, OR whenever a future classifier fix (like this one) surfaces more true positives —
+// the ratchet test below tells you to when that happens.
+const UNMIGRATED_BASELINE = 111;
 
 // Pure ratchet decision — unit-tested directly with synthetic counts (see
 // guards-population.test.cjs) as well as through the real file list, so the mechanism is
@@ -191,6 +251,10 @@ module.exports = {
   MIGRATED,
   UNMIGRATED_BASELINE,
   ratchetUnmigrated,
+  readsArtifact,
   READS_ARTIFACT,
+  READ_CALLS,
+  REPO_ROOTED,
+  STANDALONE_ARTIFACT_SIGNALS,
   PATTERN_MATCHES,
 };

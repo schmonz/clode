@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const TEST_DIR = __dirname;
-const { classifyTestFile, discoverTestFiles, isRecordedExclusion, MIGRATED,
+const { classifyTestFile, discoverTestFiles, isRecordedExclusion, GUARD_EXCLUSIONS, MIGRATED,
   UNMIGRATED_BASELINE, ratchetUnmigrated } = require('./guards-population.cjs');
 
 test('the classifier recognises a scanner-shaped test', () => {
@@ -18,6 +18,30 @@ test('the classifier does NOT flag a test that builds its own inputs', () => {
   const src = `const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'x-'));
                assert.strictEqual(add(1, 2), 3);`;
   assert.strictEqual(classifyTestFile(src).scannerShaped, false);
+});
+
+// Minor (fix round 2, coordinator, 2026-09-04): isRecordedExclusion's empty-`because`
+// throw path had no direct test. Push a synthetic bad entry, assert the throw, remove it
+// again in `finally` so no other test in this file (which walks the real GUARD_EXCLUSIONS
+// array via the real sweep) sees the synthetic entry.
+test('isRecordedExclusion throws on a recorded exclusion with an empty `because`', () => {
+  GUARD_EXCLUSIONS.push({ file: '__fixture-empty-because__.test.cjs', because: '' });
+  try {
+    assert.throws(() => isRecordedExclusion('__fixture-empty-because__.test.cjs'),
+      /empty `because`/);
+  } finally {
+    GUARD_EXCLUSIONS.pop();
+  }
+});
+
+test('isRecordedExclusion throws on a recorded exclusion with a whitespace-only `because`', () => {
+  GUARD_EXCLUSIONS.push({ file: '__fixture-whitespace-because__.test.cjs', because: '   ' });
+  try {
+    assert.throws(() => isRecordedExclusion('__fixture-whitespace-because__.test.cjs'),
+      /empty `because`/);
+  } finally {
+    GUARD_EXCLUSIONS.pop();
+  }
 });
 
 test('FLOOR: the sweep re-discovers every already-migrated guard', () => {
@@ -49,8 +73,9 @@ test('FLOOR: finding zero scanner-shaped tests is BROKEN, never a pass', () => {
 // EXPECTED stops being read: this project has already paid for exactly that failure mode
 // once (a clode-native P0 broke 13 CI jobs at once and went unnoticed because main was
 // already red with three tolerated failures — see BACKLOG.md). So this test passes as long
-// as the unmigrated count is AT OR BELOW the recorded UNMIGRATED_BASELINE (currently 57;
-// see the comment on that constant in guards-population.cjs) and only goes red when a NEW
+// as the unmigrated count is AT OR BELOW the recorded UNMIGRATED_BASELINE (111 as of fix
+// round 2, 2026-09-04 — see the comment on that constant in guards-population.cjs) and only
+// goes red when a NEW
 // scanner-shaped file skips defineGuard and pushes the count past that baseline — a real,
 // actionable regression. The full unmigrated list still prints every run (via
 // t.diagnostic), so the backlog stays visible without the suite itself staying red.
