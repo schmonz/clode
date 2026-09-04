@@ -584,10 +584,26 @@ test('spawn: numeric fd in stdio redirects child output to a file (Bash-tool pat
       });
     })();`;
   const f = prog(body);
-  const node = JSON.parse(require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' }).trim());
+  // Parse through a helper that SAYS WHICH SIDE produced unparseable output and shows it.
+  // This test flakes rarely and only under a full-suite run (2026-09-03/04, twice), and
+  // its only symptom was a bare `Unexpected end of JSON input` — which names neither the
+  // side nor the bytes, so every occurrence was undiagnosable after the fact. Two
+  // hypotheses have already been disproven by measurement (a shared oracle-stage race;
+  // file-level concurrency, six parallel runs all green), and the next occurrence should
+  // cost evidence instead of another guess.
+  const parse = (side, text, extra) => {
+    try { return JSON.parse(String(text).trim()); } catch (e) {
+      assert.fail(`${side} produced unparseable stdout (${e.message}).\n`
+        + `  stdout (${String(text).length} bytes): ${JSON.stringify(String(text))}\n`
+        + `  ${extra || ''}`);
+    }
+  };
+  const nodeRun = require('node:child_process').execFileSync(process.execPath, [f], { encoding: 'utf8' });
+  const node = parse('the node reference run', nodeRun);
   const r = runLoader(f);
   assert.strictEqual(r.status, 0, r.stderr);
-  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), node);
+  const got = parse('the tjs run', r.stdout, `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+  assert.deepStrictEqual(got, node);
   assert.strictEqual(node.file, 'redirected-to-fd');
 });
 

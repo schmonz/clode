@@ -166,6 +166,41 @@ if (!process.env.CLODE_PROVIDER_BIN) {
     console.error(`run: no Claude provider resolved — ${skipReason()}`);
   }
 }
+// PRE-WARM THE ORACLE STAGE, ONCE, BEFORE ANY TEST FILE SPAWNS.
+//
+// test/oracle-models.cjs's stageCli extracts into a SHARED, provider-keyed cache
+// (<CLODE_ORACLE_STAGE_ROOT|tmp>/clode-oracle-stage/<cacheKey>), deliberately, so a job
+// pays one merge per provider instead of one per test file. But this runner spawns test
+// files CONCURRENTLY, and libexec/clode-extract.cjs's extractIfNeeded is not atomic: it
+// mkdirs the cache dir and writeFileSyncs straight into it, with no temp-and-rename. Its
+// cache-hit guard needs a matching signature, so on a COLD cache two files both miss it
+// and both write the same paths at the same time.
+//
+// That produced two load-only flakes, both green in isolation and both filed before the
+// cause was known: node-shim-child-process's "Unexpected end of JSON input" (a read
+// beating a write) and agentic-subagent-diff's "graph-meta failed (exit 1)" (a spawn over
+// a tree still being written).
+//
+// Warming it here serialises the one write, so every concurrent reader afterwards takes
+// the cache-hit path and nothing races. It also keeps the shared cache's whole point --
+// one extraction per provider per run.
+//
+// This does NOT fix the underlying non-atomic extraction, which two concurrent
+// `clode build`s would still hit. That is filed separately; this is the suite's half.
+if (process.env.CLODE_PROVIDER_BIN) {
+  try {
+    const { stageCli } = require('./oracle-models.cjs');
+    const t0 = Date.now();
+    stageCli(process.env.CLODE_PROVIDER_BIN);
+    console.error(`run: oracle stage warmed in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+  } catch (e) {
+    // Not fatal: a provider that cannot stage is a condition the gated tests report
+    // themselves, with a better message than this could give.
+    console.error(`run: could not pre-warm the oracle stage (${e && e.message}); `
+      + 'provider-gated tests will report it');
+  }
+}
+
 // A DARWIN-carved provider, for the one test that needs a specific carve rather than
 // any provider (the macOS managed-settings branch check). Same reasoning as the two
 // above: the artifact is on this box, and the test read an env var nothing sets. Note

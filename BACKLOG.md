@@ -5604,7 +5604,29 @@ Ruled out for the second one: a stale engine. Both the scratch engine and the
 hash-subdir template carry the `moduleMeta` symbol, so this is not
 [[stale-engine-template-breaks-builds]].
 
-**Hypothesis worth testing first, because it would explain both.**
+**Status 2026-09-04: one hypothesis tested and PARTLY disproven — read this before
+guessing again.**
+
+The shared-stage race below is REAL by inspection: `libexec/clode-extract.cjs`'s
+`extractIfNeeded` mkdirs the cache dir and `writeFileSync`s straight into it with no
+temp-and-rename, and its cache-hit guard needs a matching signature, so on a COLD cache
+two concurrent test files both miss the guard and write the same paths. `test/run.mjs`
+now pre-warms that stage once before spawning anything, which serialises the one write.
+
+But it did NOT fix `node-shim-child-process`. Three cold-cache full runs after the
+pre-warm: green, **FAILED (same `Unexpected end of JSON input`)**, green. That test never
+touches the oracle stage, so the hypothesis was wrong for it — and `agentic-subagent-diff`
+did not recur in those three runs, which is encouraging but far from proof.
+
+Also disproven for it: file-level concurrency. Six parallel runs of that file alone, all
+green. Whatever it needs, it needs the full suite.
+
+What changed instead: the test now reports WHICH side produced unparseable output and
+shows the bytes. Its only symptom was a bare `Unexpected end of JSON input`, naming
+neither the side nor the content, so every occurrence was undiagnosable afterwards. The
+next one costs evidence rather than a third guess.
+
+**The original hypothesis, still worth finishing for the OTHER flake.**
 `test/oracle-models.cjs`'s `stageCli` writes to a cache dir under
 `CLODE_ORACLE_STAGE_ROOT`, defaulting to a SHARED path keyed by provider
 (`<tmp>/clode-oracle-stage/<cacheKey>`), and the suite runs files concurrently. Two
