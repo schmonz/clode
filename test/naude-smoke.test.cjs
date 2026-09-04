@@ -5,11 +5,21 @@
 // the mock's /messages, print PONG, and exit 0 — with no module-resolution or
 // "not implemented" breakage in stderr.
 //
-// This CANNOT run on this box (macOS 10.9 / old Node): building a SEA needs esbuild
-// + postject and Node >= 24, and materializing/injecting the blob is a Node>=24
-// feature. So the test is GATED and SKIPs cleanly here. It is written to be a real,
-// honest build+boot+PONG check on any Node >= 24 host / CI — nothing is stubbed; the
-// gate is the ONLY thing that keeps it from executing off-host.
+// WHY IT IS GATED: COST, not capability. Corrected 2026-09-04 — this used to read
+// "This CANNOT run on this box (macOS 10.9 / old Node)", which was true of the box it
+// was written on and has been quoted as a fact ever since. Measured on the current dev
+// box (macOS 26, node v26.3.0, pinned 2.1.251 provider): BOTH tests here build a real
+// SEA, boot it, and PONG — 2 pass, 0 fail, 0 skipped. Nothing about this host prevents
+// it.
+//
+// What the gate actually buys is minutes: it is a full `clode build --naude`, so it
+// does not belong on every push. Requirements are real but ordinary — esbuild +
+// postject and Node >= 24, since materializing/injecting the SEA blob is a Node >= 24
+// feature — and any current host or CI runner meets them.
+//
+// Nothing here is stubbed. The gate is the ONLY thing keeping it from executing, so if
+// you are wondering whether this test still works, the answer is to run it, not to read
+// this comment: `CLODE_NAUDE_SMOKE=1 node --test test/naude-smoke.test.cjs`.
 //
 // To exercise it on a Node >= 24 host with a real provider present:
 //   CLODE_NAUDE_SMOKE=1 CLODE_CLAUDE_BIN=/path/to/claude \
