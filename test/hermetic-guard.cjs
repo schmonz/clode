@@ -26,6 +26,11 @@ const tree = require('./tree-guard.cjs');
 // a breaking signature change — keeps every plain-string caller (including this file's
 // own tests) untouched while giving run.mjs's GUARD_WATCH a place to name an exclusion
 // right next to the path it applies to.
+//
+// `ignore` here stays plain string[] (tree.walk enforces this — see tree-guard.cjs); a
+// caller building it from a named, justified exemption should resolve it through
+// test/allow-list.cjs's resolveAllowList() first, not hand-write the array. run.mjs's
+// GUARD_WATCH does exactly that.
 function snapshot(paths, fsm = fs) {
   const out = [];
   for (const entry of paths) {

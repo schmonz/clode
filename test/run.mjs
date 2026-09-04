@@ -309,6 +309,7 @@ if (!fs.existsSync(NAUDE_BUNDLE) || !fs.existsSync(MAIN_BUNDLE)) {
 
 // Hermetic guard (pure node; required in-process). Watch the real dirs a test must never touch.
 const guard = require('./hermetic-guard.cjs');
+const { resolveAllowList } = require('./allow-list.cjs');
 const home = os.homedir();
 const dataBase = process.env.XDG_DATA_HOME || path.join(home, '.local', 'share');
 const cacheBase = process.env.XDG_CACHE_HOME || path.join(home, '.cache');
@@ -321,28 +322,61 @@ const REAL_STORE = path.join(dataBase, 'clode');
 // same directory twice under two different exclusion shapes. What remains here is
 // EXTERNAL real state a test must never touch, which the whole-checkout gate (rooted
 // at ROOT) cannot see at all.
+//
+// Every exclusion below is a RECORD ({ pattern, because, provenBy }), resolved through
+// allow-list.cjs, not a bare string — a bare string can only be REPORTED on, never
+// independently checked, which is how REAL_STORE/build-trace.jsonl got exempted in
+// phase 2's Task 3 BEFORE the writer it exempts existed: from the moment the writer
+// landed, every leak into that file was pre-authorised, silently, because we had told
+// the guard to be silent about it. A record that can't prove its own exemption is a
+// FINDING, and resolveAllowList DROPS it rather than applying it anyway — see
+// test/allow-list.test.cjs. A finding here is fatal (resolveOrDie below): a guard
+// config that cannot prove its own exemptions is not safe to run at all.
+function resolveOrDie(entries, label) {
+  const { patterns, findings } = resolveAllowList(entries);
+  if (findings.length) {
+    console.error(`run: ${label} allow-list entry(ies) failed to prove themselves — dropped, not applied:`);
+    for (const f of findings) console.error(`    ${f}`);
+    process.exit(2);
+  }
+  return patterns;
+}
+
+const CACHE_CLODE_ALLOW = [
+  {
+    pattern: 'tjs-vendor',
+    because: 'test/tjs-darwin-poll-fixup.test.cjs runs `node scripts/build-tjs.mjs '
+      + '--source-only` ON PURPOSE — its own header says it "resets the shared vendor '
+      + 'checkout to pristine and re-applies every patch + fixup". Rewriting '
+      + 'tjs-vendor/txiki.js IS that test, not a violation of it.',
+    provenBy: () => {
+      const p = path.join(ROOT, 'test', 'tjs-darwin-poll-fixup.test.cjs');
+      return fs.existsSync(p) && fs.readFileSync(p, 'utf8').includes('--source-only');
+    },
+  },
+  {
+    pattern: 'scratch',
+    because: "build-scratch.cjs's scratchCandidates() names <cacheBase>/clode/scratch as "
+      + 'the last-resort allocator candidate — the one that gets used on exactly the '
+      + 'machines that need it (a hardened guest, a noexec /tmp, or no TMPDIR at all). '
+      + 'Without this, a suite run on such a machine would report a HERMETICITY '
+      + 'VIOLATION for the allocator doing precisely what this phase told it to do — '
+      + 'silent today only because TMPDIR wins the candidate race on every box that has '
+      + 'run this suite so far.',
+    provenBy: () => {
+      const p = path.join(ROOT, 'scripts', 'build-scratch.cjs');
+      return fs.existsSync(p) && fs.readFileSync(p, 'utf8').includes("'clode', 'scratch'");
+    },
+  },
+];
+// REAL_STORE itself carries NO exclusion: phase 2's central CLODE_STATE_ROOT (set once,
+// above) means nothing legitimately appends to the real store during a suite run — including
+// clode-paths.cjs's traceLog(), which resolves through clodeDataDir() and therefore
+// honors CLODE_STATE_ROOT like every other state path. A leak here is real and must
+// fail loud, not be waved through by an exemption written before its writer existed.
 const GUARD_WATCH = [
-  // 'build-trace.jsonl' is ignored here: clode-paths.cjs's traceLog() names
-  // <dataBase>/clode/build-trace.jsonl as the durable per-build timing log (Task 3,
-  // 2026-09-02-phase2-name-the-steps) — it MUST survive across builds, so it lives in
-  // the real HOME/XDG state dir on purpose, not in build scratch or the checkout.
-  // Without this, a build appending a timing line to it (once Task 5 wires the writer
-  // in) would report a HERMETICITY VIOLATION for doing precisely what this log exists
-  // to do.
-  { path: REAL_STORE, ignore: ['build-trace.jsonl'] },
-  // test/tjs-darwin-poll-fixup.test.cjs:29 runs `node scripts/build-tjs.mjs --source-only`
-  // on purpose — its own header says it "resets the shared vendor checkout to pristine
-  // and re-applies every patch + fixup". Rewriting tjs-vendor/txiki.js IS that test, not
-  // a violation of it.
-  //
-  // 'scratch' is ALSO ignored here: build-scratch.cjs's scratchCandidates() names
-  // <cacheBase>/clode/scratch as the last-resort allocator candidate — the one that
-  // gets used on exactly the machines that need it (a hardened guest, a noexec
-  // /tmp, or no TMPDIR at all). Without this, a suite run on such a machine would
-  // report a HERMETICITY VIOLATION for the allocator doing precisely what this
-  // phase told it to do — silent today only because TMPDIR wins the candidate race
-  // on every box that has run this suite so far.
-  { path: path.join(cacheBase, 'clode'), ignore: ['tjs-vendor', 'scratch'] },
+  REAL_STORE,
+  { path: path.join(cacheBase, 'clode'), ignore: resolveOrDie(CACHE_CLODE_ALLOW, 'GUARD_WATCH cache/clode') },
   path.join(home, '.local', 'bin'),
 ];
 if (guard.preflight(REAL_STORE).length) {
@@ -362,58 +396,94 @@ const before = guard.snapshot(GUARD_WATCH);
 // remove, so a reviewer must be able to tell an intentional exclusion from a
 // swept-under-the-rug one without archaeology:
 const tree = require('./tree-guard.cjs');
-const TREE_ALLOW = [
-  // git refreshes its own index on plain read-only commands (status, diff, log);
-  // that is git doing its job, not a test/build writing into the checkout.
-  '.git',
-  // The sanctioned copy-back target for a FINISHED, shippable artifact — see
-  // scripts/platform-tag.cjs's file header and artifactDir(): "if it's in
-  // build/clode-*, it's shippable" is the whole contract that dir exists to serve.
-  // Everything else that used to live under build/ (the toolchain cache, the tjs
-  // engine template, the harness) is SCRATCH and has moved off through buildPath()
-  // as of this task — build/ now holds only artifact dirs (and build/bundle, the
-  // platform-independent esbuilt bundle scripts/build-clode-main.mjs declares as
-  // its own documented output dir).
-  //
-  // Named ONLY the two shapes that are actually real outputs on disk (Finding 3):
-  // build/clode-* (one dir per host/version — artifactName()'s local shape, or
-  // CI's CLODE_ASSET_NAME override, both always prefixed 'clode-', see
-  // canonical-name.cjs's assetName()) and build/bundle (the unkeyed esbuilt
-  // bundle). A bare 'build' here was blind to build/toolchain/ or build/tjs/
-  // REAPPEARING — a regression of THIS PHASE'S OWN migration off of them, which is
-  // the single thing this gate most ought to catch. naude/quaude are NOT separate
-  // top-level build/ dirs (grep confirms no build/naude, build/quaude path exists
-  // anywhere in the tree) — they are files INSIDE a build/clode-*/ artifact dir
-  // (seaOut()), already covered by the clode-* entry, so they get no entry of
-  // their own.
-  'build/bundle',
-  'build/clode-*',
-  // A developer/editor-tooling install target (this project ships zero runtime
-  // dependencies — see the repo's "Zero dependencies" doctrine — so clode itself
-  // never populates a root node_modules/, but the directory is gitignored and
-  // excluded here defensively so an incidental local `npm install` for tooling
-  // never trips the gate).
-  'node_modules',
-  // Scratch for the plan-execution machinery: reports and ledger entries under
-  // .superpowers/sdd/. It hides from git via a self-planted .superpowers/sdd/
-  // .gitignore containing `*` — worth knowing, because `git check-ignore` on the
-  // top directory reports NOT ignored and the mechanism is otherwise unguessable.
-  // This gate walks the FILESYSTEM, not git, so the entry is required whenever a
-  // plan is being executed, and a plan can be executed at any time — it is a
-  // standing exception, not a temporary one. (An earlier version of this comment
-  // promised the directory was "deleted when the plan finishes"; that made the
-  // entry look stale the moment a plan ended, which is how a named exception
-  // decays into an unexplained one.) Moving the workspace out of the checkout
-  // would desync the tooling's own scripts from where they read and write it.
-  '.superpowers',
-  // The PTY/TUI native-addon test-harness cache. As of this task harnessDir()
-  // itself resolves through buildPath() (out of the checkout), so a fresh install
-  // no longer lands here — but this directory predates that move and may still
-  // exist on disk (gitignored) from before it, on any box that ran the suite
-  // pre-migration. Excluded so the gate's verdict never depends on whether that
-  // leftover directory happens to be present.
-  'test/.harness',
+// Every TREE_ALLOW entry is a RECORD ({ pattern, because, provenBy }) resolved through
+// allow-list.cjs, not a bare string — an unexplained or unprovable entry here is exactly
+// the exempt-by-name pattern this phase exists to remove, so a reviewer must be able to
+// tell an intentional exclusion from a swept-under-the-rug one without archaeology, and
+// resolveOrDie (defined above) refuses to run at all if one can't prove itself.
+const TREE_ALLOW_ENTRIES = [
+  {
+    pattern: '.git',
+    because: 'git refreshes its own index on plain read-only commands (status, diff, log); '
+      + 'that is git doing its job, not a test/build writing into the checkout.',
+    provenBy: () => fs.existsSync(path.join(ROOT, '.git')),
+  },
+  {
+    pattern: 'build/bundle',
+    because: "The sanctioned copy-back target for a FINISHED, shippable artifact — see "
+      + "scripts/platform-tag.cjs's file header and artifactDir(): \"if it's in "
+      + "build/clode-*, it's shippable\" is the whole contract that dir exists to serve. "
+      + 'Everything else that used to live under build/ (the toolchain cache, the tjs '
+      + 'engine template, the harness) is SCRATCH and has moved off through buildPath() '
+      + 'as of this task — build/ now holds only artifact dirs (and build/bundle, the '
+      + 'platform-independent esbuilt bundle scripts/build-clode-main.mjs declares as its '
+      + 'own documented output dir).',
+    provenBy: () => {
+      const p = path.join(ROOT, 'scripts', 'build-clode-main.mjs');
+      return fs.existsSync(p) && fs.readFileSync(p, 'utf8').includes("'build', 'bundle'");
+    },
+  },
+  {
+    pattern: 'build/clode-*',
+    because: "Named ONLY the two shapes that are actually real outputs on disk (Finding 3): "
+      + "build/clode-* (one dir per host/version — artifactName()'s local shape, or CI's "
+      + "CLODE_ASSET_NAME override, both always prefixed 'clode-', see canonical-name.cjs's "
+      + 'assetName()) and build/bundle (the unkeyed esbuilt bundle). A bare \'build\' here '
+      + "was blind to build/toolchain/ or build/tjs/ REAPPEARING — a regression of THIS "
+      + "PHASE'S OWN migration off of them, which is the single thing this gate most ought "
+      + 'to catch. naude/quaude are NOT separate top-level build/ dirs — they are files '
+      + "INSIDE a build/clode-*/ artifact dir (seaOut()), already covered by this entry.",
+    provenBy: () => typeof require('../scripts/platform-tag.cjs').artifactDir === 'function',
+  },
+  {
+    pattern: 'node_modules',
+    because: 'A developer/editor-tooling install target (this project ships zero runtime '
+      + 'dependencies — see the repo\'s "Zero dependencies" doctrine — so clode itself never '
+      + 'populates a root node_modules/, but the directory is gitignored and excluded here '
+      + 'defensively so an incidental local `npm install` for tooling never trips the gate). '
+      + 'Always true — there is no writer to prove, only a promise the repo itself never '
+      + 'creates one.',
+    provenBy: () => true,
+  },
+  {
+    pattern: '.superpowers',
+    because: 'Scratch for the plan-execution machinery: reports and ledger entries under '
+      + '.superpowers/sdd/. It hides from git via a self-planted .superpowers/sdd/.gitignore '
+      + 'containing `*` — worth knowing, because `git check-ignore` on the top directory '
+      + 'reports NOT ignored and the mechanism is otherwise unguessable. This gate walks the '
+      + 'FILESYSTEM, not git, so the entry is required whenever a plan is being executed, and '
+      + 'a plan can be executed at any time — it is a standing exception, not a temporary '
+      + 'one. Moving the workspace out of the checkout would desync the tooling\'s own '
+      + 'scripts from where they read and write it.',
+    provenBy: () => fs.existsSync(path.join(ROOT, '.superpowers')),
+  },
+  {
+    pattern: 'test/.harness',
+    because: 'The PTY/TUI native-addon test-harness cache. harnessDir() itself resolves '
+      + 'through buildPath() (out of the checkout), so a fresh install no longer lands here '
+      + '— but this directory predates that move and may still exist on disk (gitignored) '
+      + "from before it, on any box that ran the suite pre-migration. Excluded so the gate's "
+      + 'verdict never depends on whether that leftover directory happens to be present. '
+      + 'Always true — it is a pre-migration leftover, not something a current run creates.',
+    provenBy: () => true,
+  },
+  {
+    pattern: 'docs',
+    because: 'docs/ is entirely gitignored (.gitignore: "Superpowers working docs (plans, '
+      + 'approaches, skill scratch) — not part of the project") — the same posture the '
+      + '.superpowers entry above already states for its own sibling scratch tree. Writing a '
+      + 'plan or spec mid-run (e.g. docs/superpowers/plans/2026-09-04-*.md, written by the '
+      + 'very plan-execution machinery running this suite) is exactly as legitimate as '
+      + '.superpowers/sdd/ scratch, for the same stated reason — a plan can be executed at '
+      + 'any time.',
+    provenBy: () => {
+      let st;
+      try { st = fs.statSync(path.join(ROOT, 'docs')); } catch { return false; }
+      return st.isDirectory();
+    },
+  },
 ];
+const TREE_ALLOW = resolveOrDie(TREE_ALLOW_ENTRIES, 'TREE_ALLOW');
 const treeBefore = tree.walk(ROOT, { ignore: TREE_ALLOW });
 
 // Run the node tests: discover test/**/*.test.cjs (no shell glob) and run under THIS

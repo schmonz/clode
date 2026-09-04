@@ -17,7 +17,18 @@ function walk(root, { ignore = [], fsm = realFs } = {}) {
   // of artifact dirs, one per host/version, not a single fixed path) without pulling
   // in a real glob engine for one character. Anything without a trailing '*' keeps
   // the exact/prefix-at-a-path-boundary match this already had.
+  //
+  // `ignore` stays a plain string[] — this module has no idea what a `because` or
+  // `provenBy` is, and never will. test/allow-list.cjs is the ONLY place that
+  // resolves a named, proven exemption record down to the strings here; a caller
+  // that hands walk() something other than a string (e.g. an unresolved allow-list
+  // record, passed straight through by mistake) gets a loud TypeError instead of a
+  // silently-never-matching pattern.
   const skip = ignore.map((p) => {
+    if (typeof p !== 'string') {
+      throw new TypeError(`tree-guard: ignore entries must be strings (resolve allow-list `
+        + `records first — see test/allow-list.cjs), got: ${JSON.stringify(p)}`);
+    }
     const wildcard = p.endsWith('*');
     let normalized = path.normalize(wildcard ? p.slice(0, -1) : p);
     while (normalized.endsWith(path.sep)) {
