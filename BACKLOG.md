@@ -5627,37 +5627,50 @@ a gate.
 **Run all of these on a logged-in machine before tagging.** Each states what it proves,
 because the point is to be able to tell which one failed and what that means.
 
-### 0. FIRST: items 1 and 2 below are OUTDATED — verify before trusting them
+### 0. FIRST: items 1 and 2 below are OBSOLETE — retire, do not re-anchor
 
-**Corrected 2026-09-04, same day they were written.** The user asked whether
-`e2e-doctor-parity` is still worth anything, recalling that `/doctor` stopped having a
-fixed format some releases ago. It is worth something in DESIGN — it is a same-run
-differential, so machine noise cancels — but its ANCHORS are stale, measured against the
-pinned 2.1.251 provider's extracted `cli.cjs`:
+**Settled 2026-09-04 by capturing the real screen** (native claude 2.1.260, under the
+repo's own PTY harness, from a trusted cwd). `/doctor` IN A SESSION is no longer a
+fixed-format report. It is an AGENT TURN:
 
-| anchor | occurrences in 2.1.251 | what it is |
-|---|---|---|
-| `Enter to close` | **0** | `doctor-parity.cjs`'s `REPORT_FOOTER` — the completeness signal ("exit 2 on an incomplete capture") AND what stale-frames asserts gets erased |
-| `Installation warnings` | **0** | the section `ALLOWED_OMISSION_SUBSTRINGS` exists to curate |
-| `Currently running:` | 1 | still present |
-| `Diagnostics` | 53 | still present |
+    ❯ /doctor
 
-The current bundle's close affordances are `Press any key to close` and
-`esc to close · esc again quits`. So the capture can never be judged complete, the
-omission allowlist curates a section that is gone, and stale-frames waits for a footer
-that is never drawn.
+    ⏺ I'll run the read-only checks first, then present a report before changing anything.
 
-**Neither test can pass against a current provider**, and that is independent of login —
-which also means the hard-fail-without-login defect was masking a deeper staleness.
+      Running 3 shell commands…
+      ⎿  $ cd ~; echo "=== installMethod/autoUpdates/numStartups ==="; jq '{installMethod,
+         autoUpdates, numStartups, hasCompletedOnboarding}' ~/.claude.json 2>&1; …
 
-Before either is run as a release gate, someone must decide: re-anchor them to the
-current `/doctor` (new footer, new sections, and check whether the report is still
-structured enough to diff at all), or retire them and keep only the stale-frames
-PROPERTY — "a finished full-screen command's frame is erased on repaint" — re-expressed
-against whatever full-screen command still has a stable footer.
+    ✻ Seasoning… (12s · ↓ 666 tokens)
 
-This was found by static inspection of the extracted bundle, not by running anything —
-running these spawns the real bundle and pops the macOS Keychain modal.
+A model runs shell commands and writes prose about what it found. There is no report
+frame, no `Enter to close`, no `Installation warnings` section, no stable item list —
+and the output is non-deterministic BY DESIGN, because it is generated. It also spends
+tokens on every run.
+
+**So `test/e2e-doctor-parity.test.cjs` is not stale-anchored, it is conceptually void.**
+It diffs two model-authored turns and asserts they match modulo an allowlist. Two runs
+of the SAME binary would not match. No amount of re-anchoring fixes that; the property
+it was written to check no longer exists to be checked.
+
+Note the CLI subcommand `claude doctor` IS still structured (`Running:`, `Platform:`,
+`Path:`, `Config install method:`, … then `No installation issues found.`) — but its own
+last line points at the in-session `/doctor` for the real checkup, and the labels have
+drifted from the test's anyway (`Running:` where the test expects `Currently running:`).
+If a doctor-parity check is ever wanted again, THAT is the surface to diff, and it is a
+different, much simpler test: run two binaries non-interactively, compare stdout.
+
+**Recommended:**
+- RETIRE `test/e2e-doctor-parity.test.cjs`. It cannot be made to work.
+- KEEP the `stale-frames` PROPERTY — "a finished full-screen command's frame is erased
+  on repaint" — but re-express it against a command that still IS a full-screen frame
+  with a stable footer. `/doctor` no longer is one, which is why that test waits forever
+  for a footer that is never drawn.
+- If doctor parity is still wanted: write a small new test over `claude doctor` vs
+  `quaude doctor`, structured and deterministic, with none of the PTY machinery.
+
+Cost of finding this: one PTY capture, ~666 tokens, no Keychain modal. Cost of NOT
+finding it: two tests carried in the release ritual that could never have passed.
 
 ### 1. Doctor parity vs native — `test/e2e-doctor-parity.test.cjs` (2 tests) — SEE ITEM 0
 
