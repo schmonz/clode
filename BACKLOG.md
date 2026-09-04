@@ -5627,7 +5627,39 @@ a gate.
 **Run all of these on a logged-in machine before tagging.** Each states what it proves,
 because the point is to be able to tell which one failed and what that means.
 
-### 1. Doctor parity vs native — `test/e2e-doctor-parity.test.cjs` (2 tests)
+### 0. FIRST: items 1 and 2 below are OUTDATED — verify before trusting them
+
+**Corrected 2026-09-04, same day they were written.** The user asked whether
+`e2e-doctor-parity` is still worth anything, recalling that `/doctor` stopped having a
+fixed format some releases ago. It is worth something in DESIGN — it is a same-run
+differential, so machine noise cancels — but its ANCHORS are stale, measured against the
+pinned 2.1.251 provider's extracted `cli.cjs`:
+
+| anchor | occurrences in 2.1.251 | what it is |
+|---|---|---|
+| `Enter to close` | **0** | `doctor-parity.cjs`'s `REPORT_FOOTER` — the completeness signal ("exit 2 on an incomplete capture") AND what stale-frames asserts gets erased |
+| `Installation warnings` | **0** | the section `ALLOWED_OMISSION_SUBSTRINGS` exists to curate |
+| `Currently running:` | 1 | still present |
+| `Diagnostics` | 53 | still present |
+
+The current bundle's close affordances are `Press any key to close` and
+`esc to close · esc again quits`. So the capture can never be judged complete, the
+omission allowlist curates a section that is gone, and stale-frames waits for a footer
+that is never drawn.
+
+**Neither test can pass against a current provider**, and that is independent of login —
+which also means the hard-fail-without-login defect was masking a deeper staleness.
+
+Before either is run as a release gate, someone must decide: re-anchor them to the
+current `/doctor` (new footer, new sections, and check whether the report is still
+structured enough to diff at all), or retire them and keep only the stale-frames
+PROPERTY — "a finished full-screen command's frame is erased on repaint" — re-expressed
+against whatever full-screen command still has a stable footer.
+
+This was found by static inspection of the extracted bundle, not by running anything —
+running these spawns the real bundle and pops the macOS Keychain modal.
+
+### 1. Doctor parity vs native — `test/e2e-doctor-parity.test.cjs` (2 tests) — SEE ITEM 0
 
     CLODE_LIVE_RENDER=1 node --test test/e2e-doctor-parity.test.cjs
 
