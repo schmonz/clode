@@ -108,6 +108,45 @@
 // VIOLATION, on purpose, because silencing the pattern until it goes quiet again
 // is the exact "gate that cannot fail" this phase exists to close off. Full
 // commands + output: task-3-report.md.
+//
+// FIX ROUND 1 (2026-09-04), from a coordinator ruling on two things verified after the
+// note above was written:
+//
+// (1) FALSE POSITIVE — the scan was counting OUR OWN emitted code. One of the 16
+// findings was in `/$bunfs/root/__clode-scc-1.js`. Those modules are not upstream's:
+// libexec/scc-merge.cjs:1119 names each merge group `/$bunfs/root/__clode-scc-` +
+// groupIndex + `.js`, and graph.json's `sources` carries three of them
+// (`__clode-scc-0/1/2.js`) — MERGED COPIES of real upstream modules the merger folded
+// together to remove a residual cyclic require. Counting them is principle 3 of
+// BACKLOG.md's "Nothing gates the gates" entry: "a scanner must not count our own
+// emitted code." Fixed by deriving the exclusion prefix from libexec/scc-merge.cjs's own
+// `mergedName` template at read() time (see `deriveOwnModulePrefix()` below) rather than
+// hand-typing the literal string — a hard-coded `__clode-scc-` in this file would be the
+// same declared-not-derived defect one layer over. Re-measuring after exclusion: the net
+// wall's count moved 11 -> 10 (one of the eleven WAS an scc-merge artifact); fs.watch's
+// 5 hits were all real modules and stayed 5.
+//
+// (2) THE REAL FINDING, and it belongs here, not just in a task report: the ESM
+// migration above restored evidence-gathering, but the ORIGINAL narrow-pattern strategy
+// this file was built on — "alarm on a DIRECT call with no intermediate alias, because
+// that shape is a fresh one-off and the giant pre-existing SDK bundles always alias
+// first" — has no ESM expression to fall back to AT ALL, not merely a harder-to-find
+// one. Every ESM `import{x}from"m"` binds a local name by construction, and Bun's
+// bundler renames that binding for every import it emits regardless of whether the
+// original source aliased it. So post-2.1.243, "matches the wall's specific API name,
+// imported by name" is the NARROWEST expressible signal, and it is exactly the
+// "alias-aware scan matching ANY such call" this file's own header already predicted
+// would be "RED ON DAY ONE" — measured here at 10 (net) + 5 (fs.watch) = 15 modules,
+// none newly inlined, all pre-existing. Judging that population against a fixed
+// zero-tolerance threshold makes this file the same untrusted, ignorable ratchet the
+// header's `fs.watchFile` story warns about. So this is now a RATCHET, not a threshold:
+// each wall carries a recorded `baseline` (the count the last human actually looked at),
+// and `findings` is non-empty only when the CURRENT count differs from that baseline, in
+// EITHER direction — a rise is a new reach, a fall means one vanished and the baseline
+// needs a deliberate re-cut, and both need a human, but neither needs one on every run
+// just because the population is nonzero. Full measurement, the control proving the
+// ratchet actually fires, and confirmation this reports OK on the real pinned carve:
+// task-3-report.md.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -115,6 +154,8 @@ const path = require('node:path');
 const { defineGuard, guardTests } = require('./guard.cjs');
 const { clodeCacheDir } = require('../libexec/clode-paths.cjs');
 const { pinnedVersion } = require('./provider-resolve.cjs');
+
+const REPO = path.resolve(__dirname, '..');
 
 // Declared walls, as DATA — adding one later is a one-line addition here, not a
 // new test. `pattern` matches source text; `why` is the shim module's own
@@ -158,6 +199,11 @@ const WALLS = [
   {
     api: 'net.connect / net.createConnection',
     pattern: /require\(\s*["'](?:node:)?net["']\s*\)\s*\.(?:connect|createConnection)\s*\(|import\s*\{[^}]*\b(?:connect|createConnection)\b[^}]*\}\s*from\s*["'](?:node:)?net["']/,
+    // MEASURED 2026-09-04 against ~/.cache/clode/2.1.251/graph.json, EXCLUDING clode's
+    // own scc-merge output (see deriveOwnModulePrefix() below) — 10 modules import
+    // `connect`/`createConnection` from "net" by name via ESM (11 before exclusion; one
+    // was an scc-merge artifact). Re-measure this on every pin bump: task-3-report.md.
+    baseline: 10,
     why: '"the actual socket surface (net.connect / createConnection / real '
       + 'Socket I/O / net.Server) is NOT implemented — the -p transport is '
       + 'txiki\'s native fetch, which never routes through node:net ... '
@@ -170,6 +216,9 @@ const WALLS = [
   {
     api: 'fs.watch',
     pattern: /require\(\s*["'](?:node:)?fs["']\s*\)\s*\.watch\s*\(|import\s*\{[^}]*\bwatch\b[^}]*\}\s*from\s*["'](?:node:)?fs["']/,
+    // MEASURED 2026-09-04, same run as net's: 5 modules import `watch` from "fs" by name
+    // via ESM; none were scc-merge artifacts, so exclusion did not change this count.
+    baseline: 5,
     why: '"fs.watch (the inotify/FSEvents-style API): STILL a stub, unlike '
       + 'watchFile above ... this engine\'s uv_fs_event backend is ENOSYS on some '
       + 'legs, so there is no portable native primitive to poll-emulate cheaply." '
@@ -184,6 +233,28 @@ const WALLS = [
       + 'libexec/node-shim/modules/fs.cjs (fsMod.watch) and RECIPE.md C7',
   },
 ];
+
+// Our own emitted merge output must never count as "upstream now calls this" — principle
+// 3 of BACKLOG.md's "Nothing gates the gates" entry. libexec/scc-merge.cjs:1119 names
+// each merged group '/$bunfs/root/__clode-scc-' + groupIndex + '.js'; graph.json's
+// `sources` carries these as MERGED COPIES of real upstream modules (folded together to
+// remove a residual cyclic require), so counting them both misattributes clode's own
+// output to upstream AND double-counts whatever real reach the merge happened to fold
+// in. Parsed from the real source rather than hand-typed here — a literal
+// '__clode-scc-' in this file would be the same declared-not-derived defect the merge
+// naming itself is meant to avoid — so a rename of the merge scheme breaks this LOUDLY
+// (the regex stops matching, this throws) instead of silently going stale and starting
+// to count our own modules again.
+function deriveOwnModulePrefix() {
+  const src = fs.readFileSync(path.join(REPO, 'libexec', 'scc-merge.cjs'), 'utf8');
+  const m = src.match(/var mergedName = (['"])((?:(?!\1).)*)\1\s*\+\s*groupIndex/);
+  if (!m) {
+    throw new Error('could not locate the scc-merge mergedName template in '
+      + 'libexec/scc-merge.cjs — it moved or changed shape; this guard can no longer '
+      + 'tell clode\'s own emitted modules from upstream\'s');
+  }
+  return m[2];
+}
 
 // Test-only override, same convention the old CLODE_SHIM_WALL_BUNDLE var used:
 // point the gate straight at a graph.json instead of resolving the pinned
@@ -226,17 +297,37 @@ function readGraphJson(env = process.env) {
   return { sources };
 }
 
-// PURE. Input is the module-source MAP from graph.json's `sources`, not the 49MB
-// cli.cjs graph runner (see the MIGRATED note above for why that distinction
-// matters — reading the runner is the escape-blind class, spec 3.7 item 8).
-function scanWalls({ sources, walls }) {
+// PURE. sources: the module-source MAP from graph.json's `sources`, not the 49MB cli.cjs
+// graph runner (see the MIGRATED note above for why that distinction matters — reading
+// the runner is the escape-blind class, spec 3.7 item 8). walls: WALLS-shaped entries,
+// each carrying a `baseline`. ownModulePrefix: modules under this prefix are clode's own
+// scc-merge output (see deriveOwnModulePrefix above) and are excluded from wall matching
+// entirely — they still count toward `examined` (the scan did look at them), they just
+// cannot produce a finding.
+//
+// RATCHET, not a threshold — see the FIX ROUND 1 header note for why. A finding fires
+// only when a wall's CURRENT match count differs from its recorded `baseline`, in EITHER
+// direction: a rise means a new reach appeared, a fall means one vanished (the baseline
+// itself needs a deliberate re-cut, not a silent shrink). The full list of matching
+// modules rides in the finding text so whoever sees it can diff against the baseline.
+function scanWalls({ sources, walls, ownModulePrefix }) {
   const findings = [];
   let examined = 0;
+  const hits = new Map(walls.map((w) => [w.api, []]));
   for (const [module, body] of Object.entries(sources)) {
     if (typeof body !== 'string') continue;
-    examined++;
+    examined++;                                    // looked at it, own-emitted or not
+    if (ownModulePrefix && module.startsWith(ownModulePrefix)) continue;
     for (const wall of walls) {
-      if (wall.pattern.test(body)) findings.push(`${wall.api} reached in ${module}`);
+      if (wall.pattern.test(body)) hits.get(wall.api).push(module);
+    }
+  }
+  for (const wall of walls) {
+    const modules = hits.get(wall.api);
+    if (modules.length !== wall.baseline) {
+      const dir = modules.length > wall.baseline ? 'ROSE' : 'FELL';
+      findings.push(`${wall.api}: reach count ${dir} from baseline ${wall.baseline} to `
+        + `${modules.length}:\n` + modules.map((m) => `      ${m}`).join('\n'));
     }
   }
   return { findings, examined };
@@ -248,14 +339,19 @@ const guard = defineGuard({
                 // not a target. Under it, the scan read something that is not the graph.
   read: () => {
     const g = readGraphJson();          // returns { skip } when no provider is staged
-    return g.skip ? g : { sources: g.sources, walls: WALLS };
+    return g.skip ? g : { sources: g.sources, walls: WALLS, ownModulePrefix: deriveOwnModulePrefix() };
   },
   scan: scanWalls,
-  // The control is built from the encoding the REAL artifact uses today. If upstream
-  // changes encoding again, this control keeps passing while the gate goes blind — so
-  // step 1 of any pin bump is to re-measure the shapes, not to re-run this file.
+  // A synthetic corpus with its OWN zero baseline (not the real WALLS' recorded counts,
+  // which describe a completely different corpus and would make this control's pass/fail
+  // depend on what pin happens to be checked out). One extra reach in a fresh corpus
+  // pushes its count from 0 to 1, past baseline, which is exactly what the ratchet must
+  // catch — a positive control describing the SAME kind of violation the real gate is
+  // built to notice, not a coincidental mismatch. If upstream changes encoding again,
+  // this control keeps passing while the gate goes blind — so step 1 of any pin bump is
+  // to re-measure the shapes, not to re-run this file.
   control: () => ({
-    walls: WALLS,
+    walls: WALLS.map((w) => ({ ...w, baseline: 0 })),
     sources: { 'synthetic/control.js': 'import{connect as q}from"net";q({})' },
   }),
 });
@@ -296,6 +392,52 @@ test('the fs.watch wall pattern still matches the legacy require form', () => {
   assert.ok(wall.pattern.test(cjs), 'both encodings must be pinned for fs.watch too');
 });
 
+test('regression: our own scc-merge output is excluded, not counted as an upstream reach', () => {
+  // A module under the derived own-module prefix that WOULD match the net wall must not
+  // be counted, even though its content is wall-shaped — it is clode's own merged
+  // output, not upstream's code (BACKLOG.md "Nothing gates the gates" principle 3).
+  const walls = [{ ...WALLS.find((w) => w.api.startsWith('net.')), baseline: 0 }];
+  const sources = { '/$bunfs/root/__clode-scc-0.js': 'import{connect as q}from"net";q({})' };
+  const withExclusion = scanWalls({ sources, walls, ownModulePrefix: '/$bunfs/root/__clode-scc-' });
+  assert.deepStrictEqual(withExclusion.findings, [],
+    'a module under the own-emitted prefix must not produce a finding');
+  assert.strictEqual(withExclusion.examined, 1, 'it is still examined, just not counted toward a wall');
+
+  // Same source, no exclusion prefix supplied: the same content DOES count. Proves the
+  // exclusion above is doing something, not a no-op that happens to pass either way.
+  const withoutExclusion = scanWalls({ sources, walls });
+  assert.strictEqual(withoutExclusion.findings.length, 1,
+    'without the own-module exclusion the same source must be counted');
+});
+
+test('regression: a count that RISES past its baseline is reported', () => {
+  const walls = [{ ...WALLS.find((w) => w.api.startsWith('net.')), baseline: 1 }];
+  const sources = {
+    'a.js': 'import{connect as x}from"net";x({})',
+    'b.js': 'import{connect as y}from"net";y({})',
+  };
+  const r = scanWalls({ sources, walls });
+  assert.strictEqual(r.findings.length, 1);
+  assert.match(r.findings[0], /ROSE from baseline 1 to 2/);
+  assert.match(r.findings[0], /a\.js/);
+  assert.match(r.findings[0], /b\.js/);
+});
+
+test('regression: a count that FALLS below its baseline is reported', () => {
+  const walls = [{ ...WALLS.find((w) => w.api.startsWith('net.')), baseline: 2 }];
+  const sources = { 'a.js': 'import{connect as x}from"net";x({})' };
+  const r = scanWalls({ sources, walls });
+  assert.strictEqual(r.findings.length, 1);
+  assert.match(r.findings[0], /FELL from baseline 2 to 1/);
+});
+
+test('regression: a count matching its baseline produces no finding', () => {
+  const walls = [{ ...WALLS.find((w) => w.api.startsWith('net.')), baseline: 1 }];
+  const sources = { 'a.js': 'import{connect as x}from"net";x({})' };
+  const r = scanWalls({ sources, walls });
+  assert.deepStrictEqual(r.findings, []);
+});
+
 test('shim wall tripwire mechanism: does not fire on the pre-existing aliased CJS shape', () => {
   // The exact CJS shape found in the real 2.1.218-era bundle: require() result
   // assigned to a variable first, THEN .request()/.connect() called on the alias
@@ -310,4 +452,4 @@ test('shim wall tripwire mechanism: does not fire on the pre-existing aliased CJ
   }
 });
 
-module.exports = { WALLS, scanWalls, readGraphJson, resolveGraphPath };
+module.exports = { WALLS, scanWalls, readGraphJson, resolveGraphPath, deriveOwnModulePrefix };
