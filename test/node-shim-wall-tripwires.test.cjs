@@ -276,12 +276,42 @@
 // meaningful when `CLODE_PROVIDER_BIN` names the pinned version — true under
 // `test/run.mjs` and CI (both cap it at `UPSTREAM_PIN`), and the same assumption the
 // pre-Task-3 file always made; not a new dependency this round introduced.
+//
+// CORRECTION (FIX ROUND 5, 2026-09-04) to the paragraph directly above: "the same
+// assumption the pre-Task-3 file always made" UNDERSTATED the risk, and a coordinator
+// probe proved it. The pre-Task-3 file only pattern-matched with no baseline at all, so
+// scanning the WRONG provider version was harmless — the narrow patterns matched nothing
+// anywhere, on any version, so a stray unpinned carve just produced the same "no walls
+// reached" result as the real one. FIX ROUND 1's ratchet baselines (10 net / 5 fs.watch)
+// are properties of 2.1.251 SPECIFICALLY, not of "whatever provider resolves" — so once
+// baselines exist, scanning the wrong version can produce a DIFFERENT real count and
+// report it as a VIOLATION, when the true state is "wrong artifact," not "upstream
+// reached a wall." Measured: with `CLODE_PROVIDER_BIN` unset and a fresh
+// `HOME`/`CLODE_STATE_ROOT`, `resolveProviderBin` fell through to clode's own uncapped
+// resolver, found a DIFFERENT installed version, and the gate reported `VIOLATION —
+// examined 1684, 2 finding(s)` — a confident-sounding false alarm about upstream calling
+// a wall, when nothing had changed about the wall at all.
+//
+// FIXED: `read()` now determines the ACTUAL version of the resolved provider by spawning
+// `<bin> --version` (the same mechanism `libexec/inspect-claude-bundle.cjs`'s
+// `hostAppletVersion` uses for host tools — parse `\d+\.\d+\.\d+` out of stdout+stderr,
+// never assume a path shape) and compares it against `UPSTREAM_PIN` — read fresh via
+// `test/provider-resolve.cjs`'s `pinnedVersion()`, never a hard-coded `'2.1.251'` literal
+// in this file, which would rot silently on the next pin bump (the exact
+// declared-not-derived defect this phase exists to remove). Three outcomes, in
+// `versionMismatchReason()` below (a pure decision function, unit-tested directly,
+// separate from the spawn that feeds it): version matches the pin -> proceed to scan as
+// before; version differs -> SKIP naming both the pin and what was actually found, never
+// a VIOLATION; version cannot be determined (spawn failed, no `--version` output, pin
+// file unreadable) -> SKIP saying so, never a guess.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const { defineGuard, guardTests } = require('./guard.cjs');
 const models = require('./oracle-models.cjs');
+const { pinnedVersion } = require('./provider-resolve.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 
@@ -438,6 +468,55 @@ function deriveOwnModulePrefix() {
 // CI too); DO NOT "simplify" this back to a direct cache path without re-reading that
 // note.
 //
+// Spawns `<bin> --version` and parses a semver out of stdout+stderr. Same mechanism
+// libexec/inspect-claude-bundle.cjs's hostAppletVersion uses for host tools — never
+// infer a version from a path shape (cacheKey() falls back to `<basename>-<sig>` for a
+// bin that isn't under a /versions//providers/ path, which is not a version at all).
+// Returns null on any failure (missing binary, spawn error, no parseable version) —
+// never throws, so a broken/unusual binary reads as "version unknown," not a crash.
+function resolvedProviderVersion(bin) {
+  if (!bin) return null;
+  let p;
+  try {
+    p = spawnSync(bin, ['--version'], { encoding: 'utf8', timeout: 5000 });
+  } catch {
+    return null;
+  }
+  if (!p || p.error) return null;
+  const text = `${p.stdout || ''}\n${p.stderr || ''}`;
+  const m = /\d+\.\d+\.\d+/.exec(text);
+  return m ? m[0] : null;
+}
+
+// PURE decision, deliberately separate from the spawn that feeds it — unit-tested
+// directly below without spawning a real binary. Three outcomes: null (proceed to scan,
+// version confirmed) or a skip reason (never a guess, never scanned).
+//
+// FIX ROUND 5 (2026-09-04): the ratchet baselines (10 net / 5 fs.watch — see FIX ROUND 1)
+// are properties of the 2.1.251 PIN specifically. Scanning any other version and judging
+// it against those baselines can report a confident VIOLATION that is really "wrong
+// artifact" — measured by the coordinator: CLODE_PROVIDER_BIN unset + a fresh
+// HOME/CLODE_STATE_ROOT fell through to clode's own uncapped resolver, found a different
+// installed version, and the gate reported VIOLATION (examined 1684) instead of naming
+// the real problem. See the FIX ROUND 5 header note for why this is NOT the same
+// "harmless if wrong" property the pre-Task-3 file's bare pattern-match had.
+function versionMismatchReason(pin, resolved) {
+  if (!resolved) {
+    return 'could not determine the version of the resolved provider (spawning it with '
+      + '--version failed, or produced no parseable version) — refusing to scan an '
+      + 'unidentified carve against version-specific baselines';
+  }
+  if (!pin) {
+    return 'UPSTREAM_PIN does not name a pinned version — cannot confirm the resolved '
+      + `provider (${resolved}) is the one the ratchet baselines were measured against`;
+  }
+  if (resolved !== pin) {
+    return `baselines are for ${pin}; resolved a ${resolved} carve — set CLODE_PROVIDER_BIN `
+      + 'to the pinned provider to exercise this gate';
+  }
+  return null;
+}
+
 // Never returns an empty sources map to mean "not found" — that would scan zero
 // modules and read exactly like a clean 1,839-module scan, the ambiguity
 // test/guard.cjs exists to make impossible. An absent precondition is always a
@@ -445,9 +524,22 @@ function deriveOwnModulePrefix() {
 function readGraphJson(env = process.env) {
   if (env.CLODE_SHIM_WALL_GRAPH) return readGraphFile(env.CLODE_SHIM_WALL_GRAPH);
 
+  const bin = models.resolveProviderBin(env);
+  if (!bin) {
+    return { skip: 'no upstream provider available locally — set CLODE_PROVIDER_BIN to a '
+      + 'real claude binary (or run somewhere clode has already resolved a local '
+      + 'provider) to exercise this gate; see test/oracle-models.cjs' };
+  }
+
+  // VERSION GATE, before staging: refuse to even extract a provider that is not the
+  // pin, rather than scan it and risk reporting a VIOLATION that is really "wrong
+  // artifact." See versionMismatchReason() above and the FIX ROUND 5 header note.
+  const versionSkip = versionMismatchReason(pinnedVersion(), resolvedProviderVersion(bin));
+  if (versionSkip) return { skip: versionSkip };
+
   let staged;
   try {
-    staged = models.stageProviderCli({ env });
+    staged = models.stageProviderCli({ env, bin });
   } catch (e) {
     return { skip: `provider found but staging it failed: ${(e && e.message) || String(e)}` };
   }
@@ -462,7 +554,7 @@ function readGraphJson(env = process.env) {
   // path.dirname(staged.cli). That is a separate, per-call copy directory that
   // stageCli() only ever copies cli.cjs and bun-shim.cjs into; confirmed empirically
   // (task-3-report.md) that graph.json is never there. Using it would silently skip
-  // again, the exact regression this round exists to fix.
+  // again, the exact regression FIX ROUND 4 exists to fix.
   return readGraphFile(path.join(staged.cacheDir, 'graph.json'));
 }
 
@@ -674,6 +766,30 @@ test('regression: a count matching its baseline produces no finding', () => {
   assert.deepStrictEqual(r.findings, []);
 });
 
+test('the version gate passes through a resolved provider matching the pin', () => {
+  assert.strictEqual(versionMismatchReason('2.1.251', '2.1.251'), null);
+});
+
+test('regression: the version gate SKIPS a mismatched provider, never reports a VIOLATION', () => {
+  // The coordinator's proof-by-construction: CLODE_PROVIDER_BIN unset + a fresh
+  // HOME/CLODE_STATE_ROOT resolved a different installed version and the OLD code
+  // (no version gate) scanned it anyway, reporting VIOLATION — examined 1684 — when the
+  // true state was "wrong artifact." The reason must name BOTH versions so a reader can
+  // tell "wrong artifact" apart from "upstream reached a wall."
+  const reason = versionMismatchReason('2.1.251', '2.1.252');
+  assert.match(reason, /2\.1\.251/);
+  assert.match(reason, /2\.1\.252/);
+  assert.match(reason, /CLODE_PROVIDER_BIN/);
+});
+
+test('regression: the version gate SKIPS rather than guesses when the version is unknown', () => {
+  assert.match(versionMismatchReason('2.1.251', null), /could not determine the version/);
+});
+
+test('regression: the version gate SKIPS when UPSTREAM_PIN itself cannot be read', () => {
+  assert.match(versionMismatchReason(null, '2.1.251'), /UPSTREAM_PIN does not name/);
+});
+
 test('shim wall tripwire mechanism: does not fire on the pre-existing aliased CJS shape', () => {
   // The exact CJS shape found in the real 2.1.218-era bundle: require() result
   // assigned to a variable first, THEN .request()/.connect() called on the alias
@@ -688,4 +804,4 @@ test('shim wall tripwire mechanism: does not fire on the pre-existing aliased CJ
   }
 });
 
-module.exports = { WALLS, scanWalls, readGraphJson, deriveOwnModulePrefix };
+module.exports = { WALLS, scanWalls, readGraphJson, deriveOwnModulePrefix, versionMismatchReason };
