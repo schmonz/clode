@@ -190,6 +190,46 @@
 // narrower gap. Phase 4 owns keying the provider store by platform+arch; a fingerprint
 // ratchet here only becomes meaningful once that exists, so this is filed as future
 // work gated on that, not re-litigated as an omission in this file.
+//
+// FIX ROUND 3 (2026-09-04), from a scoped re-review of round 2's commit. Confirmed
+// correct and left alone: the namespace fix, the swap-blindness documentation, no `g`
+// -flag `.test()` statefulness bug, and a long list of over-match candidates that do NOT
+// false-positive (`.createServer(`, `.readFileSync(`, `.isIP(`, `x.connection(`,
+// `foo.connectTimeout`, `obj.watchFile(`, multiline import forms). One real sibling gap
+// found and fixed:
+//
+// FIXED — the BARE-DEFAULT ESM form (`import net from"net"` / `import fs from"fs"` — no
+// braces, no `* as`) matched neither wall, and it is live in the corpus: 6 occurrences
+// today (`import FN from"net"`, `import $N from"net"` in one chunk; `import $g
+// from"fs"` in another; `import j/K/L from"fs"` in a third), none currently called with
+// a wall method, so neither baseline moved. This was the exact sibling of the FIX ROUND
+// 2 namespace gap, left open by a mistake in that round's own reasoning: round 2 widened
+// for the MIXED `import net,{connect}` form, which has ZERO occurrences, while leaving
+// this plainer, POPULATED form uncovered — closing one gap and not its sibling with
+// identical justification is not a position that survives the next reader. Fixed the
+// same way as the namespace case: a fourth alternative per wall, `import\s+([\w$]+)\s*
+// from"<module>"` captured via backreference, matched only against a LATER
+// `<name>.<api>(` in the same module.
+//
+// DOCUMENTED, NOT CODE — two known limitations of a regex-based scan, recorded so
+// neither is mistaken for new or silently accepted:
+//
+//   - OVER-MATCH SURFACE: the namespace/bare-default alternatives scan the REST OF THE
+//     MODULE with `[\s\S]*?` looking for `<name>.<api>(`. A wall method name sitting
+//     inside a STRING LITERAL or a COMMENT, in a module that ALSO happens to import
+//     net/fs under that same local name, would false-positive — this file does not
+//     parse an AST and cannot tell code from a string/comment. Zero instances in
+//     today's 1,839-module corpus (verified: every current finding is 0, so there is
+//     nothing to check this against directly, but the pattern shape admits it). What
+//     makes this tolerable rather than merely accepted: BECAUSE this is a ratchet, a
+//     spurious hit surfaces as a count RISE with the offending module named in the
+//     printed finding list — visible and diagnosable by a human the day it happens, not
+//     silently folded into "clean."
+//   - SHADOWING/REASSIGNMENT is invisible, and always has been: `function f(net)
+//     {net.connect(x)}` matches the net wall even though that `net` is a function
+//     parameter, not the imported module. Pre-existing regex-is-not-AST limitation
+//     (true of the CJS half too, and of every wall this file has ever had), called out
+//     explicitly here so nobody mistakes it for something FIX ROUND 3 introduced.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -252,10 +292,21 @@ const REPO = path.resolve(__dirname, '..');
 // the same time to allow an optional leading default specifier (`import net,{connect}
 // from"net"`) — 0 occurrences today, included for the same reason described in the FIX
 // ROUND 2 note: fix it while in the same regex, not after it is found reached.
+//
+// BARE-DEFAULT FORM (added FIX ROUND 3, 2026-09-04): a fourth alternative covers
+// `import <name>from"<module>"` — no braces, no `* as` — followed later in the same
+// module by `<name>.<api>(`, same backreference technique as the namespace case. This
+// was the exact sibling of the namespace gap above, missed by round 2's own reasoning:
+// round 2 widened for the MIXED default+named form (`import net,{connect}`), which has
+// ZERO occurrences in the real carve, while leaving this plainer BARE-default form
+// uncovered — and it is not zero: 6 real bare-default imports of net/fs exist today
+// (none currently called with a wall method, so this did not move either baseline
+// either). See the FIX ROUND 3 header note for the over-match and shadowing caveats
+// that apply to this alternative and the namespace one equally.
 const WALLS = [
   {
     api: 'net.connect / net.createConnection',
-    pattern: /require\(\s*["'](?:node:)?net["']\s*\)\s*\.(?:connect|createConnection)\s*\(|import\s*(?:[\w$]+\s*,\s*)?\{[^}]*\b(?:connect|createConnection)\b[^}]*\}\s*from\s*["'](?:node:)?net["']|import\s*\*\s*as\s+([\w$]+)\s*from\s*["'](?:node:)?net["'][\s\S]*?\b\1\.(?:connect|createConnection)\s*\(/,
+    pattern: /require\(\s*["'](?:node:)?net["']\s*\)\s*\.(?:connect|createConnection)\s*\(|import\s*(?:[\w$]+\s*,\s*)?\{[^}]*\b(?:connect|createConnection)\b[^}]*\}\s*from\s*["'](?:node:)?net["']|import\s*\*\s*as\s+([\w$]+)\s*from\s*["'](?:node:)?net["'][\s\S]*?\b\1\.(?:connect|createConnection)\s*\(|import\s+([\w$]+)\s*from\s*["'](?:node:)?net["'][\s\S]*?\b\2\.(?:connect|createConnection)\s*\(/,
     // MEASURED 2026-09-04 against ~/.cache/clode/2.1.251/graph.json, EXCLUDING clode's
     // own scc-merge output (see deriveOwnModulePrefix() below) — 10 modules import
     // `connect`/`createConnection` from "net" by name via ESM (11 before exclusion; one
@@ -263,8 +314,10 @@ const WALLS = [
     // matching: still 10 — none of the 11 real namespace imports of "net"/"fs" is
     // currently called with `.connect(`/`.createConnection(`/`.watch(`, so widening the
     // pattern to see that shape did not change what it currently finds; it only closes
-    // the gap for the day one of them IS called that way. Re-measure this on every pin
-    // bump: task-3-report.md.
+    // the gap for the day one of them IS called that way. RE-MEASURED again after FIX
+    // ROUND 3 added bare-default matching: still 10 — same reasoning, applied to the 6
+    // real bare-default imports of "net"/"fs". Re-measure this on every pin bump:
+    // task-3-report.md.
     baseline: 10,
     why: '"the actual socket surface (net.connect / createConnection / real '
       + 'Socket I/O / net.Server) is NOT implemented — the -p transport is '
@@ -277,12 +330,13 @@ const WALLS = [
   },
   {
     api: 'fs.watch',
-    pattern: /require\(\s*["'](?:node:)?fs["']\s*\)\s*\.watch\s*\(|import\s*(?:[\w$]+\s*,\s*)?\{[^}]*\bwatch\b[^}]*\}\s*from\s*["'](?:node:)?fs["']|import\s*\*\s*as\s+([\w$]+)\s*from\s*["'](?:node:)?fs["'][\s\S]*?\b\1\.watch\s*\(/,
+    pattern: /require\(\s*["'](?:node:)?fs["']\s*\)\s*\.watch\s*\(|import\s*(?:[\w$]+\s*,\s*)?\{[^}]*\bwatch\b[^}]*\}\s*from\s*["'](?:node:)?fs["']|import\s*\*\s*as\s+([\w$]+)\s*from\s*["'](?:node:)?fs["'][\s\S]*?\b\1\.watch\s*\(|import\s+([\w$]+)\s*from\s*["'](?:node:)?fs["'][\s\S]*?\b\2\.watch\s*\(/,
     // MEASURED 2026-09-04, same run as net's: 5 modules import `watch` from "fs" by name
     // via ESM; none were scc-merge artifacts, so exclusion did not change this count.
     // RE-MEASURED after FIX ROUND 2's namespace-form widening: still 5, for the same
     // reason as net's — real namespace imports of "fs" exist but none is currently
-    // called with `.watch(`.
+    // called with `.watch(`. RE-MEASURED again after FIX ROUND 3's bare-default
+    // widening: still 5, same reasoning.
     baseline: 5,
     why: '"fs.watch (the inotify/FSEvents-style API): STILL a stub, unlike '
       + 'watchFile above ... this engine\'s uv_fs_event backend is ENOSYS on some '
@@ -484,6 +538,25 @@ test('the net wall pattern also matches the mixed default+named import form', ()
   const wall = WALLS.find((w) => w.api.startsWith('net.'));
   assert.ok(wall.pattern.test(esm),
     'the net wall must match the mixed default+named import form too');
+});
+
+test('the wall patterns match the BARE-DEFAULT import shape upstream ALSO emits', () => {
+  // FIX ROUND 3 (2026-09-04): `import net from"net"` — no braces, no `* as` — matches
+  // neither wall until this round. Verified against the real pinned carve: 6 such
+  // bare-default imports of net/fs exist today (none currently called with a wall
+  // method, which is why the baselines below did not move), the exact sibling of the
+  // namespace gap FIX ROUND 2 closed, left open by mistake: round 2 widened for the
+  // MIXED `import net,{connect}` form (0 occurrences) while leaving this plainer,
+  // populated (6 occurrences) form uncovered.
+  const netEsm = 'import net from"net";function go(o){return net.connect(o)}';
+  const netWall = WALLS.find((w) => w.api.startsWith('net.'));
+  assert.ok(netWall.pattern.test(netEsm),
+    'the net wall must match import <name> from"net" followed by <name>.connect(');
+
+  const fsEsm = 'import fs from"fs";function go(p){return fs.watch(p,()=>{})}';
+  const fsWall = WALLS.find((w) => w.api === 'fs.watch');
+  assert.ok(fsWall.pattern.test(fsEsm),
+    'the fs.watch wall must match import <name> from"fs" followed by <name>.watch(');
 });
 
 test('regression: our own scc-merge output is excluded, not counted as an upstream reach', () => {
