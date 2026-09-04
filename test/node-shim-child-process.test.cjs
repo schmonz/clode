@@ -577,11 +577,21 @@ test('spawn: numeric fd in stdio redirects child output to a file (Bash-tool pat
       const log = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cp-fd-')), 'out.txt');
       const fh = await fs.promises.open(log, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_APPEND);
       const c = cp.spawn('/bin/echo', ['redirected-to-fd'], { stdio: ['pipe', fh.fd, fh.fd] });
+      // LISTENER FIRST, THEN the await. '/bin/echo' is about as fast as a process gets,
+      // and under load the await below can outlast it -- the child exits, 'exit' is
+      // emitted with nobody listening, node does not replay it for a late listener, and
+      // this program prints NOTHING and exits 0. The caller then parses '' and reports
+      // 'Unexpected end of JSON input' from the NODE reference side, which is what made
+      // it look like a shim or concurrency problem for two days. Attaching before the
+      // await closes the window; the parent still drops its fd right after spawn, which
+      // is the behaviour under test.
+      const done = new Promise((res) => c.on('exit', res));
       await fh.close(); // parent drops its fd; child keeps the inherited dup
-      c.on('exit', () => {
+      await done;
+      {
         // child.stdout must be null (fd redirected, no parent-side pipe)
         console.log(JSON.stringify({ stdoutNull: c.stdout === null, file: fs.readFileSync(log, 'utf8').trim() }));
-      });
+      }
     })();`;
   const f = prog(body);
   // Parse through a helper that SAYS WHICH SIDE produced unparseable output and shows it.

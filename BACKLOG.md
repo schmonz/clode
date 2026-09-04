@@ -5588,65 +5588,59 @@ The test was feeding the minimiser a shim.
 container" rather than a format complaint. Same for any other tool that assumes its
 input is a provider because of where it was found.
 
-## Intermittent: TWO tests flake under full-suite load, and they may share a cause (2026-09-03/04)
+## RESOLVED: two full-suite flakes, two different causes (2026-09-03/04)
 
-Both pass in isolation and fail only under a concurrent full-suite run:
+Both passed in isolation and failed only under a concurrent full-suite run. They looked
+like one problem. They were two, and neither was where the symptom pointed.
 
-- `test/node-shim-child-process.test.cjs:569` — "spawn: numeric fd in stdio redirects
-  child output to a file" — fails with `Unexpected end of JSON input`; 34/34 in
-  isolation, three consecutive runs.
-- `test/fidelity/agentic-subagent-diff.test.cjs:70` — "subagent (Task) dispatch is
-  identical under naude and quaude" — fails with
-  `clode: graph-meta failed under <scratch>/tjs (exit 1)`; passes in isolation with the
-  SAME provider and engine, and did not recur on the next full run.
+### 1. `node-shim-child-process.test.cjs:569` — a race in the TEST's own child program
 
-Ruled out for the second one: a stale engine. Both the scratch engine and the
-hash-subdir template carry the `moduleMeta` symbol, so this is not
-[[stale-engine-template-breaks-builds]].
+Symptom: `Unexpected end of JSON input`, roughly 1 run in 4.
 
-**Status 2026-09-04: one hypothesis tested and PARTLY disproven — read this before
-guessing again.**
+Two hypotheses were disproven by measurement first: a shared oracle-stage race (the
+pre-warm below did not stop it) and file-level concurrency (six parallel runs of the file
+alone, all green). Then the test was changed to report WHICH side produced unparseable
+output and to print the bytes — and the next occurrence, two runs later, gave it up:
 
-The shared-stage race below is REAL by inspection: `libexec/clode-extract.cjs`'s
-`extractIfNeeded` mkdirs the cache dir and `writeFileSync`s straight into it with no
-temp-and-rename, and its cache-hit guard needs a matching signature, so on a COLD cache
-two concurrent test files both miss the guard and write the same paths. `test/run.mjs`
-now pre-warms that stage once before spawning anything, which serialises the one write.
+    the node reference run produced unparseable stdout (Unexpected end of JSON input).
+      stdout (0 bytes): ""
 
-But it did NOT fix `node-shim-child-process`. Three cold-cache full runs after the
-pre-warm: green, **FAILED (same `Unexpected end of JSON input`)**, green. That test never
-touches the oracle stage, so the hypothesis was wrong for it — and `agentic-subagent-diff`
-did not recur in those three runs, which is encouraging but far from proof.
+The NODE side, not tjs. The child program did:
 
-Also disproven for it: file-level concurrency. Six parallel runs of that file alone, all
-green. Whatever it needs, it needs the full suite.
+    const c = cp.spawn('/bin/echo', ...);
+    await fh.close();
+    c.on('exit', () => { console.log(JSON.stringify(...)); });
 
-What changed instead: the test now reports WHICH side produced unparseable output and
-shows the bytes. Its only symptom was a bare `Unexpected end of JSON input`, naming
-neither the side nor the content, so every occurrence was undiagnosable afterwards. The
-next one costs evidence rather than a third guess.
+`/bin/echo` is about as fast as a process gets. Under load the `await` outlasts it, the
+child exits, `'exit'` is emitted with nobody listening, and node does not replay it for a
+late listener — so the program printed NOTHING and exited 0. Fixed by attaching the
+listener before the await, keeping the behaviour under test (the parent still drops its
+fd right after spawn).
 
-**The original hypothesis, still worth finishing for the OTHER flake.**
-`test/oracle-models.cjs`'s `stageCli` writes to a cache dir under
-`CLODE_ORACLE_STAGE_ROOT`, defaulting to a SHARED path keyed by provider
-(`<tmp>/clode-oracle-stage/<cacheKey>`), and the suite runs files concurrently. Two
-tests staging the same provider at once would read a half-written cli.cjs — which is
-exactly what "unexpected end of JSON input" and "graph-meta exited 1" both look like.
-The first is a read racing a write on a file; the second is a spawn over a tree being
-written. Neither is a logic error, and both are invisible when the file runs alone,
-which is the signature.
+Verified: **8 cold-cache full runs, 8 green.** It had reproduced on run 2, twice.
 
-Test it by giving each test file its own stage root and seeing whether both stop; if
-they do, the fix is per-file (or lock-guarded) staging rather than chasing each symptom.
+**The lesson worth keeping:** a bare `Unexpected end of JSON input` names neither the
+side nor the content, so two occurrences taught nothing. One occurrence with "which side,
+and the bytes" solved it immediately. When a flake resists, instrument it before guessing
+again — the third guess costs more than the diagnostic would have.
 
-**Why fix rather than tolerate.** A flake is ambient red one step subtler: it teaches
-everyone that a red run might mean nothing, so the next real failure gets a rerun instead
-of a look. This repo has already paid for tolerated red once
-([[silently-gated-tests-hide-p0s]]), and the whole point of the 2026-09-02/04 work was to
-make a red run mean something again. Two flaky tests are enough to undo it.
+### 2. `agentic-subagent-diff.test.cjs:70` — a real shared-cache race
 
-Prove any fix by running the FULL suite repeatedly — isolation is the condition under
-which both already pass.
+Symptom: `clode: graph-meta failed under <scratch>/tjs (exit 1)`.
+
+`libexec/clode-extract.cjs`'s `extractIfNeeded` is not atomic: it mkdirs the shared,
+provider-keyed cache dir and `writeFileSync`s straight into it, with no temp-and-rename.
+Its cache-hit guard requires a matching signature, so on a COLD cache two concurrently
+spawned test files both miss the guard and write the same paths.
+
+`test/run.mjs` now pre-warms that stage once before spawning anything, serialising the
+one write while keeping the cache's purpose (one extraction per provider per run). Not
+seen again across 11 subsequent cold runs.
+
+**Still open, product-side:** the non-atomic extraction itself. Two concurrent
+`clode build`s would race the same way — the suite's half is fixed, the product's is not.
+The fix is extract-to-temp-then-rename, and it belongs with phase 4's input-validation
+work.
 
 ## Release acceptance: the checks only a human with credentials can run (2026-09-04)
 
