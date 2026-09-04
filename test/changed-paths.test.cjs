@@ -86,6 +86,35 @@ test('every result carries a non-empty "why"', () => {
   }
 });
 
+// --- Fix round 1, Finding 2: path traversal in the docs allow-list ---------
+// Verified by the reviewer's own execution before this fix: both strings
+// below classified as code=false (docs), letting a real code file hide
+// behind a `docs/../` prefix. `git diff --name-only` does not emit
+// un-normalised paths today — this was latent, not yet exploited — but
+// isDocsPath/classifyChangedPaths are exported, so "the current caller
+// happens not to hit it" is not a reason to leave it reachable.
+
+test('a `..` segment escaping docs/ is code, not docs (regression: was code=false)', () => {
+  assert.strictEqual(isDocsPath('docs/../libexec/quaude-fuse.js'), false);
+  assert.strictEqual(classifyChangedPaths(['docs/../libexec/quaude-fuse.js']).code, true);
+});
+
+test('a nested `..` climbing back out of docs/ is code, not docs (regression: was code=false)', () => {
+  assert.strictEqual(isDocsPath('docs/sub/../../scripts/z.mjs'), false);
+  assert.strictEqual(classifyChangedPaths(['docs/sub/../../scripts/z.mjs']).code, true);
+});
+
+test('a bare ".." path is code, not docs', () => {
+  assert.strictEqual(isDocsPath('..'), false);
+  assert.strictEqual(classifyChangedPaths(['..']).code, true);
+});
+
+test('a `..` segment does not falsely poison an otherwise-safe substring match (a..b.md is still docs)', () => {
+  // ".." as a SUBSTRING (not a path segment) must not trip the traversal
+  // guard — only a segment that IS exactly ".." counts.
+  assert.strictEqual(isDocsPath('a..b.md'), true);
+});
+
 test('requiring the module does not shell out to git or print anything (no CLI side effect on import)', () => {
   // classifyChangedPaths/isDocsPath must be usable as a pure library from a
   // test with no repo/git context assumed. The CLI path (computing the real

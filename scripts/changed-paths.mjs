@@ -36,6 +36,23 @@ import { pathToFileURL } from 'node:url';
 
 const DOCS_EXTENSION = /\.md$/i;
 
+// A path containing a literal `..` SEGMENT (not merely the substring "..",
+// e.g. "a..b.md" is fine) is refused rather than normalised. Fix round 1
+// (task-7-report.md), Finding 2: `docs/../libexec/quaude-fuse.js` and
+// `docs/sub/../../scripts/z.mjs` both classified as docs before this guard,
+// because `startsWith('docs/')` never looked past the literal prefix.
+// `git diff --name-only` does not emit un-normalised paths today, so this
+// was latent — but isDocsPath/classifyChangedPaths are exported and a future
+// caller (or a git behaviour change) is not a premise worth trusting.
+// Normalising and then trusting the result invites "did I normalise the
+// same way git does?"; refusing does not. A path with a `..` segment is
+// unknown-or-suspicious, which this file's whole design already treats as
+// code, so it is rejected here rather than given its own special case in
+// classifyChangedPaths.
+function hasTraversalSegment(p) {
+  return p.split('/').some((segment) => segment === '..');
+}
+
 // A path is docs-only if it matches ALL of: *.md (anywhere in the tree —
 // a .md file inside a code directory, e.g. libexec/README.md, is still
 // docs), docs/** (a top-level docs/ directory), or the exact repo-root
@@ -46,6 +63,7 @@ const DOCS_EXTENSION = /\.md$/i;
 // means code.
 export function isDocsPath(p) {
   if (typeof p !== 'string' || p.length === 0) return false;
+  if (hasTraversalSegment(p)) return false;
   if (DOCS_EXTENSION.test(p)) return true;
   if (p === 'docs' || p.startsWith('docs/')) return true;
   if (p === 'LICENSE') return true;

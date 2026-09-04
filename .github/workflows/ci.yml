@@ -68,7 +68,23 @@ jobs:
     # sweep. Skips outright on a docs-only push (task-7); on a real code
     # push it is unaffected. See `changes`'s own header for why this must
     # fail open rather than fail silent.
-    if: needs.changes.outputs.code == 'true'
+    #
+    # DO NOT "simplify" this to `needs.changes.outputs.code == 'true'` — that
+    # reads more naturally but is the exact bug fix round 1 caught (Finding
+    # 1, CRITICAL): an `if:` with no status-check function is implicitly
+    # ANDed with success(), so if the `changes` JOB itself dies before its
+    # classify step runs (checkout timeout, a dead runner, any infra
+    # hiccup) — as opposed to the classify STEP failing, which the script's
+    # own fail-open logic already covers — `outputs.code` is never set,
+    # `success()` is false, and `== 'true'` is false too: the ENTIRE heavy
+    # matrix vanishes, reported as skipped, not failed. That is verbatim
+    # "strictly worse than the problem being fixed." `!cancelled()` supplies
+    # an explicit status-check function (suppressing the implicit
+    # success()), and `!= 'false'` means unknown/empty/errored all default
+    # to RUNNING — the same default-deny posture the classifier itself
+    # takes — while a genuine `code=false` (docs-only, computed
+    # successfully) is still the literal string 'false' and still skips.
+    if: needs.changes.outputs.code != 'false' && !cancelled()
     uses: ./.github/workflows/tjs-legs.yml
     permissions:
       contents: read
@@ -99,8 +115,10 @@ jobs:
     #
     # ALSO gated on `changes`: this job downloads a `tjs` artifact, so it must
     # skip in lockstep with `tjs` on a docs-only push (task-7) rather than
-    # run and fail loudly on a missing artifact.
-    if: needs.changes.outputs.code == 'true' && !cancelled()
+    # run and fail loudly on a missing artifact. `!= 'false'` not `== 'true'`
+    # — see `tjs`'s own comment (fix round 1, Finding 1: a dead `changes` job
+    # must not silently skip this too).
+    if: needs.changes.outputs.code != 'false' && !cancelled()
     runs-on: windows-latest
     defaults:
       run:
@@ -170,8 +188,10 @@ jobs:
     #
     # ALSO gated on `changes`: this job downloads a `tjs` artifact, so it must
     # skip in lockstep with `tjs` on a docs-only push (task-7) rather than
-    # run and fail loudly on a missing artifact.
-    if: needs.changes.outputs.code == 'true' && !cancelled()
+    # run and fail loudly on a missing artifact. `!= 'false'` not `== 'true'`
+    # — see `tjs`'s own comment (fix round 1, Finding 1: a dead `changes` job
+    # must not silently skip this too).
+    if: needs.changes.outputs.code != 'false' && !cancelled()
     runs-on: windows-latest
     defaults:
       run:
@@ -235,8 +255,10 @@ jobs:
     #
     # ALSO gated on `changes`: this job downloads a `tjs` artifact, so it must
     # skip in lockstep with `tjs` on a docs-only push (task-7) rather than
-    # run and fail loudly on a missing artifact.
-    if: needs.changes.outputs.code == 'true' && !cancelled()
+    # run and fail loudly on a missing artifact. `!= 'false'` not `== 'true'`
+    # — see `tjs`'s own comment (fix round 1, Finding 1: a dead `changes` job
+    # must not silently skip this too).
+    if: needs.changes.outputs.code != 'false' && !cancelled()
     runs-on: windows-11-arm
     defaults:
       run:
@@ -329,8 +351,10 @@ jobs:
     #
     # ALSO gated on `changes`: this job downloads a `tjs` artifact, so it must
     # skip in lockstep with `tjs` on a docs-only push (task-7) rather than
-    # run and fail loudly on a missing artifact.
-    if: needs.changes.outputs.code == 'true' && !cancelled()
+    # run and fail loudly on a missing artifact. `!= 'false'` not `== 'true'`
+    # — see `tjs`'s own comment (fix round 1, Finding 1: a dead `changes` job
+    # must not silently skip this too).
+    if: needs.changes.outputs.code != 'false' && !cancelled()
     runs-on: ubuntu-latest
     # LIKE-FOR-LIKE LIBC, ON PURPOSE — the reference node runs under musl because
     # the engine does.
@@ -525,8 +549,10 @@ jobs:
     #
     # ALSO gated on `changes`: this job downloads a `tjs` artifact, so it must
     # skip in lockstep with `tjs` on a docs-only push (task-7) rather than
-    # run and fail loudly on a missing artifact.
-    if: needs.changes.outputs.code == 'true' && !cancelled()
+    # run and fail loudly on a missing artifact. `!= 'false'` not `== 'true'`
+    # — see `tjs`'s own comment (fix round 1, Finding 1: a dead `changes` job
+    # must not silently skip this too).
+    if: needs.changes.outputs.code != 'false' && !cancelled()
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -725,8 +751,10 @@ jobs:
     #
     # ALSO gated on `changes`: this job downloads a `tjs` artifact, so it must
     # skip in lockstep with `tjs` on a docs-only push (task-7) rather than
-    # run and fail loudly on a missing artifact.
-    if: needs.changes.outputs.code == 'true' && !cancelled()
+    # run and fail loudly on a missing artifact. `!= 'false'` not `== 'true'`
+    # — see `tjs`'s own comment (fix round 1, Finding 1: a dead `changes` job
+    # must not silently skip this too).
+    if: needs.changes.outputs.code != 'false' && !cancelled()
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -814,8 +842,10 @@ jobs:
     #
     # ALSO gated on `changes`: this job downloads a `tjs` artifact, so it must
     # skip in lockstep with `tjs` on a docs-only push (task-7) rather than
-    # run and fail loudly on a missing artifact.
-    if: needs.changes.outputs.code == 'true' && !cancelled()
+    # run and fail loudly on a missing artifact. `!= 'false'` not `== 'true'`
+    # — see `tjs`'s own comment (fix round 1, Finding 1: a dead `changes` job
+    # must not silently skip this too).
+    if: needs.changes.outputs.code != 'false' && !cancelled()
     runs-on: macos-latest
     defaults:
       run:
