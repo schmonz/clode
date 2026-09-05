@@ -23,6 +23,19 @@
 
 const VM = (leg) => leg['guest-platform'] && !['native', 'alpine'].includes(leg['guest-platform']);
 
+// CI latency split (measured from run 33959009299, 2026-09-05): four oracle
+// jobs in ci.yml each declare `needs: [changes, tjs]` — job-level, so all 29
+// `ci`-tier legs had to finish before an oracle that consumes only ONE fast
+// artifact (tjs-linux-x64-musl or tjs-darwin-arm64) could start. Measured leg
+// durations that run: native/alpine legs finished in 8-9 minutes; the NetBSD
+// build.sh cross-toolchain fleet (tier2, builds a whole toolchain from source)
+// and the VM/qemu guests ran 75-113 minutes — ~104 minutes paid for nothing an
+// oracle needed. `only: 'fast'`/`'slow'` (see cli() below) splits ci.yml's tjs
+// job on exactly this property, derived from the manifest — not a hardcoded
+// leg-name list, so a leg that changes guest-platform/tier2 status
+// re-partitions itself with no YAML edit.
+export const SLOW_CI_LEG = (leg) => VM(leg) || Boolean(leg.tier2);
+
 // Version policy (user decision 2026-07-11): CI builds the NEWEST available
 // version of each OS (early warning on the front edge); release builds — and
 // publishes from — the OLDEST version that can still build (the compat
@@ -996,16 +1009,21 @@ export function legsFor(tier) {
   throw new Error(`unknown tier '${tier}' (release | ci)`);
 }
 
-// CLI: tjs-legs.mjs <tier> [only-leg] [guest-version-override] [macos-min-override]
-// The optional args back the tjs-legs.yml workflow_dispatch probe (the
-// version-floor walk): pick ONE leg out of the tier, optionally at an
-// overridden guest version — or, for the darwin floor walk, an overridden
-// deployment target (same bisect ritual, different version axis). Probes
-// never publish.
-// The four darwin slices — release.yml runs them as a SEPARATE job (only:darwin)
-// so the darwin-universal lipo waits ONLY on them, not the whole matrix (incl. the
-// slow NetBSD fleet). The rest run as only:notdarwin. Keep in sync with the
-// universal's four-arch contract.
+// CLI: tjs-legs.mjs <tier> [only] [guest-version-override] [macos-min-override]
+// `only` filters the tier: a bare leg name (the workflow_dispatch version-floor
+// probe — pick ONE leg, optionally at an overridden guest version, or for the
+// darwin floor walk an overridden deployment target; probes never publish), or
+// one of two fixed partitions:
+//   darwin / notdarwin — release.yml runs the four darwin slices as a SEPARATE
+//     job so the darwin-universal lipo waits ONLY on them, not the whole matrix
+//     (incl. the slow NetBSD fleet). Keep in sync with the universal's
+//     four-arch contract.
+//   fast / slow — ci.yml splits the `ci` tier the same way (see SLOW_CI_LEG
+//     above): `fast` is native/alpine/cross-fuse legs that finish in minutes,
+//     `slow` is VM guests + the from-source cross-toolchain fleet that can run
+//     hours. The four oracle jobs (and the Windows jobs) consume only fast
+//     legs' artifacts, so they depend on the fast job alone instead of the
+//     whole ci-tier matrix.
 export const DARWIN_SLICES = ['darwin-arm64', 'darwin-x64', 'darwin-x86', 'darwin-ppc'];
 
 // A published ARTIFACT's run-targets, not a build leg's name. These differ for
@@ -1205,6 +1223,10 @@ export function cli(tier, only, versionOverride, macosMinOverride) {
     legs = legs.filter((l) => DARWIN_SLICES.includes(l.leg));       // the universal's ingredients
   } else if (only === 'notdarwin') {
     legs = legs.filter((l) => !DARWIN_SLICES.includes(l.leg));      // everything else
+  } else if (only === 'fast') {
+    legs = legs.filter((l) => !SLOW_CI_LEG(l));    // native/alpine/cross-fuse legs — oracles' input
+  } else if (only === 'slow') {
+    legs = legs.filter((l) => SLOW_CI_LEG(l));     // VM guests + the from-source cross-toolchain fleet
   } else if (only) {
     legs = legs.filter((l) => l.leg === only);                     // single-leg probe (floor walk)
     if (!legs.length) throw new Error(`no such leg in tier '${tier}': ${only}`);

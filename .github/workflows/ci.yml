@@ -62,6 +62,23 @@ jobs:
   # build restores from the shared cache on native legs, so a typical push
   # pays only bundle+fuse+smoke there; VM legs pay the guest boot + in-guest
   # build.
+  #
+  # SPLIT IN TWO (measured from run 33959009299, 2026-09-05): `needs:` is
+  # JOB-level, not matrix-leg-level, so the four oracle jobs below (and the
+  # three Windows jobs) — which between them consume only TWO of this tier's
+  # 29 artifacts (tjs-linux-x64-musl, tjs-darwin-arm64, tjs-windows-amd64,
+  # tjs-windows-arm64 — every one a FAST leg) — were blocking on the slowest
+  # leg in the whole matrix (netbsd-mips64eb, 113 minutes that run) to use
+  # artifacts that exist at ~9 minutes. This job now runs only:fast (native
+  # runners, alpine containers, cross-fuse builds — everything
+  # scripts/tjs-legs.mjs's SLOW_CI_LEG calls fast); `tjs-slow` below runs the
+  # rest. The split is a leg PROPERTY (guest-platform VM vs. tier2's
+  # from-source cross-toolchain build), never a name list here, so a leg that
+  # changes shape re-partitions itself with no YAML edit. Every consumer of
+  # this job (`needs: tjs`) already only ever downloaded a fast-job artifact,
+  # so NONE of their `needs:` lines change — keeping this job's name `tjs`
+  # (rather than renaming it `tjs-fast`) is what makes that true with a
+  # minimal diff.
   tjs:
     needs: changes
     # THE heavy matrix this whole `changes` job exists to gate: a full OS
@@ -90,6 +107,26 @@ jobs:
       contents: read
     with:
       tier: ci
+      only: fast
+  # The slow half of the split above: VM/qemu guests + the from-source NetBSD
+  # cross-toolchain fleet (scripts/tjs-legs.mjs's SLOW_CI_LEG) — everything
+  # the fast `tjs` job above does not build. Nothing in this workflow
+  # `needs:` this job; it exists purely so those legs still run on every push
+  # (a re-partition, not a reduction — same 29 legs across the two jobs as
+  # ran in the single `tjs` job before the split). Same `changes` gate as
+  # `tjs`, for the same reason: it must skip in lockstep on a docs-only push
+  # rather than spin up guest VMs for nothing. `!= 'false'` not `== 'true'`
+  # — see `tjs`'s own comment above (fix round 1, Finding 1: a dead
+  # `changes` job must not silently skip this too).
+  tjs-slow:
+    needs: changes
+    if: needs.changes.outputs.code != 'false' && !cancelled()
+    uses: ./.github/workflows/tjs-legs.yml
+    permissions:
+      contents: read
+    with:
+      tier: ci
+      only: slow
   # Windows shim + sync-primitive coverage (windows-tjs-port spec). Windows is
   # the ONE platform whose shim + sync-primitive layer diverges from POSIX
   # (CRLF, cmd.exe/PATHEXT, drive paths, O_BINARY, the Win32 C sync primitives

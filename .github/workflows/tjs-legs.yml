@@ -7,11 +7,15 @@ name: tjs-legs
 # `node scripts/tjs-legs.mjs <tier>` into a matrix and runs the same
 # ./.github/actions/build-leg recipe for every entry.
 #
-# Callers: ci.yml (tier: ci — every OS, one arch each, publish/attest
-# stripped by the manifest) and release.yml (tier: release — the full
-# matrix). Permissions are NOT declared here: a called workflow can only
-# downgrade the caller's grant, so each caller passes exactly what its tier
-# needs (release: id-token + attestations for provenance; ci: contents read).
+# Callers: ci.yml (tier: ci — every OS, one arch each, publish/attest stripped
+# by the manifest; called TWICE — only:fast and only:slow — so the four oracle
+# jobs and the Windows jobs, which consume only fast legs' artifacts, do not
+# block on the slow VM/cross-toolchain legs; see scripts/tjs-legs.mjs's
+# SLOW_CI_LEG) and release.yml (tier: release — the full matrix, called twice
+# for only:darwin/only:notdarwin, always the union). Permissions are NOT
+# declared here: a called workflow can only downgrade the caller's grant, so
+# each caller passes exactly what its tier needs (release: id-token +
+# attestations for provenance; ci: contents read).
 
 on:
   workflow_call:
@@ -21,7 +25,7 @@ on:
         type: string
         required: true
       only:
-        description: "leg subset filter: 'darwin' (the 4 slices), 'notdarwin' (the rest), or empty (whole tier). release.yml splits darwin out so the universal doesn't wait on the whole matrix."
+        description: "leg subset filter: 'darwin' (the 4 slices) / 'notdarwin' (the rest) — release.yml splits darwin out so the universal doesn't wait on the whole matrix; 'fast' (native/alpine/cross-fuse legs) / 'slow' (VM guests + the from-source cross-toolchain fleet) — ci.yml splits on this so oracle jobs needing only a fast artifact don't wait on the slow legs; or empty (whole tier)."
         type: string
         required: false
         default: ""
