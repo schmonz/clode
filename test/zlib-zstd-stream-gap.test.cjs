@@ -51,6 +51,7 @@ const path = require('node:path');
 const hostZlib = require('node:zlib');
 
 const models = require('./oracle-models.cjs');
+const { defineGuard, guardTests } = require('./guard.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 const shimZlib = require(path.join(REPO, 'libexec/node-shim/modules/zlib.cjs'));
@@ -166,44 +167,48 @@ const CARVED_CHECKS = [
   },
 ];
 
-const RESOLVED = resolveBundleSrc();
-const BUNDLE_SRC = RESOLVED.src;
-const SKIP_REASON = RESOLVED.error
-  ? `provider found but staging it failed: ${RESOLVED.error}`
-  : 'no upstream bundle available locally — set CLODE_PROVIDER_BIN to a '
-    + 'real claude binary (or run where clode has already resolved a provider); see '
-    + 'test/oracle-models.cjs';
-
-for (const check of CARVED_CHECKS) {
-  test(`zstd gap: ${check.name}`, (t) => {
-    if (!BUNDLE_SRC) { t.skip(SKIP_REASON); return; }
-    assert.ok(check.pattern.test(BUNDLE_SRC),
-      `zstd-gap wall FIRED — ${check.why}\n`
-      + '  Consequence: upstream\'s NATIVE release downloader becomes reachable, and it '
-      + 'pipes a .zst download through createZstdDecompress(), which the node-shim does '
-      + 'not provide and deliberately does not stub.\n'
-      + '  Re-take the decision recorded in test/shim-surface/golden.json '
-      + '(zlib.createZstdDecompress) and in this file\'s header.');
-  });
+// PURE: `src` is the already-read (or already-resolved-absent) carved bundle text.
+function scanZstdWalls({ src }) {
+  const findings = [];
+  const examined = CARVED_CHECKS.length;
+  for (const check of CARVED_CHECKS) {
+    if (!check.pattern.test(src)) {
+      findings.push(`${check.name} — wall FIRED: ${check.why}\n`
+        + '  Consequence: upstream\'s NATIVE release downloader becomes reachable, and it '
+        + 'pipes a .zst download through createZstdDecompress(), which the node-shim does '
+        + 'not provide and deliberately does not stub.\n'
+        + '  Re-take the decision recorded in test/shim-surface/golden.json '
+        + '(zlib.createZstdDecompress) and in this file\'s header.');
+    }
+  }
+  return { findings, examined };
 }
 
-// Mechanism self-check — always runs, needs no bundle. Proves each pattern actually
-// discriminates, so a green run above means "the wall is up", not "the pattern never
-// matched anything". This is the half that was missing from the gates this repo has
-// been repairing all week.
-test('zstd gap mechanism: every wall pattern FAILS on a body with the walls down', () => {
-  // A carve with none of the neutralizations and no standalone gate: what the bundle
-  // looks like the day either wall comes down.
-  const wallsDown = 'async function QZ(){if(yT())return"native";return"unknown"}'
-    + 'M("tengu_native_auto_updater_start",{});try{let S=await zmt(d),w={VERSION:"9.9.9"};'
-    + 'if(L(`AutoUpdater: Detected installation type: ${x}`),x==="development"){return}'
-    + 'switch(r.installationType){case"npm-local":c=!0;break}';
-  for (const check of CARVED_CHECKS) {
-    assert.ok(!check.pattern.test(wallsDown),
-      `${check.name}: pattern matched a body where the wall is DOWN — it cannot fail, so `
-      + 'it is not a guard');
-  }
+const zstdWallsGuard = defineGuard({
+  name: 'zstd-gap-carved-walls',
+  read: () => {
+    const { src, error } = resolveBundleSrc();
+    if (!src) {
+      return { skip: error
+        ? `provider found but staging it failed: ${error}`
+        : 'no upstream bundle available locally — set CLODE_PROVIDER_BIN to a '
+          + 'real claude binary (or run where clode has already resolved a provider); see '
+          + 'test/oracle-models.cjs' };
+    }
+    return { src };
+  },
+  scan: scanZstdWalls,
+  // The exact fixture the old hand-written mechanism check used: a carve with none of
+  // the neutralizations and no standalone gate — what the bundle looks like the day
+  // either wall comes down. Every one of the four checks must fire against it.
+  control: () => ({
+    src: 'async function QZ(){if(yT())return"native";return"unknown"}'
+      + 'M("tengu_native_auto_updater_start",{});try{let S=await zmt(d),w={VERSION:"9.9.9"};'
+      + 'if(L(`AutoUpdater: Detected installation type: ${x}`),x==="development"){return}'
+      + 'switch(r.installationType){case"npm-local":c=!0;break}',
+  }),
 });
+guardTests(zstdWallsGuard);
 
 test('zstd gap mechanism: every wall pattern MATCHES both the raw and the runner-escaped carve', () => {
   // The raw module source (what graph.json's `sources` hold) and the same bytes as they

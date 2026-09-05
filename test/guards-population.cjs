@@ -270,12 +270,21 @@ const MIGRATED = deriveMigrated();
 // (the one pure-regex assertion inside msvc-getopt-shim.test.cjs, leaving its C-compiler
 // differential tests, which are not a static text scan, alone).
 //
+// RE-CUT AGAIN, 85 -> 83, Task 14 batch 4 (2026-09-04): zstd-gap-carved-walls (the
+// carved-bundle half of zlib-zstd-stream-gap.test.cjs — its own hand-written mechanism
+// self-check already WAS a defineGuard-shaped control, just not wired through this
+// module; folded the four-check loop and the "walls down" fixture into one guard,
+// keeping the escape-blind double-encoding and stubbed-zlib mechanism checks standalone)
+// and engine-api-floor-consumers (five source/yaml files' presence/absence checks over
+// build-tjs.mjs, the build-leg action, and the guest bake script, leaving the dynamic
+// import()-driven ENGINE_API_FLOOR/behavioral tests alone).
+//
 // MEANT TO GO DOWN from here as files migrate. Never raise it to make a run "look clean" —
 // raising it papers over exactly the regression this ratchet exists to catch. Lower it (with
 // a comment recording the new measured count and when) whenever a migration makes the real
 // count drop, OR whenever a future classifier fix surfaces more true positives or trims a
 // false positive — the ratchet test below tells you to when that happens.
-const UNMIGRATED_BASELINE = 85;
+const UNMIGRATED_BASELINE = 83;
 
 // Pure ratchet decision — unit-tested directly with synthetic counts (see
 // guards-population.test.cjs) as well as through the real file list, so the mechanism is

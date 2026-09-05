@@ -23,6 +23,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { defineGuard, guardTests } = require('./guard.cjs');
 
 const repo = path.join(__dirname, '..');
 const read = (rel) => fs.readFileSync(path.join(repo, rel), 'utf8');
@@ -96,53 +97,92 @@ test('the real floor passes on a locally built engine (skipped if none)', async 
 });
 
 // ---- every consumer GENERATES its check; none hand-writes one -------------
-
-test('build-tjs.mjs smoke: generated from the floor, not an inline typeof', () => {
-  const src = read(BUILD_TJS);
-  assert.match(src, /import \{ engineFloorCheckJs, OK_TOKEN \} from '\.\/engine-api-floor\.mjs';/);
-  assert.match(src, /const evalArgs = \['eval', engineFloorCheckJs\(\)\];/);
-  assert.doesNotMatch(src, /typeof __tjs_fs_sync === "object" \? "tjs-shim-ok"/,
-    'the inline copy of the engine check is back in build-tjs.mjs');
-});
-
-test('build-leg host-exec smoke: generated from the floor, not an inline typeof', () => {
-  const yml = read(ACTION);
-  assert.match(yml, /node scripts\/engine-api-floor\.mjs --emit-check > "\$RUNNER_TEMP\/engine-api-floor\.js"/);
-  assert.doesNotMatch(yml, /typeof __tjs_fs_sync === "object" \? "tjs-shim-ok"/,
-    'the inline copy of the engine check is back in build-leg/action.yml');
-});
-
-test('the guest bake runs the SHARED floor check, and the runner stages it', () => {
-  const bake = read(BAKE);
-  assert.match(bake, /f1 engine-api-floor\.js "\$S\/engine-api-floor\.js"/,
-    'the bake must fetch the generated floor check from the served workspace');
-  assert.match(bake, /\$TJS run "\$W\/engine-api-floor\.js"/);
-  assert.match(bake, /echo "cle-floor-exit=\$\?"/,
-    'the driver gates on <phase>-exit=0 markers — the floor check needs one or it is decorative');
-  assert.doesNotMatch(bake, /typeof __tjs_spawn_sync/,
-    'the bake is back to hand-writing its own engine sanity list');
-  const yml = read(ACTION);
-  assert.match(yml, /node scripts\/engine-api-floor\.mjs --emit-check > \.matrix\/qemu-bake\/engine-api-floor\.js/);
-});
-
 // ---- the bake compiles a COMPLETE tree; it never generates one ------------
+//
+// PURE: every check below is a presence/absence assertion against the three
+// already-read files (build-tjs.mjs, the build-leg action, the guest bake script).
+function scanEngineFloorConsumers({ buildTjsSrc, actionYml, bakeSrc }) {
+  const findings = [];
+  let examined = 0;
 
-test('the runner regenerates the guest tree before tarring it', () => {
-  const yml = read(ACTION);
-  const idx = yml.indexOf('tar czf .matrix/qemu-bake/txiki-canonical-le.tar.gz');
-  assert.ok(idx > -1, 'the guest source tarball step was not found');
-  const before = yml.slice(0, idx);
-  assert.match(before.slice(-2000), /node scripts\/build-tjs\.mjs --regen-only/,
-    'the tree must be bytecode-regenerated BEFORE it is tarred for the guest');
-});
+  examined++;
+  if (!/import \{ engineFloorCheckJs, OK_TOKEN \} from '\.\/engine-api-floor\.mjs';/.test(buildTjsSrc)) {
+    findings.push('build-tjs.mjs no longer imports its smoke check from engine-api-floor.mjs');
+  }
+  examined++;
+  if (!/const evalArgs = \['eval', engineFloorCheckJs\(\)\];/.test(buildTjsSrc)) {
+    findings.push('build-tjs.mjs no longer generates its eval args from engineFloorCheckJs()');
+  }
+  examined++;
+  if (/typeof __tjs_fs_sync === "object" \? "tjs-shim-ok"/.test(buildTjsSrc)) {
+    findings.push('the inline copy of the engine check is back in build-tjs.mjs');
+  }
 
-test('the guest bake refuses a tree that was never regenerated', () => {
-  const bake = read(BAKE);
-  assert.match(bake, /clode:bytecode-regen/,
-    'the bake must demand the regen fingerprint trailer build-tjs.mjs stamps');
-  assert.match(bake, /cle-regen-present=/,
-    'the guard needs a marker so the console says which check failed');
-  assert.match(bake, /bake-exit=1/);
-  assert.doesNotMatch(bake, /canonical-LE: no regen needed/,
-    'the claim that started all this must not survive the fix');
+  examined++;
+  if (!/node scripts\/engine-api-floor\.mjs --emit-check > "\$RUNNER_TEMP\/engine-api-floor\.js"/.test(actionYml)) {
+    findings.push('build-leg host-exec smoke is no longer generated from the floor');
+  }
+  examined++;
+  if (/typeof __tjs_fs_sync === "object" \? "tjs-shim-ok"/.test(actionYml)) {
+    findings.push('the inline copy of the engine check is back in build-leg/action.yml');
+  }
+
+  examined++;
+  if (!/f1 engine-api-floor\.js "\$S\/engine-api-floor\.js"/.test(bakeSrc)) {
+    findings.push('the guest bake no longer fetches the generated floor check from the served workspace');
+  }
+  examined++;
+  if (!/\$TJS run "\$W\/engine-api-floor\.js"/.test(bakeSrc)) findings.push('the guest bake no longer runs the fetched floor check');
+  examined++;
+  if (!/echo "cle-floor-exit=\$\?"/.test(bakeSrc)) {
+    findings.push('the guest bake driver no longer gates on a <phase>-exit=0 marker for the floor check');
+  }
+  examined++;
+  if (/typeof __tjs_spawn_sync/.test(bakeSrc)) findings.push('the bake is back to hand-writing its own engine sanity list');
+  examined++;
+  if (!/node scripts\/engine-api-floor\.mjs --emit-check > \.matrix\/qemu-bake\/engine-api-floor\.js/.test(actionYml)) {
+    findings.push('the runner no longer stages the generated floor check for the guest bake');
+  }
+
+  examined++;
+  {
+    const idx = actionYml.indexOf('tar czf .matrix/qemu-bake/txiki-canonical-le.tar.gz');
+    if (idx === -1) {
+      findings.push('the guest source tarball step was not found in build-leg/action.yml');
+    } else if (!/node scripts\/build-tjs\.mjs --regen-only/.test(actionYml.slice(0, idx).slice(-2000))) {
+      findings.push('the guest tree must be bytecode-regenerated BEFORE it is tarred for the guest');
+    }
+  }
+
+  examined++;
+  if (!/clode:bytecode-regen/.test(bakeSrc)) findings.push('the bake no longer demands the regen fingerprint trailer build-tjs.mjs stamps');
+  examined++;
+  if (!/cle-regen-present=/.test(bakeSrc)) findings.push('the regen-present marker is gone (the console can no longer say which check failed)');
+  examined++;
+  if (!/bake-exit=1/.test(bakeSrc)) findings.push('the bake no longer has a bake-exit=1 failure marker');
+  examined++;
+  if (/canonical-LE: no regen needed/.test(bakeSrc)) {
+    findings.push('the claim that started this whole guard ("canonical-LE: no regen needed") is back');
+  }
+
+  return { findings, examined };
+}
+
+const consumersGuard = defineGuard({
+  name: 'engine-api-floor-consumers',
+  read: () => ({
+    buildTjsSrc: read(BUILD_TJS),
+    actionYml: read(ACTION),
+    bakeSrc: read(BAKE),
+  }),
+  scan: scanEngineFloorConsumers,
+  // Models the exact regression this guard exists to catch: every consumer back
+  // to a hand-written inline check, and the guest bake's "no regen needed" claim
+  // (the one that cost the sparc leg two days) reintroduced.
+  control: () => ({
+    buildTjsSrc: 'typeof __tjs_fs_sync === "object" ? "tjs-shim-ok" : "tjs-shim-missing"',
+    actionYml: 'typeof __tjs_fs_sync === "object" ? "tjs-shim-ok" : "tjs-shim-missing"',
+    bakeSrc: 'echo "canonical-LE: no regen needed"',
+  }),
 });
+guardTests(consumersGuard);
