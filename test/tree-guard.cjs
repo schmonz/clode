@@ -63,6 +63,34 @@ function walk(root, { ignore = [], fsm = realFs } = {}) {
   return out;
 }
 
+// patternExists — does an allow-list PATTERN (the same string shape `walk`'s `ignore`
+// consumes: an exact/prefix-at-a-boundary path, or one ending '*' for a "starts with"
+// family like 'build/clode-*') currently match anything on disk under `root`? Exists so
+// a caller (test/run.mjs's resolveOrDie) can tell "this exemption's provenBy failed, but
+// the path it would have exempted doesn't exist anyway" (dropping it changes nothing —
+// SAFE to just record and continue) apart from "...and the path DOES exist" (dropping it
+// newly exposes that path to the guard, which is either correct enforcement or a needed
+// fatal signal that the exemption's proof is broken while the thing it covers is real).
+// Deliberately reuses the same normalize/wildcard shape as `walk`'s own `skip` construction
+// (see above) rather than a second interpretation of what a pattern means.
+function patternExists(root, pattern, fsm = realFs) {
+  if (typeof pattern !== 'string') {
+    throw new TypeError(`tree-guard: pattern must be a string, got: ${JSON.stringify(pattern)}`);
+  }
+  const wildcard = pattern.endsWith('*');
+  let normalized = path.normalize(wildcard ? pattern.slice(0, -1) : pattern);
+  while (normalized.endsWith(path.sep)) normalized = normalized.slice(0, -path.sep.length);
+  if (!wildcard) {
+    try { fsm.lstatSync(path.join(root, normalized)); return true; } catch { return false; }
+  }
+  const dir = path.dirname(normalized);
+  const prefix = path.basename(normalized);
+  const dirAbs = dir === '.' ? root : path.join(root, dir);
+  let names;
+  try { names = fsm.readdirSync(dirAbs); } catch { return false; }
+  return names.some((name) => name.startsWith(prefix));
+}
+
 function diff(before, after) {
   const changed = [];
   for (const [p, v] of after) {
@@ -74,4 +102,4 @@ function diff(before, after) {
   return changed;
 }
 
-module.exports = { walk, diff };
+module.exports = { walk, diff, patternExists };

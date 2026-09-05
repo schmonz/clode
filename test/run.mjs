@@ -331,13 +331,44 @@ const REAL_STORE = path.join(dataBase, 'clode');
 // landed, every leak into that file was pre-authorised, silently, because we had told
 // the guard to be silent about it. A record that can't prove its own exemption is a
 // FINDING, and resolveAllowList DROPS it rather than applying it anyway — see
-// test/allow-list.test.cjs. A finding here is fatal (resolveOrDie below): a guard
-// config that cannot prove its own exemptions is not safe to run at all.
-function resolveOrDie(entries, label) {
+// test/allow-list.test.cjs.
+//
+// A dropped finding is fatal ONLY when dropping it actually changes what the guard
+// watches — i.e. the pattern matches something that exists on disk under `root` right
+// now, so the guard newly starts watching a real path with no proven exemption behind
+// it (the `docs` entry's shape: EXISTS, provable-or-not, and silencing the guard on it
+// is exactly the leak this machinery exists to catch). When the pattern matches nothing
+// under `root` (e.g. `.superpowers` on a CI runner, where no plan workspace has ever
+// existed), dropping the exemption changes NO behaviour at all: the guard was always
+// going to see nothing there either way. Failing the whole run for a wholly vacuous
+// drop was the bug — this is the actual defect that shipped, not a proof being
+// weakened: an entry that fails to prove itself is STILL dropped either way; only
+// whether that drop is fatal now depends on whether it would have hidden anything.
+function resolveOrDie(entries, label, root) {
   const { patterns, findings } = resolveAllowList(entries);
-  if (findings.length) {
-    console.error(`run: ${label} allow-list entry(ies) failed to prove themselves — dropped, not applied:`);
-    for (const f of findings) console.error(`    ${f}`);
+  if (!findings.length) return patterns;
+  const kept = new Set(patterns);
+  const fatal = [];
+  const vacuous = [];
+  for (const entry of entries) {
+    const pattern = entry && entry.pattern;
+    if (typeof pattern !== 'string' || kept.has(pattern)) continue;
+    const finding = findings.find((f) => f.startsWith(`${pattern}: `));
+    if (!finding) continue; // shouldn't happen — every dropped entry produced exactly one finding
+    if (tree.patternExists(root, pattern)) fatal.push(finding);
+    else vacuous.push(finding);
+  }
+  if (vacuous.length) {
+    console.error(`run: ${label} allow-list entry(ies) failed to prove themselves — dropped as `
+      + 'VACUOUS (the pattern matches nothing on disk, so dropping the exemption changes no '
+      + 'behaviour):');
+    for (const v of vacuous) console.error(`    ${v}`);
+  }
+  if (fatal.length) {
+    console.error(`run: ${label} allow-list entry(ies) failed to prove themselves — dropped, not `
+      + 'applied, and the pattern matches something that EXISTS on disk (dropping it changes what '
+      + 'the guard watches):');
+    for (const f of fatal) console.error(`    ${f}`);
     process.exit(2);
   }
   return patterns;
@@ -429,8 +460,14 @@ const LOCAL_BIN_ALLOW = [
 ];
 const GUARD_WATCH = [
   REAL_STORE,
-  { path: path.join(cacheBase, 'clode'), ignore: resolveOrDie(CACHE_CLODE_ALLOW, 'GUARD_WATCH cache/clode') },
-  { path: path.join(home, '.local', 'bin'), ignore: resolveOrDie(LOCAL_BIN_ALLOW, 'GUARD_WATCH .local/bin') },
+  {
+    path: path.join(cacheBase, 'clode'),
+    ignore: resolveOrDie(CACHE_CLODE_ALLOW, 'GUARD_WATCH cache/clode', path.join(cacheBase, 'clode')),
+  },
+  {
+    path: path.join(home, '.local', 'bin'),
+    ignore: resolveOrDie(LOCAL_BIN_ALLOW, 'GUARD_WATCH .local/bin', path.join(home, '.local', 'bin')),
+  },
 ];
 if (guard.preflight(REAL_STORE).length) {
   console.error(`run: REAL store contaminated with *-clode-test deps under ${REAL_STORE}`);
@@ -553,7 +590,7 @@ const TREE_ALLOW_ENTRIES = [
   // authored into docs/ while this suite is running, the resulting tree-immutability
   // violation is CORRECT — the fix is to not write there mid-run, not to re-add this.
 ];
-const TREE_ALLOW = resolveOrDie(TREE_ALLOW_ENTRIES, 'TREE_ALLOW');
+const TREE_ALLOW = resolveOrDie(TREE_ALLOW_ENTRIES, 'TREE_ALLOW', ROOT);
 const treeBefore = tree.walk(ROOT, { ignore: TREE_ALLOW });
 
 // Run the node tests: discover test/**/*.test.cjs (no shell glob) and run under THIS
