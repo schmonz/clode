@@ -87,6 +87,9 @@ function scanMergeStepWiring({ src, buildReportSrc }) {
 
 const guard = defineGuard({
   name: 'merge-step-wiring',
+  // 13 fixed presence/absence checks (examined++ once per check, unconditionally);
+  // floor 12 (one under) fires if a check silently drops out of scanMergeStepWiring.
+  floor: 12,
   read: () => ({
     src: fs.readFileSync(require.resolve('../scripts/merge-step.mjs'), 'utf8'),
     buildReportSrc: fs.readFileSync(require.resolve('../libexec/build-report.cjs'), 'utf8'),

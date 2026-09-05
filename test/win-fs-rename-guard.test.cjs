@@ -90,13 +90,29 @@ function scanRenameGuard({ fsShimSrc }) {
 
   examined++;
   try {
+    const TEMP = 'C:\\proj\\file.tmp.abc', TARGET = 'C:\\proj\\file';
     const fss = makeFSS({ winSemantics: true });
-    fss.add('C:\\proj\\file.tmp.abc'); // the atomic-write temp
-    fss.add('C:\\proj\\file');         // the existing target the CRT rename would reject
+    fss.add(TEMP); // the atomic-write temp
+    fss.add(TARGET);         // the existing target the CRT rename would reject
     const shim = loadShim(fsShimSrc, { win: true, fss });
-    shim.renameSync('C:\\proj\\file.tmp.abc', 'C:\\proj\\file');
-    if (!fss.files.has('C:\\proj\\file') || fss.files.has('C:\\proj\\file.tmp.abc')) {
+    shim.renameSync(TEMP, TARGET);
+    if (!fss.files.has(TARGET) || fss.files.has(TEMP)) {
       findings.push('win32 renameSync did not correctly replace the existing target');
+    }
+    // THE CONTRACT IS THE ORDER, not just the end state: libexec/node-shim/modules/fs.cjs
+    // documents the unlink as non-atomic, safe ONLY because it runs after the CRT rename
+    // has already thrown EEXIST — i.e. only once we KNOW the temp is otherwise ready to
+    // replace the target. A shim that unlinks pre-emptively (no try/EEXIST/retry) reaches
+    // the same end state (target present, temp gone) through a window where the target is
+    // briefly missing entirely — exactly the non-atomicity the real fix exists to bound.
+    // Proven: a mutant that unlinks first, then renames unconditionally, passes the
+    // end-state check above with { findings: [], examined: 3 } unless this comparison also
+    // runs (see the regression test below).
+    const expectedCalls = [['rename', TEMP, TARGET], ['unlink', TARGET], ['rename', TEMP, TARGET]];
+    if (JSON.stringify(fss.calls) !== JSON.stringify(expectedCalls)) {
+      findings.push('win32 renameSync reached the right end state but NOT via try-rename, '
+        + 'EEXIST, unlink, retry — the call order is the contract (the unlink is only safe '
+        + `after the CRT rename has already failed); calls were ${JSON.stringify(fss.calls)}`);
     }
   } catch (e) {
     findings.push(`win32 renameSync threw instead of replacing an existing target (${e.message}) — `
@@ -148,6 +164,26 @@ const guard = defineGuard({
   }),
 });
 guardTests(guard);
+
+// Fix round 1 (coordinator review): the end-state check alone gave { findings: [],
+// examined: 3 } against exactly this mutant — same end state (target present, temp
+// gone), reached by unlinking the target BEFORE attempting the rename at all, never
+// discovering whether the CRT rename would have failed. That is the non-atomicity the
+// real fix (try, EEXIST, THEN unlink, THEN retry) exists to bound: the mutant's window
+// where the target is briefly missing entirely is unconditional, not gated on the CRT
+// actually rejecting the destination. The call-order comparison added above must catch it.
+test('regression: a mutant that unlinks PRE-EMPTIVELY (no try/EEXIST/retry) is caught by call order', () => {
+  const mutant = `
+    module.exports.renameSync = function (a, b) {
+      try { __tjs_fs_sync.unlink(b); } catch (e) {}
+      return __tjs_fs_sync.rename(a, b);
+    };
+    module.exports.promises = { rename: async function (a, b) { return module.exports.renameSync(a, b); } };
+  `;
+  const r = scanRenameGuard({ fsShimSrc: mutant });
+  assert.ok(r.findings.some((f) => f.includes('call order is the contract')),
+    `expected a call-order finding against the pre-emptive-unlink mutant; got: ${JSON.stringify(r.findings)}`);
+});
 
 // The async variant is not folded into the guard above: guard.cjs's scan() contract is
 // synchronous, and asserting on a promise's resolution needs an await, which a sync scan()

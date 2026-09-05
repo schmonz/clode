@@ -186,6 +186,9 @@ function scanZstdWalls({ src }) {
 
 const zstdWallsGuard = defineGuard({
   name: 'zstd-gap-carved-walls',
+  // CARVED_CHECKS is a fixed 4-entry table; floor 3 (one under) fires if an
+  // entry silently drops out of it, instead of only catching total blindness.
+  floor: 3,
   read: () => {
     const { src, error } = resolveBundleSrc();
     if (!src) {

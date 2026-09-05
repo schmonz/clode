@@ -101,6 +101,10 @@ function scanWinShimGuards({ sources }) {
 
 const guard = defineGuard({
   name: 'win-shim-guards',
+  // CHECKS is a fixed 23-entry table (examined++ once per entry, unconditionally); floor
+  // 1 caught only total blindness — a CHECKS entry silently deleted from the array still
+  // read OK. 22 (one under the real count) fires the moment the table shrinks.
+  floor: 22,
   read: () => ({
     sources: {
       cpSrc: fs.readFileSync(path.join(__dirname, '..', 'libexec/node-shim/modules/child_process.cjs'), 'utf8'),

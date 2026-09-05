@@ -170,6 +170,9 @@ function scanEngineFloorConsumers({ buildTjsSrc, actionYml, bakeSrc }) {
 
 const consumersGuard = defineGuard({
   name: 'engine-api-floor-consumers',
+  // 15 fixed presence/absence checks (examined++ once per check, unconditionally);
+  // floor 14 (one under) fires if a check silently drops out of scanEngineFloorConsumers.
+  floor: 14,
   read: () => ({
     buildTjsSrc: read(BUILD_TJS),
     actionYml: read(ACTION),

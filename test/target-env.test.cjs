@@ -202,7 +202,12 @@ test('mapPlatform: empty/undefined input defaults to linux (the quaude fallback)
 // smuggle in a dependency that breaks that.
 function scanRequireFree({ src }) {
   const findings = [];
-  const examined = 1;
+  // Coordinator fix round 1: a hardcoded `const examined = 1` reads OK even against an
+  // EMPTY file (src === '') — floor 1 can never fire because 1 is never less than 1,
+  // whatever src actually contains. Tying examined to whether there is any source at
+  // all (0 for an emptied file, 1 otherwise) makes floor 1 mean something: a
+  // target-env.cjs truncated/emptied to '' now reads BROKEN, not a clean OK.
+  const examined = src.length > 0 ? 1 : 0;
   if (src.includes('require(')) {
     findings.push('target-env.cjs contains require(...) — it is evaluated pre-node-shim under '
       + 'tjs via `new Function`, before require exists');

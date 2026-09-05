@@ -61,6 +61,10 @@ function scanWinSyncGuards({ fsPatch, spawnPatch, buildTjsSrc }) {
 
 const guard = defineGuard({
   name: 'win-sync-guards',
+  // FS_CHECKS (9) + SPAWN_CHECKS (7) + 2 build-tjs.mjs checks = 18, fixed by the
+  // literal tables above; floor 17 (one under) fires the moment either table
+  // silently loses an entry, instead of only catching total blindness.
+  floor: 17,
   read: () => ({
     fsPatch: fs.readFileSync(path.join(REPO, 'spike/quickjs/patches/txiki-sync-fs.patch'), 'utf8'),
     spawnPatch: fs.readFileSync(path.join(REPO, 'spike/quickjs/patches/txiki-sync-spawn.patch'), 'utf8'),

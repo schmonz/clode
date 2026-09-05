@@ -102,9 +102,24 @@ function assetNamesFor(leg, version) {
 
 // PURE: everything scan() needs (the legs, the required globs, the extra
 // hardcoded asset names) is gathered by read() below; scan() only compares.
+//
+// `examined` counts GLOB checks only (see the floor comment on the guard below) — the
+// leg-count sanity check is a separate finding, not folded into that count, so it does
+// not change what "just under the real glob count" means.
 function scanReleaseGlobs({ version, legs, globs, extraNames }) {
   const findings = [];
   let examined = 0;
+
+  // Coordinator fix round 1: this used to be `assert.ok(...)` INSIDE read() — a fact
+  // about the I/O half throwing instead of reporting, indistinguishable from a real
+  // node crash. A leg-discovery break (scripts/tjs-legs.mjs) is exactly the kind of
+  // thing this guard exists to notice; it must be a named finding, not an uncaught
+  // exception with a stack trace nobody reads as "the gate said something."
+  if (legs.length <= 10) {
+    findings.push(`expected many published legs, got ${legs.length} — `
+      + 'scripts/tjs-legs.mjs\'s leg discovery may be broken');
+  }
+
   const allNames = [
     ...legs.flatMap((l) => assetNamesFor(l, version)),
     ...extraNames,
@@ -123,9 +138,13 @@ function scanReleaseGlobs({ version, legs, globs, extraNames }) {
 
 const releaseGlobsGuard = defineGuard({
   name: 'release-gate-globs',
+  // `examined` is the count of REQUIRED globs parsed out of release.yml (currently 3);
+  // floor 2 (one under) fires the moment the parser silently finds fewer than it should
+  // — the coordinator's example verbatim: "a parser that finds 1 of 3 still passes" is
+  // no longer true once this floor can fire.
+  floor: 2,
   read: () => {
     const legs = publishedLegs();
-    assert.ok(legs.length > 10, `expected many published legs, got ${legs.length}`);
     const version = '0.20260801.1';
     return { version, legs, globs: requiredGlobs(), extraNames: extraAssetNames(version) };
   },

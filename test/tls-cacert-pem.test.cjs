@@ -86,49 +86,66 @@ test('extractPemFromCacertC: throws loudly if the literal is not found', () => {
 //
 // PURE: every check below is derived from the provenance record, the PINS.md
 // pin, and the .pem bytes that read() gathers — no I/O happens inside scan().
-function scanCacertProvenance({ provenance, pin, pemBytes }) {
+// `provenance`/`pemBytes` are null when read() found the file missing (rather than
+// scan() re-checking existsSync itself, which would be I/O inside the pure half) —
+// a MISSING committed file is a real, named finding here, not an uncaught ENOENT:
+// read() throwing (the pre-fix-round-1 shape) gave the exact same red as a real
+// drift, with a stack trace instead of "run scripts/extract-cacert-pem.mjs".
+function scanCacertProvenance({ provenance, pemBytes, pin }) {
   const findings = [];
   let examined = 0;
 
   examined++;
-  for (const k of ['txiki_tag', 'txiki_sha', 'cacert_c_sha256', 'pem_sha256']) {
-    if (typeof provenance[k] !== 'string' || !provenance[k]) findings.push(`provenance record has no ${k}`);
-  }
-  if (typeof provenance.cacert_c_sha256 === 'string' && !/^[0-9a-f]{64}$/.test(provenance.cacert_c_sha256)) {
-    findings.push('provenance cacert_c_sha256 is not a 64-hex sha256');
-  }
-  if (typeof provenance.pem_sha256 === 'string' && !/^[0-9a-f]{64}$/.test(provenance.pem_sha256)) {
-    findings.push('provenance pem_sha256 is not a 64-hex sha256');
+  if (provenance === null) {
+    findings.push(`${provenancePath()} is missing — run scripts/extract-cacert-pem.mjs`);
+  } else {
+    for (const k of ['txiki_tag', 'txiki_sha', 'cacert_c_sha256', 'pem_sha256']) {
+      if (typeof provenance[k] !== 'string' || !provenance[k]) findings.push(`provenance record has no ${k}`);
+    }
+    if (typeof provenance.cacert_c_sha256 === 'string' && !/^[0-9a-f]{64}$/.test(provenance.cacert_c_sha256)) {
+      findings.push('provenance cacert_c_sha256 is not a 64-hex sha256');
+    }
+    if (typeof provenance.pem_sha256 === 'string' && !/^[0-9a-f]{64}$/.test(provenance.pem_sha256)) {
+      findings.push('provenance pem_sha256 is not a 64-hex sha256');
+    }
   }
 
   // THE staleness gate: bumping txiki.js is how cacert.c changes; if the pin
   // moves and nobody re-runs the extractor, the .pem is stale — caught here
   // with NO checkout, on every runner.
   examined++;
-  if (provenance.txiki_sha !== pin.sha) {
-    findings.push(`tls-cacert.pem was extracted from txiki.js ${provenance.txiki_tag} `
-      + `(${String(provenance.txiki_sha).slice(0, 12)}) but PINS.md now pins ${pin.tag} `
-      + `(${pin.sha.slice(0, 12)}) — re-run \`node scripts/extract-cacert-pem.mjs\` against `
-      + 'the new checkout');
+  if (provenance !== null) {
+    if (provenance.txiki_sha !== pin.sha) {
+      findings.push(`tls-cacert.pem was extracted from txiki.js ${provenance.txiki_tag} `
+        + `(${String(provenance.txiki_sha).slice(0, 12)}) but PINS.md now pins ${pin.tag} `
+        + `(${pin.sha.slice(0, 12)}) — re-run \`node scripts/extract-cacert-pem.mjs\` against `
+        + 'the new checkout');
+    }
+    if (provenance.txiki_tag !== pin.tag) findings.push('provenance tag disagrees with PINS.md');
   }
-  if (provenance.txiki_tag !== pin.tag) findings.push('provenance tag disagrees with PINS.md');
 
   // Not hand-edited: the committed .pem must hash to the digest recorded at
   // extraction time.
   examined++;
-  const actualPemSha = sha256(pemBytes);
-  if (actualPemSha !== provenance.pem_sha256) {
-    findings.push('tls-cacert.pem does not hash to the digest recorded when it was extracted — '
-      + 'it was edited by hand, or written by something other than scripts/extract-cacert-pem.mjs');
+  if (pemBytes === null) {
+    findings.push(`${OUT_PEM} is missing — run scripts/extract-cacert-pem.mjs`);
+  } else if (provenance !== null) {
+    const actualPemSha = sha256(pemBytes);
+    if (actualPemSha !== provenance.pem_sha256) {
+      findings.push('tls-cacert.pem does not hash to the digest recorded when it was extracted — '
+        + 'it was edited by hand, or written by something other than scripts/extract-cacert-pem.mjs');
+    }
   }
 
   // Every BEGIN/END block must be a real, parseable X.509 certificate, and
   // there must be a plausible number of them.
   examined++;
-  const blocks = pemBytes.toString('utf8').match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || [];
-  if (blocks.length < 50) findings.push(`expected at least 50 certificates, found ${blocks.length}`);
-  for (const b of blocks) {
-    try { new X509Certificate(b); } catch { findings.push(`block failed to parse as X.509: ${b.slice(0, 60)}...`); }
+  if (pemBytes !== null) {
+    const blocks = pemBytes.toString('utf8').match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || [];
+    if (blocks.length < 50) findings.push(`expected at least 50 certificates, found ${blocks.length}`);
+    for (const b of blocks) {
+      try { new X509Certificate(b); } catch { findings.push(`block failed to parse as X.509: ${b.slice(0, 60)}...`); }
+    }
   }
 
   return { findings, examined };
@@ -137,9 +154,9 @@ function scanCacertProvenance({ provenance, pin, pemBytes }) {
 const cacertProvenanceGuard = defineGuard({
   name: 'tls-cacert-provenance',
   read: () => ({
-    provenance: readProvenance(),
+    provenance: fs.existsSync(provenancePath()) ? readProvenance() : null,
     pin: txikiPin(),
-    pemBytes: fs.readFileSync(OUT_PEM),
+    pemBytes: fs.existsSync(OUT_PEM) ? fs.readFileSync(OUT_PEM) : null,
   }),
   scan: scanCacertProvenance,
   // Models the actual dangerous drift: PINS.md moved on without a re-extraction,
