@@ -6122,3 +6122,77 @@ reference host to diff against — is an acceptance-test DESIGN problem, and it 
 **phase 6**, whose whole business is comparisons that work without a reference host. Phase 5
 does not own comparison-design; it owns whether a gate can fail, and the answer for this
 gate — now — is yes, honestly.
+
+## Guard migration is proven per-FILE; the individual claims inside are not (2026-09-05, final whole-branch review of phase 5)
+
+`defineGuard`/`guardTests` (`test/guard.cjs`) and the population sweep that ratchets what has
+NOT been migrated onto it (`test/guards-population.cjs`, `UNMIGRATED_BASELINE`) both operate
+at the granularity of a FILE: a `*.test.cjs` file counts as "migrated" the moment it contains
+one `defineGuard()` call anywhere in it, and `guards-population.cjs`'s sweep then stops
+looking at that file's OTHER `test(...)` bodies entirely — they are exempted by the file
+having a guard in it, not by having been individually wired through `checkControl`/
+`checkGate` themselves.
+
+**The worked example, found while fixing this phase's own review findings:**
+`test/release-gate-globs.test.cjs` registers the `release-gate-globs` guard (migrated, one of
+the six-then-more this phase counted as done) — and, in the SAME file, ships a second test,
+`'the release job gates on the full suite, and both workflows share ONE definition'`
+(lines 203-219), asserting FOUR separate `assert.match`/`assert.ok(!...test(...))` regex
+checks against `release.yml`/`ci.yml`/`suite.yml` with no `defineGuard`, no `control()`, and
+no floor. Every property phase 5 exists to guarantee — "this check has a proven positive
+control", "zero is BROKEN, not a pass" — is simply absent for those four assertions. They are
+invisible to `guards-population.cjs`'s ratchet not because they are safe, but because the
+FILE they live in already contains an unrelated migrated guard.
+
+**So the phase's own headline number overstates what it proved.** "102 → 82 unmigrated"
+counts files, and a file this project can point to right now (release-gate-globs.test.cjs)
+demonstrates that "migrated" and "every scanner-shaped assertion in this file has a proven
+control" are different claims — the sweep can only ever prove the first. This is not
+specific to that one file; it is a property of doing migration at file granularity at all,
+and it should be read as a caveat on the whole phase's reported progress, not a defect in
+one test.
+
+**Not fixed here, deliberately** (documentation, per the final review's own instruction) —
+fixing it for real means either (a) migrating every individually-scanner-shaped assertion
+onto its own `defineGuard`, one guard per property rather than one per file (a large,
+mechanical but not hard follow-up), or (b) teaching `guards-population.cjs`'s classifier to
+work at the `test(...)`-body granularity instead of the file granularity, which is a real
+redesign of the sweep's own unit of measure. Either is its own task; recorded here so the
+gap is legible to whoever reads this phase's numbers next, rather than re-discovered by
+someone assuming "migrated file" already meant "every claim in it is proven".
+
+## The real build-path gates have no floor, no control, and no verdict vocabulary — phase 5's natural successor (2026-09-05, final whole-branch review of phase 5)
+
+Phase 5 built `defineGuard`/`guardTests` and made it structurally hard to add a NEW
+unaccountable guard — but only inside `test/`. `guards-population.cjs`'s migration sweep
+walks `test/**/*.test.cjs` exclusively (`discoverTestFiles`, `TEST_DIR = __dirname`), because
+that is where `node:test` lives and that is what a `*.test.cjs` file even means. Nothing in
+phase 5 reaches the gates that run for real, at build time, inside `clode build` itself:
+
+- `assertNoUnknownBareSpecifiers` (the dep-closure gate, `libexec/clode-fuse.cjs`) — the
+  exact mechanism whose escape-blindness shipped a P0 twice before this phase started
+  (`upstream-deps-become-our-deps.md`, `dep-closure-derived-not-declared.md`).
+- `libexec/scc-merge.cjs` — the cyclic-group merger itself, whose `lexicalCodeMask` has the
+  IDENTICAL check-ordering defect just fixed in `windows-path-ratchet.test.cjs`'s tokenizer,
+  unproven in the wild (see "scc-merge.cjs's lexicalCodeMask..." above, this same file).
+- `libexec/host-provision.cjs` — decides what gets fetched/verified onto a host and how; the
+  origin of the "hang writing to disk" P0 traced to a silent pure-JS SHA-256 verify under tjs
+  (`clode-fetch-verify-extdep.md`).
+- `libexec/target-update-check.cjs` — the gate a stale engine template needs to refuse a
+  build with (`stale-engine-template-breaks-builds.md`).
+
+Every one of these is a scanner: it reads an artifact, derives a finding, and reports pass or
+fail — the exact shape `defineGuard` exists to discipline. None of them has a recorded
+positive control, a floor, or phase 5's OK/VIOLATION/BROKEN/CANNOT_FAIL/SKIP vocabulary; each
+reports through its own ad hoc pass/throw, the same "many gates, and nothing gates the gates"
+shape the ★★★ entry above named for the TEST suite, one layer under it, sitting exactly where
+the shipped harm actually lands — a broken `clode build`, not a red `npm test`. This is the
+natural successor to phase 5, not a fix folded into it: `defineGuard`'s registry, its
+`checkControl`/`checkGate` verdicts, and a population sweep for it all assume `node:test` as
+the harness (`guardTests()` calls `require('node:test').test`), which a build-time gate
+running inside `clode build` does not have — bringing these gates under the same discipline
+means either giving `defineGuard` a harness-agnostic verdict path (usable from both
+`node:test` and a plain build-time assertion) or building its equivalent for the build path
+specifically. Sized and scoped like its own phase, not a task inside this one; recorded here
+so it is not lost the way the umbrella phase-list (`### Phase order`, above) would otherwise
+make it look like phase 5 already covers "gates that can fail" in full.
