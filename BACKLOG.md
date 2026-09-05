@@ -6196,3 +6196,27 @@ means either giving `defineGuard` a harness-agnostic verdict path (usable from b
 specifically. Sized and scoped like its own phase, not a task inside this one; recorded here
 so it is not lost the way the umbrella phase-list (`### Phase order`, above) would otherwise
 make it look like phase 5 already covers "gates that can fail" in full.
+
+
+## "Required gate" does NOT mean branch protection here (user, 2026-09-05)
+
+Phase 5's item 4 asked to make `native-builder-oracle` "a REQUIRED gate whose failure says the
+SHIPPED ARTIFACT is broken". Implementing it surfaced that `main` has **no branch protection and
+no rulesets** — `gh api .../branches/main/protection` returns 404, `.../rulesets` returns `[]` —
+so no CI check on this repo is required, for any job.
+
+**Decision: that is intentional and stays.** The user works push-to-main wherever that is
+possible, and branch protection would take that away to buy a property this project does not
+need. So "required" in item 4 never meant GitHub-required, and nobody should re-derive that
+conclusion from the word.
+
+**What item 4 actually wanted, and now has:** a failure of that job must SAY what it means. It
+had been sitting as one anonymous red among twenty-two, which is how the zstd carve break went
+unread for a day. It now emits `::error title=SHIPPED ARTIFACT BROKEN::` plus a step-summary
+banner — but only when the `build` or `oracle` step itself failed. Any other failure (checkout,
+artifact download, a dep install) emits a quieter `::warning:: could not verify the shipped
+artifact`, because a banner that cries wolf on an npm timeout trains people to ignore the one
+signal the item exists to make loud.
+
+If a future reader wants a check that genuinely cannot be merged past, that is a different
+request with a real cost (no more push-to-main) and needs asking, not assuming.
