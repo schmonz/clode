@@ -279,12 +279,18 @@ const MIGRATED = deriveMigrated();
 // build-tjs.mjs, the build-leg action, and the guest bake script, leaving the dynamic
 // import()-driven ENGINE_API_FLOOR/behavioral tests alone).
 //
+// RE-CUT AGAIN, 83 -> 82, Task 14 batch 5 (2026-09-04): engine-recipe-cache-key-wiring,
+// the one pure-regex assertion inside engine-recipe.test.cjs (the build-leg cache key
+// consumes the recipe's hash rather than re-inlining hashFiles(...)); the rest of that
+// file's tests load scripts/engine-recipe.mjs dynamically and exercise real hashing
+// behaviour, which is not a static text scan and is left alone.
+//
 // MEANT TO GO DOWN from here as files migrate. Never raise it to make a run "look clean" —
 // raising it papers over exactly the regression this ratchet exists to catch. Lower it (with
 // a comment recording the new measured count and when) whenever a migration makes the real
 // count drop, OR whenever a future classifier fix surfaces more true positives or trims a
 // false positive — the ratchet test below tells you to when that happens.
-const UNMIGRATED_BASELINE = 83;
+const UNMIGRATED_BASELINE = 82;
 
 // Pure ratchet decision — unit-tested directly with synthetic counts (see
 // guards-population.test.cjs) as well as through the real file list, so the mechanism is

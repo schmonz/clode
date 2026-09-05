@@ -18,6 +18,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
+const { defineGuard, guardTests } = require('./guard.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 const ACTION = path.join(REPO, '.github/actions/build-leg/action.yml');
@@ -50,17 +51,45 @@ test('FILES covers the tjs cache key set, plus the cosmo patches', async () => {
   assert.deepStrictEqual([...FILES], EXPECTED_SET);
 });
 
-test('the build-leg cache key reads the recipe instead of re-inlining the list', () => {
-  const yml = fs.readFileSync(ACTION, 'utf8');
+// PURE: `yml` is the already-read build-leg/action.yml text.
+function scanCacheKeyWiring({ yml }) {
+  const findings = [];
+  let examined = 0;
+
+  examined++;
   const key = yml.split('\n').find((l) => /^\s*key: tjs-/.test(l));
-  assert.ok(key, 'no tjs cache key line in build-leg/action.yml');
-  assert.match(key, /steps\.recipe\.outputs\.hash/,
-    'the tjs cache key must consume scripts/engine-recipe.mjs, not its own file list');
-  assert.doesNotMatch(key, /hashFiles\(/,
-    'the engine-source list is back inline in the cache key — it must have exactly one home');
-  assert.match(yml, /run: echo "hash=\$\(node scripts\/engine-recipe\.mjs\)"/,
-    'the step that produces steps.recipe.outputs.hash is missing');
+  if (!key) {
+    findings.push('no tjs cache key line in build-leg/action.yml');
+  } else {
+    examined++;
+    if (!/steps\.recipe\.outputs\.hash/.test(key)) {
+      findings.push('the tjs cache key must consume scripts/engine-recipe.mjs, not its own file list');
+    }
+    examined++;
+    if (/hashFiles\(/.test(key)) {
+      findings.push('the engine-source list is back inline in the cache key — it must have exactly one home');
+    }
+  }
+
+  examined++;
+  if (!/run: echo "hash=\$\(node scripts\/engine-recipe\.mjs\)"/.test(yml)) {
+    findings.push('the step that produces steps.recipe.outputs.hash is missing');
+  }
+
+  return { findings, examined };
+}
+
+const cacheKeyGuard = defineGuard({
+  name: 'engine-recipe-cache-key-wiring',
+  read: () => ({ yml: fs.readFileSync(ACTION, 'utf8') }),
+  scan: scanCacheKeyWiring,
+  // Models the exact regression this pins: the cache key re-inlining the file
+  // list via hashFiles(...) instead of consuming the recipe's own hash output.
+  control: () => ({
+    yml: '      key: tjs-${{ hashFiles(\'spike/quickjs/**\') }}\n',
+  }),
 });
+guardTests(cacheKeyGuard);
 
 test('the recipe is a stable sha256 and does not depend on cwd', () => {
   const a = run([]);
