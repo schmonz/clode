@@ -1109,6 +1109,12 @@ const carvesInGuest = (gp, set) => !!gp && (set.has(gp) || gp.startsWith('qemu-'
 // restated — so adding a candidate there cannot leave this gate rejecting a legitimate package.
 const ZSTD_CMDS = require('../libexec/host-provision.cjs').REGISTRY.zstd.candidates.map((c) => c.name);
 
+// The literal fact the 'minimised' branch below depends on: does make-min-provider.cjs still
+// call the one function that turns a copied zstd ROW into plain bytes before it ever reaches a
+// guest? Named here, once, so the mechanism self-check below tests the SAME pattern the gate
+// itself uses rather than a hand-copied twin that could quietly drift out of sync with it.
+const ZSTD_INFLATE_CALL = /isZstdFrame\(body\)/;
+
 test('every leg that carves inside a guest VM accounts for its zstd', () => {
   const inGuest = inGuestPlatforms();
   const seen = new Set();
@@ -1128,7 +1134,7 @@ test('every leg that carves inside a guest VM accounts for its zstd', () => {
       // copies. If that is ever reverted, this leg is back to needing a decoder it cannot
       // have, and the gate must say so rather than keep documenting a stale answer.
       const min = fs.readFileSync(path.join(REPO, 'scripts', 'make-min-provider.cjs'), 'utf8');
-      assert.match(min, /isZstdFrame\(body\)/,
+      assert.match(min, ZSTD_INFLATE_CALL,
         `${l.leg}: ZSTD_SOURCE says 'minimised', but make-min-provider no longer decompresses the `
         + 'zstd rows it copies — this guest has no zstd and cannot carve compressed rows.');
     }
@@ -1151,4 +1157,42 @@ test('every leg that carves inside a guest VM accounts for its zstd', () => {
   for (const leg of Object.keys(ZSTD_SOURCE)) {
     assert.ok(seen.has(leg), `ZSTD_SOURCE names ${leg}, which is no longer an in-guest leg`);
   }
+});
+
+// Item 6 (phase 5, task 12): a CONTROL for the 'minimised' branch above, proving it can
+// actually go red rather than being a scan that is silently, permanently satisfied. THE
+// IN-GUEST CARVE ITSELF IS DELIBERATELY NOT BUILT HERE — it rides on stage-provider.mjs's
+// minimisation, which phase 4's declared-edges work reworks, so building a real guest
+// exercise now would be writing that machinery twice. What CAN be proven today, with no
+// guest at all, is that the scan the main test depends on actually discriminates: the same
+// pattern the assertion above uses (ZSTD_INFLATE_CALL), tried against synthetic source
+// text standing in for two ways the real file could regress.
+//
+// Same rationale, and the same two-direction shape, as test/zlib-zstd-stream-gap.test.cjs's
+// "mechanism self-check" (search that file for the term): a green run of the real assertion
+// above means "make-min-provider.cjs still decompresses the rows it copies", not "the
+// pattern never matched anything" — and this is the difference between those two claims,
+// made executable.
+test('zstd-row accounting mechanism: the "minimised" check fires when the row is ABSENT or WRONG', () => {
+  const real = fs.readFileSync(path.join(REPO, 'scripts', 'make-min-provider.cjs'), 'utf8');
+  assert.match(real, ZSTD_INFLATE_CALL,
+    'sanity: the real make-min-provider.cjs must still carry the call this gate looks for — '
+    + 'if this fails, the file changed and the two checks below are proving nothing');
+
+  // ABSENT: the decompression call site removed outright, e.g. a refactor that reverted to
+  // copying zstd rows through verbatim (exactly the netbsd-sparc failure this gate exists to
+  // prevent from recurring silently).
+  const absent = real.replace(/isZstdFrame\(body\)/g, '/* removed */');
+  assert.doesNotMatch(absent, ZSTD_INFLATE_CALL,
+    'the accounting check must go red when make-min-provider.cjs stops calling '
+    + 'isZstdFrame(body) — if it still matches, this scan is not looking at the call at all');
+
+  // WRONG: a plausible near-miss that keeps the function name but checks a DIFFERENT value
+  // than the one actually written to the minimised provider — the shape a local-variable
+  // rename (`body` -> `buf`/`chunk`) or a copy-paste of the wrong operand would produce, and
+  // which a looser pattern (bare `isZstdFrame\(` with no argument) would have missed.
+  const wrong = real.replace(/isZstdFrame\(body\)/g, 'isZstdFrame(chunk)');
+  assert.doesNotMatch(wrong, ZSTD_INFLATE_CALL,
+    'the accounting check must go red on a same-function-different-argument near-miss — '
+    + 'a pattern that matches this too is not precise enough to trust as "still decompressing"');
 });

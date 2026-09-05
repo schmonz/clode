@@ -21,6 +21,17 @@
 // history like any other turn. If native cannot complete the turn (logged out,
 // offline, model non-compliant) BOTH tests skip rather than fail: that is an
 // environment signal, not a quaude divergence.
+//
+// HONESTY FIX (phase 5, task 12, 2026-09-04): the code did not match the
+// paragraph above. NO_REFERENCE_SKIP is the precise subset of NATIVE_SKIP that
+// means "no confirmed logged-in reference to compare against" (native didn't
+// run, its version didn't match quaude's, or it could not complete the live
+// turn) — as opposed to "no native binary exists on this platform at all",
+// which is NOT a precondition failure: NetBSD/BSD/etc. have no native Claude
+// Code by design, and quaude's own turn is still judged standalone there (see
+// the comment above the second test). Only NO_REFERENCE_SKIP now also skips
+// the quaude test — so a red there still means quaude diverged from a
+// confirmed-good reference, never "nobody was logged in here".
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -72,8 +83,12 @@ function liveTurn(cmd) {
 // platforms that are quaude's whole reason to exist (NetBSD, the BSDs, …). There,
 // the quaude turn still runs and is judged on its OWN merits: it renders 42, is
 // logged in, and shows no shim-error markers. Its answer check (renderedAnswer) is
-// native-independent, so no comparison reference is needed.
-let SKIP = null, NATIVE_SKIP = null, NATIVE = '', QUAUDE = '', DIR = null;
+// native-independent, so no comparison reference is needed. NO_REFERENCE_SKIP is
+// the strict subset of NATIVE_SKIP that means a reference COULD have been
+// established (native is on PATH) but wasn't (didn't run / version drift /
+// couldn't complete a live turn) — that subset gates the quaude test too, so a
+// missing login reads as a skip everywhere, never as a hard failure.
+let SKIP = null, NATIVE_SKIP = null, NO_REFERENCE_SKIP = null, NATIVE = '', QUAUDE = '', DIR = null;
 before(() => {
   if (process.env.CLODE_LIVE_ONLINE !== '1') { SKIP = 'live ONLINE opt-in only (set CLODE_LIVE_ONLINE=1; uses your real credentials and spends real tokens)'; return; }
   const liveRenderSkip = liveRenderSkipReason();
@@ -85,8 +100,17 @@ before(() => {
   const provider = native || process.env.CLODE_CLAUDE_BIN;
   if (!provider) { SKIP = 'no native claude on PATH and no CLODE_CLAUDE_BIN provider to build from'; return; }
   let nver = null;
-  if (native) { nver = version([native], cleanEnv({ DISABLE_AUTOUPDATER: '1' })); if (!nver) NATIVE_SKIP = 'native claude did not run here'; }
-  else { NATIVE_SKIP = 'no runnable native Claude Code on this platform (expected off Linux/macOS — quaude is the point)'; }
+  if (native) {
+    nver = version([native], cleanEnv({ DISABLE_AUTOUPDATER: '1' }));
+    // NO_REFERENCE_SKIP too: native exists but did not even run, so there is no
+    // confirmed-good reference to judge quaude's login state against.
+    if (!nver) { NATIVE_SKIP = 'native claude did not run here'; NO_REFERENCE_SKIP = NATIVE_SKIP; }
+  } else {
+    // NOT a NO_REFERENCE_SKIP: no native binary exists on this platform BY
+    // DESIGN (NetBSD, the BSDs, ... — quaude's whole reason to exist), so the
+    // quaude test below still runs and is judged on its own merits.
+    NATIVE_SKIP = 'no runnable native Claude Code on this platform (expected off Linux/macOS — quaude is the point)';
+  }
   DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-liveturn-'));
   const quaude = path.join(DIR, 'quaude');
   const build = spawnSync(process.execPath, [ENTRY, 'build', '--out', quaude], {
@@ -95,12 +119,17 @@ before(() => {
   });
   if (build.status !== 0) { SKIP = `clode build failed:\n${build.stdout}\n${build.stderr}`; return; }
   if (native && nver && !NATIVE_SKIP) {
-    if (nver !== version([quaude], cleanEnv())) { NATIVE_SKIP = 'version mismatch native vs quaude'; }
+    if (nver !== version([quaude], cleanEnv())) { NATIVE_SKIP = 'version mismatch native vs quaude'; NO_REFERENCE_SKIP = NATIVE_SKIP; }
     else {
       NATIVE = liveTurn([native]);
       // Native is the comparison probe; logged out/offline means only the
       // comparison is unjudgeable — the quaude turn still stands on its own.
-      if (!renderedAnswer(NATIVE)) NATIVE_SKIP = `native could not complete a live turn (logged out/offline/model non-compliant):\n${lines(NATIVE).filter((l) => l.trim()).slice(-6).join('\n')}`;
+      // But it is ALSO a NO_REFERENCE_SKIP: without a confirmed logged-in
+      // reference, a red on quaude's own login check below cannot be told
+      // apart from "nobody is logged in here" — the exact ambiguity this
+      // fix exists to remove (BACKLOG.md, "Two defects found while wiring
+      // the Linux PTY CI job").
+      if (!renderedAnswer(NATIVE)) { NATIVE_SKIP = `native could not complete a live turn (logged out/offline/model non-compliant):\n${lines(NATIVE).filter((l) => l.trim()).slice(-6).join('\n')}`; NO_REFERENCE_SKIP = NATIVE_SKIP; }
     }
   }
   QUAUDE = liveTurn([quaude]);
@@ -114,7 +143,7 @@ test('native renders a live streamed response (harness + credentials sanity)', (
 });
 
 test('quaude renders the live streamed model response in the TUI (a real human turn)', (t) => {
-  if (SKIP) { t.skip(SKIP); return; }
+  if (SKIP || NO_REFERENCE_SKIP) { t.skip(SKIP || NO_REFERENCE_SKIP); return; }
   const q = QUAUDE.replace(STRIP, '');
   assert.doesNotMatch(q, /Not logged in/, 'quaude could not authenticate (credentials not reachable)');
   assert.doesNotMatch(q, /�|not implemented|not a function|TypeError|undefined is not|node-shim:/, 'quaude render shows a corruption/shim-error marker');

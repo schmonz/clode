@@ -5991,3 +5991,64 @@ returns the pinned carve or a SKIP with both versions named — so a gate cannot
 something else. Until then, every new gate that reads a carve is a fourth instance waiting to
 happen. `test/provider-resolve.cjs`'s `pinnedVersion()` is the existing half; what is missing is
 making it the ONLY door.
+
+## Item 6's coverage half waits on phase 4's declared edges (2026-09-04)
+
+Phase 5's item 6 (`test/tjs-legs.test.cjs`'s `'every leg that carves inside a guest VM
+accounts for its zstd'`) now has a can-it-fail control: `'zstd-row accounting mechanism: the
+"minimised" check fires when the row is ABSENT or WRONG'`, in the same file, proves the
+`ZSTD_INFLATE_CALL` pattern the gate depends on actually discriminates — it goes red against
+synthetic source with the decompression call removed, and again against a same-function
+different-argument near-miss. That is the WHOLE of what phase 5 owns for this item.
+
+**What is deliberately still missing: the coverage half — an actual in-guest carve that
+exercises this for real**, the way CI run 33241941716 caught the original haiku-x64/
+netbsd-sparc breaks. Today's control proves the SOURCE-TEXT SCAN can fail; it does not run a
+guest VM, and this file's own earlier entry ("No CI leg carves a zstd row in a guest any
+more", 2026-08-29) already recorded why: since `scripts/make-min-provider.cjs` decompresses
+zstd rows on the runner, no CI leg carves a compressed row inside a guest at all, so there is
+nowhere left for an in-guest exercise to run against today's shape.
+
+**This is a dependency, not a budget deferral.** The in-guest carve this coverage half needs
+rides on `stage-provider.mjs`'s minimisation, which **phase 4's declared-edges work
+reworks**. Building an in-guest exercise against today's `stage-provider.mjs` would mean
+writing it again the moment phase 4 lands — the one deferral reason this project accepts.
+Phase 4 is where this waits: once declared edges reshape minimisation, re-examine whether a
+guest-carve exercise belongs beside `ZSTD_SOURCE`'s 'minimised' entries, or whether the
+reshaped edges make the question moot a different way.
+
+## Item 7's coverage half waits on phase 6's control-free comparison (2026-09-04)
+
+Phase 5's item 7 (`test/fidelity/interactive-live-turn.test.cjs`, "the standing 'live TUI
+turn is the acceptance' gate") had a real honesty bug: its own header comment already said
+"If native cannot complete the turn (logged out, offline, model non-compliant) BOTH tests
+skip rather than fail" — but the code only implemented that for the first test
+('native renders a live streamed response'). The second test ('quaude renders the live
+streamed model response in the TUI') checked only the coarse `SKIP` (no CLODE_LIVE_ONLINE
+opt-in / no render gate / no tjs binary / no provider / build failure), so a missing or
+logged-out native reference produced a HARD FAILURE on quaude's own login check — a red
+indistinguishable from quaude actually breaking Keychain parity (the exact P0 this test was
+built to catch; see `quaude-never-reads-keychain.md`). Fixed by adding `NO_REFERENCE_SKIP`,
+the strict subset of the existing `NATIVE_SKIP` that means "a reference COULD have been
+established but wasn't" (native didn't run, version drift, or it couldn't complete the live
+turn) — as distinct from "no native binary exists on this platform at all" (NetBSD, the
+BSDs, …), which by design still lets quaude's own turn stand on its own. Only the former now
+also skips the quaude test. Preconditions (native on PATH, a logged-in profile) now produce a
+SKIP naming the reason; the P0 detection itself — quaude failing to authenticate while a
+CONFIRMED-GOOD native reference succeeded — still hard-fails, unchanged.
+
+**What is deliberately still missing: the coverage half — a control-free variant that runs
+where there is no native reference at all.** The spec (`docs/superpowers/specs/
+2026-09-04-phase5-gates-that-can-fail-design.md`, §3.7 item 7) names this directly: native
+Claude Code structurally cannot run on NetBSD, Mavericks, Haiku, illumos or sparc — the
+platforms whose mechanisms differ most from macOS/Linux, and exactly where a rendering
+regression is likeliest to hide. Today, on those platforms, the quaude test still runs and
+is judged on its own merits (renders 42, is logged in, shows no shim-error markers) — but
+that is answer-shaped judgement already built into this file, not a general mechanism.
+
+**This is a dependency, not a budget deferral.** Making that judgement rigorous — reliably
+asserting the target renders an answer that is provably absent from the prompt, without a
+reference host to diff against — is an acceptance-test DESIGN problem, and it lands with
+**phase 6**, whose whole business is comparisons that work without a reference host. Phase 5
+does not own comparison-design; it owns whether a gate can fail, and the answer for this
+gate — now — is yes, honestly.
