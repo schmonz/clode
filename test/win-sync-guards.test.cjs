@@ -1,67 +1,78 @@
-const { test } = require('node:test');
-const assert = require('node:assert');
+'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
+const { defineGuard, guardTests } = require('./guard.cjs');
 
-const patch = fs.readFileSync(
-  path.join(__dirname, '..', 'spike/quickjs/patches/txiki-sync-fs.patch'), 'utf8');
-// The audit reads the '+'-added body of the patch (strip the leading '+').
-const added = patch.split('\n').filter((l) => l.startsWith('+')).map((l) => l.slice(1)).join('\n');
+const REPO = path.join(__dirname, '..');
 
-test('fs-sync: realpath has a _WIN32 branch using _fullpath', () => {
-  assert.match(added, /#if defined\(_WIN32\)[\s\S]*_fullpath/);
-});
-test('fs-sync: pread/pwrite have a _WIN32 branch using _lseeki64', () => {
-  assert.match(added, /_lseeki64/);
-});
-test('fs-sync: lstat degrades to stat on _WIN32', () => {
-  assert.match(added, /defined\(_WIN32\)[\s\S]*?FSS_PATH_STAT\(lstat, stat\)/);
-});
-test('fs-sync: readlink/symlink return ENOSYS on _WIN32', () => {
-  assert.match(added, /ENOSYS/);
-});
-test('fs-sync: O_NONBLOCK defined to 0 on _WIN32', () => {
-  assert.match(added, /#\s*ifndef O_NONBLOCK[\s\S]*#\s*define O_NONBLOCK 0/);
-});
-test('fs-sync: PATH_MAX fallback present', () => {
-  assert.match(added, /#\s*ifndef PATH_MAX[\s\S]*#\s*define PATH_MAX 4096/);
-});
-test('fs-sync: S_ISLNK guarded', () => {
-  assert.match(added, /#\s*ifndef S_ISLNK/);
-});
-test('fs-sync: mkdir arity guarded for _WIN32', () => {
-  assert.match(added, /_mkdir\(p\)/);
-});
-test('fs-sync: open forces O_BINARY on _WIN32', () => {
-  assert.match(added, /oflags \|= O_BINARY/);
-});
+// PURE: the '+'-added body of a unified diff, stripped of its leading '+'.
+function addedLines(patch) {
+  return patch.split('\n').filter((l) => l.startsWith('+')).map((l) => l.slice(1)).join('\n');
+}
 
-const spawnPatch = fs.readFileSync(
-  path.join(__dirname, '..', 'spike/quickjs/patches/txiki-sync-spawn.patch'), 'utf8');
-const spawnAdded = spawnPatch.split('\n').filter((l) => l.startsWith('+')).map((l) => l.slice(1)).join('\n');
+const FS_CHECKS = [
+  [/#if defined\(_WIN32\)[\s\S]*_fullpath/, 'realpath has a _WIN32 branch using _fullpath'],
+  [/_lseeki64/, 'pread/pwrite have a _WIN32 branch using _lseeki64'],
+  [/defined\(_WIN32\)[\s\S]*?FSS_PATH_STAT\(lstat, stat\)/, 'lstat degrades to stat on _WIN32'],
+  [/ENOSYS/, 'readlink/symlink return ENOSYS on _WIN32'],
+  [/#\s*ifndef O_NONBLOCK[\s\S]*#\s*define O_NONBLOCK 0/, 'O_NONBLOCK defined to 0 on _WIN32'],
+  [/#\s*ifndef PATH_MAX[\s\S]*#\s*define PATH_MAX 4096/, 'PATH_MAX fallback present'],
+  [/#\s*ifndef S_ISLNK/, 'S_ISLNK guarded'],
+  [/_mkdir\(p\)/, 'mkdir arity guarded for _WIN32'],
+  [/oflags \|= O_BINARY/, 'open forces O_BINARY on _WIN32'],
+];
 
-test('spawn-sync: POSIX includes guarded under !_WIN32', () => {
-  assert.match(spawnAdded, /#if !defined\(_WIN32\)[\s\S]*#include <poll\.h>/);
-});
-test('spawn-sync: Windows twin includes windows.h', () => {
-  assert.match(spawnAdded, /#if defined\(_WIN32\)[\s\S]*#include <windows\.h>/);
-});
-test('spawn-sync: Windows path uses CreateProcess', () => {
-  assert.match(spawnAdded, /CreateProcessA?\(/);
-});
-test('spawn-sync: Windows drain uses overlapped ReadFile + WaitForMultipleObjects', () => {
-  assert.match(spawnAdded, /FILE_FLAG_OVERLAPPED/);
-  assert.match(spawnAdded, /WaitForMultipleObjects/);
-});
-test('spawn-sync: missing exe maps to ENOENT', () => {
-  assert.match(spawnAdded, /ERROR_FILE_NOT_FOUND[\s\S]*ENOENT/);
-});
-test('spawn-sync: shared init exposes __tjs_spawn_sync (unguarded)', () => {
-  assert.match(spawnAdded, /__tjs_spawn_sync/);
-});
+const SPAWN_CHECKS = [
+  [/#if !defined\(_WIN32\)[\s\S]*#include <poll\.h>/, 'POSIX includes guarded under !_WIN32'],
+  [/#if defined\(_WIN32\)[\s\S]*#include <windows\.h>/, 'Windows twin includes windows.h'],
+  [/CreateProcessA?\(/, 'Windows path uses CreateProcess'],
+  [/FILE_FLAG_OVERLAPPED/, 'Windows drain uses overlapped ReadFile'],
+  [/WaitForMultipleObjects/, 'Windows drain uses WaitForMultipleObjects'],
+  [/ERROR_FILE_NOT_FOUND[\s\S]*ENOENT/, 'missing exe maps to ENOENT'],
+  [/__tjs_spawn_sync/, 'shared init exposes __tjs_spawn_sync (unguarded)'],
+];
 
-test('build-tjs: the Phase-0 sync stub is fully retired', () => {
-  const drv = fs.readFileSync(path.join(__dirname, '..', 'scripts/build-tjs.mjs'), 'utf8');
-  assert.doesNotMatch(drv, /CLODE_TJS_STUB_SYNC/, 'CLODE_TJS_STUB_SYNC must be gone');
-  assert.doesNotMatch(drv, /fixupStubSyncPrimitives/, 'fixupStubSyncPrimitives must be gone');
+// PURE: `patches` carries the raw text of both patch files; `buildTjsSrc` the
+// driver script. scan() derives the added-lines views itself — deterministic,
+// no I/O — so a control can hand it plain strings.
+function scanWinSyncGuards({ fsPatch, spawnPatch, buildTjsSrc }) {
+  const findings = [];
+  let examined = 0;
+
+  const fsAdded = addedLines(fsPatch);
+  for (const [re, label] of FS_CHECKS) {
+    examined++;
+    if (!re.test(fsAdded)) findings.push(`txiki-sync-fs.patch: ${label} — pattern not found`);
+  }
+
+  const spawnAdded = addedLines(spawnPatch);
+  for (const [re, label] of SPAWN_CHECKS) {
+    examined++;
+    if (!re.test(spawnAdded)) findings.push(`txiki-sync-spawn.patch: ${label} — pattern not found`);
+  }
+
+  examined++;
+  if (/CLODE_TJS_STUB_SYNC/.test(buildTjsSrc)) findings.push('build-tjs.mjs: CLODE_TJS_STUB_SYNC must be gone (Phase-0 sync stub not fully retired)');
+  examined++;
+  if (/fixupStubSyncPrimitives/.test(buildTjsSrc)) findings.push('build-tjs.mjs: fixupStubSyncPrimitives must be gone (Phase-0 sync stub not fully retired)');
+
+  return { findings, examined };
+}
+
+const guard = defineGuard({
+  name: 'win-sync-guards',
+  read: () => ({
+    fsPatch: fs.readFileSync(path.join(REPO, 'spike/quickjs/patches/txiki-sync-fs.patch'), 'utf8'),
+    spawnPatch: fs.readFileSync(path.join(REPO, 'spike/quickjs/patches/txiki-sync-spawn.patch'), 'utf8'),
+    buildTjsSrc: fs.readFileSync(path.join(REPO, 'scripts/build-tjs.mjs'), 'utf8'),
+  }),
+  scan: scanWinSyncGuards,
+  // Models both directions of drift at once: every Windows-sync pattern
+  // missing from a gutted patch, AND the retired Phase-0 stub reappearing.
+  control: () => ({
+    fsPatch: '--- a/x\n+++ b/x\n+nothing relevant\n',
+    spawnPatch: '--- a/y\n+++ b/y\n+nothing relevant either\n',
+    buildTjsSrc: 'const x = CLODE_TJS_STUB_SYNC; fixupStubSyncPrimitives();',
+  }),
 });
+guardTests(guard);

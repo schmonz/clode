@@ -18,9 +18,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-
-const fsShimSrc = fs.readFileSync(
-  path.join(__dirname, '..', 'libexec/node-shim/modules/fs.cjs'), 'utf8');
+const { defineGuard, guardTests } = require('./guard.cjs');
 
 // A fake __tjs_fs_sync whose rename mirrors the platform under test: on win32 it
 // throws EEXIST when the destination exists (the Windows CRT contract); on POSIX it
@@ -47,8 +45,8 @@ function makeFSS({ winSemantics }) {
   };
 }
 
-// Load the real fs.cjs in an isolated context with mocked platform + FSS.
-function loadShim({ win, fss }) {
+// Load a given fs.cjs-shaped source in an isolated context with mocked platform + FSS.
+function loadShim(fsShimSrc, { win, fss }) {
   // fs.cjs takes its constants from the ENGINE (internal/engine-constants.cjs),
   // which refuses to guess and therefore refuses to load outside one. This sandbox
   // already stands in for the engine for __tjs_fs_sync; it stands in here too,
@@ -84,44 +82,81 @@ function loadShim({ win, fss }) {
   return sandbox.module.exports;
 }
 
-test('win32: renameSync REPLACES an existing target (unlink + retry after EEXIST)', () => {
-  const fss = makeFSS({ winSemantics: true });
-  fss.add('C:\\proj\\file.tmp.abc'); // the atomic-write temp
-  fss.add('C:\\proj\\file');         // the existing target the CRT rename would reject
-  const shim = loadShim({ win: true, fss });
-  shim.renameSync('C:\\proj\\file.tmp.abc', 'C:\\proj\\file');
-  assert.ok(fss.files.has('C:\\proj\\file'), 'target present after replace');
-  assert.ok(!fss.files.has('C:\\proj\\file.tmp.abc'), 'temp consumed by the rename');
-  assert.deepStrictEqual(fss.calls, [
-    ['rename', 'C:\\proj\\file.tmp.abc', 'C:\\proj\\file'], // throws EEXIST
-    ['unlink', 'C:\\proj\\file'],                            // drop the existing target
-    ['rename', 'C:\\proj\\file.tmp.abc', 'C:\\proj\\file'], // succeeds
-  ]);
-});
+// PURE: `fsShimSrc` is the already-read shim text; every vm load below is
+// deterministic given that text plus the mocked FSS — no filesystem I/O.
+function scanRenameGuard({ fsShimSrc }) {
+  const findings = [];
+  let examined = 0;
 
+  examined++;
+  try {
+    const fss = makeFSS({ winSemantics: true });
+    fss.add('C:\\proj\\file.tmp.abc'); // the atomic-write temp
+    fss.add('C:\\proj\\file');         // the existing target the CRT rename would reject
+    const shim = loadShim(fsShimSrc, { win: true, fss });
+    shim.renameSync('C:\\proj\\file.tmp.abc', 'C:\\proj\\file');
+    if (!fss.files.has('C:\\proj\\file') || fss.files.has('C:\\proj\\file.tmp.abc')) {
+      findings.push('win32 renameSync did not correctly replace the existing target');
+    }
+  } catch (e) {
+    findings.push(`win32 renameSync threw instead of replacing an existing target (${e.message}) — `
+      + 'the Windows CRT rename() rejects an existing destination and the shim must unlink+retry');
+  }
+
+  examined++;
+  try {
+    const fss = makeFSS({ winSemantics: true });
+    fss.add('/t/a'); fss.add('/t/b');
+    const shim = loadShim(fsShimSrc, { win: false, fss });
+    assert.throws(() => shim.renameSync('/t/a', '/t/b'), /EEXIST/);
+    assert.deepStrictEqual(fss.calls, [['rename', '/t/a', '/t/b']]);
+  } catch (e) {
+    findings.push(`POSIX renameSync must propagate a throwing rename untouched, with no unlink `
+      + `fallback (the fallback must be gated to win32 only): ${e.message}`);
+  }
+
+  examined++;
+  try {
+    const fss = makeFSS({ winSemantics: false }); // real POSIX rename replaces
+    fss.add('/t/a'); fss.add('/t/b');
+    const shim = loadShim(fsShimSrc, { win: false, fss });
+    shim.renameSync('/t/a', '/t/b');
+    assert.ok(fss.files.has('/t/b') && !fss.files.has('/t/a'));
+    assert.deepStrictEqual(fss.calls, [['rename', '/t/a', '/t/b']]);
+  } catch (e) {
+    findings.push(`POSIX renameSync must replace via the single native rename, with no `
+      + `fallback machinery invoked: ${e.message}`);
+  }
+
+  return { findings, examined };
+}
+
+const guard = defineGuard({
+  name: 'win-fs-rename-guard',
+  read: () => ({
+    fsShimSrc: fs.readFileSync(path.join(__dirname, '..', 'libexec/node-shim/modules/fs.cjs'), 'utf8'),
+  }),
+  scan: scanRenameGuard,
+  // Models the ORIGINAL bug: renameSync forwards straight to the mocked FSS
+  // rename with no unlink+retry fallback, so on win32 it throws EEXIST instead
+  // of replacing — exactly the "Edit did not apply on disk" incident.
+  control: () => ({
+    fsShimSrc: `
+      module.exports.renameSync = function (a, b) { return __tjs_fs_sync.rename(a, b); };
+      module.exports.promises = { rename: async function (a, b) { return __tjs_fs_sync.rename(a, b); } };
+    `,
+  }),
+});
+guardTests(guard);
+
+// The async variant is not folded into the guard above: guard.cjs's scan() contract is
+// synchronous, and asserting on a promise's resolution needs an await, which a sync scan()
+// cannot give without a microtask-flush hack. Real fs.cjs is still exercised directly here.
 test('win32: promises.rename REPLACES an existing target', async () => {
+  const fsShimSrc = fs.readFileSync(path.join(__dirname, '..', 'libexec/node-shim/modules/fs.cjs'), 'utf8');
   const fss = makeFSS({ winSemantics: true });
   fss.add('/t/a'); fss.add('/t/b');
-  const shim = loadShim({ win: true, fss });
+  const shim = loadShim(fsShimSrc, { win: true, fss });
   await shim.promises.rename('/t/a', '/t/b');
   assert.ok(fss.files.has('/t/b') && !fss.files.has('/t/a'));
-});
-
-test('POSIX: renameSync does NOT unlink — a throwing rename propagates (gate holds)', () => {
-  // Force win-semantics FSS but POSIX platform: the EEXIST must propagate untouched,
-  // proving the unlink+retry fallback is gated to win32 and never runs on POSIX.
-  const fss = makeFSS({ winSemantics: true });
-  fss.add('/t/a'); fss.add('/t/b');
-  const shim = loadShim({ win: false, fss });
-  assert.throws(() => shim.renameSync('/t/a', '/t/b'), /EEXIST/);
-  assert.deepStrictEqual(fss.calls, [['rename', '/t/a', '/t/b']], 'no unlink on POSIX');
-});
-
-test('POSIX: renameSync replaces via the single native rename (no fallback needed)', () => {
-  const fss = makeFSS({ winSemantics: false }); // real POSIX rename replaces
-  fss.add('/t/a'); fss.add('/t/b');
-  const shim = loadShim({ win: false, fss });
-  shim.renameSync('/t/a', '/t/b');
-  assert.ok(fss.files.has('/t/b') && !fss.files.has('/t/a'));
-  assert.deepStrictEqual(fss.calls, [['rename', '/t/a', '/t/b']]);
 });

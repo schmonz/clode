@@ -13,41 +13,58 @@
 // no, it still spawns, but skips applying anything back), it does no merge work when there are
 // no cyclic requires, and it reaches the merge ONLY by spawning scripts/merge-step.mjs — never
 // by calling the driver directly.
-const test = require('node:test');
-const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const SRC = fs.readFileSync(path.join(__dirname, '..', 'libexec', 'quaude-fuse.js'), 'utf8');
+const { defineGuard, guardTests } = require('./guard.cjs');
 
-// The merge now happens at STAGING (libexec/clode-extract.cjs) OR, for a doc staged before
-// that moved, inside scripts/merge-step.mjs — either way the staged graph both targets consume
-// ends up merged before this worker's compile step ever runs.
-test('quaude-fuse reaches the merge ONLY by spawning scripts/merge-step.mjs, never by calling the driver itself', () => {
-  assert.match(SRC, /merge-step\.mjs/, 'it must spawn the protocol-only merge component');
-  assert.match(SRC, /tjs\.spawn\(/, 'the merge is a real subprocess, not an in-process call');
-  assert.doesNotMatch(SRC, /scc\.mergeCyclicGroups\(/,
-    'the driver call belongs to scripts/merge-step.mjs alone — a second copy (or a direct call) '
-    + 'here is exactly the drift that let a quaude work while every naude and oracle did not');
-  assert.doesNotMatch(SRC, /merger\.mergeGroup\(/,
-    'the merge loop must live in libexec/graph-scc-merge.cjs only');
-});
+const REPO = path.join(__dirname, '..');
 
-test('quaude-fuse checks how the merge subprocess exited — a killed child is not exit 0', () => {
-  assert.match(SRC, /term_signal/, 'tjs reports a killed child\'s signal as a STRING, not null');
-  assert.match(SRC, /exit_status/, 'and the exit status must be checked explicitly too');
-});
+// PURE: every check is a presence/absence assertion against the already-read
+// quaude-fuse.js source.
+function scanFuseMergeWiring({ src }) {
+  const findings = [];
+  let examined = 0;
 
-test('quaude-fuse skips applying a merge result when staging already merged the graph', () => {
-  assert.match(SRC, /doc\.sccMerge/, 'it must recognise an already-merged staged graph');
-});
+  // The merge now happens at STAGING (libexec/clode-extract.cjs) OR, for a doc staged before
+  // that moved, inside scripts/merge-step.mjs — either way the staged graph both targets
+  // consume ends up merged before this worker's compile step ever runs.
+  examined++;
+  if (!/merge-step\.mjs/.test(src)) findings.push('must spawn the protocol-only merge component (merge-step.mjs)');
+  examined++;
+  if (!/tjs\.spawn\(/.test(src)) findings.push('the merge must be a real subprocess (tjs.spawn), not an in-process call');
+  examined++;
+  if (/scc\.mergeCyclicGroups\(/.test(src)) {
+    findings.push('the driver call belongs to scripts/merge-step.mjs alone — a second copy (or a '
+      + 'direct call) here is exactly the drift that let a quaude work while every naude and '
+      + 'oracle did not');
+  }
+  examined++;
+  if (/merger\.mergeGroup\(/.test(src)) findings.push('the merge loop must live in libexec/graph-scc-merge.cjs only');
 
-// A bundle with no cyclic requires must take exactly today's path.
-test('quaude-fuse does no merge work when there are no cyclic requires', () => {
-  assert.match(SRC, /cyclicRequires\s*\|\|\s*\[\]/);
-});
+  examined++;
+  if (!/term_signal/.test(src)) findings.push('must check tjs\'s STRING term_signal — a killed child is not exit 0');
+  examined++;
+  if (!/exit_status/.test(src)) findings.push('must check exit_status explicitly too');
 
-// The two processes' sole shared contract for the merged bytes: the filename. The format/
-// version fields INSIDE that file are scripts/merge-step.mjs's alone (see its own tests).
-test('quaude-fuse reads the merge result back from the SAME cache filename merge-step.mjs writes', () => {
-  assert.match(SRC, /graph-merged\.json/);
+  examined++;
+  if (!/doc\.sccMerge/.test(src)) findings.push('must recognise an already-merged staged graph (doc.sccMerge)');
+
+  examined++;
+  if (!/cyclicRequires\s*\|\|\s*\[\]/.test(src)) findings.push('absent and empty cyclicRequires must both be a no-op');
+
+  examined++;
+  if (!/graph-merged\.json/.test(src)) findings.push('must read the merge result back from the same cache filename merge-step.mjs writes');
+
+  return { findings, examined };
+}
+
+const guard = defineGuard({
+  name: 'quaude-fuse-merge-wiring',
+  read: () => ({ src: fs.readFileSync(path.join(REPO, 'libexec', 'quaude-fuse.js'), 'utf8') }),
+  scan: scanFuseMergeWiring,
+  // Models the real regression this guards against: a direct driver call
+  // reintroduced (the exact drift that let a quaude work while naude/oracles
+  // did not), alongside every other marker missing.
+  control: () => ({ src: 'scc.mergeCyclicGroups(doc); merger.mergeGroup(g);' }),
 });
+guardTests(guard);

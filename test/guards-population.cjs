@@ -251,12 +251,22 @@ const MIGRATED = deriveMigrated();
 // tls-cacert-pem (the checkout-free provenance-chain half). Each carries its own positive
 // control, shown red then green (see task-14-report.md).
 //
+// RE-CUT AGAIN, 95 -> 89, Task 14 batch 2 (2026-09-04): "reads one or more repo source/
+// patch files and asserts several must-have/must-not-have patterns hold" — update-guard-
+// drift (three inline-copy comparisons), quaude-fuse-cyclic-refusal, quaude-fuse-merge,
+// win-sync-guards (two patch files + a build script), win-shim-guards (nine source files'
+// win32 patterns), and win-fs-rename-guard (behavioral: loads the real fs.cjs in a vm
+// sandbox with a mocked platform + FSS and exercises its rename semantics; the async
+// promises.rename check was left as a standalone test — guard.cjs's scan() contract is
+// synchronous, and unwrapping a promise inside it needs a microtask-flush hack this batch
+// did not take on).
+//
 // MEANT TO GO DOWN from here as files migrate. Never raise it to make a run "look clean" —
 // raising it papers over exactly the regression this ratchet exists to catch. Lower it (with
 // a comment recording the new measured count and when) whenever a migration makes the real
 // count drop, OR whenever a future classifier fix surfaces more true positives or trims a
 // false positive — the ratchet test below tells you to when that happens.
-const UNMIGRATED_BASELINE = 95;
+const UNMIGRATED_BASELINE = 89;
 
 // Pure ratchet decision — unit-tested directly with synthetic counts (see
 // guards-population.test.cjs) as well as through the real file list, so the mechanism is
