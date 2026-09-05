@@ -115,6 +115,9 @@ const ESM_STATIC_IMPORT = new RegExp('from"' + BUNFS + '\\/chunk-[A-Za-z0-9]+\\.
 const ESM_DYNAMIC_IMPORT = new RegExp('import\\("' + BUNFS + '\\/chunk-[A-Za-z0-9]+\\.js"\\)', 'g');
 // The entry chunk carries an unminified `// Version: x.y.z` line; naming the
 // version in the error is what turns "format changed" into a reportable fact.
+// Exported (not just used here): test/node-shim-wall-tripwires.test.cjs reuses this
+// SAME marker to read a staged carve's version straight out of graph.json's own
+// content, without spawning the binary — see that file's determineResolvedVersion().
 const BUNDLE_VERSION = /\/\/ Version: ([0-9][0-9A-Za-z.+-]{0,30})\n/;
 
 function countMatches(re, data) {
@@ -1567,6 +1570,7 @@ function providerPlatformOf(binpath) {
 
 module.exports = {
   BUNFS,
+  BUNDLE_VERSION,
   moduleWithMeta,
   pickEntry,
   describeBundleFormat,

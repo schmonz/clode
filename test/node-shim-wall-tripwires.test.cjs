@@ -304,6 +304,53 @@
 // before; version differs -> SKIP naming both the pin and what was actually found, never
 // a VIOLATION; version cannot be determined (spawn failed, no `--version` output, pin
 // file unreadable) -> SKIP saying so, never a guess.
+//
+// FIX ROUND 6 (2026-09-05) — the spawn ITSELF was the bug, not the decision built on top
+// of it. CI's node-shim-oracle job (ci.yml, the linux/alpine and darwin jobs) stages a
+// provider via `scripts/stage-provider.mjs`, which MINIMISES the real binary
+// (`make-min-provider.cjs`) before handing it to `CLODE_PROVIDER_BIN` — the minimised
+// artifact is not a runnable Bun container, so `<bin> --version` always fails there, the
+// FIX-ROUND-5 gate always read "version unknown," and this gate SKIPPED on every CI run —
+// invisible on a dev box, where the same env var names a real, spawnable binary (same
+// shape as the FIX ROUND 4 story two rounds up: verified in one context, ran in another).
+// Two jobs then failed CI's OWN "expected exactly 2 skips" assertion the moment this
+// file's skip count rose to 3.
+//
+// FIXED by never spawning FIRST. `determineResolvedVersion()` below tries two
+// derivations that read what staging ALREADY produced, before falling back to the spawn:
+//
+//   (A) `versionFromCacheDirName()` — `stageProviderCli()`'s `cacheDir` is named by
+//       `libexec/clode-resolve.cjs`'s `cacheKey()`, which returns the version VERBATIM
+//       when the resolved bin came from the real per-version store
+//       (`.../providers/<version>/...` or `.../versions/<version>/...`) — true on a dev
+//       box, and cannot lie: it IS the value the whole cache layout is keyed by. Falls
+//       back to a content hash for anything staged outside that layout (a bare tmpdir,
+//       no version segment) — which is exactly CI's shape, so this derivation is
+//       correctly silent there, not wrong.
+//
+//   (B) `versionFromGraphSources()` — every module Bun emits carries an unminified
+//       `// Version: x.y.z` banner near its top (`libexec/extract-claude-js.cjs`'s
+//       `BUNDLE_VERSION`, the SAME marker that file already uses to name a version in a
+//       format-change error — imported here, not hand-copied, so the two readers cannot
+//       drift apart on the shape). Measured against the real pinned carve: 1,691 of
+//       1,839 modules carry it, including the entry module itself. This reads content
+//       `readGraphJson()` already had to parse to scan for walls anyway — no extra I/O,
+//       no execution of anything — and it is exactly the derivation CI's minimised,
+//       content-hash-named carve needs, since (A) comes back null there.
+//
+// Only if BOTH come back null does `resolvedProviderVersion()` (the spawn) still run —
+// kept for a pre-graph.json (pre-2.1.243) provider that carves no graph at all and has
+// nothing else on hand to read a version out of. `versionMismatchReason()` is unchanged:
+// still a pure function, still the same three outcomes, still fed a value that may now
+// come from three different sources instead of one, which is the point — a caller
+// downstream of it cannot tell the difference and does not need to.
+//
+// Staging itself moved earlier in `readGraphJson()` — it now runs BEFORE the version
+// check, not after — because (B) needs graph.json's already-parsed `sources` to read
+// from. That does NOT reopen the FIX ROUND 5 risk (scanning a wrong-version carve
+// against version-specific baselines): staging only carves bytes into a cache dir, it
+// asserts nothing against a baseline; the version gate still runs, and still SKIPS
+// before `scanWalls()` ever sees a mismatched carve's `sources`.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -312,6 +359,7 @@ const { spawnSync } = require('node:child_process');
 const { defineGuard, guardTests } = require('./guard.cjs');
 const models = require('./oracle-models.cjs');
 const { pinnedVersion } = require('./provider-resolve.cjs');
+const { BUNDLE_VERSION } = require('../libexec/extract-claude-js.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 
@@ -488,6 +536,63 @@ function resolvedProviderVersion(bin) {
   return m ? m[0] : null;
 }
 
+// Derivation A (FIX ROUND 6): the resolved provider's OWN cache-dir name, no spawn.
+// stageProviderCli()'s cacheDir is path.join(root, cacheKey(bin)) — see
+// libexec/clode-resolve.cjs's cacheKey() — which returns the version VERBATIM when bin
+// came from the real per-version store (`.../providers/<version>/...` or
+// `.../versions/<version>/...`): cannot lie, because it IS the value the whole cache
+// layout is keyed by. Falls back to a `<basename>-<sig>` content hash for anything
+// staged outside that layout, which is CI's shape (scripts/stage-provider.mjs's
+// minimised copy lives in a bare tmpdir with no version segment) — so this correctly
+// comes back null there, not wrong; see versionFromGraphSources() below for what
+// covers that case.
+function versionFromCacheDirName(cacheDir) {
+  if (!cacheDir) return null;
+  const base = path.basename(cacheDir);
+  return /^\d+(?:\.\d+){1,3}$/.test(base) ? base : null;
+}
+
+// Derivation B (FIX ROUND 6): graph.json's OWN content, no spawn. Every module Bun
+// emits carries an unminified `// Version: x.y.z` banner near its top —
+// libexec/extract-claude-js.cjs's BUNDLE_VERSION, the SAME regex that file already uses
+// to name a version in a format-change error, imported (not hand-copied) so the two
+// readers cannot drift apart on the shape. Measured against the real pinned carve:
+// 1,691 of graph.json's 1,839 modules carry it, including the entry module itself.
+// Checked first (cheapest, and the module extract-claude-js.cjs's own
+// describeBundleFormat() effectively reads), falling back to every module in case a
+// future encoding drops the banner from the entry module specifically without dropping
+// it everywhere. `sources` here is the SAME map readGraphJson() already parsed to scan
+// for walls — no extra file read, no execution of anything. This is the derivation
+// CI's minimised, content-hash-named carve actually needs, since (A) above is null for
+// it by construction.
+function versionFromGraphSources(sources, entryName) {
+  if (!sources) return null;
+  const entryBody = entryName && sources[entryName];
+  if (typeof entryBody === 'string') {
+    const m = BUNDLE_VERSION.exec(entryBody);
+    if (m) return m[1];
+  }
+  for (const body of Object.values(sources)) {
+    if (typeof body !== 'string') continue;
+    const m = BUNDLE_VERSION.exec(body);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+// Determine the resolved, STAGED provider's version WITHOUT executing it, whenever
+// possible. Order matters: (A) and (B) both read what staging already produced; the
+// spawn-based resolvedProviderVersion() is a LAST resort, tried only when both come
+// back null — e.g. a pre-graph.json (pre-2.1.243) provider, which carves no graph at
+// all and leaves nothing else here to read a version out of. See the FIX ROUND 6
+// header note for why the old spawn-first order silently skipped this gate on every
+// CI run.
+function determineResolvedVersion({ bin, cacheDir, sources, entry }) {
+  return versionFromCacheDirName(cacheDir)
+    || versionFromGraphSources(sources, entry)
+    || resolvedProviderVersion(bin);
+}
+
 // PURE decision, deliberately separate from the spawn that feeds it — unit-tested
 // directly below without spawning a real binary. Three outcomes: null (proceed to scan,
 // version confirmed) or a skip reason (never a guess, never scanned).
@@ -531,12 +636,13 @@ function readGraphJson(env = process.env) {
       + 'provider) to exercise this gate; see test/oracle-models.cjs' };
   }
 
-  // VERSION GATE, before staging: refuse to even extract a provider that is not the
-  // pin, rather than scan it and risk reporting a VIOLATION that is really "wrong
-  // artifact." See versionMismatchReason() above and the FIX ROUND 5 header note.
-  const versionSkip = versionMismatchReason(pinnedVersion(), resolvedProviderVersion(bin));
-  if (versionSkip) return { skip: versionSkip };
-
+  // Staging moved BEFORE the version check (FIX ROUND 6) — determineResolvedVersion()
+  // needs graph.json's own already-parsed `sources` (Derivation B) to avoid spawning
+  // the binary, and staging is the only thing that produces it. This does not reopen
+  // the FIX ROUND 5 risk: staging only carves bytes into a cache dir, it asserts
+  // nothing against a baseline; scanWalls() still never runs against a mismatched
+  // carve, because the version gate below still returns before this function ever
+  // hands `sources` back to the caller.
   let staged;
   try {
     staged = models.stageProviderCli({ env, bin });
@@ -555,7 +661,22 @@ function readGraphJson(env = process.env) {
   // stageCli() only ever copies cli.cjs and bun-shim.cjs into; confirmed empirically
   // (task-3-report.md) that graph.json is never there. Using it would silently skip
   // again, the exact regression FIX ROUND 4 exists to fix.
-  return readGraphFile(path.join(staged.cacheDir, 'graph.json'));
+  const graph = readGraphFile(path.join(staged.cacheDir, 'graph.json'));
+
+  // VERSION GATE: refuse to hand a mismatched carve's sources back to the caller,
+  // rather than let it scan and risk reporting a VIOLATION that is really "wrong
+  // artifact." See versionMismatchReason() and determineResolvedVersion() above, and
+  // the FIX ROUND 5 / FIX ROUND 6 header notes. Runs even when `graph` itself is a
+  // skip (no graph.json at all — a pre-2.1.243 provider): a version mismatch is a
+  // more useful diagnosis than "no graph.json" when both are true at once, and
+  // determineResolvedVersion()'s spawn fallback is exactly what still identifies a
+  // pre-graph.json provider.
+  const versionSkip = versionMismatchReason(pinnedVersion(), determineResolvedVersion({
+    bin, cacheDir: staged.cacheDir, sources: graph.sources, entry: graph.entry,
+  }));
+  if (versionSkip) return { skip: versionSkip };
+
+  return graph;
 }
 
 function readGraphFile(graphPath) {
@@ -574,7 +695,7 @@ function readGraphFile(graphPath) {
     return { skip: `${graphPath} has no \`sources\` map — not a code-split graph doc `
       + '(a pre-2.1.243 provider carves to cli.cjs directly and has no graph at all)' };
   }
-  return { sources };
+  return { sources, entry: doc.entry };
 }
 
 // PURE. sources: the module-source MAP from graph.json's `sources`, not the 49MB cli.cjs
@@ -804,4 +925,64 @@ test('shim wall tripwire mechanism: does not fire on the pre-existing aliased CJ
   }
 });
 
-module.exports = { WALLS, scanWalls, readGraphJson, deriveOwnModulePrefix, versionMismatchReason };
+test('versionFromCacheDirName reads a pin-versioned cache dir name straight off, no spawn', () => {
+  assert.strictEqual(versionFromCacheDirName('/tmp/clode-oracle-stage/2.1.251'), '2.1.251');
+});
+
+test('versionFromCacheDirName returns null for a content-hash-named cache dir (CI\'s shape)', () => {
+  // scripts/stage-provider.mjs's minimised copy lives in a bare tmpdir with no
+  // /versions//providers/ marker, so libexec/clode-resolve.cjs's cacheKey() falls back
+  // to a `<basename>-<sig>` content hash — this must not be mistaken for a version.
+  assert.strictEqual(versionFromCacheDirName('/tmp/clode-oracle-stage/provider-min-a1b2c3d4'), null);
+});
+
+test('versionFromGraphSources reads the version banner straight out of graph.json content', () => {
+  const sources = { '/$bunfs/root/cli': 'some header\n// Version: 2.1.251\nfunction a(){}' };
+  assert.strictEqual(versionFromGraphSources(sources, '/$bunfs/root/cli'), '2.1.251');
+});
+
+test('versionFromGraphSources falls back to scanning every module when the entry module lacks the banner', () => {
+  const sources = {
+    '/$bunfs/root/cli': 'no banner in the entry module this time',
+    '/$bunfs/root/chunk-x.js': '// Version: 2.1.251\nfunction b(){}',
+  };
+  assert.strictEqual(versionFromGraphSources(sources, '/$bunfs/root/cli'), '2.1.251');
+});
+
+test('determineResolvedVersion reads a pin-versioned cache dir name without touching graph or bin', () => {
+  const v = determineResolvedVersion({
+    bin: '/definitely/does/not/exist/claude',
+    cacheDir: '/tmp/clode-oracle-stage/2.1.251',
+    sources: null,
+    entry: null,
+  });
+  assert.strictEqual(v, '2.1.251');
+});
+
+test('determineResolvedVersion finds the pinned version from graph.json content alone, even when the '
+  + 'binary cannot be spawned at all — the exact CI shape this round fixes', () => {
+  const sources = { '/$bunfs/root/cli': '// Version: 2.1.251\nfunction a(){}' };
+  const v = determineResolvedVersion({
+    bin: '/definitely/does/not/exist/claude',                    // spawning this always fails
+    cacheDir: '/tmp/clode-oracle-stage/provider-min-deadbeef',    // content-hash name, not a version
+    sources,
+    entry: '/$bunfs/root/cli',
+  });
+  assert.strictEqual(v, '2.1.251');
+});
+
+test('determineResolvedVersion returns null (a skip, never a guess) when the cache dir name, the '
+  + 'graph content, and the spawn all fail to name a version', () => {
+  const v = determineResolvedVersion({
+    bin: '/definitely/does/not/exist/claude',
+    cacheDir: '/tmp/clode-oracle-stage/provider-min-deadbeef',
+    sources: { 'x.js': 'no marker in here at all' },
+    entry: 'x.js',
+  });
+  assert.strictEqual(v, null);
+});
+
+module.exports = {
+  WALLS, scanWalls, readGraphJson, deriveOwnModulePrefix, versionMismatchReason,
+  versionFromCacheDirName, versionFromGraphSources, determineResolvedVersion,
+};
