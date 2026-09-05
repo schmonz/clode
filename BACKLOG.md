@@ -6240,3 +6240,37 @@ creates: 44,305ms NFS vs 106ms local, 418x) but the suite reads a small working 
 and the client caches it. So a local-materialisation path should NOT be built on the suite's
 account. `clode build` is a different question — it is create-heavy, which is exactly where the
 418x lives — and deserves its own measurement before anyone assumes either way.
+
+
+## REOPENED: never-cancel-on-main may not be the right trade (user, 2026-09-05)
+
+**The user:** "Not sure I like the no-push-canceling, may want to come back to that."
+
+Phase 5 set `cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}` — PR branches cancel,
+main never does. The evidence for it was real: `194e237`, a BACKLOG.md-only commit, cancelled
+the run carrying `06c6c96` (a real test fix), and phase 2's Windows spawn number went unread
+for two days because its run was cancelled and nobody re-ran it deliberately.
+
+**Why the calculus has since changed, both directions:**
+
+- FOR keeping it: `cancel-in-progress` is evaluated at RUN level, before any job. So the
+  `changes` gatekeeper does NOT prevent cancellation — a docs-only push still cancels a code
+  run even though it then skips the entire matrix. That is the one case the gatekeeper cannot
+  fix, and it is exactly the case that motivated the change.
+- AGAINST keeping it: a cancelled run now loses far less. After the fast/slow matrix split and
+  the full-smoke decoupling, the suite reports at ~1-3 min and the fast legs at ~6 min, versus
+  a 113-minute time-to-oracle before. And never-cancel has a measured cost: consecutive pushes
+  queue behind each other's 22 qemu legs. Observed live on 2026-09-05 — run 33970393353 sat
+  `pending` until 33966318977 was cancelled by hand.
+
+**The option dismissed too quickly, worth a real look:** `paths-ignore` at the WORKFLOW level.
+A docs-only push then creates NO run, so there is nothing to cancel, and code pushes go back to
+cancelling older code runs. It was rejected during phase 5 for leaving main's head with no CI
+result — but a docs-only push does not change code, so the prior run still describes the code
+accurately. That objection is weaker than it was treated as. The real cost is that
+`paths-ignore` is a DECLARED list, the shape this project keeps removing; `changes` is the
+fail-safe derived equivalent, so any such list wants the same unknown-means-code default.
+
+**Not decided. Do not flip it without deciding which failure is worse:** a code push's signal
+destroyed by an unrelated docs push, or a code push's fast feedback queued behind a superseded
+run's emulated legs. Both have now been observed on this repo, days apart.
