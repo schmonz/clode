@@ -32,6 +32,14 @@ test('a guard whose control produces no findings is CANNOT_FAIL', () => {
   assert.match(r.message, /cannot fail/i);
 });
 
+// Minor (coordinator, whole-branch review, 2026-09-04): a control declaring `{ skip }`
+// is an authoring bug, not a runtime condition — checkControl() must refuse it loudly
+// rather than let it fall through into scan() unhandled.
+test('a control that returns { skip } is refused, not silently run through scan()', () => {
+  const g = G.defineGuard(makeGuard({ control: () => ({ skip: 'not a real precondition' }) }));
+  assert.throws(() => G.checkControl(g), /control\(\) returned \{ skip/);
+});
+
 test('a guard whose control produces findings passes the control check', () => {
   const r = G.checkControl(G.defineGuard(makeGuard()));
   assert.strictEqual(r.verdict, G.OK);

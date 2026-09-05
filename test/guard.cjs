@@ -77,7 +77,22 @@ function normalize(name, result) {
 }
 
 function checkControl(g) {
-  const r = normalize(g.name, g.scan(g.control()));
+  const controlInputs = g.control();
+  // Minor (coordinator, whole-branch review, 2026-09-04): a CONTROL is synthetic —
+  // it exists to prove the guard CAN fail — so `read()`'s `{ skip }` escape hatch
+  // ("the real precondition is absent") has no meaning here: control() has no real
+  // precondition to be absent. A control that returns `{ skip }` anyway is an
+  // authoring bug (it would otherwise fall straight into scan(), which was never
+  // written to handle a skip object, and read back as a confusing CANNOT_FAIL rather
+  // than naming the actual mistake). Cheap and unconditional: this does not touch
+  // floor semantics (see the file-level note this comment is paired with in
+  // BACKLOG.md/the final fix report for why floor enforcement here was NOT added).
+  if (controlInputs && typeof controlInputs === 'object' && 'skip' in controlInputs) {
+    throw new Error(`guard ${g.name}: control() returned { skip: ... } — a control has no `
+      + `real precondition to be absent; it is a synthetic fixture that must always exist. `
+      + `A skipping control is an authoring bug, not a runtime condition.`);
+  }
+  const r = normalize(g.name, g.scan(controlInputs));
   if (r.findings.length > 0) {
     return { verdict: OK, examined: r.examined, findings: r.findings,
       message: `${g.name}: control produced ${r.findings.length} finding(s) — the guard can fail` };
