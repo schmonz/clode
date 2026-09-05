@@ -44,19 +44,18 @@
 // version's own directory there is exactly one cache entry (keyed by version, not
 // write time), so the retired mtime-vs-highest ordering no longer has anything to
 // choose between — see the task-8 report for the full trace.
-const test = require('node:test');
-const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { SUBCOMMANDS } = require('../libexec/update-guard.cjs');
 const { pinnedVersion } = require('./provider-resolve.cjs');
+const { defineGuard, guardTests } = require('./guard.cjs');
 
 // The CACHED carve for the version UPSTREAM_PIN names — never "highest cached"
-// (see the dated note above) and never mtime. Returns { carve } on a hit or
-// { skip: reason } naming the pin and what the cache actually holds — a verdict
-// about the wrong bundle is worse than no verdict, so absence is reported, not
-// papered over with a substitute version.
+// (see the dated note above) and never mtime. Returns { carveFile, split, version }
+// on a hit or { skip: reason } naming the pin and what the cache actually holds —
+// a verdict about the wrong bundle is worse than no verdict, so absence is
+// reported, not papered over with a substitute version.
 function pinnedCarve() {
   const pin = pinnedVersion();
   if (!pin) return { skip: 'UPSTREAM_PIN is missing or malformed — no pinned version to scan' };
@@ -68,8 +67,8 @@ function pinnedCarve() {
   const dir = path.join(root, pin);
   const graph = path.join(dir, 'graph.json');
   const flat = path.join(dir, 'cli.cjs');
-  if (fs.existsSync(graph)) return { carve: { version: pin, file: graph, split: true } };
-  if (fs.existsSync(flat)) return { carve: { version: pin, file: flat, split: false } };
+  if (fs.existsSync(graph)) return { carveFile: graph, split: true, version: pin };
+  if (fs.existsSync(flat)) return { carveFile: flat, split: false, version: pin };
   return { skip: `UPSTREAM_PIN names ${pin}; cache under ~/.cache/clode/ holds `
     + `${have.length ? have.sort().join(', ') : '(nothing usable)'}. Build or fetch ${pin} `
     + '(e.g. `clode build`, or run this suite\'s node-shim-oracle CI seed step) — never '
@@ -77,7 +76,7 @@ function pinnedCarve() {
 }
 
 // The four shapes a command keyword reaches commander in. All four are matched
-// against REAL source text, so they say what they mean.
+// against REAL source text, so they say what they mean. PURE.
 //
 //   .command("doctor")            registration (may carry args: "init <name>")
 //   .alias("kill")                single alias
@@ -108,42 +107,62 @@ function scanSource(src, names) {
   return names;
 }
 
-function carveSubcommands(carve) {
+// PURE: `rawContent` is the already-read carve bytes; `subcommands` is
+// libexec/update-guard.cjs's SUBCOMMANDS, already loaded by read().
+function scanSubcommands({ rawContent, split, subcommands }) {
   const names = new Set();
-  if (!carve.split) {
-    scanSource(fs.readFileSync(carve.file, 'latin1'), names);
-    return names;
+  if (split) {
+    const doc = JSON.parse(rawContent);
+    const sources = doc && doc.sources;
+    if (!sources || typeof sources !== 'object') {
+      return { findings: [`the graph has no \`sources\` map — the graph shape changed; this scan is blind`], examined: 0 };
+    }
+    for (const src of Object.values(sources)) {
+      if (typeof src === 'string') scanSource(src, names);
+    }
+  } else {
+    scanSource(rawContent, names);
   }
-  const doc = JSON.parse(fs.readFileSync(carve.file, 'utf8'));
-  const sources = doc && doc.sources;
-  assert.ok(sources && typeof sources === 'object',
-    `${carve.file} has no \`sources\` map — the graph shape changed; this scan is blind`);
-  for (const src of Object.values(sources)) {
-    if (typeof src === 'string') scanSource(src, names);
+
+  const missing = [...names].filter((n) => !subcommands.has(n)).sort();
+  const extra = [...subcommands].filter((n) => !names.has(n)).sort();
+  const findings = [];
+  if (missing.length || extra.length) {
+    findings.push(`SUBCOMMANDS drifted:\n  add to SUBCOMMANDS: ${JSON.stringify(missing)}\n`
+      + `  remove from SUBCOMMANDS: ${JSON.stringify(extra)}\n`
+      + '  Both libexec/update-guard.cjs and libexec/quaude-bootstrap.mjs carry the'
+      + ' guardGating block; they are drift-tested against each other, so edit both.');
   }
-  return names;
+  // examined = names.size, floored at 21 by the guard below: a scan that finds
+  // fewer than 20 command names is a BROKEN SCANNER, not an empty bundle — without
+  // this the gate's own failure mode would be indistinguishable from real drift,
+  // exactly how it spent weeks demanding the deletion of every subcommand.
+  return { findings, examined: names.size };
 }
 
-test('SUBCOMMANDS matches the bundle-registered command + alias names', (t) => {
-  const { carve, skip } = pinnedCarve();
-  if (skip) { t.skip(skip); return; }
-  t.diagnostic(`scanning ${carve.version} (${path.basename(carve.file)})`);
-
-  const got = carveSubcommands(carve);
-  // A scan that finds nothing is a broken scan, not an empty bundle. Without
-  // this the gate's own failure mode is indistinguishable from real drift —
-  // exactly how it spent weeks demanding the deletion of every subcommand.
-  assert.ok(got.size > 20,
-    `found only ${got.size} command names in ${carve.version} — the SCANNER is broken,`
-    + ' not upstream. Do not act on the diff below until this is above 20.');
-
-  const missing = [...got].filter((n) => !SUBCOMMANDS.has(n)).sort();
-  const extra = [...SUBCOMMANDS].filter((n) => !got.has(n)).sort();
-  assert.deepStrictEqual(
-    { missing, extra }, { missing: [], extra: [] },
-    `SUBCOMMANDS drifted from ${carve.version}:\n`
-    + `  add to SUBCOMMANDS: ${JSON.stringify(missing)}\n`
-    + `  remove from SUBCOMMANDS: ${JSON.stringify(extra)}\n`
-    + '  Both libexec/update-guard.cjs and libexec/quaude-bootstrap.mjs carry the'
-    + ' guardGating block; they are drift-tested against each other, so edit both.');
+const guard = defineGuard({
+  name: 'guard-subcommands-gate',
+  floor: 21,
+  read: () => {
+    const carve = pinnedCarve();
+    if (carve.skip) return { skip: carve.skip };
+    return {
+      rawContent: fs.readFileSync(carve.carveFile, carve.split ? 'utf8' : 'latin1'),
+      split: carve.split,
+      subcommands: SUBCOMMANDS,
+    };
+  },
+  scan: scanSubcommands,
+  // Models the real drift this gate exists to catch: the bundle registers a
+  // command SUBCOMMANDS does not know about. Padded with 21 known dummy names
+  // so the control also clears the floor (a scan finding too few names is a
+  // broken scanner, not a real answer).
+  control: () => {
+    const known = Array.from({ length: 21 }, (_, i) => `known-cmd-${i}`);
+    const subcommands = new Set(known);
+    const rawContent = known.map((n) => `.command("${n}")`).join('\n')
+      + '\n.command("totally-new-unlisted-command")\n';
+    return { rawContent, split: false, subcommands };
+  },
 });
+guardTests(guard);

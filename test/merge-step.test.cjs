@@ -14,13 +14,93 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { tjsPath, isApeFile, wantsTrampoline } = require('./node-shim-helper.cjs');
 const { parse } = require('../libexec/build-report.cjs');
+const { defineGuard, guardTests } = require('./guard.cjs');
 
-const SRC = fs.readFileSync(require.resolve('../scripts/merge-step.mjs'), 'utf8');
+// PURE: every check below is a presence/absence assertion against the two
+// already-read source files (merge-step.mjs itself, and build-report.cjs).
+function scanMergeStepWiring({ src, buildReportSrc }) {
+  const findings = [];
+  let examined = 0;
 
-test('merge-step documents an argv contract at the top of the file', () => {
-  const src = fs.readFileSync(require.resolve('../scripts/merge-step.mjs'), 'utf8');
-  assert.match(src.slice(0, 1200), /Usage/i, 'a program with a contract says so, like quaude-fuse.js:7-21');
+  examined++;
+  if (!/Usage/i.test(src.slice(0, 1200))) {
+    findings.push('merge-step.mjs does not document an argv contract at the top of the file '
+      + '(no "Usage" in the first 1200 bytes)');
+  }
+
+  // Points at merge-step.mjs itself, NOT libexec/quaude-fuse.js. The precise mustRead(...)
+  // call, not a bare substring, so a comment mentioning scc-merge.cjs elsewhere cannot
+  // satisfy it.
+  examined++;
+  if (!/mustRead\(path\.join\(libexecDir, 'scc-merge\.cjs'\)/.test(src)) {
+    findings.push('the cache key no longer derives from the merger source via mustRead(...) '
+      + "against the actual libexec/scc-merge.cjs — it may be reading the wrong file or "
+      + 'inlining a literal');
+  }
+
+  examined++;
+  if (!/graph-scc-merge\.cjs/.test(src)) findings.push('must load the shared merge driver (graph-scc-merge.cjs)');
+  examined++;
+  if (!/scc\.mergeCyclicGroups\(/.test(src)) findings.push('must call the shared driver (scc.mergeCyclicGroups)');
+  examined++;
+  if (/merger\.mergeGroup\(/.test(src)) {
+    findings.push('the merge loop must live in libexec/graph-scc-merge.cjs only — a second copy '
+      + 'here is exactly the drift that let a quaude work while every naude and oracle did not');
+  }
+
+  examined++;
+  if (!/doc\.sccMerge/.test(src)) findings.push('must recognise an already-merged staged graph (doc.sccMerge)');
+
+  examined++;
+  if (!/does not report moduleMeta/.test(src)) findings.push('must refuse an engine without moduleMeta (the binding is required, not guessed)');
+
+  examined++;
+  if (!/CLODE_ALLOW_CYCLIC_REQUIRES/.test(src)) findings.push('must still honour the named escape hatch CLODE_ALLOW_CYCLIC_REQUIRES');
+
+  // Pin the two STRUCTURAL sites by name (not just /mergerVersion|MERGER_VERSION/, which a
+  // JSON field name alone can satisfy even after the value is hardcoded — see the header note).
+  examined++;
+  if (!/raw\.mergerVersion === merger\.MERGER_VERSION/.test(src)) {
+    findings.push('the cache-read validity check must compare against merger.MERGER_VERSION, '
+      + 'not a copied/inlined literal');
+  }
+  examined++;
+  if (!/mergerVersion:\s*merger\.MERGER_VERSION,/.test(src)) {
+    findings.push('the cache-write payload must record merger.MERGER_VERSION, not a '
+      + 'copied/inlined literal');
+  }
+
+  examined++;
+  if (!/cyclicRequires\s*\|\|\s*\[\]/.test(src)) findings.push('absent and empty cyclicRequires must both take the no-op path');
+
+  examined++;
+  if (!/graph-merged\.json/.test(src)) findings.push('must write the result to graph-merged.json (the caller\'s read-back contract)');
+
+  examined++;
+  if (/require\(/.test(buildReportSrc)) {
+    findings.push('build-report.cjs must not require(...) anything: merge-step.mjs loads it '
+      + 'under txiki.js, not Node');
+  }
+
+  return { findings, examined };
+}
+
+const guard = defineGuard({
+  name: 'merge-step-wiring',
+  read: () => ({
+    src: fs.readFileSync(require.resolve('../scripts/merge-step.mjs'), 'utf8'),
+    buildReportSrc: fs.readFileSync(require.resolve('../libexec/build-report.cjs'), 'utf8'),
+  }),
+  scan: scanMergeStepWiring,
+  // Models several of the real regressions this guard exists to catch at once:
+  // a reintroduced private merge loop, a cache key not tied to the merger's own
+  // version, and build-report.cjs gaining a require() (fatal under tjs).
+  control: () => ({
+    src: 'merger.mergeGroup(g);',
+    buildReportSrc: "const x = require('node:fs');",
+  }),
 });
+guardTests(guard);
 
 // BEHAVIORAL, not textual: a source-text match here was satisfied by merge-step.mjs's
 // OWN header comment ("Emits the `merge` step (plan/start/finish) through
@@ -61,79 +141,4 @@ test('merge-step declares its own steps through the protocol (behavioral)', (t) 
     `no started(merge) record in stdout:\n${r.stdout}`);
   assert.ok(records.some((rec) => rec.type === 'finished' && rec.name === 'merge'),
     `no finished(merge) record in stdout:\n${r.stdout}`);
-});
-
-// Points at merge-step.mjs itself (SRC, loaded once above) — NOT libexec/quaude-fuse.js,
-// which was the wrong file: Task 7 moved the merge (and its cache-key derivation) out of
-// quaude-fuse.js entirely, leaving only an unrelated carried-member-list mention of
-// 'scc-merge.cjs' there. The precise mustRead(...) call, not a bare substring, so a
-// comment mentioning scc-merge.cjs elsewhere in this file cannot satisfy it either.
-test('the cache key still derives from the merger source, not a literal', () => {
-  assert.match(SRC, /mustRead\(path\.join\(libexecDir, 'scc-merge\.cjs'\)/,
-    'merge-step.mjs must load the actual merger module (libexec/scc-merge.cjs) to derive '
-    + 'the cache key, not read it from the wrong file or inline a literal');
-});
-
-// The following carry forward the source assertions that used to live in
-// test/quaude-fuse-merge.test.cjs against libexec/quaude-fuse.js, before Task 7 moved the
-// actual merge driving logic out of it and into this file.
-
-test('merge-step calls the shared driver, not a private copy of the merge loop', () => {
-  assert.match(SRC, /graph-scc-merge\.cjs/, 'it loads the shared merge driver');
-  assert.match(SRC, /scc\.mergeCyclicGroups\(/, 'it calls the shared driver');
-  assert.doesNotMatch(SRC, /merger\.mergeGroup\(/,
-    'the merge loop must live in libexec/graph-scc-merge.cjs only — a second copy here is '
-    + 'exactly the drift that let a quaude work while every naude and oracle did not');
-});
-
-test('merge-step recognises an already-merged staged graph and does nothing to it', () => {
-  assert.match(SRC, /doc\.sccMerge/);
-});
-
-// The engine binding is REQUIRED, not optional: guessing names is how a merged module silently
-// shadows a binding. Same posture as the stale-engine constants gate.
-test('merge-step refuses an engine without moduleMeta', () => {
-  assert.match(SRC, /does not report moduleMeta/);
-});
-
-// The named escape hatch survives the extraction too — a bisect tool for separating "the merge
-// is wrong" from "the graph is wrong" is worthless if only the ORIGINAL file had it.
-test('merge-step still honours CLODE_ALLOW_CYCLIC_REQUIRES=0', () => {
-  assert.match(SRC, /CLODE_ALLOW_CYCLIC_REQUIRES/);
-});
-
-// The cache must be invalidated when OUR merger changes, or editing scc-merge.cjs would have no
-// effect on any machine that had already built once — a debugging nightmare that looks like the
-// edit did nothing. /mergerVersion|MERGER_VERSION/ alone is satisfied by the JSON field name
-// `mergerVersion` (merge-step.mjs:147-148,232) EVEN AFTER its right-hand side is replaced with
-// the literal '12' — proven: doing exactly that (merger.MERGER_VERSION -> '12' at both sites)
-// left this test 11/11 green. A bare /merger\.MERGER_VERSION/ is not enough either: the string
-// also appears in two log lines (:154,:160) that survive the same mutation untouched, so it
-// would still match. Pin the two STRUCTURAL sites by name: the cache-read validity check and
-// the cache-write payload.
-test('the merge cache is keyed on the merger version, not only the provider', () => {
-  assert.match(SRC, /raw\.mergerVersion === merger\.MERGER_VERSION/,
-    'the cache-read validity check must compare against the merger module\'s own '
-    + 'MERGER_VERSION, not a copied/inlined literal');
-  assert.match(SRC, /mergerVersion:\s*merger\.MERGER_VERSION,/,
-    'the cache-write payload must record the merger module\'s own MERGER_VERSION, not a '
-    + 'copied/inlined literal');
-});
-
-// A bundle with no cyclic requires must take exactly today's no-op path — merge-step.mjs is now
-// the ONLY place that decides this (quaude-fuse.js always spawns it, unconditionally).
-test('merge-step does no compute when there are no cyclic requires', () => {
-  assert.match(SRC, /cyclicRequires\s*\|\|\s*\[\]/);
-});
-
-// Output contract: the caller (quaude-fuse.js) reads this filename back and applies it onto
-// its own in-memory doc. Getting the name wrong here is silent until the very next build.
-test('merge-step writes the result to graph-merged.json, the caller\'s read-back contract', () => {
-  assert.match(SRC, /graph-merged\.json/);
-});
-
-test('build-report stays tjs-safe, or this script dies at runtime', () => {
-  const src = fs.readFileSync(require.resolve('../libexec/build-report.cjs'), 'utf8');
-  assert.strictEqual(/require\(/.test(src), false,
-    'build-report.cjs must not require anything: merge-step.mjs loads it under txiki.js, not Node');
 });

@@ -20,6 +20,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
+const { defineGuard, guardTests } = require('./guard.cjs');
 
 const repo = path.resolve(__dirname, '..');
 const buildTjsSrc = fs.readFileSync(path.join(repo, 'scripts/build-tjs.mjs'), 'utf8');
@@ -166,15 +167,36 @@ test('shim getopt matches the platform getopt on qjsc\'s option string', { skip:
   }
 });
 
-test('build-tjs registers the fixup and looks for tjsc.exe on Windows', () => {
-  assert.match(buildTjsSrc, /^\s*fixupQjscMsvcGetopt\(tjsDir\);$/m,
-    'fixupQjscMsvcGetopt is defined but never called');
+// PURE: `src` is the already-read build-tjs.mjs text.
+function scanFixupRegistration({ src }) {
+  const findings = [];
+  let examined = 0;
+
+  examined++;
+  if (!/^\s*fixupQjscMsvcGetopt\(tjsDir\);$/m.test(src)) {
+    findings.push('fixupQjscMsvcGetopt is defined but never called');
+  }
+
   // The native regen path used to hardcode 'tjsc', so the moment the compile was
   // fixed it would throw "tjsc did not build" on Windows instead.
-  const natives = [...buildTjsSrc.matchAll(/path\.join\((?:hostB|b)uildDir, ([^)]*)\)/g)]
+  examined++;
+  const natives = [...src.matchAll(/path\.join\((?:hostB|b)uildDir, ([^)]*)\)/g)]
     .map((m) => m[1]).filter((a) => a.includes('tjsc'));
-  assert.strictEqual(natives.length, 2, `expected 2 tjsc path.joins, got ${natives.length}`);
-  for (const a of natives) {
-    assert.match(a, /win32.*tjsc\.exe/, `a tjsc path is missing the win32 .exe suffix: ${a}`);
+  if (natives.length !== 2) {
+    findings.push(`expected 2 tjsc path.joins, got ${natives.length}`);
+  } else {
+    for (const a of natives) {
+      if (!/win32.*tjsc\.exe/.test(a)) findings.push(`a tjsc path is missing the win32 .exe suffix: ${a}`);
+    }
   }
+
+  return { findings, examined };
+}
+
+const fixupRegistrationGuard = defineGuard({
+  name: 'msvc-getopt-fixup-registration',
+  read: () => ({ src: fs.readFileSync(path.join(repo, 'scripts/build-tjs.mjs'), 'utf8') }),
+  scan: scanFixupRegistration,
+  control: () => ({ src: '// no fixup call, no tjsc path.joins here' }),
 });
+guardTests(fixupRegistrationGuard);

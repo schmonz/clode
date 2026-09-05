@@ -261,12 +261,21 @@ const MIGRATED = deriveMigrated();
 // synchronous, and unwrapping a promise inside it needs a microtask-flush hack this batch
 // did not take on).
 //
+// RE-CUT AGAIN, 89 -> 85, Task 14 batch 3 (2026-09-04): merge-step-wiring and
+// quaude-fuse-report-wiring (source pattern-presence over scripts/merge-step.mjs and
+// libexec/quaude-fuse.js, folding many single-assertion tests into one guard each while
+// leaving the real behavioral/spawn tests standalone), guard-subcommands-gate (the staged
+// carve's graph.json `sources` scan, reusing defineGuard's floor mechanism for the
+// "scan found too few names" broken-scanner check), and msvc-getopt-fixup-registration
+// (the one pure-regex assertion inside msvc-getopt-shim.test.cjs, leaving its C-compiler
+// differential tests, which are not a static text scan, alone).
+//
 // MEANT TO GO DOWN from here as files migrate. Never raise it to make a run "look clean" —
 // raising it papers over exactly the regression this ratchet exists to catch. Lower it (with
 // a comment recording the new measured count and when) whenever a migration makes the real
 // count drop, OR whenever a future classifier fix surfaces more true positives or trims a
 // false positive — the ratchet test below tells you to when that happens.
-const UNMIGRATED_BASELINE = 89;
+const UNMIGRATED_BASELINE = 85;
 
 // Pure ratchet decision — unit-tested directly with synthetic counts (see
 // guards-population.test.cjs) as well as through the real file list, so the mechanism is
