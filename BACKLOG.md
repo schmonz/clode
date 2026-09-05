@@ -3205,6 +3205,31 @@ we substituted the hard part and then read the green as coverage of the whole.
    negative trustworthy today (6 git calls, 0 security). A negative assertion with no
    positive control is not evidence — [[instruments-lie-check-them-first]].
 
+   **Gate 2 DONE 2026-09-04:** `test/credential-store-attempted.test.cjs`, wired through
+   `test/guard.cjs`'s `defineGuard`/`guardTests` (phase 5, task 13) so the check itself
+   carries a mandatory positive control. Real gate: stage a provider's `cli.cjs`, run it
+   under real node with `security` AND `git` both shadowed by a private, logging PATH
+   stub (`git` also passes through for real), in a scratch git repo, against an
+   unroutable `ANTHROPIC_BASE_URL` — no real credentials, no real network, ~5s wall
+   clock. Measured: the real artifact issues exactly the two calls this entry names
+   (`find-generic-password -a <user> -w -s "Claude Code-credentials"` / `"Claude Code"`)
+   during auth/argument resolution, before it ever reaches the network. `examined` is
+   deliberately the GIT call count (the positive-control channel), not the security
+   count, so a harness that never reached the child reads as BROKEN rather than a false
+   OK — the exact "empty log means nothing without a control" property named above. The
+   guard's own `control()` reproduces the literal shipped shape (git calls present, zero
+   security calls) and is proven, both directions, to make the check go red: with the
+   real scan logic the control produces a finding (guard "can fail"); with the
+   store-lookup detection itself disabled (`scan` returning no findings unconditionally)
+   the SAME control flips `checkControl`'s verdict to `CANNOT_FAIL`, failing the guard's
+   own test — i.e. removing the check is what makes this file's tests go red. Darwin-only
+   for now, matching everything else in this section; "same trick generalises per
+   platform" above is still open, not narrowed.
+
+   **Gate 1 remains open** (a real authenticated turn on the host leg, before a tag) —
+   that is credentialed and stays a human release-ritual step per "Release acceptance:
+   the checks only a human with credentials can run" below.
+
 **The structural part, which is the actual ask.** Not "add two tests" — tests get skipped,
 exempted by name, and quietly stop running (see the openindiana-by-name exemption and the
 coverage that turned on and off with machine state). Shipping must be IMPOSSIBLE, not
@@ -5739,9 +5764,20 @@ NATIVE Claude Code. Needs a native `claude` on PATH AND a logged-in profile, sin
 `/doctor` reports auth state. Proves: our TUI renders what upstream's does, on the one
 screen that summarises everything.
 
-**Known defect, fix before relying on this:** it HARD-FAILS rather than skipping when
-its preconditions are absent (see "Two defects found while wiring the Linux PTY CI job").
-Until that is fixed, a red here may mean "no login", not "parity broken".
+**Known defect, FIXED 2026-09-04 (phase 5, task 13):** it HARD-FAILED rather than
+skipping when its preconditions were absent (see "Two defects found while wiring the
+Linux PTY CI job") — every environmental precondition above was checked, but neither
+"did the native capture actually show the report" nor "did quaude's" was, so a
+logged-out profile — or, per item 0's later finding the same day, ANY current native
+build, since `/doctor` in a session no longer renders a fixed footer at all — hard-failed
+`assert.match(NATIVE, /Enter to close/)` instead of skipping. Same fix shape as
+`test/fidelity/stale-frames.pty.test.cjs`'s `REPORT_OK` precondition check, applied one
+file over: the first test now skips, naming which side never showed the footer, before
+asserting on it. This does NOT re-open item 0's retirement recommendation — the strict
+parity test below stays `t.skip`'d WIP regardless, and given `/doctor`'s render shape has
+moved on, this first test will now skip UNCONDITIONALLY on any current native build. That
+is the honest state of the world, not a new gap: full retirement (item 0) remains the
+still-open, separate, larger call.
 
 ### 2. Stale frames — `test/fidelity/stale-frames.pty.test.cjs` (2 tests)
 
@@ -5781,6 +5817,40 @@ and a release is when you most want it. Measured 2026-09-04 on macOS 26 / node 2
 into logs, and turn a rendering regression into an auth outage at 3am. These checks are
 cheap for a human at release time and expensive as a robot on every commit. The trade is
 deliberate: CI proves the build, a human proves the product.
+
+**MEASURED 2026-09-04 (phase 5, task 13): items 2, 4, and 5 already skip honestly.**
+Read (not assumed) before touching anything: item 2
+(`test/fidelity/stale-frames.pty.test.cjs`) already gates both its tests on a
+`REPORT_OK` precondition check before any assertion — the "Two defects" entry itself
+already noted this ("needs the same profile but already skips correctly on its own
+precondition"). Item 4's three files (`e2e-print`, `e2e-tools`, `e2e-assets.test.cjs`)
+each check `CLODE_LIVE_ONLINE`/`providerSkipReason()` and `t.skip()` before any assertion
+that could otherwise reach a real network or a missing provider. Item 5
+(`test/naude-smoke.test.cjs`) computes a single `skipReason()` (opt-in flag, Node
+version, provider presence) before anything else runs. Only item 1 (above) had the
+hard-fail defect; it is now fixed the same way.
+
+**Ambient hazard found while measuring, NOT fixed here, NOT introduced by this task:**
+any test that resolves a provider via `test/oracle-models.cjs`'s default
+`resolveProviderBin()` (no explicit `CLODE_PROVIDER_BIN`) — including item 3's oracle
+machinery and the new item-2-of-the-auth-gate `test/credential-store-attempted.test.cjs`
+above — falls through, under a FRESH `CLODE_STATE_ROOT` with no provider cached there, to
+`~/.local/bin/claude` on the bare host. On this box that now resolves to native Claude
+Code 2.1.261 (auto-updated past `UPSTREAM_PIN`'s 2.1.251), which our extractor cannot
+stage into a runnable `cli.cjs` (`clode graph: compiling /$bunfs/root/__clode-scc-2.js
+failed: invalid property name` — the same SCC-merge incompatibility "Upstream pinned to
+2.1.251" already names for 2.1.257+). Reproduced identically against an UNMODIFIED file,
+`test/node-shim-roundtrip-oracle.test.cjs`, under the same bare `CLODE_STATE_ROOT=$(mktemp
+-d)` with no other env set — so this is a pre-existing property of this box's drifted
+native install, not a defect in either file. `test/run.mjs` already avoids it by resolving
+and exporting a PINNED `CLODE_PROVIDER_BIN` once, centrally, before any test file loads
+(see its own "A provider and an engine, resolved ONCE for the whole suite" comment) — so
+the real suite, run the way it is meant to be run, never hits this. Confirmed: with
+`CLODE_PROVIDER_BIN` set to the pinned 2.1.251 store path (matching what `run.mjs` sets),
+`test/credential-store-attempted.test.cjs` gives IDENTICAL results with and without a
+fresh `CLODE_STATE_ROOT`. Filed here rather than fixed because the real fix (bump the
+pin, or teach the extractor/oracle helpers to detect+skip an incompatible carve before
+running it) is a separate, larger call this task's brief did not ask for.
 
 ## P1: a quaude built from a foreign-carved provider LIES about its platform (2026-09-04)
 

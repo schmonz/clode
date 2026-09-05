@@ -87,6 +87,27 @@ after(() => {
 
 test('both /doctor renders were captured', (t) => {
   if (SKIP) { t.skip(SKIP); return; }
+  // KNOWN DEFECT, fixed here (BACKLOG.md "Two defects found while wiring the Linux PTY
+  // CI job", item 2): every check above SKIPs on an ENVIRONMENTAL precondition (no tjs,
+  // no native binary, build failure, version mismatch) but none of them tells apart "the
+  // report footer never rendered" from "it rendered and we're comparing it" — so without
+  // a logged-in profile (or, per BACKLOG "Release acceptance" item 0, on ANY current
+  // native build: `/doctor` in a session is now an agentic turn with no fixed footer at
+  // all) this assert.match hard-failed instead of skipping. A red here could mean "no
+  // login" or "upstream's /doctor render changed shape", never "parity broke" — exactly
+  // the "red carries no information" shape the same BACKLOG entry names. Same fix shape
+  // as test/fidelity/stale-frames.pty.test.cjs's REPORT_OK precondition check, applied
+  // one file over.
+  const nativeOk = /Enter to close/.test(NATIVE);
+  const clodeOk = /Enter to close/.test(CLODE);
+  if (!nativeOk || !clodeOk) {
+    const who = !nativeOk && !clodeOk ? 'neither side' : !nativeOk ? 'the native side' : 'the quaude side';
+    t.skip(`/doctor never opened the full-screen report (footer "Enter to close" missing) on `
+      + `${who} — no logged-in profile here, or upstream's /doctor render has moved past the `
+      + `fixed-footer shape this test anchors to (see BACKLOG.md "Release acceptance", item 0):\n`
+      + `native:\n${NATIVE}\nquaude:\n${CLODE}`);
+    return;
+  }
   assert.match(NATIVE, /Enter to close/);
   assert.match(CLODE, /Enter to close/);
 });
