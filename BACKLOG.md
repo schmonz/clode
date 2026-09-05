@@ -6220,3 +6220,23 @@ signal the item exists to make loud.
 
 If a future reader wants a check that genuinely cannot be merged past, that is a different
 request with a real cost (no more push-to-main) and needs asking, not assuming.
+
+
+## Full local cross builds — the umbrella's postscript (user, 2026-09-05)
+
+**Direction:** full local cross builds are the next big thing AFTER the cross-build umbrella
+closes, not a phase inside it. Recorded so it is not smuggled into a phase and not lost.
+
+**Why it matters, in the user's framing:** in the absence of full local cross builds, CI is our
+most thorough feedback loop — so it earns real effort on latency, and every second shaved off
+it is bought back on every push. That is the standing justification for the CI-ordering work
+being done now (the tjs matrix split, and the engine-artifact/smoke split below), which would
+otherwise look like polish.
+
+**What we learned today that bears on it:** measured on this box, the suite is NOT
+NFS-read-bound — two runs from a local-disk copy landed at 382s and 391s against an 18-run NFS
+distribution of min 350 / median 367 / mean 386. NFS metadata cost is real and brutal (300
+creates: 44,305ms NFS vs 106ms local, 418x) but the suite reads a small working set repeatedly
+and the client caches it. So a local-materialisation path should NOT be built on the suite's
+account. `clode build` is a different question — it is create-heavy, which is exactly where the
+418x lives — and deserves its own measurement before anyone assumes either way.
