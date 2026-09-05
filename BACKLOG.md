@@ -5960,3 +5960,34 @@ minified source happens to contain the trigger shape. Neither was attempted here
 structurally IDENTICAL to a defect just confirmed by execution next door, not a fixed
 finding — treat it as a live risk in the merger until someone either proves it fires on a
 real SCC group or fixes the ordering preemptively.
+
+## Three gates have now scanned an UNPINNED provider — the condition needs a mechanism (2026-09-04)
+
+The standing condition says: **the suite tests the PINNED provider, exactly, or says why it
+cannot.** Phase 5 found three separate gates violating it, none of which knew:
+
+1. `test/node-shim-wall-tripwires.test.cjs` — with `CLODE_PROVIDER_BIN` unset it fell through to
+   an uncapped resolver, scanned a different carve (`examined 1684` rather than 1839), and
+   reported a **VIOLATION** — accusing upstream of reaching a wall it never reached. FIXED: it
+   now reads the pin via `pinnedVersion()` and SKIPS on a mismatch, naming both versions.
+2. `test/guard-subcommands-gate.test.cjs` — selected the **highest cached** version, not the
+   pinned one. On this box that meant checking our `SUBCOMMANDS` list against 2.1.252 while
+   `UPSTREAM_PIN` said 2.1.251. Worse, CI's new seed populates the pin, so CI and a dev box
+   would have reported on different bundles with nothing saying so. FIXED the same way.
+3. `test/dep-closure.test.cjs` — its integration test is **still not pin-locked**; it scans
+   whatever provider resolution hands it. NOT fixed (phase 5 pinned `CLODE_PROVIDER_BIN` for one
+   deterministic comparison rather than redesigning the gate mid-round).
+
+**Why this is an entry and not three fixes.** Each was found by accident, while doing something
+else, and each looked fine until someone asked which artifact it actually read. The versions on
+a dev box drift constantly — this machine's cache holds 2.1.246/.250/.251/.252/.257 and its
+native Claude Code auto-updated 2.1.257 → .261 *during* this session. So "whatever resolution
+hands me" is a different bundle on every box and every week, and a gate that does not name its
+input is reporting on something nobody can reproduce.
+
+**The mechanism worth building** (phase 4 owns provider-store keying, which is the natural
+home): make pin-resolution the only way a test can obtain a provider — a shared helper that
+returns the pinned carve or a SKIP with both versions named — so a gate cannot silently scan
+something else. Until then, every new gate that reads a carve is a fourth instance waiting to
+happen. `test/provider-resolve.cjs`'s `pinnedVersion()` is the existing half; what is missing is
+making it the ONLY door.
