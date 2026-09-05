@@ -4,6 +4,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { shapeTargetEnv, probePaths, mapPlatform } = require('../libexec/target-env.cjs');
+const { defineGuard, guardTests } = require('./guard.cjs');
 
 // Every primitive is injected: this module must run under tjs (quaude's
 // bootstrap, pre-node-shim) as well as node (naude), so it may not require
@@ -199,7 +200,20 @@ test('mapPlatform: empty/undefined input defaults to linux (the quaude fallback)
 // target-env.cjs is evaluated as a fused member under tjs via `new Function`,
 // BEFORE the node-shim (and its require) exists. Adding mapPlatform must not
 // smuggle in a dependency that breaks that.
-test('target-env.cjs stays require-free (evaluated pre-node-shim under tjs)', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'libexec', 'target-env.cjs'), 'utf8');
-  assert.ok(!src.includes('require('), 'target-env.cjs must not require(...) anything');
+function scanRequireFree({ src }) {
+  const findings = [];
+  const examined = 1;
+  if (src.includes('require(')) {
+    findings.push('target-env.cjs contains require(...) — it is evaluated pre-node-shim under '
+      + 'tjs via `new Function`, before require exists');
+  }
+  return { findings, examined };
+}
+
+const requireFreeGuard = defineGuard({
+  name: 'target-env-require-free',
+  read: () => ({ src: fs.readFileSync(path.join(__dirname, '..', 'libexec', 'target-env.cjs'), 'utf8') }),
+  scan: scanRequireFree,
+  control: () => ({ src: "const fs = require('node:fs');\n" }),
 });
+guardTests(requireFreeGuard);

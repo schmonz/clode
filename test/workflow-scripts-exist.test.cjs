@@ -14,10 +14,9 @@
 // question generically for every VM leg, off the same catalog, by comparing against the
 // PIN rather than a literal, so the bespoke one went away rather than being re-pointed.
 // This guard is what keeps the removal from leaving a dangling `run:` behind.
-const test = require('node:test');
-const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
+const { defineGuard, guardTests } = require('./guard.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 const WF = path.join(REPO, '.github', 'workflows');
@@ -33,25 +32,51 @@ function ymlFiles(dir) {
   return out;
 }
 
-test('every scripts/ file a workflow or action invokes exists', () => {
-  const files = [...ymlFiles(WF), ...ymlFiles(ACT)];
-  assert.ok(files.length > 5, `expected the workflow set, found ${files.length}`);
-  const missing = [];
-  let referenced = 0;
-  for (const f of files) {
-    const text = fs.readFileSync(f, 'utf8');
+function allFilesUnder(dir) {
+  const out = new Set();
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) { for (const f of allFilesUnder(p)) out.add(f); }
+    else out.add(path.relative(REPO, p).split(path.sep).join('/'));
+  }
+  return out;
+}
+
+// PURE: `repoFiles` is a Set of every real repo-relative path under scripts/,
+// gathered by read() — scan() only checks membership, it does no I/O of its own.
+function scanWorkflowScripts({ ymlTexts, repoFiles }) {
+  const findings = [];
+  let examined = 0;
+  for (const { file, text } of ymlTexts) {
     // `scripts/<name>.<ext>` anywhere in a run: block, however it is invoked (node,
     // bash, a variable-prefixed command). Deliberately not anchored to `node ` — the
     // point is the PATH's existence, not the interpreter.
     for (const m of text.matchAll(/\bscripts\/[A-Za-z0-9._-]+\.(?:mjs|cjs|js|sh|py)\b/g)) {
-      referenced++;
-      if (!fs.existsSync(path.join(REPO, m[0]))) {
-        missing.push(`${path.relative(REPO, f)}: ${m[0]}`);
-      }
+      examined++;
+      if (!repoFiles.has(m[0])) findings.push(`${file}: ${m[0]}`);
     }
   }
-  assert.ok(referenced > 5, `expected several script references, found ${referenced}`);
-  assert.deepStrictEqual(missing, [],
-    'a workflow names a scripts/ file that is not in the tree — the job fails only when it '
-    + 'next fires, which for a scheduled workflow can be a day later in a log nobody reads');
+  return { findings, examined };
+}
+
+const guard = defineGuard({
+  name: 'workflow-scripts-exist',
+  read: () => ({
+    ymlTexts: [...ymlFiles(WF), ...ymlFiles(ACT)].map((f) => ({
+      file: path.relative(REPO, f), text: fs.readFileSync(f, 'utf8'),
+    })),
+    repoFiles: allFilesUnder(path.join(REPO, 'scripts')),
+  }),
+  scan: scanWorkflowScripts,
+  // Floored at 6: the real corpus references well over a hundred script paths
+  // across dozens of workflow files, so examining fewer than 6 means the yml
+  // discovery broke, not that there is nothing to check.
+  floor: 6,
+  control: () => ({
+    ymlTexts: [
+      { file: 'fake.yml', text: 'run: node scripts/does-not-exist.mjs\n'.repeat(6) },
+    ],
+    repoFiles: new Set(),
+  }),
 });
+guardTests(guard);

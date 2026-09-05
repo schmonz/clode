@@ -29,6 +29,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 const canon = require('../scripts/canonical-name.cjs');
+const { defineGuard, guardTests } = require('./guard.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 const RELEASE_YML = path.join(REPO, '.github/workflows/release.yml');
@@ -99,27 +100,46 @@ function assetNamesFor(leg, version) {
   return [...out];
 }
 
-test('every REQUIRED release glob matches a real published asset name', () => {
-  const version = '0.20260801.1';
-  const legs = publishedLegs();
-  assert.ok(legs.length > 10, `expected many published legs, got ${legs.length}`);
-
+// PURE: everything scan() needs (the legs, the required globs, the extra
+// hardcoded asset names) is gathered by read() below; scan() only compares.
+function scanReleaseGlobs({ version, legs, globs, extraNames }) {
+  const findings = [];
+  let examined = 0;
   const allNames = [
     ...legs.flatMap((l) => assetNamesFor(l, version)),
-    ...extraAssetNames(version),
+    ...extraNames,
   ];
-
-  for (const glob of requiredGlobs()) {
+  for (const glob of globs) {
+    examined++;
     const re = globToRegExp(glob);
     const hits = allNames.filter((n) => re.test(n));
-    assert.ok(hits.length > 0,
-      `release.yml REQUIRED glob "${glob}" matches NO asset this release produces.\n`
-      + '  This is the exact failure that blocked v0.20260801.1: all jobs green,\n'
-      + '  release refused. Candidate names include:\n'
-      + `    ${allNames.filter((n) => n.includes(glob.replace(/\*/g, '').slice(0, 12))).slice(0, 8).join('\n    ')}\n`
-      + `  (full list length ${allNames.length})`);
+    if (hits.length === 0) {
+      findings.push(`release.yml REQUIRED glob "${glob}" matches NO asset this release produces `
+        + `(candidates: ${allNames.filter((n) => n.includes(glob.replace(/\*/g, '').slice(0, 12))).slice(0, 8).join(', ')})`);
+    }
   }
+  return { findings, examined };
+}
+
+const releaseGlobsGuard = defineGuard({
+  name: 'release-gate-globs',
+  read: () => {
+    const legs = publishedLegs();
+    assert.ok(legs.length > 10, `expected many published legs, got ${legs.length}`);
+    const version = '0.20260801.1';
+    return { version, legs, globs: requiredGlobs(), extraNames: extraAssetNames(version) };
+  },
+  scan: scanReleaseGlobs,
+  // This is the EXACT failure that blocked v0.20260801.1: all jobs green,
+  // release refused because a required glob matched nothing real.
+  control: () => ({
+    version: '0.20260801.1',
+    legs: [{ leg: 'linux-x64', publish: true }],
+    globs: ['clode-*-totally-bogus-platform-*'],
+    extraNames: [],
+  }),
 });
+guardTests(releaseGlobsGuard);
 
 // The specific regression, pinned by name so the reason is unmissable in a diff.
 test('the windows-arm64 asset carries .exe and the gate still matches it', () => {

@@ -1,8 +1,10 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
 const R = require('../libexec/build-report.cjs');
 const { Composer } = require('../libexec/build-compose.cjs');
+const { defineGuard, guardTests } = require('./guard.cjs');
 
 test('worker lines arriving over the seam land in the composed totals', () => {
   const c = new Composer();
@@ -23,8 +25,20 @@ test('non-protocol child output is passed through, not eaten', () => {
   assert.deepStrictEqual(passed, ['compiled 1795 modules -> graph.qbc']);
 });
 
-test('clode-fuse declares its own steps rather than only the worker s', () => {
-  const src = require('node:fs').readFileSync(require.resolve('../libexec/clode-fuse.cjs'), 'utf8');
-  assert.match(src, /build-compose\.cjs/, 'the builder composes');
-  assert.match(src, /build-report\.cjs/, 'and declares its own steps too');
+function scanDeclaresOwnSteps({ src }) {
+  const findings = [];
+  let examined = 0;
+  examined++;
+  if (!/build-compose\.cjs/.test(src)) findings.push('clode-fuse.cjs no longer composes (no build-compose.cjs reference)');
+  examined++;
+  if (!/build-report\.cjs/.test(src)) findings.push('clode-fuse.cjs no longer declares its own steps (no build-report.cjs reference)');
+  return { findings, examined };
+}
+
+const declaresOwnStepsGuard = defineGuard({
+  name: 'clode-fuse-declares-own-steps',
+  read: () => ({ src: fs.readFileSync(require.resolve('../libexec/clode-fuse.cjs'), 'utf8') }),
+  scan: scanDeclaresOwnSteps,
+  control: () => ({ src: '// neither reference present\n' }),
 });
+guardTests(declaresOwnStepsGuard);

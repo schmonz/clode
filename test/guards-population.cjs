@@ -244,12 +244,19 @@ const MIGRATED = deriveMigrated();
 // RE-CUT AGAIN, 103 -> 102, after Task 9 migrated test/windows-path-ratchet.test.cjs to
 // defineGuard/guardTests (its stripComments() tokenizer fix, phase 5). Task 14 owns the rest.
 //
+// RE-CUT AGAIN, 102 -> 95, Task 14 batch 1 (2026-09-04): "reads a repo pin/config/source
+// file, regex-extracts values, asserts agreement or a real control-modelled violation" —
+// version-single-source, node-pins-agree, workflow-scripts-exist, release-gate-globs,
+// target-env (the require-free half), clode-fuse-compose (the declares-own-steps half),
+// tls-cacert-pem (the checkout-free provenance-chain half). Each carries its own positive
+// control, shown red then green (see task-14-report.md).
+//
 // MEANT TO GO DOWN from here as files migrate. Never raise it to make a run "look clean" —
 // raising it papers over exactly the regression this ratchet exists to catch. Lower it (with
 // a comment recording the new measured count and when) whenever a migration makes the real
 // count drop, OR whenever a future classifier fix surfaces more true positives or trims a
 // false positive — the ratchet test below tells you to when that happens.
-const UNMIGRATED_BASELINE = 102;
+const UNMIGRATED_BASELINE = 95;
 
 // Pure ratchet decision — unit-tested directly with synthetic counts (see
 // guards-population.test.cjs) as well as through the real file list, so the mechanism is

@@ -45,6 +45,7 @@ const {
   extractPemFromCacertC, txikiPin, sha256, provenancePath, readProvenance,
 } = require('../scripts/extract-cacert-pem.mjs');
 const { tjsVendorParentDir } = require('../scripts/platform-tag.cjs');
+const { defineGuard, guardTests } = require('./guard.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 // Resolved the SAME way build-tjs.mjs resolves its own CLODE_TJS_VENDOR
@@ -82,38 +83,78 @@ test('extractPemFromCacertC: throws loudly if the literal is not found', () => {
 });
 
 // --- checkout-free half: runs on every runner, verifies the ends of the chain ---
+//
+// PURE: every check below is derived from the provenance record, the PINS.md
+// pin, and the .pem bytes that read() gathers — no I/O happens inside scan().
+function scanCacertProvenance({ provenance, pin, pemBytes }) {
+  const findings = [];
+  let examined = 0;
 
-test('the tls-cacert provenance record is committed and well-formed', () => {
-  assert.ok(fs.existsSync(provenancePath()),
-    `${provenancePath()} is missing — run scripts/extract-cacert-pem.mjs`);
-  const p = readProvenance();
+  examined++;
   for (const k of ['txiki_tag', 'txiki_sha', 'cacert_c_sha256', 'pem_sha256']) {
-    assert.ok(typeof p[k] === 'string' && p[k], `provenance record has no ${k}`);
+    if (typeof provenance[k] !== 'string' || !provenance[k]) findings.push(`provenance record has no ${k}`);
   }
-  assert.match(p.cacert_c_sha256, /^[0-9a-f]{64}$/);
-  assert.match(p.pem_sha256, /^[0-9a-f]{64}$/);
-});
+  if (typeof provenance.cacert_c_sha256 === 'string' && !/^[0-9a-f]{64}$/.test(provenance.cacert_c_sha256)) {
+    findings.push('provenance cacert_c_sha256 is not a 64-hex sha256');
+  }
+  if (typeof provenance.pem_sha256 === 'string' && !/^[0-9a-f]{64}$/.test(provenance.pem_sha256)) {
+    findings.push('provenance pem_sha256 is not a 64-hex sha256');
+  }
 
-// THE staleness gate, and the reason skipping the re-derivation below is safe.
-// Bumping txiki.js is how cacert.c changes; if the pin moves and nobody re-runs
-// the extractor, the .pem is stale and this fails — with no checkout, on CI.
-test('tls-cacert.pem was extracted from the txiki.js version PINS.md currently pins', () => {
-  const pin = txikiPin();
-  const p = readProvenance();
-  assert.strictEqual(p.txiki_sha, pin.sha,
-    `tls-cacert.pem was extracted from txiki.js ${p.txiki_tag} (${p.txiki_sha.slice(0, 12)}) but `
-    + `PINS.md now pins ${pin.tag} (${pin.sha.slice(0, 12)}) — re-run `
-    + '`node scripts/extract-cacert-pem.mjs` against the new checkout');
-  assert.strictEqual(p.txiki_tag, pin.tag, 'provenance tag disagrees with PINS.md');
-});
+  // THE staleness gate: bumping txiki.js is how cacert.c changes; if the pin
+  // moves and nobody re-runs the extractor, the .pem is stale — caught here
+  // with NO checkout, on every runner.
+  examined++;
+  if (provenance.txiki_sha !== pin.sha) {
+    findings.push(`tls-cacert.pem was extracted from txiki.js ${provenance.txiki_tag} `
+      + `(${String(provenance.txiki_sha).slice(0, 12)}) but PINS.md now pins ${pin.tag} `
+      + `(${pin.sha.slice(0, 12)}) — re-run \`node scripts/extract-cacert-pem.mjs\` against `
+      + 'the new checkout');
+  }
+  if (provenance.txiki_tag !== pin.tag) findings.push('provenance tag disagrees with PINS.md');
 
-test('the committed tls-cacert.pem is exactly the file that was extracted (not hand-edited)', () => {
-  assert.ok(fs.existsSync(OUT_PEM), `${OUT_PEM} is missing — run scripts/extract-cacert-pem.mjs`);
-  const p = readProvenance();
-  assert.strictEqual(sha256(fs.readFileSync(OUT_PEM)), p.pem_sha256,
-    'tls-cacert.pem does not hash to the digest recorded when it was extracted — it was '
-    + 'edited by hand, or written by something other than scripts/extract-cacert-pem.mjs');
+  // Not hand-edited: the committed .pem must hash to the digest recorded at
+  // extraction time.
+  examined++;
+  const actualPemSha = sha256(pemBytes);
+  if (actualPemSha !== provenance.pem_sha256) {
+    findings.push('tls-cacert.pem does not hash to the digest recorded when it was extracted — '
+      + 'it was edited by hand, or written by something other than scripts/extract-cacert-pem.mjs');
+  }
+
+  // Every BEGIN/END block must be a real, parseable X.509 certificate, and
+  // there must be a plausible number of them.
+  examined++;
+  const blocks = pemBytes.toString('utf8').match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || [];
+  if (blocks.length < 50) findings.push(`expected at least 50 certificates, found ${blocks.length}`);
+  for (const b of blocks) {
+    try { new X509Certificate(b); } catch { findings.push(`block failed to parse as X.509: ${b.slice(0, 60)}...`); }
+  }
+
+  return { findings, examined };
+}
+
+const cacertProvenanceGuard = defineGuard({
+  name: 'tls-cacert-provenance',
+  read: () => ({
+    provenance: readProvenance(),
+    pin: txikiPin(),
+    pemBytes: fs.readFileSync(OUT_PEM),
+  }),
+  scan: scanCacertProvenance,
+  // Models the actual dangerous drift: PINS.md moved on without a re-extraction,
+  // AND the .pem bytes no longer match what was recorded (a hand edit, or a
+  // corrupted write) — both real failure modes this guard exists to catch.
+  control: () => ({
+    provenance: {
+      txiki_tag: 'v0.0.0-stale', txiki_sha: 'deadbeef'.repeat(8),
+      cacert_c_sha256: 'a'.repeat(64), pem_sha256: 'b'.repeat(64),
+    },
+    pin: { tag: 'v9.9.9-current', sha: 'feedface'.repeat(8) },
+    pemBytes: Buffer.from('not a real pem file'),
+  }),
 });
+guardTests(cacertProvenanceGuard);
 
 // --- checkout-only half: re-derives the middle of the chain ---
 
@@ -133,11 +174,5 @@ test('tls-cacert.pem is NOT stale relative to cacert.c (re-run scripts/extract-c
       'tls-cacert.pem does not match a fresh extraction from cacert.c — regenerate with `node scripts/extract-cacert-pem.mjs`');
   });
 
-test('tls-cacert.pem: every BEGIN/END block is a real, parseable X.509 certificate', () => {
-  const text = fs.readFileSync(OUT_PEM, 'utf8');
-  const blocks = text.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || [];
-  assert.ok(blocks.length >= 50, `expected at least 50 certificates, found ${blocks.length}`);
-  for (const b of blocks) {
-    assert.doesNotThrow(() => new X509Certificate(b), `block failed to parse as X.509: ${b.slice(0, 60)}...`);
-  }
-});
+// The X.509-parse and cert-count checks now live in scanCacertProvenance() above
+// (folded into the tls-cacert-provenance guard), so they are not repeated here.
