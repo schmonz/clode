@@ -6,8 +6,10 @@ const path = require('node:path');
 
 const TEST_DIR = __dirname;
 const { classifyTestFile, discoverTestFiles, isRecordedExclusion, GUARD_EXCLUSIONS, MIGRATED,
-  UNMIGRATED_BASELINE, ratchetUnmigrated, unsafeCliRunnerQuoteScans, CLI_QUOTE_SCAN_EXCLUSIONS,
-  isRecordedCliQuoteScanExclusion, discoverCliQuoteScanFiles } = require('./guards-population.cjs');
+  isMigratedSource, CALLS_BARE_DEFINEGUARD, UNMIGRATED_BASELINE, ratchetUnmigrated,
+  unsafeCliRunnerQuoteScans, CLI_QUOTE_SCAN_EXCLUSIONS, isRecordedCliQuoteScanExclusion,
+  discoverCliQuoteScanFiles,
+} = require('./guards-population.cjs');
 
 test('the classifier recognises a scanner-shaped test', () => {
   const src = `const src = fs.readFileSync(path.join(REPO, 'libexec', 'x.js'), 'utf8');
@@ -83,16 +85,103 @@ test('FLOOR: finding zero scanner-shaped tests is BROKEN, never a pass', () => {
 test('every scanner-shaped test is registered through defineGuard (ratchet)', (t) => {
   const files = discoverTestFiles(TEST_DIR);
   const unmigrated = [];
+  // Weakest-link hardening (with C2, 2026-09-04): every scanner-shaped file must land in
+  // EXACTLY ONE of three buckets — migrated, recorded exclusion, or unmigrated. Counted
+  // as the walk runs (not re-derived afterward) so a file that falls through all three
+  // (the exact C2 shape: `isMigratedSource` false, `isRecordedExclusion` false, yet never
+  // pushed to `unmigrated` because some FOURTH, unaccounted-for `continue` dropped it)
+  // makes the conservation check below fail loudly instead of silently lowering the count.
+  let scannerShapedCount = 0;
+  let migratedCount = 0;
+  let exclusionCount = 0;
   for (const f of files) {
     const src = fs.readFileSync(f, 'utf8');
     if (!classifyTestFile(src).scannerShaped) continue;
-    if (/require\(['"]\.\/guard\.cjs['"]\)/.test(src)) continue;
-    if (isRecordedExclusion(f)) continue;
+    scannerShapedCount++;
+    // SAME predicate deriveMigrated() uses (guards-population.cjs) — C2's actual bug was
+    // this line using a WEAKER, independently-maintained check (`require('./guard.cjs')`
+    // present, with no defineGuard() call required), which happily classified a file that
+    // merely requires the module as "migrated" without it ever registering a guard.
+    if (isMigratedSource(src)) { migratedCount++; continue; }
+    if (isRecordedExclusion(f)) { exclusionCount++; continue; }
     unmigrated.push(path.basename(f));
   }
+  assert.strictEqual(scannerShapedCount, migratedCount + unmigrated.length + exclusionCount,
+    `conservation failed: ${scannerShapedCount} scanner-shaped file(s) but `
+    + `${migratedCount} migrated + ${unmigrated.length} unmigrated + ${exclusionCount} `
+    + 'excluded do not add up — a file vanished from every bucket instead of being counted '
+    + 'in one of them');
   const r = ratchetUnmigrated(unmigrated.length, UNMIGRATED_BASELINE, unmigrated);
   t.diagnostic(r.message);
   assert.ok(r.ok, r.message);
+});
+
+// C2 regression test: a file whose ENTIRE guard-related content is a bare
+// `require('./guard.cjs');` — no destructure, no defineGuard() call — must NOT be
+// counted as migrated. Before this fix, guards-population.test.cjs's own ratchet used a
+// looser inline check (`require\(['"]\.\/guard\.cjs['"]\)` with no defineGuard
+// requirement at all) that treated exactly this shape as migrated, silently dropping a
+// real scanner-shaped-but-unregistered file out of the unmigrated count without it ever
+// needing a control. isMigratedSource() (the one predicate now used everywhere) must
+// reject it.
+test('a file that only requires guard.cjs, with no defineGuard() call, is NOT migrated', () => {
+  const src = "'use strict';\nrequire('./guard.cjs');\n"
+    + "const fs = require('node:fs');\n"
+    + "assert.ok(/some-pattern/.test(fs.readFileSync(path.join(REPO, 'x'), 'utf8')));\n";
+  assert.strictEqual(isMigratedSource(src), false,
+    'a bare require(\'./guard.cjs\') with no defineGuard() call must not count as migrated');
+});
+
+// Weakest-link hardening (with C2, 2026-09-04): MIGRATED is derived STATICALLY (see the
+// fix-round-1 note above deriveMigrated()) precisely so loading this module never
+// re-executes every migrated guard's tests. That leaves a gap this test closes once,
+// deliberately, by actually loading test/guard.cjs plus every MIGRATED file in a
+// disposable CHILD process (never in-process — requiring a file that calls node:test's
+// top-level `test()` from inside this file's own currently-running test body is not a
+// supported registration point, and would pollute this suite's own test count) and
+// reading back REGISTRY's size immediately after the synchronous requires finish —
+// defineGuard() runs at module-load time, before any guardTests() callback body ever
+// executes, so this does not pay for running the guards' real scans/controls. A file
+// that vanishes from the MIGRATED list without also vanishing from the real registry (or
+// vice versa) means the static text-based derivation has drifted from what actually
+// registers guards at runtime — the exact kind of silent mismatch this whole module
+// exists to make loud.
+test('MIGRATED.length matches test/guard.cjs\'s registry size after loading every migrated file', () => {
+  // NOT one-file-one-guard: windows-path-ratchet.test.cjs registers TWO guards
+  // (windows-path-ratchet and windows-path-ratchet-regex-division-ambiguity), so the
+  // real invariant is at the GUARD-CALL-SITE level, not the file level — count every
+  // `defineGuard(` call site across the MIGRATED files themselves (the same predicate
+  // isMigratedSource() requires be present at least once) and compare THAT to the
+  // registry size after actually loading them.
+  const callSiteRe = new RegExp(CALLS_BARE_DEFINEGUARD.source, 'g');
+  let expectedGuardCount = 0;
+  for (const rel of MIGRATED) {
+    const src = fs.readFileSync(path.join(TEST_DIR, rel), 'utf8');
+    expectedGuardCount += (src.match(callSiteRe) || []).length;
+  }
+  const { execFileSync } = require('node:child_process');
+  const guardPath = path.join(TEST_DIR, 'guard.cjs');
+  const lines = [`const { registered } = require(${JSON.stringify(guardPath)});`];
+  for (const rel of MIGRATED) {
+    lines.push(`require(${JSON.stringify(path.join(TEST_DIR, rel))});`);
+  }
+  lines.push('process.stdout.write(String(registered().length));');
+  lines.push('process.exit(0);');
+  let out;
+  try {
+    out = execFileSync(process.execPath, ['-e', lines.join('\n')], {
+      cwd: TEST_DIR, encoding: 'utf8', timeout: 60000,
+    });
+  } catch (e) {
+    assert.fail(`loading every MIGRATED file in a child process threw: `
+      + `${(e && e.stderr) || (e && e.message)}`);
+  }
+  assert.strictEqual(Number(out), expectedGuardCount,
+    `test/guard.cjs's REGISTRY held ${out} guard(s) after requiring every MIGRATED file, `
+    + `but the MIGRATED files' own source contains ${expectedGuardCount} defineGuard() `
+    + 'call site(s) — a listed file did not actually register a guard, an unlisted file\'s '
+    + 'guard leaked in, or a call site\'s guard failed to register, and the static '
+    + 'derivation no longer matches runtime reality.');
 });
 
 // Proof the ratchet mechanism itself can fail, independent of what the real tree currently

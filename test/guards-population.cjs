@@ -206,6 +206,23 @@ function isRecordedExclusion(file) {
 // shared factory function migrated files merely call into.
 const DESTRUCTURES_DEFINEGUARD = /\{[^}]*\bdefineGuard\b[^}]*\}\s*=\s*require\(['"]\.\/guard\.cjs['"]\)/;
 const CALLS_BARE_DEFINEGUARD = /(?<![.\w])defineGuard\s*\(/;
+
+// THE ONE PREDICATE for "this file's source registers a guard" — used by deriveMigrated()
+// below AND by the ratchet test in guards-population.test.cjs. Coordinator fix (C2,
+// 2026-09-04): the ratchet test used to check its OWN, weaker, inline
+// `/require\(['"]\.\/guard\.cjs['"]\)/` — true for any file that merely REQUIRES
+// guard.cjs, whether or not it ever calls defineGuard(). Proven: a file containing only
+// `require('./guard.cjs');` (no defineGuard call at all) is scannerShaped: true (once it
+// also matches PATTERN_MATCHES) and matched that inline regex, so it was silently dropped
+// from `unmigrated` — not counted as migrated (MIGRATED, built from the STRICTER
+// isMigratedSource() below, would never list it either), just erased from the ratchet
+// entirely. That is C2: a file needing no control and lowering the count. Every caller
+// that means "is this file a registered guard?" must use isMigratedSource(), so a file
+// can no longer fall into the gap between two different definitions of "migrated".
+function isMigratedSource(src) {
+  return DESTRUCTURES_DEFINEGUARD.test(src) && CALLS_BARE_DEFINEGUARD.test(src);
+}
+
 function deriveMigrated() {
   const files = discoverTestFiles(__dirname)
     .filter((f) => f !== path.join(__dirname, 'guards-population.test.cjs'))
@@ -213,8 +230,7 @@ function deriveMigrated() {
   const migrated = [];
   for (const f of files) {
     const src = fs.readFileSync(f, 'utf8');
-    if (!DESTRUCTURES_DEFINEGUARD.test(src)) continue;
-    if (!CALLS_BARE_DEFINEGUARD.test(src)) continue;
+    if (!isMigratedSource(src)) continue;
     migrated.push(path.relative(__dirname, f));
   }
   return migrated;
@@ -502,6 +518,8 @@ module.exports = {
   isRecordedExclusion,
   GUARD_EXCLUSIONS,
   MIGRATED,
+  isMigratedSource,
+  CALLS_BARE_DEFINEGUARD,
   UNMIGRATED_BASELINE,
   ratchetUnmigrated,
   readsArtifact,
