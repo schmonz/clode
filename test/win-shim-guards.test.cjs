@@ -101,10 +101,15 @@ function scanWinShimGuards({ sources }) {
 
 const guard = defineGuard({
   name: 'win-shim-guards',
-  // CHECKS is a fixed 23-entry table (examined++ once per entry, unconditionally); floor
-  // 1 caught only total blindness — a CHECKS entry silently deleted from the array still
-  // read OK. 22 (one under the real count) fires the moment the table shrinks.
-  floor: 22,
+  // CHECKS is a fixed 23-entry table (examined++ once per entry, unconditionally). The
+  // floor is the EXACT count ON PURPOSE (fix round 2, coordinator correction): floor is a
+  // MINIMUM, and legitimate growth only ever raises `examined` above it, so there is no
+  // "headroom" to leave below the real count. Losing even ONE entry from CHECKS is
+  // supposed to report BROKEN — that is what floor is for. If a check is legitimately
+  // retired, `examined` drops, this fires, and a human lowers the floor deliberately
+  // (same ratchet discipline as UNMIGRATED_BASELINE) — that is the intended path, not a
+  // bug to route around.
+  floor: 23,
   read: () => ({
     sources: {
       cpSrc: fs.readFileSync(path.join(__dirname, '..', 'libexec/node-shim/modules/child_process.cjs'), 'utf8'),

@@ -186,9 +186,13 @@ function scanZstdWalls({ src }) {
 
 const zstdWallsGuard = defineGuard({
   name: 'zstd-gap-carved-walls',
-  // CARVED_CHECKS is a fixed 4-entry table; floor 3 (one under) fires if an
-  // entry silently drops out of it, instead of only catching total blindness.
-  floor: 3,
+  // CARVED_CHECKS is a fixed 4-entry table. The floor is the EXACT count ON PURPOSE
+  // (fix round 2, coordinator correction): floor is a MINIMUM, so legitimate growth
+  // only ever raises `examined` above it — there is no headroom to leave below the
+  // real count. Losing even ONE entry from CARVED_CHECKS is supposed to report BROKEN.
+  // A legitimate retirement drops `examined`, this fires, and a human lowers the floor
+  // deliberately — that is the intended path, not a bug.
+  floor: 4,
   read: () => {
     const { src, error } = resolveBundleSrc();
     if (!src) {

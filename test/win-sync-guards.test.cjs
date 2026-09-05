@@ -61,10 +61,14 @@ function scanWinSyncGuards({ fsPatch, spawnPatch, buildTjsSrc }) {
 
 const guard = defineGuard({
   name: 'win-sync-guards',
-  // FS_CHECKS (9) + SPAWN_CHECKS (7) + 2 build-tjs.mjs checks = 18, fixed by the
-  // literal tables above; floor 17 (one under) fires the moment either table
-  // silently loses an entry, instead of only catching total blindness.
-  floor: 17,
+  // FS_CHECKS (9) + SPAWN_CHECKS (7) + 2 build-tjs.mjs checks = 18, fixed by the literal
+  // tables above. The floor is the EXACT count ON PURPOSE (fix round 2, coordinator
+  // correction): floor is a MINIMUM, so legitimate growth only ever raises `examined`
+  // above it — there is no headroom to leave below the real count. Losing even ONE entry
+  // from either table is supposed to report BROKEN. A legitimate retirement drops
+  // `examined`, this fires, and a human lowers the floor deliberately — that is the
+  // intended path, not a bug.
+  floor: 18,
   read: () => ({
     fsPatch: fs.readFileSync(path.join(REPO, 'spike/quickjs/patches/txiki-sync-fs.patch'), 'utf8'),
     spawnPatch: fs.readFileSync(path.join(REPO, 'spike/quickjs/patches/txiki-sync-spawn.patch'), 'utf8'),

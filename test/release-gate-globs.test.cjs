@@ -105,7 +105,7 @@ function assetNamesFor(leg, version) {
 //
 // `examined` counts GLOB checks only (see the floor comment on the guard below) — the
 // leg-count sanity check is a separate finding, not folded into that count, so it does
-// not change what "just under the real glob count" means.
+// not change what "the real glob count" means for the floor.
 function scanReleaseGlobs({ version, legs, globs, extraNames }) {
   const findings = [];
   let examined = 0;
@@ -138,11 +138,16 @@ function scanReleaseGlobs({ version, legs, globs, extraNames }) {
 
 const releaseGlobsGuard = defineGuard({
   name: 'release-gate-globs',
-  // `examined` is the count of REQUIRED globs parsed out of release.yml (currently 3);
-  // floor 2 (one under) fires the moment the parser silently finds fewer than it should
-  // — the coordinator's example verbatim: "a parser that finds 1 of 3 still passes" is
-  // no longer true once this floor can fire.
-  floor: 2,
+  // `examined` is the count of REQUIRED globs parsed out of release.yml (currently 3).
+  // The floor is the EXACT count ON PURPOSE (fix round 2, coordinator correction): floor
+  // is a MINIMUM, so a legitimately ADDED required glob only ever raises `examined` above
+  // it — there is no headroom to leave below the real count. Losing even ONE glob (a
+  // parser regression, OR release.yml legitimately dropping a requirement) is supposed to
+  // report BROKEN and make a human look — the coordinator's example verbatim, "a parser
+  // that finds 1 of 3 still passes," is no longer true at any loss, not just a 2-glob one.
+  // If a glob is deliberately retired, `examined` drops, this fires, and a human lowers
+  // the floor — that is the intended path, not a bug.
+  floor: 3,
   read: () => {
     const legs = publishedLegs();
     const version = '0.20260801.1';

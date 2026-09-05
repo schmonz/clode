@@ -170,9 +170,14 @@ function scanEngineFloorConsumers({ buildTjsSrc, actionYml, bakeSrc }) {
 
 const consumersGuard = defineGuard({
   name: 'engine-api-floor-consumers',
-  // 15 fixed presence/absence checks (examined++ once per check, unconditionally);
-  // floor 14 (one under) fires if a check silently drops out of scanEngineFloorConsumers.
-  floor: 14,
+  // 15 fixed presence/absence checks (examined++ once per check, unconditionally). The
+  // floor is the EXACT count ON PURPOSE (fix round 2, coordinator correction): floor is a
+  // MINIMUM, so legitimate growth only ever raises `examined` above it — there is no
+  // headroom to leave below the real count. Losing even ONE check from
+  // scanEngineFloorConsumers is supposed to report BROKEN. A legitimate retirement drops
+  // `examined`, this fires, and a human lowers the floor deliberately — that is the
+  // intended path, not a bug.
+  floor: 15,
   read: () => ({
     buildTjsSrc: read(BUILD_TJS),
     actionYml: read(ACTION),

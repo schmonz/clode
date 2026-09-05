@@ -87,9 +87,14 @@ function scanMergeStepWiring({ src, buildReportSrc }) {
 
 const guard = defineGuard({
   name: 'merge-step-wiring',
-  // 13 fixed presence/absence checks (examined++ once per check, unconditionally);
-  // floor 12 (one under) fires if a check silently drops out of scanMergeStepWiring.
-  floor: 12,
+  // 13 fixed presence/absence checks (examined++ once per check, unconditionally). The
+  // floor is the EXACT count ON PURPOSE (fix round 2, coordinator correction): floor is a
+  // MINIMUM, so legitimate growth only ever raises `examined` above it — there is no
+  // headroom to leave below the real count. Losing even ONE check from
+  // scanMergeStepWiring is supposed to report BROKEN. A legitimate retirement drops
+  // `examined`, this fires, and a human lowers the floor deliberately — that is the
+  // intended path, not a bug.
+  floor: 13,
   read: () => ({
     src: fs.readFileSync(require.resolve('../scripts/merge-step.mjs'), 'utf8'),
     buildReportSrc: fs.readFileSync(require.resolve('../libexec/build-report.cjs'), 'utf8'),
