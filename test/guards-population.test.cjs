@@ -6,7 +6,8 @@ const path = require('node:path');
 
 const TEST_DIR = __dirname;
 const { classifyTestFile, discoverTestFiles, isRecordedExclusion, GUARD_EXCLUSIONS, MIGRATED,
-  UNMIGRATED_BASELINE, ratchetUnmigrated } = require('./guards-population.cjs');
+  UNMIGRATED_BASELINE, ratchetUnmigrated, unsafeCliRunnerQuoteScans, CLI_QUOTE_SCAN_EXCLUSIONS,
+  isRecordedCliQuoteScanExclusion } = require('./guards-population.cjs');
 
 test('the classifier recognises a scanner-shaped test', () => {
   const src = `const src = fs.readFileSync(path.join(REPO, 'libexec', 'x.js'), 'utf8');
@@ -111,4 +112,92 @@ test('ratchet: a count BELOW baseline is not a finding, and says to lower the ba
   const r = ratchetUnmigrated(50, 57, []);
   assert.strictEqual(r.ok, true);
   assert.match(r.message, /lower UNMIGRATED_BASELINE/);
+});
+
+// ---- ESCAPE-BLIND DETECTOR (BACKLOG item 8, task-11) -------------------------
+
+test('unsafeCliRunnerQuoteScans: catches the guard-subcommands-gate shape (bracket-class quote, no fix)', () => {
+  const src = `const { readFileSync } = require('fs');
+    const CLODE_PROVIDER_BIN = 1;
+    for (const m of src.matchAll(/\\.command\\(["']([a-z][a-z0-9-]*)/g)) names.add(m[1]);
+    // reads cli.cjs`;
+  const hits = unsafeCliRunnerQuoteScans(src);
+  assert.ok(hits.length > 0, 'must catch a bare bracket-class quote pattern with no fix');
+});
+
+test('unsafeCliRunnerQuoteScans: catches the zstd-gap shape (a literal double-quoted string, no fix)', () => {
+  const src = `const bin = stageProviderCli();
+    const direct = /switch\\("clode-managed-target"\\)/.test(BUNDLE_SRC);`;
+  const hits = unsafeCliRunnerQuoteScans(src);
+  assert.ok(hits.length > 0, 'must catch a literal-quoted string pattern with no fix');
+});
+
+test('unsafeCliRunnerQuoteScans: exempt when the pattern is escape-blind (tolerates any backslash depth before the quote)', () => {
+  // Built with plain string concatenation, not a template literal, so the exact
+  // characters are unambiguous: this is literally
+  //   const bin = stageProviderCli();
+  //       const pattern = /switch\(\\*["']clode-managed-target\\*["']\)/;
+  //       pattern.test(BUNDLE_SRC);
+  // — the `\\*["']` shape test/node-shim-staged-graph.test.cjs and the `Q`
+  // convention (test/zlib-zstd-stream-gap.test.cjs) both use to tolerate ANY
+  // number of backslashes before the quote.
+  const src = 'const bin = stageProviderCli();\n'
+    + '    const pattern = /switch\\(\\\\*["\']clode-managed-target\\\\*["\']\\)/;\n'
+    + '    pattern.test(BUNDLE_SRC);';
+  assert.deepStrictEqual(unsafeCliRunnerQuoteScans(src), []);
+});
+
+test('unsafeCliRunnerQuoteScans: exempt when the file reads graph.json\'s real sources instead', () => {
+  const src = `const CLODE_PROVIDER_BIN = 1;
+    const doc = JSON.parse(fs.readFileSync(graph, 'utf8'));
+    for (const src2 of Object.values(doc.sources)) {
+      if (/\\.command\\(["']([a-z][a-z0-9-]*)/.test(src2)) names.add('x');
+    }`;
+  assert.deepStrictEqual(unsafeCliRunnerQuoteScans(src), []);
+});
+
+test('unsafeCliRunnerQuoteScans: does not fire on a file with no staged-cli-runner signal at all', () => {
+  const src = `require('/\\.command\\(["']/, "totally unrelated code");`;
+  assert.deepStrictEqual(unsafeCliRunnerQuoteScans(src), []);
+});
+
+test('unsafeCliRunnerQuoteScans: a quote-bearing scan pattern mentioned only in a `//` comment is not flagged', () => {
+  const src = `const CLODE_PROVIDER_BIN = 1;
+    // old pattern was /\\.command\\(["']/ before the fix
+    const doc = JSON.parse(fs.readFileSync(graph.json, 'utf8'));`;
+  assert.deepStrictEqual(unsafeCliRunnerQuoteScans(src), []);
+});
+
+test('isRecordedCliQuoteScanExclusion throws on an exclusion with an empty `because`', () => {
+  CLI_QUOTE_SCAN_EXCLUSIONS.push({ file: '__fixture-empty-because__.test.cjs', because: '' });
+  try {
+    assert.throws(() => isRecordedCliQuoteScanExclusion('__fixture-empty-because__.test.cjs'),
+      /empty `because`/);
+  } finally {
+    CLI_QUOTE_SCAN_EXCLUSIONS.pop();
+  }
+});
+
+// THE STANDING GATE: every current test file, for real. This is what converts the
+// one-time task-11 sweep into a mechanism — a NEW file that greps a staged cli.cjs for a
+// quote-bearing literal with neither known-good fix goes RED here, at authoring time,
+// instead of silently reporting a bundle's walls as down (or up) for years.
+test('no test file greps the staged cli.cjs runner for an escape-blind quoted literal', (t) => {
+  const files = discoverTestFiles(TEST_DIR);
+  const offenders = [];
+  for (const f of files) {
+    const src = fs.readFileSync(f, 'utf8');
+    const hits = unsafeCliRunnerQuoteScans(src);
+    if (!hits.length) continue;
+    if (isRecordedCliQuoteScanExclusion(f)) continue;
+    offenders.push(`${path.basename(f)}: ${JSON.stringify(hits)}`);
+  }
+  assert.deepStrictEqual(offenders, [],
+    'a test greps the staged cli.cjs GRAPH RUNNER for a quote-bearing literal — since '
+    + '2.1.243 module sources ride escaped inside a JS string, so this can silently report '
+    + "a bundle's walls as intact (or down) for the wrong reason. Fix by reading "
+    + "graph.json's `sources` map directly (real strings, no escape level — see "
+    + 'test/node-shim-wall-tripwires.test.cjs), or by pinning BOTH encodings with a '
+    + 'self-check (the `Q` convention in test/zlib-zstd-stream-gap.test.cjs). '
+    + `Offenders:\n${offenders.join('\n')}`);
 });

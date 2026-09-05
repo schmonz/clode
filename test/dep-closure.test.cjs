@@ -27,7 +27,7 @@ const NM = path.join(REPO, 'deps', 'claude', 'node_modules');
 const LIBEXEC = path.join(REPO, 'libexec');
 const {
   readDirectDeps, computeDepClosure, assertClosureMatchesLockfile,
-  scanBareSpecifiers, specifierPackageName, isBuiltinSpecifier, shimProvidedModules,
+  scanBareSpecifiers, scannableTexts, specifierPackageName, isBuiltinSpecifier, shimProvidedModules,
   assertNoUnknownBareSpecifiers, KNOWN_UNREACHABLE,
 } = require('../libexec/clode-fuse.cjs');
 
@@ -347,6 +347,91 @@ test('scanBareSpecifiers: never scans declarative ESM `from \'...\'` (proven noi
   } finally { fs.rmSync(path.dirname(file), { recursive: true, force: true }); }
 });
 
+// ---- ESCAPE-BLIND CLASS (BACKLOG item 8, task-11) ----------------------------
+// From 2.1.243 the staged cli.cjs is a GRAPH RUNNER: module sources ride
+// escaped inside a JS string literal. Measured against the real pinned 2.1.251
+// carve: scanning cli.cjs directly found {esbuild, playwright, playwright-core,
+// ts-morph} (single-quoted doc TEXT that survives JSON.stringify's escaping by
+// coincidence) while MISSING {ajv, ajv-formats, bun:jsc, node-fetch} — the
+// REAL double-quoted require()/import() calls graph.json's `sources` carry.
+// Two entirely disjoint 4-name sets: proof the scan was reading the wrong
+// text, not merely being conservative. These tests pin the fix.
+
+test('scanBareSpecifiers: escape-blind class — the bare quote pattern genuinely cannot see an escaped require()', () => {
+  // First, the premise: prove the ORIGINAL bug is real, not assumed. A real
+  // module source containing a double-quoted require, escaped ONE level the
+  // way a graph runner embeds it as a JS string literal, defeats the bare
+  // `["']` quote class outright — no backslash-tolerant fallback exists in
+  // the pattern itself.
+  const realModuleSrc = 'require("totally-real-dep");';
+  const runnerEmbedded = JSON.stringify(realModuleSrc);
+  assert.ok(runnerEmbedded.includes('\\"totally-real-dep\\"'),
+    'test setup is wrong: the escaped form does not even contain a backslash-quoted spec');
+  const bareQuotePattern = /require\(["']([a-zA-Z0-9_/:@.-]+)["']\)/;
+  assert.strictEqual(bareQuotePattern.test(runnerEmbedded), false,
+    'premise failed: the bare quote pattern DOES match escaped text — the class this test '
+    + 'guards against is gone (or was never real), and this test needs rewriting, not deleting');
+});
+
+test('scanBareSpecifiers: reads graph.json\'s real sources beside cli.cjs, not the escaped runner text', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dep-drift-graph-'));
+  try {
+    const realModuleSrc = 'require("totally-real-dep");';
+    // What the SAME text looks like once embedded in a graph runner (escaped,
+    // sitting inside cli.cjs) — the previous test proves this defeats the raw
+    // pattern. If scanBareSpecifiers still found 'totally-real-dep' via a raw
+    // scan of THIS file, that would mean it got lucky, not fixed.
+    fs.writeFileSync(path.join(dir, 'cli.cjs'), `//clode:graph-runner:1\nconst x=${JSON.stringify(realModuleSrc)};\n`);
+    fs.writeFileSync(path.join(dir, 'graph.json'), JSON.stringify({ sources: { '/a.js': realModuleSrc } }));
+    assert.deepStrictEqual([...scanBareSpecifiers(path.join(dir, 'cli.cjs'))], ['totally-real-dep'],
+      'scanBareSpecifiers must read graph.json\'s `sources` map (real strings), not grep the '
+      + 'escaped runner text it rides beside');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('scannableTexts: falls back to a raw read when no graph.json rides beside cli.cjs (pre-2.1.243 flat carve)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dep-drift-flat-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'cli.cjs'), 'require("flat-carve-dep");');
+    assert.deepStrictEqual([...scanBareSpecifiers(path.join(dir, 'cli.cjs'))], ['flat-carve-dep']);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('scannableTexts: a file not literally named cli.cjs is scanned as raw text even with a graph.json beside it (bun-shim.cjs)', () => {
+  // bun-shim.cjs lives in the SAME staged directory as cli.cjs + graph.json in
+  // production (libexec/clode-fuse.cjs's stageDir), but it is clode's OWN
+  // source — never escaped — and must never be redirected through the
+  // upstream graph just because a graph.json happens to sit beside it.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dep-drift-shim-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'bun-shim.cjs'), 'require("shim-only-dep");');
+    fs.writeFileSync(path.join(dir, 'graph.json'), JSON.stringify({ sources: { '/a.js': 'require("graph-only-dep");' } }));
+    assert.deepStrictEqual([...scanBareSpecifiers(path.join(dir, 'bun-shim.cjs'))], ['shim-only-dep']);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('scannableTexts: a graph.json beside cli.cjs that is not valid JSON fails loud, never silently falls back', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dep-drift-badjson-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'cli.cjs'), '//clode:graph-runner:1\n');
+    fs.writeFileSync(path.join(dir, 'graph.json'), '{not valid json');
+    assert.throws(() => scanBareSpecifiers(path.join(dir, 'cli.cjs')), /could not be parsed as JSON/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('scannableTexts: a graph.json beside cli.cjs with no `sources` map fails loud, never silently falls back', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dep-drift-nosources-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'cli.cjs'), '//clode:graph-runner:1\n');
+    fs.writeFileSync(path.join(dir, 'graph.json'), JSON.stringify({ notSources: true }));
+    assert.throws(() => scanBareSpecifiers(path.join(dir, 'cli.cjs')), /no `sources` map/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('scannableTexts is exported directly and is the mechanism scanBareSpecifiers is built on', () => {
+  assert.strictEqual(typeof scannableTexts, 'function');
+});
+
 test('isBuiltinSpecifier / specifierPackageName: unit sanity', () => {
   assert.ok(isBuiltinSpecifier('fs'));
   assert.ok(isBuiltinSpecifier('node:sqlite'));
@@ -479,12 +564,24 @@ test('GATE (integration): the REAL extracted cli.cjs + bun-shim.cjs, scanned aga
   // thing the brief calls the acceptance test. Skips (does not fail) when no
   // Bun-packaged provider is available, matching every other provider-gated
   // test in this suite (test/e2e-assets.test.cjs, scripts/apicheck.mjs).
+  //
+  // Reads staged.cacheDir's cli.cjs, NOT staged.cli (the per-test copy):
+  // scannableTexts()'s escape-blind fix (task-11) looks for a graph.json
+  // riding BESIDE the cli.cjs it is handed, and stageCli() only ever copies
+  // graph.json into cacheDir, never into the per-test dir alongside its cli.cjs
+  // copy (test/oracle-models.cjs's stageCli comment). Using staged.cli here
+  // would silently re-exercise the OLD escape-blind fallback path instead of
+  // the fix — the exact same distinction test/shim-surface.test.cjs's
+  // inputs() already draws for the same reason ("Point at the CACHE dir's
+  // cli.cjs, not the per-test copy").
   const { stageProviderCli, providerSkipReason } = require('./oracle-models.cjs');
   const staged = stageProviderCli({ env: process.env });
   const skip = providerSkipReason(staged, 'no Bun-packaged CC provider');
   if (skip) { t.skip(skip); return; }
   const direct = readDirectDeps(path.join(REPO, 'deps', 'claude', 'package.json'));
   const closure = computeDepClosure(NM, direct);
+  const cachedCli = path.join(staged.cacheDir, 'cli.cjs');
+  const cli = fs.existsSync(cachedCli) ? cachedCli : staged.cli;
   assert.doesNotThrow(() => assertNoUnknownBareSpecifiers(
-    [staged.cli, path.join(staged.dir, 'bun-shim.cjs')], closure, LIBEXEC));
+    [cli, path.join(staged.dir, 'bun-shim.cjs')], closure, LIBEXEC));
 });

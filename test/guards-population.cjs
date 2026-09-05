@@ -280,6 +280,129 @@ function ratchetUnmigrated(count, baseline, unmigrated) {
     + `the recorded baseline of ${baseline}. Unmigrated${list}` };
 }
 
+// ---- ESCAPE-BLIND DETECTOR (BACKLOG item 8, task-11) -------------------------
+// A gate that greps the staged carve's `cli.cjs` for a quote-bearing literal is
+// silently blind: since Claude Code 2.1.243 the staged cli.cjs is a GRAPH
+// RUNNER, module sources ride escaped inside a JS string literal, so a literal
+// like `switch("clode-managed-target")` is present only in escaped form. THREE
+// gates already died of exactly this before this detector existed
+// (guard-subcommands-gate's `.command("…")` scan, the shim-surface family's
+// fs.watch alias scanner, zlib-zstd-stream-gap's pin check — see BACKLOG.md
+// item 8 and task-11-report.md for the measured counts, including a FOURTH,
+// production-code instance found while building this detector:
+// libexec/clode-fuse.cjs's dep-closure gate, fixed in the same commit). This is
+// a CLASS, not an incident, so — same principle as the MIGRATED sweep above —
+// this stops it from being reintroduced a fifth time unnoticed.
+//
+// THE SIGNAL: a test file that could be reading the staged graph-runner
+// cli.cjs (mentions `cli.cjs`, `stageProviderCli`, or `CLODE_PROVIDER_BIN` —
+// deliberately loose, same READS_CLI_RUNNER-style signal STANDALONE_ARTIFACT_
+// SIGNALS above already uses for a related purpose) AND contains a regex
+// LITERAL, adjacent to a require/import/command/switch call shape, that
+// carries a BARE quote character — the exact shape that defeated all three
+// real incidents (`require(["']`, `.command(["']`, `switch("literal")`, …).
+// EXEMPT if the file already shows either known-good fix: mentions
+// `graph.json`/`doc.sources` (reads real strings directly — the
+// node-shim-wall-tripwires/guard-subcommands-gate/shim-surface fix), or the
+// pattern itself is escape-blind (`\*"` / `\+"` — the zlib-zstd-stream-gap `Q`
+// convention that tolerates ANY number of backslashes before the quote).
+//
+// NOT AN AST PARSE — a "regex literal" here is approximated (a `/`-delimited
+// run with no unescaped `/` or newline inside, then optional flags), and
+// comments are stripped only to end-of-line (a same-line `//` not preceded by
+// `:`, so `https://` inside a string survives). Both approximations can
+// mis-detect a genuine regex literal sitting inside a longer non-code string
+// (see CLI_QUOTE_SCAN_EXCLUSIONS below for the one measured case). Per the
+// sweep's own tuning rule (verbatim, above): false positives are the SAFE
+// side — one recorded exclusion costs a look; a false negative is a fifth
+// silent incident.
+function stripLineComments(src) {
+  return src.split('\n').map((line) => {
+    const m = /(^|[^:])\/\//.exec(line);
+    if (!m) return line;
+    return line.slice(0, m.index + m[1].length);
+  }).join('\n');
+}
+
+const READS_CLI_RUNNER = /\bcli\.cjs\b|\bstageProviderCli\b|\bCLODE_PROVIDER_BIN\b/;
+const ALREADY_FIXED = /\bgraph\.json\b|\bdoc\.sources\b/;
+// Approximates a JS regex literal: `/`, then a run with no bare `/` or newline
+// (an escaped char `\\.` is allowed to contain one), then `/` and flags.
+const REGEX_LITERAL = /\/(?:\\.|[^/\n\\])+\/[a-z]*/g;
+// `\\?\(` (not a bare `\(`): a real regex literal escapes its OWN literal
+// parens too — `/\.command\(["']/`, not `/\.command(["']/` — so the open
+// paren these keywords are followed by usually carries its own backslash.
+// Measured against the first draft of this detector (task-11): the bare-paren
+// spelling missed guard-subcommands-gate's actual pre-fix shape entirely.
+const SCAN_CALL_SHAPE = /require\\?\(|__require\\?\(|import\\?\(|\.command\\?\(|\.alias\\?\(|switch\\?\(/;
+const BARE_QUOTE = /["']/;
+// The known-good "pin both encodings" fix's fingerprint, INSIDE the regex
+// literal itself: TWO literal backslash characters (the escaped `\\` that
+// matches one literal backslash in the scanned TEXT), then a `*`/`+`
+// quantifier, then a quote-matching construct (`"`, `'`, or the start of a
+// `["']` bracket class) — the `\\*"` shape test/node-shim-staged-graph.test.cjs
+// and the `Q = '\\\\*"'` convention (test/zlib-zstd-stream-gap.test.cjs,
+// a42bf7e) both use to tolerate ANY number of backslashes before the quote.
+const ESCAPE_BLIND_SPELLING = /\\\\[*+]["'[]/;
+
+// Every regex-literal-shaped match in `src` that looks like an unfixed
+// escape-blind scan — for diagnostics, not just a boolean, so a finding names
+// the actual offending snippet rather than just the file.
+function unsafeCliRunnerQuoteScans(src) {
+  // Comments stripped FIRST and every signal checked against that: a file
+  // merely MENTIONING cli.cjs in prose (e.g. "this runs Claude Code's
+  // cli.cjs, not clode's own code" — test/clode-self-deps.test.cjs, measured
+  // task-11) must not gate this detector in on that alone.
+  const stripped = stripLineComments(src);
+  if (!READS_CLI_RUNNER.test(stripped) || ALREADY_FIXED.test(stripped)) return [];
+  const hits = [];
+  REGEX_LITERAL.lastIndex = 0;
+  let m;
+  while ((m = REGEX_LITERAL.exec(stripped))) {
+    const lit = m[0];
+    if (!SCAN_CALL_SHAPE.test(lit)) continue;
+    if (!BARE_QUOTE.test(lit)) continue;
+    if (ESCAPE_BLIND_SPELLING.test(lit)) continue;
+    hits.push(lit);
+  }
+  return hits;
+}
+
+// A file lands here ONLY when a real, read source snippet was checked BY HAND
+// and confirmed to be prose/doc text, not scanning code — same discipline as
+// GUARD_EXCLUSIONS above (an empty `because` is a bug, checked below).
+const CLI_QUOTE_SCAN_EXCLUSIONS = [
+  {
+    file: 'inspect.test.cjs',
+    because: 'the one measured false positive (task-11): a backtick-quoted DOC STRING '
+      + '("node libexec/inspect-claude-bundle.cjs \\"$(node -e \'console.log(require(...))\')\\" ") '
+      + 'showing a human how to run the tool by hand. The regex-literal approximation reads '
+      + 'the `/` inside that string as a delimiter; it is not scanning code and matches '
+      + 'nothing at runtime.',
+  },
+  {
+    file: 'shim-surface.test.cjs',
+    because: 'measured task-11: its DELIBERATELY NARROW tripwire pattern '
+      + '(`/require\\(\\s*["\'](?:node:)?fs["\']\\s*\\)\\s*\\.watch\\s*\\(/`) is used in a '
+      + 'NEGATIVE assertion ("this must stay false") against `text`, which comes from '
+      + 'test/shim-surface/bundle-refs.cjs\'s loadModules() — already fixed (it prefers '
+      + 'graph.json\'s real `sources` over the escaped cli.cjs runner, confirmed by reading '
+      + 'that file). The fix lives in a SEPARATE file this detector does not follow across a '
+      + 'require() edge, so the same-file `graph.json`/`doc.sources` signal never fires here '
+      + 'even though the data really is unescaped.',
+  },
+];
+
+function isRecordedCliQuoteScanExclusion(file) {
+  const base = path.basename(file);
+  const entry = CLI_QUOTE_SCAN_EXCLUSIONS.find((e) => e.file === base);
+  if (!entry) return false;
+  if (typeof entry.because !== 'string' || entry.because.trim().length === 0) {
+    throw new Error(`CLI_QUOTE_SCAN_EXCLUSIONS entry for '${base}' has an empty \`because\``);
+  }
+  return true;
+}
+
 module.exports = {
   classifyTestFile,
   discoverTestFiles,
@@ -290,6 +413,9 @@ module.exports = {
   ratchetUnmigrated,
   readsArtifact,
   READS_ARTIFACT,
+  unsafeCliRunnerQuoteScans,
+  CLI_QUOTE_SCAN_EXCLUSIONS,
+  isRecordedCliQuoteScanExclusion,
   READ_CALLS,
   REPO_ROOTED,
   STANDALONE_ARTIFACT_SIGNALS,

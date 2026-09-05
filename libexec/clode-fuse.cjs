@@ -269,21 +269,69 @@ function specifierPackageName(spec) {
   return spec.split('/')[0];
 }
 
+// ESCAPE-BLIND CLASS (BACKLOG item 8, task-11): from Claude Code 2.1.243 the
+// staged `cli.cjs` is a GRAPH RUNNER — every module's source rides escaped
+// inside a JS string literal, so a real `require("pkg")` in the original
+// module text appears in cli.cjs as `require(\"pkg\")`. The bare `["']` quote
+// class in SPECIFIER_PATTERNS never matches a backslash, so a direct scan of
+// cli.cjs text is escape-blind to every DOUBLE-quoted require()/import().
+//
+// MEASURED against the pinned 2.1.251 carve (task-11-report.md): scanning
+// cli.cjs directly finds {esbuild, playwright, playwright-core, ts-morph} —
+// string TEXT the original source happens to single-quote inside a
+// double-quoted string (JSON.stringify never escapes a single quote, so those
+// four survive the runner's escaping by pure coincidence, and all four are
+// already KNOWN_UNREACHABLE doc/example text, not live requires) — while
+// MISSING {ajv, ajv-formats, bun:jsc, node-fetch}, the real double-quoted
+// require()/import() calls graph.json's own `sources` carry (ajv/ajv-formats/
+// bun:jsc are also KNOWN_UNREACHABLE; node-fetch is the ext-dep this exact
+// gate was built to have caught, and only fails to appear here because it is
+// already in deps/claude/package.json from an EARLIER measurement). Two
+// entirely DISJOINT 4-name sets — proof this was measuring the wrong text
+// altogether, not merely being conservative: a NEW double-quoted require of an
+// unlisted package would pass this gate silently, green, exactly the failure
+// this gate exists to prevent.
+//
+// Fixed the same way as test/node-shim-wall-tripwires.test.cjs and
+// test/guard-subcommands-gate.test.cjs: read graph.json's `sources` map
+// directly when it rides beside `file` — real strings, no escape level to
+// track — instead of grepping the runner. Falls back to a raw latin1 read (1
+// char == 1 byte, same convention as extract-claude-js.cjs) for bun-shim.cjs
+// (clode's own source, never escaped) and for a pre-2.1.243 flat carve with no
+// graph.json at all.
+function scannableTexts(file) {
+  const graphPath = path.join(path.dirname(file), 'graph.json');
+  if (path.basename(file) === 'cli.cjs' && fs.existsSync(graphPath)) {
+    let doc;
+    try {
+      doc = JSON.parse(fs.readFileSync(graphPath, 'utf8'));
+    } catch (e) {
+      throw new Error(`dep-closure gate: '${graphPath}' rides beside '${file}' but could not be parsed as JSON [${(e && e.message) || e}]`);
+    }
+    if (!doc || !doc.sources || typeof doc.sources !== 'object') {
+      throw new Error(`dep-closure gate: '${graphPath}' has no \`sources\` map — not a code-split graph doc; this gate can no longer tell what '${file}' really references`);
+    }
+    return Object.values(doc.sources).filter((src) => typeof src === 'string');
+  }
+  return [fs.readFileSync(file, 'latin1')];
+}
+
 // Every bare (non-builtin, non-relative/absolute) package NAME `file`
-// references via require()/__require()/dynamic import(). Reads latin1 (1 char
-// == 1 byte, same convention as extract-claude-js.cjs) so this scans the raw
-// carved bytes without a re-encode.
+// references via require()/__require()/dynamic import(), across every text
+// chunk scannableTexts() decides is real source (see its comment for why that
+// is not always `file` itself).
 function scanBareSpecifiers(file) {
-  const src = fs.readFileSync(file, 'latin1');
   const names = new Set();
-  for (const re of SPECIFIER_PATTERNS) {
-    re.lastIndex = 0;
-    let m;
-    while ((m = re.exec(src))) {
-      const spec = m[1];
-      if (!spec || spec.startsWith('.') || spec.startsWith('/')) continue;
-      if (isBuiltinSpecifier(spec)) continue;
-      names.add(specifierPackageName(spec));
+  for (const src of scannableTexts(file)) {
+    for (const re of SPECIFIER_PATTERNS) {
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(src))) {
+        const spec = m[1];
+        if (!spec || spec.startsWith('.') || spec.startsWith('/')) continue;
+        if (isBuiltinSpecifier(spec)) continue;
+        names.add(specifierPackageName(spec));
+      }
     }
   }
   return names;
@@ -1909,7 +1957,7 @@ async function clodeBuild(args, opts) {
 module.exports = {
   clodeBuild, parseBuildArgs, resolveBuildOut, makePhaseSpinner, startPongMock, cannedSSE, smokeTarget, attestTarget, timeoutScale, codesignAdHoc, thinToHostSlice, describeExit,
   readDirectDeps, computeDepClosure, assertClosureMatchesLockfile,
-  scanBareSpecifiers, specifierPackageName, isBuiltinSpecifier, shimProvidedModules,
+  scanBareSpecifiers, scannableTexts, specifierPackageName, isBuiltinSpecifier, shimProvidedModules,
   assertNoUnknownBareSpecifiers, KNOWN_UNREACHABLE, resolveClaudeNmDir,
   resolveManifest, releaseBaseUrl, thisTjsPin,
 };
