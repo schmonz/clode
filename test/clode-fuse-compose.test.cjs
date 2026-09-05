@@ -39,6 +39,11 @@ const declaresOwnStepsGuard = defineGuard({
   name: 'clode-fuse-declares-own-steps',
   read: () => ({ src: fs.readFileSync(require.resolve('../libexec/clode-fuse.cjs'), 'utf8') }),
   scan: scanDeclaresOwnSteps,
+  // I2 (coordinator, 2026-09-04): TABLE-driven, not corpus-driven — examined counts the
+  // two fixed markers scanDeclaresOwnSteps() looks for in this ONE named source file, so
+  // it only ever changes when a human edits that check. Floored at the exact measured
+  // count (2): below it means the read/scan lost track of one of the two markers.
+  floor: 2,
   control: () => ({ src: '// neither reference present\n' }),
 });
 guardTests(declaresOwnStepsGuard);

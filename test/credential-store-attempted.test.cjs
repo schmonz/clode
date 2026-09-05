@@ -214,6 +214,16 @@ const guard = defineGuard({
   name: 'credential-store-attempted',
   read: probeCredentialStoreAttempt,
   scan: scanCredentialStoreAttempt,
+  // I2 (coordinator, 2026-09-04): `examined` is the REAL git-call count the shadow
+  // observed from a live artifact turn — not a static file scan, so unlike this repo's
+  // table-driven guards it is not safe to floor at an exact measured count (a provider
+  // bump can legitimately shift how many git commands one turn issues). Measured 6 on
+  // this box against the pinned provider; floored at 3 — the same "three real git calls
+  // got through the shadow" minimum the control below already models as the proof the
+  // harness fired — so 0/1/2 (harness silently not firing, or firing once by accident)
+  // reads as BROKEN rather than a false OK, without coupling the floor to one run's
+  // exact count.
+  floor: 3,
   // Models the DANGEROUS case this guard exists to catch: the harness genuinely worked
   // (three real git calls got through the shadow -- the positive control) but the
   // artifact issued NO `find-generic-password` call. This is the literal shape of the

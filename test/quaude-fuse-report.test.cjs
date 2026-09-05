@@ -93,6 +93,9 @@ const guard = defineGuard({
     buildReportSrc: fs.readFileSync(require.resolve('../libexec/build-report.cjs'), 'utf8'),
   }),
   scan: scanFuseReportWiring,
+  // I2 (coordinator, 2026-09-04): table-driven — two fixed named files. Floored at the
+  // exact measured count (7).
+  floor: 7,
   // Models the fix-round-1 regression the header below describes: a stale
   // pre-merge total, a re-declared 'merge' step, and no protocol wiring at all.
   control: () => ({

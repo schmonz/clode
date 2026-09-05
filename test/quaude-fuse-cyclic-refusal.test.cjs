@@ -47,6 +47,9 @@ const guard = defineGuard({
     mergeStepSrc: fs.readFileSync(path.join(REPO, 'scripts', 'merge-step.mjs'), 'utf8'),
   }),
   scan: scanCyclicRefusalWiring,
+  // I2 (coordinator, 2026-09-04): table-driven — two fixed named files. Floored at the
+  // exact measured count (4).
+  floor: 4,
   // Models all four ways this wiring can silently revert to a no-op or a
   // silent tolerance, at once.
   control: () => ({ fuseSrc: '// nothing here', mergeStepSrc: '// nothing here either' }),

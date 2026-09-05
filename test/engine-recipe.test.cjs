@@ -83,6 +83,9 @@ const cacheKeyGuard = defineGuard({
   name: 'engine-recipe-cache-key-wiring',
   read: () => ({ yml: fs.readFileSync(ACTION, 'utf8') }),
   scan: scanCacheKeyWiring,
+  // I2 (coordinator, 2026-09-04): table-driven — a fixed set of markers checked in ONE
+  // named action file. Floored at the exact measured count (4).
+  floor: 4,
   // Models the exact regression this pins: the cache key re-inlining the file
   // list via hashFiles(...) instead of consuming the recipe's own hash output.
   control: () => ({

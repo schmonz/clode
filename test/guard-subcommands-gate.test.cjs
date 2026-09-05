@@ -142,7 +142,16 @@ function scanSubcommands({ rawContent, split, subcommands }) {
 
 const guard = defineGuard({
   name: 'guard-subcommands-gate',
-  floor: 21,
+  // RE-CUT (coordinator, I2, 2026-09-04): floor 21 vs a measured 54 unique names is
+  // exactly the wrong-direction looseness the whole-branch review named — this scanner
+  // is CORPUS-driven (it walks the pinned carve's real `sources`), so a broken walk
+  // (wrong graph key, an escape-level regression like the one this file's own header
+  // documents) shrinks `examined` SILENTLY, and 21 was already cleared by the
+  // control's synthetic 22-name fixture, not by anything about today's real corpus.
+  // 45 sits close to the measured 54 (comfortable margin for a subcommand or two
+  // coming/going between provider bumps) while still catching a walk that quietly
+  // regresses to reading only PART of the real command surface.
+  floor: 45,
   read: () => {
     const carve = pinnedCarve();
     if (carve.skip) return { skip: carve.skip };

@@ -87,6 +87,9 @@ const guard = defineGuard({
     pkg: JSON.parse(read('package.json')),
   }),
   scan: scanNodePins,
+  // I2 (coordinator, 2026-09-04): table-driven — four fixed named files. Floored at
+  // the exact measured count (5).
+  floor: 5,
   // Models the actual 2026-08-27 incident: .tool-versions bumped, the oracle
   // container left behind. Also exercises the embedded-node-converged finding.
   control: () => ({

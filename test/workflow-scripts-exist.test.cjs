@@ -68,10 +68,18 @@ const guard = defineGuard({
     repoFiles: allFilesUnder(path.join(REPO, 'scripts')),
   }),
   scan: scanWorkflowScripts,
-  // Floored at 6: the real corpus references well over a hundred script paths
-  // across dozens of workflow files, so examining fewer than 6 means the yml
-  // discovery broke, not that there is nothing to check.
-  floor: 6,
+  // RE-CUT (coordinator, I2, 2026-09-04): floor 6 vs a measured 90 was the exact
+  // "corpus-driven guard kept a floor loose enough to shrink silently" defect the
+  // whole-branch review named — a walk that started reading only .github/workflows/
+  // (dropping .github/actions/, or a directory rename) would still clear 6 and report
+  // OK while missing dozens of real references. Set NEAR the real count (measured 90
+  // on 2026-09-04) rather than at it, the same "regression value < floor < real value"
+  // shape windows-path-ratchet's floor already uses: 70 sits comfortably above what a
+  // broken walk would leave visible (a handful of scripts referenced by whichever ONE
+  // yml the walk still happened to find) while tolerating ordinary churn (a few
+  // scripts removed/renamed in one PR) without a manual re-cut. Recut this number, with
+  // a fresh measured count, whenever it drifts stale — never lower it to make CI green.
+  floor: 70,
   control: () => ({
     ymlTexts: [
       { file: 'fake.yml', text: 'run: node scripts/does-not-exist.mjs\n'.repeat(6) },

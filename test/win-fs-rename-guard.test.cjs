@@ -153,6 +153,9 @@ const guard = defineGuard({
     fsShimSrc: fs.readFileSync(path.join(__dirname, '..', 'libexec/node-shim/modules/fs.cjs'), 'utf8'),
   }),
   scan: scanRenameGuard,
+  // I2 (coordinator, 2026-09-04): table-driven — a fixed set of markers checked in ONE
+  // named shim file. Floored at the exact measured count (3).
+  floor: 3,
   // Models the ORIGINAL bug: renameSync forwards straight to the mocked FSS
   // rename with no unlink+retry fallback, so on win32 it throws EEXIST instead
   // of replacing — exactly the "Edit did not apply on disk" incident.

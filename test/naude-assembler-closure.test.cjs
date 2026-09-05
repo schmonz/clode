@@ -164,6 +164,13 @@ const guard = defineGuard({
     scriptSources: readScriptsDir(),
   }),
   scan: scanAssembler,
+  // I2 (coordinator, 2026-09-04): scriptSources comes from a real DIRECTORY WALK
+  // (readScriptsDir()), so unlike a fixed-file table-driven guard this one's `examined`
+  // can shrink for a legitimate reason (scripts refactored/consolidated) as well as a
+  // broken one (scripts/ misresolved, the closure BFS short-circuiting). Measured 14
+  // today; floored at 10 rather than exact, for the same reason the corpus-driven
+  // guards above got a margin instead of an exact match.
+  floor: 10,
   // The control models the DANGEROUS case measured on 2026-09-04: a script the worker
   // REACHES FOR that is not carried. A control modelling only the sibling-require case
   // would pass against the pre-phase-5 guard, certifying one that was half blind.

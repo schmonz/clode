@@ -62,6 +62,9 @@ const guard = defineGuard({
   name: 'quaude-fuse-merge-wiring',
   read: () => ({ src: fs.readFileSync(path.join(REPO, 'libexec', 'quaude-fuse.js'), 'utf8') }),
   scan: scanFuseMergeWiring,
+  // I2 (coordinator, 2026-09-04): table-driven — a fixed set of markers checked in ONE
+  // named file. Floored at the exact measured count (9).
+  floor: 9,
   // Models the real regression this guards against: a direct driver call
   // reintroduced (the exact drift that let a quaude work while naude/oracles
   // did not), alongside every other marker missing.

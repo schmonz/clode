@@ -219,6 +219,17 @@ const requireFreeGuard = defineGuard({
   name: 'target-env-require-free',
   read: () => ({ src: fs.readFileSync(path.join(__dirname, '..', 'libexec', 'target-env.cjs'), 'utf8') }),
   scan: scanRequireFree,
+  // I2 (coordinator, 2026-09-04): CANNOT be usefully floored above the default 1, and
+  // this is a fact about the check, not an oversight — scanRequireFree's own `examined`
+  // is a whole-file boolean (1 if the file has any content, 0 if empty), because the
+  // property under test ("this ONE file contains no require(...) anywhere") has no
+  // smaller unit to count; it is not a table of N markers that could partially regress.
+  // Floor 1 already sits at its own ceiling: the only thing a higher floor could ever
+  // distinguish is "the file is empty" (examined 0) from "the file has content"
+  // (examined 1), which floor 1 already does. Documented here rather than left silently
+  // at the default, per the whole-branch review's instruction not to fake a floor this
+  // guard genuinely cannot have.
+  floor: 1,
   control: () => ({ src: "const fs = require('node:fs');\n" }),
 });
 guardTests(requireFreeGuard);

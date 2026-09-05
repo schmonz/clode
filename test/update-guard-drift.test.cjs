@@ -63,6 +63,9 @@ const guard = defineGuard({
     },
   }),
   scan: scanInlinedCopies,
+  // I2 (coordinator, 2026-09-04): table-driven — three fixed marked blocks compared
+  // across three named files. Floored at the exact measured count (3).
+  floor: 3,
   // Models the real drift risk: the bootstrap's inline copy has fallen out of
   // sync with the canonical module for all three marked blocks.
   control: () => ({

@@ -62,6 +62,9 @@ const guard = defineGuard({
     changelog: read('CHANGELOG.md'),
   }),
   scan: scanVersionSources,
+  // I2 (coordinator, 2026-09-04): table-driven — four fixed named files. Floored at
+  // the exact measured count (5).
+  floor: 5,
   // Models the actual 2026-08-01-shaped drift: package.json bumped, everything
   // else left behind. Also exercises the changelog-missing and lock-mismatch
   // findings so a weakened scan of any one of the four cannot hide.

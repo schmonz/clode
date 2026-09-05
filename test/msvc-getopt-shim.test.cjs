@@ -197,6 +197,9 @@ const fixupRegistrationGuard = defineGuard({
   name: 'msvc-getopt-fixup-registration',
   read: () => ({ src: fs.readFileSync(path.join(repo, 'scripts/build-tjs.mjs'), 'utf8') }),
   scan: scanFixupRegistration,
+  // I2 (coordinator, 2026-09-04): table-driven — two fixed markers checked in ONE named
+  // build script. Floored at the exact measured count (2).
+  floor: 2,
   control: () => ({ src: '// no fixup call, no tjsc path.joins here' }),
 });
 guardTests(fixupRegistrationGuard);

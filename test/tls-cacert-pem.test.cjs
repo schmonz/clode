@@ -159,6 +159,9 @@ const cacertProvenanceGuard = defineGuard({
     pemBytes: fs.existsSync(OUT_PEM) ? fs.readFileSync(OUT_PEM) : null,
   }),
   scan: scanCacertProvenance,
+  // I2 (coordinator, 2026-09-04): table-driven — a fixed set of checks over one
+  // provenance record + pin + pem. Floored at the exact measured count (4).
+  floor: 4,
   // Models the actual dangerous drift: PINS.md moved on without a re-extraction,
   // AND the .pem bytes no longer match what was recorded (a hand edit, or a
   // corrupted write) — both real failure modes this guard exists to catch.
