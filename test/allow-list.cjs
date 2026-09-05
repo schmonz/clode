@@ -22,6 +22,30 @@
 // needing to know what any given proof actually inspects.
 const realFs = require('node:fs');
 
+// I4 (coordinator, whole-branch review, 2026-09-04): a `provenBy` that is a LITERAL
+// "always true" stub proves nothing — it is the exact `docs` entry's shape, deleted
+// as CRITICAL earlier in this phase for the same reason ("an exemption for a writer
+// that doesn't exist, with a proof that can't fail, is an exemption that's already
+// lying before the first suite run" — run.mjs's own comment on that deletion). Two
+// entries (`node_modules`, `test/.harness`) still carried `provenBy: () => true`
+// verbatim and this module accepted them silently. This is a HEURISTIC on the
+// function's own source text (`.toString()`), not a semantic proof of "always
+// returns true" in general (a function could compute its way to an unconditional
+// `true` through indirection this cannot see) — deliberately limited the same way
+// `sourceContainsWrite` above is: it exists to make the OBVIOUS, naive stub
+// impossible to write by accident, not to prove termination/constant-folding for
+// every function ever passed here.
+function isTriviallyAlwaysTrue(fn) {
+  const src = fn.toString().replace(/\s+/g, '');
+  // Arrow, expression body: `()=>true`, `(fsm)=>true`, `x=>true`, `async()=>true`.
+  if (/^(?:async)?\(?[A-Za-z0-9_$,]*\)?=>true;?$/.test(src)) return true;
+  // Arrow or function, block body whose ENTIRE body is a bare `return true;` — `src`
+  // has already had ALL whitespace stripped, so the words run together: `returntrue`.
+  if (/^(?:async)?\(?[A-Za-z0-9_$,]*\)?=>\{returntrue;?\}$/.test(src)) return true;
+  if (/^(?:async)?function[A-Za-z0-9_$]*\([A-Za-z0-9_$,]*\)\{returntrue;?\}$/.test(src)) return true;
+  return false;
+}
+
 function resolveAllowList(entries, { fsm = realFs } = {}) {
   const patterns = [];
   const findings = [];
@@ -41,6 +65,13 @@ function resolveAllowList(entries, { fsm = realFs } = {}) {
     if (typeof provenBy !== 'function') {
       findings.push(`${pattern}: no \`provenBy\` — every allow-list entry must PROVE its `
         + `exemption is real right now, not just assert it`);
+      continue;
+    }
+    if (isTriviallyAlwaysTrue(provenBy)) {
+      findings.push(`${pattern}: \`provenBy\` is a literal "always true" stub — this proves `
+        + `nothing (the exact shape the \`docs\` TREE_ALLOW entry was deleted for, as `
+        + `CRITICAL, earlier in this phase). Give it a real, falsifiable check, or delete `
+        + `the entry and let the guard watch the path instead`);
       continue;
     }
     let proven;
@@ -90,4 +121,4 @@ function sourceContainsWrite(files, { writeFns, pathLiterals, fsm = realFs }) {
   return { found: false };
 }
 
-module.exports = { resolveAllowList, sourceContainsWrite };
+module.exports = { resolveAllowList, sourceContainsWrite, isTriviallyAlwaysTrue };

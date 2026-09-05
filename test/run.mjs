@@ -493,10 +493,19 @@ const TREE_ALLOW_ENTRIES = [
     because: 'A developer/editor-tooling install target (this project ships zero runtime '
       + 'dependencies — see the repo\'s "Zero dependencies" doctrine — so clode itself never '
       + 'populates a root node_modules/, but the directory is gitignored and excluded here '
-      + 'defensively so an incidental local `npm install` for tooling never trips the gate). '
-      + 'Always true — there is no writer to prove, only a promise the repo itself never '
-      + 'creates one.',
-    provenBy: () => true,
+      + 'defensively so an incidental local `npm install` for tooling never trips the gate).',
+    // I4 (coordinator, whole-branch review, 2026-09-04): was `() => true` — the exact
+    // property the `docs` entry was deleted as CRITICAL for, earlier in this phase
+    // (see the note below), and allow-list.cjs now REJECTS a literal always-true stub
+    // outright. Proves the actual claim ("zero runtime deps") against package.json
+    // itself, right now: if a dependency is ever declared, this drops, and the gate
+    // starts watching node_modules for real — a deliberate decision at that point, not
+    // a promise nobody re-checks.
+    provenBy: () => {
+      const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+      const declared = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+      return Object.keys(declared).length === 0;
+    },
   },
   {
     pattern: '.superpowers',
@@ -516,9 +525,21 @@ const TREE_ALLOW_ENTRIES = [
       + 'through buildPath() (out of the checkout), so a fresh install no longer lands here '
       + '— but this directory predates that move and may still exist on disk (gitignored) '
       + "from before it, on any box that ran the suite pre-migration. Excluded so the gate's "
-      + 'verdict never depends on whether that leftover directory happens to be present. '
-      + 'Always true — it is a pre-migration leftover, not something a current run creates.',
-    provenBy: () => true,
+      + 'verdict never depends on whether that leftover directory happens to be present.',
+    // I4 (coordinator, whole-branch review, 2026-09-04): was `() => true` — same
+    // rejected-elsewhere property as the node_modules entry above. Proves the actual
+    // claim against CURRENT code, not a promise: harnessDir() (scripts/platform-tag.cjs)
+    // must resolve OUTSIDE the checkout right now (build-scratch.cjs's
+    // isInsideCheckout()) — the same fact test/build-scratch.test.cjs's own
+    // "toolchainDir/tjsDir/harnessDir no longer live in the checkout" test asserts. If a
+    // future change ever moves harnessDir() back into the checkout, this drops and the
+    // gate starts watching test/.harness for real, instead of the claim quietly going
+    // stale.
+    provenBy: () => {
+      const { harnessDir } = require('../scripts/platform-tag.cjs');
+      const { isInsideCheckout } = require('../scripts/build-scratch.cjs');
+      return !isInsideCheckout(harnessDir(ROOT));
+    },
   },
   // 'docs' was considered and DELIBERATELY NOT added here (round 1 of this task added
   // it, then reverted it — see BACKLOG.md/task-5-report.md, 2026-09-04). It has the

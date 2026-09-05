@@ -1,7 +1,10 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { resolveAllowList, sourceContainsWrite } = require('./allow-list.cjs');
+const fs = require('node:fs');
+const path = require('node:path');
+const { resolveAllowList, sourceContainsWrite, isTriviallyAlwaysTrue } = require('./allow-list.cjs');
+const REPO = path.resolve(__dirname, '..');
 
 test('an entry with no `because` is a finding', () => {
   const r = resolveAllowList([{ pattern: 'build/bundle', provenBy: () => true }]);
@@ -23,11 +26,46 @@ test('an exemption for a writer that does not exist is a finding', () => {
 });
 
 test('a proven, explained entry yields its pattern and no findings', () => {
+  // A REAL, falsifiable proof — not `() => true` (see the isTriviallyAlwaysTrue tests
+  // below for why that stub is now rejected outright): this repo really does have a
+  // .git directory, so the check can genuinely fail if it didn't.
   const r = resolveAllowList([
-    { pattern: '.git', because: 'git refreshes its own index on read-only commands', provenBy: () => true },
+    {
+      pattern: '.git',
+      because: 'git refreshes its own index on read-only commands',
+      provenBy: () => fs.existsSync(path.join(REPO, '.git')),
+    },
   ]);
   assert.deepStrictEqual(r.findings, []);
   assert.deepStrictEqual(r.patterns, ['.git']);
+});
+
+// I4 (coordinator, whole-branch review, 2026-09-04): run.mjs's `node_modules` and
+// `test/.harness` TREE_ALLOW entries carried `provenBy: () => true` verbatim — this
+// module accepted it silently, exactly the property the `docs` entry was deleted as
+// CRITICAL for earlier in this phase. isTriviallyAlwaysTrue() is the detector;
+// resolveAllowList must actually USE it to reject the entry, not merely have it
+// available.
+test('isTriviallyAlwaysTrue recognises the obvious "always true" stub shapes', () => {
+  assert.strictEqual(isTriviallyAlwaysTrue(() => true), true);
+  assert.strictEqual(isTriviallyAlwaysTrue(() => { return true; }), true);
+  assert.strictEqual(isTriviallyAlwaysTrue((fsm) => true), true);
+  assert.strictEqual(isTriviallyAlwaysTrue(function () { return true; }), true);
+});
+
+test('isTriviallyAlwaysTrue does NOT flag a real, falsifiable check', () => {
+  assert.strictEqual(isTriviallyAlwaysTrue(() => false), false);
+  assert.strictEqual(isTriviallyAlwaysTrue((fsm) => fsm.existsSync('/x')), false);
+  assert.strictEqual(isTriviallyAlwaysTrue(() => 1 === 1), false);
+});
+
+test('resolveAllowList rejects a `provenBy: () => true` entry as a finding, and drops it', () => {
+  const r = resolveAllowList([
+    { pattern: 'node_modules', because: 'zero runtime deps', provenBy: () => true },
+  ]);
+  assert.match(r.findings.join('\n'), /always true|proves nothing/i);
+  assert.ok(!r.patterns.includes('node_modules'),
+    'a literal always-true proof must not silently pass through to patterns');
 });
 
 test('a provenBy that throws is a finding, not a silent pass', () => {
