@@ -29,6 +29,21 @@ on:
         type: string
         required: false
         default: ""
+      defer-smoke:
+        description: >
+          'true': every leg in this call skips build-leg's full-smoke (see
+          build-leg's ci-fast-defer-smoke input) — the builder artifact still
+          uploads, unsmoked. ONLY ci.yml's `tjs` job (tier:ci, only:fast)
+          sets this, because ONLY it has a companion job
+          (tjs-fast-smoke) that runs the deferred check afterward. Deliberately
+          NOT derived from tier/only here: inferring it from those two would
+          also fire on a manual workflow_dispatch probe typed with
+          only=fast, which has no such companion job — the smoke would be
+          silently skipped forever, not merely delayed. Must be set
+          EXPLICITLY by a caller that owns the deferred check.
+        type: string
+        required: false
+        default: "false"
   # Single-leg probe (the version-floor walk): boot ONE leg, optionally at an
   # overridden guest version, without paying for a whole matrix. E.g.
   #   gh workflow run tjs-legs.yml -f only=openbsd-amd64 -f guest-version=7.5
@@ -104,6 +119,11 @@ jobs:
           msvc-arch: ${{ matrix.msvc-arch || 'x64' }}
           floor: ${{ matrix.floor || '' }}
           smoke: ${{ matrix.smoke || 'full' }}
+          # Forwarded verbatim from this workflow's OWN defer-smoke input
+          # (see its description above for why it is not derived from
+          # tier/only here) — see build-leg's ci-fast-defer-smoke input for
+          # what setting it does.
+          ci-fast-defer-smoke: ${{ inputs.defer-smoke }}
           macos-min: ${{ matrix.macos-min || '' }}
           macos-sdk: ${{ matrix.macos-sdk || '' }}
           macos-arch: ${{ matrix.macos-arch || '' }}

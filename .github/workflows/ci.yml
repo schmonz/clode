@@ -108,6 +108,10 @@ jobs:
     with:
       tier: ci
       only: fast
+      # tjs-fast-plan/tjs-fast-smoke below own the deferred check — see
+      # tjs-legs.yml's defer-smoke input for why this is the ONE call site
+      # allowed to set it.
+      defer-smoke: "true"
   # The slow half of the split above: VM/qemu guests + the from-source NetBSD
   # cross-toolchain fleet (scripts/tjs-legs.mjs's SLOW_CI_LEG) — everything
   # the fast `tjs` job above does not build. Nothing in this workflow
@@ -127,6 +131,92 @@ jobs:
     with:
       tier: ci
       only: slow
+  # Full smoke, DEFERRED (measured run 33959009299 baseline vs. current-HEAD
+  # job 101287474377, `tjs / leg (linux-x64-musl)`): the engine artifact every
+  # downstream consumer needs was complete at ~9s into that job, but the leg
+  # then spent ~8.3 more minutes (of an 8.55min total) on build-leg's own
+  # full-smoke step (a ~419s ephemeral-quaude fuse + MCP probe + rg
+  # inventory) — work no downstream job consumes. `needs:` on a `uses:` call
+  # is JOB-level and atomic: `tjs` (this workflow's call to tjs-legs.yml,
+  # tier:ci/only:fast) does not finish until ALL SEVEN of its fast legs do,
+  # so every one of them paying that ~7min tax — not only the four legs the
+  # oracle/Windows jobs actually download — was what held up every
+  # `needs: tjs` job below. The `tjs` job above now passes
+  # `defer-smoke: "true"` (tjs-legs.yml's own input, forwarded to build-leg
+  # as ci-fast-defer-smoke), which skips build-leg's full-smoke for every
+  # leg in that one call; `tjs` now finishes once each leg's builder is
+  # fused and uploaded, not once it's also been smoked.
+  #
+  # These two jobs run that SAME check (the .github/actions/full-smoke
+  # composite — one source, so build-leg's synchronous copy and this
+  # deferred copy cannot check different things) against the artifact
+  # `tjs`'s legs already uploaded, instead of re-fusing from source. The
+  # smoke still runs on every push and can still fail the run — it fails
+  # THIS job instead of `leg`, which is the whole point: nothing downstream
+  # needs THIS job to finish, only `tjs` (now fast) does.
+  #
+  # plan mirrors tjs-legs.yml's own `plan` job (same script, same tier/only
+  # pair) so the leg list here can never drift from what `tjs` actually
+  # built — scripts/tjs-legs.mjs stays the one source; nothing here declares
+  # a leg name of its own.
+  tjs-fast-plan:
+    needs: changes
+    if: needs.changes.outputs.code != 'false' && !cancelled()
+    runs-on: ubuntu-latest
+    outputs:
+      legs: ${{ steps.legs.outputs.legs }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version-file: .tool-versions
+      - id: legs
+        run: echo "legs=$(node scripts/tjs-legs.mjs ci fast)" >> "$GITHUB_OUTPUT"
+  tjs-fast-smoke:
+    needs: [changes, tjs, tjs-fast-plan]
+    # Gated on `tjs` (not just tjs-fast-plan) so this never races the leg
+    # job's own artifact upload; gated on `changes` for the same reason every
+    # artifact-downloading job here is (task-7, docs-only push skips in
+    # lockstep). `!= 'false'` not `== 'true'` — see `tjs`'s own comment (fix
+    # round 1, Finding 1: a dead `changes` job must not silently skip this
+    # too).
+    if: needs.changes.outputs.code != 'false' && !cancelled()
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.tjs-fast-plan.outputs.legs) }}
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version-file: .tool-versions
+      # Same computation build-leg's own "Name the builder artifact" step
+      # does (scripts/canonical-name.cjs is the one source for both) — the
+      # artifact name must match EXACTLY what that step uploaded, floor
+      # included (only darwin-arm64 carries one in the fast tier).
+      - name: Name the builder artifact (matches build-leg's own naming)
+        id: name
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE:-}" = tag ]; then V="${GITHUB_REF_NAME#v}"; else V="$(cat VERSION)"; fi
+          ASSET="$(node scripts/canonical-name.cjs asset '${{ matrix.leg }}' "$V" '${{ matrix.floor || '' }}')"
+          echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
+      # ci tier never sets `publish` (legsFor('ci') strips it — see
+      # scripts/tjs-legs.mjs), so build-leg's own upload is always the
+      # smoke- prefixed name, never the bare release name.
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          name: smoke-${{ steps.name.outputs.asset }}
+          path: .
+      - name: Restore the executable bit (artifact upload/download can drop it)
+        run: chmod +x "${{ steps.name.outputs.asset }}" || true
+      - uses: ./.github/actions/full-smoke
+        with:
+          asset: ${{ steps.name.outputs.asset }}
   # Windows shim + sync-primitive coverage (windows-tjs-port spec). Windows is
   # the ONE platform whose shim + sync-primitive layer diverges from POSIX
   # (CRLF, cmd.exe/PATHEXT, drive paths, O_BINARY, the Win32 C sync primitives

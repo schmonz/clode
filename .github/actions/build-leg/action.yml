@@ -138,6 +138,25 @@ inputs:
     description: "'full' (provider fetch + ephemeral quaude PONG) or 'version' (--version only)"
     required: false
     default: full
+  ci-fast-defer-smoke:
+    description: >
+      'true': skip the full-smoke composite HERE even when smoke=='full' —
+      the builder artifact still uploads right after the fuse, unsmoked.
+      ci.yml's tjs-fast-plan/tjs-fast-smoke run the SAME check afterward, in
+      their own job, against the uploaded artifact. Forwarded verbatim from
+      tjs-legs.yml's own `defer-smoke` workflow_call input, which ONLY
+      ci.yml's `tjs` job (tier:ci, only:fast) sets — see that input's own
+      comment for why it is an explicit opt-in rather than derived from
+      tier/only. (Measured run 33959009299 vs. current-HEAD job
+      101287474377: this step's ~7min ephemeral-quaude fuse was why the four
+      oracle jobs and three Windows jobs — none of which consume this step's
+      output — waited on it anyway: `needs:` on a `uses:` call is atomic, so
+      `tjs` could not finish, and downstream could not start, until EVERY
+      fast leg's OWN full-smoke had also finished.) release.yml and
+      tjs-slow never set tjs-legs.yml's defer-smoke — smoke stays
+      synchronous and gating there, unchanged.
+    required: false
+    default: "false"
   attest:
     description: "'true': actions/attest-build-provenance over the builder (caller must grant id-token+attestations write)"
     required: false
@@ -1095,7 +1114,13 @@ runs:
     # still skipped when an EARLIER step (the engine build, the floor gates)
     # failed. It is now only the PRODUCT smoke that no longer confiscates it.
     # The two steps that ship — Attest build provenance and Upload the builder
-    # artifact — stay after the smoke, still gated on it.
+    # artifact — stay after the smoke, still gated on it. EXCEPT when
+    # ci-fast-defer-smoke skips the smoke here (see that input): then Upload
+    # still runs (unsmoked) and tjs-fast-smoke smokes the SAME artifact
+    # afterward, in its own job, so a failure there still reddens the run —
+    # see that input's own comment for why this is still an honest gate.
+    # Attest is unaffected either way: ci tier never sets `attest` (it never
+    # sets `publish`, and attest is `matrix.publish && 'true'`).
     - name: Upload the bare tjs binary (oracle jobs + debugging)
       uses: actions/upload-artifact@v7.0.1
       with:
@@ -1103,99 +1128,18 @@ runs:
         path: ${{ steps.bare.outputs.path }}
         if-no-files-found: error
 
-    # quaude translates rg to ugrep/bfs ON PURPOSE (rg is Rust and cannot exist
-    # everywhere quaude does) and clode does NOT provision them — so a runner
-    # without them is not running the supported configuration at all, and the
-    # smoke below exercises the applet-missing fallback instead of the product.
-    # (The five rg-to-ugrep fixture rows that have logged "# SKIP needs bfs (not
-    # installed)" on every CI run live in the suite job, not here; suite.yml
-    # installs them for the same reason.)
-    - name: Install the rg applets (ugrep + bfs) — the configuration quaude requires
-      id: applets
-      if: steps.mode.outputs.exec != 'guest' && steps.mode.outputs.exec != 'qemu' && inputs.smoke == 'full' && inputs.no-exec != 'true'
-      shell: bash
-      run: |
-        set -euo pipefail
-        case "$RUNNER_OS" in
-          Linux)
-            # Both are in the archive for every runner image we use (noble,
-            # questing, resolute) and for both arches. The musl leg's smoke runs
-            # on the ubuntu HOST (the static binary execs there), not in the
-            # alpine container, so apt is the right package manager for it too.
-            sudo apt-get -o Acquire::Retries=3 update -qq
-            sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends ugrep bfs
-            ;;
-          macOS)
-            HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install ugrep bfs
-            ;;
-          Windows)
-            # bfs has never been ported to native Windows (it is built on POSIX
-            # fts/openat). ugrep alone would still leave `rg --files --no-ignore`
-            # untranslatable, so this leg answers the INVENTORY question only and
-            # says so out loud via --allow-untranslated below. Everything the gate
-            # observes is still observed — refused calls carry their argv.
-            echo "allow=--allow-untranslated" >> "$GITHUB_OUTPUT"
-            echo "no ugrep/bfs install on Windows: bfs has no native port"
-            exit 0
-            ;;
-        esac
-        # Assert on the WIRE, not on the package manager's exit code: apt and brew
-        # both report success for things that leave nothing runnable on PATH.
-        for a in ugrep bfs; do
-          command -v "$a" >/dev/null 2>&1 \
-            || { echo "ERROR: $a is not on PATH after install — the rg gate would be blind" >&2; exit 1; }
-        done
-        ugrep --version | head -1
-        bfs --version | head -1
-        echo "allow=" >> "$GITHUB_OUTPUT"
-
+    # The full-smoke composite (.github/actions/full-smoke) is the ONE source
+    # for "install rg applets + install the provider + fuse an ephemeral
+    # quaude + MCP probe + rg-inventory". ci-fast-defer-smoke skips it HERE
+    # (see that input's own comment) so ci.yml's tjs-fast-smoke can run it
+    # again afterward, in its own job, against the artifact this leg already
+    # uploaded — same check, same ability to fail the run, just not gating
+    # `tjs`'s own completion.
     - name: Full smoke — the builder builds the product (ephemeral, NEVER uploaded)
-      if: steps.mode.outputs.exec != 'guest' && steps.mode.outputs.exec != 'qemu' && inputs.smoke == 'full' && inputs.no-exec != 'true'
-      shell: bash
-      run: |
-        set -uo pipefail
-        V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
-        echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
-        npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
-        PROV="$(node scripts/stage-provider.mjs)" || exit 1
-        echo "provider: $PROV"
-        set -e
-        # .exe ON WINDOWS, and it has to be here rather than in clode. The probes
-        # below run on the RUNNER'S NODE, and node does not set libuv's
-        # UV_PROCESS_WINDOWS_FILE_PATH_EXACT_NAME, so an extensionless path is
-        # simply not spawnable: libuv tries <name>.com and <name>.exe and gives up.
-        # txiki DOES set it (src/mod_process.c), which is why clode's own smoke
-        # spawned this exact file seconds earlier and reported "PONG round-trip ok"
-        # while the very next step got "(nothing arrived)" and blamed SSE.
-        # NOT fixable in resolveBuildOut: a native windows `--out` is returned
-        # verbatim ON PURPOSE — the builder leg publishes an extensionless
-        # clode-<ver>-windows-amd64 and attest looks for that exact name
-        # (test/clode-fuse-args.test.cjs records the release it broke).
-        SMOKE="$RUNNER_TEMP/quaude-smoke"; [ "$RUNNER_OS" = "Windows" ] && SMOKE="$SMOKE.exe"
-        CLODE_CLAUDE_BIN="$PROV" CLODE_CACHE="$RUNNER_TEMP/clode-cache" \
-          ./"${{ steps.name.outputs.asset }}" build --out "$SMOKE"
-        # MCP transports, on the one binary CI actually builds. The PONG smoke
-        # above proves the quaude boots and answers; it says nothing about whether
-        # an MCP server can be reached, and all three transports we have driven
-        # were broken at some point WITHOUT the boot smoke noticing:
-        #   stdio  no ChildProcess 'spawn'   http  fetch(URL) died pre-socket
-        #   sse    every POST went to /[object Object]
-        # Hermetic: a local mock server, no network and no credentials. Asserts on
-        # what ARRIVED, because the SSE failure was invisible from the client side.
-        node scripts/mcp-transport-probe.mjs "$SMOKE" --transport=sse
-        # rg usage, on the same binary. We translate rg to portable applets ON
-        # PURPOSE (rg is Rust and cannot exist everywhere quaude does; ugrep and
-        # bfs can), and that bargain holds only while we can translate what
-        # upstream actually invokes — which upstream can change in any release,
-        # with no change on our side. A call we cannot translate fails here; a
-        # call that merely CHANGED fails against the recorded inventory, because
-        # that one still "works" while quietly meaning something else.
-        # A host with no ugrep/bfs cannot translate, which is a statement about
-        # the HOST, not about upstream — the gate now says which, and refuses to
-        # call an unobserved run an upstream change. --allow-untranslated is set
-        # only where an applet genuinely cannot exist (see the applets step).
-        node scripts/rg-inventory.mjs "$SMOKE" ${{ steps.applets.outputs.allow }}
-        rm -f "$SMOKE"   # quaude is derived work: ephemeral, never leaves the runner
+      if: steps.mode.outputs.exec != 'guest' && steps.mode.outputs.exec != 'qemu' && inputs.smoke == 'full' && inputs.no-exec != 'true' && inputs.ci-fast-defer-smoke != 'true'
+      uses: ./.github/actions/full-smoke
+      with:
+        asset: ${{ steps.name.outputs.asset }}
 
     - name: Attest build provenance
       if: inputs.attest == 'true' && inputs.no-exec != 'true'
