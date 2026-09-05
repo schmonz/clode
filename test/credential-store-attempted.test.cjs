@@ -19,7 +19,26 @@
 //   find-generic-password -a <user> -w -s "Claude Code"
 // -- so the store is consulted during argument/auth resolution, not during the network
 // turn itself. That is what makes this check CHEAP: no mock server, no timeout budget
-// for a live model, ~4s wall clock, entirely offline.
+// for a live model, entirely offline.
+//
+// THE ENGINE UNDER TEST MUST BE quaude (tjs + libexec/node-shim), NOT naude (real node).
+// FIX ROUND 1 (2026-09-04), from review: this file originally drove `runNaudeModel` --
+// real Node executing cli.cjs directly, NODE_PATH pointed at deps/claude/node_modules,
+// which never loads `libexec/node-shim/loader.cjs` at all. The shipped P0 lived entirely
+// in the shim's OWN `child_process.cjs` (the keychain-emulation block, `_kcMode`/
+// `_kcFakeChild`, deleted in `b901ec1`, plus an upstream availability-flag gate) --
+// code reachable ONLY through the quaude engine. `scripts/build-naude.mjs` has zero
+// `node-shim` references. A naude probe therefore could not have caught the original
+// defect, and cannot catch a FUTURE shim-side regression that suppresses `security`
+// spawns under tjs specifically -- a live risk, since that shim has its own history of
+// `child_process` defects (exit-code mapping, uncaught-error routing, sync-write
+// starvation -- see BACKLOG.md). The naude and quaude probes happened to agree (2
+// find-generic-password calls each) ONLY because the emulation code is already deleted
+// upstream of both paths today -- that coincidence is exactly the gap: nothing tied the
+// guard's verdict to the engine that actually shipped broken. Do not "simplify" this
+// back to `runNaudeModel` because it is easier to stage (no tjs binary needed) -- that
+// silently restores the gap this fix closes. If quaude staging is unavailable on a host,
+// the correct response is `{skip: '<reason>'}`, never a naude fallback.
 //
 // THE CONTROL PROBLEM, and why this file also shadows `git`. "The log is empty" is
 // EQUALLY consistent with "the artifact never asked" and "my logging shim never fired".
@@ -51,7 +70,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { defineGuard, guardTests } = require('./guard.cjs');
-const { runNaudeModel, stageProviderCli, providerSkipReason } = require('./oracle-models.cjs');
+const { runQuaudeModel, stageProviderCli, providerSkipReason } = require('./oracle-models.cjs');
+const { tjsPath } = require('./node-shim-helper.cjs');
 
 // PURE. inputs = { security: string[], git: string[] } -- each entry is the raw argv
 // string logged for one shadowed invocation (see read() below for how these are
@@ -131,13 +151,19 @@ function parseLog(text) {
 
 // The real I/O: stage a provider's cli.cjs (read-only against the resolved provider;
 // writes only into a scratch/tmp stage root -- test/oracle-models.cjs's own hermeticity
-// contract, shared with every other oracle test), run it under real node with `security`
+// contract, shared with every other oracle test), run it under the QUAUDE engine (tjs +
+// libexec/node-shim -- see the file header for why this is not optional) with `security`
 // and `git` both shadowed, in a scratch git repo, against an UNROUTABLE base URL so the
 // probe never touches a real network or a real credential and fails fast on its own.
 function probeCredentialStoreAttempt() {
   if (process.platform !== 'darwin') {
     return { skip: 'security(1) is darwin-only; this guard has no other platform\'s '
       + 'credential-store call modeled yet (see file header)' };
+  }
+  const tjs = tjsPath();
+  if (!tjs) {
+    return { skip: 'no tjs binary (CLODE_TJS or build/tjs/tjs) -- the quaude engine this '
+      + 'guard must exercise (see file header) is not buildable/resolvable here' };
   }
   const staged = stageProviderCli();
   const skip = providerSkipReason(staged, 'no resolvable Claude Code provider '
@@ -171,7 +197,7 @@ function probeCredentialStoreAttempt() {
       ANTHROPIC_BASE_URL: 'http://127.0.0.1:1',
     });
 
-    const r = runNaudeModel(staged.cli, ['-p', 'say PONG'], { cwd: repoDir, timeout: 30000, env });
+    const r = runQuaudeModel(staged.cli, ['-p', 'say PONG'], { cwd: repoDir, timeout: 60000, env, tjs });
     if (r.status === null) {
       return { skip: `the probe artifact timed out (signal ${r.signal}); cannot tell attempted from not` };
     }
