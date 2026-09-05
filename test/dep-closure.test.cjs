@@ -336,15 +336,99 @@ test('scanBareSpecifiers: collapses subpath specifiers to the package name (scop
   } finally { fs.rmSync(path.dirname(file), { recursive: true, force: true }); }
 });
 
-test('scanBareSpecifiers: never scans declarative ESM `from \'...\'` (proven noise on the real bundle — see seed-drift-report.md)', () => {
-  // If this regex were included, embedded doc/skill text ("import {x} from 'y'"
-  // shown to the model) would produce false positives — including specifiers
-  // that are not even valid package names, like `from 'now'` inside a comment
-  // on the real bundle. Confirm the scanner does not have this failure mode.
+test('scanBareSpecifiers: the FLAT (non-graph) fallback path never scans declarative ESM `from \'...\'` (proven noise on the OLD bundle — see seed-drift-report.md)', () => {
+  // This is `fakeSrcFile`'s shape — a bare file, no graph.json beside it, so
+  // scannableTexts() falls back to a single raw-latin1 chunk with
+  // `declarative: false` (see its comment). That fallback is what a
+  // pre-2.1.243 flat carve, or any OTHER file, gets — and staying
+  // declarative-blind there is still correct: embedded doc/skill text
+  // ("import {x} from 'y'" shown to the model) would produce false
+  // positives — including specifiers that are not even valid package names,
+  // like `from 'now'` inside a comment on the real OLD bundle. The
+  // graph-shaped path (task-11 fix round 1) DOES scan declarative imports —
+  // see the tests below — because graph.json's `sources` are one module's
+  // real code each, not a flat blob mixing code and doc text.
   const file = fakeSrcFile("import { build } from 'esbuild';\nimport { z } from 'zod';\n");
   try {
     assert.deepStrictEqual([...scanBareSpecifiers(file)], []);
   } finally { fs.rmSync(path.dirname(file), { recursive: true, force: true }); }
+});
+
+// ---- FIX ROUND 1 (coordinator review, task-11, 2026-09-05) -------------------
+// The escaping was fixed; the SYNTAX was not. graph.json's `sources` are ESM
+// chunks since 2.1.243, so a NEW upstream dependency arriving as a declarative
+// `import X from "newpkg"` (not require()/dynamic import()) passed the fixed
+// scanner silently. These pin the fix: DECLARATIVE_PATTERNS applied to CODE
+// chunks (sources + prelude), NOT to `assets` (embedded doc/reference text,
+// where the same shape reintroduces exactly the prose-noise failure mode the
+// original exclusion existed to avoid — see DECLARATIVE_PATTERNS's comment in
+// libexec/clode-fuse.cjs); `externals` unioned in; `prelude`/`assets` now feed
+// the ordinary require()/import() scan too (previously silently skipped).
+
+function fakeGraphCarve({ sources, prelude, assets, externals }) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dep-drift-graph-round1-'));
+  fs.writeFileSync(path.join(dir, 'cli.cjs'), '//clode:graph-runner:1\n');
+  fs.writeFileSync(path.join(dir, 'graph.json'), JSON.stringify({
+    sources: sources || {},
+    ...(prelude !== undefined ? { prelude } : {}),
+    ...(assets !== undefined ? { assets } : {}),
+    ...(externals !== undefined ? { externals } : {}),
+  }));
+  return path.join(dir, 'cli.cjs');
+}
+
+test('scanBareSpecifiers: a declarative `import X from "newpkg"` in graph.json sources IS found (the syntax gap, task-11 fix round 1)', () => {
+  const cli = fakeGraphCarve({ sources: { '/a.js': 'import X from "newpkg";X();' } });
+  try {
+    assert.deepStrictEqual([...scanBareSpecifiers(cli)], ['newpkg']);
+  } finally { fs.rmSync(path.dirname(cli), { recursive: true, force: true }); }
+});
+
+test('scanBareSpecifiers: a declarative named/export-from import in graph.json sources IS found', () => {
+  const cli = fakeGraphCarve({ sources: {
+    '/a.js': 'import { connect } from "newpkg-named";',
+    '/b.js': 'export { thing } from "newpkg-reexport";',
+  } });
+  try {
+    assert.deepStrictEqual([...scanBareSpecifiers(cli)].sort(), ['newpkg-named', 'newpkg-reexport']);
+  } finally { fs.rmSync(path.dirname(cli), { recursive: true, force: true }); }
+});
+
+test('scanBareSpecifiers: graph.json\'s `externals` list is unioned in, builtins filtered', () => {
+  const cli = fakeGraphCarve({
+    sources: { '/a.js': 'x();' },
+    externals: ['fs', 'node:path', 'ws', '@scope/pkg/sub'],
+  });
+  try {
+    assert.deepStrictEqual([...scanBareSpecifiers(cli)].sort(), ['@scope/pkg', 'ws']);
+  } finally { fs.rmSync(path.dirname(cli), { recursive: true, force: true }); }
+});
+
+test('scanBareSpecifiers: graph.json\'s `prelude` is scanned (require/import AND declarative)', () => {
+  const cli = fakeGraphCarve({
+    sources: {},
+    prelude: 'require("prelude-req");import X from "prelude-decl";',
+  });
+  try {
+    assert.deepStrictEqual([...scanBareSpecifiers(cli)].sort(), ['prelude-decl', 'prelude-req']);
+  } finally { fs.rmSync(path.dirname(cli), { recursive: true, force: true }); }
+});
+
+test('scanBareSpecifiers: graph.json\'s `assets` are scanned for require()/import() but NOT declarative imports', () => {
+  const cli = fakeGraphCarve({
+    sources: {},
+    assets: {
+      '/doc.md': 'require("asset-req");import X from "asset-decl";',
+    },
+  });
+  try {
+    // asset-req found (require() is scanned everywhere); asset-decl is NOT —
+    // assets are doc/reference TEXT, and scanning declarative imports there
+    // reproduces the exact prose-noise failure mode this gate's original
+    // exclusion existed to avoid (measured: @anthropic-ai/sdk, zod,
+    // __ds_raw__, ... — see DECLARATIVE_PATTERNS's comment).
+    assert.deepStrictEqual([...scanBareSpecifiers(cli)], ['asset-req']);
+  } finally { fs.rmSync(path.dirname(cli), { recursive: true, force: true }); }
 });
 
 // ---- ESCAPE-BLIND CLASS (BACKLOG item 8, task-11) ----------------------------

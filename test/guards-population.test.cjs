@@ -7,7 +7,7 @@ const path = require('node:path');
 const TEST_DIR = __dirname;
 const { classifyTestFile, discoverTestFiles, isRecordedExclusion, GUARD_EXCLUSIONS, MIGRATED,
   UNMIGRATED_BASELINE, ratchetUnmigrated, unsafeCliRunnerQuoteScans, CLI_QUOTE_SCAN_EXCLUSIONS,
-  isRecordedCliQuoteScanExclusion } = require('./guards-population.cjs');
+  isRecordedCliQuoteScanExclusion, discoverCliQuoteScanFiles } = require('./guards-population.cjs');
 
 test('the classifier recognises a scanner-shaped test', () => {
   const src = `const src = fs.readFileSync(path.join(REPO, 'libexec', 'x.js'), 'utf8');
@@ -182,18 +182,25 @@ test('isRecordedCliQuoteScanExclusion throws on an exclusion with an empty `beca
 // one-time task-11 sweep into a mechanism — a NEW file that greps a staged cli.cjs for a
 // quote-bearing literal with neither known-good fix goes RED here, at authoring time,
 // instead of silently reporting a bundle's walls as down (or up) for years.
-test('no test file greps the staged cli.cjs runner for an escape-blind quoted literal', (t) => {
-  const files = discoverTestFiles(TEST_DIR);
+// FIX ROUND 1 (coordinator review, task-11, 2026-09-05): walks discoverCliQuoteScanFiles()
+// — test/*.test.cjs AND every libexec/**/*.cjs,*.mjs + scripts/**/*.cjs,*.mjs — not
+// discoverTestFiles(TEST_DIR) alone. This task's OWN defect lived in
+// libexec/clode-fuse.cjs, a file the narrower test-only walk could never have reached;
+// fed the PRE-FIX file to this exact classifier and confirmed it fires (see the
+// "a synthetic offender" tests above, plus task-11-report.md's fix-round-1 section for
+// the real pre-fix file's finding).
+test('no test, libexec, or scripts file greps the staged cli.cjs runner for an escape-blind quoted literal', (t) => {
+  const files = discoverCliQuoteScanFiles();
   const offenders = [];
   for (const f of files) {
     const src = fs.readFileSync(f, 'utf8');
     const hits = unsafeCliRunnerQuoteScans(src);
     if (!hits.length) continue;
     if (isRecordedCliQuoteScanExclusion(f)) continue;
-    offenders.push(`${path.basename(f)}: ${JSON.stringify(hits)}`);
+    offenders.push(`${path.relative(path.join(TEST_DIR, '..'), f)}: ${JSON.stringify(hits)}`);
   }
   assert.deepStrictEqual(offenders, [],
-    'a test greps the staged cli.cjs GRAPH RUNNER for a quote-bearing literal — since '
+    'a file greps the staged cli.cjs GRAPH RUNNER for a quote-bearing literal — since '
     + '2.1.243 module sources ride escaped inside a JS string, so this can silently report '
     + "a bundle's walls as intact (or down) for the wrong reason. Fix by reading "
     + "graph.json's `sources` map directly (real strings, no escape level — see "

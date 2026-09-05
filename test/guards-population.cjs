@@ -325,6 +325,18 @@ function stripLineComments(src) {
 }
 
 const READS_CLI_RUNNER = /\bcli\.cjs\b|\bstageProviderCli\b|\bCLODE_PROVIDER_BIN\b/;
+// KNOWN HOLE (Finding 3, coordinator review, task-11 fix round 1, documented not
+// chased): this exemption is WHOLE-FILE, not per-assertion. A file that reads
+// graph.json's real `sources` for ONE check and ALSO blindly greps `cli.cjs`'s escaped
+// runner text for an UNRELATED check is silenced entirely — the second, still-broken
+// check goes undetected because the file merely MENTIONS `graph.json` somewhere. This
+// is not hypothetical: test/node-shim-staged-graph.test.cjs has exactly this shape
+// today (it reads `graph.json` for the residual-cyclic-require check, then separately
+// greps the raw `cli.cjs` text for the chunk-require tripwire) — safe ONLY because that
+// second pattern happens to already be escape-blind BY DESIGN (its `\\*"` spelling), not
+// because this detector verified it. A per-assertion (rather than per-file) analysis
+// would need something closer to an AST walk scoped to each `test(...)` block, which is
+// out of scope for a regex-based sweep; recorded here rather than silently accepted.
 const ALREADY_FIXED = /\bgraph\.json\b|\bdoc\.sources\b/;
 // Approximates a JS regex literal: `/`, then a run with no bare `/` or newline
 // (an escaped char `\\.` is allowed to contain one), then `/` and flags.
@@ -403,6 +415,46 @@ function isRecordedCliQuoteScanExclusion(file) {
   return true;
 }
 
+// FIX ROUND 1 (coordinator review, task-11, 2026-09-05): a detector that can only see
+// `test/*.test.cjs` cannot see where THIS TASK'S OWN defect actually lived —
+// libexec/clode-fuse.cjs's scanBareSpecifiers(), the real dep-closure gate `clode build`
+// and `clode build --naude` run. Fed the reviewer's own words: "I verified this myself...
+// the detector WOULD have flagged this task's own defect" against the PRE-FIX file. A
+// detector with a blind spot shaped exactly like the bug it exists to catch is not
+// finished, so the population walk now also covers every `.cjs`/`.mjs` under `libexec/`
+// and `scripts/` — not just `.test.cjs` files under `test/` — using the SAME
+// unsafeCliRunnerQuoteScans() classifier, unchanged. Confirmed both directories are
+// clean TODAY (task-11-report.md fix-round-1 section has the measured count), so
+// widening this costs nothing.
+//
+// Deliberately a SEPARATE walk from discoverTestFiles() (which the MIGRATED/
+// UNMIGRATED_BASELINE sweep above depends on staying scoped to `test/*.test.cjs` — see
+// its own comment): this one matches any `.cjs` or `.mjs` file, not only `*.test.cjs`.
+function discoverFilesByExt(dir, exts) {
+  const out = [];
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (e.name.startsWith('.')) continue;
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) { if (e.name !== 'node_modules') out.push(...discoverFilesByExt(p, exts)); }
+    else if (exts.some((ext) => e.name.endsWith(ext))) out.push(p);
+  }
+  return out;
+}
+
+// The full population this detector's standing gate walks: every test file (as before)
+// PLUS every libexec/scripts source file, so a NEW escape-blind gate is caught whether it
+// is authored as a test or as the production code a test merely exercises.
+function discoverCliQuoteScanFiles() {
+  const testDir = path.join(REPO, 'test');
+  const libexecDir = path.join(REPO, 'libexec');
+  const scriptsDir = path.join(REPO, 'scripts');
+  const out = [];
+  if (fs.existsSync(testDir)) out.push(...discoverFilesByExt(testDir, ['.test.cjs']));
+  if (fs.existsSync(libexecDir)) out.push(...discoverFilesByExt(libexecDir, ['.cjs', '.mjs']));
+  if (fs.existsSync(scriptsDir)) out.push(...discoverFilesByExt(scriptsDir, ['.cjs', '.mjs']));
+  return out;
+}
+
 module.exports = {
   classifyTestFile,
   discoverTestFiles,
@@ -416,6 +468,8 @@ module.exports = {
   unsafeCliRunnerQuoteScans,
   CLI_QUOTE_SCAN_EXCLUSIONS,
   isRecordedCliQuoteScanExclusion,
+  discoverFilesByExt,
+  discoverCliQuoteScanFiles,
   READ_CALLS,
   REPO_ROOTED,
   STANDALONE_ARTIFACT_SIGNALS,

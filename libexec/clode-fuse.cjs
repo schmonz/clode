@@ -228,25 +228,41 @@ function assertClosureMatchesLockfile(closureVersions, lockfilePath) {
 // justifies every KNOWN_UNREACHABLE entry.
 //
 // Deliberately regex, not an AST parse (cli.cjs is ~19MB; a full parse of every
-// build is not worth the cost for a presence scan). Two forms only:
+// build is not worth the cost for a presence scan). Two forms, applied to
+// EVERY text chunk scannableTexts() decides is real source, sources+prelude
+// AND assets alike:
 //   require("x") / __require("x")  — Bun's/esbuild's CJS require, the ONLY form
 //     that actually resolves a module at runtime in this bundle.
 //   import("x")                    — dynamic import, also a real runtime call.
-// Static `import x from "y"` is DELIBERATELY not scanned: Claude Code ships
-// embedded skill/reference documentation (design-system self-check scripts, SDK
-// usage examples) as STRING literals inside cli.cjs, many of which are
-// themselves ESM source text quoting real package names for the reader/model —
-// scanning declarative `from '...'` on the real bundle turned up a dozen "bare
-// names" that were 100% prose/doc noise (down to literal English words like
-// 'now' and 'wide' caught by "...from 'now'"/"...from 'wide'" in comments), and
-// zero real findings beyond what require()/import() already found. Since
-// cli.cjs demonstrably loads and runs (a real build's PONG smoke proves it),
-// any literal ESM `import ... from` text in the file CANNOT be live code (it
-// would be a SyntaxError in the CJS module Node/tjs actually execute) — it is
-// always inert string content.
 const SPECIFIER_PATTERNS = [
   /(?:require|__require)\(["']([a-zA-Z0-9_/:@.-]+)["']\)/g,
   /\bimport\(["']([a-zA-Z0-9_/:@.-]+)["']\)/g,
+];
+
+// Static `import x from "y"` / `export {x} from "y"` — TASK-11 FIX ROUND 1
+// (coordinator review, 2026-09-05): this was DELIBERATELY excluded, because
+// scanning it against the OLD flat cli.cjs (pre-2.1.243, one 19MB CJS blob
+// mixing real code and embedded skill/reference doc TEXT in the same string)
+// turned up a dozen "bare names" that were 100% prose/doc noise (down to
+// literal English words like 'now'/'wide' caught by "...from 'now'"). That
+// reasoning does not carry over unchanged to graph.json's `sources`: each
+// entry there is one MODULE's real code, not a blob interleaving code and doc
+// strings — so the SAME noise risk does not automatically reapply. It was
+// re-measured, not assumed: applied to sources+prelude alone (2.1.251), this
+// pattern surfaces exactly ONE new name, `@modelcontextprotocol/sdk` — itself
+// confirmed dead scaffolding-template TEXT (see KNOWN_UNREACHABLE below), the
+// same shape as every existing entry. Applied to `assets` too (the embedded
+// SKILL/reference .md doc files graph.json ALSO carries), the old prose-noise
+// failure mode returns exactly as before — six-plus further "findings"
+// (`@anthropic-ai/sdk`, `@anthropic-ai/aws-sdk`, `@anthropic-ai/bedrock-sdk`,
+// `@anthropic-ai/foundry-sdk`, `@anthropic-ai/vertex-sdk`, `zod`, and a
+// synthetic `__ds_raw__` virtual-module placeholder invented by esbuild's own
+// design-system shim generator, not a package at all) that are 100% doc prose,
+// not live code. So this pattern is scoped to CODE chunks only (sources +
+// prelude); `assets` stay covered by SPECIFIER_PATTERNS alone, same as before.
+const DECLARATIVE_PATTERNS = [
+  /\bimport\s+[^'"()]*?\bfrom\s+["']([a-zA-Z0-9_/:@.-]+)["']/g,
+  /\bexport\s+[^'"()]*?\bfrom\s+["']([a-zA-Z0-9_/:@.-]+)["']/g,
 ];
 
 const NODE_BUILTINS = new Set(require('node:module').builtinModules);
@@ -299,6 +315,29 @@ function specifierPackageName(spec) {
 // char == 1 byte, same convention as extract-claude-js.cjs) for bun-shim.cjs
 // (clode's own source, never escaped) and for a pre-2.1.243 flat carve with no
 // graph.json at all.
+//
+// FIX ROUND 1 (coordinator review, 2026-09-05) — the escaping was fixed, the
+// SYNTAX was not: graph.json's `sources` are ESM chunks since 2.1.243, and
+// SPECIFIER_PATTERNS only ever matched require()/__require()/dynamic
+// import() — never the declarative `import X from "y"` shape a NEW upstream
+// dependency is just as likely to arrive as. Measured: 4 declarative
+// `import…from"ws"` sites across the real 2.1.251 sources, invisible to the
+// fixed scanner before this round. Also: `scannableTexts` returned ONLY
+// `sources`, silently skipping graph.json's own `prelude` (1,512 bytes of
+// real bootstrap code) and `assets` (173 embedded SKILL/reference files) —
+// no live gap measured, but "read the graph" should mean the whole graph, so
+// both now feed the scan too (assets via SPECIFIER_PATTERNS only — see
+// DECLARATIVE_PATTERNS's comment for why the declarative form is scoped away
+// from them). And graph.json hands over its own `externals` list — the
+// module specifiers Bun's bundler itself determined the graph references but
+// did not inline — for free, already unescaped; unioned in below rather than
+// re-derived by regex.
+//
+// Returns { chunks, externals }: `chunks` is `{ text, declarative }[]` (only
+// `declarative: true` chunks get DECLARATIVE_PATTERNS applied — see that
+// pattern list's comment for why); `externals` is the raw non-builtin
+// specifier list graph.json names (empty for a non-graph carve, where no such
+// list exists).
 function scannableTexts(file) {
   const graphPath = path.join(path.dirname(file), 'graph.json');
   if (path.basename(file) === 'cli.cjs' && fs.existsSync(graphPath)) {
@@ -311,29 +350,44 @@ function scannableTexts(file) {
     if (!doc || !doc.sources || typeof doc.sources !== 'object') {
       throw new Error(`dep-closure gate: '${graphPath}' has no \`sources\` map — not a code-split graph doc; this gate can no longer tell what '${file}' really references`);
     }
-    return Object.values(doc.sources).filter((src) => typeof src === 'string');
+    const chunks = [];
+    if (typeof doc.prelude === 'string') chunks.push({ text: doc.prelude, declarative: true });
+    for (const src of Object.values(doc.sources)) {
+      if (typeof src === 'string') chunks.push({ text: src, declarative: true });
+    }
+    if (doc.assets && typeof doc.assets === 'object') {
+      for (const src of Object.values(doc.assets)) {
+        if (typeof src === 'string') chunks.push({ text: src, declarative: false });
+      }
+    }
+    const externals = Array.isArray(doc.externals) ? doc.externals.filter((s) => typeof s === 'string') : [];
+    return { chunks, externals };
   }
-  return [fs.readFileSync(file, 'latin1')];
+  return { chunks: [{ text: fs.readFileSync(file, 'latin1'), declarative: false }], externals: [] };
 }
 
 // Every bare (non-builtin, non-relative/absolute) package NAME `file`
-// references via require()/__require()/dynamic import(), across every text
-// chunk scannableTexts() decides is real source (see its comment for why that
-// is not always `file` itself).
+// references via require()/__require()/dynamic import() (every chunk) or a
+// declarative ESM import/export (code chunks only), plus graph.json's own
+// `externals` list — see scannableTexts()'s comment for what each of those
+// is and why.
 function scanBareSpecifiers(file) {
   const names = new Set();
-  for (const src of scannableTexts(file)) {
-    for (const re of SPECIFIER_PATTERNS) {
+  const collect = (spec) => {
+    if (!spec || spec.startsWith('.') || spec.startsWith('/')) return;
+    if (isBuiltinSpecifier(spec)) return;
+    names.add(specifierPackageName(spec));
+  };
+  const { chunks, externals } = scannableTexts(file);
+  for (const { text, declarative } of chunks) {
+    const patterns = declarative ? [...SPECIFIER_PATTERNS, ...DECLARATIVE_PATTERNS] : SPECIFIER_PATTERNS;
+    for (const re of patterns) {
       re.lastIndex = 0;
       let m;
-      while ((m = re.exec(src))) {
-        const spec = m[1];
-        if (!spec || spec.startsWith('.') || spec.startsWith('/')) continue;
-        if (isBuiltinSpecifier(spec)) continue;
-        names.add(specifierPackageName(spec));
-      }
+      while ((m = re.exec(text))) collect(m[1]);
     }
   }
+  for (const spec of externals) collect(spec);
   return names;
 }
 
@@ -437,6 +491,30 @@ const KNOWN_UNREACHABLE = {
   'react-dom': 'same virtual-esbuild-entry string as react above, same reasoning',
   typescript: 'embedded design-system self-check skill/doc TEXT, same region as esbuild above',
   'ts-morph': 'embedded design-system self-check skill/doc TEXT, same region as esbuild above',
+  // TASK-11 FIX ROUND 1 (2026-09-05): the FIRST real finding the newly-added
+  // DECLARATIVE_PATTERNS scan surfaced (measured against 2.1.251). Traced to
+  // module /$bunfs/root/chunk-g461tywa.js: a `claude channel create`-shaped
+  // scaffolding feature, whose `Ig(S)`/`Dg(S)` functions build a
+  // JSON.stringify'd package.json string (`dependencies:{"@modelcontextprotocol/
+  // sdk":"^1.0.0"}`) and a `server.ts` FILE-CONTENTS template literal (real
+  // `import { Server } from '@modelcontextprotocol/sdk/server/index.js'` etc.)
+  // meant to be WRITTEN TO DISK as a separate project the user later runs with
+  // `bun server.ts` — never a require()/import() cli.cjs's own process
+  // executes. Same shape as react/react-dom above (a string fed to some OTHER
+  // tool as file/entry contents), not the design-system-doc shape of the rest
+  // of this block.
+  '@modelcontextprotocol/sdk': "scaffolding-template TEXT for a generated stdio MCP `channel` server project (package.json + server.ts file CONTENTS a `claude channel create`-shaped feature writes to disk for the user to run separately with `bun`), not a require()/import() cli.cjs itself executes",
+  // TASK-11 FIX ROUND 1 (2026-09-05), found scanning a NEWER live-installed 2.1.261
+  // during the CLODE_STATE_ROOT cross-check (not the pinned 2.1.251 — this box's
+  // global `claude` had auto-updated mid-session). Traced to module
+  // /$bunfs/root/chunk-89h2dbe4.js: a `.d.ts`-generation feature
+  // (`claude-code-mcp.d.ts`) builds an error/help STRING that tells a developer to
+  // write `` `import type { Register } from "claude-code"` `` in THEIR OWN separate
+  // TypeScript project's generated type file. It is guidance TEXT quoting Claude
+  // Code's own package name back at the reader, never a require()/import() cli.cjs's
+  // own process executes (a package cannot resolve its own name as a dependency of
+  // itself). Same doc/guidance-text shape as every other entry in this block.
+  'claude-code': 'guidance TEXT (a `.d.ts`-generation help string) telling a developer to `import type {...} from "claude-code"` in their OWN generated TypeScript file — quoting the package\'s own name back at the reader, never a require()/import() cli.cjs itself executes',
 };
 
 // THE GATE: every bare package specifier `files` reference must be explained —
