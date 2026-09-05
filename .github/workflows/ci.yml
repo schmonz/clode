@@ -983,7 +983,36 @@ jobs:
           PROV="$(node scripts/stage-provider.mjs)" || exit 1
           echo "provider: $PROV"
           export CLODE_PROVIDER_BIN="$PROV"
-          node --test --test-concurrency=1 $FILES
+          # test/credential-store-attempted.test.cjs (C1, final whole-branch review of
+          # phase 5, 2026-09-05) is the phase's own P0 guard — "the artifact ATTEMPTS
+          # the platform credential store" — and it had run in ZERO CI jobs: it skips
+          # unless process.platform === 'darwin' (test/credential-store-attempted.test.cjs
+          # itself), and neither `test` (suite.yml, ubuntu+windows only) nor `ci.yml`
+          # gave it a darwin runner with both a real `git` on PATH and this job's two
+          # inputs (CLODE_TJS above, CLODE_PROVIDER_BIN just set). This job is the one
+          # place in CI those three preconditions already hold — macos-latest, a real
+          # git, a staged provider — so it needs nothing further, the same placement fix
+          # Task 8 made for shim-surface/guard-subcommands-gate.
+          FILES="$FILES test/credential-store-attempted.test.cjs"
+          node --test --test-concurrency=1 $FILES 2>&1 | tee darwin-oracle.out
+          # A SKIPPED run of the newly-added file must be distinguishable from a clean
+          # one — never a silent pass (same phase-5 doctrine as the linux oracle's own
+          # skip-count assertion below it in this file). `2` is this job's PRE-EXISTING,
+          # environment-appropriate skip count — MEASURED directly (coordinator,
+          # 2026-09-05) against this exact 66-file set, on a real darwin-arm64 box, with
+          # CLODE_TJS + CLODE_PROVIDER_BIN pointed at the ACTUAL pinned 2.1.251 provider
+          # (`node --test --test-concurrency=1` over all of test/node-shim-*.test.cjs
+          # minus node-shim-tty, plus credential-store-attempted.test.cjs): 308 tests,
+          # 306 pass, 2 skipped, 0 failed. The two skips are `node-shim-agentic.test.cjs`'s
+          # darwin-branch row (this job never sets CLODE_DARWIN_PROVIDER_BIN, a DIFFERENT
+          # variable from CLODE_PROVIDER_BIN, on purpose — that row wants this repo's own
+          # fetched provider, not the staged one) and `node-shim-roundtrip.test.cjs`'s
+          # CLODE_LIVE_ROUNDTRIP opt-in finale. credential-store-attempted itself ran
+          # fully (6/6 passed, 0 skipped) against the pinned provider and must not add a
+          # third skip here — a skip there means the P0 guard went right back to running
+          # nowhere.
+          grep -qE '^(ℹ|#) skipped 2$' darwin-oracle.out \
+            || { echo "ERROR: expected exactly 2 skips (the darwin-branch row needing CLODE_DARWIN_PROVIDER_BIN, and the live-roundtrip opt-in finale). A different count means credential-store-attempted skipped (the P0 guard is back to running nowhere), or an unrelated new skip appeared — see above." >&2; grep -E 'skipped' darwin-oracle.out >&2; exit 1; }
 
       # ITEM 5 (BACKLOG / phase 5 task 10): "No CI leg builds against more than one
       # platform's graph. That is why a merger corruption that broke linux shipped green
