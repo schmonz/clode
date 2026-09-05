@@ -650,6 +650,7 @@ jobs:
           path: ${{ runner.temp }}/clode-nodes
           key: pinned-node-${{ hashFiles('deps/clode/node-pin.json') }}-${{ runner.os }}-${{ runner.arch }}
       - name: the native builder BUILDS THE PRODUCT (node-free, real provider)
+        id: build
         env:
           CLODE_TJS: ${{ runner.temp }}/tjs/tjs
           # acceptance 4 (naude) fetches the pinned Node into this persistent,
@@ -697,6 +698,7 @@ jobs:
       # CI built a naude before, which is how a bug that killed every naude on its
       # first boot ("sea.getRawAsset is not a function") stayed green.
       - name: full-binary oracle — real naude vs real quaude
+        id: oracle
         env:
           # /tjs/tjs, not /tjs: download-artifact unpacks INTO ${{ runner.temp }}/tjs,
           # so that dir is the artifact, and the engine is the file inside it. Pointing
@@ -736,17 +738,31 @@ jobs:
       # ANY job, so "required" in GitHub's own sense is a repo-settings action (or a
       # mutating `gh api`/ruleset call) outside this file's reach; a human with admin on
       # the repo has to flip that switch separately. What THIS file can do is make a red
-      # here unmistakable the moment it happens, instead of blending into the matrix: an
-      # `::error::` annotation (shows as a banner on the run page) plus a step-summary
-      # entry, firing on ANY failure above in this job — checkout, artifact download,
-      # provider install, or either build/oracle step alike, because every one of those
-      # failing means this job could not prove the shipped artifact works.
-      - name: if this job is red, say what red MEANS (the shipped artifact is broken)
-        if: failure()
+      # here unmistakable the moment it happens.
+      #
+      # FIX ROUND 1 (review finding 1): a bare `if: failure()` cannot tell "the product is
+      # broken" from "an npm registry timeout / a transient nodejs.org outage stopped us
+      # from checking" — exactly the ambiguity this phase's doctrine forbids everywhere
+      # else. So the loud "SHIPPED ARTIFACT BROKEN" claim is now conditioned on the
+      # OUTCOME of the two steps that actually build/diff the product (`id: build` above,
+      # "the native builder BUILDS THE PRODUCT"; `id: oracle`, "full-binary oracle — real
+      # naude vs real quaude"). Any OTHER failure in this job (checkout, artifact
+      # download, npm ci, the provider install, the cache action, or the shim-boundary
+      # step after these two) gets the quieter, honest "could not verify" message instead
+      # — it does not assert the product is broken, only that this job could not prove it
+      # isn't.
+      - name: if THE PRODUCT build/oracle failed, say so plainly (the shipped artifact is broken)
+        if: steps.build.outcome == 'failure' || steps.oracle.outcome == 'failure'
         run: |
-          MSG='native-builder-oracle failed: this job builds THE PRODUCT node-free with a real provider (clode-native builds a quaude+naude and diffs the two packaged targets). A red here means the ARTIFACT USERS GET is broken -- the same class of break as the 2.1.251-era zstd carve regression this job exists to catch on day one -- not an ordinary test failure to triage whenever there is time.'
+          MSG='native-builder-oracle failed at the build or the full-binary oracle step: this job builds THE PRODUCT node-free with a real provider (clode-native builds a quaude+naude and diffs the two packaged targets). A red HERE means the ARTIFACT USERS GET is broken -- the same class of break as the 2.1.251-era zstd carve regression this job exists to catch on day one -- not an ordinary test failure to triage whenever there is time.'
           echo "::error title=SHIPPED ARTIFACT BROKEN::$MSG"
           { echo '### :rotating_light: SHIPPED ARTIFACT BROKEN'; echo "$MSG"; } >> "$GITHUB_STEP_SUMMARY"
+      - name: if something ELSE in this job failed, say THAT plainly (no claim about the artifact)
+        if: failure() && steps.build.outcome != 'failure' && steps.oracle.outcome != 'failure'
+        run: |
+          MSG='native-builder-oracle failed, but NOT at the build or the full-binary oracle step (checkout, an artifact download, a provider/dep install, the cache action, or the shim-boundary step) -- so this job could not verify the shipped artifact this run, which is a DIFFERENT condition from proving it broken. Could be a real regression in this job'"'"'s own plumbing, or infrastructure flake (a registry timeout, a transient fetch failure). Look at which step actually failed above before assuming either.'
+          echo "::warning title=native-builder-oracle: could not verify the shipped artifact::$MSG"
+          { echo '### :warning: native-builder-oracle: could not verify the shipped artifact'; echo "$MSG"; } >> "$GITHUB_STEP_SUMMARY"
 
   # Linux PTY / live-render coverage — the FIRST CI run of these files on any
   # POSIX platform. test/live-render-helper.cjs's CLODE_LIVE_RENDER gate used to
