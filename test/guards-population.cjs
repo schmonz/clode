@@ -33,6 +33,7 @@
 // is a guard nobody proved. When in doubt, flag it.
 const fs = require('node:fs');
 const path = require('node:path');
+const { stripLineComments, discoverFilesByExt } = require('./source-scan.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 
@@ -383,13 +384,8 @@ function ratchetUnmigrated(count, baseline, unmigrated) {
 // sweep's own tuning rule (verbatim, above): false positives are the SAFE
 // side — one recorded exclusion costs a look; a false negative is a fifth
 // silent incident.
-function stripLineComments(src) {
-  return src.split('\n').map((line) => {
-    const m = /(^|[^:])\/\//.exec(line);
-    if (!m) return line;
-    return line.slice(0, m.index + m[1].length);
-  }).join('\n');
-}
+// stripLineComments now lives in test/source-scan.cjs (it was duplicated verbatim in
+// three files); the comment there states WHICH DIRECTION each approximation fails in.
 
 const READS_CLI_RUNNER = /\bcli\.cjs\b|\bstageProviderCli\b|\bCLODE_PROVIDER_BIN\b/;
 // KNOWN HOLE (Finding 3, coordinator review, task-11 fix round 1, documented not
@@ -497,16 +493,9 @@ function isRecordedCliQuoteScanExclusion(file) {
 // Deliberately a SEPARATE walk from discoverTestFiles() (which the MIGRATED/
 // UNMIGRATED_BASELINE sweep above depends on staying scoped to `test/*.test.cjs` — see
 // its own comment): this one matches any `.cjs` or `.mjs` file, not only `*.test.cjs`.
-function discoverFilesByExt(dir, exts) {
-  const out = [];
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (e.name.startsWith('.')) continue;
-    const p = path.join(dir, e.name);
-    if (e.isDirectory()) { if (e.name !== 'node_modules') out.push(...discoverFilesByExt(p, exts)); }
-    else if (exts.some((ext) => e.name.endsWith(ext))) out.push(p);
-  }
-  return out;
-}
+// discoverFilesByExt now lives in test/source-scan.cjs and is re-exported below
+// unchanged: same dotfile skip (which is also what keeps this NFS checkout's AppleDouble
+// shadow files out), same node_modules skip.
 
 // The full population this detector's standing gate walks: every test file (as before)
 // PLUS every libexec/scripts source file, so a NEW escape-blind gate is caught whether it
@@ -671,8 +660,24 @@ function classifyProductionFile(src) {
 // LITERAL relative path: `require('../../libexec/scc-merge.cjs')`. That literal IS the
 // mapping, and reading it back is the same move isMigratedSource() already makes for guard
 // membership. defineGuard's contract is NOT extended with a `controls:` field — a declared
-// field can disagree with the code; a require() literal cannot, because the guard would not
-// run at all if it were wrong.
+// field rots silently when the code moves under it, while a require() literal cannot name a
+// module that is not there (the guard would fail to load).
+//
+// WHAT THE LITERAL DOES AND DOES NOT PROVE (fix round 2, reviewer 2026-09-12). The first cut
+// of this comment said a require() literal "cannot disagree with the code, because the guard
+// would not run at all if it were wrong". That is true of EXISTENCE and false of CONTROL: a
+// guard can require a module for a reason that has nothing to do with controlling it.
+// host-provision-gates.test.cjs requires libexec/clode-hosttools.cjs ONLY to borrow
+// `hosttools.findTool` as a fixture, and the first cut mapped clode-hosttools.cjs ->
+// "controlled" on the strength of that import alone. It moved no count only by luck —
+// clode-hosttools.cjs has no `throw new Error(` and so is not gate-shaped. Add one throw to
+// it and it would have become gate-shaped AND, in the same instant, "controlled": the
+// uncontrolled count would FALL to 29 and ratchetUncontrolledGates would have reported
+// "Progress: lower UNCONTROLLED_GATE_BASELINE" — the ratchet absorbing the exact regression
+// it exists to catch. So the derivation is now NAMED **AND** GATE-SHAPED (see
+// controlledProductionModules below), and guards-population.test.cjs pins the controlled set
+// to EXACTLY the modules phase 5b controlled, so a fifth incidental require goes RED and a
+// human decides which it is instead of the baseline quietly absorbing it.
 //
 // A build-gates file only counts if isMigratedSource() says it really registers a guard —
 // the ONE predicate, so a file that merely sits in the directory cannot silently vouch for a
@@ -705,8 +710,11 @@ function modulesNamedByGuard(guardRel, src) {
   return [...new Set(out)];
 }
 
-// path -> [guard files that name it].
-function controlledProductionModules() {
+// path -> [guard files that name it]. EVERY named production module, gate-shaped or not:
+// this is the raw reading of the require() literals, and it is what the "a guard names a
+// module that is not there" test walks — a rotted literal must stay visible under its own
+// name rather than dropping silently out of the narrower map below.
+function namedProductionModules() {
   const map = new Map();
   for (const guardRel of buildGateGuardFiles()) {
     const src = fs.readFileSync(path.join(REPO, guardRel), 'utf8');
@@ -714,6 +722,34 @@ function controlledProductionModules() {
       if (!map.has(mod)) map.set(mod, []);
       map.get(mod).push(guardRel);
     }
+  }
+  return map;
+}
+
+// path -> [guard files that name it], NARROWED to modules that are themselves gate-shaped
+// (see "WHAT THE LITERAL DOES AND DOES NOT PROVE" above): a fixture import is not a control.
+//
+// THE GRANULARITY, stated plainly because the successor phase inherits this number and the
+// two readings are not the same claim. The unit of control here is a FILE; the unit of a
+// gate is a THROW-SITE. "4 controlled" means FOUR FILES HAVE AT LEAST ONE CONTROLLED GATE —
+// it does NOT mean four gates, and it does not mean those files' other refusals are proven
+// able to fail. Measured 2026-09-12: libexec/clode-fuse.cjs has 17 `throw new Error(` sites
+// and libexec/scc-merge.cjs 7; of those 24, exactly THREE are tripped by a registered
+// guard's control (computeDepClosure's missing-package throw, assertClosureMatchesLockfile's
+// version-mismatch throw, assertNoUnknownBareSpecifiers' unknown-specifier throw — all in
+// clode-fuse.cjs). scc-merge.cjs's controlled gate is lexicalCodeMask, which refuses by
+// returning a mask its caller acts on, not by throwing, so NONE of its 7 throw-sites has a
+// control — including assertNoRenamedFixedNames, which that file's own comment calls "THE
+// RATCHET" and records as having caught a shipped merge that renamed 336 property keys (it
+// IS exercised with a real assert.throws by test/scc-merge.test.cjs, it is simply not a
+// defineGuard control). 21 of those 24 throw-sites remain uncontrolled.
+function controlledProductionModules() {
+  const map = new Map();
+  for (const [mod, guards] of namedProductionModules()) {
+    const abs = path.join(REPO, mod);
+    if (!fs.existsSync(abs)) continue; // rotted literal — namedProductionModules()'s test names it
+    if (!classifyProductionFile(fs.readFileSync(abs, 'utf8')).gateShaped) continue;
+    map.set(mod, guards);
   }
   return map;
 }
@@ -739,10 +775,12 @@ function isRecordedProductionGateExclusion(rel) {
 }
 
 // UNCONTROLLED_GATE_BASELINE — gate-shaped production files NOT named by any registered
-// test/build-gates/ guard, as last measured. 30 as of fix round 1 (phase 5b task 5,
+// test/build-gates/ guard, as last measured. 30 as of fix round 2 (phase 5b task 5,
 // 2026-09-12): 76 production files in scope, 34 gate-shaped, 4 controlled (scc-merge.cjs,
 // clode-fuse.cjs, host-provision.cjs, target-update-check.cjs — phase 5b tasks 1-4), 0
-// excluded.
+// excluded. "4 controlled" = FOUR FILES HAVE AT LEAST ONE CONTROLLED GATE, not four gates:
+// see the granularity paragraph on controlledProductionModules() above, which measures how
+// many of those files' individual throw-sites actually have a control (3 of 24).
 //
 // EVERY MOVE THIS NUMBER HAS MADE, and each was the CLASSIFIER changing, never the tree:
 //   26  first cut.
@@ -769,10 +807,20 @@ const UNCONTROLLED_GATE_BASELINE = 30;
 // GATE_VERDICT and collapsed the visible population 30 -> 8 would have PASSED, reporting
 // progress. The two FLOOR tests do not catch this either: they only catch TOTAL blindness
 // (`gates.length > 0`). So the sweep now also records how many gates it can SEE, and a count
-// below this floor is a finding regardless of what the uncontrolled number did. Set with a
-// deliberate cushion under today's 34 — ordinary churn (deleting a gate file, folding two
-// scripts into one) must not trip it, a classifier break collapses far past it.
-const GATE_SHAPED_FLOOR = 28;
+// below this floor is a finding regardless of what the uncontrolled number did.
+//
+// FIX ROUND 2 (reviewer, 2026-09-12): the first cut set this to 28 against a measured 34 —
+// "a deliberate cushion" so ordinary churn would not trip it. That is the phase's own
+// Global Constraint ("the floor equals the measured count, not one under") argued away six
+// times over, and it half-closes the hole this constant exists to close: with a cushion of
+// 6 the CATASTROPHE (34 -> 8) is caught but the EROSION is not — dropping `.matchAll(` from
+// PRODUCTION_VERDICT_EXTRA, say, leaves the classifier partly blind at ~29 and the sweep
+// still reports "Progress". Regressions arrive eroded far more often than collapsed. It is
+// now the MEASURED count: 34 gate-shaped production files, 2026-09-12, via
+// sweepProductionGates().gates.length. A legitimate retirement (deleting a gate file,
+// folding two scripts into one) SHOULD fire this and wants a deliberate re-cut — which is
+// exactly what the remediation text below already tells the next reader to do.
+const GATE_SHAPED_FLOOR = 34;
 
 // Mirrors ratchetUnmigrated's asymmetry deliberately (a rise is a finding, a fall is a
 // message telling you to re-cut) — same reason, different remediation text, which is the
@@ -868,6 +916,7 @@ module.exports = {
   PRODUCTION_VERDICT_EXTRA,
   buildGateGuardFiles,
   modulesNamedByGuard,
+  namedProductionModules,
   controlledProductionModules,
   PRODUCTION_GATE_EXCLUSIONS,
   isRecordedProductionGateExclusion,

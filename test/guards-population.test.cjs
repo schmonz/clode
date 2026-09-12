@@ -305,7 +305,7 @@ test('no test, libexec, or scripts file greps the staged cli.cjs runner for an e
 // spec erratum (ruling 3) this section corrects.
 const {
   discoverProductionFiles, classifyProductionFile, buildGateGuardFiles, modulesNamedByGuard,
-  controlledProductionModules, PRODUCTION_GATE_EXCLUSIONS, isRecordedProductionGateExclusion,
+  namedProductionModules, controlledProductionModules, PRODUCTION_GATE_EXCLUSIONS, isRecordedProductionGateExclusion,
   UNCONTROLLED_GATE_BASELINE, GATE_SHAPED_FLOOR, ratchetUncontrolledGates, sweepProductionGates,
 } = require('./guards-population.cjs');
 
@@ -455,13 +455,54 @@ test('every gate-shaped production file is named by a registered build-gates gua
 
 test('every module a build-gates guard names actually exists', () => {
   // Cheap, but it is the one way the derived mapping could silently go empty: a guard
-  // renamed its module and the require() literal rotted, so controlledProductionModules()
-  // maps a path nothing reads and the real gate quietly rejoins the uncontrolled count.
+  // renamed its module and the require() literal rotted, so the mapping names a path
+  // nothing reads and the real gate quietly rejoins the uncontrolled count. Walks
+  // namedProductionModules() — the RAW reading of the require() literals — deliberately:
+  // controlledProductionModules() has to read each module to classify it, so it drops a
+  // rotted name rather than crashing, and a rotted name must stay visible SOMEWHERE.
   const missing = [];
-  for (const rel of controlledProductionModules().keys()) {
+  for (const rel of namedProductionModules().keys()) {
     if (!fs.existsSync(path.join(TEST_DIR, '..', rel))) missing.push(rel);
   }
   assert.deepStrictEqual(missing, [], 'a build-gates guard require()s a module that is not there');
+});
+
+// FIX ROUND 2 (reviewer): "controlled" was derived from a require() literal alone, which
+// proves the guard LOADS the module, not that it CONTROLS it.
+// host-provision-gates.test.cjs requires libexec/clode-hosttools.cjs only to borrow
+// hosttools.findTool as a fixture, and that made it "controlled". It moved no count only
+// because clode-hosttools.cjs is not gate-shaped — add one `throw new Error(` to it and it
+// would have become gate-shaped AND "controlled" in the same instant, dropping the
+// uncontrolled count to 29 and making ratchetUncontrolledGates report PROGRESS for a
+// regression. The derivation is now named AND gate-shaped; this test is the other half:
+// the controlled set is PINNED, so a fifth module joining it — incidentally or on purpose —
+// goes red here and a human says which it was.
+test('the controlled set is EXACTLY the four modules phase 5b put a control under', () => {
+  assert.deepStrictEqual([...controlledProductionModules().keys()].sort(), [
+    path.join('libexec', 'clode-fuse.cjs'),
+    path.join('libexec', 'host-provision.cjs'),
+    path.join('libexec', 'scc-merge.cjs'),
+    path.join('libexec', 'target-update-check.cjs'),
+  ].sort(),
+  'the set of production modules counted as CONTROLLED changed. If a successor phase wrote '
+  + 'a new guard, add its module here and lower UNCONTROLLED_GATE_BASELINE. If a guard '
+  + 'merely started require()ing a module as a FIXTURE, it is NOT controlled: the count '
+  + 'must not fall for it.');
+});
+
+test('a module a guard requires only as a FIXTURE is not counted as controlled', () => {
+  // Pinned by shape rather than by clode-hosttools.cjs's name, so it stays proven if that
+  // particular import ever goes away: a named module that is not gate-shaped must not
+  // appear in the controlled map, however it got named.
+  const named = [...namedProductionModules().keys()];
+  const notGateShaped = named.filter((rel) => !classifyProductionFile(
+    fs.readFileSync(path.join(TEST_DIR, '..', rel), 'utf8')).gateShaped);
+  assert.ok(notGateShaped.length > 0,
+    'no build-gates guard currently names a non-gate-shaped production module — this test '
+    + 'has nothing to prove and its premise moved; re-derive it rather than deleting it');
+  const controlled = new Set(controlledProductionModules().keys());
+  assert.deepStrictEqual(notGateShaped.filter((rel) => controlled.has(rel)), [],
+    'a module that is not itself gate-shaped is being counted as a controlled gate');
 });
 
 test('discoverProductionFiles skips libexec/node-shim (target runtime, not a build gate)', () => {
