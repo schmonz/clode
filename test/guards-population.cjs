@@ -522,6 +522,249 @@ function discoverCliQuoteScanFiles() {
   return out;
 }
 
+// ---- PRODUCTION BUILD-GATE POPULATION (phase 5b, task 5) --------------------
+// Everything above this line sweeps TESTS. This sweeps the other half of the problem: the
+// gates that live in PRODUCTION code and run inside `clode build` itself. Phase 5b put a
+// control under four of them (test/build-gates/: scc-merge's lexicalCodeMask, clode-fuse's
+// dep-closure family, host-provision's two throw-sites, target-update-check's channel
+// check) and each of the first two found a live defect the moment it was controlled. The
+// question this closes is the one that outlives the phase: how does the FIFTH un-controlled
+// build gate get noticed? Without this, the same way the first four were — by accident.
+//
+// A SEPARATE SWEEP, DELIBERATELY. The MIGRATED/UNMIGRATED_BASELINE sweep above runs off
+// discoverTestFiles(__dirname) and is scoped to `test/*.test.cjs` by design (see that
+// function's own comment, and discoverFilesByExt's). A production file is not a test and
+// cannot "register a guard" about itself — the control lives in a different file — so
+// widening that walk would have meant one classifier answering two incompatible questions.
+// This one has its own population, its own classifier, and its own baseline.
+//
+// SPEC ERRATUM, recorded (coordinator ruling 3, 2026-09-12): the phase-5b spec §3 says
+// "Registration puts them in the population sweep automatically; Task 11 already extended
+// it to walk libexec/ and scripts/." That conflates two sweeps. Task 11 extended
+// discoverCliQuoteScanFiles() — which feeds ONLY the escape-blind CLI-quote detector — and
+// said so in its own comment. Before this section existed, a brand-new un-controlled build
+// gate under libexec/ was reported by nothing at all. Measured, not assumed.
+
+// SCOPE SKIP — not an exclusion list, a statement about which tree this sweep is ABOUT.
+// libexec/node-shim/ is the TARGET's Node-API emulation: it is fused INTO quaude and runs
+// on the end user's machine, and never runs as a gate during `clode build`. Its modules
+// throw and pattern-match constantly because they IMPLEMENT Node's error semantics and path
+// handling — `throw new Error('ENOENT...')` is a runtime behaving like Node, not a build
+// refusing an artifact. Measured 2026-09-12: 8 of its files match the gate shape, all for
+// exactly that reason. Skipped at the WALK rather than recorded as 8 near-identical
+// exclusions, because the reason is one fact about the directory, not eight facts about
+// eight files.
+const PRODUCTION_SCOPE_SKIP = [path.join('libexec', 'node-shim')];
+
+function discoverProductionFiles() {
+  const out = [];
+  for (const dir of ['libexec', 'scripts']) {
+    const abs = path.join(REPO, dir);
+    if (!fs.existsSync(abs)) continue;
+    out.push(...discoverFilesByExt(abs, ['.cjs', '.mjs']));
+  }
+  return out
+    .map((f) => path.relative(REPO, f))
+    .filter((rel) => !PRODUCTION_SCOPE_SKIP.some((p) => rel === p || rel.startsWith(p + path.sep)))
+    .sort();
+}
+
+// REFUSES — the half that separates a build GATE from ordinary production code. A gate's
+// defining act is stopping the build: it throws, or it exits non-zero. A module that merely
+// inspects something and returns a value is not a gate and needs no control.
+const GATE_REFUSES = /throw new Error\s*\(|process\.exit\s*\(\s*[1-9]|process\.exitCode\s*=\s*[1-9]/;
+
+// THE INPUT HALF IS DELIBERATELY ABSENT, and this is the one design decision in this
+// section worth arguing about. readsArtifact() above (READ_CALLS && REPO_ROOTED) is the
+// test sweep's notion of "reads something it did not create", and the obvious move was to
+// reuse it here. Measured against the four gates phase 5b already controls, it does not
+// work, and the way it fails is instructive:
+//   - libexec/scc-merge.cjs   — READ_CALLS: NO. lexicalCodeMask's artifact is the merged
+//                               module source handed to it as a PARAMETER. Zero fs calls.
+//   - libexec/target-update-check.cjs — READ_CALLS: NO. Its artifact is an HTTP response
+//                               (Task 4's report makes the same point from the other side:
+//                               its guard touches no filesystem and would have failed the
+//                               TEST sweep's floor on its own).
+// Two of the four. A classifier that can only recognise a file-reading scanner has a blind
+// spot shaped exactly like half the population it exists to watch — the same failure the
+// escape-blind detector's fix round 1 fixed one layer down. A production gate's artifact can
+// be a file, a network response, a subprocess's output, or a blob its caller already read,
+// and the last of those is not distinguishable from any pure function by source text alone.
+// So the input half is dropped ON PURPOSE and the cost is paid in false positives, which the
+// spec's tuning rule (verbatim, above) calls the SAFE side: `gateShaped` = derives a verdict
+// from text AND refuses. Measured 2026-09-12: 30 of 74 production files, so it discriminates
+// (44 files are NOT gates) rather than flagging everything.
+//
+// WHAT IT THEREFORE CANNOT SEE, stated: a gate that refuses by RETURNING a verdict its
+// caller acts on (`return { ok: false }`, a non-empty findings array) rather than throwing.
+// Nothing in libexec/ or scripts/ has that shape today — every gate phase 5b found throws or
+// exits — but a future one could, and it would sit here unseen.
+//
+// THE VERDICT HALF IS PATTERN_MATCHES PLUS A PRODUCTION DELTA, and the delta was MEASURED,
+// not guessed. PATTERN_MATCHES's first entry requires a regex LITERAL immediately followed
+// by `.test(` — `/re/.test(src)` — which is how tests are written. Production code hoists
+// the regex to a named const and calls `FORBIDDEN.test(src)`, and PATTERN_MATCHES sees
+// nothing. This was found by the synthetic-offender demonstration (task-5-report.md): a
+// realistic un-controlled gate, written the way libexec/clode-fuse.cjs's dep-closure gate is
+// written, was NOT flagged, and the first run of the demonstration passed when it should
+// have failed. Widening `.test(`/`.match(`/`.matchAll(` to accept a receiver of any shape
+// costs exactly two more files across the whole production tree (measured 2026-09-12:
+// 30 -> 32 gate-shaped of 74), so the precision cost is real but tiny and the blind spot it
+// closes is the single most common way a production gate is spelled. Layered ON TOP of
+// PATTERN_MATCHES rather than re-spelled, so "derives a finding from bytes" stays ONE
+// vocabulary with one stated, reasoned production delta.
+const PRODUCTION_VERDICT_EXTRA = [/\.test\s*\(/, /\.match\s*\(/, /\.matchAll\s*\(/];
+const GATE_VERDICT = [...PATTERN_MATCHES, ...PRODUCTION_VERDICT_EXTRA];
+
+function classifyProductionFile(src) {
+  const derivesFinding = GATE_VERDICT.some((re) => re.test(src));
+  const refuses = GATE_REFUSES.test(src);
+  const gateShaped = derivesFinding && refuses;
+  const why = gateShaped
+    ? 'derives a verdict from text AND refuses (throws / exits non-zero)'
+    : !derivesFinding
+      ? 'derives no verdict from bytes (no pattern-match shape)'
+      : 'pattern-matches but never refuses — it returns a value, it does not stop the build';
+  return { gateShaped, why };
+}
+
+// THE CONTROL MAPPING — derived from source text, never declared (coordinator ruling 2).
+// Every guard under test/build-gates/ requires the production module it controls through a
+// LITERAL relative path: `require('../../libexec/scc-merge.cjs')`. That literal IS the
+// mapping, and reading it back is the same move isMigratedSource() already makes for guard
+// membership. defineGuard's contract is NOT extended with a `controls:` field — a declared
+// field can disagree with the code; a require() literal cannot, because the guard would not
+// run at all if it were wrong.
+//
+// A build-gates file only counts if isMigratedSource() says it really registers a guard —
+// the ONE predicate, so a file that merely sits in the directory cannot silently vouch for a
+// gate it never controls.
+const BUILD_GATES_DIR = path.join('test', 'build-gates');
+const RELATIVE_REQUIRE = /require\(\s*['"]((?:\.\.\/)+[^'"\n]+)['"]\s*\)/g;
+
+function buildGateGuardFiles() {
+  const abs = path.join(REPO, BUILD_GATES_DIR);
+  if (!fs.existsSync(abs)) return [];
+  return discoverFilesByExt(abs, ['.test.cjs'])
+    .filter((f) => isMigratedSource(fs.readFileSync(f, 'utf8')))
+    .map((f) => path.relative(REPO, f))
+    .sort();
+}
+
+// The production modules one guard file names. Relative specifiers are resolved against the
+// guard's own directory and kept only when they land inside the production tree, so a
+// `require('../guard.cjs')` or `require('../throws-as-findings.cjs')` is not mistaken for a
+// gate under control.
+function modulesNamedByGuard(guardRel, src) {
+  const dir = path.dirname(path.join(REPO, guardRel));
+  const out = [];
+  RELATIVE_REQUIRE.lastIndex = 0;
+  let m;
+  while ((m = RELATIVE_REQUIRE.exec(src))) {
+    const rel = path.relative(REPO, path.resolve(dir, m[1]));
+    if (rel.startsWith('libexec' + path.sep) || rel.startsWith('scripts' + path.sep)) out.push(rel);
+  }
+  return [...new Set(out)];
+}
+
+// path -> [guard files that name it].
+function controlledProductionModules() {
+  const map = new Map();
+  for (const guardRel of buildGateGuardFiles()) {
+    const src = fs.readFileSync(path.join(REPO, guardRel), 'utf8');
+    for (const mod of modulesNamedByGuard(guardRel, src)) {
+      if (!map.has(mod)) map.set(mod, []);
+      map.get(mod).push(guardRel);
+    }
+  }
+  return map;
+}
+
+// PRODUCTION_GATE_EXCLUSIONS — same discipline as GUARD_EXCLUSIONS above: an entry means
+// "this file is genuinely not a build gate even though the shape matched", never "this one
+// is hard to control". Keyed by REPO-RELATIVE path, not basename, because two production
+// files can share a basename across libexec/ and scripts/. Empty today, on purpose: the one
+// false-positive CLASS measured so far (libexec/node-shim/) is a fact about a directory and
+// is handled at the walk (PRODUCTION_SCOPE_SKIP), not here. It exists so that a genuine
+// false positive has somewhere honest to go — without it the only escape would be RAISING
+// the baseline, which the ratchet exists to forbid.
+const PRODUCTION_GATE_EXCLUSIONS = [];
+
+function isRecordedProductionGateExclusion(rel) {
+  const entry = PRODUCTION_GATE_EXCLUSIONS.find((e) => e.file === rel);
+  if (!entry) return false;
+  if (typeof entry.because !== 'string' || entry.because.trim().length === 0) {
+    throw new Error(`PRODUCTION_GATE_EXCLUSIONS entry for '${rel}' has an empty \`because\` — `
+      + 'an exclusion with no stated reason is itself a failure');
+  }
+  return true;
+}
+
+// UNCONTROLLED_GATE_BASELINE — gate-shaped production files NOT named by any registered
+// test/build-gates/ guard, as last measured. FIRST CUT, 28 (phase 5b task 5, 2026-09-12):
+// 74 production files in scope, 32 gate-shaped, 4 controlled (scc-merge.cjs, clode-fuse.cjs,
+// host-provision.cjs, target-update-check.cjs — phase 5b tasks 1-4), 0 excluded. (The first
+// measurement said 30/26; the synthetic-offender demonstration then showed the verdict half
+// was blind to a hoisted regex constant, and widening it — see PRODUCTION_VERDICT_EXTRA —
+// added libexec/clode-signals.cjs and scripts/changed-paths.mjs. Every rise or fall here is
+// the classifier changing, never the tree; re-verify against classifyProductionFile() before
+// reading a future change as good or bad news.)
+//
+// MEANT TO GO DOWN. Never raise it to make a run look clean — raising it papers over exactly
+// the regression this exists to catch. This number is NOT a to-do list of 28 gates that must
+// all get controls; it is the floor under "no NEW un-controlled build gate appears without
+// someone seeing it". Some of the 28 are certainly false positives under a classifier with
+// no input half (see classifyProductionFile above); each one that is confirmed by hand
+// becomes a PRODUCTION_GATE_EXCLUSIONS entry with a reason and the baseline drops.
+const UNCONTROLLED_GATE_BASELINE = 28;
+
+// Mirrors ratchetUnmigrated's asymmetry deliberately (a rise is a finding, a fall is a
+// message telling you to re-cut) — same reason, different remediation text, which is the
+// load-bearing half: "write a guard under test/build-gates/" is not "migrate to defineGuard".
+function ratchetUncontrolledGates(count, baseline, uncontrolled) {
+  const list = uncontrolled.length
+    ? ':\n' + uncontrolled.map((f) => `    ${f}`).join('\n')
+    : ' (none)';
+  if (count > baseline) {
+    return { ok: false, message: `${count} gate-shaped production file(s) are not named by `
+      + `any registered test/build-gates/ guard — ABOVE the recorded baseline of ${baseline}. `
+      + 'A NEW build gate arrived with no control: write a guard under test/build-gates/ that '
+      + 'require()s it by its literal relative path and registers through defineGuard, or add '
+      + 'a recorded PRODUCTION_GATE_EXCLUSIONS entry naming why it is not a gate. '
+      + `Uncontrolled${list}` };
+  }
+  if (count < baseline) {
+    return { ok: true, message: `${count} gate-shaped production file(s) remain uncontrolled `
+      + `— BELOW the recorded baseline of ${baseline}. Progress: lower `
+      + `UNCONTROLLED_GATE_BASELINE in test/guards-population.cjs to ${count}. `
+      + `Uncontrolled${list}` };
+  }
+  return { ok: true, message: `${count} gate-shaped production file(s) remain uncontrolled, `
+    + `matching the recorded baseline of ${baseline}. Uncontrolled${list}` };
+}
+
+// The whole sweep in one call, so the standing gate and any command-line inspection see the
+// SAME numbers. Buckets are counted as the walk runs (not re-derived afterwards) so a file
+// that falls through every branch shows up as a conservation failure instead of quietly
+// lowering the count — the C2 shape the test sweep above already paid for once.
+function sweepProductionGates() {
+  const controlled = controlledProductionModules();
+  const files = discoverProductionFiles();
+  const gates = [];
+  const uncontrolled = [];
+  let controlledCount = 0;
+  let excludedCount = 0;
+  for (const rel of files) {
+    const src = fs.readFileSync(path.join(REPO, rel), 'utf8');
+    if (!classifyProductionFile(src).gateShaped) continue;
+    gates.push(rel);
+    if (controlled.has(rel)) { controlledCount++; continue; }
+    if (isRecordedProductionGateExclusion(rel)) { excludedCount++; continue; }
+    uncontrolled.push(rel);
+  }
+  return { population: files.length, gates, controlled, controlledCount, excludedCount, uncontrolled };
+}
+
 module.exports = {
   classifyTestFile,
   discoverTestFiles,
@@ -543,4 +786,19 @@ module.exports = {
   REPO_ROOTED,
   STANDALONE_ARTIFACT_SIGNALS,
   PATTERN_MATCHES,
+  // ---- production build-gate population (phase 5b, task 5)
+  discoverProductionFiles,
+  classifyProductionFile,
+  GATE_REFUSES,
+  GATE_VERDICT,
+  PRODUCTION_VERDICT_EXTRA,
+  buildGateGuardFiles,
+  modulesNamedByGuard,
+  controlledProductionModules,
+  PRODUCTION_GATE_EXCLUSIONS,
+  isRecordedProductionGateExclusion,
+  PRODUCTION_SCOPE_SKIP,
+  UNCONTROLLED_GATE_BASELINE,
+  ratchetUncontrolledGates,
+  sweepProductionGates,
 };

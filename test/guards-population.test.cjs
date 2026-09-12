@@ -297,3 +297,156 @@ test('no test, libexec, or scripts file greps the staged cli.cjs runner for an e
     + 'self-check (the `Q` convention in test/zlib-zstd-stream-gap.test.cjs). '
     + `Offenders:\n${offenders.join('\n')}`);
 });
+
+// ---- PRODUCTION BUILD-GATE POPULATION (phase 5b, task 5) --------------------
+// The other half of the problem. Everything above sweeps TESTS; these sweep the gates that
+// live in production code and run inside `clode build`. See the long comment block above
+// PRODUCTION_SCOPE_SKIP in guards-population.cjs for why it is a separate sweep, and for the
+// spec erratum (ruling 3) this section corrects.
+const {
+  discoverProductionFiles, classifyProductionFile, buildGateGuardFiles, modulesNamedByGuard,
+  controlledProductionModules, PRODUCTION_GATE_EXCLUSIONS, isRecordedProductionGateExclusion,
+  UNCONTROLLED_GATE_BASELINE, ratchetUncontrolledGates, sweepProductionGates,
+} = require('./guards-population.cjs');
+
+test('the production classifier recognises a gate: derives a verdict from text AND refuses', () => {
+  const src = `const src = fs.readFileSync(artifact, 'utf8');
+    if (/\\brequire\\(/.test(src)) throw new Error('bundle still requires at runtime');`;
+  assert.strictEqual(classifyProductionFile(src).gateShaped, true);
+});
+
+test('the production classifier does NOT flag code that pattern-matches but never refuses', () => {
+  // The REFUSES half is what separates a gate from ordinary production code. This shape —
+  // inspect, return a value, let the caller decide — is most of libexec/ and is not a gate.
+  const src = `function findImports(src) {
+      const out = [];
+      let m;
+      while ((m = SPEC.exec(src))) out.push(m[1]);
+      return out;
+    }`;
+  const c = classifyProductionFile(src);
+  assert.strictEqual(c.gateShaped, false);
+  assert.match(c.why, /never refuses/);
+});
+
+test('the production classifier does NOT flag code that refuses but derives no verdict from bytes', () => {
+  const src = `function need(x) { if (!x) throw new Error('missing argument'); return x; }`;
+  const c = classifyProductionFile(src);
+  assert.strictEqual(c.gateShaped, false);
+  assert.match(c.why, /no pattern-match shape/);
+});
+
+test('modulesNamedByGuard reads the literal require() path and ignores non-production requires', () => {
+  // Ruling 2: the mapping is DERIVED from the require() literal, never declared. A guard
+  // also requires test-side helpers (guard.cjs, throws-as-findings.cjs); those must not be
+  // mistaken for a production gate under control.
+  const src = "const { defineGuard } = require('../guard.cjs');\n"
+    + "const { throwsAsFindings } = require('../throws-as-findings.cjs');\n"
+    + "const { thing } = require('../../libexec/some-gate.cjs');\n"
+    + "const s = require('../../scripts/some-script.mjs');\n";
+  assert.deepStrictEqual(
+    modulesNamedByGuard(path.join('test', 'build-gates', 'x.test.cjs'), src),
+    [path.join('libexec', 'some-gate.cjs'), path.join('scripts', 'some-script.mjs')]);
+});
+
+test('FLOOR: every registered build-gates guard names a production module the classifier calls a gate', () => {
+  // The same move the MIGRATED floor above makes, one layer over: the guards are derived
+  // from source text (isMigratedSource), so if classifyProductionFile ever stops recognising
+  // gate shape, a guard we KNOW controls a gate ends up naming none and this goes red — the
+  // classifier is broken, not the files. It strengthens with every gate phase 5b's successors
+  // control, instead of staling the way a hand-written fixture would.
+  const guards = buildGateGuardFiles();
+  assert.ok(guards.length > 0,
+    'no registered guard found under test/build-gates/ — the walk or isMigratedSource broke, '
+    + 'NOT "phase 5b controlled nothing"');
+  const blind = [];
+  for (const guardRel of guards) {
+    const src = fs.readFileSync(path.join(TEST_DIR, '..', guardRel), 'utf8');
+    const named = modulesNamedByGuard(guardRel, src);
+    const gates = named.filter((rel) => classifyProductionFile(
+      fs.readFileSync(path.join(TEST_DIR, '..', rel), 'utf8')).gateShaped);
+    if (!gates.length) blind.push(`${guardRel} names [${named.join(', ')}], none gate-shaped`);
+  }
+  assert.deepStrictEqual(blind, [],
+    'a registered build-gate guard controls a production module the classifier does not '
+    + 'recognise as a gate — the classifier has gone blind to a shape we know is real');
+});
+
+test('FLOOR: finding zero gate-shaped production files is BROKEN, never a pass', () => {
+  const s = sweepProductionGates();
+  assert.ok(s.population > 0, 'the production walk found no files at all — the walk is broken');
+  assert.ok(s.gates.length > 0,
+    'zero gate-shaped production files across libexec/ and scripts/ — the sweep is broken '
+    + '(a walk or classifier regression), NOT "there are no build gates"');
+});
+
+test('the production classifier discriminates: it does not call every production file a gate', () => {
+  // A sweep that flags everything is as useless as one that flags nothing. Structural rather
+  // than "file X is not a gate", so it stays true as the tree changes.
+  const s = sweepProductionGates();
+  assert.ok(s.gates.length < s.population,
+    `every one of ${s.population} production files classified as a gate — the classifier `
+    + 'discriminates nothing and its findings mean nothing');
+});
+
+test('ratchetUncontrolledGates: a count ABOVE baseline is a finding (a NEW un-controlled gate)', () => {
+  const r = ratchetUncontrolledGates(29, 28, ['libexec/new-gate.cjs']);
+  assert.strictEqual(r.ok, false);
+  assert.match(r.message, /ABOVE the recorded baseline/);
+  assert.match(r.message, /libexec\/new-gate\.cjs/);
+});
+
+test('ratchetUncontrolledGates: a count AT baseline is not a finding', () => {
+  assert.strictEqual(ratchetUncontrolledGates(28, 28, []).ok, true);
+});
+
+test('ratchetUncontrolledGates: a count BELOW baseline says to lower the baseline', () => {
+  const r = ratchetUncontrolledGates(20, 28, []);
+  assert.strictEqual(r.ok, true);
+  assert.match(r.message, /lower UNCONTROLLED_GATE_BASELINE/);
+});
+
+test('isRecordedProductionGateExclusion throws on an exclusion with an empty `because`', () => {
+  PRODUCTION_GATE_EXCLUSIONS.push({ file: 'libexec/__fixture__.cjs', because: '' });
+  try {
+    assert.throws(() => isRecordedProductionGateExclusion('libexec/__fixture__.cjs'),
+      /empty `because`/);
+  } finally {
+    PRODUCTION_GATE_EXCLUSIONS.pop();
+  }
+});
+
+// THE STANDING GATE. A NEW build gate authored under libexec/ or scripts/ with no guard
+// under test/build-gates/ naming it pushes the count past the baseline and goes RED here,
+// at authoring time — which is the whole point of phase 5b: the first four un-controlled
+// build gates were found by accident, and this is the mechanism that means the fifth is not.
+test('every gate-shaped production file is named by a registered build-gates guard (ratchet)', (t) => {
+  const s = sweepProductionGates();
+  assert.strictEqual(s.gates.length, s.controlledCount + s.excludedCount + s.uncontrolled.length,
+    `conservation failed: ${s.gates.length} gate-shaped file(s) but ${s.controlledCount} `
+    + `controlled + ${s.uncontrolled.length} uncontrolled + ${s.excludedCount} excluded do not `
+    + 'add up — a file vanished from every bucket instead of being counted in one of them');
+  const r = ratchetUncontrolledGates(s.uncontrolled.length, UNCONTROLLED_GATE_BASELINE, s.uncontrolled);
+  t.diagnostic(`${s.population} production file(s) in scope, ${s.gates.length} gate-shaped, `
+    + `${s.controlledCount} controlled by ${buildGateGuardFiles().length} registered guard(s)`);
+  t.diagnostic(r.message);
+  assert.ok(r.ok, r.message);
+});
+
+test('every module a build-gates guard names actually exists', () => {
+  // Cheap, but it is the one way the derived mapping could silently go empty: a guard
+  // renamed its module and the require() literal rotted, so controlledProductionModules()
+  // maps a path nothing reads and the real gate quietly rejoins the uncontrolled count.
+  const missing = [];
+  for (const rel of controlledProductionModules().keys()) {
+    if (!fs.existsSync(path.join(TEST_DIR, '..', rel))) missing.push(rel);
+  }
+  assert.deepStrictEqual(missing, [], 'a build-gates guard require()s a module that is not there');
+});
+
+test('discoverProductionFiles skips libexec/node-shim (target runtime, not a build gate)', () => {
+  const inShim = discoverProductionFiles().filter((rel) => rel.includes(`node-shim${path.sep}`));
+  assert.deepStrictEqual(inShim, [],
+    'libexec/node-shim/ is the TARGET\'s Node-API emulation and never runs as a gate during '
+    + '`clode build` — see PRODUCTION_SCOPE_SKIP');
+});

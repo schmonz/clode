@@ -6197,6 +6197,54 @@ specifically. Sized and scoped like its own phase, not a task inside this one; r
 so it is not lost the way the umbrella phase-list (`### Phase order`, above) would otherwise
 make it look like phase 5 already covers "gates that can fail" in full.
 
+### Phase 5b CLOSED — and what it measured but did not control (task 5, 2026-09-12)
+
+Four of the gates named above now have a registered guard under `test/build-gates/`
+(`lexical-code-mask`, the `dep-closure-*` family, `host-provision-*`, `target-update-*`), and
+two of them found a live defect the moment they were controlled. Task 5 closed the
+population so the FIFTH is not found by accident: `test/guards-population.cjs` now carries a
+**production-gate sweep** over `libexec/` + `scripts/` alongside the existing test sweep. It
+classifies a file as a build gate when it derives a verdict from text AND refuses (throws, or
+exits non-zero), derives "which guard controls which gate" from the literal
+`require('../../libexec/x.cjs')` in each registered `test/build-gates/` guard, and ratchets on
+`UNCONTROLLED_GATE_BASELINE`.
+
+**SPEC ERRATUM, for anyone reading the phase-5b spec.** Its §3 says "Registration puts them
+in the population sweep automatically; Task 11 already extended it to walk `libexec/` and
+`scripts/`." That conflates two sweeps. Task 11 extended `discoverCliQuoteScanFiles()`, which
+feeds ONLY the escape-blind CLI-quote detector; the MIGRATED/`UNMIGRATED_BASELINE` sweep runs
+off `discoverTestFiles()` and is scoped to `test/*.test.cjs` by design. Before task 5, a
+brand-new un-controlled build gate under `libexec/` was reported by nothing at all.
+
+**MEASURED, not controlled — the standing to-do.** 74 production files in scope, **32
+gate-shaped, 4 controlled, 28 uncontrolled** (2026-09-12). That number is a floor under "no
+NEW gate appears unseen", NOT a to-do list of 28 guards to write: the classifier has no input
+half (see below), so some of the 28 are false positives that become
+`PRODUCTION_GATE_EXCLUSIONS` entries, with a reason, as each is checked by hand. The
+biggest-consequence names in the list, for whoever picks this up: `libexec/clode-fuse.cjs`
+is already controlled, but `libexec/extract-claude-js.cjs`, `libexec/bun-shim.cjs`,
+`scripts/build-tjs.mjs`, `scripts/bundle-shape.mjs`, `scripts/templates-drift.mjs` and
+`scripts/upstream-drift-check.mjs` all refuse builds today with no positive control.
+
+**TWO BLIND SPOTS, stated rather than discovered later.**
+1. *No input half, on purpose.* Reusing `readsArtifact()` (READ_CALLS && REPO_ROOTED) was
+   tried and measured: it does not see `libexec/scc-merge.cjs` (its artifact is a caller-
+   supplied source string) or `libexec/target-update-check.cjs` (its artifact is an HTTP
+   response) — two of the four gates phase 5b already controls. A production gate's artifact
+   can be a file, a network response, a subprocess's output, or a blob its caller already
+   read, and the last is not distinguishable from any pure function by source text. So the
+   classifier keys on "derives a verdict AND refuses" and pays the cost in false positives.
+2. *A gate that RETURNS its verdict is invisible.* `GATE_REFUSES` matches `throw new Error(`
+   and a non-zero `process.exit`/`process.exitCode`. A gate that returns `{ ok: false }` or a
+   findings array for its caller to act on would sit unseen. Nothing in `libexec/` or
+   `scripts/` has that shape today — every gate found so far throws or exits — but a future
+   one could, and this is the shape to re-measure for when one does.
+
+**Scope skip, not an exclusion:** `libexec/node-shim/` is walked past. It is the TARGET's
+Node-API emulation — fused into quaude, run on the end user's machine, never a gate during
+`clode build` — and its 8 gate-shaped files are all `throw new Error('ENOENT...')`-style
+Node-semantics emulation, one fact about a directory rather than eight about eight files.
+
 
 ## "Required gate" does NOT mean branch protection here (user, 2026-09-05)
 
