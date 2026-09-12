@@ -5900,7 +5900,10 @@ planning scratch. Anyone picking this up on a fresh clone starts here.
 
 ### Phase order (changed from the original, deliberately)
 
-    1 → 2 → 2.5 → 5 → 3 → 4 → 6
+    1 → 2 → 2.5 → 5 → 5b → 3 → 4 → 6
+
+**PHASE 3 IS NEXT.** Everything to its left is DONE and shipped; the notes below record what
+each one delivered and, for 5 and 5b, why they were inserted ahead of 3 at all.
 
 **Phases 1 and 2 are DONE and shipped.** Out-of-tree builds with a tree-immutability gate;
 the step-reporting protocol (`libexec/build-report.cjs`, `build-compose.cjs`,
@@ -5912,7 +5915,9 @@ host-unavailable, or deferred-with-an-entry; both full-suite flakes root-caused 
 (8 consecutive cold-cache green runs); a new Linux PTY CI job runs 16 tests that had never
 run in CI.
 
-**Phase 5 (gates that can fail) is NEXT, moved ahead of 3.** The argument, from what phase
+**Phase 5 (gates that can fail) is DONE** (2026-09-05, `ae33a49..76ee5b0`), **and so is phase
+5b (the build's own gates), 2026-09-12, `3051c35..36fa968`** — see "Phase 5b CLOSED" below for
+what 5b measured but did not control. 5 was moved ahead of 3 for this argument, from what phase
 2 cost: nearly every defect found while finishing it was hidden by a guard that could not
 fail — an allow-list entry added before the writer it exempted existed; a test whose regex
 matched its own header comment; `naude-assembler-closure` blind to a dropped LEAF member (and
@@ -5922,7 +5927,7 @@ falling past `if (!staged)` on a truthy error object. Phases 3, 4 and 6 all add 
 phase 6 is a differential whose entire output is a comparison — a wrong instrument there is
 worse than no answer.
 
-Phase 5 also owns two things measured this session: `cancel-in-progress` destroyed SIX CI
+Phase 5 also owned two things measured in that session: `cancel-in-progress` destroyed SIX CI
 runs in one night (the jobs behind a long matrix are the most likely to be cancelled and the
 least likely to be re-run deliberately), and the `_doctor`-era discovery that a red which
 cannot distinguish "broken" from "not given what I need" carries no information.
