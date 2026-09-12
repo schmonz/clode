@@ -204,7 +204,17 @@ function isRecordedExclusion(file) {
 // require('./guard.cjs');` and its OWN direct `defineGuard({...})` call, matching
 // naude-assembler-closure.test.cjs / node-shim-wall-tripwires.test.cjs's shape — not a
 // shared factory function migrated files merely call into.
-const DESTRUCTURES_DEFINEGUARD = /\{[^}]*\bdefineGuard\b[^}]*\}\s*=\s*require\(['"]\.\/guard\.cjs['"]\)/;
+//
+// DEPTH-INDEPENDENT (phase 5b, task 1, 2026-09-12): every guard until now lived directly
+// in test/, so `require('./guard.cjs')` was the only shape ever seen. test/build-gates/
+// (phase 5b's home for guards on the real build-path gates — see BACKLOG.md) is one
+// directory deeper, so its guards correctly say `require('../guard.cjs')` — a real,
+// different string, not a typo. `(?:\.\.?\/)+` matches either segment repeated any number
+// of times, so `./guard.cjs` (existing guards) and `../guard.cjs` (test/build-gates/) both
+// match; a file in a yet-deeper subdirectory (`../../guard.cjs`) would too. Proven against
+// the ratchet: test/build-gates/lexical-code-mask.test.cjs went unrecognised (a real
+// defineGuard-registered guard misclassified as a NEW unmigrated file) before this widened.
+const DESTRUCTURES_DEFINEGUARD = /\{[^}]*\bdefineGuard\b[^}]*\}\s*=\s*require\(['"](?:\.\.?\/)+guard\.cjs['"]\)/;
 const CALLS_BARE_DEFINEGUARD = /(?<![.\w])defineGuard\s*\(/;
 
 // THE ONE PREDICATE for "this file's source registers a guard" — used by deriveMigrated()

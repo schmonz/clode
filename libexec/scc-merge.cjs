@@ -1423,6 +1423,12 @@ function mergeGroup(group, sources, moduleMeta, groupIndex) {
   return { mergedName: mergedName, mergedSource: mergedSource, shims: shims };
 }
 
+// ADDITIVE EXPORT (phase 5b, task 1), mirroring phase 5 task 11's export of
+// `scannableTexts`: `lexicalCodeMask` was already load-bearing inside this file (three call
+// sites: :623, :655, :714) but had no seam a test could reach without corrupting the real
+// merger. Exporting it changes NOTHING about what mergeGroup/codeMask/etc. compute — it
+// only makes the existing function testable from outside.
 if (typeof module === 'object' && module.exports) {
-  module.exports = { declaredNames, mergeGroup, mergeBodyOrder, assertNoRenamedFixedNames, MERGER_VERSION };
+  module.exports = { declaredNames, mergeGroup, mergeBodyOrder, assertNoRenamedFixedNames,
+    MERGER_VERSION, lexicalCodeMask };
 }
