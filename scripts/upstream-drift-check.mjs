@@ -55,6 +55,8 @@
 // checks that confirm a string is still present somewhere in 340MB.
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { carveGapNote } from './lib/carve-gap-note.mjs';
+import fs from 'node:fs';
 import path from 'node:path';
 import url from 'node:url';
 
@@ -255,6 +257,12 @@ if (!broken.length) {
   process.stdout.write(
     `upstream-drift: OK — all ${Object.keys(EXPECTED).length} anchors as expected, ` +
     (cliBlock ? `CLI carveable (${cliBlock.size} bytes)\n` : 'CLI reachable as an ESM module graph\n'));
+  // …and what that green does NOT cover. See scripts/lib/carve-gap-note.mjs.
+  let pin = null;
+  try {
+    pin = (/^claude-code (\S+)/m.exec(fs.readFileSync(path.join(REPO, 'UPSTREAM_PIN'), 'utf8')) || [])[1] || null;
+  } catch { pin = null; }
+  process.stdout.write(carveGapNote({ pin, checked: process.argv[3] || null }));
   process.exit(0);
 }
 

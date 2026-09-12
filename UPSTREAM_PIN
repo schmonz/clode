@@ -12,5 +12,24 @@
 # upstream moved, so it stays on `next`/unpinned on purpose. See its own
 # comment before "fixing" that for consistency with everything else here.
 #
+# MEASURED EVIDENCE for the pin, so the gap is a dated fact and not a memory
+# (every line here is something someone observed, not inferred):
+#
+#   2.1.251  the pin. Carves, merges, builds, ships. Exercised on every push.
+#   2.1.257  `clode build` DIES in the SCC merge — QuickJS rejects the merged file
+#            with "invalid property name". Every leg that stages a provider went red;
+#            only engine-only cross-build legs passed. This is why the pin exists.
+#   2.1.261  independently observed uncarvable by our extractor, after native Claude
+#            Code auto-updated past the pin mid-session (2026-09-04).
+#   2.1.270  anchors and CLI extraction verified OK against the real darwin-arm64
+#            bundle on 2026-09-12 (the Remote Control gate anchor was re-pinned that
+#            day for its new object-returning shape). The MERGE is UNTESTED here: it
+#            needs an engine, and nothing in CI currently attempts it against newer
+#            than the pin. Filed in BACKLOG.md as an engine-backed carve probe.
+#
+# So: the versions between .252 and .269 have never been tried, and "we cannot build
+# from newer" is measured at .257 and .261 — not at .270. Say that, rather than
+# rounding it to "everything after the pin is broken".
+#
 # Bump or drop the pin by editing the version below — one line, one file.
 claude-code 2.1.251

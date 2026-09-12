@@ -6516,3 +6516,52 @@ temp `libexec/`, run the sweep against THAT root, and assert the ratchet reports
 baseline. No write into the real `libexec/` ever happens, and the demonstration becomes
 permanent. Do it before writing the fifth control, not after: it is the mechanism that says
 whether the fifth one was counted.
+
+
+## The daily drift job cannot see the thing that is actually broken (2026-09-12)
+
+**What prompted this (user):** "If we bump the drift pin does that maybe make us forget we are
+completely unable to carve recent Claude Code?" The answer was yes, and worse than the question
+assumed — so the near half was fixed the same day and the far half is filed here.
+
+**Fixed 2026-09-12, so it is not what this entry is asking for:**
+- The Remote Control gate anchor was re-pinned for upstream's 2.1.270 shape, where every reason
+  is wrapped by a local `(e)=>({reason:e,orgPolicyDenied:!1})` helper. **The regex was the small
+  half; the injected VALUE was the load-bearing half.** The consumers are now
+  `(await gate())?.reason ?? null` and `if(C.orgPolicyDenied)…{message:C.reason}`, so the old
+  bare-string gate-off would have been truthy with an undefined `.reason` — the notice vanishes
+  and Remote Control reads as AVAILABLE. A regex-only re-pin would have turned the job green
+  while shipping exactly the silent no-op the anchor exists to prevent. Proven both ways against
+  the real 2.1.270 darwin-arm64 bundle and the pinned 2.1.251.
+- `upstream-drift.yml`'s `boots` job said "does a quaude built from the newest bundle still
+  BOOT?" — but `build-leg` installs `@anthropic-ai/claude-code@$(cat UPSTREAM_PIN)`, so since
+  2026-09-01 it has been booting the PIN. The comment was corrected rather than the behaviour,
+  for the reason in the next paragraph.
+- Every green drift run now prints what it does NOT prove (`scripts/lib/carve-gap-note.mjs`,
+  pinned by `test/carve-gap-note.test.cjs`), and `UPSTREAM_PIN` carries the measured evidence
+  per version instead of a one-line assertion.
+
+**STILL OPEN — the engine-backed carve probe.** Nothing in CI asks "can `clode build` carve
+newer than the pin yet?", and that is the question whose answer decides when the umbrella's
+"absorb 2.1.257 as the first test of the rejiggered build system" can begin. It cannot simply
+be the `boots` leg pointed at `next`: that leg would be red from birth, which
+`upstream-drift-check.mjs`'s own header already rejects as the reason `--strict` is not the
+check there.
+
+**The shape it wants, from the Haiku probe in the same workflow** ("Green means 'nothing we
+could do about Haiku today', NOT 'Haiku is fine'… Red means an action just became possible"):
+
+- attempt a real carve+merge of `next` using an engine — the `boots` leg already builds one and
+  publishes it, so a `needs: boots` job can consume the artifact rather than pay for a second
+  engine build;
+- assert the KNOWN-BLOCKED state: green when it still fails **at the recorded site for the
+  recorded reason** (the SCC merge, QuickJS "invalid property name");
+- red on EITHER change — it started working (absorb now) or it fails somewhere new (fresh
+  breakage). Distinguish "the build step ran and failed" from "the job never reached the build
+  step", or infra flake will read as "still blocked" and the day it starts working will pass
+  unnoticed — the same green-that-hides shape this whole entry is about.
+
+**Why it was filed rather than built:** the wiring cannot be proven locally (no engine on the dev
+box; `engine=unknown` in every suite stamp here), and shipping an unverifiable CI job that
+reports a comforting green is precisely the defect being fixed. It wants a runner to develop
+against, which makes it its own piece of work rather than a tail on this one.

@@ -71,7 +71,7 @@ jobs:
           if [ -z "$PROV" ]; then echo "ERROR: no Bun provider found under @anthropic-ai/claude-code" >&2; exit 1; fi
           echo "provider: $PROV"
           echo "$VER" > "$RUNNER_TEMP/upstream-version"
-          node scripts/upstream-drift-check.mjs "$PROV"
+          node scripts/upstream-drift-check.mjs "$PROV" "$VER"
 
       # WHEN IT BREAKS, SAY WHAT UPSTREAM SAID. Twice now upstream has broken
       # `clode build` with no change in this repo, and both times a public changelog
@@ -95,7 +95,28 @@ jobs:
           VER="$(cat "$RUNNER_TEMP/upstream-version" 2>/dev/null || true)"
           node scripts/upstream-release-notes.mjs --from "0.0.0-no-last-green-recorded" ${VER:+--to "$VER"}
 
-  # THE SECOND DAILY QUESTION: does a quaude built from the newest bundle still BOOT?
+  # THE SECOND DAILY QUESTION: does a quaude built from the PINNED bundle still BOOT?
+  #
+  # READ THIS BEFORE TRUSTING THIS JOB'S GREEN (corrected 2026-09-12). It used to say
+  # "the newest bundle", and that was true when it was written. It is not true now:
+  # build-leg installs `@anthropic-ai/claude-code@$(sed -n 's/^claude-code //p'
+  # UPSTREAM_PIN)`, so since the pin landed (2026-09-01, 2.1.251) this job has been
+  # booting the PIN, not `next`. Nothing announced that; the comment simply went stale
+  # and the green went on reading as a statement about newest upstream.
+  #
+  # Pointing it at `next` is NOT the fix, and that is a deliberate call: `clode build`
+  # cannot carve 2.1.257+ at all (the SCC merge; see UPSTREAM_PIN), so this leg would be
+  # red from birth — the exact "red from birth teaches everyone to ignore it" failure the
+  # --strict discussion in upstream-drift-check.mjs's header already rejected. The honest
+  # replacement is an engine-backed probe that asserts the KNOWN-BLOCKED state and goes
+  # red when it CHANGES (Haiku-probe doctrine, below), which is FILED in BACKLOG.md with
+  # its shape, not hand-waved here.
+  #
+  # What this job still genuinely buys, unchanged: the pinned bundle's shim surface is
+  # exercised daily on a real runner, which is how 2.1.238's os.constants.errno break
+  # would be caught.
+  #
+  # (Historical, and still the reason this job exists:)
   #
   # The anchors job above asks whether our hook sites still match. It cannot see the
   # other way upstream breaks us: the bundle starts READING a node API the shim does
@@ -126,7 +147,7 @@ jobs:
   # from the same PINS+patches cache the push legs use, so the marginal cost is the
   # fuse and the smoke — not an engine build.
   #
-  # Red HERE means the newest bundle no longer boots under the shim. Same attribution
+  # Red HERE means the PINNED bundle no longer boots under the shim. Same attribution
   # doctrine as the anchors job: it is upstream that moved, not the last commit.
   boots:
     uses: ./.github/workflows/tjs-legs.yml
