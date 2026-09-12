@@ -35,10 +35,21 @@ const LOCKFILE = path.join(REPO, 'deps', 'claude', 'package-lock.json');
 
 // read() — the only I/O in these guards beyond deps/claude/**: the real pinned carve,
 // never ~/.local/share/clode or anything a guard here could write to (nothing does —
-// every read() is read-only; every control() writes only to a fixed, overwritten,
-// never-deleted path under os.tmpdir(), same tradeoff test/dep-closure.test.cjs's own
-// fakeNm()/fakeLockfile() helpers make with mkdtempSync — a synthetic fixture, not a
-// real artifact, is the only thing living there).
+// every read() is read-only). Every GUARD 2/3/4 control() below instead writes to a
+// FIXED path under os.tmpdir(), overwritten fresh on every call and never deleted —
+// this is NOT the same pattern as test/dep-closure.test.cjs's own fakeNm()/
+// fakeLockfile() helpers, which mkdtempSync a fresh unique directory per call and
+// fs.rmSync it in the CALLING TEST's own `finally`. control() has no such lifecycle
+// hook (checkControl() calls it and immediately scans the result; nothing runs
+// afterward), so there is nothing to hang a `finally` off of without inventing new
+// machinery guard.cjs's contract does not provide. A fixed, overwritten path is the
+// deliberate alternative: the fixture is synthetic (never a real artifact, never read
+// by anything but this file), so nothing here needs deleting between runs, and unlike
+// a real mkdtempSync/no-cleanup pairing it does not grow unboundedly across repeated
+// `node --test` invocations. (specifiersFoundIn(), below, is the one place in this
+// file that DOES mkdtempSync+rmSync in a single self-contained call — it has no
+// cross-call lifetime to manage, so the fakeNm()/fakeLockfile() pattern applies there
+// directly.)
 function pinnedCarveDir() {
   const pin = pinnedVersion();
   return pin ? path.join(os.homedir(), '.cache', 'clode', pin) : null;
@@ -77,26 +88,75 @@ function pinnedCarveDir() {
 // names, byte-identical to before this round) with the anchoring in place.
 //
 // That anchoring itself has a residual: a side-effect import relying on ASI (no
-// trailing `;`) is not recognised. This guard detects exactly that STRUCTURAL SHAPE —
-// `import "pkg"` not immediately followed by `;` — directly over source text,
-// independent of scanBareSpecifiers's own output, the same way lexicalCodeMask's own
-// guard checks the MASK's structural signature rather than re-deriving "is the final
-// answer right".
-const UNTERMINATED_SIDE_EFFECT_IMPORT = /(?:^|[;{}])\s*\bimport\s+["']([a-zA-Z0-9_/:@.-]+)["'](?!\s*;)/gm;
+// trailing `;`) is not recognised.
+//
+// FIX ROUND 2 (reviewer, task-2 fix round 1): the first cut of this detector was a
+// hand-maintained regex (`UNTERMINATED_SIDE_EFFECT_IMPORT`) shaped to be the
+// complement of DECLARATIVE_PATTERNS's own anchored pattern — a SECOND source of
+// truth about what production considers "unterminated", never actually calling
+// `scanBareSpecifiers`/`scannableTexts` or anything else exported from production.
+// If DECLARATIVE_PATTERNS's anchoring were later tightened, loosened, or reverted,
+// that duplicate had no way to notice, because it never executed the code path it
+// claimed to guard — unlike test/build-gates/lexical-code-mask.test.cjs's own
+// residual detector, which runs the REAL `lexicalCodeMask` and inspects its actual
+// output. Rewritten to do the same here: `IMPORT_STRING_LITERAL_CANDIDATE` below is
+// NOT a rule about what counts as a real import (it doesn't need to be — see its own
+// comment) — every VERDICT comes from calling the real, production `scanBareSpecifiers`
+// twice per candidate (as written, and with a `;` inserted right after the string) and
+// diffing what it ACTUALLY finds. A finding requires the terminated variant to be found
+// and the as-written variant not to be — i.e., "production's own behaviour changes
+// depending on a semicolon that ASI makes optional in real JS", which is exactly the
+// residual, derived from production's real behaviour rather than a second copy of it.
+//
+// This also makes the diff naturally immune to the FIX ROUND 1 false positive (the
+// `Failed to import '@aws-sdk/credential-providers'.` prose): inserting a `;` right
+// after that quoted string does not turn "to import" into a statement boundary, so
+// the REAL anchored pattern still rejects BOTH variants — the diff is zero, no
+// finding, with no special-casing needed here for that shape.
+//
+// Loose CANDIDATE identifier only — deliberately not anchored the way production's
+// own pattern is, because its job is merely "propose a name and an insertion point to
+// test", never "decide whether this is a real import" (that decision is production's
+// alone, and is made twice below by calling it for real).
+const IMPORT_STRING_LITERAL_CANDIDATE = /\bimport\s+["']([a-zA-Z0-9_/:@.-]+)["']/g;
 
-// PURE. The shape defineGuard's `scan` requires: {findings, examined}.
+// Materializes `text` as ONE module source in a real, throwaway graph-carve (the
+// exact on-disk shape scannableTexts() requires: a file literally named `cli.cjs`
+// with a `graph.json` beside it) and returns what the REAL, production
+// `scanBareSpecifiers` finds there. The only oracle this guard trusts.
+function specifiersFoundIn(rel, text) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-dep-closure-guard-residual-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'cli.cjs'), '//clode:graph-runner:1\n');
+    fs.writeFileSync(path.join(dir, 'graph.json'), JSON.stringify({ sources: { [rel]: text } }));
+    return scanBareSpecifiers(path.join(dir, 'cli.cjs'));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}
+
+// PURE from the caller's point of view (same input always yields the same output),
+// though it does real (throwaway, self-cleaning) I/O internally to consult the real
+// scanBareSpecifiers — see specifiersFoundIn() above. The shape defineGuard's `scan`
+// requires: {findings, examined}.
 function scanUnterminatedSideEffectImports({ chunks }) {
   const findings = [];
   for (const { rel, text } of chunks) {
     if (typeof text !== 'string' || text.length === 0) continue;
-    UNTERMINATED_SIDE_EFFECT_IMPORT.lastIndex = 0;
+    IMPORT_STRING_LITERAL_CANDIDATE.lastIndex = 0;
     let m;
-    while ((m = UNTERMINATED_SIDE_EFFECT_IMPORT.exec(text))) {
-      findings.push(`${rel}: a side-effect-only import '${m[1]}' has no trailing ";" — `
-        + `DECLARATIVE_PATTERNS's anchored regex (libexec/clode-fuse.cjs) requires one to `
-        + `reject prose ("Failed to import 'x'.") elsewhere in real bundles, so an `
-        + `ASI-reliant side-effect import like this one is invisible to scanBareSpecifiers `
-        + `and would silently vanish from the ext-dep closure scan.`);
+    while ((m = IMPORT_STRING_LITERAL_CANDIDATE.exec(text))) {
+      const name = m[1];
+      const afterQuote = m.index + m[0].length;
+      if (/^\s*;/.test(text.slice(afterQuote))) continue; // already terminated — not this residual
+      const terminatedText = `${text.slice(0, afterQuote)};${text.slice(afterQuote)}`;
+      const asWritten = specifiersFoundIn(rel, text);
+      const terminated = specifiersFoundIn(rel, terminatedText);
+      if (!asWritten.has(name) && terminated.has(name)) {
+        findings.push(`${rel}: the REAL scanBareSpecifiers finds side-effect import `
+          + `'${name}' once a trailing ";" is inserted, but NOT as originally written — `
+          + `an ASI-reliant side-effect import silently vanishes from the ext-dep `
+          + `closure scan (verdict derived from calling the real function, not a `
+          + `duplicated pattern).`);
+      }
     }
   }
   return { findings, examined: chunks.length };
