@@ -6301,53 +6301,60 @@ run's matrix signal in practice. The answer then is not `paths-ignore` but a der
 (the classification would have to be available at run level, which today it is not), or
 accepting the manual re-run as the cost.
 
-## `lexicalCodeMask` phantom-comment defect: LIVE, unfixed this phase (phase 5b, task 1, 2026-09-12)
+## `lexicalCodeMask` phantom-comment defect: FIXED (phase 5b, task 1, fix round 1, 2026-09-12)
 
 `libexec/scc-merge.cjs`'s `lexicalCodeMask` — the merger's own lexer, deciding which bytes
-are a real, renameable binding vs. a string/template/regex/comment body — has the SAME
-defect shape phase 5 fixed in `windows-path-ratchet`'s tokenizer: its `/*` branch is checked
+are a real, renameable binding vs. a string/template/regex/comment body — had the SAME
+defect shape phase 5 fixed in `windows-path-ratchet`'s tokenizer: its `/*` branch was checked
 UNCONDITIONALLY, before the regex-literal branch, so a regex literal misjudged as division
 (`regexAllowed(prevTok)` false — e.g. immediately after `)`/`]`/most identifiers) whose body
-contains `/` immediately followed by `*` opens a phantom block comment that runs to the next
-real `*/` or EOF, masking real code as non-code.
+contains `/` immediately followed by `*` opened a phantom block comment that ran to the next
+real `*/` or EOF, masking real code as non-code. Three call sites, unchanged by the fix:
+`libexec/scc-merge.cjs:663`, `:695`, `:754` (originally `:623`/`:655`/`:714` before this
+fix's own comment block shifted every later line down by 40).
 
-**Confirmed LIVE** (`/opt/pkg/bin/node --test test/build-gates/lexical-code-mask.test.cjs`,
-2026-09-12): `lexicalCodeMask('fn() /[/*]/.test(x);\nvar realName = 1;\n')` masks the
-`realName` identifier as 0 (non-code), not 1. In the merger this is worse than a blind test:
-a colliding name inside the masked region is renamed with no error, which can emit a corrupt
-merged bundle. Three call sites: `libexec/scc-merge.cjs:623`, `:655`, `:714`.
+**Confirmed LIVE before the fix** (`/opt/pkg/bin/node --test test/build-gates/lexical-code-mask.test.cjs`,
+2026-09-12): `lexicalCodeMask('fn() /[/*]/.test(x);\nvar realName = 1;\n')` masked the
+`realName` identifier as 0 (non-code), not 1. In the merger this was worse than a blind test:
+a colliding name inside the masked region would be renamed with no error, which can emit a
+corrupt merged bundle.
 
-**The fix** (not applied): the same EOF-backoff `test/windows-path-ratchet.test.cjs`'s
-`stripComments()` applies at its own `/*` branch — when no closing `*/` is found before EOF,
-back off and treat the single `/` as ordinary punctuation instead of committing to a comment
-(every source this masks is syntactically valid JS, so a genuine unterminated block comment
-cannot occur — reaching EOF unclosed is proof the `/*` was inside a misjudged regex literal,
-not a real comment). Same documented residual as that fix: if a REAL, unrelated `*/` exists
-LATER in the same source, the phantom still pairs with THAT instead of reaching EOF, and the
-EOF-backoff alone cannot tell the difference (windows-path-ratchet closes that residual with
-a second guard, `windows-path-ratchet-regex-division-ambiguity`; the same shape would apply
-here if a fix lands).
+**FIXED**: the same EOF-backoff `test/windows-path-ratchet.test.cjs`'s `stripComments()`
+applies at its own `/*` branch — when no closing `*/` is found before EOF, back off and treat
+the single `/` as ordinary punctuation instead of committing to a comment (every source this
+masks is syntactically valid JS, so a genuine unterminated block comment cannot occur —
+reaching EOF unclosed is proof the `/*` was inside a misjudged regex literal, not a real
+comment). `MERGER_VERSION` bumped `12` -> `13` (a cache entry from before this fix must be
+recomputed, on principle — see the comment at that constant for why the corpus-invariance
+proof below does not make the bump optional). `test/scc-merge.test.cjs` re-run: 37/37 pass.
+`test/quaude-fuse-merge-apply.test.cjs` SKIPS on this box for want of a tjs binary (named
+here, not glossed) — that gap is covered by the tjs-engine CI legs this phase's acceptance 6
+requires, not by anything run locally for this fix.
 
-**Why not fixed now:** phase 5b's coordinating decision (recorded before task 1 started) is
-that the phase's entire sanctioned production diff is the one additive export of
-`lexicalCodeMask` (mirroring phase 5 task 11's `scannableTexts`) — no other change to
-`libexec/scc-merge.cjs` is authorized this phase, including this fix, however small. `MERGER_VERSION`
-would also need bumping (its own header: "BUMP THIS whenever an edit to this file could
-change the bytes `mergeGroup` emits"), and any change here must re-pass `test/scc-merge.test.cjs`
-and `test/quaude-fuse-merge-apply.test.cjs` before being trusted — this is the real merger.
+**RESIDUAL, not closed by this fix** (same shape as `windows-path-ratchet`'s own admitted
+one): if a REAL, unrelated `*/` exists LATER in the same source, the phantom still pairs
+with THAT instead of backing off at EOF, and the EOF-backoff alone cannot tell the
+difference. `windows-path-ratchet` closes the equivalent gap with a second guard
+(`windows-path-ratchet-regex-division-ambiguity`); `lexical-code-mask-phantom-comment`
+(below) plays that role here, and is not gated on finding a well-formed regex-literal close
+— it flags any `/` lexicalCodeMask reads as ordinary code that is followed by a raw `/*`
+before the next real closing `/`/newline/EOF, matching `windows-path-ratchet`'s own
+`onAmbiguousSlash` hook (which does the same, for the same false-negative reason).
 
-**Why shipping stays safe in the meantime:** measured across every one of the pinned
-claude-code 2.1.251 carve's 1,839 real module sources (`~/.cache/clode/2.1.251/graph.json`),
-**zero** trigger this shape today — neither the mask-grounded detector (a `/` lexicalCodeMask
-reads as ordinary code whose candidate regex body contains a raw `/*`) nor a cruder,
-independent text-only heuristic find a single site. The `lexical-code-mask-phantom-comment`
-guard (`test/build-gates/lexical-code-mask.test.cjs`) makes that a standing, re-checked-every-run
-measurement rather than a one-time observation, with a control proving it CAN detect the
-shape (the exact repro above) and `floor: 1839` (today's real module count) so a future upstream
-bump that shrinks the corpus is itself visible.
+**The corpus-invariance proof (the load-bearing check for this fix):** `lexicalCodeMask`
+was run over every one of the pinned claude-code 2.1.251 carve's 1,839 real module sources
+(`~/.cache/clode/2.1.251/graph.json`) TWICE — once against the pre-fix function (recovered
+via `git show`), once against the post-fix one — and the resulting `Uint8Array` masks were
+compared byte-for-byte. Result: **1,839/1,839 identical, 0 differing.** This is expected
+(the earlier "zero of 1,839 trigger this shape" measurement predicted it) and is the actual
+evidence, not an assumption, that the fix changes nothing observable about today's real
+bundle while closing the defect for any input that does hit the shape (in the corpus or
+not). The `lexical-code-mask-phantom-comment` guard
+(`test/build-gates/lexical-code-mask.test.cjs`) makes the "0 across 1,839" half of that a
+standing, re-checked-every-run measurement, with a control proving it CAN detect the shape
+and `floor: 1839` (today's real module count) so a future upstream bump that shrinks the
+corpus is itself visible.
 
-**Next step, when someone picks this up:** apply the EOF-backoff to
-`libexec/scc-merge.cjs`'s `/*` branch, bump `MERGER_VERSION`, re-run
-`test/scc-merge.test.cjs` and `test/quaude-fuse-merge-apply.test.cjs`, and promote the
-`todo`-marked repro test in `test/build-gates/lexical-code-mask.test.cjs` to a real,
-green assertion.
+**The repro** (`test/build-gates/lexical-code-mask.test.cjs`) is now a plain, green
+regression test — not a `todo` marker — and goes red again if the EOF-backoff is ever
+removed or narrowed.

@@ -26,26 +26,22 @@ const { pinnedVersion } = require('../provider-resolve.cjs');
 // by `*`, opens a phantom block comment that runs to the next real `*/` or EOF. In the
 // merger the consequence is worse than a blind test: a region masked as non-code changes
 // the RENAMING decisions and can emit a corrupt merged bundle.
-// VERDICT (recorded 2026-09-12, `/opt/pkg/bin/node --test test/build-gates/lexical-code-mask.test.cjs`
-// run BEFORE this test was wrapped in `todo`): FAILS. `mask[idx]` is 0, not 1 — the
-// defect is LIVE in the real merger, not merely theoretical. Traced: the SECOND `/` of
-// the char class `[/*]` opens the phantom comment, reached because the FIRST `/` —
-// preceded by `)` from `fn()` — fails `regexAllowed()` and is read as division, so the
-// regex-body scan that would otherwise have consumed `[/*]` whole is never attempted.
+// VERDICT (recorded 2026-09-12, `/opt/pkg/bin/node --test test/build-gates/lexical-code-mask.test.cjs`,
+// BEFORE the fix below): FAILED. `mask[idx]` was 0, not 1 — the defect was LIVE in the
+// real merger, not merely theoretical. Traced: the SECOND `/` of the char class `[/*]`
+// opened the phantom comment, reached because the FIRST `/` — preceded by `)` from
+// `fn()` — fails `regexAllowed()` and is read as division, so the regex-body scan that
+// would otherwise have consumed `[/*]` whole is never attempted.
 //
-// Marked `todo`, not fixed, and not left plain-red: phase 5b's coordinating decision
-// (recorded before this task started) is that the ENTIRE phase's sanctioned production
-// diff is the single additive export above — no other change to libexec/scc-merge.cjs,
-// including this one's fix, is authorized in this phase. See BACKLOG.md for the filed
-// entry naming the site and the fix (the same EOF-backoff test/windows-path-ratchet's
-// stripComments() applies at its own `/*` branch). The corpus measurement below (the
-// `lexical-code-mask-phantom-comment` guard) is what actually stands watch in the
-// meantime: zero of the 1,839 real pinned module sources trigger this shape today
-// (task-1-report.md), so shipping stays safe without the fix; this todo exists so the
-// live defect is not forgotten, not to declare it acceptable indefinitely.
-test('a regex body containing /* does not open a phantom comment',
-  { todo: 'lexicalCodeMask phantom-comment defect is LIVE but unfixed this phase — see '
-    + 'BACKLOG.md ("lexicalCodeMask phantom-comment defect") and the guard below' }, () => {
+// FIXED (phase 5b, task 1, fix round 1): `lexicalCodeMask`'s `/*` branch now backs off
+// to ordinary punctuation when no real closing `*/` exists before EOF, the same
+// EOF-backoff `test/windows-path-ratchet.test.cjs`'s `stripComments()` applies at its own
+// `/*` branch (including that fix's documented residual — a REAL, unrelated `*/` later
+// in the same source can still pair with this one instead of reaching EOF). This is now
+// a REGRESSION TEST, not a todo: it goes red again if the EOF-backoff is ever removed or
+// narrowed. See BACKLOG.md for the corpus-invariance proof (masks over all 1,839 pinned
+// module sources are byte-identical before/after) and the merger-test re-run.
+test('a regex body containing /* does not open a phantom comment', () => {
   const src = 'fn() /[/*]/.test(x);\nvar realName = 1;\n';
   const mask = lexicalCodeMask(src);
   const idx = src.indexOf('realName');
@@ -80,16 +76,20 @@ function scanRegexBody(src, start) {
   return { end: j, closed };
 }
 
-// PURE. The general, MASK-GROUNDED phantom-comment-site detector — general in the sense
-// that it needs no foreknowledge of "realName"; it works on any source. For every `/`
-// that lexicalCodeMask's own (real, unfixed) output shows was read as ORDINARY CODE
-// (mask[i] === 1 — i.e. NOT consumed as a string-open, template-open, comment-open, or
-// a successfully-recognized regex-open, all of which leave that byte 0), this checks
-// whether the candidate regex body starting right after it — scanned the exact way a
-// real regex literal would be, via scanRegexBody above — contains a raw `/*`. That is
-// precisely the shape that makes lexicalCodeMask's own unconditional `c===47 &&
-// next===42` branch (checked BEFORE the regex branch in dispatch order) fire on an
-// interior byte it should never have reached as a comment opener.
+// PURE. The general, MASK-GROUNDED phantom-comment-RISK detector — general in the sense
+// that it needs no foreknowledge of "realName"; it works on any source, and on either the
+// fixed or unfixed lexicalCodeMask (both are proven byte-identical over the real corpus —
+// see BACKLOG.md). For every `/` that lexicalCodeMask's own output shows was read as
+// ORDINARY CODE (mask[i] === 1 — i.e. NOT consumed as a string-open, template-open,
+// comment-open, or a successfully-recognized regex-open, all of which leave that byte 0),
+// this checks whether the text between it and the next real closing `/`, newline, or EOF
+// — scanned via scanRegexBody above — contains a raw `/*`. That is precisely the shape
+// that makes lexicalCodeMask's own unconditional `c===47 && next===42` branch (checked
+// BEFORE the regex branch in dispatch order) fire on an interior byte it should never
+// have reached as a comment opener. Post-fix, a flagged site is not necessarily still a
+// LIVE defect (the EOF case backs off correctly) — it names the residual risk the fix
+// does not close (a later, unrelated real `*/` in the same source), same as
+// windows-path-ratchet's own ambiguity guard.
 //
 // Checking `mask[i] === 1` at the CANDIDATE's own opening `/` — not at the inner `/*`
 // itself — is deliberate and was verified against the repro above: the inner `/*`'s own
@@ -99,11 +99,23 @@ function scanRegexBody(src, start) {
 // its mask is 1 because `regexAllowed(')')` is false, so it falls through to ordinary
 // punctuation — and that is the byte this detector keys off.
 //
-// A residual, same shape as windows-path-ratchet's own admitted one: scanRegexBody is a
-// candidate scan, not a proof — a genuine division followed later on the same line by
-// an unrelated string containing `/` can make it report a `closed` body that isn't
-// really one. Measured across the real corpus (task-1-report.md): zero occurrences, so
-// no ALLOWED-list has been needed yet; if one ever is, follow ambiguityGuard's shape.
+// FALSE-POSITIVE residual, same shape as windows-path-ratchet's own admitted one:
+// scanRegexBody is a candidate scan, not a proof — a genuine division followed later on
+// the same line by an unrelated string containing `/` can make `closed` true over text
+// that isn't really a regex body. Measured across the real corpus (task-1-report.md,
+// fix-round-1 addendum): zero occurrences, so no ALLOWED-list has been needed yet; if one
+// ever is, follow ambiguityGuard's shape.
+//
+// FALSE-NEGATIVE check (reviewer, fix round 1): does requiring `closed` — a real
+// subsequent unescaped `/` before the next newline — miss real risk sites? It would: the
+// underlying mechanism (lexicalCodeMask's `/*` branch fires unconditionally on ANY raw
+// `/*` the main dispatch loop reaches undiverted) needs no subsequent `/` at all — it is
+// not actually "is this a well-formed regex literal", only "does the misjudged slash's
+// line contain a raw /* ". `closed` was inherited from mirroring the ORIGINAL repro's
+// shape (`fn() /[/*]/.test(x)`, which happens to have a real closing `/`) rather than
+// derived from the mechanism. FIXED here to match test/windows-path-ratchet.test.cjs's
+// own `onAmbiguousSlash` hook, which never gates on `closed` for exactly this reason: use
+// whatever `scanRegexBody` reaches (a real closing `/`, or the newline/EOF) either way.
 function findPhantomCommentSites(src, mask) {
   const n = src.length;
   const findings = [];
@@ -112,8 +124,7 @@ function findPhantomCommentSites(src, mask) {
     if (src.charCodeAt(i + 1) === 47) continue; // '//' line comment: not ambiguous
     if (mask[i] !== 1) continue; // already consumed elsewhere — see note above
     const { end, closed } = scanRegexBody(src, i + 1);
-    if (!closed) continue;
-    const body = src.slice(i + 1, end - 1);
+    const body = closed ? src.slice(i + 1, end - 1) : src.slice(i + 1, end);
     if (body.includes('/*')) {
       findings.push({ offset: i, snippet: src.slice(i, Math.min(end, i + 60)) });
     }
@@ -131,9 +142,11 @@ function scanSources({ sources }) {
     const mask = lexicalCodeMask(src);
     for (const site of findPhantomCommentSites(src, mask)) {
       findings.push(`${rel}: offset ${site.offset}: a "/" lexicalCodeMask read as ordinary `
-        + `code has a candidate regex body containing a raw "/*" — ${JSON.stringify(site.snippet)}. `
-        + `This is the shape proven fatal above: the merger can mask real code as non-code and `
-        + `rename a colliding name there with no error, emitting a corrupt bundle.`);
+        + `code is followed by a raw "/*" before the next real closing "/", newline, or EOF `
+        + `— ${JSON.stringify(site.snippet)}. This is the residual the EOF-backoff fix does `
+        + `NOT close: if a real, unrelated "*/" exists later in this source, the phantom `
+        + `comment can still pair with it instead of backing off, masking real code as `
+        + `non-code and letting a colliding name there be renamed with no error.`);
     }
   }
   return { findings, examined };

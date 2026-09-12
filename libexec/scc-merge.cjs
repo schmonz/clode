@@ -33,7 +33,16 @@
 // BUMP THIS whenever an edit to this file could change the bytes mergeGroup emits. Forgetting to
 // is not a cosmetic slip: every machine that has already built once keeps serving the OLD merge
 // from its cache, so the edit appears to do literally nothing, on that machine only, forever.
-var MERGER_VERSION = '12';
+// BUMPED to '13' (phase 5b, task 1, fix round 1): lexicalCodeMask's `/*` branch gained an
+// EOF-backoff (see the comment at that branch). The corpus-invariance proof in
+// BACKLOG.md/task-1-report.md shows this produces BYTE-IDENTICAL masks for every one of
+// the 1,839 module sources in today's pinned claude-code 2.1.251 carve — but that proves
+// invariance for TODAY'S exact corpus, not for every input this function could ever see,
+// and the rule above is "could change the bytes", not "changed them for one snapshot of
+// inputs". A machine that already merged some OTHER group under the old masker keeps a
+// cache entry this fix could legitimately invalidate; bumping is the only way that is
+// guaranteed to reach it.
+var MERGER_VERSION = '13';
 
 // `meta.locals` is the union of two engine tables (vardefs + closure_var) and can repeat a name
 // across them, and it reports compiler-internal synthetic names in angle brackets (e.g.
@@ -152,9 +161,40 @@ function lexicalCodeMask(src) {
       continue;
     }
     if (c === 47 && src.charCodeAt(i + 1) === 42) { // /*
-      i += 2;
-      while (i < n && !(src.charCodeAt(i) === 42 && src.charCodeAt(i + 1) === 47)) i++;
-      i = Math.min(i + 2, n);
+      var k = i + 2;
+      while (k < n && !(src.charCodeAt(k) === 42 && src.charCodeAt(k + 1) === 47)) k++;
+      if (k >= n) {
+        // EOF-BACKOFF (phase 5b task 1 fix round 1), mirroring the fix
+        // test/windows-path-ratchet.test.cjs's stripComments() applies at its own `/*`
+        // branch: no real closing "*/" anywhere before EOF. Every source this masks is
+        // syntactically valid JS, and valid JS never contains a real, unterminated block
+        // comment — so reaching EOF unclosed is proof this "/*" was NOT a real comment
+        // opener. It was inside a regex literal that regexAllowed() (above) failed to
+        // recognize — the "inherent ambiguity after ), ], or an identifier" that
+        // function's own header already names — e.g. `fn() /[/*]/.test(x)`: the `)`
+        // closing `fn()` sets prevTok, so the regex branch above is never attempted, and
+        // the SECOND `/` of the char class `[/*]` reads as an ordinary `/*` right here,
+        // which (before this fix) ran away to EOF, silently masking every real byte
+        // after it — including a colliding name — as non-code.
+        //
+        // Back off: treat this ONE character as ordinary punctuation (mask=1, as any
+        // other operator byte gets) and let normal dispatch re-examine everything from
+        // here, one character at a time, rather than committing to a "comment" this
+        // file's own validity already disproves.
+        //
+        // NOT A FULL FIX for the family — same documented residual as
+        // windows-path-ratchet's: if a REAL, unrelated block comment happens to sit
+        // LATER in the same source, this same misjudged `/*` still runs away and pairs
+        // with THAT comment's `*/` instead of reaching EOF, and this fallback cannot
+        // tell the difference. Solving that in general needs a real parser. Measured
+        // (BACKLOG.md, task 1 fix round 1): zero occurrences across all 1,839 real
+        // module sources in the pinned carve, both before and after this fix.
+        mask[i] = 1;
+        prevTok = '/';
+        i++;
+        continue;
+      }
+      i = k + 2;
       prevTok = ')';
       continue;
     }
