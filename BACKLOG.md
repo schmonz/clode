@@ -5988,6 +5988,13 @@ worthless.
 
 ## scc-merge.cjs's lexicalCodeMask has the same check-ordering defect just fixed next door, unproven in the wild (2026-09-04)
 
+**SUPERSEDED — proven live and FIXED 2026-09-12; see "`lexicalCodeMask` phantom-comment
+defect: FIXED (phase 5b, task 1, fix round 1, 2026-09-12)" further down this file. Every
+"not fixed here, deliberately" / "unproven in the wild" / "treat it as a live risk" below
+was accurate when written and is no longer: phase 5b task 1 built the control, the control
+fired on the REAL pinned corpus, and the ordering was fixed. Kept, not deleted, because it
+is the prediction the fix vindicated.**
+
 Task 9 fixed a CRITICAL in `test/windows-path-ratchet.test.cjs`'s tokenizer (see the
 "RESOLVED 2026-09-04" entry above): its `/*` branch checked unconditionally, before the
 regex-literal branch, so a genuine regex literal misjudged as division (the inherent
@@ -6218,7 +6225,7 @@ off `discoverTestFiles()` and is scoped to `test/*.test.cjs` by design. Before t
 brand-new un-controlled build gate under `libexec/` was reported by nothing at all.
 
 **MEASURED, not controlled — the standing to-do.** 76 production files in scope, **34
-gate-shaped, 4 controlled, 30 uncontrolled** (2026-09-12, after fix round 1). That number is a
+gate-shaped, 4 controlled, 30 uncontrolled** (2026-09-12, after fix round 2). That number is a
 floor under "no NEW gate appears unseen", NOT a to-do list of 30 guards to write: the
 classifier has no input half (see below), so some of the 30 are false positives that become
 `PRODUCTION_GATE_EXCLUSIONS` entries, with a reason, as each is checked by hand. The
@@ -6227,6 +6234,38 @@ is already controlled, but `scripts/apicheck.mjs` (the API-surface gate),
 `libexec/extract-claude-js.cjs`, `libexec/bun-shim.cjs`, `scripts/build-tjs.mjs`,
 `scripts/bundle-shape.mjs`, `scripts/templates-drift.mjs` and `scripts/upstream-drift-check.mjs`
 all refuse builds today with no positive control.
+
+**WHAT "4 CONTROLLED" MEANS — the granularity, stated so the successor inherits the right
+claim (fix round 2, 2026-09-12).** It means **4 FILES HAVE AT LEAST ONE CONTROLLED GATE**. It
+does NOT mean 4 gates are controlled, and it does not mean those files' other refusals are
+proven able to fail. The unit of control is a FILE; the unit of a gate is a THROW-SITE.
+Measured 2026-09-12 (`grep -c 'throw new Error(' libexec/clode-fuse.cjs libexec/scc-merge.cjs`
+plus a per-function attribution): `libexec/clode-fuse.cjs` has **17** throw-sites and
+`libexec/scc-merge.cjs` **7**; of those 24, exactly **3** are tripped by a registered guard's
+control — `computeDepClosure`'s missing-package throw, `assertClosureMatchesLockfile`'s
+version-mismatch throw, and `assertNoUnknownBareSpecifiers`' unknown-specifier throw, all in
+`clode-fuse.cjs`. **21 of the 24 remain uncontrolled.** `scc-merge.cjs`'s controlled gate is
+`lexicalCodeMask`, which refuses by RETURNING a mask its caller acts on rather than by
+throwing, so NONE of its 7 throw-sites has a `defineGuard` control — including
+`assertNoRenamedFixedNames`, which that file's own comment calls **"THE RATCHET"** and records
+as having caught a shipped merge that renamed 336 property keys. (It is exercised with a real
+`assert.throws` by `test/scc-merge.test.cjs:577-583`; it is simply not a control in the phase-5
+sense, so `checkControl`'s "can this fail" question is never asked of it. That is the most
+consequential single site on the uncontrolled list.)
+
+**Two derivation fixes from round 2, so the numbers above mean what they say.** (1)
+"Controlled" was derived from a `require()` literal ALONE, which proves a guard LOADS a module,
+not that it CONTROLS it: `test/build-gates/host-provision-gates.test.cjs` requires
+`libexec/clode-hosttools.cjs` only to borrow `hosttools.findTool` as a fixture, and that made
+it "controlled". It moved no count only because `clode-hosttools.cjs` is not gate-shaped — add
+one `throw new Error(` to it (demonstrated) and it becomes gate-shaped AND "controlled" in the
+same instant, and the ratchet reports a clean run for a NEW uncontrolled gate. The derivation
+is now **named AND itself gate-shaped**, and the controlled set is PINNED to exactly those four
+modules by a test, so a fifth one goes red and a human decides which it is. (2)
+`GATE_SHAPED_FLOOR` was set to 28 against a measured 34 — a "cushion" that caught the
+catastrophe (34 -> 8) and missed the EROSION (34 -> 29, e.g. losing `.matchAll(` from
+`PRODUCTION_VERDICT_EXTRA`), which is the shape regressions actually arrive in. It is now the
+measured 34, per the phase's own Global Constraint that a floor equals the measured count.
 
 **TWO BLIND SPOTS, stated rather than discovered later.**
 1. *No input half, on purpose.* Reusing `readsArtifact()` (READ_CALLS && REPO_ROOTED) was
@@ -6257,9 +6296,13 @@ gate-shaped, not excluded, not counted. Neither is gate-shaped today, which cost
 is exactly why the hole was invisible.
 
 **The split point, recorded and deliberately NOT taken:** `test/guards-population.cjs` is now
-~830 lines carrying two sweeps. Splitting it today would either duplicate the shared vocabulary
-(`PATTERN_MATCHES`, `isMigratedSource`, `discoverFilesByExt`, `REPO`) or invert the dependency,
-so the reviewer recommended against it. **Do it when a THIRD sweep arrives**, not before.
+~870 lines carrying two sweeps. Splitting it today would either duplicate the shared vocabulary
+(`PATTERN_MATCHES`, `isMigratedSource`, `REPO`) or invert the dependency, so the reviewer
+recommended against it. **Do it when a THIRD sweep arrives**, not before. (Fix round 2 did take
+the ONE mechanical part: `stripLineComments` and `discoverFilesByExt` were duplicated verbatim
+across this file and two `test/build-gates/` guards, and now live once in
+`test/source-scan.cjs` — the `test/throws-as-findings.cjs` precedent. Three copies of an
+approximation is three places for it to drift apart silently.)
 
 **Scope skip, not an exclusion:** `libexec/node-shim/` is walked past. It is the TARGET's
 Node-API emulation — fused into quaude, run on the end user's machine, never a gate during
@@ -6427,3 +6470,44 @@ corpus is itself visible.
 **The repro** (`test/build-gates/lexical-code-mask.test.cjs`) is now a plain, green
 regression test — not a `todo` marker — and goes red again if the EOF-backoff is ever
 removed or narrowed.
+
+## `lexicalCodeMask`'s EOF-backoff is O(m·n) on a pathological input — filed, deliberately NOT fixed (2026-09-12, final whole-branch review of phase 5b)
+
+`libexec/scc-merge.cjs:163` — the `/*` branch's EOF-backoff (added by phase 5b task 1's fix
+round 1, and correct: it is what closes the phantom-comment defect) scans forward to a real
+`*/` and, on failing to find one, treats the `/*` as ordinary code and backs off ONE character.
+So every `/*`-looking pair AFTER the file's last real `*/` rescans the whole tail: m such
+occurrences cost O(m·n).
+
+**Why it is filed and not fixed.** Zero firings on the real corpus — proven, not assumed: the
+masks before and after the fix are byte-identical on the pinned carve, so the backoff never
+runs today. Against that, this loop is exactly the one the file's own header records as having
+been hand-optimised to `charCodeAt` arithmetic because it once took two minutes under `tjs`,
+and this fix wave is test-side and documentation only. Changing the REAL MERGER for no
+measurable benefit at the end of a phase is the trade the phase's own doctrine refuses.
+
+**The fix when someone wants it**, so it need not be re-derived: memoise the position of the
+last real `*/` (a single `lastIndexOf('*/')`, or a one-time scan recording it) and, once `i`
+is past that point, skip the forward scan entirely — every subsequent `/*` is known to be
+unterminated. That makes the whole pass linear again and does not change a single verdict.
+The covering regression test (`test/build-gates/lexical-code-mask.test.cjs`) already goes red
+if the backoff is removed or narrowed, so this refactor has its control waiting for it.
+
+## The production-gate sweep's walk→classify→map→ratchet path is proven only by a one-off demonstration — the successor's first item (2026-09-12, final whole-branch review of phase 5b)
+
+`test/guards-population.cjs`'s production sweep is tested in pieces: `ratchetUncontrolledGates`
+against synthetic counts, `classifyProductionFile` against synthetic source strings,
+`modulesNamedByGuard` against a synthetic guard body. What is NOT a standing test is the whole
+path end to end — walk the tree, classify each file, map the controls, run the ratchet — on a
+tree that actually contains an offender. That was proven ONCE, by hand, during task 5 (the
+synthetic-offender demonstration, which is also what found the hoisted-regex blind spot in
+`PRODUCTION_VERDICT_EXTRA`), and a demonstration that ran once is not a regression test. The
+same hole, in the same words, that phase 5 closed for the guards it migrated.
+
+**What it needs:** parameterise `discoverProductionFiles(root)` and
+`sweepProductionGates({ root })` — both hard-code `REPO` today — so a `fs.mkdtemp` fixture can
+plant a realistic un-controlled gate (a hoisted-const regex plus a `throw new Error(`) in a
+temp `libexec/`, run the sweep against THAT root, and assert the ratchet reports it ABOVE
+baseline. No write into the real `libexec/` ever happens, and the demonstration becomes
+permanent. Do it before writing the fifth control, not after: it is the mechanism that says
+whether the fifth one was counted.
