@@ -306,7 +306,7 @@ test('no test, libexec, or scripts file greps the staged cli.cjs runner for an e
 const {
   discoverProductionFiles, classifyProductionFile, buildGateGuardFiles, modulesNamedByGuard,
   controlledProductionModules, PRODUCTION_GATE_EXCLUSIONS, isRecordedProductionGateExclusion,
-  UNCONTROLLED_GATE_BASELINE, ratchetUncontrolledGates, sweepProductionGates,
+  UNCONTROLLED_GATE_BASELINE, GATE_SHAPED_FLOOR, ratchetUncontrolledGates, sweepProductionGates,
 } = require('./guards-population.cjs');
 
 test('the production classifier recognises a gate: derives a verdict from text AND refuses', () => {
@@ -390,20 +390,39 @@ test('the production classifier discriminates: it does not call every production
 });
 
 test('ratchetUncontrolledGates: a count ABOVE baseline is a finding (a NEW un-controlled gate)', () => {
-  const r = ratchetUncontrolledGates(29, 28, ['libexec/new-gate.cjs']);
+  const r = ratchetUncontrolledGates(31, 30, ['libexec/new-gate.cjs'], 35, 28);
   assert.strictEqual(r.ok, false);
   assert.match(r.message, /ABOVE the recorded baseline/);
   assert.match(r.message, /libexec\/new-gate\.cjs/);
 });
 
 test('ratchetUncontrolledGates: a count AT baseline is not a finding', () => {
-  assert.strictEqual(ratchetUncontrolledGates(28, 28, []).ok, true);
+  assert.strictEqual(ratchetUncontrolledGates(30, 30, [], 34, 28).ok, true);
 });
 
 test('ratchetUncontrolledGates: a count BELOW baseline says to lower the baseline', () => {
-  const r = ratchetUncontrolledGates(20, 28, []);
+  const r = ratchetUncontrolledGates(20, 30, [], 34, 28);
   assert.strictEqual(r.ok, true);
   assert.match(r.message, /lower UNCONTROLLED_GATE_BASELINE/);
+});
+
+// FIX ROUND 1 (reviewer): the phase's own thesis applied to its newest instrument. A drop in
+// the uncontrolled count looks identical whether someone wrote a control or the classifier
+// went partly blind, and the first cut returned ok:true with "Progress" for both. The two
+// FLOOR tests only catch TOTAL blindness, so a collapse from 30 uncontrolled to 8 would have
+// passed while REPORTING PROGRESS. The gate-shaped floor is checked first, unconditionally.
+test('ratchetUncontrolledGates: a COLLAPSE in gates seen is a finding even though the count FELL', () => {
+  const r = ratchetUncontrolledGates(8, 30, [], 9, 28);
+  assert.strictEqual(r.ok, false);
+  assert.match(r.message, /BELOW the recorded floor/);
+  assert.match(r.message, /NOT progress/);
+});
+
+test('ratchetUncontrolledGates: the real sweep is above the gate-shaped floor', () => {
+  const s = sweepProductionGates();
+  assert.ok(s.gates.length >= GATE_SHAPED_FLOOR,
+    `the classifier sees ${s.gates.length} gate-shaped file(s), below the recorded floor of `
+    + `${GATE_SHAPED_FLOOR} — re-cut it deliberately or fix the classifier`);
 });
 
 test('isRecordedProductionGateExclusion throws on an exclusion with an empty `because`', () => {
@@ -426,7 +445,8 @@ test('every gate-shaped production file is named by a registered build-gates gua
     `conservation failed: ${s.gates.length} gate-shaped file(s) but ${s.controlledCount} `
     + `controlled + ${s.uncontrolled.length} uncontrolled + ${s.excludedCount} excluded do not `
     + 'add up — a file vanished from every bucket instead of being counted in one of them');
-  const r = ratchetUncontrolledGates(s.uncontrolled.length, UNCONTROLLED_GATE_BASELINE, s.uncontrolled);
+  const r = ratchetUncontrolledGates(s.uncontrolled.length, UNCONTROLLED_GATE_BASELINE,
+    s.uncontrolled, s.gates.length, GATE_SHAPED_FLOOR);
   t.diagnostic(`${s.population} production file(s) in scope, ${s.gates.length} gate-shaped, `
     + `${s.controlledCount} controlled by ${buildGateGuardFiles().length} registered guard(s)`);
   t.diagnostic(r.message);
@@ -449,4 +469,44 @@ test('discoverProductionFiles skips libexec/node-shim (target runtime, not a bui
   assert.deepStrictEqual(inShim, [],
     'libexec/node-shim/ is the TARGET\'s Node-API emulation and never runs as a gate during '
     + '`clode build` — see PRODUCTION_SCOPE_SKIP');
+});
+
+// FIX ROUND 1 (reviewer) — the live miss. scripts/apicheck.mjs IS a build gate (its own header
+// says so) and refuses with `process.exit(runGate())`, a COMPUTED status. The first cut's
+// literal-`1-9` rule called it "never refuses", which was factually wrong about that file, and
+// shipped alongside a comment claiming no such instance existed. Pinned by shape, not by that
+// file's name, so the rule stays proven if apicheck.mjs is ever rewritten.
+test('GATE_REFUSES: a COMPUTED non-zero exit status is a refusal', () => {
+  const src = "function runGate() { return bad.includes('x') ? 1 : 0; }\nprocess.exit(runGate());";
+  assert.strictEqual(classifyProductionFile(src).gateShaped, true);
+});
+
+test('GATE_REFUSES: exit(0) and a bare exit() are NOT refusals', () => {
+  const clean = "if (names.includes('x')) { report(); }\nprocess.exit(0);";
+  assert.strictEqual(classifyProductionFile(clean).gateShaped, false);
+  const bare = "if (names.includes('x')) { report(); }\nprocess.exit();";
+  assert.strictEqual(classifyProductionFile(bare).gateShaped, false);
+});
+
+test('GATE_REFUSES: a ternary and a named-variable exit status are refusals', () => {
+  assert.strictEqual(classifyProductionFile(
+    "if (src.includes('x')) fail();\nprocess.exit(failed ? 1 : 0);").gateShaped, true);
+  assert.strictEqual(classifyProductionFile(
+    "if (src.includes('x')) fail();\nprocess.exit(status);").gateShaped, true);
+});
+
+// FIX ROUND 1 (reviewer) — the extension-shaped hole. libexec/quaude-fuse.js (spawned by
+// libexec/clode-fuse.cjs) and libexec/graph-meta.js (spawned by libexec/clode-extract.cjs) are
+// real build-path files that landed in NO bucket: not gate-shaped, not excluded, not counted.
+// Neither is gate-shaped today, which is precisely why the hole was invisible.
+test('the production walk covers .js as well as .cjs and .mjs', () => {
+  const files = discoverProductionFiles();
+  for (const rel of [path.join('libexec', 'quaude-fuse.js'), path.join('libexec', 'graph-meta.js')]) {
+    assert.ok(files.includes(rel),
+      `${rel} is spawned on the build path but is outside the production-gate population — `
+      + 'an extension-shaped hole in a mechanism whose promise is "the next gate cannot '
+      + 'appear unseen"');
+  }
+  assert.ok(files.some((f) => f.endsWith('.js') && !f.endsWith('.cjs') && !f.endsWith('.mjs')),
+    'the walk found no plain .js file at all — the extension list regressed');
 });

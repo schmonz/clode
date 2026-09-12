@@ -538,6 +538,11 @@ function discoverCliQuoteScanFiles() {
 // widening that walk would have meant one classifier answering two incompatible questions.
 // This one has its own population, its own classifier, and its own baseline.
 //
+// THE SPLIT POINT, recorded and deliberately not taken (fix round 1): this file now carries
+// two sweeps. Splitting it today would either duplicate the shared vocabulary
+// (PATTERN_MATCHES, isMigratedSource, discoverFilesByExt, REPO) or invert the dependency, so
+// it stays one file. Split it when a THIRD sweep arrives, not before.
+//
 // SPEC ERRATUM, recorded (coordinator ruling 3, 2026-09-12): the phase-5b spec §3 says
 // "Registration puts them in the population sweep automatically; Task 11 already extended
 // it to walk libexec/ and scripts/." That conflates two sweeps. Task 11 extended
@@ -561,7 +566,15 @@ function discoverProductionFiles() {
   for (const dir of ['libexec', 'scripts']) {
     const abs = path.join(REPO, dir);
     if (!fs.existsSync(abs)) continue;
-    out.push(...discoverFilesByExt(abs, ['.cjs', '.mjs']));
+    // `.js` TOO (fix round 1, 2026-09-12). Leaving it out put two real build-path files in
+    // NO bucket at all — not gate-shaped, not excluded, not even counted: libexec/quaude-fuse.js
+    // (the fuse worker libexec/clode-fuse.cjs spawns under the template) and libexec/graph-meta.js
+    // (spawned from libexec/clode-extract.cjs). A mechanism whose promise is "the next gate
+    // cannot appear unseen" must not have an extension-shaped hole. Measured cost: population
+    // 74 -> 76, gates unchanged at 34 — neither .js file is gate-shaped TODAY, which is exactly
+    // why the hole was invisible and exactly why it had to be closed before one of them becomes
+    // one.
+    out.push(...discoverFilesByExt(abs, ['.cjs', '.mjs', '.js']));
   }
   return out
     .map((f) => path.relative(REPO, f))
@@ -572,7 +585,26 @@ function discoverProductionFiles() {
 // REFUSES — the half that separates a build GATE from ordinary production code. A gate's
 // defining act is stopping the build: it throws, or it exits non-zero. A module that merely
 // inspects something and returns a value is not a gate and needs no control.
-const GATE_REFUSES = /throw new Error\s*\(|process\.exit\s*\(\s*[1-9]|process\.exitCode\s*=\s*[1-9]/;
+//
+// FIX ROUND 1 (reviewer, 2026-09-12) — A LIVE MISS, and a worse disclosure. The first cut
+// required a LITERAL `1`-`9` after `process.exit(`. scripts/apicheck.mjs — whose own header
+// line 2 reads "clode API-surface gate" — refuses with `process.exit(runGate())`, a COMPUTED
+// status, and came back `gateShaped: false, why: "...never refuses..."`, which is factually
+// wrong about that file. The miss alone was forgivable; the comment that shipped with it said
+// "nothing in libexec/ or scripts/ has that shape today", which tells the next reader there is
+// nothing to go look for. A false "nothing to look for here" is the precise failure this phase
+// exists to prevent.
+//
+// The rule is now: an exit is a REFUSAL unless its argument is literally `0` or absent. That
+// covers `exit(1)`, `exit(2)`, `exit(64)`, `exit(code)`, `exit(status)`, `exit(runGate())`,
+// `exit(failed ? 1 : 0)` — every spelling measured in this tree — while `process.exit(0)` and
+// `process.exit()` stay what they are, an ordinary successful return. Measured cost: exactly
+// two more files become gate-shaped (scripts/apicheck.mjs, libexec/naude-entry.cjs), 32 -> 34.
+// `process.exitCode =` widened the same way for one vocabulary, at zero measured cost.
+const NONZERO_EXIT_ARG = /process\.exit\s*\(\s*(?!0\s*\)|\))./;
+const NONZERO_EXITCODE = /process\.exitCode\s*=\s*(?!0\b)[A-Za-z0-9_$(]/;
+const GATE_REFUSES = new RegExp(['throw new Error\\s*\\(',
+  NONZERO_EXIT_ARG.source, NONZERO_EXITCODE.source].join('|'));
 
 // THE INPUT HALF IS DELIBERATELY ABSENT, and this is the one design decision in this
 // section worth arguing about. readsArtifact() above (READ_CALLS && REPO_ROOTED) is the
@@ -596,9 +628,15 @@ const GATE_REFUSES = /throw new Error\s*\(|process\.exit\s*\(\s*[1-9]|process\.e
 // (44 files are NOT gates) rather than flagging everything.
 //
 // WHAT IT THEREFORE CANNOT SEE, stated: a gate that refuses by RETURNING a verdict its
-// caller acts on (`return { ok: false }`, a non-empty findings array) rather than throwing.
-// Nothing in libexec/ or scripts/ has that shape today — every gate phase 5b found throws or
-// exits — but a future one could, and it would sit here unseen.
+// caller acts on (`return { ok: false }`, a non-empty findings array) WITHOUT the caller then
+// throwing or exiting on it. FIX ROUND 1: the first cut of this comment said "nothing in
+// libexec/ or scripts/ has that shape today", which was a claim, not a measurement, and it was
+// wrong in spirit — scripts/apicheck.mjs's runGate() returns 1/0 and its caller exits on it,
+// which the widened GATE_REFUSES above now sees. The honest statement is narrower: a
+// return-only gate whose caller lives in a DIFFERENT file is not followed across that edge (the
+// same require()-edge limitation the escape-blind detector records for ALREADY_FIXED). No such
+// split gate has been found, but "not found" is where the search stopped, not proof of absence
+// — go look before believing it.
 //
 // THE VERDICT HALF IS PATTERN_MATCHES PLUS A PRODUCTION DELTA, and the delta was MEASURED,
 // not guessed. PATTERN_MATCHES's first entry requires a regex LITERAL immediately followed
@@ -640,7 +678,6 @@ function classifyProductionFile(src) {
 // the ONE predicate, so a file that merely sits in the directory cannot silently vouch for a
 // gate it never controls.
 const BUILD_GATES_DIR = path.join('test', 'build-gates');
-const RELATIVE_REQUIRE = /require\(\s*['"]((?:\.\.\/)+[^'"\n]+)['"]\s*\)/g;
 
 function buildGateGuardFiles() {
   const abs = path.join(REPO, BUILD_GATES_DIR);
@@ -658,9 +695,10 @@ function buildGateGuardFiles() {
 function modulesNamedByGuard(guardRel, src) {
   const dir = path.dirname(path.join(REPO, guardRel));
   const out = [];
-  RELATIVE_REQUIRE.lastIndex = 0;
-  let m;
-  while ((m = RELATIVE_REQUIRE.exec(src))) {
+  // A LOCAL literal with matchAll, not a module-level /g regex: a shared /g regex carries
+  // mutable lastIndex across calls, which is correct only as long as every caller remembers
+  // to reset it. Removing the footgun is cheaper than documenting it.
+  for (const m of src.matchAll(/require\(\s*['"]((?:\.\.\/)+[^'"\n]+)['"]\s*\)/g)) {
     const rel = path.relative(REPO, path.resolve(dir, m[1]));
     if (rel.startsWith('libexec' + path.sep) || rel.startsWith('scripts' + path.sep)) out.push(rel);
   }
@@ -701,30 +739,59 @@ function isRecordedProductionGateExclusion(rel) {
 }
 
 // UNCONTROLLED_GATE_BASELINE — gate-shaped production files NOT named by any registered
-// test/build-gates/ guard, as last measured. FIRST CUT, 28 (phase 5b task 5, 2026-09-12):
-// 74 production files in scope, 32 gate-shaped, 4 controlled (scc-merge.cjs, clode-fuse.cjs,
-// host-provision.cjs, target-update-check.cjs — phase 5b tasks 1-4), 0 excluded. (The first
-// measurement said 30/26; the synthetic-offender demonstration then showed the verdict half
-// was blind to a hoisted regex constant, and widening it — see PRODUCTION_VERDICT_EXTRA —
-// added libexec/clode-signals.cjs and scripts/changed-paths.mjs. Every rise or fall here is
-// the classifier changing, never the tree; re-verify against classifyProductionFile() before
-// reading a future change as good or bad news.)
+// test/build-gates/ guard, as last measured. 30 as of fix round 1 (phase 5b task 5,
+// 2026-09-12): 76 production files in scope, 34 gate-shaped, 4 controlled (scc-merge.cjs,
+// clode-fuse.cjs, host-provision.cjs, target-update-check.cjs — phase 5b tasks 1-4), 0
+// excluded.
+//
+// EVERY MOVE THIS NUMBER HAS MADE, and each was the CLASSIFIER changing, never the tree:
+//   26  first cut.
+//   28  the synthetic-offender demonstration showed the verdict half was blind to a hoisted
+//       regex constant; PRODUCTION_VERDICT_EXTRA added clode-signals.cjs, changed-paths.mjs.
+//   30  fix round 1 — GATE_REFUSES widened to a non-zero exit ARGUMENT (apicheck.mjs's
+//       `process.exit(runGate())` was a live miss) added apicheck.mjs and naude-entry.cjs.
+//       Adding `.js` to the walk in the same round moved the population 74 -> 76 but cost
+//       zero gates; the two effects were MEASURED together, not added on paper.
+// Re-verify against classifyProductionFile() before reading a future change as good or bad.
 //
 // MEANT TO GO DOWN. Never raise it to make a run look clean — raising it papers over exactly
-// the regression this exists to catch. This number is NOT a to-do list of 28 gates that must
+// the regression this exists to catch. This number is NOT a to-do list of 30 gates that must
 // all get controls; it is the floor under "no NEW un-controlled build gate appears without
-// someone seeing it". Some of the 28 are certainly false positives under a classifier with
+// someone seeing it". Some of the 30 are certainly false positives under a classifier with
 // no input half (see classifyProductionFile above); each one that is confirmed by hand
 // becomes a PRODUCTION_GATE_EXCLUSIONS entry with a reason and the baseline drops.
-const UNCONTROLLED_GATE_BASELINE = 28;
+const UNCONTROLLED_GATE_BASELINE = 30;
+
+// GATE_SHAPED_FLOOR — the OTHER half of the ratchet, and the reason a fall can be trusted.
+// FIX ROUND 1 (reviewer, 2026-09-12): the uncontrolled count alone cannot tell "someone wrote
+// a control" from "the classifier went partly blind". Both look like a DROP, and a drop
+// returned ok:true with a cheerful "Progress: lower the baseline" — so an edit that broke
+// GATE_VERDICT and collapsed the visible population 30 -> 8 would have PASSED, reporting
+// progress. The two FLOOR tests do not catch this either: they only catch TOTAL blindness
+// (`gates.length > 0`). So the sweep now also records how many gates it can SEE, and a count
+// below this floor is a finding regardless of what the uncontrolled number did. Set with a
+// deliberate cushion under today's 34 — ordinary churn (deleting a gate file, folding two
+// scripts into one) must not trip it, a classifier break collapses far past it.
+const GATE_SHAPED_FLOOR = 28;
 
 // Mirrors ratchetUnmigrated's asymmetry deliberately (a rise is a finding, a fall is a
 // message telling you to re-cut) — same reason, different remediation text, which is the
 // load-bearing half: "write a guard under test/build-gates/" is not "migrate to defineGuard".
-function ratchetUncontrolledGates(count, baseline, uncontrolled) {
+function ratchetUncontrolledGates(count, baseline, uncontrolled, gatesSeen, gatesFloor) {
   const list = uncontrolled.length
     ? ':\n' + uncontrolled.map((f) => `    ${f}`).join('\n')
     : ' (none)';
+  // Checked FIRST and unconditionally: if the classifier can no longer see the gates it is
+  // supposed to be counting, every other number below is meaningless — including a fall,
+  // which would otherwise read as progress. This is the sweep's own BROKEN verdict.
+  if (Number.isInteger(gatesSeen) && Number.isInteger(gatesFloor) && gatesSeen < gatesFloor) {
+    return { ok: false, message: `the classifier sees only ${gatesSeen} gate-shaped production `
+      + `file(s), BELOW the recorded floor of ${gatesFloor}. This is NOT a clean result and a `
+      + `fall in the uncontrolled count below is NOT progress: the classifier has gone partly `
+      + 'blind (GATE_VERDICT/GATE_REFUSES broke, or the walk stopped reaching a directory). '
+      + 'Fix the classifier, or — if the tree really did lose that many gates — re-cut '
+      + 'GATE_SHAPED_FLOOR deliberately, with the measurement recorded.' };
+  }
   if (count > baseline) {
     return { ok: false, message: `${count} gate-shaped production file(s) are not named by `
       + `any registered test/build-gates/ guard — ABOVE the recorded baseline of ${baseline}. `
@@ -747,6 +814,13 @@ function ratchetUncontrolledGates(count, baseline, uncontrolled) {
 // SAME numbers. Buckets are counted as the walk runs (not re-derived afterwards) so a file
 // that falls through every branch shows up as a conservation failure instead of quietly
 // lowering the count — the C2 shape the test sweep above already paid for once.
+//
+// HOW MUCH THAT ASSERTION ACTUALLY PROVES (fix round 1, honest restatement): as written the
+// three branches are EXHAUSTIVE by construction — controlled / excluded / else-uncontrolled —
+// so no crafted file can trip the conservation check. Its only real job is to catch a FUTURE
+// edit that adds a fourth `continue` and quietly drops files out of every bucket. That is
+// worth having, and it is all of it; the phase-5 review reached the same verdict about the
+// identical assertion in the test sweep above.
 function sweepProductionGates() {
   const controlled = controlledProductionModules();
   const files = discoverProductionFiles();
@@ -799,6 +873,7 @@ module.exports = {
   isRecordedProductionGateExclusion,
   PRODUCTION_SCOPE_SKIP,
   UNCONTROLLED_GATE_BASELINE,
+  GATE_SHAPED_FLOOR,
   ratchetUncontrolledGates,
   sweepProductionGates,
 };

@@ -6205,9 +6205,10 @@ two of them found a live defect the moment they were controlled. Task 5 closed t
 population so the FIFTH is not found by accident: `test/guards-population.cjs` now carries a
 **production-gate sweep** over `libexec/` + `scripts/` alongside the existing test sweep. It
 classifies a file as a build gate when it derives a verdict from text AND refuses (throws, or
-exits non-zero), derives "which guard controls which gate" from the literal
+exits with a non-zero ARGUMENT), derives "which guard controls which gate" from the literal
 `require('../../libexec/x.cjs')` in each registered `test/build-gates/` guard, and ratchets on
-`UNCONTROLLED_GATE_BASELINE`.
+`UNCONTROLLED_GATE_BASELINE` — plus `GATE_SHAPED_FLOOR`, so a FALL in the uncontrolled count
+cannot be reported as progress when the real cause is the classifier going partly blind.
 
 **SPEC ERRATUM, for anyone reading the phase-5b spec.** Its §3 says "Registration puts them
 in the population sweep automatically; Task 11 already extended it to walk `libexec/` and
@@ -6216,15 +6217,16 @@ feeds ONLY the escape-blind CLI-quote detector; the MIGRATED/`UNMIGRATED_BASELIN
 off `discoverTestFiles()` and is scoped to `test/*.test.cjs` by design. Before task 5, a
 brand-new un-controlled build gate under `libexec/` was reported by nothing at all.
 
-**MEASURED, not controlled — the standing to-do.** 74 production files in scope, **32
-gate-shaped, 4 controlled, 28 uncontrolled** (2026-09-12). That number is a floor under "no
-NEW gate appears unseen", NOT a to-do list of 28 guards to write: the classifier has no input
-half (see below), so some of the 28 are false positives that become
+**MEASURED, not controlled — the standing to-do.** 76 production files in scope, **34
+gate-shaped, 4 controlled, 30 uncontrolled** (2026-09-12, after fix round 1). That number is a
+floor under "no NEW gate appears unseen", NOT a to-do list of 30 guards to write: the
+classifier has no input half (see below), so some of the 30 are false positives that become
 `PRODUCTION_GATE_EXCLUSIONS` entries, with a reason, as each is checked by hand. The
 biggest-consequence names in the list, for whoever picks this up: `libexec/clode-fuse.cjs`
-is already controlled, but `libexec/extract-claude-js.cjs`, `libexec/bun-shim.cjs`,
-`scripts/build-tjs.mjs`, `scripts/bundle-shape.mjs`, `scripts/templates-drift.mjs` and
-`scripts/upstream-drift-check.mjs` all refuse builds today with no positive control.
+is already controlled, but `scripts/apicheck.mjs` (the API-surface gate),
+`libexec/extract-claude-js.cjs`, `libexec/bun-shim.cjs`, `scripts/build-tjs.mjs`,
+`scripts/bundle-shape.mjs`, `scripts/templates-drift.mjs` and `scripts/upstream-drift-check.mjs`
+all refuse builds today with no positive control.
 
 **TWO BLIND SPOTS, stated rather than discovered later.**
 1. *No input half, on purpose.* Reusing `readsArtifact()` (READ_CALLS && REPO_ROOTED) was
@@ -6234,11 +6236,30 @@ is already controlled, but `libexec/extract-claude-js.cjs`, `libexec/bun-shim.cj
    can be a file, a network response, a subprocess's output, or a blob its caller already
    read, and the last is not distinguishable from any pure function by source text. So the
    classifier keys on "derives a verdict AND refuses" and pays the cost in false positives.
-2. *A gate that RETURNS its verdict is invisible.* `GATE_REFUSES` matches `throw new Error(`
-   and a non-zero `process.exit`/`process.exitCode`. A gate that returns `{ ok: false }` or a
-   findings array for its caller to act on would sit unseen. Nothing in `libexec/` or
-   `scripts/` has that shape today — every gate found so far throws or exits — but a future
-   one could, and this is the shape to re-measure for when one does.
+2. *A gate whose refusal happens in ANOTHER file is invisible.* `GATE_REFUSES` matches
+   `throw new Error(` and a `process.exit`/`process.exitCode` whose argument is not literally
+   `0` (or absent). A module that only RETURNS a verdict, with the caller that acts on it in a
+   different file, is not followed across that `require()` edge — the same limitation the
+   escape-blind detector records for its `ALREADY_FIXED` exemption. **The first cut of this
+   entry claimed "nothing in libexec/ or scripts/ has that shape today"; that was a claim, not
+   a measurement, and the reviewer found a live counterexample within the file:**
+   `scripts/apicheck.mjs` refused with `process.exit(runGate())` — a COMPUTED status — and the
+   classifier reported `"pattern-matches but never refuses"`, which was factually wrong about a
+   file whose own header calls itself a gate. Fixed by widening to a non-zero exit ARGUMENT
+   (cost: exactly 2 files, `apicheck.mjs` + `libexec/naude-entry.cjs`). No SPLIT gate
+   (return-here, refuse-there) has been found — but "not found" is where the search stopped,
+   not proof of absence.
+
+**Extensions:** the walk covers `.cjs`, `.mjs` AND `.js`. The first cut omitted `.js`, which
+put `libexec/quaude-fuse.js` (the fuse worker `libexec/clode-fuse.cjs` spawns) and
+`libexec/graph-meta.js` (spawned from `libexec/clode-extract.cjs`) in NO bucket at all — not
+gate-shaped, not excluded, not counted. Neither is gate-shaped today, which cost zero gates and
+is exactly why the hole was invisible.
+
+**The split point, recorded and deliberately NOT taken:** `test/guards-population.cjs` is now
+~830 lines carrying two sweeps. Splitting it today would either duplicate the shared vocabulary
+(`PATTERN_MATCHES`, `isMigratedSource`, `discoverFilesByExt`, `REPO`) or invert the dependency,
+so the reviewer recommended against it. **Do it when a THIRD sweep arrives**, not before.
 
 **Scope skip, not an exclusion:** `libexec/node-shim/` is walked past. It is the TARGET's
 Node-API emulation — fused into quaude, run on the end user's machine, never a gate during
