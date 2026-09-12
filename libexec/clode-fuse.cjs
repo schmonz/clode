@@ -263,6 +263,33 @@ const SPECIFIER_PATTERNS = [
 const DECLARATIVE_PATTERNS = [
   /\bimport\s+[^'"()]*?\bfrom\s+["']([a-zA-Z0-9_/:@.-]+)["']/g,
   /\bexport\s+[^'"()]*?\bfrom\s+["']([a-zA-Z0-9_/:@.-]+)["']/g,
+  // PHASE 5B, TASK 2 FIX: a side-effect-only import — `import "pkg";`, no
+  // binding, no `from` clause — is valid ESM and was invisible to both
+  // patterns above (both require `\bfrom\b`). Found live-blind, not assumed:
+  // measured against the real pinned carve, `scanBareSpecifiers` returned
+  // nothing for `import "side-effect-pkg";` before this line existed (task-2
+  // guard control).
+  //
+  // FIX ROUND 1 (self-review before landing): the first cut of this pattern
+  // was bare `\bimport\s+["']([...])["']`, unanchored. Measured against the
+  // REAL pinned carve it produced a false positive — `@aws-sdk/credential-
+  // providers` — from the ENGLISH SENTENCE `` `Failed to import
+  // '@aws-sdk/credential-providers'.` `` inside a real error-message template
+  // literal (chunk-rs7rt8dj.js and others): ordinary prose reads exactly like
+  // this shape ("import 'X'"), the same prose-noise failure class
+  // DECLARATIVE_PATTERNS's own comment above already documents for `assets`.
+  // Anchored to a statement boundary (start of chunk, or immediately after
+  // `;`/`{`/`}`) and a trailing `;` to require REAL statement position on
+  // both sides — a sentence fragment mid-string satisfies neither. Verified:
+  // rejects the exact false-positive text above, still matches the genuine
+  // `import "pkg";` case, and the real carve's specifier set is unchanged
+  // (still 12) with this anchoring in place. Known scope limit, same
+  // pragmatic regex-not-a-parser tradeoff as every pattern in this file: a
+  // side-effect import relying on ASI (no trailing `;`, e.g. as the final
+  // statement in a chunk) would still be missed; not observed on the real
+  // corpus, and esbuild's own CJS/ESM chunk output always terminates
+  // statements with `;`.
+  /(?:^|[;{}])\s*\bimport\s+["']([a-zA-Z0-9_/:@.-]+)["']\s*;/gm,
 ];
 
 const NODE_BUILTINS = new Set(require('node:module').builtinModules);
