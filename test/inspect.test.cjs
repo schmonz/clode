@@ -266,6 +266,21 @@ test('remoteControlHookAnchorPresent: true on the real cBo reason, false when ab
   );
 });
 
+test('remoteControlHookAnchorPresent: true on the 2.1.270 wrapped-reason gate', () => {
+  // Upstream wraps every reason in a local `(e)=>({reason:e,orgPolicyDenied:!1})` helper at
+  // 2.1.270, so the gate returns an object, never a bare string. The mirror here must move
+  // with libexec/extract-claude-js.cjs or the two disagree about what "anchored" means.
+  const wrapped = 'async function xen(){if(l())return null;if(!dG())return i(x());'
+    + 'if(qC())return i("Remote Control is not available inside a cloud session.");return null}';
+  assert.strictEqual(ins.remoteControlHookAnchorPresent(wrapped), true);
+  assert.strictEqual(ins.remoteControlHookAnchorPresent(wrapped + wrapped), false);
+  // and an already-patched 2.1.270 bundle, whose injection is object-shaped, still counts
+  assert.strictEqual(
+    ins.remoteControlHookAnchorPresent('if(globalThis.__clodeWsUnavailable)return{reason:"x",orgPolicyDenied:!1};' + wrapped),
+    true,
+  );
+});
+
 test('gate_problems flags missing native autoupdater anchor', () => {
   const cov = {
     stubbed: [], missing: [], bun_modules_unhandled: [], modules_missing: [],

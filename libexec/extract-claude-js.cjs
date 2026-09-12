@@ -373,9 +373,27 @@ const REMOTE_CONTROL_GATE_ANCHOR =
 // as patchDoctorWarnings's 2.1.179/2.1.205 anchors).
 const REMOTE_CONTROL_INLINE_ANCHOR =
   /if\(!?[A-Za-z0-9_$]{1,8}\(\)\)return"Remote Control is only available when using Claude via api\.anthropic\.com\."/g;
+// Newest shape (2.1.270): the SAME async gate, but upstream hoisted a local
+// `var i=(e)=>({reason:e,orgPolicyDenied:!1})` and every reason now returns i(...) —
+// so the gate yields null (available) or an OBJECT, never a bare string. The
+// consumers moved with it: `(await gate())?.reason ?? null` and
+// `if(C.orgPolicyDenied)…{message:C.reason}`. That makes the injected VALUE part of
+// the anchor's contract, not a detail: a bare-string gate-off here is truthy with an
+// undefined `.reason`, so the notice vanishes and Remote Control reads as AVAILABLE —
+// the exact silent no-op this hook exists to prevent. Hence a third shape with its
+// own injection rather than a widened regex over one.
+const REMOTE_CONTROL_WRAPPED_ANCHOR =
+  /(?<pre>async function [A-Za-z0-9_$]{1,8}\(\)\{)if\([A-Za-z0-9_$]{1,8}\(\)\)return null;if\(!?[A-Za-z0-9_$]{1,8}\(\)\)return [A-Za-z0-9_$]{1,8}\([A-Za-z0-9_$]{1,8}\(\)\);if\([A-Za-z0-9_$]{1,8}\(\)\)return [A-Za-z0-9_$]{1,8}\("Remote Control is not available inside a cloud session\."\)/g;
 
 function patchRemoteControlUnavailable(body) {
   const inject = 'if(globalThis.__clodeWsUnavailable)return"' + RC_NOTICE + '";';
+  // 2.1.270+ returns {reason, orgPolicyDenied} — see REMOTE_CONTROL_WRAPPED_ANCHOR.
+  const injectWrapped = 'if(globalThis.__clodeWsUnavailable)return{reason:"' + RC_NOTICE + '",orgPolicyDenied:!1};';
+  const wrapped = [...body.matchAll(REMOTE_CONTROL_WRAPPED_ANCHOR)];
+  if (wrapped.length === 1) {
+    const cut = wrapped[0].index + wrapped[0].groups.pre.length; // after `async function X(){`
+    return [body.slice(0, cut) + injectWrapped + body.slice(cut), true];
+  }
   const gate = [...body.matchAll(REMOTE_CONTROL_GATE_ANCHOR)];
   if (gate.length === 1) {
     const cut = gate[0].index + gate[0].groups.pre.length;   // after `async function X(){`

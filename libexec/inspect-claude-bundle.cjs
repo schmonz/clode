@@ -233,13 +233,23 @@ function updateNoticeHookAnchorPresent(data) {
 // inside a cloud session" reason, and the old (<=2.1.218) inline api.anthropic.com
 // reason guard. Already-patched bundles carry the injected guard, so accept that
 // marker too (mirrors the autoupdater checks).
+// Mirror of libexec/extract-claude-js.cjs's REMOTE_CONTROL_WRAPPED_ANCHOR (2.1.270:
+// every reason wrapped by a local `(e)=>({reason:e,orgPolicyDenied:!1})` helper). These
+// two files must move together — that is what "keep them in step" in the drift check's
+// own failure message means.
+const _REMOTE_CONTROL_WRAPPED_ANCHOR =
+  /async function [A-Za-z0-9_$]{1,8}\(\)\{if\([A-Za-z0-9_$]{1,8}\(\)\)return null;if\(!?[A-Za-z0-9_$]{1,8}\(\)\)return [A-Za-z0-9_$]{1,8}\([A-Za-z0-9_$]{1,8}\(\)\);if\([A-Za-z0-9_$]{1,8}\(\)\)return [A-Za-z0-9_$]{1,8}\("Remote Control is not available inside a cloud session\."\)/g;
 const _REMOTE_CONTROL_GATE_ANCHOR =
   /async function [A-Za-z0-9_$]{1,8}\(\)\{if\([A-Za-z0-9_$]{1,8}\(\)\)return null;if\(!?[A-Za-z0-9_$]{1,8}\(\)\)return [A-Za-z0-9_$]{1,8}\(\);if\([A-Za-z0-9_$]{1,8}\(\)\)return"Remote Control is not available inside a cloud session\."/g;
 const _REMOTE_CONTROL_INLINE_ANCHOR =
   /if\(!?[A-Za-z0-9_$]{1,8}\(\)\)return"Remote Control is only available when using Claude via api\.anthropic\.com\."/g;
-const _REMOTE_CONTROL_PATCHED = 'globalThis.__clodeWsUnavailable)return"';
+// 2.1.270's gate returns {reason, orgPolicyDenied}, so the injection that follows this
+// marker is object-shaped there and string-shaped on older bundles. Match up to the
+// `return` only — the marker is our own and is specific enough without the value.
+const _REMOTE_CONTROL_PATCHED = 'globalThis.__clodeWsUnavailable)return';
 function remoteControlHookAnchorPresent(data) {
-  return [...data.matchAll(_REMOTE_CONTROL_GATE_ANCHOR)].length === 1
+  return [...data.matchAll(_REMOTE_CONTROL_WRAPPED_ANCHOR)].length === 1
+    || [...data.matchAll(_REMOTE_CONTROL_GATE_ANCHOR)].length === 1
     || [...data.matchAll(_REMOTE_CONTROL_INLINE_ANCHOR)].length === 1
     || data.includes(_REMOTE_CONTROL_PATCHED);
 }

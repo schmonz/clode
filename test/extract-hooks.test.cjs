@@ -292,6 +292,43 @@ test('patchRemoteControlUnavailable refuses ambiguous or absent anchors', () => 
   assert.strictEqual(ex.patchRemoteControlUnavailable(RC_INLINE + RC_INLINE)[1], false);  // two inlines
 });
 
+// The gate as upstream emits it at 2.1.270: the SAME `async function X(){...}`, but every
+// reason is now wrapped by a local helper — `var i=(e)=>({reason:e,orgPolicyDenied:!1})` —
+// so the function returns null (available) or an OBJECT, never a bare string. Taken from the
+// real 2.1.270 darwin-arm64 bundle, minified ids and all.
+const RC_GATE_WRAPPED = 'var i=(e)=>({reason:e,orgPolicyDenied:!1});'
+  + 'async function xen(){if(l())return null;if(!dG())return i(x());'
+  + 'if(qC())return i("Remote Control is not available inside a cloud session.");'
+  + 'if(I$())return i(Z2);if(!g())return i("Remote Control requires a claude.ai subscription.");return null}';
+
+test('patchRemoteControlUnavailable handles the 2.1.270 wrapped-reason gate', () => {
+  const [out, applied] = ex.patchRemoteControlUnavailable('var z=1;' + RC_GATE_WRAPPED);
+  assert.strictEqual(applied, true);
+  assert.match(out, /async function xen\(\)\{if\(globalThis\.__clodeWsUnavailable\)return\{reason:"Remote Control isn.*transport\.",orgPolicyDenied:!1\};if\(l\(\)\)return null;/);
+});
+
+// The shape is the whole point, not a detail: at 2.1.270 the consumers are
+// `(await gate())?.reason ?? null` and `if(C.orgPolicyDenied)…{message:C.reason}`, so a
+// BARE STRING injection returns a truthy value whose `.reason` is undefined — the notice
+// silently vanishes and Remote Control reads as available. That is exactly the silent
+// no-op the anchor exists to prevent, so assert the contract by RUNNING the patched gate.
+test('the 2.1.270 gate-off returns a value the real consumers can read', async () => {
+  const [out] = ex.patchRemoteControlUnavailable(RC_GATE_WRAPPED);
+  const gate = new Function(
+    'const l=()=>false,dG=()=>true,qC=()=>false,I$=()=>false,g=()=>true,x=()=>"nope",Z2="nope";'
+    + out + 'return xen;',
+  )();
+  globalThis.__clodeWsUnavailable = true;
+  try {
+    const got = await gate();
+    assert.strictEqual(typeof got, 'object', 'a bare string here reads as available: (await gate())?.reason is undefined');
+    assert.match(got.reason, /its engine has no WebSocket transport\./);
+    assert.strictEqual(got.orgPolicyDenied, false);
+  } finally {
+    delete globalThis.__clodeWsUnavailable;
+  }
+});
+
 test('patchRemoteControlUnavailable still supports the old inline shape (<=2.1.218)', () => {
   const [out, applied] = ex.patchRemoteControlUnavailable('x;' + RC_INLINE);
   assert.strictEqual(applied, true);
