@@ -322,8 +322,16 @@ test('GATE control names BOTH the require() and declarative-import shapes (the s
 // GUARD 3 — assertClosureMatchesLockfile: node_modules must match the lockfile.
 // ==========================================================================
 
+// `expect` (fix round 2): assertClosureMatchesLockfile's three real refusals are the only
+// throws that may be reported as findings — an unreadable lockfile, a package missing from
+// it, and a version mismatch. Any OTHER throw (a signature change, a TypeError on a Map that
+// stopped being a Map) is a crash, not a detection, and re-raising it keeps this control from
+// certifying itself on a gate that no longer refuses anything.
+const EXPECT_LOCKFILE_REFUSAL = /^(ext-dep closure: |cannot read .* to verify the ext-dep closure)/;
+
 function scanClosureMatchesLockfile({ closureVersions, lockfilePath }) {
-  return throwsAsFindings(assertClosureMatchesLockfile, [closureVersions, lockfilePath], { examined: closureVersions.size });
+  return throwsAsFindings(assertClosureMatchesLockfile, [closureVersions, lockfilePath],
+    { examined: closureVersions.size, expect: EXPECT_LOCKFILE_REFUSAL });
 }
 
 function readLockfileInputs() {
@@ -371,8 +379,20 @@ guardTests(guard3);
 // is not actually installed under node_modules must fail the BUILD loud, not surface
 // later as a runtime "Cannot find module".
 
+// Both of computeDepClosure's refusals start the same way: a package that is not installed,
+// and a REQUIRED peer dependency the walk deliberately does not follow. Same reasoning as
+// GUARD 3's EXPECT_LOCKFILE_REFUSAL — a crash is not a detection.
+const EXPECT_CLOSURE_REFUSAL = /^ext-dep closure: /;
+
+// `examined` is the RESOLVED CLOSURE — what computeDepClosure actually walked and filled in —
+// not `directDeps.length`, the INPUT (fix round 2, reviewer 2026-09-12). The input count is
+// the same 8 whether the gate walked the whole 18-package closure or nothing at all, so it
+// could never make a gate that stopped walking read BROKEN. GUARD 3 above already measures
+// the filled-in closure; this one now does too.
 function scanComputeClosure({ nmDir, directDeps }) {
-  return throwsAsFindings(computeDepClosure, [nmDir, directDeps], { examined: directDeps.length });
+  const versions = new Map();
+  return throwsAsFindings(computeDepClosure, [nmDir, directDeps, { versions }],
+    { examined: () => versions.size, expect: EXPECT_CLOSURE_REFUSAL });
 }
 
 function readComputeClosureInputs() {
@@ -396,12 +416,20 @@ function computeClosureControlInputs() {
   return { nmDir: CONTROL_NM_DIR, directDeps: ['present', 'controlled-missing-dep'] };
 }
 
-// Measured 2026-09-12: deps/claude/package.json declares 8 direct dependencies
-// (buffer, node-fetch, semver, string-width, strip-ansi, wrap-ansi, ws, yaml). See
-// task-2-report.md for the exact command.
+// Measured 2026-09-12 (fix round 2, re-measured after `examined` moved from the input to
+// the work): deps/claude/package.json declares 8 direct dependencies (buffer, node-fetch,
+// semver, string-width, strip-ansi, wrap-ansi, ws, yaml), and computeDepClosure RESOLVES
+// those 8 into 18 packages — the same 18 GUARD 3 measures, which is the point: both floors
+// now move together with the real closure instead of one of them tracking a constant that
+// the gate's own behaviour cannot affect. Command:
+//   node -e "const {computeDepClosure}=require('./libexec/clode-fuse.cjs');
+//            const d=require('./test/build-gates/dep-closure-gates.test.cjs');
+//            const i=d.readComputeClosureInputs(); const v=new Map();
+//            computeDepClosure(i.nmDir,i.directDeps,{versions:v}); console.log(v.size)"
+//   -> 18
 const guard4 = defineGuard({
   name: 'dep-closure-computed-closure',
-  floor: 8,
+  floor: 18,
   read: readComputeClosureInputs,
   scan: scanComputeClosure,
   control: computeClosureControlInputs,
