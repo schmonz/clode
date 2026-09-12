@@ -11,13 +11,31 @@ permissions:
 # get their own group so they never cancel each other.
 concurrency:
   group: ci-${{ github.ref }}
-  # A push to main NEVER cancels a run in flight. Measured 2026-09-04: 194e237, a
-  # BACKLOG.md-only commit, cancelled the run carrying 06c6c96 (a real test fix), and the
-  # phase-2 Windows spawn number went unread for two days because its run was cancelled
-  # and nobody re-ran it. A slow job behind a long matrix is the MOST likely to be
-  # cancelled and the LEAST likely to be re-run deliberately, so the jobs with the most to
-  # say are the ones that systematically never speak. PR branches keep cancelling.
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  # SETTLED 2026-09-12 by the ModernMavericks family rule (mavericks-shipyard's
+  # conventions check 1b and its release-concurrency design): **a run that can PUBLISH is
+  # cancelled by nothing; a run that is only BUILD FEEDBACK is superseded by the newer
+  # commit's.** This workflow cannot publish — release.yml is tag- and dispatch-only, and
+  # now declares the never-cancelled half explicitly — so ci.yml is the feedback half, on
+  # main as much as anywhere, and `true` is unconditional here by that rule.
+  #
+  # It replaces `${{ github.ref != 'refs/heads/main' }}` (2026-09-04), whose evidence was
+  # real and is not being denied: 194e237, a BACKLOG.md-only commit, cancelled the run
+  # carrying 06c6c96, a real test fix. What changed is the cost — after the fast/slow
+  # matrix split and the smoke decoupling the suite reports in ~1-3 min and the fast legs
+  # in ~6, against a 113-minute time-to-oracle before — and the discovery of never-cancel's
+  # own cost: consecutive pushes queue behind each other's 22 qemu legs (run 33970393353
+  # sat pending until 33966318977 was cancelled by hand, 2026-09-05).
+  #
+  # KNOWN RESIDUAL, recorded rather than papered over: `concurrency` is resolved at RUN
+  # level, before the `changes` gatekeeper below can see the diff, so a docs-only push
+  # still cancels a code run — and, because it then skips the heavy matrix, the run that
+  # replaces it carries LESS signal, which is the one place this family rule's premise
+  # ("the newer run reproduces the feedback") does not hold here. Recovery is
+  # `gh run rerun <id>`. The fix that would remove it, workflow-level `paths-ignore`, is
+  # deliberately NOT taken: it is a DECLARED path list whose failure mode is a code push
+  # creating no run at all, silently — the opposite of `changes`'s derived, fail-open
+  # default. See BACKLOG.md; if this bites, that entry is where the trade gets re-opened.
+  cancel-in-progress: true
 jobs:
   # Derives whether this push touched anything but docs, so the heavy `tjs`
   # matrix (and everything that consumes its artifacts) can skip on a

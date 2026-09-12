@@ -33,6 +33,28 @@ on:
 permissions:
   contents: read
 
+# A run that CAN PUBLISH is alone in its group and is cancelled by nothing — the
+# ModernMavericks family rule (mavericks-shipyard's conventions check 1b), adopted here
+# 2026-09-12 in the same change that made ci.yml cancel unconditionally. The two halves
+# are one decision: build feedback is superseded by the newer commit's, publishing work
+# is not, because it cannot be recreated by pushing again.
+#
+# Both halves of the family's expression are kept verbatim, including the `pull_request`
+# arm this workflow cannot currently reach (it triggers on tags and dispatch only), so the
+# shape stays correct if a PR trigger is ever added and so it reads as the family shape
+# rather than a local invention. `github.run_id` puts every tag push and every dispatch in
+# a group of ONE: never queued behind a sibling, therefore never evictable.
+#
+# `cancel-in-progress: false` would NOT be that guarantee: it protects the run that is
+# EXECUTING, not one that is QUEUED — GitHub keeps only the newest pending run per group
+# and cancels the rest, which is how mavericks-golang lost a release 13 seconds after the
+# run that evicted it. Declaring nothing at all (this file until now) happens to behave
+# correctly today, but states no property and survives no edit.
+concurrency:
+  group: >-
+    release-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # The leg matrix lives in scripts/tjs-legs.mjs (single source of truth,
   # shared with per-push CI — user decision 2026-07-11: no duplication

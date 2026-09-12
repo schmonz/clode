@@ -6242,35 +6242,61 @@ account. `clode build` is a different question — it is create-heavy, which is 
 418x lives — and deserves its own measurement before anyone assumes either way.
 
 
-## REOPENED: never-cancel-on-main may not be the right trade (user, 2026-09-05)
+## SETTLED: cancellation follows the ModernMavericks family rule (2026-09-12)
 
-**The user:** "Not sure I like the no-push-canceling, may want to come back to that."
+**Supersedes "REOPENED: never-cancel-on-main may not be the right trade" (user, 2026-09-05).**
+The user's direction: this decision should match what `../mavericks-shipyard` prescribes. It
+now does, in both halves.
 
-Phase 5 set `cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}` — PR branches cancel,
-main never does. The evidence for it was real: `194e237`, a BACKLOG.md-only commit, cancelled
-the run carrying `06c6c96` (a real test fix), and phase 2's Windows spawn number went unread
-for two days because its run was cancelled and nobody re-ran it deliberately.
+**The family rule, stated by the same maintainer in shipyard's release-concurrency design and
+enforced by `scripts/check-family-conventions.sh` check 1b:**
 
-**Why the calculus has since changed, both directions:**
+> Push-to-main builds should override each other. Release builds should not. Every release
+> build that succeeds should publish.
 
-- FOR keeping it: `cancel-in-progress` is evaluated at RUN level, before any job. So the
-  `changes` gatekeeper does NOT prevent cancellation — a docs-only push still cancels a code
-  run even though it then skips the entire matrix. That is the one case the gatekeeper cannot
-  fix, and it is exactly the case that motivated the change.
-- AGAINST keeping it: a cancelled run now loses far less. After the fast/slow matrix split and
-  the full-smoke decoupling, the suite reports at ~1-3 min and the fast legs at ~6 min, versus
-  a 113-minute time-to-oracle before. And never-cancel has a measured cost: consecutive pushes
-  queue behind each other's 22 qemu legs. Observed live on 2026-09-05 — run 33970393353 sat
-  `pending` until 33966318977 was cancelled by hand.
+Its reasoning, which is what makes it transfer rather than just being a setting to copy: a
+push run is **build feedback**, and only the newest commit's feedback is worth having; a
+publishing run is **work that cannot be recreated by pushing again**, so it must never be
+discarded.
 
-**The option dismissed too quickly, worth a real look:** `paths-ignore` at the WORKFLOW level.
-A docs-only push then creates NO run, so there is nothing to cancel, and code pushes go back to
-cancelling older code runs. It was rejected during phase 5 for leaving main's head with no CI
-result — but a docs-only push does not change code, so the prior run still describes the code
-accurately. That objection is weaker than it was treated as. The real cost is that
-`paths-ignore` is a DECLARED list, the shape this project keeps removing; `changes` is the
-fail-safe derived equivalent, so any such list wants the same unknown-means-code default.
+**How it lands here, and why the two files get opposite answers.** clode's split is cleaner
+than the family's: `ci.yml` cannot publish at all (it runs on push/PR/dispatch), and
+`release.yml` publishes only from a `v*` tag or a dispatch. So:
 
-**Not decided. Do not flip it without deciding which failure is worse:** a code push's signal
-destroyed by an unrelated docs push, or a code push's fast feedback queued behind a superseded
-run's emulated legs. Both have now been observed on this repo, days apart.
+- `ci.yml` — `cancel-in-progress: true`, unconditional. It is the feedback half, on `main` as
+  much as on a PR branch. This REPLACES `${{ github.ref != 'refs/heads/main' }}` (2026-09-04).
+- `release.yml` — `group: release-${{ pull_request && github.ref || github.run_id }}`,
+  `cancel-in-progress: ${{ pull_request }}`: every tag push and every dispatch is alone in its
+  group, so it is never queued behind a sibling and therefore never evictable. It previously
+  declared NO `concurrency:` at all — which behaves correctly today by default, but states no
+  property and survives no edit. The `pull_request` arm is unreachable in this repo and is
+  kept verbatim anyway, so the shape stays the family's rather than a local re-derivation.
+
+**Why the 2026-09-04 evidence no longer decides it.** That evidence was real and is not being
+denied: `194e237`, a BACKLOG.md-only commit, cancelled the run carrying `06c6c96`, a real test
+fix. What changed is both sides of the scale. A cancelled run now loses far less — after the
+fast/slow matrix split and the full-smoke decoupling the suite reports at ~1-3 min and the
+fast legs at ~6, against a 113-minute time-to-oracle before. And never-cancel turned out to
+have a measured cost of its own: consecutive pushes queue behind each other's 22 qemu legs —
+run `33970393353` sat `pending` until `33966318977` was cancelled by hand (2026-09-05).
+
+**KNOWN RESIDUAL — recorded, not papered over.** `concurrency` is resolved at RUN level,
+before the `changes` gatekeeper can see the diff. So a docs-only push still cancels a code
+run, and because it then skips the heavy matrix, the run that replaces it carries LESS signal.
+That is the one place the family rule's premise — "the newer run reproduces the feedback" —
+is false here, and it is exactly the 2026-09-04 case. Recovery is `gh run rerun <id>`.
+
+**The fix that would remove the residual, and why it is NOT taken.** Workflow-level
+`paths-ignore`: a docs-only push then creates no run, so there is nothing to cancel. It is
+rejected on this repo's own doctrine, not on the weak objection recorded on 2026-09-05 ("main's
+head would have no CI result" — weak, because a docs push does not change the code). The real
+objection is the failure mode: `paths-ignore` is a DECLARED path list, and a wrong entry means
+a CODE push creates no run at all, silently. `changes` is the derived, fail-open equivalent
+(`code=true` on any error, in two independent layers) and defaults to RUNNING the matrix.
+Trading a fail-open classifier for a fail-silent list is the wrong direction, and
+`dep-closure-derived-not-declared` / `ci-job-is-to-tell-the-truth` both say so.
+
+**What would re-open this:** observing the residual bite — a docs-only push killing a code
+run's matrix signal in practice. The answer then is not `paths-ignore` but a derived group
+(the classification would have to be available at run level, which today it is not), or
+accepting the manual re-run as the cost.
