@@ -27,6 +27,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { resolveLatest, resolveChannel, checkUpdate } = require('../../libexec/target-update-check.cjs');
 const { defineGuard, guardTests, checkGate, BROKEN } = require('../guard.cjs');
+const { stripLineComments, discoverFilesByExt } = require('../source-scan.cjs');
 
 const REPO = path.resolve(__dirname, '..', '..');
 const LIBEXEC = path.join(REPO, 'libexec');
@@ -227,65 +228,76 @@ test('floor fires: target-update-resolvelatest-http-failure goes BROKEN below it
 // anything this guard could write to (nothing does; this guard never writes).
 //
 // WHAT INPUT TRIPS IT (measured): a file other than `libexec/target-update-check.cjs`
-// itself containing a bare `resolveLatest(` call.
-function discoverFilesByExt(dir, exts) {
-  const out = [];
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (e.name.startsWith('.') || e.name === 'node_modules') continue;
-    const p = path.join(dir, e.name);
-    if (e.isDirectory()) out.push(...discoverFilesByExt(p, exts));
-    else if (exts.some((ext) => e.name.endsWith(ext))) out.push(p);
-  }
-  return out;
-}
+// itself containing a bare `resolveLatest(` call. See the control below, which is exactly
+// that file, synthesised.
+//
+// WHERE THE DETECTION LIVES, and why it moved (FIX ROUND 2, reviewer 2026-09-12). The first
+// cut did the whole job — the walk, stripLineComments, and the regex — inside `read()`, and
+// `scan()` was a bare `sites.map(...)`. `checkControl()` never calls `read()`, so the
+// control proved only that `.map()` works: mutating RESOLVE_LATEST_CALL_RE to
+// `/\bresolveLatestXX\s*\(/` left every test in this file green, forever. The floor did not
+// save it either — `examined` was the FILE count, which is independent of the regex, so a
+// blind regex still read OK (contrast host-provision-gates.test.cjs GUARD 1, whose floor IS
+// the detection count). And because the real corpus contains no direct caller, the regex's
+// true-positive path had never executed against anything at all. So `read()` is now pure
+// I/O — it hands back the source TEXT — and every act of detection happens in `scan()`,
+// where the control reaches it.
+const RESOLVE_LATEST_CALL_RE = /\bresolveLatest\s*\(/;
 
-// Mirrors host-provision-gates.test.cjs's own stripLineComments(): a same-line `//` not
-// preceded by `:` (so `https://` inside a string literal survives), stripped to
-// end-of-line — a prose mention of `resolveLatest(` in a COMMENT (this file's own header,
-// naude-entry.cjs's, extract-claude-js.cjs's) must not read as a real call site.
-function stripLineComments(src) {
-  return src.split('\n').map((line) => {
-    const m = /(^|[^:])\/\//.exec(line);
-    if (!m) return line;
-    return line.slice(0, m.index + m[1].length);
-  }).join('\n');
-}
-
-const RESOLVE_LATEST_CALL_RE = /\bresolveLatest\s*\(/g;
+// The one file allowed to call resolveLatest() directly: checkUpdate() lives in it and its
+// call is the caught one. It is still READ and still EXAMINED — it is exempted by name in
+// scan(), not skipped unseen, so `examined` stays an honest count of what was inspected.
+const PRODUCTION_MODULE_REL = path.relative(REPO, PRODUCTION_MODULE);
 
 // read() — the only I/O in this guard: the repo's own libexec/ and scripts/ source, never
-// ~/.local/share/clode or anything this guard could write to.
+// ~/.local/share/clode or anything this guard could write to. No detection here.
 function readRealSourceFiles() {
   const files = [
     ...discoverFilesByExt(LIBEXEC, ['.cjs', '.js']),
     ...discoverFilesByExt(SCRIPTS, ['.mjs', '.cjs', '.js']),
   ];
-  const sites = [];
-  for (const f of files) {
-    if (f === PRODUCTION_MODULE) continue; // checkUpdate's own, caught call — not a violation
-    const stripped = stripLineComments(fs.readFileSync(f, 'utf8'));
-    RESOLVE_LATEST_CALL_RE.lastIndex = 0;
-    if (RESOLVE_LATEST_CALL_RE.test(stripped)) sites.push(path.relative(REPO, f));
+  return { sources: files.map((f) => ({ file: path.relative(REPO, f), text: fs.readFileSync(f, 'utf8') })) };
+}
+
+// PURE: no I/O. Every judgment this guard makes is here — comment stripping, the regex, the
+// one exemption — so the control exercises all of it. `examined` is the size of the real
+// corpus scanned (every libexec/scripts source file), not the (normally zero) match count:
+// a shrinking corpus is exactly what should make this guard go BROKEN, not "cleaner".
+function scanNoDirectResolveLatestCalls({ sources }) {
+  const findings = [];
+  for (const { file, text } of sources) {
+    // Examined, then exempted: checkUpdate's own, caught call is not a violation.
+    if (file === PRODUCTION_MODULE_REL) continue;
+    if (!RESOLVE_LATEST_CALL_RE.test(stripLineComments(text))) continue;
+    findings.push(`${file}: calls resolveLatest() directly, outside `
+      + `checkUpdate()'s try/catch — its one throw-site would escape uncaught here`);
   }
-  return { totalFiles: files.length, sites };
+  return { findings, examined: sources.length };
 }
 
-// PURE from the caller's point of view. `examined` is the size of the real corpus
-// scanned (every libexec/scripts source file), not the (normally zero) match count — a
-// shrinking corpus is exactly what should make this guard go BROKEN, not "cleaner".
-function scanNoDirectResolveLatestCalls({ totalFiles, sites }) {
-  const findings = sites.map((file) => `${file}: calls resolveLatest() directly, outside `
-    + `checkUpdate()'s try/catch — its one throw-site would escape uncaught here`);
-  return { findings, examined: totalFiles };
-}
-
+// TWO synthetic sources, and the second one is the point. The first is a real direct caller
+// and MUST be found — it is the only place the regex's true-positive path ever runs, since
+// the real corpus (correctly) contains no such caller. The second mentions `resolveLatest(`
+// in a `//` COMMENT and must NOT be found, which puts stripLineComments under test for the
+// first time: a guard that reported every prose mention of the function as a bypassing call
+// site would be noise, and this control fails if it becomes one (see the test below, which
+// asserts the control produces EXACTLY the one finding).
 function directCallControlInputs() {
-  return { totalFiles: 1, sites: ['synthetic/control.cjs'] };
+  return {
+    sources: [
+      { file: 'synthetic/control-direct-caller.cjs',
+        text: "const { resolveLatest } = require('./target-update-check.cjs');\n"
+          + "const latest = await resolveLatest('latest', {});\n" },
+      { file: 'synthetic/control-comment-only.cjs',
+        text: '// a prose mention of resolveLatest(channel) in a comment, like this file\'s\n'
+          + '// own header and naude-entry.cjs\'s — not a call site.\nconst x = 1;\n' },
+    ],
+  };
 }
 
 // Measured 2026-09-12: calling the real, exported readRealSourceFiles() directly from
 // the repo root (`node -e "console.log(require('./test/build-gates/
-// target-update-gates.test.cjs').readRealSourceFiles().totalFiles)"`) counts 114 real
+// target-update-gates.test.cjs').readRealSourceFiles().sources.length)"`) counts 114 real
 // source files. This is NOT the same as a shell `find libexec scripts -name '*.cjs' -o
 // ...` count (129) — this NFS checkout carries stray macOS AppleDouble shadow files
 // (`libexec/._build-compose.cjs` and eight siblings) that `find`'s glob matches and
@@ -302,10 +314,24 @@ const guard2 = defineGuard({
 });
 guardTests(guard2);
 
+// The control's SECOND source is what this pins: checkControl() only demands "at least one
+// finding", so a scan that reported both sources — every prose mention of resolveLatest( in
+// the tree — would still certify as "can fail" while being useless. Exactly one finding,
+// naming the real caller and not the comment, is the claim.
+test('the control finds the direct caller and NOT the comment-only mention', () => {
+  const r = scanNoDirectResolveLatestCalls(directCallControlInputs());
+  assert.strictEqual(r.findings.length, 1, `expected exactly one finding, got: ${r.findings.join(' | ')}`);
+  assert.match(r.findings[0], /control-direct-caller\.cjs/);
+  assert.doesNotMatch(r.findings[0], /control-comment-only\.cjs/,
+    'a `// resolveLatest(...)` mention in a comment is not a call site — stripLineComments '
+    + 'is part of the detection and must run where the control can reach it');
+  assert.strictEqual(r.examined, 2);
+});
+
 test('floor fires: target-update-no-direct-resolvelatest-callers goes BROKEN below its floor', () => {
   const r = checkGate({
     name: 'floor-probe-2', floor: guard2.floor,
-    read: () => ({ totalFiles: 1, sites: [] }), // far fewer than the real 114
+    read: () => ({ sources: [{ file: 'x.cjs', text: '' }] }), // far fewer than the real 114
     scan: scanNoDirectResolveLatestCalls,
   });
   assert.strictEqual(r.verdict, BROKEN, r.message);

@@ -18,10 +18,15 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { provision, parseSha256, REGISTRY } = require('../../libexec/host-provision.cjs');
+// REGISTRY is deliberately NOT imported: this guard's whole point is that the verdict for
+// every call site comes from calling the real provision(), never from re-checking
+// Object.keys(REGISTRY) here (see scanKnownRequirementIds below). An unused import of it
+// was an invitation to do exactly that.
+const { provision, parseSha256 } = require('../../libexec/host-provision.cjs');
 const hosttools = require('../../libexec/clode-hosttools.cjs');
 const { defineGuard, guardTests, checkGate, BROKEN } = require('../guard.cjs');
 const { throwsAsFindings } = require('../throws-as-findings.cjs');
+const { stripLineComments, discoverFilesByExt } = require('../source-scan.cjs');
 
 const REPO = path.resolve(__dirname, '..', '..');
 const LIBEXEC = path.join(REPO, 'libexec');
@@ -60,29 +65,12 @@ const SCRIPTS = path.join(REPO, 'scripts');
 // let alone written to; it is not `~/.local/share/clode` or any real cache.
 const NEVER_WRITTEN_DATADIR = path.join(os.tmpdir(), 'clode-hp-guard-unknown-requirement-never-written');
 
-function stripLineComments(src) {
-  // Mirrors test/guards-population.cjs's own stripLineComments(): a same-line `//`
-  // not preceded by `:` (so `https://` inside a string literal survives), stripped
-  // to end-of-line. A prose mention of `provision('sha256'|'tar')` in a COMMENT
-  // (host-provision.cjs itself has one; naude-entry.cjs has another) must not read
-  // as a real call site.
-  return src.split('\n').map((line) => {
-    const m = /(^|[^:])\/\//.exec(line);
-    if (!m) return line;
-    return line.slice(0, m.index + m[1].length);
-  }).join('\n');
-}
-
-function discoverFilesByExt(dir, exts) {
-  const out = [];
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (e.name.startsWith('.') || e.name === 'node_modules') continue;
-    const p = path.join(dir, e.name);
-    if (e.isDirectory()) out.push(...discoverFilesByExt(p, exts));
-    else if (exts.some((ext) => e.name.endsWith(ext))) out.push(p);
-  }
-  return out;
-}
+// stripLineComments and discoverFilesByExt come from test/source-scan.cjs (they were
+// duplicated verbatim across this file, target-update-gates.test.cjs and
+// guards-population.cjs). Comment stripping is what keeps a prose mention of
+// `provision('sha256'|'tar')` — host-provision.cjs has one, naude-entry.cjs another —
+// from reading as a real call site; source-scan.cjs states which direction each of its
+// approximations fails in.
 
 const CALL_SITE_RE = /provision\(\s*['"]([\w-]+)['"]/g;
 
