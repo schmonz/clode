@@ -251,23 +251,30 @@ const VERDICTS = [
     because: 'scales self-check and floor-probe timeouts (scripts/build-naude.mjs, '
       + 'scripts/floor-probe.mjs) up for a slow or loaded box. Changes how a check is '
       + 'OBSERVED (how long it waits before declaring a hang), never what gets built.' },
-  { name: 'CLODE_UPDATE_CHANNEL', verdict: 'absorbed',
-    because: 'the env twin of an ALREADY-DOCUMENTED input: fetch\'s '
-      + "`[channel|version]` positional tail. resolveChannel's own precedence is "
-      + '"explicit arg > CLODE_UPDATE_CHANNEL env > \'latest\'" — exactly the --verbose / '
-      + 'CLODE_VERBOSE pattern already absorbed above. Selects which release channel gets '
-      + 'fetched, a real build input; not yet declared in cli-surface.cjs\'s env table.' },
+  { name: 'CLODE_UPDATE_CHANNEL', verdict: 'env-only',
+    because: 'CORRECTED (fix round 1): NOT the env twin of fetch\'s `[channel|version]` '
+      + "positional — that positional resolves through libexec/clode-update.cjs's OWN "
+      + 'resolveChannel (settings.json\'s autoUpdatesChannel > explicit arg > \'latest\'), '
+      + 'which never reads this variable. The only reader is a DIFFERENT resolveChannel in '
+      + 'libexec/target-update-check.cjs:17, whose header says it "Runs INSIDE a built '
+      + 'target (quaude/naude) with NO clode builder present" — this is the shipped '
+      + "product checking for its own update at RUNTIME, not an input to `clode build` or "
+      + "clode's fetch verb. Same situation as CLODE_RELEASES_URL two entries up, read in "
+      + 'that same file for that same runtime check: not a user-facing configuration '
+      + 'point.' },
   { name: 'CLODE_VERSION_DIR', verdict: 'absorbed',
     because: 'the second tier of resolveClaudeBin\'s precedence chain in '
       + 'libexec/clode-resolve.cjs, directly below the already-absorbed CLODE_CLAUDE_BIN '
       + '("CLODE_CLAUDE_BIN > CLODE_VERSION_DIR > provider current"): an explicit installed-'
       + "version directory to extract from. Same KIND of candidate as its sibling — it "
       + 'selects the build input — just not yet declared in cli-surface.cjs.' },
-  { name: 'CLODE_WATCH_INTERVAL', verdict: 'absorbed',
-    because: 'a real user-facing tunable for the already-absorbed watch feature: the '
-      + 'throttle interval (default one day) between clode-watch.cjs\'s update-signal '
-      + 'cycles, sibling of the already-declared CLODE_NO_WATCH on the same feature. '
-      + 'Belongs on the same verbs\' env table; not yet added.' },
+  { name: 'CLODE_WATCH_INTERVAL', verdict: 'env-only',
+    because: 'CORRECTED (fix round 1): libexec/clode-watch.cjs:286-287 throttles how often '
+      + 'a BACKGROUND update-notification check fires (default once a day) — it never '
+      + 'touches what a build produces. Feature-proximity to the already-absorbed '
+      + 'CLODE_NO_WATCH is not the rule\'s test; the closer analogy is CLODE_TIMEOUT_SCALE '
+      + 'above, correctly env-only because it changes how a check is OBSERVED, never what '
+      + 'gets built. Same shape here.' },
 ];
 
 module.exports = { VERDICTS, VERDICT_KINDS };
