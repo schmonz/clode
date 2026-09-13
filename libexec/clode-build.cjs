@@ -5,7 +5,9 @@
 // blobulating always happens locally (canon; CI may blobulate in ephemeral runners for
 // tests only).
 //
-// Pipeline (Q1a design memo spike/quickjs/results/quaude-blobulate-design.md):
+// Pipeline (Q1a design memo, cited below by section number — the file itself is not
+// in spike/quickjs/results/ under any name; the pointer predates this task and is
+// left removed rather than guessed at):
 //   1. resolve + extract + hook the upstream bundle (existing cache machinery);
 //   2. ensure the ext-dep closure (existing deps machinery);
 //   3. copy the pinned tjs template and ad-hoc re-sign the COPY while it is

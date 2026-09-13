@@ -9,7 +9,7 @@
 // runs scripts/build-tjs.mjs regenerates; the netbsd-sparc in-guest bake did not,
 // so it shipped an engine with the C function and no JS binding onto it. Nothing
 // noticed for a whole leg-lifetime: the engine built, booted, and carved 927s of
-// bundle before `quaude-blobulate: this engine does not report moduleMeta` — the LAST
+// bundle before `graph-meta: this engine does not report moduleMeta` — the LAST
 // stage of the longest job in the matrix.
 //
 // The three existing engine sanity checks (build-tjs.mjs's post-build smoke,

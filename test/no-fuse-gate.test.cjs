@@ -2,8 +2,9 @@
 // no-fuse-gate.test.cjs — phase 3a, task 2. Retiring the word "fuse" is not really about
 // renaming five files; it is about the word never quietly coming back once "blobulate" has
 // been said to mean what it meant. This guard is that promise made checkable: it reads every
-// git-tracked file that could carry prose or code and complains if the standalone word "fuse"
-// (or fused/fuses/fusing) appears anywhere outside the one place upstream still owns it.
+// git-tracked file that could carry prose or code and complains if the word "fuse" (or its
+// ordinary inflections, or a camelCase compound built on it) appears anywhere outside the
+// places named below.
 //
 // WHY GIT-TRACKED FILES, not a hand-rolled filesystem walk with a SKIP_DIRS blocklist (the
 // task brief's own Step-1 sketch, deliberately incomplete): a raw `fs.readdirSync` walk sees
@@ -23,51 +24,91 @@
 // suffuse(d), defuse(d), fuselage — and this repo has its own: the errno constant
 // ECONNREFUSED, and test/guards-population.cjs's own GATE_REFUSES / test/fixtures/
 // proxy-server.cjs's PROXY_REFUSE. A bare /fuse/i would flag every one of those, forever
-// (BACKLOG.md alone has dozens of "refuse/refused" lines that are plain English, nothing to
-// do with this task). None of that family has a WORD BOUNDARY immediately before "fuse" —
-// the character right before it is always a letter (re-FUSE, con-FUSE, ECONNRE-FUSE-D) — so
-// \bfuse\b, matched alongside fused/fuses/fusing as its own inflected forms (an ordinary
-// suffix, not a compound), excludes the whole family with no explicit allowlist, while still
-// catching every real site this task renamed: cross-fuse, quaude-fuse.js, "the fuse worker",
-// FUSED (all-caps emphasis in a comment), and so on.
+// (BACKLOG.md alone has over a hundred "refuse/refused" lines that are plain English,
+// nothing to do with this task). None of that family has a WORD BOUNDARY immediately before
+// "fuse" — the character right before it is always a letter (re-FUSE, con-FUSE,
+// ECONNRE-FUSE-D) — so \bfuse\b, matched alongside fused/fuses/fusing as its own inflected
+// forms, excludes the whole family with no explicit allowlist.
 //
-// THE KNOWN GAP, named rather than chased: a prefix glued on with NO boundary at all — a
-// hypothetical future "unfuse" or "xfuse", or a camelCase "somethingFusedPayload" — would
-// slip past this the same way "unfused"/"xfuse"/"materializeFusedPayload" did before this
-// task renamed them (there is no boundary between "l" and "F" in "materializeFused" either).
-// That is the same tradeoff test/windows-path-ratchet.test.cjs names for its own regexes:
-// "it cannot catch a shape we have not met." This guard's job is the word as it actually
-// appears in this repo today, proven by its control below, not every conceivable disguise.
+// THE CAMELCASE HALF (fix round 1, coordinator review). A plain \bfuse\b cannot see a
+// compound with NO boundary at all — `materializeFusedPayload`, `sentinelFuse`, `xfuse` all
+// have a WORD CHARACTER immediately before "fuse"/"Fuse", so \b never fires there, and this
+// gate shipped blind to the exact shape this task spent most of its effort renaming. The fix
+// is NOT simply "add /[a-z]Fus(e|ed|es|ing)\b/ and rely on the existing /i flag" — tried
+// first, measured directly: under a shared case-insensitive flag, `[a-z]` and `Fus` both fold
+// case, so the pattern also matches `refuse`/`confused`/`ECONNREFUSED` (the letter before
+// "fus" in "re-fuse" is just as much an `[a-z]` match as the letter before "Fuse" in
+// "sentinelFuse") — 302 new findings across files that have never said our word, confirmed by
+// actually running it. What distinguishes a real compound from the excluded English family is
+// not case, it is the SPECIFIC 2-3 letters immediately before "fus": re/con/dif/in/pro/ef/
+// suf/de are excluded prefixes, and nothing else is. So the real fix is a letter immediately
+// before "fus", NOT preceded by one of those specific prefixes:
+//   [a-z](?<!re)(?<!con)(?<!dif)(?<!in)(?<!pro)(?<!ef)(?<!suf)(?<!de)fus(?:e|ed|es|ing)\b
+// (case-insensitive). The lookbehinds sit AFTER the generic `[a-z]` on purpose: they must
+// check the text ending where "fus" starts, not where the generic letter starts, or the
+// exclusion silently never fires (measured: swapping the order made `diffuse`/`refuse` match
+// again). Verified against the whole family plus every real compound this task renamed
+// (`sentinelFuse`, `materializeFused`, `unfused`, `xfuse`, `cross-fuse`) before trusting it —
+// see the fix-round-1 report for the exact table. This closes the gap enough to make the
+// scripts/build-naude.mjs ALLOWED entry below load-bearing again (under the OLD plain
+// \bfuse\b, it matched nothing there and was pure documentation); it does not close the gap
+// named next.
 //
-// THE ONE SURVIVOR, and the TWO HISTORICAL RECORDS that are not survivors of the same kind:
+// THE STILL-KNOWN GAP, named rather than chased: a prefix glued on with NO letters at all
+// before it that could carry a lookbehind — i.e. this closes compounds with at least one
+// letter before "fus" (camelCase, "xfuse"), but a bare, sentence-initial reintroduction of
+// the word with a NEW two-or-three-letter prefix this list has never met (some future English
+// word, or a new coined abbreviation) would need its prefix added here to be excluded, or it
+// will slip through as a false positive requiring a new ALLOWED entry — the opposite failure
+// direction from before, and the safer one. That is the same tradeoff
+// test/windows-path-ratchet.test.cjs names for its own regexes: "it cannot catch a shape we
+// have not met." This guard's job is the word as it actually appears in this repo today,
+// proven by its two controls below (one per detector — see control()), not every conceivable
+// disguise.
 //
-//   - scripts/build-naude.mjs's `sentinelFuse` / `NODE_SEA_FUSE_<hash>` is postject's own
-//     API parameter name and Node's own sentinel constant — upstream's vocabulary, not ours,
-//     and a gate that forbade it would force a WRONG fix (renaming an argument postject does
-//     not recognise). \bfuse\b does not even match it (no boundary inside "sentinelFuse" or
-//     between "_" and "FUSE" in the constant); listed in ALLOWED anyway, as documentation and
-//     defense-in-depth against a future, less careful regex change.
+// THE OPERATIVE RULE FOR "IS THIS SITE EXEMPT", stated once so every ALLOWED/COUNT_ALLOWED
+// entry below can be checked against it: describing a mechanism in TODAY's vocabulary is
+// fine everywhere in this repo, swept like anything else (test/fidelity/PLATFORMS.md's dated
+// PROOF statements — "on-box fuse, PONG + attest green, bundle 2.1.179" — were swept to
+// "blobulate" for exactly this reason: they describe what a rig proved, not a verbatim quote
+// of what something once said). What is actually protected is narrower: a VERBATIM QUOTE of
+// specific historical wording (paraphrasing it stops being the thing quoted), a DATED LEDGER
+// ROW that is a fact about a specific past date (rewriting it misrepresents when something
+// ran), upstream's OWN identifier (ours to use, never to rename), and a REAL ON-DISK PATH this
+// task did not rename (spike/ is out of scope, so a path under it keeps its real name).
 //
-//   - BACKLOG.md and test/fidelity/RESULTS.md are dated, append-only journals, and both are
-//     exempted WHOLESALE rather than line-by-line. BACKLOG.md's entries record decisions made
-//     when the tool was literally CALLED clode-fuse.cjs and the action was literally named
-//     cross-fuse; Task 1 already established the precedent of leaving BACKLOG.md's own
-//     clode-fuse.cjs references untouched even after that literal rename ("the word 'fuse'
-//     itself is untouched (Task 2's business)" — its commit message). RESULTS.md says of
-//     itself: "a hand-driven row is a fact about the past ... and stays true forever no
-//     matter what happens later; append-only latest-wins is built for exactly that shape."
-//     Rewriting either to say "blobulate" retroactively would misrepresent what was actually
-//     decided, built, or run on the date the entry claims — the same reason this repo does
-//     not rewrite README.md in someone else's voice, applied to its own history instead.
+//   - scripts/build-naude.mjs's `sentinelFuse` / `NODE_SEA_FUSE_<hash>` — upstream's own
+//     identifier. Forcing a rename here would not fix anything; postject would not recognise
+//     the result.
+//   - test/fidelity/ci-claim-check.mjs and test/fidelity/fidelity-notes.test.cjs each quote a
+//     specific piece of historical wording verbatim, in quotes, as a worked example (the exact
+//     RESULTS.md phrase for what a `how: ci` claim asserts, and a specific note string that
+//     once drifted). Paraphrasing either stops being the thing being quoted.
+//   - libexec/quaude-blobulate.js's own header (the canonical definition — see the top of
+//     that file) names `sentinelFuse`/`NODE_SEA_FUSE_<hash>` to explain why "fuse" was
+//     retired — the same reasoning this gate applies to itself (see SELF below): explaining a
+//     rename requires naming the thing being replaced.
+//   - .github/renovate.json and test/node-pins-agree.test.cjs name the REAL, on-disk
+//     `spike/quickjs/qemu/docker-loop/Dockerfile.xfuse` — spike/ is out of scope for this
+//     task (see SKIP_DIRS below), so that file was never renamed, and text naming it by its
+//     actual name is correct, not stale. (Under the OLD plain \bfuse\b this needed no entry
+//     at all — "xfuse" has a word character, not a boundary, before "fuse". The camelCase fix
+//     above closes that gap too, which is why these two are new entries in this round.)
 //
-//     Two lines elsewhere quote that history verbatim, in quotes, as a worked example: the
-//     exact phrase RESULTS.md uses for what a `how: ci` claim asserts ("fuses and runs a
-//     quaude ... on every build") is quoted in test/fidelity/ci-claim-check.mjs to explain why
-//     that class of claim needs a liveness check, and a specific note string that once
-//     drifted ("... fuses and runs a quaude inside the Haiku guest on every build") is quoted
-//     in test/fidelity/fidelity-notes.test.cjs as the drift example. Both get the same narrow,
-//     line-scoped exemption, for the same reason as the two files above: a paraphrase would
-//     no longer be the thing being quoted.
+// BACKLOG.md and test/fidelity/RESULTS.md are a DIFFERENT shape of exception, and get a
+// DIFFERENT mechanism (fix round 1: the first draft called BACKLOG.md "a dated, append-only
+// journal", which BACKLOG.md's own line 5 contradicts — "Done items are DELETED from here —
+// git history is the record" — it is a constantly-edited triage document, not a ledger).
+// test/fidelity/RESULTS.md genuinely is what the first draft claimed for both: append-only,
+// latest-wins, each row "a fact about the past ... true forever no matter what happens
+// later" (its own header). Neither file gets a wholesale "any line in here is fine" pass,
+// because that would hide a NEW "fuse" typed into either one tomorrow exactly as well as it
+// hides today's history — instead both get the EXACT, both-directions count ratchet
+// test/windows-path-ratchet.test.cjs already uses for the same problem (COUNT_ALLOWED,
+// below): every line currently there is grandfathered by the measured count, but the count
+// itself is a tripwire — it fails the moment a NEW matching line appears (whatever its
+// reason) or an old one disappears (a stale, too-generous count), so the file is never
+// invisible to this gate the way a wholesale exemption would make it.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -80,7 +121,10 @@ const SELF = 'test/no-fuse-gate.test.cjs';
 
 // Tracked, but out of THIS task's scope on purpose: bench/ and spike/ are research and
 // experimental trees, not the vocabulary surface a user or CI reads as "the product" (the
-// task brief's own SKIP_DIRS sketch names the same two, for the same reason).
+// task brief's own SKIP_DIRS sketch names the same two, for the same reason). spike/ not
+// being renamed is also WHY .github/renovate.json and test/node-pins-agree.test.cjs need an
+// ALLOWED entry below for the real spike/.../Dockerfile.xfuse — this list is what makes that
+// path "out of scope" rather than "stale".
 const SKIP_DIRS = new Set(['bench', 'spike']);
 const EXT_RE = /\.(cjs|mjs|js|json|yml|yaml|md|sh|Dockerfile)$/;
 // bin/clode itself has no extension (a shebang script, `#!/usr/bin/env node`) and was
@@ -94,25 +138,21 @@ const EXT_RE = /\.(cjs|mjs|js|json|yml|yaml|md|sh|Dockerfile)$/;
 // draws (extname('.tool-versions') === '', extname('.eslintrc.json') === '.json').
 function hasNoExtension(rel) { return path.extname(rel) === ''; }
 
-// Matches "fuse" only as a standalone word/inflection — see the file header for exactly
-// which real English words this is designed to exclude, and why a bare substring test
-// cannot be used here.
-const FUSE_RE = /\bfuse\b|\bfused\b|\bfuses\b|\bfusing\b/i;
+// Matches "fuse"/"fused"/"fuses"/"fusing" as a standalone word (excludes the whole
+// refuse/confuse/... family automatically — no boundary before "fus" in any of them), OR the
+// same suffix glued onto ANY other letter that is not one of the excluded English prefixes —
+// this is what catches a camelCase compound (`sentinelFuse`, `materializeFused`) or a
+// lowercase compound with no boundary at all (`xfuse`) without also catching `refuse`/
+// `confuse`/`ECONNREFUSED`/`GATE_REFUSES`. See the file header for the full reasoning,
+// including why the lookbehinds must sit AFTER the generic `[a-z]`, not before it.
+const FUSE_RE = /\bfuse\b|\bfused\b|\bfuses\b|\bfusing\b/
+  .source + '|[a-z](?<!re)(?<!con)(?<!dif)(?<!in)(?<!pro)(?<!ef)(?<!suf)(?<!de)fus(?:e|ed|es|ing)\\b';
+const FUSE_WORD_RE = new RegExp(FUSE_RE, 'i');
 
 const ALLOWED = [
   { file: 'scripts/build-naude.mjs', pattern: /sentinelFuse|NODE_SEA_FUSE_[0-9a-f]{32}/,
     because: "postject's own API parameter name and Node's own sentinel constant — "
       + 'upstream\'s vocabulary, not ours; a gate that forbade it would force a wrong fix.' },
-  { file: 'BACKLOG.md', pattern: FUSE_RE,
-    because: 'a dated, append-only journal — entries record decisions made when the tool '
-      + 'was literally named with "fuse" (clode-fuse.cjs, the cross-fuse action). Task 1 '
-      + "already left this file's clode-fuse.cjs references untouched after that literal "
-      + 'rename; rewriting history to say "blobulate" retroactively would misrepresent it.' },
-  { file: 'test/fidelity/RESULTS.md', pattern: FUSE_RE,
-    because: 'an append-only, latest-wins ledger of dated fidelity rows — by its own header, '
-      + '"a hand-driven row is a fact about the past ... and stays true forever no matter '
-      + 'what happens later." Rewriting a row would misrepresent what actually ran on the '
-      + 'date it claims.' },
   { file: 'test/fidelity/ci-claim-check.mjs', pattern: /fuses and runs a quaude/i,
     because: "verbatim quotation of RESULTS.md's own historical wording, quoted to explain "
       + 'why a `how: ci` claim needs a liveness check; paraphrasing it would no longer be '
@@ -121,12 +161,36 @@ const ALLOWED = [
     because: 'verbatim quotation of a specific note string that once drifted (the haiku-x64 '
       + 'example two lines below); the point of the example is exactly what was written at '
       + "the time, not today's vocabulary." },
-  { file: 'libexec/quaude-blobulate.js', pattern: /WHY NOT "fuse"|`fuse` is Node SEA/,
+  { file: 'libexec/quaude-blobulate.js',
+    pattern: /WHY NOT "fuse"|`fuse` is Node SEA|sentinelFuse: 'NODE_SEA_FUSE_<hash>'/,
     because: "this file's own header is the canonical definition of \"blobulate\" (the task "
       + 'brief requires exactly one home for the coined word), and explaining a rename '
-      + 'requires naming the word being replaced once — the same reasoning this gate '
-      + 'applies to itself (see SELF above).' },
+      + 'requires naming the word being replaced, and the upstream identifier it is not, '
+      + 'once each — the same reasoning this gate applies to itself (see SELF above).' },
+  { file: '.github/renovate.json', pattern: /Dockerfile\.xfuse|xfuse image/,
+    because: 'names the real, on-disk spike/quickjs/qemu/docker-loop/Dockerfile.xfuse — '
+      + 'spike/ is out of this task\'s scope (SKIP_DIRS above) and was never renamed, so '
+      + 'this is the correct current name, not a stale one.' },
+  { file: 'test/node-pins-agree.test.cjs', pattern: /Dockerfile\.xfuse|xfuse docker loop/,
+    because: 'same reason as .github/renovate.json: names the real, unrenamed spike/.../'
+      + 'Dockerfile.xfuse by its actual on-disk name.' },
 ];
+
+// COUNT_ALLOWED — the exact, both-directions ratchet test/windows-path-ratchet.test.cjs uses
+// (its ALLOWED table, `scanFiles`'s two finding loops): a file's TOTAL count of FUSE_WORD_RE-
+// matching lines is grandfathered exactly at the number below, in EITHER direction. Growing
+// past it (a new "fuse" line, for any reason) is a finding; shrinking below it (the file
+// improved, and the count is now stale) is ALSO a finding — this repo's mechanism for "a
+// number in this table must never go silently unnoticed to be wrong."
+//
+// Measured 2026-09-13 against FUSE_WORD_RE (widened, this round) with:
+//   node -e "const fs=require('fs'); const FUSE_WORD_RE=/.../i; for (const f of [...])
+//     console.log(f, fs.readFileSync(f,'utf8').split('\n').filter(l=>FUSE_WORD_RE.test(l)).length)"
+// BACKLOG.md: 150. test/fidelity/RESULTS.md: 22.
+const COUNT_ALLOWED = {
+  'BACKLOG.md': 150,
+  'test/fidelity/RESULTS.md': 22,
+};
 
 function isAllowed(rel, line) {
   return ALLOWED.some((a) => rel === a.file && a.pattern.test(line));
@@ -164,21 +228,46 @@ function readCorpus() {
 // PURE. {findings, examined} — the shape defineGuard's scan requires. `examined` is a FILE
 // count (this file names the word to forbid it, so it is excluded from BOTH the corpus and
 // the count, exactly as the brief's own sketch does).
+//
+// TWO DETECTORS, each with its own control (see control() below): the FILENAME check (a
+// reintroduced `quaude-fuse.js` is the single most likely regression) and the per-LINE scan.
+// A COUNT_ALLOWED file's matching lines are tallied but never pushed individually — the
+// ratchet check after this loop is their only finding path, both directions.
 function scanForFuse({ files }) {
   const findings = [];
   let examined = 0;
+  const countTally = {};
+  const seen = new Set();
   for (const { rel, src } of files) {
     if (rel === SELF) continue;
     examined++;
-    // A bare substring, not FUSE_RE: a FILENAME is a much smaller, controlled namespace
+    seen.add(rel);
+    // A bare substring, not FUSE_WORD_RE: a FILENAME is a much smaller, controlled namespace
     // than prose (measured: no tracked path contains "refuse"/"confuse"/etc — the whole
-    // family this file's header explains FUSE_RE exists to exclude), so the brief's
+    // family this file's header explains FUSE_WORD_RE exists to exclude), so the brief's
     // original, simpler check is exactly right here.
     if (/fuse/i.test(rel)) findings.push(`${rel}: the FILENAME still says fuse`);
+    const isRatcheted = rel in COUNT_ALLOWED;
     for (const line of src.split('\n')) {
-      if (!FUSE_RE.test(line)) continue;
+      if (!FUSE_WORD_RE.test(line)) continue;
+      if (isRatcheted) { countTally[rel] = (countTally[rel] || 0) + 1; continue; }
       if (isAllowed(rel, line)) continue;
       findings.push(`${rel}: ${line.trim().slice(0, 120)}`);
+    }
+  }
+  // Ratchet only fires for a COUNT_ALLOWED file that was actually part of THIS run's corpus
+  // (`seen`) — a synthetic/partial corpus (the control below, or any future ad-hoc call)
+  // that never included BACKLOG.md at all is not evidence BACKLOG.md "shrank to zero".
+  for (const [rel, allowed] of Object.entries(COUNT_ALLOWED)) {
+    if (!seen.has(rel)) continue;
+    const actual = countTally[rel] || 0;
+    if (actual > allowed) {
+      findings.push(`${rel}: ${actual} fuse-matching lines (COUNT_ALLOWED says ${allowed}) — `
+        + 'a new one was added; either it should say "blobulate" (today\'s vocabulary is '
+        + 'always fine here) or, if it is genuinely new dated history, bump the count');
+    } else if (actual < allowed) {
+      findings.push(`${rel}: COUNT_ALLOWED says ${allowed} but only ${actual} remain — good `
+        + 'news, this shrank; lower the count so the ratchet holds the gain.');
     }
   }
   return { findings, examined };
@@ -186,25 +275,38 @@ function scanForFuse({ files }) {
 
 const guard = defineGuard({
   name: 'no-fuse-vocabulary',
-  // Measured 2026-09-13 (`/opt/pkg/bin/node -e` against readCorpus()+scanForFuse() run
-  // directly — see task-2-report.md for the exact command and output) against the real,
-  // post-rename tree: 515 tracked, extension-matching-or-extensionless files, SELF
-  // excluded, zero findings. The floor equals that measurement exactly (never one under,
-  // per the task brief) — any future file this gate would have scanned but no longer can
-  // (a `git ls-files` regression, a candidate filter narrowed by accident, a new
-  // SKIP_DIRS entry added without a reason written beside it) drops `examined` below 515
-  // and reports BROKEN rather than a silently-narrower OK.
-  floor: 515,
+  // The census this floor guards is FILES EXAMINED, not checks performed — it moves for
+  // reasons that have nothing to do with coverage (anyone deleting a tracked .md file lowers
+  // it by one), unlike phase 5's `examined` (which counts checks, so losing one IS losing
+  // coverage). Following test/windows-path-ratchet.test.cjs's own precedent for this exact
+  // distinction ("leaving room for ordinary file churn"): measured 2026-09-13 at 515 tracked,
+  // candidate files (SELF excluded) — floor is 400, comfortably below that so an ordinary
+  // month of file churn does not turn this BROKEN and train someone to re-cut the number, but
+  // nowhere near what a genuinely broken corpus would produce: a `git ls-files` invocation
+  // failure, a wrong cwd, or a candidate filter that regressed to matching almost nothing
+  // reports empty or near-empty, not "off by a few dozen" — 400 is nowhere near that, so it
+  // still catches the scan going BLIND, which is this floor's actual job.
+  floor: 400,
   read: readCorpus,
   scan: scanForFuse,
-  // A synthetic corpus containing a real violation: the word this guard exists to forbid,
-  // as an ordinary standalone word in a comment — not `sentinelFuse`/`NODE_SEA_FUSE_...`
-  // (the one real survivor) and not a `refuse`-family word (which this guard must NOT
-  // flag), so the control proves the SAME discriminating regex that protects those two
-  // categories still catches a plain, real "fuse" when one is actually there.
+  // TWO synthetic files, one per detector, so checkControl proves BOTH the filename branch
+  // and the line-scan branch can independently fail — a single-file control that happened to
+  // trip only one of them would leave the other unproven (fix round 1: the filename branch,
+  // `if (/fuse/i.test(rel))`, is the one that catches a reintroduced quaude-fuse.js, the
+  // single most likely regression this whole gate exists for, and the prior control never
+  // exercised it). Neither file's OTHER property is contaminated: the filename-control file
+  // has clean content ("// clean\n" — no line-scan finding), and the content-control file has
+  // a clean, non-`fuse`-shaped name ("control.cjs" — no filename finding). Not
+  // `sentinelFuse`/`NODE_SEA_FUSE_...` (the one real survivor) and not a `refuse`-family
+  // word (which this guard must NOT flag), so the control proves the SAME discriminating
+  // regex that protects those two categories still catches a plain, real "fuse" when one is
+  // actually there. See the fix-round-1 report for the per-detector red-then-green.
   control: () => ({
-    files: [{ rel: 'synthetic/control.cjs',
-      src: '// a fuse worker must never come back under this name.\n' }],
+    files: [
+      { rel: 'synthetic/control.cjs',
+        src: '// a fuse worker must never come back under this name.\n' },
+      { rel: 'synthetic/quaude-fuse.js', src: '// clean\n' },
+    ],
   }),
 });
 guardTests(guard);
