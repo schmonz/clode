@@ -1289,7 +1289,7 @@ function fixupLibuvPollBackendOldDarwin(dir) {
   // the product reaches it — node-shim's fs.watch/watchFile are EventEmitter
   // stubs that never call tjs.watch (modules/fs.cjs:718-742, characterized by
   // test/node-shim-fs-watch.test.cjs), no fs.watch call exists in libexec/ or
-  // bin/clode, and the shipping cosmo leg already builds no-fsevents.c. Engine-
+  // scripts/stage0.mjs, and the shipping cosmo leg already builds no-fsevents.c. Engine-
   // level tjs.watch() throws on these two legs; both are no-exec, so no CI job
   // executes it. That ENOSYS is a RUNTIME behavior, separate from a LINK-time
   // hazard fixed by edit (6) below: core.c unconditionally calls the internal

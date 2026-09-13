@@ -13,7 +13,7 @@ const { spawnSync } = require('node:child_process');
 const { stateRoot } = require('./state-root-helper.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
-const ENTRY = path.join(ROOT, 'bin', 'clode');
+const ENTRY = path.join(ROOT, 'scripts', 'stage0.mjs');
 const NODE = process.execPath;
 
 // Every spawn here defaults CLODE_WATCH_DIR to a fresh, private temp dir —

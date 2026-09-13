@@ -14,12 +14,12 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const ROOT = path.resolve(__dirname, '..');
-const ENTRY = path.join(ROOT, 'bin', 'clode');
+const ENTRY = path.join(ROOT, 'scripts', 'stage0.mjs');
 const NODE = process.execPath;
 
 const { nodeBinPath } = require('../libexec/clode-node.cjs');
 
-// Mirrors test/clode-build.test.cjs's runEntry: spawnSync bin/clode with
+// Mirrors test/clode-build.test.cjs's runEntry: spawnSync scripts/stage0.mjs with
 // DYLD_INSERT_LIBRARIES cleared (asdf/system shims break under it) and a
 // fresh CLODE_WATCH_DIR (never the real ~/.cache/clode) so this test cannot
 // mutate real machine state.

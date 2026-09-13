@@ -932,7 +932,7 @@ runs:
           # SHIPPED name (floor included), not the guest's own honest,
           # floor-less OS version — see scripts/platform-tag.cjs's artifactDir.
           CLODE_ASSET_NAME="${{ steps.name.outputs.asset }}"; export CLODE_ASSET_NAME
-          CLODE_TJS="$CLODE_TJS_OUT/tjs" node bin/clode build --self --out "./${{ steps.name.outputs.asset }}"
+          CLODE_TJS="$CLODE_TJS_OUT/tjs" node scripts/stage0.mjs build --self --out "./${{ steps.name.outputs.asset }}"
           ./"${{ steps.name.outputs.asset }}" --version
           if [ "${{ inputs.smoke }}" = full ]; then
             CLODE_CLAUDE_BIN="$PWD/.matrix/provider-claude" \
@@ -1005,7 +1005,7 @@ runs:
         # SHIPPED name (floor included) instead of this runner's own honest,
         # floor-less OS version — see scripts/platform-tag.cjs's artifactDir.
         CLODE_ASSET_NAME: ${{ steps.name.outputs.asset }}
-      run: node bin/clode build --self --out "${{ steps.name.outputs.asset }}"
+      run: node scripts/stage0.mjs build --self --out "${{ steps.name.outputs.asset }}"
 
     - name: Self-smoke --version (host exec of the blobulated builder)
       if: steps.mode.outputs.exec != 'guest' && steps.mode.outputs.exec != 'qemu' && inputs.no-exec != 'true'

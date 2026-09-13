@@ -42,7 +42,7 @@ function buildNaude(cli) {
 
 function buildQuaude(outDir) {
   const out = path.join(outDir, 'quaude');
-  execFileSync(path.join(REPO, 'bin', 'clode'), ['build', '--out', out],
+  execFileSync(path.join(REPO, 'scripts', 'stage0.mjs'), ['build', '--out', out],
     { stdio: 'pipe', timeout: BUILD_TIMEOUT, cwd: REPO });
   return out;
 }

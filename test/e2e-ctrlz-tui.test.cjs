@@ -31,7 +31,7 @@ const { tjsPath } = require('./node-shim-helper.cjs');
 const { stateRoot } = require('./state-root-helper.cjs');
 const { liveRenderSkipReason } = require('./live-render-helper.cjs');
 
-const ENTRY = path.join(REPO, 'bin', 'clode');
+const ENTRY = path.join(REPO, 'scripts', 'stage0.mjs');
 const MARKER = 'ctrlz-survivor-73';
 
 function realProvider() {

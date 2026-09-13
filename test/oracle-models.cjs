@@ -6,7 +6,7 @@
 //
 // These mirror what the PACKAGED binaries do (a naude SEA re-invokes its embedded
 // node on the baked cli.cjs; a blobulated quaude boots cli.qbc under tjs + the shim),
-// so the parity gate can diff the two runtimes WITHOUT bin/clode or CLODE_ENGINE.
+// so the parity gate can diff the two runtimes WITHOUT scripts/stage0.mjs or CLODE_ENGINE.
 // Both are gone in the builder-only surface; the oracle outlives them.
 //
 // The caller stages cli.cjs and bun-shim.cjs into the same dir (see stageBundle):

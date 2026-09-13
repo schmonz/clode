@@ -16,7 +16,7 @@ const { readTrailerIndex } = require('./quaude-archive.cjs');
 const { stateRoot } = require('./state-root-helper.cjs');
 
 const REPO = path.join(__dirname, '..');
-const ENTRY = path.join(REPO, 'bin', 'clode');
+const ENTRY = path.join(REPO, 'scripts', 'stage0.mjs');
 
 function stageMainBundle() {
   // Newest build/*/clode-main.bundle.cjs — generic scan (typically finds the

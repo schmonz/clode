@@ -28,7 +28,7 @@ let toolchainText = '';
 for (const f of fs.readdirSync(path.join(repo, 'libexec')).filter((f) => f.endsWith('.cjs'))) {
   toolchainText += fs.readFileSync(path.join(repo, 'libexec', f), 'utf8');
 }
-toolchainText += fs.readFileSync(path.join(repo, 'bin', 'clode'), 'utf8');
+toolchainText += fs.readFileSync(path.join(repo, 'scripts', 'stage0.mjs'), 'utf8');
 
 const cache = path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'), 'clode');
 const clis = fs.readdirSync(cache, { withFileTypes: true })
@@ -48,5 +48,5 @@ function mdSection(name, r) {
   return `## ${name}\n\n### node: modules\n\n| module | refs |\n|---|---|\n${rows(r.modules)}\n\n### globals\n\n| global | refs |\n|---|---|\n${rows(r.globals)}\n`;
 }
 fs.writeFileSync(path.join(outDir, 'gate2-inventory.md'),
-  `# Gate 2 — Node-API surface inventory\n\nBundle: ${clis[0]}\n\n${mdSection('Toolchain (libexec/*.cjs + bin/clode)', result.toolchain)}\n${mdSection('Bundle (extracted cli.cjs)', result.bundle)}`);
+  `# Gate 2 — Node-API surface inventory\n\nBundle: ${clis[0]}\n\n${mdSection('Toolchain (libexec/*.cjs + scripts/stage0.mjs)', result.toolchain)}\n${mdSection('Bundle (extracted cli.cjs)', result.bundle)}`);
 console.log('wrote results/gate2-inventory.{json,md}');

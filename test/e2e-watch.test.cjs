@@ -6,11 +6,11 @@ const { spawnSync } = require('node:child_process');
 const { sandbox, REPO, NODE } = require('./e2e.cjs');
 const cpaths = require('../libexec/clode-paths.cjs');
 
-const BIN = path.join(REPO, 'bin', 'clode');
+const BIN = path.join(REPO, 'scripts', 'stage0.mjs');
 
 // `clode watch` (clode-main.cjs step 7) is clode's OWN update-signal check —
 // dispatched before any bin resolution/launch, so unaffected by the runner's
-// retirement. Exercised with a direct spawn of bin/clode, not a model runner.
+// retirement. Exercised with a direct spawn of scripts/stage0.mjs, not a model runner.
 function run(sbx, args = [], opts = {}) {
   const r = spawnSync(NODE, [BIN, ...args], {
     encoding: 'utf8',

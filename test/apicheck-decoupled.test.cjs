@@ -1,6 +1,6 @@
 'use strict';
 // apicheck's gate logic, driven off injected model runners — proving it no
-// longer routes through bin/clode or CLODE_ENGINE. The corpus-level REAL run
+// longer routes through scripts/stage0.mjs or CLODE_ENGINE. The corpus-level REAL run
 // needs a Bun-packaged CC provider and is exercised where one exists; this
 // pins the wiring, the axes, and the no-provider skip.
 const { test } = require('node:test');
@@ -51,7 +51,7 @@ test('a provider that was FOUND but failed to stage skips NAMING the failure, an
     'the skip must quote the real staging error, not a generic "no provider" line');
 });
 
-test('dispatches BOTH models against the same staged cli — no bin/clode, no CLODE_ENGINE', async () => {
+test('dispatches BOTH models against the same staged cli — no scripts/stage0.mjs, no CLODE_ENGINE', async () => {
   const runGate = await gate();
   const calls = [];
   runGate({

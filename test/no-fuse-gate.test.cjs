@@ -154,11 +154,12 @@ const SELF = 'test/no-fuse-gate.test.cjs';
 // path "out of scope" rather than "stale".
 const SKIP_DIRS = new Set(['bench', 'spike']);
 const EXT_RE = /\.(cjs|mjs|js|json|yml|yaml|md|sh|Dockerfile)$/;
-// bin/clode itself has no extension (a shebang script, `#!/usr/bin/env node`) and was
+// bin/clode (since renamed+moved to scripts/stage0.mjs, which HAS an extension)
+// used to have no extension (a shebang script, `#!/usr/bin/env node`) and was
 // invisible to an EXT_RE-only filter until this line — found by running this exact gate
 // and then grepping the tracked corpus by hand for anything the extension list could not
 // see. Any tracked path with no extension is a candidate too (LICENSE, UPSTREAM_PIN,
-// VERSION, .tool-versions, .githooks/* and bin/clode all qualify; none of them is large
+// VERSION, .tool-versions and .githooks/* all qualify; none of them is large
 // or binary, so reading them as UTF-8 text is safe). A LEADING dot (.tool-versions,
 // .githooks/post-checkout) is a hidden-file marker, not an extension separator — only a
 // dot after the first character counts — exactly the distinction path.extname() already

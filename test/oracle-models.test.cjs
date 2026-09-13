@@ -1,6 +1,6 @@
 'use strict';
-// The oracle's two runtime models, decoupled from bin/clode (the runner Phase 3
-// deletes). naude-model = `node cli.cjs` (real Node built-ins — the reference);
+// The oracle's two runtime models, decoupled from scripts/stage0.mjs (the runner
+// Phase 3 deletes). naude-model = `node cli.cjs` (real Node built-ins — the reference);
 // quaude-model = `tjs run loader cli.cjs` (the node-shim — the subject).
 const { test } = require('node:test');
 const assert = require('node:assert');
@@ -29,7 +29,7 @@ test('naude-model runs cli.cjs under node directly (native built-ins, no node-sh
   assert.match(c.env.NODE_PATH, /node_modules/);
 });
 
-test('neither model consults CLODE_ENGINE or bin/clode', () => {
+test('neither model consults CLODE_ENGINE or scripts/stage0.mjs', () => {
   let c = null;
   runQuaudeModel('/x/cli.cjs', [], {
     tjs: '/t/tjs',

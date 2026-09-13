@@ -2,7 +2,7 @@
 // [GATED] End-to-end cross-build proof (Task 5 of the naude cross-build spec).
 //
 // `clode build --naude --target macos-amd64 --out <path>` — a REAL invocation of
-// the FULL CLI entry (bin/clode, under host node; not the injected-seam wiring
+// the FULL CLI entry (scripts/stage0.mjs, under host node; not the injected-seam wiring
 // covered by test/clode-build-naude.test.cjs) — cross-builds a darwin-x64 naude
 // on a darwin-arm64 host, and the produced binary boots under Rosetta
 // (`arch -x86_64 <naude> --version` prints Claude Code's own version).
@@ -27,7 +27,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const REPO = path.resolve(__dirname, '..');
-const ENTRY = path.join(REPO, 'bin', 'clode');
+const ENTRY = path.join(REPO, 'scripts', 'stage0.mjs');
 const PIN = require('../deps/clode/node-pin.json');
 
 // Same resolution convention as the other live-provider suites

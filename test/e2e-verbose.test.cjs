@@ -4,7 +4,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { sandbox, mkProvider, REPO, NODE } = require('./e2e.cjs');
 
-const BIN = path.join(REPO, 'bin', 'clode');
+const BIN = path.join(REPO, 'scripts', 'stage0.mjs');
 
 // test_verbose.bats setup: a fake provider that prints "CLODE-FIXTURE <label>" and
 // CLODE_CLAUDE_BIN pointing at it. (CLODE_LIBEXEC/CLODE_CACHE from the bats setup are
@@ -20,7 +20,7 @@ function withProvider(t, label = 'tok') {
 
 // The --help / --verbose dispatch (clode-main.cjs steps 1/4) is clode's
 // OWN flag handling — unaffected by the runner's retirement — so it's exercised with
-// a direct spawn of bin/clode, not a model runner. (The default-launch cases that used
+// a direct spawn of scripts/stage0.mjs, not a model runner. (The default-launch cases that used
 // to sit alongside these — "emits no chatter", "--verbose un-mutes progress",
 // "CLODE_VERBOSE=1 env" — asserted on the runner actually booting the bundle; that
 // premise is gone, and they were deleted rather than forced onto a model runner that

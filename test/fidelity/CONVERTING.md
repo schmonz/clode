@@ -155,7 +155,7 @@ const { resolveClaudeBin } = require('../../libexec/clode-resolve.cjs');
 const { tjsPath } = require('../node-shim-helper.cjs');
 const { liveRenderSkipReason } = require('../live-render-helper.cjs');   // or './live-render-helper.cjs' outside fidelity/
 
-const ENTRY = path.join(REPO, 'bin', 'clode');
+const ENTRY = path.join(REPO, 'scripts', 'stage0.mjs');
 function realProvider() {
   try { const p = resolveClaudeBin({ env: process.env }); if (p && fs.existsSync(p)) return p; } catch { /* */ }
   return null;

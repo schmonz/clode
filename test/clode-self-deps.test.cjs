@@ -1,6 +1,6 @@
 'use strict';
 // Pins the central claim behind the deps/ split (deps/clode, deps/claude):
-// clode ITSELF has zero npm dependencies. Everything bin/clode, libexec/*.cjs,
+// clode ITSELF has zero npm dependencies. Everything scripts/stage0.mjs, libexec/*.cjs,
 // and scripts/*.mjs require() is either a node builtin or a sibling file in
 // this checkout — never an npm package. That is what makes deps/claude
 // (Claude Code's runtime deps, baked into the built quaude/naude) and
@@ -68,12 +68,13 @@ function isExcluded(file) {
   return EXCLUDE_DIRS.some((d) => file === d || file.startsWith(d + path.sep));
 }
 
-// Entry points: every module clode itself loads to do its job — bin/clode
-// (the launcher entry), every top-level libexec/*.cjs (the launcher spine +
-// subcommands), and every top-level scripts/*.mjs (the build pipeline),
+// Entry points: every module clode itself loads to do its job — every
+// top-level libexec/*.cjs (the launcher spine + subcommands) and every
+// top-level scripts/*.mjs (the build pipeline, which now also covers
+// scripts/stage0.mjs, the launcher entry — it needs no separate line),
 // minus the app-member exclusions above.
 function entryPoints() {
-  const files = [path.join(REPO, 'bin', 'clode')];
+  const files = [];
   for (const f of fs.readdirSync(path.join(REPO, 'libexec'))) {
     if (f.endsWith('.cjs') && !f.startsWith('.')) files.push(path.join(REPO, 'libexec', f));
   }

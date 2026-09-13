@@ -162,7 +162,7 @@ function ensureDeps(opts = {}) {
   // here on the runtime path means a non-blobulated clode with no deps present. Fail
   // loud toward the binary/build rather than silently installing.
   if (!install) {
-    // Reachable only on a non-blobulated clode (bin/clode under node) whose deps aren't
+    // Reachable only on a non-blobulated clode (scripts/stage0.mjs under node) whose deps aren't
     // present — in practice a SOURCE CHECKOUT that never ran
     // `npm install --prefix deps/claude`. Point there first; a released binary
     // carries its deps as members and never lands here.

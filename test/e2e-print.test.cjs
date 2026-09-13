@@ -10,7 +10,7 @@ const { stageProviderCli, providerSkipReason, runNaudeModelAsync } = require('./
 // the assertions below are preserved verbatim for when it is run against a live model.
 //
 // Runs the naude-model directly (a real provider's cli.cjs under node) — no launcher,
-// no bin/clode: the builder-only surface has no `-p` passthrough left to run it through.
+// no scripts/stage0.mjs: the builder-only surface has no `-p` passthrough left to run it through.
 
 test('clode -p reaches the model', async (t) => {
   const sbx = sandbox(t);

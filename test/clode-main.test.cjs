@@ -1,5 +1,5 @@
 'use strict';
-// Unit tests for the JS launcher entry: bin/clode (ES5-safe prologue) +
+// Unit tests for the JS launcher entry: scripts/stage0.mjs (ES5-safe prologue) +
 // libexec/clode-main.cjs (the dispatch spine). Covers the print-and-exit paths
 // (--version, --help) and the prologue's old-node floor guard. The
 // full DEFAULT-launch wiring is smoke-tested separately (see the task's fixture
@@ -14,7 +14,7 @@ const { pathToFileURL } = require('node:url');
 const { spawnSync } = require('node:child_process');
 
 const ROOT = path.resolve(__dirname, '..');
-const ENTRY = path.join(ROOT, 'bin', 'clode');
+const ENTRY = path.join(ROOT, 'scripts', 'stage0.mjs');
 const NODE = process.execPath;
 const VERSION = fs.readFileSync(path.join(ROOT, 'VERSION'), 'utf8').replace(/\n+$/, '');
 
@@ -183,4 +183,13 @@ test('clodeHelp() interpolates the version and is newline-terminated', () => {
   assert.ok(text.endsWith('post-update signals digest\n'));
   assert.match(text, /clode watch/);
   assert.doesNotMatch(text, /--clode-watch|--self/);
+});
+
+test('the checkout entry point is scripts/stage0.mjs, and bin/ holds no script', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const ROOT = path.resolve(__dirname, '..');
+  assert.ok(fs.existsSync(path.join(ROOT, 'scripts', 'stage0.mjs')), 'scripts/stage0.mjs must exist');
+  assert.ok(!fs.existsSync(path.join(ROOT, 'bin', 'clode')),
+    'bin/ holds a built binary or nothing — a script there is the bug this move fixes');
 });

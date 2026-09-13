@@ -26,7 +26,7 @@
 //
 // GATED on a prebuilt quaude via CLODE_QUAUDE (skip if absent), like the sibling
 // e2e-pty tests. Build one with:
-//   bin/clode build --out /tmp/quaude-notify/quaude
+//   node scripts/stage0.mjs build --out /tmp/quaude-notify/quaude
 //   CLODE_QUAUDE=/tmp/quaude-notify/quaude node --test test/fidelity/update-notify.pty.test.cjs
 const test = require('node:test');
 const assert = require('node:assert');

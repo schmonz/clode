@@ -10,7 +10,7 @@ const { tjsPath } = require('./node-shim-helper.cjs');
 const { stateRoot } = require('./state-root-helper.cjs');
 const { liveRenderSkipReason } = require('./live-render-helper.cjs');
 
-const ENTRY = path.join(REPO, 'bin', 'clode');
+const ENTRY = path.join(REPO, 'scripts', 'stage0.mjs');
 const DOCTOR_PARITY = path.join(REPO, 'test', 'doctor-parity.cjs');
 
 // Hex the bats sent: type "/doctor" then Enter, at 4s and 6s.

@@ -5,11 +5,11 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { sandbox, REPO, NODE } = require('./e2e.cjs');
 
-const BIN = path.join(REPO, 'bin', 'clode');
+const BIN = path.join(REPO, 'scripts', 'stage0.mjs');
 
 // Repo-file single-source-of-truth checks + one --version case. The VERSION
 // file, package.json, and LICENSE are read straight from REPO (no subprocess); only
-// the --version reporting is exercised via a direct spawn of bin/clode —
+// the --version reporting is exercised via a direct spawn of scripts/stage0.mjs —
 // clode's own flag dispatch (clode-main.cjs step 3), unaffected by the runner's
 // retirement (it prints and exits before any bin resolution).
 

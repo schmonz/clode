@@ -34,7 +34,7 @@ const { startMockAnthropic, cannedSSE, cannedToolUseSSE } = require('./mock-anth
 const { toolchainDir } = require('../scripts/platform-tag.cjs');
 const { stateRoot } = require('./state-root-helper.cjs');
 
-const ENTRY = path.join(REPO, 'bin', 'clode');
+const ENTRY = path.join(REPO, 'scripts', 'stage0.mjs');
 const VERSION = fs.readFileSync(path.join(REPO, 'VERSION'), 'utf8').replace(/\n+$/, '');
 function providerBin() { const p = process.env.CLODE_PROVIDER_BIN; return p && fs.existsSync(p) ? p : null; }
 

@@ -1040,7 +1040,7 @@ jobs:
           # `clode build --out` does not mkdir -p its own parent — a bare path
           # under a fresh runner.temp dies ENOENT after the blobulate already ran.
           mkdir -p "${{ runner.temp }}/quaude-notify"
-          CLODE_CLAUDE_BIN="$PROV" bin/clode build --out "${{ runner.temp }}/quaude-notify/quaude"
+          CLODE_CLAUDE_BIN="$PROV" scripts/stage0.mjs build --out "${{ runner.temp }}/quaude-notify/quaude"
       - name: fidelity/update-notify.pty — the auto-update NOTIFY surface
         env:
           CLODE_QUAUDE: ${{ runner.temp }}/quaude-notify/quaude
@@ -1216,5 +1216,5 @@ jobs:
           # same note) — a bare path under a fresh runner.temp dies ENOENT.
           mkdir -p "${{ runner.temp }}/quaude-linux-graph-check"
           CLODE_CLAUDE_BIN="$LINUX_PROVIDER" \
-            node bin/clode build --target linux-x64 --out "${{ runner.temp }}/quaude-linux-graph-check/quaude"
+            node scripts/stage0.mjs build --target linux-x64 --out "${{ runner.temp }}/quaude-linux-graph-check/quaude"
           test -s "${{ runner.temp }}/quaude-linux-graph-check/quaude"

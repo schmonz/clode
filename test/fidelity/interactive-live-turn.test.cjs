@@ -43,7 +43,7 @@ const { capture, apeCmd } = require('../e2e-pty.cjs');
 const { tjsPath } = require('../node-shim-helper.cjs');
 const { liveRenderSkipReason } = require('../live-render-helper.cjs');
 
-const ENTRY = path.join(REPO, 'bin', 'clode');
+const ENTRY = path.join(REPO, 'scripts', 'stage0.mjs');
 // The answer must not appear in the prompt, so a rendered match cannot be the
 // echoed input line.
 const PROMPT = 'Reply with only the numeric result of 6 times 7, nothing else.';

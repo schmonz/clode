@@ -7,11 +7,11 @@ const { pathToFileURL } = require('node:url');
 const { spawnSync } = require('node:child_process');
 const { sandbox, mkProvider, REPO, NODE } = require('./e2e.cjs');
 
-const BIN = path.join(REPO, 'bin', 'clode');
+const BIN = path.join(REPO, 'scripts', 'stage0.mjs');
 
 // `fetch` (clode-main.cjs step 5) is clode's OWN namespace — dispatched before any
 // bin resolution/extraction, so unaffected by the runner's retirement. Exercised
-// with a direct spawn of bin/clode, not a model runner. (The old
+// with a direct spawn of scripts/stage0.mjs, not a model runner. (The old
 // `--clode-internal-update` rebuild-callback dispatch is RETIRED — auto-update is
 // notify-only now — so there is no longer an internal-update command to exercise.)
 function run(sbx, args = [], opts = {}) {

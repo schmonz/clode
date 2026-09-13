@@ -4,7 +4,7 @@
 # asserts against. Run manually (a dev tool, NOT part of `npm test`).
 #
 # clode itself never runs Claude Code — it only BUILDS quaude (`clode build`) — so
-# the "clode" side of this comparison has to be a BUILT quaude, not bare `./bin/clode`
+# the "clode" side of this comparison has to be a BUILT quaude, not bare `./scripts/stage0.mjs`
 # (which is clode's own dispatch surface: it prints usage + exits 2 with no /doctor
 # to capture). This script builds one the same way test/e2e-doctor-parity.test.cjs
 # does (same-provider-bundle discipline, hermetic CLODE_CACHE) and drives that.
@@ -32,7 +32,7 @@ QUAUDE="$WORK/quaude"
 # Build FROM the same provider bundle native runs (CLODE_CLAUDE_BIN), into a hermetic
 # CLODE_CACHE — never the real one — so this doesn't disturb the dev's own clode state.
 CLODE_CLAUDE_BIN="$NATIVE" CLODE_CACHE="$WORK/cache" CLODE_TJS="$CLODE_TJS" \
-  "$CLODE_NODE" bin/clode build --out "$QUAUDE"
+  "$CLODE_NODE" scripts/stage0.mjs build --out "$QUAUDE"
 
 CAP() { # $1=out, $2...=cmd
   out=$1; shift

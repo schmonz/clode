@@ -7,7 +7,7 @@
 //
 // This is what `clode build --naude` and `clode build` produce, minus the
 // packaging (test/oracle-binaries.test.cjs proves the packaged binaries agree
-// with these models). Nothing here touches bin/clode or CLODE_ENGINE: the
+// with these models). Nothing here touches scripts/stage0.mjs or CLODE_ENGINE: the
 // builder-only surface has no runner, and the gate that guards quaude's shim
 // must outlive it.
 //

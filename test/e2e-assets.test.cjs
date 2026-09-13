@@ -12,7 +12,7 @@ const { stageProviderCli, providerSkipReason, runNaudeModelAsync } = require('./
 // stderr (`2>err; cat err`), so the assertions run against r.stderr, not the merged output.
 //
 // Runs the naude-model directly (a real provider's cli.cjs under node) — no launcher,
-// no bin/clode: the builder-only surface has no passthrough left to run either arg through.
+// no scripts/stage0.mjs: the builder-only surface has no passthrough left to run either arg through.
 
 test('embedded-asset shim raises no consumer errors on --help', async (t) => {
   const sbx = sandbox(t);

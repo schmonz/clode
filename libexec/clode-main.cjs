@@ -1,9 +1,10 @@
 'use strict';
 // clode-main — the JS launcher spine. Ports bin/clode's main() control flow
 // (bin/clode:549) faithfully, wiring the already-built sub-modules into a complete
-// launcher. Entry is bin/clode (an ES5-safe prologue that require()s this and
-// calls main()). This module runs on modern Node (>= bin/clode's inlined v20
-// floor); the prologue guarantees that before it loads us.
+// launcher. Entry is scripts/stage0.mjs (an ES5-safe prologue that dynamically
+// import()s this and calls main()). This module runs on modern Node (>=
+// scripts/stage0.mjs's inlined v20 floor); the prologue guarantees that before
+// it loads us.
 //
 // Dispatch order (exact, from main()):
 //   1. --verbose (leading position only) -> CLODE_VERBOSE=1
@@ -188,8 +189,9 @@ async function main(argv, opts = {}) {
 }
 
 // Self-run entry: when this module is the process's main module (the esbuilt
-// bundle, or `node libexec/clode-main.cjs`), behave like bin/clode's prologue caller.
-// Guarded so it does NOT run when bin/clode require()s us and calls main() itself.
+// bundle, or `node libexec/clode-main.cjs`), behave like scripts/stage0.mjs's
+// prologue caller. Guarded so it does NOT run when scripts/stage0.mjs imports
+// us and calls main() itself.
 // Print-worthy rendering of a caught error. V8 stacks embed the `Error:
 // message` header; QuickJS stacks are frames-only — printing e.stack alone
 // there LOSES the message (v0.1.2 field report printed a bare wall of `at`

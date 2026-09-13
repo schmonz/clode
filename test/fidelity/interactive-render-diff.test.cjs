@@ -19,7 +19,7 @@ const { capture, seedClaudeProfile, apeCmd } = require('../e2e-pty.cjs');
 const { tjsPath } = require('../node-shim-helper.cjs');
 const { liveRenderSkipReason } = require('../live-render-helper.cjs');
 
-const ENTRY = path.join(REPO, 'bin', 'clode');
+const ENTRY = path.join(REPO, 'scripts', 'stage0.mjs');
 function nativeClaude() {
   const r = spawnSync('command', ['-v', 'claude'], { shell: true, encoding: 'utf8' });
   const p = (r.stdout || '').trim();

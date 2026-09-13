@@ -6,8 +6,8 @@
 // targets themselves; clode never runs the bundle, so it no longer needs them.
 // The node-floor enforcement this module also used to carry — checkNodeVersion,
 // requireNodeVersionOrExit, MIN_NODE_MAJOR=24 — was the retired runner's job,
-// gating the bundle it ran under node; clode's OWN floor is bin/clode's inlined
-// ES5-safe v20 check, which never needed this module. Deleted rather than kept
+// gating the bundle it ran under node; clode's OWN floor is scripts/stage0.mjs's
+// inlined ES5-safe v20 check, which never needed this module. Deleted rather than kept
 // on the false premise of "other callers" — there were none.) Every function is
 // unit-testable without a real launch: PATH, executability, stderr, and exit are
 // all injectable.
