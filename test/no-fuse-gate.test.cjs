@@ -245,6 +245,14 @@ const ALLOWED = [
   { file: 'test/node-pins-agree.test.cjs', pattern: /Dockerfile\.xfuse|xfuse docker loop/,
     because: 'same reason as .github/renovate.json: names the real, unrenamed spike/.../'
       + 'Dockerfile.xfuse by its actual on-disk name.' },
+  { file: 'test/no-retired-spellings.test.cjs', pattern: /no-fuse-gate\.test\.cjs/,
+    because: 'names THIS FILE by its real, on-disk path. The retired-spellings gate is built '
+      + 'in this gate\'s shape and says so four times (corpus, ALLOWED, the count ratchet, the '
+      + 'floor), which is the point — a reader who has understood one has understood both. '
+      + 'Same category as .github/renovate.json and test/node-pins-agree.test.cjs above: a '
+      + 'REAL PATH this task did not rename, named correctly. (This gate keeps its own name '
+      + 'for the reason its SELF entry gives: the word has to appear in order to be '
+      + 'forbidden.)' },
 ];
 
 // COUNT_ALLOWED — the exact, both-directions ratchet test/windows-path-ratchet.test.cjs uses
@@ -273,8 +281,17 @@ const ALLOWED = [
 // directions. Re-measure, do not trust this number:
 //   node -e "const {FUSE_WORD_RE}=...; const fs=require('fs');
 //     console.log(fs.readFileSync('BACKLOG.md','utf8').split('\n').filter(l=>FUSE_WORD_RE.test(l)).length)"
+// 152 -> 155 (2026-09-13, phase 3a final fix wave): the new BACKLOG entry filing
+// test/guard.cjs's `checkControl` per-detector gap adds THREE matching lines, all of the same
+// kind as the 151 -> 152 bump above — today's vocabulary naming a MECHANISM by its real name:
+// `test/no-fuse-gate.test.cjs`'s `scanForFuse` (a real file and a real function),
+// `guard control: no-fuse-vocabulary can fail` (the verbatim name of a test whose output the
+// entry quotes), and a list of this repo's multi-detector guards which includes
+// `no-fuse-vocabulary`. Each matches because the hyphen/underscore before "fuse" or "Fuse" is
+// a word boundary, exactly as this gate's own name does. Rewriting any of them would name the
+// guards wrongly, so the count moves. Re-measure, do not trust this number.
 const COUNT_ALLOWED = {
-  'BACKLOG.md': 152,
+  'BACKLOG.md': 155,
   'test/fidelity/RESULTS.md': 22,
 };
 
@@ -375,18 +392,36 @@ const guard = defineGuard({
   floor: 400,
   read: readCorpus,
   scan: scanForFuse,
-  // TWO synthetic files, one per detector, so checkControl proves BOTH the filename branch
-  // and the line-scan branch can independently fail — a single-file control that happened to
-  // trip only one of them would leave the other unproven (fix round 1: the filename branch,
-  // `if (/fuse/i.test(rel))`, is the one that catches a reintroduced quaude-fuse.js, the
-  // single most likely regression this whole gate exists for, and the prior control never
-  // exercised it). Neither file's OTHER property is contaminated: the filename-control file
-  // has clean content ("// clean\n" — no line-scan finding), and the content-control file has
-  // a clean, non-`fuse`-shaped name ("control.cjs" — no filename finding). Not
+  // TWO synthetic files, one per detector. WHAT THAT ACTUALLY BUYS, stated correctly —
+  // the previous version of this comment claimed checkControl "proves BOTH the filename
+  // branch and the line-scan branch can independently fail", and that is FALSE. Read
+  // test/guard.cjs's checkControl: its entire verdict is `if (r.findings.length > 0)
+  // return OK`. Findings are an unlabelled list, so one detector's finding is
+  // indistinguishable from two, and a control that trips two detectors is
+  // indistinguishable from a control that trips one. MUTATION-PROVEN, not reasoned:
+  // deleting the filename branch (`if (/fuse/i.test(rel))`) outright leaves this control
+  // still producing a finding from the content file alone, and `guard control:
+  // no-fuse-vocabulary can fail` stays GREEN. A second control file cannot prove
+  // per-detector failability through an API that only counts.
+  //
+  // What the second file DOES buy, which is real and worth keeping: (a) both detectors
+  // are EXERCISED on every run, so a scan that throws, or silently stops handling one
+  // input shape, is caught by the guard crashing rather than by nobody noticing; (b) the
+  // two violation SHAPES are written down as executable fixtures next to the scan, so a
+  // future author changing one detector has the example in front of them; and (c) with
+  // both files present the control is a faithful model of the worst case this gate exists
+  // for — a reintroduced quaude-fuse.js with a live "fuse" inside it. Proving each
+  // detector independently needs a checkControl that can tell findings apart (per-detector
+  // controls, or a labelled-findings contract) — filed in BACKLOG.md, deliberately not
+  // patched from inside one gate's control().
+  //
+  // Neither file's OTHER property is contaminated: the filename-control file has clean
+  // content ("// clean\n" — no line-scan finding), and the content-control file has a
+  // clean, non-`fuse`-shaped name ("control.cjs" — no filename finding). Not
   // `sentinelFuse`/`NODE_SEA_FUSE_...` (the one real survivor) and not a `refuse`-family
-  // word (which this guard must NOT flag), so the control proves the SAME discriminating
-  // regex that protects those two categories still catches a plain, real "fuse" when one is
-  // actually there. See the fix-round-1 report for the per-detector red-then-green.
+  // word (which this guard must NOT flag), so the control models the SAME discriminating
+  // regex that protects those two categories still catching a plain, real "fuse" when one
+  // is actually there.
   control: () => ({
     files: [
       { rel: 'synthetic/control.cjs',

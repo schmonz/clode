@@ -53,7 +53,15 @@ const delegationGuard = defineGuard({
   // The EXACT count of checks in the fixed table above (both directions), so losing
   // one of them reports BROKEN rather than passing on half the claim.
   floor: 2,
-  // Both directions at once: no delegation AND a leftover copy.
+  // A control that violates BOTH checks at once (the source neither requires
+  // clode-blobulate.cjs nor is free of a leftover materializeBlobPayload). That makes it
+  // a faithful model of the worst case and exercises both branches — but it does NOT
+  // prove each check can fail on its own, and this comment used to imply it did.
+  // test/guard.cjs's checkControl returns OK on `findings.length > 0`; findings are
+  // unlabelled, so one is the same verdict as two. Deleting either check here would leave
+  // the other still producing a finding and the control still green. Proving each check
+  // independently needs a checkControl that can tell findings apart — filed in BACKLOG.md
+  // (per-detector controls, or a labelled-findings contract); not worked around here.
   control: () => ({ src: 'function materializeBlobPayload(vfs, mat) { /* a second copy */ }\n' }),
 });
 guardTests(delegationGuard);

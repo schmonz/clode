@@ -4,6 +4,41 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 (Strategic feasibility risks live in `LONG-TERM.md`; in-flight designs in
 `docs/superpowers/`. Done items are DELETED from here — git history is the record.)
 
+## `checkControl` cannot prove a MULTI-DETECTOR guard per-detector (2026-09-13)
+
+**Site:** `test/guard.cjs:96` — `checkControl`'s entire verdict is
+`if (r.findings.length > 0) return OK`. Findings are an unlabelled `string[]`, so a control
+that trips two detectors is indistinguishable from one that trips one, and a guard whose
+scan has several independent checks can lose one of them with its control still green.
+
+**Proven, not argued (2026-09-13):** deleting the filename branch from
+`test/no-fuse-gate.test.cjs`'s `scanForFuse` outright left
+`guard control: no-fuse-vocabulary can fail` PASSING — the content-control file alone
+carried the verdict. The same holds for `test/clode-blobulate.test.cjs`'s
+`clode-build-delegates-blobulate`: stubbing its first check to `if (false)` left its
+control green too. Both guards' comments claimed the opposite in so many words; the
+comments are now corrected to say what a multi-file control actually buys (both branches
+exercised, both violation shapes written down as fixtures, a faithful worst-case model) and
+what it does not.
+
+**The two shapes this would need** — either is a change to `test/guard.cjs`, not to any
+individual gate, which is why no gate's `control()` was worked around to fake it:
+
+1. **Per-detector controls.** `control()` returns a LIST of named cases
+   (`[{ name, inputs }]`); `checkControl` runs each and requires every one to produce at
+   least one finding, reporting which case came back empty. Simple, no change to what a
+   scan returns; costs every multi-case guard one run per case.
+2. **A labelled-findings contract.** `scan()` returns findings tagged with the detector
+   that produced them (`{ detector, text }`, or a parallel `detectors: Set`), and
+   `control()` declares which detectors it expects to trip; `checkControl` compares the
+   sets. Stronger (it also catches a control that trips the WRONG detector) and it makes
+   findings self-describing everywhere, but it touches every existing guard's scan.
+
+Not urgent: the current contract still catches a wholly blind scan, which is the failure it
+was built for. What it cannot catch is a PARTIALLY blind one, and this repo now has several
+multi-detector guards (`no-fuse-vocabulary`, `no-retired-spellings`,
+`clode-build-delegates-blobulate`), so the gap is worth closing before there are more.
+
 ## Bundle scanners: FIXED, with three things still open (2026-08-29)
 
 Two of the three failing rows this entry used to describe are retired. That entry, as

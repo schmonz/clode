@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+The command line names what it acts on. Five spellings are **gone** — each is now a usage
+error with the help under it, not a silent translation:
+
+| was | now |
+| --- | --- |
+| `clode build --naude` | `clode build naude` |
+| `clode build --self` | `clode bootstrap` (from a source checkout: `node scripts/stage0.mjs bootstrap`) |
+| `clode fetch` | `clode fetch claude` |
+| `clode fetch <channel\|version>` | `clode fetch claude <channel\|version>` |
+| `clode watch` | `clode read-anthropic-tea-leaves` |
+
+- `clode build` and `clode fetch` each take a positional saying WHAT: a **product** to build
+  (`quaude`, the default, or `naude`) or an **ingredient** to fetch (`claude` or `node`).
+  `clode fetch` has no default — say which ingredient.
+- `--target` means one thing everywhere now: the artifact is for another machine. It no
+  longer changes meaning depending on which other flag is present.
+- `clode fetch node` replaces `clode fetch --naude`.
+
 ## 0.20260831.1
 
 Tested with Claude Code 2.1.251, including an interactive turn on `macos-arm64`.

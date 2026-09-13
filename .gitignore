@@ -1,7 +1,7 @@
 # build/ is GENERATED OUTPUT ONLY — no manifests live here anymore (see
 # deps/clode, deps/claude). Two subtrees now live here (see
 # scripts/platform-tag.cjs's file header for the why): build/<artifact-name>/
-# (shippable per-host output — naude, clode --self, deps.tar/sig, sea-*) and
+# (shippable per-host output — naude, clode bootstrap, deps.tar/sig, sea-*) and
 # build/bundle/ (the platform-independent esbuilt bundles). The toolchain
 # cache (esbuild/postject) and the patched-tjs engine template moved OFF this
 # tree entirely — they now resolve through build-scratch.cjs's buildPath(),
