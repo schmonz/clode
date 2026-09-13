@@ -5,7 +5,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const { indexEnvReads } = require('./env-inventory.cjs');
 const { VERDICTS, VERDICT_KINDS } = require('./env-verdicts.cjs');
-const { surfaceFor, renderHelp } = require('../libexec/cli-surface.cjs');
+const { surfaceFor } = require('../libexec/cli-surface.cjs');
 
 test('every name shipped code reads has a verdict, and every verdict names a real name', () => {
   const idx = indexEnvReads();
@@ -35,19 +35,38 @@ test('every verdict carries a kind and a reason', () => {
 // real env-read corpus agree with each other; NEITHER checks that an 'absorbed' verdict is
 // actually WIRED onto cli-surface.cjs's table. That gap is exactly how phase 3a's `env: []`
 // placeholders could have silently PINNED an absence forever — a verdict recorded once and
-// never re-checked against the surface it claims to describe. Render surfaceFor('checkout')
-// (the superset: every verb a shipped clode has, PLUS the checkout-only ones like bootstrap)
-// and require every 'absorbed' name to appear in it BY NAME. A name declared with a suffix
-// (CLODE_NO_WATCH=1, CLODE_ALLOW_FOREIGN_CARVE=1) still matches: the bare name is a substring
-// of its own '=1' spelling, so this does not need to know which names carry one.
+// never re-checked against the surface it claims to describe.
+//
+// FIX ROUND 1 (reviewer): the first cut of this test matched `help.includes(v.name)` against
+// RENDERED HELP TEXT, which is a substring check on prose — and `CLODE_TJS` is a substring of
+// `CLODE_TJS_PIN`. Deleting CLODE_TJS's own table entry (proven: its "blobulated builder" doc
+// text vanishes from help) left the gate reporting `missing: []`, because CLODE_TJS_PIN's
+// entry alone still made the substring "CLODE_TJS" appear somewhere in the rendered text. That
+// is exactly the "silently PINNED absence" failure mode this gate exists to close — closing it
+// with a hole in the same shape would have been worse than not having it. Fixed by collecting
+// the EXACT names cli-surface.cjs's own table declares (every verb's `env` plus the top-level
+// `env`, each stripped of a trailing `=NAME` the same way `CLODE_NO_WATCH=1` and
+// `CLODE_ALLOW_FOREIGN_CARVE=1` carry one), then checking Set membership — no rendered text,
+// no substrings, so a `_PIN`/`_RECIPE`/whatever-suffixed sibling can never stand in for a
+// deleted name again.
+function declaredEnvNames(surface) {
+  const names = new Set();
+  for (const def of Object.values(surface.verbs)) {
+    for (const e of def.env) names.add(e.name.split('=')[0]);
+  }
+  for (const e of surface.env) names.add(e.name.split('=')[0]);
+  return names;
+}
+
 test('every absorbed verdict is actually on the CLI surface, not just recorded as one', () => {
-  const help = renderHelp('1.2.3', surfaceFor('checkout'));
+  const declared = declaredEnvNames(surfaceFor('checkout'));
   const absorbed = VERDICTS.filter((v) => v.verdict === 'absorbed');
-  const missing = absorbed.filter((v) => !help.includes(v.name)).map((v) => v.name);
+  const missing = absorbed.filter((v) => !declared.has(v.name)).map((v) => v.name);
   assert.deepStrictEqual(missing, [],
-    'these names are recorded as verdict \'absorbed\' (a real build-input selector) but do '
-    + 'not appear anywhere in --help — either wire the name onto cli-surface.cjs\'s SURFACE '
-    + '(or CHECKOUT_ONLY_VERBS) table, or this verdict is wrong and belongs to a different '
-    + 'kind. An absorbed name --help never mentions is indistinguishable from a knob that '
-    + 'does not exist, in the one binary that ships no other documentation.');
+    'these names are recorded as verdict \'absorbed\' (a real build-input selector) but no '
+    + 'verb\'s (or the top-level) `env` array in cli-surface.cjs declares them — either wire '
+    + 'the name onto cli-surface.cjs\'s SURFACE (or CHECKOUT_ONLY_VERBS) table, or this '
+    + 'verdict is wrong and belongs to a different kind. An absorbed name --help never '
+    + 'mentions is indistinguishable from a knob that does not exist, in the one binary that '
+    + 'ships no other documentation.');
 });

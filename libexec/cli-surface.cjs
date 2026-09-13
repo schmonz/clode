@@ -152,10 +152,20 @@ const SURFACE = {
               doc: "override the GitHub release download root that --target's templates "
                 + "manifest and engine resolve against (default: "
                 + 'https://github.com/schmonz/clode/releases/download)' },
+            // FIX ROUND 1 (reviewer): the first cut of this doc only described the mismatch
+            // check and missed that the pin SELECTS which manifest --target fetches in the
+            // first place (resolveManifest builds `templates-${pin}.json`,
+            // clode-build.cjs:1018-1024) — setting it wrong changes what gets downloaded and
+            // can defeat the very check the old sentence advertised. It also said "default:
+            // derived from PINS.md", which is the CHECKOUT-only fallback; the default that
+            // actually applies to the binary --help ships inside is __CLODE_BAKED_TJS_PIN__
+            // (clode-build.cjs:1061-1066) — PINS.md is the checkout fallback used only when
+            // there is no baked pin. CLODE_ENGINE_RECIPE just below already had this right.
             { name: 'CLODE_TJS_PIN',
-              doc: "override this clode's own tjs pin, checked against a --target engine "
-                + "template's pin to catch a mismatch (default: derived from PINS.md in a "
-                + 'checkout)' },
+              doc: "override this clode's own tjs pin — selects which templates manifest "
+                + '--target fetches (templates-<pin>.json), and is checked against a '
+                + "--target engine template's pin to catch a mismatch (default: baked in, "
+                + 'else derived from PINS.md in a checkout)' },
             { name: 'CLODE_ENGINE_RECIPE',
               doc: "override this clode's own engine-recipe fingerprint, checked against a "
                 + "--target engine template's recipe to catch a mismatch (default: baked in, "
@@ -301,9 +311,10 @@ const CHECKOUT_ONLY_VERBS = {
               + "manifest and engine resolve against (default: "
               + 'https://github.com/schmonz/clode/releases/download)' },
           { name: 'CLODE_TJS_PIN',
-            doc: "override this clode's own tjs pin, checked against a --target engine "
-              + "template's pin to catch a mismatch (default: derived from PINS.md in a "
-              + 'checkout)' },
+            doc: "override this clode's own tjs pin — selects which templates manifest "
+              + '--target fetches (templates-<pin>.json), and is checked against a '
+              + "--target engine template's pin to catch a mismatch (default: baked in, "
+              + 'else derived from PINS.md in a checkout)' },
           { name: 'CLODE_ENGINE_RECIPE',
             doc: "override this clode's own engine-recipe fingerprint, checked against a "
               + "--target engine template's recipe to catch a mismatch (default: baked in, "

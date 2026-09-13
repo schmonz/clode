@@ -6980,7 +6980,31 @@ builder" the umbrella said phase 3 REQUIRED already existed at 14s warm; and one
 products was mostly done. Only the first is a number — the other two are premises, and
 premises are what a plan silently inherits.
 
-**Open, deliberately:** `CLODE_ALLOW_FOREIGN_CARVE`'s fate (it disables a safety check rather
-than selecting an input, which makes it a different KIND of candidate), and whether the
-built-binary rule holds in the same form on the slowest supported box — to be answered with a
-measurement there, not an opinion.
+**Open, deliberately:** whether the built-binary rule holds in the same form on the slowest
+supported box — to be answered with a measurement there, not an opinion.
+
+## CLODE_ALLOW_FOREIGN_CARVE CLOSED: env-only, deliberately awkward, no flag (2026-09-13)
+
+Phase 3b task 2 decided the one entry the spec above left open twice. `CLODE_ALLOW_FOREIGN_CARVE`
+stays `absorbed` (it genuinely changes whether a build proceeds with a given input, upheld on
+review) but is declared on the `build` verb's `env` table in `libexec/cli-surface.cjs:173-187`
+as `CLODE_ALLOW_FOREIGN_CARVE=1` — documented so `--help` (the only documentation inside a
+shipped binary) does not hide that it exists, but deliberately NOT given a discoverable
+`--allow-foreign-carve` flag.
+
+**Why no flag:** it disables the carve-vs-target-platform guard, i.e. the check standing
+between a build and the filed P1 above ("a quaude built from a foreign-carved provider LIES
+about its platform") until phase 4 keys the provider store by platform+arch. A discoverable
+flag would invite reaching for it as "the fix" when a build refuses a mismatched provider,
+instead of the actually-correct move (`clode fetch claude` for the right platform, or point
+`CLODE_CLAUDE_BIN` at one) — reintroducing, as a documented shortcut, exactly the failure mode
+the guard exists to prevent.
+
+**Why not deleted (making the guard unconditional):** no test exercises the escape hatch today,
+but the guard's own error message (`libexec/clode-build.cjs:1713-1718`) already tells an
+operator to set it "if you are deliberately testing this" — a legitimate, narrow use
+(reproducing the P1, or exercising cross-platform build paths without re-fetching a matching
+provider each run). Deleting it would also require rewriting that message.
+
+Not declared on `bootstrap`: the guard is gated `!naude && !self`, so a `bootstrap` build never
+reaches it (`libexec/clode-build.cjs:1706-1707`).

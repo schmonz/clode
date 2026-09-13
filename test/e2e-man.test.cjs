@@ -100,7 +100,14 @@ test('the docs describe a builder, not a runner', () => {
       `${name} describes clode itself as running Claude Code (clode builds; quaude runs)`);
     assert.doesNotMatch(text, /runs? (the )?(latest )?Claude Code (under|on|via|with)\b|under (a |the )?(host )?(Node|tjs)( runtime)?/i,
       `${name} frames clode as a runtime that hosts Claude Code`);
-    assert.doesNotMatch(text, /CLODE_ENGINE|pass(es)? through to Claude/i, `${name} references the retired runner surface`);
+    // Word-boundary, not a bare substring: phase 3b task 2 absorbed CLODE_ENGINE_RECIPE (a
+    // real, currently-read build input, unrelated to this retired runner-engine selector)
+    // onto the CLI surface. `_` is a word character, so \b does not match between
+    // CLODE_ENGINE and _RECIPE — this still fires only for the exact retired name. Same fix,
+    // same reason, as test/clode-main.test.cjs's sibling guard; man/clode.1 is hand-maintained
+    // rather than generated from the surface, so nothing forced this one red YET, but the next
+    // absorbed name to reach the man page would have tripped it exactly as it did there.
+    assert.doesNotMatch(text, /\bCLODE_ENGINE\b|pass(es)? through to Claude/i, `${name} references the retired runner surface`);
   }
   // And it must promise only what exists: update is Phase 4.
   assert.doesNotMatch(docs['man/clode.1'], /^\.Cm update$/m, 'man documents an update subcommand that does not exist');
