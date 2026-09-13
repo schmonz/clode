@@ -169,7 +169,7 @@ async function clodeWatch(manual, opts) {
   try { fs.mkdirSync(wd, { recursive: true }); } catch { return 0; }
   const notice = path.join(wd, 'watch-notice');
 
-  // Poll the SAME channel `clode fetch` would fetch: autoUpdatesChannel, else
+  // Poll the SAME channel `clode fetch claude` would fetch: autoUpdatesChannel, else
   // 'latest' (matching claude), against the resolved releases base (default URL
   // when CLODE_RELEASES_URL is unset). Keeps the nudge and the updater in step.
   const chan = resolveChannel(undefined, env);

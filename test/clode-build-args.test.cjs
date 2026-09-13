@@ -37,9 +37,48 @@ test('parseBuildArgs: the product is a parameter, and --target composes with eac
 test('parseBuildArgs: the retired product flags are unknown arguments', () => {
   assert.match(parseBuildArgs(['--self']).error, /unknown argument '--self'/);
   assert.match(parseBuildArgs(['--naude']).error, /unknown argument '--naude'/);
-  // And the usage line names the VERB that was actually run.
+  // And the usage line names the VERB that was actually run, spelled the way it is
+  // actually TYPED: `clode build`, but `node scripts/stage0.mjs bootstrap` — there is no
+  // `clode` that accepts bootstrap, and this assertion used to pin that non-existent
+  // invocation. Both spellings come from libexec/cli-surface.cjs's table (the same field
+  // --help renders), so the usage line and the help cannot drift.
   assert.match(parseBuildArgs(['--naude']).error, /usage: clode build \[quaude\|naude\]/);
-  assert.match(parseBuildArgs(['--naude'], 'clode').error, /usage: clode bootstrap/);
+  assert.match(parseBuildArgs(['--naude'], 'clode').error,
+    /usage: node scripts\/stage0\.mjs bootstrap/);
+  assert.doesNotMatch(parseBuildArgs(['--naude'], 'clode').error, /usage: clode bootstrap/);
+});
+
+test('parseBuildArgs: a flag with no value says WHICH flag, for both verbs', () => {
+  // `--out` with nothing after it used to fall through an `args[i] === '--out' &&
+  // args[i + 1]` guard into the unknown-argument branch and report
+  // `unknown argument '--out'` — for a flag this parser plainly knows — while `--target`
+  // two lines below said the useful thing. And the --target message hardcoded "build:"
+  // and "clode build --list-targets", so `bootstrap --target` named the wrong verb.
+  for (const [product, verb, cmd] of [
+    ['quaude', 'build', 'clode build'],
+    ['clode', 'bootstrap', 'node scripts/stage0.mjs bootstrap'],
+  ]) {
+    const noOut = parseBuildArgs(['--out'], product).error;
+    assert.match(noOut, new RegExp(`^${verb}: --out needs a path`),
+      `${verb} --out with no value must name the flag, not call it unknown`);
+    assert.doesNotMatch(noOut, /unknown argument/);
+    const noTarget = parseBuildArgs(['--target'], product).error;
+    assert.match(noTarget, new RegExp(`^${verb}: --target needs a platform`));
+    assert.ok(noTarget.includes(`${cmd} --list-targets`),
+      `${verb}'s --target hint must name ${cmd}, not the other verb`);
+  }
+});
+
+test('parseBuildArgs: bootstrap really does accept --list-targets and --keep-going, and says so', () => {
+  // They are parsed by the SAME loop for every product, so bootstrap has always taken
+  // them; only the usage line failed to mention it. Accepted-but-undocumented is the same
+  // lie as documented-but-ignored.
+  assert.strictEqual(parseBuildArgs(['--list-targets'], 'clode').listTargets, true);
+  assert.strictEqual(parseBuildArgs(['--keep-going'], 'clode').keepGoing, true);
+  assert.strictEqual(parseBuildArgs(['-k'], 'clode').keepGoing, true);
+  const usage = parseBuildArgs(['--bogus'], 'clode').error;
+  assert.match(usage, /--list-targets/);
+  assert.match(usage, /--keep-going/);
 });
 
 test('parseBuildArgs: an unknown product is an internal error, never a silent quaude', () => {

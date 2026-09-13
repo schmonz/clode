@@ -1,16 +1,22 @@
 'use strict';
 // clode-blobulate — THE BLOBULATE STEP, and nothing else.
 //
-// To blobulate is to ATTACH A PAYLOAD TO AN ENGINE IMAGE: take a binary that knows
-// how to run JavaScript and hand it back carrying the program it should run, so the
-// result is one file that needs nothing else on disk. Everything around that step —
+// WHAT "BLOBULATE" MEANS IS DEFINED IN ONE PLACE, AND IT IS NOT HERE:
+// libexec/quaude-blobulate.js's header is the canonical definition of the coined word
+// (including which retired word it replaced and why, explained there once so nothing
+// else has to). This file does NOT restate it — a second definition is a second thing to keep
+// true, and the whole point of coining one word was to have one home for it. Read that
+// header first; everything below is about THIS MODULE, not about the word.
+//
+// The step's BOUNDARY, which is this module's own business: everything around it —
 // resolving the provider, extracting and hooking the bundle, walking and gating the
 // ext-dep closure, signing the engine copy, smoking and attesting the product — is
 // the ORCHESTRATOR's job (clode-build.cjs). This module is the middle: given inputs
 // already staged on disk, it produces the attached artifact.
 //
 // TWO MECHANISMS, one step. They differ in how the bytes ride, not in what the step
-// means:
+// means (the canonical header names the same two; these are the implementation notes
+// for the two code paths BELOW, not a competing definition):
 //
 //   'trailer'  (quaude, and bootstrap)  — the payload is APPENDED to a copy of the tjs
 //     engine as a canonical-LE trailer: a member archive + manifest + bootstrap,

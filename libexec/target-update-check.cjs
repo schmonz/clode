@@ -4,7 +4,7 @@
 // semver compare, no install, no rebuild. The target's patched in-app updater
 // (extract-claude-js.cjs) calls this INSTEAD of trying to update. resolveChannel/
 // releasesBase mirror clode-update.cjs so a target checks the SAME channel
-// `clode fetch` would. Dependency-free (fetch + injected semver) because it is
+// `clode fetch claude` would. Dependency-free (fetch + injected semver) because it is
 // blobulated as a target member, not run in the builder.
 
 const DEFAULT_RELEASES = 'https://downloads.claude.ai/claude-code-releases';

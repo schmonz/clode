@@ -67,6 +67,11 @@ const { appendRun } = require('./build-trace.cjs');
 // else here — resolve, extract, closure, gates, signing, smoke, attest — is the
 // orchestration around it. See clode-blobulate.cjs's header.
 const { blobulate, materializeBlobPayload } = require('./clode-blobulate.cjs');
+// The SURFACE, only for HOW EACH VERB IS TYPED (see parseBuildArgs). This module owns
+// build's/bootstrap's argv contract and prints its own usage line, so it must spell the
+// command the same way --help does; reading the table is how those two cannot drift.
+// cli-surface.cjs has zero imports of its own, so this costs nothing and cannot cycle.
+const { SURFACE, CHECKOUT_ONLY_VERBS } = require('./cli-surface.cjs');
 
 function sha256File(p) {
   return crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
@@ -844,7 +849,7 @@ function describeExit(r) {
 // build branch. Returns { naude, self, out } on success or { error } on a
 // bad argv; never throws, never writes anywhere (pure parse).
 // A TTY-only, in-place phase spinner for `clode build` — the build is discrete
-// phases with no known total (extract → blobulate → smoke), so unlike `clode fetch`'s
+// phases with no known total (extract → blobulate → smoke), so unlike `clode fetch claude`'s
 // byte bar this is an animated phase LABEL, not a percentage. Mirrors
 // clode-update's download progress: redraw with `\r … \x1b[K`, clear with the
 // same. `active` should be `stderr.isTTY && !CLODE_VERBOSE` — piped/CI builds and
@@ -897,21 +902,45 @@ function parseBuildArgs(args, product) {
   let target = null;
   let listTargets = false;
   let keepGoing = false;
-  // The usage line names THIS command: `clode bootstrap` and `clode build` are
+  // Every message names THIS command: `clode bootstrap` and `clode build` are
   // different verbs with different argv, and a message that named the wrong one
-  // would be the very drift this phase is removing.
+  // would be the very drift this phase is removing. ONE prefix, computed once, used by
+  // EVERY message below — because the messages used to disagree: the usage line
+  // branched on `self` while the --target no-value error hardcoded "build:" and
+  // "clode build --list-targets", so `bootstrap --target` named the wrong verb two
+  // lines under the comment forbidding exactly that.
+  const verb = self ? 'bootstrap' : 'build';
+  // HOW THE VERB IS TYPED comes from the surface table, not from a string here: `build`
+  // is `clode build`, but `bootstrap` is `node scripts/stage0.mjs bootstrap` — there is
+  // no `clode` that accepts it. A usage line naming an invocation nobody can run is the
+  // same defect as one naming the wrong verb, and the table already had to answer this
+  // question for --help, so it answers it once for both.
+  const def = self ? CHECKOUT_ONLY_VERBS[verb] : SURFACE.verbs[verb];
+  const cmd = `${(def && def.invocation) || 'clode'} ${verb}`;
+  // The usage line names THIS command's WHOLE argv, --list-targets and --keep-going
+  // included: bootstrap accepts both (they are parsed by this same loop, for every
+  // product), and a flag that is accepted but undocumented is the same lie as a flag
+  // that is documented but ignored. `bootstrap --list-targets` really does print the
+  // target list; it now says so.
   const usage = self
-    ? 'usage: clode bootstrap [--target Y] [--out PATH]'
-    : 'usage: clode build [quaude|naude] [--target Y|--list-targets|--keep-going] [--out PATH]';
+    ? `usage: ${cmd} [--target Y|--list-targets|--keep-going] [--out PATH]`
+    : `usage: ${cmd} [quaude|naude] [--target Y|--list-targets|--keep-going] [--out PATH]`;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--list-targets') { listTargets = true; }
     else if (args[i] === '--keep-going' || args[i] === '-k') { keepGoing = true; }
-    else if (args[i] === '--out' && args[i + 1]) { out = args[++i]; }
+    else if (args[i] === '--out') {
+      // A VALUE CHECK, not an `args[i] === '--out' && args[i + 1]` guard: without a
+      // value that guard fell through to the unknown-argument branch and reported
+      // `unknown argument '--out'` for a flag this parser plainly knows, while
+      // --target right below it said the useful thing. Both now say it.
+      if (!args[i + 1]) return { error: `${verb}: --out needs a path (${usage})` };
+      out = args[++i];
+    }
     else if (args[i] === '--target') {
-      if (!args[i + 1]) return { error: 'build: --target needs a platform (see: clode build --list-targets)' };
+      if (!args[i + 1]) return { error: `${verb}: --target needs a platform (see: ${cmd} --list-targets)` };
       target = args[++i];
     }
-    else return { error: `${self ? 'bootstrap' : 'build'}: unknown argument '${args[i]}' (${usage})` };
+    else return { error: `${verb}: unknown argument '${args[i]}' (${usage})` };
   }
   // NO EXCLUSIVITY CHECK any more, and that is the point: "--self and --naude are
   // different build targets — pick one" existed because two flags could each name a
@@ -1680,7 +1709,7 @@ async function clodeBuild(args, opts) {
           + `${wantOs}${parsed.target ? ` (--target ${parsed.target})` : ' (this host)'}. `
           + 'Bun folds the platform into the bundle at carve time, so the result would '
           + 'report the wrong OS and take the wrong platform branches at runtime. Fetch a '
-          + `${wantOs} provider (clode fetch), point CLODE_CLAUDE_BIN at one, or set `
+          + `${wantOs} provider (clode fetch claude), point CLODE_CLAUDE_BIN at one, or set `
           + 'CLODE_ALLOW_FOREIGN_CARVE=1 if you are deliberately testing this.');
       }
     }

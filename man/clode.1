@@ -306,6 +306,16 @@ The esbuilt clode-main bundle
 .Cm bootstrap
 embeds (default: the newest
 .Pa build/*/clode-main.bundle.cjs ) .
+.It Ev CLODE_TARGET_TEMPLATE
+An operator-built engine to cross-build onto, used INSTEAD of the published
+template for
+.Fl -target .
+Read by both
+.Nm Cm build Cm quaude Fl -target
+and
+.Cm bootstrap Fl -target ;
+.Nm Cm build Cm naude
+never looks at it.
 .El
 .Sh FILES
 .Bl -tag -width Ds

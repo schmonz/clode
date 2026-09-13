@@ -282,7 +282,16 @@ test('--help documents clode build from the table — and bootstrap only where i
   // about it. One renderer, two tables, no conditional: that is the whole mechanism by
   // which a shipped clode cannot bootstrap.
   assert.doesNotMatch(r.stdout, /--self/, 'the flag is gone, not renamed');
-  assert.match(r.stdout, /clode bootstrap/, 'the checkout entry point documents its own verb');
+  // FINAL FIX WAVE: this used to assert `clode bootstrap`, and that spelling does not
+  // exist — bin/ is empty and a shipped binary refuses the verb, which is the whole point
+  // of the checkout-only table. renderHelp hardcoded a `clode ` prefix for every verb, so
+  // help was advertising an invocation nobody can type while dispatch's own refusal and
+  // man/clode.1 both said `node scripts/stage0.mjs bootstrap`. The table now carries an
+  // optional `invocation` per verb (default 'clode'); this assertion is what pins it.
+  assert.match(r.stdout, /node scripts\/stage0\.mjs bootstrap/,
+    'the checkout entry point documents its own verb, spelled the way it is actually run');
+  assert.doesNotMatch(r.stdout, /^\s*clode bootstrap\b/m,
+    'and never as `clode bootstrap`, which no entry point accepts');
   assert.ok(r.stdout.includes('CLODE_MAIN_BUNDLE'));
   const { renderHelp, surfaceFor } = require('../libexec/cli-surface.cjs');
   const shippedHelp = renderHelp('1.2.3', surfaceFor('shipped'));

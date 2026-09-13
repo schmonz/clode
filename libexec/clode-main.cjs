@@ -18,16 +18,17 @@
 //   1. parseArgv(args, surfaceFor(kind)) -> { verb, subject, tail, flags, rest }
 //   2. --verbose (leading, table-declared)    -> CLODE_VERBOSE=1
 //   3. resolve SELF / HERE / LIBEXEC / VERSION
-//   4. --version                -> print "clode <VERSION>", exit 0
-//   5. --help                   -> print renderHelp(table), exit 0
-//   6. no verb, or a positional the table rejects -> usage error, exit 2 (clode
+//   4. the print-and-exit globals, in the order argv gave them (globalOrder):
+//        --version             -> print "clode <VERSION>", exit 0
+//        --help                -> print renderHelp(table), exit 0
+//   5. no verb, or a positional the table rejects -> usage error, exit 2 (clode
 //                                  BUILDS targets; it never runs Claude Code itself —
 //                                  see clode-build.cjs / naude-entry.cjs for what DOES)
-//   7. fetch <ingredient>       -> clodeUpdate / ensurePinnedNode, exit status
-//   8. build <product>          -> check watch signals, then clodeBuild, exit status —
+//   6. fetch <ingredient>       -> clodeUpdate / ensurePinnedNode, exit status
+//   7. build <product>          -> check watch signals, then clodeBuild, exit status —
 //                                  this is the ONE place upstream drift is checked
-//   9. read-anthropic-tea-leaves -> clodeWatch(manual), exit 0
-//  10. bootstrap                -> clodeBuild for the BUILDER; checkout entry only,
+//   8. read-anthropic-tea-leaves -> clodeWatch(manual), exit 0
+//   9. bootstrap                -> clodeBuild for the BUILDER; checkout entry only,
 //                                  because the table it composes is the only one with
 //                                  the verb (a shipped clode refuses it, from data)
 //
@@ -243,7 +244,7 @@ async function main(argv, opts = {}) {
     return process.exit(0);
   }
 
-  // 10. `node scripts/stage0.mjs bootstrap [--target P] [--out PATH]`: build clode
+  // 9. `node scripts/stage0.mjs bootstrap [--target P] [--out PATH]`: build clode
   //     ITSELF from this checkout. Checkout-only, and not because of a conditional
   //     here — the shipped table simply has no such verb (cli-surface.cjs's
   //     CHECKOUT_ONLY_VERBS), so a shipped clode says where bootstrap lives and exits

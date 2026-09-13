@@ -366,12 +366,16 @@ test('a shipped clode refuses bootstrap with a reason', () => {
 });
 
 test('the checkout entry point HAS bootstrap, and it is the builder, not a product', () => {
-  // Not a build: a bootstrap-specific argv error, which only the bootstrap branch
-  // can print (its usage line names `clode bootstrap`, never `clode build`).
+  // Not a build: a bootstrap-specific argv error, which only the bootstrap branch can
+  // print (its usage line names bootstrap, never `clode build`). It names it the way the
+  // verb is actually TYPED — `node scripts/stage0.mjs bootstrap` — because there is no
+  // `clode` that accepts bootstrap; this used to assert the non-existent `clode
+  // bootstrap`, the same false invocation --help was rendering.
   const r = runEntry(['bootstrap', '--bogus']);
   assert.strictEqual(r.status, 2, r.stderr);
   assert.match(r.stderr || '', /unknown argument '--bogus'/);
-  assert.match(r.stderr || '', /usage: clode bootstrap/);
+  assert.match(r.stderr || '', /usage: node scripts\/stage0\.mjs bootstrap/);
+  assert.doesNotMatch(r.stderr || '', /usage: clode bootstrap/);
   assert.doesNotMatch(r.stderr || '', /unknown command/, 'the checkout table carries bootstrap');
 });
 

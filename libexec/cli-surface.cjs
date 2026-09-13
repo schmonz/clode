@@ -70,6 +70,12 @@ const TAGLINE = 'build a standalone Claude Code binary for your machine.';
 //                   CLODE_TJS       clode-build.cjs + clode-extract.cjs
 //                   CLODE_CHANGELOG_URL  clode-update.cjs (fetch) AND clode-watch.cjs
 //                                   (read-anthropic-tea-leaves) — so BOTH declare it
+//                   CLODE_TARGET_TEMPLATE  clode-build.cjs:1107 + :1514, the quaude cross
+//                                   path (`build --target`) AND the bootstrap cross path —
+//                                   so BOTH declare it. The first cut had it on bootstrap
+//                                   only, which is what "measured, not guessed" is supposed
+//                                   to prevent; re-measure by grepping, do not infer from
+//                                   which verb the name sounds like it belongs to.
 //                 The four that no single verb owns are SURFACE.env below. Phase 3b's
 //                 51-name classification then EDITS these entries rather than creating
 //                 them; help must never stop documenting a name it documented before.
@@ -92,13 +98,32 @@ const SURFACE = {
       // meaning, which is precisely how --target acquired a second meaning the first
       // time. One sentence: the subject is for another machine, whatever the verb does
       // with it.
+      // --out's text is PER-PRODUCT on purpose, because the default IS per-product and
+      // --help is the only documentation inside a shipped binary — an artifact that
+      // misreports where it wrote its output is the same lie as a documented-but-ignored
+      // flag. MEASURED, not assumed: quaude's default comes from clode-build.cjs's
+      // resolveBuildOut (the bare name `quaude`, `.exe` iff the build is for windows —
+      // i.e. ./quaude), while naude's comes from seaBin -> platform-tag.cjs's seaOut,
+      // which is <repo>/build/<artifact-name>/naude, NOT ./naude. The pre-table help
+      // claimed a default only for the quaude line for exactly this reason; saying
+      // "./<product>" for both was the regression.
       flags: { '--target': 'the product is for PLATFORM-ARCH, not this machine',
-               '--out': 'write the artifact here (default ./<product>)' },
+               '--out': 'write the artifact here (quaude defaults to ./quaude; naude defaults to '
+                 + "build/<artifact-name>/naude under clode's root)" },
       env: [{ name: 'CLODE_NO_WATCH=1',
               doc: 'disable the opportunistic update-signal check that runs during a build' },
             { name: 'CLODE_TJS',
               doc: "tjs template binary for 'clode build' (default: the blobulated builder's "
-                + 'own embedded template, else build/tjs/tjs)' }],
+                + 'own embedded template, else build/tjs/tjs)' },
+            // DECLARED ON BOTH VERBS, like CLODE_CHANGELOG_URL. It was bootstrap-only, and
+            // that was a measurement miss, not a decision: the readers are
+            // clode-build.cjs:1107 and :1514 — both on the QUAUDE cross path, reached by
+            // `clode build [quaude] --target`, never by naude — and .github/workflows/ci.yml
+            // sets it for a `build --target linux-x64` quaude. A name a verb absorbs but
+            // does not document is invisible in a shipped binary, where --help is the only
+            // documentation there is.
+            { name: 'CLODE_TARGET_TEMPLATE',
+              doc: 'an operator-built engine for --target, used INSTEAD of the published template' }],
     },
     fetch: {
       summary: 'fetch a build ingredient',
@@ -162,7 +187,20 @@ const CHECKOUT_ONLY_VERBS = {
     subjectClass: null,
     subjects: {},
     defaultSubject: null,
-    ownsArgv: true,            // same parser as build — see SURFACE.verbs.build
+    // The one verb that is NOT invoked as `clode <verb>`: there is no `clode` that
+    // accepts bootstrap (bin/ is empty, and a shipped binary refuses it — that is the
+    // whole point of CHECKOUT_ONLY_VERBS), so renderHelp's hardcoded `clode ` prefix was
+    // advertising an invocation that does not exist. Optional, defaulting to 'clode', so
+    // every other verb's entry stays as short as it was; dispatch's own refusal message
+    // and man/clode.1 already said `node scripts/stage0.mjs bootstrap`, and now help
+    // agrees with both.
+    invocation: 'node scripts/stage0.mjs',
+    // same parser as build — see SURFACE.verbs.build, which carries the same note: it
+    // also takes --list-targets and --keep-going (build-internal rather than surface
+    // vocabulary, and boolean where every flag in this table takes a value). bootstrap
+    // really does accept them — `node scripts/stage0.mjs bootstrap --list-targets`
+    // prints the target list — so parseBuildArgs's usage line names them for both verbs.
+    ownsArgv: true,
     // --target reads exactly as it does for a product: the artifact is for another
     // machine. It is the same cross-blobulate path a `build quaude --target` takes
     // (the foreign engine template becomes the base), which is why it composes here
@@ -182,9 +220,13 @@ const CHECKOUT_ONLY_VERBS = {
 //   'shipped'  — the built clode binary: SURFACE exactly.
 //   'checkout' — scripts/stage0.mjs in a source checkout: SURFACE plus
 //                CHECKOUT_ONLY_VERBS.
-// Returns a fresh object (the caller cannot mutate SURFACE through it); the verb
-// DEFINITIONS are shared, which is deliberate — one definition per verb, whoever
-// asks.
+// Returns a fresh TOP-LEVEL object with a fresh `verbs` map. Nothing deeper is copied:
+// `globals`, `env` and every verb DEFINITION are the same objects SURFACE holds, so
+// `surfaceFor('shipped').globals['--x'] = 1` really does write through to SURFACE. That
+// sharing is deliberate for the definitions — one definition per verb, whoever asks — and
+// this comment used to claim the copy was defensive ("the caller cannot mutate SURFACE
+// through it"), which was simply false. Nothing in this repo mutates a returned surface;
+// the guarantee on offer is "the two entry points get different verb MAPS", not immunity.
 // `elsewhere` is the OTHER half of the split: the verbs this entry point does not
 // have BUT SOMETHING ELSE DOES. It exists so that a shipped clode asked to bootstrap
 // can say where bootstrap lives instead of "unknown command" — still a property of
@@ -252,7 +294,10 @@ function renderHelp(version, surface) {
     const positional = subjects.length ? ` [${subjects.join(' | ')}]` : '';
     const tail = def.tail ? ` ${def.tail.name}` : '';
     const flags = Object.keys(def.flags);
-    lines.push(`  clode ${verb}${positional}${tail}${flags.length ? ' [options]' : ''}`);
+    // `invocation` — how this verb is actually TYPED. Defaults to 'clode' (every shipped
+    // verb); a checkout-only verb overrides it, because `clode bootstrap` is not a thing
+    // anyone can run. Help must never print a command line that does not exist.
+    lines.push(`  ${def.invocation || 'clode'} ${verb}${positional}${tail}${flags.length ? ' [options]' : ''}`);
     lines.push(`      ${def.summary}`);
     if (subjects.length) {
       lines.push(`      ${def.subjectClass}s:`);

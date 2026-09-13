@@ -802,7 +802,7 @@ function transform(body) {
   if (!au) {
     process.stderr.write(
       'clode: in-TUI autoupdater hook NOT applied — pkg-manager apply anchor not found '
-      + 'exactly once (Claude version drift?). `clode fetch` still works; '
+      + 'exactly once (Claude version drift?). `clode fetch claude` still works; '
       + 'run inspect-claude-bundle --strict.\n');
   }
   let nau;
@@ -810,7 +810,7 @@ function transform(body) {
   if (!nau) {
     process.stderr.write(
       'clode: in-TUI NATIVE autoupdater hook NOT applied — native apply anchor '
-      + 'not found exactly once (Claude version drift?). `clode fetch` still '
+      + 'not found exactly once (Claude version drift?). `clode fetch claude` still '
       + 'works; run inspect-claude-bundle --strict.\n');
   }
   let lau;

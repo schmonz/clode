@@ -1,6 +1,10 @@
 // quaude-blobulate.js — BLOBULATE: attach a payload blob to an engine image, producing one
 // self-contained executable. This is the canonical definition of the word; everything else
-// (comments, log lines, other files) points HERE rather than restating it.
+// (comments, log lines, other files) points HERE rather than restating it — including
+// libexec/clode-blobulate.cjs, the module named for the step, whose header opens by sending
+// the reader to this one. Two files declaring themselves the home of one coined word is the
+// exact failure this sentence exists to prevent, so if you add a definition somewhere else,
+// delete this one instead of keeping both.
 //
 // WHY NOT "fuse", the word this replaces: `fuse` is Node SEA's name for a sentinel MARKER,
 // not an operation — scripts/build-naude.mjs passes `sentinelFuse: 'NODE_SEA_FUSE_<hash>'`
