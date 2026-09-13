@@ -21,48 +21,26 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
-const { spawnSync } = require('node:child_process');
 const { sandbox, REPO } = require('./e2e.cjs');
 const { seedClaudeProfile, capture } = require('./e2e-pty.cjs');
-const { resolveClaudeBin } = require('../libexec/clode-resolve.cjs');
 const { tjsPath } = require('./node-shim-helper.cjs');
-const { stateRoot } = require('./state-root-helper.cjs');
 const { liveRenderSkipReason } = require('./live-render-helper.cjs');
+const { builtQuaude } = require('./built-binary.cjs');
 
-const ENTRY = path.join(REPO, 'scripts', 'stage0.mjs');
 const MARKER = 'ctrlz-survivor-73';
 
-function realProvider() {
-  try { const p = resolveClaudeBin({ env: process.env }); if (p && fs.existsSync(p)) return p; } catch { /* */ }
-  const home = path.join(os.homedir(), '.local', 'bin', 'claude');
-  return fs.existsSync(home) ? home : null;
-}
-
-let SKIP = null, SCREEN = '', SBX = null, DIR = null;
+let SKIP = null, SCREEN = '', SBX = null;
 before(() => {
   if (process.platform === 'win32') { SKIP = 'POSIX only (Ctrl-Z/SIGTSTP is a POSIX terminal concept)'; return; }
   if (!tjsPath()) { SKIP = 'no tjs binary (CLODE_TJS or build/tjs/tjs)'; return; }
   const liveRenderSkip = liveRenderSkipReason();
   if (liveRenderSkip) { SKIP = liveRenderSkip; return; }
 
-  // Use a prebuilt quaude if pointed at one (fast), else build one hermetically.
-  let quaude = process.env.CLODE_QUAUDE;
-  if (!(quaude && fs.existsSync(quaude))) {
-    const provider = realProvider();
-    if (!provider) { SKIP = 'no resolvable Claude Code provider (and no CLODE_QUAUDE)'; return; }
-    DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-ctrlz-'));
-    quaude = path.join(DIR, 'quaude');
-    const build = spawnSync(process.execPath, [ENTRY, 'build', '--out', quaude], {
-      encoding: 'utf8', timeout: 300000,
-      // stateRoot(DIR): respects test/run.mjs's central CLODE_STATE_ROOT when
-      // present, else falls back to this file's own private DIR -- needed
-      // for a standalone `node --test` run (run.mjs never executes).
-      env: { ...process.env, CLODE_CLAUDE_BIN: provider, CLODE_CACHE: path.join(DIR, 'cache'), CLODE_STATE_ROOT: stateRoot(DIR), CLODE_TJS: tjsPath(), DYLD_INSERT_LIBRARIES: '' },
-    });
-    if (build.status !== 0) { SKIP = `clode build failed:\n${build.stdout}\n${build.stderr}`; return; }
-  }
+  // CLODE_QUAUDE if pointed at one (fast, and how CI/a slow box hands one over),
+  // else builtQuaude() builds one hermetically ONCE for this process.
+  const built = builtQuaude();
+  if (built.skip) { SKIP = built.skip; return; }
+  const quaude = built.path;
 
   SBX = sandbox();
   seedClaudeProfile(SBX.home, { cwd: REPO });
@@ -77,7 +55,6 @@ before(() => {
 });
 after(() => {
   if (SBX) { try { fs.rmSync(SBX.dir, { recursive: true, force: true }); } catch { /* */ } }
-  if (DIR) { try { fs.rmSync(DIR, { recursive: true, force: true }); } catch { /* */ } }
 });
 
 test('quaude survives Ctrl-Z: the TUI stays alive and responsive after suspend', (t) => {

@@ -5,6 +5,16 @@
 // Spawns quaude.exe DIRECTLY — it self-loads, no loader/cli args (unlike the
 // non-blobulated roundtrip oracle, test/node-shim-roundtrip.test.cjs, which spawns
 // `tjs run loader cli`). Skips locally (no Windows / no blobulated binary).
+//
+// NOT converted to test/built-binary.cjs's builtQuaude() (phase 3b task 3). That
+// helper assembles a plain HOST-platform quaude via `clode build --out`; this file
+// needs a specific, DIFFERENT artifact -- a cross-blobulated Windows PE with a
+// tx1k1 trailer, produced by a cross-build step this box cannot even run (it
+// isn't Windows), and exercised only under a real Windows kernel (CreateProcess
+// self-loading it, not a loader+cli spawn). Handing this file a host-built quaude
+// would be a category error, the same one the umbrella carves out for build
+// machinery: this test is validating a DIFFERENT build output's shape, not
+// driving the ordinary built product. CLODE_QUAUDE_EXE stays its own gate.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');

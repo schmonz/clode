@@ -20,12 +20,14 @@
 //      fixed. That is the upstream-format-drift signal the old test wanted and could
 //      never deliver.
 //
-// Gated on a built quaude (CLODE_QUAUDE) and a native claude on PATH. Both are cheap to
-// satisfy deliberately and absent by default, so this SKIPS rather than lying.
+// Gated on a built quaude (via built-binary.cjs's builtQuaude() -- CLODE_QUAUDE wins,
+// else one is built once for this process) and a native claude on PATH. Both are cheap
+// to satisfy deliberately and absent by default, so this SKIPS rather than lying.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
+const { builtQuaude } = require('./built-binary.cjs');
 
 // Labels that legitimately differ, each with the reason. A label here is NOT ignored —
 // it must still be PRESENT in both outputs; only its value may differ.
@@ -40,7 +42,17 @@ const KNOWN_DIVERGENT = {
 };
 
 // Labels only ONE side is expected to emit at all.
-const NATIVE_ONLY = [];
+//
+// 'Organization policy': triaged 2026-09-13, the first real run of this file once
+// task 3 wired it to a built quaude instead of always skipping. Measured on this
+// box: native auto-updated itself to 2.1.270; the provider clode's build resolves
+// (and therefore the quaude built from it) reports 2.1.252 -- older, and its
+// doctor report has no such line at all. Same root cause the 'Commit' entry
+// already documents (upstream bundle revisions are expected to differ while
+// UPSTREAM_PIN lags) -- this is that same lag showing up as an added LABEL
+// instead of a changed VALUE, so it belongs beside Commit rather than as a
+// mystery.
+const NATIVE_ONLY = ['Organization policy'];
 const QUAUDE_ONLY = ['Invoked'];   // quaude names its VFS entry; native has no analogue
 
 function doctor(bin) {
@@ -68,17 +80,18 @@ function labels(text) {
   return m;
 }
 
-const QUAUDE = process.env.CLODE_QUAUDE;
 function nativeClaude() {
   const r = spawnSync('command', ['-v', 'claude'], { shell: true, encoding: 'utf8' });
   const p = (r.stdout || '').trim();
   return p && fs.existsSync(p) ? p : null;
 }
 
+// Resolves the quaude ONCE (builtQuaude() memoizes per process) and folds its
+// skip reason into why()'s, so a missing engine/provider reports as precisely
+// as a missing native claude does.
 function why() {
-  if (!QUAUDE || !fs.existsSync(QUAUDE)) {
-    return 'no built quaude: set CLODE_QUAUDE=<path> (build one with `clode build --out <path>`)';
-  }
+  const built = builtQuaude();
+  if (built.skip) return built.skip;
   if (!nativeClaude()) return 'no native `claude` on PATH to compare against';
   return null;
 }
@@ -86,6 +99,7 @@ function why() {
 test('quaude doctor reports the HOST platform, not the platform it was carved from', (t) => {
   const skip = why();
   if (skip) { t.skip(skip); return; }
+  const QUAUDE = builtQuaude().path;
 
   // THE INVARIANT WORTH THE WHOLE FILE. Bun constant-folds process.platform/arch at CARVE
   // time, so a quaude assembled from a foreign-carved provider believes it is running on
@@ -113,6 +127,7 @@ test('quaude doctor reports the HOST platform, not the platform it was carved fr
 test('both doctors emit the same label set, modulo reviewed divergences', (t) => {
   const skip = why();
   if (skip) { t.skip(skip); return; }
+  const QUAUDE = builtQuaude().path;
 
   const n = doctor(nativeClaude());
   const q = doctor(QUAUDE);
@@ -133,6 +148,7 @@ test('both doctors emit the same label set, modulo reviewed divergences', (t) =>
 test('no UNREVIEWED value divergence between the two doctors', (t) => {
   const skip = why();
   if (skip) { t.skip(skip); return; }
+  const QUAUDE = builtQuaude().path;
 
   const N = labels(doctor(nativeClaude()).out);
   const Q = labels(doctor(QUAUDE).out);

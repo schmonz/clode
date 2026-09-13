@@ -41,6 +41,10 @@
 // only when the value is a genuinely non-sensitive operational toggle (a boolean flag,
 // a tool path, a small numeric knob) — never on the strength of a name NOT looking
 // dangerous, which is the same reasoning that let CLODE_SESSION through the first time.
+// NOT a built-binary consumer (phase 3b task 3's grep for CLODE_QUAUDE matches
+// this file only because the name is LISTED here as a safe-to-print gate, once
+// among many -- this module never builds or gates a test on one, it only decides
+// whether a name's VALUE may appear in a printed stamp). Nothing here to convert.
 const SAFE_GATE_NAMES = new Set([
   // Live/e2e opt-ins: booleans, not values that could carry a credential.
   'CLODE_OFFLINE', 'CLODE_LIVE_RENDER', 'CLODE_LIVE_ONLINE', 'CLODE_LIVE_ROUNDTRIP',
