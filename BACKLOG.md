@@ -6880,3 +6880,60 @@ become "classify all 65, and route the engine cluster to phase 4 rather than the
 three trees, matching the env-read shapes above, inverting the index name→files. Counting raw
 `CLODE_*` tokens instead gives 141 and is the wrong number — it includes build-time defines
 that are not environment variables at all.
+
+
+## THREE PHASE-3B DECISIONS (user, 2026-09-13)
+
+### 1. The ~20 engine-build knobs go to phase 4 as cmake options, NOT to the CLI
+
+`CLODE_TJS_STATIC`, `_WASM`, `_FFI`, `_MIMALLOC`, `_MACOS_SDK`, `_MACOS_MIN`, `_CROSS_FILE`,
+`_REGEN`, `_SMOKE`, `CLODE_COSMOCC` and the rest of that cluster are read by
+`scripts/build-tjs.mjs` and nothing else. They are options to a COMPILE, and the umbrella's
+invariant is that `clode build` requires no compiler and no cmake — so they belong to the
+program that does. Absorbing them into `clode build`'s flag surface would put twenty compile
+options on a command that cannot compile: the same axis conflation phase 3a spent six tasks
+removing, arriving from the other end. Phase 4 moves the engine build to cmake, where they
+become typed options with defaults and a cache rather than undocumented env vars.
+
+Consequence: phase 3b's env work is ~11 genuine absorption candidates, not 51 and not 65.
+
+### 2. "The oracle is a product, not a fixture" is RETIRED — the oracle is an INGREDIENT
+
+The umbrella clause was written before phase 3a's vocabulary existed. **The oracle is
+`claude`** — upstream's own behaviour is what we are matching — and phase 3a already made it
+first-class as `clode fetch claude`, an ingredient. There is no third product to build.
+`test/oracle-models.cjs`'s `stageCli()` stays a test fixture (17 test files consume it), and
+the clause is retired with that as its written reason rather than silently ignored.
+
+**The user's correction that settles it, worth keeping verbatim in substance:** naude "is not
+more of an oracle than claude itself. Less of one, strictly speaking, since Claude's behavior
+is what we're trying to match." naude is the MIDDLE TERM in a three-way differential, not an
+authority.
+
+### 3. naude stays on EVERY platform we have it — and my narrowing was wrong
+
+I proposed cutting naude to one platform, arguing the differential's value is per-LAYER (one
+platform where both products run is enough to isolate engine-vs-shim) so additional naude
+platforms add only packaging coverage. **The user overruled it with a better argument:** given
+how much PLATFORM-DEPENDENT behaviour this project keeps finding, naude's carrying cost is in
+the noise next to the carrying cost of the build system being rehabilitated.
+
+That is right and my premise was wrong. I assumed divergences are layer-shaped; this
+repository's own record says they are platform-shaped — the haiku tjs write deadlock, NetBSD's
+64-bit `time_t` utimes truncation, Tiger/PPC's kqueue deadlock, the darwin-x64 floor walk, and
+a Windows-only path-separator failure found the same day this was decided. If divergences are
+per-platform, then "engine or shim?" is a per-platform question, and only a naude ON that
+platform can answer it.
+
+**The mechanism, already confirmed in this file (see the layer diagram above):** `bun-shim` is
+shared by both products, `node-shim` exists only under quaude, and `scripts/build-naude.mjs`
+bakes the bun-shim from the SAME staged location quaude reads — deliberately, "never one
+reached back for from the repo". So the two products differ in exactly one layer by
+construction, on every platform that carries both.
+
+**Measured while deciding, and recorded because it cuts the other way:** of 116 `naude`
+mentions in this file, most are maintenance (an unbuilt bundle, a broken `--cli` path, and one
+entry reading "quaude … fixed, proven, and green. naude was not, and nothing noticed"). The
+clearest isolation credited to the differential is the shim `FileHandle.chmod` gap. The
+instrument's demonstrated yield is thinner than its architecture promises — which is an
+argument for USING it more deliberately, not for having less of it.
