@@ -37,6 +37,32 @@ const { stripLineComments, discoverFilesByExt } = require('./source-scan.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 
+// toPosixRel — the whole fix for a real Windows-only CI failure (run 34762646884): every
+// repo-relative path this file produces is used EITHER as a literal-comparison key
+// (PRODUCTION_GATE_EXCLUSIONS, the pinned controlled-set test) or as a Map key compared
+// against another such path. path.relative(REPO, f) yields '\' on Windows, so a POSIX
+// literal like 'libexec/cli-surface.cjs' silently never matched there — the file counted
+// as uncontrolled, the ratchet's count rose from 29 to 30, and it fired correctly for the
+// wrong reason. Route every repo-relative path this module builds through this one
+// function instead of guarding each comparison site separately, so the invariant is "every
+// path in this file is POSIX, always" rather than "POSIX except where someone remembered".
+//
+// WHY THE NEWER GATES DON'T HAVE THIS BUG: test/no-fuse-gate.test.cjs and
+// test/no-retired-spellings.test.cjs build their corpus from `git ls-files`, which always
+// emits forward slashes regardless of OS — Windows-safe by construction, no normalizing
+// needed. This sweep instead walks the filesystem with readdirSync (see discoverFilesByExt
+// in source-scan.cjs) and path.relative, which keep whatever separator the OS uses. That
+// difference — git output vs. filesystem-walk output — is the actual fault line, not
+// something specific to cli-surface.cjs.
+//
+// Replaces EVERY backslash, not just path.sep: on a POSIX host path.sep is '/', so a
+// path.sep-only replace is a no-op there and cannot be exercised without an actual Windows
+// box. No filename in this repo legitimately contains a literal backslash, so this is safe
+// on every host and lets the regression test below prove the fix on macOS.
+function toPosixRel(p) {
+  return p.split('\\').join('/');
+}
+
 // Reads something it did not create: a repo-rooted path, a staged provider, or the
 // upstream carve. Deliberately NOT "uses readFileSync" — half the suite reads fixtures it
 // wrote itself, and flagging those would train people to add exclusions, which is how an
@@ -242,7 +268,7 @@ function deriveMigrated() {
   for (const f of files) {
     const src = fs.readFileSync(f, 'utf8');
     if (!isMigratedSource(src)) continue;
-    migrated.push(path.relative(__dirname, f));
+    migrated.push(toPosixRel(path.relative(__dirname, f)));
   }
   return migrated;
 }
@@ -548,7 +574,7 @@ function discoverCliQuoteScanFiles() {
 // exactly that reason. Skipped at the WALK rather than recorded as 8 near-identical
 // exclusions, because the reason is one fact about the directory, not eight facts about
 // eight files.
-const PRODUCTION_SCOPE_SKIP = [path.join('libexec', 'node-shim')];
+const PRODUCTION_SCOPE_SKIP = ['libexec/node-shim'];
 
 function discoverProductionFiles() {
   const out = [];
@@ -566,8 +592,8 @@ function discoverProductionFiles() {
     out.push(...discoverFilesByExt(abs, ['.cjs', '.mjs', '.js']));
   }
   return out
-    .map((f) => path.relative(REPO, f))
-    .filter((rel) => !PRODUCTION_SCOPE_SKIP.some((p) => rel === p || rel.startsWith(p + path.sep)))
+    .map((f) => toPosixRel(path.relative(REPO, f)))
+    .filter((rel) => !PRODUCTION_SCOPE_SKIP.some((p) => rel === p || rel.startsWith(p + '/')))
     .sort();
 }
 
@@ -689,7 +715,7 @@ function buildGateGuardFiles() {
   if (!fs.existsSync(abs)) return [];
   return discoverFilesByExt(abs, ['.test.cjs'])
     .filter((f) => isMigratedSource(fs.readFileSync(f, 'utf8')))
-    .map((f) => path.relative(REPO, f))
+    .map((f) => toPosixRel(path.relative(REPO, f)))
     .sort();
 }
 
@@ -704,8 +730,8 @@ function modulesNamedByGuard(guardRel, src) {
   // mutable lastIndex across calls, which is correct only as long as every caller remembers
   // to reset it. Removing the footgun is cheaper than documenting it.
   for (const m of src.matchAll(/require\(\s*['"]((?:\.\.\/)+[^'"\n]+)['"]\s*\)/g)) {
-    const rel = path.relative(REPO, path.resolve(dir, m[1]));
-    if (rel.startsWith('libexec' + path.sep) || rel.startsWith('scripts' + path.sep)) out.push(rel);
+    const rel = toPosixRel(path.relative(REPO, path.resolve(dir, m[1])));
+    if (rel.startsWith('libexec/') || rel.startsWith('scripts/')) out.push(rel);
   }
   return [...new Set(out)];
 }
@@ -782,10 +808,14 @@ const PRODUCTION_GATE_EXCLUSIONS = [
 ];
 
 function isRecordedProductionGateExclusion(rel) {
-  const entry = PRODUCTION_GATE_EXCLUSIONS.find((e) => e.file === rel);
+  // toPosixRel() here, not just at the callers: this is the actual literal-comparison site
+  // (`e.file` is a POSIX literal), so it stays correct even if some future caller passes a
+  // raw path.relative() result straight through. See toPosixRel's comment for the incident.
+  const posixRel = toPosixRel(rel);
+  const entry = PRODUCTION_GATE_EXCLUSIONS.find((e) => e.file === posixRel);
   if (!entry) return false;
   if (typeof entry.because !== 'string' || entry.because.trim().length === 0) {
-    throw new Error(`PRODUCTION_GATE_EXCLUSIONS entry for '${rel}' has an empty \`because\` — `
+    throw new Error(`PRODUCTION_GATE_EXCLUSIONS entry for '${posixRel}' has an empty \`because\` — `
       + 'an exclusion with no stated reason is itself a failure');
   }
   return true;
@@ -912,6 +942,7 @@ function sweepProductionGates() {
 }
 
 module.exports = {
+  toPosixRel,
   classifyTestFile,
   discoverTestFiles,
   isRecordedExclusion,

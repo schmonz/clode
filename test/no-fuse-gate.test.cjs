@@ -253,6 +253,14 @@ const ALLOWED = [
       + 'REAL PATH this task did not rename, named correctly. (This gate keeps its own name '
       + 'for the reason its SELF entry gives: the word has to appear in order to be '
       + 'forbidden.)' },
+  { file: 'test/guards-population.cjs', pattern: /no-fuse-gate\.test\.cjs/,
+    because: 'names THIS FILE by its real, on-disk path, in a comment explaining why '
+      + "test/no-fuse-gate.test.cjs and test/no-retired-spellings.test.cjs are Windows-safe "
+      + 'by construction (their corpus comes from `git ls-files`, always forward-slash) '
+      + 'while guards-population.cjs\'s own filesystem walk is not — the exact contrast that '
+      + "motivated the windows-path fix this file's toPosixRel() comment records. Same "
+      + 'category as the test/no-retired-spellings.test.cjs entry above: a REAL PATH, named '
+      + 'correctly.' },
 ];
 
 // COUNT_ALLOWED — the exact, both-directions ratchet test/windows-path-ratchet.test.cjs uses

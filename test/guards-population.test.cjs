@@ -344,9 +344,13 @@ test('modulesNamedByGuard reads the literal require() path and ignores non-produ
     + "const { throwsAsFindings } = require('../throws-as-findings.cjs');\n"
     + "const { thing } = require('../../libexec/some-gate.cjs');\n"
     + "const s = require('../../scripts/some-script.mjs');\n";
+  // Expected as POSIX literals, not path.join: modulesNamedByGuard() returns toPosixRel()
+  // output on every OS (see the windows-only regression this guards against, in
+  // guards-population.cjs's toPosixRel comment), so path.join here would silently mismatch
+  // on Windows (backslash) while still passing on this box.
   assert.deepStrictEqual(
     modulesNamedByGuard(path.join('test', 'build-gates', 'x.test.cjs'), src),
-    [path.join('libexec', 'some-gate.cjs'), path.join('scripts', 'some-script.mjs')]);
+    ['libexec/some-gate.cjs', 'scripts/some-script.mjs']);
 });
 
 test('FLOOR: every registered build-gates guard names a production module the classifier calls a gate', () => {
@@ -435,6 +439,20 @@ test('isRecordedProductionGateExclusion throws on an exclusion with an empty `be
   }
 });
 
+// REGRESSION (CI run 34762646884, windows-latest only): PRODUCTION_GATE_EXCLUSIONS is keyed
+// by a REPO-RELATIVE POSIX literal ('libexec/cli-surface.cjs'), but discoverProductionFiles()
+// built its `rel` with path.relative(REPO, f), which yields a BACKSLASH on Windows. The
+// literal never matched, cli-surface.cjs counted as uncontrolled, and the ratchet fired at 30
+// against a baseline of 29 — a real Windows-only failure with no Windows box needed to catch
+// it here: this passes a literal backslash string, which means the same thing on every OS.
+// Deliberately calling isRecordedProductionGateExclusion() directly rather than mocking
+// path.sep/path.relative — it is the exact function whose mismatch caused the CI failure.
+test('isRecordedProductionGateExclusion matches a Windows-shaped (backslash) relative path', () => {
+  assert.strictEqual(isRecordedProductionGateExclusion('libexec\\cli-surface.cjs'), true,
+    'a backslash-separated rel path (what path.relative(REPO, f) produces on Windows) must '
+    + 'match the same POSIX-literal exclusion a POSIX rel path matches');
+});
+
 // THE STANDING GATE. A NEW build gate authored under libexec/ or scripts/ with no guard
 // under test/build-gates/ naming it pushes the count past the baseline and goes RED here,
 // at authoring time — which is the whole point of phase 5b: the first four un-controlled
@@ -478,11 +496,14 @@ test('every module a build-gates guard names actually exists', () => {
 // the controlled set is PINNED, so a fifth module joining it — incidentally or on purpose —
 // goes red here and a human says which it was.
 test('the controlled set is EXACTLY the four modules phase 5b put a control under', () => {
+  // POSIX literals, not path.join — controlledProductionModules() keys are toPosixRel()
+  // output on every OS; a path.join literal would match on this box (path.sep is '/') but
+  // silently mismatch on Windows, exactly the bug this whole fix is about.
   assert.deepStrictEqual([...controlledProductionModules().keys()].sort(), [
-    path.join('libexec', 'clode-build.cjs'),
-    path.join('libexec', 'host-provision.cjs'),
-    path.join('libexec', 'scc-merge.cjs'),
-    path.join('libexec', 'target-update-check.cjs'),
+    'libexec/clode-build.cjs',
+    'libexec/host-provision.cjs',
+    'libexec/scc-merge.cjs',
+    'libexec/target-update-check.cjs',
   ].sort(),
   'the set of production modules counted as CONTROLLED changed. If a successor phase wrote '
   + 'a new guard, add its module here and lower UNCONTROLLED_GATE_BASELINE. If a guard '
@@ -506,7 +527,7 @@ test('a module a guard requires only as a FIXTURE is not counted as controlled',
 });
 
 test('discoverProductionFiles skips libexec/node-shim (target runtime, not a build gate)', () => {
-  const inShim = discoverProductionFiles().filter((rel) => rel.includes(`node-shim${path.sep}`));
+  const inShim = discoverProductionFiles().filter((rel) => rel.includes('node-shim/'));
   assert.deepStrictEqual(inShim, [],
     'libexec/node-shim/ is the TARGET\'s Node-API emulation and never runs as a gate during '
     + '`clode build` — see PRODUCTION_SCOPE_SKIP');
@@ -541,8 +562,9 @@ test('GATE_REFUSES: a ternary and a named-variable exit status are refusals', ()
 // real build-path files that landed in NO bucket: not gate-shaped, not excluded, not counted.
 // Neither is gate-shaped today, which is precisely why the hole was invisible.
 test('the production walk covers .js as well as .cjs and .mjs', () => {
+  // POSIX literals, not path.join — see the note on the pinned controlled-set test above.
   const files = discoverProductionFiles();
-  for (const rel of [path.join('libexec', 'quaude-blobulate.js'), path.join('libexec', 'graph-meta.js')]) {
+  for (const rel of ['libexec/quaude-blobulate.js', 'libexec/graph-meta.js']) {
     assert.ok(files.includes(rel),
       `${rel} is spawned on the build path but is outside the production-gate population — `
       + 'an extension-shaped hole in a mechanism whose promise is "the next gate cannot '
