@@ -299,7 +299,13 @@ const ALLOWED = [
 // a word boundary, exactly as this gate's own name does. Rewriting any of them would name the
 // guards wrongly, so the count moves. Re-measure, do not trust this number.
 const COUNT_ALLOWED = {
-  'BACKLOG.md': 155,
+  // 155 -> 158 (2026-09-13): the "five instruments, one mistake" pattern entry quotes the
+  // identifiers FUSE_WORD_RE actually missed — `materializeFusedPayload`, `fusedBuilder`,
+  // `fuseSrc` — plus this gate's own name. Those are EVIDENCE: the finding is that the old
+  // regex could not see the middle-segment shape, and rewording them into today's vocabulary
+  // would delete the finding rather than restate it. This is the "genuinely new dated
+  // history" half of the two remedies, not the "reword it" half.
+  'BACKLOG.md': 158,
   'test/fidelity/RESULTS.md': 22,
 };
 

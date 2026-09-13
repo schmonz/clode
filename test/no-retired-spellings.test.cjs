@@ -196,7 +196,11 @@ const ALLOWED = [
 //   node -e "const {execFileSync}=require('child_process'); ..." — or simply run this test
 //   and read the finding, which prints both the actual and the recorded number.
 const COUNT_ALLOWED = {
-  'BACKLOG.md': 26,
+  // 26 -> 27 (2026-09-13): the same pattern entry quotes the comment that made a pure data
+  // module classify as a build gate — `.includes('--naude')`. Quoting the retired spelling is
+  // the evidence for the finding; paraphrasing it would leave the reader unable to see why
+  // the classifier matched.
+  'BACKLOG.md': 27,
   'CHANGELOG.md': 12,
   'libexec/cli-surface.cjs': 6,
   'libexec/clode-build.cjs': 6,

@@ -7008,3 +7008,55 @@ provider each run). Deleting it would also require rewriting that message.
 
 Not declared on `bootstrap`: the guard is gated `!naude && !self`, so a `bootstrap` build never
 reaches it (`libexec/clode-build.cjs:1706-1707`).
+
+
+## ★ PATTERN: five instruments, one mistake — a loose match where an exact one was meant (2026-09-13)
+
+Not a defect report. A **class**, found five times in two phases, each time in a DIFFERENT
+instrument, each time by a reviewer rather than by the instrument itself. Writing it down
+because the sixth instance is cheaper to prevent than to find.
+
+    1. `FUSE_WORD_RE` caught only trailing-position compounds, because `\b` is not a camelCase
+       boundary — in `fusedBuilder` the needed boundary sits between `d` and `B`, both word
+       characters. It missed `materializeFusedPayload`, `fuseSrc`, `scanFuseReportWiring` —
+       the very identifiers the task had just renamed. (phase 3a task 2, two fix rounds)
+    2. The `no-fuse` gate matched the retired word inside its OWN header comment, so the file
+       that forbids the word tripped over explaining itself. (phase 3a task 2)
+    3. `classifyProductionFile()` runs its regexes over RAW source, so a COMMENT quoting
+       `.includes('--naude')` made a pure data module read as a build gate. Twice: once for
+       `cli-surface.cjs`, once for `clode-main.cjs`. (filed above, 2026-09-13)
+    4. `guards-population.cjs` compared a POSIX literal against `path.relative()` output,
+       which is backslash-separated on Windows — so a recorded exclusion silently stopped
+       matching and the ratchet fired correctly for the wrong reason, on Windows only.
+       (CI run 34762646884; fixed in `dd9aee5`)
+    5. The absorbed-verdict gate used `help.includes(name)`, and `CLODE_TJS` is a substring of
+       `CLODE_TJS_PIN` — so deleting BOTH `CLODE_TJS` entries left the gate green. A gate ruled
+       in specifically to stop a name's absence going unnoticed could not notice that absence.
+       (phase 3b task 2)
+
+Phase 2's `merge-step.test.cjs` — asserting against text that matched inside its own header
+comment — is the same class, and predates all of these.
+
+**What they share, and it is not "regexes are hard":** every one is a scanner comparing a
+STRING against a CORPUS that contains strings shaped like it. The failure is always the same
+shape — the match succeeds somewhere it was not meant to, or fails somewhere it was — and the
+symptom is always a green that means nothing.
+
+**The rules that would have caught all five, in the order they are cheap:**
+
+1. **Compare identities, not text.** Collect the set of things you mean (entry names, file
+   paths, declared members) and test membership. #5's fix is exactly this and it is three lines.
+2. **Exclude the instrument from its own corpus**, or strip comments before classifying. #2 and
+   #3 are both "the scanner read its own explanation".
+3. **Normalise the axis you did not choose.** Paths are POSIX, case is explicit, separators are
+   decided once at the boundary — #4 is what happens when that is left to the OS.
+4. **Prove the match FAILS on a near-miss, not just that it succeeds on a hit.** Every one of
+   these passed its own positive test. The disproof — delete the thing and watch the gate go
+   red — is what found #5, and a control that only proves the positive direction is half a
+   control (see the `checkControl` per-detector gap, filed separately).
+
+**Still latent, found while fixing #5 and left alone deliberately:** `test/e2e-man.test.cjs`
+lines 38, 42, 46, 50, 70 and 82 are bare/unanchored matches of the same shape. None has a
+superstring sibling among today's absorbed names, so there is no live hole — but that is luck,
+not design, and the next absorbed name could supply the sibling. A sweep wants doing; it is not
+urgent, and it should fix the shape rather than the six lines.
