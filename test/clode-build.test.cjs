@@ -236,12 +236,16 @@ test('--help documents clode build from the table, but not the undocumented --se
   const r = runEntry(['--help']);
   assert.strictEqual(r.status, 0);
   // Phase 3a task 5: help is RENDERED from libexec/cli-surface.cjs's SURFACE literal,
-  // so this reads the table instead of pinning its output. The two strings it used to
-  // pin are exactly the ones the table now owns: `clode build [--out PATH]` (build's
-  // flags are data now) and the CLODE_TJS line (the environment section is generated
-  // from SURFACE.verbs.*.env, which is EMPTY until phase 3b classifies the CLODE_*
-  // names — so the last assertion ties CLODE_TJS's presence in help to the table
-  // rather than dropping the check: the day 3b declares it, this requires it again).
+  // so this reads the table instead of pinning its output — `clode build [--out PATH]`
+  // and the CLODE_TJS line are both strings the table now owns.
+  //
+  // FIX ROUND 1 (coordinator, Important 1): the first version of this asserted
+  // `stdout.includes('CLODE_TJS') === envNames.includes('CLODE_TJS')` while env was
+  // empty, which is an iff requiring help NOT to document CLODE_TJS — it pinned the
+  // ABSENCE and nothing would have gone red if phase 3b forgot the name. Same species of
+  // never-fails assertion as the one this task deleted elsewhere. The table carries the
+  // seven CLODE_* lines now, so the requirement is stated in the direction that bites:
+  // build DECLARES CLODE_TJS and help DOCUMENTS it.
   const { SURFACE } = require('../libexec/cli-surface.cjs');
   const build = SURFACE.verbs.build;
   assert.match(r.stdout, /clode build/);
@@ -251,12 +255,23 @@ test('--help documents clode build from the table, but not the undocumented --se
   for (const product of Object.keys(build.subjects)) {
     assert.ok(r.stdout.includes(product), `help must name the product ${product}`);
   }
-  const envNames = Object.values(SURFACE.verbs).flatMap((v) => v.env.map((e) => e.name));
+  const envNames = Object.values(SURFACE.verbs).flatMap((v) => v.env.map((e) => e.name))
+    .concat(SURFACE.env.map((e) => e.name));
   for (const name of envNames) {
     assert.ok(r.stdout.includes(name), `help must document the declared env name ${name}`);
   }
-  assert.strictEqual(r.stdout.includes('CLODE_TJS'), envNames.includes('CLODE_TJS'),
-    'CLODE_TJS is documented in help iff the table declares it (phase 3b fills env)');
+  assert.ok(build.env.some((e) => e.name === 'CLODE_TJS'),
+    "build must DECLARE CLODE_TJS — it is the tjs template override 'clode build' reads");
+  assert.match(r.stdout, /CLODE_TJS/, 'help must document CLODE_TJS');
+  // --help is the ONLY documentation inside a released clode binary (package.json ships
+  // no man page), so every name the old hand-written help block carried must still be
+  // there. Named explicitly, not derived, so that DROPPING one from the table goes red
+  // here instead of quietly agreeing with itself.
+  for (const name of ['CLODE_VERBOSE', 'CLODE_NO_WATCH', 'CLODE_CLAUDE_BIN', 'CLODE_NODE',
+    'CLODE_CACHE', 'CLODE_TJS', 'CLODE_CHANGELOG_URL']) {
+    assert.ok(r.stdout.includes(name), `help must still document ${name}`);
+    assert.ok(envNames.some((n) => n.startsWith(name)), `the table must declare ${name}`);
+  }
   // build --self left the user surface: dispatch still works (release
   // tooling calls it), but it's no longer documented.
   assert.doesNotMatch(r.stdout, /--self/);

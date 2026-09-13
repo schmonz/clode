@@ -108,16 +108,21 @@ async function main(argv, opts = {}) {
   let version = (typeof __CLODE_BUNDLE_VERSION__ !== 'undefined' && __CLODE_BUNDLE_VERSION__) || 'dev';
   try { version = fs.readFileSync(path.join(ROOT, 'VERSION'), 'utf8').replace(/\n+$/, '') || version; } catch { /* keep injected/dev */ }
 
-  // 4. The print-and-exit globals, in table order of precedence: --version wins over
-  //    --help, and both win over a verb (`clode --version build` prints the version,
-  //    as it always has).
-  if (cmd.flags['--version']) {
-    process.stdout.write(`clode ${version}\n`);
-    return process.exit(0);
-  }
-  if (cmd.flags['--help']) {
-    process.stdout.write(clodeHelp(version));
-    return process.exit(0);
+  // 4. The print-and-exit globals, acted on in the order ARGV gave them (parseArgv's
+  //    globalOrder), which is the order the old first-arg-only dispatch effectively
+  //    used: `clode --help --version` prints help, `clode --version --help` prints the
+  //    version, and either beats a verb (`clode --version build` prints the version, as
+  //    it always has). Nonsense argv, but it used to have an answer and it keeps the
+  //    same one — a table-driven dispatch should not quietly re-decide such things.
+  for (const flag of cmd.globalOrder) {
+    if (flag === '--version') {
+      process.stdout.write(`clode ${version}\n`);
+      return process.exit(0);
+    }
+    if (flag === '--help') {
+      process.stdout.write(clodeHelp(version));
+      return process.exit(0);
+    }
   }
 
   // 5. Not a verb in this table: a usage error. There is no default launch — clode

@@ -53,5 +53,8 @@ test('--verbose composes as a leading flag before --help (no more any-position s
   const sbx = withProvider(t);
   const r = run(sbx, ['--verbose', '--help']);
   assert.strictEqual(r.status, 0);
-  assert.match(r.output, /build a standalone Claude Code binary for your machine/);
+  // TAGLINE is exported by libexec/cli-surface.cjs for exactly this: the tagline is the
+  // table's text now, so this file reads it instead of keeping a second copy.
+  const { TAGLINE } = require('../libexec/cli-surface.cjs');
+  assert.ok(r.output.includes(TAGLINE), 'help must carry the table tagline');
 });

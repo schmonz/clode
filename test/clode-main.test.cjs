@@ -84,10 +84,15 @@ test('--help prints clode-specific options and exits 0', () => {
     assert.ok(r.stdout.includes(global), `help must document the global ${global}`);
   }
   assert.ok(r.stdout.startsWith(`clode ${VERSION} — ${TAGLINE}\n`), 'header = version + tagline');
-  // The globals block is last, so help ends with the last global's line + a newline.
+  for (const entry of SURFACE.env) {
+    assert.ok(r.stdout.includes(entry.name), `help must document ${entry.name}`);
+  }
+  // help ends with the last line of the last block the TABLE defines — the verb-neutral
+  // environment overrides when there are any, else the globals — plus a newline.
   const globals = Object.keys(SURFACE.globals);
+  const tail = SURFACE.env.length ? SURFACE.env[SURFACE.env.length - 1].name : globals[globals.length - 1];
   const lastLine = r.stdout.replace(/\n$/, '').split('\n').pop();
-  assert.match(lastLine, new RegExp(`^\\s*${globals[globals.length - 1]}\\s`));
+  assert.match(lastLine, new RegExp(`^\\s*${tail}\\s`));
   assert.ok(r.stdout.endsWith('\n'));
 });
 
@@ -134,6 +139,82 @@ test('--help is dispatched only as the outer FIRST arg — not one level in', ()
   assert.notStrictEqual(r.status, 0);
   assert.match(r.stderr || '', /unknown argument '--help'/);
   assert.match(r.stderr || '', /usage: clode build/);
+});
+
+// FIX ROUND 1 (coordinator, Important 3): the four spellings --help started advertising
+// in task 5 had NO committed test that they dispatch. Help promising a command that does
+// not route is worse than not promising it, and "the table matches the accepted argv" was
+// only asserted against parseArgv in isolation — while the CLI deliberately discards
+// parseArgv's flag-level error (each verb's module owns its own argv). These drive the
+// real entry point, and each fails fast on a controlled error rather than doing the work:
+// no network, no cache writes, no build.
+
+test('the table spelling `build quaude` reaches the quaude build', () => {
+  // CLODE_TJS points at a nonexistent template, so the quaude path fails FAST and
+  // CONTROLLED — and that message is only reachable from the quaude blobulate path (a
+  // naude build resolves pinned NODEs, never a tjs template), so it IS the proof of
+  // where the subject routed. CLODE_NO_WATCH keeps the (valid) build from phoning home.
+  const r = runEntry(['build', 'quaude'], {
+    CLODE_TJS: '/nonexistent/clode-test-tjs-template',
+    CLODE_NO_WATCH: '1',
+    CLODE_STATE_ROOT: fs.mkdtempSync(path.join(os.tmpdir(), 'clode-bq-state-')),
+  });
+  assert.strictEqual(r.status, 1);
+  assert.match(r.stderr || '', /no tjs template at/);
+  assert.doesNotMatch(r.stderr || '', /unknown argument 'quaude'/,
+    'the subject must be consumed by dispatch, never forwarded to the build parser');
+});
+
+test('the table spelling `build naude` reaches the naude build, and `quaude` is not a flag', () => {
+  // --self and --naude are "different build targets — pick one" (clode-build.cjs's
+  // parseBuildArgs). So `build naude --self` producing that conflict proves the SUBJECT
+  // became the naude product before the parser ran, and `build quaude --self` NOT
+  // producing it proves quaude is the default rather than a second flag. Both fail
+  // before any work: parseBuildArgs runs before the watch trigger and the cache.
+  const naude = runEntry(['build', 'naude', '--self']);
+  assert.strictEqual(naude.status, 1);
+  assert.match(naude.stderr || '', /--self and --naude are different build targets/);
+  // The legacy spelling says exactly the same thing (unchanged this task).
+  const legacy = runEntry(['build', '--naude', '--self']);
+  assert.strictEqual(legacy.stderr, naude.stderr);
+
+  const quaude = runEntry(['build', 'quaude', '--self'], {
+    CLODE_TJS: '/nonexistent/clode-test-tjs-template',
+    CLODE_NO_WATCH: '1',
+    CLODE_STATE_ROOT: fs.mkdtempSync(path.join(os.tmpdir(), 'clode-bqs-state-')),
+  });
+  assert.doesNotMatch(quaude.stderr || '', /different build targets/);
+});
+
+test('the table spelling `fetch claude` names the INGREDIENT, not the channel', () => {
+  // An EMPTY local releases repo (file://, no network at all): clodeUpdate cannot
+  // resolve a version and says which CHANNEL it tried. `fetch claude` must report the
+  // DEFAULT channel (latest) — proof that `claude` was consumed as the ingredient — and
+  // the legacy positional must still land in the channel slot. This is the one case
+  // where the table spelling CHANGED an accepted argv's meaning: `clode fetch claude`
+  // used to ask for a channel named "claude".
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-releases-empty-'));
+  const common = {
+    CLODE_RELEASES_URL: 'file://' + repo,
+    HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'clode-fetch-home-')),
+    CLODE_STATE_ROOT: fs.mkdtempSync(path.join(os.tmpdir(), 'clode-fetch-state-')),
+  };
+  const ingredient = runEntry(['fetch', 'claude'], common);
+  assert.strictEqual(ingredient.status, 1);
+  assert.match(ingredient.stderr, /couldn't resolve a version for 'latest'/);
+  assert.doesNotMatch(ingredient.stderr, /for 'claude'/,
+    "'claude' is the ingredient; it must never be passed through as a channel");
+  // The legacy channel positional, unchanged.
+  const channel = runEntry(['fetch', 'stable'], common);
+  assert.match(channel.stderr, /couldn't resolve a version for 'stable'/);
+});
+
+test('a print-and-exit global wins over a verb, in the order argv gave it', () => {
+  // Nonsense argv that nonetheless had an answer before the table existed, and keeps it:
+  // the first print-and-exit global wins (clode-main.cjs step 4 walks globalOrder).
+  assert.ok(runEntry(['--help', '--version']).stdout.startsWith(`clode ${VERSION} — `));
+  assert.strictEqual(runEntry(['--version', '--help']).stdout, `clode ${VERSION}\n`);
+  assert.strictEqual(runEntry(['--version', 'build']).stdout, `clode ${VERSION}\n`);
 });
 
 test('the ES5 prologue prints the exact floor message + exits 1 on an old node', () => {

@@ -44,3 +44,25 @@ test('clode fetch --naude: pre-seeded store -> reports the path, no network, exi
   assert.match(r.stdout, /clode: pinned node ready at/);
   assert.ok(r.stdout.includes(binPath), r.stdout);
 });
+
+// FIX ROUND 1 of phase 3a task 5 (coordinator, Important 3): `clode fetch node` is the
+// TABLE spelling of the same ingredient, and --help advertises it, so it needs the same
+// proof that it routes — pre-seeded store, no network. (It also CHANGED MEANING: before
+// the table, `clode fetch node` asked clodeUpdate for a release channel named "node".)
+// Task 6 removes the --naude spelling above; this test is what remains.
+test('clode fetch node: the table spelling reaches the same pinned-node store, no network', () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-fetch-node-state-'));
+  const binPath = nodeBinPath({ CLODE_STATE_ROOT: stateRoot });
+  fs.mkdirSync(path.dirname(binPath), { recursive: true });
+  fs.writeFileSync(binPath, '#!/bin/sh\n');
+  fs.chmodSync(binPath, 0o755);
+
+  const r = runEntry(['fetch', 'node'], { CLODE_STATE_ROOT: stateRoot });
+
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.match(r.stdout, /clode: pinned node ready at/);
+  assert.ok(r.stdout.includes(binPath), r.stdout);
+  // Proof it is the INGREDIENT and not a channel: a channel argument would have gone to
+  // clodeUpdate, which never prints this and cannot succeed against no network.
+  assert.doesNotMatch(r.stderr || '', /couldn't resolve a version/);
+});

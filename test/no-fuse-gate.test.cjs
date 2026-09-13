@@ -263,8 +263,18 @@ const ALLOWED = [
 //     console.log(f, fs.readFileSync(f,'utf8').split('\n').filter(l=>FUSE_WORD_RE.test(l)).length)"
 // BACKLOG.md: 151. test/fidelity/RESULTS.md: 22 (unchanged — RESULTS.md's dated rows use only
 // the trailing-position shape round 1 already saw).
+//
+// 151 -> 152 (2026-09-13, phase 3a task 5 fix round 1): commit c4d5198 ("docs(backlog): the
+// production-gate classifier reads comments as code") added ONE matching line —
+// "the phase-5b `no-fuse` gate matching ..." — which matches because the hyphen in this
+// gate's OWN NAME is a word boundary before "fuse". That is today's vocabulary naming a
+// mechanism (this file's SELF entry above exempts the same self-reference inside the gate),
+// so the count is bumped rather than the prose reworded; the ratchet stays exact in both
+// directions. Re-measure, do not trust this number:
+//   node -e "const {FUSE_WORD_RE}=...; const fs=require('fs');
+//     console.log(fs.readFileSync('BACKLOG.md','utf8').split('\n').filter(l=>FUSE_WORD_RE.test(l)).length)"
 const COUNT_ALLOWED = {
-  'BACKLOG.md': 151,
+  'BACKLOG.md': 152,
   'test/fidelity/RESULTS.md': 22,
 };
 

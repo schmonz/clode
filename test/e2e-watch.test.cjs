@@ -71,6 +71,20 @@ test('clode watch runs a cycle, writes a notice, prints a summary, exits 0', (t)
   assert.match(r.output, /may affect how clode repackages it/i);
 });
 
+// FIX ROUND 1 of phase 3a task 5 (coordinator, Important 3): `read-anthropic-tea-leaves`
+// is the spelling --help advertises, and the only committed coverage was "it is in the
+// table and in help" — never that it runs the cycle. Same fixture, same assertions as the
+// `watch` test above, so the two spellings are proven to do the SAME thing while both
+// exist (task 6 removes `watch`).
+test('clode read-anthropic-tea-leaves runs the same cycle as watch: notice, summary, exit 0', (t) => {
+  const sbx = sandbox(t);
+  const env = watchFixture(sbx, '2.0.0', '1.0.0', 'high');
+  const r = run(sbx, ['read-anthropic-tea-leaves'], { env });
+  assert.strictEqual(r.status, 0, r.output);
+  assert.match(fs.readFileSync(noticePath(sbx), 'utf8'), /^high=1$/m);
+  assert.match(r.output, /may affect how clode repackages it/i);
+});
+
 test('clode watch does not reach the bundle (no node/provider needed)', (t) => {
   const sbx = sandbox(t);
   const env = watchFixture(sbx, '2.0.0', '1.0.0', 'low');

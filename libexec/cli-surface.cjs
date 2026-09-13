@@ -48,11 +48,17 @@ const TAGLINE = 'build a standalone Claude Code binary for your machine.';
 //                 that take the same flag must describe it identically modulo the
 //                 subject noun, which is what keeps --target meaning one thing.
 //   env           the CLODE_* names this verb absorbs, as { name, doc } entries,
-//                 rendered as the verb's own environment block in --help.
-//                 Empty for now: phase 3b fills these from the 51-name
-//                 classification, and until it does --help documents no environment
-//                 overrides rather than carrying a hand-maintained list that the
-//                 table cannot check.
+//                 rendered as the verb's own environment block in --help. These are a
+//                 VERBATIM carry of the seven lines the old hand-written help block
+//                 carried, placed against the verb whose branch reads them — measured
+//                 by grepping libexec/ for each name, not guessed:
+//                   CLODE_NO_WATCH  clode-watch.cjs, fired from build's branch
+//                   CLODE_TJS       clode-build.cjs + clode-extract.cjs
+//                   CLODE_CHANGELOG_URL  clode-update.cjs (fetch) AND clode-watch.cjs
+//                                   (read-anthropic-tea-leaves) — so BOTH declare it
+//                 The four that no single verb owns are SURFACE.env below. Phase 3b's
+//                 51-name classification then EDITS these entries rather than creating
+//                 them; help must never stop documenting a name it documented before.
 const SURFACE = {
   verbs: {
     build: {
@@ -70,7 +76,11 @@ const SURFACE = {
       // with it.
       flags: { '--target': 'the product is for PLATFORM-ARCH, not this machine',
                '--out': 'write the artifact here (default ./<product>)' },
-      env: [],          // phase 3b fills this from the 51-name classification
+      env: [{ name: 'CLODE_NO_WATCH=1',
+              doc: 'disable the opportunistic update-signal check that runs during a build' },
+            { name: 'CLODE_TJS',
+              doc: "tjs template binary for 'clode build' (default: the blobulated builder's "
+                + 'own embedded template, else build/tjs/tjs)' }],
     },
     fetch: {
       summary: 'fetch a build ingredient',
@@ -79,7 +89,8 @@ const SURFACE = {
                   node: 'the pinned runtime naude embeds' },
       defaultSubject: 'claude',
       flags: { '--target': 'the ingredient is for PLATFORM-ARCH, not this machine' },
-      env: [],
+      env: [{ name: 'CLODE_CHANGELOG_URL',
+              doc: 'release-notes source for the post-update signals digest' }],
     },
     'read-anthropic-tea-leaves': {
       summary: "infer Anthropic's direction of travel from the changelog (warn-only, never downloads)",
@@ -87,11 +98,22 @@ const SURFACE = {
       subjects: {},
       defaultSubject: null,
       flags: {},
-      env: [],
+      env: [{ name: 'CLODE_CHANGELOG_URL',
+              doc: 'release-notes source for the post-update signals digest' }],
     },
   },
   globals: { '--help': 'show this help and exit', '--version': "print clode's own version and exit",
              '--verbose': "show clode's progress; silent by default" },
+  // The CLODE_* names no single verb owns — every command reads them (CLODE_VERBOSE is
+  // the --verbose global's environment twin; CLODE_CACHE/CLODE_NODE are resolved in
+  // clode-paths.cjs, which everything goes through). Also a verbatim carry: --help is
+  // the ONLY documentation inside a released clode binary (package.json ships no `man`
+  // and no workflow installs man/clode.1), so a name that leaves this table leaves the
+  // artifact's documentation entirely.
+  env: [{ name: 'CLODE_VERBOSE=1', doc: 'same as --verbose' },
+        { name: 'CLODE_CLAUDE_BIN', doc: 'upstream claude binary to extract from' },
+        { name: 'CLODE_NODE', doc: 'host node' },
+        { name: 'CLODE_CACHE', doc: 'extracted-bundle cache dir' }],
 };
 
 // Verbs the CHECKOUT entry point has and a shipped binary does not (surfaceFor
@@ -114,21 +136,49 @@ const CHECKOUT_ONLY_VERBS = {};
 // DEFINITIONS are shared, which is deliberate — one definition per verb, whoever
 // asks.
 function surfaceFor(kind) {
-  if (kind === 'shipped') return { verbs: Object.assign({}, SURFACE.verbs), globals: SURFACE.globals };
+  if (kind === 'shipped') {
+    return { verbs: Object.assign({}, SURFACE.verbs), globals: SURFACE.globals, env: SURFACE.env };
+  }
   if (kind === 'checkout') {
-    return { verbs: Object.assign({}, SURFACE.verbs, CHECKOUT_ONLY_VERBS), globals: SURFACE.globals };
+    return { verbs: Object.assign({}, SURFACE.verbs, CHECKOUT_ONLY_VERBS), globals: SURFACE.globals, env: SURFACE.env };
   }
   throw new Error(`cli-surface: unknown entry-point kind '${kind}' (want 'shipped' or 'checkout')`);
 }
 
 function has(obj, key) { return Object.prototype.hasOwnProperty.call(obj, key); }
 
-// Two columns, aligned to the widest name in THIS list. Data in, text out.
+// Two columns, aligned to the widest name in THIS list, wrapped at WRAP columns with
+// continuation lines hanging under the text column. Data in, text out. The wrap exists
+// because the hand-written help block this renderer replaced wrapped its own long lines
+// by hand (its CLODE_TJS entry ran to three), and a table-driven help that emits a
+// 140-column line would be a readability regression dressed up as a refactor.
+const WRAP = 92;
+
+// Greedy word wrap to `room` columns. Never splits a word (a long URL or path stays
+// intact and simply overhangs), and never returns an empty list, so the caller always
+// has a first line to put the name against.
+function wrapText(text, room) {
+  const out = [];
+  let line = '';
+  for (const word of String(text).split(' ')) {
+    if (line && line.length + 1 + word.length > room) { out.push(line); line = word; continue; }
+    line = line ? line + ' ' + word : word;
+  }
+  out.push(line);
+  return out;
+}
+
 function columns(pairs, indent) {
   let width = 0;
   for (const [name] of pairs) if (name.length > width) width = name.length;
+  const gutter = indent + ' '.repeat(width + 2);
+  const room = Math.max(WRAP - gutter.length, 24);   // never wrap into nothing
   const out = [];
-  for (const [name, text] of pairs) out.push(indent + name + ' '.repeat(width - name.length + 2) + text);
+  for (const [name, text] of pairs) {
+    const wrapped = wrapText(text, room);
+    out.push(indent + name + ' '.repeat(width - name.length + 2) + wrapped[0]);
+    for (let i = 1; i < wrapped.length; i++) out.push(gutter + wrapped[i]);
+  }
   return out;
 }
 
@@ -167,6 +217,11 @@ function renderHelp(version, surface) {
   // to discover it from a usage error.
   lines.push('Options (before the command):');
   lines.push(...columns(Object.keys(surface.globals).map((g) => [g, surface.globals[g]]), '  '));
+  if (surface.env && surface.env.length) {
+    lines.push('');
+    lines.push('Key environment overrides (any command):');
+    lines.push(...columns(surface.env.map((e) => [e.name, e.doc]), '  '));
+  }
   return lines.join('\n') + '\n';
 }
 
@@ -181,6 +236,11 @@ function renderHelp(version, surface) {
 //            declares, not a parse result.
 //   flags    { '--name': value } for the verb's flags, and { '--name': true } for
 //            leading globals.
+//   globalOrder  the leading globals in the order argv gave them. Dispatch acts on the
+//            FIRST print-and-exit one, so `clode --help --version` prints help and
+//            `clode --version --help` prints the version — which is what each did
+//            before this table existed. An object's key order would carry the same
+//            information, but only by accident of insertion; this says it.
 //   rest     argv AFTER the verb, with a recognised subject removed: what a verb's
 //            own module gets handed (clode-build.cjs's parseBuildArgs owns build's
 //            argv contract — imported, not re-implemented, so there is exactly one
@@ -194,15 +254,20 @@ function renderHelp(version, surface) {
 function parseArgv(argv, surface) {
   const args = Array.isArray(argv) ? argv : [];
   const flags = {};
+  const globalOrder = [];
   let i = 0;
-  while (i < args.length && has(surface.globals, args[i])) { flags[args[i]] = true; i += 1; }
+  while (i < args.length && has(surface.globals, args[i])) {
+    flags[args[i]] = true;
+    globalOrder.push(args[i]);
+    i += 1;
+  }
 
   const token = args[i];
   if (token === undefined || !has(surface.verbs, token)) {
     // The message dispatch has always printed for an unrecognised command, including
     // the empty one (`clode` with no argv at all): clode BUILDS targets, so there is
     // nothing for a stray argv to fall through to.
-    return { verb: undefined, subject: undefined, flags, rest: [], error: `unknown command '${token === undefined ? '' : token}'` };
+    return { verb: undefined, subject: undefined, flags, globalOrder, rest: [], error: `unknown command '${token === undefined ? '' : token}'` };
   }
   const verb = token;
   const def = surface.verbs[verb];
@@ -236,7 +301,7 @@ function parseArgv(argv, surface) {
     }
   }
 
-  return { verb, subject, flags, rest, error };
+  return { verb, subject, flags, globalOrder, rest, error };
 }
 
 module.exports = { SURFACE, TAGLINE, CHECKOUT_ONLY_VERBS, surfaceFor, renderHelp, parseArgv };

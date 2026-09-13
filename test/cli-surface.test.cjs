@@ -10,16 +10,44 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const { SURFACE, CHECKOUT_ONLY_VERBS, renderHelp, parseArgv, surfaceFor } = require('../libexec/cli-surface.cjs');
 
+// FIX ROUND 1 (coordinator): this loop used to stop at verbs and subjects, and that left
+// the one flag this whole phase exists for unasserted. Measured: mutating renderHelp's
+// `if (flags.length)` to `if (false)` removed --target and --out from the rendered help
+// and ALL FIVE active tests here stayed green (build's flags happen to be covered
+// incidentally by test/clode-build.test.cjs; fetch's --target was covered by nothing,
+// anywhere). Flags, globals and env names are now in the loop, and the DOC TEXT is
+// checked too — against whitespace-collapsed help, so renderHelp's word wrap cannot
+// hide a missing description.
 test('help is generated from the table, so the two cannot disagree', () => {
   const help = renderHelp('1.2.3', SURFACE);
+  const flat = help.replace(/\s+/g, ' ');
+  const documents = (text, what) => assert.ok(flat.includes(String(text).replace(/\s+/g, ' ')), what);
   for (const verb of Object.keys(SURFACE.verbs)) {
     assert.match(help, new RegExp(`clode ${verb.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
       `help must document the verb ${verb}`);
   }
   for (const [verb, def] of Object.entries(SURFACE.verbs)) {
+    documents(def.summary, `help must carry ${verb}'s summary`);
     for (const subject of Object.keys(def.subjects)) {
       assert.ok(help.includes(subject), `help must name the ${verb} subject ${subject}`);
+      documents(def.subjects[subject], `help must describe the ${verb} subject ${subject}`);
     }
+    for (const flag of Object.keys(def.flags)) {
+      assert.ok(help.includes(flag), `help must document ${verb}'s ${flag}`);
+      documents(def.flags[flag], `help must describe ${verb}'s ${flag}`);
+    }
+    for (const entry of def.env) {
+      assert.ok(help.includes(entry.name), `help must document ${verb}'s ${entry.name}`);
+      documents(entry.doc, `help must describe ${verb}'s ${entry.name}`);
+    }
+  }
+  for (const global of Object.keys(SURFACE.globals)) {
+    assert.ok(help.includes(global), `help must document the global ${global}`);
+    documents(SURFACE.globals[global], `help must describe the global ${global}`);
+  }
+  for (const entry of SURFACE.env) {
+    assert.ok(help.includes(entry.name), `help must document the verb-neutral ${entry.name}`);
+    documents(entry.doc, `help must describe the verb-neutral ${entry.name}`);
   }
 });
 
@@ -36,10 +64,32 @@ test('every table subject parses, and nothing else does', () => {
 });
 
 test('--target means one thing: every verb that takes it documents it identically', () => {
-  const texts = Object.values(SURFACE.verbs).map((v) => v.flags['--target']).filter(Boolean);
+  const takers = Object.entries(SURFACE.verbs).filter(([, v]) => v.flags['--target']);
+  const texts = takers.map(([, v]) => v.flags['--target']);
   assert.ok(texts.length >= 2, 'at least build and fetch take --target');
   assert.strictEqual(new Set(texts.map((t) => t.replace(/ingredient|product/, 'X'))).size, 1,
     '--target must mean the same thing everywhere — that is the defect this table exists to prevent');
+  // FIX ROUND 1 (coordinator): sameness-modulo-the-noun is only half the invariant. The
+  // normalised-away noun must be the verb's OWN subjectClass, or `build` could document
+  // "the INGREDIENT is for PLATFORM-ARCH", pass the check above, and be nonsense.
+  for (const [verb, def] of takers) {
+    assert.match(def.flags['--target'], new RegExp(`\\b${def.subjectClass}\\b`),
+      `clode ${verb}'s --target must name its own subject class ('${def.subjectClass}')`);
+  }
+});
+
+test('parseArgv records the leading globals in argv order, and only leading ones', () => {
+  // Dispatch acts on the FIRST print-and-exit global (clode-main.cjs step 4), which is
+  // how `clode --help --version` keeps printing help and `clode --version --help` keeps
+  // printing the version — each what it printed before the table existed.
+  assert.deepStrictEqual(parseArgv(['--help', '--version'], SURFACE).globalOrder, ['--help', '--version']);
+  assert.deepStrictEqual(parseArgv(['--version', '--help'], SURFACE).globalOrder, ['--version', '--help']);
+  assert.deepStrictEqual(parseArgv(['--verbose', 'build'], SURFACE).globalOrder, ['--verbose']);
+  // After the verb, argv belongs to the verb: a global there is an unknown argument,
+  // which is what makes `clode build --help` a build error rather than clode's help.
+  const after = parseArgv(['build', '--help'], SURFACE);
+  assert.deepStrictEqual(after.globalOrder, []);
+  assert.match(after.error, /unknown argument '--help'/);
 });
 
 // The brief's fourth assertion, in two halves — because task 5 builds the SPLIT and
