@@ -211,7 +211,7 @@ if (role === 'builder') {
   // Task 8), and scripts/sea-sign.cjs (which build-naude execs to unsign/re-sign
   // the SEA — on macOS the ad-hoc re-sign after postject is MANDATORY or the
   // binary won't run). A blobulated builder ships no scripts/ dir, so `clode build
-  // --naude` under clode-native materializes these (clode-build.cjs's
+  // --naude` under clode-native materializes these (clode-blobulate.cjs's
   // materializeBlobPayload) and spawns the copy. Member names keep their scripts/
   // path (re-joined onto the payload dir verbatim). Committed files that always
   // exist → mustRead. (Miss one require in this list → "Cannot find module" only
@@ -237,13 +237,13 @@ if (role === 'builder') {
   // node-shim/* is stored below: the node-shim loader (SHIM_DIR =
   // '/quaude/node-shim/modules' when blobulated) requires it via a relative
   // '../../target-env.cjs' from modules/, which only lands on the archive
-  // root — a 'libexec/' prefix here would 404 that require. clode-build.cjs's
+  // root — a 'libexec/' prefix here would 404 that require. clode-blobulate.cjs's
   // materialization step special-cases this bare name back onto disk at
   // libexec/target-env.cjs (sibling to node-shim/, matching this repo's own
   // layout) for the self-blobulate path.
   members.push({ name: 'target-env.cjs', data: await mustRead(path.join(libexecDir, 'target-env.cjs'), 'target-env.cjs member') });
   // deps/claude/package.json, member name matches its real repo path (unlike
-  // target-env.cjs, no bare-root special-casing needed — clode-build.cjs's
+  // target-env.cjs, no bare-root special-casing needed — clode-blobulate.cjs's
   // materialization step just re-joins `mat` + this name verbatim): the ext-dep
   // closure's SOURCE OF TRUTH — Claude Code's runtime deps, NOT clode's own
   // (clode has none). A blobulated builder ships no repo checkout, so when IT later

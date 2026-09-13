@@ -61,39 +61,12 @@ const { seaBin, tjsBin } = require('../scripts/platform-tag.cjs');
 const { Composer, failOnMismatch } = require('./build-compose.cjs');
 const { Reporter } = require('./build-report.cjs');
 const { appendRun } = require('./build-trace.cjs');
-
-// Materialize the builder-role VFS members to `mat` on disk. A blobulated NATIVE
-// clode runs under tjs and ships NO checkout — so any subprocess it must spawn
-// (the blobulate WORKER for a quaude/--self build, or scripts/build-naude.mjs for a
-// naude build) needs real files. This is the SUPERSET both build targets need:
-// the node-shim tree + libexec support + ext-dep node_modules + deps manifests
-// (quaude/--self), plus the prebuilt naude bundle, postject, and the naude
-// assembler scripts (build --naude). Extra members a given target doesn't use
-// are harmless. Member-name -> on-disk-home mapping mirrors quaude-blobulate.js's
-// archive namespace (target-env.cjs and the naude bundle ride at the archive
-// ROOT; everything else keeps its path).
-function materializeBlobPayload(vfs, mat) {
-  for (const [name, bytes] of vfs.files) {
-    let dest;
-    if (name.startsWith('node-shim/')) dest = path.join(mat, 'libexec', name);
-    else if (name.startsWith('libexec/')) dest = path.join(mat, name);
-    else if (name.startsWith('node_modules/')) dest = path.join(mat, name);
-    // target-env.cjs rides at the archive ROOT (bare name) but belongs beside
-    // node-shim/ on disk, i.e. libexec/target-env.cjs — see quaude-blobulate.js.
-    else if (name === 'target-env.cjs') dest = path.join(mat, 'libexec', name);
-    // deps/claude (ext-dep closure + lockfile sources of truth) AND deps/clode
-    // (postject's carried JS — build --naude's --postject) keep their paths.
-    else if (name.startsWith('deps/')) dest = path.join(mat, name);
-    // The naude assembler + its one sibling require (platform-tag.cjs). A blobulated
-    // builder ships no scripts/ dir; build --naude spawns the MATERIALIZED copy.
-    else if (name.startsWith('scripts/')) dest = path.join(mat, name);
-    // The prebuilt naude SEA main, carried at the archive root (Task 4).
-    else if (name === 'naude-entry.bundle.cjs') dest = path.join(mat, name);
-    else continue;
-    fs.mkdirSync(path.dirname(dest), { recursive: true });
-    fs.writeFileSync(dest, Buffer.from(bytes));
-  }
-}
+// The one step in the middle of this pipeline that this file does NOT own: attaching
+// a payload to an engine image, in either of its two mechanisms (a canonical-LE
+// trailer appended by the tjs worker, or postject injecting a SEA blob). Everything
+// else here — resolve, extract, closure, gates, signing, smoke, attest — is the
+// orchestration around it. See clode-blobulate.cjs's header.
+const { blobulate, materializeBlobPayload } = require('./clode-blobulate.cjs');
 
 function sha256File(p) {
   return crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
@@ -1176,7 +1149,6 @@ async function clodeBuild(args, opts) {
     const vfs = globalThis.__quaudeVFS;
     const blobulatedBuilder = !!(vfs && vfs.manifest && vfs.manifest.role === 'builder');
     const ROOT = path.resolve(opts.libexec, '..');
-    const outArgs = out ? ['--out', out] : [];
 
     // -- blobulated-builder payload: a native clode ships NO checkout on disk, so
     // every real file a naude build touches is carried as an archive member —
@@ -1282,11 +1254,9 @@ async function clodeBuild(args, opts) {
         }
       }
 
-      const buildNaudeScript = path.join(assembleRoot, 'scripts', 'build-naude.mjs');
       const bundlePath = blobulatedBuilder
         ? path.join(payloadDir, 'naude-entry.bundle.cjs')
         : path.join(ROOT, 'build', 'bundle', 'naude-entry.bundle.cjs');
-      const postjectDir = path.join(assembleRoot, 'deps', 'clode', 'node_modules', 'postject');
       const nmDir = blobulatedBuilder
         ? path.join(payloadDir, 'node_modules')
         : resolveClaudeNmDir({ libexec: effLibexec, here, verbose, env, ROOT });
@@ -1338,36 +1308,34 @@ async function clodeBuild(args, opts) {
       fs.writeFileSync(extrasPath, JSON.stringify(naudeExtras));
 
       clodeLog(`clode: build --naude: building the Node SEA from ${cliPath} under ${blobgenNode} (embed: ${embedNode}) ...`);
-      // build-naude.mjs runs as a SEPARATE process UNDER the blob-gen node (the
-      // one that RUNS --experimental-sea-config). Every input is passed
-      // explicitly: --blobgen-node/--embed-node (split roles — native passes
-      // the same path for both, but named explicitly rather than via the
-      // --node alias so this call site never depends on which case it is),
-      // --target-os (the signing rules the OUTPUT needs, not the host's),
-      // --bundle (the prebuilt SEA main), --nmdir (the deps to tar), --postject
-      // (its carried JS). A separate spawn seam (opts.spawnRun) from the
-      // module's shared spawnRun: this task's tests need to capture the
-      // build-naude argv without also stubbing every OTHER spawn in the
-      // function (the smoke below keeps using the shared seam).
-      const spawnRunFn = opts.spawnRun || spawnRun;
-      const r = await spawnRunFn(blobgenNode, [
-        buildNaudeScript,
-        '--cli', cliPath,
-        '--blobgen-node', blobgenNode,
-        '--embed-node', embedNode,
-        '--target-os', targetOs,
-        '--bundle', bundlePath,
-        '--nmdir', nmDir,
-        '--postject', postjectDir,
-        '--extras', extrasPath,
-        ...(signerBin ? ['--darwin-signer', signerBin] : []),
-        ...outArgs,
-      ], { env, timeout: 600000 * SCALE });
-      try { fs.rmSync(extrasPath, { force: true }); } catch { /* best effort */ }
-      if (r.status !== 0) {
-        return fail(`build --naude: build-naude failed (${describeExit(r)}):\n${r.stdout}${r.stderr}`);
+      // -- BLOBULATE, the postject mechanism (clode-blobulate.cjs): the payload is
+      // injected into the pinned Node's SEA section rather than appended as a
+      // trailer, by scripts/build-naude.mjs under the blob-gen node. A separate
+      // spawn seam (opts.spawnRun) from this function's shared spawnRun: the naude
+      // wiring tests need to capture the assembler's argv without also stubbing
+      // every OTHER spawn in the build (the smoke below keeps using the shared
+      // seam). 10 minutes — esbuild + blob-gen + inject + sign, no bytecode
+      // compile, so nothing here approaches the trailer path's budget.
+      const b = await blobulate({
+        mechanism: 'postject',
+        spawnRun: opts.spawnRun || spawnRun,
+        assembleRoot,
+        blobgenNode,
+        embedNode,
+        targetOs,
+        cli: cliPath,
+        bundle: bundlePath,
+        nmDir,
+        extrasPath,
+        signerBin,
+        out,
+        env,
+        timeout: 600000 * SCALE,
+      });
+      if (!b.ok) {
+        return fail(`build --naude: build-naude failed (${describeExit(b.result)}):\n${b.result.stdout}${b.result.stderr}`);
       }
-      if (r.stdout) clodeLog(r.stdout.trimEnd());
+      if (b.result.stdout) clodeLog(b.result.stdout.trimEnd());
     } finally {
       if (payloadDir) { try { fs.rmSync(payloadDir, { recursive: true, force: true }); } catch { /* best effort */ } }
     }
@@ -1855,22 +1823,33 @@ async function clodeBuild(args, opts) {
     fs.writeFileSync(extrasPath, JSON.stringify(extras));
     report.finish('sign');
 
-    // -- blobulate, under the template itself.
+    // -- BLOBULATE, the trailer mechanism (clode-blobulate.cjs): the worker appends
+    // the payload to the signed engine copy, running under the template itself.
+    // The step declares/starts/finishes its own `blobulate` step in there, and
+    // routes the worker's protocol lines into THIS composer over the spawn seam —
+    // the phase label and the log lines stay here, with every other phase's.
     spin.phase('Blobulating');
-    report.plan([{ name: 'blobulate' }]);
-    report.start('blobulate');
     clodeLog(`clode: build: blobulating ${out} ...`);
-    const w = await spawnRun(template, ['run', path.join(libexec, 'quaude-blobulate.js'),
-      signedBase, stageDir, path.join(libexec, 'node-shim'), nmDir,
-      path.join(libexec, 'quaude-bootstrap.mjs'), extrasPath, out,
+    const b = await blobulate({
+      mechanism: 'trailer',
+      spawnRun,
+      engine: template,
+      libexec,
+      signedBase,
+      stageDir,
+      nmDir,
+      extrasPath,
+      out,
       // --self embeds the PRISTINE base template as a member (Decision 2) so a
-      // blobulated builder can materialize+exec it as the blobulate worker with nothing
-      // else on disk. This MUST be baseTemplate (the target-platform base,
+      // blobulated builder can materialize+exec it as its own blobulate worker with
+      // nothing else on disk. This MUST be baseTemplate (the target-platform base,
       // = crossTarget for a cross-blobulate), NOT `template` (the HOST engine that
       // runs THIS worker) — else a cross-blobulated builder ships a host-arch
       // template it cannot exec on the target. Native --self: baseTemplate ===
       // template, so this is unchanged there. The quaude role embeds nothing
       // (its base IS the signed copy).
+      embedTemplate: self ? baseTemplate : null,
+      env,
       // 30 minutes, not 5. A COLD blobulate of a bundle with cyclic requires (upstream 2.1.248+)
       // merges the graph's strongly connected groups inside the worker, and the real 95-module
       // group costs ~380s under tjs on a fast arm64 Mac (measured in situ: 398s of a 6:52 build)
@@ -1878,48 +1857,19 @@ async function clodeBuild(args, opts) {
       // result, so every retry died exactly the same way.
       // The merge is cached once per provider (quaude-blobulate.js's graph-merged.json), so only the
       // first build of a given upstream version on a given machine gets anywhere near this.
-      ...(self ? [baseTemplate] : [])], { env, timeout: 1800000 * SCALE });
-    report.finish('blobulate');
-    // Route the worker's protocol lines into the SAME composer, over the spawn
-    // seam — the one every build step goes through — BEFORE the status check:
-    // a failed blobulate may still have reported real partial progress (compile got
-    // partway through before the worker died) worth keeping. `run` buffers the
-    // whole child stdout rather than streaming it, so this happens once the
-    // worker has already exited, not live — the trace log and the totals a
-    // LATER phase's spinner reads are still real, they just update in one
-    // jump rather than incrementally during 'Blobulating' itself.
-    //
-    // ingest() returns false for a line that is not one of its `@clode-step `
-    // sentinels — anything else the worker printed (its own console.log
-    // narration) is real content and must reach the human-facing log
-    // untouched; only the sentinel lines themselves are filtered out, so a
-    // `clode build` log stops showing raw JSON (see clodeLog below).
-    let workerPassthrough = '';
-    for (const line of w.stdout.split('\n')) {
-      if (!composer.ingest('worker', line)) workerPassthrough += line + '\n';
-    }
-    if (w.status !== 0) {
-      let extra = '';
-      if (!w.stdout && !w.stderr) {
-        // A bare status with no output = the child never ran (exec failed
-        // inside the spawn; 127 is libuv's could-not-exec convention). Say
-        // what we tried to exec so a remote CI log is diagnosable. Checked
-        // against the RAW w.stdout on purpose (not workerPassthrough): a
-        // worker whose only output was sentinel lines still ran, and must
-        // not be misreported as an exec failure.
-        try {
-          extra = `\n(no worker output — exec failure? template=${template} size=${fs.statSync(template).size})`;
-        } catch {
-          extra = `\n(no worker output — exec failure? template=${template} MISSING)`;
-        }
-      }
-      // workerPassthrough, not raw w.stdout: a worker that reported real
+      timeout: 1800000 * SCALE,
+      report,
+      ingest: (line) => composer.ingest('worker', line),
+    });
+    if (!b.ok) {
+      // b.passthrough, not the raw worker stdout: a worker that reported real
       // progress (compile got partway through) before dying must not dump
       // raw @clode-step {...} JSON into the build's own error message — the
-      // exact place a clean, human-readable failure matters most.
-      return fail(`build: blobulate worker failed (${describeExit(w)}):\n${workerPassthrough}${w.stderr}${extra}`);
+      // exact place a clean, human-readable failure matters most. b.diagnosis is
+      // the "the child never even ran" note, when there was no output at all.
+      return fail(`build: blobulate worker failed (${describeExit(b.result)}):\n${b.passthrough}${b.result.stderr}${b.diagnosis}`);
     }
-    clodeLog(workerPassthrough.trimEnd());
+    clodeLog(b.passthrough.trimEnd());
 
     // Enforce the mismatch (phase-2 Task 6): both real components — this
     // process (the builder's OWN Reporter, above) and the worker just ingested
