@@ -1697,6 +1697,11 @@ async function clodeBuild(args, opts) {
     // Compared in ONE vocabulary. providerPlatformOf answers in node's ('darwin'), targets
     // speak canonical ('macos'), and comparing those raw is a guaranteed false negative --
     // the failure mode this check exists to prevent, reintroduced in the check itself.
+    // CLODE_ALLOW_FOREIGN_CARVE=1 is documented on the 'build' verb in cli-surface.cjs, NOT
+    // given a --flag (phase 3b, task 2): it disables a safety check rather than selecting a
+    // build input, and a discoverable flag would invite reaching for it to get past a build
+    // failure instead of fetching a matching provider. See cli-surface.cjs's comment on this
+    // entry for the full reasoning.
     const CARVE_TO_CANON = { darwin: 'macos', linux: 'linux', win32: 'windows' };
     if (!naude && !self && providerPlatform && providerPlatform !== 'unknown'
         && env.CLODE_ALLOW_FOREIGN_CARVE !== '1') {

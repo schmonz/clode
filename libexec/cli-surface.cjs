@@ -76,9 +76,18 @@ const TAGLINE = 'build a standalone Claude Code binary for your machine.';
 //                                   only, which is what "measured, not guessed" is supposed
 //                                   to prevent; re-measure by grepping, do not infer from
 //                                   which verb the name sounds like it belongs to.
-//                 The four that no single verb owns are SURFACE.env below. Phase 3b's
-//                 51-name classification then EDITS these entries rather than creating
-//                 them; help must never stop documenting a name it documented before.
+//                 The four that no single verb owns are SURFACE.env below. Phase 3b's task 1
+//                 classified every CLODE_* name shipped code reads (test/env-verdicts.cjs);
+//                 task 2 then EDITS these entries for every name verdict 'absorbed' rather
+//                 than creating them from scratch — CLODE_TEMPLATES_MANIFEST/_BASEURL/_BLOB,
+//                 CLODE_RELEASE_BASE, CLODE_TJS_PIN and CLODE_ENGINE_RECIPE (build AND
+//                 bootstrap, same reasoning as CLODE_TARGET_TEMPLATE above), CLODE_FETCH_PLATFORM
+//                 (fetch), CLODE_VERSION_DIR (global, beside its CLODE_CLAUDE_BIN sibling), and
+//                 CLODE_ALLOW_FOREIGN_CARVE=1 (build only — see its own comment there for why it
+//                 stays an env var and not a flag). test/env-verdicts.test.cjs's third assertion
+//                 (every 'absorbed' verdict must appear in surfaceFor('checkout')'s rendered
+//                 help) is what makes "help must never stop documenting a name it documented
+//                 before" a property a red test enforces, not a hope.
 const SURFACE = {
   verbs: {
     build: {
@@ -123,7 +132,49 @@ const SURFACE = {
             // does not document is invisible in a shipped binary, where --help is the only
             // documentation there is.
             { name: 'CLODE_TARGET_TEMPLATE',
-              doc: 'an operator-built engine for --target, used INSTEAD of the published template' }],
+              doc: 'an operator-built engine for --target, used INSTEAD of the published template' },
+            // PHASE 3B TASK 2: the remaining --target/--list-targets inputs, all read from
+            // the SAME resolveManifest/obtainEngine call chain CLODE_TARGET_TEMPLATE's
+            // comment above already documents as reached by `build --target` AND
+            // `bootstrap --target` — measured by tracing clode-build.cjs:1129-1189, not
+            // guessed, so all six are declared on BOTH verbs, same as CLODE_TARGET_TEMPLATE.
+            { name: 'CLODE_TEMPLATES_MANIFEST',
+              doc: 'a local templates manifest file for --target / --list-targets, instead of '
+                + "fetching this clode version's published one (offline builds and tests)" },
+            { name: 'CLODE_TEMPLATES_BASEURL',
+              doc: "explicit base URL to fetch --target's templates manifest and engine from, "
+                + 'overriding CLODE_RELEASE_BASE (an offline mirror, or a pinned release)' },
+            { name: 'CLODE_TEMPLATES_BLOB',
+              doc: 'a local, already-downloaded templates blob to read the --target engine '
+                + 'from instead of range-fetching it (pairs with CLODE_TEMPLATES_MANIFEST for '
+                + 'an offline build)' },
+            { name: 'CLODE_RELEASE_BASE',
+              doc: "override the GitHub release download root that --target's templates "
+                + "manifest and engine resolve against (default: "
+                + 'https://github.com/schmonz/clode/releases/download)' },
+            { name: 'CLODE_TJS_PIN',
+              doc: "override this clode's own tjs pin, checked against a --target engine "
+                + "template's pin to catch a mismatch (default: derived from PINS.md in a "
+                + 'checkout)' },
+            { name: 'CLODE_ENGINE_RECIPE',
+              doc: "override this clode's own engine-recipe fingerprint, checked against a "
+                + "--target engine template's recipe to catch a mismatch (default: baked in, "
+                + "else derived from the checkout's own sources)" },
+            // CLODE_ALLOW_FOREIGN_CARVE=1 is deliberately NOT a flag (see the block comment
+            // just above SURFACE.verbs.build's provider-carve guard in clode-build.cjs, and
+            // BACKLOG.md's "P1: a quaude built from a foreign-carved provider LIES about its
+            // platform"): it disables the check that the staged provider was carved for THIS
+            // build's target, which is the guard standing between a build and that P1 until
+            // phase 4 keys the provider store by platform. A discoverable --allow-foreign-carve
+            // flag would invite reaching for it to get past a build failure instead of fetching
+            // a matching provider; staying an awkward env var, documented here so --help (the
+            // only documentation inside a shipped binary) does not hide that it exists, is the
+            // deliberate choice. Only reached on the quaude path (`!naude && !self`), so this
+            // is NOT declared on bootstrap.
+            { name: 'CLODE_ALLOW_FOREIGN_CARVE=1',
+              doc: 'disable the check that the staged provider was carved for this build\'s '
+                + 'target platform — a safety check, not a template selector; only for '
+                + 'deliberately reproducing a foreign-carve mismatch, never a normal build input' }],
     },
     fetch: {
       summary: 'fetch a build ingredient',
@@ -145,7 +196,16 @@ const SURFACE = {
               doc: 'which upstream release to fetch (default: the autoUpdatesChannel setting, else latest)' },
       flags: { '--target': 'the ingredient is for PLATFORM-ARCH, not this machine' },
       env: [{ name: 'CLODE_CHANGELOG_URL',
-              doc: 'release-notes source for the post-update signals digest' }],
+              doc: 'release-notes source for the post-update signals digest' },
+            // PHASE 3B TASK 2: measured at clode-update.cjs:82-84 (fetchPlatform, called
+            // from clodeUpdate's `fetch claude` path) and clode-main.cjs:199 (the `fetch
+            // claude --target` usage error already tells the user to set this) — a real
+            // build-input selector that was user-facing in an error message before it was
+            // ever in this table.
+            { name: 'CLODE_FETCH_PLATFORM',
+              doc: 'choose the upstream provider platform-arch to fetch, overriding host '
+                + "detection (the provider store has no platform axis — see 'fetch claude "
+                + "--target')" }],
     },
     'read-anthropic-tea-leaves': {
       summary: "infer Anthropic's direction of travel from the changelog (warn-only, never downloads)",
@@ -167,6 +227,13 @@ const SURFACE = {
   // artifact's documentation entirely.
   env: [{ name: 'CLODE_VERBOSE=1', doc: 'same as --verbose' },
         { name: 'CLODE_CLAUDE_BIN', doc: 'upstream claude binary to extract from' },
+        // PHASE 3B TASK 2: the very next tier of the SAME resolveClaudeBin precedence chain
+        // CLODE_CLAUDE_BIN documents just above ("CLODE_CLAUDE_BIN > CLODE_VERSION_DIR >
+        // provider `current`", clode-resolve.cjs:93-103) — same kind of candidate as its
+        // sibling, declared beside it for the same reason.
+        { name: 'CLODE_VERSION_DIR',
+          doc: 'explicit installed-version directory to extract from (checked after '
+            + 'CLODE_CLAUDE_BIN, before the clode-managed provider)' },
         { name: 'CLODE_NODE', doc: 'host node' },
         { name: 'CLODE_CACHE', doc: 'extracted-bundle cache dir' }],
 };
@@ -212,7 +279,35 @@ const CHECKOUT_ONLY_VERBS = {
             doc: 'the esbuilt clode-main bundle to embed (default: the newest '
               + 'build/*/clode-main.bundle.cjs; build it with `node scripts/build-clode-main.mjs`)' },
           { name: 'CLODE_TARGET_TEMPLATE',
-            doc: 'an operator-built engine for --target, used INSTEAD of the published template' }],
+            doc: 'an operator-built engine for --target, used INSTEAD of the published template' },
+          // PHASE 3B TASK 2: same six names as build's --target/--list-targets block above,
+          // reached through the identical resolveManifest/obtainEngine call chain (`bootstrap
+          // --target` runs clodeBuild with product 'clode', which parses the SAME argv before
+          // branching on `self` — see clode-build.cjs:1129-1189, reached before the self/naude
+          // split). CLODE_ALLOW_FOREIGN_CARVE is NOT among them: its guard is gated `!self`,
+          // so bootstrap never reaches it.
+          { name: 'CLODE_TEMPLATES_MANIFEST',
+            doc: 'a local templates manifest file for --target / --list-targets, instead of '
+              + "fetching this clode version's published one (offline builds and tests)" },
+          { name: 'CLODE_TEMPLATES_BASEURL',
+            doc: "explicit base URL to fetch --target's templates manifest and engine from, "
+              + 'overriding CLODE_RELEASE_BASE (an offline mirror, or a pinned release)' },
+          { name: 'CLODE_TEMPLATES_BLOB',
+            doc: 'a local, already-downloaded templates blob to read the --target engine '
+              + 'from instead of range-fetching it (pairs with CLODE_TEMPLATES_MANIFEST for '
+              + 'an offline build)' },
+          { name: 'CLODE_RELEASE_BASE',
+            doc: "override the GitHub release download root that --target's templates "
+              + "manifest and engine resolve against (default: "
+              + 'https://github.com/schmonz/clode/releases/download)' },
+          { name: 'CLODE_TJS_PIN',
+            doc: "override this clode's own tjs pin, checked against a --target engine "
+              + "template's pin to catch a mismatch (default: derived from PINS.md in a "
+              + 'checkout)' },
+          { name: 'CLODE_ENGINE_RECIPE',
+            doc: "override this clode's own engine-recipe fingerprint, checked against a "
+              + "--target engine template's recipe to catch a mismatch (default: baked in, "
+              + "else derived from the checkout's own sources)" }],
   },
 };
 

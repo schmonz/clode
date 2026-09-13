@@ -88,42 +88,44 @@ const VERDICTS = [
 
   // ---- The remaining build-inputs-proper candidates clode-build.cjs reads (BACKLOG.md, ----
   // ---- "PHASE 3B SPECCED", the eight-decision absorption pool) — genuinely absorbed, ----
-  // ---- just not yet wired onto cli-surface.cjs's table. That wiring is a later task's ----
-  // ---- job; this verdict only records that the KIND is right. ----
+  // ---- and WIRED onto cli-surface.cjs's table by phase 3b task 2 (declared on both the ----
+  // ---- 'build' and checkout-only 'bootstrap' verbs — measured, not guessed, at ----
+  // ---- clode-build.cjs:1129-1189, the shared --target/--list-targets call chain both ----
+  // ---- verbs run through before branching on `self`). ----
   { name: 'CLODE_ENGINE_RECIPE', verdict: 'absorbed',
-    because: 'read by clode-build.cjs; one of the eight decided phase-3b absorption '
-      + 'candidates (BACKLOG.md, 2026-09-13) — selects the engine recipe a build uses, '
-      + 'changing what gets built. Not yet declared in cli-surface.cjs; that wiring is a '
-      + 'later task.' },
+    because: 'read by clode-build.cjs; declared on both the build and bootstrap verbs in '
+      + "cli-surface.cjs — checked against a --target engine template's recipe to catch a "
+      + 'mismatch, changing what gets built.' },
   { name: 'CLODE_RELEASE_BASE', verdict: 'absorbed',
-    because: 'read by clode-build.cjs; one of the eight decided phase-3b absorption '
-      + 'candidates — overrides the base URL a release build resolves published inputs '
-      + 'against, changing what gets fetched into the build. Not yet declared in '
-      + 'cli-surface.cjs.' },
+    because: 'read by clode-build.cjs; declared on both the build and bootstrap verbs in '
+      + "cli-surface.cjs — overrides the base URL a --target build resolves its templates "
+      + 'manifest and engine against, changing what gets fetched into the build.' },
   { name: 'CLODE_TEMPLATES_BASEURL', verdict: 'absorbed',
-    because: 'read by clode-build.cjs; one of the eight decided phase-3b absorption '
-      + "candidates — selects where a build's engine templates are fetched from, a real "
-      + 'build-input override. Not yet declared in cli-surface.cjs.' },
+    because: 'read by clode-build.cjs; declared on both the build and bootstrap verbs in '
+      + "cli-surface.cjs — selects where a --target build's engine templates are fetched "
+      + 'from, a real build-input override.' },
   { name: 'CLODE_TEMPLATES_BLOB', verdict: 'absorbed',
-    because: 'read by clode-build.cjs; one of the eight decided phase-3b absorption '
-      + 'candidates — an explicit templates blob to build from instead of resolving one, '
-      + 'a build-input override. Not yet declared in cli-surface.cjs.' },
+    because: 'read by clode-build.cjs; declared on both the build and bootstrap verbs in '
+      + 'cli-surface.cjs — an explicit templates blob to build a --target engine from '
+      + 'instead of resolving one, a build-input override.' },
   { name: 'CLODE_TEMPLATES_MANIFEST', verdict: 'absorbed',
-    because: 'read by clode-build.cjs; one of the eight decided phase-3b absorption '
-      + 'candidates — an explicit templates manifest to build from, a build-input override. '
-      + 'Not yet declared in cli-surface.cjs.' },
+    because: 'read by clode-build.cjs; declared on both the build and bootstrap verbs in '
+      + 'cli-surface.cjs — an explicit templates manifest to build --target/--list-targets '
+      + 'from, a build-input override.' },
   { name: 'CLODE_TJS_PIN', verdict: 'absorbed',
-    because: 'read by clode-build.cjs; one of the eight decided phase-3b absorption '
-      + 'candidates — pins which engine version a build targets, changing what gets built. '
-      + 'Not yet declared in cli-surface.cjs.' },
+    because: 'read by clode-build.cjs; declared on both the build and bootstrap verbs in '
+      + "cli-surface.cjs — checked against a --target engine template's pin to catch a "
+      + 'mismatch, changing what gets built.' },
   { name: 'CLODE_ALLOW_FOREIGN_CARVE', verdict: 'absorbed',
-    because: 'read by clode-build.cjs; one of the eight decided phase-3b absorption '
-      + 'candidates, though BACKLOG.md leaves its exact MECHANISM open deliberately — "it '
-      + 'disables a safety check rather than selecting an input, which makes it a different '
-      + 'KIND of candidate", to be answered by measurement rather than opinion. The KIND '
-      + 'recorded here is still absorbed: it changes whether a build proceeds with a '
-      + 'foreign-carved input at all, which is a WHAT-GETS-BUILT decision even if the '
-      + 'eventual UI is not a plain flag.' },
+    because: 'read by clode-build.cjs; declared on the build verb ONLY in cli-surface.cjs, '
+      + "as CLODE_ALLOW_FOREIGN_CARVE=1 — deliberately DOCUMENTED BUT NOT GIVEN A FLAG "
+      + '(phase 3b task 2\'s decision, recorded in both cli-surface.cjs and BACKLOG.md): it '
+      + 'disables the carve-vs-target-platform safety check rather than selecting an input, '
+      + "and a discoverable --allow-foreign-carve flag would invite reaching for it to get "
+      + 'past a build failure instead of fetching a matching provider. The KIND is still '
+      + 'absorbed: it changes whether a build proceeds with a foreign-carved input at all, '
+      + "which is a WHAT-GETS-BUILT decision even though the UI stays an awkward env var. "
+      + 'Not declared on bootstrap: the guard is gated `!self`, so bootstrap never reads it.' },
 
   // ---- clode-paths.cjs's plumbing seven — decided already, used verbatim. ----
   { name: 'CLODE_STATE_ROOT', verdict: 'env-only', because: PLUMBING_BECAUSE },
@@ -218,11 +220,12 @@ const VERDICTS = [
       + 'build content.' },
   { name: 'CLODE_FETCH_PLATFORM', verdict: 'absorbed',
     because: 'read by libexec/clode-update.cjs to choose which upstream provider '
-      + "platform-arch gets fetched, overriding process.platform/arch detection — and it is "
-      + "already user-facing: clode-main.cjs's own usage error for `fetch claude --target` "
-      + 'tells the user to "Set CLODE_FETCH_PLATFORM to choose the upstream build '
-      + 'deliberately". A real build-input selector already surfaced in an error message, '
-      + 'just not yet in cli-surface.cjs\'s declared table.' },
+      + "platform-arch gets fetched, overriding process.platform/arch detection — and it "
+      + "was already user-facing before this task: clode-main.cjs's own usage error for "
+      + '`fetch claude --target` tells the user to "Set CLODE_FETCH_PLATFORM to choose the '
+      + 'upstream build deliberately". Declared on the fetch verb in cli-surface.cjs by '
+      + 'phase 3b task 2 — a real build-input selector, now in the declared table where '
+      + 'that error message already implied it belonged.' },
   { name: 'CLODE_LIBEXEC', verdict: 'env-only',
     because: 'overrides where clode-main.cjs looks for its own libexec/ directory — '
       + 'self-location plumbing for running from a non-standard layout (a checkout with an '
@@ -252,22 +255,25 @@ const VERDICTS = [
       + 'scripts/floor-probe.mjs) up for a slow or loaded box. Changes how a check is '
       + 'OBSERVED (how long it waits before declaring a hang), never what gets built.' },
   { name: 'CLODE_UPDATE_CHANNEL', verdict: 'env-only',
-    because: 'CORRECTED (fix round 1): NOT the env twin of fetch\'s `[channel|version]` '
-      + "positional — that positional resolves through libexec/clode-update.cjs's OWN "
-      + 'resolveChannel (settings.json\'s autoUpdatesChannel > explicit arg > \'latest\'), '
-      + 'which never reads this variable. The only reader is a DIFFERENT resolveChannel in '
+    because: 'CORRECTED (fix round 2 — the prior correction itself misstated the '
+      + 'precedence): NOT the env twin of fetch\'s `[channel|version]` positional — that '
+      + "positional resolves through libexec/clode-update.cjs's OWN resolveChannel (an "
+      + 'explicit arg wins; else settings.json\'s autoUpdatesChannel; else \'latest\' — see '
+      + 'clode-update.cjs:124-129, comment and code agree), which never reads this '
+      + 'variable. The only reader is a DIFFERENT resolveChannel in '
       + 'libexec/target-update-check.cjs:17, whose header says it "Runs INSIDE a built '
       + 'target (quaude/naude) with NO clode builder present" — this is the shipped '
       + "product checking for its own update at RUNTIME, not an input to `clode build` or "
-      + "clode's fetch verb. Same situation as CLODE_RELEASES_URL two entries up, read in "
-      + 'that same file for that same runtime check: not a user-facing configuration '
-      + 'point.' },
+      + "clode's fetch verb. Same situation as CLODE_RELEASES_URL (own verdict entry in "
+      + 'this file, found by name rather than position): both are read by that same file '
+      + 'for that same runtime check, and neither is a user-facing configuration point.' },
   { name: 'CLODE_VERSION_DIR', verdict: 'absorbed',
     because: 'the second tier of resolveClaudeBin\'s precedence chain in '
       + 'libexec/clode-resolve.cjs, directly below the already-absorbed CLODE_CLAUDE_BIN '
       + '("CLODE_CLAUDE_BIN > CLODE_VERSION_DIR > provider current"): an explicit installed-'
-      + "version directory to extract from. Same KIND of candidate as its sibling — it "
-      + 'selects the build input — just not yet declared in cli-surface.cjs.' },
+      + 'version directory to extract from. Same KIND of candidate as its sibling — it '
+      + 'selects the build input — and declared beside it as a global env in '
+      + 'cli-surface.cjs by phase 3b task 2.' },
   { name: 'CLODE_WATCH_INTERVAL', verdict: 'env-only',
     because: 'CORRECTED (fix round 1): libexec/clode-watch.cjs:286-287 throttles how often '
       + 'a BACKGROUND update-notification check fires (default once a day) — it never '

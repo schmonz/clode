@@ -123,7 +123,12 @@ test('help advertises the builder surface and never mentions running Claude Code
   // (the runner they described no longer exists): no runner-framed prose survives.
   assert.doesNotMatch(stdout, /pass(es)? through|launch Claude Code \(|--self\b/i);
   assert.doesNotMatch(stdout, /clode update/, 'update is Phase 4 — do not promise it');
-  assert.doesNotMatch(stdout, /CLODE_ENGINE/, 'the retired engine selector must not be advertised');
+  // Word-boundary, not a bare substring: phase 3b task 2 absorbed CLODE_ENGINE_RECIPE (a
+  // real, currently-read build input, unrelated to the retired runner-engine selector this
+  // assertion guards against) onto the surface, and `_` is a word character — \b does not
+  // match between CLODE_ENGINE and _RECIPE, so this still fires only for the exact retired
+  // name.
+  assert.doesNotMatch(stdout, /\bCLODE_ENGINE\b/, 'the retired engine selector must not be advertised');
   assert.doesNotMatch(stdout, /runs? (the )?(latest )?Claude Code|under (a |the )?(host )?(Node|tjs)( runtime)?/i,
     'help must not frame clode as a runner');
   // Task 5: the verbs come from the table, so this cannot go stale when one is
