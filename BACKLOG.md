@@ -7060,3 +7060,49 @@ lines 38, 42, 46, 50, 70 and 82 are bare/unanchored matches of the same shape. N
 superstring sibling among today's absorbed names, so there is no live hole — but that is luck,
 not design, and the next absorbed name could supply the sibling. A sweep wants doing; it is not
 urgent, and it should fix the shape rather than the six lines.
+
+## `NATIVE_ONLY` now holds a transient entry in a list that documents itself as structural
+
+`test/doctor-cli-parity.test.cjs:55` reads:
+
+```js
+const NATIVE_ONLY = ['Organization policy'];
+const QUAUDE_ONLY = ['Invoked'];   // quaude names its VFS entry; native has no analogue
+```
+
+`QUAUDE_ONLY`'s comment states the contract both lists are under: a label
+belongs here when **one side has no analogue at all** — a structural fact about
+the two products that stays true across upstream bumps. `Invoked` qualifies:
+quaude names its VFS entry and native has nothing to name.
+
+`Organization policy` does not qualify, and phase 3b task 3 proved it doesn't
+with the discriminating measurement: the string appears 10x in native 2.1.270
+and **zero times in both 2.1.251 and 2.1.252**. So it is not a label quaude
+cannot emit — it is a label the PINNED bundle does not contain yet. The entry
+is version skew wearing a structural entry's clothes.
+
+**Why that matters, concretely:** the day `UPSTREAM_PIN` advances past the
+version that introduced the label, quaude starts emitting it too, the entry
+becomes dead, and the gate at `:142` (`!Q.has(k) && !NATIVE_ONLY.includes(k)`)
+keeps excusing it forever. If quaude later REGRESSES and stops emitting
+`Organization policy` — exactly the divergence this file exists to catch — the
+gate stays green. An allowlist entry in a fidelity comparison that outlives its
+reason is how a fidelity gate goes quiet without anyone deciding it should.
+
+**The wrong fix** is a new `NATIVE_ONLY` entry per upstream bump. That converts
+a structural list into an unbounded skew ledger and guarantees the failure
+above, once per label.
+
+**The right fix** is a version-skew gate on the file: the comparison already
+knows the pin, so a label present in native and absent from quaude should be
+checked against the pinned bundle's own text before it is excused. Present in
+the pinned bundle and missing from quaude's output = a real divergence, red.
+Absent from the pinned bundle = skew, excused **with the pin recorded**, so the
+excuse expires when the pin moves rather than when someone remembers. That
+makes the entry self-retiring and keeps `NATIVE_ONLY` meaning what its own
+comment says it means.
+
+Filed rather than fixed because it is a change to how the fidelity gate decides,
+not to phase 3b's subject. It belongs with whatever next touches
+`doctor-cli-parity.test.cjs`, and the measurement above is the evidence a future
+implementer needs so they don't have to re-derive it.
