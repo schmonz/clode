@@ -134,7 +134,9 @@ the store holds one Node per platform, which is what a naude cross-build needs.
 builds a standalone
 .Dq quaude
 binary on this machine (default
-.Pa ./quaude ) :
+.Pa ./quaude-<bundle-id> ,
+naming which upstream Claude Code bundle it embeds so two builds from two
+different bundles are never confused on disk) :
 the pinned txiki.js runtime plus the extracted Claude Code bundle compiled to
 quickjs bytecode, self-contained (no Node, no npm, no network at run time).
 The build verifies itself before reporting success \(em a canned offline

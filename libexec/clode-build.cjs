@@ -24,7 +24,7 @@
 //      canned Messages mock (no network, no key), then `quaude
 //      --clode-attest` — any failure exits nonzero and says why.
 //
-// Usage: clode build [--out PATH]        (default ./quaude)
+// Usage: clode build [--out PATH]        (default ./quaude-<bundle-id>)
 //        clode bootstrap [--out PATH] (default ./clode-native)
 // Env:   CLODE_TJS         — the tjs template binary (default <root>/build/tjs/tjs)
 //        CLODE_MAIN_BUNDLE — the esbuilt clode-main bundle for bootstrap (default:

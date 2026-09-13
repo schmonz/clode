@@ -158,4 +158,9 @@ test('resolveBuildOut: bundleVersion composes with the .exe suffix in the right 
   assert.strictEqual(
     resolveBuildOut({ out: null, target: 'windows-amd64', self: false, hostPlatform: 'linux', bundleVersion: '2.1.251' }),
     'quaude-2.1.251.exe');
+  // Coverage note from spec review, round 1: the NATIVE windows host case (no
+  // --target) is the same code path but was otherwise untested with bundleVersion set.
+  assert.strictEqual(
+    resolveBuildOut({ out: null, target: null, self: false, hostPlatform: 'win32', bundleVersion: '2.1.251' }),
+    'quaude-2.1.251.exe');
 });
