@@ -6565,3 +6565,108 @@ could do about Haiku today', NOT 'Haiku is fine'… Red means an action just bec
 box; `engine=unknown` in every suite stamp here), and shipping an unverifiable CI job that
 reports a comforting green is precisely the defect being fixed. It wants a runner to develop
 against, which makes it its own piece of work rather than a tail on this one.
+
+
+## PHASE 3 DECIDED — the surface, the vocabulary, and what is out (user, 2026-09-12)
+
+Spec: `docs/superpowers/specs/2026-09-12-phase3-one-entry-point-design.md` (gitignored by
+project convention, so the DECISIONS live here). Phase order is now
+**1 → 2 → 2.5 → 5 → 5b → 3 → 4 → 6**, and this is phase 3.
+
+### The surface
+
+    clode build [quaude | naude]          [--target P] [--out PATH]
+    clode fetch [claude | node]           [--target P]
+    clode read-anthropic-tea-leaves
+    clode --version | --help
+
+    node scripts/stage0.mjs bootstrap     [--target P] [--out PATH]   # checkout only
+
+`--target` means ONE thing in every line. `--naude` and `--self` are gone. Two classes, and
+every positional is drawn from exactly one: **products** (what clode builds) and
+**ingredients** (what clode fetches).
+
+### The vocabulary, and why each word
+
+- **`ingredient`** replaces the invented `provider`. NOT coined here:
+  `mavericks-shipyard/INGREDIENTS.md` already means exactly this class — "everything baked
+  into what shipyard ships … the things its scripts fetch on a consumer's behalf", one pin
+  and one bump story per row. The two repos now share a word instead of each keeping a
+  private one. The ingredients are `claude` (what quaude is built from) and `node` (the
+  pinned runtime naude additionally embeds).
+- **`blobulate`** replaces `fuse`, for BOTH products, and the reason is measured rather than
+  aesthetic: **`fuse` is Node SEA's word for a sentinel MARKER, not an operation.**
+  `scripts/build-naude.mjs:471` calls
+  `postject.inject(bin, 'NODE_SEA_BLOB', blob, { sentinelFuse: 'NODE_SEA_FUSE_fce680…' })`.
+  We promoted a flag's name to the name of the whole step, which is why it never explained
+  itself to anyone. The two products share no mechanism — postject INJECTS naude's blob,
+  quaude's is APPENDED as a canonical-LE trailer — so the general word has to cover both,
+  and what they genuinely share is that each produces a payload blob. It also greps clean,
+  which no English candidate does. Mechanism words stay true where used: inject/blob on the
+  naude path, append/trailer on the quaude path.
+- **`read-anthropic-tea-leaves`** replaces `watch` (and beat the vaguer `check`, which the
+  user rejected: "way vague"). The command greps a changelog for phrases like "requires the
+  native binary" and infers Anthropic's direction of travel — warn-only, never
+  authoritative, never downloads the ~240MB binary. `check` implies a yes/no answer from a
+  source of truth; this name states the actual epistemic status, and being a sentence among
+  terse verbs is a feature: it differs in kind.
+
+File renames: `libexec/clode-fuse.cjs` → `clode-build.cjs` (it orchestrates the build;
+blobulating is one step inside it), `libexec/quaude-fuse.js` → `quaude-blobulate.js` (this IS
+the blobulating worker, and its header is the canonical definition of the coined word),
+`.github/actions/cross-fuse/` → `cross-blobulate/`, four tests + one Dockerfile follow.
+
+### Bootstrap is not a product
+
+`clode-main.cjs` already said so: "`--self` fuses the BUILDER, not a Claude Code target … it
+is release bootstrap (CI legs, cross-fuse guests) rather than a user invocation", and it was
+dropped from the help for that reason. Every call site is the checkout's Node clode
+(`cross-fuse/action.yml:43`, `build-leg:935`, `build-leg:1008`, `release.yml:232`), and full
+cross builds are the checkout's clode plus a foreign-arch target engine template — never
+clode-builds-clode. So bootstrap is a verb on the CHECKOUT entry point only, the shipped
+binary's table does not carry it, and a shipped clode asked to bootstrap refuses with a
+reason. If phase 6's differential ever wants a builder built BY a builder, that is the line
+to revisit.
+
+### Policy
+
+- **Hard break.** Old spellings stop working the day the new ones land; the same commit
+  updates every in-repo caller. No aliases, no deprecation period — a translation layer
+  between two vocabularies is a fact stored in two places, the argument that killed the
+  fuse/build mapping.
+- **A removed spelling gets a generic usage message**, not a mapping to the new form. The
+  user's reasoning: with a tight enough vocabulary there are not enough choices to merit
+  more. Three verbs and four positionals is tight enough.
+- **Surface as DATA**: `libexec/cli-surface.cjs` holds one literal; help, dispatch and a
+  surface test all read it. Today's 213-line if-chain over `args[0]` with inline flag
+  sniffing is how `--target` acquired a second meaning without anyone deciding it should.
+
+### Env vars
+
+All 51 `CLODE_*` names read by shipped code get a verdict. **Absorbed** when the value
+changes WHAT GETS BUILT (target, product, output path, which ingredient); **env-only** when
+it changes how the build is OBSERVED or PLUMBED (test seams, CI wiring, cache/state roots);
+**dead** when its only caller is a test. Absorbed names land in the table, so there is one
+input surface rather than two. The rest ship with their verdict recorded.
+
+### MEASURED 2026-09-12, and it settles the built-binary rule
+
+    cold engine build (scripts/build-tjs.mjs)        60s
+    warm self-build, engine cached                   14s  -> 27.7MB builder, smoke passed
+    suite WITH an engine present      1955 tests / 1920 pass / 0 fail /  34 skipped
+    suite with NO engine              1955 tests / 1577 pass / 0 fail / 377 skipped
+
+The fast path the umbrella demanded already existed and simply was not being used; 14s
+amortised across 1955 tests is noise, so the suite can build the product once per run and
+exec it, with every exception named. The 343-test swing is its own finding: **a dev box
+without an engine hides a fifth of the suite, and nothing said so.**
+
+### Scope
+
+IN: the rename (first, no behaviour change), the CLI break, the env classification, the
+entry-point move (`bin/clode` → `scripts/stage0.mjs`; `bin/` holds a built binary or
+nothing) with tests driving the built product, and one target building both products (the
+oracle becomes a product, artifact names carry the bundle version).
+
+OUT, each its own piece: the naude/quaude parity audit, and release as a declared step list
+(which wanted to reuse whatever this CLI became, and now can).
