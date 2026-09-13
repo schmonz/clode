@@ -6823,3 +6823,60 @@ Same defect class as two others this project has now hit: the phase-5b `no-fuse`
 the word inside its OWN header, and `test/merge-step.test.cjs` (phase 2) asserting against text
 that matched inside its own file's header comment. A scanner that cannot tell code from prose
 about code will keep finding itself.
+
+
+## The env-var population is 65, not 51 — and it is not ONE population (measured 2026-09-13)
+
+Phase 3b inherits "51 `CLODE_*` names are read by shipped code, 0 documented, against 4 flags"
+from the 2026-08-25 entry, and the phase-3 spec repeats it. **Re-measured before designing
+anything on top of it, and both halves of that sentence have moved.**
+
+**What a single-pass index over `libexec/`, `scripts/` and `test/` actually finds** (matching
+real environment READS — `env.X`, `process.env.X`, `env['X']` — not every `CLODE_*` token,
+which would also sweep in esbuild defines like `__CLODE_BUNDLE_VERSION__`):
+
+    65   names read as env by SHIPPED code      (the "51" is stale by 14)
+    29   more read as env only under test/
+    55   of the 65 are read by exactly ONE shipped file
+    141  distinct CLODE_* tokens overall, if you count build-time defines too
+
+And the "0 documented" half is already false as of phase 3a: nine names are now declared in
+`libexec/cli-surface.cjs` and rendered into `--help`.
+
+**The structural finding, which matters more than the count: these are at least four
+populations, and one of them is not phase 3b's business at all.**
+
+    20  scripts/build-tjs.mjs      ENGINE-BUILD KNOBS — CLODE_TJS_* plus CLODE_COSMOCC
+    11  libexec/clode-build.cjs    build inputs proper
+     7  libexec/clode-paths.cjs    store/path plumbing
+     4  libexec/clode-watch.cjs    the tea-leaves reader
+     4  libexec/clode-update.cjs   ingredient fetch
+     3  libexec/bun-shim.cjs       applet resolution
+     3  libexec/node-shim/loader.cjs  shim diagnostics
+
+- **Engine-build knobs (~20)** — `CLODE_TJS_STATIC`, `_WASM`, `_FFI`, `_MIMALLOC`,
+  `_MACOS_SDK`, `_CROSS_FILE`, `CLODE_COSMOCC`… all read by `scripts/build-tjs.mjs` alone.
+  The umbrella gives the engine build to **phase 4** (cmake owns that graph). Absorbing these
+  into `clode build`'s flag surface would be actively wrong: `clode build` requires no
+  compiler and no cmake, and these names exist for the build that does. They want cmake
+  options or a recipe file, not CLI flags.
+- **Build inputs proper (~11)** — `CLODE_TARGET_TEMPLATE`, `CLODE_ENGINE_RECIPE`,
+  `CLODE_MAIN_BUNDLE`, `CLODE_RELEASE_BASE`, `CLODE_TEMPLATES_*`, `CLODE_ALLOW_FOREIGN_CARVE`.
+  These change WHAT GETS BUILT and are the real candidates for the spec's "absorbed" verdict.
+- **Store/path plumbing (~7)** — `CLODE_STATE_ROOT`, `CLODE_PROVIDERS`, `CLODE_NODES`,
+  `CLODE_CACHE`, `CLODE_DEPS`, `CLODE_LIBEXEC`. These relocate state roots so tests and CI can
+  run hermetically; they change how the build is PLUMBED, not what it produces. Env-only by
+  the spec's own test, and making them flags would be a regression — a test harness cannot
+  pass a flag through three layers of spawn as easily as it can set an environment.
+- **Diagnostics (~6)** — `CLODE_SHIM_PROBE`, `_TRACE`, `_DEBUG`, `_HANDLE_DUMP`, `CLODE_PROBE`,
+  `CLODE_RG_DEBUG`. Env-only; nobody wants `--shim-handle-dump` in `--help`.
+
+**So phase 3b's env work is smaller than it looks and differently shaped:** roughly eleven
+genuine absorption candidates, about twenty names that belong to phase 4's cmake conversation,
+and the rest env-only with a written reason. The spec's instruction to "classify all 51" should
+become "classify all 65, and route the engine cluster to phase 4 rather than the CLI."
+
+**Method, so the next person can redo it rather than trust it:** one Node pass walking the
+three trees, matching the env-read shapes above, inverting the index name→files. Counting raw
+`CLODE_*` tokens instead gives 141 and is the wrong number — it includes build-time defines
+that are not environment variables at all.
