@@ -78,7 +78,7 @@ function run(opts) {
 // The USER runtime must never shell npm. When deps aren't already present it
 // fails loud (use the fused binary / `clode build` / a managed CLODE_DEPS),
 // instead of the old auto-install. `install` defaults to true so the build/CI
-// caller (clode-fuse gathering deps to embed) is unchanged.
+// caller (clode-build gathering deps to embed) is unchanged.
 test('install:false (runtime) never shells npm — fails loud, installs nothing', () => {
   const { here, libexec, deps } = makePkg();
   const log = { calls: [] };

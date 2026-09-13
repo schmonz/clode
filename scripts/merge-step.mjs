@@ -2,7 +2,7 @@
 // "a build COMPONENT declares its own steps and reports events; an ORCHESTRATOR composes
 // them without knowing what the steps are"). This is the merge, and nothing else: the
 // worker that spawns it (libexec/quaude-fuse.js) does not know how it merges, only that
-// it does — the same relationship quaude-fuse.js itself has with clode-fuse.cjs (its own
+// it does — the same relationship quaude-fuse.js itself has with clode-build.cjs (its own
 // argv contract is the style this one follows, quaude-fuse.js:7-21).
 //
 // Usage (spawned by quaude-fuse.js, not by hand — though it is ALSO meant to be run by
@@ -26,8 +26,8 @@
 //
 // Emits the `merge` step (plan/start/finish) through libexec/build-report.cjs on stdout,
 // MARK-prefixed — quaude-fuse.js spawns this with stdout/stderr INHERITED, so these lines
-// land directly in the same stream clode-fuse.cjs already ingests at the spawn seam
-// (libexec/clode-fuse.cjs:889); there is no relay code on either side, only a shared fd.
+// land directly in the same stream clode-build.cjs already ingests at the spawn seam
+// (libexec/clode-build.cjs:889); there is no relay code on either side, only a shared fd.
 //
 // Same posture as libexec/graph-meta.js (the sibling extraction that answers moduleMeta
 // for the NODE-hosted half of this same merge): a bare tjs script, no module resolver,

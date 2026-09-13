@@ -115,7 +115,7 @@ function currentProvider(env) {
 // Under a fused native clode it is the clode binary itself — there is no node on the box,
 // that being the entire point of that artifact. Spawning it fails, the catch below
 // swallowed the failure, runSignals returned '' and HIGH update signals silently became
-// high=0. The identical trap is documented at libexec/clode-fuse.cjs:294, where it "broke
+// high=0. The identical trap is documented at libexec/clode-build.cjs:294, where it "broke
 // EVERY `clode build` under clode-native while CI stayed green".
 //
 // Measured 2026-08-25: test/clode-watch.test.cjs is 23/25 on the engine and 25/25 with

@@ -12,7 +12,7 @@
 // In both cases `...process.env` alone silently falls through to the real
 // HOME/XDG state dir -- clode-paths.cjs's own documented precedence is
 // CLODE_STATE_ROOT > XDG_* > HOME -- and a `clode build` that reaches
-// clodeBuild's finally (libexec/clode-fuse.cjs) appends a real line to
+// clodeBuild's finally (libexec/clode-build.cjs) appends a real line to
 // <clodeDataDir>/build-trace.jsonl, plus re-acquires a dependency on the real
 // deps store, provider store and cache that a private root would otherwise cut.
 //

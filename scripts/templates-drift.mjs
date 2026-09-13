@@ -9,7 +9,7 @@
 // two independent mechanisms make that invisible:
 //
 //   * `clode build --target X` fetches the pack from a URL keyed on VERSION
-//     (libexec/clode-fuse.cjs releaseBaseUrl), and VERSION only moves at a
+//     (libexec/clode-build.cjs releaseBaseUrl), and VERSION only moves at a
 //     release cut. Build clode from HEAD and it downloads the newest TAG's
 //     engines while carrying HEAD's node-shim.
 //   * The one gate on reuse (libexec/clode-templates.cjs obtainEngine) compares

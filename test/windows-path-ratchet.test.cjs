@@ -30,7 +30,7 @@
 // MIGRATED 2026-09-04 (phase 5, task 9), because `stripComments()` was a regex
 // (`/\*[\s\S]*?\*\//g` for block comments) applied to the WHOLE FILE with no idea
 // that a `/*` or `*/` can appear as literal TEXT inside a string, template literal,
-// or regex literal. build-tjs.mjs, clode-fuse.cjs and others inject C/JS source
+// or regex literal. build-tjs.mjs, clode-build.cjs and others inject C/JS source
 // through template literals that contain those characters for real (they are
 // comments in the INJECTED language, not in the JS that holds them), and the
 // non-greedy regex paired an opening `/*` inside one literal with the next `*/`
@@ -159,7 +159,7 @@ const RULES = {
 // comment — code, and string/template/regex BODIES — passes through completely
 // unchanged (never blanked): a template literal injecting C or JS source is
 // exactly where the sites this file hunts for were hiding (build-tjs.mjs,
-// clode-fuse.cjs), so their content must stay visible to the RULES below, not
+// clode-build.cjs), so their content must stay visible to the RULES below, not
 // be swallowed as if it were a comment.
 //
 // Regex-vs-division is undecidable in general without a real parser; this uses

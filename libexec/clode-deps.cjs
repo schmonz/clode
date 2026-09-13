@@ -105,7 +105,7 @@ function ensureDeps(opts = {}) {
     spawn = spawnSync,
     // install=false is the USER RUNTIME contract (retire-node-runtime D2): never
     // shell npm — a real user runs the fused binary (deps embedded) or a managed
-    // CLODE_DEPS. Only the build/CI caller (clode-fuse gathering deps to embed)
+    // CLODE_DEPS. Only the build/CI caller (clode-build gathering deps to embed)
     // leaves it true. Default true preserves the existing build behavior.
     install = true,
   } = opts;
@@ -133,7 +133,7 @@ function ensureDeps(opts = {}) {
 
   // deps/claude/node_modules already installed beside this checkout (a dev ran
   // `npm install --prefix deps/claude`, or CI already did it) -> nothing to
-  // install here; clode-fuse.cjs's nmDir resolution finds it directly. This
+  // install here; clode-build.cjs's nmDir resolution finds it directly. This
   // used to check $HERE/../node_modules (the REPO ROOT's own node_modules,
   // from `npm install -g .`) — that was the exact conflation this whole
   // restructuring removes: a root-level node_modules was never "clode's own"

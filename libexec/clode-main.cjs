@@ -16,7 +16,7 @@
 //                                  upstream drift is checked (see step 7's note)
 //   7. watch                    -> clodeWatch(manual), exit 0
 //   8. anything else            -> usage error, exit 2 (clode BUILDS targets; it
-//                                  never runs Claude Code itself — see clode-fuse.cjs
+//                                  never runs Claude Code itself — see clode-build.cjs
 //                                  / naude-entry.cjs for what DOES run it)
 //
 // Pure Node stdlib + sibling .cjs requires (the sub-modules pull the ext-deps).
@@ -143,7 +143,7 @@ async function main(argv, opts = {}) {
   //     (builder namespace, not passthrough — Claude Code never sees it).
   if (first === 'build') {
     const buildArgs = args.slice(1);
-    const fuse = require('./clode-fuse.cjs');
+    const fuse = require('./clode-build.cjs');
     // Validate argv BEFORE anything else in this branch: a build that is
     // going to be REJECTED must not phone home or touch the cache. (Regression
     // fixed here: `clode build <bad-arg>` used to fire the watch trigger below

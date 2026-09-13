@@ -58,7 +58,7 @@ const EXCLUDE_DIRS = [
   // The node-shim loader + modules + internal tree: archive members baked
   // into a fused quaude, the RUNTIME environment the built binary boots
   // into. clode's own node-side (this-file's) code never require()s these —
-  // clode-fuse.cjs passes this directory's PATH to the fuse worker
+  // clode-build.cjs passes this directory's PATH to the fuse worker
   // subprocess, it never loads the files in-process.
   path.join(REPO, 'libexec', 'node-shim'),
 ];

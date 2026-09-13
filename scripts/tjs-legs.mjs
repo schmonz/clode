@@ -164,7 +164,7 @@ const LEGS = [
     // hardware"): on a real Mavericks 10.9.5 box (Darwin 13.4.0, x86_64) the
     // builder fetched the provider over mbedtls TLS and fused a 29MB quaude
     // ON-BOX (bundle 2.1.179), PONG + attest green, quaude answers --version.
-    // `PONG` in libexec/clode-fuse.cjs is exactly RECIPE G7 (`-p 'say PONG'`
+    // `PONG` in libexec/clode-build.cjs is exactly RECIPE G7 (`-p 'say PONG'`
     // against a mock, exit 0 + response matched + POST verified) — real, not
     // asserted, evidence. That equivalence is now WRITTEN DOWN and applied to
     // every leg that executes the smoke on its own target (RESULTS.md, "What

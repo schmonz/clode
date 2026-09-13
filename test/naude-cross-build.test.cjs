@@ -8,7 +8,7 @@
 // (`arch -x86_64 <naude> --version` prints Claude Code's own version).
 //
 // This CODIFIES a pipeline already proven by hand across Tasks 1-4 (target-node
-// fetch/store, the two-node blobgen/embed split, clode-fuse's naude+--target
+// fetch/store, the two-node blobgen/embed split, clode-build's naude+--target
 // wiring, attest-only output naming): it does not re-derive that the pipeline
 // works, it makes the proof repeatable and gated.
 //
@@ -82,7 +82,7 @@ test('clode build --naude --target macos-amd64: cross-built naude boots under Ro
   if (SKIP) { t.skip(SKIP); return; }
 
   const out = path.join(DIR, 'naude-macos-amd64');
-  // clode-fuse's own internal build-naude spawn timeout is 600000ms * SCALE
+  // clode-build's own internal build-naude spawn timeout is 600000ms * SCALE
   // (CLODE_TIMEOUT_SCALE) — the deps.tar step is the slow part on this NFS
   // tree, so scale it up generously here; the OUTER spawnSync timeout below
   // must stay comfortably above the scaled inner one, or we'd kill the build

@@ -6,7 +6,7 @@
 // oracle apparatus went dead: five CI jobs, including the agentic round-trips, the shim
 // parity gate, and the tjs-vs-node extractor differential. The build path was verified by
 // the very thing it had broken. Nothing declared that build-naude consumes an extracted
-// cli.cjs — it was an argv at clode-fuse.cjs:1080 and a runtime path check — so only CI
+// cli.cjs — it was an argv at clode-build.cjs:1080 and a runtime path check — so only CI
 // could notice, hours later.
 //
 // WHY THESE TESTS AND NOT "IT RAN ONCE". Getting the runner working took four distinct

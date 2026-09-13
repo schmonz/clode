@@ -76,7 +76,7 @@ const CHECKS = [
   ['loaderSrc2', /process\.env\.NODE_PATH \|\| ''\)\.split\(':'\)/, 'notMatch', 'loader must not hardcode POSIX-only NODE_PATH splitting'],
   ['fsSrc', /split\(\/\[\\\\\/\]\/\)/, 'match', 'fs.mkdirSync recursive walk is separator-aware'],
   ['fsSrc', /path\.resolve\(p\)\.split\('\/'\)/, 'notMatch', 'fs.mkdirSync must not hardcode a POSIX-only split'],
-  ['fuseSrc', /template-tjs\.exe/, 'match', 'clode-fuse: the materialized template is named .exe on win32'],
+  ['fuseSrc', /template-tjs\.exe/, 'match', 'clode-build: the materialized template is named .exe on win32'],
   ['buildTjsSrc', /CLODE_TJS_WIN_MINGW/, 'match', 'build-tjs: CLODE_TJS_WIN_MINGW selects mingw'],
   ['buildTjsSrc', /-G['"]?,?\s*['"]Ninja['"]/, 'match', 'build-tjs: mingw path selects Ninja'],
   ['buildTjsSrc', /CMAKE_C_COMPILER=gcc/, 'match', 'build-tjs: mingw path selects gcc'],
@@ -118,7 +118,7 @@ const guard = defineGuard({
       urlSrc: fs.readFileSync(path.join(__dirname, '..', 'libexec/node-shim/modules/url.cjs'), 'utf8'),
       loaderSrc2: fs.readFileSync(path.join(__dirname, '..', 'libexec/node-shim/loader.cjs'), 'utf8'),
       fsSrc: fs.readFileSync(path.join(__dirname, '..', 'libexec/node-shim/modules/fs.cjs'), 'utf8'),
-      fuseSrc: fs.readFileSync(path.join(__dirname, '..', 'libexec/clode-fuse.cjs'), 'utf8'),
+      fuseSrc: fs.readFileSync(path.join(__dirname, '..', 'libexec/clode-build.cjs'), 'utf8'),
       buildTjsSrc: fs.readFileSync(path.join(__dirname, '..', 'scripts/build-tjs.mjs'), 'utf8'),
     },
   }),
@@ -140,9 +140,9 @@ const guard = defineGuard({
 });
 guardTests(guard);
 
-const { resolveBuildOut } = require(path.join(__dirname, '..', 'libexec/clode-fuse.cjs'));
+const { resolveBuildOut } = require(path.join(__dirname, '..', 'libexec/clode-build.cjs'));
 
-test('clode-fuse: a windows target output ends in .exe (default and explicit --out)', () => {
+test('clode-build: a windows target output ends in .exe (default and explicit --out)', () => {
   // Behavioral (was a source-grep for the old inline `win32 ? '.exe'`): the .exe
   // now follows the TARGET, and an explicit --out gains it too.
   assert.strictEqual(resolveBuildOut({ out: null, target: 'windows-amd64', self: false, hostPlatform: 'linux' }), 'quaude.exe');

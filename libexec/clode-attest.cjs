@@ -10,7 +10,7 @@
 //
 //   * `--clode-attest` is the flag on BOTH products, named for the BUILDER (the thing that
 //     made the guarantee), not for either product.
-//   * ATTEST_VERIFIED is the ONE line a build gate greps. libexec/clode-fuse.cjs imports
+//   * ATTEST_VERIFIED is the ONE line a build gate greps. libexec/clode-build.cjs imports
 //     this constant rather than spelling it again — a gate whose string can drift from the
 //     product that prints it is a gate that silently stops gating, and this repo has paid
 //     for that failure mode more than once.

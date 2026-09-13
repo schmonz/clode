@@ -55,7 +55,7 @@ function stageMainBundle(dir) {
       define: { __CLODE_BUNDLE_VERSION__: JSON.stringify(VERSION) },
       outfile: out,
     });
-    // Sibling naude-entry bundle (Task 4): clode-fuse.cjs's --self staging
+    // Sibling naude-entry bundle (Task 4): clode-build.cjs's --self staging
     // now copies it from alongside clode-main.bundle.cjs, so a fresh esbuild
     // here must produce both, mirroring scripts/build-clode-main.mjs.
     esbuild.buildSync({
@@ -66,7 +66,7 @@ function stageMainBundle(dir) {
     return out;
   } catch { /* toolchain not installed on this host */ }
   // Fallback: newest already-esbuilt build/*/clode-main.bundle.cjs (generic
-  // scan — same rationale as clode-fuse.cjs's CLODE_MAIN_BUNDLE default).
+  // scan — same rationale as clode-build.cjs's CLODE_MAIN_BUNDLE default).
   // Its sibling naude-entry.bundle.cjs lives in the same tag dir (both are
   // produced by the same build-clode-main.mjs run), so no copy is needed here.
   let tags = [];

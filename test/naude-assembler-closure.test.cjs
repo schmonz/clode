@@ -1,7 +1,7 @@
 'use strict';
 // The naude ASSEMBLER runs as loose scripts under a fetched node inside a fused
 // clode-native (NO scripts/ dir of its own) — libexec/quaude-fuse.js carries an
-// explicit list of `scripts/*` members and clode-fuse materializes them. If a staged
+// explicit list of `scripts/*` members and clode-build materializes them. If a staged
 // script gains a repo-local sibling require that ISN'T in that list, the miss is
 // INVISIBLE to a dev-checkout build (the file is right there on disk) and only
 // explodes under clode-native as "Cannot find module './X.cjs'" — the node-shim

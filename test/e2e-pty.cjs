@@ -15,7 +15,7 @@ const TUI_SCREEN = path.join(REPO, 'test', 'tui-screen.cjs');
 // ENOEXEC, and only a shell's ENOEXEC fallback runs it. node's spawn/node-pty
 // do NOT do that fallback, so any harness that spawns a built quaude directly
 // (version checks, PTY capture) would fail on cosmo. Detect the MZ magic and run
-// it the way clode-fuse's isApeFile path does: `/bin/sh -c '"$@"' sh <ape> …`.
+// it the way clode-build's isApeFile path does: `/bin/sh -c '"$@"' sh <ape> …`.
 // Non-APE binaries (native Claude, naude SEA, native-tjs quaude) are unchanged.
 function isApeFile(bin) {
   try {

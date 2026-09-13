@@ -1,5 +1,5 @@
 'use strict';
-// Unit tests for the `clode build` subcommand surface (libexec/clode-fuse.cjs
+// Unit tests for the `clode build` subcommand surface (libexec/clode-build.cjs
 // + the clode-main dispatch). Cheap paths only — no tjs, no provider, no fuse:
 // argv validation, template/provider fail-loud ordering, help text. The real
 // fuse (compile + assemble + smoke) is exercised end-to-end in
@@ -28,13 +28,13 @@ const NODE = process.execPath;
 // build (Task 5) to a path that resolves off HOME/XDG when nothing overrides
 // it. stateRoot() respects test/run.mjs's central root when this file runs
 // under the whole suite, and otherwise mints a private one per call -- needed
-// for a standalone `node --test test/clode-fuse.test.cjs` run (proven live:
+// for a standalone `node --test test/clode-build.test.cjs` run (proven live:
 // 21/21 pass while still writing 4 lines into the real
 // ~/.local/share/clode/build-trace.jsonl without this). A test that wants its
 // OWN state root passes CLODE_STATE_ROOT via extraEnv, which still wins
 // (Object.assign, later key wins).
 function runEntry(args, extraEnv) {
-  const watchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-fuse-test-watch-'));
+  const watchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-test-watch-'));
   return spawnSync(NODE, [ENTRY, ...args], {
     encoding: 'utf8',
     env: Object.assign({}, process.env,
@@ -62,7 +62,7 @@ test('clode build: unknown argument fails loudly before any work', () => {
 // a detached network check and writing <cache>/clode/last-watch — BEFORE argv
 // validation ever ran, so a build that was about to be REJECTED phoned home and
 // mutated the user's cache anyway (the "before any work" contract the test
-// above pins by name). clode-main.cjs now calls clode-fuse's parseBuildArgs and
+// above pins by name). clode-main.cjs now calls clode-build's parseBuildArgs and
 // gates the watch trigger on it succeeding FIRST. This test asserts the
 // watch dir stays untouched — no last-watch, and the dir itself never gets
 // created — when the build is invalid.
@@ -256,21 +256,21 @@ function scriptSpawn(handler) {
 }
 
 test('codesignAdHoc: non-darwin is a no-op (no spawn at all)', () => {
-  const { codesignAdHoc } = require('../libexec/clode-fuse.cjs');
+  const { codesignAdHoc } = require('../libexec/clode-build.cjs');
   const sp = scriptSpawn(() => { throw new Error('should not spawn'); });
   assert.deepStrictEqual(codesignAdHoc('/t', { platform: 'linux', spawnSync: sp }), { ok: true });
   assert.strictEqual(sp.calls.length, 0);
 });
 
 test('codesignAdHoc: one-shot when codesign succeeds (no lipo, universal preserved)', () => {
-  const { codesignAdHoc } = require('../libexec/clode-fuse.cjs');
+  const { codesignAdHoc } = require('../libexec/clode-build.cjs');
   const sp = scriptSpawn((cmd) => (cmd === 'codesign' ? { status: 0 } : { status: 1 }));
   assert.deepStrictEqual(codesignAdHoc('/t', { platform: 'darwin', arch: 'arm64', spawnSync: sp }), { ok: true });
   assert.deepStrictEqual(sp.calls, ['codesign -s - --force /t']);
 });
 
 test('codesignAdHoc: fat-template sign failure thins IN PLACE to host arch and retries (Mavericks)', () => {
-  const { codesignAdHoc } = require('../libexec/clode-fuse.cjs');
+  const { codesignAdHoc } = require('../libexec/clode-build.cjs');
   let signs = 0;
   const sp = scriptSpawn((cmd) => {
     if (cmd === 'codesign') { signs += 1; return signs === 1 ? { status: 1, stderr: 'malformed object (unknown load command 5)' } : { status: 0 }; }
@@ -288,7 +288,7 @@ test('codesignAdHoc: fat-template sign failure thins IN PLACE to host arch and r
 });
 
 test('codesignAdHoc: sign fails and thin fails (single-arch / no host slice) — stays failed, no false success', () => {
-  const { codesignAdHoc } = require('../libexec/clode-fuse.cjs');
+  const { codesignAdHoc } = require('../libexec/clode-build.cjs');
   let signs = 0;
   const sp = scriptSpawn((cmd) => {
     if (cmd === 'codesign') { signs += 1; return { status: 1, stderr: 'boom' }; }
@@ -303,7 +303,7 @@ test('codesignAdHoc: sign fails and thin fails (single-arch / no host slice) —
 });
 
 test('codesignAdHoc: no codesign on the box (pre-10.5 Darwin/Tiger) is a no-op success', () => {
-  const { codesignAdHoc } = require('../libexec/clode-fuse.cjs');
+  const { codesignAdHoc } = require('../libexec/clode-build.cjs');
   // spawnSync of a missing binary: ENOENT error, null status, no stderr.
   const sp = scriptSpawn(() => ({ error: { code: 'ENOENT' }, status: null }));
   const logged = [];
@@ -318,7 +318,7 @@ test('codesignAdHoc: no codesign on the box (pre-10.5 Darwin/Tiger) is a no-op s
 // not a 4-arch one. The BUILDER (--self) is exempt (must stay fat to run on any
 // Mac). Injected spawnSync drives each path.
 test('thinToHostSlice: fat template thins in place to the host slice (x64 -> x86_64)', () => {
-  const { thinToHostSlice } = require('../libexec/clode-fuse.cjs');
+  const { thinToHostSlice } = require('../libexec/clode-build.cjs');
   const sp = scriptSpawn(() => ({ status: 0 })); // fat + has the slice -> thin succeeds
   const r = thinToHostSlice('/tmp/tjs', { arch: 'x64', spawnSync: sp });
   assert.deepStrictEqual(r, { thinned: true, slice: 'x86_64' });
@@ -327,7 +327,7 @@ test('thinToHostSlice: fat template thins in place to the host slice (x64 -> x86
 });
 
 test('thinToHostSlice: arm64 maps straight through (no x86_64 rename)', () => {
-  const { thinToHostSlice } = require('../libexec/clode-fuse.cjs');
+  const { thinToHostSlice } = require('../libexec/clode-build.cjs');
   const sp = scriptSpawn(() => ({ status: 0 }));
   const r = thinToHostSlice('/tmp/tjs', { arch: 'arm64', spawnSync: sp });
   assert.deepStrictEqual(r, { thinned: true, slice: 'arm64' });
@@ -335,7 +335,7 @@ test('thinToHostSlice: arm64 maps straight through (no x86_64 rename)', () => {
 });
 
 test('thinToHostSlice: already-thin template is a harmless no-op (thinned:false)', () => {
-  const { thinToHostSlice } = require('../libexec/clode-fuse.cjs');
+  const { thinToHostSlice } = require('../libexec/clode-build.cjs');
   const sp = scriptSpawn(() => ({ status: 1, stderr: 'must be a fat file' }));
   const r = thinToHostSlice('/tmp/tjs', { arch: 'arm64', spawnSync: sp });
   assert.strictEqual(r.thinned, false);
@@ -350,7 +350,7 @@ test('thinToHostSlice: already-thin template is a harmless no-op (thinned:false)
 // exited cleanly while printing nothing (2026-07-17). This pins the three verdicts
 // so no failure path can go back to printing a bare number.
 test('describeExit: says timed out / killed / exited, never a bare misleading number', () => {
-  const { describeExit } = require('../libexec/clode-fuse.cjs');
+  const { describeExit } = require('../libexec/clode-build.cjs');
   // The one that mattered: OUR timeout fired, so say so, with the budget it blew.
   assert.match(describeExit({ timedOut: true, timeoutMs: 1200000, status: null, signal: 'SIGKILL' }),
     /TIMED OUT after 1200s and was SIGKILLed/);
@@ -368,7 +368,7 @@ test('timeoutScale: default 1, integer >= 1 honored, junk rejected', () => {
   // TCG-emulated guests run 10-20x slower than metal; CI's VM legs scale
   // every build-pipeline hang guard via CLODE_TIMEOUT_SCALE (dispatch #14:
   // the 5-min fuse-worker guard killed a healthy freebsd-arm64 compile).
-  const { timeoutScale } = require('../libexec/clode-fuse.cjs');
+  const { timeoutScale } = require('../libexec/clode-build.cjs');
   assert.strictEqual(timeoutScale({}), 1);
   assert.strictEqual(timeoutScale(undefined), 1);
   assert.strictEqual(timeoutScale({ CLODE_TIMEOUT_SCALE: '10' }), 10);

@@ -21,7 +21,7 @@ run-target at once, not decided per row.
    code executed on that run-target's OS+arch. Cite the source (commit, spike
    write-up, or workflow run id) in the note.
 2. **`clode build`'s own build-pipeline smoke — for row G7, and only G7.**
-   `smokeTarget()` in `libexec/clode-fuse.cjs` starts an in-process canned
+   `smokeTarget()` in `libexec/clode-build.cjs` starts an in-process canned
    Messages mock, runs the freshly fused quaude as `<bin> -p 'say PONG'` with
    `NODE_PATH` stripped, and requires **exit 0** *and* `PONG` in stdout *and* a
    POST that actually landed on `.../messages`. Compare RECIPE G7: "one agentic

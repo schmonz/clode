@@ -67,7 +67,7 @@ inputs:
     required: false
     default: ""
   cosmo:
-    description: "'true': the Cosmopolitan APE leg. build-tjs.mjs's CLODE_TJS_TARGET=cosmo self-provisions cosmocc, forces the lean profile, applies patches/libuv-cosmo.patch + patches/libtjs-cosmo.patch, and builds the tjs-cli APE via scripts/cosmo.toolchain.cmake. Runs the normal native (exec=host) source+build+fuse+smoke path — the fat APE execs on the ubuntu runner via clode-fuse's isApeFile /bin/sh route. The SAME .com is then exercised on other-OS runners downstream (the multi-OS fan-out)."
+    description: "'true': the Cosmopolitan APE leg. build-tjs.mjs's CLODE_TJS_TARGET=cosmo self-provisions cosmocc, forces the lean profile, applies patches/libuv-cosmo.patch + patches/libtjs-cosmo.patch, and builds the tjs-cli APE via scripts/cosmo.toolchain.cmake. Runs the normal native (exec=host) source+build+fuse+smoke path — the fat APE execs on the ubuntu runner via clode-build's isApeFile /bin/sh route. The SAME .com is then exercised on other-OS runners downstream (the multi-OS fan-out)."
     required: false
     default: "false"
   atomic-shim:

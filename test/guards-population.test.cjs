@@ -274,7 +274,7 @@ test('isRecordedCliQuoteScanExclusion throws on an exclusion with an empty `beca
 // FIX ROUND 1 (coordinator review, task-11, 2026-09-05): walks discoverCliQuoteScanFiles()
 // — test/*.test.cjs AND every libexec/**/*.cjs,*.mjs + scripts/**/*.cjs,*.mjs — not
 // discoverTestFiles(TEST_DIR) alone. This task's OWN defect lived in
-// libexec/clode-fuse.cjs, a file the narrower test-only walk could never have reached;
+// libexec/clode-build.cjs, a file the narrower test-only walk could never have reached;
 // fed the PRE-FIX file to this exact classifier and confirmed it fires (see the
 // "a synthetic offender" tests above, plus task-11-report.md's fix-round-1 section for
 // the real pre-fix file's finding).
@@ -479,7 +479,7 @@ test('every module a build-gates guard names actually exists', () => {
 // goes red here and a human says which it was.
 test('the controlled set is EXACTLY the four modules phase 5b put a control under', () => {
   assert.deepStrictEqual([...controlledProductionModules().keys()].sort(), [
-    path.join('libexec', 'clode-fuse.cjs'),
+    path.join('libexec', 'clode-build.cjs'),
     path.join('libexec', 'host-provision.cjs'),
     path.join('libexec', 'scc-merge.cjs'),
     path.join('libexec', 'target-update-check.cjs'),
@@ -537,7 +537,7 @@ test('GATE_REFUSES: a ternary and a named-variable exit status are refusals', ()
 });
 
 // FIX ROUND 1 (reviewer) — the extension-shaped hole. libexec/quaude-fuse.js (spawned by
-// libexec/clode-fuse.cjs) and libexec/graph-meta.js (spawned by libexec/clode-extract.cjs) are
+// libexec/clode-build.cjs) and libexec/graph-meta.js (spawned by libexec/clode-extract.cjs) are
 // real build-path files that landed in NO bucket: not gate-shaped, not excluded, not counted.
 // Neither is gate-shaped today, which is precisely why the hole was invisible.
 test('the production walk covers .js as well as .cjs and .mjs', () => {

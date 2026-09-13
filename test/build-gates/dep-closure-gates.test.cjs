@@ -1,5 +1,5 @@
 'use strict';
-// PHASE 5B, TASK 2. The dep-closure family (libexec/clode-fuse.cjs) is where phase 5's
+// PHASE 5B, TASK 2. The dep-closure family (libexec/clode-build.cjs) is where phase 5's
 // worst defect lived — a gate that decides whether `clode build` embeds every package
 // Claude Code's bundle actually references, wrong TWICE: once on escaping (a bare `["']`
 // class scanned the escaped `cli.cjs` graph-runner text and produced a set nearly
@@ -22,7 +22,7 @@ const path = require('node:path');
 const {
   scanBareSpecifiers, assertNoUnknownBareSpecifiers, assertClosureMatchesLockfile,
   computeDepClosure, readDirectDeps,
-} = require('../../libexec/clode-fuse.cjs');
+} = require('../../libexec/clode-build.cjs');
 const { defineGuard, guardTests, checkGate, BROKEN } = require('../guard.cjs');
 const { throwsAsFindings } = require('../throws-as-findings.cjs');
 const { pinnedVersion } = require('../provider-resolve.cjs');
@@ -32,6 +32,18 @@ const LIBEXEC = path.join(REPO, 'libexec');
 const NM = path.join(REPO, 'deps', 'claude', 'node_modules');
 const PKG_JSON = path.join(REPO, 'deps', 'claude', 'package.json');
 const LOCKFILE = path.join(REPO, 'deps', 'claude', 'package-lock.json');
+
+// The sweep in test/guards-population.cjs reads THIS literal to decide the dep-closure
+// gate is controlled. If the production file is renamed and this string is not, the gate
+// silently becomes UNCONTROLLED: UNCONTROLLED_GATE_BASELINE rises and the suite goes red
+// for something that reads like a regression rather than a rename.
+test('this guard names its production module by a literal that still exists', () => {
+  const src = fs.readFileSync(__filename, 'utf8');
+  const m = /require\('(\.\.\/\.\.\/libexec\/[a-z0-9-]+\.cjs)'\)/.exec(src);
+  assert.ok(m, 'no literal libexec require found — the sweep cannot map this guard');
+  assert.ok(fs.existsSync(path.join(__dirname, '..', '..', 'libexec', path.basename(m[1]))),
+    `the literal names ${m[1]}, which does not exist`);
+});
 
 // read() — the only I/O in these guards beyond deps/claude/**: the real pinned carve,
 // never ~/.local/share/clode or anything a guard here could write to (nothing does —
@@ -66,7 +78,7 @@ function pinnedCarveDir() {
 // below), is the same STRUCTURAL residual test/build-gates/lexical-code-mask.test.cjs
 // models for lexicalCodeMask: a specific source SHAPE that the current, fixed pattern
 // set still cannot see, independent of whether today's real corpus happens to trigger
-// it (measured: it does not — see the fix's own comment in clode-fuse.cjs).
+// it (measured: it does not — see the fix's own comment in clode-build.cjs).
 //
 // FIX ROUND 1 (this task, before landing): probing decision #5's literal recipe — "a
 // source declaring an unknown bare specifier in BOTH shapes it now covers" — surfaced
@@ -74,7 +86,7 @@ function pinnedCarveDir() {
 // `import "pkg";` (no binding, no `from` clause), is valid ESM and was completely
 // invisible to DECLARATIVE_PATTERNS (both existing patterns require `\bfrom\b`).
 // Verified live-blind against a synthetic corpus BEFORE fixing (this test file's own
-// history — see the git log for this commit); FIXED in libexec/clode-fuse.cjs by
+// history — see the git log for this commit); FIXED in libexec/clode-build.cjs by
 // adding a third DECLARATIVE_PATTERNS entry. The first cut of that fix (a bare
 // `\bimport\s+["']([...])["']`) was itself measured to be UNSAFE: scanned against the
 // REAL pinned 2.1.251 carve it produced a false positive, `@aws-sdk/credential-
@@ -422,7 +434,7 @@ function computeClosureControlInputs() {
 // those 8 into 18 packages — the same 18 GUARD 3 measures, which is the point: both floors
 // now move together with the real closure instead of one of them tracking a constant that
 // the gate's own behaviour cannot affect. Command:
-//   node -e "const {computeDepClosure}=require('./libexec/clode-fuse.cjs');
+//   node -e "const {computeDepClosure}=require('./libexec/clode-build.cjs');
 //            const d=require('./test/build-gates/dep-closure-gates.test.cjs');
 //            const i=d.readComputeClosureInputs(); const v=new Map();
 //            computeDepClosure(i.nmDir,i.directDeps,{versions:v}); console.log(v.size)"

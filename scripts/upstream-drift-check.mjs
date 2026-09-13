@@ -47,7 +47,7 @@
 // new baseline file: ACCEPTED_* is the baseline.
 // Other known candidates: the bundle's required Node floor creeping up; new search
 // applets; new bare specifiers (the dep-closure seed scan already catches those at
-// BUILD time, loudly — see clode-fuse's assertNoUnknownBareSpecifiers).
+// BUILD time, loudly — see clode-build's assertNoUnknownBareSpecifiers).
 //
 // THE LESSON FROM 2.1.243 (2026-08-24): every check here asserted something about
 // the CONTENT of the bundle, and none asserted that clode could still GET the

@@ -7,7 +7,7 @@
 // `clode: fused …` result stays on stdout.
 const test = require('node:test');
 const assert = require('node:assert');
-const { makePhaseSpinner } = require('../libexec/clode-fuse.cjs');
+const { makePhaseSpinner } = require('../libexec/clode-build.cjs');
 
 // A fake stream that records writes and lets us set isTTY.
 function fakeStream(isTTY) {

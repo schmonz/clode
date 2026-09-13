@@ -1,5 +1,5 @@
 'use strict';
-// clode-fuse — the `clode build` subcommand (clode's own namespace, NOT a
+// clode-build — the `clode build` subcommand (clode's own namespace, NOT a
 // passthrough): fuse a standalone quaude binary on THIS machine. quaude is the
 // product users make/use/update; it is derived work and is NEVER distributed —
 // fusing always happens locally (canon; CI may fuse in ephemeral runners for
@@ -570,7 +570,7 @@ function assertNoUnknownBareSpecifiers(files, closure, libexecDir, opts = {}) {
       + `${lines.join('\n')}\n`
       + `  Fix: if it's genuinely needed, add it to deps/claude/package.json's `
       + `dependencies (then npm install); if it's dead/optional code, add it to `
-      + `KNOWN_UNREACHABLE in libexec/clode-fuse.cjs with a concrete reason.`);
+      + `KNOWN_UNREACHABLE in libexec/clode-build.cjs with a concrete reason.`);
   }
 }
 

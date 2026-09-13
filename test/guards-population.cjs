@@ -274,7 +274,7 @@ const MIGRATED = deriveMigrated();
 // RE-CUT AGAIN, 102 -> 95, Task 14 batch 1 (2026-09-04): "reads a repo pin/config/source
 // file, regex-extracts values, asserts agreement or a real control-modelled violation" —
 // version-single-source, node-pins-agree, workflow-scripts-exist, release-gate-globs,
-// target-env (the require-free half), clode-fuse-compose (the declares-own-steps half),
+// target-env (the require-free half), clode-build-compose (the declares-own-steps half),
 // tls-cacert-pem (the checkout-free provenance-chain half). Each carries its own positive
 // control, shown red then green (see task-14-report.md).
 //
@@ -358,7 +358,7 @@ function ratchetUnmigrated(count, baseline, unmigrated) {
 // fs.watch alias scanner, zlib-zstd-stream-gap's pin check — see BACKLOG.md
 // item 8 and task-11-report.md for the measured counts, including a FOURTH,
 // production-code instance found while building this detector:
-// libexec/clode-fuse.cjs's dep-closure gate, fixed in the same commit). This is
+// libexec/clode-build.cjs's dep-closure gate, fixed in the same commit). This is
 // a CLASS, not an incident, so — same principle as the MIGRATED sweep above —
 // this stops it from being reintroduced a fifth time unnoticed.
 //
@@ -480,7 +480,7 @@ function isRecordedCliQuoteScanExclusion(file) {
 
 // FIX ROUND 1 (coordinator review, task-11, 2026-09-05): a detector that can only see
 // `test/*.test.cjs` cannot see where THIS TASK'S OWN defect actually lived —
-// libexec/clode-fuse.cjs's scanBareSpecifiers(), the real dep-closure gate `clode build`
+// libexec/clode-build.cjs's scanBareSpecifiers(), the real dep-closure gate `clode build`
 // and `clode build --naude` run. Fed the reviewer's own words: "I verified this myself...
 // the detector WOULD have flagged this task's own defect" against the PRE-FIX file. A
 // detector with a blind spot shaped exactly like the bug it exists to catch is not
@@ -514,7 +514,7 @@ function discoverCliQuoteScanFiles() {
 // ---- PRODUCTION BUILD-GATE POPULATION (phase 5b, task 5) --------------------
 // Everything above this line sweeps TESTS. This sweeps the other half of the problem: the
 // gates that live in PRODUCTION code and run inside `clode build` itself. Phase 5b put a
-// control under four of them (test/build-gates/: scc-merge's lexicalCodeMask, clode-fuse's
+// control under four of them (test/build-gates/: scc-merge's lexicalCodeMask, clode-build's
 // dep-closure family, host-provision's two throw-sites, target-update-check's channel
 // check) and each of the first two found a live defect the moment it was controlled. The
 // question this closes is the one that outlives the phase: how does the FIFTH un-controlled
@@ -557,7 +557,7 @@ function discoverProductionFiles() {
     if (!fs.existsSync(abs)) continue;
     // `.js` TOO (fix round 1, 2026-09-12). Leaving it out put two real build-path files in
     // NO bucket at all — not gate-shaped, not excluded, not even counted: libexec/quaude-fuse.js
-    // (the fuse worker libexec/clode-fuse.cjs spawns under the template) and libexec/graph-meta.js
+    // (the fuse worker libexec/clode-build.cjs spawns under the template) and libexec/graph-meta.js
     // (spawned from libexec/clode-extract.cjs). A mechanism whose promise is "the next gate
     // cannot appear unseen" must not have an extension-shaped hole. Measured cost: population
     // 74 -> 76, gates unchanged at 34 — neither .js file is gate-shaped TODAY, which is exactly
@@ -632,7 +632,7 @@ const GATE_REFUSES = new RegExp(['throw new Error\\s*\\(',
 // by `.test(` — `/re/.test(src)` — which is how tests are written. Production code hoists
 // the regex to a named const and calls `FORBIDDEN.test(src)`, and PATTERN_MATCHES sees
 // nothing. This was found by the synthetic-offender demonstration (task-5-report.md): a
-// realistic un-controlled gate, written the way libexec/clode-fuse.cjs's dep-closure gate is
+// realistic un-controlled gate, written the way libexec/clode-build.cjs's dep-closure gate is
 // written, was NOT flagged, and the first run of the demonstration passed when it should
 // have failed. Widening `.test(`/`.match(`/`.matchAll(` to accept a receiver of any shape
 // costs exactly two more files across the whole production tree (measured 2026-09-12:
@@ -733,11 +733,11 @@ function namedProductionModules() {
 // two readings are not the same claim. The unit of control here is a FILE; the unit of a
 // gate is a THROW-SITE. "4 controlled" means FOUR FILES HAVE AT LEAST ONE CONTROLLED GATE —
 // it does NOT mean four gates, and it does not mean those files' other refusals are proven
-// able to fail. Measured 2026-09-12: libexec/clode-fuse.cjs has 17 `throw new Error(` sites
+// able to fail. Measured 2026-09-12: libexec/clode-build.cjs has 17 `throw new Error(` sites
 // and libexec/scc-merge.cjs 7; of those 24, exactly THREE are tripped by a registered
 // guard's control (computeDepClosure's missing-package throw, assertClosureMatchesLockfile's
 // version-mismatch throw, assertNoUnknownBareSpecifiers' unknown-specifier throw — all in
-// clode-fuse.cjs). scc-merge.cjs's controlled gate is lexicalCodeMask, which refuses by
+// clode-build.cjs). scc-merge.cjs's controlled gate is lexicalCodeMask, which refuses by
 // returning a mask its caller acts on, not by throwing, so NONE of its 7 throw-sites has a
 // control — including assertNoRenamedFixedNames, which that file's own comment calls "THE
 // RATCHET" and records as having caught a shipped merge that renamed 336 property keys (it
@@ -777,7 +777,7 @@ function isRecordedProductionGateExclusion(rel) {
 // UNCONTROLLED_GATE_BASELINE — gate-shaped production files NOT named by any registered
 // test/build-gates/ guard, as last measured. 30 as of fix round 2 (phase 5b task 5,
 // 2026-09-12): 76 production files in scope, 34 gate-shaped, 4 controlled (scc-merge.cjs,
-// clode-fuse.cjs, host-provision.cjs, target-update-check.cjs — phase 5b tasks 1-4), 0
+// clode-build.cjs, host-provision.cjs, target-update-check.cjs — phase 5b tasks 1-4), 0
 // excluded. "4 controlled" = FOUR FILES HAVE AT LEAST ONE CONTROLLED GATE, not four gates:
 // see the granularity paragraph on controlledProductionModules() above, which measures how
 // many of those files' individual throw-sites actually have a control (3 of 24).

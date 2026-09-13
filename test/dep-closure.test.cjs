@@ -12,7 +12,7 @@
 //
 // The closure now travels to the (tjs-hosted, require-less) fuse worker as DATA
 // through extras.json. These tests grade the node-side derivation that fills it:
-// computeDepClosure/readDirectDeps in libexec/clode-fuse.cjs.
+// computeDepClosure/readDirectDeps in libexec/clode-build.cjs.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -29,7 +29,7 @@ const {
   readDirectDeps, computeDepClosure, assertClosureMatchesLockfile,
   scanBareSpecifiers, scannableTexts, specifierPackageName, isBuiltinSpecifier, shimProvidedModules,
   assertNoUnknownBareSpecifiers, KNOWN_UNREACHABLE,
-} = require('../libexec/clode-fuse.cjs');
+} = require('../libexec/clode-build.cjs');
 
 // Build a fake flat node_modules from {name: {dependencies}} — the layout npm
 // produces for this closure (no version conflicts, every package a direct child).
@@ -362,7 +362,7 @@ test('scanBareSpecifiers: the FLAT (non-graph) fallback path never scans declara
 // chunks (sources + prelude), NOT to `assets` (embedded doc/reference text,
 // where the same shape reintroduces exactly the prose-noise failure mode the
 // original exclusion existed to avoid — see DECLARATIVE_PATTERNS's comment in
-// libexec/clode-fuse.cjs); `externals` unioned in; `prelude`/`assets` now feed
+// libexec/clode-build.cjs); `externals` unioned in; `prelude`/`assets` now feed
 // the ordinary require()/import() scan too (previously silently skipped).
 
 function fakeGraphCarve({ sources, prelude, assets, externals }) {
@@ -483,7 +483,7 @@ test('scannableTexts: falls back to a raw read when no graph.json rides beside c
 
 test('scannableTexts: a file not literally named cli.cjs is scanned as raw text even with a graph.json beside it (bun-shim.cjs)', () => {
   // bun-shim.cjs lives in the SAME staged directory as cli.cjs + graph.json in
-  // production (libexec/clode-fuse.cjs's stageDir), but it is clode's OWN
+  // production (libexec/clode-build.cjs's stageDir), but it is clode's OWN
   // source — never escaped — and must never be redirected through the
   // upstream graph just because a graph.json happens to sit beside it.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dep-drift-shim-'));
@@ -642,7 +642,7 @@ test('KNOWN_UNREACHABLE is a decision record, not a dumping ground: every entry 
 test('GATE (integration): the REAL extracted cli.cjs + bun-shim.cjs, scanned against the REAL closure, passes today', (t) => {
   // The acceptance test for the whole gate: stage the real upstream bundle
   // (test/oracle-models.cjs's stageCli — same layout `clode build` produces:
-  // cli.cjs beside bun-shim.cjs) and run the SAME check clode-fuse.cjs runs at
+  // cli.cjs beside bun-shim.cjs) and run the SAME check clode-build.cjs runs at
   // build time, with the SAME real closure. A regression here means either a
   // real gap re-opened, or the gate itself would break a real build — the
   // thing the brief calls the acceptance test. Skips (does not fail) when no

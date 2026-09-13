@@ -3778,7 +3778,7 @@ if ((process.env.CLODE_TJS_SMOKE || 'on').toLowerCase() !== 'off') {
   const evalArgs = ['eval', engineFloorCheckJs()];
   // A cosmo APE is a DOS/MBR 'MZ' fat binary; on macOS (and any host that won't
   // exec the raw MZ) it runs through its own shell prologue — `/bin/sh -c '"$@"'
-  // sh <ape> <args>`, exactly the isApeFile route clode-fuse.cjs uses. On Linux/
+  // sh <ape> <args>`, exactly the isApeFile route clode-build.cjs uses. On Linux/
   // BSD the APE execs directly, but the sh wrapper is a POSIX no-op there too.
   // The floor check PRINTS the missing binding(s) and then throws, so capture
   // stdout even on a nonzero exit — otherwise the one useful line (which

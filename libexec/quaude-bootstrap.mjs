@@ -1,5 +1,5 @@
 // quaude first-stage bootstrap. Compiled to quickjs bytecode at fuse time
-// (libexec/clode-fuse.cjs -> libexec/quaude-fuse.js) and appended to a copy of
+// (libexec/clode-build.cjs -> libexec/quaude-fuse.js) and appended to a copy of
 // the tjs binary under the stock `tx1k1.js` 12-byte trailer, so the UNMODIFIED
 // pinned tjs runs it at startup, before any CLI parsing (txiki's standalone
 // detection in run-main). ES module (=> strict), no imports.
@@ -28,7 +28,7 @@
 // The reserved argv namespace + the attest report format, INLINED from the canonical
 // libexec/clode-attest.cjs. This file is compiled raw to tjs bytecode with no runtime
 // imports, so it cannot require() the shared module the way naude-entry.cjs and
-// clode-fuse.cjs do; test/update-guard-drift.test.cjs holds the two copies byte-identical.
+// clode-build.cjs do; test/update-guard-drift.test.cjs holds the two copies byte-identical.
 // Same mechanism, and the same reason, as the guardVerdict copy below.
 // >>> clodeAttest (canonical; drift-tested against libexec/quaude-bootstrap.mjs) >>>
 // The reserved argv namespace. A built target owns every `--clode-*` flag; an unknown one

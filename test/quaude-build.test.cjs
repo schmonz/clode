@@ -211,7 +211,7 @@ test('the attest gate can fail: one flipped byte in a member -> VERIFICATION FAI
     `no failure reported:\n${r.stdout}\n${r.stderr}`);
 
   // ... and the SHARED gate helper the build uses must reject exactly this output.
-  const { attestTarget } = require('../libexec/clode-fuse.cjs');
+  const { attestTarget } = require('../libexec/clode-build.cjs');
   const verdict = await attestTarget(tampered, {
     spawnRun: () => Promise.resolve(r), env: cleanEnv(), cwd: DIR, timeout: 1000,
   });

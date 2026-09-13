@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { parseBuildArgs, resolveBuildOut } = require('../libexec/clode-fuse.cjs');
+const { parseBuildArgs, resolveBuildOut } = require('../libexec/clode-build.cjs');
 
 test('parseBuildArgs: --list-targets', () => {
   assert.deepStrictEqual(parseBuildArgs(['--list-targets']),

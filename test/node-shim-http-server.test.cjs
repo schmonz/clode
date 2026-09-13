@@ -1,6 +1,6 @@
 'use strict';
 // node:http SERVER surface (Q1c): `clode build` runs its internal PONG smoke
-// against an in-process http.createServer mock (libexec/clode-fuse.cjs
+// against an in-process http.createServer mock (libexec/clode-build.cjs
 // startPongMock) — so the native clode builder needs a real, if minimal,
 // http.Server under tjs. Characterized DIFFERENTIALLY: the same probe script
 // (createServer -> fetch it -> echo shape) runs under host node (oracle) and

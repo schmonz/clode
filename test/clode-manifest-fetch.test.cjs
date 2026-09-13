@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const fuse = require('../libexec/clode-fuse.cjs');
+const fuse = require('../libexec/clode-build.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 const LIBEXEC = path.join(REPO, 'libexec');

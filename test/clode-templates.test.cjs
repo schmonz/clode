@@ -154,7 +154,7 @@ test('the built clode bakes its engine recipe, as it bakes its tjs pin', () => {
   const src = fs.readFileSync(path.resolve(__dirname, '../scripts/build-clode-main.mjs'), 'utf8');
   assert.match(src, /__CLODE_BAKED_ENGINE_RECIPE__/,
     'a fused clode with no repo cannot compute its own recipe — it must be baked at build time');
-  const fuse = fs.readFileSync(path.resolve(__dirname, '../libexec/clode-fuse.cjs'), 'utf8');
+  const fuse = fs.readFileSync(path.resolve(__dirname, '../libexec/clode-build.cjs'), 'utf8');
   assert.match(fuse, /manifestRecipe: manifest\.recipe/, 'the manifest recipe must reach obtainEngine');
   assert.match(fuse, /thisRecipe: thisEngineRecipe\(/, 'this clode\'s recipe must reach obtainEngine');
 });

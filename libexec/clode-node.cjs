@@ -54,7 +54,7 @@ const PINNED_VERSION = PIN.version;
 //
 // Exported because the answer is a pure table lookup that costs nothing, while the work it
 // gates (staging + extracting the upstream bundle) costs MINUTES on a code-split bundle.
-// `clode build --naude` therefore asks this BEFORE it stages anything — see clode-fuse's
+// `clode build --naude` therefore asks this BEFORE it stages anything — see clode-build's
 // naude branch, and the ordering test in test/clode-build-naude.test.cjs. nodeAsset throws
 // exactly this message, so the early refusal and the late one can never drift apart.
 function pinnedNodeRefusal(platform, arch) {

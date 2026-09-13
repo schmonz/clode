@@ -81,7 +81,7 @@ function winArch(env = (typeof tjs !== 'undefined' && tjs.env) || {}) {
 
 // uname -m machine string -> node process.arch value (the non-win32 arch source).
 // The old hardcoded 'arm64' here was the Mavericks-build bug: on an x86_64 host it
-// made codesignAdHoc (clode-fuse.cjs) thin the genuinely-fat tjs template down to
+// made codesignAdHoc (clode-build.cjs) thin the genuinely-fat tjs template down to
 // arm64. Covers the arches our targets run on; unknown -> 'x64' (safe, never the
 // arm64 lie). NetBSD reports 'evbarm' on arm64 — mapping, not passthrough.
 function machineToNodeArch(machine) {

@@ -687,7 +687,7 @@ jobs:
           # content hash instead of the pin, and nothing here has ever populated a
           # PIN-VERSIONED cache entry. Seed one directly, with the SAME
           # extractIfNeeded() that `clode build` itself calls
-          # (libexec/clode-fuse.cjs's stageUpstreamCli) — without paying for a
+          # (libexec/clode-build.cjs's stageUpstreamCli) — without paying for a
           # whole quaude fuse just to get one cache entry on disk.
           PIN=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
           node -e '
@@ -1167,13 +1167,13 @@ jobs:
       # no existing build here to add a second one next to; this step IS the first.
       #
       # Bun constant-folds process.platform into a provider binary at CARVE time
-      # (libexec/extract-claude-js.cjs's providerPlatformOf, libexec/clode-fuse.cjs's
+      # (libexec/extract-claude-js.cjs's providerPlatformOf, libexec/clode-build.cjs's
       # TARGET-MATCHED ASSEMBLY gate) — so a linux-carved provider is a DIFFERENT module
       # graph than the darwin one every other build in this repo's CI merges, with
       # different dead-coded branches and different cyclic-require shapes for
       # libexec/graph-scc-merge.cjs to fold. The merge itself always runs under the HOST's
       # own tjs (CLODE_TJS), never the target's — see clode-extract.cjs's resolveEngine and
-      # clode-fuse.cjs's own CROSS-FUSE comment ("the worker still runs under the host
+      # clode-build.cjs's own CROSS-FUSE comment ("the worker still runs under the host
       # template... the host cannot exec the foreign output"). So a linux graph has never
       # been merged by anything other than a linux host. This step forces exactly that
       # combination: this darwin host's tjs merging a LINUX-carved graph, cross-fusing into

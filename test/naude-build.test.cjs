@@ -118,7 +118,7 @@ test('build-naude no longer exports parseBuilderArg (the --builder write-side is
   assert.strictEqual(mod.parseBuilderArg, undefined, 'parseBuilderArg is gone');
 });
 
-// Bug 1 (--out for naude): the flag used to be forwarded by clode-fuse.cjs but
+// Bug 1 (--out for naude): the flag used to be forwarded by clode-build.cjs but
 // silently ignored here — build-naude.mjs's only argv parsing was --cli, so a
 // user-requested destination was dropped and the binary landed at the default
 // build/<tag>/naude instead, with exit 0 and no complaint. parseOutArg is the
@@ -366,7 +366,7 @@ test('writeSeaConfig: produces no `builder` asset (rebuild callback retired)', a
 });
 
 // Task 4 (off-Mac darwin signing): --darwin-signer <path> threads the rcodesign
-// binary (provisioned by clode-fuse.cjs's naude branch) down to buildBinary's
+// binary (provisioned by clode-build.cjs's naude branch) down to buildBinary's
 // two sign() calls. Absent -> null, same "no flag given" contract as every
 // other parse* helper in this file.
 test('parseDarwinSignerArg: absent -> null; given -> the path', async () => {

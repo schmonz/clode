@@ -23,7 +23,7 @@ class BuildScratchError extends Error {
 // build inside ANY repo — including a user's, which must keep working.
 function isCheckoutRoot(dir, fsm = realFs) {
   try {
-    if (!fsm.existsSync(path.join(dir, 'libexec', 'clode-fuse.cjs'))) return false;
+    if (!fsm.existsSync(path.join(dir, 'libexec', 'clode-build.cjs'))) return false;
     if (!fsm.existsSync(path.join(dir, 'VERSION'))) return false;
     const pkg = JSON.parse(fsm.readFileSync(path.join(dir, 'package.json'), 'utf8'));
     return pkg && pkg.name === 'clode';

@@ -1,10 +1,10 @@
 // quaude fuse worker — the tjs-side half of `clode build` (driven by
-// libexec/clode-fuse.cjs). Runs under the SAME tjs binary that becomes the
+// libexec/clode-build.cjs). Runs under the SAME tjs binary that becomes the
 // quaude template: the runtime-compiles-for-itself rule makes the quickjs
 // BC_VERSION/config lockstep automatic (bytecode written by any OTHER build is
 // undefined behavior — design memo §6.2).
 //
-// Usage (spawned by clode-fuse.cjs, not by hand):
+// Usage (spawned by clode-build.cjs, not by hand):
 //   tjs run quaude-fuse.js <signed-base> <stage-dir> <node-shim-dir> \
 //     <node_modules-dir> <bootstrap.mjs> <extras.json> <out>
 //
@@ -142,7 +142,7 @@ const { Reporter } = loadLibexecCjs(
 const report = new Reporter({ emit: (line) => { console.log(line); } });
 
 // ---- 1) members ------------------------------------------------------------
-// The extras file (written by clode-fuse.cjs) names the payload ROLE:
+// The extras file (written by clode-build.cjs) names the payload ROLE:
 //   quaude (default): the product — compiled Claude Code bundle + its runtime.
 //   builder: a native clode — the esbuilt clode-main bundle as a SOURCE entry
 //     (measured: 65KB, 0.24s boot under tjs — bytecode would force strict mode
@@ -161,18 +161,18 @@ let entryName = role === 'builder' ? 'clode-main.bundle.cjs' : 'cli.qbc';
 const members = [];
 
 // The ext-dep closure: package.json's `dependencies` plus their transitive
-// closure, computed by clode-fuse.cjs (node side) and handed here as DATA —
+// closure, computed by clode-build.cjs (node side) and handed here as DATA —
 // this worker runs UNDER TJS and cannot require() a shared node module to
 // recompute it itself. This used to be a hardcoded list living right here,
 // which silently drifted from package.json whenever a dependency was added
 // without a matching edit to this file (duplication audit §1: a transitive
 // bump or a new direct dep rotted the list identically, with no signal until
 // a user hit "Cannot find module" deep in a session). A missing/empty deps
-// array means an old clode-fuse.cjs fused this worker — fail loud rather than
+// array means an old clode-build.cjs fused this worker — fail loud rather than
 // silently ship a quaude with an empty ext-dep closure.
 const DEPS = extras.deps;
 if (!Array.isArray(DEPS) || DEPS.length === 0) {
-  console.error('quaude-fuse: extras.json has no non-empty "deps" array (the ext-dep closure) — built by a stale clode-fuse.cjs?');
+  console.error('quaude-fuse: extras.json has no non-empty "deps" array (the ext-dep closure) — built by a stale clode-build.cjs?');
   tjs.exit(1);
 }
 
@@ -182,7 +182,7 @@ if (role === 'builder') {
   // merge/compile/assets work here to name a step for. Not an oversight.
   members.push({ name: entryName, data: await mustRead(path.join(stageDir, 'clode-main.bundle.cjs'), 'esbuilt clode-main bundle') });
   // The naude entry point: pre-esbuilt off the user path (Task 4), staged
-  // alongside clode-main.bundle.cjs by clode-fuse.cjs's --self staging step.
+  // alongside clode-main.bundle.cjs by clode-build.cjs's --self staging step.
   // Carried here (not built at naude-assembly time) so a later task can build
   // a naude without esbuild present on the user side.
   members.push({ name: 'naude-entry.bundle.cjs', data: await mustRead(path.join(stageDir, 'naude-entry.bundle.cjs'), 'esbuilt naude-entry bundle') });
@@ -196,7 +196,7 @@ if (role === 'builder') {
   // Task 8), and scripts/sea-sign.cjs (which build-naude execs to unsign/re-sign
   // the SEA — on macOS the ad-hoc re-sign after postject is MANDATORY or the
   // binary won't run). A fused builder ships no scripts/ dir, so `clode build
-  // --naude` under clode-native materializes these (clode-fuse.cjs's
+  // --naude` under clode-native materializes these (clode-build.cjs's
   // materializeFusedPayload) and spawns the copy. Member names keep their scripts/
   // path (re-joined onto the payload dir verbatim). Committed files that always
   // exist → mustRead. (Miss one require in this list → "Cannot find module" only
@@ -222,24 +222,24 @@ if (role === 'builder') {
   // node-shim/* is stored below: the node-shim loader (SHIM_DIR =
   // '/quaude/node-shim/modules' when fused) requires it via a relative
   // '../../target-env.cjs' from modules/, which only lands on the archive
-  // root — a 'libexec/' prefix here would 404 that require. clode-fuse.cjs's
+  // root — a 'libexec/' prefix here would 404 that require. clode-build.cjs's
   // materialization step special-cases this bare name back onto disk at
   // libexec/target-env.cjs (sibling to node-shim/, matching this repo's own
   // layout) for the self-fuse path.
   members.push({ name: 'target-env.cjs', data: await mustRead(path.join(libexecDir, 'target-env.cjs'), 'target-env.cjs member') });
   // deps/claude/package.json, member name matches its real repo path (unlike
-  // target-env.cjs, no bare-root special-casing needed — clode-fuse.cjs's
+  // target-env.cjs, no bare-root special-casing needed — clode-build.cjs's
   // materialization step just re-joins `mat` + this name verbatim): the ext-dep
   // closure's SOURCE OF TRUTH — Claude Code's runtime deps, NOT clode's own
   // (clode has none). A fused builder ships no repo checkout, so when IT later
-  // runs `clode build`, its clode-fuse.cjs needs this manifest on disk to walk
+  // runs `clode build`, its clode-build.cjs needs this manifest on disk to walk
   // `dependencies` from (duplication audit §1 — the closure is derived, never
   // hand-listed).
   members.push({ name: 'deps/claude/package.json', data: await mustRead(path.join(path.dirname(libexecDir), 'deps', 'claude', 'package.json'), 'deps/claude/package.json member') });
   // deps/claude/package-lock.json, same reasoning as package.json just above:
-  // the lockfile gate's (assertClosureMatchesLockfile, clode-fuse.cjs) SOURCE
+  // the lockfile gate's (assertClosureMatchesLockfile, clode-build.cjs) SOURCE
   // OF TRUTH. A fused builder ships no repo checkout, so when it later runs
-  // `clode build`, its clode-fuse.cjs needs this on disk to verify
+  // `clode build`, its clode-build.cjs needs this on disk to verify
   // node_modules matches the lockfile before embedding.
   members.push({ name: 'deps/claude/package-lock.json', data: await mustRead(path.join(path.dirname(libexecDir), 'deps', 'claude', 'package-lock.json'), 'deps/claude/package-lock.json member') });
   // postject's pure-JS pieces (dist/api.js does the actual SEA-blob inject;
@@ -311,7 +311,7 @@ if (role === 'builder') {
     // TASK 7: 'merge' is now declared, started and finished by scripts/merge-step.mjs itself —
     // NOT by this worker's `report`. It is spawned with stdout/stderr INHERITED, so its
     // MARK-prefixed protocol lines (and its plain log lines) land directly in this worker's own
-    // stdout/stderr — the same fds clode-fuse.cjs already captures at the spawn seam — with no
+    // stdout/stderr — the same fds clode-build.cjs already captures at the spawn seam — with no
     // relay code here. This worker only decides there IS a graph to hand it (always, when a
     // graph.json was staged at all) and, once it returns, whether there is a result to read back.
     const scriptsDir = path.join(path.dirname(libexecDir), 'scripts');
@@ -512,7 +512,7 @@ const manifest = {
   template: extras.template,
   hooks: extras.hooks,
   // The declared bill of materials, name@version, computed node-side
-  // (clode-fuse.cjs's computeDepClosure) and carried verbatim — answers "what
+  // (clode-build.cjs's computeDepClosure) and carried verbatim — answers "what
   // is in this quaude?" from manifest.json alone, without cross-referencing
   // package.json + node_modules. Distinct from DEPS (bare names, above,
   // consumed only to collect members) — never itself re-emitted.

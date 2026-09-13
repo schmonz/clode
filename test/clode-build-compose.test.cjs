@@ -29,15 +29,15 @@ function scanDeclaresOwnSteps({ src }) {
   const findings = [];
   let examined = 0;
   examined++;
-  if (!/build-compose\.cjs/.test(src)) findings.push('clode-fuse.cjs no longer composes (no build-compose.cjs reference)');
+  if (!/build-compose\.cjs/.test(src)) findings.push('clode-build.cjs no longer composes (no build-compose.cjs reference)');
   examined++;
-  if (!/build-report\.cjs/.test(src)) findings.push('clode-fuse.cjs no longer declares its own steps (no build-report.cjs reference)');
+  if (!/build-report\.cjs/.test(src)) findings.push('clode-build.cjs no longer declares its own steps (no build-report.cjs reference)');
   return { findings, examined };
 }
 
 const declaresOwnStepsGuard = defineGuard({
-  name: 'clode-fuse-declares-own-steps',
-  read: () => ({ src: fs.readFileSync(require.resolve('../libexec/clode-fuse.cjs'), 'utf8') }),
+  name: 'clode-build-declares-own-steps',
+  read: () => ({ src: fs.readFileSync(require.resolve('../libexec/clode-build.cjs'), 'utf8') }),
   scan: scanDeclaresOwnSteps,
   // I2 (coordinator, 2026-09-04): TABLE-driven, not corpus-driven — examined counts the
   // two fixed markers scanDeclaresOwnSteps() looks for in this ONE named source file, so

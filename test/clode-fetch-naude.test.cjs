@@ -19,7 +19,7 @@ const NODE = process.execPath;
 
 const { nodeBinPath } = require('../libexec/clode-node.cjs');
 
-// Mirrors test/clode-fuse.test.cjs's runEntry: spawnSync bin/clode with
+// Mirrors test/clode-build.test.cjs's runEntry: spawnSync bin/clode with
 // DYLD_INSERT_LIBRARIES cleared (asdf/system shims break under it) and a
 // fresh CLODE_WATCH_DIR (never the real ~/.cache/clode) so this test cannot
 // mutate real machine state.

@@ -406,7 +406,7 @@ function readVersion() {
 // (default host process.platform) is the OS whose signing rules apply — the CROSS-BUILD
 // output's OS, not necessarily the host running this script — forwarded to sea-sign.cjs as
 // a third arg so it branches on the TARGET, not its own process.platform. signerBin (Task 4,
-// off-Mac darwin signing) is the rcodesign path clode-fuse.cjs's naude branch provisioned when
+// off-Mac darwin signing) is the rcodesign path clode-build.cjs's naude branch provisioned when
 // the target is darwin and this host isn't; forwarded as a 4th argv ONLY when given — sea-sign.cjs's
 // CLI is the positional->opts adapter that turns it into `{ signerBin }` for `sign()`. Absent
 // (native/non-darwin builds), the argv stays 3-wide, unchanged from before this task.
@@ -430,7 +430,7 @@ export function generateBlob(nodePath, cfgPath, { execFileSync: exec = execFileS
 // postject needs on macOS, and the OS signing (isolated in sea-sign.cjs).
 //
 // outOverride (from --out) picks WHERE the final binary lands; OUT (deps.tar, blob,
-// sea-config) is unaffected either way, same convention as clode-fuse.cjs's quaude
+// sea-config) is unaffected either way, same convention as clode-build.cjs's quaude
 // --out (an explicit path is the user's, verbatim; only the default gets the
 // artifact-name treatment, here build/<artifact-name>/naude instead of a bare basename).
 //
@@ -490,7 +490,7 @@ export async function buildBinary({
 // asset both surface here.
 // The self-check's budget. A naude's FIRST boot untars ~12MB of deps and writes a ~50MB
 // cli.cjs before it can print anything, so on a loaded machine this is minutes, not
-// seconds. CLODE_TIMEOUT_SCALE is the same knob clode-fuse.cjs's SCALE reads.
+// seconds. CLODE_TIMEOUT_SCALE is the same knob clode-build.cjs's SCALE reads.
 const SELFCHECK_TIMEOUT_MS = 120000 * (Number(process.env.CLODE_TIMEOUT_SCALE) || 1);
 
 function smokeCheck(bin) {
@@ -545,7 +545,7 @@ function parseCliArg(argv) {
 }
 
 // --darwin-signer <path>: the rcodesign binary to sign a darwin-target output with,
-// when this build is running on a non-darwin host (clode-fuse.cjs's naude branch
+// when this build is running on a non-darwin host (clode-build.cjs's naude branch
 // provisions it via ensureRcodesign and passes it here — Task 4). OPTIONAL — absent
 // means either a native darwin build (system codesign) or a non-darwin target (no
 // signing needed); sea-sign.cjs itself throws loud if a darwin target ever reaches

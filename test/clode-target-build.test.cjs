@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const fuse = require('../libexec/clode-fuse.cjs');
+const fuse = require('../libexec/clode-build.cjs');
 
 function manifestFile() {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'tpl-'));

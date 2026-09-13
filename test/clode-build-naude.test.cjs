@@ -9,7 +9,7 @@
 //   3. does NOT run the quaude fuse (the fuse worker / quaude-fuse.js path).
 //
 // Both are exercised via clodeBuild's injectable subprocess seam (opts.run):
-// clode-fuse's module-level async `run` is the ONE spawn seam every build step
+// clode-build's module-level async `run` is the ONE spawn seam every build step
 // goes through (the fuse worker AND build-naude), so overriding it lets us
 // capture every command clodeBuild tries to launch without spawning anything.
 // The resolve/extract path is REAL: we point CLODE_CLAUDE_BIN at a fake provider
@@ -24,7 +24,7 @@ const path = require('node:path');
 
 const REPO = path.resolve(__dirname, '..');
 const LIBEXEC = path.join(REPO, 'libexec');
-const { clodeBuild } = require('../libexec/clode-fuse.cjs');
+const { clodeBuild } = require('../libexec/clode-build.cjs');
 const { cacheKey } = require('../libexec/clode-resolve.cjs');
 const { cacheSignature, extractorSigOf } = require('../libexec/clode-extract.cjs');
 const { providerPlatformOf } = require('../libexec/extract-claude-js.cjs');
@@ -72,7 +72,7 @@ function seedProvider(dir) {
   return { env, cliPath, stageDir };
 }
 
-// A stand-in for the SMOKE spawn (`<bin> -p 'say PONG'`, clode-fuse's
+// A stand-in for the SMOKE spawn (`<bin> -p 'say PONG'`, clode-build's
 // smokeTarget): `clode build --naude` now runs the same NODE_PATH-stripped
 // PONG-against-the-mock proof the quaude path always ran (duplication audit
 // §2), so a stub that merely returns status 0 no longer satisfies the build —
@@ -94,7 +94,7 @@ function fakeSmokeTarget(opts) {
   });
 }
 
-// A stand-in for the ATTEST spawn (`<bin> --clode-attest`, clode-fuse's attestTarget).
+// A stand-in for the ATTEST spawn (`<bin> --clode-attest`, clode-build's attestTarget).
 // `clode build --naude` now runs the same attest gate the quaude path runs, so a stub that
 // merely returns status 0 no longer satisfies the build — and rightly so: a naude used to
 // ship with no self-verification of any kind. This stub behaves like a WORKING target
@@ -545,7 +545,7 @@ test('clode build --naude: a failing attest fails the build, loudly', async () =
 // refusal is a pure lookup in deps/clode/node-pin.json; nothing about it needs the bundle.
 //
 // The quaude path already works this way: an unknown --target is refused at
-// clode-fuse.cjs's resolveTarget, before any staging. naude does the same for --target
+// clode-build.cjs's resolveTarget, before any staging. naude does the same for --target
 // (targetToNode, "not a Node platform") but did NOT for the HOST, because nobody types
 // their host as a target. This restores the parity.
 //

@@ -9,7 +9,7 @@
 // as fresh as the release that carried it — and NOTHING in the reuse path could
 // see that:
 //
-//   * The engine fetch URL is keyed on VERSION (libexec/clode-fuse.cjs,
+//   * The engine fetch URL is keyed on VERSION (libexec/clode-build.cjs,
 //     releaseBaseUrl), and VERSION only moves at a release cut. A clode built
 //     from HEAD therefore downloads the newest TAG's engines while carrying
 //     HEAD's node-shim.

@@ -72,7 +72,7 @@ const DECISIVE = new Set(['success', 'failure']);
 // package install) has actually stopped delivering G7.
 //
 // So the question is not the job's conclusion, it is whether the smoke got to
-// print its success line — the exact line libexec/clode-fuse.cjs emits after the
+// print its success line — the exact line libexec/clode-build.cjs emits after the
 // PONG round-trip that "What earns a row" #2 blesses as G7.
 const SMOKE_OK = /smoke: PONG round-trip ok/;
 

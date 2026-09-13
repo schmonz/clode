@@ -50,7 +50,7 @@
 // The SERVER surface (createServer/Server/IncomingMessage/ServerResponse) IS
 // implemented, minimally, over tjs.listen('tcp', ...): `clode build` running
 // under the fused native builder smokes its quaude against an in-process canned
-// Messages mock (libexec/clode-fuse.cjs startPongMock), which needs a real
+// Messages mock (libexec/clode-build.cjs startPongMock), which needs a real
 // local HTTP server. Scope = that mock's surface, characterized differentially
 // vs host node (test/node-shim-http-server.test.cjs). Documented divergences:
 //   - every response is Connection: close (no keep-alive, no pipelining); a

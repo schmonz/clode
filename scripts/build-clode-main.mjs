@@ -2,7 +2,7 @@
 'use strict';
 // Build the esbuilt clode-main bundle (build/bundle/clode-main.bundle.cjs) that
 // `clode build --self` embeds into a quaude in place of the upstream Claude Code
-// payload (libexec/clode-fuse.cjs). This is NOT the SEA builder — the Node
+// payload (libexec/clode-build.cjs). This is NOT the SEA builder — the Node
 // Single Executable Application pipeline (deps asset, sea-config, blob, postject,
 // re-sign, embed) was retired in Phase 4 ("retire the Node SEA builder"). This
 // script keeps only the esbuild half that scripts/build-sea.mjs used to do first.
@@ -86,7 +86,7 @@ function repoVersion() {
 
 // The tjs pin (<ver>-<sha7>, no leading v) this clode targets, from PINS.md — baked
 // in so a fused clode with no PINS.md can derive its own templates-pack release URL
-// for `build --target` auto-fetch (libexec/clode-fuse.cjs thisTjsPin). MUST match
+// for `build --target` auto-fetch (libexec/clode-build.cjs thisTjsPin). MUST match
 // tjsPinFromPins + thisTjsPin exactly. Empty string if PINS.md is unreadable; the
 // runtime then falls back to CLODE_TJS_PIN/PINS.md.
 function bakedTjsPin() {

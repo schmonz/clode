@@ -9,7 +9,7 @@
 // line is the one string every build gate greps.
 //
 // Why the formatter is a pure function with its own tests: the verdict line is load-
-// bearing (libexec/clode-fuse.cjs fails a build unless it matches), and this repo has
+// bearing (libexec/clode-build.cjs fails a build unless it matches), and this repo has
 // twice shipped a gate that could not fail. A shared constant, asserted here and imported
 // there, is the only version of that gate that cannot silently drift apart from the
 // product that prints it.
@@ -141,7 +141,7 @@ test('report: notes are printed before the verdict and cannot change it', () => 
 // ------------------------------------------------------- the gate that greps --
 
 test('attestTarget: ok ONLY when the process exits 0 AND prints the verdict', async () => {
-  const { attestTarget } = require('../libexec/clode-fuse.cjs');
+  const { attestTarget } = require('../libexec/clode-build.cjs');
   const run = (out, status = 0) => () => Promise.resolve({ status, stdout: out, stderr: '' });
   const args = { env: {}, cwd: '.', timeout: 1000 };
 
@@ -161,7 +161,7 @@ test('attestTarget: ok ONLY when the process exits 0 AND prints the verdict', as
 });
 
 test('attestTarget asks for the CANONICAL flag spelling', async () => {
-  const { attestTarget } = require('../libexec/clode-fuse.cjs');
+  const { attestTarget } = require('../libexec/clode-build.cjs');
   let seen = null;
   await attestTarget('/bin/x', {
     env: {}, cwd: '.', timeout: 1000,

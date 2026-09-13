@@ -129,7 +129,7 @@ export function deriveTag(leg) {
   return tagFor(leg.leg, leg.floor);
 }
 
-// Same derivation as clode's thisTjsPin (libexec/clode-fuse.cjs) AND build-clode-main's
+// Same derivation as clode's thisTjsPin (libexec/clode-build.cjs) AND build-clode-main's
 // baked pin: all three MUST agree or obtainEngine refuses the pack. Pin format is
 // `<ver>-<sha7>` — the leading `v` from PINS.md is dropped (matches the engine name
 // scheme <engine>-<os>-<arch>-<ver>[-<sha7>]); the txiki source sha is kept because

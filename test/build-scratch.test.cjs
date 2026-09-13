@@ -9,7 +9,7 @@ const S = require('../scripts/build-scratch.cjs');
 function fakeCheckout() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-clode-'));
   fs.mkdirSync(path.join(root, 'libexec'), { recursive: true });
-  fs.writeFileSync(path.join(root, 'libexec', 'clode-fuse.cjs'), '// marker');
+  fs.writeFileSync(path.join(root, 'libexec', 'clode-build.cjs'), '// marker');
   fs.writeFileSync(path.join(root, 'VERSION'), '0.0.0\n');
   fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'clode' }));
   return root;
