@@ -75,18 +75,31 @@ test('man documents exactly the verbs and subjects the surface table declares', 
 // Phase 3b task 4 fix round 1: `build`'s --out default drifted (man/clode.1
 // still said `./quaude` after resolveBuildOut started appending a bundle id)
 // and nothing here caught it, because the verbs/subjects test above pins
-// NAMES, not flag DEFAULTS. Derived from cli-surface.cjs's own rendered text —
-// not a second hardcoded copy of the sentence — so the two copies cannot
-// silently drift apart again: whatever cli-surface.cjs says the default is,
-// man/clode.1 must say the same thing, in the same words, or this goes red.
+// NAMES, not flag DEFAULTS. Derived from BOTH sides' own rendered text — not a
+// third hardcoded copy of the sentence — so the two copies cannot silently
+// drift apart again in EITHER direction: whatever cli-surface.cjs says the
+// default is, man/clode.1 must say the exact same thing, or this goes red.
+//
+// Fix round 1 shipped this as `assert.ok(man.includes(m[1]), ...)` — a
+// containment check, not equality. That is the exact class ec7217f filed
+// ("five instruments, one mistake"): it catches man going STALE (a shorter
+// string missing from a longer one), but not cli-surface's side reverting to
+// a shorter default while man still carries the longer, now-overpromising
+// one — `man.includes('./quaude')` is true even when man actually says
+// './quaude-<bundle-id>'. Extracting man's OWN stated default from its `.Pa`
+// markup and comparing with strictEqual closes that hole from both sides.
 test('man\'s build --out default matches cli-surface.cjs\'s rendered default', () => {
   const { surfaceFor } = require('../libexec/cli-surface.cjs');
   const outDoc = surfaceFor('checkout').verbs.build.flags['--out'];
-  const m = outDoc.match(/quaude defaults to (\S+?);/);
-  assert.ok(m, `cli-surface.cjs's build --out doc no longer reads "quaude defaults to ...;" `
+  const wantMatch = outDoc.match(/quaude defaults to (\S+?);/);
+  assert.ok(wantMatch, `cli-surface.cjs's build --out doc no longer reads "quaude defaults to ...;" `
     + `— update this test's extraction to match the new wording: ${JSON.stringify(outDoc)}`);
-  assert.ok(man.includes(m[1]),
-    `man/clode.1 must state the same default quaude name cli-surface.cjs renders ("${m[1]}"); found neither`);
+  const gotMatch = man.match(/binary on this machine \(default\n\.Pa (\S+?)[ ,)]/);
+  assert.ok(gotMatch, 'man/clode.1 no longer states a --out default in the expected `.Pa` shape near '
+    + '"binary on this machine (default" — update this test\'s extraction to match the new markup');
+  assert.strictEqual(gotMatch[1], wantMatch[1],
+    `man/clode.1 states the default quaude name as "${gotMatch[1]}" but cli-surface.cjs renders `
+    + `"${wantMatch[1]}" — the two copies have drifted apart`);
 });
 
 test('man carries no spelling the break removed', () => {
