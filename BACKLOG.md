@@ -6937,3 +6937,50 @@ entry reading "quaude … fixed, proven, and green. naude was not, and nothing n
 clearest isolation credited to the differential is the shim `FileHandle.chmod` gap. The
 instrument's demonstrated yield is thinner than its architecture promises — which is an
 argument for USING it more deliberately, not for having less of it.
+
+
+## PHASE 3B SPECCED (2026-09-13)
+
+Spec: `docs/superpowers/specs/2026-09-13-phase3b-env-and-products-design.md` (gitignored by
+project convention, so the decisions live here). Phase order:
+**1 → 2 → 2.5 → 5 → 5b → 3a → 3b → 4 → 6.**
+
+**Scope, with the measurements that shaped it:**
+
+- **The env absorption pool is EIGHT decisions, not fifty-one.** `libexec/clode-build.cjs`
+  reads eleven env names and they are the entire candidate set; three of the eleven
+  (`CLODE_TJS`, `CLODE_VERBOSE`, `CLODE_TARGET_TEMPLATE`) are already declared in the table
+  from phase 3a. The remaining eight are `CLODE_ENGINE_RECIPE`, `CLODE_MAIN_BUNDLE`,
+  `CLODE_RELEASE_BASE`, `CLODE_TEMPLATES_BASEURL`, `CLODE_TEMPLATES_BLOB`,
+  `CLODE_TEMPLATES_MANIFEST`, `CLODE_TJS_PIN`, `CLODE_ALLOW_FOREIGN_CARVE`. Every other name
+  among the 65 gets a recorded verdict without ceremony.
+- **The plumbing cluster is env-only BY NECESSITY.** `clode-paths.cjs`'s seven
+  (`CLODE_STATE_ROOT`, `CLODE_CACHE`, `CLODE_DEPS`, `CLODE_PROVIDERS`, `CLODE_NODES`,
+  `CLODE_TRACE_LOG`, `CLODE_WATCH_DIR`) relocate state roots so the suite and CI run
+  hermetically. A flag cannot replace them: the harness sets them once and they must survive
+  three layers of spawn into a worker that parses its own argv. Recorded so nobody "finishes
+  the job" later by mistake.
+- **The built-binary loop is deliberately naive, and the sequencing reason is the point:** no
+  content key, no staleness hash, because phase 4 owns derived keys and hand-rolling a second
+  cache key here is exactly the "keys are never hand-written" violation phase 2 already caught
+  in `MERGER_VERSION`. One build per run at the measured 14s, with prebuilt injection kept so
+  CI and the slowest box need not pay it.
+- **"One target builds both products" is largely ALREADY TRUE** — measured, not assumed:
+  `clode build` takes the product as a positional (`clode-build.cjs:896`); both share argv,
+  staging, the dep-closure gates and reporting; both attach through the same `blobulate()`
+  since 3a; they diverge only where the mechanisms genuinely differ (postject injection vs a
+  canonical-LE trailer). What remains is ONE item: the local default output name does not
+  carry the upstream bundle version, so two builds from different bundles are
+  indistinguishable on disk, while PUBLISHED assets already carry it via
+  `canonical-name.cjs`'s `assetName`.
+
+**Three inherited claims did not survive re-measurement**, which is the phase's own lesson
+recorded for the next one: the env population was 51 and is 65; the "fast path to a fused
+builder" the umbrella said phase 3 REQUIRED already existed at 14s warm; and one-target-both-
+products was mostly done. Only the first is a number — the other two are premises, and
+premises are what a plan silently inherits.
+
+**Open, deliberately:** `CLODE_ALLOW_FOREIGN_CARVE`'s fate (it disables a safety check rather
+than selecting an input, which makes it a different KIND of candidate), and whether the
+built-binary rule holds in the same form on the slowest supported box — to be answered with a
+measurement there, not an opinion.
