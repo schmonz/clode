@@ -1,20 +1,20 @@
 'use strict';
 // clode-build — the `clode build` subcommand (clode's own namespace, NOT a
-// passthrough): fuse a standalone quaude binary on THIS machine. quaude is the
+// passthrough): blobulate a standalone quaude binary on THIS machine. quaude is the
 // product users make/use/update; it is derived work and is NEVER distributed —
-// fusing always happens locally (canon; CI may fuse in ephemeral runners for
+// blobulating always happens locally (canon; CI may blobulate in ephemeral runners for
 // tests only).
 //
-// Pipeline (Q1a design memo spike/quickjs/results/quaude-fuse-design.md):
+// Pipeline (Q1a design memo spike/quickjs/results/quaude-blobulate-design.md):
 //   1. resolve + extract + hook the upstream bundle (existing cache machinery);
 //   2. ensure the ext-dep closure (existing deps machinery);
 //   3. copy the pinned tjs template and ad-hoc re-sign the COPY while it is
 //      still a valid Mach-O (sign-THEN-append: appending tail data breaks
 //      strict codesign validation, and --remove-signature dies outright, so
 //      signing after assembly is impossible — but the kernel only validates
-//      mapped code pages, so the fused binary executes fine on the template's
+//      mapped code pages, so the blobulated binary executes fine on the template's
 //      signature; memo §6.1);
-//   4. spawn the fuse worker (libexec/quaude-fuse.js) UNDER THE TEMPLATE
+//   4. spawn the blobulate worker (libexec/quaude-blobulate.js) UNDER THE TEMPLATE
 //      ITSELF — bytecode writer == runtime, BC_VERSION lockstep automatic —
 //      which compiles cli.cjs to bytecode, assembles the member archive +
 //      manifest + bootstrap, and appends;
@@ -28,14 +28,14 @@
 //        CLODE_MAIN_BUNDLE — the esbuilt clode-main bundle for --self (default:
 //                            newest build/*/clode-main.bundle.cjs)
 //
-// --self fuses the BUILDER itself: the same trailer format with role "builder"
+// --self blobulates the BUILDER itself: the same trailer format with role "builder"
 // — the esbuilt clode-main bundle as a SOURCE entry (65KB; bytecode would force
 // strict mode on the esbuild output for no parse win — measured 0.24s boot),
-// plus everything `clode build` needs as fuse INPUTS on a machine with no
+// plus everything `clode build` needs as blobulate INPUTS on a machine with no
 // checkout and no node: the node-shim tree, the libexec support files
 // (extractor, bun-shim, worker, bootstrap), and the ext-dep closure (quaude
 // member inputs — clode-main itself imports node builtins only). When `build`
-// later RUNS under that fused builder, the payload is materialized back to
+// later RUNS under that blobulated builder, the payload is materialized back to
 // disk first (subprocesses — the template-tjs worker — need real files).
 
 const crypto = require('node:crypto');
@@ -60,29 +60,29 @@ const { Composer, failOnMismatch } = require('./build-compose.cjs');
 const { Reporter } = require('./build-report.cjs');
 const { appendRun } = require('./build-trace.cjs');
 
-// Materialize the builder-role VFS members to `mat` on disk. A fused NATIVE
+// Materialize the builder-role VFS members to `mat` on disk. A blobulated NATIVE
 // clode runs under tjs and ships NO checkout — so any subprocess it must spawn
-// (the fuse WORKER for a quaude/--self build, or scripts/build-naude.mjs for a
+// (the blobulate WORKER for a quaude/--self build, or scripts/build-naude.mjs for a
 // naude build) needs real files. This is the SUPERSET both build targets need:
 // the node-shim tree + libexec support + ext-dep node_modules + deps manifests
 // (quaude/--self), plus the prebuilt naude bundle, postject, and the naude
 // assembler scripts (build --naude). Extra members a given target doesn't use
-// are harmless. Member-name -> on-disk-home mapping mirrors quaude-fuse.js's
+// are harmless. Member-name -> on-disk-home mapping mirrors quaude-blobulate.js's
 // archive namespace (target-env.cjs and the naude bundle ride at the archive
 // ROOT; everything else keeps its path).
-function materializeFusedPayload(vfs, mat) {
+function materializeBlobPayload(vfs, mat) {
   for (const [name, bytes] of vfs.files) {
     let dest;
     if (name.startsWith('node-shim/')) dest = path.join(mat, 'libexec', name);
     else if (name.startsWith('libexec/')) dest = path.join(mat, name);
     else if (name.startsWith('node_modules/')) dest = path.join(mat, name);
     // target-env.cjs rides at the archive ROOT (bare name) but belongs beside
-    // node-shim/ on disk, i.e. libexec/target-env.cjs — see quaude-fuse.js.
+    // node-shim/ on disk, i.e. libexec/target-env.cjs — see quaude-blobulate.js.
     else if (name === 'target-env.cjs') dest = path.join(mat, 'libexec', name);
     // deps/claude (ext-dep closure + lockfile sources of truth) AND deps/clode
     // (postject's carried JS — build --naude's --postject) keep their paths.
     else if (name.startsWith('deps/')) dest = path.join(mat, name);
-    // The naude assembler + its one sibling require (platform-tag.cjs). A fused
+    // The naude assembler + its one sibling require (platform-tag.cjs). A blobulated
     // builder ships no scripts/ dir; build --naude spawns the MATERIALIZED copy.
     else if (name.startsWith('scripts/')) dest = path.join(mat, name);
     // The prebuilt naude SEA main, carried at the archive root (Task 4).
@@ -429,7 +429,7 @@ function scanBareSpecifiers(file) {
 // declaration, kept JSON-shaped expressly so this parse is a JSON.parse and not a
 // guess. Both ways of EXECUTING the shim to ask it are closed to us:
 //   - SPAWNING a host — what this did, via `process.execPath -e` — assumes
-//     process.execPath is a Node. Under a fused native builder it is the fused
+//     process.execPath is a Node. Under a blobulated native builder it is the blobulated
 //     clode binary itself: there is no node on the box (that is the entire point
 //     of that artifact), it has no `-e`, and it exited 2 with its own usage. That
 //     broke EVERY `clode build` under clode-native while CI stayed green.
@@ -591,7 +591,7 @@ function resolveClaudeNmDir({ libexec, here, verbose, env, ROOT }) {
 }
 
 // Land the user's upstream Claude Code bundle on disk, extracted and ready to
-// fuse (quaude) or bake into a SEA (naude). BOTH `clode build` targets need the
+// blobulate (quaude) or bake into a SEA (naude). BOTH `clode build` targets need the
 // identical five-step sequence — resolve the binary, follow a wrapper, key a
 // cache dir by its identity, extract if that dir is cold — and they ran it
 // twice, in parallel copies, for long enough that the naude copy grew a comment
@@ -600,7 +600,7 @@ function resolveClaudeNmDir({ libexec, here, verbose, env, ROOT }) {
 // `prefix` names the failing target ('build' / 'build --naude') so the caller's
 // errors still say WHICH build died — the only real difference between the two
 // former copies. `libexec` is a parameter rather than a closure read because the
-// quaude caller may hand us the MATERIALIZED libexec (a fused builder unpacks
+// quaude caller may hand us the MATERIALIZED libexec (a blobulated builder unpacks
 // its VFS to a temp dir and rebinds it), while naude always passes the on-disk
 // one. Errors come back as { error } for the caller to route through its own
 // fail() — this helper never writes to stderr or picks an exit code.
@@ -623,7 +623,7 @@ function stageUpstreamCli({ env, libexec, verbose, prefix, log }) {
     return { error: `${prefix}: extraction failed: ${(e && e.message) || e}` };
   }
   // WHICH PLATFORM THIS CARVE IS FOR, read from the provider's container bytes. Bun folds
-  // process.platform at carve time, so a graph is per-platform: a darwin target fused from a
+  // process.platform at carve time, so a graph is per-platform: a darwin target blobulated from a
   // linux carve is missing upstream's whole macOS credential store, which is how the
   // 2026-08-27 quaude shipped unable to read the login Keychain. It already keys the extract
   // cache (extract.cacheSignature), so a cache HIT here is by construction a carve for this
@@ -725,7 +725,7 @@ async function smokeTarget(bin, { spawnRun, env, cwd, timeout }) {
 
 // CLODE_TIMEOUT_SCALE: integer multiplier for every subprocess timeout in
 // the build pipeline (default 1). The timeouts are HANG guards, not pacing —
-// but a TCG-emulated guest runs 10-20x slower than metal, and the fuse
+// but a TCG-emulated guest runs 10-20x slower than metal, and the blobulate
 // worker's 5-minute guard killed a healthy bytecode compile on the matrix's
 // freebsd-arm64 leg (dispatch #14, 2026-07-10). CI's VM legs set 10.
 function timeoutScale(env) {
@@ -738,7 +738,7 @@ function timeoutScale(env) {
 // carries an arm64 slice — it dies "malformed object (unknown load command 5)".
 // When signing a fat template fails and the host arch is one of its slices, thin
 // to the host slice IN PLACE and retry: the worker only needs the host slice,
-// and the fused output degrades to a host-arch quaude (honest — a box whose
+// and the blobulated output degrades to a host-arch quaude (honest — a box whose
 // tooling can't sign the arm64 slice can neither run nor verify a universal one).
 // Modern hosts sign the fat template unchanged, so universal output is preserved.
 // Injectable spawnSync/platform/arch keep it unit-testable. Returns
@@ -778,7 +778,7 @@ function codesignAdHoc(file, opts = {}) {
   }
   // Signing failed. On old macOS (Mavericks, verified 10.9.5) codesign_allocate
   // cannot sign a fat Mach-O carrying an arm64 slice. Thin to the host slice IN
-  // PLACE and retry — the fused BUILDER (--self) degrades to host-arch, which is
+  // PLACE and retry — the blobulated BUILDER (--self) degrades to host-arch, which is
   // honest (a box that can't sign the arm64 slice can neither run nor verify a
   // universal one). Quaude output is thinned proactively before it ever reaches
   // here, so this reactive path is now only the --self fat-builder fallback.
@@ -858,7 +858,7 @@ function describeExit(r) {
 // build branch. Returns { naude, self, out } on success or { error } on a
 // bad argv; never throws, never writes anywhere (pure parse).
 // A TTY-only, in-place phase spinner for `clode build` — the build is discrete
-// phases with no known total (extract → fuse → smoke), so unlike `clode fetch`'s
+// phases with no known total (extract → blobulate → smoke), so unlike `clode fetch`'s
 // byte bar this is an animated phase LABEL, not a percentage. Mirrors
 // clode-update's download progress: redraw with `\r … \x1b[K`, clear with the
 // same. `active` should be `stderr.isTTY && !CLODE_VERBOSE` — piped/CI builds and
@@ -920,7 +920,7 @@ function parseBuildArgs(args) {
   // --self is the odd one out: it builds the native clode BUILDER, never a
   // product, so it composes with nothing. --naude and --target DO compose:
   // "--naude --target T" means cross-build a naude for T (blob-gen on the host,
-  // embed a fetched target-arch node). --target alone is a cross-fused quaude.
+  // embed a fetched target-arch node). --target alone is a cross-blobulated quaude.
   if (self && (naude || target)) {
     const other = naude ? '--naude' : '--target';
     return { error: `build: --self and ${other} are different build targets — pick one` };
@@ -1014,7 +1014,7 @@ async function defaultEngineFetch(url) {
 }
 
 // This clode's own tjs pin, to gate an engine/manifest against a version mismatch.
-// A fused clode bakes CLODE_TJS_PIN at build time; a dev checkout derives it from
+// A blobulated clode bakes CLODE_TJS_PIN at build time; a dev checkout derives it from
 // PINS.md (same "<ver>-<sha7>" shape the manifest uses, no leading v).
 // The engine recipe THIS clode was built from, baked by scripts/build-clode-main.mjs
 // exactly as the tjs pin is. Mirrors thisTjsPin's shape deliberately: env override
@@ -1037,7 +1037,7 @@ function thisEngineRecipe(env, opts) {
 
 function thisTjsPin(env, opts) {
   if (env.CLODE_TJS_PIN) return env.CLODE_TJS_PIN;
-  // Baked into the bundle from PINS.md at build time (esbuild define), so a fused
+  // Baked into the bundle from PINS.md at build time (esbuild define), so a blobulated
   // clode with no PINS.md still knows its pin. Undefined in a raw dev checkout
   // (same guard shape as __CLODE_BUNDLE_VERSION__) -> fall through to PINS.md.
   if (typeof __CLODE_BAKED_TJS_PIN__ !== 'undefined' && __CLODE_BAKED_TJS_PIN__) return __CLODE_BAKED_TJS_PIN__;
@@ -1046,7 +1046,7 @@ function thisTjsPin(env, opts) {
     const pins = require('node:fs').readFileSync(path.join(root, 'spike/quickjs/PINS.md'), 'utf8');
     const m = pins.match(/txiki\.js\s+v?([0-9.]+)\s+([0-9a-f]{7,})/i);
     if (m) return `${m[1]}-${m[2].slice(0, 7)}`;
-  } catch { /* fused clode with no PINS.md must bake CLODE_TJS_PIN */ }
+  } catch { /* blobulated clode with no PINS.md must bake CLODE_TJS_PIN */ }
   return null;
 }
 
@@ -1058,7 +1058,7 @@ async function clodeBuild(args, opts) {
   const env = opts.env || process.env;
   const stderr = opts.stderr || process.stderr;
   const stdout = opts.stdout || process.stdout;
-  // The one spawn seam every build step goes through (the fuse worker, the
+  // The one spawn seam every build step goes through (the blobulate worker, the
   // smokes, and the naude build). Injectable so the --naude wiring (and any
   // future step) is testable without spawning a real subprocess; defaults to
   // the module-level async `run`.
@@ -1118,14 +1118,14 @@ async function clodeBuild(args, opts) {
     //
     // That is not hypothetical: the shipped templates are all pinned
     // 26.6.0-1a230d3 (built 2026-07-27) and predate 906af8b, which made
-    // FSS.stat surface uid/gid. Fusing with one yields a Linux quaude that
+    // FSS.stat surface uid/gid. Blobulating with one yields a Linux quaude that
     // cannot boot at all — the bundle's tmpdir-ownership guard is told uid 0 for
     // a directory owned by the user and refuses. With no way to override, there
     // was no way to build a working one from this host either.
     clodeLog(`clode: build --target ${parsed.target}: using operator engine ${path.basename(env.CLODE_TARGET_TEMPLATE)} (CLODE_TARGET_TEMPLATE set — not fetching the published template)`);
   } else if (parsed.target && !naude) {
     // Resolve the target's prebuilt engine (pin-checked, sha-verified, cached),
-    // then hand it to the EXISTING compile-free cross-fuse path as the foreign
+    // then hand it to the EXISTING compile-free cross-blobulate path as the foreign
     // base (CLODE_TARGET_TEMPLATE). No compiler on this host — the engine is data.
     // (naude + --target skips this entirely: a naude cross-build resolves pinned
     // NODEs, not a tjs engine template — see the naude branch below.)
@@ -1161,37 +1161,37 @@ async function clodeBuild(args, opts) {
     } catch (e) { return fail(e.message); }
     report.finish('fetch-template');
     env.CLODE_TARGET_TEMPLATE = enginePath;
-    clodeLog(`clode: build --target ${parsed.target}: engine ${path.basename(enginePath)} -> cross-fuse`);
-    // fall through to the normal build+fuse flow, which honors CLODE_TARGET_TEMPLATE.
+    clodeLog(`clode: build --target ${parsed.target}: engine ${path.basename(enginePath)} -> cross-blobulate`);
+    // fall through to the normal build+blobulate flow, which honors CLODE_TARGET_TEMPLATE.
   }
 
   // -- naude branch (Task 4): `clode build --naude` bakes Claude Code into a
-  // Node SEA instead of fusing a quaude. It reuses the SAME resolve + extract
+  // Node SEA instead of blobulating a quaude. It reuses the SAME resolve + extract
   // machinery as the quaude path to land the user's cli.cjs, then hands that
   // cli.cjs to scripts/build-naude.mjs (which runs the esbuild/postject SEA
-  // pipeline — Node >= 24 hosts only) and RETURNS, never touching the fuse.
+  // pipeline — Node >= 24 hosts only) and RETURNS, never touching the blobulate.
   if (naude) {
     const vfs = globalThis.__quaudeVFS;
-    const fusedBuilder = !!(vfs && vfs.manifest && vfs.manifest.role === 'builder');
+    const blobulatedBuilder = !!(vfs && vfs.manifest && vfs.manifest.role === 'builder');
     const ROOT = path.resolve(opts.libexec, '..');
     const outArgs = out ? ['--out', out] : [];
 
-    // -- fused-builder payload: a native clode ships NO checkout on disk, so
+    // -- blobulated-builder payload: a native clode ships NO checkout on disk, so
     // every real file a naude build touches is carried as an archive member —
     // the extractor + bun-shim (provider extraction), the ext-dep
     // node_modules/manifests (closure), the naude assembler (build-naude.mjs +
     // its platform-tag.cjs sibling), the prebuilt SEA bundle, and postject.
     // Materialize them FIRST, before anything reads from disk, and thread the
     // materialized libexec (`effLibexec`) through extraction + the gate.
-    // Non-fused (a checkout) uses everything in place.
+    // Non-blobulated (a checkout) uses everything in place.
     let payloadDir = null;
-    if (fusedBuilder) {
+    if (blobulatedBuilder) {
       payloadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-payload-'));
-      materializeFusedPayload(vfs, payloadDir);
-      clodeLog(`clode: build --naude: materialized the fused payload -> ${payloadDir}`);
+      materializeBlobPayload(vfs, payloadDir);
+      clodeLog(`clode: build --naude: materialized the blobulated payload -> ${payloadDir}`);
     }
-    const assembleRoot = fusedBuilder ? payloadDir : ROOT;
-    const effLibexec = fusedBuilder ? path.join(payloadDir, 'libexec') : opts.libexec;
+    const assembleRoot = blobulatedBuilder ? payloadDir : ROOT;
+    const effLibexec = blobulatedBuilder ? path.join(payloadDir, 'libexec') : opts.libexec;
 
     try {
       // -- CAN THIS BUILD HAPPEN AT ALL? Asked FIRST, because it is a pure lookup in
@@ -1281,11 +1281,11 @@ async function clodeBuild(args, opts) {
       }
 
       const buildNaudeScript = path.join(assembleRoot, 'scripts', 'build-naude.mjs');
-      const bundlePath = fusedBuilder
+      const bundlePath = blobulatedBuilder
         ? path.join(payloadDir, 'naude-entry.bundle.cjs')
         : path.join(ROOT, 'build', 'bundle', 'naude-entry.bundle.cjs');
       const postjectDir = path.join(assembleRoot, 'deps', 'clode', 'node_modules', 'postject');
-      const nmDir = fusedBuilder
+      const nmDir = blobulatedBuilder
         ? path.join(payloadDir, 'node_modules')
         : resolveClaudeNmDir({ libexec: effLibexec, here, verbose, env, ROOT });
 
@@ -1295,7 +1295,7 @@ async function clodeBuild(args, opts) {
       // bundle references but the seed list never learned about. Computed fresh
       // here — this branch returns before reaching the quaude/--self shared
       // block's own closure computation. Sources of truth follow assembleRoot/
-      // effLibexec (the materialized payload under a fused builder, the checkout
+      // effLibexec (the materialized payload under a blobulated builder, the checkout
       // otherwise).
       // `closureVersions` is filled as a side effect of the walk — it is what turns the
       // bare names into the name@version BOM the naude manifest carries, exactly as the
@@ -1324,7 +1324,7 @@ async function clodeBuild(args, opts) {
       // container cannot be named — the same word the extract cache key uses, so "we could
       // not tell" stays distinguishable from "nobody recorded it".
       // Passed as a FILE, not argv: the BOM is unbounded in length, and a temp JSON is the
-      // same shape quaude's fuse worker already takes its node-side fields in.
+      // same shape quaude's blobulate worker already takes its node-side fields in.
       const naudeExtras = {
         clodeVersion: version,
         bundleVersion: staged.key,
@@ -1383,7 +1383,7 @@ async function clodeBuild(args, opts) {
     if (parsed.target) {
       // Cross-build: the host cannot exec a foreign binary (the whole point of
       // a cross build) — attest instead of smoking, exactly like the quaude
-      // cross-fuse path. build-naude.mjs already self-checked the assembled
+      // cross-blobulate path. build-naude.mjs already self-checked the assembled
       // structure (its own postject-injection smokeCheck) and skipped ITS
       // run-smoke when blobgen !== embed; there is nothing left this host can
       // safely execute. smokeTarget is deliberately never reached here.
@@ -1443,47 +1443,47 @@ async function clodeBuild(args, opts) {
   // bundleVersion field.
   let bundleVersion;
   try {
-    // -- fused-builder payload: when `build` runs under a fused NATIVE clode
-    // (the bootstrap mounted the builder-role VFS), the fuse inputs are archive
+    // -- blobulated-builder payload: when `build` runs under a blobulated NATIVE clode
+    // (the bootstrap mounted the builder-role VFS), the blobulate inputs are archive
     // members, but the worker is a template-tjs SUBPROCESS that needs real
     // files — materialize libexec + node-shim + node_modules to disk once.
     let libexec = opts.libexec;
     let nmDir = null;
     const vfs = globalThis.__quaudeVFS;
     if (vfs && vfs.manifest && vfs.manifest.role === 'builder') {
-      // Materialize the builder-role members to disk (the fuse WORKER is a
+      // Materialize the builder-role members to disk (the blobulate WORKER is a
       // template-tjs subprocess that needs real files). Shared with the naude
       // branch's own materialization above — one member-name -> on-disk-home
-      // map (materializeFusedPayload); this target uses libexec + node_modules +
+      // map (materializeBlobPayload); this target uses libexec + node_modules +
       // deps/claude (the naude-only members it also lands are unused here).
       const mat = path.join(work, 'payload');
-      materializeFusedPayload(vfs, mat);
+      materializeBlobPayload(vfs, mat);
       libexec = path.join(mat, 'libexec');
       nmDir = path.join(mat, 'node_modules');
-      clodeLog(`clode: build: materialized the fused payload -> ${mat}`);
+      clodeLog(`clode: build: materialized the blobulated payload -> ${mat}`);
     }
     // ROOT/deps/claude/package.json is the ext-dep closure's source of truth
     // (readDirectDeps below) — Claude Code's runtime deps (buffer, ws, yaml,
     // ...), not clode's own (clode has none; see deps/claude/package.json's
     // description). `libexec` is the local var above — REASSIGNED to
-    // mat/libexec under a fused builder — so this always points at the tree
-    // that actually has the manifest on disk (mat under a fused builder, the
+    // mat/libexec under a blobulated builder — so this always points at the tree
+    // that actually has the manifest on disk (mat under a blobulated builder, the
     // real checkout otherwise), unlike the `ROOT` const above (which is fixed
-    // to opts.libexec's parent and stays virtual under a fused builder).
+    // to opts.libexec's parent and stays virtual under a blobulated builder).
     const pkgJsonPath = path.join(path.dirname(libexec), 'deps', 'claude', 'package.json');
     // Same tree as pkgJsonPath, same reasoning: the lockfile gate's source of
     // truth (assertClosureMatchesLockfile below) — mat/deps/claude/package-lock.json
-    // under a fused builder (materialized above), the real checkout otherwise.
+    // under a blobulated builder (materialized above), the real checkout otherwise.
     const lockfilePath = path.join(path.dirname(libexec), 'deps', 'claude', 'package-lock.json');
 
     // -- template resolution: an explicit CLODE_TJS wins (and must exist —
     // fail loud, never fall through a typo); then the EMBEDDED pristine
-    // template a builder-role fuse carries (Q2 Decision 2 — the shipped
+    // template a builder-role blobulate carries (Q2 Decision 2 — the shipped
     // builder needs nothing on disk); then the pinned tjs this repo builds
     // (scripts/build-tjs.mjs).
     let template = env.CLODE_TJS || null;
     if (!template && vfs && vfs.manifest && vfs.manifest.role === 'builder' && vfs.files.get('template/tjs')) {
-      // The embedded template is materialized to disk and spawned as the fuse
+      // The embedded template is materialized to disk and spawned as the blobulate
       // WORKER. On Windows name it .exe so CreateProcess execs the PE
       // unambiguously (a bare extension-less name is fragile). POSIX unchanged.
       template = path.join(work, process.platform === 'win32' ? 'template-tjs.exe' : 'template-tjs');
@@ -1502,7 +1502,7 @@ async function clodeBuild(args, opts) {
         return fail('build: embedded template sha256 mismatch after materialization (shim fs write fault?)');
       }
       if (process.platform === 'darwin') {
-        // Same discipline as the fuse copy below: a materialized Mach-O may
+        // Same discipline as the blobulate copy below: a materialized Mach-O may
         // need its ad-hoc signature refreshed before it can exec. On old macOS
         // a fat template can't be signed — thin-to-host-and-retry (see helper).
         const r = codesignAdHoc(template, { log: clodeLog });
@@ -1514,7 +1514,7 @@ async function clodeBuild(args, opts) {
     if (!fs.existsSync(template)) {
       return fail(`build: no tjs template at '${template}' (run scripts/build-tjs.mjs, or set CLODE_TJS)`);
     }
-    // CROSS-FUSE (cross-fuse design, prereq 3): CLODE_TARGET_TEMPLATE names a
+    // CROSS-BLOBULATE (cross-blobulate design, prereq 3): CLODE_TARGET_TEMPLATE names a
     // FOREIGN-platform tjs to receive the trailer, while the worker still runs
     // under the host `template` (CLODE_TJS). Sound because canonical-LE makes
     // the compiled bytecode endian-portable and the pinned quickjs-ng gives
@@ -1529,9 +1529,9 @@ async function clodeBuild(args, opts) {
 
     // ENGINE ABI GATE. The shim reads fs/os constants from the engine and refuses
     // to guess (libexec/node-shim/internal/engine-constants.cjs). An engine that
-    // predates that patch cannot supply them, so fusing one produces a quaude that
+    // predates that patch cannot supply them, so blobulating one produces a quaude that
     // dies on first require('fs') — on the TARGET, long after this host called the
-    // build a success. Check here instead, at the one point every fuse passes
+    // build a success. Check here instead, at the one point every blobulate passes
     // through, host and cross alike.
     //
     // This is also the tripwire the stale-template problem always needed: the
@@ -1544,14 +1544,14 @@ async function clodeBuild(args, opts) {
       const required = (() => {
         // One source of truth: the number the shim itself enforces.
         //
-        // Read it through `libexec`, NOT __dirname. Under a fused NATIVE clode this
+        // Read it through `libexec`, NOT __dirname. Under a blobulated NATIVE clode this
         // file is esbuilt into the clode-main bundle, so __dirname is the archive
         // root and the join lands on '/quaude/node-shim/internal/engine-constants.cjs'
         // — which is a member NAME, not a path the bundle's fs can open, so the very
-        // first `clode build` under a fused builder died with ENOENT on it. `libexec`
+        // first `clode build` under a blobulated builder died with ENOENT on it. `libexec`
         // already points at the materialized payload in that case (set above, from
-        // materializeFusedPayload, which lands node-shim/ under <mat>/libexec/), and
-        // at the repo's libexec/ otherwise — the same two-case path every other fuse
+        // materializeBlobPayload, which lands node-shim/ under <mat>/libexec/), and
+        // at the repo's libexec/ otherwise — the same two-case path every other blobulate
         // input here is read through.
         const shimSrc = fs.readFileSync(
           path.join(libexec, 'node-shim/internal/engine-constants.cjs'), 'utf8');
@@ -1570,7 +1570,7 @@ async function clodeBuild(args, opts) {
       if (abi === null) {
         return fail(
           `build: engine '${path.basename(baseTemplate)}' predates the constants ABI and cannot report its own `
-          + `fs/os constants. A quaude fused from it dies on first require('fs') ON THE TARGET. `
+          + `fs/os constants. A quaude blobulated from it dies on first require('fs') ON THE TARGET. `
           + `Rebuild it (node scripts/build-tjs.mjs) or point CLODE_TARGET_TEMPLATE at a current engine. `
           + `Published templates built before 2026-08-21 are all in this state.`);
       }
@@ -1618,18 +1618,18 @@ async function clodeBuild(args, opts) {
         bundle = newest.c;
       }
       // The bundle freezes clode's own logic as of whenever it was esbuilt, so a
-      // stale one silently fuses a WRONG builder — this has already bitten once
-      // (the sparc cross-fuse campaign hit an 8-day-stale bundle that crashed
-      // inside the fused builder's extractIfNeeded; the fix at the time was a
+      // stale one silently blobulates a WRONG builder — this has already bitten once
+      // (the sparc cross-blobulate campaign hit an 8-day-stale bundle that crashed
+      // inside the blobulated builder's extractIfNeeded; the fix at the time was a
       // convention — "run build-clode-main.mjs first" — and conventions don't hold,
       // as this same skew recurring here proves). So this is a hard gate, not a
-      // warning: fail loud and name the exact command rather than fuse a builder
+      // warning: fail loud and name the exact command rather than blobulate a builder
       // that answers a dead flag surface. Deliberately the simple "newest mtime
       // under libexec/*.cjs" rule (a superset of clode-main's real require graph)
       // rather than a clever per-module dependency walk — obviously correct beats
       // clever here. Applies even when CLODE_MAIN_BUNDLE was set explicitly: an
       // override picks WHICH bundle, not whether it's fresh, and the failure mode
-      // (wrong builder fused silently) is identical either way.
+      // (wrong builder blobulated silently) is identical either way.
       const bm = fs.statSync(bundle).mtimeMs;
       // Exclude AppleDouble sidecars (this mount litters libexec/._*.cjs — see
       // git-gc-fails-appledouble): they are not real sources, and their mtimes
@@ -1638,14 +1638,14 @@ async function clodeBuild(args, opts) {
       const staleSrc = fs.readdirSync(libexec).find((f) => /\.(cjs|mjs|js)$/.test(f) && !f.startsWith('._')
         && fs.statSync(path.join(libexec, f)).mtimeMs > bm);
       if (staleSrc) {
-        return fail(`build --self: ${bundle} is older than libexec/${staleSrc} — a stale bundle would fuse a WRONG builder (dead flag surface / extractIfNeeded crash); re-run \`node scripts/build-clode-main.mjs\` and try again`);
+        return fail(`build --self: ${bundle} is older than libexec/${staleSrc} — a stale bundle would blobulate a WRONG builder (dead flag surface / extractIfNeeded crash); re-run \`node scripts/build-clode-main.mjs\` and try again`);
       }
       stageDir = path.join(work, 'stage');
       fs.mkdirSync(stageDir, { recursive: true });
       fs.copyFileSync(bundle, path.join(stageDir, 'clode-main.bundle.cjs'));
       // Sibling bundle from the same build-clode-main.mjs run: the naude entry
       // point, pre-esbuilt off the user path (Task 4). Carried alongside
-      // clode-main.bundle.cjs so the fuse worker (quaude-fuse.js) can ship it
+      // clode-main.bundle.cjs so the blobulate worker (quaude-blobulate.js) can ship it
       // as a builder-role member too. The stale-bundle gate above already
       // guarantees clode-main.bundle.cjs's freshness; since both bundles come
       // from the same script run, no separate freshness gate is needed here.
@@ -1653,7 +1653,7 @@ async function clodeBuild(args, opts) {
       clodeLog(`clode: build: staging builder bundle ${bundle} ...`);
     } else {
       // Upstream bundle: resolve + extract + hook via the existing machinery —
-      // `libexec` here is the possibly-materialized one (a fused builder rebinds
+      // `libexec` here is the possibly-materialized one (a blobulated builder rebinds
       // it above), which is why stageUpstreamCli takes it as an argument.
       const staged = stageUpstreamCli({ env, libexec, verbose, prefix: 'build', log: clodeLog });
       if (staged.error) return fail(staged.error);
@@ -1697,8 +1697,8 @@ async function clodeBuild(args, opts) {
     report.finish('extract');
 
     // -- ext-dep closure (both roles: quaude requires them at runtime; the
-    // builder ships them as the member INPUTS for the quaude it will fuse).
-    // Already materialized from the payload under a fused builder; otherwise
+    // builder ships them as the member INPUTS for the quaude it will blobulate).
+    // Already materialized from the payload under a blobulated builder; otherwise
     // ensureDeps installs into the deps store unless the deps ship beside
     // this checkout (deps/claude/node_modules — Claude Code's deps, not
     // clode's own; repo/npm layout).
@@ -1707,7 +1707,7 @@ async function clodeBuild(args, opts) {
     // ext-dep closure is separate work from staging the bundle above, and
     // unlike that step it DOES have a natural denominator — the package
     // count — known only once the walk (computeDepClosure) actually
-    // finishes, same "declare once truly known" rule quaude-fuse.js's own
+    // finishes, same "declare once truly known" rule quaude-blobulate.js's own
     // 'compile'/'assets' steps follow (see its comment on why 'merge' alone
     // is planned up front and the rest waits).
     spin.phase('Resolving dependencies');
@@ -1719,12 +1719,12 @@ async function clodeBuild(args, opts) {
       }
     }
 
-    // The closure travels to the fuse worker as DATA (extras.json below), not
-    // code: quaude-fuse.js runs under tjs and cannot require() a shared node
+    // The closure travels to the blobulate worker as DATA (extras.json below), not
+    // code: quaude-blobulate.js runs under tjs and cannot require() a shared node
     // module to recompute this itself. Computed HONESTLY from package.json's
     // `dependencies` + their transitive closure (readDirectDeps/
     // computeDepClosure, above) — this used to be a second, independently
-    // hand-maintained list living in quaude-fuse.js that silently rotted
+    // hand-maintained list living in quaude-blobulate.js that silently rotted
     // whenever package.json's dependencies changed without a matching edit
     // there (duplication audit §1).
     // closureVersions is filled as a side effect of the walk (name -> the
@@ -1739,7 +1739,7 @@ async function clodeBuild(args, opts) {
     }
     // Declared+finished together, immediately after the count is known: the
     // walk itself is one synchronous call, not an iterative loop this file
-    // could report progress() through — same shape as quaude-fuse.js's
+    // could report progress() through — same shape as quaude-blobulate.js's
     // 'assets' step (a count with no live increments in between).
     report.plan([{ name: 'resolve-deps', total: extDeps.length }]);
     report.start('resolve-deps');
@@ -1804,11 +1804,11 @@ async function clodeBuild(args, opts) {
       providerPlatform: self ? undefined : (providerPlatform || 'unknown'),
       clodeVersion: version,
       template: { sha256: sha256File(baseTemplate), len: fs.statSync(baseTemplate).size },
-      // The transforms baked into the fused artifact beyond the members
+      // The transforms baked into the blobulated artifact beyond the members
       // themselves: the extractor that hooked cli.cjs (memo §6.9 — staleness of
       // the frozen entry transforms is detectable via these + bundleVersion).
       hooks: { 'extract-claude-js.cjs': sha256File(path.join(libexec, 'extract-claude-js.cjs')) },
-      // The ext-dep closure quaude-fuse.js must embed as members (duplication
+      // The ext-dep closure quaude-blobulate.js must embed as members (duplication
       // audit §1) — package.json's dependencies + their transitive closure,
       // walked from nmDir just above. NOT part of the quaude manifest (the
       // worker consumes this from extras.json but never re-emits it).
@@ -1831,7 +1831,7 @@ async function clodeBuild(args, opts) {
     fs.chmodSync(signedBase, 0o755);
     if (process.platform === 'darwin' && !crossTarget && !self) {
       // A quaude is built to run on THIS machine, so it needs only the host slice.
-      // Thin a fat/universal template down to the host arch: no point fusing a
+      // Thin a fat/universal template down to the host arch: no point blobulating a
       // 4-arch quaude carrying ppc/i386/other slices this box will never exec, and
       // it sidesteps the Mavericks fat-sign problem for free (the sign below then
       // always operates on a thin binary). The BUILDER (--self) is deliberately
@@ -1853,39 +1853,39 @@ async function clodeBuild(args, opts) {
     fs.writeFileSync(extrasPath, JSON.stringify(extras));
     report.finish('sign');
 
-    // -- fuse, under the template itself.
-    spin.phase('Fusing');
-    report.plan([{ name: 'fuse' }]);
-    report.start('fuse');
-    clodeLog(`clode: build: fusing ${out} ...`);
-    const w = await spawnRun(template, ['run', path.join(libexec, 'quaude-fuse.js'),
+    // -- blobulate, under the template itself.
+    spin.phase('Blobulating');
+    report.plan([{ name: 'blobulate' }]);
+    report.start('blobulate');
+    clodeLog(`clode: build: blobulating ${out} ...`);
+    const w = await spawnRun(template, ['run', path.join(libexec, 'quaude-blobulate.js'),
       signedBase, stageDir, path.join(libexec, 'node-shim'), nmDir,
       path.join(libexec, 'quaude-bootstrap.mjs'), extrasPath, out,
       // --self embeds the PRISTINE base template as a member (Decision 2) so a
-      // fused builder can materialize+exec it as the fuse worker with nothing
+      // blobulated builder can materialize+exec it as the blobulate worker with nothing
       // else on disk. This MUST be baseTemplate (the target-platform base,
-      // = crossTarget for a cross-fuse), NOT `template` (the HOST engine that
-      // runs THIS worker) — else a cross-fused builder ships a host-arch
+      // = crossTarget for a cross-blobulate), NOT `template` (the HOST engine that
+      // runs THIS worker) — else a cross-blobulated builder ships a host-arch
       // template it cannot exec on the target. Native --self: baseTemplate ===
       // template, so this is unchanged there. The quaude role embeds nothing
       // (its base IS the signed copy).
-      // 30 minutes, not 5. A COLD fuse of a bundle with cyclic requires (upstream 2.1.248+)
+      // 30 minutes, not 5. A COLD blobulate of a bundle with cyclic requires (upstream 2.1.248+)
       // merges the graph's strongly connected groups inside the worker, and the real 95-module
       // group costs ~380s under tjs on a fast arm64 Mac (measured in situ: 398s of a 6:52 build)
       // — the old 300s budget killed the build mid-merge, before the worker could cache the
       // result, so every retry died exactly the same way.
-      // The merge is cached once per provider (quaude-fuse.js's graph-merged.json), so only the
+      // The merge is cached once per provider (quaude-blobulate.js's graph-merged.json), so only the
       // first build of a given upstream version on a given machine gets anywhere near this.
       ...(self ? [baseTemplate] : [])], { env, timeout: 1800000 * SCALE });
-    report.finish('fuse');
+    report.finish('blobulate');
     // Route the worker's protocol lines into the SAME composer, over the spawn
     // seam — the one every build step goes through — BEFORE the status check:
-    // a failed fuse may still have reported real partial progress (compile got
+    // a failed blobulate may still have reported real partial progress (compile got
     // partway through before the worker died) worth keeping. `run` buffers the
     // whole child stdout rather than streaming it, so this happens once the
     // worker has already exited, not live — the trace log and the totals a
     // LATER phase's spinner reads are still real, they just update in one
-    // jump rather than incrementally during 'Fusing' itself.
+    // jump rather than incrementally during 'Blobulating' itself.
     //
     // ingest() returns false for a line that is not one of its `@clode-step `
     // sentinels — anything else the worker printed (its own console.log
@@ -1915,7 +1915,7 @@ async function clodeBuild(args, opts) {
       // progress (compile got partway through) before dying must not dump
       // raw @clode-step {...} JSON into the build's own error message — the
       // exact place a clean, human-readable failure matters most.
-      return fail(`build: fuse worker failed (${describeExit(w)}):\n${workerPassthrough}${w.stderr}${extra}`);
+      return fail(`build: blobulate worker failed (${describeExit(w)}):\n${workerPassthrough}${w.stderr}${extra}`);
     }
     clodeLog(workerPassthrough.trimEnd());
 
@@ -1950,13 +1950,13 @@ async function clodeBuild(args, opts) {
       stderr.write(`clode: build: --keep-going set — continuing despite ${mismatches.length} mismatch(es)\n`);
     }
 
-    // Cross-fuse: the trailer is written to a foreign-platform base the host
+    // Cross-blobulate: the trailer is written to a foreign-platform base the host
     // cannot exec, so stop here — no PONG/attest/version smoke. The output is
     // proven on the target's own oracle (its VM/hardware). attest still runs
     // THERE (it verifies member shas from the trailer, arch-independent).
     if (crossTarget) {
       spin.done();
-      stdout.write(`clode: cross-fused ${out} (${fs.statSync(out).size} bytes, target ${path.basename(crossTarget)}) — smoke on the target\n`);
+      stdout.write(`clode: cross-blobulated ${out} (${fs.statSync(out).size} bytes, target ${path.basename(crossTarget)}) — smoke on the target\n`);
       return 0;
     }
 
@@ -1977,7 +1977,7 @@ async function clodeBuild(args, opts) {
       report.finish('smoke-version');
       spin.done();
       if (v.status !== 0 || !/^clode /.test(v.stdout)) {
-        stderr.write(`clode: build --self: SMOKE FAILED — the fused builder did not answer --version\n`);
+        stderr.write(`clode: build --self: SMOKE FAILED — the blobulated builder did not answer --version\n`);
         stderr.write(`clode: build --self: ${describeExit(v)} stdout:\n${v.stdout}\nstderr:\n${v.stderr}\n`);
         return 1;
       }
@@ -1988,12 +1988,12 @@ async function clodeBuild(args, opts) {
       report.finish('smoke-help');
       spin.done();
       if (h.status !== 0 || !/clode build/.test(h.stdout)) {
-        stderr.write(`clode: build --self: SMOKE FAILED — the fused builder did not answer --help\n`);
+        stderr.write(`clode: build --self: SMOKE FAILED — the blobulated builder did not answer --help\n`);
         stderr.write(`clode: build --self: ${describeExit(h)} stdout:\n${h.stdout}\nstderr:\n${h.stderr}\n`);
         return 1;
       }
-      stdout.write(`clode: fused ${out} (${fs.statSync(out).size} bytes, native clode builder)\n`);
-      stdout.write(`clode: smoke: --version + --help ok — run '${out} build' to fuse a quaude\n`);
+      stdout.write(`clode: blobulated ${out} (${fs.statSync(out).size} bytes, native clode builder)\n`);
+      stdout.write(`clode: smoke: --version + --help ok — run '${out} build' to blobulate a quaude\n`);
       return 0;
     }
 
@@ -2008,7 +2008,7 @@ async function clodeBuild(args, opts) {
     report.finish('smoke');
     spin.done();
     if (!smoke.ok) {
-      stderr.write(`clode: build: SMOKE FAILED — the fused quaude did not complete the mock round-trip\n`);
+      stderr.write(`clode: build: SMOKE FAILED — the blobulated quaude did not complete the mock round-trip\n`);
       stderr.write(`clode: build: ${smoke.how} posted=${smoke.posted} stdout:\n${smoke.stdout}\nstderr:\n${smoke.stderr}\n`);
       return 1;
     }
@@ -2028,7 +2028,7 @@ async function clodeBuild(args, opts) {
       return 1;
     }
 
-    stdout.write(`clode: fused ${out} (${fs.statSync(out).size} bytes, bundle ${key})\n`);
+    stdout.write(`clode: blobulated ${out} (${fs.statSync(out).size} bytes, bundle ${key})\n`);
     stdout.write(`clode: smoke: PONG round-trip ok, attest ok — run '${out}' to use it\n`);
     return 0;
   } finally {

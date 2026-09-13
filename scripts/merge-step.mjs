@@ -1,11 +1,11 @@
 // merge-step — the cyclic-group merge as a protocol-only component (phase-2 design §2:
 // "a build COMPONENT declares its own steps and reports events; an ORCHESTRATOR composes
 // them without knowing what the steps are"). This is the merge, and nothing else: the
-// worker that spawns it (libexec/quaude-fuse.js) does not know how it merges, only that
-// it does — the same relationship quaude-fuse.js itself has with clode-build.cjs (its own
-// argv contract is the style this one follows, quaude-fuse.js:7-21).
+// worker that spawns it (libexec/quaude-blobulate.js) does not know how it merges, only that
+// it does — the same relationship quaude-blobulate.js itself has with clode-build.cjs (its own
+// argv contract is the style this one follows, quaude-blobulate.js:7-21).
 //
-// Usage (spawned by quaude-fuse.js, not by hand — though it is ALSO meant to be run by
+// Usage (spawned by quaude-blobulate.js, not by hand — though it is ALSO meant to be run by
 // hand, which is the whole point of extracting it: "worth being able to run, time, and
 // cache on its own"):
 //   tjs run merge-step.mjs <graph.json> <libexec-dir> <stage-dir>
@@ -20,12 +20,12 @@
 //   stage-dir:   where the result is cached, as <stage-dir>/graph-merged.json — keyed on
 //     stage-dir's own basename (the provider key) AND the merger's MERGER_VERSION, so
 //     editing scc-merge.cjs invalidates every existing cache rather than silently having
-//     no effect on a machine that already built once. The caller (quaude-fuse.js) reads
+//     no effect on a machine that already built once. The caller (quaude-blobulate.js) reads
 //     this file back and applies it onto its OWN in-memory doc; this process never writes
 //     graph.json itself.
 //
 // Emits the `merge` step (plan/start/finish) through libexec/build-report.cjs on stdout,
-// MARK-prefixed — quaude-fuse.js spawns this with stdout/stderr INHERITED, so these lines
+// MARK-prefixed — quaude-blobulate.js spawns this with stdout/stderr INHERITED, so these lines
 // land directly in the same stream clode-build.cjs already ingests at the spawn seam
 // (libexec/clode-build.cjs:889); there is no relay code on either side, only a shared fd.
 //
@@ -53,7 +53,7 @@ async function mustRead(file, what) {
 }
 
 // libexec/*.cjs, loaded by a script that runs under tjs with no CJS resolver of its own —
-// the SAME reason quaude-fuse.js carries this exact helper (its own copy, not shared: two
+// the SAME reason quaude-blobulate.js carries this exact helper (its own copy, not shared: two
 // independently-spawned processes, no module system between them). Both files it loads
 // this way are deliberately dependency-free, so require() is a loud stub rather than a
 // resolver.
@@ -78,7 +78,7 @@ const report = new Reporter({ emit: (line) => { console.log(line); } });
 
 // Extraction is already cached once per provider in ~/.cache/clode/<key>/ (cli.cjs,
 // bun-shim.cjs); the merged graph belongs beside them so every later build of the same
-// provider, for any target, reuses it. MUST MATCH quaude-fuse.js's own read-back of this
+// provider, for any target, reuses it. MUST MATCH quaude-blobulate.js's own read-back of this
 // filename — the two processes' sole shared contract for the merged bytes.
 const MERGED_CACHE_FILE = 'graph-merged.json';
 const MERGED_CACHE_FORMAT = 'clode-scc-merge-v1';
@@ -217,7 +217,7 @@ if (!cyclicRequires.length) {
     // build the same ~6 minutes, because the pre-extraction code had already applied the
     // computed result onto the in-memory `doc` the CALLER went on to use). Extraction
     // changed that: this process's `doc` is private, and this file is now the ONLY
-    // channel the computed result travels back to the parent on — quaude-fuse.js's
+    // channel the computed result travels back to the parent on — quaude-blobulate.js's
     // read-back (`mustRead` on this exact path) is unconditional whenever this branch
     // ran. A failed write here is no longer "the next build pays" — it is "THIS build,
     // which just paid the full ~380s compute, dies on a read failure that names the wrong

@@ -1,5 +1,5 @@
 'use strict';
-// Q1b items 3/5/6 end-to-end: `clode build` fuses a real quaude on this machine
+// Q1b items 3/5/6 end-to-end: `clode build` blobulates a real quaude on this machine
 // (template tjs + compiled 2.1.204-class bundle), then the artifact is put
 // through the acceptance battery:
 //   - the build itself smokes PONG + attest internally (exit 0 required);
@@ -11,7 +11,7 @@
 //   - THE GATE ITSELF: a tampered copy of the same binary must FAIL attest —
 //     a verification that cannot fail is not a verification;
 //   - the STRICT-MODE sweep the design memo requires (§6.3): the agentic Bash
-//     mock oracle from test/node-shim-agentic.test.cjs, pointed at the fused
+//     mock oracle from test/node-shim-agentic.test.cjs, pointed at the blobulated
 //     binary — the bundle runs as compiled-module bytecode (strict), so this
 //     is the tool-use path's strictness gate;
 //   - TUI paint smoke, additionally gated (darwin only) on CLODE_LIVE_RENDER=1
@@ -64,7 +64,7 @@ before(() => {
 });
 after(() => { if (DIR) { try { fs.rmSync(DIR, { recursive: true, force: true }); } catch { /* */ } } });
 
-// Async spawn of the fused binary (the agentic oracle needs the in-process mock
+// Async spawn of the blobulated binary (the agentic oracle needs the in-process mock
 // to stay serviceable — spawnSync would starve it).
 function runQuaude(args, env, timeoutMs = 120000) {
   return new Promise((resolve) => {
@@ -77,20 +77,20 @@ function runQuaude(args, env, timeoutMs = 120000) {
     child.on('error', (e) => { clearTimeout(to); resolve({ status: null, stdout, stderr: String(e) }); });
   });
 }
-// The fused binary must be self-contained: no NODE_PATH ever.
+// The blobulated binary must be self-contained: no NODE_PATH ever.
 function cleanEnv(extra) {
   const env = { ...process.env, ...extra };
   delete env.NODE_PATH;
   return env;
 }
 
-test('clode build fuses a quaude and its internal PONG + attest smokes pass', (t) => {
+test('clode build blobulates a quaude and its internal PONG + attest smokes pass', (t) => {
   if (SKIP) { t.skip(SKIP); return; }
   assert.strictEqual(BUILD.status, 0, `clode build failed:\n${BUILD.stdout}\n${BUILD.stderr}`);
-  assert.match(BUILD.stdout, /clode: fused /);
+  assert.match(BUILD.stdout, /clode: blobulated /);
   assert.match(BUILD.stdout, /PONG round-trip ok, attest ok/);
-  assert.ok(fs.statSync(QUAUDE).size > 30 * 1024 * 1024, 'fused binary implausibly small');
-  assert.ok(fs.statSync(QUAUDE).mode & 0o111, 'fused binary not executable');
+  assert.ok(fs.statSync(QUAUDE).size > 30 * 1024 * 1024, 'blobulated binary implausibly small');
+  assert.ok(fs.statSync(QUAUDE).mode & 0o111, 'blobulated binary not executable');
 });
 
 test('attest golden: stable manifest fields + full member verification', async (t) => {
@@ -112,17 +112,17 @@ test('attest golden: stable manifest fields + full member verification', async (
   assert.strictEqual(manifest.role, 'quaude');
   // THE ENTRY MEMBER IS NAMED FOR THE BUNDLE SHAPE, and both shapes are ours:
   // 'cli.qbc' for a single-CJS provider, 'graph.qbc' for a code-split one (2.1.243+,
-  // libexec/quaude-fuse.js). Pinning only the first made this golden fail against a
+  // libexec/quaude-blobulate.js). Pinning only the first made this golden fail against a
   // CORRECTLY built quaude from the day upstream went code-split — a red that named the
   // test, not the product, and sat there while it was the product we were changing.
   assert.ok(['cli.qbc', 'graph.qbc'].includes(manifest.entry),
     `unexpected entry member: ${manifest.entry}`);
   assert.strictEqual(manifest.bundleVersion, cacheKey(providerBin()));
   // WHICH PLATFORM'S BUNDLE IS IN HERE — read from the provider's container bytes, never from
-  // the host. Bun folds process.platform at carve time, so a darwin target fused from a linux
+  // the host. Bun folds process.platform at carve time, so a darwin target blobulated from a linux
   // carve has upstream's whole macOS credential store dead-coded away; that is the quaude that
   // shipped on 2026-08-27 unable to read the login Keychain. The version alone cannot say it,
-  // and until this field existed a fused target could not be asked at all.
+  // and until this field existed a blobulated target could not be asked at all.
   assert.strictEqual(manifest.providerPlatform, providerPlatformOf(providerBin()) || 'unknown');
   assert.ok(manifest.providerPlatform !== 'unknown',
     `the provider ${providerBin()} is a real container, so its platform must be NAMED, not 'unknown'`);
@@ -137,7 +137,7 @@ test('attest golden: stable manifest fields + full member verification', async (
     sha256File(path.join(REPO, 'libexec/extract-claude-js.cjs')));
   assert.ok(!Number.isNaN(Date.parse(manifest.builtAt)), 'builtAt not ISO-parseable');
   // target-env.cjs is a BARE member name (archive root, no libexec/ prefix —
-  // see quaude-fuse.js's comment on why): pre-existing test bug fixed
+  // see quaude-blobulate.js's comment on why): pre-existing test bug fixed
   // in-passing here (this exact assertion block is what Task a's BOM checks
   // extend below) — 'libexec/target-env.cjs' never was a real member name.
   // manifest.entry names whichever bytecode member this shape produced (cli.qbc or
@@ -221,13 +221,13 @@ test('the attest gate can fail: one flipped byte in a member -> VERIFICATION FAI
 test('the BINARY says which platform it was carved for, without being run', (t) => {
   if (SKIP) { t.skip(SKIP); return; }
   // --clode-attest can only answer on a target THIS host can execute, which excludes every
-  // cross-build — and a cross-build is exactly where a linux carve gets fused into a darwin
+  // cross-build — and a cross-build is exactly where a linux carve gets blobulated into a darwin
   // target. `strings` cannot answer either: a quaude stores the bundle as bytecode, and an hour
   // was spent in 2026-08-29 concluding the wrong thing from precisely that. manifest.json is a
   // plain member of the archive, so the answer is readable off the FILE.
   const manifest = readManifest(QUAUDE);
   assert.strictEqual(manifest.providerPlatform, providerPlatformOf(providerBin()) || 'unknown',
-    'the fused archive must record the carve platform where a host can read it without exec');
+    'the blobulated archive must record the carve platform where a host can read it without exec');
   // ... and it must agree with what the running target reports, or one of the two is lying.
   assert.strictEqual(manifest.role, 'quaude');
 });
@@ -261,7 +261,7 @@ test('the retired --quaude-attest is no longer a quaude flag', async (t) => {
   assert.doesNotMatch(r.stdout, /all members verified/, 'the retired flag still attests');
 });
 
-test('strict-mode sweep: agentic Bash mock oracle against the fused quaude', async (t) => {
+test('strict-mode sweep: agentic Bash mock oracle against the blobulated quaude', async (t) => {
   if (SKIP) { t.skip(SKIP); return; }
   const MARKER = 'QUAUDE-AGENTIC-MARKER-4207';
   const TOOL_ID = 'toolu_mock_quaude_bash_1';
@@ -350,7 +350,7 @@ test('quaude remote-control: the headless subcommand runs, and runs clean', asyn
   assert.doesNotMatch(out, /unhandledRejection/, 'no swallowed crash on the way to the prompt');
 });
 
-test('TUI paint smoke under the fused quaude (CLODE_LIVE_RENDER-gated)', (t) => {
+test('TUI paint smoke under the blobulated quaude (CLODE_LIVE_RENDER-gated)', (t) => {
   if (SKIP) { t.skip(SKIP); return; }
   const liveRenderSkip = liveRenderSkipReason();
   if (liveRenderSkip) { t.skip(liveRenderSkip); return; }

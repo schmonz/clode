@@ -11,7 +11,7 @@
 // Fix: scripts/extract-cacert-pem.mjs pulls that SAME already-vendored,
 // already-trusted bundle out of cacert.c (not a separately-sourced or
 // invented set) into libexec/node-shim/modules/tls-cacert.pem, a sibling
-// asset libexec/quaude-fuse.js sweeps into a fused quaude verbatim. This
+// asset libexec/quaude-blobulate.js sweeps into a blobulated quaude verbatim. This
 // file gates two things: (1) the extraction logic itself, against a small
 // synthetic fixture (no engine/tjs binary needed — pure node:test), and (2)
 // that the COMMITTED tls-cacert.pem is not stale relative to the cacert.c the

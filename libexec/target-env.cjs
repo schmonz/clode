@@ -3,10 +3,10 @@
 //
 // This was libexec/clode-run.cjs's applyBundleEnv — knowledge that used to live
 // on the launcher, back when clode ran Claude Code. clode is a builder now, so
-// the knowledge belongs to the things it builds: quaude applies it in its fused
+// the knowledge belongs to the things it builds: quaude applies it in its blobulated
 // bootstrap, naude in its SEA entry. Same contract either way.
 //
-// DEPENDENCY-FREE ON PURPOSE. quaude's bootstrap evaluates this as a fused
+// DEPENDENCY-FREE ON PURPOSE. quaude's bootstrap evaluates this as a blobulated
 // member under tjs, BEFORE the node-shim loader exists — there is no node:fs and
 // no node:path there. Every primitive is injected. Callers supply them; nothing
 // here reaches for a runtime.
@@ -93,7 +93,7 @@ function findOnPath({ env, platform, delimiter, isExec }) {
 
 // uaPlatform (navigator.userAgentData.platform) -> node's process.platform
 // spelling. Lives HERE, not in quaude-bootstrap.mjs or the node-shim, because
-// this is the one require-free member both evaluate early: quaude's fused
+// this is the one require-free member both evaluate early: quaude's blobulated
 // bootstrap runs this switch pre-node-shim (via the same `new Function`
 // evaluation it uses for shapeTargetEnv/probePaths), and the node-shim's
 // process.cjs requires this file directly (it has require by then). One copy

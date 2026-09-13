@@ -2,8 +2,8 @@
 // Extracts the Mozilla CA bundle txiki.js ALREADY vendors and ALREADY trusts
 // for real TLS (mbedtls's TLSTcp socket class, and every libwebsockets
 // https:// fetch()/wss:// connection — see mod_tls.c/lws-utils.c) into a
-// plain-PEM sibling asset the node-shim's tls.cjs can read at runtime, fused
-// or not (libexec/quaude-fuse.js sweeps every file under node-shim/modules/
+// plain-PEM sibling asset the node-shim's tls.cjs can read at runtime, blobulated
+// or not (libexec/quaude-blobulate.js sweeps every file under node-shim/modules/
 // verbatim, no extension filter).
 //
 // WHY extract rather than add a new engine primitive: tls.rootCertificates
@@ -59,8 +59,8 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // CLODE_TJS_VENDOR if your checkout lives somewhere else.
 const CACERT_C = path.join(tjsVendorParentDir(), 'txiki.js/src/cacert.c');
 const OUT_PEM = path.join(REPO, 'libexec/node-shim/modules/tls-cacert.pem');
-// Deliberately NOT beside the .pem: libexec/quaude-fuse.js sweeps every file under
-// node-shim/modules/ and node-shim/internal/ into a fused quaude verbatim, with no
+// Deliberately NOT beside the .pem: libexec/quaude-blobulate.js sweeps every file under
+// node-shim/modules/ and node-shim/internal/ into a blobulated quaude verbatim, with no
 // extension filter, so a record dropped there would ship inside every quaude for no
 // runtime reason. It belongs next to PINS.md, which is the fact it is anchored to.
 const PROVENANCE = path.join(REPO, 'spike/quickjs/tls-cacert-provenance.json');

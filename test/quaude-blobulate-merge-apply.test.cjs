@@ -1,21 +1,21 @@
 'use strict';
-// TASK 7 FIX ROUND 1: quaude-fuse.js's read-back of scripts/merge-step.mjs's computed
-// result (libexec/quaude-fuse.js, the `if (cyclicRequires.length && !alreadyMerged) {...}`
+// TASK 7 FIX ROUND 1: quaude-blobulate.js's read-back of scripts/merge-step.mjs's computed
+// result (libexec/quaude-blobulate.js, the `if (cyclicRequires.length && !alreadyMerged) {...}`
 // block that applies <stage-dir>/graph-merged.json onto `doc`) was exercised by NOTHING —
 // not node --test, not a live build (libexec/clode-extract.cjs REFUSES to stage an unmerged
 // graph when an engine is reachable, so the real product path never reaches this branch; it
 // exists only for a doc staged before the staging-time merge existed). This is a LIVE test,
-// not a source assertion: it drives the real quaude-fuse.js worker, under the real tjs
+// not a source assertion: it drives the real quaude-blobulate.js worker, under the real tjs
 // engine, through a genuinely unmerged staged graph — bypassing clode-extract.cjs entirely
 // by writing graph.json directly, the way "a doc staged before the merge moved to staging"
 // would have looked.
 //
-// It stops short of a full build (no real signed-base/bootstrap/node_modules — quaude-fuse.js
+// It stops short of a full build (no real signed-base/bootstrap/node_modules — quaude-blobulate.js
 // legitimately dies later, past the point this test cares about) and instead reads the
 // worker's OWN build-report protocol lines off stdout: 'merge' finishing with the expected
 // count, then 'compile' being PLANNED with a total that reflects the POST-merge doc.order
 // (one longer than the pre-merge order — one synthetic module per merged group, same
-// invariant test/quaude-fuse-report.test.cjs pins with a hand-built Composer sequence). If
+// invariant test/quaude-blobulate-report.test.cjs pins with a hand-built Composer sequence). If
 // the apply-back silently did nothing, 'compile' would be planned from the UNMERGED,
 // shorter order instead.
 const test = require('node:test');
@@ -55,11 +55,11 @@ function docWithCycle() {
   };
 }
 
-// Run the real quaude-fuse.js worker far enough to plan 'compile', then let it die (missing
+// Run the real quaude-blobulate.js worker far enough to plan 'compile', then let it die (missing
 // bootstrap/signed-base/deps — none of which this test needs). Returns the parsed
 // @clode-step lines seen on stdout before that.
 function runWorkerThroughCompilePlan(t, { stageDir }) {
-  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'quaude-fuse-merge-apply-'));
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'quaude-blobulate-merge-apply-'));
   t.after(() => { try { fs.rmSync(scratch, { recursive: true, force: true }); } catch { /* best effort */ } });
 
   const extrasPath = path.join(scratch, 'extras.json');
@@ -70,7 +70,7 @@ function runWorkerThroughCompilePlan(t, { stageDir }) {
   const signedBase = path.join(scratch, 'signed-base'); // never read before our checkpoint
   const out = path.join(scratch, 'out.bin'); // never written before our checkpoint
 
-  const [cmd, argv] = engineSpawn(['run', path.join(REPO, 'libexec', 'quaude-fuse.js'),
+  const [cmd, argv] = engineSpawn(['run', path.join(REPO, 'libexec', 'quaude-blobulate.js'),
     signedBase, stageDir, shimDir, nmDir, bootstrapPath, extrasPath, out]);
   const r = spawnSync(cmd, argv, { encoding: 'utf8', timeout: 60000 });
 
@@ -81,10 +81,10 @@ function runWorkerThroughCompilePlan(t, { stageDir }) {
   return { events, raw: r };
 }
 
-test('quaude-fuse applies a freshly-computed merge onto doc.order/doc.sources before planning compile', (t) => {
+test('quaude-blobulate applies a freshly-computed merge onto doc.order/doc.sources before planning compile', (t) => {
   if (skipUnlessTjs(t)) return;
 
-  const stageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quaude-fuse-merge-apply-stage-'));
+  const stageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quaude-blobulate-merge-apply-stage-'));
   t.after(() => { try { fs.rmSync(stageDir, { recursive: true, force: true }); } catch { /* best effort */ } });
   fs.writeFileSync(path.join(stageDir, 'graph.json'), JSON.stringify(docWithCycle()));
 
@@ -101,7 +101,7 @@ test('quaude-fuse applies a freshly-computed merge onto doc.order/doc.sources be
   // THE LOAD-BEARING ASSERTION. Pre-merge order.length is 3 (fs, B, A). The merge mints ONE
   // new synthetic module for the one merged group, so 'compile' — planned from doc.order
   // AFTER the apply-back — must see 4. If the apply-back is a silent no-op (doc.order and
-  // doc.sources never actually mutated from what quaude-fuse.js started with), this would
+  // doc.sources never actually mutated from what quaude-blobulate.js started with), this would
   // read 3 instead: the pre-merge, unmerged length.
   assert.strictEqual(compileTotal, 4,
     "expected 'compile' planned from the POST-merge doc.order (3 original + 1 synthetic "

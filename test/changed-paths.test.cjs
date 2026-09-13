@@ -24,7 +24,7 @@ test('DEFAULT-DENY: an unrecognised path counts as code', () => {
 });
 
 test('one code path among many docs paths is code', () => {
-  assert.strictEqual(classifyChangedPaths(['BACKLOG.md', 'libexec/quaude-fuse.js']).code, true);
+  assert.strictEqual(classifyChangedPaths(['BACKLOG.md', 'libexec/quaude-blobulate.js']).code, true);
 });
 
 test('an EMPTY change list counts as code', () => {
@@ -95,8 +95,8 @@ test('every result carries a non-empty "why"', () => {
 // happens not to hit it" is not a reason to leave it reachable.
 
 test('a `..` segment escaping docs/ is code, not docs (regression: was code=false)', () => {
-  assert.strictEqual(isDocsPath('docs/../libexec/quaude-fuse.js'), false);
-  assert.strictEqual(classifyChangedPaths(['docs/../libexec/quaude-fuse.js']).code, true);
+  assert.strictEqual(isDocsPath('docs/../libexec/quaude-blobulate.js'), false);
+  assert.strictEqual(classifyChangedPaths(['docs/../libexec/quaude-blobulate.js']).code, true);
 });
 
 test('a nested `..` climbing back out of docs/ is code, not docs (regression: was code=false)', () => {

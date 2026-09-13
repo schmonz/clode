@@ -8,7 +8,7 @@
 // makes the program boundary a DEPLOYMENT decision rather than an architectural
 // one — the parent never needs to know which side a step runs on.
 //
-// TJS-SAFE ON PURPOSE: libexec/quaude-fuse.js requires this and runs under the
+// TJS-SAFE ON PURPOSE: libexec/quaude-blobulate.js requires this and runs under the
 // txiki.js engine, not Node. No `node:` requires may appear in this file.
 
 const PLAN = 'plan';

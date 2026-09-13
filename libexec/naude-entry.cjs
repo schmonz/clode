@@ -235,7 +235,7 @@ function runNaude(opts = {}) {
   // dynamically as `require(__dirname + '/target-update-check.cjs')` — __dirname
   // there is workDir, so the file must actually exist on disk here or that
   // require 404s the moment the notify-only autoupdater fires (mirrors quaude-
-  // fuse.js's product-role member of the same name, same reasoning).
+  // blobulate.js's product-role member of the same name, same reasoning).
   const depsRoot = materializeDeps({ sea, cacheDir });
   const workDir = opts.workDir || path.join(cacheDir, 'sea-deps', 'naude');
   materializeAssets({ sea, destDir: workDir, names: ['cli.cjs', 'bun-shim.cjs', 'target-update-check.cjs'] });

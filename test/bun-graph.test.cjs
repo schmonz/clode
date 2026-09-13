@@ -335,7 +335,7 @@ test('loader 13 is text — the row class 2.1.246 introduced', () => {
 
 // ---- the external zstd decoder: the ONLY path the SHIPPED builder has --------
 //
-// `node:zlib.zstdDecompressSync` is a Node 22.15/24+ thing. Every PUBLISHED clode is a fused
+// `node:zlib.zstdDecompressSync` is a Node 22.15/24+ thing. Every PUBLISHED clode is a blobulated
 // tjs binary, and tjs has no zstd anywhere — so on the shipped artifact these tests are the
 // whole of zstd support. They are written to run identically under `node --test` and under
 // scripts/engine-test.mjs, because a green run on Node proves nothing about the thing we ship.

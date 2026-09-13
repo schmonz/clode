@@ -21,8 +21,8 @@
 // logged. A curated list could only ever reveal gaps already known about —
 // the noise is the point. A later task intersects this log against
 // test/shim-surface/golden.json, where that fixture legitimately belongs; it
-// must never travel into shipped/fused code (test/ doesn't exist inside a
-// fused quaude, and a baked-in list would go stale against upstream anyway —
+// must never travel into shipped/blobulated code (test/ doesn't exist inside a
+// blobulated quaude, and a baked-in list would go stale against upstream anyway —
 // see memory dep-closure-derived-not-declared for the same principle applied
 // elsewhere in this shim).
 function installProbe(ns, exportsVal, allowKeys) {

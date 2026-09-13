@@ -2,7 +2,7 @@
 // The template manifest: the source of truth for which platforms clode can
 // cross-build a quaude for, and where to get each prebuilt tjs engine. Published
 // by CI (scripts/build-templates-manifest.mjs) alongside the engines; clode reads
-// it for `build --list-targets` and `build --target Y`. The engines are fuse-base
+// it for `build --list-targets` and `build --target Y`. The engines are blobulate-base
 // DATA (never executed on the build host), so a manifest + per-engine fetch is all
 // clode needs to cross-build for any target — no compiler. See the universal
 // cross-build spec (docs/superpowers/specs/2026-07-25-universal-cross-build-*).
@@ -56,7 +56,7 @@ const crypto = require('node:crypto');
 // Resolve a target's engine to a local executable path — pin-check, cache by
 // engine name, else fetch + sha256-verify + cache + chmod. `fetch(url)->Promise<Buffer>`
 // is injectable (clode-net in production; a stub in tests). NO compiler involved:
-// the engine is fuse-base data, not something this host executes.
+// the engine is blobulate-base data, not something this host executes.
 async function obtainEngine(entry, opts) {
   // THE RECIPE CHECK, which is the exact one. The pin below is coarse — it is the
   // txiki version plus a short sha, so two clodes with the SAME pin but different
@@ -77,9 +77,9 @@ async function obtainEngine(entry, opts) {
     throw new TemplatesError(`templates pin ${opts.manifestPin} != this clode's tjs pin ${opts.thisPin} — download the pack for your clode version`);
   }
   // Engines ship gzip'd (manifest.compression) to shrink the download; the CACHE
-  // holds the DECOMPRESSED engine (ready to fuse), and entry.sha256 is that
+  // holds the DECOMPRESSED engine (ready to blobulate), and entry.sha256 is that
   // decompressed engine's digest — the integrity gate, verified AFTER inflation,
-  // so a wrong decompressor is caught here and never fused.
+  // so a wrong decompressor is caught here and never blobulated.
   const compression = opts.compression || entry.compression || null;
   if (compression && compression !== 'gzip') {
     throw new TemplatesError(`engine ${entry.engine}: unsupported compression '${compression}'`);

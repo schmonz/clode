@@ -104,7 +104,7 @@ function ensureDeps(opts = {}) {
     exit = process.exit,
     spawn = spawnSync,
     // install=false is the USER RUNTIME contract (retire-node-runtime D2): never
-    // shell npm — a real user runs the fused binary (deps embedded) or a managed
+    // shell npm — a real user runs the blobulated binary (deps embedded) or a managed
     // CLODE_DEPS. Only the build/CI caller (clode-build gathering deps to embed)
     // leaves it true. Default true preserves the existing build behavior.
     install = true,
@@ -157,12 +157,12 @@ function ensureDeps(opts = {}) {
     return; // already fresh for this manifest
   }
 
-  // D2: the user runtime never shells npm. Deps ship embedded in the fused binary
+  // D2: the user runtime never shells npm. Deps ship embedded in the blobulated binary
   // (materialized as a sibling node_modules -> the early return above), so reaching
-  // here on the runtime path means a non-fused clode with no deps present. Fail
+  // here on the runtime path means a non-blobulated clode with no deps present. Fail
   // loud toward the binary/build rather than silently installing.
   if (!install) {
-    // Reachable only on a non-fused clode (bin/clode under node) whose deps aren't
+    // Reachable only on a non-blobulated clode (bin/clode under node) whose deps aren't
     // present — in practice a SOURCE CHECKOUT that never ran
     // `npm install --prefix deps/claude`. Point there first; a released binary
     // carries its deps as members and never lands here.

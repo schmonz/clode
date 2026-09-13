@@ -3,16 +3,16 @@ description: >
   One release-matrix leg (plan Q2 pipeline shape): construct the patched tjs
   tree from committed material (PINS.md tag+sha, spike/quickjs/patches/* in
   the documented order) -> build tjs (natively, or inside a guest via
-  ./.github/actions/guest) -> esbuild clode-main -> fuse the self-contained
+  ./.github/actions/guest) -> esbuild clode-main -> blobulate the self-contained
   builder (clode build --self, embedded pristine template) -> self-smoke
-  (--version always; full = ephemeral quaude fuse + PONG + attest
+  (--version always; full = ephemeral quaude blobulate + PONG + attest
   against a fetched provider, artifact NEVER uploaded) -> attest -> upload.
   Only BUILDERS are ever published; quaudes are ephemeral runner files.
-  Exec modes: `clode build` EXECS the tjs template (the fuse worker runs
-  under it) and then execs the fused output. Foreign-LINUX-arch legs get away
-  with host-side fuse+smoke because qemu-user binfmt execs the guest binaries;
+  Exec modes: `clode build` EXECS the tjs template (the blobulate worker runs
+  under it) and then execs the blobulated output. Foreign-LINUX-arch legs get away
+  with host-side blobulate+smoke because qemu-user binfmt execs the guest binaries;
   BSD/illumos/Solaris binaries have no such escape, so for VM legs the whole
-  fuse + smoke runs INSIDE the guest (exec=guest, derived from the platform),
+  blobulate + smoke runs INSIDE the guest (exec=guest, derived from the platform),
   with tjs-vendor/tjs-out under the workspace — the VM sync boundary.
 inputs:
   leg:
@@ -47,7 +47,7 @@ inputs:
     required: false
     default: ""
   no-exec:
-    description: "'true': the runner cannot execute the target output (darwin-x86 i386). Build + floor-gate + upload the BARE engine only — no exec smoke, no fuse, no builder artifact."
+    description: "'true': the runner cannot execute the target output (darwin-x86 i386). Build + floor-gate + upload the BARE engine only — no exec smoke, no blobulate, no builder artifact."
     required: false
     default: "false"
   cross-image:
@@ -67,7 +67,7 @@ inputs:
     required: false
     default: ""
   cosmo:
-    description: "'true': the Cosmopolitan APE leg. build-tjs.mjs's CLODE_TJS_TARGET=cosmo self-provisions cosmocc, forces the lean profile, applies patches/libuv-cosmo.patch + patches/libtjs-cosmo.patch, and builds the tjs-cli APE via scripts/cosmo.toolchain.cmake. Runs the normal native (exec=host) source+build+fuse+smoke path — the fat APE execs on the ubuntu runner via clode-build's isApeFile /bin/sh route. The SAME .com is then exercised on other-OS runners downstream (the multi-OS fan-out)."
+    description: "'true': the Cosmopolitan APE leg. build-tjs.mjs's CLODE_TJS_TARGET=cosmo self-provisions cosmocc, forces the lean profile, applies patches/libuv-cosmo.patch + patches/libtjs-cosmo.patch, and builds the tjs-cli APE via scripts/cosmo.toolchain.cmake. Runs the normal native (exec=host) source+build+blobulate+smoke path — the fat APE execs on the ubuntu runner via clode-build's isApeFile /bin/sh route. The SAME .com is then exercised on other-OS runners downstream (the multi-OS fan-out)."
     required: false
     default: "false"
   atomic-shim:
@@ -79,11 +79,11 @@ inputs:
     required: false
     default: "false"
   tier2:
-    description: "'true': after the cross-built target engine lands, cross-fuse a tier-2 clode BUILDER against it via ./.github/actions/cross-fuse and upload it (ELF-only — darwin is excluded, Mach-O needs a pre-signed template)."
+    description: "'true': after the cross-built target engine lands, cross-blobulate a tier-2 clode BUILDER against it via ./.github/actions/cross-blobulate and upload it (ELF-only — darwin is excluded, Mach-O needs a pre-signed template)."
     required: false
     default: "false"
   verify:
-    description: "post-build validation rung: 'smoke' (qemu-system fuse+PONG, the sparc leg), 'qemu-user' (binfmt-run the cross-fused builder: level-2 --version required, level-2.5 full fuse attempted+logged), 'none' (tier-2, built-not-run — NetBSD has no qemu-user)."
+    description: "post-build validation rung: 'smoke' (qemu-system blobulate+PONG, the sparc leg), 'qemu-user' (binfmt-run the cross-blobulated builder: level-2 --version required, level-2.5 full blobulate attempted+logged), 'none' (tier-2, built-not-run — NetBSD has no qemu-user)."
     required: false
     default: smoke
   netbsd-src:
@@ -141,14 +141,14 @@ inputs:
   ci-fast-defer-smoke:
     description: >
       'true': skip the full-smoke composite HERE even when smoke=='full' —
-      the builder artifact still uploads right after the fuse, unsmoked.
+      the builder artifact still uploads right after the blobulate, unsmoked.
       ci.yml's tjs-fast-plan/tjs-fast-smoke run the SAME check afterward, in
       their own job, against the uploaded artifact. Forwarded verbatim from
       tjs-legs.yml's own `defer-smoke` workflow_call input, which ONLY
       ci.yml's `tjs` job (tier:ci, only:fast) sets — see that input's own
       comment for why it is an explicit opt-in rather than derived from
       tier/only. (Measured run 33959009299 vs. current-HEAD job
-      101287474377: this step's ~7min ephemeral-quaude fuse was why the four
+      101287474377: this step's ~7min ephemeral-quaude blobulate was why the four
       oracle jobs and three Windows jobs — none of which consume this step's
       output — waited on it anyway: `needs:` on a `uses:` call is atomic, so
       `tjs` could not finish, and downstream could not start, until EVERY
@@ -183,11 +183,11 @@ runs:
                        # (darwin-x64/x86 osxcross) — OR against a NetBSD build.sh
                        # toolchain (netbsd-m68k). vendor/out live under runner.temp
                        # (bind-mounted into the container where one is used); no
-                       # host exec/fuse runs, and nothing here syncs to a separate
+                       # host exec/blobulate runs, and nothing here syncs to a separate
                        # machine, so the checkout is never touched.
         else
           case "${{ inputs.guest-platform }}" in
-            qemu-*) exec=qemu ;;  # own-qemu leg (netbsd-sparc): engine bakes in-guest, builder cross-fuses on the x64 runner, smoke runs via a backend recipe — see the qemu-* steps below
+            qemu-*) exec=qemu ;;  # own-qemu leg (netbsd-sparc): engine bakes in-guest, builder cross-blobulates on the x64 runner, smoke runs via a backend recipe — see the qemu-* steps below
             netbsd|freebsd|openbsd|dragonflybsd|omnios|solaris|midnightbsd|haiku|openindiana) exec=guest ;;
             *) exec=host ;;
           esac
@@ -312,7 +312,7 @@ runs:
         CLODE_TJS_TARGET: ${{ inputs.cosmo == 'true' && 'cosmo' || '' }}
       run: node scripts/build-tjs.mjs --source-only
 
-    - name: Install the runtime dep closure (fuse member inputs)
+    - name: Install the runtime dep closure (blobulate member inputs)
       shell: bash
       run: npm ci --prefix deps/claude
 
@@ -551,7 +551,7 @@ runs:
 
     # ---- own-qemu qemu-* legs (netbsd-sparc: first user, plan
     # netbsd-sparc-matrix-leg Task 3 — STRUCTURAL first pass). Unlike a
-    # guest/cross leg (fuse + smoke run wholly inside/under the foreign
+    # guest/cross leg (blobulate + smoke run wholly inside/under the foreign
     # environment), a qemu-* leg splits three ways because the guest has no
     # node (guest-sparc-*.sh's cc/cmake/gmake-direct recipes, not
     # build-tjs.mjs): (A) here — the ENGINE alone bakes in-guest via the
@@ -559,7 +559,7 @@ runs:
     # steps.mode.outputs.out by the backend (Task 4 tunes the exact recipe +
     # sync — the GUEST-DONE/*-exit marker vocabulary already used by
     # spike/quickjs/qemu/guest-sparc-*.sh); (B) below — the clode --self
-    # BUILDER cross-fuses ON the x64 runner; (C) further below — the SMOKE
+    # BUILDER cross-blobulates ON the x64 runner; (C) further below — the SMOKE
     # hands the backend a recipe. Guarded so every other leg (exec=host/
     # guest/cross, windows) is untouched.
     - name: Prepare the pinned tjs source + simde for the in-guest engine bake (qemu-* cache miss)
@@ -570,8 +570,8 @@ runs:
       run: |
         set -euo pipefail
         # The patched canonical-LE txiki source (clones txiki + quickjs-ng, applies
-        # patches/ — incl. the canonical-LE bytecode patch the cross-fuse REQUIRES;
-        # a non-canonical-LE engine gives "checksum error" on the cross-fused
+        # patches/ — incl. the canonical-LE bytecode patch the cross-blobulate REQUIRES;
+        # a non-canonical-LE engine gives "checksum error" on the cross-blobulated
         # builder — proven in the docker-loop wall-walk 2026-07-14) was ALREADY
         # constructed at $CLODE_TJS_VENDOR by the "Construct the patched tjs tree
         # from pins" step above (same --source-only, same vendor). Do NOT re-run it
@@ -585,7 +585,7 @@ runs:
         # txiki-engine-module-meta.patch, and everything after it) reach a binary
         # only through a tjsc regen. Every other leg gets that from build-tjs.mjs's
         # own build phase; the guest bake compiles by hand and cannot run node at
-        # all, so it used to get NO regen — and shipped an engine whose fuse died
+        # all, so it used to get NO regen — and shipped an engine whose blobulate died
         # with "this engine does not report moduleMeta" after a 927-second carve.
         # --regen-only runs the SAME generation code, using a host-native tjsc
         # whose canonical-LE output is valid for the sparc target by construction
@@ -638,7 +638,7 @@ runs:
         # The bake syncs the tjs OUT as a gzip|base64 block on the serial console;
         # ci-sparc-driver.py wrote that console to $CI_SPARC_WORKDIR (set in
         # GITHUB_ENV by the guest action). Decode it to steps.mode.outputs.out/tjs
-        # (where the cross-fuse reads CLODE_TARGET_TEMPLATE, and what the tjs-cache
+        # (where the cross-blobulate reads CLODE_TARGET_TEMPLATE, and what the tjs-cache
         # saves). Verify against the guest's cksum marker.
         LOG="$CI_SPARC_WORKDIR/ci-sparc-console.log"
         test -f "$LOG" || { echo "no console log at $LOG" >&2; exit 1; }
@@ -652,36 +652,36 @@ runs:
         { [ -n "$want" ] && [ "$want" = "$got" ]; } || { echo "engine sync-out cksum/len mismatch" >&2; exit 1; }
         file "$OUT/tjs"
 
-    # (B) Cross-fuse the clode --self BUILDER on the x64 runner, targeting
+    # (B) Cross-blobulate the clode --self BUILDER on the x64 runner, targeting
     # the sparc engine synced out above (the retired windows cross-file
     # leg's mechanism — git show 594f53c~1 — adapted for sparc): build a
-    # HOST (linux) tjs to run the fuse worker, then fuse against the
+    # HOST (linux) tjs to run the blobulate worker, then blobulate against the
     # foreign-arch TEMPLATE via CLODE_TARGET_TEMPLATE. Unlike windows (whose
     # no-exec native build already produced a bare tjs.exe locally), the
     # sparc bare engine only exists after the guest step above (or a
     # tjs-cache hit) landed it at steps.mode.outputs.out.
-    - name: Cross-fuse the qemu-* builder against the in-guest engine
+    - name: Cross-blobulate the qemu-* builder against the in-guest engine
       if: startsWith(inputs.guest-platform, 'qemu-')
-      uses: ./.github/actions/cross-fuse
+      uses: ./.github/actions/cross-blobulate
       with:
         target-template: ${{ steps.mode.outputs.out }}/tjs
         out-asset: ${{ steps.name.outputs.asset }}
 
     # Tier-2 cross legs (linux-s390x/riscv64, netbsd-m68k): the exec=cross
     # build above cross-compiled a foreign-ELF engine to steps.mode.outputs.out
-    # that this ubuntu runner cannot execute (no-exec). Cross-fuse a tier-2
+    # that this ubuntu runner cannot execute (no-exec). Cross-blobulate a tier-2
     # clode BUILDER against it on the runner exactly like the qemu-* path (host
-    # linux tjs runs the fuse worker; CLODE_TARGET_TEMPLATE = the foreign
+    # linux tjs runs the blobulate worker; CLODE_TARGET_TEMPLATE = the foreign
     # engine). ELF-only — darwin cross legs are excluded (Mach-O needs a
     # pre-signed template). Validation is verify=qemu-user|none (Task 3), not a
-    # host exec. Because these legs are no-exec, the normal fuse/upload path is
+    # host exec. Because these legs are no-exec, the normal blobulate/upload path is
     # skipped, so this block owns the builder artifact upload.
     # Arch gate (all tier-2 cross legs): the cross-built engine MUST be the
     # target arch, not the host. A cross leg that emits an x86-64 binary means
     # the toolchain file was bypassed (e.g. a stale host CMakeCache — the m68k
     # bug, run 29354107445). For verify=none legs (m68k) nothing runs the
     # binary, so this `file` check is the ONLY arch proof — fail loud here,
-    # before a wrong-arch builder is fused + uploaded.
+    # before a wrong-arch builder is blobulated + uploaded.
     - name: Arch gate — the cross-built engine is the target arch, not the host
       if: inputs.tier2 == 'true'
       shell: bash
@@ -712,14 +712,14 @@ runs:
         fi
         echo "arch gate ok: $ARCH"
 
-    - name: Cross-fuse the tier-2 builder against the cross-built engine
+    - name: Cross-blobulate the tier-2 builder against the cross-built engine
       if: inputs.tier2 == 'true'
-      uses: ./.github/actions/cross-fuse
+      uses: ./.github/actions/cross-blobulate
       with:
         target-template: ${{ steps.mode.outputs.out }}/tjs
         out-asset: ${{ steps.name.outputs.asset }}
 
-    - name: Upload the tier-2 cross-fused builder
+    - name: Upload the tier-2 cross-blobulated builder
       if: inputs.tier2 == 'true'
       uses: actions/upload-artifact@v7.0.1
       with:
@@ -727,7 +727,7 @@ runs:
         path: ${{ steps.name.outputs.asset }}
         if-no-files-found: error
 
-    # Validate the cross-fused builder under qemu-user (verify=qemu-user, the
+    # Validate the cross-blobulated builder under qemu-user (verify=qemu-user, the
     # s390x/riscv64 tier-2 legs). docker/setup-qemu-action registers binfmt, then
     # the foreign ELF runs INSIDE a matching-arch Debian rootfs (the runner has
     # no target glibc — the alpine musl legs get away with bare-host binfmt only
@@ -736,7 +736,7 @@ runs:
     # (toolchain file), so glibc is the only runtime dep. level-2 = the builder
     # self-loads + prints its version (proves the bootstrap canonical-LE bytecode
     # reads + runs on $ARCH — for 64-bit-BE s390x this IS the
-    # canonical-LE-on-64-bit-BE runtime proof). level-2.5 = the full fuse+PONG in
+    # canonical-LE-on-64-bit-BE runtime proof). level-2.5 = the full blobulate+PONG in
     # the same rootfs (provider carved on the x64 host), ATTEMPTED and its outcome
     # LOGGED — never a silent downgrade; tier-2 stands on level-2 either way.
     - name: Register qemu-user binfmt (verify=qemu-user)
@@ -758,7 +758,7 @@ runs:
         grep -qE '^clode ' "$RUNNER_TEMP/qu-ver.txt" \
           || { echo "level-2 FAILED: no 'clode <ver>' from the $ARCH builder under qemu-user" >&2; exit 1; }
         echo "level-2 (self-load) OK on $ARCH"
-        # level-2.5 (attempted, logged): the full fuse+PONG. The fuse compiles the
+        # level-2.5 (attempted, logged): the full blobulate+PONG. The blobulate compiles the
         # 19MB cli.cjs under the emulated engine — slow/heavy; if qemu-user cannot
         # carry it, record the bound and keep the leg green on level-2. The
         # minimal provider is carved on the x64 host (fast), then read in-rootfs.
@@ -778,14 +778,14 @@ runs:
         if docker run --rm --platform "linux/$ARCH" -v "$PWD:/w" -v "$RUNNER_TEMP:/scratch" -w /w \
              -e CLODE_CLAUDE_BIN=/scratch/qu-provider/provider-min -e CLODE_CACHE=/scratch/qu-cache \
              "$ROOTFS" ./"$ASSET" build --out /scratch/quaude-qu \
-             2>&1 | tee "$RUNNER_TEMP/qu-fuse.txt" | grep -q 'PONG round-trip ok'; then
-          echo "level-2.5 (full fuse+PONG under qemu-user) OK on $ARCH"
+             2>&1 | tee "$RUNNER_TEMP/qu-blobulate.txt" | grep -q 'PONG round-trip ok'; then
+          echo "level-2.5 (full blobulate+PONG under qemu-user) OK on $ARCH"
         else
-          echo "level-2.5 NOT achieved on $ARCH (qemu-user could not carry the full fuse) — tier-2 self-load stands; see the log above."
+          echo "level-2.5 NOT achieved on $ARCH (qemu-user could not carry the full blobulate) — tier-2 self-load stands; see the log above."
         fi
 
     # (C) The runtime smoke: hand the own-qemu backend a recipe that stages
-    # the cross-fused sparc clode builder + an x64 provider binary on :8180
+    # the cross-blobulated sparc clode builder + an x64 provider binary on :8180
     # and runs clode-on-sparc to `build --out quaude` + a PONG check. Uses
     # the PRISTINE image (no toolchain needed for a runtime smoke) — see
     # CI-IMAGES.md.
@@ -825,14 +825,14 @@ runs:
         arch: ${{ inputs.guest-arch }}
         version: ${{ inputs.guest-version }}
         cache-key: wd0-pristine-${{ inputs.guest-version }}.img.zst
-        # The proven fuse+PONG recipe (spike/quickjs/qemu/ci-guest-smoke.sh): fetch
-        # clode-builder + provider-min over :8180, clode-on-sparc fuses a quaude +
-        # internal PONG/attest smoke. smoke-exit=0 == fused + PONG + attest.
+        # The proven blobulate+PONG recipe (spike/quickjs/qemu/ci-guest-smoke.sh): fetch
+        # clode-builder + provider-min over :8180, clode-on-sparc blobulates a quaude +
+        # internal PONG/attest smoke. smoke-exit=0 == blobulated + PONG + attest.
         log-name: ${{ inputs.leg }}-smoke
         script: ${{ steps.smoke-recipe.outputs.script }}
 
     # A cache HIT skips the guest setup, so foreign-arch legs still need
-    # fix-binary binfmt on the host to exec the cached tjs (fuse worker,
+    # fix-binary binfmt on the host to exec the cached tjs (blobulate worker,
     # smokes). Cheap and idempotent.
     - name: Ensure qemu binfmt for foreign-arch host execution
       if: inputs.guest-platform == 'alpine' && inputs.guest-arch != 'x86_64' && runner.arch == 'X64'
@@ -852,11 +852,11 @@ runs:
         cp "$PROV" .matrix/provider-claude   # bytes only — clode EXTRACTS from it, never execs it
 
     # The whole exec surface in one guest invocation: build tjs (unless the
-    # cache delivered it), fuse the builder UNDER it, smoke the builder, and
+    # cache delivered it), blobulate the builder UNDER it, smoke the builder, and
     # have the builder build an ephemeral quaude (internal PONG + attest).
     # The guest's node only interprets our scripts; every exec'd artifact
-    # (fuse worker, builder, quaude) is guest-native.
-    - name: Build + fuse + smoke (inside the guest VM)
+    # (blobulate worker, builder, quaude) is guest-native.
+    - name: Build + blobulate + smoke (inside the guest VM)
       if: steps.mode.outputs.exec == 'guest'
       uses: ./.github/actions/guest
       with:
@@ -871,7 +871,7 @@ runs:
           # exec-able on 5 of the 12 guest legs: openbsd, netbsd-amd64,
           # haiku, solaris, freebsd-amd64 — including the OpenBSD one that
           # forced this in the first place (/tmp is noexec there, which is
-          # what made the fuse's mkdtemp-and-exec of its own template die
+          # what made the blobulate's mkdtemp-and-exec of its own template die
           # with exit 127, dispatch #7, before .matrix existed as the
           # workaround). The other 7 (dragonflybsd-amd64, midnightbsd-amd64,
           # omnios-amd64, openindiana-amd64, netbsd-arm64, freebsd-arm64,
@@ -881,7 +881,7 @@ runs:
           # (scripts/build-scratch.cjs) — this uses $HOME/clode-scratch, a
           # sibling under the same $HOME mount, so the inference carries.
           #
-          # TMPDIR (the fuse's own scratch, and — via build-tjs.mjs's
+          # TMPDIR (the blobulate's own scratch, and — via build-tjs.mjs's
           # localScratchRoot() — the CMake build dir, the actual bulk of the
           # reported ~23k files) and the full-smoke's own CLODE_CACHE/
           # CLODE_DEPS never need to leave this guest, so they move to
@@ -919,7 +919,7 @@ runs:
           else
             echo "tjs cache hit: skipping the in-guest build"
           fi
-          # The fuse needs only tjs-out + the repo tree; dropping the vendor
+          # The blobulate needs only tjs-out + the repo tree; dropping the vendor
           # checkout (+ its object files) here spares the vm-to-runner sync —
           # it is reconstructable from pins and never cached.
           rm -rf "$CLODE_TJS_VENDOR"
@@ -970,8 +970,8 @@ runs:
     # (it feeds the tail bare-tjs upload), so it can't be reused here
     # without reordering it — this is a second, narrower resolver instead.
     # exec=qemu is excluded throughout this block: the sparc engine cannot
-    # host-exec on the x64 runner, and qemu-* legs fuse+smoke via the
-    # dedicated cross-fuse + own-qemu-backend steps above instead.
+    # host-exec on the x64 runner, and qemu-* legs blobulate+smoke via the
+    # dedicated cross-blobulate + own-qemu-backend steps above instead.
     - name: Resolve the built tjs path (.exe on native Windows)
       id: tjsbin
       if: steps.mode.outputs.exec != 'guest' && steps.mode.outputs.exec != 'qemu'
@@ -996,7 +996,7 @@ runs:
         echo "tjs host-exec: $out"
         [ "$out" = tjs-shim-ok ]
 
-    - name: Fuse the self-contained builder (clode build --self)
+    - name: Blobulate the self-contained builder (clode build --self)
       if: steps.mode.outputs.exec != 'guest' && steps.mode.outputs.exec != 'qemu' && inputs.no-exec != 'true'
       shell: bash
       env:
@@ -1007,7 +1007,7 @@ runs:
         CLODE_ASSET_NAME: ${{ steps.name.outputs.asset }}
       run: node bin/clode build --self --out "${{ steps.name.outputs.asset }}"
 
-    - name: Self-smoke --version (host exec of the fused builder)
+    - name: Self-smoke --version (host exec of the blobulated builder)
       if: steps.mode.outputs.exec != 'guest' && steps.mode.outputs.exec != 'qemu' && inputs.no-exec != 'true'
       shell: bash
       run: |
@@ -1029,7 +1029,7 @@ runs:
     # The static floor gate: pre-10.14 dyld requires the old
     # LC_VERSION_MIN_MACOSX load command and refuses LC_BUILD_VERSION-only
     # binaries — and the version must be exactly the pinned floor. Gating
-    # the SHIPPED asset (the fuse always runs) covers cache-hit paths too;
+    # the SHIPPED asset (the blobulate always runs) covers cache-hit paths too;
     # the floor-carrying cache key guarantees the cached tjs matches. On
     # no-exec legs there is no asset (nothing on the runner can exec the
     # target): gate the bare engine, plus its arch marker.
@@ -1129,7 +1129,7 @@ runs:
         if-no-files-found: error
 
     # The full-smoke composite (.github/actions/full-smoke) is the ONE source
-    # for "install rg applets + install the provider + fuse an ephemeral
+    # for "install rg applets + install the provider + blobulate an ephemeral
     # quaude + MCP probe + rg-inventory". ci-fast-defer-smoke skips it HERE
     # (see that input's own comment) so ci.yml's tjs-fast-smoke can run it
     # again afterward, in its own job, against the artifact this leg already

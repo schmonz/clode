@@ -985,7 +985,7 @@ function _otherWorkPending() {
 function _pollerSchedule(fn, delay) {
   const raw = globalThis.__shimRawTimer;
   if (raw && typeof raw.setTimeout === 'function') return raw.setTimeout(fn, delay);
-  // __shimRawTimer absent means either an older loader (not the real fused
+  // __shimRawTimer absent means either an older loader (not the real blobulated
   // path today) or — as above — no loader.cjs ran at all in this host
   // context. Prefer a bare global setTimeout if this context happens to have
   // one (this poller would then count itself in __shimTimerLiveCount, biasing

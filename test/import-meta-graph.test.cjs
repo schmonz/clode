@@ -42,7 +42,7 @@ function q(s) { return JSON.stringify(s); }
 
 // Two processes on purpose: compiling and deserializing the same module name in ONE
 // context is the collision case, and the production loader never does it — the bytecode
-// is produced by `clode build` and consumed by a later run of the fused binary.
+// is produced by `clode build` and consumed by a later run of the blobulated binary.
 function runEngine(src, dir) {
   const f = path.join(dir, `s${Math.random().toString(36).slice(2)}.js`);
   fs.writeFileSync(f, src);

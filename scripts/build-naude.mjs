@@ -18,7 +18,7 @@
 //              esbuilds it.
 //   --nmdir    a resolved node_modules to tar as the deps asset. This script
 //              never `npm ci`s it — the caller (a checkout's deps/claude, or
-//              a fused builder's materialized payload) already has it on disk.
+//              a blobulated builder's materialized payload) already has it on disk.
 //   --postject the directory carrying postject's JS API (dist/api.js) this
 //              script calls to inject the SEA blob.
 // All default to the checkout's own locations/running node, so a plain
@@ -61,7 +61,7 @@ const OUT = artifactDir(REPO);
 // work regardless of whether the directory sits under any node_modules
 // ancestor at all — the caller can hand this script literally any directory
 // that looks like postject (deps/clode/node_modules/postject in a checkout, a
-// fused builder's materialized payload, a CI-provisioned toolchain dir, ...).
+// blobulated builder's materialized payload, a CI-provisioned toolchain dir, ...).
 const requireAbs = createRequire(path.join(REPO, 'package.json'));
 
 // --node <path>: the node binary to embed (buildBinary) and to run
@@ -200,7 +200,7 @@ export function stageDeps(nmdir) {
 // workDir (same dir cli.cjs itself lands in — see naude-entry.cjs's materializeAssets
 // `names` list), so this member MUST ride as a real SEA asset, not merely get bundled
 // into naude-entry.bundle.cjs by esbuild (which only covers naude-entry.cjs's OWN static
-// requires, not cli.cjs's dynamic one). Mirrors quaude-fuse.js's identically-named
+// requires, not cli.cjs's dynamic one). Mirrors quaude-blobulate.js's identically-named
 // product-role member for the same reason. `targetUpdateCheck` defaults (in
 // writeSeaConfig, below) to the checkout's own libexec/target-update-check.cjs — clode's
 // own code, version-independent, not staged per-bundle like bunShim.
@@ -241,7 +241,7 @@ export function naudeSeaConfig({ mainBundle, cliCjs, bunShim, tar, sig, out, tar
 // audit §5). `--cli` names the extracted stage dir's cli.cjs; the shim is its
 // sibling there, put there by the extract stage — so both build targets are
 // version-locked to the bundle they were extracted with, exactly as
-// quaude-fuse.js's "version-locked to the bundle by the cache" comment says.
+// quaude-blobulate.js's "version-locked to the bundle by the cache" comment says.
 export function stagedBunShim(cliCjs) {
   return path.join(path.dirname(cliCjs), 'bun-shim.cjs');
 }
@@ -252,7 +252,7 @@ export function stagedBunShim(cliCjs) {
 // closure (bom), and the pinned Node's version (engineVersion). OPTIONAL: a plain
 // `node scripts/build-naude.mjs --cli <cli.cjs>` still builds, with the honest defaults
 // below. A FILE rather than flags because the BOM is unbounded in length — the same shape
-// quaude's fuse worker takes its own node-side fields in (extras.json).
+// quaude's blobulate worker takes its own node-side fields in (extras.json).
 export function parseExtrasArg(argv) {
   const i = argv.indexOf('--extras');
   if (i < 0 || !argv[i + 1]) return {};
@@ -266,7 +266,7 @@ export function parseExtrasArg(argv) {
 
 // The naude's own account of itself, printed verbatim as the head of `--clode-attest`.
 //
-// The key set and ORDER deliberately mirror the quaude manifest (libexec/quaude-fuse.js):
+// The key set and ORDER deliberately mirror the quaude manifest (libexec/quaude-blobulate.js):
 // the two products answer one question, so their answers must not read as two different
 // documents. The one quaude key absent here is `idna` — that records which Unicode level
 // the quickjs/wurl URL parser was built with, and a Node SEA has no such build-time knob
@@ -302,10 +302,10 @@ export function naudeManifest({
 // naude parity — Task 5) defaults to the checkout's OWN
 // libexec/target-update-check.cjs: unlike the bun-shim, this member is clode's
 // own code, not staged per-bundle, so there is nothing to reach back for — it
-// always exists at this fixed, version-independent location (a fused builder's
-// materializeFusedPayload restores it to the same relative spot under REPO, so
+// always exists at this fixed, version-independent location (a blobulated builder's
+// materializeBlobPayload restores it to the same relative spot under REPO, so
 // the default resolves correctly whether this script runs from a checkout or a
-// fused-builder's materialized payload). Exported so a test can assert the
+// blobulated-builder's materialized payload). Exported so a test can assert the
 // threading without a full build.
 export function writeSeaConfig({
   bundle, cliCjs, tar, sigFile, outDir = OUT,
@@ -390,7 +390,7 @@ export function writeSeaConfig({
 }
 
 // The clode version this checkout is, for a standalone run with no --extras. Tolerant:
-// a fused builder materializes libexec/scripts/deps but no VERSION file, and in that case
+// a blobulated builder materializes libexec/scripts/deps but no VERSION file, and in that case
 // the caller ALWAYS passes --extras — so 'unknown' here is a real answer, not a papered
 // over failure.
 function readVersion() {

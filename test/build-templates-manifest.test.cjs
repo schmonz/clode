@@ -47,7 +47,7 @@ test('deriveVerified maps leg exec-fidelity to a trust level', () => {
   assert.strictEqual(deriveVerified({ smoke: 'version' }), 'version');      // booted, --version only
   assert.strictEqual(deriveVerified({ 'no-exec': true, smoke: 'full' }), 'attest-only'); // never executed
   assert.strictEqual(deriveVerified({ 'soft-fail': true }), 'emulated');    // ran under emulation, may flake
-  assert.strictEqual(deriveVerified({ pack: true, publish: false }), 'attest-only'); // pack-only engine (darwin slice): product never fused+run in CI
+  assert.strictEqual(deriveVerified({ pack: true, publish: false }), 'attest-only'); // pack-only engine (darwin slice): product never blobulated+run in CI
   assert.strictEqual(deriveVerified({}), 'smoke');                          // default: full smoke
 });
 

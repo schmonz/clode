@@ -7,15 +7,15 @@ const { Composer } = require('../libexec/build-compose.cjs');
 const { defineGuard, guardTests } = require('./guard.cjs');
 
 // PURE: every check below is derived from the two already-read source texts
-// (quaude-fuse.js and build-report.cjs).
-function scanFuseReportWiring({ src, buildReportSrc }) {
+// (quaude-blobulate.js and build-report.cjs).
+function scanBlobulateReportWiring({ src, buildReportSrc }) {
   const findings = [];
   let examined = 0;
 
   examined++;
-  if (!/build-report\.cjs/.test(src)) findings.push('quaude-fuse.js must speak the protocol (no build-report.cjs reference)');
+  if (!/build-report\.cjs/.test(src)) findings.push('quaude-blobulate.js must speak the protocol (no build-report.cjs reference)');
   examined++;
-  if (!/Reporter/.test(src)) findings.push('quaude-fuse.js must emit through Reporter rather than ad-hoc printing');
+  if (!/Reporter/.test(src)) findings.push('quaude-blobulate.js must emit through Reporter rather than ad-hoc printing');
   // require() in this worker is a loud stub that throws — there is no module resolver. It
   // must go through loadLibexecCjs, like scc-merge.cjs does.
   examined++;
@@ -31,12 +31,12 @@ function scanFuseReportWiring({ src, buildReportSrc }) {
   {
     const anchor = src.lastIndexOf("'scc-merge.cjs'");
     if (anchor === -1) {
-      findings.push('quaude-fuse.js no longer mentions scc-merge.cjs at all');
+      findings.push('quaude-blobulate.js no longer mentions scc-merge.cjs at all');
     } else {
       const members = src.slice(Math.max(0, anchor - 400), anchor + 200);
       if (!/build-report\.cjs/.test(members)) {
-        findings.push('build-report.cjs must be CARRIED into a fused builder — add it to the '
-          + 'carried-member list beside scc-merge.cjs, or it works from a checkout and dies fused');
+        findings.push('build-report.cjs must be CARRIED into a blobulated builder — add it to the '
+          + 'carried-member list beside scc-merge.cjs, or it works from a checkout and dies blobulated');
       }
     }
   }
@@ -52,7 +52,7 @@ function scanFuseReportWiring({ src, buildReportSrc }) {
     for (let i = src.indexOf('report.plan('); i !== -1; i = src.indexOf('report.plan(', i + 1)) planIdxs.push(i);
     if (planIdxs.length !== 1) {
       findings.push(`expected exactly one report.plan( call site (compile+assets) left in `
-        + `quaude-fuse.js, found ${planIdxs.length} — 'merge' is now planned by `
+        + `quaude-blobulate.js, found ${planIdxs.length} — 'merge' is now planned by `
         + 'scripts/merge-step.mjs, not here');
     } else {
       const mergeAppliedIdx = src.lastIndexOf('doc.order = merged.order');
@@ -72,14 +72,14 @@ function scanFuseReportWiring({ src, buildReportSrc }) {
     if (!new RegExp(`['"\`]${name}['"\`]`).test(src)) findings.push(`step '${name}' must be declared by name`);
   }
   if (/report\.plan\(\[\{\s*name:\s*['"`]merge['"`]/.test(src)) {
-    findings.push('quaude-fuse.js must not itself plan a \'merge\' report step — that step '
+    findings.push('quaude-blobulate.js must not itself plan a \'merge\' report step — that step '
       + 'belongs to scripts/merge-step.mjs alone, and a second declaration has no defined '
       + 'behaviour in build-compose.cjs');
   }
 
   examined++;
   if (/require\(/.test(buildReportSrc)) {
-    findings.push('build-report.cjs must not require(...) anything: quaude-fuse.js loads it '
+    findings.push('build-report.cjs must not require(...) anything: quaude-blobulate.js loads it '
       + 'under txiki.js, not Node');
   }
 
@@ -87,12 +87,12 @@ function scanFuseReportWiring({ src, buildReportSrc }) {
 }
 
 const guard = defineGuard({
-  name: 'quaude-fuse-report-wiring',
+  name: 'quaude-blobulate-report-wiring',
   read: () => ({
-    src: fs.readFileSync(require.resolve('../libexec/quaude-fuse.js'), 'utf8'),
+    src: fs.readFileSync(require.resolve('../libexec/quaude-blobulate.js'), 'utf8'),
     buildReportSrc: fs.readFileSync(require.resolve('../libexec/build-report.cjs'), 'utf8'),
   }),
-  scan: scanFuseReportWiring,
+  scan: scanBlobulateReportWiring,
   // I2 (coordinator, 2026-09-04): table-driven — two fixed named files. Floored at the
   // exact measured count (7).
   floor: 7,
@@ -106,22 +106,22 @@ const guard = defineGuard({
 guardTests(guard);
 
 // The guard above all match SOURCE TEXT — none exercises the actual plan/start/
-// finish arithmetic quaude-fuse.js emits at runtime. That gap let a real bug through
+// finish arithmetic quaude-blobulate.js emits at runtime. That gap let a real bug through
 // fix round 1: mergeCyclicGroups (the in-worker fallback merge, live whenever a doc was
 // staged before the merge moved to staging) mutates doc.order IN PLACE, minting one new
 // synthetic module per merged cyclic group — so a 'compile' total captured from
 // doc.order.length BEFORE merge runs is stale, and the compile loop (which iterates the
 // POST-merge, longer doc.order) reports MORE than declared. build-compose.cjs's
 // mismatch check treats any over-report as a hard failure. These two tests replay the
-// actual call sequence quaude-fuse.js now emits through the REAL Composer, so a
-// regression in that ordering fails here instead of only at a live fuse.
+// actual call sequence quaude-blobulate.js now emits through the REAL Composer, so a
+// regression in that ordering fails here instead of only at a live blobulate.
 function feed(composer, component, fn) {
   const lines = [];
   fn(new R.Reporter({ emit: (l) => lines.push(l) }));
   for (const line of lines) composer.ingest(component, line);
 }
 
-test('quaude-fuse\'s post-fix call sequence never mismatches, even when the in-worker merge GROWS doc.order', () => {
+test('quaude-blobulate\'s post-fix call sequence never mismatches, even when the in-worker merge GROWS doc.order', () => {
   const c = new Composer();
   const cyclicRequires = new Array(33).fill(0);
   const preMergeOrderLength = 1795;
@@ -130,7 +130,7 @@ test('quaude-fuse\'s post-fix call sequence never mismatches, even when the in-w
   const postMergeOrderLength = preMergeOrderLength + 3;
   const assetCount = 173;
 
-  feed(c, 'quaude-fuse', (r) => {
+  feed(c, 'quaude-blobulate', (r) => {
     // Only 'merge' is planned before it runs — its total (cyclicRequires.length) is
     // unaffected by its own work, so it is safe to declare up front.
     r.plan([{ name: 'merge', total: cyclicRequires.length }]);
@@ -161,7 +161,7 @@ test('regression proof: capturing compile\'s total from the PRE-merge doc.order 
   const postMergeOrderLength = preMergeOrderLength + 3;
   const assetCount = 173;
 
-  feed(c, 'quaude-fuse', (r) => {
+  feed(c, 'quaude-blobulate', (r) => {
     // THE BUG this round fixed: 'compile's total declared in the SAME plan() call as
     // 'merge', from doc.order.length captured BEFORE merge ran.
     r.plan([

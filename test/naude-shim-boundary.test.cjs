@@ -16,7 +16,7 @@
 // Until this file, NOTHING asserted it. It held by construction, and only that:
 // scripts/build-naude.mjs's naudeSeaConfig (:211) names five SEA assets and no
 // node-shim is among them, and stagedBunShim (:232) takes the bun-shim from the same
-// staged dir libexec/quaude-fuse.js reads. Both are deliberate; both are commented as
+// staged dir libexec/quaude-blobulate.js reads. Both are deliberate; both are commented as
 // deliberate; neither was checked.
 //
 // WHAT BREAKS WITHOUT THIS FILE, precisely: nothing goes red. A naude that quietly
@@ -437,7 +437,7 @@ test('markers name exactly one shim — neither set can fire on the other', () =
 
 // The NEGATIVE half only. naude-build.test.cjs already asserts the positive (bun-shim
 // is in naudeSeaConfig's assets, and stagedBunShim resolves it to the same staged dir
-// quaude-fuse.js reads); duplicating it here would just give the same fact two votes.
+// quaude-blobulate.js reads); duplicating it here would just give the same fact two votes.
 test('build-naude.mjs never names the node-shim tree', () => {
   const src = fs.readFileSync(path.join(REPO, 'scripts', 'build-naude.mjs'), 'utf8');
   const hits = src.split('\n')

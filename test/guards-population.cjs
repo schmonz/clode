@@ -46,7 +46,7 @@ const REPO = path.resolve(__dirname, '..');
 // out: the original rule required a READ call and a repo-rooting expression to appear
 // inside the SAME readFileSync(...) call. A reviewer sample of files the sweep did NOT
 // flag found real guards missed for exactly that reason — msvc-getopt-shim.test.cjs,
-// tjs-build-hermeticity.test.cjs, update-guard-drift.test.cjs, quaude-fuse-report.test.cjs,
+// tjs-build-hermeticity.test.cjs, update-guard-drift.test.cjs, quaude-blobulate-report.test.cjs,
 // scc-merge.test.cjs (71 assert.match calls against artifacts it did not create — the
 // starkest miss), win-sync-guards.test.cjs — six of seven sampled misses traced to
 // indirection defeating the same-call co-location: a lowercase `repo` variable,
@@ -57,7 +57,7 @@ const REPO = path.resolve(__dirname, '..');
 const READ_CALLS = /readFileSync\s*\(|readdirSync\s*\(|require\.resolve\s*\(/;
 // `require.resolve('../x')` is its OWN repo-rooting idiom: it climbs out of test/'s own
 // directory relative to __dirname IMPLICITLY, with no `__dirname` token anywhere in the
-// source — the exact shape quaude-fuse-report.test.cjs uses (5
+// source — the exact shape quaude-blobulate-report.test.cjs uses (5
 // `fs.readFileSync(require.resolve('../libexec/...'), 'utf8')` call sites, zero `__dirname`/
 // `REPO`/`ROOT` tokens, missed by the first fix-round-2 attempt and caught measuring the
 // seven named files against it).
@@ -280,7 +280,7 @@ const MIGRATED = deriveMigrated();
 //
 // RE-CUT AGAIN, 95 -> 89, Task 14 batch 2 (2026-09-04): "reads one or more repo source/
 // patch files and asserts several must-have/must-not-have patterns hold" — update-guard-
-// drift (three inline-copy comparisons), quaude-fuse-cyclic-refusal, quaude-fuse-merge,
+// drift (three inline-copy comparisons), quaude-blobulate-cyclic-refusal, quaude-blobulate-merge,
 // win-sync-guards (two patch files + a build script), win-shim-guards (nine source files'
 // win32 patterns), and win-fs-rename-guard (behavioral: loads the real fs.cjs in a vm
 // sandbox with a mocked platform + FSS and exercises its rename semantics; the async
@@ -289,8 +289,8 @@ const MIGRATED = deriveMigrated();
 // did not take on).
 //
 // RE-CUT AGAIN, 89 -> 85, Task 14 batch 3 (2026-09-04): merge-step-wiring and
-// quaude-fuse-report-wiring (source pattern-presence over scripts/merge-step.mjs and
-// libexec/quaude-fuse.js, folding many single-assertion tests into one guard each while
+// quaude-blobulate-report-wiring (source pattern-presence over scripts/merge-step.mjs and
+// libexec/quaude-blobulate.js, folding many single-assertion tests into one guard each while
 // leaving the real behavioral/spawn tests standalone), guard-subcommands-gate (the staged
 // carve's graph.json `sources` scan, reusing defineGuard's floor mechanism for the
 // "scan found too few names" broken-scanner check), and msvc-getopt-fixup-registration
@@ -540,7 +540,7 @@ function discoverCliQuoteScanFiles() {
 // gate under libexec/ was reported by nothing at all. Measured, not assumed.
 
 // SCOPE SKIP — not an exclusion list, a statement about which tree this sweep is ABOUT.
-// libexec/node-shim/ is the TARGET's Node-API emulation: it is fused INTO quaude and runs
+// libexec/node-shim/ is the TARGET's Node-API emulation: it is blobulated INTO quaude and runs
 // on the end user's machine, and never runs as a gate during `clode build`. Its modules
 // throw and pattern-match constantly because they IMPLEMENT Node's error semantics and path
 // handling — `throw new Error('ENOENT...')` is a runtime behaving like Node, not a build
@@ -556,8 +556,8 @@ function discoverProductionFiles() {
     const abs = path.join(REPO, dir);
     if (!fs.existsSync(abs)) continue;
     // `.js` TOO (fix round 1, 2026-09-12). Leaving it out put two real build-path files in
-    // NO bucket at all — not gate-shaped, not excluded, not even counted: libexec/quaude-fuse.js
-    // (the fuse worker libexec/clode-build.cjs spawns under the template) and libexec/graph-meta.js
+    // NO bucket at all — not gate-shaped, not excluded, not even counted: libexec/quaude-blobulate.js
+    // (the blobulate worker libexec/clode-build.cjs spawns under the template) and libexec/graph-meta.js
     // (spawned from libexec/clode-extract.cjs). A mechanism whose promise is "the next gate
     // cannot appear unseen" must not have an extension-shaped hole. Measured cost: population
     // 74 -> 76, gates unchanged at 34 — neither .js file is gate-shaped TODAY, which is exactly

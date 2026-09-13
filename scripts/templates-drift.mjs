@@ -3,9 +3,9 @@
 // download built from the engine sources in this tree?
 //
 // WHY IT CAN BE "NO" WITHOUT ANYTHING LOOKING WRONG. An engine template is the
-// un-fused half of a release artifact: same job, same run, same commit
+// un-blobulated half of a release artifact: same job, same run, same commit
 // (release.yml collects `tjs-*` from the CURRENT run; build-leg uploads exactly
-// the engine it fused against). It is therefore pinned to the last RELEASE, and
+// the engine it blobulated against). It is therefore pinned to the last RELEASE, and
 // two independent mechanisms make that invisible:
 //
 //   * `clode build --target X` fetches the pack from a URL keyed on VERSION

@@ -82,7 +82,7 @@ const buildOnly = process.argv.includes('--build-only') || regenOnly;
 if (sourceOnly && buildOnly) throw new Error('pick one of --source-only / --build-only / --regen-only');
 // CLODE_TJS_DARWIN_POLL=1: build libuv's generic poll(2) event backend instead of
 // kqueue (the 10.4-floor darwin legs — Darwin 8's kqueue drops events under the
-// fused runtime's fd load; see fixupLibuvPollBackendOldDarwin). posix-poll.c
+// blobulated runtime's fd load; see fixupLibuvPollBackendOldDarwin). posix-poll.c
 // replaces kqueue.c, which only the Apple/BSD cmake branches compile, so asking
 // for it off-darwin is a build-config bug — fail here, before any phase, rather
 // than emitting an engine whose backend silently did not change.
@@ -1262,7 +1262,7 @@ function fixupLibuvTtyKqueueOldDarwin(dir) {
 }
 
 function fixupLibuvPollBackendOldDarwin(dir) {
-  // Darwin 8 (Tiger) kqueue DROPS event delivery under the fused runtime's fd/
+  // Darwin 8 (Tiger) kqueue DROPS event delivery under the blobulated runtime's fd/
   // filter load: ktrace of a hung ppc quaude shows connect() returning
   // EINPROGRESS, ~12 fds registered, then kevent(nchanges=0, ...) → 0 forever —
   // the socket's write-readiness never arrives. It is systemic, not socket-
@@ -1486,7 +1486,7 @@ function fixupLibuvPollBackendOldDarwin(dir) {
   // https://daniel.haxx.se/blog/2016/10/11/poll-on-mac-10-12-is-broken/,
   // which is why curl's configure probes for exactly this and falls back to
   // select(2). Tiger (10.4, our floor) sits inside that broken range: under
-  // the fused runtime's real fd load (~31 fds — tool pipes, the TLS socket,
+  // the blobulated runtime's real fd load (~31 fds — tool pipes, the TLS socket,
   // threadpool wakeups, the signal self-pipe), 28 timers were scheduled and
   // only 13 ever fired, with the process parked in poll() — no sockets in
   // flight, every threadpool worker idle, nothing pending. Sending SIGINT (a
@@ -1529,7 +1529,7 @@ function fixupLibuvPollBackendOldDarwin(dir) {
     + ' * https://daniel.haxx.se/blog/2016/10/11/poll-on-mac-10-12-is-broken/,\n'
     + ' * which is why curl\'s configure probes for exactly this and falls back\n'
     + ' * to select(2). Tiger (10.4, our floor) sits inside that broken range:\n'
-    + ' * under the fused runtime\'s real fd load (~31 fds), 28 timers were\n'
+    + ' * under the blobulated runtime\'s real fd load (~31 fds), 28 timers were\n'
     + ' * scheduled and only 13 ever fired, with the process parked in poll() --\n'
     + ' * no sockets in flight, every threadpool worker idle, nothing pending.\n'
     + ' * Sending SIGINT (a signal the app handles, so it causes EINTR) released\n'
@@ -1581,7 +1581,7 @@ function fixupLibuvPollBackendOldDarwin(dir) {
     + '    /* select()\'s fd_set is a fixed-size bitmap indexed by fd number; an\n'
     + '     * fd >= FD_SETSIZE cannot be represented (FD_SET on it is undefined\n'
     + '     * behavior -- classically an out-of-bounds write on the bitmap). Our\n'
-    + '     * loops run ~31 fds under the fused runtime\'s load (the measured\n'
+    + '     * loops run ~31 fds under the blobulated runtime\'s load (the measured\n'
     + '     * symptom this helper exists to fix), so this branch is unreachable\n'
     + '     * in practice; fall back to the real poll() for this one call rather\n'
     + '     * than corrupting memory or silently dropping the fd.\n'
@@ -3770,11 +3770,11 @@ function checkHermeticDeps(enginePath) {
 if ((process.env.CLODE_TJS_SMOKE || 'on').toLowerCase() !== 'off') {
   const engine = path.join(outDir, outName);
   // The engine API floor, generated from scripts/engine-api-floor.mjs — the ONE
-  // list of bindings a fused quaude cannot run without. It used to be an inline
+  // list of bindings a blobulated quaude cannot run without. It used to be an inline
   // `typeof __tjs_fs_sync === "object"` here, a second copy in build-leg's
   // host-exec smoke, and a third in ci-guest-bake.sh, none of which knew about
   // tjs.engine.moduleMeta; the netbsd-sparc bake shipped an engine without it
-  // and only found out 927 seconds into the fuse.
+  // and only found out 927 seconds into the blobulate.
   const evalArgs = ['eval', engineFloorCheckJs()];
   // A cosmo APE is a DOS/MBR 'MZ' fat binary; on macOS (and any host that won't
   // exec the raw MZ) it runs through its own shell prologue — `/bin/sh -c '"$@"'

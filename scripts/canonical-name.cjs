@@ -73,7 +73,7 @@ function targetName(leg) {
 // artifacts (linux-x64-musl, linux-arm64-musl, linux-x86-musl) executing on glibc Ubuntu
 // runners. The other five published Linux legs are qemu-user `smoke: 'version'` inside an
 // Alpine rootfs and have NEVER run on a glibc host — the static-linking claim for those
-// rests on the `file`/`ldd` check, which runs on the ENGINE before fusing
+// rests on the `file`/`ldd` check, which runs on the ENGINE before blobulating
 // (.github/actions/build-leg/action.yml:840), not on the shipped artifact.
 //
 // A NON-DEFAULT libc KEEPS its qualifier — but do not mistake that for collision safety,
@@ -113,7 +113,7 @@ function assetName(leg, version, floor) {
   // clode-<ver>-<tag> plus a per-OS runnable extension (windows .exe / cosmo
   // .com). Nothing FETCHES clode by asset name (self-update is notify-only), so
   // the extension is purely the downloadable filename — appended here at the one
-  // source of truth so the fuse --out, upload, and attest all agree.
+  // source of truth so the blobulate --out, upload, and attest all agree.
   const co = canonOs(splitLeg(leg).os);
   return `clode-${version}-${tagFor(leg, floor)}${assetExt(co)}`;
 }

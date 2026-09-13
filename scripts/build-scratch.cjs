@@ -2,7 +2,7 @@
 // build-scratch — the ONE place a build path comes from.
 //
 // Why this exists: the good defaults already existed (the txiki vendor moved to
-// ~/.cache/clode, cmake intermediates to TMPDIR, every fuse scratch dir to an
+// ~/.cache/clode, cmake intermediates to TMPDIR, every blobulate scratch dir to an
 // os.tmpdir() mkdtemp) and CI overrode them straight back into the checkout —
 // see .github/actions/build-leg/action.yml, which pointed CLODE_TJS_VENDOR and
 // CLODE_TJS_OUT at "$PWD/.matrix/...". A default protects only whoever does not

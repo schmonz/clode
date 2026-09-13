@@ -120,7 +120,7 @@ test('findTool on non-win32 does NOT append extensions (POSIX bare name)', () =>
 
 // --- win32: X_OK is not a question Windows can answer ----------------------
 //
-// MEASURED, on the windows-amd64 and windows-arm64 legs of CI run 33245690046: the fused builder
+// MEASURED, on the windows-amd64 and windows-arm64 legs of CI run 33245690046: the blobulated builder
 // reported `[tried: zstd: not found; unzstd: not found; zstdcat: not found]` while a `zstd` was
 // demonstrably on PATH in that same job (actions/cache ran `tar --use-compress-program "zstd -d"`
 // seconds earlier). Nothing was missing; the PREDICATE was answering no.

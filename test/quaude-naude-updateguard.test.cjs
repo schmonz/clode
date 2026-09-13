@@ -7,7 +7,7 @@
 // test/clode-native.test.cjs's acceptance-3 mock-driven Bash-tool harness
 // (startMockAnthropic + cannedToolUseSSE/cannedSSE). Builds BOTH kinds via the
 // plain host `clode build` / `clode build --naude` — the simplest path that
-// still produces a real, runnable target (the fused-under-native-builder path
+// still produces a real, runnable target (the blobulated-under-native-builder path
 // is proven separately by clode-native.test.cjs/quaude-naude-selfupdate.test.cjs
 // and is not needed again here).
 //
@@ -125,7 +125,7 @@ function runTarget(bin, args, env, timeoutMs = 60000) {
 }
 function cleanEnv(extra) {
   const env = { ...process.env, ...extra };
-  delete env.NODE_PATH;   // the fused/baked target must be self-contained
+  delete env.NODE_PATH;   // the blobulated/baked target must be self-contained
   return env;
 }
 
@@ -206,7 +206,7 @@ function runUpdateGuardAcceptance(t, kind, bin, skipReason) {
   })();
 }
 
-test('quaude: `clode build` fuses it (precondition for the acceptance below)', (t) => {
+test('quaude: `clode build` blobulates it (precondition for the acceptance below)', (t) => {
   if (SKIP) { t.skip(SKIP); return; }
   assert.strictEqual(QUAUDE_BUILD.status, 0, `clode build failed:\n${QUAUDE_BUILD.stdout}\n${QUAUDE_BUILD.stderr}`);
 });

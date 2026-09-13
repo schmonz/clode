@@ -12,8 +12,8 @@
 // surface was the gap, not the engine. scripts/extract-cacert-pem.mjs pulls
 // that SAME bundle out of cacert.c (byte-for-byte what real HTTPS in this
 // engine already verifies against, not a separately-sourced or invented set)
-// into the sibling asset tls-cacert.pem, which libexec/quaude-fuse.js sweeps
-// into a fused quaude verbatim (no extension filter — see its `collect()`).
+// into the sibling asset tls-cacert.pem, which libexec/quaude-blobulate.js sweeps
+// into a blobulated quaude verbatim (no extension filter — see its `collect()`).
 // Re-run that script whenever cacert.c is refreshed by txiki.js's own
 // scripts/update-ca-bundle.sh; test/tls-cacert-pem.test.cjs fails loudly if
 // the shipped .pem drifts from cacert.c's current content.
@@ -30,11 +30,11 @@
 // actually used (never on the -p path).
 const FSS = globalThis.__tjs_fs_sync;
 
-// Read the sibling PEM asset, fused-or-not. Mirrors loader.cjs's own
+// Read the sibling PEM asset, blobulated-or-not. Mirrors loader.cjs's own
 // __vfsGet-then-FSS pattern (not reused directly: __nodeShim only exports the
 // TEXT-decoding readTextSync, and by the time this module can reference it,
 // __dirname already gives the right VFS-or-real path — /quaude/node-shim/
-// modules/tls-cacert.pem when fused, the real sibling path otherwise — see
+// modules/tls-cacert.pem when blobulated, the real sibling path otherwise — see
 // loader.cjs's evalModule(), which derives __dirname from the same SHIM_DIR
 // this module itself was loaded from).
 function readSiblingText(name) {

@@ -8,7 +8,7 @@
 // — except the netbsd-sparc in-guest bake, which drives cmake by hand inside a
 // 512MB sun4m guest with no node and skipped it ("canonical-LE: no regen
 // needed"). So that leg shipped an engine with the C function and no binding
-// onto it, and nothing said so until `quaude-fuse: this engine does not report
+// onto it, and nothing said so until `quaude-blobulate: this engine does not report
 // moduleMeta` — 927 seconds into the carve, at the last stage of the longest job
 // in the matrix.
 //

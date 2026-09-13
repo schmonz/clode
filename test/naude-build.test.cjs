@@ -162,12 +162,12 @@ test('stagedBunShim: the shim comes from the stage dir beside cli.cjs, not the r
 
 // The provenance rule, stated as the property that matters: whatever stage the
 // cli.cjs came from, the shim comes from THAT SAME stage — which is exactly
-// what quaude-fuse.js does (`path.join(stageDir, 'bun-shim.cjs')` where
+// what quaude-blobulate.js does (`path.join(stageDir, 'bun-shim.cjs')` where
 // stageDir is the dir holding cli.cjs). Same inputs => same shim, both targets.
 test('stagedBunShim: quaude and naude resolve the same shim for the same stage', async () => {
   const { stagedBunShim } = await import('../scripts/build-naude.mjs');
   for (const stage of ['/cache/v1', '/cache/v2', '/tmp/other/stage']) {
-    // quaude-fuse.js's rule, transcribed: join(stageDir, 'bun-shim.cjs').
+    // quaude-blobulate.js's rule, transcribed: join(stageDir, 'bun-shim.cjs').
     const quaudeShim = path.join(stage, 'bun-shim.cjs');
     const naudeShim = stagedBunShim(path.join(stage, 'cli.cjs'));
     assert.strictEqual(naudeShim, quaudeShim,

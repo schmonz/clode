@@ -1,5 +1,5 @@
 'use strict';
-// READ A FUSED QUAUDE FROM DISK, WITHOUT RUNNING IT.
+// READ A BLOBULATED QUAUDE FROM DISK, WITHOUT RUNNING IT.
 //
 // A quaude is [base exe][members][index JSON][QAUDEv0 footer 32B][bootstrap bc][tx1k1.js 12B]
 // (libexec/quaude-bootstrap.mjs owns the layout). Everything the target knows about itself —
@@ -13,7 +13,7 @@
 // prints the manifest, but only on a target this host can execute, which excludes every
 // cross-build. This reader has neither limitation.
 //
-// ONE COPY. This lived, character for character, in test/quaude-cross-fuse.test.cjs and
+// ONE COPY. This lived, character for character, in test/quaude-cross-blobulate.test.cjs and
 // test/clode-native.test.cjs before it lived here.
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -35,8 +35,8 @@ function readTrailerIndex(file) {
   return { buf, index, member, names: index.members.map((m) => m.name) };
 }
 
-// The fused artifact's own account of itself. Throws (rather than returning undefined) when
-// the member is missing: a quaude with no manifest is a broken fuse, not a quiet null.
+// The blobulated artifact's own account of itself. Throws (rather than returning undefined) when
+// the member is missing: a quaude with no manifest is a broken blobulate, not a quiet null.
 function readManifest(file) {
   const { member } = readTrailerIndex(file);
   const m = member('manifest.json');

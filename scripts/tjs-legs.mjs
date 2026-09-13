@@ -69,7 +69,7 @@ const LEGS = [
   // -node engine tag instead.
   // macos-14 = the oldest arm64 runner GitHub hosts (= the publish floor);
   // ci rides the newest (macos-26).
-  // publish:false: the arm64/x64 legs still build + fuse + smoke (validation) and
+  // publish:false: the arm64/x64 legs still build + blobulate + smoke (validation) and
   // upload their bare ENGINE slice (tjs-darwin-*), which release.yml's
   // darwin-universal job lipo's into the shipped 4-arch fat binary. The single-
   // arch builders are redundant with the universal (which contains their slices)
@@ -142,12 +142,12 @@ const LEGS = [
   // config every VM leg ships. ffi off: nothing shipped imports tjs:ffi,
   // and it spares the 10.6 sysroot a libffi question (also VM-leg parity).
   // PROVEN floor (probe run 29166443318, 2026-07-11): honest 10.6-SDK
-  // build (Csu-grafted crt1.10.6.o), fuse + full quaude smoke green on
+  // build (Csu-grafted crt1.10.6.o), blobulate + full quaude smoke green on
   // macos-15-intel, floor gate LC_VERSION_MIN_MACOSX 10.6. Walk receipts:
   // probe 1 = 29165326041 (crt wall), probe 2 = 29165510612 (CXX wall),
   // then the local Rosetta bench (PINS.md "darwin floor walk fixups").
   // REAL-HARDWARE PROOF 2026-07-11: on Mavericks 10.9.5 (Darwin 13.4.0,
-  // x86_64) the builder ran, fetched the provider (mbedtls TLS), fused a
+  // x86_64) the builder ran, fetched the provider (mbedtls TLS), blobulated a
   // quaude ON the box (29MB, bundle 2.1.179), PONG + attest green, quaude
   // answers --version. The 10.6..10.9 gap is covered by the honest SDK.
   { leg: 'darwin-x64', os: 'ubuntu-latest', publish: false, pack: true,  // slice-only builder (ships via darwin-universal); engine IS a cross-build --target
@@ -162,7 +162,7 @@ const LEGS = [
     wasm: 'off', mimalloc: 'off', ffi: 'off',
     // Commit 57fb352 (2026-07-11, "darwin-x64 floor proven on real Mavericks
     // hardware"): on a real Mavericks 10.9.5 box (Darwin 13.4.0, x86_64) the
-    // builder fetched the provider over mbedtls TLS and fused a 29MB quaude
+    // builder fetched the provider over mbedtls TLS and blobulated a 29MB quaude
     // ON-BOX (bundle 2.1.179), PONG + attest green, quaude answers --version.
     // `PONG` in libexec/clode-build.cjs is exactly RECIPE G7 (`-p 'say PONG'`
     // against a mock, exit 0 + response matched + POST verified) — real, not
@@ -184,9 +184,9 @@ const LEGS = [
   // i386 slice at floor 10.4 — second slice of the 4-way fat binary.
   // ENGINE-ONLY (no-exec): no GitHub runner can execute i386 (mac
   // runners are >=10.15, Rosetta 2 is x86_64-only), so the leg builds and
-  // floor-gates the bare tjs and publishes nothing; the fuse chain is
+  // floor-gates the bare tjs and publishes nothing; the blobulate chain is
   // proven on the Mavericks box (10.9 runs i386 natively), and a
-  // publishable i386 BUILDER waits on cross-fuse prerequisite 3 (this
+  // publishable i386 BUILDER waits on cross-blobulate prerequisite 3 (this
   // leg is its motivating consumer). Same engine knobs as darwin-x64
   // (Darwin TLV needs 10.7+; Tiger ALSO has no posix_spawn — the
   // spawn-model axis fixups ride build-tjs.mjs).
@@ -200,9 +200,9 @@ const LEGS = [
   // shim smoke ok, async spawn via libuv's fork/exec route ok, sync
   // spawn via the v3 fork/exec sibling ok — both new spawn paths ran
   // real children on real hardware. STRETCH PROVEN same day: an i386
-  // BUILDER was fused ON the box (CLODE_TJS=<this engine> + the x64
+  // BUILDER was blobulated ON the box (CLODE_TJS=<this engine> + the x64
   // builder + CLODE_MAIN_BUNDLE, 11.3MB, self-smoke green) — the first
-  // cross-arch fuse in the wild, cross-fuse prereq 3's proof-of-need.
+  // cross-arch blobulate in the wild, cross-blobulate prereq 3's proof-of-need.
   // (True-Tiger execution awaits Tiger hardware or the qemu-ppc-era
   // oracle legs; 10.4..10.9 gap covered by the honest SDK.)
   // CROSS-BUILT on ubuntu via the osxcross image (i386-apple-darwin8, LEGACY
@@ -227,12 +227,12 @@ const LEGS = [
   // CROSS-BUILT on ubuntu inside the digest-pinned VariantXYZ image (gcc
   // 14.2 powerpc-apple-darwin8 + cctools-port ppc ld + baked 10.4u SDK) —
   // the first darwin leg that is neither a mac runner nor a guest VM. No
-  // native SDK fetch (baked); no fuse/publish (no-exec: nothing in GHA
+  // native SDK fetch (baked); no blobulate/publish (no-exec: nothing in GHA
   // execs ppc). ENGINE PROVEN on real Tiger PowerPC (run 29182716872):
   // boots the LE bundles via canonical-LE, regexps/spawn/numerics correct.
   // Walls cleared: __atomic_*_8 link (CLODE_TJS_ATOMIC_SHIM) + canonical-LE
   // v5 regexp-endian discriminator. Publishable ppc BUILDER awaits
-  // cross-fuse (this leg + darwin-x86 are its consumers).
+  // cross-blobulate (this leg + darwin-x86 are its consumers).
   { leg: 'darwin-ppc', os: 'ubuntu-latest', publish: false, pack: true,
     'macos-min': '10.4', 'macos-arch': 'ppc', floor: '10.4',
     // renovate: datasource=docker depName=ghcr.io/variantxyz/gcc-powerpc-apple-darwin8
@@ -242,7 +242,7 @@ const LEGS = [
     // __atomic_*_8 link wall (formerly hardcoded in the exec=cross step, now a
     // per-leg field so the tier-2 Debian cross legs can turn it off).
     'atomic-shim': true,
-    // Tiger's kqueue drops socket/pipe/SIGCHLD/async delivery under the fused
+    // Tiger's kqueue drops socket/pipe/SIGCHLD/async delivery under the blobulated
     // runtime's fd load (ktrace-confirmed, memory tiger-ppc-agentic-turn-deadlock):
     // build libuv's generic poll(2) backend instead of kqueue.c.
     'darwin-poll': true,
@@ -260,7 +260,7 @@ const LEGS = [
   // windows-amd64 (native engine leg): compiles tjs.exe ON windows-latest with
   // MSVC cl.exe (CLODE_TJS_WIN_MSVC — the Activate-MSVC-dev-env step +
   // ilammy/msvc-dev-cmd), so build-leg's exec=host machinery does build +
-  // fuse + PONG in ONE windows job (like darwin) and PUBLISHES
+  // blobulate + PONG in ONE windows job (like darwin) and PUBLISHES
   // clode-<ver>-windows-amd64 the normal exec=host way. The canonical Windows
   // leg — a hard gate (a broken publisher must fail red). Same
   // wasm/mimalloc/ffi-off config as the other floor legs. The finer shim +
@@ -271,10 +271,10 @@ const LEGS = [
   { leg: 'windows-amd64', os: 'windows-latest', msvc: true, publish: true, ci: true,
     wasm: 'off', mimalloc: 'off', ffi: 'off',
     fidelity: { tier: 1, date: '2026-08-09', bundle: '2.1.218', how: 'cmbx-windows',
-                note: 'floor 6/6 GREEN (A1,B1,B4,C1,D1,G7) — driven 2026-08-09 on REAL Windows (cmbx-windows) against a quaude cross-fused here from the cached PE32+ engine. A1/B1/B4/C1/G7 by scripts/floor-probe.mjs over ssh under real profile isolation (USERPROFILE, not just HOME) with the sandbox-sentinel and tmpdir guards armed; D1 by an ssh -tt pty session (/quit exited code 0 in 2398ms). Supersedes earlier same-day rows that ran against the operator profile' } },
+                note: 'floor 6/6 GREEN (A1,B1,B4,C1,D1,G7) — driven 2026-08-09 on REAL Windows (cmbx-windows) against a quaude cross-blobulated here from the cached PE32+ engine. A1/B1/B4/C1/G7 by scripts/floor-probe.mjs over ssh under real profile isolation (USERPROFILE, not just HOME) with the sandbox-sentinel and tmpdir guards armed; D1 by an ssh -tt pty session (/quit exited code 0 in 2398ms). Supersedes earlier same-day rows that ran against the operator profile' } },
   // windows-arm64 (the Windows finale): native MSVC ARM64 on the windows-11-arm
   // runner (msvc-arch:arm64 → the dev-env's cl targets ARM64), exec=host build +
-  // fuse + PONG like windows-amd64. PUBLISHES clode-<ver>-windows-arm64 — the asset
+  // blobulate + PONG like windows-amd64. PUBLISHES clode-<ver>-windows-arm64 — the asset
   // the release.yml tripwire requires (Phase 4 dropped the SEA arm64 leg). Proven
   // green first try (cl.exe de-risked the build), now a HARD publisher like
   // windows-amd64. Finer signals run in ci.yml's windows-arm64-tests job.
@@ -306,7 +306,7 @@ const LEGS = [
     static: true, wasm: 'off', publish: true, smoke: 'version', timeout: 300, 'soft-fail': true,  // qemu-user (alpine >= 3.21)
     fidelity: { tier: 0,
                 note: 'zero floor coverage: this leg smokes --version only (smoke: \'version\'), so the build-pipeline PONG turn NEVER runs on loongarch64 — see RESULTS.md "What earns a row"' } },
-  // ---- T2 VM legs: fuse + smoke run INSIDE the guest (exec=guest —
+  // ---- T2 VM legs: blobulate + smoke run INSIDE the guest (exec=guest —
   // BSD/illumos binaries have no binfmt escape on a Linux host). Config:
   // wasm off (WAMR "linux"-platform mremap wall on every non-Linux POSIX),
   // mimalloc off (NetBSD compile regression; start uniform, re-enable
@@ -340,7 +340,7 @@ const LEGS = [
     // ~25 minutes just to install and never got through pkg_add"). No hand
     // drive, no spike scorecard exists for netbsd-amd64.
     // What it DOES have (2026-08-04, "what earns a row" ruling): G7, from the
-    // build-pipeline PONG smoke that fuses and runs a quaude inside the NetBSD
+    // build-pipeline PONG smoke that blobulates and runs a quaude inside the NetBSD
     // 10.1/amd64 guest on every build. That earlier "no evidence beyond
     // ordinary green CI build+smoke" note was the inconsistency the ruling
     // fixed — the identical smoke was being counted for darwin-x64 and
@@ -518,7 +518,7 @@ const LEGS = [
     // #2 is another user hitting our exact failure), so the guest cannot install
     // packages at all. `soft-fail` alone would NOT have helped: both tiers strip it
     // from publishers (:860, :889), so this leg was a HARD gate blocking releases —
-    // and a release is what fixes the ★★ cross-fuse DOA. Dropping publish is the
+    // and a release is what fixes the ★★ cross-blobulate DOA. Dropping publish is the
     // doctrine-sanctioned demotion ("demote a chronically-flaky publisher
     // explicitly (drop publish), never silently"); the leg still builds for signal.
     // RESTORE THIS once a beta6 guest image exists or master ports install — see
@@ -551,7 +551,7 @@ const LEGS = [
     // engine debugging, not a floor drive.
     //
     // BROKEN UPSTREAM, NOT BY US (2026-08-24). This leg has failed 14+ straight
-    // `ci` runs, identically, at guest package install — before any build, fuse
+    // `ci` runs, identically, at guest package install — before any build, blobulate
     // or smoke:
     //     Refreshing repository "HaikuPorts" failed
     //     *** Failed to download package c_ares: Resource not found
@@ -620,11 +620,11 @@ const LEGS = [
     // real the moment `publish` came off — the same latent softening removed from haiku.
     fidelity: { tier: 0, date: '2026-08-02', how: 'ci',
                 note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run in-guest); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
-  // netbsd-sparc (the first truly-weird platform; cross-fuse A+B1+C): the sparc
+  // netbsd-sparc (the first truly-weird platform; cross-blobulate A+B1+C): the sparc
   // tjs ENGINE is built once via the source-hash tjs-cache (TCG bake on miss);
-  // per-run cross-fuses the clode --self builder on the x64 runner (Layer A,
+  // per-run cross-blobulates the clode --self builder on the x64 runner (Layer A,
   // CLODE_TARGET_TEMPLATE=sparc engine), then boots the pristine sparc image and
-  // runs clode-on-sparc to FUSE a quaude + PONG (Layer C). Publishes
+  // runs clode-on-sparc to BLOBULATE a quaude + PONG (Layer C). Publishes
   // clode-<ver>-netbsd10.1-sparc. soft-fail (TCG flake non-blocking); the release
   // required-assets tripwire gates on the sparc asset. First user of the own-qemu
   // guest backend.
@@ -647,7 +647,7 @@ const LEGS = [
                 note: 'floor 1/6 green (G7); A1,B1,B4,C1,D1 not driven; predates canonical-LE — see RESULTS.md' } },
   // ---- cross-toolchain tier-2 (2026-07-14): cross-compiled on the x64 runner
   // inside a stock Debian image (cross-apt names the gcc-<triple>), then the
-  // shared cross-fuse (tier2:true) emits a clode BUILDER against the foreign
+  // shared cross-blobulate (tier2:true) emits a clode BUILDER against the foreign
   // engine — no runner can exec the target, so no-exec:true and the tier2 block
   // owns the upload. atomic-shim off: s390x/riscv64 have native 64-bit atomics.
   // Engine knobs match the VM legs (wasm/mimalloc/ffi off). soft-fail until they
@@ -656,7 +656,7 @@ const LEGS = [
   //
   // linux-riscv64 (64-bit LE): the easy LE cross proof — no canonical-LE
   // special-casing needed. verify=qemu-user (level-2 self-load required,
-  // level-2.5 full fuse attempted+logged).
+  // level-2.5 full blobulate attempted+logged).
   { leg: 'linux-riscv64', os: 'ubuntu-latest', 'guest-arch': 'riscv64',
     // renovate: datasource=docker depName=debian
     'cross-image': 'debian:trixie',
@@ -889,7 +889,7 @@ const LEGS = [
   // marker routes build-leg down that path). The cross "toolchain" is cosmocc,
   // self-provisioned by build-tjs (NOT a Docker cross-image), so no cross-image/
   // cross-apt; wasm/mimalloc/ffi off (none build under cosmocc). Built on ubuntu:
-  // Linux execs the APE, so the builder fuses + PONGs on the runner, and the SAME
+  // Linux execs the APE, so the builder blobulates + PONGs on the runner, and the SAME
   // .com is then exercised on macOS/Windows/BSD runners (PONG + attest each — the
   // multi-OS fan-out; see BACKLOG "Cosmopolitan APE leg" → PHASE E CI note).
   // SHIPPING (2026-07-31, maintainer call: "release worthy as is, we'll improve it
@@ -931,7 +931,7 @@ const LEGS = [
       // only the native CONTROL arm had been mined — for darwin-arm64's rows.
       // The cosmo SUBJECT arm passed the SAME 7/7 scenarios (Write, Grep,
       // Bash-inline, 2-tool loop, PreToolUse hook, --continue, Workflow), plus
-      // a Bash round-trip against the actual fused quaude.com. Reading a
+      // a Bash round-trip against the actual blobulated quaude.com. Reading a
       // document's control arm and ignoring its subject arm understated the
       // very platform the run was ABOUT. B1/C1/G7 backfilled from it (B4 was
       // already recorded), so the floor now reads 4/6 — identical to
@@ -941,7 +941,7 @@ const LEGS = [
                                note: 'floor 4/6 green (B1,B4,C1,G7); A1,D1 not driven; H1/H3/H4/H7 + F6/D6/G2 also pass (not floor rows) — see RESULTS.md' },
       // Was: "BUILD host. Never driven." — false under the 2026-08-04 ruling.
       // The build host is the ONE place the .com is actually executed: the leg
-      // fuses it and runs the PONG smoke there. That earns G7 here and nowhere
+      // blobulates it and runs the PONG smoke there. That earns G7 here and nowhere
       // else in this map — the other seven hosts inherit nothing.
       'cosmo-linux-x86-64':  { tier: 0, date: '2026-08-02', how: 'ci',
                                note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run on the ubuntu build host); A1,B1,B4,C1,D1 not driven — see RESULTS.md' },
@@ -1019,7 +1019,7 @@ export function legsFor(tier) {
 //     (incl. the slow NetBSD fleet). Keep in sync with the universal's
 //     four-arch contract.
 //   fast / slow — ci.yml splits the `ci` tier the same way (see SLOW_CI_LEG
-//     above): `fast` is native/alpine/cross-fuse legs that finish in minutes,
+//     above): `fast` is native/alpine/cross-blobulate legs that finish in minutes,
 //     `slow` is VM guests + the from-source cross-toolchain fleet that can run
 //     hours. The four oracle jobs (and the Windows jobs) consume only fast
 //     legs' artifacts, so they depend on the fast job alone instead of the
@@ -1224,7 +1224,7 @@ export function cli(tier, only, versionOverride, macosMinOverride) {
   } else if (only === 'notdarwin') {
     legs = legs.filter((l) => !DARWIN_SLICES.includes(l.leg));      // everything else
   } else if (only === 'fast') {
-    legs = legs.filter((l) => !SLOW_CI_LEG(l));    // native/alpine/cross-fuse legs — oracles' input
+    legs = legs.filter((l) => !SLOW_CI_LEG(l));    // native/alpine/cross-blobulate legs — oracles' input
   } else if (only === 'slow') {
     legs = legs.filter((l) => SLOW_CI_LEG(l));     // VM guests + the from-source cross-toolchain fleet
   } else if (only) {

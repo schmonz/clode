@@ -1,10 +1,10 @@
 'use strict';
-// Windows PE-trailer fuse acceptance: the cross-fused quaude.exe self-loads
+// Windows PE-trailer blobulate acceptance: the cross-blobulated quaude.exe self-loads
 // (tx1k1 trailer -> VFS members) and completes a turn, on a REAL Windows kernel.
-// Gated on CLODE_QUAUDE_EXE (the fused binary) + CLODE_PROVIDER_BIN (mock turn).
+// Gated on CLODE_QUAUDE_EXE (the blobulated binary) + CLODE_PROVIDER_BIN (mock turn).
 // Spawns quaude.exe DIRECTLY — it self-loads, no loader/cli args (unlike the
-// non-fused roundtrip oracle, test/node-shim-roundtrip.test.cjs, which spawns
-// `tjs run loader cli`). Skips locally (no Windows / no fused binary).
+// non-blobulated roundtrip oracle, test/node-shim-roundtrip.test.cjs, which spawns
+// `tjs run loader cli`). Skips locally (no Windows / no blobulated binary).
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -25,7 +25,7 @@ function bootQuaude(exe, args, env, timeoutMs) {
   });
 }
 
-test('fused quaude.exe --clode-attest self-loads and verifies all members', (t) => {
+test('blobulated quaude.exe --clode-attest self-loads and verifies all members', (t) => {
   const exe = quaudeExe();
   if (!exe) { t.skip('no CLODE_QUAUDE_EXE'); return; }
   const r = spawnSync(exe, ['--clode-attest'], { encoding: 'utf8', timeout: 60000 });
@@ -33,7 +33,7 @@ test('fused quaude.exe --clode-attest self-loads and verifies all members', (t) 
   assert.ok(r.stdout.includes(require('../libexec/clode-attest.cjs').ATTEST_VERIFIED), `stdout:\n${r.stdout}`);
 });
 
-test('fused quaude.exe -p prints PONG through the VFS module path', async (t) => {
+test('blobulated quaude.exe -p prints PONG through the VFS module path', async (t) => {
   const exe = quaudeExe();
   if (!exe) { t.skip('no CLODE_QUAUDE_EXE'); return; }
   if (!process.env.CLODE_PROVIDER_BIN) { t.skip('no CLODE_PROVIDER_BIN'); return; }

@@ -536,13 +536,13 @@ test('GATE_REFUSES: a ternary and a named-variable exit status are refusals', ()
     "if (src.includes('x')) fail();\nprocess.exit(status);").gateShaped, true);
 });
 
-// FIX ROUND 1 (reviewer) — the extension-shaped hole. libexec/quaude-fuse.js (spawned by
+// FIX ROUND 1 (reviewer) — the extension-shaped hole. libexec/quaude-blobulate.js (spawned by
 // libexec/clode-build.cjs) and libexec/graph-meta.js (spawned by libexec/clode-extract.cjs) are
 // real build-path files that landed in NO bucket: not gate-shaped, not excluded, not counted.
 // Neither is gate-shaped today, which is precisely why the hole was invisible.
 test('the production walk covers .js as well as .cjs and .mjs', () => {
   const files = discoverProductionFiles();
-  for (const rel of [path.join('libexec', 'quaude-fuse.js'), path.join('libexec', 'graph-meta.js')]) {
+  for (const rel of [path.join('libexec', 'quaude-blobulate.js'), path.join('libexec', 'graph-meta.js')]) {
     assert.ok(files.includes(rel),
       `${rel} is spawned on the build path but is outside the production-gate population — `
       + 'an extension-shaped hole in a mechanism whose promise is "the next gate cannot '

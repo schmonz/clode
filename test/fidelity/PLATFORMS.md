@@ -61,7 +61,7 @@ This is the canonical reference run. The operator executes the full recipe here 
 
 **Rig id:** `cmbx-windows`
 
-**Engines available:** quaude (tjs, cross-fused on the mac from the cached PE32+ engine)
+**Engines available:** quaude (tjs, cross-blobulated on the mac from the cached PE32+ engine)
 **Test scope:** Floor rows A1,B1,B4,C1,G7 via `scripts/floor-probe.mjs --ssh`; D1 via `scripts/../remote-tui.cjs` (ssh -tt pty)
 **Access:** `ssh cmbx-windows`. The login shell is cmd.exe; use Git Bash for a POSIX shell —
 `C:\PROGRA~1\Git\bin\bash.exe -s` (8.3 path dodges the space, `-s` reads the script from stdin
@@ -99,7 +99,7 @@ qemu gateway 10.0.2.2 — passing the wrong `--mock-host` looks exactly like a h
 **Rig id:** `tiger-ppc-vm`
 
 **Where:** `ssh -p 1215 schmonz@localhost` (or operator's configured credentials)
-**Engines available:** quaude (tjs — proven on real PowerPC via cross-fuse). Node has never published PowerPC macOS binaries and Tiger (10.4) predates any Node build in any case, so naude cannot run here.
+**Engines available:** quaude (tjs — proven on real PowerPC via cross-blobulate). Node has never published PowerPC macOS binaries and Tiger (10.4) predates any Node build in any case, so naude cannot run here.
 **Reference engine:** None locally. Use the **darwin baseline**: run this row's Claude + naude behavior on the primary darwin rig, then compare quaude-on-Tiger-PPC against that recorded darwin baseline.
 **Test scope:** Platform-sensitive rows only: **A1, A2, B1, C1, C2, C3, C4, D1, D2, D3, D4, D5, D6, E1, E2, E3, F4, G3**
 **Applets:** Check `command -v rg bfs ugrep` on the guest; exercise present/absent per `test/fidelity/applet-config.mjs`. A stock Tiger guest is unlikely to have any of the three preinstalled — verify rather than assume.
@@ -108,7 +108,7 @@ qemu gateway 10.0.2.2 — passing the wrong `--mock-host` looks exactly like a h
 ### How to run:
 1. Run the full recipe (or at least these platform-sensitive rows) on the primary darwin rig first, and record the Claude + naude behavior as the darwin baseline.
 2. SSH to the Tiger PPC VM (10.4.11 G4, qemu guest).
-3. Copy the quaude binary (cross-fused for ppc on an arm64 host) to the VM.
+3. Copy the quaude binary (cross-blobulated for ppc on an arm64 host) to the VM.
 4. For each platform-sensitive row, execute the action with quaude as the subject and compare against the recorded darwin baseline (not a local reference — there isn't one).
 5. Key differences from darwin: 32-bit big-endian PowerPC, pre-10.5 (no posix_spawn), fork/exec semantics differ.
 6. Record results with `platform: darwin-ppc` tag, noting the divergence (if any) against the darwin baseline.
@@ -151,7 +151,7 @@ qemu gateway 10.0.2.2 — passing the wrong `--mock-host` looks exactly like a h
 ### How to run:
 1. Run the full recipe (or at least these platform-sensitive rows) on the primary darwin rig first, and record the Claude + naude behavior as the darwin baseline.
 2. Boot or access the sparc VM (qemu sun4m guest with NetBSD 10.1).
-3. Copy the quaude binary (cross-fused on x64, then booted on sparc) to the guest.
+3. Copy the quaude binary (cross-blobulated on x64, then booted on sparc) to the guest.
 4. For each platform-sensitive row, execute the action against quaude.
    - Because there is no local reference engine, results are recorded as "quaude: pass/fail" with notes on any crashes or anomalies.
    - Behavioral correctness is adjudicated by: (a) the deterministic oracle (matching naude output recorded in the darwin baseline), (b) the absence of crashes, (c) endianness-specific rows (e.g., regexp literals under canonical-LE) passing.
@@ -188,14 +188,14 @@ x86_64) — the oldest 64-bit-Intel floor `darwin-x64` builds against. Not a per
 SSH-reachable box documented elsewhere in this file; reached via the operator's own setup for
 one-off floor-walk proofs (see the `darwin-x64`/`darwin-x86` floor-walk plan docs and commits
 `57fb352`, `6cfdaa6`, `2e4f9c8`).
-**Engines available:** quaude (tjs, cross-fused elsewhere then run natively here), naude does
+**Engines available:** quaude (tjs, cross-blobulated elsewhere then run natively here), naude does
 not target this floor.
 **Reference engine:** None locally — same darwin-baseline model as the other exotic rigs.
-**Test scope:** Whatever the floor-walk proof exercised for that run (e.g. build+fuse+PONG+attest
+**Test scope:** Whatever the floor-walk proof exercised for that run (e.g. build+blobulate+PONG+attest
 smoke — RECIPE row G7 — for `darwin-x64`; raw spawn-path smoke for `darwin-x86`).
 **Result recording:** Append platform tag `mavericks-vm`
 **Provenance:** This is the rig behind the 2026-07-11 evidence in `test/fidelity/RESULTS.md` for
-`darwin-x64` (on-box fuse, PONG + attest green, bundle 2.1.179).
+`darwin-x64` (on-box blobulate, PONG + attest green, bundle 2.1.179).
 
 ---
 
@@ -206,18 +206,18 @@ smoke — RECIPE row G7 — for `darwin-x64`; raw spawn-path smoke for `darwin-x
 **Where:** `.github/workflows/tjs-legs.yml` → `.github/actions/build-leg`, one job per leg
 of `scripts/tjs-legs.mjs`. Not a box you SSH to: a rig that re-runs itself on every push
 and every release.
-**Engines available:** quaude only (the leg fuses one and throws it away; naude and
+**Engines available:** quaude only (the leg blobulates one and throws it away; naude and
 upstream Claude are not present in a leg job).
 **Reference engine:** None on the leg. Same darwin-baseline model as the other exotic rigs.
 **Test scope:** Exactly ONE recipe row, **G7**, and only on legs that actually EXECUTE the
-fused quaude on the run-target's own platform — see "What earns a row" in
+blobulated quaude on the run-target's own platform — see "What earns a row" in
 `test/fidelity/RESULTS.md`, which is the authority. In shape:
 
 - **Earns G7:** guest-VM legs (`exec=guest`: netbsd/freebsd/openbsd/dragonflybsd/
-  midnightbsd/omnios/solaris/openindiana/haiku) fuse and smoke INSIDE a guest of the
+  midnightbsd/omnios/solaris/openindiana/haiku) blobulate and smoke INSIDE a guest of the
   target OS+arch; native-runner legs (darwin-arm64, windows-amd64/arm64) and the
-  static-musl Linux legs fuse and smoke on the runner itself; `netbsd-sparc` fuses and
-  PONGs inside its own-qemu sun4m guest; `cosmo` fuses and PONGs its `.com` on the
+  static-musl Linux legs blobulate and smoke on the runner itself; `netbsd-sparc` blobulates and
+  PONGs inside its own-qemu sun4m guest; `cosmo` blobulates and PONGs its `.com` on the
   ubuntu runner — which earns the row for `cosmo-linux-x86-64` **only**.
 - **Earns nothing:** `no-exec` legs (the darwin x64/x86/ppc slices, the tier-2 Debian
   crosses, the whole NetBSD build.sh fleet) — nothing on the builder can run the output;

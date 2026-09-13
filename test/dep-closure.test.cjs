@@ -1,6 +1,6 @@
 'use strict';
 // THE GATE (duplication audit §1). The ext-dep closure quaude embeds used to be
-// hand-transcribed in libexec/quaude-fuse.js while naude DERIVED its own from
+// hand-transcribed in libexec/quaude-blobulate.js while naude DERIVED its own from
 // package.json via `npm ci`. Nothing checked the two against each other or
 // against package.json, so adding a dependency picked it up for naude with zero
 // edits and silently omitted it from quaude — surfacing only at quaude RUN time
@@ -10,7 +10,7 @@
 // The absence of this file is what let them drift. It must FAIL if someone adds
 // a dependency to package.json that does not reach quaude.
 //
-// The closure now travels to the (tjs-hosted, require-less) fuse worker as DATA
+// The closure now travels to the (tjs-hosted, require-less) blobulate worker as DATA
 // through extras.json. These tests grade the node-side derivation that fills it:
 // computeDepClosure/readDirectDeps in libexec/clode-build.cjs.
 const test = require('node:test');
@@ -129,7 +129,7 @@ test('computeDepClosure: tolerates a dependency cycle (terminates, no repeat)', 
 
 // The point of deriving the closure at BUILD time: a needed-but-absent package
 // must fail the build loudly, NOT become a runtime "Cannot find module" deep in
-// a user's session. quaude's old fuse-time guard only fired for a dep that was
+// a user's session. quaude's old blobulate-time guard only fired for a dep that was
 // LISTED-but-missing — never for one that was NEEDED-but-unlisted.
 test('computeDepClosure: a missing DIRECT dependency fails loud at build time', () => {
   const nm = fakeNm({ present: {} });
@@ -539,8 +539,8 @@ test('shimProvidedModules: reflects libexec/bun-shim.cjs\'s own __bunBuiltins/__
 
 // THE PARSE GATE. shimProvidedModules() READS bun-shim.cjs's `const PROVIDES`
 // literal out of the source text instead of executing the shim, because
-// `clode build` must work on a host with no node: under a fused native builder
-// process.execPath is the fused clode itself (see that function's comment for the
+// `clode build` must work on a host with no node: under a blobulated native builder
+// process.execPath is the blobulated clode itself (see that function's comment for the
 // full story). Text and truth can only disagree here if the parse breaks — so
 // this asserts the two agree, by EXECUTING the real shim (in a CHILD process:
 // requiring it would hook this test runner's own Module._load) and comparing what

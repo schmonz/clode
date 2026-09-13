@@ -1,4 +1,4 @@
-// VFS-seam harness (Q1b): reproduces, in miniature and WITHOUT a fused binary,
+// VFS-seam harness (Q1b): reproduces, in miniature and WITHOUT a blobulated binary,
 // exactly what libexec/quaude-bootstrap.mjs does at quaude startup — build an
 // in-memory archive Map, mount it as globalThis.__quaudeVFS, set
 // globalThis.__quaudeArgs, and evaluate the node-shim loader source — so the
@@ -6,7 +6,7 @@
 //
 // Usage: tjs run vfs-harness.js <loader.cjs> <node-shim-dir> [entryArgs...]
 //
-// The mini cli.cjs exercises every seam the real fused bundle relies on:
+// The mini cli.cjs exercises every seam the real blobulated bundle relies on:
 // relative require from /quaude, require(__dirname + '/bun-shim.cjs'), a bare
 // specifier resolved from /quaude/node_modules, require.main identity, argv
 // shape, and a process.env read+write (the strict-mode env fix — the entry is
@@ -30,12 +30,12 @@ async function collect(dir, prefix) {
   }
 }
 
-// The real shim tree (the fused quaude ships these very files as members).
+// The real shim tree (the blobulated quaude ships these very files as members).
 files.set('node-shim/loader.cjs', await tjs.readFile(loaderPath));
 await collect(path.join(shimRoot, 'modules'), 'node-shim/modules');
 await collect(path.join(shimRoot, 'internal'), 'node-shim/internal');
 // target-env.cjs: bare member name (no libexec/ prefix), exactly like the
-// real fuse (libexec/quaude-fuse.js) — the loader's fused SHIM_DIR has no
+// real blobulate (libexec/quaude-blobulate.js) — the loader's blobulated SHIM_DIR has no
 // 'libexec' ancestor in the archive namespace, so modules/process.cjs's
 // relative require('../../target-env.cjs') only resolves if this rides at
 // the archive root. Without this member, loading the 'process' builtin
@@ -48,7 +48,7 @@ files.set('bun-shim.cjs', enc.encode(`module.exports = 'bunshim-ok';\n`));
 files.set('node_modules/fakepkg/package.json', enc.encode(JSON.stringify({ name: 'fakepkg', version: '0.0.0', main: 'index.js' })));
 files.set('node_modules/fakepkg/index.js', enc.encode(`module.exports = { name: 'fakepkg-ok' };\n`));
 
-// Mini cli.cjs -> cli.qbc, compiled exactly as the fuse step compiles the real
+// Mini cli.cjs -> cli.qbc, compiled exactly as the blobulate step compiles the real
 // bundle (CJS-wrapper function assigned to __quaude_entry, module => strict).
 const miniCli = `
 const lib = require('./lib.cjs');

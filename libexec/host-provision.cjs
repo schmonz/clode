@@ -8,8 +8,8 @@
 // install hint if none works. The registry is just code: it is consumed at
 // runtime by the clode builder (esbuild-inlined into clode-main.bundle.cjs)
 // and by naude (bundled into naude-entry.bundle.cjs), and rides as a forwarded
-// member in the builder-role quaude fuse so a self-fused clode-native can
-// re-fuse targets. The quaude PRODUCT carries no provision consumer
+// member in the builder-role quaude blobulate so a self-blobulated clode-native can
+// re-blobulate targets. The quaude PRODUCT carries no provision consumer
 // (trailer-member deps, bundle-discovered shell, updates are notify-only — a
 // version check, no rebuild), so it deliberately does not ship it. The bake injects nothing
 // and never resolves target-runtime tools (cross-build safety). Dependency-free:
@@ -214,7 +214,7 @@ const REGISTRY = {
   },
   // REQUIRED TO CARVE UPSTREAM 2.1.251+, on every artifact we publish. Claude Code embeds
   // its text assets as zstd frames; `node:zlib.zstdDecompressSync` arrived in Node 22.15/24
-  // and covers the DEV path only — every shipped clode is a fused tjs binary, tjs has no
+  // and covers the DEV path only — every shipped clode is a blobulated tjs binary, tjs has no
   // zstd, and node-shim/modules/zlib.cjs deliberately has none. So libexec/bun-graph.cjs
   // spawns a host zstd, and it resolves it through here rather than hand-rolling a lookup:
   // without the KAT, a CLODE_ZSTD (or a PATH `zstd`) that exits 0 and echoes its input makes

@@ -1,10 +1,10 @@
-// quaude first-stage bootstrap. Compiled to quickjs bytecode at fuse time
-// (libexec/clode-build.cjs -> libexec/quaude-fuse.js) and appended to a copy of
+// quaude first-stage bootstrap. Compiled to quickjs bytecode at blobulate time
+// (libexec/clode-build.cjs -> libexec/quaude-blobulate.js) and appended to a copy of
 // the tjs binary under the stock `tx1k1.js` 12-byte trailer, so the UNMODIFIED
 // pinned tjs runs it at startup, before any CLI parsing (txiki's standalone
 // detection in run-main). ES module (=> strict), no imports.
 //
-// Fused-file layout (all offsets absolute file coordinates):
+// Blobulated-file layout (all offsets absolute file coordinates):
 //   [tjs binary, ad-hoc signed BEFORE anything is appended]
 //   [member data ...]
 //   [index JSON: {version, members:[{name, offset, len, sha256}]}]
@@ -18,7 +18,7 @@
 // role, carve --clode-* out of argv BEFORE any bundle-visible code runs (the
 // reserved namespace — everything else belongs to Claude Code) and apply the
 // target-env contract (target-env.cjs — DISABLE_INSTALLATION_CHECKS, the rg
-// PATH shaping), while the BUILDER role (a fused native clode) owns its whole
+// PATH shaping), while the BUILDER role (a blobulated native clode) owns its whole
 // argv, gets no carve, and gets NO target-env contract either (that contract
 // is Claude-Code-target-shaped and pointless for the builder itself); mount
 // globalThis.__quaudeVFS; evaluate the archived
@@ -92,7 +92,7 @@ async function sha256hex(bytes) {
 // alongside those below, in main()). `map` is a real DI parameter (not just a
 // global read), matching bootstrapTargetEnv's existing shape/probe seam,
 // so host-node tests can inject target-env.cjs's mapPlatform directly instead
-// of relying on main() (which never runs outside the fused binary) to
+// of relying on main() (which never runs outside the blobulated binary) to
 // populate the global. tjs.system.platform is EMPTY, so
 // navigator.userAgentData.platform is the only source this early.
 function tjsPlatform(uaPlatform, map = globalThis.__clodeMapPlatform) {
@@ -266,7 +266,7 @@ async function main() {
   // 1) tx1k1 trailer -> where our bootstrap bytecode starts.
   const trailer = new Uint8Array(12);
   await exef.read(trailer, exeSize - 12);
-  if (dec.decode(trailer.subarray(0, 8)) !== 'tx1k1.js') die('missing tx1k1.js trailer (not a fused binary?)', 70);
+  if (dec.decode(trailer.subarray(0, 8)) !== 'tx1k1.js') die('missing tx1k1.js trailer (not a blobulated binary?)', 70);
   const bcOffset = new DataView(trailer.buffer, 8, 4).getUint32(0, true);
 
   // 2) quaude footer: the 32 bytes immediately before the bootstrap bytecode.
@@ -298,11 +298,11 @@ async function main() {
   for (const name of ['manifest.json', 'node-shim/loader.cjs']) {
     const m = index.members.find((x) => x.name === name);
     if (!m || !files.get(name)) die(`archive is missing ${name}`, 70);
-    if ((await sha256hex(files.get(name))) !== m.sha256) die(`${name} failed integrity check (corrupt fuse?)`, 70);
+    if ((await sha256hex(files.get(name))) !== m.sha256) die(`${name} failed integrity check (corrupt blobulate?)`, 70);
   }
 
   // 6) role (manifest, just verified): quaude reserves the --clode-* argv
-  // namespace; the BUILDER role (a fused native clode, Q1c) owns its whole
+  // namespace; the BUILDER role (a blobulated native clode, Q1c) owns its whole
   // argv — clode's own flags are all --clode-*/subcommands, so nothing is
   // carved and there is no --clode-attest short-circuit for it.
   const manifest = JSON.parse(dec.decode(files.get('manifest.json')));
@@ -344,15 +344,15 @@ async function main() {
     // is a member: evaluate it the same way the loader is evaluated below (it is
     // CJS, so hand it a module shim), then adapt it to tjs primitives.
     //
-    // BUILDER-role only exception: a fused native clode is the BUILDER, not a
+    // BUILDER-role only exception: a blobulated native clode is the BUILDER, not a
     // built target — applying this contract to itself would set
     // DISABLE_INSTALLATION_CHECKS/NODE_USE_ENV_PROXY on the builder's own
     // process for no reason and could prepend an rg dir to the builder's PATH.
     // So: quaude only.
     // BARE member name 'target-env.cjs' (no libexec/ prefix): the node-shim's
-    // process.cjs also requires this member (relative to its fused SHIM_DIR,
+    // process.cjs also requires this member (relative to its blobulated SHIM_DIR,
     // which has no 'libexec' ancestor in the archive namespace — see
-    // quaude-fuse.js), so this and that require must agree on where it lives.
+    // quaude-blobulate.js), so this and that require must agree on where it lives.
     const tem = { exports: {} };
     (0, new Function('module', 'exports', dec.decode(files.get('target-env.cjs'))))(tem, tem.exports);
     globalThis.__clodeShapeTargetEnv = tem.exports.shapeTargetEnv;
@@ -413,6 +413,6 @@ async function main() {
   (0, new Function(dec.decode(files.get('node-shim/loader.cjs'))))();
 }
 
-// Under tjs (the fused binary) run; under host node (unit tests importing the
+// Under tjs (the blobulated binary) run; under host node (unit tests importing the
 // carve function) do nothing.
 if (globalThis.tjs) await main();

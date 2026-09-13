@@ -200,7 +200,7 @@ test('provision(unzip) fails loud when no extractor is found', () => {
 // --- zstd: the requirement that decides whether the SHIPPED builder can carve ---
 //
 // Claude Code 2.1.251+ embeds its assets as zstd frames, and every published clode is a
-// fused tjs binary with no zstd of its own — so libexec/bun-graph.cjs spawns one. It used
+// blobulated tjs binary with no zstd of its own — so libexec/bun-graph.cjs spawns one. It used
 // to look for a single hard-coded name with a bare env override and NO known-answer test,
 // which is the shape this registry exists to replace: a `CLODE_ZSTD` pointed at anything
 // that exits 0 and echoes its input made the carve take the COMPRESSED FRAME as asset text

@@ -3,7 +3,7 @@ name: release
 # THE release workflow (unified 2026-07-10, user call — formerly two files:
 # the SEA-only release.yml and this matrix; the SEA legs themselves retired
 # Phase 4, 2026-07-13): tjs builder legs (T1 native, T1.5 Alpine/musl x8, T2
-# VM guests — fuse and smoke run INSIDE the guest; a BSD binary has no binfmt
+# VM guests — blobulate and smoke run INSIDE the guest; a BSD binary has no binfmt
 # escape on a Linux host) are now the ONLY builder family. The release job
 # gates on every hard leg succeeding, or nothing publishes; soft legs
 # (continue-on-error) contribute artifacts only when green. A release-gate
@@ -153,10 +153,10 @@ jobs:
 
 
   # The four-arch macOS universal binary: lipo the four darwin ENGINE slices
-  # (ppc/i386/x86_64/arm64) into one fat Mach-O, then fuse ONE canonical-LE
+  # (ppc/i386/x86_64/arm64) into one fat Mach-O, then blobulate ONE canonical-LE
   # trailer over it — the trailer is arch-agnostic (canonical-LE proven on
   # real ppc), so every slice reads it. Runs on macos-arm64: the fat
-  # template's arm64 slice drives the fuse worker + codesign (proven to
+  # template's arm64 slice drives the blobulate worker + codesign (proven to
   # handle a ppc-containing fat). HARD (no continue-on-error): the universal is
   # four arches or it is not release-ready — the lipo step exit-1's on any
   # missing slice, and that must block the release, not silently ship an
@@ -223,7 +223,7 @@ jobs:
         run: |
           npm ci --prefix deps/claude
           node scripts/build-clode-main.mjs
-      - name: Fat-fuse the universal builder (arm64 slice drives; trailer spans all)
+      - name: Fat-blobulate the universal builder (arm64 slice drives; trailer spans all)
         env:
           CLODE_TJS: ${{ steps.fat.outputs.fat }}
           # So any build/<artifact-name>/ this invocation touches matches the

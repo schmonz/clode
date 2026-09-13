@@ -49,9 +49,9 @@ test('net.isIP + BlockList characterization vs host node', (t) => {
 // this row locks the tls.cjs SURFACE atop that fix: real cert content (not
 // just "is an array"), frozen like node's, getCACertificates()'s per-type
 // contract, and identical content whether read via the module's __dirname
-// (unfused here — the fused/VFS leg is exercised by runLoader itself, which
-// always runs UNFUSED against loader.cjs directly; the sibling-file-read
-// mechanism is shared code with no fused-only branch to separately probe).
+// (unblobulated here — the blobulated/VFS leg is exercised by runLoader itself, which
+// always runs UNBLOBULATED against loader.cjs directly; the sibling-file-read
+// mechanism is shared code with no blobulated-only branch to separately probe).
 test('tls.rootCertificates/getCACertificates: real bundled CA content, not an empty stub', (t) => {
   if (skipUnlessTjs(t)) return;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-tls-'));

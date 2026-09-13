@@ -34,13 +34,13 @@ function isFile(p) {
 }
 
 // CONTENT, not size+mtime, and tolerant: a libexec that does not carry one of the staging
-// sources (an older fused clode, a materialized dir assembled for a different role) must
+// sources (an older blobulated clode, a materialized dir assembled for a different role) must
 // not crash staging — it just means that file cannot contribute to the cache signature.
 //
 // It was clode-resolve's sigOf (`<size>-<mtimeSeconds>`) until 2026-08-31, which made this
-// cache UNHITTABLE from any fused clode. A fused binary carries its libexec as archive
+// cache UNHITTABLE from any blobulated clode. A blobulated binary carries its libexec as archive
 // members and materializes them with fs.writeFileSync into a fresh mkdtemp on every run
-// (materializeFusedPayload), so the bytes are identical and the mtime is always `now`:
+// (materializeBlobPayload), so the bytes are identical and the mtime is always `now`:
 // "extractor changed; re-extracting" on every invocation, forever, and never a shared
 // entry between a musl quaude and a cosmo .com. Reported by the user after a `--naude`
 // build re-extracted a 2.1.251 graph that had been extracted minutes earlier.
@@ -123,18 +123,18 @@ function runQuiet(verbose, fn) {
 
 // ---- the cyclic-group merge, done ONCE per staged graph ----------------------------
 //
-// A staged graph is the input to BOTH targets: the fuse worker compiles it into quaude,
+// A staged graph is the input to BOTH targets: the blobulate worker compiles it into quaude,
 // and graphRunnerSource() below turns the same doc into the cli.cjs naude embeds and every
 // oracle stages. Upstream's residual `import.meta.require("<chunk>")` edges (2.1.248+) are
 // answerable by NEITHER, so the merge that removes them belongs here — before the doc is
-// written and before either consumer sees it. It used to live in libexec/quaude-fuse.js,
+// written and before either consumer sees it. It used to live in libexec/quaude-blobulate.js,
 // which is why a quaude worked and a naude (and every node-shim oracle) did not.
 //
 // COST, measured on darwin-arm64 2.1.251 (1836 modules, 33 residual edges, groups of
 // 99/7/5): ~5s of engine CPU for the metadata pass and ~11s for the merge under node. It
 // runs once per (provider, extractor) and is cached with the rest of the stage.
 
-// The engine to ask for module metadata. In order: this process, if it IS tjs (a fused
+// The engine to ask for module metadata. In order: this process, if it IS tjs (a blobulated
 // clode — no spawn needed and none possible); CLODE_TJS; the checkout's built engine.
 function resolveEngine(libexec, env) {
   if (globalThis.tjs && globalThis.tjs.engine && typeof globalThis.tjs.engine.moduleMeta === 'function') {
@@ -143,7 +143,7 @@ function resolveEngine(libexec, env) {
   const explicit = env.CLODE_TJS;
   if (explicit && isFile(explicit)) return { bin: explicit, why: 'CLODE_TJS' };
   try {
-    // A dev checkout: libexec/../build/tjs/<platform-tag>/tjs. Absent in a fused clode,
+    // A dev checkout: libexec/../build/tjs/<platform-tag>/tjs. Absent in a blobulated clode,
     // which never reaches here because the in-process branch above already answered.
     const { tjsBin } = require('../scripts/platform-tag.cjs');
     const cand = tjsBin(path.dirname(libexec));
@@ -298,7 +298,7 @@ function extractIfNeeded(opts) {
       if (!split) return extractToFile(bin, cliPath);
       const res = extractGraphToFile(bin, cliPath);
       // A SPLIT STAGE CARRIES BOTH SHAPES, from ONE extraction. graph.json feeds the
-      // fuse worker, which compiles each module to bytecode — that is where quaude's
+      // blobulate worker, which compiles each module to bytecode — that is where quaude's
       // load-time win comes from and it must stay. cli.cjs is the same graph as ONE
       // RUNNABLE FILE, which is what naude embeds and what every oracle stages.
       //
@@ -330,7 +330,7 @@ function extractIfNeeded(opts) {
       // A staged GRAPH is JSON, not JS, so Module.wrap would be meaningless. Check what
       // can actually be wrong here: that it parses, that every unit the order names has
       // a source, and that the entry is among them. The authoritative SYNTAX check is
-      // the fuse step, which compiles every module under the TARGET engine — the only
+      // the blobulate step, which compiles every module under the TARGET engine — the only
       // parser whose opinion matters — and fails loudly naming the module.
       const doc = JSON.parse(fs.readFileSync(cliPath, 'utf8'));
       if (doc.format !== 'clode-bun-graph-v1') throw new Error(`staged graph format ${doc.format}`);
@@ -363,7 +363,7 @@ function cacheSignature({ extractorSig, providerPlatform }) {
 }
 
 // providerPlatformOf is RE-EXPORTED, not re-implemented: this module is the extraction seam,
-// it already composes that answer into the cache key, and the fuse path needs the same answer
+// it already composes that answer into the cache key, and the blobulate path needs the same answer
 // to record in the built artifact's manifest. Two callers, one function, no chance of a
 // manifest that disagrees with the cache key it was carved under.
 module.exports = { extractIfNeeded, cacheSignature, extractorSigOf, providerPlatformOf };

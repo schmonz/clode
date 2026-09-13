@@ -190,7 +190,7 @@ test('obtainEngine refuses a blob manifest whose target has no slice', async () 
     (e) => e instanceof TemplatesError && /no `?offset\/length/.test(e.message));
 });
 
-test('a corrupt slice fails the sha gate rather than fusing wrong bytes', async () => {
+test('a corrupt slice fails the sha gate rather than blobulating wrong bytes', async () => {
   const engines = fixtureEngines();
   const { blob, slices } = packFixture(engines);
   const m = fixtureManifest(engines, slices);
@@ -205,7 +205,7 @@ test('a corrupt slice fails the sha gate rather than fusing wrong bytes', async 
       fetchRange: async () => blob.subarray(wrong.offset, wrong.offset + wrong.length),
     }),
     (e) => e instanceof TemplatesError && /sha256/.test(e.message),
-    'a wrong-but-valid slice must be caught by the decompressed sha, not fused');
+    'a wrong-but-valid slice must be caught by the decompressed sha, not blobulated');
 });
 
 // --- clode-net range primitives -------------------------------------------

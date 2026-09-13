@@ -202,7 +202,7 @@ function tjsVendorParentDir(env = process.env) {
 // narrower: platform-tag.cjs must still not require anything HEAVIER than that —
 // no clode-paths.cjs, no build-clode-main.mjs — and every module it DOES require
 // (build-scratch.cjs, canonical-name.cjs) must be carried explicitly in
-// libexec/quaude-fuse.js's naude-assembler member list (test/naude-assembler-
+// libexec/quaude-blobulate.js's naude-assembler member list (test/naude-assembler-
 // closure.test.cjs enforces this by walking the require closure; it is what
 // caught build-scratch.cjs's addition needing a member-list entry).
 function repoVersion(repo) {

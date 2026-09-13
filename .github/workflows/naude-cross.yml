@@ -7,7 +7,7 @@ name: naude-cross
 # win32 `run-win-*` jobs are themselves the empirical "does an unsigned PE
 # boot" test). Off-Mac darwin signing (rcodesign, Tasks 1-4) is gated on its
 # own offline unit tests on every push (test/clode-rcodesign.test.cjs,
-# test/clode-build-naude.test.cjs, test/clode-fuse-args.test.cjs); this
+# test/clode-build-naude.test.cjs, test/clode-build-args.test.cjs); this
 # workflow is NOT that gate — it is the empirical "does the artifact those
 # units certify actually EXECUTE on a real machine" check, deliberately
 # manual: cross-built naude is unshipped (naude publishing at all is still

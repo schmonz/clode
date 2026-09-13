@@ -21,7 +21,7 @@
 //
 // Measured, not assumed: a Linux container (ultimate-hat's remote Docker
 // daemon) ran the real gated files under CLODE_LIVE_RENDER=1 against a real
-// fused quaude -- they rendered and passed, no Keychain involved (no
+// blobulated quaude -- they rendered and passed, no Keychain involved (no
 // `security` binary on PATH at all in the container), nothing hung. See
 // .superpowers/sdd/2026-09-02-phase2-name-the-steps/linux-pty-experiment.md.
 //

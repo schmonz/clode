@@ -11,7 +11,7 @@
 //   3. --version                -> print "clode <VERSION>", exit 0
 //   4. --help                   -> print clodeHelp(), exit 0
 //   5. fetch [channel]          -> clodeUpdate, exit status
-//   6. build [--out PATH]       -> check watch signals, then clodeBuild (fuse a
+//   6. build [--out PATH]       -> check watch signals, then clodeBuild (blobulate a
 //                                  quaude), exit status — this is the ONE place
 //                                  upstream drift is checked (see step 7's note)
 //   7. watch                    -> clodeWatch(manual), exit 0
@@ -67,7 +67,7 @@ Key environment overrides:
   CLODE_CLAUDE_BIN    upstream claude binary to extract from
   CLODE_NODE          host node
   CLODE_CACHE         extracted-bundle cache dir
-  CLODE_TJS           tjs template binary for 'clode build' (default: the fused
+  CLODE_TJS           tjs template binary for 'clode build' (default: the blobulated
                       builder's own embedded template, else build/tjs/tjs)
   CLODE_CHANGELOG_URL release-notes source for the post-update signals digest
 `;
@@ -138,12 +138,12 @@ async function main(argv, opts = {}) {
     return process.exit(status);
   }
 
-  // 6. `clode build [--self] [--out PATH]`: fuse a standalone quaude binary —
+  // 6. `clode build [--self] [--out PATH]`: blobulate a standalone quaude binary —
   //     or, with --self, a standalone native clode builder — on this machine
   //     (builder namespace, not passthrough — Claude Code never sees it).
   if (first === 'build') {
     const buildArgs = args.slice(1);
-    const fuse = require('./clode-build.cjs');
+    const blobulate = require('./clode-build.cjs');
     // Validate argv BEFORE anything else in this branch: a build that is
     // going to be REJECTED must not phone home or touch the cache. (Regression
     // fixed here: `clode build <bad-arg>` used to fire the watch trigger below
@@ -152,7 +152,7 @@ async function main(argv, opts = {}) {
     // mutated the user's cache anyway. parseBuildArgs is the SAME parser
     // clodeBuild itself uses — imported, not re-implemented, so there is one
     // unknown-arg contract, not two.)
-    const parsed = fuse.parseBuildArgs(buildArgs);
+    const parsed = blobulate.parseBuildArgs(buildArgs);
     if (parsed.error) {
       process.stderr.write('clode: ' + parsed.error + '\n');
       return process.exit(1);
@@ -160,15 +160,15 @@ async function main(argv, opts = {}) {
     // Upstream drift threatens our ability to repackage, so check when we
     // repackage. (This ran on every launch when clode was a runner; there is
     // no launch anymore, so `build` — the moment upstream drift actually
-    // matters — is where the check moved.) --self fuses the BUILDER, not a
+    // matters — is where the check moved.) --self blobulates the BUILDER, not a
     // Claude Code target: it has no upstream bundle to drift, and it is release
-    // bootstrap (CI legs, cross-fuse guests) rather than a user invocation — so
+    // bootstrap (CI legs, cross-blobulate guests) rather than a user invocation — so
     // it gets no watch trigger, never mind the network fetch inside one.
     if (!parsed.self) {
       watch.clodeWatchBanner({ env, here: HERE });
       watch.clodeWatchMaybe({ env, self });
     }
-    const status = await fuse.clodeBuild(buildArgs, { env, libexec: LIBEXEC, here: HERE, version, self });
+    const status = await blobulate.clodeBuild(buildArgs, { env, libexec: LIBEXEC, here: HERE, version, self });
     return process.exit(status);
   }
 

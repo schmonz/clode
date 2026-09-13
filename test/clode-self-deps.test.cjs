@@ -42,7 +42,7 @@ const BUILTINS = new Set(Module.builtinModules);
 
 // The app/clode boundary — this list IS the documentation of that boundary.
 // Files under this repo that run INSIDE a BUILT quaude/naude (baked in as
-// fuse/SEA members and executed under CLAUDE CODE's own require graph), not
+// blobulate/SEA members and executed under CLAUDE CODE's own require graph), not
 // inside clode's build pipeline. They legitimately require npm packages
 // because Claude Code itself does. Excluded from the walk entirely — we never
 // analyze their content, matching how clode's own code never actually
@@ -56,9 +56,9 @@ const EXCLUDE_FILES = new Set([
 ]);
 const EXCLUDE_DIRS = [
   // The node-shim loader + modules + internal tree: archive members baked
-  // into a fused quaude, the RUNTIME environment the built binary boots
+  // into a blobulated quaude, the RUNTIME environment the built binary boots
   // into. clode's own node-side (this-file's) code never require()s these —
-  // clode-build.cjs passes this directory's PATH to the fuse worker
+  // clode-build.cjs passes this directory's PATH to the blobulate worker
   // subprocess, it never loads the files in-process.
   path.join(REPO, 'libexec', 'node-shim'),
 ];
@@ -176,7 +176,7 @@ test('clode itself requires only node builtins + sibling files — no npm depend
       // txiki.js's OWN builtin-module scheme — structurally the same thing as node:, a
       // runtime-supplied namespace, never an npm package. scripts/*.mjs is where a tjs-run
       // program (Task 7's scripts/merge-step.mjs, spawned under tjs — never require()'d or
-      // import()'d by any NODE-side clode code) lives; libexec/quaude-fuse.js and
+      // import()'d by any NODE-side clode code) lives; libexec/quaude-blobulate.js and
       // libexec/graph-meta.js use the same `tjs:` imports but are invisible to this walk's
       // `.cjs`-only libexec filter (they are `.js`), which is why this gap went unnoticed
       // until scripts/ grew its first tjs-run member.

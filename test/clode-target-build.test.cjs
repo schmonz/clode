@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const fuse = require('../libexec/clode-build.cjs');
+const build = require('../libexec/clode-build.cjs');
 
 function manifestFile() {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'tpl-'));
@@ -23,7 +23,7 @@ function sink() { let s = ''; return { write: (x) => { s += x; return true; }, t
 
 test('clode build --list-targets prints the available targets', async () => {
   const out = sink(), err = sink();
-  const status = await fuse.clodeBuild(['--list-targets'], {
+  const status = await build.clodeBuild(['--list-targets'], {
     env: { CLODE_TEMPLATES_MANIFEST: manifestFile() },
     here: '/x', libexec: '/x', version: '0', stdout: out, stderr: err,
   });
@@ -35,7 +35,7 @@ test('clode build --list-targets prints the available targets', async () => {
 
 test('clode build --list-targets without a manifest fails loud', async () => {
   const err = sink();
-  const status = await fuse.clodeBuild(['--list-targets'], {
+  const status = await build.clodeBuild(['--list-targets'], {
     env: {}, here: '/x', libexec: '/x', version: '0', stdout: sink(), stderr: err,
   });
   assert.strictEqual(status, 1);
@@ -48,7 +48,7 @@ const LIBEXEC = path.join(REPO, 'libexec');
 
 test('clode build --target <unknown> fails loud, names --list-targets', async () => {
   const err = sink();
-  const status = await fuse.clodeBuild(['--target', 'no-such-plat'], {
+  const status = await build.clodeBuild(['--target', 'no-such-plat'], {
     env: { CLODE_TEMPLATES_MANIFEST: manifestFile() },
     here: REPO, libexec: LIBEXEC, version: '0', stdout: sink(), stderr: err,
   });
@@ -77,31 +77,31 @@ test('clode build --target: resolves + obtains the engine, sets CLODE_TARGET_TEM
   const env = { CLODE_TEMPLATES_MANIFEST: mf, CLODE_STATE_ROOT: d };
   // Injected fetch returns the fake engine; no payload/provider in this env, so the
   // build fails downstream — but the engine must be OBTAINED and the template SET first.
-  await fuse.clodeBuild(['--target', 'linux-x64', '--out', path.join(d, 'q')], {
+  await build.clodeBuild(['--target', 'linux-x64', '--out', path.join(d, 'q')], {
     env, here: REPO, libexec: LIBEXEC, version: '0', stdout: sink(), stderr: sink(),
     templateCacheDir: cacheDir, fetchEngine: async () => engineBytes,
   });
   const cached = path.join(cacheDir, 'tjs-linux-x64-abc');
   assert.ok(fs.existsSync(cached), 'engine was obtained + cached');
   assert.strictEqual(fs.readFileSync(cached).toString(), 'FAKE-ENGINE-FOR-Y');
-  assert.strictEqual(env.CLODE_TARGET_TEMPLATE, cached, 'cross-fuse template set to the obtained engine');
+  assert.strictEqual(env.CLODE_TARGET_TEMPLATE, cached, 'cross-blobulate template set to the obtained engine');
 });
 
 test('parseBuildArgs: --naude --target composes (cross-build a naude)', () => {
-  const r = fuse.parseBuildArgs(['--naude', '--target', 'linux-arm64']);
+  const r = build.parseBuildArgs(['--naude', '--target', 'linux-arm64']);
   assert.deepStrictEqual({ naude: r.naude, target: r.target, error: r.error },
     { naude: true, target: 'linux-arm64', error: undefined });
 });
 
 test('parseBuildArgs: --self stays exclusive with --naude and --target', () => {
-  assert.match(fuse.parseBuildArgs(['--self', '--naude']).error, /different build targets/);
-  assert.match(fuse.parseBuildArgs(['--self', '--target', 'linux-arm64']).error, /different build targets/);
+  assert.match(build.parseBuildArgs(['--self', '--naude']).error, /different build targets/);
+  assert.match(build.parseBuildArgs(['--self', '--target', 'linux-arm64']).error, /different build targets/);
 });
 
 test('parseBuildArgs: singletons unchanged', () => {
-  assert.strictEqual(fuse.parseBuildArgs(['--naude']).error, undefined);
-  assert.strictEqual(fuse.parseBuildArgs(['--target', 'linux-arm64']).error, undefined);
-  assert.strictEqual(fuse.parseBuildArgs(['--self']).error, undefined);
+  assert.strictEqual(build.parseBuildArgs(['--naude']).error, undefined);
+  assert.strictEqual(build.parseBuildArgs(['--target', 'linux-arm64']).error, undefined);
+  assert.strictEqual(build.parseBuildArgs(['--self']).error, undefined);
 });
 
 // NOTE: the `clode build --naude --target` cross-build wiring test lives in

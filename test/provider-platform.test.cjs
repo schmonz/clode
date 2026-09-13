@@ -4,7 +4,7 @@
 //
 // Bun constant-folds `process.platform` at carve time, so a provider binary does not
 // produce a portable graph: it produces a graph for ITS OWN platform, with every other
-// platform's branches dead-coded away. A darwin quaude fused from a linux carve is not
+// platform's branches dead-coded away. A darwin quaude blobulated from a linux carve is not
 // "mostly right" — upstream's entire macOS credential store is simply absent from it.
 //
 // That shipped. The 2026-08-27 quaude contained ZERO of the three markers a darwin carve

@@ -4,7 +4,7 @@
 // render only when active (a TTY and not CLODE_VERBOSE, so piped/CI builds and
 // the verbose firehose are untouched), draw the current phase label immediately
 // on phase(), and clear the line on done(). Progress goes to stderr; the final
-// `clode: fused …` result stays on stdout.
+// `clode: blobulated …` result stays on stdout.
 const test = require('node:test');
 const assert = require('node:assert');
 const { makePhaseSpinner } = require('../libexec/clode-build.cjs');
@@ -18,7 +18,7 @@ function fakeStream(isTTY) {
 test('inactive (non-TTY): phase() and done() write nothing', () => {
   const err = fakeStream(false);
   const spin = makePhaseSpinner(err, false);
-  spin.phase('Fusing');
+  spin.phase('Blobulating');
   spin.done();
   assert.strictEqual(err.text(), '', 'a piped/CI build must get no spinner output');
 });
@@ -26,10 +26,10 @@ test('inactive (non-TTY): phase() and done() write nothing', () => {
 test('active (TTY): phase() draws the label immediately, in place', () => {
   const err = fakeStream(true);
   const spin = makePhaseSpinner(err, true);
-  spin.phase('Fusing');
+  spin.phase('Blobulating');
   const out = err.text();
   spin.done(); // stop the interval so the test process does not hang
-  assert.match(out, /Fusing/, 'the phase label must render');
+  assert.match(out, /Blobulating/, 'the phase label must render');
   assert.match(out, /^\r/, 'must redraw in place (carriage return), not append lines');
   assert.match(out, /\x1b\[K/, 'must clear to end-of-line so a shorter label leaves no tail');
 });

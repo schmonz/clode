@@ -17,14 +17,14 @@
 // post-conversion graph is merged into ONE module (libexec/scc-merge.cjs) and each former
 // member becomes a re-export shim onto it.
 //
-// It used to live inside libexec/quaude-fuse.js, which meant only the FUSED quaude ever
+// It used to live inside libexec/quaude-blobulate.js, which meant only the BLOBULATED quaude ever
 // got it. The graph runner — what naude embeds and what every oracle stages — was emitted
 // from the UNMERGED graph and died on the first residual require, on both of its hosts.
 // That is the bug this file's existence prevents from recurring: the merge is now a
 // property of the STAGED GRAPH, so everything downstream of staging inherits it and there
 // is no second place for it to be done differently.
 //
-// DEPENDENCY-INJECTED ON PURPOSE. libexec/quaude-fuse.js runs under tjs with no CJS
+// DEPENDENCY-INJECTED ON PURPOSE. libexec/quaude-blobulate.js runs under tjs with no CJS
 // resolver and loads its helpers with a require() that throws by design, so this file must
 // require() nothing: callers hand in `plan` (bun-graph-plan.cjs), `merger` (scc-merge.cjs)
 // and `metaOf`. That constraint is also what keeps it testable with fakes.

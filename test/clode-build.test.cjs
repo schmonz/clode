@@ -1,8 +1,8 @@
 'use strict';
 // Unit tests for the `clode build` subcommand surface (libexec/clode-build.cjs
-// + the clode-main dispatch). Cheap paths only — no tjs, no provider, no fuse:
+// + the clode-main dispatch). Cheap paths only — no tjs, no provider, no blobulate:
 // argv validation, template/provider fail-loud ordering, help text. The real
-// fuse (compile + assemble + smoke) is exercised end-to-end in
+// blobulate (compile + assemble + smoke) is exercised end-to-end in
 // test/quaude-build.test.cjs, gated on tjs + CLODE_PROVIDER_BIN.
 const test = require('node:test');
 const assert = require('node:assert');
@@ -44,7 +44,7 @@ function runEntry(args, extraEnv) {
 }
 
 // A stand-in engine must look like an engine. clode's build refuses a template
-// that cannot report its own fs/os constants, because fusing one yields a quaude
+// that cannot report its own fs/os constants, because blobulating one yields a quaude
 // that dies on first require('fs') on the target — so these fixtures carry the
 // same ABI marker a real engine does. Each test below is about a DIFFERENT
 // failure; without this they would all just trip the engine gate first, which
@@ -82,7 +82,7 @@ test('clode build <bad arg>: does not fire the watch trigger (a rejected build m
 //
 // Published engine templates built before 2026-08-21 cannot report their own
 // fs/os constants, and the shim refuses to guess them (it used to, and the
-// guesses were wrong on every BSD leg). Fusing such an engine yields a quaude
+// guesses were wrong on every BSD leg). Blobulating such an engine yields a quaude
 // that dies on first require('fs') — on the TARGET, long after the build host
 // declared success. That is exactly how a DOA Linux binary shipped.
 test('clode build: an engine predating the constants ABI is refused, with the remedy', () => {
@@ -159,10 +159,10 @@ test('clode build --self: missing esbuilt bundle fails loudly and names the fix'
   assert.match(r.stderr, /build-clode-main\.mjs|CLODE_MAIN_BUNDLE/);
 });
 
-// Regression coverage for the bootstrap↔clode-main skew (sparc cross-fuse
-// campaign hit an 8-day-stale bundle that crashed inside the fused builder's
+// Regression coverage for the bootstrap↔clode-main skew (sparc cross-blobulate
+// campaign hit an 8-day-stale bundle that crashed inside the blobulated builder's
 // extractIfNeeded): a bundle older than libexec sources must fail loud
-// instead of silently fusing a WRONG builder, and a fresh one must not be
+// instead of silently blobulating a WRONG builder, and a fresh one must not be
 // blocked by the same gate.
 test('clode build --self: stale esbuilt bundle fails loud and names the fix', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-stale-'));
@@ -367,7 +367,7 @@ test('describeExit: says timed out / killed / exited, never a bare misleading nu
 test('timeoutScale: default 1, integer >= 1 honored, junk rejected', () => {
   // TCG-emulated guests run 10-20x slower than metal; CI's VM legs scale
   // every build-pipeline hang guard via CLODE_TIMEOUT_SCALE (dispatch #14:
-  // the 5-min fuse-worker guard killed a healthy freebsd-arm64 compile).
+  // the 5-min blobulate-worker guard killed a healthy freebsd-arm64 compile).
   const { timeoutScale } = require('../libexec/clode-build.cjs');
   assert.strictEqual(timeoutScale({}), 1);
   assert.strictEqual(timeoutScale(undefined), 1);

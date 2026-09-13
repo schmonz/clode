@@ -195,7 +195,7 @@ function isZstdFrame(u8, p, len) {
 // THE EXTERNAL DECODER — and on every PUBLISHED clode it is the only one there is.
 // `node:zlib.zstdDecompressSync` arrived in Node 22.15/24, so raising the Node floor fixes the
 // DEV path and nothing else: tjs has no zstd, `node-shim/modules/zlib.cjs` deliberately has none,
-// and all 40 shipped assets are fused tjs binaries. Without this, the shipped builder cannot carve
+// and all 40 shipped assets are blobulated tjs binaries. Without this, the shipped builder cannot carve
 // upstream 2.1.251+ at all. Same doctrine as translating rg to ugrep/bfs: one portable
 // implementation, reached by spawning a tool the host already has, named by CLODE_ZSTD if the
 // host keeps it somewhere unusual (the CLODE_RG / CLODE_BFS convention).

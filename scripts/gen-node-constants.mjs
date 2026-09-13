@@ -252,7 +252,7 @@ const body = `
      * loudly instead.
      *
      * __tjs_abi is the handshake: the shim requires a minimum, and clode's build
-     * refuses an engine that predates it rather than fusing a quaude that is subtly
+     * refuses an engine that predates it rather than blobulating a quaude that is subtly
      * wrong at runtime.
      */
     typedef struct { const char *name; int64_t val; } clode_kv;

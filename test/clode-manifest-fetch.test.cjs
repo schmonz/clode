@@ -9,28 +9,28 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const fuse = require('../libexec/clode-build.cjs');
+const build = require('../libexec/clode-build.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 const LIBEXEC = path.join(REPO, 'libexec');
 
 test('releaseBaseUrl: <CLODE_RELEASE_BASE>/v<version>/ by default, overrides honored', () => {
-  assert.strictEqual(fuse.releaseBaseUrl({}, { version: '1.2.3' }),
+  assert.strictEqual(build.releaseBaseUrl({}, { version: '1.2.3' }),
     'https://github.com/schmonz/clode/releases/download/v1.2.3/');
-  assert.strictEqual(fuse.releaseBaseUrl({}, { version: 'v1.2.3' }),  // v-prefix not doubled
+  assert.strictEqual(build.releaseBaseUrl({}, { version: 'v1.2.3' }),  // v-prefix not doubled
     'https://github.com/schmonz/clode/releases/download/v1.2.3/');
-  assert.strictEqual(fuse.releaseBaseUrl({ CLODE_RELEASE_BASE: 'https://mirror/dl' }, { version: '9' }),
+  assert.strictEqual(build.releaseBaseUrl({ CLODE_RELEASE_BASE: 'https://mirror/dl' }, { version: '9' }),
     'https://mirror/dl/v9/');
-  assert.strictEqual(fuse.releaseBaseUrl({ CLODE_TEMPLATES_BASEURL: 'file:///packs/x' }, { version: '1' }),
+  assert.strictEqual(build.releaseBaseUrl({ CLODE_TEMPLATES_BASEURL: 'file:///packs/x' }, { version: '1' }),
     'file:///packs/x/');                                              // explicit base wins, slash added
-  assert.strictEqual(fuse.releaseBaseUrl({}, {}), null);              // no version -> null
+  assert.strictEqual(build.releaseBaseUrl({}, {}), null);              // no version -> null
 });
 
 test('resolveManifest: a local CLODE_TEMPLATES_MANIFEST wins (offline)', async () => {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'rm-'));
   const mf = path.join(d, 'm.json');
   fs.writeFileSync(mf, JSON.stringify({ schema: 1, tjsPin: 'p', targets: { x: { tag: 't', engine: 'e', sha256: 'a'.repeat(64), verified: 'smoke' } } }));
-  const { manifest, baseUrl } = await fuse.resolveManifest({
+  const { manifest, baseUrl } = await build.resolveManifest({
     env: { CLODE_TEMPLATES_MANIFEST: mf, CLODE_TEMPLATES_BASEURL: 'file:///e/' }, version: '1', libexec: LIBEXEC,
   });
   assert.strictEqual(manifest.tjsPin, 'p');
@@ -40,7 +40,7 @@ test('resolveManifest: a local CLODE_TEMPLATES_MANIFEST wins (offline)', async (
 test('resolveManifest: auto-fetches templates-<pin>.json from THIS version release', async () => {
   let requested = null;
   const manifestJson = JSON.stringify({ schema: 1, tjsPin: 'v26.6.0-1a230d3', targets: {} });
-  const { manifest, baseUrl } = await fuse.resolveManifest({
+  const { manifest, baseUrl } = await build.resolveManifest({
     env: { CLODE_TJS_PIN: 'v26.6.0-1a230d3' }, version: '2.0.0', libexec: LIBEXEC,
     fetchManifest: async (url) => { requested = url; return manifestJson; },
   });
@@ -52,13 +52,13 @@ test('resolveManifest: auto-fetches templates-<pin>.json from THIS version relea
 
 test('resolveManifest: no local manifest and no derivable pin fails loud', async () => {
   await assert.rejects(
-    () => fuse.resolveManifest({ env: {}, version: '1', libexec: '/nonexistent' }),
+    () => build.resolveManifest({ env: {}, version: '1', libexec: '/nonexistent' }),
     (e) => /tjs pin/.test(e.message) && /CLODE_TJS_PIN|CLODE_TEMPLATES_MANIFEST/.test(e.message));
 });
 
 test('resolveManifest: pin present but no version fails loud (cannot derive URL)', async () => {
   await assert.rejects(
-    () => fuse.resolveManifest({ env: { CLODE_TJS_PIN: 'p' }, version: '', libexec: LIBEXEC }),
+    () => build.resolveManifest({ env: { CLODE_TJS_PIN: 'p' }, version: '', libexec: LIBEXEC }),
     (e) => /release URL/.test(e.message));
 });
 
@@ -74,7 +74,7 @@ test('clode build --target: auto-fetches manifest + engine from the release (no 
   });
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'af-'));
   let manifestUrl = null, engineUrl = null;
-  await fuse.clodeBuild(['--target', 'linux-x64', '--out', path.join(d, 'q')], {
+  await build.clodeBuild(['--target', 'linux-x64', '--out', path.join(d, 'q')], {
     // CLODE_STATE_ROOT: this build fails downstream (no provider) but still
     // reaches clodeBuild's finally, which appends one build-trace.jsonl line
     // per build (Task 5) to a path resolved off HOME/XDG when nothing
@@ -89,7 +89,7 @@ test('clode build --target: auto-fetches manifest + engine from the release (no 
     `https://github.com/schmonz/clode/releases/download/v3.1.4/templates-${pin}.json`);
   assert.strictEqual(engineUrl,
     `https://github.com/schmonz/clode/releases/download/v3.1.4/tjs-linux-x64-${pin}`);
-  // The engine was obtained + set as the cross-fuse template (build fails later:
+  // The engine was obtained + set as the cross-blobulate template (build fails later:
   // no provider in this env — but the fetch path is what we're proving).
   const cached = path.join(d, 'cache', `tjs-linux-x64-${pin}`);
   assert.ok(fs.existsSync(cached), 'engine fetched from the release + cached');

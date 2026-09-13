@@ -11,13 +11,13 @@
 // So when the merge runs on a host that is NOT itself tjs (clode under node, which is the
 // dev and CI shape), staging spawns this script to answer the one question it cannot:
 // libexec/clode-extract.cjs writes the graph and the wanted names, runs this, reads the
-// metadata back, and does the merge itself. Under a fused clode there is no spawn — the
+// metadata back, and does the merge itself. Under a blobulated clode there is no spawn — the
 // engine is already in-process and clode-extract calls the same engine API directly.
 //
 // WHY EVERY MODULE IS COMPILED and not just the wanted ones: compile() resolves a module's
 // imports as it compiles, so compiling one in isolation fails with "could not load". The
 // staged order is topological, so one pass over it registers everything each later module
-// needs. Same property the fuse worker relies on.
+// needs. Same property the blobulate worker relies on.
 
 const [docPath, namesPath, outPath] = tjs.args.slice(3);
 if (!outPath) {

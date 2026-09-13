@@ -4,14 +4,14 @@
 //
 // node-shim-roundtrip-oracle.test.cjs diffs the runtime MODELS (cli.cjs under
 // node vs under tjs+shim). This diffs the PACKAGED TARGETS — a Node SEA with the
-// CC baked in, and a fused tjs binary with cli.qbc baked in. It is what proves
+// CC baked in, and a blobulated tjs binary with cli.qbc baked in. It is what proves
 // the models keep telling the truth about the things users actually build: the
 // packaging (asset materialization, the trailer, run-as-node, bytecode compile)
 // gets its own vote.
 //
 // Expensive (two real builds, ~2-4 min), so it is opt-in:
 //   CLODE_ORACLE_BINARIES=1 node --test test/oracle-binaries.test.cjs
-// and additionally needs Node >= 24 (SEA) + a tjs (fuse) + a Bun-packaged CC
+// and additionally needs Node >= 24 (SEA) + a tjs (blobulate) + a Bun-packaged CC
 // provider. Missing any of those, it SKIPs — never a false green.
 const test = require('node:test');
 const assert = require('node:assert');
@@ -30,7 +30,7 @@ const RUN_TIMEOUT = 120000;
 function why() {
   if (process.env.CLODE_ORACLE_BINARIES !== '1') return 'opt-in: set CLODE_ORACLE_BINARIES=1 (two real builds, minutes)';
   if (parseInt(process.versions.node.split('.')[0], 10) < 24) return 'needs Node >= 24 to build a naude SEA';
-  if (!tjsPath()) return 'no tjs binary (CLODE_TJS or build/tjs/tjs) to fuse a quaude';
+  if (!tjsPath()) return 'no tjs binary (CLODE_TJS or build/tjs/tjs) to blobulate a quaude';
   return null;
 }
 
@@ -110,5 +110,5 @@ test('naude and quaude binaries agree on the same baked Claude Code', async (t) 
 
   const walls = [...new Set(q.r.stderr.split('\n').filter((l) => l.includes('[wall]'))
     .map((l) => l.replace(/^.*\[wall\]\s*/, '').trim()).filter(Boolean))];
-  assert.deepStrictEqual(walls, [], `the fused quaude hit shim walls: ${walls.join(', ')}`);
+  assert.deepStrictEqual(walls, [], `the blobulated quaude hit shim walls: ${walls.join(', ')}`);
 });

@@ -6,7 +6,7 @@
 // WHY: `clode build` reads the provider bundle by CARVING the JS out of the Bun
 // binary (arch-independent — it never execs it). carveBlocks slurps the whole
 // file as a latin1 string + matchAll, so a 240MB binary peaks >512MB and scans
-// for many minutes. On the netbsd-sparc leg the fuse runs IN the sun4m guest
+// for many minutes. On the netbsd-sparc leg the blobulate runs IN the sun4m guest
 // (SS-20 @ 512MB RAM, the hardware ceiling, under TCG) — the full binary OOMs
 // ("out of swap") and is glacial. A minimal file containing ONLY the
 // entrypoints/cli.js @bun-cjs block (with the name sentinel + markers the

@@ -540,7 +540,7 @@ function patchNativeAutoupdater(body) {
 // (patchAutoupdater's site), `native` -> the native widget
 // (patchNativeAutoupdater's site), and EVERYTHING ELSE -> this one, the legacy
 // npm updater (2.1.241 `GKc`, the `qT0?VKc:GKc` fallthrough). A built target
-// reports installation type `unknown` — its process.argv[1] is the fused
+// reports installation type `unknown` — its process.argv[1] is the blobulated
 // bundle entry, Bun.isStandaloneExecutable is false (bun-shim.cjs:989), and
 // `npm config get prefix` is not its ancestor — so quaude/naude land HERE, on
 // the one updater clode never touched. Confirmed on a real built quaude
@@ -1046,7 +1046,7 @@ function extractToFile(binpath, out) {
 
 // --- staging a CODE-SPLIT bundle ----------------------------------------------
 // The CJS path above produces one cli.cjs. A split bundle (2.1.243+) produces a GRAPH:
-// every module's patched source, the compile order, and the entry name. The fuse worker
+// every module's patched source, the compile order, and the entry name. The blobulate worker
 // compiles that under the target engine; nothing here evaluates anything.
 //
 // The output is JSON rather than a directory of files on purpose: the staging cache, the
@@ -1304,7 +1304,7 @@ function extractGraphToFile(binpath, out) {
     moduleCount: plan.moduleCount,
     // The platform this graph was CARVED FOR, from the provider binary's container bytes.
     // Bun folds process.platform at carve time, so a graph is per-platform; recording it is
-    // what lets a build refuse a darwin target fused from a linux carve rather than ship one
+    // what lets a build refuse a darwin target blobulated from a linux carve rather than ship one
     // with the macOS credential store dead-coded away.
     providerPlatform: providerPlatformOf(binpath),
     sources,
@@ -1324,13 +1324,13 @@ function extractGraphToFile(binpath, out) {
 }
 
 // --- a code-split graph as ONE RUNNABLE FILE -----------------------------------
-// extractGraphToFile() above stages a graph for the FUSE path, which compiles each
+// extractGraphToFile() above stages a graph for the BLOBULATE path, which compiles each
 // module to bytecode and preregisters it — that is how quaude gets its load-time win.
 // Everything else that consumes an extracted bundle wants what the CJS path always
 // gave it: `extract-claude-js <bin> <out>` produces ONE file you can run. About twenty
 // test files and scripts/build-naude.mjs depend on exactly that contract.
 //
-// WHY THIS EXISTS AT ALL. When 2.1.243 went code-split, the fuse path learned the new
+// WHY THIS EXISTS AT ALL. When 2.1.243 went code-split, the blobulate path learned the new
 // shape and nothing else did, so `clode build` went green while naude AND the entire
 // oracle apparatus went dead — the agentic round-trips, the shim parity gate, and the
 // tjs-vs-node extractor differential all stage a single file. The build path was
@@ -1347,7 +1347,7 @@ function extractGraphToFile(binpath, out) {
 //   node  module.registerHooks() — synchronous resolve/load, v22.15+/v24+. naude
 //         already requires >= v24 (scripts/build-naude.mjs:478).
 //   tjs   compile in topological order (which registers each module), then evaluate
-//         the entry. Identical to what the fuse worker does, minus serialization.
+//         the entry. Identical to what the blobulate worker does, minus serialization.
 //
 // The graph is EMBEDDED rather than written beside the file, so the output is still
 // exactly one path in and one runnable path out. That is what lets naude's SEA embed it
@@ -1443,7 +1443,7 @@ const __CLODE_GRAPH = JSON.parse(${lit});
   if (tjs && tjs.engine && typeof tjs.engine.compile === 'function') {
     // compile() resolves imports as it compiles and registers what it compiled, so a
     // topological order makes every import resolve with no filesystem access. Same
-    // property the fuse worker relies on (libexec/quaude-fuse.js).
+    // property the blobulate worker relies on (libexec/quaude-blobulate.js).
     const enc = new TextEncoder();
     let entry = null;
     for (const name of doc.order) {
@@ -1455,10 +1455,10 @@ const __CLODE_GRAPH = JSON.parse(${lit});
         throw new Error('clode graph: compiling ' + name + ' failed: ' + e.message
           + ' (a "could not load" here means the staged order is not topological)');
       }
-      // SERIALIZE THEN DESERIALIZE, exactly as the fuse worker does. Handing
+      // SERIALIZE THEN DESERIALIZE, exactly as the blobulate worker does. Handing
       // evalBytecode() a freshly COMPILED module aborts the engine (SIGABRT, no
       // diagnostic) once the graph is big enough to matter: \`--version\` survived it
-      // and \`-p\` did not. The round-trip is the proven path (libexec/quaude-fuse.js
+      // and \`-p\` did not. The round-trip is the proven path (libexec/quaude-blobulate.js
       // compiles, serializes, and the loader deserializes), so the runner takes it too
       // rather than relying on a path nothing else exercises. Tracked in BACKLOG as an
       // engine bug in its own right — this is the workaround, not the fix.
@@ -1544,7 +1544,7 @@ if (require.main === module) {
 // WHICH PLATFORM'S BRANCHES SURVIVE IN A CARVE — read from the CONTAINER, never from the
 // host, the filename, or a version string. Bun constant-folds `process.platform` at carve
 // time, so a provider binary does not yield a portable graph: it yields a graph for ITS
-// platform, with every other platform's branches dead-coded away. A darwin target fused
+// platform, with every other platform's branches dead-coded away. A darwin target blobulated
 // from a linux carve is missing upstream's whole macOS credential store, which is how the
 // 2026-08-27 quaude shipped unable to read the login Keychain — see
 // test/provider-platform.test.cjs for the full account.

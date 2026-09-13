@@ -2,7 +2,7 @@
 // engine-recipe — ONE identity for "which engine sources was this tjs built from".
 //
 // THE BLINDNESS THIS CLOSES. A published engine template is not made by a
-// separate pipeline: it is the un-fused half of the release artifact, produced
+// separate pipeline: it is the un-blobulated half of the release artifact, produced
 // by the same job, in the same run, at the same commit (.github/workflows/
 // release.yml downloads `tjs-*` from the CURRENT run; .github/actions/build-leg
 // uploads exactly the file it passed as CLODE_TJS). So the template is only ever

@@ -1,9 +1,9 @@
 'use strict';
-// Cross-fuse (CLODE_TARGET_TEMPLATE) characterization: `clode build` appends a
+// Cross-blobulate (CLODE_TARGET_TEMPLATE) characterization: `clode build` appends a
 // valid trailer stack onto a FOREIGN base and skips the host smoke. Proven
 // locally (byte-append on the host) — a stand-in foreign base (a copy of the
 // host tjs named tjs.exe) exercises the cross path; the real PE base + self-load
-// is CI (the windows-amd64 leg's exec=host native fuse + PONG). Layout per quaude-bootstrap.mjs:
+// is CI (the windows-amd64 leg's exec=host native blobulate + PONG). Layout per quaude-bootstrap.mjs:
 // [base][members][index JSON][QAUDEv0 footer 32B][bootstrap bc][tx1k1.js 12B].
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
@@ -38,7 +38,7 @@ before(() => {
   if (!tjsPath()) { SKIP = 'no tjs binary (CLODE_TJS or build/tjs/tjs)'; return; }
   const bundle = stageMainBundle();
   if (!bundle) { SKIP = 'no esbuilt clode-main bundle (run node scripts/build-clode-main.mjs)'; return; }
-  DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'xfuse-'));
+  DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'xblobulate-'));
   const foreign = path.join(DIR, 'tjs.exe');           // foreign-base stand-in
   fs.copyFileSync(tjsPath(), foreign);
   OUT = path.join(DIR, 'quaude.exe');
@@ -56,23 +56,23 @@ before(() => {
 });
 after(() => { if (DIR) { try { fs.rmSync(DIR, { recursive: true, force: true }); } catch { /* */ } } });
 
-test('cross-fuse succeeds and reports "smoke on the target" (host smoke skipped)', (t) => {
+test('cross-blobulate succeeds and reports "smoke on the target" (host smoke skipped)', (t) => {
   if (SKIP) { t.skip(SKIP); return; }
-  assert.strictEqual(BUILD.status, 0, `cross-fuse failed:\n${BUILD.stdout}\n${BUILD.stderr}`);
-  assert.match(BUILD.stdout, /cross-fused .*— smoke on the target/, `stdout:\n${BUILD.stdout}`);
+  assert.strictEqual(BUILD.status, 0, `cross-blobulate failed:\n${BUILD.stdout}\n${BUILD.stderr}`);
+  assert.match(BUILD.stdout, /cross-blobulated .*— smoke on the target/, `stdout:\n${BUILD.stdout}`);
 });
 
-test('cross-fused output carries a valid trailer stack over the foreign base', (t) => {
+test('cross-blobulated output carries a valid trailer stack over the foreign base', (t) => {
   if (SKIP) { t.skip(SKIP); return; }
   const { names } = readTrailerIndex(OUT);
   assert.ok(names.includes('manifest.json'), `index lacks manifest.json: ${names.join(',')}`);
   assert.ok(names.includes('node-shim/loader.cjs'), `index lacks node-shim/loader.cjs: ${names.join(',')}`);
   assert.ok(names.includes('libexec/host-provision.cjs'),
-    `host-provision.cjs must ride in the builder-role fuse so a self-fused clode-native can re-fuse targets that provision host tools: ${names.join(',')}`);
+    `host-provision.cjs must ride in the builder-role blobulate so a self-blobulated clode-native can re-blobulate targets that provision host tools: ${names.join(',')}`);
 });
 
-test('cross-fused output keeps its .exe name and a nonzero size', (t) => {
+test('cross-blobulated output keeps its .exe name and a nonzero size', (t) => {
   if (SKIP) { t.skip(SKIP); return; }
   assert.ok(OUT.endsWith('.exe'));
-  assert.ok(fs.statSync(OUT).size > 1024 * 1024, 'cross-fused output implausibly small');
+  assert.ok(fs.statSync(OUT).size > 1024 * 1024, 'cross-blobulated output implausibly small');
 });

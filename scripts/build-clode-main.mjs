@@ -85,7 +85,7 @@ function repoVersion() {
 }
 
 // The tjs pin (<ver>-<sha7>, no leading v) this clode targets, from PINS.md — baked
-// in so a fused clode with no PINS.md can derive its own templates-pack release URL
+// in so a blobulated clode with no PINS.md can derive its own templates-pack release URL
 // for `build --target` auto-fetch (libexec/clode-build.cjs thisTjsPin). MUST match
 // tjsPinFromPins + thisTjsPin exactly. Empty string if PINS.md is unreadable; the
 // runtime then falls back to CLODE_TJS_PIN/PINS.md.
@@ -99,7 +99,7 @@ function bakedTjsPin() {
 
 // The ENGINE RECIPE this clode was built from — the same hash
 // scripts/engine-recipe.mjs computes and 4f86738 stamps into the published
-// templates manifest. Baking it here is the other half: it lets a fused clode
+// templates manifest. Baking it here is the other half: it lets a blobulated clode
 // compare what it IS against what a template pack was BUILT FROM, at fetch time,
 // which is the only moment the answer matters to a user. Empty in a tree where
 // the recipe cannot be computed — the check then declines rather than guessing.
@@ -133,7 +133,7 @@ function esbuildBundle() {
 // builder path into a SEA asset rather than an esbuild-time constant, and
 // naude-entry has no version/builder constant of its own — so this bundle is
 // our-source-only and safe to carry as a builder-role member (see
-// libexec/quaude-fuse.js's builder-role member loop).
+// libexec/quaude-blobulate.js's builder-role member loop).
 function esbuildNaudeEntry() {
   const bundle = path.join(OUT, 'naude-entry.bundle.cjs');
   toolRequire('esbuild').buildSync({

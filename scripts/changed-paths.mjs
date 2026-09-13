@@ -38,7 +38,7 @@ const DOCS_EXTENSION = /\.md$/i;
 
 // A path containing a literal `..` SEGMENT (not merely the substring "..",
 // e.g. "a..b.md" is fine) is refused rather than normalised. Fix round 1
-// (task-7-report.md), Finding 2: `docs/../libexec/quaude-fuse.js` and
+// (task-7-report.md), Finding 2: `docs/../libexec/quaude-blobulate.js` and
 // `docs/sub/../../scripts/z.mjs` both classified as docs before this guard,
 // because `startsWith('docs/')` never looked past the literal prefix.
 // `git diff --name-only` does not emit un-normalised paths today, so this

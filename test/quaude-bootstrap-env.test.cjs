@@ -44,10 +44,10 @@ function fakeTjs(over = {}) {
   };
 }
 // Platform arrives via navigator.userAgentData.platform under tjs, not tjs.system.
-// shape/probe/map are injected directly here — outside the real fused binary
+// shape/probe/map are injected directly here — outside the real blobulated binary
 // there is no globalThis.__clodeShapeTargetEnv/__clodeProbePaths/__clodeMapPlatform
 // (those are set only by main(), which never runs under host node); the
-// module's default params read those globals, exactly as the fused path
+// module's default params read those globals, exactly as the blobulated path
 // installs them.
 const opts = (over = {}) => Object.assign({ uaPlatform: 'Linux', shape: shapeTargetEnv, probe: probePaths, map: mapPlatform }, over);
 

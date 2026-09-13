@@ -24,7 +24,7 @@
 // WHY the client exists now (measured 2026-08-22, not assumed). The client half
 // was a documented wall on the premise that "the -p transport is fetch". That
 // premise was tested by instrumenting the shim's http module with a logging
-// throw, fusing a quaude, and driving real flows. Result:
+// throw, blobulating a quaude, and driving real flows. Result:
 //   - a plain `-p` turn, an interactive TUI boot, MCP over HTTP *and* SSE, and a
 //     run with HTTP(S)_PROXY set reach node:http's client ZERO times. axios —
 //     the bundle's only heavy node:http user under real Node (bootstrap,
@@ -49,7 +49,7 @@
 //
 // The SERVER surface (createServer/Server/IncomingMessage/ServerResponse) IS
 // implemented, minimally, over tjs.listen('tcp', ...): `clode build` running
-// under the fused native builder smokes its quaude against an in-process canned
+// under the blobulated native builder smokes its quaude against an in-process canned
 // Messages mock (libexec/clode-build.cjs startPongMock), which needs a real
 // local HTTP server. Scope = that mock's surface, characterized differentially
 // vs host node (test/node-shim-http-server.test.cjs). Documented divergences:

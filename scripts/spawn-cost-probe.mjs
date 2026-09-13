@@ -17,7 +17,7 @@
 // file, re-invoked with `--worker <units>`, doing the same CPU-bound work the in-process
 // arm calls directly. That argv-dispatch shape — one file, multiple call modes — is
 // deliberately the multi-call-binary shape phase 2's design is deciding whether to use
-// for real steps (quaude-fuse.js:7-21 and scripts/merge-step.mjs already use this
+// for real steps (quaude-blobulate.js:7-21 and scripts/merge-step.mjs already use this
 // argv-contract style for the real thing; this probe borrows the shape, not the code).
 //
 // The work unit itself is calibrated, not arbitrary: phase-2 spec §1 measured the real

@@ -7,7 +7,7 @@
 //
 // WHY A SCRIPT AND NOT ONLY A TEST. test/mcp-transport.test.cjs pins the layers a
 // bug can be caught at without a built binary (MessageEvent semantics, the ws
-// request line). It cannot answer "does MCP actually work end to end in a fused
+// request line). It cannot answer "does MCP actually work end to end in a blobulated
 // quaude", because that needs a quaude. This does.
 //
 // ALWAYS RUN THE REFERENCE TOO. Point this at the upstream claude binary and

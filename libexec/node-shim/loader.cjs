@@ -30,9 +30,9 @@ const FSS = globalThis.__tjs_fs_sync;
 if (!FSS) { console.error('node-shim: this tjs lacks the sync-fs patch (run scripts/build-tjs.mjs)'); tjs.exit(2); }
 
 /* ---- tiny path helpers (self-contained; modules/path.cjs is the real one).
- * Windows: the non-fused loader derives SHIM_DIR/entryAbs from real C:\ paths
+ * Windows: the non-blobulated loader derives SHIM_DIR/entryAbs from real C:\ paths
  * (tjs.args), so P must accept drive/UNC/backslash and preserve the drive.
- * VFS paths (/quaude/...) never contain \ or a drive, so the fused path is
+ * VFS paths (/quaude/...) never contain \ or a drive, so the blobulated path is
  * untouched. process isn't built yet here — detect Windows via navigator, the
  * same signal modules/process.cjs uses. Markers delimit the block for the
  * extraction unit test (test/win-shim-guards.test.cjs). */
@@ -89,13 +89,13 @@ const P = {
 /* @loader-paths-end */
 
 /* ---- quaude VFS seam ---------------------------------------------------------
- * When this loader boots inside a FUSED quaude binary, the first-stage bootstrap
+ * When this loader boots inside a BLOBULATED quaude binary, the first-stage bootstrap
  * (libexec/quaude-bootstrap.mjs) has already read the archive appended to the
  * executable and mounted it as globalThis.__quaudeVFS = { files: Map(relName ->
  * Uint8Array), index } BEFORE evaluating this file. Every path under /quaude/
  * then resolves from the archive; everything else falls through to the real fs.
  * With no VFS mounted (`tjs run loader.cjs <entry>`), __QVFS is null and every
- * seam below is a no-op — behavior is byte-identical to the unfused loader
+ * seam below is a no-op — behavior is byte-identical to the unblobulated loader
  * (regression net: the whole node-shim suite). Tests: test/node-shim-vfs.test.cjs. */
 const __QVFS = globalThis.__quaudeVFS || null;
 function __vfsGet(p) {
@@ -207,11 +207,11 @@ function sealSurface(ns, exportsVal) {
 
 /* ---- builtin registry (lazy) */
 const SHIM_DIR = __QVFS
-  ? '/quaude/node-shim/modules'                                // fused: shims are archive members
+  ? '/quaude/node-shim/modules'                                // blobulated: shims are archive members
   : P.join(P.dirname(P.resolve(tjs.args[2] ?? '')), 'modules'); // loader.cjs lives beside modules/
-// internal/ sits beside modules/ under node-shim/, fused or not (mirrors
-// SHIM_DIR's own fused/unfused split rather than re-deriving it) — see
-// libexec/quaude-fuse.js's `collect(...'node-shim/internal'...)`.
+// internal/ sits beside modules/ under node-shim/, blobulated or not (mirrors
+// SHIM_DIR's own blobulated/unblobulated split rather than re-deriving it) — see
+// libexec/quaude-blobulate.js's `collect(...'node-shim/internal'...)`.
 const INTERNAL_DIR = P.join(P.dirname(SHIM_DIR), 'internal');
 // Bound below, after evalModule + the machinery it depends on (moduleCache,
 // DYN_IMPORT_RE, ...) are all initialized — loadBuiltin only READS this
@@ -526,7 +526,7 @@ function evalModule(file, isEntry = false) {
 // specifier as the `buffer` builtin.
 function requireExt(name) {
   const roots = [];
-  // Fused quaude: the ext-dep closure ships as archive members; consult it first
+  // Blobulated quaude: the ext-dep closure ships as archive members; consult it first
   // (the P.join fallback below embeds '..' segments __vfsGet cannot see).
   if (__QVFS) roots.push('/quaude/node_modules/' + name);
   for (const r of (globalThis.process && process.env.NODE_PATH || '').split(NODE_PATH_DELIM)) if (r) roots.push(P.join(r, name));
@@ -545,7 +545,7 @@ function requireExt(name) {
 
 /* ---- .qbc bytecode entry ------------------------------------------------------
  * A `.qbc` entry is the CJS wrapper function around cli.cjs, compiled as an ES
- * module by the fuse step (libexec/quaude-fuse.js) under the SAME tjs build:
+ * module by the blobulate step (libexec/quaude-blobulate.js) under the SAME tjs build:
  *   globalThis.__quaude_entry = function (exports, require, module, __filename,
  *   __dirname) { <transformed cli.cjs> };
  * evalBytecode of that module completes synchronously (no imports / TLA), then
@@ -572,7 +572,7 @@ function evalBytecodeEntry(qbcFile) {
 
 /* ---- code-split graph entry ----------------------------------------------------
  * From Claude Code 2.1.243 the CLI is not one module but ~1382 ES modules, so there is
- * no CJS wrapper to call and no `__quaude_entry`. The fuse step stored them as ONE blob
+ * no CJS wrapper to call and no `__quaude_entry`. The blobulate step stored them as ONE blob
  * (graph.qbc) plus an index (graph.idx: {entry, modules:[{name,off,len}]}).
  *
  * The whole load is: deserialize every module, then evaluate ONLY the entry. That works
@@ -599,7 +599,7 @@ function evalBytecodeGraph(idxFile, blobFile) {
   const graphRequire = makeRequire('/quaude');
   // TEXT ASSETS: the bundle require()s embedded files by their container name
   // (/$bunfs/root/*.md and friends — 164 in 2.1.246, none before). They exist only inside
-  // the provider, so no host path can satisfy them; the fuse step stored them as a member
+  // the provider, so no host path can satisfy them; the blobulate step stored them as a member
   // and this answers from it BEFORE the normal resolver runs. Absent member = absent map
   // = stock behaviour, which is what a pre-2.1.246 bundle wants.
   const assetsPath = P.join(P.dirname(blobFile), 'graph-assets.json');
@@ -1021,7 +1021,7 @@ globalThis.addEventListener?.('unhandledrejection', (ev) => {
 
 let entryAbs, extraArgv;
 if (__QVFS) {
-  // Fused binary: tjs.args = [exePath, ...userArgs] (no 'run', no script path —
+  // Blobulated binary: tjs.args = [exePath, ...userArgs] (no 'run', no script path —
   // the stock tx1k1.js standalone boot leaves argv untouched). For quaude,
   // --quaude-* flags were already carved out by the bootstrap into
   // globalThis.__quaudeArgs; for the builder role, argv passes through whole.

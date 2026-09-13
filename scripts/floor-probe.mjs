@@ -5,7 +5,7 @@
 // mechanically today, by clode build's own smokeTarget. Every other row's cited
 // evidence is a node:test file, so it can only ever run where node runs — which
 // is why A1 and D1 are missing on ALL 47 run-targets and no run-target is tier-1
-// eligible. This probe drives the FUSED BINARY instead (the same thing
+// eligible. This probe drives the BLOBULATED BINARY instead (the same thing
 // smokeTarget does to earn G7), so the same evidence becomes reachable on any box
 // that can execute the artifact.
 //

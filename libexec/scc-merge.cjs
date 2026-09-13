@@ -26,7 +26,7 @@
 // compile error, since renaming a shorthand key is syntactically valid either way — this is the
 // first thing to suspect.
 
-// THE MERGER'S OWN VERSION. libexec/quaude-fuse.js caches a merged graph beside the staged
+// THE MERGER'S OWN VERSION. libexec/quaude-blobulate.js caches a merged graph beside the staged
 // cli.cjs (merging the real 95-module group costs ~345s under tjs), and stamps this string into
 // the cache entry. A cache entry whose recorded version differs is IGNORED and recomputed.
 //
@@ -860,7 +860,7 @@ function parseNamedClause(inner) {
 // collision-rename pass: an unaliased entry (`import{Yo}from"spec"`) uses the SAME token as
 // both the fixed export name and the local binding, and the rename pass (which correctly never
 // touches the export-name half — see `protectImportedExportNames`) has no other way to reach
-// the local half if it stays fused to the export-name text. Splitting it into an explicit alias
+// the local half if it stays glued to the export-name text. Splitting it into an explicit alias
 // here gives the local half its own token to rename, while `protectImportedExportNames` makes
 // sure the newly-explicit imported half is never itself mistaken for a reference needing rename
 // (it can quite easily BE a colliding name too — see that function's comment).
@@ -1436,7 +1436,7 @@ function mergeGroup(group, sources, moduleMeta, groupIndex) {
   // merged module, under its own alias (`__m<k>_export_<name>` -> `<name>`).
   // WHY `import ... from` + a separate `export`, and not the one-line `export { ... } from`
   // that says exactly the same thing: bun-graph-plan.cjs's depsOf() — the ONLY thing that knows
-  // what a module depends on, and therefore what order the fuse worker compiles in — matches
+  // what a module depends on, and therefore what order the blobulate worker compiles in — matches
   // `import` forms only. A re-export-from shim reads as dependency-free, so planOrder is free to
   // put it BEFORE the merged module it re-exports, and compile() dies with
   // "could not load '/$bunfs/root/__clode-scc-0.js'" on a graph that is perfectly well-formed.

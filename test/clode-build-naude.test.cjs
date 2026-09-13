@@ -6,11 +6,11 @@
 //      resolve/extract machinery the quaude build uses (landing cli.cjs at
 //      <cache>/<key>/cli.cjs), then
 //   2. invokes scripts/build-naude.mjs with that cli.cjs passed via --cli, and
-//   3. does NOT run the quaude fuse (the fuse worker / quaude-fuse.js path).
+//   3. does NOT run the quaude blobulate (the blobulate worker / quaude-blobulate.js path).
 //
 // Both are exercised via clodeBuild's injectable subprocess seam (opts.run):
 // clode-build's module-level async `run` is the ONE spawn seam every build step
-// goes through (the fuse worker AND build-naude), so overriding it lets us
+// goes through (the blobulate worker AND build-naude), so overriding it lets us
 // capture every command clodeBuild tries to launch without spawning anything.
 // The resolve/extract path is REAL: we point CLODE_CLAUDE_BIN at a fake provider
 // and pre-seed the extract cache (cli.cjs + bun-shim.cjs + matching
@@ -221,15 +221,15 @@ test('clode build --naude --target: cross-build resolves TWO nodes, split flags 
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('clode build --naude: does NOT run the quaude fuse', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-nofuse-'));
+test('clode build --naude: does NOT run the quaude blobulate', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-noblobulate-'));
   try {
     const { env } = seedProvider(dir);
     const r = await runBuild(['--naude'], env);
 
-    const fuse = r.calls.find((c) => Array.isArray(c.args)
-      && c.args.some((a) => typeof a === 'string' && /quaude-fuse\.js/.test(a)));
-    assert.ok(!fuse, `the quaude fuse worker must NOT run under --naude; calls:\n${JSON.stringify(r.calls, null, 2)}`);
+    const blobulate = r.calls.find((c) => Array.isArray(c.args)
+      && c.args.some((a) => typeof a === 'string' && /quaude-blobulate\.js/.test(a)));
+    assert.ok(!blobulate, `the quaude blobulate worker must NOT run under --naude; calls:\n${JSON.stringify(r.calls, null, 2)}`);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -239,7 +239,7 @@ test('clode build (no --naude): never invokes build-naude.mjs (regression guard)
     const { env } = seedProvider(dir);
     // Point CLODE_TJS at the fake provider file so the template existence gate
     // passes without a real tjs; downstream spawns go through the captured seam.
-    // (On darwin the fake-Mach-O codesign step may fail before the fuse spawn —
+    // (On darwin the fake-Mach-O codesign step may fail before the blobulate spawn —
     // that's fine: this guard only asserts the naude branch stays untaken.)
     env.CLODE_TJS = env.CLODE_CLAUDE_BIN;
     const r = await runBuild(['--out', path.join(dir, 'quaude')], env);
@@ -374,7 +374,7 @@ test('clode build --naude: a naude that never POSTs fails the build loudly', asy
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-// The old fused-builder refusal ("naude requires a Node >= 24 host") is GONE:
+// The old blobulated-builder refusal ("naude requires a Node >= 24 host") is GONE:
 // clode carries no Node, and the naude branch now FETCHES a sha-verified pinned
 // Node into a versioned store (Task 1). The only remaining refusal is "the
 // pinned node could not be obtained" — first build, offline — and it must name
@@ -509,17 +509,17 @@ test('clode build --naude --target macos-*: rcodesign fetch failure fails loud, 
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-// The FUSED-builder naude path (native clode under tjs, no checkout on disk:
+// The BLOBULATED-builder naude path (native clode under tjs, no checkout on disk:
 // materialize the carried assembler + bundle + postject + ext-deps, then spawn
 // build-naude UNDER the fetched pinned node with node ABSENT from PATH) is
 // proven end-to-end, for real, in test/clode-native.test.cjs "acceptance 4".
-// It is NOT re-proven here as a unit test on purpose: the fused branch stages
+// It is NOT re-proven here as a unit test on purpose: the blobulated branch stages
 // the provider through the MATERIALIZED libexec, whose extractor cache key is
 // size+mtime of a freshly-written file — un-seedable from a unit test without
 // reproducing the exact flake this suite exists to avoid. The wiring decisions
 // (runs under the pinned node, passes --node/--bundle/--nmdir/--postject/
-// --builder, no old refusal) are covered by the non-fused cases above; the
-// fused materialization is covered by the acceptance.
+// --builder, no old refusal) are covered by the non-blobulated cases above; the
+// blobulated materialization is covered by the acceptance.
 
 // THE NAUDE ATTEST GATE MUST BE ABLE TO FAIL THE BUILD. Everything above injects a
 // working attest so it can test other wiring; this one injects a FAILING one and requires

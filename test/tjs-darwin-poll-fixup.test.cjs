@@ -1,6 +1,6 @@
 'use strict';
 // The old-Darwin poll(2) backend fixup (spec 2026-07-31-old-darwin-poll-backend).
-// Darwin 8's kqueue drops socket/pipe/SIGCHLD/async delivery under the fused
+// Darwin 8's kqueue drops socket/pipe/SIGCHLD/async delivery under the blobulated
 // runtime's fd load, so the 10.4-floor legs build libuv's generic posix-poll.c
 // instead of kqueue.c. The SOURCE edits are unconditional and inert; only the
 // cmake selection is gated on the CLODE_DARWIN_POLL option.

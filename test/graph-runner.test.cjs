@@ -1,7 +1,7 @@
 'use strict';
 // THE GRAPH RUNNER — one extracted file that runs a code-split Claude Code on either host.
 //
-// WHY IT EXISTS. When 2.1.243 went code-split, the fuse path learned the new shape and
+// WHY IT EXISTS. When 2.1.243 went code-split, the blobulate path learned the new shape and
 // nothing else did. `clode build` went green while `clode build --naude` AND the entire
 // oracle apparatus went dead: five CI jobs, including the agentic round-trips, the shim
 // parity gate, and the tjs-vs-node extractor differential. The build path was verified by
@@ -166,7 +166,7 @@ test('a module whose name is not an absolute path gets require but no invented u
 
 // --- 4. the staged bundle carries BOTH shapes ---------------------------------------
 // The original defect, as a property rather than an anecdote: a split stage must contain
-// the graph (for the fuse worker) AND a runnable file (for naude and every oracle).
+// the graph (for the blobulate worker) AND a runnable file (for naude and every oracle).
 test('extract-claude-js produces a RUNNABLE file for either bundle shape', () => {
   const src = fs.readFileSync(path.join(REPO, 'libexec/extract-claude-js.cjs'), 'utf8');
   assert.match(src, /isSplitBundle\(binpath\) \? extractGraphRunnerToFile\(binpath, out\) : extractToFile\(binpath, out\)/,
@@ -235,13 +235,13 @@ test('decodeGraphRunner leaves a non-runner file alone, and refuses a malformed 
 // Claude Code 2.1.246 moved 164 files (118 .md — prompt preambles, quickrefs) out of JS
 // and into embedded text rows the bundle require()s BY NAME. Nothing about that is
 // visible to a decoder, a minimiser self-check, or a build: clode staged the graph, the
-// minimiser shrank it, the fuse compiled it, and the target booted — then died on its
+// minimiser shrank it, the blobulate compiled it, and the target booted — then died on its
 // first turn with "cannot resolve /$bunfs/root/loopAutonomousPreamble-07qcyhv4.md",
 // naming a file that exists ONLY inside the provider and so cannot be found on any host.
 //
 // These names never appear on disk, so every layer has to carry them deliberately:
 // bun-graph reads them, the staged doc holds them, the minimiser keeps them, the runner
-// answers require() from them, and the fuse stores them as a member for the loader.
+// answers require() from them, and the blobulate stores them as a member for the loader.
 // A break anywhere in that chain is silent until an agent turn.
 const { loadAssets } = require(path.join(REPO, 'libexec/bun-graph.cjs'));
 
@@ -269,7 +269,7 @@ test('an asset name never shadows a real module or builtin', () => {
   assert.strictEqual(runNode(f, dir).trim(), 'function');
 });
 
-test('the whole chain carries assets: extract -> minimise -> fuse member', () => {
+test('the whole chain carries assets: extract -> minimise -> blobulate member', () => {
   const ex = fs.readFileSync(path.join(REPO, 'libexec/extract-claude-js.cjs'), 'utf8');
   assert.match(ex, /assets: assets/, 'the staged graph doc must carry text assets');
   const mm = fs.readFileSync(path.join(REPO, 'scripts/make-min-provider.cjs'), 'utf8');
@@ -288,8 +288,8 @@ test('the whole chain carries assets: extract -> minimise -> fuse member', () =>
     assert.ok(LOADER_POLICY[l] && LOADER_POLICY[l] !== 'excluded',
       `loader ${l} must be served: 1 = js, 13 = text, 5 = file (compressed since 2.1.251)`);
   }
-  const qf = fs.readFileSync(path.join(REPO, 'libexec/quaude-fuse.js'), 'utf8');
-  assert.match(qf, /graph-assets\.json/, 'the fuse must store assets as a member');
+  const qf = fs.readFileSync(path.join(REPO, 'libexec/quaude-blobulate.js'), 'utf8');
+  assert.match(qf, /graph-assets\.json/, 'the blobulate must store assets as a member');
   const ld = fs.readFileSync(path.join(REPO, 'libexec/node-shim/loader.cjs'), 'utf8');
   assert.match(ld, /graph-assets\.json/, 'the loader must answer require() from that member');
 });

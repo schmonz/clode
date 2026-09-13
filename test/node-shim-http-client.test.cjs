@@ -6,7 +6,7 @@
 //
 // WHY THIS EXISTS AT ALL — measured, not assumed. The client half was a
 // documented wall ("the -p transport is fetch"). That was tested by giving the
-// shim's http module a logging throw, fusing a quaude and driving real flows:
+// shim's http module a logging throw, blobulating a quaude and driving real flows:
 //   - plain `-p` turn, interactive TUI boot, MCP over HTTP and over SSE, and a
 //     run with HTTP(S)_PROXY set: ZERO reaches. axios (the bundle's only heavy
 //     node:http user under real node) picks its XHR adapter under tjs, because

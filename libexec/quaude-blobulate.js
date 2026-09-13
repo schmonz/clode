@@ -1,17 +1,32 @@
-// quaude fuse worker — the tjs-side half of `clode build` (driven by
+// quaude-blobulate.js — BLOBULATE: attach a payload blob to an engine image, producing one
+// self-contained executable. This is the canonical definition of the word; everything else
+// (comments, log lines, other files) points HERE rather than restating it.
+//
+// WHY NOT "fuse", the word this replaces: `fuse` is Node SEA's name for a sentinel MARKER,
+// not an operation — scripts/build-naude.mjs passes `sentinelFuse: 'NODE_SEA_FUSE_<hash>'`
+// to postject.inject(). We had promoted a flag's name to the name of the whole step, which
+// is why it never explained itself.
+//
+// The two products do not share a MECHANISM, and those words stay true where they are used:
+//   naude   postject INJECTS a blob into a copy of the node binary (Node's own vocabulary)
+//   quaude  the payload is APPENDED to the engine image as a canonical-LE trailer (below)
+// "Blobulate" is the general act, because what the two share is a payload blob — this file
+// is quaude's half of it; scripts/build-naude.mjs is naude's.
+//
+// quaude blobulate worker — the tjs-side half of `clode build` (driven by
 // libexec/clode-build.cjs). Runs under the SAME tjs binary that becomes the
 // quaude template: the runtime-compiles-for-itself rule makes the quickjs
 // BC_VERSION/config lockstep automatic (bytecode written by any OTHER build is
 // undefined behavior — design memo §6.2).
 //
 // Usage (spawned by clode-build.cjs, not by hand):
-//   tjs run quaude-fuse.js <signed-base> <stage-dir> <node-shim-dir> \
+//   tjs run quaude-blobulate.js <signed-base> <stage-dir> <node-shim-dir> \
 //     <node_modules-dir> <bootstrap.mjs> <extras.json> <out>
 //
 //   signed-base: a COPY of the running tjs template, ALREADY ad-hoc re-signed
 //     (sign-then-append discipline: appending invalidates strict Mach-O
 //     validation, so signing must happen while the copy is still a plain
-//     binary; the kernel only validates mapped code pages, so the fused
+//     binary; the kernel only validates mapped code pages, so the blobulated
 //     result executes fine — memo §6.1).
 //   stage-dir:   quaude role — the extracted+hooked cache entry (cli.cjs +
 //     bun-shim.cjs); builder role — a staging dir with clode-main.bundle.cjs.
@@ -30,7 +45,7 @@ import path from 'tjs:path';
 
 const [signedBase, stageDir, shimDir, nmDir, bootstrapPath, extrasPath, out, templatePath] = tjs.args.slice(3);
 if (!out) {
-  console.error('usage: tjs run quaude-fuse.js <signed-base> <stage-dir> <node-shim-dir> <node_modules-dir> <bootstrap.mjs> <extras.json> <out> [pristine-template]');
+  console.error('usage: tjs run quaude-blobulate.js <signed-base> <stage-dir> <node-shim-dir> <node_modules-dir> <bootstrap.mjs> <extras.json> <out> [pristine-template]');
   tjs.exit(64);
 }
 
@@ -44,7 +59,7 @@ async function sha256hex(bytes) {
 
 async function mustRead(file, what) {
   try { return await tjs.readFile(file); }
-  catch (e) { console.error(`quaude-fuse: cannot read ${what}: ${file} (${e.message ?? e})`); tjs.exit(1); }
+  catch (e) { console.error(`quaude-blobulate: cannot read ${what}: ${file} (${e.message ?? e})`); tjs.exit(1); }
 }
 
 // ---- residual cyclic requires (upstream 2.1.248+): merge each SCC ----------
@@ -87,7 +102,7 @@ function loadLibexecCjs(src, file) {
   new Function('module', 'exports', 'require', '__filename', src)(
     mod, mod.exports,
     (spec) => {
-      throw new Error(`quaude-fuse: ${file} tried to require(${spec}) — the fuse worker loads it `
+      throw new Error(`quaude-blobulate: ${file} tried to require(${spec}) — the blobulate worker loads it `
         + 'with no module resolver. Keep the libexec .cjs files it loads dependency-free.');
     },
     file,
@@ -147,11 +162,11 @@ const report = new Reporter({ emit: (line) => { console.log(line); } });
 //   builder: a native clode — the esbuilt clode-main bundle as a SOURCE entry
 //     (measured: 65KB, 0.24s boot under tjs — bytecode would force strict mode
 //     on the whole esbuild output for no meaningful parse win), plus the
-//     libexec support files `clode build` must materialize at fuse time
+//     libexec support files `clode build` must materialize at blobulate time
 //     (extractor, bun-shim, this worker, the bootstrap).
 // Both roles ship the node-shim tree and the ext-dep closure: the builder needs
 // the deps NOT for itself (clode-main imports node builtins only) but as the
-// member INPUTS for the quaude it fuses.
+// member INPUTS for the quaude it blobulates.
 const extras = JSON.parse(dec.decode(await mustRead(extrasPath, 'manifest extras')));
 const role = extras.role ?? 'quaude';
 // `let`, not `const`: the quaude role has TWO shapes and only the staging artifact
@@ -168,11 +183,11 @@ const members = [];
 // without a matching edit to this file (duplication audit §1: a transitive
 // bump or a new direct dep rotted the list identically, with no signal until
 // a user hit "Cannot find module" deep in a session). A missing/empty deps
-// array means an old clode-build.cjs fused this worker — fail loud rather than
+// array means an old clode-build.cjs blobulated this worker — fail loud rather than
 // silently ship a quaude with an empty ext-dep closure.
 const DEPS = extras.deps;
 if (!Array.isArray(DEPS) || DEPS.length === 0) {
-  console.error('quaude-fuse: extras.json has no non-empty "deps" array (the ext-dep closure) — built by a stale clode-build.cjs?');
+  console.error('quaude-blobulate: extras.json has no non-empty "deps" array (the ext-dep closure) — built by a stale clode-build.cjs?');
   tjs.exit(1);
 }
 
@@ -195,73 +210,73 @@ if (role === 'builder') {
   // allocator every build-dir helper in platform-tag.cjs now resolves through —
   // Task 8), and scripts/sea-sign.cjs (which build-naude execs to unsign/re-sign
   // the SEA — on macOS the ad-hoc re-sign after postject is MANDATORY or the
-  // binary won't run). A fused builder ships no scripts/ dir, so `clode build
+  // binary won't run). A blobulated builder ships no scripts/ dir, so `clode build
   // --naude` under clode-native materializes these (clode-build.cjs's
-  // materializeFusedPayload) and spawns the copy. Member names keep their scripts/
+  // materializeBlobPayload) and spawns the copy. Member names keep their scripts/
   // path (re-joined onto the payload dir verbatim). Committed files that always
   // exist → mustRead. (Miss one require in this list → "Cannot find module" only
   // under clode-native, invisible to a dev-checkout build — the acceptance-4 gate.)
   //
   // merge-step.mjs rides in the SAME list for a different reason (Task 7): it is not a
   // naude-assembler dependency, it is what THIS worker (below, in the quaude-product role)
-  // spawns under tjs to do the cyclic-group merge. A self-fused builder that materializes
+  // spawns under tjs to do the cyclic-group merge. A self-blobulated builder that materializes
   // scripts/build-naude.mjs but omits scripts/merge-step.mjs would build fine and then die
-  // the first time it re-fuses a provider with residual cyclic requires — same failure
+  // the first time it re-blobulates a provider with residual cyclic requires — same failure
   // shape the acceptance-4 gate exists to catch for the naude assembler's own chain.
   for (const f of ['build-naude.mjs', 'platform-tag.cjs', 'canonical-name.cjs', 'build-scratch.cjs', 'sea-sign.cjs', 'merge-step.mjs']) {
     members.push({ name: `scripts/${f}`, data: await mustRead(path.join(path.dirname(libexecDir), 'scripts', f), `naude assembler member scripts/${f}`) });
   }
   // host-provision.cjs rides here as forwarded bytes, same as its loop-siblings
   // above — never require()'d from this materialized dir, only carried so a
-  // self-fused clode-native can re-fuse targets. The quaude-product role below
+  // self-blobulated clode-native can re-blobulate targets. The quaude-product role below
   // deliberately omits it: no runtime provision() consumer on that side.
-  for (const f of ['bun-shim.cjs', 'extract-claude-js.cjs', 'quaude-fuse.js', 'quaude-bootstrap.mjs', 'host-provision.cjs', 'target-update-check.cjs', 'bun-graph-plan.cjs', 'scc-merge.cjs', 'build-report.cjs', 'graph-scc-merge.cjs', 'graph-meta.js']) {
+  for (const f of ['bun-shim.cjs', 'extract-claude-js.cjs', 'quaude-blobulate.js', 'quaude-bootstrap.mjs', 'host-provision.cjs', 'target-update-check.cjs', 'bun-graph-plan.cjs', 'scc-merge.cjs', 'build-report.cjs', 'graph-scc-merge.cjs', 'graph-meta.js']) {
     members.push({ name: `libexec/${f}`, data: await mustRead(path.join(libexecDir, f), `libexec member ${f}`) });
   }
   // target-env.cjs member name is BARE (no libexec/ prefix), matching how
   // node-shim/* is stored below: the node-shim loader (SHIM_DIR =
-  // '/quaude/node-shim/modules' when fused) requires it via a relative
+  // '/quaude/node-shim/modules' when blobulated) requires it via a relative
   // '../../target-env.cjs' from modules/, which only lands on the archive
   // root — a 'libexec/' prefix here would 404 that require. clode-build.cjs's
   // materialization step special-cases this bare name back onto disk at
   // libexec/target-env.cjs (sibling to node-shim/, matching this repo's own
-  // layout) for the self-fuse path.
+  // layout) for the self-blobulate path.
   members.push({ name: 'target-env.cjs', data: await mustRead(path.join(libexecDir, 'target-env.cjs'), 'target-env.cjs member') });
   // deps/claude/package.json, member name matches its real repo path (unlike
   // target-env.cjs, no bare-root special-casing needed — clode-build.cjs's
   // materialization step just re-joins `mat` + this name verbatim): the ext-dep
   // closure's SOURCE OF TRUTH — Claude Code's runtime deps, NOT clode's own
-  // (clode has none). A fused builder ships no repo checkout, so when IT later
+  // (clode has none). A blobulated builder ships no repo checkout, so when IT later
   // runs `clode build`, its clode-build.cjs needs this manifest on disk to walk
   // `dependencies` from (duplication audit §1 — the closure is derived, never
   // hand-listed).
   members.push({ name: 'deps/claude/package.json', data: await mustRead(path.join(path.dirname(libexecDir), 'deps', 'claude', 'package.json'), 'deps/claude/package.json member') });
   // deps/claude/package-lock.json, same reasoning as package.json just above:
   // the lockfile gate's (assertClosureMatchesLockfile, clode-build.cjs) SOURCE
-  // OF TRUTH. A fused builder ships no repo checkout, so when it later runs
+  // OF TRUTH. A blobulated builder ships no repo checkout, so when it later runs
   // `clode build`, its clode-build.cjs needs this on disk to verify
   // node_modules matches the lockfile before embedding.
   members.push({ name: 'deps/claude/package-lock.json', data: await mustRead(path.join(path.dirname(libexecDir), 'deps', 'claude', 'package-lock.json'), 'deps/claude/package-lock.json member') });
   // postject's pure-JS pieces (dist/api.js does the actual SEA-blob inject;
-  // dist/cli.js + package.json ride along for completeness) — so a fused
+  // dist/cli.js + package.json ride along for completeness) — so a blobulated
   // builder can eventually assemble a naude without a host esbuild/postject
   // toolchain (mirrors how clode-main.bundle.cjs / naude-entry.bundle.cjs,
   // above, are carried as our-source-only members). Resolved from the
   // checkout's deps/clode/node_modules/postject — the SAME tree
   // `npm ci --prefix deps/clode` populates and scripts/build-naude.mjs's
   // --postject default reads (one code path, two resolutions — checkout vs a
-  // future fused-payload materialization — exactly like the deps/claude/
+  // future blobulated-payload materialization — exactly like the deps/claude/
   // package.json member above, which resolves the same way in both cases
   // because libexecDir itself is already rebound upstream).
   //
   // Deliberately NOT a hard requirement yet (unlike deps/claude/package.json,
   // a committed file that must always exist): no CI job runs
   // `npm ci --prefix deps/clode` today — that lands with the fetch/materialize
-  // wiring (a later task). A missing directory here just means this fused
+  // wiring (a later task). A missing directory here just means this blobulated
   // builder was minted on a host that hasn't provisioned postject, and won't
   // be able to assemble a naude until it is (or until a later task teaches it
   // to fetch one) — skip with a loud warning instead of failing the whole
-  // fuse over a capability nothing yet exercises end-to-end.
+  // blobulate over a capability nothing yet exercises end-to-end.
   const postjectDir = path.join(path.dirname(libexecDir), 'deps', 'clode', 'node_modules', 'postject');
   let postjectPresent = false;
   try { postjectPresent = (await tjs.stat(postjectDir)).isDirectory; } catch { /* not provisioned on this host */ }
@@ -273,10 +288,10 @@ if (role === 'builder') {
       });
     }
   } else {
-    console.log(`quaude-fuse: ${postjectDir} not provisioned — carrying no postject (this builder cannot assemble a naude until 'npm ci --prefix deps/clode' has been run somewhere in its lineage)`);
+    console.log(`quaude-blobulate: ${postjectDir} not provisioned — carrying no postject (this builder cannot assemble a naude until 'npm ci --prefix deps/clode' has been run somewhere in its lineage)`);
   }
   // The PRISTINE tjs template rides along (Q2 Decision 2): a shipped builder
-  // must be able to fuse with NOTHING on disk — `clode build` materializes this
+  // must be able to blobulate with NOTHING on disk — `clode build` materializes this
   // member when no CLODE_TJS/build-tree template exists. Pristine = the
   // pre-signing bytes, so it matches the manifest's template identity exactly.
   members.push({ name: 'template/tjs', data: await mustRead(templatePath, 'pristine tjs template') });
@@ -293,7 +308,7 @@ if (role === 'builder') {
   if (stagedGraph) {
     const doc = JSON.parse(dec.decode(stagedGraph));
     if (doc.format !== 'clode-bun-graph-v1') {
-      throw new Error(`quaude-fuse: staged graph has format ${doc.format}, expected clode-bun-graph-v1`);
+      throw new Error(`quaude-blobulate: staged graph has format ${doc.format}, expected clode-bun-graph-v1`);
     }
 
     // `|| []` on purpose: absent and empty are the same thing, and both must be an exact no-op.
@@ -324,7 +339,7 @@ if (role === 'builder') {
     // reports term_signal as a STRING, not a number, so a falsy/`!== null` check would miss a
     // SIGKILL. Check both fields explicitly.
     if (mergeStatus.term_signal || mergeStatus.exit_status !== 0) {
-      throw new Error(`quaude-fuse: the cyclic-group merge (${mergeStepPath}) exited abnormally `
+      throw new Error(`quaude-blobulate: the cyclic-group merge (${mergeStepPath}) exited abnormally `
         + `(status ${mergeStatus.exit_status}, signal ${mergeStatus.term_signal ?? 'none'})`);
     }
     if (cyclicRequires.length && !alreadyMerged) {
@@ -369,12 +384,12 @@ if (role === 'builder') {
     let off = 0;
     for (const name of doc.order) {
       const src = doc.sources[name];
-      if (typeof src !== 'string') throw new Error(`quaude-fuse: staged graph has no source for ${name}`);
+      if (typeof src !== 'string') throw new Error(`quaude-blobulate: staged graph has no source for ${name}`);
       let bc;
       try {
         bc = tjs.engine.serialize(tjs.engine.compile(enc.encode(src), name));
       } catch (e) {
-        throw new Error(`quaude-fuse: compiling ${name} failed: ${e.message}\n`
+        throw new Error(`quaude-blobulate: compiling ${name} failed: ${e.message}\n`
           + '  A "could not load" here usually means the staged order is not topological.');
       }
       index.push({ name, off, len: bc.length });
@@ -396,7 +411,7 @@ if (role === 'builder') {
     if (typeof doc.prelude === 'string' && doc.prelude.length) {
       members.push({ name: 'graph-prelude.cjs', data: enc.encode(doc.prelude) });
     } else {
-      throw new Error('quaude-fuse: staged graph has no prelude — a built target would '
+      throw new Error('quaude-blobulate: staged graph has no prelude — a built target would '
         + 'have no globalThis.Bun and a broken update path');
     }
     // TEXT ASSETS the bundle require()s by name (2.1.246+: 164 of them, 118 .md — prompt
@@ -409,13 +424,13 @@ if (role === 'builder') {
     if (doc.assets && Object.keys(doc.assets).length) {
       const a = enc.encode(JSON.stringify(doc.assets));
       members.push({ name: 'graph-assets.json', data: a });
-      console.log(`quaude-fuse: ${Object.keys(doc.assets).length} text assets -> `
+      console.log(`quaude-blobulate: ${Object.keys(doc.assets).length} text assets -> `
         + `graph-assets.json (${(a.length / 1048576).toFixed(1)}MB)`);
     }
     report.finish('assets', doc.assets ? Object.keys(doc.assets).length : 0);
     entryName = 'graph.qbc';
     members.push({ name: 'graph.idx', data: enc.encode(JSON.stringify({ entry: doc.entry, modules: index })) });
-    console.log(`quaude-fuse: compiled ${index.length} modules -> graph.qbc `
+    console.log(`quaude-blobulate: compiled ${index.length} modules -> graph.qbc `
       + `(${(all.length / 1048576).toFixed(1)}MB, ${(performance.now() - t0).toFixed(0)}ms)`);
   } else {
   // LEGACY SINGLE-BUNDLE PATH (pre-2.1.243, no code-split graph). No `report` calls in
@@ -433,7 +448,7 @@ if (role === 'builder') {
   const wrapped = 'globalThis.__quaude_entry = function (exports, require, module, __filename, __dirname) {\n' + src + '\n};\n';
   const t0 = performance.now();
   const bc = tjs.engine.serialize(tjs.engine.compile(enc.encode(wrapped), '/quaude/cli.cjs'));
-  console.log(`quaude-fuse: compiled cli.cjs -> cli.qbc (${bc.length} bytes, ${(performance.now() - t0).toFixed(0)}ms)`);
+  console.log(`quaude-blobulate: compiled cli.cjs -> cli.qbc (${bc.length} bytes, ${(performance.now() - t0).toFixed(0)}ms)`);
   members.push({ name: 'cli.qbc', data: bc });
   }
 
@@ -448,7 +463,7 @@ if (role === 'builder') {
 
   // The env contract the bootstrap applies before booting the bundle.
   // BARE member name (no libexec/ prefix) — see the builder branch's comment
-  // above for why: the node-shim loader's fused SHIM_DIR has no 'libexec'
+  // above for why: the node-shim loader's blobulated SHIM_DIR has no 'libexec'
   // ancestor in the archive namespace, so process.cjs's relative require must
   // find this at the archive root.
   members.push({ name: 'target-env.cjs', data: await mustRead(path.join(path.dirname(shimDir), 'target-env.cjs'), 'target-env.cjs member') });
@@ -477,7 +492,7 @@ for (const dep of DEPS) {
   try { await collect(path.join(nmDir, dep), `node_modules/${dep}`, members); }
   catch { /* missing dir caught below */ }
   if (members.length === before) {
-    console.error(`quaude-fuse: dependency '${dep}' not found under ${nmDir} (run clode once, or npm install)`);
+    console.error(`quaude-blobulate: dependency '${dep}' not found under ${nmDir} (run clode once, or npm install)`);
     tjs.exit(1);
   }
 }
@@ -496,9 +511,9 @@ const manifest = {
   entry: entryName,
   bundleVersion: extras.bundleVersion,
   // WHICH PLATFORM'S UPSTREAM BUNDLE IS IN HERE. Bun constant-folds process.platform at carve
-  // time, so a graph is per-platform: a darwin target fused from a linux carve has upstream's
+  // time, so a graph is per-platform: a darwin target blobulated from a linux carve has upstream's
   // whole macOS credential store dead-coded away, and that is exactly the quaude that shipped
-  // on 2026-08-27 unable to read the login Keychain. Until now a FUSED TARGET COULD NOT BE
+  // on 2026-08-27 unable to read the login Keychain. Until now a BLOBULATED TARGET COULD NOT BE
   // ASKED: the bundle is stored as bytecode, so `strings` on a quaude answers nothing (an hour
   // was spent on precisely that mistake, and it produced a false conclusion), and a
   // cross-built target cannot be run to ask it. Recording it here makes the question
@@ -547,7 +562,7 @@ chunks.push(footer); off += 32;
 // Bootstrap bytecode, compiled by THIS runtime (same lockstep rule as cli.qbc).
 const bootBc = tjs.engine.serialize(tjs.engine.compile(await mustRead(bootstrapPath, 'bootstrap'), '<quaude-boot>'));
 const bcOffset = off;
-if (bcOffset > 0xFFFFFFFF) { console.error('quaude-fuse: bootstrap offset exceeds the tx1k1 u32 trailer limit (4GiB)'); tjs.exit(1); }
+if (bcOffset > 0xFFFFFFFF) { console.error('quaude-blobulate: bootstrap offset exceeds the tx1k1 u32 trailer limit (4GiB)'); tjs.exit(1); }
 chunks.push(bootBc); off += bootBc.length;
 
 const tx = new Uint8Array(12);
@@ -558,4 +573,4 @@ chunks.push(tx); off += 12;
 const total = new Uint8Array(off);
 { let o = 0; for (const c of chunks) { total.set(c, o); o += c.length; } }
 await tjs.writeFile(out, total, { mode: 0o755 });
-console.log(`quaude-fuse: wrote ${out} (${total.length} bytes, ${members.length} members, index ${indexBytes.length}B, bootstrap ${bootBc.length}B)`);
+console.log(`quaude-blobulate: wrote ${out} (${total.length} bytes, ${members.length} members, index ${indexBytes.length}B, bootstrap ${bootBc.length}B)`);

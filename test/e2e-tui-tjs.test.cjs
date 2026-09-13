@@ -1,7 +1,7 @@
 'use strict';
 // M1 (phase 3): the real Ink TUI renders under a built quaude (tjs + node-shim).
 // Builds a real quaude (`clode build`) and spawns IT directly (no
-// launcher/CLODE_ENGINE involved — a fused quaude carries its own engine and
+// launcher/CLODE_ENGINE involved — a blobulated quaude carries its own engine and
 // deps as members). On darwin this is opt-in (spawning the real bundle probes
 // the macOS Keychain); elsewhere it runs by default — see
 // live-render-helper.cjs. Gates: CLODE_TJS (or build/tjs/tjs) + a resolvable

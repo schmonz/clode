@@ -197,7 +197,7 @@ test('mapPlatform: empty/undefined input defaults to linux (the quaude fallback)
   assert.strictEqual(mapPlatform(undefined), 'linux');
 });
 
-// target-env.cjs is evaluated as a fused member under tjs via `new Function`,
+// target-env.cjs is evaluated as a blobulated member under tjs via `new Function`,
 // BEFORE the node-shim (and its require) exists. Adding mapPlatform must not
 // smuggle in a dependency that breaks that.
 function scanRequireFree({ src }) {

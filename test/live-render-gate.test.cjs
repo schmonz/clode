@@ -37,7 +37,7 @@ test('darwin WITH the opt-in runs — the escape hatch still works', () => {
 
 // The finding this gate exists to encode: the old blanket gate suppressed these
 // everywhere for a reason that only holds on darwin. Linux has no `security` binary
-// at all -- proven by running the real gated files against a real fused quaude in a
+// at all -- proven by running the real gated files against a real blobulated quaude in a
 // Linux container, where they rendered and passed (see
 // .superpowers/sdd/2026-09-02-phase2-name-the-steps/linux-pty-experiment.md).
 for (const platform of ['linux', 'freebsd', 'netbsd', 'openbsd', 'haiku', 'win32']) {

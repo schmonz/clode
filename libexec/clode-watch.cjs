@@ -112,7 +112,7 @@ function currentProvider(env) {
 // Spawn clode-signals.cjs exactly as the sh does. Returns stdout (utf8), or ''
 // on any failure — warn-only, never throws.
 // PROCESS.EXECPATH IS NOT ALWAYS A NODE, and this file learned that the expensive way.
-// Under a fused native clode it is the clode binary itself — there is no node on the box,
+// Under a blobulated native clode it is the clode binary itself — there is no node on the box,
 // that being the entire point of that artifact. Spawning it fails, the catch below
 // swallowed the failure, runSignals returned '' and HIGH update signals silently became
 // high=0. The identical trap is documented at libexec/clode-build.cjs:294, where it "broke
@@ -124,7 +124,7 @@ function currentProvider(env) {
 function resolveNodeFor(opts) {
   if (opts && opts.node) return opts.node;
   if (process.env.CLODE_NODE) return process.env.CLODE_NODE;
-  // `tjs` is defined only when we are running ON the engine, i.e. inside a fused clode.
+  // `tjs` is defined only when we are running ON the engine, i.e. inside a blobulated clode.
   // There, execPath is emphatically not an interpreter that can run a .cjs script.
   if (typeof globalThis.tjs !== 'undefined') return null;
   return process.execPath;
@@ -144,7 +144,7 @@ function runSignals(opts, extraArgs) {
         + 'Set CLODE_NODE to a node binary to restore them.\n');
     } catch { /* stderr itself is best-effort here */ }
   };
-  if (!node) { warn('no node interpreter available under a fused clode'); return ''; }
+  if (!node) { warn('no node interpreter available under a blobulated clode'); return ''; }
   try {
     return execFileSync(node, [script, ...extraArgs],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });

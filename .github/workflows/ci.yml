@@ -78,7 +78,7 @@ jobs:
   # against release.yml. VM legs run soft-fail until they earn hard status
   # (house rule); the native legs keep their historical hard gate. The tjs
   # build restores from the shared cache on native legs, so a typical push
-  # pays only bundle+fuse+smoke there; VM legs pay the guest boot + in-guest
+  # pays only bundle+blobulate+smoke there; VM legs pay the guest boot + in-guest
   # build.
   #
   # SPLIT IN TWO (measured from run 33959009299, 2026-09-05): `needs:` is
@@ -88,7 +88,7 @@ jobs:
   # tjs-windows-arm64 — every one a FAST leg) — were blocking on the slowest
   # leg in the whole matrix (netbsd-mips64eb, 113 minutes that run) to use
   # artifacts that exist at ~9 minutes. This job now runs only:fast (native
-  # runners, alpine containers, cross-fuse builds — everything
+  # runners, alpine containers, cross-blobulate builds — everything
   # scripts/tjs-legs.mjs's SLOW_CI_LEG calls fast); `tjs-slow` below runs the
   # rest. The split is a leg PROPERTY (guest-platform VM vs. tier2's
   # from-source cross-toolchain build), never a name list here, so a leg that
@@ -153,7 +153,7 @@ jobs:
   # job 101287474377, `tjs / leg (linux-x64-musl)`): the engine artifact every
   # downstream consumer needs was complete at ~9s into that job, but the leg
   # then spent ~8.3 more minutes (of an 8.55min total) on build-leg's own
-  # full-smoke step (a ~419s ephemeral-quaude fuse + MCP probe + rg
+  # full-smoke step (a ~419s ephemeral-quaude blobulate + MCP probe + rg
   # inventory) — work no downstream job consumes. `needs:` on a `uses:` call
   # is JOB-level and atomic: `tjs` (this workflow's call to tjs-legs.yml,
   # tier:ci/only:fast) does not finish until ALL SEVEN of its fast legs do,
@@ -163,12 +163,12 @@ jobs:
   # `defer-smoke: "true"` (tjs-legs.yml's own input, forwarded to build-leg
   # as ci-fast-defer-smoke), which skips build-leg's full-smoke for every
   # leg in that one call; `tjs` now finishes once each leg's builder is
-  # fused and uploaded, not once it's also been smoked.
+  # blobulated and uploaded, not once it's also been smoked.
   #
   # These two jobs run that SAME check (the .github/actions/full-smoke
   # composite — one source, so build-leg's synchronous copy and this
   # deferred copy cannot check different things) against the artifact
-  # `tjs`'s legs already uploaded, instead of re-fusing from source. The
+  # `tjs`'s legs already uploaded, instead of re-blobulating from source. The
   # smoke still runs on every push and can still fail the run — it fails
   # THIS job instead of `leg`, which is the whole point: nothing downstream
   # needs THIS job to finish, only `tjs` (now fast) does.
@@ -241,8 +241,8 @@ jobs:
   # mod_fs_sync/mod_spawn_sync) — POSIX legs get this coverage free from the
   # host node:test suite on the dev box, but it can only be exercised on a
   # real Windows kernel against a real tjs.exe. Consumes the windows-amd64 leg's
-  # tjs-windows-amd64 engine; the leg's own exec=host job does build+fuse+PONG+
-  # publish (subsuming the old fuse-build/fuse-run/builder-smoke jobs). Because
+  # tjs-windows-amd64 engine; the leg's own exec=host job does build+blobulate+PONG+
+  # publish (subsuming the old blobulate-build/blobulate-run/builder-smoke jobs). Because
   # this installs the pinned @anthropic-ai/claude-code (UPSTREAM_PIN) it is also
   # the Windows bundle-bump gate. These finer signals isolate a C-primitive regression from
   # a shim/Bash-tool regression — what the leg's end-to-end PONG cannot.
@@ -305,7 +305,7 @@ jobs:
   # Windows ConPTY TUI render (windows-tjs-port spec, sub-project D). The FIRST
   # CI PTY harness on any platform: build a real quaude (`clode build`) and drive
   # IT directly (tjs.exe + node-shim + the real Claude Code bundle → Ink; no
-  # launcher involved — a fused quaude carries its own engine and deps as
+  # launcher involved — a blobulated quaude carries its own engine and deps as
   # members) inside a real ConPTY (node-pty) with an xterm emulator on the far
   # end, and assert the welcome box painted. Runs the SAME
   # test/e2e-tui-tjs.test.cjs as POSIX, forcing CLODE_LIVE_RENDER=1 here — a
@@ -688,7 +688,7 @@ jobs:
           # PIN-VERSIONED cache entry. Seed one directly, with the SAME
           # extractIfNeeded() that `clode build` itself calls
           # (libexec/clode-build.cjs's stageUpstreamCli) — without paying for a
-          # whole quaude fuse just to get one cache entry on disk.
+          # whole quaude blobulate just to get one cache entry on disk.
           PIN=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
           node -e '
             const path = require("node:path");
@@ -753,7 +753,7 @@ jobs:
         with:
           name: tjs-linux-x64-musl   # bare static engine from the CI-tier leg
           path: ${{ runner.temp }}/tjs
-      - name: Install the runtime dep closure (the fuse's ext-dep closure)
+      - name: Install the runtime dep closure (the blobulate's ext-dep closure)
         run: npm ci --prefix deps/claude
       # Fail loud if absent, below — a skipped acceptance is not a pass.
       - name: Install the Claude provider (npm, pinned — the acceptances' input)
@@ -763,7 +763,7 @@ jobs:
           npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
       - name: mark the engine executable
         run: chmod +x "${{ runner.temp }}/tjs/tjs"
-      # The BUILDER, driven the way a user drives it: fuse a native clode, then
+      # The BUILDER, driven the way a user drives it: blobulate a native clode, then
       # make THAT binary build a quaude with node absent from PATH.
       #
       # WHY THIS STEP EXISTS (same disease as this job's own header, caught again
@@ -772,8 +772,8 @@ jobs:
       # CLODE_PROVIDER_BIN. No workflow named the file, so they ran ONLY under
       # `npm test` — a job with no tjs and no provider, where they always skipped.
       # A commit then made the dep-closure gate spawn `process.execPath -e` to
-      # introspect the bun-shim; under a fused builder process.execPath IS the
-      # fused clode (no node on the box, no `-e`), so EVERY `clode build` under
+      # introspect the bun-shim; under a blobulated builder process.execPath IS the
+      # blobulated clode (no node on the box, no `-e`), so EVERY `clode build` under
       # clode-native died at the gate — on pushed main, with CI fully green. The
       # binary that is the entire point of the Q1 split was 100% broken and
       # nothing said a word. This step is the standing guard.
@@ -804,16 +804,16 @@ jobs:
           CLODE_NODES: ${{ runner.temp }}/clode-nodes
         run: |
           set -euo pipefail
-          # `build --self` embeds this; without it the fuse has no payload.
+          # `build --self` embeds this; without it the blobulate has no payload.
           node scripts/build-clode-main.mjs
-          # Provision postject into deps/clode: quaude-fuse.js carries it as a
+          # Provision postject into deps/clode: quaude-blobulate.js carries it as a
           # builder member (soft — skipped if absent), and acceptance 4's naude
-          # build needs it on disk. Without this the fused clode-native ships no
+          # build needs it on disk. Without this the blobulated clode-native ships no
           # postject and the naude assembly dies "Cannot find module .../postject".
           npm ci --prefix deps/clode 2>&1 | tail -3
           PROV="$(node scripts/stage-provider.mjs)" || exit 1
           echo "provider: $PROV"
-          # The acceptances prove node-freeness by running the fused builder with
+          # The acceptances prove node-freeness by running the blobulated builder with
           # PATH=/usr/bin:/bin, and they SKIP if a node lives there ("cannot prove
           # node-freeness here"). Surface that up front: if this runner image ever
           # puts node on the minimal PATH, the skipped-0 assertion below would fail
@@ -838,7 +838,7 @@ jobs:
             || { echo "ERROR: a clode-native acceptance SKIPPED (or the summary format changed) — the node-free builder went unproven" >&2; exit 1; }
 
       # The packaged targets themselves: build a real naude (Node SEA) and a real
-      # quaude (fused tjs) from the same CC and diff them. The model oracle above
+      # quaude (blobulated tjs) from the same CC and diff them. The model oracle above
       # runs cli.cjs under two engines; only this covers the PACKAGING. Nothing in
       # CI built a naude before, which is how a bug that killed every naude on its
       # first boot ("sea.getRawAsset is not a function") stayed green.
@@ -922,7 +922,7 @@ jobs:
   #
   # Measured before writing this job (not assumed): a Linux container (see
   # .superpowers/sdd/2026-09-02-phase2-name-the-steps/linux-pty-ci-report.md)
-  # built a real fused quaude from the pinned provider and ran these exact
+  # built a real blobulated quaude from the pinned provider and ran these exact
   # files/commands — quaude-build 10/10, e2e-tui-tjs 1/1, e2e-ctrlz-tui 1/1,
   # interactive-render-diff 2/2, interactive-resize-diff 2/2, update-notify.pty
   # 3/3 (11 CLODE_LIVE_RENDER tests + 3 update-notify = 14 running here).
@@ -1004,7 +1004,7 @@ jobs:
           V=$(sed -n 's/^claude-code //p' UPSTREAM_PIN)
           echo "provider pin: @anthropic-ai/claude-code@$V (deliberately behind upstream — see UPSTREAM_PIN)"
           npm i -g @anthropic-ai/claude-code@"$V" 2>&1 | tail -3
-      - name: Install the runtime dep closure (the fuse's ext-dep closure)
+      - name: Install the runtime dep closure (the blobulate's ext-dep closure)
         run: npm ci --prefix deps/claude
       - name: Install the PTY harness (node-pty + @xterm/headless)
         run: npm install --prefix test
@@ -1038,7 +1038,7 @@ jobs:
           set -euo pipefail
           PROV="$(node scripts/stage-provider.mjs)" || exit 1
           # `clode build --out` does not mkdir -p its own parent — a bare path
-          # under a fresh runner.temp dies ENOENT after the fuse already ran.
+          # under a fresh runner.temp dies ENOENT after the blobulate already ran.
           mkdir -p "${{ runner.temp }}/quaude-notify"
           CLODE_CLAUDE_BIN="$PROV" bin/clode build --out "${{ runner.temp }}/quaude-notify/quaude"
       - name: fidelity/update-notify.pty — the auto-update NOTIFY surface
@@ -1173,10 +1173,10 @@ jobs:
       # different dead-coded branches and different cyclic-require shapes for
       # libexec/graph-scc-merge.cjs to fold. The merge itself always runs under the HOST's
       # own tjs (CLODE_TJS), never the target's — see clode-extract.cjs's resolveEngine and
-      # clode-build.cjs's own CROSS-FUSE comment ("the worker still runs under the host
+      # clode-build.cjs's own CROSS-BLOBULATE comment ("the worker still runs under the host
       # template... the host cannot exec the foreign output"). So a linux graph has never
       # been merged by anything other than a linux host. This step forces exactly that
-      # combination: this darwin host's tjs merging a LINUX-carved graph, cross-fusing into
+      # combination: this darwin host's tjs merging a LINUX-carved graph, cross-blobulating into
       # a linux-x64 engine template this host only ever touches as bytes, never executes.
       #
       # The linux-x64 provider is fetched by `npm pack` (not `npm i`), because

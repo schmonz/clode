@@ -1,7 +1,7 @@
 'use strict';
 // scripts/merge-step.mjs — the cyclic-group merge extracted as a protocol-only component
 // (Task 7 of docs/superpowers/plans/2026-09-02-phase2-name-the-steps.md). SOURCE assertions
-// only, same posture as test/quaude-fuse-merge.test.cjs and test/quaude-fuse-report.test.cjs:
+// only, same posture as test/quaude-blobulate-merge.test.cjs and test/quaude-blobulate-report.test.cjs:
 // the actual merge behaviour needs a tjs engine, a staged 50MB graph and minutes, which
 // belongs in a real build, not `node --test` (see task-7-report.md for that real-data proof —
 // the pre-extraction algorithm and merge-step.mjs were run against the SAME real 2.1.251 graph
@@ -28,7 +28,7 @@ function scanMergeStepWiring({ src, buildReportSrc }) {
       + '(no "Usage" in the first 1200 bytes)');
   }
 
-  // Points at merge-step.mjs itself, NOT libexec/quaude-fuse.js. The precise mustRead(...)
+  // Points at merge-step.mjs itself, NOT libexec/quaude-blobulate.js. The precise mustRead(...)
   // call, not a bare substring, so a comment mentioning scc-merge.cjs elsewhere cannot
   // satisfy it.
   examined++;

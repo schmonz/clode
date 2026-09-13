@@ -1,7 +1,7 @@
 name: full-smoke
 description: >
   The builder builds the product: install the pinned provider, install the rg
-  applets (ugrep + bfs — the configuration quaude requires), fuse an
+  applets (ugrep + bfs — the configuration quaude requires), blobulate an
   EPHEMERAL quaude from the given self-contained builder, and verify it (an
   MCP transport probe + the rg-inventory gate). Never uploads anything.
 
@@ -89,7 +89,7 @@ runs:
         # NOT fixable in resolveBuildOut: a native windows `--out` is returned
         # verbatim ON PURPOSE — the builder leg publishes an extensionless
         # clode-<ver>-windows-amd64 and attest looks for that exact name
-        # (test/clode-fuse-args.test.cjs records the release it broke).
+        # (test/clode-build-args.test.cjs records the release it broke).
         SMOKE="$RUNNER_TEMP/quaude-smoke"; [ "$RUNNER_OS" = "Windows" ] && SMOKE="$SMOKE.exe"
         CLODE_CLAUDE_BIN="$PROV" CLODE_CACHE="$RUNNER_TEMP/clode-cache" \
           ./"${{ inputs.asset }}" build --out "$SMOKE"

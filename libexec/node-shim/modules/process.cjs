@@ -31,7 +31,7 @@ const { isTerminalFd } = require('../internal/terminal-fd.cjs');
 // The 5-case uaPlatform->node switch below used to be duplicated
 // character-for-character in quaude-bootstrap.mjs's tjsPlatform; it now lives
 // ONCE in target-env.cjs's mapPlatform (the require-free member quaude's
-// fused bootstrap evaluates pre-node-shim). This module runs under the
+// blobulated bootstrap evaluates pre-node-shim). This module runs under the
 // node-shim, where require exists, so it just requires the shared file.
 const { mapPlatform } = require('../../target-env.cjs');
 
@@ -47,7 +47,7 @@ const { mapPlatform } = require('../../target-env.cjs');
 // and future legs alike. That mapping is target-env.cjs's mapPlatform (shared
 // with quaude-bootstrap.mjs's tjsPlatform — see the require above). Fallback,
 // LOCAL to this module: the legacy navigator.platform regexes, for when ua is
-// empty — quaude's fused bootstrap never has this second signal, so it stays
+// empty — quaude's blobulated bootstrap never has this second signal, so it stays
 // out of the shared mapping. txiki's fallthrough there is "<platform>
 // <machine>" (first token = the same lowercase name). Characterized by
 // test/node-shim-platform.test.cjs. DEFERRED (Q3 engine batch, needs uname on
@@ -289,7 +289,7 @@ module.exports = {
   // write — Node semantics, characterized by test/node-shim-env.test.cjs).
   // The set/deleteProperty traps and `writable: true` are load-bearing: without
   // them an env assignment silently no-ops in sloppy mode and THROWS
-  // ("'X' is read-only") in strict mode — and the fused quaude runs the bundle
+  // ("'X' is read-only") in strict mode — and the blobulated quaude runs the bundle
   // as compiled-module bytecode, which is always strict. Node stringifies on
   // write (String(v)); delete of a missing key is a no-op returning true.
   env: new Proxy({}, {

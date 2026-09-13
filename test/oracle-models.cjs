@@ -5,7 +5,7 @@
 //   quaude-model: tjs run node-shim/loader.cjs cli.cjs … (the shim under test)
 //
 // These mirror what the PACKAGED binaries do (a naude SEA re-invokes its embedded
-// node on the baked cli.cjs; a fused quaude boots cli.qbc under tjs + the shim),
+// node on the baked cli.cjs; a blobulated quaude boots cli.qbc under tjs + the shim),
 // so the parity gate can diff the two runtimes WITHOUT bin/clode or CLODE_ENGINE.
 // Both are gone in the builder-only surface; the oracle outlives them.
 //

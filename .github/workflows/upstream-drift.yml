@@ -145,7 +145,7 @@ jobs:
   # nothing (see BACKLOG). Red means an action just became possible.
   # linux-x64-musl deliberately: an alpine container, no qemu, and the engine comes
   # from the same PINS+patches cache the push legs use, so the marginal cost is the
-  # fuse and the smoke — not an engine build.
+  # blobulate and the smoke — not an engine build.
   #
   # Red HERE means the PINNED bundle no longer boots under the shim. Same attribution
   # doctrine as the anchors job: it is upstream that moved, not the last commit.

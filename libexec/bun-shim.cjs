@@ -27,7 +27,7 @@
 //
 // WHY IT IS SHAPED LIKE JSON, up here, away from the implementations. The gate
 // runs inside `clode build`, which must work on a machine with no node: under a
-// fused native builder process.execPath IS the fused clode binary. So the gate
+// blobulated native builder process.execPath IS the blobulated clode binary. So the gate
 // can neither spawn a host to ask this file (it used to — `process.execPath -e`
 // — and that broke EVERY build under clode-native) nor require() it in-process
 // (requiring this file installs the Module._load hook and sets globalThis.Bun —

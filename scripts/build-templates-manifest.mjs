@@ -110,8 +110,8 @@ export function cleanTargetName(legName) {
 export function deriveVerified(leg) {
   if (leg['no-exec']) return 'attest-only';
   // A pack-only engine (pack && !publish, i.e. the darwin slices): the engine is
-  // real and pre-signed, but CI never fuses-and-runs the PRODUCT on a Mac (the
-  // slice job builds the universal, it doesn't smoke a fused quaude), so a
+  // real and pre-signed, but CI never blobulates-and-runs the PRODUCT on a Mac (the
+  // slice job builds the universal, it doesn't smoke a blobulated quaude), so a
   // cross-built --target darwin-* is attested, not product-verified here.
   if (leg.pack && !leg.publish) return 'attest-only';
   if (leg.smoke === 'version') return 'version';

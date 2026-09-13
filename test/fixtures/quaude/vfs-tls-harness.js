@@ -1,12 +1,12 @@
 // A minimal VFS-seam harness (sibling to vfs-harness.js — see that file's own
 // header for the full explanation of what a mounted globalThis.__quaudeVFS
-// reproduces without a fused binary) scoped to ONE question: does tls.cjs's
+// reproduces without a blobulated binary) scoped to ONE question: does tls.cjs's
 // sibling-asset read (tls-cacert.pem, via __dirname + VFS-or-FSS, see
 // libexec/node-shim/modules/tls.cjs) actually work when node-shim/modules is
-// mounted as archive members exactly as libexec/quaude-fuse.js ships them —
-// not just when running unfused straight off the real filesystem (which every
+// mounted as archive members exactly as libexec/quaude-blobulate.js ships them —
+// not just when running unblobulated straight off the real filesystem (which every
 // OTHER tls test in this suite exercises via runLoader). Without this, the
-// fused path for tls-cacert.pem would be untested even though it's the one
+// blobulated path for tls-cacert.pem would be untested even though it's the one
 // that matters for a real quaude.
 //
 // Usage: tjs run vfs-tls-harness.js <loader.cjs> <node-shim-dir>
@@ -30,7 +30,7 @@ async function collect(dir, prefix) {
 }
 
 // The real shim tree, INCLUDING tls-cacert.pem — collect() has no extension
-// filter, matching libexec/quaude-fuse.js exactly (that's the property under
+// filter, matching libexec/quaude-blobulate.js exactly (that's the property under
 // test: a non-.cjs sibling file rides along for free).
 files.set('node-shim/loader.cjs', await tjs.readFile(loaderPath));
 await collect(path.join(shimRoot, 'modules'), 'node-shim/modules');

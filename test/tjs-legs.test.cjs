@@ -368,7 +368,7 @@ test('build-leg exec=cross step is parameterized, not darwin-ppc-hardcoded', () 
 });
 
 test('the 10.4-floor darwin legs declare darwin-poll:true (Tiger kqueue event-drop)', () => {
-  // Darwin 8's kqueue drops socket/pipe/SIGCHLD/async delivery under the fused
+  // Darwin 8's kqueue drops socket/pipe/SIGCHLD/async delivery under the blobulated
   // runtime's fd load (ktrace-confirmed on real Tiger PPC), so both 10.4-floor
   // legs build libuv's generic poll(2) backend instead. darwin-x64 (10.6) and
   // darwin-arm64 keep kqueue — they are proven, including on real Mavericks.
@@ -430,7 +430,7 @@ test('darwin-x86 Tiger leg: engine-only i386 at floor 10.4', () => {
   assert.strictEqual(dt['no-exec'], true);
   assert.strictEqual(dt.publish, false);
   // No GitHub runner can exec the output of a no-exec leg. A no-exec leg can
-  // only publish a builder when it is ALSO tier2: the cross-fuse produces the
+  // only publish a builder when it is ALSO tier2: the cross-blobulate produces the
   // foreign-arch builder WITHOUT executing it (validated later under qemu-user).
   // The engine-only floor legs (darwin-ppc, darwin-x86) are no-exec + non-tier2
   // (Mach-O needs a pre-signed template) — proven but never published.
@@ -441,7 +441,7 @@ test('darwin-x86 Tiger leg: engine-only i386 at floor 10.4', () => {
   }
 });
 
-test('netbsd-sparc leg: own-qemu cross-fuse, floored at 10.1, VM leg', () => {
+test('netbsd-sparc leg: own-qemu cross-blobulate, floored at 10.1, VM leg', () => {
   const release = legsFor('release');
   const ns = release.find((l) => l.leg === 'netbsd-sparc');
   assert.ok(ns, 'netbsd-sparc leg must be present in the release tier');
@@ -612,7 +612,7 @@ test('linux-riscv64 leg: Debian-cross tier-2, qemu-user verified, publishes', ()
   assert.strictEqual(l['guest-arch'], 'riscv64');
   assert.strictEqual(l.verify, 'qemu-user');
   assert.strictEqual(l['no-exec'], true, 'cross leg cannot exec the target on the runner');
-  assert.strictEqual(l.tier2, true, 'tier2 emits the cross-fused builder (smoke artifact)');
+  assert.strictEqual(l.tier2, true, 'tier2 emits the cross-blobulated builder (smoke artifact)');
   assert.strictEqual(l.publish, false, 'glibc-dynamic no-floor — proves the machinery; musl-static twin ships (Decision 3)');
   assert.strictEqual(l['atomic-shim'], false, 'riscv64 has native 64-bit atomics');
   assert.ok(l['cross-image'], 'exec=cross needs a cross-image');
@@ -1091,7 +1091,7 @@ const ZSTD_SOURCE = {
 };
 // DERIVED from .github/actions/build-leg/action.yml, not hand-copied. Its `mode` step decides
 // where a leg builds with one shell `case`, and the exec=guest arm is the definitive list of
-// platforms whose build+fuse+carve happen inside the VM. A mirror of it here would match today
+// platforms whose build+blobulate+carve happen inside the VM. A mirror of it here would match today
 // and drift silently the moment a platform is added — and the gate's whole claim is "an unlisted
 // leg fails", which a stale mirror quietly converts into "an unlisted PLATFORM is skipped". In a
 // repo whose rule is one source per fact, reading the source is cheaper than syncing a copy.

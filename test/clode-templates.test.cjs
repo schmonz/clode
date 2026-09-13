@@ -153,10 +153,10 @@ test('a missing recipe on either side is "cannot check", not a silent pass', asy
 test('the built clode bakes its engine recipe, as it bakes its tjs pin', () => {
   const src = fs.readFileSync(path.resolve(__dirname, '../scripts/build-clode-main.mjs'), 'utf8');
   assert.match(src, /__CLODE_BAKED_ENGINE_RECIPE__/,
-    'a fused clode with no repo cannot compute its own recipe — it must be baked at build time');
-  const fuse = fs.readFileSync(path.resolve(__dirname, '../libexec/clode-build.cjs'), 'utf8');
-  assert.match(fuse, /manifestRecipe: manifest\.recipe/, 'the manifest recipe must reach obtainEngine');
-  assert.match(fuse, /thisRecipe: thisEngineRecipe\(/, 'this clode\'s recipe must reach obtainEngine');
+    'a blobulated clode with no repo cannot compute its own recipe — it must be baked at build time');
+  const blobulate = fs.readFileSync(path.resolve(__dirname, '../libexec/clode-build.cjs'), 'utf8');
+  assert.match(blobulate, /manifestRecipe: manifest\.recipe/, 'the manifest recipe must reach obtainEngine');
+  assert.match(blobulate, /thisRecipe: thisEngineRecipe\(/, 'this clode\'s recipe must reach obtainEngine');
 });
 
 // THE BUG A USER ACTUALLY HIT (2026-08-27, v0.20260827.1): `clode build --target
@@ -183,7 +183,7 @@ test('obtainEngine: a stale cached engine is discarded and re-fetched, not fatal
 
 // The gate itself must not be weakened by the above: bytes that fail verification
 // after a FRESH download are a genuine error (corruption or a bad publish), and
-// must still fail closed rather than being cached or fused.
+// must still fail closed rather than being cached or blobulated.
 test('obtainEngine: a FRESH download that fails verification is still fatal', async () => {
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engfresh-'));
   await assert.rejects(

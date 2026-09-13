@@ -25,7 +25,7 @@ on:
         type: string
         required: true
       only:
-        description: "leg subset filter: 'darwin' (the 4 slices) / 'notdarwin' (the rest) — release.yml splits darwin out so the universal doesn't wait on the whole matrix; 'fast' (native/alpine/cross-fuse legs) / 'slow' (VM guests + the from-source cross-toolchain fleet) — ci.yml splits on this so oracle jobs needing only a fast artifact don't wait on the slow legs; or empty (whole tier)."
+        description: "leg subset filter: 'darwin' (the 4 slices) / 'notdarwin' (the rest) — release.yml splits darwin out so the universal doesn't wait on the whole matrix; 'fast' (native/alpine/cross-blobulate legs) / 'slow' (VM guests + the from-source cross-toolchain fleet) — ci.yml splits on this so oracle jobs needing only a fast artifact don't wait on the slow legs; or empty (whole tier)."
         type: string
         required: false
         default: ""

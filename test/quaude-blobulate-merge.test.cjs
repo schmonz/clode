@@ -1,5 +1,5 @@
 'use strict';
-// The fuse worker's half of the SCC merge (design memo:
+// The blobulate worker's half of the SCC merge (design memo:
 // docs/superpowers/specs/2026-08-28-cyclic-scc-merge-design.md). These are SOURCE assertions,
 // not behavioural ones: the behaviour needs a tjs engine, a staged 50MB graph and minutes,
 // which belongs in the acceptance build, not in `node --test`. What a source assertion CAN do
@@ -8,7 +8,7 @@
 // TASK 7: the merge driver call, the moduleMeta guard and the merger-version cache keying all
 // moved OUT of this file and into scripts/merge-step.mjs (a protocol-only component — see
 // test/merge-step.test.cjs, which now carries the assertions that used to live here against
-// quaude-fuse.js's own source). What stays true of quaude-fuse.js itself is narrower: it
+// quaude-blobulate.js's own source). What stays true of quaude-blobulate.js itself is narrower: it
 // recognises an already-merged staged graph (so it does not even bother spawning work for it —
 // no, it still spawns, but skips applying anything back), it does no merge work when there are
 // no cyclic requires, and it reaches the merge ONLY by spawning scripts/merge-step.mjs — never
@@ -20,8 +20,8 @@ const { defineGuard, guardTests } = require('./guard.cjs');
 const REPO = path.join(__dirname, '..');
 
 // PURE: every check is a presence/absence assertion against the already-read
-// quaude-fuse.js source.
-function scanFuseMergeWiring({ src }) {
+// quaude-blobulate.js source.
+function scanBlobulateMergeWiring({ src }) {
   const findings = [];
   let examined = 0;
 
@@ -59,9 +59,9 @@ function scanFuseMergeWiring({ src }) {
 }
 
 const guard = defineGuard({
-  name: 'quaude-fuse-merge-wiring',
-  read: () => ({ src: fs.readFileSync(path.join(REPO, 'libexec', 'quaude-fuse.js'), 'utf8') }),
-  scan: scanFuseMergeWiring,
+  name: 'quaude-blobulate-merge-wiring',
+  read: () => ({ src: fs.readFileSync(path.join(REPO, 'libexec', 'quaude-blobulate.js'), 'utf8') }),
+  scan: scanBlobulateMergeWiring,
   // I2 (coordinator, 2026-09-04): table-driven — a fixed set of markers checked in ONE
   // named file. Floored at the exact measured count (9).
   floor: 9,

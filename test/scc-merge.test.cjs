@@ -406,7 +406,7 @@ test('a colliding named import keeps its real export name when loaded through th
 });
 
 // THE ORDERING COUPLING, and it is load-bearing. bun-graph-plan.cjs's depsOf() is the only
-// thing that knows what a module depends on, so it is what planOrder — and therefore the fuse
+// thing that knows what a module depends on, so it is what planOrder — and therefore the blobulate
 // worker's compile order — is computed from. It matches `import` forms ONLY: a shim written as
 // `export { ... } from "<merged>"` reads as dependency-free, planOrder is free to place it
 // BEFORE the merged module, and the build dies with

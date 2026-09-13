@@ -47,10 +47,10 @@ test('a changed extractor still invalidates, as it always did', () => {
 
 // THE SIGNATURE MUST BE ABOUT CONTENT, NOT ABOUT WHEN THE FILE LANDED.
 //
-// A fused clode (a quaude .com, a musl clode-native) ships its libexec as archive members
+// A blobulated clode (a quaude .com, a musl clode-native) ships its libexec as archive members
 // and materializes them to a fresh mkdtemp on every run — fs.writeFileSync, so mtime =
 // now. While the signature was `size-mtime` (clode-resolve's sigOf), that made the extract
-// cache UNHITTABLE from any fused binary: same bytes, new timestamp, "extractor changed;
+// cache UNHITTABLE from any blobulated binary: same bytes, new timestamp, "extractor changed;
 // re-extracting" every single time. Observed 2026-08-31 (user): a cosmo .com re-extracted
 // 2.1.251 — minutes of SCC merging — that a musl quaude had extracted minutes earlier.
 // Measured on the cache entry at the time: identical sizes, three different mtimes.
@@ -70,7 +70,7 @@ test('extractorSigOf is stable across materializations: same bytes, different mt
   const SOURCES = ['extract-claude-js.cjs', 'scc-merge.cjs', 'graph-scc-merge.cjs'];
 
   // Two "materializations" of the same libexec, with deliberately different mtimes —
-  // exactly what materializeFusedPayload produces on two runs of a fused clode.
+  // exactly what materializeBlobPayload produces on two runs of a blobulated clode.
   const mk = (mtimeSec) => {
     const d = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-extractor-sig-'));
     for (const f of SOURCES) {
@@ -87,7 +87,7 @@ test('extractorSigOf is stable across materializations: same bytes, different mt
       fs.statSync(path.join(b, SOURCES[0])).mtimeMs, 'fixture must actually differ in mtime');
     assert.strictEqual(extractorSigOf(a), extractorSigOf(b),
       'two materializations of identical extractor sources must share a signature — otherwise '
-      + 'no fused clode can ever hit the extract cache');
+      + 'no blobulated clode can ever hit the extract cache');
   } finally {
     fs.rmSync(a, { recursive: true, force: true });
     fs.rmSync(b, { recursive: true, force: true });

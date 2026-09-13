@@ -31,7 +31,7 @@ const path = require('node:path');
 // libexec/bun-shim.cjs:825-843 had already worked this out for its own `which` and
 // marked it "UNVERIFIED ON WINDOWS". CI run 33245690046 verified it: windows-amd64 and
 // windows-arm64 both reported `[tried: zstd: not found; unzstd: not found; zstdcat: not
-// found]` from the fused builder, in a job where actions/cache had just run
+// found]` from the blobulated builder, in a job where actions/cache had just run
 // `tar --use-compress-program "zstd -d"` — the tool was there; this function could not
 // see it. (It surfaced only when the zstd decoder started resolving through findTool;
 // the same blindness was already costing provision('sha256'|'tar') on Windows.)

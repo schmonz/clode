@@ -117,9 +117,9 @@ test('the ES5 prologue prints the exact floor message + exits 1 on an old node',
   assert.strictEqual(r.stdout, '');
 });
 
-test('the prologue floor is v20 end-to-end for `clode build` (fuse runs under tjs, not node)', () => {
-  // `clode build` never runs the extracted bundle under node — the fuse
-  // worker and the fused artifacts exec under tjs; node only orchestrates
+test('the prologue floor is v20 end-to-end for `clode build` (blobulate runs under tjs, not node)', () => {
+  // `clode build` never runs the extracted bundle under node — the blobulate
+  // worker and the blobulated artifacts exec under tjs; node only orchestrates
   // file work. OpenIndiana packages node 20 and OpenBSD 7.9 node 22 (matrix
   // legs, dispatches #6/#14 2026-07-10) — the build path must clear the
   // prologue on both. CLODE_TJS points at a nonexistent template so the run

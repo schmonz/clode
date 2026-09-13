@@ -1,6 +1,6 @@
 'use strict';
 // scripts/make-min-provider.cjs shrinks an upstream provider to something a MEMORY-POOR
-// guest can build from — the netbsd-sparc leg fuses inside a sun4m VM with 512MB, the
+// guest can build from — the netbsd-sparc leg blobulates inside a sun4m VM with 512MB, the
 // hardware ceiling, under TCG, where a 376MB binary simply OOMs.
 //
 // IT HAD NO TEST, AND IT ROTTED. When upstream went code-split at 2.1.243 the extractor

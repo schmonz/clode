@@ -55,7 +55,7 @@ before(() => {
   DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-doctor-parity-'));
   const quaude = path.join(DIR, 'quaude');
   // clode must build FROM the SAME provider bundle as native (the constructed-clean PATH
-  // has no provider); otherwise version-match and the comparison are meaningless. A fused
+  // has no provider); otherwise version-match and the comparison are meaningless. A blobulated
   // quaude carries its deps (incl. a real `ws`) as members — no world/fake-ws needed.
   const build = spawnSync(process.execPath, [ENTRY, 'build', '--out', quaude], {
     encoding: 'utf8',
