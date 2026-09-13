@@ -30,41 +30,68 @@
 // ECONNRE-FUSE-D) — so \bfuse\b, matched alongside fused/fuses/fusing as its own inflected
 // forms, excludes the whole family with no explicit allowlist.
 //
-// THE CAMELCASE HALF (fix round 1, coordinator review). A plain \bfuse\b cannot see a
-// compound with NO boundary at all — `materializeFusedPayload`, `sentinelFuse`, `xfuse` all
-// have a WORD CHARACTER immediately before "fuse"/"Fuse", so \b never fires there, and this
-// gate shipped blind to the exact shape this task spent most of its effort renaming. The fix
-// is NOT simply "add /[a-z]Fus(e|ed|es|ing)\b/ and rely on the existing /i flag" — tried
-// first, measured directly: under a shared case-insensitive flag, `[a-z]` and `Fus` both fold
-// case, so the pattern also matches `refuse`/`confused`/`ECONNREFUSED` (the letter before
-// "fus" in "re-fuse" is just as much an `[a-z]` match as the letter before "Fuse" in
-// "sentinelFuse") — 302 new findings across files that have never said our word, confirmed by
-// actually running it. What distinguishes a real compound from the excluded English family is
-// not case, it is the SPECIFIC 2-3 letters immediately before "fus": re/con/dif/in/pro/ef/
-// suf/de are excluded prefixes, and nothing else is. So the real fix is a letter immediately
-// before "fus", NOT preceded by one of those specific prefixes:
-//   [a-z](?<!re)(?<!con)(?<!dif)(?<!in)(?<!pro)(?<!ef)(?<!suf)(?<!de)fus(?:e|ed|es|ing)\b
-// (case-insensitive). The lookbehinds sit AFTER the generic `[a-z]` on purpose: they must
-// check the text ending where "fus" starts, not where the generic letter starts, or the
-// exclusion silently never fires (measured: swapping the order made `diffuse`/`refuse` match
-// again). Verified against the whole family plus every real compound this task renamed
-// (`sentinelFuse`, `materializeFused`, `unfused`, `xfuse`, `cross-fuse`) before trusting it —
-// see the fix-round-1 report for the exact table. This closes the gap enough to make the
-// scripts/build-naude.mjs ALLOWED entry below load-bearing again (under the OLD plain
-// \bfuse\b, it matched nothing there and was pure documentation); it does not close the gap
-// named next.
+// THE CAMELCASE HALF (fix round 1, then corrected in fix round 2 — both coordinator review;
+// the acceptance table this section describes is now committed as a unit test below,
+// `test('FUSE_WORD_RE matches every reintroduction shape...')`, so it cannot regress
+// silently). A plain \bfuse\b cannot see a compound with NO boundary at all —
+// `materializeFusedPayload`, `sentinelFuse`, `xfuse` all have a WORD CHARACTER immediately
+// before "fuse"/"Fuse", so \b never fires there, and this gate shipped blind to the exact
+// shape this task spent most of its effort renaming.
 //
-// THE STILL-KNOWN GAP, named rather than chased: a prefix glued on with NO letters at all
-// before it that could carry a lookbehind — i.e. this closes compounds with at least one
-// letter before "fus" (camelCase, "xfuse"), but a bare, sentence-initial reintroduction of
-// the word with a NEW two-or-three-letter prefix this list has never met (some future English
-// word, or a new coined abbreviation) would need its prefix added here to be excluded, or it
-// will slip through as a false positive requiring a new ALLOWED entry — the opposite failure
-// direction from before, and the safer one. That is the same tradeoff
-// test/windows-path-ratchet.test.cjs names for its own regexes: "it cannot catch a shape we
-// have not met." This guard's job is the word as it actually appears in this repo today,
-// proven by its two controls below (one per detector — see control()), not every conceivable
-// disguise.
+// Round 1's fix — a single case-insensitive alternative,
+// `[a-z](?<!re)...(?<!de)fus(?:e|ed|es|ing)\b` — was ALSO wrong, in the opposite direction
+// from a naive `/[a-z]Fus(...)\b/i` (which matched `refuse` too, 302 false positives,
+// measured by actually running it). Round 1's version excluded the refuse family correctly,
+// but the trailing `\b` only fires when "fuse" is the LAST segment of an identifier —
+// `sentinelFuse`, `xfuse`, `unfused` all happen to sit there, which is why round 1's own
+// verification table passed while missing the row that mattered: `materializeFusedPayload`
+// (round 1's table tested the wrong string, `materializeFused`, and never caught it).
+// `fusedBuilder`, `scanFuseReportWiring`, `fuseSrc` — real identifiers from this very task's
+// own sweep — all put "fuse" in a MIDDLE segment, where the character right after it is
+// another word character (the next segment's capital letter), so `\b` does not exist there
+// either. Regex word boundaries do not know about camelCase; the fix has to look at
+// adjacent CASE, not just adjacent word-character-ness.
+//
+// The working fix is five case-SENSITIVE alternatives (no shared /i — that flag is exactly
+// what broke round 1's naive attempt, since it makes `[a-z]` fold `A-Z` and erases the one
+// signal — capitalization — that tells `someFuseThing` apart from `confuse`):
+//   \b[Ff]us(?:e|ed|es|ing)(?=[A-Z]|\b)                                   -- A: word-initial
+//   [a-z0-9]Fus(?:e|ed|es|ing)                                            -- B: camelCase-in
+//   \bFUS(?:E|ED|ES|ING)\b                                                -- C: ALL-CAPS word
+//   [a-z](?<!re)(?<!con)(?<!dif)(?<!in)(?<!pro)(?<!ef)(?<!suf)(?<!de)fus(?:e|ed|es|ing)\b -- D
+//   [A-Z](?<!RE)(?<!CON)(?<!DIF)(?<!IN)(?<!PRO)(?<!EF)(?<!SUF)(?<!DE)FUS(?:E|ED|ES|ING)\b -- E
+// A is word-initial lowercase/Title-case with a RELAXED right side (a following capital
+// letter — camelCase-out, `fuseSrc` — is as good as a true \b, so this alone covers both
+// `fuse` alone and `fusedBuilder`). B is the camelCase-IN half: a lowercase/digit directly
+// before a capital "Fus" needs no right-side constraint at all, since the left-side case
+// transition is already the strong signal (`materializeFused`, `scanFuseReportWiring`,
+// `sentinelFuse`). C is the plain ALL-CAPS word. D and E are round 1's lookbehind-exclusion
+// trick, kept for the two compounds with NO case transition anywhere (`xfuse`, `unfused`/
+// `UNFUSED`) — D case-sensitive-lowercase-only, E case-sensitive-uppercase-only, so neither
+// can cross-contaminate the other the way a shared /i flag did. D excludes each prefix in
+// BOTH its lowercase and Title-case spelling (`(?<!re)(?<!Re)`, etc) — round 2's OWN first
+// attempt at D used lowercase-only lookbehinds and matched "Refusing" as "efusing", because a
+// case-sensitive `(?<!re)` does not recognise "Re" (capital R) as the thing it excludes; found
+// by re-running the real 515-file gate, not by inspection — a real, sentence-initial "Refusing
+// to guess." sits in five production files. Every one of these five (now six, counting D's
+// two case variants) alternatives was necessary: removing any single one fails at least one
+// row of the acceptance table (checked directly, not assumed).
+//
+// UNFUSED, specifically flagged by the coordinator as the row expected to be structurally
+// impossible (same shape as ECONNREFUSED — a prefix glued on with no case transition) turned
+// out to be satisfiable: "UN" is not one of the excluded prefixes {re, con, dif, in, pro, ef,
+// suf, de}, so alternative E excludes ECONNREFUSED/GATE_REFUSES (prefix "RE") while still
+// matching UNFUSED (prefix "UN") — verified in the acceptance table below, not asserted.
+//
+// THE STILL-KNOWN GAP, narrower now, named rather than chased: alternatives D/E's exclusion
+// list is a FIXED set of known English prefixes. A future real English word built the same
+// way — some prefix this list has never met, glued onto "fuse" with no case transition —
+// would slip through as a false positive requiring a new ALLOWED entry, which is the safer
+// failure direction (a spurious finding someone has to look at, not a silent miss). That is
+// the same tradeoff test/windows-path-ratchet.test.cjs names for its own regexes: "it cannot
+// catch a shape we have not met." This guard's job is the word as it actually appears in this
+// repo today, proven by its two controls below (one per detector — see control()) and by the
+// acceptance-table unit test, not every conceivable future English word.
 //
 // THE OPERATIVE RULE FOR "IS THIS SITE EXEMPT", stated once so every ALLOWED/COUNT_ALLOWED
 // entry below can be checked against it: describing a mechanism in TODAY's vocabulary is
@@ -138,16 +165,59 @@ const EXT_RE = /\.(cjs|mjs|js|json|yml|yaml|md|sh|Dockerfile)$/;
 // draws (extname('.tool-versions') === '', extname('.eslintrc.json') === '.json').
 function hasNoExtension(rel) { return path.extname(rel) === ''; }
 
-// Matches "fuse"/"fused"/"fuses"/"fusing" as a standalone word (excludes the whole
-// refuse/confuse/... family automatically — no boundary before "fus" in any of them), OR the
-// same suffix glued onto ANY other letter that is not one of the excluded English prefixes —
-// this is what catches a camelCase compound (`sentinelFuse`, `materializeFused`) or a
-// lowercase compound with no boundary at all (`xfuse`) without also catching `refuse`/
-// `confuse`/`ECONNREFUSED`/`GATE_REFUSES`. See the file header for the full reasoning,
-// including why the lookbehinds must sit AFTER the generic `[a-z]`, not before it.
-const FUSE_RE = /\bfuse\b|\bfused\b|\bfuses\b|\bfusing\b/
-  .source + '|[a-z](?<!re)(?<!con)(?<!dif)(?<!in)(?<!pro)(?<!ef)(?<!suf)(?<!de)fus(?:e|ed|es|ing)\\b';
-const FUSE_WORD_RE = new RegExp(FUSE_RE, 'i');
+// Five case-SENSITIVE alternatives (deliberately no shared /i — see the file header for why
+// that flag is exactly what breaks this): A word-initial lowercase/Title-case with a
+// right side relaxed to allow a following capital letter (`fuse`, `fusedBuilder`,
+// `fuseSrc`); B a lowercase/digit directly before a capital "Fus" segment, no right-side
+// constraint needed (`materializeFusedPayload`, `sentinelFuse`, `scanFuseReportWiring`); C
+// the plain ALL-CAPS word (`FUSE`, `FUSED`); D/E the one shape with NO case transition at
+// all (`xfuse`, `unfused`/`UNFUSED`), each excluding the known English prefixes {re, con,
+// dif, in, pro, ef, suf, de} in its own case only, so D and E cannot cross-contaminate the
+// way a shared /i flag would. Verified against the full acceptance table in the unit test
+// below before trusting it — that test is the source of truth for this regex, not this
+// comment.
+const FUSE_WORD_RE = new RegExp([
+  '\\b[Ff]us(?:e|ed|es|ing)(?=[A-Z]|\\b)',                                              // A
+  '[a-z0-9]Fus(?:e|ed|es|ing)',                                                          // B
+  '\\bFUS(?:E|ED|ES|ING)\\b',                                                            // C
+  '[a-z](?<!re)(?<!con)(?<!dif)(?<!in)(?<!pro)(?<!ef)(?<!suf)(?<!de)'
+    + '(?<!Re)(?<!Con)(?<!Dif)(?<!In)(?<!Pro)(?<!Ef)(?<!Suf)(?<!De)fus(?:e|ed|es|ing)\\b',  // D
+  '[A-Z](?<!RE)(?<!CON)(?<!DIF)(?<!IN)(?<!PRO)(?<!EF)(?<!SUF)(?<!DE)FUS(?:E|ED|ES|ING)\\b', // E
+].join('|'));
+
+// The acceptance table itself, committed so a future "simplification" of FUSE_WORD_RE cannot
+// regress any of these shapes silently — this is the source of truth the comment above
+// summarizes, not the other way around. Every MUST_MATCH string is a real shape this task
+// actually renamed somewhere in this repo (not a hypothetical); every MUST_NOT_MATCH string
+// is a real English word or a real unrelated identifier already living in this repo (see the
+// file header for where each one is used) that this gate must never flag.
+const MUST_MATCH = [
+  'fuse', 'fused', 'fuses', 'fusing', 'Fuse', 'FUSE', 'unfused', 'UNFUSED', 'xfuse',
+  'cross-fuse', 'sentinelFuse', 'someFuseThing', 'materializeFusedPayload', 'fusedBuilder',
+  'scanFuseReportWiring', 'fuseSrc', 'quaude-fuse.js',
+];
+const MUST_NOT_MATCH = [
+  'refuse', 'refused', 'refuses', 'refusing', 'confuse', 'confused', 'diffuse', 'defuse',
+  'profuse', 'ECONNREFUSED', 'GATE_REFUSES', 'refusal',
+  // Extra, beyond the coordinator's table — the rest of the excluded-prefix family, and the
+  // new word itself, so a future edit cannot "fix" a MUST_MATCH regression by accidentally
+  // widening FUSE_WORD_RE to swallow "blobulate" too.
+  'infuse', 'infused', 'effuse', 'effused', 'suffuse', 'suffused', 'fuselage', 'PROXY_REFUSE',
+  'blobulate', 'blobulated', 'cross-blobulate',
+  // Sentence-initial Title-case — found by this same round's own re-verification, not the
+  // coordinator's table: shape D's exclusion lookbehinds were written lowercase-only
+  // (`(?<!re)`), so "Refusing to guess." (a real line in libexec/bun-graph.cjs and four other
+  // production files) matched as "efusing", since "Re" (capital R) is not "re" under a
+  // case-SENSITIVE lookbehind. D now excludes both cases explicitly.
+  'Refuse', 'Refused', 'Refusing', 'Confuse', 'Confused', 'Diffuse', 'Defuse', 'Profuse',
+  'Infuse', 'Infused', 'Effuse', 'Suffuse', 'Suffused',
+];
+test('FUSE_WORD_RE matches every reintroduction shape this task actually renamed, and none of the English words or unrelated identifiers it must not flag (fix round 2 acceptance table)', () => {
+  const missed = MUST_MATCH.filter((s) => !FUSE_WORD_RE.test(s));
+  const wrongly = MUST_NOT_MATCH.filter((s) => FUSE_WORD_RE.test(s));
+  assert.deepStrictEqual(missed, [], `FUSE_WORD_RE failed to match: ${missed.join(', ')}`);
+  assert.deepStrictEqual(wrongly, [], `FUSE_WORD_RE wrongly matched: ${wrongly.join(', ')}`);
+});
 
 const ALLOWED = [
   { file: 'scripts/build-naude.mjs', pattern: /sentinelFuse|NODE_SEA_FUSE_[0-9a-f]{32}/,
@@ -183,12 +253,17 @@ const ALLOWED = [
 // improved, and the count is now stale) is ALSO a finding — this repo's mechanism for "a
 // number in this table must never go silently unnoticed to be wrong."
 //
-// Measured 2026-09-13 against FUSE_WORD_RE (widened, this round) with:
-//   node -e "const fs=require('fs'); const FUSE_WORD_RE=/.../i; for (const f of [...])
+// Measured 2026-09-13, re-measured after fix round 2's camelCase widening (which sees more
+// of BACKLOG.md than round 1's regex did — round 1 caught 150 lines; round 2 additionally
+// sees BACKLOG.md:6624's middle-segment `materializeFusedPayload` quote, a real historical
+// reference to the exact identifier this task renamed, which round 1's trailing-\b-only
+// regex could not see there):
+//   node -e "const fs=require('fs'); const FUSE_WORD_RE=/.../; for (const f of [...])
 //     console.log(f, fs.readFileSync(f,'utf8').split('\n').filter(l=>FUSE_WORD_RE.test(l)).length)"
-// BACKLOG.md: 150. test/fidelity/RESULTS.md: 22.
+// BACKLOG.md: 151. test/fidelity/RESULTS.md: 22 (unchanged — RESULTS.md's dated rows use only
+// the trailing-position shape round 1 already saw).
 const COUNT_ALLOWED = {
-  'BACKLOG.md': 150,
+  'BACKLOG.md': 151,
   'test/fidelity/RESULTS.md': 22,
 };
 
