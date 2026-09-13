@@ -18,7 +18,9 @@
 // could hand over) and the slowest box this project supports (Mavericks, per the
 // umbrella) keep this rule from taxing them. A caller that reads process.env
 // AFTER an earlier no-override build must still see the override honoured on its
-// own call, so the check runs first, every time, ahead of the memo.
+// own call, so the check runs first, every time, ahead of the memo. Its value is
+// still EXISTENCE-CHECKED: a stale path must skip with a reason naming the
+// variable, never hand a consumer a spawnSync on a file that isn't there.
 //
 // NO CONTENT KEY, NO STALENESS HASH — deliberate. "Build once per process,
 // memoize the path" is the whole cache-invalidation story here. A second
@@ -36,37 +38,40 @@ const { spawnSync } = require('node:child_process');
 const REPO = path.resolve(__dirname, '..');
 const ENTRY = path.join(REPO, 'scripts', 'stage0.mjs');
 
-const { resolveProviderBin } = require('./oracle-models.cjs');
+// provider-resolve.cjs, NOT oracle-models.cjs's resolveProviderBin. The latter is
+// filed (BACKLOG.md) as NOT pin-capped: under an ambient CLODE_STATE_ROOT pointed
+// at a fresh tmpdir -- which ordinary standalone use of this file can produce, even
+// though test/run.mjs itself never does (it sets CLODE_PROVIDER_BIN centrally,
+// via THIS SAME resolver, before any test file spawns; resolveProviderBin then
+// short-circuits on it and never falls through) -- it falls through
+// resolveClaudeBin's `current` step to whatever plain `claude` sits on PATH,
+// which can be many versions past UPSTREAM_PIN and incompatible with this repo's
+// SCC merge. provider-resolve.cjs's providerBin()/skipReason() never consult
+// CLODE_STATE_ROOT at all (storeDir() reads env.HOME directly) and cap selection
+// at UPSTREAM_PIN by construction, so there is no strip-the-env workaround to
+// maintain here — the resolver itself cannot produce the wrong answer.
+const { providerBin, skipReason: providerSkipReason } = require('./provider-resolve.cjs');
 const { tjsPath } = require('./node-shim-helper.cjs');
 const { stateRoot } = require('./state-root-helper.cjs');
 
 let memo = null; // { path } | { skip } — set at most once per process, by build()
 
+// Every build's private scratch dir, so exit-cleanup can remove exactly what THIS
+// process created and nothing another concurrent process is still using.
+const builtDirs = [];
+let cleanupRegistered = false;
+function registerCleanup() {
+  if (cleanupRegistered) return;
+  cleanupRegistered = true;
+  process.on('exit', () => {
+    for (const d of builtDirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* best effort on exit */ } }
+  });
+}
+
 function build() {
-  // Resolve the provider with CLODE_STATE_ROOT stripped from the lookup env.
-  // "What provider is really on this machine" is a machine fact, not scoped to
-  // any one test's throwaway state root -- but test/run.mjs sets ONE central
-  // CLODE_STATE_ROOT for the entire suite before any file runs (its own
-  // documented behavior), so by the time this ever runs under a real suite
-  // pass, process.env.CLODE_STATE_ROOT is ALREADY SET to a fresh, empty root.
-  // resolveClaudeBin's `current` step (clode-resolve.cjs) reads the clode-
-  // managed provider pointer under THAT root; a fresh one has none, so
-  // resolution falls through past the real, working, pinned provider store to
-  // whatever plain `claude` happens to sit in ~/.local/bin -- on this box, a
-  // newer native install (2.1.270) that this repo's SCC-merge does not yet
-  // absorb, and the build fails outright.
-  // Reproduced directly: `resolveProviderBin(process.env)` returns
-  // .../providers/2.1.252/claude with no ambient CLODE_STATE_ROOT, and
-  // .../claude/versions/2.1.270 with one set -- same process, same real
-  // provider store on disk, different answer. An explicit CLODE_PROVIDER_BIN
-  // or CLODE_CLAUDE_BIN still wins either way (checked first, unaffected by
-  // this), so a caller that wants a SPECIFIC provider is never overridden.
-  const providerLookupEnv = { ...process.env };
-  delete providerLookupEnv.CLODE_STATE_ROOT;
-  let provider = null;
-  try { provider = resolveProviderBin(providerLookupEnv); } catch { /* treated as absent below */ }
-  if (!provider || !fs.existsSync(provider)) {
-    return { skip: 'no resolvable Claude Code provider (CLODE_PROVIDER_BIN / CLODE_CLAUDE_BIN / the provider store / PATH) to build a quaude from' };
+  const provider = providerBin(process.env);
+  if (!provider) {
+    return { skip: providerSkipReason(process.env) };
   }
 
   const engine = tjsPath();
@@ -107,14 +112,29 @@ function build() {
       DYLD_INSERT_LIBRARIES: '',
     },
   });
-  if (result.status !== 0 || !fs.existsSync(out)) {
-    return { skip: `clode build failed (status ${result.status}) building a quaude to drive:\n${result.stdout}\n${result.stderr}` };
+  if (result.error || result.status !== 0 || !fs.existsSync(out)) {
+    let why;
+    if (result.error) why = `clode build could not even be spawned: ${result.error.message}`;
+    else if (result.status === null && result.signal) {
+      why = `clode build was killed by ${result.signal} (likely the 300000ms timeout) before finishing`;
+    } else {
+      why = `clode build failed (status ${result.status}) building a quaude to drive:\n${result.stdout}\n${result.stderr}`;
+    }
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+    return { skip: why };
   }
+  builtDirs.push(dir);
+  registerCleanup();
   return { path: out };
 }
 
 function builtQuaude() {
-  if (process.env.CLODE_QUAUDE) return { path: process.env.CLODE_QUAUDE };
+  if (process.env.CLODE_QUAUDE) {
+    if (!fs.existsSync(process.env.CLODE_QUAUDE)) {
+      return { skip: `CLODE_QUAUDE=${process.env.CLODE_QUAUDE} does not exist` };
+    }
+    return { path: process.env.CLODE_QUAUDE };
+  }
   if (memo) return memo;
   memo = build();
   return memo;
