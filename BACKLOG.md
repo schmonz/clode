@@ -6611,10 +6611,30 @@ every positional is drawn from exactly one: **products** (what clode builds) and
   source of truth; this name states the actual epistemic status, and being a sentence among
   terse verbs is a feature: it differs in kind.
 
-File renames: `libexec/clode-fuse.cjs` → `clode-build.cjs` (it orchestrates the build;
-blobulating is one step inside it), `libexec/quaude-fuse.js` → `quaude-blobulate.js` (this IS
-the blobulating worker, and its header is the canonical definition of the coined word),
-`.github/actions/cross-fuse/` → `cross-blobulate/`, four tests + one Dockerfile follow.
+File renames: `libexec/clode-fuse.cjs` → `clode-build.cjs` **plus an extracted
+`libexec/clode-blobulate.cjs`** (user, 2026-09-12: the orchestrator keeps `build`, and the
+step comes out into its own module, so the coined word names a module whose whole job it is
+rather than surviving only in prose), `libexec/quaude-fuse.js` → `quaude-blobulate.js` (its
+header is the canonical definition of the coined word), `.github/actions/cross-fuse/` →
+`cross-blobulate/`, four tests + one Dockerfile follow.
+
+**Where the seam is, measured:** `clode-fuse.cjs` is 2,068 lines doing at least five jobs —
+the dep-closure gate family (`:104-584`), target smoke/attest/sign (`:642-875`), argv parsing
+(`:901-961`), manifest/engine resolution (`:962-1055`), and `clodeBuild` (`:1056-2060`, ~1,000
+lines). Blobulate = `materializeFusedPayload` (`:73`) plus the part of `clodeBuild` that
+attaches a payload to an engine image (the quaude worker spawn, the naude postject path).
+RECORDED AND NOT SCHEDULED: the dep-closure family is ~480 cohesive lines with four exported
+entry points phase 5b just built controls for, so `clode-dep-closure.cjs` would be a clean
+module with a tested surface — not needed for this phase, noted so nobody re-derives it.
+
+**What the rename breaks:** 55 files reference `clode-fuse` by name, 41 reference
+`quaude-fuse`, and two of those references do not behave like text. (1)
+`test/build-gates/dep-closure-gates.test.cjs` requires its production module by a LITERAL
+relative path because phase 5b's sweep derives "controlled" from that literal — rename
+without updating it and the gate silently becomes UNCONTROLLED, raising
+`UNCONTROLLED_GATE_BASELINE` and going red for a reason that reads like a regression. (2)
+`quaude-fuse.js` has NO module resolver (its `require` is a loud stub; siblings load via
+`loadLibexecCjs`), so its rename and any new sibling must keep that loading contract.
 
 ### Bootstrap is not a product
 
