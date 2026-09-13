@@ -111,14 +111,15 @@ const SURFACE = {
       // --help is the only documentation inside a shipped binary — an artifact that
       // misreports where it wrote its output is the same lie as a documented-but-ignored
       // flag. MEASURED, not assumed: quaude's default comes from clode-build.cjs's
-      // resolveBuildOut (the bare name `quaude`, `.exe` iff the build is for windows —
-      // i.e. ./quaude), while naude's comes from seaBin -> platform-tag.cjs's seaOut,
-      // which is <repo>/build/<artifact-name>/naude, NOT ./naude. The pre-table help
-      // claimed a default only for the quaude line for exactly this reason; saying
-      // "./<product>" for both was the regression.
+      // resolveBuildOut (`quaude-<bundle version>`, `.exe` iff the build is for windows —
+      // e.g. ./quaude-2.1.251 — so two builds from two different upstream bundles are
+      // distinguishable on disk; phase 3b task 4), while naude's comes from seaBin ->
+      // platform-tag.cjs's seaOut, which is <repo>/build/<artifact-name>/naude, NOT
+      // ./naude. The pre-table help claimed a default only for the quaude line for
+      // exactly this reason; saying "./<product>" for both was the regression.
       flags: { '--target': 'the product is for PLATFORM-ARCH, not this machine',
-               '--out': 'write the artifact here (quaude defaults to ./quaude; naude defaults to '
-                 + "build/<artifact-name>/naude under clode's root)" },
+               '--out': 'write the artifact here (quaude defaults to ./quaude-<bundle version>; '
+                 + "naude defaults to build/<artifact-name>/naude under clode's root)" },
       env: [{ name: 'CLODE_NO_WATCH=1',
               doc: 'disable the opportunistic update-signal check that runs during a build' },
             { name: 'CLODE_TJS',

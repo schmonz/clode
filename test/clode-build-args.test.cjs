@@ -134,3 +134,28 @@ test('resolveBuildOut: no --target follows the host; bootstrap names clode-nativ
   assert.strictEqual(resolveBuildOut({ out: null, target: 'windows-amd64', self: true, hostPlatform: 'linux' }), 'clode-native.exe');
   assert.strictEqual(resolveBuildOut({ out: null, target: null, self: true, hostPlatform: 'linux' }), 'clode-native');
 });
+
+// Phase 3b task 4: two quaude builds from two different upstream bundles must
+// be distinguishable on disk. The suffix applies to the DEFAULT name only —
+// an explicit --out is the user's word and is never decorated — and bootstrap
+// has no bundle version to carry (it embeds no Claude Code bundle at all).
+test('a default-named quaude carries the bundle version; an explicit --out does not', () => {
+  const named = resolveBuildOut({ out: '/tmp/mine', target: null, self: false,
+                                  hostPlatform: 'darwin', bundleVersion: '2.1.251' });
+  assert.strictEqual(named, '/tmp/mine', 'an explicit --out is the user\'s word and is never decorated');
+
+  const dflt = resolveBuildOut({ out: null, target: null, self: false,
+                                 hostPlatform: 'darwin', bundleVersion: '2.1.251' });
+  assert.match(dflt, /^quaude-2\.1\.251$/,
+    'two builds from different upstream bundles must be distinguishable on disk');
+
+  const boot = resolveBuildOut({ out: null, target: null, self: true,
+                                 hostPlatform: 'darwin', bundleVersion: undefined });
+  assert.strictEqual(boot, 'clode-native', 'bootstrap embeds no Claude, so there is no version to name');
+});
+
+test('resolveBuildOut: bundleVersion composes with the .exe suffix in the right order', () => {
+  assert.strictEqual(
+    resolveBuildOut({ out: null, target: 'windows-amd64', self: false, hostPlatform: 'linux', bundleVersion: '2.1.251' }),
+    'quaude-2.1.251.exe');
+});

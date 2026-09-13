@@ -962,14 +962,22 @@ function parseBuildArgs(args, product) {
 //     way the produced file, the upload, and attest/publish all agree on the one
 //     `clode-<ver>-windows-<arch>.exe` name.
 //   - The DEFAULT name (no --out) is quaude/clode-native, with .exe iff the build
-//     is for windows — the TARGET when cross-building, else the host.
-function resolveBuildOut({ out, target, self, hostPlatform }) {
+//     is for windows — the TARGET when cross-building, else the host. A default
+//     quaude name also carries the staged upstream bundle's version (bundleVersion),
+//     so two builds made from two different Claude Code bundles are distinguishable
+//     on disk (`quaude-2.1.251`, never bare `quaude` for two different bundles).
+//     bootstrap has no bundleVersion by nature (no upstream bundle is staged) and
+//     its name is unaffected. The suffix goes BEFORE .exe, never after — composing
+//     the other way (`quaude.exe-2.1.251`) would produce a file Windows can't exec.
+function resolveBuildOut({ out, target, self, hostPlatform, bundleVersion }) {
   if (out) {
     if (target && /^windows-/.test(target) && !/\.exe$/i.test(out)) return out + '.exe';
     return out;
   }
   const isWin = target ? /^windows-/.test(target) : hostPlatform === 'win32';
-  return (self ? 'clode-native' : 'quaude') + (isWin ? '.exe' : '');
+  const base = self ? 'clode-native' : 'quaude';
+  const versioned = (!self && bundleVersion) ? `${base}-${bundleVersion}` : base;
+  return versioned + (isWin ? '.exe' : '');
 }
 
 // The default GitHub release download root. Overridable via CLODE_RELEASE_BASE
@@ -1452,7 +1460,8 @@ async function clodeBuild(args, opts) {
   // naude/self/out were already parsed + validated above (shared with the
   // naude branch, which returned before reaching here). A windows target's
   // output always ends in .exe — default OR explicit --out (see resolveBuildOut).
-  out = path.resolve(resolveBuildOut({ out, target: parsed.target, self, hostPlatform: process.platform }));
+  // The FINAL resolveBuildOut call (which needs bundleVersion) is deferred to just
+  // after staging, below — `out` stays the raw --out string (or null) until then.
 
   const ROOT = path.resolve(opts.libexec, '..');
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-'));
@@ -1681,6 +1690,17 @@ async function clodeBuild(args, opts) {
       stageDir = staged.stageDir;
       providerPlatform = staged.providerPlatform;
     }
+
+    // Resolve the FINAL output path now, not at the top of this function: a
+    // default quaude name needs bundleVersion (just staged, above), which isn't
+    // known until here — the manifest's own bundleVersion field is assigned in
+    // the very same branch. Deferring costs nothing: nothing between the old
+    // resolution point and here ever read `out` as a path (template resolution,
+    // the ABI gate, and the staging above all leave it untouched), so this is a
+    // straight move, not a rename-after-write. self/bootstrap never reaches the
+    // `else` above, so its bundleVersion stays undefined — resolveBuildOut only
+    // appends a version for a quaude (self: false), never for bootstrap.
+    out = path.resolve(resolveBuildOut({ out, target: parsed.target, self, hostPlatform: process.platform, bundleVersion }));
 
     // TARGET-MATCHED ASSEMBLY, ENFORCED. Bun constant-folds process.platform/arch into
     // the bundle at CARVE time, so a quaude assembled from a foreign-carved provider
