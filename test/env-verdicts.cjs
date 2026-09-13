@@ -53,7 +53,67 @@ const SHIM_DIAG_BECAUSE = 'env-only: shim-internal diagnostics for chasing a nod
 const APPLET_BECAUSE = 'env-only: overrides which host binary the bun-shim/target-env applet '
   + 'resolver uses for this external tool at RUNTIME (inside a built quaude/naude), not a '
   + "build-time input — it changes where the shim looks, never what clode's own build "
-  + 'produces. Sibling of the other applet overrides in this same resolution family.';
+  + 'produces. Sibling of the other applet overrides in this same resolution family. '
+  + 'SCOPE NOTE (fix round 3): this sentence is true of CLODE_RG / CLODE_BFS / CLODE_UGREP '
+  + 'and of NOTHING ELSE. It used to cover CLODE_ZSTD too, which is false on both halves — '
+  + "zstd's consumer runs during `clode build`, not at target runtime. CLODE_ZSTD now has "
+  + 'its own entry; do not re-attach this constant to a name whose reader is a build step.';
+
+// The host-provision.cjs REGISTRY's override variables — CLODE_SHA256 / CLODE_TAR /
+// CLODE_GZIP / CLODE_UNZIP (CLODE_ZSTD is the same family but earns its own text below,
+// because its failure mode is sharper). Read INDIRECTLY, as `env[req.overrideEnv]` at
+// host-provision.cjs:281, which is why none of them had a verdict until the indirect
+// detector (test/env-indirect.cjs) went in.
+//
+// These run DURING a build (clode-net.cjs verifies a download's digest, clode-node.cjs and
+// naude-sea.cjs and clode-rcodesign.cjs unpack tarballs, build-tjs.mjs unzips), so the
+// "runtime, not build-time" reasoning that fits the applet overrides does not apply. They
+// are env-only for a different and better reason: they name WHICH HOST PROGRAM performs a
+// step whose OUTPUT is fixed. The registry runs a known-answer test on whatever it
+// resolves — a digest of known bytes, a tar round-trip, a gzip/zip blob with known
+// plaintext — so an override that is not the tool it claims to be is REFUSED rather than
+// used, and an override that passes produces byte-identical results to the default. A knob
+// that cannot change the artifact is not a build input.
+const HOST_TOOL_BECAUSE = 'env-only: names which host program host-provision.cjs uses for '
+  + 'this step (resolved indirectly as `env[req.overrideEnv]` from its REGISTRY row). The '
+  + 'step runs during a build, but the override cannot change what the build PRODUCES: the '
+  + "registry KAT-tests whatever it resolves against known bytes and refuses an override "
+  + 'that fails, so a passing override is byte-equivalent to the default. A host-tool '
+  + 'LOCATION override for a host that keeps the tool somewhere unusual — same family as '
+  + 'CLODE_NPM, not a build-input selector.';
+
+// CLODE_TTY_MOUSE / CLODE_TTY_FOCUS — the one pair in this table whose classification has a
+// fact to face rather than route around: libexec/node-shim/modules/tty.cjs documents them,
+// in its own words, as USER-FACING OPT-INS ("Opt back in per capability: CLODE_TTY_MOUSE=1 /
+// CLODE_TTY_FOCUS=1"). So the usual env-only sentence — "a knob nobody outside this repo's
+// test/CI machinery should be touching" — is simply false about them, and picking env-only
+// on the strength of that sentence would be picking a verdict to avoid work.
+//
+// They are env-only anyway, on the RULE rather than on that sentence. The axis is what the
+// value changes, and these change neither what `clode build` produces nor how a build is
+// observed: NO clode verb reads them. They are read inside an ALREADY-BUILT quaude, by the
+// shim, while the product is running, to re-enable the terminal mouse/focus tracking quaude
+// suppresses by default (proven RUINOUS on slow hardware — Tiger, SGR motion flooding input
+// until the login prompt could not be submitted).
+//
+// WHY NOT 'absorbed', explicitly. Assertion 3 in env-verdicts.test.cjs would then require
+// them on libexec/cli-surface.cjs's table, i.e. in `clode --help`. That would document, in
+// clode's help, two knobs clode itself never reads — a false help sentence in the one binary
+// whose --help is its only documentation, which this repo counts as a real defect. The
+// binary that SHOULD document them is the built quaude, whose --help is upstream Claude
+// Code's text and not clode's to author.
+//
+// THE HONEST RESIDUE, recorded rather than hidden by the verdict: today these are documented
+// only in a source comment no user of a shipped binary can see. That is a documentation gap
+// in the built target's surface, not a misclassification here. Filed in BACKLOG.md.
+const TTY_BECAUSE = 'env-only BY THE RULE, not by the usual "internal knob" reasoning — this '
+  + 'IS user-facing (tty.cjs documents it as an opt-in). It is env-only because no clode verb '
+  + 'reads it at all: the reader is libexec/node-shim/modules/tty.cjs (via _ttyEnv -> '
+  + 'tjs.env[name]) inside an ALREADY-BUILT quaude at runtime, re-enabling terminal tracking '
+  + "quaude suppresses by default because the event flood starves keystrokes on slow "
+  + "hardware. Declaring it 'absorbed' would put it in `clode --help`, documenting a knob "
+  + 'clode never reads; its documentation home is the built target, not clode\'s CLI surface. '
+  + 'That the target does not yet document it is a real gap, filed in BACKLOG.md.';
 
 const VERDICTS = [
   // ---- Already declared in libexec/cli-surface.cjs (phase 3a) — genuinely absorbed. ----
@@ -147,11 +207,48 @@ const VERDICTS = [
   { name: 'CLODE_PROBE', verdict: 'env-only', because: SHIM_DIAG_BECAUSE },
   { name: 'CLODE_RG_DEBUG', verdict: 'env-only', because: SHIM_DIAG_BECAUSE },
 
-  // ---- Host-applet resolution overrides (bun-shim.cjs / target-env.cjs / bun-graph.cjs). ----
+  // ---- Host-applet resolution overrides (bun-shim.cjs / target-env.cjs). ----
   { name: 'CLODE_BFS', verdict: 'env-only', because: APPLET_BECAUSE },
   { name: 'CLODE_RG', verdict: 'env-only', because: APPLET_BECAUSE },
   { name: 'CLODE_UGREP', verdict: 'env-only', because: APPLET_BECAUSE },
-  { name: 'CLODE_ZSTD', verdict: 'env-only', because: APPLET_BECAUSE },
+
+  // ---- host-provision.cjs's REGISTRY overrides — reached INDIRECTLY (see the ----
+  // ---- HOST_TOOL_BECAUSE note above and test/env-indirect.cjs for why they were ----
+  // ---- invisible to the inventory until 2026-09-13). ----
+  { name: 'CLODE_SHA256', verdict: 'env-only', because: HOST_TOOL_BECAUSE
+    + ' Consumers: clode-net.cjs (verify a download) and clode-update.cjs; the registry KAT '
+    + 'hashes known bytes and compares the parsed digest, so a non-sha256 "sha256" is refused.' },
+  { name: 'CLODE_TAR', verdict: 'env-only', because: HOST_TOOL_BECAUSE
+    + ' Consumers: clode-node.cjs, naude-sea.cjs, clode-rcodesign.cjs; the registry KAT is a '
+    + 'create+extract round-trip compared byte-exactly, so a tar that cannot do both is refused.' },
+  { name: 'CLODE_GZIP', verdict: 'env-only', because: HOST_TOOL_BECAUSE
+    + ' Consumer: clode-net.cjs; the registry KAT inflates an embedded blob and compares the '
+    + 'exact plaintext, so an override that is not a gzip decompressor is refused.' },
+  { name: 'CLODE_UNZIP', verdict: 'env-only', because: HOST_TOOL_BECAUSE
+    + ' Consumers: clode-node.cjs and scripts/build-tjs.mjs; the registry KAT extracts an '
+    + "embedded zip and compares its single entry's exact content." },
+  { name: 'CLODE_ZSTD', verdict: 'env-only',
+    because: 'CORRECTED (fix round 3): this was carrying APPLET_BECAUSE, which is wrong on '
+      + 'both the WHEN and the WHAT. Its consumer is not the runtime applet resolver — it is '
+      + 'libexec/bun-graph.cjs, reached from clode-extract.cjs / extract-claude-js.cjs DURING '
+      + '`clode build`, decoding the zstd-framed assets upstream started shipping; '
+      + 'bun-graph.cjs:197-199 says outright that "without this, the shipped builder cannot '
+      + 'carve upstream 2.1.251+ at all" (tjs has no zstd and node-shim/modules/zlib.cjs '
+      + 'deliberately has none, so on a published clode the external decoder is the ONLY one '
+      + 'there is). It is still env-only, for the HOST_TOOL_BECAUSE reason rather than a '
+      + 'runtime one: it names which host program decodes, not what gets built. That holds '
+      + 'only because the resolution goes through host-provision.cjs and its KAT — '
+      + 'bun-graph.cjs:216-219 records the failure mode when it does not (a "zstd" that exits '
+      + '0 and echoes its input makes the carve embed the COMPRESSED FRAME as the asset text, '
+      + 'and the built target dies on its first real turn), which is exactly why the '
+      + 'known-answer test there uses a genuinely COMPRESSED frame and not a raw block.' },
+
+  // ---- The built target's own tty tracking opt-ins (node-shim/modules/tty.cjs). ----
+  // ---- Reached indirectly via _ttyEnv(name) -> tjs.env[name]; see test/env-indirect.cjs. ----
+  { name: 'CLODE_TTY_MOUSE', verdict: 'env-only', because: TTY_BECAUSE
+    + ' This one re-enables mouse tracking (\\e[?1000/1001/1002/1003h).' },
+  { name: 'CLODE_TTY_FOCUS', verdict: 'env-only', because: TTY_BECAUSE
+    + ' This one re-enables focus reporting (\\e[?1004h).' },
 
   // ---- The scripts/build-tjs.mjs engine-build-knob cluster, decided phase4-engine. ----
   // ---- CLODE_TJS_LOCAL_ROOT and CLODE_TJS_VENDOR ride along: they exist only in ----
@@ -267,6 +364,17 @@ const VERDICTS = [
       + "clode's fetch verb. Same situation as CLODE_RELEASES_URL (own verdict entry in "
       + 'this file, found by name rather than position): both are read by that same file '
       + 'for that same runtime check, and neither is a user-facing configuration point.' },
+  { name: 'CLODE_UPSTREAM_NOTES_REEXEC', verdict: 'env-only',
+    because: 'a SELF-SET re-exec sentinel, not a knob anyone is meant to set. '
+      + 'scripts/upstream-release-notes.mjs re-execs itself with NODE_USE_ENV_PROXY=1 when a '
+      + 'proxy is configured and Node is not already honoring it; proxyReexecEnv() reads '
+      + '`env[REEXEC_SENTINEL]` (line 284, the const at line 78) purely to guarantee "never '
+      + 'twice" — the re-exec sets it in the child, and seeing it set is how the child knows '
+      + 'not to re-exec again. Reached indirectly, which is why it had no verdict until '
+      + 'test/env-indirect.cjs. It is read by a release-notes DIAGNOSTIC run as `node '
+      + "scripts/upstream-release-notes.mjs`, never through clode dispatch, and it cannot "
+      + 'change what any build produces; putting a loop-guard on --help would document an '
+      + 'implementation detail as a feature.' },
   { name: 'CLODE_VERSION_DIR', verdict: 'absorbed',
     because: 'the second tier of resolveClaudeBin\'s precedence chain in '
       + 'libexec/clode-resolve.cjs, directly below the already-absorbed CLODE_CLAUDE_BIN '

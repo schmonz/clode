@@ -7106,3 +7106,28 @@ Filed rather than fixed because it is a change to how the fidelity gate decides,
 not to phase 3b's subject. It belongs with whatever next touches
 `doctor-cli-parity.test.cjs`, and the measurement above is the evidence a future
 implementer needs so they don't have to re-derive it.
+
+## THE BUILT TARGET DOCUMENTS NO ENV VAR IT READS (found 2026-09-13, phase-3b fix wave)
+
+`CLODE_TTY_MOUSE` and `CLODE_TTY_FOCUS` are **end-user opt-ins** — the only way
+to get terminal mouse tracking or focus reporting back in a running quaude,
+which suppresses both by default because the event flood starves keystrokes on
+slow hardware. `libexec/node-shim/modules/tty.cjs` says so in its own words
+("Opt back in per capability: `CLODE_TTY_MOUSE=1` / `CLODE_TTY_FOCUS=1`").
+
+**That sentence is in a source comment.** A user holding a shipped quaude has no
+way to reach it: the built target's `--help` is upstream Claude Code's text, and
+`clode --help` is the builder's surface, which correctly never mentions these
+because no clode verb reads them. They are recorded `env-only` in
+`test/env-verdicts.cjs` with that reasoning spelled out — the verdict is right
+and the documentation gap is real and separate.
+
+**The shape of the gap, not just the instance:** clode's CLI surface
+(`libexec/cli-surface.cjs`) is a real declared table with a gate behind it, and
+the built target has no equivalent at all. Every name in the "target runtime"
+group further up this file has the same problem. A fix means deciding where a
+quaude documents its own knobs — not adding two entries to clode's table, which
+would document them in the wrong binary.
+
+Filed rather than fixed: it is a new surface for the built product, which is
+larger than an env-inventory fix wave.

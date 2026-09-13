@@ -57,9 +57,16 @@ const SAFE_GATE_NAMES = new Set([
   // Store/cache roots: filesystem locations, not secrets.
   'CLODE_STATE_ROOT', 'CLODE_DEPS', 'CLODE_CACHE',
   // Small operational flags: build/target selectors, not secrets.
-  'CLODE_TARGET', 'CLODE_TARGET_KIND', 'CLODE_ENGINE', 'CLODE_VERBOSE',
+  'CLODE_TARGET', 'CLODE_ENGINE', 'CLODE_VERBOSE',
   'CLODE_TIMEOUT_SCALE', 'CLODE_UPDATE_CHANNEL', 'CLODE_CROSS_BUILD', 'CLODE_TJS_BUILD',
 ]);
+// CLODE_TARGET_KIND was listed here until 2026-09-13 and is RETIRED: nothing in the tree
+// reads it, and three tests (target-env, naude-entry, quaude-bootstrap-env) assert it is
+// never SET. An allow-list entry for a variable that cannot exist documents a knob that
+// isn't there. It was found by the new cross-check in test/env-verdicts.test.cjs — this
+// list was the second, uncross-checked list of env names that made the seven-name blind
+// spot catchable long before anyone caught it; now every name here must be one the env
+// inventory actually sees.
 function environmentStamp(env) {
   const known = (v) => (v === null || v === undefined || v === '' ? 'unknown' : String(v));
   const gates = env.gates || {};
@@ -73,4 +80,4 @@ function environmentStamp(env) {
     + `engine=${known(env.engine)} gates=${gatesStr}`;
 }
 
-module.exports = { environmentStamp };
+module.exports = { environmentStamp, SAFE_GATE_NAMES };
