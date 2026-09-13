@@ -1,4 +1,4 @@
-.Dd June 20, 2026
+.Dd September 13, 2026
 .Dt CLODE 1
 .Os
 .Sh NAME
@@ -7,19 +7,26 @@
 .Sh SYNOPSIS
 .Nm
 .Cm build
-.Op Fl -naude
+.Op Cm quaude | naude
+.Op Fl -target Ar platform-arch
 .Op Fl -out Ar path
 .Nm
 .Cm fetch
+.Cm claude | node
 .Op Cm stable | latest | Ar version
+.Op Fl -target Ar platform-arch
 .Nm
-.Cm watch
+.Cm read-anthropic-tea-leaves
 .Nm
 .Fl -help
 .Nm
 .Fl -version
 .Nm
 .Fl -verbose
+.Pp
+From a source checkout only:
+.Pp
+.Dl node scripts/stage0.mjs Cm bootstrap Oo Fl -target Ar platform-arch Oc Oo Fl -out Ar path Oc
 .Sh DESCRIPTION
 .Nm
 is a builder, not a runner: it fetches an upstream
@@ -43,7 +50,7 @@ compiles the bundle to bytecode for a pinned
 because tjs is portable,
 .Nm
 can build a quaude on a machine that has never had Node installed.
-.Nm Cm build Fl -naude
+.Nm Cm build Cm naude
 instead bakes the bundle into a Node SEA
 (single executable application), called
 .Dq naude :
@@ -75,18 +82,30 @@ The flag is recognized only in the leading position.
 Errors are always shown regardless.
 .Pp
 .Nm Cm fetch
+takes the INGREDIENT to fetch:
+.Cm claude ,
+the upstream binary a quaude is built from, or
+.Cm node ,
+the pinned Node a naude embeds.
+The ingredient is required \(em there is no default.
+.Pp
+.Nm Cm fetch Cm claude
 .Op Cm stable | latest | Ar version
-fetches an upstream Claude Code host-agnostically (a fixed
-.Cm linux-x64
-build \(em the embedded JavaScript is the same on every platform) into clode's
+fetches an upstream Claude Code build matching this machine's OS into clode's
 provider store and verifies its checksum.
 This is the build's input step:
 .Nm Cm build
 does not fetch on its own \(em it resolves an already-present provider and
 fails with a pointer to
-.Nm Cm fetch
+.Nm Cm fetch Cm claude
 if none is found.
-With no argument the channel is taken from the
+It does not take
+.Fl -target :
+the provider store is keyed by version alone, so a foreign-OS fetch would
+replace this machine's provider; use
+.Ev CLODE_FETCH_PLATFORM
+to choose the upstream build deliberately.
+With no release argument the channel is taken from the
 .Cm autoUpdatesChannel
 setting in
 .Pa managed-settings.json
@@ -97,6 +116,18 @@ or
 falling back to
 .Cm latest
 \(em matching Claude Code's own default.
+.Pp
+.Nm Cm fetch Cm node
+.Op Fl -target Ar platform-arch
+fetches the pinned Node
+.Nm Cm build Cm naude
+embeds, sha-verified, into a per-platform store, so a naude can be built on a
+machine with no Node installed.
+Unlike the provider,
+.Nm Cm fetch Cm node
+does take
+.Fl -target :
+the store holds one Node per platform, which is what a naude cross-build needs.
 .Pp
 .Nm Cm build
 .Op Fl -out Ar path
@@ -133,8 +164,7 @@ The template runtime comes from
 .Pa build/tjs/tjs
 under the clode root).
 .Pp
-.Nm Cm build
-.Fl -naude
+.Nm Cm build Cm naude
 .Op Fl -out Ar path
 bundles Claude Code as a Node SEA instead of a quaude: the extracted bundle is
 baked into a self-contained binary built from the host Node, and runs with no
@@ -151,12 +181,12 @@ cannot update itself in place: its bundle is baked into its own bytecode.
 Where an npm-installed Claude Code's in-app updater would fetch and apply a
 new version, a quaude or naude's patched updater callback refuses instead
 of lying about success; take a new version by running
-.Nm Cm fetch
+.Nm Cm fetch Cm claude
 then
 .Nm Cm build
 again.
 .Pp
-.Nm Cm watch
+.Nm Cm read-anthropic-tea-leaves
 runs one check now for upstream changes that threaten clode's ability to
 repackage Claude Code \(en either a break in the shim's correctness or a
 Bun/Node API clode does not yet cover \(em prints a summary, and exits.
@@ -168,6 +198,30 @@ only when a newer version carries such signals.
 There is no launch to hook it to anymore, so
 .Nm Cm build
 is where the check runs.
+The name states the command's epistemic status: it INFERS Anthropic's
+direction of travel from a changelog, is never authoritative, and never
+downloads anything.
+.Pp
+.Cm bootstrap
+builds
+.Nm
+ITSELF from a source checkout \(em the builder, not a Claude Code target \(em
+and is the one verb a downloaded
+.Nm
+does not have: asked to bootstrap, it says so and exits 2.
+It is release plumbing (the CI builder legs and the cross-blobulate guests run
+.Li "node scripts/stage0.mjs bootstrap" ) ,
+takes the same
+.Fl -target
+and
+.Fl -out
+as a product build, and defaults its output to
+.Pa ./clode-native .
+The esbuilt clode-main bundle it embeds comes from
+.Ev CLODE_MAIN_BUNDLE
+.Pq default: the newest Pa build/*/clode-main.bundle.cjs ,
+built by
+.Li "node scripts/build-clode-main.mjs" .
 .Pp
 The
 .Nm
@@ -191,7 +245,7 @@ An ES5-safe prologue prints a friendly
 message on an outdated node; a truly missing node yields
 .Li "env: node: not found" .
 Either shape,
-.Nm Cm build Fl -naude
+.Nm Cm build Cm naude
 needs Node
 .Ar >= 24
 on the host, because a Node SEA is built from a real Node.
@@ -212,18 +266,17 @@ and before the provider's
 pointer.
 .It Ev CLODE_PROVIDERS
 Store for binaries fetched by
-.Nm Cm fetch
+.Nm Cm fetch Cm claude
 (default
 .Pa ${XDG_DATA_HOME:-$HOME/.local/share}/clode/providers ) .
 .It Ev CLODE_RELEASES_URL
 Base URL for
-.Nm Cm fetch
+.Nm Cm fetch Cm claude
 downloads.
 .It Ev CLODE_FETCH_PLATFORM
 Which platform's build
-.Nm Cm fetch
-fetches (default
-.Cm linux-x64 ) .
+.Nm Cm fetch Cm claude
+fetches (default: this machine's OS).
 .It Ev CLODE_NO_WATCH
 If set, disable the opportunistic drift check that
 .Nm Cm build
@@ -248,6 +301,11 @@ builds from (default
 under the clode root).
 .It Ev CLODE_NODE
 Host node (absolute path).
+.It Ev CLODE_MAIN_BUNDLE
+The esbuilt clode-main bundle
+.Cm bootstrap
+embeds (default: the newest
+.Pa build/*/clode-main.bundle.cjs ) .
 .El
 .Sh FILES
 .Bl -tag -width Ds

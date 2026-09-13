@@ -49,11 +49,12 @@ function runEntryWithFakeVersion(fakeVersion, args, extraEnv) {
 
 // Run the entry under the current node with a clean-ish env (empty
 // DYLD_INSERT_LIBRARIES so the AVX shim never crashes a spawned node on old Macs).
-// CLODE_WATCH_DIR defaults to a fresh private temp dir on every call: `clode watch`
-// (below) unconditionally mkdir's its watch dir before it does anything else, and
-// this file inherits process.env, so without an override a spawned `clode watch`
-// would create the REAL ~/.cache/clode on the machine running the suite — exactly
-// the hermeticity violation test/run.mjs's guard polices on a clean CI runner.
+// CLODE_WATCH_DIR defaults to a fresh private temp dir on every call: the update-signal
+// cycle (`clode read-anthropic-tea-leaves`, below) unconditionally mkdir's its watch dir
+// before it does anything else, and this file inherits process.env, so without an
+// override a spawned one would create the REAL ~/.cache/clode on the machine running the
+// suite — exactly the hermeticity violation test/run.mjs's guard polices on a clean CI
+// runner.
 function runEntry(args, extraEnv) {
   const watchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-main-test-watch-'));
   return spawnSync(NODE, [ENTRY, ...args], {
@@ -105,10 +106,15 @@ test('the surface is unprefixed: --version/--help/--verbose', () => {
   assert.strictEqual(runEntry(['--clode-help']).status, 2);
 });
 
-test('watch is a subcommand, not a flag', () => {
-  const r = runEntry(['watch']);
-  assert.notStrictEqual(r.status, 2, 'watch must dispatch');
+test('reading the tea leaves is a subcommand, not a flag — and `watch` is neither', () => {
+  // It was `--clode-watch`, then `clode watch`, and task 6 renamed it to what it
+  // actually does. All three statements are here because each retired spelling has
+  // been a live regression at some point: the flag, the short verb, and (the one this
+  // test would otherwise stop checking) that the verb still DISPATCHES at all.
+  const r = runEntry(['read-anthropic-tea-leaves'], { CLODE_CHANGELOG_URL: 'file:///nonexistent/CHANGELOG.md' });
+  assert.notStrictEqual(r.status, 2, 'read-anthropic-tea-leaves must dispatch');
   assert.strictEqual(runEntry(['--clode-watch']).status, 2, '--clode-watch must no longer dispatch');
+  assert.strictEqual(runEntry(['watch']).status, 2, '`watch` is gone (task 6)');
 });
 
 test('help advertises the builder surface and never mentions running Claude Code', () => {
@@ -166,24 +172,29 @@ test('the table spelling `build quaude` reaches the quaude build', () => {
 });
 
 test('the table spelling `build naude` reaches the naude build, and `quaude` is not a flag', () => {
-  // --self and --naude are "different build targets — pick one" (clode-build.cjs's
-  // parseBuildArgs). So `build naude --self` producing that conflict proves the SUBJECT
-  // became the naude product before the parser ran, and `build quaude --self` NOT
-  // producing it proves quaude is the default rather than a second flag. Both fail
-  // before any work: parseBuildArgs runs before the watch trigger and the cache.
-  const naude = runEntry(['build', 'naude', '--self']);
-  assert.strictEqual(naude.status, 1);
-  assert.match(naude.stderr || '', /--self and --naude are different build targets/);
-  // The legacy spelling says exactly the same thing (unchanged this task).
-  const legacy = runEntry(['build', '--naude', '--self']);
-  assert.strictEqual(legacy.stderr, naude.stderr);
-
-  const quaude = runEntry(['build', 'quaude', '--self'], {
-    CLODE_TJS: '/nonexistent/clode-test-tjs-template',
+  // TASK 6 rewrote this test's MECHANISM, not its claim. It used to prove the routing
+  // with the `--self and --naude are different build targets` conflict; both flags are
+  // gone, and so is the conflict (one product parameter cannot contradict itself). The
+  // proof now is the message PREFIX, which names the product the build resolved to —
+  // 'build naude' only ever comes from the naude branch — reached by a controlled
+  // failure (no binary to build from) before any work, network or cache write.
+  const controlled = () => ({
+    CLODE_CLAUDE_BIN: '/nonexistent/clode-test-claude',
     CLODE_NO_WATCH: '1',
-    CLODE_STATE_ROOT: fs.mkdtempSync(path.join(os.tmpdir(), 'clode-bqs-state-')),
+    CLODE_STATE_ROOT: fs.mkdtempSync(path.join(os.tmpdir(), 'clode-bn-state-')),
+    CLODE_CACHE: fs.mkdtempSync(path.join(os.tmpdir(), 'clode-bn-cache-')),
   });
-  assert.doesNotMatch(quaude.stderr || '', /different build targets/);
+  const naude = runEntry(['build', 'naude'], controlled());
+  assert.strictEqual(naude.status, 1);
+  assert.match(naude.stderr || '', /^clode: build naude: /m);
+  assert.doesNotMatch(naude.stderr || '', /--naude/, 'the flag is gone from the messages too');
+
+  // `quaude` is the DEFAULT subject, not a second flag: the same argv with the
+  // positional spelled out, and with it omitted, fail identically.
+  const quaude = runEntry(['build', 'quaude'], controlled());
+  const bare = runEntry(['build'], controlled());
+  assert.doesNotMatch(quaude.stderr || '', /build naude:/);
+  assert.strictEqual(quaude.stderr, bare.stderr);
 });
 
 test('the table spelling `fetch claude` names the INGREDIENT, not the channel', () => {
@@ -204,9 +215,13 @@ test('the table spelling `fetch claude` names the INGREDIENT, not the channel', 
   assert.match(ingredient.stderr, /couldn't resolve a version for 'latest'/);
   assert.doesNotMatch(ingredient.stderr, /for 'claude'/,
     "'claude' is the ingredient; it must never be passed through as a channel");
-  // The legacy channel positional, unchanged.
-  const channel = runEntry(['fetch', 'stable'], common);
+  // The release positional (SURFACE.verbs.fetch.tail) now comes AFTER the ingredient:
+  // `clode fetch stable` was the old spelling and is a usage error (task 6).
+  const channel = runEntry(['fetch', 'claude', 'stable'], common);
   assert.match(channel.stderr, /couldn't resolve a version for 'stable'/);
+  const legacy = runEntry(['fetch', 'stable'], common);
+  assert.strictEqual(legacy.status, 2);
+  assert.match(legacy.stderr, /unknown ingredient 'stable'/);
 });
 
 test('a print-and-exit global wins over a verb, in the order argv gave it', () => {
@@ -296,3 +311,88 @@ test('the checkout entry point is scripts/stage0.mjs, and bin/ holds no script',
   assert.ok(!fs.existsSync(path.join(ROOT, 'bin', 'clode')),
     'bin/ holds a built binary or nothing — a script there is the bug this move fixes');
 });
+
+// ---------------------------------------------------------------------------
+// Phase 3a task 6: THE HARD BREAK. The old spellings stop working in the same
+// commit that moves every in-repo caller, and a removed spelling gets a GENERIC
+// usage message — not a mapping to the new form (user's decision: "if the
+// vocabulary is tight enough, there won't be enough choices to merit anything
+// other than a generic usage message", and three verbs with four positionals is
+// tight enough).
+
+// The SHIPPED spine: libexec/clode-main.cjs run as its own main module, which is
+// exactly what the esbuilt bundle inside a built clode binary does (and what
+// `scripts/stage0.mjs`, the CHECKOUT entry point, is NOT). The two differ by one
+// thing — the table each composes — so the difference is testable without
+// building a binary.
+const SPINE = path.join(ROOT, 'libexec', 'clode-main.cjs');
+function runShipped(args, extraEnv) {
+  const watchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-main-test-shipped-'));
+  return spawnSync(NODE, [SPINE, ...args], {
+    encoding: 'utf8',
+    env: Object.assign({}, process.env, { DYLD_INSERT_LIBRARIES: '', CLODE_WATCH_DIR: watchDir }, extraEnv || {}),
+  });
+}
+
+const EMPTY_RELEASES = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-break-releases-'));
+
+test('the old spellings are gone, and produce a plain usage error', () => {
+  for (const argv of [['fetch'], ['watch'], ['build', '--naude'], ['build', '--self'], ['fetch', '--naude']]) {
+    const r = runEntry(argv, {
+      // Hermetic AND offline: an EMPTY local releases repo (file://) so that a
+      // regression which resurrects one of these spellings fails to resolve a
+      // version instead of downloading a ~240MB provider off the network.
+      CLODE_RELEASES_URL: 'file://' + EMPTY_RELEASES,
+      CLODE_STATE_ROOT: fs.mkdtempSync(path.join(os.tmpdir(), 'clode-break-state-')),
+      HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'clode-break-home-')),
+    });
+    assert.strictEqual(r.status, 2, `${argv.join(' ')} must be a usage error, got ${r.status}: ${r.stderr}`);
+    assert.doesNotMatch(r.stderr || '', /is now|renamed|use instead/i,
+      'a generic usage message, not a mapping — the vocabulary is small enough');
+  }
+});
+
+test('the new spellings reach the right product and ingredient', () => {
+  assert.match(runEntry(['build', 'naude', '--help']).stderr || '', /unknown argument/);  // argv still validated
+  const { SURFACE: table } = require('../libexec/cli-surface.cjs');
+  assert.deepStrictEqual(Object.keys(table.verbs.build.subjects), ['quaude', 'naude']);
+  assert.deepStrictEqual(Object.keys(table.verbs.fetch.subjects), ['claude', 'node']);
+});
+
+test('a shipped clode refuses bootstrap with a reason', () => {
+  const r = runShipped(['bootstrap']);
+  assert.strictEqual(r.status, 2);
+  assert.match(r.stderr || '', /checkout/i, 'the refusal should say where bootstrap runs');
+});
+
+test('the checkout entry point HAS bootstrap, and it is the builder, not a product', () => {
+  // Not a build: a bootstrap-specific argv error, which only the bootstrap branch
+  // can print (its usage line names `clode bootstrap`, never `clode build`).
+  const r = runEntry(['bootstrap', '--bogus']);
+  assert.strictEqual(r.status, 2, r.stderr);
+  assert.match(r.stderr || '', /unknown argument '--bogus'/);
+  assert.match(r.stderr || '', /usage: clode bootstrap/);
+  assert.doesNotMatch(r.stderr || '', /unknown command/, 'the checkout table carries bootstrap');
+});
+
+test('`build quaude --naude` can no longer silently build a naude', () => {
+  // The defect this removal kills BY CONSTRUCTION: the legacy sniff was guarded by
+  // `!cmd.subject`, so an explicit `quaude` positional was kept and then IGNORED
+  // while `--naude` passed through to the build parser and won. With no --naude
+  // flag anywhere, the only way to name a product is the positional.
+  // CLODE_CLAUDE_BIN points nowhere, so even a REGRESSION that mis-routes again
+  // fails at the resolve step instead of running a real (2-minute) naude build —
+  // and the message it fails with names the product it reached, which is the
+  // evidence either way.
+  const r = runEntry(['build', 'quaude', '--naude'], {
+    CLODE_CLAUDE_BIN: '/nonexistent/clode-test-claude',
+    CLODE_NO_WATCH: '1',
+    CLODE_STATE_ROOT: fs.mkdtempSync(path.join(os.tmpdir(), 'clode-misroute-state-')),
+    CLODE_CACHE: fs.mkdtempSync(path.join(os.tmpdir(), 'clode-misroute-cache-')),
+  });
+  assert.strictEqual(r.status, 2, r.stderr);
+  assert.match(r.stderr || '', /unknown argument '--naude'/);
+  assert.doesNotMatch(r.stdout + r.stderr, /build naude|build --naude/,
+    'it must never reach the naude product');
+});
+

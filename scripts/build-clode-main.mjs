@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 // Build the esbuilt clode-main bundle (build/bundle/clode-main.bundle.cjs) that
-// `clode build --self` embeds into a quaude in place of the upstream Claude Code
+// `clode bootstrap` embeds into a quaude in place of the upstream Claude Code
 // payload (libexec/clode-build.cjs). This is NOT the SEA builder — the Node
 // Single Executable Application pipeline (deps asset, sea-config, blob, postject,
 // re-sign, embed) was retired in Phase 4 ("retire the Node SEA builder"). This

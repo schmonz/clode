@@ -55,7 +55,11 @@ Promise.all([import('node:url'), import('../libexec/clode-main.cjs')])
     var fileURLToPath = mods[0].fileURLToPath;
     var clodeMain = mods[1].default || mods[1];
     var self = fileURLToPath(import.meta.url);
-    return clodeMain.main(process.argv.slice(2), { self: self }).catch(function (e) {
+    // kind: 'checkout' — THIS entry point is a source checkout, so its table is the
+    // shipped one plus the checkout-only verbs (`bootstrap`). The built clode binary
+    // passes nothing and gets 'shipped', which is how "a shipped clode cannot
+    // bootstrap" stays a property of the data rather than a conditional in dispatch.
+    return clodeMain.main(process.argv.slice(2), { self: self, kind: 'checkout' }).catch(function (e) {
       process.stderr.write('clode: ' + clodeMain.formatError(e) + '\n');
       process.exit(1);
     });

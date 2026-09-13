@@ -12,7 +12,7 @@
 // TWO MECHANISMS, one step. They differ in how the bytes ride, not in what the step
 // means:
 //
-//   'trailer'  (quaude, and --self)  — the payload is APPENDED to a copy of the tjs
+//   'trailer'  (quaude, and bootstrap)  — the payload is APPENDED to a copy of the tjs
 //     engine as a canonical-LE trailer: a member archive + manifest + bootstrap,
 //     written by libexec/quaude-blobulate.js running UNDER THE ENGINE ITSELF so the
 //     bytecode writer and the runtime are the same binary (BC_VERSION lockstep is
@@ -49,11 +49,11 @@ const path = require('node:path');
 
 // Materialize the builder-role VFS members to `mat` on disk. A blobulated NATIVE
 // clode runs under tjs and ships NO checkout — so any subprocess it must spawn
-// (the blobulate WORKER for a quaude/--self build, or scripts/build-naude.mjs for a
+// (the blobulate WORKER for a quaude/bootstrap build, or scripts/build-naude.mjs for a
 // naude build) needs real files. This is the SUPERSET both build targets need:
 // the node-shim tree + libexec support + ext-dep node_modules + deps manifests
-// (quaude/--self), plus the prebuilt naude bundle, postject, and the naude
-// assembler scripts (build --naude). Extra members a given target doesn't use
+// (quaude/bootstrap), plus the prebuilt naude bundle, postject, and the naude
+// assembler scripts (build naude). Extra members a given target doesn't use
 // are harmless. Member-name -> on-disk-home mapping mirrors quaude-blobulate.js's
 // archive namespace (target-env.cjs and the naude bundle ride at the archive
 // ROOT; everything else keeps its path).
@@ -67,10 +67,10 @@ function materializeBlobPayload(vfs, mat) {
     // node-shim/ on disk, i.e. libexec/target-env.cjs — see quaude-blobulate.js.
     else if (name === 'target-env.cjs') dest = path.join(mat, 'libexec', name);
     // deps/claude (ext-dep closure + lockfile sources of truth) AND deps/clode
-    // (postject's carried JS — build --naude's --postject) keep their paths.
+    // (postject's carried JS — build naude's --postject) keep their paths.
     else if (name.startsWith('deps/')) dest = path.join(mat, name);
     // The naude assembler + its one sibling require (platform-tag.cjs). A blobulated
-    // builder ships no scripts/ dir; build --naude spawns the MATERIALIZED copy.
+    // builder ships no scripts/ dir; build naude spawns the MATERIALIZED copy.
     else if (name.startsWith('scripts/')) dest = path.join(mat, name);
     // The prebuilt naude SEA main, carried at the archive root (Task 4).
     else if (name === 'naude-entry.bundle.cjs') dest = path.join(mat, name);
@@ -91,7 +91,7 @@ function materializeBlobPayload(vfs, mat) {
 //   nmDir         the resolved ext-dep node_modules to embed as members
 //   extrasPath    the node-side manifest fields, as JSON (the worker adds its own)
 //   out           where to write the attached artifact
-//   embedTemplate --self only: the PRISTINE base engine to carry as a member, so a
+//   embedTemplate bootstrap only: the PRISTINE base engine to carry as a member, so a
 //                 blobulated builder can materialize+exec it as its own worker later
 //   env, timeout  passed to the spawn verbatim (the caller owns the budget)
 //   report        optional Reporter: this step declares/starts/finishes the step
@@ -108,12 +108,12 @@ async function blobulateTrailer(opts) {
   const w = await spawnRun(engine, ['run', path.join(libexec, 'quaude-blobulate.js'),
     signedBase, stageDir, path.join(libexec, 'node-shim'), nmDir,
     path.join(libexec, 'quaude-bootstrap.mjs'), extrasPath, out,
-    // --self embeds the PRISTINE base template as a member (Decision 2) so a
+    // bootstrap embeds the PRISTINE base template as a member (Decision 2) so a
     // blobulated builder can materialize+exec it as the blobulate worker with nothing
     // else on disk. This MUST be the target-platform base (= the cross template
     // for a cross-blobulate), NOT the `engine` that runs THIS worker — else a
     // cross-blobulated builder ships a host-arch template it cannot exec on the
-    // target. Native --self: the two are the same file, so this is unchanged
+    // target. Native bootstrap: the two are the same file, so this is unchanged
     // there. The quaude role embeds nothing (its base IS the signed copy).
     ...(embedTemplate ? [embedTemplate] : [])], { env, timeout });
   if (report) report.finish('blobulate');
@@ -202,7 +202,7 @@ async function blobulatePostject(opts) {
 
 // The step, one entry point, dispatched on the MECHANISM — not on the product.
 // 'trailer' vs 'postject' is the only thing that differs between a quaude, a
-// --self builder and a naude at this point in the build; everything else that
+// bootstrap builder and a naude at this point in the build; everything else that
 // distinguishes them was already decided by the orchestrator upstream.
 async function blobulate(opts) {
   const mechanism = opts && opts.mechanism;

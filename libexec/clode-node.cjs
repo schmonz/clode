@@ -54,7 +54,7 @@ const PINNED_VERSION = PIN.version;
 //
 // Exported because the answer is a pure table lookup that costs nothing, while the work it
 // gates (staging + extracting the upstream bundle) costs MINUTES on a code-split bundle.
-// `clode build --naude` therefore asks this BEFORE it stages anything — see clode-build's
+// `clode build naude` therefore asks this BEFORE it stages anything — see clode-build's
 // naude branch, and the ordering test in test/clode-build-naude.test.cjs. nodeAsset throws
 // exactly this message, so the early refusal and the late one can never drift apart.
 function pinnedNodeRefusal(platform, arch) {
@@ -83,7 +83,7 @@ function targetToNodeAsset(target) {
   const { targetToNode } = require('../scripts/canonical-name.cjs');
   const nt = targetToNode(target);
   if (!nt) {
-    throw new Error(`clode-node: '${target}' is not a Node platform — naude cannot target it; cross-build a quaude instead (clode build --target ${target})`);
+    throw new Error(`clode-node: '${target}' is not a Node platform — naude cannot target it; cross-build a quaude instead (clode build quaude --target ${target})`);
   }
   return nodeAsset(nt.platform, nt.arch); // throws its own clear error if the pin lacks this key
 }

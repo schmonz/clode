@@ -1,7 +1,7 @@
 'use strict';
 // Task 4: build-clode-main.mjs must ALSO pre-build the naude entry bundle
 // (build/bundle/naude-entry.bundle.cjs, esbuilt from libexec/naude-entry.cjs)
-// so esbuild never has to run on the user's machine when `clode build --naude`
+// so esbuild never has to run on the user's machine when `clode build naude`
 // assembles a naude. Unlike clode-main.bundle.cjs, this bundle carries NO
 // `define` (Task 3 already turned the builder path into a SEA asset, not an
 // esbuild-time constant) — so it must be our-source-only: no __CLODE_BUILDER__

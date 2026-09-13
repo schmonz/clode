@@ -15,18 +15,21 @@
 // table entry and ONE branch below; never by adding help text.
 //
 // Dispatch order (exact, from main()):
-//   1. parseArgv(args, surfaceFor('shipped')) -> { verb, subject, flags, rest }
+//   1. parseArgv(args, surfaceFor(kind)) -> { verb, subject, tail, flags, rest }
 //   2. --verbose (leading, table-declared)    -> CLODE_VERBOSE=1
 //   3. resolve SELF / HERE / LIBEXEC / VERSION
 //   4. --version                -> print "clode <VERSION>", exit 0
 //   5. --help                   -> print renderHelp(table), exit 0
-//   6. no verb in the table     -> usage error, exit 2 (clode BUILDS targets; it
-//                                  never runs Claude Code itself — see clode-build.cjs
-//                                  / naude-entry.cjs for what DOES run it)
+//   6. no verb, or a positional the table rejects -> usage error, exit 2 (clode
+//                                  BUILDS targets; it never runs Claude Code itself —
+//                                  see clode-build.cjs / naude-entry.cjs for what DOES)
 //   7. fetch <ingredient>       -> clodeUpdate / ensurePinnedNode, exit status
 //   8. build <product>          -> check watch signals, then clodeBuild, exit status —
 //                                  this is the ONE place upstream drift is checked
 //   9. read-anthropic-tea-leaves -> clodeWatch(manual), exit 0
+//  10. bootstrap                -> clodeBuild for the BUILDER; checkout entry only,
+//                                  because the table it composes is the only one with
+//                                  the verb (a shipped clode refuses it, from data)
 //
 // Pure Node stdlib + sibling .cjs requires (the sub-modules pull the ext-deps).
 
@@ -37,51 +40,47 @@ const update = require('./clode-update.cjs');
 const watch = require('./clode-watch.cjs');
 const { renderHelp, parseArgv, surfaceFor } = require('./cli-surface.cjs');
 
-// TRANSITIONAL (task 6 deletes this map together with the spellings it names): the
-// verb names that came before the table. They are rewritten into table spelling
-// BEFORE parseArgv runs, so dispatch below has exactly one router to read and the
-// compatibility is one line of data rather than a second branch per verb.
-const LEGACY_VERBS = { watch: 'read-anthropic-tea-leaves' };
-
-// Rewrite the VERB POSITION only (leading globals skipped, so `clode --verbose watch`
-// works the same as `clode watch`); anything after the verb belongs to the verb.
-function withLegacyVerbs(args, surface) {
-  const out = args.slice();
-  for (let i = 0; i < out.length; i++) {
-    if (Object.prototype.hasOwnProperty.call(surface.globals, out[i])) continue;
-    if (Object.prototype.hasOwnProperty.call(LEGACY_VERBS, out[i])) out[i] = LEGACY_VERBS[out[i]];
-    break;
-  }
-  return out;
-}
+// THE BREAK (task 6): there is no legacy-spelling map here, and there is not meant to
+// be one. `watch`, `build --naude`, `build --self`, bare `clode fetch` and `clode
+// fetch <version>` are gone; each produces a GENERIC usage error, not a translation to
+// the new form. The user's reasoning, adopted: with three verbs and four positionals
+// the vocabulary is small enough that a usage message IS the mapping. Every in-repo
+// caller moved in the same commit.
 
 // clode's own help — RENDERED FROM THE TABLE, never written here. Kept as a named
 // function because callers (and tests) ask for "clode's help at version V"; the text
 // itself is cli-surface.cjs's job, so help and the accepted argv cannot drift apart
 // (test/cli-surface.test.cjs asserts every table verb and subject appears). Ends with
 // a trailing newline, like the heredoc it replaced.
-function clodeHelp(version) {
-  return renderHelp(version, surfaceFor('shipped'));
+function clodeHelp(version, kind) {
+  return renderHelp(version, surfaceFor(kind || 'shipped'));
 }
 
-// main(argv, {self}) — async because it awaits clodeUpdate/clodeWatch.
+// main(argv, {self, kind}) — async because it awaits clodeUpdate/clodeWatch.
+//
+// `kind` is WHICH ENTRY POINT this is, and therefore which table: 'shipped' (the
+// built clode binary — the default, and what the esbuilt bundle's own self-run below
+// passes) or 'checkout' (scripts/stage0.mjs, which has `bootstrap` besides). It is an
+// argument rather than a sniff (no __dirname heuristic, no env var) because the entry
+// point is the one thing that genuinely knows.
 async function main(argv, opts = {}) {
   const env = process.env;
   const args = Array.isArray(argv) ? argv : [];
 
-  // 1. Match argv against the surface THIS entry point has. 'shipped' is the built
-  //    clode binary's table; task 6 gives the checkout entry point 'checkout', which
-  //    is the same table plus `bootstrap`. Everything below reads `cmd` — no branch
-  //    here compares args[0] to a string, which is the whole point of the table.
-  const surface = surfaceFor('shipped');
-  const cmd = parseArgv(withLegacyVerbs(args, surface), surface);
+  // 1. Match argv against the surface THIS entry point has. Everything below reads
+  //    `cmd` — no branch here compares args[0] to a string, which is the whole point
+  //    of the table.
+  const kind = opts.kind === 'checkout' ? 'checkout' : 'shipped';
+  const surface = surfaceFor(kind);
+  const cmd = parseArgv(args, surface);
 
-  // cmd.error is deliberately NOT fatal when a verb resolved: each verb's own module
-  // owns its argv contract (clode-build.cjs's parseBuildArgs is imported below, not
-  // re-implemented, so there is ONE unknown-argument message), and until task 6 the
-  // old spellings — `build --naude`, `build --self`, `fetch <channel>` — are argv the
-  // table does not yet describe but clode still accepts. An unrecognised VERB is
-  // fatal, at step 5.
+  // cmd.error is FATAL (step 5) unless the verb declares ownsArgv and the complaint is
+  // flag-level: build and bootstrap hand cmd.rest to clode-build.cjs's parseBuildArgs,
+  // which is imported rather than re-implemented, so there is ONE unknown-argument
+  // message with ONE usage line, printed by the module whose argv it is. Every other
+  // verb's contract is the table itself, so an argument it does not recognise is
+  // refused here rather than silently ignored — which is what `clode fetch claude
+  // --bogus` used to be.
 
   // 2. --verbose un-silences clode's progress chatter. A LEADING flag (the table's
   //    globals are leading-only): the old any-position stripping loop existed solely
@@ -120,62 +119,98 @@ async function main(argv, opts = {}) {
       return process.exit(0);
     }
     if (flag === '--help') {
-      process.stdout.write(clodeHelp(version));
+      process.stdout.write(clodeHelp(version, kind));
       return process.exit(0);
     }
   }
 
-  // 5. Not a verb in this table: a usage error. There is no default launch — clode
-  //    BUILDS Claude Code targets, it never runs them (quaude runs it under tjs,
-  //    naude under node), so there is nothing to pass an unrecognised argv to.
-  if (!cmd.verb) {
+  // 5. Not a verb in this table, or a positional the table rejects: a usage error,
+  //    exit 2, with the help under it. There is no default launch — clode BUILDS
+  //    Claude Code targets, it never runs them (quaude runs it under tjs, naude under
+  //    node), so there is nothing to pass an unrecognised argv to. This is also where
+  //    every spelling task 6 removed lands, and why each gets a GENERIC message: the
+  //    table says what exists, and with three verbs that is the whole mapping.
+  // The verb's table entry (null when argv named no verb): what dispatch reads for
+  // everything below, starting with whether the verb parses its own argv.
+  const def = cmd.verb ? surface.verbs[cmd.verb] : null;
+  if (!cmd.verb || (cmd.error && !(cmd.errorKind === 'flag' && def.ownsArgv))) {
     process.stderr.write(`clode: ${cmd.error}\n`);
-    process.stderr.write(clodeHelp(version));
+    process.stderr.write(clodeHelp(version, kind));
     return process.exit(2);
   }
 
-  // The table says what a bare verb means; dispatch applies it.
-  const def = surface.verbs[cmd.verb];
-  let subject = cmd.subject || def.defaultSubject;
-  // TRANSITIONAL (task 6 deletes this): `--naude` named the product before the
-  // subject did. Recognised HERE, at the one place a product is chosen, instead of
-  // sniffed inside each branch (`args.slice(1).includes('--naude')` in two of them).
-  if (!cmd.subject && cmd.rest.indexOf('--naude') !== -1) {
-    if (cmd.verb === 'build') subject = 'naude';
-    if (cmd.verb === 'fetch') subject = 'node';
-  }
+  // The table says what a bare verb means; dispatch applies it. There is no other way
+  // to name a product or an ingredient — the flags that used to (`--naude`, `--self`)
+  // are gone, which is what makes `build quaude --naude` impossible rather than
+  // merely discouraged: the positional is the only lever, and the flag is now an
+  // unknown argument to the build parser.
+  const subject = cmd.subject || def.defaultSubject;
 
   const node = env.CLODE_NODE || process.execPath;
+  // Usage errors from a verb's OWN argv parser: same exit code as the table's (2),
+  // because they are the same kind of mistake, and the module's message (which
+  // carries its usage line) is the one printed.
+  const usage = (message) => { process.stderr.write('clode: ' + message + '\n'); return process.exit(2); };
 
   // 6. `clode fetch <ingredient>`: fetch a build ingredient, then exit — no Node floor.
   //    `claude` is the upstream provider (the ~240MB binary quaude is built from);
   //    `node` is the PINNED NODE (clode-node.cjs) into the local store, so a later
   //    `clode build naude` can run without the user having Node installed.
   if (cmd.verb === 'fetch') {
+    const target = cmd.flags['--target'];
     if (subject === 'node') {
-      const p = await require('./clode-node.cjs').ensurePinnedNode({ env, log: (m) => process.stderr.write(m + '\n') });
+      // The table's second positional belongs to `claude` alone (tail.only), and an
+      // accepted-but-ignored argument is the same lie as an ignored flag. Checked
+      // BEFORE any work, like every other argv complaint in this file.
+      if (cmd.tail) {
+        return usage(`fetch node takes no release argument, got '${cmd.tail}' — the pinned Node's version is clode's own pin, not a channel`);
+      }
+      // --target crosses HONESTLY here, with plumbing that already existed: the
+      // pinned-node store is per-(version, platform, arch) precisely because a naude
+      // cross-build fetches a Node for a machine that is not this one
+      // (clode-node.cjs's nodeBinPath), so all --target has to do is name the pair.
+      // A well-formed target with no Node (netbsd, …) is a loud refusal, not a
+      // silent host fetch.
+      let platform = process.platform;
+      let arch = process.arch;
+      if (target) {
+        const nt = require('../scripts/canonical-name.cjs').targetToNode(target);
+        if (!nt) {
+          return usage(`fetch node --target: '${target}' is not a Node platform — there is no pinned Node for it (quaude is the product that targets it: clode build quaude --target ${target})`);
+        }
+        platform = nt.platform;
+        arch = nt.arch;
+      }
+      const p = await require('./clode-node.cjs').ensurePinnedNode({
+        env, platform, arch, log: (m) => process.stderr.write(m + '\n'),
+      });
       process.stdout.write('clode: pinned node ready at ' + p + '\n');
       return process.exit(0);
     }
-    // TRANSITIONAL (task 6 deletes this): `clode fetch [channel|version]` — a
-    // positional that is NOT a table ingredient is still a channel/version.
-    const channel = cmd.rest[0];
-    const status = await update.clodeUpdate(channel, { env, libexec: LIBEXEC, here: HERE, node });
+    // The OTHER ingredient cannot cross, and says so rather than accepting a flag it
+    // would ignore. MEASURED (libexec/clode-update.cjs): the provider store is keyed
+    // by VERSION ALONE — providers/<version>/claude — and a fetch re-points `current`
+    // at what it wrote, so a foreign-OS fetch would overwrite this machine's provider
+    // in place and leave every later build carving the wrong OS branches. The missing
+    // platform axis is the limitation, so the refusal names it, and names the one
+    // override that does exist.
+    if (target) {
+      return usage(`fetch claude --target: the provider store has no platform axis — it is keyed by version alone (providers/<version>/claude) and a fetch re-points 'current' at it, so fetching ${target}'s provider would replace this machine's. Set CLODE_FETCH_PLATFORM to choose the upstream build deliberately; 'clode fetch node --target' is the ingredient that crosses.`);
+    }
+    // The declared second positional (SURFACE.verbs.fetch.tail): which upstream
+    // release. Absent -> clodeUpdate resolves the configured channel, as before.
+    const status = await update.clodeUpdate(cmd.tail, { env, libexec: LIBEXEC, here: HERE, node });
     return process.exit(status);
   }
 
-  // 7. `clode build <product> [--out PATH]`: blobulate a standalone quaude binary —
-  //     or a naude, or (via --self, release bootstrap only, which task 6 moves to the
-  //     checkout's `bootstrap` verb) the native clode builder itself — on this
-  //     machine. Builder namespace, not passthrough: Claude Code never sees this argv.
+  // 7. `clode build <product> [--out PATH]`: blobulate a standalone quaude binary, or
+  //     a naude, on this machine. The PRODUCT is the positional, threaded to
+  //     clodeBuild as `product` — not a flag in the argv it parses, which is what
+  //     makes `build quaude --naude` an unknown argument instead of a naude.
+  //     Builder namespace, not passthrough: Claude Code never sees this argv.
   if (cmd.verb === 'build') {
     const build = require('./clode-build.cjs');
-    // TRANSITIONAL (task 6 deletes this): clodeBuild's parser still names the product
-    // with a FLAG, so the subject is translated back into the flag it understands —
-    // and an argv that already used the flag passes through untouched.
-    const buildArgs = (subject === 'naude' && cmd.rest.indexOf('--naude') === -1)
-      ? ['--naude'].concat(cmd.rest)
-      : cmd.rest;
+    const buildArgs = cmd.rest;
     // Validate argv BEFORE anything else in this branch: a build that is
     // going to be REJECTED must not phone home or touch the cache. (Regression
     // fixed here: `clode build <bad-arg>` used to fire the watch trigger below
@@ -184,23 +219,18 @@ async function main(argv, opts = {}) {
     // mutated the user's cache anyway. parseBuildArgs is the SAME parser
     // clodeBuild itself uses — imported, not re-implemented, so there is one
     // unknown-arg contract, not two.)
-    const parsed = build.parseBuildArgs(buildArgs);
-    if (parsed.error) {
-      process.stderr.write('clode: ' + parsed.error + '\n');
-      return process.exit(1);
-    }
+    const parsed = build.parseBuildArgs(buildArgs, subject);
+    if (parsed.error) return usage(parsed.error);
     // Upstream drift threatens our ability to repackage, so check when we
     // repackage. (This ran on every launch when clode was a runner; there is
     // no launch anymore, so `build` — the moment upstream drift actually
-    // matters — is where the check moved.) --self blobulates the BUILDER, not a
-    // Claude Code target: it has no upstream bundle to drift, and it is release
-    // bootstrap (CI legs, cross-blobulate guests) rather than a user invocation — so
-    // it gets no watch trigger, never mind the network fetch inside one.
-    if (!parsed.self) {
-      watch.clodeWatchBanner({ env, here: HERE });
-      watch.clodeWatchMaybe({ env, self });
-    }
-    const status = await build.clodeBuild(buildArgs, { env, libexec: LIBEXEC, here: HERE, version, self });
+    // matters — is where the check moved.) `bootstrap` (step 10) builds the BUILDER,
+    // which has no upstream bundle to drift and is release plumbing rather than a user
+    // invocation, so it gets no watch trigger and never mind the network fetch inside
+    // one — that is now a difference between two BRANCHES, not a flag this one tests.
+    watch.clodeWatchBanner({ env, here: HERE });
+    watch.clodeWatchMaybe({ env, self });
+    const status = await build.clodeBuild(buildArgs, { env, libexec: LIBEXEC, here: HERE, version, self, product: subject });
     return process.exit(status);
   }
 
@@ -211,6 +241,21 @@ async function main(argv, opts = {}) {
   if (cmd.verb === 'read-anthropic-tea-leaves') {
     await watch.clodeWatch('manual', { env, libexec: LIBEXEC, here: HERE, node });
     return process.exit(0);
+  }
+
+  // 10. `node scripts/stage0.mjs bootstrap [--target P] [--out PATH]`: build clode
+  //     ITSELF from this checkout. Checkout-only, and not because of a conditional
+  //     here — the shipped table simply has no such verb (cli-surface.cjs's
+  //     CHECKOUT_ONLY_VERBS), so a shipped clode says where bootstrap lives and exits
+  //     2 at step 5. Every real caller is CI release plumbing (.github/actions/
+  //     build-leg, .github/actions/cross-blobulate, .github/workflows/release.yml),
+  //     which is why it takes no watch trigger: it repackages nothing of Anthropic's.
+  if (cmd.verb === 'bootstrap') {
+    const build = require('./clode-build.cjs');
+    const parsed = build.parseBuildArgs(cmd.rest, 'clode');
+    if (parsed.error) return usage(parsed.error);
+    const status = await build.clodeBuild(cmd.rest, { env, libexec: LIBEXEC, here: HERE, version, self, product: 'clode' });
+    return process.exit(status);
   }
 
   // A verb the table declares and dispatch forgot to wire. Not reachable by argv —

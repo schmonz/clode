@@ -8,7 +8,7 @@ const cpaths = require('../libexec/clode-paths.cjs');
 
 const BIN = path.join(REPO, 'scripts', 'stage0.mjs');
 
-// `clode watch` (clode-main.cjs step 7) is clode's OWN update-signal check —
+// `clode read-anthropic-tea-leaves` (clode-main.cjs step 9) is clode's OWN update-signal check —
 // dispatched before any bin resolution/launch, so unaffected by the runner's
 // retirement. Exercised with a direct spawn of scripts/stage0.mjs, not a model runner.
 function run(sbx, args = [], opts = {}) {
@@ -58,10 +58,10 @@ function noticePath(sbx) {
   return path.join(cpaths.watchDir(sbx.env), 'watch-notice');
 }
 
-test('clode watch runs a cycle, writes a notice, prints a summary, exits 0', (t) => {
+test('clode read-anthropic-tea-leaves runs a cycle, writes a notice, prints a summary, exits 0', (t) => {
   const sbx = sandbox(t);
   const env = watchFixture(sbx, '2.0.0', '1.0.0', 'high');
-  const r = run(sbx, ['watch'], { env });
+  const r = run(sbx, ['read-anthropic-tea-leaves'], { env });
   assert.strictEqual(r.status, 0);
   // grep -qx 'high=1' "$CLODE_WATCH_DIR/watch-notice": the notice records a HIGH signal.
   const notice = fs.readFileSync(noticePath(sbx), 'utf8');
@@ -85,10 +85,10 @@ test('clode read-anthropic-tea-leaves runs the same cycle as watch: notice, summ
   assert.match(r.output, /may affect how clode repackages it/i);
 });
 
-test('clode watch does not reach the bundle (no node/provider needed)', (t) => {
+test('clode read-anthropic-tea-leaves does not reach the bundle (no node/provider needed)', (t) => {
   const sbx = sandbox(t);
   const env = watchFixture(sbx, '2.0.0', '1.0.0', 'low');
-  const r = run(sbx, ['watch'], { env: { ...env, CLODE_CLAUDE_BIN: '/nonexistent' } });
+  const r = run(sbx, ['read-anthropic-tea-leaves'], { env: { ...env, CLODE_CLAUDE_BIN: '/nonexistent' } });
   assert.strictEqual(r.status, 0);
   // A watch cycle never launches the provider: the fixture marker must be absent even
   // though CLODE_CLAUDE_BIN points at a bogus path.
@@ -99,8 +99,8 @@ test('clode --help advertises the update-signal subcommand the table declares', 
   // Task 5: help is rendered from libexec/cli-surface.cjs's SURFACE, where this cycle
   // is spelled `read-anthropic-tea-leaves` — the name states its epistemic status (it
   // INFERS Anthropic's direction of travel from a changelog; it is never authoritative
-  // and never downloads). `clode watch` still dispatches until task 6 removes it, but
-  // the table is what help advertises, so the assertion reads the table.
+  // and never downloads). Task 6 REMOVED `clode watch`: the table is the only spelling
+  // there is, and help advertises exactly it.
   const { SURFACE } = require('../libexec/cli-surface.cjs');
   assert.ok('read-anthropic-tea-leaves' in SURFACE.verbs, 'the table must declare the verb');
   const sbx = sandbox(t);

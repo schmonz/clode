@@ -2,7 +2,7 @@
 // THE GRAPH RUNNER — one extracted file that runs a code-split Claude Code on either host.
 //
 // WHY IT EXISTS. When 2.1.243 went code-split, the blobulate path learned the new shape and
-// nothing else did. `clode build` went green while `clode build --naude` AND the entire
+// nothing else did. `clode build` went green while `clode build naude` AND the entire
 // oracle apparatus went dead: five CI jobs, including the agentic round-trips, the shim
 // parity gate, and the tjs-vs-node extractor differential. The build path was verified by
 // the very thing it had broken. Nothing declared that build-naude consumes an extracted

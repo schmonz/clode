@@ -5,7 +5,7 @@
 //   naude-model  = cli.cjs under real node   -> the REFERENCE (native built-ins)
 //   quaude-model = cli.cjs under tjs + shim  -> the SUBJECT (our node-shim)
 //
-// This is what `clode build --naude` and `clode build` produce, minus the
+// This is what `clode build naude` and `clode build` produce, minus the
 // packaging (test/oracle-binaries.test.cjs proves the packaged binaries agree
 // with these models). Nothing here touches scripts/stage0.mjs or CLODE_ENGINE: the
 // builder-only surface has no runner, and the gate that guards quaude's shim

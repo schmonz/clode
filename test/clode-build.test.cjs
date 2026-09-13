@@ -53,9 +53,12 @@ const FAKE_TJS = '#!/bin/sh\n# clode-constants-abi:1\nexit 0\n';
 
 test('clode build: unknown argument fails loudly before any work', () => {
   const r = runEntry(['build', '--frobnicate']);
-  assert.strictEqual(r.status, 1);
+  // A usage error, like every other rejected argv (task 6 made the exit code one
+  // thing: the table's rejections and a verb module's rejections are the same kind
+  // of mistake).
+  assert.strictEqual(r.status, 2);
   assert.match(r.stderr, /build: unknown argument '--frobnicate'/);
-  assert.match(r.stderr, /usage: clode build \[--self\|--naude\|--target Y\|--list-targets\|--keep-going\] \[--out PATH\]/);
+  assert.match(r.stderr, /usage: clode build \[quaude\|naude\] \[--target Y\|--list-targets\|--keep-going\] \[--out PATH\]/);
 });
 
 // Regression: an invalid `clode build` used to fire the watch trigger — spawning
@@ -69,7 +72,7 @@ test('clode build: unknown argument fails loudly before any work', () => {
 test('clode build <bad arg>: does not fire the watch trigger (a rejected build must not phone home)', () => {
   const watchDir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'clode-watch-')), 'nested');
   const r = runEntry(['build', '--frobnicate'], { CLODE_WATCH_DIR: watchDir });
-  assert.strictEqual(r.status, 1);
+  assert.strictEqual(r.status, 2, 'a rejected argv is a usage error (task 6)');
   assert.ok(!fs.existsSync(watchDir), 'watch dir must not even be created for a rejected build');
 });
 
@@ -128,12 +131,12 @@ test('clode build: a valid build still fires the watch trigger', () => {
 // The naude branch resolves + extracts the upstream cli.cjs through the SAME
 // helper as the quaude branch (stageUpstreamCli), differing only in the error
 // prefix it injects. This pins that prefix: a shared helper must not flatten
-// `build --naude:` into a bare `build:` — the user has to learn WHICH build
+// `build naude:` into a bare `build:` — the user has to learn WHICH build
 // failed. Paired with the `clode build:` case above; together they are the
 // regression guard for the extraction.
-test('clode build --naude: no binary fails loudly, prefixed for the naude target', () => {
+test('clode build naude: no binary fails loudly, prefixed for the naude target', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-naude-nobin-'));
-  const r = runEntry(['build', '--naude'], {
+  const r = runEntry(['build', 'naude'], {
     HOME: home,
     CLODE_STATE_ROOT: home,
     CLODE_CLAUDE_BIN: '',
@@ -142,20 +145,20 @@ test('clode build --naude: no binary fails loudly, prefixed for the naude target
     CLODE_OFFLINE: '1',
   });
   assert.strictEqual(r.status, 1);
-  assert.match(r.stderr, /build --naude: no Claude Code binary found/);
+  assert.match(r.stderr, /build naude: no Claude Code binary found/);
   assert.match(r.stderr, /clode fetch/);
 });
 
-test('clode build --self: missing esbuilt bundle fails loudly and names the fix', () => {
+test('clode bootstrap: missing esbuilt bundle fails loudly and names the fix', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-self-'));
   const fakeTjs = path.join(home, 'tjs');
   fs.writeFileSync(fakeTjs, FAKE_TJS);
-  const r = runEntry(['build', '--self'], {
+  const r = runEntry(['bootstrap'], {
     CLODE_TJS: fakeTjs,
     CLODE_MAIN_BUNDLE: '/nonexistent/clode-main.bundle.cjs',
   });
   assert.strictEqual(r.status, 1);
-  assert.match(r.stderr, /build --self: no esbuilt clode-main bundle at '\/nonexistent\/clode-main\.bundle\.cjs'/);
+  assert.match(r.stderr, /bootstrap: no esbuilt clode-main bundle at '\/nonexistent\/clode-main\.bundle\.cjs'/);
   assert.match(r.stderr, /build-clode-main\.mjs|CLODE_MAIN_BUNDLE/);
 });
 
@@ -164,7 +167,7 @@ test('clode build --self: missing esbuilt bundle fails loudly and names the fix'
 // extractIfNeeded): a bundle older than libexec sources must fail loud
 // instead of silently blobulating a WRONG builder, and a fresh one must not be
 // blocked by the same gate.
-test('clode build --self: stale esbuilt bundle fails loud and names the fix', () => {
+test('clode bootstrap: stale esbuilt bundle fails loud and names the fix', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-stale-'));
   const fakeTjs = path.join(home, 'tjs');
   fs.writeFileSync(fakeTjs, FAKE_TJS);
@@ -174,7 +177,7 @@ test('clode build --self: stale esbuilt bundle fails loud and names the fix', ()
   // gate fires deterministically no matter when this test runs.
   const old = new Date(1000);
   fs.utimesSync(bundle, old, old);
-  const r = runEntry(['build', '--self'], {
+  const r = runEntry(['bootstrap'], {
     CLODE_TJS: fakeTjs,
     CLODE_MAIN_BUNDLE: bundle,
   });
@@ -183,7 +186,7 @@ test('clode build --self: stale esbuilt bundle fails loud and names the fix', ()
   assert.match(r.stderr, /build-clode-main\.mjs/);
 });
 
-test('clode build --self: fresh esbuilt bundle passes the staleness gate', () => {
+test('clode bootstrap: fresh esbuilt bundle passes the staleness gate', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-fresh-'));
   const fakeTjs = path.join(home, 'tjs');
   fs.writeFileSync(fakeTjs, FAKE_TJS);
@@ -200,7 +203,7 @@ test('clode build --self: fresh esbuilt bundle passes the staleness gate', () =>
   // itself did not block a fresh bundle.
   const future = new Date(Math.min(Date.now() + 1000 * 60 * 60 * 24 * 365 * 50, Date.UTC(2038, 0, 1)));
   fs.utimesSync(bundle, future, future);
-  const r = runEntry(['build', '--self'], {
+  const r = runEntry(['bootstrap'], {
     CLODE_TJS: fakeTjs,
     CLODE_MAIN_BUNDLE: bundle,
   });
@@ -232,7 +235,7 @@ test('clode build: no resolvable provider fails loudly (after the template gate)
   assert.match(r.stderr, /build: no Claude Code binary found/);
 });
 
-test('--help documents clode build from the table, but not the undocumented --self', () => {
+test('--help documents clode build from the table — and bootstrap only where it exists', () => {
   const r = runEntry(['--help']);
   assert.strictEqual(r.status, 0);
   // Phase 3a task 5: help is RENDERED from libexec/cli-surface.cjs's SURFACE literal,
@@ -272,10 +275,19 @@ test('--help documents clode build from the table, but not the undocumented --se
     assert.ok(r.stdout.includes(name), `help must still document ${name}`);
     assert.ok(envNames.some((n) => n.startsWith(name)), `the table must declare ${name}`);
   }
-  // build --self left the user surface: dispatch still works (release
-  // tooling calls it), but it's no longer documented.
-  assert.doesNotMatch(r.stdout, /--self/);
-  assert.doesNotMatch(r.stdout, /CLODE_MAIN_BUNDLE/);
+  // TASK 6. `--self` left the surface entirely: the thing it did is `clode bootstrap`,
+  // a verb on the CHECKOUT table — which is the table this entry point (scripts/
+  // stage0.mjs) composes, so its help documents it, CLODE_MAIN_BUNDLE and all. The
+  // SHIPPED table has no such verb, so the same renderer over that table says nothing
+  // about it. One renderer, two tables, no conditional: that is the whole mechanism by
+  // which a shipped clode cannot bootstrap.
+  assert.doesNotMatch(r.stdout, /--self/, 'the flag is gone, not renamed');
+  assert.match(r.stdout, /clode bootstrap/, 'the checkout entry point documents its own verb');
+  assert.ok(r.stdout.includes('CLODE_MAIN_BUNDLE'));
+  const { renderHelp, surfaceFor } = require('../libexec/cli-surface.cjs');
+  const shippedHelp = renderHelp('1.2.3', surfaceFor('shipped'));
+  assert.doesNotMatch(shippedHelp, /bootstrap/, 'a shipped clode does not carry the verb');
+  assert.doesNotMatch(shippedHelp, /CLODE_MAIN_BUNDLE/, 'nor the env name only it reads');
 });
 
 // codesignAdHoc: ad-hoc sign a Mach-O template; on old macOS (Mavericks) whose
@@ -349,7 +361,7 @@ test('codesignAdHoc: no codesign on the box (pre-10.5 Darwin/Tiger) is a no-op s
 
 // thinToHostSlice: quaude is built to run where it is built, so its (possibly
 // universal) template is thinned to the host slice — a lean single-arch quaude,
-// not a 4-arch one. The BUILDER (--self) is exempt (must stay fat to run on any
+// not a 4-arch one. The BUILDER (bootstrap) is exempt (must stay fat to run on any
 // Mac). Injected spawnSync drives each path.
 test('thinToHostSlice: fat template thins in place to the host slice (x64 -> x86_64)', () => {
   const { thinToHostSlice } = require('../libexec/clode-build.cjs');

@@ -1,7 +1,7 @@
 'use strict';
 // [GATED] End-to-end cross-build proof (Task 5 of the naude cross-build spec).
 //
-// `clode build --naude --target macos-amd64 --out <path>` — a REAL invocation of
+// `clode build naude --target macos-amd64 --out <path>` — a REAL invocation of
 // the FULL CLI entry (scripts/stage0.mjs, under host node; not the injected-seam wiring
 // covered by test/clode-build-naude.test.cjs) — cross-builds a darwin-x64 naude
 // on a darwin-arm64 host, and the produced binary boots under Rosetta
@@ -78,7 +78,7 @@ before(() => {
 });
 after(() => { if (DIR) { try { fs.rmSync(DIR, { recursive: true, force: true }); } catch { /* best effort */ } } });
 
-test('clode build --naude --target macos-amd64: cross-built naude boots under Rosetta', (t) => {
+test('clode build naude --target macos-amd64: cross-built naude boots under Rosetta', (t) => {
   if (SKIP) { t.skip(SKIP); return; }
 
   const out = path.join(DIR, 'naude-macos-amd64');
@@ -102,7 +102,7 @@ test('clode build --naude --target macos-amd64: cross-built naude boots under Ro
     CLODE_CACHE: process.env.CLODE_CACHE || path.join(DIR, 'cache'),
     CLODE_NODES: process.env.CLODE_NODES || path.join(DIR, 'nodes'),
     // No CLODE_STATE_ROOT needed here (unlike the quaude-path tests
-    // elsewhere): this is a `--naude` build, and clodeBuild's --naude branch
+    // elsewhere): this is a naude build, and clodeBuild's naude branch
     // always returns from inside its own `if (naude) {...}` block before
     // the shared try/finally that appends a build-trace.jsonl line
     // (Task 5) is ever reached.
@@ -110,11 +110,11 @@ test('clode build --naude --target macos-amd64: cross-built naude boots under Ro
   };
 
   const build = spawnSync(process.execPath,
-    [ENTRY, 'build', '--naude', '--target', 'macos-amd64', '--out', out],
+    [ENTRY, 'build', 'naude', '--target', 'macos-amd64', '--out', out],
     { encoding: 'utf8', timeout: outerTimeout, env });
 
   assert.strictEqual(build.status, 0,
-    `clode build --naude --target macos-amd64 failed:\nstdout:\n${build.stdout}\nstderr:\n${build.stderr}`);
+    `clode build naude --target macos-amd64 failed:\nstdout:\n${build.stdout}\nstderr:\n${build.stderr}`);
   // Reach honesty (Task 4, re-asserted here as the wiring this test depends
   // on): a naude cross-build must say it did NOT run the foreign binary.
   assert.match(build.stdout + build.stderr, /attest-only/,

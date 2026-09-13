@@ -118,7 +118,7 @@ function isBunContainer(binpath) {
 // bytes (providerPlatformOf) rather than assuming process.platform.
 // A provider carved FOR a given platform, or null. Never substitutes a different
 // version to satisfy the platform: the store is keyed by version alone
-// (providers/<version>/claude, one binary per version) while `clode fetch` is
+// (providers/<version>/claude, one binary per version) while `clode fetch claude` is
 // OS-matched, so the same path holds different bytes on different machines -- this
 // box's pinned 2.1.251 is a LINUX carve on a Mac. Reaching for a nearer-matching
 // version instead would trade a loud, honest "no darwin carve at the pin" for a quiet
@@ -146,7 +146,7 @@ function platformSkipReason(platform, env = process.env) {
   return `no ${platform}-carved provider. UPSTREAM_PIN names ${pin || '(unset)'}; `
     + `available: ${have.join(', ') || '(none)'}. The store is keyed by VERSION only, so a `
     + `pinned entry carved for another OS cannot be told apart by path — fetch a ${platform} `
-    + `carve at ${pin || 'the pin'} (clode fetch ${pin || '<version>'}) or set `
+    + `carve at ${pin || 'the pin'} (clode fetch claude ${pin || '<version>'}) or set `
     + `CLODE_${platform.toUpperCase()}_PROVIDER_BIN explicitly.`;
 }
 

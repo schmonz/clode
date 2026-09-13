@@ -153,8 +153,8 @@ if (!process.env.CLODE_PROVIDER_BIN) {
   // chore — and it is loud, because a test run that reaches the network should say so.
   if (!p && pinnedVersion()) {
     const v = pinnedVersion();
-    console.error(`run: pinned provider ${v} not in the store — fetching it once (clode fetch ${v})`);
-    const r = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'stage0.mjs'), 'fetch', v],
+    console.error(`run: pinned provider ${v} not in the store — fetching it once (clode fetch claude ${v})`);
+    const r = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'stage0.mjs'), 'fetch', 'claude', v],
       { stdio: 'inherit' });
     if (r.status !== 0) console.error(`run: fetch failed (status ${r.status}); provider-gated tests will skip`);
     p = providerBin({ ...process.env });   // fresh env object: providers() memoises per env

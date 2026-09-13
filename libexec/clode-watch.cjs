@@ -221,7 +221,7 @@ async function clodeWatch(manual, opts) {
       if (digest) stderr.write(digest);
     }
     if (high === 1) {
-      stderr.write(`clode: ${latest} may affect how clode repackages it (run 'clode fetch' to take it).\n`);
+      stderr.write(`clode: ${latest} may affect how clode repackages it (run 'clode fetch claude' to take it).\n`);
     } else {
       stderr.write(`clode: ${latest} is available (no repackaging-impacting signals).\n`);
     }
@@ -250,7 +250,7 @@ function clodeWatchBanner(opts) {
   if (!cur) cur = n.current;
   if (!versionGt(n.latest, cur, { env, here })) return 0;
 
-  stderr.write(`clode: Claude Code ${n.latest} is available and may affect how clode repackages it (run 'clode watch' for details, 'clode fetch' to take it).\n`);
+  stderr.write(`clode: Claude Code ${n.latest} is available and may affect how clode repackages it (run 'clode read-anthropic-tea-leaves' for details, 'clode fetch claude' to take it).\n`);
   return 0;
 }
 

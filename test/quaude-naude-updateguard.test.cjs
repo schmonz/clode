@@ -6,7 +6,7 @@
 // Mirrors test/quaude-build.test.cjs's build (host `clode build`) and
 // test/clode-native.test.cjs's acceptance-3 mock-driven Bash-tool harness
 // (startMockAnthropic + cannedToolUseSSE/cannedSSE). Builds BOTH kinds via the
-// plain host `clode build` / `clode build --naude` — the simplest path that
+// plain host `clode build` / `clode build naude` — the simplest path that
 // still produces a real, runnable target (the blobulated-under-native-builder path
 // is proven separately by clode-native.test.cjs/quaude-naude-selfupdate.test.cjs
 // and is not needed again here).
@@ -72,12 +72,12 @@ before(() => {
     },
   });
 
-  // -- naude, via the plain host `clode build --naude`. Needs the pinned node
-  // in a warm store first (`clode fetch --naude`, cheap/local when cached) —
+  // -- naude, via the plain host `clode build naude`. Needs the pinned node
+  // in a warm store first (`clode fetch node`, cheap/local when cached) —
   // any failure there (offline, no cache yet) narrows to a clean skip of the
   // naude cases only; the quaude cases are unaffected.
   const NODES = process.env.CLODE_NODES || cpaths.nodeStore(process.env);
-  const fetchNode = spawnSync(process.execPath, [ENTRY, 'fetch', '--naude'], {
+  const fetchNode = spawnSync(process.execPath, [ENTRY, 'fetch', 'node'], {
     encoding: 'utf8', timeout: 300000,
     env: { ...process.env, CLODE_NODES: NODES, DYLD_INSERT_LIBRARIES: '' },
   });
@@ -85,7 +85,7 @@ before(() => {
     NAUDE_SKIP = `pinned node unavailable (offline?): ${fetchNode.stderr || fetchNode.stdout}`;
   } else {
     NAUDE = path.join(DIR, 'naude');
-    NAUDE_BUILD = spawnSync(process.execPath, [ENTRY, 'build', '--naude', '--out', NAUDE], {
+    NAUDE_BUILD = spawnSync(process.execPath, [ENTRY, 'build', 'naude', '--out', NAUDE], {
       encoding: 'utf8',
       timeout: 300000,
       env: {
@@ -95,7 +95,7 @@ before(() => {
         CLODE_TJS: tjsPath(),
         CLODE_NODES: NODES,
         // NOT CLODE_STATE_ROOT here (unlike the quaude build above): the
-        // --naude branch of clodeBuild always returns from inside its own
+        // naude branch of clodeBuild always returns from inside its own
         // `if (naude) {...}` block before the shared try/finally that
         // appends a build-trace.jsonl line (Task 5) is ever reached, so
         // there is nothing for it to isolate on this path.
@@ -215,10 +215,10 @@ test('quaude: a model-issued `claude update` is DENIED (file marker proves the s
   return runUpdateGuardAcceptance(t, 'quaude', QUAUDE, null);
 });
 
-test('naude: `clode build --naude` builds it (precondition for the acceptance below)', (t) => {
+test('naude: `clode build naude` builds it (precondition for the acceptance below)', (t) => {
   if (SKIP) { t.skip(SKIP); return; }
   if (NAUDE_SKIP) { t.skip(NAUDE_SKIP); return; }
-  assert.strictEqual(NAUDE_BUILD.status, 0, `clode build --naude failed:\n${NAUDE_BUILD.stdout}\n${NAUDE_BUILD.stderr}`);
+  assert.strictEqual(NAUDE_BUILD.status, 0, `clode build naude failed:\n${NAUDE_BUILD.stdout}\n${NAUDE_BUILD.stderr}`);
 });
 
 test('naude: a model-issued `claude update` is DENIED (file marker proves the shell never ran); a benign command is ALLOWED', (t) => {

@@ -201,7 +201,7 @@ provider binary and quaude side by side and diffs them with
 `test/doctor-parity.cjs` — but that diff is itself still `t.skip`'d pending an
 allowlist (see that file's comment), and there's no equivalent that captures
 a **naude** SEA build's live render (naude is packaged, not just staged, so
-driving one under a PTY needs its own `clode build --naude`, not yet wired
+driving one under a PTY needs its own `clode build naude`, not yet wired
 into this harness). If a row genuinely needs a naude-vs-quaude *render* diff
 (not just the naude-vs-quaude oracle-models comparison in template (a)),
 treat wiring that up as its own small harness-extension task; until then,

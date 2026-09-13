@@ -62,7 +62,7 @@ jobs:
           PROV="$(node scripts/stage-provider.mjs)" || exit 1
           echo "provider: $PROV"
           CLODE_CLAUDE_BIN="$PROV" CLODE_PROVIDER_BIN="$PROV" \
-            node scripts/stage0.mjs build --naude --target macos-arm64 --out "$RUNNER_TEMP/naude-darwin"
+            node scripts/stage0.mjs build naude --target macos-arm64 --out "$RUNNER_TEMP/naude-darwin"
       - name: Upload the cross-built darwin naude
         uses: actions/upload-artifact@v7.0.1
         with:
@@ -130,7 +130,7 @@ jobs:
           PROV="$(node scripts/stage-provider.mjs)" || exit 1
           echo "provider: $PROV"
           CLODE_CLAUDE_BIN="$PROV" CLODE_PROVIDER_BIN="$PROV" \
-            node scripts/stage0.mjs build --naude --target macos-amd64 --out "$RUNNER_TEMP/naude-darwin-x64"
+            node scripts/stage0.mjs build naude --target macos-amd64 --out "$RUNNER_TEMP/naude-darwin-x64"
       - name: Upload the arm64-Linux-cross-built darwin-x64 naude
         uses: actions/upload-artifact@v7.0.1
         with:
@@ -199,7 +199,7 @@ jobs:
           PROV="$(node scripts/stage-provider.mjs)" || exit 1
           echo "provider: $PROV"
           CLODE_CLAUDE_BIN="$PROV" CLODE_PROVIDER_BIN="$PROV" \
-            node scripts/stage0.mjs build --naude --target windows-amd64 --out "$RUNNER_TEMP/naude-win-x64"
+            node scripts/stage0.mjs build naude --target windows-amd64 --out "$RUNNER_TEMP/naude-win-x64"
       - name: Upload the cross-built win32-x64 naude
         uses: actions/upload-artifact@v7.0.1
         with:
@@ -268,7 +268,7 @@ jobs:
           PROV="$(node scripts/stage-provider.mjs)" || exit 1
           echo "provider: $PROV"
           CLODE_CLAUDE_BIN="$PROV" CLODE_PROVIDER_BIN="$PROV" \
-            node scripts/stage0.mjs build --naude --target windows-arm64 --out "$RUNNER_TEMP/naude-win-arm64"
+            node scripts/stage0.mjs build naude --target windows-arm64 --out "$RUNNER_TEMP/naude-win-arm64"
       - name: Upload the cross-built win32-arm64 naude
         uses: actions/upload-artifact@v7.0.1
         with:

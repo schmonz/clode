@@ -4,7 +4,7 @@
 // source of truth for all their keys. A future reader must not re-merge them:
 //
 //   * ARTIFACT dirs (build/<artifact-name>/, see artifactName/artifactDir) —
-//     what we would SHIP for this host: naude, clode (--self), deps.tar,
+//     what we would SHIP for this host: naude, clode (bootstrap), deps.tar,
 //     deps.sig, sea-prep.blob, sea-config.json. Keyed by the ARTIFACT NAME —
 //     locally the host's own OS version (hostOsVersionToken), matching what
 //     CI actually publishes (build-leg/action.yml's `steps.name`) so

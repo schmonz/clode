@@ -622,7 +622,7 @@ const LEGS = [
                 note: 'floor 1/6 green (G7 — the build-pipeline PONG smoke, run in-guest); A1,B1,B4,C1,D1 not driven — see RESULTS.md' } },
   // netbsd-sparc (the first truly-weird platform; cross-blobulate A+B1+C): the sparc
   // tjs ENGINE is built once via the source-hash tjs-cache (TCG bake on miss);
-  // per-run cross-blobulates the clode --self builder on the x64 runner (Layer A,
+  // per-run cross-blobulates the bootstrap builder on the x64 runner (Layer A,
   // CLODE_TARGET_TEMPLATE=sparc engine), then boots the pristine sparc image and
   // runs clode-on-sparc to BLOBULATE a quaude + PONG (Layer C). Publishes
   // clode-<ver>-netbsd10.1-sparc. soft-fail (TCG flake non-blocking); the release

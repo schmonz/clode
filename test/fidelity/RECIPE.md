@@ -129,7 +129,7 @@ Claude), so it needs no pin. See row A2.
 
 | id | action | expected | axes | test |
 |---|---|---|---|---|
-| G1 | → `clode fetch` shows real progress (0-byte streaming bug) | real progress shown | - | test/clode-net.test.cjs |
+| G1 | → `clode fetch claude` shows real progress (0-byte streaming bug) | real progress shown | - | test/clode-net.test.cjs |
 | G2 | → a real streaming model response renders in the live TUI (PTY, REAL credentials + real API: the interactive first turn validates creds with claude.ai before firing, so a mock key spins forever without ever dialing `ANTHROPIC_BASE_URL` — the only interactive row a mock cannot reach). Prompt's answer is absent from the prompt text so the echoed input can't be mistaken for the response; native doubles as the logged-in/online probe and skips both when it can't complete | incremental render | - | test/fidelity/interactive-live-turn.test.cjs |
 | G3 | ? login opens a browser / prints the URL, and auth then persists (the disproven-lead login item — re-test now that config persists) | login flow completes and persists | platform | NEW |
 | G4 | ? Vertex/Bedrock auth path (the once-missing `node-fetch`) | auth path works | - | NEW |

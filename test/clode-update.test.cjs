@@ -262,7 +262,7 @@ test('platform not in manifest yields the exact error, return 1', async () => {
   } finally { cleanup(fx); }
 });
 
-test('clode fetch prints a warn-only signals digest and writes a snapshot', async () => {
+test('clode fetch claude prints a warn-only signals digest and writes a snapshot', async () => {
   const fx = fixture();
   const err = sink();
   try {

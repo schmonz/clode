@@ -18,8 +18,32 @@ test('parseBuildArgs: --target needs a value', () => {
   assert.match(parseBuildArgs(['--target']).error, /--target needs a platform/);
 });
 
-test('parseBuildArgs: --target and --self/--naude are exclusive', () => {
-  assert.match(parseBuildArgs(['--target', 'linux-x64', '--self']).error, /different build targets/);
+// TASK 6: the exclusivity rule is GONE because what it policed cannot happen. The
+// product is parseBuildArgs's second parameter, so it cannot contradict itself, and
+// --target composes with each of the three (a cross-built naude, a cross-blobulated
+// quaude, a cross-blobulated builder). The old flags are ordinary unknown arguments.
+test('parseBuildArgs: the product is a parameter, and --target composes with each', () => {
+  for (const [product, want] of [['quaude', { naude: false, self: false }],
+                                 ['naude', { naude: true, self: false }],
+                                 ['clode', { naude: false, self: true }]]) {
+    const p = parseBuildArgs(['--target', 'linux-x64'], product);
+    assert.strictEqual(p.error, undefined, `${product} --target must compose`);
+    assert.strictEqual(p.target, 'linux-x64');
+    assert.strictEqual(p.naude, want.naude);
+    assert.strictEqual(p.self, want.self);
+  }
+});
+
+test('parseBuildArgs: the retired product flags are unknown arguments', () => {
+  assert.match(parseBuildArgs(['--self']).error, /unknown argument '--self'/);
+  assert.match(parseBuildArgs(['--naude']).error, /unknown argument '--naude'/);
+  // And the usage line names the VERB that was actually run.
+  assert.match(parseBuildArgs(['--naude']).error, /usage: clode build \[quaude\|naude\]/);
+  assert.match(parseBuildArgs(['--naude'], 'clode').error, /usage: clode bootstrap/);
+});
+
+test('parseBuildArgs: an unknown product is an internal error, never a silent quaude', () => {
+  assert.match(parseBuildArgs([], 'kludge').error, /unknown product 'kludge'/);
 });
 
 test('parseBuildArgs: plain build unchanged', () => {
@@ -56,7 +80,7 @@ test('resolveBuildOut: an explicit --out for a windows target gains .exe if miss
 
 test('resolveBuildOut: a NATIVE windows build (no --target) keeps its explicit --out verbatim', () => {
   // REGRESSION (release 0.20260727.1): the windows BUILDER leg runs
-  // `clode build --self --out clode-<ver>-windows-amd64` on a windows host; the
+  // `clode bootstrap --out clode-<ver>-windows-amd64` on a windows host; the
   // attest/publish steps expect that EXACT bare name. Appending .exe here (as an
   // over-eager host-based rule did) makes the leg fail "Could not find subject at
   // path clode-<ver>-windows-amd64". Native explicit --out must be untouched.
@@ -64,7 +88,7 @@ test('resolveBuildOut: a NATIVE windows build (no --target) keeps its explicit -
   assert.strictEqual(resolveBuildOut({ out: 'quaude-x', target: null, self: false, hostPlatform: 'win32' }), 'quaude-x');
 });
 
-test('resolveBuildOut: no --target follows the host; --self names clode-native', () => {
+test('resolveBuildOut: no --target follows the host; bootstrap names clode-native', () => {
   assert.strictEqual(resolveBuildOut({ out: null, target: null, self: false, hostPlatform: 'win32' }), 'quaude.exe');
   assert.strictEqual(resolveBuildOut({ out: null, target: null, self: false, hostPlatform: 'linux' }), 'quaude');
   assert.strictEqual(resolveBuildOut({ out: null, target: null, self: true, hostPlatform: 'win32' }), 'clode-native.exe');

@@ -326,7 +326,7 @@ export function writeSeaConfig({
     // repo for one): the shim MUST come from the same stage as the cli.cjs.
     console.error(`build-naude: no bun-shim.cjs beside the staged --cli: ${bunShim}`);
     console.error('The bun-shim is version-locked to the bundle by the extract cache; pass a --cli from a');
-    console.error("staged cache dir (what `clode build --naude` does), not a bare cli.cjs.");
+    console.error("staged cache dir (what `clode build naude` does), not a bare cli.cjs.");
     process.exit(1);
   }
   if (!fs.existsSync(targetUpdateCheck)) {

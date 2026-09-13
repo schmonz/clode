@@ -87,24 +87,30 @@ test('clode build --target: resolves + obtains the engine, sets CLODE_TARGET_TEM
   assert.strictEqual(env.CLODE_TARGET_TEMPLATE, cached, 'cross-blobulate template set to the obtained engine');
 });
 
-test('parseBuildArgs: --naude --target composes (cross-build a naude)', () => {
-  const r = build.parseBuildArgs(['--naude', '--target', 'linux-arm64']);
+test('parseBuildArgs: naude + --target composes (cross-build a naude)', () => {
+  const r = build.parseBuildArgs(['--target', 'linux-arm64'], 'naude');
   assert.deepStrictEqual({ naude: r.naude, target: r.target, error: r.error },
     { naude: true, target: 'linux-arm64', error: undefined });
 });
 
-test('parseBuildArgs: --self stays exclusive with --naude and --target', () => {
-  assert.match(build.parseBuildArgs(['--self', '--naude']).error, /different build targets/);
-  assert.match(build.parseBuildArgs(['--self', '--target', 'linux-arm64']).error, /different build targets/);
+// TASK 6: what used to be "--self stays exclusive with --naude and --target" is now
+// two facts. The product cannot contradict itself (it is one parameter), and --target
+// composes with the builder exactly as it does with a product — the cross path keys off
+// `target`, never off which product asked.
+test('parseBuildArgs: the builder takes --target like any other product', () => {
+  const r = build.parseBuildArgs(['--target', 'linux-arm64'], 'clode');
+  assert.strictEqual(r.error, undefined);
+  assert.strictEqual(r.self, true);
+  assert.strictEqual(r.target, 'linux-arm64');
 });
 
 test('parseBuildArgs: singletons unchanged', () => {
-  assert.strictEqual(build.parseBuildArgs(['--naude']).error, undefined);
+  assert.strictEqual(build.parseBuildArgs([], 'naude').error, undefined);
   assert.strictEqual(build.parseBuildArgs(['--target', 'linux-arm64']).error, undefined);
-  assert.strictEqual(build.parseBuildArgs(['--self']).error, undefined);
+  assert.strictEqual(build.parseBuildArgs([], 'clode').error, undefined);
 });
 
-// NOTE: the `clode build --naude --target` cross-build wiring test lives in
+// NOTE: the `clode build naude --target` cross-build wiring test lives in
 // test/clode-build-naude.test.cjs, where the hermetic seedProvider harness (a fake
 // provider + pre-seeded extract cache) lets the naude branch reach the node-resolve
 // step without a real provider on the box. An earlier version here passed `env:{}`

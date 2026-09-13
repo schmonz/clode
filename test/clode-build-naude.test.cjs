@@ -1,7 +1,7 @@
 'use strict';
-// `clode build --naude` WIRING (Task 4). The naude SEA build itself
+// `clode build naude` WIRING (Task 4). The naude SEA build itself
 // (esbuild/postject/postject inject) only runs on a Node >= 24 host, so this
-// suite does NOT build a real naude. It proves the WIRING: that --naude
+// suite does NOT build a real naude. It proves the WIRING: that the naude product
 //   1. resolves + extracts the user's Claude Code cli.cjs via the SAME
 //      resolve/extract machinery the quaude build uses (landing cli.cjs at
 //      <cache>/<key>/cli.cjs), then
@@ -63,7 +63,7 @@ function seedProvider(dir) {
     // stateRoot(dir): respects test/run.mjs's central CLODE_STATE_ROOT when
     // present, else falls back to this fixture's own private `dir` -- needed
     // standalone (run.mjs never executes) and matters for the one test at
-    // 'clode build (no --naude): never invokes build-naude.mjs', the only one
+    // 'clode build quaude: never invokes build-naude.mjs', the only one
     // below that drives the QUAUDE/self path and so reaches clodeBuild's
     // finally / its build-trace.jsonl append (Task 5); harmless for the rest.
     CLODE_STATE_ROOT: stateRoot(dir),
@@ -73,7 +73,7 @@ function seedProvider(dir) {
 }
 
 // A stand-in for the SMOKE spawn (`<bin> -p 'say PONG'`, clode-build's
-// smokeTarget): `clode build --naude` now runs the same NODE_PATH-stripped
+// smokeTarget): `clode build naude` now runs the same NODE_PATH-stripped
 // PONG-against-the-mock proof the quaude path always ran (duplication audit
 // §2), so a stub that merely returns status 0 no longer satisfies the build —
 // and rightly so: that was exactly the hole (`--version` with ambient env
@@ -95,7 +95,7 @@ function fakeSmokeTarget(opts) {
 }
 
 // A stand-in for the ATTEST spawn (`<bin> --clode-attest`, clode-build's attestTarget).
-// `clode build --naude` now runs the same attest gate the quaude path runs, so a stub that
+// `clode build naude` now runs the same attest gate the quaude path runs, so a stub that
 // merely returns status 0 no longer satisfies the build — and rightly so: a naude used to
 // ship with no self-verification of any kind. This stub behaves like a WORKING target
 // (exit 0 + the real verdict line); the gate's ability to REJECT is proved separately, by
@@ -116,6 +116,10 @@ const FAKE_NODE = path.join('/pinned', 'node', 'bin', 'node');
 // output); smoke spawns (`-p`) are answered by fakeSmokeTarget above.
 // `ensureNode` is the injected pinned-node seam (default: resolves FAKE_NODE);
 // pass a thrower to exercise the "pinned node unavailable" refusal.
+// The PRODUCT is not in the argv any more (phase 3a task 6): `clode build naude` is a
+// positional the CLI resolves against the surface table and hands to clodeBuild as
+// opts.product. This file is the naude wiring's test, so 'naude' is the default here;
+// the one test that drives the quaude path overrides it through extraOpts.
 async function runBuild(args, env, runResult = { status: 0, stdout: '', stderr: '' },
   ensureNode = async () => FAKE_NODE, extraOpts = {}) {
   const calls = [];
@@ -129,6 +133,7 @@ async function runBuild(args, env, runResult = { status: 0, stdout: '', stderr: 
     here: REPO,
     version: 'clode-test',
     libexec: LIBEXEC,
+    product: 'naude',
     env,
     run,
     ensureNode,
@@ -140,11 +145,11 @@ async function runBuild(args, env, runResult = { status: 0, stdout: '', stderr: 
   return { status, calls, stderr: stderrBuf.join(''), stdout: stdoutBuf.join('') };
 }
 
-test('clode build --naude: extracts cli.cjs and invokes build-naude.mjs with it', async () => {
+test('clode build naude: extracts cli.cjs and invokes build-naude.mjs with it', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-wire-'));
   try {
     const { env, cliPath } = seedProvider(dir);
-    const r = await runBuild(['--naude'], env);
+    const r = await runBuild([], env);
 
     // Exactly the build-naude invocation ran through the spawn seam.
     const naude = r.calls.find((c) => Array.isArray(c.args)
@@ -181,7 +186,7 @@ test('clode build --naude: extracts cli.cjs and invokes build-naude.mjs with it'
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('clode build --naude --target: cross-build resolves TWO nodes, split flags + target-os, attests (no smoke)', async () => {
+test('clode build naude --target: cross-build resolves TWO nodes, split flags + target-os, attests (no smoke)', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-xbuild-'));
   try {
     const { env } = seedProvider(dir);
@@ -193,7 +198,7 @@ test('clode build --naude --target: cross-build resolves TWO nodes, split flags 
       return path.join('/pinned', `${platform}-${arch}`, 'node');
     };
     const r = await runBuild(
-      ['--naude', '--target', 'linux-arm64', '--out', path.join(dir, 'naude-cross')],
+      ['--target', 'linux-arm64', '--out', path.join(dir, 'naude-cross')],
       env, { status: 0, stdout: '', stderr: '' }, ensureNode);
 
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
@@ -221,19 +226,19 @@ test('clode build --naude --target: cross-build resolves TWO nodes, split flags 
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('clode build --naude: does NOT run the quaude blobulate', async () => {
+test('clode build naude: does NOT run the quaude blobulate', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-noblobulate-'));
   try {
     const { env } = seedProvider(dir);
-    const r = await runBuild(['--naude'], env);
+    const r = await runBuild([], env);
 
     const blobulate = r.calls.find((c) => Array.isArray(c.args)
       && c.args.some((a) => typeof a === 'string' && /quaude-blobulate\.js/.test(a)));
-    assert.ok(!blobulate, `the quaude blobulate worker must NOT run under --naude; calls:\n${JSON.stringify(r.calls, null, 2)}`);
+    assert.ok(!blobulate, `the quaude blobulate worker must NOT run under the naude product; calls:\n${JSON.stringify(r.calls, null, 2)}`);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('clode build (no --naude): never invokes build-naude.mjs (regression guard)', async () => {
+test('clode build quaude: never invokes build-naude.mjs (regression guard)', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-default-'));
   try {
     const { env } = seedProvider(dir);
@@ -242,7 +247,7 @@ test('clode build (no --naude): never invokes build-naude.mjs (regression guard)
     // (On darwin the fake-Mach-O codesign step may fail before the blobulate spawn —
     // that's fine: this guard only asserts the naude branch stays untaken.)
     env.CLODE_TJS = env.CLODE_CLAUDE_BIN;
-    const r = await runBuild(['--out', path.join(dir, 'quaude')], env);
+    const r = await runBuild(['--out', path.join(dir, 'quaude')], env, undefined, undefined, { product: 'quaude' });
 
     const naude = r.calls.find((c) => Array.isArray(c.args)
       && c.args.some((a) => typeof a === 'string' && a.endsWith(path.join('scripts', 'build-naude.mjs'))));
@@ -250,40 +255,44 @@ test('clode build (no --naude): never invokes build-naude.mjs (regression guard)
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-// Bug 1: --naude used to short-circuit BEFORE the shared argv validation loop,
-// so an unknown flag after --naude was silently ignored instead of failing
+// Bug 1: the --naude flag used to short-circuit BEFORE the shared argv validation loop,
+// so an unknown flag after it was silently ignored instead of failing
 // loud like the quaude path does. Argv is now parsed ONCE, before either
 // branch, so both get the same unknown-arg contract. No provider/env setup
 // needed — an unknown arg must fail before any resolve/extract work happens.
-test('clode build --naude --bogus: unknown argument fails loud (no spawn, no resolve)', async () => {
-  const r = await runBuild(['--naude', '--bogus'], { ...process.env, DYLD_INSERT_LIBRARIES: '' });
+test('clode build naude --bogus: unknown argument fails loud (no spawn, no resolve)', async () => {
+  const r = await runBuild(['--bogus'], { ...process.env, DYLD_INSERT_LIBRARIES: '' });
   assert.strictEqual(r.status, 1);
   assert.match(r.stderr, /unknown argument '--bogus'/);
   assert.strictEqual(r.calls.length, 0, `no subprocess should have been spawned; calls:\n${JSON.stringify(r.calls, null, 2)}`);
 });
 
-// --naude and --self are different build TARGETS (Node SEA vs the native
-// clode builder) — silently picking one for the user (the old behavior:
-// --naude won, --self was dropped) is exactly the kind of silent-wrong-output
-// this task flags. Must fail loud instead.
-test('clode build --naude --self: different targets, fails loud (does not silently pick one)', async () => {
-  const r = await runBuild(['--naude', '--self'], { ...process.env, DYLD_INSERT_LIBRARIES: '' });
-  assert.strictEqual(r.status, 1);
-  assert.match(r.stderr, /--naude/);
-  assert.match(r.stderr, /--self/);
-  assert.strictEqual(r.calls.length, 0, `no subprocess should have been spawned; calls:\n${JSON.stringify(r.calls, null, 2)}`);
+// --naude and --self used to be FLAGS naming different build targets (Node SEA vs the
+// native clode builder), so they could contradict each other and had to be refused by
+// hand ("different build targets — pick one"). TASK 6: the product is a parameter, so
+// the contradiction cannot be expressed at all — and the flags themselves are now plain
+// unknown arguments. That is what this asserts, so the removal cannot quietly come back
+// as a flag that wins over the positional (which is exactly how `build quaude --naude`
+// used to build a naude).
+test('the retired product flags are unknown arguments now, and nothing spawns', async () => {
+  for (const flag of ['--naude', '--self']) {
+    const r = await runBuild([flag], { ...process.env, DYLD_INSERT_LIBRARIES: '' });
+    assert.strictEqual(r.status, 1);
+    assert.match(r.stderr, new RegExp(`unknown argument '${flag}'`));
+    assert.strictEqual(r.calls.length, 0, `no subprocess should have been spawned; calls:\n${JSON.stringify(r.calls, null, 2)}`);
+  }
 });
 
-// Bug 1 continued: --naude --out used to be silently swallowed by
+// Bug 1 continued: the naude build's --out used to be silently swallowed by
 // build-naude.mjs's parseCliArg (which only reads --cli) — the build would
 // exit 0, print success, and write to build/<tag>/naude instead of the path
 // the user asked for. --out must now actually be forwarded.
-test('clode build --naude --out PATH: forwards --out to build-naude.mjs', async () => {
+test('clode build naude --out PATH: forwards --out to build-naude.mjs', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-out-'));
   try {
     const { env } = seedProvider(dir);
     const wantOut = path.join(dir, 'somewhere', 'naude-out');
-    const r = await runBuild(['--naude', '--out', wantOut], env);
+    const r = await runBuild(['--out', wantOut], env);
 
     const naude = r.calls.find((c) => Array.isArray(c.args)
       && c.args.some((a) => typeof a === 'string' && a.endsWith(path.join('scripts', 'build-naude.mjs'))));
@@ -296,7 +305,7 @@ test('clode build --naude --out PATH: forwards --out to build-naude.mjs', async 
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-// Duplication audit §2: `clode build --naude` used to run NO smoke of its own
+// Duplication audit §2: `clode build naude` used to run NO smoke of its own
 // — it only checked build-naude.mjs's exit status. So it printed success for a
 // naude that could not reach the API, could not resolve a dep `--version`
 // never touches, or that only worked because the build machine's ambient
@@ -304,12 +313,12 @@ test('clode build --naude --out PATH: forwards --out to build-naude.mjs', async 
 // `spawnSync(bin, ['--version'])` with `{...process.env}` INHERITED, grepping
 // stderr for /Cannot find module/.) The equivalent quaude bug was impossible.
 // Both paths now go through the SAME shared smokeTarget.
-test('clode build --naude: runs the shared PONG smoke on the binary it just built', async () => {
+test('clode build naude: runs the shared PONG smoke on the binary it just built', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-smoke-'));
   try {
     const { env } = seedProvider(dir);
     const wantOut = path.join(dir, 'naude-out');
-    const r = await runBuild(['--naude', '--out', wantOut], env);
+    const r = await runBuild(['--out', wantOut], env);
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
 
     const smoke = r.calls.find((c) => Array.isArray(c.args) && c.args[0] === '-p');
@@ -328,12 +337,12 @@ test('clode build --naude: runs the shared PONG smoke on the binary it just buil
 // The self-containment proof, and the whole reason the old --version check was
 // worthless: with the build host's NODE_PATH inherited, a naude missing a dep
 // from its own payload can still resolve it from the ambient env and look fine.
-test('clode build --naude: the smoke strips NODE_PATH (self-containment proof)', async () => {
+test('clode build naude: the smoke strips NODE_PATH (self-containment proof)', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-nodepath-'));
   try {
     const { env } = seedProvider(dir);
     env.NODE_PATH = '/some/ambient/node_modules';   // the build host's leak
-    const r = await runBuild(['--naude', '--out', path.join(dir, 'naude-out')], env);
+    const r = await runBuild(['--out', path.join(dir, 'naude-out')], env);
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
 
     const smoke = r.calls.find((c) => Array.isArray(c.args) && c.args[0] === '-p');
@@ -345,20 +354,20 @@ test('clode build --naude: the smoke strips NODE_PATH (self-containment proof)',
 
 // The failure the old wiring could not produce: a built naude that boots but
 // never completes the round-trip must FAIL the build, not print success.
-test('clode build --naude: a naude that never POSTs fails the build loudly', async () => {
+test('clode build naude: a naude that never POSTs fails the build loudly', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-nopost-'));
   try {
     const { env } = seedProvider(dir);
     const calls = [];
-    // Every spawn "succeeds" with no output — exactly what the OLD --naude
+    // Every spawn "succeeds" with no output — exactly what the OLD naude
     // branch accepted as proof (it checked only the child's exit status).
     const run = (cmd, cmdArgs, opts) => {
       calls.push({ cmd, args: cmdArgs, opts });
       return Promise.resolve({ status: 0, stdout: '', stderr: '' });
     };
     const stderrBuf = []; const stdoutBuf = [];
-    const status = await clodeBuild(['--naude', '--out', path.join(dir, 'naude-out')], {
-      here: REPO, version: 'clode-test', libexec: LIBEXEC, env, run,
+    const status = await clodeBuild(['--out', path.join(dir, 'naude-out')], {
+      here: REPO, version: 'clode-test', libexec: LIBEXEC, product: 'naude', env, run,
       // Inject the pinned-node seam — WITHOUT it the naude branch calls the real
       // ensurePinnedNode, which fetches Node from the network into the default
       // store: a hidden network hit + a hermeticity violation (it writes
@@ -378,16 +387,16 @@ test('clode build --naude: a naude that never POSTs fails the build loudly', asy
 // clode carries no Node, and the naude branch now FETCHES a sha-verified pinned
 // Node into a versioned store (Task 1). The only remaining refusal is "the
 // pinned node could not be obtained" — first build, offline — and it must name
-// the fix (`clode fetch --naude` with network), not spawn anything.
-test('clode build --naude: pinned node unavailable fails loud, names `clode fetch --naude`', async () => {
+// the fix (`clode fetch node` with network), not spawn anything.
+test('clode build naude: pinned node unavailable fails loud, names `clode fetch node`', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-nonode-'));
   try {
     const { env } = seedProvider(dir);
     const boom = async () => { throw new Error('offline: getaddrinfo ENOTFOUND nodejs.org'); };
-    const r = await runBuild(['--naude'], env, undefined, boom);
+    const r = await runBuild([], env, undefined, boom);
     assert.strictEqual(r.status, 1);
     assert.match(r.stderr, /pinned node/i);
-    assert.match(r.stderr, /clode fetch --naude/, 'should name the fetch fix');
+    assert.match(r.stderr, /clode fetch node/, 'should name the fetch fix');
     const naude = r.calls.find((c) => Array.isArray(c.args)
       && c.args.some((a) => typeof a === 'string' && a.endsWith(path.join('scripts', 'build-naude.mjs'))));
     assert.ok(!naude, `no build-naude should have been spawned; calls:\n${JSON.stringify(r.calls, null, 2)}`);
@@ -400,14 +409,14 @@ test('clode build --naude: pinned node unavailable fails loud, names `clode fetc
 // threaded to build-naude.mjs as --darwin-signer. hostPlatform/ensureRcodesign
 // are injected here exactly like ensureNode above, so this stays hermetic (no
 // real network hit, no real host-platform dependency for the test itself).
-test('clode build --naude --target macos-*: on a non-darwin host, provisions rcodesign + passes --darwin-signer', async () => {
+test('clode build naude --target macos-*: on a non-darwin host, provisions rcodesign + passes --darwin-signer', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-signer-'));
   try {
     const { env } = seedProvider(dir);
     let rcodesignFetched = 0;
     let fetchedWith = null;
     const r = await runBuild(
-      ['--naude', '--target', 'macos-amd64', '--out', path.join(dir, 'out')],
+      ['--target', 'macos-amd64', '--out', path.join(dir, 'out')],
       env, { status: 0, stdout: '', stderr: '' }, async () => FAKE_NODE,
       {
         hostPlatform: 'linux',
@@ -427,12 +436,12 @@ test('clode build --naude --target macos-*: on a non-darwin host, provisions rco
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('clode build --naude --target macos-*: on a DARWIN host, fetches NO rcodesign (system codesign)', async () => {
+test('clode build naude --target macos-*: on a DARWIN host, fetches NO rcodesign (system codesign)', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-signer-darwinhost-'));
   try {
     const { env } = seedProvider(dir);
     const r = await runBuild(
-      ['--naude', '--target', 'macos-amd64', '--out', path.join(dir, 'out')],
+      ['--target', 'macos-amd64', '--out', path.join(dir, 'out')],
       env, { status: 0, stdout: '', stderr: '' }, async () => FAKE_NODE,
       {
         hostPlatform: 'darwin',
@@ -448,12 +457,12 @@ test('clode build --naude --target macos-*: on a DARWIN host, fetches NO rcodesi
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('clode build --naude --target linux-*: non-darwin target on a non-darwin host fetches NO rcodesign', async () => {
+test('clode build naude --target linux-*: non-darwin target on a non-darwin host fetches NO rcodesign', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-signer-linuxtarget-'));
   try {
     const { env } = seedProvider(dir);
     const r = await runBuild(
-      ['--naude', '--target', 'linux-arm64', '--out', path.join(dir, 'out')],
+      ['--target', 'linux-arm64', '--out', path.join(dir, 'out')],
       env, { status: 0, stdout: '', stderr: '' }, async () => FAKE_NODE,
       {
         hostPlatform: 'linux',
@@ -469,12 +478,12 @@ test('clode build --naude --target linux-*: non-darwin target on a non-darwin ho
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('clode build --naude (native, no --target): fetches NO rcodesign regardless of injected hostPlatform', async () => {
+test('clode build naude (native, no --target): fetches NO rcodesign regardless of injected hostPlatform', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-signer-native-'));
   try {
     const { env } = seedProvider(dir);
     const r = await runBuild(
-      ['--naude'], env, { status: 0, stdout: '', stderr: '' }, async () => FAKE_NODE,
+      [], env, { status: 0, stdout: '', stderr: '' }, async () => FAKE_NODE,
       {
         hostPlatform: 'linux',
         ensureRcodesign: async () => { throw new Error('must not be called: native build, no explicit darwin target'); },
@@ -489,12 +498,12 @@ test('clode build --naude (native, no --target): fetches NO rcodesign regardless
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('clode build --naude --target macos-*: rcodesign fetch failure fails loud, names `clode fetch --naude`', async () => {
+test('clode build naude --target macos-*: rcodesign fetch failure fails loud, names `clode fetch node`', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-signer-boom-'));
   try {
     const { env } = seedProvider(dir);
     const r = await runBuild(
-      ['--naude', '--target', 'macos-amd64'],
+      ['--target', 'macos-amd64'],
       env, { status: 0, stdout: '', stderr: '' }, async () => FAKE_NODE,
       {
         hostPlatform: 'linux',
@@ -502,7 +511,7 @@ test('clode build --naude --target macos-*: rcodesign fetch failure fails loud, 
       });
 
     assert.strictEqual(r.status, 1);
-    assert.match(r.stderr, /clode fetch --naude/, 'should name the fetch fix');
+    assert.match(r.stderr, /clode fetch node/, 'should name the fetch fix');
     const naude = r.calls.find((c) => Array.isArray(c.args)
       && c.args.some((a) => typeof a === 'string' && a.endsWith(path.join('scripts', 'build-naude.mjs'))));
     assert.ok(!naude, `no build-naude should have been spawned; calls:\n${JSON.stringify(r.calls, null, 2)}`);
@@ -523,13 +532,13 @@ test('clode build --naude --target macos-*: rcodesign fetch failure fails loud, 
 
 // THE NAUDE ATTEST GATE MUST BE ABLE TO FAIL THE BUILD. Everything above injects a
 // working attest so it can test other wiring; this one injects a FAILING one and requires
-// `clode build --naude` to refuse. Without it, every naude test in this file would pass
+// `clode build naude` to refuse. Without it, every naude test in this file would pass
 // just as happily against a build that never ran the gate at all.
-test('clode build --naude: a failing attest fails the build, loudly', async () => {
+test('clode build naude: a failing attest fails the build, loudly', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-attestfail-'));
   try {
     const { env } = seedProvider(dir);
-    const r = await runBuild(['--naude'], env, { status: 0, stdout: '', stderr: '' },
+    const r = await runBuild([], env, { status: 0, stdout: '', stderr: '' },
       async () => FAKE_NODE,
       { attestTarget: () => Promise.resolve({ ok: false, status: 1, stdout: 'clode-attest: VERIFICATION FAILED\n', stderr: '' }) });
     assert.strictEqual(r.status, 1, `the build reported success despite a failed attest:\n${r.stdout}`);
@@ -539,7 +548,7 @@ test('clode build --naude: a failing attest fails the build, loudly', async () =
 });
 
 // ORDER, not just outcome: a host with no pinned Node must be refused BEFORE the bundle is
-// staged. Observed on a cosmo .com (2026-08-31, user): `clode build --naude` re-extracted
+// staged. Observed on a cosmo .com (2026-08-31, user): `clode build naude` re-extracted
 // 2.1.251 — minutes of SCC merging on a code-split bundle — and only then said
 // "naude on cosmopolitan-x64 is not supported (no pinned Node for this platform)". The
 // refusal is a pure lookup in deps/clode/node-pin.json; nothing about it needs the bundle.
@@ -552,7 +561,7 @@ test('clode build --naude: a failing attest fails the build, loudly', async () =
 // The test asserts ORDER by removing the provider: with nothing to stage, the OLD code
 // fails first with a staging/provider error, and only the hoisted check makes the platform
 // refusal win. `ensureNode` must never be reached either — the pin table answers this.
-test('clode build --naude: an unsupported HOST is refused before the bundle is staged', async () => {
+test('clode build naude: an unsupported HOST is refused before the bundle is staged', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-nohost-'));
   try {
     // Deliberately NO seedProvider: staging cannot succeed here.
@@ -560,7 +569,7 @@ test('clode build --naude: an unsupported HOST is refused before the bundle is s
       CLODE_CACHE: path.join(dir, 'cache'), DYLD_INSERT_LIBRARIES: '' };
     let ensureNodeCalled = false;
     const ensureNode = async () => { ensureNodeCalled = true; return FAKE_NODE; };
-    const r = await runBuild(['--naude'], env, { status: 0, stdout: '', stderr: '' }, ensureNode,
+    const r = await runBuild([], env, { status: 0, stdout: '', stderr: '' }, ensureNode,
       { hostPlatform: 'cosmopolitan', hostArch: 'x64' });
 
     assert.notStrictEqual(r.status, 0, 'an unsupported host must fail the build');

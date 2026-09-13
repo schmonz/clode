@@ -25,12 +25,12 @@
 //      --clode-attest` — any failure exits nonzero and says why.
 //
 // Usage: clode build [--out PATH]        (default ./quaude)
-//        clode build --self [--out PATH] (default ./clode-native)
+//        clode bootstrap [--out PATH] (default ./clode-native)
 // Env:   CLODE_TJS         — the tjs template binary (default <root>/build/tjs/tjs)
-//        CLODE_MAIN_BUNDLE — the esbuilt clode-main bundle for --self (default:
+//        CLODE_MAIN_BUNDLE — the esbuilt clode-main bundle for bootstrap (default:
 //                            newest build/*/clode-main.bundle.cjs)
 //
-// --self blobulates the BUILDER itself: the same trailer format with role "builder"
+// bootstrap blobulates the BUILDER itself: the same trailer format with role "builder"
 // — the esbuilt clode-main bundle as a SOURCE entry (65KB; bytecode would force
 // strict mode on the esbuild output for no parse win — measured 0.24s boot),
 // plus everything `clode build` needs as blobulate INPUTS on a machine with no
@@ -550,8 +550,8 @@ function assertNoUnknownBareSpecifiers(files, closure, libexecDir, opts = {}) {
 }
 
 // Resolve node_modules for the ext-dep closure the same way in both build
-// targets that embed Claude Code (the quaude/--self shared block below, and
-// `clode build --naude` above it): ensureDeps (installs into the deps store
+// targets that embed Claude Code (the quaude/bootstrap shared block below, and
+// `clode build naude` above it): ensureDeps (installs into the deps store
 // unless deps ship beside this checkout), then the two candidate locations an
 // npm/repo layout can leave it in. Throws (never a silent null) — the whole
 // ext-dep closure hinges on finding this directory. Factored out so this
@@ -572,7 +572,7 @@ function resolveClaudeNmDir({ libexec, here, verbose, env, ROOT }) {
 // twice, in parallel copies, for long enough that the naude copy grew a comment
 // claiming it reused the quaude one ("no duplication"). It did not.
 //
-// `prefix` names the failing target ('build' / 'build --naude') so the caller's
+// `prefix` names the failing target ('build' / 'build naude') so the caller's
 // errors still say WHICH build died — the only real difference between the two
 // former copies. `libexec` is a parameter rather than a closure read because the
 // quaude caller may hand us the MATERIALIZED libexec (a blobulated builder unpacks
@@ -584,7 +584,7 @@ function stageUpstreamCli({ env, libexec, verbose, prefix, log }) {
   if (bin == null || !resolve.pathExists(bin)) {
     return {
       error: bin == null
-        ? `${prefix}: no Claude Code binary found — run 'clode fetch [channel|version]' to fetch one, or install the provider package, or set CLODE_CLAUDE_BIN`
+        ? `${prefix}: no Claude Code binary found — run 'clode fetch claude' to fetch one, or install the provider package, or set CLODE_CLAUDE_BIN`
         : `${prefix}: claude binary not found at '${bin}'`,
     };
   }
@@ -656,7 +656,7 @@ function startPongMock() {
 // its own payload, not the build host's ambient NODE_PATH), and assert the
 // mock actually RECEIVED the POST (a hang or a silently-broken client would
 // otherwise exit clean without ever calling out). Before this was factored
-// out, only quaude ran this proof; `clode build --naude` checked nothing
+// out, only quaude ran this proof; `clode build naude` checked nothing
 // beyond the child's exit status, so a naude that booted but couldn't reach
 // the API — or only "worked" because the build host's NODE_PATH leaked in —
 // still printed success. Per-target bits (naude's build-time stripped-node/
@@ -753,10 +753,10 @@ function codesignAdHoc(file, opts = {}) {
   }
   // Signing failed. On old macOS (Mavericks, verified 10.9.5) codesign_allocate
   // cannot sign a fat Mach-O carrying an arm64 slice. Thin to the host slice IN
-  // PLACE and retry — the blobulated BUILDER (--self) degrades to host-arch, which is
+  // PLACE and retry — the blobulated BUILDER (bootstrap) degrades to host-arch, which is
   // honest (a box that can't sign the arm64 slice can neither run nor verify a
   // universal one). Quaude output is thinned proactively before it ever reaches
-  // here, so this reactive path is now only the --self fat-builder fallback.
+  // here, so this reactive path is now only the bootstrap fat-builder fallback.
   const t = thinToHostSlice(file, { spawnSync: sp, arch });
   if (t.thinned) {
     log(`clode: build: thinned fat template to ${t.slice} (host codesign cannot sign the fat binary)`);
@@ -826,7 +826,18 @@ function describeExit(r) {
   return `exit ${r ? r.status : '?'}`;
 }
 
-// Shared argv contract for `clode build [--naude|--self] [--out PATH]`.
+// Shared argv contract for `clode build <product> [--out PATH]` and `clode bootstrap
+// [--out PATH]`.
+//
+// THE PRODUCT IS NOT IN THE ARGV (phase 3a task 6). It is the second parameter —
+// 'quaude' (default), 'naude', or 'clode' for the bootstrap builder — because the CLI
+// takes it as a POSITIONAL that dispatch has already resolved against the table.
+// What this buys, beyond vocabulary: `clode build quaude --naude` used to build a
+// NAUDE (dispatch kept the explicit positional, then the flag it had also left in the
+// argv won), and `--naude --self` had to be refused by hand as "different build
+// targets". With one product parameter and no product flags, both are gone by
+// construction — one is an unknown argument, the other cannot be expressed.
+//
 // Exported so clode-main.cjs can validate BEFORE deciding whether to fire
 // the watch trigger: a build that will not happen (bad/unknown argv) must
 // not phone home or write <cache>/clode/last-watch — see clode-main.cjs's
@@ -873,37 +884,44 @@ function makePhaseSpinner(stderr, active, getTotals) {
   };
 }
 
-function parseBuildArgs(args) {
-  let naude = false;
-  let self = false;
+function parseBuildArgs(args, product) {
+  // 'quaude' | 'naude' | 'clode' (the bootstrap builder). Defaulted so the many
+  // in-process callers that only ever meant a quaude keep reading as they did.
+  const kind = product || 'quaude';
+  if (kind !== 'quaude' && kind !== 'naude' && kind !== 'clode') {
+    return { error: `build: internal error: unknown product '${kind}'` };
+  }
+  const naude = kind === 'naude';
+  const self = kind === 'clode';
   let out = null;
   let target = null;
   let listTargets = false;
   let keepGoing = false;
+  // The usage line names THIS command: `clode bootstrap` and `clode build` are
+  // different verbs with different argv, and a message that named the wrong one
+  // would be the very drift this phase is removing.
+  const usage = self
+    ? 'usage: clode bootstrap [--target Y] [--out PATH]'
+    : 'usage: clode build [quaude|naude] [--target Y|--list-targets|--keep-going] [--out PATH]';
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--naude') { naude = true; }
-    else if (args[i] === '--self') { self = true; }
-    else if (args[i] === '--list-targets') { listTargets = true; }
+    if (args[i] === '--list-targets') { listTargets = true; }
     else if (args[i] === '--keep-going' || args[i] === '-k') { keepGoing = true; }
     else if (args[i] === '--out' && args[i + 1]) { out = args[++i]; }
     else if (args[i] === '--target') {
       if (!args[i + 1]) return { error: 'build: --target needs a platform (see: clode build --list-targets)' };
       target = args[++i];
     }
-    else return { error: `build: unknown argument '${args[i]}' (usage: clode build [--self|--naude|--target Y|--list-targets|--keep-going] [--out PATH])` };
+    else return { error: `${self ? 'bootstrap' : 'build'}: unknown argument '${args[i]}' (${usage})` };
   }
-  // --self is the odd one out: it builds the native clode BUILDER, never a
-  // product, so it composes with nothing. --naude and --target DO compose:
-  // "--naude --target T" means cross-build a naude for T (blob-gen on the host,
-  // embed a fetched target-arch node). --target alone is a cross-blobulated quaude.
-  if (self && (naude || target)) {
-    const other = naude ? '--naude' : '--target';
-    return { error: `build: --self and ${other} are different build targets — pick one` };
-  }
+  // NO EXCLUSIVITY CHECK any more, and that is the point: "--self and --naude are
+  // different build targets — pick one" existed because two flags could each name a
+  // product. One product parameter cannot contradict itself. --target still composes
+  // with every product: a naude cross-build resolves pinned NODEs for the target, and
+  // quaude/clode cross-blobulate onto the target's engine template.
   return { naude, self, out, target, listTargets, keepGoing };
 }
 
-// Resolve the output basename for a quaude/--self build (the naude branch names
+// Resolve the output basename for a quaude/bootstrap build (the naude branch names
 // its own).
 //   - Explicit --out is respected VERBATIM, with ONE exception: a `--target
 //     windows-*` cross-build appends .exe IF MISSING (`--out quaude-windows-amd64`
@@ -1034,7 +1052,7 @@ async function clodeBuild(args, opts) {
   const stderr = opts.stderr || process.stderr;
   const stdout = opts.stdout || process.stdout;
   // The one spawn seam every build step goes through (the blobulate worker, the
-  // smokes, and the naude build). Injectable so the --naude wiring (and any
+  // smokes, and the naude build). Injectable so the naude wiring (and any
   // future step) is testable without spawning a real subprocess; defaults to
   // the module-level async `run`.
   const spawnRun = opts.run || run;
@@ -1062,12 +1080,14 @@ async function clodeBuild(args, opts) {
   // -- argv: parsed ONCE for the whole subcommand, before either branch below
   // consumes it (parseBuildArgs below — the same function clode-main.cjs
   // calls to gate the watch trigger, so there is exactly one unknown-arg
-  // contract, not two). --naude used to short-circuit BEFORE this validation
+  // contract, not two). The PRODUCT arrives as opts.product ('quaude' | 'naude' |
+  // 'clode'), never in `args`: the CLI resolved the positional against the surface
+  // table before calling. --naude used to short-circuit BEFORE this validation
   // existed, which meant an unknown flag after --naude was silently ignored,
   // --naude + --self silently picked one target and dropped the other, and
   // --out was forwarded to a stub that quietly dropped it too (build wrote to
   // build/<tag>/naude and exited 0 regardless of what the user asked for).
-  const parsed = parseBuildArgs(args);
+  const parsed = parseBuildArgs(args, opts.product);
   if (parsed.error) return fail(parsed.error);
   const { naude, self, out: parsedOut } = parsed;
   let out = parsedOut;
@@ -1140,7 +1160,7 @@ async function clodeBuild(args, opts) {
     // fall through to the normal build+blobulate flow, which honors CLODE_TARGET_TEMPLATE.
   }
 
-  // -- naude branch (Task 4): `clode build --naude` bakes Claude Code into a
+  // -- naude branch (Task 4): `clode build naude` bakes Claude Code into a
   // Node SEA instead of blobulating a quaude. It reuses the SAME resolve + extract
   // machinery as the quaude path to land the user's cli.cjs, then hands that
   // cli.cjs to scripts/build-naude.mjs (which runs the esbuild/postject SEA
@@ -1162,7 +1182,7 @@ async function clodeBuild(args, opts) {
     if (blobulatedBuilder) {
       payloadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-payload-'));
       materializeBlobPayload(vfs, payloadDir);
-      clodeLog(`clode: build --naude: materialized the blobulated payload -> ${payloadDir}`);
+      clodeLog(`clode: build naude: materialized the blobulated payload -> ${payloadDir}`);
     }
     const assembleRoot = blobulatedBuilder ? payloadDir : ROOT;
     const effLibexec = blobulatedBuilder ? path.join(payloadDir, 'libexec') : opts.libexec;
@@ -1184,7 +1204,7 @@ async function clodeBuild(args, opts) {
       let nt = null, targetOs = opts.hostPlatform || process.platform;
       if (parsed.target) {
         nt = targetToNode(parsed.target);
-        if (!nt) return fail(`build --naude: '${parsed.target}' is not a Node platform — naude cannot target it; cross-build a quaude instead (clode build --target ${parsed.target})`);
+        if (!nt) return fail(`build naude: '${parsed.target}' is not a Node platform — naude cannot target it; cross-build a quaude instead (clode build quaude --target ${parsed.target})`);
         targetOs = nt.platform;
       }
       // blob-gen runs on THIS host whatever the target is, so an unservable host is fatal
@@ -1194,7 +1214,7 @@ async function clodeBuild(args, opts) {
         ...(nt ? [[nt.platform, nt.arch]] : []),
       ]) {
         const refusal = pinnedNodeRefusal(platform, arch);
-        if (refusal) return fail(`build --naude: ${refusal}`);
+        if (refusal) return fail(`build naude: ${refusal}`);
       }
 
       // The same resolve+extract the quaude path runs (stageUpstreamCli). Done before
@@ -1202,7 +1222,7 @@ async function clodeBuild(args, opts) {
       // missing one must fail before any network), but AFTER the pin-table check above,
       // which is cheaper still and can rule the whole build out.
       const staged = stageUpstreamCli({
-        env, libexec: effLibexec, verbose, prefix: 'build --naude', log: clodeLog,
+        env, libexec: effLibexec, verbose, prefix: 'build naude', log: clodeLog,
       });
       if (staged.error) return fail(staged.error);
       const { stageDir, cliPath } = staged;
@@ -1228,7 +1248,7 @@ async function clodeBuild(args, opts) {
         blobgenNode = await ensureNode({ env, log: clodeLog, platform: process.platform, arch: process.arch });
         embedNode = nt ? await ensureNode({ env, log: clodeLog, platform: nt.platform, arch: nt.arch }) : blobgenNode;
       } catch (e) {
-        return fail(`build --naude: could not get the pinned node(s) — the first cross-build needs network; run \`clode fetch --naude\` while online, then retry: ${(e && e.message) || e}`);
+        return fail(`build naude: could not get the pinned node(s) — the first cross-build needs network; run \`clode fetch node\` while online, then retry: ${(e && e.message) || e}`);
       }
 
       // -- off-Mac darwin signing (Task 4): a darwin-target build has no
@@ -1250,7 +1270,7 @@ async function clodeBuild(args, opts) {
         try {
           signerBin = await ensureRcodesign({ env, log: clodeLog, platform: hostPlatform, arch: process.arch });
         } catch (e) {
-          return fail(`build --naude: could not get rcodesign — first off-Mac sign needs network — run \`clode fetch --naude\` while online, then retry: ${(e && e.message) || e}`);
+          return fail(`build naude: could not get rcodesign — first off-Mac sign needs network — run \`clode fetch node\` while online, then retry: ${(e && e.message) || e}`);
         }
       }
 
@@ -1265,7 +1285,7 @@ async function clodeBuild(args, opts) {
       // above): naude embeds the same Claude Code bundle and the same ext-dep
       // closure as quaude, so it needs the same protection against a package the
       // bundle references but the seed list never learned about. Computed fresh
-      // here — this branch returns before reaching the quaude/--self shared
+      // here — this branch returns before reaching the quaude/bootstrap shared
       // block's own closure computation. Sources of truth follow assembleRoot/
       // effLibexec (the materialized payload under a blobulated builder, the checkout
       // otherwise).
@@ -1282,7 +1302,7 @@ async function clodeBuild(args, opts) {
           [cliPath, path.join(stageDir, 'bun-shim.cjs')], extDeps, effLibexec, { env });
         naudeBom = extDeps.map((name) => `${name}@${closureVersions.get(name)}`);
       } catch (e) {
-        return fail(`build --naude: ${(e && e.message) || e}`);
+        return fail(`build naude: ${(e && e.message) || e}`);
       }
 
       // -- what a naude must be able to say about ITSELF (--clode-attest). These are the
@@ -1307,7 +1327,7 @@ async function clodeBuild(args, opts) {
       const extrasPath = path.join(os.tmpdir(), `clode-naude-extras-${process.pid}.json`);
       fs.writeFileSync(extrasPath, JSON.stringify(naudeExtras));
 
-      clodeLog(`clode: build --naude: building the Node SEA from ${cliPath} under ${blobgenNode} (embed: ${embedNode}) ...`);
+      clodeLog(`clode: build naude: building the Node SEA from ${cliPath} under ${blobgenNode} (embed: ${embedNode}) ...`);
       // -- BLOBULATE, the postject mechanism (clode-blobulate.cjs): the payload is
       // injected into the pinned Node's SEA section rather than appended as a
       // trailer, by scripts/build-naude.mjs under the blob-gen node. A separate
@@ -1333,7 +1353,7 @@ async function clodeBuild(args, opts) {
         timeout: 600000 * SCALE,
       });
       if (!b.ok) {
-        return fail(`build --naude: build-naude failed (${describeExit(b.result)}):\n${b.result.stdout}${b.result.stderr}`);
+        return fail(`build naude: build-naude failed (${describeExit(b.result)}):\n${b.result.stdout}${b.result.stderr}`);
       }
       if (b.result.stdout) clodeLog(b.result.stdout.trimEnd());
     } finally {
@@ -1342,7 +1362,7 @@ async function clodeBuild(args, opts) {
 
     // -- smoke: the SAME shared contract quaude's build already runs (mock +
     // NODE_PATH-stripped -p PONG + assert-the-POST-landed — smokeTarget,
-    // duplication audit §2). Before this, `clode build --naude` only checked
+    // duplication audit §2). Before this, `clode build naude` only checked
     // build-naude's exit status: build-naude.mjs's OWN self-check
     // (smokeCheck) proves the baked bundle boots, but never proves it can
     // actually reach the API — the equivalent quaude bug was impossible. The
@@ -1364,7 +1384,7 @@ async function clodeBuild(args, opts) {
     const smokeTargetFn = opts.smokeTarget || smokeTarget;
     const naudeWork = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-naude-smoke-'));
     try {
-      clodeLog('clode: build --naude: smoke -p against the canned Messages mock ...');
+      clodeLog('clode: build naude: smoke -p against the canned Messages mock ...');
       const smoke = await smokeTargetFn(naudeOut, {
         spawnRun,
         env: { ...env, NAUDE_CACHE: path.join(naudeWork, 'cache') },
@@ -1372,8 +1392,8 @@ async function clodeBuild(args, opts) {
         timeout: 120000 * SCALE,
       });
       if (!smoke.ok) {
-        stderr.write('clode: build --naude: SMOKE FAILED — the built naude did not complete the mock round-trip\n');
-        stderr.write(`clode: build --naude: ${smoke.how} posted=${smoke.posted} stdout:\n${smoke.stdout}\nstderr:\n${smoke.stderr}\n`);
+        stderr.write('clode: build naude: SMOKE FAILED — the built naude did not complete the mock round-trip\n');
+        stderr.write(`clode: build naude: ${smoke.how} posted=${smoke.posted} stdout:\n${smoke.stdout}\nstderr:\n${smoke.stderr}\n`);
         return 1;
       }
       // -- attest: the SAME gate, the SAME flag, the SAME verdict string the quaude path
@@ -1388,7 +1408,7 @@ async function clodeBuild(args, opts) {
         timeout: 120000 * SCALE,
       });
       if (!naudeAttest.ok) {
-        stderr.write(`clode: build --naude: ATTEST FAILED (${describeExit(naudeAttest)}):\n${naudeAttest.stdout}\n${naudeAttest.stderr}\n`);
+        stderr.write(`clode: build naude: ATTEST FAILED (${describeExit(naudeAttest)}):\n${naudeAttest.stdout}\n${naudeAttest.stderr}\n`);
         return 1;
       }
     } finally {
@@ -1401,7 +1421,7 @@ async function clodeBuild(args, opts) {
   }
 
   // naude/self/out were already parsed + validated above (shared with the
-  // --naude branch, which returned before reaching here). A windows target's
+  // naude branch, which returned before reaching here). A windows target's
   // output always ends in .exe — default OR explicit --out (see resolveBuildOut).
   out = path.resolve(resolveBuildOut({ out, target: parsed.target, self, hostPlatform: process.platform }));
 
@@ -1409,7 +1429,7 @@ async function clodeBuild(args, opts) {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-'));
   // Hoisted out of the try block below (not `let`-declared inside it) so the
   // trace-log append in `finally` can read the bundle version this build
-  // actually staged — undefined for --self, exactly like the manifest's own
+  // actually staged — undefined for bootstrap, exactly like the manifest's own
   // bundleVersion field.
   let bundleVersion;
   try {
@@ -1552,7 +1572,7 @@ async function clodeBuild(args, opts) {
     }
 
     // -- payload staging: the upstream Claude Code bundle (default), or the
-    // esbuilt clode-main bundle (--self). No natural denominator (one bundle
+    // esbuilt clode-main bundle (bootstrap). No natural denominator (one bundle
     // staged, not N items) — a label, like fetch-template/sign/smoke.
     spin.phase('Extracting bundle');
     report.plan([{ name: 'extract' }]);
@@ -1561,7 +1581,7 @@ async function clodeBuild(args, opts) {
     if (self) {
       let bundle = env.CLODE_MAIN_BUNDLE;
       if (bundle) {
-        if (!fs.existsSync(bundle)) return fail(`build --self: no esbuilt clode-main bundle at '${bundle}' (CLODE_MAIN_BUNDLE)`);
+        if (!fs.existsSync(bundle)) return fail(`bootstrap: no esbuilt clode-main bundle at '${bundle}' (CLODE_MAIN_BUNDLE)`);
       } else {
         // Newest build/*/clode-main.bundle.cjs. `node scripts/build-clode-main.mjs`
         // now writes ONE unkeyed copy at build/bundle/ (the bundle is platform-
@@ -1583,7 +1603,7 @@ async function clodeBuild(args, opts) {
           }
         } catch { /* no build dir */ }
         if (!newest) {
-          return fail('build --self: no esbuilt clode-main bundle found (run `node scripts/build-clode-main.mjs`, or set CLODE_MAIN_BUNDLE)');
+          return fail('bootstrap: no esbuilt clode-main bundle found (run `node scripts/build-clode-main.mjs`, or set CLODE_MAIN_BUNDLE)');
         }
         bundle = newest.c;
       }
@@ -1608,7 +1628,7 @@ async function clodeBuild(args, opts) {
       const staleSrc = fs.readdirSync(libexec).find((f) => /\.(cjs|mjs|js)$/.test(f) && !f.startsWith('._')
         && fs.statSync(path.join(libexec, f)).mtimeMs > bm);
       if (staleSrc) {
-        return fail(`build --self: ${bundle} is older than libexec/${staleSrc} — a stale bundle would blobulate a WRONG builder (dead flag surface / extractIfNeeded crash); re-run \`node scripts/build-clode-main.mjs\` and try again`);
+        return fail(`bootstrap: ${bundle} is older than libexec/${staleSrc} — a stale bundle would blobulate a WRONG builder (dead flag surface / extractIfNeeded crash); re-run \`node scripts/build-clode-main.mjs\` and try again`);
       }
       stageDir = path.join(work, 'stage');
       fs.mkdirSync(stageDir, { recursive: true });
@@ -1722,7 +1742,7 @@ async function clodeBuild(args, opts) {
     report.plan([{ name: 'verify' }]);
     report.start('verify');
     // -- dep-closure DRIFT gate (see assertNoUnknownBareSpecifiers's comment,
-    // above, for the full rationale): quaude only — --self ships clode's OWN
+    // above, for the full rationale): quaude only — bootstrap ships clode's OWN
     // esbuilt bundle, not Claude Code's, so there is nothing to scan for that
     // role (stageDir holds clode-main.bundle.cjs, not cli.cjs/bun-shim.cjs).
     if (!self) {
@@ -1764,11 +1784,11 @@ async function clodeBuild(args, opts) {
     const extras = {
       clode: '1', // archive/manifest schema version (shared by both roles)
       role: self ? 'builder' : 'quaude',
-      bundleVersion: key, // undefined for --self (no upstream bundle) — dropped by JSON
+      bundleVersion: key, // undefined for bootstrap (no upstream bundle) — dropped by JSON
       // The platform the upstream provider was CARVED FOR (never the host, never the target).
       // ALWAYS PRESENT on a quaude, 'unknown' included — the same word cacheSignature uses for
       // a container it cannot name, so the manifest and the cache key speak one vocabulary and
-      // "we could not tell" stays distinguishable from "nobody recorded it". Absent for --self,
+      // "we could not tell" stays distinguishable from "nobody recorded it". Absent for bootstrap,
       // like bundleVersion (dropped by JSON): a builder carves no upstream bundle, so it has no
       // answer to give rather than a wrong one.
       providerPlatform: self ? undefined : (providerPlatform || 'unknown'),
@@ -1804,7 +1824,7 @@ async function clodeBuild(args, opts) {
       // Thin a fat/universal template down to the host arch: no point blobulating a
       // 4-arch quaude carrying ppc/i386/other slices this box will never exec, and
       // it sidesteps the Mavericks fat-sign problem for free (the sign below then
-      // always operates on a thin binary). The BUILDER (--self) is deliberately
+      // always operates on a thin binary). The BUILDER (bootstrap) is deliberately
       // NOT thinned here — the shipped universal clode must run on any Mac, and
       // its embedded template's sha is verified on materialization. A no-op on an
       // already-thin template (the common native case).
@@ -1813,7 +1833,7 @@ async function clodeBuild(args, opts) {
     }
     if (process.platform === 'darwin' && !crossTarget) {
       // signedBase is a copy of `template` — thinned to the host slice just above
-      // for a quaude, or still fat for the --self builder (codesignAdHoc's reactive
+      // for a quaude, or still fat for the bootstrap builder (codesignAdHoc's reactive
       // thin covers the Mavericks fat-builder case). Sign the plain Mach-O before
       // the worker appends (never sign after appending).
       const r = codesignAdHoc(signedBase, { log: clodeLog });
@@ -1840,12 +1860,12 @@ async function clodeBuild(args, opts) {
       nmDir,
       extrasPath,
       out,
-      // --self embeds the PRISTINE base template as a member (Decision 2) so a
+      // bootstrap embeds the PRISTINE base template as a member (Decision 2) so a
       // blobulated builder can materialize+exec it as its own blobulate worker with
       // nothing else on disk. This MUST be baseTemplate (the target-platform base,
       // = crossTarget for a cross-blobulate), NOT `template` (the HOST engine that
       // runs THIS worker) — else a cross-blobulated builder ships a host-arch
-      // template it cannot exec on the target. Native --self: baseTemplate ===
+      // template it cannot exec on the target. Native bootstrap: baseTemplate ===
       // template, so this is unchanged there. The quaude role embeds nothing
       // (its base IS the signed copy).
       embedTemplate: self ? baseTemplate : null,
@@ -1885,8 +1905,8 @@ async function clodeBuild(args, opts) {
     // there is nothing for mismatches() to catch there; if that ever changes,
     // this comment is the marker for where a second check would need to go.
     //
-    // `clode build --naude` does NOT pass through here, and more to the point
-    // declares no steps at all — neither scripts/build-naude.mjs nor the --naude
+    // `clode build naude` does NOT pass through here, and more to the point
+    // declares no steps at all — neither scripts/build-naude.mjs nor the naude
     // branch above calls report.plan/start/finish. So naude is not merely
     // unchecked, it is structurally unmeasurable: nothing is declared, so nothing
     // can mismatch. Harmless today, and deliberately left alone rather than
@@ -1929,8 +1949,8 @@ async function clodeBuild(args, opts) {
       report.finish('smoke-version');
       spin.done();
       if (v.status !== 0 || !/^clode /.test(v.stdout)) {
-        stderr.write(`clode: build --self: SMOKE FAILED — the blobulated builder did not answer --version\n`);
-        stderr.write(`clode: build --self: ${describeExit(v)} stdout:\n${v.stdout}\nstderr:\n${v.stderr}\n`);
+        stderr.write(`clode: bootstrap: SMOKE FAILED — the blobulated builder did not answer --version\n`);
+        stderr.write(`clode: bootstrap: ${describeExit(v)} stdout:\n${v.stdout}\nstderr:\n${v.stderr}\n`);
         return 1;
       }
       spin.phase('Smoke --help');
@@ -1940,8 +1960,8 @@ async function clodeBuild(args, opts) {
       report.finish('smoke-help');
       spin.done();
       if (h.status !== 0 || !/clode build/.test(h.stdout)) {
-        stderr.write(`clode: build --self: SMOKE FAILED — the blobulated builder did not answer --help\n`);
-        stderr.write(`clode: build --self: ${describeExit(h)} stdout:\n${h.stdout}\nstderr:\n${h.stderr}\n`);
+        stderr.write(`clode: bootstrap: SMOKE FAILED — the blobulated builder did not answer --help\n`);
+        stderr.write(`clode: bootstrap: ${describeExit(h)} stdout:\n${h.stdout}\nstderr:\n${h.stderr}\n`);
         return 1;
       }
       stdout.write(`clode: blobulated ${out} (${fs.statSync(out).size} bytes, native clode builder)\n`);

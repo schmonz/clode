@@ -64,17 +64,24 @@ test('every table subject parses, and nothing else does', () => {
 });
 
 test('--target means one thing: every verb that takes it documents it identically', () => {
-  const takers = Object.entries(SURFACE.verbs).filter(([, v]) => v.flags['--target']);
+  // TASK 6: over the CHECKOUT table, which is every verb there is — `bootstrap` takes
+  // --target too, and a verb whose flag text nobody checked is exactly how --target
+  // acquired a second meaning the first time.
+  const all = surfaceFor('checkout').verbs;
+  const takers = Object.entries(all).filter(([, v]) => v.flags['--target']);
   const texts = takers.map(([, v]) => v.flags['--target']);
-  assert.ok(texts.length >= 2, 'at least build and fetch take --target');
-  assert.strictEqual(new Set(texts.map((t) => t.replace(/ingredient|product/, 'X'))).size, 1,
+  assert.ok(texts.length >= 3, 'at least build, fetch and bootstrap take --target');
+  assert.strictEqual(new Set(texts.map((t) => t.replace(/ingredient|product|builder/, 'X'))).size, 1,
     '--target must mean the same thing everywhere — that is the defect this table exists to prevent');
   // FIX ROUND 1 (coordinator): sameness-modulo-the-noun is only half the invariant. The
   // normalised-away noun must be the verb's OWN subjectClass, or `build` could document
   // "the INGREDIENT is for PLATFORM-ARCH", pass the check above, and be nonsense.
+  // bootstrap has no subject class at all — what it builds is clode — so the noun it
+  // must name is 'builder'.
   for (const [verb, def] of takers) {
-    assert.match(def.flags['--target'], new RegExp(`\\b${def.subjectClass}\\b`),
-      `clode ${verb}'s --target must name its own subject class ('${def.subjectClass}')`);
+    const noun = def.subjectClass || 'builder';
+    assert.match(def.flags['--target'], new RegExp(`\\b${noun}\\b`),
+      `clode ${verb}'s --target must name what it builds or fetches ('${noun}')`);
   }
 });
 
@@ -92,14 +99,12 @@ test('parseArgv records the leading globals in argv order, and only leading ones
   assert.match(after.error, /unknown argument '--help'/);
 });
 
-// The brief's fourth assertion, in two halves — because task 5 builds the SPLIT and
-// task 6 adds the VERB that uses it (coordinator's dispatch: bootstrap is task 6's).
-// The half that is true today is asserted today, structurally, so that task 6's whole
-// change really is one entry in one table; the half that is task 6's is SKIPPED with
-// the reason rather than left failing. A red that is expected stops being read, and
-// this project has already paid for that once (a clode-native P0 broke 13 CI jobs and
-// went unnoticed because main was already red with three tolerated failures —
-// BACKLOG.md).
+// The brief's fourth assertion, in two halves — because task 5 built the SPLIT and
+// task 6 added the VERB that uses it. Task 5 asserted the structural half and SKIPPED
+// the other with its reason rather than leaving an expected red (a red that is expected
+// stops being read, and this project has already paid for that once: a clode-native P0
+// broke 13 CI jobs and went unnoticed because main was already red with three tolerated
+// failures — BACKLOG.md). Task 6 un-skipped it without editing it.
 test('the shipped table has no bootstrap, and the checkout table is it plus the checkout-only verbs', () => {
   assert.ok(!('bootstrap' in surfaceFor('shipped').verbs), 'a shipped clode cannot bootstrap');
   const shipped = Object.keys(surfaceFor('shipped').verbs);
@@ -112,12 +117,12 @@ test('the shipped table has no bootstrap, and the checkout table is it plus the 
     + 'is one entry in one table, never a conditional in dispatch');
 });
 
-test('the checkout table has bootstrap',
-  { skip: 'task 6 adds the bootstrap entry to CHECKOUT_ONLY_VERBS (and the stage0.mjs wiring); '
-        + 'task 5 only builds the shipped/checkout split it goes in' },
-  () => {
-    assert.ok('bootstrap' in surfaceFor('checkout').verbs, 'the checkout entry point can');
-  });
+// Task 6 un-skipped this VERBATIM: adding `bootstrap` to CHECKOUT_ONLY_VERBS is what
+// made it pass, with no edit to the assertion — which is the evidence that task 5's
+// split was the right shape.
+test('the checkout table has bootstrap', () => {
+  assert.ok('bootstrap' in surfaceFor('checkout').verbs, 'the checkout entry point can');
+});
 
 test('surfaceFor refuses a kind that is not an entry point', () => {
   // There are exactly two entry points. A typo'd kind must not quietly hand back the

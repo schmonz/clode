@@ -659,7 +659,7 @@ jobs:
           #   node-shim-bunshim  bun:ffi suffix is platform-aware ('so' on Linux).
           # node-shim-child-process was un-excluded earlier: its `spawnSync: cwd` row
           # failed because musl rejected posix_spawn cwd (the addchdir_np gate was
-          # #ifdef __GLIBC__), so tar's KAT and `clode fetch --naude` died "no tar
+          # #ifdef __GLIBC__), so tar's KAT and `clode fetch node` died "no tar
           # tool found on PATH". Fixed in txiki-sync-spawn.patch (parent-side chdir
           # dance on musl); this file runs on musl as the standing guard.
           EXCLUDE='node-shim-tty'
@@ -804,7 +804,7 @@ jobs:
           CLODE_NODES: ${{ runner.temp }}/clode-nodes
         run: |
           set -euo pipefail
-          # `build --self` embeds this; without it the blobulate has no payload.
+          # `clode bootstrap` embeds this; without it the blobulate has no payload.
           node scripts/build-clode-main.mjs
           # Provision postject into deps/clode: quaude-blobulate.js carries it as a
           # builder member (soft — skipped if absent), and acceptance 4's naude

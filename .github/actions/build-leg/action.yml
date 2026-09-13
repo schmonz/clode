@@ -4,7 +4,7 @@ description: >
   tree from committed material (PINS.md tag+sha, spike/quickjs/patches/* in
   the documented order) -> build tjs (natively, or inside a guest via
   ./.github/actions/guest) -> esbuild clode-main -> blobulate the self-contained
-  builder (clode build --self, embedded pristine template) -> self-smoke
+  builder (clode bootstrap, embedded pristine template) -> self-smoke
   (--version always; full = ephemeral quaude blobulate + PONG + attest
   against a fetched provider, artifact NEVER uploaded) -> attest -> upload.
   Only BUILDERS are ever published; quaudes are ephemeral runner files.
@@ -558,7 +558,7 @@ runs:
     # own-qemu backend on a tjs-cache miss, synced OUT to
     # steps.mode.outputs.out by the backend (Task 4 tunes the exact recipe +
     # sync — the GUEST-DONE/*-exit marker vocabulary already used by
-    # spike/quickjs/qemu/guest-sparc-*.sh); (B) below — the clode --self
+    # spike/quickjs/qemu/guest-sparc-*.sh); (B) below — the bootstrap
     # BUILDER cross-blobulates ON the x64 runner; (C) further below — the SMOKE
     # hands the backend a recipe. Guarded so every other leg (exec=host/
     # guest/cross, windows) is untouched.
@@ -652,7 +652,7 @@ runs:
         { [ -n "$want" ] && [ "$want" = "$got" ]; } || { echo "engine sync-out cksum/len mismatch" >&2; exit 1; }
         file "$OUT/tjs"
 
-    # (B) Cross-blobulate the clode --self BUILDER on the x64 runner, targeting
+    # (B) Cross-blobulate the BUILDER (clode bootstrap) on the x64 runner, targeting
     # the sparc engine synced out above (the retired windows cross-file
     # leg's mechanism — git show 594f53c~1 — adapted for sparc): build a
     # HOST (linux) tjs to run the blobulate worker, then blobulate against the
@@ -932,7 +932,7 @@ runs:
           # SHIPPED name (floor included), not the guest's own honest,
           # floor-less OS version — see scripts/platform-tag.cjs's artifactDir.
           CLODE_ASSET_NAME="${{ steps.name.outputs.asset }}"; export CLODE_ASSET_NAME
-          CLODE_TJS="$CLODE_TJS_OUT/tjs" node scripts/stage0.mjs build --self --out "./${{ steps.name.outputs.asset }}"
+          CLODE_TJS="$CLODE_TJS_OUT/tjs" node scripts/stage0.mjs bootstrap --out "./${{ steps.name.outputs.asset }}"
           ./"${{ steps.name.outputs.asset }}" --version
           if [ "${{ inputs.smoke }}" = full ]; then
             CLODE_CLAUDE_BIN="$PWD/.matrix/provider-claude" \
@@ -996,7 +996,7 @@ runs:
         echo "tjs host-exec: $out"
         [ "$out" = tjs-shim-ok ]
 
-    - name: Blobulate the self-contained builder (clode build --self)
+    - name: Blobulate the self-contained builder (clode bootstrap)
       if: steps.mode.outputs.exec != 'guest' && steps.mode.outputs.exec != 'qemu' && inputs.no-exec != 'true'
       shell: bash
       env:
@@ -1005,7 +1005,7 @@ runs:
         # SHIPPED name (floor included) instead of this runner's own honest,
         # floor-less OS version — see scripts/platform-tag.cjs's artifactDir.
         CLODE_ASSET_NAME: ${{ steps.name.outputs.asset }}
-      run: node scripts/stage0.mjs build --self --out "${{ steps.name.outputs.asset }}"
+      run: node scripts/stage0.mjs bootstrap --out "${{ steps.name.outputs.asset }}"
 
     - name: Self-smoke --version (host exec of the blobulated builder)
       if: steps.mode.outputs.exec != 'guest' && steps.mode.outputs.exec != 'qemu' && inputs.no-exec != 'true'

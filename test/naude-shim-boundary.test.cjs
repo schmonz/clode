@@ -359,7 +359,7 @@ function skipMessage({ probed }) {
     + '  Probed, in order:\n' + lines.join('\n') + '\n'
     + '  To run it, build one (isolated from the shared store, per this repo\'s convention):\n'
     + '    CLODE_DEPS=$(mktemp -d) CLODE_CACHE=$(mktemp -d) \\\n'
-    + '      node scripts/stage0.mjs build --naude --out /tmp/naude\n'
+    + '      node scripts/stage0.mjs build naude --out /tmp/naude\n'
     + '    CLODE_NAUDE_BIN=/tmp/naude node --test test/naude-shim-boundary.test.cjs\n'
     + '  (needs Node >= 24 and a Bun-packaged Claude Code provider.)\n'
     + '  Everything else in this file — the marker checks, the assembly contract, and the\n'

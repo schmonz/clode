@@ -14,7 +14,7 @@
 // the carried-member loop (libexec/quaude-blobulate.js:211) made this test RED, as
 // designed. But removing 'merge-step.mjs' or 'sea-sign.cjs' — LEAF members nothing
 // relatively requires — left it GREEN: the guard checked closure, not membership. A
-// dropped leaf does not fail a test; it kills a --self-blobulated build at tjs.spawn, in
+// dropped leaf does not fail a test; it kills a bootstrap-blobulated build at tjs.spawn, in
 // the field, with no signal. This file now also derives, from real use sites, every
 // scripts/<name> the worker (or a carried script) REACHES FOR at runtime and asserts
 // each one is carried — see scriptsDirUses() below for why that derivation is scoped
@@ -104,7 +104,7 @@ function readScriptsDir() {
 //               worker (or a carried script) actually REACHES FOR is carried
 // The blind half was closure-only: a LEAF member (merge-step.mjs, sea-sign.cjs) could be
 // dropped from the list with the guard silent, and a dropped member does not fail a test —
-// it fails a --self-blobulated build at tjs.spawn, in the field, with no signal.
+// it fails a bootstrap-blobulated build at tjs.spawn, in the field, with no signal.
 //
 // `examined` counts each carried member TWICE — once in the membership loop below, once
 // again as a BFS node in the closure loop — because those are two genuinely distinct
@@ -185,7 +185,7 @@ guardTests(guard);
 test('regression: a dropped LEAF member is reported (BLIND until 2026-09-04)', () => {
   // merge-step.mjs is spawned via path.join(scriptsDir, 'merge-step.mjs') but nothing
   // REQUIRES it, so the closure-only scan was silent — and a dropped member does not fail
-  // a test, it kills a --self-blobulated build at tjs.spawn in the field.
+  // a test, it kills a bootstrap-blobulated build at tjs.spawn in the field.
   const r = scanAssembler({
     blobulateSrc: "for (const f of ['build-naude.mjs']) {\n    members.push({ name: `scripts/"
       + "\nconst p = path.join(scriptsDir, 'merge-step.mjs');",

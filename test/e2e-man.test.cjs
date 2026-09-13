@@ -50,10 +50,32 @@ test('man page documents CLODE_NODE', () => {
   assert.match(man, /CLODE_NODE/);
 });
 
-test('man page documents the watch subcommand', () => {
-  // watch was a flag (--clode-watch) before the runner was retired; it is now
-  // a subcommand (`clode watch`), triggered by `clode build` rather than a launch.
-  assert.match(man, /^\.Cm watch$/m);
+// TASK 6 (carried item 1): man/clode.1 is a SECOND hand-maintained copy of the
+// surface, and it lied the moment the spellings changed — it documented `.Cm watch`
+// (which this test pinned by name) and `clode fetch [channel|version]` with no
+// ingredient. Pinning one verb name by hand is what let that happen, so the pin is
+// now the TABLE: every verb the surface declares — the CHECKOUT table, which is all of
+// them, bootstrap included — must appear in the SYNOPSIS as its own `.Cm` line, every
+// subject must be named somewhere, and no retired spelling may survive anywhere in the
+// page. It is a cheap cross-check, not a renderer: man(7) prose is written by a human
+// and should stay that way. What it makes impossible is the specific drift that
+// actually happened.
+test('man documents exactly the verbs and subjects the surface table declares', () => {
+  const { surfaceFor } = require('../libexec/cli-surface.cjs');
+  const table = surfaceFor('checkout');
+  for (const [verb, def] of Object.entries(table.verbs)) {
+    assert.match(man, new RegExp(`^\\.Cm ${verb}$`, 'm'),
+      `man's SYNOPSIS must carry the verb ${verb}`);
+    for (const subject of Object.keys(def.subjects)) {
+      assert.ok(man.includes(subject), `man must name the ${verb} subject ${subject}`);
+    }
+  }
+});
+
+test('man carries no spelling the break removed', () => {
+  for (const gone of [/^\.Cm watch$/m, /--naude/, /--self/, /\.Nm Cm fetch\n\.Op Cm stable/]) {
+    assert.doesNotMatch(man, gone, `man still documents a retired spelling: ${gone}`);
+  }
 });
 
 test('man page documents CLODE_NO_WATCH', () => {

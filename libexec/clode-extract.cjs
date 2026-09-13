@@ -42,7 +42,7 @@ function isFile(p) {
 // members and materializes them with fs.writeFileSync into a fresh mkdtemp on every run
 // (materializeBlobPayload), so the bytes are identical and the mtime is always `now`:
 // "extractor changed; re-extracting" on every invocation, forever, and never a shared
-// entry between a musl quaude and a cosmo .com. Reported by the user after a `--naude`
+// entry between a musl quaude and a cosmo .com. Reported by the user after a `build naude`
 // build re-extracted a 2.1.251 graph that had been extracted minutes earlier.
 //
 // Hashing is also STRICTLY more reliable than what it replaces, which is why this costs no

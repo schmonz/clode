@@ -118,7 +118,7 @@ test('downloadFile(http://) string + dest modes over localhost', async () => {
 
 // dest mode must STREAM the body to disk chunk-by-chunk rather than buffer the
 // whole (~240MB) response via arrayBuffer() and writeFileSync once at the end
-// (BACKLOG "clode fetch looks eternally stuck at 0 bytes"): the arrayBuffer
+// (BACKLOG "clode fetch claude looks eternally stuck at 0 bytes"): the arrayBuffer
 // approach leaves the dest at 0 bytes for the whole download (looks hung) and
 // OOMs/hangs a 243MB buffer under tjs. Contract: onProgress fires per chunk with
 // a monotonically increasing received count that ends at total (from

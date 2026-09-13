@@ -42,7 +42,7 @@ before(() => {
   const foreign = path.join(DIR, 'tjs.exe');           // foreign-base stand-in
   fs.copyFileSync(tjsPath(), foreign);
   OUT = path.join(DIR, 'quaude.exe');
-  BUILD = spawnSync(process.execPath, [ENTRY, 'build', '--self', '--out', OUT], {
+  BUILD = spawnSync(process.execPath, [ENTRY, 'bootstrap', '--out', OUT], {
     encoding: 'utf8', timeout: 300000,
     env: {
       ...process.env, CLODE_TJS: tjsPath(), CLODE_TARGET_TEMPLATE: foreign, CLODE_MAIN_BUNDLE: bundle,

@@ -41,7 +41,21 @@ const TAGLINE = 'build a standalone Claude Code binary for your machine.';
 //                 error, and every member here is named in --help (asserted).
 //   defaultSubject  which member a bare `clode <verb>` means. null when there is no
 //                 positional (or no default), in which case the positional is
-//                 required.
+//                 required and parseArgv says so.
+//   tail          OPTIONAL second positional, as { name, only, doc }: a free-form
+//                 value (not a member of a class), accepted AFTER the subject, and
+//                 only for the subject `only` names. Exactly one verb has one
+//                 (fetch's channel/version); it is declared rather than left to
+//                 dispatch because an accepted-but-undocumented positional is the
+//                 same lie as a documented-but-ignored flag.
+//   ownsArgv      true when the verb's own MODULE parses what follows (build and
+//                 bootstrap hand cmd.rest to clode-build.cjs's parseBuildArgs). For
+//                 those, a flag-level complaint from parseArgv is NOT the answer —
+//                 the module prints its own message, with its own usage line, so there
+//                 is exactly one unknown-argument contract per verb. For every other
+//                 verb the table IS the whole contract, so a flag error is fatal here.
+//                 Absent/false is the safe default: an unrecognised flag is refused
+//                 rather than silently ignored.
 //   flags         flag name -> one line. Each takes a VALUE (`--out PATH`); the
 //                 boolean ones are the globals below, which are LEADING-only. A
 //                 flag's text is shared vocabulary, not per-verb prose: two verbs
@@ -67,6 +81,10 @@ const SURFACE = {
       subjects: { quaude: 'the pinned tjs runtime + the compiled Claude Code bundle',
                   naude: 'a Node SEA; Node hosts only' },
       defaultSubject: 'quaude',
+      // clode-build.cjs's parseBuildArgs parses the rest (it also takes
+      // --list-targets and --keep-going, which are build-internal rather than surface
+      // vocabulary), so its message — not parseArgv's — is what a bad build argv gets.
+      ownsArgv: true,
       // --target's text is the SAME SENTENCE fetch uses, with only the subject noun
       // swapped — enforced by test/cli-surface.test.cjs. The brief's draft wording
       // ('cross-build for PLATFORM-ARCH instead of this machine' here, 'fetch the
@@ -87,7 +105,19 @@ const SURFACE = {
       subjectClass: 'ingredient',
       subjects: { claude: 'the upstream binary quaude is built from',
                   node: 'the pinned runtime naude embeds' },
-      defaultSubject: 'claude',
+      // NO DEFAULT (task 6): bare `clode fetch` was one of the spellings the break
+      // removed, so the ingredient is required and its absence is a usage error the
+      // table produces, not a silent choice dispatch makes.
+      defaultSubject: null,
+      // The one verb with a SECOND positional. It is declared here for the same
+      // reason everything else is: `clode fetch [channel|version]` used to exist,
+      // still works (test/run.mjs seeds the suite with a pinned provider that way,
+      // and man(1) documented it), and an accepted-but-undocumented positional is
+      // exactly the lying surface this table exists to end. `name` is what help
+      // renders and `only` names the ingredient it applies to, which dispatch
+      // enforces.
+      tail: { name: '[channel|version]', only: 'claude',
+              doc: 'which upstream release to fetch (default: the autoUpdatesChannel setting, else latest)' },
       flags: { '--target': 'the ingredient is for PLATFORM-ARCH, not this machine' },
       env: [{ name: 'CLODE_CHANGELOG_URL',
               doc: 'release-notes source for the post-update signals digest' }],
@@ -123,10 +153,30 @@ const SURFACE = {
 // clode-builds-clode. Keeping it out of SURFACE.verbs makes "a shipped clode cannot
 // bootstrap" a property of DATA instead of a conditional somewhere in dispatch.
 //
-// Empty today: task 6 adds the `bootstrap` entry here (and the stage0.mjs wiring
-// that passes 'checkout'), which is the whole point of the split existing before
-// there is anything in it — adding the verb is one entry in one table.
-const CHECKOUT_ONLY_VERBS = {};
+// Task 6 added the entry, and that really was the whole change: one entry in one
+// table, plus the branch in clode-main.cjs that runs it. `bootstrap` takes no
+// positional because the thing it builds is not a product — it is clode.
+const CHECKOUT_ONLY_VERBS = {
+  bootstrap: {
+    summary: 'build clode itself from this source checkout (the builder, not a product)',
+    subjectClass: null,
+    subjects: {},
+    defaultSubject: null,
+    ownsArgv: true,            // same parser as build — see SURFACE.verbs.build
+    // --target reads exactly as it does for a product: the artifact is for another
+    // machine. It is the same cross-blobulate path a `build quaude --target` takes
+    // (the foreign engine template becomes the base), which is why it composes here
+    // and why the old `--self and --target are different build targets` refusal went
+    // away with the flags.
+    flags: { '--target': 'the builder is for PLATFORM-ARCH, not this machine',
+             '--out': 'write the artifact here (default ./clode-native)' },
+    env: [{ name: 'CLODE_MAIN_BUNDLE',
+            doc: 'the esbuilt clode-main bundle to embed (default: the newest '
+              + 'build/*/clode-main.bundle.cjs; build it with `node scripts/build-clode-main.mjs`)' },
+          { name: 'CLODE_TARGET_TEMPLATE',
+            doc: 'an operator-built engine for --target, used INSTEAD of the published template' }],
+  },
+};
 
 // surfaceFor(kind) — the table as a given ENTRY POINT sees it.
 //   'shipped'  — the built clode binary: SURFACE exactly.
@@ -135,12 +185,18 @@ const CHECKOUT_ONLY_VERBS = {};
 // Returns a fresh object (the caller cannot mutate SURFACE through it); the verb
 // DEFINITIONS are shared, which is deliberate — one definition per verb, whoever
 // asks.
+// `elsewhere` is the OTHER half of the split: the verbs this entry point does not
+// have BUT SOMETHING ELSE DOES. It exists so that a shipped clode asked to bootstrap
+// can say where bootstrap lives instead of "unknown command" — still a property of
+// the data (parseArgv reads the field; no conditional anywhere names 'bootstrap').
 function surfaceFor(kind) {
   if (kind === 'shipped') {
-    return { verbs: Object.assign({}, SURFACE.verbs), globals: SURFACE.globals, env: SURFACE.env };
+    return { verbs: Object.assign({}, SURFACE.verbs), globals: SURFACE.globals, env: SURFACE.env,
+             elsewhere: Object.assign({}, CHECKOUT_ONLY_VERBS) };
   }
   if (kind === 'checkout') {
-    return { verbs: Object.assign({}, SURFACE.verbs, CHECKOUT_ONLY_VERBS), globals: SURFACE.globals, env: SURFACE.env };
+    return { verbs: Object.assign({}, SURFACE.verbs, CHECKOUT_ONLY_VERBS), globals: SURFACE.globals, env: SURFACE.env,
+             elsewhere: {} };
   }
   throw new Error(`cli-surface: unknown entry-point kind '${kind}' (want 'shipped' or 'checkout')`);
 }
@@ -194,12 +250,17 @@ function renderHelp(version, surface) {
     const def = surface.verbs[verb];
     const subjects = Object.keys(def.subjects);
     const positional = subjects.length ? ` [${subjects.join(' | ')}]` : '';
+    const tail = def.tail ? ` ${def.tail.name}` : '';
     const flags = Object.keys(def.flags);
-    lines.push(`  clode ${verb}${positional}${flags.length ? ' [options]' : ''}`);
+    lines.push(`  clode ${verb}${positional}${tail}${flags.length ? ' [options]' : ''}`);
     lines.push(`      ${def.summary}`);
     if (subjects.length) {
       lines.push(`      ${def.subjectClass}s:`);
       lines.push(...columns(subjects.map((s) => [s, def.subjects[s] + (s === def.defaultSubject ? ' (default)' : '')]), '        '));
+    }
+    if (def.tail) {
+      lines.push(...columns([[def.tail.name,
+        def.tail.doc + (def.tail.only ? ` (${def.tail.only} only)` : '')]], '      '));
     }
     if (flags.length) {
       lines.push('      options:');
@@ -234,6 +295,8 @@ function renderHelp(version, surface) {
 //            undefined. Falls back to nothing — dispatch applies defaultSubject,
 //            because "what a bare verb means" is a dispatch decision the table
 //            declares, not a parse result.
+//   tail     the verb's declared SECOND positional (def.tail), when argv supplied
+//            one; undefined otherwise. Only ever set for a verb that declares it.
 //   flags    { '--name': value } for the verb's flags, and { '--name': true } for
 //            leading globals.
 //   globalOrder  the leading globals in the order argv gave them. Dispatch acts on the
@@ -247,6 +310,13 @@ function renderHelp(version, surface) {
 //            unknown-argument message).
 //   error    the FIRST complaint, as the text dispatch prints after "clode: ".
 //            undefined when argv matches the table exactly.
+//   errorKind  WHICH LAYER complained: 'verb' (no such command here), 'subject' (the
+//            positional is missing, unknown, or not wanted) or 'flag' (everything
+//            after it). The distinction is load-bearing, not decoration: verb and
+//            subject errors are the TABLE's to reject — dispatch exits 2 on them —
+//            while a flag error belongs to the verb's own module, which owns its argv
+//            contract (clode-build.cjs's parseBuildArgs) and prints its own usage
+//            line. Without the kind, dispatch would have to pattern-match the text.
 //
 // Shape: leading globals, then the verb, then an optional subject, then flags. A
 // global after the verb is an unknown argument, not a global (that is what makes
@@ -266,42 +336,62 @@ function parseArgv(argv, surface) {
   if (token === undefined || !has(surface.verbs, token)) {
     // The message dispatch has always printed for an unrecognised command, including
     // the empty one (`clode` with no argv at all): clode BUILDS targets, so there is
-    // nothing for a stray argv to fall through to.
-    return { verb: undefined, subject: undefined, flags, globalOrder, rest: [], error: `unknown command '${token === undefined ? '' : token}'` };
+    // nothing for a stray argv to fall through to. The ONE exception is a verb that
+    // exists at the OTHER entry point (surface.elsewhere): a shipped clode asked to
+    // bootstrap should say where bootstrap lives. That is read out of the data, so
+    // nothing here names a verb.
+    const elsewhere = surface.elsewhere || {};
+    const error = has(elsewhere, token)
+      ? `clode ${token} runs only from a source checkout (node scripts/stage0.mjs ${token}), not from a built clode binary`
+      : `unknown command '${token === undefined ? '' : token}'`;
+    return { verb: undefined, subject: undefined, tail: undefined, flags, globalOrder, rest: [], error, errorKind: 'verb' };
   }
   const verb = token;
   const def = surface.verbs[verb];
-  const tail = args.slice(i + 1);
+  const after = args.slice(i + 1);
 
   let subject;
+  let tail;
   let error;
+  let errorKind;
+  const complain = (kind, text) => { if (!error) { error = text; errorKind = kind; } };
   let consumed = 0;
-  if (tail.length > 0 && !tail[0].startsWith('-')) {
-    if (has(def.subjects, tail[0])) {
-      subject = tail[0];
+  if (after.length > 0 && !after[0].startsWith('-')) {
+    if (has(def.subjects, after[0])) {
+      subject = after[0];
       consumed = 1;
     } else if (def.subjectClass === null) {
-      error = `clode ${verb} takes no argument, got '${tail[0]}'`;
+      complain('subject', `clode ${verb} takes no argument, got '${after[0]}'`);
     } else {
-      error = `unknown ${def.subjectClass} '${tail[0]}' for clode ${verb} (choose: ${Object.keys(def.subjects).join(', ')})`;
+      complain('subject', `unknown ${def.subjectClass} '${after[0]}' for clode ${verb} (choose: ${Object.keys(def.subjects).join(', ')})`);
     }
+  } else if (def.subjectClass !== null && !def.defaultSubject) {
+    // A required positional, absent. The table knows it is required (no
+    // defaultSubject), so the table's parser is where that is said — this is what
+    // makes bare `clode fetch` a usage error rather than a silent 'claude'.
+    complain('subject', `clode ${verb} needs ${/^[aeiou]/.test(def.subjectClass) ? 'an' : 'a'} ${def.subjectClass} (choose: ${Object.keys(def.subjects).join(', ')})`);
   }
-  const rest = tail.slice(consumed);
+  // The declared second positional, if this verb has one and argv supplied it.
+  if (def.tail && consumed === 1 && after.length > 1 && !after[1].startsWith('-')) {
+    tail = after[1];
+    consumed = 2;
+  }
+  const rest = after.slice(consumed);
 
   for (let j = 0; j < rest.length; j++) {
     const tok = rest[j];
     if (has(def.flags, tok)) {
       // Every flag in the table takes a value; the boolean ones are the globals.
       const value = (j + 1 < rest.length && !rest[j + 1].startsWith('-')) ? rest[j + 1] : undefined;
-      if (value === undefined) { if (!error) error = `clode ${verb}: ${tok} needs a value`; continue; }
+      if (value === undefined) { complain('flag', `clode ${verb}: ${tok} needs a value`); continue; }
       flags[tok] = value;
       j += 1;
-    } else if (!error) {
-      error = `unknown argument '${tok}'`;
+    } else {
+      complain('flag', `unknown argument '${tok}'`);
     }
   }
 
-  return { verb, subject, flags, globalOrder, rest, error };
+  return { verb, subject, tail, flags, globalOrder, rest, error, errorKind };
 }
 
 module.exports = { SURFACE, TAGLINE, CHECKOUT_ONLY_VERBS, surfaceFor, renderHelp, parseArgv };

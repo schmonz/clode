@@ -154,7 +154,7 @@ export function runGate(opts = {}) {
   if (stageSkip) {
     log(`SKIP: ${stageSkip}`);
     log('  The gate stages cli.cjs from a real provider binary; point CLODE_PROVIDER_BIN');
-    log("  or CLODE_CLAUDE_BIN at one, or run 'clode fetch'.");
+    log("  or CLODE_CLAUDE_BIN at one, or run 'clode fetch claude'.");
     return 0;
   }
 

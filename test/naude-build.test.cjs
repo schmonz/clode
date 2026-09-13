@@ -144,7 +144,7 @@ test('parseOutArg: resolves a given path to absolute', async () => {
 // Duplication audit §5: the two paths used to state OPPOSITE intents about
 // bun-shim provenance — quaude took it from the extract STAGE DIR ("version-
 // locked to the bundle by the cache"), naude took it from REPO/libexec,
-// ignoring the stage dir the --naude branch had just populated. They agreed on
+// ignoring the stage dir the naude branch had just populated. They agreed on
 // bytes only BY ACCIDENT: clode-extract.cjs re-copies libexec/bun-shim.cjs over
 // the cached one on every cache hit. Pin the shim per bundle version — the
 // stated intent — and naude would silently bake a DIFFERENT shim than quaude

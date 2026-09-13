@@ -1,5 +1,5 @@
 'use strict';
-// Q1c acceptance: the NATIVE clode builder. `clode build --self` blobulates
+// Q1c acceptance: the NATIVE clode builder. `clode bootstrap` blobulates
 // ./clode-native (tjs template + builder-role trailer: esbuilt clode-main as a
 // source entry, node-shim tree, libexec blobulate inputs, ext-dep closure), and that
 // binary must complete the whole chain WITHOUT node:
@@ -55,7 +55,7 @@ function stageMainBundle(dir) {
       define: { __CLODE_BUNDLE_VERSION__: JSON.stringify(VERSION) },
       outfile: out,
     });
-    // Sibling naude-entry bundle (Task 4): clode-build.cjs's --self staging
+    // Sibling naude-entry bundle (Task 4): clode-build.cjs's bootstrap staging
     // now copies it from alongside clode-main.bundle.cjs, so a fresh esbuild
     // here must produce both, mirroring scripts/build-clode-main.mjs.
     esbuild.buildSync({
@@ -111,7 +111,7 @@ before(() => {
   NATIVE = path.join(DIR, 'clode-native');
   QUAUDE = path.join(DIR, 'quaude-from-native');
   // Blobulate the builder under HOST node (that is how a dev machine mints it).
-  BUILD = spawnSync(process.execPath, [ENTRY, 'build', '--self', '--out', NATIVE], {
+  BUILD = spawnSync(process.execPath, [ENTRY, 'bootstrap', '--out', NATIVE], {
     encoding: 'utf8',
     timeout: 300000,
     env: {
@@ -160,9 +160,9 @@ function runNative(bin, args, env, timeoutMs = 600000) {
   });
 }
 
-test('clode build --self blobulates a native builder and its internal smokes pass', (t) => {
+test('clode bootstrap blobulates a native builder and its internal smokes pass', (t) => {
   if (SKIP) { t.skip(SKIP); return; }
-  assert.strictEqual(BUILD.status, 0, `clode build --self failed:\n${BUILD.stdout}\n${BUILD.stderr}`);
+  assert.strictEqual(BUILD.status, 0, `clode bootstrap failed:\n${BUILD.stdout}\n${BUILD.stderr}`);
   assert.match(BUILD.stdout, /clode: blobulated .*native clode builder/);
   assert.match(BUILD.stdout, /--version \+ --help ok/);
   assert.ok(fs.statSync(NATIVE).size > 6 * 1024 * 1024, 'blobulated builder implausibly small');
@@ -206,10 +206,24 @@ test('acceptance 1: --version/--help answer with node ABSENT from PATH', async (
   const { renderHelp, surfaceFor } = require('../libexec/cli-surface.cjs');
   assert.strictEqual(h.stdout, renderHelp(VERSION, surfaceFor('shipped')),
     'the native builder must render the same surface as the source tree');
-  // build --self left the USER surface: the blobulated NATIVE builder still
-  // answers to it (this whole test proves that), but its own --help must not
-  // advertise it.
+  // TASK 6: `--self` is gone from the surface entirely — what it did is `clode
+  // bootstrap`, a CHECKOUT-only verb. This binary IS the shipped shape, so its help
+  // must not mention either spelling.
   assert.doesNotMatch(h.stdout, /--self/);
+  assert.doesNotMatch(h.stdout, /bootstrap/);
+});
+
+// The shipped-vs-checkout split, proven on the REAL ARTIFACT rather than on the spine
+// running under node: a downloaded clode has no bootstrap verb, and says where the verb
+// lives instead of a bare "unknown command". It cannot be a conditional in dispatch —
+// the binary carries the shipped table, and that table simply has no such entry.
+test('acceptance 1c: a shipped clode refuses bootstrap, naming the checkout', async (t) => {
+  if (SKIP) { t.skip(SKIP); return; }
+  const env = { PATH: EMPTY_PATH, HOME: DIR };
+  const r = await runNative(NATIVE, ['bootstrap'], env, 60000);
+  assert.strictEqual(r.status, 2, r.stderr);
+  assert.match(r.stderr, /checkout/i);
+  assert.match(r.stderr, /scripts\/stage0\.mjs bootstrap/);
 });
 
 test('acceptance 1b: BARE invocation is a clean usage error, not a wall stack (v0.1.2 field report)', async (t) => {
@@ -286,10 +300,10 @@ test('acceptance 4: the native builder BUILDS A NAUDE (fetch node + assemble + P
   // both (a) gates cleanly on the environment — offline / a sha problem fails
   // HERE, distinctly from an assembly bug below — and (b) warms the store so the
   // node-free build proves the ASSEMBLY without a network round-trip inside it.
-  // (`clode fetch --naude` under tjs shares clode-net with the provider fetch,
+  // (`clode fetch node` under tjs shares clode-net with the provider fetch,
   // proven elsewhere; the claim under test is that clode-native assembles a
   // working naude with no node on PATH.)
-  const fetch = spawnSync(process.execPath, [ENTRY, 'fetch', '--naude'], {
+  const fetch = spawnSync(process.execPath, [ENTRY, 'fetch', 'node'], {
     encoding: 'utf8', timeout: 300000,
     env: { ...process.env, CLODE_NODES: NODES, DYLD_INSERT_LIBRARIES: '' },
   });
@@ -307,7 +321,7 @@ test('acceptance 4: the native builder BUILDS A NAUDE (fetch node + assemble + P
     CLODE_ZSTD: HOST_ZSTD,                    // reachable by name, not by widening PATH
     CLODE_NODES: NODES,
   };
-  const r = await runNative(NATIVE, ['build', '--naude', '--out', NAUDE], env);
+  const r = await runNative(NATIVE, ['build', 'naude', '--out', NAUDE], env);
   assert.strictEqual(r.status, 0, `native naude build failed:\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
   assert.match(r.stdout, /built naude/);
   assert.match(r.stdout, /PONG round-trip ok/);   // the mandatory smoke ran on the built naude

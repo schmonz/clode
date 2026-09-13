@@ -197,7 +197,7 @@ if (role === 'builder') {
   // merge/compile/assets work here to name a step for. Not an oversight.
   members.push({ name: entryName, data: await mustRead(path.join(stageDir, 'clode-main.bundle.cjs'), 'esbuilt clode-main bundle') });
   // The naude entry point: pre-esbuilt off the user path (Task 4), staged
-  // alongside clode-main.bundle.cjs by clode-build.cjs's --self staging step.
+  // alongside clode-main.bundle.cjs by clode-build.cjs's bootstrap staging step.
   // Carried here (not built at naude-assembly time) so a later task can build
   // a naude without esbuild present on the user side.
   members.push({ name: 'naude-entry.bundle.cjs', data: await mustRead(path.join(stageDir, 'naude-entry.bundle.cjs'), 'esbuilt naude-entry bundle') });
@@ -211,7 +211,7 @@ if (role === 'builder') {
   // Task 8), and scripts/sea-sign.cjs (which build-naude execs to unsign/re-sign
   // the SEA — on macOS the ad-hoc re-sign after postject is MANDATORY or the
   // binary won't run). A blobulated builder ships no scripts/ dir, so `clode build
-  // --naude` under clode-native materializes these (clode-blobulate.cjs's
+  // naude` under clode-native materializes these (clode-blobulate.cjs's
   // materializeBlobPayload) and spawns the copy. Member names keep their scripts/
   // path (re-joined onto the payload dir verbatim). Committed files that always
   // exist → mustRead. (Miss one require in this list → "Cannot find module" only

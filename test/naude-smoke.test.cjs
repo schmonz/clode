@@ -12,7 +12,7 @@
 // SEA, boot it, and PONG — 2 pass, 0 fail, 0 skipped. Nothing about this host prevents
 // it.
 //
-// What the gate actually buys is minutes: it is a full `clode build --naude`, so it
+// What the gate actually buys is minutes: it is a full `clode build naude`, so it
 // does not belong on every push. Requirements are real but ordinary — esbuild +
 // postject and Node >= 24, since materializing/injecting the SEA blob is a Node >= 24
 // feature — and any current host or CI runner meets them.
@@ -70,7 +70,7 @@ function skipReason() {
 // libexec/extract-claude-js.cjs <bin> <out> writes the baked Claude Code JS.
 // build-naude requires bun-shim.cjs staged BESIDE the --cli (it is version-locked
 // to the bundle by the extract cache — a bare cli.cjs is rejected, which is what
-// `clode build --naude` stages from its cache dir). Mirror that here: copy the
+// `clode build naude` stages from its cache dir). Mirror that here: copy the
 // checkout's libexec/bun-shim.cjs next to the extracted cli.cjs.
 // ONE STAGING PATH, shared with every other oracle: test/oracle-models.cjs stageCli runs
 // clode's own cached extraction, which merges upstream's residual cyclic requires away.
@@ -148,7 +148,7 @@ test('naude: real SEA build boots the baked CC and answers PONG offline', async 
 });
 
 // THE NAUDE ATTEST GATE, ON A REAL NAUDE. The unit tests drive attestSelf against a fake
-// SEA; `clode build --naude` refuses to report success unless the real binary attests. That
+// SEA; `clode build naude` refuses to report success unless the real binary attests. That
 // refusal is worth nothing unless a corrupted naude actually answers differently, so: build
 // one, flip a byte inside a real asset, and require the verdict to change.
 //

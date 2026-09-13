@@ -481,7 +481,7 @@ function isRecordedCliQuoteScanExclusion(file) {
 // FIX ROUND 1 (coordinator review, task-11, 2026-09-05): a detector that can only see
 // `test/*.test.cjs` cannot see where THIS TASK'S OWN defect actually lived —
 // libexec/clode-build.cjs's scanBareSpecifiers(), the real dep-closure gate `clode build`
-// and `clode build --naude` run. Fed the reviewer's own words: "I verified this myself...
+// and `clode build naude` run. Fed the reviewer's own words: "I verified this myself...
 // the detector WOULD have flagged this task's own defect" against the PRE-FIX file. A
 // detector with a blind spot shaped exactly like the bug it exists to catch is not
 // finished, so the population walk now also covers every `.cjs`/`.mjs` under `libexec/`
@@ -807,6 +807,13 @@ function isRecordedProductionGateExclusion(rel) {
 //       `process.exit(runGate())` was a live miss) added apicheck.mjs and naude-entry.cjs.
 //       Adding `.js` to the walk in the same round moved the population 74 -> 76 but cost
 //       zero gates; the two effects were MEASURED together, not added on paper.
+//   29  phase 3a task 6 — THE FIRST MOVE THE TREE MADE, not the classifier. libexec/
+//       clode-main.cjs left the gate-shaped set because the break DELETED the two things
+//       that matched the verdict half: `cmd.rest.indexOf('--naude')` (the legacy
+//       product-flag sniff) and a comment quoting `args.slice(1).includes('--naude')`.
+//       It was never a build gate — same false positive, and the same CAUSE, as the
+//       libexec/cli-surface.cjs exclusion above; here the code simply went away, so no
+//       exclusion entry is needed. Measured: 80 in scope, 34 gate-shaped, 4 controlled.
 // Re-verify against classifyProductionFile() before reading a future change as good or bad.
 //
 // MEANT TO GO DOWN. Never raise it to make a run look clean — raising it papers over exactly
@@ -815,7 +822,7 @@ function isRecordedProductionGateExclusion(rel) {
 // someone seeing it". Some of the 30 are certainly false positives under a classifier with
 // no input half (see classifyProductionFile above); each one that is confirmed by hand
 // becomes a PRODUCTION_GATE_EXCLUSIONS entry with a reason and the baseline drops.
-const UNCONTROLLED_GATE_BASELINE = 30;
+const UNCONTROLLED_GATE_BASELINE = 29;
 
 // GATE_SHAPED_FLOOR — the OTHER half of the ratchet, and the reason a fall can be trusted.
 // FIX ROUND 1 (reviewer, 2026-09-12): the uncontrolled count alone cannot tell "someone wrote

@@ -1,7 +1,7 @@
 name: cross-blobulate
 description: >
   Build a host (linux) tjs to run the blobulate worker, then cross-blobulate the clode
-  --self BUILDER against a foreign-arch target tjs template (CLODE_TARGET_TEMPLATE).
+  BUILDER (clode bootstrap) against a foreign-arch target tjs template (CLODE_TARGET_TEMPLATE).
   Emits a tier-2 clode builder at <out-asset>. The host smoke is skipped (the
   output is target-arch); validation is the caller's job (qemu-user / qemu-system
   / none). NB: for ELF targets only — Mach-O (darwin) targets need the template
@@ -40,5 +40,5 @@ runs:
         CLODE_ASSET_NAME: ${{ inputs.out-asset }}
       run: |
         set -euo pipefail
-        node scripts/stage0.mjs build --self --out "${{ inputs.out-asset }}"
+        node scripts/stage0.mjs bootstrap --out "${{ inputs.out-asset }}"
         test -f "${{ inputs.out-asset }}"

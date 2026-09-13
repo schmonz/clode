@@ -3,7 +3,7 @@
 // provider, walk the dep closure, gate it, sign the engine copy, smoke the result);
 // blobulating is the one step in the middle that ATTACHES a payload to an engine
 // image, and it has two mechanisms — a canonical-LE trailer appended by the tjs
-// worker (quaude/--self), and postject injecting a SEA blob (naude). This file
+// worker (quaude/bootstrap), and postject injecting a SEA blob (naude). This file
 // tests that step directly: it used to be reachable only by driving a whole build.
 const { test } = require('node:test');
 const assert = require('node:assert');
@@ -104,7 +104,7 @@ test('blobulate(trailer): runs the worker UNDER the engine, with the member argv
     'the worker\'s own narration must reach the human-facing log untouched');
 });
 
-test('blobulate(trailer): --self appends the PRISTINE base engine as a 9th positional', async () => {
+test('blobulate(trailer): bootstrap appends the PRISTINE base engine as a 9th positional', async () => {
   const { blobulate } = require('../libexec/clode-blobulate.cjs');
   const { calls, spawnRun } = recorder();
   await blobulate({
