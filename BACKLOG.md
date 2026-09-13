@@ -6975,7 +6975,7 @@ project convention, so the decisions live here). Phase order:
   `canonical-name.cjs`'s `assetName`.
 
 **Three inherited claims did not survive re-measurement**, which is the phase's own lesson
-recorded for the next one: the env population was 51 and is 65; the "fast path to a fused
+recorded for the next one: the env population was 51 and is 65; the "fast path to a built
 builder" the umbrella said phase 3 REQUIRED already existed at 14s warm; and one-target-both-
 products was mostly done. Only the first is a number — the other two are premises, and
 premises are what a plan silently inherits.
