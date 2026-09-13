@@ -17,6 +17,31 @@ const ROOT = path.resolve(__dirname, '..');
 const ENTRY = path.join(ROOT, 'scripts', 'stage0.mjs');
 const NODE = process.execPath;
 const VERSION = fs.readFileSync(path.join(ROOT, 'VERSION'), 'utf8').replace(/\n+$/, '');
+const FAKE_VERSION_PRELOAD = path.join(__dirname, 'fixtures', 'fake-node-version-preload.cjs');
+
+// Spawn ENTRY for real (the normal `node <file>` dispatch, not require()), with
+// process.versions.node overridden via a --require preload (test/fixtures/
+// fake-node-version-preload.cjs) that runs before ENTRY is loaded, regardless
+// of ENTRY's module type. This is deliberately NOT `require(ENTRY)` inside a
+// `-e` harness: since ENTRY is ESM, require()-ing it depends on the SPAWNING
+// node's own require(esm) support (added well after — and unrelated to — the
+// v20 floor this exercises), so that technique would silently start testing
+// "does the test runner's node support require(esm)" instead of "does the
+// floor check work", and would throw a confusing ERR_REQUIRE_ESM on any
+// somewhat-older runner rather than the floor message under test. Measured:
+// real Node 18.20.8 (this box, via asdf) can run scripts/stage0.mjs directly
+// and gets the exact same floor message as the current interpreter; it
+// cannot require() it (ERR_REQUIRE_ESM). This helper avoids that gap entirely
+// by never using require() on ENTRY.
+function runEntryWithFakeVersion(fakeVersion, args, extraEnv) {
+  return spawnSync(NODE, ['--require', FAKE_VERSION_PRELOAD, ENTRY, ...args], {
+    encoding: 'utf8',
+    env: Object.assign({}, process.env, {
+      DYLD_INSERT_LIBRARIES: '',
+      CLODE_TEST_FAKE_NODE_VERSION: fakeVersion,
+    }, extraEnv || {}),
+  });
+}
 
 // Run the entry under the current node with a clean-ish env (empty
 // DYLD_INSERT_LIBRARIES so the AVX shim never crashes a spawned node on old Macs).
@@ -96,19 +121,13 @@ test('--help is dispatched only as the outer FIRST arg — not one level in', ()
 });
 
 test('the ES5 prologue prints the exact floor message + exits 1 on an old node', () => {
-  // Fake an old node by redefining process.versions.node BEFORE requiring the
-  // entry, so the prologue's own floor check trips (the entry is required, not
-  // spawned, so the fake version is in effect at prologue-eval time). The floor
-  // is v20 for every command now — clode never runs the extracted bundle under
-  // node (that died with the runner), so there is no higher-floor command left
-  // to special-case; the old build-only v20/v24 split collapsed into one floor.
-  const harness =
-    "Object.defineProperty(process.versions,'node',{value:'18.0.0',configurable:true});" +
-    `require(${JSON.stringify(ENTRY)});`;
-  const r = spawnSync(NODE, ['-e', harness], {
-    encoding: 'utf8',
-    env: Object.assign({}, process.env, { DYLD_INSERT_LIBRARIES: '' }),
-  });
+  // Fake an old node's reported version via a --require preload (see
+  // runEntryWithFakeVersion above), so the prologue's own floor check trips
+  // when ENTRY is actually run. The floor is v20 for every command now —
+  // clode never runs the extracted bundle under node (that died with the
+  // runner), so there is no higher-floor command left to special-case; the
+  // old build-only v20/v24 split collapsed into one floor.
+  const r = runEntryWithFakeVersion('18.0.0', []);
   assert.strictEqual(r.status, 1);
   assert.strictEqual(
     r.stderr,
@@ -124,21 +143,13 @@ test('the prologue floor is v20 end-to-end for `clode build` (blobulate runs und
   // legs, dispatches #6/#14 2026-07-10) — the build path must clear the
   // prologue on both. CLODE_TJS points at a nonexistent template so the run
   // fails FAST and CONTROLLED after the gate (proof it got past the check).
-  const harness =
-    "Object.defineProperty(process.versions,'node',{value:'20.0.0',configurable:true});" +
-    "process.argv=[process.argv[0],'clode','build'];" +
-    `require(${JSON.stringify(ENTRY)});`;
-  const r = spawnSync(NODE, ['-e', harness], {
-    encoding: 'utf8',
-    env: Object.assign({}, process.env, {
-      DYLD_INSERT_LIBRARIES: '',
-      CLODE_TJS: '/nonexistent/clode-test-tjs-template',
-      // This is a valid `clode build` (past argv validation), so it fires the
-      // watch trigger — not what this test is about, and without an override
-      // it would phone home / touch the real cache dir (this harness inherits
-      // process.env, unlike runEntry above). CLODE_NO_WATCH keeps it hermetic.
-      CLODE_NO_WATCH: '1',
-    }),
+  const r = runEntryWithFakeVersion('20.0.0', ['build'], {
+    CLODE_TJS: '/nonexistent/clode-test-tjs-template',
+    // This is a valid `clode build` (past argv validation), so it fires the
+    // watch trigger — not what this test is about, and without an override
+    // it would phone home / touch the real cache dir (this harness inherits
+    // process.env, unlike runEntry above). CLODE_NO_WATCH keeps it hermetic.
+    CLODE_NO_WATCH: '1',
   });
   assert.strictEqual(r.status, 1);
   assert.doesNotMatch(r.stderr || '', /too old/);
@@ -146,14 +157,7 @@ test('the prologue floor is v20 end-to-end for `clode build` (blobulate runs und
 });
 
 test('the prologue keeps a floor for `clode build` too — v18 is refused', () => {
-  const harness =
-    "Object.defineProperty(process.versions,'node',{value:'18.19.0',configurable:true});" +
-    "process.argv=[process.argv[0],'clode','build'];" +
-    `require(${JSON.stringify(ENTRY)});`;
-  const r = spawnSync(NODE, ['-e', harness], {
-    encoding: 'utf8',
-    env: Object.assign({}, process.env, { DYLD_INSERT_LIBRARIES: '' }),
-  });
+  const r = runEntryWithFakeVersion('18.19.0', ['build']);
   assert.strictEqual(r.status, 1);
   assert.match(r.stderr || '', /node v18\.19\.0 is too old; need >= v20/);
 });
