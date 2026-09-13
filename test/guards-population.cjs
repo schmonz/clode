@@ -762,7 +762,24 @@ function controlledProductionModules() {
 // is handled at the walk (PRODUCTION_SCOPE_SKIP), not here. It exists so that a genuine
 // false positive has somewhere honest to go — without it the only escape would be RAISING
 // the baseline, which the ratchet exists to forbid.
-const PRODUCTION_GATE_EXCLUSIONS = [];
+const PRODUCTION_GATE_EXCLUSIONS = [
+  // MEASURED 2026-09-13 (phase 3a task 5), both halves, before writing this entry:
+  //   verdict half — the ONLY match in the whole file is PATTERN_MATCHES' `.includes('`,
+  //     and it is inside a COMMENT quoting the shape this module replaced:
+  //     "`args.slice(1).includes('--naude')`". No code in the file inspects bytes.
+  //   refuse half  — `throw new Error(` in surfaceFor(kind), for an entry-point kind that
+  //     is neither 'shipped' nor 'checkout'. That is a programmer-error guard on a
+  //     two-value enum, not a verdict about an artifact.
+  // cli-surface.cjs is the CLI surface as DATA: one literal, a help renderer, an argv
+  // parser. It reads no file, spawns nothing, and cannot stop a build. Rewording the
+  // comment would make the classifier quiet and the file no better, so the honest fix is
+  // this entry — which is why PRODUCTION_GATE_EXCLUSIONS exists.
+  { file: 'libexec/cli-surface.cjs',
+    because: 'declarative CLI-surface data + help renderer + argv parser: the verdict half '
+      + "matched a COMMENT quoting args.slice(1).includes('--naude'), and the refuse half "
+      + "matched surfaceFor's programmer-error throw on an unknown entry-point kind. It "
+      + 'inspects no artifact and gates no build.' },
+];
 
 function isRecordedProductionGateExclusion(rel) {
   const entry = PRODUCTION_GATE_EXCLUSIONS.find((e) => e.file === rel);

@@ -13,6 +13,10 @@ const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const { spawnSync } = require('node:child_process');
 
+// The CLI surface as DATA (task 5): the help assertions below read this table rather
+// than pinning the text it renders.
+const { SURFACE, TAGLINE, renderHelp, surfaceFor } = require('../libexec/cli-surface.cjs');
+
 const ROOT = path.resolve(__dirname, '..');
 const ENTRY = path.join(ROOT, 'scripts', 'stage0.mjs');
 const NODE = process.execPath;
@@ -68,13 +72,23 @@ test('--version prints "clode <VERSION>" from the VERSION file and exits 0', () 
 test('--help prints clode-specific options and exits 0', () => {
   const r = runEntry(['--help']);
   assert.strictEqual(r.status, 0);
-  assert.match(r.stdout, /clode watch/);
-  assert.match(r.stdout, /--verbose/);
-  assert.match(r.stdout, /--version/);
-  assert.match(r.stdout, /build a standalone Claude Code binary for your machine/);
-  assert.match(r.stdout, new RegExp(`clode ${VERSION.replace(/\./g, '\\.')} —`));
-  // ends with the last env-override line + trailing newline
-  assert.ok(r.stdout.endsWith('post-update signals digest\n'));
+  // READS THE TABLE, does not pin strings (task 5). Every line of help is rendered
+  // from libexec/cli-surface.cjs's SURFACE literal, so pinning the text here would
+  // re-create in the test suite exactly the duplication the table removed — and it
+  // would pin it WRONG: the strings this test used to name ('clode watch', the
+  // trailing env-override line) are the two the table changed.
+  for (const verb of Object.keys(SURFACE.verbs)) {
+    assert.match(r.stdout, new RegExp(`clode ${verb}`), `help must document ${verb}`);
+  }
+  for (const global of Object.keys(SURFACE.globals)) {
+    assert.ok(r.stdout.includes(global), `help must document the global ${global}`);
+  }
+  assert.ok(r.stdout.startsWith(`clode ${VERSION} — ${TAGLINE}\n`), 'header = version + tagline');
+  // The globals block is last, so help ends with the last global's line + a newline.
+  const globals = Object.keys(SURFACE.globals);
+  const lastLine = r.stdout.replace(/\n$/, '').split('\n').pop();
+  assert.match(lastLine, new RegExp(`^\\s*${globals[globals.length - 1]}\\s`));
+  assert.ok(r.stdout.endsWith('\n'));
 });
 
 test('the surface is unprefixed: --version/--help/--verbose', () => {
@@ -101,7 +115,9 @@ test('help advertises the builder surface and never mentions running Claude Code
   assert.doesNotMatch(stdout, /CLODE_ENGINE/, 'the retired engine selector must not be advertised');
   assert.doesNotMatch(stdout, /runs? (the )?(latest )?Claude Code|under (a |the )?(host )?(Node|tjs)( runtime)?/i,
     'help must not frame clode as a runner');
-  for (const cmd of ['build', 'fetch', 'watch']) assert.match(stdout, new RegExp('clode ' + cmd));
+  // Task 5: the verbs come from the table, so this cannot go stale when one is
+  // renamed (it did: `watch` is `read-anthropic-tea-leaves` now).
+  for (const verb of Object.keys(SURFACE.verbs)) assert.match(stdout, new RegExp('clode ' + verb));
 });
 
 test('--help is dispatched only as the outer FIRST arg — not one level in', () => {
@@ -114,7 +130,7 @@ test('--help is dispatched only as the outer FIRST arg — not one level in', ()
   // "fell through" to the default launch) now that the launch path is gone — `build`
   // gives the same first-arg-only proof without depending on it.
   const r = runEntry(['build', '--help']);
-  assert.doesNotMatch(r.stdout || '', /Key environment overrides/);
+  assert.ok(!(r.stdout || '').includes(TAGLINE), "clode's own help must not be printed");
   assert.notStrictEqual(r.status, 0);
   assert.match(r.stderr || '', /unknown argument '--help'/);
   assert.match(r.stderr || '', /usage: clode build/);
@@ -184,8 +200,10 @@ test('clodeHelp() interpolates the version and is newline-terminated', () => {
   const { clodeHelp } = require('../libexec/clode-main.cjs');
   const text = clodeHelp('9.9.9');
   assert.ok(text.startsWith('clode 9.9.9 — '));
-  assert.ok(text.endsWith('post-update signals digest\n'));
-  assert.match(text, /clode watch/);
+  assert.ok(text.endsWith('\n'));
+  // clodeHelp IS renderHelp(version, surfaceFor('shipped')) — one literal, one
+  // renderer — so the assertion is that identity, not a copy of the text.
+  assert.strictEqual(text, renderHelp('9.9.9', surfaceFor('shipped')));
   assert.doesNotMatch(text, /--clode-watch|--self/);
 });
 

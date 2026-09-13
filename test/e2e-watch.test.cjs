@@ -81,11 +81,18 @@ test('clode watch does not reach the bundle (no node/provider needed)', (t) => {
   assert.doesNotMatch(r.output, /CLODE-FIXTURE/);
 });
 
-test('clode --help advertises the watch subcommand', (t) => {
+test('clode --help advertises the update-signal subcommand the table declares', (t) => {
+  // Task 5: help is rendered from libexec/cli-surface.cjs's SURFACE, where this cycle
+  // is spelled `read-anthropic-tea-leaves` — the name states its epistemic status (it
+  // INFERS Anthropic's direction of travel from a changelog; it is never authoritative
+  // and never downloads). `clode watch` still dispatches until task 6 removes it, but
+  // the table is what help advertises, so the assertion reads the table.
+  const { SURFACE } = require('../libexec/cli-surface.cjs');
+  assert.ok('read-anthropic-tea-leaves' in SURFACE.verbs, 'the table must declare the verb');
   const sbx = sandbox(t);
   const r = run(sbx, ['--help']);
   assert.strictEqual(r.status, 0);
-  assert.match(r.output, /clode watch/);
+  assert.match(r.output, /clode read-anthropic-tea-leaves/);
 });
 
 test('clode --clode-watch (the old prefixed spelling) no longer dispatches', (t) => {

@@ -38,9 +38,15 @@ test('--help prints clode-specific options and exits 0', (t) => {
   const sbx = withProvider(t);
   const r = run(sbx, ['--help']);
   assert.strictEqual(r.status, 0);
-  assert.match(r.output, /--verbose/);
-  assert.match(r.output, /--version/);
-  assert.match(r.output, /Options:/);
+  // Task 5: --help is rendered from libexec/cli-surface.cjs's SURFACE literal, so the
+  // globals come from the table rather than from a copy of the heading text here (the
+  // old `/Options:/` pinned a heading the table now owns and words differently — it
+  // says which position the globals are accepted in).
+  const { SURFACE } = require('../libexec/cli-surface.cjs');
+  for (const global of Object.keys(SURFACE.globals)) {
+    assert.ok(r.output.includes(global), `help must document the global ${global}`);
+  }
+  assert.match(r.output, /^Options\b/m);
 });
 
 test('--verbose composes as a leading flag before --help (no more any-position stripping)', (t) => {

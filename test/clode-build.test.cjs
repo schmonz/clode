@@ -232,13 +232,32 @@ test('clode build: no resolvable provider fails loudly (after the template gate)
   assert.match(r.stderr, /build: no Claude Code binary found/);
 });
 
-test('--help documents clode build and CLODE_TJS, but not the undocumented --self', () => {
+test('--help documents clode build from the table, but not the undocumented --self', () => {
   const r = runEntry(['--help']);
   assert.strictEqual(r.status, 0);
-  assert.match(r.stdout, /clode build \[--out PATH\]/);
-  assert.match(r.stdout, /quaude/);
-  assert.match(r.stdout, /CLODE_TJS/);
-  // build --self left the user surface (Task 6): dispatch still works (release
+  // Phase 3a task 5: help is RENDERED from libexec/cli-surface.cjs's SURFACE literal,
+  // so this reads the table instead of pinning its output. The two strings it used to
+  // pin are exactly the ones the table now owns: `clode build [--out PATH]` (build's
+  // flags are data now) and the CLODE_TJS line (the environment section is generated
+  // from SURFACE.verbs.*.env, which is EMPTY until phase 3b classifies the CLODE_*
+  // names — so the last assertion ties CLODE_TJS's presence in help to the table
+  // rather than dropping the check: the day 3b declares it, this requires it again).
+  const { SURFACE } = require('../libexec/cli-surface.cjs');
+  const build = SURFACE.verbs.build;
+  assert.match(r.stdout, /clode build/);
+  for (const flag of Object.keys(build.flags)) {
+    assert.ok(r.stdout.includes(flag), `help must document build's ${flag}`);
+  }
+  for (const product of Object.keys(build.subjects)) {
+    assert.ok(r.stdout.includes(product), `help must name the product ${product}`);
+  }
+  const envNames = Object.values(SURFACE.verbs).flatMap((v) => v.env.map((e) => e.name));
+  for (const name of envNames) {
+    assert.ok(r.stdout.includes(name), `help must document the declared env name ${name}`);
+  }
+  assert.strictEqual(r.stdout.includes('CLODE_TJS'), envNames.includes('CLODE_TJS'),
+    'CLODE_TJS is documented in help iff the table declares it (phase 3b fills env)');
+  // build --self left the user surface: dispatch still works (release
   // tooling calls it), but it's no longer documented.
   assert.doesNotMatch(r.stdout, /--self/);
   assert.doesNotMatch(r.stdout, /CLODE_MAIN_BUNDLE/);

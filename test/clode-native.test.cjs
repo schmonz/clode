@@ -198,9 +198,15 @@ test('acceptance 1: --version/--help answer with node ABSENT from PATH', async (
   assert.strictEqual(v.stdout, `clode ${VERSION}\n`);
   const h = await runNative(NATIVE, ['--help'], env, 60000);
   assert.strictEqual(h.status, 0, h.stderr);
-  assert.match(h.stdout, /Options:/);
-  assert.match(h.stdout, /clode build \[--out PATH\]/);
-  // build --self left the USER surface (Task 6): the blobulated NATIVE builder still
+  // Phase 3a task 5: help is rendered from libexec/cli-surface.cjs's SURFACE literal,
+  // and this binary carries that same literal (esbuilt in), so the assertion reads the
+  // table rather than pinning two strings it now owns. What matters here is not the
+  // wording but that the BLOBULATED builder — running under tjs with node absent —
+  // renders the identical surface the source tree does.
+  const { renderHelp, surfaceFor } = require('../libexec/cli-surface.cjs');
+  assert.strictEqual(h.stdout, renderHelp(VERSION, surfaceFor('shipped')),
+    'the native builder must render the same surface as the source tree');
+  // build --self left the USER surface: the blobulated NATIVE builder still
   // answers to it (this whole test proves that), but its own --help must not
   // advertise it.
   assert.doesNotMatch(h.stdout, /--self/);
