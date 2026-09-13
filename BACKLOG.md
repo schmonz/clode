@@ -6690,3 +6690,67 @@ oracle becomes a product, artifact names carry the bundle version).
 
 OUT, each its own piece: the naude/quaude parity audit, and release as a declared step list
 (which wanted to reuse whatever this CLI became, and now can).
+
+
+## The unpinned-provider pattern has a MECHANISM now: two resolvers, one pinned (2026-09-13)
+
+Found while triaging a red that a phase-3a implementer reported as "pre-existing and
+unrelated". It is unrelated to that task — and it is ours, so it got measured rather than
+relayed.
+
+**The measurements, all on this box today:**
+
+    UPSTREAM_PIN                          2.1.251
+    ~/.local/share/clode/providers/current (a pointer FILE, not a symlink)   2.1.252
+    ~/.local/bin/claude -> versions/2.1.270   the operator's native daily driver
+
+    test/shim-surface.test.cjs, CLODE_PROVIDER_BIN=<pinned 2.1.251>   3/3 PASS
+    test/shim-surface.test.cjs, CLODE_PROVIDER_BIN=<2.1.252>          PASS
+    test/shim-surface.test.cjs, no override                            FAIL
+    test/shim-surface.test.cjs, CLODE_PROVIDER_BIN=~/.local/bin/claude FAIL, identically
+
+So a bare run stages neither the pin nor `current`: it stages **the Claude Code the operator
+is running today**, and the confirming experiment above pins that to 2.1.270.
+
+**The mechanism, which the earlier entry ("Three gates have now scanned an UNPINNED provider
+— the condition needs a mechanism") said was missing. There are TWO resolvers and only one
+is pin-capped:**
+
+- `test/provider-resolve.cjs`'s `providers()` — CORRECT. Its own comment says it: "THE
+  PINNED VERSION, EXACTLY. Not 'the newest at or below the pin'." Order is
+  `CLODE_PROVIDER_BIN` → `CLODE_CLAUDE_BIN` → `<store>/<pin>/claude`. No `current`, no
+  newest-fallback. This is where the interim mitigation was applied.
+- `test/oracle-models.cjs:108`'s `resolveProviderBin()` — NOT pin-capped. It takes
+  `CLODE_PROVIDER_BIN` if set and otherwise delegates to PRODUCTION's resolver,
+  `libexec/clode-resolve.cjs`'s `resolveClaudeBin()`, whose documented order (`:93`) is
+  `CLODE_CLAUDE_BIN > CLODE_VERSION_DIR > provider current` plus the native install. It never
+  calls `pinnedVersion()`. Every gate that stages through `stageProviderCli()` — shim-surface
+  among them — inherits that.
+
+Production resolving "the claude to run" from the operator's machine is CORRECT for
+production. Borrowing that resolver for a GATE is what makes the gate answer a question about
+the wrong artifact. The fix is one line of intent: `resolveProviderBin` should prefer the pin
+exactly, the way `provider-resolve.cjs` already does, and say why it cannot when it cannot.
+
+**Why this keeps costing rounds:** it presents as a code regression. The red says the golden
+Bun-surface map drifted, which reads as "our shim is wrong", when the true statement is "you
+measured a different bundle than the one this repo pins". Two agents have now reported it as
+pre-existing-and-unrelated rather than as a defect, which is accurate about blame and wrong
+about ownership.
+
+## Unreviewed golden drift at 2.1.270: `Bun.Image`, `Bun.unsafe` (2026-09-13)
+
+A free by-product of the triage above, and the first look at 2.1.270's shim surface:
+`layer1_bun_props_missing` gains exactly two entries against the golden map —
+**`Bun.Image`** and **`Bun.unsafe`** — reproduced twice (bare run, and explicitly against
+`~/.local/bin/claude`).
+
+Same class as the `Bun.zstdDecompress`/`Bun.zstdDecompressSync` pair already filed above, and
+the same rule applies: **do not add either to `golden.json` or stub it in `bun-shim.cjs`
+without doing the reachability work first.** Nothing here says whether clode's tested traffic
+reaches them; it says upstream now references them. `Bun.unsafe` in particular is a namespace
+(`Bun.unsafe.arrayBufferToString` and friends upstream), so "one property" may be a family.
+
+Note the pin is deliberately at 2.1.251 and `clode build` cannot carve 2.1.257+ at all, so
+this is not a to-do for today — it is inventory for whoever absorbs the newer bundle, taken
+while the evidence was free.
