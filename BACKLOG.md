@@ -6754,3 +6754,37 @@ reaches them; it says upstream now references them. `Bun.unsafe` in particular i
 Note the pin is deliberately at 2.1.251 and `clode build` cannot carve 2.1.257+ at all, so
 this is not a to-do for today — it is inventory for whoever absorbs the newer bundle, taken
 while the evidence was free.
+
+
+## The production-gate classifier reads COMMENTS as code shape (2026-09-13)
+
+Found in phase 3a: `libexec/cli-surface.cjs` — a pure data module with no filesystem access and
+no verdict of any kind — was classified as a gate-shaped production file and pushed the
+uncontrolled count from 30 to 31.
+
+**Why, measured to the line.** `classifyProductionFile()` (`test/guards-population.cjs:646-649`)
+runs its regexes over RAW source. The verdict half's only hit in that file is `.includes('` at
+line 11 — inside a comment quoting the old dispatch it replaced, `args.slice(1).includes('--naude')`
+— and it becomes `false` as soon as full-line `//` comments are stripped. The refuse half is a
+real `throw new Error(` at line 121, in `surfaceFor()`'s unknown-kind guard, which is argument
+validation rather than a build gate refusing an artifact.
+
+**What was done, and why it is not the fix.** A measured `PRODUCTION_GATE_EXCLUSIONS` entry with
+a reason. That IS the sanctioned response — phase 5's tuning rule says false positives are the
+safe side, "a false positive costs one migration or one recorded exclusion with a reason", and
+the sweep's own failure message offers an exclusion as one of two remedies. Verified load-bearing
+rather than cosmetic: removing the entry gives "31 … ABOVE the recorded baseline of 30", restoring
+it gives 30, and `UNCONTROLLED_GATE_BASELINE` was never touched.
+
+**Why it still wants fixing.** This is a false-positive GENERATOR whose only outlet erodes the
+ratchet one exclusion at a time, and nothing pins the SIZE of `PRODUCTION_GATE_EXCLUSIONS` — the
+only assertion on it is that each `because` is non-empty (`test/guards-population.test.cjs:429`).
+So the sweep's headline number degrades quietly as exclusions accumulate, each individually
+justified. The fix is the comment-stripper the same file already owns for other rules: strip
+full-line `//` comments before classifying, then re-measure and drop whichever exclusions stop
+being needed.
+
+Same defect class as two others this project has now hit: the phase-5b `no-fuse` gate matching
+the word inside its OWN header, and `test/merge-step.test.cjs` (phase 2) asserting against text
+that matched inside its own file's header comment. A scanner that cannot tell code from prose
+about code will keep finding itself.
