@@ -40,7 +40,14 @@ test('every name shipped code reads has a verdict, and every verdict names a rea
   // were live in that shape (CLODE_NO_WATCH 1 prod/2 test, CLODE_TARGET_TEMPLATE 1/1,
   // CLODE_CLAUDE_BIN 1/12, CLODE_FETCH_PLATFORM 1/1). The header of env-verdicts.cjs sells
   // exactly this guarantee for the `dead` verdict; now it holds.
-  const phantom = VERDICTS.map((v) => v.name).filter((n) => !(idx.get(n)?.prod.length > 0));
+  // `dead` is EXEMPT, because `dead` is the answer this message tells you to give. Without
+  // the exemption the remedy is unsatisfiable — re-classifying leaves the gate red — and
+  // the `dead` kind env-verdicts.cjs keeps "for the day a currently-prod-read name loses
+  // its last production call site" would have no reachable use. Caught by the whole-branch
+  // re-review, which tried the instructed fix and watched it stay red.
+  const phantom = VERDICTS
+    .filter((v) => v.verdict !== 'dead' && !(idx.get(v.name)?.prod.length > 0))
+    .map((v) => v.name);
   assert.deepStrictEqual(phantom, [],
     'these verdicts name env vars no SHIPPED code reads any more (a test may still mention '
     + 'them) — delete the entry, or re-classify it `dead`, but do not keep a build-input '

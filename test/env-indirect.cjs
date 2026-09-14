@@ -31,6 +31,14 @@
 // SCOPE: shipped code only (libexec/, scripts/), the same dirs env-inventory.cjs tags
 // `prod`. test/ is deliberately not scanned: a test-only indirect read needs no verdict,
 // and the suite is full of `env[k]` loops whose noise would buy nothing.
+//
+// KNOWN FALSE POSITIVE, INHERITED AND KEPT. stripLineComments() strips `//` only, never
+// `/* … */` — its own header says so and calls that the safe direction. So an `env[k]`
+// merely MENTIONED inside a block comment reads as a real site and this gate goes red,
+// asking you to record prose. That is deliberate here too: this module exists because a
+// scan that misses one shape let seven names go unclassified for a phase, and the cost of
+// over-reporting is one look at one line. Suppress it by rewording the comment, never by
+// loosening the scan. A scan that must not misread a comment needs a real parse.
 const fs = require('node:fs');
 const path = require('node:path');
 const { stripLineComments } = require('./source-scan.cjs');

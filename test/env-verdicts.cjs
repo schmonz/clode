@@ -75,12 +75,15 @@ const APPLET_BECAUSE = 'env-only: overrides which host binary the bun-shim/targe
 // used, and an override that passes produces byte-identical results to the default. A knob
 // that cannot change the artifact is not a build input.
 const HOST_TOOL_BECAUSE = 'env-only: names which host program host-provision.cjs uses for '
-  + 'this step (resolved indirectly as `env[req.overrideEnv]` from its REGISTRY row). The '
-  + 'step runs during a build, but the override cannot change what the build PRODUCES: the '
-  + "registry KAT-tests whatever it resolves against known bytes and refuses an override "
-  + 'that fails, so a passing override is byte-equivalent to the default. A host-tool '
-  + 'LOCATION override for a host that keeps the tool somewhere unusual — same family as '
-  + 'CLODE_NPM, not a build-input selector.';
+  + 'this step (resolved indirectly as `env[req.overrideEnv]` from its REGISTRY row). These '
+  + 'steps run during a build AND, for tar, inside an already-built naude — naude-entry.cjs '
+  + "requires host-provision.cjs precisely so runtime provision('tar') works in the SEA. "
+  + 'The registry KAT-tests whatever it resolves and refuses an override that fails, so an '
+  + 'override that passes does the step correctly for what the KAT covers — hashing, and a '
+  + 'round trip of one plain regular file. That is a real floor, not a byte-equivalence '
+  + 'proof: no KAT here exercises modes, symlinks or ownership, and this repo has already '
+  + 'shipped a copy that dropped mode. A host-tool LOCATION override for a host that keeps '
+  + 'the tool somewhere unusual — same family as CLODE_NPM, not a build-input selector.';
 
 // CLODE_TTY_MOUSE / CLODE_TTY_FOCUS — the one pair in this table whose classification has a
 // fact to face rather than route around: libexec/node-shim/modules/tty.cjs documents them,
