@@ -7131,3 +7131,32 @@ would document them in the wrong binary.
 
 Filed rather than fixed: it is a new surface for the built product, which is
 larger than an env-inventory fix wave.
+
+## `man/clode.1`'s ENVIRONMENT section trails `--help` by 13 names
+
+Phase 3b absorbed 17 `CLODE_*` names into the CLI surface, so
+`libexec/cli-surface.cjs` now declares 18 (the 17 plus `CLODE_CACHE`) and all 18
+render in `--help`. `man/clode.1`'s ENVIRONMENT section documents 5 of them.
+
+This is incompleteness, not a lie — every name the man page *does* document is
+accurate, and `--help` is the authority inside a shipped binary. But the man
+page is the second hand-maintained copy of the surface, and
+`test/e2e-man.test.cjs:53-62`'s own comment already says it "lied the moment the
+spellings changed". Phase 3b tied exactly one claim between the two copies: the
+`build --out` default, ratcheted in both directions by the test at
+`test/e2e-man.test.cjs`'s `man's build --out default matches cli-surface.cjs's
+rendered default`. Nothing binds the env list.
+
+**The shape of the fix, when someone takes it:** the same derivation the `--out`
+ratchet uses. `cli-surface.cjs` already holds every declared name and its doc
+sentence as data (`env: [{name, doc}]`), so the ENVIRONMENT section can be
+checked against it — or generated from it — rather than transcribed a third
+time. A gate that requires every declared `absorbed` name to appear in
+`man/clode.1` is the cheap version and would go red today, correctly, thirteen
+times.
+
+**Sequencing:** this belongs with the sweep already filed under "five
+instruments, one mistake" for `test/e2e-man.test.cjs`'s six remaining
+bare/unanchored matches (lines 38, 42, 46, 50, 70, 82). Both are the same file,
+both are about the man page's relationship to the surface table, and doing them
+together means reading that file's matching rules once instead of twice.
