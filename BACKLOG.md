@@ -7160,3 +7160,41 @@ instruments, one mistake" for `test/e2e-man.test.cjs`'s six remaining
 bare/unanchored matches (lines 38, 42, 46, 50, 70, 82). Both are the same file,
 both are about the man page's relationship to the surface table, and doing them
 together means reading that file's matching rules once instead of twice.
+
+## Closure condition 7 has no mechanism, and phase 3b moved the number without anything noticing
+
+The umbrella's condition 7 reads: *"Every skip is understood, and as many as
+possible are not skips any more … and the count is recorded so a later rise is
+visible."* The first half has been honoured. The second half has no
+implementation: the count lives in the prose of the inventory entry above (33 at
+the time), and nothing in the suite asserts it.
+
+Phase 3b moved it. `test/doctor-cli-parity.test.cjs` went from running by default
+to gated behind `CLODE_LIVE_RENDER`, on a measurement worth keeping — a logging
+shim ahead of `/usr/bin/security` caught native `claude doctor` making six
+Keychain calls, including an interactive `security -i` and a
+`delete-generic-password` of its own `Claude Code-doctor-probe` item. It *writes*
+to the login keychain. Gating it was right, and the three tests pass 3/3 under the
+opt-in, so this is deferral rather than deleted coverage.
+
+The point is not that the rise was wrong. It is that **the rise was invisible**: 31
+-> 34 was noticed only because a controller happened to diff two suite summaries by
+hand. A phase can gate a whole file for an excellent reason and the umbrella's own
+closure condition cannot tell.
+
+This was already proposed and never built. See the earlier entry's item 3: *"A CI
+assertion on the skip COUNT (or better, the skip SET), so coverage silently…"* —
+and **the set is the right shape, not the count**. A count ratchet says a number
+moved; a set ratchet says *which test stopped running*, which is the thing anyone
+actually needs in order to act. It also survives the common case of one skip being
+fixed while another appears, which a count cannot see at all.
+
+Shape of the fix: `test/run.mjs` already aggregates the TAP summary, so it can
+collect skip names too. Record the set as data, assert against it, and require a
+change to it to be an edit with a reason — the same both-direction ratchet shape
+the `--out` man gate uses. A skip disappearing should be as loud as one appearing:
+a test that stopped skipping because it started being ABSENT is exactly the defect
+the 84 -> 33 inventory found in `inspect.test.cjs`.
+
+Sequencing: this belongs before the umbrella is closed, since it is one of the
+seven conditions. It does not block phase 4.
