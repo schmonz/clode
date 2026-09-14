@@ -20,14 +20,43 @@
 //      fixed. That is the upstream-format-drift signal the old test wanted and could
 //      never deliver.
 //
-// Gated on a built quaude (via built-binary.cjs's builtQuaude() -- CLODE_QUAUDE wins,
-// else one is built once for this process) and a native claude on PATH. Both are cheap
-// to satisfy deliberately and absent by default, so this SKIPS rather than lying.
+// THREE PRECONDITIONS, CHECKED CHEAPEST-FIRST (see why() below).
+//
+// 1. THE KEYCHAIN GATE, and it belongs here for a MEASURED reason, not by analogy.
+//    The header used to say "both are cheap to satisfy deliberately and absent by
+//    default, so this SKIPS rather than lying" -- which stopped being true once task 3
+//    wired this file to builtQuaude(): a built quaude is no longer absent by default,
+//    so this file spawns the REAL bundle on every run. That is the exact hazard
+//    test/fidelity/update-notify.pty.test.cjs and test/e2e-ctrlz-tui.test.cjs are
+//    gated for, and `doctor` turns out to be a WORSE case than either, not an
+//    exception to them. Measured on this box 2026-09-13 by putting a logging `security`
+//    shim ahead of /usr/bin/security on PATH and running native `claude doctor`:
+//
+//      security find-generic-password -a <user> -w -s Claude Code-credentials   (x3)
+//      security find-generic-password -a <user> -w -s Claude Code
+//      security -i
+//      security delete-generic-password -a <user> -s Claude Code-doctor-probe
+//
+//    Six invocations, including an INTERACTIVE `security -i` and a WRITE/DELETE against
+//    the login keychain -- doctor does not merely read auth state, it probes the
+//    Keychain by creating and removing its own item. A suite that does that by default
+//    on darwin is one locked keychain away from a GUI modal nobody is sitting at.
+//    (quaude's own side is clean -- it never shells out to `security`, per the filed
+//    P0 -- but the native reference binary is half of every comparison here, and it is
+//    a real Claude Code bundle.) So: liveRenderSkipReason(), same helper, same opt-in,
+//    same darwin-only scope as its two siblings. Off darwin there is no Keychain and
+//    this runs by default, unchanged.
+// 2. A native `claude` on PATH -- one `command -v`, free.
+// 3. A built quaude (built-binary.cjs's builtQuaude(); CLODE_QUAUDE wins, else one is
+//    built once per process) -- a full `clode build`, ~28MB, 300s timeout. LAST,
+//    because the common local case (engine + provider present, no native claude) used
+//    to pay for the whole build and then skip all three tests anyway.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
 const { builtQuaude } = require('./built-binary.cjs');
+const { liveRenderSkipReason } = require('./live-render-helper.cjs');
 
 // Labels that legitimately differ, each with the reason. A label here is NOT ignored —
 // it must still be PRESENT in both outputs; only its value may differ.
@@ -86,13 +115,20 @@ function nativeClaude() {
   return p && fs.existsSync(p) ? p : null;
 }
 
-// Resolves the quaude ONCE (builtQuaude() memoizes per process) and folds its
-// skip reason into why()'s, so a missing engine/provider reports as precisely
-// as a missing native claude does.
+// CHEAPEST PRECONDITION FIRST, always -- see the file header for all three. The
+// Keychain gate is a string compare, `command -v claude` is one spawn, and
+// builtQuaude() is a full `clode build`. Checking the build first (as this did
+// until 2026-09-13) meant a box with an engine and a provider but no native
+// claude -- the ordinary local case -- built a ~28MB binary and then skipped all
+// three tests with it. Resolves the quaude ONCE (builtQuaude() memoizes per
+// process) and folds its skip reason into why()'s, so a missing engine/provider
+// reports as precisely as a missing native claude does.
 function why() {
+  const liveRenderSkip = liveRenderSkipReason();
+  if (liveRenderSkip) return liveRenderSkip;
+  if (!nativeClaude()) return 'no native `claude` on PATH to compare against';
   const built = builtQuaude();
   if (built.skip) return built.skip;
-  if (!nativeClaude()) return 'no native `claude` on PATH to compare against';
   return null;
 }
 
