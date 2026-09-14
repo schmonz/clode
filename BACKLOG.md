@@ -7198,3 +7198,83 @@ the 84 -> 33 inventory found in `inspect.test.cjs`.
 
 Sequencing: this belongs before the umbrella is closed, since it is one of the
 seven conditions. It does not block phase 4.
+
+## ★ Phase 4 designed — the engine build splits four ways (2026-09-14)
+
+Full spec: `docs/superpowers/specs/2026-09-14-phase4-declared-edges-design.md`
+(gitignored, so this entry is the durable copy of what was expensive to establish).
+
+The umbrella said "cmake owns the build graph; something small owns provisioning
+and verification, and that something must run WITHOUT Node — i.e. quaude itself
+or shell." Neither named candidate wins alone. The work splits by CAPABILITY:
+
+| job | owner |
+|---|---|
+| build graph; bytecode regen as OUTPUT/DEPENDS; host-vs-target tjsc | cmake |
+| fetch + verify, archive extract, sha256 | cmake |
+| pinned clone + the 16 patch files | git |
+| the 52 source fixups; artifact naming | tjs |
+| hermeticity verification of the built binary | a tiny C program |
+
+**Three eliminations, each closing a door someone will re-open.**
+
+1. **Shell is dead, on Windows** (user's constraint). Windows shell means Git
+   Bash, which means POSIX tools silently reinterpreting Windows paths — and we
+   already own that scar: host-provision.cjs's tar KAT documents Git Bash tar
+   reading `C:\…\x.tar` as a remote `host:path` and dying "Cannot connect to C:".
+
+2. **One tiny C binary for everything is dead, on TLS.** Provisioning fetches
+   (the cosmocc zip is a sha-pinned 441MB). clode-net.cjs:7-9 records that
+   dropping curl/wget is an explicit goal and downloads use the engine's built-in
+   fetch — a TLS stack. A C provisioner would have to re-solve it: bundle a
+   library (not tiny), link three system ones (not one implementation), or shell
+   out (see #1). It does not have to. MEASURED on cmake 4.3.3, 2026-09-14:
+   `file(DOWNLOAD https://…)` → status 0, `file(SHA256)`, `ARCHIVE_CREATE`/
+   `ARCHIVE_EXTRACT` round-trip, `cmake -E sha256sum` agrees. So
+   `file(DOWNLOAD … EXPECTED_HASH …)` is fetch-and-verify as ONE primitive and
+   the binary needs no network at all.
+
+3. **Converting the 52 fixups to patch files is dead, because it is a
+   DOWNGRADE.** They are imperative on purpose: idempotent (`if already applied,
+   return`), self-validating with a domain-specific error (`CMakeLists.txt
+   changed under the pin — re-derive`), and deliberately position-independent
+   (append at EOF, not context-anchored). A `git apply` patch is worse at all
+   three and fails with `hunk #1 failed`. The 16 real patches stay patches; the
+   52 fixups stay code — and move to tjs, which is what actually retires Node.
+
+**The bring-up cost of moving fixups Node -> tjs is ZERO, and the reason is that
+weird platforms never had Node.** Measured over tjs-legs.mjs: 44 legs, 17
+cross-file, 21 guest-platform, 17 `verify:'none'`/`no-exec:true`. netbsd-m68k is
+`os:'ubuntu-latest'` + cross toolchain, "built-not-run … the arch gate (file(1))
+is the proof" — that box never runs anything. Where a weird box DOES execute it
+runs the PRODUCT: netbsd-sparc "cross-blobulates the bootstrap builder ON THE X64
+RUNNER … then runs clode-on-sparc". So build-tjs.mjs has always run on
+ubuntu/macOS/Windows, where we publish clode as hard publishers. The prerequisite
+gets SMALLER: one static binary we already ship, not a full Node install.
+
+**The verifier is the biggest coverage win in the phase, not a cleanup.**
+`checkHermeticDeps` (build-tjs.mjs:3705) skips on cross-builds ("the host's own
+otool/ldd cannot meaningfully inspect a foreign-arch/foreign-OS binary"), on
+Windows, and on static links. Cross-building is how most of the fleet is made, so
+for ~17 legs the ENTIRE hermeticity proof today is `file(1)` — "yes, that is an
+m68k NetBSD ELF". Nothing checks what it links: a gate that cannot fail. But the
+dependency list is a TABLE IN THE FILE — ELF `DT_NEEDED`, Mach-O `LC_LOAD_DYLIB`,
+the PE import directory — readable regardless of which machine the file targets.
+~150 lines per format, no network, no shell, no TLS, built by cmake on the spot
+and NEVER SHIPPED (no new release artifact, no version skew). That converts ~17
+legs from "right architecture" to "right architecture AND links nothing it
+shouldn't", and it is the one gate phase 5 could not reach.
+
+**Recommended split (controller's, not yet ruled on by the user):** 4a = the
+build checks its inputs (provider store key × platform × arch, plus the
+incapable-engine refusal — both are §7, both independent, and 4a's live bug is a
+linux carve sitting at this Mac's pinned provider path RIGHT NOW, so fixing it
+first makes every later measurement honest). 4b = the verifier, which proves the
+"C built by cmake on every host" pattern on Windows and cross-builds BEFORE 4c
+bets 3,799 lines on cmake. 4c = the cmake/tjs migration + ccache.
+
+**Open question to settle by measuring, not preferring:** build-tjs.mjs is ESM
+and imports seven builtins (fs, path, os, crypto, child_process, url, module) —
+all seven exist in libexec/node-shim/modules/, but loader.cjs is CommonJS-
+oriented and whether it intercepts ESM `import` is UNVERIFIED. First experiment:
+run a trivial .mjs that imports node:fs under the shim and see.
