@@ -954,13 +954,15 @@ jobs:
   # counted separately by BACKLOG — CLODE_LIVE_ONLINE, real API calls/tokens,
   # a different axis entirely, out of scope here on its own merits.)
   #
-  # update-notify.pty NEEDS a prebuilt CLODE_QUAUDE (it is not self-building,
-  # unlike the other files here) — one dedicated `clode build` step pays for
-  # it: 30s measured in the (warm) verification container, likely more on a
-  # cold CI runner — BACKLOG's own estimate for a `clode build` is ~7 minutes.
-  # Included anyway: it is the only PTY coverage of the auto-update NOTIFY
-  # surface (see the file's own header), and the cost is paid once and shared
-  # by its 3 tests.
+  # update-notify.pty builds its own quaude now (built-binary.cjs's
+  # builtQuaude(), like the other files here); CLODE_QUAUDE is an OPTIMIZATION
+  # that skips that build when a prebuilt binary is already on hand. The
+  # dedicated `clode build` step below is therefore a cost saver, not a
+  # precondition — 30s measured in the (warm) verification container, likely
+  # more on a cold CI runner — BACKLOG's own estimate for a `clode build` is
+  # ~7 minutes. Included because it is the only PTY coverage of the
+  # auto-update NOTIFY surface (see the file's own header), and the cost is
+  # paid once and shared by its 3 tests.
   linux-x64-pty:
     needs: [changes, tjs]
     # Run once `tjs` FINISHES, whatever its conclusion — do NOT skip because some

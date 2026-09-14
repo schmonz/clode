@@ -85,9 +85,13 @@ const TAGLINE = 'build a standalone Claude Code binary for your machine.';
 //                 (fetch), CLODE_VERSION_DIR (global, beside its CLODE_CLAUDE_BIN sibling), and
 //                 CLODE_ALLOW_FOREIGN_CARVE=1 (build only — see its own comment there for why it
 //                 stays an env var and not a flag). test/env-verdicts.test.cjs's third assertion
-//                 (every 'absorbed' verdict must appear in surfaceFor('checkout')'s rendered
-//                 help) is what makes "help must never stop documenting a name it documented
-//                 before" a property a red test enforces, not a hope.
+//                 (every 'absorbed' verdict must be a MEMBER of the env table surfaceFor('checkout')
+//                 returns) is what makes "help must never stop documenting a name it documented
+//                 before" a property a red test enforces, not a hope. Membership, NOT rendered
+//                 text: the first cut of that assertion matched substrings of the rendered help
+//                 and CLODE_TJS_PIN's entry alone kept the substring "CLODE_TJS" present after
+//                 CLODE_TJS's own entry was deleted (fixed 06150cf). Saying "rendered help" here
+//                 described the very hole that fix removed.
 const SURFACE = {
   verbs: {
     build: {
