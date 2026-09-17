@@ -98,7 +98,7 @@ boot order:
    for the generic HTTP client (WebSocket handshakes use a different path). Commit
    **`738b631`**. Verified via httpbin.org/headers: no `Origin` after the patch.
 
-The four committed txiki patches (build via `node scripts/build-tjs.mjs`): `txiki-sync-fs`
+The four committed txiki patches (build via `node scripts/build-tjs.cjs`): `txiki-sync-fs`
 (pre-existing), `txiki-default-stack-size` (pre-existing), `txiki-sync-spawn`,
 `txiki-no-origin-header`. All reverse- and forward-apply clean.
 

@@ -2,7 +2,7 @@
 // Locates the patched tjs binary and runs entries through the node-shim
 // loader. Tests SKIP when no binary is present (CLODE_TJS, or the scratch dir
 // tjsBin() resolves through build-scratch.cjs's buildPath() — see below; run
-// scripts/build-tjs.mjs to produce one).
+// scripts/build-tjs.cjs to produce one).
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -140,7 +140,7 @@ function resolveBin(name) {
 
 function skipUnlessTjs(t) {
   if (!tjsPath()) {
-    t.skip(`no tjs binary (CLODE_TJS or ${tjsBin(REPO)}); run scripts/build-tjs.mjs`);
+    t.skip(`no tjs binary (CLODE_TJS or ${tjsBin(REPO)}); run scripts/build-tjs.cjs`);
     return true;
   }
   return false;

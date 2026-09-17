@@ -102,7 +102,7 @@ test('clode build: an engine predating the constants ABI is refused, with the re
   });
   assert.notStrictEqual(r.status, 0, 'a stale engine must not build');
   assert.match(r.stderr, /predates the constants ABI/);
-  assert.match(r.stderr, /scripts\/build-tjs\.mjs|CLODE_TARGET_TEMPLATE/,
+  assert.match(r.stderr, /scripts\/build-tjs\.cjs|CLODE_TARGET_TEMPLATE/,
     'the refusal must name the remedy, not just the problem');
   assert.ok(!fs.existsSync(out), 'no binary may be produced from a refused engine');
 });

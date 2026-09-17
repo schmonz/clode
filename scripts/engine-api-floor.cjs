@@ -6,13 +6,13 @@
 // has two halves: a C half (src/mod_engine.c, compiled straight from source) and
 // a JS half (src/js/core/engine.js, which only reaches the binary through a regen
 // of txiki's git-tracked pre-compiled src/bundles/c/**). Every build path that
-// runs scripts/build-tjs.mjs regenerates; the netbsd-sparc in-guest bake did not,
+// runs scripts/build-tjs.cjs regenerates; the netbsd-sparc in-guest bake did not,
 // so it shipped an engine with the C function and no JS binding onto it. Nothing
 // noticed for a whole leg-lifetime: the engine built, booted, and carved 927s of
 // bundle before `graph-meta: this engine does not report moduleMeta` — the LAST
 // stage of the longest job in the matrix.
 //
-// The three existing engine sanity checks (build-tjs.mjs's post-build smoke,
+// The three existing engine sanity checks (build-tjs.cjs's post-build smoke,
 // .github/actions/build-leg's host-exec smoke, ci-guest-bake.sh's ENGINE SANITY)
 // were three hand-written copies of `typeof __tjs_fs_sync === "object"`, and not
 // one of them knew about moduleMeta. Three copies of a list is the disease this
@@ -61,7 +61,7 @@ const OK_TOKEN = 'tjs-shim-ok';
 // The check, as JS statements a bare tjs can run. It PRINTS its verdict (so a
 // caller that captures stdout can name the missing binding) and THEN throws when
 // something is missing (so a caller that only has an exit status still goes red).
-// Both matter: build-tjs.mjs compares the string, ci-guest-bake.sh's driver gates
+// Both matter: build-tjs.cjs compares the string, ci-guest-bake.sh's driver gates
 // on `<phase>-exit=0`.
 function engineFloorCheckStatements(floor = ENGINE_API_FLOOR) {
   const probe = "const P=(f)=>{try{return f()}catch(e){return undefined}};const M=[];";

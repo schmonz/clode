@@ -5,7 +5,7 @@
 // instead of kqueue.c. The SOURCE edits are unconditional and inert; only the
 // cmake selection is gated on the CLODE_DARWIN_POLL option.
 //
-// This drives the real source phase (`build-tjs.mjs --source-only`), which resets
+// This drives the real source phase (`build-tjs.cjs --source-only`), which resets
 // the shared vendor checkout to pristine and re-applies every patch + fixup —
 // build-tjs owns that tree, so the reset is its normal behavior. Skips when the
 // checkout is absent (a fresh clone would have to hit the network).
@@ -17,7 +17,7 @@ const { execFileSync } = require('node:child_process');
 const { tjsVendorParentDir } = require('../scripts/platform-tag.cjs');
 
 const REPO = path.resolve(__dirname, '..');
-// Resolved the SAME way build-tjs.mjs resolves its own CLODE_TJS_VENDOR
+// Resolved the SAME way build-tjs.cjs resolves its own CLODE_TJS_VENDOR
 // default (local scratch, not the repo tree — see platform-tag.cjs's
 // tjsVendorParentDir) — NOT hardcoded to the old spike/quickjs/vendor path,
 // which would silently stop matching (and silently start permaskipping this
@@ -26,13 +26,13 @@ const TJS = path.join(tjsVendorParentDir(), 'txiki.js');
 const has = fs.existsSync(path.join(TJS, 'deps/libuv/src/unix/darwin.c'));
 
 function sourcePhase() {
-  execFileSync('node', ['scripts/build-tjs.mjs', '--source-only'],
+  execFileSync('node', ['scripts/build-tjs.cjs', '--source-only'],
     { cwd: REPO, stdio: 'pipe', encoding: 'utf8' });
 }
 const read = (rel) => fs.readFileSync(path.join(TJS, rel), 'utf8');
 
 test('the poll-backend fixup lands its seven edits in the patched tree', (t) => {
-  if (!has) { t.skip(`no vendor checkout (${TJS}); run scripts/build-tjs.mjs`); return; }
+  if (!has) { t.skip(`no vendor checkout (${TJS}); run scripts/build-tjs.cjs`); return; }
   sourcePhase();
 
   // 1. txiki declares the option and makes the macro GLOBAL — it changes
@@ -120,21 +120,21 @@ test('the fixup is idempotent', (t) => {
     're-running the source phase must not double-apply edit (7) in posix-poll.c');
 });
 
-// --- Source-text guards below: assert against scripts/build-tjs.mjs's OWN text,
+// --- Source-text guards below: assert against scripts/build-tjs.cjs's OWN text,
 // not the vendor tree, so they run on every CI job (ubuntu/windows have no
 // vendor checkout — every test above SKIPs there, and this codebase's doctrine
 // is explicit that a skipped oracle is not a pass, .github/workflows/ci.yml:341).
 // These don't re-prove exact wiring (the vendor-tree tests above own that); they
 // catch the coarser regression of the fixup being dropped or unregistered
 // entirely, everywhere, unconditionally.
-const buildTjsSrc = fs.readFileSync(path.join(REPO, 'scripts/build-tjs.mjs'), 'utf8');
+const buildTjsSrc = fs.readFileSync(path.join(REPO, 'scripts/build-tjs.cjs'), 'utf8');
 
-test('build-tjs.mjs: the poll-backend fixup is registered right after the tty-kqueue fixup', () => {
+test('build-tjs.cjs: the poll-backend fixup is registered right after the tty-kqueue fixup', () => {
   assert.match(buildTjsSrc,
     /fixupLibuvTtyKqueueOldDarwin\(tjsDir\);\s*\n\s*fixupLibuvPollBackendOldDarwin\(tjsDir\);/);
 });
 
-test('build-tjs.mjs: the fixup body carries all seven CLODE_DARWIN_POLL edit guards', () => {
+test('build-tjs.cjs: the fixup body carries all seven CLODE_DARWIN_POLL edit guards', () => {
   const fnStart = buildTjsSrc.indexOf('function fixupLibuvPollBackendOldDarwin(dir) {');
   const fnEnd = buildTjsSrc.indexOf('\nfunction fixupTjsHandleDump(dir) {', fnStart);
   assert.ok(fnStart >= 0 && fnEnd > fnStart, 'fixupLibuvPollBackendOldDarwin function body must exist');
@@ -172,7 +172,7 @@ test('the darwin-poll knob refuses a non-darwin target, loudly and early', () =>
   // a silent no-op. The guard runs before any phase, so --source-only trips it.
   let err = null;
   try {
-    execFileSync('node', ['scripts/build-tjs.mjs', '--source-only'], {
+    execFileSync('node', ['scripts/build-tjs.cjs', '--source-only'], {
       cwd: REPO,
       stdio: 'pipe',
       encoding: 'utf8',

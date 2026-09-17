@@ -58,7 +58,7 @@ export const FILES = [
   // had changed. Widening the set is safe (it can only invalidate more), and
   // narrowing is what test/engine-recipe.test.cjs exists to catch.
   'patches/*.patch',
-  'scripts/build-tjs.mjs',
+  'scripts/build-tjs.cjs',
   // The netbsd-sparc in-guest ENGINE bake recipe. It is engine source for that
   // leg in the most literal sense — it IS the compile — yet an edit to it moved
   // nothing, so the tjs cache happily restored an engine built by a DIFFERENT

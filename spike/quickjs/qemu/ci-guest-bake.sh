@@ -7,7 +7,7 @@
 # (2026-07-14). The caller stages, under the served workspace at
 # .matrix/qemu-bake/ (http://10.0.2.2:8180/.matrix/qemu-bake/):
 #   txiki-canonical-le.tar.gz  — a tar of the patched, BYTECODE-REGENERATED
-#                                txiki.js tree (scripts/build-tjs.mjs
+#                                txiki.js tree (scripts/build-tjs.cjs
 #                                --source-only then --regen-only)
 #   simde-v0.8.2.tar.gz        — the simde source (FetchContent offline)
 #   engine-api-floor.js        — the shared engine-API floor check, generated
@@ -21,7 +21,7 @@
 #
 # THIS SCRIPT DOES NOT GENERATE ANYTHING. It compiles a tree that arrived
 # complete. That is deliberate and it is the fix for a real bug: this used to be
-# the ONE build path in the matrix that did not run scripts/build-tjs.mjs, and it
+# the ONE build path in the matrix that did not run scripts/build-tjs.cjs, and it
 # hand-rolled a cmake invocation with no bytecode regen — so the JS half of
 # patches/txiki-engine-module-meta.patch (src/js/core/engine.js, which reaches a
 # binary only through a regen of txiki's git-tracked pre-compiled
@@ -67,15 +67,15 @@ echo "cle-canon-present=$CANON"
 [ "$CANON" -ge 1 ] || { echo "FATAL: canonical-LE patch absent from served source"; echo "bake-exit=1"; echo "=== GUEST-DONE ==="; exit 1; }
 grep -c 'function_size + 7' txiki.js/deps/quickjs/quickjs.c   # cpool-align, expect 2
 
-# The bytecode arrays MUST have been regenerated on the runner (build-tjs.mjs
+# The bytecode arrays MUST have been regenerated on the runner (build-tjs.cjs
 # --regen-only), or this build compiles the upstream pin's committed bytecode and
 # silently drops every src/js/** patch — the moduleMeta bug, and before it the
-# whole class 0c72693 was written to close. build-tjs.mjs stamps each regenerated
+# whole class 0c72693 was written to close. build-tjs.cjs stamps each regenerated
 # .c with a `clode:bytecode-regen src=... sha256=...` trailer; demand it HERE, in
 # the first minute, rather than discovering the omission 927 seconds into a fuse.
 REGEN=$(cat txiki.js/src/bundles/c/core/core.c txiki.js/src/bundles/c/core/polyfills.c 2>/dev/null | grep -c 'clode:bytecode-regen') || REGEN=0
 echo "cle-regen-present=$REGEN"
-[ "$REGEN" -ge 2 ] || { echo "FATAL: served tree was NOT bytecode-regenerated (no clode:bytecode-regen trailer in src/bundles/c/core/) — the runner must run 'node scripts/build-tjs.mjs --regen-only' over this tree before tarring it, or the engine ships without the JS half of every src/js/** patch"; echo "bake-exit=1"; echo "=== GUEST-DONE ==="; exit 1; }
+[ "$REGEN" -ge 2 ] || { echo "FATAL: served tree was NOT bytecode-regenerated (no clode:bytecode-regen trailer in src/bundles/c/core/) — the runner must run 'node scripts/build-tjs.cjs --regen-only' over this tree before tarring it, or the engine ships without the JS half of every src/js/** patch"; echo "bake-exit=1"; echo "=== GUEST-DONE ==="; exit 1; }
 
 # Strip -Werror (clang/MSVC pragmas trip gcc -Wunknown-pragmas)
 sed -i.bak '/list(APPEND tjs_cflags -Werror)/d' txiki.js/CMakeLists.txt

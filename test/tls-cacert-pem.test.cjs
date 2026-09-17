@@ -48,7 +48,7 @@ const { tjsVendorParentDir } = require('../scripts/platform-tag.cjs');
 const { defineGuard, guardTests } = require('./guard.cjs');
 
 const REPO = path.resolve(__dirname, '..');
-// Resolved the SAME way build-tjs.mjs resolves its own CLODE_TJS_VENDOR
+// Resolved the SAME way build-tjs.cjs resolves its own CLODE_TJS_VENDOR
 // default (see platform-tag.cjs's tjsVendorParentDir) — not hardcoded to the
 // old spike/quickjs/vendor path, which would silently stop matching the moment
 // that default moves off the NFS-mounted repo tree onto local scratch.
@@ -56,7 +56,7 @@ const CACERT_C = path.join(tjsVendorParentDir(), 'txiki.js/src/cacert.c');
 const OUT_PEM = path.join(REPO, 'libexec/node-shim/modules/tls-cacert.pem');
 const NO_CHECKOUT = fs.existsSync(CACERT_C)
   ? false
-  : `no txiki.js checkout at ${CACERT_C} — run scripts/build-tjs.mjs (the pin and `
+  : `no txiki.js checkout at ${CACERT_C} — run scripts/build-tjs.cjs (the pin and `
     + 'digest checks above still ran, and catch drift without it)';
 
 test('extractPemFromCacertC: decodes a small synthetic C string literal', () => {

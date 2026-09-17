@@ -32,7 +32,7 @@ const EXPECTED_SET = [
   // the cosmo leg's patches live here and were never covered, so editing one
   // did not move the engine identity. See scripts/engine-recipe.mjs.
   'patches/*.patch',
-  'scripts/build-tjs.mjs',
+  'scripts/build-tjs.cjs',
   // ADDED 2026-08-29: the netbsd-sparc in-guest bake recipe IS that leg's
   // compile, and editing it used to move nothing — so the cache could restore an
   // engine built by a different recipe. See scripts/engine-recipe.mjs.
@@ -137,7 +137,7 @@ const BASE = {
   'spike/quickjs/patches/a.patch': 'AAA',
   'spike/quickjs/patches/b.patch': 'BBB',
   'patches/libtjs-cosmo.patch': 'COSMO',
-  'scripts/build-tjs.mjs': 'build',
+  'scripts/build-tjs.cjs': 'build',
   'spike/quickjs/qemu/ci-guest-bake.sh': 'bake',
   'scripts/x.toolchain.cmake': 'tc',
   'spike/quickjs/atomic-shim.c': 'shim',

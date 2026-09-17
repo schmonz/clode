@@ -52,16 +52,16 @@ function scanWinSyncGuards({ fsPatch, spawnPatch, buildTjsSrc }) {
   }
 
   examined++;
-  if (/CLODE_TJS_STUB_SYNC/.test(buildTjsSrc)) findings.push('build-tjs.mjs: CLODE_TJS_STUB_SYNC must be gone (Phase-0 sync stub not fully retired)');
+  if (/CLODE_TJS_STUB_SYNC/.test(buildTjsSrc)) findings.push('build-tjs.cjs: CLODE_TJS_STUB_SYNC must be gone (Phase-0 sync stub not fully retired)');
   examined++;
-  if (/fixupStubSyncPrimitives/.test(buildTjsSrc)) findings.push('build-tjs.mjs: fixupStubSyncPrimitives must be gone (Phase-0 sync stub not fully retired)');
+  if (/fixupStubSyncPrimitives/.test(buildTjsSrc)) findings.push('build-tjs.cjs: fixupStubSyncPrimitives must be gone (Phase-0 sync stub not fully retired)');
 
   return { findings, examined };
 }
 
 const guard = defineGuard({
   name: 'win-sync-guards',
-  // FS_CHECKS (9) + SPAWN_CHECKS (7) + 2 build-tjs.mjs checks = 18, fixed by the literal
+  // FS_CHECKS (9) + SPAWN_CHECKS (7) + 2 build-tjs.cjs checks = 18, fixed by the literal
   // tables above. The floor is the EXACT count ON PURPOSE (fix round 2, coordinator
   // correction): floor is a MINIMUM, so legitimate growth only ever raises `examined`
   // above it — there is no headroom to leave below the real count. Losing even ONE entry
@@ -72,7 +72,7 @@ const guard = defineGuard({
   read: () => ({
     fsPatch: fs.readFileSync(path.join(REPO, 'spike/quickjs/patches/txiki-sync-fs.patch'), 'utf8'),
     spawnPatch: fs.readFileSync(path.join(REPO, 'spike/quickjs/patches/txiki-sync-spawn.patch'), 'utf8'),
-    buildTjsSrc: fs.readFileSync(path.join(REPO, 'scripts/build-tjs.mjs'), 'utf8'),
+    buildTjsSrc: fs.readFileSync(path.join(REPO, 'scripts/build-tjs.cjs'), 'utf8'),
   }),
   scan: scanWinSyncGuards,
   // Models both directions of drift at once: every Windows-sync pattern

@@ -3,14 +3,14 @@
 //
 // Pure by contract: test/guard.cjs requires a guard's scan() to do no I/O and
 // hold no path literals, which is the seam that lets a known-bad input be fed
-// through the real logic. scripts/build-tjs.mjs runs the same two functions on
+// through the real logic. scripts/build-tjs.cjs runs the same two functions on
 // real depscan output, so the build and the suite cannot drift.
 //
-// CJS rather than .mjs so both build-tjs.mjs (via createRequire, as it already
+// CJS rather than .mjs so both build-tjs.cjs (via createRequire, as it already
 // does for platform-tag.cjs) and the CJS test suite reach it unchanged, and so
 // phase 4c's ESM->CJS conversion leaves it alone.
 
-// The SAME list scripts/build-tjs.mjs uses for CMAKE_IGNORE_PREFIX_PATH.
+// The SAME list scripts/build-tjs.cjs uses for CMAKE_IGNORE_PREFIX_PATH.
 // Kept here as the single definition and imported there, so the cmake
 // ignore-list and the post-build denylist cannot drift -- which is exactly
 // how /usr/pkg once went missing from one half and not the other, breaking
@@ -19,7 +19,7 @@
 // Why /usr/pkg belongs in the cmake half too (CMAKE_IGNORE_PREFIX_PATH only
 // touches find_library/find_path/find_package, never find_program, so it
 // cannot hide /usr/pkg/bin/{cmake,gmake,ninja,node} on NetBSD): see the long
-// CMAKE_IGNORE_PREFIX_PATH comment in scripts/build-tjs.mjs, which records the
+// CMAKE_IGNORE_PREFIX_PATH comment in scripts/build-tjs.cjs, which records the
 // incident. Do not drop a root from this list "to be safe" -- that is the
 // drift the single definition exists to prevent.
 //

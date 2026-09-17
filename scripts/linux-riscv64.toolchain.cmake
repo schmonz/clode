@@ -1,7 +1,7 @@
 # CMake cross-toolchain for linux-riscv64 (64-bit little-endian, glibc).
 # Consumed via CLODE_TJS_CROSS_FILE; run inside a Debian image providing
 # gcc-riscv64-linux-gnu + g++-riscv64-linux-gnu (the leg's cross-apt) and the
-# riscv64 sysroot they carry. build-tjs.mjs uses CMake's default (Make)
+# riscv64 sysroot they carry. build-tjs.cjs uses CMake's default (Make)
 # generator for cross builds, so the demotes live in *_FLAGS_INIT (the
 # host-side -DCMAKE_C_FLAGS demote is skipped when a cross file is set).
 set(CMAKE_SYSTEM_NAME Linux)

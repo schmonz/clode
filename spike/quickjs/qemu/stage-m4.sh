@@ -11,7 +11,7 @@ cd "$(dirname "$0")/../../.."   # repo root
 DIST=spike/quickjs/vendor/dist
 TJS_TAG=$(awk '$1=="txiki.js"{print $2; exit}' spike/quickjs/PINS.md)
 
-# 1. txiki tarball FROM THE PATCHED CHECKOUT (build-tjs.mjs keeps patches applied)
+# 1. txiki tarball FROM THE PATCHED CHECKOUT (build-tjs.cjs keeps patches applied)
 [ -f spike/quickjs/vendor/txiki.js/src/mod_spawn_sync.c ] \
   || { echo "FATAL: mod_spawn_sync.c missing — sync-spawn patch not applied"; exit 1; }
 grep -q 'cci.origin = NULL' spike/quickjs/vendor/txiki.js/src/httpclient.c \

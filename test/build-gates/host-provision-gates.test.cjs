@@ -128,7 +128,7 @@ function unknownRequirementControlInputs() {
 // libexec/naude-sea.cjs ('tar'), libexec/bun-graph.cjs ('zstd'),
 // libexec/clode-node.cjs ('unzip', 'tar'), libexec/clode-net.cjs ('sha256', 'gzip'),
 // libexec/clode-rcodesign.cjs ('tar'), libexec/clode-update.cjs ('sha256'), and
-// scripts/build-tjs.mjs ('unzip'). See task-3-report.md for the exact command. The
+// scripts/build-tjs.cjs ('unzip'). See task-3-report.md for the exact command. The
 // floor is that exact count — a drop means either a call site was removed (in which
 // case this floor should move with it) or the scan broke.
 const guard1 = defineGuard({

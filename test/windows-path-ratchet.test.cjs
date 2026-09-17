@@ -30,14 +30,14 @@
 // MIGRATED 2026-09-04 (phase 5, task 9), because `stripComments()` was a regex
 // (`/\*[\s\S]*?\*\//g` for block comments) applied to the WHOLE FILE with no idea
 // that a `/*` or `*/` can appear as literal TEXT inside a string, template literal,
-// or regex literal. build-tjs.mjs, clode-build.cjs and others inject C/JS source
+// or regex literal. build-tjs.cjs, clode-build.cjs and others inject C/JS source
 // through template literals that contain those characters for real (they are
 // comments in the INJECTED language, not in the JS that holds them), and the
 // non-greedy regex paired an opening `/*` inside one literal with the next `*/`
 // it could find ANYWHERE later in the file — including inside a completely
 // unrelated later literal — blanking every real line of code in between. Found by
 // ACCIDENT (BACKLOG.md, 2026-08-29) when reordering two `const` declarations in
-// build-tjs.mjs shifted that pairing and unmasked two pre-existing
+// build-tjs.cjs shifted that pairing and unmasked two pre-existing
 // `process.env.PATH` sites this file had never seen.
 //
 // MEASURED before touching anything (see task-9-report.md for the exact
@@ -98,7 +98,7 @@ const RULES = {
        + 'Mirror child_process.cjs resolveExe: slash, plus backslash and drive-letter when isWin.',
   },
   'c-file-url-sep': {
-    // NEW KIND, 2026-08-25. clode injects C into the engine (scripts/build-tjs.mjs
+    // NEW KIND, 2026-08-25. clode injects C into the engine (scripts/build-tjs.cjs
     // fixups). One fixup builds `import.meta.url` as a file:// URL from a module name.
     // On Windows tjs__normalize_pathsep has ALREADY rewritten '/' to '\\' in that name,
     // so a POSIX-shaped guard (`buf[0] == '/'`) never fires and the URL body carries
@@ -271,7 +271,7 @@ const ALLOWED = {
   'c-file-url-sep': {
     // The one injected file:// construction: fixupImportMetaRequire's import.meta.url.
     // Verified to handle both separators by the assertion at the end of this file.
-    'scripts/build-tjs.mjs': 1,
+    'scripts/build-tjs.cjs': 1,
   },
   'path-walk': {
     // Bun.which's own implementation and spawn's Bun-parity existence check.
@@ -284,14 +284,14 @@ const ALLOWED = {
     //
     // NOT A NEW SITE: it has been there since the cosmo leg landed. It became
     // VISIBLE to this scan on 2026-08-29, when reordering declarations in
-    // build-tjs.mjs happened to change how the old REGEX stripComments() paired
+    // build-tjs.cjs happened to change how the old REGEX stripComments() paired
     // `/*` with `*/` across the C that file injects in template literals. That
     // blindness (measured 2026-09-04: 1,950 lines of real code across 45 scanned
     // files — see the MIGRATED header note at the top of this file) is FIXED as
     // of this entry's own commit: stripComments() is now a tokenizer that tracks
     // string/template/regex state. This entry is the honest count for the two
     // lines this rule allows here, not a residue of the old blindness.
-    'scripts/build-tjs.mjs': 2,
+    'scripts/build-tjs.cjs': 2,
     // node's documented resolveExe semantics for child_process; already handles
     // backslash and drive-letter, and must stay independent of the shim's applets.
     'libexec/node-shim/modules/child_process.cjs': 2,
@@ -318,7 +318,7 @@ const ALLOWED = {
     'libexec/node-shim/modules/path.cjs': 2,
     // bytecodeSymbolBase deliberately mirrors tjsc's get_c_name, which splits on
     // "/" ONLY — modelling the tool's real behaviour, including the bug (9c599b6).
-    'scripts/build-tjs.mjs': 1,
+    'scripts/build-tjs.cjs': 1,
     // Repo-relative paths are POSIX-canonical on purpose: the recipe hash must be
     // identical on every host.
     'scripts/engine-recipe.mjs': 2,
@@ -539,7 +539,7 @@ module.exports = { RULES, ALLOWED, scan, scanFiles, readFiles, stripComments,
 // given file:// construction normalizes separators; this reads the injected C and checks
 // the two things that were actually wrong on Windows.
 test('injected C that builds a file:// URL handles every absolute form', () => {
-  const src = fs.readFileSync(path.join(REPO, 'scripts', 'build-tjs.mjs'), 'utf8');
+  const src = fs.readFileSync(path.join(REPO, 'scripts', 'build-tjs.cjs'), 'utf8');
   const at = src.indexOf('"file://"');
   assert.ok(at > 0, 'expected exactly one injected file:// construction to verify');
   // Wide enough to hold the guard above and the body conversion below; the guard grew

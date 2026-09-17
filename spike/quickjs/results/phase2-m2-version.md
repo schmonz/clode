@@ -28,7 +28,7 @@ no bare error, no hang.
   2. `patches/txiki-sync-fs.patch` — adds `__tjs_fs_sync` (M1 gate, sync POSIX fs for CJS interop).
   3. `patches/txiki-default-stack-size.patch` — raises the Release
      `TJS__DEFAULT_STACK_SIZE` from txiki's stock 1MB to 4MB (**new this milestone**,
-     see "Wall 1" below). Rebuilt via `node scripts/build-tjs.mjs`.
+     see "Wall 1" below). Rebuilt via `node scripts/build-tjs.cjs`.
   `build/` is gitignored; the binary is reproducible from the three committed patches.
 
 ---
@@ -107,7 +107,7 @@ milestone ("bundle `--version`"), met on the real, unmodified bundle.
     corrected by running the loader beside the real `modules/`; not a real wall.
 - **Fix:** new patch `spike/quickjs/patches/txiki-default-stack-size.patch`,
   raising the Release `TJS__DEFAULT_STACK_SIZE` from 1MB to 4MB; PINS.md note
-  added; rebuilt via `node scripts/build-tjs.mjs`. 4MB clears the boot with
+  added; rebuilt via `node scripts/build-tjs.cjs`. 4MB clears the boot with
   headroom (measured recursion depth **1034 → 4155**) and stays well under the
   8MB main-thread C stack on macOS/Linux. This is a **new, third** txiki patch
   (alongside `txiki-sync-fs.patch` from M1 and the unrelated NetBSD

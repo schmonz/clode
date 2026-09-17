@@ -1,5 +1,5 @@
 'use strict';
-// Source-text + logic tests for build hermeticity (scripts/build-tjs.mjs):
+// Source-text + logic tests for build hermeticity (scripts/build-tjs.cjs):
 // cmake must not resolve vendored deps through a third-party package-manager
 // prefix (pkgsrc/Homebrew/MacPorts/Fink), and the built engine's dynamic
 // deps must not land in one either. These run UNCONDITIONALLY, no build tree
@@ -16,10 +16,10 @@ const { execFileSync } = require('node:child_process');
 const { stripLineComments } = require('./source-scan.cjs');
 
 const repo = path.join(__dirname, '..');
-const buildTjsSrc = fs.readFileSync(path.join(repo, 'scripts/build-tjs.mjs'), 'utf8');
+const buildTjsSrc = fs.readFileSync(path.join(repo, 'scripts/build-tjs.cjs'), 'utf8');
 // PKG_MANAGER_ROOTS and the verdict functions moved to scripts/depscan-verdict.cjs
 // (phase 4b) so the build and this suite run the SAME logic. The array literal
-// tests below read it THERE now, and assert build-tjs.mjs no longer keeps a
+// tests below read it THERE now, and assert build-tjs.cjs no longer keeps a
 // second copy — the drift that broke native NetBSD is what made it one list.
 const verdictSrc = fs.readFileSync(path.join(repo, 'scripts/depscan-verdict.cjs'), 'utf8');
 
@@ -49,9 +49,9 @@ test('build-tjs: pushes CMAKE_IGNORE_PREFIX_PATH with every package-manager pref
     'the CMAKE_IGNORE_PREFIX_PATH push must read PKG_MANAGER_ROOTS, not a separate hardcoded list');
   // ...and that it gets that constant by IMPORT, with no second copy of its own.
   assert.match(buildTjsSrc, /\{[^}]*PKG_MANAGER_ROOTS[^}]*\}\s*=\s*require\(['"]\.\/depscan-verdict\.cjs['"]\)/,
-    'build-tjs.mjs must import PKG_MANAGER_ROOTS from scripts/depscan-verdict.cjs');
+    'build-tjs.cjs must import PKG_MANAGER_ROOTS from scripts/depscan-verdict.cjs');
   assert.doesNotMatch(buildTjsSrc, /const PKG_MANAGER_ROOTS = \[/,
-    'build-tjs.mjs must import the roots, not redefine them — one definition, or the cmake '
+    'build-tjs.cjs must import the roots, not redefine them — one definition, or the cmake '
     + 'ignore-list and the denylist drift apart again');
 });
 
@@ -102,13 +102,13 @@ test('build-tjs: an old cmake (<3.23) does not silently skip the protection — 
 });
 
 // Behavioral: extract the ACTUAL cmakeVersionSupportsIgnorePrefixPath(major,
-// minor) function out of build-tjs.mjs (brace-balanced, via extractFunction
+// minor) function out of build-tjs.cjs (brace-balanced, via extractFunction
 // below — the same machinery already used for checkHermeticDeps)
 // and run it directly, rather than hand-copying the comparison into the
 // test. A hand copy tracks nothing: flipping `>= 23` to `< 23` (or `>` to
-// `>=` on the major-version branch) in build-tjs.mjs would leave a
+// `>=` on the major-version branch) in build-tjs.cjs would leave a
 // hand-copied `gate` here green forever. This is defined as its own
-// function declaration (not inline in the `if`) in build-tjs.mjs
+// function declaration (not inline in the `if`) in build-tjs.cjs
 // specifically so it can be extracted and exercised here.
 test('build-tjs: version-gate arithmetic accepts 3.23+, rejects older', () => {
   const src = extractFunction(buildTjsSrc, 'cmakeVersionSupportsIgnorePrefixPath');
@@ -123,10 +123,10 @@ test('build-tjs: version-gate arithmetic accepts 3.23+, rejects older', () => {
 // ---- HALF 2: post-build dependency check -----------------------------------
 
 // The shipped checkHermeticDeps, as text. It is the LAST function in
-// build-tjs.mjs, so the terminator is the comment block that follows it.
+// build-tjs.cjs, so the terminator is the comment block that follows it.
 function hermeticFnSrc() {
   const fnStart = buildTjsSrc.indexOf('function checkHermeticDeps');
-  assert.ok(fnStart > -1, 'function checkHermeticDeps not found in build-tjs.mjs');
+  assert.ok(fnStart > -1, 'function checkHermeticDeps not found in build-tjs.cjs');
   const fnEnd = buildTjsSrc.indexOf('\n// CLODE_TJS_SMOKE=off', fnStart);
   assert.ok(fnEnd > -1, 'the CLODE_TJS_SMOKE comment that terminates checkHermeticDeps moved');
   return buildTjsSrc.slice(fnStart, fnEnd);
@@ -233,7 +233,7 @@ test('build-tjs: dependency check uses a DENYLIST of package-manager roots, not 
 // function body contains its own `}`, e.g. inside `.reduce(...)`).
 function extractFunction(src, name) {
   const start = src.indexOf(`function ${name}(`);
-  assert.ok(start > -1, `function ${name} not found in build-tjs.mjs`);
+  assert.ok(start > -1, `function ${name} not found in build-tjs.cjs`);
   const braceStart = src.indexOf('{', start);
   let depth = 0;
   for (let i = braceStart; i < src.length; i++) {

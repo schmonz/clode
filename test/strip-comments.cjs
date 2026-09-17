@@ -20,7 +20,7 @@
 // `//` as a real comment when none of those is open. Everything that is not a
 // comment — code, and string/template/regex BODIES — passes through completely
 // unchanged (never blanked): a template literal injecting C or JS source is
-// exactly where the sites this file hunts for were hiding (build-tjs.mjs,
+// exactly where the sites this file hunts for were hiding (build-tjs.cjs,
 // clode-build.cjs), so their content must stay visible to the RULES below, not
 // be swallowed as if it were a comment.
 //

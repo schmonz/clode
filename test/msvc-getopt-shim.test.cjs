@@ -1,5 +1,5 @@
 'use strict';
-// The MSVC getopt shim (fixupQjscMsvcGetopt in scripts/build-tjs.mjs), checked
+// The MSVC getopt shim (fixupQjscMsvcGetopt in scripts/build-tjs.cjs), checked
 // the only way that means anything: DIFFERENTIALLY, against the platform getopt,
 // on the exact option string src/qjsc.c passes.
 //
@@ -23,12 +23,12 @@ const { execFileSync, spawnSync } = require('node:child_process');
 const { defineGuard, guardTests } = require('./guard.cjs');
 
 const repo = path.resolve(__dirname, '..');
-const buildTjsSrc = fs.readFileSync(path.join(repo, 'scripts/build-tjs.mjs'), 'utf8');
+const buildTjsSrc = fs.readFileSync(path.join(repo, 'scripts/build-tjs.cjs'), 'utf8');
 
 // Brace-balanced extraction, same as test/tjs-bytecode-regen.test.cjs.
 function extractFunction(src, name) {
   const start = src.indexOf(`function ${name}(`);
-  assert.ok(start > -1, `function ${name} not found in build-tjs.mjs`);
+  assert.ok(start > -1, `function ${name} not found in build-tjs.cjs`);
   const braceStart = src.indexOf('{', start);
   let depth = 0;
   for (let i = braceStart; i < src.length; i++) {
@@ -100,7 +100,7 @@ int main(int argc, char **argv) {
 
 // Options strictly before operands. GNU getopt PERMUTES interleaved operands and
 // BSD getopt does not, so an interleaved vector would diff by platform and prove
-// nothing about the shim. qjsc is always invoked options-first (build-tjs.mjs
+// nothing about the shim. qjsc is always invoked options-first (build-tjs.cjs
 // passes -m -s -o OUT -n NAME -p PREFIX IN), so this is the surface that matters.
 const VECTORS = [
   ['-m', '-s', '-o', 'out.c', '-n', 'name', '-p', 'pfx', 'in.js'],   // how build-tjs actually calls it
@@ -167,7 +167,7 @@ test('shim getopt matches the platform getopt on qjsc\'s option string', { skip:
   }
 });
 
-// PURE: `src` is the already-read build-tjs.mjs text.
+// PURE: `src` is the already-read build-tjs.cjs text.
 function scanFixupRegistration({ src }) {
   const findings = [];
   let examined = 0;
@@ -195,7 +195,7 @@ function scanFixupRegistration({ src }) {
 
 const fixupRegistrationGuard = defineGuard({
   name: 'msvc-getopt-fixup-registration',
-  read: () => ({ src: fs.readFileSync(path.join(repo, 'scripts/build-tjs.mjs'), 'utf8') }),
+  read: () => ({ src: fs.readFileSync(path.join(repo, 'scripts/build-tjs.cjs'), 'utf8') }),
   scan: scanFixupRegistration,
   // I2 (coordinator, 2026-09-04): table-driven — two fixed markers checked in ONE named
   // build script. Floored at the exact measured count (2).

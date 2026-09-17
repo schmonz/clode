@@ -1,5 +1,5 @@
 # CMake cross-toolchain for darwin-ppc (the ppc walk, Phase C).
-# Consumed via CLODE_TJS_CROSS_FILE by scripts/build-tjs.mjs, run INSIDE the
+# Consumed via CLODE_TJS_CROSS_FILE by scripts/build-tjs.cjs, run INSIDE the
 # pinned VariantXYZ image (gcc 14.2 powerpc-apple-darwin8 + cctools-port ppc
 # ld/as + baked MacOSX10.4u SDK). The cross-gcc self-locates its sysroot (the
 # hello-world probe linked with just -mmacosx-version-min=10.4), so no
@@ -21,7 +21,7 @@ set(CMAKE_INSTALL_NAME_TOOL /bin/true CACHE FILEPATH "unused (static exe)")
 
 # The floor lives here (a Linux-hosted cross build can't use CMAKE_OSX_*,
 # which assume xcodebuild). -static-libgcc: the target has no shared libgcc.
-# The -Wno-error demotions match the non-darwin-host branch of build-tjs.mjs
+# The -Wno-error demotions match the non-darwin-host branch of build-tjs.cjs
 # (txiki compiles -Werror; #pragma region etc. warn under gcc) — carried here
 # rather than via -DCMAKE_C_FLAGS so the version-min survives.
 set(_floor "-mmacosx-version-min=10.4")

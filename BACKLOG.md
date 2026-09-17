@@ -304,9 +304,9 @@ resolves an engine — in-process when clode IS tjs, else `CLODE_TJS`, else the 
 
 The bake shipped an engine carrying the C half of `txiki-engine-module-meta.patch` and not
 the JS half, because it was the one build path in the matrix that did not run
-`scripts/build-tjs.mjs` and so never regenerated `src/bundles/c/**`. The fix does not teach
+`scripts/build-tjs.cjs` and so never regenerated `src/bundles/c/**`. The fix does not teach
 the guest to regenerate; it stops the guest generating anything at all. The runner now runs
-`node scripts/build-tjs.mjs --regen-only` over the same patched tree it already builds, using
+`node scripts/build-tjs.cjs --regen-only` over the same patched tree it already builds, using
 the SAME `regenBytecodeArrays`/`assertBytecodeFresh` every other leg uses (a host-native tjsc,
 whose canonical-LE output is target-independent by construction), and tars the regenerated
 tree. `ci-guest-bake.sh` refuses a tree with no `clode:bytecode-regen` trailer, and its ENGINE
@@ -331,12 +331,12 @@ never will be. If sparc goes red again with a shape neither explains, that is wh
 ## The Windows-path ratchet is blind on ~1335 lines of real code (2026-08-29) — RESOLVED 2026-09-04
 
 `test/windows-path-ratchet.test.cjs`'s `stripComments()` blanked `/* ... */` with a
-non-greedy regex over the whole file. build-tjs.mjs, clode-fuse.cjs, the node-shim loader and
+non-greedy regex over the whole file. build-tjs.cjs, clode-fuse.cjs, the node-shim loader and
 others embed C and JS *in string and template literals* that contain `/*` and `*/`, so the
 pairing ran away and blanked real code, an unknown number of lines across an unknown number
 of files (estimated ~1335 across 14, 2026-08-29 — that estimate was never actually measured).
 
-It surfaced by accident: reordering two `const` declarations in build-tjs.mjs changed the
+It surfaced by accident: reordering two `const` declarations in build-tjs.cjs changed the
 pairing and revealed two pre-existing `process.env.PATH` sites (the cosmocc bin-dir prepend)
 that the scan had never seen. They were allowlisted with a reason at the time; the blindness
 itself was not fixed until now.
@@ -651,7 +651,7 @@ still wrong. Measured, so nobody re-runs it:
   plus the `src/js/core/engine.js` wrapper, as a real patch in `spike/quickjs/patches/`. NB the
   build RESETS the vendor tree and replays the patch list, so editing
   `~/.cache/clode/tjs-vendor/txiki.js` directly is silently discarded — it must be a patch file
-  registered in `scripts/build-tjs.mjs`, and `git diff` there needs `a/`+`b/` prefixes or
+  registered in `scripts/build-tjs.cjs`, and `git diff` there needs `a/`+`b/` prefixes or
   `git apply` rejects it.
 - Engine rebuilt; `namespaceOf` appears in `Object.keys(tjs.engine)`.
 - **After evaluation it works**: `ns after eval: object x=42`.
@@ -770,10 +770,10 @@ and do the string work where it is 31x faster than tjs.
 Driver = the at-desk release-readiness plan (`docs/superpowers/plans/2026-07-28-at-desk-release-readiness.md`).
 
 1. **Cosmo APE leg (Task 4b) — CLOSEST TO SHIPPABLE.** ✅ MCP-ws sha-1/endian bug fixed
-   (`patches/libwebsockets-cosmo.patch`, wired into build-tjs.mjs); ✅ FULL agentic fidelity suite
+   (`patches/libwebsockets-cosmo.patch`, wired into build-tjs.cjs); ✅ FULL agentic fidelity suite
    GREEN on the cosmo APE at parity with native (mcp-ws, tools 5/5, node-shim-agentic, workflow,
    subagent-diff) via the now-APE-aware harness; ✅ interactive + tty fixes landed earlier. REMAINING
-   before ship: (a) a clean-from-scratch `build-tjs.mjs --target cosmo` + `agentic-mcp-ws` green in CI
+   before ship: (a) a clean-from-scratch `build-tjs.cjs --target cosmo` + `agentic-mcp-ws` green in CI
    (gold-standard; the committed patch is byte-identical to the verified scratch build); (b) the
    multi-OS CI fan-out (run the SAME `.com` on Linux/mac/Windows/BSD runners); (c) flip the `cosmo`
    leg `publish:true` in `scripts/tjs-legs.mjs` + ship UNSIGNED with a documented Gatekeeper/quarantine
@@ -991,10 +991,10 @@ all fine) — the gaps are input/socket-event-delivery:
    an inconsistent LE+BE byte mix → every lws SHA-1 is wrong → the ws client's `Sec-WebSocket-Accept`
    (=`base64(SHA1(key+GUID))`) check fails on every valid 101 (`HS: Accept hash wrong`). HTTPS was fine
    because TLS uses mbedtls SHA, not lws's builtin. FIX: **patches/libwebsockets-cosmo.patch** (new;
-   applied `git -C deps/libwebsockets apply` in build-tjs.mjs `applyCosmoPatches`) re-derives the macros
+   applied `git -C deps/libwebsockets apply` in build-tjs.cjs `applyCosmoPatches`) re-derives the macros
    from the compiler's `__BYTE_ORDER__`/`__ORDER_*_ENDIAN__` builtins, gated on `__COSMOPOLITAN__`
    (behavior-neutral for other legs). Verified: applies clean to pristine lws; scratch rebuild → accept
-   hashes match → WS-OPEN. FOLLOW-UP: a full clean `build-tjs.mjs --target cosmo` end-to-end + the
+   hashes match → WS-OPEN. FOLLOW-UP: a full clean `build-tjs.cjs --target cosmo` end-to-end + the
    `agentic-mcp-ws.test.cjs` row green on a fresh cosmo quaude (high-confidence; the productized patch is
    byte-identical to the verified scratch edit).
 
@@ -1054,7 +1054,7 @@ place work hides, not the last place anyone looks:
 - **Universal cross-build Layer 1 — engine production, deferred half.** Layer 2 (clode
   cross-fuses from prebuilt engines) shipped and now range-fetches its slice. Layer 1 —
   one clang/zig + pinned sysroots replacing the per-target toolchain zoo, plus the target
-  descriptor and `build-tjs.mjs --target Y` — is untouched. Depends on build-working-dir
+  descriptor and `build-tjs.cjs --target Y` — is untouched. Depends on build-working-dir
   isolation (already tracked above).
   Spec: `2026-07-25-universal-cross-build-compiler-free-quaude-design.md`.
 - **Feature parity #2 image (sharp/libvips) and #3 TypeScript (Bun.Transpiler).** Both
@@ -1104,7 +1104,7 @@ shipped. Two deliberate follow-ups, in this order:
   strongest version of this check is a `tjs` that can state the recipe it was built
   from, so `obtainEngine` could refuse a stale engine at fetch time instead of CI
   catching it a push later. The marker must be injected as a build-time `-D`
-  (build-tjs.mjs → cmake), NOT written into a patch: the recipe hashes
+  (build-tjs.cjs → cmake), NOT written into a patch: the recipe hashes
   `spike/quickjs/patches/*.patch`, so a patch containing the recipe is a fixed-point
   problem. Note also that this would make the pin gate meaningfully strict for the
   first time — an old clode meeting a new pack must still fail *readably*, not
@@ -1176,7 +1176,7 @@ native tjs build is unblocked. Report the pkgsrc node build bug upstream.
 Building native tjs on netbsd11-arm64 fails in WAMR: `deps/wamr/core/shared/platform/
 common/posix/posix_memmap.c` uses Linux-only `mremap(..., MREMAP_MAYMOVE)` (NetBSD has
 no such mremap). Same class as the documented MAP_32BIT breakage on s390x/ppc64le/
-riscv64. STOPGAP for green: build with `CLODE_TJS_WASM=off` (build-tjs.mjs supports it —
+riscv64. STOPGAP for green: build with `CLODE_TJS_WASM=off` (build-tjs.cjs supports it —
 drops WASM/WAMR; "nothing shipped imports it", bun:ffi is a throw-on-use stub). TODO: decide
 whether NetBSD (and other non-Linux BSDs) should ship WASM at all; if yes, patch WAMR's
 posix_memmap.c with a non-Linux mremap fallback (munmap+mmap or guard the MREMAP path) and
@@ -1531,12 +1531,12 @@ Direction (user, 2026-08-05): "we need to move toward cmake when we move away fr
 Sequenced AFTER the Node-retirement work, but it is the piece that actually completes it.
 
 **The asymmetry.** clode RUNS without Node — that shipped. clode cannot BUILD ITS OWN ENGINE
-without Node, because `scripts/build-tjs.mjs` (3,270 lines) is the orchestration. So
+without Node, because `scripts/build-tjs.cjs` (3,270 lines) is the orchestration. So
 "move away from node" is not done while the engine build needs it.
 
 **The motivating evidence — a build that silently discarded a patch.** Patching any txiki JS
 source under `src/js/**` had NO EFFECT: cmake compiles `src/bundles/c/**` (pre-compiled
-quickjs bytecode arrays txiki git-tracks), and build-tjs.mjs regenerated those only behind an
+quickjs bytecode arrays txiki git-tracks), and build-tjs.cjs regenerated those only behind an
 opt-in `CLODE_TJS_REGEN=1`. A correct `AbortSignal.timeout` patch (+ its C binding) built
 clean and changed nothing; the esbuilt `.js` HAD the change while the `.c` that compiled was
 pristine upstream, three minutes older. No failure signal anywhere. Full detail in memory
@@ -2157,7 +2157,7 @@ CLODE_PROVIDER_BIN (naude or a real claude), and (b) the cosmo engine behind a /
 APE can't be execve'd directly — same MZ→sh issue clode-fuse already solves) pointed at via the
 engine's bootP path. Set that up, run vs the cosmo quaude, triage diffs — likely a few more
 node-shim/libuv cosmo gaps (the spawn class is now closed, but streams/tty/fs edges are unaudited).
-- PHASE E (wire the leg): build-tjs.mjs cosmo target = apply patches/libuv-cosmo.patch +
+- PHASE E (wire the leg): build-tjs.cjs cosmo target = apply patches/libuv-cosmo.patch +
   patches/libtjs-cosmo.patch + CLODE_TJS_CROSS_FILE=scripts/cosmo.toolchain.cmake + force lean
   (mimalloc/ffi/wasm/sqlite OFF) + build target `tjs-cli` + chmod +x on cosmoranlib; provision
   cosmocc 4.0.2 (pin sha 85b8c37a…); add a cosmo leg to scripts/tjs-legs.mjs + multi-OS CI (run the
@@ -2175,7 +2175,7 @@ the mock round-trip", SIGABRT, empty stdout/stderr) — an abort() in a deeper n
 cosmo exercised by real agent execution (streaming/tool-use/fs), same CLASS as the boot hang. CLI
 paths (--version/--help) and basic -p don't crash. NEXT: reproduce with the mock (startPongMock) +
 --debug-to-stderr to find the aborting op, likely another cosmo libc/errno/syscall gap. Then E
-(wire the cosmo leg into build-tjs.mjs + tjs-legs.mjs + multi-OS CI). Build-cache note: incremental cmake-on-NFS
+(wire the cosmo leg into build-tjs.cjs + tjs-legs.mjs + multi-OS CI). Build-cache note: incremental cmake-on-NFS
 under-recompiles (mtime staleness); use `rm -rf build` or Ninja for dev — a non-issue for build-tjs
 (builds clean each run). Below: the earlier build-complete characterization.
 
@@ -2227,7 +2227,7 @@ of the libuv errno fix. Then re-check the libwebsockets tail (SO_PRIORITY handle
 watch for more). Then link → run the tjs.com APE.
 - Phase C: TLS (mbedtls under cosmo — quaude needs HTTPS to the API; expected easy per getentropy).
 - Phase D: zipos-fuse the quaude payload into the APE (/zip/).
-- Phase E: wire the cosmo target into build-tjs.mjs + scripts/tjs-legs.mjs; multi-OS CI
+- Phase E: wire the cosmo target into build-tjs.cjs + scripts/tjs-legs.mjs; multi-OS CI
   (Linux+Mac+Windows+BSD run the SAME .com); land the libuv-cosmo patch in patches/ once end-to-end.
 Design forks for productization: (a) FUSING — APE already uses its tail as a ZIP store (zipos,
 `/zip/…`); our quaude trailer-append collides, so embed quaude's payload in the APE zipos instead;
@@ -4541,7 +4541,7 @@ the payoffs, and how would we move incrementally?
 **FIRST CORRECTION TO THE PREMISE: the second half is already Node-free.** It runs under
 our own engine — that is what `clode build --self` producing a builder that works with
 Node absent from PATH proves. So a C port would NOT advance "no Node in dev": Node lives
-in `scripts/build-tjs.mjs` (the ENGINE half — the CMake candidate) and in the test suite.
+in `scripts/build-tjs.cjs` (the ENGINE half — the CMake candidate) and in the test suite.
 
 **Cross-quaude: neutral.** The cross constraint is that bytecode must be readable by the
 target engine, solved by canonical-LE inside the engine. The driver's language does not
@@ -4984,7 +4984,7 @@ had"; it is "finish a shape it half has, and stop growing the parts that resiste
 
 **What did not get decomposed, by line count:**
 
-    scripts/build-tjs.mjs        3796
+    scripts/build-tjs.cjs        3796
     libexec/clode-fuse.cjs       1678   resolve+stage+extract+close deps+sign+thin+fuse+smoke+attest
     libexec/extract-claude-js.cjs 1593
     libexec/scc-merge.cjs        1428
@@ -5032,7 +5032,7 @@ boundary and skip the declaration.
 
 **THE WINDOWS TAX — what is evidence, what is assumption.** Measured here, today:
 
-    win32/.exe/windows mentions, build path:   build-tjs.mjs 26, clode-fuse.cjs 22,
+    win32/.exe/windows mentions, build path:   build-tjs.cjs 26, clode-fuse.cjs 22,
                                                build-naude.mjs 15, platform-tag.cjs 11
     files carrying a #! shebang:               26   (inert on Windows — every call site must
                                                      name its interpreter, or the multi-call
@@ -6271,7 +6271,7 @@ classifier has no input half (see below), so some of the 30 are false positives 
 `PRODUCTION_GATE_EXCLUSIONS` entries, with a reason, as each is checked by hand. The
 biggest-consequence names in the list, for whoever picks this up: `libexec/clode-fuse.cjs`
 is already controlled, but `scripts/apicheck.mjs` (the API-surface gate),
-`libexec/extract-claude-js.cjs`, `libexec/bun-shim.cjs`, `scripts/build-tjs.mjs`,
+`libexec/extract-claude-js.cjs`, `libexec/bun-shim.cjs`, `scripts/build-tjs.cjs`,
 `scripts/bundle-shape.mjs`, `scripts/templates-drift.mjs` and `scripts/upstream-drift-check.mjs`
 all refuse builds today with no positive control.
 
@@ -6706,7 +6706,7 @@ input surface rather than two. The rest ship with their verdict recorded.
 
 ### MEASURED 2026-09-12, and it settles the built-binary rule
 
-    cold engine build (scripts/build-tjs.mjs)        60s
+    cold engine build (scripts/build-tjs.cjs)        60s
     warm self-build, engine cached                   14s  -> 27.7MB builder, smoke passed
     suite WITH an engine present      1955 tests / 1920 pass / 0 fail /  34 skipped
     suite with NO engine              1955 tests / 1577 pass / 0 fail / 377 skipped
@@ -6846,7 +6846,7 @@ And the "0 documented" half is already false as of phase 3a: nine names are now 
 **The structural finding, which matters more than the count: these are at least four
 populations, and one of them is not phase 3b's business at all.**
 
-    20  scripts/build-tjs.mjs      ENGINE-BUILD KNOBS — CLODE_TJS_* plus CLODE_COSMOCC
+    20  scripts/build-tjs.cjs      ENGINE-BUILD KNOBS — CLODE_TJS_* plus CLODE_COSMOCC
     11  libexec/clode-build.cjs    build inputs proper
      7  libexec/clode-paths.cjs    store/path plumbing
      4  libexec/clode-watch.cjs    the tea-leaves reader
@@ -6855,7 +6855,7 @@ populations, and one of them is not phase 3b's business at all.**
      3  libexec/node-shim/loader.cjs  shim diagnostics
 
 - **Engine-build knobs (~20)** — `CLODE_TJS_STATIC`, `_WASM`, `_FFI`, `_MIMALLOC`,
-  `_MACOS_SDK`, `_CROSS_FILE`, `CLODE_COSMOCC`… all read by `scripts/build-tjs.mjs` alone.
+  `_MACOS_SDK`, `_CROSS_FILE`, `CLODE_COSMOCC`… all read by `scripts/build-tjs.cjs` alone.
   The umbrella gives the engine build to **phase 4** (cmake owns that graph). Absorbing these
   into `clode build`'s flag surface would be actively wrong: `clode build` requires no
   compiler and no cmake, and these names exist for the build that does. They want cmake
@@ -6888,7 +6888,7 @@ that are not environment variables at all.
 
 `CLODE_TJS_STATIC`, `_WASM`, `_FFI`, `_MIMALLOC`, `_MACOS_SDK`, `_MACOS_MIN`, `_CROSS_FILE`,
 `_REGEN`, `_SMOKE`, `CLODE_COSMOCC` and the rest of that cluster are read by
-`scripts/build-tjs.mjs` and nothing else. They are options to a COMPILE, and the umbrella's
+`scripts/build-tjs.cjs` and nothing else. They are options to a COMPILE, and the umbrella's
 invariant is that `clode build` requires no compiler and no cmake — so they belong to the
 program that does. Absorbing them into `clode build`'s flag surface would put twenty compile
 options on a command that cannot compile: the same axis conflation phase 3a spent six tasks
@@ -7248,12 +7248,12 @@ cross-file, 21 guest-platform, 17 `verify:'none'`/`no-exec:true`. netbsd-m68k is
 `os:'ubuntu-latest'` + cross toolchain, "built-not-run … the arch gate (file(1))
 is the proof" — that box never runs anything. Where a weird box DOES execute it
 runs the PRODUCT: netbsd-sparc "cross-blobulates the bootstrap builder ON THE X64
-RUNNER … then runs clode-on-sparc". So build-tjs.mjs has always run on
+RUNNER … then runs clode-on-sparc". So build-tjs.cjs has always run on
 ubuntu/macOS/Windows, where we publish clode as hard publishers. The prerequisite
 gets SMALLER: one static binary we already ship, not a full Node install.
 
 **The verifier is the biggest coverage win in the phase, not a cleanup.**
-`checkHermeticDeps` (build-tjs.mjs:3705) skips on cross-builds ("the host's own
+`checkHermeticDeps` (build-tjs.cjs:3705) skips on cross-builds ("the host's own
 otool/ldd cannot meaningfully inspect a foreign-arch/foreign-OS binary"), on
 Windows, and on static links. Cross-building is how most of the fleet is made, so
 for ~17 legs the ENTIRE hermeticity proof today is `file(1)` — "yes, that is an
@@ -7273,11 +7273,12 @@ first makes every later measurement honest). 4b = the verifier, which proves the
 "C built by cmake on every host" pattern on Windows and cross-builds BEFORE 4c
 bets 3,799 lines on cmake. 4c = the cmake/tjs migration + ccache.
 
-**Open question to settle by measuring, not preferring:** build-tjs.mjs is ESM
-and imports seven builtins (fs, path, os, crypto, child_process, url, module) —
+**Open question, SETTLED (phase 4c1, 2026-09-17):** build-tjs WAS ESM and
+imported seven builtins (fs, path, os, crypto, child_process, url, module) —
 all seven exist in libexec/node-shim/modules/, but loader.cjs is CommonJS-
-oriented and whether it intercepts ESM `import` is UNVERIFIED. First experiment:
-run a trivial .mjs that imports node:fs under the shim and see.
+oriented and does NOT intercept an ESM entry at all (`loader.cjs:481` guards its
+transpile with `!isEntry`). The answer was to convert, not to teach the loader
+ESM: `scripts/build-tjs.cjs`.
 
 ## ★ Phase 4 SEQUENCED 4b → 4c → 4a, and 4b is planned (user, 2026-09-17)
 
@@ -7323,12 +7324,18 @@ The transpile is guarded `if (!isEntry && esmDetect(src))` at `loader.cjs:481`,
 so an entry is ALWAYS evaluated as CJS, and the loader's own header says it is
 "NOT a general ESM implementation". Teaching it ESM means entry interception
 PLUS an `import.meta` implementation. Conversion is far cheaper: of 20
-`import.meta` hits in `build-tjs.mjs` only **2 are executable** (`:73`, `:75`) —
+`import.meta` hits in `build-tjs.cjs` only **2 are executable** (`:73`, `:75`) —
 the other 18 are inside the C-fixup string literals and comments that teach
 *txiki* about `import.meta` for the product. Both executable ones are
 boilerplate that DISAPPEARS in CJS (`createRequire(import.meta.url)` -> built-in
 `require`; `fileURLToPath(new URL('..', import.meta.url))` -> `__dirname`). No
-top-level await — the one `await` at `:272` is inside a function. The two
+top-level await — CORRECTED 2026-09-17, this was WRONG: `await` at `:272` is
+inside `provisionCosmocc`, but its ONE caller awaits it at TOP LEVEL inside
+`if (cosmoTarget)`, which CJS cannot express. The fix cost four lines, not a
+re-indent: everything from the cosmo block to EOF now runs inside an async
+arrow whose body is deliberately left at its original column, so the ~550 build-
+phase lines keep their blame and the column-0 `function` anchors the source-text
+gates slice by still line up. The two
 sibling `.mjs` imports are 43 and 106 lines of plain `export function`.
 Ripple to fix in the same commit: `test/engine-api-floor.test.cjs:109` pins the
 exact import spelling, and `.github/actions/build-leg/action.yml:600,994` run
@@ -7375,7 +7382,7 @@ instruments, one mistake".
 which machine that binary targets — ELF `DT_NEEDED`/`DT_RUNPATH`, Mach-O
 `LC_LOAD_DYLIB`/`LC_RPATH` per fat slice, the PE import directory. cmake builds it
 host-native during the engine build; it is never shipped, so there is no release artifact
-and no version skew. `scripts/build-tjs.mjs`'s `checkHermeticDeps` uses it instead of
+and no version skew. `scripts/build-tjs.cjs`'s `checkHermeticDeps` uses it instead of
 `otool -L`/`ldd`; `scripts/depscan-verdict.cjs` holds the pure decision logic so
 `test/guard.cjs`'s `scan()` can be fed a known-bad input.
 

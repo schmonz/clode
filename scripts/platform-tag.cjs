@@ -150,7 +150,7 @@ function tjsBin(repo, opts = {}) {
   return path.join(tjsDir(repo, opts), process.platform === 'win32' ? 'tjs.exe' : 'tjs');
 }
 
-// The vendor SOURCE checkout's default PARENT dir — build-tjs.mjs's
+// The vendor SOURCE checkout's default PARENT dir — build-tjs.cjs's
 // CLODE_TJS_VENDOR default (see its header comment). Local scratch (TMPDIR
 // first, never the repo tree, which is commonly NFS-mounted on a dev box)
 // unless CLODE_TJS_LOCAL_ROOT/CLODE_TJS_VENDOR override it. Exported so

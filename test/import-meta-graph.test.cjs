@@ -15,7 +15,7 @@
 // the bundle dies with "not a function" deep inside vendored code — with no hint that the
 // engine, not the bundle, is at fault.
 //
-// Three fixups in scripts/build-tjs.mjs cooperate to make it work, and this file is the
+// Three fixups in scripts/build-tjs.cjs cooperate to make it work, and this file is the
 // wire-level check on all three at once:
 //   fixupImportMetaRequire       — import.meta.require exists at all (from __quaudeRequire)
 //   fixupImportMetaDeserialize   — a deserialized-but-not-evaluated module gets its meta
@@ -37,6 +37,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { skipUnlessTjs, engineSpawn } = require('./node-shim-helper.cjs');
+const { defineGuard, guardTests } = require('./guard.cjs');
 
 function q(s) { return JSON.stringify(s); }
 
@@ -194,3 +195,90 @@ test('import.meta: reachable from a nested function, and from a later tick', (t)
     assert.strictEqual(r.status, 0);
   });
 });
+
+// ---- the 18 payload mentions, pinned ---------------------------------------
+// The five tests above need an engine and skip without one. This guard does not:
+// it is the cheap textual tripwire that runs on every machine, and it exists
+// because phase 4c1 converted scripts/build-tjs from ESM to CommonJS.
+//
+// That conversion removed the file's only two EXECUTABLE `import.meta` uses
+// (createRequire and the repo path). The other 18 mentions had to stay, because
+// they are not code: they are the C that the three fixups named above INJECT into
+// quickjs, plus the prose explaining it. A later sweep that "finishes the ESM
+// removal" by editing them would change what the BUILT ENGINE does, and the
+// wire-level tests would only catch it on a box that has an engine in hand.
+//
+// The total pins both directions at once: more than 18 means an executable
+// `import.meta` came back (a CommonJS file would not even parse), fewer means a
+// payload lost a mention. The banner check is what makes "18" mean "18 PAYLOAD
+// mentions" rather than "any 18 lines in a 3,800-line file", and the per-fixup
+// counts name WHICH fixup changed instead of just reporting a wrong total.
+function scanImportMetaPayload({ src }) {
+  const findings = [];
+  let examined = 0;
+  const lines = src.split('\n');
+
+  examined++;
+  const total = lines.filter((l) => l.includes('import.meta')).length;
+  if (total !== 18) {
+    findings.push(`build-tjs.cjs mentions import.meta on ${total} lines, not 18 — `
+      + 'more means an executable use came back, fewer means a fixup lost payload');
+  }
+
+  examined++;
+  const banner = lines.findIndex((l) => l.startsWith('// ---- import.meta for preregistered modules'));
+  const firstHit = lines.findIndex((l) => l.includes('import.meta'));
+  if (banner < 0) {
+    findings.push('the import.meta fixup section banner is gone, so the count above can no '
+      + 'longer be read as "18 PAYLOAD mentions"');
+  } else if (firstHit < banner) {
+    findings.push(`an import.meta mention at line ${firstHit + 1} precedes the fixup section — `
+      + 'executable import.meta cannot exist in a CommonJS file, so this one is new');
+  }
+
+  // Sliced by the column-0 `function <name>(` anchor, the same way the other
+  // source-text gates over this file read it.
+  for (const [name, want] of [['fixupImportMetaRequire', 5],
+    ['fixupImportMetaDeserialize', 5], ['fixupQjsImportMetaByIdentity', 2]]) {
+    examined++;
+    const i = src.indexOf(`\nfunction ${name}(`);
+    if (i < 0) { findings.push(`fixup ${name} is gone from build-tjs.cjs`); continue; }
+    const j = src.indexOf('\nfunction ', i + 1);
+    const body = src.slice(i, j < 0 ? src.length : j);
+    const got = body.split('\n').filter((l) => l.includes('import.meta')).length;
+    if (got !== want) {
+      findings.push(`${name} names import.meta ${got} times, not ${want} — its payload `
+        + 'changed, and the wire-level tests above must prove the new one on a real engine');
+    }
+  }
+
+  return { findings, examined };
+}
+
+// A synthetic file with the real shape and the real counts: banner + 5 lines of
+// prose (6 outside the fixups) + 5 + 5 + 2 inside them = 18.
+function payloadFixture([a, b, c]) {
+  const meta = (n, pad) => Array(n).fill(`${pad}// import.meta`);
+  return [
+    '// ---- import.meta for preregistered modules -----------------------------------',
+    ...meta(5, ''),
+    'function fixupImportMetaRequire(dir) {', ...meta(a, '  '), '}',
+    'function fixupImportMetaDeserialize(dir) {', ...meta(b, '  '), '}',
+    'function fixupQjsImportMetaByIdentity(dir) {', ...meta(c, '  '), '}',
+  ].join('\n');
+}
+
+const payloadGuard = defineGuard({
+  name: 'build-tjs-import-meta-payload',
+  // 5 fixed checks, examined++ once each unconditionally: the total, the banner
+  // ordering, and one per fixup. EXACT, not conservative — floor is a minimum, so
+  // losing a check must report BROKEN rather than a clean-looking OK.
+  floor: 5,
+  read: () => ({ src: fs.readFileSync(path.join(__dirname, '..', 'scripts/build-tjs.cjs'), 'utf8') }),
+  scan: scanImportMetaPayload,
+  // Models the exact regression: one payload mention edited away. It moves the
+  // total off 18 AND localizes to the fixup that lost it, which is both of the
+  // things this guard claims to detect.
+  control: () => ({ src: payloadFixture([4, 5, 2]) }),
+});
+guardTests(payloadGuard);

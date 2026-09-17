@@ -1,5 +1,5 @@
 'use strict';
-// The bytecode-regen tripwire (scripts/build-tjs.mjs): cmake compiles
+// The bytecode-regen tripwire (scripts/build-tjs.cjs): cmake compiles
 // src/bundles/c/** — quickjs bytecode arrays txiki git-tracks pre-compiled —
 // NOT the esbuilt src/bundles/js/** a src/js/** patch actually lands in.
 // Regenerating the .c arrays from the .js bundles used to be an opt-in
@@ -22,14 +22,14 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 
 const repo = path.join(__dirname, '..');
-const buildTjsSrc = fs.readFileSync(path.join(repo, 'scripts/build-tjs.mjs'), 'utf8');
+const buildTjsSrc = fs.readFileSync(path.join(repo, 'scripts/build-tjs.cjs'), 'utf8');
 
 // Brace-balanced extraction (same as test/tjs-build-hermeticity.test.cjs) —
 // a plain non-greedy regex breaks the moment the function body contains its
 // own `}`.
 function extractFunction(src, name) {
   const start = src.indexOf(`function ${name}(`);
-  assert.ok(start > -1, `function ${name} not found in build-tjs.mjs`);
+  assert.ok(start > -1, `function ${name} not found in build-tjs.cjs`);
   const braceStart = src.indexOf('{', start);
   let depth = 0;
   for (let i = braceStart; i < src.length; i++) {
@@ -44,12 +44,12 @@ function extractFunction(src, name) {
 
 function extractConstLine(src, name) {
   const start = src.indexOf(`const ${name} = `);
-  assert.ok(start > -1, `const ${name} not found in build-tjs.mjs`);
+  assert.ok(start > -1, `const ${name} not found in build-tjs.cjs`);
   const end = src.indexOf('\n', start);
   return src.slice(start, end);
 }
 
-// Loads the REAL pure helpers out of build-tjs.mjs (not a reimplementation),
+// Loads the REAL pure helpers out of build-tjs.cjs (not a reimplementation),
 // same principle as loadCheckHermeticDeps in the hermeticity test file.
 function loadBytecodeHelpers() {
   const src = [
@@ -175,7 +175,7 @@ test('build-tjs: the freshness tripwire throws (fails the build) on stale byteco
 // ---- generation is single-sourced: --regen-only runs THE SAME code ---------
 //
 // The netbsd-sparc in-guest bake is the one build path in the matrix that does
-// not run build-tjs.mjs for its compile (a 512MB sun4m guest with no node), and
+// not run build-tjs.cjs for its compile (a 512MB sun4m guest with no node), and
 // it hand-rolled its own cmake invocation with NO regen at all — so it shipped
 // an engine carrying the C half of txiki-engine-module-meta.patch and not the
 // JS half, and died 927s into the blobulate with "this engine does not report
@@ -266,8 +266,8 @@ test('build-tjs: tjsc is handed the repo-relative inJs, never the absolute inAbs
 // a built tjsc to enable. Asserting against a model of the tool is how the
 // model drifts from the tool.
 // Resolved, not merely read from the environment. CLODE_TJSC wins if set; otherwise
-// look where scripts/build-tjs.mjs actually puts tjsc — CLODE_TJS_BUILD, else
-// <local scratch>/clode-tjs-build/<target-token>/build/tjsc (build-tjs.mjs:3220 and
+// look where scripts/build-tjs.cjs actually puts tjsc — CLODE_TJS_BUILD, else
+// <local scratch>/clode-tjs-build/<target-token>/build/tjsc (build-tjs.cjs:3220 and
 // its header). Reading the env var alone meant this reference test skipped on every
 // box that had built an engine but had not exported a variable nobody documents
 // outside this file: dark, while saying "set CLODE_TJSC" as though the tool were
@@ -291,8 +291,8 @@ const TJSC = findTjsc();
 
 test('build-tjs: real tjsc agrees — a backslash path breaks the symbol, a relative one does not',
   { skip: TJSC ? false : 'no tjsc: neither CLODE_TJSC nor a built tjsc under '
-    + "build-tjs.mjs's build root (CLODE_TJS_BUILD, else <scratch>/clode-tjs-build/*/build/tjsc). "
-    + 'Build an engine with `node scripts/build-tjs.mjs`, or set CLODE_TJSC=<path>.' }, () => {
+    + "build-tjs.cjs's build root (CLODE_TJS_BUILD, else <scratch>/clode-tjs-build/*/build/tjsc). "
+    + 'Build an engine with `node scripts/build-tjs.cjs`, or set CLODE_TJSC=<path>.' }, () => {
     const os = require('node:os');
     const { spawnSync } = require('node:child_process');
     const fn = new Function(`${extractFunction(buildTjsSrc, 'bytecodeSymbolBase')}; return bytecodeSymbolBase;`)();

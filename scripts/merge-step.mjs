@@ -123,7 +123,7 @@ if (!cyclicRequires.length) {
   if (typeof tjs.engine.moduleMeta !== 'function') {
     console.error('merge-step: this engine does not report moduleMeta, which the cyclic-group '
       + 'merge needs to know each module\'s real top-level bindings.\n'
-      + '  Rebuild the engine: node scripts/build-tjs.mjs\n'
+      + '  Rebuild the engine: node scripts/build-tjs.cjs\n'
       + '  Guessing those names from the source text is REFUSED on purpose — a merged module that '
       + 'shadows a binding boots fine and fails somewhere rare.');
     tjs.exit(1);

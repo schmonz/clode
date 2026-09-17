@@ -29,7 +29,7 @@ if (typeof tjs.engine?.moduleMeta !== 'function') {
   // than fall back to something that would look like it worked.
   console.error('graph-meta: this engine does not report moduleMeta, which the cyclic-group '
     + 'merge needs to know each module\'s real top-level bindings.\n'
-    + '  Rebuild the engine: node scripts/build-tjs.mjs');
+    + '  Rebuild the engine: node scripts/build-tjs.cjs');
   tjs.exit(1);
 }
 

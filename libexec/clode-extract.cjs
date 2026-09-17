@@ -160,7 +160,7 @@ function moduleMetas(docPath, want, { libexec, cacheDir, env, log }) {
     throw new Error('clode: this provider\'s module graph has residual cyclic require(s), which '
       + 'need the engine\'s own report of each module\'s top-level bindings to merge away.\n'
       + '  No tjs engine is reachable: set CLODE_TJS to one, or build it with '
-      + '`node scripts/build-tjs.mjs`.\n'
+      + '`node scripts/build-tjs.cjs`.\n'
       + '  Staging without the merge is REFUSED on purpose — the target would boot and then '
       + 'die on the first residual require ("cannot resolve /$bunfs/root/chunk-….js" under '
       + 'tjs, ERR_REQUIRE_CYCLE_MODULE under node).');

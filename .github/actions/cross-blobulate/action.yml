@@ -26,7 +26,7 @@ runs:
         CLODE_TJS_FFI: 'off'
       run: |
         set -euo pipefail
-        node scripts/build-tjs.mjs   # full native build into a SEPARATE tree
+        node scripts/build-tjs.cjs   # full native build into a SEPARATE tree
         test -x "${{ runner.temp }}/host-tjs-out/tjs"
     - name: Cross-blobulate the self-contained builder
       shell: bash

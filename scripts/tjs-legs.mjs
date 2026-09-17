@@ -189,7 +189,7 @@ const LEGS = [
   // publishable i386 BUILDER waits on cross-blobulate prerequisite 3 (this
   // leg is its motivating consumer). Same engine knobs as darwin-x64
   // (Darwin TLV needs 10.7+; Tiger ALSO has no posix_spawn — the
-  // spawn-model axis fixups ride build-tjs.mjs).
+  // spawn-model axis fixups ride build-tjs.cjs).
   // PROVEN floor (probe run 29168027051, 2026-07-11): honest 10.4u-SDK
   // build (the repack ships its own fat crt1.o — no Csu graft), engine
   // floor gate LC_VERSION_MIN_MACOSX 10.4 + i386 arch marker green on
@@ -883,7 +883,7 @@ const LEGS = [
   // ---- Cosmopolitan APE leg (Task 4b, spike/quickjs/results/cosmo-fidelity-run.md):
   // ONE fat (x86-64 + aarch64) Actually Portable Executable that runs native on
   // Linux/macOS/Windows/BSD — ADDED beside the tjs legs, never a replacement.
-  // build-tjs.mjs's CLODE_TJS_TARGET=cosmo provisions cosmocc 4.0.2, forces the
+  // build-tjs.cjs's CLODE_TJS_TARGET=cosmo provisions cosmocc 4.0.2, forces the
   // lean profile, applies patches/libuv-cosmo.patch + patches/libtjs-cosmo.patch,
   // and builds the tjs-cli APE via scripts/cosmo.toolchain.cmake (the `cosmo: true`
   // marker routes build-leg down that path). The cross "toolchain" is cosmocc,

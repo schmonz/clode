@@ -1,5 +1,5 @@
 # CMake cross-toolchain for darwin-x64 (x86_64-apple-darwin10, floor 10.6).
-# Consumed via CLODE_TJS_CROSS_FILE by scripts/build-tjs.mjs, run INSIDE the
+# Consumed via CLODE_TJS_CROSS_FILE by scripts/build-tjs.cjs, run INSIDE the
 # pinned osxcross image (clang + cctools-port + the phracker MacOSX10.6 SDK — the
 # same tarball+SHA the build-leg action fetches). osxcross's clang wrapper
 # self-locates the SDK sysroot (like darwin-ppc's gcc), so no explicit
@@ -24,7 +24,7 @@ set(CMAKE_INSTALL_NAME_TOOL ${_triple}-install_name_tool CACHE FILEPATH "install
 # STRICTER than Apple's clang on the ancient 10.6 SDK — -Wundef-prefix=TARGET_OS_
 # errors on TARGET_OS_TV / TARGET_OS_WATCH (macros the pre-tvOS/watchOS 10.6 SDK
 # never defined; libuv's process.c references them). The other demotes mirror the
-# darwin-ppc file / the non-darwin-host branch of build-tjs.mjs (txiki compiles
+# darwin-ppc file / the non-darwin-host branch of build-tjs.cjs (txiki compiles
 # -Werror). Carried here rather than via -DCMAKE_C_FLAGS so the version-min survives.
 set(_floor "-mmacosx-version-min=10.6")
 set(_demote "-Wno-error=unused-variable -Wno-error=unknown-pragmas -Wno-error=sign-conversion -Wno-error=undef-prefix")

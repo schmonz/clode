@@ -213,7 +213,7 @@ hook, H6 subagent/Task dispatch, F2 Bash/Edit round-trip), 1 skip (no
 direction:**
 
 - **Stale engine.** `build/tjs/tjs` is dated 2026-07-24 — 40 commits behind
-  HEAD on `libexec/node-shim` + `scripts/build-tjs.mjs` at the time of the
+  HEAD on `libexec/node-shim` + `scripts/build-tjs.cjs` at the time of the
   run, including hang-class fixes (`a06b5ea` fs.watchFile poll hang,
   `865e98f` orphaned-grandchild-stdio-reader hang, `0d22c6a` uncaught
   timer/rejection routing).

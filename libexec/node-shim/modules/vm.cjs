@@ -14,7 +14,7 @@
 // reads the run() return value, not sandbox props) — revisit if a consumer needs it.
 const VM = globalThis.__tjs_vm;
 if (!VM) {
-  throw new Error('node-shim: this tjs lacks the __tjs_vm context primitive (rebuild: node scripts/build-tjs.mjs)');
+  throw new Error('node-shim: this tjs lacks the __tjs_vm context primitive (rebuild: node scripts/build-tjs.cjs)');
 }
 
 const indirectEval = eval; // runInThisContext: main global, by design

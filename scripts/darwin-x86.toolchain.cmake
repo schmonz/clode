@@ -1,5 +1,5 @@
 # CMake cross-toolchain for darwin-x86 (i386-apple-darwin8, floor 10.4 / Tiger).
-# Consumed via CLODE_TJS_CROSS_FILE by scripts/build-tjs.mjs, run INSIDE the
+# Consumed via CLODE_TJS_CROSS_FILE by scripts/build-tjs.cjs, run INSIDE the
 # pinned osxcross image. i386@10.4 needs the LEGACY osxcross-1.1 toolchain
 # (osxcross master refuses SDK <= 10.5) + the phracker MacOSX10.4u SDK (fat
 # ppc/i386/ppc64/x86_64). 10.4u ships its own crt1.o, so — unlike the 10.6 x64

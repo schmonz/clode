@@ -92,7 +92,7 @@ test('{path, ignore} entry: a write inside the ignored tjs-vendor corner is sile
   const before = G.snapshot([watched]);
 
   // Stands in for test/tjs-darwin-poll-fixup.test.cjs:29 running
-  // `build-tjs.mjs --source-only`, which rewrites files under tjs-vendor on purpose.
+  // `build-tjs.cjs --source-only`, which rewrites files under tjs-vendor on purpose.
   fs.writeFileSync(path.join(vendor, 'src', 'main.c'), 'int main(){return 1;}');
   assert.deepStrictEqual(G.diffSnapshots(before, G.snapshot([watched])), [],
     'a write inside the ignored tjs-vendor prefix must not be reported');

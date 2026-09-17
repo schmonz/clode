@@ -73,7 +73,7 @@ function tjsAvailable(t) {
   if (TJS && fs.existsSync(TJS)) return true;
   t.skip('no engine: neither CLODE_TJS nor the platform-tagged scratch engine '
     + '(node-shim-helper tjsPath()) resolves to an existing binary. Build one with '
-    + '`node scripts/build-tjs.mjs`, or set CLODE_TJS=<path to a tjs binary>.');
+    + '`node scripts/build-tjs.cjs`, or set CLODE_TJS=<path to a tjs binary>.');
   return false;
 }
 function runTjs(f, dir) {

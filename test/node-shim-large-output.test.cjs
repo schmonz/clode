@@ -1,7 +1,7 @@
 'use strict';
 // Regression guard for the CLASS of bug fixed at 50646d9 (fix(tjs/haiku):
 // pipe() child stdio — Haiku's socketpair deadlocks past 64KB; see
-// scripts/build-tjs.mjs's fixupLibuvHaikuStdioPipe): a spawned child that
+// scripts/build-tjs.cjs's fixupLibuvHaikuStdioPipe): a spawned child that
 // produces MORE than one pipe buffer's worth of stdout before exiting must
 // have its FULL output collected by the parent — never hang. That fix is
 // `#if defined(__HAIKU__)`-guarded (this file's darwin/linux code path is the

@@ -83,7 +83,7 @@ does host-side.
 Pre-flight patch audit of `spike/quickjs/vendor/txiki.js` found 8/9 patches
 present; `quickjs-ng-js_exepath-netbsd.patch` was absent from
 `deps/quickjs/cutils.h` (it targets the quickjs-ng tree, which
-`build-tjs.mjs` doesn't re-patch inside the txiki submodule). Applied with
+`build-tjs.cjs` doesn't re-patch inside the txiki submodule). Applied with
 GNU `patch -p1 --forward` from `deps/quickjs/` (both hunks clean) before
 staging. `stage-p3.sh` now greps a distinctive line from **all nine** patches
 (including `KERN_PROC_PATHNAME` in `deps/quickjs/cutils.h`) before tarring.
@@ -105,7 +105,7 @@ pre-closed workarounds as M4, all held).
 ## Re-run 2026-07-09 (~21:31–21:38 EDT): THE WURL FLIP — 7/7 again
 
 Re-ran as the aarch64 oracle for making wurl the default URL parser
-(`-DTJS_USE_ADA=OFF`, now passed by both `scripts/build-tjs.mjs` and
+(`-DTJS_USE_ADA=OFF`, now passed by both `scripts/build-tjs.cjs` and
 `guest-p3.sh`; `txiki-wurl-url.patch` in the tarball). Same machinery, same
 mock-only discipline. Evidence appended to `vendor/aarch64-p3-console.log`
 (the driver appends; the new run starts near line ~1470): guest cmake

@@ -27,7 +27,7 @@
  */
 
 const FSS = globalThis.__tjs_fs_sync;
-if (!FSS) { console.error('node-shim: this tjs lacks the sync-fs patch (run scripts/build-tjs.mjs)'); tjs.exit(2); }
+if (!FSS) { console.error('node-shim: this tjs lacks the sync-fs patch (run scripts/build-tjs.cjs)'); tjs.exit(2); }
 
 /* ---- tiny path helpers (self-contained; modules/path.cjs is the real one).
  * Windows: the non-blobulated loader derives SHIM_DIR/entryAbs from real C:\ paths

@@ -71,7 +71,7 @@ test('no leg config can reintroduce a host-tool-based skip', () => {
   const fs = require('node:fs');
   const path = require('node:path');
   const { stripComments } = require('./strip-comments.cjs');
-  const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'build-tjs.mjs'), 'utf8');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'build-tjs.cjs'), 'utf8');
   const start = src.indexOf('function checkHermeticDeps');
   assert.ok(start > -1);
   const fn = stripComments(src.slice(start, src.indexOf('\n// CLODE_TJS_SMOKE=off', start)));

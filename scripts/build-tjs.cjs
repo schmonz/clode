@@ -58,20 +58,23 @@
 //     --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
 // Then run from a "x64 Native Tools Command Prompt for VS 2022" (or after vcvars64.bat
 // / vcvarsall.bat <arch>, so cl+cmake+ninja are on PATH):
-//   node scripts/build-tjs.mjs --build-only        # -> build/tjs/tjs.exe, no env flag
+//   node scripts/build-tjs.cjs --build-only        # -> build/tjs/tjs.exe, no env flag
 // CLODE_TJS_WIN_MINGW=1 opts into the retired mingw-gcc path instead.
-import { execFileSync } from 'node:child_process';
-import os, { cpus } from 'node:os';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
-import crypto from 'node:crypto';
+// ESM was implicitly strict; CommonJS is not, so say it out loud rather than
+// silently loosening 3,800 lines (undeclared-global assignment, block-scoped
+// function declarations) as a side effect of the rename.
+'use strict';
+const { execFileSync } = require('node:child_process');
+const os = require('node:os');
+const { cpus } = os;
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
 
-const require = createRequire(import.meta.url);
-// Phase 4c converted these three leaves to CJS (they're leaf orchestration,
-// no import.meta/top-level-await needs), so they're require()'d, not
-// imported — createRequire above must come first.
+// Phase 4c1 made this file itself CJS: the node-shim's loader.cjs hosts
+// CommonJS and cannot host an ESM entry at all, so the orchestration that
+// builds the engine had to stop needing Node to run. `require` is built in
+// here, so the createRequire this block used to need deletes itself.
 const { resetCheckoutToPristine } = require('./tjs-source-reset.cjs');
 const { engineFloorCheckJs, OK_TOKEN } = require('./engine-api-floor.cjs');
 const { buildDepscan } = require('./build-depscan.cjs');
@@ -80,7 +83,8 @@ const { tjsDir: platformTjsDir, tjsVendorParentDir } = require('./platform-tag.c
 // test suite run the SAME decision logic (test/guard.cjs needs a pure scan()
 // it can feed a known-bad input; this file needs it on real depscan output).
 const { parseDepscan, hermeticityFindings, PKG_MANAGER_ROOTS } = require('./depscan-verdict.cjs');
-const repo = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
+// __dirname is <repo>/scripts, so this is the same <repo> the URL form resolved to.
+const repo = path.resolve(__dirname, '..');
 const sourceOnly = process.argv.includes('--source-only');
 // --regen-only operates on an ALREADY-patched tree, exactly as --build-only
 // does, so it takes that flag's source-phase handling wholesale rather than
@@ -178,7 +182,7 @@ const wantStatic = process.env.CLODE_TJS_STATIC === '1';
 // there. A real fix (guard MAP_32BIT to 0 when undefined, upstream WAMR) is
 // queued for the Q3 batch; patches/ is frozen this phase.
 // Lean-POSIX targets — the BSDs, illumos, and other non-Linux/Darwin/Windows Unix —
-// default WASM/mimalloc/FFI OFF so a NATIVE `node scripts/build-tjs.mjs` on such a
+// default WASM/mimalloc/FFI OFF so a NATIVE `node scripts/build-tjs.cjs` on such a
 // host matches the SHIPPING recipe (scripts/tjs-legs.mjs: every T2 VM leg sets
 // wasm/mimalloc/ffi off) with no flags to remember: they can't build WAMR (Linux
 // mremap/MAP_32BIT), hit the mimalloc 3.2.7 compile regression, and ship no tjs:ffi.
@@ -2782,7 +2786,7 @@ function fixupQjsImportMetaByIdentity(dir) {
   const repl = `/* clode: find the module CURRENTLY EXECUTING by object identity rather than by
    filename atom. Two JSModuleDefs can share a name (js_new_module_def never dedupes),
    in which case js_find_loaded_module returns whichever was registered first and
-   import.meta reads the wrong object. See build-tjs.mjs. */
+   import.meta reads the wrong object. See build-tjs.cjs. */
 static JSModuleDef *js_find_loaded_module_by_func_obj(JSContext *ctx, JSValue func_obj)
 {
     struct list_head *el;
@@ -2836,7 +2840,7 @@ function fixupQjscMsvcGetopt(dir) {
       + 'the pin moved and this shim must be re-derived, not silently skipped');
   }
   const shim = anchor + `
-/* ---- MSVC ships no getopt (Windows tjs port; see build-tjs.mjs) ---- */
+/* ---- MSVC ships no getopt (Windows tjs port; see build-tjs.cjs) ---- */
 #if defined(_MSC_VER)
 static char *optarg;
 static int optind = 1;
@@ -3264,6 +3268,25 @@ if (!wantMimalloc) {
 if (!wantFfi) {
   cmakeArgs.push('-DBUILD_WITH_FFI=OFF');
 }
+// ---- everything below runs inside an async continuation ---------------------
+// ONE await survives the ESM->CJS conversion: provisionCosmocc() fetches the
+// 441MB cosmocc zip over the network, and clode-net's downloadFile is genuinely
+// async (built-in fetch; there is no sync seam and curl/wget are deliberately
+// gone). CommonJS has no top-level await, and the node-shim's loader.cjs hosts
+// CommonJS only — which is the whole reason this file stopped being ESM — so the
+// remaining build phases are handed to an async arrow instead.
+//
+// THE BODY IS DELIBERATELY NOT INDENTED. Indenting it would rewrite ~550 lines
+// that this conversion does not otherwise touch, destroying `git blame` on every
+// build phase and breaking the source-text gates (test/msvc-getopt-shim.test.cjs,
+// test/tjs-darwin-poll-fixup.test.cjs, test/hermetic-guard.test.cjs) that slice
+// this file by column-0 `function <name>` anchors. Nothing above this line reads
+// a binding declared below it (checked name by name at conversion time), so the
+// narrower scope changes no resolution.
+//
+// For a non-cosmo build — every shipping leg — the arrow runs to completion
+// synchronously in this same tick, exactly as the top-level statements did.
+(async () => {
 // cosmo: provision cosmocc and point the build at the cosmo cross toolchain +
 // the rest of the lean profile. Done HERE (before crossFile is read below) so
 // the toolchain file and CLODE_COSMOCC are in the environment cmake sees. The
@@ -3710,7 +3733,7 @@ function checkHermeticDeps(enginePath) {
   // intact. The gate uses it, so prose here may name what the code must not
   // call. Do not reword this back.
   // Surface this leg's verdict in the CI job summary. Done HERE rather than in
-  // build-leg/action.yml because build-tjs.mjs is invoked from five different
+  // build-leg/action.yml because build-tjs.cjs is invoked from five different
   // steps there; a grep-the-log step would need writing five times and would
   // drift from the call sites. Env-gated, so local builds are unaffected.
   //
@@ -3816,3 +3839,10 @@ if ((process.env.CLODE_TJS_SMOKE || 'on').toLowerCase() !== 'off') {
   console.log(`built ${path.join(outDir, outName)} (exec smoke SKIPPED: cross-target, CLODE_TJS_SMOKE=off)`);
 }
 checkHermeticDeps(path.join(outDir, outName));
+})().catch((e) => {
+  // A top-level throw ended the process by itself; a rejected continuation does
+  // not, and under tjs an unhandled rejection can be swallowed outright — so a
+  // failed build would have reported success. Fail loud, exit non-zero.
+  console.error(e && e.stack ? e.stack : String(e));
+  process.exit(1);
+});

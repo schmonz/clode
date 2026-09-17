@@ -217,7 +217,7 @@ if (!process.env.CLODE_TJS) {
   const t = tjsPath();
   if (t) process.env.CLODE_TJS = t;
   else console.error('run: no tjs engine resolved (CLODE_TJS unset and no platform-tagged '
-    + 'scratch engine) — engine-gated tests will skip. Build one: node scripts/build-tjs.mjs');
+    + 'scratch engine) — engine-gated tests will skip. Build one: node scripts/build-tjs.cjs');
 }
 
 // Platform-tagged harness dir + NODE_PATH (path.delimiter, NOT a hardcoded ':').
@@ -393,7 +393,7 @@ const WRITE_FNS = ['writeFileSync', 'symlinkSync', 'copyFileSync', 'cpSync', 're
 const CACHE_CLODE_ALLOW = [
   {
     pattern: 'tjs-vendor',
-    because: 'test/tjs-darwin-poll-fixup.test.cjs runs `node scripts/build-tjs.mjs '
+    because: 'test/tjs-darwin-poll-fixup.test.cjs runs `node scripts/build-tjs.cjs '
       + '--source-only` ON PURPOSE — its own header says it "resets the shared vendor '
       + 'checkout to pristine and re-applies every patch + fixup". Rewriting '
       + 'tjs-vendor/txiki.js IS that test, not a violation of it.',

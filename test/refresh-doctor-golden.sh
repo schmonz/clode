@@ -17,14 +17,14 @@
 # REFRESH POLICY: regenerate when bumping the pinned bundle version, or when a dev with
 # both native `claude` and clode installed sees the live parity test (e2e-doctor-parity,
 # run with CLODE_LIVE_RENDER=1) flag a new INTENDED deviation. Requires a native `claude`
-# on PATH, a built tjs template (CLODE_TJS, or run scripts/build-tjs.mjs first), and the
+# on PATH, a built tjs template (CLODE_TJS, or run scripts/build-tjs.cjs first), and the
 # node-pty harness installed.
 set -eu
 cd "$(dirname "$0")/.."
 : "${CLODE_NODE:=$(command -v node)}"
 : "${CLODE_TJS:=$("$CLODE_NODE" -p "require('./scripts/platform-tag.cjs').tjsBin(process.cwd())")}"
 NATIVE="$(command -v claude || { echo 'no native claude on PATH' >&2; exit 2; })"
-[ -x "$CLODE_TJS" ] || { echo "no tjs template at '$CLODE_TJS' (set CLODE_TJS, or run scripts/build-tjs.mjs)" >&2; exit 2; }
+[ -x "$CLODE_TJS" ] || { echo "no tjs template at '$CLODE_TJS' (set CLODE_TJS, or run scripts/build-tjs.cjs)" >&2; exit 2; }
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT

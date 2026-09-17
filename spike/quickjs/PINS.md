@@ -51,11 +51,11 @@ netbsd-mac68k 10.1 cdn 2026-07-06
 #   silently served stale objects; soft-fail masked the inner failure for 2 rounds).
 #   BE PROOF (run 29179165193, 2026-07-12): the s390x leg BOOTS shipped LE arrays,
 #   FUSES a builder, regexps exec — all with regen disabled. RETIRES: the BE-regen
-#   path in build-tjs.mjs (sparc wall #4) and the native-regen prerequisite for BE
+#   path in build-tjs.cjs (sparc wall #4) and the native-regen prerequisite for BE
 #   cross-builds (unblocks darwin-ppc Phase B). Order-independent of cpool-align.
 #   Upstream candidate #1.
 # quickjs-ng patch stage MAINLINED 2026-07-11 (canonical-LE plan Task 1):
-#   build-tjs.mjs now applies quickjs-ng-*.patch to deps/quickjs in the source
+#   build-tjs.cjs now applies quickjs-ng-*.patch to deps/quickjs in the source
 #   phase — previously these were guest-campaign patches applied by hand in the
 #   sparc/M4 scripts while the mainline submodule stayed pristine. cpool-align
 #   is pure alignment padding, js_exepath-netbsd is NetBSD-only code: behavior-
@@ -110,7 +110,7 @@ quickjs-ng-js_exepath-netbsd patch 2026-07-06
 #   so execve keeps exact parity). spawn.h include gated on the same macro.
 # Tiger walk fixups (2026-07-11, spec 2026-07-11-darwin-x86-tiger-walk): the pre-10.5
 #   era, enumerated on the same Rosetta bench (build-only — nothing local execs i386).
-#   New fixup family in scripts/build-tjs.mjs: libuv unsetenv-returns-void (10.4),
+#   New fixup family in scripts/build-tjs.cjs: libuv unsetenv-returns-void (10.4),
 #   _SC_NPROCESSORS_ONLN→sysctl HW_AVAILCPU, st_birthtimespec→ctime (<10.5), darwin
 #   sendfile→EINVAL-emul (<10.5), pthread_set/getname_np no-ops (<10.6), TIOCPTYGNAME→
 #   ptsname fallback (<10.5), close$NOCANCEL$UNIX2003→plain close (the $NOCANCEL/
@@ -131,7 +131,7 @@ quickjs-ng-js_exepath-netbsd patch 2026-07-06
 #   darwin-x64 release leg builds against a pinned MacOSX10.6.sdk (phracker repack,
 #   sha-pinned in build-leg/action.yml, crt1.10.6.o grafted from Apple Csu-85 — the
 #   repacks strip startup objects; probe 1 = run 29165326041). Ten fixup functions in
-#   scripts/build-tjs.mjs (grep 'OldDarwin\|CxxOnlyForAda') guard the post-10.6 API era:
+#   scripts/build-tjs.cjs (grep 'OldDarwin\|CxxOnlyForAda') guard the post-10.6 API era:
 #   tjs cmake CXX-only-for-ada (pre-libc++ SDK has no lib'c++'; probe 2 = run
 #   29165510612), libuv hrtime/clock_gettime/fs-times/scandir/strnlen/spawn-cloexec/
 #   udp-ssm/kqueue-except/msg_x, lws scandir, mbedtls ms-time, quickjs-ng hrtime. Every
@@ -194,7 +194,7 @@ quickjs-ng-js_exepath-netbsd patch 2026-07-06
 # BUILD CAVEATS re-confirmed 2026-07-08 (bit the rebuild): (1) the ~42k AppleDouble
 #   ._* sidecars on this NFS mount must be deleted before building (poison CMake/wamr
 #   globs). (2) sync-fs/sync-spawn have overlapping context in vm.c/private.h/
-#   CMakeLists — strict `git apply` (build-tjs.mjs) fails to re-apply/sequence them on
+#   CMakeLists — strict `git apply` (build-tjs.cjs) fails to re-apply/sequence them on
 #   an already-patched tree; GNU `patch -p1 --forward` (fuzzy) applies all 6 cleanly
 #   from pristine. (3) the linker-adhoc signature can be invalidated by copying the
 #   binary off the build dir on this mount (exec dies "Terminated due to code signing
@@ -250,7 +250,7 @@ txiki-wurl-url patch 2026-07-09
 #   construction); L2 full UTS-46 is the done bar (seams marked L2 TODO). Binary
 #   -542KB and NO libc++ — with TJS_USE_ADA=OFF, tjs needs only a C compiler (kills
 #   the gcc12/C++20 requirement that blocked sparc S2 on base gcc 10.5).
-#   DEFAULT since 2026-07-09: build-tjs.mjs (and guest-p3.sh) pass -DTJS_USE_ADA=OFF;
+#   DEFAULT since 2026-07-09: build-tjs.cjs (and guest-p3.sh) pass -DTJS_USE_ADA=OFF;
 #   pinned build/tjs/tjs is a wurl build (5,427,008 bytes, links only libSystem +
 #   libffi). ada remains selectable per-build via -DTJS_USE_ADA=ON (patch default
 #   stays ON upstream-facing). The prior ada binary is kept at

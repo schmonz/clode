@@ -182,7 +182,7 @@ runs:
             # 2026Q2 NetBSD/x86_64 bulk build shipped NO nodejs package at all —
             # verified against the repo index: 2026Q2 has only unrelated node-*
             # /nodejs-version entries, while 2026Q1 has nodejs-20/22/24/25. This
-            # guest NEEDS node to run scripts/build-tjs.mjs, so the leg died with
+            # guest NEEDS node to run scripts/build-tjs.cjs, so the leg died with
             # "nodejs is not available in the repository" (green 2026-07-19, red
             # from 2026-07-22). Deliberately NOT tolerating pkgin's nonzero exit:
             # that would mask the missing interpreter and fail later as

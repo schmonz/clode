@@ -26,7 +26,7 @@ no hang. Proven fully OFFLINE against the mock (no key). The gated LIVE finale
   answering `POST …/messages` with a canned streaming-SSE Messages response
   whose only assistant text is `PONG`. **HTTP (plain), not https** — see below.
 - **tjs provenance:** unchanged from M2 (three patches). `build/` gitignored;
-  reproducible from the committed patches via `scripts/build-tjs.mjs`.
+  reproducible from the committed patches via `scripts/build-tjs.cjs`.
 
 ---
 

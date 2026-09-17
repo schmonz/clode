@@ -19,12 +19,12 @@ const SCRIPT = path.resolve(__dirname, '../scripts/templates-drift.mjs');
 const load = () => import(pathToFileURL(SCRIPT).href);
 
 const PUB = { files: [
-  { path: 'scripts/build-tjs.mjs', sha: 'a'.repeat(64) },
+  { path: 'scripts/build-tjs.cjs', sha: 'a'.repeat(64) },
   { path: 'spike/quickjs/PINS.md', sha: 'b'.repeat(64) },
   { path: 'spike/quickjs/patches/gone.patch', sha: 'c'.repeat(64) },
 ] };
 const CUR = { files: [
-  { path: 'scripts/build-tjs.mjs', sha: 'a'.repeat(64) },
+  { path: 'scripts/build-tjs.cjs', sha: 'a'.repeat(64) },
   { path: 'spike/quickjs/PINS.md', sha: 'b'.repeat(64) },
   { path: 'spike/quickjs/patches/new.patch', sha: 'd'.repeat(64) },
 ] };

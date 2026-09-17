@@ -45,7 +45,7 @@ Result: a 9.9MB fat (x86-64 + aarch64) `tjs` APE.
 > Provenance note (honesty): I did NOT re-run the multi-CPU-hour full txiki+deps cosmocc rebuild —
 > the committed patches are byte-identical to what produced the existing out-of-tree engine and that
 > engine boots + evaluates JS here. I validated reproducibility via the patch/source-state check
-> above and used that verified engine as the fidelity subject. A from-clean `build-tjs.mjs` cosmo
+> above and used that verified engine as the fidelity subject. A from-clean `build-tjs.cjs` cosmo
 > build is Phase-E work (explicitly out of scope for this run).
 
 ## 2. Fuse — `quaude.com` + smoke (GREEN)
@@ -127,7 +127,7 @@ addition.
   — the SAME `.com` on Linux + Windows + BSD, x86-64 + arm64 — is Phase E's CI job (PONG + attest per
   runner). Not fidelity-blocking; it's the leg-wiring deliverable.
 - **Phase E wiring** (unchanged, still owed, explicitly out of scope for this run): cosmo target in
-  `build-tjs.mjs` (apply both patches + `CLODE_TJS_CROSS_FILE=scripts/cosmo.toolchain.cmake` + lean +
+  `build-tjs.cjs` (apply both patches + `CLODE_TJS_CROSS_FILE=scripts/cosmo.toolchain.cmake` + lean +
   `tjs-cli` + `chmod +x cosmoranlib` + provision cosmocc 4.0.2), a `cosmo` leg in `scripts/tjs-legs.mjs`,
   multi-OS CI, and the mac-APE signing posture.
 

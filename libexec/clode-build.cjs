@@ -1508,7 +1508,7 @@ async function clodeBuild(args, opts) {
     // fail loud, never fall through a typo); then the EMBEDDED pristine
     // template a builder-role blobulate carries (Q2 Decision 2 — the shipped
     // builder needs nothing on disk); then the pinned tjs this repo builds
-    // (scripts/build-tjs.mjs).
+    // (scripts/build-tjs.cjs).
     let template = env.CLODE_TJS || null;
     if (!template && vfs && vfs.manifest && vfs.manifest.role === 'builder' && vfs.files.get('template/tjs')) {
       // The embedded template is materialized to disk and spawned as the blobulate
@@ -1540,7 +1540,7 @@ async function clodeBuild(args, opts) {
     }
     if (!template) template = tjsBin(ROOT);
     if (!fs.existsSync(template)) {
-      return fail(`build: no tjs template at '${template}' (run scripts/build-tjs.mjs, or set CLODE_TJS)`);
+      return fail(`build: no tjs template at '${template}' (run scripts/build-tjs.cjs, or set CLODE_TJS)`);
     }
     // CROSS-BLOBULATE (cross-blobulate design, prereq 3): CLODE_TARGET_TEMPLATE names a
     // FOREIGN-platform tjs to receive the trailer, while the worker still runs
@@ -1599,7 +1599,7 @@ async function clodeBuild(args, opts) {
         return fail(
           `build: engine '${path.basename(baseTemplate)}' predates the constants ABI and cannot report its own `
           + `fs/os constants. A quaude blobulated from it dies on first require('fs') ON THE TARGET. `
-          + `Rebuild it (node scripts/build-tjs.mjs) or point CLODE_TARGET_TEMPLATE at a current engine. `
+          + `Rebuild it (node scripts/build-tjs.cjs) or point CLODE_TARGET_TEMPLATE at a current engine. `
           + `Published templates built before 2026-08-21 are all in this state.`);
       }
       if (abi < required) {

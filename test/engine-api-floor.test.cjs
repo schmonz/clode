@@ -4,7 +4,7 @@
 // WHAT WENT WRONG. patches/txiki-engine-module-meta.patch has a C half
 // (src/mod_engine.c) and a JS half (src/js/core/engine.js). The JS half reaches
 // a binary only through a regen of txiki's git-tracked pre-compiled
-// src/bundles/c/**. Every build path runs that regen from scripts/build-tjs.mjs
+// src/bundles/c/**. Every build path runs that regen from scripts/build-tjs.cjs
 // — except the netbsd-sparc in-guest bake, which drives cmake by hand inside a
 // 512MB sun4m guest with no node and skipped it ("canonical-LE: no regen
 // needed"). So that leg shipped an engine with the C function and no binding
@@ -12,7 +12,7 @@
 // moduleMeta` — 927 seconds into the carve, at the last stage of the longest job
 // in the matrix.
 //
-// Three separate engine sanity checks existed at the time (build-tjs.mjs's
+// Three separate engine sanity checks existed at the time (build-tjs.cjs's
 // post-build smoke, build-leg's host-exec smoke, ci-guest-bake.sh's ENGINE
 // SANITY). All three were hand-written copies of one `typeof __tjs_fs_sync`
 // test, and not one of them knew about moduleMeta. This file pins the two
@@ -30,7 +30,7 @@ const read = (rel) => fs.readFileSync(path.join(repo, rel), 'utf8');
 const FLOOR_CJS = 'scripts/engine-api-floor.cjs';
 const BAKE = 'spike/quickjs/qemu/ci-guest-bake.sh';
 const ACTION = '.github/actions/build-leg/action.yml';
-const BUILD_TJS = 'scripts/build-tjs.mjs';
+const BUILD_TJS = 'scripts/build-tjs.cjs';
 // engine-api-floor is CJS now: a plain require, no pathToFileURL/import() detour.
 const load = async () => require(path.join(repo, FLOOR_CJS));
 
@@ -50,7 +50,7 @@ test('the floor names moduleMeta, and says which patch provides it', async () =>
 
 test('the generated check reports OK, and on a miss names the binding AND exits nonzero', async () => {
   const { engineFloorCheckFile, OK_TOKEN } = await load();
-  // Both halves matter: build-tjs.mjs compares the printed token, and
+  // Both halves matter: build-tjs.cjs compares the printed token, and
   // ci-sparc-driver.py gates on a `<phase>-exit=0` marker (an exit status).
   const ok = engineFloorCheckFile([{ name: 'globalThis', expr: 'globalThis', kind: 'object', from: 'x', why: 'y' }]);
   assert.match(ok, new RegExp(OK_TOKEN));
@@ -101,22 +101,22 @@ test('the real floor passes on a locally built engine (skipped if none)', async 
 // ---- the bake compiles a COMPLETE tree; it never generates one ------------
 //
 // PURE: every check below is a presence/absence assertion against the three
-// already-read files (build-tjs.mjs, the build-leg action, the guest bake script).
+// already-read files (build-tjs.cjs, the build-leg action, the guest bake script).
 function scanEngineFloorConsumers({ buildTjsSrc, actionYml, bakeSrc }) {
   const findings = [];
   let examined = 0;
 
   examined++;
   if (!/const \{ engineFloorCheckJs, OK_TOKEN \} = require\('\.\/engine-api-floor\.cjs'\);/.test(buildTjsSrc)) {
-    findings.push('build-tjs.mjs no longer requires its smoke check from engine-api-floor.cjs');
+    findings.push('build-tjs.cjs no longer requires its smoke check from engine-api-floor.cjs');
   }
   examined++;
   if (!/const evalArgs = \['eval', engineFloorCheckJs\(\)\];/.test(buildTjsSrc)) {
-    findings.push('build-tjs.mjs no longer generates its eval args from engineFloorCheckJs()');
+    findings.push('build-tjs.cjs no longer generates its eval args from engineFloorCheckJs()');
   }
   examined++;
   if (/typeof __tjs_fs_sync === "object" \? "tjs-shim-ok"/.test(buildTjsSrc)) {
-    findings.push('the inline copy of the engine check is back in build-tjs.mjs');
+    findings.push('the inline copy of the engine check is back in build-tjs.cjs');
   }
 
   examined++;
@@ -150,13 +150,13 @@ function scanEngineFloorConsumers({ buildTjsSrc, actionYml, bakeSrc }) {
     const idx = actionYml.indexOf('tar czf .matrix/qemu-bake/txiki-canonical-le.tar.gz');
     if (idx === -1) {
       findings.push('the guest source tarball step was not found in build-leg/action.yml');
-    } else if (!/node scripts\/build-tjs\.mjs --regen-only/.test(actionYml.slice(0, idx).slice(-2000))) {
+    } else if (!/node scripts\/build-tjs\.cjs --regen-only/.test(actionYml.slice(0, idx).slice(-2000))) {
       findings.push('the guest tree must be bytecode-regenerated BEFORE it is tarred for the guest');
     }
   }
 
   examined++;
-  if (!/clode:bytecode-regen/.test(bakeSrc)) findings.push('the bake no longer demands the regen fingerprint trailer build-tjs.mjs stamps');
+  if (!/clode:bytecode-regen/.test(bakeSrc)) findings.push('the bake no longer demands the regen fingerprint trailer build-tjs.cjs stamps');
   examined++;
   if (!/cle-regen-present=/.test(bakeSrc)) findings.push('the regen-present marker is gone (the console can no longer say which check failed)');
   examined++;

@@ -51,7 +51,7 @@ const BODY = `
 // 2026-07-12: POSIX_SPAWN_CLOEXEC_DEFAULT via posix_spawnattr) was correct all
 // along. The Jul-18 binary was a STALE INCREMENTAL BUILD: the object cache
 // carried a pre-patch mod_spawn_sync.o that was never recompiled. A clean
-// rebuild (`node scripts/build-tjs.mjs --build-only` after clearing the vendor
+// rebuild (`node scripts/build-tjs.cjs --build-only` after clearing the vendor
 // build/ object cache) produced a native-arm64 tjs that no longer leaks —
 // quaude now matches node (leaked:false). This test is now active and locks it.
 test('a parent-opened fd does not leak into a sync-spawned child (CLOEXEC), matching node', (t) => {

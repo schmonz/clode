@@ -67,7 +67,7 @@ inputs:
     required: false
     default: ""
   cosmo:
-    description: "'true': the Cosmopolitan APE leg. build-tjs.mjs's CLODE_TJS_TARGET=cosmo self-provisions cosmocc, forces the lean profile, applies patches/libuv-cosmo.patch + patches/libtjs-cosmo.patch, and builds the tjs-cli APE via scripts/cosmo.toolchain.cmake. Runs the normal native (exec=host) source+build+blobulate+smoke path — the fat APE execs on the ubuntu runner via clode-build's isApeFile /bin/sh route. The SAME .com is then exercised on other-OS runners downstream (the multi-OS fan-out)."
+    description: "'true': the Cosmopolitan APE leg. build-tjs.cjs's CLODE_TJS_TARGET=cosmo self-provisions cosmocc, forces the lean profile, applies patches/libuv-cosmo.patch + patches/libtjs-cosmo.patch, and builds the tjs-cli APE via scripts/cosmo.toolchain.cmake. Runs the normal native (exec=host) source+build+blobulate+smoke path — the fat APE execs on the ubuntu runner via clode-build's isApeFile /bin/sh route. The SAME .com is then exercised on other-OS runners downstream (the multi-OS fan-out)."
     required: false
     default: "false"
   atomic-shim:
@@ -253,7 +253,7 @@ runs:
       run: echo "image=${ImageOS:-unknown}" >> "$GITHUB_OUTPUT"
     # The engine-source half of the key is now COMPUTED, not inlined. It used to
     # be a literal hashFiles('spike/quickjs/PINS.md', 'spike/quickjs/patches/
-    # *.patch', 'scripts/build-tjs.mjs', 'scripts/*.toolchain.cmake', 'spike/
+    # *.patch', 'scripts/build-tjs.cjs', 'scripts/*.toolchain.cmake', 'spike/
     # quickjs/atomic-shim.c', 'ci/osxcross-darwin/Dockerfile') — a good list, and
     # the ONLY place in the repo that said what an engine is made of. Anything
     # ELSE that needs that answer (scripts/templates-drift.mjs, which asks
@@ -310,7 +310,7 @@ runs:
         # cosmo: the source phase applies the two named cosmo patches (they are
         # OUT of the auto-apply globs), so it needs the target token too.
         CLODE_TJS_TARGET: ${{ inputs.cosmo == 'true' && 'cosmo' || '' }}
-      run: node scripts/build-tjs.mjs --source-only
+      run: node scripts/build-tjs.cjs --source-only
 
     - name: Install the runtime dep closure (blobulate member inputs)
       shell: bash
@@ -420,12 +420,12 @@ runs:
         # tjs-cli APE. Inert ('') for every other native leg. The wasm/mimalloc/
         # ffi env above is already 'off' for the cosmo leg (tjs-legs.mjs).
         CLODE_TJS_TARGET: ${{ inputs.cosmo == 'true' && 'cosmo' || '' }}
-        # Windows compiler: build-tjs.mjs now defaults to MSVC (cl) on win32, so the
+        # Windows compiler: build-tjs.cjs now defaults to MSVC (cl) on win32, so the
         # msvc legs need no explicit flag (the msvc-dev-cmd step above puts cl + the
         # Windows SDK + ninja on PATH). mingw is retired — kept only as the explicit
         # opt-in for a hypothetical non-msvc Windows leg.
         CLODE_TJS_WIN_MINGW: ${{ runner.os == 'Windows' && inputs.msvc != 'true' && '1' || '' }}
-      run: node scripts/build-tjs.mjs --build-only
+      run: node scripts/build-tjs.cjs --build-only
 
     - name: Build tjs (alpine guest)
       if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.guest-platform == 'alpine'
@@ -443,7 +443,7 @@ runs:
           export CLODE_TJS_WASM="${{ inputs.wasm }}"
           export CLODE_TJS_MIMALLOC="${{ inputs.mimalloc }}"
           export CLODE_TJS_FFI="${{ inputs.ffi }}"
-          node scripts/build-tjs.mjs --build-only
+          node scripts/build-tjs.cjs --build-only
 
     # Cross-build the engine inside a toolchain image on the ubuntu runner —
     # the generic exec=cross path. The source phase already ran on the host
@@ -504,7 +504,7 @@ runs:
           # constructed on the host by the earlier native "Construct the
           # patched tjs tree" step, at the same runner.temp path) and the
           # engine this build produces both live there, not in the checkout.
-          # /w stays mounted only for the repo sources build-tjs.mjs reads and
+          # /w stays mounted only for the repo sources build-tjs.cjs reads and
           # for CROSS_FILE.
           mkdir -p /scratch/tjs-vendor /scratch/tjs-out
           export CLODE_TJS_VENDOR=/scratch/tjs-vendor
@@ -513,7 +513,7 @@ runs:
           export CLODE_TJS_ATOMIC_SHIM=$ATOMIC_SHIM
           export CLODE_TJS_DARWIN_POLL=$DARWIN_POLL
           export CLODE_TJS_WASM=$WASM CLODE_TJS_MIMALLOC=$MIMALLOC CLODE_TJS_FFI=$FFI CLODE_TJS_SMOKE=off
-          node scripts/build-tjs.mjs --build-only
+          node scripts/build-tjs.cjs --build-only
         '
 
     # ---- NetBSD build.sh cross legs (netbsd-m68k): the other exec=cross path.
@@ -547,14 +547,14 @@ runs:
         CLODE_TJS_MIMALLOC: ${{ inputs.mimalloc }}
         CLODE_TJS_FFI: ${{ inputs.ffi }}
         CLODE_TJS_SMOKE: 'off'
-      run: node scripts/build-tjs.mjs --build-only
+      run: node scripts/build-tjs.cjs --build-only
 
     # ---- own-qemu qemu-* legs (netbsd-sparc: first user, plan
     # netbsd-sparc-matrix-leg Task 3 — STRUCTURAL first pass). Unlike a
     # guest/cross leg (blobulate + smoke run wholly inside/under the foreign
     # environment), a qemu-* leg splits three ways because the guest has no
     # node (guest-sparc-*.sh's cc/cmake/gmake-direct recipes, not
-    # build-tjs.mjs): (A) here — the ENGINE alone bakes in-guest via the
+    # build-tjs.cjs): (A) here — the ENGINE alone bakes in-guest via the
     # own-qemu backend on a tjs-cache miss, synced OUT to
     # steps.mode.outputs.out by the backend (Task 4 tunes the exact recipe +
     # sync — the GUEST-DONE/*-exit marker vocabulary already used by
@@ -583,15 +583,15 @@ runs:
         # git-tracks src/bundles/c/** as pre-compiled bytecode of its OWN
         # src/js/**, so our src/js/** patches (the JS half of
         # txiki-engine-module-meta.patch, and everything after it) reach a binary
-        # only through a tjsc regen. Every other leg gets that from build-tjs.mjs's
+        # only through a tjsc regen. Every other leg gets that from build-tjs.cjs's
         # own build phase; the guest bake compiles by hand and cannot run node at
         # all, so it used to get NO regen — and shipped an engine whose blobulate died
         # with "this engine does not report moduleMeta" after a 927-second carve.
         # --regen-only runs the SAME generation code, using a host-native tjsc
         # whose canonical-LE output is valid for the sparc target by construction
-        # (scripts/build-tjs.mjs, buildHostTjsc). ci-guest-bake.sh refuses a tree
+        # (scripts/build-tjs.cjs, buildHostTjsc). ci-guest-bake.sh refuses a tree
         # that arrives without the regen trailer, so this cannot be dropped again.
-        node scripts/build-tjs.mjs --regen-only
+        node scripts/build-tjs.cjs --regen-only
         mkdir -p .matrix/qemu-bake
         tar czf .matrix/qemu-bake/txiki-canonical-le.tar.gz -C "$CLODE_TJS_VENDOR" txiki.js
         # The shared engine-API floor check the bake runs against the engine it
@@ -881,7 +881,7 @@ runs:
           # (scripts/build-scratch.cjs) — this uses $HOME/clode-scratch, a
           # sibling under the same $HOME mount, so the inference carries.
           #
-          # TMPDIR (the blobulate's own scratch, and — via build-tjs.mjs's
+          # TMPDIR (the blobulate's own scratch, and — via build-tjs.cjs's
           # localScratchRoot() — the CMake build dir, the actual bulk of the
           # reported ~23k files) and the full-smoke's own CLODE_CACHE/
           # CLODE_DEPS never need to leave this guest, so they move to
@@ -915,7 +915,7 @@ runs:
           CLODE_TJS_MIMALLOC="${{ inputs.mimalloc }}"; export CLODE_TJS_MIMALLOC
           CLODE_TJS_FFI="${{ inputs.ffi }}"; export CLODE_TJS_FFI
           if [ ! -x "$CLODE_TJS_OUT/tjs" ]; then
-            node scripts/build-tjs.mjs --build-only
+            node scripts/build-tjs.cjs --build-only
           else
             echo "tjs cache hit: skipping the in-guest build"
           fi
@@ -1027,7 +1027,7 @@ runs:
         echo "path=$P" >> "$GITHUB_OUTPUT"
 
     # "A skipped oracle is not a pass" (ci.yml:341). The hermeticity VERDICT is
-    # produced inline by scripts/build-tjs.mjs on every leg, so nothing here is
+    # produced inline by scripts/build-tjs.cjs on every leg, so nothing here is
     # unverified — but test/depscan-guard.test.cjs, the suite-side copy of that
     # same check, skips whenever CLODE_DEPSCAN_ENGINE is unset, and until now
     # nothing in .github/ set it: it had never once executed in CI. A guard that

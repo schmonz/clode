@@ -119,7 +119,7 @@ const guard = defineGuard({
       loaderSrc2: fs.readFileSync(path.join(__dirname, '..', 'libexec/node-shim/loader.cjs'), 'utf8'),
       fsSrc: fs.readFileSync(path.join(__dirname, '..', 'libexec/node-shim/modules/fs.cjs'), 'utf8'),
       buildSrc: fs.readFileSync(path.join(__dirname, '..', 'libexec/clode-build.cjs'), 'utf8'),
-      buildTjsSrc: fs.readFileSync(path.join(__dirname, '..', 'scripts/build-tjs.mjs'), 'utf8'),
+      buildTjsSrc: fs.readFileSync(path.join(__dirname, '..', 'scripts/build-tjs.cjs'), 'utf8'),
     },
   }),
   scan: scanWinShimGuards,

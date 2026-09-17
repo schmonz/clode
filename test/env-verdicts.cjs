@@ -21,9 +21,9 @@
 //                 Kept as a real VERDICT_KINDS member for the day a currently-prod-read name
 //                 loses its last production call site and becomes test-only without being
 //                 deleted from here first; the gate's "phantom" check is what catches that.
-//   phase4-engine the scripts/build-tjs.mjs cluster (plus its two platform-tag.cjs helpers,
+//   phase4-engine the scripts/build-tjs.cjs cluster (plus its two platform-tag.cjs helpers,
 //                 CLODE_TJS_LOCAL_ROOT/CLODE_TJS_VENDOR, which exist only to compute the
-//                 same engine-build cache dir build-tjs.mjs uses). Options to a COMPILE;
+//                 same engine-build cache dir build-tjs.cjs uses). Options to a COMPILE;
 //                 `clode build` requires no compiler and no cmake by invariant, so compile
 //                 options belong to the program that compiles. Phase 4 moves the engine
 //                 build to cmake, where they become typed options with defaults and a cache
@@ -66,7 +66,7 @@ const APPLET_BECAUSE = 'env-only: overrides which host binary the bun-shim/targe
 // detector (test/env-indirect.cjs) went in.
 //
 // These run DURING a build (clode-net.cjs verifies a download's digest, clode-node.cjs and
-// naude-sea.cjs and clode-rcodesign.cjs unpack tarballs, build-tjs.mjs unzips), so the
+// naude-sea.cjs and clode-rcodesign.cjs unpack tarballs, build-tjs.cjs unzips), so the
 // "runtime, not build-time" reasoning that fits the applet overrides does not apply. They
 // are env-only for a different and better reason: they name WHICH HOST PROGRAM performs a
 // step whose OUTPUT is fixed. The registry runs a known-answer test on whatever it
@@ -228,7 +228,7 @@ const VERDICTS = [
     + ' Consumer: clode-net.cjs; the registry KAT inflates an embedded blob and compares the '
     + 'exact plaintext, so an override that is not a gzip decompressor is refused.' },
   { name: 'CLODE_UNZIP', verdict: 'env-only', because: HOST_TOOL_BECAUSE
-    + ' Consumers: clode-node.cjs and scripts/build-tjs.mjs; the registry KAT extracts an '
+    + ' Consumers: clode-node.cjs and scripts/build-tjs.cjs; the registry KAT extracts an '
     + "embedded zip and compares its single entry's exact content." },
   { name: 'CLODE_ZSTD', verdict: 'env-only',
     because: 'CORRECTED (fix round 3): this was carrying APPLET_BECAUSE, which is wrong on '
@@ -253,53 +253,53 @@ const VERDICTS = [
   { name: 'CLODE_TTY_FOCUS', verdict: 'env-only', because: TTY_BECAUSE
     + ' This one re-enables focus reporting (\\e[?1004h).' },
 
-  // ---- The scripts/build-tjs.mjs engine-build-knob cluster, decided phase4-engine. ----
+  // ---- The scripts/build-tjs.cjs engine-build-knob cluster, decided phase4-engine. ----
   // ---- CLODE_TJS_LOCAL_ROOT and CLODE_TJS_VENDOR ride along: they exist only in ----
   // ---- scripts/platform-tag.cjs to compute the SAME engine-vendor cache dir ----
-  // ---- build-tjs.mjs itself uses, measured to bring the cluster to exactly 20 ----
+  // ---- build-tjs.cjs itself uses, measured to bring the cluster to exactly 20 ----
   // ---- (BACKLOG.md's own count). ----
-  { name: 'CLODE_COSMOCC', verdict: 'phase4-engine', because: 'scripts/build-tjs.mjs '
+  { name: 'CLODE_COSMOCC', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
-  { name: 'CLODE_TJS_ATOMIC_SHIM', verdict: 'phase4-engine', because: 'scripts/build-tjs.mjs '
+  { name: 'CLODE_TJS_ATOMIC_SHIM', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
-  { name: 'CLODE_TJS_BUILD', verdict: 'phase4-engine', because: 'scripts/build-tjs.mjs '
+  { name: 'CLODE_TJS_BUILD', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
-  { name: 'CLODE_TJS_CROSS_FILE', verdict: 'phase4-engine', because: 'scripts/build-tjs.mjs '
+  { name: 'CLODE_TJS_CROSS_FILE', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
-  { name: 'CLODE_TJS_DARWIN_POLL', verdict: 'phase4-engine', because: 'scripts/build-tjs.mjs '
+  { name: 'CLODE_TJS_DARWIN_POLL', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
-  { name: 'CLODE_TJS_FFI', verdict: 'phase4-engine', because: 'scripts/build-tjs.mjs '
+  { name: 'CLODE_TJS_FFI', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
   { name: 'CLODE_TJS_LOCAL_ROOT', verdict: 'phase4-engine',
-    because: 'read by both scripts/build-tjs.mjs and scripts/platform-tag.cjs to compute '
+    because: 'read by both scripts/build-tjs.cjs and scripts/platform-tag.cjs to compute '
       + 'the same engine-vendor cache dir the compile-option cluster uses; travels with it '
       + 'to phase 4 rather than splitting one cache location across two verdicts.' },
-  { name: 'CLODE_TJS_MACOS_ARCH', verdict: 'phase4-engine', because: 'scripts/build-tjs.mjs '
+  { name: 'CLODE_TJS_MACOS_ARCH', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
-  { name: 'CLODE_TJS_MACOS_MIN', verdict: 'phase4-engine', because: 'scripts/build-tjs.mjs '
+  { name: 'CLODE_TJS_MACOS_MIN', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
-  { name: 'CLODE_TJS_MACOS_SDK', verdict: 'phase4-engine', because: 'scripts/build-tjs.mjs '
+  { name: 'CLODE_TJS_MACOS_SDK', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
-  { name: 'CLODE_TJS_MIMALLOC', verdict: 'phase4-engine', because: 'scripts/build-tjs.mjs '
+  { name: 'CLODE_TJS_MIMALLOC', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
-  { name: 'CLODE_TJS_OUT', verdict: 'phase4-engine', because: 'scripts/build-tjs.mjs '
+  { name: 'CLODE_TJS_OUT', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
-  { name: 'CLODE_TJS_REGEN', verdict: 'phase4-engine', because: 'scripts/build-tjs.mjs '
+  { name: 'CLODE_TJS_REGEN', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
-  { name: 'CLODE_TJS_SMOKE', verdict: 'phase4-engine', because: 'scripts/build-tjs.mjs '
+  { name: 'CLODE_TJS_SMOKE', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
-  { name: 'CLODE_TJS_STATIC', verdict: 'phase4-engine', because: 'scripts/build-tjs.mjs '
+  { name: 'CLODE_TJS_STATIC', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
-  { name: 'CLODE_TJS_TARGET', verdict: 'phase4-engine', because: 'scripts/build-tjs.mjs '
+  { name: 'CLODE_TJS_TARGET', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
   { name: 'CLODE_TJS_VENDOR', verdict: 'phase4-engine',
     because: 'read by scripts/platform-tag.cjs to compute the same engine-vendor cache dir '
-      + 'the build-tjs.mjs compile-option cluster uses; travels with it to phase 4.' },
-  { name: 'CLODE_TJS_WASM', verdict: 'phase4-engine', because: 'scripts/build-tjs.mjs '
+      + 'the build-tjs.cjs compile-option cluster uses; travels with it to phase 4.' },
+  { name: 'CLODE_TJS_WASM', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
-  { name: 'CLODE_TJS_WIN_MINGW', verdict: 'phase4-engine', because: 'scripts/build-tjs.mjs '
+  { name: 'CLODE_TJS_WIN_MINGW', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
-  { name: 'CLODE_TJS_WIN_MSVC', verdict: 'phase4-engine', because: 'scripts/build-tjs.mjs '
+  { name: 'CLODE_TJS_WIN_MSVC', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
 
   // ---- Everything else: classified fresh, one at a time, from its own call site. ----

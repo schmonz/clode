@@ -76,7 +76,7 @@ function build() {
 
   const engine = tjsPath();
   if (!engine) {
-    return { skip: 'no tjs engine binary (CLODE_TJS, or build one with scripts/build-tjs.mjs) to build a quaude with' };
+    return { skip: 'no tjs engine binary (CLODE_TJS, or build one with scripts/build-tjs.cjs) to build a quaude with' };
   }
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'built-binary-'));

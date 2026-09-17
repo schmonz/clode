@@ -98,7 +98,7 @@ const INDIRECT_SITES = [
       + 'own comment documents. Read INSIDE a built quaude, by the shim, at runtime.',
   },
   {
-    file: 'scripts/build-tjs.mjs',
+    file: 'scripts/build-tjs.cjs',
     reaches: ['CLODE_TJS_WASM', 'CLODE_TJS_MIMALLOC', 'CLODE_TJS_FFI'],
     because: '_tjsKnob(env, onByDefault) reads `process.env[env]` for the three on/off engine '
       + 'compile knobs it is called with. Already in the verdict table via other direct reads '

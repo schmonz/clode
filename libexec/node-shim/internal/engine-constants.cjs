@@ -24,7 +24,7 @@ if (!c || typeof c !== 'object') {
   throw new Error(
     'node-shim: this engine does not report __tjs_constants, so the shim has no '
     + 'trustworthy source for fs/os constants. It predates '
-    + 'txiki-node-constants.patch. Rebuild the engine (node scripts/build-tjs.mjs), '
+    + 'txiki-node-constants.patch. Rebuild the engine (node scripts/build-tjs.cjs), '
     + 'or point CLODE_TARGET_TEMPLATE at one built from current sources. '
     + 'Refusing to guess: the tables this replaced were measurably wrong on the BSD legs.');
 }
