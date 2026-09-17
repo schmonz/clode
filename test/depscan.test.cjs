@@ -429,3 +429,100 @@ test('(f) a Mach-O ARM64E slice gets its own label, not a duplicate "arm64"', ()
   assert.deepStrictEqual(slices, ['arm64e', 'arm64'],
     'arm64 and arm64e are the same cputype with different cpusubtypes and must not print the same label');
 });
+
+// ---- the whole-branch review's fix wave (2026-09-17) -------------------------
+
+test('(I1) a fat Mach-O whose SECOND slice is corrupt prints NOTHING AT ALL', () => {
+  // THE defect this wave exists for, REPRODUCED by the reviewer on the
+  // committed tree. The existing "fat Mach-O whose slice offset runs past the
+  // end" test above corrupts slice 0, so it can never observe this: nothing
+  // has been printed yet when slice 0 fails. Corrupt slice 1 instead and the
+  // old single-pass loop had ALREADY emitted slice 0's complete group --
+  //     format=macho-fat slices=2 / slice=arm64 /
+  //     dep=/usr/lib/libSystem.B.dylib / deps=1
+  // -- before returning 4. That transcript parses clean through the REAL
+  // parseDepscan as one hermetic slice with zero findings; the ppc slice
+  // carrying /opt/pkg/lib/libintl.8.dylib is simply absent. Only the caller
+  // checking the exit status stood between it and a false OK, and a check that
+  // is one guard deep is what this repo calls a check that cannot fail.
+  //
+  // The assertion is deliberately "no output whatsoever", not "no deps= line":
+  // the file-level contract at the top of depscan.c is that a nonzero exit is
+  // never preceded by something that reads as an answer.
+  const buf = binfmt.fat([
+    { cputype: binfmt.CPU_ARM64, buf: binfmt.macho({ bits: 64, cputype: binfmt.CPU_ARM64, needed: ['/usr/lib/libSystem.B.dylib'] }) },
+    { cputype: binfmt.CPU_PPC, buf: binfmt.macho({ bits: 32, be: true, cputype: binfmt.CPU_PPC, needed: ['/opt/pkg/lib/libintl.8.dylib'] }) },
+  ]);
+  // fat_arch[1].offset: header 8 + one 20-byte fat_arch + the 8-byte lead-in
+  // (cputype, cpusubtype) of the second. Big-endian, always.
+  binfmt.u(buf, 8 + 20 + 8, 0x7fffffff, 4, true);
+  const out = scanFixture(buf);
+  assert.strictEqual(out.status, 4, `expected malformed exit 4, got ${out.status}`);
+  assert.strictEqual(out.stdout, '',
+    `a fat file that does not fully parse must print nothing at all, got: ${JSON.stringify(out.stdout)}`);
+});
+
+test('(I1) a two-slice fat binary still reports both slices in order', () => {
+  // The two-pass scan must not change what a GOOD fat file prints. Distinct
+  // from the "reports EVERY slice separately" test above only in that this one
+  // exists to fail if the dry run ever starts printing (doubled output) or the
+  // real pass ever stops (empty output).
+  const out = scanFixture(binfmt.fat([
+    { cputype: binfmt.CPU_ARM64, buf: binfmt.macho({ bits: 64, cputype: binfmt.CPU_ARM64, needed: ['/usr/lib/libSystem.B.dylib'] }) },
+    { cputype: binfmt.CPU_PPC, buf: binfmt.macho({ bits: 32, be: true, cputype: binfmt.CPU_PPC, needed: ['/usr/lib/libintl.8.dylib'] }) },
+  ]));
+  assert.strictEqual(out.status, 0, out.stderr);
+  assert.strictEqual(out.stdout, [
+    'format=macho-fat slices=2',
+    'slice=arm64', 'dep=/usr/lib/libSystem.B.dylib', 'deps=1',
+    'slice=ppc', 'dep=/usr/lib/libintl.8.dylib', 'deps=1',
+  ].join('\n') + '\n');
+});
+
+test('(g) a PT_DYNAMIC whose p_filesz is zeroed is MALFORMED, not dependency-free', () => {
+  // DEMONSTRATED by the reviewer, 2026-09-17: an ELF that really carries
+  // DT_NEEDED = /opt/pkg/lib/libevil.so, with ONLY p_filesz/p_memsz zeroed,
+  // printed deps=0 and exited 0 -- "parsed it and found none" for a file whose
+  // dependency table we never read a byte of. A .dynamic array with no DT_NULL
+  // (and here no DT_STRTAB either) is structurally impossible; every linker
+  // emits DT_NULL and every loader stops on it.
+  const out = scanFixture(binfmt.elf({ needed: ['/opt/pkg/lib/libevil.so'], dynFilesz: 0 }));
+  assert.strictEqual(out.status, 4, `expected malformed exit 4, got ${out.status}: stdout=${out.stdout}`);
+  assert.doesNotMatch(out.stdout, /^deps=/m,
+    'an unread dependency table must NOT print a deps= line -- that is the "verified clean" lie');
+});
+
+test('(g) a PT_DYNAMIC p_filesz that TRUNCATES the array before DT_NULL is MALFORMED too', () => {
+  // The same guard, reached the other way, so a narrower fix that only
+  // rejected `dynsz < 2*w` would go red here: the array is walked, real
+  // entries ARE read, and it simply runs out before the terminator.
+  //
+  // The cut is placed with care. This fixture's .dynamic is DT_NEEDED,
+  // DT_STRTAB, DT_STRSZ, DT_NULL (16 bytes each at ELFCLASS64), and cutting
+  // it SHORTER than 3 entries would drop DT_STRTAB too -- which scan_elf
+  // already rejects on its own ("nneeded > 0 && strtab_va == 0"), making this
+  // test pass for a reason that has nothing to do with DT_NULL. At exactly 3
+  // entries the string table still resolves and every name still prints, so
+  // with the DT_NULL requirement removed this file reports
+  // dep=/opt/pkg/lib/libevil.so, deps=1, exit 0 -- a plausible-looking answer
+  // read out of a table we were told was shorter than it is. VERIFIED by
+  // removing the guard: only it turns this file red.
+  const ENTRY_64 = 16;
+  const out = scanFixture(binfmt.elf({ needed: ['/opt/pkg/lib/libevil.so'], dynFilesz: 3 * ENTRY_64 }));
+  assert.strictEqual(out.status, 4, `expected malformed exit 4, got ${out.status}: stdout=${out.stdout}`);
+  assert.doesNotMatch(out.stdout, /^deps=/m);
+});
+
+test('(h) an EMPTY dependency name is refused, not printed and counted', () => {
+  // DEMONSTRATED by the reviewer, 2026-09-17: DT_NEEDED = 0 points at
+  // strtab[0], the conventional empty string, and depscan printed a bare
+  // "dep=" line, counted it as deps=1 and exited 0. hermeticityFindings()
+  // then skips it in silence, because the denylist only judges names starting
+  // with "/" -- the same "malformed reads as hermetic" ending as the
+  // overflow bug in item (a), reached with no overflow at all. No real binary
+  // has an empty install name or an empty SONAME.
+  const out = scanFixture(binfmt.elf({ needed: [], rawNeeded: [0n] }));
+  assert.strictEqual(out.status, 4, `expected malformed exit 4, got ${out.status}: stdout=${JSON.stringify(out.stdout)}`);
+  assert.doesNotMatch(out.stdout, /^dep=/m, 'an empty name must never reach a dep= line');
+  assert.doesNotMatch(out.stdout, /^deps=/m);
+});

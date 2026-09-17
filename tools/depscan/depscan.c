@@ -32,6 +32,21 @@
  * learned this the hard way: OpenBSD's ldd prints a table parseLddDeps
  * returns [] for, which read identically to "verified clean".
  *
+ * THAT CONTRACT IS WHOLE-FILE, NOT PER-SLICE, and a fat Mach-O used to break
+ * it. REPRODUCED 2026-09-17 by the reviewer on the committed tree: a 2-slice
+ * universal, slice 0 a clean arm64 and slice 1 a ppc carrying
+ * /opt/pkg/lib/libintl.8.dylib, with fat_arch[1].offset corrupted, printed
+ *     format=macho-fat slices=2 / slice=arm64 / dep=/usr/lib/libSystem.B.dylib
+ *     / deps=1
+ * and THEN exited 4 -- a complete, well-formed, entirely hermetic-looking
+ * transcript of one slice, with the offending slice simply absent. Fed to the
+ * real parseDepscan that parses clean as one slice, zero findings. Only the
+ * caller's exit-status check stood between it and a false OK, which is the
+ * "one guard deep" shape this repo distrusts. scan_macho() therefore scans
+ * every slice TWICE -- once printing nothing, to prove they all parse, and
+ * only then for real (see the comment there). Nothing at all is printed for a
+ * fat file unless the WHOLE file parsed.
+ *
  * EXIT: 0 parsed; 2 usage; 3 unrecognized container; 4 malformed or unreadable.
  */
 #include <stdio.h>
@@ -91,8 +106,13 @@ static unsigned char *slurp(const char *path, size_t *len) {
  * defect on its own terms. "I cannot report this unambiguously" is the
  * honest answer, matching the rule that an unreadable name is malformed, not
  * absent. This applies equally to a run= search-path entry, which is exactly
- * as capable of forging a line as a dep= name is. */
-static int put_line(const char *tag, const unsigned char *b, size_t len, unsigned long long off) {
+ * as capable of forging a line as a dep= name is.
+ *
+ * `emit` == 0 validates exactly as `emit` == 1 does but prints nothing -- the
+ * dry-run half of scan_macho()'s two-pass fat scan. The CHECKS must not be
+ * duplicated into a separate validator: a validator that drifts from the
+ * printer would pass a file the printer then chokes on, halfway through. */
+static int put_line(const char *tag, const unsigned char *b, size_t len, unsigned long long off, int emit) {
   unsigned long long i;
   if (off >= (unsigned long long)len) return 0;
   for (i = off; i < (unsigned long long)len; i++) {
@@ -100,12 +120,22 @@ static int put_line(const char *tag, const unsigned char *b, size_t len, unsigne
     if (b[i] < 0x20 || b[i] == 0x7f) return 0;
   }
   if (i >= (unsigned long long)len) return 0;
-  printf("%s=%s\n", tag, (const char *)(b + off));
+  /* An EMPTY name is refused for the same reason a control byte is: it is not
+   * a dependency we read, it is a dependency we failed to read. DEMONSTRATED
+   * 2026-09-17 by the reviewer: DT_NEEDED = 0 (strtab[0], the conventional
+   * empty string) printed a bare "dep=" line, counted it, and exited 0 --
+   * and hermeticityFindings() skips it silently, because the denylist only
+   * judges names that start with "/". That is the same "malformed reads as
+   * hermetic" shape the overflow guards below were written for, reached
+   * without any overflow at all. No real binary has an empty install name or
+   * an empty SONAME. */
+  if (i == off) return 0;
+  if (emit) printf("%s=%s\n", tag, (const char *)(b + off));
   return 1;
 }
 
-static int put_dep(const unsigned char *b, size_t len, unsigned long long off) {
-  return put_line("dep", b, len, off);
+static int put_dep(const unsigned char *b, size_t len, unsigned long long off, int emit) {
+  return put_line("dep", b, len, off, emit);
 }
 
 static int scan_elf(const unsigned char *b, size_t len);
@@ -185,7 +215,7 @@ static int scan_elf(const unsigned char *b, size_t len) {
   unsigned long long phoff, dynoff = 0, dynsz = 0, strtab_va = 0;
   unsigned phentsize, phnum, machine, i;
   long long strtab_off;
-  int found_dynamic = 0, ndeps = 0;
+  int found_dynamic = 0, ndeps = 0, saw_dt_null = 0;
   unsigned long long needed[512];
   int nneeded = 0;
   unsigned long long runpath_off = 0;
@@ -236,7 +266,7 @@ static int scan_elf(const unsigned char *b, size_t len) {
     unsigned long long at = dynoff + (unsigned long long)i * w * 2;
     unsigned long long tag = rd(b + at, w, be);
     unsigned long long val = rd(b + at + w, w, be);
-    if (tag == DT_NULL_) break;
+    if (tag == DT_NULL_) { saw_dt_null = 1; break; }
     if (tag == DT_NEEDED_) {
       if (nneeded >= (int)(sizeof needed / sizeof needed[0])) return 4;
       needed[nneeded++] = val;
@@ -249,6 +279,17 @@ static int scan_elf(const unsigned char *b, size_t len) {
       runpath_off = val; have_runpath = 1;
     }
   }
+  /* A .dynamic array that ends without DT_NULL is structurally impossible:
+   * DT_NULL is the terminator every linker emits and every loader stops on,
+   * so its absence means p_filesz is lying about how much of the array is
+   * really there. DEMONSTRATED 2026-09-17 by the reviewer: an ELF that really
+   * carries DT_NEEDED = /opt/pkg/lib/libevil.so, with ONLY PT_DYNAMIC's
+   * p_filesz/p_memsz zeroed, walked an empty array and printed deps=0, exit 0
+   * -- "parsed it and found none" for a file we had not read one byte of the
+   * dependency table of. This subsumes the degenerate dynsz < 2*w case (the
+   * loop body never runs, so no DT_NULL is seen) and also catches a p_filesz
+   * that merely truncates the array part-way. */
+  if (!saw_dt_null) return 4;
   if (nneeded > 0 && strtab_va == 0) return 4;  /* names we cannot resolve */
 
   strtab_off = (nneeded > 0 || have_runpath) ?
@@ -293,7 +334,7 @@ static int scan_elf(const unsigned char *b, size_t len) {
      * HERMETIC. Guard the arithmetic, not the empty-name symptom: a wrap can
      * equally land on bytes forming a plausible name instead. */
     if (!inb((unsigned long long)strtab_off, needed[i], len)) return 4;
-    if (!put_dep(b, len, (unsigned long long)strtab_off + needed[i])) return 4;
+    if (!put_dep(b, len, (unsigned long long)strtab_off + needed[i], 1)) return 4;
     ndeps++;
   }
   printf("deps=%d\n", ndeps);
@@ -344,11 +385,13 @@ static int is_dylib_cmd(unsigned long long cmd) {
          cmd == LC_LOAD_UPWARD_DYLIB_;
 }
 
-/* One thin Mach-O at `base`, extending `size` bytes. `emit_format` is 0 for a
- * slice inside a fat container (which prints slice= instead). */
+/* One thin Mach-O at `base`, extending `size` bytes. `top_level` is 0 for a
+ * slice inside a fat container (which prints slice= instead of format=).
+ * `emit` is 0 on scan_macho()'s validation pass: identical parsing and
+ * identical verdict, no output. */
 static int scan_macho_thin(const unsigned char *b, size_t len,
                            unsigned long long base, unsigned long long size,
-                           int emit_format) {
+                           int top_level, int emit) {
   unsigned long long magic_le, magic_be, magic;
   int be, bits;
   unsigned long long hdrsz, ncmds, sizeofcmds, at, cputype, cpusubtype;
@@ -370,8 +413,10 @@ static int scan_macho_thin(const unsigned char *b, size_t len,
   ncmds      = rd(b + base + 16, 4, be);
   sizeofcmds = rd(b + base + 20, 4, be);
 
-  if (emit_format) printf("format=macho%d%s machine=%s\n", bits, be ? "be" : "le", cpu_name(cputype, cpusubtype));
-  else printf("slice=%s\n", cpu_name(cputype, cpusubtype));
+  if (emit) {
+    if (top_level) printf("format=macho%d%s machine=%s\n", bits, be ? "be" : "le", cpu_name(cputype, cpusubtype));
+    else printf("slice=%s\n", cpu_name(cputype, cpusubtype));
+  }
 
   if (sizeofcmds > size - hdrsz || !inb(base + hdrsz, sizeofcmds, len)) return 4;
 
@@ -389,7 +434,7 @@ static int scan_macho_thin(const unsigned char *b, size_t len,
       if (cmdsize < 24) return 4;
       noff = rd(b + at + 8, 4, be);
       if (noff >= cmdsize) return 4;
-      if (!put_dep(b, len, at + noff)) return 4;
+      if (!put_dep(b, len, at + noff, emit)) return 4;
       ndeps++;
     } else if (cmd == 0x8000001cULL) {            /* LC_RPATH */
       unsigned long long poff;
@@ -400,11 +445,11 @@ static int scan_macho_thin(const unsigned char *b, size_t len,
        * than trusting printf("%s") to stop at a terminator this file may not
        * actually have, and refuses a control byte for the reason documented
        * on put_line/put_dep above. */
-      if (!put_line("run", b, len, at + poff)) return 4;
+      if (!put_line("run", b, len, at + poff, emit)) return 4;
     }
     at += cmdsize;
   }
-  printf("deps=%d\n", ndeps);
+  if (emit) printf("deps=%d\n", ndeps);
   return 0;
 }
 
@@ -414,23 +459,39 @@ static int scan_macho(const unsigned char *b, size_t len) {
     /* Fat. Header and arch table are big-endian, always. */
     int wide = (magic_be == 0xcafebabfULL);          /* FAT_MAGIC_64 */
     unsigned long long nfat, i, archsz = wide ? 32 : 20;
+    int pass;
     if (!inb(0, 8, len)) return 4;
     nfat = rd(b + 4, 4, 1);
     if (nfat > 64) return 4;                          /* not a real universal binary */
     if (!inb(8, nfat * archsz, len)) return 4;
-    printf("format=macho-fat slices=%llu\n", nfat);
-    for (i = 0; i < nfat; i++) {
-      unsigned long long a = 8 + i * archsz;
-      unsigned long long off = wide ? rd(b + a + 8, 8, 1) : rd(b + a + 8, 4, 1);
-      unsigned long long sz  = wide ? rd(b + a + 16, 8, 1) : rd(b + a + 12, 4, 1);
-      int rc;
-      if (!inb(off, sz, len)) return 4;
-      rc = scan_macho_thin(b, len, off, sz, 0);
-      if (rc != 0) return rc;
+    /* TWO PASSES, and the first one prints nothing. The output contract at the
+     * top of this file is about the FILE: a nonzero exit must never be
+     * preceded by a transcript that parses as a complete, clean answer. A
+     * single printing pass breaks that here and only here, because each slice
+     * terminates its own group with deps= as it is scanned -- so a slice that
+     * fails LATER returns 4 after earlier slices have already printed
+     * well-formed groups, and the missing slice is invisible to any reader
+     * that does not also check the exit status. REPRODUCED 2026-09-17 with a
+     * corrupt fat_arch[1].offset; see the header comment for the exact
+     * transcript and why "the caller checks the exit code" is not an answer.
+     *
+     * The dry run is the same code with emit=0, never a separate validator:
+     * the only way the two passes can disagree is if one of them is wrong. */
+    for (pass = 0; pass < 2; pass++) {
+      if (pass == 1) printf("format=macho-fat slices=%llu\n", nfat);
+      for (i = 0; i < nfat; i++) {
+        unsigned long long a = 8 + i * archsz;
+        unsigned long long off = wide ? rd(b + a + 8, 8, 1) : rd(b + a + 8, 4, 1);
+        unsigned long long sz  = wide ? rd(b + a + 16, 8, 1) : rd(b + a + 12, 4, 1);
+        int rc;
+        if (!inb(off, sz, len)) return 4;
+        rc = scan_macho_thin(b, len, off, sz, 0, pass);
+        if (rc != 0) return rc;
+      }
     }
     return 0;
   }
-  return scan_macho_thin(b, len, 0, (unsigned long long)len, 1);
+  return scan_macho_thin(b, len, 0, (unsigned long long)len, 1, 1);
 }
 
 /* ---- PE --------------------------------------------------------------------
@@ -506,7 +567,7 @@ static int scan_pe(const unsigned char *b, size_t len) {
     if (name_rva == 0) return 4;
     noff = pe_rva2off(b, len, sec_at, nsec, name_rva);
     if (noff < 0) return 4;
-    if (!put_dep(b, len, (unsigned long long)noff)) return 4;
+    if (!put_dep(b, len, (unsigned long long)noff, 1)) return 4;
     ndeps++;
   }
   printf("deps=%d\n", ndeps);

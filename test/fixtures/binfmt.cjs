@@ -32,7 +32,7 @@ const ELF_PHOFF = 0x40, ELF_DYN = 0x100, ELF_STR = 0x200, ELF_BASE = 0x1000;
 
 function elf({
   cls = 2, be = false, machine = 62, needed = [], strtabVaddr = null, rpath = [],
-  rawNeeded = null, rawRunpath = null, loadOffset = 0,
+  rawNeeded = null, rawRunpath = null, loadOffset = 0, dynFilesz = null,
 } = {}) {
   const w = cls === 2 ? 8 : 4;
   const phesz = cls === 2 ? 56 : 32;
@@ -94,18 +94,24 @@ function elf({
   const haveRunpath = rpath.length > 0 || rawRunpath !== null;
 
   // ---- phdr[1]: PT_DYNAMIC
+  // dynFilesz overrides p_filesz/p_memsz ONLY: the .dynamic array itself is
+  // still written in full below, so the file really does carry its DT_NEEDED
+  // entries and its DT_NULL terminator -- the header just understates how much
+  // of it there is. That is the shape a reader must not mistake for "this
+  // binary has no dependencies" (test/depscan.test.cjs, item (g)).
   const dynCount = neededTags.length + 3 + (haveRunpath ? 1 : 0);  // NEEDED* + RUNPATH? + STRTAB + STRSZ + NULL
   const dynSize = dynCount * w * 2;
+  const declaredDynSize = dynFilesz === null ? dynSize : dynFilesz;
   const p1 = ELF_PHOFF + phesz;
   if (cls === 2) {
     u(b, p1 + 0, 2, 4, be);      u(b, p1 + 4, 4, 4, be);
     u(b, p1 + 8, ELF_DYN, 8, be); u(b, p1 + 16, ELF_BASE + ELF_DYN, 8, be);
     u(b, p1 + 24, ELF_BASE + ELF_DYN, 8, be);
-    u(b, p1 + 32, dynSize, 8, be); u(b, p1 + 40, dynSize, 8, be);
+    u(b, p1 + 32, declaredDynSize, 8, be); u(b, p1 + 40, declaredDynSize, 8, be);
   } else {
     u(b, p1 + 0, 2, 4, be);      u(b, p1 + 4, ELF_DYN, 4, be);
     u(b, p1 + 8, ELF_BASE + ELF_DYN, 4, be); u(b, p1 + 12, ELF_BASE + ELF_DYN, 4, be);
-    u(b, p1 + 16, dynSize, 4, be); u(b, p1 + 20, dynSize, 4, be);
+    u(b, p1 + 16, declaredDynSize, 4, be); u(b, p1 + 20, declaredDynSize, 4, be);
     u(b, p1 + 24, 4, 4, be);
   }
 

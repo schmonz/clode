@@ -53,11 +53,26 @@ function parseDepscan(stdout) {
   const slices = [];
   let cur = null;
   let format = null;
+  let declared = null;
   const start = (slice) => { cur = { slice, deps: [], runs: [] }; };
   for (const raw of String(stdout).split('\n')) {
     const line = raw.trim();
     if (!line) continue;
-    if (line.startsWith('format=')) { format = line.slice(7).split(/\s+/)[0]; continue; }
+    if (line.startsWith('format=')) {
+      const tokens = line.slice(7).split(/\s+/);
+      format = tokens[0];
+      // A fat Mach-O DECLARES how many slices follow. Capture it -- an earlier
+      // revision split the line and threw everything after the format token
+      // away, which is what let the incident below through.
+      const n = tokens.find((t) => t.startsWith('slices='));
+      if (n) {
+        declared = Number(n.slice(7));
+        if (!Number.isInteger(declared) || declared < 0) {
+          throw new Error(`depscan output has an unparseable slice count: ${JSON.stringify(line)}`);
+        }
+      }
+      continue;
+    }
     if (line.startsWith('slice=')) {
       // A new slice may only begin once the previous one was TERMINATED. Simply
       // starting a fresh group here would discard the unterminated one -- and
@@ -81,6 +96,24 @@ function parseDepscan(stdout) {
     throw new Error(`depscan output has an unrecognized line: ${JSON.stringify(line)}`);
   }
   if (cur !== null) throw new Error(unterminated('the output ended without a deps= line'));
+  // The header PROMISED a slice count; every one of them must have arrived.
+  // REPRODUCED 2026-09-17 on the committed tree: a 2-slice universal whose
+  // SECOND slice was corrupt printed `format=macho-fat slices=2`, then slice
+  // 0's complete, hermetic-looking group, then exited 4 -- and this parser,
+  // which discarded `slices=2`, read that truncated transcript as one clean
+  // slice with zero findings. The /opt/pkg dependency in slice 1 was simply
+  // not there. depscan.c no longer emits a partial fat transcript at all (it
+  // scans every slice once with output suppressed before printing anything),
+  // but this check closes the hole AT THE PARSER, independent of the exit
+  // code: a caller that forgets to check the status, or drifted output from a
+  // future depscan, still cannot turn a missing slice into a clean verdict.
+  // Same shape as the deps=N vs dep= count check above, which is what caught
+  // the protocol-forging DT_NEEDED name.
+  if (declared !== null && slices.length !== declared) {
+    throw new Error(`depscan output is incomplete: the header declared slices=${declared} but `
+      + `${slices.length} slice group(s) were terminated — the scan did NOT cover every slice, `
+      + 'which is NOT the same as finding no dependencies. Treat it as unverified.');
+  }
   if (slices.length === 0) {
     throw new Error('depscan produced no deps= line at all — nothing was verified');
   }
@@ -101,6 +134,24 @@ function underRoot(p, root) {
 // each library it links (the dep itself names the prefix), while an ELF
 // usually records a bare SONAME plus an RPATH/RUNPATH — there the dep has no
 // prefix to judge and the hazard lives entirely in the search path.
+//
+// WRITE DOWN WHAT THE ELF HALF NO LONGER CATCHES. On a NATIVE ELF leg the old
+// ldd-based check resolved SONAMEs through the HOST loader, so it could flag a
+// dependency that RESOLVED into a package-manager prefix even with no RPATH
+// baked into the file. This check cannot, and should not: DT_NEEDED is a bare
+// SONAME, and where it resolves is a fact about the machine doing the looking,
+// not about the artifact — which is the whole reason the check now works on
+// the 19 legs no host tool could inspect at all. The trade is hugely positive,
+// but it IS a narrowed class on the ~10 native ELF legs, and narrowing it
+// silently is the kind of thing this file exists to refuse to do.
+//
+// It follows that ALL ELF detection now rests on DT_RPATH/DT_RUNPATH being
+// present in the shipped engine. That holds today only because cmake bakes the
+// build-tree RPATH by default and the engine we ship IS the build-tree binary;
+// nothing in this repo sets CMAKE_SKIP_BUILD_RPATH. A future
+// -DCMAKE_SKIP_BUILD_RPATH=ON would blind the ELF half completely with no test
+// going red — if you are about to add it, this comment is the reason not to,
+// or the reason to replace this half with something that survives it first.
 function hermeticityFindings(parsed, roots) {
   const findings = [];
   for (const s of parsed.slices) {

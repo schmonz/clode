@@ -43,6 +43,60 @@ test('parseDepscan THROWS when a new slice= starts before the previous one was t
   ].join('\n')), /did not complete/);
 });
 
+test('parseDepscan THROWS when fewer slices arrive than the header declared', () => {
+  // THE hole this fix wave closes, and the input is the REPRODUCED transcript
+  // verbatim: a 2-slice universal whose SECOND slice was corrupt printed its
+  // header, then slice 0's complete group, then exited 4. Every line of that
+  // is well-formed -- the group closes, the count matches, nothing is
+  // unterminated -- so this parser used to return one clean slice and
+  // hermeticityFindings() returned [], because it DISCARDED `slices=2` when it
+  // split the format line. The /opt/pkg dependency in slice 1 was not hidden,
+  // it was simply never mentioned.
+  //
+  // depscan.c no longer emits this (it proves every slice parses before it
+  // prints anything), but the parser must reject it anyway: the caller's
+  // exit-status check was the ONLY thing standing between this transcript and
+  // a false hermetic verdict, and a check one guard deep is the shape this
+  // repo distrusts. Same defence as the deps=N vs dep= count check, one level
+  // up.
+  assert.throws(() => parseDepscan([
+    'format=macho-fat slices=2',
+    'slice=arm64', 'dep=/usr/lib/libSystem.B.dylib', 'deps=1',
+  ].join('\n')), /declared slices=2 but 1 slice/,
+  'a transcript missing a declared slice must be rejected, not read as a clean one-slice answer');
+});
+
+test('parseDepscan THROWS on a MORE slices than declared too — the count is an equality', () => {
+  // The other direction is just as much a lie about what was scanned, and a
+  // one-sided `slices.length < declared` check would let a fabricated extra
+  // group (the shape put_dep's control-byte guard exists to stop) through.
+  assert.throws(() => parseDepscan([
+    'format=macho-fat slices=1',
+    'slice=arm64', 'deps=0',
+    'slice=ppc', 'deps=0',
+  ].join('\n')), /declared slices=1 but 2 slice/);
+});
+
+test('parseDepscan accepts a fat transcript whose slice count matches', () => {
+  // The guard must not reject the good case: same fixture as the per-slice
+  // test above, asserted here for the count specifically.
+  const p = parseDepscan([
+    'format=macho-fat slices=3',
+    'slice=x86_64', 'dep=/usr/lib/libSystem.B.dylib', 'deps=1',
+    'slice=arm64e', 'dep=/usr/lib/libSystem.B.dylib', 'deps=1',
+    'slice=arm64', 'dep=/usr/lib/libSystem.B.dylib', 'deps=1',
+  ].join('\n'));
+  assert.strictEqual(p.slices.length, 3);
+});
+
+test('parseDepscan still parses a NON-fat header, which declares no slice count', () => {
+  // format=elf64le machine=62 carries a second token that is NOT slices=; the
+  // count check must stay inert there rather than reading machine=62 as one.
+  const p = parseDepscan('format=elf64le machine=62\ndep=libc.so.6\ndeps=1\n');
+  assert.strictEqual(p.format, 'elf64le');
+  assert.strictEqual(p.slices.length, 1);
+});
+
 test('parseDepscan accepts deps=0 as a real, complete answer', () => {
   const p = parseDepscan('format=elf64le machine=62\ndeps=0\n');
   assert.deepStrictEqual(p.slices, [{ slice: null, deps: [], runs: [] }]);
