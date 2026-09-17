@@ -11,7 +11,7 @@
 #                                --source-only then --regen-only)
 #   simde-v0.8.2.tar.gz        — the simde source (FetchContent offline)
 #   engine-api-floor.js        — the shared engine-API floor check, generated
-#                                from scripts/engine-api-floor.mjs
+#                                from scripts/engine-api-floor.cjs
 # canonical-LE matters: it makes the engine READ little-endian bytecode on this
 # big-endian host, so (a) NO in-guest tjsc BE-regen is needed, and (b) the LE
 # bytecode the linux cross-fuse worker writes is readable here (a non-canonical
@@ -130,7 +130,7 @@ date
 TJS=./txiki.js/build/tjs
 ls -l "$TJS"; file "$TJS" 2>/dev/null || true
 
-# ENGINE SANITY is now the SHARED engine-API floor (scripts/engine-api-floor.mjs),
+# ENGINE SANITY is now the SHARED engine-API floor (scripts/engine-api-floor.cjs),
 # fetched above — not a fourth hand-written `typeof __tjs_fs_sync` copy. Running
 # it also proves canonical-LE reads upstream LE bundle bytecode on this BE host.
 # A missing binding prints MISSING-ENGINE-API: <name> and exits nonzero, so the

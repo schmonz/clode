@@ -67,11 +67,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import crypto from 'node:crypto';
-import { resetCheckoutToPristine } from './tjs-source-reset.mjs';
-import { engineFloorCheckJs, OK_TOKEN } from './engine-api-floor.mjs';
-import { buildDepscan } from './build-depscan.mjs';
 
 const require = createRequire(import.meta.url);
+// Phase 4c converted these three leaves to CJS (they're leaf orchestration,
+// no import.meta/top-level-await needs), so they're require()'d, not
+// imported — createRequire above must come first.
+const { resetCheckoutToPristine } = require('./tjs-source-reset.cjs');
+const { engineFloorCheckJs, OK_TOKEN } = require('./engine-api-floor.cjs');
+const { buildDepscan } = require('./build-depscan.cjs');
 const { tjsDir: platformTjsDir, tjsVendorParentDir } = require('./platform-tag.cjs'); // tjsDir aliased: this file has its own `tjsDir` (the source build dir)
 // The hermeticity verdict, defined once in a CJS sibling so the build and the
 // test suite run the SAME decision logic (test/guard.cjs needs a pure scan()
@@ -3785,7 +3788,7 @@ function checkHermeticDeps(enginePath) {
 // carry verification instead).
 if ((process.env.CLODE_TJS_SMOKE || 'on').toLowerCase() !== 'off') {
   const engine = path.join(outDir, outName);
-  // The engine API floor, generated from scripts/engine-api-floor.mjs — the ONE
+  // The engine API floor, generated from scripts/engine-api-floor.cjs — the ONE
   // list of bindings a blobulated quaude cannot run without. It used to be an inline
   // `typeof __tjs_fs_sync === "object"` here, a second copy in build-leg's
   // host-exec smoke, and a third in ci-guest-bake.sh, none of which knew about

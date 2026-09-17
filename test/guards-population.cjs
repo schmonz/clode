@@ -335,8 +335,8 @@ const MIGRATED = deriveMigrated();
 // module; folded the four-check loop and the "walls down" fixture into one guard,
 // keeping the escape-blind double-encoding and stubbed-zlib mechanism checks standalone)
 // and engine-api-floor-consumers (five source/yaml files' presence/absence checks over
-// build-tjs.mjs, the build-leg action, and the guest bake script, leaving the dynamic
-// import()-driven ENGINE_API_FLOOR/behavioral tests alone).
+// build-tjs.mjs, the build-leg action, and the guest bake script, leaving the
+// require()-driven ENGINE_API_FLOOR/behavioral tests alone).
 //
 // RE-CUT AGAIN, 83 -> 82, Task 14 batch 5 (2026-09-04): engine-recipe-cache-key-wiring,
 // the one pure-regex assertion inside engine-recipe.test.cjs (the build-leg cache key

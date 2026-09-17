@@ -310,7 +310,7 @@ the guest to regenerate; it stops the guest generating anything at all. The runn
 the SAME `regenBytecodeArrays`/`assertBytecodeFresh` every other leg uses (a host-native tjsc,
 whose canonical-LE output is target-independent by construction), and tars the regenerated
 tree. `ci-guest-bake.sh` refuses a tree with no `clode:bytecode-regen` trailer, and its ENGINE
-SANITY step is now the shared engine-API floor (`scripts/engine-api-floor.mjs`) instead of a
+SANITY step is now the shared engine-API floor (`scripts/engine-api-floor.cjs`) instead of a
 third hand-written `typeof __tjs_fs_sync` copy — so a missing binding is named in the first
 minutes rather than 927 seconds into a fuse.
 
@@ -1592,7 +1592,7 @@ mistake a foreign-platform artifact for a local one. (DONE: `build/tjs/tjs` outp
 `build/tjs/<osToken>-<arch>/tjs`; the cmake build dir → out-of-tree per-target `<outDir>/build`;
 and build-tjs is now REENTRANT — ensureCheckout resets the vendored source to a pristine pin
 before applyPatches, so a killed/failed build can't poison the next, via
-`scripts/tjs-source-reset.mjs` + `test/tjs-source-reset.test.cjs`. That reset also sweeps the
+`scripts/tjs-source-reset.cjs` + `test/tjs-source-reset.test.cjs`. That reset also sweeps the
 NFS AppleDouble `._*` turds that were making `git clean` exit non-zero mid-sweep.)
 
 STILL OPEN — true CONCURRENT-build isolation of the shared txiki SOURCE:
@@ -7332,7 +7332,7 @@ top-level await — the one `await` at `:272` is inside a function. The two
 sibling `.mjs` imports are 43 and 106 lines of plain `export function`.
 Ripple to fix in the same commit: `test/engine-api-floor.test.cjs:109` pins the
 exact import spelling, and `.github/actions/build-leg/action.yml:600,994` run
-`node scripts/engine-api-floor.mjs --emit-check`.
+`node scripts/engine-api-floor.cjs --emit-check`.
 
 **A DEFECT FOUND WHILE PLANNING, and it is the most important thing here.** The
 denylist asks `dep === root || dep.startsWith(root + '/')` against

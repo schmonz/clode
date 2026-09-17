@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
+const { buildDepscan } = require('../scripts/build-depscan.cjs');
 
 const repo = path.join(__dirname, '..');
 
@@ -15,33 +16,10 @@ let EXE = null;
 function depscanExe() {
   if (EXE) return EXE;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'depscan-build-'));
-  // A dynamic import would make every caller async; buildDepscan is ESM, so
-  // this shells out to the same entry point the build uses instead.
-  const { buildDepscan } = requireEsmSync('../scripts/build-depscan.mjs');
   EXE = buildDepscan(repo, dir, {
     run: (cmd, args) => execFileSync(cmd, args, { stdio: 'pipe' }),
   });
   return EXE;
-}
-
-// scripts/build-depscan.mjs is ESM and this file is CJS. Rather than make
-// every test async, run the tiny build through node -e and take the path back
-// on stdout. Phase 4c converts build-depscan.mjs to CJS, after which this
-// helper collapses to a plain require() -- leave a note, not a workaround that
-// outlives its reason.
-function requireEsmSync(rel) {
-  const mod = path.join(__dirname, rel).replace(/\\/g, '/');
-  return {
-    buildDepscan: (repoDir, outDir, opts) => {
-      const script = `import { buildDepscan } from ${JSON.stringify('file://' + mod)};`
-        + `import { execFileSync } from 'node:child_process';`
-        + `process.stdout.write(buildDepscan(${JSON.stringify(repoDir)}, ${JSON.stringify(outDir)},`
-        + ` { run: (c, a) => execFileSync(c, a, { stdio: 'pipe' }), jobs: ${JSON.stringify(opts.jobs || 1)} }));`;
-      const r = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
-      if (r.status !== 0) throw new Error(`buildDepscan failed: ${r.stderr}`);
-      return r.stdout.trim();
-    },
-  };
 }
 
 // Run depscan and return { status, stdout, stderr } WITHOUT throwing on a

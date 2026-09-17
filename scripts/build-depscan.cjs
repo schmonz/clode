@@ -9,10 +9,10 @@
 // never passes CMAKE_TOOLCHAIN_FILE; test/depscan.test.cjs asserts both
 // against this file's own source, scanning code only so that this very
 // comment is not mistaken for a violation.
-import fs from 'node:fs';
-import path from 'node:path';
+const fs = require('node:fs');
+const path = require('node:path');
 
-export function buildDepscan(repo, hostBuildDir, { run, jobs = 1 } = {}) {
+function buildDepscan(repo, hostBuildDir, { run, jobs = 1 } = {}) {
   if (typeof run !== 'function') throw new Error('buildDepscan: a `run(cmd, args)` function is required');
   const src = path.join(repo, 'tools', 'depscan');
   fs.mkdirSync(hostBuildDir, { recursive: true });
@@ -30,3 +30,5 @@ export function buildDepscan(repo, hostBuildDir, { run, jobs = 1 } = {}) {
   }
   return exe;
 }
+
+module.exports = { buildDepscan };

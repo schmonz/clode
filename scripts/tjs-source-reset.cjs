@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+const { execFileSync } = require('node:child_process');
 
 // Reset a git checkout (and its submodules) to a pristine copy of its pinned
 // HEAD: revert every tracked edit and remove untracked files, but PRESERVE the
@@ -22,7 +22,7 @@ import { execFileSync } from 'node:child_process';
 // NFS) is swept. Submodules carry their own working-tree patches (the
 // libuv/quickjs-ng fixups) and no keep-paths of their own, so they reset with a
 // plain clean.
-export function resetCheckoutToPristine(dir, { run, keep = ['node_modules'], platform = process.platform } = {}) {
+function resetCheckoutToPristine(dir, { run, keep = ['node_modules'], platform = process.platform } = {}) {
   const exec = run || ((cmd, args) => execFileSync(cmd, args, { stdio: 'inherit' }));
   exec('git', ['-C', dir, 'checkout', '--', '.']);
   // Sweep macOS AppleDouble ._* sidecars BEFORE the clean. On the NFS dev mount
@@ -41,3 +41,5 @@ export function resetCheckoutToPristine(dir, { run, keep = ['node_modules'], pla
   exec('git', ['-C', dir, 'submodule', 'foreach', '--recursive',
     'git checkout -- . && git clean -fd']);
 }
+
+module.exports = { resetCheckoutToPristine };

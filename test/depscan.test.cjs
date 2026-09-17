@@ -36,14 +36,14 @@ test('depscan exits 3, not 0, on a file that is not a binary at all', () => {
 // Guard (task-8 addendum (h)): HOST-NATIVE IS THE WHOLE POINT — depscan inspects a
 // binary built for another machine, so it must run on THIS one. Handing it the
 // target's cross-file would build a verifier the build cannot execute. This used to be
-// a bare assert.doesNotMatch test; it reads an artifact it did not create (build-depscan.mjs)
+// a bare assert.doesNotMatch test; it reads an artifact it did not create (build-depscan.cjs)
 // and derives a finding from the bytes, which is exactly guard-shaped, so it moved onto
 // test/guard.cjs's defineGuard/control contract like every other scanner in this repo.
 const buildDepscanHostNative = defineGuard({
   name: 'build-depscan-host-native',
   floor: 1,
   read() {
-    // Scanned with comments stripped, not the raw source: build-depscan.mjs's own
+    // Scanned with comments stripped, not the raw source: build-depscan.cjs's own
     // header comment names both identifiers in prose, to explain why they must never
     // appear as code. A raw-text scan cannot tell that mention apart from a real
     // violation (this repo has hit that exact self-match twice already — the
@@ -51,21 +51,21 @@ const buildDepscanHostNative = defineGuard({
     // inside their own header). stripComments() preserves string literals (where the
     // real -DCMAKE_TOOLCHAIN_FILE=... argument would live) and blanks only comments,
     // so a prose mention is not a violation but an actual argument still is.
-    const src = fs.readFileSync(path.join(repo, 'scripts/build-depscan.mjs'), 'utf8');
+    const src = fs.readFileSync(path.join(repo, 'scripts/build-depscan.cjs'), 'utf8');
     return { code: stripComments(src) };
   },
   scan({ code }) {
     const findings = [];
     if (/CMAKE_TOOLCHAIN_FILE/.test(code)) {
-      findings.push('build-depscan.mjs passes CMAKE_TOOLCHAIN_FILE — depscan must be a HOST tool');
+      findings.push('build-depscan.cjs passes CMAKE_TOOLCHAIN_FILE — depscan must be a HOST tool');
     }
     if (/crossFile/.test(code)) {
-      findings.push('build-depscan.mjs consults the target cross-file at all');
+      findings.push('build-depscan.cjs consults the target cross-file at all');
     }
     return { findings, examined: 1 };
   },
   control() {
-    // A build-depscan.mjs that DOES pass a toolchain file — the exact violation this
+    // A build-depscan.cjs that DOES pass a toolchain file — the exact violation this
     // guard exists to catch (Task 1's fix round proved this control by temporarily
     // inserting a real -DCMAKE_TOOLCHAIN_FILE= argument and confirming it went red).
     return { code: "cmakeArgs.push(`-DCMAKE_TOOLCHAIN_FILE=${crossFile}`);" };

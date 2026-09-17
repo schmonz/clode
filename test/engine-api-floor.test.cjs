@@ -1,5 +1,5 @@
 'use strict';
-// The engine API floor (scripts/engine-api-floor.mjs) and its three consumers.
+// The engine API floor (scripts/engine-api-floor.cjs) and its three consumers.
 //
 // WHAT WENT WRONG. patches/txiki-engine-module-meta.patch has a C half
 // (src/mod_engine.c) and a JS half (src/js/core/engine.js). The JS half reaches
@@ -27,11 +27,12 @@ const { defineGuard, guardTests } = require('./guard.cjs');
 
 const repo = path.join(__dirname, '..');
 const read = (rel) => fs.readFileSync(path.join(repo, rel), 'utf8');
-const FLOOR_MJS = 'scripts/engine-api-floor.mjs';
+const FLOOR_CJS = 'scripts/engine-api-floor.cjs';
 const BAKE = 'spike/quickjs/qemu/ci-guest-bake.sh';
 const ACTION = '.github/actions/build-leg/action.yml';
 const BUILD_TJS = 'scripts/build-tjs.mjs';
-const load = () => import(require('node:url').pathToFileURL(path.join(repo, FLOOR_MJS)).href);
+// engine-api-floor is CJS now: a plain require, no pathToFileURL/import() detour.
+const load = async () => require(path.join(repo, FLOOR_CJS));
 
 test('the floor names moduleMeta, and says which patch provides it', async () => {
   const { ENGINE_API_FLOOR } = await load();
@@ -106,8 +107,8 @@ function scanEngineFloorConsumers({ buildTjsSrc, actionYml, bakeSrc }) {
   let examined = 0;
 
   examined++;
-  if (!/import \{ engineFloorCheckJs, OK_TOKEN \} from '\.\/engine-api-floor\.mjs';/.test(buildTjsSrc)) {
-    findings.push('build-tjs.mjs no longer imports its smoke check from engine-api-floor.mjs');
+  if (!/const \{ engineFloorCheckJs, OK_TOKEN \} = require\('\.\/engine-api-floor\.cjs'\);/.test(buildTjsSrc)) {
+    findings.push('build-tjs.mjs no longer requires its smoke check from engine-api-floor.cjs');
   }
   examined++;
   if (!/const evalArgs = \['eval', engineFloorCheckJs\(\)\];/.test(buildTjsSrc)) {
@@ -119,7 +120,7 @@ function scanEngineFloorConsumers({ buildTjsSrc, actionYml, bakeSrc }) {
   }
 
   examined++;
-  if (!/node scripts\/engine-api-floor\.mjs --emit-check > "\$RUNNER_TEMP\/engine-api-floor\.js"/.test(actionYml)) {
+  if (!/node scripts\/engine-api-floor\.cjs --emit-check > "\$RUNNER_TEMP\/engine-api-floor\.js"/.test(actionYml)) {
     findings.push('build-leg host-exec smoke is no longer generated from the floor');
   }
   examined++;
@@ -140,7 +141,7 @@ function scanEngineFloorConsumers({ buildTjsSrc, actionYml, bakeSrc }) {
   examined++;
   if (/typeof __tjs_spawn_sync/.test(bakeSrc)) findings.push('the bake is back to hand-writing its own engine sanity list');
   examined++;
-  if (!/node scripts\/engine-api-floor\.mjs --emit-check > \.matrix\/qemu-bake\/engine-api-floor\.js/.test(actionYml)) {
+  if (!/node scripts\/engine-api-floor\.cjs --emit-check > \.matrix\/qemu-bake\/engine-api-floor\.js/.test(actionYml)) {
     findings.push('the runner no longer stages the generated floor check for the guest bake');
   }
 

@@ -143,7 +143,7 @@ test('build-tjs: the dependency check reads the binary via depscan, not via otoo
   // parses the ELF/Mach-O/PE dependency table out of the file, so the build
   // host stops mattering. Assert the WIRING (build it, run it, parse it,
   // judge it) rather than the words, so a half-wired version cannot pass.
-  assert.match(buildTjsSrc, /import \{ buildDepscan \} from '\.\/build-depscan\.mjs';/);
+  assert.match(buildTjsSrc, /const \{ buildDepscan \} = require\('\.\/build-depscan\.cjs'\);/);
   const fnSrc = hermeticFnSrc();
   assert.match(fnSrc, /buildDepscan\(/, 'the check must build the host-native verifier');
   assert.match(fnSrc, /runOut\(depscan, \[enginePath\]\)/, 'the check must run depscan on the engine');

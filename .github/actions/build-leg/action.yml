@@ -595,9 +595,9 @@ runs:
         mkdir -p .matrix/qemu-bake
         tar czf .matrix/qemu-bake/txiki-canonical-le.tar.gz -C "$CLODE_TJS_VENDOR" txiki.js
         # The shared engine-API floor check the bake runs against the engine it
-        # just built (ONE list, scripts/engine-api-floor.mjs — not a fourth
+        # just built (ONE list, scripts/engine-api-floor.cjs — not a fourth
         # hand-written `typeof __tjs_fs_sync` copy).
-        node scripts/engine-api-floor.mjs --emit-check > .matrix/qemu-bake/engine-api-floor.js
+        node scripts/engine-api-floor.cjs --emit-check > .matrix/qemu-bake/engine-api-floor.js
         # simde (txiki v26.6.0 pins v0.8.2 — the guest build is offline, so stage
         # it; repackage so it extracts to simde-src/ as the bake recipe expects).
         curl -fsSL https://github.com/simd-everywhere/simde/archive/refs/tags/v0.8.2.tar.gz -o "$RUNNER_TEMP/simde.tgz"
@@ -988,10 +988,10 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        # The shared engine-API floor (scripts/engine-api-floor.mjs), not a second
+        # The shared engine-API floor (scripts/engine-api-floor.cjs), not a second
         # hand-written copy of one typeof check. It prints MISSING-ENGINE-API: with
         # the binding name and the patch that provides it, then exits nonzero.
-        node scripts/engine-api-floor.mjs --emit-check > "$RUNNER_TEMP/engine-api-floor.js"
+        node scripts/engine-api-floor.cjs --emit-check > "$RUNNER_TEMP/engine-api-floor.js"
         out=$("${{ steps.tjsbin.outputs.path }}" run "$RUNNER_TEMP/engine-api-floor.js")
         echo "tjs host-exec: $out"
         [ "$out" = tjs-shim-ok ]

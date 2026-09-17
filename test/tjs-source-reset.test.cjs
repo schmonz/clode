@@ -1,6 +1,6 @@
 'use strict';
 
-// Contract test for scripts/tjs-source-reset.mjs (resetCheckoutToPristine):
+// Contract test for scripts/tjs-source-reset.cjs (resetCheckoutToPristine):
 // build-tjs's applyPatches mutates the vendored txiki checkout in place with no
 // rollback, so a killed/failed build leaves it partially patched. The reset
 // must restore pristine source before the next build's patches apply — reverting
@@ -31,7 +31,7 @@ function initRepo(dir) {
 }
 
 test('resetCheckoutToPristine: reverts tracked, sweeps untracked, preserves keep-path', async () => {
-  const { resetCheckoutToPristine } = await import('../scripts/tjs-source-reset.mjs');
+  const { resetCheckoutToPristine } = require('../scripts/tjs-source-reset.cjs');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tjs-reset-'));
   try {
     initRepo(root);
@@ -62,7 +62,7 @@ test('resetCheckoutToPristine: reverts tracked, sweeps untracked, preserves keep
 });
 
 test('resetCheckoutToPristine: skips the Unix find sweep on win32', async () => {
-  const { resetCheckoutToPristine } = await import('../scripts/tjs-source-reset.mjs');
+  const { resetCheckoutToPristine } = require('../scripts/tjs-source-reset.cjs');
   const calls = [];
   const spy = (cmd, args) => { calls.push(cmd); };
   // No real git ops run (spy swallows them); we only assert the platform gate.
@@ -72,7 +72,7 @@ test('resetCheckoutToPristine: skips the Unix find sweep on win32', async () => 
 });
 
 test('resetCheckoutToPristine: resets submodule working trees recursively', async () => {
-  const { resetCheckoutToPristine } = await import('../scripts/tjs-source-reset.mjs');
+  const { resetCheckoutToPristine } = require('../scripts/tjs-source-reset.cjs');
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'tjs-reset-sub-'));
   try {
     // A standalone repo to embed as a submodule (local path).
