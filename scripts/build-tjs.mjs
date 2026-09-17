@@ -3730,9 +3730,19 @@ function checkHermeticDeps(enginePath) {
   // build-leg/action.yml because build-tjs.mjs is invoked from five different
   // steps there; a grep-the-log step would need writing five times and would
   // drift from the call sites. Env-gated, so local builds are unaffected.
+  //
+  // The per-leg label is derived from enginePath's own directory
+  // (platformTjsDir() = build/tjs/<osToken>-<arch>), NOT a new environment
+  // variable: fix round 1 caught an env-var read here that nothing in the
+  // workflow ever set, whose fallback (outName, just "tjs" or "tjs.exe")
+  // would have printed the SAME label on all 42 legs -- and the dead read
+  // also failed test/env-verdicts.test.cjs's inventory (every name shipped
+  // code reads must have a recorded verdict). enginePath is already the
+  // per-leg input this function was called with; deriving the label from it
+  // needs no new name and no verdict entry at all.
   if (process.env.GITHUB_STEP_SUMMARY) {
     fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
-      `- \`${process.env.CLODE_LEG || outName}\` — ${verdict}\n`);
+      `- \`${path.basename(path.dirname(enginePath))}\` — ${verdict}\n`);
   }
 }
 
