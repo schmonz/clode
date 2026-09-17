@@ -121,6 +121,8 @@ int main(int argc, char **argv) {
 #define DT_NULL_    0
 #define DT_NEEDED_  1
 #define DT_STRTAB_  5
+#define DT_RPATH_   15
+#define DT_RUNPATH_ 29
 #define PT_LOAD_    1
 #define PT_DYNAMIC_ 2
 
@@ -156,6 +158,8 @@ static int scan_elf(const unsigned char *b, size_t len) {
   int found_dynamic = 0, ndeps = 0;
   unsigned long long needed[512];
   int nneeded = 0;
+  unsigned long long runpath_off = 0;
+  int have_runpath = 0;
 
   if (len < 0x40) return 4;
   cls = b[4];
@@ -202,12 +206,38 @@ static int scan_elf(const unsigned char *b, size_t len) {
       needed[nneeded++] = val;
     } else if (tag == DT_STRTAB_) {
       strtab_va = val;
+    } else if (tag == DT_RUNPATH_ || tag == DT_RPATH_) {
+      /* DT_RUNPATH supersedes DT_RPATH where both appear; taking the last
+       * one seen matches what a loader does and both are equally damning
+       * for our purposes. */
+      runpath_off = val; have_runpath = 1;
     }
   }
   if (nneeded > 0 && strtab_va == 0) return 4;  /* names we cannot resolve */
 
-  strtab_off = nneeded ? elf_v2o(b, len, cls, be, phoff, phentsize, phnum, strtab_va) : 0;
-  if (nneeded > 0 && strtab_off < 0) return 4;
+  strtab_off = (nneeded > 0 || have_runpath) ?
+    elf_v2o(b, len, cls, be, phoff, phentsize, phnum, strtab_va) : 0;
+  if ((nneeded > 0 || have_runpath) && strtab_off < 0) return 4;
+
+  if (have_runpath) {
+    /* Reuse the strtab_off resolved above -- do NOT call elf_v2o a second
+       time. Two resolutions of the same address can disagree only by being
+       wrong, and the condition guarding strtab_off is widened above to cover
+       this case. */
+    unsigned long long p;
+    if (strtab_off < 0) return 4;
+    p = (unsigned long long)strtab_off + runpath_off;
+    if (p >= (unsigned long long)len) return 4;
+    /* The list is colon-separated inside ONE string; print an entry per
+     * element so the caller never has to re-split it. */
+    while (p < (unsigned long long)len && b[p]) {
+      unsigned long long q = p;
+      while (q < (unsigned long long)len && b[q] && b[q] != ':') q++;
+      if (q >= (unsigned long long)len) return 4;
+      printf("run=%.*s\n", (int)(q - p), (const char *)(b + p));
+      p = (b[q] == ':') ? q + 1 : q;
+    }
+  }
 
   for (i = 0; i < (unsigned)nneeded; i++) {
     if (!put_dep(b, len, (unsigned long long)strtab_off + needed[i])) return 4;
@@ -293,6 +323,13 @@ static int scan_macho_thin(const unsigned char *b, size_t len,
       if (noff >= cmdsize) return 4;
       if (!put_dep(b, len, at + noff)) return 4;
       ndeps++;
+    } else if (cmd == 0x8000001cULL) {            /* LC_RPATH */
+      unsigned long long poff;
+      if (cmdsize < 12) return 4;
+      poff = rd(b + at + 8, 4, be);
+      if (poff >= cmdsize) return 4;
+      if (at + poff >= (unsigned long long)len) return 4;
+      printf("run=%s\n", (const char *)(b + at + poff));
     }
     at += cmdsize;
   }

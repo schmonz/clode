@@ -195,3 +195,33 @@ test('PE whose import RVA maps into no section is MALFORMED, not empty', () => {
   assert.strictEqual(out.status, 4, `expected malformed exit 4, got ${out.status}`);
   assert.deepStrictEqual(out.counts, []);
 });
+
+test('ELF DT_RUNPATH is reported as run= — a SONAME has no prefix to deny', () => {
+  // The defect this task exists for: DT_NEEDED is a bare SONAME, so the
+  // package-manager denylist has nothing to match on. What the FILE declares
+  // about where it will look is DT_RUNPATH, and that is true on every machine
+  // -- unlike ldd's resolution, which is a fact about the build host.
+  const out = scanFixture(binfmt.elf({
+    cls: 2, be: false, needed: ['libintl.so.8'], rpath: ['/opt/pkg/lib', '/usr/lib'],
+  }));
+  assert.strictEqual(out.status, 0, out.stderr);
+  assert.deepStrictEqual(out.deps, ['libintl.so.8']);
+  const runs = out.stdout.split('\n').filter((l) => l.startsWith('run=')).map((l) => l.slice(4));
+  assert.deepStrictEqual(runs, ['/opt/pkg/lib', '/usr/lib'],
+    'a colon-separated DT_RUNPATH must be split into one run= line per entry');
+});
+
+test('ELF with no RUNPATH emits no run= lines', () => {
+  const out = scanFixture(binfmt.elf({ needed: ['libc.so.6'] }));
+  assert.strictEqual(out.status, 0, out.stderr);
+  assert.doesNotMatch(out.stdout, /^run=/m);
+});
+
+test('Mach-O LC_RPATH is reported as run=', () => {
+  const out = scanFixture(binfmt.macho({
+    needed: ['/usr/lib/libSystem.B.dylib'], rpath: ['/opt/homebrew/lib'],
+  }));
+  assert.strictEqual(out.status, 0, out.stderr);
+  const runs = out.stdout.split('\n').filter((l) => l.startsWith('run=')).map((l) => l.slice(4));
+  assert.deepStrictEqual(runs, ['/opt/homebrew/lib']);
+});

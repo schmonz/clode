@@ -30,7 +30,7 @@ function u(b, off, val, size, be) {
 // accidentally land on the right bytes.
 const ELF_PHOFF = 0x40, ELF_DYN = 0x100, ELF_STR = 0x200, ELF_BASE = 0x1000;
 
-function elf({ cls = 2, be = false, machine = 62, needed = [], strtabVaddr = null } = {}) {
+function elf({ cls = 2, be = false, machine = 62, needed = [], strtabVaddr = null, rpath = [] } = {}) {
   const w = cls === 2 ? 8 : 4;
   const phesz = cls === 2 ? 56 : 32;
 
@@ -39,6 +39,10 @@ function elf({ cls = 2, be = false, machine = 62, needed = [], strtabVaddr = nul
   let str = '\0';
   const nameOffsets = [];
   for (const n of needed) { nameOffsets.push(str.length); str += n + '\0'; }
+  // DT_RUNPATH's value is a string-table offset too, and the list is
+  // colon-separated in one string.
+  let runpathOffset = 0;
+  if (rpath.length) { runpathOffset = str.length; str += rpath.join(':') + '\0'; }
   const strLen = Buffer.byteLength(str, 'latin1');
 
   const total = ELF_STR + strLen + 16;
@@ -72,7 +76,7 @@ function elf({ cls = 2, be = false, machine = 62, needed = [], strtabVaddr = nul
   }
 
   // ---- phdr[1]: PT_DYNAMIC
-  const dynCount = needed.length + 3;           // NEEDED* + STRTAB + STRSZ + NULL
+  const dynCount = needed.length + 3 + (rpath.length ? 1 : 0);  // NEEDED* + RUNPATH? + STRTAB + STRSZ + NULL
   const dynSize = dynCount * w * 2;
   const p1 = ELF_PHOFF + phesz;
   if (cls === 2) {
@@ -87,8 +91,10 @@ function elf({ cls = 2, be = false, machine = 62, needed = [], strtabVaddr = nul
     u(b, p1 + 24, 4, 4, be);
   }
 
-  // ---- .dynamic: DT_NEEDED(1) per dep, then DT_STRTAB(5), DT_STRSZ(10), DT_NULL(0)
+  // ---- .dynamic: DT_NEEDED(1) per dep, DT_RUNPATH(29) if asked, then
+  // DT_STRTAB(5), DT_STRSZ(10), DT_NULL(0).
   const entries = nameOffsets.map((off) => [1, off]);
+  if (rpath.length) entries.push([29, runpathOffset]);
   entries.push([5, strtabVaddr === null ? ELF_BASE + ELF_STR : strtabVaddr]);
   entries.push([10, strLen]);
   entries.push([0, 0]);
@@ -108,7 +114,7 @@ function elf({ cls = 2, be = false, machine = 62, needed = [], strtabVaddr = nul
 // address mapping at all.
 const CPU_X86_64 = 0x01000007, CPU_ARM64 = 0x0100000c, CPU_PPC = 18, CPU_I386 = 7;
 
-function macho({ bits = 64, be = false, cputype = CPU_ARM64, needed = [] } = {}) {
+function macho({ bits = 64, be = false, cputype = CPU_ARM64, needed = [], rpath = [] } = {}) {
   const hdrSize = bits === 64 ? 32 : 28;
   const cmds = needed.map((name) => {
     const nameBytes = Buffer.byteLength(name, 'latin1') + 1;   // + NUL
@@ -124,7 +130,20 @@ function macho({ bits = 64, be = false, cputype = CPU_ARM64, needed = [] } = {})
     c.write(name, 24, 'latin1');
     return c;
   });
-  const sizeofcmds = cmds.reduce((n, c) => n + c.length, 0);
+  // LC_RPATH carries its path INLINE too, same shape as a dylib command but
+  // with a 12-byte fixed part (just path.offset) instead of 24.
+  const rpathCmds = rpath.map((p) => {
+    const nameBytes = Buffer.byteLength(p, 'latin1') + 1;
+    const size = Math.ceil((12 + nameBytes) / 4) * 4;
+    const c = Buffer.alloc(size, 0);
+    u(c, 0, 0x8000001c, 4, be);   // LC_RPATH
+    u(c, 4, size, 4, be);         // cmdsize
+    u(c, 8, 12, 4, be);           // path.offset
+    c.write(p, 12, 'latin1');
+    return c;
+  });
+  const allCmds = cmds.concat(rpathCmds);
+  const sizeofcmds = allCmds.reduce((n, c) => n + c.length, 0);
   const b = Buffer.alloc(hdrSize + sizeofcmds, 0);
   // MH_MAGIC (32-bit) / MH_MAGIC_64 stored in the file's own byte order: a
   // big-endian ppc binary has the SAME logical magic, laid out the other way.
@@ -132,11 +151,11 @@ function macho({ bits = 64, be = false, cputype = CPU_ARM64, needed = [] } = {})
   u(b, 4, cputype, 4, be);
   u(b, 8, 0, 4, be);              // cpusubtype
   u(b, 12, 2, 4, be);             // filetype = MH_EXECUTE
-  u(b, 16, cmds.length, 4, be);   // ncmds
+  u(b, 16, allCmds.length, 4, be); // ncmds
   u(b, 20, sizeofcmds, 4, be);    // sizeofcmds
   u(b, 24, 0, 4, be);             // flags
   let at = hdrSize;
-  for (const c of cmds) { c.copy(b, at); at += c.length; }
+  for (const c of allCmds) { c.copy(b, at); at += c.length; }
   return b;
 }
 
