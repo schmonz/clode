@@ -1026,6 +1026,31 @@ runs:
         [ -f "$P" ]
         echo "path=$P" >> "$GITHUB_OUTPUT"
 
+    # "A skipped oracle is not a pass" (ci.yml:341). The hermeticity VERDICT is
+    # produced inline by scripts/build-tjs.mjs on every leg, so nothing here is
+    # unverified — but test/depscan-guard.test.cjs, the suite-side copy of that
+    # same check, skips whenever CLODE_DEPSCAN_ENGINE is unset, and until now
+    # nothing in .github/ set it: it had never once executed in CI. A guard that
+    # has never run is indistinguishable from one that CANNOT run, which is the
+    # shape phase 5 exists to delete. Pointing it at the engine this leg just
+    # built makes it produce a real verdict on every leg — including the 19 that
+    # had no hermeticity verdict of any kind before phase 4b.
+    #
+    # NO LEG IS LEFT UNSET, and that is a claim, not an oversight: every route
+    # to this point (native, alpine guest, cross container, NetBSD cross,
+    # in-guest bake) has already put an engine on THIS runner's filesystem —
+    # the step above asserts the file exists — and depscan is host-native and
+    # target-agnostic by construction, so a foreign-arch engine (darwin-ppc,
+    # netbsd-m68k, the sparc bake, the no-exec i386 leg) is exactly as readable
+    # here as a native one. That is the whole reason it replaced otool/ldd.
+    # Step-level env, not GITHUB_ENV: one definition, at the one place the
+    # engine path is known, with no leakage into the steps after it.
+    - name: Hermeticity oracle (suite-side) against the engine this leg built
+      shell: bash
+      env:
+        CLODE_DEPSCAN_ENGINE: ${{ steps.bare.outputs.path }}
+      run: node --test test/depscan-guard.test.cjs
+
     # The static floor gate: pre-10.14 dyld requires the old
     # LC_VERSION_MIN_MACOSX load command and refuses LC_BUILD_VERSION-only
     # binaries — and the version must be exactly the pinned floor. Gating

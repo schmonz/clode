@@ -27,6 +27,22 @@ test('parseDepscan THROWS on output with no deps= line', () => {
     /deps=/, 'a group with no deps= terminator must be rejected, not read as empty');
 });
 
+test('parseDepscan THROWS when a new slice= starts before the previous one was terminated', () => {
+  // Fix round 1. The unterminated group used to be DISCARDED — and the slice it
+  // discarded is, by construction, the one carrying the finding: here the arm64
+  // slice's /opt/pkg dependency vanished and a clean ppc slice was all that
+  // reached hermeticityFindings(), which returned []. Not reachable through
+  // today's depscan.c (a malformed slice exits nonzero and runOut throws first),
+  // but this parser IS the backstop against forged or drifted output, and a
+  // backstop whose one hole is shaped like "drops the slice with the violation"
+  // is no backstop at all.
+  assert.throws(() => parseDepscan([
+    'format=macho-fat slices=2',
+    'slice=arm64', 'dep=/opt/pkg/lib/libevil.dylib',
+    'slice=ppc', 'deps=0',
+  ].join('\n')), /did not complete/);
+});
+
 test('parseDepscan accepts deps=0 as a real, complete answer', () => {
   const p = parseDepscan('format=elf64le machine=62\ndeps=0\n');
   assert.deepStrictEqual(p.slices, [{ slice: null, deps: [], runs: [] }]);
@@ -98,9 +114,16 @@ const engineHermeticity = defineGuard({
     const parsed = parseDepscan(output);
     return {
       findings: hermeticityFindings(parsed, roots),
-      // Examined = every dependency and search path we actually looked at, so
-      // "found nothing" cannot be confused with "looked at nothing".
-      examined: parsed.slices.reduce((n, s) => n + s.deps.length + s.runs.length, 0),
+      // Examined = complete dependency TABLES read (one per slice), not
+      // individual deps. "Found nothing" and "looked at nothing" still cannot
+      // be confused: parseDepscan throws unless every group was terminated by
+      // a deps= line, so an examined count of N means N tables were read to
+      // the end. Counting deps instead was measured WRONG against a real
+      // shipped engine — the statically-linked linux-arm64 template has zero
+      // dynamic dependencies by construction, which is the STRONGEST possible
+      // hermeticity result, and the floor reported it as BROKEN (the guard is
+      // blind). Zero dependencies is an answer; no table is not.
+      examined: parsed.slices.length,
     };
   },
   control() {
@@ -119,6 +142,21 @@ const engineHermeticity = defineGuard({
 });
 
 guardTests(engineHermeticity);
+
+test('a statically linked engine reads as EXAMINED, not BROKEN', () => {
+  // Regression, found running the gate against the real linux-arm64 engine
+  // template (ELF, aarch64, statically linked): with examined counted in
+  // dependencies it was 0, under the floor of 1, so the guard called itself
+  // blind on the one artifact shape that cannot possibly be non-hermetic. The
+  // musl legs ship exactly this shape, and this guard now runs on every CI leg.
+  const r = engineHermeticity.scan({
+    output: 'format=elf64le machine=183\ndeps=0\n',
+    roots: PKG_MANAGER_ROOTS,
+  });
+  assert.deepStrictEqual(r.findings, []);
+  assert.ok(r.examined >= engineHermeticity.floor,
+    `a complete, empty dependency table must clear the floor: examined ${r.examined}, floor ${engineHermeticity.floor}`);
+});
 
 test('the control produces findings for BOTH a bad dep and a bad RPATH', () => {
   const r = checkControl(engineHermeticity);

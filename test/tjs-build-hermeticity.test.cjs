@@ -384,6 +384,18 @@ test('local engine (if built): dynamic deps contain no package-manager paths', (
   }
   // Same verifier the build runs, same verdict function — not otool/ldd, and
   // not a hand copy of the denylist.
+  //
+  // DELIBERATE BEHAVIOUR CHANGE (phase 4b), called out because it is one: this
+  // test used to skip when the INSPECTOR was unavailable ("otool/ldd
+  // unavailable or failed"). It no longer can — depscanExe() cmake-builds the
+  // verifier, and a failure there throws. That is correct twice over. First,
+  // an engine we cannot inspect is unverified, and a skip would say
+  // "verified" by omission — the whole defect this phase deletes. Second, it
+  // adds NO new requirement to the suite: test/depscan.test.cjs and
+  // test/depscan-agreement.test.cjs already build depscan unconditionally, so
+  // a host without cc/cmake cannot run this suite at all, with or without a
+  // local engine. The remaining skips here are about the ENGINE being absent,
+  // which is a real precondition, and they still say so.
   const { depscanExe } = require('./depscan-build.cjs');
   const { parseDepscan, hermeticityFindings, PKG_MANAGER_ROOTS } = require(path.join(repo, 'scripts/depscan-verdict.cjs'));
   const out = execFileSync(depscanExe(), [enginePath], { encoding: 'utf8' });

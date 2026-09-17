@@ -42,6 +42,13 @@ const PKG_MANAGER_ROOTS = ['/opt/pkg', '/opt/homebrew', '/usr/local', '/opt/loca
 // The ldd path this replaces got that wrong -- OpenBSD's ldd prints a table
 // parseLddDeps did not recognize, and an unrecognized output shape read as
 // zero dependencies for as long as it existed.
+// ONE message for every way a group can fail to close, so the two sites cannot
+// drift into saying different things about the same condition.
+function unterminated(what) {
+  return `depscan output is incomplete: ${what} — the scan did not complete, which is NOT `
+    + 'the same as finding no dependencies. Treat it as unverified.';
+}
+
 function parseDepscan(stdout) {
   const slices = [];
   let cur = null;
@@ -51,7 +58,14 @@ function parseDepscan(stdout) {
     const line = raw.trim();
     if (!line) continue;
     if (line.startsWith('format=')) { format = line.slice(7).split(/\s+/)[0]; continue; }
-    if (line.startsWith('slice=')) { start(line.slice(6)); continue; }
+    if (line.startsWith('slice=')) {
+      // A new slice may only begin once the previous one was TERMINATED. Simply
+      // starting a fresh group here would discard the unterminated one -- and
+      // the group being discarded is exactly the group carrying the finding.
+      if (cur !== null) throw new Error(unterminated(`a new ${line} began while the previous group was still open`));
+      start(line.slice(6));
+      continue;
+    }
     if (line.startsWith('dep=')) { if (!cur) start(null); cur.deps.push(line.slice(4)); continue; }
     if (line.startsWith('run=')) { if (!cur) start(null); cur.runs.push(line.slice(4)); continue; }
     if (line.startsWith('deps=')) {
@@ -66,10 +80,7 @@ function parseDepscan(stdout) {
     }
     throw new Error(`depscan output has an unrecognized line: ${JSON.stringify(line)}`);
   }
-  if (cur !== null) {
-    throw new Error('depscan output ended without a deps= line — the scan did not complete, '
-      + 'which is NOT the same as finding no dependencies. Treat it as unverified.');
-  }
+  if (cur !== null) throw new Error(unterminated('the output ended without a deps= line'));
   if (slices.length === 0) {
     throw new Error('depscan produced no deps= line at all — nothing was verified');
   }
