@@ -464,10 +464,10 @@ runs:
     # ~20-min osxcross compile. Loaded as a local tag the run step below consumes.
     - name: Set up buildx (cross-dockerfile legs)
       if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.cross-dockerfile != ''
-      uses: docker/setup-buildx-action@v4.3.0
+      uses: docker/setup-buildx-action@v4.4.1
     - name: Build the cross-toolchain image (GHA-cached, no registry)
       if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.cross-dockerfile != ''
-      uses: docker/build-push-action@v7.3.0
+      uses: docker/build-push-action@v7.4.0
       with:
         context: ${{ inputs.cross-dockerfile }}
         load: true
@@ -741,7 +741,7 @@ runs:
     # LOGGED — never a silent downgrade; tier-2 stands on level-2 either way.
     - name: Register qemu-user binfmt (verify=qemu-user)
       if: inputs.verify == 'qemu-user'
-      uses: docker/setup-qemu-action@v4.3.0
+      uses: docker/setup-qemu-action@v4.4.0
     - name: Validate the tier-2 builder under qemu-user (verify=qemu-user)
       if: inputs.verify == 'qemu-user'
       shell: bash
@@ -836,7 +836,7 @@ runs:
     # smokes). Cheap and idempotent.
     - name: Ensure qemu binfmt for foreign-arch host execution
       if: inputs.guest-platform == 'alpine' && inputs.guest-arch != 'x86_64' && runner.arch == 'X64'
-      uses: docker/setup-qemu-action@v4.3.0
+      uses: docker/setup-qemu-action@v4.4.0
 
     - name: Stage the provider for the in-VM full smoke
       if: steps.mode.outputs.exec == 'guest' && inputs.smoke == 'full'
