@@ -5,11 +5,10 @@
 // ANOTHER MACHINE, so it must run on THIS one. Passing the target's
 // cross-file here would produce a verifier the build that needs it cannot
 // execute — the same host-vs-target split buildHostTjsc() already makes for
-// tjsc, for the same reason. This module therefore never reads the target's
-// cross-file option, and never sets cmake's toolchain-file variable (that
-// variable's name is deliberately not spelled out here, since a source-scan
-// test in test/depscan.test.cjs checks this file for the absence of both
-// exact identifiers -- see that test for their spelling).
+// tjsc, for the same reason. This module therefore never reads crossFile and
+// never passes CMAKE_TOOLCHAIN_FILE; test/depscan.test.cjs asserts both
+// against this file's own source, scanning code only so that this very
+// comment is not mistaken for a violation.
 import fs from 'node:fs';
 import path from 'node:path';
 

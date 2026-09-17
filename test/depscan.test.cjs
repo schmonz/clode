@@ -8,6 +8,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { depscanExe, runDepscan } = require('./depscan-build.cjs');
+const { stripComments } = require('./strip-comments.cjs');
 
 const repo = path.join(__dirname, '..');
 
@@ -35,9 +36,19 @@ test('build-depscan never passes a cross toolchain file', () => {
   // HOST-NATIVE IS THE WHOLE POINT: depscan inspects a binary built for
   // another machine, so it must run on THIS one. Handing it the target's
   // cross-file would build a verifier the build cannot execute.
+  //
+  // Scanned with comments stripped, not the raw source: build-depscan.mjs's own
+  // header comment names both identifiers in prose, to explain why they must never
+  // appear as code. A raw-text scan cannot tell that mention apart from a real
+  // violation (this repo has hit that exact self-match twice already — the
+  // phase-5b no-fuse gate and test/merge-step.test.cjs, both matching the word
+  // inside their own header). stripComments() preserves string literals (where the
+  // real -DCMAKE_TOOLCHAIN_FILE=... argument would live) and blanks only comments,
+  // so a prose mention is not a violation but an actual argument still is.
   const src = fs.readFileSync(path.join(repo, 'scripts/build-depscan.mjs'), 'utf8');
-  assert.doesNotMatch(src, /CMAKE_TOOLCHAIN_FILE/,
+  const code = stripComments(src);
+  assert.doesNotMatch(code, /CMAKE_TOOLCHAIN_FILE/,
     'buildDepscan must not pass CMAKE_TOOLCHAIN_FILE — the verifier is a HOST tool');
-  assert.doesNotMatch(src, /crossFile/,
+  assert.doesNotMatch(code, /crossFile/,
     'buildDepscan must not consult the target cross-file at all');
 });
