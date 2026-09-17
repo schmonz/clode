@@ -7278,3 +7278,93 @@ and imports seven builtins (fs, path, os, crypto, child_process, url, module) �
 all seven exist in libexec/node-shim/modules/, but loader.cjs is CommonJS-
 oriented and whether it intercepts ESM `import` is UNVERIFIED. First experiment:
 run a trivial .mjs that imports node:fs under the shim and see.
+
+## ★ Phase 4 SEQUENCED 4b → 4c → 4a, and 4b is planned (user, 2026-09-17)
+
+Plan: `docs/superpowers/plans/2026-09-17-phase4b-hermeticity-verifier.md`
+(gitignored, so this entry is the durable copy of the decisions and the
+measurements behind them).
+
+**The ruling.** The 2026-09-14 design offered 4a → 4b → 4c and recorded it as
+un-ruled. Re-measured first, and **4a's stated urgency had evaporated**: the
+design said "a linux carve [is] sitting at this Mac's pinned provider path
+RIGHT NOW, so fixing it first makes every later measurement honest." `2.1.251`
+is now a correct `Mach-O arm64`. The defect is still real and structural but
+sits at five OLDER versions — `2.1.207 .210 .211 .215 .243` are x86-64 Linux
+ELF on an arm64 Mac — none of which any measurement runs against. So the
+argument for 4a-first no longer holds, and the order is **4b → 4c → 4a**:
+
+- **4b first** because it de-risks 4c. 4c bets 3,799 lines on "cmake builds our
+  C correctly on every host including Windows and cross-builds"; 4b tests that
+  exact pattern on ~450 lines of self-contained C first.
+- **4b is also the only part that ADDS coverage** rather than reshaping what
+  exists, and it is the one gate phase 5 could not reach.
+- **4a last** because it is now a structural cleanup with no live contamination.
+
+**The gap is 19 legs, not the design's "~17".** Every release leg with a
+`cross-file` or a Windows host, minus the 8 `static` ones whose skip is correct
+by construction; 15 of the 19 publish. Reproduce with `legsFor('release')`.
+Named in `test/depscan-legs.test.cjs`'s `WAS_BLIND` so a regression is legible.
+
+**§12 Q4 SETTLED — fat Mach-O reports PER SLICE.** darwin ships a 4-way
+universal (`DARWIN_SLICES`), so a merged list — `otool -L`'s default — lets one
+hermetic slice mask a non-hermetic one, which is the same gate-that-cannot-fail
+shape the phase exists to remove.
+
+**§12 Q1 SETTLED BY MEASUREMENT — the orchestration converts to CJS.** Probed
+against the pinned tjs under `libexec/node-shim/loader.cjs`:
+
+    .mjs ENTRY, `import fs from 'node:fs'`  -> SyntaxError
+    same file require()d (non-entry)        -> works, builtins resolve
+    non-entry file using import.meta.url    -> SyntaxError: import.meta only
+                                               valid in module code
+
+The transpile is guarded `if (!isEntry && esmDetect(src))` at `loader.cjs:481`,
+so an entry is ALWAYS evaluated as CJS, and the loader's own header says it is
+"NOT a general ESM implementation". Teaching it ESM means entry interception
+PLUS an `import.meta` implementation. Conversion is far cheaper: of 20
+`import.meta` hits in `build-tjs.mjs` only **2 are executable** (`:73`, `:75`) —
+the other 18 are inside the C-fixup string literals and comments that teach
+*txiki* about `import.meta` for the product. Both executable ones are
+boilerplate that DISAPPEARS in CJS (`createRequire(import.meta.url)` -> built-in
+`require`; `fileURLToPath(new URL('..', import.meta.url))` -> `__dirname`). No
+top-level await — the one `await` at `:272` is inside a function. The two
+sibling `.mjs` imports are 43 and 106 lines of plain `export function`.
+Ripple to fix in the same commit: `test/engine-api-floor.test.cjs:109` pins the
+exact import spelling, and `.github/actions/build-leg/action.yml:600,994` run
+`node scripts/engine-api-floor.mjs --emit-check`.
+
+**A DEFECT FOUND WHILE PLANNING, and it is the most important thing here.** The
+denylist asks `dep === root || dep.startsWith(root + '/')` against
+`PKG_MANAGER_ROOTS` — i.e. it assumes every dependency is an ABSOLUTE PATH.
+True for Mach-O (`LC_LOAD_DYLIB` records an install path) and **never for ELF**,
+where `DT_NEEDED` is a bare SONAME with no prefix in it at all. `ldd` only
+appeared to solve this by RESOLVING the SONAME through the build host's own
+loader — a fact about that machine, not about the file, and exactly the
+coupling being removed. Ported naively, the new gate would have been green on
+every ELF leg for the wrong reason: a NEW gate that cannot fail, introduced by
+the phase whose purpose is removing one. The fix is to read `DT_RPATH`/
+`DT_RUNPATH` (and Mach-O `LC_RPATH`) and deny on the search path, which is a
+property of the artifact and true on every machine — a STRONGER check than the
+one it replaces. It gets its own task rather than a line in another.
+
+**PROVEN before the plan was written, so the premise is a dated fact.** A ~40-
+line prototype ELF reader compiled on arm64 Darwin, run against real
+cross-built engines in `~/.cache/clode/templates`:
+
+| input | file(1) | prototype |
+|---|---|---|
+| `tjs-netbsd-sparc` | ELF 32-bit **MSB** SPARC, dynamic | `elf32be machine=2`, 5 deps: `libpthread.so.1 libkvm.so.6 libm.so.0 libgcc_s.so.1 libc.so.12` |
+| `tjs-linux-s390x` | ELF 64-bit **MSB** S/390, static | `elf64be machine=22`, `deps=0` |
+| `tjs-linux-arm64` | ELF 64-bit LSB aarch64, static | `elf64le machine=183`, `deps=0` |
+
+`netbsd-sparc` is a published, dynamically-linked leg that links **five
+libraries nothing has ever verified** — they turn out to be clean, but nothing
+knew that until this ran, which is the point.
+
+**And the tool being replaced fails silently.** On that same SPARC binary,
+`otool -L` prints "is not an object file" and **exits 0**. The existing
+`try { runOut(...) } catch` cannot see that; only the later `deps.length === 0`
+guard catches it, and only by accident of ordering. One more instrument that
+reported a non-answer as an answer — the class already filed under "five
+instruments, one mistake".
