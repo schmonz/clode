@@ -225,3 +225,140 @@ test('Mach-O LC_RPATH is reported as run=', () => {
   const runs = out.stdout.split('\n').filter((l) => l.startsWith('run=')).map((l) => l.slice(4));
   assert.deepStrictEqual(runs, ['/opt/homebrew/lib']);
 });
+
+// ---- Task 6 addendum: hardening items (a)-(g) carried forward from Tasks 2-5.
+
+test('(a) a DT_NEEDED value near UINT64_MAX cannot WRAP into a plausible name', () => {
+  // DEMONSTRATED by the controller, 2026-09-17: DT_NEEDED = 0xffffffffffffff00
+  // with an otherwise valid string table used to wrap `strtab_off + needed[i]`
+  // into a small in-bounds offset, printing an EMPTY dependency name and
+  // exiting 0 -- which the downstream denylist (only matches names starting
+  // with "/") reads as HERMETIC.
+  const out = scanFixture(binfmt.elf({ needed: [], rawNeeded: [0xffffffffffffff00n] }));
+  assert.strictEqual(out.status, 4, `expected malformed exit 4, got ${out.status}: stdout=${out.stdout}`);
+  assert.doesNotMatch(out.stdout, /^dep=/m, 'a wrapped offset must never reach a dep= line, empty or otherwise');
+  assert.doesNotMatch(out.stdout, /^deps=/m);
+});
+
+test('(a) a DIFFERENT wrap value proves the arithmetic guard, not just the control-char guard, is doing the work', () => {
+  // The demonstrated value above happens to wrap into this fixture's
+  // .dynamic table, whose first tag byte (DT_NEEDED = 1) is itself a control
+  // byte -- so item (c)'s put_dep guard would ALSO reject it, even with
+  // item (a)'s arithmetic guard removed. That would make the test above
+  // pass for the wrong reason. This value instead wraps to offset 8 (e_ident
+  // padding, a plain zero byte, no control-char involved): verified by
+  // hand that with ONLY the arithmetic guard removed, this reproduces the
+  // exact original bug (`dep=` empty, `deps=1`, exit=0) -- proving the
+  // arithmetic guard is independently load-bearing, not redundant with (c).
+  const out = scanFixture(binfmt.elf({ needed: [], rawNeeded: [0xfffffffffffffe08n] }));
+  assert.strictEqual(out.status, 4, `expected malformed exit 4, got ${out.status}: stdout=${out.stdout}`);
+  assert.doesNotMatch(out.stdout, /^dep=/m);
+  assert.doesNotMatch(out.stdout, /^deps=/m);
+});
+
+test('(b) ELF32 accepts a header exactly 0x34 bytes long, not just 0x40', () => {
+  // The old `len < 0x40` check rejected every real ELF32 binary -- ELF32's
+  // own header is only 0x34 bytes. Build the smallest possible valid ELF32:
+  // e_phnum=0 (no program headers, so nothing beyond the header itself is
+  // ever read), which is a real, parseable "statically linked" answer.
+  const HDR32 = 0x34;
+  const b = Buffer.alloc(HDR32, 0);
+  b[0] = 0x7f; b[1] = 0x45; b[2] = 0x4c; b[3] = 0x46;  // \x7fELF
+  b[4] = 1;                                             // EI_CLASS = ELFCLASS32
+  b[5] = 1;                                             // EI_DATA  = little-endian
+  b[6] = 1;                                             // EI_VERSION
+  binfmt.u(b, 0x12, 3, 2, false);                       // e_machine = EM_386
+  binfmt.u(b, 0x1c, 0, 4, false);                       // e_phoff (unused: e_phnum=0)
+  binfmt.u(b, 0x2a, 32, 2, false);                      // e_phentsize
+  binfmt.u(b, 0x2c, 0, 2, false);                       // e_phnum = 0
+  const out = scanFixture(b);
+  assert.strictEqual(out.status, 0, `expected a minimal ELF32 header to parse, got ${out.status}: ${out.stderr}`);
+  assert.strictEqual(out.format, 'elf32le');
+  assert.deepStrictEqual(out.counts, [0], 'no PT_DYNAMIC means statically linked, a real deps=0 answer');
+});
+
+test('(c) an ELF dependency name containing a newline cannot forge the output protocol', () => {
+  // DEMONSTRATED by the controller: DT_NEEDED = "/tmp/ok.so\ndeps=1\n
+  // format=elf64le machine=62" fabricated a fake deps=1 terminator mid-stream,
+  // splitting one dependency into a benign-looking group and hiding a second,
+  // real one. put_dep now refuses any control byte outright.
+  const out = scanFixture(binfmt.elf({
+    needed: ['/tmp/ok.so\ndeps=1\nformat=elf64le machine=62', '/opt/pkg/lib/libevil.so'],
+  }));
+  assert.strictEqual(out.status, 4, `expected malformed exit 4, got ${out.status}`);
+  assert.doesNotMatch(out.stdout, /^deps=/m,
+    'a forged protocol line must never reach stdout -- this must fail BEFORE printing any deps= line');
+});
+
+test('(c) an ELF dependency name containing a tab is refused the same way', () => {
+  const out = scanFixture(binfmt.elf({ needed: ['libc.so.6\tbad'] }));
+  assert.strictEqual(out.status, 4, `expected malformed exit 4, got ${out.status}`);
+});
+
+test('(c) an ordinary ELF dependency name with no control characters still parses', () => {
+  // The guard must not break the common path.
+  const out = scanFixture(binfmt.elf({ needed: ['libc.so.6'] }));
+  assert.strictEqual(out.status, 0, out.stderr);
+  assert.deepStrictEqual(out.deps, ['libc.so.6']);
+});
+
+test('(c) a DT_RUNPATH entry containing a newline is refused the same way as a dep name', () => {
+  // run= lines are exactly as capable of forging a protocol line as dep=
+  // lines are -- the guard on put_line covers both call sites.
+  const out = scanFixture(binfmt.elf({ needed: ['libc.so.6'], rpath: ['/opt/pkg/lib\ndeps=99'] }));
+  assert.strictEqual(out.status, 4, `expected malformed exit 4, got ${out.status}`);
+  assert.doesNotMatch(out.stdout, /^deps=99/m);
+});
+
+test('(d) Mach-O whose first load command has cmdsize=0 is MALFORMED, not an infinite loop', () => {
+  // `cmdsize < 8` rejects 0 outright -- which is also what stops `at +=
+  // cmdsize` from looping forever. Reviewed and fuzzed (218 inputs, 0 hangs)
+  // after Task 3, but never committed as a regression test until now.
+  const HDR64 = 32;              // bits:64 header: magic..flags (28) + reserved
+  const buf = binfmt.macho({ needed: ['/usr/lib/libSystem.B.dylib'] });
+  binfmt.u(buf, HDR64 + 4, 0, 4, false);   // corrupt the first command's cmdsize
+  const out = scanFixture(buf);
+  assert.strictEqual(out.status, 4, `expected malformed exit 4, got ${out.status}`);
+});
+
+test('(d) Mach-O whose first load command cmdsize overruns sizeofcmds is MALFORMED', () => {
+  const HDR64 = 32;
+  const base = binfmt.macho({ needed: ['/usr/lib/libSystem.B.dylib'] });  // sizeofcmds=52
+  // Pad the file so an oversized cmdsize still fits inside the FILE but not
+  // inside the sizeofcmds the header itself declares -- otherwise this would
+  // exercise the same "ran off the end of the file" branch as cmdsize=0 above.
+  const buf = Buffer.concat([base, Buffer.alloc(100, 0)]);
+  binfmt.u(buf, HDR64 + 4, 100, 4, false);  // > sizeofcmds (52), but within the padded file
+  const out = scanFixture(buf);
+  assert.strictEqual(out.status, 4, `expected malformed exit 4, got ${out.status}`);
+});
+
+test('(e) PE with a zero import-directory RVA prints deps=0 and exits 0 — imports nothing', () => {
+  // Distinct from "PE with an empty import directory" above: that fixture
+  // still has a nonzero RVA and walks to a table holding only the all-zero
+  // terminator. A zero RVA is scan_pe's OTHER "imports nothing" path, and no
+  // committed test reached it before this.
+  const out = scanFixture(binfmt.pe({ zeroImportDir: true }), 'noimports.exe');
+  assert.strictEqual(out.status, 0, out.stderr);
+  assert.deepStrictEqual(out.counts, [0]);
+});
+
+test('(f) a Mach-O ARM64E slice gets its own label, not a duplicate "arm64"', () => {
+  // /bin/sh on an ordinary Mac is 3-way fat (x86_64 + two arm64e slices, per
+  // `lipo -info`), and depscan used to print "slice=arm64" for BOTH arm64e
+  // slices -- an ambiguous label that defeats per-slice reporting (spec §12
+  // Q4: one hermetic slice must not be able to mask a non-hermetic one).
+  const out = scanFixture(binfmt.fat([
+    { cputype: binfmt.CPU_ARM64, buf: binfmt.macho({
+      cputype: binfmt.CPU_ARM64, cpusubtype: binfmt.CPU_SUBTYPE_ARM64E,
+      needed: ['/usr/lib/libSystem.B.dylib'],
+    }) },
+    { cputype: binfmt.CPU_ARM64, buf: binfmt.macho({
+      cputype: binfmt.CPU_ARM64, needed: ['/usr/lib/libSystem.B.dylib'],
+    }) },
+  ]));
+  assert.strictEqual(out.status, 0, out.stderr);
+  const slices = out.stdout.split('\n').filter((l) => l.startsWith('slice=')).map((l) => l.slice(6));
+  assert.deepStrictEqual(slices, ['arm64e', 'arm64'],
+    'arm64 and arm64e are the same cputype with different cpusubtypes and must not print the same label');
+});

@@ -30,7 +30,7 @@ function u(b, off, val, size, be) {
 // accidentally land on the right bytes.
 const ELF_PHOFF = 0x40, ELF_DYN = 0x100, ELF_STR = 0x200, ELF_BASE = 0x1000;
 
-function elf({ cls = 2, be = false, machine = 62, needed = [], strtabVaddr = null, rpath = [] } = {}) {
+function elf({ cls = 2, be = false, machine = 62, needed = [], strtabVaddr = null, rpath = [], rawNeeded = null } = {}) {
   const w = cls === 2 ? 8 : 4;
   const phesz = cls === 2 ? 56 : 32;
 
@@ -75,8 +75,14 @@ function elf({ cls = 2, be = false, machine = 62, needed = [], strtabVaddr = nul
     u(b, p0 + 24, 5, 4, be);                                    // p_flags
   }
 
+  // rawNeeded lets a test emit a DT_NEEDED VALUE directly (e.g. one near
+  // UINT64_MAX to probe overflow arithmetic) instead of an offset this
+  // builder computed from a real name -- an option rather than reshaping
+  // every caller that just wants an ordinary name.
+  const neededTags = rawNeeded !== null ? rawNeeded : nameOffsets;
+
   // ---- phdr[1]: PT_DYNAMIC
-  const dynCount = needed.length + 3 + (rpath.length ? 1 : 0);  // NEEDED* + RUNPATH? + STRTAB + STRSZ + NULL
+  const dynCount = neededTags.length + 3 + (rpath.length ? 1 : 0);  // NEEDED* + RUNPATH? + STRTAB + STRSZ + NULL
   const dynSize = dynCount * w * 2;
   const p1 = ELF_PHOFF + phesz;
   if (cls === 2) {
@@ -93,7 +99,7 @@ function elf({ cls = 2, be = false, machine = 62, needed = [], strtabVaddr = nul
 
   // ---- .dynamic: DT_NEEDED(1) per dep, DT_RUNPATH(29) if asked, then
   // DT_STRTAB(5), DT_STRSZ(10), DT_NULL(0).
-  const entries = nameOffsets.map((off) => [1, off]);
+  const entries = neededTags.map((off) => [1, off]);
   if (rpath.length) entries.push([29, runpathOffset]);
   entries.push([5, strtabVaddr === null ? ELF_BASE + ELF_STR : strtabVaddr]);
   entries.push([10, strLen]);
@@ -113,8 +119,11 @@ function elf({ cls = 2, be = false, machine = 62, needed = [], strtabVaddr = nul
 // itself -- not in a separate string table, which is why Mach-O needs no
 // address mapping at all.
 const CPU_X86_64 = 0x01000007, CPU_ARM64 = 0x0100000c, CPU_PPC = 18, CPU_I386 = 7;
+// CPU_TYPE_ARM64's cpusubtype: the SAME cputype as plain arm64, so a fat
+// binary can (and, on an ordinary Mac's /bin/sh, does) carry both.
+const CPU_SUBTYPE_ARM64E = 2;
 
-function macho({ bits = 64, be = false, cputype = CPU_ARM64, needed = [], rpath = [] } = {}) {
+function macho({ bits = 64, be = false, cputype = CPU_ARM64, cpusubtype = 0, needed = [], rpath = [] } = {}) {
   const hdrSize = bits === 64 ? 32 : 28;
   const cmds = needed.map((name) => {
     const nameBytes = Buffer.byteLength(name, 'latin1') + 1;   // + NUL
@@ -149,7 +158,7 @@ function macho({ bits = 64, be = false, cputype = CPU_ARM64, needed = [], rpath 
   // big-endian ppc binary has the SAME logical magic, laid out the other way.
   u(b, 0, bits === 64 ? 0xfeedfacf : 0xfeedface, 4, be);
   u(b, 4, cputype, 4, be);
-  u(b, 8, 0, 4, be);              // cpusubtype
+  u(b, 8, cpusubtype, 4, be);     // cpusubtype
   u(b, 12, 2, 4, be);             // filetype = MH_EXECUTE
   u(b, 16, allCmds.length, 4, be); // ncmds
   u(b, 20, sizeofcmds, 4, be);    // sizeofcmds
@@ -192,7 +201,7 @@ function fat(slices) {
 // data directory [1] is the import table), one section mapping RVA 0x1000 to
 // file offset 0x400, and the import descriptors + DLL names inside it.
 // PE is little-endian on every target Windows has ever shipped.
-function pe({ plus = true, machine = 0x8664, needed = [] } = {}) {
+function pe({ plus = true, machine = 0x8664, needed = [], zeroImportDir = false } = {}) {
   const PE_AT = 0x80, OPT_AT = PE_AT + 24;
   const optSize = plus ? 240 : 224;
   const SEC_AT = OPT_AT + optSize;
@@ -223,8 +232,13 @@ function pe({ plus = true, machine = 0x8664, needed = [] } = {}) {
   u(b, OPT_AT, plus ? 0x20b : 0x10b, 2, false);    // Magic
   const ddAt = OPT_AT + (plus ? 112 : 96);         // first data directory
   u(b, OPT_AT + (plus ? 108 : 92), 16, 4, false);  // NumberOfRvaAndSizes
-  u(b, ddAt + 8, IDATA_RVA, 4, false);             // [1] Import Table RVA
-  u(b, ddAt + 12, idataSize, 4, false);            // [1] Import Table size
+  // zeroImportDir emits a data directory [1] of {0,0} -- "this PE imports
+  // nothing" is a distinct code path in scan_pe from "imports an empty
+  // table": a nonzero RVA still walks to a table holding just the all-zero
+  // terminator entry, but a zero RVA short-circuits before ever reaching the
+  // section table at all.
+  u(b, ddAt + 8, zeroImportDir ? 0 : IDATA_RVA, 4, false);   // [1] Import Table RVA
+  u(b, ddAt + 12, zeroImportDir ? 0 : idataSize, 4, false);  // [1] Import Table size
 
   // ---- Section table: one section carrying the import data.
   b.write('.idata\0\0', SEC_AT, 'latin1');
@@ -244,4 +258,4 @@ function pe({ plus = true, machine = 0x8664, needed = [] } = {}) {
   return b;
 }
 
-module.exports = { u, elf, macho, fat, pe, ELF_BASE, ELF_STR, CPU_X86_64, CPU_ARM64, CPU_PPC, CPU_I386 };
+module.exports = { u, elf, macho, fat, pe, ELF_BASE, ELF_STR, CPU_X86_64, CPU_ARM64, CPU_PPC, CPU_I386, CPU_SUBTYPE_ARM64E };

@@ -85,19 +85,32 @@ test('windows: depscan agrees with dumpbin /dependents', { skip: process.platfor
 // them cached. These are the binaries otool/ldd genuinely CANNOT read, so
 // there is no second opinion to compare against -- the assertion is only that
 // depscan parses them and says something definite.
-test('cached cross-built engine templates parse to a definite answer', () => {
+test('cached cross-built engine templates parse to a definite answer', (t) => {
   const fs = require('node:fs');
   const os = require('node:os');
   const path = require('node:path');
   const dir = path.join(os.homedir(), '.cache', 'clode', 'templates');
-  if (!fs.existsSync(dir)) return;                       // a cache, never required
+  // A bare `return` here passes in CI having examined NOTHING, with no
+  // diagnostic saying so -- ~/.cache/clode/templates exists on a dev box
+  // that has fetched engines and does NOT exist on a CI runner, so this is
+  // exactly the "a skipped oracle is not a pass" shape this repo has filed
+  // repeatedly, landing in the one environment where nobody is watching the
+  // output. t.skip() with a reason makes the run report "skipped, because
+  // X" instead of a silent green.
+  if (!fs.existsSync(dir)) {
+    t.skip(`no template cache at ${dir} — this oracle only runs on a box that has fetched engines`);
+    return;
+  }
   // A cosmo APE is an MZ header that is NOT a PE -- depscan reports it as an
   // unrecognized container, correctly. Exclude it by name rather than
   // loosening the assertion below, which would let a real parse failure pass.
   const templates = fs.readdirSync(dir)
     .filter((f) => f.startsWith('tjs-') && !f.includes('cosmo'))
     .slice(0, 12);
-  if (templates.length === 0) return;
+  if (templates.length === 0) {
+    t.skip(`no tjs-* templates found in ${dir}`);
+    return;
+  }
   let checked = 0;
   for (const t of templates) {
     const r = spawnSync(depscanExe(), [path.join(dir, t)], { encoding: 'utf8' });

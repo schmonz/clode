@@ -74,16 +74,38 @@ static unsigned char *slurp(const char *path, size_t *len) {
   return buf;
 }
 
-/* Print a NUL-terminated string that must lie wholly inside the buffer.
- * Returns 0 if it runs off the end — a dependency name we cannot read is a
- * malformed file, not an absent dependency. */
-static int put_dep(const unsigned char *b, size_t len, unsigned long long off) {
+/* Print "<tag>=<string>" for a NUL-terminated string that must lie wholly
+ * inside the buffer. Returns 0 if it runs off the end — a name we cannot
+ * read is a malformed file, not an absent dependency or search path.
+ *
+ * ALSO refuses any control byte (< 0x20, or 0x7f/DEL). depscan's output is a
+ * LINE-ORIENTED PROTOCOL, and this string is raw file bytes printed straight
+ * into it: a name containing '\n' can FORGE a fake "deps=1\n" terminator
+ * mid-stream, splitting one real dependency into a benign-looking group and
+ * hiding a real one in a second, fabricated group. DEMONSTRATED 2026-09-17 by
+ * the controller with DT_NEEDED = "/tmp/ok.so\ndeps=1\nformat=elf64le
+ * machine=62". Task 7's parseDepscan resists this via a dep-count consistency
+ * check, but that is defence-in-depth, NOT a reason to leave this open -- do
+ * not delete that check believing this guard makes it redundant; a
+ * verification tool whose OWN OUTPUT FORMAT can be reshaped by its input is a
+ * defect on its own terms. "I cannot report this unambiguously" is the
+ * honest answer, matching the rule that an unreadable name is malformed, not
+ * absent. This applies equally to a run= search-path entry, which is exactly
+ * as capable of forging a line as a dep= name is. */
+static int put_line(const char *tag, const unsigned char *b, size_t len, unsigned long long off) {
   unsigned long long i;
   if (off >= (unsigned long long)len) return 0;
-  for (i = off; i < (unsigned long long)len; i++) if (!b[i]) break;
+  for (i = off; i < (unsigned long long)len; i++) {
+    if (!b[i]) break;
+    if (b[i] < 0x20 || b[i] == 0x7f) return 0;
+  }
   if (i >= (unsigned long long)len) return 0;
-  printf("dep=%s\n", (const char *)(b + off));
+  printf("%s=%s\n", tag, (const char *)(b + off));
   return 1;
+}
+
+static int put_dep(const unsigned char *b, size_t len, unsigned long long off) {
+  return put_line("dep", b, len, off);
 }
 
 static int scan_elf(const unsigned char *b, size_t len);
@@ -144,7 +166,15 @@ static long long elf_v2o(const unsigned char *b, size_t len, int cls, int be,
     off = rd(b + ph + o_off, w, be);
     va  = rd(b + ph + o_vad, w, be);
     fsz = rd(b + ph + o_fsz, w, be);
-    if (vaddr >= va && vaddr - va < fsz) return (long long)(vaddr - va + off);
+    if (vaddr >= va && vaddr - va < fsz) {
+      unsigned long long delta = vaddr - va;
+      /* p_offset comes straight from the file and can be near UINT64_MAX;
+       * guard the addition itself so a hostile value cannot WRAP into a
+       * small, plausible-looking file offset -- the same class of defect
+       * as the DT_NEEDED addition in scan_elf below. */
+      if (off > (unsigned long long)-1 - delta) return -1;
+      return (long long)(delta + off);
+    }
   }
   return -1;
 }
@@ -161,11 +191,17 @@ static int scan_elf(const unsigned char *b, size_t len) {
   unsigned long long runpath_off = 0;
   int have_runpath = 0;
 
-  if (len < 0x40) return 4;
+  /* Just enough of e_ident (16 bytes) to learn the class before deciding how
+   * much header we actually need -- an ELF64 header is 0x40 bytes, but an
+   * ELF32 header is only 0x34; requiring 0x40 for both rejected every real
+   * ELF32 binary shorter than that, which no real binary is, but the check
+   * should say what it means. */
+  if (len < 16) return 4;
   cls = b[4];
   be  = (b[5] == 2);
   if ((cls != 1 && cls != 2) || (b[5] != 1 && b[5] != 2)) return 4;
   w = (cls == 2) ? 8 : 4;
+  if (len < (size_t)(cls == 2 ? 0x40 : 0x34)) return 4;
 
   phoff_at = (cls == 2) ? 0x20 : 0x1c;
   phesz_at = (cls == 2) ? 0x36 : 0x2a;
@@ -226,20 +262,37 @@ static int scan_elf(const unsigned char *b, size_t len) {
        this case. */
     unsigned long long p;
     if (strtab_off < 0) return 4;
+    /* strtab_off and runpath_off both come straight from the file; guard the
+     * addition itself (not just the final offset) so a hostile value near
+     * UINT64_MAX cannot WRAP into a small in-bounds offset. Written as
+     * inb() already is -- subtraction, not addition -- so the check itself
+     * cannot overflow. */
+    if (!inb((unsigned long long)strtab_off, runpath_off, len)) return 4;
     p = (unsigned long long)strtab_off + runpath_off;
-    if (p >= (unsigned long long)len) return 4;
     /* The list is colon-separated inside ONE string; print an entry per
      * element so the caller never has to re-split it. */
     while (p < (unsigned long long)len && b[p]) {
-      unsigned long long q = p;
+      unsigned long long q = p, k;
       while (q < (unsigned long long)len && b[q] && b[q] != ':') q++;
       if (q >= (unsigned long long)len) return 4;
+      /* A control byte (esp. '\n') in a search-path entry could forge our
+       * own line-oriented output the same way put_dep guards against for
+       * dependency names -- refuse it rather than print it. */
+      for (k = p; k < q; k++) if (b[k] < 0x20 || b[k] == 0x7f) return 4;
       printf("run=%.*s\n", (int)(q - p), (const char *)(b + p));
       p = (b[q] == ':') ? q + 1 : q;
     }
   }
 
   for (i = 0; i < (unsigned)nneeded; i++) {
+    /* Same overflow guard as the DT_RUNPATH addition above: needed[i] is a
+     * file-supplied offset that can be near UINT64_MAX. DEMONSTRATED
+     * 2026-09-17: DT_NEEDED = 0xffffffffffffff00 wrapped to a small in-bounds
+     * offset and printed an EMPTY dependency name, exiting 0 -- which the
+     * downstream denylist (only matching names starting with "/") reads as
+     * HERMETIC. Guard the arithmetic, not the empty-name symptom: a wrap can
+     * equally land on bytes forming a plausible name instead. */
+    if (!inb((unsigned long long)strtab_off, needed[i], len)) return 4;
     if (!put_dep(b, len, (unsigned long long)strtab_off + needed[i])) return 4;
     ndeps++;
   }
@@ -259,10 +312,24 @@ static int scan_elf(const unsigned char *b, size_t len) {
 #define LC_LAZY_LOAD_DYLIB_  0x20
 #define LC_LOAD_UPWARD_DYLIB_ 0x80000023
 
-static const char *cpu_name(unsigned long long t) {
+/* cpusubtype for CPU_TYPE_ARM64; the top byte holds a pointer-authentication
+ * ABI version on newer toolchains, unrelated to WHICH subtype this is, so it
+ * is masked off before comparing. */
+#define CPU_SUBTYPE_ARM64E_ 2
+
+static const char *cpu_name(unsigned long long t, unsigned long long subtype) {
   switch (t) {
     case 0x01000007ULL: return "x86_64";
-    case 0x0100000cULL: return "arm64";
+    case 0x0100000cULL:
+      /* arm64 and arm64e are the SAME cputype with different cpusubtypes,
+       * and DO coexist in one ordinary fat binary: /bin/sh on a stock Mac is
+       * `x86_64 arm64e arm64e.x1` per lipo -info, so two of its three slices
+       * are BOTH cputype arm64. Without this, depscan printed "slice=arm64"
+       * for both, an ambiguous label that defeats per-slice reporting (spec
+       * §12 Q4: one hermetic slice must not be able to mask a non-hermetic
+       * one) and blocks lining slices up against `otool -arch <name>` by
+       * name. */
+      return (subtype & 0x00ffffffULL) == CPU_SUBTYPE_ARM64E_ ? "arm64e" : "arm64";
     case 7ULL:          return "i386";
     case 12ULL:         return "arm";
     case 18ULL:         return "ppc";
@@ -284,7 +351,7 @@ static int scan_macho_thin(const unsigned char *b, size_t len,
                            int emit_format) {
   unsigned long long magic_le, magic_be, magic;
   int be, bits;
-  unsigned long long hdrsz, ncmds, sizeofcmds, at, cputype;
+  unsigned long long hdrsz, ncmds, sizeofcmds, at, cputype, cpusubtype;
   unsigned i;
   int ndeps = 0;
 
@@ -299,11 +366,12 @@ static int scan_macho_thin(const unsigned char *b, size_t len,
   if (!inb(base, hdrsz, len) || size < hdrsz) return 4;
 
   cputype    = rd(b + base + 4, 4, be);
+  cpusubtype = rd(b + base + 8, 4, be);
   ncmds      = rd(b + base + 16, 4, be);
   sizeofcmds = rd(b + base + 20, 4, be);
 
-  if (emit_format) printf("format=macho%d%s machine=%s\n", bits, be ? "be" : "le", cpu_name(cputype));
-  else printf("slice=%s\n", cpu_name(cputype));
+  if (emit_format) printf("format=macho%d%s machine=%s\n", bits, be ? "be" : "le", cpu_name(cputype, cpusubtype));
+  else printf("slice=%s\n", cpu_name(cputype, cpusubtype));
 
   if (sizeofcmds > size - hdrsz || !inb(base + hdrsz, sizeofcmds, len)) return 4;
 
@@ -328,8 +396,11 @@ static int scan_macho_thin(const unsigned char *b, size_t len,
       if (cmdsize < 12) return 4;
       poff = rd(b + at + 8, 4, be);
       if (poff >= cmdsize) return 4;
-      if (at + poff >= (unsigned long long)len) return 4;
-      printf("run=%s\n", (const char *)(b + at + poff));
+      /* put_line finds its own NUL and bounds-checks against `len`, rather
+       * than trusting printf("%s") to stop at a terminator this file may not
+       * actually have, and refuses a control byte for the reason documented
+       * on put_line/put_dep above. */
+      if (!put_line("run", b, len, at + poff)) return 4;
     }
     at += cmdsize;
   }
