@@ -217,7 +217,114 @@ static int scan_elf(const unsigned char *b, size_t len) {
   return 0;
 }
 
-/* Tasks 3 and 4 fill these in. Returning 3 keeps the "unrecognized" contract
+/* ---- Mach-O ---------------------------------------------------------------
+ * Each LC_LOAD_DYLIB command carries its name INLINE, at `name_offset` bytes
+ * from the start of that command -- no string table and no address mapping.
+ * A fat container's own header is ALWAYS big-endian regardless of its slices,
+ * the one place in the format where byte order is fixed rather than declared.
+ */
+#define LC_LOAD_DYLIB_       0x0c
+#define LC_LOAD_WEAK_DYLIB_  0x80000018
+#define LC_REEXPORT_DYLIB_   0x8000001f
+#define LC_LAZY_LOAD_DYLIB_  0x20
+#define LC_LOAD_UPWARD_DYLIB_ 0x80000023
+
+static const char *cpu_name(unsigned long long t) {
+  switch (t) {
+    case 0x01000007ULL: return "x86_64";
+    case 0x0100000cULL: return "arm64";
+    case 7ULL:          return "i386";
+    case 12ULL:         return "arm";
+    case 18ULL:         return "ppc";
+    case 0x01000012ULL: return "ppc64";
+    default:            return "unknown";
+  }
+}
+
+static int is_dylib_cmd(unsigned long long cmd) {
+  return cmd == LC_LOAD_DYLIB_ || cmd == LC_LOAD_WEAK_DYLIB_ ||
+         cmd == LC_REEXPORT_DYLIB_ || cmd == LC_LAZY_LOAD_DYLIB_ ||
+         cmd == LC_LOAD_UPWARD_DYLIB_;
+}
+
+/* One thin Mach-O at `base`, extending `size` bytes. `emit_format` is 0 for a
+ * slice inside a fat container (which prints slice= instead). */
+static int scan_macho_thin(const unsigned char *b, size_t len,
+                           unsigned long long base, unsigned long long size,
+                           int emit_format) {
+  unsigned long long magic_le, magic_be, magic;
+  int be, bits;
+  unsigned long long hdrsz, ncmds, sizeofcmds, at, cputype;
+  unsigned i;
+  int ndeps = 0;
+
+  if (!inb(base, 28, len) || size < 28) return 4;
+  magic_le = rd(b + base, 4, 0);
+  magic_be = rd(b + base, 4, 1);
+  if (magic_le == 0xfeedfaceULL || magic_le == 0xfeedfacfULL) { be = 0; magic = magic_le; }
+  else if (magic_be == 0xfeedfaceULL || magic_be == 0xfeedfacfULL) { be = 1; magic = magic_be; }
+  else return 4;
+  bits = (magic == 0xfeedfacfULL) ? 64 : 32;
+  hdrsz = (bits == 64) ? 32 : 28;
+  if (!inb(base, hdrsz, len) || size < hdrsz) return 4;
+
+  cputype    = rd(b + base + 4, 4, be);
+  ncmds      = rd(b + base + 16, 4, be);
+  sizeofcmds = rd(b + base + 20, 4, be);
+
+  if (emit_format) printf("format=macho%d%s machine=%s\n", bits, be ? "be" : "le", cpu_name(cputype));
+  else printf("slice=%s\n", cpu_name(cputype));
+
+  if (sizeofcmds > size - hdrsz || !inb(base + hdrsz, sizeofcmds, len)) return 4;
+
+  at = base + hdrsz;
+  for (i = 0; i < ncmds; i++) {
+    unsigned long long cmd, cmdsize, noff;
+    if (!inb(at, 8, len) || at + 8 > base + hdrsz + sizeofcmds) return 4;
+    cmd     = rd(b + at, 4, be);
+    cmdsize = rd(b + at + 4, 4, be);
+    /* A zero or unaligned cmdsize would loop forever or walk off; both mean
+     * the file is lying about its own structure. */
+    if (cmdsize < 8 || (cmdsize % 4) != 0) return 4;
+    if (!inb(at, cmdsize, len) || at + cmdsize > base + hdrsz + sizeofcmds) return 4;
+    if (is_dylib_cmd(cmd)) {
+      if (cmdsize < 24) return 4;
+      noff = rd(b + at + 8, 4, be);
+      if (noff >= cmdsize) return 4;
+      if (!put_dep(b, len, at + noff)) return 4;
+      ndeps++;
+    }
+    at += cmdsize;
+  }
+  printf("deps=%d\n", ndeps);
+  return 0;
+}
+
+static int scan_macho(const unsigned char *b, size_t len) {
+  unsigned long long magic_be = rd(b, 4, 1);
+  if (magic_be == 0xcafebabeULL || magic_be == 0xcafebabfULL) {
+    /* Fat. Header and arch table are big-endian, always. */
+    int wide = (magic_be == 0xcafebabfULL);          /* FAT_MAGIC_64 */
+    unsigned long long nfat, i, archsz = wide ? 32 : 20;
+    if (!inb(0, 8, len)) return 4;
+    nfat = rd(b + 4, 4, 1);
+    if (nfat > 64) return 4;                          /* not a real universal binary */
+    if (!inb(8, nfat * archsz, len)) return 4;
+    printf("format=macho-fat slices=%llu\n", nfat);
+    for (i = 0; i < nfat; i++) {
+      unsigned long long a = 8 + i * archsz;
+      unsigned long long off = wide ? rd(b + a + 8, 8, 1) : rd(b + a + 8, 4, 1);
+      unsigned long long sz  = wide ? rd(b + a + 16, 8, 1) : rd(b + a + 12, 4, 1);
+      int rc;
+      if (!inb(off, sz, len)) return 4;
+      rc = scan_macho_thin(b, len, off, sz, 0);
+      if (rc != 0) return rc;
+    }
+    return 0;
+  }
+  return scan_macho_thin(b, len, 0, (unsigned long long)len, 1);
+}
+
+/* Task 4 fills this in. Returning 3 keeps the "unrecognized" contract
  * honest in the meantime — it must never return 0 without printing deps=. */
-static int scan_macho(const unsigned char *b, size_t len) { (void)b; (void)len; return 3; }
 static int scan_pe(const unsigned char *b, size_t len) { (void)b; (void)len; return 3; }

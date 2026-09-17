@@ -101,4 +101,71 @@ function elf({ cls = 2, be = false, machine = 62, needed = [], strtabVaddr = nul
   return b;
 }
 
-module.exports = { u, elf, ELF_BASE, ELF_STR };
+// ---- Mach-O ----------------------------------------------------------------
+// Layout: header, then LC_LOAD_DYLIB commands back to back. Each dylib_command
+// carries its name INLINE, at `name_offset` bytes from the start of the command
+// itself -- not in a separate string table, which is why Mach-O needs no
+// address mapping at all.
+const CPU_X86_64 = 0x01000007, CPU_ARM64 = 0x0100000c, CPU_PPC = 18, CPU_I386 = 7;
+
+function macho({ bits = 64, be = false, cputype = CPU_ARM64, needed = [] } = {}) {
+  const hdrSize = bits === 64 ? 32 : 28;
+  const cmds = needed.map((name) => {
+    const nameBytes = Buffer.byteLength(name, 'latin1') + 1;   // + NUL
+    // dylib_command is 24 bytes, then the name, then pad to a 4-byte multiple.
+    const size = Math.ceil((24 + nameBytes) / 4) * 4;
+    const c = Buffer.alloc(size, 0);
+    u(c, 0, 0x0c, 4, be);       // cmd = LC_LOAD_DYLIB
+    u(c, 4, size, 4, be);       // cmdsize
+    u(c, 8, 24, 4, be);         // dylib.name.offset -- from the START of this command
+    u(c, 12, 0, 4, be);         // timestamp
+    u(c, 16, 0x10000, 4, be);   // current_version
+    u(c, 20, 0x10000, 4, be);   // compatibility_version
+    c.write(name, 24, 'latin1');
+    return c;
+  });
+  const sizeofcmds = cmds.reduce((n, c) => n + c.length, 0);
+  const b = Buffer.alloc(hdrSize + sizeofcmds, 0);
+  // MH_MAGIC (32-bit) / MH_MAGIC_64 stored in the file's own byte order: a
+  // big-endian ppc binary has the SAME logical magic, laid out the other way.
+  u(b, 0, bits === 64 ? 0xfeedfacf : 0xfeedface, 4, be);
+  u(b, 4, cputype, 4, be);
+  u(b, 8, 0, 4, be);              // cpusubtype
+  u(b, 12, 2, 4, be);             // filetype = MH_EXECUTE
+  u(b, 16, cmds.length, 4, be);   // ncmds
+  u(b, 20, sizeofcmds, 4, be);    // sizeofcmds
+  u(b, 24, 0, 4, be);             // flags
+  let at = hdrSize;
+  for (const c of cmds) { c.copy(b, at); at += c.length; }
+  return b;
+}
+
+// A fat (universal) container. The fat header and every fat_arch are ALWAYS
+// big-endian on disk, whatever the slices inside them are -- the one place in
+// Mach-O where byte order is fixed rather than declared.
+function fat(slices) {
+  const HDR = 8, ARCH = 20;
+  const tableEnd = HDR + ARCH * slices.length;
+  // Page-align each slice, as the real linker does.
+  let off = Math.ceil(tableEnd / 4096) * 4096;
+  const placed = slices.map((s) => {
+    const at = off;
+    off = Math.ceil((off + s.buf.length) / 4096) * 4096;
+    return { ...s, at };
+  });
+  const b = Buffer.alloc(off, 0);
+  u(b, 0, 0xcafebabe, 4, true);          // FAT_MAGIC, big-endian
+  u(b, 4, slices.length, 4, true);       // nfat_arch
+  placed.forEach((s, i) => {
+    const a = HDR + ARCH * i;
+    u(b, a + 0, s.cputype, 4, true);
+    u(b, a + 4, s.cpusubtype || 0, 4, true);
+    u(b, a + 8, s.at, 4, true);
+    u(b, a + 12, s.buf.length, 4, true);
+    u(b, a + 16, 12, 4, true);           // align = 2^12
+    s.buf.copy(b, s.at);
+  });
+  return b;
+}
+
+module.exports = { u, elf, macho, fat, ELF_BASE, ELF_STR, CPU_X86_64, CPU_ARM64, CPU_PPC, CPU_I386 };

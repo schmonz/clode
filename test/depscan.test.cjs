@@ -112,3 +112,50 @@ test('ELF whose DT_STRTAB points outside any PT_LOAD is MALFORMED, not empty', (
   assert.deepStrictEqual(out.counts, [],
     'an unresolvable string table must NOT print a deps= line');
 });
+
+test('Mach-O 64-bit little-endian: reads LC_LOAD_DYLIB', () => {
+  const out = scanFixture(binfmt.macho({
+    bits: 64, be: false, cputype: binfmt.CPU_ARM64,
+    needed: ['/usr/lib/libSystem.B.dylib', '/usr/lib/libc++.1.dylib'],
+  }));
+  assert.strictEqual(out.status, 0, out.stderr);
+  assert.strictEqual(out.format, 'macho64le');
+  assert.deepStrictEqual(out.deps, ['/usr/lib/libSystem.B.dylib', '/usr/lib/libc++.1.dylib']);
+  assert.deepStrictEqual(out.counts, [2]);
+});
+
+test('Mach-O 32-bit BIG-endian: the darwin-ppc case', () => {
+  // Tiger PPC is a real published run-target, cross-built on arm64. No otool
+  // on the build host can read this file.
+  const out = scanFixture(binfmt.macho({
+    bits: 32, be: true, cputype: binfmt.CPU_PPC, needed: ['/usr/lib/libSystem.B.dylib'],
+  }));
+  assert.strictEqual(out.status, 0, out.stderr);
+  assert.strictEqual(out.format, 'macho32be');
+  assert.deepStrictEqual(out.deps, ['/usr/lib/libSystem.B.dylib']);
+});
+
+test('fat Mach-O reports EVERY slice separately, not a merged list', () => {
+  // The load-bearing test for spec §12 Q4. One hermetic slice must not be
+  // able to hide a non-hermetic one.
+  const out = scanFixture(binfmt.fat([
+    { cputype: binfmt.CPU_ARM64, buf: binfmt.macho({ bits: 64, cputype: binfmt.CPU_ARM64, needed: ['/usr/lib/libSystem.B.dylib'] }) },
+    { cputype: binfmt.CPU_PPC, buf: binfmt.macho({ bits: 32, be: true, cputype: binfmt.CPU_PPC, needed: ['/opt/pkg/lib/libintl.8.dylib'] }) },
+  ]));
+  assert.strictEqual(out.status, 0, out.stderr);
+  assert.match(out.stdout, /^format=macho-fat slices=2$/m);
+  const slices = out.stdout.split('\n').filter((l) => l.startsWith('slice=')).map((l) => l.slice(6));
+  assert.strictEqual(slices.length, 2, `expected 2 slice= headers, got ${slices.length}`);
+  assert.deepStrictEqual(out.counts, [1, 1], 'each slice reports its own count');
+  assert.deepStrictEqual(out.deps, ['/usr/lib/libSystem.B.dylib', '/opt/pkg/lib/libintl.8.dylib']);
+});
+
+test('fat Mach-O whose slice offset runs past the end is MALFORMED', () => {
+  const buf = binfmt.fat([
+    { cputype: binfmt.CPU_ARM64, buf: binfmt.macho({ needed: ['/usr/lib/libSystem.B.dylib'] }) },
+  ]);
+  // Corrupt the first fat_arch's offset field (big-endian, at byte 16).
+  binfmt.u(buf, 16, 0x7fffffff, 4, true);
+  const out = scanFixture(buf);
+  assert.strictEqual(out.status, 4, `expected malformed exit 4, got ${out.status}`);
+});
