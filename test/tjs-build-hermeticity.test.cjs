@@ -12,9 +12,15 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { stripLineComments } = require('./source-scan.cjs');
 
 const repo = path.join(__dirname, '..');
 const buildTjsSrc = fs.readFileSync(path.join(repo, 'scripts/build-tjs.mjs'), 'utf8');
+// PKG_MANAGER_ROOTS and the verdict functions moved to scripts/depscan-verdict.cjs
+// (phase 4b) so the build and this suite run the SAME logic. The array literal
+// tests below read it THERE now, and assert build-tjs.mjs no longer keeps a
+// second copy — the drift that broke native NetBSD is what made it one list.
+const verdictSrc = fs.readFileSync(path.join(repo, 'scripts/depscan-verdict.cjs'), 'utf8');
 
 // ---- HALF 1: CMAKE_IGNORE_PREFIX_PATH, native builds only -----------------
 
@@ -23,12 +29,12 @@ test('build-tjs: pushes CMAKE_IGNORE_PREFIX_PATH with every package-manager pref
   // Anchored to the actual PKG_MANAGER_ROOTS array literal (same pattern as
   // the denylist test below), NOT "appears anywhere in the file" — a naive
   // whole-file search passes even if the array itself is emptied, because
-  // this file's own explanatory comments list all the prefixes in prose.
-  // See PROOF below.
-  const constStart = buildTjsSrc.indexOf('const PKG_MANAGER_ROOTS = [');
-  assert.ok(constStart > -1, 'const PKG_MANAGER_ROOTS = [...] not found');
-  const constEnd = buildTjsSrc.indexOf('\n', constStart);
-  const constLine = buildTjsSrc.slice(constStart, constEnd);
+  // the explanatory comments list all the prefixes in prose. See PROOF below.
+  // The literal lives in scripts/depscan-verdict.cjs as of phase 4b.
+  const constStart = verdictSrc.indexOf('const PKG_MANAGER_ROOTS = [');
+  assert.ok(constStart > -1, 'const PKG_MANAGER_ROOTS = [...] not found in scripts/depscan-verdict.cjs');
+  const constEnd = verdictSrc.indexOf('\n', constStart);
+  const constLine = verdictSrc.slice(constStart, constEnd);
   for (const prefix of ['/opt/pkg', '/opt/homebrew', '/usr/local', '/opt/local', '/sw', '/usr/pkg']) {
     assert.ok(constLine.includes(`'${prefix}'`),
       `expected ${prefix} in the PKG_MANAGER_ROOTS array literal, got: ${constLine}`);
@@ -40,18 +46,25 @@ test('build-tjs: pushes CMAKE_IGNORE_PREFIX_PATH with every package-manager pref
   // staying present in the dependency-check half, breaking native NetBSD).
   assert.match(buildTjsSrc, /cmakeArgs\.push\(`-DCMAKE_IGNORE_PREFIX_PATH=\$\{PKG_MANAGER_ROOTS\.join/,
     'the CMAKE_IGNORE_PREFIX_PATH push must read PKG_MANAGER_ROOTS, not a separate hardcoded list');
+  // ...and that it gets that constant by IMPORT, with no second copy of its own.
+  assert.match(buildTjsSrc, /\{[^}]*PKG_MANAGER_ROOTS[^}]*\}\s*=\s*require\(['"]\.\/depscan-verdict\.cjs['"]\)/,
+    'build-tjs.mjs must import PKG_MANAGER_ROOTS from scripts/depscan-verdict.cjs');
+  assert.doesNotMatch(buildTjsSrc, /const PKG_MANAGER_ROOTS = \[/,
+    'build-tjs.mjs must import the roots, not redefine them — one definition, or the cmake '
+    + 'ignore-list and the denylist drift apart again');
 });
 
-// PROOF that the test above is not a tautology: run it against a build-tjs.mjs
-// text with PKG_MANAGER_ROOTS emptied to `[]`. If this fails to fail, the
-// test above is worthless (it would also pass with the real protection
-// deleted). See task-14-report.md for the actual node output of this block.
+// PROOF that the test above is not a tautology: run it against a
+// depscan-verdict.cjs text with PKG_MANAGER_ROOTS emptied to `[]`. If this
+// fails to fail, the test above is worthless (it would also pass with the real
+// protection deleted). See task-14-report.md for the actual node output of this
+// block.
 test('build-tjs: PROOF — the prefix-list test above actually fails against an emptied constant', () => {
-  const emptied = buildTjsSrc.replace(
+  const emptied = verdictSrc.replace(
     /const PKG_MANAGER_ROOTS = \[[^\]]*\];/,
     'const PKG_MANAGER_ROOTS = [];',
   );
-  assert.notStrictEqual(emptied, buildTjsSrc, 'the emptying replace must actually match something');
+  assert.notStrictEqual(emptied, verdictSrc, 'the emptying replace must actually match something');
   const constStart = emptied.indexOf('const PKG_MANAGER_ROOTS = [');
   const constEnd = emptied.indexOf('\n', constStart);
   const constLine = emptied.slice(constStart, constEnd);
@@ -89,7 +102,7 @@ test('build-tjs: an old cmake (<3.23) does not silently skip the protection — 
 
 // Behavioral: extract the ACTUAL cmakeVersionSupportsIgnorePrefixPath(major,
 // minor) function out of build-tjs.mjs (brace-balanced, via extractFunction
-// below — the same machinery already used for parseOtoolDeps/parseLddDeps)
+// below — the same machinery already used for checkHermeticDeps)
 // and run it directly, rather than hand-copying the comparison into the
 // test. A hand copy tracks nothing: flipping `>= 23` to `< 23` (or `>` to
 // `>=` on the major-version branch) in build-tjs.mjs would leave a
@@ -108,38 +121,71 @@ test('build-tjs: version-gate arithmetic accepts 3.23+, rejects older', () => {
 
 // ---- HALF 2: post-build dependency check -----------------------------------
 
+// The shipped checkHermeticDeps, as text. It is the LAST function in
+// build-tjs.mjs, so the terminator is the comment block that follows it.
+function hermeticFnSrc() {
+  const fnStart = buildTjsSrc.indexOf('function checkHermeticDeps');
+  assert.ok(fnStart > -1, 'function checkHermeticDeps not found in build-tjs.mjs');
+  const fnEnd = buildTjsSrc.indexOf('\n// CLODE_TJS_SMOKE=off', fnStart);
+  assert.ok(fnEnd > -1, 'the CLODE_TJS_SMOKE comment that terminates checkHermeticDeps moved');
+  return buildTjsSrc.slice(fnStart, fnEnd);
+}
+
 test('build-tjs: hermeticity dependency check exists and is invoked after the build', () => {
   assert.match(buildTjsSrc, /function checkHermeticDeps/);
   assert.match(buildTjsSrc, /checkHermeticDeps\(path\.join\(outDir, outName\)\)/);
 });
 
-test('build-tjs: dependency check covers both otool (darwin) and ldd (ELF) paths', () => {
-  assert.match(buildTjsSrc, /otool/);
-  assert.match(buildTjsSrc, /-L['"]?,?\s*enginePath|['"]-L['"],\s*enginePath/);
-  assert.match(buildTjsSrc, /\bldd\b/);
-  assert.match(buildTjsSrc, /function parseOtoolDeps/);
-  assert.match(buildTjsSrc, /function parseLddDeps/);
+test('build-tjs: the dependency check reads the binary via depscan, not via otool/ldd', () => {
+  // Phase 4b. otool/ldd could only inspect a binary built FOR this machine,
+  // which is why 19 of 42 release legs skipped this check entirely. depscan
+  // parses the ELF/Mach-O/PE dependency table out of the file, so the build
+  // host stops mattering. Assert the WIRING (build it, run it, parse it,
+  // judge it) rather than the words, so a half-wired version cannot pass.
+  assert.match(buildTjsSrc, /import \{ buildDepscan \} from '\.\/build-depscan\.mjs';/);
+  const fnSrc = hermeticFnSrc();
+  assert.match(fnSrc, /buildDepscan\(/, 'the check must build the host-native verifier');
+  assert.match(fnSrc, /runOut\(depscan, \[enginePath\]\)/, 'the check must run depscan on the engine');
+  assert.match(fnSrc, /parseDepscan\(/, 'the check must parse depscan output through the shared parser');
+  assert.match(fnSrc, /hermeticityFindings\(parsed, PKG_MANAGER_ROOTS\)/,
+    'the verdict must come from the SAME function the suite exercises, on the SAME roots');
+  // The tools they replaced are gone from the check, root and branch. Comments
+  // stripped first: the function's own explanation of WHY otool/ldd had to go
+  // names them, and a whole-text match cannot tell that from a live call.
+  assert.doesNotMatch(stripLineComments(fnSrc), /otool|\bldd\b/,
+    'the check must not invoke otool or ldd any more');
+  assert.doesNotMatch(buildTjsSrc, /function parseOtoolDeps|function parseLddDeps/,
+    'the text-scraping parsers are deleted; depscan reads the file instead');
 });
 
-test('build-tjs: dependency check skips (not fails) for cross-built, Windows, and missing-tool', () => {
-  const fnStart = buildTjsSrc.indexOf('function checkHermeticDeps');
-  assert.ok(fnStart > -1);
-  const fnEnd = buildTjsSrc.indexOf('\nfunction ', fnStart + 1) === -1
-    ? buildTjsSrc.indexOf('\n// CLODE_TJS_SMOKE=off', fnStart)
-    : buildTjsSrc.indexOf('\nfunction ', fnStart + 1);
-  const fnSrc = buildTjsSrc.slice(fnStart, fnEnd > -1 ? fnEnd : undefined);
-  assert.match(fnSrc, /crossFile/);
-  assert.match(fnSrc, /SKIPPED/);
-  assert.match(fnSrc, /win32/);
-  assert.match(fnSrc, /catch/);
-  // Skips must be loud (console.log/error), not silent returns.
-  const skipCount = (fnSrc.match(/SKIPPED/g) || []).length;
-  assert.ok(skipCount >= 3, `expected at least 3 SKIPPED notices (cross/win32/missing-tool), found ${skipCount}`);
+test('build-tjs: the ONLY remaining hermeticity skip is static-by-construction', () => {
+  // Phase 4b. This test used to assert `skipCount >= 3` — cross-built,
+  // Windows, and missing-tool. Those three were not verdicts; they were the
+  // absence of one, on 19 of 42 release legs (15 published). depscan reads the
+  // dependency table out of the file, so the host that built it no longer
+  // matters and none of the three has a reason to exist.
+  const fnSrc = hermeticFnSrc();
+  assert.doesNotMatch(fnSrc, /crossFile/,
+    'a cross-built engine must get a real verdict now, not a skip');
+  assert.doesNotMatch(fnSrc, /win32/,
+    'Windows must get a real verdict now, not a skip');
+  assert.match(fnSrc, /wantStatic/,
+    'the static-link skip is correct by construction and must stay');
+  // Exactly one early return, and it is the static one.
+  const returns = (fnSrc.match(/^\s*return;/gm) || []).length;
+  assert.strictEqual(returns, 1, `expected exactly one early return (static), found ${returns}`);
+  const staticIdx = fnSrc.indexOf('wantStatic');
+  const returnIdx = fnSrc.search(/^\s*return;/m);
+  assert.ok(staticIdx > -1 && staticIdx < returnIdx,
+    'the one early return must be the one guarded by wantStatic');
+  // And an unreadable engine must THROW, not skip.
+  assert.match(fnSrc, /depscan could not read/);
+  assert.doesNotMatch(fnSrc, /SKIPPED/,
+    'no SKIPPED notice should remain — the one surviving skip reports OK with a reason');
 });
 
 test('build-tjs: dependency check FAILS loudly (throws) naming the library and prefix on a hit', () => {
-  const fnStart = buildTjsSrc.indexOf('function checkHermeticDeps');
-  const fnSrc = buildTjsSrc.slice(fnStart, buildTjsSrc.indexOf('\n// CLODE_TJS_SMOKE=off', fnStart));
+  const fnSrc = hermeticFnSrc();
   assert.match(fnSrc, /throw new Error/);
   assert.match(fnSrc, /CMAKE_IGNORE_PREFIX_PATH/); // points back at the fix
 });
@@ -155,30 +201,35 @@ test('build-tjs: dependency check FAILS loudly (throws) naming the library and p
 //   - BSD ldd (FreeBSD/NetBSD/DragonFly) print the INSPECTED BINARY'S OWN
 //     PATH as a header line first; a naive line-matcher captured that too —
 //     would have failed freebsd-amd64/netbsd-amd64/dragonflybsd-amd64,
-//     all publish:true legs.
-// DO NOT "simplify" this back into an allowlist — that regresses both.
+//     all publish:true legs. That SECOND failure mode is now structurally
+//     impossible rather than merely tested: depscan reads the file, so there
+//     is no tool output with a header line in it to mistake for a dependency.
+//     The first one is live logic and is still exercised, in
+//     test/depscan-guard.test.cjs ("does NOT flag /usr/lib or a bare SONAME",
+//     which includes /lib64/ld-linux-x86-64.so.2 explicitly).
+// DO NOT "simplify" this back into an allowlist — that regresses the first.
 test('build-tjs: dependency check uses a DENYLIST of package-manager roots, not an allowlist', () => {
   assert.match(buildTjsSrc, /PKG_MANAGER_ROOTS/);
   // Regression guard for the actual broken shape (not just the word
-  // "allowlist", which legitimately appears in this file's own explanatory
-  // prose describing the bug it avoids): the matcher must walk the
-  // package-manager denylist (`dep === root || dep.startsWith(root + '/')`),
-  // never a bare hardcoded system-prefix test. The /lib64-vs-/lib and
-  // BSD-header false positives an allowlist produces are exercised for real
-  // against the shipped parseLddDeps below (glibc-style / BSD-style tests).
-  assert.match(buildTjsSrc, /hitRoot[\s\S]{0,120}dep\.startsWith/);
+  // "allowlist", which legitimately appears in the explanatory prose
+  // describing the bug it avoids): the matcher must walk the package-manager
+  // denylist (`p === root || p.startsWith(root + '/')`), never a bare
+  // hardcoded system-prefix test.
+  assert.match(verdictSrc, /function underRoot[\s\S]{0,200}p\.startsWith/);
+  assert.match(verdictSrc, /roots\.find\(\(r\) => underRoot\(dep, r\)\)/);
   for (const root of ['/opt/pkg', '/opt/homebrew', '/opt/local', '/sw', '/usr/pkg', '/usr/local']) {
-    assert.match(buildTjsSrc, new RegExp(`PKG_MANAGER_ROOTS[\\s\\S]{0,200}${root.replace(/\//g, '\\/')}`),
+    assert.match(verdictSrc, new RegExp(`PKG_MANAGER_ROOTS[\\s\\S]{0,200}${root.replace(/\//g, '\\/')}`),
       `expected ${root} in PKG_MANAGER_ROOTS`);
   }
 });
 
-// ---- parser behavior, exercised directly against real-world ldd output ----
-// (extracted verbatim from the source so the regression guard tracks the
-// actual shipped parser, not a hand copy of its logic)
+// ---- the shipped checkHermeticDeps, run for real ---------------------------
+// (extracted verbatim from the source, with its free variables injected, so
+// the regression guard tracks the actual shipped function rather than a hand
+// copy of its logic)
 
 // Brace-balanced extraction (a plain non-greedy regex breaks the moment the
-// function body contains its own `}`, e.g. inside `.filter(Boolean)`).
+// function body contains its own `}`, e.g. inside `.reduce(...)`).
 function extractFunction(src, name) {
   const start = src.indexOf(`function ${name}(`);
   assert.ok(start > -1, `function ${name} not found in build-tjs.mjs`);
@@ -194,143 +245,126 @@ function extractFunction(src, name) {
   throw new Error(`unbalanced braces extracting ${name}`);
 }
 
-function loadParsers() {
-  // NOT vm.createContext: a separate vm context has its own Array/Object
-  // realm, and node:assert's deepStrictEqual rejects cross-realm arrays as
-  // "same structure but not reference-equal" even when the contents match.
-  // `new Function` compiles in the CURRENT realm (this is trusted, local
-  // test-only source — the exact text we just read from build-tjs.mjs — not
-  // arbitrary input), so the returned arrays are ordinary same-realm arrays.
-  const src = `${extractFunction(buildTjsSrc, 'parseOtoolDeps')}\n${extractFunction(buildTjsSrc, 'parseLddDeps')}`;
-  // eslint-disable-next-line no-new-func
-  const factory = new Function(`${src}\nreturn { parseOtoolDeps, parseLddDeps };`);
-  return factory();
-}
-
-// Derive PKG_MANAGER_ROOTS from the real array literal (not a hand copy) so
-// the harness below tracks the shipped denylist, same principle as
-// extractFunction/loadParsers above.
-function extractPkgManagerRoots() {
-  const m = buildTjsSrc.match(/const PKG_MANAGER_ROOTS = (\[[^\]]*\]);/);
-  assert.ok(m, 'PKG_MANAGER_ROOTS array literal not found in build-tjs.mjs');
-  // eslint-disable-next-line no-new-func
-  return new Function(`return ${m[1]};`)();
-}
-
-// Load the REAL checkHermeticDeps (brace-balanced extraction, same as the
-// parsers above) with its free variables (crossFile, wantStatic, process,
-// runOut, console) supplied as injectable stubs, so MINOR-4/MINOR-5 style
-// regressions (a wrong SKIPPED-vs-OK verdict) are caught by actually running
-// the shipped function, not by re-describing its logic in prose.
-function loadCheckHermeticDeps({ crossFile, wantStatic, platform, runOut, logs }) {
-  const src = [
-    extractFunction(buildTjsSrc, 'parseOtoolDeps'),
-    extractFunction(buildTjsSrc, 'parseLddDeps'),
-    extractFunction(buildTjsSrc, 'checkHermeticDeps'),
-  ].join('\n');
-  const processStub = { platform };
+// Load the REAL checkHermeticDeps (brace-balanced extraction) with its free
+// variables supplied as injectable stubs, so a wrong verdict (the MINOR-4 /
+// MINOR-5 shape: SKIPPED-vs-OK, or a skip where a throw belongs) is caught by
+// actually running the shipped function, not by re-describing its logic.
+//
+// The verdict functions are NOT stubbed: parseDepscan and hermeticityFindings
+// are required from scripts/depscan-verdict.cjs — the same module the build
+// imports — so this harness exercises the real decision on real-shaped output.
+function loadCheckHermeticDeps({ wantStatic, depscanOut, logs, onBuildDepscan }) {
+  const verdict = require(path.join(repo, 'scripts/depscan-verdict.cjs'));
   const consoleStub = {
     log: (...args) => logs.push(args.join(' ')),
     error: (...args) => logs.push(args.join(' ')),
   };
+  const buildDepscanStub = () => {
+    if (onBuildDepscan) onBuildDepscan();
+    return '/stub/depscan';
+  };
+  const runOutStub = () => {
+    if (typeof depscanOut === 'function') return depscanOut();
+    return depscanOut;
+  };
   // eslint-disable-next-line no-new-func
   const factory = new Function(
-    'crossFile', 'wantStatic', 'process', 'runOut', 'PKG_MANAGER_ROOTS', 'console',
-    `${src}\nreturn checkHermeticDeps;`,
+    'wantStatic', 'console', 'buildDepscan', 'repo', 'path', 'buildRoot',
+    'targetToken', 'outDir', 'run', 'jobs', 'runOut',
+    'parseDepscan', 'hermeticityFindings', 'PKG_MANAGER_ROOTS',
+    `${extractFunction(buildTjsSrc, 'checkHermeticDeps')}\nreturn checkHermeticDeps;`,
   );
-  return factory(crossFile, wantStatic, processStub, runOut, extractPkgManagerRoots(), consoleStub);
+  return factory(
+    wantStatic, consoleStub, buildDepscanStub, '/repo', path, '/buildroot',
+    () => 'target-token', '/out', () => {}, '1', runOutStub,
+    verdict.parseDepscan, verdict.hermeticityFindings, verdict.PKG_MANAGER_ROOTS,
+  );
 }
 
-// ---- MINOR 4: an unparseable-but-successful ldd run must not read as OK ----
-test('checkHermeticDeps: OpenBSD-style ldd table (no name=>path lines) reports SKIPPED, not OK', () => {
-  // Real OpenBSD ldd(1) output shape: a "Start End Type Open Ref GrpRef
-  // Name" table, not glibc/BSD's "name => path" or bare "/path" lines.
-  // parseLddDeps recognizes neither the header nor the data rows (the hex
-  // addresses are the first token, not a path starting with '/'), so it
-  // returns [] — which must NOT be reported as a verified-clean hermeticity
-  // pass for openbsd-amd64/openbsd-arm64 (both publish:true).
-  const openbsdTable = '        Start    End      Type  Open Ref GrpRef Name\n'
-    + '00000000c1e0f000 00000000c1e2f000 exe   1    0   0    /usr/local/bin/tjs\n'
-    + '00000000c1e00000 00000000c1e0e000 rlib  0    1   0    /usr/lib/libc.so.95.0\n';
+// ---- MINOR 4, phase-4b form: unverifiable must not read as OK — and now ----
+// ---- must not read as SKIPPED either. It THROWS. --------------------------
+test('checkHermeticDeps: depscan output the parser does not recognize THROWS, never OK or SKIPPED', () => {
+  // The pre-depscan defect this inherits: OpenBSD's ldd prints a "Start End
+  // Type Open Ref GrpRef Name" table that parseLddDeps recognized no line of,
+  // so it returned [] — "could not read it" arriving as "found none" on two
+  // publish:true legs. depscan's protocol closes that by construction (a
+  // group is complete only when a deps= line terminates it), and the build
+  // now treats an incomplete scan as a build failure rather than a notice.
   const logs = [];
   const check = loadCheckHermeticDeps({
-    crossFile: null,
     wantStatic: false,
-    platform: 'openbsd',
-    runOut: () => openbsdTable,
+    depscanOut: '        Start    End      Type  Open Ref GrpRef Name\n'
+      + '00000000c1e0f000 00000000c1e2f000 exe   1    0   0    /usr/local/bin/tjs\n',
     logs,
   });
-  assert.doesNotThrow(() => check('/usr/local/bin/tjs'));
+  assert.throws(() => check('/usr/local/bin/tjs'), /unrecognized line/);
   const joined = logs.join('\n');
-  console.log('OpenBSD-table harness log:', joined);
-  assert.match(joined, /SKIPPED/);
   assert.doesNotMatch(joined, /OK —/);
+  assert.doesNotMatch(joined, /SKIPPED/);
 });
 
-// ---- MINOR 5: static builds must short-circuit BEFORE otool/ldd, with an --
-// ---- accurate message, not fall into the "tool unavailable" catch --------
-test('checkHermeticDeps: a static build reports "static link" and never invokes ldd/otool', () => {
+test('checkHermeticDeps: a depscan that cannot read the engine THROWS, naming the engine', () => {
+  // Not knowing what a binary links is the unverified-looks-verified state
+  // this check exists to prevent; a skip here would rebuild it.
   const logs = [];
-  let runOutCalled = false;
   const check = loadCheckHermeticDeps({
-    crossFile: null,
-    wantStatic: true,
-    platform: 'linux',
-    runOut: () => { runOutCalled = true; return ''; },
+    wantStatic: false,
+    depscanOut: () => { throw new Error('depscan: unrecognized container'); },
     logs,
   });
+  assert.throws(() => check('/build/tjs/netbsd-m68k/tjs'),
+    /hermeticity check FAILED: depscan could not read \/build\/tjs\/netbsd-m68k\/tjs/);
+  assert.doesNotMatch(logs.join('\n'), /SKIPPED/);
+});
+
+// ---- MINOR 5: static builds must short-circuit BEFORE the verifier, with --
+// ---- an accurate message, not fall into a "tool unavailable" catch -------
+test('checkHermeticDeps: a static build reports "static link" and never builds depscan', () => {
+  const logs = [];
+  let builtDepscan = false;
+  const check = loadCheckHermeticDeps({
+    wantStatic: true,
+    depscanOut: () => { throw new Error('runOut must not be reached for a static build'); },
+    logs,
+    onBuildDepscan: () => { builtDepscan = true; },
+  });
   assert.doesNotThrow(() => check('/build/tjs-musl/tjs'));
-  assert.strictEqual(runOutCalled, false, 'a static build must not shell out to ldd/otool at all');
+  assert.strictEqual(builtDepscan, false, 'a static build must not build or run the verifier at all');
   const joined = logs.join('\n');
   console.log('static-build harness log:', joined);
   assert.match(joined, /static link/);
   assert.doesNotMatch(joined, /unavailable or failed to run/,
-    'static builds must not print the misleading "ldd unavailable or failed to run" catch message');
+    'static builds must not print a misleading "tool unavailable" catch message');
 });
 
-test('parseLddDeps: glibc-style output (linux-vdso + /lib64 dynamic linker) is not flagged', () => {
-  const { parseLddDeps } = loadParsers();
-  const out = '\tlinux-vdso.so.1 (0x00007ffd12345000)\n'
-    + '\t/lib64/ld-linux-x86-64.so.2 (0x00007f0000000000)\n'
-    + '\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f0000100000)\n';
-  const deps = parseLddDeps(out, '/some/build/tjs/linux-glibc-x64/tjs');
-  console.log('glibc ldd sanity: parsed deps =', JSON.stringify(deps));
-  assert.deepStrictEqual(deps, ['/lib64/ld-linux-x86-64.so.2', '/lib/x86_64-linux-gnu/libc.so.6']);
-  const PKG_MANAGER_ROOTS = ['/opt/pkg', '/opt/homebrew', '/opt/local', '/sw', '/usr/pkg', '/usr/local'];
-  const flagged = deps.filter((d) => PKG_MANAGER_ROOTS.some((r) => d === r || d.startsWith(`${r}/`)));
-  assert.deepStrictEqual(flagged, [], 'glibc dynamic linker / libc must not be flagged');
+// ---- the skips that are GONE, proven by running the function --------------
+
+test('checkHermeticDeps: a foreign-arch (cross-built) engine gets a real VERDICT, not a skip', () => {
+  // depscan output for a big-endian 32-bit ELF — an m68k/sparc/ppc leg, the
+  // exact shape that used to be waved through with "the host's own otool/ldd
+  // cannot meaningfully inspect a foreign-arch binary".
+  const logs = [];
+  const check = loadCheckHermeticDeps({
+    wantStatic: false,
+    depscanOut: 'format=elf32be machine=4\nrun=/opt/pkg/lib\ndep=libc.so.12\ndeps=1\n',
+    logs,
+  });
+  assert.throws(() => check('/build/tjs/netbsd-m68k/tjs'), /\/opt\/pkg\/lib/);
 });
 
-test('parseLddDeps: BSD-style header line for a binary living under /usr/local is not flagged', () => {
-  const { parseLddDeps } = loadParsers();
-  const out = '/usr/local/bin/tjs:\n\tlibc.so.7 => /lib/libc.so.7 (0x800600000)\n';
-  const deps = parseLddDeps(out, '/usr/local/bin/tjs');
-  console.log('BSD ldd sanity: parsed deps =', JSON.stringify(deps));
-  assert.deepStrictEqual(deps, ['/lib/libc.so.7']);
-  const PKG_MANAGER_ROOTS = ['/opt/pkg', '/opt/homebrew', '/opt/local', '/sw', '/usr/pkg', '/usr/local'];
-  const flagged = deps.filter((d) => PKG_MANAGER_ROOTS.some((r) => d === r || d.startsWith(`${r}/`)));
-  assert.deepStrictEqual(flagged, [], 'the binary\'s own /usr/local header line must not be flagged as a dependency');
-});
-
-test('parseLddDeps: a real /usr/local dependency IS flagged (the check still catches real hits)', () => {
-  const { parseLddDeps } = loadParsers();
-  const out = '\tlibffi.so.8 => /usr/local/lib/libffi.so.8 (0x00007f0000200000)\n';
-  const deps = parseLddDeps(out, '/some/build/tjs/linux-x64/tjs');
-  const PKG_MANAGER_ROOTS = ['/opt/pkg', '/opt/homebrew', '/opt/local', '/sw', '/usr/pkg', '/usr/local'];
-  const flagged = deps.filter((d) => PKG_MANAGER_ROOTS.some((r) => d === r || d.startsWith(`${r}/`)));
-  assert.deepStrictEqual(flagged, ['/usr/local/lib/libffi.so.8']);
-});
-
-test('parseOtoolDeps: skips the self-path header, flags a real /opt/pkg hit', () => {
-  const { parseOtoolDeps } = loadParsers();
-  const out = '/Users/x/clode/build/tjs/macos-26-arm64/tjs:\n'
-    + '\t/opt/pkg/lib/libffi.8.dylib (compatibility version 8.0.0, current version 8.1.0)\n'
-    + '\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1345.0.0)\n';
-  const deps = parseOtoolDeps(out);
-  assert.deepStrictEqual(deps, ['/opt/pkg/lib/libffi.8.dylib', '/usr/lib/libSystem.B.dylib']);
-  const PKG_MANAGER_ROOTS = ['/opt/pkg', '/opt/homebrew', '/opt/local', '/sw', '/usr/pkg', '/usr/local'];
-  const flagged = deps.filter((d) => PKG_MANAGER_ROOTS.some((r) => d === r || d.startsWith(`${r}/`)));
-  assert.deepStrictEqual(flagged, ['/opt/pkg/lib/libffi.8.dylib']);
+test('checkHermeticDeps: a clean PE (Windows) engine reports OK with counts, not a skip', () => {
+  const logs = [];
+  const check = loadCheckHermeticDeps({
+    wantStatic: false,
+    depscanOut: 'format=pe64 machine=0x8664\ndep=KERNEL32.dll\ndep=ADVAPI32.dll\ndeps=2\n',
+    logs,
+  });
+  assert.doesNotThrow(() => check('C:\\build\\tjs.exe'));
+  const joined = logs.join('\n');
+  console.log('windows harness log:', joined);
+  assert.match(joined, /OK —/);
+  assert.match(joined, /2 dynamic dependencies/);
+  assert.doesNotMatch(joined, /SKIPPED/);
 });
 
 // ---- optional: a locally built engine, if one exists ----------------------
@@ -348,20 +382,12 @@ test('local engine (if built): dynamic deps contain no package-manager paths', (
     console.log(`local engine check: SKIPPED (no local engine built at ${enginePath || '<unresolved>'})`);
     return;
   }
-  const PKG_MANAGER_ROOTS = ['/opt/pkg', '/opt/homebrew', '/opt/local', '/sw', '/usr/pkg', '/usr/local'];
-  let out;
-  const tool = process.platform === 'darwin' ? 'otool' : 'ldd';
-  try {
-    out = process.platform === 'darwin'
-      ? execFileSync('otool', ['-L', enginePath], { encoding: 'utf8' })
-      : execFileSync('ldd', [enginePath], { encoding: 'utf8' });
-  } catch (e) {
-    console.log(`local engine check: SKIPPED (${tool} unavailable or failed: ${e.message})`);
-    return;
-  }
-  const { parseOtoolDeps, parseLddDeps } = loadParsers();
-  const deps = process.platform === 'darwin' ? parseOtoolDeps(out) : parseLddDeps(out, enginePath);
-  const flagged = deps.filter((d) => PKG_MANAGER_ROOTS.some((r) => d === r || d.startsWith(`${r}/`)));
-  assert.deepStrictEqual(flagged, [],
-    `local engine at ${enginePath} links a package-manager dependency: ${flagged.join(', ')}`);
+  // Same verifier the build runs, same verdict function — not otool/ldd, and
+  // not a hand copy of the denylist.
+  const { depscanExe } = require('./depscan-build.cjs');
+  const { parseDepscan, hermeticityFindings, PKG_MANAGER_ROOTS } = require(path.join(repo, 'scripts/depscan-verdict.cjs'));
+  const out = execFileSync(depscanExe(), [enginePath], { encoding: 'utf8' });
+  const findings = hermeticityFindings(parseDepscan(out), PKG_MANAGER_ROOTS);
+  assert.deepStrictEqual(findings, [],
+    `local engine at ${enginePath} is not hermetic:\n  ${findings.join('\n  ')}`);
 });

@@ -69,9 +69,14 @@ import { createRequire } from 'node:module';
 import crypto from 'node:crypto';
 import { resetCheckoutToPristine } from './tjs-source-reset.mjs';
 import { engineFloorCheckJs, OK_TOKEN } from './engine-api-floor.mjs';
+import { buildDepscan } from './build-depscan.mjs';
 
 const require = createRequire(import.meta.url);
 const { tjsDir: platformTjsDir, tjsVendorParentDir } = require('./platform-tag.cjs'); // tjsDir aliased: this file has its own `tjsDir` (the source build dir)
+// The hermeticity verdict, defined once in a CJS sibling so the build and the
+// test suite run the SAME decision logic (test/guard.cjs needs a pure scan()
+// it can feed a known-bad input; this file needs it on real depscan output).
+const { parseDepscan, hermeticityFindings, PKG_MANAGER_ROOTS } = require('./depscan-verdict.cjs');
 const repo = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const sourceOnly = process.argv.includes('--source-only');
 // --regen-only operates on an ALREADY-patched tree, exactly as --build-only
@@ -3381,11 +3386,16 @@ if (darwinPoll) {
 // coexisting fine with CMAKE_IGNORE_PREFIX_PATH=/opt/pkg. Do not remove
 // /usr/pkg from this list "to be safe" — that reintroduces the exact gap
 // this comment documents.
-const PKG_MANAGER_ROOTS = ['/opt/pkg', '/opt/homebrew', '/usr/local', '/opt/local', '/sw', '/usr/pkg'];
+//
+// The list itself now lives in scripts/depscan-verdict.cjs (imported at the
+// top of this file) because the post-build denylist moved there with the rest
+// of the verdict logic. It stays ONE definition for the same reason it became
+// one in the first place: two hand-maintained copies drifted, /usr/pkg went
+// missing from the cmake half, and native NetBSD broke.
 // CMAKE_IGNORE_PREFIX_PATH shipped in cmake 3.23. Extracted into a named
 // function (not inlined into the `if` below) so the test suite can pull the
 // EXACT comparison through the same brace-balanced extractFunction()
-// machinery it already uses for parseOtoolDeps/parseLddDeps, rather than
+// machinery it already uses elsewhere in this file, rather than
 // hand-copying the arithmetic — a hand copy tracks nothing: inverting `>=`
 // to `<` here would leave a hand-copied test green.
 function cmakeVersionSupportsIgnorePrefixPath(major, minor) {
@@ -3643,124 +3653,75 @@ fs.copyFileSync(path.join(buildDir, builtExe ? 'tjs.exe' : 'tjs'), path.join(out
 fs.chmodSync(path.join(outDir, outName), 0o755);
 
 // ---- build hermeticity, part 2: verify the shipped binary, don't just hope
-// the configure-time flag above worked. Inspect the built engine's dynamic
-// deps and fail LOUDLY if any resolves inside a package-manager prefix — the
-// regression guard for the pkgsrc libffi/uv.h incident (see the
-// CMAKE_IGNORE_PREFIX_PATH comment above) that keeps it from coming back
-// silently the next time someone adds an unpinned find_library() upstream,
-// or builds on a host whose cmake is too old for the configure-time fix.
+// the configure-time flag above worked. Read the built engine's dynamic
+// dependency table and fail LOUDLY if anything resolves inside a
+// package-manager prefix — the regression guard for the pkgsrc libffi/uv.h
+// incident (see the CMAKE_IGNORE_PREFIX_PATH comment above) that keeps it from
+// coming back silently the next time someone adds an unpinned find_library()
+// upstream, or builds on a host whose cmake is too old for the configure-time
+// fix.
 //
-// DENYLIST, not an allowlist — deliberately. An earlier attempt at this check
-// allowlisted system prefixes (['/lib/', '/usr/lib/']) and broke two legs that
-// are actually fine:
-//   * glibc's ldd prints `/lib64/ld-linux-x86-64.so.2` for the dynamic linker;
-//     '/lib64/ld-linux-x86-64.so.2'.startsWith('/lib/') is FALSE (it's /lib64,
-//     not /lib), so a perfectly good dependency got flagged — this would have
-//     failed the native linux-x64-glibc leg on every build.
-//   * FreeBSD/NetBSD/DragonFly's ldd prints the INSPECTED BINARY'S OWN PATH as
-//     a header line first (e.g. "/usr/local/bin/tjs:"); a naive per-line
-//     regex captured that header too and flagged it — this would have failed
-//     freebsd-amd64, netbsd-amd64 and dragonflybsd-amd64, all publish:true
-//     legs, any time the binary happened to sit under /usr/local.
-// A denylist of the SPECIFIC roots we forbid cannot produce either false
-// positive: it only fires when a dependency resolves inside a package-manager
-// prefix, which is exactly (and only) the hazard CMAKE_IGNORE_PREFIX_PATH
-// exists to prevent. Do not "simplify" this back into an allowlist.
+// READ THE FILE, DO NOT ASK A TOOL. This used to shell out to otool -L or ldd
+// and parse their text, which meant it could only inspect a binary for THIS
+// machine: every cross-built leg and all of Windows skipped the check
+// entirely. tools/depscan parses the ELF/Mach-O/PE dependency table directly,
+// so a darwin-ppc or m68k-NetBSD or Windows engine gets the same real verdict
+// as a native one. It also retires a whole class of parse bug on its own: BSD
+// ldd prints the INSPECTED BINARY'S OWN PATH as a header line, which a naive
+// line-matcher once read as a dependency and flagged whenever the binary sat
+// under /usr/local (freebsd-amd64, netbsd-amd64, dragonflybsd-amd64 — all
+// publish:true). There is no tool output to mis-read now.
 //
-// PKG_MANAGER_ROOTS itself is defined ONCE, above, alongside the
-// CMAKE_IGNORE_PREFIX_PATH push — see the comment there for why this must
-// stay a single shared constant rather than two lists that can drift.
-
-// otool -L output: first line is the inspected binary's own path (`<path>:`);
-// every following line is an indented "<dep path> (compatibility version ...)".
-function parseOtoolDeps(output) {
-  return output.split('\n').slice(1)
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .map((l) => l.match(/^(\S+)/)?.[1])
-    .filter(Boolean);
-}
-
-// ldd output varies by libc, which is exactly why this is a denylist (see
-// above): glibc emits bare "<dep path> (0x...)" or "<name> => <dep path>
-// (0x...)" lines with no header; BSD ldd prefixes a "<binary path>:" header
-// line. selfPath lets us drop that header even where it isn't syntactically
-// distinguishable from a dependency line (a BSD binary living under
-// /usr/local would otherwise look like a hit).
-function parseLddDeps(output, selfPath) {
-  const deps = [];
-  for (const rawLine of output.split('\n')) {
-    const line = rawLine.trim();
-    if (!line || line === `${selfPath}:`) continue;
-    // "name => /resolved/path (0x...)" or bare "/resolved/path (0x...)".
-    // linux-vdso.so.1 has no resolved path (not a real file) and is dropped
-    // by the startsWith('/') filter below, same as an unresolved "=> not found".
-    const arrowMatch = line.match(/=>\s*(\S+)/);
-    const resolved = arrowMatch ? arrowMatch[1] : line.match(/^(\S+)/)?.[1];
-    if (resolved && resolved.startsWith('/')) deps.push(resolved);
-  }
-  return deps;
-}
-
+// The verdict itself — the DENYLIST of package-manager roots, and why it is a
+// denylist rather than an allowlist of system prefixes — lives in
+// scripts/depscan-verdict.cjs, imported at the top of this file. One
+// definition, shared with the cmake ignore-list above and with the suite, so
+// the two halves cannot drift apart again.
 function checkHermeticDeps(enginePath) {
-  if (crossFile) {
-    console.log(`hermeticity check: SKIPPED (cross-built via ${crossFile} — the host's own otool/ldd cannot meaningfully inspect a foreign-arch/foreign-OS binary)`);
-    return;
-  }
-  if (process.platform === 'win32') {
-    console.log('hermeticity check: SKIPPED (Windows — no otool/ldd, and no package-manager-prefix hazard on this platform)');
-    return;
-  }
-  // Static (musl) legs have no dynamic deps to inspect, by construction —
-  // check this BEFORE touching otool/ldd at all. Gating on wantStatic first
-  // (rather than letting a static binary fall into the otool/ldd try/catch
-  // below) matters because the catch's message is "ldd unavailable or
-  // failed to run: <error>", which for a static binary is misleadingly
-  // read as a tooling problem instead of the expected, correct outcome.
+  // Static (musl) legs have no dynamic dependencies to inspect, by
+  // construction. This is the ONE skip that survives: it is a property of the
+  // artifact, not of the host looking at it. Checked FIRST so a static binary
+  // never reaches the verifier at all -- the pre-depscan code let it fall into
+  // a try/catch whose message ("tool unavailable or failed to run") read as a
+  // tooling problem instead of the expected, correct outcome.
   if (wantStatic) {
     console.log(`hermeticity check: OK — ${enginePath} is a static link (CLODE_TJS_STATIC=1) — no dynamic dependencies by construction`);
     return;
   }
-  const tool = process.platform === 'darwin' ? 'otool' : 'ldd';
-  const toolArgs = process.platform === 'darwin' ? ['-L', enginePath] : [enginePath];
+  // The other two skips are GONE. Cross-built and Windows binaries used to be
+  // waved through because otool/ldd cannot read them — 19 of 42 release legs,
+  // 15 of them published, whose entire hermeticity proof was file(1) saying
+  // "yes, that is an m68k NetBSD ELF". depscan reads the dependency table out
+  // of the file itself, so the host it was built on is irrelevant.
+  const depscan = buildDepscan(repo, path.join(buildRoot, targetToken(outDir), 'build-depscan'), { run, jobs });
   let out;
   try {
-    out = runOut(tool, toolArgs);
+    out = runOut(depscan, [enginePath]);
   } catch (e) {
-    console.log(`hermeticity check: SKIPPED (${tool} unavailable or failed to run: ${e.message})`);
-    return;
+    // NOT a skip. If the verifier cannot read the engine we just built, we do
+    // not know what it links, and shipping it would be exactly the
+    // unverified-looks-verified state this check exists to prevent.
+    throw new Error(`hermeticity check FAILED: depscan could not read ${enginePath} — ${e.message}`);
   }
-  const deps = process.platform === 'darwin' ? parseOtoolDeps(out) : parseLddDeps(out, enginePath);
-  if (deps.length === 0) {
-    // A successfully-run ldd/otool on a non-static binary that ALWAYS links
-    // libc etc. must have at least one real dependency. Zero here means the
-    // parser didn't recognize this platform's ldd output shape — e.g.
-    // OpenBSD's ldd prints a "Start End Type Open Ref GrpRef Name" table,
-    // not glibc/BSD's "name => path" or bare "/path" lines, so
-    // parseLddDeps silently returns []. That is NOT the same as "verified
-    // clean" — report it honestly as unparsed/unverified, not OK, so
-    // openbsd-amd64/openbsd-arm64 (both publish:true) don't look checked
-    // when they weren't.
-    console.log(`hermeticity check: SKIPPED (${tool} ran but produced no parseable dependency lines for ${enginePath} — this platform's ${tool} output format is not recognized by parse${tool === 'otool' ? 'Otool' : 'Ldd'}Deps; NOT verified, not a pass)`);
-    return;
+  const parsed = parseDepscan(out);          // throws if the scan did not complete
+  const findings = hermeticityFindings(parsed, PKG_MANAGER_ROOTS);
+  if (findings.length) {
+    throw new Error(
+      `hermeticity check FAILED: ${enginePath}\n  ` + findings.join('\n  ') + '\n' +
+      'A shipped engine must not depend on a third-party package manager ' +
+      '(pkgsrc/Homebrew/MacPorts/Fink/...): a machine running it may not have that prefix ' +
+      'at all, and when one DID, a mixed-in pkgsrc uv.h got compiled into this same binary ' +
+      'alongside the vendored one and SIGABRTed before the first line of JS ran (2026-07-31 ' +
+      'incident, see the CMAKE_IGNORE_PREFIX_PATH comment above). CMAKE_IGNORE_PREFIX_PATH ' +
+      "should have kept cmake's find_*() from ever resolving into this prefix — if it linked " +
+      "anyway, either this host's cmake predates 3.23 (see the loud warning above) or " +
+      'something re-added a package-manager search path.');
   }
-  for (const dep of deps) {
-    const hitRoot = PKG_MANAGER_ROOTS.find((root) => dep === root || dep.startsWith(`${root}/`));
-    if (hitRoot) {
-      throw new Error(
-        `hermeticity check FAILED: ${enginePath} dynamically depends on ${dep}, which ` +
-        `resolves inside the package-manager prefix ${hitRoot}. A shipped engine must not ` +
-        'depend on a third-party package manager (pkgsrc/Homebrew/MacPorts/Fink/...): a ' +
-        'machine running it may not have that prefix at all, and when one DID, a mixed-in ' +
-        'pkgsrc uv.h previously got compiled into this same binary alongside the vendored ' +
-        'one and SIGABRTed before the first line of JS ran (2026-07-31 incident, see the ' +
-        'CMAKE_IGNORE_PREFIX_PATH comment above). CMAKE_IGNORE_PREFIX_PATH should have kept ' +
-        "cmake's find_*() from ever resolving into this prefix — if it linked anyway, either " +
-        'this host\'s cmake predates 3.23 (see the loud warning above) or something ' +
-        're-added a package-manager search path.');
-    }
-  }
-  console.log(`hermeticity check: OK — ${enginePath} has ${deps.length} dynamic ${deps.length === 1 ? 'dependency' : 'dependencies'}, none from a package-manager prefix (${PKG_MANAGER_ROOTS.join(', ')})`);
+  const n = parsed.slices.reduce((a, s) => a + s.deps.length, 0);
+  const runs = parsed.slices.reduce((a, s) => a + s.runs.length, 0);
+  console.log(`hermeticity check: OK — ${enginePath} (${parsed.format}, ${parsed.slices.length} slice(s)) `
+    + `has ${n} dynamic ${n === 1 ? 'dependency' : 'dependencies'} and ${runs} search path(s), `
+    + `none from a package-manager prefix (${PKG_MANAGER_ROOTS.join(', ')})`);
 }
 
 // CLODE_TJS_SMOKE=off: skip the exec smoke — for cross-target engines the

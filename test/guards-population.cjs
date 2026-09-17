@@ -118,7 +118,13 @@ const REPO_ROOTED = /__dirname\s*,\s*['"]\.\.|path\.resolve\(\s*__dirname|\bREPO
 // artifact, which is always quoted, path-joined, or slash-preceded (`'cli.cjs'`,
 // `/cli.cjs`, `path.join(dir, 'cli.cjs')`) — never glued onto a longer identifier.
 const STANDALONE_ARTIFACT_SIGNALS = [
-  /stageProviderCli|CLODE_PROVIDER_BIN|CLODE_TJS\b/,
+  // CLODE_DEPSCAN_ENGINE (phase 4b) joins CLODE_TJS/CLODE_PROVIDER_BIN for the same
+  // reason: it NAMES a real built binary the test inspects, through a helper
+  // (test/depscan-build.cjs) that does the reading on the caller's behalf. Without
+  // it, test/depscan-guard.test.cjs — a registered defineGuard guard that reads an
+  // engine it did not build — classified as "does not read an artifact", and the
+  // FLOOR test below went red saying the classifier, not the file, was broken.
+  /stageProviderCli|CLODE_PROVIDER_BIN|CLODE_TJS\b|CLODE_DEPSCAN_ENGINE\b/,
   /graph\.json|(?<![\w-])cli\.cjs/,
 ];
 // Kept as a flat array for export/inspection convenience — NOT what classifyTestFile()
