@@ -7368,3 +7368,88 @@ knew that until this ran, which is the point.
 guard catches it, and only by accident of ordering. One more instrument that
 reported a non-answer as an answer — the class already filed under "five
 instruments, one mistake".
+
+## ★ Phase 4b SHIPPED — the hermeticity check stops skipping on 19 of 42 legs (2026-09-17)
+
+`tools/depscan/depscan.c` reads the dynamic-dependency table out of a binary REGARDLESS of
+which machine that binary targets — ELF `DT_NEEDED`/`DT_RUNPATH`, Mach-O
+`LC_LOAD_DYLIB`/`LC_RPATH` per fat slice, the PE import directory. cmake builds it
+host-native during the engine build; it is never shipped, so there is no release artifact
+and no version skew. `scripts/build-tjs.mjs`'s `checkHermeticDeps` uses it instead of
+`otool -L`/`ldd`; `scripts/depscan-verdict.cjs` holds the pure decision logic so
+`test/guard.cjs`'s `scan()` can be fed a known-bad input.
+
+**Build-side skips went 3 -> 1.** The survivor is static-by-construction, which is a
+property of the ARTIFACT rather than of the host looking at it. The other two — cross-built
+and Windows — were never verdicts; they were the absence of one, on 19 of 42 release legs
+(15 `publish: true`), whose entire proof was `file(1)` saying "yes, that is an m68k NetBSD
+ELF". `test/depscan-legs.test.cjs` ratchets that: 8 static, 19 named formerly-blind.
+
+**Measured on real cross-built engines, from an arm64 Mac** (the point of the whole thing):
+
+| engine | depscan |
+|---|---|
+| `tjs-netbsd-sparc` — 32-bit **BE** SPARC | 5 deps |
+| `tjs-macos-ppc` — 32-bit **BE** PowerPC | 1 dep |
+| `tjs-windows-amd64` — PE32+ | 10 DLLs |
+| `tjs-linux-s390x` — 64-bit **BE** | static, `deps=0` |
+| a cosmo APE built from the cached toolchain | `pe64`, 4 DLLs |
+
+`otool -L` on that SPARC binary prints "is not an object file" **and exits 0** — one more
+instrument reporting a non-answer as an answer.
+
+### Four defects found by FUZZING or by running the thing, not by reading it
+
+Each was invisible in review and each is the same class this phase exists to delete —
+a gate that reports OK without having checked.
+
+1. **Overflow → reported HERMETIC.** `DT_NEEDED = 0xffffffffffffff00` wraps to a small
+   in-bounds offset; depscan printed `dep=` (empty name) and exited 0. An empty name does
+   not start with `/`, so the denylist skipped it and the binary read as clean.
+2. **A dependency name could FORGE the output protocol.** A name containing a newline
+   emitted a fake `deps=1` terminator mid-stream, splitting one real dependency into a
+   benign group and pushing the real `/opt/pkg` dep into another.
+3. **A static engine read as BROKEN.** `examined` counted DEPENDENCIES, and a static binary
+   has zero by construction — the STRONGEST hermeticity result there is. Wiring the guard
+   into CI would have reddened all 8 musl legs.
+4. **A fat Mach-O whose SECOND slice is corrupt printed slice 0's complete group, then
+   exited 4.** That stdout parses CLEAN — one slice, zero findings — so the missing slice's
+   `/opt/pkg` dependency vanished. Only the caller's exit-code check stood between that and
+   a false hermetic verdict, on darwin, the one published 4-way universal. Found by the
+   whole-branch review, which no task-scoped review could have caught: Task 6 examined the
+   analogous ELF `run=` case and ruled it safe *because "no `deps=`/`format=` line is
+   fabricated"* — which is exactly what the fat loop did. Both facts true; nobody owned both.
+   Fixed at the emitter AND at the parser: `parseDepscan` was reading `slices=N` off the
+   format line and discarding it; it now requires `slices.length === N`.
+
+### The ELF class is NARROWER than what it replaced, deliberately — write it down
+
+On native ELF legs the old check resolved SONAMEs through the host loader, so it could flag
+a dependency that RESOLVED into a package-manager prefix with no RPATH baked in. depscan
+cannot: `DT_NEEDED` is a bare SONAME, so all ELF detection now rests on
+`DT_RPATH`/`DT_RUNPATH`. That is the right call — host resolution is a fact about the build
+host, not the artifact — and it is a large net gain, but it IS a narrowed class on ~10
+native legs. It also works today only because cmake bakes the build-tree RPATH by default
+and the shipped engine is the build-tree binary; a future `-DCMAKE_SKIP_BUILD_RPATH=ON`
+would silently blind the ELF half with no test going red. Recorded in
+`hermeticityFindings`' comment.
+
+### OPEN — filed, not fixed
+
+- **Cache-hit legs now need a host C compiler.** The new CI oracle step has no `if:`, so a
+  `tjs-cache` hit — which previously compiled nothing on the runner — must now cmake-build
+  depscan or the leg goes red. Fails loudly, not silently. First-CI-run watch item, along
+  with the windows-arm64 generator question (MSVC env exports a cross compiler; the
+  `build-depscan-host-native` guard only checks that no cross-FILE is passed, so it cannot
+  see an env-supplied one).
+- **Static legs still write no CI summary line** — same shape as the failing-leg case fixed
+  here, one path over.
+- **`WAS_BLIND` is declared, not derived** — deriving it would also catch a future leg
+  silently gaining a cross-file.
+- **A new source-scan gate in `depscan-legs.test.cjs` has no `control()`**, and evades the
+  guards-population ratchet only because it uses `.includes()` rather than a regex. Same
+  class as the two files migrated under this phase's own ruling, opposite treatment.
+- **Three comment-stripping tokenizers now exist** (`test/strip-comments.cjs`,
+  `test/source-scan.cjs`'s `stripLineComments`, and a third copy in
+  `test/build-gates/lexical-code-mask.test.cjs` justified by a reason this branch made
+  false). No map says which to use when.
