@@ -111,8 +111,113 @@ int main(int argc, char **argv) {
   return rc;
 }
 
-/* Task 2 fills these in. Returning 3 keeps the "unrecognized" contract
+/* ---- ELF ------------------------------------------------------------------
+ * PT_DYNAMIC holds an array of (tag, value) pairs. DT_NEEDED's value is a
+ * BYTE OFFSET into the string table, but DT_STRTAB's value is a VIRTUAL
+ * ADDRESS -- so the table has to be located by walking PT_LOAD and undoing
+ * the load mapping. Section headers would be easier, but a stripped binary
+ * may have none, and PT_LOAD is what the loader itself uses.
+ */
+#define DT_NULL_    0
+#define DT_NEEDED_  1
+#define DT_STRTAB_  5
+#define PT_LOAD_    1
+#define PT_DYNAMIC_ 2
+
+/* Map a virtual address to a file offset via the PT_LOAD segments.
+ * Returns -1 if no segment contains it (a malformed or hostile file). */
+static long long elf_v2o(const unsigned char *b, size_t len, int cls, int be,
+                         unsigned long long phoff, unsigned phentsize,
+                         unsigned phnum, unsigned long long vaddr) {
+  int w = (cls == 2) ? 8 : 4;
+  size_t o_off = (cls == 2) ? 8 : 4;
+  size_t o_vad = (cls == 2) ? 16 : 8;
+  size_t o_fsz = (cls == 2) ? 32 : 16;
+  unsigned i;
+  for (i = 0; i < phnum; i++) {
+    unsigned long long ph = phoff + (unsigned long long)i * phentsize;
+    unsigned long long off, va, fsz;
+    if (!inb(ph, phentsize, len)) return -1;
+    if (rd(b + ph, 4, be) != PT_LOAD_) continue;
+    off = rd(b + ph + o_off, w, be);
+    va  = rd(b + ph + o_vad, w, be);
+    fsz = rd(b + ph + o_fsz, w, be);
+    if (vaddr >= va && vaddr - va < fsz) return (long long)(vaddr - va + off);
+  }
+  return -1;
+}
+
+static int scan_elf(const unsigned char *b, size_t len) {
+  int cls, be, w;
+  size_t phoff_at, phesz_at, phnum_at;
+  unsigned long long phoff, dynoff = 0, dynsz = 0, strtab_va = 0;
+  unsigned phentsize, phnum, machine, i;
+  long long strtab_off;
+  int found_dynamic = 0, ndeps = 0;
+  unsigned long long needed[512];
+  int nneeded = 0;
+
+  if (len < 0x40) return 4;
+  cls = b[4];
+  be  = (b[5] == 2);
+  if ((cls != 1 && cls != 2) || (b[5] != 1 && b[5] != 2)) return 4;
+  w = (cls == 2) ? 8 : 4;
+
+  phoff_at = (cls == 2) ? 0x20 : 0x1c;
+  phesz_at = (cls == 2) ? 0x36 : 0x2a;
+  phnum_at = (cls == 2) ? 0x38 : 0x2c;
+  if (!inb(phnum_at, 2, len)) return 4;
+  phoff     = rd(b + phoff_at, w, be);
+  phentsize = (unsigned)rd(b + phesz_at, 2, be);
+  phnum     = (unsigned)rd(b + phnum_at, 2, be);
+  machine   = (unsigned)rd(b + 0x12, 2, be);
+  if (phentsize < (unsigned)(cls == 2 ? 56 : 32)) return 4;
+
+  printf("format=elf%s%s machine=%u\n", cls == 2 ? "64" : "32", be ? "be" : "le", machine);
+
+  /* Locate PT_DYNAMIC. A binary with none is statically linked: that is a
+   * real, parseable answer (deps=0), not a failure. */
+  for (i = 0; i < phnum; i++) {
+    unsigned long long ph = phoff + (unsigned long long)i * phentsize;
+    if (!inb(ph, phentsize, len)) return 4;
+    if (rd(b + ph, 4, be) != PT_DYNAMIC_) continue;
+    dynoff = rd(b + ph + ((cls == 2) ? 8 : 4), w, be);
+    dynsz  = rd(b + ph + ((cls == 2) ? 32 : 16), w, be);
+    found_dynamic = 1;
+    break;
+  }
+  if (!found_dynamic) { printf("deps=0\n"); return 0; }
+  if (!inb(dynoff, dynsz, len)) return 4;
+
+  /* First pass: collect DT_NEEDED offsets and DT_STRTAB's address. The tags
+   * may appear in any order, so the string table cannot be resolved until
+   * the whole array has been read. */
+  for (i = 0; (unsigned long long)i * w * 2 + (unsigned)(w * 2) <= dynsz; i++) {
+    unsigned long long at = dynoff + (unsigned long long)i * w * 2;
+    unsigned long long tag = rd(b + at, w, be);
+    unsigned long long val = rd(b + at + w, w, be);
+    if (tag == DT_NULL_) break;
+    if (tag == DT_NEEDED_) {
+      if (nneeded >= (int)(sizeof needed / sizeof needed[0])) return 4;
+      needed[nneeded++] = val;
+    } else if (tag == DT_STRTAB_) {
+      strtab_va = val;
+    }
+  }
+  if (nneeded > 0 && strtab_va == 0) return 4;  /* names we cannot resolve */
+
+  strtab_off = nneeded ? elf_v2o(b, len, cls, be, phoff, phentsize, phnum, strtab_va) : 0;
+  if (nneeded > 0 && strtab_off < 0) return 4;
+
+  for (i = 0; i < (unsigned)nneeded; i++) {
+    if (!put_dep(b, len, (unsigned long long)strtab_off + needed[i])) return 4;
+    ndeps++;
+  }
+  printf("deps=%d\n", ndeps);
+  return 0;
+}
+
+/* Tasks 3 and 4 fill these in. Returning 3 keeps the "unrecognized" contract
  * honest in the meantime — it must never return 0 without printing deps=. */
-static int scan_elf(const unsigned char *b, size_t len) { (void)b; (void)len; return 3; }
 static int scan_macho(const unsigned char *b, size_t len) { (void)b; (void)len; return 3; }
 static int scan_pe(const unsigned char *b, size_t len) { (void)b; (void)len; return 3; }
