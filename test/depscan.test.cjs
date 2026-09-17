@@ -41,7 +41,7 @@ test('build-depscan never passes a cross toolchain file', () => {
   // header comment names both identifiers in prose, to explain why they must never
   // appear as code. A raw-text scan cannot tell that mention apart from a real
   // violation (this repo has hit that exact self-match twice already — the
-  // phase-5b no-fuse gate and test/merge-step.test.cjs, both matching the word
+  // phase-5b vocabulary gate and test/merge-step.test.cjs, both matching the word
   // inside their own header). stripComments() preserves string literals (where the
   // real -DCMAKE_TOOLCHAIN_FILE=... argument would live) and blanks only comments,
   // so a prose mention is not a violation but an actual argument still is.
