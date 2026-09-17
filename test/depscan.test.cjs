@@ -159,3 +159,39 @@ test('fat Mach-O whose slice offset runs past the end is MALFORMED', () => {
   const out = scanFixture(buf);
   assert.strictEqual(out.status, 4, `expected malformed exit 4, got ${out.status}`);
 });
+
+test('PE32+ reads the import directory (windows-amd64)', () => {
+  const out = scanFixture(binfmt.pe({ plus: true, machine: 0x8664, needed: ['KERNEL32.dll', 'ws2_32.dll'] }), 'fixture.exe');
+  assert.strictEqual(out.status, 0, out.stderr);
+  assert.strictEqual(out.format, 'pe64');
+  assert.deepStrictEqual(out.deps, ['KERNEL32.dll', 'ws2_32.dll']);
+  assert.deepStrictEqual(out.counts, [2]);
+});
+
+test('PE32 (32-bit optional header) reads the import directory too', () => {
+  // The data directory sits at a different offset in PE32 than PE32+; a
+  // reader that hardcodes one silently reads garbage for the other.
+  const out = scanFixture(binfmt.pe({ plus: false, machine: 0x014c, needed: ['KERNEL32.dll'] }), 'fixture32.exe');
+  assert.strictEqual(out.status, 0, out.stderr);
+  assert.strictEqual(out.format, 'pe32');
+  assert.deepStrictEqual(out.deps, ['KERNEL32.dll']);
+});
+
+test('PE with an empty import directory prints deps=0 and exits 0', () => {
+  const out = scanFixture(binfmt.pe({ needed: [] }), 'bare.exe');
+  assert.strictEqual(out.status, 0, out.stderr);
+  assert.deepStrictEqual(out.counts, [0]);
+});
+
+test('PE whose import RVA maps into no section is MALFORMED, not empty', () => {
+  const buf = binfmt.pe({ needed: ['KERNEL32.dll'] });
+  // Point data directory [1] at an RVA no section covers.
+  // Data directory [1] is the IMPORT table: base + 112 is directory [0]
+  // (export), and corrupting that would leave the import table parsing fine —
+  // a test that cannot go red.
+  const peAt = 0x80, optAt = peAt + 24, importDirRva = optAt + 112 + 8;
+  binfmt.u(buf, importDirRva, 0x7f000000, 4, false);
+  const out = scanFixture(buf, 'broken.exe');
+  assert.strictEqual(out.status, 4, `expected malformed exit 4, got ${out.status}`);
+  assert.deepStrictEqual(out.counts, []);
+});

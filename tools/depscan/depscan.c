@@ -325,6 +325,82 @@ static int scan_macho(const unsigned char *b, size_t len) {
   return scan_macho_thin(b, len, 0, (unsigned long long)len, 1);
 }
 
-/* Task 4 fills this in. Returning 3 keeps the "unrecognized" contract
- * honest in the meantime — it must never return 0 without printing deps=. */
-static int scan_pe(const unsigned char *b, size_t len) { (void)b; (void)len; return 3; }
+/* ---- PE --------------------------------------------------------------------
+ * The import table is reached through data directory [1], whose RVA must be
+ * mapped to a file offset via the section table -- the same shape as ELF's
+ * PT_LOAD walk. PE is little-endian on every Windows target that has ever
+ * shipped, so unlike ELF and Mach-O there is no byte order to discover.
+ */
+static long long pe_rva2off(const unsigned char *b, size_t len,
+                            unsigned long long sec_at, unsigned nsec,
+                            unsigned long long rva) {
+  unsigned i;
+  for (i = 0; i < nsec; i++) {
+    unsigned long long s = sec_at + (unsigned long long)i * 40;
+    unsigned long long va, vsz, rsz, praw, span;
+    if (!inb(s, 40, len)) return -1;
+    vsz  = rd(b + s + 8, 4, 0);
+    va   = rd(b + s + 12, 4, 0);
+    rsz  = rd(b + s + 16, 4, 0);
+    praw = rd(b + s + 20, 4, 0);
+    /* A section's virtual span can exceed its raw span (.bss-alikes); only
+     * the raw part is actually in the file, so clamp to it. */
+    span = (vsz && vsz < rsz) ? vsz : rsz;
+    if (rva >= va && rva - va < span) return (long long)(rva - va + praw);
+  }
+  return -1;
+}
+
+static int scan_pe(const unsigned char *b, size_t len) {
+  unsigned long long pe, opt, ddir, imp_rva, sec_at;
+  unsigned nsec, optsz, magic, machine;
+  long long at;
+  int plus, ndeps = 0, i;
+
+  if (!inb(0x3c, 4, len)) return 4;
+  pe = rd(b + 0x3c, 4, 0);
+  if (!inb(pe, 24, len)) return 4;
+  if (memcmp(b + pe, "PE\0\0", 4) != 0) return 4;
+
+  machine = (unsigned)rd(b + pe + 4, 2, 0);
+  nsec    = (unsigned)rd(b + pe + 6, 2, 0);
+  optsz   = (unsigned)rd(b + pe + 20, 2, 0);
+  opt     = pe + 24;
+  if (!inb(opt, optsz, len) || optsz < 2) return 4;
+
+  magic = (unsigned)rd(b + opt, 2, 0);
+  if (magic == 0x20b) plus = 1;
+  else if (magic == 0x10b) plus = 0;
+  else return 4;
+
+  printf("format=pe%s machine=%u\n", plus ? "64" : "32", machine);
+
+  /* Data directory [1] is the import table. Its offset differs between PE32
+   * and PE32+; a reader that hardcodes one reads garbage for the other. */
+  ddir = opt + (plus ? 112 : 96);
+  if (!inb(ddir + 8, 8, len)) return 4;
+  imp_rva = rd(b + ddir + 8, 4, 0);
+  if (imp_rva == 0) { printf("deps=0\n"); return 0; }   /* imports nothing */
+
+  sec_at = opt + optsz;
+  at = pe_rva2off(b, len, sec_at, nsec, imp_rva);
+  if (at < 0) return 4;
+
+  /* IMAGE_IMPORT_DESCRIPTOR is 20 bytes, terminated by an all-zero entry.
+   * Cap the walk so a corrupt table cannot spin. */
+  for (i = 0; i < 4096; i++) {
+    unsigned long long d = (unsigned long long)at + (unsigned long long)i * 20;
+    unsigned long long name_rva;
+    long long noff;
+    if (!inb(d, 20, len)) return 4;
+    if (rd(b + d, 4, 0) == 0 && rd(b + d + 12, 4, 0) == 0 && rd(b + d + 16, 4, 0) == 0) break;
+    name_rva = rd(b + d + 12, 4, 0);
+    if (name_rva == 0) return 4;
+    noff = pe_rva2off(b, len, sec_at, nsec, name_rva);
+    if (noff < 0) return 4;
+    if (!put_dep(b, len, (unsigned long long)noff)) return 4;
+    ndeps++;
+  }
+  printf("deps=%d\n", ndeps);
+  return 0;
+}

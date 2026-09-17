@@ -168,4 +168,61 @@ function fat(slices) {
   return b;
 }
 
-module.exports = { u, elf, macho, fat, ELF_BASE, ELF_STR, CPU_X86_64, CPU_ARM64, CPU_PPC, CPU_I386 };
+// ---- PE --------------------------------------------------------------------
+// Layout: MZ stub, PE signature at 0x80, COFF header, optional header (whose
+// data directory [1] is the import table), one section mapping RVA 0x1000 to
+// file offset 0x400, and the import descriptors + DLL names inside it.
+// PE is little-endian on every target Windows has ever shipped.
+function pe({ plus = true, machine = 0x8664, needed = [] } = {}) {
+  const PE_AT = 0x80, OPT_AT = PE_AT + 24;
+  const optSize = plus ? 240 : 224;
+  const SEC_AT = OPT_AT + optSize;
+  const IDATA_FILE = 0x400, IDATA_RVA = 0x1000;
+
+  const descBytes = (needed.length + 1) * 20;      // + the all-zero terminator
+  let names = Buffer.alloc(0);
+  const nameRvas = [];
+  for (const n of needed) {
+    nameRvas.push(IDATA_RVA + descBytes + names.length);
+    names = Buffer.concat([names, Buffer.from(n + '\0', 'latin1')]);
+  }
+  const idataSize = descBytes + names.length;
+  const total = IDATA_FILE + Math.ceil(idataSize / 512) * 512;
+  const b = Buffer.alloc(total, 0);
+
+  b.write('MZ', 0, 'latin1');
+  u(b, 0x3c, PE_AT, 4, false);                     // e_lfanew
+  b.write('PE\0\0', PE_AT, 'latin1');
+
+  // ---- COFF header
+  u(b, PE_AT + 4, machine, 2, false);              // Machine
+  u(b, PE_AT + 6, 1, 2, false);                    // NumberOfSections
+  u(b, PE_AT + 20, optSize, 2, false);             // SizeOfOptionalHeader
+  u(b, PE_AT + 22, 0x0022, 2, false);              // Characteristics (EXECUTABLE_IMAGE|LARGE_ADDRESS_AWARE)
+
+  // ---- Optional header: only the fields depscan reads need to be right.
+  u(b, OPT_AT, plus ? 0x20b : 0x10b, 2, false);    // Magic
+  const ddAt = OPT_AT + (plus ? 112 : 96);         // first data directory
+  u(b, OPT_AT + (plus ? 108 : 92), 16, 4, false);  // NumberOfRvaAndSizes
+  u(b, ddAt + 8, IDATA_RVA, 4, false);             // [1] Import Table RVA
+  u(b, ddAt + 12, idataSize, 4, false);            // [1] Import Table size
+
+  // ---- Section table: one section carrying the import data.
+  b.write('.idata\0\0', SEC_AT, 'latin1');
+  u(b, SEC_AT + 8, idataSize, 4, false);           // VirtualSize
+  u(b, SEC_AT + 12, IDATA_RVA, 4, false);          // VirtualAddress
+  u(b, SEC_AT + 16, total - IDATA_FILE, 4, false); // SizeOfRawData
+  u(b, SEC_AT + 20, IDATA_FILE, 4, false);         // PointerToRawData
+
+  // ---- Import descriptors, then the names they point at.
+  needed.forEach((_, i) => {
+    const d = IDATA_FILE + i * 20;
+    u(b, d + 0, IDATA_RVA + 0x800, 4, false);      // OriginalFirstThunk (unread)
+    u(b, d + 12, nameRvas[i], 4, false);           // Name RVA
+    u(b, d + 16, IDATA_RVA + 0x900, 4, false);     // FirstThunk (unread)
+  });
+  names.copy(b, IDATA_FILE + descBytes);
+  return b;
+}
+
+module.exports = { u, elf, macho, fat, pe, ELF_BASE, ELF_STR, CPU_X86_64, CPU_ARM64, CPU_PPC, CPU_I386 };
