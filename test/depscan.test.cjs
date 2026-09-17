@@ -256,6 +256,52 @@ test('(a) a DIFFERENT wrap value proves the arithmetic guard, not just the contr
   assert.doesNotMatch(out.stdout, /^deps=/m);
 });
 
+test('(a) elf_v2o rejects a PT_LOAD p_offset that would overflow the vaddr mapping', () => {
+  // A DIFFERENT overflow site from the two tests above: this one is
+  // elf_v2o's OWN `delta + off` addition, not scan_elf's `strtab_off +
+  // needed[i]`. loadOffset overrides PT_LOAD's p_offset field only -- p_vaddr
+  // and p_filesz are untouched, so DT_STRTAB's vaddr (0x1200) still falls
+  // inside this segment (delta = 0x1200 - 0x1000 = 0x200) and elf_v2o still
+  // finds a matching segment; it is the delta+off ADDITION that must now
+  // overflow (0x200 + 0xfffffffffffffe08 wraps to 0x8) for elf_v2o's guard,
+  // and only that guard, to be what returns -1.
+  //
+  // Verified by hand with the guard temporarily removed: elf_v2o then
+  // returns the WRAPPED value 8 (not negative, so scan_elf's `strtab_off < 0`
+  // check does not catch it either) -- offset 8 is e_ident padding, a plain
+  // zero byte, so put_dep at 8+1=9 (another zero byte) immediately hits its
+  // own NUL and prints an EMPTY "dep=" line, exiting 0. That confirms this
+  // exact fixture is caught ONLY by elf_v2o's own overflow guard: with it
+  // removed nothing else downstream rejects the file.
+  const out = scanFixture(binfmt.elf({ needed: ['libc.so.6'], loadOffset: 0xfffffffffffffe08n }));
+  assert.strictEqual(out.status, 4, `expected malformed exit 4, got ${out.status}: stdout=${out.stdout}`);
+  assert.doesNotMatch(out.stdout, /^dep=/m);
+  assert.doesNotMatch(out.stdout, /^deps=/m);
+});
+
+test('(a) the DT_RUNPATH string-table addition is guarded independently of DT_NEEDED\'s', () => {
+  // A THIRD overflow site: the `strtab_off + runpath_off` addition made
+  // just for the run= emitter, guarded separately from both the DT_NEEDED
+  // loop above and elf_v2o. strtab_off resolves normally here (0x200,
+  // loadOffset untouched); rawRunpath alone is the huge value, and it wraps
+  // to the same offset 8 used above for the same reason (0x200 + this value
+  // wraps to 8 mod 2^64).
+  //
+  // Verified by hand with ONLY this guard removed: `p` wraps to 8 (e_ident
+  // padding, zero), so the `while (p < len && b[p])` loop condition is false
+  // on its very first check -- no run= line is even attempted, control-char
+  // or otherwise, so neither of those guards is what would catch this. The
+  // scan then falls through to the (unaffected, correctly-guarded) DT_NEEDED
+  // loop for 'libc.so.6' and exits 0 having silently dropped the malformed
+  // RUNPATH instead of rejecting the file -- this guard is the only thing
+  // standing between that silent drop and an honest exit 4.
+  const out = scanFixture(binfmt.elf({ needed: ['libc.so.6'], rawRunpath: 0xfffffffffffffe08n }));
+  assert.strictEqual(out.status, 4, `expected malformed exit 4, got ${out.status}: stdout=${out.stdout}`);
+  assert.doesNotMatch(out.stdout, /^run=/m);
+  assert.doesNotMatch(out.stdout, /^dep=/m);
+  assert.doesNotMatch(out.stdout, /^deps=/m);
+});
+
 test('(b) ELF32 accepts a header exactly 0x34 bytes long, not just 0x40', () => {
   // The old `len < 0x40` check rejected every real ELF32 binary -- ELF32's
   // own header is only 0x34 bytes. Build the smallest possible valid ELF32:

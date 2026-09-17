@@ -30,7 +30,10 @@ function u(b, off, val, size, be) {
 // accidentally land on the right bytes.
 const ELF_PHOFF = 0x40, ELF_DYN = 0x100, ELF_STR = 0x200, ELF_BASE = 0x1000;
 
-function elf({ cls = 2, be = false, machine = 62, needed = [], strtabVaddr = null, rpath = [], rawNeeded = null } = {}) {
+function elf({
+  cls = 2, be = false, machine = 62, needed = [], strtabVaddr = null, rpath = [],
+  rawNeeded = null, rawRunpath = null, loadOffset = 0,
+} = {}) {
   const w = cls === 2 ? 8 : 4;
   const phesz = cls === 2 ? 56 : 32;
 
@@ -62,14 +65,19 @@ function elf({ cls = 2, be = false, machine = 62, needed = [], strtabVaddr = nul
   u(b, cls === 2 ? 0x38 : 0x2c, 2, 2, be);             // e_phnum
 
   // ---- phdr[0]: PT_LOAD covering the whole file at ELF_BASE
+  // loadOffset overrides p_offset (normally 0): a test can set it near
+  // UINT64_MAX so elf_v2o's `delta + off` wraps when mapping a vaddr through
+  // this segment, without disturbing p_vaddr/p_filesz (which still describe
+  // where the file's REAL bytes are, so everything but that one addition
+  // keeps working as normal).
   const p0 = ELF_PHOFF;
   if (cls === 2) {
     u(b, p0 + 0, 1, 4, be);      u(b, p0 + 4, 5, 4, be);       // p_type, p_flags
-    u(b, p0 + 8, 0, 8, be);      u(b, p0 + 16, ELF_BASE, 8, be); // p_offset, p_vaddr
+    u(b, p0 + 8, loadOffset, 8, be); u(b, p0 + 16, ELF_BASE, 8, be); // p_offset, p_vaddr
     u(b, p0 + 24, ELF_BASE, 8, be);                            // p_paddr
     u(b, p0 + 32, total, 8, be); u(b, p0 + 40, total, 8, be);   // p_filesz, p_memsz
   } else {
-    u(b, p0 + 0, 1, 4, be);      u(b, p0 + 4, 0, 4, be);        // p_type, p_offset
+    u(b, p0 + 0, 1, 4, be);      u(b, p0 + 4, loadOffset, 4, be); // p_type, p_offset
     u(b, p0 + 8, ELF_BASE, 4, be); u(b, p0 + 12, ELF_BASE, 4, be); // p_vaddr, p_paddr
     u(b, p0 + 16, total, 4, be); u(b, p0 + 20, total, 4, be);   // p_filesz, p_memsz
     u(b, p0 + 24, 5, 4, be);                                    // p_flags
@@ -81,8 +89,12 @@ function elf({ cls = 2, be = false, machine = 62, needed = [], strtabVaddr = nul
   // every caller that just wants an ordinary name.
   const neededTags = rawNeeded !== null ? rawNeeded : nameOffsets;
 
+  // rawRunpath lets a test emit a DT_RUNPATH VALUE directly, same idea as
+  // rawNeeded, without needing an actual rpath[] string to also exist.
+  const haveRunpath = rpath.length > 0 || rawRunpath !== null;
+
   // ---- phdr[1]: PT_DYNAMIC
-  const dynCount = neededTags.length + 3 + (rpath.length ? 1 : 0);  // NEEDED* + RUNPATH? + STRTAB + STRSZ + NULL
+  const dynCount = neededTags.length + 3 + (haveRunpath ? 1 : 0);  // NEEDED* + RUNPATH? + STRTAB + STRSZ + NULL
   const dynSize = dynCount * w * 2;
   const p1 = ELF_PHOFF + phesz;
   if (cls === 2) {
@@ -100,7 +112,7 @@ function elf({ cls = 2, be = false, machine = 62, needed = [], strtabVaddr = nul
   // ---- .dynamic: DT_NEEDED(1) per dep, DT_RUNPATH(29) if asked, then
   // DT_STRTAB(5), DT_STRSZ(10), DT_NULL(0).
   const entries = neededTags.map((off) => [1, off]);
-  if (rpath.length) entries.push([29, runpathOffset]);
+  if (haveRunpath) entries.push([29, rawRunpath !== null ? rawRunpath : runpathOffset]);
   entries.push([5, strtabVaddr === null ? ELF_BASE + ELF_STR : strtabVaddr]);
   entries.push([10, strLen]);
   entries.push([0, 0]);
