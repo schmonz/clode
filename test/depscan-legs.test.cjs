@@ -55,14 +55,58 @@ test('the legs that used to skip are now checked — named, so a regression is l
 test('no leg config can reintroduce a host-tool-based skip', () => {
   // The defect shape, not just its instances: checkHermeticDeps must not
   // consult anything about the HOST when deciding whether to check.
+  //
+  // SCANNED WITH COMMENTS STRIPPED, via the real tokenizer. This test shipped
+  // as a raw fn.includes() sweep over the function's whole text, code and
+  // prose alike -- so checkHermeticDeps could not NAME otool or ldd even to
+  // explain why they were removed, and the comment there degenerated into
+  // "...which is why they aren't spelled out here": shipped code documenting
+  // a TEST'S limitation instead of the design. Ruling 6 (Task 1, this same
+  // branch) already rejected exactly that trade as "worse than the collision"
+  // and prescribed the fix, which is sitting right here:
+  // test/strip-comments.cjs is a real tokenizer that blanks comments while
+  // leaving string literals -- where a genuine `otool` argument or an
+  // execFileSync('ldd', ...) call would live -- completely intact. A mention
+  // in prose is therefore not a violation; a call still is.
   const fs = require('node:fs');
   const path = require('node:path');
+  const { stripComments } = require('./strip-comments.cjs');
   const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'build-tjs.mjs'), 'utf8');
   const start = src.indexOf('function checkHermeticDeps');
   assert.ok(start > -1);
-  const fn = src.slice(start, src.indexOf('\n// CLODE_TJS_SMOKE=off', start));
+  const fn = stripComments(src.slice(start, src.indexOf('\n// CLODE_TJS_SMOKE=off', start)));
   for (const hostThing of ['process.platform', 'crossFile', 'otool', 'ldd']) {
     assert.ok(!fn.includes(hostThing),
       `checkHermeticDeps still consults ${hostThing} — the whole point is that the build host is irrelevant`);
+  }
+});
+
+test('the host-tool sweep can still go red — a real call is caught through the tokenizer', () => {
+  // The control for the test above. Stripping comments must narrow what the
+  // sweep sees to CODE, not defeat it: an otool/ldd call, a process.platform
+  // read, or a cross-file consultation must still be found after tokenizing,
+  // including one hidden inside a string literal or a template literal (the
+  // exact places test/strip-comments.cjs exists to preserve).
+  const { stripComments } = require('./strip-comments.cjs');
+  const violations = [
+    "  const out = runOut('otool', ['-L', enginePath]);",
+    '  const out = runOut(`ldd ${enginePath}`);',
+    '  if (process.platform === \'win32\') return;',
+    '  if (crossFile) return;',
+  ];
+  for (const line of violations) {
+    const fn = stripComments(`function checkHermeticDeps(enginePath) {\n${line}\n}\n`);
+    const hit = ['process.platform', 'crossFile', 'otool', 'ldd'].some((t) => fn.includes(t));
+    assert.ok(hit, `the tokenized sweep failed to see a real violation: ${line}`);
+  }
+  // And the converse, which is the whole reason for the tokenizer: the same
+  // words in a COMMENT are not findings.
+  const prose = stripComments(
+    'function checkHermeticDeps(enginePath) {\n'
+    + '  // otool -L and ldd could only read a binary this host can load; that is\n'
+    + '  /* why depscan replaced them, and why process.platform and crossFile are gone. */\n'
+    + '  return 1;\n}\n');
+  for (const t of ['process.platform', 'crossFile', 'otool', 'ldd']) {
+    assert.ok(!prose.includes(t), `a prose mention of ${t} must not read as a violation`);
   }
 });

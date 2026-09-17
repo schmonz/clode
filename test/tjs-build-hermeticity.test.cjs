@@ -10,6 +10,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { stripLineComments } = require('./source-scan.cjs');
@@ -253,6 +254,14 @@ function extractFunction(src, name) {
 // The verdict functions are NOT stubbed: parseDepscan and hermeticityFindings
 // are required from scripts/depscan-verdict.cjs — the same module the build
 // imports — so this harness exercises the real decision on real-shaped output.
+// `fs` IS INJECTED, and must stay injected. checkHermeticDeps appends its
+// per-leg verdict to $GITHUB_STEP_SUMMARY with fs.appendFileSync, and that
+// variable is set in EVERY GitHub Actions step -- so without fs here the
+// harness raised "ReferenceError: fs is not defined" from inside the shipped
+// function on CI while passing on a developer's machine, where the variable is
+// unset. A harness that can only exercise the code path nobody runs it on is
+// the same "gate that cannot fail" this phase exists to abolish. Found while
+// wiring the failure-path summary line (reviewer Minor 13, 2026-09-17).
 function loadCheckHermeticDeps({ wantStatic, depscanOut, logs, onBuildDepscan }) {
   const verdict = require(path.join(repo, 'scripts/depscan-verdict.cjs'));
   const consoleStub = {
@@ -269,16 +278,36 @@ function loadCheckHermeticDeps({ wantStatic, depscanOut, logs, onBuildDepscan })
   };
   // eslint-disable-next-line no-new-func
   const factory = new Function(
-    'wantStatic', 'console', 'buildDepscan', 'repo', 'path', 'buildRoot',
+    'wantStatic', 'console', 'buildDepscan', 'repo', 'path', 'fs', 'buildRoot',
     'targetToken', 'outDir', 'run', 'jobs', 'runOut',
     'parseDepscan', 'hermeticityFindings', 'PKG_MANAGER_ROOTS',
     `${extractFunction(buildTjsSrc, 'checkHermeticDeps')}\nreturn checkHermeticDeps;`,
   );
-  return factory(
-    wantStatic, consoleStub, buildDepscanStub, '/repo', path, '/buildroot',
+  const check = factory(
+    wantStatic, consoleStub, buildDepscanStub, '/repo', path, fs, '/buildroot',
     () => 'target-token', '/out', () => {}, '1', runOutStub,
     verdict.parseDepscan, verdict.hermeticityFindings, verdict.PKG_MANAGER_ROOTS,
   );
+  // EVERY invocation writes its job-summary line into a temp file belonging to
+  // this harness, never the ambient $GITHUB_STEP_SUMMARY -- which, in a GitHub
+  // Actions job, is set. Without the redirect these tests appended four
+  // fabricated verdicts to the REAL job summary of every CI run ("- `bin` —
+  // FAILED — depscan output has an unrecognized line...", from a fixture): a
+  // phase whose entire subject is honest per-leg verdicts, publishing invented
+  // ones. Read the file back with check.summary().
+  const summaryFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'clode-summary-')), 'summary.md');
+  const wrapped = (enginePath) => {
+    const prev = process.env.GITHUB_STEP_SUMMARY;
+    process.env.GITHUB_STEP_SUMMARY = summaryFile;
+    try {
+      return check(enginePath);
+    } finally {
+      if (prev === undefined) delete process.env.GITHUB_STEP_SUMMARY;
+      else process.env.GITHUB_STEP_SUMMARY = prev;
+    }
+  };
+  wrapped.summary = () => (fs.existsSync(summaryFile) ? fs.readFileSync(summaryFile, 'utf8') : '');
+  return wrapped;
 }
 
 // ---- MINOR 4, phase-4b form: unverifiable must not read as OK — and now ----
@@ -365,6 +394,66 @@ test('checkHermeticDeps: a clean PE (Windows) engine reports OK with counts, not
   assert.match(joined, /OK —/);
   assert.match(joined, /2 dynamic dependencies/);
   assert.doesNotMatch(joined, /SKIPPED/);
+});
+
+// ---- MINOR 13: the CI job summary must report FAILURES, not only successes --
+//
+// Reviewer finding, 2026-09-17. The $GITHUB_STEP_SUMMARY append used to sit
+// AFTER every throw in checkHermeticDeps, so the summary collected a bullet
+// for each leg that PASSED and nothing at all for a leg that FAILED -- which
+// in that list is indistinguishable from a leg that never ran. "No verdict"
+// and "no verdict was needed" reading the same is precisely the confusion this
+// whole phase exists to abolish, and the phase's own reporting must not
+// reintroduce it.
+//
+// Run for real against a temp file rather than grepped out of the source: the
+// fix is a try/catch around the body (so a check added here later inherits the
+// reporting instead of having to remember it), and what matters is that a line
+// LANDS, not that the source has a particular shape.
+test('checkHermeticDeps: a FAILING leg writes a red line to the CI job summary', () => {
+  const check = loadCheckHermeticDeps({
+    wantStatic: false,
+    depscanOut: 'format=elf32be machine=4\nrun=/opt/pkg/lib\ndep=libc.so.12\ndeps=1\n',
+    logs: [],
+  });
+  assert.throws(() => check('/build/tjs/netbsd-m68k/tjs'), /\/opt\/pkg\/lib/,
+    'reporting must not swallow the failure — the build still has to stop');
+  const summary = check.summary();
+  assert.match(summary, /netbsd-m68k/, 'the summary line must name the LEG that failed');
+  assert.match(summary, /FAILED/, 'and it must read as red, not as an absent verdict');
+  assert.strictEqual(summary.split('\n').filter(Boolean).length, 1,
+    `exactly one summary line per leg, got: ${JSON.stringify(summary)}`);
+});
+
+test('checkHermeticDeps: a leg whose depscan output cannot be PARSED is reported too', () => {
+  // The throw that has no throw site of its own inside checkHermeticDeps:
+  // parseDepscan raises it. A per-throw-site append would have missed this
+  // one, which is why the reporting wraps the whole body.
+  const check = loadCheckHermeticDeps({
+    wantStatic: false,
+    depscanOut: '        Start    End      Type  Open Ref GrpRef Name\n',
+    logs: [],
+  });
+  assert.throws(() => check('/build/tjs/openbsd-amd64/tjs'), /unrecognized line/);
+  assert.match(check.summary(), /openbsd-amd64/);
+  assert.match(check.summary(), /FAILED/);
+});
+
+test('checkHermeticDeps: a PASSING leg still writes its OK line', () => {
+  // The other half of the distinction: three states (OK, FAILED, absent) must
+  // stay distinguishable, so fixing the failure path must not cost the success
+  // path. This also exercises fs.appendFileSync through the harness, the call
+  // that was silently unreachable before `fs` was injected above.
+  const check = loadCheckHermeticDeps({
+    wantStatic: false,
+    depscanOut: 'format=pe64 machine=0x8664\ndep=KERNEL32.dll\ndeps=1\n',
+    logs: [],
+  });
+  assert.doesNotThrow(() => check('/build/tjs/windows-amd64/tjs.exe'));
+  const summary = check.summary();
+  assert.match(summary, /windows-amd64/);
+  assert.match(summary, /OK —/);
+  assert.doesNotMatch(summary, /FAILED/);
 });
 
 // ---- optional: a locally built engine, if one exists ----------------------

@@ -3689,44 +3689,24 @@ function checkHermeticDeps(enginePath) {
     return;
   }
   // The other two skips are GONE. Cross-built and Windows binaries used to be
-  // waved through because the build host's own native dependency-listing
-  // tools cannot read a foreign-target binary — 19 of 42 release legs, 15 of
-  // them published, whose entire hermeticity proof was file(1) saying "yes,
-  // that is an m68k NetBSD ELF". depscan reads the dependency table out of
-  // the file itself, so the host it was built on is irrelevant. (test/
-  // depscan-legs.test.cjs asserts this function's TEXT never names those
-  // host tools again, which is why they aren't spelled out here.)
-  const depscan = buildDepscan(repo, path.join(buildRoot, targetToken(outDir), 'build-depscan'), { run, jobs });
-  let out;
-  try {
-    out = runOut(depscan, [enginePath]);
-  } catch (e) {
-    // NOT a skip. If the verifier cannot read the engine we just built, we do
-    // not know what it links, and shipping it would be exactly the
-    // unverified-looks-verified state this check exists to prevent.
-    throw new Error(`hermeticity check FAILED: depscan could not read ${enginePath} — ${e.message}`);
-  }
-  const parsed = parseDepscan(out);          // throws if the scan did not complete
-  const findings = hermeticityFindings(parsed, PKG_MANAGER_ROOTS);
-  if (findings.length) {
-    throw new Error(
-      `hermeticity check FAILED: ${enginePath}\n  ` + findings.join('\n  ') + '\n' +
-      'A shipped engine must not depend on a third-party package manager ' +
-      '(pkgsrc/Homebrew/MacPorts/Fink/...): a machine running it may not have that prefix ' +
-      'at all, and when one DID, a mixed-in pkgsrc uv.h got compiled into this same binary ' +
-      'alongside the vendored one and SIGABRTed before the first line of JS ran (2026-07-31 ' +
-      'incident, see the CMAKE_IGNORE_PREFIX_PATH comment above). CMAKE_IGNORE_PREFIX_PATH ' +
-      "should have kept cmake's find_*() from ever resolving into this prefix — if it linked " +
-      "anyway, either this host's cmake predates 3.23 (see the loud warning above) or " +
-      'something re-added a package-manager search path.');
-  }
-  const n = parsed.slices.reduce((a, s) => a + s.deps.length, 0);
-  const runs = parsed.slices.reduce((a, s) => a + s.runs.length, 0);
-  const verdict = `OK — ${enginePath} (${parsed.format}, ${parsed.slices.length} slice(s)) `
-    + `has ${n} dynamic ${n === 1 ? 'dependency' : 'dependencies'} and ${runs} search path(s), `
-    + `none from a package-manager prefix (${PKG_MANAGER_ROOTS.join(', ')})`;
-  console.log(`hermeticity check: ${verdict}`);
-  // Surface the verdict in the CI job summary. Done HERE rather than in
+  // waved through because `otool -L` and `ldd` can only inspect a binary THIS
+  // host can load — 19 of 42 release legs, 15 of them published, whose entire
+  // hermeticity proof was file(1) saying "yes, that is an m68k NetBSD ELF".
+  // depscan reads the dependency table out of the file itself, so the host it
+  // was built on is irrelevant.
+  //
+  // Naming otool and ldd right here is deliberate. An earlier revision of this
+  // comment said "the build host's own native dependency-listing tools" and
+  // then explained that they "aren't spelled out here" because test/
+  // depscan-legs.test.cjs scanned this function's RAW text for those words --
+  // shipped code documenting a TEST'S limitation instead of the design. That
+  // is verbatim the defect Ruling 6 rejected in Task 1 of this same branch
+  // ("worse than the collision"), and the fix it prescribed was carried out
+  // there: test/strip-comments.cjs is a real tokenizer that blanks comments
+  // while leaving string literals (where a real `otool` argument would live)
+  // intact. The gate uses it, so prose here may name what the code must not
+  // call. Do not reword this back.
+  // Surface this leg's verdict in the CI job summary. Done HERE rather than in
   // build-leg/action.yml because build-tjs.mjs is invoked from five different
   // steps there; a grep-the-log step would need writing five times and would
   // drift from the call sites. Env-gated, so local builds are unaffected.
@@ -3740,9 +3720,62 @@ function checkHermeticDeps(enginePath) {
   // code reads must have a recorded verdict). enginePath is already the
   // per-leg input this function was called with; deriving the label from it
   // needs no new name and no verdict entry at all.
-  if (process.env.GITHUB_STEP_SUMMARY) {
-    fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
-      `- \`${path.basename(path.dirname(enginePath))}\` — ${verdict}\n`);
+  // Written as a guarded block rather than an early `return` on purpose:
+  // test/tjs-build-hermeticity.test.cjs counts the bare returns in this
+  // function's text to prove the static one is still the ONLY skip, and a
+  // reporting helper's own early exit would read as a second skip to it.
+  const summarize = (verdict) => {
+    if (process.env.GITHUB_STEP_SUMMARY) {
+      fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+        `- \`${path.basename(path.dirname(enginePath))}\` — ${verdict}\n`);
+    }
+  };
+  // A FAILING leg must contribute a RED LINE, not silence. The append used to
+  // sit after every throw below, so the summary showed a bullet for each leg
+  // that passed and NOTHING for a leg that failed -- which in that list reads
+  // exactly like a leg that never ran. "Verdict absent" and "no verdict was
+  // needed" looking the same is the confusion this entire phase exists to
+  // abolish, so it must not be reintroduced by the phase's own reporting.
+  // (Reviewer finding, 2026-09-17.) The try/catch, rather than a call at each
+  // throw site, is what makes that structural: parseDepscan() throws too, and
+  // so will the next check someone adds here.
+  try {
+    const depscan = buildDepscan(repo, path.join(buildRoot, targetToken(outDir), 'build-depscan'), { run, jobs });
+    let out;
+    try {
+      out = runOut(depscan, [enginePath]);
+    } catch (e) {
+      // NOT a skip. If the verifier cannot read the engine we just built, we do
+      // not know what it links, and shipping it would be exactly the
+      // unverified-looks-verified state this check exists to prevent.
+      throw new Error(`hermeticity check FAILED: depscan could not read ${enginePath} — ${e.message}`);
+    }
+    const parsed = parseDepscan(out);          // throws if the scan did not complete
+    const findings = hermeticityFindings(parsed, PKG_MANAGER_ROOTS);
+    if (findings.length) {
+      throw new Error(
+        `hermeticity check FAILED: ${enginePath}\n  ` + findings.join('\n  ') + '\n' +
+        'A shipped engine must not depend on a third-party package manager ' +
+        '(pkgsrc/Homebrew/MacPorts/Fink/...): a machine running it may not have that prefix ' +
+        'at all, and when one DID, a mixed-in pkgsrc uv.h got compiled into this same binary ' +
+        'alongside the vendored one and SIGABRTed before the first line of JS ran (2026-07-31 ' +
+        'incident, see the CMAKE_IGNORE_PREFIX_PATH comment above). CMAKE_IGNORE_PREFIX_PATH ' +
+        "should have kept cmake's find_*() from ever resolving into this prefix — if it linked " +
+        "anyway, either this host's cmake predates 3.23 (see the loud warning above) or " +
+        'something re-added a package-manager search path.');
+    }
+    const n = parsed.slices.reduce((a, s) => a + s.deps.length, 0);
+    const runs = parsed.slices.reduce((a, s) => a + s.runs.length, 0);
+    const verdict = `OK — ${enginePath} (${parsed.format}, ${parsed.slices.length} slice(s)) `
+      + `has ${n} dynamic ${n === 1 ? 'dependency' : 'dependencies'} and ${runs} search path(s), `
+      + `none from a package-manager prefix (${PKG_MANAGER_ROOTS.join(', ')})`;
+    console.log(`hermeticity check: ${verdict}`);
+    summarize(verdict);
+  } catch (e) {
+    // First line only: these messages are several paragraphs of remediation
+    // advice (which belongs in the log), and a job summary is a bullet list.
+    summarize(`FAILED — ${String(e.message).split('\n')[0]}`);
+    throw e;
   }
 }
 
