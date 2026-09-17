@@ -15,6 +15,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const { spawnSync } = require('node:child_process');
 const { depscanExe } = require('./depscan-build.cjs');
+const { defineGuard, guardTests } = require('./guard.cjs');
 
 function depsFromDepscan(file) {
   const r = spawnSync(depscanExe(), [file], { encoding: 'utf8' });
@@ -26,60 +27,103 @@ function have(cmd) {
   return spawnSync(process.platform === 'win32' ? 'where' : 'which', [cmd], { encoding: 'utf8' }).status === 0;
 }
 
-test('darwin: depscan agrees with otool -L on a system binary', { skip: process.platform !== 'darwin' ? 'not darwin' : !have('otool') ? 'no otool' : false }, () => {
-  const target = '/bin/sh';
-  const otool = spawnSync('otool', ['-L', target], { encoding: 'utf8' });
-  assert.strictEqual(otool.status, 0, otool.stderr);
-  // otool -L prints "<binary>:" then one indented "<path> (compatibility ...)"
-  // line per dependency. /bin/sh on this box is 3-way fat (x86_64 + two
-  // arm64e slices, per `lipo -info`) -- but this host's otool (cctools-1040)
-  // does NOT split fat output into per-architecture "(architecture ...):"
-  // sections; it prints one dependency set. We still guard against a header
-  // line being parsed as a dependency (dropping any line ending in ":"), in
-  // case a different otool build DOES split by architecture.
-  const want = new Set(otool.stdout.split('\n').slice(1)
-    .map((l) => l.trim()).filter(Boolean)
-    .filter((l) => !/:$/.test(l))
-    .map((l) => l.replace(/\s*\(compatibility.*$/, '')));
-  // depscan is fat-aware and reports one dep= line PER SLICE (task 4), so a
-  // 3-slice binary with one dylib each yields three identical dep= lines.
-  // otool's single, unsplit dependency set has no notion of "per slice" to
-  // compare against, so the honest comparison here is on the SET of names,
-  // not the raw count -- three slices agreeing with each other and with
-  // otool is still agreement, not disagreement.
-  const got = new Set(depsFromDepscan(target));
-  assert.ok(want.size > 0, 'otool -L produced no dependency lines — the harness is wrong, not depscan');
-  assert.deepStrictEqual([...got].sort(), [...want].sort(),
-    `depscan and otool -L disagree on ${target}`);
+// Guard (task-8 addendum (h)): depscan vs the host's own tool, on a binary neither
+// wrote. This used to be three separate platform-gated tests, each reading a real
+// artifact (a system binary + a native tool's own output) and deriving a finding by
+// set comparison -- exactly guard-shaped, so they collapsed into ONE guard whose
+// read() picks whichever native tool this host actually has.
+//
+// SKIPS ARE HONEST HERE, and deliberately so: this guard can only run where the host
+// has both a native tool and a native binary. The cross-built and Windows coverage
+// this phase exists for lives in test/depscan.test.cjs, which runs everywhere. A skip
+// here is "this host cannot be the second opinion", not "unverified".
+const depscanAgreesWithNativeTool = defineGuard({
+  name: 'depscan-agrees-with-native-tool',
+  floor: 1,
+  read() {
+    if (process.platform === 'darwin') {
+      if (!have('otool')) return { skip: 'no otool' };
+      const target = '/bin/sh';
+      const otool = spawnSync('otool', ['-L', target], { encoding: 'utf8' });
+      if (otool.status !== 0) return { skip: `otool -L failed: ${otool.stderr}` };
+      // otool -L prints "<binary>:" then one indented "<path> (compatibility ...)"
+      // line per dependency. /bin/sh on this box is 3-way fat (x86_64 + two
+      // arm64e slices, per `lipo -info`) -- but this host's otool (cctools-1040)
+      // does NOT split fat output into per-architecture "(architecture ...):"
+      // sections; it prints one dependency set. We still guard against a header
+      // line being parsed as a dependency (dropping any line ending in ":"), in
+      // case a different otool build DOES split by architecture.
+      const want = new Set(otool.stdout.split('\n').slice(1)
+        .map((l) => l.trim()).filter(Boolean)
+        .filter((l) => !/:$/.test(l))
+        .map((l) => l.replace(/\s*\(compatibility.*$/, '')));
+      if (want.size === 0) throw new Error('otool -L produced no dependency lines — the harness is wrong, not depscan');
+      // depscan is fat-aware and reports one dep= line PER SLICE (task 4), so a
+      // 3-slice binary with one dylib each yields three identical dep= lines.
+      // otool's single, unsplit dependency set has no notion of "per slice" to
+      // compare against, so the honest comparison here is on the SET of names,
+      // not the raw count -- three slices agreeing with each other and with
+      // otool is still agreement, not disagreement. mode 'exact': every name
+      // must appear on both sides.
+      return { want, got: new Set(depsFromDepscan(target)), target, tool: 'otool -L', mode: 'exact' };
+    }
+    if (process.platform !== 'win32') {
+      if (!have('ldd')) return { skip: 'no ldd' };
+      const target = '/bin/sh';
+      const ldd = spawnSync('ldd', [target], { encoding: 'utf8' });
+      if (ldd.status !== 0) return { skip: `ldd failed: ${ldd.stderr}` };
+      // ldd resolves to absolute paths; depscan reports the SONAME as recorded
+      // in DT_NEEDED. Compare on basename, which is what both agree on. The
+      // vDSO has no file and is dropped. mode 'subset': every depscan dep must
+      // be SOMEWHERE in ldd's list, but ldd's list is allowed to know about
+      // more than the SONAME table does (e.g. transitively resolved libs).
+      const want = new Set(ldd.stdout.split('\n')
+        .map((l) => (l.match(/^\s*(\S+)\s*=>/) || [])[1])
+        .filter(Boolean).filter((n) => !/^linux-vdso/.test(n)));
+      if (want.size === 0) throw new Error('ldd produced no dependency lines — the harness is wrong, not depscan');
+      return { want, got: new Set(depsFromDepscan(target)), target, tool: 'ldd', mode: 'subset' };
+    }
+    if (!have('dumpbin')) return { skip: 'no dumpbin (needs a VS developer prompt)' };
+    const target = process.execPath;                     // node.exe
+    const dump = spawnSync('dumpbin', ['/dependents', target], { encoding: 'utf8' });
+    if (dump.status !== 0) return { skip: `dumpbin failed: ${dump.stderr}` };
+    const want = new Set(dump.stdout.split('\n')
+      .map((l) => l.trim()).filter((l) => /\.dll$/i.test(l)).map((l) => l.toLowerCase()));
+    if (want.size === 0) throw new Error('dumpbin listed no dependents — the harness is wrong, not depscan');
+    return { want, got: new Set(depsFromDepscan(target).map((d) => d.toLowerCase())), target, tool: 'dumpbin /dependents', mode: 'exact' };
+  },
+  scan({ want, got, target, tool, mode }) {
+    const findings = [];
+    for (const d of got) {
+      if (!want.has(d)) findings.push(`depscan reported ${d} on ${target}, which ${tool} did not`);
+    }
+    if (mode === 'exact') {
+      for (const d of want) {
+        if (!got.has(d)) findings.push(`${tool} reported ${d} on ${target}, which depscan did not`);
+      }
+    }
+    // Examined = "one head-to-head comparison performed", not the dep count --
+    // a statically-linked comparison target would legitimately report zero
+    // deps on BOTH sides and that is still a complete, meaningful comparison,
+    // not a blind one (the same reasoning test/depscan-guard.test.cjs's
+    // "statically linked engine reads as EXAMINED, not BROKEN" regression
+    // test made explicit for the sibling hermeticity guard).
+    return { findings, examined: 1 };
+  },
+  control() {
+    // A depscan/native-tool pair that DISAGREE in both directions: depscan
+    // reports something the native tool never saw, AND the native tool
+    // reports something depscan missed. Synthetic paths only -- control()
+    // does no I/O.
+    return {
+      want: new Set(['/usr/lib/libSystem.B.dylib']),
+      got: new Set(['/opt/evil/lib/libFake.dylib']),
+      target: '/fake/target', tool: 'fake-tool', mode: 'exact',
+    };
+  },
 });
 
-test('linux/bsd: depscan agrees with ldd on a system binary', { skip: process.platform === 'darwin' || process.platform === 'win32' ? 'not an ldd platform' : !have('ldd') ? 'no ldd' : false }, () => {
-  const target = '/bin/sh';
-  const ldd = spawnSync('ldd', [target], { encoding: 'utf8' });
-  assert.strictEqual(ldd.status, 0, ldd.stderr);
-  // ldd resolves to absolute paths; depscan reports the SONAME as recorded in
-  // DT_NEEDED. Compare on basename, which is what both agree on. The vDSO has
-  // no file and is dropped.
-  const want = new Set(ldd.stdout.split('\n')
-    .map((l) => (l.match(/^\s*(\S+)\s*=>/) || [])[1])
-    .filter(Boolean).filter((n) => !/^linux-vdso/.test(n)));
-  const got = new Set(depsFromDepscan(target));
-  assert.ok(want.size > 0, 'ldd produced no dependency lines — the harness is wrong, not depscan');
-  for (const n of got) {
-    assert.ok(want.has(n), `depscan reported ${n}, which ldd did not list: ${[...want].join(', ')}`);
-  }
-});
-
-test('windows: depscan agrees with dumpbin /dependents', { skip: process.platform !== 'win32' ? 'not windows' : !have('dumpbin') ? 'no dumpbin (needs a VS developer prompt)' : false }, () => {
-  const target = process.execPath;                       // node.exe
-  const dump = spawnSync('dumpbin', ['/dependents', target], { encoding: 'utf8' });
-  assert.strictEqual(dump.status, 0, dump.stderr);
-  const want = new Set(dump.stdout.split('\n')
-    .map((l) => l.trim()).filter((l) => /\.dll$/i.test(l)).map((l) => l.toLowerCase()));
-  const got = new Set(depsFromDepscan(target).map((d) => d.toLowerCase()));
-  assert.ok(want.size > 0, 'dumpbin listed no dependents — the harness is wrong, not depscan');
-  assert.deepStrictEqual([...got].sort(), [...want].sort());
-});
+guardTests(depscanAgreesWithNativeTool);
 
 // The opportunistic cross oracle: real foreign-arch engines, if this box has
 // them cached. These are the binaries otool/ldd genuinely CANNOT read, so
@@ -101,11 +145,16 @@ test('cached cross-built engine templates parse to a definite answer', (t) => {
     t.skip(`no template cache at ${dir} — this oracle only runs on a box that has fetched engines`);
     return;
   }
-  // A cosmo APE is an MZ header that is NOT a PE -- depscan reports it as an
-  // unrecognized container, correctly. Exclude it by name rather than
-  // loosening the assertion below, which would let a real parse failure pass.
+  // An APE is a polyglot; depscan reports its PE face. Its Unix face is
+  // statically linked by construction (cosmopolitan's libc), so there are no
+  // dynamic dependencies to miss -- but "cosmo is verified" means "its PE
+  // imports are verified", and that distinction should not live only in
+  // someone's memory. (Corrected 2026-09-17: an earlier version of this
+  // comment claimed depscan could not parse an APE at all -- MEASURED false;
+  // depscan reads it cleanly as format=pe64 with a real import table. cosmo
+  // is included in the oracle below, not excluded.)
   const templates = fs.readdirSync(dir)
-    .filter((f) => f.startsWith('tjs-') && !f.includes('cosmo'))
+    .filter((f) => f.startsWith('tjs-'))
     .slice(0, 12);
   if (templates.length === 0) {
     t.skip(`no tjs-* templates found in ${dir}`);

@@ -3689,10 +3689,13 @@ function checkHermeticDeps(enginePath) {
     return;
   }
   // The other two skips are GONE. Cross-built and Windows binaries used to be
-  // waved through because otool/ldd cannot read them — 19 of 42 release legs,
-  // 15 of them published, whose entire hermeticity proof was file(1) saying
-  // "yes, that is an m68k NetBSD ELF". depscan reads the dependency table out
-  // of the file itself, so the host it was built on is irrelevant.
+  // waved through because the build host's own native dependency-listing
+  // tools cannot read a foreign-target binary — 19 of 42 release legs, 15 of
+  // them published, whose entire hermeticity proof was file(1) saying "yes,
+  // that is an m68k NetBSD ELF". depscan reads the dependency table out of
+  // the file itself, so the host it was built on is irrelevant. (test/
+  // depscan-legs.test.cjs asserts this function's TEXT never names those
+  // host tools again, which is why they aren't spelled out here.)
   const depscan = buildDepscan(repo, path.join(buildRoot, targetToken(outDir), 'build-depscan'), { run, jobs });
   let out;
   try {
@@ -3719,9 +3722,18 @@ function checkHermeticDeps(enginePath) {
   }
   const n = parsed.slices.reduce((a, s) => a + s.deps.length, 0);
   const runs = parsed.slices.reduce((a, s) => a + s.runs.length, 0);
-  console.log(`hermeticity check: OK — ${enginePath} (${parsed.format}, ${parsed.slices.length} slice(s)) `
+  const verdict = `OK — ${enginePath} (${parsed.format}, ${parsed.slices.length} slice(s)) `
     + `has ${n} dynamic ${n === 1 ? 'dependency' : 'dependencies'} and ${runs} search path(s), `
-    + `none from a package-manager prefix (${PKG_MANAGER_ROOTS.join(', ')})`);
+    + `none from a package-manager prefix (${PKG_MANAGER_ROOTS.join(', ')})`;
+  console.log(`hermeticity check: ${verdict}`);
+  // Surface the verdict in the CI job summary. Done HERE rather than in
+  // build-leg/action.yml because build-tjs.mjs is invoked from five different
+  // steps there; a grep-the-log step would need writing five times and would
+  // drift from the call sites. Env-gated, so local builds are unaffected.
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+      `- \`${process.env.CLODE_LEG || outName}\` — ${verdict}\n`);
+  }
 }
 
 // CLODE_TJS_SMOKE=off: skip the exec smoke — for cross-target engines the
