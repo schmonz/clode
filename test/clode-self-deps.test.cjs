@@ -70,16 +70,29 @@ function isExcluded(file) {
 
 // Entry points: every module clode itself loads to do its job — every
 // top-level libexec/*.cjs (the launcher spine + subcommands) and every
-// top-level scripts/*.mjs (the build pipeline, which now also covers
+// top-level scripts/*.{mjs,cjs} (the build pipeline, which now also covers
 // scripts/stage0.mjs, the launcher entry — it needs no separate line),
 // minus the app-member exclusions above.
+//
+// BOTH extensions, and .cjs is not optional: scripts/ used to be uniformly
+// ESM, so an .mjs-only filter was a complete filter. When phase 4c1 converted
+// the engine build's orchestration to CommonJS (build-tjs, engine-api-floor,
+// tjs-source-reset, build-depscan — and depscan-verdict, which was only ever
+// reachable THROUGH build-tjs), all five silently fell out of this walk. The
+// walk still reported 71 files and the anti-vacuity check below (> 15) could
+// not notice, so `require('semver')` could have landed in build-tjs.cjs — the
+// 3,800-line file 42 legs depend on — with the suite green. A rename must
+// never be able to remove a file from a gate; keying on "top-level module in
+// scripts/" rather than on one spelling is what makes that true.
 function entryPoints() {
   const files = [];
   for (const f of fs.readdirSync(path.join(REPO, 'libexec'))) {
     if (f.endsWith('.cjs') && !f.startsWith('.')) files.push(path.join(REPO, 'libexec', f));
   }
   for (const f of fs.readdirSync(path.join(REPO, 'scripts'))) {
-    if (f.endsWith('.mjs') && !f.startsWith('.')) files.push(path.join(REPO, 'scripts', f));
+    if ((f.endsWith('.mjs') || f.endsWith('.cjs')) && !f.startsWith('.')) {
+      files.push(path.join(REPO, 'scripts', f));
+    }
   }
   return files.filter((f) => !isExcluded(f));
 }
@@ -198,4 +211,20 @@ test('clode itself requires only node builtins + sibling files — no npm depend
   // "walked nothing" (a broken entry-point/exclude wiring would silently
   // report success on zero files).
   assert.ok(seen.size > 15, `suspiciously few files walked (${seen.size}) — entry-point/exclude wiring may be broken`);
+  // Anti-vacuity by NAME, because the count above is not enough on its own:
+  // when the .mjs-only filter dropped the five engine-build modules the walk
+  // still reached 71 files, comfortably past 15, and reported success. A
+  // statistical floor cannot notice a specific hole. These five are the
+  // engine build — the largest, most-depended-on code in the repo, and the
+  // code most likely to reach for an npm convenience — so they are named.
+  const mustReach = [
+    'scripts/build-tjs.cjs',
+    'scripts/engine-api-floor.cjs',
+    'scripts/tjs-source-reset.cjs',
+    'scripts/build-depscan.cjs',
+    'scripts/depscan-verdict.cjs',
+  ];
+  const missed = mustReach.filter((rel) => !seen.has(path.join(REPO, rel)));
+  assert.deepStrictEqual(missed, [],
+    `the walk never reached these — this gate is not covering what it claims to:\n${missed.join('\n')}`);
 });
