@@ -71,8 +71,19 @@ grep -c 'function_size + 7' txiki.js/deps/quickjs/quickjs.c   # cpool-align, exp
 # --regen-only), or this build compiles the upstream pin's committed bytecode and
 # silently drops every src/js/** patch — the moduleMeta bug, and before it the
 # whole class 0c72693 was written to close. build-tjs.cjs stamps each regenerated
-# .c with a `clode:bytecode-regen src=... sha256=...` trailer; demand it HERE, in
-# the first minute, rather than discovering the omission 927 seconds into a fuse.
+# .c with a `clode:bytecode-regen src=...` trailer; demand it HERE, in the first
+# minute, rather than discovering the omission 927 seconds into a fuse.
+#
+# PROVENANCE, NOT FRESHNESS, and the difference is load-bearing (phase 4c-2).
+# The trailer used to carry a `sha256=...` of the JS bundle so the build could
+# ask "is this .c still the one this .js produces?". That question died with the
+# imperative regen: every other leg now regenerates through a cmake DEPENDS edge,
+# where a stale array is rebuilt rather than detected. The hash is GONE, and
+# deliberately so — with nothing to compare against, this marker cannot grow back
+# into a freshness check. It answers one question, the only one this guest cannot
+# answer for itself: did anybody regenerate this tree at all? (Its cmake gets no
+# CLODE_HOST_TJSC, so the injected rules are inert here by design.) Do not put the
+# hash back; grep for presence only.
 REGEN=$(cat txiki.js/src/bundles/c/core/core.c txiki.js/src/bundles/c/core/polyfills.c 2>/dev/null | grep -c 'clode:bytecode-regen') || REGEN=0
 echo "cle-regen-present=$REGEN"
 [ "$REGEN" -ge 2 ] || { echo "FATAL: served tree was NOT bytecode-regenerated (no clode:bytecode-regen trailer in src/bundles/c/core/) — the runner must run 'node scripts/build-tjs.cjs --regen-only' over this tree before tarring it, or the engine ships without the JS half of every src/js/** patch"; echo "bake-exit=1"; echo "=== GUEST-DONE ==="; exit 1; }

@@ -143,18 +143,20 @@ function scanContinuationScope({ src }) {
 
 const continuationScopeGuard = defineGuard({
   name: 'build-tjs-continuation-scope',
-  // 1 for the opener + one per function declared inside it (6 today). EXACT, not
+  // 1 for the opener + one per function declared inside it (7 today). EXACT, not
   // padded: floor is a minimum, so legitimate growth only raises `examined`. If the
   // count FALLS the guard is inspecting less than it must and BROKEN is the right
   // answer — a human then lowers this deliberately.
   //
-  // LOWERED 8 -> 7 in phase 4c-2, deliberately, with the reason recorded here
-  // because that is the whole protocol this floor exists for: assertBytecodeFresh
-  // was DELETED, not moved. Regeneration became a cmake dependency edge, so a
-  // stale .c is no longer a state the build can reach and a detector for it is no
-  // longer meaningful. One fewer function inside the continuation, one fewer to
-  // sweep.
-  floor: 7,
+  // RE-CUT TWICE IN PHASE 4c-2, both deliberate, both recorded here because that is
+  // the whole protocol this floor exists for. 8 -> 7: assertBytecodeFresh was
+  // DELETED, not moved — regeneration became a cmake dependency edge, so a stale .c
+  // is no longer a state the build can reach and a detector for it is no longer
+  // meaningful. 7 -> 8: assertBytecodeRulesPresent was ADDED, because deleting that
+  // detector is only safe while the injected rules are actually present, and a
+  // --build-only over a pre-4c-2 tree is a real way for them not to be. Kept EXACT
+  // rather than left at 7, so the next fall is still caught.
+  floor: 8,
   read: () => ({ src: fs.readFileSync(BUILD_TJS, 'utf8') }),
   scan: scanContinuationScope,
   // The incident itself, in miniature: a top-level statement calling a function
@@ -167,6 +169,7 @@ const continuationScopeGuard = defineGuard({
     'function targetToken(d) { return d; }',
     'function buildHostTjsc(d, t) { return t; }',
     'function regenBytecodeArrays() {}',
+    'function assertBytecodeRulesPresent() {}',
     'function cmakeVersionSupportsIgnorePrefixPath() {}',
     'function bytecodeSymbolBase() {}',
     'function checkHermeticDeps() {}',

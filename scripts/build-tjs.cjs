@@ -2555,9 +2555,13 @@ function fixupTjsCmakeBytecodeRules(dir, bundlePairs) {
   // HOST tjsc, not the in-tree one: add_custom_command runs its command on the
   // BUILD HOST, and a cross build's tjsc is a TARGET binary this host cannot
   // execute. buildHostTjsc() produces the host one; it arrives as
-  // CLODE_HOST_TJSC. When it is unset (a native build that has not needed one)
-  // the rules are not emitted and the imperative path still applies — see the
-  // guard in the emitted cmake below.
+  // CLODE_HOST_TJSC. When it is unset the rules are not emitted at all and the
+  // build graph is exactly what upstream ships — the committed arrays compile,
+  // nothing regenerates. THERE IS NO IMPERATIVE FALLBACK: regenBytecodeArrays
+  // has exactly one caller left (--regen-only), so "unset" means "no regen",
+  // full stop. That is the whole mechanism behind CLODE_TJS_REGEN=0, and it is
+  // why a build that MEANS to regenerate checks the marker is present first
+  // (assertBytecodeRulesPresent) instead of assuming it.
   const f = path.join(dir, 'CMakeLists.txt');
   const cur = fs.readFileSync(f, 'utf8');
   if (cur.includes('CLODE_BYTECODE_RULES')) {
@@ -3714,6 +3718,39 @@ function regenBytecodeArrays(tjsDir, tjsc, bundlePairs) {
   console.log(`bytecode regen: ${bundlePairs.length} bytecode arrays regenerated from the current (patched) src/js/**`);
 }
 
+// THE PREMISE, CHECKED — because deleting a check is only safe once the thing
+// that makes it unnecessary is itself guaranteed.
+//
+// Handing cmake a -DCLODE_HOST_TJSC only regenerates anything if the vendored
+// CMakeLists actually CARRIES the injected rules. cmake ignores a -D nothing
+// reads, so on a tree without them the build succeeds, prints nothing, and
+// ships pristine upstream bytecode: the original defect, exactly, restored on
+// one path. That path is real and reachable today — a warm
+// ~/.cache/clode/tjs-vendor prepared by a PRE-4c-2 --source-only (or rsynced
+// from a host that predates it), then `build-tjs.cjs --build-only`, which by
+// design never re-runs the fixups. CI does not hit it (build-leg/action.yml
+// runs --source-only in the same job on every cache miss); a dev box does, and
+// "warm dev-box state hides the defect" is a recorded incident shape here, not
+// a hypothesis.
+//
+// Until this commit the tripwire covered it by accident: assertBytecodeFresh
+// ran on that path and would have thrown. Deleting it was right — staleness is
+// inexpressible WHEN THE RULES ARE PRESENT — but nothing verified the premise.
+// This does, in the one place that depends on it, and says how to fix it.
+function assertBytecodeRulesPresent(tjsDir) {
+  const f = path.join(tjsDir, 'CMakeLists.txt');
+  if (fs.readFileSync(f, 'utf8').includes('CLODE_BYTECODE_RULES')) return;
+  throw new Error('bytecode regen: the vendored CMakeLists at '
+    + `${f} carries no CLODE_BYTECODE_RULES block, so nothing will regenerate `
+    + 'src/bundles/c/** and this build would silently ship the upstream pin\'s '
+    + 'committed bytecode — every src/js/** patch dropped, exit 0, no other signal.\n'
+    + '  CAUSE: this tree was prepared by a source phase that predates the '
+    + 'bytecode-rule fixup (phase 4c-2), and --build-only deliberately never '
+    + 're-runs the fixups.\n'
+    + '  FIX: re-run the source phase over it — `node scripts/build-tjs.cjs '
+    + '--source-only` — or delete the checkout and let it be re-prepared.');
+}
+
 // ---- bytecode regen: the DEFAULT, not opt-in (2026-08-06) -----------------
 // cmake compiles src/bundles/c/** — quickjs bytecode arrays txiki git-tracks
 // pre-compiled from ITS OWN src/js/**. esbuild's src/bundles/js/** (built
@@ -3754,6 +3791,12 @@ if (regenOptOut) {
   // behavior is a recurring shape here, not a hypothetical).
   run('cmake', ['-S', tjsDir, '-B', buildDir, ...cmakeArgs, '-UCLODE_HOST_TJSC']);
 } else {
+  // FIRST, before the minutes of tjsc build below: if this tree cannot
+  // regenerate, say so now rather than producing a silently-pristine engine.
+  // Deliberately NOT in the opt-out branch above — there the committed arrays
+  // compiling IS the requested behavior, and demanding the marker would break
+  // the legitimate "build the upstream pin as-is" case.
+  assertBytecodeRulesPresent(tjsDir);
   // A cross build's own buildDir/tjsc would be a TARGET binary this host
   // cannot exec — build tjsc natively instead (buildHostTjsc). A native
   // build's buildDir/tjsc already runs here directly; no second build dir.

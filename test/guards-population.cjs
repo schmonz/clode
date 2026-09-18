@@ -199,20 +199,6 @@ const GUARD_EXCLUSIONS = [
       + 'pattern to look for; the subject is whether the build RUNS.',
   },
   {
-    file: 'bytecode-rule.test.cjs',
-    because: 'it BUILDS ITS OWN INPUT. The subject is what fixupTjsCmakeBytecodeRules '
-      + 'WRITES, so the test mkdtemps a two-line CMakeLists, calls the real fixup (pulled '
-      + 'out of build-tjs.cjs) against it, and asserts on the bytes that call just '
-      + 'produced — there is no fixed artifact in the tree to scan and no violation '
-      + 'pattern to sweep for. Both classifier signals are the known false positives: '
-      + "READS_ARTIFACT fires on reading scripts/build-tjs.cjs to EXTRACT the function "
-      + 'under test (the source is the code, not the evidence), and PATTERN_MATCHES on '
-      + 'the assert.match calls that inspect its own emission. It carries its own '
-      + 'positive control in-file — the PROOF test hand-builds the absolute-input '
-      + 'regression and requires the shape assertion to reject it — which is the property '
-      + 'defineGuard\'s control would otherwise supply.',
-  },
-  {
     file: 'guards-population.test.cjs',
     because: 'this IS the sweep — it classifies OTHER tests\' shape and asserts about the '
       + 'discovered file LIST, which trips READS_ARTIFACT (it reads REPO/__dirname-rooted '

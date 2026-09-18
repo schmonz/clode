@@ -587,10 +587,17 @@ runs:
         # own build phase; the guest bake compiles by hand and cannot run node at
         # all, so it used to get NO regen — and shipped an engine whose blobulate died
         # with "this engine does not report moduleMeta" after a 927-second carve.
-        # --regen-only runs the SAME generation code, using a host-native tjsc
-        # whose canonical-LE output is valid for the sparc target by construction
-        # (scripts/build-tjs.cjs, buildHostTjsc). ci-guest-bake.sh refuses a tree
-        # that arrives without the regen trailer, so this cannot be dropped again.
+        # --regen-only regenerates over the SAME bundle-pair table every other
+        # leg uses, with a host-native tjsc whose canonical-LE output is valid for
+        # the sparc target by construction (scripts/build-tjs.cjs, buildHostTjsc).
+        # NARROWED IN PHASE 4c-2: it no longer runs "the same generation code" as a
+        # normal build, because a normal build runs none — regeneration became a
+        # cmake dependency edge there. This guest is the ONE path that never reaches
+        # such a cmake (no node in the guest, and its hand-rolled cmake passes no
+        # CLODE_HOST_TJSC, so the injected rules are inert by design), which is why
+        # regenBytecodeArrays still exists and why this step still has to run.
+        # ci-guest-bake.sh refuses a tree that arrives without the regen trailer, so
+        # this cannot be dropped again.
         node scripts/build-tjs.cjs --regen-only
         mkdir -p .matrix/qemu-bake
         tar czf .matrix/qemu-bake/txiki-canonical-le.tar.gz -C "$CLODE_TJS_VENDOR" txiki.js

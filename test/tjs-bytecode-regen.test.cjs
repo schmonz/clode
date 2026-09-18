@@ -41,6 +41,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const repo = path.join(__dirname, '..');
@@ -101,22 +102,53 @@ test('bytecodeBundlePairs: 6 fixed core/internal pairs plus one per stdlib file'
 // hand-maintained copy of these pairs is precisely how the netbsd-sparc bake
 // came to ship an engine missing the JS half of its own patches, so the fixup
 // must be HANDED this table, never grow its own.
-test('build-tjs: the injected cmake rules are built from bytecodeBundlePairs, not a second list', () => {
-  const idx = buildTjsSrc.indexOf('fixupTjsCmakeBytecodeRules(tjsDir');
+// Reusable so the PROOF below can watch it reject the real regression — the
+// house rule for this file (see assertRegenDefaultsOn) and the repo's standing
+// constraint: a negative assertion nobody has seen go red is not yet a gate.
+function assertFixupDrivenByPairTable(src) {
+  const idx = src.indexOf('fixupTjsCmakeBytecodeRules(tjsDir');
   assert.ok(idx > -1, 'the fixup is never called — the cmake rules would never be injected');
-  const window = buildTjsSrc.slice(idx, idx + 400);
+  const window = src.slice(idx, idx + 400);
   assert.match(window, /bytecodeBundlePairs\(/,
     'the fixup must be handed the shared bundle-pair table, not a list it builds itself');
   assert.match(window, /src\/js\/stdlib/,
     'the stdlib half of the table is a function of the PATCHED tree\'s listing, read at fixup time');
+}
+
+test('build-tjs: the injected cmake rules are built from bytecodeBundlePairs, not a second list', () => {
+  assertFixupDrivenByPairTable(buildTjsSrc);
 });
 
-test('build-tjs: cmake is told where the host tjsc is, or the injected rules stay inert', () => {
+test('build-tjs: PROOF — the pair-table check rejects a second, hand-written bundle list', () => {
+  // The sparc divergence in miniature: the fixup handed a literal list instead
+  // of the shared table, which is how one emitter came to know about bundles
+  // the other did not.
+  const handRolled = "fixupTjsCmakeBytecodeRules(tjsDir, [\n"
+    + "  { outC: 'src/bundles/c/core/core.c', inJs: 'src/bundles/js/core/core.js' },\n"
+    + ']);\n';
+  assert.throws(() => assertFixupDrivenByPairTable(handRolled), /shared bundle-pair table/);
+  // And the other polarity: not calling the fixup at ALL is the defect itself.
+  assert.throws(() => assertFixupDrivenByPairTable('// nothing here\n'), /never called/);
+});
+
+function assertHostTjscHandedToCmake(src) {
   // The rules are wrapped in if(CLODE_HOST_TJSC); without this -D they are not
   // emitted at all and the build silently compiles the committed arrays again
   // — the exact defect, reintroduced by omission.
-  assert.match(buildTjsSrc, /-DCLODE_HOST_TJSC=\$\{tjsc\}/,
+  assert.match(src, /-DCLODE_HOST_TJSC=\$\{tjsc\}/,
     'the target configure must pass the selected host tjsc to cmake');
+}
+
+test('build-tjs: cmake is told where the host tjsc is, or the injected rules stay inert', () => {
+  assertHostTjscHandedToCmake(buildTjsSrc);
+});
+
+test('build-tjs: PROOF — the host-tjsc check rejects a configure that omits the -D', () => {
+  // Exactly the shape a "tidy up the duplicate configure" refactor produces:
+  // the second configure stays, the one argument that makes it matter is gone.
+  // cmake would accept it silently and regenerate nothing.
+  const omitted = "run('cmake', ['-S', tjsDir, '-B', buildDir, ...cmakeArgs]);\n";
+  assert.throws(() => assertHostTjscHandedToCmake(omitted), /must pass the selected host tjsc/);
 });
 
 // ---- source-level: regen must be opt-OUT, never opt-IN --------------------
@@ -186,14 +218,116 @@ test('build-tjs: buildHostTjsc never uses a cross toolchain file (plain host com
 //
 // This test therefore checks the property that REPLACED it: nothing may compile
 // the bundle arrays until the regeneration target has run.
-test('build-tjs: the regeneration is ordered BEFORE the compile by the graph, not by a check after it', () => {
-  const fnSrc = extractFunction(buildTjsSrc, 'fixupTjsCmakeBytecodeRules');
+function assertGraphOrdersRegenBeforeCompile(fnSrc) {
   assert.match(fnSrc, /add_dependencies\(tjs clode_bytecode\)/,
     'the LIBRARY that compiles the arrays must depend on the regeneration target: the stdlib '
     + 'arrays reach the compiler only via #include inside src/builtins.c, so they have no '
     + 'source-list edge of their own and would otherwise compile in parallel with their own rewrite');
   assert.match(fnSrc, /DEPENDS [^\n]*\$\{inJs\}/,
     'each rule must name its .js input as a DEPENDS — that edge IS the staleness answer');
+}
+
+test('build-tjs: the regeneration is ordered BEFORE the compile by the graph, not by a check after it', () => {
+  assertGraphOrdersRegenBeforeCompile(extractFunction(buildTjsSrc, 'fixupTjsCmakeBytecodeRules'));
+});
+
+test('build-tjs: PROOF — the ordering check rejects both ways the edge can go missing', () => {
+  // (a) The shape that shipped in task 1 and read as correct: ordering the
+  // EXECUTABLE. tjs-cli compiles only src/cli.c, so this leaves builtins.c —
+  // which pulls every stdlib array by #include — free to compile in parallel
+  // with the tjsc run rewriting those very files.
+  const ordersExecutable = "    + '    add_dependencies(tjs-cli clode_bytecode)\\n'\n"
+    + "    + `    DEPENDS \\${CMAKE_CURRENT_SOURCE_DIR}/${inJs} \\${CLODE_HOST_TJSC}\\n`\n";
+  assert.throws(() => assertGraphOrdersRegenBeforeCompile(ordersExecutable),
+    /LIBRARY that compiles the arrays/);
+
+  // (b) A rule with no DEPENDS on its input: cmake would run it exactly once,
+  // at first build, and never again when the .js changes — which is the
+  // original silent drop with extra steps.
+  const noDepends = "    + '    add_dependencies(tjs clode_bytecode)\\n'\n"
+    + "    + `    DEPENDS \\${CLODE_HOST_TJSC}\\n`\n";
+  assert.throws(() => assertGraphOrdersRegenBeforeCompile(noDepends),
+    /that edge IS the staleness answer/);
+});
+
+// ---- the premise the deleted tripwire used to cover ------------------------
+//
+// Deleting a check is only safe once the thing that makes it unnecessary is
+// itself guaranteed. Everything above assumes the vendored CMakeLists CARRIES
+// the injected rules; cmake ignores a -D nothing reads, so on a tree without
+// them the build succeeds, prints nothing, and ships pristine upstream
+// bytecode — the original defect, restored, on one real path: a warm
+// ~/.cache/clode/tjs-vendor prepared by a PRE-4c-2 --source-only, then
+// --build-only, which by design never re-runs the fixups. assertBytecodeFresh
+// used to cover that path by accident; assertBytecodeRulesPresent covers it on
+// purpose.
+//
+// EXECUTED, not grepped: the function is pulled out of build-tjs.cjs and run
+// against two real fixture trees, so this checks the BEHAVIOR rather than that
+// a call is written somewhere (the distinction test/build-tjs-continuation-
+// scope.test.cjs exists to keep honest).
+function loadRulesPresentCheck() {
+  const fnSrc = extractFunction(buildTjsSrc, 'assertBytecodeRulesPresent');
+  // eslint-disable-next-line no-new-func
+  return new Function('fs', 'path', `${fnSrc}\nreturn assertBytecodeRulesPresent;`)(fs, path);
+}
+
+function withFixtureTree(cmakeText, fn) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-rules-premise-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'CMakeLists.txt'), cmakeText);
+    return fn(dir);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('build-tjs: a tree that CARRIES the injected rules passes the premise check', () => {
+  const check = loadRulesPresentCheck();
+  withFixtureTree('add_executable(tjsc src/qjsc.c)\n# CLODE_BYTECODE_RULES\nif(CLODE_HOST_TJSC)\nendif()\n',
+    (dir) => check(dir));
+});
+
+test('build-tjs: PROOF — a tree WITHOUT the rules throws instead of building pristine bytecode', () => {
+  const check = loadRulesPresentCheck();
+  // A pre-4c-2 vendored CMakeLists: every other fixup applied, no rules block.
+  // This is the input that used to produce a green build and a patchless engine.
+  const preFixup = 'add_executable(tjsc EXCLUDE_FROM_ALL src/qjsc.c)\n'
+    + 'option(CLODE_ATOMIC_SHIM "..." OFF)\n';
+  const err = withFixtureTree(preFixup, (dir) => {
+    try { check(dir); } catch (e) { return e; }
+    return null;
+  });
+  assert.ok(err, 'a tree with no CLODE_BYTECODE_RULES block must throw, and did not — '
+    + 'that silence is exactly the defect this phase exists to end');
+  assert.match(err.message, /no CLODE_BYTECODE_RULES block/);
+  assert.match(err.message, /FIX: re-run the source phase/,
+    'the error must name the remedy: a reader hitting this has a warm tree, not a broken repo');
+  console.log(`PROOF captured rejection: ${err.message.split('\n')[0]}`);
+});
+
+test('build-tjs: the premise is checked on the regenerating path only, before the tjsc build', () => {
+  // The CALL, not the declaration — `indexOf('assertBytecodeRulesPresent(')`
+  // alone finds `function assertBytecodeRulesPresent(` first and then measures
+  // the distance from the function's own body, which is not a property of
+  // anything.
+  const idx = buildTjsSrc.indexOf('\n  assertBytecodeRulesPresent(tjsDir);');
+  assert.ok(idx > -1, 'the premise check is never called — the rules would be assumed present');
+  // Ahead of the tjsc selection, i.e. ahead of the minutes buildHostTjsc costs.
+  // Checked as "nothing EXPENSIVE happens in between" rather than "within N
+  // characters": a length bound would go red on a comment edit and green on a
+  // real reordering, which is the wrong way round.
+  const tjscIdx = buildTjsSrc.indexOf('let tjsc;', idx);
+  assert.ok(tjscIdx > idx, 'the premise check must come BEFORE the tjsc selection, not after it');
+  const between = buildTjsSrc.slice(idx, tjscIdx);
+  assert.doesNotMatch(between, /\brun\(|buildHostTjsc\(/,
+    'nothing may run between the premise check and the tjsc selection — a tree that cannot '
+    + 'regenerate should say so first, not after a full host qjs build');
+  // NOT in the opt-out branch: there, compiling the committed arrays is the
+  // requested behavior and demanding the marker would break it.
+  const optOutIdx = buildTjsSrc.indexOf('if (regenOptOut) {');
+  assert.ok(optOutIdx > -1 && optOutIdx < idx,
+    'the premise check must be in the else (regenerating) branch, after the opt-out branch opens');
 });
 
 // ---- generation is single-sourced: --regen-only reads THE SAME table -------
@@ -335,7 +469,6 @@ test('build-tjs: real tjsc agrees — a backslash path breaks the symbol, a rela
   { skip: TJSC ? false : 'no tjsc: neither CLODE_TJSC nor a built tjsc under '
     + "build-tjs.cjs's build root (CLODE_TJS_BUILD, else <scratch>/clode-tjs-build/*/build/tjsc). "
     + 'Build an engine with `node scripts/build-tjs.cjs`, or set CLODE_TJSC=<path>.' }, () => {
-    const os = require('node:os');
     const { spawnSync } = require('node:child_process');
     const fn = new Function(`${extractFunction(buildTjsSrc, 'bytecodeSymbolBase')}; return bytecodeSymbolBase;`)();
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tjsc-sym-'));
