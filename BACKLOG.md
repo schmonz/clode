@@ -7460,3 +7460,61 @@ would silently blind the ELF half with no test going red. Recorded in
   `test/source-scan.cjs`'s `stripLineComments`, and a third copy in
   `test/build-gates/lexical-code-mask.test.cjs` justified by a reason this branch made
   false). No map says which to use when.
+
+## ★ Phase 4c1 Task 3 SHIPPED — spec §11.1 acceptance met: the engine build runs with Node ABSENT (2026-09-17)
+
+Tasks 1-2 converted the orchestration (`scripts/build-tjs.cjs`) and its three leaves
+(`tjs-source-reset.cjs`, `engine-api-floor.cjs`, `build-depscan.cjs`) from ESM to CJS,
+because `libexec/node-shim/loader.cjs` cannot host an ESM entry at all (`:481` guards its
+transpile with `!isEntry`). Until this task, "it could run without Node" was an argument.
+It is now a transcript, gated by `test/build-tjs-no-node.test.cjs`.
+
+**Measured by hand first**, `env -i` with a PATH containing no Node install at all, driving
+the ALREADY-BUILT engine at `tjsDir()`'s reported path:
+
+    $ env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$HOME" \
+        "$E" run libexec/node-shim/loader.cjs scripts/build-tjs.cjs --source-only
+    fixup libuv-hrtime-old-darwin: applied
+    ...(31 more fixups)...
+    fixup import-meta-require: applied to src/modules.c
+    fixup import-meta-deserialize: applied to src/mod_engine.c
+    fixup qjs-import-meta-by-identity: applied to deps/quickjs/quickjs.c
+    fixup qjsc-msvc-getopt: applied (src/qjsc.c)
+    esbuilt 16 plain-JS bundles for the BE regen path
+    source tree ready: /Users/schmonz/.cache/clode/tjs-vendor/txiki.js
+    $ echo $?
+    0
+
+`command -v node` against that same bare PATH returned nothing first — the test asserts
+this itself, before asserting anything else, because a run with Node reachable proves
+nothing.
+
+**Proven able to fail.** A tiny `.mjs` (`import fs from 'node:fs'`) run the same way through
+the same loader produces exactly the SyntaxError that motivated Tasks 1-2:
+
+    SyntaxError: Unexpected identifier 'fs'
+        at <anonymous> (<input>:3:10)
+        at Function (native)
+        at evalModule (libexec/node-shim/loader.cjs:489:18)
+        ...
+    exit 1
+
+Wired into a throwaway copy of the test (assert `status === 0` against that same probe), it
+failed under `node --test` with `1 !== 0` — the gate is not one that can only pass.
+
+**What this does NOT prove.** `build-tjs.cjs` has exactly one surviving top-level `await`
+(`const cosmoccBin = await provisionCosmocc()`), reached only `if (cosmoTarget)`. `cosmoTarget`
+is false on this leg and every non-cosmo leg, so `--source-only` here never executes that
+async continuation under the shim. Only a `CLODE_TJS_TARGET=cosmo` run would exercise it, and
+that pulls a 441MB pinned download — out of scope for this gate. The test's header comment
+carries this caveat so the proof cannot be misread as covering more than it does.
+
+**Full suite:** 2089 tests / 2053 pass / 0 fail / 35 skip / 1 todo (baseline 2088/2052/0/35
+plus this one new passing test; unchanged otherwise — this phase changes no behaviour).
+
+**Scope check against the acceptance list:** `grep -c 'import\.meta' scripts/build-tjs.cjs`
+is 18 (all inside C-fixup string literals/comments, none executable); the four orchestration
+files (`build-tjs`, `tjs-source-reset`, `engine-api-floor`, `build-depscan`) are all `.cjs`;
+`test/depscan-build.cjs` has no ESM bridge left. Linux and Windows legs proving the same
+thing is deferred to CI exercising it — this task's proof is darwin-only, by hand and by test,
+on this box.
