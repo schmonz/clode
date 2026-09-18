@@ -307,9 +307,12 @@ the JS half, because it was the one build path in the matrix that did not run
 `scripts/build-tjs.cjs` and so never regenerated `src/bundles/c/**`. The fix does not teach
 the guest to regenerate; it stops the guest generating anything at all. The runner now runs
 `node scripts/build-tjs.cjs --regen-only` over the same patched tree it already builds, using
-the SAME `regenBytecodeArrays`/`assertBytecodeFresh` every other leg uses (a host-native tjsc,
+the SAME `regenBytecodeArrays` every other leg used (a host-native tjsc,
 whose canonical-LE output is target-independent by construction), and tars the regenerated
-tree. `ci-guest-bake.sh` refuses a tree with no `clode:bytecode-regen` trailer, and its ENGINE
+tree. (PHASE 4c-2 NARROWED THIS: every other leg now regenerates through cmake rules instead,
+and --regen-only is the one imperative caller left — the guest has no node and its hand-rolled
+cmake gets no `CLODE_HOST_TJSC`. The freshness tripwire is gone; the trailer the bake demands
+is now a provenance stamp with no hash.) `ci-guest-bake.sh` refuses a tree with no `clode:bytecode-regen` trailer, and its ENGINE
 SANITY step is now the shared engine-API floor (`scripts/engine-api-floor.cjs`) instead of a
 third hand-written `typeof __tjs_fs_sync` copy — so a missing binding is named in the first
 minutes rather than 927 seconds into a fuse.

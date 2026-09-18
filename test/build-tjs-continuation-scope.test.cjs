@@ -7,7 +7,7 @@
 // level (provisionCosmocc's 441MB fetch), so everything from there to EOF moved
 // inside `(async () => { ... })()`. The first cut opened that arrow ~55 lines too
 // low, leaving `if (regenOnly)` at module top level while the four functions it
-// calls — targetToken, buildHostTjsc, regenBytecodeArrays, assertBytecodeFresh —
+// calls — targetToken, buildHostTjsc, regenBytecodeArrays, and (then) assertBytecodeFresh —
 // had moved inside the arrow. `function` declarations hoist to the ARROW's scope,
 // not the module's, so `node scripts/build-tjs.cjs --regen-only` died at module
 // load with "buildHostTjsc is not defined", before the arrow's own catch was even
@@ -62,9 +62,9 @@ function fakeCheckout(dir) {
 // --regen-only block is REACHED, and that targetToken and buildHostTjsc resolve and
 // run for real (buildHostTjsc appears as a stack FRAME, which a mis-scoped name
 // cannot do — it would have thrown at the call site instead). It does NOT reach
-// regenBytecodeArrays or assertBytecodeFresh, because those need a working host
-// tjsc, which needs a real checkout and a full cmake build (~minutes). Those two
-// names are covered by the guard below, which needs neither. A real end-to-end
+// regenBytecodeArrays, because it needs a working host tjsc, which needs a real
+// checkout and a full cmake build (~minutes). That name is covered by the guard
+// below, which needs neither. A real end-to-end
 // `node scripts/build-tjs.cjs --regen-only` against the cached vendor checkout was
 // run by hand at fix time and regenerated all 18 bytecode arrays.
 test('--regen-only gets past module load and into the block (EXECUTED, not grepped)', () => {
@@ -143,11 +143,18 @@ function scanContinuationScope({ src }) {
 
 const continuationScopeGuard = defineGuard({
   name: 'build-tjs-continuation-scope',
-  // 1 for the opener + one per function declared inside it (7 today). EXACT, not
+  // 1 for the opener + one per function declared inside it (6 today). EXACT, not
   // padded: floor is a minimum, so legitimate growth only raises `examined`. If the
   // count FALLS the guard is inspecting less than it must and BROKEN is the right
   // answer — a human then lowers this deliberately.
-  floor: 8,
+  //
+  // LOWERED 8 -> 7 in phase 4c-2, deliberately, with the reason recorded here
+  // because that is the whole protocol this floor exists for: assertBytecodeFresh
+  // was DELETED, not moved. Regeneration became a cmake dependency edge, so a
+  // stale .c is no longer a state the build can reach and a detector for it is no
+  // longer meaningful. One fewer function inside the continuation, one fewer to
+  // sweep.
+  floor: 7,
   read: () => ({ src: fs.readFileSync(BUILD_TJS, 'utf8') }),
   scan: scanContinuationScope,
   // The incident itself, in miniature: a top-level statement calling a function
@@ -160,7 +167,6 @@ const continuationScopeGuard = defineGuard({
     'function targetToken(d) { return d; }',
     'function buildHostTjsc(d, t) { return t; }',
     'function regenBytecodeArrays() {}',
-    'function assertBytecodeFresh() {}',
     'function cmakeVersionSupportsIgnorePrefixPath() {}',
     'function bytecodeSymbolBase() {}',
     'function checkHermeticDeps() {}',

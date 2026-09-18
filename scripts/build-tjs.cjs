@@ -2591,7 +2591,16 @@ function fixupTjsCmakeBytecodeRules(dir, bundlePairs) {
     + `    add_custom_target(clode_bytecode DEPENDS\n`
     + bundlePairs.map(({ outC }) => `        \${CMAKE_CURRENT_SOURCE_DIR}/${outC}`).join('\n')
     + '\n    )\n'
-    + '    add_dependencies(tjs-cli clode_bytecode)\n'
+    // Order the LIBRARY on the regeneration, not just the executable. cmake
+    // auto-attaches a custom command to any target in this directory that LISTS
+    // its output as a source, which covers the five src/bundles/c/core/*.c in
+    // add_library(tjs ...) — but NOT the stdlib/internal arrays, which reach the
+    // compiler only as `#include "bundles/c/stdlib/*.c"` inside src/builtins.c
+    // (builtins.c:25-42). Those have no source-list edge at all, so without an
+    // explicit target-level order builtins.c may compile in parallel with the
+    // tjsc run that is rewriting the very files it is including. tjs-cli links
+    // tjs (CMakeLists.txt:209), so ordering tjs covers both.
+    + '    add_dependencies(tjs clode_bytecode)\n'
     + 'endif()\n';
   fs.writeFileSync(f, cur + inject);
   console.log(`fixup tjs-cmake-bytecode-rules: applied (${bundlePairs.length} rules)`);
@@ -3153,6 +3162,13 @@ if (buildOnly) {
   fixupPosixSocketLibprocOldDarwin(tjsDir);
   fixupLibuvCloseNocancelOldDarwin(tjsDir);
   fixupAtomicShim(tjsDir);
+  // The bytecode regen rules. Applied HERE, in the source phase, with every
+  // other CMakeLists fixup, so a tree handed to a later `--build-only` (the T2
+  // VM legs sync the patched tree into a guest) already carries them — the
+  // build phase never edits CMakeLists.txt. The pair table is a pure function
+  // of the patched tree's stdlib listing, the same one the regen below uses.
+  fixupTjsCmakeBytecodeRules(tjsDir, bytecodeBundlePairs(
+    fs.readdirSync(path.join(tjsDir, 'src/js/stdlib')).filter((f) => f.endsWith('.js'))));
   fixupTjsCmakeWinStack(tjsDir);
   fixupLwsTxpacerPthreadWin(tjsDir);
   fixupModFsSyncMsvc(tjsDir);
@@ -3233,9 +3249,11 @@ if (buildOnly) {
 
 // ---- bytecode regen: pure helpers -----------------------------------------
 // These live HERE, above the source/regen exits, rather than beside the regen
-// that uses them: --regen-only runs the regen before this point in the file, and
-// FINGERPRINT_RE is a const — leaving it below put the freshness tripwire in the
-// temporal dead zone ("Cannot access 'FINGERPRINT_RE' before initialization").
+// that uses them: --regen-only runs the regen before this point in the file, so
+// anything it needs must already be initialized here. (That mattered literally
+// when a `const` lived in this block and the regen path read it from the
+// temporal dead zone; only hoisted function declarations remain now, but the
+// ordering constraint is the same one and is why the block stays put.)
 // Pure declarations, so moving them changes nothing else.
 // Extracted as standalone pure functions (no fs/process access beyond their
 // arguments) so test/tjs-bytecode-regen.test.cjs can pull them out of this
@@ -3260,22 +3278,34 @@ function bytecodeBundlePairs(stdlibFiles) {
     }),
   ];
 }
-// sha256 of the exact JS bundle bytes a .c bytecode array should have been
-// compiled from, and the C-comment trailer that records it inside the
-// generated .c file (invisible to the compiler; appended after tjsc's own
-// output). bytecodeIsFresh() reads it back to answer "does this .c still
-// match this .js?" without re-running tjsc — the tripwire (below) needs that
-// to be cheap, since re-running tjsc needs a full cmake configure+build.
-function bundleFingerprint(jsBytes) {
-  return crypto.createHash('sha256').update(jsBytes).digest('hex');
-}
-function fingerprintTrailer(inJs, fp) {
-  return `\n/* clode:bytecode-regen src=${inJs} sha256=${fp} */\n`;
-}
-const FINGERPRINT_RE = /clode:bytecode-regen src=(\S+) sha256=([0-9a-f]{64})/;
-function bytecodeIsFresh(cText, jsBytes) {
-  const m = cText.match(FINGERPRINT_RE);
-  return !!m && m[2] === bundleFingerprint(jsBytes);
+// THERE IS NO STALENESS CHECK HERE ANY MORE, AND THAT IS THE POINT (phase
+// 4c-2). What stood here was a tripwire: bundleFingerprint() hashed the JS
+// bundle bytes, regen stamped that hash into the generated .c, and
+// assertBytecodeFresh() re-read it right before the compile to answer "is this
+// .c still the one this .js produces?". It existed because regeneration was an
+// IMPERATIVE step the build could skip, forget, or run in the wrong order —
+// staleness was a state the build could genuinely be in, so it needed a
+// detector.
+//
+// It is not such a state any more. src/bundles/c/** is now a cmake OUTPUT with
+// a DEPENDS edge on its src/bundles/js/** input (fixupTjsCmakeBytecodeRules
+// above), so an array older than its source is not a condition to detect — it
+// is a condition cmake rebuilds away before anything can compile it. A detector
+// for it would keep alive the idea that the build can be in a state it can no
+// longer reach, and would be the SECOND mechanism claiming responsibility for
+// bytecode freshness; two things doing one job is exactly how the original
+// silent drop hid for as long as it did.
+//
+// What survives is a PROVENANCE STAMP, not a freshness check, and the
+// difference is that it carries no hash to compare anything against. It exists
+// solely because spike/quickjs/qemu/ci-guest-bake.sh:78 refuses to bake a tree
+// that does not carry it: the netbsd-sparc guest compiles a tree prepared by
+// --regen-only and its own cmake never gets a CLODE_HOST_TJSC, so for THAT one
+// path "did anybody regenerate this tree?" is still a real, unanswerable-from-
+// inside-the-guest question. (test/engine-api-floor.test.cjs:159 guards that
+// the bake keeps asking it.)
+function regenStampTrailer(inJs) {
+  return `\n/* clode:bytecode-regen src=${inJs} */\n`;
 }
 
 // os.cpus() is EMPTY on Haiku's node (tag run 2026-07-10: cmake --build
@@ -3325,18 +3355,21 @@ const buildRoot = process.env.CLODE_TJS_BUILD || path.join(localScratchRoot(), '
 // For a non-cosmo build — every shipping leg — the arrow runs to completion
 // synchronously in this same tick, exactly as the top-level statements did.
 (async () => {
-// --regen-only: the whole point of the mode. Build a host-native tjsc from this
-// same patched tree and run THE SAME regeneration every other leg runs, then
-// stop — leaving a source tree whose src/bundles/c/** already reflects our
-// src/js/** patches, ready to be tarred and compiled somewhere that cannot run
-// this script at all.
+// --regen-only: the whole point of the mode, and — since phase 4c-2 — the ONLY
+// caller of regenBytecodeArrays left. Every other build path reaches `cmake
+// --build`, where the injected rules regenerate as a dependency edge; this one
+// never does. It builds a host-native tjsc from this same patched tree,
+// regenerates imperatively, and stops, leaving a source tree whose
+// src/bundles/c/** already reflects our src/js/** patches, ready to be tarred
+// and compiled somewhere that cannot run this script at all (the netbsd-sparc
+// guest: no node, and its hand-rolled cmake passes no CLODE_HOST_TJSC, so the
+// rules stay inert there by design and it compiles what we hand it).
 if (regenOnly) {
   const stdlib = fs.readdirSync(path.join(tjsDir, 'src/js/stdlib')).filter((f) => f.endsWith('.js'));
   const pairs = bytecodeBundlePairs(stdlib);
   const tjsc = buildHostTjsc(tjsDir, path.join(buildRoot, `regen-only-${targetToken(tjsDir)}`, 'build-host-tjsc'),
     'no target compile happens here — the tree is compiled elsewhere (in-guest)');
   regenBytecodeArrays(tjsDir, tjsc, pairs);
-  assertBytecodeFresh(tjsDir, pairs);
   console.log(`source tree REGENERATED and ready: ${tjsDir}`);
   process.exit(0);
 }
@@ -3629,34 +3662,24 @@ function bytecodeSymbolBase(inJs) {
   return (dot === -1 ? base : base.slice(0, dot)).replace(/-/g, '_');
 }
 
-// The regeneration itself, extracted so that EVERY path needing a regenerated
-// tree runs this exact code: the normal build (below) and --regen-only (above,
-// for the netbsd-sparc in-guest bake, whose compile happens in a guest that
-// cannot run this script). A second hand-maintained copy of these tjsc
-// invocations is precisely how that leg came to ship an engine missing its own
-// src/js/** patches.
-// The tripwire, as a function for the same reason as regenBytecodeArrays: the
-// --regen-only path must be held to the identical "no stale array leaves here"
-// standard as the normal build.
-function assertBytecodeFresh(tjsDir, bundlePairs) {
-  const stale = bundlePairs.filter(({ outC, inJs }) => {
-    const cAbs = path.join(tjsDir, outC);
-    const jsAbs = path.join(tjsDir, inJs);
-    return !bytecodeIsFresh(fs.readFileSync(cAbs, 'utf8'), fs.readFileSync(jsAbs));
-  });
-  if (stale.length) {
-    throw new Error(`bytecode regen: STALE — ${stale.length} array(s) do not match their esbuilt ` +
-      `src/bundles/js/** source right after regeneration: ${stale.map((x) => x.outC).join(', ')}`);
-  }
-}
-
+// The regeneration itself. Since phase 4c-2 its ONE caller is --regen-only: the
+// normal build regenerates through the cmake rules fixupTjsCmakeBytecodeRules
+// injects, because a build rule with a real dependency edge cannot be skipped,
+// forgotten, or run in the wrong order the way an imperative step can. This
+// path survives for the netbsd-sparc in-guest bake alone, whose compile happens
+// in a guest that cannot run this script and whose cmake therefore never gets a
+// CLODE_HOST_TJSC.
+//
+// The two emitters (this loop and the injected COMMAND) must not drift: both
+// read their argv from the SAME bytecodeBundlePairs() table, which is the
+// property that matters — a second hand-maintained copy of the PAIRS is how
+// that leg came to ship an engine missing its own src/js/** patches.
 function regenBytecodeArrays(tjsDir, tjsc, bundlePairs) {
   // Exactly the txiki Makefile's tjsc rules (module mode -m, strip -s, module
   // name -n, C symbol prefix -p). core+stdlib come from the esbuilt bundles;
   // worker-bootstrap + internal/path are tjsc'd straight from src/js sources.
   for (const { outC, name, prefix, inJs } of bundlePairs) {
     const outAbs = path.join(tjsDir, outC);
-    const inAbs = path.join(tjsDir, inJs);
     fs.mkdirSync(path.join(tjsDir, path.dirname(outC)), { recursive: true });
     // inJs (repo-relative, forward slashes), NOT inAbs. tjsc builds the C
     // identifier from this argument by taking everything after the last '/'
@@ -3683,7 +3706,10 @@ function regenBytecodeArrays(tjsDir, tjsc, bundlePairs) {
         + '  tjsc derives the identifier from the INPUT PATH argument; a path it cannot '
         + 'reduce to a basename (a Windows path has no "/") leaks into the symbol.');
     }
-    fs.appendFileSync(outAbs, fingerprintTrailer(inJs, bundleFingerprint(fs.readFileSync(inAbs))));
+    // Provenance, not freshness (see regenStampTrailer): ci-guest-bake.sh
+    // refuses to bake a tree that does not carry this marker, because the
+    // guest has no other way to tell a regenerated tree from a pristine one.
+    fs.appendFileSync(outAbs, regenStampTrailer(inJs));
   }
   console.log(`bytecode regen: ${bundlePairs.length} bytecode arrays regenerated from the current (patched) src/js/**`);
 }
@@ -3701,14 +3727,32 @@ function regenBytecodeArrays(tjsDir, tjsc, bundlePairs) {
 // regeneration is now unconditional. CLODE_TJS_REGEN=0 is the explicit,
 // LOUD opt-out for a fast dev loop when src/js/** is provably untouched; it
 // must never be set for a release or CI build.
+//
+// PHASE 4c-2 CHANGED HOW, NOT WHETHER. Regeneration is no longer an imperative
+// step this script performs between the configure and the compile; it is a
+// cmake dependency edge (fixupTjsCmakeBytecodeRules, applied in the source
+// phase). All this block still does is hand cmake the one thing the rule cannot
+// produce for itself — a tjsc THIS HOST can execute — and re-configure so the
+// guarded rules come alive. The regeneration then happens inside `cmake
+// --build` below, in dependency order, only for the bundles whose .js actually
+// changed, and the compile physically cannot start before it.
 const regenOptOut = process.env.CLODE_TJS_REGEN === '0';
-const stdlibFiles = fs.readdirSync(path.join(tjsDir, 'src/js/stdlib')).filter((f) => f.endsWith('.js'));
-const bundlePairs = bytecodeBundlePairs(stdlibFiles);
 if (regenOptOut) {
   console.error('build-tjs: CLODE_TJS_REGEN=0 — bytecode regen SKIPPED. The shipped src/bundles/c/** ' +
     'will NOT reflect any patch to src/js/** (this is the silent-drop defect, opted into on purpose ' +
     'here). Use only for a fast dev loop when src/js/** is provably untouched — never for a release ' +
     'or CI build.');
+  // The opt-out is now simply "do not tell cmake where tjsc is": the injected
+  // rules are wrapped in if(CLODE_HOST_TJSC), so an unset one leaves the build
+  // graph exactly as upstream ships it — the committed arrays compile, nothing
+  // regenerates. One knob, one mechanism, no second code path to keep honest.
+  //
+  // UNSET, not merely "not set". cmake KEEPS cache entries across re-configures,
+  // so a build dir that regenerated yesterday still holds CLODE_HOST_TJSC today
+  // and the rules would stay live — the message above would be a lie in exactly
+  // the warm-dev-box case the opt-out exists for (dev-box state hiding the real
+  // behavior is a recurring shape here, not a hypothetical).
+  run('cmake', ['-S', tjsDir, '-B', buildDir, ...cmakeArgs, '-UCLODE_HOST_TJSC']);
 } else {
   // A cross build's own buildDir/tjsc would be a TARGET binary this host
   // cannot exec — build tjsc natively instead (buildHostTjsc). A native
@@ -3723,18 +3767,17 @@ if (regenOptOut) {
     tjsc = path.join(buildDir, process.platform === 'win32' ? 'tjsc.exe' : 'tjsc');
     if (!fs.existsSync(tjsc)) throw new Error(`bytecode regen: tjsc did not build at ${tjsc}`);
   }
-  regenBytecodeArrays(tjsDir, tjsc, bundlePairs);
+  // A SECOND configure of the same build dir, deliberately. The rules need the
+  // host tjsc's path at configure time, and on a native build that path does
+  // not exist until the first configure has produced a build system capable of
+  // building the tjsc target — the chicken-and-egg is real, so it is paid
+  // explicitly and once. The cache is warm, so this is a re-run of the
+  // generate step, not a fresh configure; ...cmakeArgs is repeated because a
+  // cmake re-configure keeps cached values but `-D` on the command line is
+  // also how several of them (toolchain file, OSX_* ) were set in the first
+  // place, and re-passing them is the documented way to keep them authoritative.
+  run('cmake', ['-S', tjsDir, '-B', buildDir, ...cmakeArgs, `-DCLODE_HOST_TJSC=${tjsc}`]);
 }
-
-// ---- bytecode regen: the tripwire (requirement 4) --------------------------
-// Right before src/bundles/c/** is compiled into the engine, verify every
-// array's fingerprint trailer still matches the JS bundle it claims to come
-// from. This should be unreachable right after a successful regen above —
-// it exists as defense-in-depth against a future refactor that reintroduces
-// the silent-drop this whole mechanism was built to fix. It must never again
-// be possible to ship a stale array quietly: if this ever fires, that is a
-// real build-system bug, not a target quirk to route around.
-if (!regenOptOut) assertBytecodeFresh(tjsDir, bundlePairs);
 
 // cosmo builds ONLY the tjs-cli executable target (OUTPUT_NAME tjs): the default
 // (all-targets) build drags in tjsc/qjs tools and demos that cosmocc can't build,

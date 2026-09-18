@@ -106,6 +106,11 @@ const INDIRECT_SITES = [
     notEnv: {
       CLODE_ATOMIC_SHIM: 'a cmake option name (`-DCLODE_ATOMIC_SHIM=ON`) injected into tjs\'s '
         + 'CMakeLists, not an environment variable — the env knob for it is CLODE_TJS_ATOMIC_SHIM',
+      CLODE_BYTECODE_RULES: 'the idempotence sentinel in the cmake comment fixupTjsCmakeBytecode'
+        + 'Rules injects — a marker the fixup greps for to know it already ran, not a variable. '
+        + 'The env knob for that machinery is CLODE_TJS_REGEN; the cmake cache variable the '
+        + 'injected rules are guarded on is CLODE_HOST_TJSC, which build-tjs passes with -D and '
+        + 'never reads from the environment.',
     },
   },
   {

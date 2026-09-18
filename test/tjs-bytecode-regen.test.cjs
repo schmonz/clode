@@ -1,5 +1,5 @@
 'use strict';
-// The bytecode-regen tripwire (scripts/build-tjs.cjs): cmake compiles
+// Bytecode regen (scripts/build-tjs.cjs): cmake compiles
 // src/bundles/c/** — quickjs bytecode arrays txiki git-tracks pre-compiled —
 // NOT the esbuilt src/bundles/js/** a src/js/** patch actually lands in.
 // Regenerating the .c arrays from the .js bundles used to be an opt-in
@@ -14,12 +14,34 @@
 // non-executable tjsc. Both are checked against the REAL source text (the
 // house pattern — test/tjs-build-hermeticity.test.cjs, test/win-*-guards.
 // test.cjs — grepping shipped behavior, not a reimplementation of it), plus
-// the pure fingerprint/freshness functions are extracted and run directly.
+// the pure bundle-pair table is extracted and run directly.
+//
+// WHAT MOVED IN PHASE 4c-2, and where its property went. Regeneration stopped
+// being an imperative step this script performs and became a cmake dependency
+// edge (fixupTjsCmakeBytecodeRules). Two things this file used to assert went
+// with it:
+//
+//   * the fingerprint/freshness helpers (bundleFingerprint, bytecodeIsFresh)
+//     and the pre-compile tripwire (assertBytecodeFresh). Their property was
+//     "a .c older than its .js must not reach the compiler". That is now the
+//     DEPENDS edge in the injected rule — cmake rebuilds the .c instead of
+//     detecting that it is stale, so staleness is not a state to detect. The
+//     edge is gated by test/bytecode-rule.test.cjs.
+//   * "--regen-only calls the SAME regen function a normal build calls". A
+//     normal build now calls no such function at all; --regen-only is the ONE
+//     remaining imperative caller (its netbsd-sparc guest has no node and its
+//     cmake gets no CLODE_HOST_TJSC). The property that actually prevented the
+//     sparc divergence survives and is re-pointed below: both emitters read
+//     their argv from the same bytecodeBundlePairs() table.
+//
+// The provenance trailer regenBytecodeArrays still stamps is NOT a freshness
+// check and is not asserted here: it carries no hash, exists only so
+// spike/quickjs/qemu/ci-guest-bake.sh can refuse an unregenerated tree, and is
+// guarded there by test/engine-api-floor.test.cjs.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const crypto = require('node:crypto');
 
 const repo = path.join(__dirname, '..');
 const buildTjsSrc = fs.readFileSync(path.join(repo, 'scripts/build-tjs.cjs'), 'utf8');
@@ -42,27 +64,13 @@ function extractFunction(src, name) {
   throw new Error(`unbalanced braces extracting ${name}`);
 }
 
-function extractConstLine(src, name) {
-  const start = src.indexOf(`const ${name} = `);
-  assert.ok(start > -1, `const ${name} not found in build-tjs.cjs`);
-  const end = src.indexOf('\n', start);
-  return src.slice(start, end);
-}
-
 // Loads the REAL pure helpers out of build-tjs.cjs (not a reimplementation),
 // same principle as loadCheckHermeticDeps in the hermeticity test file.
 function loadBytecodeHelpers() {
-  const src = [
-    extractConstLine(buildTjsSrc, 'FINGERPRINT_RE'),
-    extractFunction(buildTjsSrc, 'bundleFingerprint'),
-    extractFunction(buildTjsSrc, 'fingerprintTrailer'),
-    extractFunction(buildTjsSrc, 'bytecodeIsFresh'),
-    extractFunction(buildTjsSrc, 'bytecodeBundlePairs'),
-  ].join('\n');
+  const src = extractFunction(buildTjsSrc, 'bytecodeBundlePairs');
   // eslint-disable-next-line no-new-func
-  const factory = new Function('crypto',
-    `${src}\nreturn { bundleFingerprint, fingerprintTrailer, bytecodeIsFresh, bytecodeBundlePairs };`);
-  return factory(crypto);
+  const factory = new Function(`${src}\nreturn { bytecodeBundlePairs };`);
+  return factory();
 }
 
 // ---- pure-function behavior ------------------------------------------------
@@ -87,22 +95,28 @@ test('bytecodeBundlePairs: 6 fixed core/internal pairs plus one per stdlib file'
   });
 });
 
-test('bundleFingerprint/fingerprintTrailer/bytecodeIsFresh: fresh matches, tampered JS does not, missing trailer does not', () => {
-  const { bundleFingerprint, fingerprintTrailer, bytecodeIsFresh } = loadBytecodeHelpers();
-  const jsBytes = Buffer.from('export const x = 1;\n');
-  const fp = bundleFingerprint(jsBytes);
-  assert.strictEqual(fp, crypto.createHash('sha256').update(jsBytes).digest('hex'));
+// The pair table is the ONE source both emitters read: this file's
+// regenBytecodeArrays loop (for --regen-only) and the cmake COMMAND lines
+// fixupTjsCmakeBytecodeRules injects (for every other build). A second
+// hand-maintained copy of these pairs is precisely how the netbsd-sparc bake
+// came to ship an engine missing the JS half of its own patches, so the fixup
+// must be HANDED this table, never grow its own.
+test('build-tjs: the injected cmake rules are built from bytecodeBundlePairs, not a second list', () => {
+  const idx = buildTjsSrc.indexOf('fixupTjsCmakeBytecodeRules(tjsDir');
+  assert.ok(idx > -1, 'the fixup is never called — the cmake rules would never be injected');
+  const window = buildTjsSrc.slice(idx, idx + 400);
+  assert.match(window, /bytecodeBundlePairs\(/,
+    'the fixup must be handed the shared bundle-pair table, not a list it builds itself');
+  assert.match(window, /src\/js\/stdlib/,
+    'the stdlib half of the table is a function of the PATCHED tree\'s listing, read at fixup time');
+});
 
-  const cText = `/* File generated automatically by the QuickJS compiler. */\nconst x = 1;\n${fingerprintTrailer('src/bundles/js/core/x.js', fp)}`;
-  assert.strictEqual(bytecodeIsFresh(cText, jsBytes), true, 'a freshly-stamped trailer must read as fresh');
-
-  const tamperedJs = Buffer.from('export const x = 2;\n');
-  assert.strictEqual(bytecodeIsFresh(cText, tamperedJs), false,
-    'a .c stamped for the OLD .js content must read as stale once the .js changes — this is the exact shape of the original bug (patch changes src/js/**, src/bundles/c/** silently keeps shipping the old bytecode)');
-
-  const noTrailer = '/* File generated automatically by the QuickJS compiler. */\nconst x = 1;\n';
-  assert.strictEqual(bytecodeIsFresh(noTrailer, jsBytes), false,
-    'a .c with no fingerprint at all (e.g. pristine upstream, never regenerated) must read as stale, not fresh-by-default');
+test('build-tjs: cmake is told where the host tjsc is, or the injected rules stay inert', () => {
+  // The rules are wrapped in if(CLODE_HOST_TJSC); without this -D they are not
+  // emitted at all and the build silently compiles the committed arrays again
+  // — the exact defect, reintroduced by omission.
+  assert.match(buildTjsSrc, /-DCLODE_HOST_TJSC=\$\{tjsc\}/,
+    'the target configure must pass the selected host tjsc to cmake');
 });
 
 // ---- source-level: regen must be opt-OUT, never opt-IN --------------------
@@ -159,51 +173,70 @@ test('build-tjs: buildHostTjsc never uses a cross toolchain file (plain host com
     'a host that cannot build its own native tjsc must fail loudly, not silently skip regen for that target');
 });
 
-// ---- source-level: the tripwire is a hard build failure, not a warning ----
-
-test('build-tjs: the freshness tripwire throws (fails the build) on stale bytecode, unless explicitly opted out', () => {
-  const idx = buildTjsSrc.indexOf('the tripwire (requirement 4)');
-  assert.ok(idx > -1, 'the tripwire section banner was not found');
-  const window = buildTjsSrc.slice(idx, idx + 1200);
-  assert.match(window, /if\s*\(\s*!regenOptOut\s*\)\s*assertBytecodeFresh\(/,
-    'the pre-compile tripwire must still be gated on !regenOptOut and must still run');
-  const src = extractFunction(buildTjsSrc, 'assertBytecodeFresh');
-  assert.match(src, /bytecodeIsFresh\(/);
-  assert.match(src, /throw new Error\(`bytecode regen: STALE/);
+// ---- the freshness tripwire is GONE, deliberately -------------------------
+//
+// It asserted "no stale array reaches the compiler" by re-reading a hash
+// stamped into each .c. That was the right shape while regeneration was an
+// imperative step that could be skipped or mis-ordered. It is the wrong shape
+// now: the .c is a cmake OUTPUT whose DEPENDS names the .js, so a stale array
+// is not a condition to detect — it is a condition the build graph rebuilds
+// away before any compile can consume it. Keeping the detector would assert a
+// state the build can no longer be in, and would put a second mechanism in
+// charge of bytecode freshness, which is how the original drop stayed hidden.
+//
+// This test therefore checks the property that REPLACED it: nothing may compile
+// the bundle arrays until the regeneration target has run.
+test('build-tjs: the regeneration is ordered BEFORE the compile by the graph, not by a check after it', () => {
+  const fnSrc = extractFunction(buildTjsSrc, 'fixupTjsCmakeBytecodeRules');
+  assert.match(fnSrc, /add_dependencies\(tjs clode_bytecode\)/,
+    'the LIBRARY that compiles the arrays must depend on the regeneration target: the stdlib '
+    + 'arrays reach the compiler only via #include inside src/builtins.c, so they have no '
+    + 'source-list edge of their own and would otherwise compile in parallel with their own rewrite');
+  assert.match(fnSrc, /DEPENDS [^\n]*\$\{inJs\}/,
+    'each rule must name its .js input as a DEPENDS — that edge IS the staleness answer');
 });
 
-// ---- generation is single-sourced: --regen-only runs THE SAME code ---------
+// ---- generation is single-sourced: --regen-only reads THE SAME table -------
 //
 // The netbsd-sparc in-guest bake is the one build path in the matrix that does
 // not run build-tjs.cjs for its compile (a 512MB sun4m guest with no node), and
 // it hand-rolled its own cmake invocation with NO regen at all — so it shipped
 // an engine carrying the C half of txiki-engine-module-meta.patch and not the
 // JS half, and died 927s into the blobulate with "this engine does not report
-// moduleMeta". The fix is --regen-only: the runner regenerates the tree with
-// the same functions every other leg uses, and the guest compiles a complete
-// tree. These assertions exist so that "the sparc tree is regenerated by a
-// SECOND implementation" cannot come back.
+// moduleMeta". The fix is --regen-only: the runner regenerates the tree before
+// tarring it, and the guest compiles a complete tree. These assertions exist so
+// that "the sparc tree is regenerated by a SECOND implementation" cannot come
+// back.
+//
+// PHASE 4c-2 NARROWED WHAT "SAME" MEANS, and it is worth being exact about it,
+// because the looser claim is now false. --regen-only no longer calls the same
+// FUNCTION a normal build calls: a normal build calls none, it lets cmake's
+// rules run. What the two share — and all they ever really needed to share — is
+// the bundle-pair TABLE, asserted above. This block keeps the rest: --regen-only
+// must still build a host tjsc, still go through the shipped regen
+// implementation rather than a copy, and still stop before the target compile.
 
 // WHAT THIS TEST CANNOT SEE, recorded where the next reader will look. Every
 // assertion below is on SOURCE TEXT: it proves the block is WRITTEN to call those
-// three functions, not that the calls RESOLVE. Phase 4c1 moved all three inside
+// functions, not that the calls RESOLVE. Phase 4c1 moved them inside
 // build-tjs's async continuation while `if (regenOnly)` stayed at module top
 // level, making every one of them a guaranteed ReferenceError at module load —
 // and this test stayed green through it, because the text never changed. A text
 // assertion is structurally incapable of catching a scope error. The execution
 // half now lives in test/build-tjs-continuation-scope.test.cjs, which RUNS
 // --regen-only; keep both, they check different properties.
-test('build-tjs: --regen-only regenerates through the same functions as a normal build', () => {
+test('build-tjs: --regen-only regenerates through the shipped implementation, over the shared pair table', () => {
   assert.match(buildTjsSrc, /const regenOnly = process\.argv\.includes\('--regen-only'\);/);
   const idx = buildTjsSrc.indexOf('if (regenOnly) {');
   assert.ok(idx > -1, 'the --regen-only block was not found');
   const window = buildTjsSrc.slice(idx, idx + 1200);
   assert.match(window, /buildHostTjsc\(/,
     '--regen-only must build a host-native tjsc (canonical-LE makes its output valid for the guest target)');
+  assert.match(window, /bytecodeBundlePairs\(/,
+    '--regen-only must drive the SAME pair table the injected cmake rules are built from — a second '
+    + 'list of bundles is the divergence that shipped the sparc engine without its JS patches');
   assert.match(window, /regenBytecodeArrays\(/,
-    '--regen-only must call the SAME regen function the normal build calls, not a copy');
-  assert.match(window, /assertBytecodeFresh\(/,
-    '--regen-only must be held to the same no-stale-array tripwire as the normal build');
+    '--regen-only must call the shipped regen implementation, not a copy of its tjsc invocations');
   assert.match(window, /process\.exit\(0\)/, '--regen-only must stop before the target compile');
 });
 
