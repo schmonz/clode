@@ -60,10 +60,38 @@ the skip path the way the original defect hid behind an unset flag.
 new test). `test/guards-population.cjs` needed one new `GUARD_EXCLUSIONS` entry for the new
 file (same shape as `build-tjs-no-node.test.cjs`'s: a live acceptance run whose
 artifact-reading/pattern-matching signals fire on its own self-produced bytes, not on a
-fixed artifact) — `UNMIGRATED_BASELINE` (82) unchanged. One transient, non-reproducing fail
-was observed on a first full-suite run (detail lost — truncated by an over-eager `tail` in
-the invoking shell, not by the suite itself) and did NOT recur across two subsequent full
-clean runs; not chased further as it did not implicate this task's files.
+fixed artifact) — `UNMIGRATED_BASELINE` (82) unchanged.
+
+**FIX ROUND 1 — a transient full-suite fail, ROOT-CAUSED (2026-09-18).** An initial full
+run showed 1 fail whose detail was lost to an over-eager `tail` in the invoking shell; two
+immediate reruns were clean, and that was wrongly treated as "not chased further." The
+coordinator reproduced it (3 full runs, whole logs retained: 1 fail on run 2) and it
+recurred with full detail captured independently on this end too: `CMake Error: Cannot
+find source file: src/mod_fs_sync.c`, ~40s into `buildHostTjsc`'s own configure. This is
+**not CPU/job-count contention** (a job count cannot make a file disappear) and **not
+purely environmental** — it is a real race in `copyCheckout`, in this test alone.
+`src/mod_fs_sync.c` is OURS (patch-added, not upstream); `scripts/tjs-source-reset.cjs`'s
+`resetCheckoutToPristine` does `git checkout -- .` + `git clean -fd` against the SHARED
+vendor checkout before `applyPatches` re-adds patch-created files, and a `--source-only`
+running anywhere on the host (another test, a concurrent build) passes that shared tree
+through states where `CMakeLists.txt` already references `src/mod_fs_sync.c` while the
+file is momentarily absent. `copyCheckout`'s clonefile()/`cp -R` walk is not a snapshot; if
+it lands in that window it faithfully copies the half-applied tree. Confirmed with process
+and mtime evidence (other clode build activity live on the same host; the shared
+checkout's own file mtimes landed inside the failing run's window).
+
+**Fixed**: `copyMissingSources()` checks the copy's self-consistency (every source file its
+own `CMakeLists.txt` lists must exist); on failure, `copyCheckout` retries once (the reset
+window is short) and re-checks; if still torn, the test **skips** with a precise reason
+naming the missing file and the mechanism — never fails, never silently tolerates the gap.
+Demonstrated deterministically: a copy with `src/mod_fs_sync.c` deleted by hand (CMakeLists
+left intact) produces exactly that skip, not a cmake error — `skipped 1 / fail 0`. Job cap
+(`-j2`, not `os.cpus().length`) and `execFileSync` timeouts were also added as separate,
+independently-justified hygiene (test-file-level parallelism in `test/run.mjs` plus this
+being the only file in the suite doing a real native compile is real oversubscription risk
+on its own merits) — but they are NOT the fix for this race and are not presented as one.
+Verified with **three consecutive full suites, whole logs retained**: 2101/2065/0 fail/35
+skip/1 todo, all three, no recurrence, no new skip.
 
 **Left open, explicitly NOT this phase** (per the task brief): the remaining four
 `scripts/build-tjs.cjs` cmake-migration call sites, and ccache — that is 4c-3. The two

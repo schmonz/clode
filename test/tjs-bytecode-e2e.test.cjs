@@ -35,12 +35,28 @@
 // of "no flag set" than running build-tjs.cjs with an unset env var would be — there is no
 // flag-reading code in the path at all for one to accidentally reintroduce.
 //
+// COST, stated because this is now a known-expensive member of the default suite: roughly
+// 60-90s wall clock, measured (a cold qjs+tjsc compile, capped at 2 parallel jobs — see
+// the `jobs` comment below for why not more), and it is the ONLY file in test/ that drives
+// a real native compiler+linker build rather than text/fixture assertions. Not gated
+// behind an opt-in: the cost is bounded by the existing warm-checkout skip (nothing to
+// build without one), and the property it proves does not exist anywhere else in the
+// suite.
+//
 // COPY, NEVER MUTATE THE SHARED CHECKOUT. ~/.cache/clode/tjs-vendor/txiki.js (or wherever
 // CLODE_TJS_VENDOR points) is the ONE checkout every build on this box patches/resets/
 // re-patches from; a test that edited its src/js/** directly would corrupt every later
 // build. test/build-tjs-no-node.test.cjs solved this first — CoW-copy into a mkdtemp, then
 // operate on the copy alone — and copyCheckout below is that same approach, not a fresh
 // design.
+//
+// QUIESCENCE, a real constraint on a PARALLEL suite, not a hypothetical: this test's copy
+// is only correct if the shared checkout is not mid reset+re-patch (scripts/
+// tjs-source-reset.cjs) from some OTHER build on the same host at the exact moment
+// copyCheckout runs — proven, not guessed, by a reproduced 3-run flake (see
+// copyMissingSources' header below for the mechanism). An occasional SKIP naming a missing
+// source file under this test is that race, caught and reported honestly; it is the first
+// place to look, not a mystery.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -109,6 +125,36 @@ function sha256(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }
 
+// TORN-COPY DETECTION (fix round 1, ROOT-CAUSED, reproduced 3x by the coordinator across 3
+// full-suite runs — not a one-off, and NOT the job-count contention this fix round also
+// addresses; job count cannot make a FILE disappear). The observed failure:
+// `CMake Error: Cannot find source file: src/mod_fs_sync.c`, ~40s into a run, from INSIDE
+// buildHostTjsc's own configure. src/mod_fs_sync.c is not upstream — it is OURS, added by
+// the patch stack. scripts/tjs-source-reset.cjs's resetCheckoutToPristine does `git
+// checkout -- .` + `git clean -fd` against the SHARED checkout (tjsVendorParentDir())
+// before applyPatches re-adds the patch-created files; a `--source-only` running ANYWHERE
+// on this host (another test, a concurrent build) passes the shared tree through states
+// where CMakeLists.txt already references src/mod_fs_sync.c (an early-order patch) while
+// the file itself is momentarily absent (reset removed it, re-patching has not yet run).
+// copyCheckout's clonefile()/cp -R walk is not a snapshot: if it runs during that window it
+// faithfully copies the half-applied tree, and cmake fails exactly as above.
+// (test/build-tjs-no-node.test.cjs's identical copyCheckout has the same exposure, on a
+// smaller surface — it never configures cmake against what it copies.)
+//
+// So the copy is not guaranteed self-consistent, and must be CHECKED, not assumed. Returns
+// which of its own CMakeLists.txt's listed sources are missing from the tree (empty when
+// consistent) — a pure function of the copy, so the caller can run it once, retry the copy
+// on failure, and run it again.
+function copyMissingSources(tjsDir) {
+  const cmakeText = fs.readFileSync(path.join(tjsDir, 'CMakeLists.txt'), 'utf8');
+  // The exact shape that broke: a bare `src/....c` source-list line inside
+  // add_library(tjs STATIC ...)/add_executable(tjsc ...). Deliberately narrow (not every
+  // path CMakeLists.txt could ever mention) — this is a targeted symptom check for the
+  // proven failure mode, not a general build-graph validator.
+  const listed = [...cmakeText.matchAll(/^ {4}(src\/[\w./-]+\.c)$/gm)].map((m) => m[1]);
+  return listed.filter((f) => !fs.existsSync(path.join(tjsDir, f)));
+}
+
 // The lines cmake prints for each COMMENT "tjsc <path>" a rule actually ran — the direct
 // observable of "which arrays did the graph decide needed rewriting", used below to prove
 // both halves of the property: a genuine no-op touches NONE of them, and editing one .js
@@ -147,6 +193,30 @@ test('a src/js/** edit changes its compiled src/bundles/c/** bytecode, via real 
   const tjsDir = path.join(dir, 'txiki.js');
   copyCheckout(srcCheckout, tjsDir);
 
+  // RETRY ONCE, THEN SKIP -- never fail on this (see copyMissingSources' header for the
+  // proven mechanism). resetCheckoutToPristine's reset+re-patch window is short (low
+  // single-digit seconds), so a fresh copy taken a moment later is very likely to land
+  // outside it; if it is STILL torn after a retry, this is an environmental race against a
+  // shared resource this test does not own, not a defect in the property under test, and a
+  // skip that names the exact missing file is the honest result -- not a cmake error that
+  // names neither the cause nor the remedy, and not silently tolerating a missing file
+  // (the assertions below are unchanged; only this precondition is re-established).
+  let missing = copyMissingSources(tjsDir);
+  if (missing.length > 0) {
+    fs.rmSync(tjsDir, { recursive: true, force: true });
+    copyCheckout(srcCheckout, tjsDir);
+    missing = copyMissingSources(tjsDir);
+  }
+  if (missing.length > 0) {
+    t.skip(`the shared vendor checkout at ${srcCheckout} was being rewritten while this `
+      + `test copied it, twice in a row (missing ${missing.join(', ')}, which its own `
+      + 'CMakeLists.txt references) -- another test or a concurrent build was mid '
+      + '--source-only/resetCheckoutToPristine on the SAME shared checkout. This is an '
+      + 'environmental race against a resource this test does not own, not a defect in '
+      + 'the property under test; re-run once the shared checkout is quiescent.');
+    return;
+  }
+
   // The premise, checked as a FAILURE, not a skip. A checkout existing is a test-infra
   // precondition (skip above); a checkout that exists but carries no CLODE_BYTECODE_RULES
   // block is exactly the pre-phase defect this task exists to catch — the fixup call
@@ -159,8 +229,25 @@ test('a src/js/** edit changes its compiled src/bundles/c/** bytecode, via real 
     + 'or the shared checkout predates it. Re-run `node scripts/build-tjs.cjs '
     + '--source-only` to refresh it.');
 
-  const jobs = String(Math.max(1, os.cpus().length));
-  const run = (cmd, args, opts = {}) => execFileSync(cmd, args, { encoding: 'utf8', ...opts });
+  // CAPPED, not os.cpus().length (fix round 1, general hygiene -- NOT the fix for the
+  // torn-copy flake above, which is a shared-checkout race, not compile contention; job
+  // count cannot make a file disappear). test/run.mjs invokes `node --test` with no
+  // --test-concurrency override, so test FILES already run concurrently across worker
+  // processes; this is also the first file in the suite that drives a real, native
+  // compiler+linker build (build-tjs-no-node.test.cjs only runs --source-only,
+  // tjs-bytecode-regen.test.cjs only touches synthetic fixtures). A full core count here
+  // would be oversubscription by construction -- N of these plus every OTHER test file's
+  // own work, all competing for the same physical cores at once. 2 is a small, fixed
+  // budget: enough that the one-time qjs+tjsc compile below is not fully serial, small
+  // enough that it does not itself add a second contention surface on top of the real one.
+  const jobs = '2';
+  // TIMEOUT, not open-ended (fix round 1, same hygiene): a STALL under contention (vs. an
+  // ordinary slow compile) must fail with a message, not hang the whole suite silently.
+  // 300s is generous even at -j2 for a cold qjs+tjsc compile (measured ~20s unloaded) with
+  // headroom for a busy box; execFileSync throws ETIMEDOUT (SIGTERM to the child) past it.
+  const CMD_TIMEOUT_MS = 300000;
+  const run = (cmd, args, opts = {}) =>
+    execFileSync(cmd, args, { encoding: 'utf8', timeout: CMD_TIMEOUT_MS, ...opts });
   const buildHostTjsc = loadBuildHostTjsc(run, jobs);
 
   const hostBuildDir = path.join(dir, 'build-host-tjsc');
