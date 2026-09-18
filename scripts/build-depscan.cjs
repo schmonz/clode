@@ -1,3 +1,6 @@
+// ESM was implicitly strict, CommonJS is not: the .mjs -> .cjs rename must not
+// silently loosen this file (undeclared globals, block-scoped fn decls). Ruling 2.
+'use strict';
 // Build the host-native depscan (tools/depscan) — the cross-capable
 // dependency reader the engine build's hermeticity check runs.
 //

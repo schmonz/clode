@@ -1,3 +1,6 @@
+// ESM was implicitly strict, CommonJS is not: the .mjs -> .cjs rename must not
+// silently loosen this file (undeclared globals, block-scoped fn decls). Ruling 2.
+'use strict';
 const { execFileSync } = require('node:child_process');
 
 // Reset a git checkout (and its submodules) to a pristine copy of its pinned

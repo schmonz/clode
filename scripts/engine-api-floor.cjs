@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+// ESM was implicitly strict, CommonJS is not: the .mjs -> .cjs rename must not
+// silently loosen this file (undeclared globals, block-scoped fn decls). Ruling 2.
+'use strict';
 // engine-api-floor — ONE list of the engine bindings clode's blobulated runtime
 // REQUIRES, and ONE generator for the check that proves an engine has them.
 //
