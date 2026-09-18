@@ -3231,6 +3231,43 @@ const jobs = String(Math.max(1, cpus().length));
 // host-native tjsc build dir and exits before the target compile.
 const buildRoot = process.env.CLODE_TJS_BUILD || path.join(localScratchRoot(), 'clode-tjs-build');
 
+// ---- everything below runs inside an async continuation ---------------------
+// ONE await survives the ESM->CJS conversion: provisionCosmocc() fetches the
+// 441MB cosmocc zip over the network, and clode-net's downloadFile is genuinely
+// async (built-in fetch; there is no sync seam and curl/wget are deliberately
+// gone). CommonJS has no top-level await, and the node-shim's loader.cjs hosts
+// CommonJS only — which is the whole reason this file stopped being ESM — so the
+// remaining build phases are handed to an async arrow instead.
+//
+// THE BODY IS DELIBERATELY NOT INDENTED. Indenting it would rewrite ~600 lines
+// this conversion does not otherwise touch, destroying `git blame` on every build
+// phase and breaking the source-text gates (test/msvc-getopt-shim.test.cjs,
+// test/tjs-darwin-poll-fixup.test.cjs, test/tjs-build-hermeticity.test.cjs,
+// test/tjs-bytecode-regen.test.cjs) that slice this file by column-0
+// `function <name>` anchors.
+//
+// THE BOUNDARY IS HERE, ABOVE THE --regen-only EXIT, AND THAT IS THE WHOLE POINT
+// (fix round 1). It opened ~55 lines lower at first, which left `if (regenOnly)`
+// at module top level calling four functions that had moved INSIDE the arrow:
+// `function` declarations hoist to the ARROW's scope, not the module's, so
+// `node scripts/build-tjs.cjs --regen-only` died with "buildHostTjsc is not
+// defined" before the catch below was even attached. The qemu guest-bake legs run
+// exactly that command (.github/actions/build-leg/action.yml). A lexical check for
+// const/let reads found nothing, because hoisted function declarations are the one
+// category that looks fine in such a scan and breaks anyway — when a scope
+// boundary moves, `function` declarations must be swept SEPARATELY, which is now
+// what the build-tjs-continuation-scope guard does on every run.
+//
+// Opening it here rather than moving the block down keeps statement order exactly
+// as it was, puts both early exits under the catch below, and leaves every line
+// between here and EOF where it already sat. Nothing above this line reads a
+// binding declared below it (swept for functions, const, let and destructures;
+// the only hits are parameter names that shadow, e.g. dropStaleCmakeCache's
+// `buildDir`).
+//
+// For a non-cosmo build — every shipping leg — the arrow runs to completion
+// synchronously in this same tick, exactly as the top-level statements did.
+(async () => {
 // --regen-only: the whole point of the mode. Build a host-native tjsc from this
 // same patched tree and run THE SAME regeneration every other leg runs, then
 // stop — leaving a source tree whose src/bundles/c/** already reflects our
@@ -3268,25 +3305,6 @@ if (!wantMimalloc) {
 if (!wantFfi) {
   cmakeArgs.push('-DBUILD_WITH_FFI=OFF');
 }
-// ---- everything below runs inside an async continuation ---------------------
-// ONE await survives the ESM->CJS conversion: provisionCosmocc() fetches the
-// 441MB cosmocc zip over the network, and clode-net's downloadFile is genuinely
-// async (built-in fetch; there is no sync seam and curl/wget are deliberately
-// gone). CommonJS has no top-level await, and the node-shim's loader.cjs hosts
-// CommonJS only — which is the whole reason this file stopped being ESM — so the
-// remaining build phases are handed to an async arrow instead.
-//
-// THE BODY IS DELIBERATELY NOT INDENTED. Indenting it would rewrite ~550 lines
-// that this conversion does not otherwise touch, destroying `git blame` on every
-// build phase and breaking the source-text gates (test/msvc-getopt-shim.test.cjs,
-// test/tjs-darwin-poll-fixup.test.cjs, test/hermetic-guard.test.cjs) that slice
-// this file by column-0 `function <name>` anchors. Nothing above this line reads
-// a binding declared below it (checked name by name at conversion time), so the
-// narrower scope changes no resolution.
-//
-// For a non-cosmo build — every shipping leg — the arrow runs to completion
-// synchronously in this same tick, exactly as the top-level statements did.
-(async () => {
 // cosmo: provision cosmocc and point the build at the cosmo cross toolchain +
 // the rest of the lean profile. Done HERE (before crossFile is read below) so
 // the toolchain file and CLODE_COSMOCC are in the environment cmake sees. The
@@ -3843,6 +3861,11 @@ checkHermeticDeps(path.join(outDir, outName));
   // A top-level throw ended the process by itself; a rejected continuation does
   // not, and under tjs an unhandled rejection can be swallowed outright — so a
   // failed build would have reported success. Fail loud, exit non-zero.
+  //
+  // exitCode, NOT exit(1): process.exit() tears the process down immediately and
+  // can truncate a pending stderr write to a pipe, which is precisely how CI reads
+  // this — the failure would be reported with its explanation cut off. Setting the
+  // code and letting the process end naturally flushes first.
   console.error(e && e.stack ? e.stack : String(e));
-  process.exit(1);
+  process.exitCode = 1;
 });
