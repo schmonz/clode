@@ -2540,6 +2540,63 @@ function fixupAtomicShim(dir) {
   console.log('fixup atomic-shim: applied');
 }
 
+function fixupTjsCmakeBytecodeRules(dir, bundlePairs) {
+  // THE DEFECT THIS FIXES (spec §4): patching any txiki JS under src/js/** had
+  // NO EFFECT. cmake compiles src/bundles/c/** — pre-built bytecode arrays that
+  // txiki git-tracks — and nothing regenerated them, so the esbuilt .js HAD the
+  // change while the .c that compiled was pristine upstream, three minutes
+  // older. No failure signal anywhere.
+  //
+  // txiki's own Makefile declares exactly this rule per bundle
+  // (src/bundles/c/core/polyfills.c: $(TJSC) src/bundles/js/core/polyfills.js).
+  // Its CMakeLists does not, because upstream regenerates through make and
+  // ships the .c pre-built. We drive cmake directly, so we must supply the rule.
+  //
+  // HOST tjsc, not the in-tree one: add_custom_command runs its command on the
+  // BUILD HOST, and a cross build's tjsc is a TARGET binary this host cannot
+  // execute. buildHostTjsc() produces the host one; it arrives as
+  // CLODE_HOST_TJSC. When it is unset (a native build that has not needed one)
+  // the rules are not emitted and the imperative path still applies — see the
+  // guard in the emitted cmake below.
+  const f = path.join(dir, 'CMakeLists.txt');
+  const cur = fs.readFileSync(f, 'utf8');
+  if (cur.includes('CLODE_BYTECODE_RULES')) {
+    console.log('fixup tjs-cmake-bytecode-rules: already applied');
+    return;
+  }
+  const anchor = 'add_executable(tjsc';
+  if (!cur.includes(anchor)) {
+    throw new Error('fixup tjs-cmake-bytecode-rules: tjsc target not found '
+      + '(CMakeLists.txt changed under the pin — re-derive)');
+  }
+  const rules = bundlePairs.map(({ outC, name, prefix, inJs }) =>
+    // WORKING_DIRECTORY + a relative input is load-bearing, not style: tjsc
+    // derives the C identifier from everything after the last '/' (get_c_name,
+    // src/qjsc.c:191), so an absolute Windows path leaks the drive colon and
+    // backslashes into the symbol name and MSVC stops at 100 errors.
+    `add_custom_command(\n`
+    + `    OUTPUT \${CMAKE_CURRENT_SOURCE_DIR}/${outC}\n`
+    + `    COMMAND \${CLODE_HOST_TJSC} -m -s -o \${CMAKE_CURRENT_SOURCE_DIR}/${outC}`
+    + ` -n "${name}" -p ${prefix} ${inJs}\n`
+    + `    DEPENDS \${CMAKE_CURRENT_SOURCE_DIR}/${inJs} \${CLODE_HOST_TJSC}\n`
+    + `    WORKING_DIRECTORY \${CMAKE_CURRENT_SOURCE_DIR}\n`
+    + `    COMMENT "tjsc ${outC}"\n`
+    + `    VERBATIM)\n`).join('');
+  const inject = '\n# CLODE_BYTECODE_RULES — regenerate src/bundles/c/** from src/bundles/js/**.\n'
+    + '# Upstream does this in its Makefile; we drive cmake directly, so the rule\n'
+    + '# lives here instead. Guarded on CLODE_HOST_TJSC so a configure without one\n'
+    + '# behaves exactly as before.\n'
+    + 'if(CLODE_HOST_TJSC)\n'
+    + rules
+    + `    add_custom_target(clode_bytecode DEPENDS\n`
+    + bundlePairs.map(({ outC }) => `        \${CMAKE_CURRENT_SOURCE_DIR}/${outC}`).join('\n')
+    + '\n    )\n'
+    + '    add_dependencies(tjs-cli clode_bytecode)\n'
+    + 'endif()\n';
+  fs.writeFileSync(f, cur + inject);
+  console.log(`fixup tjs-cmake-bytecode-rules: applied (${bundlePairs.length} rules)`);
+}
+
 function fixupTjsCmakeWinStack(dir) {
   // txiki bumps tjs-cli's stack to 8MB with the MSVC linker flag /STACK:,
   // guarded on plain WIN32 — but mingw's GNU ld rejects /STACK: (reads it as
