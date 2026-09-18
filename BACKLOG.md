@@ -7518,3 +7518,81 @@ files (`build-tjs`, `tjs-source-reset`, `engine-api-floor`, `build-depscan`) are
 `test/depscan-build.cjs` has no ESM bridge left. Linux and Windows legs proving the same
 thing is deferred to CI exercising it — this task's proof is darwin-only, by hand and by test,
 on this box.
+
+## ★ Phase 4c-1 SHIPPED — the engine build runs with Node ABSENT (2026-09-17)
+
+Spec §11 acceptance 1, met on darwin and proven by transcript rather than argument:
+
+    $ env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin   ->  node: NOT FOUND
+    $ "$ENGINE" run libexec/node-shim/loader.cjs scripts/build-tjs.cjs --source-only
+      fixup qjs-import-meta-by-identity: applied to deps/quickjs/quickjs.c
+      esbuilt 16 plain-JS bundles for the BE regen path
+      source tree ready: ~/.cache/clode/tjs-vendor/txiki.js          exit 0
+
+The thing that reconstructs the engine now runs ON the engine — a Mach-O arm64 binary this
+project built. Four files became CJS (`build-tjs`, `tjs-source-reset`, `engine-api-floor`,
+`build-depscan`), because `libexec/node-shim/loader.cjs` hosts CommonJS and CANNOT host an ESM
+entry at all (`:481` guards its transpile with `!isEntry`; `import.meta` is a hard SyntaxError
+even on the transpiled path). Red proof: that same loader, handed an ESM entry, rejects it with
+`SyntaxError: Unexpected identifier 'fs'`.
+
+**The true code delta is 12 lines** — ten imports and two `import.meta` uses. The other 18
+`import.meta` mentions are PAYLOAD inside C-fixup string literals that teach txiki about
+`import.meta` for the built product; a new guard pins the count at 18, their position after the
+fixup banner, and per-fixup counts, so an edit cannot silently drop one.
+
+### Two defects, and both were gates rather than code
+
+**1. CJS forbids top-level `await`, and there was one nobody had found.** `const cosmoccBin =
+await provisionCosmocc()` sits inside a top-level `if (cosmoTarget)` — legal ESM, rejected by
+CJS. Everything from there to EOF now runs in `(async () => {…})().catch(…)` with
+`process.exitCode = 1`; without that catch a rejected continuation would have exited **0**.
+The arrow's body is deliberately NOT indented: indenting would rewrite ~550 untouched lines and
+break the source-text gates that slice this file on column-0 `function` anchors (real — e.g.
+`test/tjs-darwin-poll-fixup.test.cjs:139`).
+
+**2. Moving that boundary killed `--regen-only`, and CI runs it.** `if (regenOnly)` sat ABOVE
+the arrow calling four `function` declarations now inside it; function declarations hoist to the
+ARROW's scope. `node scripts/build-tjs.cjs --regen-only` died with `ReferenceError:
+buildHostTjsc is not defined`, on the path `.github/actions/build-leg/action.yml:594` runs for
+the qemu guest-bake legs.
+**2,085 green tests said nothing**, because the test "covering" `--regen-only` asserts on SOURCE
+TEXT (`assert.match(buildTjsSrc, /buildHostTjsc\(/)`) — which passes on a file where that call is
+a guaranteed ReferenceError. Now there is a test that EXECUTES it and asserts `at buildHostTjsc `
+appears as a STACK FRAME, which a mis-scoped name cannot produce, plus a `defineGuard` that fails
+if any function declared inside the continuation is named above it.
+
+### Three gate-coverage regressions the branch introduced, found only by the whole-branch pass
+
+None was a behavioural defect. All three were things still TRUE but no longer CHECKED.
+
+- **All four converted files fell out of the zero-npm-dependency gate.**
+  `test/clode-self-deps.test.cjs` filtered `scripts/` for `.mjs` only, so the rename made them
+  unreachable. `require('semver')` in the 3,871-line file 42 legs depend on would have stayed
+  green, and the gate's own anti-vacuity check could not notice because it still walked 72 files.
+  Fixed, walk 71 -> 80, **zero violations on its first honest run** — plus a by-NAME assertion,
+  because a COUNT check would not have caught this.
+- **`'use strict'` landed on 1 of 4.** ESM is implicitly strict, CJS is not, so the other three
+  were silently loosened. Per-task review could not see it: the leaves shipped before the ruling
+  existed, and the next task's review scoped to `build-tjs`.
+- **The flagship acceptance ran only on one laptop.** It hand-rolled engine resolution, so it
+  ignored `CLODE_TJS` (set at nine places in `ci.yml`) and looked for `tjs` not `tjs.exe` on
+  Windows — telling developers there to build an engine they already had. Now resolves via
+  `tjsPath()`, with an explicit win32 skip naming the POSIX probe as the reason.
+
+### OPEN — filed, not fixed
+
+- **The cosmo `await` path is never exercised.** `if (cosmoTarget)` is false on every non-cosmo
+  leg, so the async continuation is not on the wire. Only `CLODE_TJS_TARGET=cosmo` reaches it,
+  and that needs a 441MB pinned download. Named in the test header and here.
+- **Linux and Windows unexercised.** The acceptance can now RUN in CI, but runners have no vendor
+  checkout, so it will honestly SKIP. Real matrix coverage needs a leg with both an engine and a
+  checkout.
+- `scripts/engine-recipe.mjs`'s `FILES` names `build-tjs.cjs` but not the three leaves — an edit
+  to `tjs-source-reset.cjs`, which decides what "pristine" means before the patch stack applies,
+  moves no recipe hash, so the cache can restore an engine built by a different recipe.
+- The shim rewrites the entry's text for `import(` and `\p{}` regex flags; only `import.meta` is
+  gated. A future fixup payload containing either would be silently corrupted under tjs and
+  correct under Node — a Node-vs-tjs divergence with no gate.
+- `docs/dev/windows-dev-setup.md` still names the old file (untracked, but a live how-to for the
+  one platform this phase admits is unexercised).
