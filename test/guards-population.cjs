@@ -186,6 +186,19 @@ function discoverTestFiles(dir) {
 // convention for `skip` reasons, which this mirrors).
 const GUARD_EXCLUSIONS = [
   {
+    file: 'build-tjs-no-node.test.cjs',
+    because: 'it is a live ACCEPTANCE run, not a scan: it copies a vendor checkout into a '
+      + 'mkdtemp of its own, spawns the engine build under the node-shim with Node absent '
+      + 'from PATH, and asserts on the exit status and the stdout THAT RUN produced. Both '
+      + 'classifier signals are false positives on prose and on self-produced bytes — '
+      + 'READS_ARTIFACT fires on the literal `CLODE_TJS` in the header comment explaining '
+      + 'how CI points the test at its engine (a comment, not an fs path), and '
+      + 'PATTERN_MATCHES fires on `assert.match(r.stdout, /source tree ready:/)`, which '
+      + 'derives its finding from the child process this test just started, never from a '
+      + 'fixed artifact it did not create. There is no artifact to scan and no violation '
+      + 'pattern to look for; the subject is whether the build RUNS.',
+  },
+  {
     file: 'guards-population.test.cjs',
     because: 'this IS the sweep — it classifies OTHER tests\' shape and asserts about the '
       + 'discovered file LIST, which trips READS_ARTIFACT (it reads REPO/__dirname-rooted '
