@@ -4,6 +4,74 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 (Strategic feasibility risks live in `LONG-TERM.md`; in-flight designs in
 `docs/superpowers/`. Done items are DELETED from here — git history is the record.)
 
+## Phase 4c-2 (bytecode as a build rule) — spec §11 acceptances 2 and 3 MET (2026-09-18)
+
+**§11.2 (the tripwire is deleted, regen is a cmake OUTPUT/DEPENDS rule)** — met in task 2
+(`f007460`): `bundleFingerprint`/`bytecodeIsFresh`/`assertBytecodeFresh` are gone, replaced
+by `fixupTjsCmakeBytecodeRules` injecting `add_custom_command(OUTPUT … DEPENDS …)` for all
+18 bundles plus `add_dependencies(tjs clode_bytecode)`. Task 3 (this entry) added the one
+thing task 2's own report flagged as unverified: an END-TO-END run, not just text/fixture
+assertions, in `test/tjs-bytecode-e2e.test.cjs`.
+
+**§11.3 (a `src/js/**` edit changes the compiled `.c`, no flag set)** — the defect that
+motivated the whole phase. Demonstrated by hand (CoW copy of the warm vendor checkout,
+never the shared one): configure+build a host-native `tjsc` (`buildHostTjsc`'s own
+recipe — its only dependency is the `qjs` library, none of libuv/mbedtls/libwebsockets/
+sqlite), second configure with `-DCLODE_HOST_TJSC=<tjsc>`, then `cmake --build … --target
+clode_bytecode` alone (never a whole engine — link-graph cost avoided on purpose). Measured
+transcript:
+
+```
+before (pristine):            bcc0b52a52141389c35c6d2f3a58ee976d5ae1128337d55af47318cb67bb76
+no-op rebuild:                bcc0b52a52141389c35c6d2f3a58ee976d5ae1128337d55af47318cb67bb76  (unchanged)
+after `echo 'globalThis.__task3BytecodeProbe = "task3-demo-marker";' >> src/js/internal/path.js`:
+                               fc5282e317b23c2759c593e715084adbc0dd21b5e92d7f9c8d57c3f43fb15f0
+```
+— `src/bundles/c/internal/path.c` changed, and the rebuild log shows exactly ONE `tjsc`
+line (`[ 50%] tjsc src/bundles/c/internal/path.c`), not all 18: the edge is per-file, not a
+blind regeneration. `CLODE_TJS_REGEN` was unset throughout — the whole point.
+
+**Turned into a committed test**: `test/tjs-bytecode-e2e.test.cjs` reproduces the same
+steps (CoW-copy the shared vendor checkout into a mkdtemp, same `buildHostTjsc` recipe
+extracted from `scripts/build-tjs.cjs` rather than reimplemented, `clode_bytecode` target
+only) and asserts: a genuine no-op rebuild touches nothing; editing
+`src/js/internal/path.js` directly (no esbuild step needed — it is one of the two bundles
+`bytecodeBundlePairs()` feeds to `tjsc` straight from `src/js/**`) touches exactly
+`src/bundles/c/internal/path.c` and changes its bytes; no `CLODE_TJS_REGEN` is read, set,
+or named anywhere in the file. POSIX-only (stated reason: the harness assumes a
+single-config generator, which MSVC's default is not); skips honestly when no vendor
+checkout is warm. Passes: 1/1, ~32s (dominated by the one-time `tjsc`/`qjs` compile).
+
+**Proven to go red** (the pre-phase silent drop, reproduced on purpose): reverted the
+fixup CALL only (`fixupTjsCmakeBytecodeRules(tjsDir, bytecodeBundlePairs(...))` in
+`scripts/build-tjs.cjs`'s source phase, commented out — the fixup itself untouched), ran
+`node scripts/build-tjs.cjs --source-only` against a CoW-copied scratch checkout
+(fully offline — no clone, no npm install, `ensureCheckout` just resets+reapplies
+patches locally), restored the call immediately, then ran the real test against that
+scratch checkout via `CLODE_TJS_VENDOR=<scratch>`. Result: **1 fail, 0 pass** —
+`AssertionError: …CMakeLists.txt carries no CLODE_BYTECODE_RULES block — either the
+fixupTjsCmakeBytecodeRules CALL … was reverted, or the shared checkout predates it`,
+in 3.6s (fails before paying for the cmake configure). That is a genuine test FAILURE,
+not a skip: the checkout-exists precondition is a skip, but "checkout exists yet carries
+no rules block" is asserted as a failure on purpose, so a reverted call cannot hide behind
+the skip path the way the original defect hid behind an unset flag.
+
+**Suite**: 2101 tests / 2065 pass / 0 fail / 35 skip / 1 todo (baseline 2100/2064/0/35 + 1
+new test). `test/guards-population.cjs` needed one new `GUARD_EXCLUSIONS` entry for the new
+file (same shape as `build-tjs-no-node.test.cjs`'s: a live acceptance run whose
+artifact-reading/pattern-matching signals fire on its own self-produced bytes, not on a
+fixed artifact) — `UNMIGRATED_BASELINE` (82) unchanged. One transient, non-reproducing fail
+was observed on a first full-suite run (detail lost — truncated by an over-eager `tail` in
+the invoking shell, not by the suite itself) and did NOT recur across two subsequent full
+clean runs; not chased further as it did not implicate this task's files.
+
+**Left open, explicitly NOT this phase** (per the task brief): the remaining four
+`scripts/build-tjs.cjs` cmake-migration call sites, and ccache — that is 4c-3. The two
+emitters (the injected COMMAND text and `regenBytecodeArrays`'s loop) still duplicate the
+`tjsc` argv shape even though both read `bytecodeBundlePairs()` — task 2's own report
+flagged this; unify by having `--regen-only` drive `cmake --target clode_bytecode` against
+its own host build dir, not attempted here (touches the sparc CI path end to end).
+
 ## `checkControl` cannot prove a MULTI-DETECTOR guard per-detector (2026-09-13)
 
 **Site:** `test/guard.cjs:96` — `checkControl`'s entire verdict is

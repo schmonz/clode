@@ -199,6 +199,22 @@ const GUARD_EXCLUSIONS = [
       + 'pattern to look for; the subject is whether the build RUNS.',
   },
   {
+    file: 'tjs-bytecode-e2e.test.cjs',
+    because: 'it is a live ACCEPTANCE run, not a scan: it CoW-copies a vendor checkout into '
+      + 'a mkdtemp of its own, drives a real cmake configure + build over the copy (never '
+      + 'the shared checkout), edits one of its own src/js/** files, and asserts on the '
+      + 'sha256 of a .c file THAT BUILD wrote — never a fixed artifact it did not create. '
+      + 'Both classifier signals are false positives on that shape, the same way they are '
+      + 'for build-tjs-no-node.test.cjs above: READS_ARTIFACT fires on the literal '
+      + '`CLODE_TJS_VENDOR`/tjsVendorParentDir() header prose describing WHY the checkout '
+      + 'is copied rather than mutated, and PATTERN_MATCHES fires on '
+      + '`assert.deepStrictEqual(tjscTouchedPaths(...), [...])` and `assert.match(...'
+      + 'CMakeLists.txt..., /CLODE_BYTECODE_RULES/)`, both of which derive their finding '
+      + 'from bytes this test\'s own cmake invocation just produced. There is no artifact '
+      + 'to scan and no violation pattern to look for; the subject is whether the DEPENDS '
+      + 'edge actually fires.',
+  },
+  {
     file: 'guards-population.test.cjs',
     because: 'this IS the sweep — it classifies OTHER tests\' shape and asserts about the '
       + 'discovered file LIST, which trips READS_ARTIFACT (it reads REPO/__dirname-rooted '
