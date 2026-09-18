@@ -10,6 +10,7 @@ const path = require('node:path');
 const { depscanExe, runDepscan } = require('./depscan-build.cjs');
 const { stripComments } = require('./strip-comments.cjs');
 const { defineGuard, guardTests } = require('./guard.cjs');
+const { parseDepscan } = require('../scripts/depscan-verdict.cjs');
 
 const repo = path.join(__dirname, '..');
 
@@ -83,10 +84,32 @@ function scanFixture(buf, name = 'fixture.bin') {
   const f = path.join(dir, name);
   fs.writeFileSync(f, buf);
   const r = runDepscan([f]);
-  const deps = r.stdout.split('\n').filter((l) => l.startsWith('dep=')).map((l) => l.slice(4));
-  const counts = r.stdout.split('\n').filter((l) => l.startsWith('deps=')).map((l) => Number(l.slice(5)));
-  const format = (r.stdout.match(/^format=(\S+)/m) || [])[1];
-  return { ...r, deps, counts, format };
+  // Parse with the PRODUCTION parser (scripts/depscan-verdict.cjs), not an
+  // ad-hoc split('\n'). Incident: CI run 35284845847 (windows-latest), 13
+  // tests red — Windows opens depscan's stdout in TEXT mode, so every '\n'
+  // the C program writes arrives here as '\r\n'; splitting on '\n' alone left
+  // a trailing '\r' glued to the last field of every line ('libc.so.6\r' vs
+  // 'libc.so.6'). parseDepscan already tolerates this (it .trim()s each
+  // line), because production reads real depscan output on real Windows
+  // every day — scripts/depscan-verdict.cjs:59. A test that parses
+  // differently from production can disagree with it, which is exactly what
+  // happened: production was right and the test was wrong, and the test is
+  // what went red. Routing through the real parser removes the whole
+  // divergence class instead of patching this one split site.
+  //
+  // Some fixtures here are deliberately malformed and parseDepscan is
+  // SUPPOSED to throw on them (a forged protocol line, an unterminated
+  // group, an empty transcript, ...). Those tests assert on r.status and
+  // r.stdout directly and never touch the fields derived below, so
+  // swallowing the throw and leaving them empty hides nothing.
+  let parsed = null;
+  try { parsed = parseDepscan(r.stdout); } catch { /* deliberately malformed input, see above */ }
+  const deps = parsed ? parsed.slices.flatMap((s) => s.deps) : [];
+  const counts = parsed ? parsed.slices.map((s) => s.deps.length) : [];
+  const runs = parsed ? parsed.slices.flatMap((s) => s.runs) : [];
+  const slices = parsed ? parsed.slices.map((s) => s.slice) : [];
+  const format = parsed ? parsed.format : (r.stdout.match(/^format=(\S+)/m) || [])[1];
+  return { ...r, deps, counts, runs, slices, format };
 }
 
 test('ELF 64-bit little-endian: reads DT_NEEDED in order', () => {
@@ -165,8 +188,7 @@ test('fat Mach-O reports EVERY slice separately, not a merged list', () => {
   ]));
   assert.strictEqual(out.status, 0, out.stderr);
   assert.match(out.stdout, /^format=macho-fat slices=2$/m);
-  const slices = out.stdout.split('\n').filter((l) => l.startsWith('slice=')).map((l) => l.slice(6));
-  assert.strictEqual(slices.length, 2, `expected 2 slice= headers, got ${slices.length}`);
+  assert.strictEqual(out.slices.length, 2, `expected 2 slice= headers, got ${out.slices.length}`);
   assert.deepStrictEqual(out.counts, [1, 1], 'each slice reports its own count');
   assert.deepStrictEqual(out.deps, ['/usr/lib/libSystem.B.dylib', '/opt/pkg/lib/libintl.8.dylib']);
 });
@@ -227,8 +249,7 @@ test('ELF DT_RUNPATH is reported as run= — a SONAME has no prefix to deny', ()
   }));
   assert.strictEqual(out.status, 0, out.stderr);
   assert.deepStrictEqual(out.deps, ['libintl.so.8']);
-  const runs = out.stdout.split('\n').filter((l) => l.startsWith('run=')).map((l) => l.slice(4));
-  assert.deepStrictEqual(runs, ['/opt/pkg/lib', '/usr/lib'],
+  assert.deepStrictEqual(out.runs, ['/opt/pkg/lib', '/usr/lib'],
     'a colon-separated DT_RUNPATH must be split into one run= line per entry');
 });
 
@@ -243,8 +264,7 @@ test('Mach-O LC_RPATH is reported as run=', () => {
     needed: ['/usr/lib/libSystem.B.dylib'], rpath: ['/opt/homebrew/lib'],
   }));
   assert.strictEqual(out.status, 0, out.stderr);
-  const runs = out.stdout.split('\n').filter((l) => l.startsWith('run=')).map((l) => l.slice(4));
-  assert.deepStrictEqual(runs, ['/opt/homebrew/lib']);
+  assert.deepStrictEqual(out.runs, ['/opt/homebrew/lib']);
 });
 
 // ---- Task 6 addendum: hardening items (a)-(g) carried forward from Tasks 2-5.
@@ -425,8 +445,7 @@ test('(f) a Mach-O ARM64E slice gets its own label, not a duplicate "arm64"', ()
     }) },
   ]));
   assert.strictEqual(out.status, 0, out.stderr);
-  const slices = out.stdout.split('\n').filter((l) => l.startsWith('slice=')).map((l) => l.slice(6));
-  assert.deepStrictEqual(slices, ['arm64e', 'arm64'],
+  assert.deepStrictEqual(out.slices, ['arm64e', 'arm64'],
     'arm64 and arm64e are the same cputype with different cpusubtypes and must not print the same label');
 });
 
@@ -472,7 +491,12 @@ test('(I1) a two-slice fat binary still reports both slices in order', () => {
     { cputype: binfmt.CPU_PPC, buf: binfmt.macho({ bits: 32, be: true, cputype: binfmt.CPU_PPC, needed: ['/usr/lib/libintl.8.dylib'] }) },
   ]));
   assert.strictEqual(out.status, 0, out.stderr);
-  assert.strictEqual(out.stdout, [
+  // Raw, not parsed: this asserts the exact wire shape of a good transcript
+  // (order, no doubled/dropped lines), which is what parseDepscan would
+  // normalize away. Normalize only the line ending, explicitly — Windows'
+  // text-mode stdout turns every '\n' depscan writes into '\r\n' (CI run
+  // 35284845847), which is not the thing this assertion is about.
+  assert.strictEqual(out.stdout.replace(/\r\n/g, '\n'), [
     'format=macho-fat slices=2',
     'slice=arm64', 'dep=/usr/lib/libSystem.B.dylib', 'deps=1',
     'slice=ppc', 'dep=/usr/lib/libintl.8.dylib', 'deps=1',

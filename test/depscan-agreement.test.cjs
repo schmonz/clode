@@ -16,11 +16,20 @@ const assert = require('node:assert');
 const { spawnSync } = require('node:child_process');
 const { depscanExe } = require('./depscan-build.cjs');
 const { defineGuard, guardTests } = require('./guard.cjs');
+const { parseDepscan } = require('../scripts/depscan-verdict.cjs');
 
 function depsFromDepscan(file) {
   const r = spawnSync(depscanExe(), [file], { encoding: 'utf8' });
   assert.strictEqual(r.status, 0, `depscan failed on ${file}: ${r.stderr}`);
-  return r.stdout.split('\n').filter((l) => l.startsWith('dep=')).map((l) => l.slice(4));
+  // Parse with the production parser, not an ad-hoc split('\n') — see the
+  // comment on scanFixture in test/depscan.test.cjs (CI run 35284845847):
+  // Windows' text-mode stdout turns depscan's '\n' into '\r\n', and only
+  // parseDepscan (which .trim()s each line, matching production) tolerates
+  // that. Deps are flattened across slices deliberately: this compares
+  // against a fat host binary's UNSPLIT dependency set (see the mode:
+  // 'exact'/'subset' comments below), so per-slice grouping doesn't matter
+  // here.
+  return parseDepscan(r.stdout).slices.flatMap((s) => s.deps);
 }
 
 function have(cmd) {
