@@ -18,6 +18,18 @@
 // genuinely present; Task 2 installs it and proves the key space is safe.
 const { findTool } = require('../libexec/clode-hosttools.cjs');
 
+// WHY THIS OPTS IN ON MERE PRESENCE, AND WHY CI IS NOT PINNED OFF (review finding, 2026-
+// 09-19). ccacheLauncher() enables the launcher whenever it finds the tool, with no cache
+// directory configured and nothing in .github/ setting or persisting CCACHE_DIR. That
+// sounds like it could cost every CI leg an all-miss run. It cannot, today: no runner image
+// we use (ubuntu-24.04, macos-15-arm64, windows-2025) and no image we build ships ccache,
+// so the wiring is a FLEET-WIDE NO-OP and pinning CLODE_TJS_CCACHE=0 in CI would be dead
+// config guarding nothing. If an image ever grows one, the cost is bounded -- an all-miss
+// run is ~5-10% over a no-cache build -- and the real CI-level cache is the recipe-keyed
+// actions/cache in .github/actions/build-leg/action.yml, which skips the compile ENTIRELY
+// on a hit, so ccache is irrelevant on the hit path and only ever costs on the miss path.
+// This comment is the record for whoever notices a runner image change.
+//
 // CLODE_TJS_CCACHE=0 is the opt-out a leg can set without a code edit — added to
 // test/env-verdicts.cjs's phase4-engine cluster in the same commit that adds this file, so
 // the env-name inventory ratchet does not go red over a name shipped code reads but no
