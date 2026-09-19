@@ -7,10 +7,13 @@
 // guest (the T2 VM legs sync the patched tree into a BSD/Solaris guest) carries the
 // HOST-platform esbuild binary in its node_modules and cannot exec it, so the build phase
 // never re-esbuilds — it can only verify. Verifying honestly requires evidence the source
-// phase actually built from what is on disk NOW, which is what this file's subject
-// (esbuildBundles' new manifest) records. THE CHECK THAT READS IT BACK is phase 4c-2b's
-// task 2, not this file — this file only proves the manifest gets written, and written
-// precisely.
+// phase actually built from what is on disk NOW, which is what this file's first subject
+// (esbuildBundles' manifest, task 1) records. THE SECOND HALF OF THIS FILE (task 2) is the
+// check that reads it back — `assertEsbuildInputsCurrent`, called from the `--build-only`
+// branch in scripts/build-tjs.cjs right after the existing presence check — proven against
+// its own small fixtures the same way: a real hash mismatch throws and names the file, a
+// missing manifest refuses rather than assuming currency, and an unrelated bundle's input
+// is never blamed for a sibling bundle's edit.
 //
 // WHY A SYNTHETIC FIXTURE, NOT THE REAL ~785MB VENDOR CHECKOUT: test/tjs-bytecode-e2e.test.cjs
 // already pays that cost (a CoW copy + a real cmake configure+build) to prove the tjsc half
@@ -94,12 +97,31 @@ function extractConst(source, name) {
   throw new Error(`unbalanced brackets extracting ${name}`);
 }
 
-// Loads the REAL esbuildBundles (+ its two free dependencies) out of build-tjs.cjs, wired
-// to a caller-supplied `run` so the test can spy on the exact argv esbuild was invoked with
+// A third extraction shape, task 2: a plain quoted-string declaration (`const NAME =
+// '...';`, no braces/brackets to balance) — used for ESBUILD_INPUTS_MANIFEST, which both
+// esbuildBundles (the writer) and assertEsbuildInputsCurrent (the reader, below) share.
+// Evaluates the declaration text itself rather than retyping the literal, so a rename in
+// build-tjs.cjs cannot leave this file quietly checking a path that is no longer real.
+function extractStringConst(source, name) {
+  const marker = `const ${name} = `;
+  const start = source.indexOf(marker);
+  assert.ok(start > -1, `const ${name} not found in build-tjs.cjs`);
+  const semi = source.indexOf(';', start);
+  assert.ok(semi > -1, `no terminating ';' found for const ${name}`);
+  const decl = source.slice(start, semi + 1);
+  // eslint-disable-next-line no-new-func
+  return new Function(`${decl}\nreturn ${name};`)();
+}
+
+// Loads the REAL esbuildBundles (+ its free dependencies, including the manifest-path
+// constant it now writes to — task 2 added ESBUILD_INPUTS_MANIFEST as a shared literal, so
+// esbuildBundles no longer has the path inline) out of build-tjs.cjs, wired to a
+// caller-supplied `run` so the test can spy on the exact argv esbuild was invoked with
 // without reimplementing any of the bundling logic.
 function loadEsbuildBundles(run) {
   const src = [
     extractConst(buildTjsSrc, 'JS_BUNDLES'),
+    `const ESBUILD_INPUTS_MANIFEST = ${JSON.stringify(extractStringConst(buildTjsSrc, 'ESBUILD_INPUTS_MANIFEST'))};`,
     extractFunction(buildTjsSrc, 'ensureEsbuild'),
     extractFunction(buildTjsSrc, 'esbuildBundles'),
   ].join('\n');
@@ -213,4 +235,120 @@ test('esbuildBundles records a precise, hashed, forward-slashed input manifest i
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ---- task 2: assertEsbuildInputsCurrent, the check that reads the manifest back ----
+//
+// Same extraction discipline as loadEsbuildBundles above (extractStringConst, defined
+// beside extractConst): the REAL function, pulled out of build-tjs.cjs and run against
+// fixtures this test built itself, never a reimplementation of its hashing logic.
+
+function loadAssertEsbuildInputsCurrent() {
+  const fnSrc = extractFunction(buildTjsSrc, 'assertEsbuildInputsCurrent');
+  const manifestName = extractStringConst(buildTjsSrc, 'ESBUILD_INPUTS_MANIFEST');
+  // eslint-disable-next-line no-new-func
+  return new Function('fs', 'path', 'crypto', 'ESBUILD_INPUTS_MANIFEST',
+    `${fnSrc}\nreturn assertEsbuildInputsCurrent;`)(fs, path, crypto, manifestName);
+}
+
+function withFixtureTree(fn) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'esbuild-edge-currency-'));
+  try {
+    return fn(dir);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function writeManifestFixture(dir, manifest) {
+  const manifestName = extractStringConst(buildTjsSrc, 'ESBUILD_INPUTS_MANIFEST');
+  fs.mkdirSync(path.join(dir, path.dirname(manifestName)), { recursive: true });
+  fs.writeFileSync(path.join(dir, manifestName), JSON.stringify(manifest));
+}
+
+function sha(text) {
+  return crypto.createHash('sha256').update(Buffer.from(text)).digest('hex');
+}
+
+test('assertEsbuildInputsCurrent: recorded hashes matching every input on disk does not throw', () => {
+  const check = loadAssertEsbuildInputsCurrent();
+  withFixtureTree((dir) => {
+    fs.mkdirSync(path.join(dir, 'src/js/stdlib'), { recursive: true });
+    const uuidSrc = 'export const uuid = 1;\n';
+    fs.writeFileSync(path.join(dir, 'src/js/stdlib/uuid.js'), uuidSrc);
+    writeManifestFixture(dir, {
+      'src/bundles/js/stdlib/uuid.js': { 'src/js/stdlib/uuid.js': sha(uuidSrc) },
+    });
+    check(dir, ['src/bundles/js/stdlib/uuid.js']);
+  });
+});
+
+// THE ACCEPTANCE, AT FUNCTION SCOPE: editing the recorded input after the bundle was
+// esbuilt from it — the exact shape of a `--build-only` guest handed a tree whose
+// src/js/** moved on since the source phase ran — must throw, and must NAME the file. Prior
+// to task 2, this same setup (a --build-only run over a bundle whose input on disk no
+// longer matches what it was esbuilt from) produced exit 0 and an unchanged engine; the
+// live, real-checkout demonstration of that is this task's report, not this fixture — this
+// proves the mechanism the real `--build-only` branch now calls.
+test('PROOF: an edited src/js/** input makes assertEsbuildInputsCurrent throw, naming the file', () => {
+  const check = loadAssertEsbuildInputsCurrent();
+  withFixtureTree((dir) => {
+    fs.mkdirSync(path.join(dir, 'src/js/stdlib'), { recursive: true });
+    const original = 'export const uuid = 1;\n';
+    fs.writeFileSync(path.join(dir, 'src/js/stdlib/uuid.js'), original);
+    writeManifestFixture(dir, {
+      'src/bundles/js/stdlib/uuid.js': { 'src/js/stdlib/uuid.js': sha(original) },
+    });
+    // The bundle on disk still reflects `original` (nothing re-esbuilds it here); only the
+    // input it was recorded against has since changed — the one thing --build-only can see.
+    fs.writeFileSync(path.join(dir, 'src/js/stdlib/uuid.js'), 'export const uuid = 2;\n');
+    assert.throws(() => check(dir, ['src/bundles/js/stdlib/uuid.js']), /uuid\.js/);
+    assert.throws(() => check(dir, ['src/bundles/js/stdlib/uuid.js']), /--source-only/);
+  });
+});
+
+// PRECISION, the same claim task 1 proved for the manifest writer, now proved for the
+// reader: editing one bundle's recorded input must not blame a sibling bundle whose own
+// recorded input never changed — a glob-shaped check would fail both and train people to
+// bypass it (see this file's header).
+test('assertEsbuildInputsCurrent blames only the bundle whose recorded input actually changed', () => {
+  const check = loadAssertEsbuildInputsCurrent();
+  withFixtureTree((dir) => {
+    fs.mkdirSync(path.join(dir, 'src/js/stdlib'), { recursive: true });
+    const uuidSrc = 'export const uuid = 1;\n';
+    const lonelySrc = 'export const lonely = true;\n';
+    fs.writeFileSync(path.join(dir, 'src/js/stdlib/uuid.js'), uuidSrc);
+    fs.writeFileSync(path.join(dir, 'src/js/stdlib/lonely.js'), lonelySrc);
+    writeManifestFixture(dir, {
+      'src/bundles/js/stdlib/uuid.js': { 'src/js/stdlib/uuid.js': sha(uuidSrc) },
+      'src/bundles/js/stdlib/lonely.js': { 'src/js/stdlib/lonely.js': sha(lonelySrc) },
+    });
+    fs.writeFileSync(path.join(dir, 'src/js/stdlib/uuid.js'), 'export const uuid = 2;\n');
+    let caught = null;
+    try {
+      check(dir, ['src/bundles/js/stdlib/uuid.js', 'src/bundles/js/stdlib/lonely.js']);
+    } catch (e) {
+      caught = e;
+    }
+    assert.ok(caught, 'an edited input must throw');
+    assert.ok(caught.message.indexOf('uuid.js') > -1, `expected uuid.js named: ${caught.message}`);
+    assert.ok(caught.message.indexOf('lonely.js') === -1,
+      `lonely.js's untouched input must not be blamed: ${caught.message}`);
+  });
+});
+
+// THE MANIFEST-ABSENCE RULING, demonstrated: a tree with no manifest at all (a checkout
+// from before phase 4c-2b) REFUSES rather than assuming its bundles are current — the same
+// choice assertBytecodeRulesPresent makes for the sibling premise on the bytecode edge, and
+// for the same reason (this file's header on the currency check, scripts/build-tjs.cjs,
+// states it in full). The remedy is one command, and this checks that command is the one
+// actually named.
+test('assertEsbuildInputsCurrent refuses (never warns-and-proceeds) when the manifest itself is missing', () => {
+  const check = loadAssertEsbuildInputsCurrent();
+  withFixtureTree((dir) => {
+    fs.mkdirSync(path.join(dir, 'src/js/stdlib'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'src/js/stdlib/uuid.js'), 'export const uuid = 1;\n');
+    // No manifest written at all.
+    assert.throws(() => check(dir, ['src/bundles/js/stdlib/uuid.js']), /--source-only/);
+  });
 });

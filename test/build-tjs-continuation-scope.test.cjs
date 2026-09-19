@@ -47,14 +47,26 @@ const BUILD_TJS = path.join(REPO, 'scripts/build-tjs.cjs');
 // per-stdlib half of that list empty, which is why this needs four files and not
 // twenty). The tree is deliberately not buildable — reaching the compiler IS the
 // result we want, because getting there means every name in the block resolved.
+//
+// PHASE 4c-2b TASK 2: the presence check now has a currency check right behind it
+// (assertEsbuildInputsCurrent), which refuses outright when
+// src/bundles/js/.clode-inputs.json is absent — exactly what this fixture looked like
+// before this comment, and exactly what a pre-4c-2b tree looks like for real. An empty
+// per-bundle input list satisfies it without giving this fixture a real src/js/** to
+// hash: what this file verifies (module-load scope resolution) does not depend on the
+// manifest recording anything true, only on it existing so the block downstream of the
+// currency check is still reached.
 function fakeCheckout(dir) {
   const tjs = path.join(dir, 'txiki.js');
   fs.mkdirSync(path.join(tjs, 'src/js/stdlib'), { recursive: true });
   fs.mkdirSync(path.join(tjs, 'src/bundles/js/core'), { recursive: true });
   fs.writeFileSync(path.join(tjs, 'CMakeLists.txt'), '# not a real project\n');
+  const manifest = {};
   for (const b of ['polyfills', 'core', 'run-main', 'run-repl']) {
     fs.writeFileSync(path.join(tjs, `src/bundles/js/core/${b}.js`), '//\n');
+    manifest[`src/bundles/js/core/${b}.js`] = {};
   }
+  fs.writeFileSync(path.join(tjs, 'src/bundles/js/.clode-inputs.json'), JSON.stringify(manifest));
   return tjs;
 }
 

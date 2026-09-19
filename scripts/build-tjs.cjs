@@ -3217,6 +3217,11 @@ const JS_BUNDLES = [
   { entry: 'src/js/run-main/index.js', out: 'src/bundles/js/core/run-main.js', extra: [] },
   { entry: 'src/js/run-repl/repl.js', out: 'src/bundles/js/core/run-repl.js', extra: ['--log-override:direct-eval=silent'] },
 ];
+// ONE spelling for where the input manifest lives, shared by the writer (esbuildBundles,
+// below) and the reader (assertEsbuildInputsCurrent, the buildOnly branch further down) —
+// two literal copies of this path is exactly how a future rename of one and not the other
+// would make the reader silently check nothing.
+const ESBUILD_INPUTS_MANIFEST = 'src/bundles/js/.clode-inputs.json';
 function esbuildBundles(dir) {
   const esbuild = ensureEsbuild(dir);
   const stdlib = fs.readdirSync(path.join(dir, 'src/js/stdlib')).filter((f) => f.endsWith('.js'));
@@ -3263,7 +3268,7 @@ function esbuildBundles(dir) {
   for (const f of stdlib) {
     one(`src/js/stdlib/${f}`, `src/bundles/js/stdlib/${f}`, ['--external:tjs:*', '--external:buffer', '--external:crypto']);
   }
-  fs.writeFileSync(path.join(dir, 'src/bundles/js/.clode-inputs.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+  fs.writeFileSync(path.join(dir, ESBUILD_INPUTS_MANIFEST), `${JSON.stringify(manifest, null, 2)}\n`);
   console.log(`esbuilt ${JS_BUNDLES.length + stdlib.length} plain-JS bundles for the BE regen path`);
 }
 // esbuild @ the txiki pin, resolved from the checkout's own node_modules
@@ -3276,6 +3281,60 @@ function ensureEsbuild(dir) {
     run('npm', ['install', '--no-save', '--no-audit', '--no-fund', pin], { cwd: dir, shell: process.platform === 'win32' });
   }
   return bin;
+}
+// THE PREMISE, CHECKED — the same move as assertBytecodeRulesPresent, one edge over.
+// The presence check just below (inherited from phase 4c-2b task 1) only proves the 16
+// esbuilt bundles EXIST; it says nothing about whether they came from the src/js/** that is
+// on disk NOW. A --build-only guest can receive a checkout whose src/bundles/js/** was
+// esbuilt at some earlier instant — an older --source-only, or a warm tree re-synced after
+// a patch changed one input — and the presence check alone would pass it: the original
+// defect, moved one edge over, exit 0 and a stale engine. `--build-only` can never re-run
+// esbuild here (see the header above ensureEsbuild), so the only thing left to do is PROVE
+// what is on disk matches what was actually read, using esbuildBundles' own manifest
+// (ESBUILD_INPUTS_MANIFEST) as the evidence: re-hash every recorded input and compare.
+//
+// THE MANIFEST'S OWN ABSENCE is handled the same way assertBytecodeRulesPresent handles a
+// pre-4c-2 tree: REFUSE, not warn-and-proceed. A tree from before this phase (4c-2b) has no
+// manifest to check against, and "no evidence" silently read as "assume it's current" is
+// the exact shape of how the original defect shipped for years with a clean exit code — an
+// unverifiable premise on this edge is the failure this check exists to end, not a warm-tree
+// inconvenience to be lenient about. The remedy is the one command
+// assertBytecodeRulesPresent already names for the sibling premise.
+function assertEsbuildInputsCurrent(tjsDir, expected) {
+  const manifestPath = path.join(tjsDir, ESBUILD_INPUTS_MANIFEST);
+  if (!fs.existsSync(manifestPath)) {
+    throw new Error(`--build-only: ${manifestPath} does not exist, so nothing proves the js `
+      + 'bundles on disk were esbuilt from the src/js/** on disk now.\n'
+      + '  CAUSE: this tree was prepared by a source phase that predates the input-manifest '
+      + 'fixup (phase 4c-2b), and --build-only deliberately never re-esbuilds to check on its '
+      + 'own.\n'
+      + '  FIX: re-run the source phase over it — `node scripts/build-tjs.cjs --source-only` '
+      + '— or delete the checkout and let it be re-prepared.');
+  }
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  // A Set so one shared helper file changing does not repeat itself once per bundle that
+  // imports it — the naming below is meant for a human to read, not to count.
+  const stale = new Set();
+  for (const out of expected) {
+    const inputs = manifest[out];
+    if (!inputs) { stale.add(`${out} (bundle not recorded in the manifest)`); continue; }
+    for (const inputRel of Object.keys(inputs)) {
+      const inputAbs = path.join(tjsDir, inputRel);
+      if (!fs.existsSync(inputAbs)) { stale.add(`${inputRel} (recorded input, now missing)`); continue; }
+      const gotHash = crypto.createHash('sha256').update(fs.readFileSync(inputAbs)).digest('hex');
+      if (gotHash !== inputs[inputRel]) stale.add(inputRel);
+    }
+  }
+  if (stale.size) {
+    const named = [...stale];
+    throw new Error(`--build-only: ${named.length} src/js/** input(s) changed since the `
+      + `esbuilt bundles on disk were built from them: ${named.slice(0, 5).join(', ')}`
+      + `${named.length > 5 ? ' ...' : ''}\n`
+      + '  CAUSE: the bundles under src/bundles/js/** were esbuilt from DIFFERENT source '
+      + 'bytes than the ones on disk now — a patch landed since the last source phase, or a '
+      + 'stale tree/manifest pair was reused.\n'
+      + '  FIX: re-run the source phase — `node scripts/build-tjs.cjs --source-only`.');
+  }
 }
 if (buildOnly) {
   // The source phase already esbuilt these, possibly on a DIFFERENT-OS host
@@ -3292,7 +3351,11 @@ if (buildOnly) {
   if (missing.length) {
     throw new Error(`--build-only: ${missing.length} js bundle(s) missing (run --source-only first): ${missing.slice(0, 3).join(', ')}${missing.length > 3 ? ' ...' : ''}`);
   }
-  console.log(`js bundles verified present (${expected.length}, esbuilt by the source phase)`);
+  // Presence proven; now prove CURRENCY (see assertEsbuildInputsCurrent's header just
+  // above) — two different failures, two different messages, exactly like
+  // assertBytecodeRulesPresent's sibling premise on the bytecode edge.
+  assertEsbuildInputsCurrent(tjsDir, expected);
+  console.log(`js bundles verified present AND current (${expected.length}, esbuilt by the source phase, inputs unchanged since)`);
 } else {
   esbuildBundles(tjsDir);
 }

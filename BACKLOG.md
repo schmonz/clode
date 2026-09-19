@@ -208,6 +208,53 @@ its own host build dir, not attempted here (touches the sparc CI path end to end
 argv shapes are now *gated* equal (`test/bytecode-rule.test.cjs`, fix round 2) so the
 duplication cannot silently diverge while it survives.
 
+### 4c-2b — the esbuild edge cannot be a cmake rule, so `--build-only` proves its premise instead (SHIPPED 2026-09-19)
+
+Phase 4c-2's DEPENDS edge reaches only 2 of 18 bundles (`internal/path`,
+`worker-bootstrap`) straight from `src/js/**`; the other 16 pass through esbuild first, and
+`--build-only` used to just check those 16 esbuilt files EXIST — presence, not currency. A
+guest handed a checkout whose `src/bundles/js/**` was esbuilt at some earlier instant (an
+older `--source-only`, or a warm tree re-synced after a patch changed one input) passed
+that check and shipped a stale engine with no signal: editing `src/js/stdlib/uuid.js` and
+running `--build-only` yielded exit 0 and an unchanged binary — the original defect's exact
+shape, for 16 of 18 bundles, on that one path.
+
+It cannot be closed with a cmake rule the way the bytecode edge was: `--build-only` runs on
+BSD/Solaris guests that receive a *synced* tree and cannot exec the host-platform esbuild
+binary in the checkout's `node_modules` (scripts/build-tjs.cjs, above the buildOnly branch).
+So the fix is one edge over from `assertBytecodeRulesPresent` — a path that cannot
+regenerate must prove regeneration already happened. Task 1 (phase 4c-2b) had
+`esbuildBundles` write `src/bundles/js/.clode-inputs.json`, a per-bundle `{input: sha256}`
+manifest built from esbuild's own `--metafile` (never a glob, so an edit to one file cannot
+fail an unrelated bundle's check). Task 2 added `assertEsbuildInputsCurrent`, called from
+the `--build-only` branch right after the existing presence check: it re-hashes every
+recorded input and refuses, naming the file(s), when any hash no longer matches.
+
+**The manifest's own absence is handled the same way `assertBytecodeRulesPresent` handles a
+pre-4c-2 tree: REFUSE**, not warn-and-proceed. A tree from before this phase has no
+manifest to check currency against, and "no evidence" silently read as "assume it's
+current" is exactly the shape that let the original defect ship for years with a clean
+exit code. The remedy is the one command the sibling premise already names
+(`node scripts/build-tjs.cjs --source-only`).
+
+**Verified against the real shared checkout, not only fixtures**: a `--source-only` run
+populated the manifest (16 bundles, `uuid.js` recording 21 real inputs, matching task 1's
+measurement); a CoW copy with `src/js/stdlib/uuid.js` edited then made `--build-only`
+refuse, naming that file, in under a second (before any cmake work — the check runs ahead
+of the async build IIFE); with the check call temporarily commented out, the identical
+edited copy completed a full `cmake --build` with exit 0, and neither the esbuilt bundle
+nor the linked binary contained the edit — the pre-fix defect, reproduced on demand; and a
+copy with the manifest deleted (simulating a pre-4c-2b tree) refused for that reason
+specifically, naming the one-command remedy. `test/esbuild-edge.test.cjs` covers the same
+four shapes (match, mismatch-names-the-file, mismatch-blames-only-the-changed-bundle,
+manifest-absent-refuses) against synthetic fixtures via the house extractFunction pattern,
+so the property has both a fast unit-level proof and a real-checkout demonstration.
+
+**Left open, unchanged from before**: the declarative graph still stops at
+`src/bundles/js/**` (see 4c-3 below) — this closes the silent-drop defect on
+`--build-only`, not the imperative esbuild step itself. Guests still need no esbuild
+binary; nothing in `libexec/` changed.
+
 ### 4c-3 — the declarative graph stops at `src/bundles/js/**` (the esbuild edge is still imperative)
 
 `fixupTjsCmakeBytecodeRules` gives every one of the 18 bundles a real cmake
@@ -216,9 +263,13 @@ duplication cannot silently diverge while it survives.
 The other 16 reach `tjsc` only after esbuild turns `src/js/**` into `src/bundles/js/**`,
 and **that** edge is still imperative and undeclared: `--source-only` re-runs
 `esbuildBundles` unconditionally so it is correct there, but `--build-only` does not
-re-esbuild at all. So on `--build-only`, editing `src/js/stdlib/uuid.js` still yields exit
-0 and an unchanged engine — **the original defect's exact shape, for 16 of 18 bundles, on
-that one path.**
+re-esbuild at all. **UPDATE (phase 4c-2b, 2026-09-19): the silent-drop consequence of this
+gap is now closed** — `--build-only` re-hashes the manifest phase 4c-2b's task 1 recorded
+and refuses when `src/js/stdlib/uuid.js` (or any other esbuilt input) no longer matches, so
+the edit no longer produces a clean exit and a stale engine. What remains open here is
+narrower: the graph still does not have a cmake `OUTPUT`/`DEPENDS` edge for these 16
+bundles, so a tree that CAN run esbuild (the source phase, any dev box) still regenerates
+them imperatively rather than through cmake's own dependency resolution.
 
 Not reachable by any CI leg (guests receive a synced tree; they never edit one), so this
 is a boundary, not a live defect — but it is the boundary that makes
