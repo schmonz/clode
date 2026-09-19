@@ -170,3 +170,124 @@ const bytecodeRuleGuard = defineGuard({
   }),
 });
 guardTests(bytecodeRuleGuard);
+
+// ---- TWO EMITTERS, ONE JOB: the tjsc argv must be identical ----------------
+//
+// There are two places that decide what arguments tjsc is called with:
+// fixupTjsCmakeBytecodeRules' emitted COMMAND (every build except one) and
+// regenBytecodeArrays' imperative `run(tjsc, [...])` loop (--regen-only, which
+// exists solely for the netbsd-sparc in-guest bake, whose cmake never gets a
+// CLODE_HOST_TJSC). Today they agree.
+//
+// WHAT WAS ALREADY GATED, AND WHY IT IS ONLY HALF: both emitters read the same
+// bytecodeBundlePairs() table (test/tjs-bytecode-regen.test.cjs), so neither can
+// know about a bundle the other does not. That closes divergence in WHICH
+// bundles get compiled and closes nothing about HOW. A `-M`, a dropped `-s`, a
+// changed module-name flag landing in one emitter and not the other would make
+// netbsd-sparc ship bytecode generated with different flags from the other 41
+// legs — silently, and detectable only as a runtime difference in a guest
+// nobody can attach a debugger to. That is the same divergence class that
+// already cost this repo the moduleMeta incident (one emitter regenerated, the
+// other did not), halved rather than closed.
+//
+// So: extract both argument lists and compare them. The per-bundle VALUES are
+// legitimately spelled differently — the cmake rule writes
+// ${CMAKE_CURRENT_SOURCE_DIR}/<outC> where the JS loop passes an absolute
+// outAbs, and cmake wants the module name quoted where an execFileSync argv
+// must not be — so values are normalized to placeholders and the FLAGS, in
+// order, are what must match exactly.
+
+const TJSC_VALUE_FLAGS = new Set(['-o', '-n', '-p']);
+
+function normalizeTjscArgv(tokens) {
+  const out = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+    if (TJSC_VALUE_FLAGS.has(tok) && i + 1 < tokens.length) {
+      out.push(tok, `<${tok.slice(1)}>`);
+      i++;
+      continue;
+    }
+    // The trailing positional is tjsc's INPUT (bytecode-rule-relative-input
+    // above judges its exact spelling; here only its POSITION matters).
+    out.push(i === tokens.length - 1 ? '<input>' : tok);
+  }
+  return out;
+}
+
+// The emitted COMMAND line, minus the program itself (cmake names it through
+// the ${CLODE_HOST_TJSC} cache variable; the JS loop has it in a binding).
+function emittedTjscArgv(emitted, outC) {
+  const block = commandBlockFor(emitted, outC);
+  assert.ok(block, `no add_custom_command OUTPUT for ${outC} in the emitted cmake`);
+  const line = block.split('\n')[0].trim();
+  const tokens = line.split(/\s+/);
+  assert.strictEqual(tokens[0], 'COMMAND', 'the extracted block must start at COMMAND');
+  assert.strictEqual(tokens[1], '${CLODE_HOST_TJSC}',
+    'the emitted COMMAND must invoke the host tjsc cache variable');
+  return tokens.slice(2);
+}
+
+// The imperative loop's argv, read out of build-tjs.cjs's source text: the
+// array literal in `run(tjsc, ['-m', '-s', ...], { cwd: tjsDir })`. Identifiers
+// (outAbs, name, prefix, inJs) stay as-is and are normalized away above.
+function imperativeTjscArgv(buildSrc) {
+  const line = buildSrc.split('\n').find((l) => l.includes("run(tjsc, ['-m'"));
+  assert.ok(line, 'the imperative tjsc invocation (run(tjsc, [\'-m\'...) was not found');
+  const open = line.indexOf('[');
+  const close = line.indexOf(']', open);
+  return line.slice(open + 1, close).split(',')
+    .map((t) => t.trim().replace(/^'(.*)'$/, '$1'));
+}
+
+function assertEmittersAgreeOnTjscArgv({ emitted, outC, buildSrc }) {
+  assert.deepStrictEqual(
+    normalizeTjscArgv(emittedTjscArgv(emitted, outC)),
+    normalizeTjscArgv(imperativeTjscArgv(buildSrc)),
+    'the injected cmake COMMAND and regenBytecodeArrays must hand tjsc the SAME flags in '
+    + 'the SAME order. They do not, which means one build path now compiles bytecode '
+    + 'differently from the other — and the path that would ship the odd one out is '
+    + '--regen-only, i.e. the netbsd-sparc in-guest bake, the one leg no CI log shows you '
+    + 'the compiler command for');
+}
+
+function emitSample() {
+  const fixup = loadFixup();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-bytecode-argv-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'CMakeLists.txt'),
+      'add_executable(tjsc src/qjsc.c)\nadd_executable(tjs-cli src/main.c)\n');
+    fixup(dir, SAMPLE_PAIRS);
+    return fs.readFileSync(path.join(dir, 'CMakeLists.txt'), 'utf8');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('bytecode: both emitters hand tjsc the same flags, in the same order', () => {
+  assertEmittersAgreeOnTjscArgv({
+    emitted: emitSample(),
+    outC: SAMPLE_PAIRS[0].outC,
+    buildSrc: src,
+  });
+});
+
+test('bytecode: PROOF — the argv-equality check rejects a flag added to one emitter only', () => {
+  const emitted = emitSample();
+  // (a) The imperative side gains a flag the cmake rule does not have. This is
+  // the shape that ships: someone tunes --regen-only for the sparc guest, the
+  // other 41 legs keep the old flags, and nothing says so.
+  const impDrift = src.replace("run(tjsc, ['-m', '-s', '-o'",
+    "run(tjsc, ['-m', '-s', '-M', '-o'");
+  assert.notStrictEqual(impDrift, src, 'the imperative argv anchor moved — re-derive this PROOF');
+  assert.throws(() => assertEmittersAgreeOnTjscArgv({ emitted, outC: SAMPLE_PAIRS[0].outC, buildSrc: impDrift }),
+    /SAME flags in the SAME order/);
+
+  // (b) The cmake side loses one. `-s` (strip) dropped from the rule alone
+  // would leave 41 legs shipping unstripped bytecode and sparc shipping
+  // stripped — a size and behaviour difference with no failure anywhere.
+  const cmakeDrift = emitted.replace('${CLODE_HOST_TJSC} -m -s -o', '${CLODE_HOST_TJSC} -m -o');
+  assert.notStrictEqual(cmakeDrift, emitted, 'the emitted COMMAND anchor moved — re-derive this PROOF');
+  assert.throws(() => assertEmittersAgreeOnTjscArgv({ emitted: cmakeDrift, outC: SAMPLE_PAIRS[0].outC, buildSrc: src }),
+    /SAME flags in the SAME order/);
+});
