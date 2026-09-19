@@ -33,14 +33,19 @@ const EXPECTED_SET = [
   // did not move the engine identity. See scripts/engine-recipe.mjs.
   'patches/*.patch',
   'scripts/build-tjs.cjs',
-  // ADDED 2026-09-19: build-tjs.cjs's own require graph split into four
-  // modules that ARE the orchestration (source-reset, the API-floor sanity
-  // check, and the two halves of the hermeticity gate); only the pre-split
-  // entry point was ever in this set. See scripts/engine-recipe.mjs.
+  // ADDED 2026-09-19: build-tjs.cjs's own require graph split into modules
+  // that ARE the orchestration (source-reset, the API-floor sanity check, the
+  // two halves of the hermeticity gate, the ccache launcher, and the path
+  // tags); only the pre-split entry point was ever in this set. See
+  // scripts/engine-recipe.mjs.
   'scripts/tjs-source-reset.cjs',
   'scripts/engine-api-floor.cjs',
   'scripts/build-depscan.cjs',
   'scripts/depscan-verdict.cjs',
+  // ADDED 2026-09-19: the same rule, applied honestly — there were SIX direct requires,
+  // not four. The test below derives them from build-tjs.cjs rather than counting again.
+  'scripts/ccache-launcher.cjs',
+  'scripts/platform-tag.cjs',
   // ADDED 2026-08-29: the netbsd-sparc in-guest bake recipe IS that leg's
   // compile, and editing it used to move nothing — so the cache could restore an
   // engine built by a different recipe. See scripts/engine-recipe.mjs.
@@ -57,6 +62,50 @@ const run = (args, opts = {}) =>
 test('FILES covers the tjs cache key set, plus the cosmo patches', async () => {
   const { FILES } = await load();
   assert.deepStrictEqual([...FILES], EXPECTED_SET);
+});
+
+// DERIVED, NOT HAND-COUNTED. The four-then-six modules under 'scripts/' in EXPECTED_SET are
+// there because build-tjs.cjs REQUIRES them, and twice now that hand-maintained list has
+// been found short of the real require graph: 02bdee9 added four and called them "the
+// modules build-tjs.cjs requires directly" when there were six, missing
+// scripts/platform-tag.cjs and -- added one commit earlier on the very same branch --
+// scripts/ccache-launcher.cjs, which decides what compiler invocation the engine is built
+// with. Rather than fix the list a second time and wait for the third, this reads the graph
+// out of the file and holds FILES to it. A new `require('./foo.cjs')` in build-tjs.cjs now
+// goes red HERE, at the moment it is added, instead of in a review months later.
+//
+// DEPTH ONE, deliberately, and this is the rule the list is judged against: the DIRECT
+// requires. Going transitive would pull in libexec/clode-hosttools.cjs and everything under
+// it -- defensible (widening is always safe for a cache key) but a much larger blast radius
+// per edit, and not the rule anyone has written down. If that changes, change it here and
+// this test follows.
+function directLocalRequires(src, fromDir) {
+  const out = new Set();
+  for (const m of src.matchAll(/require\('(\.[^']*)'\)/g)) {
+    out.add(path.posix.normalize(path.posix.join(fromDir, m[1])));
+  }
+  return [...out].sort();
+}
+
+test("FILES covers every local module build-tjs.cjs requires (derived from the file, not a list)", async () => {
+  const { FILES } = await load();
+  const src = fs.readFileSync(path.join(REPO, 'scripts/build-tjs.cjs'), 'utf8');
+  const required = directLocalRequires(src, 'scripts');
+  assert.ok(required.length >= 6, `expected build-tjs.cjs to require several local modules, got ${required}`);
+  const missing = required.filter((rel) => !FILES.includes(rel));
+  assert.deepStrictEqual(missing, [],
+    'scripts/build-tjs.cjs requires these modules, and editing one changes what the engine is '
+    + 'built from (or what it is verified against) while moving NO recipe hash -- so the tjs '
+    + 'cache would restore an engine built by a different recipe than the tree now holds:\n'
+    + missing.join('\n'));
+});
+
+test('PROOF: the derived-requires check really reads the graph', () => {
+  assert.deepStrictEqual(
+    directLocalRequires("const a = require('./one.cjs');\nconst b = require('../libexec/two.cjs');\n"
+      + "const c = require('node:fs');\nconst d = require('semver');\n", 'scripts'),
+    ['libexec/two.cjs', 'scripts/one.cjs'],
+    'relative requires must be resolved repo-root-relative, and bare/builtin ones ignored');
 });
 
 // PURE: `yml` is the already-read build-leg/action.yml text.
@@ -150,6 +199,8 @@ const BASE = {
   'scripts/engine-api-floor.cjs': 'floor',
   'scripts/build-depscan.cjs': 'depscan',
   'scripts/depscan-verdict.cjs': 'verdict',
+  'scripts/ccache-launcher.cjs': 'ccache',
+  'scripts/platform-tag.cjs': 'tag',
   'spike/quickjs/qemu/ci-guest-bake.sh': 'bake',
   'scripts/x.toolchain.cmake': 'tc',
   'spike/quickjs/atomic-shim.c': 'shim',
@@ -187,17 +238,20 @@ test('a changed byte in a repo-root cosmo patch moves the recipe', async () => {
   assert.notStrictEqual(after, before, 'editing patches/libtjs-cosmo.patch did not move the engine identity');
 });
 
-// build-tjs.cjs's engine orchestration split into four required modules
-// (source-reset, the API-floor check, and the two hermeticity-gate halves).
-// Before this test, none of the four were engine-source entries: editing
-// scripts/tjs-source-reset.cjs — which decides what "pristine" means before a
-// single patch applies — moved no recipe hash, so the tjs cache could restore
-// an engine built from a differently-reset checkout with no signal at all.
-test('a changed byte in any of the four split-out orchestration modules moves the recipe', async () => {
+// build-tjs.cjs's engine orchestration split into six required modules
+// (source-reset, the API-floor check, the two hermeticity-gate halves, the
+// ccache launcher, and the path tags). Before this test, none of them were
+// engine-source entries: editing scripts/tjs-source-reset.cjs — which decides
+// what "pristine" means before a single patch applies — moved no recipe hash, so
+// the tjs cache could restore an engine built from a differently-reset checkout
+// with no signal at all. ccache-launcher.cjs is the same hazard one level down:
+// it decides what compiler invocation the engine is built with.
+test('a changed byte in any of the six split-out orchestration modules moves the recipe', async () => {
   const { recipe } = await load();
   const before = recipe(fakeSource(BASE));
   for (const p of ['scripts/tjs-source-reset.cjs', 'scripts/engine-api-floor.cjs',
-    'scripts/build-depscan.cjs', 'scripts/depscan-verdict.cjs']) {
+    'scripts/build-depscan.cjs', 'scripts/depscan-verdict.cjs',
+    'scripts/ccache-launcher.cjs', 'scripts/platform-tag.cjs']) {
     const after = recipe(fakeSource({ ...BASE, [p]: `${BASE[p]}-edited` }));
     assert.notStrictEqual(after, before, `editing ${p} did not move the engine identity`);
   }

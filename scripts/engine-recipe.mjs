@@ -59,7 +59,7 @@ export const FILES = [
   // narrowing is what test/engine-recipe.test.cjs exists to catch.
   'patches/*.patch',
   'scripts/build-tjs.cjs',
-  // build-tjs.cjs is not a monolith: it requires four modules directly, and
+  // build-tjs.cjs is not a monolith: it requires SIX modules directly, and
   // those modules ARE the engine orchestration now, not helpers beside it.
   // scripts/tjs-source-reset.cjs decides what "pristine" means BEFORE a
   // single patch applies. scripts/engine-api-floor.cjs generates the sanity
@@ -79,6 +79,16 @@ export const FILES = [
   'scripts/engine-api-floor.cjs',
   'scripts/build-depscan.cjs',
   'scripts/depscan-verdict.cjs',
+  // ADDED 2026-09-19 (review). The first pass at this list said "the four modules
+  // build-tjs.cjs requires directly" when there were SIX, so the list was wrong by its
+  // own stated rule on the day it was written. scripts/ccache-launcher.cjs decides what
+  // COMPILER INVOCATION the engine is built with (it was added one commit earlier on the
+  // same branch); scripts/platform-tag.cjs decides where the vendor checkout, the build
+  // dir and the output live. Neither moved a recipe hash. test/engine-recipe.test.cjs now
+  // DERIVES this sublist from build-tjs.cjs's own require graph instead of trusting a
+  // third hand-count -- a new require goes red there the moment it is added.
+  'scripts/ccache-launcher.cjs',
+  'scripts/platform-tag.cjs',
   // The netbsd-sparc in-guest ENGINE bake recipe. It is engine source for that
   // leg in the most literal sense — it IS the compile — yet an edit to it moved
   // nothing, so the tjs cache happily restored an engine built by a DIFFERENT
