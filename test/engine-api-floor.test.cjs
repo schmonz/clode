@@ -156,7 +156,13 @@ function scanEngineFloorConsumers({ buildTjsSrc, actionYml, bakeSrc }) {
   }
 
   examined++;
-  if (!/clode:bytecode-regen/.test(bakeSrc)) findings.push('the bake no longer demands the regen fingerprint trailer build-tjs.cjs stamps');
+  // "fingerprint" was the pre-4c-2 name and it is now WRONG in the one place a
+  // reader meets it: this string is what prints when the gate fires. The trailer
+  // carries no hash any more — freshness became the cmake DEPENDS edge, and
+  // ci-guest-bake.sh's own comment says "do not put the hash back". A finding
+  // that names a mechanism the tree no longer has sends the reader looking for
+  // it.
+  if (!/clode:bytecode-regen/.test(bakeSrc)) findings.push('the bake no longer demands the hash-free clode:bytecode-regen PROVENANCE trailer build-tjs.cjs stamps (not a fingerprint: it answers "did anybody regenerate this tree at all", the one question the guest cannot answer for itself)');
   examined++;
   if (!/cle-regen-present=/.test(bakeSrc)) findings.push('the regen-present marker is gone (the console can no longer say which check failed)');
   examined++;

@@ -2578,6 +2578,18 @@ function fixupTjsCmakeBytecodeRules(dir, bundlePairs) {
     // derives the C identifier from everything after the last '/' (get_c_name,
     // src/qjsc.c:191), so an absolute Windows path leaks the drive colon and
     // backslashes into the symbol name and MSVC stops at 100 errors.
+    //
+    // AND THIS PATH HAS NO POST-GENERATION SYMBOL ASSERTION, unlike the
+    // imperative regenBytecodeArrays (which re-reads each .c and names the bad
+    // declaration at the moment it is produced). cmake owns the invocation
+    // here, so there is nowhere to hang that check without inventing a wrapper
+    // script — which would be a second executable on the build path for every
+    // leg, for a defect only a bad inJs can cause. The consequence, recorded so
+    // nobody re-diagnoses it from scratch: a bad input path surfaces on this
+    // path as an MSVC wall ~250 build steps later, in a file nobody wrote,
+    // instead of a named error. The compensating gate is
+    // test/bytecode-rule.test.cjs's relative-input scan over this EMITTED text,
+    // which rejects the only shape known to produce it.
     `add_custom_command(\n`
     + `    OUTPUT \${CMAKE_CURRENT_SOURCE_DIR}/${outC}\n`
     + `    COMMAND \${CLODE_HOST_TJSC} -m -s -o \${CMAKE_CURRENT_SOURCE_DIR}/${outC}`
@@ -3616,6 +3628,44 @@ fs.mkdirSync(buildDir, { recursive: true });
 dropStaleCmakeCache(buildDir, tjsDir);
 run('cmake', ['-S', tjsDir, '-B', buildDir, ...cmakeArgs]);
 
+// The host tjsc's path, spelled the way cmake spells paths: forward slashes.
+//
+// On the native MSVC leg the selected tjsc is <buildDir>\tjsc.exe, so
+// `-DCLODE_HOST_TJSC=D:\a\_temp\...\tjsc.exe` is the FIRST Windows-PATH-valued
+// `-D` anywhere on that path (every other one build-tjs.cjs pushes is flag
+// text), and the value is not merely stored: it is substituted into the
+// injected rule's COMMAND *and* into its DEPENDS, where cmake has to match it
+// against a file it already knows by its own normalized spelling.
+//
+// MEASURED, not assumed (cmake 4.3.3, Unix Makefiles, 2026-09-18) — because the
+// obvious story is wrong and it would have shipped as a comment: a backslash
+// `-D` value is NOT eaten as escape sequences. It reaches CMakeCache.txt
+// byte-for-byte and the generated recipe quotes it correctly. What the same
+// probe DID show is the quiet half: a DEPENDS naming a path cmake cannot
+// resolve produces NO configure error and NO build error — the rule simply
+// builds, minus that dependency edge. Applied to the shipping shape, a DEPENDS
+// cmake fails to match to the tjsc it was handed is a rule that silently stops
+// rebuilding when tjsc changes: no signal, which is the precise failure class
+// this whole phase exists to end.
+//
+// So this is not a fix for a reproduced Windows break — it is the removal of an
+// untested variable from a hard-publisher path, at the cost of one replace().
+// AND IT HAS RUN ON ZERO WINDOWS LEGS: tjsc is EXCLUDE_FROM_ALL upstream, so no
+// Windows build ever produced a host-tjsc path to hand cmake until phase 4c-2
+// made regeneration a build rule. windows-amd64/arm64 are hard publishers.
+// Forward slashes are what cmake canonicalizes paths to internally and are
+// accepted by Win32 itself, so the conversion is total rather than a platform
+// branch, and a no-op on every POSIX leg (nothing to replace).
+//
+// --regen-only forms no such `-D`: its guest cmake never gets a CLODE_HOST_TJSC
+// (the rules stay inert there by design) and it EXECS the host tjsc directly,
+// where the platform-native spelling is the correct one — so there is nothing to
+// normalize on that path, and test/tjs-bytecode-regen.test.cjs keeps that claim
+// true by requiring every `-DCLODE_HOST_TJSC=` in this file to come through here.
+function toCmakeCachePath(p) {
+  return p.replace(/\\/g, '/');
+}
+
 // ---- host-native tjsc: makes regen correct for CROSS builds too ----------
 // tjsc's only dependency is the qjs library (CMakeLists.txt: add_executable
 // (tjsc EXCLUDE_FROM_ALL src/qjsc.c); target_link_libraries(tjsc qjs)) — none
@@ -3819,7 +3869,7 @@ if (regenOptOut) {
   // cmake re-configure keeps cached values but `-D` on the command line is
   // also how several of them (toolchain file, OSX_* ) were set in the first
   // place, and re-passing them is the documented way to keep them authoritative.
-  run('cmake', ['-S', tjsDir, '-B', buildDir, ...cmakeArgs, `-DCLODE_HOST_TJSC=${tjsc}`]);
+  run('cmake', ['-S', tjsDir, '-B', buildDir, ...cmakeArgs, `-DCLODE_HOST_TJSC=${toCmakeCachePath(tjsc)}`]);
 }
 
 // cosmo builds ONLY the tjs-cli executable target (OUTPUT_NAME tjs): the default

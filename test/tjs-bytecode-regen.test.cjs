@@ -135,9 +135,71 @@ function assertHostTjscHandedToCmake(src) {
   // The rules are wrapped in if(CLODE_HOST_TJSC); without this -D they are not
   // emitted at all and the build silently compiles the committed arrays again
   // — the exact defect, reintroduced by omission.
-  assert.match(src, /-DCLODE_HOST_TJSC=\$\{tjsc\}/,
+  assert.match(src, /-DCLODE_HOST_TJSC=\$\{[^}]*tjsc[^}]*\}/,
     'the target configure must pass the selected host tjsc to cmake');
 }
+
+// ---- the -D VALUE IS A PATH, and it is the first one on the Windows leg ----
+//
+// Every other `-D` build-tjs.cjs pushes on the native MSVC path is flag text.
+// This one is a PATH: on win32 the selected tjsc is <buildDir>\tjsc.exe, and the
+// value is substituted into the injected rule's COMMAND and into its DEPENDS,
+// where cmake must match it against a file it already knows by its own
+// normalized spelling.
+//
+// WHAT WAS MEASURED, and why the obvious justification is NOT the one written
+// here (cmake 4.3.3, Unix Makefiles, 2026-09-18): a backslash-bearing `-D` value
+// is not eaten as escape sequences — it reaches CMakeCache.txt byte-for-byte and
+// the generated recipe quotes it correctly. The same probe found the quiet half
+// instead: a DEPENDS naming a path cmake cannot resolve produces no configure
+// error and no build error; the rule just builds without that edge. Applied to
+// the shipping shape, a DEPENDS cmake fails to match to the tjsc it was handed
+// is a rule that silently stops rebuilding when tjsc changes.
+//
+// So this gate does not encode a reproduced Windows break. It encodes a
+// deliberate removal of an untested variable from a hard-publisher path, for the
+// cost of one replace(): tjsc is EXCLUDE_FROM_ALL upstream, so no Windows build
+// ever produced a host-tjsc path to hand cmake until phase 4c-2 made
+// regeneration a build rule — this has run on ZERO Windows legs, and
+// windows-amd64/arm64 are hard publishers.
+//
+// Asserted over EVERY occurrence, not the one that exists today, so a second
+// configure site added later cannot quietly pass a raw path.
+function assertHostTjscPathNormalized(src) {
+  const values = [...src.matchAll(/-DCLODE_HOST_TJSC=\$\{([^}]*)\}/g)].map((m) => m[1]);
+  assert.ok(values.length > 0, 'no -DCLODE_HOST_TJSC= was found at all — the injected rules '
+    + 'would stay inert and nothing would regenerate');
+  for (const expr of values) {
+    assert.match(expr, /^toCmakeCachePath\(/,
+      `-DCLODE_HOST_TJSC=\${${expr}} hands cmake a raw, unnormalized path. On win32 that `
+      + 'is D:\\a\\_temp\\...\\tjsc.exe, a spelling this repo has never once put through a '
+      + 'Windows leg, and the value lands in the injected rule\'s DEPENDS as well as its '
+      + 'COMMAND -- where a path cmake cannot match to the file it names costs the rule its '
+      + 'rebuild edge with NO error at all (measured, cmake 4.3.3). Route it through '
+      + 'toCmakeCachePath() like the existing site does');
+  }
+}
+
+test('build-tjs: the host-tjsc path handed to cmake is backslash-free (Windows hard publishers)', () => {
+  assertHostTjscPathNormalized(buildTjsSrc);
+});
+
+test('build-tjs: PROOF — the normalization check rejects a raw path in the -D', () => {
+  // Exactly what the line looked like before this fix, and what a future second
+  // configure site would be written as by default.
+  const raw = "run('cmake', ['-S', tjsDir, '-B', buildDir, ...cmakeArgs, `-DCLODE_HOST_TJSC=${tjsc}`]);\n";
+  assert.throws(() => assertHostTjscPathNormalized(raw), /hands cmake a raw, unnormalized path/);
+  // And the other polarity: no -D at all is the inert-rules defect, not a pass.
+  assert.throws(() => assertHostTjscPathNormalized('// nothing\n'), /no -DCLODE_HOST_TJSC= was found/);
+});
+
+test('build-tjs: toCmakeCachePath actually converts a Windows path (run, not grepped)', () => {
+  const fn = new Function(`${extractFunction(buildTjsSrc, 'toCmakeCachePath')}; return toCmakeCachePath;`)();
+  assert.strictEqual(fn('D:\\a\\_temp\\tjs-vendor\\build\\tjsc.exe'),
+    'D:/a/_temp/tjs-vendor/build/tjsc.exe');
+  // No-op on POSIX, which is what makes it safe to apply unconditionally.
+  assert.strictEqual(fn('/Users/x/clode-tjs-build/t/build/tjsc'), '/Users/x/clode-tjs-build/t/build/tjsc');
+});
 
 test('build-tjs: cmake is told where the host tjsc is, or the injected rules stay inert', () => {
   assertHostTjscHandedToCmake(buildTjsSrc);
@@ -495,3 +557,63 @@ test('build-tjs: real tjsc agrees — a backslash path breaks the symbol, a rela
     assert.strictEqual(gen(winName, 'bad.c'), `const uint32_t tjs__internal_${fn(winName)}_size`);
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+// ---- the provenance stamp: its PRODUCER was ungated, only its consumer -----
+//
+// spike/quickjs/qemu/ci-guest-bake.sh refuses to bake a tree whose
+// src/bundles/c/core/*.c carry no `clode:bytecode-regen` trailer, and
+// test/engine-api-floor.test.cjs gates that the bake keeps asking. Nothing
+// gated the other end. Delete the appendFileSync in regenBytecodeArrays and
+// this whole suite stays green while the netbsd-sparc bake fails at minute one
+// with "served tree was NOT bytecode-regenerated" — a red leg whose cause is a
+// line nobody was watching, in a file the guest cannot see.
+//
+// One assertion closes the asymmetry: the producer and the consumer are now
+// both held.
+//
+// AND THE TRAILER MUST STAY HASH-FREE. It used to carry sha256=<bundle hash> so
+// a build could ask "is this .c still the one this .js produces?". That question
+// died with the imperative regen — every other leg now regenerates through a
+// cmake DEPENDS edge, where a stale array is rebuilt rather than detected — and
+// the bake's own comment says "do not put the hash back" in so many words. A
+// hash here would be a SECOND mechanism claiming responsibility for bytecode
+// freshness, which is how the original silent drop hid for as long as it did.
+function assertRegenStampsProvenance(loopSrc) {
+  assert.match(loopSrc, /fs\.appendFileSync\(outAbs, regenStampTrailer\(inJs\)\)/,
+    'regenBytecodeArrays must stamp each regenerated .c with the clode:bytecode-regen '
+    + 'provenance trailer — spike/quickjs/qemu/ci-guest-bake.sh refuses to bake a tree '
+    + 'without it, and the netbsd-sparc guest has no other way to tell a regenerated tree '
+    + 'from a pristine one (its cmake never gets a CLODE_HOST_TJSC, so the injected rules '
+    + 'are inert there by design)');
+}
+
+function assertTrailerIsHashFree(trailerSrc) {
+  assert.doesNotMatch(trailerSrc, /sha256|createHash|Fingerprint|fingerprint/,
+    'the regen trailer must carry NO hash: it is provenance, not freshness. Freshness is '
+    + 'the cmake DEPENDS edge now, and a second mechanism for it is exactly what phase '
+    + '4c-2 deleted (ci-guest-bake.sh says "do not put the hash back")');
+}
+
+test('build-tjs: the regen loop STAMPS provenance (the guest bake\'s only signal)', () => {
+  assertRegenStampsProvenance(extractFunction(buildTjsSrc, 'regenBytecodeArrays'));
+});
+
+test('build-tjs: the provenance trailer carries no hash', () => {
+  assertTrailerIsHashFree(extractFunction(buildTjsSrc, 'regenStampTrailer'));
+});
+
+test('build-tjs: PROOF — the stamp checks reject a dropped stamp and a reintroduced hash', () => {
+  // (a) The exact regression: the appendFileSync tidied away. Green suite, red
+  // sparc leg, 1500km apart.
+  const noStamp = "for (const { outC, name, prefix, inJs } of bundlePairs) {\n"
+    + "    run(tjsc, ['-m', '-s', '-o', outAbs, '-n', name, '-p', prefix, inJs], { cwd: tjsDir });\n"
+    + '  }\n';
+  assert.throws(() => assertRegenStampsProvenance(noStamp), /must stamp each regenerated \.c/);
+
+  // (b) The hash coming back, which is how a provenance marker grows into a
+  // second freshness mechanism.
+  const hashed = "function regenStampTrailer(inJs, js) {\n"
+    + '  return `\\n/* clode:bytecode-regen src=${inJs} sha256=${crypto.createHash("sha256")'
+    + '.update(js).digest("hex")} */\\n`;\n}\n';
+  assert.throws(() => assertTrailerIsHashFree(hashed), /must carry NO hash/);
+});
