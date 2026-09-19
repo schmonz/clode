@@ -193,6 +193,27 @@ test('PROOF: the opt-out assertion fails against a launcher that ignores CLODE_T
   }, 'an implementation that never reads CLODE_TJS_CCACHE must fail the opt-out check');
 });
 
+test('PROOF: the coverage assertion rejects a ccache that only saw SOME of the compile', () => {
+  // The regression it models: a future change (a CXX TU, a per-target launcher, a toolchain
+  // that drops the flag) routes 3 of 371 translation units through ccache. Every other
+  // assertion in the e2e gate still passes; only this one notices.
+  const compiledCObjects = new Array(371).fill('some/object.c.o');
+  const partial = { hits: 0, calls: 3, misses: 3 };
+  assert.throws(() => {
+    assert.strictEqual(partial.calls, compiledCObjects.length);
+  }, 'partial ccache coverage must fail the coverage check, or "371 identical objects" is '
+    + 'a claim about a cache that barely ran');
+});
+
+test('PROOF: the warm-miss assertion rejects a rebuild that missed on anything at all', () => {
+  const knownVolatile = [];            // what OBJECTS_EXPECTED_VOLATILE is now
+  const warm = { hits: 370, calls: 371, misses: 1 };
+  assert.throws(() => {
+    assert.strictEqual(warm.misses, knownVolatile.length);
+  }, 'a single unexplained miss on an unchanged rebuild must go red: `<=` would have let it '
+    + 'through, and that is exactly how a different TU could have become the miss unnoticed');
+});
+
 test('PROOF: the present-path exactly-once assertion fails against a launcher pushed twice', () => {
   const pushesTwice = (cmakeArgs, path) => {
     if (path) { cmakeArgs.push(`-DCMAKE_C_COMPILER_LAUNCHER=${path}`); cmakeArgs.push(`-DCMAKE_C_COMPILER_LAUNCHER=${path}`); }
@@ -332,8 +353,17 @@ function findBuildDir(buildRoot) {
 // out to `find` rather than walking the tree in-process -- this project's C build produces a
 // few hundred of these per phase, and a plain recursive listing is the same handful of bytes
 // either way.
+//
+// `*.o`, NOT `*.c.o` (review finding, 2026-09-19). The engine build emits exactly one object
+// that is not a C TU -- WAMR's invokeNative_aarch64_simd.s.o -- and the old glob left it
+// uncompared. It is not routed through ccache today (CMAKE_C_COMPILER_LAUNCHER is C-only;
+// ASM would need CMAKE_ASM_COMPILER_LAUNCHER, which is deliberately NOT wired: one hand-
+// written assembly TU compiles in milliseconds, and a second cache-key surface for that is
+// all risk and no win). But "ccache cannot touch it" is a reason to keep it OUT of the
+// cacheable-call accounting, not a reason to stop checking that it comes out the same --
+// it is an input to the very link whose whole-binary hash is now asserted below.
 function listObjects(buildDir) {
-  const found = spawnSync('find', [buildDir, '-name', '*.c.o'], { encoding: 'utf8' });
+  const found = spawnSync('find', [buildDir, '-name', '*.o'], { encoding: 'utf8' });
   assert.strictEqual(found.status, 0, `find over ${buildDir} failed: ${found.stderr}`);
   return found.stdout.split('\n').filter(Boolean)
     .map((abs) => path.relative(buildDir, abs).split(path.sep).join('/'))
@@ -502,9 +532,35 @@ test('a real, warm ccache serves byte-identical objects for a full engine build 
   const warm = parseCcacheStats(statsWarm);
   assert.strictEqual(cold.hits, 0,
     `an EMPTY cache reported a hit -- something primed it before this run:\n${statsCold}`);
-  assert.ok(warm.misses <= OBJECTS_EXPECTED_VOLATILE.length,
-    `a fully warm rebuild missed ${warm.misses} time(s), more than the `
-    + `${OBJECTS_EXPECTED_VOLATILE.length} object(s) already proven time-sensitive above:\n${statsWarm}`);
+
+  // COVERAGE, not just correctness (review finding, 2026-09-19). Without this, PARTIAL
+  // coverage is indistinguishable from full: if a future change routed only 3 of the 371
+  // TUs through ccache, `cold.hits === 0` and the miss cap below would both still pass, and
+  // the byte-identity result above would be true of a cache that had barely been consulted.
+  // The identity that actually holds today is `cacheable calls == compiled C objects`, so
+  // that is what is asserted. (Total zero coverage already fails, by luck, in
+  // parseCcacheStats -- with no calls at all ccache emits no `Hits: n / m` line to parse.)
+  const cObjects = off.objects.filter((rel) => rel.endsWith('.c.o'));
+  assert.strictEqual(cold.calls, cObjects.length,
+    `ccache saw ${cold.calls} cacheable call(s) but the build compiled ${cObjects.length} C `
+    + `object(s) (of ${off.objects.length} objects total) -- the launcher is only covering `
+    + `PART of the compile, so the byte-identity result above is a weaker claim than it looks`
+    + `:\n${statsCold}`);
+
+  // THE WARM MISS, ASSERTED DIRECTLY rather than inferred. This used to be `<=` the length
+  // of an exclusion list with one entry in it, and the claim that the one miss WAS
+  // options.c.o was an inference from `Writes: 1` plus a byte diff -- some other TU could
+  // have become the miss while options.c.o started hitting, and nothing would have said so.
+  // With the banner fixed the list is EMPTY, so the honest form is exact equality with zero:
+  // an unchanged rebuild of this engine must hit the cache for every single call.
+  assert.strictEqual(warm.misses, OBJECTS_EXPECTED_VOLATILE.length,
+    `a fully warm, unchanged rebuild missed ${warm.misses} time(s); expected exactly `
+    + `${OBJECTS_EXPECTED_VOLATILE.length} (the number of objects listed as known-volatile, `
+    + 'which is now none -- see OBJECTS_EXPECTED_VOLATILE). A miss means some translation '
+    + 'unit is still not reproducible, or ccache is keying on something that moved between '
+    + `two identical builds:\n${statsWarm}`);
+  assert.strictEqual(warm.hits, warm.calls,
+    `a fully warm rebuild should hit on every cacheable call:\n${statsWarm}`);
 
   const [hOffBin, hColdBin, hWarmBin] = await Promise.all(
     [off, onCold, onWarm].map((p) => sha256Of(p.enginePath)));
