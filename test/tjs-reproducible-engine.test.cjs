@@ -1,0 +1,143 @@
+'use strict';
+// The engine must build to the SAME BYTES twice (phase 4c3 review, finding "§5 the
+// reproducibility question", 2026-09-19).
+//
+// WHAT WAS BELIEVED, AND WAS WRONG. Phase 4c3 task 2 reported the shipped `tjs` as
+// irreducibly nondeterministic on macOS for TWO reasons: mimalloc's build banner, and "a
+// fresh LC_UUID the Apple linker assigns on every link". The second one is false. ld64's
+// LC_UUID is a CONTENT HASH, not a per-link nonce — two links of identical objects to an
+// identical output path produce an identical UUID, verified directly (three links of one
+// object: one UUID; and a relink to the same path after a one-second wait: byte-identical
+// binaries). The differing UUIDs observed were a CONSEQUENCE of differing content, not an
+// independent cause.
+//
+// So there was exactly ONE cause, three bytes wide: `__TIME__` inside
+// deps/mimalloc/src/options.c's verbose banner. (`__DATE__` is stable within a day and
+// contributed nothing, which is why it took a build straddling a minute boundary to see.)
+// Remove it and the whole linked binary — UUID, code signature and all — becomes
+// reproducible. `fixupMimallocBuildBanner` in scripts/build-tjs.cjs does that, and this
+// file is what says so out loud.
+//
+// WHY A SOURCE FIXUP AND NOT A COMPILE FLAG. `-Wno-builtin-macro-redefined
+// -D__DATE__=... -D__TIME__=...` also works (measured: object AND linked binary
+// byte-identical across builds >1s apart) but it is a gcc/clang spelling that MSVC does
+// not accept, and this repo builds two Windows legs with `cl`. A source edit is one
+// implementation for all 42 legs — the house doctrine — and it rides the SAME anchored,
+// content-verified, unconditional source-phase machinery as the other ~50 fixups, which
+// throws loudly if upstream moves the line instead of silently doing nothing. That last
+// property is the one that matters here: this repo has a scar where src/js patches were
+// silently dropped because regeneration was opt-in, and an edit that can be skipped in
+// silence is worse than no edit at all.
+//
+// WHY NOT SOURCE_DATE_EPOCH. Nothing in this repo honours it (checked: zero references
+// outside this file's own comment). It is also the weaker lever for this job: it makes a
+// build reproducible only among builders who all export the SAME value, so every leg,
+// every CI job and every developer would have to agree on one — whereas baking the epoch
+// literal in makes the engine reproducible with no environment coordination at all.
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { execFileSync, spawnSync } = require('node:child_process');
+const { tjsVendorParentDir } = require('../scripts/platform-tag.cjs');
+
+const REPO = path.resolve(__dirname, '..');
+const SHARED = path.join(tjsVendorParentDir(), 'txiki.js');
+
+// The fixup is worth nothing if the source phase can reach the end without running it, so
+// the call site is pinned as text. scripts/build-tjs.cjs cannot be require()d — it runs a
+// whole engine build the moment it is loaded (see test/ccache.test.cjs's header).
+test('the banner fixup is called UNCONDITIONALLY in the source phase, not behind a knob', () => {
+  const src = fs.readFileSync(path.join(REPO, 'scripts/build-tjs.cjs'), 'utf8');
+  const call = src.split('\n').filter((l) => /^\s*fixupMimallocBuildBanner\(tjsDir\);\s*$/.test(l));
+  assert.strictEqual(call.length, 1,
+    'expected exactly one unconditional `fixupMimallocBuildBanner(tjsDir);` line in the '
+    + 'source phase — an edit that can be skipped in silence is the src/js-patches scar');
+  assert.match(src, /function fixupMimallocBuildBanner\(dir\) \{/);
+  // …and it must FAIL LOUD rather than no-op when upstream moves the banner.
+  const body = src.slice(src.indexOf('function fixupMimallocBuildBanner(dir) {'));
+  assert.match(body.slice(0, body.indexOf('\n}\n')), /throw new Error\('fixup mimalloc-build-banner: anchor not found/,
+    'the fixup must throw when its anchor is gone (a txiki bump), not quietly skip');
+});
+
+// THE SECOND CAUSE, found by actually running the whole-binary acceptance after the banner
+// fix rather than by declaring victory at the object grain: with all 371 objects byte-
+// identical, two linked engines STILL differed (16 bytes of LC_UUID plus ~555 bytes of
+// re-hashed ad-hoc code signature). The differing inputs were the 14 static archives --
+// Apple's `ar`/`libtool` writes each member's mtime into the archive header, so libuv.a and
+// friends differ between two builds of identical objects, and ld64 folds that into the UUID
+// it derives. (This is ALSO why "the linker assigns a random UUID" looked true: the UUID
+// really is content-derived, but one of the contents it derives from was a clock.)
+//
+// ZERO_AR_DATE=1 is the reproducible-builds.org lever for exactly this, read by Apple's
+// cctools ar and libtool; GNU binutils `ar` ignores it (it wants `-D`, and most distros
+// already build it deterministic by default). Setting it unconditionally is ONE
+// implementation for every leg rather than a darwin branch -- it is inert where it is not
+// understood. VERIFIED, not assumed: `ar qc` twice over one touched object produced two
+// different archives here, and two full engine builds with ZERO_AR_DATE=1 set produced
+// byte-identical `tjs` binaries (sha256 e9c5c7881971, twice).
+test('the build sets ZERO_AR_DATE so static archives do not embed a clock', () => {
+  const src = fs.readFileSync(path.join(REPO, 'scripts/build-tjs.cjs'), 'utf8');
+  const set = src.split('\n').filter((l) => /^process\.env\.ZERO_AR_DATE = '1';$/.test(l));
+  assert.strictEqual(set.length, 1,
+    "expected exactly one unconditional `process.env.ZERO_AR_DATE = '1';` in "
+    + 'scripts/build-tjs.cjs, at top level so every spawned ar/libtool inherits it -- '
+    + 'without it the static archives carry member mtimes and the linked engine differs '
+    + 'between two builds of identical sources');
+});
+
+// The real thing: drive the actual source phase and look at the tree it produced. Against
+// a THROWAWAY copy-on-write copy, never the shared checkout — test/ccache.test.cjs already
+// uses this recipe, and mutating ~/.cache/clode/tjs-vendor here would race the one other
+// test file that legitimately owns that tree.
+function copyCheckout(src, dest) {
+  const attempts = process.platform === 'darwin' ? [['-Rc'], ['-R']] : [['-R', '--reflink=auto'], ['-R']];
+  for (const flags of attempts) {
+    if (spawnSync('cp', [...flags, src, dest]).status === 0) return dest;
+    fs.rmSync(dest, { recursive: true, force: true });
+  }
+  fs.cpSync(src, dest, { recursive: true, verbatimSymlinks: true });
+  return dest;
+}
+
+test('a real source phase leaves NO __DATE__/__TIME__ anywhere in the engine sources', (t) => {
+  if (!fs.existsSync(path.join(SHARED, 'CMakeLists.txt'))) {
+    t.skip(`no vendor checkout at ${SHARED} — run \`node scripts/build-tjs.cjs --source-only\` once`);
+    return;
+  }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tjs-repro-'));
+  t.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } });
+  const vendorParent = path.join(dir, 'vendor');
+  fs.mkdirSync(vendorParent, { recursive: true });
+  const tree = path.join(vendorParent, 'txiki.js');
+  copyCheckout(SHARED, tree);
+
+  execFileSync(process.execPath, ['scripts/build-tjs.cjs', '--source-only'],
+    { cwd: REPO, stdio: 'pipe', encoding: 'utf8',
+      env: { ...process.env, CLODE_TJS_VENDOR: vendorParent } });
+
+  // The banner itself: replaced, and by the epoch literals, not by something that only
+  // LOOKS stable.
+  const options = fs.readFileSync(path.join(tree, 'deps/mimalloc/src/options.c'), 'utf8');
+  assert.ok(!/__DATE__|__TIME__/.test(options), 'mimalloc still bakes __DATE__/__TIME__');
+  assert.match(options, /"Jan {2}1 1970", "00:00:00"/);
+
+  // The SWEEP, which is the part that survives a txiki version bump: nothing ELSE in the
+  // tree may reference these macros either. A new dependency (or a moved banner) that
+  // reintroduces one re-breaks reproducibility everywhere, and the fixup's own anchor
+  // check cannot see that — only a tree-wide look can.
+  // Restricted to COMPILED sources: node_modules ships syntax-highlighting grammars for C
+  // that list every predefined macro by name, and those are data the build never reads.
+  const COMPILED = ['*.c', '*.h', '*.cc', '*.cpp', '*.hpp', '*.cxx', '*.m', '*.S', '*.s', '*.inc'];
+  const hits = spawnSync('grep', ['-rIl', '--exclude-dir=.git', '--exclude-dir=node_modules',
+    ...COMPILED.map((g) => `--include=${g}`), '-e', '__DATE__', '-e', '__TIME__', tree],
+    { encoding: 'utf8' });
+  assert.ok(hits.status === 0 || hits.status === 1, `grep failed: ${hits.stderr}`);
+  const files = hits.stdout.split('\n').filter(Boolean).map((p) => path.relative(tree, p));
+  assert.deepStrictEqual(files, [],
+    'a source file in the patched engine tree still references __DATE__/__TIME__ — every one '
+    + 'of them makes the compiled object (and the whole linked engine) differ between two '
+    + 'builds of identical sources. Neutralise it the same way fixupMimallocBuildBanner does:\n'
+    + files.join('\n'));
+});

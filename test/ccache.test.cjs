@@ -241,50 +241,35 @@ test('PROOF: the present-path exactly-once assertion fails against a launcher pu
 // THE FIRST THING THIS TEST HAD TO PROVE WAS ITS OWN INSTRUMENT -- found empirically, not
 // assumed (the "instruments lie, check them first" discipline). The obvious design is: build
 // the engine with the cache off, hash the linked binary; build again with the cache warm, hash
-// it; compare. That design is WRONG on this host, independently of ccache. Two builds run back
-// to back with CLODE_TJS_CCACHE=0 BOTH times -- same vendor checkout, same outDir, same
-// buildDir -- produced two DIFFERENT sha256 sums for the linked engine. Root-caused byte for
-// byte rather than shrugged at:
-//   1. the linked Mach-O carries an LC_UUID load command Apple's linker assigns FRESH on every
-//      link (`otool -l` showed two different UUIDs from the same two builds) -- 16 bytes of
-//      pure metadata, never derived from source content, and nothing ccache touches;
-//   2. stripping the debug symbol table (which is where those 16 bytes' knock-on cost lives --
-//      an embedded per-object-file modification time re-hashed into the trailing ad-hoc code
-//      signature) dropped a 651-byte "diff" to 17: 16 were the UUID above, and the surviving
-//      ONE byte traced (via a raw offset dump, not a guess) to deps/mimalloc/src/options.c:239,
-//      which prints a build banner using two macros that mean "evaluate me fresh on every
-//      compile". mimalloc's own object -- and, checked directly below, ONLY mimalloc's -- is
-//      therefore expected to differ between any two compiles of this engine, on this host,
-//      forever, cache or no cache.
-// Neither cause is ccache's. Both are proven present with ccache completely disabled. So the
-// correctness question this task actually owes an answer to -- did ccache ever serve the WRONG
-// bytes for a compilation it claims matched -- has to be asked at the grain ccache actually
-// operates on: one compiled object per translation unit, not the final link (which layers a
-// random UUID and a re-hashed signature on top, turning a real 1-byte content difference into
-// hundreds of bytes of noise that have nothing to do with caching). OBJECTS_EXPECTED_VOLATILE
-// below names the one object already PROVEN (not assumed) to vary for reasons that predate this
-// task; every OTHER object compiled for the engine is compared byte for byte across all three
-// runs, and THAT comparison -- not a whole-binary hash -- is this test's real verdict. The
-// linked engine's own hash is still taken and logged for every phase (in case a future
-// divergence widens beyond the two named causes), but it is deliberately not asserted equal:
-// doing so would make this gate flaky for a reason that has nothing to do with the property it
-// exists to prove, which teaches whoever hits the flake to stop trusting it or to bypass it --
-// the opposite of what a gate is for.
+// it; compare. When this test first shipped that design was UNSATISFIABLE on this host,
+// independently of ccache: two builds run back to back with CLODE_TJS_CCACHE=0 BOTH times --
+// same vendor checkout, same outDir, same buildDir -- produced two DIFFERENT sha256 sums for
+// the linked engine. So the correctness question this task owes an answer to (did ccache ever
+// serve the WRONG bytes for a compilation it claims matched) was asked at the grain ccache
+// actually operates on instead: one compiled object per translation unit.
 //
-// A second entry here is not expected to appear casually: it would mean a second source file
-// whose compiled bytes vary for reasons unrelated to caching, which deserves its own
-// investigation before being excused, not a quiet allowlist reached for under time pressure.
-const OBJECTS_EXPECTED_VOLATILE = [
-  {
-    rel: 'deps/mimalloc/CMakeFiles/mimalloc-static.dir/src/options.c.o',
-    because: 'deps/mimalloc/src/options.c:239 prints a build banner via `__DATE__, __TIME__` '
-      + '-- macros the preprocessor evaluates fresh on every invocation, so this object '
-      + 'legitimately differs on every compile regardless of caching. Corroborated, not just '
-      + "asserted: it is also the SOLE cache miss ccache's own stats report on an otherwise "
-      + 'fully warm rebuild -- ccache is not lying about this one, it is correctly declining '
-      + 'to trust a translation unit that names itself unstable.',
-  },
-];
+// THAT WAS RIGHT, AND ITS STATED CAUSE WAS HALF WRONG. The original diagnosis named two
+// causes: mimalloc's `__DATE__`/`__TIME__` build banner, and "a fresh LC_UUID Apple's linker
+// assigns on every link". The second is FALSE -- ld64's LC_UUID is a content hash, not a
+// per-link nonce (three links of one identical object produce one identical UUID; a relink to
+// the same path after a wait is byte-identical). The differing UUIDs were a CONSEQUENCE of the
+// differing mimalloc object, not an independent cause. There was exactly ONE cause, three bytes
+// wide, and scripts/build-tjs.cjs's `fixupMimallocBuildBanner` now removes it
+// (test/tjs-reproducible-engine.test.cjs owns that half of the story).
+//
+// SO BOTH CHECKS RUN NOW, AND THE OBJECT-GRAIN ONE STAYS. The whole-binary hash is the
+// end-to-end acceptance the spec asked for; the per-object comparison is strictly stronger for
+// the property ccache threatens, because it localises a divergence to a translation unit
+// instead of saying "differs, somewhere". Neither replaces the other, and the object-grain
+// check is the one that would still work if a future platform reintroduced link-time noise.
+//
+// OBJECTS_EXPECTED_VOLATILE IS NOW EMPTY, ON PURPOSE. The machinery around it is kept, not
+// deleted: it is what makes a NEW volatile object fail loudly (it would land in `mismatches`
+// with nothing excusing it) and what makes a STALE entry fail loudly too. An entry appearing
+// here again would mean a second source file whose compiled bytes vary for reasons unrelated
+// to caching -- which deserves its own investigation and its own fix, the way mimalloc's did,
+// not a quiet allowlist reached for under time pressure.
+const OBJECTS_EXPECTED_VOLATILE = [];
 
 function why() {
   if (process.env.CLODE_CCACHE_ENGINE_E2E !== '1') {
@@ -528,11 +513,30 @@ test('a real, warm ccache serves byte-identical objects for a full engine build 
   console.log(`ccache-engine-e2e: cold cache stats -- ${cold.hits}/${cold.calls} hits`);
   console.log(`ccache-engine-e2e: warm cache stats -- ${warm.hits}/${warm.calls} hits, `
     + `${warm.misses} miss(es)`);
-  // DIAGNOSTIC ONLY, deliberately not asserted -- see the file header's "FIRST THING THIS
-  // TEST HAD TO PROVE" section. These three WILL differ from each other (a fresh LC_UUID per
-  // link, plus mimalloc's build-banner byte) even though the assertions above already proved
-  // every compiled object agrees; that is expected, not a regression, and asserting otherwise
-  // here would make this gate flaky for a reason that has nothing to do with ccache.
-  console.log(`ccache-engine-e2e: linked engine sha256 (diagnostic, expected to differ) `
-    + `off=${hOffBin.slice(0, 12)} on-cold=${hColdBin.slice(0, 12)} on-warm=${hWarmBin.slice(0, 12)}`);
+  console.log(`ccache-engine-e2e: linked engine sha256 off=${hOffBin.slice(0, 12)} `
+    + `on-cold=${hColdBin.slice(0, 12)} on-warm=${hWarmBin.slice(0, 12)}`);
+
+  // THE WHOLE-BINARY ACCEPTANCE, as the spec originally worded it: "hash the engine with the
+  // cache off, hash it with the cache warm, they must match". It was unsatisfiable until the
+  // mimalloc banner was neutralised; it is satisfiable now, so it is asserted rather than
+  // logged -- BESIDE the object-grain check above, never instead of it.
+  //
+  // NOT GATED ON PLATFORM. Both causes that had to be removed to make this assertable are
+  // platform-NEUTRAL -- mimalloc's banner is compiled on every leg, and archive timestamps
+  // are an `ar` property, not a darwin one -- so the fixes are unconditional and the check
+  // is too. It has been OBSERVED to hold on darwin/arm64 only, because that is the only host
+  // this gate has ever been run on (it is opt-in, and runs on whatever box a developer runs
+  // it on). On any other platform this assertion is a QUESTION being asked for the first
+  // time: a red here is a finding about that leg, not a flake, and the message says so
+  // rather than pretending a pass was observed.
+  assert.ok(hOffBin === hColdBin && hOffBin === hWarmBin,
+    `three builds of identical sources produced DIFFERENT linked engines on ${process.platform}`
+    + ` (off=${hOffBin} on-cold=${hColdBin} on-warm=${hWarmBin}). Every compiled object`
+    + ' matched, so the divergence entered at or after the LINK. Two causes are already known'
+    + ' and neutralised (mimalloc\'s __DATE__/__TIME__ banner via fixupMimallocBuildBanner,'
+    + ' and static-archive member mtimes via ZERO_AR_DATE); this is a THIRD. Likely suspects'
+    + ' on a leg other than darwin/arm64, where this has been proven: absolute build paths'
+    + ' baked into the binary (-ffile-prefix-map), a PE TimeDateStamp on the Windows legs'
+    + ' (/Brepro), or an archiver that ignores ZERO_AR_DATE (GNU ar wants -D). Find it and'
+    + ' fix it the same way -- do not demote this back to a diagnostic');
 });

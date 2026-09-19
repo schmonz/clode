@@ -222,6 +222,21 @@ if (cosmoTarget) {
   console.error(`build-tjs: ${process.platform} is a lean-POSIX target — defaulting wasm/mimalloc/ffi OFF ` +
     `to match scripts/tjs-legs.mjs (override any with CLODE_TJS_WASM/MIMALLOC/FFI=on)`);
 }
+// REPRODUCIBILITY, half two (the other half is fixupMimallocBuildBanner). Apple's cctools
+// `ar`/`libtool` stamp every archive member's mtime into the archive header, so the 14 static
+// archives this build produces (libuv.a, libqjs.a, libmimalloc.a, ...) differ between two
+// builds of byte-IDENTICAL objects -- and ld64 derives LC_UUID from what it is fed, so that
+// clock propagates into the linked engine and its ad-hoc code signature. Measured here: with
+// every object identical, two engines still differed by 571 bytes; with this set, they are
+// byte-identical.
+//
+// ZERO_AR_DATE is the reproducible-builds.org lever for it. Set UNCONDITIONALLY and at top
+// level -- not behind an `if (darwin)` and not per-spawn -- because it is inert on toolchains
+// that do not read it (GNU binutils `ar` wants `-D` instead, and most distributions already
+// build it deterministic by default), and because every child cmake spawns must inherit it.
+// One implementation for all 42 legs beats a platform branch.
+process.env.ZERO_AR_DATE = '1';
+
 const run = (cmd, args, opts = {}) =>
   execFileSync(cmd, args, { stdio: 'inherit', ...opts });
 const runOut = (cmd, args, opts = {}) =>
@@ -553,6 +568,40 @@ function fixupMemMallocHOpenbsd(dir) {
     throw new Error('fixup mem-malloc-h-openbsd: anchor not found (mem.c changed under the pin — re-derive the fixup)');
   }
   console.log('fixup mem-malloc-h-openbsd: applied');
+}
+
+function fixupMimallocBuildBanner(dir) {
+  // REPRODUCIBILITY, not portability — the only fixup here that is not about making some
+  // platform compile. mimalloc's verbose banner prints `(built on %s, %s)` with __DATE__
+  // and __TIME__, macros the preprocessor evaluates FRESH on every invocation. That made
+  // options.c.o differ between any two compiles, which made the linked engine differ, which
+  // made the whole engine non-byte-reproducible on every leg. It was the SOLE cause: ld64's
+  // LC_UUID is a content hash, not a per-link nonce, so once this object stops moving the
+  // binary (UUID and ad-hoc code signature included) stops moving too — measured, not
+  // assumed (phase 4c3 review, 2026-09-19).
+  //
+  // Epoch zero rather than a real timestamp: the banner is diagnostic text nothing parses,
+  // and "Jan  1 1970, 00:00:00" reads unmistakably as "deliberately redacted" to whoever
+  // runs `MIMALLOC_VERBOSE=1` and wonders. A compile flag (-Wno-builtin-macro-redefined
+  // -D__DATE__=... -D__TIME__=...) does the same job on gcc/clang and NOT on MSVC, which
+  // two Windows legs use; editing the source is one implementation for all 42 legs.
+  const f = path.join(dir, 'deps/mimalloc/src/options.c');
+  const src = fs.readFileSync(f, 'utf8');
+  // The replacement text may NOT name the macros it replaces, not even in a comment: the
+  // sweep in test/tjs-reproducible-engine.test.cjs greps the whole patched tree for them,
+  // and a mention here would keep that sweep permanently red for no reason.
+  const fixed = '"Jan  1 1970", "00:00:00" /* clode: epoch-zero literals, for a reproducible engine */';
+  if (src.includes(fixed)) {
+    console.log('fixup mimalloc-build-banner: already applied');
+    return;
+  }
+  const anchor = '__DATE__, __TIME__';
+  if (!src.includes(anchor)) {
+    throw new Error('fixup mimalloc-build-banner: anchor not found (mimalloc changed under the pin — '
+      + 're-derive the fixup; leaving it unapplied silently un-reproduces every engine build)');
+  }
+  fs.writeFileSync(f, src.split(anchor).join(fixed));
+  console.log('fixup mimalloc-build-banner: applied');
 }
 
 function fixupLibuvBsdForkSpawn(dir) {
@@ -3183,6 +3232,7 @@ if (buildOnly) {
   fixupPosixSocketLibprocOldDarwin(tjsDir);
   fixupLibuvCloseNocancelOldDarwin(tjsDir);
   fixupAtomicShim(tjsDir);
+  fixupMimallocBuildBanner(tjsDir);
   // The bytecode regen rules. Applied HERE, in the source phase, with every
   // other CMakeLists fixup, so a tree handed to a later `--build-only` (the T2
   // VM legs sync the patched tree into a guest) already carries them — the
