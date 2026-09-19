@@ -88,18 +88,71 @@ Windows hard publishers are not exercised.
   `CLODE_CCACHE_ENGINE_E2E`, so it has only ever run by hand and nothing would notice if it
   stopped working. The spec's own Step 3 asked for "a gate that runs on a schedule or on the
   engine-build legs". Scheduling is being decided separately.
-* **ccache auto-enables on mere presence, and that is fine TODAY.** Nothing in `.github/`
-  sets or persists `CCACHE_DIR`, and no runner image we use (ubuntu-24.04, macos-15-arm64,
-  windows-2025) or image we build ships ccache — so the wiring is a **fleet-wide no-op**, and
-  pinning `CLODE_TJS_CCACHE=0` in CI would be dead config guarding nothing. If an image ever
-  grows one, the cost is bounded: an all-miss run is ~5-10% over a no-cache build, and the
-  real CI-level cache is the recipe-keyed `actions/cache` in `build-leg/action.yml`, which
-  skips the compile entirely on a hit. This paragraph is the record for whoever sees a runner
-  image change.
+* ~~**ccache auto-enables on mere presence, and that is fine TODAY.**~~ **FALSE PREMISE,
+  corrected 2026-09-19 — see the section below.** Runner images DO ship ccache.
 * **Reproducibility is proven on darwin/arm64 only.** Both fixes are platform-neutral so the
   other legs should follow, but nobody has watched them. Known suspects for a per-leg gate:
   archivers that ignore `ZERO_AR_DATE` (GNU `ar` wants `-D`), absolute build paths baked in
   (`-ffile-prefix-map`), and the PE `TimeDateStamp` on the two Windows legs (`/Brepro`).
+
+## ccache + MSVC: a false premise, and what was silently running (2026-09-19)
+
+**The premise was false.** Phase 4c3's record (and `scripts/ccache-launcher.cjs`'s own
+comment) justified auto-enabling ccache on mere presence with "no runner image we use ships
+ccache, so the wiring is a fleet-wide no-op". GitHub's **`windows-latest` image ships ccache
+at `C:\Strawberry\c\bin\ccache.EXE`** — Strawberry Perl bundles it. CI run 35468190935
+proved it outright: `test / suite (windows-latest)` failed on an assertion that the box had
+none, with `actual: 'C:\Strawberry\c\bin\ccache.EXE'`. (That test is fixed at `bd5bb7e`,
+which replaced the ambient-PATH assumption with an empty `mkdtemp` PATH.)
+
+**What was silently happening.** `C:\Strawberry\c\bin` is also on the PATH of the `tjs /
+leg (windows-amd64, windows-latest, ...)` engine-build job — it appears in that job's PATH
+dump — and that leg builds the engine with **MSVC `cl.exe`** and **produces a release
+artifact**. So ccache has very likely been acting as the compiler launcher for MSVC on a hard
+publisher. It could not be confirmed from the log, because **the log never echoed the cmake
+`-D` arguments at all**: `grep -c -- '-DCMAKE'` over its 2475 lines returns 0. Two
+aggravating facts: ccache's MSVC support is partial and this repo has never verified it, and
+the Windows legs are exactly where phase 4c3's object-grain reproducibility harness is
+**skipped** — the least verification where the most risk is.
+
+**Fix 1, the ratchet: the decision is now visible** (`c2067a0`). `ccacheDecision()` returns
+the decision as one value; `describeCcacheDecision()` renders it as ONE greppable ASCII line
+printed on EVERY build (`build-tjs: ccache: ENABLED launcher=… compiler=… (found on PATH)` /
+`DISABLED (opted out: CLODE_TJS_CCACHE=0)` / `DISABLED (not found: no ccache on PATH)` /
+`DISABLED found=… compiler=… (declined: …)`), and the object that is logged is the object
+that is applied. Separately, every cmake **configure** now goes through `cmakeConfigure()`,
+which echoes its argv first — four lines per build, and the end of the blindness that hid
+this. Guards: `ccache-decision-is-logged` (the log call must sit at column zero: indentation
+means a branch, and a branch means some builds stay silent) and
+`cmake-configure-argv-is-logged`.
+
+**Fix 2: ccache declines a compiler nobody has proven it with** (`3702675`). A `declined`
+state, with the reason as a value (`UNTRUSTED_COMPILERS`: `cl`, `clang-cl`), not a comment.
+The compiler is read back out of **the cmake arguments the build just assembled**
+(`compilerFromCmakeArgs`) — the same signal that selects it (`-DCMAKE_C_COMPILER=cl` for
+MSVC, `=gcc` for the opt-in mingw path), not `process.platform`, so a win32 host building
+with gcc keeps its cache. Absence is decided BEFORE trust, so task 1's negative property
+survives: no ccache installed still means byte-identical cmake args, on the MSVC legs too. A
+decline DOES push the empty clearing flag, because a warm windows-amd64 build dir may have
+been configured while the launcher was silently on. Guard:
+`ccache-declines-untrusted-compiler`, which also pins the ORDER dependency (the decision must
+stay below the compiler-selection push, or it reads an empty array and trusts it).
+
+### Open
+
+* **ccache + MSVC can be ENABLED again once someone proves it.** The bar is the one phase 4c3
+  already set for the host leg, run on a real Windows box: a cold build, a warm rebuild, and
+  byte-identical objects with a full-coverage ccache stat line. Nothing about MSVC is
+  believed to be broken — it is *unverified*, and the decline is a scope limit, not a verdict.
+  Removing the `cl` entry from `UNTRUSTED_COMPILERS` is the whole change.
+* **Nobody has watched the new log line on a Windows leg.** The decline is proven by unit
+  tests and a source guard on this Mac; the first CI run after this lands is where
+  `build-tjs: ccache:` should be read on windows-amd64 to confirm it says `declined` and that
+  the leg still builds.
+* **The `compiler=cmake-default` blind spot.** When no `-DCMAKE_C_COMPILER` is pushed, cmake
+  chooses and this code cannot name the compiler. Every such leg is gcc/clang today, but a
+  future cross toolchain file that selected an MSVC-mode compiler from inside the file would
+  not be caught. `compiler=cmake-default` in the log is the string to grep if that changes.
 
 ## Phase 4c-2 (bytecode as a build rule) — spec §11 acceptances 2 and 3 MET (2026-09-18)
 
