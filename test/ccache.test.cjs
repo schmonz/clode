@@ -13,7 +13,10 @@
 // is testing the real behavior, not a reimplementation of it.
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { ccacheLauncher, applyCcacheArg, ccacheOptedOut } = require('../scripts/ccache-launcher.cjs');
+const {
+  ccacheLauncher, applyCcacheArg, ccacheOptedOut,
+  ccacheDecision, describeCcacheDecision, applyCcacheDecision,
+} = require('../scripts/ccache-launcher.cjs');
 const { findTool } = require('../libexec/clode-hosttools.cjs');
 const { defineGuard, guardTests } = require('./guard.cjs');
 // Task 2's own requires -- a real build, a real cache, a real diff. Nothing above this
@@ -113,6 +116,103 @@ test('ccacheOptedOut reads exactly CLODE_TJS_CCACHE=0', () => {
   assert.strictEqual(ccacheOptedOut({}), false);
 });
 
+// ---- TASK 1: THE DECISION MUST BE VISIBLE (2026-09-19) ------------------------------
+//
+// WHY THIS EXISTS, and it is not hypothetical. The record above (and the comment block in
+// scripts/ccache-launcher.cjs) used to say "no runner image we use ships ccache, so the
+// wiring is a fleet-wide no-op". That was FALSE. GitHub's windows-latest image ships one
+// at C:\Strawberry\c\bin\ccache.EXE -- Strawberry Perl bundles it -- and C:\Strawberry\c\bin
+// is on the PATH of the `tjs / leg (windows-amd64, windows-latest, ...)` engine-build job,
+// which produces a RELEASE artifact. CI run 35468190935 proved the presence half
+// (`actual: 'C:\Strawberry\c\bin\ccache.EXE'`).
+//
+// What could NOT be proved from that log is whether the launcher flag actually landed,
+// because the log never echoes the cmake `-D` arguments at all: `grep -c -- '-DCMAKE'`
+// over its 2475 lines returns 0. THAT INVISIBILITY IS ITSELF THE DEFECT this half closes.
+// A decision that silently changes which compiler driver runs on a release leg has to be
+// readable in the log of every build, whichever way it went -- found, opted out, or absent.
+//
+// The line is produced by a PURE function so it can be asserted exactly here, rather than
+// scanned for in the output of a build no test can afford to run (requiring
+// scripts/build-tjs.cjs runs a whole engine build; see this file's header). That the call
+// site logs it UNCONDITIONALLY is a separate, registered guard below.
+const ENABLED = { env: {}, findToolFn: () => '/fake/bin/ccache' };
+const OPTED_OUT = { env: { CLODE_TJS_CCACHE: '0' }, findToolFn: () => '/fake/bin/ccache' };
+const ABSENT = { env: { PATH: BARE_PATH }, findToolFn: findTool };
+
+test('decision: a resolvable launcher yields the enabled state, the path, and no clearing flag', () => {
+  const d = ccacheDecision(ENABLED);
+  assert.strictEqual(d.state, 'enabled');
+  assert.strictEqual(d.launcher, '/fake/bin/ccache');
+  assert.strictEqual(d.clear, false);
+});
+
+test('decision: the opt-out is a state of its own, distinct from absence, and it CLEARS', () => {
+  const d = ccacheDecision(OPTED_OUT);
+  assert.strictEqual(d.state, 'opted-out');
+  assert.strictEqual(d.launcher, null);
+  assert.strictEqual(d.clear, true,
+    'the opt-out must still clear a launcher cmake persisted in CMakeCache.txt');
+});
+
+test('decision: absence is a state of its own, and it must NOT clear', () => {
+  const d = ccacheDecision(ABSENT);
+  assert.strictEqual(d.state, 'absent');
+  assert.strictEqual(d.launcher, null);
+  assert.strictEqual(d.clear, false,
+    'a leg that simply has no ccache must produce byte-identical cmake args -- see the '
+    + 'asymmetry note above');
+});
+
+test('log line: ENABLED names the resolved launcher path', () => {
+  assert.strictEqual(describeCcacheDecision(ccacheDecision(ENABLED)),
+    'build-tjs: ccache: ENABLED launcher=/fake/bin/ccache (found on PATH)');
+});
+
+test('log line: the opt-out names the env var that caused it', () => {
+  assert.strictEqual(describeCcacheDecision(ccacheDecision(OPTED_OUT)),
+    'build-tjs: ccache: DISABLED (opted out: CLODE_TJS_CCACHE=0)');
+});
+
+test('log line: absence is STATED, not silent', () => {
+  assert.strictEqual(describeCcacheDecision(ccacheDecision(ABSENT)),
+    'build-tjs: ccache: DISABLED (not found: no ccache on PATH)');
+});
+
+test('log line: every state is one greppable ASCII line under a shared prefix', () => {
+  for (const opts of [ENABLED, OPTED_OUT, ABSENT]) {
+    const line = describeCcacheDecision(ccacheDecision(opts));
+    assert.ok(line.startsWith('build-tjs: ccache: '),
+      `every decision must be findable with one grep; got: ${line}`);
+    assert.ok(!line.includes('\n'), `the decision must be ONE line; got: ${JSON.stringify(line)}`);
+    // ASCII on purpose: this line's whole job is to be readable in a CI log, and the leg
+    // that matters most is the Windows one, whose console can mangle UTF-8 punctuation.
+    assert.match(line, /^[\x20-\x7e]+$/,
+      `the decision line must be plain ASCII to survive a Windows console; got: ${line}`);
+  }
+});
+
+test('log line: an unrecognised state THROWS rather than logging a blank decision', () => {
+  assert.throws(() => describeCcacheDecision({ state: 'something-new', launcher: null }),
+    /unknown ccache decision state/,
+    'a future state that nobody taught this function about must be loud, not an empty '
+    + 'string that reads like "no ccache decision was made"');
+});
+
+test('apply: the enabled decision pushes the launcher exactly once', () => {
+  const out = applyCcacheDecision([...BASE_ARGS], ccacheDecision(ENABLED));
+  assert.deepStrictEqual(out, [...BASE_ARGS, '-DCMAKE_C_COMPILER_LAUNCHER=/fake/bin/ccache']);
+});
+
+test('apply: the absent decision leaves cmakeArgs byte-identical', () => {
+  assert.deepStrictEqual(applyCcacheDecision([...BASE_ARGS], ccacheDecision(ABSENT)), BASE_ARGS);
+});
+
+test('apply: the opt-out decision pushes the EMPTY clearing value', () => {
+  assert.deepStrictEqual(applyCcacheDecision([...BASE_ARGS], ccacheDecision(OPTED_OUT)),
+    [...BASE_ARGS, '-DCMAKE_C_COMPILER_LAUNCHER=']);
+});
+
 // The CALL SITE must hand applyCcacheArg BOTH halves, or the clearing flag never reaches a
 // real cmake reconfigure and the opt-out is a no-op again. Scanned as text because
 // requiring scripts/build-tjs.cjs runs a whole engine build (see this file's header), and
@@ -124,16 +224,17 @@ function scanOptOutWiring({ src }) {
   let examined = 0;
 
   examined++;
-  if (!/applyCcacheArg\(cmakeArgs, ccacheLauncher\(\), \{ optedOut: ccacheOptedOut\(\) \}\)/.test(src)) {
-    findings.push('scripts/build-tjs.cjs must pass the opt-out decision through to '
-      + 'applyCcacheArg, or CLODE_TJS_CCACHE=0 never clears CMAKE_C_COMPILER_LAUNCHER on an '
-      + 'already-configured build dir');
+  if (!/^applyCcacheDecision\(cmakeArgs, ccache\);$/m.test(src)) {
+    findings.push('scripts/build-tjs.cjs must apply the DECISION object, or the opt-out\'s '
+      + 'clearing flag never reaches cmake and CLODE_TJS_CCACHE=0 goes back to doing nothing '
+      + 'on an already-configured build dir');
   }
 
   examined++;
-  if (/applyCcacheArg\(cmakeArgs, ccacheLauncher\(\)\)/.test(src)) {
-    findings.push('the old two-argument call site is back — that shape is exactly the bug: it '
-      + 'pushes nothing on the opt-out path, which cmake reads as "keep the cached launcher"');
+  if (/applyCcacheArg\(cmakeArgs, ccacheLauncher\(\)[,)]/.test(src)) {
+    findings.push('the pre-decision call site is back (applyCcacheArg + a bare ccacheLauncher()): '
+      + 'the two-argument shape pushes nothing on the opt-out path, which cmake reads as "keep '
+      + 'the cached launcher", and NEITHER shape logs which way the decision went');
   }
 
   return { findings, examined };
@@ -149,6 +250,92 @@ const optOutWiringGuard = defineGuard({
   control: () => ({ src: 'applyCcacheArg(cmakeArgs, ccacheLauncher());\n' }),
 });
 guardTests(optOutWiringGuard);
+
+// ---- the decision has to be LOGGED, unconditionally, at the call site ----------------
+//
+// The unit tests above pin the TEXT of the line. This pins that a build actually prints it:
+// the exact defect being closed is a decision nobody could see in a CI log, so a
+// describeCcacheDecision() that exists but is never called, or is called inside a branch,
+// would leave the original hole open. Text-scanned for the same reason as the guard above.
+//
+// COLUMN ZERO IS THE TEST FOR "UNCONDITIONAL". scripts/build-tjs.cjs is a top-level script;
+// anything nested in an `if`/`try`/function body is indented. An anchored ^ therefore
+// distinguishes "printed on every build" from "printed on some builds" without parsing JS —
+// and the control below is exactly the indented-inside-an-if version, so this is proven, not
+// asserted.
+//
+// PURE: `src` is the already-read scripts/build-tjs.cjs text.
+function scanDecisionLogged({ src }) {
+  const findings = [];
+  let examined = 0;
+
+  examined++;
+  if (!/^const ccache = ccacheDecision\(/m.test(src)) {
+    findings.push('scripts/build-tjs.cjs must compute the ccache decision ONCE at top level, '
+      + 'so the decision that gets logged is the same object that reaches cmake');
+  }
+
+  examined++;
+  if (!/^console\.error\(describeCcacheDecision\(ccache\)\);$/m.test(src)) {
+    findings.push('scripts/build-tjs.cjs must log the ccache decision UNCONDITIONALLY at top '
+      + 'level (an indented call is inside a branch, i.e. some builds would stay silent) — '
+      + 'that silence is the defect: CI run 35468190935 could not say whether ccache had been '
+      + 'driving MSVC, because nothing in the log mentioned it');
+  }
+
+  return { findings, examined };
+}
+
+const decisionLoggedGuard = defineGuard({
+  name: 'ccache-decision-is-logged',
+  read: () => ({ src: fs.readFileSync(path.join(repo, 'scripts/build-tjs.cjs'), 'utf8') }),
+  scan: scanDecisionLogged,
+  floor: 2,
+  // The plausible wrong version, not an invented one: log it only when it is interesting.
+  // That is precisely how "ENABLED on the Windows leg" would go unreported again.
+  control: () => ({ src: 'if (ccache.launcher) {\n  console.error(describeCcacheDecision(ccache));\n}\n' }),
+});
+guardTests(decisionLoggedGuard);
+
+// ---- and the cmake CONFIGURE argv has to be logged too ------------------------------
+//
+// THE OTHER HALF OF THE SAME BLINDNESS, and the reason the ccache question could not be
+// answered from CI at all: `grep -c -- '-DCMAKE' ` over the 2475 lines of run 35468190935
+// returns 0. scripts/build-tjs.cjs assembles ~15 `-D` flags — the compiler, the toolchain
+// file, the macOS floor, the reproducibility knobs — and then ran cmake without ever saying
+// what it passed. One echoed line per configure (there are at most four in a build) is cheap
+// and turns every future "which flags did that leg actually get?" into a grep instead of a
+// re-derivation from source.
+//
+// PURE: `src` is the already-read scripts/build-tjs.cjs text.
+function scanConfigureArgvLogged({ src }) {
+  const findings = [];
+  let examined = 0;
+
+  examined++;
+  if (!/console\.error\(`build-tjs: cmake configure argv: /.test(src)) {
+    findings.push('scripts/build-tjs.cjs must echo the cmake configure argv, or the flags that '
+      + 'decide what a release leg builds stay invisible in its CI log');
+  }
+
+  examined++;
+  if (/run\('cmake', \['-S'/.test(src)) {
+    findings.push('a cmake CONFIGURE is going through run() directly instead of cmakeConfigure() '
+      + '— that one is silent, and a silent configure is what hid the ccache launcher');
+  }
+
+  return { findings, examined };
+}
+
+const configureArgvGuard = defineGuard({
+  name: 'cmake-configure-argv-is-logged',
+  read: () => ({ src: fs.readFileSync(path.join(repo, 'scripts/build-tjs.cjs'), 'utf8') }),
+  scan: scanConfigureArgvLogged,
+  floor: 2,
+  // The literal pre-fix call: the exact line whose silence hid the launcher.
+  control: () => ({ src: "run('cmake', ['-S', tjsDir, '-B', buildDir, ...cmakeArgs]);\n" }),
+});
+guardTests(configureArgvGuard);
 
 // The property at the grain it actually bites: a REAL cmake build dir, already configured
 // WITH the launcher, reconfigured through the opt-out's own argument list. This is the test

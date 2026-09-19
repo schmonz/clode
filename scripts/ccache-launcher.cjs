@@ -6,7 +6,8 @@
 // top-level side effects (a real checkout + configure) just to see whether one flag lands.
 //
 // THE PROPERTY THAT MATTERS MOST HERE IS THE NEGATIVE ONE: every leg that has never heard
-// of ccache — which today is all of them, this box included — must keep building exactly
+// of ccache — most of them, though NOT all: this box has one, and so does GitHub's
+// windows-latest image (see the correction below) — must keep building exactly
 // as it does now. ccacheLauncher() returns null whenever the tool cannot be found (or the
 // caller opted out), and applyCcacheArg() leaves its input completely alone when handed
 // null: no new flag, no reordering, nothing a diff would show.
@@ -18,17 +19,23 @@
 // genuinely present; Task 2 installs it and proves the key space is safe.
 const { findTool } = require('../libexec/clode-hosttools.cjs');
 
-// WHY THIS OPTS IN ON MERE PRESENCE, AND WHY CI IS NOT PINNED OFF (review finding, 2026-
-// 09-19). ccacheLauncher() enables the launcher whenever it finds the tool, with no cache
-// directory configured and nothing in .github/ setting or persisting CCACHE_DIR. That
-// sounds like it could cost every CI leg an all-miss run. It cannot, today: no runner image
-// we use (ubuntu-24.04, macos-15-arm64, windows-2025) and no image we build ships ccache,
-// so the wiring is a FLEET-WIDE NO-OP and pinning CLODE_TJS_CCACHE=0 in CI would be dead
-// config guarding nothing. If an image ever grows one, the cost is bounded -- an all-miss
-// run is ~5-10% over a no-cache build -- and the real CI-level cache is the recipe-keyed
-// actions/cache in .github/actions/build-leg/action.yml, which skips the compile ENTIRELY
-// on a hit, so ccache is irrelevant on the hit path and only ever costs on the miss path.
-// This comment is the record for whoever notices a runner image change.
+// WHY THIS OPTS IN ON MERE PRESENCE -- AND THE PREMISE THAT TURNED OUT TO BE FALSE.
+// ccacheLauncher() enables the launcher whenever it finds the tool, with no cache directory
+// configured and nothing in .github/ setting or persisting CCACHE_DIR. The comment that
+// used to stand here justified that with "no runner image we use ships ccache, so the
+// wiring is a FLEET-WIDE NO-OP". THAT WAS FALSE, and CI proved it: GitHub's windows-latest
+// image ships ccache at C:\Strawberry\c\bin\ccache.EXE (Strawberry Perl bundles it), that
+// directory is on the PATH of the `tjs / leg (windows-amd64, windows-latest, ...)`
+// engine-build job, and that leg produces a RELEASE artifact (run 35468190935,
+// `actual: 'C:\Strawberry\c\bin\ccache.EXE'`).
+//
+// So the wiring has been LIVE on a Windows release leg, driving MSVC's cl.exe, with no way
+// to tell from the log -- which never echoed the cmake `-D` arguments at all. The first fix
+// is here: ccacheDecision()/describeCcacheDecision() make the decision a LOGGED, greppable
+// line on every build, whichever way it went, so the next time this premise is wrong the
+// log says so. Cost on the legs where it stays enabled is bounded -- an all-miss run is ~5-10% over a no-cache build -- and the real CI-level cache
+// is the recipe-keyed actions/cache in .github/actions/build-leg/action.yml, which skips
+// the compile ENTIRELY on a hit.
 //
 // CLODE_TJS_CCACHE=0 is the opt-out a leg can set without a code edit — added to
 // test/env-verdicts.cjs's phase4-engine cluster in the same commit that adds this file, so
@@ -76,4 +83,62 @@ function applyCcacheArg(cmakeArgs, ccachePath, { optedOut = false } = {}) {
   return cmakeArgs;
 }
 
-module.exports = { ccacheLauncher, applyCcacheArg, ccacheOptedOut };
+// ---- the DECISION, as one value: what happened, and enough to say why -----------------
+//
+// Three states, not a boolean, because "we did not enable it" has genuinely different
+// causes with genuinely different consequences, and the build log has to be able to tell
+// them apart. `clear` is the cmake-argument consequence (see applyCcacheArg's asymmetry
+// note): only a state that had something to UNDO may push the clearing flag, or the
+// tool-absent legs stop being byte-identical to their pre-feature selves.
+//
+//   enabled    launcher found, and the compiler is one it may drive -> push the launcher
+//   opted-out  CLODE_TJS_CCACHE=0                                   -> push the EMPTY clear
+//   absent     nothing named ccache on PATH                         -> push NOTHING
+function ccacheDecision({ env = process.env, findToolFn = findTool } = {}) {
+  if (ccacheOptedOut(env)) return { state: 'opted-out', launcher: null, clear: true };
+  const launcher = ccacheLauncher({ env, findToolFn });
+  if (!launcher) return { state: 'absent', launcher: null, clear: false };
+  return { state: 'enabled', launcher, clear: false };
+}
+
+// The ONE line scripts/build-tjs.cjs prints on every build, before cmake is configured.
+//
+// WHY A PURE FUNCTION RATHER THAN console.error() SPRINKLED THROUGH THE BRANCHES: this text
+// is a contract (CI logs get grepped for it), so it is asserted EXACTLY in
+// test/ccache.test.cjs — which cannot require() scripts/build-tjs.cjs, because that file
+// runs a whole engine build on load.
+//
+// PLAIN ASCII, DELIBERATELY. The leg this line matters most on is the Windows one, whose
+// console can mangle UTF-8 punctuation; an em dash here would be the one character that
+// makes the line unreadable exactly where it is needed. Asserted.
+//
+// A STATE THIS FUNCTION DOES NOT KNOW IS AN ERROR, not an empty string: a blank line reads
+// like "no ccache decision was made", which is the failure mode this whole mechanism exists
+// to prevent, and it would be introduced by the most likely future edit (adding a state).
+function describeCcacheDecision(decision) {
+  const { state, launcher } = decision;
+  if (state === 'enabled') {
+    return `build-tjs: ccache: ENABLED launcher=${launcher} (found on PATH)`;
+  }
+  if (state === 'opted-out') {
+    return 'build-tjs: ccache: DISABLED (opted out: CLODE_TJS_CCACHE=0)';
+  }
+  if (state === 'absent') {
+    return 'build-tjs: ccache: DISABLED (not found: no ccache on PATH)';
+  }
+  throw new Error(`unknown ccache decision state '${state}' — describeCcacheDecision must be `
+    + 'taught every state ccacheDecision can return, or a build silently logs nothing about a '
+    + 'decision that changes which compiler driver runs');
+}
+
+// The call site's single move: the decision that was LOGGED is the decision that is APPLIED,
+// because it is the same object. (Recomputing it here would let the log and the cmake
+// command line disagree — which is the class of defect this whole change is about.)
+function applyCcacheDecision(cmakeArgs, decision) {
+  return applyCcacheArg(cmakeArgs, decision.launcher, { optedOut: decision.clear });
+}
+
+module.exports = {
+  ccacheLauncher, applyCcacheArg, ccacheOptedOut,
+  ccacheDecision, describeCcacheDecision, applyCcacheDecision,
+};

@@ -82,7 +82,7 @@ const crypto = require('node:crypto');
 const { resetCheckoutToPristine } = require('./tjs-source-reset.cjs');
 const { engineFloorCheckJs, OK_TOKEN } = require('./engine-api-floor.cjs');
 const { buildDepscan } = require('./build-depscan.cjs');
-const { ccacheLauncher, applyCcacheArg, ccacheOptedOut } = require('./ccache-launcher.cjs');
+const { ccacheDecision, describeCcacheDecision, applyCcacheDecision } = require('./ccache-launcher.cjs');
 const { tjsDir: platformTjsDir, tjsVendorParentDir } = require('./platform-tag.cjs'); // tjsDir aliased: this file has its own `tjsDir` (the source build dir)
 // The hermeticity verdict, defined once in a CJS sibling so the build and the
 // test suite run the SAME decision logic (test/guard.cjs needs a pure scan()
@@ -241,6 +241,24 @@ const run = (cmd, args, opts = {}) =>
   execFileSync(cmd, args, { stdio: 'inherit', ...opts });
 const runOut = (cmd, args, opts = {}) =>
   execFileSync(cmd, args, { encoding: 'utf8', ...opts }).trim();
+
+// EVERY cmake CONFIGURE goes through here, and every one of them ECHOES ITS ARGV FIRST.
+//
+// WHY (2026-09-19): a question about a shipping Windows release leg -- "is ccache being
+// passed as the MSVC compiler launcher?" -- could not be answered from that leg's CI log,
+// because `grep -c -- '-DCMAKE'` over its 2475 lines returns 0. This script assembles ~15
+// `-D` flags (compiler, toolchain file, macOS floor, reproducibility knobs, the ccache
+// launcher) and then invoked cmake without ever saying what it passed, so the single most
+// consequential fact about a build was the one thing the log omitted.
+//
+// Bounded, not noisy: a build configures at most four times (main, the host-tjsc build, and
+// the regen re-configure), so this is at most four extra lines next to thousands of compile
+// lines. The BUILD steps (`cmake --build`) deliberately still go through run() -- their argv
+// is three constant flags and says nothing a reader does not already know.
+const cmakeConfigure = (args, opts = {}) => {
+  console.error(`build-tjs: cmake configure argv: ${args.join(' ')}`);
+  return run('cmake', args, opts);
+};
 
 function pinFields(component) {
   const line = fs.readFileSync(path.join(repo, 'spike/quickjs/PINS.md'), 'utf8')
@@ -3659,19 +3677,24 @@ if (process.env.CLODE_TJS_ATOMIC_SHIM === '1') {
 if (darwinPoll) {
   cmakeArgs.push('-DCLODE_DARWIN_POLL=ON');
 }
-// ccache (spec 4c3, task 1 — "wire it, optionally"): a compiler launcher costs nothing to
-// pass when the tool is not there, so it is attempted on every leg, native or cross —
-// CMAKE_C_COMPILER_LAUNCHER wraps whatever CMAKE_C_COMPILER already resolved to (gcc,
-// cl, or a cross toolchain file's compiler), it does not replace it. ccacheLauncher()
-// returns null when CLODE_TJS_CCACHE=0 was set or the tool is not on PATH — the state of
-// every leg today, this box included — and applyCcacheArg() leaves cmakeArgs completely
-// unchanged in the tool-absent case. It does NOT leave them unchanged for the EXPLICIT
-// opt-out: cmake persists CMAKE_C_COMPILER_LAUNCHER in CMakeCache.txt and this script
-// reuses build dirs, so CLODE_TJS_CCACHE=0 has to push an EMPTY value to clear it, or the
-// opt-out is a no-op on exactly the build dirs it exists for (review finding, 2026-09-19).
-// Actually installing ccache anywhere, and proving the cache is keyed safely across the 17
-// cross legs and the tjsc regen path, is task 2.
-applyCcacheArg(cmakeArgs, ccacheLauncher(), { optedOut: ccacheOptedOut() });
+// ccache (spec 4c3, task 1 — "wire it, optionally"): a compiler launcher wraps whatever
+// CMAKE_C_COMPILER already resolved to (gcc, cl, or a cross toolchain file's compiler), it
+// does not replace it, so the probe runs on every leg, native or cross. Three outcomes, and
+// the asymmetry between them is load-bearing (see scripts/ccache-launcher.cjs): found ->
+// push the launcher; EXPLICIT CLODE_TJS_CCACHE=0 -> push an EMPTY value, because cmake
+// persists CMAKE_C_COMPILER_LAUNCHER in CMakeCache.txt and this script reuses build dirs, so
+// pushing nothing would leave yesterday's launcher in force; simply absent -> push NOTHING,
+// keeping cmakeArgs byte-identical to its pre-feature self.
+//
+// AND IT SAYS WHICH ONE HAPPENED, on every build, in one greppable line. Not decoration: the
+// old comment here asserted the tool was on "no leg today, this box included", which was
+// FALSE — GitHub's windows-latest image ships one at C:\Strawberry\c\bin\ccache.EXE via
+// Strawberry Perl, on the PATH of the windows-amd64 engine leg — and nobody could tell from
+// a CI log, because nothing in it named ccache OR the cmake flags. Decide once, log that
+// decision, apply that same object: the log and the cmake command line cannot disagree.
+const ccache = ccacheDecision();
+console.error(describeCcacheDecision(ccache));
+applyCcacheDecision(cmakeArgs, ccache);
 // Build hermeticity: keep cmake's find_*() out of third-party package-manager
 // prefixes. Root cause (verified twice on this dev Mac, 2026-07-31): its cmake
 // is pkgsrc's (/opt/pkg/bin/cmake), and a pkgsrc-built cmake bakes ITS OWN
@@ -3811,7 +3834,7 @@ function targetToken(forOutDir) {
 const buildDir = path.join(buildRoot, targetToken(outDir), 'build');
 fs.mkdirSync(buildDir, { recursive: true });
 dropStaleCmakeCache(buildDir, tjsDir);
-run('cmake', ['-S', tjsDir, '-B', buildDir, ...cmakeArgs]);
+cmakeConfigure(['-S', tjsDir, '-B', buildDir, ...cmakeArgs]);
 
 // The host tjsc's path, spelled the way cmake spells paths: forward slashes.
 //
@@ -3874,7 +3897,7 @@ function buildHostTjsc(dir, hostBuildDir, why = 'target build is cross') {
   fs.mkdirSync(hostBuildDir, { recursive: true });
   console.log(`bytecode regen: ${why} — configuring a host-native tjsc at ${hostBuildDir} (its output is valid for every target; canonical-LE)`);
   dropStaleCmakeCache(hostBuildDir, dir);
-  run('cmake', ['-S', dir, '-B', hostBuildDir, '-DCMAKE_BUILD_TYPE=Release', '-DTJS_USE_ADA=OFF',
+  cmakeConfigure(['-S', dir, '-B', hostBuildDir, '-DCMAKE_BUILD_TYPE=Release', '-DTJS_USE_ADA=OFF',
     '-DBUILD_WITH_WASM=OFF', '-DBUILD_WITH_MIMALLOC=OFF', '-DBUILD_WITH_FFI=OFF',
     '-DBUILD_WITH_SQLITE=OFF', '-DBUILD_WITH_LTO=OFF',
     // Same -Wno-error demotions the non-Apple native path applies (:~2946) —
@@ -4026,7 +4049,7 @@ if (regenOptOut) {
   // and the rules would stay live — the message above would be a lie in exactly
   // the warm-dev-box case the opt-out exists for (dev-box state hiding the real
   // behavior is a recurring shape here, not a hypothetical).
-  run('cmake', ['-S', tjsDir, '-B', buildDir, ...cmakeArgs, '-UCLODE_HOST_TJSC']);
+  cmakeConfigure(['-S', tjsDir, '-B', buildDir, ...cmakeArgs, '-UCLODE_HOST_TJSC']);
 } else {
   // FIRST, before the minutes of tjsc build below: if this tree cannot
   // regenerate, say so now rather than producing a silently-pristine engine.
@@ -4056,7 +4079,7 @@ if (regenOptOut) {
   // cmake re-configure keeps cached values but `-D` on the command line is
   // also how several of them (toolchain file, OSX_* ) were set in the first
   // place, and re-passing them is the documented way to keep them authoritative.
-  run('cmake', ['-S', tjsDir, '-B', buildDir, ...cmakeArgs, `-DCLODE_HOST_TJSC=${toCmakeCachePath(tjsc)}`]);
+  cmakeConfigure(['-S', tjsDir, '-B', buildDir, ...cmakeArgs, `-DCLODE_HOST_TJSC=${toCmakeCachePath(tjsc)}`]);
 }
 
 // cosmo builds ONLY the tjs-cli executable target (OUTPUT_NAME tjs): the default
