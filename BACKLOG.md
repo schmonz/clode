@@ -4,6 +4,82 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 (Strategic feasibility risks live in `LONG-TERM.md`; in-flight designs in
 `docs/superpowers/`. Done items are DELETED from here — git history is the record.)
 
+## Phase 4c3 (ccache) — spec §11 acceptance 7 MET (2026-09-19)
+
+**Task 1** (`24e4157`) wired `scripts/ccache-launcher.cjs` through `build-tjs.cjs`:
+`-DCMAKE_C_COMPILER_LAUNCHER=<ccache>` lands when a `ccache` binary is found on PATH,
+`CLODE_TJS_CCACHE=0` opts out, and absence is a byte-for-byte no-op (proven on this box,
+which had no ccache at the time). Deferred correctness — "a cache that returns a wrong
+object file is worse than no cache, and this project ships binaries for 42 targets" — to
+task 2, against a REAL install.
+
+**Task 2** installed one (pkgsrc: `pkg_add ccache`, landing at `/opt/pkg/bin/ccache`,
+package `ccache-4.13.6`) and answered that deferred question. This entry replaces the
+`### ccache rides along with this` note under the cmake-migration heading below (deleted —
+its "quiet box" numbers are superseded by real ones, measured against a REAL install, not
+projected from one).
+
+**The instrument the obvious design would have used is wrong on this host.** The literal
+acceptance text says "build with the cache off, hash the engine; build with the cache
+warm, hash it; they must match." Tried first, exactly as written, and it fails — with
+ccache **completely disabled**, two builds back to back (same checkout, same outDir, same
+buildDir) produce two different sha256 sums for the linked `tjs`. Root-caused, not
+shrugged at: (1) Apple's linker assigns a fresh `LC_UUID` on every link — 16 bytes of pure
+metadata `otool -l` shows changing between the two builds, never derived from source; (2)
+after stripping the debug symbol table (which is where an embedded per-object mtime turns
+that 16-byte cause into a 651-byte "diff" via the re-hashed ad-hoc code signature), the
+surviving ONE byte traces to `deps/mimalloc/src/options.c:239`, which prints a build
+banner via `__DATE__, __TIME__` — macros that are, by definition, never stable across two
+compiles. Neither cause is ccache's; both are proven present with ccache off. So the real
+correctness check runs at the grain ccache actually operates on — **every individual
+compiled object**, not the final link:
+
+* 372 objects compiled per phase (`tjs`/`tjs-cli`/mimalloc/etc., host `arm64-darwin`, fixed
+  `outDir`/`buildDir` across all three phases so no path-embedding artifact confounds the
+  comparison).
+* **371 of 372 came out byte-identical across cache-OFF, cache-ON-cold, and cache-ON-warm.**
+  The one exception, `deps/mimalloc/.../options.c.o`, is the file named above — confirmed,
+  not assumed: it is also the SOLE cache miss ccache's own stats report on the warm rebuild
+  (see below), i.e. ccache correctly declined to trust a translation unit that names itself
+  unstable, rather than lying about it.
+* The linked engine's own hash is still taken every phase (diagnostic, not asserted) —
+  all three legitimately differ, for the two reasons above.
+
+**Hit rate, absolute numbers** (host `arm64-darwin`, fixed `outDir`/`buildDir`, isolated
+`CCACHE_DIR`, `ccache --zero-stats` before each cache-on phase):
+
+| phase                     | wall clock | cacheable calls | hits | misses |
+|---------------------------|-----------:|-----------------:|-----:|-------:|
+| cache OFF (`CLODE_TJS_CCACHE=0`) | 56.2s |  n/a (no launcher) | n/a | n/a |
+| cache ON, cold (empty cache)     | 60.2s |               371 |    0 |    371 |
+| cache ON, warm (unchanged rebuild) | 33.4s |             371 |  370 |      1 |
+
+The one warm-rebuild miss is `options.c.o`, exactly as predicted independently by the
+object-level byte comparison above — two different methods, same one file.
+
+**Wall-clock delta against the spec's 2026-08-06 baseline** (308s cold / 56s incremental,
+"numbers from a quiet box"): this box's own cache-OFF cold build is already 56s, not 308s
+— a different, faster host, not a ccache effect (compare like-for-like: this box's own
+off-cache number). The load-bearing comparison is on THIS box: an unchanged rebuild drops
+from 56.2s (no cache) to 33.4s (warm cache) — a ~41% reduction — and the original
+diagnosis holds exactly as measured: the source phase resets the checkout on every build
+(`resetCheckoutToPristine`), forcing recompiles even when nothing changed, and ccache
+converts 370 of those 371 recompiles into hits.
+
+**The standing gate**: `test/ccache.test.cjs`'s
+`'a real, warm ccache serves byte-identical objects for a full engine build (host leg
+only)'` — opt-in (`CLODE_CCACHE_ENGINE_E2E=1`, three real engine builds, several minutes),
+because the property is not optional but the cost is too high for the default suite. It
+re-derives the whole table above on every run it is given, rather than trusting a number
+that was true once: same object-identity comparison (with a self-checking exclusion list —
+if `options.c.o` ever stopped being the one file that varies, or started matching, the
+gate says so instead of a stale allowlist quietly covering for it), same hit-rate
+assertions (`Hits: 0` on an empty cache, misses `<=` the one known-volatile object on a
+warm one). **Scope, stated in the test's own header**: host leg only. The 17 cross legs and
+the two Windows hard publishers are not exercised here — that is CI's job, on CI's own
+compilers and object layout; a green run on this box says nothing about a cross toolchain
+landing in a differently-shaped ccache key.
+
 ## Phase 4c-2 (bytecode as a build rule) — spec §11 acceptances 2 and 3 MET (2026-09-18)
 
 **§11.2 (the tripwire is deleted, regen is a cmake OUTPUT/DEPENDS rule)** — met in task 2
@@ -1906,23 +1982,6 @@ bug a real build graph makes unrepresentable.
 cosmo APEs, and Tiger PPC; `scripts/tjs-legs.mjs` stays the single source of truth for leg
 definitions ([[tjs-legs-manifest]]); the build hermeticity check on the shipped binary; and
 the out-of-tree/local-disk build requirement below (this tree is NFS).
-
-### ccache rides along with this (deferred 2026-08-06, user's call)
-
-ccache was measured and the case is good, but it belongs HERE, not before: the
-compiler-launcher wiring is a cmake concern, so doing it now would mean wiring it
-twice. Numbers from a quiet box, so they do not have to be re-derived:
-
-* cold build 308s; incremental on unchanged sources 56s; with regen skipped 50s —
-  so regeneration itself costs only ~7s.
-* The recurring cost is NOT regen: the source phase resets the vendor checkout
-  every build, which forces recompiles even when nothing changed.
-* `tjsc` is DETERMINISTIC — two runs produced byte-identical output
-  (`e5b091ea...`), so those recompiles are of identical bytes. That is exactly
-  what ccache converts into hits, and it is why the case is good.
-
-Not installed on this box; installing it there and in CI is part of the cmake
-work, not a prerequisite for it.
 
 ## ★ Build-working-dir isolation — no shared-tree tromping (2026-07-25)
 
