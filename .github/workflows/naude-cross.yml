@@ -98,7 +98,7 @@ jobs:
   # pins exist: linux-arm64 Node (blob-gen), darwin-x64 Node (embed), linux-arm64
   # rcodesign (signer). Attest-only here; run-x64 boots it on an Intel target.
   build-arm64:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     defaults:
       run:
         shell: bash
