@@ -41,25 +41,60 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { tjsVendorParentDir } = require('../scripts/platform-tag.cjs');
+const { defineGuard, guardTests } = require('./guard.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 const SHARED = path.join(tjsVendorParentDir(), 'txiki.js');
 
-// The fixup is worth nothing if the source phase can reach the end without running it, so
-// the call site is pinned as text. scripts/build-tjs.cjs cannot be require()d — it runs a
-// whole engine build the moment it is loaded (see test/ccache.test.cjs's header).
-test('the banner fixup is called UNCONDITIONALLY in the source phase, not behind a knob', () => {
-  const src = fs.readFileSync(path.join(REPO, 'scripts/build-tjs.cjs'), 'utf8');
-  const call = src.split('\n').filter((l) => /^\s*fixupMimallocBuildBanner\(tjsDir\);\s*$/.test(l));
-  assert.strictEqual(call.length, 1,
-    'expected exactly one unconditional `fixupMimallocBuildBanner(tjsDir);` line in the '
-    + 'source phase — an edit that can be skipped in silence is the src/js-patches scar');
-  assert.match(src, /function fixupMimallocBuildBanner\(dir\) \{/);
-  // …and it must FAIL LOUD rather than no-op when upstream moves the banner.
-  const body = src.slice(src.indexOf('function fixupMimallocBuildBanner(dir) {'));
-  assert.match(body.slice(0, body.indexOf('\n}\n')), /throw new Error\('fixup mimalloc-build-banner: anchor not found/,
-    'the fixup must throw when its anchor is gone (a txiki bump), not quietly skip');
+// Both levers are worth nothing if the build can reach the end without applying them, so
+// the wiring is scanned as text — through defineGuard, so the scan is PROVEN able to fail
+// rather than merely green. scripts/build-tjs.cjs cannot be require()d: it runs a whole
+// engine build the moment it is loaded (see test/ccache.test.cjs's header).
+//
+// PURE: `src` is the already-read scripts/build-tjs.cjs text.
+function scanReproWiring({ src }) {
+  const findings = [];
+  let examined = 0;
+
+  examined++;
+  if (src.split('\n').filter((l) => /^\s*fixupMimallocBuildBanner\(tjsDir\);\s*$/.test(l)).length !== 1) {
+    findings.push('scripts/build-tjs.cjs must call `fixupMimallocBuildBanner(tjsDir);` exactly '
+      + 'once, unconditionally, in the source phase — an edit that can be skipped in silence '
+      + 'is the src/js-patches scar');
+  }
+
+  examined++;
+  if (!/function fixupMimallocBuildBanner\(dir\) \{/.test(src)) {
+    findings.push('fixupMimallocBuildBanner is not defined');
+  }
+
+  examined++;
+  if (!/throw new Error\('fixup mimalloc-build-banner: anchor not found/.test(src)) {
+    findings.push('the banner fixup must THROW when its anchor is gone (a txiki bump moves the '
+      + 'line), not quietly no-op — an unapplied fixup silently un-reproduces every build');
+  }
+
+  examined++;
+  if (src.split('\n').filter((l) => /^process\.env\.ZERO_AR_DATE = '1';$/.test(l)).length !== 1) {
+    findings.push("scripts/build-tjs.cjs must set `process.env.ZERO_AR_DATE = '1';` exactly once "
+      + 'at top level, so every ar/libtool cmake spawns inherits it — without it the static '
+      + 'archives carry member mtimes and the linked engine differs between two builds of '
+      + 'identical sources');
+  }
+
+  return { findings, examined };
+}
+
+const reproWiringGuard = defineGuard({
+  name: 'engine-reproducibility-wiring',
+  read: () => ({ src: fs.readFileSync(path.join(REPO, 'scripts/build-tjs.cjs'), 'utf8') }),
+  scan: scanReproWiring,
+  // Four independent facts in one named file — the exact measured count.
+  floor: 4,
+  // Models the regression precisely: a build script that has lost both levers.
+  control: () => ({ src: '// a source phase with no banner fixup and no archive-date lever\n' }),
 });
+guardTests(reproWiringGuard);
 
 // THE SECOND CAUSE, found by actually running the whole-binary acceptance after the banner
 // fix rather than by declaring victory at the object grain: with all 371 objects byte-
@@ -77,16 +112,6 @@ test('the banner fixup is called UNCONDITIONALLY in the source phase, not behind
 // understood. VERIFIED, not assumed: `ar qc` twice over one touched object produced two
 // different archives here, and two full engine builds with ZERO_AR_DATE=1 set produced
 // byte-identical `tjs` binaries (sha256 e9c5c7881971, twice).
-test('the build sets ZERO_AR_DATE so static archives do not embed a clock', () => {
-  const src = fs.readFileSync(path.join(REPO, 'scripts/build-tjs.cjs'), 'utf8');
-  const set = src.split('\n').filter((l) => /^process\.env\.ZERO_AR_DATE = '1';$/.test(l));
-  assert.strictEqual(set.length, 1,
-    "expected exactly one unconditional `process.env.ZERO_AR_DATE = '1';` in "
-    + 'scripts/build-tjs.cjs, at top level so every spawned ar/libtool inherits it -- '
-    + 'without it the static archives carry member mtimes and the linked engine differs '
-    + 'between two builds of identical sources');
-});
-
 // The real thing: drive the actual source phase and look at the tree it produced. Against
 // a THROWAWAY copy-on-write copy, never the shared checkout — test/ccache.test.cjs already
 // uses this recipe, and mutating ~/.cache/clode/tjs-vendor here would race the one other

@@ -15,6 +15,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const { ccacheLauncher, applyCcacheArg, ccacheOptedOut } = require('../scripts/ccache-launcher.cjs');
 const { findTool } = require('../libexec/clode-hosttools.cjs');
+const { defineGuard, guardTests } = require('./guard.cjs');
 // Task 2's own requires -- a real build, a real cache, a real diff. Nothing above this
 // line needed any of these; nothing below the PROOF tests should need anything else.
 const { spawnSync } = require('node:child_process');
@@ -106,17 +107,48 @@ test('absent: the tool-absent branch does NOT clear (task 1\'s negative property
     'the default (no options object) is the absent case, not the opted-out one');
 });
 
-test('ccacheOptedOut reads exactly CLODE_TJS_CCACHE=0, and is what the call site must pass', () => {
+test('ccacheOptedOut reads exactly CLODE_TJS_CCACHE=0', () => {
   assert.strictEqual(ccacheOptedOut({ CLODE_TJS_CCACHE: '0' }), true);
   assert.strictEqual(ccacheOptedOut({ CLODE_TJS_CCACHE: '1' }), false);
   assert.strictEqual(ccacheOptedOut({}), false);
-  // The wiring: build-tjs.cjs must hand applyCcacheArg BOTH halves. Asserted as text
-  // because requiring that file runs a whole engine build (see this file's header).
-  const src = fs.readFileSync(path.join(repo, 'scripts/build-tjs.cjs'), 'utf8');
-  assert.match(src, /applyCcacheArg\(cmakeArgs, ccacheLauncher\(\), \{ optedOut: ccacheOptedOut\(\) \}\)/,
-    'scripts/build-tjs.cjs must pass the opt-out decision through, or the clearing flag '
-    + 'never reaches a real cmake reconfigure');
 });
+
+// The CALL SITE must hand applyCcacheArg BOTH halves, or the clearing flag never reaches a
+// real cmake reconfigure and the opt-out is a no-op again. Scanned as text because
+// requiring scripts/build-tjs.cjs runs a whole engine build (see this file's header), and
+// registered through defineGuard so the scan is PROVEN able to fail rather than merely green.
+//
+// PURE: `src` is the already-read scripts/build-tjs.cjs text.
+function scanOptOutWiring({ src }) {
+  const findings = [];
+  let examined = 0;
+
+  examined++;
+  if (!/applyCcacheArg\(cmakeArgs, ccacheLauncher\(\), \{ optedOut: ccacheOptedOut\(\) \}\)/.test(src)) {
+    findings.push('scripts/build-tjs.cjs must pass the opt-out decision through to '
+      + 'applyCcacheArg, or CLODE_TJS_CCACHE=0 never clears CMAKE_C_COMPILER_LAUNCHER on an '
+      + 'already-configured build dir');
+  }
+
+  examined++;
+  if (/applyCcacheArg\(cmakeArgs, ccacheLauncher\(\)\)/.test(src)) {
+    findings.push('the old two-argument call site is back — that shape is exactly the bug: it '
+      + 'pushes nothing on the opt-out path, which cmake reads as "keep the cached launcher"');
+  }
+
+  return { findings, examined };
+}
+
+const optOutWiringGuard = defineGuard({
+  name: 'ccache-opt-out-reaches-cmake',
+  read: () => ({ src: fs.readFileSync(path.join(repo, 'scripts/build-tjs.cjs'), 'utf8') }),
+  scan: scanOptOutWiring,
+  // Two facts in one named file — the exact measured count.
+  floor: 2,
+  // The literal pre-fix call site: the regression this pins, not an invented violation.
+  control: () => ({ src: 'applyCcacheArg(cmakeArgs, ccacheLauncher());\n' }),
+});
+guardTests(optOutWiringGuard);
 
 // The property at the grain it actually bites: a REAL cmake build dir, already configured
 // WITH the launcher, reconfigured through the opt-out's own argument list. This is the test
