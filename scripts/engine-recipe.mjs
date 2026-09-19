@@ -59,6 +59,26 @@ export const FILES = [
   // narrowing is what test/engine-recipe.test.cjs exists to catch.
   'patches/*.patch',
   'scripts/build-tjs.cjs',
+  // build-tjs.cjs is not a monolith: it requires four modules directly, and
+  // those modules ARE the engine orchestration now, not helpers beside it.
+  // scripts/tjs-source-reset.cjs decides what "pristine" means BEFORE a
+  // single patch applies. scripts/engine-api-floor.cjs generates the sanity
+  // check that would have caught the moduleMeta bug (see ci-guest-bake.sh
+  // below) anywhere it now runs, not just in the one place it was first
+  // hand-written. scripts/build-depscan.cjs and scripts/depscan-verdict.cjs
+  // together are the hermeticity gate the build refuses to skip. Only the
+  // pre-split entry point was ever named here, which is the same
+  // one-recipe-two-lists disease this file exists to end — just with the
+  // second list living inside build-tjs.cjs's own require graph instead of a
+  // separate cache-key comment. Left uncovered, an edit to any of the four
+  // changes what the engine is built from, or what it is verified against,
+  // while moving no recipe hash — so the cache would restore an engine built,
+  // or "verified" as sound, by a different recipe than the one now in the
+  // tree.
+  'scripts/tjs-source-reset.cjs',
+  'scripts/engine-api-floor.cjs',
+  'scripts/build-depscan.cjs',
+  'scripts/depscan-verdict.cjs',
   // The netbsd-sparc in-guest ENGINE bake recipe. It is engine source for that
   // leg in the most literal sense — it IS the compile — yet an edit to it moved
   // nothing, so the tjs cache happily restored an engine built by a DIFFERENT

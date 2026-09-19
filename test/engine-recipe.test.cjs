@@ -33,6 +33,14 @@ const EXPECTED_SET = [
   // did not move the engine identity. See scripts/engine-recipe.mjs.
   'patches/*.patch',
   'scripts/build-tjs.cjs',
+  // ADDED 2026-09-19: build-tjs.cjs's own require graph split into four
+  // modules that ARE the orchestration (source-reset, the API-floor sanity
+  // check, and the two halves of the hermeticity gate); only the pre-split
+  // entry point was ever in this set. See scripts/engine-recipe.mjs.
+  'scripts/tjs-source-reset.cjs',
+  'scripts/engine-api-floor.cjs',
+  'scripts/build-depscan.cjs',
+  'scripts/depscan-verdict.cjs',
   // ADDED 2026-08-29: the netbsd-sparc in-guest bake recipe IS that leg's
   // compile, and editing it used to move nothing — so the cache could restore an
   // engine built by a different recipe. See scripts/engine-recipe.mjs.
@@ -138,6 +146,10 @@ const BASE = {
   'spike/quickjs/patches/b.patch': 'BBB',
   'patches/libtjs-cosmo.patch': 'COSMO',
   'scripts/build-tjs.cjs': 'build',
+  'scripts/tjs-source-reset.cjs': 'reset',
+  'scripts/engine-api-floor.cjs': 'floor',
+  'scripts/build-depscan.cjs': 'depscan',
+  'scripts/depscan-verdict.cjs': 'verdict',
   'spike/quickjs/qemu/ci-guest-bake.sh': 'bake',
   'scripts/x.toolchain.cmake': 'tc',
   'spike/quickjs/atomic-shim.c': 'shim',
@@ -173,6 +185,38 @@ test('a changed byte in a repo-root cosmo patch moves the recipe', async () => {
   const before = recipe(fakeSource(BASE));
   const after = recipe(fakeSource({ ...BASE, 'patches/libtjs-cosmo.patch': 'COSMOS' }));
   assert.notStrictEqual(after, before, 'editing patches/libtjs-cosmo.patch did not move the engine identity');
+});
+
+// build-tjs.cjs's engine orchestration split into four required modules
+// (source-reset, the API-floor check, and the two hermeticity-gate halves).
+// Before this test, none of the four were engine-source entries: editing
+// scripts/tjs-source-reset.cjs — which decides what "pristine" means before a
+// single patch applies — moved no recipe hash, so the tjs cache could restore
+// an engine built from a differently-reset checkout with no signal at all.
+test('a changed byte in any of the four split-out orchestration modules moves the recipe', async () => {
+  const { recipe } = await load();
+  const before = recipe(fakeSource(BASE));
+  for (const p of ['scripts/tjs-source-reset.cjs', 'scripts/engine-api-floor.cjs',
+    'scripts/build-depscan.cjs', 'scripts/depscan-verdict.cjs']) {
+    const after = recipe(fakeSource({ ...BASE, [p]: `${BASE[p]}-edited` }));
+    assert.notStrictEqual(after, before, `editing ${p} did not move the engine identity`);
+  }
+});
+
+// Demonstrates the narrowing this file exists to catch: dropping one of the
+// four from the pattern set silently drops it from the recipe, exactly as
+// removing it from FILES would, and exactly what the EXPECTED_SET pin above
+// (a plain equality check) fails loudly on the moment FILES itself narrows.
+test('dropping a split-out module from the pattern set is a silent narrowing, which is why FILES is pinned', async () => {
+  const { recipeDetail } = await load();
+  const full = ['scripts/tjs-source-reset.cjs', 'scripts/engine-api-floor.cjs',
+    'scripts/build-depscan.cjs', 'scripts/depscan-verdict.cjs'];
+  const narrowed = full.slice(1);
+  const withAll = recipeDetail(fakeSource(BASE), full).files.map((f) => f.path);
+  const withoutOne = recipeDetail(fakeSource(BASE), narrowed).files.map((f) => f.path);
+  assert.ok(withAll.includes('scripts/tjs-source-reset.cjs'));
+  assert.ok(!withoutOne.includes('scripts/tjs-source-reset.cjs'),
+    'the narrowed pattern set still covered the dropped file — the demonstration is broken, not the guard');
 });
 
 test('a glob that matches nothing is fatal, never an empty set', async () => {
