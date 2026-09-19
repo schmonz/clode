@@ -41,9 +41,19 @@ const BASE_ARGS = Object.freeze(['-DCMAKE_BUILD_TYPE=Release', '-DTJS_USE_ADA=OF
 // ccache`, so this box now has one at /opt/pkg/bin/ccache) — so the tests below build a
 // PATH that excludes it explicitly, verified empty first, rather than hoping the ambient
 // one stays clean.
-const BARE_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
+//
+// AN EMPTY DIRECTORY, NOT A LIST OF SYSTEM ONES (review finding, 2026-09-19). The first
+// version of this was '/usr/bin:/bin:/usr/sbin:/sbin' -- less ambient than the real PATH,
+// but still an assumption: it goes red the day any image ships /usr/bin/ccache, for a
+// reason that has nothing to do with the product. (It was also vacuous on win32, where ';'
+// is the delimiter and the whole string reads as one directory name.) One empty temp
+// directory has no delimiter in it, contains nothing on any platform, and cannot start
+// containing something.
+const BARE_PATH = fs.mkdtempSync(path.join(os.tmpdir(), 'ccache-empty-path-'));
 
 test('a PATH built to exclude ccache resolves none (so the next test is real, not a fluke)', () => {
+  assert.deepStrictEqual(fs.readdirSync(BARE_PATH), [],
+    'the stand-in PATH directory is not empty, so the absent-path proof below is not a proof');
   assert.strictEqual(findTool('ccache', { env: { PATH: BARE_PATH } }), null,
     `${BARE_PATH} unexpectedly resolved a ccache — the absent-path test below needs a `
     + 'PATH that genuinely excludes it, and this one no longer does');
