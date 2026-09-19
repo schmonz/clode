@@ -3221,15 +3221,49 @@ function esbuildBundles(dir) {
   const esbuild = ensureEsbuild(dir);
   const stdlib = fs.readdirSync(path.join(dir, 'src/js/stdlib')).filter((f) => f.endsWith('.js'));
   const common = ['--target=esnext', '--platform=neutral', '--format=esm', '--main-fields=main,module', '--minify', '--keep-names'];
+  // INPUT MANIFEST (phase 4c-2b). Phase 4c-2's DEPENDS edge only reaches the 2 of 18
+  // bundles tjsc compiles straight from src/js/** (internal/path, worker-bootstrap); the
+  // other 16 pass through esbuild FIRST, and esbuild is a prebuilt PLATFORM BINARY (see
+  // the buildOnly branch below) — a guest leg cannot exec the host's esbuild, so there can
+  // be no cmake rule regenerating these there. The only thing `--build-only` CAN do is
+  // PROVE the bundles already on disk came from the src/js/** already on disk, and this
+  // manifest — one sha256 per file esbuild actually read, per bundle — is that evidence.
+  //
+  // Recorded from esbuild's OWN --metafile, never a glob over src/js/**: esbuild follows
+  // imports, so a bundle's true input set is a small SUBSET of the ~91 files under
+  // src/js/**. A glob would count every unrelated file as an input to every bundle, so an
+  // edit anywhere would fail every bundle's check — a false positive, and false positives
+  // are how a gate trains people to bypass it.
+  //
+  // WHY THIS FILE LIVES IN THE CHECKOUT (src/bundles/js/.clode-inputs.json), not a build
+  // dir: `--build-only` runs on a guest the T2 VM legs sync the PATCHED CHECKOUT into —
+  // never a build directory (CLODE_TJS_BUILD/CLODE_TJS_OUT are both resolved on, and stay
+  // on, the host that ran --source-only). A manifest the guest must read after the sync
+  // has nowhere else to live that survives that sync unchanged.
+  const manifest = {};
   const one = (entry, out, extra) => {
     fs.mkdirSync(path.join(dir, path.dirname(out)), { recursive: true });
+    const metaFile = path.join(os.tmpdir(), `clode-esbuild-meta-${crypto.randomBytes(8).toString('hex')}.json`);
     run(esbuild, [path.join(dir, entry), '--bundle', `--outfile=${path.join(dir, out)}`,
-      '--external:tjs:*', ...extra, ...common], { cwd: dir, shell: process.platform === 'win32' });
+      `--metafile=${metaFile}`, '--external:tjs:*', ...extra, ...common], { cwd: dir, shell: process.platform === 'win32' });
+    const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
+    fs.rmSync(metaFile, { force: true });
+    const inputs = {};
+    for (const inputPath of Object.keys(meta.inputs)) {
+      // esbuild already reports these relative to `cwd` (== dir) with forward slashes
+      // (verified against the pinned 0.28.1 binary, both a relative and an absolute entry
+      // path); normalized again anyway so a Windows host can never make this manifest
+      // diverge from what a POSIX guest computes at check time.
+      const rel = inputPath.split(path.sep).join('/');
+      inputs[rel] = crypto.createHash('sha256').update(fs.readFileSync(path.join(dir, inputPath))).digest('hex');
+    }
+    manifest[out] = inputs;
   };
   for (const b of JS_BUNDLES) one(b.entry, b.out, b.extra);
   for (const f of stdlib) {
     one(`src/js/stdlib/${f}`, `src/bundles/js/stdlib/${f}`, ['--external:tjs:*', '--external:buffer', '--external:crypto']);
   }
+  fs.writeFileSync(path.join(dir, 'src/bundles/js/.clode-inputs.json'), `${JSON.stringify(manifest, null, 2)}\n`);
   console.log(`esbuilt ${JS_BUNDLES.length + stdlib.length} plain-JS bundles for the BE regen path`);
 }
 // esbuild @ the txiki pin, resolved from the checkout's own node_modules
