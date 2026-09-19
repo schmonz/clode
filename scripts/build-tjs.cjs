@@ -82,7 +82,7 @@ const crypto = require('node:crypto');
 const { resetCheckoutToPristine } = require('./tjs-source-reset.cjs');
 const { engineFloorCheckJs, OK_TOKEN } = require('./engine-api-floor.cjs');
 const { buildDepscan } = require('./build-depscan.cjs');
-const { ccacheLauncher, applyCcacheArg } = require('./ccache-launcher.cjs');
+const { ccacheLauncher, applyCcacheArg, ccacheOptedOut } = require('./ccache-launcher.cjs');
 const { tjsDir: platformTjsDir, tjsVendorParentDir } = require('./platform-tag.cjs'); // tjsDir aliased: this file has its own `tjsDir` (the source build dir)
 // The hermeticity verdict, defined once in a CJS sibling so the build and the
 // test suite run the SAME decision logic (test/guard.cjs needs a pure scan()
@@ -3615,10 +3615,13 @@ if (darwinPoll) {
 // cl, or a cross toolchain file's compiler), it does not replace it. ccacheLauncher()
 // returns null when CLODE_TJS_CCACHE=0 was set or the tool is not on PATH — the state of
 // every leg today, this box included — and applyCcacheArg() leaves cmakeArgs completely
-// unchanged in that case. Actually installing ccache anywhere, and proving the cache is
-// keyed safely across the 17 cross legs and the tjsc regen path, is task 2; this line
-// only makes the flag land WHEN a launcher is already present.
-applyCcacheArg(cmakeArgs, ccacheLauncher());
+// unchanged in the tool-absent case. It does NOT leave them unchanged for the EXPLICIT
+// opt-out: cmake persists CMAKE_C_COMPILER_LAUNCHER in CMakeCache.txt and this script
+// reuses build dirs, so CLODE_TJS_CCACHE=0 has to push an EMPTY value to clear it, or the
+// opt-out is a no-op on exactly the build dirs it exists for (review finding, 2026-09-19).
+// Actually installing ccache anywhere, and proving the cache is keyed safely across the 17
+// cross legs and the tjsc regen path, is task 2.
+applyCcacheArg(cmakeArgs, ccacheLauncher(), { optedOut: ccacheOptedOut() });
 // Build hermeticity: keep cmake's find_*() out of third-party package-manager
 // prefixes. Root cause (verified twice on this dev Mac, 2026-07-31): its cmake
 // is pkgsrc's (/opt/pkg/bin/cmake), and a pkgsrc-built cmake bakes ITS OWN

@@ -27,18 +27,41 @@ const { findTool } = require('../libexec/clode-hosttools.cjs');
 // (from libexec/clode-hosttools.cjs, the same PATH-walking lookup every other host-tool
 // probe in this repo uses); a test passes a synthetic one so the PRESENT path can be
 // exercised on a box that has never installed the real thing.
+// The opt-out decision, split out from ccacheLauncher() because the CALL SITE needs it
+// too: "no launcher" and "the user explicitly said no" produce DIFFERENT cmake argument
+// lists (see applyCcacheArg), and ccacheLauncher() returns null for both.
+function ccacheOptedOut(env = process.env) {
+  return env.CLODE_TJS_CCACHE === '0';
+}
+
 function ccacheLauncher({ env = process.env, findToolFn = findTool } = {}) {
-  if (env.CLODE_TJS_CCACHE === '0') return null;
+  if (ccacheOptedOut(env)) return null;
   return findToolFn('ccache', { env });
 }
 
-// Pure, and deliberately the ONLY place `-DCMAKE_C_COMPILER_LAUNCHER=` gets spelled: handed
-// a falsy ccachePath (the absent case, or the opted-out one), it returns cmakeArgs with
-// nothing appended — same array, same length, same bytes. This is the function whose
-// behavior on this box IS the "unchanged rebuild" half of the acceptance.
-function applyCcacheArg(cmakeArgs, ccachePath) {
+// Pure, and deliberately the ONLY place `-DCMAKE_C_COMPILER_LAUNCHER=` gets spelled. THREE
+// outcomes, not two — the middle one was a review finding (2026-09-19), not a refinement:
+//
+//   launcher found       -> push `-DCMAKE_C_COMPILER_LAUNCHER=<path>`
+//   EXPLICIT opt-out     -> push `-DCMAKE_C_COMPILER_LAUNCHER=` (EMPTY, clearing)
+//   tool simply absent   -> push NOTHING: same array, same length, same bytes
+//
+// Why the opt-out cannot just "push nothing": cmake PERSISTS every `-D` in CMakeCache.txt,
+// and scripts/build-tjs.cjs REUSES build dirs across runs (dropStaleCmakeCache only wipes
+// when the source dir moved). Reconfiguring without the flag therefore leaves the old value
+// in place, so `CLODE_TJS_CCACHE=0` did exactly nothing on any build dir that had been
+// configured once with ccache — which is every build dir on a developer box with it
+// installed, i.e. precisely the population the opt-out exists for. Pushing an EMPTY value
+// clears the cache entry; verified against a real cmake reconfigure in test/ccache.test.cjs.
+//
+// Why the clearing flag must NOT ride the absent branch: that would change the cmake command
+// line on all 42 legs, none of which have ccache — destroying task 1's headline negative
+// property ("a leg that has never heard of the tool builds byte-identically to before"). The
+// asymmetry is load-bearing, and both halves are asserted.
+function applyCcacheArg(cmakeArgs, ccachePath, { optedOut = false } = {}) {
   if (ccachePath) cmakeArgs.push(`-DCMAKE_C_COMPILER_LAUNCHER=${ccachePath}`);
+  else if (optedOut) cmakeArgs.push('-DCMAKE_C_COMPILER_LAUNCHER=');
   return cmakeArgs;
 }
 
-module.exports = { ccacheLauncher, applyCcacheArg };
+module.exports = { ccacheLauncher, applyCcacheArg, ccacheOptedOut };

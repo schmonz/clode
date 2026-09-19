@@ -13,7 +13,7 @@
 // is testing the real behavior, not a reimplementation of it.
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { ccacheLauncher, applyCcacheArg } = require('../scripts/ccache-launcher.cjs');
+const { ccacheLauncher, applyCcacheArg, ccacheOptedOut } = require('../scripts/ccache-launcher.cjs');
 const { findTool } = require('../libexec/clode-hosttools.cjs');
 // Task 2's own requires -- a real build, a real cache, a real diff. Nothing above this
 // line needed any of these; nothing below the PROOF tests should need anything else.
@@ -63,7 +63,91 @@ test('opt-out: CLODE_TJS_CCACHE=0 suppresses the probe even when a launcher woul
   const fakeFindToolFn = () => '/fake/bin/ccache';
   const path = ccacheLauncher({ env: { CLODE_TJS_CCACHE: '0' }, findToolFn: fakeFindToolFn });
   assert.strictEqual(path, null, 'the opt-out must win over a resolvable launcher');
-  assert.deepStrictEqual(applyCcacheArg([...BASE_ARGS], path), BASE_ARGS);
+});
+
+// ---- the opt-out has to reach CMAKE, not just this function ------------------------
+//
+// THE BUG THIS PINS (found in review, 2026-09-19): `CLODE_TJS_CCACHE=0` was implemented as
+// "push no flag", which is correct for a build dir cmake has never configured and a NO-OP
+// for one it has. cmake PERSISTS `-D` values in CMakeCache.txt, and scripts/build-tjs.cjs
+// deliberately REUSES build dirs across runs (dropStaleCmakeCache only wipes when the
+// source dir moved). So the exact scenario the opt-out exists for -- "I suspect the cache,
+// turn it off and rebuild" -- silently kept using ccache, forever, on every developer box
+// that had ever built once with it. Nothing caught it because the e2e gate wipes buildRoot
+// at the top of every phase, which is right for isolating the phases and is precisely what
+// hides this.
+//
+// THE FIX IS ASYMMETRIC, AND THE ASYMMETRY IS THE POINT. Clearing unconditionally would
+// break task 1's headline negative property (a leg with no ccache must produce cmake args
+// byte-identical to the pre-feature ones). So the empty `-D` rides the EXPLICIT OPT-OUT
+// branch only -- never the tool-absent branch. Both halves are asserted below.
+test('opt-out: the launcher is explicitly CLEARED, not merely left unset', () => {
+  const out = applyCcacheArg([...BASE_ARGS], null, { optedOut: true });
+  assert.deepStrictEqual(out, [...BASE_ARGS, '-DCMAKE_C_COMPILER_LAUNCHER='],
+    'CLODE_TJS_CCACHE=0 must push an EMPTY -DCMAKE_C_COMPILER_LAUNCHER: pushing nothing is a '
+    + 'no-op against a build dir whose CMakeCache already carries the launcher');
+});
+
+test('absent: the tool-absent branch does NOT clear (task 1\'s negative property survives the fix)', () => {
+  assert.deepStrictEqual(applyCcacheArg([...BASE_ARGS], null, { optedOut: false }), BASE_ARGS,
+    'a leg that simply has no ccache must still see byte-identical cmake args -- only an '
+    + 'EXPLICIT opt-out may add a clearing flag');
+  assert.deepStrictEqual(applyCcacheArg([...BASE_ARGS], null), BASE_ARGS,
+    'the default (no options object) is the absent case, not the opted-out one');
+});
+
+test('ccacheOptedOut reads exactly CLODE_TJS_CCACHE=0, and is what the call site must pass', () => {
+  assert.strictEqual(ccacheOptedOut({ CLODE_TJS_CCACHE: '0' }), true);
+  assert.strictEqual(ccacheOptedOut({ CLODE_TJS_CCACHE: '1' }), false);
+  assert.strictEqual(ccacheOptedOut({}), false);
+  // The wiring: build-tjs.cjs must hand applyCcacheArg BOTH halves. Asserted as text
+  // because requiring that file runs a whole engine build (see this file's header).
+  const src = fs.readFileSync(path.join(repo, 'scripts/build-tjs.cjs'), 'utf8');
+  assert.match(src, /applyCcacheArg\(cmakeArgs, ccacheLauncher\(\), \{ optedOut: ccacheOptedOut\(\) \}\)/,
+    'scripts/build-tjs.cjs must pass the opt-out decision through, or the clearing flag '
+    + 'never reaches a real cmake reconfigure');
+});
+
+// The property at the grain it actually bites: a REAL cmake build dir, already configured
+// WITH the launcher, reconfigured through the opt-out's own argument list. This is the test
+// that was missing; a unit test over applyCcacheArg alone cannot see a CMakeCache.
+test('opt-out: a build dir already configured WITH ccache stops using it after a reconfigure', (t) => {
+  const cmake = findTool('cmake');
+  if (!cmake) { t.skip('no cmake on PATH'); return; }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccache-optout-cmake-'));
+  t.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } });
+  const src = path.join(dir, 'src');
+  const bld = path.join(dir, 'b');
+  fs.mkdirSync(src);
+  // NONE: no compiler probe, so this stays fast and platform-independent. The variable is
+  // a plain cache entry either way -- persistence is a cmake-cache property, not a
+  // language-enablement one.
+  fs.writeFileSync(path.join(src, 'CMakeLists.txt'),
+    'cmake_minimum_required(VERSION 3.10)\nproject(ccache_optout NONE)\n');
+  const configure = (args) => {
+    const r = spawnSync(cmake, ['-S', src, '-B', bld, ...args], { encoding: 'utf8' });
+    assert.strictEqual(r.status, 0, `cmake failed: ${r.stdout}\n${r.stderr}`);
+  };
+  const cached = () => {
+    const line = fs.readFileSync(path.join(bld, 'CMakeCache.txt'), 'utf8').split('\n')
+      .find((l) => l.startsWith('CMAKE_C_COMPILER_LAUNCHER:'));
+    return line === undefined ? null : line.slice(line.indexOf('=') + 1);
+  };
+
+  // 1. the normal state of every build dir on a box with ccache: configured WITH it.
+  configure(applyCcacheArg([], '/fake/bin/ccache', { optedOut: false }));
+  assert.strictEqual(cached(), '/fake/bin/ccache', 'setup: the launcher should be cached here');
+
+  // 2. now the user sets CLODE_TJS_CCACHE=0 and rebuilds. build-tjs.cjs reuses this build
+  //    dir, so THIS is the argument list cmake gets.
+  const optedOutArgs = applyCcacheArg([], ccacheLauncher({
+    env: { CLODE_TJS_CCACHE: '0', PATH: process.env.PATH }, findToolFn: findTool,
+  }), { optedOut: ccacheOptedOut({ CLODE_TJS_CCACHE: '0' }) });
+  configure(optedOutArgs);
+  assert.strictEqual(cached(), '',
+    'CLODE_TJS_CCACHE=0 left the launcher in CMakeCache.txt -- the documented opt-out does '
+    + 'nothing on a build dir that was already configured with ccache, which is every build '
+    + 'dir on a box that has built once');
 });
 
 // ---- the present path, exercised through the injection seam, not a real install ----
