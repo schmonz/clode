@@ -259,6 +259,41 @@ test('build-tjs: a cross build regenerates via a host-native tjsc, not the targe
     'a NATIVE build (no crossFile) may still build tjsc directly in buildDir, since it is host-executable there');
 });
 
+// ---- the extractor's OTHER contract: what buildHostTjsc CALLS must lift too ----------
+//
+// WHY HERE, in the cheap always-on file: test/tjs-bytecode-e2e.test.cjs runs the REAL
+// buildHostTjsc by lifting it out of this source and eval'ing it, and buildHostTjsc now
+// configures through cmakeConfigure(), so that helper is lifted alongside it. Both halves of
+// that are fragile in a way nothing else in the repo is:
+//
+//   1. extractFunction finds `function <name>(`, so a const-arrow helper is invisible to it;
+//   2. it brace-counts from the FIRST `{`, so a defaulted-object parameter (`opts = {}`) cuts
+//      the extraction off mid-signature and the eval dies with "Unexpected token 'function'".
+//
+// Both were MEASURED on 2026-09-19, not imagined: the argv-logging change hit (1) and then
+// (2) in consecutive runs. The e2e test that caught them costs a real cmake build and is
+// skipped on Windows; this one costs microseconds and runs everywhere.
+test('build-tjs: cmakeConfigure lifts out of the source and echoes the argv before running cmake', () => {
+  const calls = [];
+  const lift = new Function('run', 'console',
+    `${extractFunction(buildTjsSrc, 'cmakeConfigure')}\nreturn cmakeConfigure;`)(
+    (cmd, args) => calls.push(['run', cmd, args]),
+    { error: (line) => calls.push(['log', line]) });
+  lift(['-S', 'src', '-B', 'bld', '-DX=1']);
+  assert.deepStrictEqual(calls, [
+    ['log', 'build-tjs: cmake configure argv: -S src -B bld -DX=1'],
+    ['run', 'cmake', ['-S', 'src', '-B', 'bld', '-DX=1']],
+  ], 'the echo must come FIRST (a configure that dies still says what it was asked to do)');
+});
+
+test('build-tjs: PROOF — a defaulted-object parameter would break that lift', () => {
+  const withDefault = 'function cmakeConfigure(args, opts = {}) {\n  return run(\'cmake\', args, opts);\n}\n';
+  assert.throws(() => new Function(`${extractFunction(withDefault, 'cmakeConfigure')}\nreturn cmakeConfigure;`),
+    SyntaxError,
+    'the brace counter stops at the `{}` in the parameter list, so the extracted text is half '
+    + 'a signature -- this is the exact failure this test exists to keep from coming back');
+});
+
 test('build-tjs: buildHostTjsc never uses a cross toolchain file (plain host compiler)', () => {
   const src = extractFunction(buildTjsSrc, 'buildHostTjsc');
   assert.doesNotMatch(src, /CLODE_TJS_CROSS_FILE|CMAKE_TOOLCHAIN_FILE/,
@@ -386,7 +421,10 @@ test('build-tjs: the premise is checked on the regenerating path only, before th
   const tjscIdx = buildTjsSrc.indexOf('let tjsc;', idx);
   assert.ok(tjscIdx > idx, 'the premise check must come BEFORE the tjsc selection, not after it');
   const between = buildTjsSrc.slice(idx, tjscIdx);
-  assert.doesNotMatch(between, /\brun\(|buildHostTjsc\(/,
+  // cmakeConfigure( is named alongside run( because it is the OTHER spelling of "this
+  // executes cmake" since the configure-argv logging landed; a gate that knew only the old
+  // spelling would go quietly blind to a configure inserted here.
+  assert.doesNotMatch(between, /\brun\(|\bcmakeConfigure\(|buildHostTjsc\(/,
     'nothing may run between the premise check and the tjsc selection — a tree that cannot '
     + 'regenerate should say so first, not after a full host qjs build');
   // NOT in the opt-out branch: there, compiling the committed arrays is the

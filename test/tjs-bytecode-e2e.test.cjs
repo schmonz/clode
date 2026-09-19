@@ -143,6 +143,11 @@ function extractFunction(src, name) {
 function loadBuildHostTjsc(run, jobs) {
   const src = [
     extractFunction(buildTjsSrc, 'dropStaleCmakeCache'),
+    // cmakeConfigure: buildHostTjsc configures through it (it echoes the argv first), so it
+    // must be lifted in too. Lifted, NOT stubbed as `(a) => run('cmake', a)` -- a stub here
+    // would be a second copy of the thing under test, and the next behavior added to the
+    // real one (the argv echo was the first) would silently not be exercised.
+    extractFunction(buildTjsSrc, 'cmakeConfigure'),
     extractFunction(buildTjsSrc, 'buildHostTjsc'),
   ].join('\n');
   // eslint-disable-next-line no-new-func

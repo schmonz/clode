@@ -256,10 +256,19 @@ const runOut = (cmd, args, opts = {}) =>
 // the regen re-configure), so this is at most four extra lines next to thousands of compile
 // lines. The BUILD steps (`cmake --build`) deliberately still go through run() -- their argv
 // is three constant flags and says nothing a reader does not already know.
-const cmakeConfigure = (args, opts = {}) => {
+// A `function`, not a const arrow, ON PURPOSE: test/tjs-bytecode-e2e.test.cjs runs the REAL
+// buildHostTjsc by extracting it from this file's source and eval'ing it (rather than
+// reimplementing its cmake args, which is how a second copy drifts). That extractor finds
+// `function <name>(`, so a helper buildHostTjsc calls has to be declared this way to be
+// liftable with it.
+// NO DEFAULTED-OBJECT PARAMETER (`opts = {}`), also on purpose and also for the extractor:
+// it brace-counts from the first `{` it sees, which a default `{}` in the parameter list
+// would be -- the extraction then stops mid-signature and eval'ing it is a SyntaxError.
+// Measured, not guessed: that is exactly how this failed once. No caller passes options.
+function cmakeConfigure(args) {
   console.error(`build-tjs: cmake configure argv: ${args.join(' ')}`);
-  return run('cmake', args, opts);
-};
+  return run('cmake', args);
+}
 
 function pinFields(component) {
   const line = fs.readFileSync(path.join(repo, 'spike/quickjs/PINS.md'), 'utf8')
