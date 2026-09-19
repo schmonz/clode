@@ -7825,3 +7825,87 @@ None was a behavioural defect. All three were things still TRUE but no longer CH
   correct under Node — a Node-vs-tjs divergence with no gate.
 - `docs/dev/windows-dev-setup.md` still names the old file (untracked, but a live how-to for the
   one platform this phase admits is unexercised).
+
+## ★ Phase 4c-2 SHIPPED — bytecode regeneration is a build rule (2026-09-19)
+
+Spec §11 acceptances 2 and 3, both met. **The defect that motivated the whole phase-4 effort is
+fixed**: patching txiki JS under `src/js/**` had NO EFFECT, because cmake compiled the committed
+`src/bundles/c/**` bytecode arrays and nothing regenerated them. A correct `AbortSignal.timeout`
+patch plus its C binding built clean and changed nothing, with no failure signal anywhere.
+
+Measured cause: txiki's **Makefile** declares the `.js -> .c` rule once per bundle; its
+**CMakeLists does not** (plain sources; `tjsc` is `EXCLUDE_FROM_ALL`). Upstream regenerates
+through make and ships the `.c` pre-built. We drive cmake directly and bypassed the only thing
+that would have regenerated them.
+
+Demonstrated per-file:
+
+    no-change rebuild      -> 0 tjsc lines
+    touch one src/js/**    -> exactly that bundle, then builtins.c
+    src/bundles/c/internal/path.c  bcc0b52a…b76 (pristine, and after a no-op rebuild)
+                                -> fc5282e3…5f0 (after editing the .js)   CLODE_TJS_REGEN unset
+
+The staleness tripwire is **deleted**, not disabled: `bundleFingerprint`, `bytecodeIsFresh`,
+`assertBytecodeFresh` are gone and nothing compares anything. `fingerprintTrailer` survives as a
+hash-free provenance stamp only, because `ci-guest-bake.sh` greps for the marker.
+
+### The lesson, which cost two review rounds to learn
+
+**Deleting a check is only safe once the thing that makes it unnecessary is itself GUARANTEED.**
+"A declarative graph makes staleness inexpressible" is true — *when the rules are present*. Nothing
+verified that premise, so a warm pre-4c-2 vendor tree plus `--build-only` would have shipped
+PRISTINE UPSTREAM BYTECODE at exit 0: the original defect restored, on one path, with the very
+mechanism that used to catch it having just been removed. Closed by `assertBytecodeRulesPresent`,
+demonstrated on the real tree with a before/after.
+
+### TO DETECT A TORN COPY, THE EVIDENCE MUST COME FROM ONE READ OF ONE FILE
+
+The e2e test CoW-copies the shared vendor checkout. `resetCheckoutToPristine` does
+`git checkout -- .` + `git clean -fd` before `applyPatches` re-adds patch-created files, so a copy
+landing in that window is half-applied. There are **two** torn states, not one:
+
+- **W1** `CMakeLists.txt` references `src/mod_fs_sync.c` while it is absent.
+- **W2** `CMakeLists.txt` is *pristine* — every source it lists exists, so a consistency check
+  passes — but carries no rules block. **W2 is wider** (reset through 45 fixups, vs W1 closing at
+  the first patch) and used to FAIL with a message blaming a reverted fixup call in a tree where
+  nothing was reverted.
+
+The first fix for W2 used a **cross-file** marker and failed run 1 of its own three-suite
+verification, on a copy with pristine `CMakeLists.txt` and an already-patched `src/qjsc.c`.
+`copyCheckout` is not a snapshot: **two files in one copy can come from two different instants**,
+so cross-file evidence is worthless for detecting a tear. The shipped guard is file-local —
+`fixupTjsCmakeWinStack` writes its marker into the SAME `CMakeLists.txt` on the very next call
+after the bytecode fixup, so it cannot appear without the rules block. One read, one string.
+
+Found only by running three full suites. The wrong fix passed twice.
+
+### Three unverified claims corrected by measurement
+
+- A backslash in a cmake `-D` is NOT eaten as escapes on cmake 4.3.3. The real hazard is a
+  `DEPENDS` cmake cannot resolve, which errors nowhere and silently drops the rebuild edge. The
+  comments record the measured mechanism, not the assumed one. Paths are still normalised to
+  forward slashes (defensive; unproven on Windows).
+- The `--regen-only` path forms no `-DCLODE_HOST_TJSC` at all, so "fix it there too" was wrong;
+  every occurrence is gated instead.
+- The e2e cost figure was wrong four times before becoming a measured band (~32s standalone n=3,
+  45-80s in-suite n=11).
+
+### OPEN — filed, not fixed
+
+- **The declarative graph stops at `src/bundles/js/**`.** Only 2 of 18 bundles go straight from
+  `src/js/**` to tjsc; the other 16 pass through esbuild, and that edge is still imperative.
+  `--build-only` does not re-esbuild, so on that path editing `src/js/stdlib/uuid.js` still yields
+  exit 0 and an unchanged engine — the original defect's shape, for 16/18 bundles. Not reachable
+  by any CI leg (guests receive a synced tree). **The acceptance test edits one of the two bundles
+  that BYPASS the gap**, which is stated in its header. Declaring the esbuild edge is 4c-3.
+- Two emitters share the bundle-pair table but not the tjsc argv; now gated by an equality check,
+  but they remain two emitters.
+- Regeneration is mtime-driven now; the content-level backstop is gone. On a 1-second-granularity
+  filesystem (HFS+, the exercised darwin-x64 floor host) a `.c` and `.js` written in the same
+  second could compare as "not newer". Low probability, but "staleness is inexpressible" holds
+  only to the extent mtime comparison is sound.
+- The acceptance never runs in CI (no warm vendor checkout on runners). `node-shim-timer-unref`
+  is the real CI backstop for the same property; the header names it.
+- `test/build-tjs-no-node.test.cjs` shares the copy-from-shared-source exposure but is
+  structurally immune (its `--source-only` re-patches the copy unconditionally). Residual: a
+  `.git/index.lock` carried into the copy, which fails loudly.
