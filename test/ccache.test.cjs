@@ -15,7 +15,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const {
   ccacheLauncher, applyCcacheArg, ccacheOptedOut,
-  ccacheDecision, describeCcacheDecision, applyCcacheDecision,
+  ccacheDecision, describeCcacheDecision, applyCcacheDecision, compilerFromCmakeArgs,
 } = require('../scripts/ccache-launcher.cjs');
 const { findTool } = require('../libexec/clode-hosttools.cjs');
 const { defineGuard, guardTests } = require('./guard.cjs');
@@ -96,14 +96,14 @@ test('opt-out: CLODE_TJS_CCACHE=0 suppresses the probe even when a launcher woul
 // byte-identical to the pre-feature ones). So the empty `-D` rides the EXPLICIT OPT-OUT
 // branch only -- never the tool-absent branch. Both halves are asserted below.
 test('opt-out: the launcher is explicitly CLEARED, not merely left unset', () => {
-  const out = applyCcacheArg([...BASE_ARGS], null, { optedOut: true });
+  const out = applyCcacheArg([...BASE_ARGS], null, { clear: true });
   assert.deepStrictEqual(out, [...BASE_ARGS, '-DCMAKE_C_COMPILER_LAUNCHER='],
     'CLODE_TJS_CCACHE=0 must push an EMPTY -DCMAKE_C_COMPILER_LAUNCHER: pushing nothing is a '
     + 'no-op against a build dir whose CMakeCache already carries the launcher');
 });
 
 test('absent: the tool-absent branch does NOT clear (task 1\'s negative property survives the fix)', () => {
-  assert.deepStrictEqual(applyCcacheArg([...BASE_ARGS], null, { optedOut: false }), BASE_ARGS,
+  assert.deepStrictEqual(applyCcacheArg([...BASE_ARGS], null, { clear: false }), BASE_ARGS,
     'a leg that simply has no ccache must still see byte-identical cmake args -- only an '
     + 'EXPLICIT opt-out may add a clearing flag');
   assert.deepStrictEqual(applyCcacheArg([...BASE_ARGS], null), BASE_ARGS,
@@ -166,7 +166,7 @@ test('decision: absence is a state of its own, and it must NOT clear', () => {
 
 test('log line: ENABLED names the resolved launcher path', () => {
   assert.strictEqual(describeCcacheDecision(ccacheDecision(ENABLED)),
-    'build-tjs: ccache: ENABLED launcher=/fake/bin/ccache (found on PATH)');
+    'build-tjs: ccache: ENABLED launcher=/fake/bin/ccache compiler=cmake-default (found on PATH)');
 });
 
 test('log line: the opt-out names the env var that caused it', () => {
@@ -211,6 +211,135 @@ test('apply: the absent decision leaves cmakeArgs byte-identical', () => {
 test('apply: the opt-out decision pushes the EMPTY clearing value', () => {
   assert.deepStrictEqual(applyCcacheDecision([...BASE_ARGS], ccacheDecision(OPTED_OUT)),
     [...BASE_ARGS, '-DCMAKE_C_COMPILER_LAUNCHER=']);
+});
+
+// ---- TASK 2: ccache MUST NOT DRIVE A COMPILER NOBODY HAS PROVEN IT WITH -------------
+//
+// THE LIVE RISK, not a hypothetical: the windows-amd64 engine leg builds with MSVC's
+// cl.exe (scripts/tjs-legs.mjs `msvc:true`; build-tjs.cjs pushes -DCMAKE_C_COMPILER=cl),
+// C:\Strawberry\c\bin is on its PATH, and ccache.EXE is in that directory. ccache's MSVC
+// support is partial -- it is a documented caveat of the tool, and this repo has never
+// verified it -- and the Windows legs are precisely the ones where phase 4c3's object-grain
+// reproducibility harness is SKIPPED (host leg only). Least verification, most risk, on a
+// hard publisher. So the launcher declines that compiler until someone proves otherwise.
+//
+// HOW THE CODE KNOWS, and why it is not `process.platform === 'win32'`: it reads the
+// compiler out of THE CMAKE ARGUMENTS THE BUILD ITSELF JUST ASSEMBLED. That is the same
+// signal that selects the compiler -- build-tjs.cjs pushes -DCMAKE_C_COMPILER=cl for the
+// MSVC path and -DCMAKE_C_COMPILER=gcc for the (retired, opt-in) mingw path -- so a Windows
+// host building with gcc keeps its cache, and the rule reads as "this compiler is one ccache
+// cannot be trusted with here", one implementation for all 42 legs, not "if Windows".
+const CL_ARGS = Object.freeze([...BASE_ARGS, '-G', 'Ninja', '-DCMAKE_C_COMPILER=cl',
+  '-DCMAKE_CXX_COMPILER=cl']);
+const GCC_ARGS = Object.freeze([...BASE_ARGS, '-G', 'Ninja', '-DCMAKE_C_COMPILER=gcc',
+  '-DCMAKE_CXX_COMPILER=g++']);
+const FOUND = () => '/fake/bin/ccache';
+
+test('the compiler is read out of the cmake args the build assembled, not out of the platform', () => {
+  assert.strictEqual(compilerFromCmakeArgs(CL_ARGS), 'cl');
+  assert.strictEqual(compilerFromCmakeArgs(GCC_ARGS), 'gcc');
+  assert.strictEqual(compilerFromCmakeArgs([...BASE_ARGS]), '',
+    'a build that names no compiler leaves the choice to cmake, and this function must say '
+    + 'so rather than guessing');
+});
+
+test('the compiler name is normalised: a full path, a .exe, and case all resolve to one token', () => {
+  assert.strictEqual(compilerFromCmakeArgs(['-DCMAKE_C_COMPILER=C:/Program Files/MSVC/bin/CL.EXE']), 'cl');
+  assert.strictEqual(compilerFromCmakeArgs(['-DCMAKE_C_COMPILER=/usr/bin/gcc-14']), 'gcc-14');
+  assert.strictEqual(compilerFromCmakeArgs(['-DCMAKE_C_COMPILER=clang-cl.exe']), 'clang-cl');
+});
+
+test('the LAST -DCMAKE_C_COMPILER wins, the way cmake itself resolves a repeated -D', () => {
+  assert.strictEqual(compilerFromCmakeArgs(['-DCMAKE_C_COMPILER=gcc', '-DCMAKE_C_COMPILER=cl']), 'cl');
+});
+
+test('declined: a found launcher is NOT enabled when the compiler is cl', () => {
+  const d = ccacheDecision({ env: {}, findToolFn: FOUND, compiler: 'cl' });
+  assert.strictEqual(d.state, 'declined');
+  assert.strictEqual(d.launcher, null,
+    'the launcher must not reach cmake: a wrong cache hit on a hard publisher ships a wrong '
+    + 'binary, and no harness on that leg would notice');
+  assert.strictEqual(d.compiler, 'cl');
+});
+
+test('declined: the reason is a VALUE the log can print, not a comment', () => {
+  const d = ccacheDecision({ env: {}, findToolFn: FOUND, compiler: 'cl' });
+  assert.match(d.reason, /MSVC/, 'the decision must carry its own reason');
+  assert.match(d.reason, /object-grain|reproducibility/,
+    'and it must name the missing verification, not just the compiler');
+});
+
+test('declined: it still CLEARS, because the leg may already have configured WITH ccache', () => {
+  // This is the live case, not a corner: the windows-amd64 build dir can come back warm
+  // (cmake persists CMAKE_C_COMPILER_LAUNCHER, build-tjs.cjs reuses build dirs), and it was
+  // configured while the launcher was silently enabled. Declining without clearing would
+  // leave ccache driving cl on exactly the leg this fix exists for.
+  assert.strictEqual(ccacheDecision({ env: {}, findToolFn: FOUND, compiler: 'cl' }).clear, true);
+  assert.deepStrictEqual(
+    applyCcacheDecision([...CL_ARGS], ccacheDecision({ env: {}, findToolFn: FOUND, compiler: 'cl' })),
+    [...CL_ARGS, '-DCMAKE_C_COMPILER_LAUNCHER='],
+  );
+});
+
+test('an untrusted compiler does NOT resurrect a flag on a box with no ccache at all', () => {
+  // TASK 1'S NEGATIVE PROPERTY OUTRANKS THE DECLINE. A leg with no ccache installed must
+  // still produce cmake args byte-identical to the pre-feature ones -- including the MSVC
+  // legs, whose argv would otherwise change for a tool they do not have.
+  const d = ccacheDecision({ env: { PATH: BARE_PATH }, findToolFn: findTool, compiler: 'cl' });
+  assert.strictEqual(d.state, 'absent', 'absence is decided BEFORE compiler trust');
+  assert.strictEqual(d.clear, false);
+  assert.deepStrictEqual(applyCcacheDecision([...CL_ARGS], d), CL_ARGS);
+});
+
+test('the decline is keyed on the COMPILER, not on Windows: a gcc leg keeps its cache', () => {
+  // The mingw path (CLODE_TJS_WIN_MINGW=1) is a Windows build with gcc. ccache has driven
+  // gcc for twenty years; nothing about the host OS is the problem here.
+  const d = ccacheDecision({ env: {}, findToolFn: FOUND, compiler: compilerFromCmakeArgs(GCC_ARGS) });
+  assert.strictEqual(d.state, 'enabled');
+  assert.strictEqual(d.launcher, '/fake/bin/ccache');
+});
+
+test('a build that names no compiler is trusted: every native gcc/clang leg is unaffected', () => {
+  const d = ccacheDecision({ env: {}, findToolFn: FOUND, compiler: compilerFromCmakeArgs([...BASE_ARGS]) });
+  assert.strictEqual(d.state, 'enabled');
+});
+
+test('log line: ENABLED names the compiler ccache is driving, not just the launcher', () => {
+  assert.strictEqual(
+    describeCcacheDecision(ccacheDecision({ env: {}, findToolFn: FOUND, compiler: 'gcc' })),
+    'build-tjs: ccache: ENABLED launcher=/fake/bin/ccache compiler=gcc (found on PATH)');
+  assert.strictEqual(
+    describeCcacheDecision(ccacheDecision({ env: {}, findToolFn: FOUND, compiler: '' })),
+    'build-tjs: ccache: ENABLED launcher=/fake/bin/ccache compiler=cmake-default (found on PATH)');
+});
+
+test('log line: the decline names the compiler, the launcher it refused, and why', () => {
+  const line = describeCcacheDecision(ccacheDecision({ env: {}, findToolFn: FOUND, compiler: 'cl' }));
+  assert.ok(line.startsWith('build-tjs: ccache: DISABLED found=/fake/bin/ccache compiler=cl (declined:'),
+    `the decline must name what it refused and for which compiler; got: ${line}`);
+  assert.match(line, /MSVC/);
+  assert.match(line, /^[\x20-\x7e]+$/, 'ASCII, so it survives the Windows console it will be read in');
+  assert.ok(!line.includes('\n'), 'one line');
+});
+
+test('PROOF: a decision that ignores the compiler fails the decline check', () => {
+  // The pre-fix implementation, verbatim in behavior: found on PATH means enabled.
+  const ignoresCompiler = ({ findToolFn }) => ({ state: 'enabled', launcher: findToolFn('ccache'), clear: false });
+  assert.throws(() => {
+    assert.strictEqual(ignoresCompiler({ findToolFn: FOUND, compiler: 'cl' }).launcher, null);
+  }, 'an implementation that enables ccache for cl must fail the decline check, or that check '
+    + 'is not what stopped it');
+});
+
+test('PROOF: reading the compiler off process.platform would misjudge the mingw leg', () => {
+  // Why the platform signal was rejected, made concrete rather than argued in a comment: on
+  // the SAME win32 host, the two supported compilers want opposite answers, and only the
+  // cmake-args signal can tell them apart.
+  const byPlatform = (platform) => (platform === 'win32' ? 'cl' : 'cc');
+  assert.strictEqual(ccacheDecision({ env: {}, findToolFn: FOUND, compiler: byPlatform('win32') }).state,
+    'declined', 'the platform signal declines the mingw leg too');
+  assert.strictEqual(ccacheDecision({ env: {}, findToolFn: FOUND, compiler: compilerFromCmakeArgs(GCC_ARGS) }).state,
+    'enabled', 'the cmake-args signal does not — this is the difference the fix buys');
 });
 
 // The CALL SITE must hand applyCcacheArg BOTH halves, or the clearing flag never reaches a
@@ -337,6 +466,57 @@ const configureArgvGuard = defineGuard({
 });
 guardTests(configureArgvGuard);
 
+// ---- the decline is only real if the CALL SITE tells the decision which compiler -------
+//
+// ccacheDecision() defaults `compiler` to '' (trusted), which is the right default for a
+// caller that genuinely does not know -- and exactly the wrong thing to leave at the one
+// call site that DOES know. A build-tjs.cjs that called ccacheDecision() with no argument
+// would pass every unit test above and still enable ccache for cl on the windows-amd64
+// publisher. Hence a guard, text-scanned (requiring that file runs an engine build).
+//
+// THE SECOND FACT IS ORDER, and it is the subtle one: `compilerFromCmakeArgs(cmakeArgs)`
+// reads an array that build-tjs.cjs is still assembling, so it only sees
+// `-DCMAKE_C_COMPILER=cl` if the compiler-selection block has already run. Move the ccache
+// block one page up and the decline silently stops firing -- no error, no red test anywhere
+// else, just a Windows publisher quietly back on a cache nobody has verified.
+//
+// PURE: `src` is the already-read scripts/build-tjs.cjs text.
+function scanCompilerSignalWiring({ src }) {
+  const findings = [];
+  let examined = 0;
+
+  examined++;
+  if (!/^const ccache = ccacheDecision\(\{ compiler: compilerFromCmakeArgs\(cmakeArgs\) \}\);$/m.test(src)) {
+    findings.push('scripts/build-tjs.cjs must tell ccacheDecision() which compiler this build '
+      + 'selected, or the untrusted-compiler decline never fires and ccache goes on launching '
+      + 'cl.exe on the windows-amd64 hard publisher');
+  }
+
+  examined++;
+  const compilerPush = src.indexOf("'-DCMAKE_C_COMPILER=cl'");
+  const decision = src.indexOf('const ccache = ccacheDecision(');
+  if (compilerPush === -1 || decision === -1 || compilerPush > decision) {
+    findings.push('the ccache decision must come AFTER the compiler-selection push: '
+      + 'compilerFromCmakeArgs() reads the cmakeArgs array as it stands at that moment, so a '
+      + 'decision taken earlier sees no compiler and silently trusts it');
+  }
+
+  return { findings, examined };
+}
+
+const compilerSignalGuard = defineGuard({
+  name: 'ccache-declines-untrusted-compiler',
+  read: () => ({ src: fs.readFileSync(path.join(repo, 'scripts/build-tjs.cjs'), 'utf8') }),
+  scan: scanCompilerSignalWiring,
+  floor: 2,
+  // The exact pre-fix shape: the decision taken with no compiler at all, before the compiler
+  // was even chosen. Violates both facts, which is why it models the real bug and not one of
+  // them.
+  control: () => ({ src: 'const ccache = ccacheDecision();\n'
+    + "cmakeArgs.push('-G', 'Ninja', '-DCMAKE_C_COMPILER=cl', '-DCMAKE_CXX_COMPILER=cl');\n" }),
+});
+guardTests(compilerSignalGuard);
+
 // The property at the grain it actually bites: a REAL cmake build dir, already configured
 // WITH the launcher, reconfigured through the opt-out's own argument list. This is the test
 // that was missing; a unit test over applyCcacheArg alone cannot see a CMakeCache.
@@ -364,14 +544,14 @@ test('opt-out: a build dir already configured WITH ccache stops using it after a
   };
 
   // 1. the normal state of every build dir on a box with ccache: configured WITH it.
-  configure(applyCcacheArg([], '/fake/bin/ccache', { optedOut: false }));
+  configure(applyCcacheArg([], '/fake/bin/ccache', { clear: false }));
   assert.strictEqual(cached(), '/fake/bin/ccache', 'setup: the launcher should be cached here');
 
   // 2. now the user sets CLODE_TJS_CCACHE=0 and rebuilds. build-tjs.cjs reuses this build
   //    dir, so THIS is the argument list cmake gets.
   const optedOutArgs = applyCcacheArg([], ccacheLauncher({
     env: { CLODE_TJS_CCACHE: '0', PATH: process.env.PATH }, findToolFn: findTool,
-  }), { optedOut: ccacheOptedOut({ CLODE_TJS_CCACHE: '0' }) });
+  }), { clear: ccacheOptedOut({ CLODE_TJS_CCACHE: '0' }) });
   configure(optedOutArgs);
   assert.strictEqual(cached(), '',
     'CLODE_TJS_CCACHE=0 left the launcher in CMakeCache.txt -- the documented opt-out does '

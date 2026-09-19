@@ -12,11 +12,11 @@
 // caller opted out), and applyCcacheArg() leaves its input completely alone when handed
 // null: no new flag, no reordering, nothing a diff would show.
 //
-// WHY THIS IS DEFERRED TO TASK 2, NOT DONE HERE: a cache that returns the wrong object file
-// for the compiler invocation it was keyed on is worse than no cache at all, and this
-// project ships binaries built from 42 different platform legs, several of them
-// cross-compiled from one host. Task 1 only wires the launcher through when the tool is
-// genuinely present; Task 2 installs it and proves the key space is safe.
+// A cache that returns the wrong object file for the compiler invocation it was keyed on is
+// worse than no cache at all, and this project ships binaries built from 42 platform legs,
+// several cross-compiled from one host. Task 2 installed a real ccache and proved the key
+// space is safe FOR THE HOST LEG ONLY (gcc/clang, darwin/arm64). That scope limit is now
+// enforced rather than merely documented: see UNTRUSTED_COMPILERS below.
 const { findTool } = require('../libexec/clode-hosttools.cjs');
 
 // WHY THIS OPTS IN ON MERE PRESENCE -- AND THE PREMISE THAT TURNED OUT TO BE FALSE.
@@ -30,10 +30,12 @@ const { findTool } = require('../libexec/clode-hosttools.cjs');
 // `actual: 'C:\Strawberry\c\bin\ccache.EXE'`).
 //
 // So the wiring has been LIVE on a Windows release leg, driving MSVC's cl.exe, with no way
-// to tell from the log -- which never echoed the cmake `-D` arguments at all. The first fix
-// is here: ccacheDecision()/describeCcacheDecision() make the decision a LOGGED, greppable
-// line on every build, whichever way it went, so the next time this premise is wrong the
-// log says so. Cost on the legs where it stays enabled is bounded -- an all-miss run is ~5-10% over a no-cache build -- and the real CI-level cache
+// to tell from the log -- which never echoed the cmake `-D` arguments at all. Two fixes, both
+// here and both tested: ccacheDecision()/describeCcacheDecision() make the decision a LOGGED,
+// greppable line on every build, whichever way it went, so the next time this premise is
+// wrong the log says so; and UNTRUSTED_COMPILERS declines the launcher outright for cl, the
+// compiler ccache has not been proven with here. Cost on the legs where it stays enabled is
+// bounded -- an all-miss run is ~5-10% over a no-cache build -- and the real CI-level cache
 // is the recipe-keyed actions/cache in .github/actions/build-leg/action.yml, which skips
 // the compile ENTIRELY on a hit.
 //
@@ -62,8 +64,14 @@ function ccacheLauncher({ env = process.env, findToolFn = findTool } = {}) {
 // outcomes, not two — the middle one was a review finding (2026-09-19), not a refinement:
 //
 //   launcher found       -> push `-DCMAKE_C_COMPILER_LAUNCHER=<path>`
-//   EXPLICIT opt-out     -> push `-DCMAKE_C_COMPILER_LAUNCHER=` (EMPTY, clearing)
+//   found but REFUSED    -> push `-DCMAKE_C_COMPILER_LAUNCHER=` (EMPTY, clearing)
 //   tool simply absent   -> push NOTHING: same array, same length, same bytes
+//
+// `clear` was called `optedOut` until the untrusted-compiler decline landed: there are now
+// TWO states that found something and refuse to use it (CLODE_TJS_CCACHE=0, and a compiler
+// ccache cannot be trusted with), and both have the same cmake consequence -- undo whatever
+// a previous configure of this build dir left in CMakeCache.txt. The name describes the
+// consequence, so a third such state needs no third name.
 //
 // Why the opt-out cannot just "push nothing": cmake PERSISTS every `-D` in CMakeCache.txt,
 // and scripts/build-tjs.cjs REUSES build dirs across runs (dropStaleCmakeCache only wipes
@@ -77,10 +85,64 @@ function ccacheLauncher({ env = process.env, findToolFn = findTool } = {}) {
 // line on all 42 legs, none of which have ccache — destroying task 1's headline negative
 // property ("a leg that has never heard of the tool builds byte-identically to before"). The
 // asymmetry is load-bearing, and both halves are asserted.
-function applyCcacheArg(cmakeArgs, ccachePath, { optedOut = false } = {}) {
+function applyCcacheArg(cmakeArgs, ccachePath, { clear = false } = {}) {
   if (ccachePath) cmakeArgs.push(`-DCMAKE_C_COMPILER_LAUNCHER=${ccachePath}`);
-  else if (optedOut) cmakeArgs.push('-DCMAKE_C_COMPILER_LAUNCHER=');
+  else if (clear) cmakeArgs.push('-DCMAKE_C_COMPILER_LAUNCHER=');
   return cmakeArgs;
+}
+
+// ---- which compiler ccache may drive, and how this code knows which one it IS ---------
+//
+// THE COMPILER IS READ OUT OF THE CMAKE ARGUMENTS THE BUILD ITSELF ASSEMBLED. That is the
+// same signal that SELECTS the compiler: scripts/build-tjs.cjs pushes
+// `-DCMAKE_C_COMPILER=cl` on the native MSVC path (the windows-amd64/arm64 hard publishers,
+// scripts/tjs-legs.mjs `msvc:true`) and `-DCMAKE_C_COMPILER=gcc` on the opt-in mingw path,
+// both alongside a forced `-G Ninja`. Reading it back is therefore not a second, parallel
+// notion of "what are we building with" that could drift from the first -- it is the first.
+//
+// WHY NOT process.platform: a win32 HOST is not an MSVC BUILD. The same host builds with
+// gcc under CLODE_TJS_WIN_MINGW=1, and the platform signal cannot tell those apart, so it
+// would take the cache away from a compiler ccache has driven correctly for twenty years.
+// Expressed as "this compiler is one ccache cannot be trusted with here" it is also ONE
+// implementation for all 42 legs rather than an `if (windows)` branch -- the repo's
+// solve-it-portably rule. Proven by a test that runs both signals against the mingw leg.
+//
+// THE LIMIT OF THE SIGNAL, stated rather than papered over: when nothing pushes
+// -DCMAKE_C_COMPILER, cmake picks the compiler itself and this code cannot name it (it
+// reports '' / 'cmake-default' and trusts it). Every leg that reaches that branch is a
+// gcc/clang leg today -- native POSIX, or a cross toolchain file that sets the compiler
+// inside the file -- so the untrusted population is fully covered. A future toolchain file
+// that selected an MSVC-mode compiler from inside the file would NOT be caught here; the
+// log line says `compiler=cmake-default`, which is the string to grep for if that ever
+// happens. Parsing toolchain .cmake files to close that gap was rejected as a second,
+// drifting notion of compiler identity.
+const UNTRUSTED_COMPILERS = new Map([
+  ['cl', "ccache's MSVC support is partial and this repo has never verified it, and the legs "
+    + 'built with this compiler are exactly the ones where the phase 4c3 object-grain '
+    + 'reproducibility harness is skipped, so a wrong cache hit would ship unnoticed'],
+  // clang-cl is the same cl.exe command-line interface (the caveat is about the interface and
+  // its dependency reporting, not about the vendor), and it is equally unverified here.
+  ['clang-cl', "ccache's MSVC-mode (cl-compatible) support is partial and this repo has never "
+    + 'verified it, and the legs built with this compiler skip the object-grain '
+    + 'reproducibility harness that would catch a wrong cache hit'],
+]);
+
+// Pure. Returns the compiler's normalised name, or '' when the build names none.
+// Normalised to a bare lower-case basename without .exe, so an absolute
+// `C:/Program Files/.../CL.EXE` and a bare `cl` are the same fact. LAST occurrence wins,
+// which is how cmake itself resolves a repeated `-D`.
+function compilerFromCmakeArgs(cmakeArgs) {
+  const prefix = '-DCMAKE_C_COMPILER=';
+  const values = (cmakeArgs || []).filter((a) => typeof a === 'string' && a.startsWith(prefix));
+  if (values.length === 0) return '';
+  const raw = values[values.length - 1].slice(prefix.length);
+  const base = raw.split(/[\\/]/).pop() || '';
+  return base.toLowerCase().replace(/\.exe$/, '');
+}
+
+// Pure. The reason this compiler may not be launched through ccache here, or '' if it may.
+function untrustedCompilerReason(compiler) {
+  return UNTRUSTED_COMPILERS.get(String(compiler || '').toLowerCase()) || '';
 }
 
 // ---- the DECISION, as one value: what happened, and enough to say why -----------------
@@ -93,12 +155,23 @@ function applyCcacheArg(cmakeArgs, ccachePath, { optedOut = false } = {}) {
 //
 //   enabled    launcher found, and the compiler is one it may drive -> push the launcher
 //   opted-out  CLODE_TJS_CCACHE=0                                   -> push the EMPTY clear
+//   declined   found, but the compiler is one it may NOT drive       -> push the EMPTY clear
 //   absent     nothing named ccache on PATH                         -> push NOTHING
-function ccacheDecision({ env = process.env, findToolFn = findTool } = {}) {
-  if (ccacheOptedOut(env)) return { state: 'opted-out', launcher: null, clear: true };
+//
+// ORDER IS LOAD-BEARING: absence is decided BEFORE compiler trust. A leg with no ccache
+// installed must produce cmake args byte-identical to its pre-feature self, and that
+// includes the MSVC legs -- deciding trust first would push a clearing flag for a tool the
+// box does not even have, changing the command line on legs this feature never touched.
+function ccacheDecision({ env = process.env, findToolFn = findTool, compiler = '' } = {}) {
+  if (ccacheOptedOut(env)) return { state: 'opted-out', launcher: null, compiler, clear: true };
   const launcher = ccacheLauncher({ env, findToolFn });
-  if (!launcher) return { state: 'absent', launcher: null, clear: false };
-  return { state: 'enabled', launcher, clear: false };
+  if (!launcher) return { state: 'absent', launcher: null, compiler, clear: false };
+  const reason = untrustedCompilerReason(compiler);
+  // Declined, and the launcher is deliberately dropped to null rather than carried along:
+  // applyCcacheArg's ONE rule is "a launcher value means push it", and a decision that keeps
+  // a path it refuses to use is one careless edit away from using it.
+  if (reason) return { state: 'declined', launcher: null, found: launcher, compiler, clear: true, reason };
+  return { state: 'enabled', launcher, compiler, clear: false };
 }
 
 // The ONE line scripts/build-tjs.cjs prints on every build, before cmake is configured.
@@ -116,9 +189,19 @@ function ccacheDecision({ env = process.env, findToolFn = findTool } = {}) {
 // like "no ccache decision was made", which is the failure mode this whole mechanism exists
 // to prevent, and it would be introduced by the most likely future edit (adding a state).
 function describeCcacheDecision(decision) {
-  const { state, launcher } = decision;
+  const { state, launcher, compiler, reason } = decision;
+  // The compiler is ON the line because it is the fact nobody could establish from CI run
+  // 35468190935: which compiler ccache was launching. 'cmake-default' is honest about the
+  // one case this code genuinely does not know (see compilerFromCmakeArgs).
+  const named = compiler || 'cmake-default';
   if (state === 'enabled') {
-    return `build-tjs: ccache: ENABLED launcher=${launcher} (found on PATH)`;
+    return `build-tjs: ccache: ENABLED launcher=${launcher} compiler=${named} (found on PATH)`;
+  }
+  if (state === 'declined') {
+    // `found=`, not `launcher=`: naming the path it REFUSED to launch is the point, and the
+    // two must not read alike in a log that gets grepped for one of them.
+    return `build-tjs: ccache: DISABLED found=${decision.found} compiler=${named} `
+      + `(declined: ${reason})`;
   }
   if (state === 'opted-out') {
     return 'build-tjs: ccache: DISABLED (opted out: CLODE_TJS_CCACHE=0)';
@@ -135,10 +218,11 @@ function describeCcacheDecision(decision) {
 // because it is the same object. (Recomputing it here would let the log and the cmake
 // command line disagree — which is the class of defect this whole change is about.)
 function applyCcacheDecision(cmakeArgs, decision) {
-  return applyCcacheArg(cmakeArgs, decision.launcher, { optedOut: decision.clear });
+  return applyCcacheArg(cmakeArgs, decision.launcher, { clear: decision.clear });
 }
 
 module.exports = {
   ccacheLauncher, applyCcacheArg, ccacheOptedOut,
   ccacheDecision, describeCcacheDecision, applyCcacheDecision,
+  compilerFromCmakeArgs, untrustedCompilerReason,
 };

@@ -82,7 +82,8 @@ const crypto = require('node:crypto');
 const { resetCheckoutToPristine } = require('./tjs-source-reset.cjs');
 const { engineFloorCheckJs, OK_TOKEN } = require('./engine-api-floor.cjs');
 const { buildDepscan } = require('./build-depscan.cjs');
-const { ccacheDecision, describeCcacheDecision, applyCcacheDecision } = require('./ccache-launcher.cjs');
+const { ccacheDecision, describeCcacheDecision, applyCcacheDecision,
+  compilerFromCmakeArgs } = require('./ccache-launcher.cjs');
 const { tjsDir: platformTjsDir, tjsVendorParentDir } = require('./platform-tag.cjs'); // tjsDir aliased: this file has its own `tjsDir` (the source build dir)
 // The hermeticity verdict, defined once in a CJS sibling so the build and the
 // test suite run the SAME decision logic (test/guard.cjs needs a pure scan()
@@ -3692,7 +3693,18 @@ if (darwinPoll) {
 // Strawberry Perl, on the PATH of the windows-amd64 engine leg — and nobody could tell from
 // a CI log, because nothing in it named ccache OR the cmake flags. Decide once, log that
 // decision, apply that same object: the log and the cmake command line cannot disagree.
-const ccache = ccacheDecision();
+//
+// AND IT DECLINES A COMPILER IT HAS NOT BEEN PROVEN WITH. compilerFromCmakeArgs() reads back
+// the compiler THIS BUILD just selected -- `-DCMAKE_C_COMPILER=cl` on the MSVC publishers,
+// `gcc` on the opt-in mingw path -- and ccache refuses cl: its MSVC support is partial and
+// unverified here, and the Windows legs are exactly the ones where the object-grain
+// reproducibility harness is skipped. Not "if Windows": a mingw (gcc) build on the same host
+// keeps its cache.
+//
+// THIS BLOCK MUST STAY BELOW THE COMPILER-SELECTION PUSH ABOVE, because it reads cmakeArgs as
+// they stand right now; moved up, the decline silently stops firing. Guarded
+// (`ccache-declines-untrusted-compiler` in test/ccache.test.cjs), not merely commented.
+const ccache = ccacheDecision({ compiler: compilerFromCmakeArgs(cmakeArgs) });
 console.error(describeCcacheDecision(ccache));
 applyCcacheDecision(cmakeArgs, ccache);
 // Build hermeticity: keep cmake's find_*() out of third-party package-manager
