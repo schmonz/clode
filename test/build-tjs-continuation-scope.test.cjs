@@ -34,6 +34,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 const { stripComments } = require('./strip-comments.cjs');
 const { defineGuard, guardTests } = require('./guard.cjs');
@@ -51,11 +52,18 @@ const BUILD_TJS = path.join(REPO, 'scripts/build-tjs.cjs');
 // PHASE 4c-2b TASK 2: the presence check now has a currency check right behind it
 // (assertEsbuildInputsCurrent), which refuses outright when
 // src/bundles/js/.clode-inputs.json is absent — exactly what this fixture looked like
-// before this comment, and exactly what a pre-4c-2b tree looks like for real. An empty
-// per-bundle input list satisfies it without giving this fixture a real src/js/** to
-// hash: what this file verifies (module-load scope resolution) does not depend on the
-// manifest recording anything true, only on it existing so the block downstream of the
-// currency check is still reached.
+// before this comment, and exactly what a pre-4c-2b tree looks like for real. A single
+// fake input file per bundle, hashed for real, satisfies it without needing this
+// fixture's src/js/** to be anything but a placeholder: what this file verifies
+// (module-load scope resolution) does not depend on the recorded input being real
+// txiki source, only on the manifest being HONEST for it (one recorded input, hash
+// matching what is on disk) so the block downstream of the currency check is reached.
+//
+// PHASE 4c-2b FIX WAVE (whole-branch review, Minor 8): assertEsbuildInputsCurrent now
+// treats a bundle recorded with ZERO inputs as stale rather than current — an empty
+// `{}` map used to satisfy it for free, which is exactly the shortcut this fixture used
+// to take. A real (if fake) input file plus its real hash is what keeps this fixture
+// passing the stricter check while still not requiring a genuine esbuild run.
 function fakeCheckout(dir) {
   const tjs = path.join(dir, 'txiki.js');
   fs.mkdirSync(path.join(tjs, 'src/js/stdlib'), { recursive: true });
@@ -64,7 +72,12 @@ function fakeCheckout(dir) {
   const manifest = {};
   for (const b of ['polyfills', 'core', 'run-main', 'run-repl']) {
     fs.writeFileSync(path.join(tjs, `src/bundles/js/core/${b}.js`), '//\n');
-    manifest[`src/bundles/js/core/${b}.js`] = {};
+    const inputRel = `src/js/${b}-fake-input.js`;
+    const inputContent = `// fake input for ${b}\n`;
+    fs.writeFileSync(path.join(tjs, inputRel), inputContent);
+    manifest[`src/bundles/js/core/${b}.js`] = {
+      [inputRel]: crypto.createHash('sha256').update(inputContent).digest('hex'),
+    };
   }
   fs.writeFileSync(path.join(tjs, 'src/bundles/js/.clode-inputs.json'), JSON.stringify(manifest));
   return tjs;

@@ -3231,7 +3231,9 @@ function esbuildBundles(dir) {
   // other 16 pass through esbuild FIRST, and esbuild is a prebuilt PLATFORM BINARY (see
   // the buildOnly branch below) — a guest leg cannot exec the host's esbuild, so there can
   // be no cmake rule regenerating these there. The only thing `--build-only` CAN do is
-  // PROVE the bundles already on disk came from the src/js/** already on disk, and this
+  // PROVE the src/js/** inputs recorded for each bundle have not moved since the source
+  // phase read them (the src/bundles/js/** outputs themselves are never re-hashed, so this
+  // is evidence the inputs are unchanged, not a checksum of the bundle bytes) — and this
   // manifest — one sha256 per file esbuild actually read, per bundle — is that evidence.
   //
   // Recorded from esbuild's OWN --metafile, never a glob over src/js/**: esbuild follows
@@ -3290,8 +3292,11 @@ function ensureEsbuild(dir) {
 // a patch changed one input — and the presence check alone would pass it: the original
 // defect, moved one edge over, exit 0 and a stale engine. `--build-only` can never re-run
 // esbuild here (see the header above ensureEsbuild), so the only thing left to do is PROVE
-// what is on disk matches what was actually read, using esbuildBundles' own manifest
-// (ESBUILD_INPUTS_MANIFEST) as the evidence: re-hash every recorded input and compare.
+// the recorded INPUTS have not moved since the source phase read them, using esbuildBundles'
+// own manifest (ESBUILD_INPUTS_MANIFEST) as the evidence: re-hash every recorded input and
+// compare. NOTE what this does NOT prove: the src/bundles/js/** bytes on disk are never
+// re-hashed, so a truncated or torn-synced bundle whose inputs still match would pass. That
+// is a real gap (filed), not something this check's name or comments should claim to close.
 //
 // THE MANIFEST'S OWN ABSENCE is handled the same way assertBytecodeRulesPresent handles a
 // pre-4c-2 tree: REFUSE, not warn-and-proceed. A tree from before this phase (4c-2b) has no
@@ -3308,8 +3313,10 @@ function assertEsbuildInputsCurrent(tjsDir, expected) {
       + '  CAUSE: this tree was prepared by a source phase that predates the input-manifest '
       + 'fixup (phase 4c-2b), and --build-only deliberately never re-esbuilds to check on its '
       + 'own.\n'
-      + '  FIX: re-run the source phase over it — `node scripts/build-tjs.cjs --source-only` '
-      + '— or delete the checkout and let it be re-prepared.');
+      + '  FIX: on the host that prepared this tree, re-run the source phase — '
+      + '`node scripts/build-tjs.cjs --source-only` — or delete the checkout and let it be '
+      + 're-prepared. A --build-only guest (no outbound DNS, cannot clone) cannot run this '
+      + 'fix itself.');
   }
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   // A Set so one shared helper file changing does not repeat itself once per bundle that
@@ -3318,6 +3325,14 @@ function assertEsbuildInputsCurrent(tjsDir, expected) {
   for (const out of expected) {
     const inputs = manifest[out];
     if (!inputs) { stale.add(`${out} (bundle not recorded in the manifest)`); continue; }
+    // esbuildBundles can never emit a bundle with zero recorded inputs — every bundle
+    // records at least its own entry point. A `{}` value is not "nothing changed", it is
+    // the manifest never having been written honestly for this bundle (e.g. a hand-rolled
+    // fixture) — treat it as stale rather than letting an empty map pass for free.
+    if (Object.keys(inputs).length === 0) {
+      stale.add(`${out} (recorded with zero inputs, which esbuildBundles never emits)`);
+      continue;
+    }
     for (const inputRel of Object.keys(inputs)) {
       const inputAbs = path.join(tjsDir, inputRel);
       if (!fs.existsSync(inputAbs)) { stale.add(`${inputRel} (recorded input, now missing)`); continue; }
@@ -3327,13 +3342,18 @@ function assertEsbuildInputsCurrent(tjsDir, expected) {
   }
   if (stale.size) {
     const named = [...stale];
-    throw new Error(`--build-only: ${named.length} src/js/** input(s) changed since the `
+    // "recorded input(s)", not "src/js/** input(s)": the recorded set also includes
+    // node_modules/** (an imported package like uuid) and package.json, so naming only
+    // src/js/** points a reader at the wrong directory for some failures.
+    throw new Error(`--build-only: ${named.length} recorded input(s) changed since the `
       + `esbuilt bundles on disk were built from them: ${named.slice(0, 5).join(', ')}`
       + `${named.length > 5 ? ' ...' : ''}\n`
       + '  CAUSE: the bundles under src/bundles/js/** were esbuilt from DIFFERENT source '
       + 'bytes than the ones on disk now — a patch landed since the last source phase, or a '
       + 'stale tree/manifest pair was reused.\n'
-      + '  FIX: re-run the source phase — `node scripts/build-tjs.cjs --source-only`.');
+      + '  FIX: on the host that prepared this tree, re-run the source phase — '
+      + '`node scripts/build-tjs.cjs --source-only`. A --build-only guest (no outbound DNS, '
+      + 'cannot clone) cannot run this fix itself.');
   }
 }
 if (buildOnly) {
@@ -3894,8 +3914,10 @@ function assertBytecodeRulesPresent(tjsDir) {
     + '  CAUSE: this tree was prepared by a source phase that predates the '
     + 'bytecode-rule fixup (phase 4c-2), and --build-only deliberately never '
     + 're-runs the fixups.\n'
-    + '  FIX: re-run the source phase over it — `node scripts/build-tjs.cjs '
-    + '--source-only` — or delete the checkout and let it be re-prepared.');
+    + '  FIX: on the host that prepared this tree, re-run the source phase — '
+    + '`node scripts/build-tjs.cjs --source-only` — or delete the checkout and let it be '
+    + 're-prepared. A --build-only guest (no outbound DNS, cannot clone) cannot run this '
+    + 'fix itself.');
 }
 
 // ---- bytecode regen: the DEFAULT, not opt-in (2026-08-06) -----------------

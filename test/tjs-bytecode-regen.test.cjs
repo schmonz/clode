@@ -363,8 +363,12 @@ test('build-tjs: PROOF — a tree WITHOUT the rules throws instead of building p
   assert.ok(err, 'a tree with no CLODE_BYTECODE_RULES block must throw, and did not — '
     + 'that silence is exactly the defect this phase exists to end');
   assert.match(err.message, /no CLODE_BYTECODE_RULES block/);
-  assert.match(err.message, /FIX: re-run the source phase/,
+  assert.match(err.message, /FIX: on the host that prepared this tree, re-run the source phase/,
     'the error must name the remedy: a reader hitting this has a warm tree, not a broken repo');
+  // Whole-branch review, I3: this fires on --build-only too (the CAUSE line above says
+  // so), and a guest has no outbound DNS to clone with — the remedy must say WHERE to
+  // run it, not just what to run.
+  assert.match(err.message, /guest \(no outbound DNS, cannot clone\) cannot run this fix itself/);
   console.log(`PROOF captured rejection: ${err.message.split('\n')[0]}`);
 });
 

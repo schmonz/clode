@@ -255,6 +255,68 @@ so the property has both a fast unit-level proof and a real-checkout demonstrati
 `--build-only`, not the imperative esbuild step itself. Guests still need no esbuild
 binary; nothing in `libexec/` changed.
 
+**Fix wave, whole-branch review (2026-09-19).** One Critical: nothing gated the CALL
+SITE (`scripts/build-tjs.cjs:3357` at review time). All four task-2 tests extract
+`assertEsbuildInputsCurrent` and exercise it in isolation, so deleting the call left the
+whole suite green — literally what the reviewer did by hand to demonstrate the defect.
+Fixed the same way `test/tjs-bytecode-regen.test.cjs:376` already covers the sibling
+(`assertBytecodeRulesPresent`) call site: a new test in `test/esbuild-edge.test.cjs`
+asserts the literal call text `\n  assertEsbuildInputsCurrent(tjsDir, expected);`, and
+also asserts the ORDERING the code comment above it promises (presence, then currency),
+plus that nothing re-esbuilds in between and that the call is not spilled into the
+`else { esbuildBundles(...) }` branch. Red proof: commenting out the call line made only
+that new test fail (`assertEsbuildInputsCurrent is never called from --build-only`);
+every fixture-level test stayed green, confirming the hole the review found. Restored
+immediately after.
+
+Also from that review: both `assertEsbuildInputsCurrent` error messages and
+`assertBytecodeRulesPresent`'s now say **"on the host that prepared this tree"** in their
+FIX line and note a `--build-only` guest (no outbound DNS, cannot clone) cannot run the
+named remedy itself — the guest is exactly where these errors fire unattended, and the
+un-qualified wording pointed a reader at a command that fails differently (a clone
+failure) inside the guest. A vacuous `{"<bundle>": {}}` manifest entry (Minor 8: esbuildBundles
+can never emit zero recorded inputs for a bundle) and the "src/js/\*\* input(s) changed"
+wording (Minor 9: the recorded set also includes `node_modules/**` and `package.json`,
+so it can point at the wrong directory) were also fixed; the latter now reads "recorded
+input(s)".
+
+**Minor 7, decided**: the header comment above `assertEsbuildInputsCurrent` claimed the
+check proves the bundles "came from the `src/js/**` already on disk" — it only proves the
+recorded INPUTS have not moved; the 16 `src/bundles/js/**` outputs are never hashed, so a
+truncated or torn-synced bundle whose inputs still match would still pass. **Narrowed the
+comment** (said what the check actually proves, and named what it does not) rather than
+adding output hashing: the manifest's `{bundle: {input: sha256}}` shape is read directly
+by `test/build-tjs-continuation-scope.test.cjs`'s fixture and by three other tests in
+`test/esbuild-edge.test.cjs`, and changing it to also carry an output hash touches all of
+them for a gap that is already filed (see 4c-3's imperative-esbuild-step note) rather than
+live — narrowing was the lower-risk fix for this wave.
+
+**I4, corrected.** The task-2 report characterized the skip-count wobble across its three
+consecutive suites as `test/tjs-bytecode-e2e.test.cjs`'s known W2 torn-copy skip "firing
+once out of three runs." Diffing the three logs shows it is present in runs **1 and 2**
+(36 skip each) and absent only from run 3 (35 skip) — the flake rate for phase 4c-2's real
+end-to-end acceptance was **2 of 3 runs (~67%)**, not one-third. Recorded correctly here;
+the underlying attribution (W2, not a new intermittent) was already right.
+
+**I5, filed here instead of only in a gitignored ledger** (this repo's rule: open latent
+threads live in `BACKLOG.md`, not `.superpowers/sdd/**/progress.md`). Ruling:
+`test/guards-population.cjs`'s scanner-shaped classifier matches `.includes(`/
+`assert.match` in RAW BYTES, comments included, and does not strip comments the way
+`test/strip-comments.cjs` already lets four other test files do
+(windows-path-ratchet, build-tjs-continuation-scope, depscan, depscan-legs). Phase 4c-2b
+task 1's header prose tripped it (reworded rather than adding a `GUARD_EXCLUSIONS` entry,
+correctly — the file judges a self-built fixture's behavior, never build-tjs.cjs's own
+bytes, so it genuinely is not a guard and an exclusion would be a small lie); this was the
+FOURTH time the same class of false positive was fixed by rewording rather than by making
+the classifier comment-aware. `test/esbuild-edge.test.cjs`'s own header (the paragraph
+warning the reader not to spell out the classifier's trigger shapes) is the FIFTH
+occurrence, written around this same scanner bug. The fix — run the classifier over
+`stripComments()`'d source — is not done here; filing it so the next occurrence has
+somewhere to point. **Consequence to weigh before doing it**: going comment-aware may
+LOWER `UNMIGRATED_BASELINE` (currently 82), and the ratchet's own comment requires a FALL
+there to be a deliberate re-cut, not silent drift — so this is a "do it and re-cut the
+baseline in the same change," not a drive-by.
+
 ### 4c-3 — the declarative graph stops at `src/bundles/js/**` (the esbuild edge is still imperative)
 
 `fixupTjsCmakeBytecodeRules` gives every one of the 18 bundles a real cmake

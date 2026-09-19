@@ -352,3 +352,66 @@ test('assertEsbuildInputsCurrent refuses (never warns-and-proceeds) when the man
     assert.throws(() => check(dir, ['src/bundles/js/stdlib/uuid.js']), /--source-only/);
   });
 });
+
+// A vacuous `{}` per-bundle entry is not "nothing changed" — esbuildBundles can never
+// emit a bundle with zero recorded inputs (every bundle records at least its own entry
+// point), so an empty map is evidence the manifest was never written honestly for that
+// bundle, not evidence of currency. Whole-branch review, Minor 8: this used to pass for
+// free, which is exactly the shortcut a hand-rolled fixture (or a future writer bug)
+// could ship by accident.
+test('assertEsbuildInputsCurrent treats a bundle recorded with zero inputs as stale, not current', () => {
+  const check = loadAssertEsbuildInputsCurrent();
+  withFixtureTree((dir) => {
+    fs.mkdirSync(path.join(dir, 'src/js/stdlib'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'src/js/stdlib/uuid.js'), 'export const uuid = 1;\n');
+    writeManifestFixture(dir, { 'src/bundles/js/stdlib/uuid.js': {} });
+    assert.throws(() => check(dir, ['src/bundles/js/stdlib/uuid.js']), /zero inputs/);
+  });
+});
+
+// ---- C1 (whole-branch review, BLOCKING): the call site, not just the function ----
+//
+// All the tests above extract `assertEsbuildInputsCurrent` with `new Function` and call
+// it directly — they prove the CHECK works, never that scripts/build-tjs.cjs's real
+// `--build-only` branch actually calls it. Deleting the call at the real call site left
+// every test above green, which is literally what the reviewer did by hand to demonstrate
+// the defect (see this phase's report). This is the sibling of
+// test/tjs-bytecode-regen.test.cjs:376's `assertBytecodeRulesPresent(tjsDir)` call-site
+// assertion, and follows the same pattern, including asserting the ORDERING the code
+// comment above the call promises (presence, then currency) — the same comment explains
+// why the declaration is not enough: `indexOf('assertEsbuildInputsCurrent(')` alone would
+// match `function assertEsbuildInputsCurrent(` (the declaration) first, which is a
+// property of nothing.
+test('build-tjs: the esbuild-input currency check is actually CALLED from --build-only, after presence', () => {
+  const idx = buildTjsSrc.indexOf('\n  assertEsbuildInputsCurrent(tjsDir, expected);');
+  assert.ok(idx > -1, 'assertEsbuildInputsCurrent is never called from --build-only — a '
+    + 'guest handed a stale esbuilt bundle would ship it at exit 0, the exact defect this '
+    + 'phase exists to end, with every fixture-level test above still green');
+
+  // The call must live in the SECOND `if (buildOnly) {` block (the verify-only branch;
+  // the first, near the top of the file, is the BE-regen manifest writer) and after the
+  // presence check (`if (missing.length) { throw ... }`) it is documented to follow.
+  const ifBuildOnlyIdx = buildTjsSrc.lastIndexOf('if (buildOnly) {', idx);
+  const presenceIdx = buildTjsSrc.indexOf('if (missing.length) {', ifBuildOnlyIdx);
+  assert.ok(ifBuildOnlyIdx > -1, 'no enclosing `if (buildOnly) {` found before the call');
+  assert.ok(presenceIdx > ifBuildOnlyIdx && presenceIdx < idx,
+    'presence must be checked, in this order, BEFORE currency — the code comment above the '
+    + 'call says exactly this ("Presence proven; now prove CURRENCY")');
+
+  // Nothing expensive — in particular no re-esbuild, which --build-only can never do (see
+  // the header above ensureEsbuild) — may run between the two checks. Plain indexOf
+  // (never `.includes(`/`.match(`/`.test(`) on purpose: see this file's header on
+  // avoiding test/guards-population.cjs's scanner-shaped classifier — this assertion
+  // genuinely derives a finding from build-tjs.cjs's own bytes (it IS the call-site gate),
+  // so it is written the same way test/tjs-bytecode-regen.test.cjs's sibling assertion is.
+  const between = buildTjsSrc.slice(presenceIdx, idx);
+  assert.ok(between.indexOf('esbuildBundles(') === -1 && between.indexOf('run(') === -1,
+    'nothing may run between the presence check and the currency check');
+
+  // The call must be inside the if-branch, not spilled into the `else { esbuildBundles(...) }`
+  // that handles the non-buildOnly (source) phase.
+  const elseIdx = buildTjsSrc.indexOf('} else {', idx);
+  assert.ok(elseIdx > idx, 'the currency check must be inside the --build-only branch');
+  assert.ok(buildTjsSrc.slice(idx, elseIdx).indexOf('esbuildBundles(') === -1,
+    'only the success log may follow the currency check before the branch closes');
+});
