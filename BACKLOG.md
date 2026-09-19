@@ -40,7 +40,16 @@ only) and asserts: a genuine no-op rebuild touches nothing; editing
 `src/bundles/c/internal/path.c` and changes its bytes; no `CLODE_TJS_REGEN` is read, set,
 or named anywhere in the file. POSIX-only (stated reason: the harness assumes a
 single-config generator, which MSVC's default is not); skips honestly when no vendor
-checkout is warm. Passes: 1/1, ~32s (dominated by the one-time `tjsc`/`qjs` compile).
+checkout is warm. Passes: 1/1. **Cost, measured 2026-09-18 on an 8-core box:** ~32s run
+ALONE (n=3, tight: 31.9-32.4s), and **45-80s inside `npm test`** (n=11) — a deliberately
+LOOSE band, rounded outward past the observed extremes (46.4-74.9s), because there it
+competes with every other test file for the same cores and any tight range will be wrong on
+somebody's next run. Dominated by the one-time cold `tjsc`/`qjs` compile. The test's own
+header carries the same two lines; change both. The band is loose because the point estimate
+was wrong FOUR times: a guessed "60-90s" against this line's "~32s"; "up to ~40s",
+contradicted by the very next three-suite run; "55-61s", contradicted by the three green runs
+verifying it (48.5 / 62.3 / 66.5); and "48-75s", contradicted by the next three (46.4 / 47.2
+/ 47.3). Treat it as an order of magnitude, not a budget.
 
 **Proven to go red** (the pre-phase silent drop, reproduced on purpose): reverted the
 fixup CALL only (`fixupTjsCmakeBytecodeRules(tjsDir, bytecodeBundlePairs(...))` in
@@ -93,12 +102,133 @@ on its own merits) — but they are NOT the fix for this race and are not presen
 Verified with **three consecutive full suites, whole logs retained**: 2101/2065/0 fail/35
 skip/1 todo, all three, no recurrence, no new skip.
 
+**FIX ROUND 2 — a whole-branch review, and one Critical that was a correction to fix round 1
+(2026-09-18).**
+
+* **C1 (the flake fix closed one of TWO tear windows) — and the first fix for it was ALSO
+  wrong, caught by its own three-suite run.** `resetCheckoutToPristine` does `git checkout
+  -- .` + `git clean -fd`, and only THEN re-applies patches and ~50 fixups, with
+  `fixupTjsCmakeBytecodeRules` near the END of that list. Fix round 1 closed **W1**
+  (`CMakeLists.txt` references `src/mod_fs_sync.c`, file momentarily absent → retry → skip).
+  It left **W2**: `CMakeLists.txt` PRISTINE, every source it lists present, so
+  `copyMissingSources` returns `[]` and nothing fires — but no `CLODE_BYTECODE_RULES` block
+  either, so the premise assertion FAILED with *"the fixupTjsCmakeBytecodeRules CALL was
+  reverted"* in a tree where nothing was reverted. W2 spans reset → patches → 45 fixups; it
+  is **wider** than W1, so the likelier race produced the harder-to-read result.
+
+  **The first attempt took the review's suggested shape — a marker from a fixup that runs
+  AFTER the bytecode one — and put it in a DIFFERENT FILE** (`fixupQjscMsvcGetopt`'s "MSVC
+  ships no getopt" shim in `src/qjsc.c`, the last fixup the source phase runs). It passed
+  both polarities by hand and then **failed on run 1 of its own three-suite verification**,
+  on a copy whose `CMakeLists.txt` was pristine while its `src/qjsc.c` already carried the
+  shim. That pair is not a state the source phase ever writes — it is a state `copyCheckout`
+  CONSTRUCTS: `cp`/clonefile walks a ~785MB tree over seconds and is not a snapshot, so two
+  files in one copy can come from two different instants of the shared checkout.
+  **Cross-file evidence about a non-atomic copy is worth nothing**, and the three-run
+  requirement is what surfaced it.
+
+  **The fix that ships is FILE-LOCAL.** `fixupTjsCmakeWinStack` edits the SAME
+  `CMakeLists.txt` and runs on the very next line after the bytecode fixup, over the text
+  the bytecode fixup just wrote — so its `-Wl,--stack,8388608` marker cannot appear in any
+  single snapshot of that file without `CLODE_BYTECODE_RULES` also being there. The file is
+  read ONCE and the assertion judges those same bytes (never a second read of a file a
+  concurrent build may have rewritten in between): neither marker → pristine/pre-fixup →
+  retry-then-skip; win-stack marker present, rules block absent → **FAIL** with the
+  reverted-call message, exactly as before. The fail-not-skip is deliberate and load-bearing;
+  widening the skip to swallow it would have been the easy wrong fix.
+
+  **Demonstrated on four synthetic vendor checkouts via `CLODE_TJS_VENDOR`**, each a state
+  the shared checkout really passes through: pristine `CMakeLists` → `skipped 1 / fail 0`
+  naming W2 and `fixupTjsCmakeWinStack`; fully patched `CMakeLists` with the rules block cut
+  out → `fail 1 / skipped 0` with the reverted-call message; patched tree minus
+  `src/mod_fs_sync.c` → skip naming W1; and **the exact pair that broke the first fix**
+  (pristine `CMakeLists` + patched `src/qjsc.c`) → skip, where it previously failed.
+
+* **I3 (release-blocker class).** `-DCLODE_HOST_TJSC=<host tjsc>` is the FIRST
+  Windows-PATH-valued `-D` on the native MSVC path and has run on **zero** Windows legs
+  (`tjsc` is `EXCLUDE_FROM_ALL` upstream, so no Windows build ever had a host tjsc path to
+  hand cmake until this phase). Now routed through `toCmakeCachePath()` (`\` → `/`;
+  a no-op on POSIX). **The justification was MEASURED rather than assumed, and the obvious
+  story turned out false**: on cmake 4.3.3 a backslash `-D` value is *not* eaten as escape
+  sequences — it reaches `CMakeCache.txt` byte-for-byte and the recipe quotes it correctly.
+  The same probe found the quiet half: a `DEPENDS` naming a path cmake cannot resolve
+  yields **no configure error and no build error**, just a rule missing that edge — i.e. a
+  rule that silently stops rebuilding when `tjsc` changes. So this is the removal of an
+  untested variable from a hard-publisher path, not a fix for a reproduced break, and the
+  comments say so. Gated over EVERY occurrence, with both red proofs (a raw `${tjsc}`, and
+  no `-D` at all) plus a run-it-don't-grep-it check of the conversion itself.
+* **I6 (two emitters, one job, nothing gating the argv).** The injected `COMMAND` and
+  `regenBytecodeArrays`' `run(tjsc, [...])` were only gated to read the same
+  `bytecodeBundlePairs()` table — which closes divergence in WHICH bundles and nothing about
+  HOW. A `-M`/strip/module-flag change landing in one emitter would have netbsd-sparc
+  shipping bytecode built with different flags from the other 41 legs, silently. Added an
+  argv-equality gate (`test/bytecode-rule.test.cjs`): both argument lists extracted, values
+  normalized to placeholders, FLAGS compared exactly. Red-proved both ways (a flag added to
+  the imperative side; `-s` dropped from the emitted rule).
+* **M8 (the provenance stamp's PRODUCER was ungated, only its consumer).** Deleting the
+  `appendFileSync` in `regenBytecodeArrays` left the suite green while netbsd-sparc's bake
+  died at minute one. Now gated, together with "the trailer stays hash-free" (the bake's own
+  "do not put the hash back"), both red-proved.
+* **I2 (two FALSE statements about the shipping Windows build, in the file whose header
+  promises honesty).** The e2e skip claimed Windows uses a multi-config VS generator "which
+  build-tjs.cjs handles". It does not: `build-tjs.cjs` forces `-G Ninja
+  -DCMAKE_C_COMPILER=cl` (single-config) and looks for `<buildDir>/tjsc.exe` with no
+  `Release/` handling. Rewritten to the true reason (this harness passes no `-G`, so on
+  win32 it would get cmake's *default*, which is multi-config).
+* **I5 (the declarative graph stops at `src/bundles/js/**`).** Documented, not fixed — see
+  the 4c-3 entry below. Stated plainly in the e2e header: only 2 of 18 bundles bypass
+  esbuild, the acceptance edits one of those 2, and on `--build-only` the original defect's
+  shape survives for the other 16. Read a pass as "the tjsc DEPENDS edge is real and
+  per-file", never as "no `src/js/**` edit can be silently dropped".
+* **I7 + I4 (comments the branch made false).** `test/engine-api-floor.test.cjs`'s finding
+  string said "regen **fingerprint** trailer"; there is no fingerprint (hash-free provenance
+  stamp), and that string is what a reader sees when the gate fires — corrected. The cost
+  claim contradicted itself (header "60-90s" vs. backlog "~32s"); re-measured and now
+  identical in both places. The e2e header also now records that it never runs in CI and
+  names `test/node-shim-timer-unref.test.cjs` as the CI backstop for the same property.
+* **One gate went red on this work and was right to**:
+  `guard gate: msvc-getopt-fixup-registration` counts `path.join(<x>buildDir, ...tjsc...)`
+  occurrences in `build-tjs.cjs` and does not skip comments, so a new comment quoting that
+  call shape took it from 2 to 3. The comment was reworded. Recorded because it is the
+  ratchet doing its job on a doc-only edit.
+
+**Suite after fix round 2**: 2109 tests / 2073 pass / **0 fail** / 35 skip / 1 todo
+(2101/2065/0/35/1 before, + 8 new gate tests: 2 argv-equality, 3 `-D` normalization, 3
+provenance-stamp). `UNMIGRATED_BASELINE` (82) unchanged — the new tests land in
+`tjs-bytecode-regen.test.cjs`, already counted, and in `bytecode-rule.test.cjs`, already
+migrated. **Three consecutive full suites, whole logs retained** (the guard the last flake
+produced is the very thing this round changed).
+
 **Left open, explicitly NOT this phase** (per the task brief): the remaining four
 `scripts/build-tjs.cjs` cmake-migration call sites, and ccache — that is 4c-3. The two
 emitters (the injected COMMAND text and `regenBytecodeArrays`'s loop) still duplicate the
 `tjsc` argv shape even though both read `bytecodeBundlePairs()` — task 2's own report
 flagged this; unify by having `--regen-only` drive `cmake --target clode_bytecode` against
-its own host build dir, not attempted here (touches the sparc CI path end to end).
+its own host build dir, not attempted here (touches the sparc CI path end to end). Their
+argv shapes are now *gated* equal (`test/bytecode-rule.test.cjs`, fix round 2) so the
+duplication cannot silently diverge while it survives.
+
+### 4c-3 — the declarative graph stops at `src/bundles/js/**` (the esbuild edge is still imperative)
+
+`fixupTjsCmakeBytecodeRules` gives every one of the 18 bundles a real cmake
+`OUTPUT`/`DEPENDS` edge — but the DEPENDS names `src/bundles/js/**`, and only **2 of the
+18** (`internal/path`, `worker-bootstrap`) are fed to `tjsc` straight from `src/js/**`.
+The other 16 reach `tjsc` only after esbuild turns `src/js/**` into `src/bundles/js/**`,
+and **that** edge is still imperative and undeclared: `--source-only` re-runs
+`esbuildBundles` unconditionally so it is correct there, but `--build-only` does not
+re-esbuild at all. So on `--build-only`, editing `src/js/stdlib/uuid.js` still yields exit
+0 and an unchanged engine — **the original defect's exact shape, for 16 of 18 bundles, on
+that one path.**
+
+Not reachable by any CI leg (guests receive a synced tree; they never edit one), so this
+is a boundary, not a live defect — but it is the boundary that makes
+`test/tjs-bytecode-e2e.test.cjs` a proof of the `tjsc` DEPENDS edge and **not** a proof
+that no `src/js/**` edit can be silently dropped: the acceptance edits
+`src/js/internal/path.js`, one of the two that bypass esbuild. Both facts are now stated
+in that test's header. **The fix is to declare the esbuild edge in cmake too** (each
+`src/bundles/js/**` an `OUTPUT` with its `src/js/**` inputs as `DEPENDS`), which is 4c-3
+work: it needs a host-runnable esbuild on the build path, which the cmake rule cannot
+assume the way it can assume a host `tjsc` it just built.
 
 ## `checkControl` cannot prove a MULTI-DETECTOR guard per-detector (2026-09-13)
 
