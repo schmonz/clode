@@ -31,6 +31,10 @@
 //                     <local-scratch>/clode-tjs-build/<target-token>/build).
 //                     Independent of CLODE_TJS_OUT, which is still where the
 //                     FINAL built exe lands.
+//   CLODE_TJS_CCACHE  =0: opt OUT of the ccache compiler-launcher probe (scripts/
+//                     ccache-launcher.cjs). Default is to pass -DCMAKE_C_COMPILER_LAUNCHER
+//                     when a `ccache` binary is found on PATH, and to do nothing at all
+//                     when it is not — which is every leg's state today.
 //
 // Phases (CI splits them so a qemu-user guest only pays for the C build):
 //   --source-only  stop after checkout + sha-verify + patches
@@ -78,6 +82,7 @@ const crypto = require('node:crypto');
 const { resetCheckoutToPristine } = require('./tjs-source-reset.cjs');
 const { engineFloorCheckJs, OK_TOKEN } = require('./engine-api-floor.cjs');
 const { buildDepscan } = require('./build-depscan.cjs');
+const { ccacheLauncher, applyCcacheArg } = require('./ccache-launcher.cjs');
 const { tjsDir: platformTjsDir, tjsVendorParentDir } = require('./platform-tag.cjs'); // tjsDir aliased: this file has its own `tjsDir` (the source build dir)
 // The hermeticity verdict, defined once in a CJS sibling so the build and the
 // test suite run the SAME decision logic (test/guard.cjs needs a pure scan()
@@ -3604,6 +3609,16 @@ if (process.env.CLODE_TJS_ATOMIC_SHIM === '1') {
 if (darwinPoll) {
   cmakeArgs.push('-DCLODE_DARWIN_POLL=ON');
 }
+// ccache (spec 4c3, task 1 — "wire it, optionally"): a compiler launcher costs nothing to
+// pass when the tool is not there, so it is attempted on every leg, native or cross —
+// CMAKE_C_COMPILER_LAUNCHER wraps whatever CMAKE_C_COMPILER already resolved to (gcc,
+// cl, or a cross toolchain file's compiler), it does not replace it. ccacheLauncher()
+// returns null when CLODE_TJS_CCACHE=0 was set or the tool is not on PATH — the state of
+// every leg today, this box included — and applyCcacheArg() leaves cmakeArgs completely
+// unchanged in that case. Actually installing ccache anywhere, and proving the cache is
+// keyed safely across the 17 cross legs and the tjsc regen path, is task 2; this line
+// only makes the flag land WHEN a launcher is already present.
+applyCcacheArg(cmakeArgs, ccacheLauncher());
 // Build hermeticity: keep cmake's find_*() out of third-party package-manager
 // prefixes. Root cause (verified twice on this dev Mac, 2026-07-31): its cmake
 // is pkgsrc's (/opt/pkg/bin/cmake), and a pkgsrc-built cmake bakes ITS OWN

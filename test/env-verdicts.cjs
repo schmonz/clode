@@ -256,14 +256,18 @@ const VERDICTS = [
   // ---- The scripts/build-tjs.cjs engine-build-knob cluster, decided phase4-engine. ----
   // ---- CLODE_TJS_LOCAL_ROOT and CLODE_TJS_VENDOR ride along: they exist only in ----
   // ---- scripts/platform-tag.cjs to compute the SAME engine-vendor cache dir ----
-  // ---- build-tjs.cjs itself uses, measured to bring the cluster to exactly 20 ----
-  // ---- (BACKLOG.md's own count). ----
+  // ---- build-tjs.cjs itself uses, measured to bring the cluster to exactly 21 ----
+  // ---- (BACKLOG.md's own count, +1 for phase 4c3 task 1's CLODE_TJS_CCACHE). ----
   { name: 'CLODE_COSMOCC', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
   { name: 'CLODE_TJS_ATOMIC_SHIM', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
   { name: 'CLODE_TJS_BUILD', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
+  { name: 'CLODE_TJS_CCACHE', verdict: 'phase4-engine',
+    because: 'read by scripts/ccache-launcher.cjs (required from scripts/build-tjs.cjs) as '
+      + 'the =0 opt-out for the compiler-launcher probe; same compile-option cluster as the '
+      + 'rest of this list, for the same phase-4/cmake reason.' },
   { name: 'CLODE_TJS_CROSS_FILE', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
   { name: 'CLODE_TJS_DARWIN_POLL', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
