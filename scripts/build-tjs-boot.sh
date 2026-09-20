@@ -47,7 +47,11 @@ if [ $# -lt 2 ]; then
 fi
 SITE=$1
 shift
-ARGS=$*
+# The log line below is a flat list of key=value pairs, so no value may contain a space:
+# `args=--source-only --build-only` would read as two fields to anything that splits on
+# whitespace, including this file's own test. Comma-joined instead.
+ARGS=
+for bb_a in "$@"; do ARGS="${ARGS:+$ARGS,}$bb_a"; done
 
 case "$0" in */*) SELFDIR=${0%/*} ;; *) SELFDIR=. ;; esac
 REPO=$(CDPATH= cd -- "$SELFDIR/.." && pwd)

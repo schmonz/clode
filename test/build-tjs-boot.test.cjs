@@ -178,6 +178,18 @@ test('a resolver that exits 0 but prints nothing is refused, not run as ""', () 
   assert.strictEqual(verdict(r.out).engine, 'none');
 });
 
+test('the log line is a flat key=value list: no field ever contains a space', () => {
+  // `args=--source-only --build-only` would read as two fields to anything that splits on
+  // whitespace — including verdict() above, which is deliberately written the way a CI
+  // grep|awk would be. The one artifact this whole wave is accepted on has to parse.
+  const sb = sandbox({ rc: 3 });
+  const r = run(sb, ['a-site', '--source-only', '--build-only']);
+  assert.strictEqual(r.status, 0, r.err);
+  const v = verdict(r.out);
+  assert.strictEqual(v.args, '--source-only,--build-only');
+  assert.strictEqual(v.engine, 'node');
+});
+
 test('it takes a site label and at least one build-tjs argument, or exits 2', () => {
   const sb = sandbox();
   assert.strictEqual(run(sb, []).status, 2);
@@ -206,11 +218,9 @@ test('it runs identically under dash', (t) => {
 // go stale in either direction — an entry with no matching site is a phantom and fails,
 // and a site with no entry is an unexplained node and fails. The sequencing is
 // .superpowers/sdd/node-removal-bootstrap-design.md §3, steps 3-6.
+// Wave 1 flipped three sites and deleted their three entries from here, one commit each;
+// what is left is what is still true, never a description of intent.
 const NOT_YET_FLIPPED = {
-  // --- wave 1, landing one commit at a time immediately after this one. Each entry
-  // disappears in the same commit that flips its site, so this table is never a
-  // description of intent — only of what is still true.
-  // --- deliberately out of wave 1.
   'Construct the patched tjs tree from pins (host, native speed)':
     'step 6: --source-only is blocked on esbuild plus txiki\'s own JS dependency tree, '
     + 'which scripts/bundle-inputs-gate.cjs refuses loudly today. Independent of the '
