@@ -142,6 +142,28 @@ test('findBuildDir picks the main engine build dir, not a sibling tool build', (
   assert.strictEqual(findBuildDir(dir), main);
 });
 
+// WINDOWS, run 35521083887 test 976. `find` is an EXTERNAL tool and it prints the root
+// back EXACTLY as it was handed one, with its own separator for everything below:
+// Git-for-Windows' find turned `C:\\...\\harness-builddir-naiybj` into
+// `C:\\...\\harness-builddir-naiybj/abc123/build`, and the assertion above — which
+// builds its expectation with path.join — failed on separators alone. The defect is that
+// findBuildDir returned a string another program printed instead of a path it owns, and
+// it is reachable on POSIX too: hand it a root spelled with a `.` segment and the same
+// un-normalized shape comes straight back out.
+test('findBuildDir NORMALIZES: it returns a path, not whatever find printed', (t) => {
+  const dir = tmp(t, 'harness-builddir-shape-');
+  const main = path.join(dir, 'abc123', 'build');
+  fs.mkdirSync(main, { recursive: true });
+  fs.writeFileSync(path.join(main, 'CMakeCache.txt'), '');
+  for (const root of [`${dir}${path.sep}.`, `${dir}${path.sep}${path.sep}`]) {
+    assert.strictEqual(findBuildDir(root), main,
+      `findBuildDir(${JSON.stringify(root)}) handed back find(1)'s spelling of the path `
+      + 'rather than a normalized one. Every caller compares or joins this value; on '
+      + 'Windows the same defect appears with no odd spelling at all, because find writes '
+      + 'forward slashes under a backslash root.');
+  }
+});
+
 test('findBuildDir THROWS when no main engine build dir is there', (t) => {
   const dir = tmp(t, 'harness-nobuilddir-');
   fs.mkdirSync(path.join(dir, 'build-depscan'), { recursive: true });
