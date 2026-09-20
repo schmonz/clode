@@ -425,7 +425,17 @@ test('the decoder must not stream the frame through the child stdin (deadlock gu
     console.log('LEN ' + bg.__zstdToTextForTest(f, 0, f.length, { forceCli: true }).length);
   `);
   const [cmd, argv] = childRuntime(script);
-  const r = require('node:child_process').spawnSync(cmd, argv, { encoding: 'utf8', timeout: 60000 });
+  // THE CHILD DECODES WHERE THE ROOM IS. libexec/bun-graph.cjs stages the frame in its own
+  // os.tmpdir() before spawning zstd -- deliberately, so the frame never goes through the
+  // child's stdin -- and os.tmpdir() reads TMPDIR/TMP/TEMP. scratch() already resolved which
+  // volume has room (RUNNER_TEMP on Windows, where os.tmpdir() is the small C:); handing the
+  // same directory to the child is what makes that answer apply to the DECODE rather than
+  // only to the fixture. Scoped to this one child, not the job: 4c8d94c redirected
+  // TMP/TEMP/TMPDIR for the whole suite and broke three tar rows, because Git for Windows
+  // reads `D:\a\_temp\x` as the remote host `D` (MSYS mounts C: but not D:).
+  const roomy = scratch();
+  const childEnv = { ...process.env, TMPDIR: roomy, TMP: roomy, TEMP: roomy };
+  const r = require('node:child_process').spawnSync(cmd, argv, { encoding: 'utf8', timeout: 60000, env: childEnv });
   // NO ROOM IS NOT A FAILING GUARD. This decodes ~6MB, and Windows runners have twice run out
   // of disk mid-decode (`zstd: error 70 ... No space left on device`) — at 482e9ec, and again
   // at 9ee9b1a WITH the RUNNER_TEMP redirect in place, so the roomy volume is not where I
@@ -441,6 +451,19 @@ test('the decoder must not stream the frame through the child stdin (deadlock gu
   }
   assert.strictEqual(r.status, 0, describeDecodeFailure(frame.length, r));
   assert.strictEqual((r.stdout || '').trim(), 'LEN ' + plain.length);
+  // AND IT HAPPENED IN THE ROOM THIS TEST WENT TO FIND. scratch() asks for RUNNER_TEMP
+  // because the Windows runner's os.tmpdir() is on the small C: volume -- but the decode
+  // does not run here, it runs in the child, and libexec/bun-graph.cjs stages its own copy
+  // of the frame in ITS os.tmpdir() before spawning zstd. Unless the child is told where
+  // the room is, scratch() moves only the fixture and the whole decode still happens on
+  // the tight volume: which is exactly what the comment above records as unexplained at
+  // 9ee9b1a ("the RUNNER_TEMP redirect in place, so the roomy volume is not where I
+  // assumed"). Asserted rather than trusted, because nothing else can see it -- the
+  // staging directory is a mkdtemp inside the child and it outlives the process.
+  assert.ok(fs.readdirSync(scratch()).some((n) => /^clode-zstd-[^/]*$/.test(n)),
+    `the decode staged its frame outside ${scratch()} -- the child was not given the room `
+    + 'this test found, so on a runner whose os.tmpdir() volume is tight the guard fails as '
+    + "a deadlock it never saw. Pass TMPDIR/TEMP/TMP to the child.");
 });
 
 // CONCATENATED FRAMES ARE THE ONE INPUT ON WHICH THE TWO PATHS DISAGREE: `zstd -d -c` returns
