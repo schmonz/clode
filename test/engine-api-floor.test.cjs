@@ -150,7 +150,16 @@ function scanEngineFloorConsumers({ buildTjsSrc, actionYml, bakeSrc }) {
     const idx = actionYml.indexOf('tar czf .matrix/qemu-bake/txiki-canonical-le.tar.gz');
     if (idx === -1) {
       findings.push('the guest source tarball step was not found in build-leg/action.yml');
-    } else if (!/node scripts\/build-tjs\.cjs --regen-only/.test(actionYml.slice(0, idx).slice(-2000))) {
+      // EITHER SPELLING, because the invocation flipped and the RULE did not: since
+      // 2026-09-20 this step runs `scripts/build-tjs-boot.sh <site> --regen-only`, which
+      // resolves a bootstrap engine and runs the same build-tjs.cjs --regen-only under it
+      // (node-removal-bootstrap-design.md §3 step 1). What this guard is about is that
+      // SOMETHING regenerates the bytecode in the 2000 characters before the tar; who
+      // interprets build-tjs.cjs is not its question. Matching only the old spelling would
+      // have made a correct flip look like a dropped regen -- and matching neither would
+      // be the blind gate this file exists to prevent.
+    } else if (!/(node scripts\/build-tjs\.cjs|scripts\/build-tjs-boot\.sh \S+) --regen-only/
+      .test(actionYml.slice(0, idx).slice(-2000))) {
       findings.push('the guest tree must be bytecode-regenerated BEFORE it is tarred for the guest');
     }
   }
