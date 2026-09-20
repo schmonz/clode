@@ -26,6 +26,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
+const { defineGuard, guardTests } = require('./guard.cjs');
 const F = require('./forced-win32.cjs');
 const REPO = path.join(__dirname, '..');
 const mkdtemp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'clode-forced-win32-'));
@@ -181,24 +182,43 @@ test('LIMIT it does reach, but only halfway: os.tmpdir() takes the win32 branch'
   assert.ok(fs.existsSync(t), `forced os.tmpdir() must still exist, got ${JSON.stringify(t)}`);
 });
 
-test('LIMITS are written where a reader will see them', () => {
-  const src = fs.readFileSync(path.join(__dirname, 'forced-win32.cjs'), 'utf8');
-  const lower = src.toLowerCase();
-  for (const claim of ['path separator', 'real windows', 'lib.exe', 'crlf']) {
-    assert.ok(lower.includes(claim),
-      `the pass's own header must name what it cannot catch (${claim}) — a second pass `
-      + 'whose limits live only in a commit message reads as Windows coverage');
-  }
+// Both of the remaining questions — "does the header still name what the pass cannot
+// catch?" and "does test/run.mjs still invoke it?" — are read off artifacts this file did
+// not write, which makes them a GUARD, not a pair of assertions (test/guard.cjs). The
+// control feeds every rule a violating input, so a rule that has gone blind reports as a
+// shortfall instead of a pass. Without this they would be the shape that has read clean
+// for two years elsewhere in this repo.
+const WIRING_GUARD = defineGuard({
+  name: 'forced-win32-wiring',
+  floor: 7,
+  read: () => ({
+    pass: fs.readFileSync(path.join(__dirname, 'forced-win32.cjs'), 'utf8'),
+    run: fs.readFileSync(path.join(__dirname, 'run.mjs'), 'utf8'),
+  }),
+  scan: (i) => {
+    const findings = [];
+    let examined = 0;
+    const rule = (ok, finding) => { examined += 1; if (!ok) findings.push(finding); };
+    const lower = i.pass.toLowerCase();
+    // The limits, one rule each, because each is a separate thing a reader could be
+    // misled about and a count that collapses them hides which one went missing.
+    for (const claim of ['path separator', 'real windows', 'lib.exe', 'crlf']) {
+      rule(lower.includes(claim),
+        `the pass's own header no longer names what it cannot catch (${claim}) — a second `
+        + 'pass whose limits live only in a commit message reads as Windows coverage');
+    }
+    rule(/forced-win32\.cjs/.test(i.run),
+      'test/run.mjs no longer derives the forced set from test/forced-win32.cjs');
+    rule(/PRELOAD/.test(i.run),
+      'test/run.mjs no longer passes the preload to the second `node --test`, so the pass '
+      + 'runs with the real platform and proves nothing');
+    rule(/forcedWin32Files/.test(i.run),
+      'test/run.mjs no longer calls forcedWin32Files — the pass is a script nobody invokes, '
+      + 'which is the gate-that-never-runs shape this repo has already paid for');
+    return { findings, examined };
+  },
+  // Every rule violated at once.
+  control: () => ({ pass: '// a header with no limits stated at all\n', run: 'process.exit(0);\n' }),
 });
 
-// -------------------------------------------------------------------- wiring ----
-
-test('test/run.mjs actually RUNS the pass — it is not a script nobody invokes', () => {
-  const run = fs.readFileSync(path.join(__dirname, 'run.mjs'), 'utf8');
-  assert.match(run, /forced-win32\.cjs/,
-    'test/run.mjs must derive the forced set from test/forced-win32.cjs');
-  assert.match(run, /PRELOAD/,
-    'test/run.mjs must pass the preload to the second `node --test`, or the pass runs '
-    + 'with the real platform and proves nothing');
-  assert.ok(/forcedWin32Files/.test(run));
-});
+guardTests(WIRING_GUARD);
