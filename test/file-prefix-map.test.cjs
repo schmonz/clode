@@ -415,6 +415,149 @@ test('every oso-prefix state prints one greppable ASCII line', () => {
 
 
 
+// ---- A CMAKE TOOLCHAIN FILE DECLINES BOTH LEVERS ----------------------------------------
+//
+// THE REGRESSION THIS PINS, measured in CI run 35530707866 (2026-09-20). Creating a
+// `-DCMAKE_C_FLAGS=` where the argv had none does not merely ADD a flag. cmake seeds the
+// CMAKE_C_FLAGS *cache entry* from CMAKE_<LANG>_FLAGS_INIT only when that entry does not
+// already exist, so a `-D` on the command line silently DISCARDS everything the toolchain
+// file set through _INIT. Proved by hand with cmake 4.3.3, not inferred:
+//
+//     toolchain only          CMAKE_C_FLAGS=[-isystem /tmp/cosmo-compat -Wno-error=...]
+//     + -DCMAKE_C_FLAGS=...   CMAKE_C_FLAGS=[-ffile-prefix-map=/a=/b]      <-- _INIT gone
+//
+// Every one of this repo's seven toolchain files delivers its ESSENTIALS that way, so the
+// partition in that run was exact -- every leg with a toolchain file failed, every leg
+// without one passed. cosmo lost `-isystem scripts/cosmo-compat` and died on a missing
+// sys/syslog.h; netbsd-mips64eb lost `--sysroot` and compiled against the HOST's headers.
+//
+// THE THREE DARWIN LEGS HAD NOT FIRED YET -- they are not in the `ci` workflow. They lose
+// `-mmacosx-version-min`, and if osxcross's ld64 takes -oso_prefix they lose it from the
+// LINK line too. A dropped compat floor is the failure mode this repo cares most about,
+// because it BUILDS GREEN and only fails on the old machine nobody in CI owns.
+//
+// So: when a toolchain file is in play, decline. Same escape hatch unsupported /
+// unavailable / opted-out already take, and it leaves the argv byte-identical to its
+// pre-feature self. The cost is that those legs keep baking the build path in -- which is
+// what they did every day before this feature, and what test/repro-verdicts.cjs still
+// records for all 40 of them (`unproven`). Broadening path-independence to cross legs means
+// delivering the mapping through the configure's CFLAGS/LDFLAGS environment instead, which
+// cmake APPENDS to _INIT rather than replacing; that reaches cmake's own try_compile probes
+// too, so it is a separate piece of work and not this one.
+
+const NETBSD_CROSS = '/w/scripts/netbsd.toolchain.cmake';
+
+test('a toolchain file DECLINES the compiler mapping, and does not even probe', () => {
+  let ran = false;
+  const d = filePrefixMapDecision({
+    cc: '/w/nbsd-tool/bin/mips64--netbsd-gcc', source: 'toolchain-file',
+    crossFile: NETBSD_CROSS, mappings: MAPPINGS, env: {},
+    probeFn: () => { ran = true; return 'file-prefix-map'; },
+  });
+  assert.strictEqual(d.state, 'cross-toolchain');
+  assert.deepStrictEqual(d.flags, [],
+    'the probe ACCEPTED -- the decline is about where the flag would have to ride, not '
+    + 'about whether the compiler takes it');
+  assert.strictEqual(ran, false,
+    'a lever that is going to be declined must not pay for an answer it cannot use');
+});
+
+test('a toolchain file DECLINES the linker mapping too', () => {
+  // One property, two levers: declining the compiler half and keeping the linker half
+  // would still create a -DCMAKE_EXE_LINKER_FLAGS= and still take the darwin floor out of
+  // the link line. That is the silent partial fix in a new costume.
+  let ran = false;
+  const d = osoPrefixDecision({
+    cc: 'x86_64-apple-darwin10-cc', source: 'toolchain-file', crossFile: NETBSD_CROSS,
+    prefix: '/b/build', env: {}, realpathFn: (p) => p,
+    probeFn: () => { ran = true; return 'oso-prefix'; },
+  });
+  assert.strictEqual(d.state, 'cross-toolchain');
+  assert.deepStrictEqual(d.flags, []);
+  assert.strictEqual(ran, false);
+});
+
+test('THE CROSS ARGV GOES THROUGH BYTE-IDENTICAL -- the real one, from the failed run', () => {
+  // Copied from tjs-slow / leg (netbsd-mips64eb) of run 35530707866, minus the
+  // -DCMAKE_C_FLAGS= this feature added. Applying both decisions to it must give back the
+  // same array, element for element: that IS the property, and an argv assembled by hand
+  // in a test would not have caught that this one has no -DCMAKE_C_FLAGS at all.
+  const before = [
+    '-S', '/w/_temp/tjs-vendor/txiki.js', '-B', '/tmp/clode-tjs-build/tjs-out-1e5abf/build',
+    '-DCMAKE_BUILD_TYPE=Release', '-DTJS_USE_ADA=OFF', '-DBUILD_WITH_WASM=OFF',
+    '-DBUILD_WITH_MIMALLOC=OFF', '-DBUILD_WITH_FFI=OFF',
+    `-DCMAKE_TOOLCHAIN_FILE=${NETBSD_CROSS}`,
+    '-DCMAKE_C_COMPILER_LAUNCHER=/usr/bin/ccache',
+    '-DCMAKE_C_ARCHIVE_CREATE=<CMAKE_AR> qcD <TARGET> <LINK_FLAGS> <OBJECTS>',
+    '-DCMAKE_C_ARCHIVE_APPEND=<CMAKE_AR> qD <TARGET> <LINK_FLAGS> <OBJECTS>',
+    '-DCMAKE_C_ARCHIVE_FINISH=<CMAKE_RANLIB> -D <TARGET>',
+    '-DCLODE_HOST_TJSC=/tmp/clode-tjs-build/tjs-out-1e5abf/build-host-tjsc/tjsc',
+  ];
+  const argv = [...before];
+  applyFilePrefixMapDecision(argv, filePrefixMapDecision({
+    cc: 'mips64--netbsd-gcc', source: 'toolchain-file', crossFile: NETBSD_CROSS,
+    mappings: MAPPINGS, env: {}, probeFn: () => 'file-prefix-map',
+  }));
+  applyOsoPrefixDecision(argv, osoPrefixDecision({
+    cc: 'mips64--netbsd-gcc', source: 'toolchain-file', crossFile: NETBSD_CROSS,
+    prefix: '/tmp/clode-tjs-build/tjs-out-1e5abf/build', env: {}, realpathFn: (p) => p,
+    probeFn: () => 'oso-prefix',
+  }));
+  assert.deepStrictEqual(argv, before,
+    'a cross leg must configure exactly the command line it configured before this feature '
+    + 'existed -- run 35530707866 is what one extra -D costs');
+});
+
+test('EVERY toolchain file that carries _INIT flags is covered, darwin floors included', () => {
+  // Data-driven off the directory, not a hand-written list: an eighth toolchain file added
+  // next month is covered the day it lands, which is the only way this pin survives.
+  const dir = path.join(__dirname, '..', 'scripts');
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith('.toolchain.cmake')).sort();
+  assert.ok(files.length >= 7, `expected the repo's toolchain files, found ${files.length}`);
+  let withInit = 0;
+  let withFloor = 0;
+  for (const f of files) {
+    const text = fs.readFileSync(path.join(dir, f), 'utf8');
+    if (!/_FLAGS_INIT/.test(text)) continue;
+    withInit++;
+    if (/-mmacosx-version-min/.test(text)) withFloor++;
+    const crossFile = path.join(dir, f);
+    const base = ['-DCMAKE_BUILD_TYPE=Release', `-DCMAKE_TOOLCHAIN_FILE=${crossFile}`];
+    const cd = filePrefixMapDecision({ cc: 'cc', source: 'toolchain-file', crossFile,
+      mappings: MAPPINGS, env: {}, probeFn: () => 'file-prefix-map' });
+    const od = osoPrefixDecision({ cc: 'cc', source: 'toolchain-file', crossFile,
+      prefix: '/b/build', env: {}, realpathFn: (p) => p, probeFn: () => 'oso-prefix' });
+    assert.deepStrictEqual(applyFilePrefixMapDecision([...base], cd), base,
+      `${f}: a -DCMAKE_C_FLAGS= created here DISCARDS this file's CMAKE_C_FLAGS_INIT`);
+    assert.deepStrictEqual(applyOsoPrefixDecision([...base], od), base,
+      `${f}: a -DCMAKE_EXE_LINKER_FLAGS= created here DISCARDS this file's `
+      + 'CMAKE_EXE_LINKER_FLAGS_INIT');
+  }
+  assert.strictEqual(withInit, files.length,
+    'every toolchain file here delivers its essentials through _INIT; if one stops doing '
+    + 'that, this test has to be re-read rather than silently narrowed');
+  assert.strictEqual(withFloor, 3,
+    'darwin-x64, darwin-x86 and darwin-ppc carry -mmacosx-version-min through _INIT. Those '
+    + 'three legs are NOT in the `ci` workflow, so a floor dropped from CMAKE_C_FLAGS or '
+    + 'CMAKE_EXE_LINKER_FLAGS builds perfectly GREEN and ships a binary that refuses to '
+    + 'start on the oldest macOS the asset name promises');
+});
+
+test("the declined line says NONE, names the toolchain file, and stays greppable ASCII", () => {
+  for (const describe of [describeFilePrefixMapDecision, describeOsoPrefixDecision]) {
+    const line = describe({ state: 'cross-toolchain', cc: 'mips64--netbsd-gcc',
+      source: 'toolchain-file', crossFile: NETBSD_CROSS, prefix: '/b/build/', mappings: MAPPINGS });
+    assert.match(line, /^build-tjs: (file-prefix-map|oso-prefix): NONE /);
+    assert.match(line, /netbsd\.toolchain\.cmake/,
+      'a declined decision that does not say WHICH file declined it is a decision nobody '
+      + 'can act on');
+    assert.match(line, /_INIT/, 'and it has to name the mechanism, or the next reader '
+      + 'deletes the decline as superstition');
+    assert.doesNotMatch(line, /[^\x20-\x7e]/);
+    assert.ok(!/\n/.test(line), 'ONE line');
+  }
+});
+
 // ---- THE WIRING, as a standing guard -----------------------------------------------------
 //
 // Both levers are worth nothing if the build can reach the end without composing them, and
@@ -460,6 +603,29 @@ function scanFilePrefixMapWiring({ src }) {
       + 'see rewrites nothing and reports success');
   }
 
+  // AND FROM crossFile, at BOTH call sites. Without it neither decision can know a
+  // toolchain file is in play, so both create a -D that DISCARDS that file's _INIT: the
+  // netbsd --sysroot, the cosmo -isystem, the darwin -mmacosx-version-min floor. That is
+  // run 35530707866, in which every leg with a toolchain file failed and every leg without
+  // one passed. The compiler half is checked separately from the linker half because the
+  // darwin files carry the floor in CMAKE_EXE_LINKER_FLAGS_INIT too, and wiring only one
+  // of them back would still drop it from the link line — and that BUILDS GREEN.
+  for (const [call, which] of [['filePrefixMapDecision(', 'compiler-mapping'],
+    ['osoPrefixDecision(', 'linker-mapping']]) {
+    examined++;
+    const i = src.indexOf(call);
+    const b = i === -1 ? '' : src.slice(i, i + 900);
+    // `crossFile,` -- the shorthand PROPERTY, not any mention. Both call sites already
+    // say `toolchainFile: crossFile ? ... : ''` to resolve the compiler, so scanning for
+    // the bare identifier is a check that passes on the broken source: one of the ~14
+    // gates found unable to fail in this repo. Verified RED against the pre-fix file.
+    if (!/\bcrossFile\s*,/.test(b)) {
+      findings.push(`scripts/build-tjs.cjs: the ${which} decision is not told about `
+        + 'crossFile, so on a cross leg it creates a -D that discards the toolchain file\'s '
+        + '_INIT flags');
+    }
+  }
+
   return { findings, examined };
 }
 
@@ -467,8 +633,8 @@ const wiringGuard = defineGuard({
   name: 'build-path-mapping-wiring',
   read: () => ({ src: fs.readFileSync(path.join(__dirname, '..', 'scripts/build-tjs.cjs'), 'utf8') }),
   scan: scanFilePrefixMapWiring,
-  // Eight independent facts in one named file — the exact measured count.
-  floor: 8,
+  // Ten independent facts in one named file — the exact measured count.
+  floor: 10,
   // Models the regression precisely: a source phase that has lost both levers.
   control: () => ({ src: '// a build with no path mapping at all\n' }),
 });

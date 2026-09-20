@@ -27,15 +27,31 @@
 // during the job. Whether a given one of those takes this flag turns on its version AND its
 // vendor AND its driver mode, which no platform token reports. So: run it and ask.
 //
-// FIVE OUTCOMES, deliberately not three: "refused the flag", "refused BOTH spellings" and
-// "could not be run at all" have different consequences, and an MSVC leg must land in a
-// state that changes NOTHING rather than reaching for a lever it has never heard of.
+// SIX OUTCOMES, deliberately not three: "refused the flag", "refused BOTH spellings",
+// "could not be run at all" and "a toolchain file owns the flags" have different
+// consequences, and an MSVC leg must land in a state that changes NOTHING rather than
+// reaching for a lever it has never heard of.
 //
 //     file-prefix-map    cc takes -ffile-prefix-map        -> one flag per mapping
 //     split-prefix-map   it takes the older PAIR instead   -> two flags per mapping
 //     unsupported        it takes neither (this is cl)     -> nothing added
 //     unavailable        it cannot be run at all           -> nothing added
 //     opted-out          CLODE_TJS_FILE_PREFIX_MAP=0       -> nothing added, nothing run
+//     cross-toolchain    a cmake toolchain file is in play -> nothing added, nothing run
+//
+// THAT LAST ONE IS NOT A PLATFORM BRANCH EITHER, and it is not timidity: it is the one
+// place where ADDING this flag SUBTRACTS others. cmake seeds the CMAKE_<LANG>_FLAGS cache
+// entry from CMAKE_<LANG>_FLAGS_INIT only when that entry does not already exist, so
+// passing `-DCMAKE_C_FLAGS=` on the command line where the argv had none throws away
+// everything the toolchain file set through _INIT -- netbsd's `--sysroot`, cosmo's
+// `-isystem scripts/cosmo-compat`, the three darwin files' `-mmacosx-version-min` compat
+// floor. CI run 35530707866 (2026-09-20) partitioned exactly on that: every leg with a
+// toolchain file failed or was pending, every leg without one passed. Declining costs those
+// legs nothing they had -- all 40 are `unproven` for path independence in
+// test/repro-verdicts.cjs -- and the way to give them the property is to deliver the
+// mapping through the configure's CFLAGS/LDFLAGS environment, which cmake APPENDS to _INIT
+// instead of replacing. That also reaches cmake's own try_compile probes, so it is its own
+// piece of work.
 //
 // WHAT IS MAPPED, and what that costs. Two roots, to two fixed sentinels: the vendored
 // source tree and the build directory. Mapping to a sentinel rather than to `.` is the
@@ -225,9 +241,14 @@ function resolveCompiler({
 // WITH them and reconfigured by an opted-out run gets the opted-out value.
 function filePrefixMapDecision({
   cc = 'cc', source = 'path', mappings = [], env = process.env, probeFn = probeFilePrefixMap,
+  crossFile = '',
 } = {}) {
   if (filePrefixMapOptedOut(env)) {
     return { state: 'opted-out', cc, source, mappings, flags: [] };
+  }
+  // Before the probe, not after: an answer this decision cannot use is not worth a compile.
+  if (crossFile) {
+    return { state: 'cross-toolchain', cc, source, mappings, crossFile, flags: [] };
   }
   const state = probeFn({ cc });
   const base = { state, cc, source, mappings };
@@ -246,7 +267,7 @@ function filePrefixMapDecision({
 // as "no decision was made", which is the failure mode the whole log-the-decision pattern
 // exists to prevent, and it would be introduced by the most likely future edit.
 function describeFilePrefixMapDecision(decision) {
-  const { state, cc, source, mappings } = decision || {};
+  const { state, cc, source, mappings, crossFile } = decision || {};
   const where = `cc=${cc} source=${source}`;
   const maps = (mappings || []).map(([from, to]) => `${from}=${to}`).join(' ');
   if (state === 'file-prefix-map') {
@@ -269,6 +290,15 @@ function describeFilePrefixMapDecision(decision) {
   }
   if (state === 'opted-out') {
     return 'build-tjs: file-prefix-map: NONE (opted out: CLODE_TJS_FILE_PREFIX_MAP=0)';
+  }
+  if (state === 'cross-toolchain') {
+    return `build-tjs: file-prefix-map: NONE ${where} (DECLINED: ${crossFile} is in play, `
+      + 'and a -DCMAKE_C_FLAGS= on the command line where there was none would DISCARD that '
+      + "file's CMAKE_C_FLAGS_INIT -- cmake seeds the cache entry from _INIT only when it "
+      + 'does not already exist. That is the --sysroot, the -isystem and the '
+      + '-mmacosx-version-min floor. This leg keeps baking its build path into its objects '
+      + 'and is NOT path-independent; giving it the property means routing the mapping '
+      + 'through the configure environment, which cmake appends to _INIT)';
   }
   throw new Error(`unknown file-prefix-map state '${state}' — describeFilePrefixMapDecision `
     + 'must be taught every state filePrefixMapDecision can return, or a build silently logs '
@@ -348,10 +378,16 @@ function probeOsoPrefix({
 // debug map is the silent partial fix in a new costume.
 function osoPrefixDecision({
   cc = 'cc', source = 'path', prefix = '', env = process.env,
-  probeFn = probeOsoPrefix, realpathFn = fs.realpathSync,
+  probeFn = probeOsoPrefix, realpathFn = fs.realpathSync, crossFile = '',
 } = {}) {
   if (filePrefixMapOptedOut(env)) {
     return { state: 'opted-out', cc, source, prefix, flags: [] };
+  }
+  // BOTH halves decline together, for the same reason the opt-out turns off both: the
+  // darwin toolchain files carry the compat floor in CMAKE_EXE_LINKER_FLAGS_INIT too, so
+  // declining only the compiler half would still take the floor out of the link line.
+  if (crossFile) {
+    return { state: 'cross-toolchain', cc, source, prefix, crossFile, flags: [] };
   }
   const state = probeFn({ cc });
   let resolved = prefix;
@@ -363,7 +399,7 @@ function osoPrefixDecision({
 }
 
 function describeOsoPrefixDecision(decision) {
-  const { state, cc, source, prefix } = decision || {};
+  const { state, cc, source, prefix, crossFile } = decision || {};
   if (state === 'oso-prefix') {
     return `build-tjs: oso-prefix: STRIP cc=${cc} source=${source} (ld accepts -oso_prefix; `
       + `the debug map will record object names relative to ${prefix})`;
@@ -379,6 +415,12 @@ function describeOsoPrefixDecision(decision) {
   }
   if (state === 'opted-out') {
     return 'build-tjs: oso-prefix: NONE (opted out: CLODE_TJS_FILE_PREFIX_MAP=0)';
+  }
+  if (state === 'cross-toolchain') {
+    return `build-tjs: oso-prefix: NONE cc=${cc} source=${source} (DECLINED: ${crossFile} `
+      + 'is in play, and a -DCMAKE_EXE_LINKER_FLAGS= created here would DISCARD that file\'s '
+      + 'CMAKE_EXE_LINKER_FLAGS_INIT -- on the darwin cross files that is the '
+      + '-mmacosx-version-min compat floor, and losing it BUILDS GREEN)';
   }
   throw new Error(`unknown oso-prefix state '${state}' — describeOsoPrefixDecision must be `
     + 'taught every state osoPrefixDecision can return');

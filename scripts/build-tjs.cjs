@@ -4052,7 +4052,16 @@ fs.mkdirSync(buildDir, { recursive: true });
 //
 // BUILD FIRST, SOURCE SECOND: see prefixMapFlags' ordering note (an overlapping pair, which
 // a CLODE_TJS_BUILD inside the source tree would create, resolves most-specific-first).
+//
+// AND crossFile, WHICH DECLINES BOTH LEVERS. Not timidity: on a cross leg adding this flag
+// SUBTRACTS others. cmake seeds the CMAKE_C_FLAGS cache entry from the toolchain file's
+// CMAKE_C_FLAGS_INIT only when that entry does not already exist, so the `-DCMAKE_C_FLAGS=`
+// this would CREATE (the argv has none on those legs) throws the whole _INIT away --
+// netbsd's --sysroot, cosmo's -isystem, the darwin files' -mmacosx-version-min floor. Run
+// 35530707866 partitioned exactly on it. See file-prefix-map.cjs's header for the measured
+// cmake transcript and for what routing through the configure's CFLAGS would buy instead.
 const filePrefixMap = filePrefixMapDecision({
+  crossFile,
   ...resolveCcForPrefixMap({ cmakeArgs, toolchainFile: crossFile ? path.resolve(crossFile) : '' }),
   // expandMappings, not the raw pair: each root is mapped under BOTH the name this build
   // uses and the name the OS resolves it to. Handing the raw pair over is exactly the run
@@ -4066,7 +4075,12 @@ applyFilePrefixMapDecision(cmakeArgs, filePrefixMap);
 // (txiki's CMakeLists adds it) ld64 writes a DEBUG MAP of every object's absolute path into
 // the symbol table, so two builds with clean, byte-identical objects still link to different
 // binaries. Measured: 46 N_OSO entries, +1016 bytes of string table.
+// It declines on a cross leg for the same reason the compiler half does, and the darwin
+// cross files make the stake concrete: they carry -mmacosx-version-min in
+// CMAKE_EXE_LINKER_FLAGS_INIT as well, so a -DCMAKE_EXE_LINKER_FLAGS= created here takes
+// the compat floor out of the LINK line -- and that regression builds perfectly green.
 const osoPrefix = osoPrefixDecision({
+  crossFile,
   ...resolveCcForPrefixMap({ cmakeArgs, toolchainFile: crossFile ? path.resolve(crossFile) : '' }),
   prefix: buildDir,
 });
