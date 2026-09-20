@@ -24,7 +24,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { defineGuard, guardTests } = require('./guard.cjs');
-const { committedExecBit } = require('./posix-host.cjs');
+const { shTest, committedExecBit } = require('./posix-host.cjs');
 
 const REPO = path.join(__dirname, '..');
 const BOOT = path.join(REPO, 'scripts', 'build-tjs-boot.sh');
@@ -98,9 +98,18 @@ function verdict(out) {
 
 // ---------------------------------------------------------------------------
 // What the wrapper does.
+//
+// shTest, NOT test: every case below spawns scripts/build-tjs-boot.sh BY ITS OWN PATH,
+// which on win32 is not an executable image at all — spawnSync answers `status: null`
+// and all nine cases failed on `null !== 0` in CI run 35521083887 (tests 216-224). The
+// skip, its stated reason, and the gate that keeps it from spreading live in
+// test/posix-host.cjs; no Windows leg runs this wrapper (the msvc legs run
+// `node scripts/build-tjs.cjs` natively — see NOT_YET_FLIPPED below, which records that
+// as the reason step 4 is not flipped), and the ubuntu and darwin rows run all nine for
+// real on every push. The GUARD below still runs here, because it READS the wrapper.
 // ---------------------------------------------------------------------------
 
-test('resolver exit 0 -> build-tjs.cjs runs UNDER the resolved engine, through the shim loader', () => {
+shTest('resolver exit 0 -> build-tjs.cjs runs UNDER the resolved engine, through the shim loader', () => {
   const sb = sandbox();
   fs.writeFileSync(path.join(sb.dir, 'scripts', 'bootstrap-engine.sh'),
     `#!/bin/sh\ncase "$1" in --print-target) echo linux-amd64; exit 0 ;; esac\nprintf '%s\\n' '${sb.engine}'\n`);
@@ -122,7 +131,7 @@ test('resolver exit 0 -> build-tjs.cjs runs UNDER the resolved engine, through t
   assert.strictEqual(v['resolver-rc'], '0');
 });
 
-test('resolver exit 3 -> node, and the line says node so a green run cannot be mistaken for a tjs one', () => {
+shTest('resolver exit 3 -> node, and the line says node so a green run cannot be mistaken for a tjs one', () => {
   const sb = sandbox({ rc: 3, stderr: 'bootstrap: no linux-brandnewarch in pack\\n' });
   const r = run(sb, ['a-site', '--build-only']);
   assert.strictEqual(r.status, 0, r.err);
@@ -136,7 +145,7 @@ test('resolver exit 3 -> node, and the line says node so a green run cannot be m
     "the resolver's own reason must reach the log, not be swallowed by the wrapper");
 });
 
-test('a resolver REFUSAL (exit 1) does not fall back — it fails, and nothing runs', () => {
+shTest('a resolver REFUSAL (exit 1) does not fall back — it fails, and nothing runs', () => {
   // The distinction the whole design rests on: exit 3 is "this target has no slice yet,
   // build it under node once"; exit 1 is a finding (a bad digest, a lying hasher, an
   // engine that misses HEAD's API floor). Falling back on a finding would convert every
@@ -150,7 +159,7 @@ test('a resolver REFUSAL (exit 1) does not fall back — it fails, and nothing r
   assert.strictEqual(verdict(r.out).engine, 'none');
 });
 
-test('exit 3 with no node on the machine fails loudly rather than doing nothing', () => {
+shTest('exit 3 with no node on the machine fails loudly rather than doing nothing', () => {
   // This is the alpine case after `nodejs` leaves its packages list: there is no node to
   // fall back to. The honest outcome is a red leg naming the situation, never a step that
   // exits 0 having built nothing.
@@ -161,7 +170,7 @@ test('exit 3 with no node on the machine fails loudly rather than doing nothing'
   assert.match(r.err, /no node/i);
 });
 
-test('the build\'s own exit status is the step\'s exit status', () => {
+shTest('the build\'s own exit status is the step\'s exit status', () => {
   const sb = sandbox({ engineExit: 7 });
   fs.writeFileSync(path.join(sb.dir, 'scripts', 'bootstrap-engine.sh'),
     `#!/bin/sh\ncase "$1" in --print-target) echo linux-amd64; exit 0 ;; esac\nprintf '%s\\n' '${sb.engine}'\n`);
@@ -172,14 +181,14 @@ test('the build\'s own exit status is the step\'s exit status', () => {
     + 'for a failed build is the worst outcome available');
 });
 
-test('a resolver that exits 0 but prints nothing is refused, not run as ""', () => {
+shTest('a resolver that exits 0 but prints nothing is refused, not run as ""', () => {
   const sb = sandbox({ rc: 0, stdout: '' });
   const r = run(sb, ['a-site', '--build-only']);
   assert.notStrictEqual(r.status, 0);
   assert.strictEqual(verdict(r.out).engine, 'none');
 });
 
-test('the log line is a flat key=value list: no field ever contains a space', () => {
+shTest('the log line is a flat key=value list: no field ever contains a space', () => {
   // `args=--source-only --build-only` would read as two fields to anything that splits on
   // whitespace — including verdict() above, which is deliberately written the way a CI
   // grep|awk would be. The one artifact this whole wave is accepted on has to parse.
@@ -191,13 +200,13 @@ test('the log line is a flat key=value list: no field ever contains a space', ()
   assert.strictEqual(v.engine, 'node');
 });
 
-test('it takes a site label and at least one build-tjs argument, or exits 2', () => {
+shTest('it takes a site label and at least one build-tjs argument, or exits 2', () => {
   const sb = sandbox();
   assert.strictEqual(run(sb, []).status, 2);
   assert.strictEqual(run(sb, ['a-site']).status, 2);
 });
 
-test('it runs identically under dash', (t) => {
+shTest('it runs identically under dash', (t) => {
   const { execFileSync, spawnSync } = require('node:child_process');
   let dash = '';
   try { dash = execFileSync('sh', ['-c', 'command -v dash'], { encoding: 'utf8' }).trim(); } catch { /* none */ }
