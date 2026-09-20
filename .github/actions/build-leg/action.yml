@@ -193,6 +193,63 @@ runs:
           esac
         fi
         echo "exec=$exec" >> "$GITHUB_OUTPUT"
+
+        # ---- ccache: which legs get the compiler launcher a LOCAL build already gets ---
+        #
+        # scripts/ccache-launcher.cjs has enabled ccache on mere presence since it landed,
+        # and scripts/build-tjs.cjs prints one `build-tjs: ccache: ...` line per build
+        # saying which way that went. None of it was ever wired HERE: no workflow installed
+        # ccache and none set or persisted a CCACHE_DIR, so a runner that happened to ship
+        # one (windows-latest does, via Strawberry Perl) started cold every run and could
+        # never hit, and every other leg saw no launcher at all.
+        #
+        # WHY THIS IS NOT REDUNDANT WITH THE tjs-cache BELOW. That cache is keyed on the
+        # engine RECIPE HASH, so it is all-or-nothing: a hit skips the compile entirely and
+        # a miss gives nothing. The recipe hash moves whenever ANY engine source moves —
+        # including an orchestration file that changes not one translation unit — and each
+        # move rebuilds all 42 legs from scratch (three times on 2026-09-20 alone). ccache
+        # keys on PREPROCESSED SOURCE, so on exactly those moves nearly every one of the
+        # ~371 translation units is byte-identical and still hits. Measured on the
+        # developer box this is meant to make CI resemble: cold 0/371, warm 370/371
+        # (99.7%), 59.4s -> 34.0s.
+        #
+        # THE ELIGIBLE SET IS `exec`, NOT A LIST OF LEG NAMES, so a new leg inherits the
+        # right answer from the shape it already declares:
+        #   host   the compile runs on THIS runner (native, cosmo) or in a container that
+        #          bind-mounts runner.temp (alpine) -> a persistent cache is reachable
+        #   cross  same machine: a docker toolchain image with runner.temp at /scratch, or
+        #          the NetBSD build.sh cross toolchain running on the runner itself
+        #   guest  a SEPARATE machine whose only channel is an rsync of the workspace, with
+        #          a $HOME that dies with the VM. A workspace-relative cache would round-
+        #          trip over that rsync twice a run — the very cost the guest script already
+        #          avoids by moving TMPDIR and the CMake build dir out of the workspace.
+        #   qemu   the engine bakes inside a TCG-emulated sparc guest from a hand-written
+        #          cc/gmake recipe that never runs build-tjs.cjs, over a serial console.
+        # Both exclusions are stated in test/ccache-ci.test.cjs's EXEMPT rather than being
+        # silently absent from a list.
+        #
+        # WINDOWS IS OFF, and not as an afterthought: the two MSVC legs are the ones
+        # scripts/ccache-launcher.cjs DECLINES outright (partial, unverified MSVC support,
+        # on the legs that skip the object-grain reproducibility harness). Installing and
+        # persisting a cache the launcher refuses to use is pure cost, so the decline is
+        # respected here too instead of being worked around.
+        case "$exec" in
+          host|cross) ccache=1 ;;
+          *)          ccache=0 ;;
+        esac
+        [ "${RUNNER_OS:-}" != Windows ] || ccache=0
+        echo "ccache=$ccache" >> "$GITHUB_OUTPUT"
+        # ONE path for every eligible class, which runner.temp is uniquely able to be: it
+        # is on the runner (so actions/cache can see it), it is inside the alpine
+        # container's bind mount at the SAME absolute path (/home/runner/work/_temp is
+        # under the `-v /home/runner/work:/home/runner/work` the guest action passes), and
+        # it is bind-mounted into the cross-toolchain containers at /scratch. ~/.cache/
+        # clode — the idiom the cosmocc and bootstrap caches use — is none of those things
+        # inside a container. Emitted unconditionally, including on Windows, so the build
+        # step's `env:` is one plain expression rather than a conditional producing an
+        # EMPTY CCACHE_DIR (which a ccache that did run would reject outright).
+        echo "ccachedir=$RUNNER_TEMP/ccache" >> "$GITHUB_OUTPUT"
+
         if [ "$exec" = guest ]; then
           # The VM backends (cpa.sh AND vmactions — netbsd/freebsd/openbsd/
           # dragonflybsd/omnios/midnightbsd via cpa.sh; solaris/openindiana/
@@ -325,6 +382,48 @@ runs:
         path: ~/.cache/clode/bootstrap/${{ steps.bootstrap-tag.outputs.tag }}/${{ steps.name.outputs.target }}
         key: bootstrap-${{ steps.bootstrap-tag.outputs.tag }}-${{ steps.name.outputs.target }}
 
+    # ---- the ccache, restored -------------------------------------------------------
+    #
+    # WHAT THE KEY IS, IN ONE SENTENCE: the tjs cache key above, minus the recipe hash,
+    # plus the run id.
+    #
+    # MINUS THE RECIPE HASH, because that is the entire point. The recipe hash is what
+    # makes the engine cache all-or-nothing; keying this on it too would zero the ccache
+    # on precisely the events where ccache is the only thing that can help (an
+    # orchestration file joins engine-recipe.mjs's FILES, every leg's key moves, and not
+    # one translation unit changed). test/ccache-ci.test.cjs fails if it ever creeps in.
+    #
+    # KEEPING THE BUILD-ENVIRONMENT AXES (image, guest-version, SDK, floor, cross image),
+    # though ccache would be SAFE without them: unlike the raw-artifact cache above, a
+    # wrong hit is not possible here — ccache re-derives its key from the preprocessed
+    # source, the compiler and the exact argument list on every single compile, so a cache
+    # from another toolchain simply misses. They are in the key for CAPACITY, not safety:
+    # one cache line shared by two SDK generations holds half as many useful objects
+    # inside the same 200M budget.
+    #
+    # PLUS THE RUN ID, and this is the part that is easy to get wrong. actions/cache keys
+    # are IMMUTABLE: when the primary key hits exactly, nothing is written back at the end
+    # of the job. A static key would be populated once — by whichever run first happened
+    # to miss, i.e. a cold one — and then frozen forever, reading in the logs exactly like
+    # a working cache while behaving like none. A run-scoped key always misses on the
+    # primary and always saves; restore-keys rolls the newest previous entry forward.
+    #
+    # RESTORE/SAVE SPLIT, rather than the plain actions/cache the other four caches here
+    # use: the save below is conditional on a build having actually HAPPENED. On a
+    # tjs-cache hit nothing compiled, so there is nothing new to store, and re-uploading a
+    # byte-identical cache under a fresh key every run would churn the repository's shared
+    # 10 GB budget — evicting the engine caches, which are worth far more per byte — in
+    # exchange for nothing. So ccache traffic is proportional to engine REBUILDS, not to
+    # runs, which is also exactly the population this feature exists to speed up.
+    - name: Restore the ccache (build-env keyed, deliberately NOT recipe keyed)
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && steps.mode.outputs.ccache == '1'
+      uses: actions/cache/restore@v6.1.0
+      with:
+        path: ${{ steps.mode.outputs.ccachedir }}
+        key: ccache-${{ inputs.leg }}-${{ steps.axes.outputs.image }}-${{ inputs.guest-version }}-${{ inputs.macos-min }}-${{ inputs.macos-sdk }}-${{ inputs.cross-image }}-${{ inputs.cross-dockerfile }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          ccache-${{ inputs.leg }}-${{ steps.axes.outputs.image }}-${{ inputs.guest-version }}-${{ inputs.macos-min }}-${{ inputs.macos-sdk }}-${{ inputs.cross-image }}-${{ inputs.cross-dockerfile }}-
+
     - name: Force LF line endings for the tjs checkout (native Windows)
       if: runner.os == 'Windows'
       shell: bash
@@ -448,10 +547,31 @@ runs:
     # later NetBSD cross-build (--build-only) reuses (CMake caches the compiler
     # per build dir), silently shipping a HOST binary. Caught the m68k leg
     # 2026-07-14 (run 29354107445 uploaded an x86-64 ELF labeled netbsd-m68k).
+    # ONE provide for BOTH host-side compiles — the native build immediately below and the
+    # NetBSD build.sh cross-build much further down. Both run the compiler on this runner's
+    # own PATH, so installing once here serves both; the matching report sits after the
+    # second of them. The condition is the complement of the two containerised classes
+    # (alpine, and the docker cross-toolchain images), which install inside their own
+    # container because that is where their compiler lives.
+    - name: Provide ccache (host-side compiles — native, cosmo, NetBSD cross)
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && steps.mode.outputs.ccache == '1' && inputs.guest-platform != 'alpine' && inputs.cross-image == '' && inputs.cross-dockerfile == ''
+      shell: bash
+      env:
+        CCACHE_DIR: ${{ steps.mode.outputs.ccachedir }}
+      run: scripts/ci-ccache.sh provide ${{ inputs.leg }}
+
     - name: Build tjs (native)
       if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.guest-platform == 'native' && inputs.cross-image == '' && inputs.cross-dockerfile == '' && inputs.netbsd-src == ''
       shell: bash
       env:
+        # The directory the restore/save pair above persists. scripts/ccache-launcher.cjs
+        # finds the BINARY on PATH by itself; this is the only half of the wiring the
+        # build cannot infer, because ccache's own default lives under a cache home that
+        # dies with the runner. Set on every native leg including the MSVC ones, where it
+        # is inert: the launcher declines cl, so nothing reads it. An expression that went
+        # EMPTY on those legs would be worse — an empty CCACHE_DIR is one a real ccache
+        # rejects outright, which is a failure waiting for the day the decline is lifted.
+        CCACHE_DIR: ${{ steps.mode.outputs.ccachedir }}
         CLODE_TJS_VENDOR: ${{ steps.mode.outputs.vendor }}
         CLODE_TJS_OUT: ${{ steps.mode.outputs.out }}
         CLODE_TJS_STATIC: ${{ inputs.static == 'true' && '1' || '' }}
@@ -525,7 +645,17 @@ runs:
           # so a cache restored on the host before this container started is
           # already sitting here when the resolver looks for it.
           export CLODE_CACHE="$GITHUB_WORKSPACE/.matrix/bootstrap-cache"
+          # ccache lives INSIDE this container, because the compiler does. The directory,
+          # however, is the runner's: runner.temp is /home/runner/work/_temp, which sits
+          # under the `-v /home/runner/work:/home/runner/work` the guest action passes, so
+          # the SAME absolute path names the same bytes on both sides of the mount and the
+          # restore/save pair on the host persists exactly what this build warmed. (Six of
+          # these eight legs compile under qemu-user emulation, which is where a cache hit
+          # is worth the most and a cold compile costs the most.)
+          export CCACHE_DIR="${{ steps.mode.outputs.ccachedir }}"
+          sh scripts/ci-ccache.sh provide ${{ inputs.leg }}
           scripts/build-tjs-boot.sh alpine-guest --build-only
+          sh scripts/ci-ccache.sh report ${{ inputs.leg }}
 
     # Cross-build the engine inside a toolchain image on the ubuntu runner —
     # the generic exec=cross path. The source phase already ran on the host
@@ -569,6 +699,15 @@ runs:
         MIMALLOC: ${{ inputs.mimalloc }}
         FFI: ${{ inputs.ffi }}
         CROSS_IMAGE: ${{ inputs.cross-image }}
+        LEG: ${{ inputs.leg }}
+        # ccache runs INSIDE the container, so the directory has to be named in the
+        # container's spelling: runner.temp is bind-mounted at /scratch (one line below),
+        # which is the same bytes the host-side restore/save pair persists as
+        # steps.mode.outputs.ccachedir. All three of these images are apt-based — ubuntu
+        # 24.04 for the pinned ghcr gcc-powerpc-apple-darwin8 (read out of its config
+        # blob), debian:bookworm-slim for ci/osxcross-darwin, debian:trixie for the
+        # riscv64/s390x legs — so scripts/ci-ccache.sh's apt branch covers every one.
+        CCACHE_DIR: /scratch/ccache
       run: |
         set -euo pipefail
         # cross-image → pull the pinned registry image (ppc); else use the local
@@ -577,6 +716,7 @@ runs:
         else IMG="clode-cross-toolchain:${{ inputs.leg }}"; fi
         docker run --rm \
           -e CROSS_APT -e CROSS_FILE -e ATOMIC_SHIM -e DARWIN_POLL -e WASM -e MIMALLOC -e FFI \
+          -e LEG -e CCACHE_DIR \
           -v "${{ github.workspace }}:/w" -v "${{ runner.temp }}:/scratch" -w /w "$IMG" bash -c '
           set -euxo pipefail
           if [ -n "$CROSS_APT" ]; then apt-get update -q && apt-get install -y -q $CROSS_APT >/dev/null; fi
@@ -595,7 +735,9 @@ runs:
           export CLODE_TJS_ATOMIC_SHIM=$ATOMIC_SHIM
           export CLODE_TJS_DARWIN_POLL=$DARWIN_POLL
           export CLODE_TJS_WASM=$WASM CLODE_TJS_MIMALLOC=$MIMALLOC CLODE_TJS_FFI=$FFI CLODE_TJS_SMOKE=off
+          sh scripts/ci-ccache.sh provide "$LEG"
           node scripts/build-tjs.cjs --build-only
+          sh scripts/ci-ccache.sh report "$LEG"
         '
 
     # ---- NetBSD build.sh cross legs (netbsd-m68k): the other exec=cross path.
@@ -619,6 +761,17 @@ runs:
       if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.netbsd-src != ''
       shell: bash
       env:
+        # Same directory, same restore/save pair, same "Provide ccache (host-side
+        # compiles)" step far above: this build runs on the ubuntu runner and only the
+        # COMPILER it drives is a cross one. Worth noting what the first run will decide
+        # here and nowhere else: the build.sh cross-gcc is produced fresh, or restored from
+        # the netbsd-crossbuild cache, on every run, so whether these twelve legs hit at
+        # all depends on ccache's default compiler check (size+mtime) surviving that. If
+        # they report ALL-MISS while the native legs report HIT, CCACHE_COMPILERCHECK=
+        # content is the answer, and it is deliberately NOT set pre-emptively — the
+        # directive is parity with a local build, and a divergence wants a measurement
+        # behind it rather than a hunch.
+        CCACHE_DIR: ${{ steps.mode.outputs.ccachedir }}
         CLODE_TJS_VENDOR: ${{ steps.mode.outputs.vendor }}
         CLODE_TJS_OUT: ${{ steps.mode.outputs.out }}
         CLODE_TJS_CROSS_FILE: ${{ inputs.cross-file }}
@@ -638,6 +791,41 @@ runs:
       # (which is the only time this step runs), so it is never mistaken for a candidate
       # engine — see scripts/bootstrap-engine.sh's is_engine_file.
       run: scripts/build-tjs-boot.sh netbsd-cross --build-only
+
+    # ---- the ccache, reported and saved ----------------------------------------------
+    #
+    # Both host-side compiles are behind us by here (the native build far above and the
+    # NetBSD cross-build directly above), and the two containerised classes report from
+    # inside their own containers, so this is the one place a host-side report can cover
+    # both without running twice.
+    #
+    # WHY A REPORT AT ALL, when build-tjs.cjs already prints `build-tjs: ccache: ENABLED
+    # ...`: that line is the DECISION, taken before a single file compiles. It cannot say
+    # whether the cache then hit, and a leg at 0% is indistinguishable in the log from a
+    # leg at 99%. That is the same invisibility that let ccache drive MSVC on a shipping
+    # release leg for an unknown number of runs; one greppable
+    # `ci-ccache: <leg>: HITS=.. MISSES=.. RATE=.. VERDICT=..` line per leg is what makes
+    # the next such question answerable from the logs instead of from a hunch.
+    - name: ccache stats (host-side compiles)
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && steps.mode.outputs.ccache == '1' && inputs.guest-platform != 'alpine' && inputs.cross-image == '' && inputs.cross-dockerfile == ''
+      shell: bash
+      env:
+        CCACHE_DIR: ${{ steps.mode.outputs.ccachedir }}
+      run: scripts/ci-ccache.sh report ${{ inputs.leg }}
+
+    # The save half of the split explained at the restore step: conditional on a build
+    # having HAPPENED (a tjs-cache hit compiled nothing, so there is nothing new to
+    # store), and under a run-scoped key so it is actually written — an exact-key hit
+    # writes nothing back, which would freeze this cache at its first, coldest content.
+    # Key repeated verbatim rather than referenced: composite actions have no way to name
+    # a previous step's cache key, and test/ccache-ci.test.cjs checks BOTH copies for the
+    # two properties that matter (no recipe hash, run-scoped).
+    - name: Save the ccache
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && steps.mode.outputs.ccache == '1'
+      uses: actions/cache/save@v6.1.0
+      with:
+        path: ${{ steps.mode.outputs.ccachedir }}
+        key: ccache-${{ inputs.leg }}-${{ steps.axes.outputs.image }}-${{ inputs.guest-version }}-${{ inputs.macos-min }}-${{ inputs.macos-sdk }}-${{ inputs.cross-image }}-${{ inputs.cross-dockerfile }}-${{ github.run_id }}-${{ github.run_attempt }}
 
     # ---- own-qemu qemu-* legs (netbsd-sparc: first user, plan
     # netbsd-sparc-matrix-leg Task 3 — STRUCTURAL first pass). Unlike a
