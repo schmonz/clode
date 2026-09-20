@@ -75,6 +75,37 @@ function scanReproWiring({ src }) {
       + 'line), not quietly no-op — an unapplied fixup silently un-reproduces every build');
   }
 
+  // THE THIRD CAUSE, and the one that makes the engine a function of THE BUILDER'S GIT
+  // CHECKOUT rather than of its own sources. MEASURED 2026-09-20, from a path-independence
+  // double build: 371 of 372 objects identical, and
+  // deps/mimalloc/.../options.c.o differing by 87 bytes, carrying
+  //
+  //     git v0.20260831.1-323-g611c0ab   vs   git v0.20260831.1-324-g72097c4
+  //
+  // -- THIS repo's `git describe`, which moved because a commit landed between the two
+  // builds. deps/mimalloc/CMakeLists.txt:88 tests for `${CMAKE_SOURCE_DIR}/.git/index` and
+  // then runs `git describe` with NO working directory, so it answers about whatever
+  // directory cmake was launched from, and defines MI_GIT_DESCRIBE from it.
+  //
+  // Consequence, which is worse than one unstable object: every commit to clode changes the
+  // engine's bytes, whether or not it changes an engine source, so no engine hash can ever
+  // be a function of the recipe and rebuild-and-verify cannot work. The existing
+  // `reproducible` verdicts held only because both of their builds happened inside one
+  // un-committed window.
+  examined++;
+  if (src.split('\n').filter((l) => /^\s*fixupMimallocGitDescribe\(tjsDir\);\s*$/.test(l)).length !== 1) {
+    findings.push('scripts/build-tjs.cjs must call `fixupMimallocGitDescribe(tjsDir);` exactly '
+      + 'once, unconditionally, in the source phase — without it mimalloc defines '
+      + "MI_GIT_DESCRIBE from whatever `git describe` says in cmake's working directory, and "
+      + "the engine's bytes become a function of the BUILDER's checkout state");
+  }
+
+  examined++;
+  if (!/throw new Error\('fixup mimalloc-git-describe: anchor not found/.test(src)) {
+    findings.push('the git-describe fixup must THROW when its anchor is gone, not quietly '
+      + 'no-op — an unapplied fixup silently un-reproduces every build');
+  }
+
   examined++;
   if (src.split('\n').filter((l) => /^process\.env\.ZERO_AR_DATE = '1';$/.test(l)).length !== 1) {
     findings.push("scripts/build-tjs.cjs must set `process.env.ZERO_AR_DATE = '1';` exactly once "
@@ -90,8 +121,8 @@ const reproWiringGuard = defineGuard({
   name: 'engine-reproducibility-wiring',
   read: () => ({ src: fs.readFileSync(path.join(REPO, 'scripts/build-tjs.cjs'), 'utf8') }),
   scan: scanReproWiring,
-  // Four independent facts in one named file — the exact measured count.
-  floor: 4,
+  // Six independent facts in one named file — the exact measured count.
+  floor: 6,
   // Models the regression precisely: a build script that has lost both levers.
   control: () => ({ src: '// a source phase with no banner fixup and no archive-date lever\n' }),
 });
