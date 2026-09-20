@@ -215,6 +215,20 @@ const GUARD_EXCLUSIONS = [
       + 'edge actually fires.',
   },
   {
+    file: 'bootstrap-engine-online.test.cjs',
+    because: 'it is a live ACCEPTANCE run, not a scan, the same shape as '
+      + 'build-tjs-no-node.test.cjs above: it range-fetches the pinned release\'s engine '
+      + 'slice over the network, inflates and sha-verifies it, and then EXECUTES it — '
+      + "asserting on stdout that run just produced (`tjs-shim-ok`, and build-tjs.cjs's own "
+      + 'argv-guard message). Both classifier signals are false positives on that shape: '
+      + 'READS_ARTIFACT fires on the repo-rooted path to the committed pin it hands the '
+      + 'resolver, and PATTERN_MATCHES on `assert.match` against child-process output. '
+      + 'There is no fixed artifact to scan and no violation pattern to look for — the '
+      + "subject is whether the last release's engine still RUNS HEAD's shim. The "
+      + 'scanner-shaped half of this work (the resolver\'s structural rules) IS migrated, '
+      + 'as the bootstrap-resolver-shape guard in test/bootstrap-engine.test.cjs.',
+  },
+  {
     file: 'guards-population.test.cjs',
     because: 'this IS the sweep — it classifies OTHER tests\' shape and asserts about the '
       + 'discovered file LIST, which trips READS_ARTIFACT (it reads REPO/__dirname-rooted '

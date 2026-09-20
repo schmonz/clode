@@ -1,0 +1,328 @@
+{
+  "schema": 2,
+  "bootstrapTag": "v0.20260831.1",
+  "tjsPin": "26.6.0-1a230d3",
+  "blob": "templates-26.6.0-1a230d3",
+  "targets": {
+    "cosmo": {
+      "tag": "cosmo",
+      "engine": "tjs-cosmo-26.6.0-1a230d3",
+      "sha256": "62bf19d8b58ac4a11405f9e8d9902b9046a9c304dcdf671c3ac194675fb07ce5",
+      "verified": "smoke",
+      "offset": 0,
+      "length": 4032965
+    },
+    "macos-arm64": {
+      "tag": "macos-11.0-arm64",
+      "engine": "tjs-macos-arm64-26.6.0-1a230d3",
+      "sha256": "b8b05b31b8b5f29a06fdcdf8f4c56b6cefdf4dcebb93d7bc578dd3a2bd7b891a",
+      "verified": "attest-only",
+      "offset": 51510246,
+      "length": 2550351
+    },
+    "macos-ppc": {
+      "tag": "macos-10.4-ppc",
+      "engine": "tjs-macos-ppc-26.6.0-1a230d3",
+      "sha256": "09659d24b1270a2fee5ff31cec72f070478080d95bb18974b3d05095c29d4255",
+      "verified": "attest-only",
+      "offset": 56512241,
+      "length": 2552446
+    },
+    "macos-amd64": {
+      "tag": "macos-10.6-amd64",
+      "engine": "tjs-macos-amd64-26.6.0-1a230d3",
+      "sha256": "6aafe6b5fccdd8607f75872af97bbf3eca7f214d1243b4031e8f1b5ad5843592",
+      "verified": "attest-only",
+      "offset": 49027901,
+      "length": 2482345
+    },
+    "macos-i386": {
+      "tag": "macos-10.4-i386",
+      "engine": "tjs-macos-i386-26.6.0-1a230d3",
+      "sha256": "22e1cb721181c35e81c6f18d22170f365dd9132f639610b48c21986de91c51c6",
+      "verified": "attest-only",
+      "offset": 54060597,
+      "length": 2451644
+    },
+    "dragonflybsd-amd64": {
+      "tag": "dragonflybsd-6.4.2-amd64",
+      "engine": "tjs-dragonflybsd-amd64-26.6.0-1a230d3",
+      "sha256": "4a18bb49888ce9710b0422416c10e06741f931cf1b4e0407152f8abea49a4efd",
+      "verified": "smoke",
+      "offset": 4032965,
+      "length": 3142005
+    },
+    "freebsd-amd64": {
+      "tag": "freebsd-14.0-amd64",
+      "engine": "tjs-freebsd-amd64-26.6.0-1a230d3",
+      "sha256": "0938f8eb6977ffbf94a05ebbde83a1ea49c5a3cfc412812c6457112a959ad8f1",
+      "verified": "smoke",
+      "offset": 7174970,
+      "length": 2923130
+    },
+    "freebsd-arm64": {
+      "tag": "freebsd-14.4-arm64",
+      "engine": "tjs-freebsd-arm64-26.6.0-1a230d3",
+      "sha256": "d2768329a261e355f36ac51a1c4017471ee8c257ddedf2a1558e2346cac52cd6",
+      "verified": "smoke",
+      "offset": 10098100,
+      "length": 2899208
+    },
+    "haiku-amd64": {
+      "tag": "haiku-r1beta6-amd64",
+      "engine": "tjs-haiku-amd64-26.6.0-1a230d3",
+      "sha256": "fbd9f335e9db38422526d8007bb670a502f1d680e4be0c90816e3a64dc18092b",
+      "verified": "smoke",
+      "offset": 12997308,
+      "length": 3155450
+    },
+    "linux-arm64": {
+      "tag": "linux-arm64-musl",
+      "engine": "tjs-linux-arm64-26.6.0-1a230d3",
+      "sha256": "8beb010998552e77e0c3c6acd2e7f4a7360bad764ea07a5475f01b867a733d0f",
+      "verified": "smoke",
+      "offset": 20398222,
+      "length": 4183539
+    },
+    "linux-armv7": {
+      "tag": "linux-armv7-musl",
+      "engine": "tjs-linux-armv7-26.6.0-1a230d3",
+      "sha256": "644dc2372fb698b7490f6f0415db723f74fefafd56599fa47f492693088674e9",
+      "verified": "version",
+      "offset": 24581761,
+      "length": 3651407
+    },
+    "linux-loongarch64": {
+      "tag": "linux-loongarch64-musl",
+      "engine": "tjs-linux-loongarch64-26.6.0-1a230d3",
+      "sha256": "5d92152ae6e956b60b66d1418272e736b4e6a864551a20f33bacf644dba59820",
+      "verified": "version",
+      "offset": 32353282,
+      "length": 4222740
+    },
+    "linux-ppc64le": {
+      "tag": "linux-ppc64le-musl",
+      "engine": "tjs-linux-ppc64le-26.6.0-1a230d3",
+      "sha256": "b132d830bd3cfc8a18556bc44d31195e475909ab4daa7852b84c6f8f2aea1775",
+      "verified": "version",
+      "offset": 36576022,
+      "length": 4286252
+    },
+    "linux-riscv64": {
+      "tag": "linux-riscv64-musl",
+      "engine": "tjs-linux-riscv64-26.6.0-1a230d3",
+      "sha256": "7f2aab7602d3e287ec9368ba51039995e7b708c140c4f09e2e2bbfdecaf56688",
+      "verified": "version",
+      "offset": 40862274,
+      "length": 3918171
+    },
+    "linux-s390x": {
+      "tag": "linux-s390x-musl",
+      "engine": "tjs-linux-s390x-26.6.0-1a230d3",
+      "sha256": "3b10da8bbbffa550a478bfdeca76d20c791f135e8ba2400151f8f16b562329a7",
+      "verified": "version",
+      "offset": 44780445,
+      "length": 4247456
+    },
+    "linux-amd64": {
+      "tag": "linux-amd64-musl",
+      "engine": "tjs-linux-amd64-26.6.0-1a230d3",
+      "sha256": "61f83b91deca2c2629205752560e7df549ec22b63908b4206ace8f7ad2436b1c",
+      "verified": "smoke",
+      "offset": 16152758,
+      "length": 4245464
+    },
+    "linux-i386": {
+      "tag": "linux-i386-musl",
+      "engine": "tjs-linux-i386-26.6.0-1a230d3",
+      "sha256": "8c5d22016ea4510e979b76f908683c7dcf023e0197fbdf9337e500b45c7b473c",
+      "verified": "smoke",
+      "offset": 28233168,
+      "length": 4120114
+    },
+    "midnightbsd-amd64": {
+      "tag": "midnightbsd-4.0.4-amd64",
+      "engine": "tjs-midnightbsd-amd64-26.6.0-1a230d3",
+      "sha256": "760a709531c014a2037e3d6dfbf124c03e5d007091b25e174cf05e680db39965",
+      "verified": "smoke",
+      "offset": 59064687,
+      "length": 2942049
+    },
+    "netbsd-alpha": {
+      "tag": "netbsd-10.1-alpha",
+      "engine": "tjs-netbsd-alpha-26.6.0-1a230d3",
+      "sha256": "8607a121f8395ba33a3b85c4d71561a1a06471473c16d68001001cb51c90cf77",
+      "verified": "attest-only",
+      "offset": 62006736,
+      "length": 3616955
+    },
+    "netbsd-amd64": {
+      "tag": "netbsd-10.1-amd64",
+      "engine": "tjs-netbsd-amd64-26.6.0-1a230d3",
+      "sha256": "e5052bf74a334191900e27bce2ae014954d36eb5d32134e551b1e612c9663456",
+      "verified": "smoke",
+      "offset": 65623691,
+      "length": 3037284
+    },
+    "netbsd-arm64": {
+      "tag": "netbsd-10.1-arm64",
+      "engine": "tjs-netbsd-arm64-26.6.0-1a230d3",
+      "sha256": "c441cc97a5326ef3f07b6c80792f94ebfcebddc8f3aadc550c2681b349910d9d",
+      "verified": "smoke",
+      "offset": 68660975,
+      "length": 3145926
+    },
+    "netbsd-earmv7hf": {
+      "tag": "netbsd-10.1-earmv7hf",
+      "engine": "tjs-netbsd-earmv7hf-26.6.0-1a230d3",
+      "sha256": "219b66271c5d8898e8a64052413ef68bdf0118b964bcc9ffd11f226f13a39266",
+      "verified": "attest-only",
+      "offset": 71806901,
+      "length": 3046603
+    },
+    "netbsd-hppa": {
+      "tag": "netbsd-10.1-hppa",
+      "engine": "tjs-netbsd-hppa-26.6.0-1a230d3",
+      "sha256": "eff82ff532393d795a5585544a23331646d1951e87bc1693daa2c1d0e7235ac4",
+      "verified": "attest-only",
+      "offset": 74853504,
+      "length": 3507724
+    },
+    "netbsd-i386": {
+      "tag": "netbsd-10.1-i386",
+      "engine": "tjs-netbsd-i386-26.6.0-1a230d3",
+      "sha256": "858693b2adc5ba912f70f83fa4b56202c784bcaafc15c31c9616d1c0d7af588a",
+      "verified": "attest-only",
+      "offset": 78361228,
+      "length": 3032268
+    },
+    "netbsd-m68k": {
+      "tag": "netbsd-10.1-m68k",
+      "engine": "tjs-netbsd-m68k-26.6.0-1a230d3",
+      "sha256": "23b49b3b28d80f8b6027bcee64458315462445db9537ef42ed12624ebadfeb42",
+      "verified": "attest-only",
+      "offset": 81393496,
+      "length": 3029936
+    },
+    "netbsd-ppc": {
+      "tag": "netbsd-10.1-ppc",
+      "engine": "tjs-netbsd-ppc-26.6.0-1a230d3",
+      "sha256": "4bbc0d8d2b3d6e3fb7e91700778156413473672435db007eb75e3b1cd37a53a0",
+      "verified": "attest-only",
+      "offset": 94853110,
+      "length": 3573370
+    },
+    "netbsd-mips64eb": {
+      "tag": "netbsd-10.1-mips64eb",
+      "engine": "tjs-netbsd-mips64eb-26.6.0-1a230d3",
+      "sha256": "000380f42122d9fd6169c10e0845838d7de067b24e13330df1dce1d35d25da8a",
+      "verified": "attest-only",
+      "offset": 84423432,
+      "length": 3391953
+    },
+    "netbsd-mipsel": {
+      "tag": "netbsd-10.1-mipsel",
+      "engine": "tjs-netbsd-mipsel-26.6.0-1a230d3",
+      "sha256": "40edc72978bacbe130b17e6417cb78e243a3533926d20df1bdac8f4541724c00",
+      "verified": "attest-only",
+      "offset": 91339246,
+      "length": 3513864
+    },
+    "netbsd-riscv64": {
+      "tag": "netbsd-10.1-riscv64",
+      "engine": "tjs-netbsd-riscv64-26.6.0-1a230d3",
+      "sha256": "5b4eba62fc6abca349b1f566a4541f1be75b260f8a29139c8b4c704d37893593",
+      "verified": "attest-only",
+      "offset": 98426480,
+      "length": 3044304
+    },
+    "netbsd-mipseb": {
+      "tag": "netbsd-10.1-mipseb",
+      "engine": "tjs-netbsd-mipseb-26.6.0-1a230d3",
+      "sha256": "fa72e3fb500e5b54a35097b61ff3cfd21e402e95a9e504846c7bb782bbe0b2ef",
+      "verified": "attest-only",
+      "offset": 87815385,
+      "length": 3523861
+    },
+    "netbsd-sh3el": {
+      "tag": "netbsd-10.1-sh3el",
+      "engine": "tjs-netbsd-sh3el-26.6.0-1a230d3",
+      "sha256": "818cf872610cbb84a267cf14b052a8cdc51c72a531567bde27c302782cf85f06",
+      "verified": "attest-only",
+      "offset": 101470784,
+      "length": 3250638
+    },
+    "netbsd-sparc": {
+      "tag": "netbsd-10.1-sparc",
+      "engine": "tjs-netbsd-sparc-26.6.0-1a230d3",
+      "sha256": "2b7ae657ede4b51c64e3ef188d378b01436bf24acca0f4fd3e2300450e114b2d",
+      "verified": "smoke",
+      "offset": 104721422,
+      "length": 3096223
+    },
+    "netbsd-sparc64": {
+      "tag": "netbsd-10.1-sparc64",
+      "engine": "tjs-netbsd-sparc64-26.6.0-1a230d3",
+      "sha256": "f8877ed25811057aef405e9a726e114f061e007eac198a4d28665efe0f23e125",
+      "verified": "attest-only",
+      "offset": 107817645,
+      "length": 3199866
+    },
+    "omnios-amd64": {
+      "tag": "omnios-r151056-amd64",
+      "engine": "tjs-omnios-amd64-26.6.0-1a230d3",
+      "sha256": "84ca916192b60e828cc04def219a1244be57a7d190f5a175a116d13fc27dc690",
+      "verified": "smoke",
+      "offset": 111017511,
+      "length": 3426720
+    },
+    "openbsd-amd64": {
+      "tag": "openbsd-7.9-amd64",
+      "engine": "tjs-openbsd-amd64-26.6.0-1a230d3",
+      "sha256": "633bb2d63af794caa04486bdcc1efc4bffff6e6532635bc25cff64215e97c8a1",
+      "verified": "smoke",
+      "offset": 114444231,
+      "length": 3037914
+    },
+    "openbsd-arm64": {
+      "tag": "openbsd-7.9-arm64",
+      "engine": "tjs-openbsd-arm64-26.6.0-1a230d3",
+      "sha256": "927d1934330de873b26896d7e01d31574c3786e0e445a8a1dc7833ff7872df4d",
+      "verified": "smoke",
+      "offset": 117482145,
+      "length": 2998545
+    },
+    "openindiana-amd64": {
+      "tag": "openindiana-202510-amd64",
+      "engine": "tjs-openindiana-amd64-26.6.0-1a230d3",
+      "sha256": "8362a37a2d065232a32e34cb2267f0f3868045671f318f512149830a18375f50",
+      "verified": "smoke",
+      "offset": 120480690,
+      "length": 3426861
+    },
+    "solaris-amd64": {
+      "tag": "solaris-11.4-amd64",
+      "engine": "tjs-solaris-amd64-26.6.0-1a230d3",
+      "sha256": "d6af4d26dc5908c6c21daccaea6ae08cc9eb8f82aeece7f0ac9a62138ea3bb2e",
+      "verified": "smoke",
+      "offset": 123907551,
+      "length": 3444711
+    },
+    "windows-amd64": {
+      "tag": "windows-amd64",
+      "engine": "tjs-windows-amd64-26.6.0-1a230d3",
+      "sha256": "585a18265d0a56136b99e892a3c56087e55987dfda86442962888b4ca2e9c0f4",
+      "verified": "smoke",
+      "offset": 127352262,
+      "length": 2446038
+    },
+    "windows-arm64": {
+      "tag": "windows-arm64",
+      "engine": "tjs-windows-arm64-26.6.0-1a230d3",
+      "sha256": "e9b221d43cc0566656fc24ad580dce780567ba7e863bb3d620430d73c16afce3",
+      "verified": "smoke",
+      "offset": 129798300,
+      "length": 2131664
+    }
+  }
+}
