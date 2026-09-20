@@ -178,3 +178,25 @@ test('the real pinned checkout can pin every package the gate derives from it', 
   assert.strictEqual(`esbuild@${esb.split(' ')[2]}`, ESBUILD_PIN,
     `the lockfile would provision a different esbuild than ${ESBUILD_PIN}:\n${esb}`);
 });
+
+// POSIX-sh compatibility, RUN rather than grepped. scripts/bootstrap-engine.sh's shape
+// guard scans for a list of bashisms; this file's subject has the same audience (alpine
+// containers, minimal VM guests) and gets the behavioural version of that check, because
+// the failure being guarded against — a construct /bin/sh accepts here and dash does not —
+// is one an actual dash run demonstrates and a pattern list only approximates. Skipped, with
+// the reason, on a host with no dash; that is a host that cannot ask the question.
+test('it behaves identically under dash', (t) => {
+  if (WIN) return t.skip('POSIX sh');
+  const dash = spawnSync('sh', ['-c', 'command -v dash || true'], { encoding: 'utf8' });
+  const bin = dash.stdout.trim();
+  if (!bin) return t.skip('no dash on this host — the strictest shell available is /bin/sh');
+  const dir = fixture({
+    solo: { version: '2.0.0', resolved: 'https://example.invalid/solo-2.0.0.tgz', integrity: 'sha512-ZZZZ' },
+  });
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const underDash = spawnSync(bin, [SH, '--plan', dir, 'solo'], { encoding: 'utf8', env: process.env });
+  const underSh = sh(['--plan', dir, 'solo']);
+  assert.strictEqual(underDash.status, underSh.status, underDash.stderr);
+  assert.strictEqual(underDash.stdout, underSh.stdout,
+    `dash and /bin/sh disagree about the same checkout:\n${underDash.stdout}\n${underSh.stdout}`);
+});
