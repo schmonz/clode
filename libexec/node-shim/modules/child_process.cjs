@@ -66,6 +66,7 @@
 const { EventEmitter } = require('node:events');
 const path = require('node:path');
 const { Readable } = require('node:stream');
+const { writeSyncFdBytes } = require('../internal/stdio-write.cjs');
 const FSS = globalThis.__tjs_fs_sync;
 
 // Opt-in spawn tracing (CLODE_SHIM_TRACE=1) — diagnostic for the -p wall-walk;
@@ -528,7 +529,36 @@ function spawnSync(file, args = [], opts = {}) {
     const buf = Buffer.from(ab);
     return (enc && enc !== 'buffer') ? buf.toString(enc) : buf;
   };
-  const out = conv(r.stdout), err = conv(r.stderr);
+  // STDIO WAS IGNORED HERE UNTIL 2026-09-20, and a cross leg died of it in silence.
+  //
+  // MEASURED: `tjs-slow / leg (netbsd-mips64eb)` of CI run 35530707866 printed NOTHING
+  // between 19:04:52 and 19:05:48 — no cmake output, no compiler output, just a bare stack
+  // trace. scripts/build-tjs.cjs runs every child as
+  // `execFileSync(cmd, args, { stdio: 'inherit' })`, and that leg runs build-tjs under tjs.
+  // The cosmo leg, which runs it under node, printed the fatal error on sight. This
+  // function never looked at opts.stdio: the C primitive always pipes, so every child's
+  // output was captured into a Buffer and dropped.
+  //
+  // THE PRIMITIVE CANNOT INHERIT (mod_spawn_sync.c creates its pipes unconditionally —
+  // spike/quickjs/patches/txiki-sync-spawn.patch), so REPLAY: write the captured bytes to
+  // the parent's own fd after the child exits. DIVERGENCE, stated rather than hidden: node
+  // inherits the fd, so the child's output interleaves live; here a 56-second compile
+  // prints in one burst at the end. Nothing is lost, and it needs no engine rebuild — an
+  // inherit that reaches the C side is the wall-walk item, not this.
+  //
+  // The RETURN shape then matches node exactly: a slot that was not a pipe reads back
+  // null, so `execFileSync(..., { stdio: 'inherit' })` returns null and the error it throws
+  // carries a null .stderr — which is safe precisely BECAUSE the bytes were replayed.
+  const slots = normStdio(opts);
+  const replay = (slot, fd, buf) => {
+    if (slot === 'pipe') return conv(buf);
+    if (slot === 'inherit' && buf && buf.byteLength) {
+      try { writeSyncFdBytes(fd, new Uint8Array(buf)); } catch { /* a closed fd is not this call's failure */ }
+    }
+    return null;
+  };
+  const out = replay(slots.stdout, 1, r.stdout);
+  const err = replay(slots.stderr, 2, r.stderr);
   const result = {
     pid: r.pid,
     status: r.status,

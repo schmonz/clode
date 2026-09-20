@@ -50,6 +50,15 @@ if (!(major >= floor)) {
   process.stderr.write("clode: (the extracted bundle uses newer JS, e.g. 'using' declarations)\n");
   process.exit(1);
 }
+// ES5 shapes and no template literals, like the rest of this file: stage0 has to PARSE on
+// the oldest node it might meet before it can tell that node it is too old.
+function stage0ErrText(e) {
+  var st = e && e.stack ? String(e.stack) : '';
+  var head = String(e);
+  if (!st) return head;
+  return st.indexOf(head) === 0 ? st : head + '\n' + st;
+}
+
 Promise.all([import('node:url'), import('../libexec/clode-main.cjs')])
   .then(function (mods) {
     var fileURLToPath = mods[0].fileURLToPath;
@@ -65,6 +74,10 @@ Promise.all([import('node:url'), import('../libexec/clode-main.cjs')])
     });
   })
   .catch(function (e) {
-    process.stderr.write('clode: ' + (e && e.stack ? e.stack : e) + '\n');
+    // The message, then the frames. QuickJS's Error#stack is frames ONLY (V8's begins with
+    // the message), so `e.stack` alone prints a bootstrap failure with no reason attached
+    // on every tjs-hosted clode -- the shape that cost CI run 35530707866 a round trip.
+    // The startsWith guard keeps node from printing the message twice.
+    process.stderr.write('clode: ' + stage0ErrText(e) + '\n');
     process.exit(1);
   });

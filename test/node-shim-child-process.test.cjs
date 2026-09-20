@@ -877,3 +877,73 @@ test('spawn: an explicitly-ended pipe stdin still fires finish/close normally (c
   assert.strictEqual(out, 'hello');
 });
 
+
+// ---- stdio: 'inherit' -------------------------------------------------------
+//
+// MEASURED, CI run 35530707866, `tjs-slow / leg (netbsd-mips64eb)`. The leg failed
+// having printed NOTHING between 19:04:52 and 19:05:48: no cmake configure output, no
+// compiler output, no error message — a bare stack trace and `##[error]Process completed
+// with exit code 1`. scripts/build-tjs.cjs runs every child through
+// `execFileSync(cmd, args, { stdio: 'inherit' })`, and that leg runs build-tjs UNDER TJS.
+// The cosmo leg, which runs it under node, showed the full compiler error.
+//
+// CAUSE, read in the source and then reproduced by hand against the v0.20260831.1
+// bootstrap engine: spawnSync NEVER LOOKED AT `opts.stdio`. The C primitive always pipes,
+// so every child's output was captured into a Buffer and dropped on the floor. A build
+// that fails without saying why is its own defect — it is the reason the netbsd cause took
+// a CI round-trip to find while cosmo's was legible on sight.
+//
+// THE C PRIMITIVE CANNOT INHERIT (it creates its pipes unconditionally; see
+// spike/quickjs/patches/txiki-sync-spawn.patch), so the shim REPLAYS instead: the captured
+// bytes go to the parent's own fd once the child exits. Not live — a 56-second compile
+// prints at the end rather than as it goes — but nothing is lost, and it needs no engine
+// rebuild. That divergence is characterized in the tjs-only row below.
+test('spawnSync: stdio inherit reaches the PARENT\'s stdout/stderr, like node', (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const cp = require('node:child_process');
+    cp.spawnSync('/bin/sh', ['-c', 'echo CHILD-OUT; echo CHILD-ERR 1>&2'], { stdio: 'inherit' });`;
+  const f = prog(body);
+  const node = require('node:child_process').spawnSync(process.execPath, [f], { encoding: 'utf8' });
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.match(node.stdout, /CHILD-OUT/, 'the node reference must actually show it');
+  assert.match(r.stdout, /CHILD-OUT/,
+    "an inherited child's stdout vanished — a build under tjs prints no compiler output at all");
+  assert.match(r.stderr, /CHILD-ERR/,
+    "an inherited child's stderr vanished — this is how netbsd-mips64eb failed in silence");
+});
+
+test('execFileSync: a FAILING inherited child says why before it throws, like node', (t) => {
+  if (skipUnlessTjs(t)) return;
+  // The exact shape of the lost failure: cmake --build exits non-zero, and the compiler
+  // error it printed is the only thing that explains it.
+  const body = `
+    const cp = require('node:child_process');
+    try {
+      cp.execFileSync('/bin/sh', ['-c', 'echo "fatal error: sys/syslog.h: No such file" 1>&2; exit 2'],
+        { stdio: 'inherit' });
+    } catch (e) { console.log('THREW'); }`;
+  const f = prog(body);
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.match(r.stdout, /THREW/, 'a non-zero exit must still throw');
+  assert.match(r.stderr, /fatal error: sys\/syslog\.h/,
+    'the compiler output IS the diagnosis; losing it is what made the cross leg mute');
+});
+
+test("spawnSync: 'ignore' still ignores, and is not replayed by the inherit fix", (t) => {
+  if (skipUnlessTjs(t)) return;
+  const body = `
+    const cp = require('node:child_process');
+    const r = cp.spawnSync('/bin/sh', ['-c', 'echo LOUD; echo NOISY 1>&2'], { stdio: 'ignore' });
+    console.log(JSON.stringify({ status: r.status, out: r.stdout, err: r.stderr }));`;
+  const f = prog(body);
+  const node = require('node:child_process').spawnSync(process.execPath, [f], { encoding: 'utf8' });
+  const r = runLoader(f);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.ok(!/LOUD/.test(r.stdout.replace(/\{.*\}/s, '')), 'an ignored child must stay silent');
+  assert.ok(!/NOISY/.test(r.stderr), 'an ignored child must stay silent on stderr too');
+  assert.deepStrictEqual(JSON.parse(r.stdout.trim()), JSON.parse(node.stdout.trim()),
+    "node returns null for a slot it was told to ignore; so must the shim");
+});

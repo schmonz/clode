@@ -281,6 +281,23 @@ if (cosmoTarget) {
 // platform branch.
 process.env.ZERO_AR_DATE = '1';
 
+// WHAT A CAUGHT ERROR LOOKS LIKE, on both engines this script runs on.
+//
+// MEASURED, CI run 35530707866: `tjs-slow / leg (netbsd-mips64eb)` failed having printed a
+// bare stack trace -- no `Error: Command failed: cmake`, nothing. V8 puts the message in
+// the FIRST LINE of Error#stack; QuickJS's stack is call frames ONLY, so
+// `console.error(e.stack)` is complete under node and throws the entire explanation away
+// under tjs. libexec/node-shim/loader.cjs has carried a comment about exactly this since it
+// was written; this file's own top-level rejection handler had not learned it.
+//
+// Prepending unconditionally would double the message line under node, and this script runs
+// under both -- so prepend only when the stack does not already begin with it.
+function errText(e) {
+  const st = e && e.stack ? String(e.stack) : '';
+  const head = String(e);
+  return st ? (st.startsWith(head) ? st : `${head}\n${st}`) : head;
+}
+
 const run = (cmd, args, opts = {}) =>
   execFileSync(cmd, args, { stdio: 'inherit', ...opts });
 const runOut = (cmd, args, opts = {}) =>
@@ -4544,6 +4561,6 @@ checkHermeticDeps(path.join(outDir, outName));
   // can truncate a pending stderr write to a pipe, which is precisely how CI reads
   // this — the failure would be reported with its explanation cut off. Setting the
   // code and letting the process end naturally flushes first.
-  console.error(e && e.stack ? e.stack : String(e));
+  console.error(errText(e));
   process.exitCode = 1;
 });

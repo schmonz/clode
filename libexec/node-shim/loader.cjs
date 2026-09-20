@@ -992,7 +992,8 @@ if (globalThis.process && globalThis.process.env && globalThis.process.env.CLODE
         console.error('[handles] __tjs_dump_handles unavailable (older engine)');
       }
     } catch (e) {
-      try { console.error('[handles] dump failed:', e && e.stack ? e.stack : String(e)); } catch { /* ignore */ }
+      // `${e}\n${e.stack}`, like the two handlers below: QuickJS's stack is frames only.
+      try { console.error('[handles] dump failed:', e && e.stack ? `${e}\n${e.stack}` : String(e)); } catch { /* ignore */ }
     }
   });
 }

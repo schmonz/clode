@@ -1496,7 +1496,12 @@ const __CLODE_GRAPH = JSON.parse(${lit});
   // extractor to produce byte-identical output on both hosts — 8 bytes in 39MB. The same
   // trap applies to any prose here that spells the keyword followed by a parenthesis.
   ${'import'}(url(doc.entry)).catch((e) => {
-    console.error(e && e.stack ? e.stack : e);
+    // Message THEN frames: QuickJS's Error#stack carries no message line (V8's does), so
+    // printing the stack alone leaves a quaude that died at startup saying only where, not
+    // what. The startsWith guard keeps node from doubling it.
+    var __st = e && e.stack ? String(e.stack) : '';
+    var __head = String(e);
+    console.error(__st ? (__st.indexOf(__head) === 0 ? __st : __head + '\\n' + __st) : __head);
     process.exit(1);
   });
 })();
