@@ -46,6 +46,40 @@ function fixture(t, files) {
   return dir;
 }
 
+// WHAT AN INSTALLED BUNDLER IS CALLED is the GATE'S decision, not this file's. npm's
+// bin-links writes `esbuild` on POSIX and `esbuild.cmd` on Windows, and
+// scripts/bundle-inputs-gate.cjs looks for whichever the host uses (the same branch
+// ensureEsbuild takes). A fixture that spelled the POSIX name unconditionally therefore built
+// a tree the gate CORRECTLY calls incomplete: on windows-latest the "no refusal" test above
+// got a refusal that was right about everything (CI run 35494754445, 2223 tests, this one of
+// two reds). The product was not wrong; the fixture was.
+//
+// So the fixture ASKS, rather than guessing or branching on process.platform: it runs the
+// gate against a checkout with an EMPTY node_modules and reads back the path the refusal says
+// it looked in. The name cannot drift from the product because it IS the product's answer,
+// and it stays one seam -- the gate's own -- rather than a second copy of the branch. (The
+// alternative was exporting the name from scripts/bundle-inputs-gate.cjs, which is engine
+// recipe: a one-line export there rebuilds every leg in the fleet.)
+let bundlerName = null;
+function checkoutBundlerName() {
+  if (bundlerName) return bundlerName;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bundle-inputs-bin-'));
+  try {
+    fs.mkdirSync(path.join(dir, 'src/js'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'src/js/probe.js'), 'export const probe = 1;\n');
+    const why = bundleInputsRefusal({ dir, env: {}, hasNpm: false });
+    const m = /looked in (.+?) \(the checkout\)/.exec(why || '');
+    assert.ok(m, 'the gate must name the path it looked for a bundler in — this fixture reads '
+      + `the filename back out of it:\n${why}`);
+    bundlerName = path.basename(m[1].trim());
+    assert.match(bundlerName, /^esbuild/,
+      `the checkout bundler the gate looks for must still be an esbuild: ${bundlerName}`);
+    return bundlerName;
+  } finally {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+}
+
 // The smallest tree the gate considers complete: one import, that package installed, and a
 // bundler on hand. Callers subtract from it to model the states that must refuse.
 function completeTree(t, extra = {}) {
@@ -54,7 +88,7 @@ function completeTree(t, extra = {}) {
     'src/js/stdlib/uuid.js': "import { v4 } from 'gizmo-uuid';\nexport const u = v4;\n",
     'node_modules/widget-polyfill/package.json': '{"name":"widget-polyfill","version":"1.0.0"}\n',
     'node_modules/gizmo-uuid/package.json': '{"name":"gizmo-uuid","version":"1.0.0"}\n',
-    'node_modules/.bin/esbuild': '#!/bin/sh\nexit 0\n',
+    [`node_modules/.bin/${checkoutBundlerName()}`]: '#!/bin/sh\nexit 0\n',
     ...extra,
   });
 }
@@ -113,6 +147,21 @@ test('the needed set closes over each installed package\'s own declared dependen
 test('a complete tree with a bundler produces NO refusal (the warm path is untouched)', (t) => {
   const dir = completeTree(t);
   assert.strictEqual(bundleInputsRefusal({ dir, env: {}, hasNpm: false }), null);
+});
+
+// And the name the fixture just derived is LOAD-BEARING: the gate accepts one exact filename
+// in node_modules/.bin, so a tree carrying some other spelling is still a cold one. Without
+// this, "ask the gate what it looks for" could be satisfied by a gate that looked for nothing,
+// and the test above would pass on a checkout the source phase cannot actually bundle from.
+test('a bundler under any other filename is not the bundler the gate looks for', (t) => {
+  const dir = completeTree(t);
+  const bin = path.join(dir, 'node_modules', '.bin');
+  fs.renameSync(path.join(bin, checkoutBundlerName()), path.join(bin, 'esbuild-ish'));
+  const why = bundleInputsRefusal({ dir, env: {}, hasNpm: false });
+  assert.ok(why, 'a differently-named executable must not satisfy the bundler half');
+  assert.match(why, /no esbuild@0\.28\.1/, `and the refusal names the half that is missing:\n${why}`);
+  assert.match(why, new RegExp(checkoutBundlerName().replace('.', '\\.')),
+    `naming the filename it wanted, which is what an operator has to produce:\n${why}`);
 });
 
 test('a COLD checkout with no npm refuses, naming BOTH halves and every missing package', (t) => {
