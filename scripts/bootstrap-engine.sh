@@ -238,7 +238,8 @@ pick_hasher() {
     return 1
   fi
   if try_hasher 'sha256sum' || try_hasher 'shasum -a 256' || try_hasher 'sha256 -q' \
-    || try_hasher 'openssl dgst -sha256' || try_hasher 'cksum -a sha256'; then return 0; fi
+    || try_hasher 'openssl dgst -sha256' || try_hasher 'cksum -a sha256' \
+    || try_hasher 'digest -a sha256'; then return 0; fi
   return 1
 }
 
@@ -252,7 +253,7 @@ require_hasher() {
   fi
   die "bootstrap: no working sha256 tool on this host, so a downloaded engine cannot be
   verified and will not be used.$KAT_TRIED
-  Install one (sha256sum / shasum / openssl / cksum -a sha256), or point CLODE_SHA256 at
+  Install one (sha256sum / shasum / openssl / cksum -a sha256 / digest -a sha256), or point CLODE_SHA256 at
   one, or set CLODE_TJS to an engine you already trust."
 }
 

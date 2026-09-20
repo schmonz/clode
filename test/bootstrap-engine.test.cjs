@@ -675,6 +675,35 @@ shTest('the sha256 tool is KAT-tested, so a lying hasher is refused rather than 
   assert.ok(r.err.includes(liar), 'and the refusal must name the tool that failed');
 });
 
+// A Solaris guest (CI run 35535250926, job tjs-slow / leg (solaris-amd64, ...)) has NONE
+// of sha256sum / shasum / sha256 / openssl / cksum -a sha256 — its native digest utility
+// is `digest -a sha256 <file>`, printing the BARE hex with no filename (unlike
+// sha256sum's "<hex>  <file>" shape). omnios and openindiana (both illumos, same CI run)
+// passed, so this is specific to the Oracle Solaris image, not to illumos generally.
+shTest("Solaris's `digest -a sha256` is accepted when nothing else in the chain is", () => {
+  const d = mkdtemp();
+  const bin = path.join(d, 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  // Shadow every hasher already in the fallback chain with a broken stand-in — this is
+  // what a Solaris guest's PATH actually looks like to pick_hasher: all four fail.
+  for (const broken of ['sha256sum', 'shasum', 'sha256', 'openssl', 'cksum']) {
+    fakeExe(path.join(bin, broken), '#!/bin/sh\nexit 1\n');
+  }
+  const realShasum = execFileSync('sh', ['-c', 'command -v shasum'], { encoding: 'utf8' }).trim();
+  // Computed via an ABSOLUTE path so the stub does not depend on any of the names just
+  // shadowed above being resolvable — it stands in for Solaris's own implementation.
+  fakeExe(path.join(bin, 'digest'), `#!/bin/sh\nshift 2\n"${realShasum}" -a 256 "$1" | awk '{print $1}'\n`);
+  const body = FAKE_ENGINE(OK_TOKEN);
+  const { manifest: mf, base } = localPack(path.join(d, 'base'), { [hostTarget()]: body });
+  const r = sh([], {
+    CLODE_CACHE: path.join(d, 'cache'),
+    CLODE_RELEASE_BASE: base,
+    CLODE_BOOTSTRAP_MANIFEST: mf,
+    PATH: `${bin}:${process.env.PATH}`,
+  });
+  assert.strictEqual(r.status, 0, `expected digest -a sha256 to be picked up, got ${r.status}: ${r.err}`);
+});
+
 // ---------------------------------------------------------------------------
 // dash, when this box has one. The scar: shell discovery needs a shell BY NAME,
 // and /bin/sh behaviours vary. A resolver that only ever ran under this Mac's sh
