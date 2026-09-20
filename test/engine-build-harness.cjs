@@ -65,7 +65,12 @@ function findBuildDir(buildRoot) {
     throw new Error(`expected exactly one main-engine CMakeCache.txt under ${buildRoot}, `
       + `found: ${JSON.stringify(hits)}`);
   }
-  return path.dirname(hits[0]);
+  // path.resolve, not path.dirname alone: `find` is an external program and the string
+  // it printed is ITS spelling of the path, not ours. Git-for-Windows' find hands back
+  // `C:\\...\\root/abc123/build` under a backslash root, which made every caller that
+  // compares or joins this value fail on separators (run 35521083887, test 976); a `.`
+  // segment in the root does the same on POSIX. Callers get a path this function owns.
+  return path.resolve(path.dirname(hits[0]));
 }
 
 // Every compiled translation unit under a build dir, relative to IT (not to the repo), so
