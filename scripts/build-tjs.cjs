@@ -3318,8 +3318,10 @@ function fixupModFsSyncMsvc(dir) {
 // the source/regen exits — exactly the move that produced the "buildHostTjsc is not defined"
 // incident test/build-tjs-continuation-scope.test.cjs exists for. So the fetch lives in a
 // POSIX sh sibling and arrives here through spawnSync: no await, the boundary does not move,
-// and the transport is the one scripts/bootstrap-engine.sh already proves on alpine guests
-// and minimal VMs. Same reason the resolver is sh, one layer out.
+// and the transport is the one the node-free bootstrap resolver already proves on alpine
+// guests and minimal VMs. (That resolver's own filename is deliberately NOT written here:
+// test/bootstrap-engine.test.cjs's shape guard refuses to let this file name it, because
+// this file is the program being bootstrapped.)
 //
 // NEVER ON A WARM TREE. The `want` list is DERIVED from the same two readers the gate uses,
 // so a checkout that already satisfies both inputs — every dev box, every cache-HIT leg —
