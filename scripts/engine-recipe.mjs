@@ -89,6 +89,14 @@ export const FILES = [
   // third hand-count -- a new require goes red there the moment it is added.
   'scripts/ccache-launcher.cjs',
   'scripts/platform-tag.cjs',
+  // ADDED 2026-09-19. scripts/ar-determinism.cjs decides whether cmake gets deterministic
+  // ARCHIVE rules (`ar qcD` / `ranlib -D`) or rides ZERO_AR_DATE instead -- i.e. whether two
+  // builds of identical objects produce the same .a files and therefore the same linked
+  // engine. Edit it and what the engine is assembled from changes; it is engine source by
+  // exactly the argument ccache-launcher.cjs is. The derived check in
+  // test/engine-recipe.test.cjs named it the moment build-tjs.cjs required it, which is the
+  // ratchet doing its job rather than a third hand-count catching up.
+  'scripts/ar-determinism.cjs',
   // The netbsd-sparc in-guest ENGINE bake recipe. It is engine source for that
   // leg in the most literal sense — it IS the compile — yet an edit to it moved
   // nothing, so the tjs cache happily restored an engine built by a DIFFERENT
