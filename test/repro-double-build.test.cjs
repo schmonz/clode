@@ -106,3 +106,19 @@ test('every leg the CLI accepts has a manifest entry to judge it against', () =>
     + 'throw AFTER two engine builds, which is the most expensive possible place to '
     + 'discover it');
 });
+
+test('the runner refuses a CROSS leg before spending two builds, not after', () => {
+  const r = spawnSync(process.execPath, [RUNNER, '--leg', 'netbsd-m68k'], { encoding: 'utf8' });
+  assert.strictEqual(r.status, 2, r.stderr);
+  assert.match(r.stderr, /not built natively/,
+    'pointing the runner at a cross leg must be refused in milliseconds — running it would '
+    + "double-build the HOST engine and record the verdict under that leg's name, which is "
+    + 'the one outcome worse than having no verdict');
+  assert.match(r.stderr, /cross-file/, 'the refusal must name the FIELD that made it non-native');
+});
+
+test('the runner refuses a guest-container leg too', () => {
+  const r = spawnSync(process.execPath, [RUNNER, '--leg', 'linux-x64-musl'], { encoding: 'utf8' });
+  assert.strictEqual(r.status, 2, r.stderr);
+  assert.match(r.stderr, /guest-platform/);
+});

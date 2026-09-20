@@ -200,7 +200,22 @@ async function main(argv) {
     return usage(`unknown leg '${args.leg}'. Known: ${[...all.keys()].sort().join(', ')}`);
   }
 
-  const { VERDICTS, judgeObservation } = require('./repro-verdicts.cjs');
+  const { VERDICTS, judgeObservation, nonNativeMechanism } = require('./repro-verdicts.cjs');
+  // BEFORE two engine builds, not after: this runner builds NATIVELY on the job host, so a
+  // leg whose engine is really produced inside a VM, an alpine container, an osxcross image
+  // or a qemu bake would be measured as the HOST's engine and recorded under that leg's
+  // name. An untrue verdict is worse than no verdict.
+  const mech = nonNativeMechanism(leg);
+  if (mech) {
+    return usage(`leg '${leg.leg}' declares '${mech}', so its engine is not built natively `
+      + 'on this host. Double-building here would measure THIS machine\'s engine and label '
+      + `it '${leg.leg}'. Measuring it needs the double-build driven inside that leg's own `
+      + 'build mechanism (.github/actions/build-leg), which this runner does not do.');
+  }
+  if (!VERDICTS[leg.leg]) {
+    return usage(`leg '${leg.leg}' has no entry in test/repro-verdicts.cjs, so there would `
+      + 'be nothing to judge the result against');
+  }
   const log = (m) => process.stderr.write(`repro-double-build: ${m}\n`);
   const obs = doubleBuildEngine({ legName: leg.leg, buildEnv: legBuildEnv(leg), log });
   if (!args.keep) fs.rmSync(obs.workDir, { recursive: true, force: true });

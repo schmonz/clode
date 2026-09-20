@@ -1,0 +1,142 @@
+name: repro
+
+# THE WEEKLY QUESTION: does the engine still build to the same bytes twice?
+#
+# The standing bar (BACKLOG.md): ccache is not "done" until every leg has a
+# reproducibility verdict. A cache that returns a different object than a fresh
+# compile is the one failure mode that matters, and "build twice, compare the
+# whole binary" is the only check that catches it without trusting the cache's
+# own accounting. test/repro-verdicts.cjs records what each of the 44 legs is
+# KNOWN to do; this workflow is what keeps two of those verdicts from going
+# stale, and what a human uses to earn a third.
+#
+# WHY A SEPARATE WORKFLOW AND NOT A STEP IN ci.yml — the cost decision, argued
+# rather than assumed.
+#
+#   Double-building doubles engine build time. On the legs below that is ~2
+#   minutes each (measured on a darwin host: 76.2s + 48.6s). On the qemu legs it
+#   is ruinous: netbsd-mips64eb took 115 MINUTES on its last cold run, so
+#   double-building it is ~4 hours. Per-push, fleet-wide, is not an option, and
+#   the honest consequence is written into the manifest: every leg too slow to
+#   double-build carries `unproven` with the cost as its stated reason, rather
+#   than a silent pass.
+#
+#   WEEKLY, not per-push, for the legs that ARE cheap. The property this guards
+#   changes on the timescale of a toolchain bump, a compiler image refresh or an
+#   upstream txiki dependency — not on the timescale of a commit. Paying ~2
+#   minutes on three legs of every push to notice, within seven days, something
+#   that moves monthly is the wrong trade. Weekly bounds the cost at six engine
+#   builds a week and bounds the detection window at seven days.
+#
+#   AND THE CHEAP HALF IS ALREADY PER-PUSH. The manifest's shape, its coverage
+#   of every leg, and its ratchet (REPRODUCIBLE_BASELINE must not fall,
+#   UNPROVEN_BASELINE must not rise) are three guards in `npm test`, on every
+#   push, costing milliseconds. What this workflow adds is the expensive half:
+#   the measurement itself.
+#
+#   A GATE THAT NEVER RUNS IS NOT A GATE. This repo has already been bitten by
+#   an opt-in check nothing schedules — test/ccache.test.cjs's engine e2e has
+#   only ever run by hand because nothing in .github/ sets
+#   CLODE_CCACHE_ENGINE_E2E. So this one has a cron, and its matrix is DERIVED
+#   from the manifest's `cadence` field (see the job below) rather than retyped
+#   here: promoting a leg to weekly is a one-word edit in the file that also
+#   records why it was not scheduled.
+#
+# WHAT IS NOT COVERED, said out loud. Only legs whose engine is built NATIVELY
+# on the job host can be measured by this runner — it drives
+# scripts/build-tjs.cjs directly and does not start a cross-platform-actions VM,
+# enter an alpine container, build an osxcross image or bake inside a qemu
+# guest. Pointed at such a leg it would double-build the HOST engine and label
+# the verdict with that leg's name, so test/repro-verdicts.cjs REFUSES that
+# outright (nonNativeMechanism). Those legs are `cadence: none` with the reason.
+
+on:
+  schedule:
+    - cron: '41 7 * * 1'   # Mondays 07:41 UTC (off the hour; clear of guest-versions' 06:17)
+  workflow_dispatch:
+    inputs:
+      legs:
+        description: >
+          Comma-separated leg names to double-build, overriding the weekly set.
+          Only natively-built legs are accepted; anything else is refused with
+          the field that makes it non-native. Example: windows-amd64
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+# NOT cancel-in-progress. ci.yml cancels because it is BUILD FEEDBACK and the
+# newer commit's run reproduces it (see its concurrency comment and the
+# ModernMavericks family rule). This is a MEASUREMENT: a cancelled run produces
+# no verdict, and on a weekly cron there is no "newer run" that reproduces the
+# answer — the next one is seven days away. So runs queue rather than cancel.
+concurrency:
+  group: repro-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # The matrix is DERIVED from test/repro-verdicts.cjs's `cadence` field, joined
+  # against the CI tier of scripts/tjs-legs.mjs for the runner image — the same
+  # single-source-of-truth move .github/workflows/tjs-legs.yml already makes. A
+  # leg list retyped into this YAML would be a second copy that rots the first
+  # time a leg is renamed.
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      include: ${{ steps.derive.outputs.include }}
+      count: ${{ steps.derive.outputs.count }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version-file: .tool-versions
+      - id: derive
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.legs }}" ]; then
+            include=$(node test/repro-verdicts.cjs --matrix-legs "${{ inputs.legs }}")
+          else
+            include=$(node test/repro-verdicts.cjs --matrix weekly)
+          fi
+          echo "include=$include" >> "$GITHUB_OUTPUT"
+          echo "count=$(printf '%s' "$include" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).length))')" >> "$GITHUB_OUTPUT"
+          echo "matrix: $include" >> "$GITHUB_STEP_SUMMARY"
+      # A DERIVED matrix can derive to nothing, and an empty matrix is a green
+      # run that measured zero legs — the "examined nothing reads as clean"
+      # failure test/guard.cjs exists to forbid, reappearing in YAML.
+      - name: Refuse an empty matrix
+        shell: bash
+        run: |
+          test "${{ steps.derive.outputs.count }}" -gt 0 \
+            || { echo "::error::the repro matrix derived to ZERO legs — a run that measures nothing must not report green"; exit 1; }
+
+  double-build:
+    needs: plan
+    strategy:
+      fail-fast: false        # one leg's regression must not hide another's
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.include) }}
+    name: repro (${{ matrix.leg }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version-file: .tool-versions
+
+      # Primes the vendor checkout the runner COPIES. Deliberately not cached:
+      # a cache restore is exactly the kind of "same inputs?" assumption this
+      # workflow exists to stop trusting, and the clone is a few minutes against
+      # a job that is mostly two engine builds anyway.
+      - name: Construct the patched tjs tree from pins
+        run: node scripts/build-tjs.cjs --source-only
+
+      - name: Build twice and compare the whole binary
+        run: node test/repro-double-build.cjs --leg "${{ matrix.leg }}" | tee -a "$GITHUB_STEP_SUMMARY"

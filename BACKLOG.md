@@ -275,12 +275,117 @@ output" tier.
    appears 0 times in `build-tjs.cjs`). Invisible because `ci-os` overrides to
    ubuntu-26.04, so CI never exercises the value the leg table documents for
    local dev. Adjacent to reproducibility, not caused by it.
-3. **WASM-on was never double-built** — the Linux proof turned WAMR off for
-   time. The release leg builds it on.
-4. MSVC `lib.exe`/`link.exe`: undetermined. `/Brepro` appears nowhere, and the
-   Windows legs are also where the object-grain harness is skipped.
-5. Absolute-path stability is an informal invariant (constant build dir), not
-   an enforced one.
+3. ~~**WASM-on was never double-built**~~ — DONE: re-run with WAMR on
+   (`fc3608dc...`, 8,191,584 bytes), which is the release config.
+4. ~~MSVC `lib.exe`/`link.exe`: undetermined.~~ — DETERMINED at mechanism
+   grain and recorded as `known-not-reproducible` for both Windows legs; see
+   the per-leg gate section immediately below. `/Brepro` still appears nowhere.
+5. ~~Absolute-path stability is an informal invariant~~ — MEASURED 2026-09-20:
+   perturbing the build path changed 47 of 372 objects and the linked size, and
+   two runs differing only in a same-LENGTH tmpdir suffix produced different
+   engines. Now a costed item (`-ffile-prefix-map`), not a suspicion. Below.
+
+## The per-leg reproducibility gate is BUILT, and two of 44 legs are proven (2026-09-20)
+
+The doctrine above ("ccache is not done until every leg has a reproducibility verdict") is
+no longer prose. Three files under `test/`, none of them in `scripts/engine-recipe.mjs`'s
+FILES set, so **the engine recipe hash did not move and no leg rebuilt**:
+
+* **`test/engine-build-harness.cjs`** — one copy of the engine-build machinery.
+  `copyCheckout` had existed FOUR times byte-identically; `findBuildDir`/`listObjects`/
+  `sha256Of`/`snapshotPhase` once each and about to be copied. New here:
+  `compareArtifacts()`, which **refuses** two paths whose basenames differ (the mach-o
+  ad-hoc signature identifier derives from the filename, so `tjs-a` vs `tjs-b` manufactures
+  a phantom delta) and reports WHERE and HOW MANY bytes differ. `copyCheckout` lost its
+  `process.platform` branch: the fast-copy flags are tried in turn, which is what the branch
+  fell through to anyway.
+* **`test/repro-double-build.cjs`** — `node test/repro-double-build.cjs --leg <name>`. Two
+  builds, one throwaway checkout, one fixed outDir, one basename, whole binary compared,
+  exit 1 on a finding. Engine knobs come from `scripts/tjs-legs.mjs` (the first
+  linux-x64-glibc proof was run WASM-off while the leg ships WASM-on and had to be redone).
+* **`test/repro-verdicts.cjs`** — the manifest, the ratchet and four guards.
+
+**Three states, ranked `unproven < known-not-reproducible < reproducible`.** Knowing a leg
+is broken outranks never having looked, because a recorded failure carries its reason and
+its named fix. `grain` is a separate field and `reproducible` requires `whole-binary` —
+NetBSD's archive-grain result (above) is real evidence and is NOT an engine verdict, and
+the shape rules refuse to let it be recorded as one.
+
+**Seeded from measurement only: 2 reproducible, 2 known-not-reproducible, 40 unproven.**
+`REPRODUCIBLE_BASELINE=2` must not fall and `UNPROVEN_BASELINE=40` must not rise without a
+deliberate edit; movement the good way passes but says to re-cut.
+
+**darwin-arm64 MEASURED 2026-09-20 on this Mac**: sha256
+`559224b931dd9a658b14aee1606f8c0c3a05a6078e4ddb09c1b171082f723877` over 5,464,448 bytes,
+372 objects, two builds 76.2s + 48.6s.
+
+### A NEW measurement, and it demotes an "informal invariant" to a measured fact
+
+The open item "absolute-path stability is an informal invariant (constant build dir), not an
+enforced one" is now **measured**. Forcing the gate red by moving `CLODE_TJS_OUT` and
+`CLODE_TJS_BUILD` between two otherwise identical builds changed **47 of 372 objects** and
+the linked engine's SIZE (5,464,448 -> 5,466,496 bytes). Two further data points from the
+same pair of runs: two separate invocations of the runner, differing only in their
+`mkdtemp` suffix (same LENGTH, different characters), produced different engines —
+`559224b9...` vs `5901f0fe...`. So the build path's CONTENT is baked in, not merely its
+length.
+
+Consequence for how a proof is read: a recorded sha256 is evidence that **two builds in one
+run agreed**, not a value a future run must re-match. Different host, different tmpdir,
+different sha — and `judgeObservation()` says so rather than going red. The stronger
+"different host, same output" tier needs `-ffile-prefix-map` (supported, used nowhere), and
+it is now a costed item rather than a suspicion.
+
+### The cost decision, and its cadence
+
+`.github/workflows/repro.yml`, **Mondays 07:41 UTC**, plus `workflow_dispatch` with a `legs`
+input. The matrix is DERIVED from the manifest's `cadence` field joined against
+`scripts/tjs-legs.mjs`'s CI tier — promoting a leg is a one-word edit in the file that also
+records why it was not scheduled. `cancel-in-progress: false`, deliberately: ci.yml cancels
+because it is build FEEDBACK and the newer commit reproduces it; this is a MEASUREMENT, and
+on a weekly cron the "newer run" is seven days away. An empty derived matrix FAILS the plan
+job — a run that measures nothing must not report green.
+
+Weekly and not per-push because the property changes on the timescale of a toolchain bump,
+not a commit: ~2 minutes on three legs of every push to notice within seven days something
+that moves monthly is the wrong trade. The cheap half — manifest shape, coverage of every
+leg, and the ratchet — is four guards in `npm test`, on every push, costing milliseconds.
+
+### What is NOT covered, and what it would cost
+
+The runner drives `scripts/build-tjs.cjs` **natively on the job host**. It does not start a
+cross-platform-actions VM, enter an alpine container, build an osxcross image or bake inside
+a qemu guest. Pointed at such a leg it would double-build the HOST engine and record the
+verdict under that leg's name, so `nonNativeMechanism()` **refuses** it — in the CLI before
+two builds, in the matrix builder, and in the coverage guard (a leg with a non-`none`
+cadence that is not natively built is a finding).
+
+1. **The three musl publishers** (`linux-x64-musl`, `linux-arm64-musl`, `linux-x86-musl`)
+   are the next legs to wire and the cheapest: an 8-9 minute native-runner job, and
+   linux-x64-musl is a PUBLISHED artifact. The blocker is the alpine container boundary, not
+   time. Cost: teach the runner to drive `.github/actions/guest`'s build step twice.
+2. **The two Windows legs** are natively built and reachable by `workflow_dispatch` today,
+   which is why they are `on-demand` rather than `none`. They are not scheduled because the
+   harness shells out to `find` and `cp`, never exercised on a windows runner — a weekly job
+   whose failure mode is "the script did not start" teaches people to ignore it. Proving
+   those two spawns is the whole promotion.
+3. **The 12 VM guests, the 5 qemu-user musl legs, the 14 tier-2 cross legs and cosmo** carry
+   `unproven` with the cost as the reason. netbsd-mips64eb's 115-minute cold run makes a
+   double-build ~4 hours.
+4. **`darwin-x64`/`darwin-x86`/`darwin-ppc`** are expected to pass (platform-neutral fixes, a
+   cctools archiver that reads `ZERO_AR_DATE`) and are unmeasured for the container reason.
+   Expected is not measured.
+
+### How the gate was shown RED
+
+Not synthetically alone. Two REAL engine builds on this Mac with the output and build paths
+moved between them: 47 differing objects, a size delta, `judgeObservation()` returning
+`ok=false` with `REGRESSION — this leg is recorded reproducible and two builds of identical
+sources produced DIFFERENT bytes`. Plus, always-on: each of the four guards has a positive
+control through `test/guard.cjs`, the ratchet goes red on a demoted `darwin-arm64` in a copy
+of the real manifest, `matrixForLegs` refuses `netbsd-m68k`/`linux-x64-musl`/`cosmo`, and
+`judgeObservation` THROWS for a leg it has no verdict for rather than reporting OK.
+
 ## NetBSD archives were NOT reproducible, and two assumptions said they were (2026-09-19)
 
 Twelve of the fleet's legs. Measured on a live NetBSD 11.0_RC2 evbarm qemu guest

@@ -31,7 +31,6 @@
 // would be the first lie. `reproducible` REQUIRES grain `whole-binary`.
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { defineGuard } = require('./guard.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 
@@ -77,6 +76,19 @@ const VERDICTS = {
       where: 'host darwin/arm64 (Darwin 27), two full builds 76.2s + 48.6s, 372 objects, '
         + 'via test/repro-double-build.cjs --leg darwin-arm64',
     }],
+    // WHAT A RECORDED sha256 IS, and is not. It is evidence that TWO BUILDS IN ONE RUN
+    // agreed — not a value a future run must re-match. Measured the same day, from the red
+    // proof: moving CLODE_TJS_OUT/CLODE_TJS_BUILD between two otherwise identical builds
+    // changed 47 of 372 objects and the linked size (5,464,448 -> 5,466,496), and two
+    // separate runs of the gate differing ONLY in their mkdtemp suffix (same length,
+    // different characters) produced 559224b9... and 5901f0fe... So the build path's
+    // CONTENT is baked into the engine. judgeObservation() says so rather than going red on
+    // a sha that matches no proof; the stronger "different host, same output" tier needs
+    // -ffile-prefix-map, which is supported and used nowhere.
+    caveat: 'Reproducible AT A FIXED BUILD PATH. The absolute build directory is baked into '
+      + 'the objects — measured, not assumed: perturbing it changed 47 of 372 objects and '
+      + 'the linked size. This verdict is "two builds, same inputs, same place", which is '
+      + 'the property a cache threatens; it is not "any two hosts agree".',
     evidence: 'Two causes were found and fixed before this could hold, both platform-'
       + "neutral: mimalloc's __DATE__/__TIME__ banner (an anchored source fixup in "
       + 'scripts/build-tjs.cjs, chosen over -D__DATE__= because that is a gcc/clang '
@@ -124,6 +136,12 @@ const VERDICTS = {
   'windows-amd64': {
     verdict: KNOWN_NOT_REPRODUCIBLE, grain: 'mechanism', cadence: 'on-demand',
     measured: '2026-09-20',
+    // cadence on-demand, not weekly, and not none: the runner CAN build this leg natively
+    // (msvc on a windows runner is a native build, no container and no guest), so it is
+    // reachable by workflow_dispatch today. It is not scheduled because the harness shells
+    // out to `find` and `cp`, which have never been exercised on a windows runner — a
+    // weekly job whose failure mode is "the script did not start" teaches people to ignore
+    // it. Proving those two spawns on windows is what promotes this to weekly.
     reason: 'scripts/ar-determinism.cjs probes PATH, finds mingw\'s GNU ar at '
       + 'C:\\mingw64\\bin\\ar.EXE, and it accepts -D — so the leg logs '
       + '`ar-determinism: FLAGS`. But the leg is msvc:true and build-tjs.cjs configures it '
@@ -169,41 +187,47 @@ const VERDICTS = {
       + 'is what promotes or fails it.',
   },
   'linux-x64-musl': {
-    verdict: UNPROVEN, grain: 'none', cadence: 'on-demand',
-    because: 'never measured. Cheap (an alpine container on a native x64 runner, 8-9 minute '
-      + 'job) and it IS a published artifact, so it is the strongest candidate for the next '
-      + 'promotion to weekly. Left on-demand in this pass only because the scheduled '
-      + 'workflow starts with the three legs whose runners need no container step.',
+    verdict: UNPROVEN, grain: 'none', cadence: 'none',
+    because: 'never measured, and the CHEAPEST leg still out of reach — an alpine container '
+      + 'on a native x64 runner, an 8-9 minute job, and a PUBLISHED artifact. The blocker is '
+      + 'not cost: test/repro-double-build.cjs drives scripts/build-tjs.cjs natively on the '
+      + "job host, and this leg's engine is built INSIDE the alpine container. Running it "
+      + 'natively would double-build the ubuntu-glibc engine and label it linux-x64-musl. '
+      + 'This is the next leg to wire, and wiring it means teaching the runner to drive the '
+      + "guest action's build step twice.",
   },
   'linux-arm64-musl': {
-    verdict: UNPROVEN, grain: 'none', cadence: 'on-demand',
-    because: 'never measured. Same shape and same argument as linux-x64-musl, on the native '
-      + 'arm runner.',
+    verdict: UNPROVEN, grain: 'none', cadence: 'none',
+    because: 'never measured. Same shape, same blocker and same fix as linux-x64-musl, on '
+      + 'the native arm runner: an alpine container the runner does not enter.',
   },
   'linux-x86-musl': {
-    verdict: UNPROVEN, grain: 'none', cadence: 'on-demand',
-    because: 'never measured. An alpine x86 container on an x64 runner, so no emulation and '
-      + 'no VM — cheap enough to run on demand.',
+    verdict: UNPROVEN, grain: 'none', cadence: 'none',
+    because: 'never measured. An alpine x86 container on an x64 runner — no emulation and no '
+      + 'VM, so cheap, but the same container boundary as linux-x64-musl.',
   },
 
   // ---- darwin cross legs: cheap-ish, but each drags a container image ------------------
   'darwin-x64': {
-    verdict: UNPROVEN, grain: 'none', cadence: 'on-demand',
-    because: 'never measured. Cross-built on ubuntu through the ci/osxcross-darwin image, '
-      + 'no-exec, so the binary can be byte-compared but not run. The two darwin fixes are '
-      + 'platform-neutral and the archiver here is cctools (x86_64-apple-darwin10-ar, which '
-      + 'reads ZERO_AR_DATE), so this is EXPECTED to pass — expected is not measured.',
+    verdict: UNPROVEN, grain: 'none', cadence: 'none',
+    because: 'never measured. Cross-built on ubuntu INSIDE the ci/osxcross-darwin image, '
+      + 'which the runner does not build or enter, so a native double-build here would '
+      + 'measure the ubuntu engine. no-exec, but that is no obstacle — bytes compare without '
+      + 'running. The two darwin fixes are platform-neutral and the archiver is cctools '
+      + '(x86_64-apple-darwin10-ar, which reads ZERO_AR_DATE), so this is EXPECTED to pass. '
+      + 'Expected is not measured, which is the whole point of this file.',
   },
   'darwin-x86': {
-    verdict: UNPROVEN, grain: 'none', cadence: 'on-demand',
-    because: 'never measured. Same osxcross image and same cctools archiver as darwin-x64, '
-      + 'at the 10.4/i386 floor.',
+    verdict: UNPROVEN, grain: 'none', cadence: 'none',
+    because: 'never measured. Same osxcross image, same container boundary and same cctools '
+      + 'archiver as darwin-x64, at the 10.4/i386 floor.',
   },
   'darwin-ppc': {
-    verdict: UNPROVEN, grain: 'none', cadence: 'on-demand',
-    because: 'never measured. Cross-built through a pinned gcc-powerpc-apple-darwin8 image; '
-      + 'no-exec. Its archiver has never been probed for real (BACKLOG: "the cross legs\' '
-      + 'archivers have never been probed"), so its verdict is genuinely open, not assumed.',
+    verdict: UNPROVEN, grain: 'none', cadence: 'none',
+    because: 'never measured. Cross-built inside a pinned gcc-powerpc-apple-darwin8 image, '
+      + 'the same container boundary as the osxcross legs. Its archiver has never been '
+      + 'probed for real (BACKLOG: "the cross legs\' archivers have never been probed"), so '
+      + 'its verdict is genuinely open rather than merely unmeasured.',
   },
 
   // ---- VM guests: the engine build IS the job -----------------------------------------
@@ -240,7 +264,7 @@ const VERDICTS = {
     + 'with a 1800-minute timeout and qemu-user verification, currently soft-fail.'),
   'netbsd-sparc': tooSlow('too slow to double-build in CI: the engine is baked INSIDE a '
     + 'qemu NetBSD/sparc guest (spike/quickjs/qemu/ci-guest-bake.sh, timeout 3600) and then '
-    + 'cross-fused on the x64 host. Doubling the bake is the whole cost of the leg, twice.'),
+    + 'blobulated on the x64 host. Doubling the bake is the whole cost of the leg, twice.'),
   'netbsd-m68k': tooSlow(NETBSD_CROSS),
   'netbsd-sparc64': tooSlow(NETBSD_CROSS),
   'netbsd-alpha': tooSlow(NETBSD_CROSS),
@@ -383,9 +407,92 @@ function legNamesFromManifest() {
 }
 
 // PURE.
-function scanCoverage({ legNames, verdicts }) {
+// The CI MATRIX, derived from the `cadence` field rather than retyped into YAML.
+// Promoting a leg from on-demand to weekly is then a one-word edit HERE, in the same file
+// that records why it was not scheduled — not an edit in a workflow that has no idea what
+// a verdict is. `os` comes from the CI tier of scripts/tjs-legs.mjs, so a leg scheduled
+// here runs on the same runner image its per-push build does.
+// WHAT THE RUNNER CAN ACTUALLY MEASURE, and the lie it would otherwise tell.
+// test/repro-double-build.cjs drives scripts/build-tjs.cjs NATIVELY on whatever host the
+// job runs on. It does not start a cross-platform-actions VM, does not enter an alpine
+// container, does not build an osxcross image, and does not bake inside a qemu guest —
+// every one of which is how some leg's engine is really produced. Point the runner at
+// netbsd-m68k on an ubuntu box and it will happily double-build the UBUNTU engine and
+// label the verdict `netbsd-m68k`. That is precisely the class of untrue verdict this
+// manifest exists to prevent, so it is a refusal, keyed on the leg record's own
+// orchestration fields rather than on a hand-kept list of leg names.
+const CROSS_FIELDS = ['guest-platform', 'cross-file', 'cross-image', 'cross-dockerfile',
+  'netbsd-src', 'cosmo'];
+
+function nonNativeMechanism(rec) {
+  for (const f of CROSS_FIELDS) if (rec[f]) return f;
+  return null;
+}
+
+function ciLegRecords() {
+  const out = execFileSync(process.execPath, [path.join(REPO, 'scripts/tjs-legs.mjs'), 'ci'],
+    { encoding: 'utf8' });
+  return new Map(JSON.parse(out).map((l) => [l.leg, l]));
+}
+
+function matrixForLegs(names, why) {
+  const byName = ciLegRecords();
+  return [...names].sort().map((leg) => {
+    if (!VERDICTS[leg]) {
+      throw new Error(`${why}: '${leg}' has no reproducibility verdict — a scheduled run `
+        + 'would spend two engine builds and then have nothing to judge the result against');
+    }
+    const rec = byName.get(leg);
+    if (!rec) {
+      throw new Error(`${why}: leg '${leg}' is not in the CI tier of scripts/tjs-legs.mjs, `
+        + 'so there is no runner image to schedule it on. Either add it to the ci tier or '
+        + 'run it by hand.');
+    }
+    const mech = nonNativeMechanism(rec);
+    if (mech) {
+      throw new Error(`${why}: leg '${leg}' declares '${mech}', so its engine is NOT built `
+        + 'natively on the job host. test/repro-double-build.cjs would double-build the '
+        + "HOST's engine and label the verdict '" + leg + "' — an untrue verdict, which is "
+        + 'worse than no verdict. Measuring it needs the double-build driven inside that '
+        + "leg's own build mechanism (see .github/actions/build-leg), which this gate does "
+        + 'not do yet.');
+    }
+    return { leg, os: rec.os };
+  });
+}
+
+function matrixFor(cadence) {
+  const names = Object.entries(VERDICTS).filter(([, v]) => v.cadence === cadence).map(([k]) => k);
+  return matrixForLegs(names, `matrixFor(${cadence})`);
+}
+
+function scanCoverage({ legNames, verdicts, ciRecords }) {
   const findings = [];
   let examined = 0;
+  // A SCHEDULED verdict must be one the runner can honestly produce. A leg whose engine is
+  // built inside a VM, a container, a cross image or a qemu bake, but whose cadence says
+  // `weekly` or `on-demand`, is a job that would double-build the HOST engine and label the
+  // result with that leg's name. Checked here rather than in the shape scan because it
+  // needs the leg RECORDS, which only read() can fetch.
+  if (ciRecords) {
+    for (const [leg, v] of Object.entries(verdicts)) {
+      if (v.cadence === 'none') continue;
+      examined++;
+      const rec = ciRecords.get(leg);
+      if (!rec) {
+        findings.push(`${leg}: cadence '${v.cadence}' but the leg is not in the CI tier of `
+          + 'scripts/tjs-legs.mjs — nothing can schedule it');
+        continue;
+      }
+      const mech = nonNativeMechanism(rec);
+      if (mech) {
+        findings.push(`${leg}: cadence '${v.cadence}' but the leg declares '${mech}', so its `
+          + 'engine is not built natively on the job host. A scheduled run would double-build '
+          + "the HOST engine and label it '" + leg + "'. Set cadence 'none' with the reason, "
+          + 'or teach the runner that mechanism.');
+      }
+    }
+  }
   for (const leg of legNames) {
     examined++;
     if (!verdicts[leg]) {
@@ -494,52 +601,87 @@ function judgeObservation(entry, observed) {
     + `it as ${KNOWN_NOT_REPRODUCIBLE} with the reason and what would fix it.` };
 }
 
-// ---- the three standing guards -----------------------------------------------------------
+// ---- the scheduling promise, enforced -----------------------------------------------------
+//
+// A GATE THAT NEVER RUNS IS NOT A GATE. This repo has already been bitten by exactly that:
+// test/ccache.test.cjs's engine e2e is opt-in behind CLODE_CCACHE_ENGINE_E2E and nothing in
+// .github/ sets it, so it has only ever run by hand and nothing would notice if it stopped
+// working. `cadence: 'weekly'` in this file is a PROMISE, and a promise no workflow keeps is
+// worse than an honest `none`. This scan is what makes the promise checkable.
+//
+// PURE: `workflow` is the already-read .github/workflows/repro.yml text.
+function scanScheduling({ workflow, verdicts }) {
+  const findings = [];
+  let examined = 0;
 
-const manifestShapeGuard = defineGuard({
-  name: 'repro-verdict-manifest-shape',
-  read: () => ({ verdicts: VERDICTS }),
-  scan: scanManifestShape,
-  floor: 44,
-  // Every rule at once: an unknown verdict, a reproducible entry with no proof at the wrong
-  // grain, a known-not with no reason, and an unproven with no because.
-  control: () => ({ verdicts: {
-    'a-leg': { verdict: 'probably-fine', cadence: 'weekly' },
-    'b-leg': { verdict: REPRODUCIBLE, grain: 'archive', cadence: 'weekly', proofs: [], evidence: '' },
-    'c-leg': { verdict: KNOWN_NOT_REPRODUCIBLE, grain: 'mechanism', cadence: 'on-demand' },
-    'd-leg': { verdict: UNPROVEN, grain: 'none', cadence: 'none' },
-  } }),
-});
+  examined++;
+  if (!/^\s*- cron: /m.test(workflow)) {
+    findings.push('.github/workflows/repro.yml has no `- cron:` schedule — the double-build '
+      + "gate would then run only when someone remembered, which is how this repo's ccache "
+      + 'engine e2e went a whole phase without running');
+  }
 
-const coverageGuard = defineGuard({
-  name: 'repro-verdict-covers-every-leg',
-  read: () => ({ legNames: legNamesFromManifest(), verdicts: VERDICTS }),
-  scan: scanCoverage,
-  floor: 44,
-  // A new leg with no verdict, and a verdict for a leg that no longer exists.
-  control: () => ({ legNames: ['darwin-arm64', 'a-brand-new-leg'],
-    verdicts: { 'darwin-arm64': VERDICTS['darwin-arm64'], 'a-retired-leg': tooSlow('gone') } }),
-});
+  examined++;
+  if (!/node test\/repro-double-build\.cjs --leg/.test(workflow)) {
+    findings.push('.github/workflows/repro.yml never invokes `node test/repro-double-build.cjs '
+      + '--leg` — the workflow exists but measures nothing');
+  }
 
-const ratchetGuard = defineGuard({
-  name: 'repro-verdict-ratchet',
-  read: () => ({ counts: countByVerdict(VERDICTS),
-    reproducibleBaseline: REPRODUCIBLE_BASELINE, unprovenBaseline: UNPROVEN_BASELINE }),
-  scan: ({ counts, reproducibleBaseline, unprovenBaseline }) => {
-    const r = ratchetVerdicts(counts, reproducibleBaseline, unprovenBaseline);
-    // Two facts examined: the reproducible floor and the unproven ceiling.
-    return { findings: r.ok ? [] : [r.message], examined: 2 };
-  },
-  floor: 2,
-  // A manifest that lost a reproducible leg: the demotion the ratchet exists to catch.
-  control: () => ({ counts: { [REPRODUCIBLE]: 0, [KNOWN_NOT_REPRODUCIBLE]: 2, [UNPROVEN]: 42 },
-    reproducibleBaseline: REPRODUCIBLE_BASELINE, unprovenBaseline: UNPROVEN_BASELINE }),
-});
+  examined++;
+  if (!/node test\/repro-verdicts\.cjs --matrix/.test(workflow)) {
+    findings.push('.github/workflows/repro.yml does not derive its matrix from '
+      + '`node test/repro-verdicts.cjs --matrix` — a leg list retyped into YAML is a second '
+      + 'copy of the cadence field and rots the first time a leg is renamed');
+  }
+
+  examined++;
+  if (/cancel-in-progress:\s*true/.test(workflow)) {
+    findings.push('.github/workflows/repro.yml sets cancel-in-progress: true — this is a '
+      + 'MEASUREMENT run, not build feedback. A cancelled run produces no verdict and, on a '
+      + 'weekly cron, there is no newer run that reproduces the answer for another seven days');
+  }
+
+  examined++;
+  const weekly = Object.entries(verdicts).filter(([, v]) => v.cadence === 'weekly');
+  if (weekly.length === 0) {
+    findings.push("no leg has cadence 'weekly', so the scheduled workflow would derive an "
+      + 'empty matrix and report green having measured nothing');
+  }
+
+  return { findings, examined };
+}
+
+// THE GUARDS THEMSELVES LIVE IN test/repro-verdicts.test.cjs, NOT HERE — deliberately, and
+// for two reasons. (1) test/guards-population.cjs's migration classifier defines "registers
+// a guard" as a file that destructures defineGuard from guard.cjs AND calls it directly, and
+// its own header records the constraint: "not a shared factory function migrated files
+// merely call into". A guard defined here and merely re-exported would leave the test file
+// reading as unmigrated — the ratchet would be right and the code would be wrong. (2) This
+// module is also a CLI (`--matrix`), invoked by .github/workflows/repro.yml; keeping
+// node:test's guard machinery out of its require graph keeps that invocation cheap and
+// dependency-free. What lives here is the data and the PURE scans; what lives there is the
+// defineGuard wiring that turns them into standing gates.
 
 module.exports = {
   VERDICTS, REPRODUCIBLE, KNOWN_NOT_REPRODUCIBLE, UNPROVEN, VERDICT_RANK, GRAINS, CADENCES,
   REPRODUCIBLE_BASELINE, UNPROVEN_BASELINE,
   countByVerdict, scanManifestShape, scanCoverage, ratchetVerdicts, judgeObservation,
+  matrixFor, matrixForLegs, nonNativeMechanism, ciLegRecords,
   legNamesFromManifest,
-  manifestShapeGuard, coverageGuard, ratchetGuard,
+  scanScheduling, tooSlow,
 };
+
+// ---- CLI: the shape .github/workflows/repro.yml feeds to strategy.matrix.include --------
+if (require.main === module) {
+  const [flag, value] = process.argv.slice(2);
+  if (flag === '--matrix' && CADENCES.includes(value)) {
+    process.stdout.write(`${JSON.stringify(matrixFor(value))}\n`);
+  } else if (flag === '--matrix-legs' && typeof value === 'string' && value.trim() !== '') {
+    const names = [...new Set(value.split(',').map((n) => n.trim()).filter(Boolean))];
+    process.stdout.write(`${JSON.stringify(matrixForLegs(names, '--matrix-legs'))}\n`);
+  } else {
+    process.stderr.write(`usage: node test/repro-verdicts.cjs --matrix <${CADENCES.join('|')}>\n`
+      + '       node test/repro-verdicts.cjs --matrix-legs <leg[,leg...]>\n');
+    process.exitCode = 2;
+  }
+}
