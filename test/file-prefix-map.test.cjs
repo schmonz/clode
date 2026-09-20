@@ -20,7 +20,7 @@ const path = require('node:path');
 const {
   SOURCE_SENTINEL, BUILD_SENTINEL,
   filePrefixMapOptedOut, prefixMapFlags, probeFilePrefixMap, filePrefixMapDecision,
-  describeFilePrefixMapDecision, applyFilePrefixMapDecision, resolveCompiler,
+  describeFilePrefixMapDecision, applyFilePrefixMapDecision, resolveCompiler, expandMappings,
 } = require('../scripts/file-prefix-map.cjs');
 
 const MAPPINGS = [['/tmp/b/build', BUILD_SENTINEL], ['/tmp/b/src', SOURCE_SENTINEL]];
@@ -281,4 +281,53 @@ test('scripts/file-prefix-map.cjs is ENGINE RECIPE SOURCE', async () => {
   assert.ok(FILES.includes('scripts/file-prefix-map.cjs'),
     'a build-flag decision outside the recipe means the tjs cache can restore an engine '
     + 'built by a different recipe than the one in the tree');
+});
+
+// ---- THE /private FINDING: a mapping that matches the wrong spelling maps nothing --------
+//
+// MEASURED 2026-09-20, from the first path-perturbation run WITH the flag on. The source
+// tree mapped correctly -- objects carried `/clode/tjs/src/version.c` -- and 46 of 372
+// objects STILL differed, every one of them in txiki's own target, because each carried the
+// build directory in full:
+//
+//     /private/var/folders/.../repro-double-build-P4Tg0c/build-root/out-.../build
+//
+// with a `/private` on the front. On macOS /var is a symlink to /private/var, and the
+// compiler records DWARF's DW_AT_comp_dir from getcwd(), which resolves it. build-tjs.cjs
+// composes its build dir from CLODE_TJS_BUILD, which is the /var spelling, so the prefix
+// this repo asked to map and the prefix the compiler wrote down were different strings and
+// the mapping matched nothing.
+//
+// Not a darwin quirk to branch on: any host with a symlinked build path (a /home ->
+// /usr/home BSD, an automounted network path, a container bind mount) has the same shape.
+// The portable answer is to map BOTH spellings.
+
+test('each root is mapped under BOTH the given path and its resolved path', () => {
+  const pairs = expandMappings([['/var/b', BUILD_SENTINEL], ['/var/s', SOURCE_SENTINEL]],
+    { realpathFn: (p) => `/private${p}` });
+  assert.deepStrictEqual(pairs, [
+    ['/private/var/b', BUILD_SENTINEL], ['/var/b', BUILD_SENTINEL],
+    ['/private/var/s', SOURCE_SENTINEL], ['/var/s', SOURCE_SENTINEL],
+  ]);
+});
+
+test('a root whose real path IS its given path is mapped once, not twice', () => {
+  const pairs = expandMappings([['/b', BUILD_SENTINEL]], { realpathFn: (p) => p });
+  assert.deepStrictEqual(pairs, [['/b', BUILD_SENTINEL]]);
+});
+
+test('a root that cannot be resolved is still mapped under the name it has', () => {
+  // The build dir is created before this runs, but a caller (or a future reordering) may
+  // hand a path that does not exist yet. Dropping the mapping entirely would be the silent
+  // failure; keeping the literal one is the behaviour before this fix.
+  const pairs = expandMappings([['/nope', BUILD_SENTINEL]], {
+    realpathFn: () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }); },
+  });
+  assert.deepStrictEqual(pairs, [['/nope', BUILD_SENTINEL]]);
+});
+
+test('build-tjs.cjs passes its mappings through expandMappings, not raw', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'scripts/build-tjs.cjs'), 'utf8');
+  assert.match(src, /expandMappings\(/,
+    'handing the raw pair to the decision is exactly the run that came back 46/372 red');
 });
