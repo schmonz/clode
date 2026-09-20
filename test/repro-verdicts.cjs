@@ -85,17 +85,47 @@ const VERDICTS = {
     // CONTENT is baked into the engine. judgeObservation() says so rather than going red on
     // a sha that matches no proof; the stronger "different host, same output" tier needs
     // -ffile-prefix-map, which is supported and used nowhere.
-    caveat: 'Reproducible AT A FIXED BUILD PATH. The absolute build directory is baked into '
-      + 'the objects — measured, not assumed: perturbing it changed 47 of 372 objects and '
-      + 'the linked size. This verdict is "two builds, same inputs, same place", which is '
-      + 'the property a cache threatens; it is not "any two hosts agree".',
+    // THE STRONGER TIER, measured 2026-09-20 — its own FIELD, not a fourth grain. `grain`
+    // says WHAT was compared (whole binary); this says UNDER WHICH PERTURBATION it held.
+    // Earned by `node test/repro-double-build.cjs --leg darwin-arm64 --perturb path`, which
+    // relocates the vendored source tree, the output dir AND the build root between the two
+    // phases, to a path of a DIFFERENT LENGTH, and then requires byte-identical output.
+    pathIndependent: {
+      sha256: '343e67c0af835351dfebb2fe6ff8ec3c155154e978c46799eb4db4f55b24cdcc',
+      bytes: 5_438_800, date: '2026-09-20',
+      config: 'wasm/mimalloc/ffi at build-tjs defaults, as the leg ships',
+      where: 'host darwin/arm64 (Darwin 27), Apple clang 21.0.0, two full builds from two '
+        + 'DIFFERENT absolute paths (238.7s), 372 of 372 objects compiled in EACH phase (the '
+        + 'work floor), 0 of 372 objects differing, via test/repro-double-build.cjs --leg '
+        + 'darwin-arm64 --perturb path. The engine carries 151 /clode/... sentinel paths and '
+        + 'ZERO paths from the machine that built it.',
+    },
+    // REPLACES the fixed-path caveat this entry carried until 2026-09-20, which said the
+    // absolute build directory was baked into the objects. That was true and is no longer:
+    // the same perturbation that measured 47 of 372 objects differing now measures 0.
+    caveat: 'Path independence is proven for THIS HOST and this toolchain, which is not the '
+      + 'same as "any two hosts agree": compiler version, libc, SDK and the leg config all '
+      + 'still have to match. What is now off the list of things that must match is WHERE '
+      + 'the build ran. NOTE the `proofs` sha above is from BEFORE the three fixes below '
+      + 'and no longer reproduces — a proof records that two builds agreed on the day, not '
+      + 'a value a later run must re-match.',
     evidence: 'Two causes were found and fixed before this could hold, both platform-'
       + "neutral: mimalloc's __DATE__/__TIME__ banner (an anchored source fixup in "
       + 'scripts/build-tjs.cjs, chosen over -D__DATE__= because that is a gcc/clang '
       + 'spelling MSVC rejects), and Apple ar/libtool stamping member mtimes into 14 static '
       + 'archives, which ld64 folds into LC_UUID (ZERO_AR_DATE=1, the cctools lever and only '
       + "that). CORRECTION carried forward: ld64's LC_UUID is a CONTENT hash, not a "
-      + 'per-link nonce — differing UUIDs were a symptom, never a cause.',
+      + 'per-link nonce — differing UUIDs were a symptom, never a cause. THREE MORE causes were '
+      + 'found and fixed on 2026-09-20, by running the path perturbation to the END rather '
+      + 'than stopping when the flag was accepted: (1) the build path in __FILE__ and in '
+      + 'debug info, closed by -ffile-prefix-map (scripts/file-prefix-map.cjs) -- which '
+      + 'mapped NOTHING at first, because macOS resolves /var to /private/var and the '
+      + 'compiler records the resolved spelling; (2) ld64 s debug map, 46 N_OSO stabs '
+      + 'recording every object absolute path, +1016 bytes of string table, closed by '
+      + '-Wl,-oso_prefix; (3) mimalloc defining MI_GIT_DESCRIBE from `git describe` run in '
+      + 'CMAKE OWN WORKING DIRECTORY, i.e. THIS repo, so every clode commit changed the '
+      + 'engine bytes whether or not it touched an engine source, closed by '
+      + 'fixupMimallocGitDescribe.',
   },
 
   'linux-x64-glibc': {
@@ -150,6 +180,12 @@ const VERDICTS = {
       + 'CMAKE_C_ARCHIVE_CREATE/APPEND/FINISH. The archives are built by lib.exe, which has '
       + 'no -D, and the deterministic rules were composed for an archiver that never ran. '
       + 'The leg\'s own `ar-determinism: WARNING` line says so verbatim.',
+    // PATH INDEPENDENCE IS UNPROVEN HERE TOO, with a reason rather than a silence: cl takes
+    // neither -ffile-prefix-map nor the -fdebug-prefix-map/-fmacro-prefix-map pair, so
+    // scripts/file-prefix-map.cjs's probe lands this leg in `unsupported` and changes NO
+    // argument. Its own lever is /PATHMAP, which appears nowhere in this repo. The leg's
+    // `build-tjs: file-prefix-map: NONE ... (this compiler takes neither ...)` line says so
+    // on every build, so the gap is visible in the log rather than only here.
     wouldFix: 'lib.exe has no -D. The MSVC levers are link.exe /Brepro (which zeroes the PE '
       + "TimeDateStamp and the debug directory's timestamp) plus lib.exe's own determinism; "
       + '/Brepro appears NOWHERE in this repo. Landing it means pushing it through '
@@ -169,7 +205,10 @@ const VERDICTS = {
     reason: 'Same as windows-amd64: the ar-determinism probe finds mingw ar and accepts -D, '
       + 'cmake then chooses MSVC lib.exe, and the rules reach CMakeCache.txt and nothing '
       + 'else. Both publisher legs of CI run 35487107745 printed the same WARNING.',
-    wouldFix: 'Same as windows-amd64: link.exe /Brepro, which appears nowhere in this repo.',
+    wouldFix: 'Same as windows-amd64: link.exe /Brepro, which appears nowhere in this repo. '
+      + 'And the same second gap: cl takes neither -ffile-prefix-map nor the older '
+      + '-fdebug-prefix-map/-fmacro-prefix-map pair, so the build path stays baked into '
+      + 'these objects; /PATHMAP is the MSVC answer and is also unused here.',
     evidence: 'CI run 35487107745, the windows-arm64 leg, same FLAGS + WARNING pair as its '
       + 'amd64 twin.',
   },
@@ -356,6 +395,35 @@ function scanManifestShape({ verdicts }) {
       }
       if (typeof v.evidence !== 'string' || v.evidence.trim() === '') {
         findings.push(`${leg}: claims ${REPRODUCIBLE} with no \`evidence\` prose`);
+      }
+    }
+    // PATH INDEPENDENCE — the stronger tier, and its own FIELD rather than a fifth grain.
+    // `grain` says WHAT was compared; this says UNDER WHICH PERTURBATION the comparison
+    // held. Folding the two axes into one enum would make `whole-binary` and
+    // `whole-binary-path-independent` two values answering two questions, and the rule that
+    // `reproducible` REQUIRES grain `whole-binary` would then need to know both spellings —
+    // one forgotten spelling and an archive-grain result claims an engine verdict, which is
+    // the trap that rule exists to close.
+    if (v.pathIndependent !== undefined) {
+      const p = v.pathIndependent;
+      if (v.verdict !== REPRODUCIBLE || v.grain !== 'whole-binary') {
+        findings.push(`${leg}: carries \`pathIndependent\` without ${REPRODUCIBLE} at grain `
+          + 'whole-binary underneath it. The stronger property implies the weaker one — two '
+          + 'builds at DIFFERENT paths agreeing means two builds at the SAME path agree too '
+          + '— so claiming it alone is a verdict smuggled in through a side door.');
+      }
+      if (typeof p.sha256 !== 'string' || !HEX8.test(p.sha256)) {
+        findings.push(`${leg} pathIndependent: sha256 must be 8-64 lowercase hex characters, `
+          + `got ${JSON.stringify(p && p.sha256)}`);
+      }
+      if (!Number.isInteger(p.bytes) || p.bytes <= 0) {
+        findings.push(`${leg} pathIndependent: bytes must be a positive integer`);
+      }
+      for (const field of ['date', 'where', 'config']) {
+        if (typeof p[field] !== 'string' || p[field].trim() === '') {
+          findings.push(`${leg} pathIndependent: \`${field}\` must be a non-empty string — a `
+            + 'record of the stronger tier owes at least as much as an ordinary proof');
+        }
       }
     }
     if (v.verdict === KNOWN_NOT_REPRODUCIBLE) {
@@ -579,6 +647,30 @@ function judgeObservation(entry, observed) {
   const objs = observed.differingObjects && observed.differingObjects.length
     ? `\n  differing objects:\n${observed.differingObjects.map((o) => `    ${o}`).join('\n')}`
     : '';
+  // A PERTURBED RUN IS AN EXPERIMENT, judged against the claim the manifest makes for THAT
+  // perturbation — never against the plain verdict. The trap: an `unproven` leg run under
+  // --perturb path and coming back identical would otherwise read as "promote it to
+  // reproducible", recording a fixed-path verdict from a run that never held the path fixed.
+  if (observed.perturbation === 'path') {
+    if (entry.pathIndependent) {
+      if (observed.identical) {
+        return { ok: true, message: `path-independent, as recorded, and still holding under `
+          + `relocation — ${detail}` };
+      }
+      return { ok: false, message: 'REGRESSION — this leg records `pathIndependent` and two '
+        + `builds from DIFFERENT absolute paths produced different bytes. ${detail}${objs}\n`
+        + `  Recorded: ${entry.pathIndependent.where}` };
+    }
+    if (observed.identical) {
+      return { ok: true, message: 'NOT recorded path-independent, and this run held under '
+        + `relocation — ${detail}. Record it: add a \`pathIndependent\` field to this leg `
+        + "with this run's sha256, bytes, date, where and config. (This does NOT settle the "
+        + 'plain, fixed-path verdict, which this run never measured.)' };
+    }
+    return { ok: true, message: 'NOT recorded path-independent, and this run DIFFERS under '
+      + `relocation — ${detail}${objs}. That is the status quo for a leg with no such `
+      + 'record, not news; it becomes a finding the moment the field is added.' };
+  }
   if (entry.verdict === REPRODUCIBLE) {
     if (observed.identical) {
       const known = (entry.proofs || []).some((p) => observed.sha256

@@ -117,6 +117,44 @@ function assessPhaseWork({ label, objectCount, written, floor = WORK_FLOOR }) {
   return '';
 }
 
+// ---- THE PERTURBATIONS, named --------------------------------------------------------
+//
+// `perturb` has always been the seam that lets this gate be shown able to FAIL against two
+// REAL builds rather than a synthetic fixture. Naming them turns that from a thing a caller
+// writes inline into a thing the CLI can run, which is what makes the stronger experiment
+// reproducible by someone other than its author.
+//
+// `path` IS THE ACCEPTANCE for build-path independence. The plain gate holds outDir and
+// buildRoot fixed deliberately, so the verdict it earns is conditional on the build
+// directory; this one relocates ALL THREE roots -- the vendored source tree, the output
+// directory and the build root -- between the two phases and requires byte-identical output
+// anyway. Measured RED on 2026-09-20 (47 of 372 objects, and the linked size moved), which
+// is what scripts/file-prefix-map.cjs exists to close.
+//
+// ALL THREE, not two: the source tree's own absolute path reaches the objects through
+// __FILE__ and through debug info exactly as the build dir's does, and mapping two of the
+// three would leave the engine dependent on wherever the vendor checkout was unpacked --
+// the silent partial fix this repo keeps finding.
+//
+// A DIFFERENT LENGTH, not merely different characters. Two gate runs differing only in a
+// same-LENGTH mkdtemp suffix already produced different engines, so same-length is enough
+// to go red; a different length is strictly stronger (it also catches anything that pads or
+// aligns on the path's size) and costs nothing. Returns the new root, so the caller can
+// clean it up.
+const PERTURBATIONS = {
+  path: ({ tree, baseEnv, log = () => {} }) => {
+    const moved = fs.mkdtempSync(path.join(os.tmpdir(), 'repro-double-build-relocated-much-longer-'));
+    const vendorParent = path.join(moved, 'vendor');
+    fs.mkdirSync(vendorParent, { recursive: true });
+    fs.renameSync(tree, path.join(vendorParent, 'txiki.js'));
+    baseEnv.CLODE_TJS_VENDOR = vendorParent;
+    baseEnv.CLODE_TJS_OUT = path.join(moved, 'out');
+    baseEnv.CLODE_TJS_BUILD = path.join(moved, 'build-root');
+    log(`perturb path: relocated all three roots to ${moved}`);
+    return moved;
+  },
+};
+
 // PURE, and exported so the one env fact this gate's MEANING depends on can be asserted
 // without paying for two engine builds.
 //
@@ -162,6 +200,7 @@ function doubleBuildEngine({
   timeoutMs = ENGINE_BUILD_TIMEOUT_MS,
   log = () => {},
   perturb = null,
+  perturbationName = null,
 } = {}) {
   if (!fs.existsSync(path.join(sharedCheckout, 'CMakeLists.txt'))) {
     throw new Error(`no vendor checkout at ${sharedCheckout} — run `
@@ -220,7 +259,7 @@ function doubleBuildEngine({
   };
 
   const a = phase('a');
-  if (perturb) perturb({ tree, outDir, buildRoot, baseEnv });
+  const movedTo = perturb ? perturb({ tree, outDir, buildRoot, baseEnv, log }) : null;
   const b = phase('b');
 
   // THE FLOOR, BEFORE the comparison is allowed to mean anything. Both phases, because a
@@ -263,6 +302,12 @@ function doubleBuildEngine({
     objectCount: a.objects.length,
     work: { a: a.work, b: b.work },
     insufficientWork,
+    // NAMED on the observation, so a perturbed run can never be filed as a plain one. An
+    // `unproven` leg run under --perturb path and coming back identical would otherwise
+    // read as "promote it to reproducible" -- a fixed-path verdict recorded from a run that
+    // never held the path fixed.
+    perturbation: perturbationName,
+    movedTo,
     config: describeConfig(baseEnv),
     wallMsA: a.wallMs,
     wallMsB: b.wallMs,
@@ -273,7 +318,7 @@ function doubleBuildEngine({
 
 module.exports = {
   doubleBuildEngine, doubleBuildEnv, legBuildEnv, describeConfig,
-  assessPhaseWork, WORK_FLOOR,
+  assessPhaseWork, WORK_FLOOR, PERTURBATIONS,
 };
 
 // ---- CLI -----------------------------------------------------------------------------
@@ -283,11 +328,16 @@ async function main(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--leg') args.leg = argv[++i];
+    else if (a === '--perturb') args.perturb = argv[++i];
     else if (a === '--keep') args.keep = true;
     else if (a === '--json') args.json = true;
     else return usage(`unknown argument '${a}'`);
   }
   if (!args.leg) return usage('--leg is required');
+  if (args.perturb && !PERTURBATIONS[args.perturb]) {
+    return usage(`unknown perturbation '${args.perturb}'. Known: `
+      + `${Object.keys(PERTURBATIONS).sort().join(', ')}`);
+  }
 
   // The leg is NAMED, never inferred from the host. A runner that guesses "I am on darwin
   // arm64 so this must be darwin-arm64" would happily label a cross-built or
@@ -318,12 +368,22 @@ async function main(argv) {
       + 'be nothing to judge the result against');
   }
   const log = (m) => process.stderr.write(`repro-double-build: ${m}\n`);
-  const obs = doubleBuildEngine({ legName: leg.leg, buildEnv: legBuildEnv(leg), log });
-  if (!args.keep) fs.rmSync(obs.workDir, { recursive: true, force: true });
+  const obs = doubleBuildEngine({
+    legName: leg.leg,
+    buildEnv: legBuildEnv(leg),
+    log,
+    perturb: args.perturb ? PERTURBATIONS[args.perturb] : null,
+    perturbationName: args.perturb || null,
+  });
+  if (!args.keep) {
+    fs.rmSync(obs.workDir, { recursive: true, force: true });
+    if (obs.movedTo) fs.rmSync(obs.movedTo, { recursive: true, force: true });
+  }
 
   if (args.json) process.stdout.write(`${JSON.stringify(obs, null, 2)}\n`);
   const judgement = judgeObservation(VERDICTS[leg.leg], obs);
-  process.stdout.write(`repro-double-build: ${leg.leg}: ${obs.summary}\n`);
+  process.stdout.write(`repro-double-build: ${leg.leg}`
+    + `${obs.perturbation ? ` [perturb ${obs.perturbation}]` : ''}: ${obs.summary}\n`);
   process.stdout.write(`repro-double-build: config ${obs.config}, ${obs.objectCount} objects, `
     + `${(obs.wallMsA / 1000).toFixed(1)}s + ${(obs.wallMsB / 1000).toFixed(1)}s\n`);
   process.stdout.write(`repro-double-build: work a=${obs.work.a.written}/${obs.work.a.objects} `
@@ -334,7 +394,8 @@ async function main(argv) {
 
 function usage(why) {
   process.stderr.write(`repro-double-build: ${why}\n`
-    + 'usage: node test/repro-double-build.cjs --leg <leg-name> [--json] [--keep]\n');
+    + 'usage: node test/repro-double-build.cjs --leg <leg-name> '
+    + `[--perturb <${Object.keys(PERTURBATIONS).sort().join('|')}>] [--json] [--keep]\n`);
   return 2;
 }
 
