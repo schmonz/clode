@@ -235,10 +235,6 @@ const NOT_YET_FLIPPED = {
     'step 6: --source-only is blocked on esbuild plus txiki\'s own JS dependency tree, '
     + 'which scripts/bundle-inputs-gate.cjs refuses loudly today. Independent of the '
     + 'bootstrap; flipping it would just move the refusal.',
-  'Build + blobulate + smoke (inside the guest VM)':
-    'step 5: a VM guest, reached only by the workspace rsync, and flipping it removes no '
-    + 'node by itself (the same script still runs exec-probe.mjs, stage0.mjs and '
-    + 'stage-provider.mjs under node). Sequence it with those three.',
 };
 
 // A site can be flipped for SOME of the machines it runs on. `Build tjs (native)` is one

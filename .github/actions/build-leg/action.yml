@@ -1246,6 +1246,43 @@ runs:
         mkdir -p .matrix
         cp "$PROV" .matrix/provider-claude   # bytes only — clode EXTRACTS from it, never execs it
 
+    # THE GUEST IS A SEPARATE MACHINE, so it needs an engine for the GUEST's OS and
+    # architecture — a netbsd-arm64 or haiku-amd64 slice, never this runner's. All twelve
+    # guest targets are in the pinned pack (design §1). The only channel to the VM is the
+    # workspace rsync, so the runner pulls the guest's slice into the workspace and it
+    # travels in with everything else, exactly as the vendor tree and provider-claude do.
+    #
+    # THIS FETCH IS A CROSS FETCH and says so: the runner verifies the sha256 — the only
+    # check available on another machine's binary — and prints that the engine-api-floor
+    # probe is DEFERRED, naming both machines. The deferral is honoured on the other side:
+    # the guest script exports CLODE_BOOTSTRAP_HOST_TARGET, so over there the target IS
+    # the host's own and the probe fires. Without it four of the twelve guests could not
+    # name themselves (uname -s says SunOS for omnios, openindiana AND solaris;
+    # NetBSD/arm64 says evbarm) and the acceptance would be deferred to nobody.
+    - name: Restore the bootstrap engine slice (VM guest, workspace-rsynced)
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && steps.mode.outputs.exec == 'guest'
+      uses: actions/cache@v6.1.0
+      with:
+        path: ${{ github.workspace }}/.matrix/bootstrap-cache/bootstrap/${{ steps.bootstrap-tag.outputs.tag }}/${{ steps.name.outputs.target }}
+        key: bootstrap-${{ steps.bootstrap-tag.outputs.tag }}-${{ steps.name.outputs.target }}
+    - name: Fetch the GUEST's bootstrap engine into the workspace
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && steps.mode.outputs.exec == 'guest'
+      shell: bash
+      env:
+        CLODE_CACHE: ${{ github.workspace }}/.matrix/bootstrap-cache
+        CLODE_BOOTSTRAP_TARGET: ${{ steps.name.outputs.target }}
+      run: |
+        set -euo pipefail
+        scripts/bootstrap-engine.sh > /dev/null
+        ENG="$CLODE_CACHE/bootstrap/${{ steps.bootstrap-tag.outputs.tag }}/$CLODE_BOOTSTRAP_TARGET/tjs"
+        if [ ! -x "$ENG" ]; then
+          echo "the resolver did not leave a $CLODE_BOOTSTRAP_TARGET engine at $ENG." >&2
+          echo "The VM's only channel is the workspace rsync, so an engine anywhere else" >&2
+          echo "cannot reach the guest." >&2
+          exit 1
+        fi
+        ls -l "$ENG"
+
     # The whole exec surface in one guest invocation: build tjs (unless the
     # cache delivered it), blobulate the builder UNDER it, smoke the builder, and
     # have the builder build an ephemeral quaude (internal PONG + attest).
@@ -1310,7 +1347,36 @@ runs:
           CLODE_TJS_MIMALLOC="${{ inputs.mimalloc }}"; export CLODE_TJS_MIMALLOC
           CLODE_TJS_FFI="${{ inputs.ffi }}"; export CLODE_TJS_FFI
           if [ ! -x "$CLODE_TJS_OUT/tjs" ]; then
-            node scripts/build-tjs.cjs --build-only
+            # FLIPPED ONTO THE BOOTSTRAP RESOLVER (node-removal-bootstrap-design.md §3
+            # step 5). The engine for THIS guest came in with the workspace rsync — see
+            # "Fetch the GUEST's bootstrap engine into the workspace" on the runner —
+            # and .matrix is inside the checkout precisely because that rsync is the
+            # only channel this machine has.
+            #
+            # HOST_TARGET, not TARGET: this guest is the machine the engine runs on, and
+            # saying so is what makes the floor probe fire HERE rather than deferring an
+            # acceptance to a machine that is already this one. uname cannot say it --
+            # `uname -s` answers SunOS for three different legs and NetBSD/arm64 calls
+            # itself evbarm -- so the leg descriptor's canonical target is passed in.
+            CLODE_CACHE="$PWD/.matrix/bootstrap-cache"; export CLODE_CACHE
+            CLODE_BOOTSTRAP_HOST_TARGET="${{ steps.name.outputs.target }}"; export CLODE_BOOTSTRAP_HOST_TARGET
+            # FAIL, never fall back. build-tjs-boot.sh's exit-3 path (no slice for this
+            # target in the pinned pack) hands the build to the guest's own node, which
+            # is the correct base case for a brand-new guest OS and exactly the wrong
+            # outcome here: every one of these twelve targets IS in the pack, so a miss
+            # means the engine did not survive the trip (a dropped exec bit, a partial
+            # rsync) and falling back would keep this guest's node dependency invisible
+            # while the leg went green. The whole point of this leg is to retire that
+            # dependency, so the absence is a finding and it is fatal.
+            BOOT_ENGINE="$CLODE_CACHE/bootstrap/${{ steps.bootstrap-tag.outputs.tag }}/${{ steps.name.outputs.target }}/tjs"
+            if [ ! -x "$BOOT_ENGINE" ]; then
+              echo "no bootstrap engine at $BOOT_ENGINE — the runner resolved a"
+              echo "${{ steps.name.outputs.target }} slice into the workspace and it did not arrive"
+              echo "here executable. Refusing to build this engine under the guest's node:"
+              echo "that would pass while proving nothing."
+              exit 1
+            fi
+            scripts/build-tjs-boot.sh vm-guest --build-only
           else
             echo "tjs cache hit: skipping the in-guest build"
           fi
