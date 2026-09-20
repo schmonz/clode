@@ -246,15 +246,42 @@ hash_file() {
   first_hex64 "$(eval "$HASHER \"\$1\"" 2>/dev/null || :)" || :
 }
 
+# ONE LINE, but a line that says WHICH failure this was. The old report printed
+# "(no 64-hex digest in its output)" for a tool that is NOT INSTALLED, for one that RAN
+# AND FAILED, and for one that RAN AND PRINTED SOMETHING ELSE -- three conditions with
+# three different fixes. Five identical lines read as five missing tools and bought a
+# whole CI cycle spent adding a sixth to the chain, when every one of the five was
+# present and working and the extractor above was the bug. A diagnostic that cannot
+# distinguish its own causes is a gate that cannot fail.
+kat_snip() {
+  ks_s=${1%%"$HASH_NL"*}
+  if [ -z "$ks_s" ]; then printf '(it printed nothing)'; return 0; fi
+  printf '%.72s' "$ks_s"
+}
+
 try_hasher() {
   th_word=${1%% *}
-  command -v "$th_word" >/dev/null 2>&1 || return 1
-  HASHER=$1
-  th_got=$(hash_file "$TMP/kat")
-  if [ "$th_got" = "$KAT_SHA" ]; then return 0; fi
+  th_got=
+  if ! command -v "$th_word" >/dev/null 2>&1; then
+    th_why="command not found: no \`$th_word\` on PATH"
+  else
+    HASHER=$1
+    # stderr is FOLDED IN deliberately: a tool that ran and complained says why, and
+    # the extractor cannot be fooled by prose -- it wants exactly 64 hex characters.
+    if th_raw=$(eval "$HASHER \"\$TMP/kat\"" 2>&1); then th_rc=0; else th_rc=$?; fi
+    th_got=$(first_hex64 "$th_raw" || :)
+    if [ "$th_got" = "$KAT_SHA" ]; then return 0; fi
+    if [ "$th_rc" -ne 0 ]; then
+      th_why="ran but exited $th_rc: $(kat_snip "$th_raw")"
+    elif [ -z "$th_got" ]; then
+      th_why="ran (exit 0) but printed no 64-hex digest: $(kat_snip "$th_raw")"
+    else
+      th_why="ran (exit 0) but answered $th_got, which is not the known answer"
+    fi
+  fi
   HASHER=
   KAT_TRIED="$KAT_TRIED
-  $1 -> ${th_got:-(no 64-hex digest in its output)}"
+  $1 -> $th_why"
   return 1
 }
 

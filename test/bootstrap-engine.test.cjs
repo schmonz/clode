@@ -749,6 +749,54 @@ exec "${realTr}" "$@"
     `a box whose hashers all work must resolve even when grep/tr are the legacy ones, got ${r.status}: ${r.err}`);
 });
 
+// The diagnostic itself was the second half of that cost. "(no 64-hex digest in its
+// output)" was printed for a tool that is NOT INSTALLED, for one that RAN AND FAILED,
+// and for one that RAN AND PRINTED SOMETHING ELSE — three conditions with three
+// different fixes, reported identically. It read as "five missing tools" and bought a
+// whole CI cycle spent adding a sixth. One line per tool, but a line that DISTINGUISHES.
+shTest('a hasher that fails says WHICH way it failed: missing / non-zero / unparseable', () => {
+  const d = mkdtemp();
+  const { manifest: mf, base } = localPack(path.join(d, 'base'), { [hostTarget()]: FAKE_ENGINE(OK_TOKEN) });
+  const run = (tool) => sh([], {
+    CLODE_CACHE: path.join(d, `cache-${path.basename(tool)}`),
+    CLODE_RELEASE_BASE: base,
+    CLODE_BOOTSTRAP_MANIFEST: mf,
+    CLODE_SHA256: tool,
+  });
+
+  const missing = run(path.join(d, 'no-such-hasher-at-all'));
+  assert.strictEqual(missing.status, 1, missing.err);
+  assert.match(missing.err, /not found/i,
+    'a tool that is not installed must SAY it is not installed, not "no 64-hex digest"');
+
+  const angry = run(fakeExe(path.join(d, 'angry'), '#!/bin/sh\necho "angry: I cannot read that" >&2\nexit 7\n'));
+  assert.strictEqual(angry.status, 1, angry.err);
+  assert.match(angry.err, /exited 7/,
+    'a tool that ran and failed must report its exit status');
+  assert.match(angry.err, /angry: I cannot read that/,
+    'and what it said, so the reader does not have to reproduce it');
+
+  const chatty = run(fakeExe(path.join(d, 'chatty'), '#!/bin/sh\necho "MD5 (kat) = deadbeef"\n'));
+  assert.strictEqual(chatty.status, 1, chatty.err);
+  assert.match(chatty.err, /no 64-hex digest/,
+    'a tool that ran fine but printed something else is the ONLY case that message fits');
+  assert.match(chatty.err, /MD5 \(kat\) = deadbeef/,
+    'and its actual output is the whole diagnostic value');
+
+  const liar = run(fakeExe(path.join(d, 'liar2'), `#!/bin/sh\necho ${'a'.repeat(64)}\n`));
+  assert.strictEqual(liar.status, 1, liar.err);
+  assert.match(liar.err, /not the known answer/i,
+    'a well-formed WRONG digest is a lying tool, not an unparseable one');
+
+  // One line per tool is the constraint that keeps the report readable when six are
+  // tried; a multi-line stub must not become a multi-line entry.
+  const wordy = run(fakeExe(path.join(d, 'wordy'), '#!/bin/sh\nprintf "line one\\nline two\\nline three\\n"\n'));
+  assert.strictEqual(wordy.status, 1, wordy.err);
+  const entries = wordy.err.split('\n').filter((l) => l.includes(' -> '));
+  assert.strictEqual(entries.length, 1, `expected one line for the one tool tried, got ${entries.length}`);
+  assert.ok(!wordy.err.includes('line two'), 'the entry must be one line, so only the first is quoted');
+});
+
 // ---------------------------------------------------------------------------
 // dash, when this box has one. The scar: shell discovery needs a shell BY NAME,
 // and /bin/sh behaviours vary. A resolver that only ever ran under this Mac's sh
