@@ -95,6 +95,10 @@ const crypto = require('node:crypto');
 // builds the engine had to stop needing Node to run. `require` is built in
 // here, so the createRequire this block used to need deletes itself.
 const { resetCheckoutToPristine } = require('./tjs-source-reset.cjs');
+// The JS-bundle step's two inputs, and the refusal that names both (see the call site in
+// the source phase below). A sibling, not inline, for the reason every other build decision
+// in this file is one: a test can hand it a known-bad tree without a 785MB checkout.
+const { bundleInputsRefusal } = require('./bundle-inputs-gate.cjs');
 const { engineFloorCheckJs, OK_TOKEN } = require('./engine-api-floor.cjs');
 const { buildDepscan } = require('./build-depscan.cjs');
 const { ccacheDecision, describeCcacheDecision, applyCcacheDecision,
@@ -3250,6 +3254,35 @@ if (buildOnly) {
   // is pure alignment padding and js_exepath-netbsd is NetBSD-only, so
   // mainlining them is behavior-neutral for every published leg.
   applyPatches(path.join(tjsDir, 'deps/quickjs'), 'quickjs-ng-');
+  // THE JS BUNDLE STEP'S INPUTS, CHECKED UP FRONT (scripts/bundle-inputs-gate.cjs).
+  //
+  // Everything below this line is ~50 source fixups and then esbuildBundles, and until
+  // this call existed a checkout that could not possibly bundle got all of that done to it
+  // first and THEN failed from inside the bundle step — with `spawnSync npm ENOENT` before
+  // CLODE_ESBUILD existed; with a refusal naming only the bundler after it; and, handed a
+  // CLODE_ESBUILD but no dep tree, with `Error: Command failed: <path>/esbuild` (measured
+  // 2026-09-20 under the shim, which does not even surface esbuild's own "Could not
+  // resolve" on stderr). None of those name the SECOND input the step has — txiki's own JS
+  // dependency tree, which esbuild bundles into the engine — so none of them tell a
+  // node-free operator what to provision.
+  //
+  // HERE, and not earlier: the gate derives the package list from the bare imports in
+  // src/js/**, and the patch stack above edits src/js/** (six txiki-*.patch files do). No
+  // patch adds a bare package import today, but reading the tree AFTER they apply means
+  // that stays a fact about the code rather than an assumption this gate depends on. It is
+  // still before every fixup and before the bundle step itself, which is what "refuse up
+  // front" has to mean for a refusal to be worth reading.
+  //
+  // NOT A PROVISIONING STEP. It installs nothing and changes no behavior on a host that
+  // has npm with no bundler — ensureEsbuild's `npm install` supplies both halves there, so
+  // the gate stays silent. What it ends is the failure being SILENT UNTIL COLD: a build
+  // that works only on a warm checkout, which is the "dev-box state hides bugs" shape this
+  // tree keeps rediscovering.
+  {
+    const { findTool } = require(path.join(repo, 'libexec/clode-hosttools.cjs'));
+    const refusal = bundleInputsRefusal({ dir: tjsDir, env: process.env, hasNpm: Boolean(findTool('npm')) });
+    if (refusal) throw new Error(refusal);
+  }
   fixupLwsDragonflySoPriority(tjsDir);
   fixupLwsIpv6PrefGuard(tjsDir);
   fixupMemMallocHOpenbsd(tjsDir);

@@ -415,3 +415,65 @@ test('build-tjs: the esbuild-input currency check is actually CALLED from --buil
   assert.ok(buildTjsSrc.slice(idx, elseIdx).indexOf('esbuildBundles(') === -1,
     'only the success log may follow the currency check before the branch closes');
 });
+
+// ---- the OTHER input the bundle step has, and the call site that refuses without it ----
+//
+// Everything above is about esbuild: that it runs, that what it read is recorded, that a
+// later phase can prove the recording still matches. None of it notices that esbuild also
+// needs SOMETHING TO BUNDLE — txiki's own JS dependency tree (web-streams-polyfill, uuid,
+// getopts and the rest), which nothing in this build installs on purpose; the single
+// `npm install --no-save esbuild@0.28.1` in ensureEsbuild materializes it as a side effect
+// of running inside a checkout whose package.json declares it. scripts/bundle-inputs-gate.cjs
+// is the refusal that names both inputs, and test/bundle-inputs-gate.test.cjs proves it
+// against fixtures. These two rows prove the parts a fixture cannot: that the real source
+// phase CALLS it, in the right place, and that the pin is one pin and not two.
+const { ESBUILD_PIN } = require('../scripts/bundle-inputs-gate.cjs');
+
+test('the esbuild pin is spelled the same in ensureEsbuild and in the input gate', () => {
+  // ensureEsbuild keeps its own `const pin` INSIDE the function on purpose (this file
+  // evaluates that function standalone, so a free name declared elsewhere would be a
+  // ReferenceError there — a lifted constant broke exactly this row once). That is two
+  // spellings of one load-bearing pin, which is a staleness risk unless something holds
+  // them together. This is that something.
+  //
+  // Plain indexOf, no regex — see this file's header on staying clear of
+  // test/guards-population.cjs's scanner-shaped classifier, whose trigger shapes include
+  // the regex idioms this would otherwise reach for.
+  const fnSrc = extractFunction(buildTjsSrc, 'ensureEsbuild');
+  const marker = "const pin = '";
+  const at = fnSrc.indexOf(marker);
+  assert.ok(at > -1, 'ensureEsbuild no longer declares its pin as `const pin = \'...\'` — if '
+    + 'it moved, move this check with it rather than deleting it');
+  const end = fnSrc.indexOf("'", at + marker.length);
+  assert.strictEqual(fnSrc.slice(at + marker.length, end), ESBUILD_PIN,
+    'ensureEsbuild installs one esbuild and the input gate tells operators to supply '
+    + 'another — one of the two refusals is now a lie');
+});
+
+test('build-tjs: the bundle-input gate is CALLED in the source phase, before the fixups', () => {
+  const callIdx = buildTjsSrc.indexOf('const refusal = bundleInputsRefusal({');
+  assert.ok(callIdx > -1, 'nothing calls bundleInputsRefusal — a cold checkout would once '
+    + 'again get the whole patch stack and ~50 source fixups applied to it and THEN fail '
+    + 'from inside the bundle step, naming neither the pin nor the dep tree, with every '
+    + 'fixture-level test in test/bundle-inputs-gate.test.cjs still green');
+  assert.ok(buildTjsSrc.indexOf('if (refusal) throw new Error(refusal);', callIdx) > callIdx,
+    'the verdict must be thrown; a computed-and-ignored refusal is the gate not existing');
+
+  // Placement, both edges. It reads the PATCHED tree (six txiki-*.patch files edit
+  // src/js/**, which is what the package list is derived from), and it must still land
+  // before the first source fixup — the whole point is that a cold checkout is refused
+  // before the work, not after it.
+  const patchesIdx = buildTjsSrc.indexOf("applyPatches(path.join(tjsDir, 'deps/quickjs'), 'quickjs-ng-');");
+  const firstFixupIdx = buildTjsSrc.indexOf('fixupLwsDragonflySoPriority(tjsDir);');
+  assert.ok(patchesIdx > -1 && firstFixupIdx > patchesIdx, 'the source phase changed shape; '
+    + 'this row anchors on the patch stack and the first fixup');
+  assert.ok(callIdx > patchesIdx && callIdx < firstFixupIdx,
+    'the gate must sit between the patch stack and the first source fixup');
+
+  // And in the SOURCE branch, never the --build-only one: a guest that only receives a
+  // synced tree has no npm, no network and no business being told to install anything.
+  const buildOnlyIdx = buildTjsSrc.lastIndexOf('if (buildOnly) {', callIdx);
+  const elseIdx = buildTjsSrc.indexOf('} else {', buildOnlyIdx);
+  assert.ok(elseIdx > -1 && callIdx > elseIdx,
+    'the gate belongs in the else (source) branch, not in --build-only');
+});

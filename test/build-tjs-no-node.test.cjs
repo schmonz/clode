@@ -373,3 +373,92 @@ test('the source phase names its esbuild need instead of ENOENTing on npm', (t) 
   assert.match(good.stdout, /source tree ready:/,
     `exited 0 without reaching the source-phase marker:\n${good.stdout}\n${good.stderr}`);
 });
+
+// ---- the COLD checkout, which is the state the warm rows cannot express ------
+//
+// Every row above copies a WARM checkout: node_modules present, esbuild inside it. That is
+// the state a dev box and a cache-hit leg are in, and in that state the source phase's two
+// JS-bundle inputs are both satisfied by accident, so nothing about provisioning them is
+// ever exercised. The row just above defeats HALF of that masking (it deletes the esbuild
+// packages) — deliberately, because the state CLODE_ESBUILD addresses is "bundler missing,
+// dep tree present". Nothing defeated the OTHER half.
+//
+// This row does: it deletes node_modules OUTRIGHT, which is what a cache MISS leaves behind
+// (node_modules is not in git; only `npm install` inside the checkout puts it there). On a
+// node-free host that tree can satisfy neither input, and BOTH of the ways it used to fail
+// were measured on this box, 2026-09-20, before the gate existed:
+//
+//   * no bundler, no npm: the ensureEsbuild refusal, which names the pin and CLODE_ESBUILD
+//     and says nothing whatsoever about the seven packages the bundle step ALSO needs — so
+//     an operator who acts on it lands straight in the next failure. It arrived after all
+//     25 patches and all ~50 source fixups had already been applied and logged.
+//   * handed a CLODE_ESBUILD: `Error: Command failed: <...>/node_modules/.bin/esbuild`, and
+//     nothing else. Under the shim esbuild's own `Could not resolve
+//     "web-streams-polyfill/polyfill"` does not even reach the operator's terminal, so the
+//     entire diagnosis available was the path of the binary that exited nonzero.
+//
+// So the claim under test is not "it fails" — it already did, twice — but that it refuses
+// UP FRONT and names BOTH halves. Two invocations, because supplying the bundler must not
+// make the second half go quiet.
+test('a COLD checkout is refused by name, both halves, before any bundling is attempted', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-tjs-cold-'));
+  t.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } });
+  const pre = preflight(t, path.join(dir, 'nodefree-bin'));
+  if (!pre) return;
+  const realEsbuild = path.join(pre.srcCheckout, 'node_modules', '.bin', 'esbuild');
+  if (!fs.existsSync(realEsbuild)) {
+    t.skip(`no esbuild at ${realEsbuild} — run \`node scripts/build-tjs.cjs --source-only\` once `
+      + 'with Node available so the checkout has one to point CLODE_ESBUILD at');
+    return;
+  }
+
+  const checkout = path.join(dir, 'txiki.js');
+  copyCheckout(pre.srcCheckout, checkout);
+  // THE WHOLE TREE, not the esbuild packages alone — this is the cold state, and it is
+  // safe on the COPY (the CoW clone above means nothing here touches the shared checkout).
+  fs.rmSync(path.join(checkout, 'node_modules'), { recursive: true, force: true });
+  const baseEnv = {
+    PATH: pre.bare,
+    HOME: process.env.HOME,
+    CLODE_TJS_VENDOR: dir,
+    CLODE_TJS_BUILD: path.join(dir, 'build'),
+    CLODE_CACHE: path.join(dir, 'cache'),
+    CLODE_DEPS: path.join(dir, 'deps'),
+  };
+  const [cmd, argv] = engineSpawn(['run', LOADER, path.join(REPO, 'scripts/build-tjs.cjs'), '--source-only']);
+  const sourceOnly = (env) => spawnSync(cmd, argv,
+    { cwd: REPO, env, encoding: 'utf8', timeout: 600000 });
+
+  // (a) neither input available, and no npm to fetch either.
+  const cold = sourceOnly(baseEnv);
+  assert.notStrictEqual(cold.status, 0,
+    `a cold checkout cannot build the js bundles and must not exit 0:\n${cold.stdout}\n${cold.stderr}`);
+  const why = `${cold.stdout}${cold.stderr}`;
+  assert.match(why, /esbuild@0\.28\.1/, `half one, the bundler, must be named by pin:\n${why}`);
+  assert.match(why, /CLODE_ESBUILD/, `half one must name its seam:\n${why}`);
+  assert.match(why, /web-streams-polyfill/,
+    `half two, txiki's own bundled dep tree, must be named package by package:\n${why}`);
+  assert.doesNotMatch(why, /spawnSync npm ENOENT/,
+    `the refusal must explain itself, not leak npm's ENOENT:\n${why}`);
+  // UP FRONT is half the claim, and this is the assertion that holds it: the old refusal
+  // arrived after every source fixup had run and logged. Patches above the gate may have
+  // applied (the gate reads the patched tree on purpose); a single `fixup ` line means the
+  // check drifted back down the file to where it cannot save anyone the work.
+  assert.doesNotMatch(why, /^fixup /m,
+    `the refusal must precede the source fixups, not follow all ~50 of them:\n${why}`);
+
+  // (b) handed a bundler, the OTHER half must still refuse — and must not go on claiming
+  // the bundler is what is missing. This is the half a warm checkout can never show.
+  const withBundler = sourceOnly({ ...baseEnv, CLODE_ESBUILD: realEsbuild });
+  assert.notStrictEqual(withBundler.status, 0,
+    'a bundler with nothing to bundle is not a satisfied source phase:\n'
+    + `${withBundler.stdout}\n${withBundler.stderr}`);
+  const why2 = `${withBundler.stdout}${withBundler.stderr}`;
+  assert.match(why2, /web-streams-polyfill/, `name the dep tree:\n${why2}`);
+  // The measured red for this half, verbatim: esbuild was reached, exited nonzero, and the
+  // only thing said about it was its own path.
+  assert.doesNotMatch(why2, /Command failed:/,
+    `this half must be refused by name, not by a bundler exiting nonzero:\n${why2}`);
+  assert.doesNotMatch(why2, /source tree ready:/,
+    `a refused source phase must not also announce success:\n${why2}`);
+});
