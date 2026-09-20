@@ -4,6 +4,68 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 (Strategic feasibility risks live in `LONG-TERM.md`; in-flight designs in
 `docs/superpowers/`. Done items are DELETED from here — git history is the record.)
 
+## Getting Node out of the ENGINE build — all three modes PROVEN under tjs (2026-09-19)
+
+The standing claim further down this file is that "Node lives in `scripts/build-tjs.cjs`
+(the ENGINE half) and in the test suite." The first half of that is now almost entirely
+wrong, and it was wrong before this session started — nobody had run it.
+
+**Measured on darwin-arm64, node/npm/npx symlink-filtered off PATH and `command -v node`
+asserted empty first, every phase driven by
+`tjs run libexec/node-shim/loader.cjs scripts/build-tjs.cjs <mode>`:**
+
+    --source-only   11s   `source tree ready:`                    (gate existed)
+    --build-only    68s   `built <out>/tjs (tjs-shim-ok)`         NEW — worked first try
+    --regen-only    27s   `18 bytecode arrays regenerated`        NEW — worked first try
+
+`--build-only` was the gating unknown: it is where the script stops manipulating files and
+starts shelling out — two cmake configures, `cmake --build`, the host tjsc, and an exec of
+the engine it just produced for the API-floor smoke, all `child_process` under node-shim.
+The engine it produced passes the hermeticity check and reports tjs 26.6.0 when run.
+
+**`--regen-only` never needed esbuild.** `regenOnly` implies `buildOnly` (build-tjs.cjs:99)
+and the `if (buildOnly)` branch *verifies* the bundles rather than re-esbuilding them, so
+`ensureEsbuild` is unreachable there. Earlier recon had esbuild down as the `--regen-only`
+blocker; it is a `--source-only` blocker.
+
+**The build gate is opt-in** (`CLODE_TJS_BUILD_GATE=1`) because it compiles txiki for real
+and the nine CI jobs exporting `CLODE_TJS` would each rebuild a tree they already built.
+Both new assertions were RUN RED before being trusted: `#error` in `src/vm.c` → exit 1, no
+marker; and pointing the row at `--source-only` (exit 0, cheerful line, no compile) → RED
+on the marker in 10s.
+
+**`ensureEsbuild` was the one real hole, and it is half-closed.** It shelled to `npm`;
+cold on a node-free host that was `Error: spawnSync npm ENOENT`, naming nothing.
+`CLODE_ESBUILD` now short-circuits it and the refusal names the pin, the path and the
+override. NOT a fallback to any esbuild on PATH: the 0.28.1 pin is load-bearing, since a
+different minifier changes the bundles and then the bytecode arrays.
+
+**The other half, which no recon had noticed:** that same `npm install` also materializes
+txiki's OWN package.json deps — web-streams-polyfill, urlpattern-polyfill, ipaddr.js, uuid,
+getopts, `@jsr/std__tar`, `@jridgewell/trace-mapping` — and esbuild BUNDLES them
+(`src/js/polyfills/index.js:30` imports `web-streams-polyfill/polyfill`). Nothing else
+installs them; `npm ci --prefix deps/claude` is clode's own closure, not txiki's. So a COLD
+checkout on a node-free host needs a bundler AND that tree. A WARM one needs neither, which
+is exactly why this stayed invisible: the acceptance test copies a warm checkout, and so
+does every leg's cache restore.
+
+**Nothing in `.github/` was touched, deliberately.** Flipping the six call sites in
+`build-leg/action.yml` (:313, :428, :446, :516, :550, :601) while `--source-only` can still
+need npm on a cache MISS buys a leg that is Node-free on Tuesday and red on Wednesday.
+
+**Open, and the next decision to make:** is the cached vendor checkout — node_modules
+included — a CONTRACT the legs may rely on, or must the source phase be able to construct
+one without npm? If a contract: add a gate refusing a `--source-only` whose checkout lacks
+the JS dep tree, naming it, and the six call sites can then flip on proven ground. If not:
+`provisionEsbuild` (the `provisionCosmocc` shape — `downloadFile` + pinned sha256 +
+`provision('tar')` against the prebuilt `@esbuild/<plat>-<arch>` tarball; only the
+GitHub-runner platforms matter, since `--source-only` runs exactly once in the matrix and
+always on the host) plus a fetch of txiki's seven runtime deps is the next work, and it
+wants a spec. Two snags to design around, not discover: `esbuildBundles` is called at
+module top level ABOVE the async continuation opener (build-tjs.cjs:3463 vs :3573), so an
+`await` there moves the boundary `test/build-tjs-continuation-scope.test.cjs` guards; and
+`test/run.mjs` forces `CLODE_OFFLINE=1`, so no gate over this may reach the network.
+
 ## Phase 4c3 (ccache) — spec §11 acceptance 7 MET (2026-09-19)
 
 **Task 1** (`24e4157`) wired `scripts/ccache-launcher.cjs` through `build-tjs.cjs`:

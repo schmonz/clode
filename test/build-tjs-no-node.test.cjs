@@ -87,9 +87,9 @@ function copyCheckout(src, dest) {
 
 
 // ---- shared preconditions ---------------------------------------------------
-// Both rows below need the SAME four things (a POSIX host, an engine, a warm
-// vendor checkout, and a PATH that provably has no node on it), and the first
-// cut of the --build-only row duplicated all four. Duplicated preconditions
+// All three rows below need the SAME four things (a POSIX host, an engine, a
+// warm vendor checkout, and a PATH that provably has no node on it), and the
+// first cut of the --build-only row duplicated all four. Duplicated preconditions
 // drift: the copy that stops matching is the one that starts skipping for the
 // wrong reason, which is exactly how the --source-only row once told CI "no
 // engine — build one" on nine jobs that HAD an engine (see the header).
@@ -107,7 +107,8 @@ function copyCheckout(src, dest) {
 // So filter by ENTRY: a farm of symlinks to every program on the ambient PATH
 // except the Node family, first-wins so PATH precedence is preserved, with the
 // POSIX floor behind it. That is what a node-free host looks like from inside
-// the build, and it is the exact shape the phase-4c-1 proof run used.
+// the build, and it is the exact shape the 2026-09-19 proof runs of all three
+// modes used before any of this was committed.
 const NODE_FAMILY = new Set(['node', 'nodejs', 'npm', 'npx', 'corepack',
   'node.exe', 'npm.cmd', 'npx.cmd']);
 const POSIX_FLOOR = '/usr/bin:/bin:/usr/sbin:/sbin';
