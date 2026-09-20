@@ -693,7 +693,14 @@ runs:
           # The container cannot name itself: with binfmt registered `uname -m` answers
           # for the emulated arch on six of these legs but for the amd64 HOST on
           # linux/386, so the leg descriptor's canonical target is passed in instead.
-          export CLODE_BOOTSTRAP_TARGET="${{ steps.name.outputs.target }}"
+          #
+          # HOST_TARGET, not TARGET: this container is the machine that RUNS the engine.
+          # Shipped as CLODE_BOOTSTRAP_TARGET in wave 1, which is the cross-fetch knob —
+          # on linux/386, the one leg where uname really does disagree, the resolver
+          # therefore took the cross path and DEFERRED the engine-api-floor probe to "the
+          # linux-i386 machine", which was this container. The acceptance was owed by
+          # nobody. The other seven were unaffected only because uname happened to agree.
+          export CLODE_BOOTSTRAP_HOST_TARGET="${{ steps.name.outputs.target }}"
           # See "Restore the bootstrap engine slice (alpine guest, workspace-mounted)"
           # above: this directory is the SAME path on both sides of the bind mount,
           # so a cache restored on the host before this container started is

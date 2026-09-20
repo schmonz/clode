@@ -287,6 +287,21 @@ function bootSiteSteps(yaml) {
   return out;
 }
 
+// Which steps SET each of the two bootstrap target knobs. Same walk again; a step is
+// counted once per knob.
+function targetKnobSteps(yaml, knob) {
+  const out = new Set();
+  let step = '(before any step)';
+  for (const line of yaml.split('\n')) {
+    const m = /^\s*-\s+name:\s*(.+?)\s*$/.exec(line);
+    if (m) step = m[1];
+    const t = line.trim();
+    if (t.startsWith('#')) continue;
+    if (new RegExp(`(^|[\\s:])${knob}[=:]`).test(t)) out.add(step);
+  }
+  return out;
+}
+
 // Call sites only, and the COMMAND only. A YAML comment that names the wrapper is prose
 // about it, not an invocation of it, and demanding the idiom's shape of prose would make
 // the rule unwritable-about; a one-line `run:` step carries the YAML key on the same line
@@ -311,7 +326,7 @@ const IDIOM = /^scripts\/build-tjs-boot\.sh [a-z0-9][a-z0-9-]* --[a-z-]+only$/;
 
 const GUARD = defineGuard({
   name: 'build-tjs-invocation-shape',
-  floor: 11,
+  floor: 12,
   read: () => ({
     sh: fs.readFileSync(BOOT, 'utf8'),
     // The SHIPPED bit, from git's index — not the checkout's. On win32 every file's
@@ -390,6 +405,23 @@ const GUARD = defineGuard({
       + `${unexplained.join(' / ')}. Either flip them onto scripts/build-tjs-boot.sh or `
       + 'record why not.');
 
+    // WHICH KNOB, AND THEREFORE WHO OWES THE ACCEPTANCE. A step that runs the wrapper is
+    // a step on the machine that will EXECUTE the engine, and such a machine must name
+    // itself with CLODE_BOOTSTRAP_HOST_TARGET. Naming itself with CLODE_BOOTSTRAP_TARGET
+    // instead says "fetch somebody else's slice", which makes the resolver take the cross
+    // path: sha-verified, floor probe DEFERRED to the target machine — which is this one.
+    // The acceptance is then owed by nobody and the leg is green having never run the one
+    // check that goes red when HEAD's node-shim outruns the last release. A pure host-side
+    // FETCH for another machine is the opposite case and keeps CLODE_BOOTSTRAP_TARGET;
+    // it is a step that calls the resolver and never the wrapper.
+    const runnersNamingSomeoneElse = [...targetKnobSteps(i.yaml, 'CLODE_BOOTSTRAP_TARGET')]
+      .filter((s) => booted.includes(s));
+    rule(runnersNamingSomeoneElse.length === 0,
+      `these steps RUN the engine but name themselves with CLODE_BOOTSTRAP_TARGET: `
+      + `${runnersNamingSomeoneElse.join(' / ')}. That is the cross-fetch knob, so the `
+      + 'floor probe is deferred to the machine that will run the engine — which is this '
+      + 'one. Use CLODE_BOOTSTRAP_HOST_TARGET, which makes the probe fire here.');
+
     const fiction = Object.keys(SPLIT_BY_PLATFORM).filter((s) => !booted.includes(s));
     rule(fiction.length === 0,
       `these steps claim a per-platform SPLIT but never run the wrapper: `
@@ -423,6 +455,7 @@ const GUARD = defineGuard({
     executable: false,
     yaml: '    - name: A brand new step\n      run: node scripts/build-tjs.cjs --build-only\n'
       + '    - name: Sloppy\n      run: bash scripts/build-tjs-boot.sh --build-only\n'
+      + '        export CLODE_BOOTSTRAP_TARGET=linux-i386\n'
       + '        packages: build-base cmake nodejs\n'
       + '        path: ${{ github.workspace }}/.matrix/bootstrap-cache/${{ steps.bootstrap-tag.outputs.tag }}/${{ steps.name.outputs.target }}\n'
       + '        path: ~/.cache/clode/bootstrap/${{ steps.bootstrap-tag.outputs.tag }}/${{ steps.name.outputs.target }}\n',
