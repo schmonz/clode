@@ -24,6 +24,16 @@
 # itself (through HEAD's node-shim loader, which also proves the loader runs on it) and
 # required to print `tjs-shim-ok`.
 #
+# A CACHE HIT IS BYTES FROM SOMEWHERE ELSE. Step 4 sha256-verifies what it fetched, and
+# step 3 now verifies what it found: the digest is in the COMMITTED manifest, keyed by
+# target, so re-checking a cache entry costs one hash and no network. It is the ONLY
+# check a cross-target hit can get (the floor probe cannot run on another machine's
+# binary), and it is a different property from the probe same-host — "this is the binary
+# the manifest names", not "an engine runs here" — so both run. A mismatch is loud, the
+# entry is deleted, and the resolve FALLS THROUGH to a fresh fetch: a cache tarball that
+# came back short is recoverable in one range request, and refusing would turn that into
+# a red leg.
+#
 # THE BASE CASE IS DERIVED, NOT DECLARED. A brand-new alpine arch or VM guest OS has no
 # published slice. This asks the pinned manifest whether <target> is in the pack; absent
 # means one loud line and exit 3, and that leg builds its FIRST engine under node exactly
@@ -171,6 +181,11 @@ local_engine() {
 }
 
 # --- sha256, known-answer tested before it is trusted -----------------------
+HASHER=
+HASHER_PICKED=
+KAT_TRIED=
+KAT_EXPLICIT=
+
 hash_file() {
   eval "$HASHER \"\$1\"" 2>/dev/null | tr -c '0-9a-f' '\n' | grep -E '^[0-9a-f]{64}$' | head -n 1
 }
@@ -187,23 +202,83 @@ try_hasher() {
   return 1
 }
 
+# Choose a hasher ONCE per run and REPORT, rather than die. Two callers want different
+# verdicts from the same question: the fetch path cannot proceed without a digest (it
+# dies, below), while the cache path treats "cannot verify" as a reason to distrust one
+# cache entry, not as a reason to fail the whole resolve.
 pick_hasher() {
+  if [ -n "$HASHER_PICKED" ]; then
+    if [ -n "$HASHER" ]; then return 0; fi
+    return 1
+  fi
+  HASHER_PICKED=1
   HASHER=
   KAT_TRIED=
   printf '%s' "$KAT_INPUT" > "$TMP/kat"
   if [ -n "${CLODE_SHA256:-}" ]; then
     if try_hasher "$CLODE_SHA256"; then return 0; fi
+    KAT_EXPLICIT=1
+    return 1
+  fi
+  if try_hasher 'sha256sum' || try_hasher 'shasum -a 256' || try_hasher 'sha256 -q' \
+    || try_hasher 'openssl dgst -sha256' || try_hasher 'cksum -a sha256'; then return 0; fi
+  return 1
+}
+
+require_hasher() {
+  if pick_hasher; then return 0; fi
+  if [ -n "$KAT_EXPLICIT" ]; then
     die "bootstrap: CLODE_SHA256=$CLODE_SHA256 failed its known-answer test.$KAT_TRIED
   sha256 of '$KAT_INPUT' must be $KAT_SHA.
   A tool that cannot reproduce a digest we already know must not be used to verify a
   downloaded engine — refusing rather than trusting it."
   fi
-  if try_hasher 'sha256sum' || try_hasher 'shasum -a 256' || try_hasher 'sha256 -q' \
-    || try_hasher 'openssl dgst -sha256' || try_hasher 'cksum -a sha256'; then return 0; fi
   die "bootstrap: no working sha256 tool on this host, so a downloaded engine cannot be
   verified and will not be used.$KAT_TRIED
   Install one (sha256sum / shasum / openssl / cksum -a sha256), or point CLODE_SHA256 at
   one, or set CLODE_TJS to an engine you already trust."
+}
+
+# --- step 3's verification --------------------------------------------------
+# A CACHE HIT IS BYTES FROM SOMEWHERE ELSE, and until this landed nothing hashed them.
+# Same-host, accept()'s floor probe below proves an engine RUNS here — real, but a
+# different property from "this is the binary the pinned manifest names". Cross-target
+# there was no check at all, because the probe cannot run on another machine's binary;
+# the digest is the only check available there, which makes it the case most worth
+# closing. f5d18ea gave that teeth: ~/.cache/clode/bootstrap now round-trips through
+# actions/cache — tarred, uploaded, restored into a DIFFERENT run — and truncation and a
+# restored-wrong entry both survive the `-x` test that used to be the whole gate.
+#
+# The idiom is scripts/build-tjs.cjs's provisionCosmocc(): hash the cached artifact
+# whether or not THIS run downloaded it, and on a mismatch remove it. One deliberate
+# difference — cosmocc throws, this FALLS THROUGH to a fresh fetch. A cache tarball that
+# came back short is recoverable in one range request, and failing the resolve would turn
+# a recoverable condition into a red leg. Loud either way: a cache that silently re-fetches
+# is a mystery, and a mystery is how this gets quietly disabled later.
+#
+# Costs no network: the expected digest is in the COMMITTED manifest, keyed by target.
+cache_is_authentic() {  # $1 = the cached engine
+  if [ -z "$SLICE" ]; then
+    note "bootstrap: the cached $TARGET engine at $1 cannot be verified — pack $TAG's manifest has no $TARGET slice to compare it against."
+    note "bootstrap: an entry nothing can vouch for is not used; the base-case path below says what to do instead."
+    return 1
+  fi
+  ca_want=${SLICE##* }
+  if ! pick_hasher; then
+    note "bootstrap: the cached $TARGET engine at $1 cannot be verified — no sha256 tool on this host passed its known-answer test.$KAT_TRIED"
+    note "bootstrap: an unverifiable engine is not used just because it is already on disk; set CLODE_TJS to one you trust."
+    return 1
+  fi
+  ca_got=$(hash_file "$1")
+  if [ "$ca_got" = "$ca_want" ]; then return 0; fi
+  note "bootstrap: the cached $TARGET engine at $1 does not match the sha256 pack $TAG records for it."
+  note "bootstrap:   expected $ca_want"
+  note "bootstrap:   got      ${ca_got:-(no digest)}"
+  note "bootstrap: discarding it and falling through to a fresh fetch. Cache corruption is"
+  note "bootstrap: recoverable in one range request — and a bad entry that is merely SKIPPED"
+  note "bootstrap: is sticky in exactly the way step 4 refuses to let a bad fetch become."
+  rm -f "$1"
+  return 1
 }
 
 # --- the network ------------------------------------------------------------
@@ -335,12 +410,24 @@ elif [ -n "${CLODE_TJS:-}" ] || [ -n "${CLODE_TJS_OUT:-}" ]; then
   note "bootstrap: target $TARGET is not this host ($HOST), so CLODE_TJS/CLODE_TJS_OUT are not candidates — they name a $HOST binary."
 fi
 
-# 3. a slice this host already fetched and verified.
+# The manifest's expectation for this target, read BEFORE step 3 because that is what a
+# cache hit is verified against. A committed-file read, so it costs nothing and reaches
+# no network; the base-case verdict on an EMPTY answer stays in step 4, below, where it
+# cannot preempt steps 1 and 2.
+SLICE=$(manifest_slice "$TARGET")
+
+# 3. a slice this host already fetched and verified — re-verified HERE, every time,
+# because "already on disk" says nothing about whose disk or which run.
 CACHED="$CACHE/bootstrap/$TAG/$TARGET/tjs$EXE"
-if is_engine_file "$CACHED"; then emit cache "$CACHED"; fi
+if is_engine_file "$CACHED"; then
+  # --plan describes ROUTING, not acceptance: it deliberately does not run the floor
+  # probe either (see emit), and a dry run that deletes a cache entry would be a
+  # surprising thing for a no-network flag to do.
+  if [ "$MODE" = '--plan' ]; then emit cache "$CACHED"; fi
+  if cache_is_authentic "$CACHED"; then emit cache "$CACHED"; fi
+fi
 
 # 4. the pinned pack.
-SLICE=$(manifest_slice "$TARGET")
 if [ -z "$SLICE" ]; then
   note "bootstrap: no $TARGET in pack $TAG — this leg is building its FIRST engine under node; it self-hosts from the next release."
   note "bootstrap: that is the expected base case for a new alpine arch or a new VM guest OS, not a broken build."
@@ -356,7 +443,7 @@ LENGTH=${REST%% *}
 WANT_SHA=${REST#* }
 END=$((OFFSET + LENGTH - 1))
 
-pick_hasher
+require_hasher
 
 BASE=${CLODE_RELEASE_BASE:-$RELEASE_BASE_DEFAULT}
 URL="$BASE/$TAG/$BLOB"
