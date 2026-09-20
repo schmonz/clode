@@ -393,3 +393,81 @@ test('the real workflow keeps the promise the manifest makes', () => {
   });
   assert.deepStrictEqual(r.findings, []);
 });
+
+// ---- PATH INDEPENDENCE: a stronger property, recorded as its own FIELD ------------------
+//
+// WHY A FIELD AND NOT A GRAIN. `grain` answers WHAT was compared — whole binary, one
+// archive, one object, a mechanism. Path independence answers UNDER WHICH PERTURBATION the
+// comparison held. Two axes. Folding it into grain would make `whole-binary` and
+// `whole-binary-path-independent` two values of one enum answering two questions, and the
+// rule that `reproducible` REQUIRES grain `whole-binary` would then have to know about both
+// spellings — the first edit that forgot one would silently let an archive-grain result
+// claim an engine verdict, which is the exact trap that rule exists to close.
+
+test('a `pathIndependent` record needs the same evidence a proof does', () => {
+  const { findings } = scanManifestShape({ verdicts: {
+    'x-leg': { verdict: REPRODUCIBLE, grain: 'whole-binary', cadence: 'weekly',
+      evidence: 'e', proofs: [{ sha256: 'a'.repeat(64), bytes: 1, date: 'd', where: 'w', config: 'c' }],
+      pathIndependent: { sha256: 'nothex', bytes: 0, date: '', where: '', config: '' } },
+  } });
+  assert.ok(findings.some((f) => /pathIndependent/.test(f) && /sha256/.test(f)), findings.join('\n'));
+  assert.ok(findings.some((f) => /pathIndependent/.test(f) && /bytes/.test(f)), findings.join('\n'));
+});
+
+test('a leg may not claim path independence without the plain verdict underneath it', () => {
+  const { findings } = scanManifestShape({ verdicts: {
+    'x-leg': { verdict: UNPROVEN, grain: 'none', cadence: 'none', because: 'never measured, too slow',
+      pathIndependent: { sha256: 'a'.repeat(64), bytes: 1, date: 'd', where: 'w', config: 'c' } },
+  } });
+  assert.ok(findings.some((f) => /pathIndependent/.test(f)),
+    'the stronger property implies the weaker one; claiming it on an unmeasured leg is a '
+    + 'verdict smuggled in through a side door');
+});
+
+test('the real manifest\'s pathIndependent records pass their own shape rules', () => {
+  const claimed = Object.entries(VERDICTS).filter(([, v]) => v.pathIndependent);
+  assert.ok(claimed.length > 0, 'seeded from a run that actually happened, or not at all');
+  const { findings } = scanManifestShape({ verdicts: Object.fromEntries(claimed) });
+  assert.deepStrictEqual(findings, []);
+});
+
+// ---- judging a PERTURBED run ------------------------------------------------------------
+
+const PATH_IDENTICAL = { identical: true, sha256: 'b'.repeat(64), bytes: 1, summary: 'identical',
+  perturbation: 'path' };
+const PATH_DIFFERS = { identical: false, shaA: 'a'.repeat(64), shaB: 'c'.repeat(64), bytes: 1,
+  summary: 'DIFFERS: 47 objects', perturbation: 'path', differingObjects: [] };
+
+test('THE NEW RED: a leg that CLAIMS path independence and stops having it is a FINDING', () => {
+  const r = judgeObservation(VERDICTS['darwin-arm64'], PATH_DIFFERS);
+  assert.strictEqual(r.ok, false, r.message);
+  assert.match(r.message, /REGRESSION/);
+  assert.match(r.message, /path/i);
+});
+
+test('a claimed leg that still holds under relocation passes', () => {
+  const r = judgeObservation(VERDICTS['darwin-arm64'], PATH_IDENTICAL);
+  assert.strictEqual(r.ok, true, r.message);
+  assert.match(r.message, /path/i);
+});
+
+test('an UNCLAIMED leg proven path-independent says to record it, and does not pretend it did', () => {
+  const r = judgeObservation(VERDICTS['netbsd-amd64'], PATH_IDENTICAL);
+  assert.strictEqual(r.ok, true, r.message);
+  assert.match(r.message, /pathIndependent/);
+});
+
+test('a perturbed run never counts as the PLAIN verdict, however it came out', () => {
+  // The trap this closes: an `unproven` leg run under --perturb path and coming back
+  // identical would otherwise read as "promote it to reproducible", recording a fixed-path
+  // verdict from a run that never held the path fixed.
+  const r = judgeObservation(VERDICTS['netbsd-amd64'], PATH_IDENTICAL);
+  assert.doesNotMatch(r.message, /set the verdict to reproducible/i);
+});
+
+test('the work-count floor still outranks a perturbed run', () => {
+  const r = judgeObservation(VERDICTS['darwin-arm64'],
+    { ...PATH_IDENTICAL, insufficientWork: 'phase b wrote 0 of 372 object file(s)' });
+  assert.strictEqual(r.ok, false, r.message);
+  assert.match(r.message, /INSUFFICIENT WORK/);
+});

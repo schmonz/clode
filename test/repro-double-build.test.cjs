@@ -16,7 +16,7 @@ const os = require('node:os');
 const path = require('node:path');
 const {
   legBuildEnv, describeConfig, doubleBuildEngine, doubleBuildEnv,
-  assessPhaseWork, WORK_FLOOR,
+  assessPhaseWork, WORK_FLOOR, PERTURBATIONS,
 } = require('./repro-double-build.cjs');
 const { countObjectsWrittenSince } = require('./engine-build-harness.cjs');
 const { VERDICTS } = require('./repro-verdicts.cjs');
@@ -244,4 +244,61 @@ test('judgeObservation FAILS an insufficient-work run even for a `reproducible` 
   assert.match(r.message, /INSUFFICIENT WORK/,
     'an identical compare over a build that never ran is the vacuous verdict this gate was '
     + 'already caught producing; it must be its own loud outcome, not a pass');
+});
+
+// ---- THE PATH PERTURBATION: the experiment that was RED ---------------------------------
+//
+// The plain gate holds outDir and buildRoot FIXED across both phases, deliberately: two
+// builds told they live in different places are not a clean test of a cache. That makes the
+// verdict it earns conditional on the build directory — "reproducible AT A FIXED BUILD
+// PATH", as the darwin-arm64 entry says verbatim — and a verdict conditional on the build
+// directory cannot travel to a second machine, because two machines never share one.
+//
+// `--perturb path` is the stronger experiment: move the source tree, the output directory
+// AND the build root between the two phases, and require byte-identical output anyway. It
+// was measured RED (47 of 372 objects) before -ffile-prefix-map.
+
+test('the path perturbation moves ALL THREE roots, not just the build dir', () => {
+  // Mapping two of the three is the silent partial fix: the engine would stay dependent on
+  // wherever the vendored sources happened to be unpacked.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'perturb-unit-'));
+  try {
+    const tree = path.join(dir, 'vendor', 'txiki.js');
+    fs.mkdirSync(tree, { recursive: true });
+    const baseEnv = { CLODE_TJS_VENDOR: path.join(dir, 'vendor'),
+      CLODE_TJS_OUT: path.join(dir, 'out'), CLODE_TJS_BUILD: path.join(dir, 'build-root') };
+    const before = { ...baseEnv };
+    const moved = PERTURBATIONS.path({ tree, baseEnv, log: () => {} });
+    for (const k of ['CLODE_TJS_VENDOR', 'CLODE_TJS_OUT', 'CLODE_TJS_BUILD']) {
+      assert.notStrictEqual(baseEnv[k], before[k], `${k} was not relocated`);
+    }
+    assert.ok(fs.existsSync(path.join(baseEnv.CLODE_TJS_VENDOR, 'txiki.js')),
+      'the source tree has to actually BE at the new path, or phase b has nothing to build');
+    fs.rmSync(moved, { recursive: true, force: true });
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('the relocated paths differ in LENGTH, not only in content', () => {
+  // Measured 2026-09-20: two gate runs differing only in a same-LENGTH mkdtemp suffix
+  // already produced different engines, so same-length is enough to go red. A DIFFERENT
+  // length is strictly stronger — it also catches anything that pads or aligns on the
+  // path's size — and costs nothing.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'perturb-unit-'));
+  try {
+    const tree = path.join(dir, 'vendor', 'txiki.js');
+    fs.mkdirSync(tree, { recursive: true });
+    const baseEnv = { CLODE_TJS_VENDOR: path.join(dir, 'vendor'),
+      CLODE_TJS_OUT: path.join(dir, 'out'), CLODE_TJS_BUILD: path.join(dir, 'build-root') };
+    const moved = PERTURBATIONS.path({ tree, baseEnv, log: () => {} });
+    assert.notStrictEqual(moved.length, dir.length);
+    fs.rmSync(moved, { recursive: true, force: true });
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('the CLI names the perturbations it has, and refuses one it does not', () => {
+  const r = spawnSync(process.execPath, [RUNNER, '--leg', 'darwin-arm64', '--perturb', 'weather'],
+    { encoding: 'utf8' });
+  assert.strictEqual(r.status, 2, r.stderr);
+  assert.match(r.stderr, /unknown perturbation 'weather'/);
+  assert.match(r.stderr, /path/, 'the refusal must name the ones that DO exist');
 });
