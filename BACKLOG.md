@@ -53,11 +53,27 @@ does every leg's cache restore.
 `build-leg/action.yml` (:313, :428, :446, :516, :550, :601) while `--source-only` can still
 need npm on a cache MISS buys a leg that is Node-free on Tuesday and red on Wednesday.
 
-**Open, and the next decision to make:** is the cached vendor checkout — node_modules
-included — a CONTRACT the legs may rely on, or must the source phase be able to construct
-one without npm? If a contract: add a gate refusing a `--source-only` whose checkout lacks
-the JS dep tree, naming it, and the six call sites can then flip on proven ground. If not:
-`provisionEsbuild` (the `provisionCosmocc` shape — `downloadFile` + pinned sha256 +
+**DECIDED (user, 2026-09-20): the cached vendor checkout is NOT a contract.** A build that
+is Node-free only when the cache is warm is the dev-box-state-hides-bugs pattern, and
+shipping it as done would be a half-measure dressed as a finish. Full provisioning is a
+spec-sized job, so the step taken instead was to make the dependency LOUD:
+`scripts/bundle-inputs-gate.cjs` refuses a `--source-only` whose checkout cannot bundle,
+naming BOTH halves — the pin plus `CLODE_ESBUILD`, and every missing package with the
+`src/js/**` import that needs it. The list is DERIVED (bare imports under `src/js/**`,
+closed over each installed package's declared dependencies), not a hand-written seven.
+It fires between the patch stack and the first source fixup, so a cold checkout is refused
+in ~10s instead of failing at ~40s with `Command failed: <path>/esbuild`. The cold path is
+now covered by a test that deletes `node_modules` outright, which is the masking every
+other row inherits.
+
+**Still open:** the provisioning itself, and the six call sites (nothing in `.github/` was
+touched, still deliberately — see `.superpowers/sdd/node-removal-phase2.md` for the
+per-site verdict; the short version is that the three host `--build-only`/`--regen-only`
+sites are provable today given a bootstrap engine for the RUNNER, the three guest/container
+sites need that engine staged INSIDE the guest, `:313` still needs npm on a cache miss, and
+flipping all six would not remove `actions/setup-node` because ten other Node/npm host call
+sites remain, several of them `.mjs` entries the shim cannot host at all). The provisioning
+shape: `provisionEsbuild` (the `provisionCosmocc` shape — `downloadFile` + pinned sha256 +
 `provision('tar')` against the prebuilt `@esbuild/<plat>-<arch>` tarball; only the
 GitHub-runner platforms matter, since `--source-only` runs exactly once in the matrix and
 always on the host) plus a fetch of txiki's seven runtime deps is the next work, and it
