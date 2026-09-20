@@ -103,6 +103,9 @@ const { engineFloorCheckJs, OK_TOKEN } = require('./engine-api-floor.cjs');
 const { buildDepscan } = require('./build-depscan.cjs');
 const { ccacheDecision, describeCcacheDecision, applyCcacheDecision,
   compilerFromCmakeArgs } = require('./ccache-launcher.cjs');
+const { SOURCE_SENTINEL, BUILD_SENTINEL, resolveCompiler: resolveCcForPrefixMap,
+  filePrefixMapDecision, describeFilePrefixMapDecision, applyFilePrefixMapDecision,
+  ccCacheMismatchWarning, cmakeCacheCc } = require('./file-prefix-map.cjs');
 const { resolveArchivers, arDeterminismDecision, describeArDeterminismDecision,
   applyArDeterminismDecision, arCacheMismatchWarning,
   cmakeCacheAr } = require('./ar-determinism.cjs');
@@ -3986,8 +3989,39 @@ function targetToken(forOutDir) {
 }
 const buildDir = path.join(buildRoot, targetToken(outDir), 'build');
 fs.mkdirSync(buildDir, { recursive: true });
+
+// BUILD-PATH INDEPENDENCE (scripts/file-prefix-map.cjs, whose header carries the
+// measurement). Same shape as the ccache and ar-determinism blocks above and for the same
+// reason: decide ONCE, LOG that decision on every build whichever way it went, then apply
+// the object that was logged.
+//
+// HERE AND NOT UP THERE WITH THE OTHER TWO, for a reason those two do not have: this
+// decision needs the two paths it is mapping, and `buildDir` does not exist until
+// targetToken(outDir) has been computed a few lines above. Moved up beside the ccache
+// block it could only map the source tree, which is half the baked-in path and therefore
+// the silent partial fix.
+//
+// BUILD FIRST, SOURCE SECOND: see prefixMapFlags' ordering note (an overlapping pair, which
+// a CLODE_TJS_BUILD inside the source tree would create, resolves most-specific-first).
+const filePrefixMap = filePrefixMapDecision({
+  ...resolveCcForPrefixMap({ cmakeArgs, toolchainFile: crossFile ? path.resolve(crossFile) : '' }),
+  mappings: [[buildDir, BUILD_SENTINEL], [path.resolve(tjsDir), SOURCE_SENTINEL]],
+});
+console.error(describeFilePrefixMapDecision(filePrefixMap));
+applyFilePrefixMapDecision(cmakeArgs, filePrefixMap);
+
 dropStaleCmakeCache(buildDir, tjsDir);
 cmakeConfigure(['-S', tjsDir, '-B', buildDir, ...cmakeArgs]);
+
+// The same assumption-check the archiver decision gets, for the same reason: on a native
+// leg nothing names CMAKE_C_COMPILER, so the probe ran `cc` off PATH while cmake ran its
+// own compiler search. A wrong guess here is WORSE than the archiver's, because it fails
+// SILENTLY -- a compiler that would have taken the flag but was never probed just keeps
+// baking the build path into every object, and nothing else would say so.
+{
+  const warn = ccCacheMismatchWarning({ decision: filePrefixMap, cacheCc: cmakeCacheCc(buildDir) });
+  if (warn) console.error(warn);
+}
 
 // The one step of the archiver resolution that is an ASSUMPTION rather than a reading: on a
 // native leg nothing names CMAKE_AR, so ar-determinism.cjs probed `ar` off PATH while cmake

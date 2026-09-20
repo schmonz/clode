@@ -58,6 +58,13 @@ const EXPECTED_SET = [
   // the moment build-tjs.cjs required it, which is this list being kept honest by the
   // graph rather than by memory.
   'scripts/bundle-inputs-gate.cjs',
+  // ADDED 2026-09-20: the build-path mapping decision -- whether -ffile-prefix-map (or the
+  // older -fdebug-prefix-map/-fmacro-prefix-map pair, or nothing) rewrites the absolute
+  // path a build ran from OUT of every object. Those are compile flags: edit this file and
+  // every object the engine is assembled from changes byte-for-byte. Same argument as
+  // ccache-launcher.cjs and ar-determinism.cjs, and the derived check below named it the
+  // moment build-tjs.cjs required it.
+  'scripts/file-prefix-map.cjs',
   // ADDED 2026-08-29: the netbsd-sparc in-guest bake recipe IS that leg's
   // compile, and editing it used to move nothing — so the cache could restore an
   // engine built by a different recipe. See scripts/engine-recipe.mjs.
@@ -215,6 +222,7 @@ const BASE = {
   'scripts/platform-tag.cjs': 'tag',
   'scripts/ar-determinism.cjs': 'ardet',
   'scripts/bundle-inputs-gate.cjs': 'bundleinputs',
+  'scripts/file-prefix-map.cjs': 'fileprefixmap',
   'spike/quickjs/qemu/ci-guest-bake.sh': 'bake',
   'scripts/x.toolchain.cmake': 'tc',
   'spike/quickjs/atomic-shim.c': 'shim',
@@ -260,13 +268,14 @@ test('a changed byte in a repo-root cosmo patch moves the recipe', async () => {
 // the tjs cache could restore an engine built from a differently-reset checkout
 // with no signal at all. ccache-launcher.cjs is the same hazard one level down:
 // it decides what compiler invocation the engine is built with.
-test('a changed byte in any of the eight split-out orchestration modules moves the recipe', async () => {
+test('a changed byte in any of the nine split-out orchestration modules moves the recipe', async () => {
   const { recipe } = await load();
   const before = recipe(fakeSource(BASE));
   for (const p of ['scripts/tjs-source-reset.cjs', 'scripts/engine-api-floor.cjs',
     'scripts/build-depscan.cjs', 'scripts/depscan-verdict.cjs',
     'scripts/ccache-launcher.cjs', 'scripts/platform-tag.cjs',
-    'scripts/ar-determinism.cjs', 'scripts/bundle-inputs-gate.cjs']) {
+    'scripts/ar-determinism.cjs', 'scripts/bundle-inputs-gate.cjs',
+    'scripts/file-prefix-map.cjs']) {
     const after = recipe(fakeSource({ ...BASE, [p]: `${BASE[p]}-edited` }));
     assert.notStrictEqual(after, before, `editing ${p} did not move the engine identity`);
   }

@@ -106,6 +106,14 @@ export const FILES = [
   // test/engine-recipe.test.cjs named it the same way: the moment build-tjs.cjs required
   // it, without anyone remembering to.
   'scripts/bundle-inputs-gate.cjs',
+  // ADDED 2026-09-20. scripts/file-prefix-map.cjs decides whether the absolute path a
+  // build ran from is REWRITTEN OUT of the objects (-ffile-prefix-map, or the older
+  // -fdebug-prefix-map/-fmacro-prefix-map pair, or nothing on a compiler that takes
+  // neither). Those are compile flags: edit this file and every object the engine is
+  // assembled from changes byte-for-byte. Exactly the argument that put
+  // ccache-launcher.cjs and ar-determinism.cjs here, and the derived check in
+  // test/engine-recipe.test.cjs named it the moment build-tjs.cjs required it.
+  'scripts/file-prefix-map.cjs',
   // The netbsd-sparc in-guest ENGINE bake recipe. It is engine source for that
   // leg in the most literal sense — it IS the compile — yet an edit to it moved
   // nothing, so the tjs cache happily restored an engine built by a DIFFERENT
