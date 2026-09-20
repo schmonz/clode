@@ -319,9 +319,17 @@ runs:
     # darwin-ppc: the engine that has to RUN in there is the RUNNER's, not the leg's. It
     # is asked of scripts/bootstrap-engine.sh rather than spelled here, so the two sides
     # cannot disagree about what this machine is called.
+    #
+    # AND IT RUNS FOR EVERY NON-WINDOWS LEG, which used to be a seven-way disjunct over
+    # leg shapes. Since --source-only flipped onto the wrapper there is no leg shape left
+    # to enumerate: that step has no leg condition at all — it constructs the patched tree
+    # on the RUNNER for cross-container, alpine and VM-guest legs alike — so every
+    # non-Windows leg now asks the resolver for an engine here. The disjunct happened to
+    # cover all of them already; saying so directly is what makes the coverage checkable
+    # (test/build-tjs-boot.test.cjs derives this gate from the --source-only step's own).
     - name: Bootstrap pack tag (identity of the cached engine slice)
       id: bootstrap-tag
-      if: steps.tjs-cache.outputs.cache-hit != 'true' && (startsWith(inputs.guest-platform, 'qemu-') || inputs.netbsd-src != '' || inputs.guest-platform == 'alpine' || inputs.cross-image != '' || inputs.cross-dockerfile != '' || steps.mode.outputs.exec == 'guest' || (inputs.guest-platform == 'native' && runner.os != 'Windows'))
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && runner.os != 'Windows'
       shell: bash
       run: |
         echo "tag=$(node -p "require('./scripts/bootstrap-engine.manifest.json').bootstrapTag")" >> "$GITHUB_OUTPUT"
@@ -369,10 +377,14 @@ runs:
         path: ${{ steps.mode.outputs.out }}
         key: tjs-${{ inputs.leg }}-${{ steps.axes.outputs.image }}-${{ inputs.guest-version }}-${{ inputs.macos-min }}-${{ inputs.macos-sdk }}-${{ inputs.cross-image }}-${{ inputs.cross-dockerfile }}-${{ steps.recipe.outputs.hash }}
 
-    # Restore the bootstrap-engine slice for the HOST-side call sites (qemu-regen,
-    # netbsd-cross and — since the POSIX half of `Build tjs (native)` flipped — every
-    # non-Windows native leg all run scripts/build-tjs-boot.sh directly on the runner's
-    # own filesystem; see those steps below). This is the
+    # Restore the bootstrap-engine slice for the HOST-side call sites. That used to be
+    # three leg families (qemu-regen, netbsd-cross, and the POSIX half of `Build tjs
+    # (native)`); with --source-only flipped it is simply EVERY non-Windows leg, because
+    # that step constructs the patched tree on the runner for every leg in the matrix and
+    # now does it under the wrapper. Gated on three families while thirty-odd more filled
+    # the same directory, the other legs re-fetched a byte-identical sha256-pinned slice
+    # on every engine rebuild — not a wrong cache, a missing one, and it reads in the log
+    # exactly like no cache because it IS none. This is the
     # SAME path scripts/bootstrap-engine.sh already resolves to on a cache miss
     # (cache_root()'s default: no CLODE_CACHE/CLODE_STATE_ROOT/XDG_CACHE_HOME is
     # set anywhere on these legs, so it falls through to $HOME/.cache/clode — the
@@ -392,8 +404,8 @@ runs:
     # override, so what it writes is linux-amd64. The entry named a directory that never
     # existed: actions/cache warned, stored nothing, and the key never hit. Same defect as
     # the alpine entry, and pinned now by the same test.
-    - name: Restore the bootstrap engine slice (host legs — native, qemu-regen, netbsd-cross)
-      if: steps.tjs-cache.outputs.cache-hit != 'true' && runner.os != 'Windows' && (startsWith(inputs.guest-platform, 'qemu-') || inputs.netbsd-src != '' || (inputs.guest-platform == 'native' && inputs.cross-image == '' && inputs.cross-dockerfile == ''))
+    - name: Restore the bootstrap engine slice (every non-Windows leg)
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && runner.os != 'Windows'
       uses: actions/cache@v6.1.0
       with:
         path: ~/.cache/clode/bootstrap/${{ steps.bootstrap-tag.outputs.tag }}/${{ steps.bootstrap-tag.outputs.host-target }}

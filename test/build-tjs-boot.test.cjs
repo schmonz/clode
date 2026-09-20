@@ -313,6 +313,23 @@ function targetKnobSteps(yaml, knob) {
   return out;
 }
 
+// Every step as { name, if, body } — the same walk once more, keeping each step's own
+// `if:` so a rule can compare one step's gate against another's. The first `if:` key wins
+// (a step has one); `if [ ... ]` inside a run: block is not an `if:` key and never matches.
+function stepsOf(yaml) {
+  const out = [];
+  let cur = null;
+  for (const line of yaml.split('\n')) {
+    const m = /^\s*-\s+name:\s*(.+?)\s*$/.exec(line);
+    if (m) { cur = { name: m[1], if: '', body: [] }; out.push(cur); continue; }
+    if (!cur) continue;
+    const g = /^\s+if:\s*(.+?)\s*$/.exec(line);
+    if (g && !cur.if) cur.if = g[1];
+    cur.body.push(line);
+  }
+  return out;
+}
+
 // Call sites only, and the COMMAND only. A YAML comment that names the wrapper is prose
 // about it, not an invocation of it, and demanding the idiom's shape of prose would make
 // the rule unwritable-about; a one-line `run:` step carries the YAML key on the same line
@@ -337,7 +354,7 @@ const IDIOM = /^scripts\/build-tjs-boot\.sh [a-z0-9][a-z0-9-]* --[a-z-]+only$/;
 
 const GUARD = defineGuard({
   name: 'build-tjs-invocation-shape',
-  floor: 12,
+  floor: 13,
   read: () => ({
     sh: fs.readFileSync(BOOT, 'utf8'),
     // The SHIPPED bit, from git's index — not the checkout's. On win32 every file's
@@ -408,6 +425,30 @@ const GUARD = defineGuard({
       + 'it resolves this runner — a netbsd-sparc directory under ~/.cache/clode is never '
       + 'written and the key never hits.');
 
+    // AND HOW WIDE. The --source-only step has no leg condition at all: it constructs the
+    // patched tree on the RUNNER for every leg in the matrix, cross-container and alpine
+    // and VM-guest legs included. Since it flipped onto the wrapper, that means every
+    // non-Windows leg now asks the resolver for an engine under the DEFAULT cache root,
+    // and a host-side cache entry gated on a narrower set of legs than that is not a
+    // wrong cache but a missing one — the three leg families it names hit, the other
+    // thirty-odd silently re-fetch a byte-identical sha256-pinned slice on every engine
+    // rebuild, which reads in the log exactly like no cache at all because it IS none.
+    // The expectation is DERIVED from that step's own gate plus the platform split, not
+    // spelled here, so narrowing the site narrows this too.
+    const allSteps = stepsOf(i.yaml);
+    const srcOnly = allSteps.find((s) =>
+      s.body.some((l) => l.trim().replace(/^run:\s+/, '').startsWith('scripts/build-tjs-boot.sh source-only')));
+    const expectedIf = srcOnly ? `${srcOnly.if} && runner.os != 'Windows'` : null;
+    const hostSide = allSteps.filter((s) => s.body.some((l) =>
+      /^\s*id:\s*bootstrap-tag\s*$/.test(l) || /^\s*path:\s*~\/\.cache\/clode\/bootstrap/.test(l)));
+    const narrower = hostSide.filter((s) => s.if !== expectedIf)
+      .map((s) => `${s.name} [if: ${s.if || '(none)'}]`);
+    rule(srcOnly !== undefined && hostSide.length > 0 && narrower.length === 0,
+      `the host-side bootstrap steps are gated more narrowly than the step that fills `
+      + `that cache: ${narrower.join(' / ')}. --source-only runs the wrapper on EVERY `
+      + `non-Windows leg, so both must be \`${expectedIf}\` — anything narrower leaves `
+      + 'those legs re-fetching the slice every run.');
+
     const raw = rawNodeSites(i.yaml);
     const booted = bootSiteSteps(i.yaml);
     const unexplained = raw.filter((s) => !(s in NOT_YET_FLIPPED) && !(s in SPLIT_BY_PLATFORM));
@@ -465,6 +506,8 @@ const GUARD = defineGuard({
     sh: '#!/bin/bash\nif [[ -n "$x" ]]; then :; fi\necho no-verdict-here\n',
     executable: false,
     yaml: '    - name: A brand new step\n      run: node scripts/build-tjs.cjs --build-only\n'
+      + '    - name: The source phase\n      if: never\n'
+      + '        run: scripts/build-tjs-boot.sh source-only --source-only\n'
       + '    - name: Sloppy\n      run: bash scripts/build-tjs-boot.sh --build-only\n'
       + '        export CLODE_BOOTSTRAP_TARGET=linux-i386\n'
       + '        packages: build-base cmake nodejs\n'
