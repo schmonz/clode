@@ -227,7 +227,8 @@ only check that catches it without trusting the cache's own accounting.
 mimalloc's `__DATE__`/`__TIME__` banner (anchored source fixup, chosen over a
 compiler flag because `-D__DATE__=` is a gcc/clang spelling MSVC rejects), and
 Apple `ar`/`libtool` stamping member mtimes into the 14 static archives, which
-ld64 folds into `LC_UUID` (`ZERO_AR_DATE=1`).
+ld64 folds into `LC_UUID` (`ZERO_AR_DATE=1` — which is the CCTOOLS lever and
+only that; see the NetBSD section below for what that sentence used to claim).
 CORRECTION to an earlier claim in this file: Apple's `LC_UUID` is a CONTENT
 hash, NOT a per-link nonce. Differing UUIDs were a symptom, never a cause.
 Note for anyone comparing mach-o binaries: the ad-hoc signature's identifier
@@ -238,7 +239,10 @@ will chase a phantom one-byte delta.
 (ubuntu:26.04, gcc 15.2, glibc 2.43, WASM off, same `CLODE_TJS_OUT`) gave
 byte-identical SHA-256 `648221ea...` over a 7,531,360-byte ELF. GNU binutils
 2.38 `ar` is ALREADY deterministic by default — `ZERO_AR_DATE` and `ar -D` are
-both no-ops there, so the darwin fix is inert, not corrective. GNU ld output is
+both no-ops there, so the darwin fix is inert, not corrective.
+CORRECTED 2026-09-19: "already deterministic by default" is a property of
+**Debian/Ubuntu's binutils packaging** (`--enable-deterministic-archives`), not
+of GNU ar. Same GNU ar, built without that flag, is not — see below. GNU ld output is
 stable and the build-id is content-derived. `__FILE__` absolute paths do not
 break it while the build dir is held constant; `-ffile-prefix-map` (supported,
 used nowhere) is future hardening for the stronger "different host, same
@@ -246,11 +250,9 @@ output" tier.
 
 ### Open, ranked
 
-1. **NetBSD: entirely UNMEASURED** — 12 of 42 legs. All three local qemu
-   oracles (1213/2230/1215) were down and no auto-start job exists. NetBSD's
-   `ar` is BSD-derived with its own history, so the GNU result cannot speak for
-   it. Re-run the 3-way `ar` test (default / `ZERO_AR_DATE=1` / whatever
-   NetBSD calls deterministic mode, if anything) the moment that VM is up.
+1. ~~**NetBSD: entirely UNMEASURED**~~ — MEASURED and FIXED 2026-09-19, see
+   the section immediately below. What remains open there: a real NetBSD
+   **engine** double-build, which qemu makes too slow to have done here.
 2. **`linux-x64-glibc`'s documented `os: ubuntu-22.04` does not build at all** —
    `mod_spawn_sync.c` trips `-Werror=implicit-function-declaration` on
    `posix_spawn_file_actions_addchdir_np` for want of `_GNU_SOURCE` (which
@@ -263,6 +265,91 @@ output" tier.
    Windows legs are also where the object-grain harness is skipped.
 5. Absolute-path stability is an informal invariant (constant build dir), not
    an enforced one.
+## NetBSD archives were NOT reproducible, and two assumptions said they were (2026-09-19)
+
+Twelve of the fleet's legs. Measured on a live NetBSD 11.0_RC2 evbarm qemu guest
+(`ssh -p 2230 127.0.0.1` — use the literal address, `localhost` does not connect and
+`nc -z` lies about the port), two runs two seconds apart, over three real `.o` files:
+
+| what was run | result |
+|---|---|
+| `ar rc` (bare, no ranlib) | **DIFFERS** |
+| `ZERO_AR_DATE=1 ar rc` | **DIFFERS — no effect whatsoever** |
+| `ar rcD` | IDENTICAL |
+| link twice, same output basename | IDENTICAL |
+
+**Dead assumption 1: "NetBSD's `ar` is BSD-derived with its own history."** It is
+`GNU ar (NetBSD Binutils nb1) 2.42`. The open item above said the GNU result could not
+speak for NetBSD; in fact it is the same program — built without
+`--enable-deterministic-archives`, which is the Debian/Ubuntu packaging choice that made
+`linux-x64-glibc` come back clean. Same GNU ar, different configure flag, opposite verdict.
+No version string, vendor name or platform token distinguishes them.
+
+**Dead assumption 2: "`ZERO_AR_DATE` is the reproducible-builds.org lever ... inert on
+toolchains that do not read it."** That comment stood above
+`process.env.ZERO_AR_DATE = '1'` in `scripts/build-tjs.cjs` and was half right in the way
+that hides things: it IS inert elsewhere, but inert is not handled. It is the **cctools**
+lever. GNU ar ignores it; Apple's `ar` rejects `-D` outright (`ar: illegal option -- D`).
+**There is no single portable incantation**, so there is no one-line version of this fix.
+
+**A third thing the original measurement could not see, found while fixing it.** cmake does
+not run `ar rc`. Its archive rules are `<CMAKE_AR> qc <TARGET> <LINK_FLAGS> <OBJECTS>`
+followed by `<CMAKE_RANLIB> <TARGET>`, and re-run in that shape the table changes:
+
+| cmake-shaped sequence | result |
+|---|---|
+| `ar qc` + `ranlib` | DIFFERS |
+| `ZERO_AR_DATE=1 ar qc` + `ranlib` | DIFFERS |
+| `ar qcD` + `ranlib` | **DIFFERS — the `D` on `ar` alone buys nothing** |
+| `ar qcD` + `ranlib -D` | IDENTICAL |
+| `ar qc` + `ranlib -D` | IDENTICAL |
+
+The trailing `ranlib` re-stamps the symbol index that `ar -D` had just zeroed. A fix that
+touched only `CMAKE_C_ARCHIVE_CREATE` would have logged a decision, changed the command
+line, and left the twelve legs exactly as non-reproducible as before.
+
+**The fix**: `scripts/ar-determinism.cjs` — one goal, a capability probe, no platform
+branch. It resolves the archiver cmake will actually use (`-DCMAKE_AR`, else `cmake -P`
+`include()`ing the very toolchain file the configure will load — not a text parse of it),
+RUNS that binary, and returns one of five states. `flags` sets
+`CMAKE_C_ARCHIVE_CREATE/APPEND/FINISH` to `qcD` / `qD` / `ranlib -D`; `zero-ar-date`,
+`unavailable` and `opted-out` add nothing at all, so a leg that needs nothing keeps a
+byte-identical cmake command line. Every build logs the decision
+(`build-tjs: ar-determinism: ...`), for the reason c2067a0 established — except that this
+one hid worse than the ccache launcher did, because there was no log line to be wrong.
+
+Reach was verified, not assumed: a real configure of the vendored tree shows the rule on
+11 of the 14 archives (libuv, libwebsockets, mimalloc, quickjs ×2, sqlite3, miniz, wurl,
+everest, p256-m, tjs_core), and the other 3 are mbedtls's own AppleClang-only `ar Scr`
+override — which only fires on the legs whose `ar` rejects `D` anyway. A guard follows the
+`add_subdirectory` closure and goes red if another vendored override appears, or if
+mbedtls's stops being AppleClang-guarded.
+
+### Open
+
+1. **A real NetBSD ENGINE double-build is still unmeasured.** What was proven on the guest
+   is the ARCHIVE-grain property, through the mechanism that ships; whether two full NetBSD
+   engines are byte-identical is a separate question, and qemu makes it too slow to answer
+   there. Nothing else on that leg has been double-built either — the object-grain harness
+   has only ever run on darwin/arm64.
+2. **The native archiver resolution is an assumption, checked rather than removed.** With no
+   `-DCMAKE_AR` and no toolchain file, this probes `ar` off PATH while cmake runs its own
+   `CMakeFindBinUtils` search, which can prefer a compiler-relative or `llvm-` prefixed one.
+   The build now compares its probe against `CMakeCache.txt`'s `CMAKE_AR` after configuring
+   and prints `build-tjs: ar-determinism: WARNING` on a mismatch. Grep CI for that line
+   before trusting any leg's verdict.
+3. **The cross legs' archivers have never been probed for real.** The resolution path is
+   exercised (`scripts/darwin-x64.toolchain.cmake` resolves to
+   `x86_64-apple-darwin10-ar`), but no cross toolchain was installed here, so which of them
+   take `D` is still unknown — the log line on the first CI run of each is the answer.
+4. **`ranlib -D` on a `partial` toolchain.** A toolchain whose `ar` takes `D` but whose
+   `ranlib` does not gets the create/append rules and a `PARTIAL` line saying its archives
+   may still be nondeterministic. No such toolchain has been seen; if one appears, the
+   answer is probably `CMAKE_C_ARCHIVE_FINISH` set to `:` with `ar s` folded into create.
+5. **C only.** The vendored project is `project(tjs LANGUAGES C)` and a real cache has no
+   `CMAKE_CXX_COMPILER`, so the CXX archive rules are deliberately not set (cmake would warn
+   about unused variables on every leg). A future C++ archive needs the CXX triple added.
+
 ## A full-suite flake, seen once and not yet named (2026-09-19)
 
 One `npm test` run at `31a0342` reported `# tests 2172 / pass 2134 / fail 1`.
