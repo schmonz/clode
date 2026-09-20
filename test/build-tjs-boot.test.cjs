@@ -210,9 +210,6 @@ const NOT_YET_FLIPPED = {
   // --- wave 1, landing one commit at a time immediately after this one. Each entry
   // disappears in the same commit that flips its site, so this table is never a
   // description of intent — only of what is still true.
-  'Cross-build tjs against the NetBSD toolchain':
-    'wave 1, second: --build-only on the ubuntu host, the same class as the host-native '
-    + 'path test/build-tjs-no-node.test.cjs already proves.',
   'Build tjs (alpine guest)':
     'wave 1, third: the only flip that removes a node from a machine outright — '
     + 'build-tjs.cjs is the alpine container\'s sole node consumer.',
@@ -247,11 +244,14 @@ function rawNodeSites(yaml) {
   return out;
 }
 
-// Call sites only: a YAML COMMENT that names the wrapper is prose about it, not an
-// invocation of it, and demanding the idiom's shape of prose would make the rule
-// unwritable-about. (Found by the rule firing on the first flip's own explanation.)
+// Call sites only, and the COMMAND only. A YAML comment that names the wrapper is prose
+// about it, not an invocation of it, and demanding the idiom's shape of prose would make
+// the rule unwritable-about; a one-line `run:` step carries the YAML key on the same line
+// as the command. Both narrowings were found by the rule firing on a real flip, and
+// neither loosens what is pinned: the command text itself still has to be identical
+// modulo the site label and the mode flag.
 function bootSites(yaml) {
-  return yaml.split('\n').map((l) => l.trim())
+  return yaml.split('\n').map((l) => l.trim().replace(/^run:\s+/, ''))
     .filter((l) => l.includes('build-tjs-boot.sh') && !l.startsWith('#'));
 }
 

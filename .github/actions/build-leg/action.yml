@@ -547,7 +547,15 @@ runs:
         CLODE_TJS_MIMALLOC: ${{ inputs.mimalloc }}
         CLODE_TJS_FFI: ${{ inputs.ffi }}
         CLODE_TJS_SMOKE: 'off'
-      run: node scripts/build-tjs.cjs --build-only
+      # FLIPPED ONTO THE BOOTSTRAP RESOLVER (node-removal-bootstrap-design.md §3 step 1,
+      # the second of three). The BUILD runs on the ubuntu host — only the compiler it
+      # drives is a cross one — so the engine the resolver hands back is for this host,
+      # its API-floor probe really runs, and this is the same host-native --build-only
+      # class test/build-tjs-no-node.test.cjs already proves with Node absent from PATH.
+      # CLODE_TJS_OUT below is the m68k OUTPUT DIRECTORY and is empty on a tjs-cache miss
+      # (which is the only time this step runs), so it is never mistaken for a candidate
+      # engine — see scripts/bootstrap-engine.sh's is_engine_file.
+      run: scripts/build-tjs-boot.sh netbsd-cross --build-only
 
     # ---- own-qemu qemu-* legs (netbsd-sparc: first user, plan
     # netbsd-sparc-matrix-leg Task 3 — STRUCTURAL first pass). Unlike a
