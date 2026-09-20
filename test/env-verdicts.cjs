@@ -259,7 +259,8 @@ const VERDICTS = [
   // ---- build-tjs.cjs itself uses, measured to bring the cluster to exactly 21 ----
   // ---- (BACKLOG.md's own count, +1 for phase 4c3 task 1's CLODE_TJS_CCACHE, ----
   // ---- +1 for CLODE_ESBUILD — the npm escape hatch in ensureEsbuild, ----
-  // ---- +1 for CLODE_TJS_AR_DETERMINISM — the deterministic-archive probe). ----
+  // ---- +1 for CLODE_TJS_AR_DETERMINISM — the deterministic-archive probe, ----
+  // ---- +1 for CLODE_TJS_FILE_PREFIX_MAP — the build-path mapping probe). ----
   { name: 'CLODE_COSMOCC', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
   { name: 'CLODE_ESBUILD', verdict: 'phase4-engine',
@@ -286,6 +287,14 @@ const VERDICTS = [
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
   { name: 'CLODE_TJS_FFI', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
+  { name: 'CLODE_TJS_FILE_PREFIX_MAP', verdict: 'phase4-engine',
+    because: 'read by scripts/file-prefix-map.cjs (required from scripts/build-tjs.cjs) as '
+      + 'the =0 opt-out for BOTH halves of the build-path mapping — the compiler probe '
+      + '(-ffile-prefix-map, or the older -fdebug-prefix-map/-fmacro-prefix-map pair) and '
+      + "the linker one (-Wl,-oso_prefix, which strips ld64's debug-map paths). One knob "
+      + 'for one property, because mapping the objects and not the debug map is a partial '
+      + 'fix that reads as done. Same compile-option cluster as the rest of this list, for '
+      + 'the same phase-4/cmake reason.' },
   { name: 'CLODE_TJS_LOCAL_ROOT', verdict: 'phase4-engine',
     because: 'read by both scripts/build-tjs.cjs and scripts/platform-tag.cjs to compute '
       + 'the same engine-vendor cache dir the compile-option cluster uses; travels with it '

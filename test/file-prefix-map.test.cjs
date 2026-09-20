@@ -23,6 +23,7 @@ const {
   describeFilePrefixMapDecision, applyFilePrefixMapDecision, resolveCompiler, expandMappings,
   probeOsoPrefix, osoPrefixDecision, describeOsoPrefixDecision, applyOsoPrefixDecision,
 } = require('../scripts/file-prefix-map.cjs');
+const { defineGuard, guardTests } = require('./guard.cjs');
 
 const MAPPINGS = [['/tmp/b/build', BUILD_SENTINEL], ['/tmp/b/src', SOURCE_SENTINEL]];
 
@@ -258,22 +259,6 @@ test('with nothing naming a compiler, the answer is PATH and the log says it is 
 
 // ---- the build actually asks for it ------------------------------------------------------
 
-test('scripts/build-tjs.cjs composes the decision and applies the object it logged', () => {
-  // Not a style check: the defect this whole pattern exists to prevent is a build whose log
-  // line and command line disagree, which is what recomputing at the call site produces.
-  const src = fs.readFileSync(path.join(__dirname, '..', 'scripts/build-tjs.cjs'), 'utf8');
-  assert.match(src, /filePrefixMapDecision\(/);
-  assert.match(src, /console\.error\(describeFilePrefixMapDecision\(/);
-  assert.match(src, /applyFilePrefixMapDecision\(cmakeArgs, /);
-});
-
-test('the decision is composed with the REAL source tree and build dir', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'scripts/build-tjs.cjs'), 'utf8');
-  const block = src.slice(src.indexOf('filePrefixMapDecision('), src.indexOf('filePrefixMapDecision(') + 900);
-  assert.match(block, /buildDir/, 'mapping a build dir that is not the build dir maps nothing');
-  assert.match(block, /tjsDir/);
-});
-
 test('scripts/file-prefix-map.cjs is ENGINE RECIPE SOURCE', async () => {
   // It decides what compiler flags the engine is built with. Edit it and the engine's bytes
   // change, so a cache keyed on the recipe must invalidate. Same argument that put
@@ -325,12 +310,6 @@ test('a root that cannot be resolved is still mapped under the name it has', () 
     realpathFn: () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }); },
   });
   assert.deepStrictEqual(pairs, [['/nope', BUILD_SENTINEL]]);
-});
-
-test('build-tjs.cjs passes its mappings through expandMappings, not raw', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'scripts/build-tjs.cjs'), 'utf8');
-  assert.match(src, /expandMappings\(/,
-    'handing the raw pair to the decision is exactly the run that came back 46/372 red');
 });
 
 // ---- THE LINKER'S OWN COPY OF THE PATHS -------------------------------------------------
@@ -434,9 +413,63 @@ test('every oso-prefix state prints one greppable ASCII line', () => {
   assert.throws(() => describeOsoPrefixDecision({ state: 'sideways' }), /unknown/);
 });
 
-test('build-tjs.cjs composes, logs and applies the linker decision too', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'scripts/build-tjs.cjs'), 'utf8');
-  assert.match(src, /osoPrefixDecision\(/);
-  assert.match(src, /console\.error\(describeOsoPrefixDecision\(/);
-  assert.match(src, /applyOsoPrefixDecision\(cmakeArgs, /);
+
+
+// ---- THE WIRING, as a standing guard -----------------------------------------------------
+//
+// Both levers are worth nothing if the build can reach the end without composing them, and
+// the defect this whole decide-once/log-that/apply-that pattern exists to prevent is a build
+// whose LOG LINE and COMMAND LINE disagree — which is exactly what recomputing at the call
+// site produces. So the wiring is scanned as TEXT, through defineGuard so the scan is proven
+// able to fail rather than merely green. scripts/build-tjs.cjs cannot be require()d: it runs
+// a whole engine build the moment it is loaded.
+//
+// PURE: `src` is the already-read scripts/build-tjs.cjs text.
+function scanFilePrefixMapWiring({ src }) {
+  const findings = [];
+  let examined = 0;
+
+  const facts = [
+    [/filePrefixMapDecision\(/, 'the compiler-mapping decision is never composed'],
+    [/console\.error\(describeFilePrefixMapDecision\(/,
+      'the compiler-mapping decision is composed but never LOGGED — an invisible build '
+      + 'decision hides for an unknown number of runs (c2067a0\'s lesson)'],
+    [/applyFilePrefixMapDecision\(cmakeArgs, /,
+      'the compiler-mapping decision is composed and logged but never APPLIED, so the log '
+      + 'line and the command line disagree'],
+    [/osoPrefixDecision\(/, 'the linker half is never composed, so ld64 keeps writing every '
+      + "object's absolute path into the debug map and the engine stays path-dependent"],
+    [/console\.error\(describeOsoPrefixDecision\(/, 'the linker decision is never logged'],
+    [/applyOsoPrefixDecision\(cmakeArgs, /, 'the linker decision is never applied'],
+    [/expandMappings\(/, 'the mappings are handed over RAW, without their resolved spellings '
+      + '— exactly the run that came back 46 of 372 red with the flag present and inert'],
+  ];
+  for (const [re, why] of facts) {
+    examined++;
+    if (!re.test(src)) findings.push(`scripts/build-tjs.cjs: ${why}`);
+  }
+
+  // The decision has to be composed from the REAL two roots. Mapping a build dir that is
+  // not the build dir maps nothing, silently.
+  examined++;
+  const at = src.indexOf('filePrefixMapDecision(');
+  const block = at === -1 ? '' : src.slice(at, at + 900);
+  if (!/buildDir/.test(block) || !/tjsDir/.test(block)) {
+    findings.push('scripts/build-tjs.cjs: the file-prefix-map decision is not composed from '
+      + 'buildDir and tjsDir — a mapping whose FROM is not the directory the compiler will '
+      + 'see rewrites nothing and reports success');
+  }
+
+  return { findings, examined };
+}
+
+const wiringGuard = defineGuard({
+  name: 'build-path-mapping-wiring',
+  read: () => ({ src: fs.readFileSync(path.join(__dirname, '..', 'scripts/build-tjs.cjs'), 'utf8') }),
+  scan: scanFilePrefixMapWiring,
+  // Eight independent facts in one named file — the exact measured count.
+  floor: 8,
+  // Models the regression precisely: a source phase that has lost both levers.
+  control: () => ({ src: '// a build with no path mapping at all\n' }),
 });
+guardTests(wiringGuard);
