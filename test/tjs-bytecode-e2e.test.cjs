@@ -111,6 +111,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawnSync, execFileSync } = require('node:child_process');
 const { tjsVendorParentDir } = require('../scripts/platform-tag.cjs');
+const { copyCheckout } = require('./engine-build-harness.cjs');
 
 const repo = path.join(__dirname, '..');
 const buildTjsSrc = fs.readFileSync(path.join(repo, 'scripts/build-tjs.cjs'), 'utf8');
@@ -160,17 +161,10 @@ function loadBuildHostTjsc(run, jobs) {
 // APFS `cp -c` / GNU `cp --reflink=auto` first (seconds for a ~785MB tree), a plain `cp -R`
 // if that flag is rejected, and fs.cpSync as the last resort. Correctness never depends on
 // which one ran, only the wall clock does.
-function copyCheckout(src, dest) {
-  const attempts = process.platform === 'darwin'
-    ? [['-Rc'], ['-R']]
-    : [['-R', '--reflink=auto'], ['-R']];
-  for (const flags of attempts) {
-    if (spawnSync('cp', [...flags, src, dest]).status === 0) return dest;
-    fs.rmSync(dest, { recursive: true, force: true });
-  }
-  fs.cpSync(src, dest, { recursive: true, verbatimSymlinks: true });
-  return dest;
-}
+// copyCheckout now lives in test/engine-build-harness.cjs — this was one of FOUR
+// byte-identical copies (see that file's header). Same recipe, one home, and the
+// process.platform branch gone: the fast-copy flags are tried in turn rather than
+// selected, which is what the branch fell through to anyway.
 
 function sha256(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');

@@ -27,6 +27,9 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { tjsVendorParentDir } = require('../scripts/platform-tag.cjs');
+const {
+  copyCheckout, findBuildDir, listObjects, sha256Of, snapshotPhase,
+} = require('./engine-build-harness.cjs');
 
 const repo = path.join(__dirname, '..');
 
@@ -771,88 +774,17 @@ function why() {
 // run, so mutating the shared ~/.cache/clode/tjs-vendor checkout with three back-to-back
 // full builds would leave every OTHER build on this box patching from a tree this test
 // disturbed mid-flight.
-function copyCheckout(src, dest) {
-  const attempts = process.platform === 'darwin'
-    ? [['-Rc'], ['-R']]
-    : [['-R', '--reflink=auto'], ['-R']];
-  for (const flags of attempts) {
-    if (spawnSync('cp', [...flags, src, dest]).status === 0) return dest;
-    fs.rmSync(dest, { recursive: true, force: true });
-  }
-  fs.cpSync(src, dest, { recursive: true, verbatimSymlinks: true });
-  return dest;
-}
+// copyCheckout now lives in test/engine-build-harness.cjs — this was one of FOUR
+// byte-identical copies (see that file's header). Same recipe, one home, and the
+// process.platform branch gone: the fast-copy flags are tried in turn rather than
+// selected, which is what the branch fell through to anyway.
 
-// The one place this file names the SHIPPED build dir's shape: buildRoot is what this test
-// hands build-tjs.cjs as its build-dir override, but the script nests the REAL cmake build
-// dir one level down (a per-target hash it derives from outDir, so a shared tree never lets
-// two targets collide -- see build-tjs.cjs's targetToken()). Rather than reimplement that
-// hash here (a second copy of a naming scheme is exactly how the netbsd-sparc bake drifted),
-// find the one CMakeCache.txt whose PARENT is literally named `build` -- the main engine
-// target, never build-tjs.cjs's separate build-depscan tool dir alongside it.
-function findBuildDir(buildRoot) {
-  const found = spawnSync('find', [buildRoot, '-name', 'CMakeCache.txt'], { encoding: 'utf8' });
-  assert.strictEqual(found.status, 0, `find over ${buildRoot} failed: ${found.stderr}`);
-  const hits = found.stdout.split('\n').filter(Boolean)
-    .filter((p) => path.basename(path.dirname(p)) === 'build');
-  assert.strictEqual(hits.length, 1,
-    `expected exactly one main-engine CMakeCache.txt under ${buildRoot}, found: `
-    + `${JSON.stringify(hits)}`);
-  return path.dirname(hits[0]);
-}
-
-// Every compiled translation unit under a build dir, repo-relative to IT (not to the repo),
-// so the same relative name lines up across three independently rooted build dirs. Shells
-// out to `find` rather than walking the tree in-process -- this project's C build produces a
-// few hundred of these per phase, and a plain recursive listing is the same handful of bytes
-// either way.
-//
-// `*.o`, NOT `*.c.o` (review finding, 2026-09-19). The engine build emits exactly one object
-// that is not a C TU -- WAMR's invokeNative_aarch64_simd.s.o -- and the old glob left it
-// uncompared. It is not routed through ccache today (CMAKE_C_COMPILER_LAUNCHER is C-only;
-// ASM would need CMAKE_ASM_COMPILER_LAUNCHER, which is deliberately NOT wired: one hand-
-// written assembly TU compiles in milliseconds, and a second cache-key surface for that is
-// all risk and no win). But "ccache cannot touch it" is a reason to keep it OUT of the
-// cacheable-call accounting, not a reason to stop checking that it comes out the same --
-// it is an input to the very link whose whole-binary hash is now asserted below.
-function listObjects(buildDir) {
-  const found = spawnSync('find', [buildDir, '-name', '*.o'], { encoding: 'utf8' });
-  assert.strictEqual(found.status, 0, `find over ${buildDir} failed: ${found.stderr}`);
-  return found.stdout.split('\n').filter(Boolean)
-    .map((abs) => path.relative(buildDir, abs).split(path.sep).join('/'))
-    .sort();
-}
-
-// Streamed, not loaded whole -- these objects are small, but the habit is the point: this
-// file never pulls a build artifact into memory in one shot.
-function sha256Of(file) {
-  return new Promise((resolve, reject) => {
-    const hash = crypto.createHash('sha256');
-    fs.createReadStream(file)
-      .on('data', (chunk) => hash.update(chunk))
-      .on('error', reject)
-      .on('end', () => resolve(hash.digest('hex')));
-  });
-}
-
-// Copies everything THIS phase's identity check and diagnostics need out of the shared
-// buildRoot/outDir before the next phase wipes and overwrites both -- the reason this exists
-// at all is that outDir and buildRoot are deliberately the SAME path across all three phases
-// (see the test body for why), so nothing about them survives past the next runPhase() call
-// unless it is copied out first.
-function snapshotPhase(label, buildDir, outBin, snapshotsRoot) {
-  const objDir = path.join(snapshotsRoot, label, 'objs');
-  fs.mkdirSync(objDir, { recursive: true });
-  const objects = listObjects(buildDir);
-  for (const rel of objects) {
-    const dest = path.join(objDir, rel);
-    fs.mkdirSync(path.dirname(dest), { recursive: true });
-    fs.copyFileSync(path.join(buildDir, rel), dest);
-  }
-  const enginePath = path.join(snapshotsRoot, label, 'tjs');
-  fs.copyFileSync(outBin, enginePath);
-  return { label, objects, objDir, enginePath };
-}
+// findBuildDir / listObjects / sha256Of / snapshotPhase now live in
+// test/engine-build-harness.cjs, required at the top of this file. They were written here
+// first; the per-leg reproducibility gate needs the same four, and a second copy of "where
+// does build-tjs.cjs put the real cmake build dir" is exactly how the netbsd-sparc bake
+// recipe drifted. Their comments — including WHY the glob is `*.o` and not `*.c.o`, and why
+// a snapshot has to be taken before the next phase wipes outDir — moved with them.
 
 function parseCcacheStats(text) {
   const hits = text.match(/^\s*Hits:\s*(\d+)\s*\/\s*(\d+)/m);

@@ -42,6 +42,7 @@ const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { tjsVendorParentDir } = require('../scripts/platform-tag.cjs');
 const { defineGuard, guardTests } = require('./guard.cjs');
+const { copyCheckout } = require('./engine-build-harness.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 const SHARED = path.join(tjsVendorParentDir(), 'txiki.js');
@@ -116,15 +117,10 @@ guardTests(reproWiringGuard);
 // a THROWAWAY copy-on-write copy, never the shared checkout — test/ccache.test.cjs already
 // uses this recipe, and mutating ~/.cache/clode/tjs-vendor here would race the one other
 // test file that legitimately owns that tree.
-function copyCheckout(src, dest) {
-  const attempts = process.platform === 'darwin' ? [['-Rc'], ['-R']] : [['-R', '--reflink=auto'], ['-R']];
-  for (const flags of attempts) {
-    if (spawnSync('cp', [...flags, src, dest]).status === 0) return dest;
-    fs.rmSync(dest, { recursive: true, force: true });
-  }
-  fs.cpSync(src, dest, { recursive: true, verbatimSymlinks: true });
-  return dest;
-}
+// copyCheckout now lives in test/engine-build-harness.cjs — this was one of FOUR
+// byte-identical copies (see that file's header). Same recipe, one home, and the
+// process.platform branch gone: the fast-copy flags are tried in turn rather than
+// selected, which is what the branch fell through to anyway.
 
 test('a real source phase leaves NO __DATE__/__TIME__ anywhere in the engine sources', (t) => {
   if (!fs.existsSync(path.join(SHARED, 'CMakeLists.txt'))) {

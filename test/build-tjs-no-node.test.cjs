@@ -49,6 +49,7 @@ const { spawnSync } = require('node:child_process');
 const { tjsPath, engineSpawn, LOADER, REPO } = require('./node-shim-helper.cjs');
 const { tjsBin, tjsVendorParentDir } = require('../scripts/platform-tag.cjs');
 const { OK_TOKEN } = require('../scripts/engine-api-floor.cjs');
+const { copyCheckout } = require('./engine-build-harness.cjs');
 
 // A throwaway COPY of an EXISTING vendor checkout, never a virgin dir.
 //
@@ -73,17 +74,10 @@ const { OK_TOKEN } = require('../scripts/engine-api-floor.cjs');
 // Prefer the filesystem's copy-on-write clone (APFS `cp -c`, ~2s for 785MB;
 // GNU `cp --reflink=auto`) and fall back to a real copy. Correctness never
 // depends on which one ran — only the wall clock does.
-function copyCheckout(src, dest) {
-  const attempts = process.platform === 'darwin'
-    ? [['-Rc'], ['-R']]
-    : [['-R', '--reflink=auto'], ['-R']];
-  for (const flags of attempts) {
-    if (spawnSync('cp', [...flags, src, dest]).status === 0) return dest;
-    fs.rmSync(dest, { recursive: true, force: true });
-  }
-  fs.cpSync(src, dest, { recursive: true, verbatimSymlinks: true });
-  return dest;
-}
+// copyCheckout now lives in test/engine-build-harness.cjs — this was one of FOUR
+// byte-identical copies (see that file's header). Same recipe, one home, and the
+// process.platform branch gone: the fast-copy flags are tried in turn rather than
+// selected, which is what the branch fell through to anyway.
 
 
 // ---- shared preconditions ---------------------------------------------------
