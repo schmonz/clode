@@ -4,6 +4,75 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 (Strategic feasibility risks live in `LONG-TERM.md`; in-flight designs in
 `docs/superpowers/`. Done items are DELETED from here — git history is the record.)
 
+## Thirteen gates that could not fail, and the one rule that outranks a harness (2026-09-20)
+
+**Design shelved, not started.** Spec:
+`docs/superpowers/specs/2026-09-20-behavioral-gate-harness.md` (gitignored, like every
+in-flight design here — this entry is the durable record).
+
+`test/guard.cjs` models *read → scan → findings* and its mandatory, frozen control is
+cheap because `scan` is pure. It does not fit an EXPENSIVE BEHAVIORAL observation — "build
+the engine twice and compare bytes", "run with node off PATH", "compile warm and check the
+objects match" — where the cost is producing the observation, not judging it. Five agents
+today independently split those along the same line (`judgeObservation`,
+`arControlVerdict`/`applyControlVerdict`, `doubleBuildEnv`, `ccacheDecision`/
+`describeCcacheDecision`, `archiveRuleReachVerdict`): **observe (expensive, real) / judge
+(pure, cheap)**, control = a synthetic observation that must judge to a failure.
+
+**The spec's central claim is that such a harness WOULD NOT have caught the day's worst
+failure.** `test/repro-double-build.cjs` passed `PATH`/`HOME` through and never opted out
+of ccache, so phase B was served from the cache phase A warmed: **neither phase re-ran the
+compiler**, and the weekly "same bytes twice" verdict proved only that the linker is
+deterministic. The judge was right; the OBSERVATION was contaminated by shared mutable
+state. Worse, **it had a control and the control passed** — moving the build path made
+47/372 objects differ, but that changed the preprocessed source, so ccache MISSED and the
+compiler genuinely ran. The control incidentally cleared the contamination it should have
+exposed.
+
+> **A gate that measures "doing X twice gives the same result" must assert that X ran
+> twice.**
+
+That sentence would have caught it; the harness would not. Generally: a control must
+exercise the observation APPARATUS, not merely the judgment, and any gate whose cost is
+absorbed by shared mutable state (compiler cache, shared vendor checkout, warm
+`node_modules`, cached engine) needs a POSITIVE assertion that the work happened —
+"N compilations occurred", not "the bytes differ when I expect them to". The no-Node gate
+has the same exposure via the warm vendor checkout, live today.
+
+**Countable set MEASURED, not guessed: 16 files** hold an expensive behavioral
+observation. 12 invoke a compiler or a full engine build (`ccache`, `ccache-ci`,
+`repro-double-build`(+`.test`), `build-tjs-no-node`, `tjs-bytecode-e2e`,
+`tjs-reproducible-engine`, `bootstrap-engine`(+`-online`), `ar-determinism`,
+`engine-build-harness`(+`.test`)); 4 assemble/compare a shipped artifact (`clode-native`,
+`quaude-cross-blobulate`, `clode-blobulate`, `tjs-darwin-poll-fixup`). Five already have a
+hand-rolled judge seam. **Zero have a work-count floor.** Not 82 + 29 — those are the
+scanner ratchets and a different population.
+
+**Scope discipline, and why the ratchet needs a different predicate.** A text regex for
+"spawns a builder" returned 28 files, 12 of them false positives (43%) — the same noise
+ratio that got today's proposed Windows lint rejected at 66:1. So derive the set
+STRUCTURALLY: a require of `test/engine-build-harness.cjs` (make it the choke point for
+every engine build) plus any `defineCapability` registration. Same move
+`scripts/engine-recipe.mjs` made when its FILES set became derived; hand-maintained lists
+have gone stale three times here.
+
+**New verdict the harness would add: `VACUOUS`** — the observation was produced but the
+work floor was not met. Distinct from `BROKEN` because nothing errored: a complete, clean,
+green run that measured nothing. That is what `repro-double-build` should have printed for
+months.
+
+**Cost: harness ~a day; retrofitting all 16 is two to three weeks.** MINIMUM USEFUL
+INCREMENT is neither — it is **increment 0, a few hours, no new abstraction**: give
+`repro-double-build` and `ccache` a work-count assertion (ccache miss delta or
+compiler-invocation count) that refuses the verdict below floor, and RUN IT RED first on a
+ccache box. That closes the actual hole in the two gates where it is live. Increment 1
+(the harness, adopted by the five files that already have a seam) and increment 2 (the
+ratchets) only after that earns its keep.
+
+**Does NOT solve:** cheap controls are still the weaker half; properties with NO gate are
+counted by nothing; an observation measuring the WRONG config (the WASM-off linux proof)
+stays a human job; the 40 `unproven` legs stay unproven; `-ffile-prefix-map` is separate.
+
 ## Getting Node out of the ENGINE build — all three modes PROVEN under tjs (2026-09-19)
 
 The standing claim further down this file is that "Node lives in `scripts/build-tjs.cjs`
