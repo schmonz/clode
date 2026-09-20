@@ -31,6 +31,13 @@
 //                     <local-scratch>/clode-tjs-build/<target-token>/build).
 //                     Independent of CLODE_TJS_OUT, which is still where the
 //                     FINAL built exe lands.
+//   CLODE_ESBUILD     path to a pinned-0.28.1 esbuild for the SOURCE phase's js
+//                     bundles, INSTEAD of `npm install`ing one into the checkout.
+//                     npm is a Node program, and every other phase of this build
+//                     is proven to run with no Node on PATH; this is how the
+//                     source phase joins them. Not a fallback to any esbuild on
+//                     PATH — the pin is load-bearing (a different minifier
+//                     changes the bundles, and then the bytecode arrays).
 //   CLODE_TJS_CCACHE  =0: opt OUT of the ccache compiler-launcher probe (scripts/
 //                     ccache-launcher.cjs). Default is to pass -DCMAKE_C_COMPILER_LAUNCHER
 //                     when a `ccache` binary is found on PATH, and to do nothing at all

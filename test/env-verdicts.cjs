@@ -257,9 +257,15 @@ const VERDICTS = [
   // ---- CLODE_TJS_LOCAL_ROOT and CLODE_TJS_VENDOR ride along: they exist only in ----
   // ---- scripts/platform-tag.cjs to compute the SAME engine-vendor cache dir ----
   // ---- build-tjs.cjs itself uses, measured to bring the cluster to exactly 21 ----
-  // ---- (BACKLOG.md's own count, +1 for phase 4c3 task 1's CLODE_TJS_CCACHE). ----
+  // ---- (BACKLOG.md's own count, +1 for phase 4c3 task 1's CLODE_TJS_CCACHE, ----
+  // ---- +1 for CLODE_ESBUILD — the npm escape hatch in ensureEsbuild). ----
   { name: 'CLODE_COSMOCC', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
+  { name: 'CLODE_ESBUILD', verdict: 'phase4-engine',
+    because: 'scripts/build-tjs.cjs ensureEsbuild: hands the SOURCE phase a pinned-0.28.1 '
+      + 'esbuild so it never shells to npm. It exists because npm is a Node program and '
+      + 'every other phase of the engine build is now proven to run with no Node on PATH; '
+      + 'same compile-option cluster as the rest of this list, for the same phase-4 reason.' },
   { name: 'CLODE_TJS_ATOMIC_SHIM', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
   { name: 'CLODE_TJS_BUILD', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
