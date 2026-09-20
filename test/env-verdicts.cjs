@@ -360,6 +360,15 @@ const VERDICTS = [
       + 'interpreter is fetched to run the builder, and the artifact that build produces is '
       + 'identical either way. Same reasoning as CLODE_PROVIDER_BIN — the configuration of a '
       + 'tool that runs outside clode dispatch, not a knob for `clode --help` to document.' },
+  { name: 'CLODE_BOOTSTRAP_HOST_TARGET', verdict: 'env-only',
+    because: 'tells scripts/bootstrap-engine.sh what THIS machine is, when uname cannot '
+      + 'spell it — `uname -s` says SunOS for three different legs (omnios, openindiana, '
+      + 'solaris) and NetBSD/arm64 calls itself evbarm. Distinct from '
+      + 'CLODE_BOOTSTRAP_TARGET, which says which SLICE to fetch and is deliberately '
+      + 'someone else\'s on a cross fetch: only this one makes the engine-api-floor probe '
+      + 'run HERE rather than being deferred to a machine that is already this one. '
+      + 'Env-only for the same reason as CLODE_BOOTSTRAP_TARGET — it selects nothing '
+      + 'about what gets BUILT, only which prebuilt interpreter runs the builder.' },
   { name: 'CLODE_BUILD_SCRATCH', verdict: 'env-only',
     because: 'relocates the scratch/tmp working directory scripts/build-scratch.cjs hands '
       + 'out (CI\'s build-leg action sets it to a workspace-local dir). A location override '

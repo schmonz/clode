@@ -48,7 +48,8 @@
 # USAGE
 #   scripts/bootstrap-engine.sh                -> print a usable engine's path (stdout)
 #   scripts/bootstrap-engine.sh --plan         -> print how it WOULD resolve; no network
-#   scripts/bootstrap-engine.sh --print-target -> print this host's canonical target
+#   scripts/bootstrap-engine.sh --print-target -> print the target it will resolve for
+#     (CLODE_BOOTSTRAP_TARGET, else CLODE_BOOTSTRAP_HOST_TARGET, else uname)
 #   scripts/bootstrap-engine.sh --print-cache  -> print the cache root it would use
 # EXIT
 #   0  resolved (or planned)        1  refused, loudly and specifically
@@ -119,7 +120,23 @@ canon_target() {
   host_target
 }
 
+# WHICH SLICE and WHOSE MACHINE are two questions, and CLODE_BOOTSTRAP_TARGET answers
+# only the first. A cross fetch (design call site #7: the runner pulls a guest's engine
+# into the workspace) deliberately asks for a slice that is NOT this machine's, and the
+# floor probe is deferred to the machine that will run it. But the VM guests are the
+# other case: the engine IS for this machine and uname still cannot spell the target --
+# `uname -s` says SunOS for three different legs (omnios, openindiana, solaris) and
+# NetBSD/arm64's `uname -m` says evbarm. Told only CLODE_BOOTSTRAP_TARGET, four of the
+# twelve guest legs would fetch their OWN engine and then defer acceptance to themselves,
+# i.e. to nobody, and the floor probe -- the check that goes red the day HEAD's node-shim
+# outruns the last release -- would run on no machine at all.
+# CLODE_BOOTSTRAP_HOST_TARGET is the second answer: it replaces the uname derivation of
+# what THIS machine is. Set it (and not CLODE_BOOTSTRAP_TARGET) and the target is the
+# host's own, so steps 1-2 apply and the probe fires HERE.
 host_target() {
+  if [ -n "${CLODE_BOOTSTRAP_HOST_TARGET:-}" ]; then
+    printf '%s\n' "$CLODE_BOOTSTRAP_HOST_TARGET"; return 0
+  fi
   ct_os=$(uname -s 2>/dev/null | tr 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' 'abcdefghijklmnopqrstuvwxyz')
   case "$ct_os" in
     darwin) ct_os=macos ;;

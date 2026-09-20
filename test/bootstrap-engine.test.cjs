@@ -52,6 +52,7 @@ function sh(args, env = {}, shell = '/bin/sh') {
   const base = { ...process.env };
   for (const k of ['CLODE_TJS', 'CLODE_TJS_OUT', 'CLODE_CACHE', 'CLODE_STATE_ROOT',
     'CLODE_RELEASE_BASE', 'CLODE_SHA256', 'CLODE_BOOTSTRAP_TARGET',
+    'CLODE_BOOTSTRAP_HOST_TARGET',
     'CLODE_BOOTSTRAP_MANIFEST']) delete base[k];
   // Step 2 asks scripts/platform-tag.cjs where a LOCALLY BUILT engine would be, and on
   // this box one really is there (run.mjs resolved the suite's CLODE_TJS from it). A
@@ -420,6 +421,84 @@ shTest("a FOREIGN target's slice is fetched and verified, but acceptance is DEFE
   assert.match(r.err, /floor/i);
   assert.ok(r.err.includes(foreign) && r.err.includes(hostTarget()),
     'the deferral must name both machines, or a reader cannot tell which one owes the check');
+});
+
+// ---------------------------------------------------------------------------
+// THE MACHINE THAT CANNOT NAME ITSELF, BUT IS STILL THE MACHINE.
+//
+// CLODE_BOOTSTRAP_TARGET answers "which slice"; it does NOT claim the slice is for this
+// machine, and on a cross fetch (design call site #7) it deliberately is not. Those are
+// two different questions and one variable cannot answer both: the VM guests are exactly
+// the case where the engine IS for this machine and `uname` still cannot spell the
+// target — SunOS names three different legs (omnios, openindiana, solaris) and NetBSD's
+// `uname -m` on arm64 says `evbarm`. Four of the twelve guest legs, told only
+// CLODE_BOOTSTRAP_TARGET, would have fetched their own engine and then DEFERRED
+// acceptance to themselves, which means to nobody: the floor probe — the one check that
+// goes red the day HEAD's node-shim outruns the last release — would never run anywhere.
+// CLODE_BOOTSTRAP_HOST_TARGET is the other half: it overrides the uname derivation of
+// what THIS machine is, so the target resolves to the host's own and the probe fires.
+// ---------------------------------------------------------------------------
+
+shTest('CLODE_BOOTSTRAP_HOST_TARGET is what this machine IS, when uname cannot spell it', () => {
+  const r = sh(['--print-target'], { CLODE_BOOTSTRAP_HOST_TARGET: 'omnios-amd64' });
+  assert.strictEqual(r.status, 0, r.err);
+  assert.strictEqual(r.out, 'omnios-amd64',
+    'uname on an OmniOS guest says SunOS, which names three different legs — the leg '
+    + 'descriptor is the only thing that knows which one this is');
+});
+
+shTest('a host that renamed itself gets the FULL acceptance, not the cross-fetch deferral', () => {
+  // The bug this pins: with only CLODE_BOOTSTRAP_TARGET, target != uname-host, so the
+  // resolver takes the cross path — sha-verified, floor probe DEFERRED "to the target
+  // machine". On a guest, the target machine IS this one, so the deferral is to nobody
+  // and the leg ships an engine no probe ever looked at.
+  const d = mkdtemp();
+  const self = 'omnios-amd64';
+  assert.notStrictEqual(self, hostTarget());
+  const marker = path.join(d, 'probe-ran');
+  const body = `#!/bin/sh
+touch ${JSON.stringify(marker)}
+[ "$1" = run ] || exit 2
+case "$2" in
+  *loader.cjs) echo "// generated floor check" ;;
+  *) printf '%s\\n' ${JSON.stringify(OK_TOKEN)}; exit 0 ;;
+esac
+exit 0
+`;
+  const { manifest: mf, base } = localPack(path.join(d, 'base'), { [self]: body });
+  const cache = path.join(d, 'cache');
+  const r = sh([], {
+    CLODE_CACHE: cache, CLODE_RELEASE_BASE: base,
+    CLODE_BOOTSTRAP_HOST_TARGET: self, CLODE_BOOTSTRAP_MANIFEST: mf,
+  });
+  assert.strictEqual(r.status, 0, `${r.err}\n${r.out}`);
+  assert.strictEqual(r.out, path.join(cache, 'bootstrap', 'vFIXTURE', self, 'tjs'));
+  assert.ok(fs.existsSync(marker),
+    'the floor probe never ran: this machine said what it is, so acceptance is OWED here '
+    + 'and there is no other machine to defer it to');
+  assert.doesNotMatch(r.err, /DEFERRED/, 'and it must not claim a deferral it cannot honour');
+});
+
+shTest('a host that renamed itself still defers a fetch for SOMEBODY ELSE', () => {
+  // Both knobs, different answers: the runner pulling a guest's slice into the workspace
+  // is still a cross fetch, and the override must not turn every fetch into "mine".
+  const d = mkdtemp();
+  const me = 'omnios-amd64';
+  const them = 'haiku-amd64';
+  const marker = path.join(d, 'it-ran');
+  const body = `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nexit 0\n`;
+  const { manifest: mf, base } = localPack(path.join(d, 'base'), { [them]: body });
+  const cache = path.join(d, 'cache');
+  const r = sh([], {
+    CLODE_CACHE: cache, CLODE_RELEASE_BASE: base,
+    CLODE_BOOTSTRAP_TARGET: them, CLODE_BOOTSTRAP_HOST_TARGET: me,
+    CLODE_BOOTSTRAP_MANIFEST: mf,
+  });
+  assert.strictEqual(r.status, 0, `${r.err}\n${r.out}`);
+  assert.ok(!fs.existsSync(marker), 'it executed another machine\'s binary');
+  assert.ok(r.err.includes(them) && r.err.includes(me),
+    'the deferral must name both machines, and the host it names must be the one this '
+    + 'machine says it is — not the uname guess the override exists to replace');
 });
 
 shTest('a sha256 mismatch is REFUSED, naming the target and both digests', () => {
