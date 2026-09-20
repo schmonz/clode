@@ -30,6 +30,15 @@ const { OK_TOKEN } = require('../scripts/engine-api-floor.cjs');
 const canon = require('../scripts/canonical-name.cjs');
 
 function why() {
+  // Same wall as the offline half: `spawnSync('/bin/sh', ...)` on win32 resolves to
+  // `<drive>:\bin\sh` and returns ENOENT, and no Windows leg bootstraps through this
+  // resolver anyway (the msvc legs build tjs natively). Checked FIRST so the reason a
+  // Windows runner reads is the true one, not "you forgot the opt-in".
+  if (process.platform === 'win32') {
+    return 'windows: scripts/bootstrap-engine.sh is POSIX sh and there is no shell this '
+      + 'runner can spawn by an absolute POSIX path; no Windows leg resolves an engine '
+      + 'through it';
+  }
   if (process.env.CLODE_BOOTSTRAP_ONLINE !== '1') {
     return 'opt-in: set CLODE_BOOTSTRAP_ONLINE=1 (fetches ~3MB from the pinned release) — '
       + 'this is the gate that answers "does the last release still bootstrap HEAD?"';

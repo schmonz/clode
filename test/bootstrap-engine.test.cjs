@@ -61,6 +61,30 @@ function sh(args, env = {}, shell = '/bin/sh') {
   return { status: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() };
 }
 
+// WINDOWS HAS NO POSIX SHELL AT A PATH NODE CAN SPAWN. `spawnSync('/bin/sh', ...)` on
+// win32 does not reach Git Bash: libuv hands the path straight to CreateProcess, which
+// resolves it as `<drive>:\bin\sh(.exe)` and returns ENOENT. Every sh() call below then
+// answers `status: null`, and each of these tests fails on a comparison to 0 or 1 — the
+// FOURTH consecutive round of Windows-only reds in this repo, all of them POSIX
+// assumptions in test code. (Found before its CI logs were readable by running this file
+// under `node test/forced-win32.cjs --run`, which flags the same file for the adjacent
+// reason: hostTarget() answers `windows-<arch>` while the resolver's own uname does not.)
+//
+// Skipping is the honest verdict, not a dodge. scripts/bootstrap-engine.sh is POSIX sh
+// on purpose — it runs in alpine containers and in minimal VM guests where bash may be
+// absent — and NO Windows leg resolves an engine through it: the msvc legs in
+// .github/actions/build-leg/action.yml run `node scripts/build-tjs.cjs --build-only`
+// natively, while the resolver serves the alpine and qemu legs. The ubuntu row of the
+// suite matrix runs every one of these for real on every push, and the four structural
+// rules above still run HERE too, because they READ the resolver rather than execute it.
+const NO_POSIX_SH = process.platform === 'win32'
+  && 'windows: scripts/bootstrap-engine.sh is POSIX sh and there is no shell this runner '
+  + 'can spawn by an absolute POSIX path. No Windows leg resolves an engine through it '
+  + '(the msvc legs build tjs natively); the ubuntu row of the suite matrix covers these.';
+// Sugar, so the reason is written ONCE and a new resolver test gets it by using shTest
+// instead of having to remember a per-case skip option.
+const shTest = (name, fn) => test(name, { skip: NO_POSIX_SH }, fn);
+
 const mkdtemp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'clode-bootstrap-'));
 // A stand-in for an executable engine. Resolution ORDER is about which PATH wins, so
 // these never need to be a real tjs — the tests that need a real one say so.
@@ -144,7 +168,7 @@ guardTests(SHAPE_GUARD);
 // Resolution order. Each step is proven to WIN over the one below it.
 // ---------------------------------------------------------------------------
 
-test('1. CLODE_TJS wins over everything below it', () => {
+shTest('1. CLODE_TJS wins over everything below it', () => {
   const d = mkdtemp();
   const want = fakeExe(path.join(d, 'env-tjs'));
   const r = sh(['--plan'], { CLODE_TJS: want, CLODE_TJS_OUT: fakeExe(path.join(d, 'out-tjs')), CLODE_CACHE: d });
@@ -152,7 +176,7 @@ test('1. CLODE_TJS wins over everything below it', () => {
   assert.strictEqual(r.out, `env ${want}`);
 });
 
-test('1b. CLODE_TJS that is not executable is REFUSED, not silently skipped', () => {
+shTest('1b. CLODE_TJS that is not executable is REFUSED, not silently skipped', () => {
   const d = mkdtemp();
   const p = path.join(d, 'not-exec');
   fs.writeFileSync(p, 'x');
@@ -170,7 +194,7 @@ test('1b. CLODE_TJS that is not executable is REFUSED, not silently skipped', ()
 // FILE reading — `fakeExe(.../out-tjs)` — and so did the resolver, which is wrong in the
 // one way sh hides: `[ -x <a directory> ]` is TRUE, so the resolver handed the DIRECTORY
 // back as "the engine". These three cases pin the directory contract from both ends.
-test('2. a locally built engine is the tjs INSIDE CLODE_TJS_OUT, which is a directory', () => {
+shTest('2. a locally built engine is the tjs INSIDE CLODE_TJS_OUT, which is a directory', () => {
   const d = mkdtemp();
   const out = path.join(d, 'tjs-out');
   const want = fakeExe(path.join(out, process.platform === 'win32' ? 'tjs.exe' : 'tjs'));
@@ -179,7 +203,7 @@ test('2. a locally built engine is the tjs INSIDE CLODE_TJS_OUT, which is a dire
   assert.strictEqual(r.out, `local ${want}`);
 });
 
-test('2b. an EMPTY CLODE_TJS_OUT directory is not an engine', () => {
+shTest('2b. an EMPTY CLODE_TJS_OUT directory is not an engine', () => {
   // The state EVERY flipped call site is in on a tjs-cache miss: the output directory
   // exists (actions/cache's `path:`, or an earlier step's mkdir) and the engine it will
   // hold does not exist yet. Resolving that to the directory itself would hand a leg a
@@ -193,7 +217,7 @@ test('2b. an EMPTY CLODE_TJS_OUT directory is not an engine', () => {
     'an empty output directory must fall through to the pack, not resolve to itself');
 });
 
-test('2c. CLODE_TJS pointing at a directory is REFUSED, not resolved', () => {
+shTest('2c. CLODE_TJS pointing at a directory is REFUSED, not resolved', () => {
   const d = mkdtemp();
   const dir = path.join(d, 'a-directory');
   fs.mkdirSync(dir, { recursive: true });
@@ -203,7 +227,7 @@ test('2c. CLODE_TJS pointing at a directory is REFUSED, not resolved', () => {
     'the refusal already says "not an executable file" — the check has to mean it');
 });
 
-test('3. the bootstrap cache comes next, at the path clode-paths.cjs owns', () => {
+shTest('3. the bootstrap cache comes next, at the path clode-paths.cjs owns', () => {
   const d = mkdtemp();
   const cacheRoot = path.join(d, 'cache');
   const tag = manifest().bootstrapTag;
@@ -214,7 +238,7 @@ test('3. the bootstrap cache comes next, at the path clode-paths.cjs owns', () =
   assert.strictEqual(r.out, `cache ${want}`);
 });
 
-test('the cache root is clode-paths.cjs\'s, not a fourth spelling of XDG', () => {
+shTest('the cache root is clode-paths.cjs\'s, not a fourth spelling of XDG', () => {
   const d = mkdtemp();
   for (const env of [
     { CLODE_CACHE: path.join(d, 'explicit') },
@@ -230,7 +254,7 @@ test('the cache root is clode-paths.cjs\'s, not a fourth spelling of XDG', () =>
   }
 });
 
-test('4. with nothing local, it plans a range-fetch of the pinned slice', () => {
+shTest('4. with nothing local, it plans a range-fetch of the pinned slice', () => {
   const d = mkdtemp();
   const m = manifest();
   const r = sh(['--plan'], { CLODE_CACHE: d });
@@ -238,7 +262,7 @@ test('4. with nothing local, it plans a range-fetch of the pinned slice', () => 
   assert.strictEqual(r.out, `fetch ${hostTarget()} ${m.bootstrapTag}`);
 });
 
-test('the host target is the ONE canonical vocabulary, not a private uname table', () => {
+shTest('the host target is the ONE canonical vocabulary, not a private uname table', () => {
   const r = sh(['--print-target'], {});
   assert.strictEqual(r.status, 0, r.err);
   assert.strictEqual(r.out, hostTarget(),
@@ -249,7 +273,7 @@ test('the host target is the ONE canonical vocabulary, not a private uname table
   assert.strictEqual(sh(['--print-target'], { CLODE_BOOTSTRAP_TARGET: 'haiku-amd64' }).out, 'haiku-amd64');
 });
 
-test('a FOREIGN target never resolves to this host\'s own engine', () => {
+shTest('a FOREIGN target never resolves to this host\'s own engine', () => {
   // Found by running the thing: `--plan` for linux-amd64 on this Mac answered with the
   // Mac's own scratch engine. Steps 1 and 2 both name a HOST-NATIVE binary, and the
   // design's call site #7 is exactly the case that breaks on -- the ubuntu runner fetches
@@ -276,7 +300,7 @@ test('a FOREIGN target never resolves to this host\'s own engine', () => {
 // The base case, DERIVED.
 // ---------------------------------------------------------------------------
 
-test('a target absent from the pinned pack falls back, loudly, and says it is EXPECTED', () => {
+shTest('a target absent from the pinned pack falls back, loudly, and says it is EXPECTED', () => {
   const d = mkdtemp();
   const m = manifest();
   const absent = 'linux-brandnewarch';
@@ -295,7 +319,7 @@ test('a target absent from the pinned pack falls back, loudly, and says it is EX
     'and it must name the target and the pinned tag it looked in');
 });
 
-test('the fallback set is EXACTLY the leg targets absent from the pinned pack', async () => {
+shTest('the fallback set is EXACTLY the leg targets absent from the pinned pack', async () => {
   const { legsFor } = await import('../scripts/tjs-legs.mjs');
   const m = manifest();
   const pack = new Set(Object.keys(m.targets));
@@ -366,7 +390,7 @@ esac
 exit 0
 `;
 
-test('a fetched slice is gunzipped, sha-verified, cached and accepted', () => {
+shTest('a fetched slice is gunzipped, sha-verified, cached and accepted', () => {
   const d = mkdtemp();
   const body = FAKE_ENGINE(OK_TOKEN);
   const { manifest: mf, base } = localPack(path.join(d, 'base'), { [hostTarget()]: body });
@@ -384,7 +408,7 @@ test('a fetched slice is gunzipped, sha-verified, cached and accepted', () => {
   assert.strictEqual(fs.readFileSync(cached, 'utf8'), body, 'the cached bytes are the inflated engine');
 });
 
-test("a FOREIGN target's slice is fetched and verified, but acceptance is DEFERRED, loudly", () => {
+shTest("a FOREIGN target's slice is fetched and verified, but acceptance is DEFERRED, loudly", () => {
   // The design's call site #7: the ubuntu runner fetches a guest's slice into the
   // workspace and the guest runs it. The floor probe cannot run here — these bytes are
   // for another machine — so it must not silently not-run either. It says so, and the
@@ -411,7 +435,7 @@ test("a FOREIGN target's slice is fetched and verified, but acceptance is DEFERR
     'the deferral must name both machines, or a reader cannot tell which one owes the check');
 });
 
-test('a sha256 mismatch is REFUSED, naming the target and both digests', () => {
+shTest('a sha256 mismatch is REFUSED, naming the target and both digests', () => {
   const d = mkdtemp();
   const { manifest: mf, base } = localPack(path.join(d, 'base'), { [hostTarget()]: FAKE_ENGINE(OK_TOKEN) });
   // Corrupt the manifest's expectation, which is the same failure as corrupt bytes.
@@ -434,7 +458,7 @@ test('a sha256 mismatch is REFUSED, naming the target and both digests', () => {
     + 'becomes a sticky bad engine');
 });
 
-test('an engine that fails the floor probe is REFUSED, naming the remedies', () => {
+shTest('an engine that fails the floor probe is REFUSED, naming the remedies', () => {
   const d = mkdtemp();
   const body = FAKE_ENGINE('MISSING-ENGINE-API: tjs.engine.moduleMeta (function)', 1);
   const { manifest: mf, base } = localPack(path.join(d, 'base'), { [hostTarget()]: body });
@@ -449,7 +473,7 @@ test('an engine that fails the floor probe is REFUSED, naming the remedies', () 
   assert.match(r.err, /CLODE_TJS/, 'and the second');
 });
 
-test('the sha256 tool is KAT-tested, so a lying hasher is refused rather than trusted', () => {
+shTest('the sha256 tool is KAT-tested, so a lying hasher is refused rather than trusted', () => {
   const d = mkdtemp();
   const liar = fakeExe(path.join(d, 'liar'), `#!/bin/sh\necho ${'0'.repeat(64)}  "$1"\n`);
   const { manifest: mf, base } = localPack(path.join(d, 'base'), { [hostTarget()]: FAKE_ENGINE(OK_TOKEN) });
@@ -470,7 +494,7 @@ test('the sha256 tool is KAT-tested, so a lying hasher is refused rather than tr
 // would be untested for alpine's ash and for a minimal guest.
 // ---------------------------------------------------------------------------
 
-test('it behaves identically under dash', (t) => {
+shTest('it behaves identically under dash', (t) => {
   let dash;
   try { dash = execFileSync('sh', ['-c', 'command -v dash'], { encoding: 'utf8' }).trim(); }
   catch { dash = ''; }
@@ -488,6 +512,20 @@ test('it behaves identically under dash', (t) => {
 // ---------------------------------------------------------------------------
 // The pin itself.
 // ---------------------------------------------------------------------------
+
+// And the skip must not spread. On any box that is not Windows these tests really run,
+// which is only true while there IS a working /bin/sh — so assert it, rather than let a
+// broken box turn eighteen resolution tests into eighteen confusing comparisons to null.
+test('on a POSIX box the resolver tests really RAN — the win32 skip must not spread',
+  { skip: process.platform === 'win32' && 'on Windows the skip IS the behaviour under test' }, () => {
+    assert.strictEqual(NO_POSIX_SH, false,
+      'the sh tests are being skipped on a platform that is not win32. That is not a '
+      + 'porting accommodation, it is the resolver going untested — widen the RUNNER, '
+      + 'never this condition.');
+    const r = spawnSync('/bin/sh', ['-c', 'exit 7'], { encoding: 'utf8' });
+    assert.strictEqual(r.status, 7,
+      'this box has no working /bin/sh, so every sh() call above compared against null');
+  });
 
 test('the pinned manifest is a real schema-2 pack manifest, with a tag to fetch from', () => {
   const m = manifest();
