@@ -31,8 +31,22 @@ const F = require('./forced-win32.cjs');
 const REPO = path.join(__dirname, '..');
 const mkdtemp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'clode-forced-win32-'));
 
+const T = path.resolve(path.sep === '\\' ? 'C:\\t' : '/t');
+const A = path.join(T, 'a.test.cjs');
+const HELPER = path.join(T, 'helper.cjs');
+
 // A fake tree, so the derivation is tested on inputs this file controls rather than on
 // whatever happens to be in test/ today.
+//
+// NATIVE paths, not POSIX literals. forcedWin32Files() follows a file's relative
+// requires with path.resolve(path.dirname(file), spec), so on Windows a key spelled
+// '/t/helper.cjs' is never what the lookup asks for — path.resolve there answers
+// 'D:\\t\\helper.cjs' (the cwd's drive), io.exists() misses, the helper is never
+// followed, and the transitive-exclusion case silently stopped testing the transitive
+// rule: it went red on windows-latest in CI run 35521083887, test 1138, expecting [] and
+// getting the file back. Building the fixture's paths the way the code under test builds
+// its own is the fix, and it makes the fixture exercise real resolution on every OS
+// instead of only on the ones whose separator happens to match the literal.
 function fakeIo(files) {
   return {
     read: (f) => {
@@ -46,13 +60,13 @@ function fakeIo(files) {
 // ---------------------------------------------------------------- derivation ----
 
 test('a platform-sensitive file with no reach into the real OS is IN the pass', () => {
-  const io = fakeIo({ '/t/a.test.cjs': "if (process.platform === 'win32') {}\n" });
-  assert.deepStrictEqual(F.forcedWin32Files(['/t/a.test.cjs'], io), ['/t/a.test.cjs']);
+  const io = fakeIo({ [A]: "if (process.platform === 'win32') {}\n" });
+  assert.deepStrictEqual(F.forcedWin32Files([A], io), [A]);
 });
 
 test('a file with no platform sensitivity at all is OUT — nothing to force', () => {
-  const io = fakeIo({ '/t/a.test.cjs': 'assert.ok(1 + 1 === 2);\n' });
-  assert.deepStrictEqual(F.forcedWin32Files(['/t/a.test.cjs'], io), []);
+  const io = fakeIo({ [A]: 'assert.ok(1 + 1 === 2);\n' });
+  assert.deepStrictEqual(F.forcedWin32Files([A], io), []);
 });
 
 test('a sensitive file that SPAWNS is OUT, because the child sees the real OS', () => {
@@ -64,25 +78,28 @@ test('a sensitive file that SPAWNS is OUT, because the child sees the real OS', 
   // the sensitivity pattern, 100 went red under forcing, and 85 of those died in ONE
   // place — scripts/build-scratch.cjs's exec probe spawning `cmd.exe`, which a Mac does
   // not have. That is 341 of 424 failures carrying no information about Windows.
-  const io = fakeIo({ '/t/a.test.cjs': "process.platform; spawnSync('sh', []);\n" });
-  assert.deepStrictEqual(F.forcedWin32Files(['/t/a.test.cjs'], io), []);
+  const io = fakeIo({ [A]: "process.platform; spawnSync('sh', []);\n" });
+  assert.deepStrictEqual(F.forcedWin32Files([A], io), []);
 });
 
 test('the reach is TRANSITIVE: a sensitive file whose helper spawns is OUT too', () => {
   // The helper is where this would otherwise hide — test/*.cjs helpers are shared by
   // dozens of test files, and a per-file text scan would call every one of them clean.
   const io = fakeIo({
-    '/t/a.test.cjs': "require('./helper.cjs'); process.platform;\n",
-    '/t/helper.cjs': "const { execFileSync } = require('node:child_process');\n",
+    [A]: "require('./helper.cjs'); process.platform;\n",
+    [HELPER]: "const { execFileSync } = require('node:child_process');\n",
   });
-  assert.deepStrictEqual(F.forcedWin32Files(['/t/a.test.cjs'], io), []);
+  assert.deepStrictEqual(F.forcedWin32Files([A], io), []);
   // ...and the same file is IN once the helper stops reaching the real OS, which proves
   // the exclusion is the helper and not the require itself.
   const clean = fakeIo({
-    '/t/a.test.cjs': "require('./helper.cjs'); process.platform;\n",
-    '/t/helper.cjs': 'module.exports = {};\n',
+    [A]: "require('./helper.cjs'); process.platform;\n",
+    [HELPER]: 'module.exports = {};\n',
   });
-  assert.deepStrictEqual(F.forcedWin32Files(['/t/a.test.cjs'], clean), ['/t/a.test.cjs']);
+  assert.deepStrictEqual(F.forcedWin32Files([A], clean), [A]);
+  // And the fixture really did exercise resolution rather than getting the right answer
+  // by never looking: the helper key is the path the closure walk asks for.
+  assert.strictEqual(path.resolve(path.dirname(A), './helper.cjs'), HELPER);
 });
 
 test('the real set is DERIVED from the tree and meets a floor', () => {
@@ -99,6 +116,21 @@ test('the real set is DERIVED from the tree and meets a floor', () => {
 });
 
 // ------------------------------------------------------------------- control ----
+
+// ON A REAL WINDOWS RUNNER THE FORCING IS A NO-OP, so neither half of this control can
+// say anything there: `process.platform` is already 'win32', the preload changes nothing,
+// and the fixture below is red with OR without it. That made the first half pass
+// VACUOUSLY on windows-latest — a control that cannot fail, which is the exact defect
+// this file exists to prevent — and the second half fail outright (CI run 35521083887,
+// test 1141). Both are skipped there, with the reason stated, because the thing they
+// prove is "the lie reaches the child on a box where it IS a lie". The ubuntu and darwin
+// rows prove it on every push, and Windows does not need a simulation of Windows: the
+// main suite already ran every one of these files on the real platform.
+const NO_FORCING_ON_WIN32 = process.platform === 'win32'
+  && 'windows: forcing process.platform to win32 on win32 is not a lie, so neither the '
+  + 'red half nor the green half of this control can distinguish the preload from the '
+  + 'platform. The ubuntu and darwin rows prove the forcing works; this row already ran '
+  + 'the whole suite on the real thing.';
 
 // The control fixture: one assertion that is true on POSIX and false on Windows, written
 // the way the three earlier rounds were written — no win32 branch, no skip.
@@ -128,7 +160,8 @@ function runFixture(withPreload) {
   return r;
 }
 
-test('CONTROL: the pass can actually FAIL — a POSIX assumption goes red under it', () => {
+test('CONTROL: the pass can actually FAIL — a POSIX assumption goes red under it',
+  { skip: NO_FORCING_ON_WIN32 }, () => {
   const red = runFixture(true);
   assert.notStrictEqual(red.status, 0,
     'the forced-win32 preload did not turn a plain POSIX assumption red. The pass is '
@@ -137,7 +170,8 @@ test('CONTROL: the pass can actually FAIL — a POSIX assumption goes red under 
   assert.match(red.stdout, /this box is POSIX/);
 });
 
-test('CONTROL: the same fixture is GREEN without the preload', () => {
+test('CONTROL: the same fixture is GREEN without the preload',
+  { skip: NO_FORCING_ON_WIN32 }, () => {
   // Without this half, the control above would also be satisfied by a preload that
   // breaks node:test outright — "it went red" would prove nothing about the forcing.
   const green = runFixture(false);
