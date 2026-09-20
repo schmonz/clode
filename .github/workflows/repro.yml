@@ -94,10 +94,16 @@ jobs:
           node-version-file: .tool-versions
       - id: derive
         shell: bash
+        # The dispatch input rides in through `env:`, never interpolated into the
+        # script body. `${{ inputs.legs }}` expanded inline is a string the caller
+        # controls landing inside a shell command — the standard GitHub Actions
+        # script-injection shape. It is also just clearer: the value is a variable.
+        env:
+          LEGS: ${{ inputs.legs }}
         run: |
           set -euo pipefail
-          if [ -n "${{ inputs.legs }}" ]; then
-            include=$(node test/repro-verdicts.cjs --matrix-legs "${{ inputs.legs }}")
+          if [ -n "${LEGS:-}" ]; then
+            include=$(node test/repro-verdicts.cjs --matrix-legs "$LEGS")
           else
             include=$(node test/repro-verdicts.cjs --matrix weekly)
           fi
@@ -109,8 +115,11 @@ jobs:
       # failure test/guard.cjs exists to forbid, reappearing in YAML.
       - name: Refuse an empty matrix
         shell: bash
+        env:
+          COUNT: ${{ steps.derive.outputs.count }}
         run: |
-          test "${{ steps.derive.outputs.count }}" -gt 0 \
+          set -euo pipefail
+          test "$COUNT" -gt 0 \
             || { echo "::error::the repro matrix derived to ZERO legs — a run that measures nothing must not report green"; exit 1; }
 
   double-build:
@@ -139,4 +148,8 @@ jobs:
         run: node scripts/build-tjs.cjs --source-only
 
       - name: Build twice and compare the whole binary
-        run: node test/repro-double-build.cjs --leg "${{ matrix.leg }}" | tee -a "$GITHUB_STEP_SUMMARY"
+        env:
+          LEG: ${{ matrix.leg }}
+        run: |
+          set -euo pipefail
+          node test/repro-double-build.cjs --leg "$LEG" | tee -a "$GITHUB_STEP_SUMMARY"
