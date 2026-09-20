@@ -235,9 +235,6 @@ const NOT_YET_FLIPPED = {
     'step 6: --source-only is blocked on esbuild plus txiki\'s own JS dependency tree, '
     + 'which scripts/bundle-inputs-gate.cjs refuses loudly today. Independent of the '
     + 'bootstrap; flipping it would just move the refusal.',
-  'Build tjs (cross container)':
-    'step 3: the engine has to be visible INSIDE the toolchain container. The host fetch '
-    + 'lands in the runner\'s cache, not in /w or /scratch, so the bind mount comes first.',
   'Build + blobulate + smoke (inside the guest VM)':
     'step 5: a VM guest, reached only by the workspace rsync, and flipping it removes no '
     + 'node by itself (the same script still runs exec-probe.mjs, stage0.mjs and '
@@ -360,8 +357,13 @@ const GUARD = defineGuard({
     // and it is the shape every later one would have been copied from.
     const slicePaths = i.yaml.split('\n').map((l) => l.trim())
       .filter((l) => /^path:/.test(l) && /bootstrap/.test(l));
-    const wrong = slicePaths.filter((l) =>
-      !l.endsWith('/bootstrap/${{ steps.bootstrap-tag.outputs.tag }}/${{ steps.name.outputs.target }}'));
+    // The TARGET half is left open: it is steps.name.outputs.target where the machine
+    // that runs the engine is the leg's own (alpine, the VM guests) and the RUNNER's
+    // target where it is not (the cross-toolchain containers are x86_64 images on an
+    // x86_64 runner, cross-compiling for somebody else). What is pinned is the shape:
+    // <cache root>/bootstrap/<tag>/<one target expression>.
+    const SLICE_PATH = /\/bootstrap\/\$\{\{ steps\.bootstrap-tag\.outputs\.tag \}\}\/\$\{\{ steps\.[a-z-]+\.outputs\.[a-z-]+ \}\}$/;
+    const wrong = slicePaths.filter((l) => !SLICE_PATH.test(l));
     rule(slicePaths.length > 0 && wrong.length === 0,
       `these actions/cache entries do not name the directory the resolver writes `
       + `(<cache root>/bootstrap/<tag>/<target>): ${wrong.join(' / ')}. A cache keyed on `

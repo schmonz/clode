@@ -312,11 +312,20 @@ runs:
     # offset/length/sha256 by target, under one tag) — nothing about the LEG
     # (guest-version, floor, runner image) changes which bytes come back, so
     # including any of those in the key would only cause needless misses.
+    #
+    # HOST-TARGET is the other identity this step supplies, and it is NOT
+    # steps.name.outputs.target. The cross-toolchain containers are x86_64 Debian/Ubuntu
+    # images running on an x86_64 runner while they cross-compile for riscv64, s390x or
+    # darwin-ppc: the engine that has to RUN in there is the RUNNER's, not the leg's. It
+    # is asked of scripts/bootstrap-engine.sh rather than spelled here, so the two sides
+    # cannot disagree about what this machine is called.
     - name: Bootstrap pack tag (identity of the cached engine slice)
       id: bootstrap-tag
-      if: steps.tjs-cache.outputs.cache-hit != 'true' && (startsWith(inputs.guest-platform, 'qemu-') || inputs.netbsd-src != '' || inputs.guest-platform == 'alpine')
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && (startsWith(inputs.guest-platform, 'qemu-') || inputs.netbsd-src != '' || inputs.guest-platform == 'alpine' || inputs.cross-image != '' || inputs.cross-dockerfile != '' || steps.mode.outputs.exec == 'guest')
       shell: bash
-      run: echo "tag=$(node -p "require('./scripts/bootstrap-engine.manifest.json').bootstrapTag")" >> "$GITHUB_OUTPUT"
+      run: |
+        echo "tag=$(node -p "require('./scripts/bootstrap-engine.manifest.json').bootstrapTag")" >> "$GITHUB_OUTPUT"
+        echo "host-target=$(scripts/bootstrap-engine.sh --print-target)" >> "$GITHUB_OUTPUT"
 
     # The cache key carries the BUILD ENVIRONMENT axes, not just the leg
     # name: guest-version varies per tier (ci = newest, release = oldest
@@ -724,6 +733,46 @@ runs:
         cache-from: type=gha,scope=xc-${{ inputs.leg }}
         cache-to: type=gha,mode=max,scope=xc-${{ inputs.leg }}
 
+    # THE ENGINE HAS TO BE VISIBLE INSIDE THE CONTAINER, and unlike the alpine legs the
+    # engine this container needs is the RUNNER's own: these are x86_64 images on an
+    # x86_64 runner, cross-compiling for somebody else. So the resolve happens HERE, where
+    # curl, node and the resolver already are, and — because the target IS this host's —
+    # the engine-api-floor probe RUNS, on the same architecture that will execute it. A
+    # cross fetch could only have deferred that acceptance.
+    #
+    # It lands in the workspace, which is the same bind-mount trick the alpine legs use:
+    # the container sees the identical bytes at /w/.matrix/bootstrap-cache and re-resolves
+    # through this same script, re-verifying the sha256 on its cache hit, so nothing
+    # crosses the mount on trust. actions/cache makes the fetch a one-run cost; a miss
+    # simply means the resolver fetches, exactly as before.
+    - name: Restore the bootstrap engine slice (cross container, workspace-mounted)
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && (inputs.cross-image != '' || inputs.cross-dockerfile != '')
+      uses: actions/cache@v6.1.0
+      with:
+        path: ${{ github.workspace }}/.matrix/bootstrap-cache/bootstrap/${{ steps.bootstrap-tag.outputs.tag }}/${{ steps.bootstrap-tag.outputs.host-target }}
+        key: bootstrap-${{ steps.bootstrap-tag.outputs.tag }}-${{ steps.bootstrap-tag.outputs.host-target }}
+    - name: Resolve the bootstrap engine into the workspace (cross container)
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && (inputs.cross-image != '' || inputs.cross-dockerfile != '')
+      shell: bash
+      env:
+        CLODE_CACHE: ${{ github.workspace }}/.matrix/bootstrap-cache
+      run: |
+        set -euo pipefail
+        scripts/bootstrap-engine.sh > /dev/null
+        ENG="$CLODE_CACHE/bootstrap/${{ steps.bootstrap-tag.outputs.tag }}/${{ steps.bootstrap-tag.outputs.host-target }}/tjs"
+        # The resolver may legitimately answer with an engine that is NOT in this cache
+        # (CLODE_TJS, or one this checkout already built) — on this leg neither exists,
+        # since the native build step is excluded for cross legs. If that ever changes,
+        # the container would find an empty cache and try to fetch for itself, inside an
+        # image with no curl and no ca-certificates. Say so here, once, rather than
+        # discovering it as a refusal in the middle of a docker run.
+        if [ ! -x "$ENG" ]; then
+          echo "the resolver did not populate $ENG — it resolved something else (CLODE_TJS," >&2
+          echo "or a locally built engine). The cross container can only see the workspace." >&2
+          exit 1
+        fi
+        ls -l "$ENG"
+
     - name: Build tjs (cross container)
       if: steps.tjs-cache.outputs.cache-hit != 'true' && (inputs.cross-image != '' || inputs.cross-dockerfile != '')
       shell: bash
@@ -745,6 +794,10 @@ runs:
         # blob), debian:bookworm-slim for ci/osxcross-darwin, debian:trixie for the
         # riscv64/s390x legs — so scripts/ci-ccache.sh's apt branch covers every one.
         CCACHE_DIR: /scratch/ccache
+        # What the RUNNER calls itself, asked of the resolver rather than spelled twice.
+        # The container is the same machine's kernel and the same architecture, and this
+        # pins both sides to one string instead of two independent uname derivations.
+        HOST_TARGET: ${{ steps.bootstrap-tag.outputs.host-target }}
       run: |
         set -euo pipefail
         # cross-image → pull the pinned registry image (ppc); else use the local
@@ -753,12 +806,15 @@ runs:
         else IMG="clode-cross-toolchain:${{ inputs.leg }}"; fi
         docker run --rm \
           -e CROSS_APT -e CROSS_FILE -e ATOMIC_SHIM -e DARWIN_POLL -e WASM -e MIMALLOC -e FFI \
-          -e LEG -e CCACHE_DIR \
+          -e LEG -e CCACHE_DIR -e HOST_TARGET \
           -v "${{ github.workspace }}:/w" -v "${{ runner.temp }}:/scratch" -w /w "$IMG" bash -c '
           set -euxo pipefail
           if [ -n "$CROSS_APT" ]; then apt-get update -q && apt-get install -y -q $CROSS_APT >/dev/null; fi
-          if ! command -v node >/dev/null; then apt-get update -q && apt-get install -y -q nodejs >/dev/null 2>&1; fi
-          node --version
+          # NO nodejs install (node-removal-bootstrap-design.md §3 step 3). It used to be
+          # `if ! command -v node; then apt-get install nodejs; fi` + `node --version`,
+          # and scripts/build-tjs.cjs was the only thing in here that wanted it: the rest
+          # of this script is apt, mkdir, exports and scripts/ci-ccache.sh, which is pure
+          # sh. It now runs under the engine the step above left in the workspace.
           # /scratch is runner.temp bind-mounted alongside /w: vendor (already
           # constructed on the host by the earlier native "Construct the
           # patched tjs tree" step, at the same runner.temp path) and the
@@ -772,8 +828,14 @@ runs:
           export CLODE_TJS_ATOMIC_SHIM=$ATOMIC_SHIM
           export CLODE_TJS_DARWIN_POLL=$DARWIN_POLL
           export CLODE_TJS_WASM=$WASM CLODE_TJS_MIMALLOC=$MIMALLOC CLODE_TJS_FFI=$FFI CLODE_TJS_SMOKE=off
+          # The bind mount makes /w the same bytes as $GITHUB_WORKSPACE, so the slice the
+          # runner resolved and verified a moment ago is already sitting under this cache
+          # root; the resolver re-verifies its sha256 here and then runs the floor probe,
+          # because this container IS the machine the engine runs on.
+          export CLODE_CACHE=/w/.matrix/bootstrap-cache
+          export CLODE_BOOTSTRAP_HOST_TARGET="$HOST_TARGET"
           sh scripts/ci-ccache.sh provide "$LEG"
-          node scripts/build-tjs.cjs --build-only
+          scripts/build-tjs-boot.sh cross-container --build-only
           sh scripts/ci-ccache.sh report "$LEG"
         '
 
