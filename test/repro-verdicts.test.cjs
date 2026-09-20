@@ -256,6 +256,38 @@ test('a `known-not-reproducible` leg that still differs passes, unchanged', () =
   assert.strictEqual(r.ok, true, r.message);
 });
 
+// ---- the work-count floor outranks EVERY verdict --------------------------------------
+//
+// A run that compared two builds neither of which compiled anything is not evidence about
+// any leg, whatever that leg is recorded as. The three cases below are the three recorded
+// verdicts; missing one would leave a state where a vacuous run still votes.
+
+const VACUOUS = { identical: true, sha256: 'b'.repeat(64), bytes: 8_191_584,
+  summary: 'identical', insufficientWork: 'phase b wrote 0 of 372 object file(s)' };
+
+test('an insufficient-work run FAILS for a `reproducible` leg, instead of confirming it', () => {
+  const r = judgeObservation(VERDICTS['darwin-arm64'], VACUOUS);
+  assert.strictEqual(r.ok, false, r.message);
+  assert.match(r.message, /INSUFFICIENT WORK/);
+  assert.doesNotMatch(r.message, /still reproducing/,
+    'the most confident sentence in this file must not be attached to the least evidence');
+});
+
+test('an insufficient-work run FAILS for an `unproven` leg, instead of promoting it', () => {
+  const r = judgeObservation(VERDICTS['netbsd-amd64'], VACUOUS);
+  assert.strictEqual(r.ok, false, r.message);
+  assert.match(r.message, /INSUFFICIENT WORK/);
+  assert.doesNotMatch(r.message, /Promote/,
+    'promoting a leg to `reproducible` on a run that compiled nothing is how a manifest '
+    + 'starts lying');
+});
+
+test('an insufficient-work run FAILS for a `known-not-reproducible` leg too', () => {
+  const r = judgeObservation(VERDICTS['windows-amd64'], VACUOUS);
+  assert.strictEqual(r.ok, false, r.message);
+  assert.match(r.message, /INSUFFICIENT WORK/);
+});
+
 test('judgeObservation REFUSES an unknown leg rather than silently passing it', () => {
   assert.throws(() => judgeObservation(undefined, IDENTICAL), /no reproducibility verdict/,
     'a runner pointed at a leg the manifest has never heard of must stop, not report OK');

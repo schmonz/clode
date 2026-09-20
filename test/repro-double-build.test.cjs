@@ -11,10 +11,14 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { execFileSync, spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const {
   legBuildEnv, describeConfig, doubleBuildEngine, doubleBuildEnv,
+  assessPhaseWork, WORK_FLOOR,
 } = require('./repro-double-build.cjs');
+const { countObjectsWrittenSince } = require('./engine-build-harness.cjs');
 const { VERDICTS } = require('./repro-verdicts.cjs');
 // The launcher's OWN reader, so this file cannot drift into testing a spelling
 // scripts/ccache-launcher.cjs does not recognise.
@@ -167,4 +171,77 @@ test('the runner refuses a guest-container leg too', () => {
   const r = spawnSync(process.execPath, [RUNNER, '--leg', 'linux-x64-musl'], { encoding: 'utf8' });
   assert.strictEqual(r.status, 2, r.stderr);
   assert.match(r.stderr, /guest-platform/);
+});
+
+// ---- THE WORK-COUNT FLOOR: a verdict may not be returned for a build that did nothing ----
+//
+// THE RULE, from the behavioral-gate-harness design shelved in BACKLOG.md: a gate that
+// measures "doing X twice gives the same result" must assert that X RAN TWICE. This gate
+// was already found vacuous once — it leaked PATH/HOME and never opted out of ccache, so
+// phase B was served entirely from the cache phase A warmed and NEITHER PHASE RE-RAN THE
+// COMPILER. CLODE_TJS_CCACHE=0 closed that particular hole; it did not add an assertion
+// that the compiler ran, so the next mechanism that empties the build (a warm build dir
+// the wipe missed, a cmake configure that generates nothing, a `--target` that builds one
+// file) would pass exactly as trivially.
+//
+// WHAT IS MEASURED, honestly: OBJECT FILES ACTUALLY WRITTEN BY THAT PHASE — the count of
+// *.o under the phase's build dir whose mtime is at or after a marker file stamped
+// immediately before the build was spawned. Not "compiler invocations": nothing in this
+// harness sees the compiler's process table, and counting ninja's edges would mean parsing
+// its log, which is a second, driftable notion of the same fact. An object file that
+// exists and was written during the phase is the product of a compile, and it is the
+// artifact whose bytes the comparison is actually about.
+
+test('a phase that wrote NOTHING is not a pass and not a fail — it is insufficient work', () => {
+  const why = assessPhaseWork({ label: 'b', objectCount: 372, written: 0 });
+  assert.match(why, /0 of 372/,
+    'forced to zero, the floor must produce a REASON, not an empty string');
+  assert.match(why, /insufficient|did not/i);
+});
+
+test('a phase that wrote every object it has is enough work', () => {
+  assert.strictEqual(assessPhaseWork({ label: 'a', objectCount: 372, written: 372 }), '');
+});
+
+test('a phase that INHERITED most of its objects is insufficient work', () => {
+  // The exact shape of the vacuous run that was already found here: the tree is fully
+  // populated, the binary links, the compare passes — and one object was compiled.
+  const why = assessPhaseWork({ label: 'b', objectCount: 372, written: 1 });
+  assert.notStrictEqual(why, '', 'a nearly-empty rebuild must not be allowed to vote');
+});
+
+test('an ABSOLUTE floor, so "wrote all zero of its zero objects" cannot read as complete', () => {
+  // written === objectCount is satisfied trivially at 0, and a build dir the harness
+  // pointed at the wrong place looks exactly like this.
+  const why = assessPhaseWork({ label: 'a', objectCount: 0, written: 0 });
+  assert.notStrictEqual(why, '',
+    'the self-scaling rule alone is vacuous at zero; the absolute floor is what closes it');
+  assert.ok(WORK_FLOOR > 1, 'a floor of 0 or 1 would be the same hole with a number on it');
+});
+
+test('the floor is reported on the observation, so a caller cannot look away', () => {
+  // countObjectsWrittenSince is the measurement; this pins that it MEASURES rather than
+  // estimates, against a directory whose mtimes are known.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'repro-work-floor-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'old.o'), 'x');
+    const since = Date.now() + 1;
+    fs.writeFileSync(path.join(dir, 'new.o'), 'y');
+    fs.utimesSync(path.join(dir, 'old.o'), new Date(since - 10_000), new Date(since - 10_000));
+    assert.strictEqual(countObjectsWrittenSince(dir, since - 1000), 1,
+      'only the object written after the marker counts as work this phase did');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ---- and the judgement must REFUSE it, for every recorded verdict --------------------
+
+test('judgeObservation FAILS an insufficient-work run even for a `reproducible` leg', () => {
+  const { judgeObservation } = require('./repro-verdicts.cjs');
+  const r = judgeObservation(VERDICTS['darwin-arm64'],
+    { identical: true, sha256: 'b'.repeat(64), bytes: 1, summary: 'identical',
+      insufficientWork: 'phase b wrote 0 of 372 objects' });
+  assert.strictEqual(r.ok, false, r.message);
+  assert.match(r.message, /INSUFFICIENT WORK/,
+    'an identical compare over a build that never ran is the vacuous verdict this gate was '
+    + 'already caught producing; it must be its own loud outcome, not a pass');
 });
