@@ -365,6 +365,29 @@ mbedtls's stops being AppleClang-guarded.
 5. **C only.** The vendored project is `project(tjs LANGUAGES C)` and a real cache has no
    `CMAKE_CXX_COMPILER`, so the CXX archive rules are deliberately not set (cmake would warn
    about unused variables on every leg). A future C++ archive needs the CXX triple added.
+6. **The two Windows legs log `FLAGS` but may not be able to USE them (found 2026-09-20,
+   unmeasured).** Both publisher legs of CI run 35487107745 printed
+   `build-tjs: ar-determinism: FLAGS ar=C:\mingw64\bin\ar.EXE ranlib=C:\mingw64\bin\ranlib.EXE
+   source=path` — an ar-shaped archiver found on PATH, probed, and accepted `D`. But both legs
+   are `msvc: true` (`scripts/tjs-legs.mjs`) and `scripts/build-tjs.cjs` configures them with
+   `-G Ninja -DCMAKE_C_COMPILER=cl`, so cmake loads `Modules/Platform/Windows-MSVC.cmake`,
+   which sets `CMAKE_C_CREATE_STATIC_LIBRARY` — and `Modules/CMakeCInformation.cmake` documents
+   that entry as OVERRIDING `CMAKE_C_ARCHIVE_CREATE/APPEND/FINISH`. If that holds on the legs,
+   the three `-D`s those legs push reach `CMakeCache.txt` and nothing else, the archiver those
+   archives are actually built with is `lib.exe`, and the `FLAGS` line overstates what happened.
+   Reproduced as a MECHANISM on this darwin host (a configure handed
+   `-DCMAKE_C_CREATE_STATIC_LIBRARY=...` inherits both archive rules into the subproject scope
+   and still generates a command with no `qcD` in it); test/ar-determinism.test.cjs's reach
+   guard now names this outcome out loud, which is how it would be noticed. NOT reproduced on
+   Windows, and deliberately not fixed here: `scripts/ar-determinism.cjs` is engine-recipe
+   source, so any change moves the recipe hash and rebuilds every leg.
+   A SECOND, related datum from the same logs: `arCacheMismatchWarning` compares the probed
+   `ar` against `CMakeCache.txt`'s `CMAKE_AR`, which under MSVC should be `lib.exe` — so a
+   `WARNING` line was expected on those legs and none appears. Either MSVC leaves no cached
+   `CMAKE_AR` for `cmakeCacheAr()` to read (it returns `''`, which is deliberately not a
+   disagreement) or the line went somewhere the log did not capture. Whichever it is, item 2
+   above says "grep CI for that line before trusting any leg's verdict", and on these two legs
+   that grep currently cannot distinguish agreement from silence.
 
 ## A full-suite flake, seen once and not yet named (2026-09-19)
 
