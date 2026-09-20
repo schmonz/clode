@@ -517,6 +517,53 @@ const compilerSignalGuard = defineGuard({
 });
 guardTests(compilerSignalGuard);
 
+// Reading ONE entry back out of a real CMakeCache.txt. Test apparatus, not product code --
+// scripts/ar-determinism.cjs has its own cmakeCacheAr() for the shipped path, and the two must
+// not become one import, because this file is deliberately forbidden from require()ing anything
+// that drags scripts/build-tjs.cjs in (see the header).
+//
+// THE BUG THIS PINS (CI run 35487107745, `test / suite (windows-latest)`, the only two reds in
+// 2215 tests). The reader below used to split on '\n' alone. cmake writes CMakeCache.txt with the
+// HOST's line ending, so on Windows every line ends '\r\n' and every value parsed that way came
+// back with a trailing carriage return:
+//
+//     + actual   - expected
+//     + '/fake/bin/ccache\r'
+//     - '/fake/bin/ccache'
+//
+// Splitting on /\r?\n/ is the fix, and NOT .trim() on the value: trimming would also swallow a
+// genuine trailing space in a cached path, and it would leave the line-splitting itself wrong for
+// the next entry someone reads. Note what must NOT be normalised away either -- '' (the entry is
+// present and EMPTY, which is exactly what the opt-out below asserts cmake persisted) is a
+// different fact from null (no such entry), and collapsing them would make the opt-out test
+// pass against a cmake that dropped the flag entirely.
+function cmakeCacheEntry(text, name) {
+  const line = String(text).split(/\r?\n/).find((l) => l.startsWith(`${name}:`));
+  return line === undefined ? null : line.slice(line.indexOf('=') + 1);
+}
+
+test('cmakeCacheEntry reads a value the same whether cmake wrote LF or CRLF line endings', () => {
+  const body = [
+    '# This is the CMakeCache file.',
+    'CMAKE_C_COMPILER_LAUNCHER:FILEPATH=/fake/bin/ccache',
+    'CMAKE_AR:FILEPATH=/usr/bin/ar',
+    '',
+  ];
+  assert.strictEqual(cmakeCacheEntry(body.join('\n'), 'CMAKE_C_COMPILER_LAUNCHER'), '/fake/bin/ccache');
+  assert.strictEqual(cmakeCacheEntry(body.join('\r\n'), 'CMAKE_C_COMPILER_LAUNCHER'), '/fake/bin/ccache',
+    'a CRLF cache must not yield a value with a trailing carriage return -- this is the exact '
+    + 'windows-latest failure this reader was written for');
+  // The two states the opt-out test distinguishes, under both line endings: CLEARED (present and
+  // empty) is not ABSENT, and neither may be read as the other.
+  assert.strictEqual(cmakeCacheEntry('CMAKE_C_COMPILER_LAUNCHER:FILEPATH=\r\n', 'CMAKE_C_COMPILER_LAUNCHER'), '',
+    'an explicitly cleared entry reads as the empty string, not as a carriage return');
+  assert.strictEqual(cmakeCacheEntry('CMAKE_C_COMPILER_LAUNCHER:FILEPATH=\n', 'CMAKE_C_COMPILER_LAUNCHER'), '');
+  assert.strictEqual(cmakeCacheEntry(body.join('\r\n'), 'CMAKE_CXX_COMPILER_LAUNCHER'), null,
+    'an absent entry is null, and null is not the empty string');
+  // A value that legitimately contains '=' survives: the split is at the FIRST one.
+  assert.strictEqual(cmakeCacheEntry('CMAKE_C_FLAGS:STRING=-DX=1 -DY=2\r\n', 'CMAKE_C_FLAGS'), '-DX=1 -DY=2');
+});
+
 // The property at the grain it actually bites: a REAL cmake build dir, already configured
 // WITH the launcher, reconfigured through the opt-out's own argument list. This is the test
 // that was missing; a unit test over applyCcacheArg alone cannot see a CMakeCache.
@@ -537,11 +584,8 @@ test('opt-out: a build dir already configured WITH ccache stops using it after a
     const r = spawnSync(cmake, ['-S', src, '-B', bld, ...args], { encoding: 'utf8' });
     assert.strictEqual(r.status, 0, `cmake failed: ${r.stdout}\n${r.stderr}`);
   };
-  const cached = () => {
-    const line = fs.readFileSync(path.join(bld, 'CMakeCache.txt'), 'utf8').split('\n')
-      .find((l) => l.startsWith('CMAKE_C_COMPILER_LAUNCHER:'));
-    return line === undefined ? null : line.slice(line.indexOf('=') + 1);
-  };
+  const cached = () => cmakeCacheEntry(
+    fs.readFileSync(path.join(bld, 'CMakeCache.txt'), 'utf8'), 'CMAKE_C_COMPILER_LAUNCHER');
 
   // 1. the normal state of every build dir on a box with ccache: configured WITH it.
   configure(applyCcacheArg([], '/fake/bin/ccache', { clear: false }));
