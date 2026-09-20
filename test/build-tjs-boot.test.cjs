@@ -235,10 +235,6 @@ const NOT_YET_FLIPPED = {
     'step 6: --source-only is blocked on esbuild plus txiki\'s own JS dependency tree, '
     + 'which scripts/bundle-inputs-gate.cjs refuses loudly today. Independent of the '
     + 'bootstrap; flipping it would just move the refusal.',
-  'Build tjs (native)':
-    'step 4: proven under tjs on POSIX by test/build-tjs-no-node.test.cjs, but this same '
-    + 'step is the WINDOWS legs too, and there is no expression of "a PATH with no node" '
-    + 'for win32 yet. The Windows row gets written red first.',
   'Build tjs (cross container)':
     'step 3: the engine has to be visible INSIDE the toolchain container. The host fetch '
     + 'lands in the runner\'s cache, not in /w or /scratch, so the bind mount comes first.',
@@ -246,6 +242,30 @@ const NOT_YET_FLIPPED = {
     'step 5: a VM guest, reached only by the workspace rsync, and flipping it removes no '
     + 'node by itself (the same script still runs exec-probe.mjs, stage0.mjs and '
     + 'stage-provider.mjs under node). Sequence it with those three.',
+};
+
+// A site can be flipped for SOME of the machines it runs on. `Build tjs (native)` is one
+// step for ubuntu, macOS and Windows, and the flip is proven on POSIX and unproven on
+// win32 — so it runs the wrapper on POSIX and stays on node for Windows. That is a THIRD
+// state, and neither table above could express it: left in NOT_YET_FLIPPED a real flip
+// would read as no flip at all, and deleted from it the surviving `node
+// scripts/build-tjs.cjs` would read as an unexplained node.
+//
+// The entry costs what it should: the step must contain BOTH spellings. Delete the
+// wrapper half and the split is a fiction, which is how a half-flip silently becomes an
+// un-flip; delete the node half and the step is fully flipped and the entry is a phantom.
+const SPLIT_BY_PLATFORM = {
+  'Build tjs (native)':
+    'step 4, POSIX ONLY. Flipped for ubuntu and macOS (`--build-only` under tjs is proven '
+    + 'by test/build-tjs-no-node.test.cjs and measured at 68s in phase 1). The two MSVC '
+    + 'legs are the SAME step and stay on node, stated not silent: nothing has run this '
+    + 'wrapper on win32 — test/posix-host.cjs records that spawning it by its own path '
+    + 'there gives status null, the pack\'s windows-amd64 slice has never been range-'
+    + 'fetched by any leg, and there is no expression of "a PATH with no node" for win32. '
+    + 'To cover Windows later: a win32 row for build-tjs-no-node.test.cjs, a wrapper '
+    + 'invocation win32 can actually execute (the `bash` shell GitHub gives Windows '
+    + 'runners is git-bash, so `sh scripts/build-tjs-boot.sh` is the candidate), and one '
+    + 'leg proving the windows-amd64 slice resolves, passes the floor probe and builds.',
 };
 
 // Which step each `node scripts/build-tjs.cjs` lives in — derived by walking back to the
@@ -257,6 +277,19 @@ function rawNodeSites(yaml) {
     const m = /^\s*-\s+name:\s*(.+?)\s*$/.exec(line);
     if (m) step = m[1];
     if (/(^|\s)node\s+scripts\/build-tjs\.cjs/.test(line)) out.push(step);
+  }
+  return out;
+}
+
+// The same walk for the wrapper's call sites: which step each one lives in.
+function bootSiteSteps(yaml) {
+  const out = [];
+  let step = '(before any step)';
+  for (const line of yaml.split('\n')) {
+    const m = /^\s*-\s+name:\s*(.+?)\s*$/.exec(line);
+    if (m) step = m[1];
+    const t = line.trim().replace(/^run:\s+/, '');
+    if (t.includes('build-tjs-boot.sh') && !t.startsWith('#')) out.push(step);
   }
   return out;
 }
@@ -285,7 +318,7 @@ const IDIOM = /^scripts\/build-tjs-boot\.sh [a-z0-9][a-z0-9-]* --[a-z-]+only$/;
 
 const GUARD = defineGuard({
   name: 'build-tjs-invocation-shape',
-  floor: 9,
+  floor: 10,
   read: () => ({
     sh: fs.readFileSync(BOOT, 'utf8'),
     // The SHIPPED bit, from git's index — not the checkout's. On win32 every file's
@@ -335,11 +368,18 @@ const GUARD = defineGuard({
       + 'bytes that are never stored there is a cache that cannot hit.');
 
     const raw = rawNodeSites(i.yaml);
-    const unexplained = raw.filter((s) => !(s in NOT_YET_FLIPPED));
+    const booted = bootSiteSteps(i.yaml);
+    const unexplained = raw.filter((s) => !(s in NOT_YET_FLIPPED) && !(s in SPLIT_BY_PLATFORM));
     rule(unexplained.length === 0,
       `these steps still run build-tjs.cjs under node with no recorded reason: `
       + `${unexplained.join(' / ')}. Either flip them onto scripts/build-tjs-boot.sh or `
       + 'record why not.');
+
+    const fiction = Object.keys(SPLIT_BY_PLATFORM).filter((s) => !booted.includes(s));
+    rule(fiction.length === 0,
+      `these steps claim a per-platform SPLIT but never run the wrapper: `
+      + `${fiction.join(' / ')}. A split whose flipped half is missing is an un-flip with `
+      + 'a nicer name — the whole reason the entry has to cost both spellings.');
     // The alpine containers' ONLY node consumer was scripts/build-tjs.cjs, so flipping
     // that site let `nodejs` leave their apk list — the single removal in this wave. This
     // file has exactly one literal packages: list (the VM legs' comes through
@@ -353,7 +393,8 @@ const GUARD = defineGuard({
       + 'containers stopped needing one when their build-tjs.cjs call site flipped; if a '
       + 'leg needs node back, that is a finding about the flip, not a package to re-add.');
 
-    const phantom = Object.keys(NOT_YET_FLIPPED).filter((s) => !raw.includes(s));
+    const phantom = [...Object.keys(NOT_YET_FLIPPED), ...Object.keys(SPLIT_BY_PLATFORM)]
+      .filter((s) => !raw.includes(s));
     rule(phantom.length === 0,
       `NOT_YET_FLIPPED names steps that no longer run build-tjs.cjs under node: `
       + `${phantom.join(' / ')}. A carve-out that outlives its reason is how an exception `

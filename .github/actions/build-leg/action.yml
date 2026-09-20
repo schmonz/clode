@@ -592,7 +592,37 @@ runs:
         # Windows SDK + ninja on PATH). mingw is retired — kept only as the explicit
         # opt-in for a hypothetical non-msvc Windows leg.
         CLODE_TJS_WIN_MINGW: ${{ runner.os == 'Windows' && inputs.msvc != 'true' && '1' || '' }}
-      run: node scripts/build-tjs.cjs --build-only
+      # FLIPPED ONTO THE BOOTSTRAP RESOLVER, FOR POSIX ONLY (node-removal-bootstrap-
+      # design.md §3 step 4). On ubuntu and macOS this now builds the engine under an
+      # engine: build-tjs-boot.sh asks scripts/bootstrap-engine.sh for one (CLODE_TJS, a
+      # locally built one, the bootstrap cache, or a sha256-verified range-fetch of the
+      # pinned pack) and runs scripts/build-tjs.cjs under it through HEAD's node-shim
+      # loader. `--build-only` under tjs is proven by test/build-tjs-no-node.test.cjs and
+      # was measured at 68s in phase 1. No CLODE_BOOTSTRAP_TARGET here on purpose: a
+      # native leg's HOST is the machine the engine must run on, uname names it correctly
+      # on both POSIX runner families, and the leg's own target is NOT the same thing
+      # (the cosmo leg builds an APE on an ubuntu x86_64 runner).
+      #
+      # THE WINDOWS LEGS ARE THE SAME STEP AND STAY ON NODE. Stated, not silent, and
+      # recorded in SPLIT_BY_PLATFORM in test/build-tjs-boot.test.cjs, which requires this
+      # step to keep BOTH spellings so the half-flip cannot quietly become an un-flip.
+      # Nothing has ever run this wrapper on win32: test/posix-host.cjs records that
+      # spawning it by its own path there answers `status: null`, and no leg has ever
+      # range-fetched the pack's windows-amd64 slice. Covering Windows later needs three
+      # things, in this order: a win32 row for test/build-tjs-no-node.test.cjs written RED
+      # first; an invocation win32 can execute (the `bash` GitHub gives Windows runners is
+      # git-bash, so `sh scripts/build-tjs-boot.sh ...` is the candidate shape); and one
+      # leg proving the windows-amd64 slice resolves, passes the floor probe and builds.
+      #
+      # `$RUNNER_OS` and not a ${{ }} expression: this step already carries fifteen env
+      # lines, and the branch is about the machine the shell is running on, which the
+      # shell can see for itself.
+      run: |
+        if [ "${RUNNER_OS:-}" = Windows ]; then
+          node scripts/build-tjs.cjs --build-only
+        else
+          scripts/build-tjs-boot.sh native-host --build-only
+        fi
 
     # The alpine leg is CONTAINERIZED (docker run --rm), so $HOME/.cache/clode
     # inside it dies with the container — this runner's actions/cache can only
