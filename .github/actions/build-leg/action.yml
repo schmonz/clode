@@ -233,11 +233,26 @@ runs:
         # on the legs that skip the object-grain reproducibility harness). Installing and
         # persisting a cache the launcher refuses to use is pure cost, so the decline is
         # respected here too instead of being worked around.
+        # COSMO IS OFF, and this one is a hard incompatibility rather than a cost argument.
+        # cosmocc is a FAT compiler: a single `-o foo.o` writes TWO object files, `foo.o`
+        # (x86-64) and `<dir>/.aarch64/foo.o`, and `cosmoar` refuses to archive one without
+        # the other. ccache models a compile as having exactly ONE output, so a cache HIT
+        # restores `foo.o` and the sidecar never comes into existence. A cold cache hides it
+        # perfectly (a miss runs the real cosmocc, which writes both), so the leg was green
+        # on run 35537960554 — the first run that wired ccache at all — and red on the very
+        # next one, which restored it: `Cache hit for restore-key:
+        # ccache-cosmo-ubuntu24-3.22-----35537960554-1`, then
+        #   cosmoar: CMakeFiles/p256m.dir/p256-m_driver_entrypoints.c.o: missing concomitant
+        #            CMakeFiles/p256m.dir/.aarch64/p256-m_driver_entrypoints.c.o file
+        # at the FIRST archive of the build. The rolling restore-key is correct; cosmocc is
+        # simply not a compiler ccache can cache. An AXIS, not a leg name, so the day a
+        # second Cosmopolitan leg appears it inherits the right answer.
         case "$exec" in
           host|cross) ccache=1 ;;
           *)          ccache=0 ;;
         esac
         [ "${RUNNER_OS:-}" != Windows ] || ccache=0
+        [ "${{ inputs.cosmo }}" != true ] || ccache=0
         echo "ccache=$ccache" >> "$GITHUB_OUTPUT"
         # ONE path for every eligible class, which runner.temp is uniquely able to be: it
         # is on the runner (so actions/cache can see it), it is inside the alpine
@@ -643,6 +658,15 @@ runs:
         # EMPTY on those legs would be worse — an empty CCACHE_DIR is one a real ccache
         # rejects outright, which is a failure waiting for the day the decline is lifted.
         CCACHE_DIR: ${{ steps.mode.outputs.ccachedir }}
+        # AND THE VERDICT ITSELF, because the directory alone does not carry it.
+        # scripts/ccache-launcher.cjs opts IN on mere PRESENCE of the tool, so "CI did not
+        # install a ccache for this leg" was never the same statement as "this build uses
+        # no ccache" — windows-latest ships one via Strawberry Perl and only the cl decline
+        # stopped it there. This step serves BOTH legs the gate says no to (the MSVC ones
+        # and cosmo, whose cosmocc ccache cannot cache at all), so the decision is passed
+        # in rather than inferred from the image. '1' is not an opt-out; only '0' is, which
+        # is exactly the gate's own two values.
+        CLODE_TJS_CCACHE: ${{ steps.mode.outputs.ccache }}
         CLODE_TJS_VENDOR: ${{ steps.mode.outputs.vendor }}
         CLODE_TJS_OUT: ${{ steps.mode.outputs.out }}
         CLODE_TJS_STATIC: ${{ inputs.static == 'true' && '1' || '' }}

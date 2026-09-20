@@ -277,6 +277,105 @@ guardTests(keyGuard);
 guardTests(pairGuard);
 
 // ---------------------------------------------------------------------------
+// GUARD 4 — the ELIGIBILITY TABLE, run rather than read; and the verdict reaches the build.
+// ---------------------------------------------------------------------------
+//
+// WHY THIS EXISTS: run 35542679928's cosmo leg died at the FIRST archive, with
+//
+//   cosmoar: CMakeFiles/p256m.dir/p256-m_driver_entrypoints.c.o: missing concomitant
+//            CMakeFiles/p256m.dir/.aarch64/p256-m_driver_entrypoints.c.o file
+//
+// cosmocc is a FAT compiler: one `-o foo.o` produces TWO object files, `foo.o` (x86-64) and
+// `<dir>/.aarch64/foo.o`, and cosmoar refuses to archive one without the other. ccache models
+// a compile as having exactly ONE output, so on a ccache HIT it restores `foo.o` and the
+// sidecar is simply never created. A COLD cache hides this completely (a miss runs the real
+// cosmocc, which writes both), which is why the leg was green on 35537960554 — the first run
+// with ccache wired — and red on the next one, whose restore-keys line reads
+// `Cache hit for restore-key: ccache-cosmo-ubuntu24-3.22-----35537960554-1`. The rolling
+// restore-key is doing its job; cosmocc is the thing ccache cannot cache.
+//
+// Two properties, and the SECOND is the one that would have made this cheap to notice:
+//
+//  (a) the eligibility table is EXECUTED here, for every shape the matrix can present,
+//      instead of being eyeballed in YAML. It is nine lines of `case`/`[ ]` in the mode
+//      step and nothing type-checks it.
+//  (b) a leg CI decided NOT to give a ccache must SAY SO to the build. Until now "no
+//      ccache" was expressed only by not installing one — so on any runner image that
+//      happens to ship the tool (windows-latest does, via Strawberry Perl), the build
+//      enabled it anyway and only ccache-launcher.cjs's cl decline stopped it. cosmocc is
+//      not cl, and cosmo runs on an image that could ship ccache tomorrow. Passing the
+//      mode step's verdict through CLODE_TJS_CCACHE makes CI's decision reach the decision.
+const NO_SH_GATE = process.platform === 'win32'
+  && 'windows: the gate is POSIX sh and Windows runners have no /bin/sh (the ubuntu row of '
+  + 'the suite matrix, and every developer box, run it for real)';
+
+// The gate itself, lifted out of the mode step by its own first and last lines. Prose above
+// the `case` is deliberately excluded: this runs the CODE, and a comment that changed would
+// otherwise look like a behaviour change.
+function ccacheGateSource() {
+  const text = fs.readFileSync(ACTION, 'utf8');
+  const step = splitSteps(text).find((s) => /^Resolve the exec mode/.test(s.name));
+  assert.ok(step, 'the mode step that derives `exec` and `ccache` is gone or renamed');
+  const m = /\n( *case "\$exec" in[\s\S]*?echo "ccache=\$ccache" >> "\$GITHUB_OUTPUT")/
+    .exec(step.text);
+  assert.ok(m, 'could not find the ccache eligibility gate in the mode step — it is the '
+    + '`case "$exec" in` ... `echo "ccache=$ccache"` block');
+  return m[1];
+}
+
+// Run it. `exec` arrives as $1 (it is assigned, not exec'd), RUNNER_OS and the cosmo axis
+// are bound per case, and GITHUB_OUTPUT is a scratch file we read the verdict back out of.
+function decideCcache({ exec, runnerOs = 'Linux', cosmo = 'false' }) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-ccache-gate-'));
+  const out = path.join(dir, 'github-output');
+  fs.writeFileSync(out, '');
+  const body = ccacheGateSource().replace(/\$\{\{ inputs\.cosmo \}\}/g, cosmo);
+  const r = spawnSync('sh', ['-c', `set -eu\nexec="$1"\n${body}\n`, 'sh', exec], {
+    encoding: 'utf8',
+    env: { ...process.env, RUNNER_OS: runnerOs, RUNNER_TEMP: dir, GITHUB_OUTPUT: out },
+  });
+  assert.strictEqual(r.status, 0, `the gate did not run: ${r.stderr}`);
+  const m = /^ccache=(\d)$/m.exec(fs.readFileSync(out, 'utf8'));
+  assert.ok(m, `the gate emitted no ccache verdict: ${fs.readFileSync(out, 'utf8')}`);
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+  return m[1];
+}
+
+test('the ccache eligibility table, executed', { skip: NO_SH_GATE }, () => {
+  // The two classes that CAN reach a persistent cache, on a normal POSIX runner.
+  assert.strictEqual(decideCcache({ exec: 'host' }), '1', 'exec=host is eligible');
+  assert.strictEqual(decideCcache({ exec: 'cross' }), '1', 'exec=cross is eligible');
+  // The two that cannot (EXEMPT above says why).
+  assert.strictEqual(decideCcache({ exec: 'guest' }), '0', 'exec=guest has no persistent cache');
+  assert.strictEqual(decideCcache({ exec: 'qemu' }), '0', 'exec=qemu compiles in-guest');
+  // MSVC: ccache-launcher.cjs declines cl, so installing one is pure cost.
+  assert.strictEqual(decideCcache({ exec: 'host', runnerOs: 'Windows' }), '0',
+    'the MSVC legs are the ones the launcher declines');
+  // COSMO: exec=host on an ubuntu runner, and the one leg ccache must NOT be given.
+  assert.strictEqual(decideCcache({ exec: 'host', cosmo: 'true' }), '0',
+    'cosmocc emits TWO objects per compile (foo.o plus .aarch64/foo.o) and ccache restores '
+    + 'only one, so a warm cache makes cosmoar fail with "missing concomitant" — run '
+    + '35542679928. The cosmo axis must turn the gate off.');
+  // ...and the axis must not take the cache away from the legs that build fine with it.
+  assert.strictEqual(decideCcache({ exec: 'host', cosmo: 'false' }), '1',
+    'the cosmo decline must be scoped to the cosmo axis');
+});
+
+test('a leg CI gave no ccache SAYS so to the build, rather than hoping the image lacks one', () => {
+  const steps = splitSteps(fs.readFileSync(ACTION, 'utf8'));
+  const native = steps.find((s) => s.name === 'Build tjs (native)');
+  assert.ok(native, 'the native engine-build step is gone or renamed');
+  const code = codeLines(native.text).join('\n');
+  assert.match(code, /CCACHE_DIR: \$\{\{ steps\.mode\.outputs\.ccachedir \}\}/,
+    'the native build step should still be told which directory the cache lives in');
+  assert.match(code, /CLODE_TJS_CCACHE: \$\{\{ steps\.mode\.outputs\.ccache \}\}/,
+    'the native build step serves BOTH legs the gate says no to (windows/MSVC and cosmo) '
+    + 'and both run on images that can ship ccache on PATH. Without the verdict reaching '
+    + 'scripts/ccache-launcher.cjs — which opts in on mere PRESENCE — "CI installed no '
+    + 'ccache" is not the same statement as "this build uses no ccache".');
+});
+
+// ---------------------------------------------------------------------------
 // scripts/ci-ccache.sh itself, run for real.
 // ---------------------------------------------------------------------------
 //
