@@ -563,6 +563,18 @@ function judgeObservation(entry, observed) {
       + 'pointed at a leg the manifest has never heard of must STOP — reporting OK for an '
       + 'unknown leg is how a gate covers nothing and says nothing.');
   }
+  // THE WORK-COUNT FLOOR, checked BEFORE the bytes are allowed to say anything, and for
+  // every recorded verdict rather than only the hopeful one. An `identical` compare over a
+  // build that never ran is the vacuous verdict this gate was already caught producing
+  // once (ccache served phase B entirely from phase A's cache), and its natural reading —
+  // "reproducible and still reproducing" — is the most confident sentence in this file
+  // attached to the least evidence. It is neither a pass nor a reproducibility failure, so
+  // it gets its own outcome and that outcome FAILS: a measurement that did not happen must
+  // cost someone a red, or nobody ever finds out it stopped happening.
+  if (observed.insufficientWork) {
+    return { ok: false, message: 'INSUFFICIENT WORK — this run produced a comparison but '
+      + `not a measurement, so no verdict is returned. ${observed.insufficientWork}` };
+  }
   const detail = observed.summary || (observed.identical ? 'identical' : 'DIFFERS');
   const objs = observed.differingObjects && observed.differingObjects.length
     ? `\n  differing objects:\n${observed.differingObjects.map((o) => `    ${o}`).join('\n')}`

@@ -83,6 +83,25 @@ function listObjects(buildDir) {
     .sort();
 }
 
+// HOW MUCH REAL WORK A PHASE DID, measured rather than assumed: the object files under a
+// build dir that were WRITTEN at or after `sinceMs`. Callers stamp a marker file
+// immediately before spawning the build and pass that file's own mtime, so the comparison
+// never crosses from a clock reading to a filesystem timestamp (two sources that disagree
+// on NFS, on FAT, and on any host whose clock is being stepped).
+//
+// WHY THIS IS THE HONEST UNIT. Nothing here can see the compiler's process table, and
+// counting ninja's edges would mean parsing its log — a second, driftable notion of the
+// same fact. An object file written during the phase is the product of a compile that
+// happened, and it is also exactly the artifact whose bytes a reproducibility comparison
+// is about. A phase that "succeeded" having written none of them compiled nothing.
+function countObjectsWrittenSince(buildDir, sinceMs) {
+  let n = 0;
+  for (const rel of listObjects(buildDir)) {
+    if (fs.statSync(path.join(buildDir, rel)).mtimeMs >= sinceMs) n++;
+  }
+  return n;
+}
+
 // Streamed, not loaded whole — these are small, but the habit is the point.
 function sha256Of(file) {
   return new Promise((resolve, reject) => {
@@ -213,6 +232,6 @@ function runEngineBuild({ env, timeoutMs = ENGINE_BUILD_TIMEOUT_MS, repo = REPO 
 
 module.exports = {
   REPO, ENGINE_BUILD_TIMEOUT_MS,
-  copyCheckout, findBuildDir, listObjects, sha256Of, sha256OfSync,
+  copyCheckout, findBuildDir, listObjects, countObjectsWrittenSince, sha256Of, sha256OfSync,
   compareArtifacts, runEngineBuild, snapshotPhase,
 };

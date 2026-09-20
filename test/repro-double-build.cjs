@@ -38,7 +38,7 @@ const os = require('node:os');
 const path = require('node:path');
 const {
   copyCheckout, findBuildDir, snapshotPhase, compareArtifacts, runEngineBuild,
-  ENGINE_BUILD_TIMEOUT_MS, REPO,
+  countObjectsWrittenSince, ENGINE_BUILD_TIMEOUT_MS, REPO,
 } = require('./engine-build-harness.cjs');
 const { tjsVendorParentDir } = require('../scripts/platform-tag.cjs');
 
@@ -63,6 +63,58 @@ function describeConfig(buildEnv) {
   const knobs = ['CLODE_TJS_WASM', 'CLODE_TJS_MIMALLOC', 'CLODE_TJS_FFI', 'CLODE_TJS_STATIC'];
   const parts = knobs.map((k) => `${k.replace('CLODE_TJS_', '').toLowerCase()}=${buildEnv[k] ?? 'default'}`);
   return parts.join(' ');
+}
+
+// ---- THE WORK-COUNT FLOOR ---------------------------------------------------------------
+//
+// THE RULE, taken from the behavioral-gate-harness design shelved in BACKLOG.md: a gate
+// that measures "doing X twice gives the same result" must assert that X RAN TWICE.
+//
+// THIS GATE WAS ALREADY FOUND VACUOUS ONCE. It leaked PATH and HOME into the child and
+// never opted out of ccache, so phase B was served entirely from the cache phase A warmed:
+// neither phase re-ran the compiler, the whole-binary compare passed trivially, and the
+// verdict read `reproducible` while checking nothing but the link. CLODE_TJS_CCACHE=0
+// below closed THAT hole. It did not close the class: a build dir the wipe missed, a cmake
+// re-configure that generates nothing, a `--target` that builds one file, or a findBuildDir
+// that lands on a stale tree all empty this gate exactly as completely, and every one of
+// them still ends in `identical`. So the emptiness is MEASURED, not argued away.
+//
+// WHAT IS COUNTED, and why it is the honest unit: object files under the phase's own build
+// dir whose mtime is at or after a marker file stamped immediately before the build was
+// spawned. Not compiler invocations — nothing here sees the compiler's process table, and
+// counting ninja's edges means parsing its log, a second and driftable notion of the same
+// fact. An object written during the phase is the product of a compile that happened, and
+// it is the very artifact whose bytes the comparison is about.
+//
+// TWO RULES, because either alone is empty:
+//   SELF-SCALING  every object present must have been written by THIS phase. No magic
+//                 number, so a lean leg with 180 objects and a fat one with 372 are both
+//                 held to their own whole build. This is what catches an inherited tree.
+//   ABSOLUTE      and at least WORK_FLOOR of them, because "wrote all zero of its zero
+//                 objects" satisfies the first rule perfectly. This is what catches a
+//                 build dir the harness pointed at the wrong place.
+//
+// 50 is chosen to be far below every real leg (the leanest engine config here compiles
+// well over a hundred translation units) and far above any number a broken build produces.
+// It is a floor under a floor, not a threshold anyone should tune.
+const WORK_FLOOR = 50;
+
+// PURE. '' when the phase did enough real work for its bytes to mean something, otherwise
+// the reason it did not — which the caller must carry all the way to the verdict, because
+// an insufficient-work run is neither a pass nor a reproducibility failure.
+function assessPhaseWork({ label, objectCount, written, floor = WORK_FLOOR }) {
+  if (written < floor) {
+    return `phase ${label} wrote ${written} of ${objectCount} object file(s), below the `
+      + `floor of ${floor}: this build did not compile, so comparing its bytes measures `
+      + 'nothing. A double-build gate that cannot see the compiler run is the vacuous gate '
+      + 'this floor exists to refuse.';
+  }
+  if (written < objectCount) {
+    return `phase ${label} wrote ${written} of ${objectCount} object file(s) — the rest `
+      + 'were INHERITED, not compiled. Two builds that share objects agree about those '
+      + 'objects by construction, which is not the property this gate claims to measure.';
+  }
+  return '';
 }
 
 // PURE, and exported so the one env fact this gate's MEANING depends on can be asserted
@@ -140,6 +192,14 @@ function doubleBuildEngine({
   // this repo already knows bakes into the objects.
   const phase = (label) => {
     fs.rmSync(baseEnv.CLODE_TJS_BUILD, { recursive: true, force: true });
+    // The work-count marker, written HERE and read back for its own mtime rather than
+    // trusting Date.now(): the comparison is filesystem-timestamp against
+    // filesystem-timestamp, so a stepped clock or a coarse-granularity mount cannot make a
+    // phase that did nothing look busy (or the reverse).
+    fs.mkdirSync(dir, { recursive: true });
+    const marker = path.join(dir, `work-marker-${label}`);
+    fs.writeFileSync(marker, label);
+    const since = fs.statSync(marker).mtimeMs;
     log(`build ${label}: starting`);
     const r = runEngineBuild({ env: baseEnv, timeoutMs });
     if (!r.ok) {
@@ -148,14 +208,27 @@ function doubleBuildEngine({
         + `${r.stdout.slice(-4000)}\n${r.stderr.slice(-4000)}`);
     }
     log(`build ${label}: ok in ${(r.wallMs / 1000).toFixed(1)}s`);
-    const snap = snapshotPhase(label, findBuildDir(baseEnv.CLODE_TJS_BUILD),
+    // BEFORE snapshotPhase copies them: fs.copyFileSync does not preserve mtime, so the
+    // snapshot's objects all look freshly written no matter what the build did.
+    const realBuildDir = findBuildDir(baseEnv.CLODE_TJS_BUILD);
+    const written = countObjectsWrittenSince(realBuildDir, since);
+    const snap = snapshotPhase(label, realBuildDir,
       path.join(baseEnv.CLODE_TJS_OUT, 'tjs'), snapshotsRoot);
-    return { ...snap, wallMs: r.wallMs };
+    const work = { objects: snap.objects.length, written };
+    log(`build ${label}: compiled ${written} of ${work.objects} objects`);
+    return { ...snap, wallMs: r.wallMs, work };
   };
 
   const a = phase('a');
   if (perturb) perturb({ tree, outDir, buildRoot, baseEnv });
   const b = phase('b');
+
+  // THE FLOOR, BEFORE the comparison is allowed to mean anything. Both phases, because a
+  // gate that checked only the second would still pass a run whose FIRST build was empty.
+  const insufficientWork = [
+    assessPhaseWork({ label: 'a', objectCount: a.work.objects, written: a.work.written }),
+    assessPhaseWork({ label: 'b', objectCount: b.work.objects, written: b.work.written }),
+  ].filter(Boolean).join(' ') || null;
 
   // Identical basenames by construction: both snapshots are named `tjs`, in different
   // directories. compareArtifacts refuses anything else, so this cannot silently rot.
@@ -188,6 +261,8 @@ function doubleBuildEngine({
     differingBytes: cmp.differingBytes,
     differingObjects,
     objectCount: a.objects.length,
+    work: { a: a.work, b: b.work },
+    insufficientWork,
     config: describeConfig(baseEnv),
     wallMsA: a.wallMs,
     wallMsB: b.wallMs,
@@ -196,7 +271,10 @@ function doubleBuildEngine({
   };
 }
 
-module.exports = { doubleBuildEngine, doubleBuildEnv, legBuildEnv, describeConfig };
+module.exports = {
+  doubleBuildEngine, doubleBuildEnv, legBuildEnv, describeConfig,
+  assessPhaseWork, WORK_FLOOR,
+};
 
 // ---- CLI -----------------------------------------------------------------------------
 
@@ -248,6 +326,8 @@ async function main(argv) {
   process.stdout.write(`repro-double-build: ${leg.leg}: ${obs.summary}\n`);
   process.stdout.write(`repro-double-build: config ${obs.config}, ${obs.objectCount} objects, `
     + `${(obs.wallMsA / 1000).toFixed(1)}s + ${(obs.wallMsB / 1000).toFixed(1)}s\n`);
+  process.stdout.write(`repro-double-build: work a=${obs.work.a.written}/${obs.work.a.objects} `
+    + `b=${obs.work.b.written}/${obs.work.b.objects} objects compiled (floor ${WORK_FLOOR})\n`);
   process.stdout.write(`repro-double-build: ${judgement.ok ? 'OK' : 'FINDING'} — ${judgement.message}\n`);
   return judgement.ok ? 0 : 1;
 }
