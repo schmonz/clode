@@ -21,6 +21,7 @@ const {
   SOURCE_SENTINEL, BUILD_SENTINEL,
   filePrefixMapOptedOut, prefixMapFlags, probeFilePrefixMap, filePrefixMapDecision,
   describeFilePrefixMapDecision, applyFilePrefixMapDecision, resolveCompiler, expandMappings,
+  probeOsoPrefix, osoPrefixDecision, describeOsoPrefixDecision, applyOsoPrefixDecision,
 } = require('../scripts/file-prefix-map.cjs');
 
 const MAPPINGS = [['/tmp/b/build', BUILD_SENTINEL], ['/tmp/b/src', SOURCE_SENTINEL]];
@@ -330,4 +331,112 @@ test('build-tjs.cjs passes its mappings through expandMappings, not raw', () => 
   const src = fs.readFileSync(path.join(__dirname, '..', 'scripts/build-tjs.cjs'), 'utf8');
   assert.match(src, /expandMappings\(/,
     'handing the raw pair to the decision is exactly the run that came back 46/372 red');
+});
+
+// ---- THE LINKER'S OWN COPY OF THE PATHS -------------------------------------------------
+//
+// MEASURED 2026-09-20, the run after the /private fix: all 372 OBJECTS came back
+// byte-identical across two different absolute paths, and the linked engine still differed
+// -- 5,444,224 vs 5,445,264 bytes. The delta is in the symbol table (`strsize` 243,672 vs
+// 244,688, +1016) and its cause is 46 N_OSO stabs, ld64's DEBUG MAP: with -g on (txiki's
+// own CMakeLists adds it), the linker records the ABSOLUTE PATH of every object it read, so
+// a longer build directory makes a longer binary. 46 entries times the 22-character
+// difference between the two directory names is 1012 bytes, plus alignment.
+//
+// -ffile-prefix-map cannot reach this. It is a COMPILER flag and the objects were already
+// clean; the paths are written by the linker, from its own command line. ld64's lever is
+// `-oso_prefix <path>`, which STRIPS that prefix from the recorded names, leaving
+// `CMakeFiles/tjs.dir/src/foo.c.o`. GNU ld does not record object paths in the first place
+// and rejects the option, which is the correct outcome there: nothing to fix, nothing
+// added.
+
+test('the oso-prefix probe LINKS, because accepting a flag is not the same as needing it', () => {
+  const seen = [];
+  const r = probeOsoPrefix({
+    cc: 'cc',
+    execFileSyncFn: (bin, args) => { seen.push(args); },
+    mkdtempFn: () => fs.mkdtempSync(path.join(os.tmpdir(), 'oso-probe-test-')),
+    existsFn: () => true,
+  });
+  assert.strictEqual(r, 'oso-prefix');
+  assert.ok(seen.some((a) => a.some((x) => /^-Wl,-oso_prefix,/.test(x))));
+});
+
+test('a linker that rejects it is unsupported, and nothing is added', () => {
+  const r = probeOsoPrefix({
+    cc: 'gcc', execFileSyncFn: () => { throw new Error('ld: unknown options'); },
+    mkdtempFn: () => fs.mkdtempSync(path.join(os.tmpdir(), 'oso-probe-test-')),
+    existsFn: () => true,
+  });
+  assert.strictEqual(r, 'unsupported');
+  const d = osoPrefixDecision({ cc: 'gcc', prefix: '/b/', env: {}, probeFn: () => 'unsupported' });
+  assert.deepStrictEqual(applyOsoPrefixDecision(['-DCMAKE_BUILD_TYPE=Release'], d),
+    ['-DCMAKE_BUILD_TYPE=Release']);
+});
+
+test('a compiler driver that cannot be run at all is unavailable, not "rejected"', () => {
+  const enoent = Object.assign(new Error('nope'), { code: 'ENOENT' });
+  assert.strictEqual(probeOsoPrefix({
+    cc: 'no-such-cc', execFileSyncFn: () => { throw enoent; },
+    mkdtempFn: () => fs.mkdtempSync(path.join(os.tmpdir(), 'oso-probe-test-')),
+    existsFn: () => true,
+  }), 'unavailable');
+});
+
+test('THE REAL LINKER ON THIS HOST takes -oso_prefix', () => {
+  assert.strictEqual(probeOsoPrefix({ cc: process.env.CC || 'cc' }), 'oso-prefix');
+});
+
+test('the prefix is RESOLVED, or it strips nothing while looking like it worked', () => {
+  // Measured by hand on this host: `-Wl,-oso_prefix,/tmp/osotest/` was ACCEPTED, exited 0,
+  // and left `OSO /private/tmp/osotest/m.o` untouched. The same /private trap as the
+  // compiler mapping, with a worse failure mode -- ld64 does not complain about a prefix
+  // that matches nothing.
+  const d = osoPrefixDecision({ cc: 'cc', prefix: '/var/b', env: {},
+    realpathFn: (p) => `/private${p}`, probeFn: () => 'oso-prefix' });
+  assert.ok(d.flags.some((f) => f.includes('/private/var/b')), JSON.stringify(d.flags));
+});
+
+test('the prefix ends in a separator, so a sibling directory is not half-stripped', () => {
+  const d = osoPrefixDecision({ cc: 'cc', prefix: '/b/build', env: {},
+    realpathFn: (p) => p, probeFn: () => 'oso-prefix' });
+  assert.ok(d.flags.every((f) => /\/$/.test(f)), JSON.stringify(d.flags));
+});
+
+test('it appends to CMAKE_EXE_LINKER_FLAGS without dropping the static leg\'s -static', () => {
+  const d = osoPrefixDecision({ cc: 'cc', prefix: '/b/', env: {}, realpathFn: (p) => p,
+    probeFn: () => 'oso-prefix' });
+  const args = applyOsoPrefixDecision(['-DCMAKE_EXE_LINKER_FLAGS=-static'], d);
+  assert.strictEqual(args.length, 1, 'a SECOND -DCMAKE_EXE_LINKER_FLAGS would drop the first');
+  assert.match(args[0], /-static/);
+  assert.match(args[0], /-oso_prefix/);
+});
+
+test('opting out of the compiler mapping opts out of the linker one too', () => {
+  // One knob. Two levers for one property, and a build that maps its objects but not its
+  // debug map is the partial fix in a new costume.
+  let ran = false;
+  const d = osoPrefixDecision({ cc: 'cc', prefix: '/b/', env: { CLODE_TJS_FILE_PREFIX_MAP: '0' },
+    probeFn: () => { ran = true; return 'oso-prefix'; } });
+  assert.strictEqual(d.state, 'opted-out');
+  assert.strictEqual(ran, false);
+  assert.deepStrictEqual(d.flags, []);
+});
+
+test('every oso-prefix state prints one greppable ASCII line', () => {
+  for (const state of ['oso-prefix', 'unsupported', 'unavailable']) {
+    const d = osoPrefixDecision({ cc: 'cc', prefix: '/b/', env: {}, realpathFn: (p) => p,
+      probeFn: () => state });
+    const line = describeOsoPrefixDecision(d);
+    assert.match(line, /^build-tjs: oso-prefix: /);
+    assert.doesNotMatch(line, /[^\x20-\x7e]/);
+  }
+  assert.throws(() => describeOsoPrefixDecision({ state: 'sideways' }), /unknown/);
+});
+
+test('build-tjs.cjs composes, logs and applies the linker decision too', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'scripts/build-tjs.cjs'), 'utf8');
+  assert.match(src, /osoPrefixDecision\(/);
+  assert.match(src, /console\.error\(describeOsoPrefixDecision\(/);
+  assert.match(src, /applyOsoPrefixDecision\(cmakeArgs, /);
 });
