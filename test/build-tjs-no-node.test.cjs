@@ -285,3 +285,90 @@ test('the BUILD phase produces a working engine with Node absent from PATH', (t)
   const engine = path.join(out, process.platform === 'win32' ? 'tjs.exe' : 'tjs');
   assert.ok(fs.existsSync(engine), `--build-only printed its marker but left no engine at ${engine}`);
 });
+
+// ---- the one place the source phase still needs Node ------------------------
+// ensureEsbuild shells to `npm install --no-save esbuild@0.28.1` into the txiki
+// checkout. npm is a Node program, so on a node-free host it cannot run — which
+// makes `--source-only` Node-free only by ACCIDENT, on a checkout that already
+// has node_modules/.bin/esbuild. The row at the top of this file copies exactly
+// such a warm checkout, so its `existsSync` short-circuits and the gap never
+// shows: the recon (.superpowers/sdd/node-removal-recon.md, "Gaps" 2) called
+// this out as a gate that cannot fail. This row defeats the short-circuit by
+// deleting node_modules from its copy.
+//
+// MEASURED (this box, 2026-09-19): before CLODE_ESBUILD existed, that run died
+// with `Error: spawnSync npm ENOENT` — a message that names neither esbuild,
+// nor the pin, nor anything a reader could act on. It now refuses by name and
+// offers the seam, and the seam WORKS: given an esbuild binary, the whole
+// source phase completes with no Node anywhere.
+//
+// SCOPE, so this is not mistaken for the fix, and the scope is narrower than
+// the first draft of this comment claimed. CLODE_ESBUILD is the seam, not the
+// provisioning, and it covers only the BUNDLER. The same `npm install` also
+// populates txiki's own JS dependency tree, which esbuild bundles — see the
+// fixture below. So a cold checkout on a node-free host needs BOTH a bundler
+// and that tree; this seam supplies the first. Where a node-free leg gets
+// either is still open — .superpowers/sdd/node-removal-phase1.md.
+test('the source phase names its esbuild need instead of ENOENTing on npm', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-tjs-esbuild-'));
+  t.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } });
+  const pre = preflight(t, path.join(dir, 'nodefree-bin'));
+  if (!pre) return;
+  // The override needs a REAL esbuild to point at, and the warm checkout is
+  // where this repo already has one. No esbuild anywhere means the second half
+  // of this row would be testing the error path twice.
+  const realEsbuild = path.join(pre.srcCheckout, 'node_modules', '.bin', 'esbuild');
+  if (!fs.existsSync(realEsbuild)) {
+    t.skip(`no esbuild at ${realEsbuild} — run \`node scripts/build-tjs.cjs --source-only\` once `
+      + 'with Node available so the checkout has one to point CLODE_ESBUILD at');
+    return;
+  }
+
+  // ONLY the esbuild packages, NOT all of node_modules — and the difference is
+  // a finding, not a nicety. `npm install --no-save esbuild@0.28.1` runs inside
+  // a checkout whose OWN package.json declares web-streams-polyfill,
+  // urlpattern-polyfill, ipaddr.js, uuid, getopts, @jsr/std__tar and
+  // @jridgewell/trace-mapping, so it materializes all of those too — and
+  // esbuild BUNDLES them (src/js/polyfills/index.js literally
+  // `import 'web-streams-polyfill/polyfill'`). Deleting node_modules wholesale,
+  // as the first cut did, therefore deletes real BUILD INPUTS and the run dies
+  // with `Could not resolve "web-streams-polyfill/polyfill"` — a fixture
+  // artifact that says nothing about esbuild. The state modelled here is the
+  // one CLODE_ESBUILD actually addresses: the checkout's JS dep tree is present
+  // (it rides in the cached vendor checkout every leg restores), the BUNDLER is
+  // not, and there is no npm to fetch one.
+  const checkout = path.join(dir, 'txiki.js');
+  copyCheckout(pre.srcCheckout, checkout);
+  for (const p of ['node_modules/.bin/esbuild', 'node_modules/.bin/esbuild.cmd',
+    'node_modules/esbuild', 'node_modules/@esbuild']) {
+    fs.rmSync(path.join(checkout, p), { recursive: true, force: true });
+  }
+  const baseEnv = {
+    PATH: pre.bare,
+    HOME: process.env.HOME,
+    CLODE_TJS_VENDOR: dir,
+    CLODE_TJS_BUILD: path.join(dir, 'build'),
+    CLODE_CACHE: path.join(dir, 'cache'),
+    CLODE_DEPS: path.join(dir, 'deps'),
+  };
+  const [cmd, argv] = engineSpawn(['run', LOADER, path.join(REPO, 'scripts/build-tjs.cjs'), '--source-only']);
+  const sourceOnly = (env) => spawnSync(cmd, argv,
+    { cwd: REPO, env, encoding: 'utf8', timeout: 600000 });
+
+  // (a) no esbuild, no npm: refuse by name. An opaque ENOENT here is the bug.
+  const bad = sourceOnly(baseEnv);
+  assert.notStrictEqual(bad.status, 0, 'a checkout with no esbuild and a PATH with no npm '
+    + `must not succeed — that would mean esbuild never ran:\n${bad.stdout}\n${bad.stderr}`);
+  const why = `${bad.stdout}${bad.stderr}`;
+  assert.match(why, /esbuild@0\.28\.1/, `the refusal must name the pin it wanted:\n${why}`);
+  assert.match(why, /CLODE_ESBUILD/, `the refusal must name the way out:\n${why}`);
+  assert.doesNotMatch(why, /spawnSync npm ENOENT/,
+    `the refusal must explain itself, not leak npm's ENOENT:\n${why}`);
+
+  // (b) the same run, handed an esbuild: the whole source phase, no Node.
+  const good = sourceOnly({ ...baseEnv, CLODE_ESBUILD: realEsbuild });
+  assert.strictEqual(good.status, 0,
+    `CLODE_ESBUILD did not carry the source phase through:\n${good.stdout}\n${good.stderr}`);
+  assert.match(good.stdout, /source tree ready:/,
+    `exited 0 without reaching the source-phase marker:\n${good.stdout}\n${good.stderr}`);
+});

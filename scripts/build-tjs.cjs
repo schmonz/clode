@@ -3358,13 +3358,59 @@ function esbuildBundles(dir) {
 }
 // esbuild @ the txiki pin, resolved from the checkout's own node_modules
 // (installed on demand — no repo-root dep, no npx network guess).
+// THE ONE PLACE THE SOURCE PHASE STILL NEEDS NODE, and the seam out of it.
+//
+// `npm install esbuild` is how this has always got its bundler, and npm is a
+// Node program. Every other phase of this script is now proven to run under the
+// tjs engine with no Node on PATH at all (test/build-tjs-no-node.test.cjs runs
+// --source-only and --build-only that way; --regen-only takes --build-only's
+// handling and was measured the same). This function is what still doesn't.
+//
+// It was ALSO invisible. A node-free host with a WARM checkout sails past,
+// because node_modules/.bin/esbuild already exists and the existsSync below
+// short-circuits — which is precisely the state the acceptance test copies. A
+// cold checkout on the same host died with `Error: spawnSync npm ENOENT`: a
+// message naming neither esbuild, nor the pin, nor anything to do about it.
+//
+// So two changes, neither of which is the provisioning answer:
+//   * CLODE_ESBUILD — hand it a binary and npm is never consulted. This is the
+//     seam a future host-provision entry (or a fetch-verify download of the
+//     prebuilt @esbuild/<plat>-<arch> tarball, the shape provisionCosmocc
+//     already uses) plugs into, and it makes the source phase Node-free TODAY
+//     for anyone who has an esbuild.
+//   * an honest refusal when there is no esbuild and no npm, naming the pin,
+//     the path it looked in, and the override. A user WILL hit this the first
+//     time a node-free leg starts cold.
+// It is deliberately NOT a silent fallback to some esbuild found on PATH: the
+// pin is load-bearing (a different esbuild minifies differently, so the bundles
+// and therefore the bytecode arrays change), and picking up an unpinned one
+// behind the operator's back is how that would ship unnoticed.
 function ensureEsbuild(dir) {
+  // Kept INSIDE the function rather than lifted to a module const: test/esbuild-edge.cjs
+  // extracts this function's text and evaluates it standalone (extractFunction +
+  // new Function), so a free name declared elsewhere in the file is a ReferenceError
+  // there — which is exactly how a lifted `ESBUILD_PIN` broke that row.
   const pin = 'esbuild@0.28.1';
-  const bin = path.join(dir, 'node_modules', '.bin', process.platform === 'win32' ? 'esbuild.cmd' : 'esbuild');
-  if (!fs.existsSync(bin)) {
-    console.log(`installing ${pin} into the txiki checkout for the JS bundle regen ...`);
-    run('npm', ['install', '--no-save', '--no-audit', '--no-fund', pin], { cwd: dir, shell: process.platform === 'win32' });
+  const override = process.env.CLODE_ESBUILD;
+  if (override) {
+    if (!fs.existsSync(override)) {
+      throw new Error(`CLODE_ESBUILD=${override} does not exist — point it at an `
+        + `${pin} executable, or unset it to let npm install one into the checkout`);
+    }
+    console.log(`using CLODE_ESBUILD=${override} for the JS bundle regen (expected ${pin})`);
+    return override;
   }
+  const bin = path.join(dir, 'node_modules', '.bin', process.platform === 'win32' ? 'esbuild.cmd' : 'esbuild');
+  if (fs.existsSync(bin)) return bin;
+  const { findTool } = require(path.join(repo, 'libexec/clode-hosttools.cjs'));
+  if (!findTool('npm')) {
+    throw new Error(`the source phase needs ${pin} to build the js bundles, and this checkout `
+      + `has none at ${bin}.\nThere is no \`npm\` on PATH to install one with — npm is a Node `
+      + 'program, so a host with no Node has none.\nSet CLODE_ESBUILD to an '
+      + `${pin} executable, or run this phase on a host that has Node.`);
+  }
+  console.log(`installing ${pin} into the txiki checkout for the JS bundle regen ...`);
+  run('npm', ['install', '--no-save', '--no-audit', '--no-fund', pin], { cwd: dir, shell: process.platform === 'win32' });
   return bin;
 }
 // THE PREMISE, CHECKED — the same move as assertBytecodeRulesPresent, one edge over.
