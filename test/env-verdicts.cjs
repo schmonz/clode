@@ -329,6 +329,28 @@ const VERDICTS = [
       + "(so a CI release leg's dir can carry its deliberate floor/arch spelling). An "
       + 'output-location override for the release pipeline, not a change to what is inside '
       + 'the artifact.' },
+  // ---- scripts/bootstrap-engine.sh, the node-free engine resolver. These are the first
+  // ---- SHELL-read names this table has ever carried: test/env-inventory.cjs was blind to
+  // ---- `${CLODE_X}` until the resolver landed, so a shipped file's knobs were invisible
+  // ---- to the one gate that exists to see them. Widening the inventory is what makes
+  // ---- these classifiable at all; see that file's SH_READ comment.
+  { name: 'CLODE_BOOTSTRAP_MANIFEST', verdict: 'env-only',
+    because: 'points scripts/bootstrap-engine.sh at a different pinned pack manifest than '
+      + 'the one committed beside it (test fixtures; an offline mirror that re-pins). A '
+      + 'LOCATION override for the resolver\'s own trust root, same shape as '
+      + 'CLODE_SIGNALS_DIR — and it cannot smuggle a bad engine past anything, because the '
+      + "manifest only supplies the sha256 the fetched bytes are still verified against and "
+      + "the engine still has to pass engine-api-floor's probe before it is used. It is not "
+      + 'a `clode build` input: no clode verb reads it, and the resolver is DEV/CI tooling '
+      + 'that runs BEFORE any clode exists on the machine.' },
+  { name: 'CLODE_BOOTSTRAP_TARGET', verdict: 'env-only',
+    because: 'names which leg scripts/bootstrap-engine.sh is bootstrapping FOR, overriding '
+      + "the uname derivation — CI knows its leg from scripts/tjs-legs.mjs, which is the "
+      + 'real source of truth, where uname is a guess. Env-only by the rule rather than by '
+      + '"internal knob": it selects nothing about what gets BUILT, only which prebuilt '
+      + 'interpreter is fetched to run the builder, and the artifact that build produces is '
+      + 'identical either way. Same reasoning as CLODE_PROVIDER_BIN — the configuration of a '
+      + 'tool that runs outside clode dispatch, not a knob for `clode --help` to document.' },
   { name: 'CLODE_BUILD_SCRATCH', verdict: 'env-only',
     because: 'relocates the scratch/tmp working directory scripts/build-scratch.cjs hands '
       + 'out (CI\'s build-leg action sets it to a workspace-local dir). A location override '
@@ -346,6 +368,14 @@ const VERDICTS = [
     because: 'overrides where clode-main.cjs looks for its own libexec/ directory — '
       + 'self-location plumbing for running from a non-standard layout (a checkout with an '
       + 'unusual tree, or a test harness), not a build-content selector.' },
+  { name: 'CLODE_LIVE_ROUNDTRIP', verdict: 'env-only',
+    because: 'the =1 opt-in gate on scripts/m3-live-roundtrip.sh, a BY-HAND diagnostic that '
+      + 'drives one real -p round-trip against api.anthropic.com under tjs and prints a '
+      + 'transcript to paste into a results file. Unset, the script prints SKIP and exits 0. '
+      + 'It decides whether a DIAGNOSTIC runs, never what any build produces — the same axis '
+      + 'as CLODE_TIMEOUT_SCALE. It carried no verdict for as long as it has existed because '
+      + 'the inventory could not see shell reads at all; it is classified now for the same '
+      + 'reason the bootstrap resolver\'s names are.' },
   { name: 'CLODE_NPM', verdict: 'env-only',
     because: 'overrides which npm binary libexec/clode-deps.cjs invokes to install deps '
       + '(used verbatim, matching `${CLODE_NPM:-...}`). A host-tool-location override, '

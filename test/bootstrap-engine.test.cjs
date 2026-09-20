@@ -421,3 +421,28 @@ test('the pinned manifest is a real schema-2 pack manifest, with a tag to fetch 
     assert.ok(Number.isInteger(t.offset) && Number.isInteger(t.length) && t.length > 0, `${name}: unusable slice`);
   }
 });
+// ---------------------------------------------------------------------------
+// The resolver's own knobs must be VISIBLE to the gate that classifies knobs.
+// test/env-inventory.cjs could not see `${CLODE_X}` at all until this landed, so a
+// shell file under scripts/ could read the environment with nothing to notice — the
+// same "population drifted with nothing to notice" this repo already paid for once, in
+// a different syntax. If SH_READ is ever reverted, this goes red instead of the
+// resolver going quietly unclassified.
+// ---------------------------------------------------------------------------
+
+test('every CLODE_* knob the resolver reads is seen by the env inventory', () => {
+  const { indexEnvReads } = require('./env-inventory.cjs');
+  const { VERDICTS } = require('./env-verdicts.cjs');
+  const idx = indexEnvReads();
+  const src = fs.readFileSync(SH, 'utf8');
+  const read = [...new Set([...src.matchAll(/\$\{?(CLODE_[A-Z0-9_]+)/g)].map((m) => m[1]))].sort();
+  assert.ok(read.length >= 8, `expected the resolver to read several knobs, saw ${read.length}`);
+  const recorded = new Set(VERDICTS.map((v) => v.name));
+  for (const name of read) {
+    assert.ok(idx.get(name)?.prod.includes('scripts/bootstrap-engine.sh'),
+      `${name}: the env inventory does not see scripts/bootstrap-engine.sh reading it — a `
+      + 'shipped file whose knobs no gate can see is exactly the gate-that-cannot-fail '
+      + 'class this repo keeps finding');
+    assert.ok(recorded.has(name), `${name}: read by the resolver with no recorded verdict`);
+  }
+});
