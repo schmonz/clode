@@ -243,6 +243,24 @@ runs:
         # HOST, and the leg descriptor is the only thing that knows this leg is i386.
         echo "target=$(node scripts/canonical-name.cjs target "$LEG")" >> "$GITHUB_OUTPUT"
 
+    # scripts/bootstrap-engine.sh range-fetches a ~2.6MB slice of the templates pack
+    # and caches it at $CACHE/bootstrap/<tag>/<target>/tjs — but nothing here told
+    # actions/cache about that directory, so every leg that reaches step 3 of the
+    # resolver (a tjs-cache MISS, on the three sites flipped in wave 1) re-fetched
+    # a byte-identical, sha256-pinned slice from the release every single run.
+    # TAG is the identity half this step supplies (the manifest's own bootstrapTag,
+    # read the same way the resolver itself does — via json_str, not re-parsed by
+    # hand); target is already steps.name.outputs.target above. Together they are
+    # EXACTLY what determines the fetched bytes (the manifest keys each slice's
+    # offset/length/sha256 by target, under one tag) — nothing about the LEG
+    # (guest-version, floor, runner image) changes which bytes come back, so
+    # including any of those in the key would only cause needless misses.
+    - name: Bootstrap pack tag (identity of the cached engine slice)
+      id: bootstrap-tag
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && (startsWith(inputs.guest-platform, 'qemu-') || inputs.netbsd-src != '' || inputs.guest-platform == 'alpine')
+      shell: bash
+      run: echo "tag=$(node -p "require('./scripts/bootstrap-engine.manifest.json').bootstrapTag")" >> "$GITHUB_OUTPUT"
+
     # The cache key carries the BUILD ENVIRONMENT axes, not just the leg
     # name: guest-version varies per tier (ci = newest, release = oldest
     # floor) and per floor-walk probe, and the runner IMAGE varies for native
@@ -284,6 +302,28 @@ runs:
       with:
         path: ${{ steps.mode.outputs.out }}
         key: tjs-${{ inputs.leg }}-${{ steps.axes.outputs.image }}-${{ inputs.guest-version }}-${{ inputs.macos-min }}-${{ inputs.macos-sdk }}-${{ inputs.cross-image }}-${{ inputs.cross-dockerfile }}-${{ steps.recipe.outputs.hash }}
+
+    # Restore the bootstrap-engine slice for the two HOST-side call sites
+    # (qemu-regen and netbsd-cross both run scripts/build-tjs-boot.sh directly on
+    # this ubuntu runner's own filesystem — see those steps below). This is the
+    # SAME path scripts/bootstrap-engine.sh already resolves to on a cache miss
+    # (cache_root()'s default: no CLODE_CACHE/CLODE_STATE_ROOT/XDG_CACHE_HOME is
+    # set anywhere on these legs, so it falls through to $HOME/.cache/clode — the
+    # same idiom as the cosmocc cache below), so this changes nothing about WHAT
+    # the resolver does, only whether step 3 (cache) or step 4 (network fetch)
+    # satisfies it. A miss restores nothing; the resolver fetches, verifies and
+    # populates this same directory as before, and the plain (non-restore-only)
+    # actions/cache save afterward writes it back under this key for next time.
+    # Multiple legs can race to save the SAME key (qemu-regen and netbsd-cross are
+    # both linux-amd64 today) — actions/cache keys are immutable and a losing
+    # save is a harmless no-op, the same reasoning that already lets every
+    # macos-sdk leg below share one sdk-cache key without a save/restore split.
+    - name: Restore the bootstrap engine slice (host legs — qemu-regen, netbsd-cross)
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && (startsWith(inputs.guest-platform, 'qemu-') || inputs.netbsd-src != '')
+      uses: actions/cache@v6.1.0
+      with:
+        path: ~/.cache/clode/bootstrap/${{ steps.bootstrap-tag.outputs.tag }}/${{ steps.name.outputs.target }}
+        key: bootstrap-${{ steps.bootstrap-tag.outputs.tag }}-${{ steps.name.outputs.target }}
 
     - name: Force LF line endings for the tjs checkout (native Windows)
       if: runner.os == 'Windows'
@@ -434,6 +474,22 @@ runs:
         CLODE_TJS_WIN_MINGW: ${{ runner.os == 'Windows' && inputs.msvc != 'true' && '1' || '' }}
       run: node scripts/build-tjs.cjs --build-only
 
+    # The alpine leg is CONTAINERIZED (docker run --rm), so $HOME/.cache/clode
+    # inside it dies with the container — this runner's actions/cache can only
+    # see paths under the bind mount, which is /home/runner/work (== $GITHUB_
+    # WORKSPACE) per the guest action's own `-v /home/runner/work:/home/runner/
+    # work`. So this leg points CLODE_CACHE at a workspace-relative directory
+    # instead of relying on the resolver's $HOME default, and the guest script
+    # below exports the SAME path inside the container (a bind-mounted path is
+    # identical on both sides, byte for byte, by construction). Same tag+target
+    # key as the host cache above — it is the same pinned slice either way.
+    - name: Restore the bootstrap engine slice (alpine guest, workspace-mounted)
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.guest-platform == 'alpine'
+      uses: actions/cache@v6.1.0
+      with:
+        path: ${{ github.workspace }}/.matrix/bootstrap-cache/${{ steps.bootstrap-tag.outputs.tag }}/${{ steps.name.outputs.target }}
+        key: bootstrap-${{ steps.bootstrap-tag.outputs.tag }}-${{ steps.name.outputs.target }}
+
     - name: Build tjs (alpine guest)
       if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.guest-platform == 'alpine'
       uses: ./.github/actions/guest
@@ -464,6 +520,11 @@ runs:
           # for the emulated arch on six of these legs but for the amd64 HOST on
           # linux/386, so the leg descriptor's canonical target is passed in instead.
           export CLODE_BOOTSTRAP_TARGET="${{ steps.name.outputs.target }}"
+          # See "Restore the bootstrap engine slice (alpine guest, workspace-mounted)"
+          # above: this directory is the SAME path on both sides of the bind mount,
+          # so a cache restored on the host before this container started is
+          # already sitting here when the resolver looks for it.
+          export CLODE_CACHE="$GITHUB_WORKSPACE/.matrix/bootstrap-cache"
           scripts/build-tjs-boot.sh alpine-guest --build-only
 
     # Cross-build the engine inside a toolchain image on the ubuntu runner —
