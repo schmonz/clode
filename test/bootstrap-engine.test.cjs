@@ -34,6 +34,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { defineGuard, guardTests } = require('./guard.cjs');
+const { shTest, committedExecBit } = require('./posix-host.cjs');
 const zlib = require('node:zlib');
 const crypto = require('node:crypto');
 
@@ -61,30 +62,12 @@ function sh(args, env = {}, shell = '/bin/sh') {
   return { status: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() };
 }
 
-// WINDOWS HAS NO POSIX SHELL AT A PATH NODE CAN SPAWN. `spawnSync('/bin/sh', ...)` on
-// win32 does not reach Git Bash: libuv hands the path straight to CreateProcess, which
-// resolves it as `<drive>:\bin\sh(.exe)` and returns ENOENT. Every sh() call below then
-// answers `status: null`, and each of these tests fails on a comparison to 0 or 1 — the
-// FOURTH consecutive round of Windows-only reds in this repo, all of them POSIX
-// assumptions in test code. (Found before its CI logs were readable by running this file
-// under `node test/forced-win32.cjs --run`, which flags the same file for the adjacent
-// reason: hostTarget() answers `windows-<arch>` while the resolver's own uname does not.)
-//
-// Skipping is the honest verdict, not a dodge. scripts/bootstrap-engine.sh is POSIX sh
-// on purpose — it runs in alpine containers and in minimal VM guests where bash may be
-// absent — and NO Windows leg resolves an engine through it: the msvc legs in
-// .github/actions/build-leg/action.yml run `node scripts/build-tjs.cjs --build-only`
-// natively, while the resolver serves the alpine and qemu legs. The ubuntu row of the
-// suite matrix runs every one of these for real on every push, and the four structural
-// rules above still run HERE too, because they READ the resolver rather than execute it.
-const NO_POSIX_SH = process.platform === 'win32'
-  && 'windows: scripts/bootstrap-engine.sh is POSIX sh and there is no shell this runner '
-  + 'can spawn by an absolute POSIX path. No Windows leg resolves an engine through it '
-  + '(the msvc legs build tjs natively); the ubuntu row of the suite matrix covers these.';
-// Sugar, so the reason is written ONCE and a new resolver test gets it by using shTest
-// instead of having to remember a per-case skip option.
-const shTest = (name, fn) => test(name, { skip: NO_POSIX_SH }, fn);
-
+// The win32 skip and its sugar live in test/posix-host.cjs, with the reason and the
+// anti-spread gate that keeps them from spreading — test/build-tjs-boot.test.cjs needs
+// exactly the same predicate for exactly the same cause, and a second copy is how this
+// arrived twice. (Found before its CI logs were readable by running this file under
+// `node test/forced-win32.cjs --run`, which flags it for the adjacent reason:
+// hostTarget() answers `windows-<arch>` while the resolver's own uname does not.)
 const mkdtemp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'clode-bootstrap-'));
 // A stand-in for an executable engine. Resolution ORDER is about which PATH wins, so
 // these never need to be a real tjs — the tests that need a real one say so.
@@ -117,7 +100,11 @@ const SHAPE_GUARD = defineGuard({
   floor: 8,
   read: () => ({
     sh: fs.readFileSync(SH, 'utf8'),
-    executable: (fs.statSync(SH).mode & 0o111) !== 0,
+    // The SHIPPED bit, from git's index — not the checkout's. On win32 every file's
+    // mode reads 0o666 (NTFS has no POSIX mode), so the fs answer turned this
+    // structural rule into a platform report and the guard fired on Windows over a
+    // file that is 100755 in the index. See test/posix-host.cjs.
+    executable: committedExecBit('scripts/bootstrap-engine.sh'),
     buildTjs: fs.readFileSync(path.join(REPO, 'scripts', 'build-tjs.cjs'), 'utf8'),
     okToken: OK_TOKEN,
   }),
@@ -634,19 +621,11 @@ shTest('it behaves identically under dash', (t) => {
 // The pin itself.
 // ---------------------------------------------------------------------------
 
-// And the skip must not spread. On any box that is not Windows these tests really run,
-// which is only true while there IS a working /bin/sh — so assert it, rather than let a
-// broken box turn eighteen resolution tests into eighteen confusing comparisons to null.
-test('on a POSIX box the resolver tests really RAN — the win32 skip must not spread',
-  { skip: process.platform === 'win32' && 'on Windows the skip IS the behaviour under test' }, () => {
-    assert.strictEqual(NO_POSIX_SH, false,
-      'the sh tests are being skipped on a platform that is not win32. That is not a '
-      + 'porting accommodation, it is the resolver going untested — widen the RUNNER, '
-      + 'never this condition.');
-    const r = spawnSync('/bin/sh', ['-c', 'exit 7'], { encoding: 'utf8' });
-    assert.strictEqual(r.status, 7,
-      'this box has no working /bin/sh, so every sh() call above compared against null');
-  });
+// The gate that keeps the skip above from spreading — "off win32 NO_POSIX_SH must be
+// false, and /bin/sh must really work" — moved WITH the predicate into
+// test/posix-host.test.cjs when the wrapper tests needed the same one. It now asserts
+// strictly more than the copy that lived here: both the `/bin/sh -c` spelling this file
+// uses AND the direct-shebang-spawn spelling test/build-tjs-boot.test.cjs uses.
 
 test('the pinned manifest is a real schema-2 pack manifest, with a tag to fetch from', () => {
   const m = manifest();

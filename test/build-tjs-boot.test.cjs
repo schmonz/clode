@@ -24,6 +24,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { defineGuard, guardTests } = require('./guard.cjs');
+const { committedExecBit } = require('./posix-host.cjs');
 
 const REPO = path.join(__dirname, '..');
 const BOOT = path.join(REPO, 'scripts', 'build-tjs-boot.sh');
@@ -278,7 +279,11 @@ const GUARD = defineGuard({
   floor: 8,
   read: () => ({
     sh: fs.readFileSync(BOOT, 'utf8'),
-    executable: (fs.statSync(BOOT).mode & 0o111) !== 0,
+    // The SHIPPED bit, from git's index — not the checkout's. On win32 every file's
+    // mode reads 0o666 (NTFS has no POSIX mode), so the fs answer turned this
+    // structural rule into a platform report and the guard fired on Windows over a
+    // file that is 100755 in the index. See test/posix-host.cjs.
+    executable: committedExecBit('scripts/build-tjs-boot.sh'),
     yaml: fs.readFileSync(ACTION, 'utf8'),
     buildTjs: fs.readFileSync(path.join(REPO, 'scripts', 'build-tjs.cjs'), 'utf8'),
   }),
