@@ -458,6 +458,127 @@ shTest('a sha256 mismatch is REFUSED, naming the target and both digests', () =>
     + 'becomes a sticky bad engine');
 });
 
+// ---------------------------------------------------------------------------
+// A CACHE HIT IS BYTES FROM SOMEWHERE ELSE. Step 4 sha256-verifies what it fetched;
+// step 3 used to verify nothing at all. Same-host it had accept()'s functional probe —
+// real, but "it runs here", not "it is the binary the manifest names" — and CROSS-target
+// it had no check whatsoever, because the probe cannot run on another machine's binary.
+//
+// That gap grew teeth when .github/actions/build-leg/action.yml started caching
+// ~/.cache/clode/bootstrap through actions/cache: the bytes now leave the machine, get
+// tarred, uploaded, and restored into a DIFFERENT run. Truncation and a restored-wrong
+// entry are exactly the failure modes of that trip, and both of them survive a `-x` test.
+//
+// The in-repo idiom is scripts/build-tjs.cjs's provisionCosmocc(): it hashes the cached
+// zip whether or not this run downloaded it, and on a mismatch REMOVES it. The one
+// difference here is the verdict — cosmocc throws, but a corrupt bootstrap cache entry
+// must fall through to a fresh fetch instead, loudly. A leg whose cache tarball came
+// back short is recoverable in one HTTP range request; failing it turns a recoverable
+// condition into a red leg.
+// ---------------------------------------------------------------------------
+
+shTest('a CACHED slice whose bytes are not the manifest\'s is discarded and re-fetched', () => {
+  // RED (before): accept() passes — the stale engine really does run and really does
+  // print the token — so the resolver handed back bytes it had never hashed.
+  const d = mkdtemp();
+  const good = FAKE_ENGINE(OK_TOKEN);
+  const stale = `${FAKE_ENGINE(OK_TOKEN)}# a DIFFERENT build of the same engine\n`;
+  const { manifest: mf, base } = localPack(path.join(d, 'base'), { [hostTarget()]: good });
+  const cache = path.join(d, 'cache');
+  const cached = fakeExe(path.join(cache, 'bootstrap', 'vFIXTURE', hostTarget(), 'tjs'), stale);
+  const r = sh([], { CLODE_CACHE: cache, CLODE_RELEASE_BASE: base, CLODE_BOOTSTRAP_MANIFEST: mf });
+  assert.strictEqual(r.status, 0, `a corrupt cache entry is RECOVERABLE — re-fetch, do not fail the leg:\n${r.err}`);
+  assert.strictEqual(r.out, cached, 'it still resolves, at the same cache path');
+  assert.strictEqual(fs.readFileSync(cached, 'utf8'), good,
+    'the resolver returned the UNVERIFIED cached bytes instead of the ones the pinned '
+    + 'manifest describes — accept() proves an engine runs, never that it is this engine');
+  assert.match(r.err, /sha256/i, 'and the discard must be loud, or a silently re-fetching cache is a mystery');
+});
+
+shTest('a CROSS-target cached slice is verified too — the case with no check at all', () => {
+  // The floor probe CANNOT run on another machine's binary, so cryptographic identity is
+  // the ONLY check available here. This is the path the ubuntu runner takes when it pulls
+  // a NetBSD or Haiku guest's engine into the workspace, and a wrong one fails inside the
+  // VM, a long way from here.
+  const d = mkdtemp();
+  const foreign = 'haiku-amd64';
+  assert.notStrictEqual(foreign, hostTarget());
+  const good = '#!/bin/sh\necho haiku\n';
+  const { manifest: mf, base } = localPack(path.join(d, 'base'), { [foreign]: good });
+  const cache = path.join(d, 'cache');
+  const cached = fakeExe(path.join(cache, 'bootstrap', 'vFIXTURE', foreign, 'tjs'),
+    '#!/bin/sh\necho some other guest entirely\n');
+  const r = sh([], {
+    CLODE_CACHE: cache, CLODE_RELEASE_BASE: base,
+    CLODE_BOOTSTRAP_TARGET: foreign, CLODE_BOOTSTRAP_MANIFEST: mf,
+  });
+  assert.strictEqual(r.status, 0, r.err);
+  assert.strictEqual(r.out, cached);
+  assert.strictEqual(fs.readFileSync(cached, 'utf8'), good,
+    'a cross-target cache hit had NO check of any kind: not the floor probe (it cannot '
+    + 'run) and not the sha (nobody asked). The sha is the one check that works here.');
+});
+
+shTest('a TRUNCATED cache entry — the shape a cache tarball really fails in — is caught', () => {
+  const d = mkdtemp();
+  const good = FAKE_ENGINE(OK_TOKEN);
+  const { manifest: mf, base } = localPack(path.join(d, 'base'), { [hostTarget()]: good });
+  const cache = path.join(d, 'cache');
+  const cached = fakeExe(path.join(cache, 'bootstrap', 'vFIXTURE', hostTarget(), 'tjs'),
+    good.slice(0, Math.floor(good.length / 2)));
+  const r = sh([], { CLODE_CACHE: cache, CLODE_RELEASE_BASE: base, CLODE_BOOTSTRAP_MANIFEST: mf });
+  assert.strictEqual(r.status, 0, r.err);
+  assert.strictEqual(fs.readFileSync(cached, 'utf8'), good, 'the half-file must not survive the resolve');
+});
+
+shTest('a corrupt cache entry does not STICK when the re-fetch also fails', () => {
+  // The whole reason step 4 refuses to cache unverified bytes is that a bad engine in the
+  // cache is a sticky bad engine. A bad entry that is merely skipped, not removed, is
+  // sticky in exactly the same way — every later run pays for it again.
+  const d = mkdtemp();
+  const { manifest: mf, base } = localPack(path.join(d, 'base'), { [hostTarget()]: FAKE_ENGINE(OK_TOKEN) });
+  const cache = path.join(d, 'cache');
+  const cached = fakeExe(path.join(cache, 'bootstrap', 'vFIXTURE', hostTarget(), 'tjs'), '#!/bin/sh\nexit 0\n');
+  const r = sh([], {
+    CLODE_CACHE: cache, CLODE_BOOTSTRAP_MANIFEST: mf,
+    CLODE_RELEASE_BASE: path.join(d, 'no-such-base'),
+  });
+  assert.strictEqual(r.status, 1, `expected the fetch failure to be the verdict, got ${r.status}`);
+  assert.ok(!fs.existsSync(cached), 'the entry that failed its sha must be GONE, not left for the next run');
+  void base;
+});
+
+shTest('a GOOD cache entry still gets the floor probe — sha is added, accept() is not replaced', () => {
+  // Cryptographic identity and "it actually runs here" are different properties. An
+  // engine whose bytes ARE the manifest's can still be too old for HEAD's node-shim, and
+  // that is the finding scripts/engine-api-floor.cjs exists to make.
+  const d = mkdtemp();
+  const body = FAKE_ENGINE('MISSING-ENGINE-API: tjs.engine.moduleMeta (function)', 1);
+  const { manifest: mf, base } = localPack(path.join(d, 'base'), { [hostTarget()]: body });
+  const cache = path.join(d, 'cache');
+  fakeExe(path.join(cache, 'bootstrap', 'vFIXTURE', hostTarget(), 'tjs'), body);
+  const r = sh([], { CLODE_CACHE: cache, CLODE_RELEASE_BASE: base, CLODE_BOOTSTRAP_MANIFEST: mf });
+  assert.strictEqual(r.status, 1, `expected the floor probe to refuse the cache hit, got ${r.status}`);
+  assert.match(r.err, /moduleMeta/, 'a sha check that shadowed the floor probe would resolve this happily');
+});
+
+shTest('a GOOD cache entry resolves with no network at all', () => {
+  const d = mkdtemp();
+  const body = FAKE_ENGINE(OK_TOKEN);
+  const { manifest: mf } = localPack(path.join(d, 'base'), { [hostTarget()]: body });
+  const cache = path.join(d, 'cache');
+  const cached = fakeExe(path.join(cache, 'bootstrap', 'vFIXTURE', hostTarget(), 'tjs'), body);
+  const r = sh([], {
+    CLODE_CACHE: cache, CLODE_BOOTSTRAP_MANIFEST: mf,
+    // Unreachable on purpose: the manifest is COMMITTED, so the expected digest is a
+    // local read. Verifying a cache hit must not cost a round trip.
+    CLODE_RELEASE_BASE: path.join(d, 'no-such-base'),
+  });
+  assert.strictEqual(r.status, 0, `${r.err}`);
+  assert.strictEqual(r.out, cached);
+  assert.strictEqual(fs.readFileSync(cached, 'utf8'), body, 'a verified entry is kept as-is');
+});
+
 shTest('an engine that fails the floor probe is REFUSED, naming the remedies', () => {
   const d = mkdtemp();
   const body = FAKE_ENGINE('MISSING-ENGINE-API: tjs.engine.moduleMeta (function)', 1);
