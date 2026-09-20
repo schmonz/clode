@@ -17,6 +17,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const {
   SOURCE_SENTINEL, BUILD_SENTINEL,
   filePrefixMapOptedOut, prefixMapFlags, probeFilePrefixMap, filePrefixMapDecision,
@@ -362,8 +363,56 @@ test('a compiler driver that cannot be run at all is unavailable, not "rejected"
   }), 'unavailable');
 });
 
-test('THE REAL LINKER ON THIS HOST takes -oso_prefix', () => {
-  assert.strictEqual(probeOsoPrefix({ cc: process.env.CC || 'cc' }), 'oso-prefix');
+// WHICH LINKER IS ACTUALLY HERE -- read, not assumed from process.platform.
+//
+// `-oso_prefix` is an ld64 option. GNU ld rejecting it is the DOCUMENTED-CORRECT outcome;
+// describeOsoPrefixDecision says so in as many words ("On GNU ld that is correct and costs
+// nothing"). The test below used to assert 'oso-prefix' unconditionally, which encoded one
+// author's darwin host as a property of every host and was the ONLY failing test in both
+// the ubuntu and the windows suites of run 35530707866.
+//
+// NOT A PLATFORM BRANCH: the darwin cross legs run an osxcross ld64 on a LINUX host, so
+// `process.platform` would call that one GNU and expect exactly the wrong answer. Every
+// linker announces itself under -v -- Apple's prints `PROJECT:ld-<n>`, GNU binutils prints
+// `GNU ld`, lld prints `LLD` -- so ask it. The banner goes to stderr on ld64 and to stdout
+// on some GNU builds; read both.
+function hostLinkerKind(cc = process.env.CC || 'cc') {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oso-which-ld-'));
+  try {
+    const src = path.join(dir, 'v.c');
+    fs.writeFileSync(src, 'int main(void) { return 0; }\n');
+    const r = spawnSync(cc, ['-Wl,-v', src, '-o', path.join(dir, 'v.out')], { encoding: 'utf8' });
+    if (r.error && r.error.code === 'ENOENT') return 'unrunnable';
+    const banner = `${r.stdout || ''}${r.stderr || ''}`;
+    return /PROJECT:ld[-0-9]/.test(banner) ? 'ld64' : 'other';
+  } catch {
+    return 'unrunnable';
+  } finally {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+}
+
+test('THE REAL LINKER ON THIS HOST gives the answer that linker owes', () => {
+  const cc = process.env.CC || 'cc';
+  const kind = hostLinkerKind(cc);
+  const state = probeOsoPrefix({ cc });
+  const expected = { ld64: 'oso-prefix', other: 'unsupported', unrunnable: 'unavailable' }[kind];
+  assert.strictEqual(state, expected,
+    `this host's linker identifies as '${kind}', so the probe owes '${expected}'`);
+
+  // AND THE HALF THE OLD TEST NEVER ASSERTED: whichever way it went, an answer that is not
+  // 'oso-prefix' must add ZERO flags. That is the property the feature actually owes -- the
+  // probe answers, and a refusal changes nothing -- and it is the one a host with GNU ld
+  // can prove, which is most of them.
+  const before = ['-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_EXE_LINKER_FLAGS=-static'];
+  const d = osoPrefixDecision({ cc, prefix: os.tmpdir(), env: {}, probeFn: () => state });
+  const after = applyOsoPrefixDecision([...before], d);
+  if (state === 'oso-prefix') {
+    assert.match(after[1], /-static .*-oso_prefix/, 'the static leg\'s flag must survive');
+  } else {
+    assert.deepStrictEqual(after, before,
+      'a linker this lever cannot help must link exactly the command line it linked before');
+  }
 });
 
 test('the prefix is RESOLVED, or it strips nothing while looking like it worked', () => {
