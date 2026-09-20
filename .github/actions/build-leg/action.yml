@@ -603,11 +603,18 @@ runs:
     # below exports the SAME path inside the container (a bind-mounted path is
     # identical on both sides, byte for byte, by construction). Same tag+target
     # key as the host cache above — it is the same pinned slice either way.
+    #
+    # The `bootstrap/` segment in the middle is the RESOLVER's, not the cache root's:
+    # CLODE_CACHE is the root and scripts/bootstrap-engine.sh writes
+    # $CLODE_CACHE/bootstrap/<tag>/<target>/tjs under it. Shipped for one wave without
+    # it, which named a directory that never exists — actions/cache warns and stores
+    # nothing, and the log reads exactly like a working cache while every run re-fetched
+    # the slice. Pinned now by a rule in test/build-tjs-boot.test.cjs.
     - name: Restore the bootstrap engine slice (alpine guest, workspace-mounted)
       if: steps.tjs-cache.outputs.cache-hit != 'true' && inputs.guest-platform == 'alpine'
       uses: actions/cache@v6.1.0
       with:
-        path: ${{ github.workspace }}/.matrix/bootstrap-cache/${{ steps.bootstrap-tag.outputs.tag }}/${{ steps.name.outputs.target }}
+        path: ${{ github.workspace }}/.matrix/bootstrap-cache/bootstrap/${{ steps.bootstrap-tag.outputs.tag }}/${{ steps.name.outputs.target }}
         key: bootstrap-${{ steps.bootstrap-tag.outputs.tag }}-${{ steps.name.outputs.target }}
 
     - name: Build tjs (alpine guest)
