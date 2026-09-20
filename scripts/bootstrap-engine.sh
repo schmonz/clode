@@ -106,6 +106,10 @@ manifest_slice() {  # $1 = target -> "<offset> <length> <sha256>", or nothing
 # from the leg descriptor, which is the real source of truth for a leg.
 canon_target() {
   if [ -n "${CLODE_BOOTSTRAP_TARGET:-}" ]; then printf '%s\n' "$CLODE_BOOTSTRAP_TARGET"; return 0; fi
+  host_target
+}
+
+host_target() {
   ct_os=$(uname -s 2>/dev/null | tr 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' 'abcdefghijklmnopqrstuvwxyz')
   case "$ct_os" in
     darwin) ct_os=macos ;;
@@ -251,7 +255,17 @@ $(cat "$TMP/gen.err" 2>/dev/null || :)
 
 emit() {  # how path
   if [ "$MODE" = '--plan' ]; then printf '%s %s\n' "$1" "$2"; exit 0; fi
-  accept "$2"
+  if [ "$TARGET" = "$HOST" ]; then
+    accept "$2"
+  else
+    # A CROSS fetch (design call site #7: the runner pulls a guest's slice into the
+    # workspace and the guest runs it). The floor probe CANNOT run here — these bytes are
+    # for another machine — so say that rather than skipping a check in silence. The
+    # probe is not lost: the machine that runs this engine resolves through this same
+    # script, where its target IS its host and the probe fires.
+    note "bootstrap: NOT running the engine API floor probe — this slice is $TARGET and this host is $HOST."
+    note "bootstrap: acceptance is DEFERRED to the $TARGET machine, which must resolve through this same script; the probe runs there."
+  fi
   printf '%s\n' "$2"
   exit 0
 }
@@ -265,6 +279,7 @@ case "$MODE" in
 esac
 
 TARGET=$(canon_target)
+HOST=$(host_target)
 if [ "$MODE" = '--print-target' ]; then printf '%s\n' "$TARGET"; exit 0; fi
 CACHE=$(cache_root)
 if [ "$MODE" = '--print-cache' ]; then printf '%s\n' "$CACHE"; exit 0; fi
@@ -284,19 +299,27 @@ fi
 EXE=
 case "$TARGET" in windows-*) EXE='.exe' ;; esac
 
-# 1. an engine the operator or CI named outright.
-if [ -n "${CLODE_TJS:-}" ]; then
-  if [ ! -x "$CLODE_TJS" ]; then
-    die "bootstrap: CLODE_TJS is set to '$CLODE_TJS', which is not an executable file.
+# Steps 1 and 2 name a HOST-NATIVE binary, so they answer only for the HOST's own
+# target. The design's call site #7 is why that distinction has to be made out loud: the
+# ubuntu runner fetches a NetBSD or Haiku GUEST's slice into the workspace for the guest
+# to use, and handing that fetch the runner's own x86-64 ELF would rsync a binary into a
+# guest that cannot run it — a failure that lands inside the VM, a long way from here.
+if [ "$TARGET" = "$HOST" ]; then
+  # 1. an engine the operator or CI named outright.
+  if [ -n "${CLODE_TJS:-}" ]; then
+    if [ ! -x "$CLODE_TJS" ]; then
+      die "bootstrap: CLODE_TJS is set to '$CLODE_TJS', which is not an executable file.
   Refusing rather than quietly resolving something else: an engine selection that is
   silently ignored is how a build ends up testing a binary nobody chose."
+    fi
+    emit env "$CLODE_TJS"
   fi
-  emit env "$CLODE_TJS"
+  # 2. an engine this checkout already built.
+  LOCAL=$(local_engine)
+  if [ -n "$LOCAL" ]; then emit local "$LOCAL"; fi
+elif [ -n "${CLODE_TJS:-}" ] || [ -n "${CLODE_TJS_OUT:-}" ]; then
+  note "bootstrap: target $TARGET is not this host ($HOST), so CLODE_TJS/CLODE_TJS_OUT are not candidates — they name a $HOST binary."
 fi
-
-# 2. an engine this checkout already built.
-LOCAL=$(local_engine)
-if [ -n "$LOCAL" ]; then emit local "$LOCAL"; fi
 
 # 3. a slice this host already fetched and verified.
 CACHED="$CACHE/bootstrap/$TAG/$TARGET/tjs$EXE"

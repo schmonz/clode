@@ -217,6 +217,28 @@ test('the host target is the ONE canonical vocabulary, not a private uname table
   assert.strictEqual(sh(['--print-target'], { CLODE_BOOTSTRAP_TARGET: 'haiku-amd64' }).out, 'haiku-amd64');
 });
 
+test('a FOREIGN target never resolves to this host\'s own engine', () => {
+  // Found by running the thing: `--plan` for linux-amd64 on this Mac answered with the
+  // Mac's own scratch engine. Steps 1 and 2 both name a HOST-NATIVE binary, and the
+  // design's call site #7 is exactly the case that breaks on -- the ubuntu runner fetches
+  // a NetBSD or Haiku guest's slice INTO the workspace for the guest to use. Handing that
+  // fetch the runner's own x86-64 ELF would rsync a binary into a guest that cannot run
+  // it, and the failure would land inside the VM, far from here.
+  const d = mkdtemp();
+  const hostish = fakeExe(path.join(d, 'host-tjs'));
+  const foreign = 'haiku-amd64';
+  assert.notStrictEqual(foreign, hostTarget(), 'fixture invalid: pick a target this box is not');
+  const r = sh(['--plan'], {
+    CLODE_TJS: hostish, CLODE_TJS_OUT: hostish, CLODE_CACHE: d, CLODE_BOOTSTRAP_TARGET: foreign,
+  });
+  assert.strictEqual(r.status, 0, r.err);
+  assert.strictEqual(r.out, `fetch ${foreign} ${manifest().bootstrapTag}`,
+    'an engine for THIS host is not an engine for the target that was asked for');
+  assert.match(r.err, /haiku-amd64/,
+    'and it must say out loud that it is ignoring the host engines, naming the target — a '
+    + 'silently ignored CLODE_TJS is how a build ends up testing a binary nobody chose');
+});
+
 // ---------------------------------------------------------------------------
 // The base case, DERIVED.
 // ---------------------------------------------------------------------------
@@ -314,42 +336,67 @@ exit 0
 test('a fetched slice is gunzipped, sha-verified, cached and accepted', () => {
   const d = mkdtemp();
   const body = FAKE_ENGINE(OK_TOKEN);
-  const { manifest: mf, base } = localPack(path.join(d, 'base'), { 'fake-target': body });
+  const { manifest: mf, base } = localPack(path.join(d, 'base'), { [hostTarget()]: body });
   const cache = path.join(d, 'cache');
   const r = sh([], {
     CLODE_CACHE: cache,
     CLODE_RELEASE_BASE: base,
-    CLODE_BOOTSTRAP_TARGET: 'fake-target',
     CLODE_BOOTSTRAP_MANIFEST: mf,
   });
   assert.strictEqual(r.status, 0, `${r.err}\n${r.out}`);
-  const cached = path.join(cache, 'bootstrap', 'vFIXTURE', 'fake-target', 'tjs');
+  const cached = path.join(cache, 'bootstrap', 'vFIXTURE', hostTarget(), 'tjs');
   assert.strictEqual(r.out, cached, 'the resolver prints the cached path and nothing else');
   assert.ok(fs.existsSync(cached), 'the verified slice must be cached for the next run');
   assert.ok((fs.statSync(cached).mode & 0o111) !== 0, 'and chmod +x, or the next step exits 126');
   assert.strictEqual(fs.readFileSync(cached, 'utf8'), body, 'the cached bytes are the inflated engine');
 });
 
+test("a FOREIGN target's slice is fetched and verified, but acceptance is DEFERRED, loudly", () => {
+  // The design's call site #7: the ubuntu runner fetches a guest's slice into the
+  // workspace and the guest runs it. The floor probe cannot run here — these bytes are
+  // for another machine — so it must not silently not-run either. It says so, and the
+  // machine that will run the engine resolves through this same script, where the probe
+  // DOES fire because the target is its own.
+  const d = mkdtemp();
+  const foreign = 'haiku-amd64';
+  assert.notStrictEqual(foreign, hostTarget());
+  const marker = path.join(d, 'it-ran');
+  const body = `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nexit 0\n`;
+  const { manifest: mf, base } = localPack(path.join(d, 'base'), { [foreign]: body });
+  const cache = path.join(d, 'cache');
+  const r = sh([], {
+    CLODE_CACHE: cache, CLODE_RELEASE_BASE: base,
+    CLODE_BOOTSTRAP_TARGET: foreign, CLODE_BOOTSTRAP_MANIFEST: mf,
+  });
+  assert.strictEqual(r.status, 0, `${r.err}\n${r.out}`);
+  assert.strictEqual(r.out, path.join(cache, 'bootstrap', 'vFIXTURE', foreign, 'tjs'));
+  assert.ok(!fs.existsSync(marker),
+    'the resolver EXECUTED a binary built for another machine — on a real cross fetch that '
+    + 'is an exec format error at best and the wrong architecture running at worst');
+  assert.match(r.err, /floor/i);
+  assert.ok(r.err.includes(foreign) && r.err.includes(hostTarget()),
+    'the deferral must name both machines, or a reader cannot tell which one owes the check');
+});
+
 test('a sha256 mismatch is REFUSED, naming the target and both digests', () => {
   const d = mkdtemp();
-  const { manifest: mf, base } = localPack(path.join(d, 'base'), { 'fake-target': FAKE_ENGINE(OK_TOKEN) });
+  const { manifest: mf, base } = localPack(path.join(d, 'base'), { [hostTarget()]: FAKE_ENGINE(OK_TOKEN) });
   // Corrupt the manifest's expectation, which is the same failure as corrupt bytes.
   const m = JSON.parse(fs.readFileSync(mf, 'utf8'));
   const bad = 'f'.repeat(64);
-  m.targets['fake-target'].sha256 = bad;
+  m.targets[hostTarget()].sha256 = bad;
   fs.writeFileSync(mf, JSON.stringify(m, null, 2));
   const cache = path.join(d, 'cache');
   const r = sh([], {
     CLODE_CACHE: cache,
     CLODE_RELEASE_BASE: base,
-    CLODE_BOOTSTRAP_TARGET: 'fake-target',
     CLODE_BOOTSTRAP_MANIFEST: mf,
   });
   assert.strictEqual(r.status, 1, `expected a refusal, got ${r.status}`);
   assert.match(r.err, /sha256/i);
   assert.ok(r.err.includes(bad), 'the refusal must print the digest it EXPECTED');
   assert.match(r.err, /[0-9a-f]{64}/, 'and the one it GOT');
-  assert.ok(!fs.existsSync(path.join(cache, 'bootstrap', 'vFIXTURE', 'fake-target', 'tjs')),
+  assert.ok(!fs.existsSync(path.join(cache, 'bootstrap', 'vFIXTURE', hostTarget(), 'tjs')),
     'bytes that failed verification must never reach the cache — that is how a bad engine '
     + 'becomes a sticky bad engine');
 });
@@ -357,11 +404,10 @@ test('a sha256 mismatch is REFUSED, naming the target and both digests', () => {
 test('an engine that fails the floor probe is REFUSED, naming the remedies', () => {
   const d = mkdtemp();
   const body = FAKE_ENGINE('MISSING-ENGINE-API: tjs.engine.moduleMeta (function)', 1);
-  const { manifest: mf, base } = localPack(path.join(d, 'base'), { 'fake-target': body });
+  const { manifest: mf, base } = localPack(path.join(d, 'base'), { [hostTarget()]: body });
   const r = sh([], {
     CLODE_CACHE: path.join(d, 'cache'),
     CLODE_RELEASE_BASE: base,
-    CLODE_BOOTSTRAP_TARGET: 'fake-target',
     CLODE_BOOTSTRAP_MANIFEST: mf,
   });
   assert.strictEqual(r.status, 1, `expected a refusal, got ${r.status}: ${r.out}`);
@@ -373,11 +419,10 @@ test('an engine that fails the floor probe is REFUSED, naming the remedies', () 
 test('the sha256 tool is KAT-tested, so a lying hasher is refused rather than trusted', () => {
   const d = mkdtemp();
   const liar = fakeExe(path.join(d, 'liar'), `#!/bin/sh\necho ${'0'.repeat(64)}  "$1"\n`);
-  const { manifest: mf, base } = localPack(path.join(d, 'base'), { 'fake-target': FAKE_ENGINE(OK_TOKEN) });
+  const { manifest: mf, base } = localPack(path.join(d, 'base'), { [hostTarget()]: FAKE_ENGINE(OK_TOKEN) });
   const r = sh([], {
     CLODE_CACHE: path.join(d, 'cache'),
     CLODE_RELEASE_BASE: base,
-    CLODE_BOOTSTRAP_TARGET: 'fake-target',
     CLODE_BOOTSTRAP_MANIFEST: mf,
     CLODE_SHA256: liar,
   });
