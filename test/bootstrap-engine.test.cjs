@@ -163,12 +163,44 @@ test('1b. CLODE_TJS that is not executable is REFUSED, not silently skipped', ()
     'the refusal must name the path that was set, or the operator cannot see their typo');
 });
 
-test('2. a locally built engine (CLODE_TJS_OUT) comes next', () => {
+// CLODE_TJS_OUT IS A DIRECTORY. scripts/build-tjs.cjs:203 names it `outDir`, creates it
+// (`fs.mkdirSync(outDir, { recursive: true })`) and copies the finished engine INTO it as
+// `tjs` / `tjs.exe`; three CI call sites in .github/actions/build-leg/action.yml set it to
+// a directory another step has already made. The first cut of this file asserted the
+// FILE reading — `fakeExe(.../out-tjs)` — and so did the resolver, which is wrong in the
+// one way sh hides: `[ -x <a directory> ]` is TRUE, so the resolver handed the DIRECTORY
+// back as "the engine". These three cases pin the directory contract from both ends.
+test('2. a locally built engine is the tjs INSIDE CLODE_TJS_OUT, which is a directory', () => {
   const d = mkdtemp();
-  const want = fakeExe(path.join(d, 'out-tjs'));
-  const r = sh(['--plan'], { CLODE_TJS_OUT: want, CLODE_CACHE: d });
+  const out = path.join(d, 'tjs-out');
+  const want = fakeExe(path.join(out, process.platform === 'win32' ? 'tjs.exe' : 'tjs'));
+  const r = sh(['--plan'], { CLODE_TJS_OUT: out, CLODE_CACHE: d });
   assert.strictEqual(r.status, 0, r.err);
   assert.strictEqual(r.out, `local ${want}`);
+});
+
+test('2b. an EMPTY CLODE_TJS_OUT directory is not an engine', () => {
+  // The state EVERY flipped call site is in on a tjs-cache miss: the output directory
+  // exists (actions/cache's `path:`, or an earlier step's mkdir) and the engine it will
+  // hold does not exist yet. Resolving that to the directory itself would hand a leg a
+  // path it can only fail to exec, halfway through a build, for no stated reason.
+  const d = mkdtemp();
+  const out = path.join(d, 'tjs-out');
+  fs.mkdirSync(out, { recursive: true });
+  const r = sh(['--plan'], { CLODE_TJS_OUT: out, CLODE_CACHE: path.join(d, 'cache') });
+  assert.strictEqual(r.status, 0, r.err);
+  assert.strictEqual(r.out, `fetch ${hostTarget()} ${manifest().bootstrapTag}`,
+    'an empty output directory must fall through to the pack, not resolve to itself');
+});
+
+test('2c. CLODE_TJS pointing at a directory is REFUSED, not resolved', () => {
+  const d = mkdtemp();
+  const dir = path.join(d, 'a-directory');
+  fs.mkdirSync(dir, { recursive: true });
+  const r = sh(['--plan'], { CLODE_TJS: dir, CLODE_CACHE: d });
+  assert.strictEqual(r.status, 1, `expected a refusal, got ${r.status}: ${r.out}`);
+  assert.match(r.err, /executable file/,
+    'the refusal already says "not an executable file" — the check has to mean it');
 });
 
 test('3. the bootstrap cache comes next, at the path clode-paths.cjs owns', () => {
@@ -229,7 +261,8 @@ test('a FOREIGN target never resolves to this host\'s own engine', () => {
   const foreign = 'haiku-amd64';
   assert.notStrictEqual(foreign, hostTarget(), 'fixture invalid: pick a target this box is not');
   const r = sh(['--plan'], {
-    CLODE_TJS: hostish, CLODE_TJS_OUT: hostish, CLODE_CACHE: d, CLODE_BOOTSTRAP_TARGET: foreign,
+    CLODE_TJS: hostish, CLODE_TJS_OUT: path.dirname(fakeExe(path.join(d, 'out', 'tjs'))),
+    CLODE_CACHE: d, CLODE_BOOTSTRAP_TARGET: foreign,
   });
   assert.strictEqual(r.status, 0, r.err);
   assert.strictEqual(r.out, `fetch ${foreign} ${manifest().bootstrapTag}`,
@@ -443,8 +476,9 @@ test('it behaves identically under dash', (t) => {
   catch { dash = ''; }
   if (!dash) return t.skip('no dash on this box (the POSIX floor is still asserted by the syntax check above)');
   const d = mkdtemp();
-  const want = fakeExe(path.join(d, 'out-tjs'));
-  const r = sh(['--plan'], { CLODE_TJS_OUT: want, CLODE_CACHE: d }, dash);
+  const out = path.join(d, 'tjs-out');
+  const want = fakeExe(path.join(out, process.platform === 'win32' ? 'tjs.exe' : 'tjs'));
+  const r = sh(['--plan'], { CLODE_TJS_OUT: out, CLODE_CACHE: d }, dash);
   assert.strictEqual(r.status, 0, r.err);
   assert.strictEqual(r.out, `local ${want}`);
   const f = sh(['--plan'], { CLODE_CACHE: d, CLODE_BOOTSTRAP_TARGET: 'linux-brandnewarch' }, dash);

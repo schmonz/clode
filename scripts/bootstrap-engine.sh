@@ -139,19 +139,33 @@ cache_root() {
   printf '%s/.cache/clode\n' "${HOME:-}"
 }
 
+# --- what counts as an engine ------------------------------------------------
+# A REGULAR file that is executable. The `-f` is the whole point: `[ -x <a directory> ]`
+# is TRUE in every sh, and every candidate below can legitimately name a directory.
+is_engine_file() { [ -f "$1" ] && [ -x "$1" ]; }
+
 # --- step 2: an engine this checkout already built --------------------------
-# CLODE_TJS_OUT is the explicit output path every CI cross-build already sets. The
-# scratch path is NOT recomputed here: scripts/platform-tag.cjs owns it (its linux token
-# comes from the glibc the running node was COMPILED against, which sh cannot know), so
-# we ASK it when a node happens to be present and skip the step entirely when one is
+# CLODE_TJS_OUT is the explicit output DIRECTORY every CI cross-build already sets --
+# scripts/build-tjs.cjs:203 calls it `outDir`, creates it, and copies the finished engine
+# into it as tjs / tjs.exe. It is NOT a path to the binary, and reading it as one was a
+# real bug: `[ -x $CLODE_TJS_OUT ]` is true for the directory, so on a tjs-cache MISS --
+# exactly when a leg needs this -- the resolver used to hand back the empty output
+# directory as "the engine", and the leg would have died exec'ing it a long way from here.
+# The scratch path is NOT recomputed here: scripts/platform-tag.cjs owns it (its linux
+# token comes from the glibc the running node was COMPILED against, which sh cannot know),
+# so we ASK it when a node happens to be present and skip the step entirely when one is
 # not. A node-free host simply has no locally built engine to find, which is the truth.
 local_engine() {
-  if [ -n "${CLODE_TJS_OUT:-}" ] && [ -x "${CLODE_TJS_OUT}" ]; then printf '%s\n' "$CLODE_TJS_OUT"; return 0; fi
+  if [ -n "${CLODE_TJS_OUT:-}" ]; then
+    for le_name in tjs tjs.exe; do
+      if is_engine_file "$CLODE_TJS_OUT/$le_name"; then printf '%s\n' "$CLODE_TJS_OUT/$le_name"; return 0; fi
+    done
+  fi
   le_node=${CLODE_NODE:-}
   if [ -z "$le_node" ]; then le_node=$(command -v node 2>/dev/null || :); fi
   if [ -n "$le_node" ] && [ -x "$le_node" ]; then
     le_path=$("$le_node" -p "require('$REPO/scripts/platform-tag.cjs').tjsBin('$REPO')" 2>/dev/null || :)
-    if [ -n "$le_path" ] && [ -x "$le_path" ]; then printf '%s\n' "$le_path"; return 0; fi
+    if [ -n "$le_path" ] && is_engine_file "$le_path"; then printf '%s\n' "$le_path"; return 0; fi
   fi
   return 0
 }
@@ -307,7 +321,7 @@ case "$TARGET" in windows-*) EXE='.exe' ;; esac
 if [ "$TARGET" = "$HOST" ]; then
   # 1. an engine the operator or CI named outright.
   if [ -n "${CLODE_TJS:-}" ]; then
-    if [ ! -x "$CLODE_TJS" ]; then
+    if ! is_engine_file "$CLODE_TJS"; then
       die "bootstrap: CLODE_TJS is set to '$CLODE_TJS', which is not an executable file.
   Refusing rather than quietly resolving something else: an engine selection that is
   silently ignored is how a build ends up testing a binary nobody chose."
@@ -323,7 +337,7 @@ fi
 
 # 3. a slice this host already fetched and verified.
 CACHED="$CACHE/bootstrap/$TAG/$TARGET/tjs$EXE"
-if [ -x "$CACHED" ]; then emit cache "$CACHED"; fi
+if is_engine_file "$CACHED"; then emit cache "$CACHED"; fi
 
 # 4. the pinned pack.
 SLICE=$(manifest_slice "$TARGET")
