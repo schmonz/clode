@@ -311,7 +311,7 @@ const IDIOM = /^scripts\/build-tjs-boot\.sh [a-z0-9][a-z0-9-]* --[a-z-]+only$/;
 
 const GUARD = defineGuard({
   name: 'build-tjs-invocation-shape',
-  floor: 10,
+  floor: 11,
   read: () => ({
     sh: fs.readFileSync(BOOT, 'utf8'),
     // The SHIPPED bit, from git's index — not the checkout's. On win32 every file's
@@ -365,6 +365,23 @@ const GUARD = defineGuard({
       + `(<cache root>/bootstrap/<tag>/<target>): ${wrong.join(' / ')}. A cache keyed on `
       + 'bytes that are never stored there is a cache that cannot hit.');
 
+    // AND WHICH TARGET, for the one case a rule can settle. An entry whose cache root is
+    // the resolver's own default (~/.cache/clode) is a cache the RUNNER fills by running
+    // the resolver with no target override — which always resolves the runner's own
+    // target, never the leg's. Both host-side entries shipped keyed on the LEG's
+    // (netbsd-sparc, netbsd-m68k) and so named directories that never exist, the same
+    // way the alpine entry did. The workspace-mounted entries are left to the rule above:
+    // there the target legitimately differs per consumer (the leg's own for alpine and
+    // the VM guests, the runner's for the cross containers).
+    const hostRooted = slicePaths.filter((l) => l.includes('~/.cache/clode/'));
+    const misTargeted = hostRooted.filter((l) =>
+      !l.endsWith('${{ steps.bootstrap-tag.outputs.host-target }}'));
+    rule(misTargeted.length === 0,
+      `these host-side bootstrap caches are keyed on the LEG's target, not the RUNNER's: `
+      + `${misTargeted.join(' / ')}. The resolver runs here with no target override, so `
+      + 'it resolves this runner — a netbsd-sparc directory under ~/.cache/clode is never '
+      + 'written and the key never hits.');
+
     const raw = rawNodeSites(i.yaml);
     const booted = bootSiteSteps(i.yaml);
     const unexplained = raw.filter((s) => !(s in NOT_YET_FLIPPED) && !(s in SPLIT_BY_PLATFORM));
@@ -407,7 +424,8 @@ const GUARD = defineGuard({
     yaml: '    - name: A brand new step\n      run: node scripts/build-tjs.cjs --build-only\n'
       + '    - name: Sloppy\n      run: bash scripts/build-tjs-boot.sh --build-only\n'
       + '        packages: build-base cmake nodejs\n'
-      + '        path: ${{ github.workspace }}/.matrix/bootstrap-cache/${{ steps.bootstrap-tag.outputs.tag }}/${{ steps.name.outputs.target }}\n',
+      + '        path: ${{ github.workspace }}/.matrix/bootstrap-cache/${{ steps.bootstrap-tag.outputs.tag }}/${{ steps.name.outputs.target }}\n'
+      + '        path: ~/.cache/clode/bootstrap/${{ steps.bootstrap-tag.outputs.tag }}/${{ steps.name.outputs.target }}\n',
     buildTjs: "spawnSync('scripts/build-tjs-boot.sh');\n",
   }),
 });

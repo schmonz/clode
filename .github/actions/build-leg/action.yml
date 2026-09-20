@@ -321,7 +321,7 @@ runs:
     # cannot disagree about what this machine is called.
     - name: Bootstrap pack tag (identity of the cached engine slice)
       id: bootstrap-tag
-      if: steps.tjs-cache.outputs.cache-hit != 'true' && (startsWith(inputs.guest-platform, 'qemu-') || inputs.netbsd-src != '' || inputs.guest-platform == 'alpine' || inputs.cross-image != '' || inputs.cross-dockerfile != '' || steps.mode.outputs.exec == 'guest')
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && (startsWith(inputs.guest-platform, 'qemu-') || inputs.netbsd-src != '' || inputs.guest-platform == 'alpine' || inputs.cross-image != '' || inputs.cross-dockerfile != '' || steps.mode.outputs.exec == 'guest' || (inputs.guest-platform == 'native' && runner.os != 'Windows'))
       shell: bash
       run: |
         echo "tag=$(node -p "require('./scripts/bootstrap-engine.manifest.json').bootstrapTag")" >> "$GITHUB_OUTPUT"
@@ -369,9 +369,10 @@ runs:
         path: ${{ steps.mode.outputs.out }}
         key: tjs-${{ inputs.leg }}-${{ steps.axes.outputs.image }}-${{ inputs.guest-version }}-${{ inputs.macos-min }}-${{ inputs.macos-sdk }}-${{ inputs.cross-image }}-${{ inputs.cross-dockerfile }}-${{ steps.recipe.outputs.hash }}
 
-    # Restore the bootstrap-engine slice for the two HOST-side call sites
-    # (qemu-regen and netbsd-cross both run scripts/build-tjs-boot.sh directly on
-    # this ubuntu runner's own filesystem — see those steps below). This is the
+    # Restore the bootstrap-engine slice for the HOST-side call sites (qemu-regen,
+    # netbsd-cross and — since the POSIX half of `Build tjs (native)` flipped — every
+    # non-Windows native leg all run scripts/build-tjs-boot.sh directly on the runner's
+    # own filesystem; see those steps below). This is the
     # SAME path scripts/bootstrap-engine.sh already resolves to on a cache miss
     # (cache_root()'s default: no CLODE_CACHE/CLODE_STATE_ROOT/XDG_CACHE_HOME is
     # set anywhere on these legs, so it falls through to $HOME/.cache/clode — the
@@ -384,12 +385,19 @@ runs:
     # both linux-amd64 today) — actions/cache keys are immutable and a losing
     # save is a harmless no-op, the same reasoning that already lets every
     # macos-sdk leg below share one sdk-cache key without a save/restore split.
-    - name: Restore the bootstrap engine slice (host legs — qemu-regen, netbsd-cross)
-      if: steps.tjs-cache.outputs.cache-hit != 'true' && (startsWith(inputs.guest-platform, 'qemu-') || inputs.netbsd-src != '')
+    #
+    # KEYED ON THE RUNNER'S TARGET, NOT THE LEG'S. This shipped keyed on
+    # steps.name.outputs.target, which is netbsd-sparc for the qemu legs and netbsd-m68k
+    # for the cross one — and the resolver runs HERE, on the ubuntu runner, with no target
+    # override, so what it writes is linux-amd64. The entry named a directory that never
+    # existed: actions/cache warned, stored nothing, and the key never hit. Same defect as
+    # the alpine entry, and pinned now by the same test.
+    - name: Restore the bootstrap engine slice (host legs — native, qemu-regen, netbsd-cross)
+      if: steps.tjs-cache.outputs.cache-hit != 'true' && runner.os != 'Windows' && (startsWith(inputs.guest-platform, 'qemu-') || inputs.netbsd-src != '' || (inputs.guest-platform == 'native' && inputs.cross-image == '' && inputs.cross-dockerfile == ''))
       uses: actions/cache@v6.1.0
       with:
-        path: ~/.cache/clode/bootstrap/${{ steps.bootstrap-tag.outputs.tag }}/${{ steps.name.outputs.target }}
-        key: bootstrap-${{ steps.bootstrap-tag.outputs.tag }}-${{ steps.name.outputs.target }}
+        path: ~/.cache/clode/bootstrap/${{ steps.bootstrap-tag.outputs.tag }}/${{ steps.bootstrap-tag.outputs.host-target }}
+        key: bootstrap-${{ steps.bootstrap-tag.outputs.tag }}-${{ steps.bootstrap-tag.outputs.host-target }}
 
     # ---- the ccache, restored -------------------------------------------------------
     #
