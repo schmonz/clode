@@ -264,6 +264,279 @@ test('arCacheMismatchWarning is silent on agreement and loud on disagreement', (
   assert.match(warn, /\bar\b/);
 });
 
+// ---- the control's own instrument: reading an archive's member headers ------------------
+//
+// The control further down asserts that STOCK cmake archive rules produce DIFFERENT archives two
+// seconds apart -- a negative control, proving this host can exhibit the defect so that the green
+// half is not vacuous. On a Debian-family host that premise is simply FALSE and always will be:
+// their binutils is configured --enable-deterministic-archives, so `ar qc` + `ranlib` already
+// zeroes every member-header timestamp. The header of scripts/ar-determinism.cjs has recorded
+// that fact since the module was written; the control was never taught it, so the suite was
+// permanently red on ubuntu with nothing actually wrong.
+//
+// Relaxing the control to a skip would reopen exactly the hole it exists to close. Instead it
+// gets a THIRD outcome that is PROVED from bytes: an archiver is "deterministic by construction"
+// when the stock rules and the fixed rules emit IDENTICAL bytes AND every member header carries
+// timestamp 0. Two independent pieces of evidence, because either alone has an innocent reading --
+// identical bytes alone could be a clock that failed to tick, and zero timestamps alone could be
+// the fixed rules doing their job while the stock ones did not. Anything else, including "the two
+// control runs matched but the timestamps are non-zero", is UNEXPLAINED and still fails.
+//
+// THE MEMBER HEADER is 60 bytes of fixed-width ASCII, the same in the GNU and BSD variants:
+//
+//     name[16] mtime[12] uid[6] gid[6] mode[8] size[10] "`\n"
+//
+// followed by `size` bytes of data padded to an even offset. Parsed here rather than shelled out
+// to `ar tv`, because `ar tv` renders the stamp as a LOCALISED human date through a second
+// program whose output format is not a contract -- on this darwin host the zero epoch prints as
+// "Dec 31 19:00 1969", so a /1970/ regex would be reading the reader's timezone, not the archive.
+// The bytes are the fact; the listing is a rendering of it.
+//
+// WHY THIS IS IN THE TEST and not in scripts/ar-determinism.cjs, where every other pure decision
+// in this feature lives: nothing in `clode build` calls it. It exists so the control can prove
+// its own premise, which makes it test apparatus. The first cut DID put it in the module, and
+// test/guards-population.test.cjs's production ratchet fired -- a production file that derives a
+// verdict from bytes AND throws is gate-shaped, so the module became the 30th un-controlled build
+// gate against a baseline of 29. The ratchet was right: this is not a build gate, and the honest
+// answer is to keep it out of production code rather than to record an exclusion claiming a gate
+// is not a gate.
+const AR_MAGIC = '!<arch>\n';
+const AR_HEADER_BYTES = 60;
+
+// Every member's { name, mtime }, in file order. THROWS rather than returning a short or empty
+// list on anything it cannot read: a caller asking "are all the timestamps 0?" would read an
+// empty array as VACUOUSLY yes, which is the same class of false green this whole file exists to
+// close.
+function arMemberTimestamps(bytes) {
+  const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes || '');
+  const magic = buf.subarray(0, AR_MAGIC.length).toString('binary');
+  if (magic !== AR_MAGIC) {
+    throw new Error(`not an ar archive: it starts ${JSON.stringify(magic)}, not ${JSON.stringify(AR_MAGIC)}`);
+  }
+  const members = [];
+  let off = AR_MAGIC.length;
+  while (off < buf.length) {
+    if (buf.length - off < AR_HEADER_BYTES) {
+      throw new Error(`truncated ar member header at byte ${off}: ${buf.length - off} bytes left, `
+        + `a header is ${AR_HEADER_BYTES}`);
+    }
+    const head = buf.subarray(off, off + AR_HEADER_BYTES).toString('binary');
+    if (head.slice(58, 60) !== '`\n') {
+      throw new Error(`ar member header at byte ${off} does not end in the \`\\n sentinel `
+        + `(got ${JSON.stringify(head.slice(58, 60))}), so this is not a header and the walk `
+        + 'cannot be trusted to have found every member');
+    }
+    const stamp = head.slice(16, 28).trim();
+    if (!/^\d+$/.test(stamp)) {
+      throw new Error(`ar member header at byte ${off} has an unreadable timestamp field `
+        + `${JSON.stringify(head.slice(16, 28))}`);
+    }
+    const size = head.slice(48, 58).trim();
+    if (!/^\d+$/.test(size)) {
+      throw new Error(`ar member header at byte ${off} has an unreadable size field `
+        + `${JSON.stringify(head.slice(48, 58))}, so the next member cannot be located`);
+    }
+    members.push({ name: head.slice(0, 16).trim(), mtime: Number(stamp) });
+    off += AR_HEADER_BYTES + Number(size) + (Number(size) % 2); // members start on even offsets
+  }
+  if (!members.length) throw new Error('ar archive has no members, so it evidences nothing');
+  return members;
+}
+
+// THE CONTROL'S OWN VERDICT, pure, over four measurements and nothing else -- no process.platform,
+// no distro name, no binutils version. Same doctrine as the probe above: ask the artifact.
+//
+//   defect-demonstrated          the two stock runs DIFFER: the host can exhibit the defect, so
+//                                the control does its usual job and the fixed pair means something
+//   deterministic-by-construction stock bytes == fixed bytes AND every member timestamp is 0: the
+//                                archiver zeroes stamps whatever rules you hand it (Debian-family
+//                                binutils, llvm-ar), so there is no defect here to demonstrate.
+//                                The control -- and ONLY the control -- is skipped, out loud.
+//   unexplained                  the stock runs matched but the evidence above does not hold:
+//                                something is true that nobody has explained, and certifying a
+//                                green off it is precisely what the control refuses to do.
+function arControlVerdict({
+  control1 = '', control2 = '', fixed1 = '', controlTimestamps = [], stockRules = '',
+} = {}) {
+  const short = (h) => String(h).slice(0, 12);
+  const stamps = (Array.isArray(controlTimestamps) ? controlTimestamps : []).map(Number);
+  const nonZero = stamps.filter((t) => t !== 0);
+  if (control1 !== control2) {
+    return {
+      outcome: 'defect-demonstrated',
+      controlSkipped: false,
+      line: 'ar-determinism-control: FIRED -- the stock cmake archive rules produced DIFFERENT '
+        + `archives two seconds apart (sha ${short(control1)} vs ${short(control2)}), so this host `
+        + 'demonstrates the defect the fixed rules repair',
+    };
+  }
+  if (stamps.length && !nonZero.length && control1 === fixed1) {
+    return {
+      outcome: 'deterministic-by-construction',
+      controlSkipped: true,
+      line: 'ar-determinism-control: SKIPPED (archiver is deterministic by construction) -- the '
+        + 'stock cmake archive rules produced byte-identical output to the fixed rules '
+        + `(sha ${short(control1)}) and all ${stamps.length} ar member-header timestamps are 0, so `
+        + 'this archiver cannot exhibit the defect and there is nothing here for the control to '
+        + 'demonstrate; the fixed-pair assertion still ran',
+    };
+  }
+  const why = !stamps.length
+    ? 'no ar member-header timestamps could be read out of it'
+    : (nonZero.length
+      ? `its ar member-header timestamps are not all 0 (${nonZero.join(',')})`
+      : `the fixed rules produced DIFFERENT bytes (sha ${short(fixed1)})`);
+  return {
+    outcome: 'unexplained',
+    controlSkipped: false,
+    line: 'ar-determinism-control: UNEXPLAINED -- the stock cmake archive rules'
+      + (stockRules ? ` (${stockRules})` : '')
+      + ` produced identical archives two seconds apart (sha ${short(control1)}), but ${why}, so `
+      + 'this host cannot demonstrate the defect and the green below proves nothing. '
+      + 'Do not delete this assertion -- find out why',
+  };
+}
+
+test('arMemberTimestamps reads the fixed-width mtime field out of a real archive', () => {
+  const ar = findTool('ar');
+  const cc = findTool(process.env.CC || 'cc') || findTool('gcc') || findTool('clang');
+  // REAL OBJECTS, not text members: cctools `ar` drops anything that is not a mach-o
+  // ('warning: archive member not a mach-o file') and writes an archive with only a symbol
+  // table, so a text-file fixture would have silently tested a one-member archive.
+  if (!ar || !cc) { console.log('SKIP: need both ar and a C compiler to make a real archive'); return; }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-ardet-ts-'));
+  const objs = [];
+  for (let i = 0; i < 2; i += 1) {
+    const src = path.join(dir, `m${i}.c`);
+    fs.writeFileSync(src, `int clode_stamp_${i}(void) { return ${i}; }\n`);
+    const obj = path.join(dir, `m${i}.o`);
+    execFileSync(cc, ['-c', src, '-o', obj], { stdio: 'ignore' });
+    objs.push(obj);
+  }
+  const archive = path.join(dir, 'stamped.a');
+  execFileSync(ar, ['qc', archive, ...objs], { stdio: 'ignore' });
+  const members = arMemberTimestamps(fs.readFileSync(archive));
+  assert.ok(members.length >= 2, `both members must be walked, got ${JSON.stringify(members)}`);
+  assert.ok(members.some((m) => m.name.includes('m0.o') || m.name.startsWith('#1/')),
+    `the names come out of the header too: ${JSON.stringify(members)}`);
+  // A stock `ar qc` on a host that is NOT deterministic by default stamps the wall clock; on one
+  // that IS, it stamps 0. Both are fine here -- what is asserted is that the field was READ, as
+  // a number, not that it has any particular value.
+  for (const m of members) assert.ok(Number.isInteger(m.mtime) && m.mtime >= 0, JSON.stringify(m));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('arMemberTimestamps walks padding and refuses anything it cannot read', () => {
+  const header = (name, mtime, size) => Buffer.from(
+    name.padEnd(16) + String(mtime).padEnd(12) + '0'.padEnd(6) + '0'.padEnd(6)
+    + '100644'.padEnd(8) + String(size).padEnd(10) + '`\n', 'binary');
+  const archive = Buffer.concat([
+    Buffer.from('!<arch>\n'),
+    header('a.o/', 1758300000, 3), Buffer.from('abc\n'), // odd size -> one pad byte
+    header('b.o/', 0, 2), Buffer.from('bc'),
+  ]);
+  assert.deepStrictEqual(arMemberTimestamps(archive),
+    [{ name: 'a.o/', mtime: 1758300000 }, { name: 'b.o/', mtime: 0 }]);
+
+  // Every refusal below would otherwise come back as "no members", and an empty list would make
+  // `every timestamp is zero` VACUOUSLY true -- i.e. the parser would hand the control a reason
+  // to skip itself. It throws instead.
+  assert.throws(() => arMemberTimestamps(Buffer.from('not an archive at all\n')), /not an ar archive/);
+  assert.throws(() => arMemberTimestamps(Buffer.concat([Buffer.from('!<arch>\n'), Buffer.alloc(20)])),
+    /truncated/);
+  const badMagic = Buffer.concat([Buffer.from('!<arch>\n'), header('a.o/', 0, 0)]);
+  badMagic[8 + 58] = 0x58; // clobber the trailing "`\n" sentinel
+  assert.throws(() => arMemberTimestamps(badMagic), /member header/);
+  const blankStamp = Buffer.concat([Buffer.from('!<arch>\n'), header('a.o/', '', 0)]);
+  assert.throws(() => arMemberTimestamps(blankStamp), /timestamp field/);
+  assert.throws(() => arMemberTimestamps(Buffer.concat([Buffer.from('!<arch>\n')])), /no members/);
+});
+
+// The control's three outcomes, as ONE pure decision over observed bytes -- no process.platform,
+// no distro sniff, nothing but four measurements.
+test('arControlVerdict: stock archives that differ DEMONSTRATE the defect', () => {
+  const v = arControlVerdict({
+    control1: 'aaa', control2: 'bbb', fixed1: 'ccc', controlTimestamps: [1758300000, 1758300000],
+  });
+  assert.strictEqual(v.outcome, 'defect-demonstrated');
+  assert.strictEqual(v.controlSkipped, false);
+});
+
+test('arControlVerdict: stock bytes == fixed bytes AND every timestamp 0 -> deterministic by construction', () => {
+  const v = arControlVerdict({
+    control1: 'same', control2: 'same', fixed1: 'same', controlTimestamps: [0, 0, 0],
+  });
+  assert.strictEqual(v.outcome, 'deterministic-by-construction');
+  assert.strictEqual(v.controlSkipped, true);
+});
+
+// The whole point of the third outcome is that it is PROVED, so each half of the proof has to be
+// load-bearing on its own: neither "the bytes matched" nor "the timestamps are zero" may certify
+// alone. These two are why this is not just a relaxation of the control.
+test('arControlVerdict: matching control runs with a NON-ZERO timestamp are unexplained, and still fail', () => {
+  const v = arControlVerdict({
+    control1: 'same', control2: 'same', fixed1: 'same', controlTimestamps: [0, 1758300000],
+  });
+  assert.strictEqual(v.outcome, 'unexplained');
+  assert.strictEqual(v.controlSkipped, false);
+  assert.match(v.line, /1758300000/, 'the line names the evidence that refused to certify');
+  // And it still names the exact stock rules that produced the identical pair, which is the
+  // diagnostic the pre-existing control message carried and the reason anyone could act on it.
+  assert.match(arControlVerdict({
+    control1: 'same', control2: 'same', fixed1: 'same', controlTimestamps: [7],
+    stockRules: '<CMAKE_AR> qc <TARGET> <OBJECTS> then <CMAKE_RANLIB> <TARGET>',
+  }).line, /\(<CMAKE_AR> qc <TARGET> <OBJECTS> then <CMAKE_RANLIB> <TARGET>\)/);
+});
+
+test('arControlVerdict: zero timestamps but fixed bytes that differ from stock are unexplained', () => {
+  const v = arControlVerdict({
+    control1: 'same', control2: 'same', fixed1: 'OTHER', controlTimestamps: [0, 0],
+  });
+  assert.strictEqual(v.outcome, 'unexplained');
+  assert.strictEqual(v.controlSkipped, false);
+  // An empty parse must never certify either (see arMemberTimestamps' refusals above).
+  assert.strictEqual(arControlVerdict({
+    control1: 's', control2: 's', fixed1: 's', controlTimestamps: [],
+  }).outcome, 'unexplained');
+});
+
+test('each control outcome says which one it is on one greppable plain-ASCII line', () => {
+  const same = 'ssssssssssssssss';
+  const lines = {
+    demonstrated: arControlVerdict({
+      control1: 'aaaaaaaaaaaaaaaa', control2: 'bbbbbbbbbbbbbbbb', fixed1: 'c',
+      controlTimestamps: [1758300000],
+    }).line,
+    skipped: arControlVerdict({
+      control1: same, control2: same, fixed1: same, controlTimestamps: [0, 0],
+    }).line,
+    unexplained: arControlVerdict({
+      control1: same, control2: same, fixed1: same, controlTimestamps: [7],
+    }).line,
+  };
+  for (const [k, l] of Object.entries(lines)) {
+    assert.ok(l.startsWith('ar-determinism-control: '), `${k} shares the grep prefix: ${l}`);
+    assert.ok(!l.includes('\n'), `${k} is one line, not several: ${l}`);
+    // eslint-disable-next-line no-control-regex
+    assert.ok(/^[\x20-\x7e]*$/.test(l), `${k} is plain ASCII: ${l}`);
+  }
+  // The new outcome's line is asserted EXACTLY, because it is the only thing standing between a
+  // reader and the conclusion that the control silently passed. It has to say SKIPPED, and it has
+  // to carry the evidence it was skipped on.
+  assert.strictEqual(lines.skipped,
+    'ar-determinism-control: SKIPPED (archiver is deterministic by construction) -- the stock '
+    + 'cmake archive rules produced byte-identical output to the fixed rules '
+    + '(sha ssssssssssss) and all 2 ar member-header timestamps are 0, so this archiver cannot '
+    + 'exhibit the defect and there is nothing here for the control to demonstrate; '
+    + 'the fixed-pair assertion still ran');
+  assert.strictEqual(lines.demonstrated,
+    'ar-determinism-control: FIRED -- the stock cmake archive rules produced DIFFERENT archives '
+    + 'two seconds apart (sha aaaaaaaaaaaa vs bbbbbbbbbbbb), so this host demonstrates the defect '
+    + 'the fixed rules repair');
+  assert.match(lines.unexplained, /^ar-determinism-control: UNEXPLAINED /);
+  assert.match(lines.unexplained, /Do not delete this assertion -- find out why$/);
+});
+
 // ---- the real host, the real property, with a control that must fail -------------------
 //
 // The mechanism above is only worth anything if the archives it produces are actually
@@ -272,13 +545,36 @@ test('arCacheMismatchWarning is silent on agreement and loud on disagreement', (
 // CONTROL run in the unfixed shape that MUST differ. Without the control a green here would
 // be indistinguishable from a box whose clock or archiver never varied in the first place,
 // which is exactly how this gap hid on twelve NetBSD legs.
-test('the real toolchain produces byte-identical archives through the chosen mechanism', { timeout: 120000 }, async () => {
-  const cc = findTool(process.env.CC || 'cc') || findTool('gcc') || findTool('clang');
-  if (!cc) { console.log('SKIP: no C compiler on PATH, so no real objects to archive'); return; }
-  const resolved = resolveArchivers({ cmakeArgs: [], toolchainFile: '' });
-  const decision = arDeterminismDecision({ ...resolved, env: {} });
+// The control, applied. One line, hoisted out of runRealArchiveCheck so the test below can
+// exercise all three CONSEQUENCES -- fires and passes, steps aside, fires and FAILS -- through
+// the very same statement the real run executes, rather than through a copy of it.
+function applyControlVerdict(verdict, control1, control2) {
+  if (!verdict.controlSkipped) assert.notStrictEqual(control1, control2, verdict.line);
+}
+
+test('the three outcomes have the three consequences, through the statement the real run uses', () => {
+  const stamps = { demonstrated: [1758300000], zero: [0, 0], odd: [7] };
+  // 1. the defect is demonstrable: the control fires on two DIFFERENT archives and passes.
+  applyControlVerdict(
+    arControlVerdict({ control1: 'aaa', control2: 'bbb', fixed1: 'ccc', controlTimestamps: stamps.demonstrated }),
+    'aaa', 'bbb');
+  // 2. deterministic by construction: identical archives, and the control steps aside.
+  applyControlVerdict(
+    arControlVerdict({ control1: 'sss', control2: 'sss', fixed1: 'sss', controlTimestamps: stamps.zero }),
+    'sss', 'sss');
+  // 3. identical archives with NO such proof: the control still refuses, with today's words.
+  assert.throws(() => applyControlVerdict(
+    arControlVerdict({ control1: 'sss', control2: 'sss', fixed1: 'sss', controlTimestamps: stamps.odd }),
+    'sss', 'sss'), /Do not delete this assertion -- find out why/);
+});
+
+// The whole measurement, for ONE pair of archivers: three real objects, archived twice two
+// seconds apart through the mechanism this repo chose AND through stock cmake rules, with
+// arControlVerdict reading the four results plus the stock archive's own member headers.
+async function runRealArchiveCheck({ cc, ar, ranlib, source }) {
+  const decision = arDeterminismDecision({ ar, ranlib, source, env: {} });
   console.log(describeArDeterminismDecision(decision));
-  if (decision.state === 'unavailable') { console.log('SKIP: no runnable ar on this host'); return; }
+  if (decision.state === 'unavailable') { console.log('SKIP: no runnable ar on this host'); return null; }
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-ardet-real-'));
   const objs = [];
@@ -335,14 +631,52 @@ test('the real toolchain produces byte-identical archives through the chosen mec
   const a2 = path.join(dir, 'fixed-2.a'); const c2 = path.join(dir, 'ctrl-2.a');
   build(a2, true); build(c2, false);
 
-  assert.notStrictEqual(sha(c1), sha(c2),
-    `the CONTROL (stock cmake archive rules: ${rules(false).create} then ${rules(false).finish}) `
-    + 'produced identical archives two seconds apart, so this host cannot demonstrate the defect '
-    + 'and the green below proves nothing. Do not delete this assertion -- find out why');
+  // The control's premise, decided from the bytes in front of us rather than assumed. The stock
+  // archive's OWN member headers are the second piece of evidence: identical bytes alone could be
+  // a clock that failed to tick, and that must not be enough to excuse the control.
+  const verdict = arControlVerdict({
+    control1: sha(c1),
+    control2: sha(c2),
+    fixed1: sha(a1),
+    controlTimestamps: arMemberTimestamps(fs.readFileSync(c1)).map((m) => m.mtime),
+    stockRules: `${rules(false).create} then ${rules(false).finish}`,
+  });
+  console.log(verdict.line);
+  // THE CONTROL, and the one condition under which it steps aside. `unexplained` lands here too
+  // and fails exactly as it did before this third outcome existed -- the skip is granted only to
+  // a host that PROVED it cannot exhibit the defect, never to one that merely came out equal.
+  applyControlVerdict(verdict, sha(c1), sha(c2));
   assert.strictEqual(sha(a1), sha(a2),
     `two archives built ${decision.state} two seconds apart differ on ${process.platform}: `
     + `${rules(true).create} then ${rules(true).finish}`);
   fs.rmSync(dir, { recursive: true, force: true });
+  return verdict;
+}
+
+test('the real toolchain produces byte-identical archives through the chosen mechanism', { timeout: 120000 }, async () => {
+  const cc = findTool(process.env.CC || 'cc') || findTool('gcc') || findTool('clang');
+  if (!cc) { console.log('SKIP: no C compiler on PATH, so no real objects to archive'); return; }
+  await runRealArchiveCheck({ cc, ...resolveArchivers({ cmakeArgs: [], toolchainFile: '' }) });
+});
+
+// A SECOND archiver, when the host happens to have one, run through the identical machinery.
+//
+// This is how the third outcome gets exercised on real bytes outside CI: llvm-ar is deterministic
+// by construction everywhere (it zeroes stamps unless asked for `U`), so on this darwin box --
+// whose cctools `ar` is the opposite, and whose control therefore FIRES -- the two tests together
+// reach both of the non-failing branches in one run. It is not a platform branch and not a
+// second implementation: same function, same assertions, a different pair of tools, and it skips
+// when the host has nothing else to offer.
+test('a second archiver on this host runs the same three-way control', { timeout: 120000 }, async () => {
+  const cc = findTool(process.env.CC || 'cc') || findTool('gcc') || findTool('clang');
+  if (!cc) { console.log('SKIP: no C compiler on PATH, so no real objects to archive'); return; }
+  const host = resolveArchivers({ cmakeArgs: [], toolchainFile: '' });
+  const alt = [['llvm-ar', 'llvm-ranlib'], ['gar', 'granlib']]
+    .map(([a, r]) => ({ ar: findTool(a), ranlib: findTool(r) }))
+    .find((c) => c.ar && c.ranlib && c.ar !== host.ar);
+  if (!alt) { console.log('SKIP: this host has only one archiver'); return; }
+  const verdict = await runRealArchiveCheck({ cc, ...alt, source: 'second-archiver-on-this-host' });
+  assert.ok(verdict && verdict.outcome, 'the second archiver must reach a verdict, not vanish');
 });
 
 // ---- reach: does a cache-level archive rule actually get into the SUBPROJECTS? ---------
