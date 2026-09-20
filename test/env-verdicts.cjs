@@ -258,7 +258,8 @@ const VERDICTS = [
   // ---- scripts/platform-tag.cjs to compute the SAME engine-vendor cache dir ----
   // ---- build-tjs.cjs itself uses, measured to bring the cluster to exactly 21 ----
   // ---- (BACKLOG.md's own count, +1 for phase 4c3 task 1's CLODE_TJS_CCACHE, ----
-  // ---- +1 for CLODE_ESBUILD — the npm escape hatch in ensureEsbuild). ----
+  // ---- +1 for CLODE_ESBUILD — the npm escape hatch in ensureEsbuild, ----
+  // ---- +1 for CLODE_TJS_AR_DETERMINISM — the deterministic-archive probe). ----
   { name: 'CLODE_COSMOCC', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
   { name: 'CLODE_ESBUILD', verdict: 'phase4-engine',
@@ -266,6 +267,11 @@ const VERDICTS = [
       + 'esbuild so it never shells to npm. It exists because npm is a Node program and '
       + 'every other phase of the engine build is now proven to run with no Node on PATH; '
       + 'same compile-option cluster as the rest of this list, for the same phase-4 reason.' },
+  { name: 'CLODE_TJS_AR_DETERMINISM', verdict: 'phase4-engine',
+    because: 'read by scripts/ar-determinism.cjs (required from scripts/build-tjs.cjs) as the '
+      + '=0 opt-out for the deterministic-archive probe — the one that decides whether cmake '
+      + 'gets `ar qcD` / `ranlib -D` archive rules or rides ZERO_AR_DATE instead. Same '
+      + 'compile-option cluster as the rest of this list, for the same phase-4/cmake reason.' },
   { name: 'CLODE_TJS_ATOMIC_SHIM', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '
     + 'compile-option cluster; see the file header for the phase-4/cmake reason.' },
   { name: 'CLODE_TJS_BUILD', verdict: 'phase4-engine', because: 'scripts/build-tjs.cjs '

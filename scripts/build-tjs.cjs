@@ -42,6 +42,14 @@
 //                     ccache-launcher.cjs). Default is to pass -DCMAKE_C_COMPILER_LAUNCHER
 //                     when a `ccache` binary is found on PATH, and to do nothing at all
 //                     when it is not — which is every leg's state today.
+//   CLODE_TJS_AR_DETERMINISM
+//                     =0: opt OUT of the deterministic-archive probe (scripts/
+//                     ar-determinism.cjs), which runs the archiver cmake will use and, if it
+//                     takes the flag, sets CMAKE_C_ARCHIVE_CREATE/APPEND/FINISH to `qcD`/`qD`/
+//                     `ranlib -D`. For a FRESH build dir: cmake persists those rules in
+//                     CMakeCache.txt, so opting out of a dir already configured with them
+//                     leaves them in place (the logged decision line still tells the truth
+//                     about what this run decided).
 //
 // Phases (CI splits them so a qemu-user guest only pays for the C build):
 //   --source-only  stop after checkout + sha-verify + patches
@@ -91,6 +99,9 @@ const { engineFloorCheckJs, OK_TOKEN } = require('./engine-api-floor.cjs');
 const { buildDepscan } = require('./build-depscan.cjs');
 const { ccacheDecision, describeCcacheDecision, applyCcacheDecision,
   compilerFromCmakeArgs } = require('./ccache-launcher.cjs');
+const { resolveArchivers, arDeterminismDecision, describeArDeterminismDecision,
+  applyArDeterminismDecision, arCacheMismatchWarning,
+  cmakeCacheAr } = require('./ar-determinism.cjs');
 const { tjsDir: platformTjsDir, tjsVendorParentDir } = require('./platform-tag.cjs'); // tjsDir aliased: this file has its own `tjsDir` (the source build dir)
 // The hermeticity verdict, defined once in a CJS sibling so the build and the
 // test suite run the SAME decision logic (test/guard.cjs needs a pure scan()
@@ -238,11 +249,28 @@ if (cosmoTarget) {
 // every object identical, two engines still differed by 571 bytes; with this set, they are
 // byte-identical.
 //
-// ZERO_AR_DATE is the reproducible-builds.org lever for it. Set UNCONDITIONALLY and at top
-// level -- not behind an `if (darwin)` and not per-spawn -- because it is inert on toolchains
-// that do not read it (GNU binutils `ar` wants `-D` instead, and most distributions already
-// build it deterministic by default), and because every child cmake spawns must inherit it.
-// One implementation for all 42 legs beats a platform branch.
+// ZERO_AR_DATE is the lever FOR CCTOOLS -- Apple's `ar`/`libtool`/`ranlib` read it, and
+// nothing else does. Set UNCONDITIONALLY and at top level (not behind an `if (darwin)`, not
+// per-spawn) because it is inert where it is not read and every child cmake spawns must
+// inherit it.
+//
+// WHAT THIS COMMENT USED TO CLAIM, AND WHY IT WAS WRONG (corrected 2026-09-19). It called
+// ZERO_AR_DATE "the reproducible-builds.org lever", adding that GNU binutils "wants -D
+// instead, and most distributions already build it deterministic by default". The first
+// clause was too broad and the second was a guess that happened to hold on the one GNU box
+// anybody had checked. Measured on a live NetBSD 11.0_RC2 evbarm guest (`GNU ar (NetBSD
+// Binutils nb1) 2.42`), two runs two seconds apart: plain `ar rc` DIFFERS, and `ar rc` under
+// ZERO_AR_DATE=1 STILL DIFFERS. Ubuntu's binutils 2.38 came back clean only because
+// Debian/Ubuntu configure it with --enable-deterministic-archives; NetBSD does not. Same GNU
+// ar, different configure flag -- so twelve NetBSD legs were silently non-reproducible under
+// a line that said they were covered, and the object-grain harness could not see it because
+// it compares objects, not archives.
+//
+// So this line is now HALF of the answer, and it says which half. The other half is
+// scripts/ar-determinism.cjs, applied to cmakeArgs further down: it probes the archiver the
+// build will actually run and, when that archiver takes the deterministic flag, teaches cmake
+// the `qcD` / `qD` / `ranlib -D` archive rules instead. One goal, one capability probe, no
+// platform branch.
 process.env.ZERO_AR_DATE = '1';
 
 const run = (cmd, args, opts = {}) =>
@@ -3769,6 +3797,24 @@ if (darwinPoll) {
 const ccache = ccacheDecision({ compiler: compilerFromCmakeArgs(cmakeArgs) });
 console.error(describeCcacheDecision(ccache));
 applyCcacheDecision(cmakeArgs, ccache);
+
+// Deterministic STATIC ARCHIVES (scripts/ar-determinism.cjs, whose header carries the
+// measurement). Same shape as the ccache block directly above and for the same reason: decide
+// ONCE, LOG that decision on every build whichever way it went, then apply the object that was
+// logged. c2067a0's lesson was that an invisible build decision hides for an unknown number of
+// runs; this one hid worse -- twelve NetBSD legs shipped non-reproducible archives and no log
+// line anywhere was even wrong, because there was no log line.
+//
+// ALSO BELOW THE TOOLCHAIN-FILE PUSH, and for a sharper reason than ccache's: on the cross
+// legs the archiver is the TARGET's, named inside the toolchain file, and resolveArchivers
+// hands that file to `cmake -P` to find out which binary that is. Moved above the push at
+// line ~3705 it would silently probe the HOST's ar and answer the wrong question.
+const arDet = arDeterminismDecision(resolveArchivers({
+  cmakeArgs,
+  toolchainFile: crossFile ? path.resolve(crossFile) : '',
+}));
+console.error(describeArDeterminismDecision(arDet));
+applyArDeterminismDecision(cmakeArgs, arDet);
 // Build hermeticity: keep cmake's find_*() out of third-party package-manager
 // prefixes. Root cause (verified twice on this dev Mac, 2026-07-31): its cmake
 // is pkgsrc's (/opt/pkg/bin/cmake), and a pkgsrc-built cmake bakes ITS OWN
@@ -3909,6 +3955,17 @@ const buildDir = path.join(buildRoot, targetToken(outDir), 'build');
 fs.mkdirSync(buildDir, { recursive: true });
 dropStaleCmakeCache(buildDir, tjsDir);
 cmakeConfigure(['-S', tjsDir, '-B', buildDir, ...cmakeArgs]);
+
+// The one step of the archiver resolution that is an ASSUMPTION rather than a reading: on a
+// native leg nothing names CMAKE_AR, so ar-determinism.cjs probed `ar` off PATH while cmake
+// ran its own CMakeFindBinUtils search, which can land on a compiler-relative or llvm-
+// prefixed archiver instead. CMakeCache.txt now records what cmake actually chose, so the
+// assumption is CHECKED rather than documented -- and says so out loud when it was wrong,
+// instead of leaving a future reader to discover it from a diffing artifact.
+{
+  const warn = arCacheMismatchWarning({ decision: arDet, cacheAr: cmakeCacheAr(buildDir) });
+  if (warn) console.error(warn);
+}
 
 // The host tjsc's path, spelled the way cmake spells paths: forward slashes.
 //
