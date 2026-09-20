@@ -675,6 +675,53 @@ function fixupMimallocBuildBanner(dir) {
   console.log('fixup mimalloc-build-banner: applied');
 }
 
+function fixupMimallocGitDescribe(dir) {
+  // REPRODUCIBILITY, the sibling of fixupMimallocBuildBanner above and a worse defect than
+  // it. deps/mimalloc/CMakeLists.txt guards on `EXISTS "${CMAKE_SOURCE_DIR}/.git/index"`
+  // and then runs `git describe` through execute_process with NO WORKING_DIRECTORY -- so
+  // the existence check asks about the VENDORED tree while the command answers about
+  // whatever directory cmake was launched from, which for every build here is the clode
+  // checkout. The result is defined into the compile as MI_GIT_DESCRIBE.
+  //
+  // MEASURED 2026-09-20, from a path-independence double build whose two phases straddled a
+  // commit: 371 of 372 objects identical, and options.c.o differing by 87 bytes, carrying
+  // `git v0.20260831.1-323-g611c0ab` against `git v0.20260831.1-324-g72097c4`.
+  //
+  // The consequence is not "one unstable object". It is that the engine's bytes are a
+  // function of the BUILDER'S CHECKOUT STATE: every commit to this repo changes them,
+  // whether or not it touches an engine source. No engine hash can then be a function of
+  // the recipe, the tjs cache can hand back an engine no recipe describes, and
+  // rebuild-and-verify attestation is impossible by construction. The `reproducible`
+  // verdicts already recorded held only because both of their builds happened to run inside
+  // one un-committed window.
+  //
+  // DISABLING THE BLOCK, not redefining the macro: the define is only APPENDED when the git
+  // call succeeds, so there is no value to override -- `-DMI_GIT_DESCRIBE=` on the command
+  // line would be silently replaced by mimalloc's own list(APPEND). And a source edit is
+  // one implementation for all 42 legs, which is the same argument fixupMimallocBuildBanner
+  // records for choosing an edit over a compile flag MSVC does not take.
+  const f = path.join(dir, 'deps/mimalloc/CMakeLists.txt');
+  const src = fs.readFileSync(f, 'utf8');
+  const marker = '# clode: mimalloc-git-describe';
+  if (src.includes(marker)) {
+    console.log('fixup mimalloc-git-describe: already applied');
+    return;
+  }
+  const anchor = 'if(EXISTS "${CMAKE_SOURCE_DIR}/.git/index")';
+  if (!src.includes(anchor)) {
+    throw new Error('fixup mimalloc-git-describe: anchor not found (mimalloc changed under the '
+      + 'pin — re-derive the fixup; leaving it unapplied makes every engine build a function '
+      + "of the builder's git checkout instead of of its own sources)");
+  }
+  const disabled = [
+    `if(FALSE) ${marker}: git describe here answers about cmake's working directory,`,
+    "# not about this tree, so MI_GIT_DESCRIBE made the engine depend on the BUILDER's",
+    '# checkout state. See fixupMimallocGitDescribe in scripts/build-tjs.cjs.',
+  ].join('\n');
+  fs.writeFileSync(f, src.split(anchor).join(disabled));
+  console.log('fixup mimalloc-git-describe: applied');
+}
+
 function fixupLibuvBsdForkSpawn(dir) {
   // The pinned libuv (saghul's fork) uses posix_spawn on EVERY platform;
   // upstream libuv uses it only on macOS. Two BSDs object, each in its own
@@ -3333,6 +3380,7 @@ if (buildOnly) {
   fixupLibuvCloseNocancelOldDarwin(tjsDir);
   fixupAtomicShim(tjsDir);
   fixupMimallocBuildBanner(tjsDir);
+  fixupMimallocGitDescribe(tjsDir);
   // The bytecode regen rules. Applied HERE, in the source phase, with every
   // other CMakeLists fixup, so a tree handed to a later `--build-only` (the T2
   // VM legs sync the patched tree into a guest) already carries them — the
