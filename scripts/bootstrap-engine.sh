@@ -203,8 +203,47 @@ HASHER_PICKED=
 KAT_TRIED=
 KAT_EXPLICIT=
 
+# EXTRACTION IS PURE SHELL, and that is the whole point. This used to be
+#   eval "$HASHER ..." | tr -c '0-9a-f' '\n' | grep -E '^[0-9a-f]{64}$' | head -n 1
+# and BOTH filters are GNU/BSD assumptions that Solaris's /usr/bin does not share:
+# legacy grep has no -E at all (it prints `grep: illegal option -- E` and exits 2), and
+# legacy tr reads `0-9a-f` as the six LITERAL characters 0 - 9 a - f rather than as two
+# ranges. On the solaris-amd64 leg of CI run 35537960554 that made ALL FIVE hashers the
+# box actually has -- sha256sum, shasum, openssl, cksum, digest -- report "no 64-hex
+# digest in its output". Five tools, ONE broken extractor, and `digest -a sha256` had
+# been added the commit before precisely because the same report said it was missing.
+# A hasher chain that depends on a text tool is a chain with a silent sixth link, so
+# there is no text tool: word-splitting and `case` are shell builtins everywhere.
+# The extra IFS characters are the separators real hashers put around the digest --
+# `SHA256(f)= <hex>` (openssl) and `SHA256 (f) = <hex>` (BSD) -- so every shape in the
+# chain splits into a bare word without a per-tool parser. `*` is deliberately NOT one
+# of them, though GNU sha256sum's binary mode prints `<hex> *f`: a `*` in IFS makes
+# bash-as-sh match NEITHER arm of `case ${#w} in 64) ;; *) ;; esac`, silently falling
+# through both -- which is how this function first answered `MD5` for the output
+# `MD5 (kat) = deadbeef`. The `*` never touches the digest word anyway (it prefixes the
+# FILENAME) and the hex test below rejects it. Every `case` word here is QUOTED for the
+# same reason: an unquoted one is one more place for IFS to change the meaning.
+HASH_NL='
+'
+HASH_IFS=$(printf ' \t\n()=')
+
+first_hex64() {
+  fh_ifs=$IFS
+  IFS=$HASH_IFS
+  set -f
+  for fh_w in $1; do
+    case "${#fh_w}" in 64) ;; *) continue ;; esac
+    case "$fh_w" in *[!0-9a-f]*) continue ;; esac
+    set +f; IFS=$fh_ifs
+    printf '%s\n' "$fh_w"
+    return 0
+  done
+  set +f; IFS=$fh_ifs
+  return 1
+}
+
 hash_file() {
-  eval "$HASHER \"\$1\"" 2>/dev/null | tr -c '0-9a-f' '\n' | grep -E '^[0-9a-f]{64}$' | head -n 1
+  first_hex64 "$(eval "$HASHER \"\$1\"" 2>/dev/null || :)" || :
 }
 
 try_hasher() {

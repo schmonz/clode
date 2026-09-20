@@ -704,6 +704,51 @@ shTest("Solaris's `digest -a sha256` is accepted when nothing else in the chain 
   assert.strictEqual(r.status, 0, `expected digest -a sha256 to be picked up, got ${r.status}: ${r.err}`);
 });
 
+// A Solaris guest's /usr/bin does not only lack hashers — its grep and tr are the
+// LEGACY ones, and the digest extractor was written in terms of both. CI run
+// 35537960554, job tjs-slow / leg (solaris-amd64): the guest printed
+// `grep: illegal option -- E` FIVE times, once per hasher it actually has, and then
+// reported all five as "(no 64-hex digest in its output)". Five tools, one broken
+// extractor. `digest -a sha256` (added the commit before) was among the five. So the
+// extraction must not depend on any external filter at all, and this case is the
+// Solaris /usr/bin faithfully stood in for: grep with no -E, tr with no -c.
+shTest('a legacy grep (no -E) and a legacy tr (no -c) cannot break digest extraction', () => {
+  const d = mkdtemp();
+  const bin = path.join(d, 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  const abs = (n) => execFileSync('sh', ['-c', `command -v ${n}`], { encoding: 'utf8' }).trim();
+  const realGrep = abs('grep');
+  const realTr = abs('tr');
+  // Solaris's /usr/bin/grep: BRE only. `-E` is not "unsupported", it is an ERROR.
+  fakeExe(path.join(bin, 'grep'), `#!/bin/sh
+for a in "$@"; do
+  case $a in
+    -*E*) echo "grep: illegal option -- E" >&2
+          echo "Usage: grep [-c|-l|-q] -bhinsvw pattern file . . ." >&2
+          exit 2 ;;
+  esac
+done
+exec "${realGrep}" "$@"
+`);
+  // Solaris's /usr/bin/tr: no complement ranges. `tr -c '0-9a-f' '\\n'` reads string1 as
+  // the six literal characters 0 - 9 a - f, so it mangles rather than filters.
+  fakeExe(path.join(bin, 'tr'), `#!/bin/sh
+for a in "$@"; do
+  case $a in -*c*) echo "tr: bad string" >&2; exit 2 ;; esac
+done
+exec "${realTr}" "$@"
+`);
+  const { manifest: mf, base } = localPack(path.join(d, 'base'), { [hostTarget()]: FAKE_ENGINE(OK_TOKEN) });
+  const r = sh([], {
+    CLODE_CACHE: path.join(d, 'cache'),
+    CLODE_RELEASE_BASE: base,
+    CLODE_BOOTSTRAP_MANIFEST: mf,
+    PATH: `${bin}:${process.env.PATH}`,
+  });
+  assert.strictEqual(r.status, 0,
+    `a box whose hashers all work must resolve even when grep/tr are the legacy ones, got ${r.status}: ${r.err}`);
+});
+
 // ---------------------------------------------------------------------------
 // dash, when this box has one. The scar: shell discovery needs a shell BY NAME,
 // and /bin/sh behaviours vary. A resolver that only ever ran under this Mac's sh
