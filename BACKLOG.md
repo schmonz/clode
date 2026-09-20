@@ -381,13 +381,20 @@ mbedtls's stops being AppleClang-guarded.
    guard now names this outcome out loud, which is how it would be noticed. NOT reproduced on
    Windows, and deliberately not fixed here: `scripts/ar-determinism.cjs` is engine-recipe
    source, so any change moves the recipe hash and rebuilds every leg.
-   A SECOND, related datum from the same logs: `arCacheMismatchWarning` compares the probed
-   `ar` against `CMakeCache.txt`'s `CMAKE_AR`, which under MSVC should be `lib.exe` — so a
-   `WARNING` line was expected on those legs and none appears. Either MSVC leaves no cached
-   `CMAKE_AR` for `cmakeCacheAr()` to read (it returns `''`, which is deliberately not a
-   disagreement) or the line went somewhere the log did not capture. Whichever it is, item 2
-   above says "grep CI for that line before trusting any leg's verdict", and on these two legs
-   that grep currently cannot distinguish agreement from silence.
+   A SECOND datum from the same logs, CORRECTED 2026-09-20 by reading the log rather than
+   inferring from it: the `WARNING` line DOES exist on both Windows legs. An earlier draft of
+   this entry said none appears and guessed at two reasons; that was wrong. Verbatim from
+   `windows-amd64`: `build-tjs: ar-determinism: WARNING probed C:\mingw64\bin\ar.EXE but cmake
+   chose .../MSVC/14.51.36231/bin/Hostx64/x64/lib.exe (state=flags source=path) -- the
+   archive-rule decision was made about a different archiver`. So item 1 above is CONFIRMED,
+   not suspected: the probe found mingw's GNU `ar`, it accepted `-D`, cmake then chose MSVC's
+   `lib.exe`, and the deterministic rules were composed for an archiver that never ran.
+   Windows archive determinism is therefore UNSOLVED, not uncertain, and the `FLAGS` line is
+   misleading on these two legs — it should say the decision was superseded. `lib.exe` has no
+   `-D`; the MSVC lever is `link.exe /Brepro` plus `lib.exe`'s own determinism, neither of
+   which appears anywhere in this repo. The mismatch check itself earned its keep on its
+   first real CI run: it exists because "the native branch probes PATH while cmake runs
+   CMakeFindBinUtils" was an admitted assumption, and it caught precisely that.
 
 ## A full-suite flake, seen once and not yet named (2026-09-19)
 
