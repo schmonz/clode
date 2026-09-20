@@ -568,6 +568,64 @@ test('the three outcomes have the three consequences, through the statement the 
     'sss', 'sss'), /Do not delete this assertion -- find out why/);
 });
 
+// ---- expanding a cmake archive rule into an argv ---------------------------------------
+//
+// A rule template is TEXT (`<CMAKE_AR> qcD <TARGET> <LINK_FLAGS> <OBJECTS>`) and what it must
+// become is an ARGV. cmake gets there by substituting each placeholder with a value and never
+// re-lexing the result, so a value may contain anything -- spaces included. This does the same:
+// the TEMPLATE is split into words FIRST, and each placeholder contributes whole elements. The
+// tool path is therefore carried as its own argv element rather than round-tripped through a
+// command string, which is the distinction the first cut got wrong (see the test above).
+function expandCmakeArchiveRule(tmpl, { ar = '', ranlib = '', target = '', objects = [] } = {}) {
+  const argv = [];
+  for (const word of String(tmpl).split(' ').filter(Boolean)) {
+    if (word === '<CMAKE_AR>') argv.push(ar);
+    else if (word === '<CMAKE_RANLIB>') argv.push(ranlib);
+    else if (word === '<TARGET>') argv.push(target);
+    else if (word === '<OBJECTS>') argv.push(...objects);
+    else if (word === '<LINK_FLAGS>') continue; // cmake expands it to nothing for an archive
+    else argv.push(word);
+  }
+  return argv;
+}
+
+test('expandCmakeArchiveRule turns a rule template into an argv, one placeholder one element', () => {
+  assert.deepStrictEqual(
+    expandCmakeArchiveRule(C_ARCHIVE_CREATE_D,
+      { ar: '/usr/bin/ar', target: '/tmp/lib.a', objects: ['/tmp/a.o', '/tmp/b.o'] }),
+    ['/usr/bin/ar', 'qcD', '/tmp/lib.a', '/tmp/a.o', '/tmp/b.o'],
+    '<LINK_FLAGS> expands to nothing in an archive rule, as it does in cmake');
+  assert.deepStrictEqual(
+    expandCmakeArchiveRule(C_ARCHIVE_FINISH_D, { ranlib: '/usr/bin/ranlib', target: '/tmp/lib.a' }),
+    ['/usr/bin/ranlib', '-D', '/tmp/lib.a']);
+});
+
+// THE WINDOWS RED, as a unit. cmake SUBSTITUTES placeholders with values and does not re-lex
+// the result; the values are paths, and on windows-latest `<CMAKE_AR>` resolves to
+// C:\Program Files\LLVM\bin\llvm-ar.exe. Pasting that into the template and splitting the
+// string on spaces afterwards handed execFileSync the program `C:\Program` -- which is what
+// CI run 35494754445 (`test / suite (windows-latest)`) reported as `spawnSync C:\Program ENOENT`.
+// No path here may be split, whichever placeholder it arrived through.
+test('expandCmakeArchiveRule keeps a space-containing path in ONE argv element', () => {
+  const ar = 'C:\\Program Files\\LLVM\\bin\\llvm-ar.exe';
+  const ranlib = 'C:\\Program Files\\LLVM\\bin\\llvm-ranlib.exe';
+  const target = 'C:\\Users\\some one\\Temp\\lib.a';
+  const objects = ['C:\\obj dir\\a.o', 'C:\\obj dir\\b.o'];
+  const create = expandCmakeArchiveRule(C_ARCHIVE_CREATE_D, { ar, target, objects });
+  assert.strictEqual(create[0], ar,
+    'the program execFileSync is handed is the WHOLE tool path, never its first word');
+  assert.deepStrictEqual(create, [ar, 'qcD', target, ...objects]);
+  assert.deepStrictEqual(expandCmakeArchiveRule(C_ARCHIVE_FINISH_D, { ranlib, target }),
+    [ranlib, '-D', target]);
+  // The CONTROL's stock rules go through the same expansion, so they break the same way --
+  // this is the pair the failing test was running when it died.
+  assert.deepStrictEqual(
+    expandCmakeArchiveRule('<CMAKE_AR> qc <TARGET> <OBJECTS>', { ar, target, objects }),
+    [ar, 'qc', target, ...objects]);
+  assert.deepStrictEqual(
+    expandCmakeArchiveRule('<CMAKE_RANLIB> <TARGET>', { ranlib, target }), [ranlib, target]);
+});
+
 // The whole measurement, for ONE pair of archivers: three real objects, archived twice two
 // seconds apart through the mechanism this repo chose AND through stock cmake rules, with
 // arControlVerdict reading the four results plus the stock archive's own member headers.
@@ -612,16 +670,9 @@ async function runRealArchiveCheck({ cc, ar, ranlib, source }) {
     delete env.ZERO_AR_DATE;
     if (fixed && decision.state === 'zero-ar-date') env.ZERO_AR_DATE = '1';
     for (const tmpl of [create, finish]) {
-      const words = tmpl.replace('<CMAKE_AR>', decision.ar).replace('<CMAKE_RANLIB>', decision.ranlib)
-        .split(' ').filter(Boolean);
-      const expanded = [];
-      for (const w of words) {
-        if (w === '<TARGET>') expanded.push(out);
-        else if (w === '<OBJECTS>') expanded.push(...objs);
-        else if (w === '<LINK_FLAGS>') continue;
-        else expanded.push(w);
-      }
-      execFileSync(expanded[0], expanded.slice(1), { stdio: 'ignore', env });
+      const argv = expandCmakeArchiveRule(tmpl,
+        { ar: decision.ar, ranlib: decision.ranlib, target: out, objects: objs });
+      execFileSync(argv[0], argv.slice(1), { stdio: 'ignore', env });
     }
   };
 
@@ -678,6 +729,63 @@ test('a second archiver on this host runs the same three-way control', { timeout
   const verdict = await runRealArchiveCheck({ cc, ...alt, source: 'second-archiver-on-this-host' });
   assert.ok(verdict && verdict.outcome, 'the second archiver must reach a verdict, not vanish');
 });
+
+// THE WINDOWS RED, end to end, on any host that can reach its own archiver through a
+// space-containing path. The unit test above pins the argv; this one pins the thing that
+// actually died -- execFileSync, running the real toolchain, through the real `build()`.
+// `C:\Program Files\LLVM\bin\llvm-ar.exe` is not reproducible here, but "an ar whose path
+// contains a space" is, and it is the entire content of that failure.
+//
+// It SKIPS out loud rather than failing when the host cannot present its archiver that way
+// (Windows needs a privilege for symlinks, and a copied ar may not find its DLLs): the skip is
+// decided from a PROBE that tries to archive with the relocated tool, never from a platform name.
+test('an archiver reached through a space-containing path is not split into a missing program',
+  { timeout: 120000 }, async () => {
+    const cc = findTool(process.env.CC || 'cc') || findTool('gcc') || findTool('clang');
+    if (!cc) { console.log('SKIP: no C compiler on PATH, so no real objects to archive'); return; }
+    const host = resolveArchivers({ cmakeArgs: [], toolchainFile: '' });
+    // `override` makes this work whichever shape resolveArchivers returned: an absolute path
+    // is taken as-is when it is executable, a bare name still goes through the PATH search.
+    const arAbs = findTool(host.ar, { override: host.ar });
+    const ranlibAbs = findTool(host.ranlib, { override: host.ranlib });
+    if (!arAbs || !ranlibAbs) { console.log('SKIP: cannot locate this host\'s ar/ranlib on PATH'); return; }
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-ardet-space-'));
+    try {
+      const bin = path.join(dir, 'tool dir'); // the whole point: a space in the tool's path
+      fs.mkdirSync(bin, { recursive: true });
+      const place = (abs) => {
+        const at = path.join(bin, path.basename(abs));
+        try { fs.symlinkSync(abs, at); } catch { fs.copyFileSync(abs, at); }
+        return at;
+      };
+      let ar; let ranlib;
+      try { ar = place(arAbs); ranlib = place(ranlibAbs); } catch (e) {
+        console.log(`SKIP: this host will not present its archiver at a spaced path: ${e.message}`);
+        return;
+      }
+      // Does the relocated tool RUN? An archiver that cannot be reached this way would fail
+      // below for a reason that has nothing to do with argv splitting.
+      const probeSrc = path.join(dir, 'probe.c');
+      fs.writeFileSync(probeSrc, 'int clode_space_probe(void){return 0;}\n');
+      const probeObj = path.join(dir, 'probe.o');
+      execFileSync(cc, ['-c', probeSrc, '-o', probeObj], { stdio: 'ignore' });
+      const probe = spawnSync(ar, ['qc', path.join(dir, 'probe.a'), probeObj], { encoding: 'utf8' });
+      if (probe.status !== 0 || !fs.existsSync(path.join(dir, 'probe.a'))) {
+        console.log('SKIP: the relocated archiver does not run from a spaced path '
+          + `(${(probe.error && probe.error.message) || probe.stderr || `status ${probe.status}`})`);
+        return;
+      }
+
+      // The real machinery, with a tool path a naive split would destroy. Before the fix this
+      // died exactly as windows-latest did: ENOENT on the path's first word.
+      const verdict = await runRealArchiveCheck({ cc, ar, ranlib, source: 'spaced-tool-path' });
+      assert.ok(verdict && verdict.outcome,
+        'an archiver at a spaced path must reach a verdict like any other');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
 // ---- reach: does a cache-level archive rule actually get into the SUBPROJECTS? ---------
 //
