@@ -92,6 +92,38 @@ function prefixMapFlags(kind, mappings) {
   return out;
 }
 
+// BOTH SPELLINGS OF EACH ROOT: the path as this build names it, and the path the operating
+// system resolves it to.
+//
+// MEASURED 2026-09-20, and this is the whole reason the first attempt at this feature
+// measured as a no-op on txiki's own 46 objects. On macOS /var is a symlink to /private/var;
+// the compiler records DWARF's DW_AT_comp_dir from getcwd(), which resolves it, while
+// build-tjs.cjs composes its build dir from CLODE_TJS_BUILD, which does not. Two different
+// strings for one directory, and a prefix map only ever matches a string. The flag was
+// present, accepted and logged, and rewrote nothing.
+//
+// PORTABLE, not a darwin branch: any host whose build path goes through a symlink -- a
+// /home -> /usr/home BSD, an automounted network path, a container bind mount -- has the
+// same shape, and asking the OS which is which costs one lstat.
+//
+// REALPATH FIRST, then the literal: they are different strings so order cannot change the
+// outcome here, but it keeps the more-resolved form ahead of the less-resolved one, which
+// is the direction any future nesting would want.
+function expandMappings(pairs, { realpathFn = fs.realpathSync } = {}) {
+  const out = [];
+  const seen = new Set();
+  for (const [from, to] of pairs || []) {
+    let real = from;
+    try { real = realpathFn(from); } catch { /* not created yet: the literal is all there is */ }
+    for (const candidate of [real, from]) {
+      if (seen.has(candidate)) continue;
+      seen.add(candidate);
+      out.push([candidate, to]);
+    }
+  }
+  return out;
+}
+
 function defaultMkdtemp(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
@@ -298,7 +330,7 @@ function cmakeCacheCc(buildDir, { fsm = fs } = {}) {
 
 module.exports = {
   SOURCE_SENTINEL, BUILD_SENTINEL,
-  filePrefixMapOptedOut, prefixMapFlags, probeFilePrefixMap,
+  filePrefixMapOptedOut, prefixMapFlags, expandMappings, probeFilePrefixMap,
   compilerFromToolchainFile, resolveCompiler,
   filePrefixMapDecision, describeFilePrefixMapDecision, applyFilePrefixMapDecision,
   ccCacheMismatchWarning, cmakeCacheCc,

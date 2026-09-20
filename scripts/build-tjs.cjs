@@ -103,7 +103,7 @@ const { engineFloorCheckJs, OK_TOKEN } = require('./engine-api-floor.cjs');
 const { buildDepscan } = require('./build-depscan.cjs');
 const { ccacheDecision, describeCcacheDecision, applyCcacheDecision,
   compilerFromCmakeArgs } = require('./ccache-launcher.cjs');
-const { SOURCE_SENTINEL, BUILD_SENTINEL, resolveCompiler: resolveCcForPrefixMap,
+const { SOURCE_SENTINEL, BUILD_SENTINEL, expandMappings, resolveCompiler: resolveCcForPrefixMap,
   filePrefixMapDecision, describeFilePrefixMapDecision, applyFilePrefixMapDecision,
   ccCacheMismatchWarning, cmakeCacheCc } = require('./file-prefix-map.cjs');
 const { resolveArchivers, arDeterminismDecision, describeArDeterminismDecision,
@@ -4005,7 +4005,10 @@ fs.mkdirSync(buildDir, { recursive: true });
 // a CLODE_TJS_BUILD inside the source tree would create, resolves most-specific-first).
 const filePrefixMap = filePrefixMapDecision({
   ...resolveCcForPrefixMap({ cmakeArgs, toolchainFile: crossFile ? path.resolve(crossFile) : '' }),
-  mappings: [[buildDir, BUILD_SENTINEL], [path.resolve(tjsDir), SOURCE_SENTINEL]],
+  // expandMappings, not the raw pair: each root is mapped under BOTH the name this build
+  // uses and the name the OS resolves it to. Handing the raw pair over is exactly the run
+  // that came back 46 of 372 red with the flag on, present and doing nothing.
+  mappings: expandMappings([[buildDir, BUILD_SENTINEL], [path.resolve(tjsDir), SOURCE_SENTINEL]]),
 });
 console.error(describeFilePrefixMapDecision(filePrefixMap));
 applyFilePrefixMapDecision(cmakeArgs, filePrefixMap);
