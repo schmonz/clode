@@ -210,9 +210,6 @@ const NOT_YET_FLIPPED = {
   // --- wave 1, landing one commit at a time immediately after this one. Each entry
   // disappears in the same commit that flips its site, so this table is never a
   // description of intent — only of what is still true.
-  'Prepare the pinned tjs source + simde for the in-guest engine bake (qemu-* cache miss)':
-    'wave 1, first: --regen-only on the ubuntu host, measured at 27s under tjs and never '
-    + 'reaching ensureEsbuild.',
   'Cross-build tjs against the NetBSD toolchain':
     'wave 1, second: --build-only on the ubuntu host, the same class as the host-native '
     + 'path test/build-tjs-no-node.test.cjs already proves.',
@@ -250,8 +247,12 @@ function rawNodeSites(yaml) {
   return out;
 }
 
+// Call sites only: a YAML COMMENT that names the wrapper is prose about it, not an
+// invocation of it, and demanding the idiom's shape of prose would make the rule
+// unwritable-about. (Found by the rule firing on the first flip's own explanation.)
 function bootSites(yaml) {
-  return yaml.split('\n').filter((l) => l.includes('build-tjs-boot.sh')).map((l) => l.trim());
+  return yaml.split('\n').map((l) => l.trim())
+    .filter((l) => l.includes('build-tjs-boot.sh') && !l.startsWith('#'));
 }
 
 const BASHISMS = [

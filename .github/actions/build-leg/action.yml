@@ -598,7 +598,18 @@ runs:
         # regenBytecodeArrays still exists and why this step still has to run.
         # ci-guest-bake.sh refuses a tree that arrives without the regen trailer, so
         # this cannot be dropped again.
-        node scripts/build-tjs.cjs --regen-only
+        #
+        # FLIPPED ONTO THE BOOTSTRAP RESOLVER (node-removal-bootstrap-design.md §3 step 1,
+        # the first of three). build-tjs-boot.sh asks scripts/bootstrap-engine.sh for an
+        # engine — CLODE_TJS, a locally built one, the bootstrap cache, or a range-fetch
+        # of this host's slice out of the templates pack the last release published — and
+        # runs THIS SAME --regen-only under it via HEAD's node-shim loader. --regen-only
+        # is the safest mode to go first with: it is measured at 27s under tjs and never
+        # reaches ensureEsbuild, the one thing still blocked. If the pack has no slice for
+        # this runner the wrapper falls back to node and SAYS SO; grep the log for
+        # `build-tjs-engine:` to see which actually ran. This step's own semantics are
+        # unchanged — same script, same flag, same CLODE_TJS_VENDOR.
+        scripts/build-tjs-boot.sh qemu-regen --regen-only
         mkdir -p .matrix/qemu-bake
         tar czf .matrix/qemu-bake/txiki-canonical-le.tar.gz -C "$CLODE_TJS_VENDOR" txiki.js
         # The shared engine-API floor check the bake runs against the engine it
