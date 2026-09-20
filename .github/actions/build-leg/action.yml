@@ -473,7 +473,49 @@ runs:
         # cosmo: the source phase applies the two named cosmo patches (they are
         # OUT of the auto-apply globs), so it needs the target token too.
         CLODE_TJS_TARGET: ${{ inputs.cosmo == 'true' && 'cosmo' || '' }}
-      run: node scripts/build-tjs.cjs --source-only
+      # FLIPPED ONTO THE BOOTSTRAP RESOLVER, FOR POSIX ONLY — the seventh and last
+      # engine-build call site in this file. With this, EVERY engine build in CI runs
+      # under tjs; none runs under node on any POSIX machine.
+      #
+      # The blocker that kept this one back through two waves is gone.
+      # scripts/bundle-inputs-gate.cjs refuses a --source-only run whose checkout cannot
+      # build the txiki JS bundles, and both halves it names — esbuild@0.28.1 and txiki's
+      # own runtime dep closure — used to arrive only as a side effect of `npm install`.
+      # scripts/provision-bundle-inputs.sh now fetches them with no npm and no node,
+      # reading every version, URL and sha512 out of the pinned checkout's OWN
+      # package-lock.json, and a cold checkout produces all 17 files under
+      # src/bundles/js/** byte-identical to the warm path
+      # (test/build-tjs-cold-provision.test.cjs). The gate itself is unchanged and still
+      # runs, after provisioning. `--source-only` under the shim with no Node anywhere on
+      # PATH is the first row of test/build-tjs-no-node.test.cjs.
+      #
+      # WHAT THIS DOES NOT DO: it removes no node from this runner. This same job still
+      # runs `npm ci --prefix deps/claude`, three `npm i -g @anthropic-ai/claude-code`,
+      # and six ESM entry points the CJS shim cannot host (engine-recipe.mjs,
+      # exec-probe.mjs, spawn-cost-probe.mjs, build-clode-main.mjs, stage-provider.mjs,
+      # stage0.mjs). actions/setup-node stays. This completes "the engine build needs no
+      # Node"; it does not start "the leg needs no Node".
+      #
+      # THE WINDOWS LEGS ARE THE SAME STEP AND STAY ON NODE, for TWO reasons where the
+      # native step below has one. (1) Nothing has ever run this wrapper on win32 — see
+      # that step's note. (2) provisionBundleInputs returns immediately on win32 because
+      # there is no POSIX sh it can spawn by an absolute path, so a flipped Windows half
+      # would reach the gate's refusal rather than a build. It costs nothing: this step
+      # runs ONCE per matrix and the Windows runners have npm. Recorded in
+      # SPLIT_BY_PLATFORM in test/build-tjs-boot.test.cjs, which requires this step to
+      # keep BOTH spellings so the half-flip cannot quietly become an un-flip.
+      #
+      # No CLODE_BOOTSTRAP_TARGET, same reason as the native step: the source phase runs
+      # on the RUNNER for every leg — including the cross-container, alpine and VM-guest
+      # legs, whose own target is a different machine entirely — so the engine that must
+      # execute here is this runner's, which uname names correctly on both POSIX runner
+      # families.
+      run: |
+        if [ "${RUNNER_OS:-}" = Windows ]; then
+          node scripts/build-tjs.cjs --source-only
+        else
+          scripts/build-tjs-boot.sh source-only --source-only
+        fi
 
     - name: Install the runtime dep closure (blobulate member inputs)
       shell: bash

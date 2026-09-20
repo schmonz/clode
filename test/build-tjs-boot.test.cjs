@@ -104,8 +104,8 @@ function verdict(out) {
 // and all nine cases failed on `null !== 0` in CI run 35521083887 (tests 216-224). The
 // skip, its stated reason, and the gate that keeps it from spreading live in
 // test/posix-host.cjs; no Windows leg runs this wrapper (the msvc legs run
-// `node scripts/build-tjs.cjs` natively — see NOT_YET_FLIPPED below, which records that
-// as the reason step 4 is not flipped), and the ubuntu and darwin rows run all nine for
+// `node scripts/build-tjs.cjs` natively — see SPLIT_BY_PLATFORM below, which records that
+// as the reason step 4 is POSIX-only), and the ubuntu and darwin rows run all nine for
 // real on every push. The GUARD below still runs here, because it READS the wrapper.
 // ---------------------------------------------------------------------------
 
@@ -230,12 +230,11 @@ shTest('it runs identically under dash', (t) => {
 // .superpowers/sdd/node-removal-bootstrap-design.md §3, steps 3-6.
 // Wave 1 flipped three sites and deleted their three entries from here, one commit each;
 // what is left is what is still true, never a description of intent.
-const NOT_YET_FLIPPED = {
-  'Construct the patched tjs tree from pins (host, native speed)':
-    'step 6: --source-only is blocked on esbuild plus txiki\'s own JS dependency tree, '
-    + 'which scripts/bundle-inputs-gate.cjs refuses loudly today. Independent of the '
-    + 'bootstrap; flipping it would just move the refusal.',
-};
+// EMPTY, and that is the milestone: every engine-build call site in the file now runs
+// under a bootstrap engine on at least one platform. The table stays because the rule it
+// feeds is what makes a NEW unflipped site fail instead of arriving unnoticed — with no
+// entries it is strictly stronger, not weaker.
+const NOT_YET_FLIPPED = {};
 
 // A site can be flipped for SOME of the machines it runs on. `Build tjs (native)` is one
 // step for ubuntu, macOS and Windows, and the flip is proven on POSIX and unproven on
@@ -248,6 +247,18 @@ const NOT_YET_FLIPPED = {
 // wrapper half and the split is a fiction, which is how a half-flip silently becomes an
 // un-flip; delete the node half and the step is fully flipped and the entry is a phantom.
 const SPLIT_BY_PLATFORM = {
+  'Construct the patched tjs tree from pins (host, native speed)':
+    'step 6, POSIX ONLY. The blocker is gone: scripts/provision-bundle-inputs.sh fetches '
+    + 'esbuild and txiki\'s runtime dep closure with no npm and no node, reading every '
+    + 'version/URL/sha512 out of the pinned checkout\'s own package-lock.json, and a cold '
+    + 'checkout produces all 17 files under src/bundles/js/** byte-identical to the warm '
+    + 'path (test/build-tjs-cold-provision.test.cjs). `--source-only` under the shim with '
+    + 'no Node on PATH is the first row of test/build-tjs-no-node.test.cjs. Windows stays '
+    + 'on node for TWO reasons, not one: the wrapper has never run on win32 (see the entry '
+    + 'below), AND provisionBundleInputs returns immediately on win32 because there is no '
+    + 'POSIX sh it can spawn by an absolute path — so a flipped Windows half would reach '
+    + 'the gate\'s refusal, not a build. It costs nothing: --source-only runs once per '
+    + 'matrix and the Windows runners have npm.',
   'Build tjs (native)':
     'step 4, POSIX ONLY. Flipped for ubuntu and macOS (`--build-only` under tjs is proven '
     + 'by test/build-tjs-no-node.test.cjs and measured at 68s in phase 1). The two MSVC '
