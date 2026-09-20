@@ -58,6 +58,15 @@ const EXPECTED_SET = [
   // the moment build-tjs.cjs required it, which is this list being kept honest by the
   // graph rather than by memory.
   'scripts/bundle-inputs-gate.cjs',
+  // ADDED 2026-09-20: the sibling half of the line above. bundle-inputs-gate.cjs decides
+  // whether the source phase may run; scripts/provision-bundle-inputs.sh decides what it
+  // runs AGAINST -- it puts the pinned esbuild and txiki's own bundled dependency tree on
+  // disk without npm, and esbuild links every one of those packages INTO the engine.
+  // Change which tarball it fetches or how it verifies one and the engine's bytes change
+  // with no .c file moving. NOT named by the derived check below, and that is the point of
+  // this comment: a shell script is SPAWNED, not required, so the require-graph ratchet is
+  // structurally blind to it. This is the one hand-add on the list, recorded as such.
+  'scripts/provision-bundle-inputs.sh',
   // ADDED 2026-09-20: the build-path mapping decision -- whether -ffile-prefix-map (or the
   // older -fdebug-prefix-map/-fmacro-prefix-map pair, or nothing) rewrites the absolute
   // path a build ran from OUT of every object. Those are compile flags: edit this file and
@@ -222,6 +231,7 @@ const BASE = {
   'scripts/platform-tag.cjs': 'tag',
   'scripts/ar-determinism.cjs': 'ardet',
   'scripts/bundle-inputs-gate.cjs': 'bundleinputs',
+  'scripts/provision-bundle-inputs.sh': 'provision',
   'scripts/file-prefix-map.cjs': 'fileprefixmap',
   'spike/quickjs/qemu/ci-guest-bake.sh': 'bake',
   'scripts/x.toolchain.cmake': 'tc',
@@ -268,13 +278,17 @@ test('a changed byte in a repo-root cosmo patch moves the recipe', async () => {
 // the tjs cache could restore an engine built from a differently-reset checkout
 // with no signal at all. ccache-launcher.cjs is the same hazard one level down:
 // it decides what compiler invocation the engine is built with.
-test('a changed byte in any of the nine split-out orchestration modules moves the recipe', async () => {
+test('a changed byte in any of the ten split-out orchestration files moves the recipe', async () => {
   const { recipe } = await load();
   const before = recipe(fakeSource(BASE));
   for (const p of ['scripts/tjs-source-reset.cjs', 'scripts/engine-api-floor.cjs',
     'scripts/build-depscan.cjs', 'scripts/depscan-verdict.cjs',
     'scripts/ccache-launcher.cjs', 'scripts/platform-tag.cjs',
     'scripts/ar-determinism.cjs', 'scripts/bundle-inputs-gate.cjs',
+    // The tenth is not a module: scripts/provision-bundle-inputs.sh is SPAWNED, and it
+    // decides what the JS bundle step is built against. Covered here for the same reason
+    // as the nine above and because the require-graph ratchet cannot see it.
+    'scripts/provision-bundle-inputs.sh',
     'scripts/file-prefix-map.cjs']) {
     const after = recipe(fakeSource({ ...BASE, [p]: `${BASE[p]}-edited` }));
     assert.notStrictEqual(after, before, `editing ${p} did not move the engine identity`);

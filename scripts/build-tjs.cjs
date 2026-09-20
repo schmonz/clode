@@ -83,7 +83,7 @@
 // silently loosening 3,800 lines (undeclared-global assignment, block-scoped
 // function declarations) as a side effect of the rename.
 'use strict';
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 const os = require('node:os');
 const { cpus } = os;
 const fs = require('node:fs');
@@ -98,7 +98,7 @@ const { resetCheckoutToPristine } = require('./tjs-source-reset.cjs');
 // The JS-bundle step's two inputs, and the refusal that names both (see the call site in
 // the source phase below). A sibling, not inline, for the reason every other build decision
 // in this file is one: a test can hand it a known-bad tree without a 785MB checkout.
-const { bundleInputsRefusal } = require('./bundle-inputs-gate.cjs');
+const { bundleInputsRefusal, requiredPackages, esbuildStatus } = require('./bundle-inputs-gate.cjs');
 const { engineFloorCheckJs, OK_TOKEN } = require('./engine-api-floor.cjs');
 const { buildDepscan } = require('./build-depscan.cjs');
 const { ccacheDecision, describeCcacheDecision, applyCcacheDecision,
@@ -3304,6 +3304,82 @@ function fixupModFsSyncMsvc(dir) {
   console.log('fixup mod-fs-sync-msvc: applied');
 }
 
+// ---- the JS bundle step's two inputs, PROVISIONED (scripts/provision-bundle-inputs.sh) --
+//
+// The gate below names what is missing; this is what stops it from having anything to name.
+// It supplies the pinned esbuild and txiki's own bundled JS dependency tree WITHOUT npm,
+// reading every version, URL and sha512 out of the pinned checkout's own package-lock.json
+// (see that script's header — no table lives in this repo).
+//
+// SYNCHRONOUS, AND THAT IS A DESIGN CONSTRAINT, NOT AN ACCIDENT. esbuildBundles() is called
+// ~110 lines ABOVE this file's one async continuation (`(async () => {`), which exists only
+// because provisionCosmocc's fetch needs an await that CommonJS cannot express at top level.
+// Provisioning with clode-net's async downloadFile would have forced that boundary UP past
+// the source/regen exits — exactly the move that produced the "buildHostTjsc is not defined"
+// incident test/build-tjs-continuation-scope.test.cjs exists for. So the fetch lives in a
+// POSIX sh sibling and arrives here through spawnSync: no await, the boundary does not move,
+// and the transport is the one scripts/bootstrap-engine.sh already proves on alpine guests
+// and minimal VMs. Same reason the resolver is sh, one layer out.
+//
+// NEVER ON A WARM TREE. The `want` list is DERIVED from the same two readers the gate uses,
+// so a checkout that already satisfies both inputs — every dev box, every cache-HIT leg —
+// returns before anything is spawned and nothing touches the network.
+//
+// NOT A GATE. A failure here is logged, not thrown: bundleInputsRefusal re-derives the
+// answer from the tree immediately below, so a partial provision is reported as "these are
+// still missing" by the thing whose job that is, rather than as this function's exit code.
+//
+// SCOPE, said plainly: POSIX only. Windows is skipped because there is no shell this can
+// spawn by an absolute POSIX path, and it costs nothing — the `--source-only` call site
+// runs ONCE per matrix, on a runner, and the Windows runners have Node. The same wall is
+// written down in test/bootstrap-engine.test.cjs and test/provision-bundle-inputs.test.cjs.
+function provisionBundleInputs(dir) {
+  if (process.platform === 'win32') return;
+  const sh = path.join(repo, 'scripts/provision-bundle-inputs.sh');
+  // A FIXED POINT, not one pass, and the gate's own header says why: "a package that is
+  // missing cannot be asked what it needs". requiredPackages closes over the declared
+  // dependencies of the packages that ARE installed, so on a cold tree the first round can
+  // only see the seven DIRECT imports — @jridgewell/resolve-uri, @jridgewell/sourcemap-codec
+  // and @jsr/std__streams are declared by parents that are not there yet. Measured: one pass
+  // left exactly those three missing and the gate refused, correctly. So provision, re-derive
+  // from the tree that now exists, and repeat until the derivation stops asking for anything.
+  //
+  // Bounded and PROGRESS-CHECKED rather than `while (missing.length)`: a package whose
+  // extraction silently produced nothing would otherwise loop forever. A round that asks for
+  // the same set it just asked for has stopped making progress, and stopping there hands the
+  // gate a tree to describe instead of hanging the build.
+  let asked = null;
+  for (let round = 1; round <= 8; round++) {
+    const want = [];
+    if (!esbuildStatus(dir, process.env).bin) want.push('esbuild');
+    for (const m of requiredPackages(dir).missing) want.push(m.pkg);
+    if (!want.length) return;
+    if (process.env.CLODE_OFFLINE === '1') {
+      console.log(`bundle inputs: ${want.length} missing and CLODE_OFFLINE=1, so nothing will be `
+        + 'fetched — the refusal below names them');
+      return;
+    }
+    const key = want.slice().sort().join(' ');
+    if (key === asked) {
+      console.log(`bundle inputs: round ${round} would ask for exactly what round ${round - 1} `
+        + 'already provisioned, so provisioning has stopped making progress — leaving the '
+        + 'check below to describe the tree rather than looping');
+      return;
+    }
+    asked = key;
+    console.log(`bundle inputs: provisioning ${want.length} missing input(s) without npm `
+      + `(round ${round}): ${want.join(', ')}`);
+    const r = spawnSync('/bin/sh', [sh, dir, ...want], { stdio: 'inherit' });
+    if (r.error || r.status !== 0) {
+      console.log(`bundle inputs: provisioning did not complete (${r.error ? r.error.message : `exit ${r.status}`})`
+        + ' — the check below says what is still missing and how else to supply it');
+      return;
+    }
+  }
+  console.log('bundle inputs: the derivation was still naming new packages after 8 rounds of '
+    + 'provisioning — stopping, so the check below can describe the tree rather than looping');
+}
+
 let tjsDir;
 if (buildOnly) {
   // The patched tree was constructed by a prior --source-only run (possibly on
@@ -3346,6 +3422,7 @@ if (buildOnly) {
   // the gate stays silent. What it ends is the failure being SILENT UNTIL COLD: a build
   // that works only on a warm checkout, which is the "dev-box state hides bugs" shape this
   // tree keeps rediscovering.
+  provisionBundleInputs(tjsDir);
   {
     const { findTool } = require(path.join(repo, 'libexec/clode-hosttools.cjs'));
     const refusal = bundleInputsRefusal({ dir: tjsDir, env: process.env, hasNpm: Boolean(findTool('npm')) });

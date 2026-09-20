@@ -23,6 +23,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
+const { tjsPath } = require('./node-shim-helper.cjs');
+const { tjsBin, tjsVendorParentDir } = require('../scripts/platform-tag.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 
@@ -235,8 +237,71 @@ function runEngineBuild({ env, timeoutMs = ENGINE_BUILD_TIMEOUT_MS, repo = REPO 
   return { ok, status: r.status, wallMs, stdout: r.stdout || '', stderr: r.stderr || '' };
 }
 
+// ---- "a host with no Node on it", synthesized -----------------------------------------
+// MOVED HERE FROM test/build-tjs-no-node.test.cjs when a SECOND file needed it
+// (test/build-tjs-cold-provision.test.cjs), for the reason that file's own header already
+// gives about duplicated preconditions: "the copy that stops matching is the one that
+// starts skipping for the wrong reason". copyCheckout was written four times before it
+// landed here; this is the same function one round earlier.
+//
+// FILTER BY ENTRY, NOT BY DIRECTORY. --build-only shells to cmake, ninja and ccache, and
+// on this box all three live in /opt/pkg/bin -- WHICH IS ALSO WHERE node LIVES. Dropping
+// every PATH directory that contains a node drops the compiler with it, and the run then
+// fails for a reason that has nothing to do with Node absence. So: a farm of symlinks to
+// every program on the ambient PATH except the Node family, first-wins so PATH precedence
+// is preserved, with the POSIX floor behind it.
+const NODE_FAMILY = new Set(['node', 'nodejs', 'npm', 'npx', 'corepack',
+  'node.exe', 'npm.cmd', 'npx.cmd']);
+const POSIX_FLOOR = '/usr/bin:/bin:/usr/sbin:/sbin';
+function nodeFreePath(farmDir) {
+  fs.mkdirSync(farmDir, { recursive: true });
+  for (const d of (process.env.PATH || '').split(path.delimiter).filter(Boolean)) {
+    let entries;
+    try { entries = fs.readdirSync(d); } catch { continue; }
+    for (const name of entries) {
+      if (NODE_FAMILY.has(name)) continue;
+      const link = path.join(farmDir, name);
+      if (fs.existsSync(link)) continue; // first wins: PATH precedence
+      try { fs.symlinkSync(path.join(d, name), link); } catch { /* racy dir, skip */ }
+    }
+  }
+  return `${farmDir}${path.delimiter}${POSIX_FLOOR}`;
+}
+
+// Returns { srcCheckout, bare } or null after calling t.skip with the reason.
+// Every refusal names what is missing AND how to supply it, because a skip nobody can act
+// on is a test that quietly stopped existing.
+function nodeFreePreflight(t, farmDir) {
+  if (process.platform === 'win32') {
+    t.skip('POSIX-only: this gate proves Node-absence with `sh -c \'command -v node\'` '
+      + 'and a synthesized POSIX PATH — not a missing engine');
+    return null;
+  }
+  if (!tjsPath()) {
+    t.skip(`no engine (CLODE_TJS or ${tjsBin(REPO)}) — build one with \`node scripts/build-tjs.cjs\``);
+    return null;
+  }
+  const srcCheckout = path.join(tjsVendorParentDir(), 'txiki.js');
+  if (!fs.existsSync(path.join(srcCheckout, '.git'))) {
+    t.skip(`no vendor checkout at ${srcCheckout} — run \`node scripts/build-tjs.cjs --source-only\` `
+      + 'once; this gate copies an existing checkout and will not clone 785MB inside a test run');
+    return null;
+  }
+  const bare = nodeFreePath(farmDir);
+  const probe = spawnSync('sh', ['-c', 'command -v node || true'],
+    { env: { PATH: bare }, encoding: 'utf8' });
+  if (probe.stdout.trim()) {
+    t.skip(`node is still reachable at ${probe.stdout.trim()} on the synthesized node-free PATH `
+      + `(it is inside the POSIX floor ${POSIX_FLOOR}, which this gate cannot drop without `
+      + 'losing sh/cc) — this host cannot express "no node" and the gate would prove nothing');
+    return null;
+  }
+  return { srcCheckout, bare };
+}
+
 module.exports = {
   REPO, ENGINE_BUILD_TIMEOUT_MS,
   copyCheckout, findBuildDir, listObjects, countObjectsWrittenSince, sha256Of, sha256OfSync,
   compareArtifacts, runEngineBuild, snapshotPhase,
+  NODE_FAMILY, POSIX_FLOOR, nodeFreePath, nodeFreePreflight,
 };

@@ -106,6 +106,21 @@ export const FILES = [
   // test/engine-recipe.test.cjs named it the same way: the moment build-tjs.cjs required
   // it, without anyone remembering to.
   'scripts/bundle-inputs-gate.cjs',
+  // ADDED 2026-09-20. scripts/provision-bundle-inputs.sh is what PUTS the JS bundle step's
+  // inputs on disk when npm is not available: the pinned esbuild binary and txiki's own
+  // bundled dependency tree, both of which esbuild links INTO the engine. It is the
+  // sibling half of bundle-inputs-gate.cjs above — that file decides whether the source
+  // phase may run, this one decides what it runs AGAINST — so it is engine source by the
+  // identical argument. Change which tarball it fetches, or how it verifies one, and what
+  // the engine is built from changes while every .c file stays put.
+  //
+  // THE ONE ENTRY THE DERIVED CHECK CANNOT NAME. test/engine-recipe.test.cjs derives the
+  // orchestration sublist from build-tjs.cjs's own require graph, which is how the last
+  // three additions were found without a hand-count. A shell script is not required, it is
+  // SPAWNED, so that ratchet is structurally blind to it and this entry is a deliberate
+  // hand-add. Recorded here rather than silently, because "the derivation found it" is the
+  // property that makes the rest of this list trustworthy and this line does not have it.
+  'scripts/provision-bundle-inputs.sh',
   // ADDED 2026-09-20. scripts/file-prefix-map.cjs decides whether the absolute path a
   // build ran from is REWRITTEN OUT of the objects (-ffile-prefix-map, or the older
   // -fdebug-prefix-map/-fmacro-prefix-map pair, or nothing on a compiler that takes

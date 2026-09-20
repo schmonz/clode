@@ -178,3 +178,51 @@ test('the real pinned checkout can pin every package the gate derives from it', 
   assert.strictEqual(`esbuild@${esb.split(' ')[2]}`, ESBUILD_PIN,
     `the lockfile would provision a different esbuild than ${ESBUILD_PIN}:\n${esb}`);
 });
+
+// ---- the call site ----------------------------------------------------------
+// Everything above is the script in isolation. This row is the other half, and it is the
+// one this repo has been burned by most often: a gate, a refusal or a provisioner that is
+// perfectly correct and never CALLED. Same shape as test/esbuild-edge.test.cjs's two
+// call-site rows, and written with plain indexOf for the same reason its header gives —
+// `.match(`/`.test(`/`.exec(` are what test/guards-population.cjs's classifier reads as
+// scanner shape.
+const BUILD_TJS = fs.readFileSync(path.join(REPO, 'scripts', 'build-tjs.cjs'), 'utf8');
+
+test('build-tjs CALLS the provisioner, in the source branch, immediately before the gate', () => {
+  const callIdx = BUILD_TJS.indexOf('\n  provisionBundleInputs(tjsDir);');
+  assert.ok(callIdx > -1, 'nothing calls provisionBundleInputs — a cold checkout would be '
+    + 'refused instead of provisioned, with every row above still green');
+
+  // BEFORE the gate, and with nothing between them: the gate re-derives what is missing
+  // from the tree the provisioner just wrote, which is what makes a partial provision
+  // report itself by name instead of as an exit code.
+  const gateIdx = BUILD_TJS.indexOf('const refusal = bundleInputsRefusal({');
+  assert.ok(gateIdx > callIdx, 'the provisioner must run BEFORE the refusal it exists to '
+    + 'make unnecessary; after it, it could only ever provision a tree nothing will use');
+
+  // In the SOURCE branch. A --build-only guest receives a synced tree and has no business
+  // fetching anything — the same rule the gate itself follows.
+  const buildOnlyIdx = BUILD_TJS.lastIndexOf('if (buildOnly) {', callIdx);
+  const elseIdx = BUILD_TJS.indexOf('} else {', buildOnlyIdx);
+  assert.ok(elseIdx > -1 && callIdx > elseIdx,
+    'provisioning belongs in the else (source) branch, not in --build-only');
+
+  // THE ASYNC-BOUNDARY RULE, PINNED. scripts/build-tjs.cjs has exactly one async
+  // continuation, opened for provisionCosmocc's await, and test/build-tjs-continuation-scope
+  // .test.cjs exists because moving that opener once produced a ReferenceError at module
+  // load on every qemu guest-bake leg. Provisioning sits ABOVE it and is therefore
+  // synchronous BY CONSTRAINT: the fetch lives in a POSIX sh sibling reached through
+  // spawnSync precisely so no `await` is introduced here. An `await` on this line would
+  // force that boundary up past the --regen-only exit again.
+  const openerIdx = BUILD_TJS.indexOf('\n(async () => {');
+  assert.ok(openerIdx > -1, 'the async continuation opener is gone; this row is now blind');
+  assert.ok(callIdx < openerIdx,
+    'provisionBundleInputs is called above the async continuation, so it must stay '
+    + 'synchronous — see its header');
+  const body = BUILD_TJS.slice(BUILD_TJS.indexOf('function provisionBundleInputs(dir) {'),
+    BUILD_TJS.indexOf('\n}\n', BUILD_TJS.indexOf('function provisionBundleInputs(dir) {')));
+  assert.ok(body.indexOf('await ') === -1,
+    'provisionBundleInputs must not await: it runs above the one async continuation this '
+    + 'file has, and introducing an await here moves the boundary that '
+    + 'test/build-tjs-continuation-scope.test.cjs exists to protect');
+});

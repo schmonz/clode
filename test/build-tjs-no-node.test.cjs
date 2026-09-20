@@ -46,10 +46,9 @@ const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
 const { spawnSync } = require('node:child_process');
-const { tjsPath, engineSpawn, LOADER, REPO } = require('./node-shim-helper.cjs');
-const { tjsBin, tjsVendorParentDir } = require('../scripts/platform-tag.cjs');
+const { engineSpawn, LOADER, REPO } = require('./node-shim-helper.cjs');
 const { OK_TOKEN } = require('../scripts/engine-api-floor.cjs');
-const { copyCheckout } = require('./engine-build-harness.cjs');
+const { copyCheckout, nodeFreePreflight } = require('./engine-build-harness.cjs');
 
 // A throwaway COPY of an EXISTING vendor checkout, never a virgin dir.
 //
@@ -88,87 +87,14 @@ const { copyCheckout } = require('./engine-build-harness.cjs');
 // wrong reason, which is exactly how the --source-only row once told CI "no
 // engine — build one" on nine jobs that HAD an engine (see the header).
 
-// A PATH with no node on it, and still enough of a toolchain to compile with.
-//
-// THE PROBLEM THE FIRST CUT DID NOT HAVE: --source-only needs no tools beyond
-// git, so a hardcoded '/usr/bin:/bin:/usr/sbin:/sbin' expresses "no node" for
-// it. --build-only shells to cmake, ninja and ccache, and on this box all
-// three live in /opt/pkg/bin — WHICH IS ALSO WHERE node LIVES. Dropping every
-// PATH directory that contains a node therefore drops the compiler toolchain
-// with it, and the run fails for a reason that has nothing to do with Node
-// absence. Filtering by DIRECTORY cannot express this host at all.
-//
-// So filter by ENTRY: a farm of symlinks to every program on the ambient PATH
-// except the Node family, first-wins so PATH precedence is preserved, with the
-// POSIX floor behind it. That is what a node-free host looks like from inside
-// the build, and it is the exact shape the 2026-09-19 proof runs of all three
-// modes used before any of this was committed.
-const NODE_FAMILY = new Set(['node', 'nodejs', 'npm', 'npx', 'corepack',
-  'node.exe', 'npm.cmd', 'npx.cmd']);
-const POSIX_FLOOR = '/usr/bin:/bin:/usr/sbin:/sbin';
-function nodeFreePath(farmDir) {
-  fs.mkdirSync(farmDir, { recursive: true });
-  for (const d of (process.env.PATH || '').split(path.delimiter).filter(Boolean)) {
-    let entries;
-    try { entries = fs.readdirSync(d); } catch { continue; }
-    for (const name of entries) {
-      if (NODE_FAMILY.has(name)) continue;
-      const link = path.join(farmDir, name);
-      if (fs.existsSync(link)) continue; // first wins: PATH precedence
-      try { fs.symlinkSync(path.join(d, name), link); } catch { /* racy dir, skip */ }
-    }
-  }
-  return `${farmDir}${path.delimiter}${POSIX_FLOOR}`;
-}
-
-// Returns { srcCheckout, bare } or null after calling t.skip with the reason.
-// Every refusal names what is missing AND how to supply it, because a skip
-// nobody can act on is a test that quietly stopped existing.
-function preflight(t, farmDir) {
-  // POSIX-only, and say so rather than letting it look like a missing engine.
-  // The probe below is `sh -c 'command -v node'`; there is no Windows
-  // equivalent of "a PATH with no node on it" that this file expresses. Before
-  // this skip existed, Windows fell through to the engine check, found no
-  // `.../tjs` (it is `tjs.exe` there) and told a developer who HAS an engine to
-  // go build one.
-  if (process.platform === 'win32') {
-    t.skip('POSIX-only: this gate proves Node-absence with `sh -c \'command -v node\'` '
-      + 'and a synthesized POSIX PATH — not a missing engine');
-    return null;
-  }
-  if (!tjsPath()) {
-    t.skip(`no engine (CLODE_TJS or ${tjsBin(REPO)}) — build one with \`node scripts/build-tjs.cjs\``);
-    return null;
-  }
-  // A warm vendor checkout is a PRECONDITION, not something this gate creates
-  // (see copyCheckout above for the 785MB reason).
-  const srcCheckout = path.join(tjsVendorParentDir(), 'txiki.js');
-  if (!fs.existsSync(path.join(srcCheckout, '.git'))) {
-    t.skip(`no vendor checkout at ${srcCheckout} — run \`node scripts/build-tjs.cjs --source-only\` `
-      + 'once; this gate copies an existing checkout and will not clone 785MB inside a test run');
-    return null;
-  }
-  // If node were reachable the run would prove nothing, so establish its
-  // absence before asserting anything else. A host whose POSIX floor itself
-  // ships a node (some distro images put it in /usr/bin) cannot express this
-  // condition at all — that is a SKIP with the reason spelled out, not a
-  // failure, and not a silent pass.
-  const bare = nodeFreePath(farmDir);
-  const probe = spawnSync('sh', ['-c', 'command -v node || true'],
-    { env: { PATH: bare }, encoding: 'utf8' });
-  if (probe.stdout.trim()) {
-    t.skip(`node is still reachable at ${probe.stdout.trim()} on the synthesized node-free PATH `
-      + `(it is inside the POSIX floor ${POSIX_FLOOR}, which this gate cannot drop without `
-      + 'losing sh/cc) — this host cannot express "no node" and the gate would prove nothing');
-    return null;
-  }
-  return { srcCheckout, bare };
-}
-
+// A PATH with no node on it, and a preflight for the four preconditions every row here
+// shares, BOTH MOVED to test/engine-build-harness.cjs when test/build-tjs-cold-provision.test.cjs
+// became a second caller. The duplication warning three paragraphs up is this file's own,
+// and it applies to a second FILE exactly as it applied to a second row.
 test('the SOURCE phase runs with Node absent from PATH', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-tjs-no-node-'));
   t.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } });
-  const pre = preflight(t, path.join(dir, 'nodefree-bin'));
+  const pre = nodeFreePreflight(t, path.join(dir, 'nodefree-bin'));
   if (!pre) return;
 
   // Scrubbed and redirected rather than inherited: the env below is BUILT UP,
@@ -245,7 +171,7 @@ test('the BUILD phase produces a working engine with Node absent from PATH', (t)
   }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-tjs-no-node-build-'));
   t.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } });
-  const pre = preflight(t, path.join(dir, 'nodefree-bin'));
+  const pre = nodeFreePreflight(t, path.join(dir, 'nodefree-bin'));
   if (!pre) return;
 
   // --build-only demands an ALREADY-PATCHED tree and never patches one itself,
@@ -307,7 +233,7 @@ test('the BUILD phase produces a working engine with Node absent from PATH', (t)
 test('the source phase names its esbuild need instead of ENOENTing on npm', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-tjs-esbuild-'));
   t.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } });
-  const pre = preflight(t, path.join(dir, 'nodefree-bin'));
+  const pre = nodeFreePreflight(t, path.join(dir, 'nodefree-bin'));
   if (!pre) return;
   // The override needs a REAL esbuild to point at, and the warm checkout is
   // where this repo already has one. No esbuild anywhere means the second half
@@ -345,6 +271,13 @@ test('the source phase names its esbuild need instead of ENOENTing on npm', (t) 
     CLODE_TJS_BUILD: path.join(dir, 'build'),
     CLODE_CACHE: path.join(dir, 'cache'),
     CLODE_DEPS: path.join(dir, 'deps'),
+    // "PROVISIONING CANNOT RUN HERE", declared. Since scripts/provision-bundle-inputs.sh
+    // landed, a missing input is normally FETCHED rather than refused, so without this both
+    // halves of this row would quietly succeed and it would be asserting nothing — while
+    // also reaching the network from inside a suite test/run.mjs:23 put in offline mode.
+    // CLODE_OFFLINE=1 is the honest expression of the state the refusal is FOR: a host that
+    // cannot provision. The claim is unchanged; its precondition is now written down.
+    CLODE_OFFLINE: '1',
   };
   const [cmd, argv] = engineSpawn(['run', LOADER, path.join(REPO, 'scripts/build-tjs.cjs'), '--source-only']);
   const sourceOnly = (env) => spawnSync(cmd, argv,
@@ -394,10 +327,17 @@ test('the source phase names its esbuild need instead of ENOENTing on npm', (t) 
 // So the claim under test is not "it fails" — it already did, twice — but that it refuses
 // UP FRONT and names BOTH halves. Two invocations, because supplying the bundler must not
 // make the second half go quiet.
+//
+// WHAT CHANGED WHEN PROVISIONING LANDED (scripts/provision-bundle-inputs.sh). A cold
+// checkout is no longer normally refused — it is FETCHED, and
+// test/build-tjs-cold-provision.test.cjs is the row that proves it and that the bundles come
+// out byte-identical. This row keeps its original claim by declaring the state the refusal
+// is for: CLODE_OFFLINE=1, i.e. a host that cannot provision. The gate was not weakened to
+// keep this row green; the row was made honest about which world it is describing.
 test('a COLD checkout is refused by name, both halves, before any bundling is attempted', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-tjs-cold-'));
   t.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } });
-  const pre = preflight(t, path.join(dir, 'nodefree-bin'));
+  const pre = nodeFreePreflight(t, path.join(dir, 'nodefree-bin'));
   if (!pre) return;
   const realEsbuild = path.join(pre.srcCheckout, 'node_modules', '.bin', 'esbuild');
   if (!fs.existsSync(realEsbuild)) {
@@ -418,6 +358,13 @@ test('a COLD checkout is refused by name, both halves, before any bundling is at
     CLODE_TJS_BUILD: path.join(dir, 'build'),
     CLODE_CACHE: path.join(dir, 'cache'),
     CLODE_DEPS: path.join(dir, 'deps'),
+    // "PROVISIONING CANNOT RUN HERE", declared. Since scripts/provision-bundle-inputs.sh
+    // landed, a missing input is normally FETCHED rather than refused, so without this both
+    // halves of this row would quietly succeed and it would be asserting nothing — while
+    // also reaching the network from inside a suite test/run.mjs:23 put in offline mode.
+    // CLODE_OFFLINE=1 is the honest expression of the state the refusal is FOR: a host that
+    // cannot provision. The claim is unchanged; its precondition is now written down.
+    CLODE_OFFLINE: '1',
   };
   const [cmd, argv] = engineSpawn(['run', LOADER, path.join(REPO, 'scripts/build-tjs.cjs'), '--source-only']);
   const sourceOnly = (env) => spawnSync(cmd, argv,

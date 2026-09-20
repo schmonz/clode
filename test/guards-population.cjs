@@ -215,6 +215,20 @@ const GUARD_EXCLUSIONS = [
       + 'edge actually fires.',
   },
   {
+    file: 'build-tjs-cold-provision.test.cjs',
+    because: 'it is a live ACCEPTANCE run, not a scan, the same shape as '
+      + 'build-tjs-no-node.test.cjs and bootstrap-engine-online.test.cjs above: it CoW-copies '
+      + 'the vendor checkout TWICE into a mkdtemp of its own, deletes node_modules from one '
+      + 'of them, runs both source phases under the node-shim with Node absent from PATH, '
+      + 'and compares the sha256 of every src/bundles/js/** file THOSE TWO RUNS just wrote. '
+      + 'Both classifier signals are false positives on that shape: READS_ARTIFACT fires on '
+      + 'the repo-rooted path it hands the child as its script argument, and PATTERN_MATCHES '
+      + 'on `assert.match(cr.stdout, /source tree ready:/)` — a finding derived from a child '
+      + 'process this test started, never from a fixed artifact it did not create. There is '
+      + 'no artifact to scan and no violation pattern to look for; the subject is whether a '
+      + 'COLD checkout can build the bundles at all, and whether they come out identical.',
+  },
+  {
     file: 'bootstrap-engine-online.test.cjs',
     because: 'it is a live ACCEPTANCE run, not a scan, the same shape as '
       + 'build-tjs-no-node.test.cjs above: it range-fetches the pinned release\'s engine '

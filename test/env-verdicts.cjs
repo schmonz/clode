@@ -369,6 +369,25 @@ const VERDICTS = [
       + 'run HERE rather than being deferred to a machine that is already this one. '
       + 'Env-only for the same reason as CLODE_BOOTSTRAP_TARGET — it selects nothing '
       + 'about what gets BUILT, only which prebuilt interpreter runs the builder.' },
+  { name: 'CLODE_SHA512', verdict: 'env-only',
+    because: 'points scripts/provision-bundle-inputs.sh at a sha512 tool when the chain it '
+      + 'probes (sha512sum / shasum -a 512 / openssl / cksum -a sha512 / digest -a sha512) '
+      + 'finds none. Exactly CLODE_SHA256\'s shape one algorithm up, and with the same '
+      + 'teeth: the override is KNOWN-ANSWER TESTED against a digest written in that script '
+      + 'before it is allowed to verify anything, so a tool that is not a sha512 is refused '
+      + 'rather than trusted. Selects nothing about what gets BUILT — the pinned bytes it '
+      + 'checks are the same bytes either way.' },
+  { name: 'CLODE_OFFLINE', verdict: 'env-only',
+    because: 'declares that this run may not reach the network, and is READ (not just set) '
+      + 'by the bundle-input provisioning path: scripts/build-tjs.cjs skips provisioning and '
+      + 'lets scripts/bundle-inputs-gate.cjs refuse by name instead, and '
+      + 'scripts/provision-bundle-inputs.sh refuses a cache miss rather than fetching. It '
+      + 'changes how the build is PLUMBED, never what it produces: the inputs provisioning '
+      + 'supplies are pinned by the txiki checkout\'s own package-lock.json, so an online '
+      + 'run and a warm offline run build from identical bytes (proved byte-for-byte by '
+      + 'test/build-tjs-cold-provision.test.cjs). The suite\'s single source of truth for '
+      + 'it is test/run.mjs:22-23, which is why it is a gate name in '
+      + 'test/environment-stamp.cjs rather than a CLI flag.' },
   { name: 'CLODE_BUILD_SCRATCH', verdict: 'env-only',
     because: 'relocates the scratch/tmp working directory scripts/build-scratch.cjs hands '
       + 'out (CI\'s build-leg action sets it to a workspace-local dir). A location override '
