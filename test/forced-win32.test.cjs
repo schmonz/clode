@@ -1,0 +1,204 @@
+'use strict';
+// THE GATE ON THE FORCED-WIN32 PASS ITSELF.
+//
+// The pass (test/forced-win32.cjs + test/forced-win32-preload.cjs, run by test/run.mjs
+// straight after the main suite) exists because FOUR consecutive rounds of Windows-only
+// CI failures were POSIX assumptions in TEST code that no local run could reach. Its own
+// failure mode is the one this repo keeps paying for: a gate that runs, reports green,
+// and is structurally unable to fail. So this file pins four separate things —
+//
+//   1. the FILE SET IS DERIVED, not a list. Three hand-maintained lists have gone stale
+//      here (which is why scripts/engine-recipe.mjs's FILES is derived); a fourth would
+//      rot the same way.
+//   2. the pass CAN FAIL. A control fixture with a plain POSIX assumption is run through
+//      the real pass and required to go RED — and required to go GREEN without the
+//      preload, so the redness is provably the forcing and not the fixture.
+//   3. the LIMITS ARE TRUE. The pass's documented blind spots (path separators, a real
+//      filesystem) are asserted against the running preload rather than merely written
+//      down, so a future preload that quietly acquires more reach makes this red instead
+//      of letting the docs lie.
+//   4. it is WIRED IN. A pass that test/run.mjs stops invoking is a gate that never runs,
+//      which this repo has also already paid for.
+const { test } = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+
+const F = require('./forced-win32.cjs');
+const REPO = path.join(__dirname, '..');
+const mkdtemp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'clode-forced-win32-'));
+
+// A fake tree, so the derivation is tested on inputs this file controls rather than on
+// whatever happens to be in test/ today.
+function fakeIo(files) {
+  return {
+    read: (f) => {
+      if (!(f in files)) throw new Error(`fake io: no ${f}`);
+      return files[f];
+    },
+    exists: (f) => f in files,
+  };
+}
+
+// ---------------------------------------------------------------- derivation ----
+
+test('a platform-sensitive file with no reach into the real OS is IN the pass', () => {
+  const io = fakeIo({ '/t/a.test.cjs': "if (process.platform === 'win32') {}\n" });
+  assert.deepStrictEqual(F.forcedWin32Files(['/t/a.test.cjs'], io), ['/t/a.test.cjs']);
+});
+
+test('a file with no platform sensitivity at all is OUT — nothing to force', () => {
+  const io = fakeIo({ '/t/a.test.cjs': 'assert.ok(1 + 1 === 2);\n' });
+  assert.deepStrictEqual(F.forcedWin32Files(['/t/a.test.cjs'], io), []);
+});
+
+test('a sensitive file that SPAWNS is OUT, because the child sees the real OS', () => {
+  // This is the pass's central honesty constraint, not a convenience: forcing
+  // process.platform is a lie told to ONE process. Anything it spawns — a shell, a
+  // compiler, an engine, `cmd.exe` — still runs on the real machine, so a forced run of
+  // such a file reports a contradiction between the lie and the box rather than anything
+  // about Windows. MEASURED, before this rule existed: of the 177 test files matching
+  // the sensitivity pattern, 100 went red under forcing, and 85 of those died in ONE
+  // place — scripts/build-scratch.cjs's exec probe spawning `cmd.exe`, which a Mac does
+  // not have. That is 341 of 424 failures carrying no information about Windows.
+  const io = fakeIo({ '/t/a.test.cjs': "process.platform; spawnSync('sh', []);\n" });
+  assert.deepStrictEqual(F.forcedWin32Files(['/t/a.test.cjs'], io), []);
+});
+
+test('the reach is TRANSITIVE: a sensitive file whose helper spawns is OUT too', () => {
+  // The helper is where this would otherwise hide — test/*.cjs helpers are shared by
+  // dozens of test files, and a per-file text scan would call every one of them clean.
+  const io = fakeIo({
+    '/t/a.test.cjs': "require('./helper.cjs'); process.platform;\n",
+    '/t/helper.cjs': "const { execFileSync } = require('node:child_process');\n",
+  });
+  assert.deepStrictEqual(F.forcedWin32Files(['/t/a.test.cjs'], io), []);
+  // ...and the same file is IN once the helper stops reaching the real OS, which proves
+  // the exclusion is the helper and not the require itself.
+  const clean = fakeIo({
+    '/t/a.test.cjs': "require('./helper.cjs'); process.platform;\n",
+    '/t/helper.cjs': 'module.exports = {};\n',
+  });
+  assert.deepStrictEqual(F.forcedWin32Files(['/t/a.test.cjs'], clean), ['/t/a.test.cjs']);
+});
+
+test('the real set is DERIVED from the tree and meets a floor', () => {
+  const files = F.forcedWin32Files(F.discover(path.join(REPO, 'test')));
+  assert.ok(files.length >= F.FLOOR,
+    `the pass covers ${files.length} file(s), below the floor of ${F.FLOOR} — either the `
+    + 'sensitivity pattern stopped matching (a derivation regression) or the suite really '
+    + 'did lose that much platform-sensitive fixture code. Do not lower the floor to make '
+    + 'this pass.');
+  for (const f of files) assert.ok(f.endsWith('.test.cjs'), `${f} is not a test file`);
+  // And it is a SUBSET, not everything: a pass that claims to cover every file would be
+  // claiming Windows coverage it does not have.
+  assert.ok(files.length < F.discover(path.join(REPO, 'test')).length);
+});
+
+// ------------------------------------------------------------------- control ----
+
+// The control fixture: one assertion that is true on POSIX and false on Windows, written
+// the way the three earlier rounds were written — no win32 branch, no skip.
+const POSIX_ASSUMING_FIXTURE = `
+const { test } = require('node:test');
+const assert = require('node:assert');
+const path = require('node:path');
+test('assumes a POSIX platform', () => {
+  assert.notStrictEqual(process.platform, 'win32', 'this box is POSIX');
+});
+`;
+
+function runFixture(withPreload) {
+  const d = mkdtemp();
+  const f = path.join(d, 'control.test.cjs');
+  fs.writeFileSync(f, POSIX_ASSUMING_FIXTURE);
+  // NODE_TEST_CONTEXT et al. are set by the `node --test` running THIS file, and an
+  // inner `node --test` that inherits them thinks it is a reporter child: it exits 0
+  // having run nothing, so the control would report "cannot fail" for a reason that has
+  // nothing to do with the preload. Scrubbed, not worked around.
+  const env = { ...process.env };
+  for (const k of Object.keys(env)) if (k.startsWith('NODE_TEST_')) delete env[k];
+  if (withPreload) env.NODE_OPTIONS = `${env.NODE_OPTIONS || ''} --require ${F.PRELOAD}`.trim();
+  const r = spawnSync(process.execPath, ['--test', '--test-reporter', 'tap', f],
+    { env, encoding: 'utf8' });
+  fs.rmSync(d, { recursive: true, force: true });
+  return r;
+}
+
+test('CONTROL: the pass can actually FAIL — a POSIX assumption goes red under it', () => {
+  const red = runFixture(true);
+  assert.notStrictEqual(red.status, 0,
+    'the forced-win32 preload did not turn a plain POSIX assumption red. The pass is '
+    + 'structurally unable to fail, which is worse than not having it: it reports green '
+    + 'over exactly the class of bug it was built for.');
+  assert.match(red.stdout, /this box is POSIX/);
+});
+
+test('CONTROL: the same fixture is GREEN without the preload', () => {
+  // Without this half, the control above would also be satisfied by a preload that
+  // breaks node:test outright — "it went red" would prove nothing about the forcing.
+  const green = runFixture(false);
+  assert.strictEqual(green.status, 0, green.stdout + green.stderr);
+});
+
+// -------------------------------------------------------------------- limits ----
+
+// What the pass covers is exactly as important as what it does not, and a limit that is
+// only WRITTEN DOWN drifts. Each one below is asserted against the real preload.
+function probe(expr) {
+  const r = spawnSync(process.execPath, ['--require', F.PRELOAD, '-e',
+    `process.stdout.write(String(${expr}))`], { encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, r.stderr);
+  return r.stdout;
+}
+
+test('LIMIT it DOES reach: process.platform really is win32 in the child', () => {
+  assert.strictEqual(probe('process.platform'), 'win32');
+  assert.strictEqual(probe('process.env.CLODE_FORCED_WIN32'), '1',
+    'the preload must leave a witness, or a --require that silently failed to load would '
+    + 'read as a clean pass over the whole set');
+});
+
+test('LIMIT it does NOT reach: path separators stay POSIX', () => {
+  // node binds node:path to the POSIX implementation during bootstrap, BEFORE any
+  // --require runs, so `path.join`, `path.sep` and `path.isAbsolute` keep POSIX
+  // semantics no matter what process.platform says. The backslash/drive-letter class of
+  // bug — round 3's `C:\\Program Files\\...` split — is therefore OUT OF REACH of this
+  // pass. Asserted so the claim cannot quietly stop being true.
+  assert.strictEqual(probe('require("node:path").sep'), path.sep);
+  assert.strictEqual(probe('require("node:path").win32.sep'), '\\',
+    'sanity: path.win32 is still available for code that asks for it explicitly');
+});
+
+test('LIMIT it does reach, but only halfway: os.tmpdir() takes the win32 branch', () => {
+  // os.tmpdir()'s win32 branch reads TEMP/TMP, which a POSIX box does not set — the
+  // preload points them at the real tmpdir so the branch is EXERCISED and still returns
+  // a directory that exists. A test that hardcodes '/tmp' instead of asking still goes
+  // red; a test that asks keeps working.
+  const t = probe('require("node:os").tmpdir()');
+  assert.ok(fs.existsSync(t), `forced os.tmpdir() must still exist, got ${JSON.stringify(t)}`);
+});
+
+test('LIMITS are written where a reader will see them', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'forced-win32.cjs'), 'utf8');
+  const lower = src.toLowerCase();
+  for (const claim of ['path separator', 'real windows', 'lib.exe', 'crlf']) {
+    assert.ok(lower.includes(claim),
+      `the pass's own header must name what it cannot catch (${claim}) — a second pass `
+      + 'whose limits live only in a commit message reads as Windows coverage');
+  }
+});
+
+// -------------------------------------------------------------------- wiring ----
+
+test('test/run.mjs actually RUNS the pass — it is not a script nobody invokes', () => {
+  const run = fs.readFileSync(path.join(__dirname, 'run.mjs'), 'utf8');
+  assert.match(run, /forced-win32\.cjs/,
+    'test/run.mjs must derive the forced set from test/forced-win32.cjs');
+  assert.match(run, /PRELOAD/,
+    'test/run.mjs must pass the preload to the second `node --test`, or the pass runs '
+    + 'with the real platform and proves nothing');
+  assert.ok(/forcedWin32Files/.test(run));
+});

@@ -664,6 +664,68 @@ if (!testsRan) {
   fails = 1;
 }
 
+// ---------------------------------------------------------------------------
+// THE FORCED-WIN32 SECOND PASS.
+//
+// A cheap re-run of the platform-sensitive, fixture-only test files with
+// `process.platform` forced to 'win32' — real execution, nothing stubbed, no test file
+// edited. It exists because four consecutive rounds of Windows-only CI failures were
+// POSIX assumptions in TEST code, each costing a ~2-hour cycle to discover, and because
+// a static lint for them was measured and rejected. test/forced-win32.cjs carries the
+// whole argument: how the set is DERIVED (never listed), what the pass catches, and —
+// read that part before quoting a green run — the things it structurally cannot catch,
+// starting with path separators. It is NOT Windows coverage.
+//
+// WHY IT RUNS HERE, ON EVERY `npm test`, rather than as its own npm script or CI job:
+// measured at 3.0s / 122 tests over the derived set against a multi-minute suite, far below
+// the cost of remembering to run it. This repo has been bitten by gates that existed but
+// never ran; the cheapest way for this one not to join them is to have no separate
+// invocation at all. It also inherits the whole environment this runner has already
+// built (CLODE_NODE, CLODE_STATE_ROOT, the offline gate, the hermeticity snapshot), so
+// it is covered by the same postflight guards as the main pass.
+{
+  const { forcedWin32Files, PRELOAD } = require('./forced-win32.cjs');
+  const forcedFiles = forcedWin32Files(files);
+  if (forcedFiles.length === 0) {
+    console.error('run: the forced-win32 pass derived ZERO files from '
+      + `${files.length} discovered test file(s) — that is a derivation regression in `
+      + 'test/forced-win32.cjs, not "nothing to check". A pass over no files is a gate '
+      + 'that cannot fail.');
+    fails = 1;
+  } else {
+    const winTap = path.join(os.tmpdir(), `clode-test-win32-${process.pid}.tap`);
+    const res2 = spawnSync(process.execPath, [
+      '--test',
+      '--test-reporter', 'tap',
+      '--test-reporter-destination', winTap,
+      ...forcedFiles,
+    ], {
+      stdio: ['ignore', 'ignore', 'inherit'],
+      env: {
+        ...process.env,
+        NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --require ${PRELOAD}`.trim(),
+      },
+    });
+    let winTapText = null;
+    try { winTapText = fs.readFileSync(winTap, 'utf8'); } catch { /* handled below */ }
+    finally { try { fs.unlinkSync(winTap); } catch { /* best-effort */ } }
+    const ran = winTapText ? winTapText.match(/^# tests (\d+)/m) : null;
+    if (res2.status === 0 && ran && Number(ran[1]) > 0) {
+      console.error(`run: forced-win32 pass OK — ${ran[1]} test(s) over `
+        + `${forcedFiles.length} platform-sensitive fixture-only file(s). This is a `
+        + 'pre-filter, NOT Windows coverage (see test/forced-win32.cjs).');
+    } else {
+      console.error('run: FORCED-WIN32 PASS FAILED — one or more test files assume a POSIX '
+        + 'platform. These are the failures a Windows runner would report hours from now; '
+        + 'reproduce one with `node test/forced-win32.cjs --run <file>`:');
+      if (winTapText) for (const line of winTapText.split(/\r?\n/)) {
+        if (/^\s*(not ok|# (tests|pass|fail|skipped))/.test(line)) console.error(`    ${line}`);
+      } else console.error('    (no TAP output — the second `node --test` did not run at all)');
+      fails = 1;
+    }
+  }
+}
+
 // Postflight: no watched real dir changed, and the store still has no fake deps.
 //
 // DEV-BOX BLIND SPOT (cost a CI round-trip 2026-08-01, worth knowing before you
