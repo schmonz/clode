@@ -65,6 +65,36 @@ function describeConfig(buildEnv) {
   return parts.join(' ');
 }
 
+// PURE, and exported so the one env fact this gate's MEANING depends on can be asserted
+// without paying for two engine builds.
+//
+// THE GATE THAT COULD NOT FAIL, and why CLODE_TJS_CCACHE=0 is here. This file's own header
+// names the property: "a cache that returns a different object than a fresh compile is the
+// one failure mode that matters". PATH and HOME are passed through to the child, so on any
+// box with ccache installed -- this developer box since scripts/ccache-launcher.cjs's task
+// 2, and now, potentially, a CI runner, since .github/actions/build-leg installs one --
+// scripts/build-tjs.cjs enables the launcher and phase B is served ENTIRELY from the cache
+// phase A warmed. Neither phase re-runs the compiler, the whole-binary compare passes
+// trivially, and the only nondeterminism still reachable is in the LINK. The verdict would
+// keep reading `reproducible` while checking almost nothing.
+//
+// LAST, AFTER the `...buildEnv` spread, unlike every other key here. The leg knobs are a
+// caller seam on purpose (legBuildEnv derives them from the manifest); this is not a knob
+// but the precondition that makes the measurement mean anything, and a leg config that
+// could switch it back on could silently empty the gate. `perturb` remains the seam for
+// showing this gate CAN go red.
+function doubleBuildEnv({ vendorParent, outDir, buildRoot, buildEnv = {} }) {
+  return {
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    CLODE_TJS_VENDOR: vendorParent,
+    CLODE_TJS_OUT: outDir,
+    CLODE_TJS_BUILD: buildRoot,
+    ...buildEnv,
+    CLODE_TJS_CCACHE: '0',
+  };
+}
+
 // THE CAPABILITY. Two builds, identical inputs, identical output path, whole-binary
 // compare. Returns an OBSERVATION — a fact about what happened — and judges nothing;
 // test/repro-verdicts.cjs's judgeObservation() decides what it means for a given leg.
@@ -101,14 +131,7 @@ function doubleBuildEngine({
   const outDir = path.join(dir, 'out');
   const buildRoot = path.join(dir, 'build-root');
   const snapshotsRoot = path.join(dir, 'snapshots');
-  const baseEnv = {
-    PATH: process.env.PATH,
-    HOME: process.env.HOME,
-    CLODE_TJS_VENDOR: vendorParent,
-    CLODE_TJS_OUT: outDir,
-    CLODE_TJS_BUILD: buildRoot,
-    ...buildEnv,
-  };
+  const baseEnv = doubleBuildEnv({ vendorParent, outDir, buildRoot, buildEnv });
 
   // outDir/buildRoot are read back OUT of baseEnv at call time, not closed over. That is
   // what gives `perturb` a real lever: the only way to show this gate can go red against
@@ -173,7 +196,7 @@ function doubleBuildEngine({
   };
 }
 
-module.exports = { doubleBuildEngine, legBuildEnv, describeConfig };
+module.exports = { doubleBuildEngine, doubleBuildEnv, legBuildEnv, describeConfig };
 
 // ---- CLI -----------------------------------------------------------------------------
 

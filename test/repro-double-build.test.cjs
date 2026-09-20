@@ -12,8 +12,13 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const { execFileSync, spawnSync } = require('node:child_process');
 const path = require('node:path');
-const { legBuildEnv, describeConfig, doubleBuildEngine } = require('./repro-double-build.cjs');
+const {
+  legBuildEnv, describeConfig, doubleBuildEngine, doubleBuildEnv,
+} = require('./repro-double-build.cjs');
 const { VERDICTS } = require('./repro-verdicts.cjs');
+// The launcher's OWN reader, so this file cannot drift into testing a spelling
+// scripts/ccache-launcher.cjs does not recognise.
+const { ccacheOptedOut } = require('../scripts/ccache-launcher.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 const RUNNER = path.join(__dirname, 'repro-double-build.cjs');
@@ -27,6 +32,47 @@ function legsByName() {
   }
   return all;
 }
+
+// ---- the precondition the whole measurement rests on ---------------------------------
+//
+// THE GATE THAT COULD NOT FAIL. baseEnv passes PATH and HOME straight through, so on any
+// box with ccache installed scripts/build-tjs.cjs enables the compiler launcher and phase
+// B is served entirely from the cache phase A warmed: neither phase re-runs the compiler,
+// the whole-binary compare passes trivially, and the verdict keeps reading `reproducible`
+// while checking almost nothing but the link. True on this developer box since
+// scripts/ccache-launcher.cjs's task 2 installed a real ccache, and newly reachable in CI
+// now that .github/actions/build-leg installs one on 27 of the 42 legs.
+
+test('the double build opts OUT of ccache, or it measures the cache instead of the compiler', () => {
+  const env = doubleBuildEnv({ vendorParent: '/v', outDir: '/o', buildRoot: '/b' });
+  assert.strictEqual(env.CLODE_TJS_CCACHE, '0',
+    'without this, phase B is served from the cache phase A warmed and the compare is vacuous');
+  // The spelling has to be the one scripts/ccache-launcher.cjs actually reads, not a
+  // plausible-looking neighbour — ccacheOptedOut() tests for exactly '0'.
+  assert.strictEqual(ccacheOptedOut(env), true,
+    'the opt-out must be the value the launcher itself recognises');
+});
+
+test('a leg config cannot switch ccache back on', () => {
+  // legBuildEnv never sets it today; this pins that a future leg knob (or a caller
+  // experimenting) cannot empty the gate by accident. The `perturb` seam remains the
+  // supported way to show this gate can go red.
+  const env = doubleBuildEnv({
+    vendorParent: '/v', outDir: '/o', buildRoot: '/b', buildEnv: { CLODE_TJS_CCACHE: '1' },
+  });
+  assert.strictEqual(env.CLODE_TJS_CCACHE, '0');
+  assert.strictEqual(ccacheOptedOut(env), true);
+});
+
+test('the leg knobs that ARE a caller seam still win over the defaults', () => {
+  // The control for the test above: proving the override is refused only means something
+  // if overrides are otherwise honoured.
+  const env = doubleBuildEnv({
+    vendorParent: '/v', outDir: '/o', buildRoot: '/b', buildEnv: { CLODE_TJS_WASM: 'off' },
+  });
+  assert.strictEqual(env.CLODE_TJS_WASM, 'off');
+  assert.strictEqual(env.CLODE_TJS_OUT, '/o', 'and the fixed paths are untouched');
+});
 
 // ---- the engine config a verdict is ABOUT -------------------------------------------
 //
