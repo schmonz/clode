@@ -289,19 +289,104 @@ function describeFilePrefixMapDecision(decision) {
 //
 // The LAST -DCMAKE_C_FLAGS is the one extended, because that is the one cmake obeys.
 function applyFilePrefixMapDecision(cmakeArgs, decision) {
-  const flags = (decision && decision.flags) || [];
-  if (flags.length === 0) return cmakeArgs;
-  const prefix = '-DCMAKE_C_FLAGS=';
+  return appendToCmakeFlag(cmakeArgs, '-DCMAKE_C_FLAGS=', (decision && decision.flags) || []);
+}
+
+// Shared by both apply functions. Extends the LAST occurrence of a `-D<VAR>=` argument,
+// which is the one cmake obeys, and creates it only when there is none — so the static
+// leg's `-DCMAKE_EXE_LINKER_FLAGS=-static` and the non-Apple legs' -Wno-error demotions
+// survive, instead of being shadowed by a second copy of the same -D.
+function appendToCmakeFlag(cmakeArgs, prefix, flags) {
+  if (!flags || flags.length === 0) return cmakeArgs;
   let last = -1;
   for (let i = 0; i < cmakeArgs.length; i++) {
     if (typeof cmakeArgs[i] === 'string' && cmakeArgs[i].startsWith(prefix)) last = i;
   }
-  if (last === -1) {
-    cmakeArgs.push(prefix + flags.join(' '));
-  } else {
-    cmakeArgs[last] = `${cmakeArgs[last]} ${flags.join(' ')}`;
-  }
+  if (last === -1) cmakeArgs.push(prefix + flags.join(' '));
+  else cmakeArgs[last] = `${cmakeArgs[last]} ${flags.join(' ')}`;
   return cmakeArgs;
+}
+
+// ---- THE LINKER'S OWN COPY OF THE PATHS -------------------------------------------------
+//
+// MEASURED 2026-09-20. With every object byte-identical across two build paths, the linked
+// engine still differed by 1040 bytes, all of it in the symbol table: 46 N_OSO stabs, which
+// is ld64's DEBUG MAP. With -g on (txiki's own CMakeLists adds it) the linker records the
+// ABSOLUTE PATH of every object it read, so a longer build directory makes a longer binary.
+//
+// -ffile-prefix-map cannot reach this: it is a COMPILER flag, and these paths are written by
+// the linker from its own command line. ld64's lever is `-oso_prefix <path>`, which STRIPS
+// that prefix, leaving `CMakeFiles/tjs.dir/src/foo.c.o`. GNU ld does not record object paths
+// at all and rejects the option — the right outcome there is to add nothing.
+//
+// SAME PROBE SHAPE, and one extra trap: ld64 ACCEPTS a prefix that matches nothing, exits 0
+// and strips nothing (measured by hand: `-Wl,-oso_prefix,/tmp/osotest/` left
+// `OSO /private/tmp/osotest/m.o` untouched). So the prefix is resolved through the same
+// realpath move the compiler mapping needed, and it carries a trailing separator so a
+// sibling directory cannot be half-stripped.
+function probeOsoPrefix({
+  cc = 'cc', execFileSyncFn = execFileSync, mkdtempFn = defaultMkdtemp, existsFn = fs.existsSync,
+} = {}) {
+  const dir = mkdtempFn('clode-oso-probe-');
+  try {
+    const src = path.join(dir, 'probe.c');
+    fs.writeFileSync(src, 'int main(void) { return 0; }\n');
+    const exe = path.join(dir, 'probe.out');
+    try {
+      execFileSyncFn(cc, ['-g', `-Wl,-oso_prefix,${dir}/`, src, '-o', exe], { stdio: 'ignore' });
+    } catch (e) {
+      return e && e.code === 'ENOENT' ? 'unavailable' : 'unsupported';
+    }
+    return existsFn(exe) ? 'oso-prefix' : 'unsupported';
+  } finally {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+}
+
+// ONE KNOB for both levers: CLODE_TJS_FILE_PREFIX_MAP=0 turns off the compiler mapping AND
+// this. They are two halves of one property, and a build that maps its objects but not its
+// debug map is the silent partial fix in a new costume.
+function osoPrefixDecision({
+  cc = 'cc', source = 'path', prefix = '', env = process.env,
+  probeFn = probeOsoPrefix, realpathFn = fs.realpathSync,
+} = {}) {
+  if (filePrefixMapOptedOut(env)) {
+    return { state: 'opted-out', cc, source, prefix, flags: [] };
+  }
+  const state = probeFn({ cc });
+  let resolved = prefix;
+  try { resolved = realpathFn(prefix); } catch { /* not created yet: use the literal */ }
+  const withSep = resolved.endsWith(path.sep) || resolved.endsWith('/') ? resolved : `${resolved}/`;
+  const base = { state, cc, source, prefix: withSep };
+  if (state !== 'oso-prefix') return { ...base, flags: [] };
+  return { ...base, flags: [`-Wl,-oso_prefix,${withSep}`] };
+}
+
+function describeOsoPrefixDecision(decision) {
+  const { state, cc, source, prefix } = decision || {};
+  if (state === 'oso-prefix') {
+    return `build-tjs: oso-prefix: STRIP cc=${cc} source=${source} (ld accepts -oso_prefix; `
+      + `the debug map will record object names relative to ${prefix})`;
+  }
+  if (state === 'unsupported') {
+    return `build-tjs: oso-prefix: NONE cc=${cc} source=${source} (this linker rejects `
+      + '-oso_prefix. On GNU ld that is correct and costs nothing, because it does not '
+      + 'record object paths in the linked output at all)';
+  }
+  if (state === 'unavailable') {
+    return `build-tjs: oso-prefix: NONE cc=${cc} source=${source} (could not run it, so no `
+      + 'linker flags were changed)';
+  }
+  if (state === 'opted-out') {
+    return 'build-tjs: oso-prefix: NONE (opted out: CLODE_TJS_FILE_PREFIX_MAP=0)';
+  }
+  throw new Error(`unknown oso-prefix state '${state}' — describeOsoPrefixDecision must be `
+    + 'taught every state osoPrefixDecision can return');
+}
+
+function applyOsoPrefixDecision(cmakeArgs, decision) {
+  return appendToCmakeFlag(cmakeArgs, '-DCMAKE_EXE_LINKER_FLAGS=',
+    (decision && decision.flags) || []);
 }
 
 // ---- after the configure: did cmake agree with the compiler this probed? -----------------
@@ -333,5 +418,6 @@ module.exports = {
   filePrefixMapOptedOut, prefixMapFlags, expandMappings, probeFilePrefixMap,
   compilerFromToolchainFile, resolveCompiler,
   filePrefixMapDecision, describeFilePrefixMapDecision, applyFilePrefixMapDecision,
+  probeOsoPrefix, osoPrefixDecision, describeOsoPrefixDecision, applyOsoPrefixDecision,
   ccCacheMismatchWarning, cmakeCacheCc,
 };

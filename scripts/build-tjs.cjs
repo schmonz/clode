@@ -105,6 +105,7 @@ const { ccacheDecision, describeCcacheDecision, applyCcacheDecision,
   compilerFromCmakeArgs } = require('./ccache-launcher.cjs');
 const { SOURCE_SENTINEL, BUILD_SENTINEL, expandMappings, resolveCompiler: resolveCcForPrefixMap,
   filePrefixMapDecision, describeFilePrefixMapDecision, applyFilePrefixMapDecision,
+  osoPrefixDecision, describeOsoPrefixDecision, applyOsoPrefixDecision,
   ccCacheMismatchWarning, cmakeCacheCc } = require('./file-prefix-map.cjs');
 const { resolveArchivers, arDeterminismDecision, describeArDeterminismDecision,
   applyArDeterminismDecision, arCacheMismatchWarning,
@@ -4012,6 +4013,17 @@ const filePrefixMap = filePrefixMapDecision({
 });
 console.error(describeFilePrefixMapDecision(filePrefixMap));
 applyFilePrefixMapDecision(cmakeArgs, filePrefixMap);
+
+// AND THE LINKER'S OWN COPY. Mapping the compiler's paths is half the property: with -g on
+// (txiki's CMakeLists adds it) ld64 writes a DEBUG MAP of every object's absolute path into
+// the symbol table, so two builds with clean, byte-identical objects still link to different
+// binaries. Measured: 46 N_OSO entries, +1016 bytes of string table.
+const osoPrefix = osoPrefixDecision({
+  ...resolveCcForPrefixMap({ cmakeArgs, toolchainFile: crossFile ? path.resolve(crossFile) : '' }),
+  prefix: buildDir,
+});
+console.error(describeOsoPrefixDecision(osoPrefix));
+applyOsoPrefixDecision(cmakeArgs, osoPrefix);
 
 dropStaleCmakeCache(buildDir, tjsDir);
 cmakeConfigure(['-S', tjsDir, '-B', buildDir, ...cmakeArgs]);
