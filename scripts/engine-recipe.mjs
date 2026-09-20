@@ -97,6 +97,15 @@ export const FILES = [
   // test/engine-recipe.test.cjs named it the moment build-tjs.cjs required it, which is the
   // ratchet doing its job rather than a third hand-count catching up.
   'scripts/ar-determinism.cjs',
+  // ADDED 2026-09-20. scripts/bundle-inputs-gate.cjs decides whether the source phase is
+  // ALLOWED TO RUN AT ALL: it derives what the JS bundle step needs (the pinned esbuild,
+  // and txiki's own dependency tree, which esbuild bundles INTO the engine) and refuses a
+  // checkout that lacks it. Widen its derivation and a tree that used to build is refused;
+  // narrow it and a tree that cannot bundle gets through -- either way what the engine is
+  // built from changes. Same argument as ar-determinism.cjs above, and the derived check in
+  // test/engine-recipe.test.cjs named it the same way: the moment build-tjs.cjs required
+  // it, without anyone remembering to.
+  'scripts/bundle-inputs-gate.cjs',
   // The netbsd-sparc in-guest ENGINE bake recipe. It is engine source for that
   // leg in the most literal sense — it IS the compile — yet an edit to it moved
   // nothing, so the tjs cache happily restored an engine built by a DIFFERENT
