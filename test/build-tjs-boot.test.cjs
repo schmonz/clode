@@ -210,9 +210,6 @@ const NOT_YET_FLIPPED = {
   // --- wave 1, landing one commit at a time immediately after this one. Each entry
   // disappears in the same commit that flips its site, so this table is never a
   // description of intent — only of what is still true.
-  'Build tjs (alpine guest)':
-    'wave 1, third: the only flip that removes a node from a machine outright — '
-    + 'build-tjs.cjs is the alpine container\'s sole node consumer.',
   // --- deliberately out of wave 1.
   'Construct the patched tjs tree from pins (host, native speed)':
     'step 6: --source-only is blocked on esbuild plus txiki\'s own JS dependency tree, '
@@ -268,7 +265,7 @@ const IDIOM = /^scripts\/build-tjs-boot\.sh [a-z0-9][a-z0-9-]* --[a-z-]+only$/;
 
 const GUARD = defineGuard({
   name: 'build-tjs-invocation-shape',
-  floor: 7,
+  floor: 8,
   read: () => ({
     sh: fs.readFileSync(BOOT, 'utf8'),
     executable: (fs.statSync(BOOT).mode & 0o111) !== 0,
@@ -302,6 +299,19 @@ const GUARD = defineGuard({
       `these steps still run build-tjs.cjs under node with no recorded reason: `
       + `${unexplained.join(' / ')}. Either flip them onto scripts/build-tjs-boot.sh or `
       + 'record why not.');
+    // The alpine containers' ONLY node consumer was scripts/build-tjs.cjs, so flipping
+    // that site let `nodejs` leave their apk list — the single removal in this wave. This
+    // file has exactly one literal packages: list (the VM legs' comes through
+    // inputs.guest-packages and those guests still need node), so the rule can be the
+    // whole-file fact rather than a lookup that would rot: putting nodejs back here is
+    // putting a node back on eight machines, and it should have to be deliberate.
+    const withNode = i.yaml.split('\n').map((l) => l.trim())
+      .filter((l) => /^packages:/.test(l) && /\bnodejs\b/.test(l));
+    rule(withNode.length === 0,
+      `a guest package list installs node again: ${withNode.join(' / ')}. The alpine `
+      + 'containers stopped needing one when their build-tjs.cjs call site flipped; if a '
+      + 'leg needs node back, that is a finding about the flip, not a package to re-add.');
+
     const phantom = Object.keys(NOT_YET_FLIPPED).filter((s) => !raw.includes(s));
     rule(phantom.length === 0,
       `NOT_YET_FLIPPED names steps that no longer run build-tjs.cjs under node: `
@@ -315,7 +325,8 @@ const GUARD = defineGuard({
     sh: '#!/bin/bash\nif [[ -n "$x" ]]; then :; fi\necho no-verdict-here\n',
     executable: false,
     yaml: '    - name: A brand new step\n      run: node scripts/build-tjs.cjs --build-only\n'
-      + '    - name: Sloppy\n      run: bash scripts/build-tjs-boot.sh --build-only\n',
+      + '    - name: Sloppy\n      run: bash scripts/build-tjs-boot.sh --build-only\n'
+      + '        packages: build-base cmake nodejs\n',
     buildTjs: "spawnSync('scripts/build-tjs-boot.sh');\n",
   }),
 });

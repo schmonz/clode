@@ -235,6 +235,13 @@ runs:
         # (empty floor) names, and canonicalizes os/arch (macos, amd64, port names).
         ASSET="$(node scripts/canonical-name.cjs asset "$LEG" "$V" "$FLOOR")"
         echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
+        # The leg's canonical <os>-<arch>, from the SAME vocabulary — it is the key into
+        # the templates pack, so scripts/bootstrap-engine.sh reads it as
+        # CLODE_BOOTSTRAP_TARGET wherever the machine that runs the engine cannot name
+        # itself. The alpine containers are exactly that case: a linux/386 container has
+        # no qemu between it and an amd64 kernel, so `uname -m` there answers for the
+        # HOST, and the leg descriptor is the only thing that knows this leg is i386.
+        echo "target=$(node scripts/canonical-name.cjs target "$LEG")" >> "$GITHUB_OUTPUT"
 
     # The cache key carries the BUILD ENVIRONMENT axes, not just the leg
     # name: guest-version varies per tier (ci = newest, release = oldest
@@ -434,7 +441,17 @@ runs:
         platform: ${{ inputs.guest-platform }}
         arch: ${{ inputs.guest-arch }}
         version: ${{ inputs.guest-version }}
-        packages: build-base cmake git linux-headers nodejs
+        # NO nodejs (node-removal-bootstrap-design.md §3 step 2 — the one flip in wave 1
+        # that removes a node from a machine outright). scripts/build-tjs.cjs was this
+        # container's SOLE node consumer, and it now runs under an engine
+        # scripts/bootstrap-engine.sh range-fetches out of the templates pack the last
+        # release published. curl replaces it: busybox wget is what alpine ships, and
+        # this fetch turns on a Range header surviving GitHub's redirect to
+        # objects.githubusercontent.com, which is not a thing to discover on eight legs
+        # at once. All eight alpine arches are pack targets today, so the node fallback
+        # should never be reached here — and if it is, there IS no node and the leg goes
+        # red naming the gap, which is the honest outcome and not a silent one.
+        packages: build-base cmake git linux-headers curl
         cache-key: tjs-${{ inputs.leg }}
         script: |
           export CLODE_TJS_VENDOR="${{ steps.mode.outputs.vendor }}"
@@ -443,7 +460,11 @@ runs:
           export CLODE_TJS_WASM="${{ inputs.wasm }}"
           export CLODE_TJS_MIMALLOC="${{ inputs.mimalloc }}"
           export CLODE_TJS_FFI="${{ inputs.ffi }}"
-          node scripts/build-tjs.cjs --build-only
+          # The container cannot name itself: with binfmt registered `uname -m` answers
+          # for the emulated arch on six of these legs but for the amd64 HOST on
+          # linux/386, so the leg descriptor's canonical target is passed in instead.
+          export CLODE_BOOTSTRAP_TARGET="${{ steps.name.outputs.target }}"
+          scripts/build-tjs-boot.sh alpine-guest --build-only
 
     # Cross-build the engine inside a toolchain image on the ubuntu runner —
     # the generic exec=cross path. The source phase already ran on the host
