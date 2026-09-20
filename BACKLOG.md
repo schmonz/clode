@@ -154,6 +154,71 @@ stay below the compiler-selection push, or it reads an empty array and trusts it
   future cross toolchain file that selected an MSVC-mode compiler from inside the file would
   not be caught. `compiler=cmake-default` in the log is the string to grep if that changes.
 
+## Build reproducibility — measured, per platform (2026-09-19)
+
+Doctrine: ccache is not "done" until every leg has a reproducibility verdict.
+A cache that returns a different object than a fresh compile is the only
+failure mode that matters, and "build twice, compare the whole binary" is the
+only check that catches it without trusting the cache's own accounting.
+
+**darwin: REPRODUCIBLE.** Two causes, both fixed and both platform-neutral:
+mimalloc's `__DATE__`/`__TIME__` banner (anchored source fixup, chosen over a
+compiler flag because `-D__DATE__=` is a gcc/clang spelling MSVC rejects), and
+Apple `ar`/`libtool` stamping member mtimes into the 14 static archives, which
+ld64 folds into `LC_UUID` (`ZERO_AR_DATE=1`).
+CORRECTION to an earlier claim in this file: Apple's `LC_UUID` is a CONTENT
+hash, NOT a per-link nonce. Differing UUIDs were a symptom, never a cause.
+Note for anyone comparing mach-o binaries: the ad-hoc signature's identifier
+derives from the output FILENAME, so compare identically-named outputs or you
+will chase a phantom one-byte delta.
+
+**linux-x64-glibc: REPRODUCIBLE, no extra flags.** Two full engine builds
+(ubuntu:26.04, gcc 15.2, glibc 2.43, WASM off, same `CLODE_TJS_OUT`) gave
+byte-identical SHA-256 `648221ea...` over a 7,531,360-byte ELF. GNU binutils
+2.38 `ar` is ALREADY deterministic by default — `ZERO_AR_DATE` and `ar -D` are
+both no-ops there, so the darwin fix is inert, not corrective. GNU ld output is
+stable and the build-id is content-derived. `__FILE__` absolute paths do not
+break it while the build dir is held constant; `-ffile-prefix-map` (supported,
+used nowhere) is future hardening for the stronger "different host, same
+output" tier.
+
+### Open, ranked
+
+1. **NetBSD: entirely UNMEASURED** — 12 of 42 legs. All three local qemu
+   oracles (1213/2230/1215) were down and no auto-start job exists. NetBSD's
+   `ar` is BSD-derived with its own history, so the GNU result cannot speak for
+   it. Re-run the 3-way `ar` test (default / `ZERO_AR_DATE=1` / whatever
+   NetBSD calls deterministic mode, if anything) the moment that VM is up.
+2. **`linux-x64-glibc`'s documented `os: ubuntu-22.04` does not build at all** —
+   `mod_spawn_sync.c` trips `-Werror=implicit-function-declaration` on
+   `posix_spawn_file_actions_addchdir_np` for want of `_GNU_SOURCE` (which
+   appears 0 times in `build-tjs.cjs`). Invisible because `ci-os` overrides to
+   ubuntu-26.04, so CI never exercises the value the leg table documents for
+   local dev. Adjacent to reproducibility, not caused by it.
+3. **WASM-on was never double-built** — the Linux proof turned WAMR off for
+   time. The release leg builds it on.
+4. MSVC `lib.exe`/`link.exe`: undetermined. `/Brepro` appears nowhere, and the
+   Windows legs are also where the object-grain harness is skipped.
+5. Absolute-path stability is an informal invariant (constant build dir), not
+   an enforced one.
+## A full-suite flake, seen once and not yet named (2026-09-19)
+
+One `npm test` run at `31a0342` reported `# tests 2172 / pass 2134 / fail 1`.
+Two further runs of the SAME tree reported `pass 2135 / fail 0`, exit 0. The
+failing test's NAME was lost: the run was piped to `tail`, so only the summary
+survived. `test/ccache.test.cjs` was the obvious suspect (it is the file this
+phase churned, and it touches real cache state) and it is NOT it — 5/5 clean
+runs in isolation.
+
+So there is a flaky test somewhere in the suite and we do not know which. This
+is recorded rather than shrugged off because a flake is a green that sometimes
+lies, and this repo's standing rule is that CI's job is to tell the truth.
+
+**How to catch it:** always capture the full TAP output to a file, never pipe
+the suite to `tail` — the summary alone cannot name the test. Re-run the suite
+in a loop redirecting to distinct files until one exits non-zero, then read the
+`not ok` line. Do NOT assume it is in the phase 4c3 files.
+
 ## Phase 4c-2 (bytecode as a build rule) — spec §11 acceptances 2 and 3 MET (2026-09-18)
 
 **§11.2 (the tripwire is deleted, regen is a cmake OUTPUT/DEPENDS rule)** — met in task 2
