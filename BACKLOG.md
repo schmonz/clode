@@ -368,6 +368,67 @@ the suite to `tail` — the summary alone cannot name the test. Re-run the suite
 in a loop redirecting to distinct files until one exits non-zero, then read the
 `not ok` line. Do NOT assume it is in the phase 4c3 files.
 
+### A SECOND one-off, this one fully named (2026-09-19)
+
+`CLODE_CCACHE_ENGINE_E2E=1` on darwin/arm64, three real engine builds:
+
+    ccache served DIFFERENT bytes than a cache-off compile for 1 object(s)
+    deps/mimalloc/CMakeFiles/mimalloc-static.dir/src/options.c.o:
+      off=7cb69c48e10d on-cold=543209a477aa on-warm=543209a477aa
+
+Not reproduced. Two further runs — one at the parent commit `f30f59b`, one at
+the same HEAD that produced the red — both PASS, so it is neither a regression
+from the archive-determinism work (which adds nothing to the cmake command line
+on darwin, where the decision is `zero-ar-date`) nor a standing failure.
+
+Note the SHAPE, because it is the informative part and it is written down here
+so the next sighting is the second data point rather than the first: the two
+CACHED phases agreed with each other and disagreed with the UNCACHED one. That
+is not the mimalloc `__DATE__`/`__TIME__` banner (`fixupMimallocBuildBanner`
+runs in the source phase of every phase, before any compile, so all three see
+the same fixed source) and it is not a clock (a clock would have made all three
+differ). It looks like something about the cache-off phase specifically —
+`CLODE_TJS_CCACHE=0`, which is also the phase that runs FIRST over a
+freshly-copied vendor tree. `OBJECTS_EXPECTED_VOLATILE` is deliberately empty
+and must stay empty: do not allowlist this.
+
+### And a NAMED CANDIDATE for the unnamed flake above (2026-09-19)
+
+Four more reds, all in one run, all with the same shape — and this one has a
+mechanism, not just a sighting:
+
+    not ok 2002 - a src/js/** edit changes its compiled src/bundles/c/** bytecode ...
+      add_subdirectory given source "deps/wurl" which is not an existing directory
+    not ok 2032..2034 - the poll-backend fixup lands its seven edits in the patched tree
+      ... 'project(tjs LANGUAGES C CXX)' ...
+
+`deps/wurl` absent and `LANGUAGES C CXX` are both **pristine upstream**: those two
+test files were reading the shared vendor checkout at a moment when it had been
+RESET and not yet re-patched. By the time the run finished it was patched again
+(`LANGUAGES C`, `deps/wurl` present, three `CLODE_DARWIN_POLL` hits), so nothing
+was left broken — which is exactly why it reads as a flake.
+
+**Eight test files touch that one shared checkout**, and four of them drive the
+real source phase, which RESETS it:
+`build-tjs-no-node`, `ccache`, `hermetic-guard`, `esbuild-edge`,
+`tjs-darwin-poll-fixup`, `tjs-bytecode-regen`, `tjs-bytecode-e2e`,
+`tjs-reproducible-engine`. `node --test` runs files in parallel processes, so one
+file's reset lands inside another file's read. Nothing serialises them.
+
+Consistent with the unnamed flake above (which was also "one run red, two runs
+green, `ccache.test.cjs` cleared in isolation" — in isolation is precisely where
+this race cannot happen). Not yet proven to be the same one.
+
+**Fix shape, not yet done:** give the resetting tests their own copy (the way
+`ccache.test.cjs`'s `copyCheckout` already does) rather than a lock, so the
+suite keeps its parallelism.
+
+**Observed run-to-run on this box, same tree:** 3 timeouts (cold engine-template
+caches right after a recipe change), then these 4, then `2192 tests / 2154 pass /
+0 fail / 37 skipped / 1 todo` in 341s. Warm-vs-cold is worth a THIRD of the wall
+clock here (1134s cold, 341s warm), which is enough on its own to push the
+slowest tests past their timeouts.
+
 ## Phase 4c-2 (bytecode as a build rule) — spec §11 acceptances 2 and 3 MET (2026-09-18)
 
 **§11.2 (the tripwire is deleted, regen is a cmake OUTPUT/DEPENDS rule)** — met in task 2
