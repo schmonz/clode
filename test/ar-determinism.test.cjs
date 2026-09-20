@@ -687,21 +687,208 @@ test('a second archiver on this host runs the same three-way control', { timeout
 // inheritance" is a claim, so a real cmake run makes it a fact -- on a two-file synthetic
 // project rather than the 46-second vendored configure, because the mechanism under test is
 // cmake's, not txiki's.
-test('a -D archive rule reaches a subproject added with add_subdirectory', () => {
-  if (!findTool('cmake')) { console.log('SKIP: no cmake on PATH'); return; }
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-ardet-reach-'));
+//
+// THE CLAIM IS TWO LINKS, AND ONLY ONE OF THEM EXISTS ON EVERY TOOLCHAIN (CI run 35487107745,
+// `test / suite (windows-latest)`, the second of that run's only two reds in 2215 tests):
+//
+//   (a) the cache entry reaches the subproject's DIRECTORY SCOPE. cmake's own rule, true on
+//       every platform and every generator.
+//   (b) the value in that scope reaches the GENERATED archive command. True only where cmake
+//       composes a static library out of CMAKE_<LANG>_ARCHIVE_CREATE/APPEND/FINISH at all.
+//
+// Modules/CMakeCInformation.cmake defaults those three and says so in a comment above them:
+// "If CMAKE_C_CREATE_STATIC_LIBRARY is set it will override these." Modules/Platform/
+// Windows-MSVC.cmake sets exactly that -- `<CMAKE_AR> /nologo ... /out:<TARGET> <OBJECTS>`,
+// where CMAKE_AR is lib.exe -- so under MSVC link (b) does not exist and no amount of correct
+// inheritance will put `qcD` in the rule. The suite job on windows-latest configures this
+// throwaway project with nothing pinned, so it gets the runner default (MSVC), and the old
+// assertion failed on a premise that was simply false there.
+//
+// NOTE WHAT THIS IS NOT: it is not a defect on the shipping legs, and it is not a reason to
+// touch the product. Both Windows publisher legs of that same run logged
+// `build-tjs: ar-determinism: FLAGS ar=C:\mingw64\bin\ar.EXE ranlib=C:\mingw64\bin\ranlib.EXE
+// source=path`, i.e. the decision itself resolved an ar-shaped archiver and took the
+// deterministic branch. (Whether an MSVC-compiled leg can then USE those rules is a separate
+// question this test now makes visible and BACKLOG.md records; it is not this test's job to
+// answer, and answering it would move the engine recipe hash.)
+//
+// So the guard keeps both links, decides which ones apply FROM EVIDENCE IT CHECKED, and skips
+// only the inapplicable one, out loud -- the same shape as the control above, and for the same
+// reason: no process.platform, no runner name, no silent skip.
+const REACH_REPORT = 'clode-subproject-scope.txt';
+
+// The verdict, pure, over what the subproject reported and what cmake generated.
+//
+//   not-inherited         link (a) failed: the subproject did not see the cache value. This is
+//                         the property the guard exists for and it FAILS everywhere.
+//   archive-rules-unused  link (a) held, but this toolchain composes its static-library command
+//                         from CMAKE_C_CREATE_STATIC_LIBRARY, so the archive rules are not
+//                         consulted by anyone. Link (b) is inapplicable and ONLY link (b) is
+//                         skipped -- named, with the rule that displaced it.
+//   no-rule-files         link (b) applies but the configure produced no inspectable rule text
+//                         at all, so a green would be vacuous. FAILS.
+//   rule-not-generated    link (b) applies, rule text exists, and the flags are not in it. FAILS.
+//   inherited             both links proven.
+function archiveRuleReachVerdict({
+  seen = {}, wantCreate = '', wantFinish = '', ruleText = '', ruleFiles = 0,
+} = {}) {
+  const create = String(seen.archiveCreate === undefined ? '' : seen.archiveCreate);
+  const finish = String(seen.archiveFinish === undefined ? '' : seen.archiveFinish);
+  const own = String(seen.createStaticLibrary === undefined ? '' : seen.createStaticLibrary).trim();
+  const verdict = (outcome, ok, ruleAssertionSkipped, why) => ({
+    outcome, ok, ruleAssertionSkipped, line: `ar-determinism-reach: ${why}`,
+  });
+  if (create !== wantCreate || finish !== wantFinish) {
+    return verdict('not-inherited', false, false,
+      'NOT INHERITED -- the subproject added with add_subdirectory does not see the cache-level '
+      + `archive rules. It sees CMAKE_C_ARCHIVE_CREATE=${JSON.stringify(create)} and `
+      + `CMAKE_C_ARCHIVE_FINISH=${JSON.stringify(finish)}, but the configure passed `
+      + `${JSON.stringify(wantCreate)} and ${JSON.stringify(wantFinish)}. Every vendored archive `
+      + 'in the engine is built in a scope like this one');
+  }
+  if (own) {
+    return verdict('archive-rules-unused', true, true,
+      'SKIPPED (this toolchain does not archive with an ar-shaped rule) -- the subproject DID '
+      + 'inherit both cache-level archive rules, but its scope also carries '
+      + `CMAKE_C_CREATE_STATIC_LIBRARY=${JSON.stringify(own)}, which cmake documents as overriding `
+      + 'CMAKE_C_ARCHIVE_CREATE/APPEND/FINISH (Modules/CMakeCInformation.cmake). There is no '
+      + 'archive rule here for the inherited value to reach, so only that half is skipped; the '
+      + 'inheritance itself was checked and held');
+  }
+  if (!ruleFiles) {
+    return verdict('no-rule-files', false, false,
+      'UNEXPLAINED -- the archive rules were inherited and nothing overrides them, but the '
+      + 'configure emitted no link.txt or build.ninja to read the generated archive command out '
+      + 'of, so passing here would prove nothing. Find out what this generator writes instead');
+  }
+  const hasCreate = /\bqcD\b/.test(ruleText);
+  const hasFinish = /ranlib.* -D /.test(ruleText) || /-D <TARGET>/.test(ruleText) || / -D /.test(ruleText);
+  if (!hasCreate || !hasFinish) {
+    return verdict('rule-not-generated', false, false,
+      `GENERATED RULE MISSING the ${hasCreate ? 'finish' : 'create'} flag -- the subproject `
+      + 'inherited the cache-level archive rules and this toolchain does use them, but the '
+      + `command cmake generated across ${ruleFiles} rule file(s) does not carry them`);
+  }
+  return verdict('inherited', true, false,
+    `INHERITED -- the subproject's generated archive command carries both the qcD create flag and `
+    + `the -D finish flag, read out of ${ruleFiles} rule file(s)`);
+}
+
+test('archiveRuleReachVerdict: both links proven is the only unqualified pass', () => {
+  const v = archiveRuleReachVerdict({
+    seen: { archiveCreate: 'C', archiveFinish: 'F', createStaticLibrary: '' },
+    wantCreate: 'C', wantFinish: 'F', ruleFiles: 2,
+    ruleText: '/usr/bin/ar qcD lib.a a.o\n/usr/bin/ranlib -D lib.a\n',
+  });
+  assert.strictEqual(v.outcome, 'inherited');
+  assert.strictEqual(v.ok, true);
+  assert.strictEqual(v.ruleAssertionSkipped, false);
+});
+
+test('archiveRuleReachVerdict: a subproject that did not see the cache value FAILS, everywhere', () => {
+  for (const seen of [
+    { archiveCreate: '<CMAKE_AR> qc <TARGET>', archiveFinish: 'F', createStaticLibrary: '' },
+    { archiveCreate: 'C', archiveFinish: '<CMAKE_RANLIB> <TARGET>', createStaticLibrary: '' },
+    // and it stays a failure even on a toolchain that would skip the rule half: link (a) is
+    // the property, and no platform gets to opt out of it.
+    { archiveCreate: '', archiveFinish: '', createStaticLibrary: '<CMAKE_AR> /out:<TARGET>' },
+  ]) {
+    const v = archiveRuleReachVerdict({ seen, wantCreate: 'C', wantFinish: 'F', ruleFiles: 1 });
+    assert.strictEqual(v.outcome, 'not-inherited', JSON.stringify(seen));
+    assert.strictEqual(v.ok, false);
+  }
+});
+
+test('archiveRuleReachVerdict: a toolchain with its own static-library rule skips ONLY the rule half', () => {
+  const v = archiveRuleReachVerdict({
+    seen: {
+      archiveCreate: 'C',
+      archiveFinish: 'F',
+      createStaticLibrary: '<CMAKE_AR> /nologo /out:<TARGET> <OBJECTS>',
+    },
+    wantCreate: 'C', wantFinish: 'F', ruleFiles: 0, ruleText: '',
+  });
+  assert.strictEqual(v.outcome, 'archive-rules-unused');
+  assert.strictEqual(v.ok, true);
+  assert.strictEqual(v.ruleAssertionSkipped, true);
+  assert.match(v.line, /CMAKE_C_CREATE_STATIC_LIBRARY/, 'the line names the evidence it skipped on');
+  assert.match(v.line, /nologo/, 'and quotes the rule that displaced the archive rules');
+});
+
+test('archiveRuleReachVerdict: an applicable toolchain with nothing to read is UNEXPLAINED, not a pass', () => {
+  const v = archiveRuleReachVerdict({
+    seen: { archiveCreate: 'C', archiveFinish: 'F', createStaticLibrary: '' },
+    wantCreate: 'C', wantFinish: 'F', ruleFiles: 0, ruleText: '',
+  });
+  assert.strictEqual(v.outcome, 'no-rule-files');
+  assert.strictEqual(v.ok, false);
+});
+
+test('archiveRuleReachVerdict: inherited, applicable, and the flags absent from the rule FAILS', () => {
+  const base = {
+    seen: { archiveCreate: 'C', archiveFinish: 'F', createStaticLibrary: '' },
+    wantCreate: 'C', wantFinish: 'F', ruleFiles: 1,
+  };
+  const noCreate = archiveRuleReachVerdict({ ...base, ruleText: '/usr/bin/ar qc lib.a a.o\n/usr/bin/ranlib -D lib.a\n' });
+  assert.strictEqual(noCreate.outcome, 'rule-not-generated');
+  assert.match(noCreate.line, /create flag/);
+  const noFinish = archiveRuleReachVerdict({ ...base, ruleText: '/usr/bin/ar qcD lib.a a.o\n/usr/bin/ranlib lib.a\n' });
+  assert.strictEqual(noFinish.outcome, 'rule-not-generated');
+  assert.match(noFinish.line, /finish flag/);
+});
+
+test('every reach outcome says which one it is on one greppable plain-ASCII line', () => {
+  const seen = { archiveCreate: 'C', archiveFinish: 'F', createStaticLibrary: '' };
+  const lines = [
+    archiveRuleReachVerdict({ seen: { ...seen, archiveCreate: 'x' }, wantCreate: 'C', wantFinish: 'F' }).line,
+    archiveRuleReachVerdict({ seen: { ...seen, createStaticLibrary: 'lib.exe' }, wantCreate: 'C', wantFinish: 'F' }).line,
+    archiveRuleReachVerdict({ seen, wantCreate: 'C', wantFinish: 'F', ruleFiles: 0 }).line,
+    archiveRuleReachVerdict({ seen, wantCreate: 'C', wantFinish: 'F', ruleFiles: 1, ruleText: 'ar qc x' }).line,
+    archiveRuleReachVerdict({
+      seen, wantCreate: 'C', wantFinish: 'F', ruleFiles: 1, ruleText: 'ar qcD x\nranlib -D x',
+    }).line,
+  ];
+  for (const l of lines) {
+    assert.ok(l.startsWith('ar-determinism-reach: '), `shares the grep prefix: ${l}`);
+    assert.ok(!l.includes('\n'), `one line, not several: ${l}`);
+    // eslint-disable-next-line no-control-regex
+    assert.ok(/^[\x20-\x7e]*$/.test(l), `plain ASCII (the Windows console mangles the rest): ${l}`);
+  }
+  assert.strictEqual(new Set(lines).size, lines.length, 'five outcomes, five distinguishable lines');
+});
+
+// The synthetic project. The SUBPROJECT reports what it sees in its own directory scope, at
+// configure time -- that report IS link (a), one step upstream of the generated command, and it
+// is readable on every generator including the multi-config ones that write no link.txt.
+function reachEvidence(cmake, dir, extraArgs = []) {
   fs.mkdirSync(path.join(dir, 'src/sub'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'src/CMakeLists.txt'),
     'cmake_minimum_required(VERSION 3.16)\nproject(reach LANGUAGES C)\nadd_subdirectory(sub)\n');
   fs.writeFileSync(path.join(dir, 'src/sub/CMakeLists.txt'),
-    'add_library(subarchive STATIC a.c)\n');
+    'add_library(subarchive STATIC a.c)\n'
+    + `file(WRITE "\${CMAKE_BINARY_DIR}/${REACH_REPORT}"\n`
+    + '  "archiveCreate=${CMAKE_C_ARCHIVE_CREATE}\\n"\n'
+    + '  "archiveFinish=${CMAKE_C_ARCHIVE_FINISH}\\n"\n'
+    + '  "createStaticLibrary=${CMAKE_C_CREATE_STATIC_LIBRARY}\\n")\n');
   fs.writeFileSync(path.join(dir, 'src/sub/a.c'), 'int a(void){return 0;}\n');
-  const r = spawnSync('cmake', [
-    '-S', path.join(dir, 'src'), '-B', path.join(dir, 'build'), '-DCMAKE_BUILD_TYPE=Release',
+  const build = path.join(dir, 'build');
+  const r = spawnSync(cmake, [
+    '-S', path.join(dir, 'src'), '-B', build, '-DCMAKE_BUILD_TYPE=Release',
     `-DCMAKE_C_ARCHIVE_CREATE=${C_ARCHIVE_CREATE_D}`,
     `-DCMAKE_C_ARCHIVE_FINISH=${C_ARCHIVE_FINISH_D}`,
+    ...extraArgs,
   ], { encoding: 'utf8' });
   assert.strictEqual(r.status, 0, `synthetic configure failed:\n${r.stdout}\n${r.stderr}`);
+  const report = path.join(build, REACH_REPORT);
+  assert.ok(fs.existsSync(report),
+    `the subproject never wrote ${REACH_REPORT}, so nothing was measured:\n${r.stdout}`);
+  const seen = {};
+  // /\r?\n/, because a report written on Windows is read on Windows -- the same parse bug that
+  // took out test/ccache.test.cjs's CMakeCache reader in this very CI run.
+  for (const l of fs.readFileSync(report, 'utf8').split(/\r?\n/)) {
+    const eq = l.indexOf('=');
+    if (eq > 0) seen[l.slice(0, eq)] = l.slice(eq + 1);
+  }
   const rules = [];
   const walk = (d) => {
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
@@ -710,13 +897,64 @@ test('a -D archive rule reaches a subproject added with add_subdirectory', () =>
       else if (e.name === 'link.txt' || e.name === 'build.ninja') rules.push(fs.readFileSync(p, 'utf8'));
     }
   };
-  walk(path.join(dir, 'build'));
-  const text = rules.join('\n');
-  assert.ok(/\bqcD\b/.test(text),
-    `the subproject's archive rule did not inherit the cache-level create rule:\n${text}`);
-  assert.ok(/ranlib.* -D /.test(text) || /-D <TARGET>/.test(text) || / -D /.test(text),
-    `the subproject's archive rule did not inherit the cache-level finish rule:\n${text}`);
-  fs.rmSync(dir, { recursive: true, force: true });
+  walk(build);
+  return { seen, ruleText: rules.join('\n'), ruleFiles: rules.length };
+}
+
+const reachVerdictFor = (cmake, dir, extraArgs) => archiveRuleReachVerdict({
+  ...reachEvidence(cmake, dir, extraArgs),
+  wantCreate: C_ARCHIVE_CREATE_D,
+  wantFinish: C_ARCHIVE_FINISH_D,
+});
+
+test('a -D archive rule reaches a subproject added with add_subdirectory', () => {
+  const cmake = findTool('cmake');
+  if (!cmake) { console.log('SKIP: no cmake on PATH'); return; }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-ardet-reach-'));
+  try {
+    const v = reachVerdictFor(cmake, dir, []);
+    console.log(v.line);
+    assert.ok(v.ok, v.line);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// THE DETECTION'S OWN CONTROL, and the reason the skip above is not a hole. A toolchain that
+// composes its own static-library rule is exactly what windows-latest's default (MSVC) does, and
+// this reproduces that shape on ANY host by handing cmake the same kind of override by hand --
+// no Windows box, no process.platform, the real cmake deciding for real. It asserts two things
+// the bare skip could not: that link (a) is still PROVEN under the override (the subproject sees
+// the inherited values), and that the generated command really does stop carrying qcD -- i.e.
+// that the outcome is earned rather than assumed.
+test('a toolchain that composes its own static-library rule is DETECTED, not mistaken for a failure', () => {
+  const cmake = findTool('cmake');
+  if (!cmake) { console.log('SKIP: no cmake on PATH'); return; }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-ardet-reach-own-'));
+  try {
+    const OWN_RULE = '<CMAKE_AR> -clode-stand-in-for-lib-exe /out:<TARGET> <OBJECTS>';
+    const ev = reachEvidence(cmake, dir, [`-DCMAKE_C_CREATE_STATIC_LIBRARY=${OWN_RULE}`]);
+    const v = archiveRuleReachVerdict({
+      ...ev, wantCreate: C_ARCHIVE_CREATE_D, wantFinish: C_ARCHIVE_FINISH_D,
+    });
+    console.log(v.line);
+    assert.strictEqual(v.outcome, 'archive-rules-unused', v.line);
+    assert.strictEqual(v.ruleAssertionSkipped, true);
+    assert.strictEqual(ev.seen.archiveCreate, C_ARCHIVE_CREATE_D,
+      'the override must not cost link (a): the subproject still inherits the cache entry');
+    // The half that is skipped is skipped because it is ABSENT, and that absence is measured
+    // here rather than asserted from a platform name. If a future cmake started honouring both,
+    // this line fails and the skip above has to be re-justified.
+    if (ev.ruleFiles) {
+      assert.ok(!/\bqcD\b/.test(ev.ruleText),
+        'cmake generated qcD anyway, so CMAKE_C_CREATE_STATIC_LIBRARY did NOT displace the '
+        + `archive rules and the skip is unjustified:\n${ev.ruleText}`);
+      assert.ok(/-clode-stand-in-for-lib-exe/.test(ev.ruleText),
+        `the override is what cmake generated instead:\n${ev.ruleText}`);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // The one way reach can be lost: a vendored CMakeLists that sets the archive rules ITSELF,
