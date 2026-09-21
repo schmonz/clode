@@ -42,6 +42,16 @@ function providersDir(sbx) {
   return path.join(sbx.stateRoot, 'share', 'clode', 'providers');
 }
 
+// Where a fetch of PLAT for version V lands: providers/<ver>/<os>-<arch>/claude. The store
+// key is derived (spec 2026-09-14 §7.1) — the version alone could not say which OS the bytes
+// were carved for, so the same path meant different bytes on different machines. Asked of
+// clode-paths, not spelled here, so the fixture cannot drift from the product.
+const CPATHS = require(path.join(REPO, 'libexec', 'clode-paths.cjs'));
+function fetchedBin(sbx, version = V, plat = PLAT) {
+  const [os_, arch] = plat.split('-');
+  return path.join(providersDir(sbx), version, CPATHS.providerKey(os_, arch), 'claude');
+}
+
 function withReleases(t) {
   const sbx = sandbox(t);
 
@@ -77,7 +87,7 @@ test('clode fetch claude <channel> fetches and reports, then exits', (t) => {
   const r = run(sbx, ['fetch', 'claude', 'stable'], { env: { CLODE_CLAUDE_BIN: '/nonexistent' } });
   assert.strictEqual(r.status, 0);
   assert.match(r.output, /fetched 9\.9\.9/);
-  assert.ok(fs.existsSync(path.join(providersDir(sbx), '9.9.9', 'claude')));
+  assert.ok(fs.existsSync(fetchedBin(sbx)));
 });
 
 test('clode --clode-internal-update is retired: an unknown command, not a rebuild', (t) => {
@@ -89,7 +99,7 @@ test('clode --clode-internal-update is retired: an unknown command, not a rebuil
     { env: { CLODE_CLAUDE_BIN: '/nonexistent' } });
   assert.notStrictEqual(r.status, 0);
   assert.match(r.output, /unknown command/);
-  assert.ok(!fs.existsSync(path.join(providersDir(sbx), '9.9.9', 'claude')),
+  assert.ok(!fs.existsSync(fetchedBin(sbx)),
     'a retired command must not fetch anything into the provider store');
 });
 

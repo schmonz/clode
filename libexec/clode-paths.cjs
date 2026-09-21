@@ -45,6 +45,60 @@ function depsStore(env = process.env) {
 function providersDir(env = process.env) {
   return env.CLODE_PROVIDERS || path.join(clodeDataDir(env), 'providers');
 }
+// --- THE PROVIDER STORE'S LAYOUT ---------------------------------------------
+// `providers/<version>/<os>-<arch>/claude`, and the reason for the middle segment is the
+// whole of spec 2026-09-14 phase 4 §7.1: the store used to be `providers/<version>/claude`,
+// keyed by VERSION ALONE, while `clode fetch claude` is OS-MATCHED. So the same path meant
+// different bytes on different machines -- and on one machine, whichever target was fetched
+// FIRST for a version occupied the path and later fetches re-pointed to it instead of
+// fetching their own (clode-update's "byte-verified copy on disk" branch). First writer
+// wins, silently. Measured consequence, 2026-09-04: `quaude doctor` on a darwin-arm64 Mac
+// reporting `Platform: linux-x64`, because Bun folds process.platform at carve time and the
+// pinned path held a linux carve -- with upstream's whole macOS credential store
+// dead-coded away.
+//
+// The key is therefore a function of WHAT THE ARTIFACT IS, not of the one attribute
+// someone happened to name. Spelled in the repo's ONE naming vocabulary
+// (scripts/canonical-name.cjs), the same `<os>-<arch>` that names a published asset, a
+// `--list-targets` tag and an engine artifact -- not a second spelling invented here.
+const canon = require('../scripts/canonical-name.cjs');
+
+// The store key for a NODE-spelled platform/arch pair: process.platform + process.arch for
+// this host, or the two leading segments of an upstream manifest platform string
+// (`darwin-arm64`, `linux-x64`, `win32-x64`), or a container sniff
+// (providerPlatformOf/providerArchOf). Defaults to this host.
+function providerKey(platform = process.platform, arch = process.arch) {
+  return canon.targetFromNode(platform, arch);
+}
+
+// `providers/<version>` — the entries for one upstream version, one per carve.
+function providerVersionDir(env, version) {
+  return path.join(providersDir(env), version);
+}
+
+// `providers/<version>/<key>/claude` — one provider binary, at a path that says what it is.
+function providerBinPath(env, version, key) {
+  return path.join(providerVersionDir(env, version), key, 'claude');
+}
+
+// WHICH entry a given host may use, out of the keys present for a version. PURE, so the
+// policy is testable without a store on disk.
+//
+// The policy is not invented here either: it is the same one clode-update's providerFor()
+// already applies when CHOOSING what to fetch, restated on the reading side so the two
+// cannot disagree. Exact `<os>-<arch>` first; then any entry with the SAME OS, because
+// "arch is don't-care for the carve" (clode-update: tjs loads no native .node addons and
+// the sole arch-switch is moot, so any same-OS build carves the right OS branches) and
+// refusing the fallback here would turn a documented fetch fallback into a permanent cache
+// miss -- a re-fetch loop, not a fix. What it NEVER does is cross the OS boundary: that is
+// the defect, and it is now unrepresentable rather than unlikely.
+function pickProviderEntry(keys, platform = process.platform, arch = process.arch) {
+  const want = providerKey(platform, arch);
+  if (keys.includes(want)) return want;
+  const osPrefix = `${canon.canonOsFromNode(platform)}-`;
+  return keys.find((k) => k.startsWith(osPrefix)) || null;
+}
+
 function nodeStore(env = process.env) {
   return env.CLODE_NODES || path.join(clodeDataDir(env), 'nodes');
 }
@@ -63,4 +117,7 @@ function traceLog(env = process.env) {
   return env.CLODE_TRACE_LOG || path.join(clodeDataDir(env), 'build-trace.jsonl');
 }
 
-module.exports = { homeDir, clodeDataDir, clodeCacheDir, depsStore, providersDir, nodeStore, watchDir, cacheBase, traceLog };
+module.exports = {
+  homeDir, clodeDataDir, clodeCacheDir, depsStore, providersDir, nodeStore, watchDir, cacheBase, traceLog,
+  providerKey, providerVersionDir, providerBinPath, pickProviderEntry,
+};

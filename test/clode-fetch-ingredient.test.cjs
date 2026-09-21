@@ -95,13 +95,14 @@ test('clode fetch node --target: a non-Node platform is refused by name, nothing
   assert.doesNotMatch(r.stdout || '', /pinned node ready/);
 });
 
-// The OTHER ingredient cannot cross, and says so rather than pretending. MEASURED
-// (clode-update.cjs): the provider store is keyed by VERSION ALONE —
-// providers/<version>/claude — and a fetch re-points `current` at it, so fetching a
-// foreign-OS provider would overwrite this machine's provider in place and leave
-// every later build carving the wrong OS branches. The limitation is the STORE's
-// missing platform axis, and the refusal names it (and the escape hatch that does
-// exist) instead of being a flag that is silently ignored.
+// The OTHER ingredient still cannot cross, and says so rather than pretending. The
+// original limitation was the store's MISSING PLATFORM AXIS (providers/<version>/claude,
+// keyed by version alone, so a foreign-OS fetch overwrote this machine's provider in
+// place). Spec 2026-09-14 §7.1 added the axis, so what remains is narrower and is a
+// DECISION rather than a defect: a fetch also re-points `current`, which names a version
+// and not a carve. This test pins the SHAPE of the refusal -- it names --target, names the
+// store as the reason, and names the override that does exist -- not the wording, so the
+// message can keep telling the truth as the truth changes.
 test('clode fetch claude --target: refused LOUDLY, naming the limitation', () => {
   const r = runEntry(['fetch', 'claude', '--target', 'linux-amd64'], {
     CLODE_RELEASES_URL: 'file://' + fs.mkdtempSync(path.join(os.tmpdir(), 'clode-empty-releases-')),

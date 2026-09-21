@@ -188,15 +188,21 @@ async function main(argv, opts = {}) {
       process.stdout.write('clode: pinned node ready at ' + p + '\n');
       return process.exit(0);
     }
-    // The OTHER ingredient cannot cross, and says so rather than accepting a flag it
-    // would ignore. MEASURED (libexec/clode-update.cjs): the provider store is keyed
-    // by VERSION ALONE — providers/<version>/claude — and a fetch re-points `current`
-    // at what it wrote, so a foreign-OS fetch would overwrite this machine's provider
-    // in place and leave every later build carving the wrong OS branches. The missing
-    // platform axis is the limitation, so the refusal names it, and names the one
-    // override that does exist.
+    // The OTHER ingredient still cannot cross, and says so rather than accepting a flag
+    // it would ignore — but the REASON changed on 2026-09-20 and the message has to say
+    // the true one. It used to be that the store had no platform axis at all
+    // (providers/<version>/claude, keyed by version alone), so a foreign-OS fetch
+    // OVERWROTE this machine's provider in place. Spec 2026-09-14 §7.1 gave the store that
+    // axis: an entry is providers/<version>/<os>-<arch>/claude and a foreign carve now has
+    // its own home, so it cannot displace anything.
+    //
+    // What is still missing is smaller and is a DECISION, not a defect: a fetch also
+    // re-points `current`, which names a version and not a carve, and nobody has decided
+    // what a foreign fetch should do with it (leave the active provider alone? refuse when
+    // this host has no entry for that version?). Until that is settled, the deliberate
+    // override is the honest door, and the refusal names it.
     if (target) {
-      return usage(`fetch claude --target: the provider store has no platform axis — it is keyed by version alone (providers/<version>/claude) and a fetch re-points 'current' at it, so fetching ${target}'s provider would replace this machine's. Set CLODE_FETCH_PLATFORM to choose the upstream build deliberately; 'clode fetch node --target' is the ingredient that crosses.`);
+      return usage(`fetch claude --target: the provider store keys entries by version x platform x arch (providers/<version>/<os>-<arch>/claude), so ${target}'s provider would not collide with this machine's — but a fetch also re-points 'current', which names a VERSION and not a carve, and what a foreign fetch should do with the active provider is undecided. Set CLODE_FETCH_PLATFORM to choose the upstream build deliberately; 'clode fetch node --target' is the ingredient that crosses.`);
     }
     // The declared second positional (SURFACE.verbs.fetch.tail): which upstream
     // release. Absent -> clodeUpdate resolves the configured channel, as before.

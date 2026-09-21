@@ -33,7 +33,10 @@ test('currentVersion is empty when no current exists', () => {
 
 test('currentBin returns the resolved provider claude path', () => {
   const s = store();
-  const verdir = path.join(s.providers, '9.9.9');
+  // providers/<ver>/<os>-<arch>/claude: the store key carries version x platform x arch
+  // (spec 2026-09-14 §7.1). This test is about the POINTER, so it puts the entry at this
+  // host's own key -- test/provider-store-key.test.cjs owns the key's own behaviour.
+  const verdir = path.join(s.providers, '9.9.9', require('../libexec/clode-paths.cjs').providerKey());
   fs.mkdirSync(verdir, { recursive: true });
   fs.writeFileSync(path.join(verdir, 'claude'), 'x');
   setCurrent(s.env, '9.9.9');

@@ -35,6 +35,24 @@ const ARCH_MAP = {
 function canonOs(os) { return OS_MAP[os] || os; }
 function canonArch(arch) { return ARCH_MAP[arch] || arch; }
 
+// NODE's OS word -> ours. OS_MAP above is keyed on the words our own leg tokens use, where
+// `windows` and `dragonflybsd` are already canonical; Node spells those two `win32` and
+// `dragonfly`, and upstream's provider-manifest platform strings share Node's spelling
+// (`win32-x64`). So anything reading a NODE platform -- process.platform, a manifest
+// platform string, a container sniff -- needs this extra hop, and before this existed each
+// such caller kept a PRIVATE copy of it (libexec/clode-build.cjs's CARVE_TO_CANON was
+// one). A second spelling of the one vocabulary is the disease this file exists to cure,
+// so the hop lives here, next to its inverse (targetToNode, below).
+const NODE_TO_OS = { win32: 'windows', dragonfly: 'dragonflybsd' };
+function canonOsFromNode(platform) { return NODE_TO_OS[platform] || canonOs(platform); }
+
+// Canonical `<os>-<arch>` for a NODE-spelled platform + arch pair: process.platform /
+// process.arch, or the two leading segments of an upstream provider-manifest platform
+// string (`darwin-arm64`, `linux-x64`, `win32-x64`). The exact inverse of targetToNode.
+function targetFromNode(platform, arch) {
+  return `${canonOsFromNode(platform)}-${canonArch(arch)}`;
+}
+
 // Split a leg token `<os>-<arch>[-<libc>]`: os is the first segment, arch the second,
 // and a trailing `musl`/`glibc` (only on 3-segment legs) is the libc variant.
 function splitLeg(leg) {
@@ -144,7 +162,8 @@ function targetToNode(target) {
 }
 
 module.exports = {
-  OS_MAP, ARCH_MAP, canonOs, canonArch, splitLeg, targetName, tagFor, assetName, assetExt, engineName,
+  OS_MAP, ARCH_MAP, NODE_TO_OS, canonOs, canonArch, canonOsFromNode, targetFromNode,
+  splitLeg, targetName, tagFor, assetName, assetExt, engineName,
   targetToNode,
 };
 

@@ -1591,6 +1591,63 @@ function providerPlatformOf(binpath) {
   return null;
 }
 
+// WHICH ARCH'S CODE IS IN THE CONTAINER — the sibling of providerPlatformOf above, on the
+// same terms: read from the container's own header, never from the host, the filename or a
+// version string. Answers in NODE's arch vocabulary ('x64'/'arm64'/'ia32'/...), matching
+// providerPlatformOf's node OS vocabulary, so ONE canonicalizer
+// (scripts/canonical-name.cjs targetFromNode) turns the pair into our `<os>-<arch>` word
+// and neither half grows a private spelling.
+//
+// WHY THE STORE NEEDS IT. The provider store's key is version x platform x arch. At fetch
+// time both halves are known for free (the manifest platform string says them), but an
+// EXISTING store holds version-only entries whose only remaining witness is the bytes. This
+// is what lets those be re-keyed in place instead of re-downloaded, and — for a container
+// we cannot identify — what lets us decline to invent a key rather than guess one.
+//
+// Returns null on anything unrecognized, INCLUDING a universal/fat Mach-O: a fat binary is
+// not one arch, and claiming one of its slices would be the same lie as defaulting to the
+// host.
+const MACHO_CPU = {
+  7: 'ia32', 0x01000007: 'x64', 12: 'arm', 0x0100000c: 'arm64',
+  18: 'ppc', 0x01000012: 'ppc64', 0x0100000e: 'sparc64',
+};
+const ELF_MACHINE = {
+  0x02: 'sparc', 0x03: 'ia32', 0x08: 'mips', 0x14: 'ppc', 0x15: 'ppc64',
+  0x16: 's390x', 0x28: 'arm', 0x2b: 'sparc64', 0x3e: 'x64', 0xb7: 'arm64', 0xf3: 'riscv64',
+};
+const PE_MACHINE = { 0x014c: 'ia32', 0x8664: 'x64', 0xaa64: 'arm64', 0x01c4: 'arm' };
+function providerArchOf(binpath) {
+  let fd;
+  const head = Buffer.alloc(64);
+  try {
+    fd = fs.openSync(binpath, 'r');
+    if (fs.readSync(fd, head, 0, 64, 0) < 20) return null;
+    const be = head.readUInt32BE(0);
+    // Mach-O thin. feedface/feedfacf are host-order-as-written (fields BE here);
+    // cefaedfe/cffaedfe are the byte-swapped spellings (fields LE). cafebabe/cafebabf and
+    // their swaps are FAT — deliberately not answered.
+    if (be === 0xfeedface || be === 0xfeedfacf) return MACHO_CPU[head.readUInt32BE(4)] || null;
+    if (be === 0xcefaedfe || be === 0xcffaedfe) return MACHO_CPU[head.readUInt32LE(4)] || null;
+    if (head[0] === 0x7f && head[1] === 0x45 && head[2] === 0x4c && head[3] === 0x46) {
+      const m = head[5] === 2 ? head.readUInt16BE(18) : head.readUInt16LE(18); // EI_DATA
+      return ELF_MACHINE[m] || null;
+    }
+    if (head[0] === 0x4d && head[1] === 0x5a) {
+      // PE: e_lfanew at 0x3c points at the 'PE\0\0' signature; Machine is the u16 after it.
+      const off = head.readUInt32LE(0x3c);
+      const pe = Buffer.alloc(6);
+      if (fs.readSync(fd, pe, 0, 6, off) < 6) return null;
+      if (pe.readUInt32LE(0) !== 0x00004550) return null;
+      return PE_MACHINE[pe.readUInt16LE(4)] || null;
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* already failing */ } }
+  }
+}
+
 module.exports = {
   BUNFS,
   BUNDLE_VERSION,
@@ -1617,6 +1674,7 @@ module.exports = {
   assertGraphServesWhatItReferences,
   LOADER_POLICY,
   providerPlatformOf,
+  providerArchOf,
   extractToFile,
   extractGraphToFile,
   extractGraphRunnerToFile,

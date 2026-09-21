@@ -17,6 +17,9 @@ const {
   sigOf,
   cacheKey,
 } = require('../libexec/clode-resolve.cjs');
+// This host's provider-store key (`macos-arm64`, `linux-amd64`, ...) — asked of the ONE
+// place that derives it, never spelled out here.
+const PROVIDER_KEY = require('../libexec/clode-paths.cjs').providerKey();
 
 // --- helpers ---------------------------------------------------------------
 function tmpdir() {
@@ -70,9 +73,13 @@ test('2. CLODE_VERSION_DIR next', () => {
 
 test('3. provider current (symlink-resolved abs) beats baked/local/PATH', () => {
   const dir = tmpdir();
-  // providers/<ver>/claude, with providers/current -> <ver> (a symlink).
+  // providers/<ver>/<os>-<arch>/claude, with providers/current naming the version. The
+  // middle segment is the store key (spec 2026-09-14 §7.1): the version alone never said
+  // which OS the bytes were carved for, so the same path meant different bytes on
+  // different machines. This test is about resolution ORDER, so it puts the entry at THIS
+  // host's key rather than restating that policy.
   const providers = path.join(dir, 'providers');
-  const verdir = path.join(providers, '2.1.183');
+  const verdir = path.join(providers, '2.1.183', PROVIDER_KEY);
   fs.mkdirSync(verdir, { recursive: true });
   mkBundle(path.join(verdir, 'claude'), 'prov');
   fs.writeFileSync(path.join(providers, 'current'), '2.1.183\n');
@@ -87,7 +94,7 @@ test('3. provider current (symlink-resolved abs) beats baked/local/PATH', () => 
 test('3b. provider default location XDG_DATA_HOME/clode/providers', () => {
   const dir = tmpdir();
   const providers = path.join(dir, 'clode', 'providers');
-  const verdir = path.join(providers, '9.9.9');
+  const verdir = path.join(providers, '9.9.9', PROVIDER_KEY);
   fs.mkdirSync(verdir, { recursive: true });
   mkBundle(path.join(verdir, 'claude'), 'prov');
   fs.writeFileSync(path.join(providers, 'current'), '9.9.9\n');

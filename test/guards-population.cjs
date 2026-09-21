@@ -186,6 +186,20 @@ function discoverTestFiles(dir) {
 // convention for `skip` reasons, which this mirrors).
 const GUARD_EXCLUSIONS = [
   {
+    file: 'provider-store-key.test.cjs',
+    because: 'it BUILDS every input it looks at and then asserts on what the product did '
+      + 'with them: mkdtemp provider stores, a file:// releases fixture it writes, and '
+      + 'hand-assembled Mach-O/ELF container headers (Buffer.alloc + writeUInt32). It then '
+      + 'runs the real clodeUpdate/currentBin and asserts on the paths and bytes THOSE '
+      + 'CALLS produced. Both classifier signals are false positives on that shape: '
+      + "READS_ARTIFACT fires on its `require('../libexec/clode-update.cjs')` line, which "
+      + 'imports the file\'s own SUBJECT rather than scanning a fixed artifact (the same '
+      + 'own-imports defect fix round 3 trimmed elsewhere), and PATTERN_MATCHES fires on '
+      + '`assert.match(rel, /macos-arm64/)` where `rel` is a store path this test just '
+      + 'caused to be created. There is no artifact to scan and no violation pattern to '
+      + 'look for; the subject is whether the store can still represent the wrong binary.',
+  },
+  {
     file: 'build-tjs-no-node.test.cjs',
     because: 'it is a live ACCEPTANCE run, not a scan: it copies a vendor checkout into a '
       + 'mkdtemp of its own, spawns the engine build under the node-shim with Node absent '

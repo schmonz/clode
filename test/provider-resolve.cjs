@@ -65,8 +65,36 @@ function _providers(env) {
   // varies with whatever a given box happens to have in its store, which is the wobble
   // this is here to remove. UPSTREAM_PIN names one version; every machine tests that
   // one, or says why it cannot.
+  //
+  // EVERY CARVE THE PIN HAS, not one path. Since spec 2026-09-14 §7.1 the store is
+  // providers/<ver>/<os>-<arch>/claude, so one version legitimately holds several entries
+  // and a test that wants a SPECIFIC platform's carve (providerBinFor, below) can now
+  // actually find one that is not this host's. Before the key had that dimension there was
+  // one path per version and nothing to enumerate.
+  //
+  // rekeyLegacyEntry FIRST, through the PRODUCT's own migration rather than a second copy of
+  // it here: a box whose store predates the change still holds providers/<pin>/claude, and a
+  // harness that quietly reached for the old path would keep the suite running against an
+  // entry whose platform the path cannot state -- which is the whole defect.
   const pin = pinnedVersion();
-  if (pin) add(path.join(storeDir(env), pin, 'claude'));
+  if (pin) {
+    try { require('../libexec/clode-current.cjs').rekeyLegacyEntry(env, pin); } catch { /* best effort */ }
+    let keys = [];
+    try {
+      keys = fs.readdirSync(path.join(storeDir(env), pin), { withFileTypes: true })
+        .filter((e) => e.isDirectory()).map((e) => e.name).sort();
+    } catch { /* no entries for the pin */ }
+    // This host's own carve first, so providerBin() (the "any provider" answer) is the one a
+    // build here would actually use; the rest follow for providerBinFor's sake.
+    const mine = require('../libexec/clode-paths.cjs').pickProviderEntry(keys);
+    for (const k of (mine ? [mine, ...keys.filter((x) => x !== mine)] : keys)) {
+      add(path.join(storeDir(env), pin, k, 'claude'));
+    }
+    // A store the migration could not re-key (unidentifiable container, or an unwritable
+    // store) still has to be USABLE -- just never mistakable for a known platform. Last,
+    // so it can never displace a keyed entry.
+    add(path.join(storeDir(env), pin, 'claude'));
+  }
 
   return found.filter(isBunContainer);
 }
@@ -108,22 +136,26 @@ function isBunContainer(binpath) {
 }
 
 
-// The first provider carved for a given platform, or null.
+// A provider carved FOR a given platform, or null.
 //
 // Some tests need a provider from a SPECIFIC platform rather than any provider: the
-// darwin-carve check (test/node-shim-agentic.test.cjs) asserts a darwin-carved bundle
-// takes the macOS managed-settings branch, which only means anything against a darwin
-// carve. Note the platform of a PROVIDER is not the platform of this HOST -- the pinned
-// 2.1.251 in this box's store is a linux-x64 carve sitting on a Mac -- so this asks the
-// bytes (providerPlatformOf) rather than assuming process.platform.
-// A provider carved FOR a given platform, or null. Never substitutes a different
-// version to satisfy the platform: the store is keyed by version alone
-// (providers/<version>/claude, one binary per version) while `clode fetch claude` is
-// OS-matched, so the same path holds different bytes on different machines -- this
-// box's pinned 2.1.251 is a LINUX carve on a Mac. Reaching for a nearer-matching
-// version instead would trade a loud, honest "no darwin carve at the pin" for a quiet
-// "tested something else", which is how the darwin check silently ran against 2.1.252
-// and failed on the SCC break the pin exists to avoid. See the umbrella's phase 4.
+// darwin-carve check (test/node-shim-agentic.test.cjs) asserts a darwin-carved bundle takes
+// the macOS managed-settings branch, which only means anything against a darwin carve. The
+// platform of a PROVIDER is not the platform of this HOST -- this Mac's store holds linux
+// carves at 2.1.207/210/211/215/243 -- so this asks the BYTES (providerPlatformOf) and not
+// process.platform, and not the path either.
+//
+// WHY THE BYTES, NOW THAT THE PATH SAYS IT TOO. Since spec 2026-09-14 §7.1 the store key
+// carries version x platform x arch, so `providers/<pin>/macos-arm64/claude` is a claim the
+// path makes -- and a claim is not the thing. The bytes are what Bun folded the platform
+// into, they are what the build's own carve gate reads (libexec/clode-build.cjs, via the same
+// providerPlatformOf), and a store entry can be replaced by hand. Asking the container costs
+// a 16-byte read.
+//
+// Never substitutes a different VERSION to satisfy the platform. Reaching for a
+// nearer-matching version would trade a loud, honest "no darwin carve at the pin" for a
+// quiet "tested something else", which is how the darwin check silently ran against 2.1.252
+// and failed on the SCC break the pin exists to avoid.
 function providerBinFor(platform, env = process.env) {
   const { providerPlatformOf } = require('../libexec/extract-claude-js.cjs');
   for (const p of providers(env)) {
@@ -144,10 +176,11 @@ function platformSkipReason(platform, env = process.env) {
     return `${path.basename(path.dirname(p))}=${plat}`;
   });
   return `no ${platform}-carved provider. UPSTREAM_PIN names ${pin || '(unset)'}; `
-    + `available: ${have.join(', ') || '(none)'}. The store is keyed by VERSION only, so a `
-    + `pinned entry carved for another OS cannot be told apart by path — fetch a ${platform} `
-    + `carve at ${pin || 'the pin'} (clode fetch claude ${pin || '<version>'}) or set `
-    + `CLODE_${platform.toUpperCase()}_PROVIDER_BIN explicitly.`;
+    + `available: ${have.join(', ') || '(none)'}. The store is keyed by version x platform x `
+    + `arch (providers/<ver>/<os>-<arch>/claude), so this is an honest absence and not an `
+    + `entry hiding behind an ambiguous path — fetch a ${platform} carve at `
+    + `${pin || 'the pin'} (CLODE_FETCH_PLATFORM=${platform}-<arch> clode fetch claude `
+    + `${pin || '<version>'}) or set CLODE_${platform.toUpperCase()}_PROVIDER_BIN explicitly.`;
 }
 
 // UPSTREAM_PIN names the newest version this project supports. A provider NEWER than it

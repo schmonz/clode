@@ -6896,6 +6896,18 @@ smoke test is green. Every existing acceptance check is satisfied by a quaude th
 it is running on the wrong operating system. The one surface that says otherwise is a
 diagnostic nobody was diffing.
 
+**CLOSED 2026-09-20.** Step 1 landed 2026-09-04 (the carve refusal in
+`libexec/clode-build.cjs`). Step 2 landed now, as spec §11 acceptance 5: the store is
+`providers/<version>/<os>-<arch>/claude`, keyed in `scripts/canonical-name.cjs` vocabulary
+through `libexec/clode-paths.cjs` (`providerKey`/`pickProviderEntry`), and the read side
+never crosses the OS boundary. Existing version-only entries are re-keyed IN PLACE from
+their own container header (`clode-current.rekeyLegacyEntry`, using `providerPlatformOf` +
+the new `providerArchOf`) — a rename, so nobody re-downloads 250MB; a container we cannot
+identify is left where it is rather than given a guessed key. Run against this box's real
+store, the five linux carves at 2.1.207/210/211/215/243 now sit at `linux-amd64/` where a
+darwin build cannot reach them. Step 3's invariant is covered continuously by
+`test/provider-store-key.test.cjs` (7 tests, all shown red first).
+
 ## WHERE THE CROSS-BUILD UMBRELLA STANDS (2026-09-04) — read this first
 
 The umbrella spec itself lives at `docs/superpowers/specs/2026-09-01-clean-cross-build-umbrella.md`,

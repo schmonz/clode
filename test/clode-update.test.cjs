@@ -27,6 +27,17 @@ const { sha256Of } = require('../libexec/clode-net.cjs');
 const V = '9.9.9';
 const PLAT = 'linux-x64';
 
+// Where a fetch of PLAT lands: providers/<ver>/<os>-<arch>/claude. The store key carries
+// version x platform x arch since spec 2026-09-14 §7.1 -- the version alone could not say
+// which OS the bytes were carved for, so whichever target was fetched FIRST for a version
+// owned the path and later fetches re-pointed to it. Derived through clode-paths so this
+// fixture cannot drift from the product.
+const CPATHS = require('../libexec/clode-paths.cjs');
+function storeBin(providers, version, plat = PLAT) {
+  const [os_, arch] = plat.split('-');
+  return path.join(providers, version, CPATHS.providerKey(os_, arch), 'claude');
+}
+
 // Real-host sha256Of caches its chosen tool to clodeDataDir/hosttools.json. In
 // tests it must not touch the real ~/.local/share/clode (the suite's hermetic
 // guard watches it). clodeUpdate already threads its isolated env through to
@@ -178,14 +189,14 @@ test('clode_update fetches the fixed platform into the provider store + current 
   try {
     const status = await clodeUpdate('stable', opts(fx.env, err));
     assert.strictEqual(status, 0, 'update succeeded');
-    assert.ok(fs.existsSync(path.join(fx.providers, V, 'claude')), 'provider binary landed');
+    assert.ok(fs.existsSync(storeBin(fx.providers, V)), 'provider binary landed');
     assert.strictEqual(fs.readFileSync(path.join(fx.providers, 'current'), 'utf8').trim(), V, 'current -> 9.9.9');
     assert.match(err.text(), /fetched 9\.9\.9/, 'updated message');
     // The fetched binary must byte-match the fixture (atomic temp->rename intact).
-    assert.strictEqual(sha(path.join(fx.providers, V, 'claude')), fx.sum);
+    assert.strictEqual(sha(storeBin(fx.providers, V)), fx.sum);
     // chmod +x: the mode carries the execute bit.
     if (process.platform !== 'win32') {
-      assert.ok(fs.statSync(path.join(fx.providers, V, 'claude')).mode & 0o111, 'executable');
+      assert.ok(fs.statSync(storeBin(fx.providers, V)).mode & 0o111, 'executable');
     }
   } finally { cleanup(fx); }
 });
@@ -205,7 +216,7 @@ test('clode_update fails LOUD before downloading when no sha256 digest tool exis
     assert.match(err.text(), /no sha256 digest tool|install one of/i,
       'prints an actionable message naming the missing tools');
     // Preflight fires before the download: no unverified binary, no partial left.
-    assert.strictEqual(fs.existsSync(path.join(fx.providers, V, 'claude')), false,
+    assert.strictEqual(fs.existsSync(storeBin(fx.providers, V)), false,
       'no unverified binary installed');
     assert.strictEqual(fs.existsSync(path.join(fx.providers, V, '.claude.partial')), false,
       'no partial download left behind');
@@ -233,7 +244,7 @@ test('clode_update accepts a numeric version channel (uses it as-is)', async () 
   try {
     const status = await clodeUpdate(V, opts(fx.env, err));
     assert.strictEqual(status, 0, 'numeric channel update succeeded');
-    assert.ok(fs.existsSync(path.join(fx.providers, V, 'claude')), 'provider binary landed');
+    assert.ok(fs.existsSync(storeBin(fx.providers, V)), 'provider binary landed');
     assert.strictEqual(fs.readFileSync(path.join(fx.providers, 'current'), 'utf8').trim(), V);
   } finally { cleanup(fx); }
 });

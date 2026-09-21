@@ -1785,13 +1785,16 @@ async function clodeBuild(args, opts) {
     // build input, and a discoverable flag would invite reaching for it to get past a build
     // failure instead of fetching a matching provider. See cli-surface.cjs's comment on this
     // entry for the full reasoning.
-    const CARVE_TO_CANON = { darwin: 'macos', linux: 'linux', win32: 'windows' };
+    // canonOsFromNode is scripts/canonical-name.cjs's job, not a private map here. This
+    // WAS a private map (`CARVE_TO_CANON`), i.e. a third spelling of the one vocabulary
+    // living in the very check whose failure mode is a vocabulary mismatch.
+    const { splitLeg, canonOsFromNode } = require('../scripts/canonical-name.cjs');
     if (!naude && !self && providerPlatform && providerPlatform !== 'unknown'
         && env.CLODE_ALLOW_FOREIGN_CARVE !== '1') {
       const wantOs = parsed.target
-        ? (require('../scripts/canonical-name.cjs').splitLeg(parsed.target) || {}).os
-        : CARVE_TO_CANON[process.platform];
-      const gotOs = CARVE_TO_CANON[providerPlatform] || providerPlatform;
+        ? (splitLeg(parsed.target) || {}).os
+        : canonOsFromNode(process.platform);
+      const gotOs = canonOsFromNode(providerPlatform);
       if (wantOs && gotOs && wantOs !== gotOs) {
         return fail(`build: the provider is carved for ${gotOs}, but this build targets `
           + `${wantOs}${parsed.target ? ` (--target ${parsed.target})` : ' (this host)'}. `

@@ -24,7 +24,7 @@ const { spawnSync } = require('node:child_process');
 const { downloadFile, sha256Of } = require('./clode-net.cjs');
 const { provision } = require('./host-provision.cjs');
 const cpaths = require('./clode-paths.cjs');
-const { currentVersion, setCurrent } = require('./clode-current.cjs');
+const { currentVersion, setCurrent, rekeyLegacyEntry } = require('./clode-current.cjs');
 
 // `[ -f "$p" ]`: exists AND is a regular file.
 function isFile(p) {
@@ -274,8 +274,21 @@ async function clodeUpdate(channel, opts = {}) {
   }
 
   const providers = providersDir(env);
-  const dest = path.join(providers, ver);
+  // THE DESTINATION IS KEYED BY WHAT WE ARE FETCHING, not by the version alone. This used
+  // to be `path.join(providers, ver)` and the `haveIt` short-circuit below turned that into
+  // a silent first-writer-wins: fetch linux-x64 for a version, then fetch darwin-arm64 for
+  // the SAME version, and the second one found a byte-verified `claude` already there,
+  // announced "already have", and re-pointed `current` at the LINUX bytes. `plat` is
+  // already the OS-matched decision providerFor() made a few lines up, so the key is just
+  // that decision written down. See clode-paths.cjs's PROVIDER STORE LAYOUT comment.
+  const { os: fetchOs, arch: fetchArch } = require('../scripts/canonical-name.cjs').splitLeg(plat);
+  const dest = path.join(cpaths.providerVersionDir(env, ver), cpaths.providerKey(fetchOs, fetchArch));
   const bin = path.join(dest, 'claude');
+
+  // Re-key any legacy version-only entry for this version BEFORE the have-it check, so an
+  // upgrade does not re-download bytes the store already holds (clode-current's
+  // rekeyLegacyEntry; it is a rename, and a no-op once done).
+  rekeyLegacyEntry(env, ver);
 
   // The version `current` points at now — for no-op detection and the signals
   // diff's baseline.

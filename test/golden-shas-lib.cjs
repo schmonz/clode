@@ -35,9 +35,25 @@ function providersDir() {
       'clode/providers');
 }
 
+// Any provider binary this box holds for version `v`. The store is keyed by
+// version x platform x arch since spec 2026-09-14 §7.1 (providers/<ver>/<os>-<arch>/claude);
+// a store that has not been read since the change may still hold the old version-only entry,
+// so both shapes are looked for. These goldens are of the CARVED JS, which is per-platform,
+// and the golden file records which carve each sha came from -- so returning the first entry
+// found is right here, and a mismatch shows up as a sha mismatch rather than a wrong pass.
 function providerBin(v) {
-  const p = path.join(providersDir(), v, 'claude');
-  return fs.existsSync(p) ? p : null;
+  const legacy = path.join(providersDir(), v, 'claude');
+  if (fs.existsSync(legacy)) return legacy;
+  let keys = [];
+  try {
+    keys = fs.readdirSync(path.join(providersDir(), v), { withFileTypes: true })
+      .filter((e) => e.isDirectory()).map((e) => e.name).sort();
+  } catch { return null; }
+  for (const k of keys) {
+    const p = path.join(providersDir(), v, k, 'claude');
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
 }
 
 function sha256(buf) { return crypto.createHash('sha256').update(buf).digest('hex'); }
