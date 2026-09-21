@@ -580,6 +580,17 @@ test('shape: provisions must be a FUNCTION, like every other derived field', () 
 // spelling of $TMPDIR — the restatement disease one field over. Both halves: the graph's
 // answer comes from platform-tag.cjs's toolchainDir, and the emitter is still the script
 // that calls it.
+//
+// WHAT THIS ROW CANNOT CATCH, SAID OUT LOUD (re-review, finding 3). It calls both sides in
+// ONE process, so both read the SAME `process.versions.node` — and the node major is part
+// of the directory name. A graph PLANNED under tjs and a step RUN under node are two
+// processes with two answers, and no assertion made inside one process can see them
+// disagree. That is a gate that cannot fail for a whole class of wrongness, which this repo
+// treats as a P0; the row below is the form that CAN fail, and the mechanism is recorded in
+// BACKLOG.md, "The toolchain directory is named for the interpreter that PLANS".
+//
+// WHICH STEP carries the field is no longer asserted here at all: it is derived, and its
+// guard (with a control) is test/build-gates/build-graph-gates.test.cjs's guard 6.
 test('the provisioned toolchain is the directory the emitter resolves, not a copy of it', () => {
   const step = G.stepById('bundle.clode-main');
   assert.ok(typeof step.provisions === 'function', 'the bundle step declares no provisions');
@@ -589,6 +600,36 @@ test('the provisioned toolchain is the directory the emitter resolves, not a cop
   assert.match(emitter, /toolchainDir\(/,
     `${G.EMITTER_REL} no longer resolves its toolchain through platform-tag.cjs's `
     + 'toolchainDir, so the graph is now declaring a directory that script does not use');
+});
+
+// THE FORM THAT CAN FAIL. toolchainDir() keys on `process.versions.node`, and the two
+// interpreters in this build answer differently: libexec/node-shim/modules/process.cjs
+// hardcodes `24.0.0-node-shim-m1`, while `bundle.clode-main` runs under the REAL node. So a
+// graph planned under tjs ALWAYS declares `toolchain/<os>-<arch>-node24`, and the step fills
+// `…-node<real major>`. They agree on a node-24 box and nowhere else — which is precisely
+// the node-free machine the generated page is about.
+//
+// Both sides are READ, not restated: the shim's answer out of the shim's own source, the
+// real one out of this process, and both fed through platformTag()'s injectable
+// `nodeVersion`. Nothing here changes what the shim reports; the point is that the
+// disagreement becomes a red instead of a silence.
+test('the toolchain directory names the node major that RUNS the step, not the planner', () => {
+  const { platformTag } = require('../scripts/platform-tag.cjs');
+  const shimRel = 'libexec/node-shim/modules/process.cjs';
+  const shimSrc = fs.readFileSync(path.join(REPO, shimRel), 'utf8');
+  const m = shimSrc.match(/versions:\s*\{\s*node:\s*'([^']+)'/);
+  assert.ok(m, `${shimRel} no longer spells \`versions: { node: '…' }\` where this reads it — `
+    + 'this row exists to compare the shim\'s reported node version against the real one, and '
+    + 'a reader that cannot find it would go green for the wrong reason');
+  assert.strictEqual(platformTag({ nodeVersion: m[1] }), platformTag(),
+    `the graph planned under tjs declares \`${platformTag({ nodeVersion: m[1] })}\` as the `
+    + `build-only toolchain directory (the shim hardcodes node ${m[1]} at ${shimRel}), while `
+    + `scripts/build-clode-main.mjs runs under node ${process.versions.node} and fills `
+    + `\`${platformTag()}\`. The graph's \`provisions\` is therefore naming a directory this `
+    + 'build does not use. This is NOT a fault of your machine: it is the divergence recorded '
+    + 'in BACKLOG.md as "The toolchain directory is named for the interpreter that PLANS", '
+    + 'and it is invisible on a node-24 host. Do not paper over it by changing what the shim '
+    + 'reports.');
 });
 
 // FINDING 1 (review round 1, Important). The record must not call a boundary failure

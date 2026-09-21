@@ -323,6 +323,56 @@ second is cheap and would have caught this; the first removes the restatement. W
 comment at `build-graph.cjs:284` must stop claiming a sameness that is not there — that is what
 made this invisible.
 
+**Update 2026-09-21 (re-review, finding 2): the SENTENCE is corrected; the RECONCILIATION is
+still open.** `engineHomeForLeg`'s comment no longer claims the same rule. It now says the two
+answer different questions, names alpine as the known disagreement with both file:lines, and
+points here. Nothing else changed: there is still no gate pinning the two classifications, and
+a tenth guest OS still drifts silently. That is what remains of this item.
+
+## The toolchain directory is named for the interpreter that PLANS (2026-09-21)
+
+Found by the re-review of the build-graph fix pass (finding 3). Recorded, not fixed — the fix
+is a decision about what the shim reports or about how the graph names a per-interpreter path,
+and neither belongs in a fix pass.
+
+**The mechanism.** `scripts/platform-tag.cjs`'s `toolchainDir()` returns
+`buildPath('toolchain', platformTag())`, and `platformTag()` (`platform-tag.cjs:97-103`) builds
+`${osToken}-${arch}-node${nodeMajor}` out of `process.versions.node`. So the answer depends on
+WHICH INTERPRETER ASKS:
+
+* `libexec/node-shim/modules/process.cjs:426` hardcodes `versions: { node: '24.0.0-node-shim-m1' }`
+  — the shim presents as a Node 24 host, deliberately, and that is not up for renegotiation
+  here.
+* `scripts/build-clode-main.mjs:25` resolves `toolchainDir(REPO)` under the REAL node, because
+  `bundle.clode-main` shells out to `node` (it is one of the two steps `docs/build.md` says
+  still needs it).
+
+**When they diverge.** A graph planned under tjs — which is what `./build.sh` does on a machine
+with no node, the whole point of this work — ALWAYS declares `toolchain/<os>-<arch>-node24` in
+`bundle.clode-main`'s `provisions`. The step then fills `toolchain/<os>-<arch>-node<real major>`.
+The two agree if and only if the host's node major is 24. They agree on this box (node 24.21.0)
+and in CI (`.tool-versions` pins `nodejs 24.21.0`), and nowhere else. `ctx.engine` and
+`ctx.checkout` do NOT have this problem: `platform-tag.cjs`'s own comment says `tjsBin` carries
+no node major on purpose, so `toolchain` is the first context field with an interpreter-
+dependent answer.
+
+**Why nothing could catch it, and what does now.** The pinning test
+(`test/build-graph.test.cjs`, "the provisioned toolchain is the directory the emitter
+resolves") calls both sides in ONE process, so both read the same `process.versions.node`: it
+is green by construction and could never have failed for this. It now says so in its own
+header, and a second row beside it — "the toolchain directory names the node major that RUNS
+the step" — reads the shim's hardcoded version out of the shim's own source and compares
+`platformTag({ nodeVersion: <shim> })` against `platformTag()`. On a node-24 host that is
+green; on any other host it is RED, with the two directory names in the message. That is a
+tripwire, not a fix.
+
+**Shape of the fix, when it is taken.** Either drop the node major from `toolchainDir` (it is a
+cache key for native tools, and esbuild's ABI, not node's, is what it is really keyed on), or
+resolve the toolchain against the node that will RUN the step rather than the one planning it
+(the graph knows the step shells out to `node`, so it could ask that binary). The first is
+smaller and probably right; it touches `platform-tag.cjs`, which several other things key on,
+so it is a decision and not an edit.
+
 ## Two literals in the build graph that a new step would walk past (2026-09-21)
 
 Both found by the final whole-branch review; both small, both latent, neither fixed.
