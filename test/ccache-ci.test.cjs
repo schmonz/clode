@@ -163,7 +163,18 @@ function scanCoverage({ steps }) {
 
 const coverage = defineGuard({
   name: 'ccache-ci-leg-coverage',
-  // Floor 5: five call sites naming the compile step plus the two sparc steps is 7 today.
+  // Floor 5, against a population MEASURED at 6 — not the 7 this comment used to claim
+  // (review, F5). The 7 was arithmetic ("five call sites plus the two sparc steps") over a
+  // set that overlaps: the VM-guest step is BOTH a call site naming the compile step and one
+  // of the two sparc-adjacent steps, so it was counted twice. The six are: Build tjs
+  // (native), (alpine guest), (cross container), Cross-build tjs against the NetBSD
+  // toolchain, Load the sparc bake recipe, and Build + blobulate + smoke (inside the guest
+  // VM). Re-measured at a7201b6 with the OLD `--build-only` matcher against the OLD action
+  // YAML: the same six, so the step-id migration preserved the population exactly and the
+  // number was wrong before it, not because of it. `examined` out of checkGate() is the
+  // count that cannot be stale; this prose is a reader's aid, and that is the order to
+  // trust them in.
+  //
   // Set just under, so a split that stops seeing a leg class goes BROKEN rather than
   // reporting a clean sweep of two steps. It did exactly that when the call sites stopped
   // spelling `--build-only` and this rule was still looking for it.

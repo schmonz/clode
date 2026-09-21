@@ -17,8 +17,9 @@
 //           run: node scripts/build-tjs.cjs --regen-only
 //
 //       appended to the real .github/actions/build-leg/action.yml gave 4 pass / 0 fail.
-//       Nothing saw it. That reproduction is this file's own control (CONTROL_YAML below)
-//       and the test directly beneath the guard, so the hole cannot reopen silently.
+//       Nothing saw it. That reproduction is the third line of the guard's own `control()`
+//       below (the inline `control.yml`), and the subject of the "a bare run: appended to a
+//       REAL workflow is seen" test, so the hole cannot reopen silently.
 //
 // WHAT UNBLOCKED (2). Six call sites shared ONE blocker: `--only engine.compile` selected
 // that step AND its transitive `needs`, so naming it would have dragged engine.bytecode and
@@ -84,6 +85,15 @@ const quote = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // Every CI YAML, found rather than listed. Relative POSIX paths, sorted, so a finding names
 // a path a reader can open and the order does not depend on the filesystem.
+//
+// AppleDouble `._*` sidecars are NOT CI YAML. This repo is developed on a mount that sprays
+// them next to every file ([[git-gc-fails-appledouble]]), and two live under .github/ right
+// now; `._action.yml` ends in .yml, so the walk read a binary resource fork as UTF-8 and
+// scanned it for call sites. It cannot mask a finding, but it inflates `files.length` on one
+// developer's filesystem and nowhere else -- which makes the `files.length >= 3` assertion
+// below weaker than it reads, and would make any future count of "how many CI files are
+// there" answer differently on this mac than in CI. The same one-line exclusion
+// scripts/engine-recipe.cjs and scripts/build-graph.cjs's libexec walk already make.
 function ciYamlFiles(root) {
   const out = [];
   const walk = (dir) => {
@@ -91,6 +101,7 @@ function ciYamlFiles(root) {
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const e of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
       const p = path.join(dir, e.name);
+      if (e.name.startsWith('._')) continue;
       if (e.isDirectory()) walk(p);
       else if (/\.ya?ml$/.test(e.name)) out.push(path.relative(root, p).split(path.sep).join('/'));
     }
@@ -176,9 +187,21 @@ const ALLOWED = {};
 
 const GUARD = defineGuard({
   name: 'build-graph-ci-step-ids',
-  // The named call sites, which is the population that matters. It rose from 1 to 10 when
-  // the six blocked sites converted, and it must never fall to 0 -- that is the state this
-  // floor exists to report as BROKEN rather than as OK.
+  // The call sites this scan reads -- named step ids PLUS raw engine invocations -- which
+  // is the population that matters. MEASURED, not remembered (the first cut of this comment
+  // said "1 to 10" against a real population of 11, in a gate whose whole subject is a
+  // number going stale): at a7201b6 exactly ONE line named a step (build-leg's qemu
+  // bytecode regen); today it is ELEVEN, all of them named ids and none of them raw
+  // invocations -- 9 in .github/actions/build-leg/action.yml, 1 in cross-blobulate, 1 in
+  // workflows/repro.yml. Re-measure by reading `examined` out of checkGate(), which is the
+  // same count and cannot be stale by construction.
+  //
+  // THE FLOOR IS DELIBERATELY BELOW THAT, and the gap is the point rather than slack nobody
+  // noticed: a floor equal to the population would redden on any legitimate removal (a leg
+  // retired, two halves of a site merged), which trains people to edit the floor instead of
+  // reading it. Eight says the thing worth saying -- that the conversion happened and did
+  // not silently unwind -- while leaving room for the matrix to change shape. It must never
+  // fall to 0; that is the state this floor exists to report as BROKEN rather than as OK.
   floor: 8,
   read: () => {
     const files = ciYamlFiles(repo);
