@@ -277,6 +277,23 @@ were found, several by accident, most of them green beforehand:
 The durable lesson, now enforced in several places: **a gate that cannot demonstrate its own
 failure is not a gate**, and the way to find out is to run it RED on purpose.
 
+## The recipe does not hash the recipe (2026-09-21)
+
+Found while converting `scripts/engine-recipe.mjs` to CJS. `engine-recipe` computes what an
+engine is made of, and is NOT itself in the `FILES` set it expands. So editing the LOGIC that
+decides what counts as an engine source moves no hash, and the cache can restore an engine
+keyed by the old rule while the tree now says something different.
+
+This is the same blindness the file's own header is a monument to — the cosmo patches were
+missing from the key, "the recipe hash did not move, so nothing said the engine sources had
+changed", and it cost 13 commits of red — except one level up: there the omission was a
+SOURCE, here it is the RULE.
+
+Not fixed, no ruling taken. Adding it to its own FILES is a one-line change with a 42-leg
+rebuild attached, and it wants a deliberate decision rather than a drive-by. Note the
+self-reference is not circular in practice: the file's bytes are an input to a hash it
+computes, which is exactly what `spike/quickjs/PINS.md` and the patches already are.
+
 ## Seams worth naming, even if nothing leaves this repo (2026-09-21)
 
 Asked "what else is in the trenchcoat." Measured, ranked by how close the seam already is.
