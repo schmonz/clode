@@ -495,15 +495,24 @@ test('every module a build-gates guard names actually exists', () => {
 // regression. The derivation is now named AND gate-shaped; this test is the other half:
 // the controlled set is PINNED, so a fifth module joining it — incidentally or on purpose —
 // goes red here and a human says which it was.
-test('the controlled set is EXACTLY the four modules phase 5b put a control under', () => {
+test('the controlled set is EXACTLY the modules a guard was deliberately written for', () => {
   // POSIX literals, not path.join — controlledProductionModules() keys are toPosixRel()
   // output on every OS; a path.join literal would match on this box (path.sep is '/') but
   // silently mismatch on Windows, exactly the bug this whole fix is about.
+  //
+  // scripts/build-graph.cjs ADDED 2026-09-21, and this is the mechanism working as designed
+  // rather than a baseline absorbing a change: the build-graph declaration landed
+  // gate-shaped (its bundle-output derivation REFUSES rather than answering empty), pushed
+  // the uncontrolled count to 30 against a baseline of 29, and went red at authoring time.
+  // test/build-gates/build-graph-gates.test.cjs was written to control that refusal, which
+  // returned the count to 29 — so the baseline did NOT move, and the fifth entry here is a
+  // human saying which of the two it was.
   assert.deepStrictEqual([...controlledProductionModules().keys()].sort(), [
     'libexec/clode-build.cjs',
     'libexec/host-provision.cjs',
     'libexec/scc-merge.cjs',
     'libexec/target-update-check.cjs',
+    'scripts/build-graph.cjs',
   ].sort(),
   'the set of production modules counted as CONTROLLED changed. If a successor phase wrote '
   + 'a new guard, add its module here and lower UNCONTROLLED_GATE_BASELINE. If a guard '
