@@ -561,6 +561,39 @@ test('--needs is parsed off the command line, and rides through to the selection
     'the REAL graph, not a fixture: this is the selection CI asks for');
 });
 
+// THE HOLE THE NAME-CHECKS CANNOT SEE (review, F2). A name-check cannot check a name that
+// is not there: `--needs asume` was refused, but `--needs` with the word dropped set
+// `o.needs = undefined`, which runGraph reads as "not supplied" and maps to the DEFAULT —
+// so a trailing `--needs` ran engine.source + engine.bytecode + engine.compile and exited
+// 0, verbatim what that refusal's own comment forbids. `--only` was the same shape from the
+// other side: bare, it ran the WHOLE graph green. In a YAML `run:` block a dropped argument
+// is at least as likely as a misspelling, and CI is exactly where nobody reads the log of a
+// green step.
+test('a flag with its value dropped is refused, not defaulted', () => {
+  for (const flag of ['--needs', '--only', '--target', '--runs-on']) {
+    assert.throws(() => R.parseArgs(['--plan', flag]), /needs a value and the command line ended/,
+      `a trailing ${flag} fell through to the default instead of refusing`);
+  }
+  // Mid-line, the same mistake one word earlier: `--only --needs assume` is a dropped step
+  // id, not a step whose name is `--needs`.
+  assert.throws(() => R.parseArgs(['--only', '--needs', 'assume']),
+    /needs a value and the next argument is '--needs', another flag/);
+  // And the well-formed cases still parse, including the one where a value legitimately
+  // follows a flag-looking sibling.
+  assert.deepStrictEqual(R.parseArgs(['--plan', '--needs', 'assume', '--only', 'engine.compile']),
+    { dryRun: true, needs: 'assume', only: 'engine.compile' });
+});
+
+test('PROOF: the dropped-value refusal is what stops the whole subgraph running', () => {
+  // Without the refusal, this is the plan a bare `--needs` produced: parseArgs handing
+  // runGraph `needs: undefined` IS the default, and the default builds what engine.compile
+  // needs. The test above is the only thing standing between that and a green CI step.
+  assert.deepStrictEqual(
+    R.runGraph({ only: 'engine.compile', needs: undefined, dryRun: true, logFn: () => {} }).ran,
+    ['engine.source', 'engine.bytecode', 'engine.compile'],
+    'if this is no longer the default behaviour, the refusal above is guarding nothing');
+});
+
 test('the default run reaches the root, in dependency order', () => {
   const out = R.runGraph({ dryRun: true, logFn: () => {} });
   assert.deepStrictEqual(out.ran, G.orderedSteps().map((s) => s.id));

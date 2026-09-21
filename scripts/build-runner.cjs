@@ -387,16 +387,45 @@ const USAGE = [
   '  --help            this text',
 ].join('\n');
 
+// THE FOURTH DOOR INTO THE BLIND PASS, and the only one the three name-checks in runGraph
+// cannot see (review, F2). Every `--flag <value>` here used to take argv[i + 1] unexamined,
+// so a trailing `--needs` set `o.needs = undefined` — and undefined is exactly the value
+// runGraph reads as "not supplied" and maps to the DEFAULT. `--needs asume` is refused;
+// `--needs` with the word dropped ran the whole transitive subgraph and exited 0, which is
+// verbatim what that refusal's own comment forbids ("Defaulting an unrecognised value to
+// `build` would put a source phase back on a machine that cannot run one"). In a YAML `run:`
+// block a dropped argument is at least as likely as a misspelling, and it was the one typo
+// the name-check is structurally blind to: a name-check cannot check a name that is not there.
+// `--only`, `--target` and `--runs-on` had the identical hole — a bare `--only` ran the whole
+// graph and exited 0, the same shape from the other side.
+//
+// A VALUE THAT IS ITSELF A FLAG IS THE SAME MISTAKE, one word earlier: `--only --needs assume`
+// is a dropped step id, not a step named `--needs`. Both readings are refused here rather than
+// downstream, because downstream only knows that some step id is undeclared — it cannot say
+// that an argument went missing, which is the thing the author needs to be told.
+function flagValue(argv, i, flag) {
+  const v = argv[i];
+  if (v === undefined || /^-/.test(v)) {
+    throw new Error(`build-runner: '${flag}' needs a value and `
+      + (v === undefined ? 'the command line ended' : `the next argument is '${v}', another flag`)
+      + `. A missing value is NOT the same as an omitted flag: '${flag}' with nothing after it `
+      + 'would otherwise read as "not supplied" and fall through to the default, which for '
+      + '`--needs` means building a source phase on a machine that was told to assume one, and '
+      + `for \`--only\` means running the WHOLE graph. Refusing here instead.\n${USAGE}`);
+  }
+  return v;
+}
+
 function parseArgs(argv) {
   const o = {};
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--help' || a === '-h') o.help = true;
     else if (a === '--plan' || a === '--dry-run') o.dryRun = true;
-    else if (a === '--only') { i += 1; o.only = argv[i]; }
-    else if (a === '--needs') { i += 1; o.needs = argv[i]; }
-    else if (a === '--target') { i += 1; o.target = argv[i]; }
-    else if (a === '--runs-on') { i += 1; o.runsOn = argv[i]; }
+    else if (a === '--only') { i += 1; o.only = flagValue(argv, i, a); }
+    else if (a === '--needs') { i += 1; o.needs = flagValue(argv, i, a); }
+    else if (a === '--target') { i += 1; o.target = flagValue(argv, i, a); }
+    else if (a === '--runs-on') { i += 1; o.runsOn = flagValue(argv, i, a); }
     else throw new Error(`build-runner: unknown argument '${a}'\n${USAGE}`);
   }
   return o;
