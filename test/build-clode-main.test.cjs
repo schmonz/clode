@@ -24,10 +24,26 @@ test('build-clode-main.mjs also pre-builds naude-entry.bundle.cjs', () => {
   // test created it, remove it afterward so the suite stays hermetic.
   const buildPreexisted = fs.existsSync(BUILD_DIR);
   try {
-    execFileSync(process.execPath, [path.join(REPO, 'scripts', 'build-clode-main.mjs')], {
-      cwd: REPO,
-      stdio: 'inherit',
-    });
+    // CAPTURED, NOT INHERITED, and the capture is put back into the failure. With
+    // `stdio: 'inherit'` execFileSync's thrown error carries `stdout: null,
+    // stderr: null` and says only "Command failed" — the child's real complaint
+    // went to the runner's stream, ending up somewhere near this assertion rather
+    // than in it. That is how a `Cannot find module 'esbuild'` from
+    // ensureToolchain's own loader got reported here as a nameless non-zero exit
+    // (2026-09-21), and it is the same shape as the node-shim defect where a
+    // child's output was thrown away and the failure named the wrong thing.
+    try {
+      execFileSync(process.execPath, [path.join(REPO, 'scripts', 'build-clode-main.mjs')], {
+        cwd: REPO,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        encoding: 'utf8',
+      });
+    } catch (e) {
+      // Both streams: the script narrates on stderr (`esbuild -> ...`), but a
+      // spawned npm's diagnosis can land on either.
+      const said = [e.stdout, e.stderr].map((s) => (s || '').trim()).filter(Boolean).join('\n');
+      throw new Error(`scripts/build-clode-main.mjs failed (${e.message}).\nIt said:\n${said || '(nothing)'}`);
+    }
 
     assert.ok(fs.existsSync(OUT), `expected ${OUT} to exist`);
     const contents = fs.readFileSync(OUT, 'utf8');
