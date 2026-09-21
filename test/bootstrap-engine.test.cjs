@@ -24,7 +24,7 @@
 // AND THE SECOND ONE. The base case — a brand-new alpine arch or VM guest OS with no
 // published slice — must be DERIVED from the pinned manifest ("is <target> in the
 // pack?"), never declared. This repo has been bitten three times by a hand-maintained
-// list going stale; engine-recipe.mjs's FILES is derived for exactly that reason. The
+// list going stale; engine-recipe.cjs's FILES is derived for exactly that reason. The
 // fallback-set test below pins the derived set against the manifest so a hand-added
 // `bootstrap: node` flag, reached for to dodge a real failure, goes red.
 const { test } = require('node:test');

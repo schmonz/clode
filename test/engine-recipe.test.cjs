@@ -1,5 +1,5 @@
 'use strict';
-// Ties the engine RECIPE (scripts/engine-recipe.mjs) to the one place that
+// Ties the engine RECIPE (scripts/engine-recipe.cjs) to the one place that
 // previously owned the answer — the tjs cache key in
 // .github/actions/build-leg/action.yml — and pins the properties the recipe is
 // worthless without: determinism, cwd-independence, and sensitivity to the very
@@ -22,22 +22,22 @@ const { defineGuard, guardTests } = require('./guard.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 const ACTION = path.join(REPO, '.github/actions/build-leg/action.yml');
-const SCRIPT = path.join(REPO, 'scripts/engine-recipe.mjs');
+const SCRIPT = path.join(REPO, 'scripts/engine-recipe.cjs');
 
-// The set the tjs cache key covered before it was moved into engine-recipe.mjs.
+// The set the tjs cache key covered before it was moved into engine-recipe.cjs.
 const EXPECTED_SET = [
   'spike/quickjs/PINS.md',
   'spike/quickjs/patches/*.patch',
   // ADDED 2026-08-22, deliberately WIDER than the historical cache-key list:
   // the cosmo leg's patches live here and were never covered, so editing one
-  // did not move the engine identity. See scripts/engine-recipe.mjs.
+  // did not move the engine identity. See scripts/engine-recipe.cjs.
   'patches/*.patch',
   'scripts/build-tjs.cjs',
   // ADDED 2026-09-19: build-tjs.cjs's own require graph split into modules
   // that ARE the orchestration (source-reset, the API-floor sanity check, the
   // two halves of the hermeticity gate, the ccache launcher, and the path
   // tags); only the pre-split entry point was ever in this set. See
-  // scripts/engine-recipe.mjs.
+  // scripts/engine-recipe.cjs.
   'scripts/tjs-source-reset.cjs',
   'scripts/engine-api-floor.cjs',
   'scripts/build-depscan.cjs',
@@ -76,7 +76,7 @@ const EXPECTED_SET = [
   'scripts/file-prefix-map.cjs',
   // ADDED 2026-08-29: the netbsd-sparc in-guest bake recipe IS that leg's
   // compile, and editing it used to move nothing — so the cache could restore an
-  // engine built by a different recipe. See scripts/engine-recipe.mjs.
+  // engine built by a different recipe. See scripts/engine-recipe.cjs.
   'spike/quickjs/qemu/ci-guest-bake.sh',
   'scripts/*.toolchain.cmake',
   'spike/quickjs/atomic-shim.c',
@@ -148,7 +148,7 @@ function scanCacheKeyWiring({ yml }) {
   } else {
     examined++;
     if (!/steps\.recipe\.outputs\.hash/.test(key)) {
-      findings.push('the tjs cache key must consume scripts/engine-recipe.mjs, not its own file list');
+      findings.push('the tjs cache key must consume scripts/engine-recipe.cjs, not its own file list');
     }
     examined++;
     if (/hashFiles\(/.test(key)) {
@@ -157,7 +157,7 @@ function scanCacheKeyWiring({ yml }) {
   }
 
   examined++;
-  if (!/run: echo "hash=\$\(node scripts\/engine-recipe\.mjs\)"/.test(yml)) {
+  if (!/run: echo "hash=\$\(node scripts\/engine-recipe\.cjs\)"/.test(yml)) {
     findings.push('the step that produces steps.recipe.outputs.hash is missing');
   }
 
@@ -336,4 +336,88 @@ test('the git source reads a rev without touching the working tree', async () =>
   assert.strictEqual(one.files[0].sha,
     crypto.createHash('sha256').update(fs.readFileSync(path.join(REPO, 'spike/quickjs/PINS.md'))).digest('hex'),
     'committed PINS.md and the on-disk one disagree (dirty tree?), or gitSource read the wrong blob');
+});
+
+// ---- the recipe under the SHIM, mode by mode ----------------------------------------
+//
+// WHY THIS IS NOT COVERED BY THE GRAPH'S PROOF. This file was ESM using `import.meta`
+// until 2026-09-21, which meant libexec/node-shim/loader.cjs could not host it and a
+// node-free `./build` stopped dead at the first engine step (test/build-graph.test.cjs
+// plans the whole graph under tjs, which is the proof that lifted). But that proof only
+// asks for a patch COUNT. The CLI has four more answers -- the full hash, --short,
+// --files, --json -- plus a usage path that must exit 2, and a --rev mode that reads
+// through `git show` instead of the filesystem. A conversion that silently broke any of
+// them would leave the graph green: phase 4c-1's identical conversion broke --regen-only
+// while 2,085 tests said nothing, because the covering test asserted source TEXT.
+//
+// So: every mode, run under BOTH engines, compared byte for byte. Two engines agreeing on
+// the recipe is also the property the cache key depends on, since a leg may compute it on
+// either one.
+const TJS = require('./node-shim-helper.cjs').tjsPath();
+const LOADER = path.join(REPO, 'libexec/node-shim/loader.cjs');
+const CLI_MODES = [[], ['--short'], ['--files'], ['--json'], ['--bogus']];
+
+// --rev is NOT in that table, and this is the trade rather than an oversight: `git show`
+// is one process per file, so a full-tree `--rev HEAD` measured 20s PER ENGINE on this
+// mount -- 41s added to the suite to re-prove a hash the worktree rows already prove. The
+// part that is genuinely engine-specific is gitSource's spawn (binary stdout through the
+// shim's sync spawn, not a string), so that is probed NARROWLY below, one file, which is
+// the same bargain the gitSource test above already struck for the same reason.
+const probeUnder = (exe, pre, src) => {
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'engine-recipe-probe-'));
+  const probe = path.join(dir, 'probe.cjs');
+  fs.writeFileSync(probe, src);
+  try {
+    return require('node:child_process')
+      .spawnSync(exe, [...pre, probe], { encoding: 'utf8', cwd: REPO });
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+};
+
+test('every CLI mode answers identically under node and under the node-shim loader', (t) => {
+  if (!TJS || !fs.existsSync(TJS)) {
+    t.skip('no engine: neither CLODE_TJS nor the platform-tagged scratch engine resolves');
+    return;
+  }
+  const both = (exe, pre, args) => {
+    const r = require('node:child_process')
+      .spawnSync(exe, [...pre, ...args], { encoding: 'utf8', cwd: REPO });
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+  };
+  let sawUsage = false;
+  for (const args of CLI_MODES) {
+    const n = both(process.execPath, [SCRIPT], args);
+    const s = both(TJS, ['run', LOADER, SCRIPT], args);
+    assert.deepStrictEqual(s, n,
+      `engine-recipe.cjs answered differently under tjs than under node for \`${args.join(' ') || '(no args)'}\`. `
+      + 'This file must stay hostable by the CJS node-shim loader -- no ESM syntax, no '
+      + 'import.meta, no top-level await -- because the build graph derives the engine '
+      + "steps' inputs and counts from it and the developer build runs that graph under tjs.");
+    if (args[0] === '--bogus') { sawUsage = true; assert.strictEqual(n.status, 2, 'usage must exit 2'); }
+    else assert.strictEqual(n.status, 0, `\`${args.join(' ')}\` failed under node: ${n.stderr}`);
+  }
+  assert.ok(sawUsage, 'the mode table lost its refusal row — agreement on success paths only is half a proof');
+});
+
+test('gitSource reads a rev under the shim too, and agrees with node', (t) => {
+  if (!TJS || !fs.existsSync(TJS)) {
+    t.skip('no engine: neither CLODE_TJS nor the platform-tagged scratch engine resolves');
+    return;
+  }
+  // ONE ls-tree and ONE show, for the sibling test's reason: `git show` is a process per
+  // file, so hashing the patch stack here would cost 20s an engine to re-prove what the
+  // worktree rows prove. list() covers the ls-tree parse, recipeDetail() covers the blob read.
+  const src = `const R = require(${JSON.stringify(SCRIPT)});\n`
+    + `const g = R.gitSource('HEAD', ${JSON.stringify(REPO)});\n`
+    + "const d = R.recipeDetail(g, ['spike/quickjs/PINS.md']);\n"
+    + "console.log(d.hash + ' ' + g.list('spike/quickjs/patches').length);\n";
+  const n = probeUnder(process.execPath, [], src);
+  const s = probeUnder(TJS, ['run', LOADER], src);
+  assert.strictEqual(n.status, 0, `the node half of the probe failed: ${n.stderr}`);
+  assert.match(n.stdout.trim(), /^[0-9a-f]{64} \d+$/, 'the probe printed nothing useful');
+  assert.ok(Number(n.stdout.trim().split(' ')[1]) > 1, 'ls-tree listed no patches — the probe is measuring nothing');
+  assert.strictEqual(s.stdout, n.stdout,
+    'gitSource answered differently under tjs than under node. It shells out to `git show`, '
+    + "whose stdout is BINARY (no encoding) -- if the shim's sync spawn ever hands that back "
+    + 'as a decoded string, every blob hashes differently and the recipe silently disagrees '
+    + `between engines. tjs said: ${s.stdout || s.stderr}`);
 });

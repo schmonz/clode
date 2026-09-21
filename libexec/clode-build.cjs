@@ -1058,7 +1058,7 @@ function thisEngineRecipe(env, opts) {
   }
   try {
     const root = path.resolve(opts.libexec || '.', '..');
-    const script = path.join(root, 'scripts/engine-recipe.mjs');
+    const script = path.join(root, 'scripts/engine-recipe.cjs');
     if (!require('node:fs').existsSync(script)) return null;
     return require('node:child_process')
       .execFileSync(process.execPath, [script], { encoding: 'utf8' }).trim() || null;

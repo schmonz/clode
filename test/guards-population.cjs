@@ -431,7 +431,7 @@ const MIGRATED = deriveMigrated();
 // RE-CUT AGAIN, 83 -> 82, Task 14 batch 5 (2026-09-04): engine-recipe-cache-key-wiring,
 // the one pure-regex assertion inside engine-recipe.test.cjs (the build-leg cache key
 // consumes the recipe's hash rather than re-inlining hashFiles(...)); the rest of that
-// file's tests load scripts/engine-recipe.mjs dynamically and exercise real hashing
+// file's tests load scripts/engine-recipe.cjs dynamically and exercise real hashing
 // behaviour, which is not a static text scan and is left alone.
 //
 // MEANT TO GO DOWN from here as files migrate. Never raise it to make a run "look clean" —

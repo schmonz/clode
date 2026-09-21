@@ -8,7 +8,7 @@
 // and is structurally unable to fail. So this file pins four separate things —
 //
 //   1. the FILE SET IS DERIVED, not a list. Three hand-maintained lists have gone stale
-//      here (which is why scripts/engine-recipe.mjs's FILES is derived); a fourth would
+//      here (which is why scripts/engine-recipe.cjs's FILES is derived); a fourth would
 //      rot the same way.
 //   2. the pass CAN FAIL. A control fixture with a plain POSIX assumption is run through
 //      the real pass and required to go RED — and required to go GREEN without the

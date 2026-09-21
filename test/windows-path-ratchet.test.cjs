@@ -321,7 +321,7 @@ const ALLOWED = {
     'scripts/build-tjs.cjs': 1,
     // Repo-relative paths are POSIX-canonical on purpose: the recipe hash must be
     // identical on every host.
-    'scripts/engine-recipe.mjs': 2,
+    'scripts/engine-recipe.cjs': 2,
   },
   'npm-global-layout': {
     // Each of these is the POSIX HALF of a correctly-branched pair; the Windows

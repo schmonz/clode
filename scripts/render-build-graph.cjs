@@ -4,7 +4,7 @@
 // WHY THIS EXISTS. docs/build.md is this repo's first tracked developer-facing page, and a
 // page about a build is exactly the artifact that rots: right on the day it is written and
 // silently wrong every day after. This tree has watched that happen three times to
-// hand-maintained LISTS (NODE_CONSTANTS, engine-recipe.mjs's FILES, the BACKLOG prose about
+// hand-maintained LISTS (NODE_CONSTANTS, engine-recipe.cjs's FILES, the BACKLOG prose about
 // what building this repo involves) and, earlier today, to a single WORD: a step was
 // renamed in one place and the generated text that quoted it was never regenerated. A hand-drawn
 // diagram is a comment with better typography, so nothing here is hand-drawn: every node,
@@ -23,12 +23,12 @@
 // there is not a cosmetic bug: it is a gate that goes red in CI and nowhere else.
 //
 // COMMONJS, for build-graph.cjs's reason — this repo is removing ESM from its own tooling,
-// and a renderer is not the place to add some back. It does NOT have to run under tjs (it is
-// a dev/CI tool, like scripts/tjs-legs.mjs, and it reads the graph's `inputs`, which compose
-// the ESM engine-recipe the node-shim loader cannot host).
+// and a renderer is not the place to add some back. It does not have to RUN under tjs (it is
+// a dev/CI tool, like scripts/tjs-legs.mjs, and it renders every leg, which asks
+// scripts/tjs-legs.mjs — still ESM — for the list).
 //
 // scripts/build-tjs.cjs MUST NOT require this file, for the reason build-graph.cjs's header
-// states at length: a require would pull it into engine-recipe.mjs's derived FILES, move the
+// states at length: a require would pull it into engine-recipe.cjs's derived FILES, move the
 // recipe hash and rebuild all 42 legs for an edit to a file that compiles nothing.
 
 const fs = require('node:fs');

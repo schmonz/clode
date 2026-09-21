@@ -24,7 +24,7 @@
 // stack and ~50 source fixups have already run.
 //
 // THE LIST IS DERIVED, NOT DECLARED, and that is load-bearing. Two hand-maintained lists in
-// this tree have gone stale and been caught by accident (engine-recipe.mjs's FILES, twice),
+// this tree have gone stale and been caught by accident (engine-recipe.cjs's FILES, twice),
 // so the packages named here are read out of the tree being built:
 //   * DIRECT: every bare import specifier appearing in src/js/** — which is precisely the
 //     set esbuild will try to resolve. NOT txiki's package.json `dependencies`, which also

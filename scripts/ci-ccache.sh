@@ -11,7 +11,7 @@
 #
 # WHAT IT BUYS, and why the recipe-keyed engine cache does not already cover it. The
 # tjs-cache in .github/actions/build-leg/action.yml is keyed on the engine RECIPE HASH
-# (scripts/engine-recipe.mjs), so it is all-or-nothing: a hit skips the compile entirely,
+# (scripts/engine-recipe.cjs), so it is all-or-nothing: a hit skips the compile entirely,
 # and a MISS gives nothing at all. The recipe hash moves whenever ANY engine source moves
 # — including an orchestration file that changes not one translation unit — and every such
 # move rebuilds all 42 legs completely from scratch (it moved three times on 2026-09-20

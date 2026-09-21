@@ -99,7 +99,7 @@ flowchart LR
   a14("deps/clode/ — 2 files")
   a15("VERSION")
   a16("spike/quickjs/PINS.md")
-  a17("scripts/engine-recipe.mjs")
+  a17("scripts/engine-recipe.cjs")
   a18("build/bundle/ — 2 files")
   s4[["clode.blobulate"]]
   a19("clode-native")

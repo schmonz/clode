@@ -4,7 +4,7 @@
 //
 // WHY A GATE AT ALL. A hand-drawn diagram is a comment that rots: it is right on the day it
 // is drawn and silently wrong every day after. This repo has watched that happen to three
-// hand-maintained lists (NODE_CONSTANTS, engine-recipe.mjs's FILES, the BACKLOG prose about
+// hand-maintained lists (NODE_CONSTANTS, engine-recipe.cjs's FILES, the BACKLOG prose about
 // the build) and, earlier today, to a single WORD: a step was renamed in one place and the
 // generated text that quoted it was never regenerated. So the page is derived from
 // scripts/build-graph.cjs, and gate 4 below is what makes "derived" true: the committed

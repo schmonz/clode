@@ -246,7 +246,7 @@ test('buildManifest without a blob still emits schema 1 (no offsets leak in)', a
 
 const { spawnSync } = require('node:child_process');
 const repo = path.resolve(__dirname, '..');
-const { recipe: engineRecipe, worktreeSource } = require('../scripts/engine-recipe.mjs');
+const { recipe: engineRecipe, worktreeSource } = require('../scripts/engine-recipe.cjs');
 
 function fakeInput(dir, name) {
   const f = path.join(dir, `${name}.bin`);
@@ -269,7 +269,7 @@ test('buildManifest omits recipe when there is none — an older manifest stays 
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('stampRecipe computes THIS tree\'s recipe, agreeing with engine-recipe.mjs', () => {
+test('stampRecipe computes THIS tree\'s recipe, agreeing with engine-recipe.cjs', () => {
   assert.strictEqual(stampRecipe({}), engineRecipe(worktreeSource()));
   assert.match(stampRecipe({}), /^[0-9a-f]{64}$/);
 });

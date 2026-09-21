@@ -28,7 +28,7 @@ test('every step declares the required fields, with functions not literals', () 
   assert.deepStrictEqual(G.shapeFindings(steps), [],
     'a step is missing a required field, or declared a LITERAL where the graph requires a '
     + 'function -- literal input/output lists and literal counts are exactly what rotted '
-    + 'NODE_CONSTANTS once and engine-recipe.mjs\'s FILES three times');
+    + 'NODE_CONSTANTS once and engine-recipe.cjs\'s FILES three times');
 });
 
 test('gate 5: no orphans — every step is reachable from the root', () => {
@@ -181,8 +181,8 @@ test('the bundle step derives its repo inputs from the emitter, including the on
       `${rel} is declared an input but ${G.EMITTER_REL} never names it — the derivation is `
       + 'reading something else');
   }
-  assert.ok(rels.includes('scripts/engine-recipe.mjs'),
-    'build-clode-main.mjs runs scripts/engine-recipe.mjs to bake __CLODE_BAKED_ENGINE_RECIPE__, '
+  assert.ok(rels.includes('scripts/engine-recipe.cjs'),
+    'build-clode-main.mjs runs scripts/engine-recipe.cjs to bake __CLODE_BAKED_ENGINE_RECIPE__, '
     + 'and the hand-written list this replaced had missed it. If the emitter stopped baking '
     + 'the recipe, re-derive this expectation; do not drop it.');
   assert.ok(rels.includes('VERSION') && rels.includes('spike/quickjs/PINS.md'),
@@ -651,33 +651,41 @@ test('the runner plans under tjs exactly as it plans under node', (t) => {
     'this proof is only worth running while the selected step HAS a derived count to get wrong');
 });
 
-// THE LIMITATION, PINNED RATHER THAN DESCRIBED. The plan above deliberately names a step
-// outside the engine phase, because the engine phase cannot be planned under tjs at all:
-// scripts/engine-recipe.mjs is ESM using `import.meta`, libexec/node-shim/loader.cjs is a
-// CJS host, and `engine.source`'s inputs/count and `engine.compile`'s inputs are all
-// compositions of it. build-graph.cjs's own header already concedes this ("merely LOADING
-// this module stays node-free even though asking it for an engine input list does not") —
-// what was missing is that the DEVELOPER BUILD asks, so a `./build` running under tjs stops
-// at the first engine step.
+// THE ENGINE PHASE, PLANNED UNDER TJS. This is what the tripwire that used to stand here
+// was waiting for. Until 2026-09-21 `engine.source`'s inputs/count and `engine.compile`'s
+// inputs were UNANSWERABLE under the shim: they are compositions of the engine recipe, the
+// recipe was ESM using `import.meta`, and libexec/node-shim/loader.cjs is a CJS host — so a
+// `./build` running under tjs stopped dead at the first engine step and a node-free
+// developer build was impossible. The recipe is CommonJS now
+// (scripts/engine-recipe.cjs), and this is the positive assertion the tripwire was standing
+// in for: the whole graph, engine phase included, plans identically under both engines.
 //
-// Not fixed here: engine-recipe.mjs is inside the engine recipe's own file set, so editing
-// it moves the recipe hash and rebuilds all 42 legs. That is a decision with a price tag,
-// not a side effect of writing a runner. This test is the tripwire: the day engine-recipe
-// becomes shim-hostable it goes RED, and whoever made that true widens the proof above
-// instead of finding a stale comment years later.
-test('TRIPWIRE: the engine phase cannot be planned under tjs, and says which step asked', (t) => {
+// WHY THE COUNT, NOT JUST THE PARSE. `engine.source`'s count is patchCount(), which is
+// recipeFiles() filtered — i.e. it needs the recipe to actually EXPAND its globs under the
+// shim, which needs `git ls-files` through the shim's sync spawn. A probe that only proved
+// the module loads would pass on a recipe that silently answered zero, and a zero count is
+// precisely the blindness scripts/engine-recipe.cjs's expand() refuses. So the count is
+// asserted against node's answer, digit for digit.
+test('the engine phase plans under tjs, count and all, exactly as it plans under node', (t) => {
   if (!TJS || !fs.existsSync(TJS)) {
     t.skip('no engine: neither CLODE_TJS nor the platform-tagged scratch engine resolves');
     return;
   }
-  let err;
-  try { planUnderTjs(['--plan']); } catch (e) { err = e; }
-  assert.ok(err, 'engine-recipe.mjs is hostable under the shim now — DELETE this tripwire and '
-    + 'widen the plan-under-tjs proof above to the whole graph, which is the thing a node-free '
-    + '`./build` has been waiting for');
-  assert.match(err.stderr, /engine\.source could not resolve its declared count/,
-    'the failure must name the STEP that asked, not just the parser that refused');
-  assert.match(err.stderr, /import\.meta/);
+  const lines = [];
+  R.runGraph({ dryRun: true, logFn: (l) => lines.push(l) });
+  const engineLines = lines.filter((l) => / phase=engine /.test(l));
+  assert.ok(engineLines.length >= 2,
+    'this proof is only worth running while the graph HAS an engine phase to plan');
+  assert.deepStrictEqual(planUnderTjs(['--plan']), lines,
+    'the runner planned a different build under tjs than under node. The engine steps derive '
+    + 'their inputs and counts from scripts/engine-recipe.cjs; if this says a step "could not '
+    + 'resolve", that file (or something it now reaches) is no longer hostable by the CJS '
+    + 'node-shim loader, and the node-free `./build` is broken again.');
+  const source = lines.find((l) => l.indexOf('step=engine.source ') !== -1);
+  assert.match(source, /count=\d+$/,
+    'engine.source must still carry a DERIVED count here — it is the half that proves the '
+    + 'recipe expanded its globs under the shim rather than merely parsing');
+  assert.ok(Number(source.match(/count=(\d+)$/)[1]) > 1, 'the derived patch count collapsed');
 });
 
 // The control for that wrapping, on a synthetic graph: a derivation that throws for ANY

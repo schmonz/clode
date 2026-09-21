@@ -16,7 +16,7 @@
 // double-build reproducibility gate, and a human running one leg by hand.
 //
 // NOT REQUIRED BY scripts/build-tjs.cjs, deliberately. It lives under test/ so it is
-// outside the engine recipe's file set (scripts/engine-recipe.mjs FILES) and outside
+// outside the engine recipe's file set (scripts/engine-recipe.cjs FILES) and outside
 // test/guards-population.cjs's production-gate population. Adding a reproducibility
 // harness must not rebuild all 44 legs.
 const fs = require('node:fs');

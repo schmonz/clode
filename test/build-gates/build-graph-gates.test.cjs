@@ -9,7 +9,7 @@
 // produces nothing" and every downstream check (the blobulate's inputs, the runner's
 // did-the-outputs-appear pass, the artifact diagram) then agrees, quietly, with nothing.
 // So the derivation REFUSES on no match instead of returning [], for the reason
-// scripts/engine-recipe.mjs's expand() refuses on a glob that matched nothing: a typo'd
+// scripts/engine-recipe.cjs's expand() refuses on a glob that matched nothing: a typo'd
 // pattern would otherwise make every tree look identical.
 //
 // WHAT INPUT TRIPS IT (measured): any build-clode-main.mjs source with no
@@ -97,7 +97,7 @@ test('FLOOR: the real emitter still names the bundles the bootstrap stages', () 
 // WHAT IT GUARDS. The bundle step's non-libexec inputs are READ OUT of
 // scripts/build-clode-main.mjs's own `path.join(REPO, ...)` calls. The hand-written list
 // this replaced had already rotted on the day it was written — it missed
-// scripts/engine-recipe.mjs, which the emitter runs to bake __CLODE_BAKED_ENGINE_RECIPE__ —
+// scripts/engine-recipe.cjs, which the emitter runs to bake __CLODE_BAKED_ENGINE_RECIPE__ —
 // and the libexec walk kept the answer non-empty, so no existing check could ever have
 // noticed. A derivation with no refusal behind it is the same hand list with extra steps.
 //

@@ -19,7 +19,7 @@
 //
 // THE PACKAGE LIST IS DERIVED, and these tests are what hold it to that. A hand-maintained
 // list of seven names would be correct today and wrong the first time txiki adds an import
-// — the same staleness that was found twice in engine-recipe.mjs's FILES. So the module
+// — the same staleness that was found twice in engine-recipe.cjs's FILES. So the module
 // under test reads the bare import specifiers out of src/js/** and closes over each
 // package's own declared dependencies, and the fixtures below are built to make a
 // hard-coded list fail: they import packages with invented names that no real checkout has.

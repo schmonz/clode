@@ -19,10 +19,10 @@
 // `count` are FUNCTIONS that COMPOSE existing single sources of truth -- never literal
 // arrays, never literal numbers. This repo has watched a hand-maintained list rot in
 // exactly this position twice over, loudly: NODE_CONSTANTS was the union of whichever
-// platforms somebody transcribed, and scripts/engine-recipe.mjs's FILES was wrong by its
+// platforms somebody transcribed, and scripts/engine-recipe.cjs's FILES was wrong by its
 // own stated rule on the day it was written, three separate times. The sources composed
 // here:
-//   scripts/engine-recipe.mjs   the engine's source set, itself DERIVED from
+//   scripts/engine-recipe.cjs   the engine's source set, itself DERIVED from
 //                               build-tjs.cjs's own require graph
 //   scripts/tjs-legs.mjs        the 42 release legs -- the graph is ONE graph parameterized
 //                               by target through legsFor(), never 42 graphs
@@ -37,14 +37,16 @@
 // hostable by libexec/node-shim/loader.cjs under tjs, because the developer build resolves
 // a tjs through scripts/bootstrap-engine.sh and runs the graph under it. scripts/stage0.mjs
 // is the cautionary case: `import.meta` outside Module goal is an EARLY parse error, so an
-// ESM graph could not load far enough to report its own failure. The two ESM single
-// sources of truth this file composes (engine-recipe.mjs, tjs-legs.mjs) are therefore
-// required LAZILY, inside the functions that need them -- both are dev/CI tooling by their
-// own headers ("Nothing on the `clode build` path imports this"), so merely LOADING this
-// module stays node-free even though asking it for an engine input list does not.
+// ESM graph could not load far enough to report its own failure. engine-recipe.cjs became
+// CommonJS on 2026-09-21 for exactly this reason, which is what made the ENGINE phase
+// answerable under the shim and a node-free `./build` possible at all; scripts/tjs-legs.mjs
+// is still ESM, so it stays a LAZY require inside the function that needs it and only a
+// leg-parameterized question costs node. Both are dev/CI tooling by their own headers
+// ("Nothing on the `clode build` path imports this"), and loading this module is node-free
+// either way.
 //
 // build-tjs.cjs MUST NOT require this file. It is the program being bootstrapped, and a
-// require here would pull build-graph.cjs into engine-recipe.mjs's derived FILES and move
+// require here would pull build-graph.cjs into engine-recipe.cjs's derived FILES and move
 // the recipe hash -- rebuilding all 42 legs. Same rule, same reason, as
 // scripts/build-tjs-boot.sh's.
 
@@ -73,7 +75,7 @@ const RUNS_ON = ['host', 'container', 'guest', 'qemu-guest'];
 // ---- composing the single sources of truth --------------------------------------------
 
 // The engine's source set, repo-relative and POSIX, expanded against the working tree by
-// scripts/engine-recipe.mjs itself. NOT restated here: that file's FILES is already derived
+// scripts/engine-recipe.cjs itself. NOT restated here: that file's FILES is already derived
 // from build-tjs.cjs's own require graph, and a second copy of it is the precise disease
 // its own header is a monument to. `expand` throws when a pattern matches nothing, so a
 // wrong set is loud rather than silently smaller.
@@ -85,7 +87,7 @@ const RUNS_ON = ['host', 'container', 'guest', 'qemu-guest'];
 let RECIPE_FILES = null;
 function recipeFiles() {
   if (RECIPE_FILES) return RECIPE_FILES.slice();
-  const er = require('./engine-recipe.mjs');
+  const er = require('./engine-recipe.cjs');
   RECIPE_FILES = er.expand(er.worktreeSource(REPO));
   return RECIPE_FILES.slice();
 }
@@ -99,7 +101,7 @@ function patchCount() {
 
 // The esbuilt bundles `clode bootstrap` embeds, DERIVED from the script that emits them.
 // build-clode-main.mjs writes each one as `path.join(OUT, '<name>.bundle.cjs')`, so that is
-// what is read back here. Matching nothing is fatal, for engine-recipe.mjs's reason: a
+// what is read back here. Matching nothing is fatal, for engine-recipe.cjs's reason: a
 // silently empty output list is a gate that cannot fail. Split into a PURE half and an I/O
 // half for the reason every other decision in this build is (depscan-verdict.cjs,
 // ar-determinism.cjs, bundle-inputs-gate.cjs): a refusal a test cannot feed a known-bad
@@ -140,7 +142,7 @@ function bundleOutputPaths(ctx) {
 // The rest is READ OUT OF THE EMITTER, not listed here. The first cut of this function
 // named four scalars by hand (VERSION, PINS.md and deps/clode's two manifests) with no
 // refusal behind them, and the libexec walk kept the answer non-empty so nothing could ever
-// notice a fifth. It already had: build-clode-main.mjs also runs scripts/engine-recipe.mjs
+// notice a fifth. It already had: build-clode-main.mjs also runs scripts/engine-recipe.cjs
 // to bake __CLODE_BAKED_ENGINE_RECIPE__, and the hand list had missed it on the day it was
 // written. That is the NODE_CONSTANTS shape exactly, and the third hand list in this tree
 // to rot. So every `path.join(REPO, ...)` in the emitter is the list now.
@@ -411,7 +413,7 @@ const STEPS = [
     // the last of which needs esbuild and txiki's own dependency closure on disk, which
     // scripts/provision-bundle-inputs.sh puts there with no npm and no node, and which
     // scripts/bundle-inputs-gate.cjs refuses the phase without. Both of those are already
-    // engine sources (they are in engine-recipe.mjs's FILES), so recipeFiles() covers them.
+    // engine sources (they are in engine-recipe.cjs's FILES), so recipeFiles() covers them.
     id: 'engine.source',
     phase: 'engine',
     runsOn: 'host',
@@ -623,7 +625,7 @@ function evaluationFindings(records) {
 // THE RULE THAT PROTECTS THE ENGINE RECIPE. scripts/build-tjs.cjs must not require this
 // module. build-tjs.cjs's own require graph is what test/engine-recipe.test.cjs DERIVES the
 // engine-source list from, so a require here would put build-graph.cjs into
-// scripts/engine-recipe.mjs's FILES -- moving the recipe hash, invalidating the tjs build
+// scripts/engine-recipe.cjs's FILES -- moving the recipe hash, invalidating the tjs build
 // cache, and rebuilding all 42 legs every time this declaration is edited. It is the same
 // rule, for the same reason, that scripts/build-tjs-boot.sh states about itself: the
 // program being bootstrapped may not require its own bootstrapper. Stated as a gate rather

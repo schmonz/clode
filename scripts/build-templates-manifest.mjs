@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
-import { recipe as engineRecipe, worktreeSource } from './engine-recipe.mjs';
+import { recipe as engineRecipe, worktreeSource } from './engine-recipe.cjs';
 
 // inputs: [{ name, tag, engine, file, verified }] — name = target key (e.g.
 // 'linux-x64'), tag = platform-tag, engine = published asset filename, file =

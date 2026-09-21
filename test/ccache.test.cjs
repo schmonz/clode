@@ -696,9 +696,9 @@ test('PROOF: the present-path exactly-once assertion fails against a launcher pu
 // shipped. A timing win that cannot also prove this did not happen is not worth having.
 //
 // THE DIFFERENTIAL IS THE AUDIT, not a one-time measurement: ccache's cache key is opaque from
-// the outside -- unlike scripts/engine-recipe.mjs's hash, there is no second list to compare it
+// the outside -- unlike scripts/engine-recipe.cjs's hash, there is no second list to compare it
 // against -- so the only way to know it stayed sound as sources and targets change is to keep
-// re-deriving the answer by actually building. That is exactly what both of engine-recipe.mjs's
+// re-deriving the answer by actually building. That is exactly what both of engine-recipe.cjs's
 // own scars were missing: the cosmo patches absent from that recipe's key "cost 13 commits of
 // red ... the recipe hash did not move, so nothing said the engine sources had changed", and the
 // netbsd-sparc bake recipe where "an edit to it moved nothing, so the tjs cache happily restored

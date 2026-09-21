@@ -34,7 +34,7 @@
 // for `import`: a parse-only probe never reaches the lazy requires below.
 //
 // scripts/build-tjs.cjs MUST NOT require this file, for build-graph.cjs's reason exactly: a
-// require would pull it into engine-recipe.mjs's derived FILES, move the recipe hash, and
+// require would pull it into engine-recipe.cjs's derived FILES, move the recipe hash, and
 // rebuild all 42 legs on every edit to a file that compiles nothing.
 
 const fs = require('node:fs');
@@ -98,19 +98,20 @@ function stepLine(step, ms, count) {
 // ---- the boundary checks, as one refusal each ---------------------------------------------
 
 // A DERIVATION THAT CANNOT ANSWER, named at the step it belongs to. The graph's answers are
-// compositions of other single sources of truth, and one of those -- scripts/engine-recipe.mjs
-// -- is ESM that uses `import.meta`, which libexec/node-shim/loader.cjs cannot host. So under
-// tjs, `engine.source`'s inputs and count and `engine.compile`'s inputs are UNANSWERABLE
-// today, and what escapes is the bare engine message "import.meta only valid in module code"
-// with no hint which step asked or why. That is a true statement about a parser and a useless
-// one about a build. Wrapped, never swallowed: the cause is quoted verbatim, and the step and
-// the derivation are named.
+// compositions of other single sources of truth, and a source of truth that refuses is the
+// failure mode this wrapping exists for: what escapes otherwise is whatever that file threw,
+// with no hint which step asked or why. That is a true statement about some other file and a
+// useless one about a build. Wrapped, never swallowed: the cause is quoted verbatim, and the
+// step and the derivation are named.
 //
-// NOT FIXED HERE, on purpose: engine-recipe.mjs is itself inside the engine recipe's file
-// set, so editing it moves the recipe hash and rebuilds all 42 legs. Making it shim-hostable
-// is a deliberate decision with that price tag attached, not a side effect of writing a
-// runner. test/build-graph.test.cjs pins the limitation as a tripwire so the day it lifts,
-// the proof widens rather than the note rotting.
+// THE CASE THIS WAS WRITTEN FOR, now closed. scripts/engine-recipe.cjs was ESM using
+// `import.meta` until 2026-09-21, so under tjs `engine.source`'s inputs and count and
+// `engine.compile`'s inputs were UNANSWERABLE and a node-free `./build` stopped at the first
+// engine step. It is CommonJS now and the whole graph plans under the shim
+// (test/build-graph.test.cjs compares the tjs plan to the node plan, count for count). The
+// wrapping stays: it is about ANY derivation refusing, not about that one file, and the
+// import.meta hint below is what makes a relapse -- here or in anything the graph reaches --
+// name itself instead of arriving as a bare parser complaint.
 function derive(step, what, fn) {
   try {
     return fn();
@@ -119,7 +120,7 @@ function derive(step, what, fn) {
       + `${(e && e.message) || e}. The graph DERIVES that answer from another source of truth `
       + '(see scripts/build-graph.cjs) rather than listing it, so this is that source refusing '
       + 'or unreachable — not a missing file. If the message names `import.meta`, the engine '
-      + 'running this build cannot host scripts/engine-recipe.mjs (ESM) through the CJS '
+      + 'running this build cannot host scripts/engine-recipe.cjs (ESM) through the CJS '
       + 'node-shim loader: run the graph under node, or name a step outside the engine phase.');
     err.cause = e;
     throw err;

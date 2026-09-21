@@ -264,7 +264,7 @@ test('scripts/file-prefix-map.cjs is ENGINE RECIPE SOURCE', async () => {
   // It decides what compiler flags the engine is built with. Edit it and the engine's bytes
   // change, so a cache keyed on the recipe must invalidate. Same argument that put
   // scripts/ccache-launcher.cjs and scripts/ar-determinism.cjs in the list.
-  const { FILES } = await import('../scripts/engine-recipe.mjs');
+  const { FILES } = await import('../scripts/engine-recipe.cjs');
   assert.ok(FILES.includes('scripts/file-prefix-map.cjs'),
     'a build-flag decision outside the recipe means the tjs cache can restore an engine '
     + 'built by a different recipe than the one in the tree');

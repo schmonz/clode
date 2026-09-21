@@ -37,17 +37,36 @@
 // DEV/CI TOOLING ONLY. Nothing on the `clode build` path imports this: quaude
 // must keep building on a host with no node at all. Its output is consumed by
 // CI (the cache key) and by scripts/templates-drift.mjs.
-import fs from 'node:fs';
-import path from 'node:path';
-import crypto from 'node:crypto';
-import { execFileSync } from 'node:child_process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+//
+// COMMONJS, AND IT HAS TO STAY THAT WAY. This was ESM until 2026-09-21, and that
+// one fact made a node-free developer build impossible. The build graph
+// (scripts/build-graph.cjs) DERIVES `engine.source`s inputs and count, and
+// `engine.compile`s inputs, from this file; the developer entry point runs that
+// graph under tjs through libexec/node-shim/loader.cjs, which is a CommonJS host.
+// `import.meta` outside Module goal is an EARLY PARSE ERROR, so an ESM recipe
+// could not even load far enough to say what was wrong -- what escaped was the
+// bare engine message "import.meta only valid in module code", a true statement
+// about a parser and a useless one about a build. So: no `import`, no `export`,
+// no `import.meta`, no top-level await, and nothing required from here may have
+// them either. That is not a style rule, it is the one thing standing between
+// this repo and `./build` on a machine with no node.
+//
+// IT IS A GATE, NOT A COMMENT. test/build-graph.test.cjs plans the WHOLE graph
+// under tjs and compares it to the plan under node, count for count. Reintroduce
+// ESM here (or anywhere this reaches) and that goes red with the step named.
+// scripts/stage0.mjs is the cautionary sibling: 7 `import.meta` and 4 dynamic
+// `import()`, and it is why the shim cannot host the rest of the toolchain yet.
+'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const { execFileSync } = require('node:child_process');
 
 // The engine-source file set. Keep IDENTICAL to what the tjs cache key covers —
 // test/engine-recipe.test.cjs pins both ends. Globs are POSIX, root-relative,
 // and `*` matches within one path segment only (all we have ever needed, and all
 // GitHub's hashFiles patterns here use).
-export const FILES = [
+const FILES = [
   'spike/quickjs/PINS.md',
   'spike/quickjs/patches/*.patch',
   // The cosmo leg's patches are engine sources too, and they were NOT in the
@@ -142,8 +161,8 @@ export const FILES = [
   'ci/osxcross-darwin/Dockerfile',
 ];
 
-export function repoRoot() {
-  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+function repoRoot() {
+  return path.resolve(__dirname, '..');
 }
 
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
@@ -159,7 +178,7 @@ const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 // readdir picks them up, so the same commit hashed differently on this mac than
 // on a Linux runner. Tracked-only is also exactly what a CI workspace contains,
 // which is what GitHub's hashFiles saw.
-export function worktreeSource(root = repoRoot()) {
+function worktreeSource(root = repoRoot()) {
   const abs = (rel) => path.join(root, ...rel.split('/'));
   const git = (args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   const tracked = (pathspec) => {
@@ -189,7 +208,7 @@ export function worktreeSource(root = repoRoot()) {
   };
 }
 
-export function gitSource(rev, root = repoRoot()) {
+function gitSource(rev, root = repoRoot()) {
   const git = (args, opts = {}) =>
     execFileSync('git', ['-C', root, ...args], { maxBuffer: 256 * 1024 * 1024, ...opts });
   return {
@@ -219,7 +238,7 @@ function globToRe(basename) {
 // Expand FILES against a source. A pattern that matches NOTHING is fatal, not
 // empty: silently hashing fewer files is exactly the blindness this exists to
 // remove — a typo'd glob would make every tree look identical.
-export function expand(src, patterns = FILES) {
+function expand(src, patterns = FILES) {
   const out = new Set();
   for (const pat of patterns) {
     let matched = [];
@@ -244,17 +263,17 @@ export function expand(src, patterns = FILES) {
 // sizes, no cwd, no path separators from the host. The path is folded into the
 // digest alongside its content so that ADDING or REMOVING a file moves the hash
 // even when the remaining bytes are unchanged.
-export function recipeDetail(src = worktreeSource(), patterns = FILES) {
+function recipeDetail(src = worktreeSource(), patterns = FILES) {
   const files = expand(src, patterns).map((p) => ({ path: p, sha: sha256(src.read(p)) }));
   const hash = sha256(files.map((f) => `${f.path} ${f.sha}\n`).join(''));
   return { hash, files };
 }
 
-export function recipe(src = worktreeSource(), patterns = FILES) {
+function recipe(src = worktreeSource(), patterns = FILES) {
   return recipeDetail(src, patterns).hash;
 }
 
-export const short = (h) => h.slice(0, 12);
+const short = (h) => h.slice(0, 12);
 
 function main(argv) {
   let rev = null; let mode = 'hash'; let want = 'full';
@@ -264,7 +283,7 @@ function main(argv) {
     else if (a === '--short') want = 'short';
     else if (a === '--files') mode = 'files';
     else if (a === '--json') mode = 'json';
-    else { process.stderr.write(`usage: engine-recipe.mjs [--rev REV] [--short] [--files|--json]\n`); process.exit(2); }
+    else { process.stderr.write(`usage: engine-recipe.cjs [--rev REV] [--short] [--files|--json]\n`); process.exit(2); }
   }
   const src = rev ? gitSource(rev) : worktreeSource();
   const d = recipeDetail(src);
@@ -273,4 +292,6 @@ function main(argv) {
   else process.stdout.write((want === 'short' ? short(d.hash) : d.hash) + '\n');
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main(process.argv.slice(2));
+module.exports = { FILES, repoRoot, worktreeSource, gitSource, expand, recipeDetail, recipe, short };
+
+if (require.main === module) main(process.argv.slice(2));

@@ -36,7 +36,7 @@
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { recipeDetail, worktreeSource, gitSource, repoRoot, short } from './engine-recipe.mjs';
+import { recipeDetail, worktreeSource, gitSource, repoRoot, short } from './engine-recipe.cjs';
 
 const ROOT = repoRoot();
 const git = (args, opts = {}) =>

@@ -46,7 +46,7 @@
 //
 // ---------------------------------------------------------------------------------
 // HOW THE FILE SET IS DERIVED (never listed — three hand-maintained lists have gone
-// stale in this repo, which is why scripts/engine-recipe.mjs's FILES is derived):
+// stale in this repo, which is why scripts/engine-recipe.cjs's FILES is derived):
 //
 //   a file is IN when its require-closure under test/ mentions a platform-sensitive
 //   construct, and NOTHING in that closure reaches the real operating system.

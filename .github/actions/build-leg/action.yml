@@ -374,7 +374,7 @@ runs:
     # whether the PUBLISHED engine templates were built from these same sources)
     # would have had to copy it, and a copied list is a list that drifts —
     # see test/release-gate-globs.test.cjs for what that costs. So the list moved
-    # into scripts/engine-recipe.mjs and this reads it from there. Node is
+    # into scripts/engine-recipe.cjs and this reads it from there. Node is
     # already required on the host before this point (the asset-name step runs
     # canonical-name.cjs), and git is present from actions/checkout.
     #
@@ -384,7 +384,7 @@ runs:
     - name: Engine recipe (the identity of the engine sources)
       id: recipe
       shell: bash
-      run: echo "hash=$(node scripts/engine-recipe.mjs)" >> "$GITHUB_OUTPUT"
+      run: echo "hash=$(node scripts/engine-recipe.cjs)" >> "$GITHUB_OUTPUT"
     - name: Restore the built tjs (PINS+patches+recipe+build-env keyed)
       id: tjs-cache
       uses: actions/cache@v6.1.0
@@ -434,7 +434,7 @@ runs:
     # MINUS THE RECIPE HASH, because that is the entire point. The recipe hash is what
     # makes the engine cache all-or-nothing; keying this on it too would zero the ccache
     # on precisely the events where ccache is the only thing that can help (an
-    # orchestration file joins engine-recipe.mjs's FILES, every leg's key moves, and not
+    # orchestration file joins engine-recipe.cjs's FILES, every leg's key moves, and not
     # one translation unit changed). test/ccache-ci.test.cjs fails if it ever creeps in.
     #
     # KEEPING THE BUILD-ENVIRONMENT AXES (image, guest-version, SDK, floor, cross image),
@@ -518,9 +518,10 @@ runs:
       #
       # WHAT THIS DOES NOT DO: it removes no node from this runner. This same job still
       # runs `npm ci --prefix deps/claude`, three `npm i -g @anthropic-ai/claude-code`,
-      # and six ESM entry points the CJS shim cannot host (engine-recipe.mjs,
-      # exec-probe.mjs, spawn-cost-probe.mjs, build-clode-main.mjs, stage-provider.mjs,
-      # stage0.mjs). actions/setup-node stays. This completes "the engine build needs no
+      # and five ESM entry points the CJS shim cannot host (exec-probe.mjs,
+      # spawn-cost-probe.mjs, build-clode-main.mjs, stage-provider.mjs, stage0.mjs --
+      # engine-recipe became CommonJS on 2026-09-21 and left this list).
+      # actions/setup-node stays. This completes "the engine build needs no
       # Node"; it does not start "the leg needs no Node".
       #
       # THE WINDOWS LEGS ARE THE SAME STEP AND STAY ON NODE, for TWO reasons where the
