@@ -55,10 +55,36 @@ const toolRequire = createRequire(path.join(TOOLCHAIN, 'package.json'));
 
 // Provision the build-only toolchain (esbuild) INTO the per-tag dir, so each host
 // installs its own native binaries side by side instead of overwriting a shared
-// build/node_modules. Idempotent: skips the install once the .bin shim is present.
+// build/node_modules.
+//
+// IDEMPOTENT ON THE PROPERTY THIS SCRIPT USES, which is the whole of the fix here.
+// esbuildBundle() below reaches the toolchain through `toolRequire('esbuild')` and
+// esbuild's JS API then spawns its own native child; those two facts together are
+// what has to be true. This check used to be `existsSync(node_modules/.bin/esbuild)`
+// — a DIFFERENT property, satisfiable without either half — so a cache that met it
+// and nothing else was declared provisioned and died forty lines later in the module
+// loader, with a `Cannot find module 'esbuild'` that named neither the toolchain nor
+// the install that never re-ran.
+//
+// It is not a hypothetical. toolchainDir() resolves under $TMPDIR (see
+// scripts/build-scratch.cjs's candidate order) and macOS reaps /var/folders/*/T on
+// its own schedule: com.apple.bsd.dirhelper, StartCalendarInterval 03:35 daily,
+// CLEAN_FILES_OLDER_THAN_DAYS=3, deleting FILES by atime and leaving the DIRECTORIES
+// standing. On this box on 2026-09-21 at 03:39:31 it took esbuild's package.json and
+// lib/main.js (atime 09-17) and spared node_modules/.bin/esbuild, a symlink to the
+// one file it left behind — the 10.5MB native binary a build had exec'd at 03:37.
+// Nothing in this repo did it and nothing in this repo can stop it; a cache that
+// lives somewhere the OS may empty has to VERIFY itself rather than assume.
+//
+// The probe is a real round trip rather than a bare require, because the native
+// child is resolved LAZILY on first use: loading the wrapper proves only half of
+// what buildSync needs. Measured ~30ms, once per build.
 function ensureToolchain() {
-  const bin = (name) => path.join(TOOLCHAIN, 'node_modules', '.bin', name);
-  if (fs.existsSync(bin('esbuild'))) return;
+  const loadable = () => {
+    try { toolRequire('esbuild').transformSync(''); return true; }
+    catch { return false; }
+  };
+  if (loadable()) return;
   // npm --prefix needs the manifest in the prefix dir; the committed source of truth
   // is deps/clode/package.json (clode's OWN build-time toolchain — esbuild/postject —
   // kept OUT of deps/clode/node_modules because they're native per-platform binaries;
@@ -70,8 +96,19 @@ function ensureToolchain() {
   const cmd = fs.existsSync(lock)
     ? (fs.copyFileSync(lock, path.join(TOOLCHAIN, 'package-lock.json')), ['ci'])
     : ['install'];
-  console.error(`toolchain: installing esbuild into ${path.relative(REPO, TOOLCHAIN)}`);
+  console.error(`toolchain: installing esbuild into ${TOOLCHAIN}`);
   runNpm([cmd[0], '--no-audit', '--no-fund', ...cmd.slice(1)], { stdio: 'inherit', cwd: TOOLCHAIN });
+  // An install that exited 0 and still left nothing loadable is a real failure, and
+  // it must be named HERE — by the code that knows which directory it was trying to
+  // fill and why — rather than by the loader forty lines on.
+  if (!loadable()) {
+    throw new Error(`toolchain: esbuild does not load from ${TOOLCHAIN} even after \`npm ${cmd[0]}\` `
+      + 'reported success there.\n'
+      + '  This dir is a CACHE in scratch space (scripts/build-scratch.cjs), so the likely causes are\n'
+      + '  a partially-emptied tree (macOS reaps $TMPDIR files by atime) or an install that could not\n'
+      + '  fetch esbuild\'s platform binary.\n'
+      + `  FIX: remove ${TOOLCHAIN} and re-run this script, which will install it from scratch.`);
+  }
 }
 
 // clode's version lives in the VERSION file at the repo root. The esbuilt bundle's
