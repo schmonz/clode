@@ -134,7 +134,14 @@ function hermeticFnSrc() {
 
 test('build-tjs: hermeticity dependency check exists and is invoked after the build', () => {
   assert.match(buildTjsSrc, /function checkHermeticDeps/);
-  assert.match(buildTjsSrc, /checkHermeticDeps\(path\.join\(outDir, outName\)\)/);
+  // `installedEngine`, not `path.join(outDir, outName)`: the install now stages the built
+  // engine beside its destination and rename()s it into place (the build may be RUNNING
+  // from that path — see test/engine-install-atomic.test.cjs), and the one name for the
+  // installed file is what every consumer down here reads. Same strength, new spelling.
+  assert.match(buildTjsSrc, /checkHermeticDeps\(installedEngine\)/);
+  assert.match(buildTjsSrc, /const installedEngine = path\.join\(outDir, outName\)/,
+    'installedEngine must still BE outDir/outName — otherwise this check runs on some '
+    + 'other file than the one the build shipped');
 });
 
 test('build-tjs: the dependency check reads the binary via depscan, not via otool/ldd', () => {

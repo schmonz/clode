@@ -4467,8 +4467,48 @@ fs.mkdirSync(outDir, { recursive: true });
 // name). Every other target emits build/tjs.
 const builtExe = fs.existsSync(path.join(buildDir, 'tjs.exe'));
 const outName = builtExe ? 'tjs.exe' : 'tjs';
-fs.copyFileSync(path.join(buildDir, builtExe ? 'tjs.exe' : 'tjs'), path.join(outDir, outName));
-fs.chmodSync(path.join(outDir, outName), 0o755);
+const installedEngine = path.join(outDir, outName);
+
+// INSTALL BY RENAME, NEVER IN PLACE — this build may be RUNNING from the very path it is
+// about to replace. outDir defaults to scripts/platform-tag.cjs's tjsDir(), and that is
+// exactly where the engine resolver every caller goes through looks for "an engine this
+// checkout already built". So a node-free build resolves the engine sitting at this
+// destination, runs under it, and arrives HERE with the interpreter executing the file
+// about to be written. The install used to be a copy onto that live path, and under the
+// node-shim (the node-free build's fs) copyFileSync is writeFileSync(dst,
+// readFileSync(src)) — an O_TRUNC open on the running image. The kernel then SIGKILLs the
+// process mid-build: `Killed: 9`, or the exec smoke below reporting `smoke failed: engine
+// did not run`. Reproduced twice by hand on macOS 27/arm64. Nothing about it is specific
+// to one caller — CI resolves the same engine the same way — which is why the fix is
+// here, at the one place that writes the file, rather than in any single caller.
+//
+// Write a fully-closed temporary file first, then rename() it over the destination.
+// POSIX rename unlinks the old directory entry instead of truncating the old inode, so a
+// process already executing the old image keeps running from it and finishes cleanly.
+//
+// SAME DIRECTORY, deliberately: rename(2) is EXDEV across filesystems, and outDir is a
+// $TMPDIR scratch path here but a workspace path in CI — staging anywhere else would
+// break whichever of those two does not happen to share a device with it.
+//
+// WINDOWS gets NO FALLBACK, on purpose. Windows locks an executing image, so a rename
+// over a running .exe fails (EPERM/EBUSY/EACCES) where POSIX permits it. Falling back to
+// an in-place copy there would be worse than useless: that copy fails too (sharing
+// violation), and the fallback would only hide which operation was refused. The two
+// Windows legs run this natively, so they get the refusal with its reason attached.
+const staged = path.join(outDir, `.${outName}.new-${process.pid}`);
+fs.copyFileSync(path.join(buildDir, outName), staged);
+fs.chmodSync(staged, 0o755);
+try {
+  fs.renameSync(staged, installedEngine);
+} catch (e) {
+  fs.rmSync(staged, { force: true });
+  throw new Error(`could not install the built engine at ${installedEngine}: ${e.message}\n`
+    + 'The new engine was built and staged; only the final rename failed. On Windows that '
+    + 'means something is holding the destination open (an executing engine, a virus '
+    + 'scanner, an editor) — rename and in-place copy are BOTH refused there, so retrying '
+    + 'as a copy would fail too and would only obscure which operation was denied. '
+    + 'Close whatever holds it, or point CLODE_TJS_OUT somewhere else.');
+}
 
 // ---- build hermeticity, part 2: verify the shipped binary, don't just hope
 // the configure-time flag above worked. Read the built engine's dynamic
@@ -4602,7 +4642,7 @@ function checkHermeticDeps(enginePath) {
 // arm64 dev box can exec it; the floor gate + the real-hardware oracle
 // carry verification instead).
 if ((process.env.CLODE_TJS_SMOKE || 'on').toLowerCase() !== 'off') {
-  const engine = path.join(outDir, outName);
+  const engine = installedEngine;
   // The engine API floor, generated from scripts/engine-api-floor.cjs — the ONE
   // list of bindings a blobulated quaude cannot run without. It used to be an inline
   // `typeof __tjs_fs_sync === "object"` here, a second copy in build-leg's
@@ -4628,9 +4668,9 @@ if ((process.env.CLODE_TJS_SMOKE || 'on').toLowerCase() !== 'off') {
   if (smoke !== OK_TOKEN) throw new Error(`smoke failed: ${smoke}`);
   console.log(`built ${engine} (${smoke})`);
 } else {
-  console.log(`built ${path.join(outDir, outName)} (exec smoke SKIPPED: cross-target, CLODE_TJS_SMOKE=off)`);
+  console.log(`built ${installedEngine} (exec smoke SKIPPED: cross-target, CLODE_TJS_SMOKE=off)`);
 }
-checkHermeticDeps(path.join(outDir, outName));
+checkHermeticDeps(installedEngine);
 })().catch((e) => {
   // A top-level throw ended the process by itself; a rejected continuation does
   // not, and under tjs an unhandled rejection can be swallowed outright — so a
