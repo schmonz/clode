@@ -32,6 +32,32 @@ runs:
         # here ran before it — CLODE_TJS_VENDOR/CLODE_TJS_OUT above point at a separate
         # tree that this step creates from nothing. The graph declares engine.compile's
         # output at CLODE_TJS_OUT, which is what the `test -x` below asserts by hand.
+        #
+        # WHAT THAT COSTS, MEASURED (review F3, 2026-09-21). The old spelling here was a
+        # bare `node scripts/build-tjs.cjs`, and the step-id spelling is NOT free — the
+        # reviewer's estimate of "roughly a second compile" was checked on an arm64 mac with
+        # fresh cmake build dirs and a warm ccache, one step at a time:
+        #
+        #   engine.bytecode  ms=32179   <- ADDED by naming a step (a host `tjsc`: its own
+        #                                 cmake configure of the same project, then the
+        #                                 quickjs core + qjsc, with WASM/MIMALLOC/FFI/
+        #                                 SQLITE off), 11888 ms on a second run in the
+        #                                 same tree, so it is cached but not free
+        #   engine.compile   ms=38077   <- the work the old spelling already did
+        #
+        # So this step gained about 85% of a compile, on 15 of the 42 release legs (the 14
+        # tier-2 cross legs plus netbsd-sparc), plus a bootstrap-engine resolve (a
+        # fetch-and-verify of a pinned pack slice, ~1s warm here, uncached on a cold runner).
+        # KEPT DELIBERATELY, and the reason is not inertia: a full build generates bytecode
+        # with the engine it is building, while engine.bytecode generates it with a
+        # host-native tjsc — one code path for every leg, which is exactly the blindness
+        # that let the sparc bake compile the upstream pin's committed bytecode for a whole
+        # leg-lifetime (the moduleMeta bug). Reverting to a raw command would also reopen
+        # gate 3, which now refuses any engine invocation that does not name a step.
+        # IF IT EVER BITES a timeout, the cheapest honest fix is to stop configuring a
+        # SECOND cmake project for tjsc (build-tjs.cjs's buildHostTjsc) and take it from the
+        # tree this step is already configuring — not to drop the regen, and not to skip
+        # the step id.
         ./build.sh --only engine.compile   # full native build into a SEPARATE tree
         test -x "${{ runner.temp }}/host-tjs-out/tjs"
     - name: Cross-blobulate the self-contained builder

@@ -153,6 +153,24 @@ jobs:
       # and node is guaranteed here by actions/setup-node above; which interpreter the
       # engine phase then shells out to is scripts/build-graph.cjs's decision, per
       # platform, not this file's.
+      #
+      # AND ON POSIX THAT DECISION IS NOT NODE, which the paragraph above was silent about
+      # until the review asked (F4). `runBuildTjs`'s POSIX branch shells out to
+      # scripts/build-tjs-boot.sh, which RESOLVES A BOOTSTRAP ENGINE — a fetch-and-verify of
+      # a pinned pack slice, over the network on a cold runner — and runs the source phase
+      # under tjs. Before this change that phase ran under node with no resolver at all. So
+      # this job gained a network dependency, and it is named here rather than left for
+      # someone to discover in a log.
+      #
+      # WHY THAT IS NOT THE THING THE COMMENT ABOVE FORBIDS. "Deliberately not cached" is
+      # about the VENDOR CHECKOUT: a restored tree is an input this workflow would be
+      # assuming is the same, which is the assumption it exists to stop making. A resolved
+      # engine is the opposite kind of input — pinned and sha256-verified against that pin
+      # (scripts/bootstrap-engine.sh refuses a mismatch rather than falling back), identical
+      # for both halves of the double build, and producing a byte-identical patched tree,
+      # which test/build-tjs-cold-provision.test.cjs gates independently of this workflow.
+      # The comment is therefore still true and was merely incomplete; if a future edit ever
+      # CACHES the resolved engine here, that is a different claim and needs its own reason.
       - name: Construct the patched tjs tree from pins
         run: node scripts/build-runner.cjs --only engine.source
 

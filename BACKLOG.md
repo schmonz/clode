@@ -434,8 +434,13 @@ the runner's synthetic controls drive the same selector a real build does.
 The gate's `scan` now DERIVES the engine phase's invocation spellings by observing each engine
 step's `run` with a recording exec (`observedNodeRouteFindings`), walks every `.yml` under
 `.github/` rather than one path, and refuses any line that invokes one of them. Its allowlist is
-empty: all ten sites across three files converted — six in `build-leg/action.yml`, plus
-`cross-blobulate/action.yml` and `workflows/repro.yml`. The Windows halves name step ids too,
+empty: all ten call sites across three files converted — MEASURED, not added up (the first
+cut of this sentence said "six + 1 + 1", which is eight): **eight** in `build-leg/action.yml`,
+plus one in `cross-blobulate/action.yml` and one in `workflows/repro.yml`. Those ten join the
+one site that already named a step (build-leg's qemu bytecode regen), so the gate reads
+**eleven** named lines today — nine logical sites, two of which have a Windows half and a POSIX
+half on consecutive lines. The count to trust is `examined` out of `checkGate()`, which is the
+gate's own and cannot go stale. The Windows halves name step ids too,
 through `node scripts/build-runner.cjs --only <id>`, so the per-platform split now lives in
 `build-graph.cjs`'s `runBuildTjs` (the one place that already discloses it to docs/build.md)
 rather than in YAML.
@@ -479,6 +484,32 @@ Recorded so they are not re-found. None is a correctness bug in what ships.
 - **A `pgrep -qf test/run.mjs` wait loop can never terminate**, because the waiting shell's own
   command line contains that string. Wait on a PID. This is a likely source of "waiting forever"
   and false-completion reports in long sessions.
+
+### Added by the review of the runner-step-mode branch (2026-09-21)
+
+- **`IDIOM` in `test/build-tjs-boot.test.cjs` gained an unexercised loosening** (review F7).
+  The idiom now ends `(?:\s+#.*)?`, permitting arbitrary trailing text after a `#`. No call
+  site in the file that guard reads (`build-leg/action.yml`) uses a trailing comment; the one
+  that does (`cross-blobulate/action.yml:35`) is not read by that guard. A permission with no
+  current user, inside a rule whose whole point is "one idiom, no per-call-site invention" —
+  so the next site is free to invent one and stay green. Either point the guard at the file
+  that needs the loosening, or drop it until something needs it.
+- **`defaultContext().engine` keys `.exe` off the HOST, not the TARGET** (review F8, latent).
+  `process.platform === 'win32' ? 'tjs.exe' : 'tjs'` — while the NEIGHBOURING `out` field was
+  deliberately re-keyed off the target after exactly this confusion, and records the
+  divergence in its own comment; `runBuildTjs` reads `ctx.platform`. Correct today ONLY
+  because both Windows legs are MSVC-native (`tjs-legs.mjs:271,281`), so host == target. A
+  cross-built Windows engine would have cmake emit `tjs.exe` (`build-tjs.cjs:4469`, keyed off
+  what cmake emitted) while the graph declared `tjs`, and `checkOutputs` would refuse a good
+  engine — the same defect class the `CLODE_TJS_OUT` fix just closed, one field over. The fix
+  is one expression; what it needs is a leg that can prove it, which is why it is recorded
+  rather than changed blind.
+- **Two gates are now load-bearing for each other.** A bare `node scripts/build-tjs.cjs` in
+  `build-leg/action.yml` is invisible to `test/build-tjs-boot.test.cjs` (its `NODE_SITE` names
+  `scripts/build-runner.cjs` now, not that program) and is caught ONLY by gate 3
+  (`test/build-graph-ci.test.cjs`), whose control includes exactly that line. That is a real
+  dependency between two guards that previously overlapped, and it is fine while gate 3's
+  control keeps firing — which is the thing to check before narrowing either one.
 
 ## The recipe does not hash the recipe (2026-09-21)
 
