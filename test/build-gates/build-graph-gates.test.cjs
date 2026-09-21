@@ -31,7 +31,8 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { bundleOutputNamesFrom, emitterInputPaths, runsOnForLegs, stepById, legsNamed,
-  targets, ROOT_ID, EMITTER_REL } = require('../../scripts/build-graph.cjs');
+  targets, ROOT_ID, EMITTER_REL, GRAPH_REL, steps, nodeRoutes, nodeRouteFindings,
+  engineNodeOnWindows } = require('../../scripts/build-graph.cjs');
 const { defineGuard, guardTests } = require('../guard.cjs');
 const { throwsAsFindings } = require('../throws-as-findings.cjs');
 
@@ -219,4 +220,126 @@ test('FLOOR: at least one canonical target name still selects more than one leg'
   assert.ok(multi.length > 0,
     'no canonical target name collapses two legs any more, so the disagreement refusal '
     + 'guards a case that cannot arise on this manifest — re-derive it or delete it');
+});
+
+// ==========================================================================
+// GUARD 4 — every step that REACHES node is one nodeSteps() reports
+//           (final whole-branch review, finding 1).
+// ==========================================================================
+//
+// WHAT IT GUARDS. docs/build.md's "What still needs node" section — the page's central
+// honest claim — is derived from build-graph.cjs's nodeSteps(), which matches a DIRECT
+// `runNode` call in a step's own `run`. The reviewer added a third helper
+// (`runNodeAlias`, a one-line wrapper around `sh(ctx, 'node', args)`), pointed
+// bundle.clode-main at it, and the page silently dropped from "2 of the 5 declared steps"
+// to "1 of the 5". NOTHING went red except gate 4 — the page-STALENESS gate — and only
+// because the committed bytes changed; regenerating the page (which the page itself tells
+// you to do) makes the omission permanent and green, and a NEW step by that route never had
+// a row to lose. A gate that can only see a change to a committed file is not a gate on the
+// property.
+//
+// WHAT INPUT TRIPS IT (measured): exactly that mutation. A step whose `run` calls a helper
+// that spawns node, where the helper is not spelled `runNode`.
+//
+// WHY THE PURE HALF EXISTS. nodeRouteFindings takes the module SOURCE and the step list, so
+// the control is the reviewer's mutation as a fixture rather than a corrupted
+// scripts/build-graph.cjs — the same split bundleOutputNamesFrom and emitterInputPaths
+// already make, for the same stated reason.
+//
+// The literal relative require at the top of this file is load-bearing for the
+// production-gate population sweep (test/guards-population.cjs).
+const GRAPH_SRC = () => fs.readFileSync(path.join(REPO, GRAPH_REL), 'utf8');
+
+const nodeRouteGuard = defineGuard({
+  name: 'build-graph: no step reaches node by a route nodeSteps() cannot see',
+  read: () => ({ src: GRAPH_SRC(), steps: steps() }),
+  // `examined` is the steps this scan actually resolved a route for. Zero means there is no
+  // graph to ask, which is BROKEN and not a node-free build.
+  scan: (inputs) => {
+    const r = nodeRouteFindings(inputs);
+    return { findings: r.findings, examined: r.examined };
+  },
+  // The reviewer's mutation, verbatim in shape: a THIRD helper, and a step that reaches node
+  // through it. nodeSteps() sees nothing here (`runNodeAlias(` does not match `\brunNode\s*\(`),
+  // which is precisely the silence this guard exists to break.
+  control: () => ({
+    src: [
+      'function sh(ctx, file, args) {',
+      '  return ctx.execFileSync(file, args);',
+      '}',
+      'function runNode(ctx, args) {',
+      "  return sh(ctx, 'node', args);",
+      '}',
+      'function runNodeAlias(ctx, args) {',
+      "  return sh(ctx, 'node', args);",
+      '}',
+    ].join('\n'),
+    steps: [{ id: 'fixture.aliased', run: (ctx) => runNodeAlias(ctx, ['scripts/fixture.mjs']) }],
+  }),
+  floor: 2,
+});
+
+guardTests(nodeRouteGuard);
+
+// The OTHER direction, which the guard's gate half would also report but which deserves to
+// be shown firing: a step nodeSteps() reports and no route in the source can reach. That is
+// what a reader gone blind on the shape looks like, and it must not read as "no node".
+test('the route gate reports a step nodeSteps() names but no route reaches', () => {
+  const r = nodeRouteFindings({
+    src: 'function unrelated(a) {\n  return a;\n}\n',
+    steps: [{ id: 'fixture.claimed', run: (ctx) => runNode(ctx, ['scripts/fixture.mjs']) }],
+  });
+  assert.strictEqual(r.findings.length, 1, `expected one finding, got: ${r.findings}`);
+  assert.match(r.findings[0], /no route in/);
+});
+
+// A node spawn that belongs to no named function — an arrow-function helper, say — is the
+// shape this reader would otherwise go blind on while still answering "no routes".
+test('the route gate reports a node spawn it cannot attribute to a named function', () => {
+  const r = nodeRouteFindings({
+    src: "const runNodeArrow = (ctx, args) => sh(ctx, 'node', args);\n",
+    steps: [],
+  });
+  assert.strictEqual(r.findings.length, 1, `expected one finding, got: ${r.findings}`);
+  assert.match(r.findings[0], /outside every named function/);
+});
+
+// PROSE IS NOT AN INVOCATION. This file's subject QUOTES the spawn it looks for — in
+// build-graph.cjs's own header, and in the comment above this very test — so a reader that
+// counted comments would report the documentation as an unattributable spawn and be red
+// forever about nothing. `sh(ctx, 'node', args)` on this line is a comment, not a call.
+test('a comment quoting the spawn is not a spawn site', () => {
+  const r = nodeRouteFindings({
+    src: "// sh(ctx, 'node', args) is what runNode does\nfunction unrelated(a) {\n  return a;\n}\n",
+    steps: [],
+  });
+  assert.deepStrictEqual(r.findings, []);
+});
+
+// THE EXCLUSION, PINNED TO THE DISCLOSURE. A platform-guarded route (runBuildTjs's win32
+// fallback) is not a finding — but only because docs/build.md discloses it separately,
+// through engineNodeOnWindows(). Two derivations of one fact; this is the row that stops
+// them drifting apart, which is the defect one level up from the one this guard closes.
+test('a windows-only node route exists exactly when the page says it does', () => {
+  const r = nodeRouteFindings({ src: GRAPH_SRC(), steps: steps() });
+  assert.strictEqual(r.windowsOnly.length > 0, engineNodeOnWindows(),
+    `${r.windowsOnly.length} step(s) reach node only through a win32-guarded helper, while `
+    + `engineNodeOnWindows() says ${engineNodeOnWindows()} — the page's Windows caveat and `
+    + 'the route gate\'s exclusion are the same fact derived twice, and they disagree');
+});
+
+// THE FLOOR under the route reader. "No step reaches node" is the answer this guard gives
+// both when the build has genuinely stopped needing node and when the reader has stopped
+// parsing this module — opposite results. This row makes a human tell them apart.
+test('FLOOR: the route reader still parses this module and still finds a node spawn', () => {
+  const routes = nodeRoutes(GRAPH_SRC());
+  assert.ok(routes.functions.length > 10,
+    `the route reader parsed ${routes.functions.length} function(s) out of ${GRAPH_REL} — it `
+    + 'reads top-level `function name(...) {` declarations, so a formatting or style change '
+    + 'there blinds it, and a blind reader answers "no step needs node" exactly like a '
+    + 'node-free build does');
+  assert.ok(routes.always.length + routes.windows.length > 0,
+    `no function in ${GRAPH_REL} spawns node any more. If that is real, the build is node-`
+    + 'free: retire this guard, nodeSteps() and the page section together. If it is not, the '
+    + 'spawn moved out of the shape this reader sees.');
 });

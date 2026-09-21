@@ -79,6 +79,12 @@ const ROOT_ID = 'clode.blobulate';
 // a style preference; it is the only spelling that can exist beside build/.
 const ENTRY_REL = 'build.sh';
 
+// THIS FILE, named repo-relative and POSIX. The node-route gate below reads this module's
+// own SOURCE, and scripts/render-build-graph.cjs quotes the name in the page it generates;
+// both used to spell it as a literal. Derived from __filename so a rename moves it, for the
+// reason ENTRY_REL exists directly above.
+const GRAPH_REL = posixRel(REPO, __filename);
+
 // Where a step's work physically happens. 'host' is the machine running the build;
 // 'container' is a docker toolchain image (the alpine/musl and cross legs); 'guest' is a
 // VM whose binaries the host cannot exec; 'qemu-guest' is our own qemu system emulation
@@ -465,6 +471,150 @@ function engineNodeOnWindows() {
   return /win32/.test(src) && /sh\(\s*ctx,\s*'node'/.test(src);
 }
 
+// ---- a step that REACHES node by a route nodeSteps() cannot see ---------------------------
+//
+// WHY THIS EXISTS (final whole-branch review, finding 1). nodeSteps() above matches a DIRECT
+// `runNode(` in a step's own `run`. The reviewer added a third helper --
+// `function runNodeAlias(ctx, args) { return sh(ctx, 'node', args); }` -- pointed
+// bundle.clode-main at it, and watched docs/build.md silently drop from "2 of the 5 declared
+// steps" to "1 of the 5" with NOTHING in the suite reddening except gate 4, the STALENESS
+// gate, and only because the COMMITTED page changed. Regenerate the page -- which is exactly
+// what the page's own "Changing the build" section instructs -- and the omission becomes
+// permanent and green. Add a NEW step by that route and there was never a row to lose, so
+// gate 4 cannot notice at all. A gate that can only see a change to a committed file is not
+// a gate on the property.
+//
+// SO THE PROPERTY IS STATED DIRECTLY: every step whose `run` REACHES a node spawn is a step
+// nodeSteps() reports, in both directions. "Reaches" is DERIVED FROM THIS MODULE'S OWN
+// SOURCE -- the functions that spawn node, plus every function that transitively calls one --
+// so a fourth, aliased or renamed helper is seen the day it lands rather than the day someone
+// remembers. The alternative (a list of helper names) is the hand-maintained list this whole
+// file is a reaction to, one layer in.
+//
+// PURE, taking the source and the step list, so the control can be the reviewer's exact
+// mutation rather than a corrupted repo. test/build-gates/build-graph-gates.test.cjs is that
+// control.
+//
+// THE ONE EXCLUSION IS DERIVED TOO. runBuildTjs's node spawn sits behind a `win32` branch,
+// and the page discloses THAT route separately, through engineNodeOnWindows(). So a
+// platform-guarded route is reported as `windowsOnly` rather than as a finding -- and the
+// test beside the guard pins the two derivations to agree, so the exclusion cannot outlive
+// the disclosure. The classification is per-FUNCTION and deliberately coarse, exactly as
+// coarse as engineNodeOnWindows() itself: a function whose body mentions win32 AND spawns
+// node is read as the windows fallback. An UNGUARDED node spawn added inside that same
+// function would be mis-read by both, which is the one edge this pair cannot see.
+//
+// THE COMPLEMENT is gate 1 in test/build-graph.test.cjs ("a step shells out through the
+// CONTEXT's exec"): a spawn that bypassed sh() altogether reddens there. A node spawn this
+// reader cannot attribute to a named function -- an arrow-function helper, say -- is a
+// finding below rather than a silence, because that is the shape this derivation could
+// otherwise go blind on.
+const NODE_SPAWN = /\b(?:sh|exec|execFile|execFileSync|spawn|spawnSync)\s*\(\s*(?:['"]node['"]|[A-Za-z_$][\w$.]*\s*,\s*['"]node['"])/g;
+const TOP_LEVEL_FN = /^function\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{\n([\s\S]*?)\n\}$/gm;
+const PLATFORM_BRANCH = /win32/;
+
+// PROSE ABOUT AN IDIOM IS NOT AN INVOCATION -- the narrowing test/build-graph-ci.test.cjs's
+// stepIdsNamedBy() already learned, here in a file whose header QUOTES the very spawn this
+// reader looks for. Whole-line `//` comments are blanked (length- and newline-preserving, so
+// every index below still lines up with the real source); a TRAILING comment after code is
+// deliberately left in, because the only cost of reading one is a loud false finding, while
+// the cost of a too-clever strip is a spawn this reader silently stops seeing.
+function maskLineComments(src) {
+  return String(src).split('\n')
+    .map((line) => (line.trim().startsWith('//') ? ' '.repeat(line.length) : line))
+    .join('\n');
+}
+
+function moduleFunctions(src) {
+  const out = [];
+  TOP_LEVEL_FN.lastIndex = 0;
+  let m;
+  while ((m = TOP_LEVEL_FN.exec(src)) !== null) {
+    out.push({ name: m[1], body: m[2], start: m.index, end: m.index + m[0].length });
+  }
+  return out;
+}
+
+function callsFn(body, name) {
+  return new RegExp(`\\b${name}\\s*\\(`).test(body);
+}
+
+// PURE. Which named functions in `src` reach a node spawn, and by which route.
+function nodeRoutes(src) {
+  const text = maskLineComments(src);
+  const fns = moduleFunctions(text);
+  const always = new Set();
+  const windows = new Set();
+  for (const f of fns) {
+    NODE_SPAWN.lastIndex = 0;
+    if (!NODE_SPAWN.test(f.body)) continue;
+    (PLATFORM_BRANCH.test(f.body) ? windows : always).add(f.name);
+  }
+  // Transitively: a function that CALLS a reaching function reaches node too. This is the
+  // half that sees an alias, and it is why a THIRD helper cannot hide.
+  for (const set of [always, windows]) {
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const f of fns) {
+        if (set.has(f.name)) continue;
+        for (const name of [...set]) {
+          if (!callsFn(f.body, name)) continue;
+          set.add(f.name);
+          grew = true;
+          break;
+        }
+      }
+    }
+  }
+  // A spawn site inside no named function at all: this reader has gone blind on the shape,
+  // and a blind reader that answers "no routes" reads exactly like a build with none.
+  const unattributed = [];
+  NODE_SPAWN.lastIndex = 0;
+  let m;
+  while ((m = NODE_SPAWN.exec(text)) !== null) {
+    if (!fns.some((f) => m.index >= f.start && m.index < f.end)) unattributed.push(m[0]);
+  }
+  return { functions: fns.map((f) => f.name), always: [...always], windows: [...windows], unattributed };
+}
+
+// PURE. { src, steps } -> { findings, examined, reported, windowsOnly, routes }.
+function nodeRouteFindings(inputs) {
+  const src = String((inputs && inputs.src) || '');
+  const list = (inputs && inputs.steps) || [];
+  const routes = nodeRoutes(src);
+  const reported = new Set(nodeSteps(list).map((r) => r.id));
+  const findings = [];
+  const windowsOnly = [];
+
+  for (const site of routes.unattributed) {
+    findings.push(`\`${site.trim()}\` spawns node outside every named function this reader `
+      + 'can see, so no step can be attributed to it. Give the spawn a named function (the '
+      + 'shape runNode/runBuildTjs already have) or teach this reader the shape — an '
+      + 'unattributable spawn is how the route derivation goes blind while still answering.');
+  }
+
+  for (const s of list) {
+    if (typeof s.run !== 'function') continue;
+    const body = String(s.run);
+    const direct = routes.always.filter((n) => callsFn(body, n));
+    const guarded = routes.windows.filter((n) => callsFn(body, n));
+    if (direct.length && !reported.has(s.id)) {
+      findings.push(`${s.id} reaches node through ${direct.join(', ')}, and nodeSteps() does `
+        + 'not report it — so docs/build.md is about to claim a smaller node dependency than '
+        + 'the build has. nodeSteps() matches a DIRECT runNode call; this step gets there '
+        + 'another way. Route it through runNode, or widen nodeSteps to see this route.');
+    } else if (!direct.length && !guarded.length && reported.has(s.id)) {
+      findings.push(`nodeSteps() reports ${s.id}, but no route in scripts/build-graph.cjs's `
+        + 'own source reaches a node spawn from that step — either the spawn helpers moved '
+        + 'out of the shape this reader parses (in which case every OTHER step\'s route is '
+        + 'invisible too), or nodeSteps() is matching something that no longer runs node.');
+    }
+    if (!direct.length && guarded.length) windowsOnly.push(s.id);
+  }
+  return { findings, examined: list.length, reported: [...reported], windowsOnly, routes };
+}
+
 // ---- the steps ---------------------------------------------------------------------------
 
 const STEPS = [
@@ -746,7 +896,7 @@ function orphanFindings(list) {
 }
 
 module.exports = {
-  ROOT_ID, RUNS_ON, ENTRY_REL,
+  ROOT_ID, RUNS_ON, ENTRY_REL, GRAPH_REL,
   steps, stepById, orderedSteps, select, topoOrder, sh,
   legs, targets, legsNamed, runsOnFor, runsOnForLegs, engineHomeForLeg, blobulateHomeForLeg,
   defaultContext,
@@ -755,5 +905,5 @@ module.exports = {
   evaluate,
   shapeFindings, danglingFindings, cycleFindings, orphanFindings, evaluationFindings,
   recipeCouplingFindings,
-  nodeSteps, engineNodeOnWindows,
+  nodeSteps, engineNodeOnWindows, nodeRoutes, nodeRouteFindings,
 };

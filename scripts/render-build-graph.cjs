@@ -40,7 +40,9 @@ const G = require('./build-graph.cjs');
 const REPO = path.resolve(__dirname, '..');
 const PAGE_REL = 'docs/build.md';
 const SELF_REL = 'scripts/render-build-graph.cjs';
-const GRAPH_REL = 'scripts/build-graph.cjs';
+// ONE spelling, and it is the graph's own: build-graph.cjs derives it from __filename, so a
+// rename moves the name in this page instead of leaving a literal here pointing nowhere.
+const GRAPH_REL = G.GRAPH_REL;
 const RUNNER_REL = 'scripts/build-runner.cjs';
 
 // The tier whose legs the fleet view draws. The release tier is the whole fleet; `ci` is a
