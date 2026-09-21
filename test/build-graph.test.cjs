@@ -196,6 +196,24 @@ test('engine.compile declares the engine where CLODE_TJS_OUT puts it', () => {
   assert.strictEqual(G.defaultContext({ env: {} }).engine, platformTag.tjsBin(REPO));
 });
 
+// AND THE TRIPWIRE THAT WOULD HAVE MADE THE ABOVE EASY TO NOTICE. The knob is read out of
+// scripts/build-tjs.cjs's OWN source rather than spelled a second time here, so the two
+// cannot drift apart in silence: the defect this test exists for was the graph reading a
+// different answer from the program it declares. A reader that stops matching is a finding,
+// not a silence — that is the shape this whole file is a reaction to.
+test('the graph reads the SAME output knob scripts/build-tjs.cjs installs with', () => {
+  const src = fs.readFileSync(path.join(REPO, 'scripts', 'build-tjs.cjs'), 'utf8');
+  const m = /^const outDir = process\.env\.([A-Z][A-Z0-9_]*)\s*\|\|/m.exec(src);
+  assert.ok(m, 'scripts/build-tjs.cjs no longer resolves `outDir` from a single env var in '
+    + 'the shape this reader parses. Either it stopped honouring one — in which case the '
+    + 'graph must stop too — or this reader has gone blind and the graph could now declare '
+    + 'the engine at a path no build writes, which is exactly the defect it caught.');
+  const knob = m[1];
+  const out = path.join(os.tmpdir(), 'clode-graph-outdir-tripwire');
+  assert.strictEqual(path.dirname(G.defaultContext({ env: { [knob]: out } }).engine), out,
+    `scripts/build-tjs.cjs installs the engine under $${knob}, and the graph does not read it`);
+});
+
 // FINDING 2 (review round 1). The bundle step's non-libexec inputs are read out of the
 // emitter, not listed. The proof that the derivation is live rather than merely non-empty:
 // it must name the one the hand list had already missed.
