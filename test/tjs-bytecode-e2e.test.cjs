@@ -196,7 +196,18 @@ function copyMissingSources(tjsDir, cmakeText) {
   // path CMakeLists.txt could ever mention) — this is a targeted symptom check for the
   // proven failure mode, not a general build-graph validator.
   const listed = [...cmakeText.matchAll(/^ {4}(src\/[\w./-]+\.c)$/gm)].map((m) => m[1]);
-  return listed.filter((f) => !fs.existsSync(path.join(tjsDir, f)));
+  // WINDOW W3, and it is the same symptom one directory up (observed 2026-09-21, a full
+  // suite run: `add_subdirectory given source "deps/wurl" which is not an existing
+  // directory`, from a copy taken mid-reset; the same file passed in isolation minutes
+  // later). deps/wurl is PATCH-CREATED — the ada-ectomy replaces upstream's deps/ada with
+  // a pure-C11 deps/wurl — so a copy can catch CMakeLists.txt already naming it while
+  // `git clean -fd` has removed the directory and re-patching has not yet put it back.
+  // W1's check could not see it: it reads source-list lines, and this one is an
+  // add_subdirectory ARGUMENT. Without it the torn copy arrives as a raw cmake error
+  // instead of as this file's own honest "torn copy -> retry -> skip" verdict, which is
+  // the difference between a flake someone re-runs and a flake someone debugs.
+  const dirs = [...cmakeText.matchAll(/^\s*add_subdirectory\(\s*(deps\/[\w.-]+)/gm)].map((m) => m[1]);
+  return listed.concat(dirs).filter((f) => !fs.existsSync(path.join(tjsDir, f)));
 }
 
 // TORN-COPY DETECTION, WINDOW 2 — and the reason the evidence for it must come
