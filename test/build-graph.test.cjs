@@ -608,6 +608,117 @@ test('every step can say what its inputs and outputs are with NOTHING on PATH', 
     assert.ok(Number(outs) > 0, `${id} declared NO outputs`);
   }
 });
+// ITS SIBLING: A HOST THAT CANNOT NAME ITSELF. The test above asks what a step's boundary
+// costs in PROGRAMS; this one asks what a CONTEXT costs in FACTS ABOUT THIS MACHINE, which
+// is the other half of the same question and the one that went red in CI.
+//
+// THE CLASS. defaultContext() derived every field eagerly, so a run paid for facts the
+// SELECTED work never used. Instance 1 was `engine` (fixed two commits ago): it fell
+// through to platform-tag's tjsBin on the 42 legs that redirect the build's output with
+// CLODE_TJS_OUT. Instance 2 was `toolchain`, and it cost two CI legs on 2026-09-21 (run
+// 35667585073): it is keyed by platformTag() -> osToken() -> `os.release()`, and under tjs
+// in a NetBSD or DragonFly VM guest `os.release()` is EMPTY, so platform-tag refuses to
+// name an artifact `netbsd-`. That refusal is CORRECT. What was wrong is that
+// `--only engine.compile --needs assume` — a step that bundles nothing, in a guest whose
+// vendor tree and output dir CI had already named in the environment — was asked to answer
+// it at all, and died 25s in before the first step ran.
+//
+// So: build the context and drive the real runner, in a child, on each platform in the LEG
+// MANIFEST that cannot name its own floor. Derived, not declared — the child asks
+// platform-tag which of the shipped OSes fall through to `os.release()` rather than
+// carrying a list of them, and `os.release()` is stubbed empty for all of them, which is
+// exactly the divergence libexec/node-shim/modules/os.cjs documents. No branch names a
+// platform on either side: the fix is one implementation for every machine, and so is this.
+//
+// AND THE CONTROL IS IN THE SAME SPAWN, because the fix would be trivial to "pass" by
+// weakening platform-tag. Dropping CLODE_TJS_OUT from the same guest makes engine.compile's
+// declared OUTPUT genuinely need the host's floor, and the run MUST still refuse with
+// platform-tag's own words. Green here means both: the work that does not need the name
+// runs, and the work that does still stops.
+test('a host that cannot name its own floor still runs the step CI asks a guest for', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-nameless-'));
+  const probe = path.join(dir, 'probe.cjs');
+  fs.writeFileSync(probe, `'use strict';
+const os = require('os');
+const REAL_RELEASE = os.release;
+os.release = () => '';                       // the guest condition, verbatim
+const platformTag = require(${JSON.stringify(path.join(REPO, 'scripts', 'platform-tag.cjs'))});
+const canonical = require(${JSON.stringify(path.join(REPO, 'scripts', 'canonical-name.cjs'))});
+const G = require(${JSON.stringify(path.join(REPO, 'scripts', 'build-graph.cjs'))});
+const { runGraph } = require(${JSON.stringify(path.join(REPO, 'scripts', 'build-runner.cjs'))});
+const REFUSAL = 'os.release() is empty';
+const as = (p) => Object.defineProperty(process, 'platform', { value: p, configurable: true });
+const here = REAL_RELEASE.call(os) ? process.platform : null;
+// WHICH of the shipped OSes cannot name a floor without os.release(): asked, not listed.
+const nameless = [];
+for (const t of G.targets('release')) {
+  const p = canonical.nodeOsFromCanon(t.split('-')[0]);
+  if (nameless.includes(p)) continue;
+  as(p);
+  try { platformTag.osToken(p); } catch (e) {
+    if (String(e.message).includes(REFUSAL)) nameless.push(p);
+  }
+}
+// The guest's declared knobs: its vendor checkout and its output dir, and NO target.
+const env = Object.assign({}, process.env, {
+  CLODE_TJS_VENDOR: ${JSON.stringify(path.join('{DIR}', 'vendor'))},
+  CLODE_TJS_OUT: ${JSON.stringify(path.join('{DIR}', 'out'))},
+});
+delete env.CLODE_TJS;
+delete env.CLODE_TJS_TARGET;
+const guest = (over) => runGraph(Object.assign({
+  only: 'engine.compile',
+  needs: 'assume',
+  env,
+  execFileSyncFn: () => '',
+  existsFn: () => true,
+  logFn: () => {},
+  traceLog: ${JSON.stringify(path.join('{DIR}', 'trace.jsonl'))},
+}, over));
+const rows = [];
+for (const p of nameless) {
+  as(p);
+  const row = { platform: p, ran: null, failed: null, control: null };
+  try { row.ran = guest({}).ran; } catch (e) { row.failed = String(e.message); }
+  const blind = Object.assign({}, env);
+  delete blind.CLODE_TJS_OUT;                // now the step's OWN output needs the floor
+  try { guest({ env: blind }); } catch (e) { row.control = String(e.message); }
+  rows.push(row);
+}
+if (here) as(here);
+process.stdout.write(JSON.stringify({ nameless, rows }));
+`.replace(/\{DIR\}/g, dir));
+  const r = spawnSync(process.execPath, [probe], { encoding: 'utf8', cwd: REPO });
+  assert.strictEqual(r.status, 0, `the probe itself died:\n${r.stderr}`);
+  const { nameless, rows } = JSON.parse(r.stdout);
+  fs.rmSync(dir, { recursive: true, force: true });
+
+  // THE FLOOR. Every OS in the manifest answering its own floor would make this test a
+  // ceremony around an empty list — and would itself be news, since it is what the node
+  // shim's os.cjs says is not true.
+  assert.ok(nameless.length > 0,
+    'no OS in the leg manifest falls through to os.release() for its floor, so this ratchet '
+    + 'examined NOTHING. Either platform-tag grew a floor for every platform (say so here) '
+    + 'or the derivation stopped reading the manifest');
+
+  for (const row of rows) {
+    assert.strictEqual(row.failed, null,
+      `as ${row.platform}, \`--only engine.compile --needs assume\` could not run on a host `
+      + `that cannot name its own floor:\n${row.failed}\nCI hands this guest its vendor tree `
+      + 'and its output dir in the environment; a context field that asks the machine a '
+      + 'question the SELECTED step never uses is the defect this asserts against — resolve '
+      + 'it lazily in defaultContext() instead of demanding it up front.');
+    assert.deepStrictEqual(row.ran, ['engine.compile'],
+      `as ${row.platform}, the runner reported ${JSON.stringify(row.ran)} — a selection that `
+      + 'runs nothing, or runs the phases the guest cannot run, is not this acceptance');
+    // The other half, and it is not symmetry: platform-tag's refusal must be UNCHANGED.
+    assert.ok(row.control && row.control.includes('os.release() is empty'),
+      `as ${row.platform}, a run that GENUINELY needs the artifact name (no CLODE_TJS_OUT, so `
+      + "engine.compile's declared output resolves through platform-tag) did not refuse with "
+      + `platform-tag's own words. It said: ${row.control}\nLaziness may move WHEN a host `
+      + 'fact is asked for; it may never make an unanswerable question look answered.');
+  }
+});
 
 // THE HOLE THE NAME-CHECKS CANNOT SEE (review, F2). A name-check cannot check a name that
 // is not there: `--needs asume` was refused, but `--needs` with the word dropped set
