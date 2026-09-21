@@ -75,15 +75,24 @@ function interpreterLabel() {
 // `build-tjs-engine: engine=` already use: one flat key=value line per step, so a piped or
 // CI log can be grepped for what ran, where, and how long it took without a parser.
 //
-//   build-graph: step=<id> phase=<phase> runsOn=<where> ms=<elapsed> count=<n/total|->
+//   build-graph: step=<id> phase=<phase> runsOn=<where> ms=<elapsed> count=<total|->
 //
 // `count` is the step's DERIVED denominator (BACKLOG.md:4686's second ask) — patches
-// applied, bundles emitted — and `-` where a step has none. An honest mixed display beats a
-// fake percentage, which is the backlog item's own words.
+// applied, bundles emitted — and `-` where a step has none.
+//
+// A BARE TOTAL, NOT A FRACTION, and this is a correction (review round 1). The first cut
+// rendered `count=<n>/<n>`, which is a ratio that is ALWAYS 1: this line is printed once,
+// after the step has finished, and the graph stops at STEP granularity by design (cmake owns
+// the within-step compile graph), so there is no moment at which the runner knows a partial
+// numerator. `28/28` is a fake percentage wearing a fraction's clothes — it looks like
+// progress and can never report any. BACKLOG.md:4686's own words are that an honest mixed
+// display beats a fake percentage, so the denominator ships alone and means exactly what it
+// says: how many units this step covered. A real numerator needs progress reported from
+// INSIDE a step, which is a different mechanism (the backlog item's first ask) and not
+// something a step-granularity runner can fake its way to.
 function stepLine(step, ms, count) {
-  const n = count === undefined ? '-' : `${count}/${count}`;
   return `build-graph: step=${step.id} phase=${step.phase} runsOn=${step.runsOn}`
-    + ` ms=${ms} count=${n}`;
+    + ` ms=${ms} count=${count === undefined ? '-' : count}`;
 }
 
 // ---- the boundary checks, as one refusal each ---------------------------------------------
@@ -172,7 +181,33 @@ function runGraph(opts) {
       + 'Running zero steps and reporting success would be worse than this refusal.');
   }
 
+  // THE SECOND DOOR INTO THE SAME BLIND PASS (review round 1, Important). `--only` was
+  // validated and `--runs-on` was not, so `runGraph({ runsOn: 'nonsense-machine' })` selected
+  // nothing and exited 0 — precisely the "select nothing, report success" failure the refusal
+  // above exists to prevent, reached through the other argument. RUNS_ON is a closed set the
+  // graph already declares (and USAGE already prints), so a name outside it is a typo, not a
+  // machine nobody has legs on.
+  if (o.runsOn && !G.RUNS_ON.includes(o.runsOn)) {
+    throw new Error(`build-runner: '${o.runsOn}' is not a declared machine. A step runs on one `
+      + `of: ${G.RUNS_ON.join(', ')}. Selecting nothing and reporting a successful build of `
+      + 'zero steps is how a typo becomes a green run about nothing.');
+  }
+
   const plan = G.select(G.topoOrder(declared), { id: o.only, runsOn: o.runsOn });
+
+  // AND THE COMBINATION, which neither name-check can see. `--only engine.compile --runs-on
+  // guest` names a real step and a real machine and still selects nothing, because that
+  // step's subgraph runs nowhere near a guest on this target. Task 1's own orderedSteps test
+  // already guards this shape (`order.length > 0`: "a filter that matches no step is a blind
+  // pass, not an ordering proof"); the same rule belongs where a build acts on it.
+  if (!plan.length) {
+    throw new Error('build-runner: that selection matched no step'
+      + (o.only ? ` (only=${o.only})` : '') + (o.runsOn ? ` (runsOn=${o.runsOn})` : '')
+      + `. The graph declares ${declared.length} step(s): ${declared.map((s) => s.id).join(', ')}`
+      + ' — with the machines each one resolves to for this target. An empty plan that exits 0 '
+      + 'is indistinguishable from a build that worked, which is the whole failure this runner '
+      + 'is a reaction to.');
+  }
 
   // DEFINED KEYS ONLY. defaultContext falls back per field on falsiness, so writing
   // `target: undefined` over a `context: { target }` a caller supplied would silently
@@ -203,28 +238,49 @@ function runGraph(opts) {
         continue;
       }
       checkInputs(step, derive(step, 'inputs', () => step.inputs(ctx)), existsFn);
+
+      // THE VERDICT COMES BEFORE THE RECORD (review round 1, Important). The first cut
+      // pushed `state: 'finished'`, the green log line and the timing from inside a
+      // `finally` that ran BEFORE checkOutputs — so a step that exited 0 and wrote nothing
+      // printed a normal green line and landed in build-trace.jsonl as `finished`, and only
+      // then was refused. That is the silent-producer shape this gate cites as its whole
+      // reason for existing, reintroduced one layer over: the gate refuses correctly and the
+      // durable record says it succeeded. A history that disagrees with the build's own
+      // verdict is worse than no history, because the next person diffs it and believes it.
+      // So nothing is recorded until the step has BOTH run and produced what it declared.
       const started = nowFn();
-      let ok = false;
+      let ms = 0;
       try {
         step.run(ctx);
-        ok = true;
-      } finally {
-        const ms = nowFn() - started;
+        ms = nowFn() - started;
+        checkOutputs(step, derive(step, 'outputs', () => step.outputs(ctx)), existsFn);
+      } catch (e) {
         traceSteps.push({
           component: step.phase,
           name: step.id,
           total: count === undefined ? null : count,
-          done: ok && count !== undefined ? count : 0,
-          elapsedMs: ms,
-          state: ok ? 'finished' : 'failed',
+          done: 0,
+          // `run` may have thrown before ms was taken; the output check may have thrown
+          // after. Either way the elapsed recorded is real time this step consumed.
+          elapsedMs: ms || (nowFn() - started),
+          state: 'failed',
         });
-        if (ok) {
-          ran.push(step.id);
-          timings.push({ id: step.id, phase: step.phase, runsOn: step.runsOn, ms, count });
-          logFn(stepLine(step, ms, count));
-        }
+        throw e;
       }
-      checkOutputs(step, derive(step, 'outputs', () => step.outputs(ctx)), existsFn);
+      traceSteps.push({
+        component: step.phase,
+        name: step.id,
+        total: count === undefined ? null : count,
+        // A step that FINISHED covered every unit it declared, so done === total is a fact
+        // about a completed step rather than a progress claim — build-trace's shape wants
+        // both fields, and a viewer reading this line is reading history, not a spinner.
+        done: count === undefined ? 0 : count,
+        elapsedMs: ms,
+        state: 'finished',
+      });
+      ran.push(step.id);
+      timings.push({ id: step.id, phase: step.phase, runsOn: step.runsOn, ms, count });
+      logFn(stepLine(step, ms, count));
     }
   } finally {
     // WIN OR LOSE, for the same reason libexec/clode-build.cjs records one: a failed build's

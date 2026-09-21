@@ -455,7 +455,27 @@ test('every step it runs prints one greppable line in house style', () => {
     only: 'x.counted', nowFn: () => (t += 12), logFn: (l) => lines.push(l),
   });
   assert.deepStrictEqual(lines,
-    ['build-graph: step=x.counted phase=x runsOn=host ms=12 count=7/7']);
+    ['build-graph: step=x.counted phase=x runsOn=host ms=12 count=7']);
+});
+
+// FINDING 3 (review round 1). The line used to render `count=<n>/<n>` — a ratio that is
+// ALWAYS 1, because it is printed once, after the step finished, and the graph stops at STEP
+// granularity so no partial numerator exists to report. A fraction that can never be
+// anything but 1/1 reads as progress and carries none; BACKLOG.md:4686 asks for an honest
+// denominator, not a fake percentage. Pinned as a rule rather than as one expected string,
+// so the tautology cannot come back for a step nobody wrote a literal for.
+test('no step line renders a ratio that is always 1', () => {
+  const lines = [];
+  R.runGraph({ dryRun: true, logFn: (l) => lines.push(l) });
+  assert.ok(lines.length > 1, 'a one-line sample cannot show a rule holding');
+  for (const l of lines) {
+    const count = l.slice(l.indexOf('count=') + 'count='.length);
+    assert.doesNotMatch(count, /^(\d+)\/\1$/,
+      `${l} — count=n/n is a fake percentage: this line prints once, after the step is done, `
+      + 'so the numerator can only ever equal the denominator');
+  }
+  assert.ok(lines.some((l) => /count=\d+$/.test(l)),
+    'no step reported a derived denominator at all, so this rule proved nothing');
 });
 
 test('a step with no derived count says so rather than inventing one', () => {
@@ -496,6 +516,68 @@ test('a failed run still records the steps that ran, and names the one that did 
   const runs = require('../libexec/build-trace.cjs').readRuns(log);
   assert.strictEqual(runs.length, 1);
   assert.strictEqual(runs[0].steps[0].state, 'failed');
+});
+
+// FINDING 1 (review round 1, Important). The record must not call a boundary failure
+// "finished". The green line, the timing and the trace entry all used to be written from a
+// `finally` that ran BEFORE checkOutputs, so a step that exited 0 and wrote nothing printed a
+// normal green line and landed in build-trace.jsonl as `finished` — and was only then
+// refused. That is the silent-producer shape this gate exists for, reintroduced in the record
+// of the gate firing. Read the trace, not just the throw: the throw was already correct.
+test('a step that exits 0 and writes nothing is recorded as FAILED, not finished', () => {
+  const log = scratchTrace();
+  const fake = [fixture({ id: 'x.liar', count: () => 4, outputs: () => [ABSENT] })];
+  assert.throws(
+    () => R.runGraph({ graph: fake, only: 'x.liar', nowFn: () => 0, traceLog: log, logFn: () => {} }),
+    /declared output.*did not appear/i);
+  const runs = require('../libexec/build-trace.cjs').readRuns(log);
+  assert.strictEqual(runs.length, 1);
+  assert.strictEqual(runs[0].steps[0].state, 'failed',
+    'the durable history disagreed with the build\'s own verdict — the next person to diff '
+    + 'this log would read a step that produced nothing as a step that worked');
+  assert.strictEqual(runs[0].steps[0].done, 0,
+    'a step that did not produce its outputs completed none of its declared units');
+});
+
+test('a step refused by the output check prints no green line and is not in `ran`', () => {
+  const lines = [];
+  const fake = [fixture({ id: 'x.liar', outputs: () => [ABSENT] })];
+  let out;
+  try {
+    out = runFixture({ graph: fake, only: 'x.liar', nowFn: () => 0, logFn: (l) => lines.push(l) });
+  } catch { /* the refusal itself is pinned above */ }
+  assert.strictEqual(out, undefined);
+  assert.deepStrictEqual(lines, [],
+    'a build whose log shows a green step line for a step that produced nothing is a log that '
+    + 'lies in exactly the direction the reader will trust');
+});
+
+// FINDING 2 (review round 1, Important). Gate 1 had a second door: `--only` was validated and
+// `--runs-on` was not, so a typo selected nothing and exited 0 — the same "select nothing,
+// report success" blind pass, reached through the other argument.
+test('gate 1: the runner refuses a machine the graph does not declare', () => {
+  assert.throws(() => R.runGraph({ runsOn: 'nonsense-machine', dryRun: true, logFn: () => {} }),
+    /not a declared machine/i);
+  for (const where of G.RUNS_ON) {
+    assert.doesNotThrow(() => R.runGraph({
+      graph: [fixture({ runsOn: where })], runsOn: where, dryRun: true, logFn: () => {},
+    }), `${where} is in G.RUNS_ON and must be accepted — a refusal that rejects the whole `
+      + 'vocabulary is not a typo check, it is an outage');
+  }
+});
+
+// And the combination neither name-check can see: a real step and a real machine that select
+// nothing together. Task 1's orderedSteps test already guards this shape ("a filter that
+// matches no step is a blind pass, not an ordering proof"); the same rule belongs where a
+// build acts on it.
+test('gate 1: a selection that matches no step is refused, not reported as success', () => {
+  assert.throws(
+    () => R.runGraph({ only: 'engine.compile', runsOn: 'guest', dryRun: true, logFn: () => {} }),
+    /matched no step/i,
+    'engine.compile runs on the host for this target, so --runs-on guest selects nothing — '
+    + 'and an empty plan that exits 0 is indistinguishable from a build that worked');
+  assert.throws(() => runFixture({ graph: [fixture({})], runsOn: 'guest', dryRun: true }),
+    /matched no step/i);
 });
 
 // THE INJECTION, PROVEN ON THE REAL GRAPH AND NOT ONLY ON FIXTURES. A synthetic step's
@@ -565,7 +647,7 @@ test('the runner plans under tjs exactly as it plans under node', (t) => {
   assert.deepStrictEqual(planUnderTjs(['--plan', '--only', 'bundle.clode-main']), lines,
     'the runner planned a different build under tjs than under node — including the derived '
     + 'count, which is the half a parse-only probe would miss');
-  assert.match(lines[0], /count=\d+\/\d+$/,
+  assert.match(lines[0], /count=\d+$/,
     'this proof is only worth running while the selected step HAS a derived count to get wrong');
 });
 
