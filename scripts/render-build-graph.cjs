@@ -54,11 +54,11 @@ const TIER = 'release';
 //
 // THREE of the graph's roots live OUTSIDE the repo and differ per machine: the patched
 // txiki.js checkout (under the platform-tag vendor dir), the engine this build produces
-// (under $TMPDIR, keyed by an OS-version tag), and the build-only toolchain the bundle step
-// provisions for itself. They are given names here instead of values,
-// so the page says what a path IS rather than where it happened to land on the box that
-// generated it. They are absolute so that every path.join/path.resolve in the graph keeps
-// working unchanged; the leading slash is stripped at display time.
+// (under $TMPDIR, keyed by an OS-version tag), and the build-only toolchain the bundle
+// step provisions for itself. They are given names here instead of values, so the page says
+// what a path IS rather than where it happened to land on the box that generated it. They
+// are absolute so that every path.join/path.resolve in the graph keeps working unchanged;
+// the leading slash is stripped at display time.
 // NOT a filename: `engine` names the binary itself rather than spelling a basename, because
 // a basename would have to be `tjs` or `tjs.exe` depending on the target and the page would
 // then quietly claim one of them for every reader. (test/windows-path-ratchet.test.cjs's
@@ -91,8 +91,8 @@ function renderContext(overrides) {
   }, overrides));
 }
 
-// A path under one of the known out-of-repo roots, named against that root. Anything else is a
-// REFUSAL: it means the graph grew a root this renderer does not know about, and the choices
+// A path under one of the known out-of-repo roots, named against that root. Anything else
+// is a REFUSAL: it means the graph grew a root this renderer does not know about, and the choices
 // are "commit a machine-specific path" or "say so". The first one is green here and red for
 // everyone else, which is the worst shape a gate can have.
 function underRoot(root, abs) {
@@ -113,8 +113,8 @@ function displayPath(ctx, abs) {
   if (rel !== null) return rel || '.';
   throw new Error(`render-build-graph: '${abs}' is under none of the repo, the engine `
     + 'checkout, the engine or the toolchain, so it cannot be named symbolically — and '
-    + 'docs/build.md is '
-    + 'COMMITTED, so rendering an absolute path here would bake this machine\'s home '
+    + 'docs/build.md is COMMITTED, so rendering an absolute path here would bake this '
+    + 'machine\'s home '
     + 'directory into a page whose gate then fails on every other machine. Either the graph '
     + 'grew a new out-of-repo root (give it a name in renderContext), or a step is naming '
     + 'something it should not.');
@@ -222,7 +222,8 @@ function renderArtifacts(list, ctx) {
     // claim the runner checks it (it cannot: the directory is absent on a clean machine),
     // and leaving it out is what the review found — an undeclared input in the one view
     // that exists to surface exactly that.
-    for (const label of groupArtifacts((s.provisions ? s.provisions(c) : []).map((p) => displayPath(c, p)))) {
+    const provisioned = s.provisions ? s.provisions(c) : [];
+    for (const label of groupArtifacts(provisioned.map((p) => displayPath(c, p)))) {
       edges.push(`  ${sid} -.->|"provisions, then reads"| ${artifactNode(label)}`);
     }
     for (const label of groupArtifacts(s.outputs(c).map((p) => displayPath(c, p)))) {
@@ -713,5 +714,6 @@ if (require.main === module) {
 module.exports = {
   renderPipeline, renderArtifacts, renderFleet, renderAll,
   fleetTally, groupArtifacts, renderContext, displayPath, entryPointPresent,
-  stepsTable, nodeSection, provisionSection, npmProvisioningEntries, commonJsParseError, main, USAGE, PAGE_REL, TIER,
+  stepsTable, nodeSection, provisionSection, npmProvisioningEntries, commonJsParseError,
+  main, USAGE, PAGE_REL, TIER,
 };
