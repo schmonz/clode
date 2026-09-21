@@ -32,10 +32,12 @@ test('every step declares the required fields, with functions not literals', () 
     + 'NODE_CONSTANTS once and engine-recipe.cjs\'s FILES three times');
 });
 
-test('gate 5: no orphans — every step is reachable from the root', () => {
+test('gate 5: no orphans — every step is in the root\'s dependency closure', () => {
   const orphans = G.orphanFindings(G.steps());
   assert.deepStrictEqual(orphans, [],
-    `unreachable steps accumulate and the diagram lies by addition: ${orphans}`);
+    `declared but never built: ${orphans} — either wire them into the root's closure or `
+    + 'delete them; a step no build reaches is work `./build.sh` never does and a lie the '
+    + 'diagram will draw');
 });
 
 test('every `needs` names a step that exists', () => {
@@ -74,22 +76,18 @@ test('ROOT_ID names a real step, and nothing depends on it', () => {
     + 'the thing it exists to build');
 });
 
-// Every step is reached from the root by walking `needs` BACKWARDS. Gate 5 above proves no
-// step is stranded off the front of the graph; this proves none is stranded off the back —
-// a step nothing transitively needs is work `./build.sh` would never do.
-test('every step is in the root\'s dependency closure', () => {
-  const byId = new Map(G.steps().map((s) => [s.id, s]));
-  const seen = new Set();
-  const up = (id) => {
-    if (seen.has(id)) return;
-    seen.add(id);
-    for (const n of (byId.get(id) || { needs: [] }).needs) up(n);
-  };
-  up(G.ROOT_ID);
-  const stranded = G.steps().map((s) => s.id).filter((id) => !seen.has(id));
-  assert.deepStrictEqual(stranded, [],
-    `declared but never built: ${stranded} — either wire them into the root's closure or `
-    + 'delete them; a step no build reaches is a lie the diagram will draw');
+// The root-closure walk that USED TO LIVE HERE, as a plain control-less test, is now what
+// orphanFindings() itself computes (final whole-branch review, finding 3): the real RED was
+// coming from this test while the guard that carried the name was vacuous. Keeping a second
+// copy of the walk would restate the rule the module now owns — the disease this whole file
+// is a reaction to — so gate 5 above and orphanGuard below are the two halves, and this is
+// the refusal that keeps the walk from answering about a root it was never given.
+test('orphanFindings refuses a root that is not in the graph it was handed', () => {
+  assert.throws(() => G.orphanFindings(G.steps(), 'clode.typoed'), (e) => {
+    assert.match(e.message, /clode\.typoed/);
+    assert.match(e.message, /Every step would be reported as an orphan/);
+    return true;
+  });
 });
 
 // The 42 legs are ONE graph parameterized by target, never 42 graphs. The parameter is
@@ -277,17 +275,39 @@ const acyclicGuard = defineGuard({
   ],
 });
 
+// GATE 5, WITH A CONTROL THAT IS AN ORPHAN AND NOTHING ELSE (final whole-branch review,
+// finding 3). The control this replaces was a mutual-needs PAIR — a cycle, which
+// acyclicGuard catches too, and which the old downward walk could only report because it
+// could not report anything else. `fixture.orphan` below has `needs: []` and nothing needs
+// it: no dangling edge, no cycle, reachable from a source and still work the root never
+// does. Neither of the other two gates can see it, and the reviewer verified that a real
+// orphan added to the REAL graph is exactly this shape.
+//
+// The root rides in the inputs because scan() may only see what read()/control() returned —
+// a control on a synthetic graph has a synthetic root.
 const orphanGuard = defineGuard({
   name: 'build-graph orphans',
-  read: () => G.steps(),
-  scan: (steps) => ({ findings: G.orphanFindings(steps), examined: steps.length }),
-  // fixture.two/three need each other, so no source step ever reaches them: unreachable
-  // WITHOUT any dangling edge, so this control isolates gate 5 from the dangling rule.
-  control: () => [
-    { id: 'fixture.one', needs: [] },
-    { id: 'fixture.two', needs: ['fixture.three'] },
-    { id: 'fixture.three', needs: ['fixture.two'] },
-  ],
+  read: () => ({ steps: G.steps(), root: G.ROOT_ID }),
+  scan: ({ steps, root }) => ({ findings: G.orphanFindings(steps, root), examined: steps.length }),
+  control: () => ({
+    root: 'fixture.root',
+    steps: [
+      { id: 'fixture.root', needs: ['fixture.needed'] },
+      { id: 'fixture.needed', needs: [] },
+      { id: 'fixture.orphan', needs: [] },
+    ],
+  }),
+});
+
+// THE CONTROL IS AN ORPHAN AND NOTHING ELSE — checked, not claimed. The control this
+// replaced was reported by acyclicGuard as well, which is how gate 5 could carry a name for
+// a property it was not testing. If either of the other two rules can see this fixture,
+// gate 5's red would once again be somebody else's.
+test('gate 5\'s control is invisible to the dangling and cycle rules', () => {
+  const { steps } = orphanGuard.control();
+  assert.deepStrictEqual(G.danglingFindings(steps), [], 'the orphan control has a dangling edge');
+  assert.deepStrictEqual(G.cycleFindings(steps), [], 'the orphan control has a cycle');
+  assert.deepStrictEqual(G.orphanFindings(steps, 'fixture.root'), ['fixture.orphan']);
 });
 
 // Shape says `inputs` is a function; this says the function ANSWERS. A derivation that

@@ -881,18 +881,42 @@ function cycleFindings(list) {
   return findings;
 }
 
-// Gate 5. Reachability is computed DOWNWARD from every source step (one with no `needs`):
-// anything the build never arrives at is an orphan. Unreachable steps accumulate silently
-// and the diagram then lies by addition -- it draws work that no build performs.
-function orphanFindings(list) {
-  const reachable = new Set();
-  const down = (id) => {
-    if (reachable.has(id)) return;
-    reachable.add(id);
-    for (const s of list) if (s.needs.includes(id)) down(s.id);
+// Gate 5. An orphan is a step THE ROOT DOES NOT TRANSITIVELY NEED: work `./build.sh` would
+// never do, accumulating silently while the diagram lies by addition -- it draws work no
+// build performs.
+//
+// REACHABILITY IS COMPUTED UPWARD FROM THE ROOT, and that is a correction (final
+// whole-branch review, finding 3). The first cut walked DOWNWARD from every source step
+// (one with `needs: []`), which cannot report anything the dangling and cycle gates have not
+// already reported: given a graph that passes those two, every step's `needs` chain
+// terminates at a source, so every step is reachable downward and this function is
+// VACUOUS. Its control was a mutual-needs pair -- a CYCLE, which cycleFindings catches too.
+// The property the spec actually asked for ("add an unreachable step; the gate names it")
+// was being delivered by a plain, control-less test elsewhere in
+// test/build-graph.test.cjs. It is delivered here now, by the function that carries the
+// name, with a control that is a genuine orphan and nothing else.
+//
+// THE ROOT IS AN ARGUMENT, not a closure read, so a control can hand this a synthetic graph
+// with its own root -- the seam every other finding function in this file already has. A
+// root that is not in the list is REFUSED rather than answered: "every step is an orphan"
+// is what a mistyped root looks like, and it reads exactly like the catastrophe it is not.
+function orphanFindings(list, rootId) {
+  const root = rootId || ROOT_ID;
+  const byId = new Map(list.map((s) => [s.id, s]));
+  if (!byId.has(root)) {
+    throw new Error(`build-graph: orphanFindings was asked to walk up from '${root}', which is `
+      + `not one of the ${list.length} step(s) it was given (${list.map((s) => s.id).join(', ')}). `
+      + 'Every step would be reported as an orphan, which looks identical to the graph having '
+      + 'come apart. Name the root of the graph you are asking about.');
+  }
+  const seen = new Set();
+  const up = (id) => {
+    if (seen.has(id) || !byId.has(id)) return;
+    seen.add(id);
+    for (const n of byId.get(id).needs) up(n);
   };
-  for (const s of list) if (s.needs.length === 0) down(s.id);
-  return list.map((s) => s.id).filter((id) => !reachable.has(id));
+  up(root);
+  return list.map((s) => s.id).filter((id) => !seen.has(id));
 }
 
 module.exports = {
