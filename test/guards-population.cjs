@@ -267,6 +267,25 @@ const GUARD_EXCLUSIONS = [
       + 'already ARE its positive control — a file cannot register itself as its own '
       + 'defineGuard guard without becoming circular.',
   },
+  {
+    file: 'node-shim-constants.test.cjs',
+    because: 'it is a live DIFFERENTIAL, not a scan, the same shape as '
+      + 'build-tjs-no-node.test.cjs above: every row runs host node and the shim (or the '
+      + 'generator) as CHILD PROCESSES and compares what those runs printed. It crossed '
+      + 'the classifier\'s threshold on 2026-09-21 when a row was added proving the '
+      + 'node-constants staleness gate still FAILS — it injects a name onto '
+      + 'os.constants.errno via a preload it writes into its own mkdtemp, spawns '
+      + 'scripts/gen-node-constants.mjs --check, and asserts the message names both '
+      + 'causes. Both signals are false positives on that shape: READS_ARTIFACT fires on '
+      + 'the __dirname-rooted path to shim-surface/constants-golden.json, which is this '
+      + "test's OWN recorded expectation (it rewrites it under "
+      + 'CLODE_UPDATE_CONSTANTS_GOLDEN=1) rather than a fixed artifact it scans, and '
+      + 'PATTERN_MATCHES on `assert.match(out, /PLATFORM NOBODY TRANSCRIBED FROM/)` — a '
+      + 'finding derived from a child process this test just started. There is no artifact '
+      + 'to scan and no violation pattern to look for; the subject is whether the shim '
+      + "reports the same constants node does, and whether the generator's own ratchet "
+      + 'still fires.',
+  },
 ];
 
 function isRecordedExclusion(file) {
