@@ -15,8 +15,9 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 const { defineGuard, guardTests } = require('./guard.cjs');
+const { shTest, committedExecBit } = require('./posix-host.cjs');
 const { tjsPath } = require('./node-shim-helper.cjs');
 const G = require('../scripts/build-graph.cjs');
 
@@ -59,7 +60,7 @@ test('orderedSteps returns dependencies before dependents', () => {
 });
 
 // ROOT_ID is the interface Task 2's runner and Task 6's call-site gate both address, so
-// "it names a real step" is a property, not a comment. And the root is what `./build`
+// "it names a real step" is a property, not a comment. And the root is what `./build.sh`
 // builds: nothing may DEPEND on it, or the thing a developer asked for is not the end of
 // the build.
 test('ROOT_ID names a real step, and nothing depends on it', () => {
@@ -67,15 +68,15 @@ test('ROOT_ID names a real step, and nothing depends on it', () => {
   assert.ok(root, `ROOT_ID '${G.ROOT_ID}' names no declared step`);
   const dependents = G.steps().filter((s) => s.needs.includes(G.ROOT_ID)).map((s) => s.id);
   assert.deepStrictEqual(dependents, [],
-    `${G.ROOT_ID} is the artifact ./build produces, so nothing may need it: ${dependents}`);
+    `${G.ROOT_ID} is the artifact ./build.sh produces, so nothing may need it: ${dependents}`);
   assert.ok(G.orderedSteps().map((s) => s.id).includes(G.ROOT_ID),
-    'the default ordering does not reach the root — ./build would build everything except '
+    'the default ordering does not reach the root — ./build.sh would build everything except '
     + 'the thing it exists to build');
 });
 
 // Every step is reached from the root by walking `needs` BACKWARDS. Gate 5 above proves no
 // step is stranded off the front of the graph; this proves none is stranded off the back —
-// a step nothing transitively needs is work `./build` would never do.
+// a step nothing transitively needs is work `./build.sh` would never do.
 test('every step is in the root\'s dependency closure', () => {
   const byId = new Map(G.steps().map((s) => [s.id, s]));
   const seen = new Set();
@@ -189,7 +190,7 @@ test('the bundle step derives its repo inputs from the emitter, including the on
     `the derivation lost a known define input: ${rels.join(',')}`);
 });
 
-// THE CONSTRAINT THAT MAKES A NODE-FREE `./build` POSSIBLE, proven by running it rather
+// THE CONSTRAINT THAT MAKES A NODE-FREE `./build.sh` POSSIBLE, proven by running it rather
 // than by reading the file for `import`. The graph has to be loadable by
 // libexec/node-shim/loader.cjs under tjs -- CommonJS, no top-level await, no import.meta --
 // because the developer entry point resolves an engine through scripts/bootstrap-engine.sh
@@ -671,7 +672,7 @@ test('the runner plans under tjs exactly as it plans under node', (t) => {
 // was waiting for. Until 2026-09-21 `engine.source`'s inputs/count and `engine.compile`'s
 // inputs were UNANSWERABLE under the shim: they are compositions of the engine recipe, the
 // recipe was ESM using `import.meta`, and libexec/node-shim/loader.cjs is a CJS host — so a
-// `./build` running under tjs stopped dead at the first engine step and a node-free
+// `./build.sh` running under tjs stopped dead at the first engine step and a node-free
 // developer build was impossible. The recipe is CommonJS now
 // (scripts/engine-recipe.cjs), and this is the positive assertion the tripwire was standing
 // in for: the whole graph, engine phase included, plans identically under both engines.
@@ -696,7 +697,7 @@ test('the engine phase plans under tjs, count and all, exactly as it plans under
     'the runner planned a different build under tjs than under node. The engine steps derive '
     + 'their inputs and counts from scripts/engine-recipe.cjs; if this says a step "could not '
     + 'resolve", that file (or something it now reaches) is no longer hostable by the CJS '
-    + 'node-shim loader, and the node-free `./build` is broken again.');
+    + 'node-shim loader, and the node-free `./build.sh` is broken again.');
   const source = lines.find((l) => l.indexOf('step=engine.source ') !== -1);
   assert.match(source, /count=\d+$/,
     'engine.source must still carry a DERIVED count here — it is the half that proves the '
@@ -728,4 +729,146 @@ test('an explicit context survives the option merge', () => {
     context: { target: 'windows-amd64' },
   });
   assert.deepStrictEqual(seen, ['windows-amd64']);
+});
+
+// ---- the front door (build-graph.cjs's ENTRY_REL) ----------------------------------------
+//
+// The entry point is a handful of lines of shell under a long header, and every interesting
+// thing about it is a thing it must NOT do. It must not assume an engine (the whole point of the task is a
+// machine with no node), it must not reach for a package manager, it must not re-implement
+// the runner's argument validation in shell, and it must not swallow the build's exit
+// status. Those are the rows below.
+//
+// THE NAME COMES FROM THE GRAPH, not from a literal here. If this file spelled it, then the
+// renderer, the page and this gate would each carry their own copy of a filename, and the
+// first afternoon of that arrangement already produced the `build`-is-a-directory bug that
+// made docs/build.md announce its own front door was missing.
+const ENTRY = path.join(REPO, G.ENTRY_REL);
+
+// Bashisms, in the shape test/build-tjs-boot.test.cjs already pins them: the entry point
+// is `#!/bin/sh` ON PURPOSE, because it runs in alpine containers and minimal VM guests
+// where bash may be absent, and `/bin/sh` there is dash or ash. Every one of these parses
+// fine under bash and dies under dash, which is why a reader cannot be the gate.
+const BASHISMS = [
+  [/^\s*\[\[/m, '[[ ]] test'], [/^\s*local\s/m, '`local`'], [/^\s*declare\s/m, '`declare`'],
+  [/^\s*function\s+[A-Za-z_]/m, '`function` keyword'],
+  [/\$\{[A-Za-z_][A-Za-z0-9_]*\[/, 'array subscript'],
+];
+
+// A GUARD, not five assertions, for test/guard.cjs's stated reason: this reads an artifact
+// it did not create and derives findings from its bytes, and a staleness check with no
+// positive control is a test that happens to be green. control() hands the same scan a
+// script that violates every rule at once, so "it never fires" cannot quietly become "it
+// cannot fire".
+const entryPointGuard = defineGuard({
+  name: 'entry-point-shape',
+  floor: 7,
+  read: () => ({
+    sh: fs.readFileSync(ENTRY, 'utf8'),
+    // THE EXEC BIT AS SHIPPED, not as checked out. `fs.statSync().mode & 0o111` is 0 for
+    // every file on win32 (NTFS has no POSIX mode), so reading the worktree here would
+    // report a VIOLATION on Windows over a file that is 100755 in the index — which is
+    // exactly what test/posix-host.cjs's committedExecBit() exists to stop happening a
+    // sixth time.
+    executable: committedExecBit(G.ENTRY_REL),
+  }),
+  scan: (i) => {
+    const findings = [];
+    let examined = 0;
+    const rule = (ok, finding) => { examined += 1; if (!ok) findings.push(finding); };
+    rule(/^#!\/bin\/sh$/.test(i.sh.split('\n')[0]),
+      'the entry point must be a `#!/bin/sh` script — it is the first thing run on a '
+      + 'machine that may have neither node nor bash');
+    rule(i.executable,
+      `${G.ENTRY_REL} ships non-executable (git index mode 100644), so a clean clone `
+      + 'cannot run it. `git update-index --chmod=+x` it.');
+    const bashisms = BASHISMS.filter(([re]) => re.test(i.sh)).map(([, what]) => what);
+    rule(bashisms.length === 0,
+      `bash-only syntax (${bashisms.join(', ')}) in a file that must run under dash/ash`);
+    rule(/bootstrap-engine\.sh/.test(i.sh),
+      'the entry point must RESOLVE an engine, not assume one is installed');
+    rule(/build-runner\.cjs/.test(i.sh),
+      'the entry point must run the graph through the runner, not shell out to a build of '
+      + 'its own');
+    rule(!/\b(npm|yarn|pnpm)\b/.test(i.sh),
+      'a package manager is a node program, and the point of this entry point is a machine '
+      + 'that has neither');
+    rule(/^\s*exec\s/m.test(i.sh),
+      'the entry point must `exec` the build, so the build\'s exit status IS the entry '
+      + 'point\'s. A subshell that forgets to propagate is how a failed build exits 0.');
+    rule(/build: engine=/.test(i.sh),
+      'the entry point must print one greppable verdict naming the engine it handed the '
+      + 'build to; a silent node fallback is otherwise indistinguishable from the '
+      + 'node-free path working');
+    return { examined, findings };
+  },
+  control: () => ({
+    sh: '#!/bin/bash\nlocal answer=42\nnpm ci\nnode scripts/build-clode-main.mjs\n',
+    executable: false,
+  }),
+});
+guardTests(entryPointGuard);
+
+// THE NAME COLLISION THAT DICTATED THE SPELLING, as a property rather than a comment.
+// build/ is a directory in every working checkout, and on a case-insensitive filesystem a
+// file cannot share its name. A future rename back to `build` would pass every grep above
+// and be unopenable here.
+test('the entry point is a file, and does not collide with the build directory', () => {
+  assert.ok(fs.statSync(ENTRY).isFile(),
+    `${G.ENTRY_REL} is not a regular file — the entry point cannot be a directory, which is `
+    + 'what `build` already is in this checkout');
+  const collides = fs.readdirSync(REPO).some(
+    (name) => name !== G.ENTRY_REL
+      && name.toLowerCase() === G.ENTRY_REL.toLowerCase().replace(/\.sh$/, ''));
+  assert.ok(!collides || G.ENTRY_REL.endsWith('.sh'),
+    'the entry point name collides with an existing repo-root entry');
+});
+
+function entryPoint(args, env) {
+  return spawnSync(ENTRY, args, {
+    cwd: REPO,
+    encoding: 'utf8',
+    env: Object.assign({}, process.env, env || {}),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
+// THE END TO END ROW. Everything above reads the file; this one RUNS it, which is the only
+// way to learn that the engine it resolved can host the runner. CLODE_TJS is set to the
+// engine the rest of this file already found, so the row costs no network: resolving from
+// the pinned pack is scripts/bootstrap-engine.sh's own test's job, not this one's.
+shTest('the entry point plans the whole graph, under the engine it resolved', (t) => {
+  if (!TJS || !fs.existsSync(TJS)) {
+    t.skip('no engine: neither CLODE_TJS nor the platform-tagged scratch engine resolves');
+    return;
+  }
+  const r = entryPoint(['--plan'], { CLODE_TJS: TJS });
+  assert.strictEqual(r.status, 0, `the entry point exited ${r.status}\n${r.stderr}`);
+  const planned = r.stdout.trim().split('\n').filter((l) => l.indexOf('build-graph: step=') === 0);
+  const lines = [];
+  R.runGraph({ dryRun: true, logFn: (l) => lines.push(l) });
+  assert.deepStrictEqual(planned, lines,
+    'the entry point planned a different build than the runner plans under node');
+  // ONE greppable line saying WHICH engine ran it. Without it, a run that quietly fell back
+  // to node is indistinguishable from the flip working — the precise blindness
+  // scripts/build-tjs-boot.sh's verdict line exists to end, and the reason this one copies
+  // its shape.
+  assert.match(r.stdout, /^build: engine=tjs /m,
+    'the entry point must say which engine it handed the build to; a silent node fallback '
+    + 'is how a green run says nothing about the node-free path');
+});
+
+// THE STATUS IS THE BUILD'S. `exec` is what makes that true, and a refusal is the cheapest
+// way to observe it: the runner refuses an undeclared step id, and if the entry point
+// validated arguments itself — or ran the runner in a subshell and forgot to propagate —
+// this row would come back 0 with a green log about nothing.
+shTest('a refusal by the runner is the entry point\'s exit status, not a shell opinion', (t) => {
+  if (!TJS || !fs.existsSync(TJS)) {
+    t.skip('no engine: neither CLODE_TJS nor the platform-tagged scratch engine resolves');
+    return;
+  }
+  const r = entryPoint(['--plan', '--only', 'no.such.step'], { CLODE_TJS: TJS });
+  assert.notStrictEqual(r.status, 0, 'an undeclared step id was not refused');
+  assert.match(`${r.stdout}${r.stderr}`, /no\.such\.step/,
+    'the runner\'s refusal must reach the developer verbatim, not be reworded by the shell');
 });

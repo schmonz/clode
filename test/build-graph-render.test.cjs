@@ -18,6 +18,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const { defineGuard, guardTests } = require('./guard.cjs');
@@ -135,11 +136,44 @@ test('the fleet view refuses a fleet drawn from canonical names, and counts LEGS
 // embeds exactly the three views.
 test('the page names the entry point and embeds three mermaid blocks', () => {
   const page = R.renderAll();
-  assert.match(page, /\.\/build/, 'the page must name the developer entry point');
+  assert.ok(page.includes(`./${G.ENTRY_REL}`),
+    `the page must name the developer entry point (./${G.ENTRY_REL})`);
   const fences = page.match(/^```mermaid$/gm) || [];
   assert.strictEqual(fences.length, 3, `expected 3 mermaid blocks, found ${fences.length}`);
   // Every fence opened is a fence closed. An unbalanced one swallows the rest of the page
   // into a code block, which renders as "fine" in a diff and as garbage on the page.
   assert.strictEqual((page.match(/^```/gm) || []).length % 2, 0,
     'unbalanced code fences — an odd number of ``` lines');
+});
+
+// THE DERIVED LINE THAT WAS PERMANENTLY WRONG, with the control that would have caught it.
+//
+// renderAll() prints a one-line caveat when the entry point is not in the checkout, and it
+// asked about `build` — which is a DIRECTORY here (build/ holds the scratch bundle and the
+// built binaries), so `isFile()` was false for a reason that had nothing to do with the
+// entry point, and the page announced that its own front door was missing on a day it was
+// right there. Two rows, because the bug needed both: the real repo must answer TRUE, and a
+// directory of that name must still answer FALSE — a laxer existence check would "fix" the
+// first by breaking the property the caveat exists for.
+test('the entry point is present in this checkout, and the page says so', () => {
+  assert.ok(R.entryPointPresent(repo),
+    `entryPointPresent() says ${G.ENTRY_REL} is missing from this checkout. If it really is, `
+    + 'that is the finding; if it is there, this function is asking about the wrong path — '
+    + 'which is exactly what it did while it asked about `build`, the directory.');
+  assert.ok(!R.renderAll().includes('is not in this checkout yet'),
+    'the page carries the missing-entry-point caveat while the entry point is right there');
+});
+
+test('entryPointPresent answers about a FILE, not about any dirent of that name', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-entry-point-'));
+  assert.strictEqual(R.entryPointPresent(dir), false, 'an empty tree has no entry point');
+  // The exact shape of the bug: a DIRECTORY where the entry point should be.
+  fs.mkdirSync(path.join(dir, G.ENTRY_REL));
+  assert.strictEqual(R.entryPointPresent(dir), false,
+    `a directory named ${G.ENTRY_REL} is not an entry point, and a page that claimed `
+    + 'otherwise would tell its first reader to run a directory');
+  fs.rmSync(path.join(dir, G.ENTRY_REL), { recursive: true });
+  fs.writeFileSync(path.join(dir, G.ENTRY_REL), '#!/bin/sh\n');
+  assert.strictEqual(R.entryPointPresent(dir), true);
+  fs.rmSync(dir, { recursive: true, force: true });
 });

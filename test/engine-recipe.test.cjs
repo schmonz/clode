@@ -342,7 +342,7 @@ test('the git source reads a rev without touching the working tree', async () =>
 //
 // WHY THIS IS NOT COVERED BY THE GRAPH'S PROOF. This file was ESM using `import.meta`
 // until 2026-09-21, which meant libexec/node-shim/loader.cjs could not host it and a
-// node-free `./build` stopped dead at the first engine step (test/build-graph.test.cjs
+// node-free `./build.sh` stopped dead at the first engine step (test/build-graph.test.cjs
 // plans the whole graph under tjs, which is the proof that lifted). But that proof only
 // asks for a patch COUNT. The CLI has four more answers -- the full hash, --short,
 // --files, --json -- plus a usage path that must exit 2, and a --rev mode that reads

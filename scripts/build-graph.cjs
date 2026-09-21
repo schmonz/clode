@@ -39,7 +39,7 @@
 // is the cautionary case: `import.meta` outside Module goal is an EARLY parse error, so an
 // ESM graph could not load far enough to report its own failure. engine-recipe.cjs became
 // CommonJS on 2026-09-21 for exactly this reason, which is what made the ENGINE phase
-// answerable under the shim and a node-free `./build` possible at all; scripts/tjs-legs.mjs
+// answerable under the shim and a node-free `./build.sh` possible at all; scripts/tjs-legs.mjs
 // is still ESM, so it stays a LAZY require inside the function that needs it and only a
 // leg-parameterized question costs node. Both are dev/CI tooling by their own headers
 // ("Nothing on the `clode build` path imports this"), and loading this module is node-free
@@ -59,9 +59,25 @@ const canonical = require('./canonical-name.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 
-// The step that produces `clode` — the contract of `./build` from a clean clone. The
+// The step that produces `clode` — the contract of `./build.sh` from a clean clone. The
 // engine is an interior node of this graph, not a target a developer names.
 const ROOT_ID = 'clode.blobulate';
+
+// The front door: the file a developer types to run this graph. ONE place spells it,
+// because three consumers need the name and none of them can check the others —
+// scripts/render-build-graph.cjs writes it into the committed docs/build.md, the gate in
+// test/build-graph.test.cjs reads the file itself, and the entry point's own header quotes
+// it. It was three string literals in the renderer for exactly one afternoon and that was
+// already enough to ship a bug: `entryPointPresent` stat'ed `build`, which is a DIRECTORY
+// in every working checkout (build/ holds the scratch bundle and the built binaries), so it
+// answered `false` for a reason that had nothing to do with the entry point and the page
+// permanently announced that its own front door "is not in this checkout yet".
+//
+// AND THAT IS WHY IT IS `build.sh`, NOT `build`. On a case-insensitive filesystem — macOS's
+// default, where this repo is developed — a file and a directory cannot share a name at the
+// same level, so `build` is not available to be taken. The suffix is not decoration and not
+// a style preference; it is the only spelling that can exist beside build/.
+const ENTRY_REL = 'build.sh';
 
 // Where a step's work physically happens. 'host' is the machine running the build;
 // 'container' is a docker toolchain image (the alpine/musl and cross legs); 'guest' is a
@@ -282,7 +298,7 @@ function blobulateHomeForLeg(leg) {
   return engineHomeForLeg(leg) === 'guest' ? 'guest' : 'host';
 }
 
-// `runsOn` for one step of one name. The step declares its NATIVE answer (what `./build`
+// `runsOn` for one step of one name. The step declares its NATIVE answer (what `./build.sh`
 // does on this machine); a leg token or target name re-homes exactly the two steps that
 // move.
 function runsOnFor(step, target, tier) {
@@ -468,7 +484,7 @@ const STEPS = [
   {
     // `clode bootstrap`: append the member archive + manifest + bootstrap to a copy of the
     // engine as a canonical-LE trailer, carrying the PRISTINE base engine as a member so
-    // the result can build a quaude on a machine that has nothing. This is what `./build`
+    // the result can build a quaude on a machine that has nothing. This is what `./build.sh`
     // produces, and it is where the two phases above meet.
     id: ROOT_ID,
     phase: 'blobulate',
@@ -685,7 +701,7 @@ function orphanFindings(list) {
 }
 
 module.exports = {
-  ROOT_ID, RUNS_ON,
+  ROOT_ID, RUNS_ON, ENTRY_REL,
   steps, stepById, orderedSteps, select, topoOrder, sh,
   legs, targets, legsNamed, runsOnFor, runsOnForLegs, engineHomeForLeg, blobulateHomeForLeg,
   defaultContext,

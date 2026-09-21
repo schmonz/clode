@@ -291,16 +291,24 @@ function renderFleet(list, legTokens, tier) {
 
 // ---- the page --------------------------------------------------------------------------------
 
-// The command a developer types, DERIVED rather than asserted. `./build` is the entry point
-// this graph exists to serve, and the page names it either way — but a page that says "run
-// ./build" in a checkout that has no such file is a lie the first reader finds, which is
-// precisely the failure mode this whole task is a reaction to. So when the file is not there
-// the page says so in one line and names the command that does work today; the line
-// disappears by itself the moment `./build` is committed, and gate 4 makes regenerating it
-// non-optional.
+// The command a developer types, DERIVED rather than asserted. The entry point is what this
+// graph exists to serve, and the page names it either way — but a page that says "run it" in
+// a checkout that has no such file is a lie the first reader finds, which is precisely the
+// failure mode this whole task is a reaction to. So when the file is not there the page says
+// so in one line and names the command that does work today; the line disappears by itself
+// the moment the entry point is committed, and gate 4 makes regenerating it non-optional.
+//
+// IT MUST BE A FILE, AND THE NAME MUST COME FROM THE GRAPH. Both halves of that sentence are
+// bugs this function already shipped. It asked about `build`, spelled here as a literal, and
+// `build/` is a DIRECTORY in every working checkout — so `isFile()` answered false for a
+// reason that had nothing to do with the entry point, and the page announced that its own
+// front door "is not in this checkout yet" on a day it was right there. The name now comes
+// from build-graph.cjs's ENTRY_REL (which is why it is `build.sh`: a file cannot share a name
+// with build/ on a case-insensitive filesystem), and `isFile()` stays, because the directory
+// it sits beside is exactly what a laxer existence check would find.
 function entryPointPresent(repo) {
   try {
-    return fs.statSync(path.join(repo || REPO, 'build')).isFile();
+    return fs.statSync(path.join(repo || REPO, G.ENTRY_REL)).isFile();
   } catch {
     return false;
   }
@@ -345,13 +353,14 @@ function renderAll(opts) {
     '',
     '# Building clode',
     '',
-    `\`./build\` turns a clean clone into a working \`${out}\` — the builder this repo ships.`,
+    `\`./${G.ENTRY_REL}\` turns a clean clone into a working \`${out}\` — the builder this `
+      + 'repo ships.',
     'It is the only command a developer needs, and everything below is drawn from the one',
     `place that declares what it does: \`${GRAPH_REL}\`.`,
     '');
   if (!here) {
-    p(`> \`./build\` is not in this checkout yet. Until it lands, the same run is`,
-      `> \`node ${RUNNER_REL}\`, which is what \`./build\` will exec.`,
+    p(`> \`./${G.ENTRY_REL}\` is not in this checkout yet. Until it lands, the same run is`,
+      `> \`node ${RUNNER_REL}\`, which is what \`./${G.ENTRY_REL}\` will exec.`,
       '');
   }
   p(`The engine — a patched [txiki.js](https://github.com/saghul/txiki.js) — is an INTERIOR`,

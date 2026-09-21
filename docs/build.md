@@ -4,12 +4,9 @@
 
 # Building clode
 
-`./build` turns a clean clone into a working `clode-native` — the builder this repo ships.
+`./build.sh` turns a clean clone into a working `clode-native` — the builder this repo ships.
 It is the only command a developer needs, and everything below is drawn from the one
 place that declares what it does: `scripts/build-graph.cjs`.
-
-> `./build` is not in this checkout yet. Until it lands, the same run is
-> `node scripts/build-runner.cjs`, which is what `./build` will exec.
 
 The engine — a patched [txiki.js](https://github.com/saghul/txiki.js) — is an INTERIOR
 node of this graph, not something a developer builds by hand. `quaude` is what the

@@ -6,7 +6,7 @@
 // with a syntax highlighter: it drifts the moment the build changes, in exactly the silent
 // way BACKLOG.md:4595 names ("a fourth hand-maintained list of what the build does"). The
 // only thing that keeps a declaration TRUE is a build that fails when it is false. So this
-// file is the one place `./build` and CI turn the graph into a sequence of commands, and it
+// file is the one place `./build.sh` and CI turn the graph into a sequence of commands, and it
 // treats every step's `inputs` and `outputs` as an assertion rather than as documentation.
 //
 // THE TWO BOUNDARY GATES, and the incidents behind them:
@@ -106,7 +106,7 @@ function stepLine(step, ms, count) {
 //
 // THE CASE THIS WAS WRITTEN FOR, now closed. scripts/engine-recipe.cjs was ESM using
 // `import.meta` until 2026-09-21, so under tjs `engine.source`'s inputs and count and
-// `engine.compile`'s inputs were UNANSWERABLE and a node-free `./build` stopped at the first
+// `engine.compile`'s inputs were UNANSWERABLE and a node-free `./build.sh` stopped at the first
 // engine step. It is CommonJS now and the whole graph plans under the shim
 // (test/build-graph.test.cjs compares the tjs plan to the node plan, count for count). The
 // wrapping stays: it is about ANY derivation refusing, not about that one file, and the
