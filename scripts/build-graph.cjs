@@ -655,6 +655,12 @@ function observedNodeRouteFindings(inputs) {
       programs: posix.map((c) => c.file),
       windowsPrograms: win.map((c) => c.file),
       entries: argvEntries(nodePosix),
+      // THE WINDOWS ARGV TOO, and it is not symmetry for its own sake. runBuildTjs's win32
+      // branch is the ONLY place `scripts/build-tjs.cjs` is named at all, so without this
+      // field the engine phase's entry point is invisible to anything asking the graph what
+      // the build shells out to -- and test/build-graph-ci.test.cjs asks exactly that, to
+      // derive the CI call sites it must refuse rather than keeping a list of them.
+      windowsEntries: argvEntries(nodeWin),
     });
 
     if (nodePosix.length && !declared.has(s.id)) {

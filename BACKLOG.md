@@ -397,30 +397,54 @@ a running `clode-native`/`quaude` blobulates over ITSELF. It wants its own accep
 of the binary executing while it is rewritten, surviving), not a drive-by copy of the engine
 fix.
 
-## Gate 3 catches a typo'd step id, not a bypassed graph (2026-09-21)
+## Gate 3 catches a typo'd step id, not a bypassed graph (2026-09-21) — CLOSED 2026-09-21
 
-`test/build-graph-ci.test.cjs` enforces that every CI call site NAMING a step id names one the
+CLOSED by `--needs assume` (scripts/build-runner.cjs) plus the widened gate in
+`test/build-graph-ci.test.cjs`. What follows is kept because the reproduction is now that
+gate's own control and its `a bare run: appended to a REAL workflow is seen` test; a future
+narrowing has to make one of those go red.
+
+`test/build-graph-ci.test.cjs` enforced that every CI call site NAMING a step id names one the
 graph declares. The wider property — *a call site that spells out a command instead of naming a
-step is a step the graph never hears about* — is NOT enforced, and the file header used to claim
-it was. The header is corrected; the property is here.
+step is a step the graph never hears about* — was NOT enforced, and the file header used to
+claim it was.
 
 **The reproduction (final whole-branch review, run against the real file).** Append to
 `.github/actions/build-leg/action.yml`:
 
     run: node scripts/build-tjs.cjs --regen-only
 
-`node --test test/build-graph-ci.test.cjs` -> **4 pass, 0 fail**. Nothing sees it.
+`node --test test/build-graph-ci.test.cjs` -> **4 pass, 0 fail**. Nothing saw it.
 
-**Why a wider gate cannot be green today.** Six call sites are still un-converted, and they
-share one blocker: `--only engine.compile` selects that step AND its transitive `needs`, so it
-drags `engine.bytecode` and `engine.source` into containers and guests that cannot run a source
-phase. A gate that COUNTED un-converted sites would be red by design until that is resolved.
+**Why a wider gate could not be green.** Six call sites were un-converted, and they shared one
+blocker: `--only engine.compile` selects that step AND its transitive `needs`, so it drags
+`engine.bytecode` and `engine.source` into containers and guests that cannot run a source phase.
 
-**The parked decision (the user's).** Two options, not costed here: (a) a runner mode that runs
-the NAMED step alone, leaving its inputs to a previous phase — which means the input assertions
-have to stay meaningful on a machine that did not build them; or (b) a separate guest-side
-compile step that declares the already-complete tree as its input. When one lands, the six sites
-convert and the wider rule belongs in that gate's `scan`, with the header paragraph deleted.
+**The decision (the user's), and what landed.** Of the two options — (a) a runner mode that runs
+the NAMED step alone, or (b) a separate guest-side compile step declaring the already-complete
+tree as its input — the user chose (a), *"if there's a choice between duplication and not, I
+agree, we must avoid duplication"*: (b) would put a second declaration of the same work in the
+graph, which is the disease the graph exists to cure.
+
+`./build.sh --only <id> --needs assume` runs the named step alone and still REFUSES an absent
+declared input, with the same greppable message shape — the refusal is what makes the mode safe
+and is the whole reason (a) beats (b). The selection lives in `build-graph.cjs`'s `select`, so
+the runner's synthetic controls drive the same selector a real build does.
+
+The gate's `scan` now DERIVES the engine phase's invocation spellings by observing each engine
+step's `run` with a recording exec (`observedNodeRouteFindings`), walks every `.yml` under
+`.github/` rather than one path, and refuses any line that invokes one of them. Its allowlist is
+empty: all ten sites across three files converted — six in `build-leg/action.yml`, plus
+`cross-blobulate/action.yml` and `workflows/repro.yml`. The Windows halves name step ids too,
+through `node scripts/build-runner.cjs --only <id>`, so the per-platform split now lives in
+`build-graph.cjs`'s `runBuildTjs` (the one place that already discloses it to docs/build.md)
+rather than in YAML.
+
+**What it exposed on the way.** `defaultContext`'s `engine` ignored `CLODE_TJS_OUT`, which every
+leg sets and which `build-tjs.cjs` installs to — so `engine.compile` declared its output at
+platform-tag's default, a path no CI build writes, and the runner's output check would have
+refused a perfectly good engine. Fixed in the same commit; it had never bitten because no leg
+ran the graph.
 
 ## Smaller things the build-graph review found and left (2026-09-21)
 

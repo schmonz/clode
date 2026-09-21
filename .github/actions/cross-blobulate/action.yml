@@ -26,7 +26,13 @@ runs:
         CLODE_TJS_FFI: 'off'
       run: |
         set -euo pipefail
-        node scripts/build-tjs.cjs   # full native build into a SEPARATE tree
+        # A STEP ID, WITH THE DEFAULT `--needs` (runner-step-mode, 2026-09-21): this is
+        # the one engine call site that really does want the WHOLE engine subgraph, so
+        # `--only engine.compile` builds engine.source and engine.bytecode first. Nothing
+        # here ran before it — CLODE_TJS_VENDOR/CLODE_TJS_OUT above point at a separate
+        # tree that this step creates from nothing. The graph declares engine.compile's
+        # output at CLODE_TJS_OUT, which is what the `test -x` below asserts by hand.
+        ./build.sh --only engine.compile   # full native build into a SEPARATE tree
         test -x "${{ runner.temp }}/host-tjs-out/tjs"
     - name: Cross-blobulate the self-contained builder
       shell: bash

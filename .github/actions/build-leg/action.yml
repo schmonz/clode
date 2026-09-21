@@ -538,11 +538,28 @@ runs:
       # legs, whose own target is a different machine entirely — so the engine that must
       # execute here is this runner's, which uname names correctly on both POSIX runner
       # families.
+      #
+      # IT NAMES A STEP ID, NOT A COMMAND (runner-step-mode, 2026-09-21). The graph
+      # declares `engine.source` — the patch stack + the txiki JS bundles, runsOn host,
+      # needing nothing — and this step asks for it BY NAME on both platforms. The
+      # platform split above did not go away; it MOVED into scripts/build-graph.cjs's
+      # runBuildTjs, which is the one place that decides whether the engine phase goes
+      # through the POSIX wrapper or through node, and which docs/build.md's Windows
+      # caveat is generated from. What is different here is only WHO the split is
+      # declared by. An id the graph does not declare is refused before anything runs,
+      # and test/build-graph-ci.test.cjs now refuses a call site that spells the command
+      # out at all — the wider rule that used to be impossible to enforce.
+      #
+      # WHY TWO SPELLINGS AND NOT ONE. ./build.sh is POSIX sh and is the spelling for a
+      # machine that must build without a node; `node scripts/build-runner.cjs` is the
+      # spelling for one that has to stay on node. Windows takes the second for the two
+      # reasons recorded above, and it costs no node that was not already there (this job
+      # runs npm ci and five ESM entry points on that runner).
       run: |
         if [ "${RUNNER_OS:-}" = Windows ]; then
-          node scripts/build-tjs.cjs --source-only
+          node scripts/build-runner.cjs --only engine.source
         else
-          scripts/build-tjs-boot.sh source-only --source-only
+          ./build.sh --only engine.source
         fi
 
     - name: Install the runtime dep closure (blobulate member inputs)
@@ -713,11 +730,21 @@ runs:
       # `$RUNNER_OS` and not a ${{ }} expression: this step already carries fifteen env
       # lines, and the branch is about the machine the shell is running on, which the
       # shell can see for itself.
+      #
+      # IT NAMES A STEP ID, NOT A COMMAND (runner-step-mode, 2026-09-21), and `--needs
+      # assume` is what made that possible here. The graph declares `engine.compile`
+      # needing `engine.bytecode` needing `engine.source`, and the source phase already
+      # ran on this runner in the step far above — so the DEFAULT `--only engine.compile`
+      # would run it a second time. `--needs assume` says another part of this leg already
+      # satisfied those needs; the step's declared INPUTS (the patched tree's
+      # src/bundles/c, plus every engine-recipe source) are still checked before it runs,
+      # so a tree that never arrived is a refusal naming the path rather than a cmake
+      # failure ten minutes later.
       run: |
         if [ "${RUNNER_OS:-}" = Windows ]; then
-          node scripts/build-tjs.cjs --build-only
+          node scripts/build-runner.cjs --only engine.compile --needs assume
         else
-          scripts/build-tjs-boot.sh native-host --build-only
+          ./build.sh --only engine.compile --needs assume
         fi
 
     # The alpine leg is CONTAINERIZED (docker run --rm), so $HOME/.cache/clode
@@ -794,7 +821,13 @@ runs:
           # is worth the most and a cold compile costs the most.)
           export CCACHE_DIR="${{ steps.mode.outputs.ccachedir }}"
           sh scripts/ci-ccache.sh provide ${{ inputs.leg }}
-          scripts/build-tjs-boot.sh alpine-guest --build-only
+          # A STEP ID, AND `--needs assume` IS LOAD-BEARING HERE (runner-step-mode,
+          # 2026-09-21). This container has no node and cannot run a source phase: the
+          # patched tree was constructed on the RUNNER and is visible here only because
+          # /home/runner/work is bind-mounted. The default `--only engine.compile` would
+          # drag engine.bytecode and engine.source in behind it. `--needs assume` runs the
+          # compile alone and still refuses if the synced-in tree is not there.
+          ./build.sh --only engine.compile --needs assume
           sh scripts/ci-ccache.sh report ${{ inputs.leg }}
 
     # Cross-build the engine inside a toolchain image on the ubuntu runner —
@@ -935,7 +968,10 @@ runs:
           export CLODE_CACHE=/w/.matrix/bootstrap-cache
           export CLODE_BOOTSTRAP_HOST_TARGET="$HOST_TARGET"
           sh scripts/ci-ccache.sh provide "$LEG"
-          scripts/build-tjs-boot.sh cross-container --build-only
+          # A STEP ID + --needs assume, same shape and same reason as the alpine guest:
+          # no node in this image, and the patched tree arrived at /scratch from the
+          # runner rather than being built here.
+          ./build.sh --only engine.compile --needs assume
           sh scripts/ci-ccache.sh report "$LEG"
         '
 
@@ -989,7 +1025,11 @@ runs:
       # CLODE_TJS_OUT below is the m68k OUTPUT DIRECTORY and is empty on a tjs-cache miss
       # (which is the only time this step runs), so it is never mistaken for a candidate
       # engine — see scripts/bootstrap-engine.sh's is_engine_file.
-      run: scripts/build-tjs-boot.sh netbsd-cross --build-only
+      #
+      # A STEP ID + --needs assume (runner-step-mode, 2026-09-21): the source phase ran on
+      # this same runner in the step far above, and only the COMPILER this step drives is
+      # a cross one.
+      run: ./build.sh --only engine.compile --needs assume
 
     # ---- the ccache, reported and saved ----------------------------------------------
     #
@@ -1518,7 +1558,12 @@ runs:
               echo "that would pass while proving nothing."
               exit 1
             fi
-            scripts/build-tjs-boot.sh vm-guest --build-only
+            # A STEP ID + --needs assume (runner-step-mode, 2026-09-21). This guest's
+            # ONLY channel is the workspace rsync: the patched tree was constructed on
+            # the runner and came in that way, and this machine could not run a source
+            # phase even if it were asked to. The compile's declared inputs are still
+            # checked here, so a tree the rsync truncated is a refusal naming the path.
+            ./build.sh --only engine.compile --needs assume
           else
             echo "tjs cache hit: skipping the in-guest build"
           fi

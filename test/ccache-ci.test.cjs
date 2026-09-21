@@ -21,6 +21,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { defineGuard, guardTests } = require('./guard.cjs');
+const G = require('../scripts/build-graph.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 const ACTION = path.join(REPO, '.github', 'actions', 'build-leg', 'action.yml');
@@ -68,12 +69,30 @@ function splitSteps(text) {
 // compile nothing and misses the point entirely.
 const codeLines = (text) => text.split('\n').filter((l) => !/^\s*#/.test(l));
 
-// The two ways an engine object file comes to exist in this matrix. `--build-only` is
-// scripts/build-tjs.cjs's compile phase, however it is reached (directly, or through
-// scripts/build-tjs-boot.sh); spike/quickjs/qemu/ci-guest-bake.sh is the netbsd-sparc
-// leg's hand-written in-guest compile, which never goes through build-tjs.cjs at all and
-// would otherwise be the one compiling leg class this guard could not see.
-const COMPILES = [/--build-only/, /ci-guest-bake\.sh/];
+// The two ways an engine object file comes to exist in this matrix.
+//
+// THE FIRST IS ASKED OF THE GRAPH (runner-step-mode, 2026-09-21). It used to be the
+// literal `--build-only`, which stopped appearing in this YAML the moment every engine
+// call site started naming a step id instead of spelling the command out — and a literal
+// that matches nothing turns a seven-step population into one, which is what this guard's
+// floor caught. The compiling step is the engine-phase step whose declared OUTPUT is the
+// engine binary; that is a property of the graph, so a renamed step moves this rule with
+// it rather than leaving it quietly sweeping two steps and calling it clean.
+//
+// The second, spike/quickjs/qemu/ci-guest-bake.sh, is the netbsd-sparc leg's hand-written
+// in-guest compile, which never goes through build-tjs.cjs at all and would otherwise be
+// the one compiling leg class this guard could not see.
+const COMPILE_STEP_ID = (() => {
+  const ctx = G.defaultContext();
+  const step = G.steps().find((s) => s.phase === 'engine' && s.outputs(ctx).includes(ctx.engine));
+  if (!step) {
+    throw new Error('ccache-ci: no engine-phase step declares the engine binary as its '
+      + 'output, so this guard cannot tell which CI steps compile. Do not hardcode the id.');
+  }
+  return step.id;
+})();
+const COMPILES = [new RegExp(`--only ${COMPILE_STEP_ID.replace(/[.]/g, '\\.')}\\b`),
+  /ci-guest-bake\.sh/];
 
 // ---------------------------------------------------------------------------
 // GUARD 1 — every compiling step either wires ccache or is exempt WITH A REASON.
@@ -144,9 +163,10 @@ function scanCoverage({ steps }) {
 
 const coverage = defineGuard({
   name: 'ccache-ci-leg-coverage',
-  // Floor 5: five `--build-only` call sites plus the two sparc steps is 7 today. Set just
-  // under, so a split that stops seeing a leg class goes BROKEN rather than reporting a
-  // clean sweep of two steps.
+  // Floor 5: five call sites naming the compile step plus the two sparc steps is 7 today.
+  // Set just under, so a split that stops seeing a leg class goes BROKEN rather than
+  // reporting a clean sweep of two steps. It did exactly that when the call sites stopped
+  // spelling `--build-only` and this rule was still looking for it.
   floor: 5,
   read: () => ({ steps: splitSteps(fs.readFileSync(ACTION, 'utf8')) }),
   scan: scanCoverage,
@@ -157,7 +177,7 @@ const coverage = defineGuard({
     steps: [...splitSteps(fs.readFileSync(ACTION, 'utf8')), {
       name: 'Build tjs (a new leg class nobody wired)',
       text: '    - name: Build tjs (a new leg class nobody wired)\n'
-        + '      run: node scripts/build-tjs.cjs --build-only\n',
+        + `      run: ./${G.ENTRY_REL} --only ${COMPILE_STEP_ID} --needs assume\n`,
     }],
   }),
 });

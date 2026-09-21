@@ -144,8 +144,17 @@ jobs:
       # a cache restore is exactly the kind of "same inputs?" assumption this
       # workflow exists to stop trusting, and the clone is a few minutes against
       # a job that is mostly two engine builds anyway.
+      # IT NAMES A STEP ID (runner-step-mode, 2026-09-21). `engine.source` is the graph's
+      # name for exactly this work, and naming it means an id the graph does not declare
+      # is refused here too. Through the RUNNER rather than ./build.sh, and that is not an
+      # oversight: this workflow's windows-amd64 / windows-arm64 legs are dispatchable
+      # (test/repro-verdicts.cjs, cadence on-demand), the entry point is POSIX sh, and
+      # nothing has ever run a POSIX sh wrapper on a win32 runner. The runner is CommonJS
+      # and node is guaranteed here by actions/setup-node above; which interpreter the
+      # engine phase then shells out to is scripts/build-graph.cjs's decision, per
+      # platform, not this file's.
       - name: Construct the patched tjs tree from pins
-        run: node scripts/build-tjs.cjs --source-only
+        run: node scripts/build-runner.cjs --only engine.source
 
       - name: Build twice and compare the whole binary
         env:

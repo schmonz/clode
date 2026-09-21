@@ -25,6 +25,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { defineGuard, guardTests } = require('./guard.cjs');
 const { shTest, committedExecBit } = require('./posix-host.cjs');
+const G = require('../scripts/build-graph.cjs');
 
 const REPO = path.join(__dirname, '..');
 const BOOT = path.join(REPO, 'scripts', 'build-tjs-boot.sh');
@@ -222,11 +223,27 @@ shTest('it runs identically under dash', (t) => {
 // How many legs still run build-tjs.cjs under node, and where.
 // ---------------------------------------------------------------------------
 
-// The four call sites in .github/actions/build-leg/action.yml that are DELIBERATELY not
-// flipped yet, each with the reason, keyed by the step that contains them (a line number
-// would rot on the next edit). This table is the whole point: it shrinks, and it cannot
-// go stale in either direction — an entry with no matching site is a phantom and fails,
-// and a site with no entry is an unexplained node and fails. The sequencing is
+// WHAT "THE CALL SITE" MEANS NOW (runner-step-mode, 2026-09-21). Every engine call site in
+// this action NAMES A GRAPH STEP; none spells out a command, and test/build-graph-ci.test.cjs
+// refuses one that does. So the two spellings this file's tables are about have MOVED, and
+// the property they pin has not:
+//
+//   under a bootstrap engine   `./build.sh --only <id> [--needs assume]` — POSIX sh, the
+//                              spelling for a machine that must build with no node. It
+//                              resolves an engine and runs the graph under it, and the
+//                              graph is what invokes scripts/build-tjs-boot.sh.
+//   under node                 `node scripts/build-runner.cjs --only <id>` — the spelling
+//                              for a machine that has to stay on node.
+//
+// The wrapper itself now has exactly ONE caller in the whole repo (build-graph.cjs's
+// runBuildTjs), which is why the "three subtly different spellings" rule below is about the
+// ENTRY POINT's idiom instead: that is where a per-call-site invention could appear today.
+//
+// The call sites in .github/actions/build-leg/action.yml that are DELIBERATELY not flipped
+// yet, each with the reason, keyed by the step that contains them (a line number would rot
+// on the next edit). This table is the whole point: it shrinks, and it cannot go stale in
+// either direction — an entry with no matching site is a phantom and fails, and a site with
+// no entry is an unexplained node and fails. The sequencing is
 // .superpowers/sdd/node-removal-bootstrap-design.md §3, steps 3-6.
 // Wave 1 flipped three sites and deleted their three entries from here, one commit each;
 // what is left is what is still true, never a description of intent.
@@ -244,8 +261,9 @@ const NOT_YET_FLIPPED = {};
 // scripts/build-tjs.cjs` would read as an unexplained node.
 //
 // The entry costs what it should: the step must contain BOTH spellings. Delete the
-// wrapper half and the split is a fiction, which is how a half-flip silently becomes an
-// un-flip; delete the node half and the step is fully flipped and the entry is a phantom.
+// bootstrap half (`./build.sh`) and the split is a fiction, which is how a half-flip
+// silently becomes an un-flip; delete the node half and the step is fully flipped and the
+// entry is a phantom.
 const SPLIT_BY_PLATFORM = {
   'Construct the patched tjs tree from pins (host, native speed)':
     'step 6, POSIX ONLY. The blocker is gone: scripts/provision-bundle-inputs.sh fetches '
@@ -272,30 +290,39 @@ const SPLIT_BY_PLATFORM = {
     + 'leg proving the windows-amd64 slice resolves, passes the floor probe and builds.',
 };
 
-// Which step each `node scripts/build-tjs.cjs` lives in — derived by walking back to the
-// nearest `- name:`, never hand-listed.
-function rawNodeSites(yaml) {
-  const out = [];
-  let step = '(before any step)';
-  for (const line of yaml.split('\n')) {
-    const m = /^\s*-\s+name:\s*(.+?)\s*$/.exec(line);
-    if (m) step = m[1];
-    if (/(^|\s)node\s+scripts\/build-tjs\.cjs/.test(line)) out.push(step);
-  }
-  return out;
-}
-
-// The same walk for the wrapper's call sites: which step each one lives in.
-function bootSiteSteps(yaml) {
+// A walk back to the nearest `- name:`, so a site is attributed to the STEP that contains
+// it and never to a line number, which would rot on the next edit.
+function sitesMatching(yaml, re) {
   const out = [];
   let step = '(before any step)';
   for (const line of yaml.split('\n')) {
     const m = /^\s*-\s+name:\s*(.+?)\s*$/.exec(line);
     if (m) step = m[1];
     const t = line.trim().replace(/^run:\s+/, '');
-    if (t.includes('build-tjs-boot.sh') && !t.startsWith('#')) out.push(step);
+    if (!t.startsWith('#') && re.test(t)) out.push(step);
   }
   return out;
+}
+
+// Which step runs the engine build UNDER NODE. The runner is the graph's own entry point
+// for a machine that has to keep one, so this is the same question it always was — the
+// command it names has changed, not the property.
+const NODE_SITE = /(^|\s)node\s+scripts\/build-runner\.cjs/;
+function rawNodeSites(yaml) {
+  return sitesMatching(yaml, NODE_SITE);
+}
+
+// And which step runs it under a bootstrap engine: the POSIX entry point, whose filename
+// comes from the graph so a rename moves this rule with it.
+//
+// THE LEADING `./` IS REQUIRED, and that is a narrowing a false finding taught (this
+// commit): NetBSD's OWN build.sh is named three times in this action's `description:`
+// fields ("cross-build the engine with a NetBSD build.sh toolchain"), and a rule that
+// matched the bare filename read three paragraphs of prose as three malformed call sites.
+// Every real invocation spells the path, prose never does.
+const BOOTED_SITE = new RegExp(`(^|\\s)\\./${G.ENTRY_REL.replace(/[.]/g, '\\$&')}(\\s|$)`);
+function bootSiteSteps(yaml) {
+  return sitesMatching(yaml, BOOTED_SITE);
 }
 
 // Which steps SET each of the two bootstrap target knobs. Same walk again; a step is
@@ -330,15 +357,15 @@ function stepsOf(yaml) {
   return out;
 }
 
-// Call sites only, and the COMMAND only. A YAML comment that names the wrapper is prose
-// about it, not an invocation of it, and demanding the idiom's shape of prose would make
-// the rule unwritable-about; a one-line `run:` step carries the YAML key on the same line
-// as the command. Both narrowings were found by the rule firing on a real flip, and
-// neither loosens what is pinned: the command text itself still has to be identical
-// modulo the site label and the mode flag.
+// Call sites only, and the COMMAND only. A YAML comment that names the entry point is
+// prose about it, not an invocation of it, and demanding the idiom's shape of prose would
+// make the rule unwritable-about; a one-line `run:` step carries the YAML key on the same
+// line as the command. Both narrowings were found by the rule firing on a real flip, and
+// neither loosens what is pinned: the command text itself still has to be identical modulo
+// the step id and the needs mode.
 function bootSites(yaml) {
   return yaml.split('\n').map((l) => l.trim().replace(/^run:\s+/, ''))
-    .filter((l) => l.includes('build-tjs-boot.sh') && !l.startsWith('#'));
+    .filter((l) => !l.startsWith('#') && BOOTED_SITE.test(l));
 }
 
 const BASHISMS = [
@@ -347,10 +374,13 @@ const BASHISMS = [
   [/\$\{[A-Za-z_][A-Za-z0-9_]*\[/, 'array subscript'],
 ];
 
-// ONE idiom, three times: `scripts/build-tjs-boot.sh <site> <flag>`. A per-call-site
-// invention is how three subtly different spellings end up in one file and only one of
-// them is ever tested.
-const IDIOM = /^scripts\/build-tjs-boot\.sh [a-z0-9][a-z0-9-]* --[a-z-]+only$/;
+// ONE idiom, six times: `./build.sh --only <step-id> [--needs assume]`. A per-call-site
+// invention is how subtly different spellings end up in one file and only one of them is
+// ever tested. The step id and the two `needs` modes come from the graph, so a renamed step
+// or a third mode moves this rule instead of leaving it quietly matching nothing.
+const IDIOM = new RegExp(`^\\./${G.ENTRY_REL.replace(/[.]/g, '\\$&')}`
+  + ` --only (?:${G.steps().map((s) => s.id.replace(/[.]/g, '\\.')).join('|')})`
+  + `(?: --needs (?:${G.NEEDS.join('|')}))?(?:\\s+#.*)?$`);
 
 const GUARD = defineGuard({
   name: 'build-tjs-invocation-shape',
@@ -384,7 +414,9 @@ const GUARD = defineGuard({
 
     const bad = bootSites(i.yaml).filter((l) => !IDIOM.test(l));
     rule(bad.length === 0,
-      `these build-tjs-boot.sh call sites do not use the one idiom: ${bad.join(' / ')}`);
+      `these ./${G.ENTRY_REL} call sites do not use the one idiom `
+      + `(\`./${G.ENTRY_REL} --only <step-id> [--needs ${G.NEEDS.join('|')}]\`): `
+      + `${bad.join(' / ')}`);
 
     // WHERE THE RESOLVER'S CACHE ACTUALLY IS. Every actions/cache entry for a bootstrap
     // slice names a directory scripts/bootstrap-engine.sh writes, and that path is
@@ -436,8 +468,16 @@ const GUARD = defineGuard({
     // The expectation is DERIVED from that step's own gate plus the platform split, not
     // spelled here, so narrowing the site narrows this too.
     const allSteps = stepsOf(i.yaml);
+    // WHICH STEP IS THE SOURCE PHASE, asked of the graph rather than of a site label that
+    // no longer exists: the engine-phase step that needs nothing is the one that runs on
+    // the runner for every leg. A renamed step moves this; a hand-written 'source-only'
+    // would have gone quietly blind the moment the call site named an id instead.
+    const srcId = G.steps().find((s) => s.phase === 'engine' && !s.needs.length).id;
     const srcOnly = allSteps.find((s) =>
-      s.body.some((l) => l.trim().replace(/^run:\s+/, '').startsWith('scripts/build-tjs-boot.sh source-only')));
+      s.body.some((l) => {
+        const t = l.trim().replace(/^run:\s+/, '');
+        return !t.startsWith('#') && BOOTED_SITE.test(t) && t.includes(`--only ${srcId}`);
+      }));
     const expectedIf = srcOnly ? `${srcOnly.if} && runner.os != 'Windows'` : null;
     const hostSide = allSteps.filter((s) => s.body.some((l) =>
       /^\s*id:\s*bootstrap-tag\s*$/.test(l) || /^\s*path:\s*~\/\.cache\/clode\/bootstrap/.test(l)));
@@ -453,9 +493,9 @@ const GUARD = defineGuard({
     const booted = bootSiteSteps(i.yaml);
     const unexplained = raw.filter((s) => !(s in NOT_YET_FLIPPED) && !(s in SPLIT_BY_PLATFORM));
     rule(unexplained.length === 0,
-      `these steps still run build-tjs.cjs under node with no recorded reason: `
-      + `${unexplained.join(' / ')}. Either flip them onto scripts/build-tjs-boot.sh or `
-      + 'record why not.');
+      `these steps still run the engine build under node with no recorded reason: `
+      + `${unexplained.join(' / ')}. Either flip them onto ./${G.ENTRY_REL} (which resolves `
+      + 'a bootstrap engine and runs the graph under it) or record why not.');
 
     // WHICH KNOB, AND THEREFORE WHO OWES THE ACCEPTANCE. A step that runs the wrapper is
     // a step on the machine that will EXECUTE the engine, and such a machine must name
@@ -476,7 +516,8 @@ const GUARD = defineGuard({
 
     const fiction = Object.keys(SPLIT_BY_PLATFORM).filter((s) => !booted.includes(s));
     rule(fiction.length === 0,
-      `these steps claim a per-platform SPLIT but never run the wrapper: `
+      `these steps claim a per-platform SPLIT but never run the engine build under a `
+      + 'bootstrap engine: '
       + `${fiction.join(' / ')}. A split whose flipped half is missing is an un-flip with `
       + 'a nicer name — the whole reason the entry has to cost both spellings.');
     // The alpine containers' ONLY node consumer was scripts/build-tjs.cjs, so flipping
@@ -495,7 +536,7 @@ const GUARD = defineGuard({
     const phantom = [...Object.keys(NOT_YET_FLIPPED), ...Object.keys(SPLIT_BY_PLATFORM)]
       .filter((s) => !raw.includes(s));
     rule(phantom.length === 0,
-      `NOT_YET_FLIPPED names steps that no longer run build-tjs.cjs under node: `
+      `NOT_YET_FLIPPED names steps that no longer run the engine build under node: `
       + `${phantom.join(' / ')}. A carve-out that outlives its reason is how an exception `
       + 'list rots; delete the entry when you flip the site.');
     return { findings: f, examined };
@@ -505,10 +546,10 @@ const GUARD = defineGuard({
   control: () => ({
     sh: '#!/bin/bash\nif [[ -n "$x" ]]; then :; fi\necho no-verdict-here\n',
     executable: false,
-    yaml: '    - name: A brand new step\n      run: node scripts/build-tjs.cjs --build-only\n'
+    yaml: '    - name: A brand new step\n      run: node scripts/build-runner.cjs --only engine.compile\n'
       + '    - name: The source phase\n      if: never\n'
-      + '        run: scripts/build-tjs-boot.sh source-only --source-only\n'
-      + '    - name: Sloppy\n      run: bash scripts/build-tjs-boot.sh --build-only\n'
+      + `        run: ./${G.ENTRY_REL} --only engine.source\n`
+      + `    - name: Sloppy\n      run: bash ./${G.ENTRY_REL} --build-only\n`
       + '        export CLODE_BOOTSTRAP_TARGET=linux-i386\n'
       + '        packages: build-base cmake nodejs\n'
       + '        path: ${{ github.workspace }}/.matrix/bootstrap-cache/${{ steps.bootstrap-tag.outputs.tag }}/${{ steps.name.outputs.target }}\n'
