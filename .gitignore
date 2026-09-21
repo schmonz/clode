@@ -30,3 +30,10 @@ docs/superpowers/
 spike/quickjs/vendor/
 
 bench/results/
+
+# The builder `./build.sh` produces at the repo root (`clode-native`, `clode-native.exe` on
+# windows — libexec/clode-build.cjs's resolveBuildOut names it). 27MB of build output that
+# `git add -A` would otherwise take, in a repo whose `git gc` already dies on stray files
+# (see [[git-gc-fails-appledouble]]). The name is anchored to the root so the tracked
+# test/clode-native.test.cjs is untouched.
+/clode-native*
