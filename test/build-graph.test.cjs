@@ -561,6 +561,54 @@ test('--needs is parsed off the command line, and rides through to the selection
     'the REAL graph, not a fixture: this is the selection CI asks for');
 });
 
+// THE RATCHET F1 IS PAYING FOR. `engine.compile`'s declared inputs were derived through
+// `git ls-files`, and `checkInputs` resolves them BEFORE the step runs — so every machine
+// that compiles the engine had to be able to run git, against a repository git was willing
+// to talk about. The midnightbsd guest ships none by written design, the cross containers
+// install a compiler and not a git, and every docker leg is root over a uid-1001 bind mount
+// (git's dubious-ownership refusal). Each would have been refused a tree that was handed to
+// it complete, because it could not enumerate a source recipe the compile never reads.
+//
+// Nothing could notice: the derivation worked perfectly on every machine anybody ran it on.
+// So the property is asserted where it is cheap — resolve EVERY declared step's inputs and
+// outputs in a child whose PATH is an empty directory. Any spawn of any program, for any
+// step, fails there. This is not about git: it is about a step's declared boundary being
+// answerable from the checkout alone, on the machine that was handed the checkout.
+//
+// SCOPED TO THE DERIVATION, NOT TO defaultContext(). Resolving WHICH MACHINE THIS IS costs
+// `sw_vers` on a mac and `uname` elsewhere (platform-tag.cjs), and that is a different
+// question with a different answer: those are in the base system of every platform in the
+// matrix, they are asked once for the whole run, and the answer is a name rather than a
+// file set. So the context is built HERE, where PATH is normal, and handed to the child as
+// plain strings — which is also what CI does, since every leg passes the target and the
+// output path in explicitly. What the child must then do with nothing on PATH is the thing
+// F1 got wrong: say what each step reads and writes.
+test('every step can say what its inputs and outputs are with NOTHING on PATH', () => {
+  const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-empty-path-'));
+  const base = G.defaultContext({});
+  const plain = {};
+  for (const [k, v] of Object.entries(base)) if (typeof v === 'string') plain[k] = v;
+  const probe = 'const G = require(process.argv[1]);\n'
+    + 'const ctx = G.defaultContext(JSON.parse(process.argv[2]));\n'
+    + 'const out = G.steps({ target: ctx.target }).map((s) => '
+    + '`${s.id} ${s.inputs(ctx).length} ${s.outputs(ctx).length}`);\n'
+    + 'process.stdout.write(out.join("\\n"));\n';
+  const r = spawnSync(process.execPath,
+    ['-e', probe, path.join(REPO, 'scripts', 'build-graph.cjs'), JSON.stringify(plain)],
+    { encoding: 'utf8', cwd: REPO, env: { ...process.env, PATH: emptyDir } });
+  fs.rmSync(emptyDir, { recursive: true, force: true });
+  assert.strictEqual(r.status, 0, 'resolving a declared boundary needed a program on PATH:\n'
+    + `${r.stderr}\nA step whose inputs cannot be named without shelling out is refused on `
+    + 'every machine that lacks the program — and the machines that most need --needs assume '
+    + '(alpine containers, cross images, VM guests) are exactly the ones carrying the least.');
+  const rows = r.stdout.trim().split('\n').map((l) => l.split(' '));
+  assert.strictEqual(rows.length, G.steps({}).length, 'the probe did not reach every step');
+  for (const [id, ins, outs] of rows) {
+    assert.ok(Number(ins) > 0, `${id} declared NO inputs, which is not an answer`);
+    assert.ok(Number(outs) > 0, `${id} declared NO outputs`);
+  }
+});
+
 // THE HOLE THE NAME-CHECKS CANNOT SEE (review, F2). A name-check cannot check a name that
 // is not there: `--needs asume` was refused, but `--needs` with the word dropped set
 // `o.needs = undefined`, which runGraph reads as "not supplied" and maps to the DEFAULT —
