@@ -923,13 +923,15 @@ const STEPS = [
 // that come from the code -- the entry points from nodeSteps() (the step's own `run`), the
 // resolution from the entry point's own source.
 //
-// IT REFUSES rather than answering an empty set, for bundleOutputNamesFrom's reason: a
-// derivation that can answer "nobody provisions anything" is indistinguishable from a
-// derivation that stopped reading, and this one's whole job is to say that a directory
-// nothing else in the graph mentions is real.
+// AN EMPTY ANSWER IS REFUSED -- by the GATE's form of it, `toolchainProvisionerIds`, for
+// bundleOutputNamesFrom's reason: a derivation that can answer "nobody provisions anything"
+// is indistinguishable from a derivation that stopped reading, and this one's whole job is
+// to say that a directory nothing else in the graph mentions is real. The graph itself uses
+// the non-refusing form, for the reason stated on the pair below.
 const TOOLCHAIN_CALL = /\btoolchainDir\s*\(/;
 
-// PURE, so a control can hand it entry points whose source never resolves a toolchain.
+// BOTH ARE PURE, so a control can hand either one entry points whose source never resolves
+// a toolchain.
 //
 // THE RULE AND THE REFUSAL ARE SEPARATE FUNCTIONS, and that is deliberate. The refusal
 // belongs to the GATE, not to the graph: a `steps()` that threw whenever this derivation
