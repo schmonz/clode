@@ -31,6 +31,7 @@ const FLOOR_CJS = 'scripts/engine-api-floor.cjs';
 const BAKE = 'spike/quickjs/qemu/ci-guest-bake.sh';
 const ACTION = '.github/actions/build-leg/action.yml';
 const BUILD_TJS = 'scripts/build-tjs.cjs';
+const CLODE_BUILD = 'libexec/clode-build.cjs';
 // engine-api-floor is CJS now: a plain require, no pathToFileURL/import() detour.
 const load = async () => require(path.join(repo, FLOOR_CJS));
 
@@ -102,7 +103,7 @@ test('the real floor passes on a locally built engine (skipped if none)', async 
 //
 // PURE: every check below is a presence/absence assertion against the three
 // already-read files (build-tjs.cjs, the build-leg action, the guest bake script).
-function scanEngineFloorConsumers({ buildTjsSrc, actionYml, bakeSrc }) {
+function scanEngineFloorConsumers({ buildTjsSrc, actionYml, bakeSrc, clodeBuildSrc }) {
   const findings = [];
   let examined = 0;
 
@@ -181,23 +182,48 @@ function scanEngineFloorConsumers({ buildTjsSrc, actionYml, bakeSrc }) {
     findings.push('the claim that started this whole guard ("canonical-LE: no regen needed") is back');
   }
 
+  // THE FOURTH CONSUMER, added for spec 2026-09-14 §7.2: `clode build`'s own front door.
+  // Everything above catches an engine that was BUILT wrong; this catches one that was
+  // RESOLVED wrong, which is the failure that cost two agents a chase apiece (default
+  // template resolution landing on a pre-2026-08-29 engine, surfacing ~900s later as
+  // `graph-meta: this engine does not report moduleMeta`). It is a consumer on exactly
+  // the same terms as the other three, so it is guarded on exactly the same terms:
+  // it must GENERATE its probe from the one list, never carry a second copy.
+  examined++;
+  if (!/require\('\.\.\/scripts\/engine-api-floor\.cjs'\)/.test(clodeBuildSrc)) {
+    findings.push('clode build no longer gets its engine capability gate from engine-api-floor.cjs');
+  }
+  examined++;
+  if (!/engineFloorCheckJs\(\)/.test(clodeBuildSrc)) {
+    findings.push('clode build no longer GENERATES its engine probe from the floor');
+  }
+  examined++;
+  if (!/OK_TOKEN/.test(clodeBuildSrc)) {
+    findings.push('clode build no longer compares the floor\'s own success token');
+  }
+  examined++;
+  if (/moduleMeta/.test(clodeBuildSrc) && !/graph-meta/.test(clodeBuildSrc)) {
+    findings.push('clode build has grown its own hand-written binding name — that is the second list this file exists to prevent');
+  }
+
   return { findings, examined };
 }
 
 const consumersGuard = defineGuard({
   name: 'engine-api-floor-consumers',
-  // 15 fixed presence/absence checks (examined++ once per check, unconditionally). The
+  // 19 fixed presence/absence checks (examined++ once per check, unconditionally). The
   // floor is the EXACT count ON PURPOSE (fix round 2, coordinator correction): floor is a
   // MINIMUM, so legitimate growth only ever raises `examined` above it — there is no
   // headroom to leave below the real count. Losing even ONE check from
   // scanEngineFloorConsumers is supposed to report BROKEN. A legitimate retirement drops
   // `examined`, this fires, and a human lowers the floor deliberately — that is the
   // intended path, not a bug.
-  floor: 15,
+  floor: 19,
   read: () => ({
     buildTjsSrc: read(BUILD_TJS),
     actionYml: read(ACTION),
     bakeSrc: read(BAKE),
+    clodeBuildSrc: read(CLODE_BUILD),
   }),
   scan: scanEngineFloorConsumers,
   // Models the exact regression this guard exists to catch: every consumer back
@@ -207,6 +233,8 @@ const consumersGuard = defineGuard({
     buildTjsSrc: 'typeof __tjs_fs_sync === "object" ? "tjs-shim-ok" : "tjs-shim-missing"',
     actionYml: 'typeof __tjs_fs_sync === "object" ? "tjs-shim-ok" : "tjs-shim-missing"',
     bakeSrc: 'echo "canonical-LE: no regen needed"',
+    // The build back to no engine gate at all: the door with the hole in it.
+    clodeBuildSrc: '// no engine capability gate here',
   }),
 });
 guardTests(consumersGuard);

@@ -26,9 +26,15 @@
 // every nicety. Each entry names the patch that provides it, so a failure points
 // at the build step that dropped it rather than at the symptom.
 //
-// DEV/CI TOOLING ONLY. Nothing on the `clode build` path imports this (quaude
-// must keep building on a host with no node at all): it emits plain JS text that
-// a bare tjs runs.
+// NO NODE-ONLY ANYTHING IN HERE. This used to say "dev/CI tooling only, nothing on
+// the `clode build` path imports this". That stopped being true when the build grew
+// its own front-door capability gate (libexec/clode-build.cjs, spec 2026-09-14 §7.2):
+// it requires this file to generate the probe it runs against the host engine, and
+// esbuild inlines it into the clode-main bundle. So the constraint the old sentence
+// was PROTECTING is now stricter, not gone — quaude must keep building on a host with
+// no node at all, and a blobulated clode runs this module under tjs's node-shim. Pure
+// stdlib and plain data: no npm, no child_process, nothing that only real node has.
+// What it EMITS is likewise plain JS text that a bare tjs runs.
 
 // kind: 'function' | 'object' (an 'object' entry also rejects null, which
 // `typeof` alone would happily call an object).

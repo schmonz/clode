@@ -1510,6 +1510,11 @@ async function clodeBuild(args, opts) {
     // builder needs nothing on disk); then the pinned tjs this repo builds
     // (scripts/build-tjs.cjs).
     let template = env.CLODE_TJS || null;
+    // WHICH resolution produced it. The capability gate below has to be able to say
+    // "this engine, chosen this way" — a refusal that names only a path leaves the
+    // reader guessing whether they set CLODE_TJS, inherited an embedded one, or got
+    // the default. Default resolution is the case that cost two agents a chase.
+    let templateWhy = template ? 'CLODE_TJS' : null;
     if (!template && vfs && vfs.manifest && vfs.manifest.role === 'builder' && vfs.files.get('template/tjs')) {
       // The embedded template is materialized to disk and spawned as the blobulate
       // WORKER. On Windows name it .exe so CreateProcess execs the PE
@@ -1537,8 +1542,9 @@ async function clodeBuild(args, opts) {
         if (!r.ok) return fail(`build: codesign of the embedded template failed:\n${r.error}`);
       }
       clodeLog(`clode: build: using the embedded tjs template -> ${template}`);
+      templateWhy = 'the embedded builder template';
     }
-    if (!template) template = tjsBin(ROOT);
+    if (!template) { template = tjsBin(ROOT); templateWhy = 'default resolution (the checkout engine)'; }
     if (!fs.existsSync(template)) {
       return fail(`build: no tjs template at '${template}' (run scripts/build-tjs.cjs, or set CLODE_TJS)`);
     }
@@ -1606,6 +1612,63 @@ async function clodeBuild(args, opts) {
         return fail(
           `build: engine '${path.basename(baseTemplate)}' reports constants ABI ${abi}, but this clode requires `
           + `${required}. Rebuild the engine from current sources.`);
+      }
+    }
+
+    // ENGINE CAPABILITY GATE. The ABI gate above asks the TARGET engine one question
+    // ("can you report your own fs/os constants?"); this asks the HOST engine the rest of
+    // them. They are two halves of one door, and a door that validates one input and not
+    // the others is a door with a hole in it (spec 2026-09-14 phase 4, §7.2).
+    //
+    // WHAT WENT WRONG WITHOUT IT. Default template resolution can land on an engine built
+    // before a binding the build now requires — `tjs.engine.moduleMeta`, 2026-08-29. The
+    // build then ran for minutes and died inside extraction, either as
+    // `graph-meta: this engine does not report moduleMeta` (the symptom, not the cause) or,
+    // when the stale engine merely exits 0 without writing anything, as a bare
+    // `ENOENT: ... .graph-meta.json`. TWO SEPARATE AGENTS chased it as an upstream bug.
+    //
+    // WHY `template` AND NOT `baseTemplate`. baseTemplate is the engine the output RUNS on,
+    // which on a cross-blobulate this host cannot execute — that is the ABI gate's job, and
+    // why it reads a token out of the bytes. `template` is the engine that COMPILES: it runs
+    // the blobulate worker and (under node) answers graph-meta. It is a host binary, so it
+    // can simply be ASKED, which is honest in a way sniffing never is — the moduleMeta C
+    // half is present in the binary even on engines that lack the JS binding onto it, so a
+    // string scan for it would report a confident false PASS. Exactly the "uid/gid in libc"
+    // trap the ABI gate's comment records rejecting.
+    //
+    // ONE LIST. The bindings come from scripts/engine-api-floor.cjs, the same list
+    // build-tjs.cjs's post-build smoke, build-leg's host-exec smoke, the guest bake and
+    // scripts/bootstrap-engine.sh's acceptance all generate their check from. A second
+    // notion of "capable enough" here is the disease that produced the first one.
+    {
+      const { engineFloorCheckJs, OK_TOKEN } = require('../scripts/engine-api-floor.cjs');
+      const probe = spawnSync(template, ['eval', engineFloorCheckJs()], { encoding: 'utf8', maxBuffer: 1 << 20 });
+      const said = `${probe.stdout || ''}${probe.stderr || ''}`;
+      if (probe.error) {
+        // NEVER LAUNCHED — a permission bit, ENOEXEC, a Windows stand-in. That says nothing
+        // about the engine's CAPABILITIES, which is the only thing this gate is competent to
+        // judge, and the build hits the same wall a few steps later with its own message.
+        // So it defers — LOUDLY, on stderr, not by silently doing nothing (the shape of the
+        // ~15 gates in this repo that turned out unable to fail). Same posture as
+        // scripts/bootstrap-engine.sh's DEFERRED note on a cross slice.
+        stderr.write(`clode: build: NOT probing the engine API floor — could not launch `
+          + `${template} (${probe.error.code || probe.error.message}). Deferred to the first `
+          + `step that actually runs it.\n`);
+      } else {
+        const ok = probe.status === 0 && said.includes(OK_TOKEN);
+        if (!ok) {
+          const missing = (said.match(/MISSING-ENGINE-API: (.*)/) || [])[1]
+            || said.trim().split('\n').pop() || `(the probe printed nothing; exit ${probe.status})`;
+          return fail(
+            `build: engine '${path.basename(template)}' does not meet this clode's engine API floor.\n`
+            + `  missing: ${missing}\n`
+            + `  engine:  ${template}\n`
+            + `  chosen:  ${templateWhy}\n`
+            + `  This engine COMPILES the bundle. Without those bindings the build proceeds and `
+            + `dies minutes later inside extraction, naming the symptom instead of this.\n`
+            + `  Rebuild it from this tree (node scripts/build-tjs.cjs), or point CLODE_TJS at an `
+            + `engine that was.`);
+        }
       }
     }
 

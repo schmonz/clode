@@ -49,7 +49,16 @@ function runEntry(args, extraEnv) {
 // same ABI marker a real engine does. Each test below is about a DIFFERENT
 // failure; without this they would all just trip the engine gate first, which
 // would say nothing about the thing each one is checking.
-const FAKE_TJS = '#!/bin/sh\n# clode-constants-abi:1\nexit 0\n';
+// It must also ANSWER THE ENGINE API FLOOR PROBE (the capability gate added for spec
+// §7.2 asks the host engine, by running it, for the bindings scripts/engine-api-floor.cjs
+// lists), and be executable, or every test below would meet that gate's deferral branch
+// instead of the engine path a real build takes. The token is imported, never spelled
+// here: a fixture with its own copy of the success token is a fixture that can drift
+// away from the thing it stands in for.
+const { OK_TOKEN } = require('../scripts/engine-api-floor.cjs');
+const FAKE_TJS = `#!/bin/sh\n# clode-constants-abi:1\n`
+  + `if [ "$1" = eval ]; then echo ${OK_TOKEN}; exit 0; fi\nexit 0\n`;
+const EXE = { mode: 0o755 };
 
 test('clode build: unknown argument fails loudly before any work', () => {
   const r = runEntry(['build', '--frobnicate']);
@@ -93,7 +102,7 @@ test('clode build: an engine predating the constants ABI is refused, with the re
   const oldTjs = path.join(home, 'tjs');
   // Byte-identical to FAKE_TJS except for the marker — so this pins the GATE,
   // not some incidental difference between the two fixtures.
-  fs.writeFileSync(oldTjs, '#!/bin/sh\nexit 0\n');
+  fs.writeFileSync(oldTjs, `#!/bin/sh\nif [ "$1" = eval ]; then echo ${OK_TOKEN}; exit 0; fi\nexit 0\n`, EXE);
   const out = path.join(home, 'quaude-out');
   const r = runEntry(['build', '--out', out], {
     HOME: home,
@@ -111,7 +120,7 @@ test('clode build: a valid build still fires the watch trigger', () => {
   const watchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-watch-'));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-validwatch-'));
   const fakeTjs = path.join(home, 'tjs');
-  fs.writeFileSync(fakeTjs, FAKE_TJS);
+  fs.writeFileSync(fakeTjs, FAKE_TJS, EXE);
   const r = runEntry(['build'], {
     HOME: home,
     CLODE_STATE_ROOT: home,
@@ -152,7 +161,7 @@ test('clode build naude: no binary fails loudly, prefixed for the naude target',
 test('clode bootstrap: missing esbuilt bundle fails loudly and names the fix', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-self-'));
   const fakeTjs = path.join(home, 'tjs');
-  fs.writeFileSync(fakeTjs, FAKE_TJS);
+  fs.writeFileSync(fakeTjs, FAKE_TJS, EXE);
   const r = runEntry(['bootstrap'], {
     CLODE_TJS: fakeTjs,
     CLODE_MAIN_BUNDLE: '/nonexistent/clode-main.bundle.cjs',
@@ -170,7 +179,7 @@ test('clode bootstrap: missing esbuilt bundle fails loudly and names the fix', (
 test('clode bootstrap: stale esbuilt bundle fails loud and names the fix', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-stale-'));
   const fakeTjs = path.join(home, 'tjs');
-  fs.writeFileSync(fakeTjs, FAKE_TJS);
+  fs.writeFileSync(fakeTjs, FAKE_TJS, EXE);
   const bundle = path.join(home, 'clode-main.bundle.cjs');
   fs.writeFileSync(bundle, '// stale stand-in\n');
   // Pin the bundle's mtime to well before any real libexec source, so the
@@ -189,7 +198,7 @@ test('clode bootstrap: stale esbuilt bundle fails loud and names the fix', () =>
 test('clode bootstrap: fresh esbuilt bundle passes the staleness gate', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-fresh-'));
   const fakeTjs = path.join(home, 'tjs');
-  fs.writeFileSync(fakeTjs, FAKE_TJS);
+  fs.writeFileSync(fakeTjs, FAKE_TJS, EXE);
   const bundle = path.join(home, 'clode-main.bundle.cjs');
   fs.writeFileSync(bundle, '// fresh stand-in\n');
   // Pin the bundle's mtime into the future so it postdates every real libexec
@@ -222,7 +231,7 @@ test('clode build: no resolvable provider fails loudly (after the template gate)
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-nohome-'));
   // A real file suffices for the template existence gate; resolution then fails.
   const fakeTjs = path.join(home, 'tjs');
-  fs.writeFileSync(fakeTjs, FAKE_TJS);
+  fs.writeFileSync(fakeTjs, FAKE_TJS, EXE);
   const r = runEntry(['build'], {
     HOME: home,
     CLODE_TJS: fakeTjs,
@@ -430,4 +439,74 @@ test('timeoutScale: default 1, integer >= 1 honored, junk rejected', () => {
   assert.strictEqual(timeoutScale({ CLODE_TIMEOUT_SCALE: '0' }), 1);
   assert.strictEqual(timeoutScale({ CLODE_TIMEOUT_SCALE: '-3' }), 1);
   assert.strictEqual(timeoutScale({ CLODE_TIMEOUT_SCALE: 'lots' }), 1);
+});
+
+// ---- the ENGINE CAPABILITY gate (spec 2026-09-14 phase 4, §7.2) -------------
+//
+// The constants-ABI gate above asks one question of the engine ("can you report
+// your own fs/os constants?"). It is not the only question the build depends on.
+// Default template resolution can land on an engine built before a binding the
+// build now requires -- `tjs.engine.moduleMeta`, added 2026-08-29 -- and that
+// failure surfaced ~900 seconds later, inside extraction, as
+// `graph-meta: this engine does not report moduleMeta`. It names the symptom.
+// TWO SEPARATE AGENTS chased it as an upstream bug.
+//
+// So the same door asks the rest of the questions too, from the ONE list
+// (scripts/engine-api-floor.cjs) every other consumer already generates its
+// check from.
+// An engine that RUNS, carries the constants ABI, and is missing moduleMeta --
+// i.e. exactly the shape that produced the 927-second failure.
+const FAKE_TJS_NO_MODULE_META = '#!/bin/sh\n# clode-constants-abi:1\n'
+  + 'if [ "$1" = eval ]; then echo "MISSING-ENGINE-API: tjs.engine.moduleMeta (function)"; exit 1; fi\nexit 0\n';
+
+test('clode build: an engine missing a required binding is refused, naming the binding', (t) => {
+  if (process.platform === 'win32') {
+    // The fixture is a /bin/sh stand-in; Windows cannot launch it, so the probe
+    // DEFERS there by design (see the gate's own comment). Skipped loudly rather
+    // than passing vacuously.
+    t.skip('POSIX-only fixture: a #!/bin/sh stand-in engine cannot be launched on Windows');
+    return;
+  }
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-floor-'));
+  const badTjs = path.join(home, 'tjs');
+  fs.writeFileSync(badTjs, FAKE_TJS_NO_MODULE_META, { mode: 0o755 });
+  const out = path.join(home, 'quaude-out');
+  const r = runEntry(['build', '--out', out], {
+    HOME: home,
+    CLODE_STATE_ROOT: home,
+    CLODE_TJS: badTjs,
+  });
+  assert.notStrictEqual(r.status, 0, 'an incapable engine must not build');
+  assert.match(r.stderr, /moduleMeta/,
+    'the refusal must name the MISSING CAPABILITY, not just say "engine"');
+  assert.ok(r.stderr.includes(badTjs),
+    'and it must name WHICH engine was resolved, so the reader knows what to replace');
+  assert.match(r.stderr, /scripts\/build-tjs\.cjs|CLODE_TJS/,
+    'and what to do about it');
+  assert.ok(!fs.existsSync(out), 'no binary may be produced from a refused engine');
+});
+
+test('clode build: a capable engine passes the floor gate', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('POSIX-only fixture: a #!/bin/sh stand-in engine cannot be launched on Windows');
+    return;
+  }
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-floor-ok-'));
+  const okTjs = path.join(home, 'tjs');
+  fs.writeFileSync(okTjs,
+    `#!/bin/sh\n# clode-constants-abi:1\nif [ "$1" = eval ]; then echo ${OK_TOKEN}; exit 0; fi\nexit 0\n`,
+    { mode: 0o755 });
+  const r = runEntry(['build'], {
+    HOME: home,
+    CLODE_STATE_ROOT: home,
+    CLODE_TJS: okTjs,
+    CLODE_CLAUDE_BIN: '',
+    CLODE_VERSION_DIR: '',
+    PATH: '/nonexistent',
+    CLODE_OFFLINE: '1',
+  });
+  // It gets PAST the engine gate and dies on the next input instead. A gate that
+  // cannot be passed is as useless as one that cannot fail.
+  assert.match(r.stderr, /build: no Claude Code binary found/);
+  assert.doesNotMatch(r.stderr, /engine API floor|MISSING-ENGINE-API/);
 });
