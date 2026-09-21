@@ -60,14 +60,26 @@ function replaceByRename(dest) {
 // A real executing binary is the whole point — a shell script would be re-read from the
 // path by the shell and would prove nothing about a paged-in image.
 function runVictim(dir, name) {
-  const victim = path.join(dir, name);
+  // The extension comes from the interpreter we are copying, not from a platform branch:
+  // Windows CreateProcess resolves an image by extension, so a copy of `node.exe` saved as
+  // a bare `victim-inplace` is ENOENT the moment we try to run it -- which is how this
+  // arrived, as `spawn ...\\victim-inplace ENOENT` on windows-latest and nowhere else.
+  // `path.extname(process.execPath)` is '' on every POSIX host, so this is one spelling.
+  const victim = path.join(dir, name + path.extname(process.execPath));
   fs.copyFileSync(process.execPath, victim);
   fs.chmodSync(victim, 0o755);
   const child = spawn(victim, ['-e', 'setTimeout(() => process.stdout.write("SURVIVED"), 1500);'],
     { stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '';
   child.stdout.on('data', (d) => { out += d; });
-  const done = new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })));
+  // A victim that never STARTED makes this test vacuous, not red for the right reason, and
+  // without this handler the failure arrives as an uncaughtException with no mention of the
+  // victim -- which is exactly how the missing `.exe` above read on windows-latest.
+  const done = new Promise((resolve, reject) => {
+    child.on('error', (e) => reject(new Error(
+      `the victim copy of ${process.execPath} at ${victim} never started: ${e.code} ${e.message}`)));
+    child.on('exit', (code, signal) => resolve({ code, signal }));
+  });
   // Let the loader map the image before anything replaces it.
   const started = new Promise((resolve) => setTimeout(resolve, 500));
   return { victim, started, done, read: () => out };
