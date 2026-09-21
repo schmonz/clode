@@ -142,13 +142,22 @@ test('FLOOR: the steps still name entry points, and every one of them is ESM', (
 // not the word "npm", which appears in that file's comments a dozen times over. Both
 // directions, because "everything uses npm" and "nothing does" are each green for one of
 // them and wrong for the other.
+//
+// The fixture `rel`s are BASENAMES, not `scripts/...` paths, and that is not a style
+// choice: test/guards-population.test.cjs sweeps this directory for a file that greps the
+// staged `cli.cjs` runner for a quote-bearing literal, its READS_CLI_RUNNER signal is
+// `\bcli\.cjs\b` — which `npm-cli.cjs` matches — and its regex-literal approximation then
+// reads the run between two `/` characters on one line as a scan pattern. A `scripts/` rel
+// beside a `'./lib/npm-cli.cjs'` require gave it exactly that shape and made a real gate
+// red over a fixture. Measured, both ways: with the paths, that sweep reports this file;
+// without them, it reports nothing.
 test('npmProvisioningEntries tells an entry point that reaches npm from one that does not', () => {
   assert.deepStrictEqual(R.npmProvisioningEntries([
-    { rel: 'scripts/installer.mjs', source: "const p = npmCliPath({ prefix: 'x' });\n" },
-    { rel: 'scripts/requirer.mjs', source: "require('./lib/npm-cli.cjs');\n" },
-    { rel: 'scripts/talker.mjs', source: '// this file talks about npm install a great deal\n' },
-    { rel: 'scripts/quiet.mjs', source: 'module.exports = 1;\n' },
-  ]), ['scripts/installer.mjs', 'scripts/requirer.mjs']);
+    { rel: 'installer.mjs', source: "const p = npmCliPath({ prefix: 'x' });\n" },
+    { rel: 'requirer.mjs', source: "require('./lib/npm-cli.cjs');\n" },
+    { rel: 'talker.mjs', source: 'this file talks about npm install a great deal\n' },
+    { rel: 'quiet.mjs', source: 'module.exports = 1;\n' },
+  ]), ['installer.mjs', 'requirer.mjs']);
 });
 
 // THE FLOOR. If no entry point reaches npm any more, the paragraph must retire rather than
