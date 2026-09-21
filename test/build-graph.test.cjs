@@ -170,6 +170,32 @@ test('the declared output name comes from resolveBuildOut, keyed on TARGET not h
     'clode-native.exe', 'the ROOT step must DECLARE the file the build actually writes');
 });
 
+// WHERE THE ENGINE LANDS, asked of the same knob scripts/build-tjs.cjs installs it with.
+// Every one of the 42 legs sets CLODE_TJS_OUT (the native build, the alpine container, the
+// cross images, the VM guests, cross-blobulate's separate host tree), and build-tjs.cjs
+// installs at `CLODE_TJS_OUT || platformTjsDir(repo)` — so a graph that fell straight
+// through to platform-tag's default declared an OUTPUT no CI build writes, and the runner's
+// output check would have refused a perfectly good engine. It never bit until the engine
+// call sites started naming step ids.
+test('engine.compile declares the engine where CLODE_TJS_OUT puts it', () => {
+  const out = path.join(os.tmpdir(), 'clode-graph-tjs-out-fixture');
+  const exe = process.platform === 'win32' ? 'tjs.exe' : 'tjs';
+  const ctx = G.defaultContext({ env: { CLODE_TJS_OUT: out } });
+  assert.strictEqual(ctx.engine, path.join(out, exe));
+  assert.deepStrictEqual(G.stepById('engine.compile').outputs(ctx), [path.join(out, exe)],
+    'the step must DECLARE the path build-tjs.cjs actually installs to');
+
+  // CLODE_TJS still wins: it names an engine the caller already HAS, which is a stronger
+  // claim than where a build would put one.
+  assert.strictEqual(
+    G.defaultContext({ env: { CLODE_TJS: '/some/engine', CLODE_TJS_OUT: out } }).engine,
+    '/some/engine');
+
+  // And with neither, the platform-keyed default — unchanged.
+  const platformTag = require('../scripts/platform-tag.cjs');
+  assert.strictEqual(G.defaultContext({ env: {} }).engine, platformTag.tjsBin(REPO));
+});
+
 // FINDING 2 (review round 1). The bundle step's non-libexec inputs are read out of the
 // emitter, not listed. The proof that the derivation is live rather than merely non-empty:
 // it must name the one the hand list had already missed.
@@ -443,6 +469,78 @@ test('the runner records a timing per step it ran', () => {
 test('only selects the step and its transitive needs, in dependency order', () => {
   const out = R.runGraph({ only: 'engine.compile', dryRun: true, logFn: () => {} });
   assert.deepStrictEqual(out.ran, ['engine.source', 'engine.bytecode', 'engine.compile']);
+});
+
+// ---- --needs assume: the named step ALONE, still refused on an absent input ----------
+//
+// THE BLOCKER IT REMOVES. `--only engine.compile` under the default drags engine.bytecode
+// and engine.source into an alpine container, a cross-toolchain image or a VM guest that
+// cannot run a source phase at all — and those machines already HAVE the earlier phases'
+// outputs, synced in from the runner. The alternative was a second declaration of the same
+// compile with empty `needs`, which is the duplication the graph exists to cure.
+//
+// WHAT MAKES IT SAFE is not this selector but the UNCHANGED input check below: a mode that
+// ran a step with missing inputs and exited 0 would be strictly worse than the blocker.
+
+test('--needs assume runs exactly the named step; its needs do NOT run', () => {
+  // A step whose needs have NOT run, whose OWN inputs are present — the CI shape exactly.
+  const ran = [];
+  const fake = [
+    fixture({ id: 'x.first', run: () => ran.push('x.first') }),
+    fixture({ id: 'x.second', needs: ['x.first'], run: () => ran.push('x.second') }),
+  ];
+  const out = runFixture({ graph: fake, only: 'x.second', needs: 'assume' });
+  assert.deepStrictEqual(out.ran, ['x.second']);
+  assert.deepStrictEqual(ran, ['x.second'],
+    'the need really must not run — `ran` is the side effect, not the plan');
+
+  // And the DEFAULT still drags it in, because only the pair distinguishes "assume worked"
+  // from "this graph never had an edge".
+  ran.length = 0;
+  assert.deepStrictEqual(runFixture({ graph: fake, only: 'x.second' }).ran,
+    ['x.first', 'x.second']);
+  assert.deepStrictEqual(ran, ['x.first', 'x.second']);
+});
+
+test('--needs assume still REFUSES an absent declared input, in the same message shape', () => {
+  let ran = false;
+  const fake = [
+    fixture({ id: 'x.first' }),
+    fixture({ id: 'x.second', needs: ['x.first'], inputs: () => [ABSENT], run: () => { ran = true; } }),
+  ];
+  assert.throws(() => runFixture({ graph: fake, only: 'x.second', needs: 'assume' }),
+    (e) => /^build-runner: x\.second declared input is missing: /.test(e.message)
+      && e.message.includes(ABSENT),
+    'assume must not become a way to run a step against a tree that never arrived');
+  assert.strictEqual(ran, false);
+});
+
+test('--needs assume without --only is refused, not read as "assume everything"', () => {
+  assert.throws(() => runFixture({ needs: 'assume', dryRun: true }),
+    /--needs assume needs --only/,
+    'with no step named there is nothing whose needs could have been satisfied elsewhere');
+});
+
+test('an unrecognised --needs value is refused rather than defaulting to build', () => {
+  assert.throws(() => runFixture({ only: 'engine.compile', needs: 'asume', dryRun: true }),
+    /is not a way for a step's needs to be satisfied/,
+    'a typo that silently ran the transitive subgraph would put a source phase back on a '
+    + 'machine that cannot run one — the fourth door into the same blind pass');
+});
+
+test('--needs assume and --runs-on can still select nothing, and that is still refused', () => {
+  assert.throws(() => runFixture({ only: 'engine.compile', needs: 'assume', runsOn: 'guest', dryRun: true }),
+    /matched no step.*needs=assume/s,
+    'the empty-plan refusal has to name the mode too, or the reason is unguessable');
+});
+
+test('--needs is parsed off the command line, and rides through to the selection', () => {
+  assert.deepStrictEqual(R.parseArgs(['--only', 'engine.compile', '--needs', 'assume']),
+    { only: 'engine.compile', needs: 'assume' });
+  assert.deepStrictEqual(
+    R.runGraph({ only: 'engine.compile', needs: 'assume', dryRun: true, logFn: () => {} }).ran,
+    ['engine.compile'],
+    'the REAL graph, not a fixture: this is the selection CI asks for');
 });
 
 test('the default run reaches the root, in dependency order', () => {

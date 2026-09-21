@@ -95,6 +95,23 @@ const GRAPH_REL = posixRel(REPO, __filename);
 // class of bug, let alone catch it.
 const RUNS_ON = ['host', 'container', 'guest', 'qemu-guest'];
 
+// WHO SATISFIES A NAMED STEP'S `needs`. Not a second selection verb next to `--only` -- a
+// reader would have to remember which of two similar words drags the subgraph in -- but the
+// real semantic, said out loud.
+//
+//   'build'   this run does: `--only engine.compile` builds engine.source and
+//             engine.bytecode first. The default, and what a developer asking for the
+//             engine means.
+//   'assume'  something else already did, and the step's declared INPUTS are the assertion
+//             that it really happened. This is the whole reason the mode is safe: an
+//             alpine container, a cross image or a VM guest is handed the earlier phases'
+//             outputs by a sync, and cannot run a source phase at all -- but it can still
+//             be refused when what was supposed to arrive did not.
+//
+// 'assume' is meaningless without a named step (there is no step whose needs could have
+// been satisfied elsewhere), and scripts/build-runner.cjs refuses that combination.
+const NEEDS = ['build', 'assume'];
+
 // ---- composing the single sources of truth --------------------------------------------
 
 // The engine's source set, repo-relative and POSIX, expanded against the working tree by
@@ -375,7 +392,23 @@ function defaultContext(overrides) {
     // The patched txiki.js checkout scripts/build-tjs.cjs constructs and compiles.
     checkout: o.checkout || path.join(platformTag.tjsVendorParentDir(env), 'txiki.js'),
     // The engine this build produces and then blobulates against.
-    engine: o.engine || env.CLODE_TJS || platformTag.tjsBin(repo),
+    //
+    // CLODE_TJS_OUT IS READ HERE, and it is the knob every CI leg sets. scripts/build-tjs.cjs
+    // installs the engine at `CLODE_TJS_OUT || platformTjsDir(repo)` (its :207), while this
+    // field used to fall straight through to platform-tag's tjsBin -- so on ANY machine that
+    // redirects the output (all 42 legs: the native build, the alpine container, the cross
+    // images, the VM guests, cross-blobulate's separate host tree) `engine.compile`'s declared
+    // OUTPUT named a path the build never writes, and the runner's output check would have
+    // refused a perfectly good engine. Found while migrating those call sites onto step ids;
+    // it never bit before because no leg ran the graph. The exe suffix is tjsBin's own rule,
+    // not a second copy of build-tjs.cjs's `outName` (which keys off what cmake emitted).
+    //
+    // CLODE_TJS still wins: it names an engine the caller already HAS, which is a stronger
+    // statement than where a build would put one.
+    engine: o.engine || env.CLODE_TJS
+      || (env.CLODE_TJS_OUT
+        ? path.join(env.CLODE_TJS_OUT, process.platform === 'win32' ? 'tjs.exe' : 'tjs')
+        : platformTag.tjsBin(repo)),
     // The build-only toolchain (esbuild) the bundle step provisions for ITSELF. A THIRD
     // out-of-repo root, and it is here because it was a real UNDECLARED INPUT (final
     // whole-branch review, finding 4): scripts/build-clode-main.mjs resolves
@@ -1035,18 +1068,31 @@ function topoOrder(list) {
 // duplicate-list disease this whole file is a reaction to, one layer up: the controls that
 // prove the runner refuses correctly would have been exercising a different selector from
 // the one a real build uses.
+//
+// `needs: 'assume'` narrows the SAME `id` selection to the named step alone -- the caller
+// is asserting that another machine already ran its `needs` and synced the outputs over.
+// It lives HERE rather than in the runner for this function's own reason: a second
+// closure-and-filter walk in build-runner.cjs is the duplicate-list disease one layer up,
+// and the runner's synthetic controls have to exercise the selector a real build uses.
+// What keeps the mode honest is not this filter but the runner's UNCHANGED input check:
+// the step still refuses when a declared input is absent, which is exactly what "assume"
+// is assuming.
 function select(list, opts) {
   const o = opts || {};
   if (o.id) {
-    const byId = new Map(list.map((s) => [s.id, s]));
-    const keep = new Set();
-    const up = (id) => {
-      if (keep.has(id) || !byId.has(id)) return;
-      keep.add(id);
-      for (const n of byId.get(id).needs) up(n);
-    };
-    up(o.id);
-    list = list.filter((s) => keep.has(s.id));
+    if (o.needs === 'assume') {
+      list = list.filter((s) => s.id === o.id);
+    } else {
+      const byId = new Map(list.map((s) => [s.id, s]));
+      const keep = new Set();
+      const up = (id) => {
+        if (keep.has(id) || !byId.has(id)) return;
+        keep.add(id);
+        for (const n of byId.get(id).needs) up(n);
+      };
+      up(o.id);
+      list = list.filter((s) => keep.has(s.id));
+    }
   }
   if (o.runsOn) list = list.filter((s) => s.runsOn === o.runsOn);
   return list;
@@ -1225,7 +1271,7 @@ function orphanFindings(list, rootId) {
 }
 
 module.exports = {
-  ROOT_ID, RUNS_ON, ENTRY_REL, GRAPH_REL,
+  ROOT_ID, RUNS_ON, NEEDS, ENTRY_REL, GRAPH_REL,
   steps, stepById, orderedSteps, select, topoOrder, sh,
   legs, targets, legsNamed, runsOnFor, runsOnForLegs, engineHomeForLeg, blobulateHomeForLeg,
   defaultContext,

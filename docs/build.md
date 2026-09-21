@@ -220,13 +220,20 @@ The same graph, narrowed. A selection that matches no step is refused rather tha
 reported as a successful build of nothing.
 
 ```text
-usage: build-runner.cjs [--plan] [--only <step-id>] [--target <name>] [--runs-on <where>]
+usage: build-runner.cjs [--plan] [--only <step-id>] [--needs build|assume]
+                        [--target <name>] [--runs-on <where>]
 
   Runs the build declared by scripts/build-graph.cjs, checking each step's declared
   inputs before it runs and its declared outputs after.
 
   --plan            print the steps that would run; run nothing
-  --only <step-id>  run that step and everything it transitively needs
+  --only <step-id>  the step to run
+  --needs <who>     who satisfies that step's `needs`: build|assume
+                      build   (default) this run builds them first
+                      assume  another machine already did and synced the outputs
+                              here; run the named step ALONE. Its declared inputs
+                              are still checked, and a missing one still refuses.
+                              Requires --only.
   --target <name>   a leg token or canonical target name (default: this host)
   --runs-on <where> only the steps that run on host|container|guest|qemu-guest
   --help            this text

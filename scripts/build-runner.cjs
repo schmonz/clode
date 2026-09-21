@@ -130,16 +130,28 @@ function derive(step, what, fn) {
   }
 }
 
-function checkInputs(step, paths, existsFn) {
+// SAME REFUSAL UNDER BOTH MODES, and the same message SHAPE — the greppable
+// `build-runner: <id> declared input is missing: <path>` prefix does not move, because
+// `--needs assume` is exactly the mode in which this check is load-bearing rather than
+// belt-and-braces. Only the closing advice differs, and it has to: under 'assume' the
+// machine reading this cannot "run the step that produces it" (that is the whole reason it
+// was told to assume), so sending it there would be a true sentence and useless counsel.
+function checkInputs(step, paths, existsFn, needs) {
   const missing = paths.filter((p) => !existsFn(p));
   if (!missing.length) return;
   throw new Error(`build-runner: ${step.id} declared input is missing: ${missing[0]}`
     + (missing.length > 1 ? ` (and ${missing.length - 1} more)` : '')
     + ' — the step was NOT run. A step launched against an absent input either dies minutes '
     + 'later inside the tool it shells out to, or succeeds against a stale tree; either way '
-    + 'the failure is reported somewhere other than where it happened. Run the step that '
-    + `produces it (see \`needs\` for ${step.id} in scripts/build-graph.cjs), or fix the `
-    + 'declaration if that path is no longer an input.');
+    + 'the failure is reported somewhere other than where it happened. '
+    + (needs === 'assume'
+      ? 'This run was told `--needs assume`: another machine was supposed to have run '
+        + `\`${step.needs.join(', ') || '(nothing)'}\` and delivered that path here. It did `
+        + 'not arrive, so fix the sync (or drop --needs assume and let this machine build '
+        + 'it), rather than assuming harder.'
+      : `Run the step that produces it (see \`needs\` for ${step.id} in `
+        + 'scripts/build-graph.cjs), or fix the declaration if that path is no longer an '
+        + 'input.'));
 }
 
 function checkOutputs(step, paths, existsFn) {
@@ -159,9 +171,26 @@ function checkOutputs(step, paths, existsFn) {
 //            traceLog, env, repo })
 //   -> { ran: string[], timings: [{ id, phase, runsOn, ms, count }] }
 //
-// `only` is a step id and selects that step AND ITS TRANSITIVE `needs` — asking for the
-// engine has to build what the engine needs, and a runner that ran the named step alone
-// would fail on its own declared inputs (or, worse, succeed against a stale tree).
+// `only` is a step id. `needs` says WHO satisfies that step's `needs`:
+//
+//   'build'  (the default) this run does — asking for the engine builds what the engine
+//            needs. A developer on one machine means this.
+//   'assume' something else already did, and the step's declared INPUTS are the assertion
+//            that it really happened. CI needs this and a developer almost never does: an
+//            alpine container, a cross-toolchain image and a VM guest are HANDED the
+//            earlier phases' outputs by a sync and cannot run a source phase at all, so
+//            `--only engine.compile` under 'build' drags engine.bytecode and engine.source
+//            onto a machine that has no business running them.
+//
+// NOT A SECOND SELECTION VERB. `--only` still means the same thing under both; what moves
+// is who is responsible for the subgraph, which is the property that actually differs.
+//
+// AND IT IS NOT A FOURTH DOOR INTO THE BLIND PASS the three refusals below exist against.
+// The reason 'assume' is safe is precisely that checkInputs is UNCHANGED: a step whose
+// declared input did not arrive is refused before it runs, naming the path. A mode that ran
+// a step with missing inputs and exited 0 would be strictly worse than the blocker it
+// removes — it would be the stale-tree failure the input gate was built for, granted its
+// own flag.
 //
 // `graph` lets a caller drive a synthetic step list, which is the whole reason the two
 // refusals above can be shown to fire: a control built out of the REAL graph could only be
@@ -197,7 +226,31 @@ function runGraph(opts) {
       + 'zero steps is how a typo becomes a green run about nothing.');
   }
 
-  const plan = G.select(G.topoOrder(declared), { id: o.only, runsOn: o.runsOn });
+  // THE THIRD NAME-CHECK, for the same reason as the two above. `--needs` is a closed set
+  // the graph declares, and an unrecognised value must not fall through to the default:
+  // `--needs asume` silently running the transitive subgraph is how a cross container
+  // acquires a source phase again, with a green log and a typo nobody sees.
+  const needs = o.needs === undefined ? 'build' : o.needs;
+  if (!G.NEEDS.includes(needs)) {
+    throw new Error(`build-runner: '${needs}' is not a way for a step's needs to be `
+      + `satisfied. They are: ${G.NEEDS.join(', ')} — 'build' (this run builds them) or `
+      + "'assume' (another machine already did, and the step's declared inputs are the "
+      + 'assertion that it really happened). Defaulting an unrecognised value to `build` '
+      + 'would put a source phase back on a machine that cannot run one.');
+  }
+
+  // 'assume' WITHOUT A NAMED STEP IS A USAGE ERROR, not a whole-graph run. There is no step
+  // whose needs could have been satisfied elsewhere, so the word describes nothing — and
+  // the reading it would otherwise fall into (run the whole graph, assume everything) is
+  // the "select nothing meaningful, report success" shape again, in a new costume.
+  if (needs === 'assume' && !o.only) {
+    throw new Error('build-runner: --needs assume needs --only <step-id>. It means "run THAT '
+      + 'step alone, because another machine already ran what it needs and synced the '
+      + 'outputs here" — with no step named there is nothing for the word to be about, and '
+      + 'running the whole graph while assuming its needs is not a thing a build can do.');
+  }
+
+  const plan = G.select(G.topoOrder(declared), { id: o.only, runsOn: o.runsOn, needs });
 
   // AND THE COMBINATION, which neither name-check can see. `--only engine.compile --runs-on
   // guest` names a real step and a real machine and still selects nothing, because that
@@ -207,6 +260,7 @@ function runGraph(opts) {
   if (!plan.length) {
     throw new Error('build-runner: that selection matched no step'
       + (o.only ? ` (only=${o.only})` : '') + (o.runsOn ? ` (runsOn=${o.runsOn})` : '')
+      + (needs === 'assume' ? ' (needs=assume)' : '')
       + `. The graph declares ${declared.length} step(s): ${declared.map((s) => s.id).join(', ')}`
       + ' — with the machines each one resolves to for this target. An empty plan that exits 0 '
       + 'is indistinguishable from a build that worked, which is the whole failure this runner '
@@ -241,7 +295,7 @@ function runGraph(opts) {
         logFn(stepLine(step, '-', count));
         continue;
       }
-      checkInputs(step, derive(step, 'inputs', () => step.inputs(ctx)), existsFn);
+      checkInputs(step, derive(step, 'inputs', () => step.inputs(ctx)), existsFn, needs);
 
       // THE VERDICT COMES BEFORE THE RECORD (review round 1, Important). The first cut
       // pushed `state: 'finished'`, the green log line and the timing from inside a
@@ -314,13 +368,20 @@ function runGraph(opts) {
 // ---- the command line ------------------------------------------------------------------------
 
 const USAGE = [
-  'usage: build-runner.cjs [--plan] [--only <step-id>] [--target <name>] [--runs-on <where>]',
+  'usage: build-runner.cjs [--plan] [--only <step-id>] [--needs build|assume]',
+  '                        [--target <name>] [--runs-on <where>]',
   '',
   '  Runs the build declared by scripts/build-graph.cjs, checking each step\'s declared',
   '  inputs before it runs and its declared outputs after.',
   '',
   '  --plan            print the steps that would run; run nothing',
-  '  --only <step-id>  run that step and everything it transitively needs',
+  '  --only <step-id>  the step to run',
+  `  --needs <who>     who satisfies that step's \`needs\`: ${G.NEEDS.join('|')}`,
+  '                      build   (default) this run builds them first',
+  '                      assume  another machine already did and synced the outputs',
+  '                              here; run the named step ALONE. Its declared inputs',
+  '                              are still checked, and a missing one still refuses.',
+  '                              Requires --only.',
   '  --target <name>   a leg token or canonical target name (default: this host)',
   `  --runs-on <where> only the steps that run on ${G.RUNS_ON.join('|')}`,
   '  --help            this text',
@@ -333,6 +394,7 @@ function parseArgs(argv) {
     if (a === '--help' || a === '-h') o.help = true;
     else if (a === '--plan' || a === '--dry-run') o.dryRun = true;
     else if (a === '--only') { i += 1; o.only = argv[i]; }
+    else if (a === '--needs') { i += 1; o.needs = argv[i]; }
     else if (a === '--target') { i += 1; o.target = argv[i]; }
     else if (a === '--runs-on') { i += 1; o.runsOn = argv[i]; }
     else throw new Error(`build-runner: unknown argument '${a}'\n${USAGE}`);
