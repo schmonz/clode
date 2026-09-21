@@ -517,12 +517,25 @@ test('the controlled set is EXACTLY the modules a guard was deliberately written
   // against the same baseline of 29, and went red at authoring time.
   // test/build-gates/render-build-graph-gates.test.cjs controls it, which returned the
   // count to 29 — the baseline did not move for this one either.
+  //
+  // scripts/build-runner.cjs ADDED 2026-09-21, the same mechanism a THIRD time, and the
+  // interesting one: the file did not become a gate, it became VISIBLE as one. Its argument
+  // parser grew a pattern-match beside its throws (`/^-/.test(v)`, closing the hole where a
+  // flag with its value dropped fell through to the default), which is what the classifier
+  // reads as "derives a verdict" — and the refusals it has carried all along, `checkInputs`
+  // and `checkOutputs`, are a build gate by any reading: they decide whether a step runs and
+  // whether a run that exited 0 is allowed to count. Uncontrolled went to 30 against the
+  // baseline of 29 and this test went red at authoring time.
+  // test/build-gates/build-runner-gates.test.cjs controls both refusals (plus the new one),
+  // which returned the count to 29 — the baseline did not move. An exclusion entry would
+  // have been the wrong answer here: the shape matched because the shape is real.
   assert.deepStrictEqual([...controlledProductionModules().keys()].sort(), [
     'libexec/clode-build.cjs',
     'libexec/host-provision.cjs',
     'libexec/scc-merge.cjs',
     'libexec/target-update-check.cjs',
     'scripts/build-graph.cjs',
+    'scripts/build-runner.cjs',
     'scripts/render-build-graph.cjs',
   ].sort(),
   'the set of production modules counted as CONTROLLED changed. If a successor phase wrote '
