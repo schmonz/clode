@@ -15,8 +15,12 @@ test/.harness/
 __pycache__/
 *.pyc
 
-# Superpowers working docs (plans, approaches, skill scratch) — not part of the project
-docs/
+# Superpowers working docs (plans, approaches, skill scratch) — not part of the project.
+# NARROWED from `docs/` on 2026-09-21: `docs/build.md` is generated from
+# scripts/build-graph.cjs and IS part of the project (test/build-graph-render.test.cjs
+# fails when it is stale), so the whole directory can no longer be ignored. Only the
+# superpowers working tree stays out of git.
+docs/superpowers/
 
 # macOS cruft
 .DS_Store

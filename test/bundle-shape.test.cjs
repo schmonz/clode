@@ -11,8 +11,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const REPO = path.join(__dirname, '..');
-// NOT docs/ — that directory is gitignored, so a record kept there is invisible to
-// everyone but its author and the gate would fail on a fresh clone.
+// NOT docs/ — the generated docs/build.md is the only TRACKED file under that directory
+// (.gitignore still ignores docs/superpowers/, and the rest is untracked working
+// material), so a record kept there is invisible to everyone but its author and the gate
+// would fail on a fresh clone.
 const TSV = path.join(__dirname, 'fixtures', 'bundle-shapes.tsv');
 
 function rows() {
