@@ -128,10 +128,11 @@ function group(name, keys) {
 // host that is a safe place to derive from.
 //
 // So the list is node's OWN static list, transcribed from the NODE_DEFINE_CONSTANT
-// entries in node's src/node_constants.cc (v24.19.0: DefineErrnoConstants,
-// DefineSignalConstants, DefineFsConstants, DefineDLOpenConstants,
-// DefinePriorityConstants). That list is a UNION across platforms — node emits it
-// under #ifdef exactly as we do — so it is the only correct input. With
+// entries in node's src/node_constants.cc (DefineErrnoConstants,
+// DefineWindowsErrorConstants, DefineSignalConstants, DefineFsConstants,
+// DefineDLOpenConstants, DefinePriorityConstants). That list is a UNION across
+// platforms — node emits it under #ifdef exactly as we do — so it is the only
+// correct input. With
 // guard-by-default above, a name absent on a target compiles out and the key is
 // simply not reported, which is precisely what node does there. Extra names are
 // therefore free; missing names are unfixable at runtime. Union in, #ifdef out.
@@ -142,6 +143,48 @@ function group(name, keys) {
 // hand-written patch this generator replaced (txiki-signals-expose.patch) carried 34
 // signals and its comment asserted node "deliberately OMITS SIGUNUSED"; the musl
 // measurement above disproves that. Hand-maintained platform knowledge rots.
+//
+// UNION AS OF WHOM (2026-09-21). "Node's cross-platform union" is what this list is
+// SUPPOSED to be; what it actually was is the union of the platforms somebody
+// transcribed. The paragraph above named five Define* functions until today (it
+// names six now). node has SIX that feed these five namespaces: DefineWindowsErrorConstants pours 58 Winsock
+// names into the SAME err_constants object DefineErrnoConstants fills, so node's
+// os.constants.errno is 79 keys on POSIX and 137 on Windows. All 58 were absent
+// here, and nothing could see it: this box, every Linux leg, every BSD leg and the
+// node-shim-oracle job are all POSIX, where node does not report them either, so the
+// list looked complete from every host anyone ever ran it on. The --check row added
+// in 3b1bc37 found it on its FIRST windows-latest run. Nothing "grew"; Windows had
+// always had them, and we had never asked a Windows host.
+//
+// That is the standing hazard of a transcribed union, and the lesson is narrower than
+// "transcribe harder": a gap in a union is invisible from every host that does not
+// have it, so completeness has to be checked against node's SOURCE (all of the
+// Define* functions that write into a namespace, not the ones named in a comment),
+// never against a host. Re-verified 2026-09-21 against v24.21.0's node_constants.cc,
+// function by function: fs 61/61, signals 37/37, errno 79+58/137, dlopen 5/5,
+// priority 6/6 — same names, same order, no extras. errno was the only incomplete one.
+//
+// GUARDING THE WSA* NAMES: plain #ifdef, which is this file's default for anything
+// not from libuv, and it is node's own guard for these, one #ifdef per name. The
+// three choices are not interchangeable on the 40 non-Windows legs:
+//
+//   * plain #ifdef (chosen)  -> the macro is absent, the entry compiles out, the key
+//     is not reported. Exactly what node does there: node guards each of the 58 too,
+//     so POSIX node has no WSAEINTR either. Key sets match, which is the whole design.
+//   * GUARDED_WITH_ZERO      -> 58 keys node does NOT have, all worth 0. Wrong twice:
+//     it invents a superset on those 40, and 0 is not a plausible errno, so any
+//     value->name lookup gains 58 aliases for 0. The UV_FS_O_* four are in that set
+//     for the opposite reason — node emits THOSE unguarded, reports them on every
+//     platform, and 0 is node's own documented answer off Windows.
+//   * unguarded              -> `'WSAEINTR' undeclared` and a hard compile failure on
+//     every one of them. That is the SIGINFO break that made guard-by-default the rule.
+//
+// Where the VALUES come from on Windows is the F_OK/R_OK/W_OK/X_OK situation again and
+// is handled the same way: WSAE* live in <winsock2.h>, which this block does not
+// include and neither does node's. Both reach them through libuv — src/signals.c
+// includes private.h, private.h includes <uv.h>, and uv/win.h line 33 includes
+// <winsock2.h> (node: node_internals.h -> uv.h). Relying on a header we do not name
+// is only acceptable with a tripwire, so there is one in `includes` below.
 //
 // KNOWN REMAINING GAP, measured 2026-08-22, deliberately NOT fixed here. A name in
 // the union is only reported if the target's headers make it VISIBLE, and on glibc
@@ -214,6 +257,25 @@ const NODE_CONSTANTS = {
     'ENXIO', 'EOPNOTSUPP', 'EOVERFLOW', 'EPERM', 'EPIPE', 'EPROTO',
     'EPROTONOSUPPORT', 'EPROTOTYPE', 'ERANGE', 'EROFS', 'ESPIPE', 'ESRCH', 'ESTALE',
     'ETIME', 'ETIMEDOUT', 'ETXTBSY', 'EWOULDBLOCK', 'EXDEV',
+    // DefineWindowsErrorConstants writes into the SAME object as
+    // DefineErrnoConstants (node_constants.cc CreatePerContextProperties calls
+    // both with err_constants), so node's os.constants.errno is these 79 POSIX
+    // names PLUS these 58 Winsock ones — 137 on Windows. Transcribed in node's
+    // order. See the UNION AS OF WHOM note above.
+    'WSAEINTR', 'WSAEBADF', 'WSAEACCES', 'WSAEFAULT', 'WSAEINVAL', 'WSAEMFILE',
+    'WSAEWOULDBLOCK', 'WSAEINPROGRESS', 'WSAEALREADY', 'WSAENOTSOCK',
+    'WSAEDESTADDRREQ', 'WSAEMSGSIZE', 'WSAEPROTOTYPE', 'WSAENOPROTOOPT',
+    'WSAEPROTONOSUPPORT', 'WSAESOCKTNOSUPPORT', 'WSAEOPNOTSUPP', 'WSAEPFNOSUPPORT',
+    'WSAEAFNOSUPPORT', 'WSAEADDRINUSE', 'WSAEADDRNOTAVAIL', 'WSAENETDOWN',
+    'WSAENETUNREACH', 'WSAENETRESET', 'WSAECONNABORTED', 'WSAECONNRESET',
+    'WSAENOBUFS', 'WSAEISCONN', 'WSAENOTCONN', 'WSAESHUTDOWN', 'WSAETOOMANYREFS',
+    'WSAETIMEDOUT', 'WSAECONNREFUSED', 'WSAELOOP', 'WSAENAMETOOLONG',
+    'WSAEHOSTDOWN', 'WSAEHOSTUNREACH', 'WSAENOTEMPTY', 'WSAEPROCLIM', 'WSAEUSERS',
+    'WSAEDQUOT', 'WSAESTALE', 'WSAEREMOTE', 'WSASYSNOTREADY', 'WSAVERNOTSUPPORTED',
+    'WSANOTINITIALISED', 'WSAEDISCON', 'WSAENOMORE', 'WSAECANCELLED',
+    'WSAEINVALIDPROCTABLE', 'WSAEINVALIDPROVIDER', 'WSAEPROVIDERFAILEDINIT',
+    'WSASYSCALLFAILURE', 'WSASERVICE_NOT_FOUND', 'WSATYPE_NOT_FOUND',
+    'WSA_E_NO_MORE', 'WSA_E_CANCELLED', 'WSAEREFUSED',
   ],
   dlopen: ['RTLD_LAZY', 'RTLD_NOW', 'RTLD_GLOBAL', 'RTLD_LOCAL', 'RTLD_DEEPBIND'],
   priority: [
@@ -269,7 +331,6 @@ if (stale.length) {
   for (const s of stale) console.error(`    ${s}`);
   process.exit(1);
 }
-
 
 const fsKeys = NODE_CONSTANTS.fs;
 const signalKeys = NODE_CONSTANTS.signals;
@@ -413,6 +474,14 @@ const includes = '#include <errno.h>\n#include <fcntl.h>\n#include <signal.h>\n'
   + 'on Windows (node_constants.cc guards each with #ifdef, having pulled uv.h in '
   + 'through node_internals.h), so this engine must too -- failing loudly beats '
   + 'shipping a Windows fs.constants four keys short of node\'s."\n#endif\n'
+  + '#if defined(_WIN32) && !defined(WSAEINTR)\n'
+  + '#error "clode: the 58 WSA* errno names must come from <winsock2.h>, pulled in by '
+  + 'libuv (uv/win.h, via private.h -> uv.h). WSAEINTR is not defined, so every one of '
+  + 'them just compiled out and this engine would report a Windows os.constants.errno of '
+  + '79 keys where node reports 137 -- silently, because a missing constant does not '
+  + 'throw. That gap already shipped once (it was invisible until a --check ran on a '
+  + 'Windows host), so it fails the build instead of coming back. _WIN32 and not '
+  + '_MSC_VER: mingw has no winsock2 of its own either."\n#endif\n'
   + `#define CLODE_CONSTANTS_ABI ${ABI}\n`
   + `#define CLODE_ABI_MARKER "clode-constants-abi:${ABI}"\n`;
 

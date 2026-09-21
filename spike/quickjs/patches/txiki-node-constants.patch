@@ -1,8 +1,8 @@
 diff --git a/src/signals.c b/src/signals.c
-index 5db61d5..6ca1802 100644
+index 5db61d5..cbe4907 100644
 --- a/src/signals.c
 +++ b/src/signals.c
-@@ -166,7 +166,646 @@ static const JSCFunctionListEntry tjs_signal_funcs[] = {
+@@ -166,7 +166,823 @@ static const JSCFunctionListEntry tjs_signal_funcs[] = {
      TJS_CFUNC_DEF("signal", 2, tjs_signal),
  };
  
@@ -27,6 +27,9 @@ index 5db61d5..6ca1802 100644
 +#endif
 +#if defined(_MSC_VER) && (!defined(F_OK) || !defined(R_OK) || !defined(W_OK) || !defined(X_OK))
 +#error "clode: MSVC lacks <unistd.h>, so F_OK/R_OK/W_OK/X_OK must come from libuv (uv/win.h, via private.h -> uv.h). They did not. node reports all four on Windows (node_constants.cc guards each with #ifdef, having pulled uv.h in through node_internals.h), so this engine must too -- failing loudly beats shipping a Windows fs.constants four keys short of node's."
++#endif
++#if defined(_WIN32) && !defined(WSAEINTR)
++#error "clode: the 58 WSA* errno names must come from <winsock2.h>, pulled in by libuv (uv/win.h, via private.h -> uv.h). WSAEINTR is not defined, so every one of them just compiled out and this engine would report a Windows os.constants.errno of 79 keys where node reports 137 -- silently, because a missing constant does not throw. That gap already shipped once (it was invisible until a --check ran on a Windows host), so it fails the build instead of coming back. _WIN32 and not _MSC_VER: mingw has no winsock2 of its own either."
 +#endif
 +#define CLODE_CONSTANTS_ABI 1
 +#define CLODE_ABI_MARKER "clode-constants-abi:1"
@@ -587,6 +590,180 @@ index 5db61d5..6ca1802 100644
 +#endif
 +#ifdef EXDEV
 +        CLODE_K(EXDEV, EXDEV),
++#endif
++#ifdef WSAEINTR
++        CLODE_K(WSAEINTR, WSAEINTR),
++#endif
++#ifdef WSAEBADF
++        CLODE_K(WSAEBADF, WSAEBADF),
++#endif
++#ifdef WSAEACCES
++        CLODE_K(WSAEACCES, WSAEACCES),
++#endif
++#ifdef WSAEFAULT
++        CLODE_K(WSAEFAULT, WSAEFAULT),
++#endif
++#ifdef WSAEINVAL
++        CLODE_K(WSAEINVAL, WSAEINVAL),
++#endif
++#ifdef WSAEMFILE
++        CLODE_K(WSAEMFILE, WSAEMFILE),
++#endif
++#ifdef WSAEWOULDBLOCK
++        CLODE_K(WSAEWOULDBLOCK, WSAEWOULDBLOCK),
++#endif
++#ifdef WSAEINPROGRESS
++        CLODE_K(WSAEINPROGRESS, WSAEINPROGRESS),
++#endif
++#ifdef WSAEALREADY
++        CLODE_K(WSAEALREADY, WSAEALREADY),
++#endif
++#ifdef WSAENOTSOCK
++        CLODE_K(WSAENOTSOCK, WSAENOTSOCK),
++#endif
++#ifdef WSAEDESTADDRREQ
++        CLODE_K(WSAEDESTADDRREQ, WSAEDESTADDRREQ),
++#endif
++#ifdef WSAEMSGSIZE
++        CLODE_K(WSAEMSGSIZE, WSAEMSGSIZE),
++#endif
++#ifdef WSAEPROTOTYPE
++        CLODE_K(WSAEPROTOTYPE, WSAEPROTOTYPE),
++#endif
++#ifdef WSAENOPROTOOPT
++        CLODE_K(WSAENOPROTOOPT, WSAENOPROTOOPT),
++#endif
++#ifdef WSAEPROTONOSUPPORT
++        CLODE_K(WSAEPROTONOSUPPORT, WSAEPROTONOSUPPORT),
++#endif
++#ifdef WSAESOCKTNOSUPPORT
++        CLODE_K(WSAESOCKTNOSUPPORT, WSAESOCKTNOSUPPORT),
++#endif
++#ifdef WSAEOPNOTSUPP
++        CLODE_K(WSAEOPNOTSUPP, WSAEOPNOTSUPP),
++#endif
++#ifdef WSAEPFNOSUPPORT
++        CLODE_K(WSAEPFNOSUPPORT, WSAEPFNOSUPPORT),
++#endif
++#ifdef WSAEAFNOSUPPORT
++        CLODE_K(WSAEAFNOSUPPORT, WSAEAFNOSUPPORT),
++#endif
++#ifdef WSAEADDRINUSE
++        CLODE_K(WSAEADDRINUSE, WSAEADDRINUSE),
++#endif
++#ifdef WSAEADDRNOTAVAIL
++        CLODE_K(WSAEADDRNOTAVAIL, WSAEADDRNOTAVAIL),
++#endif
++#ifdef WSAENETDOWN
++        CLODE_K(WSAENETDOWN, WSAENETDOWN),
++#endif
++#ifdef WSAENETUNREACH
++        CLODE_K(WSAENETUNREACH, WSAENETUNREACH),
++#endif
++#ifdef WSAENETRESET
++        CLODE_K(WSAENETRESET, WSAENETRESET),
++#endif
++#ifdef WSAECONNABORTED
++        CLODE_K(WSAECONNABORTED, WSAECONNABORTED),
++#endif
++#ifdef WSAECONNRESET
++        CLODE_K(WSAECONNRESET, WSAECONNRESET),
++#endif
++#ifdef WSAENOBUFS
++        CLODE_K(WSAENOBUFS, WSAENOBUFS),
++#endif
++#ifdef WSAEISCONN
++        CLODE_K(WSAEISCONN, WSAEISCONN),
++#endif
++#ifdef WSAENOTCONN
++        CLODE_K(WSAENOTCONN, WSAENOTCONN),
++#endif
++#ifdef WSAESHUTDOWN
++        CLODE_K(WSAESHUTDOWN, WSAESHUTDOWN),
++#endif
++#ifdef WSAETOOMANYREFS
++        CLODE_K(WSAETOOMANYREFS, WSAETOOMANYREFS),
++#endif
++#ifdef WSAETIMEDOUT
++        CLODE_K(WSAETIMEDOUT, WSAETIMEDOUT),
++#endif
++#ifdef WSAECONNREFUSED
++        CLODE_K(WSAECONNREFUSED, WSAECONNREFUSED),
++#endif
++#ifdef WSAELOOP
++        CLODE_K(WSAELOOP, WSAELOOP),
++#endif
++#ifdef WSAENAMETOOLONG
++        CLODE_K(WSAENAMETOOLONG, WSAENAMETOOLONG),
++#endif
++#ifdef WSAEHOSTDOWN
++        CLODE_K(WSAEHOSTDOWN, WSAEHOSTDOWN),
++#endif
++#ifdef WSAEHOSTUNREACH
++        CLODE_K(WSAEHOSTUNREACH, WSAEHOSTUNREACH),
++#endif
++#ifdef WSAENOTEMPTY
++        CLODE_K(WSAENOTEMPTY, WSAENOTEMPTY),
++#endif
++#ifdef WSAEPROCLIM
++        CLODE_K(WSAEPROCLIM, WSAEPROCLIM),
++#endif
++#ifdef WSAEUSERS
++        CLODE_K(WSAEUSERS, WSAEUSERS),
++#endif
++#ifdef WSAEDQUOT
++        CLODE_K(WSAEDQUOT, WSAEDQUOT),
++#endif
++#ifdef WSAESTALE
++        CLODE_K(WSAESTALE, WSAESTALE),
++#endif
++#ifdef WSAEREMOTE
++        CLODE_K(WSAEREMOTE, WSAEREMOTE),
++#endif
++#ifdef WSASYSNOTREADY
++        CLODE_K(WSASYSNOTREADY, WSASYSNOTREADY),
++#endif
++#ifdef WSAVERNOTSUPPORTED
++        CLODE_K(WSAVERNOTSUPPORTED, WSAVERNOTSUPPORTED),
++#endif
++#ifdef WSANOTINITIALISED
++        CLODE_K(WSANOTINITIALISED, WSANOTINITIALISED),
++#endif
++#ifdef WSAEDISCON
++        CLODE_K(WSAEDISCON, WSAEDISCON),
++#endif
++#ifdef WSAENOMORE
++        CLODE_K(WSAENOMORE, WSAENOMORE),
++#endif
++#ifdef WSAECANCELLED
++        CLODE_K(WSAECANCELLED, WSAECANCELLED),
++#endif
++#ifdef WSAEINVALIDPROCTABLE
++        CLODE_K(WSAEINVALIDPROCTABLE, WSAEINVALIDPROCTABLE),
++#endif
++#ifdef WSAEINVALIDPROVIDER
++        CLODE_K(WSAEINVALIDPROVIDER, WSAEINVALIDPROVIDER),
++#endif
++#ifdef WSAEPROVIDERFAILEDINIT
++        CLODE_K(WSAEPROVIDERFAILEDINIT, WSAEPROVIDERFAILEDINIT),
++#endif
++#ifdef WSASYSCALLFAILURE
++        CLODE_K(WSASYSCALLFAILURE, WSASYSCALLFAILURE),
++#endif
++#ifdef WSASERVICE_NOT_FOUND
++        CLODE_K(WSASERVICE_NOT_FOUND, WSASERVICE_NOT_FOUND),
++#endif
++#ifdef WSATYPE_NOT_FOUND
++        CLODE_K(WSATYPE_NOT_FOUND, WSATYPE_NOT_FOUND),
++#endif
++#ifdef WSA_E_NO_MORE
++        CLODE_K(WSA_E_NO_MORE, WSA_E_NO_MORE),
++#endif
++#ifdef WSA_E_CANCELLED
++        CLODE_K(WSA_E_CANCELLED, WSA_E_CANCELLED),
++#endif
++#ifdef WSAEREFUSED
++        CLODE_K(WSAEREFUSED, WSAEREFUSED),
 +#endif
 +        { NULL, 0 },   /* terminator: keeps an all-guarded-out table legal */
 +    };
