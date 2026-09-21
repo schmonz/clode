@@ -67,8 +67,18 @@ const UV_EXPR = {
   PRIORITY_HIGH: 'UV_PRIORITY_HIGH',
   PRIORITY_HIGHEST: 'UV_PRIORITY_HIGHEST',
 };
-// Defined only on Windows in uv.h; node still exposes it (as 0) everywhere.
-const GUARDED_WITH_ZERO = new Set(['UV_FS_O_FILEMAP']);
+// The five Windows-only open flags. node exposes all of them on every platform,
+// UNGUARDED (node_constants.cc, DefineFsConstants), because its bundled libuv
+// defines them everywhere: uv/win.h maps them to the _O_* bits, uv/unix.h defines
+// them as 0. We emit them #ifdef'd with a 0 FALLBACK instead of either extreme —
+// unguarded would hard-fail the compile on a leg whose libuv (or cosmo compat
+// header) predates the unix zero-defines, and a plain #ifdef would let the key
+// vanish where node has it, which is the silent gap this file exists to end. 0 is
+// node's own answer off Windows, so the fallback is not a guess.
+const GUARDED_WITH_ZERO = new Set([
+  'UV_FS_O_FILEMAP', 'UV_FS_O_TEMPORARY', 'UV_FS_O_SHORT_LIVED',
+  'UV_FS_O_SEQUENTIAL', 'UV_FS_O_RANDOM',
+]);
 
 function emitEntry(key) {
   const expr = UV_EXPR[key] || key;
@@ -156,14 +166,26 @@ function group(name, keys) {
 //
 // TO UPDATE (when node grows a constant): re-read those five functions in node's
 // src/node_constants.cc for the node version we track and transcribe the additions.
-// The staleness check below will tell you when that is due.
+// The staleness check below will tell you when that is due — run it directly with
+// `node scripts/gen-node-constants.mjs --check` (no vendor tree needed), which is
+// what test/node-shim-constants.test.cjs runs on every leg.
+//
+// UPDATED 2026-09-20 for node 24.21.0. Diffing node's src/node_constants.cc across
+// v24.20.0..v24.21.0, the only constant change in the whole file is four new lines in
+// DefineFsConstants — UV_FS_O_TEMPORARY, UV_FS_O_SHORT_LIVED, UV_FS_O_SEQUENTIAL and
+// UV_FS_O_RANDOM, joining the UV_FS_O_FILEMAP that was already there, under the comment
+// "Windows-only open flags honored by libuv. They are 0 on other platforms." They are
+// transcribed below in node's order. Not academic off Windows: an undefined
+// UV_FS_O_TEMPORARY OR'd into an open-flag mask is NaN, and a NaN mask is the quiet
+// misclassification the gap inventory exists to catch.
 const NODE_CONSTANTS = {
   fs: [
     'UV_FS_SYMLINK_DIR', 'UV_FS_SYMLINK_JUNCTION', 'O_RDONLY', 'O_WRONLY', 'O_RDWR',
     'UV_DIRENT_UNKNOWN', 'UV_DIRENT_FILE', 'UV_DIRENT_DIR', 'UV_DIRENT_LINK',
     'UV_DIRENT_FIFO', 'UV_DIRENT_SOCKET', 'UV_DIRENT_CHAR', 'UV_DIRENT_BLOCK',
     'S_IFMT', 'S_IFREG', 'S_IFDIR', 'S_IFCHR', 'S_IFBLK', 'S_IFIFO', 'S_IFLNK',
-    'S_IFSOCK', 'O_CREAT', 'O_EXCL', 'UV_FS_O_FILEMAP', 'O_NOCTTY', 'O_TRUNC',
+    'S_IFSOCK', 'O_CREAT', 'O_EXCL', 'UV_FS_O_FILEMAP', 'UV_FS_O_TEMPORARY',
+    'UV_FS_O_SHORT_LIVED', 'UV_FS_O_SEQUENTIAL', 'UV_FS_O_RANDOM', 'O_NOCTTY', 'O_TRUNC',
     'O_APPEND', 'O_DIRECTORY', 'O_NOATIME', 'O_NOFOLLOW', 'O_SYNC', 'O_DSYNC',
     'O_SYMLINK', 'O_DIRECT', 'O_NONBLOCK', 'S_IRWXU', 'S_IRUSR', 'S_IWUSR',
     'S_IXUSR', 'S_IRWXG', 'S_IRGRP', 'S_IWGRP', 'S_IXGRP', 'S_IRWXO', 'S_IROTH',

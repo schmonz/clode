@@ -1,8 +1,8 @@
 diff --git a/src/signals.c b/src/signals.c
-index 5db61d5..565048a 100644
+index 5db61d5..6ca1802 100644
 --- a/src/signals.c
 +++ b/src/signals.c
-@@ -166,7 +166,626 @@ static const JSCFunctionListEntry tjs_signal_funcs[] = {
+@@ -166,7 +166,646 @@ static const JSCFunctionListEntry tjs_signal_funcs[] = {
      TJS_CFUNC_DEF("signal", 2, tjs_signal),
  };
  
@@ -52,7 +52,7 @@ index 5db61d5..565048a 100644
 +     * loudly instead.
 +     *
 +     * __tjs_abi is the handshake: the shim requires a minimum, and clode's build
-+     * refuses an engine that predates it rather than fusing a quaude that is subtly
++     * refuses an engine that predates it rather than blobulating a quaude that is subtly
 +     * wrong at runtime.
 +     */
 +    typedef struct { const char *name; int64_t val; } clode_kv;
@@ -126,6 +126,26 @@ index 5db61d5..565048a 100644
 +        CLODE_K(UV_FS_O_FILEMAP, UV_FS_O_FILEMAP),
 +#else
 +        CLODE_K(UV_FS_O_FILEMAP, 0),
++#endif
++#ifdef UV_FS_O_TEMPORARY
++        CLODE_K(UV_FS_O_TEMPORARY, UV_FS_O_TEMPORARY),
++#else
++        CLODE_K(UV_FS_O_TEMPORARY, 0),
++#endif
++#ifdef UV_FS_O_SHORT_LIVED
++        CLODE_K(UV_FS_O_SHORT_LIVED, UV_FS_O_SHORT_LIVED),
++#else
++        CLODE_K(UV_FS_O_SHORT_LIVED, 0),
++#endif
++#ifdef UV_FS_O_SEQUENTIAL
++        CLODE_K(UV_FS_O_SEQUENTIAL, UV_FS_O_SEQUENTIAL),
++#else
++        CLODE_K(UV_FS_O_SEQUENTIAL, 0),
++#endif
++#ifdef UV_FS_O_RANDOM
++        CLODE_K(UV_FS_O_RANDOM, UV_FS_O_RANDOM),
++#else
++        CLODE_K(UV_FS_O_RANDOM, 0),
 +#endif
 +#ifdef O_NOCTTY
 +        CLODE_K(O_NOCTTY, O_NOCTTY),
