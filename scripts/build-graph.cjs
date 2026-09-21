@@ -282,12 +282,23 @@ function legsNamed(name, tier) {
     (l) => l.leg === name || canonical.targetName(l.leg) === name);
 }
 
-// WHERE a leg's engine compile happens, derived from the leg descriptor by the SAME rule
-// .github/actions/build-leg/action.yml's "Resolve the exec mode" step applies: a cross
-// toolchain (a pinned image, a Dockerfile built in CI, or a NetBSD build.sh sysroot) or an
-// alpine container compiles in a CONTAINER; a `qemu-*` guest-platform bakes in our own
-// qemu system emulation; every other named guest-platform is a VM guest; anything else is
-// the runner itself.
+// WHERE a leg's engine compile happens, derived from the leg descriptor: a cross toolchain
+// (a pinned image, a Dockerfile built in CI, or a NetBSD build.sh sysroot) or an alpine
+// container compiles in a CONTAINER; a `qemu-*` guest-platform bakes in our own qemu system
+// emulation; every other named guest-platform is a VM guest; anything else is the runner
+// itself.
+//
+// THIS IS NOT THE SAME RULE AS CI'S, and the sentence that said it was is the correction
+// (re-review, finding 2). .github/actions/build-leg/action.yml's "Resolve the exec mode"
+// step answers a DIFFERENT question -- which orchestration mode the leg runs in, i.e. where
+// vendor and out live -- and its `case` sends `alpine` down `*) exec=host` (action.yml:188-192)
+// while this function answers 'container' for it. Both are right about their own question:
+// the alpine legs really do compile inside a docker container, and the YAML calls that
+// `host` because the container bind-mounts the runner's filesystem. NOTHING pins the two
+// together, and the YAML ENUMERATES its guest platforms where this says "anything
+// non-native", so a tenth guest OS drifts silently. Recorded in BACKLOG.md, "The build
+// graph names one machine and CI names another"; reconciling them is a decision, not an
+// edit, and it is not made here.
 function engineHomeForLeg(leg) {
   if (!leg) return 'host';
   if (leg['cross-image'] || leg['cross-dockerfile'] || leg['netbsd-src']) return 'container';
@@ -375,6 +386,10 @@ function defaultContext(overrides) {
     // from inside esbuild rather than as a refused step. Named from platform-tag.cjs's own
     // toolchainDir, the function the emitter calls, never a second spelling of $TMPDIR.
     toolchain: o.toolchain || platformTag.toolchainDir(repo),
+    // WHICH MACHINE a step's `run` resolves against. Only runBuildTjs branches on it today
+    // (its win32 node fallback), and it is a context field rather than a process read so
+    // that branch is OBSERVABLE from both sides on any box -- see hostPlatform().
+    platform: o.platform || process.platform,
     out: bootstrapOut(o.out, target),
   });
 }
@@ -417,6 +432,18 @@ function sh(ctx, file, args, extraEnv) {
   });
 }
 
+// THE PLATFORM COMES FROM THE CONTEXT, for the reason the exec does (see sh() above). The
+// win32 branch below is the ONE place a step's behaviour depends on which machine it is
+// resolved for, and reading process.platform directly made that branch unobservable: the
+// route derivation below can only ever watch the half of this function the host happens to
+// take, so the Windows fallback would be invisible on every developer box and the POSIX
+// route invisible on the Windows leg. Threaded through ctx, both halves are observable
+// everywhere and the answer is the SAME on every machine -- which is what the page claims,
+// since docs/build.md's Windows caveat is not a statement about the box generating it.
+function hostPlatform(ctx) {
+  return (ctx && ctx.platform) || process.platform;
+}
+
 // The ONE way this repo runs scripts/build-tjs.cjs: scripts/build-tjs-boot.sh resolves an
 // engine (CLODE_TJS -> local -> cache -> a sha-verified slice of the published pack) and
 // runs the build UNDER it through HEAD's node-shim loader, printing one greppable
@@ -425,7 +452,9 @@ function sh(ctx, file, args, extraEnv) {
 // win32, and provisionBundleInputs returns immediately there because it has no POSIX sh to
 // spawn by an absolute path.
 function runBuildTjs(ctx, site, flags) {
-  if (process.platform === 'win32') return sh(ctx, 'node', ['scripts/build-tjs.cjs'].concat(flags));
+  if (hostPlatform(ctx) === 'win32') {
+    return sh(ctx, 'node', ['scripts/build-tjs.cjs'].concat(flags));
+  }
   return sh(ctx, path.join(ctx.repo, 'scripts', 'build-tjs-boot.sh'), [site].concat(flags));
 }
 
@@ -482,7 +511,165 @@ function engineNodeOnWindows() {
   return /win32/.test(src) && /sh\(\s*ctx,\s*'node'/.test(src);
 }
 
+// ---- what a step ACTUALLY spawns: OBSERVED, not read about --------------------------------
+//
+// WHY THIS EXISTS (re-review, finding 1 -- MAJOR). The first answer to "does any step reach
+// node by a route nodeSteps() cannot see" was a text parse of this file's own source (it is
+// still below, in a narrower role). The re-reviewer blinded it with one token: the mutation
+//
+//     const hop = (ctx, args) => runNode(ctx, args);
+//
+// in place of `function hop(ctx, args) { ... }`. The parse reported ZERO findings, all 104
+// build-graph tests stayed green, and the regenerated, COMMITTED docs/build.md read "1 of
+// the 5 declared steps shell out to node" while the build shelled out in two. A reader that
+// a restyled binding can silence answers "no step needs node" exactly the way a node-free
+// build does, which is the defect this whole branch exists to remove -- so replacing it with
+// a cleverer parse would have been the same defect with a bigger regex.
+//
+// SO THE PROPERTY IS OBSERVED INSTEAD OF READ. Every step's `run` is DRIVEN, with a
+// RECORDING exec in the context, and the programs it actually spawns are compared against
+// what nodeSteps() reports. Nothing is parsed, so no binding shape, rename, formatter or
+// arrow can hide a route: whatever the code does, the recorder sees. The seam already
+// exists and is already proven -- sh() takes its exec from the context (see its note), and
+// test/build-graph.test.cjs's "a step shells out through the CONTEXT's exec" drives BOTH
+// directions, so "the injection was honoured" is not something this derivation assumes.
+//
+// BOTH PLATFORMS, ALWAYS, so the answer does not depend on the box. runBuildTjs's win32
+// fallback is the one platform branch in the graph; each step is driven once with
+// `platform: 'linux'` and once with `platform: 'win32'`, and a step that reaches node ONLY
+// under win32 is reported as `windowsOnly` rather than as a finding -- because docs/build.md
+// discloses THAT route separately, through engineNodeOnWindows(). The gate beside this pins
+// the two to agree, so the exclusion cannot outlive the disclosure.
+//
+// WHAT THIS CANNOT SEE, stated plainly rather than left to be discovered: a spawn that
+// bypasses the context's exec entirely (a step calling node:child_process directly) never
+// reaches the recorder. That is exactly the gap the source parse below still covers, and it
+// is why both readers are kept.
+//
+// PURE with respect to the repo: it takes the steps and a context, so a control can be a
+// synthetic step reaching node through any shape at all.
+
+const POSIX_PROBE = 'linux';
+const WIN32_PROBE = 'win32';
+
+function isNodeProgram(file) {
+  const base = path.basename(String(file)).toLowerCase();
+  return base === 'node' || base === 'node.exe';
+}
+
+// Drive ONE step's `run` with a recording exec and answer what it spawned. The recorder
+// returns '' rather than throwing a sentinel, so a `run` that spawns more than once is seen
+// completely -- an early throw would report the first program and call the rest invisible.
+function observeStep(step, ctx, platform) {
+  const spawns = [];
+  const probe = Object.assign({}, ctx, {
+    platform,
+    execFileSync: (file, args) => {
+      spawns.push({ file: String(file), args: (args || []).map(String) });
+      return '';
+    },
+  });
+  step.run(probe);
+  return spawns;
+}
+
+// The `scripts/...` entry points an observed argv names -- the same vocabulary nodeSteps()
+// reports, so the two lists are comparable without either side translating.
+function argvEntries(spawns) {
+  const out = [];
+  for (const c of spawns) for (const a of c.args) {
+    if (a.indexOf('scripts/') === 0 && !out.includes(a)) out.push(a);
+  }
+  return out;
+}
+
+// { steps, ctx } -> { findings, examined, windowsOnly, observed }.
+//
+// `examined` counts (step, platform) drives that actually RECORDED a spawn. Zero means no
+// step reached the recorder at all -- a graph that spawns nothing, or a recorder that is no
+// longer consulted -- and the guard's floor turns that into BROKEN rather than into the
+// clean bill of health it reads like.
+function observedNodeRouteFindings(inputs) {
+  const list = (inputs && inputs.steps) || [];
+  const ctx = ctxOf(inputs && inputs.ctx);
+  const declared = new Map(nodeSteps(list).map((r) => [r.id, r.entries]));
+  const findings = [];
+  const windowsOnly = [];
+  const observed = [];
+  let examined = 0;
+
+  for (const s of list) {
+    if (typeof s.run !== 'function') continue;
+    let posix;
+    let win;
+    try {
+      posix = observeStep(s, ctx, POSIX_PROBE);
+      win = observeStep(s, ctx, WIN32_PROBE);
+    } catch (e) {
+      findings.push(`${s.id}: driving its \`run\` with a recording exec threw `
+        + `(${(e && e.message) || e}) — this derivation answers "which steps reach node" by `
+        + 'RUNNING each step against a recorder, so a `run` that cannot be driven is a step '
+        + 'whose node dependency nothing can observe. Keep `run` free of work that needs a '
+        + 'real filesystem or a real child process; the exec it calls is injected.');
+      continue;
+    }
+    if (posix.length) examined += 1;
+    if (win.length) examined += 1;
+    const nodePosix = posix.filter((c) => isNodeProgram(c.file));
+    const nodeWin = win.filter((c) => isNodeProgram(c.file));
+    observed.push({
+      id: s.id,
+      programs: posix.map((c) => c.file),
+      windowsPrograms: win.map((c) => c.file),
+      entries: argvEntries(nodePosix),
+    });
+
+    if (nodePosix.length && !declared.has(s.id)) {
+      findings.push(`${s.id} SPAWNS \`${nodePosix.map((c) => c.file).join(', ')}\` when its `
+        + '`run` is driven, and nodeSteps() does not report it — so docs/build.md is about to '
+        + 'claim a smaller node dependency than the build has. This is OBSERVED, not parsed: '
+        + 'the step really reached node, whatever shape the helper it went through is written '
+        + 'in. Route it through runNode, or widen nodeSteps() to see this route.');
+    } else if (!nodePosix.length && !nodeWin.length && declared.has(s.id)) {
+      findings.push(`nodeSteps() reports ${s.id}, but driving its \`run\` spawned `
+        + `${posix.length ? `\`${posix.map((c) => c.file).join(', ')}\`` : 'nothing'} and no `
+        + 'node — either that step stopped needing node and the derivation has not noticed, '
+        + 'or nodeSteps() is matching a `runNode` mention that no longer runs.');
+    } else if (nodePosix.length && declared.has(s.id)) {
+      const want = declared.get(s.id);
+      const got = argvEntries(nodePosix);
+      const missing = want.filter((e) => !got.includes(e));
+      const extra = got.filter((e) => !want.includes(e));
+      if (missing.length || extra.length) {
+        findings.push(`${s.id}: docs/build.md names \`${want.join(', ') || '(none)'}\` as the `
+          + `entry point(s) this step needs node for, but it actually ran node on `
+          + `\`${got.join(', ') || '(none)'}\``
+          + (missing.length ? ` (missing ${missing.join(', ')})` : '')
+          + (extra.length ? ` (unannounced ${extra.join(', ')})` : '')
+          + ' — the page names the files a reader is being asked to convert, so a wrong list '
+          + 'sends them to the wrong file.');
+      }
+    }
+    if (!nodePosix.length && nodeWin.length) windowsOnly.push(s.id);
+  }
+  return { findings, examined, windowsOnly, observed };
+}
+
 // ---- a step that REACHES node by a route nodeSteps() cannot see ---------------------------
+//
+// SECOND READER, NARROWER JOB (re-review, finding 1). What follows is a text parse of this
+// module's own source. It is NOT the gate on "every step that reaches node is one
+// nodeSteps() reports" any more -- observedNodeRouteFindings() above is, by watching the
+// steps run -- because a parse can be blinded by a binding style and an observation cannot.
+// It is kept for the ONE thing observation cannot do: see a node spawn that never goes
+// through the context's exec (a direct node:child_process call), which the recorder would
+// never hear about. Read it as a source-shape tripwire, not as the property.
+//
+// ITS KNOWN BLIND SPOT, stated rather than discovered: an INTERMEDIARY bound as
+// `const hop = (ctx, a) => runNode(ctx, a)` or `const runner = runNode` is not a `function`
+// declaration, so the transitive closure below does not follow it. The spawn itself is
+// still attributed to runNode, so nothing is reported. That is precisely the hole the
+// observation above closes; do not re-point a gate at this reader.
 //
 // WHY THIS EXISTS (final whole-branch review, finding 1). nodeSteps() above matches a DIRECT
 // `runNode(` in a step's own `run`. The reviewer added a third helper --
@@ -495,12 +682,11 @@ function engineNodeOnWindows() {
 // gate 4 cannot notice at all. A gate that can only see a change to a committed file is not
 // a gate on the property.
 //
-// SO THE PROPERTY IS STATED DIRECTLY: every step whose `run` REACHES a node spawn is a step
-// nodeSteps() reports, in both directions. "Reaches" is DERIVED FROM THIS MODULE'S OWN
-// SOURCE -- the functions that spawn node, plus every function that transitively calls one --
-// so a fourth, aliased or renamed helper is seen the day it lands rather than the day someone
-// remembers. The alternative (a list of helper names) is the hand-maintained list this whole
-// file is a reaction to, one layer in.
+// WHAT IT STILL SAYS: which named functions in the source reach a node spawn, the
+// `function`-declared helpers that transitively call one, and -- the half that carries its
+// weight now -- every node spawn site it CANNOT attribute to a named function at all. That
+// last one is the "this reader has gone blind on the shape" signal, and a blind reader that
+// answers "no routes" reads exactly like a build with none.
 //
 // PURE, taking the source and the step list, so the control can be the reviewer's exact
 // mutation rather than a corrupted repo. test/build-gates/build-graph-gates.test.cjs is that
@@ -526,7 +712,12 @@ function engineNodeOnWindows() {
 const NODE_SPAWN = new RegExp(
   '\\b(?:sh|exec|execFile|execFileSync|spawn|spawnSync)\\s*\\('
   + '\\s*(?:[\'"]node[\'"]|[A-Za-z_$][\\w$.]*\\s*,\\s*[\'"]node[\'"])', 'g');
-const TOP_LEVEL_FN = /^function\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{\n([\s\S]*?)\n\}$/gm;
+// `async` is OPTIONAL, and that one word is a correction (re-review, finding 6). Without it
+// an `async function` holding a node spawn still went red -- but as an UNATTRIBUTABLE spawn,
+// telling the reader to "give the spawn a named function" about a spawn that was already
+// inside one. Right verdict, wrong instruction, which sends the next person to fix the wrong
+// thing.
+const TOP_LEVEL_FN = /^(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{\n([\s\S]*?)\n\}$/gm;
 const PLATFORM_BRANCH = /win32/;
 
 // PROSE ABOUT AN IDIOM IS NOT AN INVOCATION -- the narrowing test/build-graph-ci.test.cjs's
@@ -689,13 +880,10 @@ const STEPS = [
     phase: 'bundle',
     runsOn: 'host',
     needs: [],
-    // NOT an `input`, and the distinction is the whole point of the field. The runner
-    // treats `inputs` as an assertion checked BEFORE the step runs, and this directory does
-    // not exist on a clean machine -- the step fills it itself, with `npm ci`, which is also
-    // the one moment of this build that touches the network. Declared as an input it would
-    // refuse every first build; left undeclared it was invisible to the graph, to the
-    // artifacts view and to the page, which is what the review found.
-    provisions: (ctx) => [ctxOf(ctx).toolchain],
+    // NO `provisions` FIELD HERE, and that is the point: which step provisions the
+    // build-only toolchain is DERIVED and attached by attachProvisions() below, from the
+    // entry points this step actually runs. See that function for why a hand-placed field
+    // was the wrong shape.
     inputs: (ctx) => absAll(ctxOf(ctx), bundleInputs(ctxOf(ctx))),
     outputs: (ctx) => bundleOutputPaths(ctxOf(ctx)),
     count: () => bundleOutputNames().length,
@@ -719,17 +907,97 @@ const STEPS = [
   },
 ];
 
+// ---- `provisions`: WHICH step, derived from what that step runs --------------------------
+//
+// WHY THIS IS NOT A FIELD ON THE STEP (re-review, finding 4's residual). The PATH is
+// derived -- platform-tag.cjs's toolchainDir, the function the emitter itself calls -- but
+// WHICH STEP provisions it was a hand-placed field on one step, pinned only by a test
+// grepping the emitter for `toolchainDir(`. That is a declaration restating something the
+// code already knows, in a repo whose own rule is "derived, never declared" and which has
+// watched exactly this shape rot three times (engine-recipe.cjs's FILES) and twice more
+// (NODE_CONSTANTS). Point the bundle step at a different emitter, or teach a SECOND entry
+// point to resolve a toolchain, and a hand-placed field is wrong with nothing to notice.
+//
+// THE RULE, in one sentence: a step provisions the build-only toolchain exactly when one of
+// the entry points it runs node on resolves `toolchainDir(...)` for itself. Both halves of
+// that come from the code -- the entry points from nodeSteps() (the step's own `run`), the
+// resolution from the entry point's own source.
+//
+// IT REFUSES rather than answering an empty set, for bundleOutputNamesFrom's reason: a
+// derivation that can answer "nobody provisions anything" is indistinguishable from a
+// derivation that stopped reading, and this one's whole job is to say that a directory
+// nothing else in the graph mentions is real.
+const TOOLCHAIN_CALL = /\btoolchainDir\s*\(/;
+
+// PURE, so a control can hand it entry points whose source never resolves a toolchain.
+//
+// THE RULE AND THE REFUSAL ARE SEPARATE FUNCTIONS, and that is deliberate. The refusal
+// belongs to the GATE, not to the graph: a `steps()` that threw whenever this derivation
+// found nothing would turn one wrong answer into "the graph cannot be read at all" —
+// measured, not feared, when an early cut of this did exactly that and reddened four
+// unrelated guards with a message about a toolchain. It is the same reason orphanFindings
+// refuses a root it was not given rather than calling every step an orphan: a symptom that
+// swamps the diagnosis is worse than the defect.
+function toolchainProvisionerIdsOrNone(rows, readSource) {
+  const ids = [];
+  for (const row of rows) {
+    if (row.entries.some((rel) => TOOLCHAIN_CALL.test(String(readSource(rel) || '')))) {
+      ids.push(row.id);
+    }
+  }
+  return ids;
+}
+
+function toolchainProvisionerIds(rows, readSource) {
+  const ids = toolchainProvisionerIdsOrNone(rows, readSource);
+  if (!ids.length) {
+    throw new Error('build-graph: no step\'s entry point resolves `toolchainDir(...)` any '
+      + `more (looked at ${rows.length} node step(s): `
+      + `${rows.map((r) => r.entries.join(' ')).join(' | ') || '(none)'}). Either the build `
+      + 'stopped provisioning a build-only toolchain — in which case delete this derivation '
+      + 'and the page section that draws it — or an entry point stopped spelling its '
+      + 'resolution that way and the graph is now silent about an out-of-repo directory the '
+      + 'build fills itself. Do not hardcode which step provisions it.');
+  }
+  return ids;
+}
+
+// The I/O half, memoized: attaching costs one small read of each node entry point, and
+// merely LOADING this declaration must stay I/O-free (the tjs plan under the shim loads it
+// before anything has a filesystem opinion), so it happens on the first `steps()`/
+// `stepById()` and not at module scope.
+let PROVISIONS_ATTACHED = false;
+function attachProvisions() {
+  if (PROVISIONS_ATTACHED) return;
+  const ids = toolchainProvisionerIdsOrNone(nodeSteps(STEPS), (rel) => {
+    try { return fs.readFileSync(path.join(REPO, rel), 'utf8'); } catch { return ''; }
+  });
+  for (const s of STEPS) {
+    // NOT an `input`, and the distinction is the whole point of the field. The runner
+    // treats `inputs` as an assertion checked BEFORE the step runs (build-runner.cjs's
+    // checkInputs at :244, step.run at :258), and this directory does not exist on a clean
+    // machine -- the step fills it itself, with npm, which is also the one moment of this
+    // build that touches the network. Declared as an input it would refuse every first
+    // build; left undeclared it was invisible to the graph, to the artifacts view and to
+    // the page, which is what the review found.
+    if (ids.indexOf(s.id) !== -1) s.provisions = (ctx) => [ctxOf(ctx).toolchain];
+  }
+  PROVISIONS_ATTACHED = true;
+}
+
 // ---- the graph ----------------------------------------------------------------------------
 
 // `steps()` is the declaration. `steps({ target })` is the SAME graph with `runsOn`
 // resolved for that leg -- one graph parameterized by target, never 42 graphs.
 function steps(opts) {
   const o = opts || {};
+  attachProvisions();
   if (!o.target) return STEPS.slice();
   return STEPS.map((s) => Object.assign({}, s, { runsOn: runsOnFor(s, o.target, o.tier) }));
 }
 
 function stepById(id) {
+  attachProvisions();
   return STEPS.find((s) => s.id === id);
 }
 
@@ -965,4 +1233,5 @@ module.exports = {
   shapeFindings, danglingFindings, cycleFindings, orphanFindings, evaluationFindings,
   recipeCouplingFindings,
   nodeSteps, engineNodeOnWindows, nodeRoutes, nodeRouteFindings,
+  observedNodeRouteFindings, toolchainProvisionerIds,
 };
