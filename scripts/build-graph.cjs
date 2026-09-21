@@ -1,8 +1,9 @@
 'use strict';
 // build-graph — the ONE declaration of what building `clode` from a clean checkout does.
 //
-// WHY THIS EXISTS. BACKLOG.md:4595: "Steps you can show are steps you have named, and
-// steps you have named are a build graph. We do not have one." What a developer needs in
+// WHY THIS EXISTS. BACKLOG.md's "name the steps, show how done we are" item: "Steps you
+// can show are steps you have named, and steps you have named are a build graph. We do not
+// have one." What a developer needs in
 // order to build this repo is spread across 51 scripts, six npm scripts that build
 // nothing, an 8,756-line BACKLOG.md and code comments. Prose describing an undeclared
 // pipeline would be a FOURTH hand-maintained list of what the build does, going stale the

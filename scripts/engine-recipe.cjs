@@ -49,7 +49,7 @@
 // about a parser and a useless one about a build. So: no `import`, no `export`,
 // no `import.meta`, no top-level await, and nothing required from here may have
 // them either. That is not a style rule, it is the one thing standing between
-// this repo and `./build` on a machine with no node.
+// this repo and `./build.sh` on a machine with no node.
 //
 // IT IS A GATE, NOT A COMMENT. test/build-graph.test.cjs plans the WHOLE graph
 // under tjs and compares it to the plan under node, count for count. Reintroduce

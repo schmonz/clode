@@ -1,9 +1,10 @@
 'use strict';
 // The build graph's SHAPE rules (scripts/build-graph.cjs).
 //
-// WHY THE RULES LIVE IN THE MODULE, NOT IN THESE TEST BODIES. BACKLOG.md:4595 names the
-// disease this graph exists to cure -- "a fourth hand-maintained list of what the build
-// does, going stale the same silent way" -- and a shape rule written inline in a test body
+// WHY THE RULES LIVE IN THE MODULE, NOT IN THESE TEST BODIES. BACKLOG.md's "name the
+// steps, show how done we are" item names the disease this graph exists to cure -- "a
+// fourth hand-maintained list of what the build does, going stale the same silent way" --
+// and a shape rule written inline in a test body
 // has no seam to feed a known-bad graph through. So build-graph.cjs exports FOUR pure
 // finding functions (shapeFindings / danglingFindings / cycleFindings / orphanFindings),
 // and both halves of every gate below drive the SAME code: the real graph through
@@ -482,7 +483,7 @@ test('every step it runs prints one greppable line in house style', () => {
 // FINDING 3 (review round 1). The line used to render `count=<n>/<n>` — a ratio that is
 // ALWAYS 1, because it is printed once, after the step finished, and the graph stops at STEP
 // granularity so no partial numerator exists to report. A fraction that can never be
-// anything but 1/1 reads as progress and carries none; BACKLOG.md:4686 asks for an honest
+// anything but 1/1 reads as progress and carries none; that backlog item asks for an honest
 // denominator, not a fake percentage. Pinned as a rule rather than as one expected string,
 // so the tautology cannot come back for a step nobody wrote a literal for.
 test('no step line renders a ratio that is always 1', () => {
@@ -505,7 +506,8 @@ test('a step with no derived count says so rather than inventing one', () => {
   assert.deepStrictEqual(lines, ['build-graph: step=x.one phase=x runsOn=host ms=0 count=-']);
 });
 
-// BACKLOG.md:4686 asks for "every step's elapsed time written where a piped/CI build keeps
+// BACKLOG.md's "name the steps, show how done we are" asks for "every step's elapsed time
+// written where a piped/CI build keeps
 // it, so a regression is a diff and not a feeling". libexec/build-trace.cjs is ALREADY that
 // record (one JSON line per build, Chrome-trace step shape, refusing a run with no
 // interpreter recorded) and `clode build` already writes it, so the graph runner composes it

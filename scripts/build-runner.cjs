@@ -4,8 +4,9 @@
 //
 // WHY THIS EXISTS. The graph is a declaration, and a declaration nothing executes is prose
 // with a syntax highlighter: it drifts the moment the build changes, in exactly the silent
-// way BACKLOG.md:4595 names ("a fourth hand-maintained list of what the build does"). The
-// only thing that keeps a declaration TRUE is a build that fails when it is false. So this
+// way BACKLOG.md's "name the steps, show how done we are" names it ("a fourth
+// hand-maintained list of what the build does"). The only thing that keeps a declaration
+// TRUE is a build that fails when it is false. So this
 // file is the one place `./build.sh` and CI turn the graph into a sequence of commands, and it
 // treats every step's `inputs` and `outputs` as an assertion rather than as documentation.
 //
@@ -43,8 +44,9 @@ const G = require('./build-graph.cjs');
 
 // ---- the durable timing record ----------------------------------------------------------
 //
-// BACKLOG.md:4686 asks for "every step's elapsed time written where a piped/CI build keeps
-// it, so a regression is a diff and not a feeling". That record ALREADY EXISTS:
+// BACKLOG.md's "name the steps, show how done we are" asks for "every step's elapsed time
+// written where a piped/CI build keeps it, so a regression is a diff and not a feeling".
+// That record ALREADY EXISTS:
 // libexec/build-trace.cjs, one JSON line per build in Chrome-trace step shape, which
 // `clode build` has appended to since Task 3 of the build-report work. So this composes it
 // instead of emitting a second timing format — two formats would disagree within a release,
@@ -77,15 +79,16 @@ function interpreterLabel() {
 //
 //   build-graph: step=<id> phase=<phase> runsOn=<where> ms=<elapsed> count=<total|->
 //
-// `count` is the step's DERIVED denominator (BACKLOG.md:4686's second ask) — patches
-// applied, bundles emitted — and `-` where a step has none.
+// `count` is the step's DERIVED denominator (the second ask of BACKLOG.md's "name the
+// steps, show how done we are") — patches applied, bundles emitted — and `-` where a step
+// has none.
 //
 // A BARE TOTAL, NOT A FRACTION, and this is a correction (review round 1). The first cut
 // rendered `count=<n>/<n>`, which is a ratio that is ALWAYS 1: this line is printed once,
 // after the step has finished, and the graph stops at STEP granularity by design (cmake owns
 // the within-step compile graph), so there is no moment at which the runner knows a partial
 // numerator. `28/28` is a fake percentage wearing a fraction's clothes — it looks like
-// progress and can never report any. BACKLOG.md:4686's own words are that an honest mixed
+// progress and can never report any. That backlog item's own words are that an honest mixed
 // display beats a fake percentage, so the denominator ships alone and means exactly what it
 // says: how many units this step covered. A real numerator needs progress reported from
 // INSIDE a step, which is a different mechanism (the backlog item's first ask) and not

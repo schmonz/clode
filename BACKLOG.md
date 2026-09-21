@@ -4,6 +4,10 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 (Strategic feasibility risks live in `LONG-TERM.md`; in-flight designs in
 `docs/superpowers/`. Done items are DELETED from here — git history is the record.)
 
+**Building this repo: `./build.sh`, and [`docs/build.md`](docs/build.md) says what that does.**
+That page is GENERATED from `scripts/build-graph.cjs` — the one declaration of the build — so it
+cannot drift from it; it is also where the honest answer to "does this need node?" lives.
+
 ## The carve gate refused nine platforms it can never be satisfied on (2026-09-21)
 
 The 2026-09-04 carve refusal is right: Bun folds `process.platform` at carve time, and a
@@ -276,6 +280,131 @@ were found, several by accident, most of them green beforehand:
 
 The durable lesson, now enforced in several places: **a gate that cannot demonstrate its own
 failure is not a gate**, and the way to find out is to run it RED on purpose.
+
+## The build graph names one machine and CI names another (2026-09-21)
+
+`scripts/build-graph.cjs`'s `engineHomeForLeg` says in its own comment that it applies "the
+SAME rule `.github/actions/build-leg/action.yml`'s 'Resolve the exec mode' step applies". **It
+does not**, and that sentence is the defect — found by the final whole-branch review of the
+build-graph work, investigated here, not fixed.
+
+**The disagreement, exactly.** `action.yml:184-191` sends `guest-platform: alpine` down the
+`*) exec=host` arm. `build-graph.cjs:284`'s `engineHomeForLeg` sends the same leg to
+`container`. Everything else maps cleanly: `cross-image`/`cross-dockerfile`/`netbsd-src` ->
+`exec=cross` / `container`, `qemu-*` -> `exec=qemu` / `qemu-guest`, the nine named VM platforms
+-> `exec=guest` / `guest`.
+
+**Which one is right: both, about different questions.** The eight alpine legs DO compile the
+engine inside a docker container — `action.yml:746` "Build tjs (alpine guest)" runs
+`./.github/actions/guest` with `platform: alpine`, and `scripts/build-tjs-boot.sh alpine-guest
+--build-only` runs in there, six of the eight under qemu-user emulation. So the GRAPH's answer
+is the physically true one for `engine.compile`. The YAML's `exec` is not answering "which
+machine compiles": it is answering "which orchestration mode, and where do vendor/out live" —
+and alpine is `host` there because the container bind-mounts the runner's own filesystem, so
+there is no separate machine to sync a tree to. Two true answers to two different questions,
+with one comment claiming they are the same rule.
+
+**What the disagreement costs.** Nothing functional today: the graph's `runsOn` drives the
+generated fleet view in `docs/build.md` and `./build.sh`'s own native plan, not CI's leg
+orchestration. What it costs is the truth of the picture. The fleet view's 4/25/12/1 split is a
+SECOND classification of the same 42 leg descriptors, and `grep -rn engineHomeForLeg test/`
+finds nothing that pins the two in agreement. The concrete drift waiting to happen: the YAML
+ENUMERATES its nine guest platforms (`netbsd|freebsd|openbsd|dragonflybsd|omnios|solaris|
+midnightbsd|haiku|openindiana`), while the graph says "any non-native, non-alpine, non-qemu
+guest-platform is a guest". Add a tenth guest OS to `scripts/tjs-legs.mjs` and forget the YAML
+case, and CI runs it `exec=host` while the page draws it in a VM — the resolving-for-the-wrong-
+machine class `runsOn` exists to express, arriving through the classifier instead of the plan.
+
+**Shape of the fix, when it is taken.** Either derive one from the other (the graph reads the
+YAML's case arms, or the YAML asks the graph) with the alpine difference named as a difference
+rather than papered over, or leave both and add a gate that walks all 42 legs and asserts the
+mapping `cross->container, qemu->qemu-guest, guest->guest, host->host EXCEPT alpine`. The
+second is cheap and would have caught this; the first removes the restatement. Whichever, the
+comment at `build-graph.cjs:284` must stop claiming a sameness that is not there — that is what
+made this invisible.
+
+## Two literals in the build graph that a new step would walk past (2026-09-21)
+
+Both found by the final whole-branch review; both small, both latent, neither fixed.
+
+**1. `runsOnForLegs` carries a two-element literal list of step ids.**
+`scripts/build-graph.cjs`'s `runsOnForLegs` decides a step's per-leg home with
+`step.id === 'engine.compile' ? engineHomeForLeg(leg) : step.id === ROOT_ID ?
+blobulateHomeForLeg(leg) : step.runsOn`. Those are the two steps that MOVE per leg today, and
+the third arm (the source phase runs on the runner for every leg) is right and explained. But a
+NEW step that moves per leg would silently resolve to its native answer, and every view would
+agree with it. This is the same shape as every other hand list this file's header is a monument
+to, one level down — the set of movers is a property of the steps, and a step could declare its
+own per-leg rule (`home: (leg) => ...`) instead of being named here.
+
+**2. `libexec/quaude-blobulate.js:579` still has the in-place-write defect fixed in the engine
+install at `f3b6b16`.** `await tjs.writeFile(out, total, { mode: 0o755 })` writes over the
+destination in place. The engine case was fixed by staging beside the target and `rename`ing,
+because writing over a RUNNING executable's image truncates it and kills the process using it.
+Narrower here, which is why it is recorded rather than done: `./build.sh` runs the graph under
+the ENGINE, not under `clode-native`, so re-blobulating does not kill the build. It bites when
+a running `clode-native`/`quaude` blobulates over ITSELF. It wants its own acceptance (a copy
+of the binary executing while it is rewritten, surviving), not a drive-by copy of the engine
+fix.
+
+## Gate 3 catches a typo'd step id, not a bypassed graph (2026-09-21)
+
+`test/build-graph-ci.test.cjs` enforces that every CI call site NAMING a step id names one the
+graph declares. The wider property — *a call site that spells out a command instead of naming a
+step is a step the graph never hears about* — is NOT enforced, and the file header used to claim
+it was. The header is corrected; the property is here.
+
+**The reproduction (final whole-branch review, run against the real file).** Append to
+`.github/actions/build-leg/action.yml`:
+
+    run: node scripts/build-tjs.cjs --regen-only
+
+`node --test test/build-graph-ci.test.cjs` -> **4 pass, 0 fail**. Nothing sees it.
+
+**Why a wider gate cannot be green today.** Six call sites are still un-converted, and they
+share one blocker: `--only engine.compile` selects that step AND its transitive `needs`, so it
+drags `engine.bytecode` and `engine.source` into containers and guests that cannot run a source
+phase. A gate that COUNTED un-converted sites would be red by design until that is resolved.
+
+**The parked decision (the user's).** Two options, not costed here: (a) a runner mode that runs
+the NAMED step alone, leaving its inputs to a previous phase — which means the input assertions
+have to stay meaningful on a machine that did not build them; or (b) a separate guest-side
+compile step that declares the already-complete tree as its input. When one lands, the six sites
+convert and the wider rule belongs in that gate's `scan`, with the header paragraph deleted.
+
+## Smaller things the build-graph review found and left (2026-09-21)
+
+Recorded so they are not re-found. None is a correctness bug in what ships.
+
+- **`bundleOutputPaths` restates `build/bundle`.** The bundle NAMES are derived by regex out of
+  `scripts/build-clode-main.mjs`; the DIRECTORY (`OUT`, `build-clode-main.mjs:30`) is not. It
+  fails LOUDLY if `OUT` moves (the runner's output check names the path), so it is the mildest
+  of the restatements — and the same regex could capture the directory.
+- **A step refused on its INPUTS leaves no trace entry.** `checkInputs` throws BEFORE the
+  try/catch that pushes `traceSteps`, so a step stopped at its input boundary appears in
+  `build-trace.jsonl` not as `failed` but not at all. The run line is still written by the
+  `finally`. Pre-existing, unchanged by this work, mildly misleading history.
+- **The node-shim's `renameReplace` is not atomic on win32.** `libexec/node-shim/modules/fs.cjs:
+  90-101` does `unlink(b); rename(a,b)`, which can leave NO file if the rename then fails.
+  Unreachable today (win32 runs `build-tjs.cjs` under node, not the shim), but it contradicts
+  the install-by-rename guarantee `f3b6b16`'s comment states, if that ever changes.
+- **Nothing sweeps a stale `.tjs.new-<pid>`** if a build dies between the staged copy and the
+  rename. Nothing enumerates that directory, so it is wasted space only.
+- **`entryPointGuard`'s `floor: 7` against 8 rules cannot bite** — `examined` is always 8.
+  Harmless, and the floor means nothing where the population is a constant.
+- **The three mermaid blocks in `docs/build.md` have never been RENDERED.** Hand-checked as
+  valid (shapes, `subgraph id["label"]`, edge labels, `<br/>` inside quotes, em-dashes inside
+  quotes); GitHub is the renderer and a break would be visible.
+- **`action.yml:1116` says "STILL THE BOOTSTRAP RESOLVER, AND STILL NO NODE HERE"** while
+  `node scripts/engine-api-floor.cjs --emit-check` runs at `:1137`, inside the same step. A
+  charitable reading scopes "here" to the build invocation; a literal one is false. One word.
+- **`BACKLOG.md:NNNN` citations in code comments rot silently.** The `BACKLOG.md:4595` /
+  `:4686` references in `scripts/build-graph.cjs`, `scripts/build-runner.cjs` and
+  `test/build-graph.test.cjs` were already pointing at unrelated lines before this file was
+  edited again; they now quote the SECTION title instead. Any new citation should do the same.
+- **A `pgrep -qf test/run.mjs` wait loop can never terminate**, because the waiting shell's own
+  command line contains that string. Wait on a PID. This is a likely source of "waiting forever"
+  and false-completion reports in long sessions.
 
 ## The recipe does not hash the recipe (2026-09-21)
 
@@ -4706,12 +4835,22 @@ build. That is a hypothesis, and it stays a hypothesis until each step is timed.
    checkable.
 
 **Why it belongs to ★★★ and not to a display tweak.** Steps you can show are steps you have
-named, and steps you have named are a build graph. We do not have one — that is exactly what the
-naude entry above ("The case for explicit dependencies") found the hard way, when a producer
-stopped emitting `cli.cjs` and only a two-minute runtime path check noticed. A progress bar
-bolted onto today's imperative script would be a fourth hand-maintained list of what the build
-does, going stale the same silent way. Sequence this WITH the out-of-tree/CMake item, not before
-it: get the steps declared, and the progress display falls out of the declaration.
+named, and steps you have named are a build graph. **We have one now** (2026-09-21):
+`scripts/build-graph.cjs` declares the steps, `scripts/build-runner.cjs` runs them checking each
+one's declared inputs and outputs, `./build.sh` is the developer front door, and
+[`docs/build.md`](docs/build.md) is generated from the declaration — see it for what building
+this repo actually does. That closes ask 1 above, and ask 3 with it: the runner appends every
+step's elapsed time and derived `count` to `libexec/build-trace.cjs`'s durable record rather
+than to a second timing format. Ask 2 — a per-step NUMERATOR, progress from inside a step — is
+still open, and the graph stops at step granularity by design, so it needs progress reported
+from within a step rather than a runner that can fake one.
+
+The original reason this belonged to ★★★ still stands and is why the graph was built the way it
+was: that is exactly what the naude entry above ("The case for explicit dependencies") found the
+hard way, when a producer stopped emitting `cli.cjs` and only a two-minute runtime path check
+noticed. A progress bar bolted onto today's imperative script would be a fourth hand-maintained
+list of what the build does, going stale the same silent way. Sequence the remaining numerator
+WITH the out-of-tree/CMake item, not before it.
 
 ### Default artifact names should carry the Claude bundle version (user, 2026-08-31)
 

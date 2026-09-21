@@ -2,12 +2,27 @@
 // gate 3 — CI names a STEP ID, and cannot invent one.
 //
 // WHY THIS EXISTS. scripts/build-graph.cjs is the one declaration of what building this
-// repo does, and a declaration CI routes around is prose. Every call site in
+// repo does, and a declaration CI routes around is prose. A call site in
 // .github/actions/build-leg/action.yml that spells out a command instead of naming a step
 // is a step the graph never hears about: it can be added, changed or dropped with the
-// graph, the generated docs/build.md and the diagrams all staying green and all wrong. So
-// a converted call site names an id, and this gate refuses an id the graph does not
-// declare — a typo in CI YAML is otherwise found by a 40-minute matrix.
+// graph, the generated docs/build.md and the diagrams all staying green and all wrong.
+//
+// WHAT THIS GATE CATCHES, EXACTLY, AND WHAT IT DOES NOT. It reads every call site that
+// NAMES a step id and refuses an id the graph does not declare — a typo in CI YAML is
+// otherwise found by a 40-minute matrix. It does NOT catch the wider property the sentence
+// above describes: a bare `run:` that spells out a command instead of naming a step is
+// INVISIBLE to it. That is measured, not assumed. The final whole-branch review appended
+//
+//     run: node scripts/build-tjs.cjs --regen-only
+//
+// to the real action.yml and this file reported 4 pass / 0 fail. Six un-converted sites
+// remain, sharing one blocker (a runner mode that runs a named step ALONE — `--only
+// engine.compile` today drags engine.bytecode and engine.source into containers and guests
+// that cannot run a source phase), so a gate that COUNTED the un-converted sites would be
+// red by design today. That decision is the user's and is recorded in BACKLOG.md with this
+// reproduction; when it lands, the wider rule belongs here and this paragraph goes away.
+// Until then the header says what the code does, because a file header claiming a property
+// its code does not test is the same rot as a page claiming a build it does not describe.
 //
 // A GUARD, NOT A BARE TEST, AND THE FLOOR IS THE WHOLE POINT. The interesting failure of
 // a rule shaped like "every X satisfies P" is that there are NO X: this repo has found
