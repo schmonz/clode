@@ -338,6 +338,105 @@ test('the git source reads a rev without touching the working tree', async () =>
     'committed PINS.md and the on-disk one disagree (dirty tree?), or gitSource read the wrong blob');
 });
 
+// ---- the git-free listing IS the git listing -----------------------------------------
+//
+// WHY THIS GATE EXISTS. worktreeSource() used to shell out to `git ls-files`, and that made
+// the engine's source set unanswerable on the machines that most need an answer: the build
+// graph derives engine.compile's declared INPUTS from this expansion, and the runner checks
+// declared inputs before the step runs, so a compile-only machine with no usable git was
+// refused a tree that was perfectly fine (the midnightbsd guest ships no git by written
+// design; the cross containers install a compiler and not a git; every docker leg is root
+// over a uid-1001 bind mount, which is git's dubious-ownership refusal). It is a readdir
+// now, on every platform, with no `if (git)` branch.
+//
+// That swap is only safe while the two listings AGREE, and "they agree" is the kind of claim
+// that is true when written and quietly false later — one `.gitignore` line, one untracked
+// `*.patch`, and a developer's recipe hash stops matching CI's. So on any box that has git,
+// both listings are computed and every path one names and the other does not is a finding.
+// scripts/engine-recipe.cjs keeps the git spelling (trackedSource) beside the one the build
+// uses, for this and nothing else.
+//
+// A DIFFERENCE IS A REAL FINDING, not gate noise: an untracked engine source moves YOUR hash
+// and will never move CI's, and a tracked-but-absent one means the recipe is about to read a
+// file that is not there. Both are things the person running the suite wants to hear.
+//
+// THE FLOOR IS DERIVED. Every pattern in FILES must match at least one file (expand() makes
+// a pattern that matched nothing fatal), so the union of the two listings cannot honestly be
+// smaller than the number of patterns. A hand-written floor here would be one more number to
+// go stale in the file whose whole subject is numbers going stale.
+const ER = require('../scripts/engine-recipe.cjs');
+
+// PURE. { fromTree, fromGit, error } -> findings/examined. Both listings arrive as arrays of
+// root-relative POSIX paths, so the control can hand it a disagreement without a repo.
+function scanListingAgreement(inputs) {
+  const fromTree = (inputs && inputs.fromTree) || [];
+  const fromGit = (inputs && inputs.fromGit) || [];
+  const tree = new Set(fromTree);
+  const tracked = new Set(fromGit);
+  const findings = [];
+  if (inputs && inputs.error) findings.push(inputs.error);
+  for (const p of fromTree) {
+    if (!tracked.has(p)) {
+      findings.push(`the filesystem listing names '${p}' and \`git ls-files\` does not — an `
+        + 'untracked or ignored engine source moves the recipe hash on THIS box and cannot '
+        + 'move it in CI, so the two disagree about which engine they built. Commit it, '
+        + 'delete it, or (if it is a sidecar this filesystem sprays) teach worktreeSource '
+        + 'to skip it.');
+    }
+  }
+  for (const p of fromGit) {
+    if (!tree.has(p)) {
+      findings.push(`\`git ls-files\` names '${p}' and the filesystem listing does not — the `
+        + 'recipe is defined over what is on disk, so a tracked engine source that is not '
+        + 'there is a tree the build cannot honestly hash. Restore it '
+        + `(git checkout -- ${p}), or fix the exclusion that hid it.`);
+    }
+  }
+  return { findings, examined: new Set([...fromTree, ...fromGit]).size };
+}
+
+const listingAgreementGuard = defineGuard({
+  name: 'engine-recipe-listing-is-gitless-but-agrees',
+  read: () => {
+    const tracked = ER.trackedSource(REPO);
+    if (!tracked) {
+      return { skip: 'git could not list this checkout (no git, not a repository, or the '
+        + 'dubious-ownership refusal) — which is exactly the machine worktreeSource() was '
+        + 'made git-free for. There is nothing to compare against here; a box WITH git '
+        + 'runs the comparison.' };
+    }
+    try {
+      return { fromTree: ER.expand(ER.worktreeSource(REPO)), fromGit: ER.expand(tracked) };
+    } catch (e) {
+      // expand() refuses a pattern that matched nothing. Reported as a finding rather than
+      // thrown, so the verdict still says how much was examined instead of the suite
+      // showing a bare stack where a gate's answer belongs.
+      return { fromTree: [], fromGit: [], error: `one of the two listings could not be `
+        + `expanded at all: ${(e && e.message) || e}` };
+    }
+  },
+  scan: scanListingAgreement,
+  floor: ER.FILES.length,
+  // One path the filesystem sees and git does not: the untracked-patch case, which is the
+  // way this can go wrong without anybody editing this repo.
+  control: () => ({
+    fromTree: ['patches/libtjs-cosmo.patch', 'patches/work-in-progress.patch'],
+    fromGit: ['patches/libtjs-cosmo.patch', 'spike/quickjs/PINS.md'],
+  }),
+});
+guardTests(listingAgreementGuard);
+
+test('the working-tree listing asks no external program — that is what makes it portable', () => {
+  const src = fs.readFileSync(SCRIPT, 'utf8');
+  const body = src.slice(src.indexOf('function worktreeSource('), src.indexOf('function trackedSource('));
+  assert.ok(body.length > 200, 'worktreeSource() moved or was renamed — this reader is blind');
+  assert.ok(!/execFileSync|spawnSync|execSync/.test(body),
+    'worktreeSource() spawns a program again. The build graph derives engine.compile\'s '
+    + 'declared inputs from it and the runner checks those BEFORE the step runs, so any '
+    + 'external dependency here is a refusal on every machine that lacks it — the midnightbsd '
+    + 'guest ships no git by design, and the cross containers install a compiler, not a git.');
+});
+
 // ---- the recipe under the SHIM, mode by mode ----------------------------------------
 //
 // WHY THIS IS NOT COVERED BY THE GRAPH'S PROOF. This file was ESM using `import.meta`

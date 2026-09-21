@@ -168,44 +168,119 @@ function repoRoot() {
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 
 // A "source" is anything that can list a directory and read a file by
-// root-relative POSIX path. Two implementations: the working tree, and a git
-// rev (so a published manifest's tag can be evaluated WITHOUT checking anything
-// out — no worktree mutation, no stash, safe to run mid-edit).
-// The working tree, restricted to git-TRACKED paths, with content read from
-// disk (so an uncommitted edit to a patch DOES move the recipe — that is the
-// point). Tracked-only is not fastidiousness: this mount sprays AppleDouble
-// `._*` sidecars next to every file ([[git-gc-fails-appledouble]]), and a plain
-// readdir picks them up, so the same commit hashed differently on this mac than
-// on a Linux runner. Tracked-only is also exactly what a CI workspace contains,
-// which is what GitHub's hashFiles saw.
+// root-relative POSIX path. Two implementations, and they answer two DIFFERENT
+// questions: the working tree (what is on disk right now), and a git rev (what a
+// published manifest's tag contained — evaluated WITHOUT checking anything out, so
+// no worktree mutation, no stash, safe to run mid-edit).
+//
+// THE WORKING TREE LISTS ITSELF. This used to be `git ls-files`, and the recipe
+// was therefore defined as "the TRACKED engine sources". That was one word of
+// precision bought at a price nobody had measured: the build graph
+// (scripts/build-graph.cjs) DERIVES engine.compile's declared inputs from this
+// expansion, and scripts/build-runner.cjs checks declared inputs BEFORE the step
+// runs — so every machine that compiles the engine had to be able to run `git`,
+// against a repository git was willing to talk about. Three classes of machine in
+// this repo's own matrix cannot:
+//
+//   * midnightbsd-amd64's VM guest ships NO git, deliberately and with a written
+//     reason (scripts/tjs-legs.mjs: the 4.0.4 mport tree's git dep chain is
+//     broken). No package fixes that leg.
+//   * the cross-container legs run stock `debian:trixie` with a cross-apt list
+//     that installs a compiler, not a git; darwin-ppc's baked image installs
+//     nothing at all.
+//   * EVERY docker leg runs as root over a bind mount owned by uid 1001, which is
+//     git's "detected dubious ownership" refusal — present git, no answer.
+//
+// Each of those would have been refused before compiling a tree that was handed
+// to it complete, because it could not enumerate a SOURCE RECIPE the compile step
+// never reads. A red that says "your inputs are missing" when they are all there
+// is not feedback, it is noise — and `--needs assume` exists precisely for those
+// machines. So the listing is a readdir, everywhere, with no `if (git)` branch to
+// leave two answers in the tree.
+//
+// WHAT TRACKED-ONLY WAS ACTUALLY BUYING, and how it is still bought. Its own
+// comment named one hazard: this mount sprays AppleDouble `._*` sidecars next to
+// every file ([[git-gc-fails-appledouble]]), and a plain readdir picks them up, so
+// the same commit hashed differently on this mac than on a Linux runner. That is a
+// one-line exclusion (`._`), the same one scripts/build-graph.cjs's libexec walk
+// already makes for the same reason. Everything else the glob patterns already
+// filter: FILES names individual files plus `*.patch` / `*.toolchain.cmake` in
+// three directories, and nothing in this build writes into any of them. The set a
+// CI workspace contains — which is what GitHub's hashFiles saw, and hashFiles is
+// itself a filesystem glob, not a git query — is the set this returns.
+//
+// AND THE DIFFERENCE IS GATED, NOT ASSERTED. test/engine-recipe.test.cjs runs both
+// listings on any box that has git and reddens on any path one names and the other
+// does not, so "the git-free answer is the git answer" is measured on every test
+// run rather than believed. An untracked `*.patch` sitting in the tree is a real
+// finding there: it moves YOUR recipe hash and it will not move CI's.
 function worktreeSource(root = repoRoot()) {
   const abs = (rel) => path.join(root, ...rel.split('/'));
-  const git = (args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-  const tracked = (pathspec) => {
-    let out;
-    try { out = git(['ls-files', '-z', '--', pathspec]); }
-    catch (e) {
-      // Loud, not empty: "git could not tell us" is not "nothing is tracked".
-      throw new Error(`engine-recipe: cannot list tracked files under ${root} (${e.message.trim()}) — `
-        + 'the recipe is defined over committed engine sources and needs a git checkout');
-    }
-    return out.split('\0').filter(Boolean);
-  };
   return {
     label: 'working tree',
     list(dir) {
-      return tracked(`${dir}/`).filter((p) => p.startsWith(`${dir}/`) && !p.slice(dir.length + 1).includes('/'))
-        .map((p) => p.slice(dir.length + 1));
+      let ents;
+      try { ents = fs.readdirSync(abs(dir), { withFileTypes: true }); }
+      catch (e) {
+        // Empty, not loud, and ONLY here: `expand` already turns "this pattern
+        // matched nothing" into a fatal error naming the pattern and the source,
+        // which is the message a missing engine-source directory should produce.
+        // Throwing our own would replace it with a worse one (an ENOENT for a path
+        // the caller never named) at the one call site that can say more.
+        if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return [];
+        throw e;
+      }
+      return ents.filter((e) => !e.isDirectory() && !e.name.startsWith('._')).map((e) => e.name);
     },
-    has(rel) { return tracked(rel).includes(rel) && fs.existsSync(abs(rel)); },
+    has(rel) {
+      if (path.posix.basename(rel).startsWith('._')) return false;
+      try { return fs.statSync(abs(rel)).isFile(); } catch { return false; }
+    },
     read(rel) {
       try { return fs.readFileSync(abs(rel)); }
       catch (e) {
-        throw new Error(`engine-recipe: tracked engine source '${rel}' is missing from the working tree (${e.code}) — `
+        throw new Error(`engine-recipe: engine source '${rel}' is missing from the working tree (${e.code}) — `
           + 'restore it (git checkout -- ' + rel + ') before computing a recipe');
       }
     },
   };
+}
+
+// The same listing, asked of `git ls-files` instead of the filesystem. NOT USED BY
+// THE RECIPE, and that is the whole point of it being here: it is the control half
+// of the gate in test/engine-recipe.test.cjs that proves worktreeSource() still
+// answers what git answers. It lives beside its twin rather than in the test so
+// that the two listings are read together, and it REFUSES rather than falling back
+// (a git-free box gets `null` from gitLsFiles below and the gate skips with a
+// reason) — a silent empty answer would make the comparison vacuous, which is the
+// one way a gate like this fails without saying so.
+function trackedSource(root = repoRoot()) {
+  const listed = gitLsFiles(root);
+  if (!listed) return null;
+  const set = new Set(listed);
+  return {
+    label: 'git ls-files',
+    list(dir) {
+      return listed.filter((p) => p.startsWith(`${dir}/`) && !p.slice(dir.length + 1).includes('/'))
+        .map((p) => p.slice(dir.length + 1));
+    },
+    has(rel) { return set.has(rel); },
+    read(rel) { return fs.readFileSync(path.join(root, ...rel.split('/'))); },
+  };
+}
+
+// Every path git tracks under `root`, or null where git cannot say — no git on
+// PATH, not a repository, or the dubious-ownership refusal. null is a legitimate
+// answer HERE (and only here) because the one caller is a comparison that has
+// nothing to compare against without it; nothing on the build path asks.
+function gitLsFiles(root = repoRoot()) {
+  try {
+    return execFileSync('git', ['-C', root, 'ls-files', '-z'],
+      { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] })
+      .split('\0').filter(Boolean);
+  } catch {
+    return null;
+  }
 }
 
 function gitSource(rev, root = repoRoot()) {
@@ -292,6 +367,7 @@ function main(argv) {
   else process.stdout.write((want === 'short' ? short(d.hash) : d.hash) + '\n');
 }
 
-module.exports = { FILES, repoRoot, worktreeSource, gitSource, expand, recipeDetail, recipe, short };
+module.exports = { FILES, repoRoot, worktreeSource, trackedSource, gitLsFiles, gitSource, expand,
+  recipeDetail, recipe, short };
 
 if (require.main === module) main(process.argv.slice(2));
