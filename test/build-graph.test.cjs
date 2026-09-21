@@ -586,20 +586,36 @@ test('gate 1: a selection that matches no step is refused, not reported as succe
 // spawn" promise holds only for graphs that never spawn anyway is decoration. Both
 // directions, because only the pair distinguishes "the injection is used" from "nothing ran
 // at all": with no injection the real execFileSync runs and the marker file appears.
+//
+// WHAT IT SPAWNS, AND WHY IT IS NOT A SHELL. The un-injected half has to REALLY spawn or the
+// injected half proves nothing — and the first spelling of that half spawned `/bin/sh -c`,
+// which is the fifth POSIX-sh-on-Windows red this repo has taken (CI run 35613236035,
+// `not ok 243`): win32 resolves that absolute POSIX path as `<drive>:\bin\sh`, CreateProcess
+// answers ENOENT, and execFileSync THROWS before any assertion is reached. But nothing about
+// this seam is about shells — sh() is named for the call it replaces, not for a program it
+// must run — so the honest fix is not test/posix-host.cjs's skip, it is to stop assuming the
+// POSIX fact at all: `process.execPath` is an executable that exists on every platform this
+// suite runs on, Windows included, and it writes the marker with no shell in the picture. So
+// this case still RUNS on the Windows leg, which is worth strictly more than a stated skip;
+// posix-host.cjs stays for the cases that genuinely drive a `#!/bin/sh` script. The marker
+// travels as an ARGV element rather than interpolated into the `-e` source, so a Windows temp
+// path's backslashes are never a quoting question.
 test('a step shells out through the CONTEXT\'s exec, so an injected one really replaces it', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-runner-exec-'));
   const marker = path.join(dir, 'ran');
+  const spawnArgs = ['-e', 'require("fs").writeFileSync(process.argv[1], "x")', marker];
   const ctx = G.defaultContext({ repo: REPO });
   // Not injected: the real execFileSync runs the command.
-  G.sh(ctx, '/bin/sh', ['-c', `printf x > ${marker}`]);
+  G.sh(ctx, process.execPath, spawnArgs);
   assert.ok(fs.existsSync(marker), 'the un-injected path must really spawn — otherwise the '
     + 'test below proves nothing, because nothing would have run either way');
   fs.rmSync(marker);
   const calls = [];
   G.sh(Object.assign({}, ctx, { execFileSync: (f, a) => { calls.push([f, a]); } }),
-    '/bin/sh', ['-c', `printf x > ${marker}`]);
+    process.execPath, spawnArgs);
   assert.strictEqual(fs.existsSync(marker), false, 'the injected exec was bypassed');
-  assert.deepStrictEqual(calls, [['/bin/sh', ['-c', `printf x > ${marker}`]]]);
+  assert.deepStrictEqual(calls, [[process.execPath, spawnArgs]]);
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('runGraph threads execFileSyncFn into the context the steps resolve against', () => {
