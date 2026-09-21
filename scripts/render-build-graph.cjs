@@ -52,9 +52,10 @@ const TIER = 'release';
 
 // ---- the symbolic context the views are rendered against ---------------------------------
 //
-// Two of the graph's roots live OUTSIDE the repo and differ per machine: the patched
-// txiki.js checkout (under the platform-tag vendor dir) and the engine this build produces
-// (under $TMPDIR, keyed by an OS-version tag). They are given names here instead of values,
+// THREE of the graph's roots live OUTSIDE the repo and differ per machine: the patched
+// txiki.js checkout (under the platform-tag vendor dir), the engine this build produces
+// (under $TMPDIR, keyed by an OS-version tag), and the build-only toolchain the bundle step
+// provisions for itself. They are given names here instead of values,
 // so the page says what a path IS rather than where it happened to land on the box that
 // generated it. They are absolute so that every path.join/path.resolve in the graph keeps
 // working unchanged; the leading slash is stripped at display time.
@@ -65,6 +66,11 @@ const TIER = 'release';
 // branch; here there is no executable to name at all.)
 const CHECKOUT_ROOT = '/engine-checkout';
 const ENGINE_PATH = '/engine';
+// The THIRD out-of-repo root, named for the same reason: the build-only toolchain directory
+// (esbuild) `bundle.clode-main` provisions for itself. On this box it is
+// `$TMPDIR/toolchain/<os>-<arch>-node<major>`, which is three machine-specific facts in one
+// path, so the page says what it IS.
+const TOOLCHAIN_ROOT = '/toolchain';
 
 // The target the page is rendered for. FIXED, not this host: `out` is resolved through
 // libexec/clode-build.cjs's resolveBuildOut, which appends `.exe` for a windows target — so
@@ -81,10 +87,11 @@ function renderContext(overrides) {
     target: RENDER_TARGET,
     checkout: CHECKOUT_ROOT,
     engine: ENGINE_PATH,
+    toolchain: TOOLCHAIN_ROOT,
   }, overrides));
 }
 
-// A path under one of the three known roots, named against that root. Anything else is a
+// A path under one of the known out-of-repo roots, named against that root. Anything else is a
 // REFUSAL: it means the graph grew a root this renderer does not know about, and the choices
 // are "commit a machine-specific path" or "say so". The first one is green here and red for
 // everyone else, which is the worst shape a gate can have.
@@ -96,7 +103,7 @@ function underRoot(root, abs) {
 }
 
 function displayPath(ctx, abs) {
-  for (const root of [ctx.checkout, ctx.engine]) {
+  for (const root of [ctx.checkout, ctx.engine, ctx.toolchain]) {
     const rel = underRoot(root, abs);
     if (rel === null) continue;
     const base = String(root).replace(/^[\\/]/, '').split(path.sep).join('/');
@@ -104,8 +111,9 @@ function displayPath(ctx, abs) {
   }
   const rel = underRoot(ctx.repo, abs);
   if (rel !== null) return rel || '.';
-  throw new Error(`render-build-graph: '${abs}' is under neither the repo, the engine `
-    + 'checkout nor the engine, so it cannot be named symbolically — and docs/build.md is '
+  throw new Error(`render-build-graph: '${abs}' is under none of the repo, the engine `
+    + 'checkout, the engine or the toolchain, so it cannot be named symbolically — and '
+    + 'docs/build.md is '
     + 'COMMITTED, so rendering an absolute path here would bake this machine\'s home '
     + 'directory into a page whose gate then fails on every other machine. Either the graph '
     + 'grew a new out-of-repo root (give it a name in renderContext), or a step is naming '
@@ -207,6 +215,15 @@ function renderArtifacts(list, ctx) {
     nodes.push(`  ${sid}[["${q(s.id)}"]]`);
     for (const label of groupArtifacts(s.inputs(c).map((p) => displayPath(c, p)))) {
       edges.push(`  ${artifactNode(label)} --> ${sid}`);
+    }
+    // A PROVISIONED input gets a DASHED edge pointing the other way, because that is what
+    // it is: the step fills the directory and then reads it, so it is neither an input the
+    // runner can assert nor an output of the build. Drawing it as a plain input edge would
+    // claim the runner checks it (it cannot: the directory is absent on a clean machine),
+    // and leaving it out is what the review found — an undeclared input in the one view
+    // that exists to surface exactly that.
+    for (const label of groupArtifacts((s.provisions ? s.provisions(c) : []).map((p) => displayPath(c, p)))) {
+      edges.push(`  ${sid} -.->|"provisions, then reads"| ${artifactNode(label)}`);
     }
     for (const label of groupArtifacts(s.outputs(c).map((p) => displayPath(c, p)))) {
       edges.push(`  ${sid} --> ${artifactNode(label)}`);
@@ -352,6 +369,26 @@ function commonJsParseError(source) {
   }
 }
 
+// WHAT ELSE `./build.sh` NEEDS, and it is not only node (final whole-branch review,
+// finding 6). `bundle.clode-main`'s entry point provisions its own build-only toolchain
+// (esbuild) by running npm into an out-of-repo directory whenever esbuild does not already
+// load from there — so a clean machine also needs `npm` and, the first time, the network.
+// The page said nothing about it. That is this section's OWN stated failure mode ("THE PAGE
+// MUST NOT BE TRUE BY OMISSION") arriving as a missing sentence: no false claim, and a
+// clean-clone developer behind a firewall still gets the surprise the page promised to
+// prevent.
+//
+// MEASURED, not asserted, in the same spirit as the CommonJS parse beside it: an entry
+// point counts when its own source REACHES npm's CLI — it requires scripts/lib/npm-cli.cjs
+// or calls npmCliPath(). Both spellings are call shapes rather than the word "npm", which
+// appears in that file's comments a dozen times over. PURE, so the control can hand it a
+// source either way round.
+const NPM_CLI_USE = /require\(\s*['"][^'"]*npm-cli\.cjs['"]\s*\)|\bnpmCliPath\s*\(/;
+
+function npmProvisioningEntries(verdicts) {
+  return verdicts.filter((v) => NPM_CLI_USE.test(String(v.source))).map((v) => v.rel);
+}
+
 function nodeSection(list, ctx, out) {
   const rows = G.nodeSteps(list);
   const entries = [];
@@ -370,7 +407,7 @@ function nodeSection(list, ctx, out) {
         + 'this checkout, so the page cannot say why that step needs node. Either the step '
         + 'names the wrong path, or the file moved and nothing followed it.');
     }
-    return { rel, err: commonJsParseError(source) };
+    return { rel, source, err: commonJsParseError(source) };
   });
   const stillCjs = verdicts.filter((v) => v.err === null).map((v) => v.rel);
   if (stillCjs.length) {
@@ -383,6 +420,7 @@ function nodeSection(list, ctx, out) {
   // The entry point that cannot even report its own failure, named by its PARSER rather than
   // from memory, so the sentence about it leaves when the file it is about does.
   const earlyParse = verdicts.filter((v) => /import\s*\.\s*meta/.test(v.err)).map((v) => v.rel);
+  const npmEntries = npmProvisioningEntries(verdicts);
   const code = (xs) => xs.map((x) => '`' + x + '`').join(' and ');
 
   const l = [];
@@ -418,6 +456,28 @@ function nodeSection(list, ctx, out) {
         'POSIX sh, so the engine steps fall back to `node scripts/build-tjs.cjs` there.',
         '');
     }
+    if (npmEntries.length) {
+      // WHERE it installs comes from the step's own `provisions`, not from a second reading
+      // of the emitter: the artifact view below draws that same declaration as a dashed
+      // edge, and two spellings of one directory is how the page and the graph drift.
+      const into = [];
+      for (const r of rows) {
+        const step = list.find((x) => x.id === r.id);
+        if (!step || typeof step.provisions !== 'function') continue;
+        if (!r.entries.some((e) => npmEntries.includes(e))) continue;
+        for (const abs of step.provisions(ctx)) {
+          const d = displayPath(ctx, abs);
+          if (!into.includes(d)) into.push(d);
+        }
+      }
+      l.push(`It needs \`npm\` too, and on a cold machine the network: ${code(npmEntries)}`,
+        'provisions its own build-only toolchain (esbuild) by running `npm`'
+          + (into.length ? ` into ${code(into)},` : ','),
+        'whenever esbuild does not already load from there. That is the one step of this',
+        'build that fetches anything: a warm toolchain directory skips it, and a clean',
+        'machine with no network does not get past it.',
+        '');
+    }
   }
   l.push('`npm test` needs node for a different reason, and will still need it after those',
     'entry points are converted: the suite is `node:test`, which the shim does not provide.',
@@ -434,11 +494,41 @@ function nodeSection(list, ctx, out) {
   const pad = (cmd) => cmd + ' '.repeat(col - cmd.length);
   l.push('```sh',
     `${pad(entryCmd)}# builds ${out}`
-      + (rows.length ? ' — node still required, see above' : ' — no node, no npm'),
+      + (rows.length
+        ? ` — ${npmEntries.length ? 'node and npm' : 'node'} still required, see above`
+        : ' — no node, no npm'),
     `${pad(testCmd)}# requires node: the suite is node:test, which the shim does not provide`,
     '```',
     '');
   return l;
+}
+
+// ---- what a step provisions for itself ----------------------------------------------------
+//
+// A THIRD kind of edge, and it exists because leaving it out was a real finding (final
+// whole-branch review, finding 4): `bundle.clode-main` installs its own build-only
+// toolchain (esbuild) into an out-of-repo directory and then requires it from there. That
+// is an input by every ordinary meaning of the word, and it is NOT an `inputs` entry,
+// because the runner asserts `inputs` BEFORE a step runs and this directory does not exist
+// on a clean machine. Undeclared, it was invisible to the graph and to the view that exists
+// to surface undeclared inputs; declared as an input it would refuse every first build.
+//
+// DERIVED, and silent when there is nothing to say: a graph whose steps provision nothing
+// renders no paragraph at all, so this cannot become a sentence about a field nobody uses.
+function provisionSection(list, ctx) {
+  const rows = list.filter((s) => typeof s.provisions === 'function')
+    .map((s) => ({ id: s.id, paths: s.provisions(ctx).map((abs) => displayPath(ctx, abs)) }))
+    .filter((r) => r.paths.length);
+  if (!rows.length) return [];
+  const named = rows.map((r) => `\`${r.id}\` (${r.paths.map((x) => `\`${x}\``).join(', ')})`);
+  return [
+    'A DASHED edge is an artifact the step provisions for itself and then reads: '
+      + `${named.join(', ')}.`,
+    'The runner does not assert those — they are absent on a clean machine by construction,',
+    'and the step fills them. They are drawn because an input nothing declares is an input',
+    'nothing can notice going missing.',
+    '',
+  ];
 }
 
 function stepsTable(list) {
@@ -534,8 +624,9 @@ function renderAll(opts) {
     'The runner treats these as assertions, not as documentation: a declared input that is',
     'missing stops the step before it runs, and a declared output that did not appear fails',
     'the run.',
-    '',
-    '```mermaid');
+    '');
+  p(...provisionSection(list, ctx));
+  p('```mermaid');
   p(renderArtifacts(list, ctx));
   p('```',
     '',
@@ -622,5 +713,5 @@ if (require.main === module) {
 module.exports = {
   renderPipeline, renderArtifacts, renderFleet, renderAll,
   fleetTally, groupArtifacts, renderContext, displayPath, entryPointPresent,
-  stepsTable, nodeSection, commonJsParseError, main, USAGE, PAGE_REL, TIER,
+  stepsTable, nodeSection, provisionSection, npmProvisioningEntries, commonJsParseError, main, USAGE, PAGE_REL, TIER,
 };

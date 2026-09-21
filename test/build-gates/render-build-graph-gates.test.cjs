@@ -126,3 +126,44 @@ test('FLOOR: the steps still name entry points, and every one of them is ESM', (
       `${rel} parses as CommonJS — the page's explanation for it is stale`);
   }
 });
+
+// ---- what else the page must not be true by omission about ------------------------------
+//
+// FINDING 6 of the final whole-branch review. The section above is the best thing on the
+// page — derived, measured, and refusing to render a stale explanation — and it left out
+// that `./build.sh` also needs `npm` and, on a cold machine, the network:
+// scripts/build-clode-main.mjs runs npm into its own toolchain directory whenever esbuild
+// does not already load from there. No false sentence, and a clean-clone developer behind a
+// firewall still gets the surprise the page promised to prevent. That is the page's OWN
+// stated failure mode ("THE PAGE MUST NOT BE TRUE BY OMISSION") arriving as a missing one.
+//
+// MEASURED, like the CommonJS parse beside it: an entry point counts when its own source
+// reaches npm's CLI (requires scripts/lib/npm-cli.cjs, or calls npmCliPath) — a call shape,
+// not the word "npm", which appears in that file's comments a dozen times over. Both
+// directions, because "everything uses npm" and "nothing does" are each green for one of
+// them and wrong for the other.
+test('npmProvisioningEntries tells an entry point that reaches npm from one that does not', () => {
+  assert.deepStrictEqual(R.npmProvisioningEntries([
+    { rel: 'scripts/installer.mjs', source: "const { npmCliPath } = require('./lib/npm-cli.cjs');\n" },
+    { rel: 'scripts/requirer.mjs', source: "import x from './lib/npm-cli.cjs';\nrequire('./lib/npm-cli.cjs');\n" },
+    { rel: 'scripts/talker.mjs', source: '// this file talks about npm install a great deal\n' },
+    { rel: 'scripts/quiet.mjs', source: 'module.exports = 1;\n' },
+  ]), ['scripts/installer.mjs', 'scripts/requirer.mjs']);
+});
+
+// THE FLOOR. If no entry point reaches npm any more, the paragraph must retire rather than
+// linger — and if one does, the page has to say so. Either way a human decides, instead of
+// the sentence quietly outliving or under-reporting the build.
+test('FLOOR: an entry point still provisions with npm, and the page says so', () => {
+  const entries = [...new Set(G.nodeSteps().flatMap((r) => r.entries))]
+    .map((rel) => ({ rel, source: fs.readFileSync(path.join(REPO, rel), 'utf8') }));
+  const npm = R.npmProvisioningEntries(entries);
+  assert.ok(npm.length > 0,
+    'no entry point the graph names reaches npm any more. If that is real, `./build.sh` no '
+    + 'longer needs a package manager or the network: retire the paragraph. If it is not, '
+    + 'this measurement has stopped seeing the call.');
+  const page = R.renderAll();
+  assert.match(page, /It needs `npm` too, and on a cold machine the network/,
+    `${npm.join(', ')} reaches npm and the page does not say so — the omission this test exists for`);
+  for (const rel of npm) assert.ok(page.includes(rel), `${rel} provisions with npm and the page never names it`);
+});

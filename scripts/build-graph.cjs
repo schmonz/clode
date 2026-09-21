@@ -364,6 +364,16 @@ function defaultContext(overrides) {
     checkout: o.checkout || path.join(platformTag.tjsVendorParentDir(env), 'txiki.js'),
     // The engine this build produces and then blobulates against.
     engine: o.engine || env.CLODE_TJS || platformTag.tjsBin(repo),
+    // The build-only toolchain (esbuild) the bundle step provisions for ITSELF. A THIRD
+    // out-of-repo root, and it is here because it was a real UNDECLARED INPUT (final
+    // whole-branch review, finding 4): scripts/build-clode-main.mjs resolves
+    // toolchainDir(REPO) and requires esbuild from there, and because that path is not a
+    // `path.join(REPO, ...)` it is invisible to emitterInputPaths — so the graph said
+    // nothing about it and the artifacts view drew a picture that implied it was not there.
+    // It has a scar too: this directory being reaped by com.apple.bsd.dirhelper surfaced
+    // from inside esbuild rather than as a refused step. Named from platform-tag.cjs's own
+    // toolchainDir, the function the emitter calls, never a second spelling of $TMPDIR.
+    toolchain: o.toolchain || platformTag.toolchainDir(repo),
     out: bootstrapOut(o.out, target),
   });
 }
@@ -671,6 +681,13 @@ const STEPS = [
     phase: 'bundle',
     runsOn: 'host',
     needs: [],
+    // NOT an `input`, and the distinction is the whole point of the field. The runner
+    // treats `inputs` as an assertion checked BEFORE the step runs, and this directory does
+    // not exist on a clean machine -- the step fills it itself, with `npm ci`, which is also
+    // the one moment of this build that touches the network. Declared as an input it would
+    // refuse every first build; left undeclared it was invisible to the graph, to the
+    // artifacts view and to the page, which is what the review found.
+    provisions: (ctx) => [ctxOf(ctx).toolchain],
     inputs: (ctx) => absAll(ctxOf(ctx), bundleInputs(ctxOf(ctx))),
     outputs: (ctx) => bundleOutputPaths(ctxOf(ctx)),
     count: () => bundleOutputNames().length,
@@ -787,6 +804,10 @@ function shapeFindings(list) {
     if (typeof s.outputs !== 'function') findings.push(`${id}: outputs must be a FUNCTION (literals rot)`);
     if (typeof s.run !== 'function') findings.push(`${id}: run must be a function`);
     if (s.count !== undefined && typeof s.count !== 'function') findings.push(`${id}: count must be derived`);
+    if (s.provisions !== undefined && typeof s.provisions !== 'function') {
+      findings.push(`${id}: provisions must be a FUNCTION (literals rot) — it names an `
+        + 'out-of-repo directory whose location is a machine\'s answer, not a constant');
+    }
   }
   return findings;
 }
@@ -801,6 +822,7 @@ function evaluate(ctx, opts) {
     id: s.id,
     inputs: s.inputs(c),
     outputs: s.outputs(c),
+    provisions: s.provisions ? s.provisions(c) : undefined,
     count: s.count ? s.count() : undefined,
   }));
 }
@@ -808,7 +830,10 @@ function evaluate(ctx, opts) {
 function evaluationFindings(records) {
   const findings = [];
   for (const r of records) {
-    for (const k of ['inputs', 'outputs']) {
+    // `provisions` is OPTIONAL (most steps have none) but held to the same rules when it is
+    // there: an empty or relative answer is the same "derivation stopped reading its source"
+    // failure one field over, and it is the field that names an out-of-repo directory.
+    for (const k of r.provisions === undefined ? ['inputs', 'outputs'] : ['inputs', 'outputs', 'provisions']) {
       const v = r[k];
       if (!Array.isArray(v)) { findings.push(`${r.id}: ${k}() did not return an array`); continue; }
       if (!v.length) {

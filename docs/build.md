@@ -40,12 +40,18 @@ then fails at `bundle.clode-main`.
 On Windows the engine phase needs node as well: `scripts/build-tjs-boot.sh` is
 POSIX sh, so the engine steps fall back to `node scripts/build-tjs.cjs` there.
 
+It needs `npm` too, and on a cold machine the network: `scripts/build-clode-main.mjs`
+provisions its own build-only toolchain (esbuild) by running `npm` into `toolchain`,
+whenever esbuild does not already load from there. That is the one step of this
+build that fetches anything: a warm toolchain directory skips it, and a clean
+machine with no network does not get past it.
+
 `npm test` needs node for a different reason, and will still need it after those
 entry points are converted: the suite is `node:test`, which the shim does not provide.
 Getting the suite off `node:test` is separate work, tracked in `BACKLOG.md`.
 
 ```sh
-./build.sh   # builds clode-native — node still required, see above
+./build.sh   # builds clode-native — node and npm still required, see above
 npm test     # requires node: the suite is node:test, which the shim does not provide
 ```
 
@@ -108,6 +114,11 @@ The runner treats these as assertions, not as documentation: a declared input th
 missing stops the step before it runs, and a declared output that did not appear fails
 the run.
 
+A DASHED edge is an artifact the step provisions for itself and then reads: `bundle.clode-main` (`toolchain`).
+The runner does not assert those — they are absent on a clean machine by construction,
+and the step fills them. They are drawn because an input nothing declares is an input
+nothing can notice going missing.
+
 ```mermaid
 flowchart LR
   s0[["engine.source"]]
@@ -132,9 +143,10 @@ flowchart LR
   a15("VERSION")
   a16("spike/quickjs/PINS.md")
   a17("scripts/engine-recipe.cjs")
-  a18("build/bundle/ — 2 files")
+  a18("toolchain")
+  a19("build/bundle/ — 2 files")
   s4[["clode.blobulate"]]
-  a19("clode-native")
+  a20("clode-native")
   a0 --> s0
   a1 --> s0
   a2 --> s0
@@ -160,10 +172,11 @@ flowchart LR
   a15 --> s3
   a16 --> s3
   a17 --> s3
-  s3 --> a18
+  s3 -.->|"provisions, then reads"| a18
+  s3 --> a19
   a9 --> s4
-  a18 --> s4
-  s4 --> a19
+  a19 --> s4
+  s4 --> a20
 ```
 
 ## Where each step runs, across the 42 release legs

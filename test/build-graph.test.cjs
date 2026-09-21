@@ -539,6 +539,56 @@ test('a failed run still records the steps that ran, and names the one that did 
   assert.strictEqual(runs[0].steps[0].state, 'failed');
 });
 
+// ---- `provisions`: the input a step fills for itself (final review, finding 4) ----------
+//
+// scripts/build-clode-main.mjs requires esbuild out of toolchainDir(REPO) and installs it
+// there itself. That directory is out-of-repo, so emitterInputPaths (which reads
+// `path.join(REPO, ...)`) cannot see it and the graph said NOTHING about it — an undeclared
+// input in the branch whose artifacts view exists to surface undeclared inputs. It is
+// declared now, as `provisions` rather than `inputs`, and these three rows are why that
+// distinction is not a euphemism.
+
+test('a provisioned path is NOT asserted as an input — the step fills it', () => {
+  let ran = false;
+  const fake = [fixture({
+    id: 'x.provisioner',
+    provisions: () => [ABSENT],
+    run: () => { ran = true; },
+  })];
+  assert.doesNotThrow(() => R.runGraph({
+    graph: fake, only: 'x.provisioner', nowFn: () => 0, traceLog: scratchTrace(), logFn: () => {},
+  }), 'a provisioned directory is absent on a clean machine by construction; asserting it '
+    + 'as an input would refuse every first build');
+  assert.strictEqual(ran, true, 'the step did not run');
+  // And the same path as an INPUT still stops the step — otherwise the row above would pass
+  // for the wrong reason (a boundary check that stopped checking anything).
+  assert.throws(() => R.runGraph({
+    graph: [fixture({ id: 'x.consumer', inputs: () => [ABSENT] })],
+    only: 'x.consumer', nowFn: () => 0, traceLog: scratchTrace(), logFn: () => {},
+  }), /declared input is missing/);
+});
+
+test('shape: provisions must be a FUNCTION, like every other derived field', () => {
+  const findings = G.shapeFindings([fixture({ id: 'x.literal', provisions: ['/tmp/toolchain'] })]);
+  assert.strictEqual(findings.length, 1, `expected one finding, got: ${findings}`);
+  assert.match(findings[0], /provisions must be a FUNCTION/);
+});
+
+// THE DECLARATION MUST BE THE SAME DIRECTORY THE EMITTER ACTUALLY USES, or it is a second
+// spelling of $TMPDIR — the restatement disease one field over. Both halves: the graph's
+// answer comes from platform-tag.cjs's toolchainDir, and the emitter is still the script
+// that calls it.
+test('the provisioned toolchain is the directory the emitter resolves, not a copy of it', () => {
+  const step = G.stepById('bundle.clode-main');
+  assert.ok(typeof step.provisions === 'function', 'the bundle step declares no provisions');
+  assert.deepStrictEqual(step.provisions(G.defaultContext()),
+    [require('../scripts/platform-tag.cjs').toolchainDir(REPO)]);
+  const emitter = fs.readFileSync(path.join(REPO, G.EMITTER_REL), 'utf8');
+  assert.match(emitter, /toolchainDir\(/,
+    `${G.EMITTER_REL} no longer resolves its toolchain through platform-tag.cjs's `
+    + 'toolchainDir, so the graph is now declaring a directory that script does not use');
+});
+
 // FINDING 1 (review round 1, Important). The record must not call a boundary failure
 // "finished". The green line, the timing and the trace entry all used to be written from a
 // `finally` that ran BEFORE checkOutputs, so a step that exited 0 and wrote nothing printed a

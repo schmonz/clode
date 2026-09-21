@@ -91,7 +91,7 @@ test('the page carries no machine-specific path', () => {
 test('displayPath refuses a path it cannot name symbolically', () => {
   const ctx = R.renderContext();
   assert.throws(() => R.displayPath(ctx, '/somewhere/else/entirely'),
-    /neither the repo, the engine checkout nor the engine/);
+    /none of the repo, the engine checkout, the engine or the toolchain/);
   assert.strictEqual(R.displayPath(ctx, path.join(repo, 'scripts', 'build-graph.cjs')),
     'scripts/build-graph.cjs');
 });
