@@ -901,6 +901,26 @@ const PRODUCTION_GATE_EXCLUSIONS = [
       + "matched a COMMENT quoting args.slice(1).includes('--naude'), and the refuse half "
       + "matched surfaceFor's programmer-error throw on an unknown entry-point kind. It "
       + 'inspects no artifact and gates no build.' },
+  // MEASURED 2026-09-21, both halves, before writing this entry:
+  //   verdict half — the ONLY matches in the whole file are PRODUCTION_VERDICT_EXTRA's
+  //     `.match(` and PATTERN_MATCHES' `.match(/`, both the SAME call: `pins.match(...)`
+  //     in bakedTjsPin(), which EXTRACTS the txiki pin out of spike/quickjs/PINS.md to
+  //     bake into the bundle. On no match it returns '' and the runtime falls back to
+  //     CLODE_TJS_PIN/PINS.md — an extractor that declines, never a verdict.
+  //   refuse half  — the ONE `throw new Error(` is in ensureToolchain: the toolchain
+  //     cache (a scratch dir the OS may empty; see that function's header) still had no
+  //     loadable esbuild after `npm ci` reported success there. That is the build STEP
+  //     failing on its own precondition, the same way npmCliPath's missing-npm failure
+  //     does, not a verdict about any artifact's bytes.
+  // The two halves are in different functions and have nothing to do with each other,
+  // which is the false-positive shape this list exists for. build-clode-main.mjs esbuilds
+  // two bundles; it inspects no artifact and refuses no input.
+  { file: 'scripts/build-clode-main.mjs',
+    because: 'a build STEP that esbuilds two bundles: the verdict half matched '
+      + "bakedTjsPin's pins.match(), a field extractor that returns '' when PINS.md does "
+      + 'not match, and the refuse half matched ensureToolchain throwing when its own '
+      + 'toolchain install left no loadable esbuild. It derives no verdict from any '
+      + 'artifact and refuses no input.' },
 ];
 
 function isRecordedProductionGateExclusion(rel) {
