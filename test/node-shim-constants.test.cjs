@@ -158,3 +158,43 @@ test('crypto.constants: every value we share with host node is identical', () =>
     + '`node scripts/gen-crypto-constants.mjs --write` under the PINNED reference node, '
     + 'not by editing the literal.');
 });
+
+// THE MESSAGE IS THE GATE (2026-09-21). The row above proves --check PASSES on a
+// clean tree; nothing proved it still fails when it should, or that what it prints
+// is useful. Both matter, and the second one had already gone wrong.
+//
+// On its first windows-latest run the check found 58 WSA* errno names that
+// NODE_CONSTANTS had never had — Windows-only Winsock errnos, fed into
+// os.constants.errno by node's DefineWindowsErrorConstants, a sixth Define*
+// function nobody had transcribed. Nothing had grown; no version had moved; the
+// list was simply the union of the platforms someone had looked at. The message
+// said "node grew a constant" and sent the reader hunting for a toolchain bump
+// that did not exist.
+//
+// So this row injects a name the host "has" and NODE_CONSTANTS cannot, and asserts
+// the check fails and explains BOTH causes. Injection, not a golden copy of the WSA
+// list: asserting that NODE_CONSTANTS contains names we just typed into
+// NODE_CONSTANTS is a gate that cannot fail. What can fail is the check going quiet
+// (someone softens the exit) or the wording regressing to one cause.
+test('node-constants --check: a name this host has and the list lacks fails LOUDLY, naming both causes', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nc-check-'));
+  const preload = path.join(dir, 'inject.cjs');
+  // os.constants.errno's own properties are read-only but the object is extensible,
+  // so a preload can add one — which is exactly the shape a Windows host presents
+  // (79 POSIX names plus 58 Winsock ones in the same object).
+  fs.writeFileSync(preload,
+    "require('node:os').constants.errno.ECLODENOTAREALERRNO = 424242;\n");
+  const gen = path.join(__dirname, '..', 'scripts', 'gen-node-constants.mjs');
+  const r = require('node:child_process')
+    .spawnSync(process.execPath, ['--require', preload, gen, '--check'], { encoding: 'utf8' });
+  const out = `${r.stdout}${r.stderr}`;
+  assert.strictEqual(r.status, 1,
+    `--check must FAIL when the host has a name NODE_CONSTANTS lacks; got ${r.status}:\n${out}`);
+  assert.match(out, /ECLODENOTAREALERRNO/, `the missing name must be listed:\n${out}`);
+  assert.match(out, /GREW/, `cause 1 (a version bump added it) must be named:\n${out}`);
+  assert.match(out, /PLATFORM NOBODY TRANSCRIBED FROM/,
+    'cause 2 must be named: the 58 WSA* errno names were a platform gap with no version '
+    + `change, and "node grew a constant" alone sent the reader after a bump that never happened:\n${out}`);
+  assert.match(out, /DefineWindowsErrorConstants/,
+    `the fix must name EVERY Define* function feeding the namespace, not just the obvious one:\n${out}`);
+});

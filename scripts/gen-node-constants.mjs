@@ -241,12 +241,35 @@ for (const [g, names] of Object.entries(NODE_CONSTANTS)) {
   for (const k of hostKeys[g]) if (!have.has(k)) stale.push(`${g}.${k}`);
 }
 if (stale.length) {
-  console.error(`host node ${process.version} exposes ${stale.length} name(s) missing from`);
-  console.error('NODE_CONSTANTS in this file — node grew a constant. Re-transcribe the');
-  console.error('NODE_DEFINE_CONSTANT lists from node\'s src/node_constants.cc, then rerun:');
+  console.error(`host node ${process.version} on ${process.platform}-${process.arch} exposes `
+    + `${stale.length} name(s) missing from NODE_CONSTANTS in this file.`);
+  console.error('');
+  // The original wording said only "node grew a constant". That is one of the two
+  // causes and it was the wrong one the very next time this fired: 58 WSA* errno
+  // names turned up on windows-latest with NO version change at all, and the message
+  // sent the reader looking for a node bump that had not happened. Both causes get
+  // named now, with the host's platform printed above so the second is checkable at a
+  // glance.
+  console.error('TWO CAUSES, and the names below usually tell you which:');
+  console.error('  1. node GREW a constant — a version bump added it (e.g. 24.21.0 added');
+  console.error('     four UV_FS_O_* fs names). Expect it right after a toolchain bump, and');
+  console.error('     expect every leg to report it, not just this one.');
+  console.error('  2. nothing grew — THIS HOST IS A PLATFORM NOBODY TRANSCRIBED FROM. The');
+  console.error('     list is a union assembled by hand, so a name real only on a platform');
+  console.error('     no one has run this on is invisible everywhere else. Expect it on one');
+  console.error('     OS only, with no version change. Do not go looking for a bump.');
+  console.error('');
+  console.error('Either way the fix is the same: re-transcribe from node\'s');
+  console.error('src/node_constants.cc at the version in .tool-versions, taking EVERY');
+  console.error('Define*Constants function that writes into the namespace — errno is fed by');
+  console.error('DefineErrnoConstants AND DefineWindowsErrorConstants, and missing the second');
+  console.error('one is exactly how cause 2 happened. Keep node\'s order. Then rerun.');
+  console.error('');
+  console.error('Missing:');
   for (const s of stale) console.error(`    ${s}`);
   process.exit(1);
 }
+
 
 const fsKeys = NODE_CONSTANTS.fs;
 const signalKeys = NODE_CONSTANTS.signals;
