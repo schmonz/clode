@@ -14,6 +14,41 @@ resulting `clode-native` goes on to build; it is not part of this page.
 
 On Windows the same run produces `clode-native.exe`.
 
+## What still needs node
+
+`./build.sh` is NOT node-free yet. 2 of the 5 declared steps shell out to `node`:
+
+| step | shells out to |
+| --- | --- |
+| `bundle.clode-main` | `node scripts/build-clode-main.mjs` |
+| `clode.blobulate` | `node scripts/stage0.mjs` |
+
+The reason is the entry points, not the work they do: they are ESM, and the CJS
+node-shim loader the engine boots cannot host a module — neither one parses in the
+CommonJS goal at all.
+`scripts/stage0.mjs` is the harder conversion: `import.meta` outside a module is
+an EARLY parse error, so that file cannot load far enough to report its own failure —
+a node-free run of it dies without saying why.
+Converting `scripts/build-clode-main.mjs` and `scripts/stage0.mjs`
+to CommonJS is what would take node off this list, and this section shrinks by itself
+when that lands.
+
+Everything else already runs under the engine, including the runner's own planning. So
+on a machine with no node, `./build.sh` plans the graph and builds the engine, and
+then fails at `bundle.clode-main`.
+
+On Windows the engine phase needs node as well: `scripts/build-tjs-boot.sh` is
+POSIX sh, so the engine steps fall back to `node scripts/build-tjs.cjs` there.
+
+`npm test` needs node for a different reason, and will still need it after those
+entry points are converted: the suite is `node:test`, which the shim does not provide.
+Getting the suite off `node:test` is separate work, tracked in `BACKLOG.md`.
+
+```sh
+./build.sh   # builds clode-native — node still required, see above
+npm test     # requires node: the suite is node:test, which the shim does not provide
+```
+
 ## The steps
 
 | step | phase | runs on | needs | count |

@@ -1,0 +1,128 @@
+'use strict';
+// The build gate inside `scripts/render-build-graph.cjs`: nodeSection()'s two refusals.
+//
+// WHAT IT GUARDS. docs/build.md now carries a section saying which steps of `./build.sh`
+// still shell out to `node`, and WHY — that their entry points are ESM, which the CJS
+// node-shim loader cannot host. The which is derived (build-graph.cjs's nodeSteps() reads
+// the steps' own `run` functions, so a conversion drops a row by itself). The WHY cannot be
+// derived from the graph, because it is a property of the entry-point FILES; so instead of
+// asserting it in prose, nodeSection() puts every entry point the graph names to an actual
+// CommonJS parse and REFUSES when one of them parses.
+//
+// WHY THAT REFUSAL IS THE LOAD-BEARING ONE. The day someone converts scripts/stage0.mjs to
+// CommonJS and leaves the step calling runNode, every other gate on this page stays green:
+// the graph still declares five steps, the three views still render, the committed bytes
+// still match the renderer, and the section still names the right step. The only thing that
+// is wrong is the REASON — the page keeps explaining a CommonJS file by its being ESM. A
+// page that is stale in its explanation and fresh in its facts is the exact failure this
+// whole generated page exists to prevent, and nothing but this refusal can see it.
+//
+// WHAT INPUT TRIPS IT (measured): an entry point whose source parses in the CommonJS goal
+// (`module.exports = 1;`) while a step still runs it through node. And the second refusal:
+// an entry point a step names that is not in the checkout at all, which would otherwise
+// leave the section quietly silent about why that step needs node.
+//
+// WHY THE PURE HALF EXISTS. nodeSection() reads entry points off disk relative to its ctx,
+// so a control could only reach its refusal by corrupting the real scripts/stage0.mjs.
+// commonJsParseError(src) is the same decision with the I/O lifted out — the split
+// build-graph-gates.test.cjs already makes for bundleOutputNamesFrom, and for the same
+// stated reason: a test must be able to hand the decision a known-bad input.
+//
+// The literal relative require below is load-bearing for the production-gate population
+// sweep (test/guards-population.cjs), which derives "which guard controls this production
+// gate" by reading that exact string out of this file's own source.
+const { test } = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const R = require('../../scripts/render-build-graph.cjs');
+const G = require('../../scripts/build-graph.cjs');
+const { defineGuard, guardTests } = require('../guard.cjs');
+
+const REPO = path.resolve(__dirname, '..', '..');
+
+const nodeReasonGuard = defineGuard({
+  name: 'render-build-graph refuses an entry point that is no longer ESM',
+  read: () => ({
+    entries: [...new Set(G.nodeSteps().flatMap((r) => r.entries))].map((rel) => ({
+      rel,
+      source: fs.readFileSync(path.join(REPO, rel), 'utf8'),
+    })),
+  }),
+  // `examined` counts the entry points the graph actually named. Zero is not "clean": it is
+  // either a build that has genuinely stopped needing node — in which case the FLOOR below
+  // says so out loud — or a derivation that has stopped seeing the steps.
+  scan: (inputs) => ({
+    examined: inputs.entries.length,
+    findings: inputs.entries
+      .filter((e) => R.commonJsParseError(e.source) === null)
+      .map((e) => `${e.rel} parses as CommonJS, yet the graph still runs it through node — `
+        + `${R.PAGE_REL} explains that dependency by the entry point being ESM, and that `
+        + 'explanation is no longer true'),
+  }),
+  // An entry point after the conversion this page asks for, with the step left calling
+  // runNode: unmistakably CommonJS, still shelled out to node.
+  control: () => ({ entries: [{ rel: 'scripts/converted.cjs', source: 'module.exports = 1;\n' }] }),
+});
+
+guardTests(nodeReasonGuard);
+
+// The refusal itself, driven through nodeSection rather than through the pure half — the
+// guard proves the DECISION can fail, this proves the renderer acts on it instead of
+// emitting a section with a false explanation in it.
+test('nodeSection refuses an entry point that is no longer ESM', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-node-section-'));
+  fs.mkdirSync(path.join(dir, 'scripts'));
+  fs.writeFileSync(path.join(dir, 'scripts', 'converted.cjs'), 'module.exports = 1;\n');
+  const ctx = R.renderContext({ repo: dir });
+  const steps = [{ id: 'x', run: (c) => runNode(c, ['scripts/converted.cjs']) }];
+  assert.throws(() => R.nodeSection(steps, ctx, 'clode-native'), (e) => {
+    assert.match(e.message, /parse\(s\) as CommonJS, yet/);
+    assert.match(e.message, /scripts\/converted\.cjs/);
+    // It has to say what to do, or the reader is told the page is wrong and left to guess.
+    assert.match(e.message, /stop calling\s+runNode/);
+    return true;
+  });
+
+  // Refusal two: an entry point the graph names and the checkout does not have. Silence
+  // here would be a section that says a step needs node and never says why.
+  const gone = [{ id: 'y', run: (c) => runNode(c, ['scripts/vanished.mjs']) }];
+  assert.throws(() => R.nodeSection(gone, ctx, 'clode-native'), /is not in this checkout/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// commonJsParseError is the measuring device both halves lean on, so it is measured itself,
+// in BOTH directions — "a message for everything" and "null for everything" are each green
+// for one of them and catastrophic for the other.
+test('commonJsParseError tells the CommonJS goal from the module goal', () => {
+  assert.strictEqual(R.commonJsParseError('module.exports = 1;\n'), null);
+  assert.match(R.commonJsParseError("import x from 'y';\n"), /import statement outside a module/);
+  assert.match(R.commonJsParseError('console.log(import.meta.url);\n'), /import\.meta/);
+  // A file that merely MENTIONS import.meta in a comment is CommonJS, and a grep for
+  // `import` would say otherwise. That is not hypothetical: the first cut of this
+  // derivation WAS a grep, and it classified scripts/build-graph.cjs as ESM on the strength
+  // of a comment explaining import.meta. Hence a parse.
+  assert.strictEqual(
+    R.commonJsParseError('// import.meta is not used here\nmodule.exports = 1;\n'), null);
+});
+
+// THE FLOOR. The guard above examines whatever entry points the graph names; if that set
+// empties, its gate half becomes vacuous and reads exactly like a pass. The honest states
+// are two, and this row makes a human pick: either node really is gone from the build — in
+// which case this file and the page's section both retire — or the derivation went blind.
+test('FLOOR: the steps still name entry points, and every one of them is ESM', () => {
+  const entries = [...new Set(G.nodeSteps().flatMap((r) => r.entries))];
+  assert.ok(entries.length > 0,
+    'no declared step shells out to node any more. If that is real, `./build.sh` is now '
+    + 'node-free: retire this guard and the "What still needs node" section with it. If it '
+    + 'is not real, build-graph.cjs\'s nodeSteps() has stopped seeing the runNode calls and '
+    + 'the page is now silently claiming a node-free build.');
+  for (const rel of entries) {
+    const abs = path.join(REPO, rel);
+    assert.ok(fs.existsSync(abs), `${rel} is named by a step but is not in this checkout`);
+    assert.notStrictEqual(R.commonJsParseError(fs.readFileSync(abs, 'utf8')), null,
+      `${rel} parses as CommonJS — the page's explanation for it is stale`);
+  }
+});

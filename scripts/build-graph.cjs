@@ -420,6 +420,51 @@ function runNode(ctx, args, extraEnv) {
   return sh(ctx, 'node', args, extraEnv);
 }
 
+// ---- which steps STILL NEED NODE, derived rather than listed ------------------------------
+//
+// WHY THIS IS DERIVED. docs/build.md has to tell a developer whether `./build.sh` works on a
+// machine with no node, and today the honest answer is "most of the way". A sentence naming
+// the two steps that shell out would be true on the day it was written and silently wrong the
+// moment one of them is converted -- which is the exact rot docs/build.md is generated to
+// avoid, arriving as prose instead of as a stale word. So the page asks the graph, and the
+// graph reads its own steps: a step needs node iff its `run` CALLS runNode, and the entry
+// points it names are the `scripts/...` literals in that same call. Convert stage0.mjs to
+// CommonJS and stop calling runNode, and the page loses the row by itself.
+//
+// Reading function source is the price of not keeping a second list. The alternative -- a
+// `needsNode: true` field beside `run` -- is a list, in the one place where a list and the
+// code it describes can disagree without anything noticing.
+const RUN_NODE_CALL = /\brunNode\s*\(/;
+const SCRIPT_LITERAL = /['"`](scripts\/[^'"`]+)['"`]/g;
+
+function nodeSteps(list) {
+  const steps = list || STEPS;
+  const out = [];
+  for (const s of steps) {
+    if (typeof s.run !== 'function') continue;
+    const src = String(s.run);
+    if (!RUN_NODE_CALL.test(src)) continue;
+    const entries = [];
+    SCRIPT_LITERAL.lastIndex = 0;
+    let m;
+    while ((m = SCRIPT_LITERAL.exec(src)) !== null) {
+      if (!entries.includes(m[1])) entries.push(m[1]);
+    }
+    out.push({ id: s.id, entries });
+  }
+  return out;
+}
+
+// The one step-shaped node dependency the derivation above CANNOT see, because it is not a
+// step's own decision: runBuildTjs sends the engine phase through scripts/build-tjs-boot.sh
+// everywhere except win32, where it falls back to node. Derived from that function's source
+// for the same reason as nodeSteps -- so the page's Windows caveat disappears on its own if
+// the fallback ever does, rather than outliving it.
+function engineNodeOnWindows() {
+  const src = String(runBuildTjs);
+  return /win32/.test(src) && /sh\(\s*ctx,\s*'node'/.test(src);
+}
+
 // ---- the steps ---------------------------------------------------------------------------
 
 const STEPS = [
@@ -710,4 +755,5 @@ module.exports = {
   evaluate,
   shapeFindings, danglingFindings, cycleFindings, orphanFindings, evaluationFindings,
   recipeCouplingFindings,
+  nodeSteps, engineNodeOnWindows,
 };

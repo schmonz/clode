@@ -33,6 +33,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 
 const G = require('./build-graph.cjs');
 
@@ -314,6 +315,130 @@ function entryPointPresent(repo) {
   }
 }
 
+// ---- what still needs node -------------------------------------------------------------
+//
+// THE PAGE MUST NOT BE TRUE BY OMISSION. Everything above this point describes a build the
+// graph can run, and a reader takes that as "so I can build this without node" — because
+// that is what the rest of this repo has spent months making true. It is not true YET, and
+// the gap is exactly two steps. A page that left this out would contain no false sentence
+// and would still mislead every reader who did not go and try it on a node-free box: the
+// same rot this file is generated to prevent, arriving as a MISSING sentence rather than as
+// a stale word.
+//
+// DERIVED, for the reason everything else here is. WHICH steps shell out to node comes from
+// build-graph.cjs's nodeSteps(), which reads the steps' own `run` functions, so converting
+// one drops its row without anyone having to remember that this page exists.
+
+// WHY those entry points need node, MEASURED rather than asserted. The claim the section
+// makes is "they are ESM, and the CJS node-shim loader cannot host a module" — so each one
+// is put to an actual CommonJS parse instead of grepped for `import`. null means the file
+// parses in the CommonJS goal (and the page's explanation of it has gone stale); otherwise
+// the parser's own message, which is also what separates the two cases the section reports
+// differently: "Cannot use import statement outside a module" is a refusal at load, while
+// "Cannot use 'import.meta' outside a module" is an EARLY parse error — that file cannot
+// run far enough to report its own failure, which is what makes it the harder conversion.
+//
+// node:vm, so this renderer is node-only. It already is, twice over (it is a dev/CI tool,
+// and it asks ESM scripts/tjs-legs.mjs for the legs); scripts/build-tjs.cjs must not require
+// this file, for the reason in this file's header.
+function commonJsParseError(source) {
+  try {
+    new vm.Script(String(source), { filename: 'commonjs-goal-probe.cjs' });
+    return null;
+  } catch (e) {
+    return (e && e.message) || String(e);
+  }
+}
+
+function nodeSection(list, ctx, out) {
+  const rows = G.nodeSteps(list);
+  const entries = [];
+  for (const r of rows) for (const e of r.entries) if (!entries.includes(e)) entries.push(e);
+
+  // The parse verdict for every entry point the steps name. A file that has BECOME CommonJS
+  // and is still run through node is a refusal, not a silence: the section would otherwise
+  // go on explaining it with a reason that had stopped being true, which is the precise
+  // failure this page is generated to make impossible.
+  const verdicts = entries.map((rel) => {
+    let source;
+    try {
+      source = fs.readFileSync(path.join(ctx.repo, rel), 'utf8');
+    } catch {
+      throw new Error(`render-build-graph: '${rel}' is named by a step's run() but is not in `
+        + 'this checkout, so the page cannot say why that step needs node. Either the step '
+        + 'names the wrong path, or the file moved and nothing followed it.');
+    }
+    return { rel, err: commonJsParseError(source) };
+  });
+  const stillCjs = verdicts.filter((v) => v.err === null).map((v) => v.rel);
+  if (stillCjs.length) {
+    throw new Error(`render-build-graph: ${stillCjs.join(', ')} now parse(s) as CommonJS, yet `
+      + 'the graph still runs it through node. This page explains that dependency by the entry '
+      + 'point being ESM, and that explanation is now false. Either the step can stop calling '
+      + 'runNode — which is the whole point of converting it — or the real reason has to be '
+      + 'written down here in place of this one.');
+  }
+  // The entry point that cannot even report its own failure, named by its PARSER rather than
+  // from memory, so the sentence about it leaves when the file it is about does.
+  const earlyParse = verdicts.filter((v) => /import\s*\.\s*meta/.test(v.err)).map((v) => v.rel);
+  const code = (xs) => xs.map((x) => '`' + x + '`').join(' and ');
+
+  const l = [];
+  l.push('## What still needs node', '');
+  if (!rows.length) {
+    l.push('No declared step runs `node`: the whole graph runs under the engine it builds.', '');
+  } else {
+    l.push(`\`./${G.ENTRY_REL}\` is NOT node-free yet. ${rows.length} of the ${list.length} `
+        + 'declared steps shell out to `node`:',
+      '',
+      '| step | shells out to |',
+      '| --- | --- |');
+    for (const r of rows) l.push(`| \`${r.id}\` | \`node ${r.entries.join(' ')}\` |`);
+    l.push('',
+      'The reason is the entry points, not the work they do: they are ESM, and the CJS',
+      'node-shim loader the engine boots cannot host a module — neither one parses in the',
+      'CommonJS goal at all.');
+    if (earlyParse.length) {
+      l.push(`${code(earlyParse)} is the harder conversion: \`import.meta\` outside a module is`,
+        'an EARLY parse error, so that file cannot load far enough to report its own failure —',
+        'a node-free run of it dies without saying why.');
+    }
+    l.push(`Converting ${code(entries)}`,
+      'to CommonJS is what would take node off this list, and this section shrinks by itself',
+      'when that lands.',
+      '',
+      'Everything else already runs under the engine, including the runner\'s own planning. So',
+      `on a machine with no node, \`./${G.ENTRY_REL}\` plans the graph and builds the engine, and`,
+      `then fails at \`${rows[0].id}\`.`,
+      '');
+    if (G.engineNodeOnWindows()) {
+      l.push('On Windows the engine phase needs node as well: `scripts/build-tjs-boot.sh` is',
+        'POSIX sh, so the engine steps fall back to `node scripts/build-tjs.cjs` there.',
+        '');
+    }
+  }
+  l.push('`npm test` needs node for a different reason, and will still need it after those',
+    'entry points are converted: the suite is `node:test`, which the shim does not provide.',
+    'Getting the suite off `node:test` is separate work, tracked in `BACKLOG.md`.',
+    '');
+
+  // The two commands side by side, with their comments aligned on a column derived from the
+  // longer of the two. The entry point's name comes from the graph, so padding counted by
+  // hand here would go crooked on the day it is renamed — which is the same class of rot,
+  // one character wide.
+  const entryCmd = `./${G.ENTRY_REL}`;
+  const testCmd = 'npm test';
+  const col = Math.max(entryCmd.length, testCmd.length) + 3;
+  const pad = (cmd) => cmd + ' '.repeat(col - cmd.length);
+  l.push('```sh',
+    `${pad(entryCmd)}# builds ${out}`
+      + (rows.length ? ' — node still required, see above' : ' — no node, no npm'),
+    `${pad(testCmd)}# requires node: the suite is node:test, which the shim does not provide`,
+    '```',
+    '');
+  return l;
+}
+
 function stepsTable(list) {
   const rows = [
     '| step | phase | runs on | needs | count |',
@@ -368,8 +493,9 @@ function renderAll(opts) {
     `resulting \`${out}\` goes on to build; it is not part of this page.`,
     '',
     `On Windows the same run produces \`${winOut}\`.`,
-    '',
-    '## The steps',
+    '');
+  p(...nodeSection(list, ctx, out));
+  p('## The steps',
     '');
   p(...stepsTable(list));
   p('',
@@ -494,5 +620,5 @@ if (require.main === module) {
 module.exports = {
   renderPipeline, renderArtifacts, renderFleet, renderAll,
   fleetTally, groupArtifacts, renderContext, displayPath, entryPointPresent,
-  stepsTable, main, USAGE, PAGE_REL, TIER,
+  stepsTable, nodeSection, commonJsParseError, main, USAGE, PAGE_REL, TIER,
 };

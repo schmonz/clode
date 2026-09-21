@@ -507,12 +507,23 @@ test('the controlled set is EXACTLY the modules a guard was deliberately written
   // test/build-gates/build-graph-gates.test.cjs was written to control that refusal, which
   // returned the count to 29 — so the baseline did NOT move, and the fifth entry here is a
   // human saying which of the two it was.
+  //
+  // scripts/render-build-graph.cjs ADDED 2026-09-21, the same mechanism a second time and
+  // the same answer. docs/build.md gained a section saying which steps of the build still
+  // shell out to node and why, and the renderer gained the refusal that keeps the WHY from
+  // rotting: an entry point that has BECOME CommonJS while its step still runs it through
+  // node is refused, not explained as ESM. That made the renderer gate-shaped (it now
+  // derives a verdict from bytes and throws on it), pushed the uncontrolled count to 30
+  // against the same baseline of 29, and went red at authoring time.
+  // test/build-gates/render-build-graph-gates.test.cjs controls it, which returned the
+  // count to 29 — the baseline did not move for this one either.
   assert.deepStrictEqual([...controlledProductionModules().keys()].sort(), [
     'libexec/clode-build.cjs',
     'libexec/host-provision.cjs',
     'libexec/scc-merge.cjs',
     'libexec/target-update-check.cjs',
     'scripts/build-graph.cjs',
+    'scripts/render-build-graph.cjs',
   ].sort(),
   'the set of production modules counted as CONTROLLED changed. If a successor phase wrote '
   + 'a new guard, add its module here and lower UNCONTROLLED_GATE_BASELINE. If a guard '

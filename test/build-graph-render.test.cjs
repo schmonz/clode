@@ -177,3 +177,64 @@ test('entryPointPresent answers about a FILE, not about any dirent of that name'
   assert.strictEqual(R.entryPointPresent(dir), true);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+// ---- what still needs node -----------------------------------------------------------------
+//
+// THE PAGE MUST NOT BE TRUE BY OMISSION. `./build.sh` is this repo's answer to "how do I
+// build it", and the honest answer today has three parts, not one: the suite still needs
+// node, the BUILD still needs node for its last two steps, and there is a specific thing
+// that would change the second. A page that stated only the first would be read as "the
+// build is node-free" by every reader who did not go and try it on a node-free box — which
+// is the same rot this whole file exists to gate, arriving as a missing sentence instead of
+// a stale word.
+//
+// Read from DISK, not from renderAll(). Gate 4 already pins disk == renderer; these rows
+// are about what a reader actually opens, so a renderer that emitted the prose while the
+// committed page lacked it must fail HERE too rather than only there.
+test('the page states the ./build.sh vs npm test split honestly', () => {
+  const page = fs.readFileSync(path.join(repo, R.PAGE_REL), 'utf8');
+  assert.match(page, new RegExp(`\\./${G.ENTRY_REL.replace(/\./g, '\\.')}`),
+    'the page must name the entry point');
+  assert.match(page, /npm test/, 'the page must name the test command');
+  assert.match(page, /node:test/i,
+    'the page must say WHY npm test still needs node, not merely that it does');
+});
+
+// AND IT MUST NAME THEM FROM THE GRAPH, not from a sentence someone typed. build-graph.cjs's
+// nodeSteps() reads the steps' own `run` functions, so a conversion drops a row by itself;
+// this row is what holds the page to that derivation rather than to a prose list that agrees
+// with it today.
+test('the page names the steps that still shell out to node, and their entry points', () => {
+  const page = fs.readFileSync(path.join(repo, R.PAGE_REL), 'utf8');
+  const rows = G.nodeSteps();
+  assert.ok(rows.length >= 1,
+    'no step calls runNode any more — if that is real, this row and the page section it '
+    + 'guards should both go; if it is not, nodeSteps() has stopped seeing them');
+  for (const row of rows) {
+    assert.ok(page.includes(row.id), `${row.id} shells out to node and the page does not say so`);
+    for (const entry of row.entries) {
+      assert.ok(page.includes(entry),
+        `${row.id} runs \`node ${entry}\` and the page does not name that entry point`);
+    }
+  }
+});
+
+// nodeSteps() DERIVES, so it gets driven both ways — a derivation that cannot come back
+// empty is indistinguishable from a hard-coded list, and one that reports every step is
+// indistinguishable from `true`.
+test('nodeSteps reports a step that shells out to node, and only such a step', () => {
+  const fake = [
+    { id: 'runs.node', run: (ctx) => runNode(ctx, ['scripts/made-up.mjs']) },
+    { id: 'runs.engine', run: (ctx) => runBuildTjs(ctx, 'site', ['--build-only']) },
+    { id: 'declares.nothing', needs: [] },
+  ];
+  assert.deepStrictEqual(G.nodeSteps(fake),
+    [{ id: 'runs.node', entries: ['scripts/made-up.mjs'] }]);
+  assert.deepStrictEqual(G.nodeSteps([fake[1], fake[2]]), [],
+    'nodeSteps found a node dependency in steps that have none');
+});
+
+// The renderer's own refusal behind that section — that an entry point which has BECOME
+// CommonJS is refused rather than explained as ESM — is a production build gate, so its
+// control lives where the production-gate population sweep looks for it:
+// test/build-gates/render-build-graph-gates.test.cjs.
