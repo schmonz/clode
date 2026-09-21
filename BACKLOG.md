@@ -39,6 +39,63 @@ fetched (macos/linux/windows, host or `--target`), and the unavoidable case is N
 stderr rather than passing silently. `carveVerdict` is now a pure exported function, so all
 four branches are tested directly instead of only reachable through a real build.
 
+## ccache never hits because the entries are EVICTED, not mis-keyed (2026-09-21)
+
+**Measured, not guessed.** `ci-ccache: linux-x64-glibc: HITS=0 MISSES=368 TOTAL=368
+RATE=0.0% VERDICT=ALL-MISS` has now been predicted-away twice on a keying theory. The keys
+are fine. The evidence, from run 35554516795 and its predecessor 35546045465 (both on
+`refs/heads/main`):
+
+- **The restore-keys are wired and were tried.** `Cache not found for input keys:
+  ccache-linux-x64-glibc-ubuntu26-3.22-----35554516795-1,
+  ccache-linux-x64-glibc-ubuntu26-3.22-----` — both the run-scoped primary AND the prefix.
+- **The save happened.** `2026-09-20T23:59:44Z Cache saved with key:
+  ccache-linux-x64-glibc-ubuntu26-3.22-----35546045465-1`, 9,237,496 bytes, on main.
+- **It was gone 2h33m later**: the next run's restore at `2026-09-21T02:33:06Z` found
+  nothing under that exact prefix. That run then saved its own 9,228,031-byte entry at
+  02:36:21, and THAT entry is already absent from the repository's cache list too.
+
+**Where the budget went** (`/repos/schmonz/clode/actions/cache/usage`, 2026-09-21T03:30Z):
+34 entries, 7,770,191,495 bytes against the documented 10 GB per-repository limit. FOUR
+entries hold 89% of it, and not one of them is a ccache:
+
+| size | ref | key |
+|---|---|---|
+| 4828 MB | refs/pull/52/merge | `solaris-11.4-gcc-14-2.0.8-amd64-v3` |
+| 815 MB | refs/pull/45/merge | `cosmocc-4.0.2` |
+| 623 MB | refs/pull/45/merge | `haiku-r1beta6-2.0.3-amd64-v3` |
+| 623 MB | refs/pull/52/merge | `haiku-r1beta6-2.0.3-amd64-v3` |
+
+Every surviving ccache entry is 6-8 MB; eight exist repo-wide, ~60 MB total. **The premise
+that ccache costs "200 MB x 17 legs" is false by a factor of ~50** — the 200M figure is
+ccache's own in-dir `max_size`, not what the tarball weighs. ccache is not the capacity
+problem; it is the capacity problem's first victim. A run-scoped key means every run mints
+a NEW entry that is written once and (because it is evicted before the next run reads it)
+never read, so its `last_accessed_at` never advances and it sits permanently at the tail of
+GitHub's LRU eviction order. The two Renovate PRs pushing multi-gigabyte VM images in the
+same window cross the limit and take the tail with them.
+
+**This also explains the one hit anyone has ever seen.** `Cache hit for restore-key:
+ccache-cosmo-ubuntu24-3.22-----35537960554-1` landed before those PR image caches filled
+the budget.
+
+**Not fixed — the fix is not in the ccache wiring, and loosening its key would buy
+nothing** (a key that is already tried and already absent does not become present).
+Options, in decreasing order of how much they reclaim:
+
+1. **Stop the 4.8 GB solaris VM image (48% of the whole repository budget by itself) from
+   being cached per-PR-ref.** A cache saved on `refs/pull/N/merge` is unreadable from main,
+   so the PR copies buy main nothing while evicting it. Either hoist those image caches to
+   a main-branch-only save, or do not cache them at all on PR runs.
+2. **Delete a PR's caches when the PR closes** (`gh cache delete` in a `pull_request:
+   closed` job). Renovate PRs currently leave gigabytes behind indefinitely; that is ~7 GB
+   of the current 7.77 GB.
+3. **Make ALL-MISS attributable rather than mysterious.** `scripts/ci-ccache.sh report`
+   says the rate but cannot say why; one line of `actions/cache/usage` beside it would have
+   answered this in one run instead of three.
+
+Until (1) or (2) lands, **predict ALL-MISS**, because the budget has no headroom.
+
 ## Thirteen gates that could not fail, and the one rule that outranks a harness (2026-09-20)
 
 **Design shelved, not started.** Spec:
