@@ -891,6 +891,12 @@ runs:
         # The container is the same machine's kernel and the same architecture, and this
         # pins both sides to one string instead of two independent uname derivations.
         HOST_TARGET: ${{ steps.bootstrap-tag.outputs.host-target }}
+        # For scripts/ci-ccache.sh's `report` case, which asks actions/cache/usage for the
+        # repo-wide budget alongside the verdict (report_usage()) -- explicit, since a
+        # container gets nothing from the host's environment without an `-e`. Degrades to
+        # "usage unknown" if this image has no curl, or the caller has not granted
+        # `actions: read`; never fails the build either way.
+        GITHUB_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
         # cross-image → pull the pinned registry image (ppc); else use the local
@@ -899,7 +905,7 @@ runs:
         else IMG="clode-cross-toolchain:${{ inputs.leg }}"; fi
         docker run --rm \
           -e CROSS_APT -e CROSS_FILE -e ATOMIC_SHIM -e DARWIN_POLL -e WASM -e MIMALLOC -e FFI \
-          -e LEG -e CCACHE_DIR -e HOST_TARGET \
+          -e LEG -e CCACHE_DIR -e HOST_TARGET -e GITHUB_TOKEN -e GITHUB_REPOSITORY \
           -v "${{ github.workspace }}:/w" -v "${{ runner.temp }}:/scratch" -w /w "$IMG" bash -c '
           set -euxo pipefail
           if [ -n "$CROSS_APT" ]; then apt-get update -q && apt-get install -y -q $CROSS_APT >/dev/null; fi
@@ -998,11 +1004,21 @@ runs:
     # release leg for an unknown number of runs; one greppable
     # `ci-ccache: <leg>: HITS=.. MISSES=.. RATE=.. VERDICT=..` line per leg is what makes
     # the next such question answerable from the logs instead of from a hunch.
+    #
+    # GITHUB_TOKEN, passed explicitly: a composite step does not inherit it as an env var
+    # just because the workflow has one — scripts/ci-ccache.sh's `report` case reads it to
+    # ask actions/cache/usage for the repo-wide budget alongside the verdict (see that
+    # script's report_usage()). GITHUB_REPOSITORY needs no passthrough; it is already one
+    # of the default env vars every runner step gets. The calling workflow must grant the
+    # `actions: read` permission for this to succeed; where it has not, report_usage()
+    # degrades to a stated "usage unknown" rather than erroring — this line can only ADD
+    # information, never take a leg down.
     - name: ccache stats (host-side compiles)
       if: steps.tjs-cache.outputs.cache-hit != 'true' && steps.mode.outputs.ccache == '1' && inputs.guest-platform != 'alpine' && inputs.cross-image == '' && inputs.cross-dockerfile == ''
       shell: bash
       env:
         CCACHE_DIR: ${{ steps.mode.outputs.ccachedir }}
+        GITHUB_TOKEN: ${{ github.token }}
       run: scripts/ci-ccache.sh report ${{ inputs.leg }}
 
     # The save half of the split explained at the restore step: conditional on a build

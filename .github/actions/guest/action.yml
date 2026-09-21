@@ -145,6 +145,14 @@ runs:
       env:
         CLODE_GUEST_SCRIPT: ${{ inputs.script }}
         CLODE_GUEST_PACKAGES: ${{ inputs.packages }}
+        # Forwarded so a guest script that shells out to scripts/ci-ccache.sh's `report`
+        # case can ask actions/cache/usage for the repo-wide budget alongside the ccache
+        # verdict (report_usage()). A container gets nothing from the host's environment
+        # without an explicit `-e` below. Harmless to forward unconditionally: a script
+        # that never reads them sees two unused env vars, and report_usage() itself
+        # degrades to "usage unknown" rather than failing if this image lacks curl or the
+        # caller has not granted `actions: read`.
+        GITHUB_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
         printf '%s\n' "$CLODE_GUEST_SCRIPT" > "$RUNNER_TEMP/guest-script.sh"
@@ -154,6 +162,7 @@ runs:
           -w "$GITHUB_WORKSPACE" \
           -e RUNNER_TEMP -e GITHUB_WORKSPACE \
           -e CLODE_GUEST_PACKAGES \
+          -e GITHUB_TOKEN -e GITHUB_REPOSITORY \
           "alpine:${{ inputs.version }}" \
           sh -e -c '[ -z "$CLODE_GUEST_PACKAGES" ] || apk add -q $CLODE_GUEST_PACKAGES; sh -e "$RUNNER_TEMP/guest-script.sh"'
 

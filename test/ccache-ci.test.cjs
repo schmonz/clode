@@ -464,6 +464,113 @@ shTest('report distinguishes "nothing went through the launcher" from "it missed
       'one miss then one hit over the same translation unit is the whole mechanism');
   });
 
+// ---------------------------------------------------------------------------
+// GUARD-adjacent: the repo cache-usage line `report` prints alongside the verdict.
+// ---------------------------------------------------------------------------
+//
+// WHY THIS EXISTS: see .superpowers/sdd/guest-carve-and-ccache.md -- VERDICT=ALL-MISS
+// on every leg was diagnosed BY HAND as capacity/LRU eviction (a few multi-GB guest
+// images and toolchain caches on `refs/pull/*/merge` fill the repo's shared 10 GB
+// budget and evict a run-scoped ccache entry before the next run can ever read it),
+// not broken wiring -- and that distinction cost two wrong predictions before anyone
+// thought to ask actions/cache/usage. This makes it readable from a leg's own log.
+//
+// A fake `curl` on PATH gives deterministic bodies without a live token; the
+// degrade-path tests clear GITHUB_TOKEN/GITHUB_REPOSITORY explicitly so a real one
+// leaking in from this box's own environment cannot make them pass for the wrong
+// reason.
+function fakeCurl(dir, body) {
+  const bin = path.join(dir, 'curl');
+  fs.writeFileSync(bin, `#!/bin/sh\ncat <<'CURL_EOF'\n${body}\nCURL_EOF\n`);
+  fs.chmodSync(bin, 0o755);
+  return dir;
+}
+
+shTest('report degrades to "usage unknown" with no token, rather than guessing or failing',
+  { skip: !HAVE_CCACHE }, () => {
+    const dir = tmp();
+    assert.strictEqual(run(['provide', 'unit'], { CCACHE_DIR: dir }).status, 0);
+    const r = run(['report', 'unit'],
+      { CCACHE_DIR: dir, GITHUB_TOKEN: '', GITHUB_REPOSITORY: '' });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.match(r.stderr, /^ci-ccache: unit: cache usage unknown \(/m);
+  });
+
+shTest('report prints repo cache usage alongside the verdict, when it can ask',
+  { skip: !HAVE_CCACHE }, () => {
+    const dir = tmp();
+    const binDir = fakeCurl(tmp(), JSON.stringify({
+      full_name: 'schmonz/clode', active_caches_size_in_bytes: 1000000, active_caches_count: 3,
+    }));
+    assert.strictEqual(run(['provide', 'unit'], { CCACHE_DIR: dir }).status, 0);
+    const r = run(['report', 'unit'], {
+      CCACHE_DIR: dir, PATH: `${binDir}:${process.env.PATH}`,
+      GITHUB_REPOSITORY: 'schmonz/clode', GITHUB_TOKEN: 'fake',
+    });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.match(r.stderr,
+      /^ci-ccache: unit: cache usage: entries=3 bytes=1000000 of \d+ \([\d.]+%\)$/m);
+  });
+
+shTest('VERDICT=ALL-MISS names eviction as the likely cause ONLY when usage backs it up',
+  { skip: !HAVE_CCACHE }, () => {
+    const dir = tmp();
+    // Same 77.7%-of-budget occupancy the real incident measured (7,770,191,495 of
+    // 10,000,000,000) -- the exact evidence this line is allowed to reason from.
+    const binDir = fakeCurl(tmp(), JSON.stringify({
+      full_name: 'schmonz/clode', active_caches_size_in_bytes: 7770191495, active_caches_count: 34,
+    }));
+    assert.strictEqual(run(['provide', 'unit'], { CCACHE_DIR: dir }).status, 0);
+    const work = tmp();
+    const src = path.join(work, 'a.c');
+    fs.writeFileSync(src, 'int main(void){return 2;}\n');
+    const cc = spawnSync('sh', ['-c', 'command -v cc || command -v gcc || command -v clang'],
+      { encoding: 'utf8' });
+    if (cc.status !== 0) return; // no compiler on this box: covered by the PROOF test below
+    const compiler = cc.stdout.trim().split('\n')[0];
+    // Exactly one compile -- HITS=0 MISSES=1, VERDICT=ALL-MISS (not NOTHING-CACHED).
+    const c = spawnSync('ccache', [compiler, '-c', src, '-o', path.join(work, 'a.o')],
+      { encoding: 'utf8', env: { ...process.env, CCACHE_DIR: dir } });
+    assert.strictEqual(c.status, 0, c.stderr);
+    const r = run(['report', 'unit'], {
+      CCACHE_DIR: dir, PATH: `${binDir}:${process.env.PATH}`,
+      GITHUB_REPOSITORY: 'schmonz/clode', GITHUB_TOKEN: 'fake',
+    });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.match(r.stderr,
+      /VERDICT=ALL-MISS at 77\.7% of the repo cache budget: EVICTION is the likely cause/);
+  });
+
+// PROOF the eviction note is not printed unconditionally: a HIT at the same occupancy
+// must not carry it -- otherwise the note would be decoration, not evidence-gated.
+shTest('PROOF: the eviction note is gated on VERDICT=ALL-MISS, not printed for a HIT',
+  { skip: !HAVE_CCACHE }, () => {
+    const dir = tmp();
+    const binDir = fakeCurl(tmp(), JSON.stringify({
+      full_name: 'schmonz/clode', active_caches_size_in_bytes: 7770191495, active_caches_count: 34,
+    }));
+    assert.strictEqual(run(['provide', 'unit'], { CCACHE_DIR: dir }).status, 0);
+    const work = tmp();
+    const src = path.join(work, 'a.c');
+    fs.writeFileSync(src, 'int main(void){return 3;}\n');
+    const cc = spawnSync('sh', ['-c', 'command -v cc || command -v gcc || command -v clang'],
+      { encoding: 'utf8' });
+    if (cc.status !== 0) return;
+    const compiler = cc.stdout.trim().split('\n')[0];
+    for (const out of ['a1.o', 'a2.o']) {
+      const c = spawnSync('ccache', [compiler, '-c', src, '-o', path.join(work, out)],
+        { encoding: 'utf8', env: { ...process.env, CCACHE_DIR: dir } });
+      assert.strictEqual(c.status, 0, c.stderr);
+    }
+    const r = run(['report', 'unit'], {
+      CCACHE_DIR: dir, PATH: `${binDir}:${process.env.PATH}`,
+      GITHUB_REPOSITORY: 'schmonz/clode', GITHUB_TOKEN: 'fake',
+    });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.match(r.stderr, /VERDICT=HIT/);
+    assert.doesNotMatch(r.stderr, /EVICTION is the likely cause/);
+  });
+
 // PROOF that the two assertions above are not vacuous: the same regex must REJECT the
 // shape the old world produced (a decision line with no hit information in it).
 test('PROOF: the stats regex rejects build-tjs\'s decision line, which carries no hit rate', () => {

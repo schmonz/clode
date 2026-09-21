@@ -6,6 +6,12 @@ on:
   workflow_dispatch: {}
 permissions:
   contents: read
+  # Read-only, additive: the workflow-level ceiling a job's own `permissions:` cannot
+  # exceed. Granted here so the `tjs`/`tjs-slow` jobs can request it for
+  # scripts/ci-ccache.sh's repo cache-usage line (report_usage()) -- see those jobs'
+  # own comments. No job that does not also request it gets it: job-level permissions
+  # narrow this ceiling, never widen it.
+  actions: read
 # One live run per ref: a newer push (or PR update) cancels the superseded run
 # instead of piling four full matrices onto the runners at once. main and each PR
 # get their own group so they never cancel each other.
@@ -123,6 +129,13 @@ jobs:
     uses: ./.github/workflows/tjs-legs.yml
     permissions:
       contents: read
+      # Read-only, additive: lets each leg's scripts/ci-ccache.sh `report` step ask
+      # actions/cache/usage for the repo-wide cache budget alongside its HITS/MISSES/
+      # VERDICT line (see that script's report_usage() and
+      # .superpowers/sdd/guest-carve-and-ccache.md for why VERDICT=ALL-MISS everywhere
+      # was capacity/LRU eviction, not broken wiring). Nothing here can fail a leg: a
+      # scope this workflow had not granted degrades to a stated "usage unknown".
+      actions: read
     with:
       tier: ci
       only: fast
@@ -146,6 +159,7 @@ jobs:
     uses: ./.github/workflows/tjs-legs.yml
     permissions:
       contents: read
+      actions: read  # same reason as the `tjs` job above: ci-ccache.sh's usage line
     with:
       tier: ci
       only: slow

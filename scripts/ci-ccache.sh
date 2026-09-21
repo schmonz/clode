@@ -90,6 +90,63 @@ install_ccache() {
   fi
 }
 
+# Repo-wide actions/cache usage, printed ALONGSIDE the ccache verdict line so a human
+# reading one leg's log can tell "the entry was EVICTED" (capacity/LRU pressure) apart
+# from "the wiring is broken" -- see .superpowers/sdd/guest-carve-and-ccache.md for the
+# measured cause: ccache's own tarballs are 6-8 MB each, but a handful of multi-GB guest
+# images and toolchain caches on `refs/pull/*/merge` fill the repo's shared 10 GB budget,
+# evicting a run-scoped ccache entry before the next run can ever read it. That distinction
+# cost two wrong predictions before it was diagnosed by hand; this line is what makes it
+# readable from a leg's own log instead of re-derived from the coordinator's memory.
+#
+# READ-ONLY and best-effort, on purpose (see the header docstring on why a diagnostic that
+# can break a leg is worse than no diagnostic): it needs GITHUB_REPOSITORY (set by every
+# Actions run already), GITHUB_TOKEN (the caller passes it explicitly -- composite actions
+# do not inherit secrets/tokens implicitly) and curl, and the token needs the `actions:
+# read` permission scope. Any of those missing, or GitHub answering non-200 (403 for a
+# scope this workflow has not granted, a rate limit, a network hiccup on an air-gapped
+# guest), degrades to a stated "usage unknown" -- never a guess, never a failed leg.
+report_usage() {
+  verdict="$1"
+  repo="${GITHUB_REPOSITORY:-}"
+  token="${GITHUB_TOKEN:-}"
+  if [ -z "$repo" ] || [ -z "$token" ] || ! have curl; then
+    say 'cache usage unknown (no GITHUB_REPOSITORY/GITHUB_TOKEN/curl available to ask)'
+    return 0
+  fi
+  body=$(curl -fsS --max-time 10 \
+    -H "Authorization: Bearer $token" \
+    -H 'Accept: application/vnd.github+json' \
+    "https://api.github.com/repos/$repo/actions/cache/usage" 2>/dev/null) || {
+    say 'cache usage unknown (actions/cache/usage request failed -- network, scope, or rate limit)'
+    return 0
+  }
+  bytes=$(printf '%s' "$body" | grep -o '"active_caches_size_in_bytes":[0-9]*' | head -1 | cut -d: -f2)
+  count=$(printf '%s' "$body" | grep -o '"active_caches_count":[0-9]*' | head -1 | cut -d: -f2)
+  if [ -z "$bytes" ] || [ -z "$count" ]; then
+    say 'cache usage unknown (unexpected response from actions/cache/usage)'
+    return 0
+  fi
+  # 10,000,000,000 -- GitHub's own documented per-repository Actions-cache budget
+  # (LRU-evicted across every branch and PR). Not a gate: this is reporting, not a limit
+  # this script enforces.
+  limit=10000000000
+  pct=$(awk -v b="$bytes" -v l="$limit" 'BEGIN { printf "%.1f", (100 * b / l) }')
+  # 70% is not a guess: the run this diagnosis was built from sat at 7,770,191,495 /
+  # 10,000,000,000 (77.7%) with FOUR entries -- none of them ccache -- holding 89% of
+  # that, and every ccache entry on main was already evicted. Below the measured
+  # incident's own occupancy, calling eviction "likely" would be exactly the guess the
+  # brief said not to make; naming it only when the evidence THIS job actually has
+  # (this build's own verdict plus this fetch's own occupancy) matches the incident is
+  # not a guess.
+  near=$(awk -v b="$bytes" -v l="$limit" 'BEGIN { print (b / l >= 0.70) ? 1 : 0 }')
+  if [ "$verdict" = "ALL-MISS" ] && [ "$near" = "1" ]; then
+    say "cache usage: entries=$count bytes=$bytes of $limit (${pct}%) -- VERDICT=ALL-MISS at ${pct}% of the repo cache budget: EVICTION is the likely cause, not broken wiring"
+  else
+    say "cache usage: entries=$count bytes=$bytes of $limit (${pct}%)"
+  fi
+}
+
 case "$cmd" in
   provide)
     # CCACHE_DIR is the ONE thing CI must say that a local build does not: ccache's own
@@ -139,7 +196,11 @@ case "$cmd" in
     # then hit. Without this, a leg with a cold or non-persisting cache is indistinguish-
     # able in the log from one running at 99% hits -- which is the same invisibility that
     # let ccache drive MSVC on a release leg for an unknown number of runs.
-    if ! have ccache; then say 'NO STATS (no ccache on PATH at report time)'; exit 0; fi
+    if ! have ccache; then
+      say 'NO STATS (no ccache on PATH at report time)'
+      report_usage 'NO-STATS'
+      exit 0
+    fi
     # ONE LINE A HUMAN CAN SCAN 42 LEGS OF, then the full dump underneath it for whoever
     # wants detail. The one-liner is derived from `ccache --print-stats` (tab-separated
     # counter names, ccache 4.x) rather than scraped out of `-s`, whose human layout
@@ -148,7 +209,7 @@ case "$cmd" in
     # it, which reads like "no information" instead of like the finding it is.
     stats=$(ccache --print-stats 2>/dev/null || true)
     if [ -n "$stats" ]; then
-      say "$(printf '%s\n' "$stats" | awk -F'\t' '
+      line=$(printf '%s\n' "$stats" | awk -F'\t' '
         $1 == "direct_cache_hit" { d = $2 }
         $1 == "preprocessed_cache_hit" { p = $2 }
         $1 == "cache_miss" { m = $2 }
@@ -161,12 +222,16 @@ case "$cmd" in
           printf "HITS=%d MISSES=%d TOTAL=%d RATE=%s VERDICT=%s",
             h, m, t, (t ? sprintf("%.1f%%", 100 * h / t) : "n/a"),
             (t == 0 ? "NOTHING-CACHED" : (h == 0 ? "ALL-MISS" : "HIT"));
-        }')"
+        }')
+      say "$line"
+      verdict=$(printf '%s' "$line" | sed -n 's/.*VERDICT=\([A-Za-z-]*\).*/\1/p')
     else
       say 'HITS=? MISSES=? VERDICT=NO-PRINT-STATS (ccache too old for --print-stats)'
+      verdict='NO-PRINT-STATS'
     fi
     say "full stats for this build (dir=${CCACHE_DIR:-<unset>})"
     ccache -s 2>&1 || true
+    report_usage "$verdict"
     ;;
   *)
     die 'usage: scripts/ci-ccache.sh provide|report <label>'
