@@ -1080,6 +1080,68 @@ function thisTjsPin(env, opts) {
   return null;
 }
 
+// TARGET-MATCHED ASSEMBLY, ENFORCED. Bun constant-folds process.platform/arch into
+// the bundle at CARVE time, so a quaude assembled from a foreign-carved provider
+// believes it runs on that other OS -- and tells the user so. Found 2026-09-04 on
+// darwin-arm64: `quaude doctor` reported `Platform: linux-x64`, because this box's
+// pinned provider is a LINUX carve (the store was keyed by version alone, so a foreign
+// carve sat happily at the pinned path -- fixed 2026-09-20) and the build accepted it
+// without a word.
+//
+// Every other acceptance check passes on such a binary: --version matches, the PONG
+// round-trip works, attest is ok, the smoke is green. Nothing else can see it, which
+// is exactly why this belongs at the input rather than in a later gate.
+//
+// Compared in ONE vocabulary. providerPlatformOf answers in node's ('darwin'), targets
+// speak canonical ('macos'), and comparing those raw is a guaranteed false negative --
+// the failure mode this check exists to prevent, reintroduced in the check itself.
+// canonOsFromNode is scripts/canonical-name.cjs's job, not a private map here. This
+// WAS a private map (`CARVE_TO_CANON`), i.e. a third spelling of the one vocabulary
+// living in the very check whose failure mode is a vocabulary mismatch.
+//
+// BUT A MISMATCH IS ONLY A DEFECT WHERE A MATCH IS POSSIBLE. Upstream carves for three
+// OSes; clode targets twenty. On freebsd/openbsd/netbsd/dragonflybsd/haiku/illumos there
+// is no same-OS carve to be had, so `wantOs !== gotOs` is not a mistake anyone made -- it
+// is the documented output of clode's OWN fetch policy (clode-update's providerFor: "OSes
+// upstream does not build fall back to linux-x64 (Unix-closest branches)"). Refusing it
+// made the fetcher and the builder disagree about the same provider and made nine
+// platforms unbuildable, with a remedy line ("Fetch a freebsd provider") naming something
+// that cannot exist. So the gate asks providerFor itself, through upstreamCarvesOs -- one
+// policy restated, never a second list of Bun's OSes free to drift from the first.
+//
+// Returns null when there is nothing to say, { refuse } when the build must stop, or
+// { note } when the mismatch is unavoidable and the user should still hear about it.
+//
+// CLODE_ALLOW_FOREIGN_CARVE=1 is documented on the 'build' verb in cli-surface.cjs, NOT
+// given a --flag (phase 3b, task 2): it disables a safety check rather than selecting a
+// build input, and a discoverable flag would invite reaching for it to get past a build
+// failure instead of fetching a matching provider. See cli-surface.cjs's comment on this
+// entry for the full reasoning.
+function carveVerdict({ naude, self, providerPlatform, target, hostPlatform, env }) {
+  if (naude || self) return null;
+  if (!providerPlatform || providerPlatform === 'unknown') return null;
+  const { splitLeg, canonOsFromNode, nodeOsFromCanon } = require('../scripts/canonical-name.cjs');
+  const wantOs = target ? (splitLeg(target) || {}).os : canonOsFromNode(hostPlatform);
+  const gotOs = canonOsFromNode(providerPlatform);
+  if (!wantOs || !gotOs || wantOs === gotOs) return null;
+  const where = target ? ` (--target ${target})` : ' (this host)';
+  if (!require('./clode-update.cjs').upstreamCarvesOs(nodeOsFromCanon(wantOs))) {
+    return { note: `clode: build: upstream carves no ${wantOs} provider, so this build uses the `
+      + `${gotOs} carve (Unix-closest branches) -- the same fallback clode fetch claude makes. `
+      + `The quaude will report itself as ${gotOs} and take ${gotOs} platform branches at runtime.` };
+  }
+  // The env override is read only HERE, past the unavoidable case: a build that was never
+  // going to be refused must not depend on it, or the nine platforms above would "pass"
+  // for the wrong reason the day someone dropped the variable from CI.
+  if (env.CLODE_ALLOW_FOREIGN_CARVE === '1') return null;
+  return { refuse: `build: the provider is carved for ${gotOs}, but this build targets `
+    + `${wantOs}${where}. `
+    + 'Bun folds the platform into the bundle at carve time, so the result would '
+    + 'report the wrong OS and take the wrong platform branches at runtime. Fetch a '
+    + `${wantOs} provider (clode fetch claude), point CLODE_CLAUDE_BIN at one, or set `
+    + 'CLODE_ALLOW_FOREIGN_CARVE=1 if you are deliberately testing this.' };
+}
+
 // clode build [--out PATH]. Returns the exit status (0 on success). Injectable
 // bits (env/stderr/stdout) keep the unit-testable surface consistent with the
 // sibling subcommand modules.
@@ -1765,44 +1827,19 @@ async function clodeBuild(args, opts) {
     // appends a version for a quaude (self: false), never for bootstrap.
     out = path.resolve(resolveBuildOut({ out, target: parsed.target, self, hostPlatform: process.platform, bundleVersion }));
 
-    // TARGET-MATCHED ASSEMBLY, ENFORCED. Bun constant-folds process.platform/arch into
-    // the bundle at CARVE time, so a quaude assembled from a foreign-carved provider
-    // believes it runs on that other OS -- and tells the user so. Found 2026-09-04 on
-    // darwin-arm64: `quaude doctor` reported `Platform: linux-x64`, because this box's
-    // pinned provider is a LINUX carve (the store is keyed by version alone, so a foreign
-    // carve sits happily at the pinned path -- see the umbrella's phase 4) and the build
-    // accepted it without a word.
-    //
-    // Every other acceptance check passes on such a binary: --version matches, the PONG
-    // round-trip works, attest is ok, the smoke is green. Nothing else can see it, which
-    // is exactly why this belongs at the input rather than in a later gate.
-    //
-    // Compared in ONE vocabulary. providerPlatformOf answers in node's ('darwin'), targets
-    // speak canonical ('macos'), and comparing those raw is a guaranteed false negative --
-    // the failure mode this check exists to prevent, reintroduced in the check itself.
-    // CLODE_ALLOW_FOREIGN_CARVE=1 is documented on the 'build' verb in cli-surface.cjs, NOT
-    // given a --flag (phase 3b, task 2): it disables a safety check rather than selecting a
-    // build input, and a discoverable flag would invite reaching for it to get past a build
-    // failure instead of fetching a matching provider. See cli-surface.cjs's comment on this
-    // entry for the full reasoning.
-    // canonOsFromNode is scripts/canonical-name.cjs's job, not a private map here. This
-    // WAS a private map (`CARVE_TO_CANON`), i.e. a third spelling of the one vocabulary
-    // living in the very check whose failure mode is a vocabulary mismatch.
-    const { splitLeg, canonOsFromNode } = require('../scripts/canonical-name.cjs');
-    if (!naude && !self && providerPlatform && providerPlatform !== 'unknown'
-        && env.CLODE_ALLOW_FOREIGN_CARVE !== '1') {
-      const wantOs = parsed.target
-        ? (splitLeg(parsed.target) || {}).os
-        : canonOsFromNode(process.platform);
-      const gotOs = canonOsFromNode(providerPlatform);
-      if (wantOs && gotOs && wantOs !== gotOs) {
-        return fail(`build: the provider is carved for ${gotOs}, but this build targets `
-          + `${wantOs}${parsed.target ? ` (--target ${parsed.target})` : ' (this host)'}. `
-          + 'Bun folds the platform into the bundle at carve time, so the result would '
-          + 'report the wrong OS and take the wrong platform branches at runtime. Fetch a '
-          + `${wantOs} provider (clode fetch claude), point CLODE_CLAUDE_BIN at one, or set `
-          + 'CLODE_ALLOW_FOREIGN_CARVE=1 if you are deliberately testing this.');
-      }
+    // TARGET-MATCHED ASSEMBLY, ENFORCED — see carveVerdict() at module scope for the
+    // whole argument. Two outcomes reach the user: a refusal, and a NOTE for the case
+    // where a foreign carve is the only carve this OS can have.
+    {
+      const v = carveVerdict({
+        naude, self, providerPlatform, target: parsed.target,
+        hostPlatform: process.platform, env,
+      });
+      if (v && v.refuse) return fail(v.refuse);
+      // Unconditional, not clodeLog: providerFor logs the same fact when it CHOOSES the
+      // linux carve ("LOGGED, never silently"), and a build that silently disagreed with
+      // the gate's own premise is what shipped the 2026-08-27 defect.
+      if (v && v.note) stderr.write(v.note + '\n');
     }
     report.finish('extract');
 
@@ -2152,7 +2189,7 @@ async function clodeBuild(args, opts) {
 }
 
 module.exports = {
-  clodeBuild, parseBuildArgs, resolveBuildOut, makePhaseSpinner, startPongMock, cannedSSE, smokeTarget, attestTarget, timeoutScale, codesignAdHoc, thinToHostSlice, describeExit,
+  clodeBuild, carveVerdict, parseBuildArgs, resolveBuildOut, makePhaseSpinner, startPongMock, cannedSSE, smokeTarget, attestTarget, timeoutScale, codesignAdHoc, thinToHostSlice, describeExit,
   readDirectDeps, computeDepClosure, assertClosureMatchesLockfile,
   scanBareSpecifiers, scannableTexts, specifierPackageName, isBuiltinSpecifier, shimProvidedModules,
   assertNoUnknownBareSpecifiers, KNOWN_UNREACHABLE, resolveClaudeNmDir,

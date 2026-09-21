@@ -79,6 +79,28 @@ function providerFor(platform, arch, available, opts = {}) {
   return has('linux-x64') ? 'linux-x64' : (available.find((p) => p.startsWith('linux-')) || 'linux-x64');
 }
 
+// DOES UPSTREAM CARVE FOR THIS OS AT ALL? Asked OF providerFor, never of a second list:
+// hand it a hypothetical manifest offering BOTH a same-OS carve and the linux fallback and
+// see which one it takes. If it reaches for the same-OS entry, upstream publishes that OS
+// and a matching carve is one `clode fetch claude` away; if it still falls back to linux,
+// this OS has no carve to fetch and the linux one is not a mistake — it is the documented
+// outcome of the policy three lines up ("OSes upstream does not build (netbsd/freebsd/...)
+// fall back to linux-x64 (Unix-closest branches), LOGGED, never silently").
+//
+// Derived, not declared. A hand-kept list of Bun's target OSes would be a second policy
+// beside providerFor's, free to disagree with it — and the disagreement it would encode is
+// precisely the bug this function exists to prevent: `clode build`'s carve gate refusing
+// the very carve `clode fetch claude` is designed to hand it. The day providerFor learns a
+// new upstream OS, this answers differently with no edit. Offline and pure: the probe is
+// the policy's own branch structure, not a network call.
+//
+// The arch is don't-care (providerFor says so itself), so the caller need not know one;
+// x64 stands in because every OS upstream publishes, it publishes for x64.
+function upstreamCarvesOs(platform, arch = 'x64') {
+  const sameOs = `${platform}-${arch}`;
+  return providerFor(platform, arch, [sameOs, 'linux-x64'], { isMusl: false }).startsWith(`${platform}-`);
+}
+
 function fetchPlatform(env, manifestText, opts) {
   if (env.CLODE_FETCH_PLATFORM) return env.CLODE_FETCH_PLATFORM;
   return providerFor(process.platform, process.arch, manifestPlatforms(manifestText || ''), opts);
@@ -364,4 +386,4 @@ async function clodeUpdate(channel, opts = {}) {
   return 0;
 }
 
-module.exports = { clodeUpdate, clodeSignalsReport, resolveChannel, releasesUrl, binaryFor, providerFor, manifestPlatforms };
+module.exports = { clodeUpdate, clodeSignalsReport, resolveChannel, releasesUrl, binaryFor, providerFor, upstreamCarvesOs, manifestPlatforms };

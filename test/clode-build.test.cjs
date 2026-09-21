@@ -510,3 +510,81 @@ test('clode build: a capable engine passes the floor gate', (t) => {
   assert.match(r.stderr, /build: no Claude Code binary found/);
   assert.doesNotMatch(r.stderr, /engine API floor|MISSING-ENGINE-API/);
 });
+
+// THE CARVE GATE, AND THE NINE PLATFORMS IT MADE UNBUILDABLE.
+//
+// `clode build` refuses a provider carved for another OS, because Bun folds
+// process.platform into the bundle at carve time (the 2026-08-27 quaude shipped unable to
+// read the login Keychain for exactly this reason). Correct — where a matching carve can
+// be had. Upstream carves three OSes; clode targets twenty, and on the other seventeen
+// there is nothing to fetch. clode's OWN fetch policy says so out loud (clode-update's
+// providerFor: "OSes upstream does not build (netbsd/freebsd/...) fall back to linux-x64").
+//
+// THE REGRESSION THIS PINS (CI run 35554516795, nine exec=guest legs red at once —
+// freebsd/openbsd/dragonflybsd/netbsd-amd64/netbsd-sparc64/haiku/solaris/omnios/
+// openindiana — where run 35546045465 on the preceding commit was 49/49 green): the gate
+// used to compute its wanted OS through a private three-entry map (CARVE_TO_CANON =
+// darwin/linux/win32), so on any other host it got `undefined` and the whole check
+// silently did not run. Replacing that map with the shared canonOsFromNode (456fe10) was
+// right, and it woke the check up on seventeen OSes where its refusal is unsatisfiable:
+// the remedy it printed, "Fetch a freebsd provider (clode fetch claude)", names something
+// that does not exist.
+//
+// So the question is not which OS but whether a matching carve is OBTAINABLE, asked of
+// providerFor itself (upstreamCarvesOs) so the fetcher and the builder cannot disagree
+// about the same provider.
+const { carveVerdict } = require('../libexec/clode-build.cjs');
+const CARVE = (over) => Object.assign(
+  { naude: false, self: false, providerPlatform: 'linux', target: null, hostPlatform: 'darwin', env: {} },
+  over);
+
+test('carve gate: a foreign carve is REFUSED where a matching one can be fetched', () => {
+  for (const [hostPlatform, wantOs] of [['darwin', 'macos'], ['win32', 'windows']]) {
+    const v = carveVerdict(CARVE({ hostPlatform }));
+    assert.ok(v && v.refuse, `${hostPlatform} host + linux carve must refuse`);
+    assert.match(v.refuse, /carved for linux/);
+    assert.match(v.refuse, new RegExp(`targets ${wantOs} \\(this host\\)`));
+  }
+  // ... and through --target, which is how a cross-build reaches the same mistake.
+  const t = carveVerdict(CARVE({ hostPlatform: 'linux', target: 'macos-arm64' }));
+  assert.ok(t && t.refuse, 'cross-building macos from a linux carve must refuse');
+  assert.match(t.refuse, /--target macos-arm64/);
+});
+
+test('carve gate: an OS upstream does not carve for is NOT refused — there is nothing to fetch', () => {
+  // Every OS the nine red legs run on, spelled as its host reports it (node's vocabulary:
+  // the three illumos legs all say sunos, dragonflybsd says dragonfly).
+  for (const hostPlatform of ['freebsd', 'openbsd', 'netbsd', 'dragonfly', 'haiku', 'sunos']) {
+    const v = carveVerdict(CARVE({ hostPlatform }));
+    assert.ok(!(v && v.refuse),
+      `${hostPlatform}: refused a linux carve, but upstream publishes no ${hostPlatform} carve to fetch instead`
+      + ` -- ${v && v.refuse}`);
+  }
+  // Same answer through --target: a cross-build for such an OS is no different.
+  const t = carveVerdict(CARVE({ hostPlatform: 'linux', target: 'freebsd-amd64' }));
+  assert.ok(!(t && t.refuse), `cross-building freebsd from a linux carve must not refuse -- ${t && t.refuse}`);
+});
+
+test('carve gate: the unavoidable case is NOTED, never silent', () => {
+  const v = carveVerdict(CARVE({ hostPlatform: 'freebsd' }));
+  assert.ok(v && v.note, 'an unavoidable foreign carve must still say so');
+  assert.match(v.note, /upstream carves no freebsd provider/);
+  assert.match(v.note, /linux carve/);
+  // The note must NOT be reachable where a fetch would fix it: that would be the refusal
+  // downgraded to a shrug.
+  assert.ok(!carveVerdict(CARVE({ hostPlatform: 'darwin' })).note);
+});
+
+test('carve gate: the exemptions it already had still hold, and nothing else is exempt', () => {
+  assert.equal(carveVerdict(CARVE({ naude: true })), null, 'naude builds no quaude from the carve');
+  assert.equal(carveVerdict(CARVE({ self: true })), null, 'bootstrap builds no quaude from the carve');
+  assert.equal(carveVerdict(CARVE({ providerPlatform: 'unknown' })), null);
+  assert.equal(carveVerdict(CARVE({ providerPlatform: null })), null);
+  assert.equal(carveVerdict(CARVE({ env: { CLODE_ALLOW_FOREIGN_CARVE: '1' } })), null);
+  // The override is NOT what saves the unavoidable case -- if CI dropped the variable the
+  // nine legs must still pass, and for the right reason.
+  assert.ok(!carveVerdict(CARVE({ hostPlatform: 'freebsd', env: {} })).refuse);
+  // A matching carve is a match on every host, exempt from nothing.
+  assert.equal(carveVerdict(CARVE({ hostPlatform: 'linux', providerPlatform: 'linux' })), null);
+  assert.equal(carveVerdict(CARVE({ hostPlatform: 'darwin', providerPlatform: 'darwin' })), null);
+});

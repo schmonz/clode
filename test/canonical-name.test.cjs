@@ -113,3 +113,39 @@ test('targetToNode: windows targets map to win32', () => {
   assert.deepStrictEqual(C.targetToNode('windows-x64'), { platform: 'win32', arch: 'x64' });
   assert.deepStrictEqual(C.targetToNode('windows-arm64'), { platform: 'win32', arch: 'arm64' });
 });
+
+// canonOsFromNode / nodeOsFromCanon are a PAIR, and the pair is the point: the carve gate
+// reads a host's OS in node's vocabulary and then has to ask clode-update's providerFor
+// (also node's vocabulary) a question about a target spelled in ours. A one-way hop was
+// what the build had before -- a private three-entry map that returned undefined on every
+// other OS and silently switched the gate off there (CI run 35554516795).
+test('canonOsFromNode: node spellings that differ from ours, and identity for the rest', () => {
+  assert.strictEqual(C.canonOsFromNode('win32'), 'windows');
+  assert.strictEqual(C.canonOsFromNode('dragonfly'), 'dragonflybsd');
+  assert.strictEqual(C.canonOsFromNode('darwin'), 'macos');
+  for (const same of ['linux', 'freebsd', 'openbsd', 'netbsd', 'haiku', 'sunos']) {
+    assert.strictEqual(C.canonOsFromNode(same), same);
+  }
+});
+
+test('nodeOsFromCanon: a TOTAL round trip with canonOsFromNode, both ways', () => {
+  assert.strictEqual(C.nodeOsFromCanon('windows'), 'win32');
+  assert.strictEqual(C.nodeOsFromCanon('dragonflybsd'), 'dragonfly');
+  assert.strictEqual(C.nodeOsFromCanon('macos'), 'darwin');
+  for (const node of ['win32', 'dragonfly', 'darwin', 'linux', 'freebsd', 'openbsd', 'netbsd',
+    'haiku', 'sunos', 'aix']) {
+    assert.strictEqual(C.nodeOsFromCanon(C.canonOsFromNode(node)), node,
+      `${node} did not survive the round trip`);
+  }
+  // Derived from the two maps, so a new rename in either one shows up here without an edit.
+  for (const [node, ours] of [...Object.entries(C.OS_MAP), ...Object.entries(C.NODE_TO_OS)]) {
+    assert.strictEqual(C.nodeOsFromCanon(ours), node);
+  }
+});
+
+test('nodeOsFromCanon is NOT targetToNode: one is total, the other deliberately partial', () => {
+  // targetToNode answers "does Node publish a runtime here?" and says null for haiku.
+  assert.strictEqual(C.targetToNode('haiku-amd64'), null);
+  // nodeOsFromCanon answers "how does Node SPELL this OS?", which haiku has an answer to.
+  assert.strictEqual(C.nodeOsFromCanon('haiku'), 'haiku');
+});

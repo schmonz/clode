@@ -46,6 +46,20 @@ function canonArch(arch) { return ARCH_MAP[arch] || arch; }
 const NODE_TO_OS = { win32: 'windows', dragonfly: 'dragonflybsd' };
 function canonOsFromNode(platform) { return NODE_TO_OS[platform] || canonOs(platform); }
 
+// The exact inverse: OUR word -> Node's, for a caller holding a canonical target and
+// needing to ask a question Node's vocabulary owns (`is there an upstream carve for this
+// OS?` -- clode-update's providerFor switches on process.platform words). DERIVED by
+// inverting the two maps canonOsFromNode composes, never re-typed: a hand-written third
+// table is exactly how `macos` would one day stop answering `darwin` in one direction
+// only. Total, like its forward half: an OS with no rename is its own inverse.
+// NOT targetToNode, which is deliberately PARTIAL (it answers only for the three OSes
+// Node itself publishes a runtime for, returning null elsewhere so naude can say "Node-only,
+// use quaude"). "Node ships a runtime here" and "Node spells this OS differently" are two
+// different questions that merely coincide on darwin/linux/win32.
+const OS_FROM_CANON = Object.fromEntries(
+  [...Object.entries(OS_MAP), ...Object.entries(NODE_TO_OS)].map(([node, ours]) => [ours, node]));
+function nodeOsFromCanon(os) { return OS_FROM_CANON[os] || os; }
+
 // Canonical `<os>-<arch>` for a NODE-spelled platform + arch pair: process.platform /
 // process.arch, or the two leading segments of an upstream provider-manifest platform
 // string (`darwin-arm64`, `linux-x64`, `win32-x64`). The exact inverse of targetToNode.
@@ -162,7 +176,7 @@ function targetToNode(target) {
 }
 
 module.exports = {
-  OS_MAP, ARCH_MAP, NODE_TO_OS, canonOs, canonArch, canonOsFromNode, targetFromNode,
+  OS_MAP, ARCH_MAP, NODE_TO_OS, canonOs, canonArch, canonOsFromNode, nodeOsFromCanon, targetFromNode,
   splitLeg, targetName, tagFor, assetName, assetExt, engineName,
   targetToNode,
 };

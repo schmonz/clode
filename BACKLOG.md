@@ -4,6 +4,41 @@ Concrete clode-under-Node divergences from native Claude Code, to triage and fix
 (Strategic feasibility risks live in `LONG-TERM.md`; in-flight designs in
 `docs/superpowers/`. Done items are DELETED from here — git history is the record.)
 
+## The carve gate refused nine platforms it can never be satisfied on (2026-09-21)
+
+The 2026-09-04 carve refusal is right: Bun folds `process.platform` at carve time, and a
+darwin quaude built from a linux carve ships with upstream's whole macOS credential store
+dead-coded away (that shipped, 2026-08-27). But it asked **which OS**, and the answer it
+needed is **whether a matching carve is obtainable**.
+
+Upstream carves three OSes; clode targets twenty. On the other seventeen there is nothing
+to fetch — and clode's OWN fetch policy says so, in `clode-update.cjs`'s `providerFor`:
+"OSes upstream does not build (netbsd/freebsd/...) fall back to linux-x64 (Unix-closest
+branches), LOGGED, never silently." The gate refused the exact carve the fetcher is
+designed to hand it, printing a remedy ("Fetch a freebsd provider") that names something
+that cannot exist.
+
+**Why it only fired now.** The check computed its wanted OS through a private three-entry
+map, `CARVE_TO_CANON = { darwin, linux, win32 }`. On every other host that yielded
+`undefined`, and `if (wantOs && gotOs && ...)` then skipped the whole check — the gate was
+silently OFF on seventeen OSes and nobody knew. Replacing that map with the shared
+`canonOsFromNode` (456fe10, correct in itself: a private third spelling of the one
+vocabulary, inside the very check whose failure mode is a vocabulary mismatch) made
+`wantOs` resolvable everywhere and woke the refusal up where it is unsatisfiable. Nine
+`exec=guest` legs went red at once in run 35554516795 — freebsd, openbsd, dragonflybsd,
+netbsd-amd64, netbsd-sparc64, haiku, solaris, omnios, openindiana — against 49/49 green on
+the immediately preceding run 35546045465 (`952f193`).
+
+**Fixed at the policy layer, not with an OS list.** `clode-update.upstreamCarvesOs` asks
+`providerFor` itself — hand it a hypothetical manifest offering both a same-OS carve and
+the linux fallback and see which it takes — so the fetcher and the builder cannot disagree
+about the same provider, and the day upstream adds an OS the gate follows with no edit. A
+hand-kept list of Bun's targets would have been a second policy free to drift from the
+first, which is the bug, not the fix. The refusal is unchanged wherever a carve can be
+fetched (macos/linux/windows, host or `--target`), and the unavoidable case is NOTED on
+stderr rather than passing silently. `carveVerdict` is now a pure exported function, so all
+four branches are tested directly instead of only reachable through a real build.
+
 ## Thirteen gates that could not fail, and the one rule that outranks a harness (2026-09-20)
 
 **Design shelved, not started.** Spec:

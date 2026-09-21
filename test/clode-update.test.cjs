@@ -21,7 +21,7 @@ const LIBEXEC = path.join(REPO_ROOT, 'libexec');
 const HERE = path.join(REPO_ROOT, 'bin');
 const NODE = process.env.CLODE_NODE || process.execPath;
 
-const { clodeUpdate, binaryFor, providerFor, manifestPlatforms } = require('../libexec/clode-update.cjs');
+const { clodeUpdate, binaryFor, providerFor, upstreamCarvesOs, manifestPlatforms } = require('../libexec/clode-update.cjs');
 const { sha256Of } = require('../libexec/clode-net.cjs');
 
 const V = '9.9.9';
@@ -69,6 +69,39 @@ test('providerFor: exotic OS falls back to linux-x64 and LOGS', () => {
   assert.strictEqual(providerFor('netbsd','sparc', PLATFORMS, { log: (m) => logs.push(m) }), 'linux-x64');
   assert.strictEqual(providerFor('freebsd','x64', PLATFORMS, { log: (m) => logs.push(m) }), 'linux-x64');
   assert.ok(logs.some((l) => /no upstream provider for netbsd-sparc/.test(l)), 'exotic fallback must be logged');
+});
+
+// upstreamCarvesOs — "is a matching carve OBTAINABLE for this OS?", the question `clode
+// build`'s carve gate needs and the one it previously answered with a private
+// three-entry map that silently disabled the gate everywhere else (CI run 35554516795,
+// nine guest legs). It must be providerFor's own answer, not a parallel list of Bun's
+// OSes: a second list is free to disagree, and the disagreement IS the bug (the builder
+// refusing the carve the fetcher is designed to hand it).
+test('upstreamCarvesOs: true exactly where providerFor would pick a same-OS carve', () => {
+  for (const os of ['darwin', 'linux', 'win32']) {
+    assert.strictEqual(upstreamCarvesOs(os), true, `${os} is carved upstream`);
+    assert.match(providerFor(os, 'x64', PLATFORMS), new RegExp(`^${os}-`),
+      `${os}: upstreamCarvesOs and providerFor must agree against the real platform list`);
+  }
+  for (const os of ['freebsd', 'openbsd', 'netbsd', 'dragonfly', 'haiku', 'sunos']) {
+    assert.strictEqual(upstreamCarvesOs(os), false, `${os} has no upstream carve`);
+    assert.strictEqual(providerFor(os, 'x64', PLATFORMS), 'linux-x64',
+      `${os}: upstreamCarvesOs and providerFor must agree against the real platform list`);
+  }
+});
+
+test('upstreamCarvesOs: silent, and arch-independent (providerFor says arch is don\'t-care)', () => {
+  // It probes the policy; it must not emit the policy's user-facing fallback log while
+  // doing so, or every build on a non-Bun OS would print it twice.
+  const before = process.stderr.write;
+  const seen = [];
+  process.stderr.write = (c) => { seen.push(String(c)); return true; };
+  try { upstreamCarvesOs('freebsd'); } finally { process.stderr.write = before; }
+  assert.deepStrictEqual(seen, []);
+  for (const arch of ['x64', 'arm64', 'ppc', 'sparc64']) {
+    assert.strictEqual(upstreamCarvesOs('darwin', arch), true);
+    assert.strictEqual(upstreamCarvesOs('netbsd', arch), false);
+  }
 });
 
 test('providerFor: linux musl falls back to glibc build when no -musl exists', () => {
