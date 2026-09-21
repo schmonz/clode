@@ -308,6 +308,126 @@ ${group('priority_kv', priorityKeys)}
     JS_FreeValue(ctx, clode_g);
 `;
 
+// THE INCLUDE SET IS NODE'S OWN, GUARD FOR GUARD (src/node_constants.cc,
+// v24.19.0). Names come from node's list and values come from the headers; the
+// headers must therefore be the ones node reads, with node's conditions, or the
+// #ifdef-guarded table quietly reports fewer keys than node on some platform —
+// which is the failure this whole file exists to end. Three guards carry weight:
+//
+//  * <unistd.h> is `#if !defined(_MSC_VER)` in node (node_constants.cc:30-32).
+//    MSVC ships no such header, which is what broke the windows-arm64 leg:
+//    signals.c(173): fatal error C1083: Cannot open include file: 'unistd.h'.
+//    _MSC_VER, not _WIN32, because mingw DOES ship it — node draws the line in
+//    exactly that place and so do we.
+//
+//    Guarding it costs nothing, MEASURED not assumed. Compiling our five name
+//    lists with and without <unistd.h> (darwin 26 clang, and gcc 13.3 on
+//    Ubuntu 24.04/glibc 2.39) changes exactly four keys: F_OK, R_OK, W_OK,
+//    X_OK. Everything else has another home — O_* in <fcntl.h>, S_I* in
+//    <sys/stat.h>, E* in <errno.h>, SIG* in <signal.h>, RTLD_* in <dlfcn.h>.
+//    And those four are NOT lost on Windows: libuv defines them there
+//    (deps/libuv/include/uv/win.h, `#ifndef F_OK #define F_OK 0` ... 4/2/1),
+//    and this block is spliced far BELOW signals.c's `#include "private.h"`,
+//    which includes <uv.h> — note that upstream private.h already guards its
+//    own <unistd.h> with `#ifndef _WIN32` and does not guard <uv.h>. node
+//    reaches them by the same route: node_constants.cc includes
+//    node_internals.h, which includes uv.h, and then guards each with #ifdef.
+//    Same header, same values, same mechanism.
+//
+//  * <io.h> and the two S_I* fallbacks are node_constants.cc:51-59 verbatim.
+//    MSVC's <sys/stat.h> spells the owner bits _S_IREAD/_S_IWRITE and has no
+//    S_IRUSR/S_IWUSR at all, so node hands itself those two names and reports
+//    them on Windows. Without this our Windows engine would report a fs table
+//    two keys short of node's, silently, on the one platform nobody here can
+//    eyeball. This is NOT a hand-written platform table: it is #ifndef-guarded
+//    (inert on mingw, and on any MSVC that grows them) and it defines exactly
+//    the two names node defines — node invents no other owner/group/other bit
+//    on Windows, and neither may we.
+//
+//  * <dlfcn.h> stays `#ifndef _WIN32` (node spells the same thing
+//    `#if defined(__POSIX__)`); no Windows toolchain has it.
+//
+// The tripwire is what keeps the first bullet from rotting. On MSVC we are
+// deliberately relying on a header that does not mention *_OK in its name, so
+// if libuv ever drops that block the honest outcome is a build that fails and
+// says why — not four keys quietly missing from quaude's fs.constants on
+// Windows only, discovered by an fs.accessSync that starts answering wrong.
+// Scoped to _MSC_VER because that is the only configuration where we skip the
+// header POSIX guarantees them in.
+const includes = '#include <errno.h>\n#include <fcntl.h>\n#include <signal.h>\n'
+  + '#include <sys/stat.h>\n'
+  + '#if !defined(_MSC_VER)\n#include <unistd.h>\n#endif\n'
+  + '#ifndef _WIN32\n#include <dlfcn.h>\n#endif\n'
+  + '#if defined(_WIN32)\n#include <io.h>  /* _S_IREAD _S_IWRITE */\n'
+  + '#ifndef S_IRUSR\n#define S_IRUSR _S_IREAD\n#endif\n'
+  + '#ifndef S_IWUSR\n#define S_IWUSR _S_IWRITE\n#endif\n#endif\n'
+  + '#if defined(_MSC_VER) && (!defined(F_OK) || !defined(R_OK) '
+  + '|| !defined(W_OK) || !defined(X_OK))\n'
+  + '#error "clode: MSVC lacks <unistd.h>, so F_OK/R_OK/W_OK/X_OK must come from '
+  + 'libuv (uv/win.h, via private.h -> uv.h). They did not. node reports all four '
+  + 'on Windows (node_constants.cc guards each with #ifdef, having pulled uv.h in '
+  + 'through node_internals.h), so this engine must too -- failing loudly beats '
+  + 'shipping a Windows fs.constants four keys short of node\'s."\n#endif\n'
+  + `#define CLODE_CONSTANTS_ABI ${ABI}\n`
+  + `#define CLODE_ABI_MARKER "clode-constants-abi:${ABI}"\n`;
+
+// --- staleness/freshness gate (`--check`) -------------------------------------
+//
+// Two ways this generator's output can quietly fall behind, both of which have
+// HAPPENED, and neither of which anything ran in CI:
+//
+//   1. node grows a constant. The ratchet above sees it, but only if somebody runs
+//      the generator — and you only run the generator when you already know. node
+//      24.21.0 added four fs names (see NODE_CONSTANTS), and the first thing that
+//      noticed was two tjs ORACLE legs failing with a bare `fs.missing: [...]`,
+//      which does not tell you the fix is "re-transcribe node_constants.cc".
+//   2. the generator changes and the COMMITTED PATCH does not. 97a3fe6 renamed a
+//      word inside the emitted comment and never regenerated; the patch sat one
+//      wording behind its generator until this check was written. Same shape as the
+//      src/js/** patches that were silently dropped because regeneration was opt-in
+//      (0c72693) — generated output that nothing compares to its generator.
+//
+// Regenerating needs the txiki vendor tree, so it cannot run in the suite. But the
+// TEXT this file splices in is computed above from nothing but this file, so the
+// freshness question is answerable from the committed patch alone, on any host, in
+// milliseconds. `--check` answers both and writes nothing; test/node-shim-constants
+// runs it on every leg.
+const PATCH = path.join(import.meta.dirname, '..', 'spike/quickjs/patches/txiki-node-constants.patch');
+
+// The lines this generator would ADD, in order: the include block is spliced in
+// ahead of the anchor line (which stays put, as diff context), the body after it.
+function wantedAddedLines() {
+  return [...includes.split('\n').slice(0, -1), '', ...body.split('\n').slice(0, -1)];
+}
+
+// The lines the committed patch actually adds. Everything after the `+++` header
+// is a hunk line; a '+' one is an addition, and its content is the rest.
+function patchAddedLines() {
+  const lines = fs.readFileSync(PATCH, 'utf8').split('\n');
+  const head = lines.findIndex((l) => l.startsWith('+++ '));
+  if (head < 0) throw new Error(`${PATCH} has no +++ header — not a diff`);
+  return lines.slice(head + 1).filter((l) => l.startsWith('+')).map((l) => l.slice(1));
+}
+
+if (process.argv.includes('--check')) {
+  const want = wantedAddedLines();
+  const got = patchAddedLines();
+  const at = want.findIndex((l, i) => got[i] !== l);
+  if (at >= 0 || got.length !== want.length) {
+    const i = at >= 0 ? at : Math.min(want.length, got.length);
+    console.error(`${PATCH} is not what scripts/gen-node-constants.mjs emits.`);
+    console.error(`  added lines: patch ${got.length}, generator ${want.length}`);
+    console.error(`  first difference at added line ${i + 1}:`);
+    console.error(`    patch:     ${JSON.stringify(got[i])}`);
+    console.error(`    generator: ${JSON.stringify(want[i])}`);
+    console.error('Regenerate with the vendor tree present: node scripts/gen-node-constants.mjs');
+    process.exit(1);
+  }
+  console.log(`node-constants OK: host ${process.version} adds no name we lack, and the `
+    + `committed patch matches this generator (${got.length} added lines).`);
+  process.exit(0);
+}
+
 // --- splice into the vendor tree and diff -------------------------------------
 const vendorRoot = path.join(tjsVendorParentDir(process.env), 'txiki.js');
 const target = path.join(vendorRoot, 'src', 'signals.c');
@@ -326,68 +446,6 @@ try {
   const src = fs.readFileSync(target, 'utf8');
   const anchor = 'void tjs__mod_signals_init(JSContext *ctx, JSValue ns) {';
   if (!src.includes(anchor)) throw new Error('anchor not found in signals.c');
-  // THE INCLUDE SET IS NODE'S OWN, GUARD FOR GUARD (src/node_constants.cc,
-  // v24.19.0). Names come from node's list and values come from the headers; the
-  // headers must therefore be the ones node reads, with node's conditions, or the
-  // #ifdef-guarded table quietly reports fewer keys than node on some platform —
-  // which is the failure this whole file exists to end. Three guards carry weight:
-  //
-  //  * <unistd.h> is `#if !defined(_MSC_VER)` in node (node_constants.cc:30-32).
-  //    MSVC ships no such header, which is what broke the windows-arm64 leg:
-  //    signals.c(173): fatal error C1083: Cannot open include file: 'unistd.h'.
-  //    _MSC_VER, not _WIN32, because mingw DOES ship it — node draws the line in
-  //    exactly that place and so do we.
-  //
-  //    Guarding it costs nothing, MEASURED not assumed. Compiling our five name
-  //    lists with and without <unistd.h> (darwin 26 clang, and gcc 13.3 on
-  //    Ubuntu 24.04/glibc 2.39) changes exactly four keys: F_OK, R_OK, W_OK,
-  //    X_OK. Everything else has another home — O_* in <fcntl.h>, S_I* in
-  //    <sys/stat.h>, E* in <errno.h>, SIG* in <signal.h>, RTLD_* in <dlfcn.h>.
-  //    And those four are NOT lost on Windows: libuv defines them there
-  //    (deps/libuv/include/uv/win.h, `#ifndef F_OK #define F_OK 0` ... 4/2/1),
-  //    and this block is spliced far BELOW signals.c's `#include "private.h"`,
-  //    which includes <uv.h> — note that upstream private.h already guards its
-  //    own <unistd.h> with `#ifndef _WIN32` and does not guard <uv.h>. node
-  //    reaches them by the same route: node_constants.cc includes
-  //    node_internals.h, which includes uv.h, and then guards each with #ifdef.
-  //    Same header, same values, same mechanism.
-  //
-  //  * <io.h> and the two S_I* fallbacks are node_constants.cc:51-59 verbatim.
-  //    MSVC's <sys/stat.h> spells the owner bits _S_IREAD/_S_IWRITE and has no
-  //    S_IRUSR/S_IWUSR at all, so node hands itself those two names and reports
-  //    them on Windows. Without this our Windows engine would report a fs table
-  //    two keys short of node's, silently, on the one platform nobody here can
-  //    eyeball. This is NOT a hand-written platform table: it is #ifndef-guarded
-  //    (inert on mingw, and on any MSVC that grows them) and it defines exactly
-  //    the two names node defines — node invents no other owner/group/other bit
-  //    on Windows, and neither may we.
-  //
-  //  * <dlfcn.h> stays `#ifndef _WIN32` (node spells the same thing
-  //    `#if defined(__POSIX__)`); no Windows toolchain has it.
-  //
-  // The tripwire is what keeps the first bullet from rotting. On MSVC we are
-  // deliberately relying on a header that does not mention *_OK in its name, so
-  // if libuv ever drops that block the honest outcome is a build that fails and
-  // says why — not four keys quietly missing from quaude's fs.constants on
-  // Windows only, discovered by an fs.accessSync that starts answering wrong.
-  // Scoped to _MSC_VER because that is the only configuration where we skip the
-  // header POSIX guarantees them in.
-  const includes = '#include <errno.h>\n#include <fcntl.h>\n#include <signal.h>\n'
-    + '#include <sys/stat.h>\n'
-    + '#if !defined(_MSC_VER)\n#include <unistd.h>\n#endif\n'
-    + '#ifndef _WIN32\n#include <dlfcn.h>\n#endif\n'
-    + '#if defined(_WIN32)\n#include <io.h>  /* _S_IREAD _S_IWRITE */\n'
-    + '#ifndef S_IRUSR\n#define S_IRUSR _S_IREAD\n#endif\n'
-    + '#ifndef S_IWUSR\n#define S_IWUSR _S_IWRITE\n#endif\n#endif\n'
-    + '#if defined(_MSC_VER) && (!defined(F_OK) || !defined(R_OK) '
-    + '|| !defined(W_OK) || !defined(X_OK))\n'
-    + '#error "clode: MSVC lacks <unistd.h>, so F_OK/R_OK/W_OK/X_OK must come from '
-    + 'libuv (uv/win.h, via private.h -> uv.h). They did not. node reports all four '
-    + 'on Windows (node_constants.cc guards each with #ifdef, having pulled uv.h in '
-    + 'through node_internals.h), so this engine must too -- failing loudly beats '
-    + 'shipping a Windows fs.constants four keys short of node\'s."\n#endif\n'
-    + `#define CLODE_CONSTANTS_ABI ${ABI}\n`
-    + `#define CLODE_ABI_MARKER "clode-constants-abi:${ABI}"\n`;
   let out = src.replace(anchor, includes + '\n' + anchor);
   // Insert at the END of the init function's opening — right after the anchor line.
   out = out.replace(anchor + '\n', anchor + '\n' + body);

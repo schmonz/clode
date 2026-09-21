@@ -99,6 +99,34 @@ test('node-shim constants: the gap inventory matches the reviewed golden', (t) =
     + 'CLODE_UPDATE_CONSTANTS_GOLDEN=1 node --test test/node-shim-constants.test.cjs');
 });
 
+// THE GENERATOR'S OWN TWO WAYS OF GOING STALE, gated here rather than left to
+// whoever next runs it (2026-09-20).
+//
+// The row above is the downstream symptom: it needs a BUILT tjs engine, it skips
+// without one, and when it fires it says `fs.missing: [UV_FS_O_RANDOM, ...]` — true,
+// but it does not say that the fix is to re-transcribe node's NODE_DEFINE_CONSTANT
+// list. That is exactly how node 24.21.0's four new fs names reached CI: a Renovate
+// toolchain bump (#45) went red on two oracle legs only, with a message that reads
+// like a shim bug.
+//
+// scripts/gen-node-constants.mjs already KNOWS both answers — it has a host-vs-list
+// ratchet, and it can recompute the exact text it splices into signals.c without the
+// vendor tree. Nothing ever ran either check. `--check` runs both and writes nothing,
+// on every leg, in milliseconds, before any engine exists:
+//
+//   * host node exposes a name NODE_CONSTANTS lacks  -> node grew a constant
+//   * the committed patch is not what the generator emits -> somebody edited the
+//     generator and did not regenerate (97a3fe6 did exactly that, and the drift sat
+//     in the tree unnoticed until this row was written)
+//
+// The reverse direction is never an error: the list is a UNION across platforms, so
+// names this host lacks are the design working. See the long comment in the generator.
+test('node-constants generator: the name list tracks host node and the committed patch tracks the generator', () => {
+  const gen = path.join(__dirname, '..', 'scripts', 'gen-node-constants.mjs');
+  const r = require('node:child_process').spawnSync(process.execPath, [gen, '--check'], { encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, `${r.stdout}${r.stderr}`);
+});
+
 // VALUES, not just keys (2026-08-27). The gap inventory above compares the KEY SETS of
 // host node and the shim; it never looks at what a constant is worth. crypto.constants is
 // a 55-entry hand-written literal in libexec/node-shim/modules/crypto.cjs, and exactly
