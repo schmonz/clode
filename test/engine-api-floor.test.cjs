@@ -32,6 +32,38 @@ const BAKE = 'spike/quickjs/qemu/ci-guest-bake.sh';
 const ACTION = '.github/actions/build-leg/action.yml';
 const BUILD_TJS = 'scripts/build-tjs.cjs';
 const CLODE_BUILD = 'libexec/clode-build.cjs';
+
+// EVERY SPELLING OF "somebody regenerates the bytecode here", because the INVOCATION keeps
+// moving and this rule must not move with it in either direction. What the rule below is
+// about is that SOMETHING regenerates before the guest tarball is made; WHO interprets
+// scripts/build-tjs.cjs is not its question. Matching only yesterday's spelling reads a
+// correct change as a dropped regen -- that happened on 2026-09-20, when the site flipped
+// onto scripts/build-tjs-boot.sh -- and dropping the rule, or widening it to "anything at
+// all", would be the blind gate this whole file exists to prevent. So the list is CLOSED,
+// and each entry is a real idiom this repo uses:
+//   1. `node scripts/build-tjs.cjs --regen-only`             the original
+//   2. `scripts/build-tjs-boot.sh <site> --regen-only`       under a bootstrap engine
+//   3. `./build.sh --only <id>` (or the runner directly)     naming the GRAPH step
+// The id in (3) and the entry point's filename are NOT written here. They are read out of
+// scripts/build-graph.cjs -- the id being that of the step whose run() carries
+// --regen-only, the filename being ENTRY_REL -- so renaming either moves this rule with it
+// instead of turning a rename into a gate that silently matches nothing.
+function regenSpellings(stepId, entryRel) {
+  const out = [/(node scripts\/build-tjs\.cjs|scripts\/build-tjs-boot\.sh \S+) --regen-only/];
+  if (stepId && entryRel) {
+    const q = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    out.push(new RegExp(`(build-runner\\.cjs|${q(entryRel)}) [^\\n]*--only[= ]${q(stepId)}`));
+  }
+  return out;
+}
+
+// The graph's own answer to "which step regenerates the bytecode", derived rather than
+// transcribed, for the reason scripts/build-graph.cjs gives about every other list in it.
+function graphRegen() {
+  const G = require(path.join(repo, 'scripts/build-graph.cjs'));
+  const s = G.steps().find((st) => typeof st.run === 'function' && /--regen-only/.test(String(st.run)));
+  return { regenStepId: s ? s.id : '', entryRel: G.ENTRY_REL };
+}
 // engine-api-floor is CJS now: a plain require, no pathToFileURL/import() detour.
 const load = async () => require(path.join(repo, FLOOR_CJS));
 
@@ -103,7 +135,8 @@ test('the real floor passes on a locally built engine (skipped if none)', async 
 //
 // PURE: every check below is a presence/absence assertion against the three
 // already-read files (build-tjs.cjs, the build-leg action, the guest bake script).
-function scanEngineFloorConsumers({ buildTjsSrc, actionYml, bakeSrc, clodeBuildSrc }) {
+function scanEngineFloorConsumers({ buildTjsSrc, actionYml, bakeSrc, clodeBuildSrc,
+  regenStepId, entryRel }) {
   const findings = [];
   let examined = 0;
 
@@ -151,16 +184,10 @@ function scanEngineFloorConsumers({ buildTjsSrc, actionYml, bakeSrc, clodeBuildS
     const idx = actionYml.indexOf('tar czf .matrix/qemu-bake/txiki-canonical-le.tar.gz');
     if (idx === -1) {
       findings.push('the guest source tarball step was not found in build-leg/action.yml');
-      // EITHER SPELLING, because the invocation flipped and the RULE did not: since
-      // 2026-09-20 this step runs `scripts/build-tjs-boot.sh <site> --regen-only`, which
-      // resolves a bootstrap engine and runs the same build-tjs.cjs --regen-only under it
-      // (node-removal-bootstrap-design.md §3 step 1). What this guard is about is that
-      // SOMETHING regenerates the bytecode in the 2000 characters before the tar; who
-      // interprets build-tjs.cjs is not its question. Matching only the old spelling would
-      // have made a correct flip look like a dropped regen -- and matching neither would
-      // be the blind gate this file exists to prevent.
-    } else if (!/(node scripts\/build-tjs\.cjs|scripts\/build-tjs-boot\.sh \S+) --regen-only/
-      .test(actionYml.slice(0, idx).slice(-2000))) {
+      // ANY OF THE THREE SPELLINGS, in the 2000 characters before the tar. See
+      // regenSpellings() above for what the list is and why it is closed.
+    } else if (!regenSpellings(regenStepId, entryRel)
+      .some((re) => re.test(actionYml.slice(0, idx).slice(-2000)))) {
       findings.push('the guest tree must be bytecode-regenerated BEFORE it is tarred for the guest');
     }
   }
@@ -219,12 +246,12 @@ const consumersGuard = defineGuard({
   // `examined`, this fires, and a human lowers the floor deliberately — that is the
   // intended path, not a bug.
   floor: 19,
-  read: () => ({
+  read: () => Object.assign({
     buildTjsSrc: read(BUILD_TJS),
     actionYml: read(ACTION),
     bakeSrc: read(BAKE),
     clodeBuildSrc: read(CLODE_BUILD),
-  }),
+  }, graphRegen()),
   scan: scanEngineFloorConsumers,
   // Models the exact regression this guard exists to catch: every consumer back
   // to a hand-written inline check, and the guest bake's "no regen needed" claim
@@ -235,6 +262,9 @@ const consumersGuard = defineGuard({
     bakeSrc: 'echo "canonical-LE: no regen needed"',
     // The build back to no engine gate at all: the door with the hole in it.
     clodeBuildSrc: '// no engine capability gate here',
+    // The graph's REAL answers, so the control's regen finding comes from the yaml having
+    // no regen in any spelling -- not from the derivation having been fed a blank.
+    ...graphRegen(),
   }),
 });
 guardTests(consumersGuard);

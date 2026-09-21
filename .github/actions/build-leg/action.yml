@@ -1061,10 +1061,22 @@ runs:
         # a non-canonical-LE engine gives "checksum error" on the cross-blobulated
         # builder — proven in the docker-loop wall-walk 2026-07-14) was ALREADY
         # constructed at $CLODE_TJS_VENDOR by the "Construct the patched tjs tree
-        # from pins" step above (same --source-only, same vendor). Do NOT re-run it
-        # here: patches now apply unconditionally onto a PRISTINE clone (no
-        # already-applied fallback), so a second --source-only over the patched
-        # tree fails at the first patch.
+        # from pins" step above (same --source-only, same vendor).
+        #
+        # THAT STEP NOW RUNS A SECOND TIME HERE, and it is safe — a CORRECTION to what
+        # this comment used to say. It read "do NOT re-run it here: patches apply
+        # unconditionally onto a PRISTINE clone, so a second --source-only over the
+        # patched tree fails at the first patch". That stopped being true when
+        # ensureCheckout started calling resetCheckoutToPristine
+        # (scripts/tjs-source-reset.cjs, proven by test/tjs-source-reset.test.cjs) BEFORE
+        # applyPatches: every --source-only reverts tracked edits and sweeps untracked
+        # files first — the reentrancy guarantee a killed build needs — so a repeat run
+        # rebuilds the same tree rather than dying on an already-applied patch. The repeat
+        # arrives because this step names a GRAPH STEP (see below) and
+        # scripts/build-runner.cjs runs the named step's transitive `needs`. It does no
+        # up-to-date checking on purpose: a runner that skipped a dependency because its
+        # output looked present is a runner that builds against a stale tree. The cost is
+        # one extra source phase on a tjs-cache miss, on qemu-* legs only.
         #
         # REGENERATE THE BYTECODE HERE, on the runner, before tarring. txiki
         # git-tracks src/bundles/c/** as pre-compiled bytecode of its OWN
@@ -1086,17 +1098,37 @@ runs:
         # ci-guest-bake.sh refuses a tree that arrives without the regen trailer, so
         # this cannot be dropped again.
         #
-        # FLIPPED ONTO THE BOOTSTRAP RESOLVER (node-removal-bootstrap-design.md §3 step 1,
-        # the first of three). build-tjs-boot.sh asks scripts/bootstrap-engine.sh for an
-        # engine — CLODE_TJS, a locally built one, the bootstrap cache, or a range-fetch
-        # of this host's slice out of the templates pack the last release published — and
-        # runs THIS SAME --regen-only under it via HEAD's node-shim loader. --regen-only
-        # is the safest mode to go first with: it is measured at 27s under tjs and never
-        # reaches ensureEsbuild, the one thing still blocked. If the pack has no slice for
-        # this runner the wrapper falls back to node and SAYS SO; grep the log for
-        # `build-tjs-engine:` to see which actually ran. This step's own semantics are
-        # unchanged — same script, same flag, same CLODE_TJS_VENDOR.
-        scripts/build-tjs-boot.sh qemu-regen --regen-only
+        # IT NAMES A STEP ID, NOT A COMMAND (developer-build-graph Task 6 — the first of
+        # this file's seven engine call sites to convert, picked as the lowest-risk one:
+        # --regen-only is the cheapest mode, it runs on the RUNNER rather than in a guest
+        # or a container, and it is gated on a tjs-cache miss on qemu-* legs only, so a
+        # mistake here cannot take the matrix down). scripts/build-graph.cjs declares
+        # `engine.bytecode` — the regen step, runsOn host, needing engine.source — and this
+        # step asks for it BY NAME. What that buys: an id the graph does not declare is
+        # REFUSED by scripts/build-runner.cjs, with the list of what is declared, before
+        # anything runs; and CI can no longer grow an engine step the graph never hears
+        # about. test/build-graph-ci.test.cjs is the gate, and it refuses to pass
+        # vacuously — with no converted call site it FAILS rather than finding nothing to
+        # check. Do not re-spell this as a command to "keep it simple": the command is what
+        # the graph is FOR, and an un-named call site is invisible to docs/build.md, to the
+        # diagrams and to every boundary check the runner makes.
+        #
+        # STILL THE BOOTSTRAP RESOLVER, AND STILL NO NODE HERE (node-removal-bootstrap-
+        # design.md §3 step 1). ./build.sh is the entry point the graph names in ENTRY_REL:
+        # it asks scripts/bootstrap-engine.sh for an engine — CLODE_TJS, a locally built
+        # one, the bootstrap cache, or a range-fetch of this host's slice out of the
+        # templates pack the last release published — and execs the runner under it through
+        # HEAD's node-shim loader, exactly as scripts/build-tjs-boot.sh did for the command
+        # this replaces. `node scripts/build-runner.cjs` would have put a node back on this
+        # machine, which is the one thing this site had already won. If the pack has no
+        # slice for this runner it falls back to node and SAYS SO: grep `build:` for
+        # build.sh's own verdict, `build-tjs-engine:` for each step it shells out to, and
+        # `build-graph: step=` for what ran, where, and how long it took.
+        #
+        # The build itself is unchanged where it counts: the same scripts/build-tjs.cjs
+        # --regen-only over the same $CLODE_TJS_VENDOR, stamping the same
+        # clode:bytecode-regen trailer ci-guest-bake.sh refuses a tree without.
+        ./build.sh --only engine.bytecode
         mkdir -p .matrix/qemu-bake
         tar czf .matrix/qemu-bake/txiki-canonical-le.tar.gz -C "$CLODE_TJS_VENDOR" txiki.js
         # The shared engine-API floor check the bake runs against the engine it
