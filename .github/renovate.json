@@ -32,7 +32,7 @@
       "allowedVersions": "/gcc/"
     },
     {
-      "description": "THE TOOLCHAIN NODE IS ONE DEPENDENCY PINNED IN THREE PLACES, and Renovate sees three: .tool-versions (asdf), ci.yml's oracle `container: image: node:<v>-alpine`, and docker-loop/Dockerfile.xfuse's `FROM node:<v>-bookworm-slim`. ci.yml's own guard requires the container's node to EQUAL .tool-versions exactly, so any split takes both node-shim-oracle jobs down. Group them so one PR moves all three, and gate the same invariant in test/node-pins-agree.test.cjs, because a hand-edit or a partially-merged PR can still split what this groups. AND THE BINDING CONSTRAINT IS DOCKER HUB, NOT nodejs.org: on 2026-08-27 a bump to 24.20.0 landed in .tool-versions while Docker Hub's newest was node:24.19.0-alpine, and 'matching' the container to it failed as `manifest unknown` before the job ran a line of our code. Publishing is not simultaneous. So allowedVersions holds this group to what an image actually exists for; the toolchain pin follows image availability rather than dragging it. package.json engines.node is EXCLUDED deliberately: that is the node a built naude EMBEDS, on its own major.",
+      "description": "THE TOOLCHAIN NODE IS ONE DEPENDENCY PINNED IN THREE PLACES, and Renovate sees three: .tool-versions (asdf), ci.yml's oracle `container: image: node:<v>-alpine`, and docker-loop/Dockerfile.xfuse's `FROM node:<v>-bookworm-slim`. ci.yml's own guard requires the container's node to EQUAL .tool-versions exactly, so any split takes both node-shim-oracle jobs down. Group them so one PR moves all three, and gate the same invariant in test/node-pins-agree.test.cjs, because a hand-edit or a partially-merged PR can still split what this groups. AND THE BINDING CONSTRAINT IS DOCKER HUB, NOT nodejs.org: on 2026-08-27 a bump to 24.20.0 landed in .tool-versions while Docker Hub's newest was node:24.19.0-alpine, and 'matching' the container to it failed as `manifest unknown` before the job ran a line of our code. Publishing is not simultaneous. There is no allowedVersions here holding this group to what an image actually exists for — that gap is exactly what let the 2026-08-27 incident happen, and it can recur; ci.yml's own guard is what catches a mismatch today, not Renovate. package.json's engines.node is the node a built naude EMBEDS, on its own major, and rides its OWN group (the rule below, placed AFTER this one so it wins) instead of this one: it does not depend on image availability, and coupling it to the toolchain meant one red toolchain leg could block an unrelated embed bump (PR #45).",
       "matchDepNames": [
         "node",
         "nodejs"
@@ -42,6 +42,19 @@
         "docker"
       ],
       "groupName": "node toolchain (asdf + oracle container + xfuse image)"
+    },
+    {
+      "description": "package.json's engines.node is a DIFFERENT dependency from the toolchain node above: it is the node a built naude EMBEDS, on its own major, not the node CI builds or runs oracles with. The toolchain rule's matchDepNames/matchDatasources also matches this dep (Renovate's npm manager reports engines.node under the same names), so without this rule PR #45 swept 26.8.1 -> 26.9.0 into the toolchain's branch and held it hostage to an unrelated toolchain failure. Placed AFTER the toolchain group so its groupName wins for this one dep, giving it its own branch the way #30/#31 rode separately before the toolchain group existed.",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchDepTypes": [
+        "engines"
+      ],
+      "matchDepNames": [
+        "node"
+      ],
+      "groupName": "naude embedded node"
     }
   ],
   "customManagers": [

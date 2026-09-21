@@ -100,3 +100,89 @@ const guard = defineGuard({
   }),
 });
 guardTests(guard);
+
+// renovate.json's toolchain rule NAMES two mechanisms in its own prose — an exclusion
+// rule for package.json's engines.node, and an allowedVersions clamp — that a reader
+// takes as documentation of what the config DOES. Neither was backed by a rule: PR #45
+// swept engines.node into the toolchain's branch anyway (2026-09-20), and the missing
+// allowedVersions is the same gap the 2026-08-27 `manifest unknown` incident exploited.
+// This is the class the coordinator's SDD note calls "config prose that no rule
+// implements", not a one-off — this repo has now found roughly seventeen of those. The
+// gate below does not evaluate Renovate's behavior (it cannot, from here); it asserts
+// only that a claim the description MAKES about a mechanism is backed by an actual rule
+// object, so a future edit to one side without the other goes red instead of silent.
+const RENOVATE_PATH = '.github/renovate.json';
+
+function findToolchainRule(rules) {
+  return rules.find((r) => Array.isArray(r.matchDepNames) && r.matchDepNames.includes('node')
+    && Array.isArray(r.matchDatasources) && r.matchDatasources.includes('node-version'));
+}
+
+function scanRenovateRulesAgree({ renovate }) {
+  const findings = [];
+  let examined = 0;
+  const rules = (renovate && Array.isArray(renovate.packageRules)) ? renovate.packageRules : [];
+
+  examined++;
+  const toolchain = findToolchainRule(rules);
+  if (!toolchain) {
+    findings.push('no packageRule matches node/nodejs against the node-version datasource — '
+      + 'cannot check its prose against its rules');
+    return { findings, examined };
+  }
+  const desc = toolchain.description || '';
+
+  // Claim 1: the description says package.json's engines.node is excluded/grouped
+  // separately from this rule. If it says so, a SIBLING rule must actually give
+  // engines.node its own group.
+  examined++;
+  if (/engines\.node/.test(desc)) {
+    const sibling = rules.some((r) => r !== toolchain
+      && Array.isArray(r.matchDepTypes) && r.matchDepTypes.includes('engines')
+      && Array.isArray(r.matchDepNames) && r.matchDepNames.includes('node'));
+    if (!sibling) {
+      findings.push('the toolchain rule\'s description talks about package.json engines.node, '
+        + 'but no packageRule matches matchDepTypes:["engines"] + matchDepNames:["node"] — '
+        + 'the toolchain rule\'s own matchDepNames/matchDatasources also matches engines.node, '
+        + 'so without a sibling rule it rides the toolchain\'s branch (this is what PR #45 did)');
+    }
+  }
+
+  // Claim 2: the description says allowedVersions holds this group to something. If it
+  // says so, the rule must actually carry an allowedVersions field.
+  examined++;
+  if (/allowedVersions/.test(desc) && !/no allowedVersions/i.test(desc)) {
+    if (!('allowedVersions' in toolchain)) {
+      findings.push('the toolchain rule\'s description claims an allowedVersions constraint, '
+        + 'but the rule object has no allowedVersions key — this is the 2026-08-27 `manifest '
+        + 'unknown` gap the description claims is closed');
+    }
+  }
+
+  return { findings, examined };
+}
+
+const renovateGuard = defineGuard({
+  name: 'renovate-rules-agree-with-description',
+  read: () => ({ renovate: JSON.parse(read(RENOVATE_PATH)) }),
+  scan: scanRenovateRulesAgree,
+  // Three checks always run once the toolchain rule is found: find-the-rule, the
+  // engines.node claim, the allowedVersions claim.
+  floor: 3,
+  // Models the actual pre-fix state (2026-09-20): the toolchain rule's description
+  // names both mechanisms, and NEITHER packageRule exists.
+  control: () => ({
+    renovate: {
+      packageRules: [
+        {
+          description: 'toolchain node. package.json engines.node is EXCLUDED deliberately. '
+            + 'allowedVersions holds this group to what an image actually exists for.',
+          matchDepNames: ['node', 'nodejs'],
+          matchDatasources: ['node-version', 'docker'],
+          groupName: 'node toolchain',
+        },
+      ],
+    },
+  }),
+});
+guardTests(renovateGuard);
