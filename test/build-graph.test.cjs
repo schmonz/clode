@@ -93,28 +93,100 @@ test('every step is in the root\'s dependency closure', () => {
 
 // The 42 legs are ONE graph parameterized by target, never 42 graphs. The parameter is
 // real only if it can CHANGE something, so this holds `runsOn` to the leg manifest: at
-// least one published leg must resolve the engine compile somewhere other than the host,
-// or `runsOn` is decoration and the fleet view is a drawing.
-test('the graph is parameterized by target, and the parameter bites', () => {
+// least one leg must resolve a step somewhere other than the host, or `runsOn` is
+// decoration and the fleet view is a drawing.
+//
+// DISTINCTNESS, not length. The first cut asserted `targets('release').length === 42` and
+// passed only BY COUNTING DUPLICATES: canonical-name.cjs's targetName() drops the libc
+// qualifier, so the two riscv64 legs and the two s390x legs each collapse onto one name,
+// and a Map keyed on that name silently kept the last of each pair. The length assertion
+// was asserting the bug. Legs are keyed by their own token now, and both halves are pinned
+// here: the tokens are unique, the names are unique after collapsing, and there are FEWER
+// names than legs — that last one is what keeps the collision rule below from being
+// untested the day the twins go away.
+test('the graph is parameterized by leg, and the parameter bites', () => {
+  const legs = G.legs('release');
+  assert.strictEqual(legs.length, 42,
+    `expected the 42 release legs from scripts/tjs-legs.mjs, got ${legs.length}`);
+  assert.strictEqual(new Set(legs).size, legs.length,
+    `leg tokens must be distinct — they are the key: ${legs.join(',')}`);
+
   const targets = G.targets('release');
-  assert.strictEqual(targets.length, 42,
-    `expected the 42 release legs from scripts/tjs-legs.mjs, got ${targets.length}`);
+  assert.strictEqual(new Set(targets).size, targets.length,
+    `targets() must return DISTINCT names, not one per leg: ${targets.join(',')}`);
+  assert.ok(targets.length < legs.length,
+    'no canonical target name collapses two legs any more, so the disagreement refusal '
+    + 'below guards a case that cannot arise — re-derive it or delete it, do not leave a '
+    + 'rule nothing can reach');
+
   const homes = new Set();
-  for (const t of targets) for (const s of G.steps({ target: t })) homes.add(s.runsOn);
+  for (const leg of legs) for (const s of G.steps({ target: leg })) homes.add(s.runsOn);
   assert.ok(homes.size > 1,
     `every step of every leg resolved to the same machine (${[...homes]}) — runsOn cannot `
     + 'then express the class of bug it exists for (a step resolving for the wrong machine)');
 });
 
-// A finding has to say what to DO about it. This one's whole value is explaining WHY an
-// entirely reasonable-looking require is forbidden, because nothing about `const g =
-// require('./build-graph.cjs')` looks like "and now 42 legs rebuild".
-test('the recipe-coupling finding explains the cost, not just the fact', () => {
-  const [finding] = G.recipeCouplingFindings({
-    buildTjsSource: "const g = require('./build-graph.cjs');", recipeFiles: [],
-  });
-  assert.match(finding, /recipe/i);
-  assert.match(finding, /42 legs/);
+// A collapsed name selects BOTH legs, and while they agree it still answers. This is the
+// pair the old Map answered for by accident; now it answers on purpose.
+test('a canonical target naming two legs answers only while they agree', () => {
+  const selected = G.legsNamed('linux-riscv64', 'release').map((l) => l.leg).sort();
+  assert.deepStrictEqual(selected, ['linux-riscv64', 'linux-riscv64-musl'],
+    'the musl/glibc twins no longer collapse onto one canonical name — this test names the '
+    + 'pair it was written for, so re-derive it rather than deleting the coverage');
+  assert.strictEqual(G.stepById('engine.compile').runsOn, 'host');
+  assert.strictEqual(
+    G.steps({ target: 'linux-riscv64' }).find((s) => s.id === 'engine.compile').runsOn,
+    'container', 'both riscv64 legs cross-build in a container; the collapsed name must say so');
+});
+
+// An unknown name has no leg descriptor, so the graph can only say "wherever you are". That
+// is honest; silently inventing a machine for it would not be.
+test('a name the manifest does not know falls back to the native answer', () => {
+  const s = G.steps({ target: 'plan9-mips' });
+  assert.deepStrictEqual(s.map((x) => x.runsOn), G.steps().map((x) => x.runsOn));
+});
+
+// FINDING 1 (review round 1). `defaultContext().out` used to restate libexec/
+// clode-build.cjs's resolveBuildOut rule and keyed `.exe` off the HOST, while the real rule
+// keys it off the TARGET — so a windows cross-build declared `clode-native` for a build that
+// writes `clode-native.exe`, and Task 4's "did the declared output appear?" check would have
+// red on the graph rather than on the build. Composed now, and pinned in both directions so
+// a future restatement cannot pass.
+test('the declared output name comes from resolveBuildOut, keyed on TARGET not host', () => {
+  const { resolveBuildOut } = require('../libexec/clode-build.cjs');
+  for (const target of ['macos-arm64', 'linux-amd64', 'windows-amd64', 'windows-arm64']) {
+    assert.strictEqual(G.defaultContext({ target }).out,
+      resolveBuildOut({ target, self: true, hostPlatform: process.platform }),
+      `${target}: the graph's declared output name disagrees with the function clode `
+      + 'bootstrap actually calls');
+  }
+  assert.strictEqual(G.defaultContext({ target: 'windows-amd64' }).out, 'clode-native.exe',
+    'a windows TARGET must carry .exe whatever host this test runs on');
+  assert.strictEqual(G.defaultContext({ target: 'linux-amd64' }).out, 'clode-native',
+    'a non-windows TARGET must NOT carry .exe, even on a windows host');
+  // An explicit --out is resolveBuildOut's business too: it gains .exe for a windows target.
+  assert.strictEqual(G.defaultContext({ target: 'windows-amd64', out: 'mine' }).out, 'mine.exe');
+  assert.strictEqual(path.basename(G.stepById(G.ROOT_ID).outputs({ target: 'windows-amd64' })[0]),
+    'clode-native.exe', 'the ROOT step must DECLARE the file the build actually writes');
+});
+
+// FINDING 2 (review round 1). The bundle step's non-libexec inputs are read out of the
+// emitter, not listed. The proof that the derivation is live rather than merely non-empty:
+// it must name the one the hand list had already missed.
+test('the bundle step derives its repo inputs from the emitter, including the one a hand list missed', () => {
+  const rels = G.bundleInputs(G.defaultContext()).filter((p) => !p.startsWith('libexec/'));
+  const emitter = fs.readFileSync(path.join(REPO, G.EMITTER_REL), 'utf8');
+  for (const rel of rels) {
+    assert.ok(emitter.includes(`'${rel.split('/').pop()}'`) || emitter.includes(`'${rel}'`),
+      `${rel} is declared an input but ${G.EMITTER_REL} never names it — the derivation is `
+      + 'reading something else');
+  }
+  assert.ok(rels.includes('scripts/engine-recipe.mjs'),
+    'build-clode-main.mjs runs scripts/engine-recipe.mjs to bake __CLODE_BAKED_ENGINE_RECIPE__, '
+    + 'and the hand-written list this replaced had missed it. If the emitter stopped baking '
+    + 'the recipe, re-derive this expectation; do not drop it.');
+  assert.ok(rels.includes('VERSION') && rels.includes('spike/quickjs/PINS.md'),
+    `the derivation lost a known define input: ${rels.join(',')}`);
 });
 
 // THE CONSTRAINT THAT MAKES A NODE-FREE `./build` POSSIBLE, proven by running it rather
@@ -136,15 +208,28 @@ test('the graph loads and answers under tjs, through the node-shim loader', (t) 
   }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-build-graph-'));
   const probe = path.join(dir, 'probe.cjs');
+  // Deliberately reaches the LAZY requires too, not just the module body: defaultContext()
+  // composes libexec/clode-build.cjs's resolveBuildOut, and bundleInputs() reads the
+  // emitter. A probe that only touched orderedSteps() would prove the file parses and
+  // nothing about what happens when the graph is actually asked something.
   fs.writeFileSync(probe,
     `const G = require(${JSON.stringify(path.join(REPO, 'scripts', 'build-graph.cjs'))});\n`
-    + 'console.log(G.ROOT_ID + " " + G.orderedSteps().map((s) => s.id).join(","));\n');
+    + 'const ctx = G.defaultContext();\n'
+    + 'console.log(G.ROOT_ID + " " + G.orderedSteps().map((s) => s.id).join(","));\n'
+    + 'console.log(ctx.out);\n'
+    + "console.log(G.bundleInputs(ctx).filter((p) => p.indexOf('libexec/') !== 0).join(','));\n");
   const out = execFileSync(TJS, ['run', path.join(REPO, 'libexec/node-shim/loader.cjs'), probe],
-    { cwd: REPO, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-  const ids = G.orderedSteps().map((s) => s.id).join(',');
-  assert.strictEqual(out, `${G.ROOT_ID} ${ids}`,
+    { cwd: REPO, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim().split('\n');
+  const ctx = G.defaultContext();
+  assert.strictEqual(out[0], `${G.ROOT_ID} ${G.orderedSteps().map((s) => s.id).join(',')}`,
     'the graph answered differently under tjs than under node — the declaration is not the '
     + 'same declaration on the engine the developer build actually runs it under');
+  assert.strictEqual(out[1], ctx.out,
+    'the declared output name differs under tjs — resolveBuildOut is composed lazily, and '
+    + 'this is the half a parse-only probe would miss');
+  assert.strictEqual(out[2],
+    G.bundleInputs(ctx).filter((p) => p.indexOf('libexec/') !== 0).join(','),
+    'the emitter-derived inputs differ under tjs');
 });
 
 // ---- the controls: each rule, proven able to fail, on a synthetic graph ----------------

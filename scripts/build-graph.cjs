@@ -129,38 +129,87 @@ function bundleOutputPaths(ctx) {
   return bundleOutputNames().map((n) => path.join(ctx.repo, 'build', 'bundle', n));
 }
 
-// Everything build-clode-main.mjs bundles or bakes in. The libexec set is WALKED rather
-// than listed, deliberately the same superset rule libexec/clode-build.cjs's own
-// stale-bundle gate uses ("newest mtime under libexec/*.cjs") rather than a clever
+// Everything build-clode-main.mjs bundles or bakes in, DERIVED in both halves.
+//
+// The libexec set is WALKED, deliberately the same superset rule libexec/clode-build.cjs's
+// own stale-bundle gate uses ("newest mtime under libexec/*.cjs") rather than a clever
 // per-module require walk: obviously correct beats clever, and a new libexec module is an
 // input the day it lands. AppleDouble `._*` sidecars are excluded — this mount sprays them
-// and they are not sources (see [[git-gc-fails-appledouble]]). The four scalars after it
-// are the individual files that script READS by name for its esbuild `define`s: VERSION
-// (__CLODE_BUNDLE_VERSION__), PINS.md (__CLODE_BAKED_TJS_PIN__) and deps/clode's manifest
-// plus lockfile (the pinned esbuild it installs).
-function bundleInputs() {
-  const libexec = path.join(REPO, 'libexec');
+// and they are not sources (see [[git-gc-fails-appledouble]]).
+//
+// The rest is READ OUT OF THE EMITTER, not listed here. The first cut of this function
+// named four scalars by hand (VERSION, PINS.md and deps/clode's two manifests) with no
+// refusal behind them, and the libexec walk kept the answer non-empty so nothing could ever
+// notice a fifth. It already had: build-clode-main.mjs also runs scripts/engine-recipe.mjs
+// to bake __CLODE_BAKED_ENGINE_RECIPE__, and the hand list had missed it on the day it was
+// written. That is the NODE_CONSTANTS shape exactly, and the third hand list in this tree
+// to rot. So every `path.join(REPO, ...)` in the emitter is the list now.
+const EMITTER_REL = 'scripts/build-clode-main.mjs';
+
+// PURE, so a test can hand it a known-bad emitter: `isFile` and the output-directory set
+// are injected rather than probed. Two refusals, because the derivation can be wrong in two
+// ways that both read as "fine":
+//   * NOTHING MATCHED — the emitter stopped spelling its repo reads as path.join(REPO, ...),
+//     so the answer silently shrinks to just the libexec walk.
+//   * A MATCH THAT IS NEITHER a readable file NOR the step's own output directory — either
+//     the emitter names something that is not there, or this reader is parsing the wrong
+//     shape. Returning it as an input would make Task 4's existence check red on the graph
+//     rather than on the build; dropping it silently is how an input goes missing.
+function emitterInputPaths({ src, outDirs, isFile }) {
+  const re = /path\.join\(\s*REPO\s*,\s*((?:'[^']*'\s*,\s*)*'[^']*')\s*\)/g;
+  const seen = [];
+  let m;
+  while ((m = re.exec(src)) !== null) {
+    const rel = m[1].match(/'([^']*)'/g).map((q) => q.slice(1, -1)).join('/').replace(/\/+/g, '/');
+    if (!seen.includes(rel)) seen.push(rel);
+  }
+  if (!seen.length) {
+    throw new Error(`build-graph: ${EMITTER_REL} names no \`path.join(REPO, ...)\` repo path — `
+      + 'that script reads this repo (VERSION, PINS.md, deps/clode, the engine recipe) to bake '
+      + 'its defines, so zero means the shape moved and the bundle step\'s declared inputs '
+      + 'silently shrank to the libexec walk. Fix this reader; do not hardcode the paths here.');
+  }
+  const inputs = [];
+  for (const rel of seen) {
+    if (outDirs.has(rel)) continue; // that join IS the step's output dir, not an input
+    if (!isFile(rel)) {
+      throw new Error(`build-graph: ${EMITTER_REL} joins the repo path '${rel}', which is `
+        + 'neither a readable file nor this step\'s output directory. Either the emitter names '
+        + 'something that is not there, or this reader is parsing a shape it does not '
+        + 'understand — both make the bundle step\'s declared inputs wrong.');
+    }
+    inputs.push(rel);
+  }
+  return inputs;
+}
+
+function bundleInputs(ctx) {
+  const c = ctx && ctx.repo ? ctx : { repo: REPO };
+  const libexec = path.join(c.repo, 'libexec');
   const walk = (dir) => {
     const out = [];
     for (const e of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
-      if (e.name.startsWith('._') || e.name.startsWith('.')) continue;
+      if (e.name.startsWith('.')) continue;
       const p = path.join(dir, e.name);
       if (e.isDirectory()) out.push(...walk(p));
-      else if (/\.(cjs|mjs|js)$/.test(e.name)) out.push(posixRel(p));
+      else if (/\.(cjs|mjs|js)$/.test(e.name)) out.push(posixRel(c.repo, p));
     }
     return out;
   };
-  return [
-    ...walk(libexec),
-    'VERSION',
-    'spike/quickjs/PINS.md',
-    'deps/clode/package.json',
-    'deps/clode/package-lock.json',
-  ];
+  const derived = emitterInputPaths({
+    src: fs.readFileSync(path.join(c.repo, EMITTER_REL), 'utf8'),
+    outDirs: new Set(bundleOutputPaths(c).map((p) => posixRel(c.repo, path.dirname(p)))),
+    isFile: (rel) => {
+      try { return fs.statSync(path.join(c.repo, rel)).isFile(); } catch { return false; }
+    },
+  });
+  const out = walk(libexec);
+  for (const rel of derived) if (!out.includes(rel)) out.push(rel);
+  return out;
 }
 
-function posixRel(abs) {
-  return path.relative(REPO, abs).split(path.sep).join('/');
+function posixRel(repo, abs) {
+  return path.relative(repo, abs).split(path.sep).join('/');
 }
 
 // Every `inputs`/`outputs` answer is an ABSOLUTE path resolved against the context's repo.
@@ -174,18 +223,38 @@ function absAll(ctx, rels) {
 
 // ---- the 42 legs, as ONE parameterization ---------------------------------------------
 
-// Canonical target names for a tier's legs — scripts/tjs-legs.mjs for the legs,
-// scripts/canonical-name.cjs for the spelling. Never a second vocabulary.
-function targets(tier) {
+// A tier's legs by their OWN unique identity: the leg token. 42 of them at the release
+// tier, all distinct, which scripts/tjs-legs.mjs's own tests already pin.
+function legs(tier) {
   const { legsFor } = require('./tjs-legs.mjs');
-  return legsFor(tier || 'release').map((leg) => canonical.targetName(leg.leg));
+  return legsFor(tier || 'release').map((l) => l.leg);
 }
 
-function legByTarget(tier) {
+// The DISTINCT canonical target names a tier builds — FEWER than its legs, on purpose.
+// canonical-name.cjs's targetName() drops the libc qualifier by design (a published asset
+// name carries no `-musl`), so linux-riscv64-musl and linux-riscv64 collapse onto one name,
+// as do the two s390x legs. That is right for a NAME and wrong for a KEY: the first cut of
+// this file built a Map keyed on the collapsed name, which silently kept the LAST of each
+// colliding pair and answered runsOn for whichever that happened to be. Both pairs agree
+// today, so it was latent — but answering for a leg nobody asked about is exactly the
+// resolving-for-the-wrong-machine class runsOn exists to express.
+function targets(tier) {
+  const out = [];
+  for (const leg of legs(tier)) {
+    const t = canonical.targetName(leg);
+    if (!out.includes(t)) out.push(t);
+  }
+  return out;
+}
+
+// Every leg descriptor a name selects. A LEG TOKEN selects exactly one; a canonical TARGET
+// name selects every leg that collapses onto it. A name the manifest does not know selects
+// none, and the caller then gets the step's own native answer — honest, because a target
+// with no leg descriptor has nothing to say about where anything runs.
+function legsNamed(name, tier) {
   const { legsFor } = require('./tjs-legs.mjs');
-  const map = new Map();
-  for (const leg of legsFor(tier || 'release')) map.set(canonical.targetName(leg.leg), leg);
-  return map;
+  return legsFor(tier || 'release').filter(
+    (l) => l.leg === name || canonical.targetName(l.leg) === name);
 }
 
 // WHERE a leg's engine compile happens, derived from the leg descriptor by the SAME rule
@@ -211,19 +280,43 @@ function blobulateHomeForLeg(leg) {
   return engineHomeForLeg(leg) === 'guest' ? 'guest' : 'host';
 }
 
-// `runsOn` for one step of one target. The step declares its NATIVE answer (what `./build`
-// does on this machine); a target re-homes exactly the two steps that move.
+// `runsOn` for one step of one name. The step declares its NATIVE answer (what `./build`
+// does on this machine); a leg token or target name re-homes exactly the two steps that
+// move.
 function runsOnFor(step, target, tier) {
   if (!target) return step.runsOn;
-  const leg = legByTarget(tier).get(target);
-  if (step.id === 'engine.compile') return engineHomeForLeg(leg);
-  if (step.id === ROOT_ID) return blobulateHomeForLeg(leg);
-  // The source phase runs on the RUNNER for every leg — including the cross-container,
-  // alpine and VM-guest legs, whose own target is a different machine entirely (see the
-  // "Construct the patched tjs tree from pins" step's own note). Bytecode regen is
-  // canonical-LE and therefore target-independent, which is the whole reason --regen-only
-  // exists: the runner generates, the guest compiles an already-complete tree.
-  return step.runsOn;
+  return runsOnForLegs(step, legsNamed(target, tier), target);
+}
+
+// PURE, and it REFUSES rather than picking. A canonical target name can select more than
+// one leg (the musl/glibc twins), and when those legs disagree about where a step runs
+// there is no right answer to return — silently taking one is how a plan resolves an engine
+// for the wrong machine, which on 2026-09-20 nearly rsynced an x86-64 ELF into a NetBSD
+// guest. Today both pairs agree, so this refusal is a tripwire, not a live branch; it is
+// controlled in test/build-gates/build-graph-gates.test.cjs so "it never fires" cannot
+// quietly become "it cannot fire".
+function runsOnForLegs(step, selected, name) {
+  if (!selected.length) return step.runsOn;
+  const answers = [];
+  for (const leg of selected) {
+    const home = step.id === 'engine.compile' ? engineHomeForLeg(leg)
+      : step.id === ROOT_ID ? blobulateHomeForLeg(leg)
+        // The source phase runs on the RUNNER for every leg — including the cross-container,
+        // alpine and VM-guest legs, whose own target is a different machine entirely (see the
+        // "Construct the patched tjs tree from pins" step's own note). Bytecode regen is
+        // canonical-LE and therefore target-independent, which is the whole reason
+        // --regen-only exists: the runner generates, the guest compiles a complete tree.
+        : step.runsOn;
+    if (!answers.includes(home)) answers.push(home);
+  }
+  if (answers.length > 1) {
+    throw new Error(`build-graph: '${name}' names ${selected.length} legs `
+      + `(${selected.map((l) => l.leg).join(', ')}) that disagree about where ${step.id} runs `
+      + `(${answers.join(' vs ')}). Name the LEG, not the collapsed target: canonical-name.cjs `
+      + 'drops the libc qualifier for the published asset name, and two legs that share a name '
+      + 'do not have to share a machine.');
+  }
+  return answers[0];
 }
 
 // ---- the context a step's inputs/outputs/run are resolved against -----------------------
@@ -235,19 +328,36 @@ function defaultContext(overrides) {
   const o = overrides || {};
   const env = o.env || process.env;
   const repo = o.repo || REPO;
-  const checkout = path.join(platformTag.tjsVendorParentDir(env), 'txiki.js');
-  return Object.assign({
+  // The target is resolved FIRST and then fed to the output name, because the output name
+  // depends on it (see bootstrapOut). This host, in the one canonical vocabulary, when the
+  // caller names none.
+  const target = o.target || canonical.targetFromNode(process.platform, process.arch);
+  return Object.assign({}, o, {
     repo,
     env,
+    target,
     // The patched txiki.js checkout scripts/build-tjs.cjs constructs and compiles.
-    checkout,
+    checkout: o.checkout || path.join(platformTag.tjsVendorParentDir(env), 'txiki.js'),
     // The engine this build produces and then blobulates against.
-    engine: env.CLODE_TJS || platformTag.tjsBin(repo),
-    // libexec/clode-build.cjs's resolveBuildOut default for `clode bootstrap`.
-    out: 'clode-native' + (process.platform === 'win32' ? '.exe' : ''),
-    // This host, in the one canonical vocabulary.
-    target: canonical.targetFromNode(process.platform, process.arch),
-  }, o);
+    engine: o.engine || env.CLODE_TJS || platformTag.tjsBin(repo),
+    out: bootstrapOut(o.out, target),
+  });
+}
+
+// `clode bootstrap`'s output name, from the function `clode bootstrap` ACTUALLY CALLS --
+// libexec/clode-build.cjs's exported resolveBuildOut -- rather than a second copy of its
+// rule. The restatement this replaces keyed `.exe` off the HOST
+// (`process.platform === 'win32'`), while resolveBuildOut keys it off the TARGET, so the
+// two had already diverged: defaultContext({ target: 'windows-amd64' }) on a mac declared
+// `clode-native` for a build that writes `clode-native.exe`. An explicit `out` is passed
+// STRAIGHT THROUGH to it as well, so the "--out for a windows target gains .exe" half of
+// that rule is composed too instead of being lost.
+//
+// Required lazily, like the two ESM sources: clode-build.cjs is the builder itself, and
+// merely loading the declaration must not drag it in.
+function bootstrapOut(out, target) {
+  const { resolveBuildOut } = require('../libexec/clode-build.cjs');
+  return resolveBuildOut({ out, target, self: true, hostPlatform: process.platform });
 }
 
 function ctxOf(ctx) {
@@ -340,7 +450,7 @@ const STEPS = [
     phase: 'bundle',
     runsOn: 'host',
     needs: [],
-    inputs: (ctx) => absAll(ctxOf(ctx), bundleInputs()),
+    inputs: (ctx) => absAll(ctxOf(ctx), bundleInputs(ctxOf(ctx))),
     outputs: (ctx) => bundleOutputPaths(ctxOf(ctx)),
     count: () => bundleOutputNames().length,
     run: (ctx) => runNode(ctxOf(ctx), ['scripts/build-clode-main.mjs']),
@@ -557,9 +667,10 @@ function orphanFindings(list) {
 module.exports = {
   ROOT_ID, RUNS_ON,
   steps, stepById, orderedSteps, topoOrder,
-  targets, runsOnFor, engineHomeForLeg, blobulateHomeForLeg,
+  legs, targets, legsNamed, runsOnFor, runsOnForLegs, engineHomeForLeg, blobulateHomeForLeg,
   defaultContext,
-  recipeFiles, patchCount, bundleInputs, bundleOutputNames, bundleOutputNamesFrom, bundleOutputPaths,
+  recipeFiles, patchCount, bundleInputs, emitterInputPaths, EMITTER_REL,
+  bundleOutputNames, bundleOutputNamesFrom, bundleOutputPaths,
   evaluate,
   shapeFindings, danglingFindings, cycleFindings, orphanFindings, evaluationFindings,
   recipeCouplingFindings,
