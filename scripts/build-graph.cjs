@@ -366,8 +366,16 @@ function ctxOf(ctx) {
 
 // ---- running a step ---------------------------------------------------------------------
 
+// THE ONE PLACE A STEP SHELLS OUT, and the exec it uses comes from the CONTEXT rather than
+// from this module's closure. That is what makes `execFileSyncFn` a real seam instead of a
+// knob: scripts/build-runner.cjs threads an injected exec through the same ctx every step's
+// inputs/outputs are resolved against, so a test can drive the DECLARED steps -- not just
+// synthetic fixtures -- without spawning cmake. Defaulting to the real execFileSync keeps
+// every existing caller unchanged, and test/build-graph.test.cjs pins BOTH directions,
+// because only the pair distinguishes "the injection was used" from "nothing ran at all".
 function sh(ctx, file, args, extraEnv) {
-  execFileSync(file, args, {
+  const exec = (ctx && ctx.execFileSync) || execFileSync;
+  exec(file, args, {
     cwd: ctx.repo,
     stdio: 'inherit',
     env: extraEnv ? Object.assign({}, ctx.env, extraEnv) : ctx.env,
@@ -512,9 +520,15 @@ function topoOrder(list) {
 // one kind of machine; `id` selects a step and everything it transitively needs (the
 // subgraph a developer asks for when they want the engine alone). Both filters apply AFTER
 // the ordering, so a selection never reorders what survives it.
-function orderedSteps(opts) {
+//
+// SPLIT FROM orderedSteps() so the runner can select over a graph it was HANDED (its
+// synthetic controls) through the very code that selects over the declared one. The
+// alternative -- a second closure-and-filter walk inside build-runner.cjs -- is the
+// duplicate-list disease this whole file is a reaction to, one layer up: the controls that
+// prove the runner refuses correctly would have been exercising a different selector from
+// the one a real build uses.
+function select(list, opts) {
   const o = opts || {};
-  let list = topoOrder(steps(o));
   if (o.id) {
     const byId = new Map(list.map((s) => [s.id, s]));
     const keep = new Set();
@@ -528,6 +542,10 @@ function orderedSteps(opts) {
   }
   if (o.runsOn) list = list.filter((s) => s.runsOn === o.runsOn);
   return list;
+}
+
+function orderedSteps(opts) {
+  return select(topoOrder(steps(opts || {})), opts);
 }
 
 // ---- the shape rules, as PURE functions --------------------------------------------------
@@ -666,7 +684,7 @@ function orphanFindings(list) {
 
 module.exports = {
   ROOT_ID, RUNS_ON,
-  steps, stepById, orderedSteps, topoOrder,
+  steps, stepById, orderedSteps, select, topoOrder, sh,
   legs, targets, legsNamed, runsOnFor, runsOnForLegs, engineHomeForLeg, blobulateHomeForLeg,
   defaultContext,
   recipeFiles, patchCount, bundleInputs, emitterInputPaths, EMITTER_REL,

@@ -332,3 +332,294 @@ guardTests(acyclicGuard);
 guardTests(orphanGuard);
 guardTests(evaluationGuard);
 guardTests(recipeCouplingGuard);
+
+// ---- the runner (scripts/build-runner.cjs) ----------------------------------------------
+//
+// Task 2: running the build FROM the declaration, checking every step's declared boundary.
+// The declaration above says what each step consumes and produces; these say that a run
+// which violates that declaration STOPS, and that the stop names the path. Every rule here
+// is driven through a SYNTHETIC graph carrying exactly one violation -- the same
+// control-first contract test/guard.cjs imposes on the file scanners, applied to a runtime
+// refusal: a boundary check nobody has watched fire is not a check.
+
+const R = require('../scripts/build-runner.cjs');
+
+// The fixtures. Deliberately minimal steps, not real ones: a control's job is to contain
+// the ONE violation its rule claims to detect.
+const ABSENT = path.join(os.tmpdir(), 'clode-build-runner-definitely-not-present');
+
+// The gates below all turn on this path NOT existing. If something ever creates it, every
+// one of them goes quietly green while checking nothing — the blind-pass shape, arriving
+// through the fixture rather than through the code under test.
+test('the controls\' absent path really is absent', () => {
+  assert.strictEqual(fs.existsSync(ABSENT), false,
+    `${ABSENT} exists, so every boundary control below would pass without checking anything`);
+});
+
+function fixture(over) {
+  return Object.assign({
+    id: 'x.one', phase: 'x', runsOn: 'host', needs: [],
+    inputs: () => [], outputs: () => [], run: () => {},
+  }, over);
+}
+
+// Never touches the real trace log (~/.local/share/clode/build-trace.jsonl): a suite that
+// appends to the developer's durable timing history would poison the very record this step
+// exists to make trustworthy.
+function scratchTrace() {
+  return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'clode-runner-trace-')), 'build-trace.jsonl');
+}
+
+function runFixture(opts) {
+  return R.runGraph(Object.assign({ traceLog: scratchTrace(), logFn: () => {} }, opts));
+}
+
+test('gate 1: the runner refuses an id the graph does not declare', () => {
+  assert.throws(() => runFixture({ only: 'not.a.step', dryRun: true }),
+    /not a declared step/i,
+    'a typo in --only must stop the build, not silently select nothing and report success');
+});
+
+test('gate 1: the refusal also fires against a synthetic graph', () => {
+  assert.throws(() => runFixture({ graph: [fixture({})], only: 'x.nope', dryRun: true }),
+    /not a declared step/i);
+});
+
+test('gate 2: a step whose declared OUTPUT does not appear fails the run', () => {
+  assert.throws(
+    () => runFixture({ graph: [fixture({ outputs: () => [ABSENT] })], only: 'x.one' }),
+    /declared output.*did not appear/i,
+    'a step that exits 0 without writing what it promised is the silent-producer failure '
+    + 'the naude cli.cjs incident cost two minutes of runtime path checking to notice');
+});
+
+test('gate 2: the output refusal names the path', () => {
+  assert.throws(
+    () => runFixture({ graph: [fixture({ outputs: () => [ABSENT] })], only: 'x.one' }),
+    (e) => e.message.includes(ABSENT));
+});
+
+test('gate 2: a step whose declared INPUT is missing fails before it runs', () => {
+  let ran = false;
+  const fake = [fixture({ id: 'x.two', inputs: () => [ABSENT], run: () => { ran = true; } })];
+  assert.throws(() => runFixture({ graph: fake, only: 'x.two' }), /declared input.*missing/i);
+  assert.strictEqual(ran, false, 'the step must not run when its inputs are absent');
+});
+
+test('the runner records a timing per step it ran', () => {
+  let t = 0;
+  const out = runFixture({ graph: [fixture({ id: 'x.three' })], only: 'x.three', nowFn: () => (t += 5) });
+  assert.deepStrictEqual(out.ran, ['x.three']);
+  assert.strictEqual(out.timings.length, 1);
+  assert.strictEqual(out.timings[0].id, 'x.three');
+  assert.strictEqual(out.timings[0].ms, 5, 'elapsed comes from nowFn, not the clock');
+});
+
+// `only` is a SUBGRAPH selector, not a single-step selector: asking for the engine must
+// build what the engine needs. A runner that ran the named step alone would fail on its
+// declared inputs, or worse, succeed against a stale tree.
+test('only selects the step and its transitive needs, in dependency order', () => {
+  const out = R.runGraph({ only: 'engine.compile', dryRun: true, logFn: () => {} });
+  assert.deepStrictEqual(out.ran, ['engine.source', 'engine.bytecode', 'engine.compile']);
+});
+
+test('the default run reaches the root, in dependency order', () => {
+  const out = R.runGraph({ dryRun: true, logFn: () => {} });
+  assert.deepStrictEqual(out.ran, G.orderedSteps().map((s) => s.id));
+  assert.ok(out.ran.includes(G.ROOT_ID));
+});
+
+// A dry run must not execute and must not judge: the outputs of a build that has not run
+// are absent BY CONSTRUCTION, so checking them would make --plan red on a clean checkout.
+test('a dry run neither runs a step nor judges its boundary', () => {
+  let ran = false;
+  const fake = [fixture({ inputs: () => [ABSENT], outputs: () => [ABSENT], run: () => { ran = true; } })];
+  const out = runFixture({ graph: fake, only: 'x.one', dryRun: true });
+  assert.strictEqual(ran, false);
+  assert.deepStrictEqual(out.ran, ['x.one']);
+});
+
+test('runsOn narrows the run to one machine', () => {
+  const fake = [fixture({ id: 'x.here' }), fixture({ id: 'x.there', runsOn: 'guest' })];
+  const out = runFixture({ graph: fake, runsOn: 'guest' });
+  assert.deepStrictEqual(out.ran, ['x.there']);
+});
+
+// The house line, in the shape build-tjs's `ccache:`/`ar-determinism:` verdicts already
+// use. A build whose steps are invisible in a piped log is a build nobody can diff.
+test('every step it runs prints one greppable line in house style', () => {
+  const lines = [];
+  let t = 0;
+  runFixture({
+    graph: [fixture({ id: 'x.counted', count: () => 7 })],
+    only: 'x.counted', nowFn: () => (t += 12), logFn: (l) => lines.push(l),
+  });
+  assert.deepStrictEqual(lines,
+    ['build-graph: step=x.counted phase=x runsOn=host ms=12 count=7/7']);
+});
+
+test('a step with no derived count says so rather than inventing one', () => {
+  const lines = [];
+  runFixture({ graph: [fixture({})], only: 'x.one', nowFn: () => 0, logFn: (l) => lines.push(l) });
+  assert.deepStrictEqual(lines, ['build-graph: step=x.one phase=x runsOn=host ms=0 count=-']);
+});
+
+// BACKLOG.md:4686 asks for "every step's elapsed time written where a piped/CI build keeps
+// it, so a regression is a diff and not a feeling". libexec/build-trace.cjs is ALREADY that
+// record (one JSON line per build, Chrome-trace step shape, refusing a run with no
+// interpreter recorded) and `clode build` already writes it, so the graph runner composes it
+// rather than inventing a second timing format that would immediately disagree with the
+// first.
+test('the run is appended to the durable timing record', () => {
+  const log = scratchTrace();
+  let t = 0;
+  R.runGraph({
+    graph: [fixture({ id: 'x.timed', phase: 'engine', count: () => 3 })],
+    only: 'x.timed', nowFn: () => (t += 9), traceLog: log, logFn: () => {},
+  });
+  const runs = require('../libexec/build-trace.cjs').readRuns(log);
+  assert.strictEqual(runs.length, 1, 'one line per run');
+  assert.deepStrictEqual(runs[0].steps, [{
+    component: 'engine', name: 'x.timed', total: 3, done: 3, elapsedMs: 9, state: 'finished',
+  }]);
+  assert.ok(runs[0].meta.interpreter, 'a timing with no interpreter is not comparable');
+  assert.strictEqual(runs[0].meta.target, G.defaultContext().target);
+});
+
+// A FAILED run's partial timings are real data too — and the failing step is recorded as
+// what it was. This is the half that turns "it got slower, then it broke" into a diff.
+test('a failed run still records the steps that ran, and names the one that did not finish', () => {
+  const log = scratchTrace();
+  const fake = [fixture({ id: 'x.boom', run: () => { throw new Error('boom'); } })];
+  assert.throws(() => R.runGraph({ graph: fake, only: 'x.boom', nowFn: () => 0, traceLog: log, logFn: () => {} }),
+    /boom/);
+  const runs = require('../libexec/build-trace.cjs').readRuns(log);
+  assert.strictEqual(runs.length, 1);
+  assert.strictEqual(runs[0].steps[0].state, 'failed');
+});
+
+// THE INJECTION, PROVEN ON THE REAL GRAPH AND NOT ONLY ON FIXTURES. A synthetic step's
+// `run` never shells out, so passing execFileSyncFn through fixtures alone would prove
+// nothing about whether the DECLARED steps honour it — and a runner whose "tests never
+// spawn" promise holds only for graphs that never spawn anyway is decoration. Both
+// directions, because only the pair distinguishes "the injection is used" from "nothing ran
+// at all": with no injection the real execFileSync runs and the marker file appears.
+test('a step shells out through the CONTEXT\'s exec, so an injected one really replaces it', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clode-runner-exec-'));
+  const marker = path.join(dir, 'ran');
+  const ctx = G.defaultContext({ repo: REPO });
+  // Not injected: the real execFileSync runs the command.
+  G.sh(ctx, '/bin/sh', ['-c', `printf x > ${marker}`]);
+  assert.ok(fs.existsSync(marker), 'the un-injected path must really spawn — otherwise the '
+    + 'test below proves nothing, because nothing would have run either way');
+  fs.rmSync(marker);
+  const calls = [];
+  G.sh(Object.assign({}, ctx, { execFileSync: (f, a) => { calls.push([f, a]); } }),
+    '/bin/sh', ['-c', `printf x > ${marker}`]);
+  assert.strictEqual(fs.existsSync(marker), false, 'the injected exec was bypassed');
+  assert.deepStrictEqual(calls, [['/bin/sh', ['-c', `printf x > ${marker}`]]]);
+});
+
+test('runGraph threads execFileSyncFn into the context the steps resolve against', () => {
+  const seen = [];
+  runFixture({
+    graph: [fixture({ run: (ctx) => { seen.push(typeof ctx.execFileSync); } })],
+    only: 'x.one',
+    execFileSyncFn: () => {},
+  });
+  assert.deepStrictEqual(seen, ['function']);
+});
+
+// Same constraint, same proof method, as the graph's own tjs test above: the developer
+// build resolves a tjs and runs the RUNNER under it, so a top-level `await`, an `import`,
+// or an `import.meta` here would be an early parse error on exactly the machines that have
+// no node. `--help` is the cheapest whole-program exercise that still reaches the lazy
+// requires a parse-only probe would miss.
+test('the runner loads and answers under tjs, through the node-shim loader', (t) => {
+  if (!TJS || !fs.existsSync(TJS)) {
+    t.skip('no engine: neither CLODE_TJS nor the platform-tagged scratch engine resolves');
+    return;
+  }
+  const out = execFileSync(TJS,
+    ['run', path.join(REPO, 'libexec/node-shim/loader.cjs'),
+      path.join(REPO, 'scripts', 'build-runner.cjs'), '--help'],
+    { cwd: REPO, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  assert.match(out, /--only/, 'the runner\'s own usage must reach stdout under tjs');
+});
+
+function planUnderTjs(args) {
+  return execFileSync(TJS,
+    ['run', path.join(REPO, 'libexec/node-shim/loader.cjs'),
+      path.join(REPO, 'scripts', 'build-runner.cjs')].concat(args),
+    { cwd: REPO, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+    .trim().split('\n').filter((l) => l.indexOf('build-graph: step=') === 0);
+}
+
+test('the runner plans under tjs exactly as it plans under node', (t) => {
+  if (!TJS || !fs.existsSync(TJS)) {
+    t.skip('no engine: neither CLODE_TJS nor the platform-tagged scratch engine resolves');
+    return;
+  }
+  const lines = [];
+  R.runGraph({ only: 'bundle.clode-main', dryRun: true, logFn: (l) => lines.push(l) });
+  assert.deepStrictEqual(planUnderTjs(['--plan', '--only', 'bundle.clode-main']), lines,
+    'the runner planned a different build under tjs than under node — including the derived '
+    + 'count, which is the half a parse-only probe would miss');
+  assert.match(lines[0], /count=\d+\/\d+$/,
+    'this proof is only worth running while the selected step HAS a derived count to get wrong');
+});
+
+// THE LIMITATION, PINNED RATHER THAN DESCRIBED. The plan above deliberately names a step
+// outside the engine phase, because the engine phase cannot be planned under tjs at all:
+// scripts/engine-recipe.mjs is ESM using `import.meta`, libexec/node-shim/loader.cjs is a
+// CJS host, and `engine.source`'s inputs/count and `engine.compile`'s inputs are all
+// compositions of it. build-graph.cjs's own header already concedes this ("merely LOADING
+// this module stays node-free even though asking it for an engine input list does not") —
+// what was missing is that the DEVELOPER BUILD asks, so a `./build` running under tjs stops
+// at the first engine step.
+//
+// Not fixed here: engine-recipe.mjs is inside the engine recipe's own file set, so editing
+// it moves the recipe hash and rebuilds all 42 legs. That is a decision with a price tag,
+// not a side effect of writing a runner. This test is the tripwire: the day engine-recipe
+// becomes shim-hostable it goes RED, and whoever made that true widens the proof above
+// instead of finding a stale comment years later.
+test('TRIPWIRE: the engine phase cannot be planned under tjs, and says which step asked', (t) => {
+  if (!TJS || !fs.existsSync(TJS)) {
+    t.skip('no engine: neither CLODE_TJS nor the platform-tagged scratch engine resolves');
+    return;
+  }
+  let err;
+  try { planUnderTjs(['--plan']); } catch (e) { err = e; }
+  assert.ok(err, 'engine-recipe.mjs is hostable under the shim now — DELETE this tripwire and '
+    + 'widen the plan-under-tjs proof above to the whole graph, which is the thing a node-free '
+    + '`./build` has been waiting for');
+  assert.match(err.stderr, /engine\.source could not resolve its declared count/,
+    'the failure must name the STEP that asked, not just the parser that refused');
+  assert.match(err.stderr, /import\.meta/);
+});
+
+// The control for that wrapping, on a synthetic graph: a derivation that throws for ANY
+// reason is reported against the step that owns it, with the cause quoted rather than
+// swallowed.
+test('a derivation that refuses is reported against the step that asked, cause and all', () => {
+  const fake = [fixture({ inputs: () => { throw new Error('the source of truth said no'); } })];
+  assert.throws(() => runFixture({ graph: fake, only: 'x.one' }), (e) => {
+    assert.match(e.message, /x\.one could not resolve its declared inputs/);
+    assert.match(e.message, /the source of truth said no/);
+    return true;
+  });
+});
+
+// A caller-supplied context must not be silently re-resolved for THIS HOST by the merge
+// that folds runGraph's own options over it. defaultContext falls back per field on
+// falsiness, so `Object.assign({}, context, { target: undefined })` would have answered for
+// the wrong machine — the exact class runsOn exists to express, reintroduced one layer up.
+test('an explicit context survives the option merge', () => {
+  const seen = [];
+  runFixture({
+    graph: [fixture({ run: (ctx) => seen.push(ctx.target) })],
+    only: 'x.one',
+    context: { target: 'windows-amd64' },
+  });
+  assert.deepStrictEqual(seen, ['windows-amd64']);
+});
