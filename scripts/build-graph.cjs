@@ -374,57 +374,112 @@ function runsOnForLegs(step, selected, name) {
 
 // ---- the context a step's inputs/outputs/run are resolved against -----------------------
 
+// ONE FIELD, DERIVED ONCE, ON FIRST READ. A context field is a QUESTION about this machine,
+// and `defineLazy` is what makes asking it cost nothing until somebody wants the answer.
+// Memoised so a field that four steps read is still one `sw_vers`; a thunk that THREW is
+// deliberately NOT memoised, so the refusal is re-raised (identically) on every later read
+// rather than being cached as a value. The setter keeps a context assignable the way a
+// plain object was -- a caller that writes `ctx.engine = ...` gets what it wrote, and the
+// derivation is never consulted.
+function defineLazy(ctx, key, derive) {
+  let has = false;
+  let value;
+  Object.defineProperty(ctx, key, {
+    enumerable: true,
+    configurable: true,
+    get() {
+      if (!has) { value = derive(); has = true; }
+      return value;
+    },
+    set(v) { value = v; has = true; },
+  });
+}
+
 // Every path a step names comes from here, so the runner, the renderer and a `--target`
 // cross build all resolve the same answers. Overridable field by field; nothing is read
 // from the environment except through the sources of truth that own it.
+//
+// NOTHING DERIVED IS RESOLVED EAGERLY, and that is the shape of a CLASS of defect rather
+// than a style choice. Twice now this function has demanded a host fact on behalf of work
+// that never used it:
+//
+//   1. `engine` fell through to platform-tag's tjsBin on machines that redirect the build's
+//      output with CLODE_TJS_OUT, so `engine.compile`'s declared OUTPUT named a path the
+//      build never writes (see that field's note below).
+//   2. `toolchain` called platformTag.toolchainDir() -- and so osToken(), and so
+//      `os.release()` -- for EVERY context on EVERY machine, including a `--only
+//      engine.compile --needs assume` in a NetBSD or DragonFly VM guest that never bundles
+//      anything. Under tjs those guests report an empty `os.release()`, platform-tag
+//      correctly REFUSES to name an artifact `netbsd-`, and the refusal landed on a build
+//      that had not asked the question: CI run 35667585073, both guests, 25s in, before the
+//      first step ran. The old spelling (`scripts/build-tjs.cjs` directly, same engine,
+//      same guest) never asked, because CLODE_TJS_OUT and CLODE_TJS_VENDOR told it
+//      everything it needed.
+//
+// The cure for both, and for the third one nobody has hit yet, is that a context COSTS
+// NOTHING TO BUILD: each field is a thunk resolved on first read, so the only host facts a
+// run demands are the ones the SELECTED work actually names. The machines that most need
+// `--needs assume` -- containers, cross images, VM guests -- are exactly the ones that can
+// answer the fewest questions about themselves, and CI hands them the answers that matter
+// in the environment.
+//
+// THE REFUSALS ARE NOT WEAKENED BY THIS. A step whose boundary genuinely names a
+// floor-keyed path (`engine` with no CLODE_TJS_OUT, `toolchain`, an artifact name) still
+// gets platform-tag's error, verbatim, at the moment it reads the field. Laziness moves
+// WHEN the question is asked, never WHETHER it is answered honestly. test/build-graph.test.cjs
+// drives both halves on a host that cannot name itself.
 function defaultContext(overrides) {
   const o = overrides || {};
   const env = o.env || process.env;
   const repo = o.repo || REPO;
-  // The target is resolved FIRST and then fed to the output name, because the output name
-  // depends on it (see bootstrapOut). This host, in the one canonical vocabulary, when the
-  // caller names none.
-  const target = o.target || canonical.targetFromNode(process.platform, process.arch);
-  return Object.assign({}, o, {
-    repo,
-    env,
-    target,
-    // The patched txiki.js checkout scripts/build-tjs.cjs constructs and compiles.
-    checkout: o.checkout || path.join(platformTag.tjsVendorParentDir(env), 'txiki.js'),
-    // The engine this build produces and then blobulates against.
-    //
-    // CLODE_TJS_OUT IS READ HERE, and it is the knob every CI leg sets. scripts/build-tjs.cjs
-    // installs the engine at `CLODE_TJS_OUT || platformTjsDir(repo)` (its :207), while this
-    // field used to fall straight through to platform-tag's tjsBin -- so on ANY machine that
-    // redirects the output (all 42 legs: the native build, the alpine container, the cross
-    // images, the VM guests, cross-blobulate's separate host tree) `engine.compile`'s declared
-    // OUTPUT named a path the build never writes, and the runner's output check would have
-    // refused a perfectly good engine. Found while migrating those call sites onto step ids;
-    // it never bit before because no leg ran the graph. The exe suffix is tjsBin's own rule,
-    // not a second copy of build-tjs.cjs's `outName` (which keys off what cmake emitted).
-    //
-    // CLODE_TJS still wins: it names an engine the caller already HAS, which is a stronger
-    // statement than where a build would put one.
-    engine: o.engine || env.CLODE_TJS
-      || (env.CLODE_TJS_OUT
-        ? path.join(env.CLODE_TJS_OUT, process.platform === 'win32' ? 'tjs.exe' : 'tjs')
-        : platformTag.tjsBin(repo)),
-    // The build-only toolchain (esbuild) the bundle step provisions for ITSELF. A THIRD
-    // out-of-repo root, and it is here because it was a real UNDECLARED INPUT (final
-    // whole-branch review, finding 4): scripts/build-clode-main.mjs resolves
-    // toolchainDir(REPO) and requires esbuild from there, and because that path is not a
-    // `path.join(REPO, ...)` it is invisible to emitterInputPaths — so the graph said
-    // nothing about it and the artifacts view drew a picture that implied it was not there.
-    // It has a scar too: this directory being reaped by com.apple.bsd.dirhelper surfaced
-    // from inside esbuild rather than as a refused step. Named from platform-tag.cjs's own
-    // toolchainDir, the function the emitter calls, never a second spelling of $TMPDIR.
-    toolchain: o.toolchain || platformTag.toolchainDir(repo),
-    // WHICH MACHINE a step's `run` resolves against. Only runBuildTjs branches on it today
-    // (its win32 node fallback), and it is a context field rather than a process read so
-    // that branch is OBSERVABLE from both sides on any box -- see hostPlatform().
-    platform: o.platform || process.platform,
-    out: bootstrapOut(o.out, target),
-  });
+  const ctx = Object.assign({}, o, { repo, env });
+  // This host, in the one canonical vocabulary, when the caller names none. Only the
+  // bootstrap output name and the trace's own metadata read it.
+  defineLazy(ctx, 'target', () => o.target
+    || canonical.targetFromNode(process.platform, process.arch));
+  // The patched txiki.js checkout scripts/build-tjs.cjs constructs and compiles.
+  defineLazy(ctx, 'checkout', () => o.checkout
+    || path.join(platformTag.tjsVendorParentDir(env), 'txiki.js'));
+  // The engine this build produces and then blobulates against.
+  //
+  // CLODE_TJS_OUT IS READ HERE, and it is the knob every CI leg sets. scripts/build-tjs.cjs
+  // installs the engine at `CLODE_TJS_OUT || platformTjsDir(repo)` (its :207), while this
+  // field used to fall straight through to platform-tag's tjsBin -- so on ANY machine that
+  // redirects the output (all 42 legs: the native build, the alpine container, the cross
+  // images, the VM guests, cross-blobulate's separate host tree) `engine.compile`'s declared
+  // OUTPUT named a path the build never writes, and the runner's output check would have
+  // refused a perfectly good engine. Found while migrating those call sites onto step ids;
+  // it never bit before because no leg ran the graph. The exe suffix is tjsBin's own rule,
+  // not a second copy of build-tjs.cjs's `outName` (which keys off what cmake emitted).
+  //
+  // CLODE_TJS still wins: it names an engine the caller already HAS, which is a stronger
+  // statement than where a build would put one.
+  defineLazy(ctx, 'engine', () => o.engine || env.CLODE_TJS
+    || (env.CLODE_TJS_OUT
+      ? path.join(env.CLODE_TJS_OUT, process.platform === 'win32' ? 'tjs.exe' : 'tjs')
+      : platformTag.tjsBin(repo)));
+  // The build-only toolchain (esbuild) the bundle step provisions for ITSELF. A THIRD
+  // out-of-repo root, and it is here because it was a real UNDECLARED INPUT (final
+  // whole-branch review, finding 4): scripts/build-clode-main.mjs resolves
+  // toolchainDir(REPO) and requires esbuild from there, and because that path is not a
+  // `path.join(REPO, ...)` it is invisible to emitterInputPaths — so the graph said
+  // nothing about it and the artifacts view drew a picture that implied it was not there.
+  // It has a scar too: this directory being reaped by com.apple.bsd.dirhelper surfaced
+  // from inside esbuild rather than as a refused step. Named from platform-tag.cjs's own
+  // toolchainDir, the function the emitter calls, never a second spelling of $TMPDIR.
+  //
+  // IT IS ALSO THE FIELD THAT COST TWO CI LEGS (see this function's header): it is keyed by
+  // platformTag(), which needs the host's compatibility floor, and until it was made lazy
+  // every context on every machine paid for it whether or not anything bundled.
+  defineLazy(ctx, 'toolchain', () => o.toolchain || platformTag.toolchainDir(repo));
+  // WHICH MACHINE a step's `run` resolves against. Only runBuildTjs branches on it today
+  // (its win32 node fallback), and it is a context field rather than a process read so
+  // that branch is OBSERVABLE from both sides on any box -- see hostPlatform().
+  defineLazy(ctx, 'platform', () => o.platform || process.platform);
+  // The output name depends on the target (see bootstrapOut), so it reads the field rather
+  // than a second copy of the derivation -- and reading it is what resolves it.
+  defineLazy(ctx, 'out', () => bootstrapOut(o.out, ctx.target));
+  return ctx;
 }
 
 // `clode bootstrap`'s output name, from the function `clode bootstrap` ACTUALLY CALLS --
@@ -595,12 +650,19 @@ function isNodeProgram(file) {
 // completely -- an early throw would report the first program and call the rest invisible.
 function observeStep(step, ctx, platform) {
   const spawns = [];
-  const probe = Object.assign({}, ctx, {
-    platform,
-    execFileSync: (file, args) => {
+  // DERIVED FROM the context rather than COPIED OUT OF IT (`Object.create`, not
+  // `Object.assign({}, ctx, ...)`), because a copy READS every field -- and defaultContext's
+  // fields are lazy precisely so a machine is never asked a question the work does not need
+  // (see its header). Spreading them here would ask all of them, on behalf of a recorder
+  // that wants two. The two overrides are own properties, so they win over the inherited
+  // derivations without resolving them.
+  const own = (value) => ({ value, enumerable: true, configurable: true, writable: true });
+  const probe = Object.create(ctx, {
+    platform: own(platform),
+    execFileSync: own((file, args) => {
       spawns.push({ file: String(file), args: (args || []).map(String) });
       return '';
-    },
+    }),
   });
   step.run(probe);
   return spawns;
