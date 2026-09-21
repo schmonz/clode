@@ -144,8 +144,8 @@ test('FLOOR: the steps still name entry points, and every one of them is ESM', (
 // them and wrong for the other.
 test('npmProvisioningEntries tells an entry point that reaches npm from one that does not', () => {
   assert.deepStrictEqual(R.npmProvisioningEntries([
-    { rel: 'scripts/installer.mjs', source: "const { npmCliPath } = require('./lib/npm-cli.cjs');\n" },
-    { rel: 'scripts/requirer.mjs', source: "import x from './lib/npm-cli.cjs';\nrequire('./lib/npm-cli.cjs');\n" },
+    { rel: 'scripts/installer.mjs', source: "const p = npmCliPath({ prefix: 'x' });\n" },
+    { rel: 'scripts/requirer.mjs', source: "require('./lib/npm-cli.cjs');\n" },
     { rel: 'scripts/talker.mjs', source: '// this file talks about npm install a great deal\n' },
     { rel: 'scripts/quiet.mjs', source: 'module.exports = 1;\n' },
   ]), ['scripts/installer.mjs', 'scripts/requirer.mjs']);
@@ -164,6 +164,9 @@ test('FLOOR: an entry point still provisions with npm, and the page says so', ()
     + 'this measurement has stopped seeing the call.');
   const page = R.renderAll();
   assert.match(page, /It needs `npm` too, and on a cold machine the network/,
-    `${npm.join(', ')} reaches npm and the page does not say so — the omission this test exists for`);
-  for (const rel of npm) assert.ok(page.includes(rel), `${rel} provisions with npm and the page never names it`);
+    `${npm.join(', ')} reaches npm and the page does not say so — the omission this test `
+    + 'exists for');
+  for (const rel of npm) {
+    assert.ok(page.includes(rel), `${rel} provisions with npm and the page never names it`);
+  }
 });

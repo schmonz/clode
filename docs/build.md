@@ -114,7 +114,8 @@ The runner treats these as assertions, not as documentation: a declared input th
 missing stops the step before it runs, and a declared output that did not appear fails
 the run.
 
-A DASHED edge is an artifact the step provisions for itself and then reads: `bundle.clode-main` (`toolchain`).
+A DASHED edge is an artifact the step provisions for itself and then reads:
+`bundle.clode-main` (`toolchain`).
 The runner does not assert those — they are absent on a clean machine by construction,
 and the step fills them. They are drawn because an input nothing declares is an input
 nothing can notice going missing.

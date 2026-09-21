@@ -523,8 +523,8 @@ function provisionSection(list, ctx) {
   if (!rows.length) return [];
   const named = rows.map((r) => `\`${r.id}\` (${r.paths.map((x) => `\`${x}\``).join(', ')})`);
   return [
-    'A DASHED edge is an artifact the step provisions for itself and then reads: '
-      + `${named.join(', ')}.`,
+    'A DASHED edge is an artifact the step provisions for itself and then reads:',
+    `${named.join(', ')}.`,
     'The runner does not assert those — they are absent on a clean machine by construction,',
     'and the step fills them. They are drawn because an input nothing declares is an input',
     'nothing can notice going missing.',

@@ -3,8 +3,8 @@
 //
 // WHY THIS EXISTS. BACKLOG.md's "name the steps, show how done we are" item: "Steps you
 // can show are steps you have named, and steps you have named are a build graph. We do not
-// have one." What a developer needs in
-// order to build this repo is spread across 51 scripts, six npm scripts that build
+// have one." What a developer needs in order to build this repo is spread across 51
+// scripts, six npm scripts that build
 // nothing, an 8,756-line BACKLOG.md and code comments. Prose describing an undeclared
 // pipeline would be a FOURTH hand-maintained list of what the build does, going stale the
 // same silent way as the other three. So the build declares its steps here, and the
@@ -520,7 +520,12 @@ function engineNodeOnWindows() {
 // reader cannot attribute to a named function -- an arrow-function helper, say -- is a
 // finding below rather than a silence, because that is the shape this derivation could
 // otherwise go blind on.
-const NODE_SPAWN = /\b(?:sh|exec|execFile|execFileSync|spawn|spawnSync)\s*\(\s*(?:['"]node['"]|[A-Za-z_$][\w$.]*\s*,\s*['"]node['"])/g;
+// A spawn-ish call whose FIRST or SECOND argument is the literal 'node' -- `sh(ctx,
+// 'node', ...)` as this file spells it, and `execFileSync('node', ...)` as anything
+// bypassing sh() would.
+const NODE_SPAWN = new RegExp(
+  '\\b(?:sh|exec|execFile|execFileSync|spawn|spawnSync)\\s*\\('
+  + '\\s*(?:[\'"]node[\'"]|[A-Za-z_$][\\w$.]*\\s*,\\s*[\'"]node[\'"])', 'g');
 const TOP_LEVEL_FN = /^function\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{\n([\s\S]*?)\n\}$/gm;
 const PLATFORM_BRANCH = /win32/;
 
@@ -586,7 +591,9 @@ function nodeRoutes(src) {
   while ((m = NODE_SPAWN.exec(text)) !== null) {
     if (!fns.some((f) => m.index >= f.start && m.index < f.end)) unattributed.push(m[0]);
   }
-  return { functions: fns.map((f) => f.name), always: [...always], windows: [...windows], unattributed };
+  return {
+    functions: fns.map((f) => f.name), always: [...always], windows: [...windows], unattributed,
+  };
 }
 
 // PURE. { src, steps } -> { findings, examined, reported, windowsOnly, routes }.
@@ -834,7 +841,9 @@ function evaluationFindings(records) {
     // `provisions` is OPTIONAL (most steps have none) but held to the same rules when it is
     // there: an empty or relative answer is the same "derivation stopped reading its source"
     // failure one field over, and it is the field that names an out-of-repo directory.
-    for (const k of r.provisions === undefined ? ['inputs', 'outputs'] : ['inputs', 'outputs', 'provisions']) {
+    const fields = r.provisions === undefined
+      ? ['inputs', 'outputs'] : ['inputs', 'outputs', 'provisions'];
+    for (const k of fields) {
       const v = r[k];
       if (!Array.isArray(v)) { findings.push(`${r.id}: ${k}() did not return an array`); continue; }
       if (!v.length) {
