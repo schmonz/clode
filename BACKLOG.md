@@ -243,6 +243,103 @@ module top level ABOVE the async continuation opener (build-tjs.cjs:3463 vs :357
 `await` there moves the boundary `test/build-tjs-continuation-scope.test.cjs` guards; and
 `test/run.mjs` forces `CLODE_OFFLINE=1`, so no gate over this may reach the network.
 
+## Phase 4 umbrella CLOSED — all eight §11 acceptances met (2026-09-21)
+
+Spec: `docs/superpowers/specs/2026-09-14-phase4-declared-edges-design.md` (untracked).
+Proof for acceptance 8: CI run 35562521239 at `0677e7b`, **49/49 jobs success**.
+
+| § | acceptance | how |
+|---|---|---|
+| 1 | engine build runs without Node | all 7 call sites under tjs via `build-tjs-boot.sh`; `nodejs` removed from the alpine and cross-docker containers; a bootstrap resolver fetches sha-verified engine slices from the `templates-<pin>` pack |
+| 2 | bytecode regen is an OUTPUT/DEPENDS rule | cmake rules, staleness tripwire retired in favour of `assertBytecodeRulesPresent` |
+| 3 | a `src/js/**` edit changes the compiled `.c` | demonstrated, no flag set |
+| 4 | the verifier meets §6's four criteria | `tools/depscan/` over ELF/Mach-O/PE incl. cross-built |
+| 5 | provider store keyed version × platform × arch | `providers/<version>/<os>-<arch>/`, migrated IN PLACE from container bytes, not from paths |
+| 6 | `clode build` refuses an incapable engine | asks the engine (a string scan would false-PASS: the moduleMeta C half is present even when the JS binding is not) |
+| 7 | ccache wired, hit rate recorded | 59.4s→34.0s locally, 371/371 warm; wired into CI at parity |
+| 8 | full suite + CI green on every leg | 2481 local tests / 2438 pass / 0 fail; 49/49 CI |
+
+**Pulled in by the standing bar "ccache is not done until every leg has a reproducibility
+verdict":** darwin and linux-x64-glibc reproducible (WASM off AND on), NetBSD archives
+deterministic, and PATH-INDEPENDENCE — which took three separate causes, none of which was
+the one originally suspected: mimalloc's `__DATE__` banner, `ar` member mtimes folded into
+`LC_UUID`, and `MI_GIT_DESCRIBE` baking THIS repo's commit into every engine, so every clode
+commit changed the engine's bytes.
+
+**What the session is actually worth remembering for.** Roughly 17 gates that could not fail
+were found, several by accident, most of them green beforehand:
+- the per-leg reproducibility gate shipped in this very session was VACUOUS — it leaked PATH/HOME so ccache served phase B from phase A's cache and neither phase re-ran the compiler
+- the provider carve check had been silently OFF on 17 OSes since 2026-09-04, because a private `CARVE_TO_CANON` returned `undefined` and the guard read that as "nothing to compare"
+- `NODE_CONSTANTS` was missing an entire source function — node fills `os.constants.errno` from `DefineErrnoConstants` AND `DefineWindowsErrorConstants`; 79 keys on POSIX, 137 on Windows
+- `engine-recipe.mjs`'s FILES was found incomplete three times, and is now DERIVED from build-tjs.cjs's require graph
+- the shim discarded every `stdio:'inherit'` child's output, and QuickJS's `Error#stack` dropped the message, so a failing cross leg reported a bare stack trace with no compiler error
+
+The durable lesson, now enforced in several places: **a gate that cannot demonstrate its own
+failure is not a gate**, and the way to find out is to run it RED on purpose.
+
+## Seams worth naming, even if nothing leaves this repo (2026-09-21)
+
+Asked "what else is in the trenchcoat." Measured, ranked by how close the seam already is.
+Nothing here proposes extraction — a library with one consumer has an imaginary boundary.
+What it proposes is naming the seams so violations become visible, which is the thing that
+actually bites: today's guest-leg outage was a THIRD private spelling of the carve
+vocabulary (`CARVE_TO_CANON`) sitting beside `canonical-name.cjs` and returning `undefined`
+on 17 OSes, which silently disabled a gate for two weeks.
+
+**Already standalone, seam work ~zero:**
+- `tools/depscan/` (593 lines C, own CMakeLists, no install()/export(), line protocol
+  `format=`/`slice=`/`dep=`/`run=`/`deps=`, exit 0/2/3/4). Reads ELF/Mach-O/PE, answers
+  "what does this depend on, is it hermetic." Only thing keeping it here is that nothing
+  else calls it.
+- `test/guard.cjs` (158 lines) — read/scan/control/floor, verdicts OK/VIOLATION/BROKEN/
+  CANNOT_FAIL/SKIP, frozen so a control cannot be reassigned. The most transferable idea in
+  the repo: A GATE THAT CANNOT DEMONSTRATE ITS OWN FAILURE IS NOT A GATE. It caught ~17 of
+  those in one session. 158 lines of framework vs 1079 in guards-population.cjs, which is
+  clode-specific POLICY — the split is already in the right place.
+- `scripts/canonical-name.cjs` (204 lines). Value is not reuse; it is that a second spelling
+  becomes visible.
+
+**Real seams, some work:**
+- Bun carve extraction, 2162 lines (`libexec/bun-graph.cjs` + `extract-claude-js.cjs`).
+  Takes a Bun single-file executable apart: module graph, text assets, zstd rows. Genuinely
+  general; nothing else does it. Measure how thin the claude-specific coupling actually is.
+- Reproducible-C-builds toolkit, 810 lines (`ar-determinism.cjs` + `file-prefix-map.cjs`)
+  plus a 1503-line gate. Probes archiver and compiler BY RUNNING THEM, five outcomes each,
+  capability-detected never platform-branched. Encodes expensive facts: ZERO_AR_DATE is
+  cctools-only; GNU ar needs -D; ranlib re-stamps what -D zeroed; ld64's N_OSO stabs carry
+  absolute paths; mimalloc bakes `git describe` from whatever repo it is built in.
+- Bootstrap interpreter resolver, 671 lines (`bootstrap-engine.sh` + `build-tjs-boot.sh`).
+  Solves "bootstrap X without already having X": sha-verified slice from a published pack,
+  KAT'd hasher chain, functional acceptance probe, honest cross-target deferral.
+
+**Argued AGAINST seaming:** `scripts/tjs-legs.mjs` (1252 lines). Looks like "build a C
+project for 42 targets," but its value is entirely the specific measured facts — which
+floors are proven, which archivers take -D, which guests lack a hasher. Abstracted away
+from those it is a config format. Keep the seam internal.
+
+**The through-line.** Four of these (depscan, guard.cjs, the repro toolkit, the resolver)
+are VERIFICATION tools, not build tools. If something is trying to get out of this repo it
+is probably not the node-shim — it is a toolkit for PROVING THINGS ABOUT BUILDS YOU DO NOT
+CONTROL.
+
+**On extracting the node-shim specifically: argued and declined, with a trigger.** Measured
+11,767 lines / 32 modules — the SMALLEST of the four candidates, not the biggest (spike/
+17,939; scripts/ 17,018; libexec-minus-shim 15,055; test/ 106,087). The corpus that would
+specify a standalone Node-compat layer ALREADY EXISTS HERE: 106k lines of tests, 294 files
+using fs, 287 child_process, 280 path, 214 os. Splitting moves the library away from its own
+best test suite, adds absorption latency against "keeping up IS the job", strands shared
+infrastructure (canonical-name, engine-recipe, the resolver, the 42-leg matrix), and there
+is no second consumer. Revisit when a second consumer appears, or when the shim's
+conformance suite stops needing clode's fixtures to be meaningful.
+
+Also measured while arguing it: node v24.20.0 has 50 public builtin modules / 1249
+top-level exports (a FLOOR — export counts miss instance methods, stream class
+hierarchies, options objects, error-code contracts). 16 builtins have no shim module;
+only three matter here — `test`, `console`, and `worker_threads` (listed in the loader's
+KNOWN set with no backing module, so every property throws through wallProxy).
+"Implement all of Node" is unbounded and has no finish line; "implement the Node our
+corpus uses" is nearly done. That difference is the argument against the split.
+
 ## Phase 4c3 (ccache) — spec §11 acceptance 7 MET (2026-09-19)
 
 **Task 1** (`24e4157`) wired `scripts/ccache-launcher.cjs` through `build-tjs.cjs`:
