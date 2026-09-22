@@ -117,8 +117,14 @@ function doctorHookAnchorPresent(data) {
 // stopped applying, and this check went on reporting the site present on every
 // build for three releases. A gate that says "the patch WOULD apply" has to test
 // the thing that decides whether it applies.
+//
+// Re-pinned 2026-09-21 for upstream 2.1.278's third generator shape (the storageV5
+// argument now feeds a plugin-bin-paths read whose result is what reaches the
+// snapshot builder). The reasoning, the measurements and the three shapes are
+// written out ONCE, beside SNAPSHOT_GEN in extract-claude-js.cjs — read it there.
+// The two literals must stay byte-identical; test/inspect.test.cjs pins that.
 const _SNAPSHOT_GEN_ANCHOR =
-  /async function (?<gen>[A-Za-z0-9_$]{1,6})\((?<arg>[A-Za-z0-9_$]{0,6})\)\{let (?<h>[A-Za-z0-9_$]{1,6})=await [A-Za-z0-9_$]{1,6}\(\);return\{provider:await [A-Za-z0-9_$]{1,6}\(\k<h>(?:,\{storageV5:\k<arg>\})?\)\}\}/g;
+  /async function (?<gen>[A-Za-z0-9_$]{1,6})\((?<arg>[A-Za-z0-9_$]{0,6})\)\{let (?<h>[A-Za-z0-9_$]{1,6})=await [A-Za-z0-9_$]{1,6}\(\)(?:,(?<paths>[A-Za-z0-9_$]{1,6})=await [A-Za-z0-9_$]{1,6}\(\k<arg>\))?;return\{provider:await [A-Za-z0-9_$]{1,6}\(\k<h>(?:,\{(?:storageV5:\k<arg>|pluginBinPaths:\k<paths>)\})?\)(?:,pluginBinPaths:\k<paths>)?\}\}/g;
 // No already-patched alternative is needed (unlike _AUTOUPDATER_PATCHED below):
 // patchSnapshotBridge only APPENDS the exposure statement after the generator, so
 // the anchor survives its own patch verbatim.

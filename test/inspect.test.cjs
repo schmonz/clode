@@ -139,6 +139,46 @@ test('doctor-load anchor retired: no export, no report field, snapshot gen kept'
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
+// THE MIRROR IS PART OF THE ANCHOR, not a copy of it. inspect-claude-bundle.cjs's
+// _SNAPSHOT_GEN_ANCHOR exists to answer "would patchSnapshotBridge apply?", which it can
+// only answer if it is the SAME regex. It was already once a looser substring, and the
+// gate reported the site present for three releases after the real anchor had stopped
+// applying. Nothing pinned the two together, so the 2026-09-21 re-pin for 2.1.278's
+// third generator shape could have landed in one file and not the other and read green
+// here. Compared as SOURCE TEXT, read out of the two files, so neither literal has to be
+// restated in this test.
+test('the inspector\'s snapshot-generator anchor is byte-identical to the extractor\'s', () => {
+  const literalAfter = (file, decl) => {
+    const src = fs.readFileSync(path.join(ROOT, 'libexec', file), 'utf8');
+    const i = src.indexOf(decl);
+    assert.notStrictEqual(i, -1, `${file}: no \`${decl}\` declaration to compare`);
+    const start = src.indexOf('/async function', i);
+    const end = src.indexOf('/g;', start);
+    assert.ok(start !== -1 && end > start, `${file}: could not read the anchor literal`);
+    return src.slice(start, end + 2);
+  };
+  assert.strictEqual(
+    literalAfter('inspect-claude-bundle.cjs', 'const _SNAPSHOT_GEN_ANCHOR ='),
+    literalAfter('extract-claude-js.cjs', 'const SNAPSHOT_GEN ='),
+    'the inspector mirror and the extractor anchor have drifted — one of them is now lying '
+    + 'about whether the eager-snapshot bridge would apply');
+});
+
+// The five-day red light this re-pin closes: upstream-drift.yml reported
+// `snapshot_generator_present = false` against `next` from 2026-09-17. Both ends are
+// asserted, because an anchor that matches only the NEW shape trades one red for another:
+// every build in CI stages the PIN.
+for (const [version, gen] of [['2.1.251', 'CDn'], ['2.1.278', 'OCr']]) {
+  test(`snapshotGeneratorPresent on the REAL ${version} bundle shape`, () => {
+    const src = fs.readFileSync(
+      path.join(__dirname, 'fixtures', 'doctor', `snapshot-gen-${version}.js`), 'latin1');
+    assert.ok(src.includes(`async function ${gen}(`), `${version}: fixture lost its generator`);
+    assert.strictEqual(ins.snapshotGeneratorPresent(src), true);
+    assert.strictEqual(ins.snapshotGeneratorPresent(src + src), false,
+      `${version}: a doubled bundle is ambiguous, not present`);
+  });
+}
+
 test('autoupdater anchor present and absent', () => {
   const present = 'd("tengu_pkg_manager_auto_updater_start",e);'
     + 'let[_H,...AH]=a,qH=await o_(_H,AH,{cwd:x});';

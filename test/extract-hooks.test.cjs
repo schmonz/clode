@@ -169,10 +169,20 @@ test('patchSnapshotBridge exposes the real 2.1.205 generator as the bridge', () 
 // REAL darwin-arm64 bundle around `return{provider:await ` — not a hand-written
 // approximation. All three carry the memoizing wrapper right after the generator,
 // which is what makes the "never the wrapper" assertion below meaningful.
+//
+// 2.1.278 is the third shape: the storageV5 argument now feeds a plugin-bin-paths read
+// (`let n=await I(),r=await D(e)`) and it is THAT result the snapshot builder is handed
+// (`{pluginBinPaths:r}`), with the same value echoed on the returned object. The old
+// anchor missed it, which is what had upstream-drift.yml red for five days. 2.1.251 — the
+// version UPSTREAM_PIN names and the one every CI leg actually stages — is in the list for
+// the other half of that: an anchor that matches only the newest bundle trades one red for
+// another, silently, on every build.
 for (const [version, gen, wrapper] of [
   ['2.1.241', 'X5v', 'XUf'],   // no-arg generator, memo `Afe.shellConfig??=X5v()`
   ['2.1.243', 'iqo', 'ozn'],   // storageV5 arrives; memo `jC.shellConfig??=iqo(e)`
   ['2.1.245', 'iqo', 'ozn'],   // byte-identical shape to 2.1.243 in this window
+  ['2.1.251', 'CDn', 'oyt'],   // THE PIN — memo `m0.shellConfig??=CDn(e)`
+  ['2.1.278', 'OCr', 'JLt'],   // pluginBinPaths shape; memo `e.shellConfig??=OCr(n)`
 ]) {
   test(`patchSnapshotBridge applies to the REAL ${version} bundle shape`, () => {
     const src = read(`snapshot-gen-${version}.js`);
@@ -190,7 +200,7 @@ for (const [version, gen, wrapper] of [
 }
 
 test('patchSnapshotBridge is fail-loud on absent/ambiguous generator', () => {
-  for (const v of ['2.1.205', '2.1.241', '2.1.245']) {
+  for (const v of ['2.1.205', '2.1.241', '2.1.245', '2.1.251', '2.1.278']) {
     const gen = read(`snapshot-gen-${v}.js`);
     assert.strictEqual(ex.patchSnapshotBridge(gen + gen)[1], false, `${v}: doubled must not apply`);
   }
@@ -200,6 +210,18 @@ test('patchSnapshotBridge is fail-loud on absent/ambiguous generator', () => {
   assert.strictEqual(
     ex.patchSnapshotBridge('async function G9(e){let h9=await S9();return{provider:await I9(h9,{storageV5:zz})}}')[1],
     false);
+  // Same rule one shape later: 2.1.278's plugin-bin-paths read must be fed the
+  // generator's OWN parameter, and the tail must name the binding THAT read produced.
+  // Either back-reference broken is some other async function that merely returns a
+  // provider, and pre-warming it would be a silent fidelity divergence.
+  assert.strictEqual(
+    ex.patchSnapshotBridge('async function G9(e){let h9=await S9(),p9=await D9(zz);'
+      + 'return{provider:await I9(h9,{pluginBinPaths:p9}),pluginBinPaths:p9}}')[1],
+    false, 'the plugin-bin-paths read must take the generator\'s own parameter');
+  assert.strictEqual(
+    ex.patchSnapshotBridge('async function G9(e){let h9=await S9(),p9=await D9(e);'
+      + 'return{provider:await I9(h9,{pluginBinPaths:zz}),pluginBinPaths:p9}}')[1],
+    false, 'the builder must be handed the binding that read produced');
 });
 
 test('exposed bridge is callable and runs the generator (no-arg shape)', async () => {

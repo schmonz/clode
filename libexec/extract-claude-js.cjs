@@ -324,8 +324,38 @@ function patchDoctorWarnings(body) {
 // one-argument one; the storageV5 tail is optional AND back-referenced to `arg`,
 // so it can only match the generator that threads its own parameter through — an
 // arbitrary `{storageV5:x}` in some other function will not do.
+//
+// THE THIRD SHAPE (2.1.278), which is why this was re-pinned on 2026-09-21 after
+// upstream-drift.yml had been red for five days with
+// `snapshot_generator_present = false`. Upstream stopped threading storageV5 into
+// the snapshot builder directly and now derives the PLUGIN BIN PATHS from it first:
+//
+//   <=2.1.241  async function G(){let h=await S();return{provider:await I(h)}}
+//   2.1.243+   async function G(v){let h=await S();return{provider:await I(h,{storageV5:v})}}
+//   2.1.278    async function G(v){let h=await S(),p=await D(v);
+//                return{provider:await I(h,{pluginBinPaths:p}),pluginBinPaths:p}}
+//
+// So the optional second `let` binding and the optional `,pluginBinPaths:` tail are
+// added, and the object passed to the builder becomes an ALTERNATION of the two
+// tails we have measured. Both halves stay back-referenced — `D(\k<arg>)` must be
+// fed the generator's OWN parameter and the tail must name the binding that second
+// await produced — so the anchor still cannot drift onto some other async function
+// that merely returns a `provider`. VERIFIED to match exactly once against the real
+// darwin-arm64 bundles for 2.1.251 (the pin), 2.1.257 and 2.1.278; the fixtures in
+// test/fixtures/doctor/ are byte slices of the first and last of those, so this
+// claim is a standing test rather than a note.
+//
+// THE THROWAWAY ARGUMENT SURVIVES THE NEW SHAPE, which is the half worth checking.
+// The bridge still calls with no arguments, so on 2.1.278 `v` is undefined and the
+// plugin-bin-path read runs as `D(undefined)` — and upstream's own `D` is
+// `try{return await L(v)}catch{…warn…;return[]}`, so the worst case is OUR throwaway
+// snapshot missing plugin bin dirs, with upstream's own warn line saying so. The
+// memoizing wrapper (`function W(e,v){return e.shellConfig??=G(v),e.shellConfig}`)
+// is still NOT what we expose, so the app's own first call still builds its own
+// shellConfig from its own storageV5 and uses that for the session. Exactly the
+// trade documented above, one upstream shape later.
 const SNAPSHOT_GEN =
-  /async function (?<gen>[A-Za-z0-9_$]{1,6})\((?<arg>[A-Za-z0-9_$]{0,6})\)\{let (?<h>[A-Za-z0-9_$]{1,6})=await [A-Za-z0-9_$]{1,6}\(\);return\{provider:await [A-Za-z0-9_$]{1,6}\(\k<h>(?:,\{storageV5:\k<arg>\})?\)\}\}/g;
+  /async function (?<gen>[A-Za-z0-9_$]{1,6})\((?<arg>[A-Za-z0-9_$]{0,6})\)\{let (?<h>[A-Za-z0-9_$]{1,6})=await [A-Za-z0-9_$]{1,6}\(\)(?:,(?<paths>[A-Za-z0-9_$]{1,6})=await [A-Za-z0-9_$]{1,6}\(\k<arg>\))?;return\{provider:await [A-Za-z0-9_$]{1,6}\(\k<h>(?:,\{(?:storageV5:\k<arg>|pluginBinPaths:\k<paths>)\})?\)(?:,pluginBinPaths:\k<paths>)?\}\}/g;
 
 // Expose the snapshot generator as globalThis.__clodeEnsureSnapshot (the bridge
 // the _skewContribution splice awaits). The bridge is called with no arguments, so
