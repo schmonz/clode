@@ -1052,6 +1052,36 @@ const Bun = {
   // bundle's `Bun.isStandaloneExecutable===true` feature-detect resolves cleanly.
   isStandaloneExecutable: false,
 
+  // Bun.unsafe — an EMPTY NAMESPACE, deliberately, and it has to EXIST.
+  //
+  // NEW BETWEEN 2.1.257 AND 2.1.278 (measured: zero `setJITPolicy` strings in the
+  // .251 and .257 provider binaries, four call sites in .278). Upstream writes it
+  //
+  //     if (typeof Bun < "u") Bun.unsafe.setJITPolicy?.(1)
+  //
+  // at four points on the STARTUP path — once on a 10s unref'd timer, three times as
+  // the CLI message loop / agents list / turn host come up. Note where the `?.` is:
+  // on the METHOD, not on the namespace. Upstream treats `Bun.unsafe` as something
+  // that always exists wherever `Bun` does, so under this shim (which defines a Bun
+  // global, and must keep doing so) the deref threw a bare TypeError and the session
+  // died with "An internal error ended the session (cannot read property
+  // 'setJITPolicy' of undefined)". That is the Bun.SQL trap again: defining Bun at
+  // all is what puts us inside a branch written for real Bun.
+  //
+  // EMPTY rather than `{ setJITPolicy(){} }`, per the Bun.ant rule below: upstream
+  // already optional-chained the method, so absence is a shape it handles, and a
+  // stub would advertise a JIT-policy control we cannot honor. There is no JIT to
+  // police — quaude is QuickJS (interpreter + bytecode, no tiering), and naude's V8
+  // has no such API either — so the no-op the `?.` produces is not a degradation,
+  // it IS the correct behavior on both engines. Nothing else in the 2.1.278 bundle
+  // reads `Bun.unsafe` (grepped the carved graph: 4 hits, all setJITPolicy).
+  //
+  // Real Bun's `unsafe` also carries arrayBufferToString / segfault /
+  // gcAggressionLevel / mimallocDump. None are referenced by the bundle; add them
+  // only against a measured call site, and only if the call site cannot tolerate
+  // absence the way this one can.
+  unsafe: {},
+
   // --- heavy / not-yet-done ---
   Terminal: TODO('Terminal'),        // PTY for the TUI — likely needs node-pty
   Transpiler: Object.assign(

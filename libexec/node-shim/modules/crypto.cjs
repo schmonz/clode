@@ -1,6 +1,6 @@
 'use strict';
 // node:crypto — surface: createHash('sha256'), createHmac('sha256'), randomUUID,
-// randomBytes, randomFillSync, timingSafeEqual, getHashes, constants, webcrypto
+// randomBytes, randomFillSync, randomInt, timingSafeEqual, getHashes, constants, webcrypto
 // passthrough. Hash/HMAC are KAT-locked against host node. Algorithms beyond
 // sha256 (md5/sha1/sha512) and the asymmetric/KDF surface (createSign/Verify,
 // createPrivateKey/PublicKey, pbkdf2, X509Certificate) are NOT implemented here —
@@ -93,6 +93,67 @@ function randomFillSync(buf, offset = 0, size) {
   return buf;
 }
 
+// node:crypto's randomInt — NEW REQUIREMENT AT UPSTREAM 2.1.278, and its absence was
+// not a graceful degradation. The bundle's Ink renderer grew a graphics-id allocator
+// whose CLASS FIELD initializer is `nextWide = randomInt(min, max)`, so the field runs
+// while the render root is being CONSTRUCTED. A missing export therefore threw a bare
+// "not a function" (quickjs TypeErrors carry no name) out of the root constructor, the
+// rejection was swallowed by the bundle's own handler, and the interactive TUI simply
+// never painted: zero bytes on the pty, 0% CPU, event loop still alive. `-p` was
+// unaffected, so every headless gate stayed green. Measured 2026-09-22 by bisecting the
+// startup with trace markers; see test/fidelity/RESULTS.md.
+//
+// SEMANTICS ARE NODE'S, not "a random number in range": min inclusive, max EXCLUSIVE,
+// both safe integers, max > min, and the range capped at 2**48 exactly as node caps it.
+// The sampler is rejection sampling over whole bytes with the value masked down to the
+// range's bit width first, so at most half of the draws are ever rejected and the result
+// is uniform — a plain `% range` would be biased, which for an id allocator means
+// collisions clustering at the low end.
+const RANDOM_INT_MAX_RANGE = 281474976710656; // 2**48, node's own cap
+function randomInt(min, max, cb) {
+  if (typeof max === 'function') { cb = max; max = undefined; }
+  if (max === undefined) { max = min; min = 0; }
+  if (typeof min !== 'number' || typeof max !== 'number') {
+    throw new TypeError('The "min" and "max" arguments must be of type number');
+  }
+  // TypeError, not RangeError, and that asymmetry is node's, not a guess: node validates
+  // the bounds with ERR_INVALID_ARG_TYPE ('a safe integer'), and keeps RangeError for the
+  // two RELATIONAL failures below (max <= min, and the 2**48 cap). Differentially locked
+  // in test/node-shim-crypto.test.cjs, which reads both classes off host node.
+  if (!Number.isSafeInteger(min) || !Number.isSafeInteger(max)) {
+    throw new TypeError('The "min"/"max" argument must be a safe integer');
+  }
+  if (max <= min) {
+    throw new RangeError('The value of "max" is out of range. It must be greater than '
+      + `the value of "min" (${min}). Received ${max}`);
+  }
+  const range = max - min;
+  if (range > RANDOM_INT_MAX_RANGE) {
+    throw new RangeError('The value of "max - min" is out of range. '
+      + `It must be <= 2**48. Received ${range}`);
+  }
+  let bits = 0;
+  for (let r = range - 1; r > 0; r = Math.floor(r / 2)) bits++;
+  const bytes = Math.max(1, Math.ceil(bits / 8));
+  const cap = Math.pow(2, bits);
+  const buf = new Uint8Array(bytes);
+  const pick = () => {
+    for (;;) {
+      fillRandom(buf);
+      let v = 0;
+      for (let i = 0; i < bytes; i++) v = (v * 256) + buf[i];
+      v %= cap;                         // == masking to `bits`; keeps rejection under 50%
+      if (v < range) return min + v;
+    }
+  };
+  if (cb === undefined) return pick();
+  if (typeof cb !== 'function') throw new TypeError('The "callback" argument must be of type function');
+  // node's callback form is ASYNCHRONOUS; calling back inline would let a caller observe
+  // an ordering node never produces.
+  setTimeout(() => { let v; try { v = pick(); } catch (e) { cb(e); return; } cb(undefined, v); }, 0);
+  return undefined;
+}
+
 // We implement only sha256 hashing/HMAC; report exactly that so feature-detection
 // (getHashes().includes(x)) never selects an algorithm we would then throw on.
 function getHashes() { return ['sha256']; }
@@ -108,6 +169,7 @@ module.exports = {
   randomUUID: () => crypto.randomUUID(),
   randomBytes: (n) => { const b = globalThis.Buffer.alloc(n); fillRandom(new Uint8Array(b.buffer, b.byteOffset, b.byteLength)); return b; },
   randomFillSync,
+  randomInt,
   // getRandomValues keeps the WEB contract (it IS the web API): callers of the web
   // name get the web cap. Only node's own randomBytes/randomFillSync are uncapped.
   getRandomValues: (a) => crypto.getRandomValues(a),
