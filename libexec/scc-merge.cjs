@@ -33,6 +33,14 @@
 // BUMP THIS whenever an edit to this file could change the bytes mergeGroup emits. Forgetting to
 // is not a cosmetic slip: every machine that has already built once keeps serving the OLD merge
 // from its cache, so the edit appears to do literally nothing, on that machine only, forever.
+// BUMPED to '14': the mask stopped calling two positions renameable that never were — a
+// `\u{…}`/`\uXXXX` escape inside an identifier, and a class/object member's modifier (chained,
+// private-named, or in an `export default {…}` literal). Unlike the '13' bump this one is NOT
+// invariant on today's corpus and was never expected to be: the pinned 2.1.251 carve has 55
+// escape bytes and 69 modifier bytes whose mask flips 1 -> 0, so any group containing one of
+// those modules AND a collision on one of those names merges to different — correct — bytes.
+// A machine that merged such a group before this fix has a cache entry holding a merge that
+// does not parse, and the bump is what stops it serving that forever.
 // BUMPED to '13' (phase 5b, task 1, fix round 1): lexicalCodeMask's `/*` branch gained an
 // EOF-backoff (see the comment at that branch). The corpus-invariance proof in
 // BACKLOG.md/task-1-report.md shows this produces BYTE-IDENTICAL masks for every one of
@@ -42,7 +50,7 @@
 // inputs". A machine that already merged some OTHER group under the old masker keeps a
 // cache entry this fix could legitimately invalidate; bumping is the only way that is
 // guaranteed to reach it.
-var MERGER_VERSION = '13';
+var MERGER_VERSION = '14';
 
 // `meta.locals` is the union of two engine tables (vardefs + closure_var) and can repeat a name
 // across them, and it reports compiler-internal synthetic names in angle brackets (e.g.
@@ -129,6 +137,35 @@ function isAsciiWsCode(c) {
 }
 function isAsciiLetterCode(c) {
   return (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
+}
+function isHexCode(c) {
+  return (c >= 48 && c <= 57) || (c >= 97 && c <= 102) || (c >= 65 && c <= 70); // 0-9 a-f A-F
+}
+
+// A UNICODE ESCAPE IS A SPELLING OF AN IDENTIFIER CHARACTER, NOT A TOKEN OF ITS OWN. Outside
+// a string, template, regex or comment — i.e. everywhere this masker calls "code" — the JS
+// grammar puts a backslash in exactly ONE place: a `\uXXXX` or `\u{H+}` UnicodeEscapeSequence
+// inside an IdentifierName. `\u{b5}s` is the single identifier `µs`; it is not the punctuation
+// `\`, the identifier `u`, a block `{b5}` and the identifier `s`, which is how the masker read
+// it before this function existed. The real 2.1.257 darwin-arm64 carve has 218 of them in one
+// group and the pinned 2.1.251 carve has 55, so this is ordinary minifier output, not a corner:
+// `\u{b5}s:1000n` merged to `\__m28_u{b5}s:1000n`, which no engine parses ("invalid property
+// name" under QuickJS, "Invalid or unexpected token" under node).
+//
+// Returns the offset just past the escape at `i` (which must be the backslash), or -1 when what
+// follows is not a well-formed escape — in which case the caller leaves its old behaviour
+// alone, because a lone backslash in code is not valid JS and guessing about it buys nothing.
+function unicodeEscapeEnd(src, i) {
+  var n = src.length;
+  if (src.charCodeAt(i) !== 92 || src.charCodeAt(i + 1) !== 117) return -1; // \u
+  var j = i + 2, k;
+  if (src.charCodeAt(j) === 123) { // \u{H+}
+    k = ++j;
+    while (j < n && isHexCode(src.charCodeAt(j))) j++;
+    return (j > k && src.charCodeAt(j) === 125) ? j + 1 : -1;
+  }
+  for (k = 0; k < 4; k++) if (!isHexCode(src.charCodeAt(j + k))) return -1; // \uXXXX
+  return j + 4;
 }
 
 function lexicalCodeMask(src) {
@@ -233,10 +270,35 @@ function lexicalCodeMask(src) {
       // Fell through: not a well-formed regex literal on this line. Treat `/` as division
       // (the safe default — worst case a byte that could have been masked stays protected).
     }
-    if (isIdentStartCode(c)) {
-      var start = i;
-      while (i < n && isIdentCode(src.charCodeAt(i))) { mask[i] = 1; i++; }
-      prevTok = src.slice(start, i);
+    // An IdentifierName, which may be spelled with `\uXXXX`/`\u{H+}` escapes anywhere in it
+    // (`\u{b5}s`, `a\u0062c`). An ESCAPED one is masked 0 — LEFT VERBATIM — rather than 1:
+    // `tjs.engine.moduleMeta` reports bindings by their VALUE (`µs`), never by the escaped
+    // spelling, so the rename pass could not match such a token as a whole even if it wanted
+    // to; all masking it 1 ever achieved was letting the pass match the FRAGMENTS between the
+    // escapes (`u`, `s`) as if each were an identifier of its own. Marking it non-code says
+    // the true thing once — this run of bytes is one token, and not one the merger can name.
+    //
+    // The common path is untouched: `mask[i] = 1` still happens inside the scan loop, and the
+    // zeroing pass below runs only for the rare token that actually contains an escape. This
+    // loop walks every byte of every member several times per merge (see the charCode note
+    // above) and a second unconditional pass over every identifier is not free.
+    if (isIdentStartCode(c) || (c === 92 && unicodeEscapeEnd(src, i) > 0)) {
+      var start = i, escaped = false, ue, ic;
+      while (i < n) {
+        ic = src.charCodeAt(i);
+        if (isIdentCode(ic)) { mask[i] = 1; i++; continue; }
+        if (ic === 92 && (ue = unicodeEscapeEnd(src, i)) > 0) { escaped = true; i = ue; continue; }
+        break;
+      }
+      if (escaped) {
+        for (var z = start; z < i; z++) mask[z] = 0;
+        // A value, so a following `/` is division. An escaped identifier can never BE one of
+        // `regexAllowed`'s keywords — JS forbids escapes in keywords — so `)` is exact here,
+        // not the usual conservative guess.
+        prevTok = ')';
+      } else {
+        prevTok = src.slice(start, i);
+      }
       continue;
     }
     mask[i] = 1;
@@ -378,9 +440,15 @@ function protectImportedExportNames(src, mask) {
 // `key: local` entries have the identical grammar); a `{` in statement position opens a BLOCK.
 // These are the tokens after which an expression may start. `do`/`else`/`try`/`finally` are
 // deliberately absent — they too are followed by a `{`, and it is always a block.
+// `default` is here for `export default { … }`, whose `{` is an object literal and nothing
+// else — a block cannot be a default export. The OTHER `default`, a switch clause, never
+// reaches this list: its `{` arrives with `blockPending` already set by the clause's own `:`
+// (see the `{` handler), which is decided before `braceKind` is consulted. Without this,
+// `export default{get clearMemoized(){…},get get(){…}}` — the real shape in the pinned carve's
+// chunk-8n46n48n.js — read as a BLOCK, so none of its `get` modifiers were protected.
 var OBJ_OPEN_WORD = new Set([
   'return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'throw', 'yield',
-  'case', 'await', 'let', 'var', 'const',
+  'case', 'await', 'let', 'var', 'const', 'default',
 ]);
 // `{ get x(){}, set x(v){}, async f(){} }` and `class C { static m(){} }` — the member NAME
 // follows the modifier, and it is a property name just the same.
@@ -614,29 +682,55 @@ function propertyNames(src, mask) {
       var starts = enc === 'obj'
         ? (pc === 123 || pc === 44)
         : (pc === 123 || pc === 59 || pc === 125);
-      // ... or right after a member modifier that itself starts one?
+      // ... or right after member modifierS that themselves start one? A CHAIN, not one.
+      // `static get rules(){}` puts two of them in front of the member name, and reading only
+      // the nearest one answered "no" at every token of it: at `rules` the preceding word is
+      // `get`, a modifier, but the word before THAT is `static` rather than a member boundary,
+      // so `rules` read as an ordinary reference. The real 2.1.257 carve renamed the middle
+      // one — `static __m28_get rules(){` — because `get` is a genuine top-level
+      // `function get(e="api")` in that same chunk and so was in the collision set for real.
       mod = false;
-      var modStart = -1;
       if (!starts) {
-        wStart = wordStart(pi);
-        if (wStart >= 0 && pi - wStart < 6 && MEMBER_MODIFIER.has(src.slice(wStart, pi + 1))) {
-          var bp = prevIdx(wStart - 1), bc = bp >= 0 ? src.charCodeAt(bp) : -1;
+        var bp = pi, bc;
+        while (bp >= 0 && isIdentCode(src.charCodeAt(bp))) {
+          wStart = wordStart(bp);
+          if (wStart < 0 || bp - wStart >= 6 || !MEMBER_MODIFIER.has(src.slice(wStart, bp + 1))) break;
+          bc = (bp = prevIdx(wStart - 1)) >= 0 ? src.charCodeAt(bp) : -1;
           mod = enc === 'obj'
             ? (bc === 123 || bc === 44)
             : (bc === 123 || bc === 59 || bc === 125 || bp < 0);
-          if (mod) modStart = wStart;
+          if (mod) break;
         }
       }
       if (starts || mod) {
+        // THE MODIFIER IS DECIDED AT THE MODIFIER'S OWN TOKEN, not reconstructed backwards from
+        // the member name — because the member name is very often not a token this scan can
+        // see. `static async#a(){}` and `static#i;` name a PRIVATE member (`#` is not an
+        // identifier character, so the loop never visits it); `static[k]=1` names a computed
+        // one; `static*m(){}` puts a generator star in between. Deciding it here covers every
+        // one of those the same way it covers `static get rules(){}`, and it needs no list of
+        // what a member name may look like: the ONE thing the JS grammar never allows is two
+        // identifier tokens side by side, so a modifier word at a member-start position that is
+        // followed by an identifier — or by a `#`, which only a private member name can be — is
+        // fixed syntax and nothing else. Renaming it emits `static __m28_get rules(){`, which
+        // no engine parses. Excluded on purpose: `(` (the member is NAMED `get`), `:` (a
+        // property key, already protected above), `,`/`}`/`=`/`;` (a member named `static`, or
+        // a shorthand entry) — every position where the word is a name rather than a modifier.
+        if (end - i < 7 && MEMBER_MODIFIER.has(src.slice(i, end))
+            && (isIdentStartCode(nc) || nc === 35 /* # */)) {
+          markSpan(keys, i, end - i);
+          i = end - 1;
+          continue;
+        }
         // `{ set: v }` needs no case here — the bracket-kind-independent rule above already
         // protected every `key:` in the file, whatever brace it sat in.
         if (nc === 40 /* ( */ && (enc === 'class' || mod || methodTail(ni))) {
           markSpan(keys, i, end - i);
-          // `{ get x(){} }` — `get` is contextual keyword here, not a reference.
-          // `{ __m0_get x(){} }` does not parse any more than `for (o __m0_of xs)` does.
-          if (modStart >= 0) markSpan(keys, modStart, pi - modStart + 1);
         }
-        else if (enc === 'class' && (nc === 61 || nc === 59 || nc === 125)) markSpan(keys, i, end - i);
+        // A class FIELD, `static x = 1` / `static x;` / `static x}`.
+        else if (enc === 'class' && (nc === 61 || nc === 59 || nc === 125)) {
+          markSpan(keys, i, end - i);
+        }
         else if (enc === 'obj' && !mod && (nc === 44 || nc === 125
           || (nc === 61 && src.charCodeAt(ni + 1) !== 61 && src.charCodeAt(ni + 1) !== 62))) {
           shorthand.push([i, end - i]);                                     // { set } / { set = 1 }
@@ -1469,6 +1563,14 @@ function mergeGroup(group, sources, moduleMeta, groupIndex) {
 // merger. Exporting it changes NOTHING about what mergeGroup/codeMask/etc. compute — it
 // only makes the existing function testable from outside.
 if (typeof module === 'object' && module.exports) {
+  // `codeMask` joins `lexicalCodeMask` on the same additive-export argument, one layer out:
+  // it is the mask EVERY substitution in this file actually routes through (lexical, minus the
+  // import/export clause syntax, minus the fixed property names), so it is the only seam at
+  // which "would the rename pass touch this byte?" can be asked directly. The two positions
+  // test/build-gates/renameable-positions.test.cjs gates are decided in DIFFERENT halves of it
+  // — a `\u{…}` escape in lexicalCodeMask, a member modifier in propertyNames — and a gate that
+  // could only reach the first half would have said nothing about the second. Exporting it
+  // changes nothing about what the merger computes.
   module.exports = { declaredNames, mergeGroup, mergeBodyOrder, assertNoRenamedFixedNames,
-    MERGER_VERSION, lexicalCodeMask };
+    MERGER_VERSION, lexicalCodeMask, codeMask };
 }
