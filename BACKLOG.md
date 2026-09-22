@@ -64,6 +64,74 @@ the live NetBSD/arm64 guest; the pinned 2.1.251 build still passes D1 on both. T
 that would have named this on the day .278 appeared now exists
 (`test/build-gates/bun-ant-surface-gate.test.cjs`), and it is RED against .278 on purpose.
 
+**The contract is now derived, not guessed (2026-09-22).** The caller is the spec: every
+call site lives in one carved module (`chunk-rp2p2mxd.js`), and what it never reads, we may
+choose. Only three sites exist — `class Mf { native = vs(qot) }`, the `A0 ??= vs([])`
+singleton `px()` uses for `setCell`, and `Mf.resetNative()`. The distinction that makes this
+tractable:
+
+- **OBSERVED, must match:** the three fields the caller reads out of the scratch cells
+  (`cells[2i+1] & 255` = advance width, `& 256` = tab, `>>> 10` = run index); `runs[2j]` /
+  `runs[2j+1]` as pool indices with **0 reserved** in both (`ansiCodes(0)` short-circuits;
+  a uri index of 0 means no link); pool index STABILITY and append-only growth (the caller
+  memoises `styleIds[]`/`linkIds[]` across calls); the exact SGR open spellings, their
+  ORDER (style identity is order-sensitive), and their close codes compared by identity
+  (`22m` bold/dim, `23m` italic, `24m` underline, `27m` inverse, `29m` strike, `39m` fg,
+  `49m` bg, `55m` overline); the packed return's three fields (bits 0-19 the new cursor
+  column, 20-35 damage x1, 36+ damage x2); `spacerTail` (2) as the spelling for the second
+  half of a wide grapheme, because `Yd()`'s blit fixups test for exactly `1` then `2`.
+- **FREE, the caller never looks:** how `cells[2i]` encodes a grapheme; whether a wide
+  grapheme takes one scratch cell or two (`width()` only SUMS the advances); the exact
+  negative `segment()` returns, as long as its magnitude is >= the cell count (the caller
+  reallocates to `2*max(-u, oldLen)` and retries exactly ONCE); the 7th `paint` argument
+  (always `undefined`); the low 20 bits of `setCell`'s return; **`spacerHead` (3) — nothing
+  in the bundle ever produces or distinguishes it**, every reader treats 2 and 3 alike.
+- **Also measured:** `tabWidth` is 8 (`cwt`, chunk-xpg5m2n8.js); `substitute` is a list of
+  codepoint RANGES to replace with U+FFFD, passed the bidi controls
+  `[[1564,1564],[8234,8238],[8294,8297]]`; `emptyCharIndex`/`spacerCharIndex` index the
+  SCREEN charPool (`[" ", ""]`), not `graphemes`; `reordered` is
+  `WT_SESSION || TERM_PROGRAM==="vscode"`, i.e. **false everywhere quaude normally runs**.
+
+Full derivation, the per-member call sites, the named experiments for the handful of things
+only native can answer, and the implementation plan: see the CellSegmenter contract note in
+`.superpowers/sdd/2026-09-22-cellsegmenter/` (untracked, per the no-plans-in-git rule).
+
+**The thing that makes this bigger than it looks, measured on the real engine 2026-09-22:
+WE HAVE NO GRAPHEME SEGMENTER.** `typeof Intl === "undefined"` in bare tjs; what exists is
+our own polyfill (`libexec/node-shim/modules/intl.cjs`), and it splits on CODE POINTS and
+re-joins only trailing `\p{Mark}` and a simple ZWJ pair. `loader.cjs`'s own comment already
+called this out — "a future path needing true grapheme segmentation … is a real wall" —
+and CellSegmenter IS that path. Variation selectors, regional-indicator flag pairs, emoji
+modifiers (skin tone is `Symbol`, not `Mark`), Prepend and Hangul jamo all cluster wrongly
+today, and `Bun.stringWidth` / `Bun.sliceAnsi` sit on the same polyfill, so they already
+diverge on multi-code-point emoji. A wrong width is not a wrong cell, it is a wrong OFFSET:
+everything after it on the line shifts. Real UAX #29 clustering belongs in `intl.cjs` where
+every consumer gets it, not privately inside the segmenter — which also means the existing
+`node-shim-intl` / `node-shim-esm` parity tests become part of that change's gate.
+
+**The instrument exists, and it has been proven able to fail (2026-09-22).** A text-line
+differential cannot judge a segmenter — three of the four ways a segmenter corrupts a screen
+leave the stripped text identical. So:
+
+- `test/tui-screen.cjs --cells` dumps a CELL-level frame (glyph, emulator width, fg/bg,
+  a 9-bit attribute mask, OSC-8 target), `test/e2e-pty.cjs captureFrame()` parses it,
+  `test/frame-diff.cjs` classifies every differing cell as `glyph`/`width`/`sgr`/`link`,
+  and `test/frame-oracle.cjs` drives a reference and a subject through the same scripted
+  pty session against the canned local mock (no credentials, no tokens, no network).
+- `test/frame-diff.test.cjs` PROVES the differ distinguishes identical frames, a one-cell
+  glyph change, a wide char's spacer placement, an SGR-only change and an OSC-8-only
+  change — from real pty captures AND from deliberate one-cell corruption — and asserts
+  that the text view is blind to three of them.
+- Measured with it: **native 2.1.278's initial TUI frame is bit-identical across runs**
+  (0 differing cells), so this can be an exact-equality gate; and quaude-from-.278 paints
+  a completely EMPTY screen (709 differing cell-classes, all of them native's content).
+- Two ways the instrument itself was wrong, found and fixed before trusting it:
+  `tui-screen.cjs` truncated its own stdout at 64 KiB (`write()` then `process.exit`), so
+  every cell frame came back as broken JSON; and a shared `HOME` let the SIGKILL teardown
+  of one capture leave a "fullscreen didn't finish starting" marker that pushed the NEXT
+  capture onto the classic renderer — native-vs-native differed in 1431 cells purely from
+  that. `frame-oracle` now seeds a fresh sandbox per capture.
+
 **Two smaller things found alongside it, both open:**
 
 - `[uds-messaging] Failed to create server: TypeError: not a function` at startup on both
